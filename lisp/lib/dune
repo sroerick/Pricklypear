@@ -1,0 +1,5 @@
+(library
+ (name pricklypear_lisp)
+ (public_name pricklypear-lisp)
+ (modules ast reader env eval effect)
+ (libraries yojson lwt))

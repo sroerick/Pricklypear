@@ -1,0 +1,3 @@
+(executable
+ (name probe)
+ (libraries awa awa-mirage fmt cstruct lwt))

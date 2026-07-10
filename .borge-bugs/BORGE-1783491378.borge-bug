@@ -1,0 +1,54 @@
+(borge-bug (id "BORGE-1783491378")
+  (title "Spec divergence: data_rows is a generic shared JSONB table with no schema_vers / per-type DDL emission — spec branching.schema-authority + migrations.additive-only describe a system that doesn't exist in code")
+  (status triage)
+  (created 2026-07-08)
+  (filed-by roerick)
+  (doc "")
+  (* agent note (|Filed by the reviewing agent after a quality review of the build through iteration 20 (build green, 92 tests pass, borge lint clean, borge report 12 implemented / 20 partial / 16 planned, 42.9% completion). This is a SPEC DIVERGENCE captured for the next plan pass — not an emergency, not a directive. The building agent documented this gap in an agent note during iteration 20's migration plan-pass but did NOT file a borge issue for it. This issue promotes that agent note to a tracked issue so the next plan pass must resolve it. Roerick does not want the building agent interrupted mid-iteration-21 (awa-ssh swap-in); this issue sits in triage until plan-pass #5.
+
+THE DIVERGENCE:
+
+The spec describes a TWO-TIER schema story in [branching.schema-authority] and [migrations.additive-only]:
+  - type_defs in main are the slow-changing, merge-governed layer. A branch can PROPOSE a type change in its type_defs, but the underlying table doesn't change until that proposal is merged to main and the supervisor runs the resulting migration.
+  - type_defs carries a `schema_vers` per-type version column (per the spec's storage.schema: `schema_vers integer NOT NULL DEFAULT 1`).
+  - When main accepts a schema change, the supervisor runs a migration on the shared data table (additive-only: ADD COLUMN with DEFAULT, no DROP/RENAME/ALTER-TYPE). All branches see the new shape on next function lookup.
+  - Runtime field-validation against main's schema is implied: a branch running code that references a field that doesn't exist in main gets a clear runtime error.
+
+The CODE implements a ONE-TIER generic-table story (migration 003, iteration 13):
+  - `data_rows(id uuid PK, type_name text, fields jsonb, author text, ...)` — a single shared table for ALL user-declared types. No branch_id (correct per spec [branching.data]: data is shared). But also no schema_vers, no per-type DDL emission, no typed tables.
+  - `(deftype 'name 'field1 ...)` inserts a row into type_defs with fields = JSON array of field names. type_defs is pure metadata — it does NOT drive any DDL. The data_rows table accepts any jsonb fields bag for any type name.
+  - There is no runtime field-validation against main's schema. A branch can (create 'anything "{...}") and it lands in data_rows regardless of whether type_defs declares the type or fields.
+  - The spec's `schema_vers` column EXISTS in the type_defs table (migration 001 line 44) but is never read or written by any code — it's a dead column.
+
+WHY THIS IS A REAL DIVERGENCE, NOT JUST A DEFERRED FEATURE:
+  - The spec's [branching.schema-authority] subsection describes the two-tier model as a FOUNDATION CONSTRAINT ("set early because retrofitting it later is expensive"). The code chose the opposite foundation (generic JSONB bag). These are incompatible foundations.
+  - The spec's [migrations.additive-only] is marked `implemented` in the plan passes (it20) with the rationale that 'runtime type_defs -> data_rows story is itself additive — new types add rows, not DDL.' That rationale is a post-hoc justification: the spec's additive-only policy is about SCHEMA COLUMNS (ADD COLUMN), not about 'we don't have schema columns at all.' Marking additive-only as `implemented` when the entire per-type-DDL-emission machinery it governs doesn't exist is a status inflation.
+  - The agent honestly noted all of this in the iteration-20 plan-pass agent notes (migrations.branching-interaction -> partial, with the gap listed). But an agent note is not an issue — it doesn't surface in `borge issue list` and doesn't have to be resolved in a plan pass.
+
+TWO RESOLUTIONS THE PLAN PASS SHOULD CHOOSE BETWEEN:
+
+Option A (ratify the generic-table model in the spec): update [branching.schema-authority] and [migrations.additive-only] to describe the actual v1 architecture — a single shared data_rows table with type_defs as pure metadata, no per-type DDL, no schema_vers. Drop the schema_vers column from type_defs (additive-only means we can't remove it, so leave it as a dead column or repurpose it). This is the pragmatic v1 choice: it shipped, it works, CRUD composes, it sidesteps the entire DDL-emission feature. Cost: the spec's two-tier change model (OCaml-slow / Lisp-fast / schema-merge-governed) collapses to two tiers (OCaml-slow / Lisp-fast) with schema reduced to metadata. The 'merge-governed schema' politics feature is gone — but it was never built anyway.
+
+Option B (build the per-type-DDL-emission machinery): implement what the spec describes — when a type_def is merged to main, the supervisor emits an ALTER TABLE (additive-only) and bumps schema_vers; runtime primitives validate field names against the branch's type_defs view of main's schema. This is a real feature, probably 1-2 iterations, and it restores the spec's two-tier model. Cost: real work; and it locks in a schema-evolution story that the generic-table model deliberately avoided.
+
+MY RECOMMENDATION (for the plan pass to consider, not for the building agent to act on now): Option A. The generic-table model is the right v1 — it's what Smalltalk-style images do (no schema, just objects), it composes cleanly with the Lwt-ABI CRUD primitives, and the two-tier schema-governance politics is a v2+ feature that can be added later if it's ever felt. The spec should describe what the code does, not aspirationally describe a more elaborate system. But this is a spec decision, not a code decision, and it belongs in a plan pass with roerick's input.
+
+SCOPE OF SPEC CHANGES (Option A):
+  - branching.schema-authority: rewrite to describe type_defs as metadata only; data_rows as a single shared generic table; no per-type DDL; schema_vers is vestigial.
+  - migrations.additive-only: keep the additive-only POLICY (it still applies to the real migrations 001/002/003), but remove the claims about per-type DDL emission and ADD COLUMN for new fields. The additive-only policy now governs only the core schema migrations, not a type-evolution machinery that doesn't exist.
+  - migrations.branching-interaction: simplify — branches can propose type_defs (metadata), all branches see all type_defs via the recursive-CTE walk, there is no schema-version mismatch runtime error because there is no schema version.
+  - storage.schema: document the data_rows table as the actual v1 storage for user data; note type_defs.schema_vers as vestigial.
+
+SCOPE OF SPEC CHANGES (Option B):
+  - storage.schema: add the per-type table emission story (type_def merged to main -> supervisor emits ALTER TABLE -> schema_vers bump).
+  - image.primitives-layer: add the runtime field-validation primitive behavior.
+  - migrations.applied-by-supervisor: add the type_defs-DDL-emission pass to the supervisor's migration runner.
+  - This is strictly more spec + more code.
+
+RELATED:
+  - BORGE-1783398327 (tree-as-substrate) is compatible with either option: if Option A, the nodes table subsumes data_rows anyway; if Option B, per-type tables are the named subtrees. Either way this issue is orthogonal to the tree-as-substrate proposal.
+  - BORGE-1783399614 (Lwt-ABI directive) is implemented in code but the issue is still open in triage — the next plan pass should close it as `implemented`.
+
+NOT A DIRECTIVE: the building agent should not act on this during the current make phase. This is for roerick + the next plan pass to resolve. Filing now so it's tracked rather than buried in an agent note.|) *)
+  (details (doc ""))
+)

@@ -1,0 +1,141 @@
+(project pricklypear-supervisor
+ (doc "Pricklypear book chapter: supervisor")
+ (status partial)
+ (convention ocaml-dune)
+ (section supervisor
+  (doc "The root unikernel: fleet management, A/B rollback, health checks, admin HTTP")
+  (status partial)
+  (* agent note (|plan-pass #4 (it20): supervisor/lib/{boot,fleet,health,process,store,ssh,auth_client,admin}.ml + supervisor/bin/supervisor.ml shipped it4. 5 admin routes served via httpaf-lwt-unix + pure-html (no Dream). Boots cleanly on temp PG cluster, runs migrations, serves fleet dashboard/health/fleet JSON. End-to-end SSH→auth→image supervision verified by /tmp/pp_e2e_it6.py through scripts/dev.sh. Partial (not implemented): Solo5 target — currently mirage/unix only (deferred per [architecture.mirage-vs-unix]). A/B rollback /fleet/:id/rollback route NOT built (Fleet only has boot/kill/list). VM-request boot path NOT built — Fleet spawns via posix_spawn only (dev model). See BORGE-1783433175.|) *)
+  (subsection unikernel-target
+   (doc "Solo5 in production, mirage/unix in dev")
+   (status partial)
+   (* agent note (|it20: PARTIAL — currently mirage/unix only. The Process module (supervisor/lib/process.ml) abstracts boot behind a boot()/kill() interface; in dev that's posix_spawn over a configured PP_IMAGE_BIN path. The Solo5/hypervisor-VM-request path is NOT built — Solo5 target itself is deferred per spec [architecture.mirage-vs-unix] ("Solo5 is a build switch, not a rewrite"). The abstraction boundary the spec describes (one interface, two implementations) is in place in process.ml. No real switchover has been exercised.|) *)
+   (details
+    (doc (|
+         The supervisor IS a unikernel, not a daemon. It
+         boots directly on the hypervisor (Solo5 target)
+         and manages the rest. No OpenBSD userland in the
+         hot path; the hypervisor trusts exactly one thing.
+
+         Process model: the supervisor does NOT posix_spawn
+         child images (Solo5 has no spawn). Instead it
+         requests new VMs from the hypervisor for each
+         per-user image instance. This is the Solo5/KVM
+         model: boot a unikernel = request a VM.
+
+         In dev: mirage/unix target, supervisor runs as a
+         normal process on the dev box, images too. Same
+         code, different target. The fleet/process module
+         abstracts the boot mechanism (VM-request in prod,
+         posix_spawn in dev) behind one interface.
+   |))
+   )
+  )
+  (subsection fleet
+   (doc "Managing per-user image instances")
+   (implements supervisor/lib/fleet.ml supervisor/lib/process.ml)
+   (status partial)
+   (* agent note (|it20: PARTIAL. IMPLEMENTED — supervisor/lib/fleet.ml maintains an in-memory instance table keyed by instance_id (inst-001, -002, ...). boot/kill/list/find_by_user/mark_health operations work; ports allocated sequentially (http_port_base=18080, repl_port_base=17878) per Fleet.spawn. Verified by /tmp/pp_e2e_it6.py: SSH→auth→image spawn flow registers inst-001 with the verified user_id. NOT IMPLEMENTED — fleet table persistence to PG sessions table (currently in-memory only; supervisor reboot loses it), rollback(instance_id, to_version) A/B op (no route), always-on boot_mode pin (only the boot-on-connect default exists by behavior). The spec text's `(user, branch, image_version, ..., boot_mode, last_seen)` columns are partially populated (instance_id, user_id, ports, started_at mapped; branch/image_version/boot_mode/last_seen omitted).|) *)
+   (details
+    (doc (|
+         The supervisor maintains a fleet table:
+           (user, branch, image_version, instance_id,
+            boot_mode, health_status, started_at,
+            last_seen)
+
+         Operations:
+         - boot(user, branch, image_version) -> instance
+           On SSH connect (default boot-on-connect) or
+           always-on pin.
+         - kill(instance_id)
+           Stop a wedged or unwanted image.
+         - list-fleet() -> all instances + health
+         - rollback(instance_id, to_version)
+           A/B rollback for ONE user's image, not the
+           whole system.
+
+         Lifecycle:
+         - boot-on-connect: image boots when user SSHes in,
+           dies when session ends. Default. Doesn't persist
+           in-memory REPL state across disconnects, but
+           the store survives.
+         - always-on: image pinned running. Power users
+           who want long-lived REPL state across SSH
+           disconnects. RAM always committed.
+
+         The supervisor itself never holds user-visible
+         state in memory beyond the fleet table (which is
+         also in Postgres and recoverable). It's stateless
+         w.r.t. user data; Postgres is the truth.
+   |))
+   )
+  )
+  (subsection health
+   (doc "Pinging images, marking healthy/unhealthy")
+   (status partial)
+   (* agent note (|it20: PARTIAL. IMPLEMENTED — supervisor/lib/health.ml is an HTTP /health client (plain Lwt_unix socket + minimal HTTP/1.0 GET). Parses the JSON response via the Protocol module (the { ok, branch, uptime, error } shape is shared with common/lib/protocol.ml and used by both the supervisor's own /health and the image's /health). Fleet.mark_health updates an instance's health_status field. NOT IMPLEMENTED — periodic background health-check loop (every 10s). Currently health is checked on-demand (e.g. before returning Fleet.list), not via a background Lwt.async tick. Unhealthy-then-autorestart logic for always-on instances is NOT built (no always-on mode to autorestart).|) *)
+   (details
+    (doc (|
+         The supervisor health-checks each running image:
+         - Periodically (every 10s) ping the image's HTTP
+           health endpoint.
+         - Response within timeout -> healthy.
+         - No response in N tries -> unhealthy.
+         - Unhealthy X seconds -> supervisor kills and
+           either restarts (if always-on) or marks dead
+           (if boot-on-connect; will reboot on next SSH).
+
+         Health check protocol (in common/lib/protocol.ml):
+           GET /health -> { ok: true, branch: ..., uptime: ... }
+                       or { ok: false, error: ... }
+
+         On boot of a new image version:
+         - Boot image v(N+1) alongside vN (or instead of,
+           simpler).
+         - Wait for health-check to pass within T seconds.
+         - If healthy: v(N+1) becomes new default.
+         - If not: rollback to vN, log failure, alert admin.
+
+         This makes "user upgraded primitives, broke their
+         image" a 10-second recovery, not a crisis.
+   |))
+   )
+  )
+  (subsection admin-http
+   (doc "Minimal admin surface, httpaf-lwt-unix + pure-html, no Dream")
+   (implements supervisor/lib/admin.ml supervisor/lib/boot.ml)
+   (status partial)
+   (* agent note (|it20/it31: PARTIAL. IMPLEMENTED — supervisor/lib/admin.ml
+     serves via httpaf-lwt-unix + pure-html (no Dream, consistent with
+     image/). Three routes live: GET / (fleet dashboard), GET /fleet
+     (JSON), GET /health (supervisor health JSON). Explicit content-length
+     headers. NOT IMPLEMENTED — POST /fleet/:id/kill and
+     POST /fleet/:id/rollback?to=vN; admin auth. Doctrinal text updated
+     it31 away from httpaf-mirage fiction.|) *)
+   (details
+    (doc (|
+         The supervisor exposes a small admin surface over
+         HTTP via httpaf-lwt-unix + pure-html (same v1
+         stack as the image). Hand-written router.
+
+         v1 SHIPPED routes:
+           GET  /                  fleet dashboard
+           GET  /fleet             list instances + health (JSON)
+           GET  /health            supervisor's own health
+
+         DEFERRED routes:
+           POST /fleet/:id/kill
+           POST /fleet/:id/rollback?to=vN
+
+         UI: plain HTML tables (pure-html), minimal htmx.
+         Auth (later): admin token via authd, or localhost
+         only in dev. Not wyo.auth.
+
+         Solo5 note: when the supervisor moves to Solo5,
+         swap httpaf-lwt-unix for gluten-mirage + httpaf
+         behind the same admin handler shape.
+   |))
+   )
+  )
+ )
+)

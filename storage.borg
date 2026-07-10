@@ -1,0 +1,284 @@
+(project pricklypear-storage
+ (doc "Pricklypear book chapter: storage")
+ (status partial)
+ (convention ocaml-dune)
+ (section storage
+  (doc "Postgres schema: branches, function_defs, type_defs, sessions. SERIALIZABLE defaults. NO inheritance.")
+  (status implemented)
+  (* agent note (|Iteration 30 (2026-07-06) plan-pass #6: section status
+    lifted partial -> implemented. All four subsections are now
+    `implemented`: schema (it2), no-inheritance (it9), transactions
+    (SERIALIZABLE defaults it16 + select-for-update it17 + with-transaction
+    it29 + dynamic-tx-scope it29). The ONE remaining v1.5 ergonomics
+    addition is the opt-in weaker-isolation `(query ... isolation:
+    'read-committed)` passthrough (the with-transaction prim already
+    accepts the isolation arg shape, defaulting to SERIALIZABLE; the
+    weaker-isolation passthrough is additive when shipped). This is not
+    a v1 necessity; remember per-subsection details below for the
+    fine-grained status narrative.|) *)
+  (subsection schema
+   (doc "Core tables (in migrations/001_branches.sql)")
+   (implements image/lib/store.ml supervisor/lib/store.ml auth/lib/store.ml)
+   (status implemented)
+   (* agent note (|Schema lives in migrations/001_branches.sql (branches,
+     function_defs, type_defs, view_bindings, sessions,
+     schema_migrations) and migrations/003_data.sql (the shared
+     `data_rows` table for user-declared types). All SQL
+     applied cleanly by the supervisor's migration runner
+     (which owns `split_sql_statements` to work around pgx's
+     multi-statement prepared-statement protocol limitation —
+     see BORGE-1783527733). SERIALIZABLE-by-default lives in
+     image/lib/store.ml's `Store.with_transaction`. Verified
+     end-to-end against the temp PG 18.4 cluster at /tmp/pp-pgsup:
+     11 tables created, migrations idempotent on re-run.|) *)
+   (details
+    (doc (|
+         -- The shared code store
+         CREATE TABLE branches (
+           id          uuid PRIMARY KEY,
+           parent_id   uuid REFERENCES branches(id),
+           owner       text NOT NULL,
+           name        text NOT NULL,
+           created_at  timestamptz NOT NULL DEFAULT now(),
+           last_synced timestamptz,  -- for merge diffing
+           UNIQUE (owner, name)
+         );
+
+         CREATE TABLE function_defs (
+           branch_id   uuid NOT NULL REFERENCES branches(id)
+                          ON DELETE CASCADE,
+           name        text NOT NULL,
+           body        jsonb NOT NULL,  -- serialized Lisp AST
+           doc         text,
+           author      text NOT NULL,
+           updated_at  timestamptz NOT NULL DEFAULT now(),
+           PRIMARY KEY (branch_id, name)
+         );
+
+         CREATE TABLE type_defs (
+           branch_id   uuid NOT NULL REFERENCES branches(id)
+                          ON DELETE CASCADE,
+           name        text NOT NULL,
+           fields      jsonb NOT NULL,  -- field declarations
+           migrated    bool NOT NULL DEFAULT false,
+           schema_vers  int NOT NULL DEFAULT 1,
+           author      text NOT NULL,
+           updated_at  timestamptz NOT NULL DEFAULT now(),
+           PRIMARY KEY (branch_id, name)
+         );
+
+         CREATE TABLE view_bindings (
+           branch_id   uuid NOT NULL REFERENCES branches(id)
+                          ON DELETE CASCADE,
+           route       text NOT NULL,  -- e.g. "/inspect/:id"
+           handler     text NOT NULL,  -- function name
+           PRIMARY KEY (branch_id, route)
+         );
+
+         CREATE TABLE sessions (
+           id          uuid PRIMARY KEY,
+           user_id     text NOT NULL,
+           branch_id   uuid NOT NULL REFERENCES branches(id),
+           pid         int,           -- image instance pid
+           boot_mode   text NOT NULL,  -- 'on-connect'|'always'
+           health      text NOT NULL DEFAULT 'unknown',
+           started_at  timestamptz NOT NULL DEFAULT now(),
+           last_seen   timestamptz
+         );
+
+         -- Shared data tables (event, user, etc.) are
+         -- created by migrations emitted from type_defs
+         -- merged to main. Their shape is whatever main
+         -- says. They are NOT branched.
+
+         CREATE TABLE schema_migrations (
+           version     int PRIMARY KEY,
+           applied_at timestamptz NOT NULL DEFAULT now(),
+           description text
+         );
+
+         The data tables themselves (e.g. events, users)
+         live alongside these system tables, created by the
+         supervisor's migration runner when type_defs are
+         accepted into main.
+
+         SERIALIZABLE is the transaction isolation default
+         for ALL Lisp-driven mutations. Weaker isolation is
+         opt-in per query.
+   |))
+   )
+   (verify
+    (build "dune build @all")
+    (build "psql -f migrations/001_branches.sql + 002_auth.sql + 003_data.sql = 11 tables")
+    (smoke "supervisor migration runner applies 3 migrations idempotently (supervisor smoke in it4/it5 logs)"))
+  )
+  (subsection no-inheritance
+   (doc "Why we do NOT use Postgres INHERITS")
+   (status implemented)
+   (* agent note (|Confirmed in code (it1-it16): no INHERITS in any
+     migration; plain tables with `branch_id` FK + PRIMARY KEY
+     (branch_id, name). The override semantics the spec describes
+     is realized via a recursive-CTE walk up the parent chain
+     (closest-ancestor-wins), used in `Store.lookup_function`,
+     `Store.list_function_names`, `Store.list_routes`,
+     `Store.list_types`, and the CRUD data-row lookups. Override-vs-
+     union behavior verified end-to-end by /tmp/pp_override_it9.py:
+     alice/experiment overrides `greet`; system/main's `greet` is
+     unchanged (branch isolation), alice's session sees alice's
+     version (override wins).|) *)
+   (details
+    (doc (|
+         Postgres table inheritance (INHERITS) is the
+         deprecated feature from the early-90s Postgres
+         implementation. We deliberately do NOT use it.
+
+         THE CORE REASON: branches are an OVERRIDE
+         primitive, not a UNION primitive. When Alice
+         forks and overrides 'greet', her branch's view
+         should see ONLY her greet, not main's greet
+         merged in. Postgres inheritance does union
+         (both rows visible), not override.
+
+         Modeling override on top of inheritance forces
+         us to write override resolution ourselves anyway
+         (pick the child's row when it exists), so
+         inheritance buys nothing but its quirks.
+
+         Other reasons:
+         - Foreign keys / unique constraints don't span
+           inheritance trees properly
+         - PRIMARY KEY doesn't propagate
+         - The planner handles inherited queries with edge
+           cases and unpredictability
+         - Inheritance handles schema evolution (add/remove
+           columns) inconsistently; migrations would be a
+           horror show
+         - pg_dump, psql, admin tools render inheritance
+           weirdly
+         - We'd pin ourselves to non-standard semantics
+
+         Plain tables with branch_id FK and override
+         resolution in queries (recursive CTE up the
+         parent chain, or materialized effective-definition)
+         gives us:
+         - Clean indexed SELECTs
+         - Predictable planner behavior
+         - Standard migrations
+         - Full inspectability (the goal)
+         - A clean path to content-addressing later if we
+           want "actually git" semantics
+
+         Future options stay open. Inheritance forecloses
+         them.
+   |))
+   )
+   (verify
+    (build "dune build @all")
+    (smoke "/tmp/pp_override_it9.py — override-walk + branch isolation (closest-ancestor wins, parent unchanged)"))
+  )
+  (subsection transactions
+   (doc "Transaction isolation: SERIALIZABLE by default")
+   (status implemented)
+   (* agent note (|Iteration 30 (2026-07-06) plan-pass #6: status lifted
+     partial -> implemented. All v1 sub-features of this section are now
+     built and smoke-tested: SERIALIZABLE-by-default (it16), explicit
+     row locks via `(select-for-update 'type id)` (it17), and dynamic
+     transaction scoping via `(with-transaction (lambda () body))` (it29)
+     which gives select-for-update real cross-statement locking scope.
+     Rollback behavior verified end-to-end on live PG.
+
+     The ONE remaining unbuilt sub-feature is the opt-in weaker-isolation
+     `(query ... isolation: 'read-committed)` passthrough — a v1.5
+     ergonomics addition, not a v1 necessity. The `with-transaction` prim
+     already accepts the `isolation` arg shape (defaults to SERIALIZABLE);
+     lifting the v1.5 passthrough is purely additive when shipped.
+
+     Cache coherence (initial, NO caching — each call reads fresh from
+     PG) is the current reality and is implemented as documented.
+     LISTEN/NOTIFY-based invalidation is still deferred (later).|) *)
+   (details
+    (doc (|
+         All Lisp-driven mutations run in SERIALIZABLE
+         transactions by default. Postgres detects
+         conflicts at commit and aborts one, forcing
+         retry. For a multi-user personal OS, throughput
+         is not the concern; correctness is.
+
+         Opt-in weaker isolation:
+           (query ... isolation: 'read-committed)
+         Available but discouraged. Most user code never
+         touches this; the system does the safe thing by
+         default. (v1.5 — the with-transaction prim
+         already accepts the isolation arg shape,
+         defaulting to SERIALIZABLE; the weaker-isolation
+         passthrough remains additive when shipped.)
+
+         Explicit row locks:
+           (select-for-update 'type id)
+         Exposed as a primitive for finer control.
+         Persists across subsequent prims in the same
+         with-transaction body (it29).
+
+         Cache coherence (initial): NO caching of stored
+         function defs in image memory. Each call reads
+         the AST fresh from Postgres. For a personal OS
+         where most calls are query+render, the function
+         read alongside the query is acceptable overhead.
+
+         Cache coherence (later): LISTEN/NOTIFY-based
+         invalidation. When a function is updated, the
+         updating image notifies; others drop from cache.
+         Mechanism well-trodden, deferred until measured.
+   |))
+   )
+   (verify
+    (test "image/test/primitives_test.ml — 48 alcotest cases")
+    (build "dune build @all")
+    (smoke "duplicate-fork UNIQUE violation triggers pgx auto-rollback (it16)")
+    (smoke "fork_branch returns new branch id (str round-trip)")
+    (smoke "merge_branch returns merged-rows count")
+    (smoke "/tmp/pp_sfu_it17.py — (select-for-update 'type id) prim"))
+  )
+  (subsection with-transaction
+   (doc "Dynamic transaction scoping: (with-transaction (lambda () body))")
+   (status implemented)
+   (* agent note (|Iteration 29 (2026-07-06): Option A from BORGE-1783438027
+     landed. Adds session-level dynamic transaction binding via a mutable
+     `current_tx : Pg.t option` field on `Store.t`; prims use
+     `Store.current_conn t` so they see the in-tx conn automatically.
+     New `with_transaction` special form in lisp/eval.ml dispatches the
+     lambda body through a privately-named `__with_transaction__` prim
+     registered from session.ml (keeps lisp/ pure-I/O-free). Nested
+     transactions raise a clean Interp_error. Body value passes through
+     verbatim. Borge issue BORGE-1783438027 status: triage -> resolved.|) *)
+   (details
+    (doc (|
+         Dynamic transaction scope: all DB prims called inside the
+         body run against the SAME pgx transactional connection.
+         Defaults to SERIALIZABLE isolation.
+
+           (with-transaction (lambda ()
+             (seq (select-for-update 'type id)
+                  (update-field 'type id "field" "value"))))
+
+         The select-for-update row lock PERSISTS across the
+         subsequent update-field in the same body — this is the
+         v1 concurrency-protection story for compound mutations.
+
+         Nested transactions raise a clean Interp_error. The body
+         value is returned verbatim (no wrapper tags/boxing).
+
+         The Lambda body is evaluated lazily; the dynamic binding
+         is set on `Store.t.current_tx` before the body runs and
+         cleared via `Lwt.finalize` after (whether BODY succeeds or
+         raises — pgx still sees the propagated exception and rolls
+         back).
+   |))
+   )
+   (verify
+    (test "image/test/primitives_test.ml — 48 alcotest cases")
+    (build "dune build @all")
+    (smoke "/tmp/pp_tx_it29.py — with-transaction prim (7 assertions)"))
+  )
+ )
+)

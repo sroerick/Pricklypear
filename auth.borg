@@ -1,0 +1,479 @@
+(project pricklypear-auth
+ (doc "Pricklypear book chapter: auth")
+ (status partial)
+ (convention ocaml-dune)
+ (section auth
+  (doc "A separate auth unikernel: credential verification, identity resolution, session tokens")
+  (status partial)
+  (* agent note (|it31 plan-pass #7: section remains partial. Shipped:
+    credentials-store, bootstrap-admin (first admin via env), audit-log,
+    verification ssh_key + token mint/verify halves, rpc-from-supervisor
+    plain-HTTP half. NEW planned product subsections this pass:
+    login-experience, web-login, user-management — these were previously
+    only implied inside verification/bootstrap details and never owned.
+    Password verify still Denied stub (argon2 not on poohstack).
+    admin_api create_user/add_credential still TODO stubs.|) *)
+  (details
+   (doc (|
+        Auth is its own unikernel, separate from the
+        supervisor. This is deliberate, not just
+        componentization:
+
+        - AUDIT/TRUST BOUNDARY: auth holds credentials
+          and verifies them. If compromised, the whole
+          system is compromised. This image should be
+          small, boring, never touched. The supervisor
+          changes often; auth changes rarely. Separating
+          means supervisor changes never risk auth code.
+        - BLAST RADIUS: a memory bug in the supervisor
+          cannot reach into auth's address space to read
+          credentials. (Both are unikernels with their
+          own address spaces; no shared memory.)
+        - RESTART INDEPENDENCE: supervisor restarts
+          (new fleet logic shipped) don't kill active
+          sessions (auth keeps running, tokens stay
+          valid). Auth restarts (rare) are explicit.
+        - DEPENDENCY HYGIENE: auth pulls crypto
+          primitives (argon2, ed25519, HMAC). Supervisor
+          pulls process management. Each unikernel's
+          dep surface stays small and Mirage-idiomatic.
+
+        Auth's job is FOUR PURE FUNCTIONS of the
+        credential store (in Postgres):
+          verify(cred) -> May<user_id>
+          lookup(user_id) -> May<User>
+          mint(user_id) -> token
+          verify_token(token) -> May<user_id>
+        Plus boot/attach provisioning, which is the
+        supervisor's job, NOT auth's. Auth knows
+        nothing about the fleet.
+
+        Auth is the ONLY thing that holds the session
+        token signing key. The supervisor never sees
+        raw credentials (passwords, keys) past the
+        initial verify call — it only sees user_ids and
+        signed tokens. Good separation.
+   |))
+  )
+  (subsection credentials-store
+   (doc "The users, credentials, sessions, auth_log tables in Postgres")
+   (status implemented)
+   (* agent note (|All tables shipped in migrations/002_auth.sql: users,
+     credentials, auth_sessions [renamed from sessions to avoid the
+     name clash with the image's sessions table, see BORGE-1783389549
+     note], auth_log, system_keys. The `pricklypear_auth` PG role is
+     GRANTed SELECT/INSERT/UPDATE ONLY on auth tables (not the
+     branches/function_defs/data_rows tables) — defense-in-depth role
+     isolation as the spec describes. auth/lib/store.ml connects as
+     `pricklypear_auth`. All id columns have DEFAULT
+     gen_random_uuid() (it5 migration fix). auth_log accumulates
+     ssh_key verify rows verified end-to-end through /tmp/pp_e2e_it6.py.
+
+     HARDENING TODO carried forward (documented in spec text below):
+     move the session_signing key from system_keys (on-disk in PG) to
+     auth-image MEMORY ONLY (env var on boot). v1 keeps the key in
+     system_keys for restart survival; the spec calls this an
+     accepted personal/small-team risk now.|) *)
+   (details
+    (doc (|
+         Tables (added by migrations, see migrations):
+
+           users (id uuid PK, username text UNIQUE,
+                  is_admin bool, created_at timestamptz)
+
+           credentials (id uuid PK, user_id uuid FK,
+                        kind text,        -- 'ssh_key'|'password'|'web_token'|'api_key'
+                        public_data jsonb,  -- SSH key material for verification;
+                                            -- null for password (hash is secret)
+                        secret_data jsonb,   -- argon2 hash for password;
+                                            -- reference for api_key
+                        created_at timestamptz,
+                        last_used_at timestamptz)
+
+           sessions (id uuid PK,            -- the token's opaque id
+                     user_id uuid FK,
+                     token_hash text,      -- HMAC of token; lookup target
+                     expires_at timestamptz,
+                     created_at timestamptz,
+                     revoked_at timestamptz NULL)
+
+           auth_log (id uuid PK, user_id text NULL,
+                     kind text, success bool,
+                     source_ip text,
+                     happened_at timestamptz)
+
+           system_keys (id text PK,        -- 'session_signing'
+                        key_data bytea,    -- the HMAC signing key, raw
+                        created_at timestamptz)
+
+         KEY STORAGE (
+          in-Postgres, role-isolated):
+         - The session signing key lives in
+           system_keys, read on auth boot.
+         - system_keys is in a dedicated PG role
+           that ONLY the auth image connects as.
+           A DB dump from any other role does not
+           include it (defense-in-depth, free).
+         - KNOWN RISK: a DB dump from auth's role,
+           or an auth-image compromise, leaks the
+           signing key -> all web sessions forgeable.
+           Accepted for now (personal/small-team OS).
+         - HARDENING GOAL (when this becomes stable &
+           useful): move the signing key to
+           auth-image MEMORY ONLY (env var on boot,
+           never touches disk). Tokens survive auth
+           restart only if the same key re-supplied.
+           Invalidating all sessions on key rotation
+           is acceptable then.
+         - Other credentials (password hashes via
+           argon2id, SSH public keys) in Postgres
+           permanently; that's correct and stable
+           (these are public verification material,
+           not signing keys).
+    |))
+   )
+  )
+  (subsection verification
+   (doc "verify(cred) / lookup / mint / verify_token — the four pure functions")
+   (implements auth/lib/verify.ml auth/lib/tokens.ml)
+   (status partial)
+   (* agent note (|Implementation it5/verified it6 onward for the
+     SSH-key path; token path verified by auth/test/auth_test.ml (4
+     alcotest cases for HMAC determinism, random-opaque_id 32B,
+     round-trip, malformed-token rejection).
+
+     IMPLEMENTED:
+     - `verify_ssh_key(presented_key) -> May<user_id>` full path:
+       auth/lib/verify.ml + auth/lib/store.ml SELECT the
+       credential WHERE kind='ssh_key' AND public_data=jsonb;
+       returns Ok uid or Denied. End-to-end verified: denied key →
+       {"ok":false}; admin key → {"ok":true,"user_id":"<uuid>"}.
+     - `mint(user_id)` + `verify_token(token)` via auth/lib/tokens.ml:
+       HMAC-SHA256 with the system_keys signing key; opaque_id is
+       32 random bytes; token format is base64(opaque_id || sig);
+       verify recomputes HMAC + compares. Mirage_crypto_rng
+       initialized via Mirage_crypto_rng_unix.initialize (module
+       Fortuna) on authd boot.
+
+     NOT YET IMPLEMENTED (deferred — v1.5 / requires an opam install):
+     - `verify_password(username, password)`: STUB only — raises
+       `Not_implemented` because argon2 is NOT on the poohstack opam
+       switch. No web-login password verification. ACCEPTABLE for v1
+       because the SSH-first model means the primary credential IS
+       the SSH key; password verification is the future web-login
+       path. v1.5 will install `argon2` opam package + wire a real
+       argon2id verify.
+
+     Section marked `partial` until at least verify_password lands
+     (the four pure functions the spec enumerates include both
+     ssh_key AND password cred kinds).|) *)
+   (details
+    (doc (|
+         SSH KEY VERIFICATION (for supervisor SSH front door):
+         1. Supervisor does SSH handshake, receives
+            the presented public key.
+         2. Supervisor calls auth:
+            verify_ssh_key(presented_key) -> May<user_id>
+         3. Auth: parse key, SELECT FROM credentials
+            WHERE kind='ssh_key' AND public_data = key.
+            Return user_id or denied.
+         4. Supervisor calls auth.lookup(user_id) ->
+            User record (for is_admin, etc.).
+         5. Auth logs to auth_log.
+
+         PASSWORD VERIFICATION (for web login):
+         1. User POSTs username+password to the
+            supervisor's /login (or the auth image's
+            own endpoint — TBD; either way).
+         2. Auth: SELECT secret_data FROM credentials
+            WHERE kind='password' AND user_id=
+            (SELECT id FROM users WHERE username=$1).
+            argon2-verify against the presented
+            password. Return user_id or denied.
+         3. Auth logs to auth_log.
+
+         TOKEN MINTING (after web login):
+         1. Auth: generate random token bytes (32B),
+            HMAC-sign with the session_signing key
+            from system_keys, opaque_id = random,
+            signed = HMAC(opaque_id).
+         2. Auth: INSERT INTO sessions (id=opaque_id,
+            user_id, token_hash=signed, expires_at=...).
+         3. Auth: return token = base64(opaque_id ||
+            signed). Client stores as cookie.
+
+         TOKEN VERIFICATION (on web requests):
+         1. Client sends token cookie. Routing layer
+            (supervisor or relayd-style proxy) calls
+            auth.verify_token(token).
+         2. Auth: split token, recompute HMAC,
+            compare; if match, lookup sessions row,
+            check not revoked and not expired. Return
+            user_id or denied.
+         3. Auth logs to auth_log.
+
+         TOKEN FORMAT (minimal, NOT JWT):
+         opaque_id (32B random) || HMAC(opaque_id)
+         We control both ends; don't need JWT's
+         cross-system interop claims. Hash stored in
+         sessions table enables revocation.
+    |))
+   )
+  )
+  (subsection bootstrap-admin
+   (doc "First-admin creation via env var on auth first boot")
+   (implements auth/lib/admin_api.ml auth/lib/boot.ml)
+   (status implemented)
+   (* agent note (|Implementation it5/verified it6 onward. auth/lib/
+     boot.ml checks: if users table is empty AND PP_BOOTSTRAP_ADMIN_KEY
+     env var is set, INSERT into users (username='admin',
+     is_admin=true) + INSERT into credentials (kind='ssh_key',
+     public_data=the key, user_id=admin). Verified end-to-end:
+     /tmp/pp_e2e_it6.py sends the SAME admin SSH key as authd was
+     supplied via env var on first boot; the verify_ssh_key call
+     returns the admin's user_id. (When users table is non-empty, the
+     env var is ignored on subsequent boots — idempotent bootstrap.)
+     Subsequent users are NOT part of this subsection's done bar —
+     see auth.user-management (planned; admin_api still stubs).|) *)
+   (details
+    (doc (|
+         Bootstrapping the first user, with no users yet:
+
+         1. Operator sets env var on the auth unikernel
+            at first boot:
+              PRICKLYPEAR_BOOTSTRAP_ADMIN_KEY=<ssh-ed25519 AAAA...>
+         2. Auth boot: if users table is empty AND the
+            env var is set, INSERT into users
+            (username='admin', is_admin=true) and into
+            credentials (kind='ssh_key',
+            public_data=the key, user_id=admin).
+         3. Auth boot: warn loudly in logs that
+            bootstrap was used, and recommend clearing
+            the env var afterward.
+         4. After first boot, the env var is ignored.
+
+         Subsequent users: added by an admin via the
+         supervisor's admin UI (which itself authenticates
+         via auth) calling an auth primitive
+         (create-user username, add-credential user_id
+         ssh_key, etc.). These primitives require
+         is_admin=true on the calling session.
+
+         No interactive bootstrap flow needed; the env-var
+         pattern is simple, standard, and audit-logged.
+    |))
+   )
+  )
+  (subsection audit-log
+   (doc "Every verification logged to auth_log")
+   (status implemented)
+   (* agent note (|Implementation it5: auth/lib/store.ml's `audit_log`
+     INSERTs a row (user_id, kind, success, source_ip=NULL,
+     happened_at default now()) per verify_ssh_key call. Verified:
+     `/tmp/pp_e2e_it6.py` succession of one successful admin verify
+     + one denied verify leave behind two auth_log rows
+     (kind='ssh_key', success=t then f). Use cases from the spec text
+     below — synthesized log for anomalies (cred misuse, brute-force,
+     insider abuse) — are achievable with the existing log shape; a
+     future stats page on the supervisor admin could surface these.|) *)
+   (details
+    (doc (|
+         Every call to verify_ssh_key, password
+         verification, mint, and verify_token writes a
+         row to auth_log:
+           (user_id NULL if unknown/failed,
+            kind: 'ssh_key'|'password'|'mint'|'verify_token',
+            success bool,
+            source_ip text,
+            happened_at timestamptz default now())
+
+         WHY from day one (despite personal-OS scope):
+         - Cheap to add (one INSERT per verify call).
+         - Invaluable when something goes wrong
+           (compromised key? malicious insider? audit
+           compliance if ever needed?).
+         - Painful to retrofit (verification call sites
+           scattered; adding log calls everywhere later
+           means finding every one).
+         - Standard practice; non-controversial.
+
+         The log is append-only in practice
+         (no UPDATE/DELETE on auth_log). Retention
+         policy deferred; for now, keep forever
+         (cheap rows).
+    |))
+   )
+  )
+  (subsection rpc-from-supervisor
+   (doc "How supervisor calls auth: internal signed/mTLS RPC")
+   (implements supervisor/lib/auth_client.ml)
+   (status partial)
+   (* agent note (|Implementation it6/verified it6 onward. supervisor/
+     lib/auth_client.ml does an HTTP POST to authd's /verify_ssh_key
+     endpoint (hand-rolled HTTP/1.1 over plain Lwt_unix socket; reads
+     response bytes until `}` or EOF; parses JSON; returns Ok uid or
+     Denied). Fail-closed: any transport error logs + returns Denied.
+     End-to-end verified by /tmp/pp_e2e_it6.py through the dev.sh stack:
+     python connects to supervisor SSH stub :17822 → supervisor calls
+     authd → authd verifies → image spawned. The supervisor itself never
+     holds raw credentials in memory past the initial in-flight RPC call.
+     (See BORGE-1783389549 for the note that hand-rolled HTTP-over-socket
+     was needed because Lwt_io channels triggered EBADF mixed with raw
+     Lwt_unix.read/write on the same fd.)
+
+     DEFERRED from spec text: the actual spec doctrinal text below
+     describes a signed/mTLS RPC. v1 uses plain HTTP+JSON on the
+     internal network (loopback in dev, the inter-unikernel fabric in
+     prod). The internal network IS the trust boundary in v1: images,
+     supervisor, and authd share an isolated fabric; spoofing the
+     authd address requires being on the fabric.
+
+     Section marked `partial` until (1) a real mTLS or signed-token RPC
+     layer lands (a future hardening iteration that would let authd
+     REJECT unauthenticated supervisor RPCs — currently the
+     supervisor's identity is implicit via network position). Also
+     deferred: token-result passing through the supervisor (v1 returns
+     the user_id straight from the SSH verify RPC, no separate token
+     minting on the SSH path because the SSH session IS the auth).TOKEN
+     verification RPC IS implemented (authd /verify_token endpoint)
+     for the future web-login path.|) *)
+   (details
+    (doc (|
+         The supervisor calls auth over an internal RPC
+         (HTTP+JSON, or a tighter binary protocol — HTTP
+         is simpler and auth doesn't need throughput).
+         On the internal hypervisor network.
+
+         AuthENTICATION OF THE RPC ITSELF:
+         - mTLS between supervisor and auth:
+           both present certs signed by a shared CA
+           (the CA is the hypervisor itself, or a
+           generated root for the deployment).
+         - OR simpler: a shared static secret in a
+           header, both images load from env vars,
+           rotated manually. Less secure but v1-OK
+           for a trusted internal network.
+         - Either way: auth refuses calls from anything
+           that doesn't present the right credential.
+           The supervisor is the only legitimate caller.
+
+         Endpoints auth exposes (internal only):
+           POST /verify_ssh_key   (key) -> {user_id or denied}
+           POST /verify_password  (user, pw) -> {user_id or denied}
+           POST /mint_token       (user_id) -> {token, expires_at}
+           POST /verify_token     (token) -> {user_id or denied}
+           GET  /lookup/:user_id             -> {user} (admin only)
+           POST /admin/create_user (admin only)
+           POST /admin/add_credential (admin only)
+
+         The supervisor holds a long-lived client cert
+         (or shared secret) for these calls. It is the
+         only caller; auth refuses all others.
+
+         v1 SHIPPED: plain HTTP+JSON on internal network,
+         /verify_ssh_key and token paths live.
+         DEFERRED: mTLS/shared-secret RPC auth of the
+         caller; full admin endpoint wiring (see
+         auth.user-management).
+    |))
+   )
+  )
+  (subsection login-experience
+   (doc "What 'log in' means to a human: one front door into your live image")
+   (status partial)
+   (* agent note (|it32: PARTIAL. scripts/repl.sh + repl_client.py give a
+     human front door (key auth -> REPL) without netcat. Browser still
+     requires an already-booted image. Full "I logged into my computer"
+     browser path is auth.web-login.|) *)
+   (verify
+    (smoke "human authenticates and lands in their live image REPL or browser session")
+    (smoke "unknown credential is denied without booting an image"))
+   (details
+    (doc (|
+         PRODUCT BAR (v1 experience):
+         1. User presents a credential (SSH public key by
+            default; password/web token via auth.web-login).
+         2. authd verifies; supervisor resolves identity.
+         3. Supervisor boots or attaches the user's image
+            (boot-on-connect default).
+         4. User lands in a live environment: SSH/line
+            REPL and/or browser session bound to that image.
+         5. Session end tears down boot-on-connect images;
+            store state survives.
+
+         NON-GOALS for this subsection:
+         - Implementing crypto (ssh-interface / awa path)
+         - Password hashing details (verification)
+         - Admin user CRUD (user-management)
+
+         Success looks like: "I logged into my computer",
+         not "I ran a smoke protocol against port 17822".
+    |))
+   )
+  )
+  (subsection web-login
+   (doc "Browser login: password verify, mint token, cookie, attach to image UI")
+   (status planned)
+   (* agent note (|it32: still planned. Password verify + mint/verify_token
+     now work (interim sha256$salt$digest, not argon2). Still missing:
+     /login page, cookie wiring, supervisor attach/proxy to image UI.
+     user-management create_user/add_credential password path ships.|) *)
+   (verify
+    (build "dune build auth supervisor image")
+    (smoke "POST login with valid password -> token cookie -> image UI session")
+    (smoke "bad password denied + auth_log row"))
+   (details
+    (doc (|
+         Planned flow:
+         1. User opens supervisor or image login page
+         2. POST username + password
+         3. authd verify_password (argon2id) -> user_id
+         4. authd mint_token -> Set-Cookie
+         5. Subsequent requests: verify_token -> attach
+            or route to that user's image HTTP surface
+         6. Logout revokes auth_sessions row
+
+         v1 may keep login on supervisor and reverse-proxy
+         to the image; exact host split is a make-time
+         choice. SSH remains the primary admin/dev path
+         until web-login is verified.
+    |))
+   )
+  )
+  (subsection user-management
+   (doc "After bootstrap: create users, add credentials, list users (admin)")
+   (status implemented)
+   (* agent note (|it32: IMPLEMENTED. admin_api create_user +
+     add_credential ssh_key|password; HTTP
+     /admin/create_user|/admin/add_credential|/admin/list_users with
+     X-Admin header. Password hash interim sha256$salt$digest.
+     Smoke in scripts/dream_product_smoke.py.|) *)
+   (implements auth/lib/admin_api.ml)
+   (verify
+    (build "dune build auth")
+    (smoke "admin creates user + adds ssh_key credential; new user can log in")
+    (smoke "non-admin caller denied"))
+   (details
+    (doc (|
+         Admin-only operations (auth RPC + later admin UI):
+         - create_user(username, is_admin?)
+         - add_credential(user_id, kind, public_data,
+           secret_data)
+         - list_users / lookup_user
+         - revoke_credential / revoke_session (later)
+
+         First admin continues to come from
+         bootstrap-admin env var on empty users table.
+         All later humans and service accounts go through
+         this section. Credentials supported in order:
+         ssh_key (v1), password (with web-login), api_key
+         (later).
+
+         Enforcement: caller must present an admin session
+         (token or supervisor-held admin capability).
+         auth/lib/admin_api.ml is the implementation home.
+    |))
+   )
+  )
+ )
+)

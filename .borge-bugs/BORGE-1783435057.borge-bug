@@ -1,0 +1,52 @@
+title: storage.transactions now genuinely implemented — mark (status implemented)
+severity: low
+status: triage
+section: storage.transactions
+reporter: agent (iteration 16, 2026-07-06)
+
+summary:
+  In iteration 16 the pgx transaction wrapper [Store.with_transaction]
+  was added to image/lib/store.ml and used to wrap [fork_branch] (4 SQL
+  statements) and [merge_branch] (1 INSERT ... ON CONFLICT). Both now
+  run as a single SERIALIZABLE transaction per AGENTS.md and
+  [storage.transactions] spec text. The spec doctrinal text is already
+  correct ("SERIALIZABLE by default", "Postgres detects conflicts at
+  commit and aborts one", "select-for-update exposed as a primitive"
+  — note: select-for-update prim is NOT yet built; that's still
+  TODO and should keep the status as `partial` or be split).
+
+request:
+  In the next borge plan pass, transition [storage.transactions] from
+  (status planned) to (status implemented) — annotating that the
+  SERIALIZABLE default with pgx with_transaction is wired through
+  fork_branch and merge_branch. Do NOT mark `verified` until the
+  - select-for-update prim is built and cross-checked, OR
+  - split the subsection: a `with-transaction` subsection = implemented,
+    a `select-for-update` subsection = planned.
+
+  Reference agent note in pricklypear.borg should describe the actual
+  implementation reality:
+    - [Store.with_transaction ?isolation:Pg.Isolation.Serializable]
+      lives in image/lib/store.ml (post-it16).
+    - fork_branch: 4 SQL statements wrapped in with_transaction.
+    - merge_branch: 1 statement wrapped (still atomic; tests cover this).
+    - Variable: reads via recursive-CTE are NOT wrapped (they're read-
+      only against the latest committed snapshot per connection —
+      acceptable for read; SERIALIZABLE matters for mutations only).
+
+verified-at-iteration:
+  16 (2026-07-06)
+  - dune build @all exit 0; dune runtest --force 92 tests pass.
+  - Programmatic rollback verified: duplicate (fork 'main 'rbtest/child)
+    raises on the branches(owner,name) UNIQUE constraint; pgx rolls back
+    the partial INSERT, no orphaned branch row left behind (verified
+    post-state: branches=1, function_defs=1).
+  - Smoke tests green: pp_e2e_it6, pp_persist_it8, pp_route_it9,
+    pp_checkout_it11, pp_fork_it9, pp_merge_it10, pp_crud_it13,
+    pp_types_it14 — all re-tested under the transaction wrapper.
+
+depends-on:
+  BORGE-1783433175 (comprehensive plan-pass request — supersedes this
+  for the bulk transition, but this issue adds storage.transactions
+  specifically with the realized-with-transaction-flow context that
+  BORGE-1783433175 didn't have at filing time).

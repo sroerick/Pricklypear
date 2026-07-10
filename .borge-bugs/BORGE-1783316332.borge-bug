@@ -1,0 +1,7 @@
+(borge-bug (id "BORGE-1783316332")
+  (title "Spec deviation: Eio stack instead of Lwt/Mirage — pgx_lwt_mirage -> caqti-eio, httpaf-mirage -> httpun-eio")
+  (status triage)
+  (created 2026-07-05)
+  (filed-by roerick)
+  (doc "")
+)

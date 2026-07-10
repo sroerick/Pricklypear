@@ -1,0 +1,8 @@
+(borge-bug (id "")
+  (title "")
+  (status closed)
+  (created )
+  (filed-by )
+  (doc "")
+  (resolution (when 1783316371) (how closed) (by roerick))
+)

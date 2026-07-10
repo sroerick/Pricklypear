@@ -1,0 +1,362 @@
+(project pricklypear-ai-authoring
+ (doc "Pricklypear book chapter: ai-authoring")
+ (status partial)
+ (convention ocaml-dune)
+ (section ai-authoring
+  (doc "AI as a first-class author of functions: propose, surgical AST rewrite/freeze, growth-from-seed, human merge gate, provenance")
+  (status partial)
+  (* agent note (|it33: design expanded with growth-style coding tools
+    (llm-inner/outer/seed) discussed with roerick. Still PARTIAL:
+    blank-slate propose-function ships; surgical freeze rewrites and
+    recursive seed growth are planned. Effects gates reference
+    lisp-interpreter.effects. Runtime LLM-as-value holes are
+    explicitly secondary to coding-tool freeze-on-accept.|) *)
+  (verify
+   (build "dune build @all")
+   (smoke "AI propose on user branch -> human inspect -> merge policy gate")
+   (smoke "future: llm-inner freeze rewrites stored AST; llm-seed grows outward on a branch"))
+  (details
+   (doc (|
+        AI is an author, not a privileged runtime. Machine-
+        written code uses the same store, branch, and merge
+        machinery as human code. Default trust model:
+        AI writes only to a user (or agent) branch; promoting
+        into system/* still requires admin merge policy.
+
+        Coding styles supported by the tool surface:
+
+        1) Blank-slate propose
+           (propose-function 'name "spec")
+           Whole new/replaced binding from a prompt.
+
+        2) Surgical freeze rewrite (CODING TOOL — preferred)
+           (llm-inner 'name "concept")
+           (llm-outer 'name "concept")
+           LLM rewrites one AST component; on accept the
+           result is FROZEN into function_defs (not left as
+           an unevaluated hole). Emacs-ish replace-region
+           with generated code, but tree-native.
+
+        3) Growth-from-seed (CODING TOOL)
+           (llm-seed "build an app that ...")
+           Recursively: create smallest clean core, then
+           llm-outer until requirements are satisfied.
+           Bottom-up / inside-out Lisp style operationalized.
+
+        4) Runtime generative eval (SECONDARY / later)
+           Eval-time expansion of AI holes without freeze.
+           Useful, but not the primary coding workflow.
+
+        Non-goals for first cut of new tools:
+        - AI does not bypass author-runs-as-author
+        - AI does not write system/* without merge policy
+        - full addressable node table not required for
+          whole-function inner/outer (paths into JSONB AST
+          suffice); node IDs are a later upgrade
+          (branching.ast-nodes)
+   |))
+  )
+  (subsection tools
+   (doc "How an AI proposes or patches functions into the store")
+   (status implemented)
+   (* agent note (|it32: IMPLEMENTED blank-slate path. image/lib/
+     llm_client.ml OpenAI-compat via curl; Session.propose_function;
+     prim propose-function; POST /api/ai/propose; author agent:<model>.
+     Surgical rewrite + seed growth live in sibling subsections.|) *)
+   (verify
+    (build "dune build image")
+    (smoke "POST /api/ai/propose ai-double then (ai-double 21) => 42"))
+   (details
+    (doc (|
+         v1 SHIPPED:
+         - propose-function Lisp prim + /api/ai/propose
+         - whole-function body from model, define on current branch
+         - author = agent:<model>
+         - never merges to system/*
+         - local or remote OpenAI-compat endpoint via env
+           LLM_API_BASE / LLM_API_KEY / LLM_MODEL
+
+         Shared client contract for ALL AI tools:
+         - non-streaming POST chat/completions (gateway-safe)
+         - model returns code/AST only (no markdown essay)
+         - parse gate before any store write
+         - effect inference after parse (lisp-interpreter.effects)
+         - policy gate before freeze
+
+         Sibling tools (planned):
+         - ast-rewrite: llm-inner / llm-outer / llm-rewrite
+         - growth-seed: llm-seed recursive outer growth
+    |))
+   )
+  )
+  (subsection ast-rewrite
+   (doc "Surgical coding tools: llm-inner / llm-outer / llm-rewrite with freeze-on-accept into stored AST")
+   (status implemented)
+   (* agent note (|it33: NEW. Roerick's coding-tool model: not primarily
+     runtime hole expansion; editor/session command that pings LLM to
+     write one AST component, previews, freezes into function_defs.
+     Emacs replace-region analogy. Depends on llm_client + AST
+     json round-trip (already ship) + effects inference (planned).|) *)
+   (verify
+    (build "dune build image")
+    (smoke "llm-inner on a binding rewrites body AST and survives reload")
+    (smoke "llm-outer wraps a pure function; effect badges update")
+    (smoke "reject unparseable model output without mutating store"))
+   (details
+    (doc (|
+         PURPOSE
+         Iterative code growth/refactor against live stored trees.
+         Human (or command) supplies a concept; model rewrites ONE
+         component; accept freezes into Postgres AST + live env.
+
+         PRIMS / COMMANDS
+
+         (llm-rewrite name prompt . options)
+           General form. Options may include:
+             mode: 'replace | 'wrap     ; default replace
+             path: structural path      ; default whole body
+             as: new-name               ; non-destructive rename target
+             branch: branch-ref         ; work on a branch first
+             accept: 'auto | 'preview   ; default preview in UI,
+                                        ; REPL may auto with flag
+
+         (llm-inner name prompt . options)
+           Sugar: mode=replace on function body (or selection path).
+           "Improve/replace the organ."
+
+         (llm-outer name prompt . options)
+           Sugar: mode=wrap on whole function.
+           "Put tissue around the organ." Old behavior preserved
+           via call-through or careful inline; prefer call-through
+           to name-old or nested original subtree.
+
+         FREEZE-ON-ACCEPT SEMANTICS (critical)
+         1. Load current function AST from store/env
+         2. Select target subtree (body / path / whole)
+         3. Build surgical prompt (see PROMPT CONTRACT)
+         4. Ping LLM local or remote
+         5. Parse response as s-expr or JSON AST only
+         6. Splice into tree (replace or wrap)
+         7. infer_effects on result
+         8. policy check (default allow Pure|ReadDb|Html;
+            escalate WriteDb|Branch|Publish|Ai)
+         9. Preview diff (pretty + optional AST)
+         10. On accept:
+             - persist function_defs.body JSONB
+             - rebind live env
+             - author = agent:<model>
+             - optional provenance run id
+         11. On reject: no store mutation
+
+         This is NOT leaving (llm-inner ...) in the program.
+         After accept, the program contains real Lisp AST only.
+
+         PROMPT CONTRACT (surgical AST author)
+         System:
+           You are editing a Pricklypear Lisp AST.
+           Return ONLY one replacement form: a single
+           s-expression (or JSON AST). No markdown, no essay.
+           You write ONE component of a larger program tree.
+
+         User payload includes:
+           - mode replace|wrap
+           - function name
+           - user concept / intent
+           - current function pretty
+           - current function AST json
+           - selected path + selected subtree pretty/json
+           - available prims summary
+           - allowed effect set
+           - for wrap: instruction to preserve behavior and
+             call through original unless inlining is clearer
+
+         Model output:
+           - full lambda when replacing whole binding body
+           - subtree only when replacing a selection hole
+           - wrapper lambda when mode=wrap
+
+         VALIDATION GATES
+           - reader/json parse success
+           - splice shape compatibility
+           - effect policy
+           - optional smoke eval of (name sample-args) if provided
+
+         UI SURFACE
+           - function editor command: Rewrite… / Wrap…
+           - structural selection path when structure mode exists
+           - REPL prims for power users
+           - always show diff before freeze unless accept:'auto
+
+         DEFAULTS (safety)
+           - prefer work on current branch; offer agent/* branch
+           - prefer preview over silent overwrite
+           - keep old body in diff buffer / one-level undo
+           - non-destructive 'as new-name always available
+
+         NON-GOALS (this subsection)
+           - recursive app growth (see growth-seed)
+           - runtime hole expansion without freeze
+           - multi-file repo patches
+    |))
+   )
+  )
+  (subsection growth-seed
+   (doc "llm-seed: recursive bottom-up growth via smallest core + repeated llm-outer until requirements satisfied")
+   (status implemented)
+   (* agent note (|it33: NEW. Roerick coding style operationalized:
+     start from one little function, grow outward. llm-seed orchestrates
+     propose/inner for the seed then recursive llm-outer with a planner
+     prompt until the high-level requirement is met or caps hit.
+     This is how LLMs can be made to work inside-out instead of only
+     top-down whole-app dumps.|) *)
+   (verify
+    (build "dune build image")
+    (smoke "llm-seed on a tiny goal produces >=1 frozen function on a branch")
+    (smoke "growth stops at max-steps or requirement-satisfied judge")
+    (smoke "each step is inspectable as a frozen binding + diff"))
+   (details
+    (doc (|
+         PURPOSE
+         Operationalize inside-out Lisp development for AI:
+           seed a minimal clean function, then wrap/grow until
+           the stated requirements are satisfied.
+
+         TOP-LEVEL COMMAND
+
+         (llm-seed requirement . options)
+
+         Options (sketch):
+           name: optional root name hint
+           branch: default fork to user/ai-<stamp> or agent/*
+           max-steps: default small (e.g. 4..8)
+           budget: token/time caps
+           effects-allow: default Pure|ReadDb|Html
+           stop: 'ask | 'auto-judge
+
+         ALGORITHM (orchestrator, not one giant prompt)
+
+         Step 0 — Plan (optional short call)
+           Given requirement, emit a growth outline:
+             core behavior, successive wrappers, final page?
+           Human may edit plan later; v1 can be implicit.
+
+         Step 1 — Seed (smallest clean core)
+           Prompt specialty:
+             "Write the SMALLEST and CLEANEST pure-ish function
+              that captures the essential nucleus of: <req>.
+              One lambda only. No wrapping, no IO unless required."
+           Freeze as seed name (e.g. notes-core).
+           Run a tiny smoke if possible.
+
+         Step 2..N — Grow outward (llm-outer loop)
+           While not satisfied and steps < max-steps:
+             a. Judge prompt (or human):
+                "Does current function set satisfy <req>?
+                 If not, what SINGLE outer responsibility
+                 should be added next (validation, IO, page,
+                 composition)?"
+             b. If satisfied -> stop
+             c. Else llm-outer on current tip with that single
+                responsibility (surgical wrap prompt)
+             d. Freeze wrapper as new tip (or replace tip name
+                while keeping -vN history / old symbol)
+             e. Record step in a growth log (session + optional
+                data_rows type 'ai-growth-step)
+
+         Step Final — Optional publish surface
+           If requirement implies a page and effects allow:
+             define page handler + (route ...)
+           Still no auto-merge to system/*.
+
+         JUDGE / STOP CONDITIONS
+           - model judge returns satisfied=true
+           - human stops
+           - max-steps reached
+           - effect escalation would exceed allowlist
+           - parse/policy failures exceed retry budget
+
+         WHY RECURSIVE OUTER NOT ONE-SHOT APP DUMP
+           - preserves a working center at every step
+           - each layer is runnable/testable in the image
+           - matches bottom-up Lisp craft
+           - forces LLMs into step-sized commits
+           - diffs remain reviewable
+
+         PROMPT SPECIALIZATIONS
+           Seed prompt: smallest nucleus, prefer Pure
+           Outer prompt: one responsibility only, preserve
+             prior behavior via call-through
+           Judge prompt: boolean satisfied + next missing
+             capability in one short structured response
+
+         FAILURE MODES / GUARDRAILS
+           - onion wraps forever -> max-steps + dedupe judge
+           - outer reimplements instead of wraps -> prompt
+             + validation heuristic (must reference prior name)
+           - effect creep -> policy gate per step
+           - nondeterminism -> provenance + branch + growth log
+
+         RELATIONSHIP TO OTHER TOOLS
+           llm-seed USES:
+             - blank-slate propose or llm-inner for seed
+             - llm-outer for each growth ring
+             - effects inference/policy each freeze
+             - review-merge for promotion to system/*
+           llm-seed is an orchestrator over ast-rewrite.
+
+         NON-GOALS
+           - fully autonomous unattended product engineering
+           - hidden multi-minute agent swarms without logs
+           - replacing human taste for when to re-inner/
+             collapse wrappers after growth
+    |))
+   )
+  )
+  (subsection review-merge
+   (doc "Human gate: inspect AI changes, then merge with existing policy")
+   (status planned)
+   (* agent note (|it33: still planned. Applies to propose, ast-rewrite
+     freezes, and growth-seed branches alike. Growth log should appear
+     in review UI when seed exists.|) *)
+   (details
+    (doc (|
+         Review loop:
+         1. AI commits one or more function_defs on a branch
+            (propose, llm-inner/outer freezes, or llm-seed steps)
+         2. Human opens system browser / functions list /
+            editor / inspect to read AST + effect badges
+         3. Human runs/tests via browser-repl or scripts/repl.sh
+         4. For growth-seed: step through growth log diffs
+         5. Human merges branch -> target via existing
+            (merge ...) policy (admin-only into system/*)
+         6. Reject path: leave branch, redefine, or undo freeze
+
+         No separate "AI merge" privilege. Merge politics
+         stay in branching.merge.
+    |))
+   )
+  )
+  (subsection provenance
+   (doc "Attribution, audit, and trust labels for machine-authored code")
+   (status partial)
+   (* agent note (|it32/it33: PARTIAL. author=agent:<model> on propose.
+     ast-rewrite/growth-seed must record the same plus optional run id
+     and parent step for seed rings.|) *)
+   (details
+    (doc (|
+         v1 SHIPPED: author=agent:<model> on AI writes; visible in
+         /bindings and inspect.
+
+         REQUIRED for rewrite/seed tools:
+         - author agent:<model> on every freeze
+         - optional metadata: run_id, parent_function,
+           growth_step, prompt_hash, mode inner|outer|seed
+         - growth-seed writes an inspectable step log
+
+         DEFERRED: visual agent badge styling, dedicated audit table.
+         Trust rule remains branch + merge policy + effect allowlists.
+    |))
+   )
+  )
+ )
+)

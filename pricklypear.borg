@@ -1,0 +1,155 @@
+(project pricklypear
+ (doc "A multi-user Lisp operating system built on MirageOS unikernels, with Postgres as the shared object store and htmx as the user interface layer")
+ (status partial)
+ (* agent note (|it31 plan-pass #7 (product-truth reconciliation):
+  Demoted project status implemented -> partial. The substrate
+  (5 packages, 3 migrations, scripts/dev.sh, 92 alcotest cases,
+  end-to-end smoke path SSH/line-protocol -> authd -> image ->
+  REPL -> define -> call) IS real and green. That is not the same
+  as the v1 product experience bar. Project stays partial until a
+  user can: (1) log in without developer ceremony, (2) use base
+  functions in a live image, (3) create/edit functions from the
+  environment (not only raw REPL typing), and (4) optionally accept
+  AI-proposed functions on a branch. New planned product surfaces
+  added this pass: auth.login-experience, auth.web-login,
+  auth.user-management, image.system-browser, image.browser-repl,
+  image.function-editor, image.inspector, ai-authoring.*, and
+  branching.ast-nodes. Systems sections remain mostly partial/
+  implemented as before; type-system stays planned (typed fields
+  deferred). Solo5 target remains a v1.5 hardening axis.|) *)
+ (verify
+  (build "dune build @all — exit 0 across all 5 packages + spikes/awa_ssh")
+  (test "dune runtest — 92 alcotest cases pass (lisp 30 + common 10 + auth 4 + image 48)")
+  (smoke "scripts/dev.sh start boots PG + authd + supervisor; ssh admin@host -p 17822 → \"hello\" from the image REPL")
+  (smoke "v1 product cut (not yet): login + base fns + define/edit in browser + optional AI propose on branch"))
+ (convention ocaml-dune
+ )
+ (no-inline
+ )
+ (roerick
+  (|
+   Pricklypear is an operating system in the Smalltalk tradition:
+   a live, inspectable image where programs are editable data
+   and the running state IS the system. It is NOT Smalltalk:
+   no OOP, no image snapshots, no single-address-space-only
+   single-user world.
+
+   It is built on three architectural pillars:
+
+   1. MirageOS unikernels. The "OS" is OCaml code linked into
+      a unikernel. No userspace/kernel split, no syscalls.
+      Everything is inspectable OCaml values. The unikernel
+      boots in ~2s, making "rebuild the world" a cheap
+      operation and A/B rollback viable as a routine
+      operation, not a disaster-recovery one.
+
+   2. Postgres as the object store. Durable state (function
+      definitions, type schemas, branch metadata, user
+      records, application data) lives in Postgres. The
+      image is ephemeral and rebuildable from the store.
+      This splits durability from execution cleanly.
+
+   3. A Lisp interpreter (Scheme-flavored, Lisp-1, lexically
+      scoped). Programmers write functions in Lisp; the AST
+      IS the source (homoiconicity); functions are stored
+      as JSONB rows in Postgres, editable live without
+      rebuilding the image. The OCaml layer (primitives,
+      interpreter, transports) changes slowly via
+      supervised A/B boot. The Lisp layer changes fast via
+      row updates in the store.
+
+   Two unikernels compose the runtime:
+
+   - The SUPERVISOR unikernel: booted directly by the
+     hypervisor, manages a fleet of per-user IMAGE
+     unikernels, handles A/B rollback and health checks,
+     serves a minimal admin HTTP surface. Targets Solo5
+     in production, mirage/unix in dev.
+
+   - The IMAGE unikernel: booted per-user-session, runs
+     the Lisp interpreter, exposes an internal REPL
+     endpoint (supervisor fronts SSH and forwards) and
+     an htmx HTTP endpoint. Runs as mirage/unix initially;
+     v1 uses httpaf-lwt-unix + pure-html + pgx_lwt
+     (+ Io_unix). Solo5 is a later build-axis swap
+     (gluten-mirage + httpaf + pgx_lwt_mirage), not a
+     rewrite of the Lisp/store model.
+
+   The hypervisor box runs: the supervisor unikernel,
+   Postgres, and the per-user image unikernels the
+   supervisor spawns. Nothing else. There is no OpenBSD
+   userland in the hot path; the hypervisor trusts exactly
+   one thing (the supervisor) and the supervisor manages
+   the rest.
+
+   Multi-user is achieved by process isolation: each user
+   gets their own image instance. Namespaces, budgets, and
+   author-runs-as-author permissions handle the remaining
+   concerns. Code is branched (git-style fork/merge) so
+   users can experiment without clobbering each other or
+   the system baseline ('main').
+
+   This file is the source of truth. If the implementation
+   disagrees, the implementation is wrong.
+  |)
+ )
+ (* agent note (|it34 overnight foundation: monolithic pricklypear.borg split
+  into chapter files for literate book structure. Root inlines each chapter
+  project in book order. Backup: pricklypear.borg.monolith.bak.|) *)
+ (section philosophy
+  (doc "Book chapter — full text inlined from philosophy.borg")
+  (inline philosophy.borg)
+ )
+ (section architecture
+  (doc "Book chapter — full text inlined from architecture.borg")
+  (inline architecture.borg)
+ )
+ (section object-model
+  (doc "Book chapter — full text inlined from object-model.borg")
+  (inline object-model.borg)
+ )
+ (section branching
+  (doc "Book chapter — full text inlined from branching.borg")
+  (inline branching.borg)
+ )
+ (section lisp-interpreter
+  (doc "Book chapter — full text inlined from lisp-interpreter.borg")
+  (inline lisp-interpreter.borg)
+ )
+ (section storage
+  (doc "Book chapter — full text inlined from storage.borg")
+  (inline storage.borg)
+ )
+ (section multi-user
+  (doc "Book chapter — full text inlined from multi-user.borg")
+  (inline multi-user.borg)
+ )
+ (section auth
+  (doc "Book chapter — full text inlined from auth.borg")
+  (inline auth.borg)
+ )
+ (section supervisor
+  (doc "Book chapter — full text inlined from supervisor.borg")
+  (inline supervisor.borg)
+ )
+ (section image
+  (doc "Book chapter — full text inlined from image.borg")
+  (inline image.borg)
+ )
+ (section product-experience
+  (doc "Book chapter — full text inlined from product-experience.borg")
+  (inline product-experience.borg)
+ )
+ (section migrations
+  (doc "Book chapter — full text inlined from migrations.borg")
+  (inline migrations.borg)
+ )
+ (section workflow
+  (doc "Book chapter — full text inlined from workflow.borg")
+  (inline workflow.borg)
+ )
+ (section ai-authoring
+  (doc "Book chapter — full text inlined from ai-authoring.borg")
+  (inline ai-authoring.borg)
+ )
+)

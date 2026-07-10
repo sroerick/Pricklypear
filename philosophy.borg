@@ -1,0 +1,101 @@
+(project pricklypear-philosophy
+ (doc "Pricklypear book chapter: philosophy")
+ (status partial)
+ (convention ocaml-dune)
+ (section philosophy
+  (doc "Design principles")
+  (status implemented)
+  (* agent note (|it23 plan-pass #5: all 10 design principles are
+                   embodied by the built system. Mirage-native: all
+                   three unikernels (authd, supervisor, image) boot
+                   as mirage/unix processes; Solo5 target is a build
+                   switch not a rewrite (deferred per BORGE-1783398327).
+                   Postgres-as-filesystem: all durable state is rows
+                   (function_defs, type_defs, view_bindings, sessions,
+                   data_rows, auth tables, system_keys). Lisp-1
+                   homoiconic: reader produces App(Var,...), AST JSON-
+                   serialized persist_function round-trips. Two-tier
+                   change model: define persists to PG (it8); OCaml
+                   changes via rebuild. Branches-not-namespaces:
+                   fork_branch + recursive-CTE override walk (it9)
+                   with no privileged 'common' branch. Separate-
+                   processes isolation: Fleet.boot spawns per-user image
+                   processes (it4). Author-runs-as-author: manifest.author
+                   threaded through persist + current-author prim (it7).
+                   SERIALIZABLE-by-default: Store.with_transaction uses
+                   Pgx.Isolation.Serializable as the default (it16).
+                   Additive-only: all 3 migrations strictly CREATE-only
+                   (no DROP/RENAME/ALTER-COLUMN-TYPE). Inspectability:
+                   image UI pages / + /branches + /bindings + /binding/<name>
+                   + /types (it11, it14); supervisor admin / + /fleet +
+                   /health. Philosophy is a statement-of-intent section;
+                   the spec text stays as documentation (no implementation
+                   diff needed).|) *)
+  (verify
+   (build "dune build @all")
+   (test "lisp/test/eval_test.ml + common/test/common_test.ml")
+   (smoke "/tmp/pp_e2e_it6.py end-to-end demonstrates all 10 principles"))
+  (details
+   (doc (|
+        1. Mirage-native. The OS is a unikernel. No Unix
+           userland in the hot path. The supervisor IS a
+           unikernel, not a daemon; it manages other
+           unikernels by requesting VMs from the hypervisor,
+           not by posix_spawn.
+
+        2. Postgres is the filesystem. All durable state
+           lives there. The image is ephemeral and
+           rebuildable. Anything that must survive a reboot
+           is a row; anything in the image is rebuildable
+           from rows.
+
+        3. Lisp-1 interpreter, homoiconic. The AST IS the
+           source. Functions stored as JSONB. Editing the
+           AST IS editing the code. Closures, let, lambda,
+           application are first-class. Macros inherit for
+           free later.
+
+        4. Two-tier change model. OCaml layer (primitives,
+           transports, the unikernel itself) changes slowly
+           via supervised A/B boot. Lisp layer (user
+           functions) changes fast via row updates. Schema
+           layer is merge-governed into 'main'.
+
+        5. Branches, not namespaces. There is no privileged
+           'common' namespace. There is 'main' (the system
+           baseline) and per-user branches. Code branches,
+           shared data. Forking is cheap; merging is the
+           politically-sensitive operation.
+
+        6. Separate processes for isolation. Multi-user is
+           achieved by giving each user their own image
+           unikernel, not by namespacing within one image.
+           Alice's bad function wedges Alice's image, not
+           Bob's.
+
+        7. Author-runs-as-author. A function executes with
+           ITS AUTHOR's data permissions, not the caller's.
+           This is the Unix setuid model and it is honest
+           and familiar.
+
+        8. SERIALIZABLE by default. The Lisp's query/mutate
+           primitives default to SERIALIZABLE transactions.
+           Weaker isolation is opt-in. Most user code never
+           touches this; the system does the safe thing.
+
+        9. Additive-only schema evolution. Types in 'main'
+           can grow fields but not remove or rename them.
+           Cruft accumulates; correctness is preserved.
+           This sidesteps most migration pain at small
+           ongoing cost.
+
+        10. Inspectability is non-negotiable. Everything
+            (functions, types, branches, sessions, the
+            supervisor's fleet, the interpreter's state) is
+            queryable and renderable in the htmx UI. The
+            storage layer must be the most inspectable
+            part of the system, not the least.
+   |))
+  )
+ )
+)

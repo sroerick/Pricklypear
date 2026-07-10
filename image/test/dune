@@ -1,0 +1,4 @@
+(test
+ (name primitives_test)
+ (modules primitives_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest lwt lwt.unix))

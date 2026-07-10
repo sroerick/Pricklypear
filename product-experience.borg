@@ -1,0 +1,193 @@
+(project pricklypear-product-experience
+ (doc "Pricklypear book chapter: product-experience")
+ (status partial)
+ (convention ocaml-dune)
+ (section product-experience
+  (doc "Human-facing product layer: concepts, access paths, legible vocabulary, first-run, horizon")
+  (status partial)
+  (* agent note (|it32: PARTIAL overall. concepts-guide, vocabulary,
+    first-run-recipe implemented; access-paths partial (repl.sh yes,
+    browser login no); horizon planned design-only. Markdown removed;
+    .borg is SoT. Verified by dream_product_smoke.py about/hello/pages.|) *)
+  (verify
+   (build "dune build image")
+   (smoke "GET /about teaches concepts; home offers first-run hello recipe")
+   (smoke "scripts/repl.sh logs into REPL"))
+  (details
+   (doc (|
+        Pricklypear is a multi-user live computing environment:
+        log into your image, write Lisp functions stored as data,
+        branch code while sharing data, bind functions to URLs,
+        let AI propose functions onto a branch.
+
+        Product experience is the thin skin that makes the dense
+        substrate legible. Without it, only authors understand
+        the system.
+   |))
+  )
+  (subsection concepts-guide
+   (doc "In-app about page: glossary, access, first tour, horizon summary")
+   (status implemented)
+   (* agent note (|it32: IMPLEMENTED. GET /about + home link. Markdown
+     docs/concepts-and-horizon.md removed; .borg is source of truth.|) *)
+   (verify
+    (build "dune build image")
+    (smoke "GET /about contains Image, Store, Function, Branch, Route, AI"))
+   (details
+    (doc (|
+         GET /about (always-present OCaml page) MUST explain:
+
+         WHAT: multi-user live Lisp environment; image=CPU,
+         Postgres=disk; Smalltalk tradition without OOP image dump.
+
+         GLOSSARY:
+         - Image: running personal process (REPL + HTTP)
+         - Store: Postgres durable truth
+         - Function/binding: named live value; define persists
+         - Branch: versioned code world; data shared
+         - Type/row: deftype + data_rows CRUD
+         - Route/page: URL bound to a function
+         - AI propose: agent authors on current branch only
+
+         ACCESS:
+         - scripts/dev.sh start
+         - scripts/repl.sh (key line protocol :17822)
+         - browser :18080 after image boot
+         - /repl /edit/<name> /bindings /about
+         - authd :17879 admin/token APIs
+
+         FIRST TOUR: define hi-page, route /hello, open page,
+         edit, optional propose-function.
+
+         Link from home nav and home body. Full horizon detail
+         in product-experience.horizon.
+    |))
+   )
+  )
+  (subsection access-paths
+   (doc "Documented ways humans reach a live image")
+   (status partial)
+   (* agent note (|it32: PARTIAL (intentional). scripts/repl.sh + browser
+     after boot + about docs ship. Browser password login still
+     auth.web-login planned — keeps this subsection partial.|) *)
+   (verify
+    (smoke "scripts/repl.sh connects and evaluates (+ 1 2)")
+    (smoke "unknown key denied"))
+   (details
+    (doc (|
+         v1 SHIPPED paths:
+         1. scripts/repl.sh — interactive key auth + REPL
+         2. Browser UI once image booted (HTTP on image port)
+         3. Auth RPC for admin create_user / password / token
+         4. scripts/verify_dream_product.sh automated gate
+
+         DEFERRED:
+         - Browser login page that boots/attaches image
+           (auth.web-login)
+         - Default real SSH (awa 0.5.x path)
+    |))
+   )
+  )
+  (subsection vocabulary
+   (doc "Friendly UI labels over systems jargon")
+   (status implemented)
+   (* agent note (|it32: IMPLEMENTED. Nav/home/pages use Functions,
+     Pages, Data, Workspace. Lisp prim names unchanged. Smoke checks
+     home vocabulary.|) *)
+   (verify
+    (smoke "nav/home use Functions (not only Bindings) and point to /about"))
+   (details
+    (doc (|
+         UI vocabulary (human):
+           Functions  <- function_defs / bindings
+           Pages      <- view_bindings / routes
+           Data       <- type_defs + data_rows
+           Workspace  <- current branch + whoami
+           About      <- concepts guide
+
+         Lisp/REPL vocabulary stays technical (define, route,
+         deftype, rows). The browser skin translates.
+    |))
+   )
+  )
+  (subsection first-run-recipe
+   (doc "One-click or one-form 'make a hello page' onboarding")
+   (status implemented)
+   (* agent note (|it32: IMPLEMENTED. POST /api/recipe/hello + home
+     button create hi-page + /hello route. Smoke: GET /hello works.|) *)
+   (verify
+    (build "dune build image")
+    (smoke "POST /api/recipe/hello creates hi-page route; GET /hello works"))
+   (details
+    (doc (|
+         Recipe "hello page":
+         1. Define function hi-page -> render-html greeting
+         2. (route "/hello" "hi-page")
+         3. Return link to /hello and /edit/hi-page
+
+         Exposed as:
+         - Button/form on home
+         - POST /api/recipe/hello
+
+         Non-goals: full app wizard (that's AI app-sketch later).
+    |))
+   )
+  )
+  (subsection horizon
+   (doc "Long-term possible futures built on this substrate (design only)")
+   (status planned)
+   (* agent note (|it32: design-only. Migrated from
+     docs/concepts-and-horizon.md. Not an implementation checklist;
+     guides prioritization and pitching.|) *)
+   (details
+    (doc (|
+         Possible futures (not commitments):
+
+         A. Personal computing environment
+            Always-on personal image; notes/CRM/automations
+            as live functions; browser as desktop.
+
+         B. Multi-user community OS
+            system/main commons; personal garden branches;
+            merge reviews; author-runs-as-author capabilities.
+
+         C. AI-native software workshop
+            AI cohabits image; proposes types+fns+routes as
+            app sketches; binding-level diffs; provenance;
+            later addressable AST patches.
+
+         D. Internal tools platform
+            Team branches; shared business objects; live
+            inspectable tools without redeploy for Lisp-tier
+            changes.
+
+         E. Education / research lab
+            Legible multi-user systems + PL teaching with
+            forks/merges and visible isolation.
+
+         F. End-user programmable products
+            Friendly skin on same substrate; templates as
+            starter branches; AI drafts, users edit.
+
+         G. Hardened multi-tenant service
+            Solo5, real SSH + web login, argon2, mTLS,
+            fleet policies, true setuid data scoping.
+
+         Milestone ladder:
+           now   — hacker env (define/edit/route/AI propose)
+           next  — legibility (vocabulary, about, hello recipe,
+                   browser login)
+           later — environment feel (system browser density,
+                   merge UI, permissions)
+           horizon — community + AI coworker + Solo5 product
+
+         Principles to preserve:
+           live system over file tree; store is truth;
+           code branches / data shared; functions compose;
+           AI is an author not god mode; inspectability;
+           isolation by process.
+    |))
+   )
+  )
+ )
+)

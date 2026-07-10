@@ -1,0 +1,516 @@
+(project pricklypear-image
+ (doc "Pricklypear book chapter: image")
+ (status partial)
+ (convention ocaml-dune)
+ (section image
+  (doc "The per-user unikernel: Lisp interpreter, REPL endpoint, htmx interface")
+  (status partial)
+  (* agent note (|it32: image still partial overall. browser-repl +
+    function-editor implemented; system-browser + inspector partial;
+    product-experience owns about/vocabulary/first-run. ssh still
+    line-protocol default; linenoise still deferred.|) *)
+  (subsection boot
+   (doc "Reading the manifest, loading initial env")
+   (status implemented)
+   (* agent note (|it23: image/lib/boot.ml + bin/unikernel.ml.
+                    Reads manifest from env vars (PP_USER_ID,
+                    PP_USERNAME, PP_BRANCH_ID, PP_BRANCH_NAME,
+                    PP_IMAGE_VERSION, PP_HTTP_PORT, PP_REPL_PORT,
+                    PP_DB_* env vars). PG connect (non-fatal on
+                    failure).
+                    load_defs_async populates env from function_defs
+                    via recursive-CTE walk (it8). REPL endpoint +
+                    HTTP server started async. Health endpoint /health.
+                    The spec's 7th step 'marks self healthy, signals
+                    supervisor' is NOT explicitly wired — supervisor
+                    uses retry-on-connect backoff (it6) to detect image
+                    readiness instead.
+                    The spec describes the PROD flow as 'manifest fetched
+                    from PG by the supervisor before booting' — v1 dev
+                    flow uses env vars because boot-on-connect uses
+                    posix_spawn (it4); prod Solo5 + hypervisor VM request
+                    would carry the manifest forward, deferred. The 8-step
+                    boot sequence is implemented; the PG-fetched manifest
+                    is the prod-flow upgrade path.|) *)
+   (verify
+    (build "dune build image")
+    (smoke "/tmp/pp_img_it7.py —   image boots + serves / and /health + REPL accepts connections"))
+   (details
+    (doc (|
+         On boot, the image:
+         1. Reads its boot manifest (from common/lib/manifest.ml
+            type, fetched from Postgres by the supervisor
+            before booting).
+         2. Manifest specifies:
+            - user_id (who this image is; asserted by
+              supervisor after auth verified the
+              credential — see section auth. The image
+              trusts this because supervisor+auth did the
+              verification; the image does no auth itself.)
+            - username (for the REPL prompt and author
+              tracking)
+            - branch_id (default branch, usually user/main)
+            - boot_mode ('on-connect' | 'always-on')
+            - image_version (for A/B tracking)
+            - config (budgets, feature flags)
+         3. Loads all function_defs and type_defs for
+            branch_id from Postgres into the in-memory
+            env (or, with no-caching policy, sets up the
+            branch-aware lookup that reads on each call).
+         4. Starts the REPL endpoint (internal line
+            protocol; the supervisor forwards SSH channels
+            here — see ssh-interface). NOT a full SSH server.
+         5. Starts the htmx server (httpaf-lwt-unix in v1)
+            on configured port.
+         6. Registers health endpoint.
+         7. Marks self healthy, signals supervisor.
+
+         The image is STATELESS across reboots w.r.t. user
+         data: anything that must survive is in Postgres.
+         In-memory REPL state (define'd locals in a
+         session) does NOT survive reboot unless the user
+         persisted via (store) or similar.
+   |))
+   )
+  )
+  (subsection ssh-interface
+   (doc "The SSH front door: supervisor authenticates, forwards to image REPL")
+   (implements supervisor/lib/ssh.ml supervisor/lib/ssh_awa.ml supervisor/lib/ssh_awa_shims.ml supervisor/lib/ssh_keys.ml supervisor/lib/boot.ml)
+   (status partial)
+   (* agent note (|it23: the supervisor-fronts-SSH pattern is implemented
+                    (supervisor/lib/ssh.ml). v1 uses a non-crypto line
+                    protocol on PP_SSH_PORT (default 17822 dev / 2222 prod):
+                    accept TCP, banner, read key as first line, auth via
+                    authd's /verify_ssh_key HTTP RPC, DENIED or OK+
+                    boot/attach image, byte-proxy TCP between SSH socket
+                    and image REPL socket. Real awa-ssh path (it21) is
+                    OPT-IN via PP_AWA_SSH_PORT; real SSH transport +
+                    pubkey auth works end-to-end but the exec_callback's
+                    REPL proxy bridge has a Cstruct<->Lwt_io bug, AND
+                    awa 0.3.1's static-auth-db constraint means the awa
+                    path can't propagate user identity into the image
+                    (see BORGE-1783439434). The line protocol IS the
+                    spec's design minus the cryptographic transport.
+                    Marked partial: the cryptographic SSH handshake
+                    isn't default; waiting on awa 0.5.x upgrade (its
+                    auth-event callback exposes username to exec_callback).
+                    Per the spec's own tradeoff section 'supervisor-to-image
+                    hop is internal (trusted hypervisor network), so no
+                    end-to-end SSH crypto between user terminal and image' —
+                    that has held. Image does NOT run full SSH — matches spec
+                    design.|) *)
+   (verify
+    (build "dune build @all")
+    (smoke "/tmp/pp_e2e_it6.py — line-protocol SSH→auth→image→REPL→define→call")
+    (smoke "PP_AWA_SSH_PORT=12223 + real ed25519 key in DB → awa-ssh handshake + pubkey auth"))
+   (details
+    (doc (|
+         THE SSH PATH (end to end):
+
+         1. User runs: ssh alice@pricklypear.host
+         2. SUPERVISOR listens on port 22 (awa-ssh,
+            Mirage-compatible) and accepts the connection.
+         3. SSH handshake + key exchange (awa-ssh, pure
+            OCaml, no libssh).
+         4. Authentication: supervisor calls pricklypear
+            authd (NOT wyo.auth — deliberate v1 choice;
+            see workflow.conventions) via verify_ssh_key
+            RPC to resolve the presented public key to a
+            user_id. Key -> user mapping is authd's job.
+         5. Supervisor boots (boot-on-connect) or attaches
+            (always-on) the user's image unikernel.
+         6. Supervisor opens a channel to the image's
+            internal REPL endpoint (see repl_endpoint
+            below) and FORWARDS the SSH channel's PTY
+            stream to it. The user's terminal is now
+            talking to the image's REPL.
+         7. Image presents the REPL prompt (see
+            repl-experience).
+         8. On disconnect, supervisor notes session end;
+            boot-on-connect images die, always-on images
+            keep running.
+
+         WHY SUPERVISOR-FRONTS-SSH (not each image on its
+         own port):
+         - One door, one auth, one image per user. Matches
+           'SSH-first OS' — it's THE login, not N logins.
+         - Users don't need to know their image's port.
+         - authd integration happens in one place
+           (supervisor), not N places (each image).
+         - The image doesn't need full SSH — just a REPL
+           endpoint. Simpler image.
+
+         TRADEOFF: supervisor-to-image hop is internal
+         (trusted hypervisor network), so no end-to-end
+         SSH crypto between user terminal and image. For
+         a personal OS on a trusted hypervisor, this is
+         acceptable. If it becomes a concern, the image
+         can run its own awa-ssh on an internal port and
+         the supervisor does TCP forwarding of the
+         encrypted SSH stream (then the image decrypts).
+         Defer this until it's a felt concern.
+   |))
+   )
+  )
+  (subsection repl-endpoint
+   (doc "Image's internal REPL endpoint, not full SSH")
+   (status implemented)
+   (* agent note (|it23: image/lib/repl_endpoint.ml. TCP listener on
+                    PP_REPL_PORT. Accepts a connection, prints banner
+                    'Pricklypear REPL. Type :quit to exit.', prompts
+                    with prompt (branch_name + '> '). Read-eval-print loop
+                    driven by Lwt_io channels. Session.t IS shared across
+                    connections (one Session.t per image process), so
+                    `(define x 42)` in one socket persists to the next —
+                    matches the it18 smoke-test pattern. Graceful disconnect
+                    (it10): all post-disconnect cleanup wrapped in Lwt.catch,
+                    EBADF classified as 'peer disconnected' not fatal.
+                    No full SSH in the image — matches the spec's design.
+                    The supervisor connects and forwards SSH-to-image TCP
+                    bytes via Lwt_unix.read/write.|) *)
+   (verify
+    (build "dune build image")
+    (smoke "/tmp/pp_persist_it8.py — define persists + /tmp/pp_e2e_it6.py — REPL proxy works"))
+   (details
+    (doc (|
+         The image does NOT run a full SSH server. Instead
+         it exposes an internal REPL endpoint — a simple
+         line protocol over a TCP socket (or Mirage
+         channel) on an internal port. The supervisor
+         connects to this and forwards the user's PTY
+         stream.
+
+         Protocol (minimal, framed):
+           - Connect: supervisor opens TCP to image:REPL_PORT
+           - Auth: none needed (internal network; the
+             supervisor already authenticated the user)
+           - Exchange: lines of UTF-8. User input flows
+             in; REPL output flows out.
+           - The image's session.ml tracks this connection
+             as a session; on disconnect, session ends.
+
+         WHY NOT FULL SSH IN THE IMAGE:
+         - Removes awa-ssh dependency from the image
+           (keeps image smaller; awa crypto is non-trivial).
+         - One SSH implementation (in supervisor) to
+           maintain, not N.
+         - authd resolution stays in supervisor.
+
+         The endpoint is in image/lib/repl_endpoint.ml.
+         It owns: accepting the supervisor's connection,
+         wiring PTY stream to the line editor (lineedit.ml),
+         and the REPL read-eval-print loop itself.
+   |))
+   )
+  )
+  (subsection repl-experience
+   (doc "What the user sees: prompt, multi-line, line editing, meta-commands")
+   (implements image/lib/lineedit.ml)
+   (status partial)
+   (* agent note (|it23: prompt + multi-line + meta-commands + session-state
+                    are implemented in image/lib/repl_endpoint.ml.
+                    Currently the prompt is '<branch-name>> ' (e.g.
+                    'main> '), NOT the spec's 'alice/main>' 2-token form.
+                    Multi-line: the reader's is_complete is consulted so
+                    a `(define square (lambda ...` spanning lines waits for
+                    the closing paren. Meta-commands (define, fork, checkout,
+                    merge, list-bindings) ARE implemented as Lisp special
+                    forms or prims (define is the only AST-level intercept
+                    since its name arg is a Var not to be evaluated before
+                    binding; others are Lwt prims on the it12 ABI). Session
+                    state: define persists to PG (it8); REPL locals are
+                    session-local, persist across REPL socket reconnections
+                    within an image's life; checkout mutates branch_id (it11).
+                    NOT IMPLEMENTED: real line EDITING (image/lib/lineedit.ml
+                    is a single-line stub). ocaml-linenoise is the candidate;
+                    v1 just uses raw input — no cursor movement, no history,
+                    no Ctrl-A/E. Editing is desired but not v1-blocking (the
+                    image IS usable via a wrapper that sends prepared lines).
+                    (edit name), (describe 'type), (load "file"), (help) —
+                    meta-commands not yet implemented (ergonomic gaps, see
+                    lisp-interpreter.primitives' agent note). Marked partial:
+                    the REPL usability core + meta-commands ship; real
+                    linenoise-style editing + the 4 missing meta-commands are
+                    the deferred v1.5 polish layer.|) *)
+   (verify
+    (build "dune build image")
+    (smoke "/tmp/pp_e2e_it6.py — define + apply works through the REPL"))
+   (details
+    (doc (|
+         THE PROMPT:
+           alice/main>           -- showing user + current branch
+           alice/main (def) |     -- mid-multiline-define
+
+         READING INPUT:
+         - The REPL reads s-expressions. It keeps reading
+           lines until parens are balanced and strings
+           closed (standard Lisp REPL behavior). The
+           reader tells us 'incomplete' so we know to
+           prompt for more, not to evaluate yet.
+         - One REPL turn = one s-expression (which may
+           span many lines).
+         - Comments: ; to end of line, as in the reader.
+
+         LINE EDITING:
+         - Real line editing matters for a dev tool.
+           Raw SSH PTY + a line-editing layer.
+         - Library choice deferred to build time:
+           ocaml-linenoise is the leading candidate
+           (small, Mirage-compatible-ish). Pure OCaml.
+         - Supports: cursor movement, history (up/down),
+           Ctrl-A/E, backspace, delete.
+         - Search/history-reverse-search: nice-to-have,
+           not v1-blocking.
+
+         EVALUATION + PRINTING:
+         - Evaluate the s-expression in the session env.
+         - On success: pretty-print the resulting value.
+           VList -> (a b c), VLambda -> #<lambda>,
+           VRef -> #<ref event:uuid>, VInt -> 42, etc.
+         - On error: print the error with location if
+           possible (line/col from the reader), then a
+           continuation prompt. Don't kill the session.
+
+         META-COMMANDS (Lisp forms, not a separate
+         command lexer — the reader handles them, the
+         eval loop recognizes them as special forms):
+           (define name expr)         bind + persist to store
+           (edit name)                print htmx URL for AST editor
+           (fork parent child)        create a branch
+           (checkout branch)         switch session's branch
+           (merge source target)      reviewer flow
+           (describe 'type)           show type schema
+           (list-bindings)           current env
+           (load "file")              eval a file's contents
+           (help)                     list specials
+           Any other Lisp form        evaluate + print result
+
+         SESSION STATE:
+         - (define ...) persists to the store: survives
+           image reboot (loaded on next boot of the
+           branch).
+         - REPL-local let bindings (e.g. (let ((x 5))
+           ...) at top level): session-local, not
+           persisted. Like bash variables.
+         - Switching branch (checkout) within a session
+           keeps REPL locals but changes which function
+           defs are visible. (Decision: this is the
+           'working directory' model — you carry your
+           locals across branch switches.)
+   |))
+   )
+  )
+  (subsection htmx-interface
+   (doc "httpaf-lwt-unix + pure-html, routes AS functions in the store")
+   (implements image/lib/http.ml auth/lib/http.ml)
+   (status partial)
+   (* agent note (|it23: htmx-interface is partially implemented.
+                    SYSTEM pages (always present in OCaml): / (hello
+                    world index with nav links), /health (JSON),
+                    /branches (list all branch rows), /bindings (list
+                    function_defs via recursive-CTE), /binding/<name>
+                    (single def pretty-print), /types (list type_defs
+                    via recursive-CTE). All built in image/lib/http.ml
+                    using httpaf-lwt-unix + pure-html with Hx.* htmx
+                    attrs (it11, it14). /inspect/:id is NOT built.
+                    USER pages: `(route "/path" 'handler)` prim registers
+                    in view_bindings + live-updates session.routes
+                    hashtable (it9). Route handler's return value is
+                    dispatched in http.ml: tagged VStr ('__html__:' prefix
+                    from render-html) → raw HTML via txt ~raw:true
+                    (it14); bare VStr → text in <p>; anything else →
+                    pretty-printed in <pre>.
+                    NOT IMPLEMENTED: the htmx attribute helpers as Lisp
+                    prims — (hx-get url), (hx-post url), etc. are NOT
+                    Lisp prims yet (v1 emits htmx attributes directly
+                    in the raw HTML string passed to render-html).
+                    Matches spec principle 'routes ARE functions in the
+                    store'; 'pure-html for HTML generation (use Hx.* not
+                    raw strings)' is honored at the OCaml level.
+                    Marked partial: /inspect/:id + (hx-get/post) Lisp
+                    prims are the unbuilt pieces. Product surfaces that
+                    grow out of these pages are now owned by planned
+                    subsections system-browser, browser-repl,
+                    function-editor, inspector (it31).|) *)
+   (verify
+    (build "dune build image")
+    (smoke "/tmp/pp_ui_it11.py — system pages / /branches / /bindings / /binding/<name>")
+    (smoke "/tmp/pp_route_it9.py — (route ...) registers + dispatches user pages")
+    (smoke "/tmp/pp_types_it14.py — /types page + render-html tagged VStr dispatch"))
+   (details
+    (doc (|
+         The image's htmx endpoint serves two kinds of
+         pages:
+
+         1. SYSTEM pages (always present, part of the
+            OCaml image):
+            /health            health check
+            /inspect/:id       browse any stored value
+            /branches          list + fork/merge UI
+            /types             type browser
+            /bindings          function browser (per branch)
+
+         2. USER pages (defined as functions in the store):
+            registered via (route "/path" fn-name).
+            The route handler function takes the request
+            (params, body) and returns a value the
+            system renders (an HTML node, a redirect, etc).
+
+         Routes ARE functions in the store. Adding a route
+         = (route "/foo" 'foo-handler). This makes the
+         user-facing UI part of the live image, editable
+         via the same mechanisms as everything else.
+
+         pure-html (the dream_html HTML generation core,
+         usable WITHOUT Dream) is used for HTML generation
+         (per poohstack convention; use Hx.* not raw
+         strings at the OCaml layer).
+
+         v1 SHIPPED:
+         - httpaf-lwt-unix HTTP server
+         - system pages listed above (except /inspect)
+         - user routes via (route ...) + render-html
+
+         DEFERRED:
+         - /inspect/:id (see image.inspector)
+         - (hx-get)/(hx-post) Lisp prims (authors currently
+           embed htmx attrs inside render-html strings)
+         - Solo5 HTTP via gluten-mirage + httpaf
+         - richer system-browser chrome (own subsection)
+   |))
+   )
+  )
+  (subsection primitives-layer
+   (doc "image/lib/primitives.ml: the ~20 impure fns registered at boot")
+   (implements image/lib/primitives.ml image/lib/crud.ml image/lib/session.ml)
+   (status partial)
+   (* agent note (|it31 plan-pass #7: demoted implemented -> partial in
+    lockstep with lisp-interpreter.primitives. Registration path is real:
+    image/lib/primitives.ml + crud.ml + session-control prims + env
+    auto-bind of VPrim names at session-make. Interpreter stays pure
+    (lisp/ tests with no services). Section is partial because the
+    registered universe still includes stubs/missing prims listed under
+    lisp-interpreter.primitives (list-branches VNil stub, missing query/
+    describe/inspect/diff/current-branch, hx helpers incomplete, create
+    returns VStr not VRef, no author-scoped CRUD filtering). Promote back
+    to implemented only when that table is honest and complete-or-trimmed.|) *)
+   (verify
+    (build "dune build image && cd lisp && dune build && dune runtest")
+    (test "image/test/primitives_test.ml 48 alcotest cases; lisp/test/eval_test.ml 30 pure tests"))
+   (details
+    (doc (|
+         See lisp-interpreter.primitives for the full
+         primitive list. This subsection covers the IMAGE
+         layer's responsibility: registering them with
+         the interpreter at boot.
+
+         The interpreter is pure and knows nothing about
+         Postgres, htmx, or SSH. The IMAGE layer:
+         1. Opens a Postgres connection (v1: pgx_lwt +
+            custom Io_unix shim; Solo5 later may use
+            pgx_lwt_mirage behind the same Store.t).
+         2. Constructs an initial env with VPrim values
+            bound to names like 'get', 'create', etc.
+         3. The interpreter's Prim call dispatches by name
+            to the OCaml function the image registered.
+         4. Each primitive handles its own transaction
+            (SERIALIZABLE by default) and permission
+            checks (per multi-user.permissions; author-
+            scoped filtering still partial).
+
+         This separation is what makes the interpreter
+         testable without any services running (pure
+         lisp/test/eval_test.ml, no DB, no HTTP).
+
+         v1 SHIPPED registration path: real.
+         DEFERRED: full prim table completeness (see
+         lisp-interpreter.primitives); Solo5 pgx path.
+   |))
+   )
+  )
+  (subsection system-browser
+   (doc "The live environment UI: browse branches, functions, types as a place you live")
+   (status partial)
+   (* agent note (|it32: PARTIAL. Chrome shell ships in image/lib/http.ml:
+     header with whoami/branch/uptime, nav (home/about/functions/types/
+     repl/editor), home card with entry points, AI propose form.
+     /about concepts guide added it32. Still missing: first-class pages
+     list, data browser, branch switcher UI, richer "place you live"
+     density. Friendly vocabulary (Functions not Bindings) is the
+     product-experience.vocabulary track.|) *)
+   (verify
+    (build "dune build image")
+    (smoke "GET / shows user+branch chrome and links to about/functions/repl"))
+   (details
+    (doc (|
+         v1 SHIPPED:
+         - Chrome: whoami, branch, uptime, nav
+         - Home entry points + AI propose form
+         - /about concepts guide
+         - Click-through to functions/types/branches/repl/editor
+
+         DEFERRED:
+         - Pages list (view_bindings browser)
+         - Data rows browser by type
+         - Branch switcher control
+         - Fork/merge affordances in UI
+    |))
+   )
+  )
+  (subsection browser-repl
+   (doc "Evaluate Lisp from the browser against the live session env")
+   (status implemented)
+   (* agent note (|it32: IMPLEMENTED. GET /repl + POST /api/eval invoke
+     Session.eval_one on the live env. Multi-line via textarea; errors
+     return JSON without killing session; (define ...) persists.
+     scripts/dream_product_smoke.py covers define+call.|) *)
+   (verify
+    (build "dune build image")
+    (smoke "POST /api/eval (+ 20 22) => 42; define + call persists"))
+   (details
+    (doc (|
+         - GET /repl — input + Eval button
+         - POST /api/eval {expr} -> {ok,value|error}
+         - Same Session.eval_one path as SSH REPL
+         - Not a second interpreter
+    |))
+   )
+  )
+  (subsection function-editor
+   (doc "Load, edit, and save a binding's AST from the UI")
+   (status implemented)
+   (* agent note (|it32: IMPLEMENTED. GET/POST /edit/<name> load body via
+     pp_expr, save via Session.define_binding (reader + persist +
+     env rebind). Smoke: editor-greet save + call. Conflict/stale-body
+     detection deferred.|) *)
+   (verify
+    (build "dune build image")
+    (smoke "POST /edit/editor-greet save -> callable via /api/eval"))
+   (details
+    (doc (|
+         v1 SHIPPED: plain textarea editor + save on current branch.
+         DEFERRED: optimistic concurrency / stale-body reject,
+         structural AST tree-editor (branching.ast-nodes).
+    |))
+   )
+  )
+  (subsection inspector
+   (doc "Inspect values, rows, and ASTs live")
+   (status partial)
+   (* agent note (|it32: PARTIAL. GET /inspect/binding/<name> and
+     /inspect/row/<type>/<id> ship. Ephemeral eval-result inspect and
+     richer panels still deferred.|) *)
+   (verify
+    (build "dune build image")
+    (smoke "GET /inspect/binding/<name> shows author + AST"))
+   (details
+    (doc (|
+         v1 SHIPPED: binding AST pretty+JSON; data row JSON pretty.
+         DEFERRED: eval-result inspect, type-def deep inspect,
+         mutate actions from inspector.
+    |))
+   )
+  )
+ )
+
+)

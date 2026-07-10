@@ -1,0 +1,253 @@
+(project pricklypear-multi-user
+ (doc "Pricklypear book chapter: multi-user")
+ (status partial)
+ (convention ocaml-dune)
+ (section multi-user
+  (doc "Per-user image instances, namespaces via branch ownership, budgets, author-runs-as-author")
+  (status partial)
+  (* agent note (|it31 plan-pass #7: section overall partial.
+    isolation = implemented; namespaces = partial (no cross-branch
+    qualified calls); budgets = partial (step budget SHIPPED in eval,
+    memory/raise-budget deferred — earlier notes wrongly said planned/
+    missing); permissions = partial (author column + admin merge yes,
+    runtime setuid + row scoping no). User-facing multi-user model is
+    in place at process/branch level; finer permission semantics remain.|) *)
+  (subsection isolation
+   (doc "Process-level isolation: one image per user")
+   (status implemented)
+   (* agent note (|Implementation it6 / verified it6 onward: the
+     supervisor's `Fleet.boot` (supervisor/lib/fleet.ml) spawns a
+     per-user image (unix process) on SSH connect and sets
+     PP_USER_ID/USERNAME/BRANCH_ID/BRANCH_NAME env vars so each
+     image boots as the verified user. Auth is the separate authd
+     unikernel (auth/) that verifies the SSH key via the auth RPC;
+     the supervisor never sees raw credentials, just gets back the
+     user_id or denial. The image trusts the supervisor's identity
+     claim via PP_USER_ID (the internal network is the trust
+     boundary). End-to-end verified by /tmp/pp_e2e_it6.py: admin's
+     SSH key → auth verifies → supervisor spawns image inst-001 →
+     REPL proxy → (define square (lambda (x) (* x x))) → (square 7)
+     -> 49. An infinite loop OR bad function in alice's image takes
+     only alice's image offline; the supervisor's other connections
+     (admin, other users) are unaffected (each is its own Lwt.async
+     per supervisor/lib/ssh.ml's per-connection dispatch).|) *)
+   (details
+    (doc (|
+         Multi-user is achieved by giving each user their
+         OWN image unikernel, not by namespacing within one
+         shared image. This is the Unix/POSIX model:
+         - Each user has a "home" (their branch bindings)
+         - Logging in = booting your image
+         - Each image is a separate process
+
+         Wins:
+         - Alice's infinite loop wedges Alice's image only
+         - Alice's bad function definition takes only her
+           image offline; she recovers by rolling back to
+           her last-good branch
+         - The interpreter doesn't need cooperative
+           scheduling for cross-user safety (only for
+           in-session budgeting)
+         - Per-user A/B rollback (finer than whole-image)
+
+         Costs:
+         - N images always running if "always-on" pinned
+           (RAM committed)
+         - Boot-on-connect default mitigates this: idle
+           users' images aren't running
+
+         Auth: a SEPARATE auth unikernel (see section
+         auth) verifies credentials and resolves user
+         identities. The supervisor never sees raw
+         credentials — it passes them to auth and gets
+         back a user_id (or denial). The image trusts the
+         supervisor's identity claim because: the
+         supervisor asserted it AND the supervisor got it
+         from auth, AND image/supervisor are on the
+         internal network. The image itself does no
+         credential verification.
+   |))
+   )
+  )
+  (subsection namespaces
+   (doc "No privileged 'common'; branches are namespaces")
+   (status partial)
+   (* agent note (|Implemented: there is no privileged 'common'
+     namespace. A binding's key is (branch_id, name) per the
+     migrations/001_branches.sql schema; when alice forks system/main
+     to alice/main she gets her own function_defs row for `greet`
+     independent of main's `greet` until she merges. Admin-only merges
+     to system branches ARE enforced (per policy at image/lib/
+     session.ml's `merge` prim and branching.merge subsection).
+     Verified by /tmp/pp_override_it9.py (alice/experiment fork of
+     system/main sees inherited `greet` via recursive-CTE override
+     walk; alice overrides; alice's session sees alice's; system/main
+     unchanged).
+
+     NOT YET IMPLEMENTED — cross-branch calls: a function can NOT
+     yet explicitly reference another branch's binding via a qualified
+     name (e.g. `(system/main:greet)`). All function calls consult the
+     current branch's env only (with override-walk up the parent chain).
+     Cross-branch qualified references are a v1.5 ergonomic addition.
+
+     Section marked `partial` until cross-branch qualified calls land.|) *)
+   (details
+    (doc (|
+         There is no privileged 'common' namespace. There
+         is 'main' (system baseline) and per-user branches.
+         Namespacing IS branch ownership.
+
+         A binding's key is (branch_id, name). When Alice
+         forks main to alice/main, she gets her own
+         'greet' independent of main's greet (until she
+         merges).
+
+         Cross-branch calls: a function can explicitly
+         reference another branch's binding via a qualified
+         name. Normally a function calls bindings in its
+         own branch.
+
+         The 'common namespace problem' is thus reframed
+         as the 'merge to main politics problem':
+         - Default: admin-only merges to main
+         - All users can fork freely
+         - Users can merge into their own branches freely
+         - Politics expand later (PR/review workflow)
+
+         This sidesteps the up-or-down political decision
+         the original 'publish to common' model forced.
+   |))
+   )
+  )
+  (subsection budgets
+   (doc "Per-call step budgets to bound runaway user code")
+   (status partial)
+   (* agent note (|it31 plan-pass #7: corrected stale it23 note.
+
+    SHIPPED:
+    (1) Process isolation — each user gets their own image process
+        via Fleet.boot; a wedged image only takes that user offline.
+    (2) Per-call evaluator step budget — lisp/lib/eval.ml ticks a
+        budget at every recursive eval step; default_limit 100_000;
+        raises Budget_exceeded for that call. Earlier notes claiming
+        "step budget NOT shipped" were wrong after the budget code
+        landed in eval.
+
+    STILL DEFERRED (keeps section partial):
+    - Memory-budget tracking per session/call
+    - Explicit primitive to raise budget for a legitimate long
+      sub-call, with audit logging
+    - Configurable per-session default budget from manifest/config
+    - Supervisor-side kill/restart automation when an image is
+      wedged despite budgets (health auto-restart loop)
+
+    Step budget + process isolation are the two load-bearing layers
+    for runaway-code defense today.|) *)
+   (verify
+    (build "dune build @all")
+    (smoke "scripts/dev.sh start + ssh admin@host -p 12223 boots an isolated image process"))
+   (details
+    (doc (|
+         Each Lisp primitive invocation runs with a step
+         counter. When exceeded, that ONE call aborts;
+         the session continues. This prevents "one user's
+         bad function wedges the whole image" at the
+         interpreter level (defense in depth alongside
+         process-level isolation).
+
+         Default budget: configurable per session, sensible
+         initial value (e.g. 100k eval steps). User can
+         request more for legitimate long-running operations
+         via a primitive that explicitly raises the budget
+         for a sub-call (and logs it).
+
+         The interpreter checks the counter at every Prim
+         invocation and every recursive eval depth. Cheap:
+         one integer increment per step.
+
+         Memory: also tracked. A session exceeding memory
+         budget aborts the offending call. (Deferred; step
+         budget is the v1 mechanism.)
+
+         This is per-CALL, not per-session: a session can
+         make many calls, each independently bounded.
+   |))
+   )
+  )
+  (subsection permissions
+   (doc "Author-runs-as-author: functions execute with their author's data perms")
+   (status partial)
+   (* agent note (|Partially implemented as of it19 plan-pass #3.
+
+     IMPLEMENTED (the OCaml-side governance half):
+     - Admin-only merges to system branches IS enforced (it10; see
+       branching.merge) — this is half of the "admin owns main /
+       merges require admin approval" permissions story.
+     - function_defs and type_defs carry an `author` text column,
+       populated from manifest.username at (define ...) / (deftype ...)
+       / (route ...) time. Store.lookup_function + list_function_names
+       return author alongside the body; it's surfaced in the
+       /binding/<name> system page UI.
+     - `(current-author)` prim is registered (it7) returning the
+       session user — the FIRST HALF of the spec's author-runs-as-
+       author pattern (reading the author for visibility).
+
+     NOT YET IMPLEMENTED (the runtime-permission half):
+     - `(current-author)` is the SESSION user, NOT "the executed
+       binding's author" — the interpreter does NOT thread the
+       AUTHOR of the currently-executing binding through eval.
+       So a function authored by alice and called by bob runs as
+       bob (the session user), NOT as alice. This is a meaningful
+       security gap from the spec's setuid model: alice-authoring a
+       function that reads her calendar and bob calling it would
+       read bob's calendar today (or fail), not alice's.
+     - Data prims (get/create/update/delete/rows) do NOT consult
+       current-author for permission filtering — they operate on
+       the shared `data_rows` table without per-author row scoping.
+       In v1 every image sees every row in its data_rows-table shape;
+       isolation depends on per-user PG roles or per-user tables,
+       which isn't wired yet (data_rows is schema-shared).
+
+     Section marked `partial` until the runtime-author-threading +
+     per-author row scoping lands. v1 ships the SECURITY MODEL
+     halfway: governance policy (admin-only merges) yes; runtime
+     setuid semantics no. Documented honestly so a perusing user
+     knows what NOT to assume about a privileged function's blast
+     radius today.|) *)
+   (details
+    (doc (|
+         A function executes with ITS AUTHOR's data
+         permissions, not the caller's. This is the Unix
+         setuid model: if alice authors a function that
+         reads her calendar, and bob calls it, the function
+         reads alice's calendar (not bob's), and bob sees
+         only what alice's function returns.
+
+         Implications:
+         - The interpreter's eval carries a (current-author)
+           field, read from the EXECUTED binding's author,
+           not the session user.
+         - Data primitives (query, get, create, etc.)
+           consult current-author for permission filtering.
+         - A careless privileged function is a security
+           hole, same as Unix setuid. Honest and familiar.
+         - Functions can expose capabilities to other
+           users by name without exposing raw rows.
+
+         Authoring permissions (separate concern):
+         - A binding in alice/main is callable by anyone
+           in the same image (read access implicit).
+         - Only alice can edit bindings in alice/* branches.
+         - main is owned by admin; merges require admin
+           approval (default).
+
+         This model is the Unix model, by choice. It maps
+         cleanly to "SSH-first, multi-user OS" framing. If
+         we wanted a Lisp-machine feel (shared trusted
+         environment), we'd pick differently, but
+         SSH-first implies Unix-style multi-user.
+   |))
+   )
+  )
+ )
+)

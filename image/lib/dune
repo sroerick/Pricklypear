@@ -1,0 +1,16 @@
+(library
+ (name pricklypear_image_lib)
+ (public_name pricklypear-image)
+ (modules store primitives session crud repl_endpoint http lineedit boot llm_client)
+ (libraries
+   pricklypear-lisp
+   pricklypear-common
+   pgx_lwt
+   pgx
+   httpaf-lwt-unix
+   bigstringaf
+   lwt
+   lwt.unix
+   unix
+   yojson
+   pure-html))

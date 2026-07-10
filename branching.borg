@@ -1,0 +1,252 @@
+(project pricklypear-branching
+ (doc "Pricklypear book chapter: branching")
+ (status partial)
+ (convention ocaml-dune)
+ (section branching
+  (doc "Branches as the fundamental organizational primitive: code branches, shared data, fork/merge")
+  (status partial)
+  (* agent note (|Section overall `partial` as of it17/it18 plan-pass:
+    fork = implemented, merge = partial, schema-authority = partial.
+    Per-subsection status below carries the per-feature detail.|) *)
+  (details
+   (doc (|
+        Branches are to Pricklypear what files are to
+        Unix: the fundamental organizational primitive.
+        Everything is a branch; everything else is built
+        on top of that.
+
+        KEY DISTINCTION: branches are for CODE, not data.
+        - BRANCHED (lives in branches): function
+          definitions, type schemas, view/route bindings.
+          Each row keyed by (branch_id, kind, name).
+        - SHARED (lives in main data tables): the actual
+          records those functions operate on. Event rows
+          are NOT branched. This is git's model applied
+          religiously.
+
+        This split is critical. It means:
+        - Alice's experimental calendar branch can render
+          against her REAL events. She forks the code,
+          not the data.
+        - Forking is cheap: copy code-rows (a few hundred
+          inserts). Negligible cost.
+        - Multi-user data races on code are gone: each
+          branch is owned by one editor.
+        - Cache coherence is trivial: invalidate only on
+          merge, which is rare and explicit.
+        - The 'common namespace' political problem is just
+          git's merge-upstream politics.
+
+        A branch is identified by (owner, name):
+          main            the system baseline, root
+          alice/main      alice's fork of main
+          alice/experiment alice's fork of alice/main
+        Each branch has a parent. Forking = create new
+        branch row + copy code-rows from parent.
+
+        Effective definition lookup (CLOS override, not
+        Postgres union): walk up the parent chain, return
+        first (closest) definition found. Plain SELECT
+        against function_defs WHERE branch_id IN (chain).
+        No Postgres INHERITS (see storage.no-inheritance).
+   |))
+  )
+  (subsection ast-nodes
+   (doc "Design: addressable AST nodes as substrate for surgical edits and AI patches")
+   (status planned)
+   (* agent note (|it31 plan-pass #7: NEW planned design subsection,
+     elevating BORGE-1783398327 out of bugs-only limbo. Not required
+     for v1 product cut (whole-function define/edit/AI propose is
+     enough). Captures the 'nodes as substrate, named branchable
+     subtrees as versioning unit' proposal so future plan/make work
+     has a home. No schema migration until explicitly planned.|) *)
+   (details
+    (doc (|
+         TODAY: two trees, two models
+         - Branch tree: rows in branches, fork/merge,
+           recursive CTE lookup, unit = whole function
+         - AST tree: JSONB blob in function_defs.body,
+           in-memory eval walk, no node ids, edit =
+           replace whole body
+
+         PROPOSAL (design only):
+         Give AST nodes identity so AI/human tools can
+         patch subexpressions without rewriting whole
+         functions, while keeping branches as the
+         versioning model over named subtrees.
+
+         Sketch (non-normative until a later plan pass):
+           nodes(id, branch_id, kind, payload, parent_id,
+                 position, ...)
+         function_defs may become a view/root pointer
+         over a node tree, or remain a cache of the
+         root expression.
+
+         Non-goals for first product cut:
+         - Do not block function-editor or ai-authoring
+           tools on this redesign
+         - Whole-function propose/edit ships first
+    |))
+   )
+  )
+  (subsection fork
+   (doc "Forking a branch")
+   (status implemented)
+   (* agent note (|Implementation it9 (2026-07-06); hardened with a
+     SERIALIZABLE transaction in it16. The 3-step implementation
+     matches the spec text below exactly: INSERT branches row,
+     INSERT function_defs copy, INSERT type_defs copy, INSERT
+     view_bindings copy. All 4 statements run in a single
+     `Store.with_transaction` (it16) — atomic, pgx-rolled-back on
+     exception. The primitive is a normal Lwt-typed prim registered
+     via `register_session_control_prims` (it12); its return value
+     is the new branch UUID. Smoke test `/tmp/pp_fork_it9.py` exercises
+     the full lifecycle; `/tmp/pp_override_it9.py` exercises the
+     branch isolation half of fork semantics.|) *)
+   (details
+    (doc (|
+         (fork 'main 'alice/experiment)
+
+         Implementation:
+         1. INSERT INTO branches (id, parent_id, owner,
+            name, ...) VALUES (new_uuid, main_id, 'alice',
+            'experiment', ...)
+         2. INSERT INTO function_defs (branch_id, name,
+            body, author, updated_at)
+            SELECT new_uuid, name, body, author,
+            updated_at FROM function_defs
+            WHERE branch_id = parent_id
+         3. Similarly for type_defs, view_bindings
+
+         Cost: O(num code rows in parent). For ~100 fns
+         and ~20 types, a few hundred row inserts. Lands
+         in well under a second.
+
+         Forking does NOT copy data table rows. The
+         forked branch's functions operate on the same
+         shared event rows as the parent.
+   |))
+   )
+   (verify
+    (test "image/test/primitives_test.ml — 48 alcotest cases")
+    (build "dune build @all")
+    (smoke "/tmp/pp_fork_it9.py — fork creates + copies function_defs")
+    (smoke "/tmp/pp_override_it9.py — override-walk + branch isolation"))
+  )
+  (subsection merge
+   (doc "Merging a branch into its parent")
+   (status partial)
+   (* agent note (|Implementation it10 (2026-07-06); hardened with a
+     SERIALIZABLE transaction in it16. The current implementation
+     does the basic case: INSERT INTO function_defs SELECT ... FROM
+     function_defs WHERE branch_id=source ON CONFLICT (branch_id,
+     name) DO UPDATE — full-source-to-target upsert of function_defs.
+     Returns `merged N rows` count via INSERT RETURNING.
+     Policy enforced at the Lisp prim layer (session.ml):
+     admin-only merges TO system branches (owner="system"),
+     per-user can merge into their own branches freely. Verified
+     end-to-end by /tmp/pp_merge_it10.py (both happy-path and
+     policy-rejection).
+
+     NOT YET IMPLEMENTED (deferred — these are nicer-to-haves over
+     the basic merge):
+     (1) diff-based merge (only fns whose updated_at > parent's
+         last_synced_with_child, OR whose name was added in child).
+     (2) per-function conflict detection (parent ALSO modified same
+         name since fork → conflict surfacing).
+     (3) type_defs schema-merge governance (only main accepts
+         schema changes via migration-governed merge).
+     (4) the real htmx inspector UI for per-function conflict
+         resolution.
+
+     Section marked `partial` until at least (1) and (2) land; (3)
+     and (4) are explicitly v2+ features.|) *)
+   (details
+    (doc (|
+         (merge 'alice/experiment 'alice/main)
+
+         Policy:
+         - Default: admin-only merges to main,
+           per-user can merge into their own branches
+           freely.
+         - Expandable later (PR/review flow).
+
+         Implementation:
+         1. Compute diff: code rows in alice/experiment
+            whose updated_at > parent's last_sync_with_child,
+            OR whose name was added in child.
+         2. For each changed function, apply to parent.
+            Conflict if parent ALSO modified same name
+            since fork. Per-function conflict (coarse, not
+            line-level): pick a version, or write a new one.
+         3. Schema changes (type_defs) are merge-governed
+            separately: only main accepts schema changes.
+            A branch can propose; main accepts via a
+            special merge that runs the migration.
+
+         The merge needs a real htmx UI (in the inspector):
+         list changed functions, show diffs (whole function
+         bodies since functions are atomic units), let user
+         resolve per-function.
+   |))
+   )
+   (verify
+    (test "image/test/primitives_test.ml — 48 alcotest cases")
+    (build "dune build @all")
+    (smoke "/tmp/pp_merge_it10.py — merge basic upsert + admin-only policy"))
+  )
+  (subsection schema-authority
+   (doc "Types in main, branches read against main's schema")
+   (status partial)
+   (* agent note (|Partially implemented as of it14 (2026-07-06): the
+     `(deftype 'name 'field1 ...)` prim lands type declarations into
+     the `type_defs` table on the current branch; `Store.list_types`
+     walks the recursive-CTE override chain so ancestor type
+     declarations are visible to descendant branches (the read side
+     of "branches read against main's schema"). The /types system page
+     surfaces them in the UI.
+
+     NOT YET IMPLEMENTED (deferred — explicitly v2+):
+     (1) the migration-governed schema-change accept flow ("only
+         main accepts schema changes via a special merge that runs
+         the migration"). Currently any admin-author on the system
+         branch can run (deftype ...) directly.
+     (2) schema_version bump + cache-invalidation broadcast on
+         schema change (LISTEN/NOTIFY or schema_version check).
+     (3) governance policy for proposed-vs-accepted schema changes
+         across non-system branches.
+
+     The read side (recursive-CTE type lookup) IS implemented and
+     spec-text-aligned. Marked `partial` until at least the
+     migration-governed merge-to-main accept flow and the
+     schema_version invalidation hook land.|) *)
+   (details
+    (doc (|
+         Schema authority is 'main'. Branches CANNOT change
+         the underlying table shape directly; they propose
+         schema changes which only take effect when merged
+         to main.
+
+         When main accepts a schema change:
+         1. Run migration on shared data table
+            (additive-only: see migrations.additive-only)
+         2. Bump schema_version
+         3. All branches see new shape on next function
+            lookup (cache invalidation: schema_version
+            check, or LISTEN/NOTIFY)
+
+         Branch code that ignores new fields: fine, reads
+         subset. Branch code that expects old fields:
+         errors at runtime (additive-only means removed
+         fields don't happen, but renamed/reused-semantic
+         fields could; document expectations).
+
+         This makes type_defs the slow-changing,
+         merge-governed layer; function_defs the
+         fast-changing, per-branch layer. Two tiers of
+         change, mirroring the OCaml-slow/Lisp-fast split.
+   |))
+   )
+  )
+ )
+)

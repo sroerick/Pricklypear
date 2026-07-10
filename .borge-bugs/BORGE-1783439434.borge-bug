@@ -1,0 +1,51 @@
+title: awa-ssh 0.3.1 static-auth-db constraint vs. Pricklypear's authd-RPC auth model
+section: supervisor.ssh-interface
+kind: implementation-discovery
+status: open
+
+body: |
+  DISCOVERED in iteration 21 while building the awa-ssh real-SSH swap-in
+  (deferred since it6; feasibility spike proved in it15):
+  The poohstack opam switch currently has awa/awa-mirage 0.3.1 installed.
+  At this version, `Awa.Server.make : Awa.Hostkey.priv -> Awa.Auth.db
+  -> Awa.Server.t * Awa.Ssh.message list` takes the FULL user database
+  (list of {name; password option; keys}) STATICALLY at server-make time.
+  There is NO per-connection auth-event callback hook — the SSH handshake
+  verifies the client pubkey/password against this in-memory db.
+
+  This conflicts with Pricklypear's architecture: spec [auth.section]
+  says auth lives in a SEPARATE unikernel (authd) and the supervisor
+  calls verify_ssh_key via HTTP RPC. The supervisor does not have the
+  user/key set in memory; authd does.
+
+  PR #74 in upstream awa-ssh (merged April 2025, released in 0.5.x) fixes
+  exactly this: "Userauth is now an event. This means the effectful layer
+  can do e.g. database lookups or LDAP requests when authenticating a
+  user." With 0.5.x, we'd register an auth callback that calls authd's
+  /verify_ssh_key per-connection — clean and idiomatic.
+
+  The 0.3.1 → 0.5.x upgrade cascade is significant (opam dry-run shows
+  21 upgrades, 3 removals, 4 installs including mirage-crypto-pk 0.11->2.1,
+  mirage-crypto-rng 0.11->2.1, tls, x509, tcpip major-version bumps).
+  These cascade into auth/, which uses mirage-crypto for the existing
+  HMAC token machinery. AGENTS.md says "Do not add dependencies lightly";
+  this upgrade deserves its own focused iteration with careful audit,
+  not bundling into the SSH swap-in.
+
+  WORKAROUND in v1 (built this iteration):
+  - Keep the awa-ssh 0.3.1 stack installed (no upgrade).
+  - Supervisor builds the Awa.Auth.db at startup by querying authd's new
+    /list_ssh_credentials endpoint (which returns all (username, ssh_key)
+    pairs from the credentials table). This is a startup-only snapshot;
+    runtime key rotation requires a supervisor restart until awa-ssh 0.5.x.
+  - Acceptable for v1 (personal/small-team per spec [auth.bootstrap-admin]).
+    New admin keys added later will require `supervisor restart` — same
+    blast radius as the OpenSSH model's "reload" on authorized_keys edit.
+
+  RECOMMENDED RESOLUTION:
+  - Plan-pass: leave supervisor.ssh-interface at `partial` until the
+    0.5.x upgrade is shipped; document the snapshot-refresh caveat
+    in the section's agent note.
+  - When 0.5.x is upgraded: rewrite `ssh_awa.ml`'s db build to a
+    single per-connection auth callback that calls authd's
+    /verify_ssh_key — eliminates the snapshot refresh concern.

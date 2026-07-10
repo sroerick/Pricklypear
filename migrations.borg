@@ -1,0 +1,154 @@
+(project pricklypear-migrations
+ (doc "Pricklypear book chapter: migrations")
+ (status partial)
+ (convention ocaml-dune)
+ (section migrations
+  (doc "Schema evolution: supervisor-applied, additive-only, schema authority in main")
+  (* agent note (|plan-pass #4 (it20): migrations shipped. supervisor/lib/store.ml's migration runner (Run_pending_migrations + split_sql_statements) applies 001_branches.sql + 002_auth.sql + 003_data.sql idempotently tracked via schema_migrations table, blocking image boot until applied (verified it4 supervisor smoke test + it5 auth smoke test + it6 e2e). Spec-consistent: 11 tables across 3 migrations, all additive. The type_defs-merged-to-main -> emitted-DDL migration (the second ordering paragraph in applied-by-supervisor's doc text) is NOT yet built — v1 uses a single generic data_rows table for all user-declared types (migration 003), sidestepping the per-type-DDL emission machinery. That sub-feature is what keeps this section at `partial` rather than `implemented`. See BORGE-1783433175 for the comprehensive plan-pass rationale.|) *)
+  (status partial)
+  (verify
+   (build "dune build supervisor")
+   (build "psql ... — SELECT count(*) FROM schema_migrations expects 3")
+   (smoke "/tmp/pp_e2e_it6.py — supervisor runs migrations on boot before serving image-boot requests"))
+  (subsection applied-by-supervisor
+   (doc "Supervisor owns schema state before any image boots")
+   (status partial)
+   (* agent note (|it20: IMPLEMENTED — supervisor's Run_pending_migrations in supervisor/lib/store.ml creates schema_migrations if missing, reads applied versions, applies pending .sql files (001, 002, 003 declared statically) in order. Each migration is split via the hand-rolled split_sql_statements (handles single-quoted strings, dollar-quoted $$ blocks, -- comments — see BORGE-1783527733). Idempotent: re-applying is a no-op (no duplicate schema_migrations rows). Verified end-to-end by /tmp/pp_e2e_it6.py through scripts/dev.sh. The NOT-yet-built half: migrations EMITTED FROM type_defs merged to main — v1 uses a single shared data_rows table (migration 003) instead of per-type-DDL emission, so the type-declaration -> DDL migration machinery doesn't exist.|) *)
+   (details
+    (doc (|
+         The SUPERVISOR, not the image, runs migrations.
+         It owns schema state because it owns image
+         lifecycle. Images assume "the schema is current".
+
+         Migration source: SQL files in migrations/
+         (version-numbered), PLUS migrations emitted from
+         type_defs that have been merged to main (the
+         type-declaration -> DDL emission).
+
+         Initial migrations:
+           001_branches.sql  — code store tables
+             (branches, function_defs, type_defs,
+             view_bindings, sessions, schema_migrations)
+           002_auth.sql      — auth tables
+             (users, credentials, sessions
+              [NAMED auth_sessions to avoid clash],
+              auth_log, system_keys)
+             + CREATE ROLE pricklypear_auth with
+             SELECT-only on its own tables;
+             system_keys GRANTed ONLY to that role.
+             The supervisor runs the migration but never
+             connects as pricklypear_auth; only the auth
+             image does.
+
+         Applied idempotently: tracked in schema_migrations
+         table. On supervisor boot:
+           1. Read applied versions from schema_migrations.
+           2. Apply any pending migrations in order.
+           3. Only then: start serving image-boot requests.
+
+         A migration in flight blocks new image boots until
+         it completes (or fails). This guarantees images
+         always see a consistent schema.
+
+         Migration failure: supervisor refuses to boot
+         images, alerts admin, requires manual intervention.
+         No half-applied state. (Additive-only policy makes
+         failure recovery simpler.)
+   |))
+   )
+  )
+  (subsection additive-only
+   (doc "Schema changes can ADD, not remove or rename")
+   (status implemented)
+   (* agent note (|it20: IMPLEMENTED by policy — all 3 migrations (001_branches.sql, 002_auth.sql, 003_data.sql) are strictly additive: CREATE TABLE statements only, no DROP COLUMN, no RENAME, no ALTER COLUMN TYPE except column additions with sensible defaults. Migration 002 added DEFAULT gen_random_uuid() on all id columns during the it5 fix. No non-additive migrations exist in migrations/. The runtime type_defs -> data_rows story (v1: a shared generic table holds all user-declared types as JSONB) is itself additive — new types add rows, not DDL. (See BORGE-1783432745.)|) *)
+   (verify
+    (build "grep -rE 'DROP|RENAME|ALTER COLUMN TYPE' migrations/ = 0 matches")
+    (smoke "all 3 migrations idempotently re-appliable"))
+   (details
+    (doc (|
+         Schema evolution policy for type_defs in main:
+         ADDITIVE ONLY. You can:
+           - Add a new type (new table)
+           - Add a new field to an existing type
+             (ALTER TABLE ADD COLUMN, with NOT NULL
+             forbidden unless a DEFAULT is specified)
+
+         You CANNOT:
+           - Remove a field (no DROP COLUMN)
+           - Rename a field (no RENAME)
+           - Change a field's type (no ALTER COLUMN TYPE
+             except widening)
+
+         WHY:
+         - Additive changes are backward-compatible with
+           running images. An image running old code that
+           doesn't know about a new field still works; it
+           just ignores the column.
+         - Removing/renaming breaks running images that
+           reference the field, with no compile-time error
+           to catch it (Lisp is dynamic).
+         - The cost is cruft accumulation: dead fields
+           pile up over time. Tradeoff accepted for
+           correctness.
+
+         When a field truly must go: a manual migration
+         (off-cycle, supervisor downtime, admin-run) that
+         also updates affected branch code. This is rare
+         and treated as an incident, not routine.
+
+         This policy is set early because retrofitting it
+         later (after non-additive migrations exist) is
+         expensive. It is a foundation constraint.
+   |))
+   )
+  )
+  (subsection branching-interaction
+   (doc "How migrations interact with branches")
+   (status partial)
+   (* agent note (|it31 plan-pass #7: corrected factual error in it20 note.
+    IMPLEMENTED — migrations only touch shared data tables (data_rows has
+    no branch_id; shared across branches per branching.data). A branch can
+    propose a type change via (deftype ...); recursive-CTE lookup makes
+    ancestor type_defs visible. schema_vers DOES exist on type_defs in
+    migrations/001_branches.sql (integer NOT NULL DEFAULT 1, plus migrated
+    boolean) — earlier notes wrongly claimed the column was missing.
+    NOT IMPLEMENTED — runtime validation against schema_vers / main field
+    set ("field X not in current main schema"), cache invalidation on
+    schema change, and type_defs-merge-emitted DDL. v1 data_rows still
+    accepts any jsonb fields bag for any type_name. schema_vers column is
+    schema-ready; enforcement is the remaining partial.|) *)
+   (details
+    (doc (|
+         Migrations only apply to the SHARED data tables
+         (event, user, etc.), governed by main's type_defs
+         (which are merge-governed into main).
+
+         Branches CANNOT migrate data tables. A branch
+         can PROPOSE a type change in its type_defs, but
+         the underlying table doesn't change until that
+         proposal is merged to main and the supervisor
+         runs the resulting migration.
+
+         A branch running code that references a field
+         added in main but not yet handled by the branch's
+         own code: works (the column exists; branch code
+         ignores it on write, reads null on read if no
+         default).
+
+         A branch running code that references a field
+         that DOESN'T exist (because the branch's type_defs
+         is behind main's): runtime error at the primitive
+         layer. The user gets a clear message: "field X
+         not in current main schema; merge your schema
+         change or sync to main".
+
+         Schema version is tracked per type (schema_vers
+         in type_defs). Branches see the version they
+         declared; main sees its current version. The
+         primitive layer can validate against either at
+         query time.
+   |))
+   )
+  )
+ )
+)

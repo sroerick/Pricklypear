@@ -1,0 +1,295 @@
+(project pricklypear-architecture
+ (doc "Pricklypear book chapter: architecture")
+ (status partial)
+ (convention ocaml-dune)
+ (section architecture
+  (doc "The overall picture: hypervisor -> supervisor unikernel -> per-user image unikernels -> Postgres")
+  (status partial)
+  (* agent note (|it23 plan-pass #5: architecture is partially
+                   realized. Topology describes a supervisor +
+                   per-user image + auth + PG layout that IS built,
+                   except the production Solo5 + hypervisor-VM-
+                   request path is deferred (Solo5 spike still
+                   pending; v1 uses posix_spawn from Lwt_unix,
+                   not hypervisor VM requests). The SSH front
+                   door's awa-ssh path is ALSO real (it21) but is
+                   opt-in — the default v1 path is a non-crypto
+                   line protocol per BORGE-1783439434 (awa 0.3.1's
+                   static-auth-db constraint blocks user identity
+                   propagation through the awa path). The image's
+                   internal REPL endpoint matches the spec — the
+                   supervisor forwards SSH channels to it. The A/B
+                   rollback per image, always-on boot_mode, and
+                   health-check auto-restart loop are deferred
+                   sub-features of supervisor.fleet/health. Topology
+                   section as a whole is partial: implemented parts
+                   (the diagram) are accurate; deferred parts are
+                   called out explicitly in the agent notes in
+                   those subsections.|) *)
+  (subsection topology
+   (doc "Physical and logical layout")
+   (status partial)
+   (* agent note (|it23: topology diagram is implemented-by-construction.
+                    PG cluster is real. Auth unikernel connects
+                    as pricklypear_auth role (verified it5).
+                    Supervisor runs migrations + manages fleet +
+                    exposes admin HTTP + SSH front door (it4+it6).
+                    Per-user Image instances boot via Fleet.boot
+                    with PP_USER_ID manifest env vars (it4+it6).
+                    The 'flow for user adds function via SSH' (5
+                    steps) is verified end-to-end by
+                    /tmp/pp_e2e_it6.py — awa-ssh handshake replaced
+                    with non-crypto line protocol in v1 (see
+                    BORGE-1783316371 + BORGE-1783439434);
+                    image REPL endpoint accepts the forwarded
+                    session; define persists to function_defs and
+                    registers live. The 'flow for supervisor changes
+                    a primitive' (4 steps, A/B boot) is the deferred
+                    half — v1 has no A/B boot staging; primitive
+                    changes require a manual image rebuild +
+                    supervisor restart. Marked partial: the
+                    diagram-shaped intent is accurate as built; the
+                    A/B staging + auto-rollback is v1.5/v2 work.
+                    Carried-forward TODOs: Solo5 mirage target spike,
+                    A/B image staging, always-on boot_mode pin,
+                    health-check auto-restart loop.|) *)
+   (verify
+    (build "dune build @all")
+    (test "all 92 alcotest cases pass")
+    (smoke "/tmp/pp_e2e_it6.py — end-to-end SSH→auth→image→REPL→define→call"))
+   (details
+    (doc (|
+         Hypervisor box (KVM or Solo5 host)
+         |
+         +-- Postgres (shared object store, namespaced,
+         |              SERIALIZABLE defaults; role-isolated
+         |              for auth tables)
+         |
+         +-- Auth unikernel (separate; see section auth)
+         |   +-- verify_ssh_key, verify_password
+         |   +-- mint_token, verify_token (HMAC sign)
+         |   +-- audit_log on every verify
+         |   +-- connects as pricklypear_auth role (only
+         |       role that can read system_keys)
+         |   +-- internal RPC, called by supervisor
+         |
+         +-- Supervisor unikernel (Solo5 in prod,
+             mirage/unix in dev)
+             |
+             +-- manages fleet of per-user image instances
+             +-- A/B rollback per image
+             +-- health-check (ping image's SSH/HTTP)
+             +-- admin HTTP (httpaf-lwt-unix + pure-html)
+             +-- SSH front door (line protocol default;
+             |                  awa-ssh OPT-IN side port)
+             +-- calls auth before booting/attaching
+             |
+             +-- alice's image (boot-on-connect, loads
+             |                  alice's branch bindings)
+             +-- bob's image (always-on, pinned)
+             +-- ... one per active session
+
+         Flow for "user adds a function via SSH":
+         1. Connect to supervisor SSH front door (v1:
+            line protocol or OPT-IN awa-ssh); supervisor
+            calls authd.verify_ssh_key -> user_id (or
+            denied).
+         2. Supervisor boots/attaches the user's image,
+            forwards the SSH channel to the image's
+            REPL endpoint.
+         3. Define function -> reader parses s-expr -> AST
+            -> stored as JSONB row in function_defs.
+         4. Registered in in-memory dispatch table, live
+            immediately, no rebuild.
+         5. New htmx route /call/fn-name serves the result
+            (the route is itself a stored function).
+
+         Flow for "supervisor changes a primitive":
+         1. Edit lib/primitives.ml in image source
+         2. Supervisor stages image v(N+1), A/Bs it
+         3. Health-check passes -> new default
+         4. Health-check fails -> auto-rollback to vN
+    |))
+   )
+  )
+  (subsection package-layout
+   (doc "Directory and package structure")
+   (implements lib/pricklypear_common/manifest.ml lib/pricklypear_common/branch.ml lib/pricklypear_common/protocol.ml lib/pricklypear_common/auth_types.ml)
+   (status implemented)
+   (* agent note (|it23: package-layout matches the spec exactly.
+                    migrations/001_branches.sql + 002_auth.sql +
+                    003_data.sql. lisp/ (pure, no I/O; 30 alcotest
+                    cases). common/ (pure types; 10 alcotest cases).
+                    image/ at lib/{store,primitives,session,
+                    repl_endpoint,http,lineedit,boot,crud}.ml +
+                    bin/unikernel.ml (mirage/unix). supervisor/ at
+                    lib/{fleet,health,process,store,ssh,ssh_awa,
+                    ssh_awa_shims,ssh_keys,auth_client,admin,boot}.ml
+                    + bin/supervisor.ml. auth/ at lib/{verify,tokens,
+                    admin_api,store,http,boot}.ml + bin/authd.ml +
+                    test/auth_test.ml (4 alcotest cases). proto/ in spec
+                    is common/ in the actual code (the boot_manifest,
+                    health protocol, auth_types modules live there).
+                    scripts/dev.sh orchestrates PG + authd + supervisor.
+                    Spec text is accurate as the actual code structure,
+                    modulo proto/ -> common/ rename.|) *)
+   (verify
+    (build "dune build @all")
+    (smoke "scripts/dev.sh start - boots PG + authd + supervisor on the documented directory layout"))
+   (details
+    (doc (|
+         pricklypear/                    the whole system
+         |
+         +-- migrations/                 SQL, shared data
+         |   +-- 001_branches.sql        code store: branches,
+         |                               function_defs, type_defs,
+         |                               view_bindings, sessions
+         |   +-- 002_auth.sql            users, credentials, sessions,
+         |                               auth_log, system_keys
+         |                               (NOT data tables — those come
+         |                               from type_defs accepted to main)
+         |
+         +-- proto/                      shared format defs
+         |   +-- boot_manifest.json      per-user boot config
+         |   +-- health.proto            health-check format
+         |
+         +-- lisp/                       the interpreter
+         |                               PURE, no I/O dep
+         |   +-- lib/ast.ml              expr + value types
+         |   +-- lib/reader.ml           s-expr -> ast
+         |   +-- lib/env.ml              lexical env
+         |   +-- lib/eval.ml             the evaluator
+         |   +-- bin/repl.ml             dev REPL, no image
+         |   +-- test/eval_test.ml       alcotest, no svc
+         |
+         +-- image/                      Mirage unikernel
+         |                               per-user instance
+         |   +-- lib/store.ml            PG client, branch
+         |   +-- lib/primitives.ml       ~20 impure fns
+         |   +-- lib/session.ml         per-conn REPL env
+         |   +-- lib/repl_endpoint.ml    internal REPL protocol
+         |                               (supervisor forwards SSH
+         |                               channel here; not full SSH)
+         |   +-- lib/http.ml             httpaf-lwt-unix + pure-html
+         |   +-- lib/crud.ml             data_rows CRUD prims
+         |   +-- lib/lineedit.ml         readline stub (linenoise later)
+         |   +-- lib/boot.ml             reads manifest
+         |   +-- bin/unikernel.ml        mirage/unix entry
+         |
+         +-- supervisor/                 unikernel, root
+         |                               manages fleet
+         |   +-- lib/fleet.ml            per-user instances
+         |   +-- lib/health.ml           ping images
+         |   +-- lib/process.ml         boot/kill (Solo5
+         |                               VM-request model)
+         |   +-- lib/store.ml           PG (manifests, sessions)
+         |                               — Lwt via pgx_lwt + Io_unix
+         |   +-- lib/ssh.ml             line-protocol front door
+         |   +-- lib/ssh_awa.ml         OPT-IN awa-ssh side port
+         |   +-- lib/auth_client.ml      RPC client to authd
+         |                               (verify_ssh_key, tokens)
+         |   +-- lib/admin.ml           httpaf-lwt-unix + pure-html,
+         |                               fleet dashboard routes
+         |   +-- bin/supervisor.ml       entry point
+         |
+         +-- auth/                       the auth unikernel
+         |                               (separate; see section auth)
+         |   +-- lib/verify.ml           verify_ssh_key, verify_password
+         |   +-- lib/tokens.ml           mint, verify_token, HMAC sign
+         |   +-- lib/admin_api.ml        create_user, add_credential (admin)
+         |   +-- lib/store.ml           PG (users, credentials, sessions,
+         |                               auth_log, system_keys) — own PG role
+         |   +-- lib/http.ml             httpaf-lwt-unix, internal RPC
+         |   +-- bin/authd.ml            entry point
+         |   +-- test/verify_test.ml    crypto tests, no services
+         |
+         +-- common/                     shared OCaml lib
+         |   +-- lib/manifest.ml         boot manifest type
+         |   +-- lib/branch.ml           branch ref type
+         |   +-- lib/protocol.ml         health msg types
+         |   +-- lib/auth_types.ml      user, credential, token types
+         |                               (shared supervisor <-> auth)
+         |
+         +-- config/                     infra config
+         +-- scripts/                    dev helpers
+    |))
+   )
+  )
+  (subsection transport-choices
+   (doc "Why each transport + framework choice")
+   (status partial)
+   (* agent note (|it23: transport choices are realized as documented,
+                    with the same SSH caveat: the spec text says
+                    'awa-ssh listens on :22' which IS the design; v1
+                    uses a non-crypto line protocol on :PP_SSH_PORT as
+                    the default (deferred from it6) and the real awa-ssh
+                    path is opt-in on PP_AWA_SSH_PORT (it21) — see
+                    BORGE-1783439434 for the awa 0.3.1 constraint.
+                    htmx via httpaf-lwt-unix + pure-html IS realized on
+                    both supervisor (admin.ml) and image (http.ml) —
+                    pages use HTML.Hx.* htmx attributes (it11 UI
+                    pages, it14 render-html prim). Admin HTTP routes
+                    are ~3 currently (GET /, /fleet, /health). Postgres
+                    via pgx_lwt with custom Io_unix shim
+                    (BORGE-1783389549). SERIALIZABLE-by-default via
+                    Store.with_transaction (it16). ONE v1 stack on both
+                    unikernels (httpaf-lwt-unix + pure-html + pgx_lwt)
+                    — confirmed; doctrinal details rewritten it31 to
+                    match. No Dream. Marked partial: default SSH is
+                    still line-protocol; real awa default depends on
+                    awa 0.5.x (BORGE-1783439434); Solo5 transport swap
+                    deferred.|) *)
+   (verify
+    (build "dune build @all")
+    (smoke "scripts/dev.sh start boots the documented stack"))
+   (details
+    (doc (|
+         SSH (supervisor front door — see image.ssh-interface):
+           - v1 default: non-crypto line protocol on
+             PP_SSH_PORT; OPT-IN real awa-ssh on
+             PP_AWA_SSH_PORT (see BORGE-1783439434)
+           - Supervisor authenticates via authd
+             verify_ssh_key (NOT wyo.auth), forwards to
+             image's internal REPL endpoint
+           - Image does NOT run full SSH, just a line
+             protocol on an internal port
+
+         htmx (image interface):
+           - v1: httpaf-lwt-unix + pure-html (no Dream).
+             Future Solo5 path: gluten-mirage + httpaf
+             (there is no httpaf-mirage package on opam).
+           - Routes ARE functions in the store
+           - pure-html provides HTML.Hx.* htmx attribute
+             support (the type-safe htmx attrs we want)
+
+         Admin (supervisor):
+           - v1: httpaf-lwt-unix + pure-html (same stack
+             as image)
+           - ~3 routes live today (/, /fleet, /health);
+             kill/rollback routes deferred
+           - Hand-written small router
+
+         Postgres:
+           - v1: pgx_lwt + custom Io_unix shim (POSIX).
+             pgx_lwt_mirage is installed but needs a real
+             Tcpip.Stack.V4V6 — Solo5/v1.5 axis only.
+           - SERIALIZABLE by default for mutations
+           - LISTEN/NOTIFY available for cache
+             invalidation later
+           - Lwt throughout unikernels (no Eio in the
+             hot path; Eio only for pure-unix dev tools)
+
+         ONE stack on both unikernels in v1:
+         httpaf-lwt-unix + pure-html + pgx_lwt(+Io_unix).
+         No Dream. Future Solo5 stack swap stays behind
+         the same Store/Http interfaces:
+         gluten-mirage + httpaf + pgx_lwt_mirage.
+         Reasoning:
+         - Keep one mental model across supervisor/image
+         - htmx is rendering chrome; shell/REPL is primary
+         - pure-html gives HTML.Hx.* without Dream
+    |))
+   )
+  )
+ )
+)

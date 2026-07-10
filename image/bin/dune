@@ -1,0 +1,6 @@
+(executable
+ (name unikernel)
+ (public_name pricklypear-image-unikernel)
+ (package pricklypear-image)
+ (modules unikernel)
+ (libraries pricklypear-image lwt.unix))

@@ -1,0 +1,521 @@
+(project pricklypear-lisp-interpreter
+ (doc "Pricklypear book chapter: lisp-interpreter")
+ (status partial)
+ (convention ocaml-dune)
+ (section lisp-interpreter
+  (doc "Pure Scheme-flavored Lisp-1 interpreter, AST-as-source, primitives layer")
+  (status partial)
+  (* agent note (|Section overall `partial` as of it18 plan-pass:
+    ast = implemented, reader = implemented, eval = partial
+    (Lwt-typed eval shipped it12; the per-call step-budget / cooperative
+    stepping described in eval subsection text is deferred),
+    primitives = implemented (the ~21 prim set + dict prims + render-html
+    + CRUD + select-for-update + deftype + branching control prims).|) *)
+  (subsection ast
+   (doc "The expr and value types")
+   (status implemented)
+   (* agent note (|lisp/lib/ast.ml ships exactly the type schema documented
+     below (Var/Lit/App/Let/Letrec/If/Lambda/Prim/Seq/Quote on the expr
+     side; VInt/VStr/VBool/VNil/VPair/VLambda/VPrim/VRef/VList on the
+     value side). AST serializes to/from JSON via Ast.expr_of_json /
+     expr_to_json (Yojson) for storage in function_defs.body::jsonb.
+     Homoiconicity preserved (the reader produces the same shape eval
+     consumes; printer round-trips). Closed value type universe — no VDict
+     was ever introduced (v1 used VStr-JSON + dict prims instead; see
+     BORGE-1783432745).|) *)
+   (details
+    (doc (|
+         type expr =
+           | Var of string
+           | Lit of value
+           | App of expr * expr list
+           | Let of string * expr * expr
+           | Letrec of (string * expr) list * expr
+           | If of expr * expr * expr
+           | Lambda of string list * expr
+           | Prim of string * expr list
+           | Seq of expr * expr
+           | Quote of expr                 (* for macros later *)
+
+         type value =
+           | VInt of int64
+           | VStr of string
+           | VBool of bool
+           | VNil
+           | VPair of value * value           (* cons cells *)
+           | VLambda of string list * expr * env
+           | VPrim of string                  (* primitive name *)
+           | VRef of type_name * id           (* tagged ref into store *)
+           | VList of value list              (* sugar for nested pairs *)
+
+         The AST IS the source (homoiconicity). Stored as
+         JSONB in function_defs.body. The reader (s-expr
+         parser) produces expr values; the printer
+         round-trips them. No parser/printer asymmetry.
+
+         Closures capture their defining env (lexical
+         scope). VLambda carries env. No dynamic scope.
+
+         VRef carries its target type so the interpreter
+         can verify derefs at call time before querying
+         the store.
+   |))
+   )
+  )
+  (subsection reader
+   (doc "S-expression reader: source text -> AST")
+   (status implemented)
+   (* agent note (|lisp/lib/reader.ml. Recognizes standard s-expr
+     surface syntax: (foo bar baz), 'symbol, "string", 123, #t, #f,
+     (). Comments `;` to end-of-line. Special forms (lambda/let/letrec/
+     if/define/quote/fork/merge/route/checkout/deftype) are recognized
+     at EVAL time, not read time — the reader produces App (Var name, ...)
+     and eval dispatches on the head. is_complete correctly tracks
+     line-comment completeness at EOF (it1 fix). The `\\` escape handler
+     in read_string is correct as of it13 (was a stale advance-return bug;
+     see BORGE-1783431485). pp_value round-trips VPair chains as proper
+     lists and improper tails with `.` notation.|) *)
+   (details
+    (doc (|
+         The reader parses Lisp surface syntax to expr
+         values. Standard s-expressions: (foo bar baz),
+         'symbol, "string", 123, #t, #f, ().
+
+         Surface syntax is just an editor concern: a
+         function stored in Postgres is its AST (JSONB),
+         and the s-expr syntax is one of several possible
+         editors (along with the htmx tree-editor that
+         edits the AST directly).
+
+         Special forms recognized at read or eval time
+         (decision: eval time, the reader is generic):
+           (lambda (args) body)
+           (let ((name val)...) body)
+           (letrec ((name val)...) body)
+           (if test then else)
+           (define name expr)        (* top-level binding *)
+           (quote x)
+           (deftype name (fields ...))
+           (fork parent child)
+           (merge source target)
+           (app "prim-name" args)    (* explicit prim call *)
+
+         Comments: ; to end of line. Docstrings: a leading
+         string in a body position is the function's doc.
+   |))
+   )
+  )
+  (subsection eval
+   (doc "The evaluator: env * expr -> value")
+   (implements lisp/lib/env.ml lisp/lib/eval.ml)
+   (status partial)
+   (* agent note (|it31 plan-pass #7: corrected stale it12 note.
+
+    SHIPPED:
+    - `Eval.eval : env -> expr -> value Lwt.t` (it12 Lwt-ABI).
+    - Pure prims via register_sync; DB prims return promises.
+    - Special forms: lambda/let/letrec/if/define/quote/seq/prim/
+      with-transaction.
+    - Per-call step budget IS implemented in lisp/lib/eval.ml:
+      type budget { mutable steps; limit }, default_limit = 100_000,
+      tick at every recursive eval step, raises Budget_exceeded.
+      Earlier agent notes claiming "NO step budget" were stale.
+    - 30 alcotest cases in lisp/test/eval_test.ml.
+
+    STILL PARTIAL:
+    (1) Quote of compounds: quote still accepts only Lit/Var;
+        (quote (a b)) and nested App forms raise User_error
+        "can only quote literals/symbols" (BORGE-1783383905).
+        Spec intent is full s-expr quote; this blocks quoted data
+        as first-class values.
+    (2) Memory budget tracking (multi-user.budgets layer) deferred.
+    (3) Explicit per-subcall budget raise + audit logging deferred.
+
+    Status stays partial primarily for quote semantics + memory
+    budget, NOT because step budgeting is missing.|) *)
+   (details
+    (doc (|
+         The evaluator is PURE. It takes an env and an expr,
+         returns a value or raises an interpreter error.
+         No I/O in the interpreter. All side effects go
+         through Prim calls, which the IMAGE layer wires to
+         actual Postgres/SSH/HTTP side-effects.
+
+         Cooperative evaluation: the eval loop is stepped;
+         each Prim invocation yields back to the image's
+         event loop. This gives per-session budgeting:
+         - A step counter per call, configurable per session
+         - When exceeded, that ONE call aborts
+         - The session continues
+         This prevents "user's bad function wedges the
+         image" entirely.
+
+         (define name expr) at top-level adds binding to
+         current session's env AND persists to store. Edit
+         = redefine (update the row). No versioning at the
+         binding level beyond what branches provide.
+
+         Application: evaluate operator + args, apply.
+         Primitives are dispatched by name through a table
+         the IMAGE layer registers at boot. The interpreter
+         knows nothing about Postgres or htmx.
+
+         Special forms handled in eval, not reader: lambda,
+         let, letrec, if, define, quote. The reader just
+         produces App/Variants of these as plain AST.
+   |))
+   )
+  )
+  (subsection primitives
+   (doc "The ~20 impure functions the interpreter calls into")
+   (status partial)
+   (* agent note (|it31 plan-pass #7: demoted implemented -> partial.
+    Primitive DISPATCH + a useful core set are shipped, but the section's
+    own details still enumerate missing/stub prims, so `implemented` was
+    an overclaim.
+
+    v1 SHIPPED (image/lib/primitives.ml + crud.ml + session.ml):
+    pure math (+ - * = < > <= >= not), list/pair (list car cdr cons
+    null? pair? count), string (string-append str), reflection (type-of),
+    session-aware (whoami current-author list-bindings), CRUD (get create
+    update update-field delete rows select-for-update deftype), dict-over-
+    JSON (dict-get dict-set dict-keys), branching (fork merge checkout),
+    htmx (route render-html), with-transaction special form + private
+    __with_transaction__ prim. All on Lwt-typed ABI (it12). 48 alcotest
+    cases + multiple smoke tests.
+
+    STUB / MISSING (keep section partial until these land or are
+    explicitly removed from the doctrinal table):
+    (1) (query 'type where: ...) — only (rows 'type [limit])
+    (2) (describe 'type) / (inspect binding)
+    (3) (diff source target)
+    (4) (current-branch)
+    (5) (list-branches) — registered but returns VNil stub
+    (6) (hx-get)/(hx-post) — hx-get is a weak string-tag stub; hx-post
+        missing; authors currently embed Hx attrs inside render-html
+    (7) create returns VStr uuid, not VRef as details text says
+    (8) author-scoped data filtering on CRUD (permissions gap)
+
+    image.primitives-layer demoted in lockstep.|) *)
+   (details
+    (doc (|
+         Primitives live in image/lib/primitives.ml. They
+         are REAL OCaml, typed at the boundary, fast.
+         Anything that touches Postgres, htmx, or the OS
+         is a primitive, never user-Lisp.
+
+         CRUD:
+           (create 'type {fields...}) -> VRef
+           (get 'type id) -> record value
+           (update 'type id {fields...}) -> VRef
+           (delete 'type id) -> VNil
+           (query 'type where: ...) -> VList of records
+           (select-for-update 'type id) -> record (locked)
+
+         Branching:
+           (fork parent child-name) -> branch-id
+           (merge source target) -> status
+           (current-branch) -> branch-id
+           (checkout branch-id) -> VNil (* session switches *)
+           (list-branches) -> VList
+           (diff source target) -> VList of changes
+
+         htmx/Routes:
+           (route path fn)            (* register route *)
+           (render-html node)          (* pure-html node *)
+           (hx-get url) (hx-post url) (* attribute helpers *)
+
+         Reflection:
+           (type-of value) -> type-tag
+           (describe 'type) -> schema
+           (inspect binding) -> AST + metadata
+           (list-bindings) -> VList
+
+         Sessions:
+           (whoami) -> username
+           (current-author) -> username (* for perm checks *)
+           (call-fn name args...)       (* resolves+calls *)
+
+         All primitives that touch data consult the
+         CURRENT-AUTHOR (from the binding being executed)
+         for permission filtering, per multi-user model.
+
+         Effect tags for each prim are defined in
+         lisp-interpreter.effects (capability lattice).
+   |))
+   )
+  )
+  (subsection effects
+   (doc "Capability effects for Lisp programs: classify pure vs DB vs AI vs publish; infer; gate; display. Separate from OCaml 5 host effects and from Lwt async plumbing.")
+   (status implemented)
+   (* agent note (|it34 IMPLEMENTED: lisp/lib/effect.ml + 12 tests +
+     /bindings badges + AI propose policy (PP_AI_ALLOW_WRITE elevate).
+     it33 design sketch (roerick asked for effects + async
+     clarity). IMPORTANT SPLIT:
+       (1) ASYNC composition is ALREADY SOLVED at runtime: Eval.eval
+           returns value Lwt.t; DB/AI prims return promises; pure prims
+           use register_sync. (define u (get 'note id)) composes.
+       (2) EFFECTS as policy/visibility are NOT solved: the language
+           does not yet label or enforce Pure/ReadDb/WriteDb/Ai/Publish.
+       (3) OCaml 5 algebraic effects are a possible FUTURE host runtime
+           for the interpreter, NOT a substitute for Lisp-level
+           capability effects. Do not migrate off Lwt for this feature.
+     This subsection is the source-of-truth design; implement later as
+     prim effect table + AST inference + UI badges + AI/route gates.|) *)
+   (verify
+    (build "dune build lisp image")
+    (test "effect inference pure vs db vs ai on sample ASTs")
+    (smoke "/bindings shows effect badges; AI propose rejects disallowed effects when policy on"))
+   (details
+    (doc (|
+         ==========================================================
+         0. THREE PROBLEMS PEOPLE CONFUSE (read this first)
+         ==========================================================
+
+         A) ASYNC / COMPOSITION  (mostly DONE)
+            Can a function call (get ...) and use the result?
+            YES today:
+              (define u (get 'note id))
+              (dict-get u "title")
+            Mechanism: eval : env -> expr -> value Lwt.t
+            Pure prims: register_sync wraps Lwt.return
+            DB/AI prims: return promises directly
+            This is the "async problem" for data-in-Lisp.
+            It is runtime plumbing, not an effect system.
+
+         B) CAPABILITY EFFECTS  (NOT DONE — this section)
+            What powers does this function need?
+            Pure calc vs read DB vs write DB vs AI vs publish page.
+            Needed for: UI badges, AI safety, page policy,
+            testing without services, author-runs-as-author story.
+
+         C) HOST ALGEBRAIC EFFECTS (OPTIONAL LATER)
+            OCaml 5 Effect.perform / handlers inside the
+            interpreter implementation. Could one day replace
+            some Lwt coloring. Does NOT give Lisp programs
+            effects for free. Guest language still needs B.
+
+         Do not block B on C. Do not re-solve A while building B.
+
+         ==========================================================
+         1. WHY EFFECTS
+         ==========================================================
+
+         Today every lambda looks the same:
+           (lambda (x) (* x x))              ; pure
+           (lambda () (get 'note id))        ; read DB
+           (lambda () (create 'note "{}"))   ; write DB
+           (lambda () (propose-function ...)); AI + write code
+           (lambda () (render-html "..."))   ; page-ish
+
+         The OS cares which is which. Effects make that
+         first-class, inspectable, enforceable.
+
+         ==========================================================
+         2. EFFECT LATTICE (capability sets)
+         ==========================================================
+
+         Base labels (finite, small):
+
+           Pure      no capability prims; only pure computation
+           ReadDb    get, rows, select-for-update, list-branches, ...
+           WriteDb   create, update, update-field, delete, deftype, ...
+           Branch    fork, merge, checkout
+           Publish   route (and later define-page helpers)
+           Ai        propose-function / LLM client
+           Html      render-html (soft; display intent, not security)
+           Txn       body expects with-transaction scope
+           Meta      define-persist side channel? (see note)
+
+         A function's effect set is a SET of labels, e.g.
+           {ReadDb, Html}
+           {WriteDb, Ai}
+           {}
+
+         Ordering for policy (allowlist checks):
+           Pure ⊂ anything
+           ReadDb ⊂ ReadDb∪WriteDb  (writes imply reads usually)
+           optional sugar: Db = ReadDb∪WriteDb
+
+         NOTE on (define ...):
+           Top-level define persists code. That is a Meta/code-store
+           write performed by the REPL/session layer, not always an
+           effect inside the defined body. Distinguish:
+             - effects OF a function body (what it does when called)
+             - effects OF defining it (session install + persist)
+
+         ==========================================================
+         3. PRIM EFFECT TABLE (initial map)
+         ==========================================================
+
+           Pure:
+             + - * = < > <= >= not
+             list car cdr cons null? pair? count
+             string-append str type-of
+             dict-get dict-set dict-keys
+             hx-get hx-post          ; string tags only
+
+           ReadDb:
+             get rows select-for-update
+             list-branches current-branch list-bindings
+             whoami current-author   ; session read; treat ReadDb or soft Ambient
+
+           WriteDb:
+             create update update-field delete deftype
+
+           Branch:
+             fork merge checkout
+
+           Publish:
+             route
+
+           Html:
+             render-html
+
+           Ai:
+             propose-function
+             (Ai usually pairs with WriteDb on code store via define path)
+
+           Txn-related:
+             with-transaction (special form) introduces Txn scope
+             select-for-update meaningful only under Txn
+
+         Image layer owns the table (primitives live in image/).
+         Lisp package may define the effect datatype only.
+
+         ==========================================================
+         4. INFERENCE (syntactic, conservative)
+         ==========================================================
+
+         effects(expr) =
+           union over subexpressions
+           + effects of any prim head used in App
+           + effects of known global bindings referenced
+             (lookup function_defs metadata / env annotation)
+
+         Rules of thumb:
+           - overapproximate: if unsure, add effect
+           - higher-order unknown fn => Effects.top or {ReadDb,WriteDb,Ai,Publish,Branch} policy knob
+           - lambda body effects = function effects
+           - quote bodies contribute no runtime effects
+
+         On successful (define name body):
+           store inferred effect set next to function
+           (new column function_defs.effects jsonb OR side table OR
+            derive on the fly from body AST — prefer derive-on-read
+            for v1 to avoid migration, cache later)
+
+         v1 implementation preference:
+           derive-on-read from AST + prim table (no schema change)
+           optional cache field later
+
+         ==========================================================
+         5. GATES / POLICY (where effects pay rent)
+         ==========================================================
+
+         a) UI badges
+            /bindings and editor show: pure | db-read | db-write | ai | page
+
+         b) AI propose policy (default)
+            allowed = {Pure, ReadDb, Html}
+            denied  = {WriteDb, Branch, Publish, Ai} unless user elevates
+            (tune experimentally; document in product-experience)
+
+         c) Route publish policy (optional v1)
+            (route path fn) warns or rejects if fn has Branch/Ai
+            pages should be ReadDb/Html/Pure by default
+
+         d) Sandbox eval (future)
+            browser anonymous do-it: Pure only
+
+         e) Transactions
+            if body has select-for-update or multi WriteDb,
+            linter suggests with-transaction
+
+         ==========================================================
+         6. ASYNC STORY (what is already true)
+         ==========================================================
+
+         Solved:
+           - eval returns value Lwt.t
+           - prim_fn = value list -> value Lwt.t
+           - composition of DB reads in Lisp works
+           - with-transaction threads dynamic connection
+
+         Not the same as effects:
+           Lwt answers "when / how concurrency is scheduled"
+           Effects answer "what capabilities are required"
+
+         Example:
+           (get 'note id) is BOTH
+             async (returns promise through eval)
+             AND ReadDb (capability)
+
+         You already need both; only async exists today.
+
+         ==========================================================
+         7. RELATION TO OCAML 5 EFFECTS
+         ==========================================================
+
+         OCaml 5 algebraic effects MAY later implement host-side
+         intercept for DB/AI inside the interpreter (handlers).
+         That is a runtime rewrite of image/lisp internals.
+
+         Explicit non-goals for first effects delivery:
+           - do not replace Lwt in Mirage/httpaf/pgx stack
+           - do not expose Effect.perform to Lisp users
+           - do not require monadic syntax in Lisp
+
+         Guest programs keep looking like normal Lisp.
+         Effects are metadata + checks, not new call syntax
+         (unless we add optional declare forms later).
+
+         Optional sugar later:
+           (define-pure name body)
+           (define-page path body)
+         Desugar to define + check inferred ⊆ declared.
+
+         ==========================================================
+         8. IMPLEMENTATION PHASES
+         ==========================================================
+
+         Phase 0 (docs/UI copy): explain Pure vs DB vs AI in /about
+         Phase 1: Effect module + prim -> effect set table
+         Phase 2: infer_effects : expr -> EffectSet.t
+         Phase 3: badges on /bindings + /edit + inspect
+         Phase 4: AI propose allowlist gate (configurable)
+         Phase 5: route publish warnings
+         Phase 6 (later): session capability masks, setuid authority effect
+         Phase 7 (optional research): OCaml effect handlers under eval
+
+         ==========================================================
+         9. DATA SHAPES (sketch)
+         ==========================================================
+
+         type effect =
+           | Pure | ReadDb | WriteDb | Branch
+           | Publish | Ai | Html | Txn
+
+         type effect_set = effect list  (* unique sorted *)
+
+         val prim_effects : string -> effect_set
+         val infer : prim_table_meta -> expr -> effect_set
+         val subset : effect_set -> effect_set -> bool
+         val pp : effect_set -> string  (* "pure" / "read-db+html" *)
+
+         No change to value or eval types required for Phases 1-5.
+
+         ==========================================================
+         10. SUCCESS CRITERIA
+         ==========================================================
+
+         - User can see whether a function is pure or touches DB/AI
+         - AI-proposed functions can be policy-gated by effects
+         - Pure functions remain testable without Postgres
+         - Async composition remains intact (no regression of Lwt ABI)
+         - Spec/docs stop conflating async with effects
+    |))
+   )
+  )
+ )
+)

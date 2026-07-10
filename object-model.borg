@@ -1,0 +1,157 @@
+(project pricklypear-object-model
+ (doc "Pricklypear book chapter: object-model")
+ (status partial)
+ (convention ocaml-dune)
+ (section object-model
+  (doc "Typed records in Postgres, schema declared in Lisp, SQL-via-primitives, no ORM")
+  (status partial)
+  (* agent note (|it23 plan-pass #5: object-model v1 foundation is
+                   built, the typed-field half is deferred. WHAT'S
+                   REAL: '(deftype 'name 'field1 'field2 ...)' prim
+                   (it14) inserts into type_defs (fields stored as
+                   JSON array of field-name strings — not typed).
+                   Data lives in the shared 'data_rows' table (one
+                   row per instance, no per-type PG table is emitted
+                   — see migration 003 + BORGE-1783433175).
+                   CRUD prims are implemented: (create 'type
+                   "{fields-json}") (it13), (get 'type id) (it13),
+                   (update 'type id "{fields-json}") (it13),
+                   (delete 'type id) (it13), (rows 'type [limit])
+                   (it13), (select-for-update 'type id) (it17),
+                   (update-field 'type id "field" "value") (it18).
+                   The /types htmx page lists type_defs (it14).
+                   NO ORM anywhere — all SQL is hand-written in
+                   image/lib/store.ml + image/lib/crud.ml.
+                   WHAT'S DEFERRED: typed field declarations
+                   (:string/:int/:bool/:ref user/:array (ref user)/
+                   :timestamptz/:json) — type_defs stores field NAME
+                   lists only, no field TYPE. Runtime field-level
+                   validation against main's schema is unbuilt
+                   (v1 data_rows accepts any jsonb fields bag for
+                   any type_name). The 'system creates or ALTERs
+                   underlying Postgres table on declaration/merge'
+                   machinery (the type-merge-governance flow) is
+                   NOT built (v1 uses the single shared data_rows
+                   table to sidestep the emitted-DDL complexity).
+                   '(query 'event where: ...)' parameterized SQL
+                   suger is not built (v1 has (rows 'type [limit])
+                   instead — returns all rows of a type, no WHERE).
+                   ':ref user' first-class values with type tags
+                   (lazy or eager deref) are not built — v1 refs
+                   are just plain strings/UUIDs. Marked partial:
+                   the 'objects are typed records + no methods +
+                   CRUD prims + no ORM' shape is implemented; the
+                   typed-field + query-sugar + schema-validation
+                   are v1.5/v2 work.|) *)
+  (verify
+   (build "dune build @all")
+   (test "image/test/primitives_test.ml 48 alcotest cases incl. CRUD + deftype + dict + render-html")
+   (smoke "/tmp/pp_crud_it13.py + /tmp/pp_types_it14.py + /tmp/pp_sfu_it17.py + /tmp/pp_uf_it18.py"))
+  (details
+   (doc (|
+        An "object" is a typed record with an id, a set of
+        named typed fields, stored in Postgres. There are
+        NO methods on objects. Methods are functions in the
+        store that take an object id as argument. This is
+        functions + data, not OOP, matching the poohstack
+        shape.
+
+        Types are DECLARED IN LISP, not in SQL migrations:
+
+        (deftype event
+          (fields
+            (title :string)
+            (start :timestamptz)
+            (end :timestamptz)
+            (owner :ref user)
+            (attendees :array (ref user))))
+
+        The declaration lives in function_defs-equivalent
+        table (type_defs, branched like code). On
+        declaration/merge to main, the system creates or
+        ALTERs the underlying Postgres table.
+
+        The type is itself inspectable data: the htmx UI
+        can render "list all types, show fields, browse
+        instances" nearly free. This is the Smalltalk-image
+        browser feeling, achieved via a metamodel rather
+        than via live mutable objects.
+
+        CRUD primitives (real OCaml, typed at boundary):
+          (create 'event {...})      -> row insert
+          (get 'event id)            -> row fetch
+          (update 'event id {...})   -> row update
+          (delete 'event id)         -> row delete
+          (query 'event where: ...)  -> parameterized SQL
+          (select-for-update ...)    -> explicit row lock
+
+        References are first-class values: a :ref user
+        field holds an id + type tag. Dereferencing is
+        explicit: (get 'user (event-owner ev)).
+
+        The Lisp still has plain values (int, string, bool,
+        lambda, list, ref) for logic that doesn't touch the
+        DB. Pure functions for "does this event conflict?"
+        take event values, return bool, no DB. The DB and
+        the Lisp have a clean seam.
+
+        NO ORM. SQL is the query language. (query ...)
+        desugars to parameterized SQL; the primitive layer
+        parses results into typed Lisp values.
+   |))
+  )
+  (subsection type-system
+   (doc "Field types and reference semantics")
+   (status planned)
+   (* agent note (|it23 plan-pass #5: type-system is planned (v1 has
+                    NO typed-field implementation). type_defs stores
+                    field NAME lists only (e.g. 'name email age' as
+                    a JSON array of strings) — no field TYPE
+                    declarations. The 7 field types in the spec
+                    text (:string, :int, :bool, :timestamptz,
+                    :ref <type>, :array <type>, :json) are
+                    described-as-design but have no runtime
+                    enforcement: any jsonb fields bag is accepted
+                    for any type_name by v1 data_rows. v1.5 plan:
+                    extend (deftype ...) syntax to take field-type
+                    pairs, persist field types in type_defs.fields,
+                    and run runtime field-level validation on
+                    create/update. v2 plan: ':ref user' as a
+                    first-class tagged value (eager deref first;
+                    lazy stub-ref later if perf requires).
+                    No inheritance, no subtyping is preserved as a
+                    principle via storage.no-inheritance (which
+                    IS implemented — recursive-CTE override walk).
+                    Marked planned because no typed-field code
+                    exists as of it23|) *)
+   (details
+    (doc (|
+         Field types (initial cut, grow as needed):
+           :string         text
+           :int            int8
+           :bool           bool
+           :timestamptz    timestamptz
+           :ref <type>     uuid FK to <type>_table.id
+           :array <type>   <type>[] (homogeneous)
+           :json           jsonb (schemaless escape hatch)
+
+         A (ref user) value is a tagged id: the value
+         carries its target type so the interpreter can
+         verify derefs at call time. Dereferencing returns
+         the full record or a stub-ref that lazy-loads on
+         field access (decision deferred; start eager).
+
+         Cycles in the type graph are allowed (user has
+         :ref calendar; calendar has :ref user) because
+         refs hold ids, not nested values.
+
+         No inheritance, no subtyping. Composition via
+         references, not via type hierarchies. This matches
+         the poohstack (relational, no ORM, no inheritance)
+         and avoids the Postgres INHERITS trap (see
+         storage.no-inheritance).
+    |))
+   )
+  )
+ )
+)

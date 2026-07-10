@@ -1,0 +1,6 @@
+(executable
+ (name repl)
+ (public_name pricklypear-lisp-repl)
+ (package pricklypear-lisp)
+ (modules repl)
+ (libraries pricklypear-lisp lwt lwt.unix))

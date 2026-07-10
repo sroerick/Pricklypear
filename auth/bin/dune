@@ -1,0 +1,6 @@
+(executable
+ (name authd)
+ (public_name pricklypear-authd-exe)
+ (package pricklypear-auth)
+ (modules authd)
+ (libraries pricklypear-auth lwt.unix))

@@ -1,0 +1,125 @@
+(project pricklypear-workflow
+ (doc "Pricklypear book chapter: workflow")
+ (status partial)
+ (convention ocaml-dune)
+ (section workflow
+  (doc "Build/test workflow and conventions")
+  (status partial)
+  (* agent note (|it31 plan-pass #7: conventions doctrinal text rewritten
+    to the adopted v1 stack (Lwt, pgx_lwt+Io_unix, httpaf-lwt-unix,
+    pure-html, own authd). build remains implemented. Section stays
+    partial only while Solo5/prod-path conventions and any remaining
+    package-layout drift are still open; day-to-day build workflow is
+    green.|) *)
+  (subsection build
+   (doc "How to build and test each component")
+   (status implemented)
+   (* agent note (|The full build/test workflow described in this
+     subsection's doctrinal text is exercised every iteration:
+       - `dune build @all` exit 0 across all 5 packages (lisp, common,
+         image, supervisor, auth) + the spikes/awa_ssh spike target.
+       - `dune runtest --force` runs 92 alcotest cases (lisp 30 +
+         common 10 + auth 4 + image 48).
+       - `scripts/dev.sh start|stop|restart|status|clean` brings up
+         the temp PG cluster (initdb if first run) + authd +
+         supervisor, mirroring the "Full dev boot" path documented
+         below (with PG + authd + supervisor in one command).
+     Image/supervisor/ui binaries all run on mirage/unix per spec
+     [architecture.mirage-vs-unix]; Solo5 still a deferred build
+     switch. The 13 end-to-end smoke tests under /tmp/pp_*_it*.py
+     exercise every layer end-to-end against the temp PG cluster at
+     /tmp/pp-pgsup (port 5433).|) *)
+   (details
+    (doc (|
+         Lisp interpreter (no services needed):
+           cd lisp/ && dune build && dune runtest
+           Tests are pure alcotest cases, no DB, no HTTP.
+
+         Image (needs Postgres for full run, but builds
+         without):
+           cd image/ && dune build
+           Run: dune exec bin/unikernel.ml (mirage/unix)
+           Needs PG connection from env.
+
+         Supervisor (needs Postgres for full run):
+           cd supervisor/ && dune build
+           Run: dune exec bin/supervisor.ml
+           Needs PG connection, can boot images.
+
+         Common:
+           cd common/ && dune build && dune runtest
+
+         Migrations:
+           Applied by supervisor on boot, or manually via:
+           psql -f migrations/NNN_xxx.sql
+
+         Full dev boot:
+           1. start Postgres
+           2. dune exec supervisor/bin/supervisor.ml
+              (supervisor runs migrations, then listens)
+           3. ssh into a user's image
+              (supervisor boots the image on connect)
+   |))
+   )
+  )
+  (subsection conventions
+   (doc "Coding conventions for this project")
+   (status partial)
+   (* agent note (|it31 plan-pass #7: doctrinal text rewritten to adopted
+     v1 stack. Deliberate choices now normative in the details below:
+     Lwt (not Eio) in unikernels; pgx_lwt + custom Io_unix (not
+     pgx_lwt_mirage in v1); httpaf-lwt-unix (httpaf-mirage does not
+     exist on opam; future Solo5 path is gluten-mirage + httpaf);
+     own authd unikernel (not wyo.auth) as the SSH/token/audit trust
+     boundary. Eio remains allowed only for pure-unix dev tooling
+     (lisp/bin/repl.ml, scripts). Section stays partial until Solo5
+     package conventions and any remaining transport text elsewhere
+     are fully aligned; the day-to-day v1 conventions are now honest.|) *)
+   (details
+    (doc (|
+         v1 ADOPTED STACK (normative):
+         - OCaml / dune (per poohstack); OCaml 5.x on the
+           poohstack opam switch
+         - Lwt for ALL unikernel I/O (supervisor, authd,
+           image). Mirage's runtime is Lwt-based; the
+           evaluator is Lwt-typed (eval returns value Lwt.t).
+           Eio only for pure-unix dev tooling (e.g.
+           lisp/bin/repl.ml), never inside unikernels.
+         - pure-html (dream_html HTML core, no Dream) for
+           HTML; use HTML.Hx.* not raw htmx attribute strings.
+           txt ~raw:true for intentional raw-HTML injection.
+         - httpaf-lwt-unix for image + supervisor + authd
+           HTTP in v1. (There is no httpaf-mirage package on
+           opam. Future Solo5 path: gluten-mirage + httpaf.)
+         - Postgres via pgx_lwt + a custom Io_unix shim in v1
+           (POSIX-flavored libs). pgx_lwt_mirage exists on the
+           switch but needs a real Tcpip.Stack.V4V6 device,
+           only available inside a true Mirage unikernel —
+           that swap is a Solo5/v1.5 axis, not v1.
+         - Auth via pricklypear's own authd unikernel (auth/),
+           NOT wyo.auth. authd is the credential/token/audit
+           trust boundary; supervisor calls it over internal
+           HTTP RPC; images trust supervisor-asserted identity
+           via the boot manifest.
+         - SERIALIZABLE transactions by default for mutations
+         - No ORM, no Postgres INHERITANCE, no premature
+           abstraction; plain parameterized SQL
+         - Additive-only schema migrations
+         - The .borg file is the source of truth; if the
+           implementation disagrees, the implementation is
+           wrong — unless a plan pass rewrites the spec
+         - Design changes go through borge plan/make/review;
+           during make, file `borge issue new` instead of
+           editing .borg
+
+         DEFERRED CONVENTIONS (not v1-normative yet):
+         - Solo5 target + Mirage-native transports
+           (pgx_lwt_mirage, gluten-mirage, real VM boot)
+         - mTLS/signed internal RPC between supervisor/authd
+         - wyo.auth integration (explicitly not chosen for v1)
+   |))
+   )
+  )
+ )
+
+)

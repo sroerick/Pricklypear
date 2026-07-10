@@ -1,0 +1,52 @@
+# dune / OCaml
+_build/
+*.install
+.merlin
+*.cmi
+*.cmo
+*.cmx
+*.cmt
+*.cmti
+*.o
+*.a
+*.so
+*.cmxs
+*.cmxa
+*.exe
+*.byte
+*.native
+
+# opam local switch (if ever created in-tree)
+_opam/
+
+# Mirage generated (spikes may regenerate)
+**/mirage_solo5/main.ml
+**/mirage_solo5/dune.build
+**/mirage_solo5/dune.config
+**/mirage_solo5/dune-workspace
+**/mirage_solo5/dune-project
+**/mirage_solo5/Makefile
+**/mirage_solo5/*.opam
+
+# secrets / local env
+.env
+.env.*
+*.pem
+id_ed25519
+id_ed25519.pub
+id_rsa
+id_rsa.pub
+
+# editor / OS junk
+*~
+*.swp
+*.swo
+.DS_Store
+.idea/
+.vscode/
+*.orig
+
+# runtime / local data
+/tmp/
+*.log
+*.pid
