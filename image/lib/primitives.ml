@@ -431,6 +431,12 @@ let prim_string_eq args =
   | [ VStr a; VStr b ] -> VBool (String.equal a b)
   | _ -> raise (Interp_error (User_error "string-eq needs 2 strings"))
 
+(* (string-trim s) -> VStr. Trim leading/trailing whitespace. *)
+let prim_string_trim args =
+  match args with
+  | [ VStr s ] -> VStr (String.trim s)
+  | _ -> raise (Interp_error (User_error "string-trim needs 1 string"))
+
 (* JSON <-> Lisp values for outline trees and generic data.
    Objects become VStr of JSON object (use dict-get); arrays -> VList. *)
 let rec json_to_value (j : Yojson.Safe.t) : value =
@@ -596,6 +602,7 @@ let make_with_defaults () : t =
   register_sync t "substring" prim_substring;
   register_sync t "string-contains?" prim_string_contains;
   register_sync t "string-eq" prim_string_eq;
+  register_sync t "string-trim" prim_string_trim;
   register_sync t "html-escape" prim_html_escape;
   register_sync t "json-parse" prim_json_parse;
   register_sync t "json-emit" prim_json_emit;
@@ -641,6 +648,7 @@ let prim_summary (name : string) : string =
   | "substring" -> "substring start [len]"
   | "string-contains?" -> "haystack contains needle?"
   | "string-eq" -> "string equality"
+  | "string-trim" -> "trim whitespace from string"
   | "html-escape" -> "escape text for HTML"
   | "json-parse" -> "parse JSON string to Lisp value"
   | "json-emit" -> "emit Lisp value as JSON string"

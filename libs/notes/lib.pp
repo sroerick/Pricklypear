@@ -175,9 +175,9 @@
 (define notes/do-create
   (lambda (title slug)
     (let ((s
-            (if (if (null? slug) #t (string-eq (as-str slug) ""))
+            (if (if (null? slug) #t (string-eq (string-trim (as-str slug)) ""))
                 (string-append "note-" (as-str (count (notes/list))))
-                (as-str slug))))
+                (string-trim (as-str slug)))))
       (seq
         (notes/upsert s (as-str title)
           (notes/empty-outline (as-str title))

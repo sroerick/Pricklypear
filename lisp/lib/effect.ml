@@ -105,7 +105,7 @@ let pure_prims = [
   "+"; "-"; "*"; "="; "<"; ">"; "<="; ">="; "not";
   "list"; "car"; "cdr"; "cons"; "null?"; "pair?"; "count";
   "string-append"; "str"; "type-of"; "as-str";
-  "string-eq"; "string-length"; "substring"; "string-contains?";
+  "string-eq"; "string-trim"; "string-length"; "substring"; "string-contains?";
   "html-escape"; "json-parse"; "json-emit";
   "hx-request?"; "request-header";
   "dict-get"; "dict-set"; "dict-keys";
