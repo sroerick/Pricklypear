@@ -62,7 +62,9 @@
    (* agent note (|it32: IMPLEMENTED blank-slate path. image/lib/
      llm_client.ml OpenAI-compat via curl; Session.propose_function;
      prim propose-function; POST /api/ai/propose; author agent:<model>.
-     Surgical rewrite + seed growth live in sibling subsections.|) *)
+     Surgical rewrite + seed growth live in sibling subsections.
+     2026-07-11: agent-portal is the unified entry; propose remains a
+     thin authoring helper on top of (agent ...).|) *)
    (verify
     (build "dune build image")
     (smoke "POST /api/ai/propose ai-double then (ai-double 21) => 42"))
@@ -77,15 +79,117 @@
            LLM_API_BASE / LLM_API_KEY / LLM_MODEL
 
          Shared client contract for ALL AI tools:
-         - non-streaming POST chat/completions (gateway-safe)
-         - model returns code/AST only (no markdown essay)
+         - chat/completions (stream optional; SSE for live UI)
+         - model returns code/AST only for author modes
          - parse gate before any store write
          - effect inference after parse (lisp-interpreter.effects)
          - policy gate before freeze
 
-         Sibling tools (planned):
+         Primary guest surface is now agent-portal ((agent seed prompt)).
+         propose-function / llm-* remain specialized authoring helpers.
+
+         Sibling tools (exist as prims; product UX secondary):
          - ast-rewrite: llm-inner / llm-outer / llm-rewrite
          - growth-seed: llm-seed recursive outer growth
+    |))
+   )
+  )
+  (subsection agent-portal
+   (doc "Unified guest AI portal: (agent seed prompt) + progress channel; tools are existing Lisp prims (read functions not files)")
+   (status in-progress)
+   (* agent note (|2026-07-11 design+build: radical simplify. One prim for
+     ask and author modes; kernels share Agent.run ~on_event; SSE at
+     POST /api/agent; capability effect Ai only (progress is not a new
+     lattice). OCaml 5 algebraic effects deferred.|) *)
+   (implements
+    (module image/lib/llm_client.ml)
+    (module image/lib/session.ml)
+    (module image/lib/http.ml)
+    (module lisp/lib/effect.ml)
+    (module libs/ai/lib.pp))
+   (verify
+    (build "dune build image")
+    (smoke "(agent seed prompt) returns string when LLM_API_KEY set")
+    (smoke "POST /api/agent streams text/event-stream tokens then done"))
+   (details
+    (doc (|
+         ==========================================================
+         GUEST SURFACE (one prim)
+         ==========================================================
+
+         (agent seed prompt) -> string
+
+         - seed   = system instruction (copilot vs author persona)
+         - prompt = user message (may include context built in Lisp)
+         - result = final model text as VStr (or error string)
+         - effect = Ai  (lisp-interpreter.effects)
+         - does NOT auto-define functions; apply/define is separate
+
+         Optional later opts (not required for v1):
+           :stream for job-id return shape; :tools allowlist
+
+         Lisp libraries wrap modes without new kernel APIs:
+
+           (define ai/ask
+             (lambda (q)
+               (agent *copilot-seed*
+                 (string-append (ai/context) "\n\n" q))))
+
+           (define ai/draft-fn
+             (lambda (name spec)
+               (agent *author-seed*
+                 (string-append "name=" name "\n" spec))))
+
+         Reading the world = existing Lisp (list-bindings, rows, get,
+         inspect AST via page/REPL). No filesystem tools in the image.
+
+         ==========================================================
+         KERNEL: one runner, many sinks
+         ==========================================================
+
+         Agent.run ~seed ~prompt ~on_event : string Lwt.t
+
+         on_event receives:
+           `Token s | `Done | `Error s
+
+         Sinks:
+           - Lisp/REPL: on_event ignore or eprintf; return final string
+           - HTTP POST /api/agent: text/event-stream
+               data: {"t":"token","s":"..."}
+               data: {"t":"done","text":"..."}
+               data: {"t":"error","s":"..."}
+           - WebSocket later only if mid-turn client input needed
+
+         Streaming uses OpenAI stream:true when a sink wants live
+         tokens; non-stream POST when only final text is needed.
+
+         ==========================================================
+         CAPABILITY vs PROGRESS (do not confuse)
+         ==========================================================
+
+         A) Capability effects (existing): may this call AI?
+            Label prim agent with Ai. Gates/badges only.
+
+         B) Progress channel: what to show while it runs?
+            on_event / SSE. Not a new effect lattice.
+
+         C) Host algebraic effects (OCaml 5): later optional
+            implementation of yield; not a v1 dependency.
+
+         ==========================================================
+         TOOL LOOP (phase 2; design locked, implement after portal)
+         ==========================================================
+
+         When tools are enabled, the model may request PP prims:
+           list-bindings, get, rows, current-branch, whoami, ...
+         Kernel runs allowlisted prims and continues the chat.
+         Write-y tools (define, create, update) stay human-gated
+         or require elevated policy (same as propose effects).
+
+         propose-function remains a convenience that:
+           1. builds an author seed
+           2. calls Agent.run
+           3. parse + effect gate + define_binding agent:<model>
     |))
    )
   )
