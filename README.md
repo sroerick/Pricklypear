@@ -139,6 +139,25 @@ python3 /tmp/pp_e2e_it6.py      # SSH→auth→image→REPL→define→call
 scripts/dev.sh stop
 ```
 
+## Laptop / agent eval (the image is the API)
+
+From your machine, call live Lisp without building per-app REST:
+
+```bash
+export PP_URL=http://155.138.208.45   # or local image URL
+export PP_USER=pricklypear
+export PP_PASS='…'                    # nginx basic auth
+
+python3 scripts/pp_eval.py '(+ 1 2)'
+python3 scripts/pp_eval.py -e '(load-library "todo")' -e '(todo/list)'
+python3 scripts/pp_eval.py -j '(bible/verse "John" 3 16)'   # JSON for agents
+python3 scripts/pp_eval.py -i                                 # interactive
+```
+
+This hits `POST /api/eval` on the running image. Same env as the browser
+REPL — libraries, data_rows, routes. Real multi-turn SSH/line-protocol
+REPL remains local/loopback until the proxy path is hardened.
+
 ## Spec reconciliation (borge)
 
 The spec is kept faithful via the borge workflow (`plan`/`make`/`review`
