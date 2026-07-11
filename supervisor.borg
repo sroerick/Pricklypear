@@ -2,7 +2,7 @@
  (doc "Pricklypear book chapter: supervisor — RETIRED by the
         single-image pivot (it35). Kept for historical context.
         See single-image.borg for the successor topology.")
- (status planned)
+ (status deprecated)
  (* agent note (|it35 plan pass: this whole chapter is retired.
                   The supervisor package will be deleted in the make
                   pass. One image, one process, one deployment.

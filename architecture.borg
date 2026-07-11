@@ -4,7 +4,7 @@
         and transport-choices. This chapter's multi-process /
         Mirage unikernel diagram is the RETIRED design. Kept for
         historical context; the live architecture is single-image.")
- (status planned)
+ (status deprecated)
  (* agent note (|it35 plan pass: the topology below (hypervisor ->
                   supervisor -> per-user image unikernels + authd)
                   is retired. The live topology is ONE image binary
