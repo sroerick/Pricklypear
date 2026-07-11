@@ -657,7 +657,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpaf.Reqd.t)
     ^ Packages.name_encode fn
   in
   match pkg_q, fn_q with
-  | Some "(kernel)", Some fname ->
+  | Some "kernel", Some fname ->
       let summary =
         match List.assoc_opt fname kernel with
         | Some s -> s
@@ -668,7 +668,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpaf.Reqd.t)
           HTML.p [] [
             HTML.a [HTML.href "/bindings"] [txt "Functions"];
             txt " › ";
-            HTML.a [HTML.href "/bindings?pkg=%%28kernel%%29"] [txt "(kernel)"];
+            HTML.a [HTML.href "/bindings?pkg=kernel"] [txt "(kernel)"];
             txt " › %s" fname;
           ];
           HTML.div [HTML.class_ "card"] [
@@ -761,7 +761,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpaf.Reqd.t)
       in
       html_response reqd body;
       Lwt.return_unit
-  | Some "(kernel)", None ->
+  | Some "kernel", None ->
       let rows =
         if q = "" then kernel
         else List.filter (fun (n, s) -> contains_ci n q || contains_ci s q) kernel
@@ -771,7 +771,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpaf.Reqd.t)
           (fun (n, summary) ->
             HTML.tr [] [
               HTML.td [] [
-                HTML.a [HTML.href "%s" (fn_href "(kernel)" n)] [txt "%s" n];
+                HTML.a [HTML.href "%s" (fn_href "kernel" n)] [txt "%s" n];
               ];
               HTML.td [] [txt "primitive"];
               HTML.td [] [txt "%s" summary];
@@ -864,7 +864,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpaf.Reqd.t)
       in
       let all_pkgs =
         ( "(kernel)"
-        , "/bindings?pkg=%%28kernel%%29"
+        , "/bindings?pkg=kernel"
         , List.length kernel
         , "kernel" )
         :: ws_pkgs
