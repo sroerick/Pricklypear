@@ -40,17 +40,25 @@ let boot
   if not (Sys.file_exists bin) then
     Lwt.return_error (Printf.sprintf "image binary not found: %s" bin)
   else
+    let libs =
+      match Sys.getenv_opt "PP_LIBS_DIR" with
+      | Some d when d <> "" -> [| "PP_LIBS_DIR=" ^ d |]
+      | _ -> [||]
+    in
     let env =
-      Array.append (Unix.environment ())
-        [| "PP_USER_ID=" ^ manifest.user_id;
-           "PP_USERNAME=" ^ manifest.username;
-           "PP_BRANCH_ID=" ^ manifest.branch_id;
-           "PP_BRANCH_NAME=" ^ manifest.branch_name;
-           "PP_BOOT_MODE=" ^ Pricklypear_common.Manifest.boot_mode_to_string manifest.boot_mode;
-           "PP_IMAGE_VERSION=" ^ manifest.image_version;
-           "PP_HTTP_PORT=" ^ string_of_int http_port;
-           "PP_REPL_PORT=" ^ string_of_int repl_port;
-        |]
+      Array.concat
+        [ Unix.environment ()
+        ; [| "PP_USER_ID=" ^ manifest.user_id;
+             "PP_USERNAME=" ^ manifest.username;
+             "PP_BRANCH_ID=" ^ manifest.branch_id;
+             "PP_BRANCH_NAME=" ^ manifest.branch_name;
+             "PP_BOOT_MODE=" ^ Pricklypear_common.Manifest.boot_mode_to_string manifest.boot_mode;
+             "PP_IMAGE_VERSION=" ^ manifest.image_version;
+             "PP_HTTP_PORT=" ^ string_of_int http_port;
+             "PP_REPL_PORT=" ^ string_of_int repl_port;
+          |]
+        ; libs
+        ]
     in
     Lwt.catch
       (fun () ->

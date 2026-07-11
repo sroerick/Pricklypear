@@ -37,7 +37,7 @@ done
 
 log "stage $STAGE"
 rm -rf "$STAGE"
-mkdir -p "$STAGE/bin" "$STAGE/migrations" "$STAGE/rc.d"
+mkdir -p "$STAGE/bin" "$STAGE/migrations" "$STAGE/rc.d" "$STAGE/libs"
 
 cp "$AUTH_BIN" "$STAGE/bin/authd"
 cp "$SUP_BIN" "$STAGE/bin/supervisor"
@@ -45,6 +45,10 @@ cp "$IMG_BIN" "$STAGE/bin/image"
 chmod 755 "$STAGE/bin/authd" "$STAGE/bin/supervisor" "$STAGE/bin/image"
 
 cp migrations/*.sql "$STAGE/migrations/"
+# Lisp libraries (same text as in git) for load-library
+if [ -d libs ]; then
+  cp -R libs/. "$STAGE/libs/"
+fi
 cp scripts/rc.d/pricklypear_authd "$STAGE/rc.d/pricklypear_authd"
 cp scripts/rc.d/pricklypear_supervisor "$STAGE/rc.d/pricklypear_supervisor"
 cp scripts/openbsd/run-authd.ksh "$STAGE/bin/run-authd.ksh"

@@ -26,8 +26,10 @@ export PP_SSH_PORT="${PP_SSH_PORT:-17822}"
 export PP_AUTH_HOST="${PP_AUTH_HOST:-127.0.0.1}"
 export PP_AUTH_PORT="${PP_AUTH_PORT:-17879}"
 export PP_IMAGE_BIN="${PP_IMAGE_BIN:-${RELEASE_ROOT}/bin/image}"
+export PP_LIBS_DIR="${PP_LIBS_DIR:-${RELEASE_ROOT}/libs}"
 # Ensure child images inherit DB settings via Unix.environment ()
 export PP_IMAGE_BIN
+export PP_LIBS_DIR
 
 mkdir -p "$(dirname "${PIDFILE}")" "${LOG_DIR}"
 print -r -- "$$" > "${PIDFILE}"

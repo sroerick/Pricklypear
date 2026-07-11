@@ -584,6 +584,8 @@ let prim_summary (name : string) : string =
   | "llm-inner" | "llm-outer" | "llm-rewrite" | "llm-seed" ->
       "AI rewrite / growth tool"
   | "__with_transaction__" -> "internal transaction helper"
+  | "load-string" -> "load Lisp source text (define/route/deftype)"
+  | "load-library" -> "load libs/<name>/lib.pp into current branch"
   | _ -> "built-in primitive"
 
 (** All registered prim names with one-line summaries, sorted. *)

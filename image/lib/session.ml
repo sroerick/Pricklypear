@@ -275,124 +275,6 @@ let define_binding (t : t) ~(name : string) ~(body_src : string)
       Lwt.return (Error msg))
 
 (* First-run recipe: hello page function + route. No Lisp knowledge required. *)
-let recipe_hello (t : t) : (string, string) result Lwt.t =
-  let body_src =
-    "(lambda () (render-html \"<h1>Hello</h1><p>Your first Pricklypear page. Edit me at /edit/hi-page.</p>\"))"
-  in
-  let* def =
-    define_binding t ~name:"hi-page" ~body_src ~author:(t.manifest.username)
-  in
-  match def with
-  | Error e -> Lwt.return (Error e)
-  | Ok _ ->
-      Hashtbl.replace t.routes "/hello" "hi-page";
-      let* _ = Store.register_route t.store ~route:"/hello" ~handler:"hi-page" in
-      Lwt.return
-        (Ok "created function hi-page and route /hello — open /hello")
-
-(* Seed standard Lisp helpers if missing (author system). *)
-let stdlib_seeds : (string * string) list =
-  [ ( "list/map"
-    , "(lambda (f xs) (if (null? xs) (list) (cons (f (car xs)) (list/map f (cdr xs)))))"
-    )
-  ; ( "list/filter"
-    , "(lambda (p xs) (if (null? xs) (list) (if (p (car xs)) (cons (car xs) (list/filter p (cdr xs))) (list/filter p (cdr xs)))))"
-    )
-  ; ( "list/foldl"
-    , "(lambda (f acc xs) (if (null? xs) acc (list/foldl f (f acc (car xs)) (cdr xs))))"
-    )
-  ; ( "html/wrap"
-    , "(lambda (title body) (render-html (string-append \"<article><h1>\" (str title) \"</h1><div>\" (str body) \"</div></article>\")))"
-    )
-  ; ( "data/get-field"
-    , "(lambda (type-name id field) (dict-get (get type-name id) field))"
-    )
-  ]
-
-let seed_stdlib (t : t) : unit Lwt.t =
-  Lwt_list.iter_s
-    (fun (name, body_src) ->
-      let* found = Store.lookup_function t.store name in
-      match found with
-      | Some _ -> Lwt.return_unit
-      | None ->
-          let* r =
-            define_binding t ~name ~body_src ~author:"system"
-          in
-          (match r with
-           | Ok _ ->
-               Printf.eprintf "[session] seeded %s\n" name;
-               Lwt.return_unit
-           | Error e ->
-               Printf.eprintf "[session] seed %s failed: %s\n" name e;
-               Lwt.return_unit))
-    stdlib_seeds
-
-(** Dogfood: interactive todo package (it33 POST + request context). *)
-let recipe_todo (t : t) : (string, string) result Lwt.t =
-  let* _ =
-    Crud.deftype t.store
-      ~args:[ Pricklypear_lisp.Ast.VStr "todo-item"; Pricklypear_lisp.Ast.VStr "title"; Pricklypear_lisp.Ast.VStr "done" ]
-      ~author:t.manifest.username
-  in
-  (* Method-aware /todos:
-       POST + title -> create + redirect /todos (PRG)
-       GET          -> form + list dump
-     Toggle deferred (optional in plan); form add is the POST acceptance. *)
-  let seeds =
-    [ ( "todo/add"
-      , "(lambda (title) (create 'todo-item (dict-set (dict-set \"{}\" \"title\" title) \"done\" \"false\")))"
-      )
-    ; ( "todo/list"
-      , "(lambda () (rows 'todo-item 50))"
-      )
-    ; ( "todo/item-li"
-      , String.concat ""
-          [ "(lambda (row) "
-          ; "(string-append \"<li><strong>\" "
-          ; "  (dict-get (cdr row) \"title\") "
-          ; "  \"</strong></li>\"))" ]
-      )
-    ; ( "todo/page"
-      , String.concat ""
-          [ "(lambda () "
-          ; "(if (string-eq (request-method) \"POST\") "
-          ; "  (seq (todo/add (request-param \"title\")) (redirect \"/todos\")) "
-          ; "  (render-html (string-append "
-          ; "    \"<h1>Todos</h1>\" "
-          ; "    \"<form method=\\\"POST\\\" action=\\\"/todos\\\" class=\\\"card\\\">\" "
-          ; "    \"<p><label>New item <input type=\\\"text\\\" name=\\\"title\\\" required placeholder=\\\"buy milk\\\"></label></p>\" "
-          ; "    \"<p><button type=\\\"submit\\\">Add</button></p></form>\" "
-          ; "    \"<ul class=\\\"card\\\">\" "
-          ; "    (list/foldl "
-          ; "      (lambda (acc row) (string-append acc (todo/item-li row))) "
-          ; "      \"\" "
-          ; "      (todo/list)) "
-          ; "    \"</ul>\" "
-          ; "    \"<p class=\\\"muted\\\">\" (str (count (todo/list))) \" item(s)</p>\")))"
-          ; ")" ]
-      )
-    ]
-  in
-  let* results =
-    Lwt_list.map_s
-      (fun (name, body) ->
-        define_binding t ~name ~body_src:body ~author:t.manifest.username)
-      seeds
-  in
-  let failed =
-    List.find_map
-      (function Error e -> Some e | Ok _ -> None)
-      results
-  in
-  match failed with
-  | Some e -> Lwt.return (Error e)
-  | None ->
-      Hashtbl.replace t.routes "/todos" "todo/page";
-      let* _ = Store.register_route t.store ~route:"/todos" ~handler:"todo/page" in
-      Lwt.return
-        (Ok "todo package: todo/add, todo/list, todo/page + route /todos (POST forms)")
-
 (* Optional elevate: PP_AI_ALLOW_WRITE=1 allows WriteDb/Publish/etc. *)
 let ai_allow_set () =
   match Sys.getenv_opt "PP_AI_ALLOW_WRITE" with
@@ -809,6 +691,70 @@ let register_request_prims (t : t) (tbl : Primitives.t) : unit =
             (Pricklypear_lisp.Ast.Interp_error
                (Pricklypear_lisp.Ast.User_error "redirect needs 1 string path")))
 
+(* Evaluate a single s-expression string as one REPL turn.
+   Returns either the resulting value or an error message string.
+
+   Per spec [image.repl-experience]: (define name val) ALSO persists to
+   the store: the env binding is in-memory (fast), the store binding
+   survives image reboot. The store call is non-fatal on PG-down (the
+   env binding still happened).
+
+   Lwt ABI (post-refactor): fork/merge/route/checkout are NORMAL PRIMS
+   registered via [register_session_control_prims] — they return their
+   real DB result wrapped in a promise. Only [define] keeps an AST-level
+   intercept: it's read-level special (the name arg is a Var that must
+   not be evaluated), so it can't become a regular prim. *)
+let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value Lwt.t =
+  try
+    let expr = Pricklypear_lisp.Reader.read_one input in
+    (* Pre-eval intercept: (define name <body>) is the only AST-level
+       special case left, because the name argument is a Var that must
+       not be evaluated. Everything else (fork/merge/route/checkout)
+       dispatches through Eval.apply via the prim_table. *)
+    let* v =
+      Pricklypear_lisp.Eval.eval_string ~prims:t.prims t.env input
+    in
+    (match expr with
+     | Pricklypear_lisp.Ast.App
+         (Pricklypear_lisp.Ast.Var "define",
+          [ Pricklypear_lisp.Ast.Var name; body_expr ]) ->
+         (* Persist the body AST to the store for reload-on-boot. The
+            env binding already happened via eval's Define case; this
+            DB write is non-fatal on PG-down. *)
+         Lwt.async (fun () ->
+           Store.persist_function t.store name body_expr t.manifest.username);
+         Lwt.return v
+     | _ -> Lwt.return v)
+  with
+  | Pricklypear_lisp.Ast.Interp_error e as exn -> Lwt.fail exn
+  | Pricklypear_lisp.Reader.Reader_error (msg, line, col) ->
+      Lwt.fail (Pricklypear_lisp.Ast.Interp_error
+                  (Pricklypear_lisp.Ast.Parse_error (msg, line, col)))
+  | exn -> Lwt.fail exn
+
+
+(* --- Library loader: same .pp text as in git libs/ --- *)
+
+and load_string (t : t) (src : string) : (string, string) result Lwt.t =
+  Loader.load_string ~eval_one:(eval_one t) src
+
+and load_library (t : t) (name : string) : (string, string) result Lwt.t =
+  Loader.load_library ~eval_one:(eval_one t) name
+
+and seed_stdlib (t : t) : unit Lwt.t =
+  let* r = load_library t "std" in
+  (match r with
+   | Ok msg -> Printf.eprintf "[session] stdlib: %s\n%!" msg
+   | Error e -> Printf.eprintf "[session] stdlib load: %s\n%!" e);
+  Lwt.return_unit
+
+and recipe_hello (t : t) : (string, string) result Lwt.t =
+  load_library t "hello"
+
+and recipe_todo (t : t) : (string, string) result Lwt.t =
+  load_library t "todo"
+
+
 let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
   let env = Pricklypear_lisp.Env.create () in
   let prim_table = Primitives.make_with_defaults () in
@@ -855,6 +801,30 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
     (fun name _ ->
       Pricklypear_lisp.Env.define env name (Pricklypear_lisp.Ast.VPrim name))
     prim_table;
+  Primitives.register prim_table "load-string"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr src ] ->
+          let* r = load_string !t src in
+          (match r with
+           | Ok msg -> Lwt.return (Pricklypear_lisp.Ast.VStr msg)
+           | Error e ->
+               Lwt.return (Pricklypear_lisp.Ast.VStr ("load-string: " ^ e)))
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr "load-string: need 1 string"));
+  Primitives.register prim_table "load-library"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr name ] ->
+          let* r = load_library !t name in
+          (match r with
+           | Ok msg -> Lwt.return (Pricklypear_lisp.Ast.VStr msg)
+           | Error e ->
+               Lwt.return (Pricklypear_lisp.Ast.VStr ("load-library: " ^ e)))
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr "load-library: need 1 string"));
   let final_prims = Primitives.to_eval_table prim_table in
   let kernel_catalog = Primitives.catalog prim_table in
   (* Mutate the prims field in place (rather than building a fresh
@@ -878,53 +848,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
     seed_stdlib session);
   session
 
-(* Evaluate a single s-expression string as one REPL turn.
-   Returns either the resulting value or an error message string.
 
-   Per spec [image.repl-experience]: (define name val) ALSO persists to
-   the store: the env binding is in-memory (fast), the store binding
-   survives image reboot. The store call is non-fatal on PG-down (the
-   env binding still happened).
-
-   Lwt ABI (post-refactor): fork/merge/route/checkout are NORMAL PRIMS
-   registered via [register_session_control_prims] — they return their
-   real DB result wrapped in a promise. Only [define] keeps an AST-level
-   intercept: it's read-level special (the name arg is a Var that must
-   not be evaluated), so it can't become a regular prim. *)
-let eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value Lwt.t =
-  try
-    let expr = Pricklypear_lisp.Reader.read_one input in
-    (* Pre-eval intercept: (define name <body>) is the only AST-level
-       special case left, because the name argument is a Var that must
-       not be evaluated. Everything else (fork/merge/route/checkout)
-       dispatches through Eval.apply via the prim_table. *)
-    let* v =
-      Pricklypear_lisp.Eval.eval_string ~prims:t.prims t.env input
-    in
-    (match expr with
-     | Pricklypear_lisp.Ast.App
-         (Pricklypear_lisp.Ast.Var "define",
-          [ Pricklypear_lisp.Ast.Var name; body_expr ]) ->
-         (* Persist the body AST to the store for reload-on-boot. The
-            env binding already happened via eval's Define case; this
-            DB write is non-fatal on PG-down. *)
-         Lwt.async (fun () ->
-           Store.persist_function t.store name body_expr t.manifest.username);
-         Lwt.return v
-     | _ -> Lwt.return v)
-  with
-  | Pricklypear_lisp.Ast.Interp_error e as exn -> Lwt.fail exn
-  | Pricklypear_lisp.Reader.Reader_error (msg, line, col) ->
-      Lwt.fail (Pricklypear_lisp.Ast.Interp_error
-                  (Pricklypear_lisp.Ast.Parse_error (msg, line, col)))
-  | exn -> Lwt.fail exn
-
-(* Register the DB-touching control primitives (fork/merge/route/checkout)
-   on a session's prim_table. These capture the session [t] so they can
-   read/write the store + manifest. They are normal prim_fns returning
-   'a Lwt.t — the Lwt-typed evaluator threads the promise all the way
-   back to the REPL caller, so e.g. `(fork ...)` returns the new branch
-   id, `(merge ...)` returns the row count. *)
 let uptime_seconds (t : t) : int =
   int_of_float (Unix.gettimeofday () -. t.started_at)
 
