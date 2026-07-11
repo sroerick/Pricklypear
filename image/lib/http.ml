@@ -424,7 +424,7 @@ let home_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit =
           HTML.li [] [HTML.a [HTML.href "/pages"] [txt "Pages"]];
           HTML.li [] [HTML.a [HTML.href "/types"] [txt "Data types"]];
           HTML.li [] [HTML.a [HTML.href "/repl"] [txt "REPL (do-it)"]];
-          HTML.li [] [HTML.a [HTML.href "/edit/greet"] [txt "Editor"]];
+          HTML.li [] [HTML.a [HTML.href "/bindings"] [txt "Functions"]];
           HTML.li [] [HTML.a [HTML.href "/branches"] [txt "Branches"]];
         ];
       ];
