@@ -346,6 +346,13 @@ let recipe_todo (t : t) : (string, string) result Lwt.t =
     ; ( "todo/list"
       , "(lambda () (rows 'todo-item 50))"
       )
+    ; ( "todo/item-li"
+      , String.concat ""
+          [ "(lambda (row) "
+          ; "(string-append \"<li><strong>\" "
+          ; "  (dict-get (cdr row) \"title\") "
+          ; "  \"</strong></li>\"))" ]
+      )
     ; ( "todo/page"
       , String.concat ""
           [ "(lambda () "
@@ -356,8 +363,13 @@ let recipe_todo (t : t) : (string, string) result Lwt.t =
           ; "    \"<form method=\\\"POST\\\" action=\\\"/todos\\\" class=\\\"card\\\">\" "
           ; "    \"<p><label>New item <input type=\\\"text\\\" name=\\\"title\\\" required placeholder=\\\"buy milk\\\"></label></p>\" "
           ; "    \"<p><button type=\\\"submit\\\">Add</button></p></form>\" "
-          ; "    \"<pre>\" (str (todo/list)) \"</pre>\" "
-          ; "    \"<p class=\\\"muted\\\">POST title=… adds an item and redirects.</p>\")))"
+          ; "    \"<ul class=\\\"card\\\">\" "
+          ; "    (list/foldl "
+          ; "      (lambda (acc row) (string-append acc (todo/item-li row))) "
+          ; "      \"\" "
+          ; "      (todo/list)) "
+          ; "    \"</ul>\" "
+          ; "    \"<p class=\\\"muted\\\">\" (str (count (todo/list))) \" item(s)</p>\")))"
           ; ")" ]
       )
     ]
