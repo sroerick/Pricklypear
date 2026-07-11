@@ -156,13 +156,19 @@
         (html/h1 (html/text title))
         (html/p* (html/attr "class" "muted")
           (string-append "tags: " (as-str tags)))
-        (html/div (html/attr "id" "outline")
-          (outline/html outline))
+        (outline/html slug outline)
         (html/div (html/attr "class" "card")
           (html/join
             (list
-              (html/h2 "Edit outline (JSON)")
-              (notes/edit-form slug outline))))))))
+              (html/h2 "Raw JSON (debug)")
+              (notes/edit-form slug outline))))
+        (html/script [] "%s"
+          ("document.getElementById('outline').addEventListener('blur',function(e){" ^
+           "var t=e.target;if(!t.dataset||!t.dataset.field)return;" ^
+           "var p='slug='+'%s'.replace(/\s/g,'')+'&op=set-'+t.dataset.field+'&node-id='+t.dataset.id;" ^
+           "p+='&'+t.dataset.field+'='+encodeURIComponent(t.innerText);" ^
+           "fetch('/partials/notes-node-op',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:p});" ^
+           "},true);") slug slug)))))
 (define notes/show-html
   (lambda (slug)
     (let ((n (notes/get slug)))
@@ -216,6 +222,51 @@
     (let ((n (notes/get (request-param "slug"))))
       (if (null? n)
           (render-html (html/p* (html/attr "class" "err") "missing"))
-          (render-html (outline/html (notes/get-outline n)))))))
+          (render-html (outline/html (as-str (request-param "slug")) (notes/get-outline n)))))))
+
+;; --- node op handler ---
+
+(define notes/apply-op
+  (lambda (slug tree op nid)
+    (if (string-eq op "add-child")
+        (outline/add-child-by-id tree nid (outline/node "n-new" "New node"))
+        (if (string-eq op "add-sibling")
+            (outline/insert-sibling tree nid (outline/node "n-new" "New node"))
+            (if (string-eq op "delete")
+                (outline/delete tree nid)
+                (if (string-eq op "move-up")
+                    (outline/move-up tree nid)
+                    (if (string-eq op "move-down")
+                        (outline/move-down tree nid)
+                        (if (string-eq op "set-title")
+                            (outline/update tree nid
+                              (lambda (n) (outline/set-title n (request-param "title"))))
+                            (if (string-eq op "set-body")
+                                (outline/update tree nid
+                                  (lambda (n) (outline/set-body n (request-param "body"))))
+                                (if (string-eq op "set-todo")
+                                    (outline/update tree nid
+                                      (lambda (n) (outline/set-todo n (request-param "todo"))))
+                                    tree))))))))))
+
+(define notes/node-op
+  (lambda ()
+    (let ((slug (as-str (request-param "slug")))
+          (op (as-str (request-param "op")))
+          (nid (as-str (request-param "node-id"))))
+      (let ((prev (notes/get slug)))
+        (if (null? prev)
+            (render-html (html/p* (html/attr "class" "err") "missing"))
+            (let ((tree (notes/get-outline prev))
+                  (title (notes/get-title prev))
+                  (tags (notes/get-tags prev))
+                  (kind (notes/get-kind prev))
+                  (day (notes/get-day prev)))
+              (let ((new-tree (notes/apply-op slug tree op nid)))
+                (seq
+                  (notes/upsert slug title new-tree tags kind day)
+                  (render-html (outline/html slug new-tree))))))))))
+
 (route "/notes" "notes/page")
 (route "/partials/notes-outline" "notes/outline-partial")
+(route "/partials/notes-node-op" "notes/node-op")

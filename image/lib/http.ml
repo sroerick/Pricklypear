@@ -99,11 +99,21 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
          /* Outline notes */
          .ol-root{margin:.5rem 0}
          .ol-node{margin:.25rem 0 .25rem .5rem;border-left:2px solid #808080;padding-left:.4rem}
-         .ol-sum{cursor:pointer;font-weight:700}
+         .ol-sum{cursor:pointer;font-weight:700;display:flex;align-items:center;gap:.3rem}
+         .ol-fold{font-size:.7em;width:1em;display:inline-block}
          .ol-todo{display:inline-block;margin-right:.35rem;padding:0 .3rem;
-           border:1px solid #000;background:#c0c0c0;font-size:.8rem}
-         .ol-body{margin:.25rem 0 .35rem;white-space:pre-wrap;font-size:.95rem}
+           border:1px solid #000;background:#c0c0c0;font-size:.8rem;font-weight:700}
+         .ol-title{outline:none;padding:.1rem .2rem;border-radius:0}
+         .ol-title:focus{background:#fff;border:1px solid #000}
+         .ol-body{margin:.25rem 0 .35rem;white-space:pre-wrap;font-size:.95rem;
+           outline:none;padding:.1rem .2rem}
+         .ol-body:focus{background:#fff;border:1px solid #000}
          .ol-kids{margin-left:.25rem}
+         .ol-actions{display:flex;gap:.25rem;margin:.25rem 0}
+         .ol-btn{font-size:.75rem;padding:.15rem .4rem;min-height:auto;
+           border:1px solid #000;background:#d4d0c8;cursor:pointer}
+         .ol-btn:hover{background:#fff}
+         .ol-del{color:#800000}
          /* Todo list */
          .todo-add-label{display:block;font-weight:bold;margin:0 0 .35rem}
          .todo-add-row{display:flex;gap:.5rem;align-items:stretch;flex-wrap:wrap}
