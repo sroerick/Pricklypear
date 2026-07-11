@@ -431,8 +431,10 @@ let parse_turn_response (body : string) : turn_result =
           | _ -> None
         in
         let tcs = parse_tool_calls msg in
-        if tcs <> [] || finish = "tool_calls" then
+        if tcs <> [] then
           Need_tools { content = content_opt; tool_calls = tcs }
+        else if finish = "tool_calls" then
+          Turn_error "LLM: finish_reason=tool_calls but no tool_calls payload"
         else
           (match content_opt with
            | Some c -> Final c

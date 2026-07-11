@@ -539,20 +539,22 @@ let run_agent_tool (t : t) ~(name : string) ~(arguments : string)
 (** Multi-turn agent with tools: can install many functions to finish a task. *)
 let agent_task
     (t : t)
-    ?(max_steps = 8)
+    ?(max_steps = 16)
     ?(on_event : Llm_client.agent_event -> unit = fun _ -> ())
     ~(prompt : string)
     () : Pricklypear_lisp.Ast.value Lwt.t =
   let seed =
     "You are the agent for a running Pricklypear multi-user Lisp OS image " ^
     "(software, not a cactus).\n" ^
-    "You may call tools to inspect the image and install Lisp functions.\n" ^
-    "To create or update functions, use install_function with a pure lambda body.\n" ^
-    "You may call install_function multiple times to build a small package.\n" ^
-    "Prefer small pure functions; use package/name names (e.g. demo/hello).\n" ^
-    "When the task is done, reply with a short summary of what you installed " ^
-    "and how to call it — no tool call on the final message.\n" ^
-    "Do not invent that a function exists; use list_bindings / inspect_function."
+    "Tools: image_context, list_bindings, list_routes, inspect_function, install_function.\n" ^
+    "Efficiency rules:\n" ^
+    "- Batch: emit MULTIPLE tool calls in ONE assistant turn when possible " ^
+    "(e.g. several install_function calls together).\n" ^
+    "- Do not re-list bindings after every install unless needed.\n" ^
+    "- install_function body = one lambda s-expression only, no prose.\n" ^
+    "- Prefer package/name names (demo/hello).\n" ^
+    "- When finished, respond with a SHORT text summary and NO tool calls.\n" ^
+    "- Do not invent bindings; use list_bindings / inspect_function."
   in
   let open Llm_client in
   let msgs =
@@ -561,15 +563,29 @@ let agent_task
       ; Msg { role = User; content = prompt }
       ]
   in
+  let installs : string list ref = ref [] in
   let rec loop step =
     if step > max_steps then begin
-      on_event (Fail "agent-task: max steps exceeded");
-      Lwt.return
-        (Pricklypear_lisp.Ast.VStr "agent-task: max steps exceeded")
+      let summary =
+        match !installs with
+        | [] ->
+            "agent-task: max steps exceeded (no installs recorded). " ^
+            "Try a smaller task or (agent-task prompt 24)."
+        | xs ->
+            "agent-task: max steps exceeded after installs:\n- " ^
+            String.concat "\n- " (List.rev xs) ^
+            "\n(Partial progress kept on this branch.)"
+      in
+      on_event (Fail summary);
+      Lwt.return (Pricklypear_lisp.Ast.VStr summary)
     end else
+      (* Last step: no tools — force a plain-text wrap-up. *)
+      let tools_now =
+        if step = max_steps then [] else agent_tool_defs
+      in
       let* turn =
         chat_turn ~temperature:0.2 ~max_tokens:2048
-          ~tools:agent_tool_defs ~messages:!msgs ()
+          ~tools:tools_now ~messages:!msgs ()
       in
       match turn with
       | Turn_error e ->
@@ -580,27 +596,60 @@ let agent_task
           on_event Done;
           Lwt.return (Pricklypear_lisp.Ast.VStr text)
       | Need_tools { content; tool_calls } ->
-          (match content with
-           | Some c when String.trim c <> "" -> on_event (Token (c ^ "\n"))
-           | _ -> ());
-          msgs :=
-            !msgs
-            @ [ Assistant_tools { content; tool_calls } ];
-          let* () =
-            Lwt_list.iter_s
-              (fun (tc : tool_call) ->
-                on_event (Token (Printf.sprintf "[tool %s]\n" tc.name));
-                let* result = run_agent_tool t ~name:tc.name ~arguments:tc.arguments in
-                on_event (Token (Printf.sprintf "→ %s\n"
-                  (if String.length result > 200 then String.sub result 0 200 ^ "…"
-                   else result)));
-                msgs :=
-                  !msgs
-                  @ [ Tool_result { tool_call_id = tc.id; content = result } ];
-                Lwt.return_unit)
-              tool_calls
-          in
-          loop (step + 1)
+          (* Empty tool_calls burns steps instantly — stop that loop. *)
+          if tool_calls = [] then begin
+            let fallback =
+              match content with
+              | Some c when String.trim c <> "" -> c
+              | _ ->
+                  "agent-task: model requested tools but sent none; stopping."
+            in
+            on_event (Token fallback);
+            on_event Done;
+            Lwt.return (Pricklypear_lisp.Ast.VStr fallback)
+          end else begin
+            (match content with
+             | Some c when String.trim c <> "" -> on_event (Token (c ^ "\n"))
+             | _ -> ());
+            msgs :=
+              !msgs
+              @ [ Assistant_tools { content; tool_calls } ];
+            let* () =
+              Lwt_list.iter_s
+                (fun (tc : tool_call) ->
+                  on_event (Token (Printf.sprintf "[tool %s]\n" tc.name));
+                  let* result =
+                    run_agent_tool t ~name:tc.name ~arguments:tc.arguments
+                  in
+                  if tc.name = "install_function" then begin
+                    let n =
+                      match
+                        try
+                          json_string_field
+                            (Yojson.Safe.from_string tc.arguments) "name"
+                        with _ -> None
+                      with
+                      | Some name -> name
+                      | None -> "?"
+                    in
+                    installs := n :: !installs
+                  end;
+                  on_event
+                    (Token
+                       (Printf.sprintf "→ %s\n"
+                          (if String.length result > 200 then
+                             String.sub result 0 200 ^ "…"
+                           else result)));
+                  msgs :=
+                    !msgs
+                    @ [ Tool_result
+                          { tool_call_id = tc.id; content = result }
+                      ];
+                  Lwt.return_unit)
+                tool_calls
+            in
+            loop (step + 1)
+          end
   in
   loop 1
 
