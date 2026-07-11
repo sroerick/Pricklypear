@@ -157,10 +157,10 @@
         (html/p* (html/attr "class" "muted")
           (string-append "tags: " (as-str tags)))
         (outline/html slug outline)
-        (html/div (html/attr "class" "card")
+        (html/tag "details" (html/attr "class" "ol-debug")
           (html/join
             (list
-              (html/h2 "Raw JSON (debug)")
+              (html/tag "summary" (html/attr "class" "muted") "Raw JSON (debug)")
               (notes/edit-form slug outline))))
         (html/tag "script" ""
           (string-append
