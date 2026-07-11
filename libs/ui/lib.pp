@@ -30,8 +30,7 @@
           (html/join
             (list
               (html/h2 "Workspace")
-              (html/p*
-                ""
+              (html/p* ""
                 (html/join
                   (list
                     "Homepage is "
@@ -47,22 +46,20 @@
                     (html/li "" (html/a "/bible" "Bible"))
                     (html/li "" (html/a "/todos" "Todos"))
                     (html/li "" (html/a "/bindings?pkg=ui" "Edit ui package"))
-                    (html/li "" (html/a "/agent" "Agent")))))))))
+                    (html/li "" (html/a "/agent" "Agent"))))))))
         (html/div (html/attr "class" "card")
           (html/join
             (list
               (html/h2 "Customize nav")
-              (html/p*
-                ""
+              (html/p* ""
                 (html/join
                   (list
                     "Edit "
                     (html/code "ui/menu")
-                    " — use "
-                    (html/code "(menu/link label href)")
+                    " with "
+                    (html/code "menu/link")
                     " and "
-                    (html/code "(menu/group label kids)")
+                    (html/code "menu/group")
                     ".")))
-              (html/p*
-                (html/attr "class" "muted")
-                "Example: (menu/group \"apps\" (list (menu/link \"todos\" \"/todos\")))"))))))))
+              (html/p* (html/attr "class" "muted")
+                "Example: menu/group apps containing menu/link items"))))))))
