@@ -52,7 +52,7 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
          .menu-drop{position:relative;display:inline-block;margin:0}
          .menu-drop>summary{list-style:none}
          .menu-drop>summary::-webkit-details-marker{display:none}
-         .menu-drop>summary::after{content:" ▾";font-size:.75em}
+         .menu-drop>summary::after{content:" v";font-size:.7em}
          .menu-drop-panel{display:none;position:absolute;left:0;top:100%;
            z-index:40;min-width:10rem;margin-top:2px;padding:.25rem;
            background:#fff;border:2px solid #000;box-shadow:2px 2px 0 #808080}
