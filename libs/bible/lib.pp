@@ -72,6 +72,109 @@
   (lambda (ref)
     (find-row 'bible-verse "ref" (as-str ref))))
 
+;; Parse small positive ints from request strings (1..max).
+(define bible/parse-int-from
+  (lambda (s i max)
+    (if (> i max)
+        0
+        (if (string-eq (as-str s) (as-str i))
+            i
+            (bible/parse-int-from s (+ i 1) max)))))
+
+(define bible/parse-int
+  (lambda (s)
+    (bible/parse-int-from s 1 200)))
+
+(define bible/book-ordinal
+  (lambda (book)
+    (let ((row (bible/book-row book)))
+      (if (null? row)
+          0
+          (bible/parse-int (dict-get row "ordinal"))))))
+
+(define bible/book-by-ordinal
+  (lambda (ord)
+    (list/foldl
+      (lambda (acc row)
+        (let ((f (cdr row)))
+          (if (string-eq (as-str (dict-get f "ordinal")) (as-str ord))
+              f
+              acc)))
+      ()
+      (bible/books))))
+
+;; -> (abbrev chapter-str) or ()
+(define bible/prev-ref
+  (lambda (book chapter)
+    (let ((ab (bible/abbrev-of book))
+          (c (bible/parse-int (bible/safe-chapter book chapter)))
+          (ord (bible/book-ordinal book)))
+      (if (> c 1)
+          (list ab (as-str (- c 1)))
+          (if (> ord 1)
+              (let ((prev (bible/book-by-ordinal (- ord 1))))
+                (if (null? prev)
+                    ()
+                    (list (dict-get prev "abbrev")
+                          (as-str (bible/chapter-count
+                                    (dict-get prev "abbrev"))))))
+              ())))))
+
+(define bible/next-ref
+  (lambda (book chapter)
+    (let ((ab (bible/abbrev-of book))
+          (c (bible/parse-int (bible/safe-chapter book chapter)))
+          (maxc (bible/chapter-count (bible/abbrev-of book)))
+          (ord (bible/book-ordinal book)))
+      (if (< c maxc)
+          (list ab (as-str (+ c 1)))
+          (if (< ord 66)
+              (let ((nxt (bible/book-by-ordinal (+ ord 1))))
+                (if (null? nxt)
+                    ()
+                    (list (dict-get nxt "abbrev") "1")))
+              ())))))
+
+(define bible/href-chapter
+  (lambda (pair)
+    (if (null? pair)
+        "#"
+        (string-append
+          "/bible?book="
+          (as-str (car pair))
+          "&chapter="
+          (as-str (car (cdr pair)))))))
+
+(define bible/nav-links
+  (lambda (book chapter)
+    (let ((prev (bible/prev-ref book chapter))
+          (next (bible/next-ref book chapter)))
+      (html/p*
+        (html/attr "class" "bible-nav")
+        (html/join
+          (list
+            (if (null? prev)
+                (html/span (html/attr "class" "muted") "← prev")
+                (html/a (bible/href-chapter prev) "← prev"))
+            " · "
+            (html/a "/bible?random=1" "random")
+            " · "
+            (if (null? next)
+                (html/span (html/attr "class" "muted") "next →")
+                (html/a (bible/href-chapter next) "next →"))
+            " · "
+            (html/a
+              (string-append
+                "/dabar?book="
+                (bible/abbrev-of book)
+                "&chapter="
+                (bible/safe-chapter book chapter))
+              "study")))))))
+
+(define bible/random-row
+  (lambda ()
+    (find-random 'bible-verse)))
+
 (define bible/verse-li
   (lambda (row)
     (let ((fields (cdr row)))
@@ -88,11 +191,14 @@
 ;; Fragment: chapter body only (htmx #bible-panel / /partials/bible-chapter).
 (define bible/chapter-panel
   (lambda (book chapter focus-verse)
-    (let ((rows (bible/chapter book chapter)))
+    (let ((rows (bible/chapter book chapter))
+          (ab (bible/abbrev-of book))
+          (ch (bible/safe-chapter book chapter)))
       (html/join
         (list
           (html/h1
             (string-append (as-str book) " " (as-str chapter)))
+          (bible/nav-links ab ch)
           ;; list-style:none — <ol> markers + <sup> verse nums was double-numbering
           (html/tag "ol"
             (html/attrs
@@ -104,6 +210,7 @@
               (lambda (acc row) (string-append acc (bible/verse-li row)))
               ""
               rows))
+          (bible/nav-links ab ch)
           (if (null? focus-verse)
               ""
               (html/p*
@@ -306,57 +413,79 @@
 (define bible/panel-for-request
   (lambda ()
     (let ((ref (request-param "ref"))
-          (q (request-param "q")))
-      (if (null? q)
-          (if (null? ref)
-              (let ((book (request-param "book"))
-                    (chapter (request-param "chapter"))
-                    (verse (request-param "verse")))
-                (let ((b (if (null? book) "John" (as-str book)))
-                      (c (bible/safe-chapter
-                            (if (null? book) "John" book)
-                            (if (null? chapter) "3" chapter)))
-                      (v (if (null? verse) () verse)))
-                  (html/join
-                    (list
-                      (bible/go-form b c v)
-                      (bible/search-form ())
-                      (bible/chapter-panel b c v)
-                      (html/p*
-                        (html/attr "class" "muted")
-                        (html/join
-                          (list
-                            "Berean Standard Bible · "
-                            (bible/ref b c (if (null? v) 1 v))
-                            " · "
-                            (html/a "/partials/bible-chapter" "raw partial"))))))))
-              (let ((row (bible/parse-ref ref)))
-                (if (null? row)
-                    (html/join
-                      (list
-                        (bible/go-form "John" "3" ())
-                        (html/p*
-                          (html/attr "class" "err")
-                          (string-append "Unknown ref " (as-str ref)))))
-                    (let ((book (dict-get row "book"))
-                          (chapter (dict-get row "chapter"))
-                          (verse (dict-get row "verse")))
+          (q (request-param "q"))
+          (rnd (request-param "random")))
+      (if (null? rnd)
+          (if (null? q)
+              (if (null? ref)
+                  (let ((book (request-param "book"))
+                        (chapter (request-param "chapter"))
+                        (verse (request-param "verse")))
+                    (let ((b (if (null? book) "John" (as-str book)))
+                          (c (bible/safe-chapter
+                                (if (null? book) "John" book)
+                                (if (null? chapter) "3" chapter)))
+                          (v (if (null? verse) () verse)))
                       (html/join
                         (list
-                          (bible/go-form book chapter verse)
+                          (bible/go-form b c v)
                           (bible/search-form ())
-                          (bible/chapter-panel book chapter verse)
+                          (bible/chapter-panel b c v)
                           (html/p*
                             (html/attr "class" "muted")
-                            (string-append
-                              "ref "
-                              (as-str ref)
-                              " · Berean Standard Bible"))))))))
-          (html/join
-            (list
-              (bible/go-form "John" "3" ())
-              (bible/search-form q)
-              (bible/search-panel q)))))))
+                            (html/join
+                              (list
+                                "Berean Standard Bible · "
+                                (bible/ref b c (if (null? v) 1 v))
+                                " · "
+                                (html/a "/partials/bible-chapter" "raw partial")
+                                " · "
+                                (html/a "/strongs" "Strong's"))))))))
+                  (let ((row (bible/parse-ref ref)))
+                    (if (null? row)
+                        (html/join
+                          (list
+                            (bible/go-form "John" "3" ())
+                            (html/p*
+                              (html/attr "class" "err")
+                              (string-append "Unknown ref " (as-str ref)))))
+                        (let ((book (dict-get row "book"))
+                              (chapter (dict-get row "chapter"))
+                              (verse (dict-get row "verse")))
+                          (html/join
+                            (list
+                              (bible/go-form book chapter verse)
+                              (bible/search-form ())
+                              (bible/chapter-panel book chapter verse)
+                              (html/p*
+                                (html/attr "class" "muted")
+                                (string-append
+                                  "ref "
+                                  (as-str ref)
+                                  " · Berean Standard Bible"))))))))
+              (html/join
+                (list
+                  (bible/go-form "John" "3" ())
+                  (bible/search-form q)
+                  (bible/search-panel q))))
+          ;; random=1 → pick a verse, show its chapter with focus
+          (let ((row (bible/random-row)))
+            (if (null? row)
+                (html/p* (html/attr "class" "err") "no verses seeded")
+                (let ((f (cdr row)))
+                  (let ((book (dict-get f "abbrev"))
+                        (chapter (dict-get f "chapter"))
+                        (verse (dict-get f "verse")))
+                    (html/join
+                      (list
+                        (bible/go-form book chapter verse)
+                        (bible/search-form ())
+                        (bible/chapter-panel book chapter verse)
+                        (html/p*
+                          (html/attr "class" "muted")
+                          (string-append
+                            "random · "
+                            (as-str (dict-get f "ref"))))))))))))))
 
 (define bible/partial
   (lambda ()

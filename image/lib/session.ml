@@ -980,6 +980,16 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
             (Pricklypear_lisp.Ast.VStr
                "find-text: need type, field, needle [, limit]"));
 
+  (* (find-random 'type) -> (id . fields) | () *)
+  Primitives.register tbl "find-random"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr type_name ] ->
+          Crud.find_random t.store ~type_name
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr "find-random: need type"));
+
   (* (list-branches) -> VList of "owner/name" strings *)
   Primitives.register tbl "list-branches"
     (fun _args ->
@@ -1337,6 +1347,13 @@ and recipe_todo (t : t) : (string, string) result Lwt.t =
 and recipe_bible (t : t) : (string, string) result Lwt.t =
   (* Types + API + /bible only — corpus via scripts/seed_bible_bsb.py *)
   load_library t "bible"
+
+and recipe_dabar (t : t) : (string, string) result Lwt.t =
+  (* Study layer — requires bible/*; Strong's/interlinear via seed scripts *)
+  let* r = load_library t "bible" in
+  (match r with
+   | Error e -> Lwt.return (Error e)
+   | Ok _ -> load_library t "dabar")
 
 
 let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =

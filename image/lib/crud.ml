@@ -366,6 +366,30 @@ let find_rows
         in
         Lwt.return (VList lisp_rows)
 
+(** (find-random 'type) -> (id . fields) pair | VNil.
+    One random row of the given type (for bible/random etc.). *)
+let find_random (store : Store.t) ~(type_name : string) : value Lwt.t =
+  match Store.current_conn store with
+  | None -> Lwt.return VNil
+  | Some conn ->
+      let sql =
+        "SELECT id::text, fields::text FROM data_rows " ^
+        "WHERE type_name = $1 ORDER BY random() LIMIT 1"
+      in
+      let* rows =
+        Pg.execute conn
+          ~params:[ Pgx.Value.of_string type_name ]
+          sql
+      in
+      (match rows with
+       | [] -> Lwt.return VNil
+       | row :: _ ->
+           (match row with
+            | [ id_cell; fields_cell ] ->
+                Lwt.return
+                  (VPair (value_of_id id_cell, value_of_id fields_cell))
+            | _ -> Lwt.return VNil))
+
 (** (find-text 'type "field" "needle" [limit]) -> VList of (id . fields).
     Case-insensitive substring match on fields->>field. *)
 let find_text

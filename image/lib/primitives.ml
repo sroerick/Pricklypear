@@ -628,6 +628,7 @@ let prim_summary (name : string) : string =
   | "find-row" -> "first row by fields->>key"
   | "find-rows" -> "rows filtered by fields"
   | "find-text" -> "substring search on a field"
+  | "find-random" -> "one random data row of a type"
   | "select-for-update" -> "lock row in transaction"
   | "agent" -> "AI portal: (agent seed prompt) -> text"
   | "agent-task" -> "multi-turn tool agent; may install many functions"

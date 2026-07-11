@@ -618,6 +618,15 @@ let default_home_content (session : Session.t) : Pure_html.node list =
       ];
     ]
   ; HTML.div [HTML.class_ "card"] [
+      HTML.h2 [] [txt "Library: dabar (study)"];
+      HTML.p [] [txt
+        "Strong's + interlinear study layer (libs/dabar). Seeds: scripts/seed_strongs.py, seed_interlinear_dogfood.py."];
+      HTML.form [HTML.method_ `POST; HTML.action "/api/recipe/dabar";
+                 HTML.enctype `urlencoded] [
+        HTML.button [HTML.type_ "submit"] [txt "Install dabar library"];
+      ];
+    ]
+  ; HTML.div [HTML.class_ "card"] [
       HTML.h2 [] [txt "AI propose (current branch)"];
       HTML.form [HTML.method_ `POST; HTML.action "/api/ai/propose";
                  HTML.enctype `urlencoded] [
@@ -2057,6 +2066,40 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
          | Error e ->
              let body =
                chrome ~session ~title:"Bible recipe failed" [
+                 HTML.p [HTML.class_ "err"] [txt "%s" e];
+                 HTML.p [] [HTML.a [HTML.href "/"] [txt "Home"]];
+               ]
+             in
+             html_response reqd ~status:`Internal_server_error body;
+             Lwt.return_unit)
+  | `POST, "/api/recipe/dabar" ->
+      launch
+        (let* res = Session.recipe_dabar session in
+         match res with
+         | Ok msg ->
+             let body =
+               chrome ~session ~title:"Dabar library" [
+                 HTML.div [HTML.class_ "card"] [
+                   HTML.p [HTML.class_ "ok"] [txt "%s" msg];
+                   HTML.p [] [
+                     HTML.a [HTML.href "/dabar?book=John&chapter=3&verse=16"]
+                       [txt "Open /dabar"];
+                     txt " · ";
+                     HTML.a [HTML.href "/strongs?n=G2316"] [txt "Strong's G2316"];
+                     txt " · ";
+                     HTML.a [HTML.href "/bible"] [txt "Bible"];
+                   ];
+                   HTML.p [HTML.class_ "muted"] [
+                     txt "Seeds: scripts/seed_strongs.py · seed_interlinear_dogfood.py";
+                   ];
+                 ];
+               ]
+             in
+             html_response reqd body;
+             Lwt.return_unit
+         | Error e ->
+             let body =
+               chrome ~session ~title:"Dabar recipe failed" [
                  HTML.p [HTML.class_ "err"] [txt "%s" e];
                  HTML.p [] [HTML.a [HTML.href "/"] [txt "Home"]];
                ]
