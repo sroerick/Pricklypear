@@ -162,7 +162,7 @@
             (list
               (html/h2 "Raw JSON (debug)")
               (notes/edit-form slug outline))))
-        (html/script [] "%s"
+        (html/tag "script" [] "%s"
           ("document.getElementById('outline').addEventListener('blur',function(e){" ^
            "var t=e.target;if(!t.dataset||!t.dataset.field)return;" ^
            "var p='slug='+'%s'.replace(/\\s/g,'')+'&op=set-'+t.dataset.field+'&node-id='+t.dataset.id;" ^
