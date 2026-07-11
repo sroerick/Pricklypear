@@ -34,16 +34,15 @@ let ensure_signing_key (store : Store.t) : Cstruct.t option Lwt.t =
       Lwt.return (Some k)
   | None ->
       pr "[auth.boot] no signing key; seeding fresh 32B random key\n";
-      let new_key = Mirage_crypto_rng.generate 32 in
+      let new_key = Cstruct.of_string (Mirage_crypto_rng.generate 32) in
       let* ok = Store.seed_signing_key_if_missing store new_key in
       pr "[auth.boot] signing key seeded: %b\n" ok;
       Lwt.return (Some new_key)
 
 let start () : unit Lwt.t =
   pr "[auth.boot] pricklypear auth starting up...\n";
-  (* Initialize mirage-crypto-rng with Unix /dev/urandom. *)
-  (try Mirage_crypto_rng_unix.initialize (module Mirage_crypto_rng.Fortuna)
-   with _ -> ());
+  (* mirage-crypto-rng 1.x API (poohstack/Dream-compatible). *)
+  Mirage_crypto_rng_unix.use_default ();
   let cfg = Store.config_from_env () in
   let store = Store.make ~cfg () in
   let* connected = Store.connect store in

@@ -7,8 +7,7 @@
 open Pricklypear_auth_lib
 
 let () =
-  (try Mirage_crypto_rng_unix.initialize (module Mirage_crypto_rng.Fortuna)
-   with _ -> ())
+  Mirage_crypto_rng_unix.use_default ()
 
 let crypto_tests = [
   ("tokens: HMAC round-trips deterministically", `Quick, fun () ->

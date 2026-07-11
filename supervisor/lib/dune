@@ -19,7 +19,6 @@
    mirage-clock
    mtime
    mtime.clock.os
-   mirage-crypto
    mirage-crypto-rng
    mirage-crypto-rng.unix
    mirage-crypto-pk

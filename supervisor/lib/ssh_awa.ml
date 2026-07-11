@@ -1,34 +1,14 @@
-(** Pricklypear Supervisor — Real SSH via awa-mirage (0.3.1).
+(** Pricklypear Supervisor — Real SSH via awa-mirage (0.6.x).
 
     Per spec [supervisor.ssh-interface]: the supervisor's front door is
     "ssh alice@pricklypear.host". [Ssh.serve] handles the v1 line protocol
     (hand-rolled non-crypto). This module is the awa-mirage SSH handshake
-    path — real SSH transport (key exchange, encryption) — gated behind
-    PP_AWA_SSH_PORT (default 12223 so it doesn't conflict with the line
-    protocol on PP_SSH_PORT).
+    path — real SSH transport — gated behind PP_AWA_SSH_PORT.
 
-    ARCHITECTURE NOTE (recorded in BORGE-1783439434):
-    awa-mirage 0.3.1 on poohstack exposes
-      spawn_server ?stop server msgs flow exec_callback
-    with exec_callback = request -> unit Lwt.t — the callback receives
-    ONLY the request (Channel of {cmd; ic; oc; ec} or Shell of {ic; oc; ec}),
-    NOT the authenticated user identity. Userauth is handled by awa up-front
-    against the [Awa.Auth.db] we build at supervisor boot from authd's
-    /list_ssh_credentials, but the username never reaches the callback.
-
-    Implication: this real-SSH path CANNOT propagate user identity into the
-    image today (the line-protocol [Ssh.serve] DOES, because it calls
-    authd's /verify_ssh_key per-connection and knows the user_id). So this
-    module currently ships a REAL SSH front door on PP_AWA_SSH_PORT that
-    authenticates real ssh clients (pubkey handshake, no cleartext
-    key-sending) but boots the image under the system/admin context (the
-    standard bootstrap-admin user). When awa-mirage 0.5.x is upgraded
-    (auth-event callback), this module's exec_callback will receive the
-    username and can transition to per-user identity, replacing the line
-    protocol fully.
-
-    The line-protocol [Ssh.serve] path REMAINS the default for the dev
-    stack and all smoke tests. *)
+    awa-mirage 0.6: Make takes only Mirage_flow.S; Auth.db lives in
+    Awa_mirage.Auth; spawn_server server user_db msgs flow exec_callback.
+    exec_callback still does not receive the authenticated username
+    (identity propagation still deferred). Line-protocol remains default. *)
 open Lwt.Syntax
 open Lwt.Infix
 
@@ -37,8 +17,8 @@ let flush' () = flush stderr
 
 let default_port = 12223  (* awa-ssh real-SSH dev port; PP_SSH_PORT (2222) is the line protocol *)
 
-(* The awa SSH module — built once by applying the functor to our shims. *)
-module SSH = Awa_mirage.Make (Ssh_awa_shims.Flow) (Ssh_awa_shims.Time) (Ssh_awa_shims.Clock)
+(* awa-mirage 0.6: functor takes only Flow. *)
+module SSH = Awa_mirage.Make (Ssh_awa_shims.Flow)
 
 (* Build the exec_callback for one connection. The callback gets the
    SSH channel's ic/oc functions (Cstruct-based) and bridges them to
@@ -195,11 +175,11 @@ let make_exec_callback
 
 let serve
     ~(fleet : Fleet.t)
-    ~(auth_db : Awa.Auth.db)
+    ~(auth_db : Awa_mirage.Auth.db)
     ~(hostkey : Awa.Hostkey.priv)
     ?(port = default_port)
     () : unit Lwt.t =
-  let server, msgs = Awa.Server.make hostkey auth_db in
+  let server, msgs = Awa.Server.make hostkey in
   let exec_callback = make_exec_callback ~fleet in
   let addr = Lwt_unix.ADDR_INET (Unix.inet_addr_loopback, port) in
   let sock =
@@ -215,13 +195,10 @@ let serve
   let rec loop () =
     let* (fd, _peer) = Lwt_unix.accept sock in
     Lwt.async (fun () ->
-      (* Build a fresh per-connection flow from the raw Lwt_unix fd.
-         awa-mirage's spawn_server runs the SSH handshake + reads
-         forever after; we wrap it in Lwt.catch so a broken connection
-         doesn't kill the supervisor. *)
+      (* awa-mirage 0.6: spawn_server server user_db msgs flow exec_callback *)
       Lwt.catch
         (fun () ->
-          let* _t = SSH.spawn_server server msgs fd exec_callback in
+          let* _t = SSH.spawn_server server auth_db msgs fd exec_callback in
           Lwt.return_unit)
         (fun exn ->
           pp "[supervisor.ssh_awa] connection error: %s\n"

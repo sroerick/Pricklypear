@@ -19,13 +19,20 @@ open Lwt.Syntax
 
 let opaque_id_len = 32  (* bytes of entropy *)
 
-(* Generate 32 bytes of random data using mirage-crypto-rng. *)
+(* Generate 32 bytes of random data using mirage-crypto-rng.
+   mirage-crypto 1.x: generate returns string (was Cstruct.t in 0.11). *)
 let random_opaque_id () : Cstruct.t =
-  Mirage_crypto_rng.generate opaque_id_len
+  Cstruct.of_string (Mirage_crypto_rng.generate opaque_id_len)
 
-(* HMAC-SHA256 of the opaque_id using the signing key. *)
+(* HMAC-SHA256 of the opaque_id using the signing key.
+   Hash moved out of mirage-crypto 1.x — use Digestif. *)
 let sign ~(key : Cstruct.t) (opaque_id : Cstruct.t) : Cstruct.t =
-  Mirage_crypto.Hash.SHA256.hmac ~key opaque_id
+  let dig =
+    Digestif.SHA256.hmac_string
+      ~key:(Cstruct.to_string key)
+      (Cstruct.to_string opaque_id)
+  in
+  Cstruct.of_string (Digestif.SHA256.to_raw_string dig)
 
 (* Encode Cstruct as hex DIGITS (printable). Note: Hex.to_string DECODES. *)
 let hex_of_cs (cs : Cstruct.t) : string =

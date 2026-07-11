@@ -24,7 +24,7 @@ let start () : unit Lwt.t =
      one-shot entropic-seed + Fortuna setup that's safe to always
      run and conditions the awa-ssh path for when PP_AWA_SSH_PORT
      is set. See BORGE-1783439434. *)
-  (try Mirage_crypto_rng_unix.initialize (module Mirage_crypto_rng.Fortuna);
+  (try Mirage_crypto_rng_unix.use_default ();
      Printf.eprintf "[supervisor.boot] RNG initialized (awa-ssh path ready)\n";
      flush stderr
    with exn ->

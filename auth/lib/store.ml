@@ -407,12 +407,16 @@ let hex_encode (cs : Cstruct.t) : string =
 let hex_decode (s : string) : Cstruct.t =
   Hex.to_cstruct (`Hex s)
 
-(* Interim password hash: sha256$salt_hex$digest_hex *)
+let sha256_raw (s : string) : string =
+  Digestif.SHA256.(to_raw_string (digest_string s))
+
+(* Interim password hash: sha256$salt_hex$digest_hex
+   mirage-crypto 1.x: RNG returns string; hashes via Digestif. *)
 let hash_password (password : string) : string =
-  let salt = Mirage_crypto_rng.generate 16 in
+  let salt = Cstruct.of_string (Mirage_crypto_rng.generate 16) in
   let salt_hex = hex_encode salt in
-  let material = Cstruct.concat [ salt; Cstruct.of_string password ] in
-  let digest = Mirage_crypto.Hash.SHA256.digest material in
+  let material = Cstruct.to_string salt ^ password in
+  let digest = Cstruct.of_string (sha256_raw material) in
   let digest_hex = hex_encode digest in
   Printf.sprintf "sha256$%s$%s" salt_hex digest_hex
 
@@ -421,8 +425,8 @@ let verify_password_hash ~(stored : string) ~(password : string) : bool =
   | [ "sha256"; salt_hex; digest_hex ] ->
       (try
          let salt = hex_decode salt_hex in
-         let material = Cstruct.concat [ salt; Cstruct.of_string password ] in
-         let digest = Mirage_crypto.Hash.SHA256.digest material in
+         let material = Cstruct.to_string salt ^ password in
+         let digest = Cstruct.of_string (sha256_raw material) in
          let got = hex_encode digest in
          String.equal got digest_hex
        with _ -> false)

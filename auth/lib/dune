@@ -12,8 +12,8 @@
    lwt.unix
    unix
    yojson
-   mirage-crypto
    mirage-crypto-rng
    mirage-crypto-rng.unix
+   digestif
    hex
    uuidm))
