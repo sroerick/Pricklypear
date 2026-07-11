@@ -175,7 +175,7 @@
 (define notes/do-create
   (lambda (title slug)
     (let ((s
-            (if (or (null? slug) (string-eq (as-str slug) ""))
+            (if (if (null? slug) #t (string-eq (as-str slug) ""))
                 (string-append "note-" (as-str (count (notes/list))))
                 (as-str slug))))
       (seq
@@ -208,7 +208,7 @@
     (if (string-eq (request-method) "POST")
         (notes/handle-post)
         (let ((slug (request-param "slug")))
-          (if (or (null? slug) (string-eq (as-str slug) ""))
+          (if (if (null? slug) #t (string-eq (as-str slug) ""))
               (html/page (list (notes/index-html)))
               (html/page (list (notes/show-html (as-str slug)))))))))
 (define notes/outline-partial
