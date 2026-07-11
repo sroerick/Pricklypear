@@ -1,6 +1,0 @@
-(executable
- (name supervisor)
- (public_name pricklypear-supervisor-exe)
- (package pricklypear-supervisor)
- (modules supervisor)
- (libraries pricklypear-supervisor lwt.unix))

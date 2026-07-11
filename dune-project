@@ -8,16 +8,8 @@
 
 (package
  (name pricklypear-common)
- (description "Shared OCaml types between Pricklypear supervisor, auth, and image"))
-
-(package
- (name pricklypear-auth)
- (description "Auth unikernel for Pricklypear: credential verification, session tokens"))
-
-(package
- (name pricklypear-supervisor)
- (description "Supervisor unikernel for Pricklypear: fleet management, SSH front door"))
+ (description "Shared OCaml types for Pricklypear (manifest, branch, protocol, auth_types)"))
 
 (package
  (name pricklypear-image)
- (description "Per-user image unikernel for Pricklypear: Lisp interpreter, REPL, htmx"))
+ (description "Pricklypear image: a single OCaml unix binary — Lisp interpreter, REPL, htmx, Postgres"))

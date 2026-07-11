@@ -50,3 +50,6 @@ id_rsa.pub
 /tmp/
 *.log
 *.pid
+.pi-subagents/
+__pycache__/
+lisp/bin/read_test.ml

@@ -1,12 +1,12 @@
 #!/bin/ksh
-# scripts/dev.sh — start the full Pricklypear dev stack.
+# scripts/dev.sh — start the Pricklypear dev stack.
 #
-# Brings up: temp Postgres (if not already running), authd, supervisor.
-# The supervisor will spawn image unikernels on SSH connect.
+# Brings up: temp Postgres (if not already running) + the image binary.
+# One process. No supervisor, no authd (retired by the single-image pivot).
 #
 # Usage:
-#   scripts/dev.sh start    # boot everything
-#   scripts/dev.sh stop     # kill everything (leaves PG running)
+#   scripts/dev.sh start    # boot PG + image
+#   scripts/dev.sh stop     # kill the image (leaves PG running)
 #   scripts/dev.sh restart  # stop + start
 #   scripts/dev.sh status   # show what's running
 #   scripts/dev.sh clean    # stop + DROP the pricklypear DB
@@ -25,11 +25,9 @@ PP_SOCKET_DIR="${PP_SOCKET_DIR:-/tmp}"
 PP_DB_PORT="${PP_DB_PORT:-5433}"
 PP_DB_NAME="${PP_DB_NAME:-pricklypear}"
 PP_DB_USER="${PP_DB_USER:-postgres}"
-PP_AUTH_PORT="${PP_AUTH_PORT:-17879}"
-PP_SSH_PORT="${PP_SSH_PORT:-17822}"
-PP_ADMIN_PORT="${PP_ADMIN_PORT:-17880}"
-PP_IMAGE_HTTP_PORT="${PP_IMAGE_HTTP_PORT:-18080}"
-PP_IMAGE_REPL_PORT="${PP_IMAGE_REPL_PORT:-17878}"
+PP_HTTP_PORT="${PP_HTTP_PORT:-18080}"
+PP_REPL_PORT="${PP_REPL_PORT:-17878}"
+PP_LIBS_DIR="${PP_LIBS_DIR:-$PP_ROOT/libs}"
 PP_DEV_DIR="${PP_DEV_DIR:-/tmp/pp-dev}"
 
 # Build artifacts (poohstack opam switch required)
@@ -54,8 +52,7 @@ build_all() {
 }
 
 pg_pidfile="$PP_DEV_DIR/pg.pid"
-auth_pidfile="$PP_DEV_DIR/authd.pid"
-sup_pidfile="$PP_DEV_DIR/supervisor.pid"
+image_pidfile="$PP_DEV_DIR/image.pid"
 
 start_pg() {
   if [ -f "$pg_pidfile" ] && kill -0 "$(cat "$pg_pidfile")" 2>/dev/null; then
@@ -76,6 +73,7 @@ start_pg() {
   pg_ctl -D "$PP_DATA_DIR" \
     -o "-k $PP_SOCKET_DIR -p $PP_DB_PORT" \
     -l "$PP_DEV_DIR/pg.log" start
+  echo $! > "$pg_pidfile"
   sleep 1
   if ! psql -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U "$PP_DB_USER" \
        -d postgres -tAc "SELECT 1" >/dev/null 2>&1; then
@@ -87,13 +85,11 @@ start_pg() {
     echo "[dev] creating database $PP_DB_NAME"
     createdb -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U "$PP_DB_USER" "$PP_DB_NAME"
   fi
-  echo "[dev] applying migrations 001 + 002"
-  psql -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U "$PP_DB_USER" -d "$PP_DB_NAME" \
-    -f "$PP_ROOT/migrations/001_branches.sql" -q
-  psql -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U "$PP_DB_USER" -d "$PP_DB_NAME" \
-    -f "$PP_ROOT/migrations/002_auth.sql" -q
-  psql -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U "$PP_DB_USER" -d "$PP_DB_NAME" \
-    -f "$PP_ROOT/migrations/003_data.sql" -q
+  echo "[dev] applying migrations 001 + 002 + 003 + 004"
+  for m in 001_branches 002_auth 003_data 004_bible_ref_index; do
+    psql -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U "$PP_DB_USER" -d "$PP_DB_NAME" \
+      -f "$PP_ROOT/migrations/${m}.sql" -q
+  done
   # Seed system/main branch if not present (001 should do this; idempotent)
   psql -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U "$PP_DB_USER" -d "$PP_DB_NAME" -q <<EOF
 INSERT INTO branches (id, parent_id, owner, name)
@@ -105,54 +101,31 @@ EOF
   echo "[dev] pg ready (db=$PP_DB_NAME on :$PP_DB_PORT)"
 }
 
-start_authd() {
-  if [ -f "$auth_pidfile" ] && kill -0 "$(cat "$auth_pidfile")" 2>/dev/null; then
-    echo "[dev] authd already running (pid $(cat "$auth_pidfile"))"
+start_image() {
+  if [ -f "$image_pidfile" ] && kill -0 "$(cat "$image_pidfile")" 2>/dev/null; then
+    echo "[dev] image already running (pid $(cat "$image_pidfile"))"
     return
   fi
-  echo "[dev] starting authd on port $PP_AUTH_PORT"
-  PP_DB_HOST=127.0.0.1 \
-  PP_DB_PORT="$PP_DB_PORT" \
-  PP_DB_NAME="$PP_DB_NAME" \
-  PP_DB_USER=pricklypear_auth \
-  PP_DB_PASS=change-me-on-prod \
-  PP_AUTH_PORT="$PP_AUTH_PORT" \
-  PP_BOOTSTRAP_ADMIN_KEY="${PP_BOOTSTRAP_ADMIN_KEY:-ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIVtestkeyforpricklypearadmin}" \
-    "$PP_ROOT/_build/default/auth/bin/authd.exe" \
-      >"$PP_DEV_DIR/authd.log" 2>&1 &
-  echo $! > "$auth_pidfile"
-  sleep 1
-  if ! kill -0 "$(cat "$auth_pidfile")" 2>/dev/null; then
-    echo "[dev] FATAL: authd failed to start; check $PP_DEV_DIR/authd.log" >&2
-    exit 1
-  fi
-  echo "[dev] authd ready (pid $(cat "$auth_pidfile"))"
-}
-
-start_supervisor() {
-  if [ -f "$sup_pidfile" ] && kill -0 "$(cat "$sup_pidfile")" 2>/dev/null; then
-    echo "[dev] supervisor already running (pid $(cat "$sup_pidfile"))"
-    return
-  fi
-  echo "[dev] starting supervisor: ssh=:$PP_SSH_PORT admin=:$PP_ADMIN_PORT"
+  echo "[dev] starting image: http=:$PP_HTTP_PORT repl=:$PP_REPL_PORT"
   PP_DB_HOST=127.0.0.1 \
   PP_DB_PORT="$PP_DB_PORT" \
   PP_DB_NAME="$PP_DB_NAME" \
   PP_DB_USER="$PP_DB_USER" \
-  PP_ADMIN_PORT="$PP_ADMIN_PORT" \
-  PP_SSH_PORT="$PP_SSH_PORT" \
-  PP_AUTH_HOST=127.0.0.1 \
-  PP_AUTH_PORT="$PP_AUTH_PORT" \
-  PP_IMAGE_BIN="$PP_ROOT/_build/default/image/bin/unikernel.exe" \
-    "$PP_ROOT/_build/default/supervisor/bin/supervisor.exe" \
-      >"$PP_DEV_DIR/supervisor.log" 2>&1 &
-  echo $! > "$sup_pidfile"
+  PP_LIBS_DIR="$PP_LIBS_DIR" \
+  PP_USERNAME="${PP_USERNAME:-admin}" \
+  PP_BRANCH_NAME="${PP_BRANCH_NAME:-main}" \
+  PP_BRANCH_ID="${PP_BRANCH_ID:-00000000-0000-0000-0000-000000000001}" \
+  PP_HTTP_PORT="$PP_HTTP_PORT" \
+  PP_REPL_PORT="$PP_REPL_PORT" \
+    "$PP_ROOT/_build/default/image/bin/main.exe" \
+      >"$PP_DEV_DIR/image.log" 2>&1 &
+  echo $! > "$image_pidfile"
   sleep 1
-  if ! kill -0 "$(cat "$sup_pidfile")" 2>/dev/null; then
-    echo "[dev] FATAL: supervisor failed; check $PP_DEV_DIR/supervisor.log" >&2
+  if ! kill -0 "$(cat "$image_pidfile")" 2>/dev/null; then
+    echo "[dev] FATAL: image failed to start; check $PP_DEV_DIR/image.log" >&2
     exit 1
   fi
-  echo "[dev] supervisor ready (pid $(cat "$sup_pidfile"))"
+  echo "[dev] image ready (pid $(cat "$image_pidfile"))"
 }
 
 stop_pidfile() {
@@ -172,33 +145,26 @@ stop_pidfile() {
 do_start() {
   build_all
   start_pg
-  start_authd
-  start_supervisor
+  start_image
   echo
   echo "[dev] all services up. Endpoints:"
-  echo "  authd RPC:    http://127.0.0.1:$PP_AUTH_PORT/health"
-  echo "  supervisor:   http://127.0.0.1:$PP_ADMIN_PORT/  (admin)"
-  echo "  SSH:          ssh-like line proto on 127.0.0.1:$PP_SSH_PORT"
+  echo "  image HTTP:   http://127.0.0.1:$PP_HTTP_PORT/  (htmx)"
+  echo "  image REPL:    127.0.0.1:$PP_REPL_PORT  (line protocol)"
   echo "  PostgreSQL:   -h /tmp -p $PP_DB_PORT -U $PP_DB_USER -d $PP_DB_NAME"
-  echo "  logs:         $PP_DEV_DIR/{authd,supervisor,pg}.log"
+  echo "  logs:         $PP_DEV_DIR/{image,pg}.log"
 }
 
 do_stop() {
-  stop_pidfile "$sup_pidfile" "supervisor"
-  stop_pidfile "$auth_pidfile" "authd"
-  # also kill any orphaned image unikernels spawned by the supervisor
-  pkill -9 -f "_build/default/image/bin/unikernel.exe" 2>/dev/null || true
+  stop_pidfile "$image_pidfile" "image"
   echo "[dev] services stopped (PG left running — use 'clean' to drop DB)"
 }
 
 do_status() {
-  for pf in "$auth_pidfile" "$sup_pidfile"; do
-    if [ -f "$pf" ] && kill -0 "$(cat "$pf")" 2>/dev/null; then
-      echo "  running  pid $(cat "$pf")  ($(basename "$pf" .pid))"
-    else
-      echo "  stopped  ($(basename "$pf" .pid))"
-    fi
-  done
+  if [ -f "$image_pidfile" ] && kill -0 "$(cat "$image_pidfile")" 2>/dev/null; then
+    echo "  running  pid $(cat "$image_pidfile")  (image)"
+  else
+    echo "  stopped  (image)"
+  fi
   if pg_ctl -D "$PP_DATA_DIR" status >/dev/null 2>&1; then
     echo "  running  pg on :$PP_DB_PORT"
   else

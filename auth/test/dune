@@ -1,4 +1,0 @@
-(test
- (name auth_test)
- (modules auth_test)
- (libraries pricklypear-auth alcotest cstruct mirage-crypto mirage-crypto-rng hex))
