@@ -1355,6 +1355,13 @@ and recipe_dabar (t : t) : (string, string) result Lwt.t =
    | Error e -> Lwt.return (Error e)
    | Ok _ -> load_library t "dabar")
 
+and recipe_notes (t : t) : (string, string) result Lwt.t =
+  (* Outline-first notes — outline pure lib then notes package *)
+  let* r = load_library t "outline" in
+  (match r with
+   | Error e -> Lwt.return (Error e)
+   | Ok _ -> load_library t "notes")
+
 
 let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
   let env = Pricklypear_lisp.Env.create () in

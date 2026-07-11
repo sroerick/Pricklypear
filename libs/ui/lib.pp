@@ -1,76 +1,53 @@
-;; package ui -- exported from live branch system/main
-;; Sync: scripts/pp_sync.py pull|push
-
-(define ui/home
-  (lambda
-    ()
-    (html/page
-      (list
-        (html/div
-          (html/attr "class" "card")
-          (html/join
-            (list
-              (html/h2 "Workspace")
-              (html/p*
-                ""
-                (html/join
-                  (list
-                    "Homepage is "
-                    (html/code "ui/home")
-                    "; navbar is "
-                    (html/code "ui/menu")
-                    " rendered by "
-                    (html/code "ui/nav")
-                    ".")))
-              (html/ul
-                ""
-                (html/join
-                  (list
-                    (html/li "" (html/a "/bible" "Bible"))
-                    (html/li "" (html/a "/todos" "Todos"))
-                    (html/li
-                      ""
-                      (html/a "/bindings?pkg=ui" "Edit ui package"))
-                    (html/li "" (html/a "/agent" "Agent"))))))))
-        (html/div
-          (html/attr "class" "card")
-          (html/join
-            (list
-              (html/h2 "Customize nav")
-              (html/p*
-                ""
-                (html/join
-                  (list
-                    "Edit "
-                    (html/code "ui/menu")
-                    " with "
-                    (html/code "menu/link")
-                    " and "
-                    (html/code "menu/group")
-                    ".")))
-              (html/p*
-                (html/attr "class" "muted")
-                "Example: menu/group apps containing menu/link items"))))))))
+;; Editable UI shell — package ui
+;; Nav: menu/link + menu/group tree in ui/menu
 
 (define ui/menu
   (list
     (menu/link "home" "/")
-    (menu/group
-      "browse"
+    (menu/group "browse"
       (list
         (menu/link "functions" "/bindings")
         (menu/link "pages" "/pages")
         (menu/link "data" "/types")
         (menu/link "branches" "/branches")
         (menu/link "about" "/about")))
-    (menu/group
-      "apps"
+    (menu/group "apps"
       (list
+        (menu/link "notes" "/notes")
         (menu/link "bible" "/bible")
         (menu/link "todos" "/todos")
         (menu/link "agent" "/agent")
         (menu/link "repl" "/repl")))))
 
 (define ui/nav
-  (lambda () (render-html (menu/bar ui/menu))))
+  (lambda ()
+    (render-html (menu/bar ui/menu))))
 
+(define ui/home
+  (lambda ()
+    (html/page
+      (list
+        (html/div (html/attr "class" "card")
+          (html/join
+            (list
+              (html/h2 "Workspace")
+              (html/p* ""
+                (html/join
+                  (list
+                    "Live image — edit "
+                    (html/code "ui/menu")
+                    " for the navbar.")))
+              (html/ul ""
+                (html/join
+                  (list
+                    (html/li "" (html/a "/notes" "Notes"))
+                    (html/li "" (html/a "/bible" "Bible"))
+                    (html/li "" (html/a "/todos" "Todos"))
+                    (html/li "" (html/a "/bindings?pkg=ui" "Edit ui"))))))))
+        (html/div (html/attr "class" "card")
+          (html/join
+            (list
+              (html/h2 "Install notes")
+              (html/form "POST" "/api/recipe/notes" (html/attr "class" "")
+                (html/button (html/attr "type" "submit")
+                  "Load outline + notes libraries")))))))))

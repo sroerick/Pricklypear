@@ -106,7 +106,8 @@ let pure_prims = [
   "list"; "car"; "cdr"; "cons"; "null?"; "pair?"; "count";
   "string-append"; "str"; "type-of"; "as-str";
   "string-eq"; "string-length"; "substring"; "string-contains?";
-  "html-escape"; "hx-request?"; "request-header";
+  "html-escape"; "json-parse"; "json-emit";
+  "hx-request?"; "request-header";
   "dict-get"; "dict-set"; "dict-keys";
   "hx-get"; "hx-post";
 ]

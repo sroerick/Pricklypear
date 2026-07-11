@@ -431,6 +431,55 @@ let prim_string_eq args =
   | [ VStr a; VStr b ] -> VBool (String.equal a b)
   | _ -> raise (Interp_error (User_error "string-eq needs 2 strings"))
 
+(* JSON <-> Lisp values for outline trees and generic data.
+   Objects become VStr of JSON object (use dict-get); arrays -> VList. *)
+let rec json_to_value (j : Yojson.Safe.t) : value =
+  match j with
+  | `Null -> VNil
+  | `Bool b -> VBool b
+  | `Int n -> VInt (Int64.of_int n)
+  | `Intlit s -> (try VInt (Int64.of_string s) with _ -> VStr s)
+  | `Float f -> VStr (string_of_float f)
+  | `String s -> VStr s
+  | `List xs -> VList (List.map json_to_value xs)
+  | `Assoc _ as o -> VStr (Yojson.Safe.to_string o)
+
+let rec value_to_json (v : value) : Yojson.Safe.t =
+  match v with
+  | VNil -> `Null
+  | VBool b -> `Bool b
+  | VInt n -> `Intlit (Int64.to_string n)
+  | VStr s ->
+      (* Nested JSON object/array strings stay structured when emitted. *)
+      let len = String.length s in
+      if len >= 2
+         && ((s.[0] = '{' && s.[len - 1] = '}')
+             || (s.[0] = '[' && s.[len - 1] = ']'))
+      then (try Yojson.Safe.from_string s with _ -> `String s)
+      else `String s
+  | VList xs -> `List (List.map value_to_json xs)
+  | VPair (a, b) ->
+      let rec unwind acc = function
+        | VPair (x, y) -> unwind (x :: acc) y
+        | VNil -> List.rev acc
+        | VList ys -> List.rev_append acc ys
+        | tail -> List.rev (tail :: acc)
+      in
+      `List (List.map value_to_json (unwind [] (VPair (a, b))))
+  | other -> `String (Pricklypear_lisp.Reader.pp_value other)
+
+let prim_json_parse args =
+  match args with
+  | [ VStr s ] ->
+      (try json_to_value (Yojson.Safe.from_string s)
+       with _ -> raise (Interp_error (User_error "json-parse: invalid JSON")))
+  | _ -> raise (Interp_error (User_error "json-parse needs 1 string"))
+
+let prim_json_emit args =
+  match args with
+  | [ v ] -> VStr (Yojson.Safe.to_string (value_to_json v))
+  | _ -> raise (Interp_error (User_error "json-emit needs 1 value"))
+
 (* (html-escape s) -> VStr. Escape amp lt gt quote apos for HTML text/attrs. *)
 let rec prim_html_escape args =
   match args with
@@ -548,6 +597,8 @@ let make_with_defaults () : t =
   register_sync t "string-contains?" prim_string_contains;
   register_sync t "string-eq" prim_string_eq;
   register_sync t "html-escape" prim_html_escape;
+  register_sync t "json-parse" prim_json_parse;
+  register_sync t "json-emit" prim_json_emit;
   register_sync t "type-of" prim_type_of;
   register_sync t "str" prim_str;
   register_sync t "as-str" prim_as_str;
@@ -591,6 +642,8 @@ let prim_summary (name : string) : string =
   | "string-contains?" -> "haystack contains needle?"
   | "string-eq" -> "string equality"
   | "html-escape" -> "escape text for HTML"
+  | "json-parse" -> "parse JSON string to Lisp value"
+  | "json-emit" -> "emit Lisp value as JSON string"
   | "request-method" -> "HTTP method of active request"
   | "request-path" -> "path of active request"
   | "request-param" -> "form/query param of active request"

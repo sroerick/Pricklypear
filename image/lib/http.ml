@@ -96,6 +96,14 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
               font-family:\"Courier New\",Courier,monospace}
          ul.actions{list-style:none;padding:0;margin:.5rem 0}
          ul.actions li{margin:.4rem 0}
+         /* Outline notes */
+         .ol-root{margin:.5rem 0}
+         .ol-node{margin:.25rem 0 .25rem .5rem;border-left:2px solid #808080;padding-left:.4rem}
+         .ol-sum{cursor:pointer;font-weight:700}
+         .ol-todo{display:inline-block;margin-right:.35rem;padding:0 .3rem;
+           border:1px solid #000;background:#c0c0c0;font-size:.8rem}
+         .ol-body{margin:.25rem 0 .35rem;white-space:pre-wrap;font-size:.95rem}
+         .ol-kids{margin-left:.25rem}
          /* Todo list */
          .todo-add-label{display:block;font-weight:bold;margin:0 0 .35rem}
          .todo-add-row{display:flex;gap:.5rem;align-items:stretch;flex-wrap:wrap}
@@ -2066,6 +2074,39 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
          | Error e ->
              let body =
                chrome ~session ~title:"Bible recipe failed" [
+                 HTML.p [HTML.class_ "err"] [txt "%s" e];
+                 HTML.p [] [HTML.a [HTML.href "/"] [txt "Home"]];
+               ]
+             in
+             html_response reqd ~status:`Internal_server_error body;
+             Lwt.return_unit)
+  | `POST, "/api/recipe/notes" ->
+      launch
+        (let* res = Session.recipe_notes session in
+         match res with
+         | Ok msg ->
+             let body =
+               chrome ~session ~title:"Notes library" [
+                 HTML.div [HTML.class_ "card"] [
+                   HTML.p [HTML.class_ "ok"] [txt "%s" msg];
+                   HTML.p [] [
+                     HTML.a [HTML.href "/notes"] [txt "Open /notes"];
+                     txt " · ";
+                     HTML.a [HTML.href "/bindings?pkg=notes"] [txt "Package notes"];
+                     txt " · ";
+                     HTML.a [HTML.href "/bindings?pkg=outline"] [txt "outline"];
+                   ];
+                   HTML.p [HTML.class_ "muted"] [
+                     txt "Outline-first notes (org-shaped). Content lives in data_rows.";
+                   ];
+                 ];
+               ]
+             in
+             html_response reqd body;
+             Lwt.return_unit
+         | Error e ->
+             let body =
+               chrome ~session ~title:"Notes recipe failed" [
                  HTML.p [HTML.class_ "err"] [txt "%s" e];
                  HTML.p [] [HTML.a [HTML.href "/"] [txt "Home"]];
                ]
