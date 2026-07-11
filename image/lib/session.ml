@@ -19,6 +19,8 @@ type request = {
   path : string;
   params : (string * string) list;  (** form fields win over query *)
   body : string;
+  (** Lowercase header names → values (for HX-Request, etc.). *)
+  headers : (string * string) list;
 }
 
 type t = {
@@ -1063,6 +1065,23 @@ let register_request_prims (t : t) (tbl : Primitives.t) : unit =
           raise
             (Pricklypear_lisp.Ast.Interp_error
                (Pricklypear_lisp.Ast.User_error "request-param needs 1 string")));
+  Primitives.register_sync tbl "request-header" (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr key ] ->
+          let r = require_request t in
+          let k = String.lowercase_ascii key in
+          (match List.assoc_opt k r.headers with
+           | Some v -> Pricklypear_lisp.Ast.VStr v
+           | None -> Pricklypear_lisp.Ast.VNil)
+      | _ ->
+          raise
+            (Pricklypear_lisp.Ast.Interp_error
+               (Pricklypear_lisp.Ast.User_error "request-header needs 1 string")));
+  Primitives.register_sync tbl "hx-request?" (fun _args ->
+      let r = require_request t in
+      match List.assoc_opt "hx-request" r.headers with
+      | Some v when v <> "" && v <> "false" -> Pricklypear_lisp.Ast.VBool true
+      | _ -> Pricklypear_lisp.Ast.VBool false);
   Primitives.register_sync tbl "request-params" (fun _args ->
       let r = require_request t in
       let j =

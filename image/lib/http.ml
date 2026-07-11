@@ -163,6 +163,25 @@ let try_ui_fn (session : Session.t) (name : string) : string option Lwt.t =
       | None -> Lwt.return None)
     (fun _ -> Lwt.return None)
 
+(** Fragment / partial: no document chrome (htmx swap target). *)
+let is_partials_path (path : string) : bool =
+  String.length path >= 10 && String.sub path 0 10 = "/partials/"
+
+let header_list (req : Httpaf.Request.t) : (string * string) list =
+  Httpaf.Headers.to_list req.headers
+  |> List.map (fun (k, v) -> (String.lowercase_ascii k, v))
+
+let wants_fragment ~(path : string) ~(headers : (string * string) list) : bool =
+  if is_partials_path path then true
+  else
+    match List.assoc_opt "hx-request" headers with
+    | Some v when v <> "" && String.lowercase_ascii v <> "false" -> true
+    | _ -> false
+
+let fragment_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (html : string)
+    : unit =
+  text_response reqd ~status ~content_type:"text/html; charset=utf-8" html
+
 let chrome ?nav_html ~(session : Session.t) ~(title : string)
     (content : Pure_html.node list) : Pure_html.node =
   let nav_html =
@@ -274,6 +293,44 @@ let redirect_response (reqd : Httpaf.Reqd.t) (location : string) : unit =
   in
   let resp = Httpaf.Response.create ~headers `See_other in
   Httpaf.Reqd.respond_with_string reqd resp ""
+
+let respond_handler_value
+    ~(session : Session.t)
+    ~(reqd : Httpaf.Reqd.t)
+    ~(path : string)
+    ~(fragment : bool)
+    (value : Pricklypear_lisp.Ast.value) : unit =
+  match Primitives.is_redirect value with
+  | Some loc -> redirect_response reqd loc
+  | None ->
+      if fragment then
+        let html =
+          match Primitives.is_raw_html value with
+          | Some raw -> raw
+          | None ->
+              (match value with
+               | Pricklypear_lisp.Ast.VStr s -> s
+               | _ -> Pricklypear_lisp.Reader.pp_value value)
+        in
+        fragment_response reqd html
+      else
+        let body =
+          match Primitives.is_raw_html value with
+          | Some raw_html ->
+              chrome ~session ~title:path [ txt ~raw:true "%s" raw_html ]
+          | None ->
+              (match value with
+               | Pricklypear_lisp.Ast.VStr s ->
+                   chrome ~session ~title:path [ HTML.p [] [txt "%s" s] ]
+               | _ ->
+                   let rendered =
+                     Pricklypear_lisp.Reader.pp_value value
+                   in
+                   chrome ~session ~title:path [
+                     HTML.pre [] [txt "%s" rendered];
+                   ])
+        in
+        html_response reqd body
 
 let list_branches_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
   let* branches = Store.list_branches (Session.store session) in
@@ -2089,64 +2146,54 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
                      else []
                in
                let params = merge_params ~query ~form in
+               let headers = header_list req in
+               let fragment = wants_fragment ~path ~headers in
                let method_ : Session.http_method =
                  match umeth with `GET -> `GET | `POST -> `POST
                in
                let request : Session.request =
-                 { method_; path; params; body = body_str }
+                 { method_; path; params; body = body_str; headers }
                in
                let* result =
                  Session.call_handler session ~request handler_name
                in
                (match result with
                 | Some value ->
-                    (match Primitives.is_redirect value with
-                     | Some loc ->
-                         redirect_response reqd loc;
-                         Lwt.return_unit
-                     | None ->
-                         let body =
-                           match Primitives.is_raw_html value with
-                           | Some raw_html ->
-                               chrome ~session ~title:path [
-                                 txt ~raw:true "%s" raw_html;
-                               ]
-                           | None ->
-                               (match value with
-                                | Pricklypear_lisp.Ast.VStr s ->
-                                    chrome ~session ~title:path [
-                                      HTML.p [] [txt "%s" s];
-                                    ]
-                                | _ ->
-                                    let rendered =
-                                      Pricklypear_lisp.Reader.pp_value value
-                                    in
-                                    chrome ~session ~title:path [
-                                      HTML.pre [] [txt "%s" rendered];
-                                    ])
-                         in
-                         html_response reqd body;
-                         Lwt.return_unit)
+                    respond_handler_value ~session ~reqd ~path ~fragment value;
+                    Lwt.return_unit
                 | None ->
-                    html_response reqd ~status:`Internal_server_error
-                      (chrome ~session ~title:"Route handler error" [
-                         HTML.p []
-                           [txt "handler %s returned no value" handler_name];
-                       ]);
+                    if fragment then
+                      fragment_response reqd ~status:`Internal_server_error
+                        ("handler " ^ handler_name ^ " returned no value")
+                    else
+                      html_response reqd ~status:`Internal_server_error
+                        (chrome ~session ~title:"Route handler error" [
+                           HTML.p []
+                             [txt "handler %s returned no value" handler_name];
+                         ]);
                     Lwt.return_unit)
              end
            in
            launch (page ())
        | None ->
-           html_response reqd ~status:`Not_found
-             (chrome ~session ~title:"Not found" [
-                HTML.p [] [txt "no route for %s" path];
-              ]))
+           let headers = header_list req in
+           if wants_fragment ~path ~headers then
+             fragment_response reqd ~status:`Not_found
+               ("no partial for " ^ path)
+           else
+             html_response reqd ~status:`Not_found
+               (chrome ~session ~title:"Not found" [
+                  HTML.p [] [txt "no route for %s" path];
+                ]))
   | _, _ ->
-      html_response reqd ~status:`Not_found
-        (chrome ~session ~title:"Not found" [
-           HTML.p [] [txt "no route for %s" path];
-         ])
+      let headers = header_list req in
+      if wants_fragment ~path ~headers then
+        fragment_response reqd ~status:`Not_found ("no partial for " ^ path)
+      else
+        html_response reqd ~status:`Not_found
+          (chrome ~session ~title:"Not found" [
+             HTML.p [] [txt "no route for %s" path];
+           ])
 
 let error_handler (_sockaddr : Unix.sockaddr)
     ?(request : Httpaf.Request.t option)

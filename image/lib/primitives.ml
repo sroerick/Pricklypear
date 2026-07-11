@@ -594,6 +594,8 @@ let prim_summary (name : string) : string =
   | "request-method" -> "HTTP method of active request"
   | "request-path" -> "path of active request"
   | "request-param" -> "form/query param of active request"
+  | "request-header" -> "HTTP header of active request"
+  | "hx-request?" -> "true if HX-Request header present"
   | "request-params" -> "all params as JSON object"
   | "request-body" -> "raw body of active request"
   | "redirect" -> "HTTP 303 redirect response"
