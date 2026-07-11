@@ -125,14 +125,13 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
       HTML.script [HTML.src "https://unpkg.com/htmx.org@1.9.12"] "";
       (* Close nav dropdowns on outside click / when another opens *)
       HTML.script [] "%s"
-        "document.addEventListener('DOMContentLoaded',function(){"^
-        "document.addEventListener('click',function(e){"^
-        "document.querySelectorAll('details.menu-drop[open]').forEach(function(d){"^
-        "if(!d.contains(e.target))d.removeAttribute('open');});});"^
-        "document.querySelectorAll('details.menu-drop').forEach(function(d){"^
-        "d.addEventListener('toggle',function(){"^
-        "if(d.open){document.querySelectorAll('details.menu-drop[open]').forEach(function(o){"^
-        "if(o!==d)o.removeAttribute('open');});}});});});";
+        ("document.addEventListener('click',function(e){" ^
+         "document.querySelectorAll('details.menu-drop[open]').forEach(function(d){" ^
+         "if(!d.contains(e.target))d.removeAttribute('open');});});" ^
+         "document.addEventListener('toggle',function(e){" ^
+         "var d=e.target;if(!d||!d.classList||!d.classList.contains('menu-drop')||!d.open)return;" ^
+         "document.querySelectorAll('details.menu-drop[open]').forEach(function(o){" ^
+         "if(o!==d)o.removeAttribute('open');});},true);");
     ];
     HTML.body [] [body];
   ] in
