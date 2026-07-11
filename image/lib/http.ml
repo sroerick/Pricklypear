@@ -175,61 +175,6 @@ let list_branches_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t
   html_response reqd body;
   Lwt.return_unit
 
-let list_bindings_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
-  let* defs = Store.list_function_names (Session.store session) in
-  let rows =
-    List.map
-      (fun (name, body, author) ->
-        let badge =
-          Pricklypear_lisp.Effect.EffSet.badge
-            (Pricklypear_lisp.Effect.infer body)
-        in
-        HTML.tr [] [
-          HTML.td [] [
-            HTML.a [HTML.href "%s" ("/binding/" ^ name)] [txt "%s" name]
-          ];
-          HTML.td [] [txt "%s" badge];
-          HTML.td [] [txt "%s" author];
-          HTML.td [] [
-            HTML.a [HTML.href "%s" ("/edit/" ^ name)] [txt "edit"];
-            txt " · ";
-            HTML.a [HTML.href "%s" ("/inspect/binding/" ^ name)] [txt "inspect"];
-          ];
-        ])
-      defs
-  in
-  let body =
-    chrome ~session ~title:("Functions (" ^ Session.branch_name session ^ ")") [
-      HTML.p [HTML.class_ "meta"] [
-        txt "Workspace functions on this branch. Badges = capability effects (pure/db-read/db-write/ai/page). Author agent:* = AI-proposed.";
-      ];
-      (match defs with
-       | [] ->
-           HTML.p [] [txt "(no functions yet — try the Hello recipe on Home, or open the editor)"]
-       | _ ->
-           HTML.table [] [
-             HTML.thead [] [
-               HTML.tr [] [
-                 HTML.th [] [txt "function"];
-                 HTML.th [] [txt "effects"];
-                 HTML.th [] [txt "author"];
-                 HTML.th [] [txt "actions"];
-               ]
-             ];
-             HTML.tbody [] rows;
-           ]);
-      HTML.p [] [
-        HTML.a [HTML.href "/edit/new-fn"] [txt "create new function"];
-        txt " · ";
-        HTML.a [HTML.href "/repl"] [txt "open REPL"];
-        txt " · ";
-        HTML.a [HTML.href "/"] [txt "home / hello recipe"];
-      ];
-    ]
-  in
-  html_response reqd body;
-  Lwt.return_unit
-
 let show_binding_page (session : Session.t) (name : string)
     (reqd : Httpaf.Reqd.t) : unit Lwt.t =
   let* found = Store.lookup_function (Session.store session) name in
@@ -246,9 +191,9 @@ let show_binding_page (session : Session.t) (name : string)
           HTML.p [] [txt "author: %s" author];
           HTML.pre [] [txt "%s" pp];
           HTML.p [] [
-            HTML.a [HTML.href "%s" ("/edit/" ^ name)] [txt "edit"];
+            HTML.a [HTML.href "%s" (Packages.edit_href name)] [txt "edit"];
             txt " · ";
-            HTML.a [HTML.href "%s" ("/inspect/binding/" ^ name)] [txt "inspect"];
+            HTML.a [HTML.href "%s" (Packages.inspect_href name)] [txt "inspect"];
           ];
         ]
   in
@@ -369,12 +314,12 @@ let pages_list_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit =
         HTML.tr [] [
           HTML.td [] [HTML.a [HTML.href "%s" route] [txt "%s" route]];
           HTML.td [] [
-            HTML.a [HTML.href "%s" ("/edit/" ^ handler)] [txt "%s" handler];
+            HTML.a [HTML.href "%s" (Packages.edit_href handler)] [txt "%s" handler];
           ];
           HTML.td [] [
             HTML.a [HTML.href "%s" route] [txt "open"];
             txt " · ";
-            HTML.a [HTML.href "%s" ("/edit/" ^ handler)] [txt "edit function"];
+            HTML.a [HTML.href "%s" (Packages.edit_href handler)] [txt "edit function"];
             txt " · ";
             HTML.a [HTML.href "%s" inspect] [txt "inspect page"];
           ];
@@ -442,9 +387,16 @@ let home_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit =
         HTML.form [HTML.method_ `POST; HTML.action "/api/ai/propose";
                    HTML.enctype `urlencoded] [
           HTML.p [] [
-            HTML.label [HTML.for_ "name"] [txt "name "];
-            HTML.input [HTML.type_ "text"; HTML.name "name"; HTML.id "name";
-                        HTML.value "greet"; HTML.required];
+            HTML.label [HTML.for_ "package"] [txt "package "];
+            HTML.input [HTML.type_ "text"; HTML.name "package"; HTML.id "package";
+                        HTML.placeholder "todo (optional)"];
+            txt " ";
+            HTML.label [HTML.for_ "local"] [txt "name "];
+            HTML.input [HTML.type_ "text"; HTML.name "local"; HTML.id "local";
+                        HTML.value "greet"; HTML.placeholder "greet"];
+          ];
+          HTML.p [HTML.class_ "muted"] [
+            txt "Full name = package/name (or just name if package empty). Prefer todo/list style.";
           ];
           HTML.p [] [
             HTML.label [HTML.for_ "spec"] [txt "spec"];
@@ -559,6 +511,220 @@ let page_function_graph (session : Session.t) ~(handler : string)
   let* rows = walk 0 [] handler "handler" [] in
   Lwt.return (List.rev rows)
 
+let parse_query (target : string) : (string * string) list =
+  match String.index_opt target '?' with
+  | None -> []
+  | Some i ->
+      let q = String.sub target (i + 1) (String.length target - i - 1) in
+      String.split_on_char '&' q
+      |> List.filter_map (fun p ->
+             match String.split_on_char '=' p with
+             | k :: vs ->
+                 Some (url_decode k, url_decode (String.concat "=" vs))
+             | _ -> None)
+
+let query_param (target : string) (key : string) : string option =
+  List.assoc_opt key (parse_query target)
+
+let contains_ci (hay : string) (needle : string) : bool =
+  if needle = "" then true
+  else
+    let h = String.lowercase_ascii hay in
+    let n = String.lowercase_ascii needle in
+    let rec loop i =
+      if i + String.length n > String.length h then false
+      else if String.sub h i (String.length n) = n then true
+      else loop (i + 1)
+    in
+    loop 0
+
+(** Build function-name -> route list using static page graphs. *)
+let used_by_pages_map (session : Session.t)
+    : (string, string list) Hashtbl.t Lwt.t =
+  let routes = Session.list_pages session in
+  let tbl : (string, string list) Hashtbl.t = Hashtbl.create 32 in
+  let add fn route =
+    let prev = try Hashtbl.find tbl fn with Not_found -> [] in
+    if List.mem route prev then ()
+    else Hashtbl.replace tbl fn (route :: prev)
+  in
+  let rec fold_routes rs =
+    match rs with
+    | [] -> Lwt.return tbl
+    | (route, handler) :: rest ->
+        let* graph = page_function_graph session ~handler in
+        List.iter (fun (fn, _) -> add fn route) graph;
+        fold_routes rest
+  in
+  fold_routes routes
+
+let list_bindings_page (session : Session.t) (reqd : Httpaf.Reqd.t)
+    : unit Lwt.t =
+  let target = (Httpaf.Reqd.request reqd).Httpaf.Request.target in
+  let q = Option.value (query_param target "q") ~default:"" |> String.trim in
+  let author_f =
+    Option.value (query_param target "author") ~default:"" |> String.trim
+  in
+  let* defs = Store.list_function_names (Session.store session) in
+  let* used_by = used_by_pages_map session in
+  let matches (name, _body, author) =
+    let q_ok =
+      q = ""
+      || contains_ci name q
+      || contains_ci (Packages.package_of_name name) q
+      || contains_ci author q
+    in
+    let a_ok =
+      match author_f with
+      | "" | "all" -> true
+      | "agent" ->
+          String.length author >= 6 && String.sub author 0 6 = "agent:"
+      | "human" ->
+          not (String.length author >= 6 && String.sub author 0 6 = "agent:")
+      | _ -> true
+    in
+    q_ok && a_ok
+  in
+  let defs = List.filter matches defs in
+  let groups = Packages.group_by_package defs in
+  let used_links name =
+    let routes = try Hashtbl.find used_by name with Not_found -> [] in
+    match List.rev routes with
+    | [] -> HTML.span [HTML.class_ "muted"] [txt "—"]
+    | rs ->
+        let nodes =
+          List.concat
+            (List.mapi
+               (fun i route ->
+                 let link =
+                   HTML.a
+                     [HTML.href "%s" ("/page/" ^ page_inspect_path route)]
+                     [txt "%s" route]
+                 in
+                 if i = 0 then [link] else [txt " "; link])
+               rs)
+        in
+        HTML.span [] nodes
+  in
+  let group_blocks =
+    List.map
+      (fun (pkg, rows) ->
+        let header =
+          HTML.tr [] [
+            HTML.td
+              [HTML.colspan 5; HTML.class_ "muted"]
+              [ txt "package: %s  (%d)"
+                  (Packages.package_label pkg) (List.length rows) ];
+          ]
+        in
+        let body_rows =
+          List.map
+            (fun (name, body, author) ->
+              let badge =
+                Pricklypear_lisp.Effect.EffSet.badge
+                  (Pricklypear_lisp.Effect.infer body)
+              in
+              HTML.tr [] [
+                HTML.td [] [
+                  HTML.a [HTML.href "%s" (Packages.binding_href name)]
+                    [txt "%s" name];
+                ];
+                HTML.td [] [txt "%s" badge];
+                HTML.td [] [txt "%s" author];
+                HTML.td [] [used_links name];
+                HTML.td [] [
+                  HTML.a [HTML.href "%s" (Packages.edit_href name)] [txt "edit"];
+                  txt " · ";
+                  HTML.a [HTML.href "%s" (Packages.inspect_href name)]
+                    [txt "inspect"];
+                ];
+              ])
+            rows
+        in
+        header :: body_rows)
+      groups
+    |> List.flatten
+  in
+  let body =
+    chrome ~session ~title:("Functions (" ^ Session.branch_name session ^ ")") [
+      HTML.p [HTML.class_ "meta"] [
+        txt "Packages group names by prefix (todo/list → package todo). Branch is version; package is organization.";
+      ];
+      HTML.div [HTML.class_ "card"] [
+        HTML.form [HTML.method_ `GET; HTML.action "/bindings"] [
+          HTML.p [] [
+            HTML.label [HTML.for_ "q"] [txt "search "];
+            HTML.input
+              [ HTML.type_ "text"
+              ; HTML.name "q"
+              ; HTML.id "q"
+              ; HTML.value "%s" q
+              ; HTML.placeholder "name, package, author" ];
+            txt " ";
+            HTML.button [HTML.type_ "submit"] [txt "Filter"];
+            txt " ";
+            HTML.a [HTML.href "/bindings"] [txt "clear"];
+            txt " · ";
+            HTML.a [HTML.href "/bindings?author=human"] [txt "human"];
+            txt " · ";
+            HTML.a [HTML.href "/bindings?author=agent"] [txt "agent:*"];
+          ];
+        ];
+      ];
+      HTML.div [HTML.class_ "card"] [
+        HTML.h2 [] [txt "New function"];
+        HTML.form [HTML.method_ `GET; HTML.action "/edit/"] [
+          HTML.p [] [
+            HTML.label [] [txt "package "];
+            HTML.input
+              [ HTML.type_ "text"
+              ; HTML.name "package"
+              ; HTML.placeholder "todo" ];
+            txt " ";
+            HTML.label [] [txt "name "];
+            HTML.input
+              [ HTML.type_ "text"
+              ; HTML.name "local"
+              ; HTML.placeholder "list" ];
+            txt " ";
+            HTML.button [HTML.type_ "submit"] [txt "Create / edit"];
+          ];
+          HTML.p [HTML.class_ "muted"] [
+            txt "Joins to package/name (e.g. todo/list). Leave package empty for root names.";
+          ];
+        ];
+      ];
+      (match defs with
+       | [] ->
+           HTML.p [] [
+             txt "(no functions match — try Hello recipe, clear filter, or create above)";
+           ]
+       | _ ->
+           HTML.table [] [
+             HTML.thead [] [
+               HTML.tr [] [
+                 HTML.th [] [txt "function"];
+                 HTML.th [] [txt "effects"];
+                 HTML.th [] [txt "author"];
+                 HTML.th [] [txt "used by pages"];
+                 HTML.th [] [txt "actions"];
+               ];
+             ];
+             HTML.tbody [] group_blocks;
+           ]);
+      HTML.p [] [
+        HTML.a [HTML.href "/repl"] [txt "open REPL"];
+        txt " · ";
+        HTML.a [HTML.href "/pages"] [txt "pages"];
+        txt " · ";
+        HTML.a [HTML.href "/"] [txt "home"];
+      ];
+    ]
+  in
+  html_response reqd body;
+  Lwt.return_unit
+
+
 let editor_form_partial ~(name : string) ~(body_src : string) ?(msg = "") ()
     : Pure_html.node =
   let flash =
@@ -624,7 +790,7 @@ let missing_editor_card (session : Session.t) (name : string) : Pure_html.node =
             txt ".";
           ];
           HTML.p [] [
-            HTML.a [HTML.href "%s" ("/edit/" ^ handler); HTML.class_ "btn"]
+            HTML.a [HTML.href "%s" (Packages.edit_href handler); HTML.class_ "btn"]
               [txt "Edit %s" handler];
             txt " ";
             HTML.a
@@ -776,9 +942,9 @@ let page_inspector (session : Session.t) (path_seg : string)
               HTML.td [] [txt "%s" n];
               HTML.td [] [txt "%s" role];
               HTML.td [] [
-                HTML.a [HTML.href "%s" ("/edit/" ^ n)] [txt "edit"];
+                HTML.a [HTML.href "%s" (Packages.edit_href n)] [txt "edit"];
                 txt " · ";
-                HTML.a [HTML.href "%s" ("/inspect/binding/" ^ n)] [txt "inspect"];
+                HTML.a [HTML.href "%s" (Packages.inspect_href n)] [txt "inspect"];
               ];
             ])
           graph
@@ -793,12 +959,12 @@ let page_inspector (session : Session.t) (path_seg : string)
             ];
             HTML.p [] [
               txt "Handler function: ";
-              HTML.a [HTML.href "%s" ("/edit/" ^ handler)] [txt "%s" handler];
+              HTML.a [HTML.href "%s" (Packages.edit_href handler)] [txt "%s" handler];
             ];
             HTML.p [] [
               HTML.a [HTML.href "%s" route; HTML.class_ "btn"] [txt "Open page"];
               txt " ";
-              HTML.a [HTML.href "%s" ("/edit/" ^ handler); HTML.class_ "btn secondary"]
+              HTML.a [HTML.href "%s" (Packages.edit_href handler); HTML.class_ "btn secondary"]
                 [txt "Edit handler"];
             ];
           ];
@@ -852,7 +1018,7 @@ let inspect_binding_page (session : Session.t) (name : string)
             HTML.h2 [] [txt "AST JSON"];
             HTML.pre [] [txt "%s" j];
             HTML.p [] [
-              HTML.a [HTML.href "%s" ("/edit/" ^ name)] [txt "edit"];
+              HTML.a [HTML.href "%s" (Packages.edit_href name)] [txt "edit"];
             ];
           ];
         ]
@@ -974,7 +1140,16 @@ let ai_propose (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
           (name, spec)
       | _ -> (None, None)
     with _ ->
-      (form_field body "name", form_field body "spec")
+      let pkg = Option.value (form_field body "package") ~default:"" in
+      let local = Option.value (form_field body "local") ~default:"" in
+      let name =
+        match form_field body "name" with
+        | Some n when String.trim n <> "" -> Some (String.trim n)
+        | _ ->
+            let j = Packages.join_name ~package:pkg ~local in
+            if j = "" then None else Some j
+      in
+      (name, form_field body "spec")
   in
   match name_opt, spec_opt with
   | Some name, Some spec when name <> "" && spec <> "" ->
@@ -995,7 +1170,7 @@ let ai_propose (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
               HTML.p [] [
                 HTML.a [HTML.href "%s" ("/edit/" ^ name)] [txt "open editor"];
                 txt " · ";
-                HTML.a [HTML.href "%s" ("/inspect/binding/" ^ name)] [txt "inspect"];
+                HTML.a [HTML.href "%s" (Packages.inspect_href name)] [txt "inspect"];
                 txt " · ";
                 HTML.a [HTML.href "/bindings"] [txt "functions"];
               ];
@@ -1099,7 +1274,9 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
       launch (page_inspector session "" reqd)
   | `GET, path when String.length path >= 18
                  && String.sub path 0 18 = "/inspect/binding/" ->
-      let name = String.sub path 18 (String.length path - 18) in
+      let name =
+        Packages.name_decode (String.sub path 18 (String.length path - 18))
+      in
       launch (inspect_binding_page session name reqd)
   | `GET, path when String.length path >= 13
                  && String.sub path 0 13 = "/inspect/row/" ->
@@ -1113,15 +1290,33 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
               ]))
   | `GET, path when String.length path >= 9
                  && String.sub path 0 9 = "/binding/" ->
-      let name = String.sub path 9 (String.length path - 9) in
+      let name =
+        Packages.name_decode (String.sub path 9 (String.length path - 9))
+      in
       launch (show_binding_page session name reqd)
+  | `GET, "/edit" | `GET, "/edit/" ->
+      (* package + local query form from Functions browser *)
+      let pkg = Option.value (query_param target "package") ~default:"" in
+      let local = Option.value (query_param target "local") ~default:"" in
+      let name = Packages.join_name ~package:pkg ~local in
+      if name = "" then
+        html_response reqd
+          (chrome ~session ~title:"New function" [
+             HTML.p [] [txt "Provide package and/or name (see Functions)."];
+             HTML.p [] [HTML.a [HTML.href "/bindings"] [txt "Functions"]];
+           ])
+      else launch (editor_page session name reqd)
   | `GET, path when String.length path >= 6
                  && String.sub path 0 6 = "/edit/" ->
-      let name = String.sub path 6 (String.length path - 6) in
+      let name =
+        Packages.name_decode (String.sub path 6 (String.length path - 6))
+      in
       launch (editor_page session name reqd)
   | `POST, path when String.length path >= 6
                   && String.sub path 0 6 = "/edit/" ->
-      let name = String.sub path 6 (String.length path - 6) in
+      let name =
+        Packages.name_decode (String.sub path 6 (String.length path - 6))
+      in
       launch (save_edit session name reqd)
   | _, _ ->
       (* User routes only on GET for now *)
