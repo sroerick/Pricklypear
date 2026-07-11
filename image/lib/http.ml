@@ -123,6 +123,16 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
          }";
       (* htmx for create-in-place editor empty state *)
       HTML.script [HTML.src "https://unpkg.com/htmx.org@1.9.12"] "";
+      (* Close nav dropdowns on outside click / when another opens *)
+      HTML.script [] "%s"
+        "document.addEventListener('DOMContentLoaded',function(){"^
+        "document.addEventListener('click',function(e){"^
+        "document.querySelectorAll('details.menu-drop[open]').forEach(function(d){"^
+        "if(!d.contains(e.target))d.removeAttribute('open');});});"^
+        "document.querySelectorAll('details.menu-drop').forEach(function(d){"^
+        "d.addEventListener('toggle',function(){"^
+        "if(d.open){document.querySelectorAll('details.menu-drop[open]').forEach(function(o){"^
+        "if(o!==d)o.removeAttribute('open');});}});});});";
     ];
     HTML.body [] [body];
   ] in
