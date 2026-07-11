@@ -682,7 +682,10 @@
     (smoke "after seed: (bible/verse \"John\" 3 16) returns BSB text containing God/world")
     (smoke "GET /bible?book=John&chapter=3 lists verse text")
     (smoke "GET /bible?ref=BSB:John:3:16 focuses that verse")
-    (smoke "seed script idempotent: second run does not duplicate refs"))
+    (smoke "seed script idempotent: second run does not duplicate refs")
+    (smoke "(function-source \"ui/nav\") returns non-empty lambda/list source")
+    (smoke "(export-package \"ui\") contains define ui/nav")
+    (smoke "scripts/pp_sync.py status ui exits 0 with env set"))
    (details
     (doc (|
          PROBLEM: flat binding names collide once many tools live on
@@ -721,15 +724,17 @@
            implementation may use /edit?name=todo/list if path
            routing is awkward — pick one and document in agent note.
 
-         LIBRARY LOADER (2026-07-11 — implement):
+         LIBRARY LOADER (implemented):
          Same Lisp source text in git repos and in the live system.
          OCaml provides only a pure loader (no app string blobs).
 
          On-disk layout (shipped in release tarball as libs/):
-           libs/std/lib.pp     — list/map filter foldl, html/wrap, data/get-field
-           libs/todo/lib.pp    — deftype + todo/* + (route "/todos" …)
+           libs/std/lib.pp     — list/*, html/*, menu/*, data/*
+           libs/todo/lib.pp    — deftype + todo/* + routes + partials
            libs/hello/lib.pp   — optional hi-page recipe as Lisp
            libs/bible/lib.pp   — bible/* API + /bible (canon is data_rows)
+           libs/ui/lib.pp      — ui/menu ui/nav ui/home
+           libs/ai/lib.pp      — ai/ask ai/do wrappers
 
          Loader API:
            (load-string SRC)     read_all forms; eval_one each (define
@@ -739,13 +744,65 @@
                                  PP_LIBS_DIR or ./libs (release CWD).
 
          Boot / recipes:
-           seed_stdlib → load-library "std" (idempotent re-define ok)
+           seed_stdlib → load-library "std" then "ui" then "ai"
            recipe_todo → load-library "todo"
-           recipe_hello → load-library "hello" (or keep minimal)
+           recipe_hello → load-library "hello"
            recipe_bible → load-library "bible"  (types+fns+route ONLY;
-                            does NOT bulk-insert 30k verses)
+                            does NOT bulk-insert verses)
 
          Release build MUST copy libs/ into the tarball.
+
+         =========================================================
+         LIBRARY SYNC CLI (2026-07-11 — implement)
+         =========================================================
+         PROBLEM: live function_defs drift from git libs/*.pp when users
+         or AI edit in the browser. Push of kernel does NOT overwrite DB.
+         Developers need explicit sync so laptop git matches language state.
+
+         MODEL:
+         - Local truth for recipes: libs/<pkg>/lib.pp
+         - Live truth for running language: function_defs on current branch
+         - CLI (scripts/pp_sync.py) uses authenticated /api/eval (pp_eval)
+           and export prims — no direct Postgres from laptop required.
+
+         EXPORT PRIMS (image):
+           (function-source "ui/menu")
+             → VStr pretty body only (lambda/list/…) for define
+           (export-package "ui")
+             → VStr multi-form lib.pp text:
+               ;; package ui — exported from live branch
+               (define ui/menu …)
+               (define ui/nav …)
+               … sorted by name
+             Root package "" / "(root)" exports unprefixed names only.
+             Kernel prims are never exported.
+           (package-bindings "ui")
+             → VList of VStr full names in that package on this branch
+
+         CLI:
+           scripts/pp_sync.py status [pkg]
+             Compare libs/<pkg>/lib.pp define names vs live package-bindings.
+             Report only-local / only-live / both (optional body hash later).
+           scripts/pp_sync.py pull <pkg>
+             Write libs/<pkg>/lib.pp from (export-package pkg).
+             Creates directory if missing. Does not auto-commit git.
+           scripts/pp_sync.py push <pkg>
+             (load-library pkg) via pp_eval — file → live (upsert defines).
+           scripts/pp_sync.py pull-all
+             Pull every non-empty package that exists live or under libs/.
+
+         ENV: same as pp_eval (PP_URL PP_USER PP_PASS, ~/.config/pricklypear/env).
+
+         OUT OF SCOPE v1:
+           - data_rows sync (todos/bible text)
+           - automatic merge conflict resolution
+           - function revision history table
+           - Doltgres
+
+         VERIFY:
+           - (export-package "ui") contains define ui/nav
+           - pull ui rewrites libs/ui/lib.pp; status shows both
+           - push ui after edit reloads live
 
          =========================================================
          BIBLE LIBRARY (BSB dogfood — PLAN locked 2026-07-11)
