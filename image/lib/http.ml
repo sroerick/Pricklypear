@@ -100,20 +100,25 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
          .ol-root{margin:.5rem 0}
          .ol-node{margin:.25rem 0 .25rem .5rem;border-left:2px solid #808080;padding-left:.4rem}
          .ol-sum{cursor:pointer;font-weight:700;display:flex;align-items:center;gap:.3rem}
-         .ol-fold{font-size:.7em;width:1em;display:inline-block}
+         .ol-fold{font-size:.7em;width:1em;display:inline-block;user-select:none}
+         details.ol-node > .ol-sum .ol-fold::before{content:\"v\"}
+         details.ol-node:not([open]) > .ol-sum .ol-fold::before{content:\">\"}
          .ol-todo{display:inline-block;margin-right:.35rem;padding:0 .3rem;
            border:1px solid #000;background:#c0c0c0;font-size:.8rem;font-weight:700}
-         .ol-title{outline:none;padding:.1rem .2rem;border-radius:0}
+         .ol-title{outline:none;padding:.1rem .2rem;border-radius:0;flex:1 1 auto}
          .ol-title:focus{background:#fff;border:1px solid #000}
          .ol-body{margin:.25rem 0 .35rem;white-space:pre-wrap;font-size:.95rem;
            outline:none;padding:.1rem .2rem}
          .ol-body:focus{background:#fff;border:1px solid #000}
          .ol-kids{margin-left:.25rem}
-         .ol-actions{display:flex;gap:.25rem;margin:.25rem 0}
+         .ol-actions{display:flex;justify-content:flex-end;gap:.25rem;margin:.25rem 0;opacity:.5}
+         .ol-node:hover > .ol-actions{opacity:1}
          .ol-btn{font-size:.75rem;padding:.15rem .4rem;min-height:auto;
            border:1px solid #000;background:#d4d0c8;cursor:pointer}
          .ol-btn:hover{background:#fff}
          .ol-del{color:#800000}
+         .ol-debug{margin:.75rem 0;opacity:.6}
+         .ol-debug > summary{cursor:pointer;font-size:.85rem}
          /* Todo list */
          .todo-add-label{display:block;font-weight:bold;margin:0 0 .35rem}
          .todo-add-row{display:flex;gap:.5rem;align-items:stretch;flex-wrap:wrap}
@@ -627,18 +632,9 @@ let default_home_content (session : Session.t) : Pure_html.node list =
       ];
     ]
   ; HTML.div [HTML.class_ "card"] [
-      HTML.h2 [] [txt "Library: bible (BSB)"];
+      HTML.h2 [] [txt "Library: dabar (Bible study)"];
       HTML.p [] [txt
-        "Install bible/* + /bible from libs/bible/lib.pp. Corpus: run scripts/seed_bible_bsb.py (types only here)."];
-      HTML.form [HTML.method_ `POST; HTML.action "/api/recipe/bible";
-                 HTML.enctype `urlencoded] [
-        HTML.button [HTML.type_ "submit"] [txt "Install bible library"];
-      ];
-    ]
-  ; HTML.div [HTML.class_ "card"] [
-      HTML.h2 [] [txt "Library: dabar (study)"];
-      HTML.p [] [txt
-        "Strong's + interlinear study layer (libs/dabar). Seeds: scripts/seed_strongs.py, seed_interlinear_dogfood.py."];
+        "Unified Bible study: reader + Strong's + interlinear (libs/bible data + libs/dabar UI). Strips /bible; all routes under /dabar. Seeds: scripts/seed_bible_bsb.py, seed_strongs.py, seed_interlinear_dogfood.py."];
       HTML.form [HTML.method_ `POST; HTML.action "/api/recipe/dabar";
                  HTML.enctype `urlencoded] [
         HTML.button [HTML.type_ "submit"] [txt "Install dabar library"];
@@ -2059,37 +2055,6 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
              in
              html_response reqd ~status:`Internal_server_error body;
              Lwt.return_unit)
-  | `POST, "/api/recipe/bible" ->
-      launch
-        (let* res = Session.recipe_bible session in
-         match res with
-         | Ok msg ->
-             let body =
-               chrome ~session ~title:"Bible library" [
-                 HTML.div [HTML.class_ "card"] [
-                   HTML.p [HTML.class_ "ok"] [txt "%s" msg];
-                   HTML.p [] [
-                     HTML.a [HTML.href "/bible?book=John&chapter=3"] [txt "Open /bible"];
-                     txt " · ";
-                     HTML.a [HTML.href "/bindings?pkg=bible"] [txt "Package bible"];
-                   ];
-                   HTML.p [HTML.class_ "muted"] [
-                     txt "Seed text with: python3 scripts/seed_bible_bsb.py";
-                   ];
-                 ];
-               ]
-             in
-             html_response reqd body;
-             Lwt.return_unit
-         | Error e ->
-             let body =
-               chrome ~session ~title:"Bible recipe failed" [
-                 HTML.p [HTML.class_ "err"] [txt "%s" e];
-                 HTML.p [] [HTML.a [HTML.href "/"] [txt "Home"]];
-               ]
-             in
-             html_response reqd ~status:`Internal_server_error body;
-             Lwt.return_unit)
   | `POST, "/api/recipe/notes" ->
       launch
         (let* res = Session.recipe_notes session in
@@ -2133,15 +2098,16 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
                  HTML.div [HTML.class_ "card"] [
                    HTML.p [HTML.class_ "ok"] [txt "%s" msg];
                    HTML.p [] [
-                     HTML.a [HTML.href "/dabar?book=John&chapter=3&verse=16"]
+                     HTML.a [HTML.href "/dabar?book=John&chapter=3"]
                        [txt "Open /dabar"];
                      txt " · ";
-                     HTML.a [HTML.href "/strongs?n=G2316"] [txt "Strong's G2316"];
+                     HTML.a [HTML.href "/dabar?book=John&chapter=3&verse=16"]
+                       [txt "Study John 3:16"];
                      txt " · ";
-                     HTML.a [HTML.href "/bible"] [txt "Bible"];
+                     HTML.a [HTML.href "/strongs?n=G2316"] [txt "Strong's G2316"];
                    ];
                    HTML.p [HTML.class_ "muted"] [
-                     txt "Seeds: scripts/seed_strongs.py · seed_interlinear_dogfood.py";
+                     txt "Seeds: scripts/seed_bible_bsb.py · seed_strongs.py · seed_interlinear_dogfood.py";
                    ];
                  ];
                ]
