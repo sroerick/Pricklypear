@@ -1335,6 +1335,7 @@ and seed_stdlib (t : t) : unit Lwt.t =
   let* () = seed_one t "ai" in
   let* () = seed_one t "todo" in
   let* () = seed_one t "bible" in
+  let* () = seed_one t "dabar" in
   let* () = refresh_ui_shell t in
   Lwt.return_unit
 
