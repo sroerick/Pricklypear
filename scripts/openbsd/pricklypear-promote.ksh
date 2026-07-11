@@ -122,6 +122,11 @@ rollback() {
   rcctl restart "${sup_service}" >/dev/null 2>&1 || true
 }
 
+# Drop stale listeners before restart (avoids EADDRINUSE on small boxes)
+pkill -U "${runtime_user}" 2>/dev/null || true
+sleep 1
+rm -f /var/run/pricklypear/*.pid 2>/dev/null || true
+
 log "restart ${auth_service}"
 if ! rcctl restart "${auth_service}"; then
   # first boot may need start
