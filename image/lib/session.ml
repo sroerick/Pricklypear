@@ -21,6 +21,8 @@ type t = {
      http.ml reads from here on every request (no DB round-trip). *)
   routes : (string, string) Hashtbl.t;
   mutable started_at : float;
+  (** Kernel prim catalog for Functions browser: (name, summary) list. *)
+  mutable kernel_catalog : (string * string) list;
 }
 
 (* Asynchronously load all persisted function_defs for this branch
@@ -652,6 +654,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
       prims = Primitives.to_eval_table prim_table;  (* temporary; replaced below *)
       routes;
       started_at = Unix.gettimeofday ();
+      kernel_catalog = [];  (* filled after all prims register *)
     }
   in
   (* Register the DB-touching control primitives on the prim_table,
@@ -673,6 +676,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
       Pricklypear_lisp.Env.define env name (Pricklypear_lisp.Ast.VPrim name))
     prim_table;
   let final_prims = Primitives.to_eval_table prim_table in
+  let kernel_catalog = Primitives.catalog prim_table in
   (* Mutate the prims field in place (rather than building a fresh
      record via { (!t) with prims = ... }). Closures captured by
      register_session_control_prims / register_crud_prims read
@@ -684,6 +688,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
      checkout) didn't trip this because they only invoke Store.*
      functions, never Eval.apply against the prims table. *)
   (!t).prims <- final_prims;
+  (!t).kernel_catalog <- kernel_catalog;
   let session : t = !t in
   (* Kick off background loading of persisted function_defs into env. *)
   load_defs_async session;
@@ -747,6 +752,8 @@ let store (t : t) : Store.t = t.store
    registered on this branch. Called by http.ml's request_handler. *)
 let lookup_route (t : t) (route : string) : string option =
   Hashtbl.find_opt t.routes route
+
+let kernel_catalog (t : t) : (string * string) list = t.kernel_catalog
 
 let list_pages (t : t) : (string * string) list =
   Hashtbl.fold (fun route handler acc -> (route, handler) :: acc) t.routes []

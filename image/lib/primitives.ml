@@ -360,6 +360,62 @@ let make_with_defaults () : t =
   register_sync t "render-html" prim_render_html;
   t
 
+(* Short docs for the Functions browser (kernel package). *)
+let prim_summary (name : string) : string =
+  match name with
+  | "+" -> "add numbers"
+  | "-" -> "subtract / negate"
+  | "*" -> "multiply"
+  | "=" -> "numeric equality"
+  | "<" | ">" | "<=" | ">=" -> "numeric compare"
+  | "not" -> "boolean not"
+  | "list" -> "build a list"
+  | "car" -> "first of pair/list"
+  | "cdr" -> "rest of pair/list"
+  | "cons" -> "cons cell"
+  | "null?" -> "empty list?"
+  | "pair?" -> "is pair?"
+  | "count" -> "length of list"
+  | "string-append" -> "concat strings"
+  | "str" -> "value to string"
+  | "type-of" -> "runtime type tag"
+  | "dict-get" -> "JSON object field get"
+  | "dict-set" -> "JSON object field set"
+  | "dict-keys" -> "JSON object keys"
+  | "render-html" -> "mark string as raw HTML"
+  | "hx-get" | "hx-post" -> "htmx attribute helper"
+  | "whoami" | "current-author" -> "session identity"
+  | "list-bindings" -> "names in env"
+  | "list-branches" -> "list branch refs"
+  | "current-branch" -> "current branch name"
+  | "fork" -> "fork a branch"
+  | "merge" -> "merge branches"
+  | "checkout" -> "switch branch"
+  | "route" -> "bind URL to function"
+  | "deftype" -> "declare a data type"
+  | "get" -> "read one data row"
+  | "create" -> "insert data row → id"
+  | "update" -> "replace row fields JSON"
+  | "update-field" -> "set one JSON field"
+  | "delete" -> "delete data row"
+  | "rows" -> "list data rows"
+  | "select-for-update" -> "lock row in transaction"
+  | "propose-function" -> "AI draft function on branch"
+  | "llm-inner" | "llm-outer" | "llm-rewrite" | "llm-seed" ->
+      "AI rewrite / growth tool"
+  | "__with_transaction__" -> "internal transaction helper"
+  | _ -> "built-in primitive"
+
+(** All registered prim names with one-line summaries, sorted. *)
+let catalog (t : t) : (string * string) list =
+  Hashtbl.fold
+    (fun name _ acc -> (name, prim_summary name) :: acc)
+    t []
+  |> List.sort (fun (a, _) (b, _) -> String.compare a b)
+
+let list_names (t : t) : string list =
+  List.map fst (catalog t)
+
 (* Convert the table into the shape Pricklypear_lisp.Eval.prim_table
    expects. Delegating to a separate function so the integration with
    the interpreter is explicit. *)

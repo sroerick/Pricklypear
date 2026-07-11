@@ -619,168 +619,328 @@ let list_bindings_page (session : Session.t) (reqd : Httpaf.Reqd.t)
     : unit Lwt.t =
   let target = (Httpaf.Reqd.request reqd).Httpaf.Request.target in
   let q = Option.value (query_param target "q") ~default:"" |> String.trim in
-  let author_f =
-    Option.value (query_param target "author") ~default:"" |> String.trim
-  in
+  let pkg_q = query_param target "pkg" in
+  let fn_q = query_param target "fn" in
   let* defs = Store.list_function_names (Session.store session) in
   let* used_by = used_by_pages_map session in
-  let matches (name, _body, author) =
-    let q_ok =
-      q = ""
-      || contains_ci name q
-      || contains_ci (Packages.package_of_name name) q
-      || contains_ci author q
-    in
-    let a_ok =
-      match author_f with
-      | "" | "all" -> true
-      | "agent" ->
-          String.length author >= 6 && String.sub author 0 6 = "agent:"
-      | "human" ->
-          not (String.length author >= 6 && String.sub author 0 6 = "agent:")
-      | _ -> true
-    in
-    q_ok && a_ok
+  let kernel = Session.kernel_catalog session in
+  let matches_ws (name, _body, author) =
+    q = ""
+    || contains_ci name q
+    || contains_ci (Packages.package_of_name name) q
+    || contains_ci author q
   in
-  let defs = List.filter matches defs in
-  let groups = Packages.group_by_package defs in
+  let defs_f = List.filter matches_ws defs in
+  let groups = Packages.group_by_package defs_f in
   let used_links name =
     let routes = try Hashtbl.find used_by name with Not_found -> [] in
     match List.rev routes with
     | [] -> HTML.span [HTML.class_ "muted"] [txt "—"]
     | rs ->
-        let nodes =
-          List.concat
-            (List.mapi
-               (fun i route ->
-                 let link =
-                   HTML.a
-                     [HTML.href "%s" ("/page/" ^ page_inspect_path route)]
-                     [txt "%s" route]
-                 in
-                 if i = 0 then [link] else [txt " "; link])
-               rs)
-        in
-        HTML.span [] nodes
+        HTML.span []
+          (List.concat
+             (List.mapi
+                (fun i route ->
+                  let link =
+                    HTML.a
+                      [HTML.href "%s" ("/page/" ^ page_inspect_path route)]
+                      [txt "%s" route]
+                  in
+                  if i = 0 then [link] else [txt " "; link])
+                rs))
   in
-  let group_blocks =
-    List.map
-      (fun (pkg, rows) ->
-        let header =
-          HTML.tr [] [
-            HTML.td
-              [HTML.colspan 5; HTML.class_ "muted"]
-              [ txt "package: %s  (%d)"
-                  (Packages.package_label pkg) (List.length rows) ];
-          ]
-        in
-        let body_rows =
-          List.map
-            (fun (name, body, author) ->
-              let badge =
-                Pricklypear_lisp.Effect.EffSet.badge
-                  (Pricklypear_lisp.Effect.infer body)
-              in
+  let pkg_href pkg =
+    "/bindings?pkg=" ^ Packages.name_encode pkg
+  in
+  let fn_href pkg fn =
+    "/bindings?pkg=" ^ Packages.name_encode pkg ^ "&fn="
+    ^ Packages.name_encode fn
+  in
+  match pkg_q, fn_q with
+  | Some "(kernel)", Some fname ->
+      let summary =
+        match List.assoc_opt fname kernel with
+        | Some s -> s
+        | None -> "unknown primitive"
+      in
+      let body =
+        chrome ~session ~title:("Primitive " ^ fname) [
+          HTML.p [] [
+            HTML.a [HTML.href "/bindings"] [txt "Functions"];
+            txt " › ";
+            HTML.a [HTML.href "/bindings?pkg=%%28kernel%%29"] [txt "(kernel)"];
+            txt " › %s" fname;
+          ];
+          HTML.div [HTML.class_ "card"] [
+            HTML.p [] [
+              HTML.span [HTML.class_ "muted"] [txt "kind: "];
+              txt "primitive (OCaml)";
+            ];
+            HTML.p [] [
+              HTML.span [HTML.class_ "muted"] [txt "name: "];
+              txt "%s" fname;
+            ];
+            HTML.p [] [txt "%s" summary];
+            HTML.p [HTML.class_ "muted"] [
+              txt "Built into the image kernel — not stored as Lisp. App logic should usually be Lisp functions you can edit.";
+            ];
+          ];
+        ]
+      in
+      html_response reqd body;
+      Lwt.return_unit
+  | Some pkg, Some local ->
+      let full =
+        if String.contains local '/' then local
+        else if pkg = "" || pkg = "(root)" then local
+        else Packages.join_name ~package:pkg ~local
+      in
+      let* found = Store.lookup_function (Session.store session) full in
+      let crumb_pkg = if pkg = "(root)" then "" else pkg in
+      let body =
+        match found with
+        | None ->
+            chrome ~session ~title:full [
+              HTML.p [] [
+                HTML.a [HTML.href "/bindings"] [txt "Functions"];
+                txt " › ";
+                HTML.a [HTML.href "%s" (pkg_href pkg)]
+                  [txt "%s" (Packages.package_label crumb_pkg)];
+              ];
+              HTML.p [HTML.class_ "err"] [txt "no function %s" full];
+              HTML.p [] [
+                HTML.a [HTML.href "%s" (Packages.edit_href full)] [txt "create it"];
+              ];
+            ]
+        | Some (expr, author) ->
+            let badge =
+              Pricklypear_lisp.Effect.EffSet.badge
+                (Pricklypear_lisp.Effect.infer expr)
+            in
+            let pp = Pricklypear_lisp.Reader.pp_expr expr in
+            chrome ~session ~title:full [
+              HTML.p [] [
+                HTML.a [HTML.href "/bindings"] [txt "Functions"];
+                txt " › ";
+                HTML.a [HTML.href "%s" (pkg_href pkg)]
+                  [txt "%s" (Packages.package_label crumb_pkg)];
+                txt " › %s" (Packages.local_name full);
+              ];
+              HTML.div [HTML.class_ "card"] [
+                HTML.p [] [
+                  HTML.span [HTML.class_ "muted"] [txt "kind: "];
+                  txt "function (Lisp)";
+                ];
+                HTML.p [] [
+                  HTML.span [HTML.class_ "muted"] [txt "author: "];
+                  txt "%s" author;
+                ];
+                HTML.p [] [
+                  HTML.span [HTML.class_ "muted"] [txt "effects: "];
+                  txt "%s" badge;
+                ];
+                HTML.p [] [
+                  HTML.span [HTML.class_ "muted"] [txt "used by: "];
+                  used_links full;
+                ];
+                HTML.h2 [] [txt "definition"];
+                HTML.pre [] [txt "%s" pp];
+                HTML.p [] [
+                  HTML.a
+                    [ HTML.href "%s" (Packages.edit_href full)
+                    ; HTML.class_ "btn" ]
+                    [txt "Edit"];
+                  txt " ";
+                  HTML.a
+                    [ HTML.href "%s" (Packages.inspect_href full)
+                    ; HTML.class_ "btn secondary" ]
+                    [txt "Inspect AST"];
+                ];
+              ];
+            ]
+      in
+      html_response reqd body;
+      Lwt.return_unit
+  | Some "(kernel)", None ->
+      let rows =
+        if q = "" then kernel
+        else List.filter (fun (n, s) -> contains_ci n q || contains_ci s q) kernel
+      in
+      let items =
+        List.map
+          (fun (n, summary) ->
+            HTML.tr [] [
+              HTML.td [] [
+                HTML.a [HTML.href "%s" (fn_href "(kernel)" n)] [txt "%s" n];
+              ];
+              HTML.td [] [txt "primitive"];
+              HTML.td [] [txt "%s" summary];
+            ])
+          rows
+      in
+      let body =
+        chrome ~session ~title:"Package (kernel)" [
+          HTML.p [] [HTML.a [HTML.href "/bindings"] [txt "← all packages"]];
+          HTML.p [HTML.class_ "meta"] [
+            txt "Built-in OCaml primitives. Read-only. Prefer app logic as Lisp.";
+          ];
+          HTML.table [] [
+            HTML.thead [] [
               HTML.tr [] [
-                HTML.td [] [
-                  HTML.a [HTML.href "%s" (Packages.binding_href name)]
-                    [txt "%s" name];
-                ];
-                HTML.td [] [txt "%s" badge];
-                HTML.td [] [txt "%s" author];
-                HTML.td [] [used_links name];
-                HTML.td [] [
-                  HTML.a [HTML.href "%s" (Packages.edit_href name)] [txt "edit"];
-                  txt " · ";
-                  HTML.a [HTML.href "%s" (Packages.inspect_href name)]
-                    [txt "inspect"];
-                ];
-              ])
-            rows
-        in
-        header :: body_rows)
-      groups
-    |> List.flatten
-  in
-  let body =
-    chrome ~session ~title:("Functions (" ^ Session.branch_name session ^ ")") [
-      HTML.p [HTML.class_ "meta"] [
-        txt "Packages group names by prefix (todo/list → package todo). Branch is version; package is organization.";
-      ];
-      HTML.div [HTML.class_ "card"] [
-        HTML.form [HTML.method_ `GET; HTML.action "/bindings"] [
+                HTML.th [] [txt "name"];
+                HTML.th [] [txt "kind"];
+                HTML.th [] [txt "summary"];
+              ];
+            ];
+            HTML.tbody [] items;
+          ];
+        ]
+      in
+      html_response reqd body;
+      Lwt.return_unit
+  | Some pkg, None ->
+      let pkg_key = if pkg = "(root)" then "" else pkg in
+      let rows =
+        List.filter
+          (fun (name, _, _) -> Packages.package_of_name name = pkg_key)
+          defs_f
+      in
+      let items =
+        List.map
+          (fun (name, body, author) ->
+            let badge =
+              Pricklypear_lisp.Effect.EffSet.badge
+                (Pricklypear_lisp.Effect.infer body)
+            in
+            let local = Packages.local_name name in
+            HTML.tr [] [
+              HTML.td [] [
+                HTML.a [HTML.href "%s" (fn_href pkg local)] [txt "%s" name];
+              ];
+              HTML.td [] [txt "%s" badge];
+              HTML.td [] [txt "%s" author];
+              HTML.td [] [used_links name];
+            ])
+          rows
+      in
+      let body =
+        chrome ~session ~title:("Package " ^ Packages.package_label pkg_key) [
+          HTML.p [] [HTML.a [HTML.href "/bindings"] [txt "← all packages"]];
+          (match items with
+           | [] -> HTML.p [] [txt "(no functions in this package)"]
+           | _ ->
+               HTML.table [] [
+                 HTML.thead [] [
+                   HTML.tr [] [
+                     HTML.th [] [txt "function"];
+                     HTML.th [] [txt "effects"];
+                     HTML.th [] [txt "author"];
+                     HTML.th [] [txt "used by"];
+                   ];
+                 ];
+                 HTML.tbody [] items;
+               ]);
           HTML.p [] [
-            HTML.label [HTML.for_ "q"] [txt "search "];
-            HTML.input
-              [ HTML.type_ "text"
-              ; HTML.name "q"
-              ; HTML.id "q"
-              ; HTML.value "%s" q
-              ; HTML.placeholder "name, package, author" ];
-            txt " ";
-            HTML.button [HTML.type_ "submit"] [txt "Filter"];
-            txt " ";
-            HTML.a [HTML.href "/bindings"] [txt "clear"];
-            txt " · ";
-            HTML.a [HTML.href "/bindings?author=human"] [txt "human"];
-            txt " · ";
-            HTML.a [HTML.href "/bindings?author=agent"] [txt "agent:*"];
+            HTML.a
+              [ HTML.href "%s"
+                  (if pkg_key = "" then "/edit/?local="
+                   else
+                     "/edit/?package=" ^ Packages.name_encode pkg_key
+                     ^ "&local=") ]
+              [txt "new in this package…"];
           ];
-        ];
-      ];
-      HTML.div [HTML.class_ "card"] [
-        HTML.h2 [] [txt "New function"];
-        HTML.form [HTML.method_ `GET; HTML.action "/edit/"] [
-          HTML.p [] [
-            HTML.label [] [txt "package "];
-            HTML.input
-              [ HTML.type_ "text"
-              ; HTML.name "package"
-              ; HTML.placeholder "todo" ];
-            txt " ";
-            HTML.label [] [txt "name "];
-            HTML.input
-              [ HTML.type_ "text"
-              ; HTML.name "local"
-              ; HTML.placeholder "list" ];
-            txt " ";
-            HTML.button [HTML.type_ "submit"] [txt "Create / edit"];
-          ];
-          HTML.p [HTML.class_ "muted"] [
-            txt "Joins to package/name (e.g. todo/list). Leave package empty for root names.";
-          ];
-        ];
-      ];
-      (match defs with
-       | [] ->
-           HTML.p [] [
-             txt "(no functions match — try Hello recipe, clear filter, or create above)";
-           ]
-       | _ ->
-           HTML.table [] [
-             HTML.thead [] [
-               HTML.tr [] [
-                 HTML.th [] [txt "function"];
-                 HTML.th [] [txt "effects"];
-                 HTML.th [] [txt "author"];
-                 HTML.th [] [txt "used by pages"];
-                 HTML.th [] [txt "actions"];
-               ];
-             ];
-             HTML.tbody [] group_blocks;
-           ]);
-      HTML.p [] [
-        HTML.a [HTML.href "/repl"] [txt "open REPL"];
-        txt " · ";
-        HTML.a [HTML.href "/pages"] [txt "pages"];
-        txt " · ";
-        HTML.a [HTML.href "/"] [txt "home"];
-      ];
-    ]
-  in
-  html_response reqd body;
-  Lwt.return_unit
-
+        ]
+      in
+      html_response reqd body;
+      Lwt.return_unit
+  | None, _ ->
+      let ws_pkgs =
+        List.map
+          (fun (pkg, rows) ->
+            let label = Packages.package_label pkg in
+            let key = if pkg = "" then "(root)" else pkg in
+            (label, pkg_href key, List.length rows, "workspace"))
+          groups
+      in
+      let all_pkgs =
+        ( "(kernel)"
+        , "/bindings?pkg=%%28kernel%%29"
+        , List.length kernel
+        , "kernel" )
+        :: ws_pkgs
+      in
+      let filtered =
+        if q = "" then all_pkgs
+        else List.filter (fun (label, _, _, _) -> contains_ci label q) all_pkgs
+      in
+      let items =
+        List.map
+          (fun (label, href, n, kind) ->
+            HTML.tr [] [
+              HTML.td [] [HTML.a [HTML.href "%s" href] [txt "%s" label]];
+              HTML.td [] [txt "%s" kind];
+              HTML.td [] [txt "%d" n];
+            ])
+          filtered
+      in
+      let body =
+        chrome ~session
+          ~title:("Functions (" ^ Session.branch_name session ^ ")")
+          [ HTML.p [HTML.class_ "meta"] [
+              txt "Drill: package → function → definition. Kernel = OCaml prims (read-only). Workspace = Lisp you can edit.";
+            ]
+          ; HTML.div [HTML.class_ "card"] [
+              HTML.form [HTML.method_ `GET; HTML.action "/bindings"] [
+                HTML.p [] [
+                  HTML.label [HTML.for_ "q"] [txt "search "];
+                  HTML.input
+                    [ HTML.type_ "text"
+                    ; HTML.name "q"
+                    ; HTML.id "q"
+                    ; HTML.value "%s" q
+                    ; HTML.placeholder "package or name" ];
+                  txt " ";
+                  HTML.button [HTML.type_ "submit"] [txt "Filter"];
+                ];
+              ];
+            ]
+          ; HTML.div [HTML.class_ "card"] [
+              HTML.h2 [] [txt "New function"];
+              HTML.form [HTML.method_ `GET; HTML.action "/edit/"] [
+                HTML.p [] [
+                  HTML.label [] [txt "package "];
+                  HTML.input
+                    [ HTML.type_ "text"
+                    ; HTML.name "package"
+                    ; HTML.placeholder "todo" ];
+                  txt " ";
+                  HTML.label [] [txt "name "];
+                  HTML.input
+                    [ HTML.type_ "text"
+                    ; HTML.name "local"
+                    ; HTML.placeholder "list" ];
+                  txt " ";
+                  HTML.button [HTML.type_ "submit"] [txt "Create / edit"];
+                ];
+              ];
+            ]
+          ; HTML.table [] [
+              HTML.thead [] [
+                HTML.tr [] [
+                  HTML.th [] [txt "package"];
+                  HTML.th [] [txt "kind"];
+                  HTML.th [] [txt "count"];
+                ];
+              ];
+              HTML.tbody [] items;
+            ]
+          ; HTML.p [HTML.class_ "muted"] [
+              txt "Tip: open (kernel) to browse create, +, render-html, propose-function, …";
+            ]
+          ]
+      in
+      html_response reqd body;
+      Lwt.return_unit
 
 let editor_form_partial ~(name : string) ~(body_src : string) ?(msg = "") ()
     : Pure_html.node =

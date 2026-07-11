@@ -67,6 +67,10 @@ let name_encode (name : string) : string =
     (function
       | '/' -> Buffer.add_string buf "%2F"
       | ' ' -> Buffer.add_string buf "%20"
+      | '(' -> Buffer.add_string buf "%28"
+      | ')' -> Buffer.add_string buf "%29"
+      | '&' -> Buffer.add_string buf "%26"
+      | '=' -> Buffer.add_string buf "%3D"
       | c -> Buffer.add_char buf c)
     name;
   Buffer.contents buf
