@@ -42,48 +42,52 @@ type t = {
   mutable current_request : request option;
 }
 
-(* Asynchronously load all persisted function_defs for this branch
-   into the env. Non-blocking — the REPL starts immediately, defs
-   appear as the store responds. *)
+(* Load persisted function_defs + routes into the env.
+   Returns when finished (caller may then seed libs/ which overwrite). *)
+let load_defs (t : t) : unit Lwt.t =
+  let* defs = Store.list_function_names t.store in
+  (* Iterate ALL definitions; the first occurrence (depth ASC) wins
+     because the recursive CTE returns ancestors first. *)
+  let seen = Hashtbl.create 16 in
+  let* _ =
+    Lwt_list.iter_s
+      (fun (name, body, _author) ->
+        if not (Hashtbl.mem seen name) then begin
+          Hashtbl.replace seen name ();
+          (* Re-evaluate (define name <body>) so the session env binds
+             the deserialized lambda/value to [name]. *)
+          Lwt.catch
+            (fun () ->
+               let* _ =
+                 Pricklypear_lisp.Eval.eval_string ~prims:t.prims t.env
+                   (Printf.sprintf "(define %s %s)" name
+                      (Pricklypear_lisp.Reader.pp_expr body))
+               in
+               Lwt.return_unit)
+            (fun exn ->
+               Printf.eprintf "[session] load def %s failed: %s\n%!"
+                 name (Printexc.to_string exn);
+               Lwt.return_unit)
+        end else Lwt.return_unit)
+      defs
+  in
+  (* Also load view_bindings into the in-memory routes table. The
+     recursive-CTE returns ancestors first, so a route defined in both
+     the child and parent: child's wins (Hashtbl.replace on the
+     first-seen only — skip further matches). *)
+  let* routes = Store.list_routes t.store in
+  let seen_r = Hashtbl.create 16 in
+  List.iter
+    (fun (route, handler) ->
+      if not (Hashtbl.mem seen_r route) then begin
+        Hashtbl.replace seen_r route ();
+        Hashtbl.replace t.routes route handler
+      end)
+    routes;
+  Lwt.return_unit
+
 let load_defs_async (t : t) : unit =
-  Lwt.async (fun () ->
-    let* defs = Store.list_function_names t.store in
-    (* Iterate ALL definitions; the first occurrence (depth ASC) wins
-       because the recursive CTE returns ancestors first. *)
-    let seen = Hashtbl.create 16 in
-    let* _ =
-      Lwt_list.iter_s
-        (fun (name, body, _author) ->
-          if not (Hashtbl.mem seen name) then begin
-            Hashtbl.replace seen name ();
-            (* Re-evaluate (define name <body>) so the session env binds
-               the deserialized lambda/value to [name]. *)
-            Lwt.catch
-              (fun () ->
-                 let* _ =
-                   Pricklypear_lisp.Eval.eval_string ~prims:t.prims t.env
-                     (Printf.sprintf "(define %s %s)" name
-                        (Pricklypear_lisp.Reader.pp_expr body))
-                 in
-                 Lwt.return_unit)
-              (fun _exn -> Lwt.return_unit)
-          end else Lwt.return_unit)
-        defs
-    in
-    (* Also load view_bindings into the in-memory routes table. The
-       recursive-CTE returns ancestors first, so a route defined in both
-       the child and parent: child's wins (Hashtbl.replace on the
-       first-seen only — skip further matches). *)
-    let* routes = Store.list_routes t.store in
-    let seen_r = Hashtbl.create 16 in
-    List.iter
-      (fun (route, handler) ->
-        if not (Hashtbl.mem seen_r route) then begin
-          Hashtbl.replace seen_r route ();
-          Hashtbl.replace t.routes route handler
-        end)
-      routes;
-    Lwt.return_unit)
+  Lwt.async (fun () -> load_defs t)
 
 let split_branch_ref (s : string) : string * string =
   match String.split_on_char '/' s with
@@ -1204,19 +1208,21 @@ and refresh_ui_shell (t : t) : unit Lwt.t =
           t.ui_nav_html <- None;
           Lwt.return_unit)
 
-and seed_stdlib (t : t) : unit Lwt.t =
-  let* r = load_library t "std" in
+and seed_one (t : t) (name : string) : unit Lwt.t =
+  let* r = load_library t name in
   (match r with
-   | Ok msg -> Printf.eprintf "[session] stdlib: %s\n%!" msg
-   | Error e -> Printf.eprintf "[session] stdlib load: %s\n%!" e);
-  let* r2 = load_library t "ui" in
-  (match r2 with
-   | Ok msg -> Printf.eprintf "[session] ui shell: %s\n%!" msg
-   | Error e -> Printf.eprintf "[session] ui load: %s\n%!" e);
-  let* r3 = load_library t "ai" in
-  (match r3 with
-   | Ok msg -> Printf.eprintf "[session] ai lib: %s\n%!" msg
-   | Error e -> Printf.eprintf "[session] ai load: %s\n%!" e);
+   | Ok msg -> Printf.eprintf "[session] %s: %s\n%!" name msg
+   | Error e -> Printf.eprintf "[session] %s load: %s\n%!" name e);
+  Lwt.return_unit
+
+and seed_stdlib (t : t) : unit Lwt.t =
+  (* File libs overwrite DB defs — canonical source is libs/*.pp.
+     Load dogfood apps so /bible and /todos work after every boot. *)
+  let* () = seed_one t "std" in
+  let* () = seed_one t "ui" in
+  let* () = seed_one t "ai" in
+  let* () = seed_one t "todo" in
+  let* () = seed_one t "bible" in
   let* () = refresh_ui_shell t in
   Lwt.return_unit
 
@@ -1321,12 +1327,12 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
   Pricklypear_lisp.Env.define env "load-string" (Pricklypear_lisp.Ast.VPrim "load-string");
   Pricklypear_lisp.Env.define env "load-library" (Pricklypear_lisp.Ast.VPrim "load-library");
   let session : t = !t in
-  (* Kick off background loading of persisted function_defs into env. *)
-  load_defs_async session;
-  (* Seed stdlib after a short delay so it does not race first define. *)
+  (* Boot order: DB defs first, then libs/*.pp overwrite (canonical).
+     Sequential so bible/todo routes never hit half-loaded env. *)
   Lwt.async (fun () ->
-    let* () = Lwt_unix.sleep 0.3 in
-    seed_stdlib session);
+    let* () = load_defs session in
+    let* () = seed_stdlib session in
+    Lwt.return_unit);
   session
 
 
@@ -1378,7 +1384,10 @@ let call_handler (t : t) ?request (handler_name : string)
                  ("(" ^ handler_name ^ ")")
              in
              Lwt.return (Some v))
-          (fun _exn -> Lwt.return_none)
+          (fun exn ->
+             Printf.eprintf "[session] call_handler %s: %s\n%!"
+               handler_name (Printexc.to_string exn);
+             Lwt.return_none)
       in
       (match request with
        | None -> run ()

@@ -114,8 +114,10 @@
                   ": "
                   (as-str (bible/verse book chapter focus-verse))))))))))
 
-;; Alias kept for older call sites.
-(define bible/chapter-html bible/chapter-panel)
+;; Alias for older call sites (lambda, not bare var — safe on DB reload).
+(define bible/chapter-html
+  (lambda (book chapter focus-verse)
+    (bible/chapter-panel book chapter focus-verse)))
 
 (define bible/search-panel
   (lambda (q)
