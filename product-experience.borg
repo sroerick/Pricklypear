@@ -187,6 +187,12 @@
             Solo5, real SSH + web login, argon2, mTLS,
             fleet policies, true setuid data scoping.
 
+         H. Dabar — live Bible study libraries
+            BSB reader + Strong's + interlinear as load-library
+            packages (bible/ + dabar/) on the image; not a
+            separate OS. Spec: dabar.borg (root-inlined chapter).
+            Semantic search deferred.
+
          Milestone ladder:
            now   — hacker env (define/edit/route/AI propose)
            next  — legibility (vocabulary, about, hello recipe,

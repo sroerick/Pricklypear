@@ -1,0 +1,239 @@
+(project pricklypear-dabar
+ (doc "Pricklypear book chapter: dabar — BSB study library (reader + Strong's + interlinear)")
+ (status planned)
+ (convention ocaml-dune)
+ (* agent note (|2026-07-11: New chapter. Dabar is NOT a separate unikernel.
+   It is Lisp library packages + data_rows seeds living inside the image.
+   Feature/data donor for study UX is the sibling repo wyo.tech/dabar
+   (Dream app; no .borg of its own). Semantic search is OUT OF SCOPE.|) *)
+ (section dabar
+  (doc "Bible study layer on the live image: plugin libs, seeds, routes")
+  (status planned)
+  (verify
+   (build "dune build image")
+   (smoke "(load-library \"bible\") then (bible/verse \"John\" 3 16) has God/world")
+   (smoke "(load-library \"dabar\") installs study routes without breaking /bible")
+   (smoke "GET /bible prev/next or random works after WP1")
+   (smoke "GET /strongs and (strongs/get \"G26\") after Strong's seed")
+   (smoke "interlinear fragment for a seeded verse after WP3"))
+  (details
+   (doc (|
+        PRODUCT: Dabar on Pricklypear is a multi-user, live Bible
+        study environment built as *libraries* inside the user image
+        — not a port of the Dream dabar server.
+
+        PILLARS:
+        1. Plugin-shaped Lisp packages (libs/*/lib.pp + load-library).
+        2. Canon + lexicons in Postgres data_rows (shared across
+           branches); personal notes on the user branch later.
+        3. htmx partials for reading/study panels (no SPA).
+        4. Seeds are offline scripts; recipes only install code.
+
+        NAMING (locked):
+        - bible/  — core reader (exists): verse, chapter, search,
+                    /bible, partials, dropdowns.
+        - dabar/  — study layer: Strong's, interlinear, study chrome
+                    that *uses* bible/*.
+        Do NOT rename existing bible/* without a migration plan.
+
+        RELATION TO wyo.tech/dabar:
+        - Donor of data formats, Strong's CSV, interlinear field
+          shapes, UX ideas (filters, prev/next, random).
+        - That repo has no borge book; this chapter is SoT for the
+          Pricklypear port. Link from root pricklypear.borg.
+   |))
+  )
+  (subsection packaging
+   (doc "Library layout, boot policy, deps on std/bible")
+   (status planned)
+   (implements libs/bible/lib.pp libs/dabar/lib.pp scripts/seed_bible_bsb.py)
+   (verify
+    (smoke "libs/bible/lib.pp loads via load-library bible")
+    (smoke "libs/dabar/lib.pp loads via load-library dabar after bible")
+    (smoke "boot seed_stdlib loads bible; dabar remains opt-in recipe until stable"))
+   (details
+    (doc (|
+         LAYOUT:
+           libs/bible/lib.pp     — reader (shipped)
+           libs/dabar/lib.pp     — study (to add)
+           scripts/seed_bible_bsb.py
+           scripts/seed_strongs.py      (from dabar strongs.csv)
+           scripts/seed_interlinear.py  (from dabar extract)
+
+         BOOT:
+           seed_stdlib loads: std, ui, ai, todo, bible
+           dabar: POST /api/recipe/dabar or (load-library "dabar")
+           — not auto-boot until study layer is dogfood-stable.
+
+         DEPS:
+           dabar assumes bible/* and html/* (std) already bound.
+           Document in lib header; multi-file require is deferred.
+
+         INVARIANTS:
+           - No dabar-specific OCaml except generic find/FTS if needed.
+           - Routes under /bible stay bible-owned; /strongs and
+             /dabar/* may be dabar-owned.
+           - Kernel stays thin.
+    |))
+   )
+  )
+  (subsection reader
+   (doc "Existing bible/ reader — baseline for dabar")
+   (status partial)
+   (* agent note (|Reader shipped: types bible-book/bible-verse, seed BSB
+     full text, /bible dropdowns + htmx panel, find-row/find-text.
+     Status partial until prev/next/random and FTS land (WP1/WP4).|) *)
+   (verify
+    (smoke "31086+ bible-verse rows after full seed")
+    (smoke "GET /bible?book=John&chapter=3 renders chapter")
+    (smoke "HX-Request /bible returns fragment without chrome"))
+   (details
+    (doc (|
+         BASELINE (implemented):
+         - ref BSB:<Abbrev>:<c>:<v>
+         - (bible/verse book ch v), (bible/chapter …), (bible/search q)
+         - /bible + /partials/bible-chapter
+         - html/* selects for book/chapter/verse
+
+         STILL IN READER WP1:
+         - (bible/prev-chapter) / (bible/next-chapter) + UI
+         - (bible/random) + Surprise control
+         - empty/missing chapter UX
+    |))
+   )
+  )
+  (subsection navigation
+   (doc "Prev/next chapter and random verse")
+   (status planned)
+   (verify
+    (smoke "next from John 3 → John 4 panel")
+    (smoke "prev from Genesis 1 stays or wraps per policy")
+    (smoke "(bible/random) returns a ref+text; UI button works"))
+   (details
+    (doc (|
+         Use bible/chapter-counts + book ordinal (bible-book rows).
+         Wrap policy v1: stop at ends (no wrap), or wrap OT/NT —
+         pick stop-at-ends for clarity.
+         Random: SQL ORDER BY random() LIMIT 1 via thin prim or
+         store helper; expose (bible/random) in bible/ or dabar/.
+    |))
+   )
+  )
+  (subsection strongs
+   (doc "Strong's lexicon seed, lookup, pages")
+   (status planned)
+   (verify
+    (build "python3 scripts/seed_strongs.py --help exits 0")
+    (smoke "after seed: (strongs/get \"H430\") or G26 returns lemma/description")
+    (smoke "GET /strongs and GET /strongs?n=G26"))
+   (details
+    (doc (|
+         SOURCE: wyo.tech/dabar/src/tool/sql/strongs/strongs.csv
+         (and dabar Schema.Strongs shape: number, lemma, xlit,
+         pronounce, description).
+
+         TYPE: strongs-entry (or strongs)
+           number, lemma, xlit, pronounce, description
+         id/ref: fields.number unique (H430 / G26).
+
+         PACKAGE: prefer dabar/strongs-* or strongs/* under dabar
+         load; public names (strongs/get) OK if namespaced carefully.
+
+         UI: /strongs list/search stub; detail by number; links from
+         interlinear tokens.
+    |))
+   )
+  )
+  (subsection interlinear
+   (doc "Word-level interlinear fragments + toggles")
+   (status planned)
+   (verify
+    (smoke "seed loads tokens for at least John 1 or full corpus")
+    (smoke "(bible/interlinear \"John\" 1 1) or dabar/inter returns HTML fragment")
+    (smoke "UI toggle plain vs interlinear on verse/chapter panel"))
+   (details
+    (doc (|
+         SOURCE: dabar inter_verse (bsb_sort, base_text, variant_text,
+         translit, parsing, parsing_str, heb_str, grk_str, verse_id,
+         heading, crossref, bsb_version).
+
+         STORAGE v1: per-verse JSON on a type bible-interlinear
+           ref, tokens (JSON array of word objects), heading?, crossref?
+         keyed by same BSB:Abbrev:C:V ref as bible-verse.
+         Avoid millions of token rows unless needed.
+
+         UI: htmx toggle on /bible or /dabar/verse; Strong's hrefs
+         to /strongs?n=.
+
+         Full corpus seed may be large — allow --book John for dogfood.
+    |))
+   )
+  )
+  (subsection search-fts
+   (doc "Postgres full-text search over verse text (not semantic)")
+   (status planned)
+   (verify
+    (smoke "bible/search love returns ranked hits better than bare ILIKE smoke"))
+   (details
+    (doc (|
+         OPTIONAL WP: expression index / tsvector on
+         data_rows.fields->>'text' for type bible-verse, or
+         generated column in a later migration.
+         Prim: find-text-fts or specialized bible search SQL.
+         NON-GOAL: pgvector, embedder, /api/search/semantic.
+    |))
+   )
+  )
+  (subsection notes
+   (doc "Personal bookmarks and notes on refs")
+   (status planned)
+   (verify
+    (smoke "(create note on BSB:John:3:16) visible only as data_rows author story allows"))
+   (details
+    (doc (|
+         DEFERRED after study read path:
+         bible-note: ref, body
+         bible-bookmark: ref, label
+         Shared data_rows means notes are global unless filtered by
+         author — document v1 limitation; multi-user.permissions
+         may tighten later.
+    |))
+   )
+  )
+  (subsection work-packages
+   (doc "Implementation order")
+   (status planned)
+   (details
+    (doc (|
+         WP0  This chapter + root inline + image.packages cross-link
+         WP1  Navigation: prev/next + random (bible/)
+         WP2  Strong's seed + dabar/strongs + /strongs
+         WP3  Interlinear seed + toggle + Strong's links
+         WP4  FTS (optional parallel)
+         WP5  Notes/bookmarks (optional)
+         WP6  Multi-file library / require (when packages grow)
+
+         ACCEPTANCE v1 "dabar on PP":
+         - bible reader green on boot
+         - load-library dabar adds study without breaking /bible
+         - Strong's lookup + one interlinear dogfood path
+         - no semantic search
+    |))
+   )
+  )
+  (subsection non-goals
+   (doc "Explicit exclusions")
+   (status planned)
+   (details
+    (doc (|
+         - Semantic search / pgvector / llama embedder
+         - Porting Dream dabar server into the image
+         - Audio
+         - Path-param routes /bible/John/3 until platform supports
+         - Multi-translation UI
+         - New unikernel or service binary for dabar
+    |))
+   )
+  )
+ )
+)

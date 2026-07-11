@@ -140,6 +140,10 @@
   (doc "Book chapter — full text inlined from product-experience.borg")
   (inline product-experience.borg)
  )
+ (section dabar
+  (doc "Book chapter — BSB study libraries (dabar); full text inlined from dabar.borg")
+  (inline dabar.borg)
+ )
  (section migrations
   (doc "Book chapter — full text inlined from migrations.borg")
   (inline migrations.borg)

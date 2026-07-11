@@ -668,7 +668,10 @@
      Reader already allows / in symbols (is_symbol_start).
      2026-07-11: BIBLE LIBRARY dogfood locked — BSB in data_rows,
      ref format BSB:Abbrev:C:V, bulk seed script, libs/bible/lib.pp,
-     URLs via query book/chapter/verse or ref= (see BIBLE LIBRARY).|) *)
+     URLs via query book/chapter/verse or ref= (see BIBLE LIBRARY).
+     Study layer (Strong's, interlinear, dabar package) is specified
+     in chapter dabar.borg (root pricklypear.borg inlines it) — not
+     expanded here.|) *)
    (verify
     (build "dune build lisp image")
     (smoke "reader accepts symbol todo/list as Var")
