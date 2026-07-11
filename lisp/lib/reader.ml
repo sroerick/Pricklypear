@@ -261,27 +261,136 @@ let rec pp_value (v : value) : string =
   | VRef (t, i) -> "#<ref:" ^ t ^ ":" ^ String.sub i 0 (min 8 (String.length i)) ^ ">"
   | VList vs -> "(" ^ String.concat " " (List.map pp_value vs) ^ ")"
 
-(** Pretty-print an expr (the AST). Mostly for debugging; the REPL
-    pretty-prints values, not exprs. *)
-let rec pp_expr (e : expr) : string =
+(** Flat one-line print (for length checks / compact leaves). *)
+let rec pp_expr_flat (e : expr) : string =
   match e with
   | Var s -> s
   | Lit v -> pp_value v
   | App (f, args) ->
-      "(" ^ pp_expr f
-      ^ (if args = [] then "" else " " ^ String.concat " " (List.map pp_expr args))
+      "(" ^ pp_expr_flat f
+      ^ (if args = [] then ""
+         else " " ^ String.concat " " (List.map pp_expr_flat args))
       ^ ")"
-  | Let (n, v, b) -> "(let (" ^ n ^ " " ^ pp_expr v ^ ") " ^ pp_expr b ^ ")"
+  | Let (n, v, b) ->
+      "(let ((" ^ n ^ " " ^ pp_expr_flat v ^ ")) " ^ pp_expr_flat b ^ ")"
   | Letrec (bs, b) ->
       "(letrec ("
-      ^ String.concat " " (List.map (fun (n, e) -> "(" ^ n ^ " " ^ pp_expr e ^ ")") bs)
-      ^ ") " ^ pp_expr b ^ ")"
+      ^ String.concat " "
+          (List.map (fun (n, e) -> "(" ^ n ^ " " ^ pp_expr_flat e ^ ")") bs)
+      ^ ") " ^ pp_expr_flat b ^ ")"
   | If (t, th, el) ->
-      "(if " ^ pp_expr t ^ " " ^ pp_expr th ^ " " ^ pp_expr el ^ ")"
+      "(if " ^ pp_expr_flat t ^ " " ^ pp_expr_flat th ^ " " ^ pp_expr_flat el
+      ^ ")"
   | Lambda (ps, b) ->
-      "(lambda (" ^ String.concat " " ps ^ ") " ^ pp_expr b ^ ")"
+      "(lambda (" ^ String.concat " " ps ^ ") " ^ pp_expr_flat b ^ ")"
   | Prim (n, args) ->
-      "(prim " ^ n ^ " " ^ String.concat " " (List.map pp_expr args) ^ ")"
-  | Seq (a, b) -> "(seq " ^ pp_expr a ^ " " ^ pp_expr b ^ ")"
-  | Quote e -> "(quote " ^ pp_expr e ^ ")"
-  | Define (n, e) -> "(define " ^ n ^ " " ^ pp_expr e ^ ")"
+      "(prim " ^ n
+      ^ (if args = [] then ""
+         else " " ^ String.concat " " (List.map pp_expr_flat args))
+      ^ ")"
+  | Seq (a, b) -> "(seq " ^ pp_expr_flat a ^ " " ^ pp_expr_flat b ^ ")"
+  | Quote e -> "'" ^ pp_expr_flat e
+  | Define (n, e) -> "(define " ^ n ^ " " ^ pp_expr_flat e ^ ")"
+
+let pp_indent (depth : int) : string = String.make (depth * 2) ' '
+
+(** Prefer one line when short and shallow; otherwise break. *)
+let rec expr_is_compact (e : expr) : bool =
+  let flat = pp_expr_flat e in
+  if String.length flat <= 56 then
+    match e with
+    | Var _ | Lit _ -> true
+    | Quote e' -> expr_is_compact e'
+    | App (f, args) ->
+        List.length args <= 5
+        && expr_is_compact f
+        && List.for_all expr_is_compact args
+    | Lambda (ps, b) -> List.length ps <= 4 && expr_is_compact b
+    | Prim (_, args) -> List.for_all expr_is_compact args
+    | If (t, th, el) ->
+        expr_is_compact t && expr_is_compact th && expr_is_compact el
+    | Seq (a, b) -> expr_is_compact a && expr_is_compact b
+    | Let (_, v, b) -> expr_is_compact v && expr_is_compact b
+    | Letrec (bs, b) ->
+        List.length bs <= 2
+        && List.for_all (fun (_, e) -> expr_is_compact e) bs
+        && expr_is_compact b
+    | Define (_, e) -> expr_is_compact e
+  else false
+
+(** Pretty-print an expr with indentation for the Functions browser / editor. *)
+let rec pp_expr_at (depth : int) (e : expr) : string =
+  if depth > 0 && expr_is_compact e then pp_expr_flat e
+  else
+    let ind1 = pp_indent (depth + 1) in
+    match e with
+    | Var s -> s
+    | Lit v -> pp_value v
+    | Quote e' ->
+        if expr_is_compact e' then "'" ^ pp_expr_flat e'
+        else "(quote\n" ^ ind1 ^ pp_expr_at (depth + 1) e' ^ ")"
+    | App (f, []) -> "(" ^ pp_expr_at depth f ^ ")"
+    | App (f, args) ->
+        if expr_is_compact e then pp_expr_flat e
+        else
+          let head = pp_expr_at (depth + 1) f in
+          let body =
+            List.map
+              (fun a -> ind1 ^ pp_expr_at (depth + 1) a)
+              args
+          in
+          "(" ^ head ^ "\n" ^ String.concat "\n" body ^ ")"
+    | Lambda (ps, b) ->
+        if expr_is_compact e then pp_expr_flat e
+        else
+          "(lambda (" ^ String.concat " " ps ^ ")\n"
+          ^ ind1 ^ pp_expr_at (depth + 1) b ^ ")"
+    | If (t, th, el) ->
+        if expr_is_compact e then pp_expr_flat e
+        else
+          "(if\n"
+          ^ ind1 ^ pp_expr_at (depth + 1) t ^ "\n"
+          ^ ind1 ^ pp_expr_at (depth + 1) th ^ "\n"
+          ^ ind1 ^ pp_expr_at (depth + 1) el ^ ")"
+    | Let (n, v, b) ->
+        if expr_is_compact e then pp_expr_flat e
+        else
+          "(let ((" ^ n ^ "\n"
+          ^ ind1 ^ "  " ^ pp_expr_at (depth + 2) v ^ "))\n"
+          ^ ind1 ^ pp_expr_at (depth + 1) b ^ ")"
+    | Letrec (bs, b) ->
+        if expr_is_compact e then pp_expr_flat e
+        else
+          let binds =
+            List.map
+              (fun (n, e') ->
+                ind1 ^ "(" ^ n ^ "\n"
+                ^ pp_indent (depth + 2) ^ pp_expr_at (depth + 2) e' ^ ")")
+              bs
+          in
+          "(letrec (\n"
+          ^ String.concat "\n" binds ^ ")\n"
+          ^ ind1 ^ pp_expr_at (depth + 1) b ^ ")"
+    | Seq (a, b) ->
+        if expr_is_compact e then pp_expr_flat e
+        else
+          "(seq\n"
+          ^ ind1 ^ pp_expr_at (depth + 1) a ^ "\n"
+          ^ ind1 ^ pp_expr_at (depth + 1) b ^ ")"
+    | Prim (n, args) ->
+        if expr_is_compact e then pp_expr_flat e
+        else if args = [] then "(prim " ^ n ^ ")"
+        else
+          "(prim " ^ n ^ "\n"
+          ^ String.concat "\n"
+              (List.map
+                 (fun a -> ind1 ^ pp_expr_at (depth + 1) a)
+                 args)
+          ^ ")"
+    | Define (n, body) ->
+        if expr_is_compact e then pp_expr_flat e
+        else
+          "(define " ^ n ^ "\n"
+          ^ ind1 ^ pp_expr_at (depth + 1) body ^ ")"
+
+let pp_expr (e : expr) : string = pp_expr_at 0 e

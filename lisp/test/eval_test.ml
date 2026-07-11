@@ -169,9 +169,32 @@ let eval_tests = [
       Alcotest.(check string) "nope" "nope" name);
 ]
 
+let pretty_print_tests = [
+  ("pp_expr: nested list breaks lines", `Quick, fun () ->
+    let src =
+      "(list (menu/link \"home\" \"/\") (menu/group \"apps\" (list (menu/link \"todos\" \"/todos\"))))"
+    in
+    let e = Reader.read_one src in
+    let pp = Reader.pp_expr e in
+    if not (String.contains pp '\n') then
+      Alcotest.failf "expected newlines in:\n%s" pp;
+    if not (String.contains pp 'a') then
+      Alcotest.fail "missing content";
+    (* Round-trip: pretty output still parses to same flat shape *)
+    let e' = Reader.read_one pp in
+    Alcotest.(check string) "flat equal"
+      (Reader.pp_expr_flat e) (Reader.pp_expr_flat e'));
+  ("pp_expr: short form stays one line", `Quick, fun () ->
+    let e = Reader.read_one "(+ 1 2)" in
+    let pp = Reader.pp_expr e in
+    Alcotest.(check bool) "no newline" false (String.contains pp '\n');
+    Alcotest.(check string) "compact" "(+ 1 2)" pp);
+]
+
 let () =
   Alcotest.run "pricklypear-lisp" [
     "reader", reader_tests @ reader_list_tests @ reader_completeness_tests;
     "ast-roundtrip", ast_roundtrip_tests;
+    "pretty-print", pretty_print_tests;
     "eval", eval_tests;
   ]

@@ -76,7 +76,8 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
            font-family:\"Courier New\",Courier,monospace;font-size:1rem;
            background:#fff;color:#000;border:1px solid #000;border-radius:0;
            padding:.5rem;width:100%;max-width:100%}
-         textarea{min-height:12rem;line-height:1.35}
+         pre{white-space:pre-wrap;overflow-x:auto;line-height:1.35}
+         textarea{min-height:16rem;line-height:1.35;white-space:pre;tab-size:2}
          button,.btn,input[type=submit]{
            font:inherit;font-size:1rem;cursor:pointer;
            background:#c0c0c0;color:#000;border:2px outset #fff;
