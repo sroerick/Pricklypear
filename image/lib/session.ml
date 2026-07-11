@@ -303,6 +303,23 @@ let check_ai_body_effects (body_src : string) : (unit, string) result =
            (Pricklypear_lisp.Effect.EffSet.pp fx))
   with _ -> Ok ()  (* parse errors handled by define_binding *)
 
+(** Unified agent portal: seed + prompt -> final text.
+    Progress via optional [on_event] (SSE / log). Does not define. *)
+let agent
+    (t : t)
+    ?(stream = false)
+    ?(on_event : Llm_client.agent_event -> unit = fun _ -> ())
+    ~(seed : string)
+    ~(prompt : string)
+    () : Pricklypear_lisp.Ast.value Lwt.t =
+  let _ = t in
+  let* res =
+    Llm_client.agent_chat ~stream ~on_event ~seed ~prompt ()
+  in
+  match res with
+  | Ok text -> Lwt.return (Pricklypear_lisp.Ast.VStr text)
+  | Error e -> Lwt.return (Pricklypear_lisp.Ast.VStr ("agent error: " ^ e))
+
 (* AI propose: LLM writes body; we define with agent provenance. *)
 let propose_function (t : t) ~(name : string) ~(spec : string)
     : Pricklypear_lisp.Ast.value Lwt.t =
@@ -569,6 +586,19 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
   Primitives.register_sync tbl "current-branch"
     (fun _ -> Pricklypear_lisp.Ast.VStr t.manifest.branch_name);
 
+  (* (agent seed prompt) -> VStr final text | error string.
+     Unified AI portal. Effect Ai. Does not auto-define. *)
+  Primitives.register tbl "agent"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr seed;
+          Pricklypear_lisp.Ast.VStr prompt ] ->
+          agent t ~seed ~prompt ()
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr
+               "agent: need 2 strings (seed, prompt)"));
+
   (* (propose-function 'name "spec text") -> VStr name | error string.
      Calls OpenAI-compat LLM, defines the function on the CURRENT branch
      with author = agent:<model> (AI provenance). Never merges to system. *)
@@ -798,6 +828,10 @@ and seed_stdlib (t : t) : unit Lwt.t =
   (match r2 with
    | Ok msg -> Printf.eprintf "[session] ui shell: %s\n%!" msg
    | Error e -> Printf.eprintf "[session] ui load: %s\n%!" e);
+  let* r3 = load_library t "ai" in
+  (match r3 with
+   | Ok msg -> Printf.eprintf "[session] ai lib: %s\n%!" msg
+   | Error e -> Printf.eprintf "[session] ai load: %s\n%!" e);
   let* () = refresh_ui_shell t in
   Lwt.return_unit
 

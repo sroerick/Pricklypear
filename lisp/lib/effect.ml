@@ -122,9 +122,12 @@ let write_db_prims = [
 let branch_prims = [ "fork"; "merge"; "checkout" ]
 let publish_prims = [ "route" ]
 let html_prims = [ "render-html" ]
-let ai_prims = [
+(* Author tools that freeze into function_defs (Ai + WriteDb). *)
+let ai_write_prims = [
   "propose-function"; "llm-inner"; "llm-outer"; "llm-rewrite"; "llm-seed";
 ]
+(* Portal that only talks to the model (Ai only). *)
+let ai_prims = "agent" :: ai_write_prims
 
 let effects_for_prim (name : string) : effect_set =
   if List.mem name pure_prims then EffSet.empty
@@ -133,7 +136,9 @@ let effects_for_prim (name : string) : effect_set =
   else if List.mem name branch_prims then EffSet.singleton Branch
   else if List.mem name publish_prims then EffSet.singleton Publish
   else if List.mem name html_prims then EffSet.singleton Html
-  else if List.mem name ai_prims then EffSet.union (EffSet.singleton Ai) (EffSet.singleton WriteDb)
+  else if name = "agent" then EffSet.singleton Ai
+  else if List.mem name ai_write_prims then
+    EffSet.union (EffSet.singleton Ai) (EffSet.singleton WriteDb)
   else if name = "with-transaction" || name = "__with_transaction__" then EffSet.singleton Txn
   else
     (* Unknown name: not a registered capability prim. User fns resolved

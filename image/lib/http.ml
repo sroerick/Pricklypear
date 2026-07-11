@@ -143,6 +143,7 @@ let default_nav_nodes () : Pure_html.node list =
   ; HTML.a [HTML.href "/types"] [txt "data"]
   ; HTML.a [HTML.href "/pages"] [txt "pages"]
   ; HTML.a [HTML.href "/repl"] [txt "repl"]
+  ; HTML.a [HTML.href "/agent"] [txt "agent"]
   ]
 
 let value_to_html_string (v : Pricklypear_lisp.Ast.value) : string =
@@ -1426,6 +1427,180 @@ let save_edit (session : Session.t) (path_name : string)
   | Error e ->
       editor_page session name ~msg:("error: " ^ e) ~body_src reqd
 
+let sse_write (body : [ `write ] Httpaf.Body.t) (event_json : string) : unit Lwt.t =
+  let chunk = "data: " ^ event_json ^ "\n\n" in
+  Httpaf.Body.write_string body chunk;
+  let promise, wakeup = Lwt.wait () in
+  Httpaf.Body.flush body (fun () -> Lwt.wakeup_later wakeup ());
+  promise
+
+let api_agent (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+  let* body = read_body reqd in
+  let seed, prompt, want_stream =
+    try
+      match Yojson.Safe.from_string body with
+      | `Assoc items ->
+          let seed =
+            match List.assoc_opt "seed" items with
+            | Some (`String s) -> s
+            | _ -> "You are a helpful Pricklypear image assistant."
+          in
+          let prompt =
+            match List.assoc_opt "prompt" items with
+            | Some (`String s) -> s
+            | _ ->
+                (match List.assoc_opt "q" items with
+                 | Some (`String s) -> s
+                 | _ -> "")
+          in
+          let stream =
+            match List.assoc_opt "stream" items with
+            | Some (`Bool b) -> b
+            | Some (`String "1") | Some (`String "true") -> true
+            | _ -> true
+          in
+          (seed, prompt, stream)
+      | _ -> ("", "", true)
+    with _ ->
+      let seed =
+        Option.value (form_field body "seed")
+          ~default:"You are a helpful Pricklypear image assistant."
+      in
+      let prompt =
+        match form_field body "prompt" with
+        | Some p -> p
+        | None -> Option.value (form_field body "q") ~default:""
+      in
+      (seed, prompt, true)
+  in
+  if String.trim prompt = "" then begin
+    json_response reqd
+      (`Assoc [ ("ok", `Bool false); ("error", `String "need prompt") ]);
+    Lwt.return_unit
+  end else if not want_stream then begin
+    let* v = Session.agent session ~seed ~prompt () in
+    let text = Pricklypear_lisp.Reader.pp_value v in
+    json_response reqd
+      (`Assoc [ ("ok", `Bool true); ("text", `String text) ]);
+    Lwt.return_unit
+  end else begin
+    let headers =
+      Httpaf.Headers.of_list
+        [ ("content-type", "text/event-stream; charset=utf-8")
+        ; ("cache-control", "no-cache")
+        ; ("connection", "keep-alive")
+        ]
+    in
+    let resp = Httpaf.Response.create ~headers `OK in
+    let body_w = Httpaf.Reqd.respond_with_streaming reqd resp in
+    let queue : string Queue.t = Queue.create () in
+    let cond = Lwt_condition.create () in
+    let closed = ref false in
+    let push s =
+      Queue.add s queue;
+      Lwt_condition.signal cond ()
+    in
+    let on_event = function
+      | Llm_client.Token tok ->
+          push (Yojson.Safe.to_string
+                  (`Assoc [ ("t", `String "token"); ("s", `String tok) ]))
+      | Llm_client.Done ->
+          push (Yojson.Safe.to_string (`Assoc [ ("t", `String "done") ]));
+          closed := true;
+          Lwt_condition.signal cond ()
+      | Llm_client.Fail e ->
+          push (Yojson.Safe.to_string
+                  (`Assoc [ ("t", `String "error"); ("s", `String e) ]));
+          closed := true;
+          Lwt_condition.signal cond ()
+    in
+    (* Run agent in background; stream writer drains queue. *)
+    Lwt.async (fun () ->
+      let* v =
+        Session.agent session ~stream:true ~on_event ~seed ~prompt ()
+      in
+      (* Ensure done if runner only returned Ok without Done (non-stream path). *)
+      (match v with
+       | Pricklypear_lisp.Ast.VStr s when not !closed ->
+           push (Yojson.Safe.to_string
+                   (`Assoc [ ("t", `String "done"); ("text", `String s) ]));
+           closed := true;
+           Lwt_condition.signal cond ()
+       | _ -> ());
+      Lwt.return_unit);
+    let rec drain () =
+      if Queue.is_empty queue then
+        if !closed then begin
+          Httpaf.Body.close_writer body_w;
+          Lwt.return_unit
+        end else
+          let* () = Lwt_condition.wait cond in
+          drain ()
+      else
+        let ev = Queue.take queue in
+        let* () = sse_write body_w ev in
+        drain ()
+    in
+    drain ()
+  end
+
+let agent_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit =
+  let js =
+    "const out=document.getElementById('out');" ^
+    "const run=document.getElementById('run');" ^
+    "run.onclick=async()=>{" ^
+    "const seed=document.getElementById('seed').value;" ^
+    "const prompt=document.getElementById('prompt').value;" ^
+    "out.textContent='';" ^
+    "try{" ^
+    "const r=await fetch('/api/agent',{method:'POST'," ^
+    "headers:{'content-type':'application/json'}," ^
+    "body:JSON.stringify({seed,prompt,stream:true})});" ^
+    "const reader=r.body.getReader();" ^
+    "const dec=new TextDecoder();" ^
+    "let buf='';" ^
+    "while(true){" ^
+    "const {value,done}=await reader.read();" ^
+    "if(done)break;" ^
+    "buf+=dec.decode(value,{stream:true});" ^
+    "const parts=buf.split('\\n\\n');" ^
+    "buf=parts.pop();" ^
+    "for(const p of parts){" ^
+    "const line=p.trim();" ^
+    "if(!line.startsWith('data:'))continue;" ^
+    "const j=JSON.parse(line.slice(5).trim());" ^
+    "if(j.t==='token')out.textContent+=j.s;" ^
+    "if(j.t==='error')out.textContent+='\\n[error] '+j.s;" ^
+    "if(j.t==='done'&&j.text&&!out.textContent)out.textContent=j.text;" ^
+    "}}}" ^
+    "catch(e){out.textContent=String(e);}" ^
+    "};"
+  in
+  let body =
+    chrome ~session ~title:"Agent" [
+      HTML.div [HTML.class_ "card"] [
+        HTML.p [] [txt
+          "Unified portal: Lisp (agent seed prompt) or this form. Live tokens via SSE."];
+        HTML.p [] [
+          HTML.label [HTML.for_ "seed"] [txt "seed (system)"];
+        ];
+        HTML.textarea [HTML.name "seed"; HTML.id "seed"]
+          "%s" "You are the Pricklypear image co-pilot. Answer briefly. Prefer facts from the prompt context.";
+        HTML.p [] [
+          HTML.label [HTML.for_ "prompt"] [txt "prompt"];
+        ];
+        HTML.textarea [HTML.name "prompt"; HTML.id "prompt"]
+          "%s" "What is Pricklypear in one sentence?";
+        HTML.p [] [
+          HTML.button [HTML.type_ "button"; HTML.id "run"] [txt "Run agent"];
+        ];
+        HTML.pre [HTML.id "out"; HTML.class_ "card"] [txt ""];
+      ];
+      HTML.script [] "%s" js;
+    ]
+  in
+  html_response reqd body
+
 let ai_propose (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
   let* body = read_body reqd in
   let name_opt, spec_opt =
@@ -1599,7 +1774,9 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
   | `GET, "/types" -> launch (list_types_page session reqd)
   | `GET, "/repl" -> repl_page session reqd
   | `POST, "/api/eval" -> launch (api_eval session reqd)
+  | `POST, "/api/agent" -> launch (api_agent session reqd)
   | `POST, "/api/ai/propose" -> launch (ai_propose session reqd)
+  | `GET, "/agent" -> agent_page session reqd
   | `POST, "/api/edit/create" -> launch (api_edit_create session reqd)
   | `GET, path when String.length path >= 6
                  && String.sub path 0 6 = "/page/" ->

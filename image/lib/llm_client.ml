@@ -21,6 +21,12 @@ let model () = env_or "LLM_MODEL" "hf:zai-org/GLM-4.7-Flash"
 
 type call_result = (string, string) result
 
+(** Progress events for live sinks (SSE / REPL). Not a capability effect. *)
+type agent_event =
+  | Token of string
+  | Done
+  | Fail of string
+
 let shell_quote (s : string) : string =
   (* single-quote for POSIX sh, escape embedded single quotes *)
   let buf = Buffer.create (String.length s + 8) in
@@ -138,6 +144,123 @@ let strip_fences (s : string) : string =
          | Some i -> String.trim (String.sub rest 0 i)
          | None -> String.trim rest)
   else s
+
+(** Extract delta content from one streaming SSE JSON payload. *)
+let extract_stream_delta (data : string) : string option =
+  if data = "[DONE]" then None
+  else
+    try
+      let json = Yojson.Safe.from_string data in
+      let open Yojson.Safe.Util in
+      match json |> member "choices" |> to_list with
+      | [] -> None
+      | choice :: _ ->
+          let delta = choice |> member "delta" in
+          (match delta |> member "content" |> to_string_option with
+           | Some s when s <> "" -> Some s
+           | _ -> None)
+    with _ -> None
+
+(** Unified agent chat: system=seed, user=prompt.
+    When [stream] is true, uses OpenAI stream:true and fires [on_event]
+    for each token. Always returns the final concatenated text. *)
+let agent_chat
+    ?(temperature = 0.3)
+    ?(max_tokens = 4096)
+    ?(stream = false)
+    ?(on_event : agent_event -> unit = fun _ -> ())
+    ~(seed : string)
+    ~(prompt : string)
+    () : call_result Lwt.t =
+  let key = api_key () in
+  if key = "" then begin
+    on_event (Fail "LLM_API_KEY not set");
+    Lwt.return (Error "LLM_API_KEY not set")
+  end else if not stream then begin
+    let* res = call ~temperature ~max_tokens ~system:seed ~user:prompt () in
+    (match res with
+     | Ok text -> on_event (Token text); on_event Done; Lwt.return (Ok text)
+     | Error e -> on_event (Fail e); Lwt.return (Error e))
+  end else
+    let body_json =
+      `Assoc
+        [ ("model", `String (model ()))
+        ; ("messages",
+           `List
+             [ `Assoc [("role", `String "system"); ("content", `String seed)]
+             ; `Assoc [("role", `String "user"); ("content", `String prompt)]
+             ])
+        ; ("temperature", `Float temperature)
+        ; ("max_tokens", `Int max_tokens)
+        ; ("stream", `Bool true)
+        ]
+    in
+    let body_str = Yojson.Safe.to_string body_json in
+    let url = api_base () ^ "/chat/completions" in
+    let tmp = Filename.temp_file "pp_llm_stream_" ".json" in
+    let oc = open_out tmp in
+    output_string oc body_str;
+    close_out oc;
+    let cmd =
+      Printf.sprintf
+        "curl -sS -N --max-time 180 -X POST %s \
+         -H %s -H %s --data-binary @%s 2>&1"
+        (shell_quote url)
+        (shell_quote "Content-Type: application/json")
+        (shell_quote ("Authorization: Bearer " ^ key))
+        (shell_quote tmp)
+    in
+    Printf.eprintf "[llm] STREAM %s model=%s\n" url (model ());
+    let buf = Buffer.create 4096 in
+    Lwt.catch
+      (fun () ->
+        let proc = Lwt_process.open_process_in (Lwt_process.shell cmd) in
+        let rec loop () =
+          let* line_opt = Lwt_io.read_line_opt proc#stdout in
+          match line_opt with
+          | None ->
+              let* st = proc#close in
+              (try Sys.remove tmp with _ -> ());
+              ignore st;
+              let text = Buffer.contents buf in
+              if String.trim text = "" then begin
+                on_event (Fail "LLM stream: empty content");
+                Lwt.return (Error "LLM stream: empty content")
+              end else begin
+                on_event Done;
+                Lwt.return (Ok text)
+              end
+          | Some line ->
+              let line = String.trim line in
+              if line = "" then loop ()
+              else if String.length line >= 6
+                      && String.sub line 0 6 = "data: " then
+                let data = String.sub line 6 (String.length line - 6) |> String.trim in
+                if data = "[DONE]" then loop ()
+                else begin
+                  (match extract_stream_delta data with
+                   | Some tok ->
+                       Buffer.add_string buf tok;
+                       on_event (Token tok)
+                   | None -> ());
+                  loop ()
+                end
+              else if String.length line >= 5
+                      && (String.sub line 0 5 = "curl "
+                          || String.sub line 0 5 = "curl:") then begin
+                (try Sys.remove tmp with _ -> ());
+                on_event (Fail line);
+                let* _ = proc#close in
+                Lwt.return (Error line)
+              end else
+                loop ()
+        in
+        loop ())
+      (fun exn ->
+        (try Sys.remove tmp with _ -> ());
+        let e = "LLM stream transport: " ^ Printexc.to_string exn in
+        on_event (Fail e);
+        Lwt.return (Error e))
 
 (** Ask the model to write one Lisp function body (s-expr).
     Returns source text for (define name <body>). *)

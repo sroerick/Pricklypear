@@ -580,6 +580,7 @@ let prim_summary (name : string) : string =
   | "delete" -> "delete data row"
   | "rows" -> "list data rows"
   | "select-for-update" -> "lock row in transaction"
+  | "agent" -> "AI portal: (agent seed prompt) -> text"
   | "propose-function" -> "AI draft function on branch"
   | "llm-inner" | "llm-outer" | "llm-rewrite" | "llm-seed" ->
       "AI rewrite / growth tool"
