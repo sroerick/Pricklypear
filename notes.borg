@@ -181,6 +181,26 @@
          HISTORY:
            v1 overwrite on save (updated_at). Revision log is a
            future chapter; do not block on Doltgres.
+
+         STORAGE ALTERNATIVES (decision 2026-07-11):
+           Phase 1 PRIMARY: whole outline as JSON (or list-encoded
+           JSON) on the note row — document = tree (org buffer model).
+           Lisp structure ops on in-memory lists; encode/decode at
+           DB boundary (json-emit / json-parse prims).
+
+           NOT phase 1: PostgreSQL ltree. ltree is a solid contrib for
+           path queries (a.b.c, ancestors/descendants) when every
+           headline is its own row. It does not replace sexp trees for
+           org-like structure editing of one note. Path rewrites on
+           promote/demote/move-subtree are painful if ltree is sole truth.
+
+           Phase 2+ IF needed: note_node adjacency (parent_id, pos,
+           note_slug) for huge notes / concurrent section edit;
+           optional ltree OR closure table as a query index, not the
+           only representation. Recursive CTEs (already used for
+           branches) remain the default SQL hierarchy tool.
+
+           Do not install ltree only to start notes.
     |))
    )
   )
