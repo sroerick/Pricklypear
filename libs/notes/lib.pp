@@ -169,7 +169,7 @@
             "var p='slug=" slug "&op=set-'+t.dataset.field+'&node-id='+t.dataset.id;"
             "p+='&'+t.dataset.field+'='+encodeURIComponent(t.innerText);"
             "fetch('/partials/notes-node-op',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:p});"
-            "},true);")))))
+            "},true);"))))))
 (define notes/show-html
   (lambda (slug)
     (let ((n (notes/get slug)))
