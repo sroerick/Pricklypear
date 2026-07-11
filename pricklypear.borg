@@ -1,5 +1,5 @@
 (project pricklypear
- (doc "A multi-user Lisp operating system built on MirageOS unikernels, with Postgres as the shared object store and htmx as the user interface layer")
+ (doc "A single-tenant Lisp operating system in the Smalltalk tradition: one OCaml `unix' binary (the image), Postgres as the durable object store, htmx as the interface. Formerly multi-user + MirageOS unikernels; pivoted to single-image in it35 (see single-image.borg).")
  (status partial)
  (* agent note (|it31 plan-pass #7 (product-truth reconciliation):
   Demoted project status implemented -> partial. The substrate
@@ -101,8 +101,16 @@
   (inline philosophy.borg)
  )
  (section architecture
-  (doc "Book chapter — full text inlined from architecture.borg")
+  (doc "Book chapter — full text inlined from architecture.borg.
+        SUPERSEDED by single-image.borg (it35) for topology,
+        package-layout, and transport-choices.")
   (inline architecture.borg)
+ )
+ (section single-image
+  (doc "Book chapter — the single-image pivot (it35). One process,
+        single-tenant, no Mirage/Solo5, no supervisor, no authd.
+        Successor to architecture/supervisor/multi-user.")
+  (inline single-image.borg)
  )
  (section object-model
   (doc "Book chapter — full text inlined from object-model.borg")
@@ -121,7 +129,10 @@
   (inline storage.borg)
  )
  (section multi-user
-  (doc "Book chapter — full text inlined from multi-user.borg")
+  (doc "Book chapter — RETIRED by the single-image pivot (it35).
+        Process-isolation model dropped; the system is single-tenant.
+        Namespaces/budgets/permissions stay as Lisp-level safeguards.
+        See single-image.borg. Kept for historical context; status dropped.")
   (inline multi-user.borg)
  )
  (section auth
@@ -129,7 +140,9 @@
   (inline auth.borg)
  )
  (section supervisor
-  (doc "Book chapter — full text inlined from supervisor.borg")
+  (doc "Book chapter — RETIRED by the single-image pivot (it35).
+        Kept for historical context; status dropped.
+        See single-image.borg for the successor topology.")
   (inline supervisor.borg)
  )
  (section image

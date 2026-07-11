@@ -1,6 +1,17 @@
 (project pricklypear-architecture
- (doc "Pricklypear book chapter: architecture")
- (status partial)
+ (doc "Pricklypear book chapter: architecture — SUPERSEDED by
+        single-image.borg (it35) for topology, package-layout,
+        and transport-choices. This chapter's multi-process /
+        Mirage unikernel diagram is the RETIRED design. Kept for
+        historical context; the live architecture is single-image.")
+ (status planned)
+ (* agent note (|it35 plan pass: the topology below (hypervisor ->
+                  supervisor -> per-user image unikernels + authd)
+                  is retired. The live topology is ONE image binary
+                  + Postgres + nginx. See single-image.borg. This
+                  chapter is kept so the book records the prior
+                  design and the reason for the pivot; its section
+                  statuses are not authoritative after it35.|) *)
  (convention ocaml-dune)
  (section architecture
   (doc "The overall picture: hypervisor -> supervisor unikernel -> per-user image unikernels -> Postgres")
