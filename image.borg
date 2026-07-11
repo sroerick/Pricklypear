@@ -926,8 +926,8 @@
            Optional: ?view=sexp returns chapter as Lisp list via bare value.
            Attribution footer: Berean Standard Bible / license line.
 
-         PERSONAL LAYER (deferred, same package later):
-           bible-note / bible-highlight types on user data — not canon.
+         PERSONAL LAYER: notes/bookmarks are NOT bible/dabar — a
+           separate module owns them. Canon text stays shared.
 
          MAKE CHECKLIST:
            1. Abbrev map + seed script I/O against sample or full BSB
