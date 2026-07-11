@@ -1494,57 +1494,76 @@ let api_agent (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
       (`Assoc [ ("ok", `Bool true); ("text", `String text) ]);
     Lwt.return_unit
   end else begin
-    (* Prefer a single-thread stream writer: collect events then emit.
-       Avoids races with Lwt.async + condition, and works for fast
-       failures like missing LLM_API_KEY. *)
-    let events : string list ref = ref [] in
-    let push j = events := j :: !events in
-    let on_event = function
-      | Llm_client.Token tok ->
-          push (Yojson.Safe.to_string
-                  (`Assoc [ ("t", `String "token"); ("s", `String tok) ]))
-      | Llm_client.Done ->
-          push (Yojson.Safe.to_string (`Assoc [ ("t", `String "done") ]))
-      | Llm_client.Fail e ->
-          push (Yojson.Safe.to_string
-                  (`Assoc [ ("t", `String "error"); ("s", `String e) ]))
-    in
-    let* v =
-      Session.agent session ~stream:true ~on_event ~seed ~prompt ()
-    in
-    (match v with
-     | Pricklypear_lisp.Ast.VStr s ->
-         let already =
-           List.exists
-             (fun j ->
-               try
-                 match Yojson.Safe.from_string j with
-                 | `Assoc items ->
-                     (match List.assoc_opt "t" items with
-                      | Some (`String "done") | Some (`String "error") -> true
-                      | _ -> false)
-                 | _ -> false
-               with _ -> false)
-             !events
-         in
-         if not already then
-           push (Yojson.Safe.to_string
-                   (`Assoc [ ("t", `String "done"); ("text", `String s) ]))
-     | _ -> ());
-    let payload =
-      String.concat ""
-        (List.rev_map (fun j -> "data: " ^ j ^ "\n\n") !events)
-    in
+    (* Live SSE: stream tokens as they arrive. Fast-fail (no API key)
+       still works because on_event fires before any network wait. *)
     let headers =
       Httpaf.Headers.of_list
         [ ("content-type", "text/event-stream; charset=utf-8")
         ; ("cache-control", "no-cache")
-        ; ("content-length", string_of_int (String.length payload))
+        ; ("connection", "keep-alive")
+        ; ("x-accel-buffering", "no")  (* disable nginx response buffering *)
         ]
     in
     let resp = Httpaf.Response.create ~headers `OK in
-    Httpaf.Reqd.respond_with_string reqd resp payload;
-    Lwt.return_unit
+    let body_w =
+      Httpaf.Reqd.respond_with_streaming ~flush_headers_immediately:true
+        reqd resp
+    in
+    let queue : string Queue.t = Queue.create () in
+    let cond = Lwt_condition.create () in
+    let finished = ref false in
+    let push_json (j : string) : unit =
+      Queue.add j queue;
+      Lwt_condition.signal cond ()
+    in
+    let on_event = function
+      | Llm_client.Token tok ->
+          push_json
+            (Yojson.Safe.to_string
+               (`Assoc [ ("t", `String "token"); ("s", `String tok) ]))
+      | Llm_client.Done ->
+          push_json (Yojson.Safe.to_string (`Assoc [ ("t", `String "done") ]));
+          finished := true;
+          Lwt_condition.signal cond ()
+      | Llm_client.Fail e ->
+          push_json
+            (Yojson.Safe.to_string
+               (`Assoc [ ("t", `String "error"); ("s", `String e) ]));
+          finished := true;
+          Lwt_condition.signal cond ()
+    in
+    (* Producer: LLM stream (or immediate Fail). *)
+    Lwt.async (fun () ->
+      let* v =
+        Session.agent session ~stream:true ~on_event ~seed ~prompt ()
+      in
+      if not !finished then begin
+        (match v with
+         | Pricklypear_lisp.Ast.VStr s ->
+             push_json
+               (Yojson.Safe.to_string
+                  (`Assoc [ ("t", `String "done"); ("text", `String s) ]))
+         | _ ->
+             push_json
+               (Yojson.Safe.to_string (`Assoc [ ("t", `String "done") ])));
+        finished := true;
+        Lwt_condition.signal cond ()
+      end;
+      Lwt.return_unit);
+    (* Consumer: write SSE frames as they enqueue. *)
+    let rec drain () =
+      if not (Queue.is_empty queue) then
+        let j = Queue.take queue in
+        let* () = sse_write body_w j in
+        drain ()
+      else if !finished then begin
+        Httpaf.Body.close_writer body_w;
+        Lwt.return_unit
+      end else
+        let* () = Lwt_condition.wait cond in
+        drain ()
+    in
+    drain ()
   end
 
 let api_agent_task (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
@@ -1628,20 +1647,26 @@ let agent_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
     "const j=await r.json();" ^
     "out.textContent=(j.text||j.error||JSON.stringify(j));" ^
     "return;}" ^
-    "const txt=await r.text();" ^
-    "let shown='';" ^
-    "for(const p of txt.split('\\n\\n')){" ^
+    "out.textContent='';" ^
+    "const reader=r.body.getReader();" ^
+    "const dec=new TextDecoder();" ^
+    "let buf='';" ^
+    "while(true){" ^
+    "const {value,done}=await reader.read();" ^
+    "if(done)break;" ^
+    "buf+=dec.decode(value,{stream:true});" ^
+    "const parts=buf.split('\\n\\n');" ^
+    "buf=parts.pop();" ^
+    "for(const p of parts){" ^
     "const line=p.trim();" ^
     "if(!line.startsWith('data:'))continue;" ^
     "try{" ^
     "const j=JSON.parse(line.slice(5).trim());" ^
-    "if(j.t==='token')shown+=j.s;" ^
-    "else if(j.t==='error')shown+=(shown?'\\n':'')+'[error] '+j.s;" ^
-    "else if(j.t==='done'){" ^
-    "if(j.text&&!shown)shown=j.text;" ^
-    "}" ^
-    "}catch(_e){}}" ^
-    "out.textContent=shown||txt||'(empty response)';" ^
+    "if(j.t==='token')out.textContent+=j.s;" ^
+    "else if(j.t==='error')out.textContent+=(out.textContent?'\\n':'')+'[error] '+j.s;" ^
+    "else if(j.t==='done'&&j.text&&!out.textContent)out.textContent=j.text;" ^
+    "}catch(_e){}}}" ^
+    "if(!out.textContent)out.textContent='(empty response)';" ^
     "}catch(e){out.textContent=String(e);}" ^
     "finally{run.disabled=false;}" ^
     "};"
