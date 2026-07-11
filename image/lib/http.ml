@@ -1462,7 +1462,6 @@ let api_agent (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
             match List.assoc_opt "stream" items with
             | Some (`Bool b) -> b
             | Some (`String "1") | Some (`String "true") -> true
-            | Some (`Bool false) -> false
             | Some (`String "0") | Some (`String "false") -> false
             | _ -> true
           in
