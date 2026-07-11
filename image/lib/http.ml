@@ -111,6 +111,14 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
          li.todo-item .todo-title{flex:1 1 auto;min-width:0;word-break:break-word}
          li.todo-item.is-done .todo-title{text-decoration:line-through;color:#666}
          li.todo-item .todo-del button{width:auto;padding:.25rem .45rem;font-size:.85rem}
+         /* Bible chapter: only <sup> verse nums, not browser list markers */
+         ol.bible-chapter{list-style:none;padding-left:0;margin:.25rem 0 1rem}
+         ol.bible-chapter>li{margin:.35rem 0;line-height:1.45;padding-left:0}
+         ol.bible-chapter>li>sup{font-size:.75em;font-weight:700;margin-right:.2em;
+           color:#333;vertical-align:super}
+         .bible-go label,.bible-search label{display:inline-block;margin:.2rem .45rem .2rem 0}
+         .bible-go select,.bible-search input[type=text]{width:auto;min-width:6rem;
+           max-width:100%;margin-right:.35rem}
          /* Mobile: stack denser chrome, full-width controls */
          @media (max-width:40rem){
            main{padding:.5rem}

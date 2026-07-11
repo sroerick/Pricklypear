@@ -93,7 +93,13 @@
         (list
           (html/h1
             (string-append (as-str book) " " (as-str chapter)))
-          (html/tag "ol" (html/attr "class" "bible-chapter")
+          ;; list-style:none — <ol> markers + <sup> verse nums was double-numbering
+          (html/tag "ol"
+            (html/attrs
+              (list
+                (html/attr "class" "bible-chapter")
+                (html/attr "style"
+                  "list-style:none;padding-left:0;margin:.25rem 0")))
             (list/foldl
               (lambda (acc row) (string-append acc (bible/verse-li row)))
               ""
