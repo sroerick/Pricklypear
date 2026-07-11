@@ -165,7 +165,7 @@
         (html/script [] "%s"
           ("document.getElementById('outline').addEventListener('blur',function(e){" ^
            "var t=e.target;if(!t.dataset||!t.dataset.field)return;" ^
-           "var p='slug='+'%s'.replace(/\s/g,'')+'&op=set-'+t.dataset.field+'&node-id='+t.dataset.id;" ^
+           "var p='slug='+'%s'.replace(/\\s/g,'')+'&op=set-'+t.dataset.field+'&node-id='+t.dataset.id;" ^
            "p+='&'+t.dataset.field+'='+encodeURIComponent(t.innerText);" ^
            "fetch('/partials/notes-node-op',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:p});" ^
            "},true);") slug slug)))))
