@@ -42,11 +42,24 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
          header .meta{display:block;font-family:\"Courier New\",Courier,monospace;
                       font-size:.8rem;color:#333;margin:.25rem 0 .5rem}
          nav{display:flex;flex-wrap:wrap;gap:.35rem .5rem;align-items:center}
-         nav a{display:inline-block;padding:.45rem .55rem;min-height:2.5rem;
+         nav a,.menu-drop-btn{display:inline-block;padding:.45rem .55rem;min-height:2.5rem;
                line-height:1.5;border:1px solid #000;background:#c0c0c0;
-               color:#000;text-decoration:none;font-size:.9rem}
+               color:#000;text-decoration:none;font-size:.9rem;cursor:pointer;
+               list-style:none}
          nav a:visited{color:#000}
-         nav a:hover,nav a:focus{background:#fff}
+         nav a:hover,nav a:focus,.menu-drop-btn:hover{background:#fff}
+         /* Dropdown menus (details/summary — works without JS, mobile-friendly) */
+         .menu-drop{position:relative;display:inline-block;margin:0}
+         .menu-drop>summary{list-style:none}
+         .menu-drop>summary::-webkit-details-marker{display:none}
+         .menu-drop>summary::after{content:" ▾";font-size:.75em}
+         .menu-drop-panel{display:none;position:absolute;left:0;top:100%;
+           z-index:40;min-width:10rem;margin-top:2px;padding:.25rem;
+           background:#fff;border:2px solid #000;box-shadow:2px 2px 0 #808080}
+         .menu-drop[open]>.menu-drop-panel{display:block}
+         .menu-drop-panel a{display:block;width:100%;margin:0 0 .2rem;
+           white-space:nowrap}
+         .menu-drop-panel a:last-child{margin-bottom:0}
          main{padding:.75rem;max-width:52rem;margin:0 auto}
          h1{font-size:1.25rem;font-weight:700;margin:.25rem 0 .75rem;
             border-bottom:1px solid #000;padding-bottom:.25rem}

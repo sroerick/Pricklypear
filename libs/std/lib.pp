@@ -155,6 +155,43 @@
   (lambda (parts)
     (render-html (html/join parts))))
 
+;; --- menu/  (navbar trees as plain lists) ---
+;;
+;;   (menu/link "home" "/")
+;;   (menu/group "apps" (list (menu/link "todos" "/todos") …))
+;;   (menu/bar (list item1 item2 …))  →  HTML string for <nav>
+;;
+;; Leaves are ("link" label href); groups are ("group" label kids-list).
+
+(define menu/link
+  (lambda (label href)
+    (list "link" (as-str label) (as-str href))))
+
+(define menu/group
+  (lambda (label kids)
+    (list "group" (as-str label) kids)))
+
+(define menu/render
+  (lambda (item)
+    (let ((kind (car item))
+          (label (car (cdr item)))
+          (rest (car (cdr (cdr item)))))
+      (if (string-eq kind "link")
+          (html/a rest (html/text label))
+          (if (string-eq kind "group")
+              (html/tag "details" (html/attr "class" "menu-drop")
+                (html/join
+                  (list
+                    (html/tag "summary" (html/attr "class" "menu-drop-btn")
+                      (html/text label))
+                    (html/div (html/attr "class" "menu-drop-panel")
+                      (html/join (list/map menu/render rest))))))
+              "")))))
+
+(define menu/bar
+  (lambda (items)
+    (html/join (list/map menu/render items))))
+
 ;; --- data/ ---
 
 (define data/get-field
