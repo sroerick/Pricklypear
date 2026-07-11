@@ -21,6 +21,21 @@ borge issues filed, each tracking a real spec gap surfaced by actual
 builds — see the `.borge-bugs/` directory. The monitor command is
 externally rerunnable (see the bottom of `README.md`).
 
+## Live image eval (laptop / pi agent)
+
+The running image **is** the API. From this machine:
+
+```bash
+set -a; . ~/.config/pricklypear/env; set +a
+python3 "$PP_EVAL" -j '(whoami)'
+python3 "$PP_EVAL" -j '(load-library "todo")'
+```
+
+- Client: `scripts/pp_eval.py` → `POST /api/eval` (HTTP basic auth)
+- Secrets: `~/.config/pricklypear/env` (local only, mode 600 — never commit)
+- Pi skill: `pricklypear-eval` (`~/.pi/agent/skills/pricklypear-eval/SKILL.md`)
+- Prefer eval over inventing REST for todos/bible/ui/etc.
+
 ## Stack
 
 - OCaml 5.4.1 on the **`poohstack`** opam switch (NOT a dedicated
