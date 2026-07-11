@@ -53,3 +53,11 @@ Rules:
 (define ai/install
   (lambda (name body)
     (install-function name body)))
+
+;; Multi-turn tool agent: may list bindings, inspect, and install many functions.
+;; Example:
+;;   (ai/do "Create demo/inc and demo/dec pure lambdas, then summarize.")
+(define ai/do
+  (lambda (task)
+    (agent-task
+      (string-append (ai/context) "\n\nTask:\n" task))))

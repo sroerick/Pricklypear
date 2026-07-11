@@ -406,6 +406,205 @@ let current_fn_pretty (t : t) (name : string) : string Lwt.t =
        | _ -> Lwt.return "(lambda () #f)")
 
 (** Freeze AI rewrite into store (coding tool). mode: replace|wrap *)
+(* ---- Tool-using agent loop (multi-function tasks) ---- *)
+
+let json_string_field (j : Yojson.Safe.t) (k : string) : string option =
+  match j with
+  | `Assoc items ->
+      (match List.assoc_opt k items with
+       | Some (`String s) -> Some s
+       | Some (`Int i) -> Some (string_of_int i)
+       | Some (`Float f) -> Some (string_of_float f)
+       | Some (`Bool b) -> Some (string_of_bool b)
+       | Some other -> Some (Yojson.Safe.to_string other)
+       | None -> None)
+  | _ -> None
+
+let pp_value_short (v : Pricklypear_lisp.Ast.value) : string =
+  let s = Pricklypear_lisp.Reader.pp_value v in
+  if String.length s > 4000 then String.sub s 0 4000 ^ "…" else s
+
+let agent_tool_defs : Llm_client.tool_def list =
+  let open Llm_client in
+  let obj props required =
+    `Assoc
+      [ ("type", `String "object")
+      ; ("properties", `Assoc props)
+      ; ("required", `List (List.map (fun s -> `String s) required))
+      ]
+  in
+  [ { name = "list_bindings"
+    ; description = "List function/binding names visible in this image env"
+    ; parameters = obj [] []
+    }
+  ; { name = "list_routes"
+    ; description = "List HTTP routes and their handler function names"
+    ; parameters = obj [] []
+    }
+  ; { name = "inspect_function"
+    ; description = "Show the Lisp source body of a named function if present"
+    ; parameters =
+        obj
+          [ ("name",
+             `Assoc
+               [ ("type", `String "string")
+               ; ("description", `String "function name, e.g. demo/double or todo/page")
+               ])
+          ]
+          [ "name" ]
+    }
+  ; { name = "install_function"
+    ; description =
+        "Install a Lisp function on the current branch. body must be a lambda          s-expression only, e.g. (lambda (x) (* x 2)). Author becomes agent:<model>."
+    ; parameters =
+        obj
+          [ ("name",
+             `Assoc
+               [ ("type", `String "string")
+               ; ("description", `String "binding name to define")
+               ])
+          ; ("body",
+             `Assoc
+               [ ("type", `String "string")
+               ; ("description", `String "lambda s-expression source")
+               ])
+          ]
+          [ "name"; "body" ]
+    }
+  ; { name = "image_context"
+    ; description = "Return user, branch, and a short summary of this image"
+    ; parameters = obj [] []
+    }
+  ]
+
+let run_agent_tool (t : t) ~(name : string) ~(arguments : string)
+    : string Lwt.t =
+  let args_json =
+    try Yojson.Safe.from_string arguments with _ -> `Assoc []
+  in
+  match name with
+  | "list_bindings" ->
+      let names =
+        try
+          match Primitives.prim_list_bindings_fn ~env:t.env [] with
+          | Pricklypear_lisp.Ast.VList xs ->
+              List.filter_map
+                (function Pricklypear_lisp.Ast.VStr s -> Some s | _ -> None) xs
+              |> List.sort String.compare
+          | _ -> []
+        with _ -> []
+      in
+      Lwt.return (if names = [] then "(no bindings)" else String.concat "\n" names)
+  | "list_routes" ->
+      let rs =
+        Hashtbl.fold
+          (fun route handler acc -> (route ^ " -> " ^ handler) :: acc)
+          t.routes []
+        |> List.sort String.compare
+      in
+      Lwt.return (if rs = [] then "(no routes)" else String.concat "
+" rs)
+  | "inspect_function" ->
+      (match json_string_field args_json "name" with
+       | None -> Lwt.return "error: need name"
+       | Some n ->
+           let* pretty = current_fn_pretty t n in
+           Lwt.return pretty)
+  | "install_function" ->
+      (match json_string_field args_json "name", json_string_field args_json "body" with
+       | Some n, Some body ->
+           let* v = install_ai_function t ~name:n ~body_src:body in
+           Lwt.return (pp_value_short v)
+       | _ -> Lwt.return "error: need name and body")
+  | "image_context" ->
+      let names =
+        try
+          match Primitives.prim_list_bindings_fn ~env:t.env [] with
+          | Pricklypear_lisp.Ast.VList xs ->
+              List.filter_map
+                (function Pricklypear_lisp.Ast.VStr s -> Some s | _ -> None)
+                xs
+          | _ -> []
+        with _ -> []
+      in
+      let nshow = List.length names in
+      let sample = String.concat ", " (List.filteri (fun i _ -> i < 40) names) in
+      Lwt.return
+        (Printf.sprintf
+           "user=%s\nbranch=%s\nbinding_count=%d\nbindings_sample=%s"
+           t.manifest.username t.manifest.branch_name nshow sample)
+  | other ->
+      Lwt.return ("error: unknown tool " ^ other)
+
+(** Multi-turn agent with tools: can install many functions to finish a task. *)
+let agent_task
+    (t : t)
+    ?(max_steps = 8)
+    ?(on_event : Llm_client.agent_event -> unit = fun _ -> ())
+    ~(prompt : string)
+    () : Pricklypear_lisp.Ast.value Lwt.t =
+  let seed =
+    "You are the agent for a running Pricklypear multi-user Lisp OS image " ^
+    "(software, not a cactus).\n" ^
+    "You may call tools to inspect the image and install Lisp functions.\n" ^
+    "To create or update functions, use install_function with a pure lambda body.\n" ^
+    "You may call install_function multiple times to build a small package.\n" ^
+    "Prefer small pure functions; use package/name names (e.g. demo/hello).\n" ^
+    "When the task is done, reply with a short summary of what you installed " ^
+    "and how to call it — no tool call on the final message.\n" ^
+    "Do not invent that a function exists; use list_bindings / inspect_function."
+  in
+  let open Llm_client in
+  let msgs =
+    ref
+      [ Msg { role = System; content = seed }
+      ; Msg { role = User; content = prompt }
+      ]
+  in
+  let rec loop step =
+    if step > max_steps then begin
+      on_event (Fail "agent-task: max steps exceeded");
+      Lwt.return
+        (Pricklypear_lisp.Ast.VStr "agent-task: max steps exceeded")
+    end else
+      let* turn =
+        chat_turn ~temperature:0.2 ~max_tokens:2048
+          ~tools:agent_tool_defs ~messages:!msgs ()
+      in
+      match turn with
+      | Turn_error e ->
+          on_event (Fail e);
+          Lwt.return (Pricklypear_lisp.Ast.VStr ("agent-task error: " ^ e))
+      | Final text ->
+          on_event (Token text);
+          on_event Done;
+          Lwt.return (Pricklypear_lisp.Ast.VStr text)
+      | Need_tools { content; tool_calls } ->
+          (match content with
+           | Some c when String.trim c <> "" -> on_event (Token (c ^ "\n"))
+           | _ -> ());
+          msgs :=
+            !msgs
+            @ [ Assistant_tools { content; tool_calls } ];
+          let* () =
+            Lwt_list.iter_s
+              (fun (tc : tool_call) ->
+                on_event (Token (Printf.sprintf "[tool %s]\n" tc.name));
+                let* result = run_agent_tool t ~name:tc.name ~arguments:tc.arguments in
+                on_event (Token (Printf.sprintf "→ %s\n"
+                  (if String.length result > 200 then String.sub result 0 200 ^ "…"
+                   else result)));
+                msgs :=
+                  !msgs
+                  @ [ Tool_result { tool_call_id = tc.id; content = result } ];
+                Lwt.return_unit)
+              tool_calls
+          in
+          loop (step + 1)
+  in
+  loop 1
+
+
 let llm_rewrite (t : t) ~(mode : string) ~(name : string) ~(concept : string)
     : Pricklypear_lisp.Ast.value Lwt.t =
   let* current = current_fn_pretty t name in
@@ -634,6 +833,19 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
           Lwt.return
             (Pricklypear_lisp.Ast.VStr
                "agent: need 2 strings (seed, prompt)"));
+
+  (* (agent-task prompt) multi-turn tools; may install many functions. *)
+  Primitives.register tbl "agent-task"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr prompt ] ->
+          agent_task t ~prompt ()
+      | [ Pricklypear_lisp.Ast.VStr prompt; Pricklypear_lisp.Ast.VInt n ] ->
+          agent_task t ~max_steps:(Int64.to_int n) ~prompt ()
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr
+               "agent-task: need prompt-str [, max-steps int]"));
 
   (* (propose-function 'name "spec text") -> VStr name | error string.
      Calls OpenAI-compat LLM, defines the function on the CURRENT branch

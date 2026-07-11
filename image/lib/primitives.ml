@@ -581,6 +581,7 @@ let prim_summary (name : string) : string =
   | "rows" -> "list data rows"
   | "select-for-update" -> "lock row in transaction"
   | "agent" -> "AI portal: (agent seed prompt) -> text"
+  | "agent-task" -> "multi-turn tool agent; may install many functions"
   | "propose-function" -> "AI draft+install function on branch"
   | "install-function" -> "install AI body string as named function"
   | "llm-inner" | "llm-outer" | "llm-rewrite" | "llm-seed" ->

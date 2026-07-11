@@ -1547,6 +1547,38 @@ let api_agent (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
     Lwt.return_unit
   end
 
+let api_agent_task (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+  let* body = read_body reqd in
+  let prompt =
+    try
+      match Yojson.Safe.from_string body with
+      | `Assoc items ->
+          (match List.assoc_opt "prompt" items with
+           | Some (`String s) -> s
+           | _ ->
+               (match List.assoc_opt "task" items with
+                | Some (`String s) -> s
+                | _ -> ""))
+      | _ -> ""
+    with _ ->
+      Option.value (form_field body "prompt")
+        ~default:(Option.value (form_field body "task") ~default:"")
+  in
+  if String.trim prompt = "" then begin
+    json_response reqd
+      (`Assoc [ ("ok", `Bool false); ("error", `String "need prompt/task") ]);
+    Lwt.return_unit
+  end else
+    let* v = Session.agent_task session ~prompt () in
+    let text =
+      match v with
+      | Pricklypear_lisp.Ast.VStr s -> s
+      | _ -> Pricklypear_lisp.Reader.pp_value v
+    in
+    json_response reqd
+      (`Assoc [ ("ok", `Bool true); ("text", `String text) ]);
+    Lwt.return_unit
+
 let agent_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
   (* Live context so the model is grounded in THIS image, not botany. *)
   let* ctx_v =
@@ -1673,6 +1705,35 @@ let agent_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
         "finally{wbtn.disabled=false;}" ^
         "};"
       );
+
+      HTML.div [HTML.class_ "card"] [
+        HTML.h2 [] [txt "Task (tool agent)"];
+        HTML.p [HTML.class_ "muted"] [txt
+          "Multi-turn: can list bindings, inspect functions, and install several functions. Lisp: (ai/do \"…\")."];
+        HTML.textarea [HTML.name "task"; HTML.id "task"]
+          "%s" "Create pure functions demo/inc and demo/dec (int -> int), install both, then say how to call them.";
+        HTML.p [] [
+          HTML.button [HTML.type_ "button"; HTML.id "task_run"] [txt "Run task"];
+        ];
+        HTML.pre [HTML.id "task_out"; HTML.class_ "card"] [txt ""];
+      ];
+      HTML.script [] "%s" (
+        "const tout=document.getElementById('task_out');" ^
+        "const tbtn=document.getElementById('task_run');" ^
+        "tbtn.onclick=async()=>{" ^
+        "const prompt=document.getElementById('task').value;" ^
+        "tout.textContent='… (may take a while)'; tbtn.disabled=true;" ^
+        "try{" ^
+        "const r=await fetch('/api/agent-task',{method:'POST'," ^
+        "headers:{'content-type':'application/json'}," ^
+        "body:JSON.stringify({prompt})});" ^
+        "const j=await r.json();" ^
+        "tout.textContent=j.text||j.error||JSON.stringify(j);" ^
+        "}catch(e){tout.textContent=String(e);}" ^
+        "finally{tbtn.disabled=false;}" ^
+        "};"
+      );
+
     ]
   in
   html_response reqd body;
@@ -1852,6 +1913,7 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
   | `GET, "/repl" -> repl_page session reqd
   | `POST, "/api/eval" -> launch (api_eval session reqd)
   | `POST, "/api/agent" -> launch (api_agent session reqd)
+  | `POST, "/api/agent-task" -> launch (api_agent_task session reqd)
   | `POST, "/api/ai/propose" -> launch (ai_propose session reqd)
   | `GET, "/agent" -> launch (agent_page session reqd)
   | `POST, "/api/edit/create" -> launch (api_edit_create session reqd)

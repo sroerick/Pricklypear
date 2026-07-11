@@ -308,6 +308,205 @@ let agent_chat
         on_event (Fail e);
         Lwt.return (Error e))
 
+
+(** ---- Multi-turn chat + OpenAI tools (agent loop) ---- *)
+
+type role = System | User | Assistant | Tool
+
+type tool_call = {
+  id : string;
+  name : string;
+  arguments : string;  (* JSON object string *)
+}
+
+type chat_message =
+  | Msg of { role : role; content : string }
+  | Assistant_tools of { content : string option; tool_calls : tool_call list }
+  | Tool_result of { tool_call_id : string; content : string }
+
+type tool_def = {
+  name : string;
+  description : string;
+  parameters : Yojson.Safe.t;  (* JSON Schema object *)
+}
+
+type turn_result =
+  | Final of string
+  | Need_tools of { content : string option; tool_calls : tool_call list }
+  | Turn_error of string
+
+let role_to_string = function
+  | System -> "system"
+  | User -> "user"
+  | Assistant -> "assistant"
+  | Tool -> "tool"
+
+let message_to_json = function
+  | Msg { role; content } ->
+      `Assoc
+        [ ("role", `String (role_to_string role))
+        ; ("content", `String content)
+        ]
+  | Assistant_tools { content; tool_calls } ->
+      let tcs =
+        List.map
+          (fun (tc : tool_call) ->
+            `Assoc
+              [ ("id", `String tc.id)
+              ; ("type", `String "function")
+              ; ("function",
+                 `Assoc
+                   [ ("name", `String tc.name)
+                   ; ("arguments", `String tc.arguments)
+                   ])
+              ])
+          tool_calls
+      in
+      let base =
+        [ ("role", `String "assistant")
+        ; ("tool_calls", `List tcs)
+        ]
+      in
+      let base =
+        match content with
+        | Some c when c <> "" -> ("content", `String c) :: base
+        | _ -> ("content", `Null) :: base
+      in
+      `Assoc base
+  | Tool_result { tool_call_id; content } ->
+      `Assoc
+        [ ("role", `String "tool")
+        ; ("tool_call_id", `String tool_call_id)
+        ; ("content", `String content)
+        ]
+
+let tool_def_to_json (t : tool_def) : Yojson.Safe.t =
+  `Assoc
+    [ ("type", `String "function")
+    ; ("function",
+       `Assoc
+         [ ("name", `String t.name)
+         ; ("description", `String t.description)
+         ; ("parameters", t.parameters)
+         ])
+    ]
+
+let parse_tool_calls (msg : Yojson.Safe.t) : tool_call list =
+  let open Yojson.Safe.Util in
+  match msg |> member "tool_calls" with
+  | `Null -> []
+  | `List xs ->
+      List.filter_map
+        (fun tc ->
+          try
+            let id = tc |> member "id" |> to_string in
+            let fn = tc |> member "function" in
+            let name = fn |> member "name" |> to_string in
+            let arguments =
+              match fn |> member "arguments" with
+              | `String s -> s
+              | other -> Yojson.Safe.to_string other
+            in
+            Some { id; name; arguments }
+          with _ -> None)
+        xs
+  | _ -> []
+
+let parse_turn_response (body : string) : turn_result =
+  try
+    let json = Yojson.Safe.from_string body in
+    let open Yojson.Safe.Util in
+    match json |> member "choices" |> to_list with
+    | [] -> Turn_error "LLM: empty choices"
+    | choice :: _ ->
+        let msg = choice |> member "message" in
+        let finish =
+          match choice |> member "finish_reason" |> to_string_option with
+          | Some f -> f
+          | None -> ""
+        in
+        let content_opt =
+          match msg |> member "content" |> to_string_option with
+          | Some c when String.trim c <> "" -> Some c
+          | _ -> None
+        in
+        let tcs = parse_tool_calls msg in
+        if tcs <> [] || finish = "tool_calls" then
+          Need_tools { content = content_opt; tool_calls = tcs }
+        else
+          (match content_opt with
+           | Some c -> Final c
+           | None ->
+               (* some models put answer only in reasoning *)
+               (match msg |> member "reasoning_content" |> to_string_option with
+                | Some r when String.trim r <> "" -> Final r
+                | _ -> Turn_error (Printf.sprintf "LLM: empty content (finish=%s)" finish)))
+  with e ->
+    let trunc =
+      if String.length body > 300 then String.sub body 0 300 ^ "..." else body
+    in
+    Turn_error ("LLM parse error: " ^ Printexc.to_string e ^ " body=" ^ trunc)
+
+(** One non-streaming chat completions call over a full message list. *)
+let chat_turn
+    ?(temperature = 0.2)
+    ?(max_tokens = 4096)
+    ?(tools : tool_def list = [])
+    ~(messages : chat_message list)
+    () : turn_result Lwt.t =
+  let key = api_key () in
+  if key = "" then
+    Lwt.return (Turn_error "LLM_API_KEY not set")
+  else
+    let msgs = `List (List.map message_to_json messages) in
+    let fields =
+      [ ("model", `String (model ()))
+      ; ("messages", msgs)
+      ; ("temperature", `Float temperature)
+      ; ("max_tokens", `Int max_tokens)
+      ]
+    in
+    let fields =
+      if tools = [] then fields
+      else
+        ("tools", `List (List.map tool_def_to_json tools))
+        :: ("tool_choice", `String "auto")
+        :: fields
+    in
+    let body_str = Yojson.Safe.to_string (`Assoc fields) in
+    let url = api_base () ^ "/chat/completions" in
+    let tmp = Filename.temp_file "pp_llm_turn_" ".json" in
+    let oc = open_out tmp in
+    output_string oc body_str;
+    close_out oc;
+    let cmd =
+      Printf.sprintf
+        "curl -sS --max-time 180 -X POST %s \
+         -H %s -H %s --data-binary @%s 2>&1"
+        (shell_quote url)
+        (shell_quote "Content-Type: application/json")
+        (shell_quote ("Authorization: Bearer " ^ key))
+        (shell_quote tmp)
+    in
+    Printf.eprintf "[llm] TURN %s model=%s tools=%d msgs=%d\n%!"
+      url (model ()) (List.length tools) (List.length messages);
+    Lwt.catch
+      (fun () ->
+        let* stdout =
+          Lwt_process.pread ~timeout:200. (Lwt_process.shell cmd)
+        in
+        (try Sys.remove tmp with _ -> ());
+        if String.trim stdout = "" then
+          Lwt.return (Turn_error "LLM: empty curl response")
+        else if String.length stdout > 6
+                && String.sub stdout 0 5 = "curl " then
+          Lwt.return (Turn_error ("curl: " ^ String.trim stdout))
+        else
+          Lwt.return (parse_turn_response stdout))
+      (fun exn ->
+        (try Sys.remove tmp with _ -> ());
+        Lwt.return (Turn_error ("LLM transport: " ^ Printexc.to_string exn)))
+
 (** Ask the model to write one Lisp function body (s-expr).
     Returns source text for (define name <body>). *)
 let propose_function_source
