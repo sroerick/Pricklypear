@@ -1430,9 +1430,14 @@ let save_edit (session : Session.t) (path_name : string)
 let sse_write (body : [ `write ] Httpaf.Body.t) (event_json : string) : unit Lwt.t =
   let chunk = "data: " ^ event_json ^ "\n\n" in
   Httpaf.Body.write_string body chunk;
-  let promise, wakeup = Lwt.wait () in
-  Httpaf.Body.flush body (fun () -> Lwt.wakeup_later wakeup ());
-  promise
+  let promise, wakeup = Lwt.task () in
+  Httpaf.Body.flush body (fun () ->
+    if Lwt.state promise = Lwt.Sleep then Lwt.wakeup_later wakeup ());
+  (* Don't hang forever if the peer never acks the flush. *)
+  Lwt.pick
+    [ promise
+    ; (let* () = Lwt_unix.sleep 2.0 in Lwt.return_unit)
+    ]
 
 let api_agent (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
   let* body = read_body reqd in
@@ -1457,6 +1462,8 @@ let api_agent (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
             match List.assoc_opt "stream" items with
             | Some (`Bool b) -> b
             | Some (`String "1") | Some (`String "true") -> true
+            | Some (`Bool false) -> false
+            | Some (`String "0") | Some (`String "false") -> false
             | _ -> true
           in
           (seed, prompt, stream)
@@ -1479,69 +1486,66 @@ let api_agent (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
     Lwt.return_unit
   end else if not want_stream then begin
     let* v = Session.agent session ~seed ~prompt () in
-    let text = Pricklypear_lisp.Reader.pp_value v in
+    let text =
+      match v with
+      | Pricklypear_lisp.Ast.VStr s -> s
+      | _ -> Pricklypear_lisp.Reader.pp_value v
+    in
     json_response reqd
       (`Assoc [ ("ok", `Bool true); ("text", `String text) ]);
     Lwt.return_unit
   end else begin
-    let headers =
-      Httpaf.Headers.of_list
-        [ ("content-type", "text/event-stream; charset=utf-8")
-        ; ("cache-control", "no-cache")
-        ; ("connection", "keep-alive")
-        ]
-    in
-    let resp = Httpaf.Response.create ~headers `OK in
-    let body_w = Httpaf.Reqd.respond_with_streaming reqd resp in
-    let queue : string Queue.t = Queue.create () in
-    let cond = Lwt_condition.create () in
-    let closed = ref false in
-    let push s =
-      Queue.add s queue;
-      Lwt_condition.signal cond ()
-    in
+    (* Prefer a single-thread stream writer: collect events then emit.
+       Avoids races with Lwt.async + condition, and works for fast
+       failures like missing LLM_API_KEY. *)
+    let events : string list ref = ref [] in
+    let push j = events := j :: !events in
     let on_event = function
       | Llm_client.Token tok ->
           push (Yojson.Safe.to_string
                   (`Assoc [ ("t", `String "token"); ("s", `String tok) ]))
       | Llm_client.Done ->
-          push (Yojson.Safe.to_string (`Assoc [ ("t", `String "done") ]));
-          closed := true;
-          Lwt_condition.signal cond ()
+          push (Yojson.Safe.to_string (`Assoc [ ("t", `String "done") ]))
       | Llm_client.Fail e ->
           push (Yojson.Safe.to_string
-                  (`Assoc [ ("t", `String "error"); ("s", `String e) ]));
-          closed := true;
-          Lwt_condition.signal cond ()
+                  (`Assoc [ ("t", `String "error"); ("s", `String e) ]))
     in
-    (* Run agent in background; stream writer drains queue. *)
-    Lwt.async (fun () ->
-      let* v =
-        Session.agent session ~stream:true ~on_event ~seed ~prompt ()
-      in
-      (* Ensure done if runner only returned Ok without Done (non-stream path). *)
-      (match v with
-       | Pricklypear_lisp.Ast.VStr s when not !closed ->
+    let* v =
+      Session.agent session ~stream:true ~on_event ~seed ~prompt ()
+    in
+    (match v with
+     | Pricklypear_lisp.Ast.VStr s ->
+         let already =
+           List.exists
+             (fun j ->
+               try
+                 match Yojson.Safe.from_string j with
+                 | `Assoc items ->
+                     (match List.assoc_opt "t" items with
+                      | Some (`String "done") | Some (`String "error") -> true
+                      | _ -> false)
+                 | _ -> false
+               with _ -> false)
+             !events
+         in
+         if not already then
            push (Yojson.Safe.to_string
-                   (`Assoc [ ("t", `String "done"); ("text", `String s) ]));
-           closed := true;
-           Lwt_condition.signal cond ()
-       | _ -> ());
-      Lwt.return_unit);
-    let rec drain () =
-      if Queue.is_empty queue then
-        if !closed then begin
-          Httpaf.Body.close_writer body_w;
-          Lwt.return_unit
-        end else
-          let* () = Lwt_condition.wait cond in
-          drain ()
-      else
-        let ev = Queue.take queue in
-        let* () = sse_write body_w ev in
-        drain ()
+                   (`Assoc [ ("t", `String "done"); ("text", `String s) ]))
+     | _ -> ());
+    let payload =
+      String.concat ""
+        (List.rev_map (fun j -> "data: " ^ j ^ "\n\n") !events)
     in
-    drain ()
+    let headers =
+      Httpaf.Headers.of_list
+        [ ("content-type", "text/event-stream; charset=utf-8")
+        ; ("cache-control", "no-cache")
+        ; ("content-length", string_of_int (String.length payload))
+        ]
+    in
+    let resp = Httpaf.Response.create ~headers `OK in
+    Httpaf.Reqd.respond_with_string reqd resp payload;
+    Lwt.return_unit
   end
 
 let agent_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit =
@@ -1551,29 +1555,33 @@ let agent_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit =
     "run.onclick=async()=>{" ^
     "const seed=document.getElementById('seed').value;" ^
     "const prompt=document.getElementById('prompt').value;" ^
-    "out.textContent='';" ^
+    "out.textContent='…'; run.disabled=true;" ^
     "try{" ^
     "const r=await fetch('/api/agent',{method:'POST'," ^
     "headers:{'content-type':'application/json'}," ^
     "body:JSON.stringify({seed,prompt,stream:true})});" ^
-    "const reader=r.body.getReader();" ^
-    "const dec=new TextDecoder();" ^
-    "let buf='';" ^
-    "while(true){" ^
-    "const {value,done}=await reader.read();" ^
-    "if(done)break;" ^
-    "buf+=dec.decode(value,{stream:true});" ^
-    "const parts=buf.split('\\n\\n');" ^
-    "buf=parts.pop();" ^
-    "for(const p of parts){" ^
+    "if(!r.ok){out.textContent='HTTP '+r.status;return;}" ^
+    "const ct=r.headers.get('content-type')||'';" ^
+    "if(ct.indexOf('application/json')>=0){" ^
+    "const j=await r.json();" ^
+    "out.textContent=(j.text||j.error||JSON.stringify(j));" ^
+    "return;}" ^
+    "const txt=await r.text();" ^
+    "let shown='';" ^
+    "for(const p of txt.split('\\n\\n')){" ^
     "const line=p.trim();" ^
     "if(!line.startsWith('data:'))continue;" ^
+    "try{" ^
     "const j=JSON.parse(line.slice(5).trim());" ^
-    "if(j.t==='token')out.textContent+=j.s;" ^
-    "if(j.t==='error')out.textContent+='\\n[error] '+j.s;" ^
-    "if(j.t==='done'&&j.text&&!out.textContent)out.textContent=j.text;" ^
-    "}}}" ^
-    "catch(e){out.textContent=String(e);}" ^
+    "if(j.t==='token')shown+=j.s;" ^
+    "else if(j.t==='error')shown+=(shown?'\\n':'')+'[error] '+j.s;" ^
+    "else if(j.t==='done'){" ^
+    "if(j.text&&!shown)shown=j.text;" ^
+    "}" ^
+    "}catch(_e){}}" ^
+    "out.textContent=shown||txt||'(empty response)';" ^
+    "}catch(e){out.textContent=String(e);}" ^
+    "finally{run.disabled=false;}" ^
     "};"
   in
   let body =
