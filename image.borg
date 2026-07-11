@@ -302,41 +302,24 @@
   )
   (subsection htmx-interface
    (doc "httpaf-lwt-unix + pure-html, routes AS functions in the store")
-   (implements image/lib/http.ml auth/lib/http.ml)
+   (implements image/lib/http.ml auth/lib/http.ml image/lib/session.ml image/lib/primitives.ml)
    (status partial)
-   (* agent note (|it23: htmx-interface is partially implemented.
-                    SYSTEM pages (always present in OCaml): / (hello
-                    world index with nav links), /health (JSON),
-                    /branches (list all branch rows), /bindings (list
-                    function_defs via recursive-CTE), /binding/<name>
-                    (single def pretty-print), /types (list type_defs
-                    via recursive-CTE). All built in image/lib/http.ml
-                    using httpaf-lwt-unix + pure-html with Hx.* htmx
-                    attrs (it11, it14). /inspect/:id is NOT built.
-                    USER pages: `(route "/path" 'handler)` prim registers
-                    in view_bindings + live-updates session.routes
-                    hashtable (it9). Route handler's return value is
-                    dispatched in http.ml: tagged VStr ('__html__:' prefix
-                    from render-html) → raw HTML via txt ~raw:true
-                    (it14); bare VStr → text in <p>; anything else →
-                    pretty-printed in <pre>.
-                    NOT IMPLEMENTED: the htmx attribute helpers as Lisp
-                    prims — (hx-get url), (hx-post url), etc. are NOT
-                    Lisp prims yet (v1 emits htmx attributes directly
-                    in the raw HTML string passed to render-html).
-                    Matches spec principle 'routes ARE functions in the
-                    store'; 'pure-html for HTML generation (use Hx.* not
-                    raw strings)' is honored at the OCaml level.
-                    Marked partial: /inspect/:id + (hx-get/post) Lisp
-                    prims are the unbuilt pieces. Product surfaces that
-                    grow out of these pages are now owned by planned
-                    subsections system-browser, browser-repl,
-                    function-editor, inspector (it31).|) *)
+   (* agent note (|it23 baseline: system pages + GET-only user routes +
+     render-html dispatch shipped. it33 PLAN: user-route POST +
+     request-context prims + redirect return (see details USER-ROUTE
+     HTTP METHODS / REQUEST CONTEXT). Dogfood: interactive todo recipe
+     forms. hx-* Lisp prims and Solo5 HTTP remain deferred.|) *)
    (verify
     (build "dune build image")
     (smoke "/tmp/pp_ui_it11.py — system pages / /branches / /bindings / /binding/<name>")
     (smoke "/tmp/pp_route_it9.py — (route ...) registers + dispatches user pages")
-    (smoke "/tmp/pp_types_it14.py — /types page + render-html tagged VStr dispatch"))
+    (smoke "/tmp/pp_types_it14.py — /types page + render-html tagged VStr dispatch")
+    (smoke "GET user route still calls zero-arg handler (compat)")
+    (smoke "POST user route hits same path handler; (request-method) => POST")
+    (smoke "POST form-urlencoded body: (request-param \"title\") returns field")
+    (smoke "GET query: (request-param \"q\") returns query value")
+    (smoke "(redirect \"/todos\") => 303 Location: /todos")
+    (smoke "POST /api/recipe/todo then POST /todos title=… creates row + redirects; GET /todos lists it"))
    (details
     (doc (|
          The image's htmx endpoint serves two kinds of
@@ -352,9 +335,9 @@
 
          2. USER pages (defined as functions in the store):
             registered via (route "/path" fn-name).
-            The route handler function takes the request
-            (params, body) and returns a value the
-            system renders (an HTML node, a redirect, etc).
+            The route handler runs with a REQUEST CONTEXT
+            (method, path, params) and returns a value the
+            system renders (HTML, redirect, text, etc).
 
          Routes ARE functions in the store. Adding a route
          = (route "/foo" 'foo-handler). This makes the
@@ -366,15 +349,174 @@
          (per poohstack convention; use Hx.* not raw
          strings at the OCaml layer).
 
-         v1 SHIPPED:
+         =========================================================
+         USER-ROUTE HTTP METHODS (it33 — PLAN, not yet shipped)
+         =========================================================
+
+         GOAL: Lisp pages can accept browser forms. Todo and every
+         other dogfood app need POST without leaving the image.
+
+         METHODS on user routes (view_bindings paths):
+         - GET  — already shipped (call handler, render value)
+         - POST — REQUIRED this plan
+         - PUT / PATCH / DELETE — deferred (not needed for form
+           dogfood; may map later; do not invent now)
+
+         MATCHING: exact path string only (status quo). No path
+         params (/todos/:id) in this plan. Method does NOT select
+         a different handler — same route path → same handler name
+         for GET and POST. Handler branches on (request-method).
+
+         SYSTEM routes keep exclusive claim on their paths:
+         /api/*, /edit/*, /health, /bindings, … never fall through
+         to user routes (status quo dispatch order).
+
+         BODY (POST):
+         - Read full body (reuse existing body reader in http.ml).
+         - Content-Type application/x-www-form-urlencoded:
+           parse into string key→value map (reuse form_field style
+           decode; empty values allowed; last wins on dup keys).
+         - Other content-types: raw body available via
+           (request-body); params map empty unless also on query.
+         - Size: soft cap 64 KiB for v1; oversize → 413 text error
+           (do not eval handler).
+
+         QUERY (GET and POST):
+         - Parse target query string into the same params map.
+         - Conflict rule: form field WINS over query key of same
+           name (POST body is the intentional write path).
+
+         =========================================================
+         REQUEST CONTEXT (dynamic, handler-scoped)
+         =========================================================
+
+         Design choice: DYNAMIC BINDING, not a mandatory handler
+         argument. Zero-arg handlers keep working:
+           (define hi-page (lambda () (render-html "…")))
+         Interactive handlers read request via prims while the
+         HTTP dispatch is inside call_handler:
+
+           (request-method)     -> VStr "GET" | "POST"
+           (request-path)       -> VStr path without query
+           (request-param k)    -> VStr value | VNil if missing
+           (request-params)     -> VStr JSON object of all params
+           (request-body)       -> VStr raw body ("" on GET)
+
+         Implementation sketch (mirrors with-transaction scope):
+         - Session.t gains mutable current_request : request option
+         - type request = {
+             method_ : [`GET|`POST];
+             path : string;
+             params : (string * string) list;  (* or Hashtbl *)
+             body : string;
+           }
+         - http.ml builds request from meth + path + query + body
+         - Session.call_handler ~request sets current_request,
+           runs (handler-name) zero-arg apply, clears in finalize
+         - Prims registered at session-make (image layer, like
+           whoami) read Session.current_request; if None:
+             (request-method) etc raise clean User_error
+             "no active request" (REPL/eval outside HTTP)
+
+         WHY NOT pass (lambda (req) …) as required arity:
+         - Breaks every existing zero-arg page (hello, current todo)
+         - Forces a VDict / record convention early
+         - Dynamic prims match (whoami) / with-transaction style
+         Optional later: also pass req dict as single arg if handler
+         arity is 1 — NOT in this plan.
+
+         =========================================================
+         HANDLER RETURN VALUES
+         =========================================================
+
+         Keep existing render rules, add redirect:
+
+         1. render-html tagged VStr (__html__:…)
+            -> 200 text/html, body = raw HTML inside chrome
+            (status quo; chrome wrap stays for full pages)
+         2. bare VStr -> 200 text/html, <p> escaped text
+         3. other values -> 200 text/html, <pre> pp_value
+         4. NEW: (redirect path) -> tagged VStr __redirect__:path
+            -> HTTP 303 See Other, Location: path, empty/minimal body
+            Path must be absolute-on-host ("/todos") for v1;
+            reject off-site (no "http://…") — User_error at prim
+            or 500 if somehow returned.
+
+         PRG: POST handlers that mutate SHOULD (redirect …) so
+         refresh does not re-POST. Dogfood todo does this.
+
+         Htmx partials: if request has header HX-Request: true,
+         v1 MAY still wrap chrome (acceptable); optional later:
+         skip chrome when HX-Request. Not required for form POST
+         dogfood.
+
+         Handler errors (Interp_error / missing handler):
+         - GET: 500 HTML error page (status quo)
+         - POST: 500 HTML error page (same); do not redirect
+
+         =========================================================
+         DOGFOOD: INTERACTIVE TODO (acceptance for this plan)
+         =========================================================
+
+         Upgrade Session.recipe_todo so /todos is a real form app:
+
+         Type: todo-item {title, done}  (unchanged)
+
+         Functions (illustrative; exact HTML may vary):
+           todo/add     — (lambda (title) (create …))
+           todo/list    — (lambda () (rows 'todo-item 50))
+           todo/toggle  — flip done via update-field / get+dict-set
+           todo/page    — method-aware page:
+             POST: (todo/add (request-param "title"))
+                   then (redirect "/todos")
+             GET:  render-html with:
+                   - <form method="POST" action="/todos">
+                       <input name="title"> + submit
+                   - list of items (title + done)
+                   - optional small POST forms/buttons for toggle
+                     (same path with action=toggle&id=… OR
+                      separate route /todos/toggle — pick one in make;
+                      prefer same-path + request-param "action")
+
+         Route: (route "/todos" "todo/page") only is enough if
+         action dispatch is param-based. Extra routes OK if clearer.
+
+         Smoke path:
+           POST /api/recipe/todo
+           POST /todos  title=milk   -> 303 /todos
+           GET  /todos               -> body contains milk
+           Functions browser shows package todo
+
+         =========================================================
+         MAKE CHECKLIST (implementation order)
+         =========================================================
+
+         1. Session.request type + current_request field + accessors
+         2. Register request-* and redirect prims (session-scoped)
+         3. http.ml: parse query+form into request; allow POST on
+            user-route fallthrough; call_handler ~request
+         4. http.ml: dispatch redirect sentinel -> 303 Location
+         5. Upgrade recipe_todo + home copy if needed
+         6. Smoke script (e.g. /tmp/pp_post_routes_it33.py)
+         7. Keep GET zero-arg hello recipe green
+
+         OUT OF SCOPE THIS PLAN:
+         - path parameters (/items/:id)
+         - multipart file upload
+         - JSON body auto-parse to dict prims
+         - CSRF tokens (localhost/dev trust; file issue if prod needs)
+         - (hx-get)/(hx-post) Lisp prims (still embed in HTML strings)
+         - Solo5 / gluten-mirage HTTP
+         - PUT/PATCH/DELETE user routes
+
+         v1 SHIPPED (pre-it33):
          - httpaf-lwt-unix HTTP server
          - system pages listed above (except /inspect)
-         - user routes via (route ...) + render-html
+         - user routes via (route ...) + render-html (GET only)
 
-         DEFERRED:
+         DEFERRED beyond it33:
          - /inspect/:id (see image.inspector)
-         - (hx-get)/(hx-post) Lisp prims (authors currently
-           embed htmx attrs inside render-html strings)
+         - (hx-get)/(hx-post) Lisp prims
          - Solo5 HTTP via gluten-mirage + httpaf
          - richer system-browser chrome (own subsection)
    |))
@@ -440,10 +582,13 @@
     (smoke "nav has no /edit/hello; Pages links to /pages")
     (smoke "GET /pages columns: page URL + handler function")
     (smoke "GET /page/hello shows route + handler + callee list")
-    (smoke "GET /bindings groups functions by package prefix")
-    (smoke "GET /bindings?q=todo filters names")
-    (smoke "GET /bindings shows used-by page links when handler/callee of a route")
-    (smoke "define todo/list + call (todo/list) persists and appears under package todo"))
+    (smoke "GET /bindings lists packages including (kernel) and (root)/workspace pkgs")
+    (smoke "GET /bindings?pkg=(kernel) lists primitives e.g. create, +")
+    (smoke "GET /bindings?pkg=(kernel)&fn=create shows read-only prim docs")
+    (smoke "GET /bindings?pkg=todo lists todo/* functions")
+    (smoke "GET /bindings?pkg=todo&fn=list shows function detail + edit link")
+    (smoke "GET /bindings?q=todo filters; mobile-width usable (nav wraps)")
+    (smoke "define todo/list + call (todo/list); used-by shows /todos when routed"))
    (details
     (doc (|
          VOCABULARY (must not conflate):
@@ -461,34 +606,50 @@
          - /pages list + /page/<path> inspector
          - Flat /bindings table (name, effects, author, edit, inspect)
 
-         REQUIRED NEXT — Functions browser (/bindings):
-         1. Group rows by package prefix (see image.packages).
-            Root/unprefixed names under label "(root)".
-            Nested prefixes allowed (todo/ui/row -> package todo/ui).
-            Default grouping key = all segments except last
-            (package_of_name); optional later: group by first segment only.
-         2. Search: query param q= or htmx filter on name/package/author.
-         3. Filters (minimal): author contains agent: | not agent;
-            optional effect badge filter if cheap.
-         4. Column or detail: "used by pages" — reverse of page
-            call graph (static). List route links to /page/<path>
-            for every page whose handler or callee set includes this
-            function. Empty -> "—".
-         5. Create affordances:
-            - "New function" with optional package field + local name
-              -> full name package/local (or local if package empty)
-            - Per-package "+ in todo" -> /edit/todo/… or create form
-              prefilled package=todo
-         6. Row actions: edit, inspect, used-by pages (links).
-         7. Keep URL /bindings (nav label Functions); do not invent
-            /edit/hello-style fake targets.
+         FUNCTIONS BROWSER (/bindings) — Smalltalk-ish drilldown:
+
+         PHILOSOPHY:
+         - Majority of programs are Lisp bindings in function_defs.
+         - Kernel primitives are OCaml (performant, trusted); still
+           BROWSABLE so the system is legible, but read-only.
+         - Optional future: mark some OCaml modules as "image libs"
+           for hot paths; not required for this cut.
+
+         MOBILE FIRST (three-step drilldown, not three columns):
+         URL state via query params (works on phones):
+           Step 1  GET /bindings
+                   → list packages only (big tap targets)
+                   Always includes virtual package "(kernel)"
+                   Workspace packages from prefix grouping + "(root)"
+           Step 2  GET /bindings?pkg=todo
+                   → list functions in that package
+                   Kernel: list prim names in catalog
+           Step 3  GET /bindings?pkg=todo&fn=list
+                   → detail: source/docs, effects, author, used-by,
+                     edit/inspect links (workspace) OR read-only
+                     kernel doc (primitives)
+         Desktop MAY show a wider table when no pkg selected
+         (grouped overview), but pkg/fn drilldown is the canonical
+         model and must work at ~390px width.
+         Back links: Functions → package → (back to packages).
+
+         KERNEL CATALOG:
+         - Virtual package name: "(kernel)" (not a real binding prefix)
+         - Source: prim registry + short docs (name, summary, effects)
+         - Kind badge: primitive | function
+         - No Save on primitives; link to About/docs if needed
+
+         WORKSPACE (existing + keep):
+         - Group by package_of_name; search q=; author filter
+         - used-by pages; create package+local form
+         - Edit only for function_defs rows
 
          DEFERRED:
          - Data rows browser by type
-         - Branch switcher control
-         - Fork/merge affordances in UI
-         - Two-pane package sidebar (nice-to-have after grouped table)
+         - Branch switcher; fork/merge UI
+         - True three-column desktop layout (optional later)
          - Import/require, private symbols, rename-with-rewrite
+         - Authoring new prims from the UI
     |))
    )
   )
@@ -546,6 +707,25 @@
          - A "library" is a prefix + optional recipe that seeds
            functions/types/routes under that prefix (e.g. todo/).
          - Not a separate schema object in this plan.
+
+         STD CUT (2026-07-11):
+         A. Kernel prims (OCaml, browsable under (kernel)):
+            Math: div, mod, abs, min, max
+            String: string-length, substring, string-contains?
+            List: map, filter, foldl, append, reverse, nth
+            (map/filter/foldl apply VLambda/VPrim via Eval.apply)
+         B. Lisp seeds on system/main if missing (author system):
+            html/wrap — simple page shell helper using render-html
+            data/field — dict-get sugar if useful
+            llm/help — short doc string binding (optional)
+         C. Dogfood recipe POST /api/recipe/todo:
+            deftype todo-item; todo/list, todo/add, todo/page;
+            route /todos; package todo visible in Functions browser.
+            Interactive form POST on /todos requires image.htmx-interface
+            request-context + POST user routes (it33 plan). Until that
+            ships, recipe may still be REPL-write + GET dump; after it33,
+            todo/page is method-aware (POST add + redirect, GET form UI).
+         Majority of app code remains Lisp; kernel stays thin OCaml.
     |))
    )
   )

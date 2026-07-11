@@ -192,6 +192,38 @@ let form_field (body : string) (name : string) : string option =
   in
   find pairs
 
+let parse_form_body (body : string) : (string * string) list =
+  if body = "" then []
+  else
+    String.split_on_char '&' body
+    |> List.filter_map (fun p ->
+           if p = "" then None
+           else
+             match String.split_on_char '=' p with
+             | k :: vs ->
+                 Some (url_decode k, url_decode (String.concat "=" vs))
+             | _ -> None)
+
+(** Merge query + form params; form fields win on key conflict (it33). *)
+let merge_params ~(query : (string * string) list)
+    ~(form : (string * string) list) : (string * string) list =
+  let tbl = Hashtbl.create 16 in
+  List.iter (fun (k, v) -> Hashtbl.replace tbl k v) query;
+  List.iter (fun (k, v) -> Hashtbl.replace tbl k v) form;
+  Hashtbl.fold (fun k v acc -> (k, v) :: acc) tbl []
+
+let max_user_body_bytes = 64 * 1024
+
+let redirect_response (reqd : Httpaf.Reqd.t) (location : string) : unit =
+  let headers =
+    Httpaf.Headers.of_list
+      [ ("location", location)
+      ; ("content-length", "0")
+      ]
+  in
+  let resp = Httpaf.Response.create ~headers `See_other in
+  Httpaf.Reqd.respond_with_string reqd resp ""
+
 let list_branches_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
   let* branches = Store.list_branches (Session.store session) in
   let rows =
@@ -442,7 +474,7 @@ let home_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit =
       HTML.div [HTML.class_ "card"] [
         HTML.h2 [] [txt "Library: todo package"];
         HTML.p [] [txt
-          "Seeds package todo/ (add, list, page), type todo-item, and route /todos. Browse it under Functions → todo."];
+          "Seeds package todo/ (add, list, page), type todo-item, and route /todos with POST form add + redirect. Browse it under Functions → todo."];
         HTML.form [HTML.method_ `POST; HTML.action "/api/recipe/todo";
                    HTML.enctype `urlencoded] [
           HTML.button [HTML.type_ "submit"] [txt "Install todo library"];
@@ -1574,49 +1606,102 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
         Packages.name_decode (String.sub path 6 (String.length path - 6))
       in
       launch (save_edit session name reqd)
-  | _, _ ->
-      (* User routes only on GET for now *)
+  | ((`GET | `POST) as umeth), _ ->
+      (* User routes: GET + POST (it33). Same path → same handler;
+         request-* prims expose method/params for branching. *)
       (match Session.lookup_route session path with
-       | Some handler_name when meth = `GET ->
+       | Some handler_name ->
            let page () : unit Lwt.t =
-             let* result = Session.call_handler session handler_name in
-             (match result with
-              | Some value ->
-                  let body =
-                    match Primitives.is_raw_html value with
-                    | Some raw_html ->
-                        chrome ~session ~title:path [
-                          txt ~raw:true "%s" raw_html;
-                        ]
-                    | None ->
-                        (match value with
-                         | Pricklypear_lisp.Ast.VStr s ->
-                             chrome ~session ~title:path [
-                               HTML.p [] [txt "%s" s];
-                             ]
-                         | _ ->
-                             let rendered =
-                               Pricklypear_lisp.Reader.pp_value value
-                             in
-                             chrome ~session ~title:path [
-                               HTML.pre [] [txt "%s" rendered];
-                             ])
-                  in
-                  html_response reqd body;
-                  Lwt.return_unit
-              | None ->
-                  html_response reqd ~status:`Internal_server_error
-                    (chrome ~session ~title:"Route handler error" [
-                       HTML.p [] [txt "handler %s returned no value" handler_name];
-                     ]);
-                  Lwt.return_unit)
+             let* body_str =
+               match umeth with
+               | `POST -> read_body reqd
+               | `GET -> Lwt.return ""
+             in
+             if String.length body_str > max_user_body_bytes then begin
+               text_response reqd ~status:`Payload_too_large
+                 ~content_type:"text/plain"
+                 "request body too large (max 64KiB)";
+               Lwt.return_unit
+             end else begin
+               let query = parse_query target in
+               let form =
+                 match umeth with
+                 | `GET -> []
+                 | `POST ->
+                     let ct =
+                       match
+                         Httpaf.Headers.get req.headers "content-type"
+                       with
+                       | Some s -> s
+                       | None -> ""
+                     in
+                     if String.length ct >= 33
+                        && String.sub ct 0 33
+                           = "application/x-www-form-urlencoded"
+                        || ct = ""
+                           && String.contains body_str '='
+                     then parse_form_body body_str
+                     else []
+               in
+               let params = merge_params ~query ~form in
+               let method_ : Session.http_method =
+                 match umeth with `GET -> `GET | `POST -> `POST
+               in
+               let request : Session.request =
+                 { method_; path; params; body = body_str }
+               in
+               let* result =
+                 Session.call_handler session ~request handler_name
+               in
+               (match result with
+                | Some value ->
+                    (match Primitives.is_redirect value with
+                     | Some loc ->
+                         redirect_response reqd loc;
+                         Lwt.return_unit
+                     | None ->
+                         let body =
+                           match Primitives.is_raw_html value with
+                           | Some raw_html ->
+                               chrome ~session ~title:path [
+                                 txt ~raw:true "%s" raw_html;
+                               ]
+                           | None ->
+                               (match value with
+                                | Pricklypear_lisp.Ast.VStr s ->
+                                    chrome ~session ~title:path [
+                                      HTML.p [] [txt "%s" s];
+                                    ]
+                                | _ ->
+                                    let rendered =
+                                      Pricklypear_lisp.Reader.pp_value value
+                                    in
+                                    chrome ~session ~title:path [
+                                      HTML.pre [] [txt "%s" rendered];
+                                    ])
+                         in
+                         html_response reqd body;
+                         Lwt.return_unit)
+                | None ->
+                    html_response reqd ~status:`Internal_server_error
+                      (chrome ~session ~title:"Route handler error" [
+                         HTML.p []
+                           [txt "handler %s returned no value" handler_name];
+                       ]);
+                    Lwt.return_unit)
+             end
            in
            launch (page ())
-       | _ ->
+       | None ->
            html_response reqd ~status:`Not_found
              (chrome ~session ~title:"Not found" [
                 HTML.p [] [txt "no route for %s" path];
               ]))
+  | _, _ ->
+      html_response reqd ~status:`Not_found
+        (chrome ~session ~title:"Not found" [
+           HTML.p [] [txt "no route for %s" path];
+         ])
 
 let error_handler (_sockaddr : Unix.sockaddr)
     ?(request : Httpaf.Request.t option)

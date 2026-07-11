@@ -10,6 +10,17 @@
       - Switching branch (checkout) keeps REPL locals but changes visibility. *)
 open Lwt.Syntax
 
+(** Per-request HTTP context for user-route handlers (it33).
+    Bound only while [call_handler] runs; request-* prims read this. *)
+type http_method = [ `GET | `POST ]
+
+type request = {
+  method_ : http_method;
+  path : string;
+  params : (string * string) list;  (** form fields win over query *)
+  body : string;
+}
+
 type t = {
   mutable manifest : Pricklypear_common.Manifest.t;
   store : Store.t;
@@ -23,6 +34,8 @@ type t = {
   mutable started_at : float;
   (** Kernel prim catalog for Functions browser: (name, summary) list. *)
   mutable kernel_catalog : (string * string) list;
+  (** Active HTTP request for user-route dispatch; None in REPL. *)
+  mutable current_request : request option;
 }
 
 (* Asynchronously load all persisted function_defs for this branch
@@ -315,13 +328,17 @@ let seed_stdlib (t : t) : unit Lwt.t =
                Lwt.return_unit))
     stdlib_seeds
 
-(** Dogfood: todo package + type + page. *)
+(** Dogfood: interactive todo package (it33 POST + request context). *)
 let recipe_todo (t : t) : (string, string) result Lwt.t =
   let* _ =
     Crud.deftype t.store
       ~args:[ Pricklypear_lisp.Ast.VStr "todo-item"; Pricklypear_lisp.Ast.VStr "title"; Pricklypear_lisp.Ast.VStr "done" ]
       ~author:t.manifest.username
   in
+  (* Method-aware /todos:
+       POST + title -> create + redirect /todos (PRG)
+       GET          -> form + list dump
+     Toggle deferred (optional in plan); form add is the POST acceptance. *)
   let seeds =
     [ ( "todo/add"
       , "(lambda (title) (create 'todo-item (dict-set (dict-set \"{}\" \"title\" title) \"done\" \"false\")))"
@@ -330,7 +347,18 @@ let recipe_todo (t : t) : (string, string) result Lwt.t =
       , "(lambda () (rows 'todo-item 50))"
       )
     ; ( "todo/page"
-      , "(lambda () (render-html (string-append \"<h1>Todos</h1><p>Use (todo/add \\\"…\\\") in the REPL, then refresh. (todo/list) shows rows.</p><pre>\" (str (todo/list)) \"</pre>\")))"
+      , String.concat ""
+          [ "(lambda () "
+          ; "(if (string-eq (request-method) \"POST\") "
+          ; "  (seq (todo/add (request-param \"title\")) (redirect \"/todos\")) "
+          ; "  (render-html (string-append "
+          ; "    \"<h1>Todos</h1>\" "
+          ; "    \"<form method=\\\"POST\\\" action=\\\"/todos\\\" class=\\\"card\\\">\" "
+          ; "    \"<p><label>New item <input type=\\\"text\\\" name=\\\"title\\\" required placeholder=\\\"buy milk\\\"></label></p>\" "
+          ; "    \"<p><button type=\\\"submit\\\">Add</button></p></form>\" "
+          ; "    \"<pre>\" (str (todo/list)) \"</pre>\" "
+          ; "    \"<p class=\\\"muted\\\">POST title=… adds an item and redirects.</p>\")))"
+          ; ")" ]
       )
     ]
   in
@@ -351,7 +379,7 @@ let recipe_todo (t : t) : (string, string) result Lwt.t =
       Hashtbl.replace t.routes "/todos" "todo/page";
       let* _ = Store.register_route t.store ~route:"/todos" ~handler:"todo/page" in
       Lwt.return
-        (Ok "todo package: todo/add, todo/list, todo/page + route /todos")
+        (Ok "todo package: todo/add, todo/list, todo/page + route /todos (POST forms)")
 
 (* Optional elevate: PP_AI_ALLOW_WRITE=1 allows WriteDb/Publish/etc. *)
 let ai_allow_set () =
@@ -709,6 +737,66 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
                "llm-seed: need requirement-str [, max-steps int]"))
 
 
+let method_to_string (m : http_method) : string =
+  match m with `GET -> "GET" | `POST -> "POST"
+
+let require_request (t : t) : request =
+  match t.current_request with
+  | Some r -> r
+  | None ->
+      raise
+        (Pricklypear_lisp.Ast.Interp_error
+           (Pricklypear_lisp.Ast.User_error "no active request"))
+
+(** Register request-* + redirect prims. Closures capture [t] and read
+    [current_request] at call time (handler-scoped dynamic binding). *)
+let register_request_prims (t : t) (tbl : Primitives.t) : unit =
+  Primitives.register_sync tbl "request-method" (fun _args ->
+      let r = require_request t in
+      Pricklypear_lisp.Ast.VStr (method_to_string r.method_));
+  Primitives.register_sync tbl "request-path" (fun _args ->
+      let r = require_request t in
+      Pricklypear_lisp.Ast.VStr r.path);
+  Primitives.register_sync tbl "request-body" (fun _args ->
+      let r = require_request t in
+      Pricklypear_lisp.Ast.VStr r.body);
+  Primitives.register_sync tbl "request-param" (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr key ] ->
+          let r = require_request t in
+          (match List.assoc_opt key r.params with
+           | Some v -> Pricklypear_lisp.Ast.VStr v
+           | None -> Pricklypear_lisp.Ast.VNil)
+      | _ ->
+          raise
+            (Pricklypear_lisp.Ast.Interp_error
+               (Pricklypear_lisp.Ast.User_error "request-param needs 1 string")));
+  Primitives.register_sync tbl "request-params" (fun _args ->
+      let r = require_request t in
+      let j =
+        `Assoc
+          (List.map (fun (k, v) -> (k, `String v)) r.params)
+      in
+      Pricklypear_lisp.Ast.VStr (Yojson.Safe.to_string j));
+  Primitives.register_sync tbl "redirect" (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr path ] ->
+          if String.length path = 0 || path.[0] <> '/' then
+            raise
+              (Pricklypear_lisp.Ast.Interp_error
+                 (Pricklypear_lisp.Ast.User_error
+                    "redirect path must be absolute on host (start with /)"))
+          else if String.contains path ':' then
+            raise
+              (Pricklypear_lisp.Ast.Interp_error
+                 (Pricklypear_lisp.Ast.User_error
+                    "redirect rejects off-site URLs"))
+          else Primitives.redirect_value path
+      | _ ->
+          raise
+            (Pricklypear_lisp.Ast.Interp_error
+               (Pricklypear_lisp.Ast.User_error "redirect needs 1 string path")))
+
 let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
   let env = Pricklypear_lisp.Env.create () in
   let prim_table = Primitives.make_with_defaults () in
@@ -731,12 +819,16 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
       routes;
       started_at = Unix.gettimeofday ();
       kernel_catalog = [];  (* filled after all prims register *)
+      current_request = None;
     }
   in
   (* Register the DB-touching control primitives on the prim_table,
      then rebind t.prims to the populated table. These prims capture
      (!t), so they read/write store+manifest on each invocation. *)
   register_session_control_prims !t prim_table;
+  (* HTTP request-context prims (it33): request-method/path/param(s)/body +
+     redirect. Dynamic scope via current_request while call_handler runs. *)
+  register_request_prims !t prim_table;
   (* Register CRUD primitives (get/create/update/delete/list) over
      the shared data_rows table. Same pattern as control prims:
      they capture (!t) and return their real DB result via Lwt. *)
@@ -847,18 +939,29 @@ let set_route (t : t) ~(route : string) ~(handler : string) : unit Lwt.t =
 (* Invoke a named handler function (looked up via env). The handler
    must be a zero-arg VLambda or a VPrim name. Returns its value, or
    raises Interp_error if the handler doesn't resolve.
-   Used by http.ml to render dynamic pages. *)
-let call_handler (t : t) (handler_name : string)
+   When [~request] is provided, request-* prims see that context for
+   the duration of the call (cleared in finalize). *)
+let call_handler (t : t) ?request (handler_name : string)
   : Pricklypear_lisp.Ast.value option Lwt.t =
   match Pricklypear_lisp.Env.lookup t.env handler_name with
   | None -> Lwt.return_none
   | Some _fn ->
       (* Evaluate (handler-name) — zero args. Re-uses eval's apply path
          so VLambda closures AND VPrim dispatch both work. *)
-      Lwt.catch
-        (fun () ->
-           let* v = Pricklypear_lisp.Eval.eval_string ~prims:t.prims t.env
-                      ("(" ^ handler_name ^ ")")
-           in
-           Lwt.return (Some v))
-        (fun _exn -> Lwt.return_none)
+      let run () =
+        Lwt.catch
+          (fun () ->
+             let* v =
+               Pricklypear_lisp.Eval.eval_string ~prims:t.prims t.env
+                 ("(" ^ handler_name ^ ")")
+             in
+             Lwt.return (Some v))
+          (fun _exn -> Lwt.return_none)
+      in
+      (match request with
+       | None -> run ()
+       | Some req ->
+           t.current_request <- Some req;
+           Lwt.finalize run (fun () ->
+               t.current_request <- None;
+               Lwt.return_unit))

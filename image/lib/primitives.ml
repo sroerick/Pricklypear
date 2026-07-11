@@ -385,6 +385,7 @@ let prim_dict_keys args =
    unescaped (instead of pretty-printing the value inside <pre>).
    The tag is a private prefix sentinel; http.ml checks for it. *)
 let html_sentinel = "__html__:"
+let redirect_sentinel = "__redirect__:"
 
 let prim_render_html args =
   match args with
@@ -400,6 +401,24 @@ let is_raw_html (v : value) : string option =
       Some (String.sub s (String.length html_sentinel)
               (String.length s - String.length html_sentinel))
   | _ -> None
+
+let redirect_value (path : string) : value =
+  VStr (redirect_sentinel ^ path)
+
+let is_redirect (v : value) : string option =
+  match v with
+  | VStr s when String.length s >= String.length redirect_sentinel
+              && String.sub s 0 (String.length redirect_sentinel)
+                 = redirect_sentinel ->
+      Some (String.sub s (String.length redirect_sentinel)
+              (String.length s - String.length redirect_sentinel))
+  | _ -> None
+
+(* (string-eq a b) -> VBool. String equality for request-method checks etc. *)
+let prim_string_eq args =
+  match args with
+  | [ VStr a; VStr b ] -> VBool (String.equal a b)
+  | _ -> raise (Interp_error (User_error "string-eq needs 2 strings"))
 
 (* (hx-get url) -> VStr tagged attribute helper (lightweight; authors may
    also embed Hx attrs inside render-html). *)
@@ -487,6 +506,7 @@ let make_with_defaults () : t =
   register_sync t "string-length" prim_string_length;
   register_sync t "substring" prim_substring;
   register_sync t "string-contains?" prim_string_contains;
+  register_sync t "string-eq" prim_string_eq;
   register_sync t "type-of" prim_type_of;
   register_sync t "str" prim_str;
   register_sync t "append" prim_append;
@@ -527,6 +547,13 @@ let prim_summary (name : string) : string =
   | "string-length" -> "length of string"
   | "substring" -> "substring start [len]"
   | "string-contains?" -> "haystack contains needle?"
+  | "string-eq" -> "string equality"
+  | "request-method" -> "HTTP method of active request"
+  | "request-path" -> "path of active request"
+  | "request-param" -> "form/query param of active request"
+  | "request-params" -> "all params as JSON object"
+  | "request-body" -> "raw body of active request"
+  | "redirect" -> "HTTP 303 redirect response"
   | "append" -> "concatenate lists"
   | "reverse" -> "reverse list"
   | "nth" -> "nth element of list (0-based)"
