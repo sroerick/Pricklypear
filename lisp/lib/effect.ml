@@ -124,7 +124,8 @@ let publish_prims = [ "route" ]
 let html_prims = [ "render-html" ]
 (* Author tools that freeze into function_defs (Ai + WriteDb). *)
 let ai_write_prims = [
-  "propose-function"; "llm-inner"; "llm-outer"; "llm-rewrite"; "llm-seed";
+  "propose-function"; "install-function";
+  "llm-inner"; "llm-outer"; "llm-rewrite"; "llm-seed";
 ]
 (* Portal that only talks to the model (Ai only). *)
 let ai_prims = "agent" :: ai_write_prims

@@ -320,38 +320,60 @@ let agent
   | Ok text -> Lwt.return (Pricklypear_lisp.Ast.VStr text)
   | Error e -> Lwt.return (Pricklypear_lisp.Ast.VStr ("agent error: " ^ e))
 
-(* AI propose: LLM writes body; we define with agent provenance. *)
-let propose_function (t : t) ~(name : string) ~(spec : string)
+(** Install a Lisp body as [name] with AI provenance (parse + effect gate). *)
+let install_ai_function (t : t) ~(name : string) ~(body_src : string)
     : Pricklypear_lisp.Ast.value Lwt.t =
-  let* res = Llm_client.propose_function_source ~name ~spec () in
-  match res with
-  | Error e -> Lwt.return (Pricklypear_lisp.Ast.VStr ("ai error: " ^ e))
-  | Ok body_src ->
-      (match check_ai_body_effects body_src with
-       | Error pe ->
+  let body_src = Llm_client.strip_fences body_src in
+  match check_ai_body_effects body_src with
+  | Error pe ->
+      Lwt.return
+        (Pricklypear_lisp.Ast.VStr
+           (Printf.sprintf "ai rejected by effects: %s\n---\n%s" pe body_src))
+  | Ok () ->
+      let author = "agent:" ^ Llm_client.model () in
+      let* def = define_binding t ~name ~body_src ~author in
+      (match def with
+       | Ok _ ->
+           let badge =
+             try
+               let e = Pricklypear_lisp.Reader.read_one body_src in
+               Pricklypear_lisp.Effect.EffSet.badge
+                 (Pricklypear_lisp.Effect.infer e)
+             with _ -> "?"
+           in
            Lwt.return
              (Pricklypear_lisp.Ast.VStr
-                (Printf.sprintf "ai rejected by effects: %s\n---\n%s" pe body_src))
-       | Ok () ->
-           let author = "agent:" ^ Llm_client.model () in
-           let* def = define_binding t ~name ~body_src ~author in
-           (match def with
-            | Ok _ ->
-                let badge =
-                  try
-                    let e = Pricklypear_lisp.Reader.read_one body_src in
-                    Pricklypear_lisp.Effect.EffSet.badge
-                      (Pricklypear_lisp.Effect.infer e)
-                  with _ -> "?"
-                in
-                Lwt.return
-                  (Pricklypear_lisp.Ast.VStr
-                     (Printf.sprintf "proposed %s by %s [%s]\n%s"
-                        name author badge body_src))
-            | Error e ->
-                Lwt.return
-                  (Pricklypear_lisp.Ast.VStr
-                     (Printf.sprintf "ai proposed invalid body: %s\n---\n%s" e body_src))))
+                (Printf.sprintf "installed %s by %s [%s]\n%s"
+                   name author badge body_src))
+       | Error e ->
+           Lwt.return
+             (Pricklypear_lisp.Ast.VStr
+                (Printf.sprintf "ai body invalid: %s\n---\n%s" e body_src)))
+
+(* AI propose: draft via agent portal, then install on current branch. *)
+let propose_function (t : t) ~(name : string) ~(spec : string)
+    : Pricklypear_lisp.Ast.value Lwt.t =
+  let seed =
+    "You are a Pricklypear Lisp author on a live multi-user Lisp OS (software, not a cactus). " ^
+    "Respond ONLY with a single Lisp s-expression that is the BODY of function " ^ name ^
+    " (typically a lambda). No markdown fences, no (define ...) wrapper, no commentary. " ^
+    "Available prims: + - * = < > <= >= not list car cdr cons null? pair? count " ^
+    "string-append str type-of whoami list-bindings dict-get dict-set dict-keys " ^
+    "get create update delete rows deftype render-html. Prefer pure functions."
+  in
+  let prompt =
+    Printf.sprintf "Function name: %s\nRequirement:\n%s\nWrite only the body s-expression."
+      name spec
+  in
+  let* drafted = agent t ~seed ~prompt () in
+  match drafted with
+  | Pricklypear_lisp.Ast.VStr body when
+      String.length body >= 12 && String.sub body 0 12 = "agent error:" ->
+      Lwt.return drafted
+  | Pricklypear_lisp.Ast.VStr body_src ->
+      install_ai_function t ~name ~body_src
+  | v ->
+      install_ai_function t ~name ~body_src:(Pricklypear_lisp.Reader.pp_value v)
 
 (** Pretty-print a stored function body, or default stub. *)
 let current_fn_pretty (t : t) (name : string) : string Lwt.t =
@@ -612,6 +634,18 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
           Lwt.return
             (Pricklypear_lisp.Ast.VStr
                "propose-function: bad args (need name-str, spec-str)"));
+
+  (* (install-function name body-src) -> install AI-authored body (effect gate). *)
+  Primitives.register tbl "install-function"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr name;
+          Pricklypear_lisp.Ast.VStr body ] ->
+          install_ai_function t ~name ~body_src:body
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr
+               "install-function: need name-str, body-str"));
 
   (* Coding tools: freeze AST rewrites into store *)
   Primitives.register tbl "llm-inner"

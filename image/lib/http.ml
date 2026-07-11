@@ -1637,6 +1637,42 @@ let agent_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
         HTML.pre [HTML.id "out"; HTML.class_ "card"] [txt ""];
       ];
       HTML.script [] "%s" js;
+      HTML.div [HTML.class_ "card"] [
+        HTML.h2 [] [txt "Write a function"];
+        HTML.p [HTML.class_ "muted"] [txt
+          "Generates a Lisp body and installs it on this branch as agent:<model>. Same as (ai/write name spec)."];
+        HTML.p [] [
+          HTML.label [HTML.for_ "fn_name"] [txt "name "];
+          HTML.input [HTML.type_ "text"; HTML.name "fn_name"; HTML.id "fn_name";
+                      HTML.value "demo/double"; HTML.placeholder "pkg/name"];
+        ];
+        HTML.p [] [
+          HTML.label [HTML.for_ "fn_spec"] [txt "spec"];
+        ];
+        HTML.textarea [HTML.name "fn_spec"; HTML.id "fn_spec"]
+          "%s" "A pure lambda of one int x that returns (* x 2).";
+        HTML.p [] [
+          HTML.button [HTML.type_ "button"; HTML.id "write_fn"] [txt "Generate & install"];
+        ];
+        HTML.pre [HTML.id "write_out"; HTML.class_ "card"] [txt ""];
+      ];
+      HTML.script [] "%s" (
+        "const wout=document.getElementById('write_out');" ^
+        "const wbtn=document.getElementById('write_fn');" ^
+        "wbtn.onclick=async()=>{" ^
+        "const name=document.getElementById('fn_name').value.trim();" ^
+        "const spec=document.getElementById('fn_spec').value;" ^
+        "wout.textContent='…'; wbtn.disabled=true;" ^
+        "try{" ^
+        "const r=await fetch('/api/ai/propose',{method:'POST'," ^
+        "headers:{'content-type':'application/json'}," ^
+        "body:JSON.stringify({name,spec})});" ^
+        "const j=await r.json();" ^
+        "wout.textContent=j.result||j.error||JSON.stringify(j);" ^
+        "}catch(e){wout.textContent=String(e);}" ^
+        "finally{wbtn.disabled=false;}" ^
+        "};"
+      );
     ]
   in
   html_response reqd body;
