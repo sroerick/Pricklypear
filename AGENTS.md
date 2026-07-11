@@ -48,8 +48,9 @@ externally rerunnable (see the bottom of `README.md`).
   the line-protocol replacement as the default SSH front door —
   deferred per BORGE-1783439434). The default SSH front door is the
   non-crypto line protocol on `PP_SSH_PORT` for all 14 smoke tests.
-- `mirage-crypto-rng` (Fortuna) initialized at supervisor + authd boot
-  via `Mirage_crypto_rng_unix.initialize (module Fortuna)`.
+- `mirage-crypto-rng` initialized at supervisor + authd boot via
+  `Mirage_crypto_rng_unix.use_default ()` (mirage-crypto 1.x / Dream-
+  compatible poohstack). Hash/HMAC via Digestif; awa-mirage 0.6.x.
 - `pure-html` for type-safe HTML + `HTML.Hx.*` htmx attributes (the
   dream_html core, usable without Dream). Use `txt ~raw:true "%s" s`
   to bypass escaping for raw-HTML injection from Lisp route handlers.
