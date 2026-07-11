@@ -839,6 +839,9 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
      functions, never Eval.apply against the prims table. *)
   (!t).prims <- final_prims;
   (!t).kernel_catalog <- kernel_catalog;
+  (* Bind load prims into env (registered after the bulk VPrim bind). *)
+  Pricklypear_lisp.Env.define env "load-string" (Pricklypear_lisp.Ast.VPrim "load-string");
+  Pricklypear_lisp.Env.define env "load-library" (Pricklypear_lisp.Ast.VPrim "load-library");
   let session : t = !t in
   (* Kick off background loading of persisted function_defs into env. *)
   load_defs_async session;
