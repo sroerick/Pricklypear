@@ -692,7 +692,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpaf.Reqd.t)
   | Some pkg, Some local ->
       let full =
         if String.contains local '/' then local
-        else if pkg = "" || pkg = "(root)" then local
+        else if pkg = "" || pkg = "(root)" || pkg = "root" then local
         else Packages.join_name ~package:pkg ~local
       in
       let* found = Store.lookup_function (Session.store session) full in
@@ -799,7 +799,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpaf.Reqd.t)
       html_response reqd body;
       Lwt.return_unit
   | Some pkg, None ->
-      let pkg_key = if pkg = "(root)" then "" else pkg in
+      let pkg_key = if pkg = "(root)" || pkg = "root" then "" else pkg in
       let rows =
         List.filter
           (fun (name, _, _) -> Packages.package_of_name name = pkg_key)
@@ -858,7 +858,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpaf.Reqd.t)
         List.map
           (fun (pkg, rows) ->
             let label = Packages.package_label pkg in
-            let key = if pkg = "" then "(root)" else pkg in
+            let key = if pkg = "" then "root" else pkg in
             (label, pkg_href key, List.length rows, "workspace"))
           groups
       in
