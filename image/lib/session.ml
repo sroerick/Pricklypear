@@ -277,6 +277,82 @@ let recipe_hello (t : t) : (string, string) result Lwt.t =
       Lwt.return
         (Ok "created function hi-page and route /hello — open /hello")
 
+(* Seed standard Lisp helpers if missing (author system). *)
+let stdlib_seeds : (string * string) list =
+  [ ( "list/map"
+    , "(lambda (f xs) (if (null? xs) (list) (cons (f (car xs)) (list/map f (cdr xs)))))"
+    )
+  ; ( "list/filter"
+    , "(lambda (p xs) (if (null? xs) (list) (if (p (car xs)) (cons (car xs) (list/filter p (cdr xs))) (list/filter p (cdr xs)))))"
+    )
+  ; ( "list/foldl"
+    , "(lambda (f acc xs) (if (null? xs) acc (list/foldl f (f acc (car xs)) (cdr xs))))"
+    )
+  ; ( "html/wrap"
+    , "(lambda (title body) (render-html (string-append \"<article><h1>\" (str title) \"</h1><div>\" (str body) \"</div></article>\")))"
+    )
+  ; ( "data/get-field"
+    , "(lambda (type-name id field) (dict-get (get type-name id) field))"
+    )
+  ]
+
+let seed_stdlib (t : t) : unit Lwt.t =
+  Lwt_list.iter_s
+    (fun (name, body_src) ->
+      let* found = Store.lookup_function t.store name in
+      match found with
+      | Some _ -> Lwt.return_unit
+      | None ->
+          let* r =
+            define_binding t ~name ~body_src ~author:"system"
+          in
+          (match r with
+           | Ok _ ->
+               Printf.eprintf "[session] seeded %s\n" name;
+               Lwt.return_unit
+           | Error e ->
+               Printf.eprintf "[session] seed %s failed: %s\n" name e;
+               Lwt.return_unit))
+    stdlib_seeds
+
+(** Dogfood: todo package + type + page. *)
+let recipe_todo (t : t) : (string, string) result Lwt.t =
+  let* _ =
+    Crud.deftype t.store
+      ~args:[ Pricklypear_lisp.Ast.VStr "todo-item"; Pricklypear_lisp.Ast.VStr "title"; Pricklypear_lisp.Ast.VStr "done" ]
+      ~author:t.manifest.username
+  in
+  let seeds =
+    [ ( "todo/add"
+      , "(lambda (title) (create 'todo-item (dict-set (dict-set \"{}\" \"title\" title) \"done\" \"false\")))"
+      )
+    ; ( "todo/list"
+      , "(lambda () (rows 'todo-item 50))"
+      )
+    ; ( "todo/page"
+      , "(lambda () (render-html (string-append \"<h1>Todos</h1><p>Use (todo/add \\\"…\\\") in the REPL, then refresh. (todo/list) shows rows.</p><pre>\" (str (todo/list)) \"</pre>\")))"
+      )
+    ]
+  in
+  let* results =
+    Lwt_list.map_s
+      (fun (name, body) ->
+        define_binding t ~name ~body_src:body ~author:t.manifest.username)
+      seeds
+  in
+  let failed =
+    List.find_map
+      (function Error e -> Some e | Ok _ -> None)
+      results
+  in
+  match failed with
+  | Some e -> Lwt.return (Error e)
+  | None ->
+      Hashtbl.replace t.routes "/todos" "todo/page";
+      let* _ = Store.register_route t.store ~route:"/todos" ~handler:"todo/page" in
+      Lwt.return
+        (Ok "todo package: todo/add, todo/list, todo/page + route /todos")
+
 (* Optional elevate: PP_AI_ALLOW_WRITE=1 allows WriteDb/Publish/etc. *)
 let ai_allow_set () =
   match Sys.getenv_opt "PP_AI_ALLOW_WRITE" with
@@ -692,6 +768,10 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
   let session : t = !t in
   (* Kick off background loading of persisted function_defs into env. *)
   load_defs_async session;
+  (* Seed stdlib after a short delay so it does not race first define. *)
+  Lwt.async (fun () ->
+    let* () = Lwt_unix.sleep 0.3 in
+    seed_stdlib session);
   session
 
 (* Evaluate a single s-expression string as one REPL turn.

@@ -440,6 +440,15 @@ let home_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit =
         ];
       ];
       HTML.div [HTML.class_ "card"] [
+        HTML.h2 [] [txt "Library: todo package"];
+        HTML.p [] [txt
+          "Seeds package todo/ (add, list, page), type todo-item, and route /todos. Browse it under Functions → todo."];
+        HTML.form [HTML.method_ `POST; HTML.action "/api/recipe/todo";
+                   HTML.enctype `urlencoded] [
+          HTML.button [HTML.type_ "submit"] [txt "Install todo library"];
+        ];
+      ];
+      HTML.div [HTML.class_ "card"] [
         HTML.h2 [] [txt "AI propose (current branch)"];
         HTML.form [HTML.method_ `POST; HTML.action "/api/ai/propose";
                    HTML.enctype `urlencoded] [
@@ -1460,6 +1469,36 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
          | Error e ->
              let body =
                chrome ~session ~title:"Hello recipe failed" [
+                 HTML.p [HTML.class_ "err"] [txt "%s" e];
+                 HTML.p [] [HTML.a [HTML.href "/"] [txt "Home"]];
+               ]
+             in
+             html_response reqd ~status:`Internal_server_error body;
+             Lwt.return_unit)
+  | `POST, "/api/recipe/todo" ->
+      launch
+        (let* res = Session.recipe_todo session in
+         match res with
+         | Ok msg ->
+             let body =
+               chrome ~session ~title:"Todo library" [
+                 HTML.div [HTML.class_ "card"] [
+                   HTML.p [HTML.class_ "ok"] [txt "%s" msg];
+                   HTML.p [] [
+                     HTML.a [HTML.href "/todos"] [txt "Open /todos"];
+                     txt " · ";
+                     HTML.a [HTML.href "/bindings?pkg=todo"] [txt "Package todo"];
+                     txt " · ";
+                     HTML.a [HTML.href "/pages"] [txt "Pages"];
+                   ];
+                 ];
+               ]
+             in
+             html_response reqd body;
+             Lwt.return_unit
+         | Error e ->
+             let body =
+               chrome ~session ~title:"Todo recipe failed" [
                  HTML.p [HTML.class_ "err"] [txt "%s" e];
                  HTML.p [] [HTML.a [HTML.href "/"] [txt "Home"]];
                ]

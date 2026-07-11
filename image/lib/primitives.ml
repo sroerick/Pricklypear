@@ -168,6 +168,137 @@ let prim_str args =
   | [ v ] -> VStr (Pricklypear_lisp.Reader.pp_value v)
   | _ -> raise (Interp_error (User_error "str needs one arg"))
 
+(* (div a b) integer division *)
+let prim_div args =
+  match args with
+  | [ VInt a; VInt b ] when b <> 0L -> VInt (Int64.div a b)
+  | [ VInt _; VInt 0L ] ->
+      raise (Interp_error (User_error "div by zero"))
+  | _ -> raise (Interp_error (User_error "div needs two VInt args"))
+
+let prim_mod args =
+  match args with
+  | [ VInt a; VInt b ] when b <> 0L -> VInt (Int64.rem a b)
+  | [ VInt _; VInt 0L ] ->
+      raise (Interp_error (User_error "mod by zero"))
+  | _ -> raise (Interp_error (User_error "mod needs two VInt args"))
+
+let prim_abs args =
+  match args with
+  | [ VInt a ] -> VInt (Int64.abs a)
+  | _ -> raise (Interp_error (User_error "abs needs one VInt"))
+
+let prim_min args =
+  match args with
+  | [] -> raise (Interp_error (User_error "min needs at least one VInt"))
+  | VInt h :: rest ->
+      let m =
+        List.fold_left
+          (fun acc v ->
+            match v with
+            | VInt n -> if Int64.compare n acc < 0 then n else acc
+            | _ -> raise (Interp_error (User_error "min needs VInt args")))
+          h rest
+      in
+      VInt m
+  | _ -> raise (Interp_error (User_error "min needs VInt args"))
+
+let prim_max args =
+  match args with
+  | [] -> raise (Interp_error (User_error "max needs at least one VInt"))
+  | VInt h :: rest ->
+      let m =
+        List.fold_left
+          (fun acc v ->
+            match v with
+            | VInt n -> if Int64.compare n acc > 0 then n else acc
+            | _ -> raise (Interp_error (User_error "max needs VInt args")))
+          h rest
+      in
+      VInt m
+  | _ -> raise (Interp_error (User_error "max needs VInt args"))
+
+let prim_string_length args =
+  match args with
+  | [ VStr s ] -> VInt (Int64.of_int (String.length s))
+  | _ -> raise (Interp_error (User_error "string-length needs one VStr"))
+
+let prim_substring args =
+  match args with
+  | [ VStr s; VInt start; VInt len ] ->
+      let st = Int64.to_int start in
+      let n = Int64.to_int len in
+      let sl = String.length s in
+      if st < 0 || n < 0 || st > sl then
+        raise (Interp_error (User_error "substring out of range"))
+      else
+        let n = min n (sl - st) in
+        VStr (String.sub s st n)
+  | [ VStr s; VInt start ] ->
+      let st = Int64.to_int start in
+      let sl = String.length s in
+      if st < 0 || st > sl then
+        raise (Interp_error (User_error "substring out of range"))
+      else VStr (String.sub s st (sl - st))
+  | _ ->
+      raise
+        (Interp_error
+           (User_error "substring needs string start [len]"))
+
+let prim_string_contains args =
+  match args with
+  | [ VStr hay; VStr needle ] ->
+      let rec loop i =
+        if needle = "" then true
+        else if i + String.length needle > String.length hay then false
+        else if String.sub hay i (String.length needle) = needle then true
+        else loop (i + 1)
+      in
+      VBool (loop 0)
+  | _ ->
+      raise
+        (Interp_error (User_error "string-contains? needs two VStr args"))
+
+let list_of_value = function
+  | VList xs -> xs
+  | VNil -> []
+  | VPair (a, b) ->
+      let rec unwind p acc =
+        match p with
+        | VPair (x, y) -> unwind y (x :: acc)
+        | VNil | VList [] -> List.rev acc
+        | VList xs -> List.rev_append acc xs
+        | other -> List.rev (other :: acc)
+      in
+      unwind (VPair (a, b)) []
+  | _ -> raise (Interp_error (User_error "expected a list"))
+
+let prim_append args =
+  match args with
+  | [ a; b ] -> VList (list_of_value a @ list_of_value b)
+  | xs ->
+      VList
+        (List.concat_map
+           (function
+             | VList l -> l
+             | VNil -> []
+             | _ -> raise (Interp_error (User_error "append needs lists")))
+           xs)
+
+let prim_reverse args =
+  match args with
+  | [ xs ] -> VList (List.rev (list_of_value xs))
+  | _ -> raise (Interp_error (User_error "reverse needs one list"))
+
+let prim_nth args =
+  match args with
+  | [ xs; VInt i ] ->
+      let n = Int64.to_int i in
+      let lst = list_of_value xs in
+      if n < 0 || n >= List.length lst then VNil
+      else List.nth lst n
+  | _ -> raise (Interp_error (User_error "nth needs list and VInt"))
+
 (* ---- dict primitives over VStr JSON -----------------------------
 
    Iteration-14 decision: don't introduce a new VDict value type yet
@@ -335,6 +466,11 @@ let make_with_defaults () : t =
   register_sync t "+" prim_add;
   register_sync t "-" prim_sub;
   register_sync t "*" prim_mul;
+  register_sync t "div" prim_div;
+  register_sync t "mod" prim_mod;
+  register_sync t "abs" prim_abs;
+  register_sync t "min" prim_min;
+  register_sync t "max" prim_max;
   register_sync t "=" prim_num_eq;
   register_sync t "<" prim_lt;
   register_sync t ">" prim_gt;
@@ -348,8 +484,14 @@ let make_with_defaults () : t =
   register_sync t "null?" prim_null_p;
   register_sync t "pair?" prim_pair_p;
   register_sync t "string-append" prim_string_append;
+  register_sync t "string-length" prim_string_length;
+  register_sync t "substring" prim_substring;
+  register_sync t "string-contains?" prim_string_contains;
   register_sync t "type-of" prim_type_of;
   register_sync t "str" prim_str;
+  register_sync t "append" prim_append;
+  register_sync t "reverse" prim_reverse;
+  register_sync t "nth" prim_nth;
   (* list-branches is registered as a session DB prim in session.ml *)
   register_sync t "hx-get" prim_hx_get;
   register_sync t "hx-post" prim_hx_post;
@@ -366,6 +508,11 @@ let prim_summary (name : string) : string =
   | "+" -> "add numbers"
   | "-" -> "subtract / negate"
   | "*" -> "multiply"
+  | "div" -> "integer divide"
+  | "mod" -> "integer remainder"
+  | "abs" -> "absolute value"
+  | "min" -> "minimum of VInts"
+  | "max" -> "maximum of VInts"
   | "=" -> "numeric equality"
   | "<" | ">" | "<=" | ">=" -> "numeric compare"
   | "not" -> "boolean not"
@@ -377,6 +524,12 @@ let prim_summary (name : string) : string =
   | "pair?" -> "is pair?"
   | "count" -> "length of list"
   | "string-append" -> "concat strings"
+  | "string-length" -> "length of string"
+  | "substring" -> "substring start [len]"
+  | "string-contains?" -> "haystack contains needle?"
+  | "append" -> "concatenate lists"
+  | "reverse" -> "reverse list"
+  | "nth" -> "nth element of list (0-based)"
   | "str" -> "value to string"
   | "type-of" -> "runtime type tag"
   | "dict-get" -> "JSON object field get"
