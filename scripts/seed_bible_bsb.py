@@ -4,18 +4,20 @@
 Ref format: BSB:<Abbrev>:<chapter>:<verse>  (unique via migration 004)
 
 Usage:
-  python3 scripts/seed_bible_bsb.py              # sample corpus (John 3, etc.)
+  # Full BSB from helloao complete.json (recommended)
+  python3 scripts/seed_bible_bsb.py --full
+  python3 scripts/seed_bible_bsb.py --complete /tmp/bsb-seed/complete.json
+
+  # Sample only (John 3 + anchors)
+  python3 scripts/seed_bible_bsb.py --sample
+
+  # JSONL: {"abbrev","book","chapter","verse","text"}
   python3 scripts/seed_bible_bsb.py --file verses.jsonl
-  python3 scripts/seed_bible_bsb.py --host /tmp --port 5433
 
-JSONL line shape (optional --file):
-  {"abbrev":"John","book":"John","chapter":3,"verse":16,"text":"..."}
+Idempotent: deletes by fields.ref then inserts (or uses bulk replace mode).
+Full seed uses psycopg2 COPY-style batch for speed.
 
-Idempotent: ON CONFLICT (fields->>'ref') WHERE type_name=bible-verse
-requires migration 004. Re-run updates text.
-
-Attribution: sample strings are Berean Standard Bible wording where used;
-full redistributable dumps should include BSB license NOTICE alongside.
+Text: Berean Standard Bible — public domain (berean.bible).
 """
 from __future__ import annotations
 
@@ -23,122 +25,98 @@ import argparse
 import json
 import subprocess
 import sys
-import uuid
+import urllib.request
+from pathlib import Path
 
-# Stable abbrev table (plan). ordinal 1..66.
+# (display name, our abbrev, ordinal, testament, helloao/USFM code)
 BOOKS = [
-    ("Genesis", "Gen", 1, "OT"),
-    ("Exodus", "Exod", 2, "OT"),
-    ("Leviticus", "Lev", 3, "OT"),
-    ("Numbers", "Num", 4, "OT"),
-    ("Deuteronomy", "Deut", 5, "OT"),
-    ("Joshua", "Josh", 6, "OT"),
-    ("Judges", "Judg", 7, "OT"),
-    ("Ruth", "Ruth", 8, "OT"),
-    ("1 Samuel", "1Sam", 9, "OT"),
-    ("2 Samuel", "2Sam", 10, "OT"),
-    ("1 Kings", "1Kgs", 11, "OT"),
-    ("2 Kings", "2Kgs", 12, "OT"),
-    ("1 Chronicles", "1Chr", 13, "OT"),
-    ("2 Chronicles", "2Chr", 14, "OT"),
-    ("Ezra", "Ezra", 15, "OT"),
-    ("Nehemiah", "Neh", 16, "OT"),
-    ("Esther", "Esth", 17, "OT"),
-    ("Job", "Job", 18, "OT"),
-    ("Psalms", "Ps", 19, "OT"),
-    ("Proverbs", "Prov", 20, "OT"),
-    ("Ecclesiastes", "Eccl", 21, "OT"),
-    ("Song of Solomon", "Song", 22, "OT"),
-    ("Isaiah", "Isa", 23, "OT"),
-    ("Jeremiah", "Jer", 24, "OT"),
-    ("Lamentations", "Lam", 25, "OT"),
-    ("Ezekiel", "Ezek", 26, "OT"),
-    ("Daniel", "Dan", 27, "OT"),
-    ("Hosea", "Hos", 28, "OT"),
-    ("Joel", "Joel", 29, "OT"),
-    ("Amos", "Amos", 30, "OT"),
-    ("Obadiah", "Obad", 31, "OT"),
-    ("Jonah", "Jonah", 32, "OT"),
-    ("Micah", "Mic", 33, "OT"),
-    ("Nahum", "Nah", 34, "OT"),
-    ("Habakkuk", "Hab", 35, "OT"),
-    ("Zephaniah", "Zeph", 36, "OT"),
-    ("Haggai", "Hag", 37, "OT"),
-    ("Zechariah", "Zech", 38, "OT"),
-    ("Malachi", "Mal", 39, "OT"),
-    ("Matthew", "Matt", 40, "NT"),
-    ("Mark", "Mark", 41, "NT"),
-    ("Luke", "Luke", 42, "NT"),
-    ("John", "John", 43, "NT"),
-    ("Acts", "Acts", 44, "NT"),
-    ("Romans", "Rom", 45, "NT"),
-    ("1 Corinthians", "1Cor", 46, "NT"),
-    ("2 Corinthians", "2Cor", 47, "NT"),
-    ("Galatians", "Gal", 48, "NT"),
-    ("Ephesians", "Eph", 49, "NT"),
-    ("Philippians", "Phil", 50, "NT"),
-    ("Colossians", "Col", 51, "NT"),
-    ("1 Thessalonians", "1Thess", 52, "NT"),
-    ("2 Thessalonians", "2Thess", 53, "NT"),
-    ("1 Timothy", "1Tim", 54, "NT"),
-    ("2 Timothy", "2Tim", 55, "NT"),
-    ("Titus", "Titus", 56, "NT"),
-    ("Philemon", "Phlm", 57, "NT"),
-    ("Hebrews", "Heb", 58, "NT"),
-    ("James", "Jas", 59, "NT"),
-    ("1 Peter", "1Pet", 60, "NT"),
-    ("2 Peter", "2Pet", 61, "NT"),
-    ("1 John", "1John", 62, "NT"),
-    ("2 John", "2John", 63, "NT"),
-    ("3 John", "3John", 64, "NT"),
-    ("Jude", "Jude", 65, "NT"),
-    ("Revelation", "Rev", 66, "NT"),
+    ("Genesis", "Gen", 1, "OT", "GEN"),
+    ("Exodus", "Exod", 2, "OT", "EXO"),
+    ("Leviticus", "Lev", 3, "OT", "LEV"),
+    ("Numbers", "Num", 4, "OT", "NUM"),
+    ("Deuteronomy", "Deut", 5, "OT", "DEU"),
+    ("Joshua", "Josh", 6, "OT", "JOS"),
+    ("Judges", "Judg", 7, "OT", "JDG"),
+    ("Ruth", "Ruth", 8, "OT", "RUT"),
+    ("1 Samuel", "1Sam", 9, "OT", "1SA"),
+    ("2 Samuel", "2Sam", 10, "OT", "2SA"),
+    ("1 Kings", "1Kgs", 11, "OT", "1KI"),
+    ("2 Kings", "2Kgs", 12, "OT", "2KI"),
+    ("1 Chronicles", "1Chr", 13, "OT", "1CH"),
+    ("2 Chronicles", "2Chr", 14, "OT", "2CH"),
+    ("Ezra", "Ezra", 15, "OT", "EZR"),
+    ("Nehemiah", "Neh", 16, "OT", "NEH"),
+    ("Esther", "Esth", 17, "OT", "EST"),
+    ("Job", "Job", 18, "OT", "JOB"),
+    ("Psalms", "Ps", 19, "OT", "PSA"),
+    ("Proverbs", "Prov", 20, "OT", "PRO"),
+    ("Ecclesiastes", "Eccl", 21, "OT", "ECC"),
+    ("Song of Solomon", "Song", 22, "OT", "SNG"),
+    ("Isaiah", "Isa", 23, "OT", "ISA"),
+    ("Jeremiah", "Jer", 24, "OT", "JER"),
+    ("Lamentations", "Lam", 25, "OT", "LAM"),
+    ("Ezekiel", "Ezek", 26, "OT", "EZK"),
+    ("Daniel", "Dan", 27, "OT", "DAN"),
+    ("Hosea", "Hos", 28, "OT", "HOS"),
+    ("Joel", "Joel", 29, "OT", "JOL"),
+    ("Amos", "Amos", 30, "OT", "AMO"),
+    ("Obadiah", "Obad", 31, "OT", "OBA"),
+    ("Jonah", "Jonah", 32, "OT", "JON"),
+    ("Micah", "Mic", 33, "OT", "MIC"),
+    ("Nahum", "Nah", 34, "OT", "NAM"),
+    ("Habakkuk", "Hab", 35, "OT", "HAB"),
+    ("Zephaniah", "Zeph", 36, "OT", "ZEP"),
+    ("Haggai", "Hag", 37, "OT", "HAG"),
+    ("Zechariah", "Zech", 38, "OT", "ZEC"),
+    ("Malachi", "Mal", 39, "OT", "MAL"),
+    ("Matthew", "Matt", 40, "NT", "MAT"),
+    ("Mark", "Mark", 41, "NT", "MRK"),
+    ("Luke", "Luke", 42, "NT", "LUK"),
+    ("John", "John", 43, "NT", "JHN"),
+    ("Acts", "Acts", 44, "NT", "ACT"),
+    ("Romans", "Rom", 45, "NT", "ROM"),
+    ("1 Corinthians", "1Cor", 46, "NT", "1CO"),
+    ("2 Corinthians", "2Cor", 47, "NT", "2CO"),
+    ("Galatians", "Gal", 48, "NT", "GAL"),
+    ("Ephesians", "Eph", 49, "NT", "EPH"),
+    ("Philippians", "Phil", 50, "NT", "PHP"),
+    ("Colossians", "Col", 51, "NT", "COL"),
+    ("1 Thessalonians", "1Thess", 52, "NT", "1TH"),
+    ("2 Thessalonians", "2Thess", 53, "NT", "2TH"),
+    ("1 Timothy", "1Tim", 54, "NT", "1TI"),
+    ("2 Timothy", "2Tim", 55, "NT", "2TI"),
+    ("Titus", "Titus", 56, "NT", "TIT"),
+    ("Philemon", "Phlm", 57, "NT", "PHM"),
+    ("Hebrews", "Heb", 58, "NT", "HEB"),
+    ("James", "Jas", 59, "NT", "JAS"),
+    ("1 Peter", "1Pet", 60, "NT", "1PE"),
+    ("2 Peter", "2Pet", 61, "NT", "2PE"),
+    ("1 John", "1John", 62, "NT", "1JN"),
+    ("2 John", "2John", 63, "NT", "2JN"),
+    ("3 John", "3John", 64, "NT", "3JN"),
+    ("Jude", "Jude", 65, "NT", "JUD"),
+    ("Revelation", "Rev", 66, "NT", "REV"),
 ]
 
-# Minimal BSB-flavored sample for dogfood (John 3 + a few anchors).
-# Replace/extend via --file for full corpus.
+CODE_TO_BOOK = {code: (name, abbrev, ordinal, testament) for name, abbrev, ordinal, testament, code in BOOKS}
+
 SAMPLE_VERSES = [
     ("Gen", "Genesis", 1, 1, "In the beginning God created the heavens and the earth."),
     ("Ps", "Psalms", 23, 1, "The LORD is my shepherd; I shall not want."),
-    ("John", "John", 3, 1, "Now there was a man of the Pharisees named Nicodemus, a leader of the Jews."),
-    ("John", "John", 3, 2, "He came to Jesus at night and said, \"Rabbi, we know that You are a teacher who has come from God. For no one could perform the signs You are doing if God were not with him.\""),
-    ("John", "John", 3, 3, "Jesus replied, \"Truly, truly, I tell you, no one can see the kingdom of God unless he is born again.\""),
-    ("John", "John", 3, 4, "\"How can a man be born when he is old?\" Nicodemus asked. \"Can he enter his mother's womb a second time to be born?\""),
-    ("John", "John", 3, 5, "Jesus answered, \"Truly, truly, I tell you, no one can enter the kingdom of God unless he is born of water and the Spirit.\""),
-    ("John", "John", 3, 6, "Flesh is born of flesh, but spirit is born of the Spirit."),
-    ("John", "John", 3, 7, "Do not be amazed that I said, 'You must be born again.'"),
-    ("John", "John", 3, 8, "The wind blows where it wishes. You hear its sound, but you do not know where it comes from or where it is going. So it is with everyone born of the Spirit.\""),
-    ("John", "John", 3, 9, "\"How can this be?\" Nicodemus asked."),
-    ("John", "John", 3, 10, "\"You are Israel's teacher,\" said Jesus, \"and you do not understand these things?"),
-    ("John", "John", 3, 11, "Truly, truly, I tell you, we speak of what we know, and we testify to what we have seen, and yet you people do not accept our testimony."),
-    ("John", "John", 3, 12, "If I have told you about earthly things and you do not believe, how will you believe if I tell you about heavenly things?"),
-    ("John", "John", 3, 13, "No one has ascended into heaven except the One who descended from heaven—the Son of Man."),
-    ("John", "John", 3, 14, "Just as Moses lifted up the snake in the wilderness, so the Son of Man must be lifted up,"),
-    ("John", "John", 3, 15, "that everyone who believes in Him may have eternal life."),
     ("John", "John", 3, 16, "For God so loved the world that He gave His one and only Son, that everyone who believes in Him shall not perish but have eternal life."),
-    ("John", "John", 3, 17, "For God did not send His Son into the world to condemn the world, but to save the world through Him."),
-    ("John", "John", 3, 18, "Whoever believes in Him is not condemned, but whoever does not believe has already been condemned, because he has not believed in the name of God's one and only Son."),
-    ("John", "John", 3, 19, "And this is the verdict: The Light has come into the world, but men loved the darkness rather than the Light because their deeds were evil."),
-    ("John", "John", 3, 20, "Everyone who does evil hates the Light, and does not come into the Light for fear that his deeds will be exposed."),
-    ("John", "John", 3, 21, "But whoever practices the truth comes into the Light, so that it may be seen clearly that what he has done has been accomplished in God.\""),
-    ("1Cor", "1 Corinthians", 13, 4, "Love is patient, love is kind. It does not envy, it does not boast, it is not proud."),
-    ("Rev", "Revelation", 21, 1, "Then I saw a new heaven and a new earth, for the first heaven and earth had passed away, and the sea was no more."),
 ]
+
+COMPLETE_URL = "https://bible.helloao.org/api/BSB/complete.json"
 
 
 def psql(args: argparse.Namespace, sql: str) -> str:
     cmd = [
         "psql",
-        "-h",
-        args.host,
-        "-p",
-        str(args.port),
-        "-U",
-        args.user,
-        "-d",
-        args.db,
-        "-v",
-        "ON_ERROR_STOP=1",
+        "-h", args.host,
+        "-p", str(args.port),
+        "-U", args.user,
+        "-d", args.db,
+        "-v", "ON_ERROR_STOP=1",
         "-tAc",
         sql,
     ]
@@ -152,8 +130,23 @@ def sql_str(s: str) -> str:
     return "'" + s.replace("'", "''") + "'"
 
 
+def connect(args: argparse.Namespace):
+    import psycopg2
+
+    # host /tmp is a unix socket dir for our dev cluster
+    kwargs = {
+        "dbname": args.db,
+        "user": args.user,
+        "port": int(args.port),
+    }
+    if args.host.startswith("/"):
+        kwargs["host"] = args.host
+    else:
+        kwargs["host"] = args.host
+    return psycopg2.connect(**kwargs)
+
+
 def ensure_types(args: argparse.Namespace) -> None:
-    # type_defs are per-branch; seed on system main branch id if present.
     main = psql(
         args,
         "SELECT id::text FROM branches WHERE owner='system' AND name='main' LIMIT 1",
@@ -161,11 +154,14 @@ def ensure_types(args: argparse.Namespace) -> None:
     if not main:
         main = psql(args, "SELECT id::text FROM branches ORDER BY created_at LIMIT 1")
     if not main:
-        print("warn: no branches; skipping type_defs (run load-library bible for deftype)", file=sys.stderr)
+        print("warn: no branches; skip type_defs", file=sys.stderr)
         return
     for name, fields in [
         ("bible-book", ["name", "abbrev", "ordinal", "testament"]),
-        ("bible-verse", ["translation", "book", "abbrev", "chapter", "verse", "text", "ref"]),
+        (
+            "bible-verse",
+            ["translation", "book", "abbrev", "chapter", "verse", "text", "ref"],
+        ),
     ]:
         fields_json = json.dumps(fields)
         psql(
@@ -180,56 +176,92 @@ def ensure_types(args: argparse.Namespace) -> None:
         )
 
 
-def seed_books(args: argparse.Namespace) -> int:
-    n = 0
-    for name, abbrev, ordinal, testament in BOOKS:
+def seed_books_pg(conn) -> int:
+    cur = conn.cursor()
+    cur.execute("DELETE FROM data_rows WHERE type_name = 'bible-book'")
+    for name, abbrev, ordinal, testament, _code in BOOKS:
         fields = {
             "name": name,
             "abbrev": abbrev,
             "ordinal": ordinal,
             "testament": testament,
         }
-        fj = json.dumps(fields, separators=(",", ":"))
-        # Upsert-ish: delete same abbrev then insert (books are few)
-        psql(
-            args,
-            f"""
-            DELETE FROM data_rows
-            WHERE type_name = 'bible-book' AND fields->>'abbrev' = {sql_str(abbrev)};
-            INSERT INTO data_rows (type_name, fields, author)
-            VALUES ('bible-book', {sql_str(fj)}::jsonb, 'system');
-            """,
+        cur.execute(
+            "INSERT INTO data_rows (type_name, fields, author) VALUES (%s, %s::jsonb, %s)",
+            ("bible-book", json.dumps(fields, separators=(",", ":")), "system"),
         )
-        n += 1
-    return n
+    conn.commit()
+    return len(BOOKS)
 
 
-def upsert_verse(args: argparse.Namespace, abbrev: str, book: str, chapter: int, verse: int, text: str) -> None:
-    ref = f"BSB:{abbrev}:{chapter}:{verse}"
-    fields = {
-        "translation": "BSB",
-        "book": book,
-        "abbrev": abbrev,
-        "chapter": chapter,
-        "verse": verse,
-        "text": text,
-        "ref": ref,
-    }
-    fj = json.dumps(fields, separators=(",", ":"))
-    # Prefer ON CONFLICT on unique index expression — PG needs constraint name or matching index.
-    # Use delete+insert by ref for portability if ON CONFLICT target is awkward.
-    psql(
-        args,
-        f"""
-        DELETE FROM data_rows
-        WHERE type_name = 'bible-verse' AND fields->>'ref' = {sql_str(ref)};
-        INSERT INTO data_rows (type_name, fields, author)
-        VALUES ('bible-verse', {sql_str(fj)}::jsonb, 'system');
-        """,
-    )
+def verse_text_from_content(content) -> str:
+    """Join helloao verse content nodes into plain text.
+
+    Footnote markers sit between string fragments with no spaces
+    ("only" + note + "Son"); when notes are dropped we re-insert a
+    single space so we don't glue words together.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    parts: list[str] = []
+    for node in content:
+        if isinstance(node, str):
+            if node:
+                parts.append(node)
+        elif isinstance(node, dict):
+            if "noteId" in node:
+                continue
+            if "text" in node and isinstance(node["text"], str):
+                if node["text"]:
+                    parts.append(node["text"])
+            elif "content" in node:
+                inner = verse_text_from_content(node["content"])
+                if inner:
+                    parts.append(inner)
+    if not parts:
+        return ""
+    out: list[str] = [parts[0]]
+    for p in parts[1:]:
+        prev = out[-1]
+        if (
+            prev
+            and p
+            and not prev[-1].isspace()
+            and not p[0].isspace()
+            and p[0] not in ". ,;:!?)]}”’"
+            and prev[-1] not in "([{“‘"
+        ):
+            out.append(" ")
+        out.append(p)
+    return "".join(out).strip()
 
 
-def load_file(path: str):
+def verses_from_complete(data: dict):
+    books = data.get("books") or []
+    for b in books:
+        code = b.get("id") or b.get("bookId")
+        meta = CODE_TO_BOOK.get(code)
+        if not meta:
+            print(f"warn: unknown book code {code!r}, skipping", file=sys.stderr)
+            continue
+        name, abbrev, _ord, _t = meta
+        for ch_wrap in b.get("chapters") or []:
+            inner = ch_wrap.get("chapter") if isinstance(ch_wrap, dict) else ch_wrap
+            if not isinstance(inner, dict):
+                continue
+            chapter = int(inner.get("number") or ch_wrap.get("number") or 0)
+            for item in inner.get("content") or []:
+                if not isinstance(item, dict) or item.get("type") != "verse":
+                    continue
+                verse = int(item.get("number") or 0)
+                text = verse_text_from_content(item.get("content"))
+                if chapter and verse and text:
+                    yield abbrev, name, chapter, verse, text
+
+
+def load_jsonl(path: str):
     with open(path, encoding="utf-8") as f:
         for line in f:
             line = line.strip()
@@ -245,39 +277,204 @@ def load_file(path: str):
             )
 
 
+def bulk_replace_verses(conn, verses, batch_size: int = 2000) -> int:
+    """Replace all bible-verse rows with the given stream (full reseed)."""
+    cur = conn.cursor()
+    cur.execute("DELETE FROM data_rows WHERE type_name = 'bible-verse'")
+    conn.commit()
+
+    buf: list[tuple[str, str, str]] = []
+    n = 0
+
+    def flush():
+        nonlocal buf, n
+        if not buf:
+            return
+        args_str = ",".join(cur.mogrify("(%s,%s::jsonb,%s)", row).decode() for row in buf)
+        cur.execute(
+            "INSERT INTO data_rows (type_name, fields, author) VALUES " + args_str
+        )
+        conn.commit()
+        n += len(buf)
+        print(f"  … {n} verses", flush=True)
+        buf = []
+
+    for abbrev, book, chapter, verse, text in verses:
+        ref = f"BSB:{abbrev}:{chapter}:{verse}"
+        fields = {
+            "translation": "BSB",
+            "book": book,
+            "abbrev": abbrev,
+            "chapter": chapter,
+            "verse": verse,
+            "text": text,
+            "ref": ref,
+        }
+        buf.append(
+            (
+                "bible-verse",
+                json.dumps(fields, separators=(",", ":")),
+                "system",
+            )
+        )
+        if len(buf) >= batch_size:
+            flush()
+    flush()
+    return n
+
+
+def upsert_sample_psql(args: argparse.Namespace, verses) -> int:
+    n = 0
+    for abbrev, book, chapter, verse, text in verses:
+        ref = f"BSB:{abbrev}:{chapter}:{verse}"
+        fields = {
+            "translation": "BSB",
+            "book": book,
+            "abbrev": abbrev,
+            "chapter": chapter,
+            "verse": verse,
+            "text": text,
+            "ref": ref,
+        }
+        fj = json.dumps(fields, separators=(",", ":"))
+        psql(
+            args,
+            f"""
+            DELETE FROM data_rows
+            WHERE type_name = 'bible-verse' AND fields->>'ref' = {sql_str(ref)};
+            INSERT INTO data_rows (type_name, fields, author)
+            VALUES ('bible-verse', {sql_str(fj)}::jsonb, 'system');
+            """,
+        )
+        n += 1
+    return n
+
+
+def download_complete(dest: Path) -> Path:
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    print(f"downloading {COMPLETE_URL} → {dest}", flush=True)
+    urllib.request.urlretrieve(COMPLETE_URL, dest)
+    return dest
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--host", default="/tmp")
     ap.add_argument("--port", default="5433")
     ap.add_argument("--user", default="postgres")
     ap.add_argument("--db", default="pricklypear")
-    ap.add_argument("--file", help="JSONL verses (abbrev,book,chapter,verse,text)")
+    ap.add_argument("--file", help="JSONL verses")
+    ap.add_argument(
+        "--complete",
+        help="Path to helloao BSB complete.json",
+    )
+    ap.add_argument(
+        "--full",
+        action="store_true",
+        help="Download complete.json if needed and seed full BSB",
+    )
+    ap.add_argument(
+        "--sample",
+        action="store_true",
+        help="Seed tiny sample only (default if no --full/--file/--complete)",
+    )
     ap.add_argument("--skip-books", action="store_true")
+    ap.add_argument(
+        "--cache",
+        default="/tmp/bsb-seed/complete.json",
+        help="Cache path for --full download",
+    )
     args = ap.parse_args()
+
+    use_full = args.full or args.complete
+    use_file = bool(args.file)
+    use_sample = args.sample or (not use_full and not use_file)
 
     try:
         ver = psql(args, "SELECT version FROM schema_migrations WHERE version = 4")
         if ver != "4":
             print(
-                "warn: migration 004 not applied yet — restart supervisor or apply 004_bible_ref_index.sql",
+                "warn: migration 004 not applied — restart supervisor",
                 file=sys.stderr,
             )
+
         ensure_types(args)
-        books_n = 0 if args.skip_books else seed_books(args)
-        verses = list(load_file(args.file)) if args.file else SAMPLE_VERSES
-        for abbrev, book, ch, vs, text in verses:
-            upsert_verse(args, abbrev, book, ch, vs, text)
-        vcount = psql(args, "SELECT count(*) FROM data_rows WHERE type_name='bible-verse'")
-        bcount = psql(args, "SELECT count(*) FROM data_rows WHERE type_name='bible-book'")
-        print(f"seeded books={books_n} (table has {bcount}), verses_written={len(verses)} (table has {vcount})")
+
+        if use_sample and not use_full and not use_file:
+            # slow path ok for tiny sample
+            if not args.skip_books:
+                # books via psycopg if available
+                try:
+                    conn = connect(args)
+                    bn = seed_books_pg(conn)
+                    conn.close()
+                except Exception:
+                    bn = 0
+                    for name, abbrev, ordinal, testament, _ in BOOKS:
+                        fields = {
+                            "name": name,
+                            "abbrev": abbrev,
+                            "ordinal": ordinal,
+                            "testament": testament,
+                        }
+                        fj = json.dumps(fields, separators=(",", ":"))
+                        psql(
+                            args,
+                            f"""
+                            DELETE FROM data_rows
+                            WHERE type_name = 'bible-book' AND fields->>'abbrev' = {sql_str(abbrev)};
+                            INSERT INTO data_rows (type_name, fields, author)
+                            VALUES ('bible-book', {sql_str(fj)}::jsonb, 'system');
+                            """,
+                        )
+                        bn += 1
+            n = upsert_sample_psql(args, SAMPLE_VERSES)
+            print(f"sample seed: books ok, verses={n}")
+        else:
+            conn = connect(args)
+            if not args.skip_books:
+                bn = seed_books_pg(conn)
+                print(f"seeded {bn} books", flush=True)
+            if use_file:
+                verses = load_jsonl(args.file)
+                print(f"seeding from JSONL {args.file}", flush=True)
+            else:
+                path = Path(args.complete) if args.complete else Path(args.cache)
+                if not path.is_file():
+                    if args.full or not args.complete:
+                        download_complete(path)
+                    else:
+                        raise SystemExit(f"missing complete.json: {path}")
+                print(f"loading {path}", flush=True)
+                with path.open(encoding="utf-8") as f:
+                    data = json.load(f)
+                verses = verses_from_complete(data)
+                print("seeding full BSB (replace all bible-verse rows)…", flush=True)
+            n = bulk_replace_verses(conn, verses)
+            conn.close()
+            print(f"wrote {n} verses", flush=True)
+
+        vcount = psql(
+            args, "SELECT count(*) FROM data_rows WHERE type_name='bible-verse'"
+        )
+        bcount = psql(
+            args, "SELECT count(*) FROM data_rows WHERE type_name='bible-book'"
+        )
         sample = psql(
             args,
-            "SELECT fields->>'text' FROM data_rows WHERE type_name='bible-verse' AND fields->>'ref'='BSB:John:3:16' LIMIT 1",
+            "SELECT fields->>'text' FROM data_rows WHERE type_name='bible-verse' "
+            "AND fields->>'ref'='BSB:John:3:16' LIMIT 1",
         )
+        print(f"table books={bcount} verses={vcount}")
         if sample:
-            print(f"check BSB:John:3:16: {sample[:80]}…")
+            print(f"check BSB:John:3:16: {sample[:100]}")
         else:
-            print("warn: BSB:John:3:16 missing after seed", file=sys.stderr)
+            print("warn: BSB:John:3:16 missing", file=sys.stderr)
+            return 1
+        if use_full or args.complete:
+            if int(vcount) < 30000:
+                print(f"warn: expected ~31k verses, got {vcount}", file=sys.stderr)
+                return 1
         return 0
     except Exception as e:
         print(f"error: {e}", file=sys.stderr)
