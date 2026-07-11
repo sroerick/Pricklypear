@@ -6,6 +6,7 @@
 
 daemon="/usr/local/libexec/pricklypear/current/bin/run-image.ksh"
 daemon_user="_pricklypear"
+daemon_class=daemon
 daemon_timeout=30
 rc_bg=YES
 
