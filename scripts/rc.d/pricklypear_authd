@@ -1,0 +1,55 @@
+#!/bin/ksh
+
+daemon="/usr/local/libexec/pricklypear/current/bin/run-authd.ksh"
+daemon_user="_pricklypear"
+daemon_timeout=30
+rc_bg=YES
+
+service_name="pricklypear_authd"
+env_file="${PP_ENV_FILE:-/etc/pricklypear/pricklypear.env}"
+runtime_dir="${PP_RUNTIME_DIR:-/var/run/pricklypear}"
+pidfile="${PP_AUTHD_PIDFILE:-${runtime_dir}/authd.pid}"
+log_dir="${PP_LOG_DIR:-/var/log/pricklypear}"
+
+if [ -f "${env_file}" ]; then
+	set -a
+	# shellcheck disable=SC1090
+	. "${env_file}"
+	set +a
+fi
+
+. /etc/rc.d/rc.subr
+
+rc_pre() {
+	install -d -o "${daemon_user}" -g "${daemon_user}" -m 0750 \
+		"${runtime_dir}" "${log_dir}"
+}
+
+rc_check() {
+	[ -f "${pidfile}" ] || return 1
+	pid="$(cat "${pidfile}" 2>/dev/null)" || return 1
+	[ -n "${pid}" ] || return 1
+	if kill -0 "${pid}" 2>/dev/null; then
+		return 0
+	fi
+	rm -f "${pidfile}"
+	return 1
+}
+
+rc_stop() {
+	rc_check || return 1
+	pid="$(cat "${pidfile}")"
+	kill -TERM "${pid}" 2>/dev/null || return 1
+	timeout="${daemon_timeout}"
+	while kill -0 "${pid}" 2>/dev/null; do
+		[ "${timeout}" -gt 0 ] || {
+			print -ru2 -- "failed to stop ${service_name}: pid ${pid}"
+			return 1
+		}
+		sleep 1
+		timeout=$((timeout - 1))
+	done
+	rm -f "${pidfile}"
+}
+
+rc_cmd $1
