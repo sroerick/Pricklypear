@@ -25,7 +25,8 @@
         PILLARS:
         1. Plugin-shaped Lisp packages (libs/*/lib.pp + load-library).
         2. Canon + lexicons in Postgres data_rows (shared across
-           branches); personal notes on the user branch later.
+           branches). Personal notes/bookmarks are a SEPARATE module
+           (not this chapter).
         3. htmx partials for reading/study panels (no SPA).
         4. Seeds are offline scripts; recipes only install code.
 
@@ -184,22 +185,6 @@
     |))
    )
   )
-  (subsection notes
-   (doc "Personal bookmarks and notes on refs")
-   (status planned)
-   (verify
-    (smoke "(create note on BSB:John:3:16) visible only as data_rows author story allows"))
-   (details
-    (doc (|
-         DEFERRED after study read path:
-         bible-note: ref, body
-         bible-bookmark: ref, label
-         Shared data_rows means notes are global unless filtered by
-         author — document v1 limitation; multi-user.permissions
-         may tighten later.
-    |))
-   )
-  )
   (subsection work-packages
    (doc "Implementation order")
    (status planned)
@@ -210,14 +195,16 @@
          WP2  Strong's seed + dabar/strongs + /strongs
          WP3  Interlinear seed + toggle + Strong's links
          WP4  FTS (optional parallel)
-         WP5  Notes/bookmarks (optional)
-         WP6  Multi-file library / require (when packages grow)
+         WP5  Multi-file library / require (when packages grow)
+
+         NOT THIS CHAPTER: personal notes/bookmarks — separate module.
 
          ACCEPTANCE v1 "dabar on PP":
          - bible reader green on boot
          - load-library dabar adds study without breaking /bible
          - Strong's lookup + one interlinear dogfood path
          - no semantic search
+         - no notes/bookmarks here
     |))
    )
   )
@@ -227,6 +214,7 @@
    (details
     (doc (|
          - Semantic search / pgvector / llama embedder
+         - Personal notes / bookmarks (separate module)
          - Porting Dream dabar server into the image
          - Audio
          - Path-param routes /bible/John/3 until platform supports
