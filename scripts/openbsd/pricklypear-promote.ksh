@@ -2,11 +2,10 @@
 # Promote a Pricklypear release archive on the runtime host (OpenBSD).
 # Run as root.
 #
+# Single-image model: one service (pricklypear), one process.
+#
 # Usage:
 #   /usr/local/sbin/pricklypear-promote <archive.tar.gz> <release-id>
-#
-# Or from a staged incoming path after scp:
-#   /usr/local/sbin/pricklypear-promote /home/deploy/incoming/abc123.tar.gz abc123
 
 set -eu
 
@@ -28,10 +27,8 @@ config_dir="${CONFIG_DIR:-/etc/pricklypear}"
 config_file="${config_dir}/pricklypear.env"
 config_group="${CONFIG_GROUP:-_pricklypear}"
 runtime_user="${RUNTIME_USER:-_pricklypear}"
-auth_service="pricklypear_authd"
-sup_service="pricklypear_supervisor"
-health_auth="${HEALTH_AUTH_URL:-http://127.0.0.1:17879/health}"
-health_sup="${HEALTH_SUP_URL:-http://127.0.0.1:17880/health}"
+service="pricklypear"
+health_url="${HEALTH_URL:-http://127.0.0.1:18080/health}"
 target_dir="${releases_dir}/${release_id}"
 tmpdir="$(mktemp -d /tmp/pp-promote.XXXXXXXXXX)"
 stage_dir="${tmpdir}/release"
@@ -54,27 +51,20 @@ install -d -o "${runtime_user}" -g "${runtime_user}" -m 0750 \
 mkdir -p "${stage_dir}"
 tar -C "${stage_dir}" -xzf "${archive}"
 
-for required in bin/authd bin/supervisor bin/image \
-  bin/run-authd.ksh bin/run-supervisor.ksh \
-  rc.d/pricklypear_authd rc.d/pricklypear_supervisor \
+for required in bin/image bin/run-image.ksh \
+  rc.d/pricklypear \
   pricklypear.env.example MANIFEST; do
   [ -e "${stage_dir}/${required}" ] || die "archive missing ${required}"
 done
 
-# Normalize perms
-chmod 755 "${stage_dir}/bin/authd" "${stage_dir}/bin/supervisor" \
-  "${stage_dir}/bin/image" \
-  "${stage_dir}/bin/run-authd.ksh" "${stage_dir}/bin/run-supervisor.ksh"
-chmod 555 "${stage_dir}/rc.d/pricklypear_authd" \
-  "${stage_dir}/rc.d/pricklypear_supervisor"
+chmod 755 "${stage_dir}/bin/image" "${stage_dir}/bin/run-image.ksh"
+chmod 555 "${stage_dir}/rc.d/pricklypear"
 
 mv "${stage_dir}" "${target_dir}"
 
-# Install rc.d scripts
+# Install rc.d service
 install -o root -g wheel -m 0555 \
-  "${target_dir}/rc.d/pricklypear_authd" "/etc/rc.d/${auth_service}"
-install -o root -g wheel -m 0555 \
-  "${target_dir}/rc.d/pricklypear_supervisor" "/etc/rc.d/${sup_service}"
+  "${target_dir}/rc.d/pricklypear" "/etc/rc.d/${service}"
 
 # Install promote helper system-wide (from archive if present)
 if [ -f "${target_dir}/pricklypear-promote.ksh" ]; then
@@ -91,7 +81,8 @@ if [ ! -f "${config_file}" ]; then
   log "created ${config_file} from example — edit secrets before relying on boot"
 fi
 
-# Force PP_IMAGE_BIN in live env to current release image path
+# Point PP_IMAGE_BIN at the current release (unused by run-image.ksh directly,
+# but kept for operators / scripts that read it).
 if grep -q '^PP_IMAGE_BIN=' "${config_file}" 2>/dev/null; then
   tmpf="${config_file}.new"
   sed "s|^PP_IMAGE_BIN=.*|PP_IMAGE_BIN=${current_link}/bin/image|" \
@@ -110,49 +101,35 @@ fi
 
 ln -sfn "${target_dir}" "${current_link}"
 
-# Enable services
-rcctl enable "${auth_service}" 2>/dev/null || true
-rcctl enable "${sup_service}" 2>/dev/null || true
+# Enable the service
+rcctl enable "${service}" 2>/dev/null || true
 
 rollback() {
   [ -n "${previous_target}" ] || return 1
   log "rolling back to ${previous_target}"
   ln -sfn "${previous_target}" "${current_link}"
-  rcctl restart "${auth_service}" >/dev/null 2>&1 || true
-  rcctl restart "${sup_service}" >/dev/null 2>&1 || true
+  rcctl restart "${service}" >/dev/null 2>&1 || true
 }
 
-# Drop stale listeners before restart (avoids EADDRINUSE on small boxes)
+# Drop the stale image listener (one process, one port, clean shutdown).
 pkill -U "${runtime_user}" 2>/dev/null || true
 sleep 1
 rm -f /var/run/pricklypear/*.pid 2>/dev/null || true
 
-log "restart ${auth_service}"
-if ! rcctl restart "${auth_service}"; then
-  # first boot may need start
-  rcctl start "${auth_service}" || {
+log "restart ${service}"
+if ! rcctl restart "${service}"; then
+  rcctl start "${service}" || {
     rollback || true
-    die "authd failed to start; see /var/log/pricklypear/authd.log"
+    die "image failed to start; see /var/log/pricklypear/image.log"
   }
 fi
 
-sleep 1
-log "restart ${sup_service}"
-if ! rcctl restart "${sup_service}"; then
-  rcctl start "${sup_service}" || {
-    rollback || true
-    die "supervisor failed to start; see /var/log/pricklypear/supervisor.log"
-  }
-fi
-
-# Health checks (best-effort; ftp -o - works on OpenBSD base)
+# Health check (best-effort)
 ok=0
 attempts=0
 while [ "${attempts}" -lt 20 ]; do
-  auth_body="$(ftp -o - "${health_auth}" 2>/dev/null || true)"
-  sup_body="$(ftp -o - "${health_sup}" 2>/dev/null || true)"
-  if print -r -- "${auth_body}" | grep -qi . && \
-     print -r -- "${sup_body}" | grep -qi .; then
+  body="$(ftp -o - "${health_url}" 2>/dev/null || true)"
+  if print -r -- "${body}" | grep -qi '"ok"'; then
     ok=1
     break
   fi
@@ -161,24 +138,8 @@ while [ "${attempts}" -lt 20 ]; do
 done
 
 if [ "${ok}" -ne 1 ]; then
-  log "WARN: health endpoints not ready after promote (auth/sup may still be migrating)"
-  log "  auth log: /var/log/pricklypear/authd.log"
-  log "  sup log:  /var/log/pricklypear/supervisor.log"
-  # Do not auto-rollback on health — migrations may need a moment; operator checks.
-fi
-
-# Warm-boot default image so relayd :80 has a backend (line-protocol key auth).
-# Uses PP_BOOTSTRAP_ADMIN_KEY from env if present.
-if [ -f "${config_file}" ]; then
-  set -a
-  # shellcheck disable=SC1090
-  . "${config_file}"
-  set +a
-fi
-if [ -n "${PP_BOOTSTRAP_ADMIN_KEY:-}" ]; then
-  log "warm-boot image via line-protocol"
-  print -r -- "${PP_BOOTSTRAP_ADMIN_KEY}" | nc -w 5 127.0.0.1 "${PP_SSH_PORT:-17822}" >/dev/null 2>&1 || true
-  sleep 1
+  log "WARN: health endpoint not ready after promote"
+  log "  image log: /var/log/pricklypear/image.log"
 fi
 
 log "promoted ${release_id}"

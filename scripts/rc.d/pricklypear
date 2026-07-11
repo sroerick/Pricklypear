@@ -1,0 +1,45 @@
+#!/bin/ksh
+# /etc/rc.d/pricklypear — single Pricklypear image service.
+#
+# One process. No supervisor, no authd (retired by the single-image pivot).
+# The image binary serves htmx HTTP + a line-protocol REPL directly.
+
+daemon="/usr/local/libexec/pricklypear/current/bin/run-image.ksh"
+daemon_user="_pricklypear"
+daemon_timeout=30
+rc_bg=YES
+
+service_name="pricklypear"
+env_file="${PP_ENV_FILE:-/etc/pricklypear/pricklypear.env}"
+runtime_dir="${PP_RUNTIME_DIR:-/var/run/pricklypear}"
+pidfile="${PP_IMAGE_PIDFILE:-${runtime_dir}/image.pid}"
+log_dir="${PP_LOG_DIR:-/var/log/pricklypear}"
+
+if [ -f "${env_file}" ]; then
+	set -a
+	# shellcheck disable=SC1090
+	. "${env_file}"
+	set +a
+fi
+
+. /etc/rc.d/rc.subr
+
+rc_pre() {
+	install -d -o "${daemon_user}" -g "${daemon_user}" -m 0750 \
+		"${runtime_dir}" "${log_dir}"
+}
+
+rc_check() {
+	[ -f "${pidfile}" ] || return 1
+	pid="$(cat "${pidfile}" 2>/dev/null)" || return 1
+	kill -0 "${pid}" 2>/dev/null || return 1
+	# Health probe (best-effort)
+	port="${PP_HTTP_PORT:-18080}"
+	ftp -o - "http://127.0.0.1:${port}/health" 2>/dev/null | grep -qi '"ok"' || return 1
+}
+
+rc_post() {
+	rm -f "${pidfile}" 2>/dev/null || true
+}
+
+rc_cmd "$1"
