@@ -741,11 +741,31 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value Lwt.t =
 
 (* --- Library loader: same .pp text as in git libs/ --- *)
 
+and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
+    : Pricklypear_lisp.Ast.value Lwt.t =
+  (* Like eval_one but takes AST — avoids pp_expr string round-trip. *)
+  let* v =
+    Pricklypear_lisp.Eval.eval ~budget:(Pricklypear_lisp.Eval.make_budget ())
+      ~prims:t.prims t.env expr
+  in
+  (match expr with
+   | Pricklypear_lisp.Ast.App
+       (Pricklypear_lisp.Ast.Var "define",
+        [ Pricklypear_lisp.Ast.Var name; body_expr ]) ->
+       Lwt.async (fun () ->
+         Store.persist_function t.store name body_expr t.manifest.username);
+       let* () =
+         if name = "ui/nav" || name = "ui/home" then refresh_ui_shell t
+         else Lwt.return_unit
+       in
+       Lwt.return v
+   | _ -> Lwt.return v)
+
 and load_string (t : t) (src : string) : (string, string) result Lwt.t =
-  Loader.load_string ~eval_one:(eval_one t) src
+  Loader.load_string ~eval_form:(eval_form t) src
 
 and load_library (t : t) (name : string) : (string, string) result Lwt.t =
-  Loader.load_library ~eval_one:(eval_one t) name
+  Loader.load_library ~eval_form:(eval_form t) name
 
 and refresh_ui_shell (t : t) : unit Lwt.t =
   match Pricklypear_lisp.Env.lookup t.env "ui/nav" with
