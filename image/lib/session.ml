@@ -752,6 +752,11 @@ let list_pages (t : t) : (string * string) list =
   Hashtbl.fold (fun route handler acc -> (route, handler) :: acc) t.routes []
   |> List.sort (fun (a, _) (b, _) -> String.compare a b)
 
+let set_route (t : t) ~(route : string) ~(handler : string) : unit Lwt.t =
+  Hashtbl.replace t.routes route handler;
+  let* _ = Store.register_route t.store ~route ~handler in
+  Lwt.return_unit
+
 (* Invoke a named handler function (looked up via env). The handler
    must be a zero-arg VLambda or a VPrim name. Returns its value, or
    raises Interp_error if the handler doesn't resolve.

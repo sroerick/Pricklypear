@@ -34,7 +34,10 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
          pre,textarea,input[type=text]{background:#121a24;color:#e7ecf1;border:1px solid #2a3a4f;border-radius:6px;padding:.6rem;width:100%;box-sizing:border-box;font:inherit}
          textarea{min-height:220px}button,.btn{background:#2f6fed;color:#fff;border:0;border-radius:6px;padding:.45rem .9rem;cursor:pointer;font:inherit}
          button.secondary{background:#314156}.card{background:#151e2a;border:1px solid #2a3a4f;border-radius:10px;padding:1rem;margin-bottom:1rem}
-         .err{color:#ff8e8e}.ok{color:#9fefb0}#out{white-space:pre-wrap;min-height:4rem}";
+         .err{color:#ff8e8e}.ok{color:#9fefb0}#out{white-space:pre-wrap;min-height:4rem}
+         .muted{color:#9aa7b5;font-size:.9rem}ul.actions{list-style:none;padding:0}ul.actions li{margin:.4rem 0}";
+      (* htmx for create-in-place editor empty state *)
+      HTML.script [HTML.src "https://unpkg.com/htmx.org@1.9.12"] "";
     ];
     HTML.body [] [body];
   ] in
@@ -79,7 +82,6 @@ let chrome ~(session : Session.t) ~(title : string) (content : Pure_html.node li
         HTML.a [HTML.href "/types"] [txt "data"];
         HTML.a [HTML.href "/pages"] [txt "pages"];
         HTML.a [HTML.href "/repl"] [txt "repl"];
-        HTML.a [HTML.href "/edit/hello"] [txt "editor"];
       ];
     ];
     HTML.main [] (
@@ -352,16 +354,29 @@ let about_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit =
   in
   html_response reqd body
 
+(* Page path for inspector: "/hello" -> "hello" for URL segment. *)
+let page_inspect_path (route : string) : string =
+  if String.length route > 0 && route.[0] = '/' then
+    String.sub route 1 (String.length route - 1)
+  else route
+
 let pages_list_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit =
   let routes = Session.list_pages session in
   let rows =
     List.map
       (fun (route, handler) ->
+        let inspect = "/page/" ^ page_inspect_path route in
         HTML.tr [] [
           HTML.td [] [HTML.a [HTML.href "%s" route] [txt "%s" route]];
-          HTML.td [] [txt "%s" handler];
           HTML.td [] [
-            HTML.a [HTML.href "%s" ("/edit/" ^ handler)] [txt "edit fn"];
+            HTML.a [HTML.href "%s" ("/edit/" ^ handler)] [txt "%s" handler];
+          ];
+          HTML.td [] [
+            HTML.a [HTML.href "%s" route] [txt "open"];
+            txt " · ";
+            HTML.a [HTML.href "%s" ("/edit/" ^ handler)] [txt "edit function"];
+            txt " · ";
+            HTML.a [HTML.href "%s" inspect] [txt "inspect page"];
           ];
         ])
       routes
@@ -369,7 +384,7 @@ let pages_list_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit =
   let body =
     chrome ~session ~title:"Pages" [
       HTML.p [HTML.class_ "meta"] [
-        txt "URLs bound to functions via (route \"/path\" \"handler\"). User pages are just functions.";
+        txt "Page = URL endpoint. Function = code it runs. Edit functions; open pages.";
       ];
       (match routes with
        | [] ->
@@ -380,8 +395,8 @@ let pages_list_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit =
            HTML.table [] [
              HTML.thead [] [
                HTML.tr [] [
-                 HTML.th [] [txt "page"];
-                 HTML.th [] [txt "function"];
+                 HTML.th [] [txt "page (URL)"];
+                 HTML.th [] [txt "function (handler)"];
                  HTML.th [] [txt "actions"];
                ]
              ];
@@ -478,49 +493,339 @@ let repl_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit =
   in
   html_response reqd body
 
-let editor_page (session : Session.t) (name : string) ?(msg = "")
-    ?(body_src = "") (reqd : Httpaf.Reqd.t) : unit Lwt.t =
-  let* initial =
-    if body_src <> "" then Lwt.return body_src
+(* Default stub body for a brand-new function. *)
+let stub_body (name : string) : string =
+  Printf.sprintf "(lambda ()\n  \"TODO: implement %s\")" name
+
+(* Static user-function callees: walk AST App heads that are Vars. *)
+let rec collect_var_apps (acc : string list) (e : Pricklypear_lisp.Ast.expr)
+    : string list =
+  match e with
+  | Pricklypear_lisp.Ast.Var _ | Pricklypear_lisp.Ast.Lit _ -> acc
+  | Pricklypear_lisp.Ast.App (Pricklypear_lisp.Ast.Var f, args) ->
+      List.fold_left collect_var_apps (f :: acc) args
+  | Pricklypear_lisp.Ast.App (f, args) ->
+      List.fold_left collect_var_apps (collect_var_apps acc f) args
+  | Pricklypear_lisp.Ast.Let (_, e1, e2) ->
+      collect_var_apps (collect_var_apps acc e1) e2
+  | Pricklypear_lisp.Ast.Letrec (binds, body) ->
+      let acc =
+        List.fold_left (fun a (_, e) -> collect_var_apps a e) acc binds
+      in
+      collect_var_apps acc body
+  | Pricklypear_lisp.Ast.If (c, t, e) ->
+      collect_var_apps (collect_var_apps (collect_var_apps acc c) t) e
+  | Pricklypear_lisp.Ast.Lambda (_, body) -> collect_var_apps acc body
+  | Pricklypear_lisp.Ast.Prim (_, args) ->
+      List.fold_left collect_var_apps acc args
+  | Pricklypear_lisp.Ast.Seq (a, b) ->
+      collect_var_apps (collect_var_apps acc a) b
+  | Pricklypear_lisp.Ast.Quote _ -> acc
+  | Pricklypear_lisp.Ast.Define (_, body) -> collect_var_apps acc body
+
+let page_function_graph (session : Session.t) ~(handler : string)
+    : (string * string) list Lwt.t =
+  let max_depth = 8 in
+  let rec walk depth seen name role acc =
+    if depth > max_depth || List.mem name seen then Lwt.return acc
     else
       let* found = Store.lookup_function (Session.store session) name in
       match found with
-      | Some (expr, _) -> Lwt.return (Pricklypear_lisp.Reader.pp_expr expr)
-      | None ->
-          Lwt.return
-            (Printf.sprintf
-               "(lambda ()\n  \"TODO: implement %s\")" name)
+      | None -> Lwt.return ((name, role ^ " (missing)") :: acc)
+      | Some (expr, _) ->
+          let acc = (name, role) :: acc in
+          let seen = name :: seen in
+          let candidates = collect_var_apps [] expr in
+          let rec filter_bind names out =
+            match names with
+            | [] -> Lwt.return (List.rev out)
+            | n :: rest ->
+                let* f = Store.lookup_function (Session.store session) n in
+                (match f with
+                 | Some _ when n <> name && not (List.mem n out) ->
+                     filter_bind rest (n :: out)
+                 | _ -> filter_bind rest out)
+          in
+          let* callees = filter_bind candidates [] in
+          let rec fold_c cs acc =
+            match cs with
+            | [] -> Lwt.return acc
+            | c :: rest ->
+                let* acc = walk (depth + 1) seen c "callee" acc in
+                fold_c rest acc
+          in
+          fold_c callees acc
   in
+  let* rows = walk 0 [] handler "handler" [] in
+  Lwt.return (List.rev rows)
+
+let editor_form_partial ~(name : string) ~(body_src : string) ?(msg = "") ()
+    : Pure_html.node =
   let flash =
     if msg = "" then HTML.div [] []
-    else HTML.p [HTML.class_ (if String.length msg >= 5 && String.sub msg 0 5 = "error" then "err" else "ok")]
-           [txt "%s" msg]
+    else
+      HTML.p
+        [ HTML.class_
+            (if String.length msg >= 5 && String.sub msg 0 5 = "error" then "err"
+             else "ok") ]
+        [ txt "%s" msg ]
   in
-  let body =
-    chrome ~session ~title:("Edit " ^ name) [
-      flash;
-      HTML.div [HTML.class_ "card"] [
-        HTML.form [HTML.method_ `POST; HTML.action "%s" ("/edit/" ^ name);
-                   HTML.enctype `urlencoded] [
-          HTML.p [] [
+  HTML.div [HTML.id "editor-root"] [
+    flash;
+    HTML.div [HTML.class_ "card"] [
+      HTML.form
+        [ HTML.method_ `POST
+        ; HTML.action "%s" ("/edit/" ^ name)
+        ; HTML.enctype `urlencoded ]
+        [ HTML.p [] [
             HTML.label [HTML.for_ "name"] [txt "name "];
-            HTML.input [HTML.type_ "text"; HTML.name "name"; HTML.id "name";
-                        HTML.value "%s" name];
-          ];
-          HTML.p [] [HTML.label [HTML.for_ "body"] [txt "body (s-expression)"]];
-          HTML.textarea [HTML.name "body"; HTML.id "body"] "%s" initial;
-          HTML.p [] [
+            HTML.input
+              [ HTML.type_ "text"
+              ; HTML.name "name"
+              ; HTML.id "name"
+              ; HTML.value "%s" name ];
+          ]
+        ; HTML.p [] [HTML.label [HTML.for_ "body"] [txt "body (s-expression)"]]
+        ; (HTML.textarea [HTML.name "body"; HTML.id "body"] "%s" body_src)
+        ; HTML.p [] [
             HTML.button [HTML.type_ "submit"] [txt "Save (define + persist)"];
             txt " ";
-            HTML.a [HTML.href "%s" ("/binding/" ^ name); HTML.class_ "btn secondary"]
-              [txt "View"];
+            HTML.a
+              [ HTML.href "%s" ("/binding/" ^ name)
+              ; HTML.class_ "btn secondary" ]
+              [ txt "View" ];
           ];
         ];
+    ];
+  ]
+
+let route_for_edit_name (session : Session.t) (name : string)
+    : (string * string) option =
+  let route = "/" ^ name in
+  match Session.lookup_route session route with
+  | Some handler -> Some (route, handler)
+  | None ->
+      (match Session.lookup_route session name with
+       | Some handler -> Some (name, handler)
+       | None -> None)
+
+let missing_editor_card (session : Session.t) (name : string) : Pure_html.node =
+  let route_opt = route_for_edit_name session name in
+  let route_block =
+    match route_opt with
+    | None -> HTML.div [] []
+    | Some (route, handler) ->
+        HTML.div [HTML.class_ "card"] [
+          HTML.p [] [
+            txt "There is a page ";
+            HTML.a [HTML.href "%s" route] [txt "%s" route];
+            txt " that currently runs function ";
+            HTML.span [HTML.class_ "ok"] [txt "%s" handler];
+            txt ".";
+          ];
+          HTML.p [] [
+            HTML.a [HTML.href "%s" ("/edit/" ^ handler); HTML.class_ "btn"]
+              [txt "Edit %s" handler];
+            txt " ";
+            HTML.a
+              [ HTML.href "%s" ("/page/" ^ page_inspect_path route)
+              ; HTML.class_ "btn secondary" ]
+              [ txt "Inspect page" ];
+          ];
+        ]
+  in
+  let create_form =
+    HTML.div [HTML.class_ "card"] [
+      HTML.p [] [txt "Function \"%s\" does not exist." name];
+      HTML.p [HTML.class_ "muted"] [
+        txt "Create it here — the editor loads in place (htmx).";
       ];
+      HTML.form
+        [ HTML.method_ `POST
+        ; HTML.action "/api/edit/create"
+        ; HTML.enctype `urlencoded
+        ; Hx.post "/api/edit/create"
+        ; Hx.target "#editor-root"
+        ; Hx.swap "outerHTML" ]
+        [ HTML.input [HTML.type_ "hidden"; HTML.name "name"; HTML.value "%s" name]
+        ; (match route_opt with
+           | Some (route, _) ->
+               HTML.p [] [
+                 HTML.label [] [
+                   HTML.input
+                     [ HTML.type_ "checkbox"
+                     ; HTML.name "rebind_route"
+                     ; HTML.value "1" ];
+                   txt " also point page %s at this new function" route;
+                 ];
+               ]
+           | None -> HTML.div [] [])
+        ; HTML.p [] [
+            HTML.button [HTML.type_ "submit"] [txt "Create function %s" name];
+            txt " ";
+            HTML.a [HTML.href "/bindings"; HTML.class_ "btn secondary"]
+              [txt "Functions list"];
+          ];
+        ];
     ]
+  in
+  HTML.div [HTML.id "editor-root"] [route_block; create_form]
+
+let editor_page (session : Session.t) (name : string) ?(msg = "")
+    ?(body_src = "") (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+  let* found = Store.lookup_function (Session.store session) name in
+  let body =
+    match found, body_src with
+    | _, src when src <> "" ->
+        chrome ~session ~title:("Edit " ^ name)
+          [ editor_form_partial ~name ~body_src:src ~msg () ]
+    | Some (expr, _), _ ->
+        let initial = Pricklypear_lisp.Reader.pp_expr expr in
+        chrome ~session ~title:("Edit " ^ name)
+          [ editor_form_partial ~name ~body_src:initial ~msg () ]
+    | None, _ ->
+        chrome ~session ~title:("Edit " ^ name)
+          [ missing_editor_card session name ]
   in
   html_response reqd body;
   Lwt.return_unit
+
+let api_edit_create (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+  let* body = read_body reqd in
+  let name =
+    match form_field body "name" with
+    | Some n when String.trim n <> "" -> String.trim n
+    | _ -> ""
+  in
+  if name = "" then begin
+    html_response reqd ~status:`Bad_request
+      (HTML.div [HTML.class_ "err"] [txt "name required"]);
+    Lwt.return_unit
+  end else
+    let rebind =
+      match form_field body "rebind_route" with
+      | Some ("1" | "on" | "true") -> true
+      | _ -> false
+    in
+    let body_src = stub_body name in
+    let* res =
+      Session.define_binding session ~name ~body_src
+        ~author:(Session.username session)
+    in
+    match res with
+    | Error e ->
+        html_response reqd ~status:`Bad_request
+          (HTML.div [HTML.id "editor-root"; HTML.class_ "err"]
+             [txt "create failed: %s" e]);
+        Lwt.return_unit
+    | Ok _ ->
+        let* () =
+          if rebind then
+            Session.set_route session ~route:("/" ^ name) ~handler:name
+          else Lwt.return_unit
+        in
+        let msg =
+          if rebind then
+            Printf.sprintf "created %s and pointed /%s at it" name name
+          else Printf.sprintf "created %s — edit and save" name
+        in
+        let node = editor_form_partial ~name ~body_src ~msg () in
+        (* Partial only — htmx swaps into #editor-root *)
+        let s = Pure_html.to_string node in
+        let headers =
+          Httpaf.Headers.of_list
+            [ ("content-type", "text/html; charset=utf-8")
+            ; ("content-length", string_of_int (String.length s)) ]
+        in
+        let resp = Httpaf.Response.create ~headers `OK in
+        Httpaf.Reqd.respond_with_string reqd resp s;
+        Lwt.return_unit
+
+let page_inspector (session : Session.t) (path_seg : string)
+    (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+  let route =
+    if path_seg = "" then "/"
+    else if path_seg.[0] = '/' then path_seg
+    else "/" ^ path_seg
+  in
+  match Session.lookup_route session route with
+  | None ->
+      html_response reqd ~status:`Not_found
+        (chrome ~session ~title:("Page " ^ route) [
+           HTML.p [HTML.class_ "err"] [txt "no page registered for %s" route];
+           HTML.p [] [HTML.a [HTML.href "/pages"] [txt "all pages"]];
+         ]);
+      Lwt.return_unit
+  | Some handler ->
+      let* graph = page_function_graph session ~handler in
+      let* found = Store.lookup_function (Session.store session) handler in
+      let body_block =
+        match found with
+        | None ->
+            HTML.p [HTML.class_ "err"] [txt "handler function missing in store"]
+        | Some (expr, author) ->
+            HTML.div [] [
+              HTML.p [HTML.class_ "muted"] [txt "author: %s" author];
+              HTML.pre [] [txt "%s" (Pricklypear_lisp.Reader.pp_expr expr)];
+            ]
+      in
+      let rows =
+        List.map
+          (fun (n, role) ->
+            HTML.tr [] [
+              HTML.td [] [txt "%s" n];
+              HTML.td [] [txt "%s" role];
+              HTML.td [] [
+                HTML.a [HTML.href "%s" ("/edit/" ^ n)] [txt "edit"];
+                txt " · ";
+                HTML.a [HTML.href "%s" ("/inspect/binding/" ^ n)] [txt "inspect"];
+              ];
+            ])
+          graph
+      in
+      let body =
+        chrome ~session ~title:("Page " ^ route) [
+          HTML.div [HTML.class_ "card"] [
+            HTML.h2 [] [txt "Routing"];
+            HTML.p [] [
+              txt "Page URL: ";
+              HTML.a [HTML.href "%s" route] [txt "%s" route];
+            ];
+            HTML.p [] [
+              txt "Handler function: ";
+              HTML.a [HTML.href "%s" ("/edit/" ^ handler)] [txt "%s" handler];
+            ];
+            HTML.p [] [
+              HTML.a [HTML.href "%s" route; HTML.class_ "btn"] [txt "Open page"];
+              txt " ";
+              HTML.a [HTML.href "%s" ("/edit/" ^ handler); HTML.class_ "btn secondary"]
+                [txt "Edit handler"];
+            ];
+          ];
+          HTML.div [HTML.class_ "card"] [
+            HTML.h2 [] [txt "Functions this page uses"];
+            HTML.p [HTML.class_ "muted"] [
+              txt "Static call graph from the handler body (user functions only).";
+            ];
+            HTML.table [] [
+              HTML.thead [] [
+                HTML.tr [] [
+                  HTML.th [] [txt "function"];
+                  HTML.th [] [txt "role"];
+                  HTML.th [] [txt "actions"];
+                ];
+              ];
+              HTML.tbody [] rows;
+            ];
+          ];
+          HTML.div [HTML.class_ "card"] [
+            HTML.h2 [] [txt "Entry body (handler)"];
+            body_block;
+          ];
+        ]
+      in
+      html_response reqd body;
+      Lwt.return_unit
 
 let inspect_binding_page (session : Session.t) (name : string)
     (reqd : Httpaf.Reqd.t) : unit Lwt.t =
@@ -785,6 +1090,13 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
   | `GET, "/repl" -> repl_page session reqd
   | `POST, "/api/eval" -> launch (api_eval session reqd)
   | `POST, "/api/ai/propose" -> launch (ai_propose session reqd)
+  | `POST, "/api/edit/create" -> launch (api_edit_create session reqd)
+  | `GET, path when String.length path >= 6
+                 && String.sub path 0 6 = "/page/" ->
+      let seg = String.sub path 6 (String.length path - 6) in
+      launch (page_inspector session seg reqd)
+  | `GET, "/page" | `GET, "/page/" ->
+      launch (page_inspector session "" reqd)
   | `GET, path when String.length path >= 18
                  && String.sub path 0 18 = "/inspect/binding/" ->
       let name = String.sub path 18 (String.length path - 18) in
