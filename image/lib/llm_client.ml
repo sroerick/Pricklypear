@@ -145,6 +145,52 @@ let strip_fences (s : string) : string =
          | None -> String.trim rest)
   else s
 
+(** Pull the first balanced s-expression from model noise
+    (reasoning essays, markdown, numbered lists). *)
+let extract_lisp_sexpr (s : string) : (string, string) result =
+  let s = strip_fences s in
+  let len = String.length s in
+  let rec find_open i =
+    if i >= len then None
+    else if s.[i] = '(' then Some i
+    else find_open (i + 1)
+  in
+  match find_open 0 with
+  | None ->
+      Error "no Lisp s-expression found in model output (expected a (lambda ...) form)"
+  | Some start ->
+      let rec scan i depth in_str =
+        if i >= len then Error "unbalanced parentheses in model output"
+        else
+          let c = s.[i] in
+          if in_str then
+            if c = '\\' && i + 1 < len then scan (i + 2) depth true
+            else if c = '"' then scan (i + 1) depth false
+            else scan (i + 1) depth true
+          else
+            match c with
+            | '"' -> scan (i + 1) depth true
+            | '(' -> scan (i + 1) (depth + 1) false
+            | ')' ->
+                if depth <= 1 then
+                  Ok (String.trim (String.sub s start (i - start + 1)))
+                else scan (i + 1) (depth - 1) false
+            | ';' ->
+                (* skip line comment *)
+                let rec skip j =
+                  if j >= len || s.[j] = '\n' then j else skip (j + 1)
+                in
+                scan (skip i) depth false
+            | _ -> scan (i + 1) depth false
+      in
+      (match scan (start + 1) 1 false with
+       | Error e -> Error e
+       | Ok sexpr ->
+           (* Prefer a lambda/list form; reject tiny garbage. *)
+           if String.length sexpr < 3 then
+             Error "extracted s-expression too short"
+           else Ok sexpr)
+
 (** Extract delta content from one streaming SSE JSON payload. *)
 let extract_stream_delta (data : string) : string option =
   if data = "[DONE]" then None
