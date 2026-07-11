@@ -120,8 +120,46 @@ let json_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (j : Yojson.Safe.t) : u
   let s = Yojson.Safe.to_string j in
   text_response reqd ~status ~content_type:"application/json" s
 
-let chrome ~(session : Session.t) ~(title : string) (content : Pure_html.node list)
-    : Pure_html.node =
+let default_nav_nodes () : Pure_html.node list =
+  [ HTML.a [HTML.href "/"] [txt "home"]
+  ; HTML.a [HTML.href "/about"] [txt "about"]
+  ; HTML.a [HTML.href "/branches"] [txt "branches"]
+  ; HTML.a [HTML.href "/bindings"] [txt "functions"]
+  ; HTML.a [HTML.href "/types"] [txt "data"]
+  ; HTML.a [HTML.href "/pages"] [txt "pages"]
+  ; HTML.a [HTML.href "/repl"] [txt "repl"]
+  ]
+
+let value_to_html_string (v : Pricklypear_lisp.Ast.value) : string =
+  match Primitives.is_raw_html v with
+  | Some s -> s
+  | None ->
+      (match v with
+       | Pricklypear_lisp.Ast.VStr s -> s
+       | _ -> Pricklypear_lisp.Reader.pp_value v)
+
+let try_ui_fn (session : Session.t) (name : string) : string option Lwt.t =
+  Lwt.catch
+    (fun () ->
+      let* r = Session.call_handler session name in
+      match r with
+      | Some v -> Lwt.return (Some (value_to_html_string v))
+      | None -> Lwt.return None)
+    (fun _ -> Lwt.return None)
+
+let chrome ?nav_html ~(session : Session.t) ~(title : string)
+    (content : Pure_html.node list) : Pure_html.node =
+  let nav_html =
+    match nav_html with
+    | Some _ as s -> s
+    | None -> Session.ui_nav_html session
+  in
+  let nav =
+    match nav_html with
+    | Some html when String.trim html <> "" ->
+        HTML.nav [] [txt ~raw:true "%s" html]
+    | _ -> HTML.nav [] (default_nav_nodes ())
+  in
   HTML.div [] [
     HTML.header [] [
       HTML.span [HTML.class_ "brand"] [txt "Pricklypear"];
@@ -131,20 +169,17 @@ let chrome ~(session : Session.t) ~(title : string) (content : Pure_html.node li
           (Session.branch_name session)
           (Session.uptime_seconds session);
       ];
-      HTML.nav [] [
-        HTML.a [HTML.href "/"] [txt "home"];
-        HTML.a [HTML.href "/about"] [txt "about"];
-        HTML.a [HTML.href "/branches"] [txt "branches"];
-        HTML.a [HTML.href "/bindings"] [txt "functions"];
-        HTML.a [HTML.href "/types"] [txt "data"];
-        HTML.a [HTML.href "/pages"] [txt "pages"];
-        HTML.a [HTML.href "/repl"] [txt "repl"];
-      ];
+      nav;
     ];
     HTML.main [] (
       HTML.h1 [] [txt "%s" title] :: content
     );
   ]
+
+let chrome_lwt ~(session : Session.t) ~(title : string)
+    (content : Pure_html.node list) : Pure_html.node Lwt.t =
+  let* nav_html = try_ui_fn session "ui/nav" in
+  Lwt.return (chrome ?nav_html ~session ~title content)
 
 let read_body (reqd : Httpaf.Reqd.t) : string Lwt.t =
   let body = Httpaf.Reqd.request_body reqd in
@@ -440,73 +475,70 @@ let pages_list_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit =
   in
   html_response reqd body
 
-let home_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit =
-  let body =
-    chrome ~session ~title:"Workspace" [
-      HTML.div [HTML.class_ "card"] [
-        HTML.h2 [] [txt "Workspace"];
-        HTML.p [] [
-          txt "You are %s on branch %s. This is your live image — functions are durable data, pages are functions bound to URLs."
-            (Session.username session) (Session.branch_name session);
-        ];
-        HTML.p [] [
-          HTML.a [HTML.href "/about"] [txt "New here? Read About — concepts, access, and long-term possibilities"];
-        ];
-        HTML.ul [] [
-          HTML.li [] [HTML.a [HTML.href "/about"] [txt "About / concepts"]];
-          HTML.li [] [HTML.a [HTML.href "/bindings"] [txt "Functions"]];
-          HTML.li [] [HTML.a [HTML.href "/pages"] [txt "Pages"]];
-          HTML.li [] [HTML.a [HTML.href "/types"] [txt "Data types"]];
-          HTML.li [] [HTML.a [HTML.href "/repl"] [txt "REPL (do-it)"]];
-          HTML.li [] [HTML.a [HTML.href "/bindings"] [txt "Functions"]];
-          HTML.li [] [HTML.a [HTML.href "/branches"] [txt "Branches"]];
-        ];
+let default_home_content (session : Session.t) : Pure_html.node list =
+  [ HTML.div [HTML.class_ "card"] [
+      HTML.h2 [] [txt "Workspace"];
+      HTML.p [] [
+        txt "You are %s on branch %s."
+          (Session.username session) (Session.branch_name session);
       ];
-      HTML.div [HTML.class_ "card"] [
-        HTML.h2 [] [txt "First-run: make a Hello page"];
-        HTML.p [] [txt
-          "One click creates a function (hi-page) and a page at /hello. No Lisp required — then edit it."];
-        HTML.form [HTML.method_ `POST; HTML.action "/api/recipe/hello";
-                   HTML.enctype `urlencoded] [
-          HTML.button [HTML.type_ "submit"] [txt "Create Hello page"];
-        ];
-      ];
-      HTML.div [HTML.class_ "card"] [
-        HTML.h2 [] [txt "Library: todo package"];
-        HTML.p [] [txt
-          "Seeds package todo/ (add, list, page), type todo-item, and route /todos with POST form add + redirect. Browse it under Functions → todo."];
-        HTML.form [HTML.method_ `POST; HTML.action "/api/recipe/todo";
-                   HTML.enctype `urlencoded] [
-          HTML.button [HTML.type_ "submit"] [txt "Install todo library"];
-        ];
-      ];
-      HTML.div [HTML.class_ "card"] [
-        HTML.h2 [] [txt "AI propose (current branch)"];
-        HTML.form [HTML.method_ `POST; HTML.action "/api/ai/propose";
-                   HTML.enctype `urlencoded] [
-          HTML.p [] [
-            HTML.label [HTML.for_ "package"] [txt "package "];
-            HTML.input [HTML.type_ "text"; HTML.name "package"; HTML.id "package";
-                        HTML.placeholder "todo (optional)"];
-            txt " ";
-            HTML.label [HTML.for_ "local"] [txt "name "];
-            HTML.input [HTML.type_ "text"; HTML.name "local"; HTML.id "local";
-                        HTML.value "greet"; HTML.placeholder "greet"];
-          ];
-          HTML.p [HTML.class_ "muted"] [
-            txt "Full name = package/name (or just name if package empty). Prefer todo/list style.";
-          ];
-          HTML.p [] [
-            HTML.label [HTML.for_ "spec"] [txt "spec"];
-          ];
-          HTML.textarea [HTML.name "spec"; HTML.id "spec"; HTML.required]
-            "%s" "A lambda that takes one string name and returns a greeting string using string-append.";
-          HTML.p [] [HTML.button [HTML.type_ "submit"] [txt "Propose with AI"]];
-        ];
+      HTML.p [] [
+        HTML.a [HTML.href "/bindings?pkg=ui"] [txt "Customize ui/home and ui/nav"];
+        txt " · ";
+        HTML.a [HTML.href "/about"] [txt "About"];
       ];
     ]
+  ; HTML.div [HTML.class_ "card"] [
+      HTML.h2 [] [txt "First-run: make a Hello page"];
+      HTML.p [] [txt "Creates hi-page + /hello via load-library hello."];
+      HTML.form [HTML.method_ `POST; HTML.action "/api/recipe/hello";
+                 HTML.enctype `urlencoded] [
+        HTML.button [HTML.type_ "submit"] [txt "Create Hello page"];
+      ];
+    ]
+  ; HTML.div [HTML.class_ "card"] [
+      HTML.h2 [] [txt "Library: todo package"];
+      HTML.p [] [txt "Install from libs/todo/lib.pp (load-library)."];
+      HTML.form [HTML.method_ `POST; HTML.action "/api/recipe/todo";
+                 HTML.enctype `urlencoded] [
+        HTML.button [HTML.type_ "submit"] [txt "Install todo library"];
+      ];
+    ]
+  ; HTML.div [HTML.class_ "card"] [
+      HTML.h2 [] [txt "AI propose (current branch)"];
+      HTML.form [HTML.method_ `POST; HTML.action "/api/ai/propose";
+                 HTML.enctype `urlencoded] [
+        HTML.p [] [
+          HTML.label [HTML.for_ "package"] [txt "package "];
+          HTML.input [HTML.type_ "text"; HTML.name "package"; HTML.id "package";
+                      HTML.placeholder "todo (optional)"];
+          txt " ";
+          HTML.label [HTML.for_ "local"] [txt "name "];
+          HTML.input [HTML.type_ "text"; HTML.name "local"; HTML.id "local";
+                      HTML.value "greet"; HTML.placeholder "greet"];
+        ];
+        HTML.p [] [
+          HTML.label [HTML.for_ "spec"] [txt "spec"];
+        ];
+        HTML.textarea [HTML.name "spec"; HTML.id "spec"; HTML.required]
+          "%s" "A lambda that takes one string name and returns a greeting string using string-append.";
+        HTML.p [] [HTML.button [HTML.type_ "submit"] [txt "Propose with AI"]];
+      ];
+    ]
+  ]
+
+let home_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+  let* home_html = try_ui_fn session "ui/home" in
+  let* nav_html = try_ui_fn session "ui/nav" in
+  let content =
+    match home_html with
+    | Some html when String.trim html <> "" ->
+        [ txt ~raw:true "%s" html ]
+    | _ -> default_home_content session
   in
-  html_response reqd body
+  let body = chrome ?nav_html ~session ~title:"Workspace" content in
+  html_response reqd body;
+  Lwt.return_unit
 
 let repl_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit =
   let js =
@@ -1472,7 +1504,7 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
           Lwt.return_unit))
   in
   match meth, path with
-  | `GET, "/" -> home_page session reqd
+  | `GET, "/" -> launch (home_page session reqd)
   | `GET, "/about" -> about_page session reqd
   | `GET, "/pages" -> pages_list_page session reqd
   | `POST, "/api/recipe/hello" ->

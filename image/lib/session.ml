@@ -34,6 +34,8 @@ type t = {
   mutable started_at : float;
   (** Kernel prim catalog for Functions browser: (name, summary) list. *)
   mutable kernel_catalog : (string * string) list;
+  (** Cached HTML from ui/nav when defined; None = use OCaml default nav. *)
+  mutable ui_nav_html : string option;
   (** Active HTTP request for user-route dispatch; None in REPL. *)
   mutable current_request : request option;
 }
@@ -723,6 +725,10 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value Lwt.t =
             DB write is non-fatal on PG-down. *)
          Lwt.async (fun () ->
            Store.persist_function t.store name body_expr t.manifest.username);
+         let* () =
+           if name = "ui/nav" || name = "ui/home" then refresh_ui_shell t
+           else Lwt.return_unit
+         in
          Lwt.return v
      | _ -> Lwt.return v)
   with
@@ -741,11 +747,38 @@ and load_string (t : t) (src : string) : (string, string) result Lwt.t =
 and load_library (t : t) (name : string) : (string, string) result Lwt.t =
   Loader.load_library ~eval_one:(eval_one t) name
 
+and refresh_ui_shell (t : t) : unit Lwt.t =
+  match Pricklypear_lisp.Env.lookup t.env "ui/nav" with
+  | None ->
+      t.ui_nav_html <- None;
+      Lwt.return_unit
+  | Some _ ->
+      Lwt.catch
+        (fun () ->
+          let* v = eval_one t "(ui/nav)" in
+          (match Primitives.is_raw_html v with
+           | Some s -> t.ui_nav_html <- Some s
+           | None ->
+               (match v with
+                | Pricklypear_lisp.Ast.VStr s -> t.ui_nav_html <- Some s
+                | _ ->
+                    t.ui_nav_html <-
+                      Some (Pricklypear_lisp.Reader.pp_value v)));
+          Lwt.return_unit)
+        (fun _ ->
+          t.ui_nav_html <- None;
+          Lwt.return_unit)
+
 and seed_stdlib (t : t) : unit Lwt.t =
   let* r = load_library t "std" in
   (match r with
    | Ok msg -> Printf.eprintf "[session] stdlib: %s\n%!" msg
    | Error e -> Printf.eprintf "[session] stdlib load: %s\n%!" e);
+  let* r2 = load_library t "ui" in
+  (match r2 with
+   | Ok msg -> Printf.eprintf "[session] ui shell: %s\n%!" msg
+   | Error e -> Printf.eprintf "[session] ui load: %s\n%!" e);
+  let* () = refresh_ui_shell t in
   Lwt.return_unit
 
 and recipe_hello (t : t) : (string, string) result Lwt.t =
@@ -777,6 +810,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
       routes;
       started_at = Unix.gettimeofday ();
       kernel_catalog = [];  (* filled after all prims register *)
+      ui_nav_html = None;
       current_request = None;
     }
   in
@@ -818,6 +852,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
       match args with
       | [ Pricklypear_lisp.Ast.VStr name ] ->
           let* r = load_library !t name in
+          let* () = refresh_ui_shell !t in
           (match r with
            | Ok msg -> Lwt.return (Pricklypear_lisp.Ast.VStr msg)
            | Error e ->
@@ -865,6 +900,11 @@ let lookup_route (t : t) (route : string) : string option =
   Hashtbl.find_opt t.routes route
 
 let kernel_catalog (t : t) : (string * string) list = t.kernel_catalog
+
+let ui_nav_html (t : t) : string option = t.ui_nav_html
+
+let set_ui_nav_html (t : t) (s : string option) : unit = t.ui_nav_html <- s
+
 
 let list_pages (t : t) : (string * string) list =
   Hashtbl.fold (fun route handler acc -> (route, handler) :: acc) t.routes []
