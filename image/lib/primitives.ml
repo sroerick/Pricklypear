@@ -431,6 +431,35 @@ let prim_string_eq args =
   | [ VStr a; VStr b ] -> VBool (String.equal a b)
   | _ -> raise (Interp_error (User_error "string-eq needs 2 strings"))
 
+(* (html-escape s) -> VStr. Escape amp lt gt quote apos for HTML text/attrs. *)
+let rec prim_html_escape args =
+  match args with
+  | [ VStr s ] ->
+      let buf = Buffer.create (String.length s + 8) in
+      String.iter
+        (function
+          | '&' -> Buffer.add_string buf "&amp;"
+          | '<' -> Buffer.add_string buf "&lt;"
+          | '>' -> Buffer.add_string buf "&gt;"
+          | '"' -> Buffer.add_string buf "&quot;"
+          | '\'' -> Buffer.add_string buf "&#39;"
+          | c -> Buffer.add_char buf c)
+        s;
+      VStr (Buffer.contents buf)
+  | [ v ] ->
+      (* coerce then escape *)
+      let s =
+        match v with
+        | VStr s -> s
+        | VInt n -> Int64.to_string n
+        | VBool true -> "true"
+        | VBool false -> "false"
+        | VNil -> ""
+        | _ -> Pricklypear_lisp.Reader.pp_value v
+      in
+      prim_html_escape [ VStr s ]
+  | _ -> raise (Interp_error (User_error "html-escape needs 1 value"))
+
 (* (hx-get url) -> VStr tagged attribute helper (lightweight; authors may
    also embed Hx attrs inside render-html). *)
 let prim_hx_get args =
@@ -518,6 +547,7 @@ let make_with_defaults () : t =
   register_sync t "substring" prim_substring;
   register_sync t "string-contains?" prim_string_contains;
   register_sync t "string-eq" prim_string_eq;
+  register_sync t "html-escape" prim_html_escape;
   register_sync t "type-of" prim_type_of;
   register_sync t "str" prim_str;
   register_sync t "as-str" prim_as_str;
@@ -560,6 +590,7 @@ let prim_summary (name : string) : string =
   | "substring" -> "substring start [len]"
   | "string-contains?" -> "haystack contains needle?"
   | "string-eq" -> "string equality"
+  | "html-escape" -> "escape text for HTML"
   | "request-method" -> "HTTP method of active request"
   | "request-path" -> "path of active request"
   | "request-param" -> "form/query param of active request"

@@ -104,7 +104,9 @@ type effect_set = EffSet.t
 let pure_prims = [
   "+"; "-"; "*"; "="; "<"; ">"; "<="; ">="; "not";
   "list"; "car"; "cdr"; "cons"; "null?"; "pair?"; "count";
-  "string-append"; "str"; "type-of";
+  "string-append"; "str"; "type-of"; "as-str";
+  "string-eq"; "string-length"; "substring"; "string-contains?";
+  "html-escape";
   "dict-get"; "dict-set"; "dict-keys";
   "hx-get"; "hx-post";
 ]

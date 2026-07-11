@@ -5,6 +5,8 @@
 ;;   action=add    + title=...
 ;;   action=toggle + id=...
 ;;   action=delete + id=...
+;;
+;; HTML via std html/* helpers (not raw tag soup).
 
 (deftype 'todo-item 'title 'done)
 
@@ -39,24 +41,40 @@
       (let ((fields (cdr row)))
         (let ((title (dict-get fields "title")))
           (let ((done (todo/done? fields)))
-            (string-append
-              "<li class=\"todo-item"
-              (if done " is-done" "")
-              "\">"
-              "<form method=\"POST\" action=\"/todos\" class=\"todo-check\">"
-              "<input type=\"hidden\" name=\"action\" value=\"toggle\">"
-              "<input type=\"hidden\" name=\"id\" value=\"" id "\">"
-              "<button type=\"submit\" class=\"todo-box\" title=\"toggle done\" "
-              "aria-label=\"toggle\">"
-              (if done "[x]" "[ ]")
-              "</button></form>"
-              "<span class=\"todo-title\">" title "</span>"
-              "<form method=\"POST\" action=\"/todos\" class=\"todo-del\">"
-              "<input type=\"hidden\" name=\"action\" value=\"delete\">"
-              "<input type=\"hidden\" name=\"id\" value=\"" id "\">"
-              "<button type=\"submit\" class=\"secondary\" title=\"delete\">del</button>"
-              "</form>"
-              "</li>")))))))
+            (html/li
+              (html/attrs
+                (list
+                  (html/attr "class"
+                    (if done "todo-item is-done" "todo-item"))))
+              (html/join
+                (list
+                  (html/form "POST" "/todos" (html/attr "class" "todo-check")
+                    (html/join
+                      (list
+                        (html/hidden "action" "toggle")
+                        (html/hidden "id" id)
+                        (html/button
+                          (html/attrs
+                            (list
+                              (html/attr "type" "submit")
+                              (html/attr "class" "todo-box")
+                              (html/attr "title" "toggle done")
+                              (html/attr "aria-label" "toggle")))
+                          (if done "[x]" "[ ]")))))
+                  (html/span (html/attr "class" "todo-title")
+                    (html/text title))
+                  (html/form "POST" "/todos" (html/attr "class" "todo-del")
+                    (html/join
+                      (list
+                        (html/hidden "action" "delete")
+                        (html/hidden "id" id)
+                        (html/button
+                          (html/attrs
+                            (list
+                              (html/attr "type" "submit")
+                              (html/attr "class" "secondary")
+                              (html/attr "title" "delete")))
+                          "del")))))))))))))
 
 (define todo/page
   (lambda ()
@@ -71,25 +89,40 @@
                         (todo/delete (request-param "id"))
                         (todo/add (request-param "title")))))
             (redirect "/todos")))
-        (render-html
-          (string-append
-            "<h1>Todos</h1>"
-            "<form method=\"POST\" action=\"/todos\" class=\"card todo-add\">"
-            "<input type=\"hidden\" name=\"action\" value=\"add\">"
-            "<label class=\"todo-add-label\" for=\"title\">New item</label>"
-            "<div class=\"todo-add-row\">"
-            "<input id=\"title\" type=\"text\" name=\"title\" required "
-            "placeholder=\"buy milk\" autocomplete=\"off\">"
-            "<button type=\"submit\">Add</button>"
-            "</div></form>"
-            "<ul class=\"card todo-list\">"
-            (list/foldl
-              (lambda (acc row) (string-append acc (todo/item-li row)))
-              ""
-              (todo/list))
-            "</ul>"
-            "<p class=\"muted\">"
-            (str (count (todo/list)))
-            " item(s) · click [ ] to check off</p>")))))
+        (html/page
+          (list
+            (html/h1 "Todos")
+            (html/form "POST" "/todos"
+              (html/attr "class" "card todo-add")
+              (html/join
+                (list
+                  (html/hidden "action" "add")
+                  (html/label
+                    (html/attrs
+                      (list
+                        (html/attr "class" "todo-add-label")
+                        (html/attr "for" "title")))
+                    "New item")
+                  (html/div (html/attr "class" "todo-add-row")
+                    (html/join
+                      (list
+                        (html/text-input "title"
+                          (html/attrs
+                            (list
+                              (html/attr "id" "title")
+                              (html/attr "required" "required")
+                              (html/attr "placeholder" "buy milk")
+                              (html/attr "autocomplete" "off"))))
+                        (html/button (html/attr "type" "submit") "Add")))))))
+            (html/ul (html/attr "class" "card todo-list")
+              (list/foldl
+                (lambda (acc row) (string-append acc (todo/item-li row)))
+                ""
+                (todo/list)))
+            (html/p*
+              (html/attr "class" "muted")
+              (string-append
+                (str (count (todo/list)))
+                " item(s) · click [ ] to check off")))))))
 
 (route "/todos" "todo/page")
