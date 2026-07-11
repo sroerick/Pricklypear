@@ -22,20 +22,77 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
     HTML.head [] [
       HTML.title [] "Pricklypear";
       HTML.meta [HTML.charset "utf-8"];
+      (* Mobile-first: prevent tiny text, enable proper layout *)
+      HTML.meta [HTML.name "viewport";
+                 HTML.content "width=device-width, initial-scale=1"];
       HTML.style [] "%s"
-        "body{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;margin:0;background:#0f1419;color:#e7ecf1}
-         a{color:#7cb7ff;text-decoration:none}a:hover{text-decoration:underline}
-         header{background:#1a2332;padding:.75rem 1.25rem;border-bottom:1px solid #2a3a4f;display:flex;gap:1rem;align-items:center;flex-wrap:wrap}
-         header .brand{font-weight:700;color:#9fefb0}header .meta{color:#9aa7b5;font-size:.9rem}
-         nav a{margin-right:.85rem}main{padding:1.25rem;max-width:1100px}
-         table{border-collapse:collapse;width:100%}
-         th,td{border-bottom:1px solid #2a3a4f;padding:.4rem .6rem;text-align:left;vertical-align:top}
-         th{color:#9aa7b5;font-weight:600}
-         pre,textarea,input[type=text]{background:#121a24;color:#e7ecf1;border:1px solid #2a3a4f;border-radius:6px;padding:.6rem;width:100%;box-sizing:border-box;font:inherit}
-         textarea{min-height:220px}button,.btn{background:#2f6fed;color:#fff;border:0;border-radius:6px;padding:.45rem .9rem;cursor:pointer;font:inherit}
-         button.secondary{background:#314156}.card{background:#151e2a;border:1px solid #2a3a4f;border-radius:10px;padding:1rem;margin-bottom:1rem}
-         .err{color:#ff8e8e}.ok{color:#9fefb0}#out{white-space:pre-wrap;min-height:4rem}
-         .muted{color:#9aa7b5;font-size:.9rem}ul.actions{list-style:none;padding:0}ul.actions li{margin:.4rem 0}";
+        (* Classic Mac / Smalltalk / mainframe terminal — flat, bordered, readable.
+           No gradients, no pill buttons, no dark "LLM dashboard" chrome. *)
+        "*{box-sizing:border-box}
+         html{font-size:16px;-webkit-text-size-adjust:100%}
+         body{margin:0;background:#d4d0c8;color:#000;
+              font-family:Geneva,\"Lucida Grande\",\"DejaVu Sans\",Verdana,sans-serif;
+              line-height:1.4}
+         a{color:#000080;text-decoration:underline}
+         a:visited{color:#551a8b}
+         a:hover{color:#000}
+         header{background:#fff;border-bottom:2px solid #000;padding:.5rem .75rem}
+         header .brand{font-weight:700;font-size:1.1rem;letter-spacing:.02em;
+                       color:#000;margin-right:.75rem}
+         header .meta{display:block;font-family:\"Courier New\",Courier,monospace;
+                      font-size:.8rem;color:#333;margin:.25rem 0 .5rem}
+         nav{display:flex;flex-wrap:wrap;gap:.35rem .5rem;align-items:center}
+         nav a{display:inline-block;padding:.45rem .55rem;min-height:2.5rem;
+               line-height:1.5;border:1px solid #000;background:#c0c0c0;
+               color:#000;text-decoration:none;font-size:.9rem}
+         nav a:visited{color:#000}
+         nav a:hover,nav a:focus{background:#fff}
+         main{padding:.75rem;max-width:52rem;margin:0 auto}
+         h1{font-size:1.25rem;font-weight:700;margin:.25rem 0 .75rem;
+            border-bottom:1px solid #000;padding-bottom:.25rem}
+         h2{font-size:1.05rem;font-weight:700;margin:0 0 .5rem}
+         p{margin:.5rem 0}
+         .card{background:#fff;border:2px solid #000;padding:.75rem;margin:0 0 .75rem}
+         table{border-collapse:collapse;width:100%;background:#fff;
+               border:1px solid #000;font-size:.9rem}
+         th,td{border:1px solid #808080;padding:.45rem .5rem;text-align:left;
+               vertical-align:top;word-break:break-word}
+         th{background:#c0c0c0;font-weight:700;border-color:#000}
+         tr:nth-child(even) td{background:#ece9e0}
+         pre,textarea,input[type=text],input[type=search],input:not([type]){
+           font-family:\"Courier New\",Courier,monospace;font-size:1rem;
+           background:#fff;color:#000;border:1px solid #000;border-radius:0;
+           padding:.5rem;width:100%;max-width:100%}
+         textarea{min-height:12rem;line-height:1.35}
+         button,.btn,input[type=submit]{
+           font:inherit;font-size:1rem;cursor:pointer;
+           background:#c0c0c0;color:#000;border:2px outset #fff;
+           border-radius:0;padding:.5rem .85rem;min-height:2.75rem}
+         button:active,.btn:active{border-style:inset}
+         button.secondary,.btn.secondary{background:#d4d0c8}
+         a.btn{display:inline-block;text-decoration:none;color:#000;
+               line-height:1.2;vertical-align:middle}
+         a.btn:visited{color:#000}
+         label{font-weight:700}
+         .meta,.muted{color:#333;font-size:.9rem}
+         .err{color:#800000;font-weight:700}
+         .ok{color:#006600;font-weight:700}
+         #out{white-space:pre-wrap;min-height:4rem;background:#fff;
+              border:1px solid #000;padding:.5rem;
+              font-family:\"Courier New\",Courier,monospace}
+         ul.actions{list-style:none;padding:0;margin:.5rem 0}
+         ul.actions li{margin:.4rem 0}
+         /* Mobile: stack denser chrome, full-width controls */
+         @media (max-width:40rem){
+           main{padding:.5rem}
+           header{padding:.5rem}
+           nav{gap:.3rem}
+           nav a{flex:1 1 auto;text-align:center;min-width:4.5rem}
+           table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch}
+           h1{font-size:1.15rem}
+           button,.btn{width:100%;margin:.2rem 0}
+           .card form button,.card form .btn{width:auto;min-width:44%}
+         }";
       (* htmx for create-in-place editor empty state *)
       HTML.script [HTML.src "https://unpkg.com/htmx.org@1.9.12"] "";
     ];
