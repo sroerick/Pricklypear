@@ -1,15 +1,9 @@
-;; Bible library (BSB) — functions + /bible route.
-;; Canon text lives in data_rows (seed: scripts/seed_bible_bsb.py).
-;; Install: (load-library "bible") or POST /api/recipe/bible
+;; Bible data + helpers (BSB) — pure functions, no routes.
+;; Routes/UI now live in libs/dabar/lib.pp.
 ;;
 ;; Ref format: BSB:<Abbrev>:<chapter>:<verse>  e.g. BSB:John:3:16
-;; URLs: /bible?book=John&chapter=3&verse=16  or  ?ref=BSB:John:3:16
-;;
-;; Partials (htmx — same pattern as todo):
-;;   bible/chapter-panel  → chapter HTML fragment
-;;   route /partials/bible-chapter
-;; Full page: /bible (chrome + form + #bible-panel).
-;; GET with HX-Request returns panel fragment only (swap into #bible-panel).
+;; Install: (load-library "bible") — types + data helpers only.
+;; UI dispatch: /dabar (see dabar/lib.pp).
 ;;
 ;; Text: Berean Standard Bible (see seed script NOTICE / attribution).
 ;; HTML via std html/* helpers.
@@ -140,7 +134,7 @@
     (if (null? pair)
         "#"
         (string-append
-          "/bible?book="
+          "/dabar?book="
           (as-str (car pair))
           "&chapter="
           (as-str (car (cdr pair)))))))
@@ -157,7 +151,7 @@
                 (html/span (html/attr "class" "muted") "← prev")
                 (html/a (bible/href-chapter prev) "← prev"))
             " · "
-            (html/a "/bible?random=1" "random")
+            (html/a "/dabar?random=1" "random")
             " · "
             (if (null? next)
                 (html/span (html/attr "class" "muted") "next →")
@@ -168,7 +162,8 @@
                 "/dabar?book="
                 (bible/abbrev-of book)
                 "&chapter="
-                (bible/safe-chapter book chapter))
+                (bible/safe-chapter book chapter)
+                "&verse=1")
               "study")))))))
 
 (define bible/random-row
@@ -188,7 +183,7 @@
               " "
               (html/text text))))))))
 
-;; Fragment: chapter body only (htmx #bible-panel / /partials/bible-chapter).
+;; Fragment: chapter body only (htmx #dabar-panel).
 (define bible/chapter-panel
   (lambda (book chapter focus-verse)
     (let ((rows (bible/chapter book chapter))
@@ -242,7 +237,7 @@
                         (list
                           (html/a
                             (string-append
-                              "/bible?ref="
+                              "/dabar?ref="
                               (as-str (dict-get f "ref")))
                             (as-str (dict-get f "ref")))
                           " "
@@ -345,18 +340,19 @@
         (bible/chapter book chapter)))))
 
 ;; Dropdown navigator: book / chapter / verse.
-;; change from:select reloads #bible-panel so option lists stay valid.
+;; change from:select reloads #dabar-panel so option lists stay valid.
+;; Selecting a verse drops you into the verse study view.
 (define bible/go-form
   (lambda (b c verse)
     (let ((ab (bible/abbrev-of b))
           (ch (bible/safe-chapter b c))
           (vs (if (null? verse) "" (as-str verse))))
-      (html/form "GET" "/bible"
+      (html/form "GET" "/dabar"
         (html/attrs
           (list
             (html/attr "class" "card bible-go")
-            (html/attr "hx-get" "/bible")
-            (html/attr "hx-target" "#bible-panel")
+            (html/attr "hx-get" "/dabar")
+            (html/attr "hx-target" "#dabar-panel")
             (html/attr "hx-swap" "innerHTML")
             (html/attr "hx-push-url" "true")
             (html/attr "hx-trigger" "submit, change from:select")))
@@ -387,12 +383,12 @@
 
 (define bible/search-form
   (lambda (q)
-    (html/form "GET" "/bible"
+    (html/form "GET" "/dabar"
       (html/attrs
         (list
           (html/attr "class" "card bible-search")
-          (html/attr "hx-get" "/bible")
-          (html/attr "hx-target" "#bible-panel")
+          (html/attr "hx-get" "/dabar")
+          (html/attr "hx-target" "#dabar-panel")
           (html/attr "hx-swap" "innerHTML")
           (html/attr "hx-push-url" "true")))
       (html/join
@@ -409,8 +405,8 @@
           " "
           (html/button (html/attr "type" "submit") "Find"))))))
 
-;; Full panel body: forms + reading (swapped by htmx into #bible-panel).
-(define bible/panel-for-request
+;; Chapter reader body: forms + reading (swapped by htmx into #dabar-panel).
+(define bible/chapter-reader
   (lambda ()
     (let ((ref (request-param "ref"))
           (q (request-param "q"))
@@ -437,8 +433,6 @@
                               (list
                                 "Berean Standard Bible · "
                                 (bible/ref b c (if (null? v) 1 v))
-                                " · "
-                                (html/a "/partials/bible-chapter" "raw partial")
                                 " · "
                                 (html/a "/strongs" "Strong's"))))))))
                   (let ((row (bible/parse-ref ref)))
@@ -486,33 +480,3 @@
                           (string-append
                             "random · "
                             (as-str (dict-get f "ref"))))))))))))))
-
-(define bible/partial
-  (lambda ()
-    (bible/panel-for-request)))
-
-(define bible/page
-  (lambda ()
-    (if (string-eq (request-method) "POST")
-        (let ((book (request-param "book"))
-              (chapter (request-param "chapter"))
-              (verse (request-param "verse")))
-          (redirect
-            (string-append
-              "/bible?book="
-              (if (null? book) "John" (as-str book))
-              "&chapter="
-              (if (null? chapter) "3" (as-str chapter))
-              (if (null? verse)
-                  ""
-                  (string-append "&verse=" (as-str verse))))))
-        (if (hx-request?)
-            (bible/panel-for-request)
-            (html/page
-              (list
-                (html/h1 "Bible")
-                (html/div (html/attr "id" "bible-panel")
-                  (bible/panel-for-request))))))))
-
-(route "/bible" "bible/page")
-(route "/partials/bible-chapter" "bible/partial")

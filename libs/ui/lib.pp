@@ -14,7 +14,7 @@
     (menu/group "apps"
       (list
         (menu/link "notes" "/notes")
-        (menu/link "bible" "/bible")
+        (menu/link "dabar" "/dabar")
         (menu/link "todos" "/todos")
         (menu/link "agent" "/agent")
         (menu/link "repl" "/repl")))))
@@ -41,13 +41,16 @@
                 (html/join
                   (list
                     (html/li "" (html/a "/notes" "Notes"))
-                    (html/li "" (html/a "/bible" "Bible"))
+                    (html/li "" (html/a "/dabar" "Bible"))
                     (html/li "" (html/a "/todos" "Todos"))
                     (html/li "" (html/a "/bindings?pkg=ui" "Edit ui"))))))))
         (html/div (html/attr "class" "card")
           (html/join
             (list
-              (html/h2 "Install notes")
+              (html/h2 "Install libraries")
+              (html/form "POST" "/api/recipe/dabar" (html/attr "class" "")
+                (html/button (html/attr "type" "submit")
+                  "Install dabar (Bible study)"))
               (html/form "POST" "/api/recipe/notes" (html/attr "class" "")
                 (html/button (html/attr "type" "submit")
                   "Load outline + notes libraries")))))))))
