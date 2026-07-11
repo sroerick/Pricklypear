@@ -1528,10 +1528,10 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
       launch (page_inspector session seg reqd)
   | `GET, "/page" | `GET, "/page/" ->
       launch (page_inspector session "" reqd)
-  | `GET, path when String.length path >= 18
-                 && String.sub path 0 18 = "/inspect/binding/" ->
+  | `GET, path when String.length path >= 17
+                 && String.sub path 0 17 = "/inspect/binding/" ->
       let name =
-        Packages.name_decode (String.sub path 18 (String.length path - 18))
+        Packages.name_decode (String.sub path 17 (String.length path - 17))
       in
       launch (inspect_binding_page session name reqd)
   | `GET, path when String.length path >= 13
