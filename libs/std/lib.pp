@@ -142,6 +142,28 @@
           (html/attr "name" name)
           attrs)))))
 
+;; (html/option value label selected?) — selected? is bool/truthy
+(define html/option
+  (lambda (value label selected?)
+    (html/tag "option"
+      (if selected?
+          (html/attrs
+            (list
+              (html/attr "value" value)
+              (html/attr "selected" "selected")))
+          (html/attr "value" value))
+      (html/text label))))
+
+;; (html/select name attrs body) — body is options HTML string
+(define html/select
+  (lambda (name attrs body)
+    (html/tag "select"
+      (html/attrs
+        (list
+          (html/attr "name" name)
+          attrs))
+      body)))
+
 (define html/wrap
   (lambda (title body)
     (render-html

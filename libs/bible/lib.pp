@@ -138,44 +138,137 @@
             (html/attr "class" "muted")
             "Berean Standard Bible"))))))
 
+;; Protestant BSB chapter counts (abbrev . n). Used for chapter <select>.
+(define bible/chapter-counts
+  (list
+    (list "Gen" 50) (list "Exod" 40) (list "Lev" 27) (list "Num" 36)
+    (list "Deut" 34) (list "Josh" 24) (list "Judg" 21) (list "Ruth" 4)
+    (list "1Sam" 31) (list "2Sam" 24) (list "1Kgs" 22) (list "2Kgs" 25)
+    (list "1Chr" 29) (list "2Chr" 36) (list "Ezra" 10) (list "Neh" 13)
+    (list "Esth" 10) (list "Job" 42) (list "Ps" 150) (list "Prov" 31)
+    (list "Eccl" 12) (list "Song" 8) (list "Isa" 66) (list "Jer" 52)
+    (list "Lam" 5) (list "Ezek" 48) (list "Dan" 12) (list "Hos" 14)
+    (list "Joel" 3) (list "Amos" 9) (list "Obad" 1) (list "Jonah" 4)
+    (list "Mic" 7) (list "Nah" 3) (list "Hab" 3) (list "Zeph" 3)
+    (list "Hag" 2) (list "Zech" 14) (list "Mal" 4)
+    (list "Matt" 28) (list "Mark" 16) (list "Luke" 24) (list "John" 21)
+    (list "Acts" 28) (list "Rom" 16) (list "1Cor" 16) (list "2Cor" 13)
+    (list "Gal" 6) (list "Eph" 6) (list "Phil" 4) (list "Col" 4)
+    (list "1Thess" 5) (list "2Thess" 3) (list "1Tim" 6) (list "2Tim" 4)
+    (list "Titus" 3) (list "Phlm" 1) (list "Heb" 13) (list "Jas" 5)
+    (list "1Pet" 5) (list "2Pet" 3) (list "1John" 5) (list "2John" 1)
+    (list "3John" 1) (list "Jude" 1) (list "Rev" 22)))
+
+(define bible/chapter-count
+  (lambda (abbrev)
+    (list/foldl
+      (lambda (acc pair)
+        (if (string-eq (car pair) (as-str abbrev))
+            (car (cdr pair))
+            acc))
+      1
+      bible/chapter-counts)))
+
+(define bible/int-in-range?
+  (lambda (s lo hi)
+    (bible/int-in-range-from? s lo hi lo)))
+
+(define bible/int-in-range-from?
+  (lambda (s lo hi i)
+    (if (> i hi)
+        #f
+        (if (string-eq (as-str s) (as-str i))
+            #t
+            (bible/int-in-range-from? s lo hi (+ i 1))))))
+
+(define bible/safe-chapter
+  (lambda (book chapter)
+    (let ((max (bible/chapter-count (bible/abbrev-of book)))
+          (c (if (null? chapter) "1" (as-str chapter))))
+      (if (bible/int-in-range? c 1 max) c "1"))))
+
+(define bible/option-range
+  (lambda (n selected)
+    (bible/option-range-from 1 n selected)))
+
+(define bible/option-range-from
+  (lambda (i n selected)
+    (if (> i n)
+        ""
+        (string-append
+          (html/option (as-str i) (as-str i)
+            (string-eq (as-str selected) (as-str i)))
+          (bible/option-range-from (+ i 1) n selected)))))
+
+(define bible/book-options
+  (lambda (current)
+    (list/foldl
+      (lambda (acc row)
+        (let ((f (cdr row)))
+          (let ((name (dict-get f "name"))
+                (abbrev (dict-get f "abbrev")))
+            (string-append acc
+              (html/option (as-str abbrev) (as-str name)
+                (if (string-eq (as-str current) (as-str abbrev))
+                    #t
+                    (string-eq (as-str current) (as-str name))))))))
+      ""
+      (bible/books))))
+
+(define bible/verse-options
+  (lambda (book chapter selected)
+    (string-append
+      (html/option "" "—"
+        (if (null? selected) #t (string-eq (as-str selected) "")))
+      (list/foldl
+        (lambda (acc row)
+          (let ((n (dict-get (cdr row) "verse")))
+            (string-append acc
+              (html/option (as-str n) (as-str n)
+                (string-eq (as-str selected) (as-str n))))))
+        ""
+        (bible/chapter book chapter)))))
+
+;; Dropdown navigator: book / chapter / verse.
+;; change from:select reloads #bible-panel so option lists stay valid.
 (define bible/go-form
   (lambda (b c verse)
-    (html/form "GET" "/bible"
-      (html/attrs
-        (list
-          (html/attr "class" "card bible-go")
-          (html/attr "hx-get" "/bible")
-          (html/attr "hx-target" "#bible-panel")
-          (html/attr "hx-swap" "innerHTML")
-          (html/attr "hx-push-url" "true")))
-      (html/join
-        (list
-          (html/label ""
-            (html/join
-              (list
-                "Book "
-                (html/text-input "book"
-                  (html/attr "value" b)))))
-          " "
-          (html/label ""
-            (html/join
-              (list
-                "Chapter "
-                (html/text-input "chapter"
-                  (html/attr "value" c)))))
-          " "
-          (html/label ""
-            (html/join
-              (list
-                "Verse "
-                (html/text-input "verse"
-                  (html/attrs
-                    (list
-                      (html/attr "placeholder" "optional")
-                      (html/attr "value"
-                        (if (null? verse) "" (as-str verse)))))))))
-          " "
-          (html/button (html/attr "type" "submit") "Go"))))))
+    (let ((ab (bible/abbrev-of b))
+          (ch (bible/safe-chapter b c))
+          (vs (if (null? verse) "" (as-str verse))))
+      (html/form "GET" "/bible"
+        (html/attrs
+          (list
+            (html/attr "class" "card bible-go")
+            (html/attr "hx-get" "/bible")
+            (html/attr "hx-target" "#bible-panel")
+            (html/attr "hx-swap" "innerHTML")
+            (html/attr "hx-push-url" "true")
+            (html/attr "hx-trigger" "submit, change from:select")))
+        (html/join
+          (list
+            (html/label ""
+              (html/join
+                (list
+                  "Book "
+                  (html/select "book" "" (bible/book-options ab)))))
+            " "
+            (html/label ""
+              (html/join
+                (list
+                  "Chapter "
+                  (html/select "chapter" ""
+                    (bible/option-range
+                      (bible/chapter-count ab) ch)))))
+            " "
+            (html/label ""
+              (html/join
+                (list
+                  "Verse "
+                  (html/select "verse" ""
+                    (bible/verse-options ab ch vs)))))
+            " "
+            (html/button (html/attr "type" "submit") "Go")))))))
 
 (define bible/search-form
   (lambda (q)
@@ -201,7 +294,7 @@
           " "
           (html/button (html/attr "type" "submit") "Find"))))))
 
-;; Resolve current GET view into a panel fragment (no chrome).
+;; Full panel body: forms + reading (swapped by htmx into #bible-panel).
 (define bible/panel-for-request
   (lambda ()
     (let ((ref (request-param "ref"))
@@ -212,20 +305,51 @@
                     (chapter (request-param "chapter"))
                     (verse (request-param "verse")))
                 (let ((b (if (null? book) "John" (as-str book)))
-                      (c (if (null? chapter) "3" (as-str chapter))))
-                  (bible/chapter-panel b c verse)))
+                      (c (bible/safe-chapter
+                            (if (null? book) "John" book)
+                            (if (null? chapter) "3" chapter)))
+                      (v (if (null? verse) () verse)))
+                  (html/join
+                    (list
+                      (bible/go-form b c v)
+                      (bible/search-form ())
+                      (bible/chapter-panel b c v)
+                      (html/p*
+                        (html/attr "class" "muted")
+                        (html/join
+                          (list
+                            "Berean Standard Bible · "
+                            (bible/ref b c (if (null? v) 1 v))
+                            " · "
+                            (html/a "/partials/bible-chapter" "raw partial"))))))))
               (let ((row (bible/parse-ref ref)))
                 (if (null? row)
-                    (html/p*
-                      (html/attr "class" "err")
-                      (string-append "Unknown ref " (as-str ref)))
+                    (html/join
+                      (list
+                        (bible/go-form "John" "3" ())
+                        (html/p*
+                          (html/attr "class" "err")
+                          (string-append "Unknown ref " (as-str ref)))))
                     (let ((book (dict-get row "book"))
                           (chapter (dict-get row "chapter"))
                           (verse (dict-get row "verse")))
-                      (bible/chapter-panel book chapter verse)))))
-          (bible/search-panel q)))))
+                      (html/join
+                        (list
+                          (bible/go-form book chapter verse)
+                          (bible/search-form ())
+                          (bible/chapter-panel book chapter verse)
+                          (html/p*
+                            (html/attr "class" "muted")
+                            (string-append
+                              "ref "
+                              (as-str ref)
+                              " · Berean Standard Bible"))))))))
+          (html/join
+            (list
+              (bible/go-form "John" "3" ())
+              (bible/search-form q)
+              (bible/search-panel q)))))))
 
-;; Raw partial route handler (query: book, chapter, verse | ref | q).
 (define bible/partial
   (lambda ()
     (bible/panel-for-request)))
@@ -245,33 +369,13 @@
               (if (null? verse)
                   ""
                   (string-append "&verse=" (as-str verse))))))
-        ;; GET: htmx wants fragment only; full page wraps #bible-panel.
         (if (hx-request?)
             (bible/panel-for-request)
-            (let ((ref (request-param "ref"))
-                  (q (request-param "q"))
-                  (book (request-param "book"))
-                  (chapter (request-param "chapter"))
-                  (verse (request-param "verse")))
-              (let ((b (if (null? book) "John" (as-str book)))
-                    (c (if (null? chapter) "3" (as-str chapter))))
-                (html/page
-                  (list
-                    (html/h1 "Bible")
-                    (bible/go-form b c verse)
-                    (bible/search-form q)
-                    (html/div (html/attr "id" "bible-panel")
-                      (bible/panel-for-request))
-                    (html/p*
-                      (html/attr "class" "muted")
-                      (html/join
-                        (list
-                          "Berean Standard Bible · "
-                          (if (null? ref)
-                              (bible/ref b c (if (null? verse) 1 verse))
-                              (as-str ref))
-                          " · htmx swaps #bible-panel · "
-                          (html/a "/partials/bible-chapter" "raw partial"))))))))))))
+            (html/page
+              (list
+                (html/h1 "Bible")
+                (html/div (html/attr "id" "bible-panel")
+                  (bible/panel-for-request))))))))
 
 (route "/bible" "bible/page")
 (route "/partials/bible-chapter" "bible/partial")
