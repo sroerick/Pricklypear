@@ -70,42 +70,36 @@
    )
   )
   (subsection namespaces
-   (doc "No privileged 'common'; branches are namespaces")
+   (doc "Branch ownership namespaces; packages are a separate in-branch axis")
    (status partial)
-   (* agent note (|Implemented: there is no privileged 'common'
-     namespace. A binding's key is (branch_id, name) per the
-     migrations/001_branches.sql schema; when alice forks system/main
-     to alice/main she gets her own function_defs row for `greet`
-     independent of main's `greet` until she merges. Admin-only merges
-     to system branches ARE enforced (per policy at image/lib/
-     session.ml's `merge` prim and branching.merge subsection).
-     Verified by /tmp/pp_override_it9.py (alice/experiment fork of
-     system/main sees inherited `greet` via recursive-CTE override
-     walk; alice overrides; alice's session sees alice's; system/main
-     unchanged).
-
-     NOT YET IMPLEMENTED — cross-branch calls: a function can NOT
-     yet explicitly reference another branch's binding via a qualified
-     name (e.g. `(system/main:greet)`). All function calls consult the
-     current branch's env only (with override-walk up the parent chain).
-     Cross-branch qualified references are a v1.5 ergonomic addition.
-
-     Section marked `partial` until cross-branch qualified calls land.|) *)
+   (* agent note (|Branch half implemented: no privileged 'common';
+     key (branch_id, name); fork/override/merge verified.
+     2026-07-11: clarify ORTHOGONAL image.packages (prefix packages
+     like todo/list) — not this subsection's job. Cross-branch
+     qualified calls still deferred.|) *)
    (details
     (doc (|
-         There is no privileged 'common' namespace. There
-         is 'main' (system baseline) and per-user branches.
-         Namespacing IS branch ownership.
+         TWO AXES (do not conflate):
 
-         A binding's key is (branch_id, name). When Alice
-         forks main to alice/main, she gets her own
-         'greet' independent of main's greet (until she
-         merges).
+         1. BRANCH namespace (this subsection):
+            There is no privileged 'common' namespace. There
+            is 'main' (system baseline) and per-user branches.
+            Versioning/ownership IS branch ownership.
+            A binding's key is (branch_id, name). When Alice
+            forks main to alice/main, she gets her own
+            'greet' independent of main's greet (until she
+            merges).
 
-         Cross-branch calls: a function can explicitly
-         reference another branch's binding via a qualified
-         name. Normally a function calls bindings in its
-         own branch.
+         2. PACKAGE prefix (image.packages):
+            Within ONE branch, organize functions with `/`
+            in the name (todo/list). That is organization,
+            not ownership. See image.packages.
+
+         Cross-branch calls (still deferred): a function can
+         explicitly reference another branch's binding via a
+         qualified name (e.g. system/main:greet — note colon
+         or other separator TBD, must not collide with package `/`).
+         Normally a function calls bindings in its own branch.
 
          The 'common namespace problem' is thus reframed
          as the 'merge to main politics problem':

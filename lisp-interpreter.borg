@@ -74,7 +74,10 @@
      line-comment completeness at EOF (it1 fix). The `\\` escape handler
      in read_string is correct as of it13 (was a stale advance-return bug;
      see BORGE-1783431485). pp_value round-trips VPair chains as proper
-     lists and improper tails with `.` notation.|) *)
+     lists and improper tails with `.` notation.
+     2026-07-11: symbol charset already allows `/` (package names like
+     todo/list are Vars). Keep that; add explicit smoke/tests when
+     image.packages lands. Do NOT treat `/` as a reader special form.|) *)
    (details
     (doc (|
          The reader parses Lisp surface syntax to expr

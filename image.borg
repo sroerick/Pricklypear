@@ -431,49 +431,121 @@
   (subsection system-browser
    (doc "The live environment UI: browse branches, functions, types as a place you live")
    (status partial)
-   (* agent note (|it32: PARTIAL. Chrome shell ships in image/lib/http.ml:
-     header with whoami/branch/uptime, nav (home/about/functions/types/
-     repl/editor), home card with entry points, AI propose form.
-     /about concepts guide added it32. Pages list at /pages ships.
-     2026-07-11 plan: fix nav (no /edit/hello), page list columns
-     Page/Function, page inspector /page/<path>.|) *)
+   (* agent note (|Chrome + pages + page inspector ship. 2026-07-11 plan B:
+     Functions browser with package grouping, search, used-by pages;
+     prefix packages (todo/list). Page≠function nav fixes already live.|) *)
    (verify
     (build "dune build image")
     (smoke "GET / shows user+branch chrome and links to about/functions/repl")
     (smoke "nav has no /edit/hello; Pages links to /pages")
     (smoke "GET /pages columns: page URL + handler function")
-    (smoke "GET /page/hello shows route + handler + callee list"))
+    (smoke "GET /page/hello shows route + handler + callee list")
+    (smoke "GET /bindings groups functions by package prefix")
+    (smoke "GET /bindings?q=todo filters names")
+    (smoke "GET /bindings shows used-by page links when handler/callee of a route")
+    (smoke "define todo/list + call (todo/list) persists and appears under package todo"))
    (details
     (doc (|
          VOCABULARY (must not conflate):
          - Page / endpoint = route URL (e.g. /hello)
-         - Function = named binding (e.g. hi-page)
+         - Function = named binding (e.g. hi-page or todo/list)
+         - Package = in-branch name prefix (todo/), NOT a branch
+         - Branch = versioned code world (system/main)
          A page RUNS a function; you EDIT functions, OPEN pages.
+         Packages ORGANIZE functions inside one branch.
 
          v1 SHIPPED:
          - Chrome: whoami, branch, uptime, nav
          - Home entry points + AI propose form
          - /about concepts guide
-         - /pages list (view_bindings)
+         - /pages list + /page/<path> inspector
+         - Flat /bindings table (name, effects, author, edit, inspect)
 
-         REQUIRED NEXT (page/function legibility):
-         - Nav MUST NOT link /edit/hello (or any invented fn name).
-           "Functions" -> /bindings; "Pages" -> /pages; drop bare
-           "editor" or point it at /bindings.
-         - /pages table columns: Page (URL), Function (handler),
-           actions: open page | edit function | inspect page.
-         - GET /page/<path> page inspector (path without leading
-           slash or with — normalize to route key "/hello"):
-             Routing: URL + handler name + link to /edit/<handler>
-             Functions this page uses: handler + static callees
-             (AST walk of user bindings; see inspector.page-graph)
-             Entry body: pretty source/AST of the handler.
+         REQUIRED NEXT — Functions browser (/bindings):
+         1. Group rows by package prefix (see image.packages).
+            Root/unprefixed names under label "(root)".
+            Nested prefixes allowed (todo/ui/row -> package todo/ui).
+            Default grouping key = all segments except last
+            (package_of_name); optional later: group by first segment only.
+         2. Search: query param q= or htmx filter on name/package/author.
+         3. Filters (minimal): author contains agent: | not agent;
+            optional effect badge filter if cheap.
+         4. Column or detail: "used by pages" — reverse of page
+            call graph (static). List route links to /page/<path>
+            for every page whose handler or callee set includes this
+            function. Empty -> "—".
+         5. Create affordances:
+            - "New function" with optional package field + local name
+              -> full name package/local (or local if package empty)
+            - Per-package "+ in todo" -> /edit/todo/… or create form
+              prefilled package=todo
+         6. Row actions: edit, inspect, used-by pages (links).
+         7. Keep URL /bindings (nav label Functions); do not invent
+            /edit/hello-style fake targets.
 
          DEFERRED:
          - Data rows browser by type
          - Branch switcher control
          - Fork/merge affordances in UI
-         - Reverse index "function used by N pages" on /bindings
+         - Two-pane package sidebar (nice-to-have after grouped table)
+         - Import/require, private symbols, rename-with-rewrite
+    |))
+   )
+  )
+  (subsection packages
+   (doc "In-branch prefix packages for organizing functions (not branch ownership)")
+   (status planned)
+   (* agent note (|2026-07-11 plan: packages = name prefixes with / separator.
+     Orthogonal to multi-user.namespaces (branches). No new tables in v1.
+     Reader already allows / in symbols (is_symbol_start).|) *)
+   (verify
+    (build "dune build lisp image")
+    (smoke "reader accepts symbol todo/list as Var")
+    (smoke "(define todo/list (lambda () 1)) then (todo/list) => 1")
+    (smoke "todo/list and calendar/list coexist on same branch")
+    (smoke "/bindings groups todo/list under package todo"))
+   (details
+    (doc (|
+         PROBLEM: flat binding names collide once many tools live on
+         one branch (todo list vs calendar list).
+
+         MODEL (v1):
+         - Package is a PREFIX of a function name, separator `/`.
+         - Full binding key remains (branch_id, name) with name the
+           full string "todo/list". No packages table required.
+         - package_of_name "todo/list" = "todo"; local = "list".
+         - package_of_name "todo/ui/row" = "todo/ui"; local = "row".
+         - package_of_name "hi-page" = "" (root).
+         - Call and define use the full name: (todo/list), (define todo/list …).
+         - Pages still route to full handler names:
+           (route "/todos" "todo/list").
+
+         ORTHOGONAL TO BRANCHES:
+         - Branch = version + ownership (multi-user.namespaces).
+         - Package = organization inside one branch.
+         - UI must never call a branch a "package" or vice versa.
+
+         NOT IN V1:
+         - (require 'todo) / import aliases
+         - Private package symbols
+         - Automatic rename of call sites
+         - Cross-branch qualified names (system/main:greet) — still
+           multi-user.namespaces deferred item
+         - Privileged global package registry
+
+         AI / EDITOR:
+         - Prefer namespaced names for new tools (todo/list not list).
+         - AI propose form: optional package field + local name, or
+           single name field that may contain /.
+         - Function editor URL remains /edit/<full-name> with / in
+           the path segment (encode if needed) or query name=;
+           implementation may use /edit?name=todo/list if path
+           routing is awkward — pick one and document in agent note.
+
+         LIBRARY (soft, later):
+         - A "library" is a prefix + optional recipe that seeds
+           functions/types/routes under that prefix (e.g. todo/).
+         - Not a separate schema object in this plan.
     |))
    )
   )
@@ -547,6 +619,13 @@
          5. Creating a function does not silently rename routes unless
             the user chose "point page at it".
 
+         6. Namespaced names (image.packages):
+            - Accept full names with `/` (todo/list) in name field.
+            - Create form MAY split package + local name and join with `/`.
+            - URL routing for /edit/todo/list: either path segments after
+              /edit/ joined back to todo/list, or /edit?name=todo%2Flist.
+              Prefer path join if http router is easy; document choice.
+
          DEFERRED: optimistic concurrency / stale-body reject,
          structural AST tree-editor (branching.ast-nodes).
     |))
@@ -590,7 +669,13 @@
               edit goes to /edit/<handler>)
 
          This answers: "which functions does this endpoint touch?"
-         Reverse index (function → pages) deferred to a later pass.
+
+         REVERSE INDEX (function → pages) — now REQUIRED for the
+         Functions browser (system-browser), not only deferred:
+         - For each visible route, compute handler + static callee set.
+         - Invert to map function-name -> list of route keys.
+         - Expose on /bindings rows as "used by" links to /page/<path>.
+         - Same static analysis as page inspector (no runtime traces).
 
          DEFERRED: eval-result inspect, type-def deep inspect,
          runtime request traces, mutate actions from inspector.

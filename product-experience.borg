@@ -111,6 +111,14 @@
            Page inspect is /page/hello (route + call graph).
            Never nav-link /edit/<route-basename> as if it were a function.
 
+         PACKAGE vs BRANCH:
+           Package = in-branch prefix (todo/) for organizing functions.
+           Branch = versioned workspace (system/main).
+           UI labels: "package" for prefixes, "branch"/"workspace" for
+           version worlds — never swap the words.
+           Functions browser groups by package; branch chrome stays
+           whoami + current branch.
+
          Lisp/REPL vocabulary stays technical (define, route,
          deftype, rows). The browser skin translates.
     |))
