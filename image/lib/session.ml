@@ -405,7 +405,7 @@ let export_package (t : t) (pkg : string) : string Lwt.t =
   let buf = Buffer.create 4096 in
   Buffer.add_string buf
     (Printf.sprintf
-       ";; package %s — exported from live branch %s\n;; Do not edit by hand unless you know the sync model (pp_sync pull/push).\n\n"
+       ";; package %s -- exported from live branch %s\n;; Sync: scripts/pp_sync.py pull|push\n\n"
        label t.manifest.branch_name);
   let rec go = function
     | [] -> Lwt.return (Buffer.contents buf)
