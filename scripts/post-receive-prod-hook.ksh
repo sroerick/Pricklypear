@@ -59,6 +59,13 @@ git -C "${WORKTREE}" fetch "${BARE_REPO}" "${REF}"
 git -C "${WORKTREE}" checkout -B "${BRANCH}" "${target_rev}"
 git -C "${WORKTREE}" reset --hard "${target_rev}"
 
+# Self-update the installed hook body for next push
+if [ -f "${WORKTREE}/scripts/post-receive-prod-hook.ksh" ]; then
+  cp "${WORKTREE}/scripts/post-receive-prod-hook.ksh" \
+    "${HOME}/bin/pricklypear-post-receive"
+  chmod 755 "${HOME}/bin/pricklypear-post-receive"
+fi
+
 log "build release (opam switch ${OPAM_SWITCH})"
 # shellcheck disable=SC1090
 eval "$($(command -v opam) env --switch="${OPAM_SWITCH}" --set-switch)"
@@ -77,6 +84,6 @@ scp -o BatchMode=yes "${archive}" "${TARGET_USER}@${TARGET_HOST}:${remote_path}"
 
 log "promote on ${TARGET_HOST}"
 ssh -o BatchMode=yes "root@${TARGET_HOST}" \
-  "${REMOTE_PROMOTE} '${remote_path}' '${release_id}'"
+  "${REMOTE_PROMOTE} ${remote_path} ${release_id}"
 
 log "deploy OK ${release_id}"
