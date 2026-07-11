@@ -8,7 +8,6 @@
 (define notes/get-tags (lambda (n) (car (cdr (cdr (cdr (cdr n)))))))
 (define notes/get-kind (lambda (n) (car (cdr (cdr (cdr (cdr (cdr n))))))))
 (define notes/get-day (lambda (n) (car (cdr (cdr (cdr (cdr (cdr (cdr n)))))))))
-
 (define notes/empty-outline
   (lambda (title)
     (outline/node "root" title)))
@@ -53,8 +52,7 @@
       (let ((fields (notes/make-fields slug title outline tags kind day)))
         (if (null? row)
             (create 'note fields)
-            (update 'note (car row) fields)))))
-
+            (update 'note (car row) fields))))))
 (define notes/list (lambda () (rows 'note 100)))
 
 (define notes/search
@@ -84,18 +82,14 @@
         (notes/upsert slug title
           (outline/set-body (outline/node "root" title) body)
           "inbox" "note" "")
-        slug)))
-
-;; --- HTML pieces ---
-
+        slug))))
 (define notes/item-li
   (lambda (row)
     (let ((f (cdr row)))
       (html/li ""
         (html/a
           (string-append "/notes?slug=" (as-str (dict-get f "slug")))
-          (html/text (as-str (dict-get f "title")))))))
-
+          (html/text (as-str (dict-get f "title"))))))))
 (define notes/recent-list
   (lambda ()
     (list/foldl
@@ -115,8 +109,7 @@
           (html/label "" "Slug ")
           (html/text-input "slug" (html/attr "placeholder" "my-note"))
           " "
-          (html/button (html/attr "type" "submit") "Create")))))
-
+          (html/button (html/attr "type" "submit") "Create"))))))
 (define notes/index-html
   (lambda ()
     (html/join
@@ -126,8 +119,7 @@
           "Outline-first notes. Create or open a slug.")
         (notes/create-form)
         (html/h2 "Recent")
-        (html/ul (html/attr "class" "card") (notes/recent-list)))))
-
+        (html/ul (html/attr "class" "card") (notes/recent-list))))))
 (define notes/missing-html
   (lambda (slug)
     (html/join
@@ -135,8 +127,7 @@
         (html/h1 "Missing")
         (html/p* (html/attr "class" "err")
           (string-append "No note " (as-str slug)))
-        (html/p* "" (html/a "/notes" "All notes")))))
-
+        (html/p* "" (html/a "/notes" "All notes"))))))
 (define notes/edit-form
   (lambda (slug outline)
     (html/form "POST" "/notes" ""
@@ -151,8 +142,7 @@
                 (html/attr "rows" "16")))
             (outline/encode outline))
           (html/p* ""
-            (html/button (html/attr "type" "submit") "Save outline"))))))
-
+            (html/button (html/attr "type" "submit") "Save outline")))))))
 (define notes/show-body
   (lambda (slug title outline tags)
     (html/join
@@ -172,8 +162,7 @@
           (html/join
             (list
               (html/h2 "Edit outline (JSON)")
-              (notes/edit-form slug outline)))))))
-
+              (notes/edit-form slug outline))))))))
 (define notes/show-html
   (lambda (slug)
     (let ((n (notes/get slug)))
@@ -182,10 +171,7 @@
           (notes/show-body slug
             (notes/get-title n)
             (notes/get-outline n)
-            (notes/get-tags n)))))
-
-;; --- POST ---
-
+            (notes/get-tags n))))))
 (define notes/do-create
   (lambda (title slug)
     (let ((s
@@ -197,7 +183,6 @@
           (notes/empty-outline (as-str title))
           "" "note" "")
         (redirect (string-append "/notes?slug=" s))))))
-
 (define notes/do-save
   (lambda (slug raw)
     (let ((tree (outline/decode raw))
@@ -208,8 +193,7 @@
             (day (if (null? prev) "" (notes/get-day prev))))
         (seq
           (notes/upsert (as-str slug) title tree tags kind day)
-          (redirect (string-append "/notes?slug=" (as-str slug)))))))
-
+          (redirect (string-append "/notes?slug=" (as-str slug))))))))
 (define notes/handle-post
   (lambda ()
     (let ((action (request-param "action")))
@@ -219,8 +203,6 @@
               (notes/do-save (request-param "slug") (request-param "outline"))
               (redirect "/notes"))))))
 
-;; --- routes ---
-
 (define notes/page
   (lambda ()
     (if (string-eq (request-method) "POST")
@@ -228,14 +210,12 @@
         (let ((slug (request-param "slug")))
           (if (or (null? slug) (string-eq (as-str slug) ""))
               (html/page (list (notes/index-html)))
-              (html/page (list (notes/show-html (as-str slug))))))))
-
+              (html/page (list (notes/show-html (as-str slug)))))))))
 (define notes/outline-partial
   (lambda ()
     (let ((n (notes/get (request-param "slug"))))
       (if (null? n)
           (render-html (html/p* (html/attr "class" "err") "missing"))
-          (render-html (outline/html (notes/get-outline n))))))
-
+          (render-html (outline/html (notes/get-outline n)))))))
 (route "/notes" "notes/page")
 (route "/partials/notes-outline" "notes/outline-partial")
