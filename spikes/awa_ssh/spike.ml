@@ -94,8 +94,8 @@ module Flow = struct
 end
 
 (* Link-check that Awa_mirage.Make compiles against these shims.
-   If the functor application type-checks, the spike is proven feasible. *)
-module SSH = Awa_mirage.Make (Flow) (Time) (Clock)
+   awa-mirage 0.6: Make takes only Mirage_flow.S (Time/Clock no longer params). *)
+module SSH = Awa_mirage.Make (Flow)
 
 (* A trivial entry point so dune has something to build. *)
 let () = printf "awa-ssh spike compiles; SSH.spawn_server reachable\n%!"
