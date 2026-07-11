@@ -1,39 +1,61 @@
 ;; Editable UI shell — Functions package "ui"
 ;; (load-library "ui") or edit ui/nav and ui/home in the browser.
+;; Uses std html/* helpers. Chrome re-runs (ui/nav) on every request.
 
 (define ui/nav
   (lambda ()
-    (render-html
-      (string-append
-        "<a href=\"/\">home</a>"
-        "<a href=\"/about\">about</a>"
-        "<a href=\"/branches\">branches</a>"
-        "<a href=\"/bindings\">functions</a>"
-        "<a href=\"/types\">data</a>"
-        "<a href=\"/pages\">pages</a>"
-        "<a href=\"/repl\">repl</a>"
-        "<a href=\"/agent\">agent</a>"
-        "<a href=\"/todos\">todos</a>"))))
+    (html/page
+      (list
+        (html/a "/" "home")
+        (html/a "/about" "about")
+        (html/a "/branches" "branches")
+        (html/a "/bindings" "functions")
+        (html/a "/types" "data")
+        (html/a "/pages" "pages")
+        (html/a "/bible" "bible")
+        (html/a "/todos" "todos")
+        (html/a "/repl" "repl")
+        (html/a "/agent" "agent")))))
 
 (define ui/home
   (lambda ()
-    (render-html
-      (string-append
-        "<div class=\"card\">"
-        "<h2>Workspace</h2>"
-        "<p>Homepage is Lisp function <code>ui/home</code>. "
-        "Edit under Functions / package <strong>ui</strong>.</p>"
-        "<ul>"
-        "<li><a href=\"/about\">About</a></li>"
-        "<li><a href=\"/bindings\">Functions</a></li>"
-        "<li><a href=\"/pages\">Pages</a></li>"
-        "<li><a href=\"/todos\">Todos</a></li>"
-        "<li><a href=\"/repl\">REPL</a></li>"
-        "</ul></div>"
-        "<div class=\"card\">"
-        "<h2>Customize</h2>"
-        "<p><a href=\"/bindings?pkg=ui\">ui package</a> · "
-        "<a href=\"/edit/ui%2Fhome\">edit homepage</a> · "
-        "<a href=\"/edit/ui%2Fnav\">edit navbar</a></p>"
-        "<p class=\"muted\">Brand/user/branch chrome stays system; nav and home body are Lisp.</p>"
-        "</div>"))))
+    (html/page
+      (list
+        (html/div (html/attr "class" "card")
+          (html/join
+            (list
+              (html/h2 "Workspace")
+              (html/p*
+                ""
+                (html/join
+                  (list
+                    "Homepage is Lisp function "
+                    (html/code "ui/home")
+                    ". Edit under Functions / package "
+                    (html/strong "ui")
+                    ".")))
+              (html/ul ""
+                (html/join
+                  (list
+                    (html/li "" (html/a "/about" "About"))
+                    (html/li "" (html/a "/bindings" "Functions"))
+                    (html/li "" (html/a "/pages" "Pages"))
+                    (html/li "" (html/a "/bible" "Bible"))
+                    (html/li "" (html/a "/todos" "Todos"))
+                    (html/li "" (html/a "/repl" "REPL"))))))))
+        (html/div (html/attr "class" "card")
+          (html/join
+            (list
+              (html/h2 "Customize")
+              (html/p*
+                ""
+                (html/join
+                  (list
+                    (html/a "/bindings?pkg=ui" "ui package")
+                    " · "
+                    (html/a "/edit/ui%2Fhome" "edit homepage")
+                    " · "
+                    (html/a "/edit/ui%2Fnav" "edit navbar"))))
+              (html/p*
+                (html/attr "class" "muted")
+                "Brand/user/branch chrome stays system; nav and home body are Lisp."))))))))

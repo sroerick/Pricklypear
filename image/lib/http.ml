@@ -553,15 +553,15 @@ let default_home_content (session : Session.t) : Pure_html.node list =
   ]
 
 let home_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+  (* Nav comes from Session.ui_nav_html (refreshed in request launch). *)
   let* home_html = try_ui_fn session "ui/home" in
-  let* nav_html = try_ui_fn session "ui/nav" in
   let content =
     match home_html with
     | Some html when String.trim html <> "" ->
         [ txt ~raw:true "%s" html ]
     | _ -> default_home_content session
   in
-  let body = chrome ?nav_html ~session ~title:"Workspace" content in
+  let body = chrome ~session ~title:"Workspace" content in
   html_response reqd body;
   Lwt.return_unit
 
@@ -1855,7 +1855,12 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
   let meth = req.Httpaf.Request.meth in
   let launch (page : unit Lwt.t) : unit =
     Lwt.async (fun () ->
-      Lwt.catch (fun () -> page)
+      Lwt.catch
+        (fun () ->
+          (* Refresh ui/nav cache every request so Lisp chrome is shared
+             by home, system pages, and user routes — not only /. *)
+          let* () = Session.refresh_ui_shell session in
+          page)
         (fun exn ->
           let body =
             chrome ~session ~title:"Error" [
@@ -1867,8 +1872,16 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
   in
   match meth, path with
   | `GET, "/" -> launch (home_page session reqd)
-  | `GET, "/about" -> about_page session reqd
-  | `GET, "/pages" -> pages_list_page session reqd
+  | `GET, "/about" ->
+      launch
+        (let* () = Lwt.return_unit in
+         about_page session reqd;
+         Lwt.return_unit)
+  | `GET, "/pages" ->
+      launch
+        (let* () = Lwt.return_unit in
+         pages_list_page session reqd;
+         Lwt.return_unit)
   | `POST, "/api/recipe/hello" ->
       launch
         (let* res = Session.recipe_hello session in
@@ -1975,7 +1988,11 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
   | `GET, "/branches" -> launch (list_branches_page session reqd)
   | `GET, "/bindings" -> launch (list_bindings_page session reqd)
   | `GET, "/types" -> launch (list_types_page session reqd)
-  | `GET, "/repl" -> repl_page session reqd
+  | `GET, "/repl" ->
+      launch
+        (let* () = Lwt.return_unit in
+         repl_page session reqd;
+         Lwt.return_unit)
   | `POST, "/api/eval" -> launch (api_eval session reqd)
   | `POST, "/api/agent" -> launch (api_agent session reqd)
   | `POST, "/api/agent-task" -> launch (api_agent_task session reqd)

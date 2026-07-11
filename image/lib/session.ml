@@ -255,6 +255,9 @@ let define_binding (t : t) ~(name : string) ~(body_src : string)
            (Pricklypear_lisp.Ast.Var "define",
             [ Pricklypear_lisp.Ast.Var n; body_expr ]) ->
            let* () = Store.persist_function t.store n body_expr author in
+           (* Stale chrome nav was the "bible only on home" bug: home
+              live-calls ui/nav; other pages used a cached string. *)
+           if n = "ui/nav" || n = "ui/home" then t.ui_nav_html <- None;
            Lwt.return (Ok v)
        | _ ->
            (* Still bound in env if define special-form ran *)

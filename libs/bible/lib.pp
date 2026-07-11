@@ -6,6 +6,7 @@
 ;; URLs: /bible?book=John&chapter=3&verse=16  or  ?ref=BSB:John:3:16
 ;;
 ;; Text: Berean Standard Bible (see seed script NOTICE / attribution).
+;; HTML via std html/* helpers.
 
 (deftype 'bible-book 'name 'abbrev 'ordinal 'testament)
 (deftype 'bible-verse 'translation 'book 'abbrev 'chapter 'verse 'text 'ref)
@@ -63,7 +64,6 @@
 
 (define bible/parse-ref
   (lambda (ref)
-    ;; "BSB:John:3:16" -> uses find-row directly via ref
     (find-row 'bible-verse "ref" (as-str ref))))
 
 (define bible/verse-li
@@ -72,36 +72,66 @@
       (let ((n (dict-get fields "verse"))
             (text (dict-get fields "text"))
             (ref (dict-get fields "ref")))
-        (string-append
-          "<li id=\"" (as-str ref) "\"><sup>"
-          (as-str n)
-          "</sup> "
-          (as-str text)
-          "</li>")))))
+        (html/li (html/attr "id" (as-str ref))
+          (html/join
+            (list
+              (html/tag "sup" "" (html/text (as-str n)))
+              " "
+              (html/text text))))))))
 
 (define bible/chapter-html
   (lambda (book chapter focus-verse)
     (let ((rows (bible/chapter book chapter)))
-      (string-append
-        "<h1>"
-        (as-str book)
-        " "
-        (as-str chapter)
-        "</h1>"
-        "<ol class=\"bible-chapter\">"
-        (list/foldl
-          (lambda (acc row) (string-append acc (bible/verse-li row)))
-          ""
-          rows)
-        "</ol>"
-        (if (null? focus-verse)
-            ""
-            (string-append
-              "<p class=\"muted\">Focus verse "
-              (as-str focus-verse)
-              ": "
-              (as-str (bible/verse book chapter focus-verse))
-              "</p>"))))))
+      (html/join
+        (list
+          (html/h1
+            (string-append (as-str book) " " (as-str chapter)))
+          (html/tag "ol" (html/attr "class" "bible-chapter")
+            (list/foldl
+              (lambda (acc row) (string-append acc (bible/verse-li row)))
+              ""
+              rows))
+          (if (null? focus-verse)
+              ""
+              (html/p*
+                (html/attr "class" "muted")
+                (string-append
+                  "Focus verse "
+                  (as-str focus-verse)
+                  ": "
+                  (as-str (bible/verse book chapter focus-verse))))))))))
+
+(define bible/go-form
+  (lambda (b c verse)
+    (html/form "GET" "/bible" (html/attr "class" "card")
+      (html/join
+        (list
+          (html/label ""
+            (html/join
+              (list
+                "Book "
+                (html/text-input "book"
+                  (html/attr "value" b)))))
+          " "
+          (html/label ""
+            (html/join
+              (list
+                "Chapter "
+                (html/text-input "chapter"
+                  (html/attr "value" c)))))
+          " "
+          (html/label ""
+            (html/join
+              (list
+                "Verse "
+                (html/text-input "verse"
+                  (html/attrs
+                    (list
+                      (html/attr "placeholder" "optional")
+                      (html/attr "value"
+                        (if (null? verse) "" (as-str verse)))))))))
+          " "
+          (html/button (html/attr "type" "submit") "Go"))))))
 
 (define bible/page
   (lambda ()
@@ -127,51 +157,60 @@
                         (verse (request-param "verse")))
                     (let ((b (if (null? book) "John" (as-str book)))
                           (c (if (null? chapter) "3" (as-str chapter))))
-                      (render-html
-                        (string-append
-                          "<form method=\"GET\" action=\"/bible\" class=\"card\">"
-                          "<label>Book <input name=\"book\" value=\"" b "\"></label> "
-                          "<label>Chapter <input name=\"chapter\" value=\"" c "\"></label> "
-                          "<label>Verse <input name=\"verse\" placeholder=\"optional\" value=\""
-                          (if (null? verse) "" (as-str verse))
-                          "\"></label> "
-                          "<button type=\"submit\">Go</button></form>"
+                      (html/page
+                        (list
+                          (bible/go-form b c verse)
                           (bible/chapter-html b c verse)
-                          "<p class=\"muted\">Berean Standard Bible · ref "
-                          (bible/ref b c (if (null? verse) 1 verse))
-                          " · <a href=\"/bible?q=love\">search love</a></p>"))))
+                          (html/p*
+                            (html/attr "class" "muted")
+                            (html/join
+                              (list
+                                "Berean Standard Bible · ref "
+                                (bible/ref b c (if (null? verse) 1 verse))
+                                " · "
+                                (html/a "/bible?q=love" "search love"))))))))
                   (let ((row (bible/parse-ref ref)))
                     (if (null? row)
-                        (render-html
-                          (string-append "<p class=\"err\">Unknown ref "
-                            (as-str ref) "</p>"))
+                        (html/page
+                          (list
+                            (html/p*
+                              (html/attr "class" "err")
+                              (string-append "Unknown ref " (as-str ref)))))
                         (let ((book (dict-get row "book"))
                               (chapter (dict-get row "chapter"))
                               (verse (dict-get row "verse")))
-                          (render-html
-                            (string-append
+                          (html/page
+                            (list
                               (bible/chapter-html book chapter verse)
-                              "<p class=\"muted\">ref " (as-str ref)
-                              " · Berean Standard Bible</p>"))))))
+                              (html/p*
+                                (html/attr "class" "muted")
+                                (string-append
+                                  "ref "
+                                  (as-str ref)
+                                  " · Berean Standard Bible"))))))))
               (let ((hits (bible/search q)))
-                (render-html
-                  (string-append
-                    "<h1>Search: " (as-str q) "</h1>"
-                    "<ul>"
-                    (list/foldl
-                      (lambda (acc row)
-                        (let ((f (cdr row)))
-                          (string-append acc
-                            "<li><a href=\"/bible?ref="
-                            (as-str (dict-get f "ref"))
-                            "\">"
-                            (as-str (dict-get f "ref"))
-                            "</a> "
-                            (as-str (dict-get f "text"))
-                            "</li>")))
-                      ""
-                      hits)
-                    "</ul>"
-                    "<p class=\"muted\">Berean Standard Bible</p>"))))))))
+                (html/page
+                  (list
+                    (html/h1 (string-append "Search: " (as-str q)))
+                    (html/ul ""
+                      (list/foldl
+                        (lambda (acc row)
+                          (let ((f (cdr row)))
+                            (string-append acc
+                              (html/li ""
+                                (html/join
+                                  (list
+                                    (html/a
+                                      (string-append
+                                        "/bible?ref="
+                                        (as-str (dict-get f "ref")))
+                                      (as-str (dict-get f "ref")))
+                                    " "
+                                    (html/text (dict-get f "text"))))))))
+                        ""
+                        hits))
+                    (html/p*
+                      (html/attr "class" "muted")
+                      "Berean Standard Bible")))))))))
 
 (route "/bible" "bible/page")
