@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import urllib.request
@@ -120,7 +121,10 @@ def psql(args: argparse.Namespace, sql: str) -> str:
         "-tAc",
         sql,
     ]
-    r = subprocess.run(cmd, capture_output=True, text=True)
+    env = os.environ.copy()
+    if args.password:
+        env["PGPASSWORD"] = args.password
+    r = subprocess.run(cmd, capture_output=True, text=True, env=env)
     if r.returncode != 0:
         raise RuntimeError(r.stderr or r.stdout or "psql failed")
     return r.stdout.strip()
@@ -138,11 +142,10 @@ def connect(args: argparse.Namespace):
         "dbname": args.db,
         "user": args.user,
         "port": int(args.port),
+        "host": args.host,
     }
-    if args.host.startswith("/"):
-        kwargs["host"] = args.host
-    else:
-        kwargs["host"] = args.host
+    if args.password:
+        kwargs["password"] = args.password
     return psycopg2.connect(**kwargs)
 
 
@@ -363,6 +366,11 @@ def main() -> int:
     ap.add_argument("--port", default="5433")
     ap.add_argument("--user", default="postgres")
     ap.add_argument("--db", default="pricklypear")
+    ap.add_argument(
+        "--password",
+        default=os.environ.get("PGPASSWORD") or os.environ.get("PP_DB_PASS") or "",
+        help="DB password (or set PGPASSWORD / PP_DB_PASS)",
+    )
     ap.add_argument("--file", help="JSONL verses")
     ap.add_argument(
         "--complete",
