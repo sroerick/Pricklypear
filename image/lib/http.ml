@@ -1448,7 +1448,7 @@ let api_agent (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
           let seed =
             match List.assoc_opt "seed" items with
             | Some (`String s) -> s
-            | _ -> "You are a helpful Pricklypear image assistant."
+            | _ -> "You are the co-pilot for a Pricklypear multi-user Lisp OS image (software, not a cactus). Prefer CONTEXT; if unknown say so."
           in
           let prompt =
             match List.assoc_opt "prompt" items with
@@ -1470,7 +1470,7 @@ let api_agent (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
     with _ ->
       let seed =
         Option.value (form_field body "seed")
-          ~default:"You are a helpful Pricklypear image assistant."
+          ~default:"You are the co-pilot for a Pricklypear multi-user Lisp OS image (software, not a cactus). Prefer CONTEXT; if unknown say so."
       in
       let prompt =
         match form_field body "prompt" with
@@ -1547,13 +1547,44 @@ let api_agent (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
     Lwt.return_unit
   end
 
-let agent_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit =
+let agent_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+  (* Live context so the model is grounded in THIS image, not botany. *)
+  let* ctx_v =
+    Lwt.catch
+      (fun () ->
+         Session.eval_one session
+           "(string-append \"user=\" (whoami) \" branch=\" (current-branch) \" bindings=\" (str (list-bindings)))")
+      (fun _ ->
+         Lwt.return
+           (Pricklypear_lisp.Ast.VStr
+              (Printf.sprintf "user=%s branch=%s"
+                 (Session.username session) (Session.branch_name session))))
+  in
+  let ctx =
+    match ctx_v with
+    | Pricklypear_lisp.Ast.VStr s -> s
+    | _ -> Pricklypear_lisp.Reader.pp_value ctx_v
+  in
+  let default_seed =
+    "You are the co-pilot for a running Pricklypear IMAGE — a multi-user Lisp " ^
+    "operating system (software), NOT the cactus plant.\n\n" ^
+    "Pricklypear: live per-user images; Lisp functions stored in Postgres; " ^
+    "branches version code; routes bind functions to HTTP; UI is htmx. " ^
+    "Prims include list-bindings, get, rows, define, route, render-html, agent.\n\n" ^
+    "Rules: Prefer facts from the CONTEXT block in the user prompt. " ^
+    "If unknown from context, say so. Do not invent bindings or data. " ^
+    "Never answer as if Pricklypear is a cactus unless the user clearly asks about the plant."
+  in
   let js =
     "const out=document.getElementById('out');" ^
     "const run=document.getElementById('run');" ^
+    "const baseCtx=" ^ Yojson.Safe.to_string (`String ctx) ^ ";" ^
     "run.onclick=async()=>{" ^
     "const seed=document.getElementById('seed').value;" ^
-    "const prompt=document.getElementById('prompt').value;" ^
+    "const q=document.getElementById('prompt').value;" ^
+    "const prompt='=== IMAGE CONTEXT ===\\n'+" ^
+    "'system: Pricklypear multi-user Lisp OS image (software, not a cactus)\\n'+" ^
+    "baseCtx+'\\n=== END CONTEXT ===\\n\\nUser question:\\n'+q;" ^
     "out.textContent='…'; run.disabled=true;" ^
     "try{" ^
     "const r=await fetch('/api/agent',{method:'POST'," ^
@@ -1587,17 +1618,19 @@ let agent_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit =
     chrome ~session ~title:"Agent" [
       HTML.div [HTML.class_ "card"] [
         HTML.p [] [txt
-          "Unified portal: Lisp (agent seed prompt) or this form. Live tokens via SSE."];
+          "Co-pilot for this image. Seed = persona; prompt = your question."];
+        HTML.p [HTML.class_ "muted"] [txt
+          "Each run injects live context (user/branch/bindings). Lisp: (ai/ask \"…\")."];
         HTML.p [] [
           HTML.label [HTML.for_ "seed"] [txt "seed (system)"];
         ];
         HTML.textarea [HTML.name "seed"; HTML.id "seed"]
-          "%s" "You are the Pricklypear image co-pilot. Answer briefly. Prefer facts from the prompt context.";
+          "%s" default_seed;
         HTML.p [] [
-          HTML.label [HTML.for_ "prompt"] [txt "prompt"];
+          HTML.label [HTML.for_ "prompt"] [txt "prompt (your question)"];
         ];
         HTML.textarea [HTML.name "prompt"; HTML.id "prompt"]
-          "%s" "What is Pricklypear in one sentence?";
+          "%s" "What is this image, and what branch am I on?";
         HTML.p [] [
           HTML.button [HTML.type_ "button"; HTML.id "run"] [txt "Run agent"];
         ];
@@ -1606,7 +1639,8 @@ let agent_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit =
       HTML.script [] "%s" js;
     ]
   in
-  html_response reqd body
+  html_response reqd body;
+  Lwt.return_unit
 
 let ai_propose (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
   let* body = read_body reqd in
@@ -1783,7 +1817,7 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
   | `POST, "/api/eval" -> launch (api_eval session reqd)
   | `POST, "/api/agent" -> launch (api_agent session reqd)
   | `POST, "/api/ai/propose" -> launch (ai_propose session reqd)
-  | `GET, "/agent" -> agent_page session reqd
+  | `GET, "/agent" -> launch (agent_page session reqd)
   | `POST, "/api/edit/create" -> launch (api_edit_create session reqd)
   | `GET, path when String.length path >= 6
                  && String.sub path 0 6 = "/page/" ->
