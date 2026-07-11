@@ -30,6 +30,39 @@ let read_file (path : string) : (string, string) result =
     Ok s
   with exn -> Error (path ^ ": " ^ Printexc.to_string exn)
 
+(** Strip `;` line comments outside strings so file headers do not confuse load. *)
+let strip_line_comments (s : string) : string =
+  let buf = Buffer.create (String.length s) in
+  let len = String.length s in
+  let rec loop i in_str =
+    if i >= len then Buffer.contents buf
+    else
+      let c = s.[i] in
+      if in_str then begin
+        Buffer.add_char buf c;
+        if c = '\\' && i + 1 < len then begin
+          Buffer.add_char buf s.[i + 1];
+          loop (i + 2) true
+        end else if c = '"' then loop (i + 1) false
+        else loop (i + 1) true
+      end else if c = '"' then begin
+        Buffer.add_char buf c;
+        loop (i + 1) true
+      end else if c = ';' then
+        (* skip to end of line *)
+        let rec skip j =
+          if j >= len || s.[j] = '\n' then j else skip (j + 1)
+        in
+        let j = skip i in
+        if j < len then Buffer.add_char buf '\n';
+        loop (if j < len then j + 1 else j) false
+      else begin
+        Buffer.add_char buf c;
+        loop (i + 1) false
+      end
+  in
+  loop 0 false
+
 (** Load SRC: each top-level form is pretty-printed and passed to
     [eval_one] so (define) persists and (route)/(deftype) run as prims. *)
 let load_string
@@ -37,6 +70,7 @@ let load_string
     (src : string)
     : (string, string) result Lwt.t =
   try
+    let src = strip_line_comments src in
     let forms = Pricklypear_lisp.Reader.read_all src in
     let rec go i = function
       | [] ->
