@@ -368,6 +368,71 @@ let install_ai_function (t : t) ~(name : string) ~(body_src : string)
                   (Pricklypear_lisp.Ast.VStr
                      (Printf.sprintf "ai body invalid: %s\n---\n%s" e body_src))))
 
+(** Pretty source body for a binding (env lambda or store). *)
+let function_source (t : t) (name : string) : string option Lwt.t =
+  let* found = Store.lookup_function t.store name in
+  match found with
+  | Some (expr, _) ->
+      Lwt.return (Some (Pricklypear_lisp.Reader.pp_expr expr))
+  | None ->
+      (match Pricklypear_lisp.Env.lookup t.env name with
+       | Some (Pricklypear_lisp.Ast.VLambda (params, body, _)) ->
+           let e =
+             Pricklypear_lisp.Ast.Lambda (params, body)
+           in
+           Lwt.return (Some (Pricklypear_lisp.Reader.pp_expr e))
+       | _ -> Lwt.return_none)
+
+let package_binding_names (t : t) (pkg : string) : string list Lwt.t =
+  let* defs = Store.list_function_names t.store in
+  let pkg =
+    if pkg = "(root)" || pkg = "root" then "" else pkg
+  in
+  let names =
+    List.filter_map
+      (fun (name, _, _) ->
+        let p = Packages.package_of_name name in
+        if p = pkg then Some name else None)
+      defs
+    |> List.sort_uniq String.compare
+  in
+  Lwt.return names
+
+(** Export package as lib.pp text: (define name body)… pretty-printed. *)
+let export_package (t : t) (pkg : string) : string Lwt.t =
+  let* names = package_binding_names t pkg in
+  let label = if pkg = "" || pkg = "(root)" then "(root)" else pkg in
+  let buf = Buffer.create 4096 in
+  Buffer.add_string buf
+    (Printf.sprintf
+       ";; package %s — exported from live branch %s\n;; Do not edit by hand unless you know the sync model (pp_sync pull/push).\n\n"
+       label t.manifest.branch_name);
+  let rec go = function
+    | [] -> Lwt.return (Buffer.contents buf)
+    | name :: rest ->
+        let* src = function_source t name in
+        (match src with
+         | None -> go rest
+         | Some body ->
+             Buffer.add_string buf "(define ";
+             Buffer.add_string buf name;
+             Buffer.add_string buf "\n  ";
+             (* indent body lines by 2 spaces after first *)
+             let body_indented =
+               body
+               |> String.split_on_char '\n'
+               |> (function
+                    | [] -> ""
+                    | h :: t ->
+                        String.concat "\n"
+                          (h :: List.map (fun line -> "  " ^ line) t))
+             in
+             Buffer.add_string buf body_indented;
+             Buffer.add_string buf ")\n\n";
+             go rest)
+  in
+  go names
+
 (* AI propose: draft via agent portal, then install on current branch. *)
 let propose_function (t : t) ~(name : string) ~(spec : string)
     : Pricklypear_lisp.Ast.value Lwt.t =
@@ -984,6 +1049,43 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
           Lwt.return
             (Pricklypear_lisp.Ast.VStr
                "install-function: need name-str, body-str"));
+
+  (* (function-source name) -> VStr pretty body | VNil *)
+  Primitives.register tbl "function-source"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr name ] ->
+          let* src = function_source t name in
+          (match src with
+           | Some s -> Lwt.return (Pricklypear_lisp.Ast.VStr s)
+           | None -> Lwt.return Pricklypear_lisp.Ast.VNil)
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr "function-source: need name-str"));
+
+  (* (package-bindings pkg) -> VList of name strings *)
+  Primitives.register tbl "package-bindings"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr pkg ] ->
+          let* names = package_binding_names t pkg in
+          Lwt.return
+            (Pricklypear_lisp.Ast.VList
+               (List.map (fun n -> Pricklypear_lisp.Ast.VStr n) names))
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr "package-bindings: need package-str"));
+
+  (* (export-package pkg) -> VStr lib.pp text *)
+  Primitives.register tbl "export-package"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr pkg ] ->
+          let* text = export_package t pkg in
+          Lwt.return (Pricklypear_lisp.Ast.VStr text)
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr "export-package: need package-str"));
 
   (* Coding tools: freeze AST rewrites into store *)
   Primitives.register tbl "llm-inner"

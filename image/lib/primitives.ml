@@ -633,6 +633,9 @@ let prim_summary (name : string) : string =
   | "agent-task" -> "multi-turn tool agent; may install many functions"
   | "propose-function" -> "AI draft+install function on branch"
   | "install-function" -> "install AI body string as named function"
+  | "function-source" -> "pretty-print stored function body"
+  | "package-bindings" -> "list binding names in a package"
+  | "export-package" -> "export package as lib.pp text"
   | "llm-inner" | "llm-outer" | "llm-rewrite" | "llm-seed" ->
       "AI rewrite / growth tool"
   | "__with_transaction__" -> "internal transaction helper"

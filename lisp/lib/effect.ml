@@ -115,6 +115,7 @@ let read_db_prims = [
   "get"; "rows"; "select-for-update";
   "list-branches"; "current-branch"; "list-bindings";
   "whoami"; "current-author";
+  "function-source"; "package-bindings"; "export-package";
 ]
 
 let write_db_prims = [
