@@ -82,6 +82,21 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
               font-family:\"Courier New\",Courier,monospace}
          ul.actions{list-style:none;padding:0;margin:.5rem 0}
          ul.actions li{margin:.4rem 0}
+         /* Todo list */
+         .todo-add-label{display:block;font-weight:bold;margin:0 0 .35rem}
+         .todo-add-row{display:flex;gap:.5rem;align-items:stretch;flex-wrap:wrap}
+         .todo-add-row input[type=text]{flex:1 1 12rem;min-width:0}
+         .todo-add-row button{flex:0 0 auto;width:auto;min-width:5rem}
+         ul.todo-list{list-style:none;padding:.25rem .5rem;margin:0 0 .75rem}
+         li.todo-item{display:flex;align-items:center;gap:.5rem;
+           padding:.45rem 0;border-bottom:1px solid #c0c0c0}
+         li.todo-item:last-child{border-bottom:none}
+         li.todo-item form{margin:0;display:inline}
+         li.todo-item .todo-box{font-family:ui-monospace,Menlo,monospace;
+           min-width:2.6rem;padding:.25rem .35rem;width:auto}
+         li.todo-item .todo-title{flex:1 1 auto;min-width:0;word-break:break-word}
+         li.todo-item.is-done .todo-title{text-decoration:line-through;color:#666}
+         li.todo-item .todo-del button{width:auto;padding:.25rem .45rem;font-size:.85rem}
          /* Mobile: stack denser chrome, full-width controls */
          @media (max-width:40rem){
            main{padding:.5rem}
