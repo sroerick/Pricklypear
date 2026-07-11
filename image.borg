@@ -644,6 +644,13 @@
          - used-by pages; create package+local form
          - Edit only for function_defs rows
 
+         UI SHELL AS LISP (2026-07-11):
+         - Optional bindings ui/nav and ui/home (render-html strings).
+         - If present, chrome nav and GET / use them; else OCaml defaults.
+         - libs/ui/lib.pp is the default editable shell; load-library "ui".
+         - Identity strip (brand, user, branch, uptime) stays OCaml.
+         - Edit via Functions → ui package (mobile drilldown works).
+
          DEFERRED:
          - Data rows browser by type
          - Branch switcher; fork/merge UI
@@ -658,13 +665,24 @@
    (status planned)
    (* agent note (|2026-07-11 plan: packages = name prefixes with / separator.
      Orthogonal to multi-user.namespaces (branches). No new tables in v1.
-     Reader already allows / in symbols (is_symbol_start).|) *)
+     Reader already allows / in symbols (is_symbol_start).
+     2026-07-11: BIBLE LIBRARY dogfood locked — BSB in data_rows,
+     ref format BSB:Abbrev:C:V, bulk seed script, libs/bible/lib.pp,
+     URLs via query book/chapter/verse or ref= (see BIBLE LIBRARY).|) *)
    (verify
     (build "dune build lisp image")
     (smoke "reader accepts symbol todo/list as Var")
     (smoke "(define todo/list (lambda () 1)) then (todo/list) => 1")
     (smoke "todo/list and calendar/list coexist on same branch")
-    (smoke "/bindings groups todo/list under package todo"))
+    (smoke "/bindings groups todo/list under package todo")
+    (smoke "(load-string \"(define pack/x (lambda () 7))\") then (pack/x) => 7")
+    (smoke "(load-library \"todo\") installs /todos and todo/page")
+    (smoke "libs/todo/lib.pp is source of truth; no OCaml string recipe body")
+    (smoke "(load-library \"bible\") defines bible/verse bible/chapter bible/page + /bible")
+    (smoke "after seed: (bible/verse \"John\" 3 16) returns BSB text containing God/world")
+    (smoke "GET /bible?book=John&chapter=3 lists verse text")
+    (smoke "GET /bible?ref=BSB:John:3:16 focuses that verse")
+    (smoke "seed script idempotent: second run does not duplicate refs"))
    (details
     (doc (|
          PROBLEM: flat binding names collide once many tools live on
@@ -703,29 +721,174 @@
            implementation may use /edit?name=todo/list if path
            routing is awkward — pick one and document in agent note.
 
-         LIBRARY (soft, later):
-         - A "library" is a prefix + optional recipe that seeds
-           functions/types/routes under that prefix (e.g. todo/).
-         - Not a separate schema object in this plan.
+         LIBRARY LOADER (2026-07-11 — implement):
+         Same Lisp source text in git repos and in the live system.
+         OCaml provides only a pure loader (no app string blobs).
 
-         STD CUT (2026-07-11):
-         A. Kernel prims (OCaml, browsable under (kernel)):
-            Math: div, mod, abs, min, max
-            String: string-length, substring, string-contains?
-            List: map, filter, foldl, append, reverse, nth
-            (map/filter/foldl apply VLambda/VPrim via Eval.apply)
-         B. Lisp seeds on system/main if missing (author system):
-            html/wrap — simple page shell helper using render-html
-            data/field — dict-get sugar if useful
-            llm/help — short doc string binding (optional)
-         C. Dogfood recipe POST /api/recipe/todo:
-            deftype todo-item; todo/list, todo/add, todo/page;
-            route /todos; package todo visible in Functions browser.
-            Interactive form POST on /todos requires image.htmx-interface
-            request-context + POST user routes (it33 plan). Until that
-            ships, recipe may still be REPL-write + GET dump; after it33,
-            todo/page is method-aware (POST add + redirect, GET form UI).
-         Majority of app code remains Lisp; kernel stays thin OCaml.
+         On-disk layout (shipped in release tarball as libs/):
+           libs/std/lib.pp     — list/map filter foldl, html/wrap, data/get-field
+           libs/todo/lib.pp    — deftype + todo/* + (route "/todos" …)
+           libs/hello/lib.pp   — optional hi-page recipe as Lisp
+           libs/bible/lib.pp   — bible/* API + /bible (canon is data_rows)
+
+         Loader API:
+           (load-string SRC)     read_all forms; eval_one each (define
+                                 persists via existing intercept; route/
+                                 deftype via prims). Stop on first error.
+           (load-library NAME)   load file libs/<NAME>/lib.pp relative to
+                                 PP_LIBS_DIR or ./libs (release CWD).
+
+         Boot / recipes:
+           seed_stdlib → load-library "std" (idempotent re-define ok)
+           recipe_todo → load-library "todo"
+           recipe_hello → load-library "hello" (or keep minimal)
+           recipe_bible → load-library "bible"  (types+fns+route ONLY;
+                            does NOT bulk-insert 30k verses)
+
+         Release build MUST copy libs/ into the tarball.
+
+         =========================================================
+         BIBLE LIBRARY (BSB dogfood — PLAN locked 2026-07-11)
+         =========================================================
+
+         GOAL: read BSB from the live image via Lisp + /bible page.
+         Canon lives in Postgres data_rows (shared across branches).
+         Functions live in package bible/ via load-library.
+
+         DECISIONS:
+         - Translation v1: BSB only (attribution in page footer / lib header).
+         - Storage: data_rows, NOT giant define / NOT .sexp corpus at runtime.
+         - Ref string (human + share + seed key):
+             BSB:<Abbrev>:<chapter>:<verse>
+             e.g. BSB:John:3:16
+                  BSB:1Cor:13:4
+                  BSB:Ps:23:1
+         - Book token in ref = stable ABBREV (no spaces).
+           Display name on bible-book rows separately.
+         - data_rows.id stays UUID PK (migration 003). Ref is NOT the PK.
+           fields.ref holds BSB:Abbrev:C:V uniquely.
+         - Optional seed optimization: deterministic UUID v5 from ref so
+           tooling can recompute id; Lisp users still call bible/* not raw
+           get-by-uuid. Either UUID-default or v5 is fine if ref unique.
+
+         TYPES (deftype from libs/bible/lib.pp):
+           bible-book:
+             name, abbrev, ordinal, testament
+             (~66 rows; menus / prev-next / name→abbrev map)
+           bible-verse:
+             translation, book, abbrev, chapter, verse, text, ref
+             chapter/verse as JSON numbers or digit strings — pick one
+             in seed and stick to it (prefer numbers in JSON).
+             ref = "BSB:John:3:16" always.
+
+         LOOKUP (needs more than blind rows scan):
+           (get 'bible-verse uuid) alone is not enough for humans.
+           Provide ONE of (make picks; prefer smallest):
+             A. Crud/store helper + prim:
+                (find-row 'bible-verse "ref" "BSB:John:3:16")
+                (find-rows 'bible-verse "abbrev" "John"
+                           ["chapter" 3])  ; chapter list
+             B. Dedicated thin prims bible-get-ref / bible-chapter
+                (worse — special-case kernel).
+           Prefer A (general field find). GIN on fields already exists;
+           add UNIQUE index for idempotent seed:
+             CREATE UNIQUE INDEX data_rows_bible_ref_uidx
+               ON data_rows ((fields->>'ref'))
+               WHERE type_name = 'bible-verse';
+           (migration 004 additive — only if make needs it).
+
+         LISP API (libs/bible/lib.pp):
+           (bible/ref book chapter verse) -> "BSB:John:3:16"
+             book may be name or abbrev; normalize via bible-book catalog
+           (bible/verse book chapter verse) -> text VStr | VNil
+           (bible/verse-row book chapter verse) -> fields JSON VStr | VNil
+           (bible/chapter book chapter) -> VList of verse fields/sexps
+           (bible/books) -> list from bible-book rows ordered by ordinal
+           (bible/search q) -> VList hits (v1: SQL ILIKE or limited scan;
+             may be prim-backed; OK if slow/limited first cut)
+           (bible/page) -> GET renders chapter; POST goto redirects
+           (route "/bible" "bible/page")
+
+         URL SURFACE (exact path /bible only — no path params in v1):
+           GET /bible
+           GET /bible?book=John&chapter=3
+           GET /bible?book=John&chapter=3&verse=16
+           GET /bible?ref=BSB:John:3:16
+           GET /bible?q=love                    (optional search)
+           POST /bible  book= & chapter= & verse=
+             -> redirect to GET with query (PRG)
+           Do NOT require colon-ids in path segments.
+           ref= query is the shareable explicit form (URL-ok in query).
+
+         ABBREV TABLE (seed must use these tokens in ref):
+           Gen Exod Lev Num Deut Josh Judg Ruth 1Sam 2Sam 1Kgs 2Kgs
+           1Chr 2Chr Ezra Neh Esth Job Ps Prov Eccl Song Isa Jer Lam
+           Ezek Dan Hos Joel Amos Obad Jonah Mic Nah Hab Zeph Hag
+           Zech Mal
+           Matt Mark Luke John Acts Rom 1Cor 2Cor Gal Eph Phil Col
+           1Thess 2Thess 1Tim 2Tim Titus Phlm Heb Jas 1Pet 2Pet
+           1John 2John 3John Jude Rev
+           (If vendor data uses different codes, map in seed script;
+            document mapping next to script. Display names full English.)
+
+         BULK SEED SCRIPT (required — not HTTP recipe):
+           Path: scripts/seed_bible_bsb.py  (or .ksh driver + py)
+           Inputs:
+             - BSB source file(s) (JSON/CSV/USFM — vendor format;
+               script owns parsing; do not commit illegal redistrib if
+               license forbids; prefer redistributable BSB dump + NOTICE)
+             - PG connect: same as dev (PP_DB_* / /tmp:5433)
+           Behavior:
+             1. Ensure type_defs exist OR document that load-library bible
+                must run first (deftype). Prefer: script can INSERT type_defs
+                rows for bible-book/bible-verse if missing (author system).
+             2. Upsert ~66 bible-book rows (stable id or fields.abbrev unique).
+             3. Upsert all bible-verse rows:
+                  fields.ref unique; ON CONFLICT DO UPDATE text
+                  (requires unique index on ref — migration or special
+                   conflict target).
+             4. Idempotent: second run = no duplicate verses.
+             5. Print counts: books N, verses M.
+           NOT in recipe_bible HTTP handler (too slow / wrong layer).
+
+         INSTALL STORY:
+           A. scripts/seed_bible_bsb.py     # once per DB
+           B. (load-library "bible")        # or POST /api/recipe/bible
+           C. (bible/verse "John" 3 16)
+           D. open /bible?book=John&chapter=3
+
+         HOME UI (optional make):
+           Card "Install bible library" -> POST /api/recipe/bible
+           Note on card: "Run seed script for BSB text if empty".
+
+         RENDER:
+           v1: simple HTML chapter list + optional verse highlight is OK.
+           Optional: ?view=sexp returns chapter as Lisp list via bare value.
+           Attribution footer: Berean Standard Bible / license line.
+
+         PERSONAL LAYER (deferred, same package later):
+           bible-note / bible-highlight types on user data — not canon.
+
+         MAKE CHECKLIST:
+           1. Abbrev map + seed script I/O against sample or full BSB
+           2. migration 004 unique index on verse ref (if upsert needs it)
+           3. find-row / find-rows (or equivalent) for ref + chapter
+           4. libs/bible/lib.pp API + route /bible
+           5. recipe_bible + optional home card
+           6. Smokes in verify stanza above
+
+         OUT OF SCOPE V1:
+           - multi-translation UI
+           - path params /bible/John/3/16 (map later from same ref)
+           - full-text search engine
+           - audio / cross-refs apparatus
+           - pure-sexp file corpus as runtime source of truth
+
+         DEFERRED (packages general): library_files table, git export,
+         multi-file manifests, load from HTTP.
+
+         Kernel prims (OCaml) stay under (kernel) browser package.
+         Majority of app code remains Lisp in .pp files.
     |))
    )
   )

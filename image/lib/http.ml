@@ -521,6 +521,15 @@ let default_home_content (session : Session.t) : Pure_html.node list =
       ];
     ]
   ; HTML.div [HTML.class_ "card"] [
+      HTML.h2 [] [txt "Library: bible (BSB)"];
+      HTML.p [] [txt
+        "Install bible/* + /bible from libs/bible/lib.pp. Corpus: run scripts/seed_bible_bsb.py (types only here)."];
+      HTML.form [HTML.method_ `POST; HTML.action "/api/recipe/bible";
+                 HTML.enctype `urlencoded] [
+        HTML.button [HTML.type_ "submit"] [txt "Install bible library"];
+      ];
+    ]
+  ; HTML.div [HTML.class_ "card"] [
       HTML.h2 [] [txt "AI propose (current branch)"];
       HTML.form [HTML.method_ `POST; HTML.action "/api/ai/propose";
                  HTML.enctype `urlencoded] [
@@ -1916,6 +1925,37 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
          | Error e ->
              let body =
                chrome ~session ~title:"Todo recipe failed" [
+                 HTML.p [HTML.class_ "err"] [txt "%s" e];
+                 HTML.p [] [HTML.a [HTML.href "/"] [txt "Home"]];
+               ]
+             in
+             html_response reqd ~status:`Internal_server_error body;
+             Lwt.return_unit)
+  | `POST, "/api/recipe/bible" ->
+      launch
+        (let* res = Session.recipe_bible session in
+         match res with
+         | Ok msg ->
+             let body =
+               chrome ~session ~title:"Bible library" [
+                 HTML.div [HTML.class_ "card"] [
+                   HTML.p [HTML.class_ "ok"] [txt "%s" msg];
+                   HTML.p [] [
+                     HTML.a [HTML.href "/bible?book=John&chapter=3"] [txt "Open /bible"];
+                     txt " · ";
+                     HTML.a [HTML.href "/bindings?pkg=bible"] [txt "Package bible"];
+                   ];
+                   HTML.p [HTML.class_ "muted"] [
+                     txt "Seed text with: python3 scripts/seed_bible_bsb.py";
+                   ];
+                 ];
+               ]
+             in
+             html_response reqd body;
+             Lwt.return_unit
+         | Error e ->
+             let body =
+               chrome ~session ~title:"Bible recipe failed" [
                  HTML.p [HTML.class_ "err"] [txt "%s" e];
                  HTML.p [] [HTML.a [HTML.href "/"] [txt "Home"]];
                ]

@@ -852,6 +852,60 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
           Crud.list t.store ~type_name ~limit:(Int64.to_int n) ()
       | _ -> Lwt.return (Pricklypear_lisp.Ast.VStr "rows: bad args (need type[, limit])"));
 
+  (* (find-row 'type "field" "value") -> fields JSON | () *)
+  Primitives.register tbl "find-row"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr type_name;
+          Pricklypear_lisp.Ast.VStr field;
+          Pricklypear_lisp.Ast.VStr value ] ->
+          Crud.find_row t.store ~type_name ~field ~value
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr
+               "find-row: need type, field, value"));
+
+  (* (find-rows 'type "f" "v" … [limit]) -> list of (id . fields) *)
+  Primitives.register tbl "find-rows"
+    (fun args ->
+      let rec parse_filters acc = function
+        | [] -> Ok (List.rev acc, 500)
+        | [ Pricklypear_lisp.Ast.VInt n ] ->
+            Ok (List.rev acc, Int64.to_int n)
+        | Pricklypear_lisp.Ast.VStr f :: Pricklypear_lisp.Ast.VStr v :: rest ->
+            parse_filters ((f, v) :: acc) rest
+        | _ -> Error "find-rows: bad filter args"
+      in
+      match args with
+      | Pricklypear_lisp.Ast.VStr type_name :: rest ->
+          (match parse_filters [] rest with
+           | Error e -> Lwt.return (Pricklypear_lisp.Ast.VStr e)
+           | Ok (filters, limit) ->
+               Crud.find_rows t.store ~type_name ~filters ~limit ())
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr
+               "find-rows: need type and field/value pairs"));
+
+  (* (find-text 'type "field" "needle" [limit]) *)
+  Primitives.register tbl "find-text"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr type_name;
+          Pricklypear_lisp.Ast.VStr field;
+          Pricklypear_lisp.Ast.VStr needle ] ->
+          Crud.find_text t.store ~type_name ~field ~needle ()
+      | [ Pricklypear_lisp.Ast.VStr type_name;
+          Pricklypear_lisp.Ast.VStr field;
+          Pricklypear_lisp.Ast.VStr needle;
+          Pricklypear_lisp.Ast.VInt n ] ->
+          Crud.find_text t.store ~type_name ~field ~needle
+            ~limit:(Int64.to_int n) ()
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr
+               "find-text: need type, field, needle [, limit]"));
+
   (* (list-branches) -> VList of "owner/name" strings *)
   Primitives.register tbl "list-branches"
     (fun _args ->
@@ -1149,6 +1203,10 @@ and recipe_hello (t : t) : (string, string) result Lwt.t =
 
 and recipe_todo (t : t) : (string, string) result Lwt.t =
   load_library t "todo"
+
+and recipe_bible (t : t) : (string, string) result Lwt.t =
+  (* Types + API + /bible only — corpus via scripts/seed_bible_bsb.py *)
+  load_library t "bible"
 
 
 let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =

@@ -248,6 +248,7 @@ let migration_files () : (int * string * string) list =
     (1, "initial branches/code-store schema", "migrations/001_branches.sql");
     (2, "auth tables", "migrations/002_auth.sql");
     (3, "generic data row storage (shared across branches)", "migrations/003_data.sql");
+    (4, "bible-verse ref unique index", "migrations/004_bible_ref_index.sql");
   ]
 
 (* Run all pending migrations. Reads schema_migrations to know what's

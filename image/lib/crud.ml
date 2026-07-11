@@ -295,3 +295,107 @@ let list
           rows
       in
       Lwt.return (VList lisp_rows)
+
+(** (find-row 'type "field" "value") -> VStr fields-json | VNil.
+    First row where fields->>field = value (text equality). *)
+let find_row
+    (store : Store.t) ~(type_name : string) ~(field : string) ~(value : string)
+    : value Lwt.t =
+  match Store.current_conn store with
+  | None -> Lwt.return VNil
+  | Some conn ->
+      let sql =
+        "SELECT fields::text FROM data_rows " ^
+        "WHERE type_name = $1 AND fields->>$2 = $3 " ^
+        "ORDER BY created_at ASC LIMIT 1"
+      in
+      let* rows =
+        Pg.execute conn
+          ~params:[ Pgx.Value.of_string type_name
+                  ; Pgx.Value.of_string field
+                  ; Pgx.Value.of_string value ]
+          sql
+      in
+      (match rows with
+       | [] -> Lwt.return VNil
+       | row :: _ ->
+           (match row with
+            | [ fields_cell ] -> Lwt.return (value_of_id fields_cell)
+            | _ -> Lwt.return VNil))
+
+(** (find-rows 'type "f1" "v1" "f2" "v2" ... [limit])
+    -> VList of (id . fields) pairs.
+    All field filters AND together (fields->>k = v text). Optional
+    trailing VInt limit (default 500). Orders by created_at ASC. *)
+let find_rows
+    (store : Store.t) ~(type_name : string)
+    ~(filters : (string * string) list) ?(limit : int = 500) ()
+    : value Lwt.t =
+  match Store.current_conn store with
+  | None -> Lwt.return (VList [])
+  | Some conn ->
+      if filters = [] then list store ~type_name ~limit ()
+      else
+        let buf = Buffer.create 128 in
+        Buffer.add_string buf
+          "SELECT id::text, fields::text FROM data_rows WHERE type_name = $1";
+        let params = ref [ Pgx.Value.of_string type_name ] in
+        let i = ref 2 in
+        List.iter
+          (fun (field, value) ->
+            Buffer.add_string buf
+              (Printf.sprintf " AND fields->>$%d = $%d" !i (!i + 1));
+            params := !params @ [ Pgx.Value.of_string field
+                               ; Pgx.Value.of_string value ];
+            i := !i + 2)
+          filters;
+        Buffer.add_string buf
+          (Printf.sprintf
+             " ORDER BY COALESCE((fields->>'verse')::int, 0) ASC, created_at ASC LIMIT $%d"
+             !i);
+        params := !params @ [ Pgx.Value.of_int limit ];
+        let* rows = Pg.execute conn ~params:!params (Buffer.contents buf) in
+        let lisp_rows =
+          List.map
+            (fun row ->
+              match row with
+              | [ id_cell; fields_cell ] ->
+                  VPair (value_of_id id_cell, value_of_id fields_cell)
+              | _ -> VNil)
+            rows
+        in
+        Lwt.return (VList lisp_rows)
+
+(** (find-text 'type "field" "needle" [limit]) -> VList of (id . fields).
+    Case-insensitive substring match on fields->>field. *)
+let find_text
+    (store : Store.t) ~(type_name : string) ~(field : string)
+    ~(needle : string) ?(limit : int = 50) ()
+    : value Lwt.t =
+  match Store.current_conn store with
+  | None -> Lwt.return (VList [])
+  | Some conn ->
+      let sql =
+        "SELECT id::text, fields::text FROM data_rows " ^
+        "WHERE type_name = $1 AND fields->>$2 ILIKE $3 " ^
+        "ORDER BY created_at ASC LIMIT $4"
+      in
+      let pat = "%" ^ needle ^ "%" in
+      let* rows =
+        Pg.execute conn
+          ~params:[ Pgx.Value.of_string type_name
+                  ; Pgx.Value.of_string field
+                  ; Pgx.Value.of_string pat
+                  ; Pgx.Value.of_int limit ]
+          sql
+      in
+      let lisp_rows =
+        List.map
+          (fun row ->
+            match row with
+            | [ id_cell; fields_cell ] ->
+                VPair (value_of_id id_cell, value_of_id fields_cell)
+            | _ -> VNil)
+          rows
+      in
+      Lwt.return (VList lisp_rows)

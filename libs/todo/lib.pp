@@ -18,7 +18,8 @@
 
 (define todo/done?
   (lambda (fields)
-    (string-eq (dict-get fields "done") "true")))
+    (let ((d (dict-get fields "done")))
+      (if (null? d) false (string-eq d "true")))))
 
 (define todo/toggle
   (lambda (id)

@@ -168,6 +168,17 @@ let prim_str args =
   | [ v ] -> VStr (Pricklypear_lisp.Reader.pp_value v)
   | _ -> raise (Interp_error (User_error "str needs one arg"))
 
+(* (as-str x) -> VStr without Lisp quotes (for path/ref building). *)
+let prim_as_str args =
+  match args with
+  | [ VStr s ] -> VStr s
+  | [ VInt n ] -> VStr (Int64.to_string n)
+  | [ VBool true ] -> VStr "true"
+  | [ VBool false ] -> VStr "false"
+  | [ VNil ] -> VStr ""
+  | [ v ] -> VStr (Pricklypear_lisp.Reader.pp_value v)
+  | _ -> raise (Interp_error (User_error "as-str needs one arg"))
+
 (* (div a b) integer division *)
 let prim_div args =
   match args with
@@ -509,6 +520,7 @@ let make_with_defaults () : t =
   register_sync t "string-eq" prim_string_eq;
   register_sync t "type-of" prim_type_of;
   register_sync t "str" prim_str;
+  register_sync t "as-str" prim_as_str;
   register_sync t "append" prim_append;
   register_sync t "reverse" prim_reverse;
   register_sync t "nth" prim_nth;
@@ -558,6 +570,7 @@ let prim_summary (name : string) : string =
   | "reverse" -> "reverse list"
   | "nth" -> "nth element of list (0-based)"
   | "str" -> "value to string"
+  | "as-str" -> "plain string coerce (no quotes)"
   | "type-of" -> "runtime type tag"
   | "dict-get" -> "JSON object field get"
   | "dict-set" -> "JSON object field set"
@@ -579,6 +592,9 @@ let prim_summary (name : string) : string =
   | "update-field" -> "set one JSON field"
   | "delete" -> "delete data row"
   | "rows" -> "list data rows"
+  | "find-row" -> "first row by fields->>key"
+  | "find-rows" -> "rows filtered by fields"
+  | "find-text" -> "substring search on a field"
   | "select-for-update" -> "lock row in transaction"
   | "agent" -> "AI portal: (agent seed prompt) -> text"
   | "agent-task" -> "multi-turn tool agent; may install many functions"
