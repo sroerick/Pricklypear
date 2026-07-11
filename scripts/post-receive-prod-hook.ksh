@@ -33,8 +33,17 @@ done
 
 [ -n "${target_rev}" ] || exit 0
 
-BARE_REPO="$(git rev-parse --absolute-git-dir 2>/dev/null || true)"
+BARE_REPO="${GIT_DIR:-}"
+if [ -z "${BARE_REPO}" ]; then
+  BARE_REPO="$(git rev-parse --absolute-git-dir 2>/dev/null || true)"
+fi
 [ -n "${BARE_REPO}" ] || die "not running inside a git hook context"
+# Absolute-ize and clear hook env so worktree git commands don't use bare GIT_DIR
+case "${BARE_REPO}" in
+  /*) ;;
+  *) BARE_REPO="$(cd "${BARE_REPO}" && pwd)" ;;
+esac
+unset GIT_DIR GIT_WORK_TREE GIT_QUARANTINE_PATH
 
 mkdir -p "$(dirname "${WORKTREE}")"
 mkdir "${lockdir}" 2>/dev/null || die "another deploy is already running"
