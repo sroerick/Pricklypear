@@ -167,6 +167,20 @@ if [ "${ok}" -ne 1 ]; then
   # Do not auto-rollback on health — migrations may need a moment; operator checks.
 fi
 
+# Warm-boot default image so relayd :80 has a backend (line-protocol key auth).
+# Uses PP_BOOTSTRAP_ADMIN_KEY from env if present.
+if [ -f "${config_file}" ]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "${config_file}"
+  set +a
+fi
+if [ -n "${PP_BOOTSTRAP_ADMIN_KEY:-}" ]; then
+  log "warm-boot image via line-protocol"
+  print -r -- "${PP_BOOTSTRAP_ADMIN_KEY}" | nc -w 5 127.0.0.1 "${PP_SSH_PORT:-17822}" >/dev/null 2>&1 || true
+  sleep 1
+fi
+
 log "promoted ${release_id}"
 log "current -> ${current_link} -> ${target_dir}"
 cat "${target_dir}/MANIFEST" 2>/dev/null || true
