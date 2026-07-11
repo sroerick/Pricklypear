@@ -105,6 +105,12 @@
            Workspace  <- current branch + whoami
            About      <- concepts guide
 
+         HARD RULE: Page ≠ Function.
+           Page = URL endpoint (/hello). Function = named code (hi-page).
+           Edit targets are always function names (/edit/hi-page).
+           Page inspect is /page/hello (route + call graph).
+           Never nav-link /edit/<route-basename> as if it were a function.
+
          Lisp/REPL vocabulary stays technical (define, route,
          deftype, rows). The browser skin translates.
     |))

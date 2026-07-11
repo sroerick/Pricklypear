@@ -434,26 +434,46 @@
    (* agent note (|it32: PARTIAL. Chrome shell ships in image/lib/http.ml:
      header with whoami/branch/uptime, nav (home/about/functions/types/
      repl/editor), home card with entry points, AI propose form.
-     /about concepts guide added it32. Still missing: first-class pages
-     list, data browser, branch switcher UI, richer "place you live"
-     density. Friendly vocabulary (Functions not Bindings) is the
-     product-experience.vocabulary track.|) *)
+     /about concepts guide added it32. Pages list at /pages ships.
+     2026-07-11 plan: fix nav (no /edit/hello), page list columns
+     Page/Function, page inspector /page/<path>.|) *)
    (verify
     (build "dune build image")
-    (smoke "GET / shows user+branch chrome and links to about/functions/repl"))
+    (smoke "GET / shows user+branch chrome and links to about/functions/repl")
+    (smoke "nav has no /edit/hello; Pages links to /pages")
+    (smoke "GET /pages columns: page URL + handler function")
+    (smoke "GET /page/hello shows route + handler + callee list"))
    (details
     (doc (|
+         VOCABULARY (must not conflate):
+         - Page / endpoint = route URL (e.g. /hello)
+         - Function = named binding (e.g. hi-page)
+         A page RUNS a function; you EDIT functions, OPEN pages.
+
          v1 SHIPPED:
          - Chrome: whoami, branch, uptime, nav
          - Home entry points + AI propose form
          - /about concepts guide
-         - Click-through to functions/types/branches/repl/editor
+         - /pages list (view_bindings)
+
+         REQUIRED NEXT (page/function legibility):
+         - Nav MUST NOT link /edit/hello (or any invented fn name).
+           "Functions" -> /bindings; "Pages" -> /pages; drop bare
+           "editor" or point it at /bindings.
+         - /pages table columns: Page (URL), Function (handler),
+           actions: open page | edit function | inspect page.
+         - GET /page/<path> page inspector (path without leading
+           slash or with — normalize to route key "/hello"):
+             Routing: URL + handler name + link to /edit/<handler>
+             Functions this page uses: handler + static callees
+             (AST walk of user bindings; see inspector.page-graph)
+             Entry body: pretty source/AST of the handler.
 
          DEFERRED:
-         - Pages list (view_bindings browser)
          - Data rows browser by type
          - Branch switcher control
          - Fork/merge affordances in UI
+         - Reverse index "function used by N pages" on /bindings
     |))
    )
   )
@@ -478,36 +498,102 @@
   )
   (subsection function-editor
    (doc "Load, edit, and save a binding's AST from the UI")
-   (status implemented)
-   (* agent note (|it32: IMPLEMENTED. GET/POST /edit/<name> load body via
-     pp_expr, save via Session.define_binding (reader + persist +
-     env rebind). Smoke: editor-greet save + call. Conflict/stale-body
-     detection deferred.|) *)
+   (status partial)
+   (* agent note (|it32: base editor implemented. 2026-07-11 plan:
+     missing-fn empty state + htmx create-in-place; route-aware
+     choices when name matches a page handler path. Status back to
+     partial until those ship.|) *)
    (verify
     (build "dune build image")
-    (smoke "POST /edit/editor-greet save -> callable via /api/eval"))
+    (smoke "POST /edit/editor-greet save -> callable via /api/eval")
+    (smoke "GET /edit/missing-fn shows create affordance, not silent TODO only")
+    (smoke "GET /edit/hello after hello-recipe: offers Edit hi-page + Create hello")
+    (smoke "htmx POST create missing fn returns editor partial; save works"))
    (details
     (doc (|
-         v1 SHIPPED: plain textarea editor + save on current branch.
+         URL: /edit/<function-name>  (function name, NEVER a route path
+         as the object of edit — routes are pages).
+
+         v1 SHIPPED: plain textarea editor + save on current branch
+         when the binding already exists.
+
+         REQUIRED NEXT — missing binding empty state:
+         When GET /edit/<name> and no function_defs row for name:
+
+         1. Do NOT present only a raw TODO stub as if the user is
+            already editing a real function.
+
+         2. Show an explicit card:
+              Function "<name>" does not exist.
+
+         3. Route awareness: if a page route "/<name>" (or path
+            equal to name) exists with handler H:
+              There is a page /<name> that currently runs function H.
+              Primary:  [ Edit H ]  -> /edit/H
+              Secondary:[ Create function <name> ]
+              Optional: [ Create <name> and point /<name> at it ]
+                (define + route update; power move)
+            If no such route: only Create (and link back to Functions).
+
+         4. Create-in-place via htmx (no full-page dead end):
+              POST /api/edit/create  {name}  (and optional rebind_route)
+              -> 200 HTML partial: the editor form for the new binding
+                 (same fields as GET /edit/<name> after create)
+              hx-target=#editor-root hx-swap=innerHTML
+              Default body stub:
+                (lambda ()\n  "TODO: implement <name>")
+              After create, user saves via existing POST /edit/<name>.
+
+         5. Creating a function does not silently rename routes unless
+            the user chose "point page at it".
+
          DEFERRED: optimistic concurrency / stale-body reject,
          structural AST tree-editor (branching.ast-nodes).
     |))
    )
   )
   (subsection inspector
-   (doc "Inspect values, rows, and ASTs live")
+   (doc "Inspect values, rows, ASTs, and page→function graphs live")
    (status partial)
    (* agent note (|it32: PARTIAL. GET /inspect/binding/<name> and
-     /inspect/row/<type>/<id> ship. Ephemeral eval-result inspect and
-     richer panels still deferred.|) *)
+     /inspect/row/<type>/<id> ship. 2026-07-11 plan: page call graph
+     — endpoint → handler + static user-function callees.|) *)
    (verify
     (build "dune build image")
-    (smoke "GET /inspect/binding/<name> shows author + AST"))
+    (smoke "GET /inspect/binding/<name> shows author + AST")
+    (smoke "GET /page/hello after recipe: handler hi-page listed")
+    (smoke "page inspector lists callees of handler when body calls other fns"))
    (details
     (doc (|
          v1 SHIPPED: binding AST pretty+JSON; data row JSON pretty.
+
+         REQUIRED NEXT — page → functions graph:
+         GET /page/<path> (also linked from /pages "inspect"):
+
+         A. Routing panel
+            - Page URL (canonical route key)
+            - Handler function name
+            - Links: open page, edit handler, change handler (deferred UI)
+
+         B. Functions this page uses (STATIC analysis)
+            - Always include the handler as root
+            - Walk handler body AST; collect App heads that are Vars
+              naming a visible function_def on the current branch
+            - Depth: transitive closure of user bindings (cap depth
+              e.g. 8 to avoid cycles; mark cycles)
+            - Do not list pure prims as first-class rows; optional
+              dim note "also uses prims: render-html, ..." is OK
+            - Each row: name, role (handler|callee), edit + inspect links
+
+         C. Entry body
+            - Pretty source or pp_expr of the handler (read-only here;
+              edit goes to /edit/<handler>)
+
+         This answers: "which functions does this endpoint touch?"
+         Reverse index (function → pages) deferred to a later pass.
+
          DEFERRED: eval-result inspect, type-def deep inspect,
-         mutate actions from inspector.
+         runtime request traces, mutate actions from inspector.
     |))
    )
   )
