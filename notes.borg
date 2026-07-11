@@ -1,0 +1,369 @@
+(project pricklypear-notes
+ (doc "Pricklypear book chapter: notes — outline-first personal knowledge (org-roam / org-mode / Obsidian-shaped) as Lisp + data_rows")
+ (status planned)
+ (convention ocaml-dune)
+ (* agent note (|2026-07-11: New chapter. Notes are NOT a markdown vault on disk
+   and NOT a separate service. Substrate = sexp outlines in data_rows;
+   behavior = libs/outline + libs/notes; UI = html/* + htmx partials;
+   agents use the vault via eval/pp_eval (image is the API).
+   Priority locked with roerick: OUTLINES first (org structure), then
+   roam links/backlinks/dailies/capture; graph view deferred.
+   Orthogonal to dabar personal notes (study bookmarks) — this chapter
+   is the general thinking tool / Zettelkasten.|) *)
+ (section notes
+  (doc "Outline-first notes OS: tree documents, wiki links, dailies, capture, hypermedia structure edit")
+  (status planned)
+  (verify
+   (build "dune build image")
+   (smoke "(load-library \"outline\") then pure tree ops on a sample node tree")
+   (smoke "(load-library \"notes\") installs /notes and notes/*")
+   (smoke "create note with nested outline; GET /notes?slug=… shows foldable tree")
+   (smoke "[[slug]] in node body becomes link; backlinks partial lists inbound")
+   (smoke "(notes/daily) get-or-creates today's daily outline")
+   (smoke "pp_eval '(notes/get \"…\")' returns outline value for agents"))
+  (details
+   (doc (|
+        =========================================================
+        PRODUCT INTENT
+        =========================================================
+        Build a personal knowledge environment on the live image
+        inspired by:
+          - org-mode: hierarchical OUTLINES as the document model
+          - org-roam: stable ids/slugs, backlinks, dailies, capture
+          - Obsidian: fast browse, wiki links, search (not FS religion)
+
+        NOT a port of Electron Obsidian or Emacs.
+        NOT file-backed markdown under libs/ or the VPS disk.
+        Notes are durable OBJECTS in Postgres (data_rows), edited live.
+
+        KILLER PROPERTY ON THIS OS:
+          Every note/outline is a Lisp value. Agents and humans use
+          the same functions via REPL / pp_eval / htmx. No notes REST
+          API to invent — the image is the API.
+
+        =========================================================
+        PRIORITY ORDER (locked)
+        =========================================================
+        1. Outline tree (structure, fold, structure edit)
+        2. Wiki links [[slug]] + backlinks
+        3. Daily notes
+        4. Capture / inbox
+        5. Tags / search polish
+        6. Graph visualization (optional, late)
+
+        =========================================================
+        TWO PACKAGES
+        =========================================================
+        outline/  — pure tree ADT + print/parse/html + structure ops
+                    (no DB; testable offline)
+        notes/    — persistence, routes, link index, dailies, capture
+                    (depends on outline/, html/*, find-row/find-text)
+
+        =========================================================
+        OUT OF SCOPE (v1)
+        =========================================================
+        - Full org-mode syntax (drawers, babel, agenda, clock)
+        - Full CommonMark / markdown WYSIWYG
+        - Force-directed graph as launch requirement
+        - File vault sync (Obsidian folder)
+        - Doltgres / DB engine swap for note history
+        - Per-note function_defs (notes are data, not code)
+        - Real-time multiplayer CRDT on one outline
+        - Branching data_rows (notes stay shared vault until
+          multi-user vault field is designed)
+   |))
+  )
+
+  (subsection outline-model
+   (doc "Sexp outline ADT: node tree with stable ids — org structure as data")
+   (status planned)
+   (implements libs/outline/lib.pp)
+   (verify
+    (smoke "outline/node constructors and outline/html produce nested details")
+    (smoke "outline/promote demote move-up move-down preserve ids")
+    (smoke "round-trip: print tree text then parse back (or JSON props path)"))
+   (details
+    (doc (|
+         CANONICAL SHAPE (implementation may use lists/dicts):
+
+           A node is a record with:
+             id     — stable string (uuid or short id), required
+             title  — string, required
+             body   — string, optional prose (may contain [[slug]])
+             todo   — "" | "TODO" | "DONE" | future keywords
+             kids   — list of child nodes (order matters)
+
+         Suggested Lisp construction helpers:
+
+           (outline/node title) 
+           (outline/node title body)
+           (outline/node* props kids)   ; props = alist or dict JSON
+
+         Tree = root node (the note's outline field stores this tree).
+
+         WHY SEXPS:
+           Nested lists ARE outlines. No heading-level parser.
+           pp_expr / pretty printers already exist for readability.
+           Structure edit = pure functions on values.
+
+         PATHS:
+           Prefer id-based addressing over index paths so reorder
+           does not break ops:
+             (outline/find tree id) -> node | nil
+             (outline/update tree id f) -> tree
+             (outline/insert-child tree parent-id new-node) -> tree
+             (outline/delete tree id) -> tree
+             (outline/promote tree id) / demote / move-up / move-down
+
+         FOLD STATE:
+           v1: browser <details> open attribute only (ephemeral).
+           Optional later: collapsed-ids set in note props or session.
+
+         PRINT/PARSE:
+           Store as JSON in data_rows.fields (Yojson-friendly:
+           nested objects/arrays), OR as a single sexp string field.
+           Recommendation: JSON tree in fields.outline object for
+           robust DB tooling; Lisp constructors convert to/from
+           internal list representation.
+
+         PURE PACKAGE:
+           libs/outline/lib.pp must not touch data_rows so it can
+           be unit-tested / reused by other apps (e.g. project plans).
+    |))
+   )
+  )
+
+  (subsection storage
+   (doc "data_rows types for notes and optional link index; shared vault")
+   (status planned)
+   (implements libs/notes/lib.pp)
+   (verify
+    (smoke "(deftype 'note …) via load-library notes")
+    (smoke "notes/upsert then notes/get by slug returns outline")
+    (smoke "second upsert same slug updates in place (idempotent)"))
+   (details
+    (doc (|
+         TYPE note (fields):
+           title    — display title
+           slug     — stable human id for URLs and [[slug]] (unique
+                      among notes; enforce via find-row + app logic;
+                      optional unique index migration later)
+           outline  — JSON tree (root node object) OR sexp string;
+                      see outline-model. Prefer JSON object.
+           tags     — string (comma-separated) or JSON array string
+           kind     — "note" | "daily" | "project" | future
+           day      — "YYYY-MM-DD" for dailies, else ""
+           body     — optional root-level prose; may be empty if all
+                      content lives in outline nodes
+
+         TYPE note-link (optional but recommended early):
+           from_slug — source note
+           from_id   — source node id (or "" for whole-note)
+           to_slug   — target note
+           to_id     — target node id optional
+           label     — optional
+
+         On notes/save:
+           1. upsert note row by slug
+           2. parse [[wikilinks]] from all node bodies (+ title?)
+           3. replace note-link rows for from_slug
+
+         SHARED VAULT:
+           data_rows are branch-shared (existing storage rule).
+           v1 = one vault per Postgres. Multi-user isolation later
+           via author field filter or vault id — not blocking v1.
+
+         NOT IN function_defs:
+           Note content is not code. pp_sync does not pull notes.
+           Language packages notes/* and outline/* ARE code and
+           sync with pp_sync like todo/ui.
+
+         HISTORY:
+           v1 overwrite on save (updated_at). Revision log is a
+           future chapter; do not block on Doltgres.
+    |))
+   )
+  )
+
+  (subsection links-and-roam
+   (doc "Wiki links [[slug]], forward links, backlinks partial")
+   (status planned)
+   (verify
+    (smoke "body with [[other]] creates note-link on save")
+    (smoke "notes/backlinks shows inbound from other notes")
+    (smoke "render turns [[other]] into anchor to /notes?slug=other"))
+   (details
+    (doc (|
+         SYNTAX (v1 only):
+           [[slug]]           — link to note slug
+           [[slug|label]]     — optional display label (if easy)
+         No #heading deep links required v1; optional #node-id later.
+
+         PARSE:
+           notes/parse-links body -> list of slugs
+           notes/reindex-links slug outline-tree
+
+         RENDER:
+           notes/render-body body -> HTML string
+             html-escape then substitute links
+           notes/render-outline tree -> nested foldable HTML
+             each title/summary + rendered body + children
+
+         BACKLINKS:
+           (notes/backlinks slug) -> list of {from_slug, from_id, title}
+           UI partial /partials/notes-backlinks?slug=
+
+         MISSING TARGETS:
+           Link to unknown slug still renders as link; open page
+           offers create-stub capture.
+
+         UNLINKED MENTIONS (phase 3):
+           find-text on body for title string — optional.
+    |))
+   )
+  )
+
+  (subsection dailies-and-capture
+   (doc "Daily outlines and quick capture (org-roam-dailies / org-capture shaped)")
+   (status planned)
+   (verify
+    (smoke "(notes/daily) returns same slug for same day on second call")
+    (smoke "(notes/capture title body) creates inbox-tagged note or appends")
+    (smoke "GET /notes/daily opens today"))
+   (details
+    (doc (|
+         DAILY:
+           slug convention: daily-YYYY-MM-DD
+           kind = "daily", day = YYYY-MM-DD
+           (notes/daily) / (notes/daily "2026-07-11")
+             get-or-create root outline with title "Daily YYYY-MM-DD"
+           UI: /notes/daily , menu link under apps or notes
+
+         CAPTURE:
+           (notes/capture title body) ->
+             new slug (slugify title + short id), tags include inbox,
+             kind note, outline = single node with body
+           Optional: (notes/capture-to slug title body) appends a
+             child node under root (inbox into a project outline)
+
+         INBOX REVIEW:
+           /notes?tag=inbox list partial — phase 2.
+    |))
+   )
+  )
+
+  (subsection hypermedia-ui
+   (doc "Routes, partials, structure-edit via htmx; menu entry")
+   (status planned)
+   (implements libs/notes/lib.pp image/lib/http.ml)
+   (verify
+    (smoke "GET /notes lists recent notes")
+    (smoke "GET /notes?slug=… full page with chrome + outline")
+    (smoke "GET /partials/notes-outline?slug=… fragment no chrome")
+    (smoke "structure op POST returns updated outline partial")
+    (smoke "ui/menu can link Notes without breaking other apps"))
+   (details
+    (doc (|
+         ROUTES (full page = chrome; /partials/ and HX-Request = fragment):
+
+           GET  /notes
+           GET  /notes?slug=NAME
+           GET  /notes/daily
+           GET  /notes/edit?slug=NAME     ; optional dedicated editor
+           POST /notes                   ; create / save / capture
+           GET  /partials/notes-list
+           GET  /partials/notes-outline?slug=
+           GET  /partials/notes-backlinks?slug=
+           POST /partials/notes-op       ; structure edit
+                params: slug, op, id, … 
+
+         STRUCTURE OPS (POST notes-op):
+           op = insert-child | delete | promote | demote |
+                move-up | move-down | set-title | set-body | set-todo
+           Always reindex links if body changes.
+           Response: outline partial HTML (hx-swap target #outline)
+
+         RENDER:
+           Prefer <details class="ol-node"> fold (no heavy JS tree).
+           Ops as small buttons on each row (htmx).
+
+         MENU:
+           Add (menu/link "notes" "/notes") under apps in default
+           ui/menu when notes is dogfood-stable; or document
+           manual ui/menu edit + pp_sync pull.
+
+         COMPOSITION:
+           notes/page embeds partials like todo/page embeds
+           todo/list-html — same hypermedia discipline.
+    |))
+   )
+  )
+
+  (subsection agent-access
+   (doc "Agents use notes via eval — no separate notes HTTP API")
+   (status planned)
+   (verify
+    (smoke "pp_eval notes/list and notes/get")
+    (smoke "agent-task tool list may include notes_search later"))
+   (details
+    (doc (|
+         LAPTOP / PI:
+           scripts/pp_eval.py '(notes/daily)'
+           scripts/pp_eval.py '(notes/search "sync")'
+           scripts/pp_eval.py '(notes/get "pp-design")'
+
+         IN-IMAGE AGENT:
+           Optional phase 2 tools on agent-task:
+             notes_search, notes_get, notes_capture
+           Do not grant blind outline/delete without policy.
+
+         PRINCIPLE:
+           Adding a notes feature = adding Lisp functions.
+           Remote agents gain them automatically through eval.
+    |))
+   )
+  )
+
+  (subsection phases
+   (doc "Implementation phases and acceptance")
+   (status planned)
+   (verify
+    (smoke "phase 1 dogfood: one project outline + list/show/save"))
+   (details
+    (doc (|
+         PHASE 1 — Outline core (ship first):
+           - libs/outline/lib.pp pure tree + html
+           - libs/notes/lib.pp deftype note, upsert/get/list
+           - store outline JSON on note
+           - /notes index + /notes?slug= foldable view
+           - whole-outline save (textarea sexp or JSON editor OK)
+           - load-library notes recipe
+
+         PHASE 2 — Roam + structure:
+           - note-link reindex, backlinks partial
+           - [[slug]] render
+           - htmx structure ops (promote/demote/move/insert)
+           - daily + capture
+           - menu entry
+
+         PHASE 3 — Comfort:
+           - tags filter, better search UI
+           - light typography
+           - unlinked mentions optional
+           - agent-task tools
+
+         PHASE 4 — Optional:
+           - graph page
+           - node-level rows if single-blob hurts
+           - revision history
+           - per-user vault field
+
+         ACCEPTANCE FOR "v1 notes":
+           Phase 1 + backlinks + daily + capture (phase 2 subset).
+           Graph not required.
+    |))
+   )
+  )
+
+ )
+)

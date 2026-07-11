@@ -140,6 +140,10 @@
   (doc "Book chapter — full text inlined from product-experience.borg")
   (inline product-experience.borg)
  )
+ (section notes
+  (doc "Book chapter — outline-first notes (org/roam/obsidian-shaped); full text inlined from notes.borg")
+  (inline notes.borg)
+ )
  (section dabar
   (doc "Book chapter — BSB study libraries (dabar); full text inlined from dabar.borg")
   (inline dabar.borg)
