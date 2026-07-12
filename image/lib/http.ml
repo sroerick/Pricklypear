@@ -114,7 +114,7 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
          .ol-node{position:relative;margin:.25rem 0 .25rem .35rem;
            border-left:2px solid #808080;padding-left:.35rem}
          .ol-sum{cursor:default;font-weight:700;display:flex;align-items:center;
-           gap:.35rem;flex-wrap:nowrap;min-width:0;padding-right:11.5rem}
+           gap:.35rem;flex-wrap:nowrap;min-width:0;padding-right:16rem}
          /* Only the fold chevron toggles open/closed (JS preventDefault on rest of summary). */
          .ol-fold{font-size:.75em;flex:0 0 auto;display:inline-flex;align-items:center;
            justify-content:center;user-select:none;cursor:pointer;line-height:1;
@@ -123,9 +123,15 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
          .ol-fold:hover{background:#fff;border:1px solid #808080;padding:calc(.2rem - 1px)}
          details.ol-node > .ol-sum .ol-fold::before{content:\"v\"}
          details.ol-node:not([open]) > .ol-sum .ol-fold::before{content:\">\"}
-         .ol-todo,.ol-todo-btn{display:inline-block;flex:0 0 auto;width:auto;min-width:1.75rem;
-           margin:0;padding:.15rem .35rem;border:1px solid #000;background:#c0c0c0;
-           font-size:.8rem;font-weight:700;line-height:1.2;min-height:1.75rem}
+         /* Read-only state badge (not a button) — hidden when not a todo. */
+         .ol-todo{display:inline-block;flex:0 0 auto;width:auto;margin:0 .15rem 0 0;
+           padding:.05rem .3rem;border:1px solid #666;background:transparent;
+           font-size:.7rem;font-weight:700;line-height:1.3;letter-spacing:.02em;
+           color:#333;vertical-align:middle}
+         .ol-todo.st-TODO{border-color:#886600;color:#664400;background:#fff8dc}
+         .ol-todo.st-DONE{border-color:#226622;color:#226622;background:#e8f5e8}
+         .ol-node.st-DONE > .ol-sum .ol-title{text-decoration:line-through;color:#555;
+           font-weight:500}
          .ol-title{outline:none;padding:.15rem .25rem;border-radius:0;flex:1 1 auto;
            min-width:0;word-break:break-word;white-space:normal;line-height:1.35;
            cursor:text;font-weight:700}
@@ -177,6 +183,7 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
          .todo-box.st-WAITING{background:#e0e8ff}
          .todo-box.st-CANCELLED{background:#ddd;color:#666}
          .todo-from-note .todo-src{font-size:.8rem;margin-left:.35rem}
+         /* legacy class hooks (todo package may still emit them) */
          .ol-todo-btn{cursor:pointer}
          .ol-todo-btn.st-TODO{background:#fff8dc}
          .ol-todo-btn.st-DONE{background:#cfc}
@@ -249,7 +256,7 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
            h1{font-size:1.15rem}
            button,.btn{width:100%;margin:.2rem 0}
            .card form button,.card form .btn{width:auto;min-width:44%}
-           button.ol-btn,button.ol-todo,button.ol-todo-btn,
+           button.ol-btn,button.ol-todo-btn,
            .ol-btn,.ol-todo,.ol-todo-btn{width:auto;margin:0}
            .ol-node{margin-left:.1rem;padding-left:.3rem}
            .ol-sum{padding-right:2.75rem;align-items:center}
