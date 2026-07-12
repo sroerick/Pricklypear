@@ -89,6 +89,33 @@ let load_defs (t : t) : unit Lwt.t =
 let load_defs_async (t : t) : unit =
   Lwt.async (fun () -> load_defs t)
 
+(** Clear env + routes and reload from the store for the current branch.
+    Re-binds kernel prims from [t.kernel_catalog] first so checkout does
+    not lose +/define/load-library/etc. *)
+let rehydrate (t : t) : unit Lwt.t =
+  Hashtbl.clear t.env.bindings;
+  Hashtbl.clear t.routes;
+  List.iter
+    (fun (name, _) ->
+      Pricklypear_lisp.Env.define t.env name
+        (Pricklypear_lisp.Ast.VPrim name))
+    t.kernel_catalog;
+  Pricklypear_lisp.Env.define t.env "load-string"
+    (Pricklypear_lisp.Ast.VPrim "load-string");
+  Pricklypear_lisp.Env.define t.env "load-library"
+    (Pricklypear_lisp.Ast.VPrim "load-library");
+  load_defs t
+
+(** Switch store + manifest to [branch_id], then rehydrate env. *)
+let checkout_to (t : t) ~(branch_id : string) ~(branch_ref : string)
+  : unit Lwt.t =
+  let* () = Store.checkout_branch t.store ~new_branch_id:branch_id in
+  t.manifest <-
+    { t.manifest with
+      Pricklypear_common.Manifest.branch_id = branch_id;
+      branch_name = branch_ref };
+  rehydrate t
+
 let split_branch_ref (s : string) : string * string =
   match String.split_on_char '/' s with
   | [ o; n ] -> o, n
@@ -183,8 +210,9 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
           Lwt.return (Pricklypear_lisp.Ast.VStr "route: bad args"));
 
   (* (checkout 'branch-ref) -> VStr "checked out" | "no such branch".
-     Mutates t.store.branch_id + t.manifest.branch_name, then re-hydrates
-     the env from the new branch's function_defs via load_defs_async. *)
+     Mutates t.store.branch_id + t.manifest, then re-hydrates the env
+     from the new branch's function_defs (sync — so the next form sees
+     the right bindings). *)
   Primitives.register tbl "checkout"
     (fun args ->
       match args with
@@ -196,10 +224,7 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
           (match found with
            | None -> Lwt.return (Pricklypear_lisp.Ast.VStr "no such branch")
            | Some new_id ->
-               let* _ = Store.checkout_branch t.store ~new_branch_id:new_id in
-               t.manifest <- { t.manifest with
-                               Pricklypear_common.Manifest.branch_name = branch_ref };
-               load_defs_async t;
+               let* () = checkout_to t ~branch_id:new_id ~branch_ref in
                Lwt.return (Pricklypear_lisp.Ast.VStr "checked out"))
       | _ ->
           Lwt.return (Pricklypear_lisp.Ast.VStr "checkout: bad args"));
@@ -1328,16 +1353,53 @@ and seed_one (t : t) (name : string) : unit Lwt.t =
   Lwt.return_unit
 
 and seed_stdlib (t : t) : unit Lwt.t =
-  (* File libs overwrite DB defs — canonical source is libs/*.pp.
-     Load dogfood apps so /bible and /todos work after every boot. *)
-  let* () = seed_one t "std" in
-  let* () = seed_one t "ui" in
-  let* () = seed_one t "ai" in
-  let* () = seed_one t "todo" in
-  let* () = seed_one t "bible" in
-  let* () = seed_one t "dabar" in
-  let* () = refresh_ui_shell t in
-  Lwt.return_unit
+  (* Package defaults always land on system/main — NEVER on the user's
+     personal branch. Personal inherits main via the recursive CTE; user
+     (define)s write overrides on personal and survive reseed/deploy.
+
+     Canonical source is libs/*.pp in git. Explicit (load-library ...) on
+     the current branch still overwrites that branch (intentional). *)
+  Store.with_branch t.store ~branch_id:Store.system_main_id (fun () ->
+    let* () = seed_one t "std" in
+    let* () = seed_one t "ui" in
+    let* () = seed_one t "ai" in
+    let* () = seed_one t "todo" in
+    let* () = seed_one t "bible" in
+    let* () = seed_one t "dabar" in
+    (* outline/notes stay recipe-install for now — not every image needs them *)
+    Lwt.return_unit)
+
+(** Ensure username/personal exists as an EMPTY child of system/main.
+    Inheritance (not copy) means main defaults stay visible; personal
+    only stores the user's overrides. *)
+and ensure_personal_branch (t : t) : string option Lwt.t =
+  let owner = t.manifest.username in
+  let* main_id_opt =
+    Store.lookup_branch_id_by_name t.store ~owner:"system" ~name:"main"
+  in
+  let parent_id =
+    match main_id_opt with
+    | Some id -> id
+    | None -> Store.system_main_id
+  in
+  Store.ensure_branch t.store ~parent_id ~owner ~name:"personal"
+
+and checkout_personal (t : t) : unit Lwt.t =
+  let owner = t.manifest.username in
+  let branch_ref = owner ^ "/personal" in
+  let* found =
+    Store.lookup_branch_id_by_name t.store ~owner ~name:"personal"
+  in
+  match found with
+  | None ->
+      Printf.eprintf
+        "[session] personal branch missing; staying on %s\n%!"
+        t.manifest.branch_name;
+      (* Still rehydrate whatever branch we have. *)
+      rehydrate t
+  | Some id ->
+      Printf.eprintf "[session] checkout %s (%s)\n%!" branch_ref id;
+      checkout_to t ~branch_id:id ~branch_ref
 
 and recipe_hello (t : t) : (string, string) result Lwt.t =
   load_library t "hello"
@@ -1454,11 +1516,17 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
   Pricklypear_lisp.Env.define env "load-string" (Pricklypear_lisp.Ast.VPrim "load-string");
   Pricklypear_lisp.Env.define env "load-library" (Pricklypear_lisp.Ast.VPrim "load-library");
   let session : t = !t in
-  (* Boot order: DB defs first, then libs/*.pp overwrite (canonical).
-     Sequential so bible/todo routes never hit half-loaded env. *)
+  (* Boot order (personal-branch safety):
+       1. ensure username/personal exists (empty child of system/main)
+       2. seed_stdlib writes package defaults ONLY to system/main
+       3. checkout personal + rehydrate env (inherits main via CTE)
+       4. refresh ui shell from the personal-visible ui/nav
+     User (define)s land on personal and are never wiped by reseed. *)
   Lwt.async (fun () ->
-    let* () = load_defs session in
+    let* _ = ensure_personal_branch session in
     let* () = seed_stdlib session in
+    let* () = checkout_personal session in
+    let* () = refresh_ui_shell session in
     Lwt.return_unit);
   session
 

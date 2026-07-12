@@ -36,6 +36,21 @@ python3 "$PP_EVAL" -j '(load-library "todo")'
 - Pi skill: `pricklypear-eval` (`~/.pi/agent/skills/pricklypear-eval/SKILL.md`)
 - Prefer eval over inventing REST for todos/bible/ui/etc.
 
+## Branches: defaults vs personal garden
+
+- **`system/main`** — package defaults. Boot `seed_stdlib` always writes
+  `libs/{std,ui,ai,todo,bible,dabar}` here from git. Treat as read-mostly.
+- **`<user>/personal`** — your garden. Image boots here after seed. Empty
+  child of main (inherits via recursive CTE). Your `(define …)` and
+  `(route …)` land here and **survive reseed/deploy**.
+- Switch: `(checkout "system/main")` / `(checkout "dev/personal")`
+  (owner is `PP_USERNAME`). Header shows current branch.
+- Explicit `(load-library "ui")` writes the **current** branch — on
+  personal that pins full package overrides (main updates won't show for
+  those names until you delete the override or merge).
+- `pp_sync pull` exports the active branch. Prefer editing on personal;
+  pull when you want your garden in git.
+
 ## Stack
 
 - OCaml 5.4.1 on the **`poohstack`** opam switch (NOT a dedicated

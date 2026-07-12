@@ -411,6 +411,54 @@ let checkout_branch (t : t) ~(new_branch_id : string) : unit Lwt.t =
 (* Get the branch_id the store is currently bound to. *)
 let current_branch_id (t : t) : string = t.branch_id
 
+(** Canonical system/main UUID — seeded by migrations/001_branches.sql. *)
+let system_main_id = "00000000-0000-0000-0000-000000000001"
+
+(** Temporarily rebind [t.branch_id] for the duration of [f], then restore.
+    Used so seed_stdlib can write package defaults to system/main without
+    polluting the user's personal branch. *)
+let with_branch (t : t) ~(branch_id : string) (f : unit -> 'a Lwt.t) : 'a Lwt.t =
+  let old = t.branch_id in
+  t.branch_id <- branch_id;
+  Lwt.finalize f (fun () -> t.branch_id <- old; Lwt.return_unit)
+
+(** Ensure a branch row exists; create an EMPTY child (parent pointer only)
+    if missing. Does NOT copy function_defs/types/routes — inheritance via
+    the recursive CTE makes parent defs visible, and personal overrides are
+    just rows on the child. This is the right shape for user/personal. *)
+let ensure_branch (t : t) ~(parent_id : string) ~(owner : string)
+    ~(name : string) : string option Lwt.t =
+  let* existing = lookup_branch_id_by_name t ~owner ~name in
+  match existing with
+  | Some id -> Lwt.return (Some id)
+  | None ->
+      (match t.conn with
+       | None -> Lwt.return_none
+       | Some conn ->
+           Lwt.catch
+             (fun () ->
+               let sql =
+                 "INSERT INTO branches (id, parent_id, owner, name) " ^
+                 "VALUES (gen_random_uuid(), $1, $2, $3) " ^
+                 "ON CONFLICT (owner, name) DO UPDATE SET name = EXCLUDED.name " ^
+                 "RETURNING id::text" in
+               let* rows =
+                 Pg.execute conn
+                   ~params:[ Pgx.Value.of_string parent_id;
+                             Pgx.Value.of_string owner;
+                             Pgx.Value.of_string name ]
+                   sql
+               in
+               (match rows with
+                | [ [ id_cell ] ] -> Lwt.return (Pgx.Value.to_string id_cell)
+                | _ ->
+                    (* Race: another image created it; re-lookup. *)
+                    lookup_branch_id_by_name t ~owner ~name))
+             (fun exn ->
+               Printf.eprintf "[store] ensure_branch error: %s\n"
+                 (Printexc.to_string exn);
+               lookup_branch_id_by_name t ~owner ~name))
+
 (* Fork a branch: create a new branch with parent_id as its parent,
    then copy all function_defs, type_defs, view_bindings from the
    parent into the new branch.
