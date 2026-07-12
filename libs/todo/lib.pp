@@ -59,15 +59,13 @@
                       (todo/ensure-inbox)
                       (as-str list-id))))
             (update 'todo-item id
-              (dict-set
-                (dict-set
-                  (dict-set
-                    (dict-set
-                      (dict-set fields "title" (as-str title))
-                      "notes" (as-str notes))
-                    "due" (as-str due))
-                  "state" (as-str state))
-                "list_id" lid)))))))
+              (dict-set* fields
+                (list
+                  "title" (as-str title)
+                  "notes" (as-str notes)
+                  "due" (as-str due)
+                  "state" (as-str state)
+                  "list_id" lid))))))))
 
 ;; --- lists ---
 
@@ -102,21 +100,21 @@
     (let ((found (todo/find-default-list)))
       (if (null? found)
           (create 'todo-list
-            (dict-set
-              (dict-set
-                (dict-set "{}" "title" "Inbox")
-                "description" "Default list")
-              "is_default" "true"))
+            (dict-set* "{}"
+              (list
+                "title" "Inbox"
+                "description" "Default list"
+                "is_default" "true")))
           (car found)))))
 
 (define todo/create-list
   (lambda (title)
     (create 'todo-list
-      (dict-set
-        (dict-set
-          (dict-set "{}" "title" (as-str title))
-          "description" "")
-        "is_default" "false"))))
+      (dict-set* "{}"
+        (list
+          "title" (as-str title)
+          "description" ""
+          "is_default" "false")))))
 
 (define todo/get-list
   (lambda (id)
@@ -147,17 +145,14 @@
                    (todo/ensure-inbox)
                    (as-str list-id))))
       (create 'todo-item
-        (dict-set
-          (dict-set
-            (dict-set
-              (dict-set
-                (dict-set
-                  (dict-set "{}" "list_id" lid)
-                  "title" (as-str title))
-                "notes" "")
-              "state" "TODO")
-            "due" "")
-          "position" "0")))))
+        (dict-set* "{}"
+          (list
+            "list_id" lid
+            "title" (as-str title)
+            "notes" ""
+            "state" "TODO"
+            "due" ""
+            "position" "0"))))))
 
 (define todo/set-state
   (lambda (id state)

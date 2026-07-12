@@ -34,17 +34,14 @@
 
 (define notes/make-fields
   (lambda (slug title outline tags kind day)
-    (dict-set
-      (dict-set
-        (dict-set
-          (dict-set
-            (dict-set
-              (dict-set "{}" "slug" (as-str slug))
-              "title" (as-str title))
-            "outline" (outline/encode outline))
-          "tags" (as-str tags))
-        "kind" (as-str kind))
-      "day" (as-str day))))
+    (dict-set* "{}"
+      (list
+        "slug" (as-str slug)
+        "title" (as-str title)
+        "outline" (outline/encode outline)
+        "tags" (as-str tags)
+        "kind" (as-str kind)
+        "day" (as-str day)))))
 
 (define notes/upsert
   (lambda (slug title outline tags kind day)

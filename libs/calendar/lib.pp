@@ -110,23 +110,17 @@
     (let ((st (if (null? start) "" (as-str start))))
       (let ((all (if (string-eq st "") "true" "false")))
       (create 'calendar-event
-        (dict-set
-          (dict-set
-            (dict-set
-              (dict-set
-                (dict-set
-                  (dict-set
-                    (dict-set
-                      (dict-set
-                        (dict-set "{}" "title" (as-str title))
-                        "day" (as-str day))
-                      "start_time" st)
-                    "end_time" "")
-                  "all_day" all)
-                "notes" (as-str notes))
-              "location" "")
-            "color" "")
-          "source" "calendar"))))))
+        (dict-set* "{}"
+          (list
+            "title" (as-str title)
+            "day" (as-str day)
+            "start_time" st
+            "end_time" ""
+            "all_day" all
+            "notes" (as-str notes)
+            "location" ""
+            "color" ""
+            "source" "calendar")))))))
 
 (define calendar/delete
   (lambda (id) (delete 'calendar-event id)))

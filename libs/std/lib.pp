@@ -23,6 +23,20 @@
         acc
         (list/foldl f (f acc (car xs)) (cdr xs)))))
 
+;; --- dict/ ---
+
+;; (dict-set* json (list "k1" v1 "k2" v2 …)) — flat multi-field update.
+;; Prefer this over nested (dict-set (dict-set …)).
+(define dict-set*
+  (lambda (json kvs)
+    (if (null? kvs)
+        json
+        (if (null? (cdr kvs))
+            json
+            (dict-set*
+              (dict-set json (car kvs) (car (cdr kvs)))
+              (cdr (cdr kvs)))))))
+
 ;; --- html/  (strings → render-html; no raw tag soup in apps) ---
 ;;
 ;; Pattern:
