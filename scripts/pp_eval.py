@@ -9,11 +9,12 @@ system without building per-app REST endpoints:
   (load-library "ui")
   (demo/double 21)
 
-Auth: HTTP basic auth (nginx front door). Session is the image's live env.
+Auth: HTTP basic against the image credentials table (or a session cookie).
+Nginx edge basic auth on :80 is not required.
 
 Usage:
   export PP_URL=http://155.138.208.45
-  export PP_USER=pricklypear
+  export PP_USER=admin
   export PP_PASS='…'          # or PP_PASS_FILE=/path/to/file
 
   python3 scripts/pp_eval.py '(+ 1 2)'
@@ -165,8 +166,8 @@ def main() -> int:
     )
     ap.add_argument(
         "--user",
-        default=env_or("PP_USER", "pricklypear"),
-        help="basic-auth user (default PP_USER or pricklypear)",
+        default=env_or("PP_USER", "admin"),
+        help="image basic-auth user (default PP_USER or admin)",
     )
     ap.add_argument(
         "--password",
