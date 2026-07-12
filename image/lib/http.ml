@@ -53,13 +53,20 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
          .menu-drop>summary{list-style:none}
          .menu-drop>summary::-webkit-details-marker{display:none}
          .menu-drop>summary::after{content:\" v\";font-size:.7em}
-         .menu-drop-panel{display:none;position:absolute;left:0;top:100%;
-           z-index:40;min-width:10rem;margin-top:2px;padding:.25rem;
+         .menu-drop-panel{display:none;position:absolute;left:0;right:auto;top:100%;
+           z-index:50;min-width:10rem;max-width:min(16rem,calc(100vw - 1rem));
+           margin-top:2px;padding:.25rem;box-sizing:border-box;
            background:#fff;border:2px solid #000;box-shadow:2px 2px 0 #808080}
          .menu-drop[open]>.menu-drop-panel{display:block}
          .menu-drop-panel a{display:block;width:100%;margin:0 0 .2rem;
-           white-space:nowrap}
+           white-space:nowrap;box-sizing:border-box}
          .menu-drop-panel a:last-child{margin-bottom:0}
+         /* Right-edge menus (e.g. Apps) open leftward so panels stay on-screen */
+         @media (max-width:40rem){
+           header,nav{overflow:visible}
+           .menu-drop-panel{left:auto;right:0;
+             max-width:calc(100vw - .75rem)}
+         }
          main{padding:.75rem;max-width:52rem;margin:0 auto}
          h1{font-size:1.25rem;font-weight:700;margin:.25rem 0 .75rem;
             border-bottom:1px solid #000;padding-bottom:.25rem}
