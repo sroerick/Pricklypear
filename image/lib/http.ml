@@ -2598,86 +2598,106 @@ let api_agent_task (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
     Lwt.return_unit
 
 let agent_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
-  (* Live context so the model is grounded in THIS image, not botany. *)
-  let* ctx_v =
-    Lwt.catch
-      (fun () ->
-         Session.eval_one session
-           "(string-append \"user=\" (whoami) \" branch=\" (current-branch) \" bindings=\" (str (list-bindings)))")
-      (fun _ ->
-         Lwt.return
-           (Pricklypear_lisp.Ast.VStr
-              (Printf.sprintf "user=%s branch=%s"
-                 (Session.username session) (Session.branch_name session))))
-  in
+  (* Short live context only — full binding dumps bloat the page + prompt. *)
   let ctx =
-    match ctx_v with
-    | Pricklypear_lisp.Ast.VStr s -> s
-    | _ -> Pricklypear_lisp.Reader.pp_value ctx_v
+    Printf.sprintf "user=%s branch=%s"
+      (Session.username session) (Session.branch_name session)
   in
   let default_seed =
     "You are the co-pilot for a running Pricklypear IMAGE — a multi-user Lisp " ^
-    "operating system (software), NOT the cactus plant.\n\n" ^
-    "Pricklypear: live per-user images; Lisp functions stored in Postgres; " ^
-    "branches version code; routes bind functions to HTTP; UI is htmx. " ^
-    "Prims include list-bindings, get, rows, define, route, render-html, agent.\n\n" ^
-    "Rules: Prefer facts from the CONTEXT block in the user prompt. " ^
-    "If unknown from context, say so. Do not invent bindings or data. " ^
-    "Never answer as if Pricklypear is a cactus unless the user clearly asks about the plant."
+    "operating system (software), NOT the cactus plant.\n" ^
+    "Prefer facts from the CONTEXT block. Use tools to inspect the live image " ^
+    "when available. Answer clearly and briefly. Never invent bindings."
   in
   let js =
-    "const out=document.getElementById('out');" ^
-    "const run=document.getElementById('run');" ^
+    "const log=document.getElementById('log');" ^
+    "const msg=document.getElementById('msg');" ^
+    "const send=document.getElementById('send');" ^
+    "const neu=document.getElementById('newchat');" ^
+    "const sidEl=document.getElementById('sid');" ^
+    "const toolsEl=document.getElementById('tools');" ^
+    "const seedEl=document.getElementById('seed');" ^
     "const baseCtx=" ^ Yojson.Safe.to_string (`String ctx) ^ ";" ^
     "let sid=null;" ^
-    "run.onclick=async()=>{" ^
-    "const seed=document.getElementById('seed').value;" ^
-    "const q=document.getElementById('prompt').value;" ^
+    "function add(role,text){" ^
+    "const d=document.createElement('div');" ^
+    "d.className='card';" ^
+    "d.style.margin='.4rem 0';" ^
+    "d.innerHTML='<b>'+role+'</b><pre style=\"white-space:pre-wrap;margin:.35rem 0 0\">'+" ^
+    "String(text).replace(/[&<>]/g,c=>({\"&\":\"&amp;\",\"<\":\"&lt;\",\">\":\"&gt;\"}[c]))+" ^
+    "'</pre>';log.appendChild(d);log.scrollTop=log.scrollHeight;}" ^
+    "function setSid(s){sid=s||null;sidEl.textContent=sid?sid:'(new on send)';}" ^
+    "neu.onclick=()=>{setSid(null);log.innerHTML='';msg.focus();};" ^
+    "send.onclick=async()=>{" ^
+    "const q=msg.value.trim();if(!q)return;" ^
+    "const seed=seedEl.value;" ^
+    "const tools=toolsEl.checked;" ^
     "const prompt='=== IMAGE CONTEXT ===\\n'+" ^
-    "'system: Pricklypear multi-user Lisp OS image (software, not a cactus)\\n'+" ^
-    "baseCtx+'\\n=== END CONTEXT ===\\n\\nUser question:\\n'+q;" ^
-    "out.textContent='…'; run.disabled=true;" ^
+    "'system: Pricklypear multi-user Lisp OS image (software)\\n'+" ^
+    "baseCtx+'\\n=== END CONTEXT ===\\n\\nUser:\\n'+q;" ^
+    "add('you',q);msg.value='';send.disabled=true;" ^
     "try{" ^
-    "const body={seed,prompt,stream:false};" ^
+    "const body={seed,prompt,tools,stream:false};" ^
     "if(sid)body.session_id=sid;" ^
     "const r=await fetch('/api/agent',{method:'POST'," ^
     "headers:{'content-type':'application/json'}," ^
     "body:JSON.stringify(body)});" ^
     "const j=await r.json();" ^
-    "if(j.session_id)sid=j.session_id;" ^
-    "const label=sid?('[session '+sid.slice(0,8)+'…]\\n'):'';" ^
-    "out.textContent=label+(j.text||j.error||JSON.stringify(j));" ^
-    "}catch(e){out.textContent=String(e);}" ^
-    "finally{run.disabled=false;}" ^
-    "};"
+    "if(j.session_id)setSid(j.session_id);" ^
+    "add('agent',j.text||j.error||JSON.stringify(j));" ^
+    "}catch(e){add('error',String(e));}" ^
+    "finally{send.disabled=false;msg.focus();}" ^
+    "};" ^
+    "msg.addEventListener('keydown',e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send.click();}});"
   in
   let body =
     chrome ~session ~title:"Agent" [
       HTML.div [HTML.class_ "card"] [
-        HTML.p [] [txt
-          "Durable co-pilot session. Seed = persona; prompt = your turn."];
+        HTML.h2 [] [txt "Conversation"];
         HTML.p [HTML.class_ "muted"] [txt
-          "Same session continues on each Run. Lisp: (agent-session-new seed) then (agent-say sid \"…\")."];
+          "One durable session. Each Send continues the same thread (tools optional). New chat starts a fresh session."];
         HTML.p [] [
-          HTML.label [HTML.for_ "seed"] [txt "seed (system)"];
+          txt "session: ";
+          HTML.code [HTML.id "sid"] [txt "(new on send)"];
         ];
-        HTML.textarea [HTML.name "seed"; HTML.id "seed"]
-          "%s" default_seed;
         HTML.p [] [
-          HTML.label [HTML.for_ "prompt"] [txt "prompt (your question)"];
+          HTML.label [HTML.for_ "tools"] [
+            HTML.input
+              [ HTML.type_ "checkbox"
+              ; HTML.name "tools"
+              ; HTML.id "tools"
+              ; HTML.value "1"
+              ; HTML.checked
+              ]
+              ;
+            txt " tools (inspect / install)"
+          ];
         ];
-        HTML.textarea [HTML.name "prompt"; HTML.id "prompt"]
-          "%s" "What is this image, and what branch am I on?";
+        HTML.details [] [
+          HTML.summary [] [txt "seed (system persona)"];
+          HTML.textarea [HTML.name "seed"; HTML.id "seed"] "%s" default_seed;
+        ];
+        HTML.div
+          [ HTML.id "log"
+          ; HTML.style_ "max-height:28rem;overflow:auto;border:1px solid #ccc;padding:.5rem;margin:.5rem 0"
+          ]
+          [];
         HTML.p [] [
-          HTML.button [HTML.type_ "button"; HTML.id "run"] [txt "Run agent"];
+          HTML.label [HTML.for_ "msg"] [txt "message"];
         ];
-        HTML.pre [HTML.id "out"; HTML.class_ "card"] [txt ""];
+        HTML.textarea [HTML.name "msg"; HTML.id "msg"]
+          "%s" "What branch am I on?";
+        HTML.p [] [
+          HTML.button [HTML.type_ "button"; HTML.id "send"] [txt "Send"];
+          txt " ";
+          HTML.button [HTML.type_ "button"; HTML.id "newchat"] [txt "New chat"];
+        ];
       ];
       HTML.script [] "%s" js;
       HTML.div [HTML.class_ "card"] [
         HTML.h2 [] [txt "Write a function"];
         HTML.p [HTML.class_ "muted"] [txt
-          "Generates a Lisp body and installs it on this branch as agent:<model>. Same as (ai/write name spec)."];
+          "One-shot authoring (not chat). Same as (ai/write name spec)."];
         HTML.p [] [
           HTML.label [HTML.for_ "fn_name"] [txt "name "];
           HTML.input [HTML.type_ "text"; HTML.name "fn_name"; HTML.id "fn_name";
@@ -2710,35 +2730,6 @@ let agent_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
         "finally{wbtn.disabled=false;}" ^
         "};"
       );
-
-      HTML.div [HTML.class_ "card"] [
-        HTML.h2 [] [txt "Task (tool agent)"];
-        HTML.p [HTML.class_ "muted"] [txt
-          "Multi-turn: can list bindings, inspect functions, and install several functions. Lisp: (ai/do \"…\")."];
-        HTML.textarea [HTML.name "task"; HTML.id "task"]
-          "%s" "Create pure functions demo/inc and demo/dec (int -> int), install both, then say how to call them.";
-        HTML.p [] [
-          HTML.button [HTML.type_ "button"; HTML.id "task_run"] [txt "Run task"];
-        ];
-        HTML.pre [HTML.id "task_out"; HTML.class_ "card"] [txt ""];
-      ];
-      HTML.script [] "%s" (
-        "const tout=document.getElementById('task_out');" ^
-        "const tbtn=document.getElementById('task_run');" ^
-        "tbtn.onclick=async()=>{" ^
-        "const prompt=document.getElementById('task').value;" ^
-        "tout.textContent='… (may take a while)'; tbtn.disabled=true;" ^
-        "try{" ^
-        "const r=await fetch('/api/agent-task',{method:'POST'," ^
-        "headers:{'content-type':'application/json'}," ^
-        "body:JSON.stringify({prompt})});" ^
-        "const j=await r.json();" ^
-        "tout.textContent=j.text||j.error||JSON.stringify(j);" ^
-        "}catch(e){tout.textContent=String(e);}" ^
-        "finally{tbtn.disabled=false;}" ^
-        "};"
-      );
-
     ]
   in
   html_response reqd ~session body;
