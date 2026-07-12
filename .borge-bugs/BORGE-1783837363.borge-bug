@@ -1,0 +1,7 @@
+(borge-bug (id "BORGE-1783837363")
+  (title "Product CSS as Lisp data (Path B): css/* sheet compiler in std, ui/theme + ui/css shell, session-cached render, OCaml emergency only — mirror ui/nav product-shell rule. Reject CSS-string-in-lambda hybrid.")
+  (status triage)
+  (created 2026-07-12)
+  (filed-by roerick)
+  (doc "")
+)

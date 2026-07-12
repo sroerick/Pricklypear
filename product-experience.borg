@@ -9,7 +9,10 @@
     first-run-recipe implemented; access-paths: browser login now
     in-image (auth.web-login path); horizon planned design-only.
     2026-07-12: product shell layering — environment UI is Lisp;
-    OCaml is host/gate/emergency only (see image.system-browser).|) *)
+    OCaml is host/gate/emergency only (see image.system-browser).
+    2026-07-12: product theme Path B planned (image.product-theme,
+    BORGE-1783837363) — presentation is Lisp css/* sheets, not a
+    hard-coded OCaml CSS twin.|) *)
   (verify
    (build "dune build image")
    (smoke "GET /about teaches concepts; home offers first-run hello recipe")
@@ -25,15 +28,20 @@
         substrate legible. Without it, only authors understand
         the system.
 
-        LAYERING (aligned with image.system-browser, 2026-07-12):
+        LAYERING (aligned with image.system-browser +
+        image.product-theme, 2026-07-12):
         - Environment UI humans live in (nav, home, app menus,
-          user routes) is Lisp on branches (libs/*.pp seed +
-          personal pins). That is the product.
+          theme/presentation, user routes) is Lisp on branches
+          (libs/*.pp seed + personal pins). That is the product.
         - OCaml hosts Lisp: eval, store, auth gate, health,
           kernel system pages (/bindings, /edit, …), and a
-          labeled emergency shell if ui/nav or ui/home fails.
-        - OCaml must not ship a silent second product nav/home.
+          labeled emergency shell if ui/nav, ui/home, or ui/css
+          fails.
+        - OCaml must not ship a silent second product nav/home
+          or a silent full design-system CSS twin in http.ml.
           Dual silent defaults are rejected architecture.
+        - Theme is Path B (honest Lisp): css/* sheets + tokens,
+          not CSS-string-in-lambda as the native form.
    |))
   )
   (subsection concepts-guide
@@ -59,7 +67,9 @@
          - Branch: versioned code world; data shared
          - Type/row: deftype + data_rows CRUD
          - Route/page: URL bound to a function
-         - Shell (ui/menu, ui/nav, ui/home): Lisp product chrome
+         - Shell (ui/menu, ui/nav, ui/home, ui/theme, ui/css):
+           Lisp product chrome + presentation
+         - Theme tokens (theme/bg, …): branch-visible style knobs
          - AI propose: agent authors on current branch only
 
          ACCESS:
@@ -99,8 +109,9 @@
          5. scripts/verify_auth.sh product gate
          6. Optional scripts/repl.sh / line-protocol REPL
 
-         Product chrome after login is Lisp (ui/nav, ui/home).
-         Auth gate and emergency shell are OCaml kernel.
+         Product chrome after login is Lisp (ui/nav, ui/home,
+         ui/theme/ui/css). Auth gate and emergency shell/CSS are
+         OCaml kernel only.
 
          DEFERRED:
          - Fleet boot/attach per user (process isolation path)
@@ -218,8 +229,10 @@
          Milestone ladder:
            now   — hacker env + browser login + Lisp product shell
                    (define/edit/route/AI; ui/nav ui/home; auth session)
-           next  — kill silent OCaml product defaults; emergency-only
-                   chrome; shell packages denser; branch promote UI
+           next  — product theme Path B (css/* + ui/theme); kill
+                   silent OCaml product defaults (nav/home/CSS);
+                   emergency-only chrome+css; shell denser; branch
+                   promote UI
            later — environment feel (more system UI in Lisp,
                    permissions, multi-user fleet isolation)
            horizon — community + AI coworker + Solo5 product

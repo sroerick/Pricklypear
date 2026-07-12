@@ -17,7 +17,46 @@ open Pure_html
 
 let default_port = 8080
 
-let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node) : unit =
+let emergency_css : string =
+  (* Labeled recovery only — NOT the product design system.
+     Product CSS comes from Lisp (ui/css) via Session.ui_css. *)
+  "/* emergency-css */\n\
+   body{font-family:ui-monospace,Menlo,monospace;margin:1rem;\n\
+   background:#fff3cd;color:#1a1a1a;line-height:1.4}\n\
+   .emergency-banner{display:block;width:100%;padding:.4rem .55rem;\n\
+   border:2px solid #8b0000;background:#fff3cd;color:#1a1a1a;\n\
+   font-size:.85rem;font-family:Courier,monospace;margin:.35rem 0}\n\
+   .emergency-banner a{color:#000080}\n\
+   nav.emergency-nav{width:100%;margin-top:.35rem}\n\
+   .emergency-home{border:2px solid #8b0000;background:#fff3cd;padding:.75rem}\n\
+   a{color:#000080}\n\
+   header{border-bottom:2px solid #000;padding:.5rem;background:#fff}\n\
+   main{padding:.75rem}\n\
+   .card{border:2px solid #000;background:#fff;padding:.75rem;margin:.5rem 0}\n\
+   .err{color:#8b0000;font-weight:700}\n\
+   .ok{color:#006600;font-weight:700}\n\
+   button,.btn,input[type=submit]{font:inherit;padding:.45rem .75rem;\n\
+   border:2px solid #000;background:#eee;cursor:pointer}\n\
+   table{border-collapse:collapse;width:100%}\n\
+   th,td{border:1px solid #808080;padding:.35rem}\n\
+   pre,textarea,input[type=text],input[type=password]{\n\
+   font-family:ui-monospace,Menlo,monospace;width:100%;\n\
+   box-sizing:border-box;border:1px solid #000;padding:.4rem}\n\
+   "
+
+let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK)
+    ?session ?(css : string option) (body : Pure_html.node) : unit =
+  let css =
+    match css with
+    | Some c when String.trim c <> "" -> c
+    | _ ->
+        (match session with
+         | Some s ->
+             (match Session.ui_css s with
+              | Some c when String.trim c <> "" -> c
+              | _ -> emergency_css)
+         | None -> emergency_css)
+  in
   let html_doc = HTML.html [HTML.lang "en"] [
     HTML.head [] [
       HTML.title [] "Pricklypear";
@@ -25,288 +64,8 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
       (* Mobile-first: prevent tiny text, enable proper layout *)
       HTML.meta [HTML.name "viewport";
                  HTML.content "width=device-width, initial-scale=1"];
-      HTML.style [] "%s"
-        (* Classic Mac / Smalltalk / mainframe terminal — flat, bordered, readable.
-           No gradients, no pill buttons, no dark "LLM dashboard" chrome. *)
-        "*{box-sizing:border-box}
-         html{font-size:16px;-webkit-text-size-adjust:100%}
-         body{margin:0;background:#d4d0c8;color:#000;
-              font-family:Geneva,\"Lucida Grande\",\"DejaVu Sans\",Verdana,sans-serif;
-              line-height:1.4}
-         a{color:#000080;text-decoration:underline}
-         a:visited{color:#551a8b}
-         a:hover{color:#000}
-         header{background:#fff;border-bottom:2px solid #000;padding:.5rem .75rem}
-         header .brand{font-weight:700;font-size:1.1rem;letter-spacing:.02em;
-                       color:#000;margin-right:.75rem}
-         header .meta{display:block;font-family:\"Courier New\",Courier,monospace;
-                      font-size:.8rem;color:#333;margin:.25rem 0 .5rem}
-         nav{display:flex;flex-wrap:wrap;gap:.35rem .5rem;align-items:center}
-         /* Links + dropdowns share the same chrome size — don't let a single
-            top-level link (home) flex-grow while apps/system stay compact. */
-         nav > a,.menu-drop{flex:0 0 auto}
-         nav a,.menu-drop-btn{display:inline-block;padding:.45rem .55rem;min-height:2.5rem;
-               line-height:1.5;border:1px solid #000;background:#c0c0c0;
-               color:#000;text-decoration:none;font-size:.9rem;cursor:pointer;
-               list-style:none;box-sizing:border-box}
-         nav a:visited{color:#000}
-         nav a:hover,nav a:focus,.menu-drop-btn:hover{background:#fff}
-         nav.emergency-nav{width:100%;margin-top:.35rem}
-         .emergency-banner{display:block;width:100%;padding:.4rem .55rem;
-           border:2px solid #8b0000;background:#fff3cd;color:#1a1a1a;
-           font-size:.85rem;font-family:Courier,monospace}
-         .emergency-banner a{color:#000080}
-         .emergency-home{border:2px solid #8b0000;background:#fff3cd}
-         /* Dropdown menus (details/summary — works without JS, mobile-friendly) */
-         .menu-drop{position:relative;display:inline-block;margin:0}
-         .menu-drop>summary{list-style:none}
-         .menu-drop>summary::-webkit-details-marker{display:none}
-         .menu-drop>summary::after{content:\" v\";font-size:.7em}
-         .menu-drop-panel{display:none;position:absolute;left:0;right:auto;top:100%;
-           z-index:50;min-width:10rem;max-width:min(16rem,calc(100vw - 1rem));
-           margin-top:2px;padding:.25rem;box-sizing:border-box;
-           background:#fff;border:2px solid #000;box-shadow:2px 2px 0 #808080}
-         .menu-drop[open]>.menu-drop-panel{display:block}
-         .menu-drop-panel a{display:block;width:100%;margin:0 0 .2rem;
-           white-space:nowrap;box-sizing:border-box}
-         .menu-drop-panel a:last-child{margin-bottom:0}
-         /* Right-edge menus (e.g. Apps) open leftward so panels stay on-screen */
-         @media (max-width:40rem){
-           header,nav{overflow:visible}
-           .menu-drop-panel{left:auto;right:0;
-             max-width:calc(100vw - .75rem)}
-         }
-         main{padding:.75rem;max-width:52rem;margin:0 auto}
-         h1{font-size:1.25rem;font-weight:700;margin:.25rem 0 .75rem;
-            border-bottom:1px solid #000;padding-bottom:.25rem}
-         h2{font-size:1.05rem;font-weight:700;margin:0 0 .5rem}
-         p{margin:.5rem 0}
-         .card{background:#fff;border:2px solid #000;padding:.75rem;margin:0 0 .75rem}
-         table{border-collapse:collapse;width:100%;background:#fff;
-               border:1px solid #000;font-size:.9rem}
-         th,td{border:1px solid #808080;padding:.45rem .5rem;text-align:left;
-               vertical-align:top;word-break:break-word}
-         th{background:#c0c0c0;font-weight:700;border-color:#000}
-         tr:nth-child(even) td{background:#ece9e0}
-         pre,textarea,input[type=text],input[type=search],input:not([type]){
-           font-family:\"Courier New\",Courier,monospace;font-size:1rem;
-           background:#fff;color:#000;border:1px solid #000;border-radius:0;
-           padding:.5rem;width:100%;max-width:100%}
-         pre{white-space:pre-wrap;overflow-x:auto;line-height:1.35}
-         textarea{min-height:16rem;line-height:1.35;white-space:pre;tab-size:2}
-         button,.btn,input[type=submit]{
-           font:inherit;font-size:1rem;cursor:pointer;
-           background:#c0c0c0;color:#000;border:2px outset #fff;
-           border-radius:0;padding:.5rem .85rem;min-height:2.75rem}
-         button:active,.btn:active{border-style:inset}
-         button.secondary,.btn.secondary{background:#d4d0c8}
-         a.btn{display:inline-block;text-decoration:none;color:#000;
-               line-height:1.2;vertical-align:middle}
-         a.btn:visited{color:#000}
-         label{font-weight:700}
-         .meta,.muted{color:#333;font-size:.9rem}
-         .err{color:#800000;font-weight:700}
-         .ok{color:#006600;font-weight:700}
-         #out{white-space:pre-wrap;min-height:4rem;background:#fff;
-              border:1px solid #000;padding:.5rem;
-              font-family:\"Courier New\",Courier,monospace}
-         ul.actions{list-style:none;padding:0;margin:.5rem 0}
-         ul.actions li{margin:.4rem 0}
-         /* Outline notes */
-         .ol-root{margin:.5rem 0}
-         .ol-node{position:relative;margin:.25rem 0 .25rem .35rem;
-           border-left:2px solid #808080;padding-left:.35rem}
-         .ol-sum{cursor:default;font-weight:700;display:flex;align-items:center;
-           gap:.35rem;flex-wrap:nowrap;min-width:0;padding-right:16rem}
-         /* Only the fold chevron toggles open/closed (JS preventDefault on rest of summary). */
-         .ol-fold{font-size:.75em;flex:0 0 auto;display:inline-flex;align-items:center;
-           justify-content:center;user-select:none;cursor:pointer;line-height:1;
-           min-width:1.6rem;min-height:1.6rem;padding:.2rem;margin:0 .05rem 0 -.1rem;
-           color:#333}
-         .ol-fold:hover{background:#fff;border:1px solid #808080;padding:calc(.2rem - 1px)}
-         details.ol-node > .ol-sum .ol-fold::before{content:\"v\"}
-         details.ol-node:not([open]) > .ol-sum .ol-fold::before{content:\">\"}
-         /* Read-only state badge (not a button) — hidden when not a todo. */
-         .ol-todo{display:inline-block;flex:0 0 auto;width:auto;margin:0 .15rem 0 0;
-           padding:.05rem .3rem;border:1px solid #666;background:transparent;
-           font-size:.7rem;font-weight:700;line-height:1.3;letter-spacing:.02em;
-           color:#333;vertical-align:middle}
-         .ol-todo.st-TODO{border-color:#886600;color:#664400;background:#fff8dc}
-         .ol-todo.st-DONE{border-color:#226622;color:#226622;background:#e8f5e8}
-         .ol-node.st-DONE > .ol-sum .ol-title{text-decoration:line-through;color:#555;
-           font-weight:500}
-         .ol-title{outline:none;padding:.15rem .25rem;border-radius:0;flex:1 1 auto;
-           min-width:0;word-break:break-word;white-space:normal;line-height:1.35;
-           cursor:text;font-weight:700}
-         .ol-title:focus{background:#fff;border:1px solid #000}
-         .ol-body{margin:.25rem 0 .35rem;white-space:pre-wrap;font-size:.95rem;
-           outline:none;padding:.25rem;min-width:0;word-break:break-word}
-         .ol-body:focus{background:#fff;border:1px solid #000}
-         .ol-kids{margin-left:.15rem;min-width:0}
-         /* Actions: DOM before kids; desktop = right of title row; mobile = ··· menu */
-         details.ol-actions{position:absolute;top:.1rem;right:0;z-index:3;margin:0;display:block}
-         details.ol-actions[open]{z-index:40}
-         details.ol-actions > summary.ol-actions-sum{display:none;list-style:none;cursor:pointer;
-           user-select:none;width:auto;min-width:1.75rem;min-height:1.75rem;padding:.1rem .3rem;
-           border:1px solid #666;background:transparent;font-weight:700;color:#333;
-           text-align:center;line-height:1.3;border-radius:0}
-         details.ol-actions > summary.ol-actions-sum:hover,
-         details.ol-actions[open] > summary.ol-actions-sum{background:#fff;border-color:#000}
-         details.ol-actions > summary.ol-actions-sum::-webkit-details-marker{display:none}
-         .ol-actions-panel{display:flex !important;flex-direction:row;flex-wrap:nowrap;
-           justify-content:flex-end;align-items:center;gap:.25rem;margin:0;padding:0;
-           background:transparent;border:none}
-         .ol-btn{font-size:.75rem;padding:.25rem .45rem;min-height:2rem;width:auto;
-           flex:0 0 auto;margin:0;border:1px solid #000;background:#d4d0c8;cursor:pointer}
-         .ol-btn:hover{background:#fff}
-         .ol-del{color:#800000}
-         .ol-debug{margin:.75rem 0;opacity:.6}
-         .ol-debug > summary{cursor:pointer;font-size:.85rem}
-         /* Branch browser */
-         .br-table-wrap{overflow-x:auto}
-         .br-table{width:100%;font-size:.9rem}
-         .br-table th,.br-table td{padding:.35rem .4rem;vertical-align:top}
-         tr.br-current{background:#fff8dc}
-         .br-stats{display:flex;flex-wrap:wrap;gap:.5rem;margin:.5rem 0}
-         .br-stat{padding:.4rem .6rem;margin:0}
-         .br-diff{display:grid;grid-template-columns:1fr 1fr;gap:.5rem}
-         @media(max-width:700px){.br-diff{grid-template-columns:1fr}}
-         form.inline-form{display:inline}
-         form.inline-form button{margin-left:.2rem}
-         /* Unified todos */
-         .todo-layout{display:grid;grid-template-columns:12rem 1fr;gap:.75rem}
-         @media(max-width:700px){.todo-layout{grid-template-columns:1fr}}
-         .todo-nav{list-style:none;padding:0;margin:0}
-         .todo-nav-item{margin:.25rem 0}
-         .todo-nav-item.is-active a{font-weight:700;border-left:3px solid #000;padding-left:.35rem}
-         .todo-new-list{display:flex;flex-direction:column;gap:.25rem;margin-top:.5rem}
-         .todo-new-list-input{font-size:.85rem;min-height:2rem;padding:.25rem}
-         .todo-box.st-TODO{background:#fff8dc}
-         .todo-box.st-DONE{background:#cfc;text-decoration:line-through}
-         .todo-box.st-WAITING{background:#e0e8ff}
-         .todo-box.st-CANCELLED{background:#ddd;color:#666}
-         .todo-box.st-ARCHIVED{background:#eee;color:#555;border-style:dashed}
-         li.todo-item.is-archived .todo-title{color:#888;font-style:italic}
-         .todo-from-note .todo-src{font-size:.8rem;margin-left:.35rem}
-         /* legacy class hooks (todo package may still emit them) */
-         .ol-todo-btn{cursor:pointer}
-         .ol-todo-btn.st-TODO{background:#fff8dc}
-         .ol-todo-btn.st-DONE{background:#cfc}
-         .ol-todo-btn.st-WAITING{background:#e0e8ff}
-         /* Calendar */
-         .cal-nav{display:flex;align-items:center;gap:.75rem;margin:.5rem 0;flex-wrap:wrap}
-         .cal-nav a{text-decoration:none;font-weight:700}
-         .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;
-           background:#808080;border:2px solid #000;max-width:42rem}
-         .cal-dow{background:#c0c0c0;text-align:center;font-weight:700;
-           padding:.25rem;font-size:.8rem}
-         .cal-cell{background:#fff;min-height:3.5rem;padding:.2rem;
-           display:block;color:#000;text-decoration:none}
-         a .cal-cell:hover{background:#fff8dc}
-         .cal-empty{background:#d4d0c8;min-height:3.5rem}
-         .cal-today{outline:2px solid #000;background:#ffffe0}
-         .cal-dom{font-weight:700;font-size:.85rem}
-         .cal-marks{display:flex;flex-wrap:wrap;gap:2px;margin-top:.15rem}
-         .cal-dot{font-size:.65rem;padding:0 .2rem;border:1px solid #000;
-           background:#c0c0c0;line-height:1.2}
-         .cal-dot-ev{background:#cfc}
-         .cal-dot-todo{background:#fff8dc}
-         .cal-dot-note{background:#e0e8ff}
-         .cal-list{list-style:none;padding:.25rem;margin:0}
-         .cal-event,.cal-todo{display:flex;gap:.5rem;align-items:center;
-           padding:.35rem 0;border-bottom:1px solid #ccc}
-         .cal-time{font-size:.8rem;min-width:3.5rem;color:#333}
-         .cal-day-panel label{display:block;margin-top:.4rem}
-         /* Weather widget */
-         .weather-card .wx-row{display:flex;align-items:baseline;gap:.75rem;flex-wrap:wrap}
-         .weather-card .wx-temp{font-size:2rem;font-weight:700;line-height:1}
-         .weather-card .wx-meta{font-size:.9rem;color:#333}
-         .weather-card .wx-loc{font-weight:700;margin:.25rem 0}
-         .weather-card .wx-form{display:flex;gap:.35rem;flex-wrap:wrap;margin-top:.5rem}
-         .weather-card .wx-form input[type=text]{flex:1 1 8rem;min-width:0}
-         .weather-card .wx-form button{width:auto;min-width:4.5rem}
-         .weather-card .wx-err{color:#800000;font-weight:700}
-         /* Nav capture dropdown → inbox note */
-         .capture-panel{min-width:16rem;max-width:min(22rem,calc(100vw - 1rem));padding:.4rem}
-         .capture-nav-form{display:flex;flex-direction:column;gap:.35rem;margin:0}
-         .capture-nav-form input[type=text],.capture-nav-form textarea{
-           width:100%;box-sizing:border-box;font-size:.9rem}
-         .capture-nav-form .capture-body{min-height:4rem}
-         .capture-nav-form .capture-row{display:flex;flex-wrap:wrap;gap:.35rem;
-           align-items:center}
-         .capture-nav-form .capture-row button{width:auto;min-width:4.5rem;margin:0}
-         .capture-nav-form #capture-status{font-size:.85rem;min-height:1.1em}
-         .capture-nav-form .ok{color:#226622;font-weight:700}
-         .capture-nav-form .err{color:#800000;font-weight:700}
-         .capture-card label{display:block;margin:.35rem 0 .15rem;font-weight:700}
-         .capture-card .capture-body{width:100%;box-sizing:border-box;min-height:4.5rem}
-         .capture-card .capture-row{display:flex;flex-wrap:wrap;gap:.5rem;
-           align-items:center;margin-top:.5rem}
-         .capture-card .capture-row button{width:auto;min-width:6rem}
-         /* Todo list */
-         .todo-add-label{display:block;font-weight:bold;margin:0 0 .35rem}
-         .todo-add-row{display:flex;gap:.5rem;align-items:stretch;flex-wrap:wrap}
-         .todo-add-row input[type=text]{flex:1 1 12rem;min-width:0}
-         .todo-add-row button{flex:0 0 auto;width:auto;min-width:5rem}
-         ul.todo-list{list-style:none;padding:.25rem .5rem;margin:0 0 .75rem}
-         li.todo-item{display:flex;align-items:center;gap:.5rem;
-           padding:.45rem 0;border-bottom:1px solid #c0c0c0}
-         li.todo-item:last-child{border-bottom:none}
-         li.todo-item form{margin:0;display:inline}
-         li.todo-item .todo-box{font-family:ui-monospace,Menlo,monospace;
-           min-width:2.6rem;padding:.25rem .35rem;width:auto}
-         li.todo-item .todo-title{flex:1 1 auto;min-width:0;word-break:break-word}
-         li.todo-item.is-done .todo-title{text-decoration:line-through;color:#666}
-         li.todo-item .todo-del button,
-         li.todo-item .todo-archive button{width:auto;padding:.25rem .45rem;font-size:.85rem}
-         li.todo-nav-list{display:flex;align-items:center;gap:.25rem;flex-wrap:wrap}
-         li.todo-nav-list > a{flex:1 1 auto;min-width:0}
-         li.todo-nav-list form.todo-list-del{margin:0;display:inline}
-         li.todo-nav-list .todo-list-del button{width:auto;min-width:1.6rem;
-           padding:.1rem .3rem;font-size:.8rem;line-height:1.2}
-         li.note-item{display:flex;align-items:center;gap:.5rem;
-           padding:.35rem 0;border-bottom:1px solid #c0c0c0}
-         li.note-item > a{flex:1 1 auto}
-         li.note-item form.note-del{margin:0}
-         li.note-item .note-del button{width:auto;padding:.25rem .45rem;font-size:.85rem}
-         .note-title-row{display:flex;flex-wrap:wrap;align-items:center;gap:.75rem}
-         .note-title-row h1{flex:1 1 auto;margin:0;border-bottom:none;padding:0}
-         .note-title-row .note-del-page button{width:auto}
-         /* Bible chapter: only <sup> verse nums, not browser list markers */
-         ol.bible-chapter{list-style:none;padding-left:0;margin:.25rem 0 1rem}
-         ol.bible-chapter>li{margin:.35rem 0;line-height:1.45;padding-left:0}
-         ol.bible-chapter>li>sup{font-size:.75em;font-weight:700;margin-right:.2em;
-           color:#333;vertical-align:super}
-         .bible-go label,.bible-search label{display:inline-block;margin:.2rem .45rem .2rem 0}
-         .bible-go select,.bible-search input[type=text]{width:auto;min-width:6rem;
-           max-width:100%;margin-right:.35rem}
-         /* Mobile: stack denser chrome, full-width form controls.
-            Outline editor buttons must stay compact — global width:100%
-            was turning TODO · chips into full-row gray bars. */
-         @media (max-width:40rem){
-           main{padding:.5rem}
-           header{padding:.5rem}
-           nav{gap:.3rem;width:100%}
-           /* Equal-width toolbar: home | apps | system */
-           nav > a,.menu-drop{flex:1 1 0;min-width:0;text-align:center}
-           nav > a{display:block}
-           .menu-drop-btn{display:block;width:100%;text-align:center}
-           table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch}
-           h1{font-size:1.15rem}
-           button,.btn{width:100%;margin:.2rem 0}
-           .card form button,.card form .btn{width:auto;min-width:44%}
-           button.ol-btn,button.ol-todo-btn,
-           .ol-btn,.ol-todo,.ol-todo-btn{width:auto;margin:0}
-           .ol-node{margin-left:.1rem;padding-left:.3rem}
-           .ol-sum{padding-right:2.75rem;align-items:center}
-           details.ol-actions > summary.ol-actions-sum{display:inline-block}
-           .ol-actions-panel{display:none !important;position:absolute;right:0;top:100%;
-             margin-top:2px;flex-direction:column;flex-wrap:nowrap;align-items:stretch;
-             min-width:7rem;padding:.2rem;background:#fff;border:1px solid #000}
-           details.ol-actions[open] > .ol-actions-panel{display:flex !important}
-           details.ol-actions[open] > .ol-actions-panel .ol-btn{width:100%;text-align:left;
-             min-height:2.1rem;background:#fff}
-         }";
+      HTML.style [] "%s" css;
+
       (* htmx for create-in-place editor empty state *)
       HTML.script [HTML.src "https://unpkg.com/htmx.org@1.9.12"] "";
       (* Close nav dropdowns on outside click / when another opens *)
@@ -775,7 +534,7 @@ let post_logout (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
 let admin_users_page (session : Session.t) (reqd : Httpaf.Reqd.t)
   : unit Lwt.t =
   if not (Session.is_admin session) then begin
-    html_response reqd ~status:`Forbidden
+    html_response reqd ~session ~status:`Forbidden
       (chrome ~session ~title:"Forbidden" [
          HTML.p [HTML.class_ "err"] [txt "admin only"];
        ]);
@@ -851,13 +610,13 @@ let admin_users_page (session : Session.t) (reqd : Httpaf.Reqd.t)
         ];
       ]
     in
-    html_response reqd body;
+    html_response reqd ~session body;
     Lwt.return_unit
 
 let post_admin_users (session : Session.t) (reqd : Httpaf.Reqd.t)
   : unit Lwt.t =
   if not (Session.is_admin session) then begin
-    html_response reqd ~status:`Forbidden
+    html_response reqd ~session ~status:`Forbidden
       (chrome ~session ~title:"Forbidden" [
          HTML.p [HTML.class_ "err"] [txt "admin only"];
        ]);
@@ -873,7 +632,7 @@ let post_admin_users (session : Session.t) (reqd : Httpaf.Reqd.t)
         Option.value (form_field body "user_id") ~default:"" |> String.trim
       in
       if user_id = "" then begin
-        html_response reqd ~status:`Bad_request
+        html_response reqd ~session ~status:`Bad_request
           (chrome ~session ~title:"Revoke sessions" [
              HTML.p [HTML.class_ "err"] [txt "user_id required"];
              HTML.p [] [HTML.a [HTML.href "/admin/users"] [txt "Back"]];
@@ -900,7 +659,7 @@ let post_admin_users (session : Session.t) (reqd : Httpaf.Reqd.t)
         | _ -> false
       in
       if username = "" || password = "" then begin
-        html_response reqd ~status:`Bad_request
+        html_response reqd ~session ~status:`Bad_request
           (chrome ~session ~title:"Create user" [
              HTML.p [HTML.class_ "err"] [txt "username and password required"];
              HTML.p [] [HTML.a [HTML.href "/admin/users"] [txt "Back"]];
@@ -911,7 +670,7 @@ let post_admin_users (session : Session.t) (reqd : Httpaf.Reqd.t)
         let* created = Auth_store.create_user store ~username ~is_admin in
         match created with
         | Error e ->
-            html_response reqd ~status:`Bad_request
+            html_response reqd ~session ~status:`Bad_request
               (chrome ~session ~title:"Create user" [
                  HTML.p [HTML.class_ "err"] [txt "%s" e];
                  HTML.p [] [HTML.a [HTML.href "/admin/users"] [txt "Back"]];
@@ -924,7 +683,7 @@ let post_admin_users (session : Session.t) (reqd : Httpaf.Reqd.t)
             in
             (match pw with
              | Error e ->
-                 html_response reqd ~status:`Internal_server_error
+                 html_response reqd ~session ~status:`Internal_server_error
                    (chrome ~session ~title:"Create user" [
                       HTML.p [HTML.class_ "err"] [txt "password: %s" e];
                     ]);
@@ -973,7 +732,7 @@ let respond_handler_value
                      HTML.pre [] [txt "%s" rendered];
                    ])
         in
-        html_response reqd body
+        html_response reqd ~session body
 
 let branch_ref_of (b : Pricklypear_common.Branch.t) : string =
   b.Pricklypear_common.Branch.owner ^ "/" ^ b.Pricklypear_common.Branch.name
@@ -1132,7 +891,7 @@ let list_branches_page (session : Session.t) (reqd : Httpaf.Reqd.t)
            ]
        ])
   in
-  html_response reqd body;
+  html_response reqd ~session body;
   Lwt.return_unit
 
 let branch_detail_page (session : Session.t) (reqd : Httpaf.Reqd.t)
@@ -1410,7 +1169,7 @@ let branch_detail_page (session : Session.t) (reqd : Httpaf.Reqd.t)
            ]
            @ diff_block)
       in
-      html_response reqd body;
+      html_response reqd ~session body;
       Lwt.return_unit
 
 let branches_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
@@ -1509,7 +1268,7 @@ let show_binding_page (session : Session.t) (name : string)
           ];
         ]
   in
-  html_response reqd body;
+  html_response reqd ~session body;
   Lwt.return_unit
 
 let list_types_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
@@ -1544,7 +1303,7 @@ let list_types_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
            ]);
     ]
   in
-  html_response reqd body;
+  html_response reqd ~session body;
   Lwt.return_unit
 
 let about_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit =
@@ -1609,7 +1368,7 @@ let about_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit =
       ];
     ]
   in
-  html_response reqd body
+  html_response reqd ~session body
 
 (* Page path for inspector: "/hello" -> "hello" for URL segment. *)
 let page_inspect_path (route : string) : string =
@@ -1661,7 +1420,7 @@ let pages_list_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit =
            ]);
     ]
   in
-  html_response reqd body
+  html_response reqd ~session body
 
 (** Labeled emergency home — NOT a second product workspace.
     Real home is Lisp ui/home (libs/ui). See image.system-browser. *)
@@ -1702,7 +1461,7 @@ let home_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
     | _ -> emergency_home_content session
   in
   let body = chrome ~session ~title:"" content in
-  html_response reqd body;
+  html_response reqd ~session body;
   Lwt.return_unit
 
 let repl_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit =
@@ -1738,7 +1497,7 @@ let repl_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit =
       HTML.script [] "%s" js;
     ]
   in
-  html_response reqd body
+  html_response reqd ~session body
 
 (* Default stub body for a brand-new function. *)
 let stub_body (name : string) : string =
@@ -1931,7 +1690,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpaf.Reqd.t)
           ];
         ]
       in
-      html_response reqd body;
+      html_response reqd ~session body;
       Lwt.return_unit
   | Some pkg, Some local ->
       let full =
@@ -2008,7 +1767,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpaf.Reqd.t)
               ];
             ]
       in
-      html_response reqd body;
+      html_response reqd ~session body;
       Lwt.return_unit
   | Some "kernel", None ->
       let rows =
@@ -2045,7 +1804,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpaf.Reqd.t)
           ];
         ]
       in
-      html_response reqd body;
+      html_response reqd ~session body;
       Lwt.return_unit
   | Some pkg, None ->
       let pkg_key = if pkg = "(root)" || pkg = "root" then "" else pkg in
@@ -2104,7 +1863,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpaf.Reqd.t)
           ];
         ]
       in
-      html_response reqd body;
+      html_response reqd ~session body;
       Lwt.return_unit
   | None, _ ->
       let ws_pkgs =
@@ -2192,7 +1951,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpaf.Reqd.t)
             ]
           ]
       in
-      html_response reqd body;
+      html_response reqd ~session body;
       Lwt.return_unit
 
 let editor_form_partial ~(name : string) ~(body_src : string) ?(msg = "") ()
@@ -2323,7 +2082,7 @@ let editor_page (session : Session.t) (name : string) ?(msg = "")
         chrome ~session ~title:("Edit " ^ name)
           [ missing_editor_card session name ]
   in
-  html_response reqd body;
+  html_response reqd ~session body;
   Lwt.return_unit
 
 let api_edit_create (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
@@ -2334,7 +2093,7 @@ let api_edit_create (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
     | _ -> ""
   in
   if name = "" then begin
-    html_response reqd ~status:`Bad_request
+    html_response reqd ~session ~status:`Bad_request
       (HTML.div [HTML.class_ "err"] [txt "name required"]);
     Lwt.return_unit
   end else
@@ -2350,7 +2109,7 @@ let api_edit_create (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
     in
     match res with
     | Error e ->
-        html_response reqd ~status:`Bad_request
+        html_response reqd ~session ~status:`Bad_request
           (HTML.div [HTML.id "editor-root"; HTML.class_ "err"]
              [txt "create failed: %s" e]);
         Lwt.return_unit
@@ -2386,7 +2145,7 @@ let page_inspector (session : Session.t) (path_seg : string)
   in
   match Session.lookup_route session route with
   | None ->
-      html_response reqd ~status:`Not_found
+      html_response reqd ~session ~status:`Not_found
         (chrome ~session ~title:("Page " ^ route) [
            HTML.p [HTML.class_ "err"] [txt "no page registered for %s" route];
            HTML.p [] [HTML.a [HTML.href "/pages"] [txt "all pages"]];
@@ -2460,7 +2219,7 @@ let page_inspector (session : Session.t) (path_seg : string)
           ];
         ]
       in
-      html_response reqd body;
+      html_response reqd ~session body;
       Lwt.return_unit
 
 let inspect_binding_page (session : Session.t) (name : string)
@@ -2493,7 +2252,7 @@ let inspect_binding_page (session : Session.t) (name : string)
           ];
         ]
   in
-  html_response reqd body;
+  html_response reqd ~session body;
   Lwt.return_unit
 
 let inspect_row_page (session : Session.t) (type_name : string) (id : string)
@@ -2520,7 +2279,7 @@ let inspect_row_page (session : Session.t) (type_name : string) (id : string)
           HTML.pre [] [txt "%s" (Pricklypear_lisp.Reader.pp_value other)];
         ]
   in
-  html_response reqd body;
+  html_response reqd ~session body;
   Lwt.return_unit
 
 let api_eval (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
@@ -2925,7 +2684,7 @@ let agent_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
 
     ]
   in
-  html_response reqd body;
+  html_response reqd ~session body;
   Lwt.return_unit
 
 let ai_propose (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
@@ -2984,7 +2743,7 @@ let ai_propose (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
             ];
           ]
         in
-        html_response reqd body_node;
+        html_response reqd ~session body_node;
         Lwt.return_unit
       else begin
         json_response reqd
@@ -3045,7 +2804,7 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
                 HTML.p [HTML.class_ "err"] [txt "%s" (Printexc.to_string exn)];
               ]
             in
-            html_response reqd ~status:`Internal_server_error body;
+            html_response reqd ~session ~status:`Internal_server_error body;
             Lwt.return_unit)))
   in
   match meth, path with
@@ -3090,7 +2849,7 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
                  ];
                ]
              in
-             html_response reqd body;
+             html_response reqd ~session body;
              Lwt.return_unit
          | Error e ->
              let body =
@@ -3099,7 +2858,7 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
                  HTML.p [] [HTML.a [HTML.href "/"] [txt "Home"]];
                ]
              in
-             html_response reqd ~status:`Internal_server_error body;
+             html_response reqd ~session ~status:`Internal_server_error body;
              Lwt.return_unit)
   | `POST, "/api/recipe/todo" ->
       launch (fun () ->
@@ -3120,7 +2879,7 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
                  ];
                ]
              in
-             html_response reqd body;
+             html_response reqd ~session body;
              Lwt.return_unit
          | Error e ->
              let body =
@@ -3129,7 +2888,7 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
                  HTML.p [] [HTML.a [HTML.href "/"] [txt "Home"]];
                ]
              in
-             html_response reqd ~status:`Internal_server_error body;
+             html_response reqd ~session ~status:`Internal_server_error body;
              Lwt.return_unit)
   | `POST, "/api/recipe/notes" ->
       launch (fun () ->
@@ -3153,7 +2912,7 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
                  ];
                ]
              in
-             html_response reqd body;
+             html_response reqd ~session body;
              Lwt.return_unit
          | Error e ->
              let body =
@@ -3162,7 +2921,7 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
                  HTML.p [] [HTML.a [HTML.href "/"] [txt "Home"]];
                ]
              in
-             html_response reqd ~status:`Internal_server_error body;
+             html_response reqd ~session ~status:`Internal_server_error body;
              Lwt.return_unit)
   | `POST, "/api/recipe/dabar" ->
       launch (fun () ->
@@ -3188,7 +2947,7 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
                  ];
                ]
              in
-             html_response reqd body;
+             html_response reqd ~session body;
              Lwt.return_unit
          | Error e ->
              let body =
@@ -3197,7 +2956,7 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
                  HTML.p [] [HTML.a [HTML.href "/"] [txt "Home"]];
                ]
              in
-             html_response reqd ~status:`Internal_server_error body;
+             html_response reqd ~session ~status:`Internal_server_error body;
              Lwt.return_unit)
   | `GET, "/health" ->
       let h =
@@ -3245,7 +3004,7 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
       (match String.split_on_char '/' rest with
        | [ty; id] -> launch (fun () -> inspect_row_page session ty id reqd)
        | _ ->
-           html_response reqd ~status:`Bad_request
+           html_response reqd ~session ~status:`Bad_request
              (chrome ~session ~title:"Bad inspect path" [
                 HTML.p [] [txt "use /inspect/row/<type>/<id>"];
               ]))
@@ -3261,7 +3020,7 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
       let local = Option.value (query_param target "local") ~default:"" in
       let name = Packages.join_name ~package:pkg ~local in
       if name = "" then
-        html_response reqd
+        html_response reqd ~session
           (chrome ~session ~title:"New function" [
              HTML.p [] [txt "Provide package and/or name (see Functions)."];
              HTML.p [] [HTML.a [HTML.href "/bindings"] [txt "Functions"]];
@@ -3337,7 +3096,7 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
                       fragment_response reqd ~status:`Internal_server_error
                         ("handler " ^ handler_name ^ " returned no value")
                     else
-                      html_response reqd ~status:`Internal_server_error
+                      html_response reqd ~session ~status:`Internal_server_error
                         (chrome ~session ~title:"Route handler error" [
                            HTML.p []
                              [txt "handler %s returned no value" handler_name];
@@ -3352,7 +3111,7 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
              fragment_response reqd ~status:`Not_found
                ("no partial for " ^ path)
            else
-             html_response reqd ~status:`Not_found
+             html_response reqd ~session ~status:`Not_found
                (chrome ~session ~title:"Not found" [
                   HTML.p [] [txt "no route for %s" path];
                 ]))
@@ -3361,7 +3120,7 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
       if wants_fragment ~path ~headers then
         fragment_response reqd ~status:`Not_found ("no partial for " ^ path)
       else
-        html_response reqd ~status:`Not_found
+        html_response reqd ~session ~status:`Not_found
           (chrome ~session ~title:"Not found" [
              HTML.p [] [txt "no route for %s" path];
            ])

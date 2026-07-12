@@ -38,6 +38,8 @@ type t = {
   mutable kernel_catalog : (string * string) list;
   (** Cached HTML from ui/nav when defined; None = use OCaml default nav. *)
   mutable ui_nav_html : string option;
+  (** Cached CSS from (ui/css) when defined; None = emergency_css in http. *)
+  mutable ui_css : string option;
   (** Active HTTP request for user-route dispatch; None in REPL. *)
   mutable current_request : request option;
   (** When true, (checkout)/(fork)/(merge) are blocked so the agent
@@ -129,6 +131,10 @@ let checkout_to (t : t) ~(branch_id : string) ~(branch_ref : string)
     { t.manifest with
       Pricklypear_common.Manifest.branch_id = branch_id;
       branch_name = branch_ref };
+  (* Drop shell caches — ui/nav and ui/css are branch-visible. Next
+     refresh_ui_shell (request launch / load) repopulates from new env. *)
+  t.ui_nav_html <- None;
+  t.ui_css <- None;
   rehydrate t
 
 let split_branch_ref (s : string) : string * string =
@@ -319,7 +325,10 @@ let define_binding (t : t) ~(name : string) ~(body_src : string)
            let* () = Store.persist_function t.store n body_expr author in
            (* Stale chrome nav was the "bible only on home" bug: home
               live-calls ui/nav; other pages used a cached string. *)
-           if n = "ui/nav" || n = "ui/home" then t.ui_nav_html <- None;
+           if n = "ui/nav" || n = "ui/home" || n = "ui/css" || n = "ui/theme"
+              || String.starts_with ~prefix:"theme/" n then (
+             t.ui_nav_html <- None;
+             t.ui_css <- None);
            Lwt.return (Ok v)
        | _ ->
            (* Still bound in env if define special-form ran *)
@@ -1324,7 +1333,10 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value Lwt.t =
          Lwt.async (fun () ->
            Store.persist_function t.store name body_expr t.manifest.username);
          let* () =
-           if name = "ui/nav" || name = "ui/home" then refresh_ui_shell t
+           if name = "ui/nav" || name = "ui/home" || name = "ui/css"
+              || name = "ui/theme"
+              || String.starts_with ~prefix:"theme/" name
+           then refresh_ui_shell t
            else Lwt.return_unit
          in
          Lwt.return v
@@ -1353,7 +1365,10 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
        Lwt.async (fun () ->
          Store.persist_function t.store name body_expr t.manifest.username);
        let* () =
-         if name = "ui/nav" || name = "ui/home" then refresh_ui_shell t
+         if name = "ui/nav" || name = "ui/home" || name = "ui/css"
+            || name = "ui/theme"
+            || String.starts_with ~prefix:"theme/" name
+         then refresh_ui_shell t
          else Lwt.return_unit
        in
        Lwt.return v
@@ -1366,27 +1381,52 @@ and load_library (t : t) (name : string) : (string, string) result Lwt.t =
   Loader.load_library ~eval_form:(eval_form t) name
 
 and refresh_ui_shell (t : t) : unit Lwt.t =
-  match Pricklypear_lisp.Env.lookup t.env "ui/nav" with
+  (* Product shell: nav HTML + theme CSS (image.product-theme). *)
+  let* () =
+    match Pricklypear_lisp.Env.lookup t.env "ui/nav" with
+    | None ->
+        t.ui_nav_html <- None;
+        Lwt.return_unit
+    | Some _ ->
+        Lwt.catch
+          (fun () ->
+            let* v = eval_one t "(ui/nav)" in
+            (match Primitives.is_raw_html v with
+             | Some s -> t.ui_nav_html <- Some s
+             | None ->
+                 (match v with
+                  | Pricklypear_lisp.Ast.VStr s -> t.ui_nav_html <- Some s
+                  | _ ->
+                      t.ui_nav_html <-
+                        Some (Pricklypear_lisp.Reader.pp_value v)));
+            Lwt.return_unit)
+          (fun exn ->
+            Printf.eprintf "[session] refresh_ui_shell (ui/nav) failed: %s\n%!"
+              (Printexc.to_string exn);
+            t.ui_nav_html <- None;
+            Lwt.return_unit)
+  in
+  match Pricklypear_lisp.Env.lookup t.env "ui/css" with
   | None ->
-      t.ui_nav_html <- None;
+      t.ui_css <- None;
       Lwt.return_unit
   | Some _ ->
       Lwt.catch
         (fun () ->
-          let* v = eval_one t "(ui/nav)" in
+          let* v = eval_one t "(ui/css)" in
           (match Primitives.is_raw_html v with
-           | Some s -> t.ui_nav_html <- Some s
+           | Some s -> t.ui_css <- Some s
            | None ->
                (match v with
-                | Pricklypear_lisp.Ast.VStr s -> t.ui_nav_html <- Some s
+                | Pricklypear_lisp.Ast.VStr s -> t.ui_css <- Some s
                 | _ ->
-                    t.ui_nav_html <-
+                    t.ui_css <-
                       Some (Pricklypear_lisp.Reader.pp_value v)));
           Lwt.return_unit)
         (fun exn ->
-          Printf.eprintf "[session] refresh_ui_shell (ui/nav) failed: %s\n%!"
+          Printf.eprintf "[session] refresh_ui_shell (ui/css) failed: %s\n%!"
             (Printexc.to_string exn);
-          t.ui_nav_html <- None;
+          t.ui_css <- None;
           Lwt.return_unit)
 
 and seed_one (t : t) (name : string) : unit Lwt.t =
@@ -1491,6 +1531,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
       started_at = Unix.gettimeofday ();
       kernel_catalog = [];  (* filled after all prims register *)
       ui_nav_html = None;
+      ui_css = None;
       current_request = None;
       agent_branch_lock = false;
       is_admin = (manifest.username = "admin");
@@ -1697,6 +1738,10 @@ let kernel_catalog (t : t) : (string * string) list = t.kernel_catalog
 let ui_nav_html (t : t) : string option = t.ui_nav_html
 
 let set_ui_nav_html (t : t) (s : string option) : unit = t.ui_nav_html <- s
+
+let ui_css (t : t) : string option = t.ui_css
+
+let set_ui_css (t : t) (s : string option) : unit = t.ui_css <- s
 
 
 let list_pages (t : t) : (string * string) list =

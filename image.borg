@@ -581,11 +581,16 @@
      nav/home. Silent default_nav_nodes / default_home_content are
      debt — emergency chrome only, labeled when used. Load-order fix
      (parents-first rehydrate) landed 653f5e5 so personal ui/menu pins
-     can depend on system menu/* helpers.|) *)
+     can depend on system menu/* helpers.
+     2026-07-12 PRODUCT THEME (Path B, BORGE-1783837363): product
+     presentation is Lisp data too — css/* sheet compiler + ui/theme
+     + ui/css. Reject CSS-string-in-lambda hybrid and silent full
+     OCaml design-system twin. See image.product-theme.|) *)
    (verify
     (build "dune build image")
     (smoke "GET / shows user+branch chrome and links to about/functions/repl")
     (smoke "product nav comes from (ui/nav) when shell loaded; not silent OCaml product twin")
+    (smoke "product CSS comes from (ui/css) / ui/theme when shell loaded; not silent full OCaml design-system twin")
     (smoke "nav has no /edit/hello; Pages links to /pages")
     (smoke "GET /pages columns: page URL + handler function")
     (smoke "GET /page/hello shows route + handler + callee list")
@@ -658,36 +663,46 @@
          branch — not a parallel OCaml product skin.
 
          - Product shell bindings (required when seed runs):
-             ui/menu  — menu tree (prefer zero-arg lambda that
-                        returns a list; eager lists are fragile
-                        if they call menu/* at define-time)
-             ui/nav   — (lambda () (render-html (menu/bar …)))
-             ui/home  — (lambda () …) home body HTML
+             ui/menu   — menu tree (prefer zero-arg lambda that
+                         returns a list; eager lists are fragile
+                         if they call menu/* at define-time)
+             ui/nav    — (lambda () (render-html (menu/bar …)))
+             ui/home   — (lambda () …) home body HTML
+             ui/theme  — css/sheet data (tokens + rules); Lisp,
+                         not a CSS string blob
+             ui/css    — (lambda () (css/render ui/theme))
+                         adapter only; session caches its string
          - libs/ui/lib.pp seeds system/main (load-library "ui" /
            seed_stdlib). Personal may pin overrides; inherit main
            when no pin. Prefer thunks over eager value pins.
-         - Chrome nav uses (ui/nav); GET / uses (ui/home).
+         - Chrome nav uses (ui/nav); GET / uses (ui/home);
+           full-page <style> uses rendered (ui/css) — see
+           image.product-theme.
          - Identity strip only (brand, username, branch, uptime)
            stays OCaml — not product structure.
          - Kernel OCaml pages stay OCaml until deliberately moved:
            /login, /health, auth middleware, /bindings,/branches,
            /edit, /inspect, emergency recovery. These are host UI,
            not a second apps menu.
-         - EMERGENCY chrome (nav/home fail or unbound): minimal,
-           labeled failure (must not look like a healthy product
-           menu). Silent rich OCaml default_nav / default_home is
+         - EMERGENCY chrome (nav/home/theme fail or unbound):
+           minimal, labeled failure (must not look like a healthy
+           product menu or full design system). Silent rich OCaml
+           default_nav / default_home / full inline CSS twin is
            REJECTED architecture — debt to remove.
          - Rehydrate load order: parents first, child overrides
-           last (so personal ui/menu can call system menu/link).
-         - Edit shell via Functions → package ui (mobile drilldown).
+           last (so personal ui/menu can call system menu/link;
+           personal theme/* tokens can override system tokens).
+         - Edit shell via Functions → package ui (mobile drilldown),
+           including ui/theme and theme/* tokens.
 
          LAYERING SUMMARY:
-           Lisp  = the computer you live in (shell + app routes)
+           Lisp  = the computer you live in (shell + theme + apps)
            OCaml = host + gate (eval, store, auth, health, emergency)
 
          DEFERRED:
          - Remove silent default_nav_nodes / default_home_content
-           (replace with labeled emergency only)
+           and shrink html_response style blob to emergency_css
+           (image.product-theme make)
          - ui/menu seed always lambda (load-order safe by default)
          - Move softer system pages (/about copy) into Lisp packages
          - Data rows browser by type
@@ -695,6 +710,224 @@
          - True three-column desktop layout (optional later)
          - Import/require, private symbols, rename-with-rewrite
          - Authoring new prims from the UI
+         - Dedicated /theme form UI (Functions edit is enough v1)
+    |))
+   )
+  )
+  (subsection product-theme
+   (doc "Product presentation as Lisp data: css/* sheet compiler, ui/theme + ui/css, emergency CSS only in OCaml")
+   (status planned)
+   (* agent note (|2026-07-12 Path B locked (BORGE-1783837363). Rejects:
+     (1) CSS-string-in-lambda hybrid (worst of both languages);
+     (2) silent full design-system twin hard-coded in http.ml
+     html_response as the product theme. Honest Lisp: styles are
+     sexps; css/render emits CSS; session caches string; kernel
+     injects or falls back to labeled emergency_css. Parallel to
+     ui/nav product-shell rule.|) *)
+   (verify
+    (build "dune build image")
+    (smoke "(css/render (css/sheet (body margin 0 background \"#d4d0c8\"))) contains body{ and margin:0")
+    (smoke "(function-source \"ui/theme\") or (function-source \"ui/css\") non-empty after seed")
+    (smoke "(export-package \"ui\") contains define ui/theme or define ui/css")
+    (smoke "GET / authenticated response <style> matches rendered (ui/css) distinctive marker, not only emergency")
+    (smoke "personal (define theme/bg …) or ui/theme pin changes next full-page CSS; checkout main restores")
+    (smoke "(define ui/css (lambda () (error \"boom\"))) still serves page with emergency CSS + labeled failure")
+    (smoke "htmx fragment / partial responses do not re-inject full stylesheet")
+    (smoke "login page stays pre-session OCaml mini stylesheet (no Lisp theme required)"))
+   (details
+    (doc (|
+         WHY:
+         Today almost all product CSS is a giant inline string in
+         image/lib/http.ml html_response — inaccessible from the
+         garden, unversioned as Lisp, dual to the product-shell
+         rule that already moved nav/home into libs/ui. Widget
+         packages emit class names that only work because that
+         OCaml blob knows them. That is a black box.
+
+         DECISION (Path B — honest Lisp):
+         Presentation is Lisp data, same substrate as shell and
+         apps. A small css/* compiler (sibling of html/* in std)
+         turns sheets into CSS text. ui/theme holds the sheet;
+         ui/css is a thin (lambda () (css/render ui/theme))
+         adapter for session refresh. Humans and agents edit
+         sexps / tokens via Functions — not escaped CSS inside
+         a lambda, and not a second language document as the
+         native store.
+
+         REJECTED:
+         - Path hybrid: (define ui/css (lambda () "body{…}"))
+           as the primary form (CSS-in-string wearing Lisp hat)
+         - Path A as native store: bare CSS document / data_rows
+           stylesheet type as the only theme representation
+           (allowed later as import/export sugar, not authority)
+         - Static /assets/*.css as the product theme path
+         - Silent full OCaml design-system twin beside Lisp theme
+         - Per-request uncached re-eval of ui/css without shell
+           refresh discipline (mirror ui/nav caching lessons)
+
+         =========================================================
+         css/*  (libs/std/lib.pp — seed with std, before ui)
+         =========================================================
+         Parallel to html/*: structure in Lisp, render to string.
+
+         Core bindings (v1 — keep small):
+           (css/sheet rule…)     → sheet value (list-tagged data)
+           (css/use other)       → splice/concat another sheet
+           (css/raw "…")         → escape hatch for rare CSS
+           (css/render sheet)    → CSS string
+
+         Rule encoding (selectors as strings; declarations data):
+           - (selector prop val prop val…)
+             selector may be a symbol (body, header) or string
+             (".card", "nav a", "details.ol-node > .ol-sum")
+           - ((sel1 sel2 …) prop val …)
+             multi-selector group → "sel1, sel2 { … }"
+           - ((media "max-width:40rem") rule…)
+             nested @media block
+           - Values: number | string | symbol (symbol resolves
+             as token binding if bound, else as CSS ident)
+           - Do NOT invent a full selector AST or px-type system
+             in v1. Selectors stay strings/symbols; props are
+             alternating key/value data.
+
+         Emit rules (css/render):
+           - prop symbols/strings → CSS property names
+             (margin → margin; font-family → font-family;
+              accept underscore→hyphen if needed)
+           - numbers: print without quotes (0, 1.4)
+           - strings: as CSS values (caller includes units)
+           - stable, readable output; order preserved
+           - css/raw segments pass through unchanged
+
+         Composition:
+           (css/sheet
+             (css/use ui/theme-base)
+             (css/use todo/theme)    ; optional later
+             (body background theme/bg))
+
+         html/* analogy docstring in std:
+           "sheets → css/render; no raw rule soup in apps"
+           (css/raw remains the deliberate guest).
+
+         =========================================================
+         ui/theme + tokens + ui/css  (libs/ui/lib.pp)
+         =========================================================
+         Required product-shell bindings (with ui/menu ui/nav ui/home):
+
+           theme/* tokens (examples; exact set is implementation
+           discretion so long as the classic-Mac look ports):
+             theme/bg theme/ink theme/panel theme/chrome
+             theme/link theme/err theme/ok …
+
+           ui/theme
+             A css/sheet (or zero-arg lambda returning a sheet)
+             expressing the full product design system currently
+             hard-coded in http.ml (body, header, nav, cards,
+             tables, forms, outline, todos, calendar, bible,
+             weather class contracts, mobile breakpoints).
+             Prefer data + theme/* tokens over magic hex literals
+             so personal gardens can (define theme/bg …).
+
+           ui/css
+             (lambda () (css/render ui/theme))
+             or (lambda () (css/render (ui/theme))) if theme is
+             a thunk. Adapter only — not where humans paste CSS.
+
+         Class contract:
+           - Shared classes used by multiple packages live in
+             ui/theme (todo-box, ol-node, cal-grid, card, …).
+           - Package-local extras may keep a small (html/tag
+             "style" …) or later (todo/theme) composed via
+             css/use — weather/style today is acceptable local.
+           - Moving the monolith out of OCaml does not require
+             splitting packages on day one.
+
+         Seed: seed_stdlib still load-library std then weather
+         then ui … — css/* must exist before ui/theme renders.
+         (std before ui already holds.)
+
+         =========================================================
+         Session cache + HTTP inject
+         =========================================================
+         Mirror ui/nav:
+
+           Session.t gains mutable ui_css : string option
+             Some s → product stylesheet text
+             None   → use emergency_css
+
+           refresh_ui_shell (rename meaning: refresh shell):
+             existing (ui/nav) path unchanged
+             plus eval (ui/css) → string | raw-html-as-text →
+             cache; on miss/throw → ui_css <- None
+
+           Invalidate / refresh when:
+             define/load of ui/css, ui/theme, ui/nav, ui/home
+             (and ideally theme/* token defines — at minimum any
+             define that refresh_ui_shell already re-runs after
+             shell names; token-only defines may require explicit
+             ui/css refresh or re-eval on next request launch)
+             checkout / branch switch (no stale other-branch CSS)
+             load-library that may redefine shell
+
+           html_response gains ~css parameter (or reads session):
+             HTML.style [] "%s" css
+             Authenticated full pages pass Session.ui_css |
+             emergency_css.
+
+           fragment_response / HX partials:
+             do NOT re-inject the full stylesheet (page already
+             has it). Same spirit as chrome-skip for fragments.
+
+           login_form_page (pre-session):
+             keeps a tiny OCaml-only mini stylesheet. Must not
+             require Lisp theme. Not the product design system.
+
+         =========================================================
+         Emergency CSS (OCaml kernel — labeled, minimal)
+         =========================================================
+         emergency_css is host recovery, not a product twin:
+           - monospace / high-contrast / readable
+           - styles emergency-banner, emergency-nav, basic links
+           - MUST look broken or sparse on purpose if product
+             theme fails (parallel emergency-nav rule)
+           - After make: the 200-line classic-Mac blob MUST leave
+             html_response; only emergency_css (+ login mini)
+             remain as OCaml string stylesheets.
+
+         Optional: when falling back, surface a one-line labeled
+         banner in chrome ("product theme unbound — emergency css")
+         consistent with emergency-nav labeling.
+
+         =========================================================
+         Authoring / multi-user / sync
+         =========================================================
+         - Edit via Functions → package ui → ui/theme | theme/*
+           (same mobile drilldown as other shell bindings).
+         - Personal pin: (define theme/bg "#e8f0e8") or full
+           ui/theme override on user/personal; inherits main
+           when no pin.
+         - (export-package "ui") includes theme tokens + ui/theme
+           + ui/css; pp_sync pull/push works unchanged.
+         - Agents: pp_eval define/function-source — no new REST.
+         - v1 non-goals: /theme textarea page, CSS file import
+           pipeline, Tailwind/Sass build step, data_rows theme
+           type as authority, per-user CSS without branch pins.
+
+         =========================================================
+         MAKE ORDER
+         =========================================================
+         1. css/* in libs/std + unit/smoke sexp→CSS
+         2. Transcribe http.ml product blob → ui/theme (+ tokens)
+            in libs/ui; define ui/css adapter
+         3. Session ui_css + refresh_ui_shell extension
+         4. html_response ~css inject from session
+         5. Shrink OCaml to emergency_css (+ login mini)
+         6. Smokes: seed marker, personal override, failure
+            fallback, fragment no-reinject
+         7. borge drift / resolve BORGE-1783837363
+
+         STATUS: planned until make lands and silent full OCaml
+         product CSS twin is gone.
     |))
    )
   )
@@ -726,6 +959,7 @@
     (smoke "seed script idempotent: second run does not duplicate refs")
     (smoke "(function-source \"ui/nav\") returns non-empty lambda/list source")
     (smoke "(export-package \"ui\") contains define ui/nav")
+    (smoke "(function-source \"ui/css\") or ui/theme non-empty after seed; export-package ui includes theme")
     (smoke "scripts/pp_sync.py status ui exits 0 with env set"))
    (details
     (doc (|
@@ -770,11 +1004,11 @@
          OCaml provides only a pure loader (no app string blobs).
 
          On-disk layout (shipped in release tarball as libs/):
-           libs/std/lib.pp     — list/*, html/*, menu/*, data/*
+           libs/std/lib.pp     — list/*, html/*, css/*, menu/*, data/*
            libs/todo/lib.pp    — deftype + todo/* + routes + partials
            libs/hello/lib.pp   — optional hi-page recipe as Lisp
            libs/bible/lib.pp   — bible/* API + /bible (canon is data_rows)
-           libs/ui/lib.pp      — ui/menu ui/nav ui/home
+           libs/ui/lib.pp      — ui/menu ui/nav ui/home ui/theme ui/css
            libs/ai/lib.pp      — ai/ask ai/do wrappers
 
          Loader API:
