@@ -150,7 +150,8 @@
       items)))
 
 (define todo/count-all-in
-  (lambda (items) (count items)))
+  (lambda (items)
+    (list/foldl (lambda (acc _) (+ acc 1)) 0 items)))
 
 (define todo/ratio
   (lambda (items)
