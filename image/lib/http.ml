@@ -130,10 +130,14 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
          .ol-body:focus{background:#fff;border:1px solid #000}
          .ol-kids{margin-left:.15rem;min-width:0}
          /* Actions: DOM before kids; desktop = right of title row; mobile = ··· menu */
-         details.ol-actions{position:absolute;top:.05rem;right:0;z-index:3;margin:0;display:block}
+         details.ol-actions{position:absolute;top:.1rem;right:0;z-index:3;margin:0;display:block}
+         details.ol-actions[open]{z-index:40}
          details.ol-actions > summary.ol-actions-sum{display:none;list-style:none;cursor:pointer;
-           user-select:none;width:auto;min-width:2.25rem;min-height:2.25rem;padding:.2rem .45rem;
-           border:1px solid #000;background:#c0c0c0;font-weight:700;text-align:center;line-height:1.4}
+           user-select:none;width:auto;min-width:1.75rem;min-height:1.75rem;padding:.1rem .3rem;
+           border:1px solid #666;background:transparent;font-weight:700;color:#333;
+           text-align:center;line-height:1.3;border-radius:0}
+         details.ol-actions > summary.ol-actions-sum:hover,
+         details.ol-actions[open] > summary.ol-actions-sum{background:#fff;border-color:#000}
          details.ol-actions > summary.ol-actions-sum::-webkit-details-marker{display:none}
          .ol-actions-panel{display:flex !important;flex-direction:row;flex-wrap:nowrap;
            justify-content:flex-end;align-items:center;gap:.25rem;margin:0;padding:0;
@@ -247,10 +251,10 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
            details.ol-actions > summary.ol-actions-sum{display:inline-block}
            .ol-actions-panel{display:none !important;position:absolute;right:0;top:100%;
              margin-top:2px;flex-direction:column;flex-wrap:nowrap;align-items:stretch;
-             min-width:7.5rem;padding:.25rem;background:#fff;border:2px solid #000;
-             box-shadow:2px 2px 0 #808080}
+             min-width:7rem;padding:.2rem;background:#fff;border:1px solid #000}
            details.ol-actions[open] > .ol-actions-panel{display:flex !important}
-           details.ol-actions[open] > .ol-actions-panel .ol-btn{width:100%;text-align:left}
+           details.ol-actions[open] > .ol-actions-panel .ol-btn{width:100%;text-align:left;
+             min-height:2.1rem;background:#fff}
          }";
       (* htmx for create-in-place editor empty state *)
       HTML.script [HTML.src "https://unpkg.com/htmx.org@1.9.12"] "";
