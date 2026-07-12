@@ -111,23 +111,27 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
          ul.actions li{margin:.4rem 0}
          /* Outline notes */
          .ol-root{margin:.5rem 0}
-         .ol-node{margin:.25rem 0 .25rem .5rem;border-left:2px solid #808080;padding-left:.4rem}
-         .ol-sum{cursor:pointer;font-weight:700;display:flex;align-items:center;gap:.3rem}
-         .ol-fold{font-size:.7em;width:1em;display:inline-block;user-select:none}
+         .ol-node{margin:.25rem 0 .25rem .35rem;border-left:2px solid #808080;padding-left:.35rem}
+         .ol-sum{cursor:pointer;font-weight:700;display:flex;align-items:flex-start;
+           gap:.35rem;flex-wrap:nowrap;min-width:0}
+         .ol-fold{font-size:.7em;width:1em;flex:0 0 auto;display:inline-block;user-select:none;
+           line-height:1.6}
          details.ol-node > .ol-sum .ol-fold::before{content:\"v\"}
          details.ol-node:not([open]) > .ol-sum .ol-fold::before{content:\">\"}
-         .ol-todo{display:inline-block;margin-right:.35rem;padding:0 .3rem;
-           border:1px solid #000;background:#c0c0c0;font-size:.8rem;font-weight:700}
-         .ol-title{outline:none;padding:.1rem .2rem;border-radius:0;flex:1 1 auto}
+         .ol-todo,.ol-todo-btn{display:inline-block;flex:0 0 auto;width:auto;min-width:1.75rem;
+           margin:0;padding:.15rem .35rem;border:1px solid #000;background:#c0c0c0;
+           font-size:.8rem;font-weight:700;line-height:1.2;min-height:1.75rem}
+         .ol-title{outline:none;padding:.15rem .25rem;border-radius:0;flex:1 1 auto;
+           min-width:0;word-break:break-word;white-space:normal;line-height:1.35}
          .ol-title:focus{background:#fff;border:1px solid #000}
          .ol-body{margin:.25rem 0 .35rem;white-space:pre-wrap;font-size:.95rem;
-           outline:none;padding:.1rem .2rem}
+           outline:none;padding:.25rem;min-width:0;word-break:break-word}
          .ol-body:focus{background:#fff;border:1px solid #000}
-         .ol-kids{margin-left:.25rem}
-         .ol-actions{display:flex;justify-content:flex-end;gap:.25rem;margin:.25rem 0;opacity:.5}
-         .ol-node:hover > .ol-actions{opacity:1}
-         .ol-btn{font-size:.75rem;padding:.15rem .4rem;min-height:auto;
-           border:1px solid #000;background:#d4d0c8;cursor:pointer}
+         .ol-kids{margin-left:.15rem;min-width:0}
+         .ol-actions{display:flex;flex-wrap:wrap;justify-content:flex-start;gap:.3rem;
+           margin:.35rem 0 .5rem;opacity:1}
+         .ol-btn{font-size:.8rem;padding:.35rem .55rem;min-height:2.25rem;width:auto;
+           flex:0 0 auto;margin:0;border:1px solid #000;background:#d4d0c8;cursor:pointer}
          .ol-btn:hover{background:#fff}
          .ol-del{color:#800000}
          .ol-debug{margin:.75rem 0;opacity:.6}
@@ -156,8 +160,7 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
          .todo-box.st-WAITING{background:#e0e8ff}
          .todo-box.st-CANCELLED{background:#ddd;color:#666}
          .todo-from-note .todo-src{font-size:.8rem;margin-left:.35rem}
-         .ol-todo-btn{font-size:.7rem;padding:.1rem .3rem;min-height:auto;
-           border:1px solid #000;background:#c0c0c0;cursor:pointer;margin-right:.25rem}
+         .ol-todo-btn{cursor:pointer}
          .ol-todo-btn.st-TODO{background:#fff8dc}
          .ol-todo-btn.st-DONE{background:#cfc}
          .ol-todo-btn.st-WAITING{background:#e0e8ff}
@@ -217,7 +220,9 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
          .bible-go label,.bible-search label{display:inline-block;margin:.2rem .45rem .2rem 0}
          .bible-go select,.bible-search input[type=text]{width:auto;min-width:6rem;
            max-width:100%;margin-right:.35rem}
-         /* Mobile: stack denser chrome, full-width controls */
+         /* Mobile: stack denser chrome, full-width form controls.
+            Outline editor buttons must stay compact — global width:100%
+            was turning TODO · chips into full-row gray bars. */
          @media (max-width:40rem){
            main{padding:.5rem}
            header{padding:.5rem}
@@ -227,6 +232,11 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
            h1{font-size:1.15rem}
            button,.btn{width:100%;margin:.2rem 0}
            .card form button,.card form .btn{width:auto;min-width:44%}
+           button.ol-btn,button.ol-todo,button.ol-todo-btn,
+           .ol-btn,.ol-todo,.ol-todo-btn{width:auto;margin:0}
+           .ol-node{margin-left:.1rem;padding-left:.3rem}
+           .ol-actions{opacity:1;justify-content:flex-start}
+           .ol-sum{align-items:center}
          }";
       (* htmx for create-in-place editor empty state *)
       HTML.script [HTML.src "https://unpkg.com/htmx.org@1.9.12"] "";
