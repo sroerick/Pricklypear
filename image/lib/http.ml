@@ -2397,15 +2397,20 @@ let agent_user_visible_text (s : string) : string =
       else s
 
 let agent_session_label (s : Ai_store.session) : string =
+  let short = String.sub s.id 0 (min 8 (String.length s.id)) in
   match s.title with
   | Some t when String.trim t <> "" ->
       let t = agent_user_visible_text t in
-      if String.trim t = "" then String.sub s.id 0 (min 8 (String.length s.id))
+      (* Old rows stored the full IMAGE CONTEXT wrapper as title (truncated
+         before User:). Don't show that dump in the chat list. *)
+      if String.trim t = ""
+         || (String.length t >= 20
+             && String.sub t 0 20 = "=== IMAGE CONTEXT ===")
+         || String.starts_with ~prefix:"=== IMAGE CONTEXT" t then
+        "chat " ^ short
       else if String.length t > 72 then String.sub t 0 72 ^ "…"
       else t
-  | _ ->
-      let short = String.sub s.id 0 (min 8 (String.length s.id)) in
-      "chat " ^ short
+  | _ -> "chat " ^ short
 
 let api_agent (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
   let* body = read_body reqd in
