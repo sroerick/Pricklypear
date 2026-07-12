@@ -58,10 +58,13 @@ let load_defs (t : t) : unit Lwt.t =
              the deserialized lambda/value to [name]. *)
           Lwt.catch
             (fun () ->
+               (* Eval the stored AST directly — NEVER pp_expr round-trip.
+                  Complex bodies (ui/home, notes/*) break under print/parse. *)
                let* _ =
-                 Pricklypear_lisp.Eval.eval_string ~prims:t.prims t.env
-                   (Printf.sprintf "(define %s %s)" name
-                      (Pricklypear_lisp.Reader.pp_expr body))
+                 Pricklypear_lisp.Eval.eval
+                   ~budget:(Pricklypear_lisp.Eval.make_budget ())
+                   ~prims:t.prims t.env
+                   (Pricklypear_lisp.Ast.Define (name, body))
                in
                Lwt.return_unit)
             (fun exn ->
