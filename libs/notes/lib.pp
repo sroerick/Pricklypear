@@ -68,18 +68,99 @@
             (notes/get slug))
           (notes/get slug)))))
 
+;; One durable note doc (slug "inbox"). Captures are child nodes under root.
+(define notes/ensure-inbox
+  (lambda ()
+    (if (null? (notes/get "inbox"))
+        (seq
+          (notes/upsert "inbox" "Inbox"
+            (notes/empty-outline "Inbox")
+            "inbox" "inbox" "")
+          (notes/get "inbox"))
+        (notes/get "inbox"))))
+
+(define notes/capture-title
+  (lambda (title body)
+    (let ((t (string-trim (as-str title))))
+      (if (not (string-eq t ""))
+          t
+          (let ((b (string-trim (as-str body))))
+            (if (string-eq b "")
+                "capture"
+                (if (<= (string-length b) 48)
+                    b
+                    (string-append (substring b 0 45) "…"))))))))
+
+(define notes/capture-node-id
+  (lambda (tree)
+    (string-append "c"
+      (as-str (count (outline/kids tree)))
+      "-"
+      (as-str (string-length (outline/encode tree))))))
+
+;; Append a capture as a child of the Inbox outline root. Returns "inbox".
 (define notes/capture
   (lambda (title body)
-    (let ((slug
-            (string-append "note-"
-              (as-str (count (notes/list)))
-              "-"
-              (as-str (string-length (as-str title))))))
-      (seq
-        (notes/upsert slug title
-          (outline/set-body (outline/node "root" title) body)
-          "inbox" "note" "")
-        slug))))
+    (let ((prev (notes/ensure-inbox)))
+      (let ((tree (notes/get-outline prev))
+            (t (notes/capture-title title body))
+            (b (as-str body)))
+        (let ((child
+                (outline/set-body
+                  (outline/node (notes/capture-node-id tree) t)
+                  b)))
+          (let ((new-tree (outline/add-child-by-id tree "root" child)))
+            (seq
+              (notes/upsert "inbox" "Inbox" new-tree
+                "inbox" "inbox" "")
+              "inbox")))))))
+
+(define notes/capture-form
+  (lambda ()
+    (html/form "POST" "/notes"
+      (html/attrs
+        (list
+          (html/attr "class" "card capture-card")
+          (html/attr "hx-post" "/notes")
+          (html/attr "hx-target" "#capture-status")
+          (html/attr "hx-swap" "innerHTML")
+          (html/attr "hx-on::after-request"
+            "if(event.detail.successful){this.reset()}")))
+      (html/join
+        (list
+          (html/hidden "action" "capture")
+          (html/h2 "Capture")
+          (html/p* (html/attr "class" "muted")
+            "Drops a node into the Inbox note.")
+          (html/label (html/attr "for" "capture-title") "Title")
+          (html/text-input "title"
+            (html/attrs
+              (list
+                (html/attr "id" "capture-title")
+                (html/attr "placeholder" "optional")
+                (html/attr "autocomplete" "off"))))
+          (html/label (html/attr "for" "capture-body") "Note")
+          (html/textarea "body"
+            (html/attrs
+              (list
+                (html/attr "id" "capture-body")
+                (html/attr "rows" "3")
+                (html/attr "class" "capture-body")
+                (html/attr "placeholder" "Quick capture…")
+                (html/attr "required" "required")))
+            "")
+          (html/div (html/attr "class" "capture-row")
+            (html/join
+              (list
+                (html/button (html/attr "type" "submit") "Capture")
+                (html/a "/notes?slug=inbox" "Open inbox"))))
+          (html/div (html/attr "id" "capture-status") ""))))))
+
+(define notes/capture-status-html
+  (lambda (ok msg)
+    (html/p*
+      (html/attr "class" (if ok "ok" "err"))
+      msg)))
 (define notes/item-li
   (lambda (row)
     (let ((f (cdr row)))
@@ -198,14 +279,36 @@
         (seq
           (notes/upsert (as-str slug) title tree tags kind day)
           (redirect (string-append "/notes?slug=" (as-str slug))))))))
+(define notes/do-capture
+  (lambda ()
+    (let ((title (request-param "title"))
+          (body (request-param "body")))
+      (let ((b (if (null? body) "" (as-str body))))
+        (if (string-eq (string-trim b) "")
+            (if (hx-request?)
+                (render-html
+                  (notes/capture-status-html #f "Write something first."))
+                (redirect "/"))
+            (seq
+              (notes/capture
+                (if (null? title) "" title)
+                b)
+              (if (hx-request?)
+                  (render-html
+                    (notes/capture-status-html #t
+                      "Saved to Inbox."))
+                  (redirect "/notes?slug=inbox"))))))))
+
 (define notes/handle-post
   (lambda ()
-    (let ((action (request-param "action")))
+    (let ((action (as-str (request-param "action"))))
       (if (string-eq action "create")
           (notes/do-create (request-param "title") (request-param "slug"))
           (if (string-eq action "save")
               (notes/do-save (request-param "slug") (request-param "outline"))
-              (redirect "/notes"))))))
+              (if (string-eq action "capture")
+                  (notes/do-capture)
+                  (redirect "/notes")))))))
 
 (define notes/page
   (lambda ()

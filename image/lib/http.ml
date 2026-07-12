@@ -42,10 +42,13 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
          header .meta{display:block;font-family:\"Courier New\",Courier,monospace;
                       font-size:.8rem;color:#333;margin:.25rem 0 .5rem}
          nav{display:flex;flex-wrap:wrap;gap:.35rem .5rem;align-items:center}
+         /* Links + dropdowns share the same chrome size — don't let a single
+            top-level link (home) flex-grow while apps/system stay compact. */
+         nav > a,.menu-drop{flex:0 0 auto}
          nav a,.menu-drop-btn{display:inline-block;padding:.45rem .55rem;min-height:2.5rem;
                line-height:1.5;border:1px solid #000;background:#c0c0c0;
                color:#000;text-decoration:none;font-size:.9rem;cursor:pointer;
-               list-style:none}
+               list-style:none;box-sizing:border-box}
          nav a:visited{color:#000}
          nav a:hover,nav a:focus,.menu-drop-btn:hover{background:#fff}
          nav.emergency-nav{width:100%;margin-top:.35rem}
@@ -223,6 +226,15 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
          .weather-card .wx-form input[type=text]{flex:1 1 8rem;min-width:0}
          .weather-card .wx-form button{width:auto;min-width:4.5rem}
          .weather-card .wx-err{color:#800000;font-weight:700}
+         /* Home capture → inbox note */
+         .capture-card label{display:block;margin:.35rem 0 .15rem;font-weight:700}
+         .capture-card .capture-body{width:100%;box-sizing:border-box;min-height:4.5rem}
+         .capture-card .capture-row{display:flex;flex-wrap:wrap;gap:.5rem;
+           align-items:center;margin-top:.5rem}
+         .capture-card .capture-row button{width:auto;min-width:6rem}
+         .capture-card #capture-status{margin-top:.35rem;font-size:.9rem}
+         .capture-card #capture-status.ok{color:#226622;font-weight:700}
+         .capture-card #capture-status.err{color:#800000;font-weight:700}
          /* Todo list */
          .todo-add-label{display:block;font-weight:bold;margin:0 0 .35rem}
          .todo-add-row{display:flex;gap:.5rem;align-items:stretch;flex-wrap:wrap}
@@ -253,8 +265,11 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
          @media (max-width:40rem){
            main{padding:.5rem}
            header{padding:.5rem}
-           nav{gap:.3rem}
-           nav a{flex:1 1 auto;text-align:center;min-width:4.5rem}
+           nav{gap:.3rem;width:100%}
+           /* Equal-width toolbar: home | apps | system */
+           nav > a,.menu-drop{flex:1 1 0;min-width:0;text-align:center}
+           nav > a{display:block}
+           .menu-drop-btn{display:block;width:100%;text-align:center}
            table{display:block;overflow-x:auto;-webkit-overflow-scrolling:touch}
            h1{font-size:1.15rem}
            button,.btn{width:100%;margin:.2rem 0}
