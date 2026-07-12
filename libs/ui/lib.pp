@@ -20,9 +20,15 @@
         (menu/link "agent" "/agent")
         (menu/link "repl" "/repl")))))
 
+;; ui/menu may be a list (preferred) OR a zero-arg lambda that returns a list.
+;; Agents often install (lambda () (list ...)); menu/bar needs the list value.
 (define ui/nav
   (lambda ()
-    (render-html (menu/bar ui/menu))))
+    (render-html
+      (menu/bar
+        (if (string-eq (type-of ui/menu) "lambda")
+            (ui/menu)
+            ui/menu)))))
 
 (define ui/home
   (lambda ()
