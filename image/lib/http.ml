@@ -113,17 +113,22 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
          .ol-root{margin:.5rem 0}
          .ol-node{position:relative;margin:.25rem 0 .25rem .35rem;
            border-left:2px solid #808080;padding-left:.35rem}
-         .ol-sum{cursor:pointer;font-weight:700;display:flex;align-items:center;
+         .ol-sum{cursor:default;font-weight:700;display:flex;align-items:center;
            gap:.35rem;flex-wrap:nowrap;min-width:0;padding-right:11.5rem}
-         .ol-fold{font-size:.7em;width:1em;flex:0 0 auto;display:inline-block;user-select:none;
-           line-height:1.6}
+         /* Only the fold chevron toggles open/closed (JS preventDefault on rest of summary). */
+         .ol-fold{font-size:.75em;flex:0 0 auto;display:inline-flex;align-items:center;
+           justify-content:center;user-select:none;cursor:pointer;line-height:1;
+           min-width:1.6rem;min-height:1.6rem;padding:.2rem;margin:0 .05rem 0 -.1rem;
+           color:#333}
+         .ol-fold:hover{background:#fff;border:1px solid #808080;padding:calc(.2rem - 1px)}
          details.ol-node > .ol-sum .ol-fold::before{content:\"v\"}
          details.ol-node:not([open]) > .ol-sum .ol-fold::before{content:\">\"}
          .ol-todo,.ol-todo-btn{display:inline-block;flex:0 0 auto;width:auto;min-width:1.75rem;
            margin:0;padding:.15rem .35rem;border:1px solid #000;background:#c0c0c0;
            font-size:.8rem;font-weight:700;line-height:1.2;min-height:1.75rem}
          .ol-title{outline:none;padding:.15rem .25rem;border-radius:0;flex:1 1 auto;
-           min-width:0;word-break:break-word;white-space:normal;line-height:1.35}
+           min-width:0;word-break:break-word;white-space:normal;line-height:1.35;
+           cursor:text;font-weight:700}
          .ol-title:focus{background:#fff;border:1px solid #000}
          .ol-body{margin:.25rem 0 .35rem;white-space:pre-wrap;font-size:.95rem;
            outline:none;padding:.25rem;min-width:0;word-break:break-word}
@@ -261,6 +266,9 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
       (* Close nav dropdowns on outside click / when another opens *)
       HTML.script [] "%s"
         ("document.addEventListener('click',function(e){" ^
+         /* Outline: only .ol-fold on the summary toggles collapse. */
+         "var sum=e.target&&e.target.closest?e.target.closest('summary.ol-sum'):null;" ^
+         "if(sum&&!(e.target.closest&&e.target.closest('.ol-fold'))){e.preventDefault();}" ^
          "document.querySelectorAll('details.menu-drop[open],details.ol-actions[open]').forEach(function(d){" ^
          "if(!d.contains(e.target))d.removeAttribute('open');});});" ^
          "document.addEventListener('toggle',function(e){" ^
