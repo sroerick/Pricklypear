@@ -143,6 +143,15 @@
           (html/attr "name" name)
           attrs)))))
 
+(define html/textarea
+  (lambda (name attrs body)
+    (html/tag "textarea"
+      (html/attrs
+        (list
+          (html/attr "name" name)
+          attrs))
+      (html-escape (as-str body)))))
+
 ;; (html/option value label selected?) — selected? is bool/truthy
 (define html/option
   (lambda (value label selected?)

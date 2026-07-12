@@ -7,10 +7,11 @@
 
 ;; --- states (same vocabulary as outline) ---
 
-(define todo/states outline/todo-states)
+;; Literal list so rehydrate does not depend on outline/todo-states load order.
+(define todo/states (list "" "TODO" "DONE" "WAITING" "CANCELLED"))
 
 (define todo/next-state
-  (lambda (cur) (outline/todo-next cur)))
+  (lambda (cur) (outline/todo-next-in todo/states (as-str cur))))
 
 (define todo/open?
   (lambda (s) (outline/todo-open? s)))
@@ -33,6 +34,40 @@
   (lambda (fields)
     (let ((lid (dict-get fields "list_id")))
       (if (null? lid) "" (as-str lid)))))
+
+(define todo/item-notes
+  (lambda (fields)
+    (let ((n (dict-get fields "notes")))
+      (if (null? n) "" (as-str n)))))
+
+(define todo/item-due
+  (lambda (fields)
+    (let ((d (dict-get fields "due")))
+      (if (null? d) "" (as-str d)))))
+
+(define todo/get-item
+  (lambda (id)
+    (get 'todo-item id)))
+
+(define todo/save
+  (lambda (id title notes due state list-id)
+    (let ((fields (todo/get-item id)))
+      (if (null? fields)
+          ()
+          (let ((lid
+                  (if (string-eq (as-str list-id) "")
+                      (todo/ensure-inbox)
+                      (as-str list-id))))
+            (update 'todo-item id
+              (dict-set
+                (dict-set
+                  (dict-set
+                    (dict-set
+                      (dict-set fields "title" (as-str title))
+                      "notes" (as-str notes))
+                    "due" (as-str due))
+                  "state" (as-str state))
+                "list_id" lid)))))))
 
 ;; --- lists ---
 
@@ -250,8 +285,10 @@
                             (string-append "todo-box st-" state))
                           (html/attr "title" "cycle state")))
                       (if (string-eq state "") "·" state)))))
-              (html/span (html/attr "class" "todo-title")
-                (html/text title))
+              (html/a
+                (string-append "/todos?id=" id "&view=" view)
+                (html/span (html/attr "class" "todo-title")
+                  (html/text title)))
               (html/form "POST" "/todos"
                 (html/attrs
                   (list
@@ -386,27 +423,131 @@
                 ""
                 (todo/items-for-list view)))))))
 
+(define todo/list-options
+  (lambda (selected)
+    (list/foldl
+      (lambda (acc row)
+        (let ((id (car row)))
+          (let ((title (todo/list-title (cdr row))))
+            (string-append acc
+              (html/option id title (string-eq (as-str id) (as-str selected)))))))
+      ""
+      (todo/lists))))
+
+(define todo/state-options
+  (lambda (selected)
+    (list/foldl
+      (lambda (acc st)
+        (let ((lab (if (string-eq st "") "(none)" st)))
+          (string-append acc
+            (html/option st lab (string-eq st (as-str selected))))))
+      ""
+      todo/states)))
+
+(define todo/detail-html
+  (lambda (id view)
+    (let ((fields (todo/get-item id)))
+      (if (null? fields)
+          (html/div (html/attr "class" "card")
+            (html/join
+              (list
+                (html/p* (html/attr "class" "err") "Item not found.")
+                (html/a (string-append "/todos?view=" view) "← back"))))
+          (let ((title (todo/item-title fields)))
+            (let ((notes (todo/item-notes fields)))
+              (let ((due (todo/item-due fields)))
+                (let ((state (todo/item-state fields)))
+                  (let ((lid (todo/item-list-id fields)))
+                    (html/div (html/attr "class" "card todo-detail")
+                      (html/join
+                        (list
+                          (html/p*
+                            (html/attr "class" "muted")
+                            (html/a
+                              (string-append "/todos?view=" view)
+                              "← back to list"))
+                          (html/h2 (html/text title))
+                          (html/form "POST" "/todos"
+                            (html/attrs
+                              (list
+                                (html/attr "class" "todo-detail-form")))
+                            (html/join
+                              (list
+                                (html/hidden "action" "save")
+                                (html/hidden "id" id)
+                                (html/hidden "view" view)
+                                (html/label (html/attr "for" "title") "Title")
+                                (html/text-input "title"
+                                  (html/attrs
+                                    (list
+                                      (html/attr "id" "title")
+                                      (html/attr "value" title)
+                                      (html/attr "required" "required"))))
+                                (html/label (html/attr "for" "state") "State")
+                                (html/select "state" (html/attr "id" "state")
+                                  (todo/state-options state))
+                                (html/label (html/attr "for" "due")
+                                  "Due (YYYY-MM-DD)")
+                                (html/text-input "due"
+                                  (html/attrs
+                                    (list
+                                      (html/attr "id" "due")
+                                      (html/attr "value" due)
+                                      (html/attr "placeholder" "2026-07-15"))))
+                                (html/label (html/attr "for" "list_id") "List")
+                                (html/select "list_id" (html/attr "id" "list_id")
+                                  (todo/list-options lid))
+                                (html/label (html/attr "for" "notes") "Notes")
+                                (html/textarea "notes"
+                                  (html/attrs
+                                    (list
+                                      (html/attr "id" "notes")
+                                      (html/attr "rows" "8")
+                                      (html/attr "class" "todo-notes")))
+                                  notes)
+                                (html/div ""
+                                  (html/join
+                                    (list
+                                      (html/button (html/attr "type" "submit")
+                                        "Save")
+                                      " "
+                                      (html/a
+                                        (string-append "/todos?view=" view)
+                                        "Cancel")))))))))))))))))))
+
 (define todo/main-html
   (lambda (view)
-    (let ((list-id
-            (if (string-eq view "everything")
-                (todo/ensure-inbox)
-                (if (string-eq view "from-notes")
-                    ""
-                    view))))
-      (html/div (html/attr "id" "todo-main")
-        (html/join
-          (list
-            (html/div (html/attr "class" "todo-layout")
+    (let ((id-param (request-param "id")))
+      (if (if (null? id-param) #f (not (string-eq (as-str id-param) "")))
+          (html/div (html/attr "id" "todo-main")
+            (html/join
+              (list
+                (html/div (html/attr "class" "todo-layout")
+                  (html/join
+                    (list
+                      (html/div (html/attr "class" "todo-side")
+                        (todo/nav-html view))
+                      (html/div (html/attr "class" "todo-body")
+                        (todo/detail-html (as-str id-param) view))))))))
+          (let ((list-id
+                  (if (string-eq view "everything")
+                      (todo/ensure-inbox)
+                      (if (string-eq view "from-notes")
+                          ""
+                          view))))
+            (html/div (html/attr "id" "todo-main")
               (html/join
                 (list
-                  (html/div (html/attr "class" "todo-side")
-                    (todo/nav-html view))
-                  (html/div (html/attr "class" "todo-body")
+                  (html/div (html/attr "class" "todo-layout")
                     (html/join
                       (list
-                        (todo/add-form view list-id)
-                        (todo/items-html view)))))))))))))
+                        (html/div (html/attr "class" "todo-side")
+                          (todo/nav-html view))
+                        (html/div (html/attr "class" "todo-body")
+                          (html/join
+                            (list
+                              (todo/add-form view list-id)
+                              (todo/items-html view)))))))))))))))
 
 (define todo/handle-post
   (lambda ()
@@ -423,8 +564,16 @@
                           (notes/cycle-node-todo
                             (request-param "slug")
                             (request-param "node-id"))
-                          (todo/add (todo/ensure-inbox)
-                            (request-param "title"))))))))))
+                          (if (string-eq action "save")
+                              (todo/save
+                                (request-param "id")
+                                (request-param "title")
+                                (request-param "notes")
+                                (request-param "due")
+                                (request-param "state")
+                                (request-param "list_id"))
+                              (todo/add (todo/ensure-inbox)
+                                (request-param "title")))))))))))
 
 (define todo/page
   (lambda ()
@@ -436,14 +585,21 @@
             (let ((view
                     (let ((v (request-param "view")))
                       (if (null? v) "everything" (as-str v)))))
-              (if (hx-request?)
-                  (render-html (todo/main-html view))
-                  (redirect (string-append "/todos?view=" view)))))
+              (let ((id (request-param "id")))
+                (let ((action (as-str (request-param "action"))))
+                  (if (hx-request?)
+                      (render-html (todo/main-html view))
+                      (if (string-eq action "save")
+                          (redirect
+                            (string-append "/todos?id=" (as-str id)
+                              "&view=" view))
+                          (redirect
+                            (string-append "/todos?view=" view))))))))
           (html/page
             (list
               (html/h1 "To-dos")
               (html/p* (html/attr "class" "muted")
-                "Lists (Basecamp) + notes scrape (org). States: TODO · DONE · WAITING · CANCELLED.")
+                "Lists (Basecamp) + notes scrape (org). Click a title for details.")
               (todo/main-html (todo/view))))))))
 
 (define todo/partial
