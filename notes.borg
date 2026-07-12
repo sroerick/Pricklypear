@@ -384,6 +384,25 @@
     |))
    )
   )
+  (subsection unified-todos
+   (doc "Basecamp lists + org node todos; unified /todos with smart views")
+   (status in-progress)
+   (implements libs/todo/lib.pp libs/outline/lib.pp libs/notes/lib.pp)
+   (details
+    (doc (|
+         Real lists: todo-list + todo-item (list_id, title, notes,
+         state, due, position). state in todo/states (Lisp).
+         Note todos: outline node.todo; scrape + write-back.
+         Smart views: everything, from-notes, default Inbox.
+         /todos nav + body; cycle state; create list; add item.
+         No dual-copy of note todos until promote (later).
+    |))
+   )
+   (verify
+    (smoke "/todos everything + from-notes + inbox")
+    (smoke "cycle note TODO write-back")
+    (smoke "create list and add item"))
+  )
 
  )
 )

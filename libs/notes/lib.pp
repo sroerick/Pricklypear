@@ -248,7 +248,47 @@
                                 (if (string-eq op "set-todo")
                                     (outline/update tree nid
                                       (lambda (n) (outline/set-todo n (request-param "todo"))))
-                                    tree))))))))))
+                                    (if (string-eq op "cycle-todo")
+                                        (outline/update tree nid
+                                          (lambda (n) (outline/cycle-todo n)))
+                                        tree))))))))))))
+
+;; (slug node-id title state)*
+(define notes/all-todos
+  (lambda ()
+    (list/foldl
+      (lambda (acc row)
+        (let ((f (cdr row)))
+          (let ((slug (as-str (dict-get f "slug")))
+                (tree (outline/decode (dict-get f "outline"))))
+            (list/foldl
+              (lambda (a t)
+                (cons (list slug (car t) (car (cdr t)) (car (cdr (cdr t)))) a))
+              acc
+              (outline/todos tree)))))
+      (list)
+      (notes/list))))
+
+(define notes/open-todos
+  (lambda ()
+    (list/filter
+      (lambda (t) (outline/todo-open? (car (cdr (cdr (cdr t))))))
+      (notes/all-todos))))
+
+(define notes/cycle-node-todo
+  (lambda (slug nid)
+    (let ((prev (notes/get slug)))
+      (if (null? prev)
+          ()
+          (let ((tree (notes/get-outline prev))
+                (title (notes/get-title prev))
+                (tags (notes/get-tags prev))
+                (kind (notes/get-kind prev))
+                (day (notes/get-day prev)))
+            (let ((new-tree
+                    (outline/update tree nid
+                      (lambda (n) (outline/cycle-todo n)))))
+              (notes/upsert slug title new-tree tags kind day)))))))
 
 (define notes/node-op
   (lambda ()

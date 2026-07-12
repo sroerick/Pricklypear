@@ -1366,10 +1366,11 @@ and seed_stdlib (t : t) : unit Lwt.t =
     let* () = seed_one t "std" in
     let* () = seed_one t "ui" in
     let* () = seed_one t "ai" in
+    let* () = seed_one t "outline" in
+    let* () = seed_one t "notes" in
     let* () = seed_one t "todo" in
     let* () = seed_one t "bible" in
     let* () = seed_one t "dabar" in
-    (* outline/notes stay recipe-install for now — not every image needs them *)
     Lwt.return_unit)
 
 (** Ensure username/personal exists as an EMPTY child of system/main.

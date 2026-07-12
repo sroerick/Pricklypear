@@ -130,6 +130,24 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
          @media(max-width:700px){.br-diff{grid-template-columns:1fr}}
          form.inline-form{display:inline}
          form.inline-form button{margin-left:.2rem}
+         /* Unified todos */
+         .todo-layout{display:grid;grid-template-columns:12rem 1fr;gap:.75rem}
+         @media(max-width:700px){.todo-layout{grid-template-columns:1fr}}
+         .todo-nav{list-style:none;padding:0;margin:0}
+         .todo-nav-item{margin:.25rem 0}
+         .todo-nav-item.is-active a{font-weight:700;border-left:3px solid #000;padding-left:.35rem}
+         .todo-new-list{display:flex;flex-direction:column;gap:.25rem;margin-top:.5rem}
+         .todo-new-list-input{font-size:.85rem;min-height:2rem;padding:.25rem}
+         .todo-box.st-TODO{background:#fff8dc}
+         .todo-box.st-DONE{background:#cfc;text-decoration:line-through}
+         .todo-box.st-WAITING{background:#e0e8ff}
+         .todo-box.st-CANCELLED{background:#ddd;color:#666}
+         .todo-from-note .todo-src{font-size:.8rem;margin-left:.35rem}
+         .ol-todo-btn{font-size:.7rem;padding:.1rem .3rem;min-height:auto;
+           border:1px solid #000;background:#c0c0c0;cursor:pointer;margin-right:.25rem}
+         .ol-todo-btn.st-TODO{background:#fff8dc}
+         .ol-todo-btn.st-DONE{background:#cfc}
+         .ol-todo-btn.st-WAITING{background:#e0e8ff}
          /* Todo list */
          .todo-add-label{display:block;font-weight:bold;margin:0 0 .35rem}
          .todo-add-row{display:flex;gap:.5rem;align-items:stretch;flex-wrap:wrap}

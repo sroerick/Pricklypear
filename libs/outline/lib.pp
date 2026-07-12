@@ -28,6 +28,53 @@
   (lambda (n todo)
     (outline/node* (outline/id n) (outline/title n) (outline/body n) todo (outline/kids n))))
 
+;; Shared org-style states (also used by todo/). Empty = not a todo.
+(define outline/todo-states
+  (list "" "TODO" "DONE" "WAITING" "CANCELLED"))
+
+(define outline/todo-next
+  (lambda (cur)
+    (outline/todo-next-in outline/todo-states (as-str cur))))
+
+(define outline/todo-next-in
+  (lambda (xs cur)
+    (if (null? xs)
+        "TODO"
+        (if (string-eq (as-str (car xs)) cur)
+            (if (null? (cdr xs)) (as-str (car outline/todo-states))
+                (as-str (car (cdr xs))))
+            (outline/todo-next-in (cdr xs) cur)))))
+
+(define outline/todo-open?
+  (lambda (s)
+    (let ((t (as-str s)))
+      (if (string-eq t "")
+          false
+          (if (string-eq t "DONE")
+              false
+              (if (string-eq t "CANCELLED") false true))))))
+
+(define outline/cycle-todo
+  (lambda (n)
+    (outline/set-todo n (outline/todo-next (outline/todo n)))))
+
+;; Collect (id title state) for every node with non-empty todo.
+(define outline/todos
+  (lambda (tree)
+    (outline/todos-acc tree (list))))
+
+(define outline/todos-acc
+  (lambda (n acc)
+    (let ((todo (as-str (outline/todo n))))
+      (let ((acc1
+              (if (string-eq todo "")
+                  acc
+                  (cons (list (outline/id n) (outline/title n) todo) acc))))
+        (list/foldl
+          (lambda (a k) (outline/todos-acc k a))
+          acc1
+          (outline/kids n))))))
+
 (define outline/set-kids
   (lambda (n kids)
     (outline/node* (outline/id n) (outline/title n) (outline/body n) (outline/todo n) kids)))
@@ -186,10 +233,21 @@
               (html/join
                 (list
                   (html/span (html/attr "class" "ol-fold") "")
-                  (if (string-eq todo "")
-                      ""
-                      (html/span (html/attr "class" "ol-todo")
-                        (html/text todo)))
+                  (html/tag "button"
+                    (html/attrs
+                      (list
+                        (html/attr "class"
+                          (if (string-eq todo "")
+                              "ol-todo ol-todo-btn"
+                              (string-append "ol-todo ol-todo-btn st-" todo)))
+                        (html/attr "type" "button")
+                        (html/attr "title" "cycle TODO state")
+                        (html/attr "hx-post"
+                          (string-append "/partials/notes-node-op?slug=" slug
+                            "&op=cycle-todo&node-id=" nid))
+                        (html/attr "hx-target" "#outline")
+                        (html/attr "hx-swap" "innerHTML")))
+                    (if (string-eq todo "") "·" todo))
                   (html/span
                     (html/attrs
                       (list
