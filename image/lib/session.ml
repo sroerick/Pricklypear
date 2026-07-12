@@ -43,6 +43,10 @@ type t = {
   (** When true, (checkout)/(fork)/(merge) are blocked so the agent
       cannot leave the current branch mid-task. *)
   mutable agent_branch_lock : bool;
+  (** Admin flag from users.is_admin (auth identity). *)
+  mutable is_admin : bool;
+  (** Raw pp_session cookie for the active HTTP request, if any. *)
+  mutable auth_token : string option;
 }
 
 (* Load persisted function_defs + routes into the env.
@@ -181,6 +185,7 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
           let tgt_owner, tgt_short = split_branch_ref target_ref in
           let authorized =
             (tgt_owner <> "system")
+            || t.is_admin
             || (t.manifest.username = "admin")
           in
           if not authorized then
@@ -1463,11 +1468,6 @@ and recipe_notes (t : t) : (string, string) result Lwt.t =
 let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
   let env = Pricklypear_lisp.Env.create () in
   let prim_table = Primitives.make_with_defaults () in
-  (* Register session-aware primitives (whoami, current-author,
-     list-bindings). These capture the manifest.username and env as
-     closures. *)
-  Primitives.register_session_prims prim_table
-    ~username:manifest.username ~env;
   (* Pre-allocate the session record so the DB-touching control prims
      (fork/merge/route/checkout) can capture [t] as a closure (they
      need access to t.store + t.manifest) and register themselves on
@@ -1485,8 +1485,15 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
       ui_nav_html = None;
       current_request = None;
       agent_branch_lock = false;
+      is_admin = (manifest.username = "admin");
+      auth_token = None;
     }
   in
+  (* Register session-aware primitives (whoami, current-author,
+     list-bindings). username_fn re-reads t.manifest so per-request
+     identity attach updates (whoami) without re-registering. *)
+  Primitives.register_session_prims prim_table
+    ~username_fn:(fun () -> (!t).manifest.username) ~env;
   (* Register the DB-touching control primitives on the prim_table,
      then rebind t.prims to the populated table. These prims capture
      (!t), so they read/write store+manifest on each invocation. *)
@@ -1571,8 +1578,36 @@ let uptime_seconds (t : t) : int =
 
 let branch_name (t : t) : string = t.manifest.branch_name
 let username (t : t) : string = t.manifest.username
+let is_admin (t : t) : bool = t.is_admin
 let store (t : t) : Store.t = t.store
 let branch_id (t : t) : string = t.manifest.branch_id
+let auth_token (t : t) : string option = t.auth_token
+
+(** Attach authenticated identity for this request (auth.web-login).
+    Updates manifest user/username, is_admin, optional raw token.
+    When [checkout_personal] is true, ensures + checks out
+    username/personal (login / first attach). *)
+let attach_identity
+    (t : t)
+    ~(user_id : string)
+    ~(username : string)
+    ~(is_admin : bool)
+    ?(auth_token : string option = None)
+    ?(checkout_personal_now = false)
+    () : unit Lwt.t =
+  let prev = t.manifest.username in
+  t.manifest <-
+    { t.manifest with user_id; username };
+  t.is_admin <- is_admin;
+  t.auth_token <- auth_token;
+  if checkout_personal_now || prev <> username then
+    let* _ = ensure_personal_branch t in
+    checkout_personal t
+  else
+    Lwt.return_unit
+
+let clear_auth_token (t : t) : unit =
+  t.auth_token <- None
 
 (** Resolve owner/name ref and checkout. *)
 let checkout_ref (t : t) (branch_ref : string) : (unit, string) result Lwt.t =
@@ -1608,7 +1643,8 @@ let promote_to_main (t : t) ~(source_ref : string) ~(names : string list)
     | None -> Lwt.return (Error "no such source branch")
     | Some source_id ->
         (* Policy: only admin username may write system/main via promote UI. *)
-        if t.manifest.username <> "admin"
+        if (not t.is_admin)
+           && t.manifest.username <> "admin"
            && t.manifest.username <> "system" then
           Lwt.return (Error "promote to system/main requires admin")
         else

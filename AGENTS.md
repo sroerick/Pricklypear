@@ -97,32 +97,45 @@ The pure libraries (`lisp/`, `common/`) have no Mirage/Lwt deps and
 ## Layout
 
 Per spec `architecture.package-layout`. The order of build dependency is:
-`lisp/` -> `common/` -> `migrations/` -> (`auth/`, `image/`, `supervisor/`
-build somewhat independently but wire together at the end).
+`lisp/` -> `common/` -> `migrations/` -> `image/` (single-image v1).
+Supervisor/authd packages were retired by the single-image pivot;
+auth is **in-process** in the image (Option B / auth.web-login).
 
 - `lisp/` — pure interpreter (no I/O). Testable with no services.
-- `common/` — pure shared types.
-- `migrations/` — SQL, applied by the supervisor.
-- `auth/` — auth unikernel (`authd`).
-- `supervisor/` — supervisor unikernel.
-- `image/` — per-user image unikernel.
+- `common/` — pure shared types (incl. `auth_types.ml`).
+- `migrations/` — SQL applied by `scripts/dev.sh` (and deploy hooks).
+- `image/` — the single unix binary: Lisp, REPL, htmx, Postgres, **auth**.
+  Auth modules: `image/lib/auth_password.ml`, `image/lib/auth_store.ml`.
 - `scripts/` — dev orchestration. `scripts/dev.sh start` brings up PG
-  (initdb if needed) + authd + supervisor; `stop`/`restart`/`status`/
-  `clean` manage them. See `scripts/dev.sh` header for env-var knobs.
+  (initdb if needed) + the image; `stop`/`restart`/`status`/`clean`
+  manage them. See `scripts/dev.sh` header for env-var knobs.
+
+## Auth (single-image)
+
+- Browser: `GET/POST /login`, `POST /logout`, cookie `pp_session` (HttpOnly).
+- Middleware: public `/login`, `/health`, `/logout`; else session required.
+- Admin: `GET/POST /admin/users` (create user, set password, revoke sessions).
+- Bootstrap: `PP_BOOTSTRAP_USER` / `PP_BOOTSTRAP_PASSWORD` (default admin/admin)
+  when users empty, or when admin has no password credential yet.
+- Agents/`pp_eval`: HTTP Basic (username/password against credentials table)
+  or session cookie. nginx htpasswd is emergency edge only, not the user DB.
+- Escape hatch: `PP_AUTH_DISABLED=1` skips HTTP auth gate (dev only).
+- Password hash interim: `sha256$salt_hex$digest_hex` (argon2 deferred —
+  BORGE-1783831698). Verify: `ksh scripts/verify_auth.sh`.
 
 ## Workflow
 
 - Build: `dune build` at the root (each package also builds standalone)
 - Test: `dune runtest` (lisp/ and common/ tests need no services;
-  the unikernels need Postgres + the switch)
-- Dev stack: `scripts/dev.sh start` brings up PG + authd + supervisor
-  on ports 5433/17879/17880/17822 respectively. Logs in `/tmp/pp-dev/`.
-- The image's HTTP UI exposes system pages: `/`, `/health`,
-  `/branches` (list all branches), `/bindings` (list visible
-  function_defs on the current branch), `/binding/<name>` (pretty-
-  print one function_def's AST), `/types` (list visible type_defs
-  on the current branch — fields shown comma-separated). User routes
-  via `(route "/x" 'fn)`.
+  image tests need the switch; auth smoke needs PG + image)
+- Dev stack: `scripts/dev.sh start` brings up PG + image on ports
+  5433 (PG) / 18080 (HTTP) / 17878 (REPL). Logs in `/tmp/pp-dev/`.
+- The image's HTTP UI exposes system pages: `/`, `/login`, `/health`,
+  `/admin/users`, `/branches` (list all branches), `/bindings` (list
+  visible function_defs on the current branch), `/binding/<name>`
+  (pretty-print one function_def's AST), `/types` (list visible
+  type_defs on the current branch — fields shown comma-separated).
+  User routes via `(route "/x" 'fn)`.
 - Lisp primitives: pure (`+ - * = < > <= >= not list car cdr cons
   null? pair? count string-append str type-of whoami current-author
   list-bindings dict-get dict-set dict-keys render-html`), DB-

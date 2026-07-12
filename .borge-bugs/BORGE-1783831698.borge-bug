@@ -1,0 +1,7 @@
+(borge-bug (id "BORGE-1783831698")
+  (title "auth: argon2id password hashing deferred — interim sha256$salt$digest until argon2 on poohstack")
+  (status triage)
+  (created 2026-07-11)
+  (filed-by roerick)
+  (doc "")
+)

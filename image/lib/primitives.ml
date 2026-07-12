@@ -542,16 +542,18 @@ let prim_count args =
    [register_session_prims]. The signature stays prim_fn (value list
    -> value) — the closure captures the session. *)
 
-(* (whoami) -> VStr. The current session's username (from the
-   manifest asserted by the supervisor). *)
-let prim_whoami_fn ~(username : string) (_ : value list) : value =
-  VStr username
+(* (whoami) -> VStr. Current session username. [username_fn] is
+   re-read on each call so cotenant multi-user can switch identity
+   per HTTP request without re-registering prims. *)
+let prim_whoami_fn ~(username_fn : unit -> string) (_ : value list) : value =
+  VStr (username_fn ())
 
 (* (current-author) -> VStr. Same as whoami for now; reserved for
    the multi-user permission model where (current-author) consults
    the binding being executed rather than the session. *)
-let prim_current_author_fn ~(username : string) (_ : value list) : value =
-  VStr username
+let prim_current_author_fn ~(username_fn : unit -> string)
+    (_ : value list) : value =
+  VStr (username_fn ())
 
 (* (list-bindings) -> VList of binding-name VStrs. Lists all names
    currently visible in the session env. *)
@@ -563,14 +565,14 @@ let prim_list_bindings_fn ~(env : Pricklypear_lisp.Ast.env) (_ : value list) : v
   VList (List.map (fun s -> VStr s) names)
 
 (* Register session-aware primitives into [t]. Called at session-make
-   time with manifest.username and env. *)
+   time with a dynamic username getter + env. *)
 let register_session_prims
     (t : t)
-    ~(username : string)
+    ~(username_fn : unit -> string)
     ~(env : Pricklypear_lisp.Ast.env)
     : unit =
-  register_sync t "whoami" (prim_whoami_fn ~username);
-  register_sync t "current-author" (prim_current_author_fn ~username);
+  register_sync t "whoami" (prim_whoami_fn ~username_fn);
+  register_sync t "current-author" (prim_current_author_fn ~username_fn);
   register_sync t "list-bindings" (prim_list_bindings_fn ~env)
 
 

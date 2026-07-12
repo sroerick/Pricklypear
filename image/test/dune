@@ -7,3 +7,8 @@
  (name packages_test)
  (modules packages_test)
  (libraries pricklypear-image alcotest))
+
+(test
+ (name auth_password_test)
+ (modules auth_password_test)
+ (libraries pricklypear-image alcotest mirage-crypto-rng.unix))

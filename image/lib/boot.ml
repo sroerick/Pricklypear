@@ -37,12 +37,16 @@ let manifest_from_env () : Pricklypear_common.Manifest.t =
 
 let start () : unit Lwt.t =
   Printf.eprintf "[boot] Pricklypear image starting up...\n";
+  (* RNG required for password salt + session tokens (auth). *)
+  Mirage_crypto_rng_unix.use_default ();
   let manifest = manifest_from_env () in
   let cfg = Store.config_from_env () in
   let store = Store.make ~cfg ~branch_id:manifest.branch_id () in
   (* Try to connect to PG but don't fail boot if it's down — the
      minimal image serves system pages with no DB. *)
   let* () = Store.connect store in
+  (* First-boot admin when users table is empty (auth.bootstrap-admin). *)
+  let* _ = Auth_store.bootstrap_admin_if_empty store in
   let session = Session.make ~manifest ~store () in
   let http_port = int_of_string (env_or "PP_HTTP_PORT" "8080") in
   let repl_port = int_of_string (env_or "PP_REPL_PORT" "7878") in

@@ -292,6 +292,141 @@ let wants_fragment ~(path : string) ~(headers : (string * string) list) : bool =
     | Some v when v <> "" && String.lowercase_ascii v <> "false" -> true
     | _ -> false
 
+(* ---------- Auth (single-image Option B: in-process sessions) ---------- *)
+
+let cookie_name = "pp_session"
+
+(** Serialize request identity attach — cotenant multi-user shares one
+    Session.t; concurrent Alice/Bob would otherwise race branch/env. *)
+let request_mutex = Lwt_mutex.create ()
+
+let auth_disabled () : bool =
+  match Sys.getenv_opt "PP_AUTH_DISABLED" with
+  | Some ("1" | "true" | "TRUE" | "yes" | "YES") -> true
+  | _ -> false
+
+let is_public_path (path : string) : bool =
+  path = "/login" || path = "/health" || path = "/logout"
+
+let parse_cookies (headers : (string * string) list) : (string * string) list =
+  match List.assoc_opt "cookie" headers with
+  | None -> []
+  | Some raw ->
+      String.split_on_char ';' raw
+      |> List.filter_map (fun part ->
+             let part = String.trim part in
+             match String.index_opt part '=' with
+             | None -> None
+             | Some i ->
+                 let k = String.trim (String.sub part 0 i) in
+                 let v =
+                   String.trim
+                     (String.sub part (i + 1) (String.length part - i - 1))
+                 in
+                 if k = "" then None else Some (k, v))
+
+let cookie_value (headers : (string * string) list) (name : string)
+  : string option =
+  List.assoc_opt name (parse_cookies headers)
+
+let b64_decode_opt (s : string) : string option =
+  match Base64.decode ~pad:true s with
+  | Ok raw -> Some raw
+  | Error _ ->
+      (match Base64.decode ~pad:false s with
+       | Ok raw -> Some raw
+       | Error _ -> None)
+
+(** Parse "Basic base64(user:pass)" Authorization header. *)
+let parse_basic_auth (headers : (string * string) list)
+  : (string * string) option =
+  match List.assoc_opt "authorization" headers with
+  | None -> None
+  | Some v ->
+      let v = String.trim v in
+      if String.length v < 7 then None
+      else
+        let scheme = String.lowercase_ascii (String.sub v 0 5) in
+        if scheme <> "basic" then None
+        else
+          let b64 = String.trim (String.sub v 5 (String.length v - 5)) in
+          match b64_decode_opt b64 with
+          | None -> None
+          | Some decoded ->
+              (match String.index_opt decoded ':' with
+               | None -> None
+               | Some i ->
+                   let u = String.sub decoded 0 i in
+                   let p =
+                     String.sub decoded (i + 1)
+                       (String.length decoded - i - 1)
+                   in
+                   Some (u, p))
+
+let set_cookie_header ~(token : string) : string =
+  (* Dev is plain HTTP — omit Secure. Path=/; HttpOnly; SameSite=Lax. *)
+  Printf.sprintf "%s=%s; Path=/; HttpOnly; SameSite=Lax; Max-Age=%d"
+    cookie_name token (60 * 60 * 24 * 14)
+
+let clear_cookie_header () : string =
+  Printf.sprintf
+    "%s=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0" cookie_name
+
+let redirect_with_cookie (reqd : Httpaf.Reqd.t) ~(location : string)
+    ~(set_cookie : string) : unit =
+  let headers =
+    Httpaf.Headers.of_list
+      [ ("location", location)
+      ; ("set-cookie", set_cookie)
+      ; ("content-length", "0") ]
+  in
+  let resp = Httpaf.Response.create ~headers `See_other in
+  Httpaf.Reqd.respond_with_string reqd resp ""
+
+let unauthorized_api (reqd : Httpaf.Reqd.t) : unit =
+  json_response reqd ~status:`Unauthorized
+    (`Assoc
+       [ ("ok", `Bool false)
+       ; ("error", `String "authentication required") ])
+
+(** Resolve identity for this request: cookie session, then Basic auth.
+    Returns None if unauthenticated. *)
+let resolve_identity (session : Session.t)
+    ~(headers : (string * string) list)
+  : Auth_store.user option Lwt.t =
+  let store = Session.store session in
+  match cookie_value headers cookie_name with
+  | Some token when token <> "" ->
+      let* row = Auth_store.lookup_session store ~raw_token:token in
+      (match row with
+       | Some s ->
+           Lwt.return_some
+             { Auth_store.id = s.user_id;
+               username = s.username;
+               is_admin = s.is_admin }
+       | None ->
+           (* Fall through to Basic if cookie stale. *)
+           (match parse_basic_auth headers with
+            | None -> Lwt.return_none
+            | Some (u, p) ->
+                Auth_store.verify_password store ~username:u ~password:p ()))
+  | _ ->
+      (match parse_basic_auth headers with
+       | None -> Lwt.return_none
+       | Some (u, p) ->
+           Auth_store.verify_password store ~username:u ~password:p ())
+
+let attach_from_user (session : Session.t) (user : Auth_store.user)
+    ?(auth_token : string option = None)
+    ?(checkout_personal_now = false) () : unit Lwt.t =
+  Session.attach_identity session
+    ~user_id:user.Auth_store.id
+    ~username:user.Auth_store.username
+    ~is_admin:user.Auth_store.is_admin
+    ~auth_token
+    ~checkout_personal_now
+    ()
+
 let fragment_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (html : string)
     : unit =
   text_response reqd ~status ~content_type:"text/html; charset=utf-8" html
@@ -422,6 +557,275 @@ let redirect_response (reqd : Httpaf.Reqd.t) (location : string) : unit =
   in
   let resp = Httpaf.Response.create ~headers `See_other in
   Httpaf.Reqd.respond_with_string reqd resp ""
+
+let require_login_redirect (reqd : Httpaf.Reqd.t) ~(path : string) : unit =
+  if String.length path >= 5 && String.sub path 0 5 = "/api/" then
+    unauthorized_api reqd
+  else
+    redirect_response reqd "/login"
+
+let login_form_page ?(error = "") (reqd : Httpaf.Reqd.t) : unit =
+  let err =
+    if error = "" then HTML.div [] []
+    else HTML.p [HTML.class_ "err"] [txt "%s" error]
+  in
+  let body =
+    HTML.html [HTML.lang "en"] [
+      HTML.head [] [
+        HTML.title [] "Pricklypear — Sign in";
+        HTML.meta [HTML.charset "utf-8"];
+        HTML.meta [HTML.name "viewport";
+                   HTML.content "width=device-width, initial-scale=1"];
+        HTML.style [] "%s"
+          "body{font-family:ui-monospace,Menlo,monospace;max-width:28rem;
+           margin:4rem auto;padding:1rem;background:#f4f1ea;color:#1a1a1a}
+           .card{border:2px solid #1a1a1a;background:#fff;padding:1.25rem}
+           h1{font-size:1.25rem;margin:0 0 1rem}
+           label{display:block;margin:.75rem 0 .25rem;font-size:.85rem}
+           input[type=text],input[type=password]{width:100%;box-sizing:border-box;
+           border:1px solid #1a1a1a;padding:.4rem;font:inherit}
+           button{margin-top:1rem;border:2px solid #1a1a1a;background:#1a1a1a;
+           color:#fff;padding:.45rem .9rem;font:inherit;cursor:pointer}
+           .err{color:#8b0000;margin:.5rem 0}
+           .muted{color:#555;font-size:.85rem;margin-top:1rem}";
+      ];
+      HTML.body [] [
+        HTML.div [HTML.class_ "card"] [
+          HTML.h1 [] [txt "Sign in"];
+          err;
+          HTML.form [HTML.method_ `POST; HTML.action "/login"] [
+            HTML.label [HTML.for_ "username"] [txt "Username"];
+            HTML.input [HTML.type_ "text"; HTML.name "username";
+                        HTML.id "username"; HTML.required;
+                        HTML.autocomplete `username];
+            HTML.label [HTML.for_ "password"] [txt "Password"];
+            HTML.input [HTML.type_ "password"; HTML.name "password";
+                        HTML.id "password"; HTML.required;
+                        HTML.autocomplete `current_password];
+            HTML.button [HTML.type_ "submit"] [txt "Log in"];
+          ];
+          HTML.p [HTML.class_ "muted"] [
+            txt "Your garden: username/personal after login.";
+          ];
+        ];
+      ];
+    ]
+  in
+  html_response reqd body
+
+let post_login (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+  let* body = read_body reqd in
+  let username =
+    Option.value (form_field body "username") ~default:"" |> String.trim
+  in
+  let password = Option.value (form_field body "password") ~default:"" in
+  if username = "" || password = "" then begin
+    login_form_page ~error:"Invalid username or password" reqd;
+    Lwt.return_unit
+  end else
+    let store = Session.store session in
+    let* user_opt =
+      Auth_store.verify_password store ~username ~password ()
+    in
+    match user_opt with
+    | None ->
+        login_form_page ~error:"Invalid username or password" reqd;
+        Lwt.return_unit
+    | Some user ->
+        let* minted =
+          Auth_store.mint_session store ~user_id:user.Auth_store.id ()
+        in
+        (match minted with
+         | Error e ->
+             login_form_page ~error:("Login failed: " ^ e) reqd;
+             Lwt.return_unit
+         | Ok token ->
+             let* () =
+               attach_from_user session user ~auth_token:(Some token)
+                 ~checkout_personal_now:true ()
+             in
+             redirect_with_cookie reqd ~location:"/"
+               ~set_cookie:(set_cookie_header ~token);
+             Lwt.return_unit)
+
+let post_logout (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+  let headers = header_list (Httpaf.Reqd.request reqd) in
+  let token = cookie_value headers cookie_name in
+  let store = Session.store session in
+  let* () =
+    match token with
+    | Some t when t <> "" -> Auth_store.revoke_session store ~raw_token:t ()
+    | _ -> Lwt.return_unit
+  in
+  Session.clear_auth_token session;
+  redirect_with_cookie reqd ~location:"/login"
+    ~set_cookie:(clear_cookie_header ());
+  Lwt.return_unit
+
+let admin_users_page (session : Session.t) (reqd : Httpaf.Reqd.t)
+  : unit Lwt.t =
+  if not (Session.is_admin session) then begin
+    html_response reqd ~status:`Forbidden
+      (chrome ~session ~title:"Forbidden" [
+         HTML.p [HTML.class_ "err"] [txt "admin only"];
+       ]);
+    Lwt.return_unit
+  end else
+    let store = Session.store session in
+    let* users = Auth_store.list_users store in
+    let rows =
+      List.map
+        (fun (u : Auth_store.user) ->
+          HTML.tr [] [
+            HTML.td [] [txt "%s" u.Auth_store.username];
+            HTML.td [] [txt "%s" (if u.Auth_store.is_admin then "yes" else "no")];
+            HTML.td [] [HTML.code [] [txt "%s" u.Auth_store.id]];
+            HTML.td [] [
+              HTML.form
+                [ HTML.method_ `POST; HTML.action "/admin/users" ]
+                [ HTML.input
+                    [ HTML.type_ "hidden"; HTML.name "action";
+                      HTML.value "revoke_sessions" ]
+                ; HTML.input
+                    [ HTML.type_ "hidden"; HTML.name "user_id";
+                      HTML.value "%s" u.Auth_store.id ]
+                ; HTML.button [HTML.type_ "submit"] [txt "Revoke sessions"]
+                ]
+            ];
+          ])
+        users
+    in
+    let body =
+      chrome ~session ~title:"Users" [
+        HTML.div [HTML.class_ "card"] [
+          HTML.h2 [] [txt "Users"];
+          HTML.table [] [
+            HTML.thead [] [
+              HTML.tr [] [
+                HTML.th [] [txt "username"];
+                HTML.th [] [txt "admin"];
+                HTML.th [] [txt "id"];
+                HTML.th [] [txt "actions"];
+              ];
+            ];
+            HTML.tbody [] rows;
+          ];
+        ];
+        HTML.div [HTML.class_ "card"] [
+          HTML.h2 [] [txt "Create user"];
+          HTML.form [HTML.method_ `POST; HTML.action "/admin/users"] [
+            HTML.input
+              [ HTML.type_ "hidden"; HTML.name "action";
+                HTML.value "create" ];
+            HTML.p [] [
+              HTML.label [] [txt "username "];
+              HTML.input [HTML.type_ "text"; HTML.name "username"; HTML.required];
+            ];
+            HTML.p [] [
+              HTML.label [] [txt "password "];
+              HTML.input [HTML.type_ "password"; HTML.name "password"; HTML.required];
+            ];
+            HTML.p [] [
+              HTML.label [] [
+                HTML.input [HTML.type_ "checkbox"; HTML.name "is_admin"; HTML.value "1"];
+                txt " is_admin";
+              ];
+            ];
+            HTML.button [HTML.type_ "submit"] [txt "Create"];
+          ];
+        ];
+        HTML.p [] [
+          HTML.form [HTML.method_ `POST; HTML.action "/logout"] [
+            HTML.button [HTML.type_ "submit"] [txt "Log out"];
+          ];
+        ];
+      ]
+    in
+    html_response reqd body;
+    Lwt.return_unit
+
+let post_admin_users (session : Session.t) (reqd : Httpaf.Reqd.t)
+  : unit Lwt.t =
+  if not (Session.is_admin session) then begin
+    html_response reqd ~status:`Forbidden
+      (chrome ~session ~title:"Forbidden" [
+         HTML.p [HTML.class_ "err"] [txt "admin only"];
+       ]);
+    Lwt.return_unit
+  end else
+    let* body = read_body reqd in
+    let action =
+      Option.value (form_field body "action") ~default:"create"
+      |> String.trim
+    in
+    if action = "revoke_sessions" then
+      let user_id =
+        Option.value (form_field body "user_id") ~default:"" |> String.trim
+      in
+      if user_id = "" then begin
+        html_response reqd ~status:`Bad_request
+          (chrome ~session ~title:"Revoke sessions" [
+             HTML.p [HTML.class_ "err"] [txt "user_id required"];
+             HTML.p [] [HTML.a [HTML.href "/admin/users"] [txt "Back"]];
+           ]);
+        Lwt.return_unit
+      end else
+        let store = Session.store session in
+        let* n = Auth_store.revoke_all_sessions store ~user_id in
+        let* () =
+          Auth_store.log_auth store ~user_id ~kind:"admin_revoke_sessions"
+            ~success:true ()
+        in
+        ignore n;
+        redirect_response reqd "/admin/users";
+        Lwt.return_unit
+    else
+      let username =
+        Option.value (form_field body "username") ~default:"" |> String.trim
+      in
+      let password = Option.value (form_field body "password") ~default:"" in
+      let is_admin =
+        match form_field body "is_admin" with
+        | Some ("1" | "on" | "true") -> true
+        | _ -> false
+      in
+      if username = "" || password = "" then begin
+        html_response reqd ~status:`Bad_request
+          (chrome ~session ~title:"Create user" [
+             HTML.p [HTML.class_ "err"] [txt "username and password required"];
+             HTML.p [] [HTML.a [HTML.href "/admin/users"] [txt "Back"]];
+           ]);
+        Lwt.return_unit
+      end else
+        let store = Session.store session in
+        let* created = Auth_store.create_user store ~username ~is_admin in
+        match created with
+        | Error e ->
+            html_response reqd ~status:`Bad_request
+              (chrome ~session ~title:"Create user" [
+                 HTML.p [HTML.class_ "err"] [txt "%s" e];
+                 HTML.p [] [HTML.a [HTML.href "/admin/users"] [txt "Back"]];
+               ]);
+            Lwt.return_unit
+        | Ok user ->
+            let* pw =
+              Auth_store.set_password store ~user_id:user.Auth_store.id
+                ~password
+            in
+            (match pw with
+             | Error e ->
+                 html_response reqd ~status:`Internal_server_error
+                   (chrome ~session ~title:"Create user" [
+                      HTML.p [HTML.class_ "err"] [txt "password: %s" e];
+                    ]);
+                 Lwt.return_unit
+             | Ok () ->
+                 let* () =
+                   Auth_store.log_auth store ~user_id:user.Auth_store.id
+                     ~kind:"admin_create_user" ~success:true ()
+                 in
+                 redirect_response reqd "/admin/users";
+                 Lwt.return_unit)
 
 let respond_handler_value
     ~(session : Session.t)
@@ -2526,38 +2930,70 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
     | None -> target
   in
   let meth = req.Httpaf.Request.meth in
-  let launch (page : unit Lwt.t) : unit =
+  let headers = header_list req in
+  (* Thunk page: Lwt promises are eager — must not start page work
+     before auth middleware decides proceed. *)
+  let launch (page_fn : unit -> unit Lwt.t) : unit =
     Lwt.async (fun () ->
-      Lwt.catch
-        (fun () ->
-          (* Refresh ui/nav cache every request so Lisp chrome is shared
-             by home, system pages, and user routes — not only /. *)
-          let* () = Session.refresh_ui_shell session in
-          page)
-        (fun exn ->
-          let body =
-            chrome ~session ~title:"Error" [
-              HTML.p [HTML.class_ "err"] [txt "%s" (Printexc.to_string exn)];
-            ]
-          in
-          html_response reqd ~status:`Internal_server_error body;
-          Lwt.return_unit))
+      Lwt_mutex.with_lock request_mutex (fun () ->
+        Lwt.catch
+          (fun () ->
+            let* proceed =
+              if auth_disabled () || is_public_path path then
+                Lwt.return true
+              else
+                let* user_opt = resolve_identity session ~headers in
+                match user_opt with
+                | None ->
+                    require_login_redirect reqd ~path;
+                    Lwt.return false
+                | Some user ->
+                    let tok = cookie_value headers cookie_name in
+                    let* () =
+                      attach_from_user session user ~auth_token:tok
+                        ~checkout_personal_now:false ()
+                    in
+                    Lwt.return true
+            in
+            if not proceed then Lwt.return_unit
+            else
+              (* Refresh ui/nav cache every request so Lisp chrome is shared
+                 by home, system pages, and user routes — not only /. *)
+              let* () = Session.refresh_ui_shell session in
+              page_fn ())
+          (fun exn ->
+            let body =
+              chrome ~session ~title:"Error" [
+                HTML.p [HTML.class_ "err"] [txt "%s" (Printexc.to_string exn)];
+              ]
+            in
+            html_response reqd ~status:`Internal_server_error body;
+            Lwt.return_unit)))
   in
   match meth, path with
-  | `GET, "/" -> launch (home_page session reqd)
+  | `GET, "/login" ->
+      launch (fun () ->
+        let* () = Lwt.return_unit in
+         login_form_page reqd;
+         Lwt.return_unit)
+  | `POST, "/login" -> launch (fun () -> post_login session reqd)
+  | `POST, "/logout" -> launch (fun () -> post_logout session reqd)
+  | `GET, "/admin/users" -> launch (fun () -> admin_users_page session reqd)
+  | `POST, "/admin/users" -> launch (fun () -> post_admin_users session reqd)
+  | `GET, "/" -> launch (fun () -> home_page session reqd)
   | `GET, "/about" ->
-      launch
-        (let* () = Lwt.return_unit in
+      launch (fun () ->
+        let* () = Lwt.return_unit in
          about_page session reqd;
          Lwt.return_unit)
   | `GET, "/pages" ->
-      launch
-        (let* () = Lwt.return_unit in
+      launch (fun () ->
+        let* () = Lwt.return_unit in
          pages_list_page session reqd;
          Lwt.return_unit)
   | `POST, "/api/recipe/hello" ->
-      launch
-        (let* res = Session.recipe_hello session in
+      launch (fun () ->
+        let* res = Session.recipe_hello session in
          match res with
          | Ok msg ->
              let body =
@@ -2588,8 +3024,8 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
              html_response reqd ~status:`Internal_server_error body;
              Lwt.return_unit)
   | `POST, "/api/recipe/todo" ->
-      launch
-        (let* res = Session.recipe_todo session in
+      launch (fun () ->
+        let* res = Session.recipe_todo session in
          match res with
          | Ok msg ->
              let body =
@@ -2618,8 +3054,8 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
              html_response reqd ~status:`Internal_server_error body;
              Lwt.return_unit)
   | `POST, "/api/recipe/notes" ->
-      launch
-        (let* res = Session.recipe_notes session in
+      launch (fun () ->
+        let* res = Session.recipe_notes session in
          match res with
          | Ok msg ->
              let body =
@@ -2651,8 +3087,8 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
              html_response reqd ~status:`Internal_server_error body;
              Lwt.return_unit)
   | `POST, "/api/recipe/dabar" ->
-      launch
-        (let* res = Session.recipe_dabar session in
+      launch (fun () ->
+        let* res = Session.recipe_dabar session in
          match res with
          | Ok msg ->
              let body =
@@ -2695,41 +3131,41 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
       let j = Pricklypear_common.Protocol.health_response_to_json h in
       text_response reqd ~content_type:"application/json"
         (Yojson.Safe.pretty_to_string j)
-  | `GET, "/branches" -> launch (branches_page session reqd)
-  | `POST, "/branches/checkout" -> launch (branches_checkout session reqd)
-  | `POST, "/branches/fork" -> launch (branches_fork session reqd)
-  | `POST, "/branches/unoverride" -> launch (branches_unoverride session reqd)
-  | `POST, "/branches/promote" -> launch (branches_promote session reqd)
-  | `GET, "/bindings" -> launch (list_bindings_page session reqd)
-  | `GET, "/types" -> launch (list_types_page session reqd)
+  | `GET, "/branches" -> launch (fun () -> branches_page session reqd)
+  | `POST, "/branches/checkout" -> launch (fun () -> branches_checkout session reqd)
+  | `POST, "/branches/fork" -> launch (fun () -> branches_fork session reqd)
+  | `POST, "/branches/unoverride" -> launch (fun () -> branches_unoverride session reqd)
+  | `POST, "/branches/promote" -> launch (fun () -> branches_promote session reqd)
+  | `GET, "/bindings" -> launch (fun () -> list_bindings_page session reqd)
+  | `GET, "/types" -> launch (fun () -> list_types_page session reqd)
   | `GET, "/repl" ->
-      launch
-        (let* () = Lwt.return_unit in
+      launch (fun () ->
+        let* () = Lwt.return_unit in
          repl_page session reqd;
          Lwt.return_unit)
-  | `POST, "/api/eval" -> launch (api_eval session reqd)
-  | `POST, "/api/agent" -> launch (api_agent session reqd)
-  | `POST, "/api/agent-task" -> launch (api_agent_task session reqd)
-  | `POST, "/api/ai/propose" -> launch (ai_propose session reqd)
-  | `GET, "/agent" -> launch (agent_page session reqd)
-  | `POST, "/api/edit/create" -> launch (api_edit_create session reqd)
+  | `POST, "/api/eval" -> launch (fun () -> api_eval session reqd)
+  | `POST, "/api/agent" -> launch (fun () -> api_agent session reqd)
+  | `POST, "/api/agent-task" -> launch (fun () -> api_agent_task session reqd)
+  | `POST, "/api/ai/propose" -> launch (fun () -> ai_propose session reqd)
+  | `GET, "/agent" -> launch (fun () -> agent_page session reqd)
+  | `POST, "/api/edit/create" -> launch (fun () -> api_edit_create session reqd)
   | `GET, path when String.length path >= 6
                  && String.sub path 0 6 = "/page/" ->
       let seg = String.sub path 6 (String.length path - 6) in
-      launch (page_inspector session seg reqd)
+      launch (fun () -> page_inspector session seg reqd)
   | `GET, "/page" | `GET, "/page/" ->
-      launch (page_inspector session "" reqd)
+      launch (fun () -> page_inspector session "" reqd)
   | `GET, path when String.length path >= 17
                  && String.sub path 0 17 = "/inspect/binding/" ->
       let name =
         Packages.name_decode (String.sub path 17 (String.length path - 17))
       in
-      launch (inspect_binding_page session name reqd)
+      launch (fun () -> inspect_binding_page session name reqd)
   | `GET, path when String.length path >= 13
                  && String.sub path 0 13 = "/inspect/row/" ->
       let rest = String.sub path 13 (String.length path - 13) in
       (match String.split_on_char '/' rest with
-       | [ty; id] -> launch (inspect_row_page session ty id reqd)
+       | [ty; id] -> launch (fun () -> inspect_row_page session ty id reqd)
        | _ ->
            html_response reqd ~status:`Bad_request
              (chrome ~session ~title:"Bad inspect path" [
@@ -2740,7 +3176,7 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
       let name =
         Packages.name_decode (String.sub path 9 (String.length path - 9))
       in
-      launch (show_binding_page session name reqd)
+      launch (fun () -> show_binding_page session name reqd)
   | `GET, "/edit" | `GET, "/edit/" ->
       (* package + local query form from Functions browser *)
       let pkg = Option.value (query_param target "package") ~default:"" in
@@ -2752,19 +3188,19 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
              HTML.p [] [txt "Provide package and/or name (see Functions)."];
              HTML.p [] [HTML.a [HTML.href "/bindings"] [txt "Functions"]];
            ])
-      else launch (editor_page session name reqd)
+      else launch (fun () -> editor_page session name reqd)
   | `GET, path when String.length path >= 6
                  && String.sub path 0 6 = "/edit/" ->
       let name =
         Packages.name_decode (String.sub path 6 (String.length path - 6))
       in
-      launch (editor_page session name reqd)
+      launch (fun () -> editor_page session name reqd)
   | `POST, path when String.length path >= 6
                   && String.sub path 0 6 = "/edit/" ->
       let name =
         Packages.name_decode (String.sub path 6 (String.length path - 6))
       in
-      launch (save_edit session name reqd)
+      launch (fun () -> save_edit session name reqd)
   | ((`GET | `POST) as umeth), _ ->
       (* User routes: GET + POST (it33). Same path → same handler;
          request-* prims expose method/params for branching. *)
@@ -2831,7 +3267,7 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
                     Lwt.return_unit)
              end
            in
-           launch (page ())
+           launch (fun () -> page ())
        | None ->
            let headers = header_list req in
            if wants_fragment ~path ~headers then
