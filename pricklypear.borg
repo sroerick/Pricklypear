@@ -1,5 +1,5 @@
 (project pricklypear
- (doc "A single-tenant Lisp operating system in the Smalltalk tradition: one OCaml `unix' binary (the image), Postgres as the durable object store, htmx as the interface. Formerly multi-user + MirageOS unikernels; pivoted to single-image in it35 (see single-image.borg).")
+ (doc "A multi-user Lisp operating system in the Smalltalk tradition: OCaml image binary, Postgres object store, htmx UI. Many humans, each with session + personal garden. Deploy topology may be one binary (single-image.borg); multi-user product is auth.multi-user-product + multi-user.isolation.")
  (status partial)
  (* agent note (|it31 plan-pass #7 (product-truth reconciliation):
   Demoted project status implemented -> partial. The substrate
