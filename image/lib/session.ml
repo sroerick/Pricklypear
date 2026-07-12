@@ -50,35 +50,40 @@ type t = {
 }
 
 (* Load persisted function_defs + routes into the env.
-   Returns when finished (caller may then seed libs/ which overwrite). *)
+   Returns when finished (caller may then seed libs/ which overwrite).
+
+   Load order is critical: many personal pins are *values* evaluated at
+   define-time (e.g. ui/menu = (list (menu/link …))), not lambdas.
+   Those bodies need parent helpers (menu/link, menu/group, …) already
+   bound. Store.list_function_names returns effective defs only (closest
+   branch wins) but does NOT topological-order dependencies across the
+   parent chain. We therefore load the full chain parents-first
+   (depth DESC) and redefine so child overrides win last.
+
+   Historical bug: depth ASC + first-wins loaded personal ui/menu BEFORE
+   system menu/link → define failed → ui/menu unbound → (ui/nav) fails →
+   silent fallback to OCaml default_nav_nodes ("navbar disappeared"). *)
 let load_defs (t : t) : unit Lwt.t =
-  let* defs = Store.list_function_names t.store in
-  (* Iterate ALL definitions; the first occurrence (depth ASC) wins
-     because the recursive CTE returns ancestors first. *)
-  let seen = Hashtbl.create 16 in
+  let* defs = Store.list_function_names_for_load t.store in
   let* _ =
     Lwt_list.iter_s
       (fun (name, body, _author) ->
-        if not (Hashtbl.mem seen name) then begin
-          Hashtbl.replace seen name ();
-          (* Re-evaluate (define name <body>) so the session env binds
-             the deserialized lambda/value to [name]. *)
-          Lwt.catch
-            (fun () ->
-               (* Eval the stored AST directly — NEVER pp_expr round-trip.
-                  Complex bodies (ui/home, notes) break under print/parse. *)
-               let* _ =
-                 Pricklypear_lisp.Eval.eval
-                   ~budget:(Pricklypear_lisp.Eval.make_budget ())
-                   ~prims:t.prims t.env
-                   (Pricklypear_lisp.Ast.Define (name, body))
-               in
-               Lwt.return_unit)
-            (fun exn ->
-               Printf.eprintf "[session] load def %s failed: %s\n%!"
-                 name (Printexc.to_string exn);
-               Lwt.return_unit)
-        end else Lwt.return_unit)
+        (* Always (re)define — parents first, children last → override. *)
+        Lwt.catch
+          (fun () ->
+             (* Eval the stored AST directly — NEVER pp_expr round-trip.
+                Complex bodies (ui/home, notes) break under print/parse. *)
+             let* _ =
+               Pricklypear_lisp.Eval.eval
+                 ~budget:(Pricklypear_lisp.Eval.make_budget ())
+                 ~prims:t.prims t.env
+                 (Pricklypear_lisp.Ast.Define (name, body))
+             in
+             Lwt.return_unit)
+          (fun exn ->
+             Printf.eprintf "[session] load def %s failed: %s\n%!"
+               name (Printexc.to_string exn);
+             Lwt.return_unit))
       defs
   in
   (* Also load view_bindings into the in-memory routes table. The
@@ -1378,7 +1383,9 @@ and refresh_ui_shell (t : t) : unit Lwt.t =
                     t.ui_nav_html <-
                       Some (Pricklypear_lisp.Reader.pp_value v)));
           Lwt.return_unit)
-        (fun _ ->
+        (fun exn ->
+          Printf.eprintf "[session] refresh_ui_shell (ui/nav) failed: %s\n%!"
+            (Printexc.to_string exn);
           t.ui_nav_html <- None;
           Lwt.return_unit)
 

@@ -312,6 +312,55 @@ let list_function_names (t : t)
   let* rows = list_function_names_meta t in
   Lwt.return (List.map (fun (n, e, a, _) -> (n, e, a)) rows)
 
+(** Full branch-chain defs for env rehydrate: parents first (depth DESC),
+    then children. Includes ALL rows (not deduped) so Session.load_defs can
+    redefine — last write wins (child override). See session.load_defs note. *)
+let list_function_names_for_load (t : t)
+  : (string * Pricklypear_lisp.Ast.expr * string) list Lwt.t =
+  match t.conn with
+  | None -> Lwt.return []
+  | Some conn ->
+      Lwt.catch
+        (fun () ->
+          let sql =
+            "WITH RECURSIVE chain AS ( " ^
+            "  SELECT id, parent_id, 0 AS depth FROM branches WHERE id = $1 " ^
+            "  UNION ALL " ^
+            "  SELECT b.id, b.parent_id, c.depth + 1 " ^
+            "  FROM branches b JOIN chain c ON b.id = c.parent_id " ^
+            ") SELECT fd.name, fd.body, fd.author, chain.depth " ^
+            "FROM function_defs fd " ^
+            "JOIN chain ON fd.branch_id = chain.id " ^
+            "ORDER BY chain.depth DESC, fd.name ASC" in
+          let* rows =
+            Pg.execute conn
+              ~params:[ Pgx.Value.of_string t.branch_id ]
+              sql in
+          let acc =
+            List.filter_map
+              (fun row ->
+                match row with
+                | [ name_c; body_cell; author_cell; _depth_c ] ->
+                    (match Pgx.Value.to_string name_c,
+                            Pgx.Value.to_string body_cell,
+                            Pgx.Value.to_string author_cell with
+                     | Some name, Some body_str, Some author ->
+                         (try
+                            let j = Yojson.Safe.from_string body_str in
+                            (match Pricklypear_lisp.Ast.expr_of_json j with
+                             | Ok e -> Some (name, e, author)
+                             | Error _ -> None)
+                          with Yojson.Json_error _ -> None)
+                     | _ -> None)
+                | _ -> None)
+              rows
+          in
+          Lwt.return acc)
+        (fun exn ->
+          Printf.eprintf "[store] list_function_names_for_load error: %s\n"
+            (Printexc.to_string exn);
+          Lwt.return [])
+
 (* ---- own-branch stats / overrides (no recursive CTE) ---- *)
 
 let count_functions_on_branch (t : t) ~(branch_id : string) : int Lwt.t =
