@@ -8,13 +8,26 @@
 ;; --- states (same vocabulary as outline) ---
 
 ;; Literal list so rehydrate does not depend on outline/todo-states load order.
+;; ARCHIVED is terminal (not in the cycle); set via archive action from DONE.
 (define todo/states (list "" "TODO" "DONE" "WAITING" "CANCELLED"))
 
 (define todo/next-state
   (lambda (cur) (outline/todo-next-in todo/states (as-str cur))))
 
+;; Open = actionable work. DONE / CANCELLED / ARCHIVED / empty are closed.
 (define todo/open?
-  (lambda (s) (outline/todo-open? s)))
+  (lambda (s)
+    (let ((t (as-str s)))
+      (if (string-eq t "")
+          #f
+          (if (string-eq t "DONE")
+              #f
+              (if (string-eq t "CANCELLED")
+                  #f
+                  (if (string-eq t "ARCHIVED") #f #t)))))))
+
+(define todo/archived?
+  (lambda (s) (string-eq (as-str s) "ARCHIVED")))
 
 (define todo/item-state
   (lambda (fields)
@@ -163,7 +176,15 @@
     (let ((row (get 'todo-item id)))
       (if (null? row)
           ()
-          (todo/set-state id (todo/next-state (todo/item-state row)))))))
+          ;; ARCHIVED is not in the cycle list; leave it alone on cycle.
+          (let ((cur (todo/item-state row)))
+            (if (todo/archived? cur)
+                cur
+                (todo/set-state id (todo/next-state cur))))))))
+
+(define todo/archive
+  (lambda (id)
+    (todo/set-state id "ARCHIVED")))
 
 (define todo/delete
   (lambda (id)
@@ -208,20 +229,36 @@
         (string-append label
           (if (string-eq extra "") "" (string-append " " extra)))))))
 
+(define todo/active-items
+  (lambda (items)
+    (list/filter
+      (lambda (row) (not (todo/archived? (todo/item-state (cdr row)))))
+      items)))
+
+(define todo/archived-items
+  (lambda ()
+    (list/filter
+      (lambda (row) (todo/archived? (todo/item-state (cdr row))))
+      (todo/all-items))))
+
 (define todo/nav-html
   (lambda (view)
     (let ((lists (todo/lists))
-          (inbox (todo/ensure-inbox)))
+          (inbox (todo/ensure-inbox))
+          (arch-n (todo/count-all-in (todo/archived-items))))
       (html/ul (html/attr "class" "todo-nav")
         (html/join
           (list
             (todo/nav-link view "everything" "Everything" "")
             (todo/nav-link view "from-notes" "From notes" "")
+            (todo/nav-link view "archived" "Archived"
+              (string-append "(" (as-str arch-n) ")"))
             (list/foldl
               (lambda (acc row)
                 (let ((id (car row))
                       (f (cdr row))
-                      (items (todo/items-for-list (car row))))
+                      (items (todo/active-items
+                               (todo/items-for-list (car row)))))
                   (string-append acc
                     (todo/nav-link view id
                       (todo/list-title f)
@@ -257,7 +294,11 @@
             (open (todo/open? (todo/item-state fields))))
         (html/li
           (html/attr "class"
-            (if open "todo-item" "todo-item is-done"))
+            (if open
+                "todo-item"
+                (if (todo/archived? state)
+                    "todo-item is-done is-archived"
+                    "todo-item is-done")))
           (html/join
             (list
               (html/form "POST" "/todos"
@@ -284,6 +325,28 @@
                 (string-append "/todos?id=" id "&view=" view)
                 (html/span (html/attr "class" "todo-title")
                   (html/text title)))
+              ;; Archive DONE items (terminal state, hidden from active lists).
+              (if (string-eq state "DONE")
+                  (html/form "POST" "/todos"
+                    (html/attrs
+                      (list
+                        (html/attr "class" "todo-archive")
+                        (html/attr "hx-post" "/todos")
+                        (html/attr "hx-target" "#todo-main")
+                        (html/attr "hx-swap" "innerHTML")))
+                    (html/join
+                      (list
+                        (html/hidden "action" "archive")
+                        (html/hidden "id" id)
+                        (html/hidden "view" view)
+                        (html/button
+                          (html/attrs
+                            (list
+                              (html/attr "type" "submit")
+                              (html/attr "class" "secondary")
+                              (html/attr "title" "archive done task")))
+                          "arch"))))
+                  "")
               (html/form "POST" "/todos"
                 (html/attrs
                   (list
@@ -350,6 +413,9 @@
     (if (string-eq view "from-notes")
         (html/p* (html/attr "class" "muted")
           "Mark nodes TODO in notes — they appear here. Toggle writes back.")
+        (if (string-eq view "archived")
+            (html/p* (html/attr "class" "muted")
+              "Archived tasks. Unarchive from detail (set state back), or delete.")
         (html/form "POST" "/todos"
           (html/attrs
             (list
@@ -380,7 +446,7 @@
                           (html/attr "required" "required")
                           (html/attr "placeholder" "buy milk")
                           (html/attr "autocomplete" "off"))))
-                    (html/button (html/attr "type" "submit") "Add"))))))))))
+                    (html/button (html/attr "type" "submit") "Add")))))))))))
 
 (define todo/items-html
   (lambda (view)
@@ -391,32 +457,39 @@
               (string-append acc (todo/note-item-li t view)))
             ""
             (notes/all-todos)))
-        (if (string-eq view "everything")
-            (html/join
-              (list
-                (html/h2 "Lists")
-                (html/ul (html/attr "class" "card todo-list")
-                  (list/foldl
-                    (lambda (acc row)
-                      (string-append acc (todo/list-item-li row view)))
-                    ""
-                    (todo/all-items)))
-                (html/h2 "From notes")
-                (html/ul (html/attr "class" "card todo-list")
-                  (list/foldl
-                    (lambda (acc t)
-                      (if (todo/open? (car (cdr (cdr (cdr t)))))
-                          (string-append acc (todo/note-item-li t view))
-                          acc))
-                    ""
-                    (notes/all-todos)))))
-            ;; real list id
+        (if (string-eq view "archived")
             (html/ul (html/attr "class" "card todo-list")
               (list/foldl
                 (lambda (acc row)
                   (string-append acc (todo/list-item-li row view)))
                 ""
-                (todo/items-for-list view)))))))
+                (todo/archived-items)))
+            (if (string-eq view "everything")
+                (html/join
+                  (list
+                    (html/h2 "Lists")
+                    (html/ul (html/attr "class" "card todo-list")
+                      (list/foldl
+                        (lambda (acc row)
+                          (string-append acc (todo/list-item-li row view)))
+                        ""
+                        (todo/active-items (todo/all-items))))
+                    (html/h2 "From notes")
+                    (html/ul (html/attr "class" "card todo-list")
+                      (list/foldl
+                        (lambda (acc t)
+                          (if (todo/open? (car (cdr (cdr (cdr t)))))
+                              (string-append acc (todo/note-item-li t view))
+                              acc))
+                        ""
+                        (notes/all-todos)))))
+                ;; real list id — hide archived from active lists
+                (html/ul (html/attr "class" "card todo-list")
+                  (list/foldl
+                    (lambda (acc row)
+                      (string-append acc (todo/list-item-li row view)))
+                    ""
+                    (todo/active-items (todo/items-for-list view)))))))))
 
 (define todo/list-options
   (lambda (selected)
@@ -438,6 +511,23 @@
             (html/option st lab (string-eq st (as-str selected))))))
       ""
       todo/states)))
+
+;; Detail form: cycle states + ARCHIVED (terminal).
+(define todo/state-options-all
+  (lambda (selected)
+    (todo/state-options-from
+      selected
+      (append todo/states (list "ARCHIVED")))))
+
+(define todo/state-options-from
+  (lambda (selected states)
+    (list/foldl
+      (lambda (acc st)
+        (let ((lab (if (string-eq st "") "(none)" st)))
+          (string-append acc
+            (html/option st lab (string-eq st (as-str selected))))))
+      ""
+      states)))
 
 (define todo/detail-html
   (lambda (id view)
@@ -480,7 +570,9 @@
                                       (html/attr "required" "required"))))
                                 (html/label (html/attr "for" "state") "State")
                                 (html/select "state" (html/attr "id" "state")
-                                  (todo/state-options state))
+                                  ;; Include ARCHIVED in the detail picker even though
+                                  ;; it is not part of the cycle list.
+                                  (todo/state-options-all state))
                                 (html/label (html/attr "for" "due")
                                   "Due (YYYY-MM-DD)")
                                 (html/text-input "due"
@@ -512,8 +604,13 @@
 
 (define todo/main-html
   (lambda (view)
-    (let ((id-param (request-param "id")))
-      (if (if (null? id-param) #f (not (string-eq (as-str id-param) "")))
+    ;; Detail only on GET ?id=… — cycle/save/archive POSTs also carry id for
+    ;; the action target and must stay on the list view (not open detail).
+    (let ((id-param (request-param "id"))
+          (is-get (string-eq (request-method) "GET")))
+      (if (if is-get
+              (if (null? id-param) #f (not (string-eq (as-str id-param) "")))
+              #f)
           (html/div (html/attr "id" "todo-main")
             (html/join
               (list
@@ -529,7 +626,9 @@
                       (todo/ensure-inbox)
                       (if (string-eq view "from-notes")
                           ""
-                          view))))
+                          (if (string-eq view "archived")
+                              ""
+                              view)))))
             (html/div (html/attr "id" "todo-main")
               (html/join
                 (list
@@ -551,24 +650,26 @@
           (todo/cycle (request-param "id"))
           (if (string-eq action "delete")
               (todo/delete (request-param "id"))
-              (if (string-eq action "add")
-                  (todo/add (request-param "list_id") (request-param "title"))
-                  (if (string-eq action "create-list")
-                      (todo/create-list (request-param "title"))
-                      (if (string-eq action "cycle-note")
-                          (notes/cycle-node-todo
-                            (request-param "slug")
-                            (request-param "node-id"))
-                          (if (string-eq action "save")
-                              (todo/save
-                                (request-param "id")
-                                (request-param "title")
-                                (request-param "notes")
-                                (request-param "due")
-                                (request-param "state")
-                                (request-param "list_id"))
-                              (todo/add (todo/ensure-inbox)
-                                (request-param "title")))))))))))
+              (if (string-eq action "archive")
+                  (todo/archive (request-param "id"))
+                  (if (string-eq action "add")
+                      (todo/add (request-param "list_id") (request-param "title"))
+                      (if (string-eq action "create-list")
+                          (todo/create-list (request-param "title"))
+                          (if (string-eq action "cycle-note")
+                              (notes/cycle-node-todo
+                                (request-param "slug")
+                                (request-param "node-id"))
+                              (if (string-eq action "save")
+                                  (todo/save
+                                    (request-param "id")
+                                    (request-param "title")
+                                    (request-param "notes")
+                                    (request-param "due")
+                                    (request-param "state")
+                                    (request-param "list_id"))
+                                  (todo/add (todo/ensure-inbox)
+                                    (request-param "title"))))))))))))
 
 (define todo/page
   (lambda ()
@@ -580,16 +681,12 @@
             (let ((view
                     (let ((v (request-param "view")))
                       (if (null? v) "everything" (as-str v)))))
-              (let ((id (request-param "id")))
-                (let ((action (as-str (request-param "action"))))
-                  (if (hx-request?)
-                      (render-html (todo/main-html view))
-                      (if (string-eq action "save")
-                          (redirect
-                            (string-append "/todos?id=" (as-str id)
-                              "&view=" view))
-                          (redirect
-                            (string-append "/todos?view=" view))))))))
+              ;; After any mutation (incl. save), return to the list — not detail.
+              ;; Cycle/save POSTs carry id as the action target; that must not
+              ;; open the detail page (GET ?id= is the only detail entry).
+              (if (hx-request?)
+                  (render-html (todo/main-html view))
+                  (redirect (string-append "/todos?view=" view)))))
           (html/page
             (list
               (html/h1 "To-dos")

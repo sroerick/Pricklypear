@@ -182,6 +182,8 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
          .todo-box.st-DONE{background:#cfc;text-decoration:line-through}
          .todo-box.st-WAITING{background:#e0e8ff}
          .todo-box.st-CANCELLED{background:#ddd;color:#666}
+         .todo-box.st-ARCHIVED{background:#eee;color:#555;border-style:dashed}
+         li.todo-item.is-archived .todo-title{color:#888;font-style:italic}
          .todo-from-note .todo-src{font-size:.8rem;margin-left:.35rem}
          /* legacy class hooks (todo package may still emit them) */
          .ol-todo-btn{cursor:pointer}
@@ -235,7 +237,8 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
            min-width:2.6rem;padding:.25rem .35rem;width:auto}
          li.todo-item .todo-title{flex:1 1 auto;min-width:0;word-break:break-word}
          li.todo-item.is-done .todo-title{text-decoration:line-through;color:#666}
-         li.todo-item .todo-del button{width:auto;padding:.25rem .45rem;font-size:.85rem}
+         li.todo-item .todo-del button,
+         li.todo-item .todo-archive button{width:auto;padding:.25rem .45rem;font-size:.85rem}
          /* Bible chapter: only <sup> verse nums, not browser list markers */
          ol.bible-chapter{list-style:none;padding-left:0;margin:.25rem 0 1rem}
          ol.bible-chapter>li{margin:.35rem 0;line-height:1.45;padding-left:0}
