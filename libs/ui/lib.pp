@@ -13,6 +13,8 @@
         (list
           (menu/link "notes" "/notes")
           (menu/link "inbox" "/notes?slug=inbox")
+          (menu/link "contacts" "/contacts")
+          (menu/link "bookmarks" "/bookmarks")
           (menu/link "dabar" "/dabar")
           (menu/link "todos" "/todos")
           (menu/link "calendar" "/calendar")

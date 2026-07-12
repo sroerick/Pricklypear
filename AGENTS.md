@@ -38,7 +38,7 @@ python3 "$PP_EVAL" -j '(load-library "todo")'
 ## Branches: defaults vs personal garden
 
 - **`system/main`** — package defaults. Boot `seed_stdlib` always writes
-  `libs/{std,weather,ui,ai,outline,notes,todo,calendar,bible,dabar}` here from git. Treat as read-mostly.
+  `libs/{std,weather,ui,ai,outline,notes,todo,contacts,bookmarks,calendar,bible,dabar}` here from git. Treat as read-mostly.
 - **`<user>/personal`** — your garden. Image boots here after seed. Empty
   child of main (inherits via recursive CTE). Your `(define …)` and
   `(route …)` land here and **survive reseed/deploy**.
