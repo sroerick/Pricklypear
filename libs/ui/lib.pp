@@ -38,32 +38,4 @@
   (lambda ()
     (html/page
       (list
-        (weather/widget)
-        (html/div (html/attr "class" "card")
-          (html/join
-            (list
-              (html/h2 "Workspace")
-              (html/p* ""
-                (html/join
-                  (list
-                    "Live image — edit "
-                    (html/code "ui/menu")
-                    " for the navbar.")))
-              (html/ul ""
-                (html/join
-                  (list
-                    (html/li "" (html/a "/notes" "Notes"))
-                    (html/li "" (html/a "/dabar" "Bible"))
-                    (html/li "" (html/a "/todos" "Todos"))
-                    (html/li "" (html/a "/weather" "Weather"))
-                    (html/li "" (html/a "/bindings?pkg=ui" "Edit ui"))))))))
-        (html/div (html/attr "class" "card")
-          (html/join
-            (list
-              (html/h2 "Install libraries")
-              (html/form "POST" "/api/recipe/dabar" (html/attr "class" "")
-                (html/button (html/attr "type" "submit")
-                  "Install dabar (Bible study)"))
-              (html/form "POST" "/api/recipe/notes" (html/attr "class" "")
-                (html/button (html/attr "type" "submit")
-                  "Load outline + notes libraries")))))))))
+        (weather/widget))))))
