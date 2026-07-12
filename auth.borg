@@ -3,16 +3,16 @@
  (status partial)
  (convention ocaml-dune)
  (section auth
-  (doc "A separate auth unikernel: credential verification, identity resolution, session tokens")
+  (doc "Multi-user identity: credentials, sessions, login, and binding each human to their garden")
   (status partial)
-  (* agent note (|it31 plan-pass #7: section remains partial. Shipped:
-    credentials-store, bootstrap-admin (first admin via env), audit-log,
-    verification ssh_key + token mint/verify halves, rpc-from-supervisor
-    plain-HTTP half. NEW planned product subsections this pass:
-    login-experience, web-login, user-management — these were previously
-    only implied inside verification/bootstrap details and never owned.
-    Password verify still Denied stub (argon2 not on poohstack).
-    admin_api create_user/add_credential still TODO stubs.|) *)
+  (* agent note (|2026-07-12: PRODUCT CORRECTION. Multi-user is the system,
+    not an optional phase and not cancelled by the single-image deploy
+    pivot. Single-image simplified process topology (one binary to ship);
+    it does NOT mean single-human. Complete auth = many users, each with
+    credentials + session + personal branch + authorship; process-per-user
+    isolation remains the isolation model (multi-user.isolation) when the
+    fleet is live. nginx basic-auth is a temporary gate, not the product.
+    Spec below is the complete multi-user auth system for implementation.|) *)
   (details
    (doc (|
         Auth is its own unikernel, separate from the
@@ -378,100 +378,361 @@
     |))
    )
   )
-  (subsection login-experience
-   (doc "What 'log in' means to a human: one front door into your live image")
-   (status partial)
-   (* agent note (|it32: PARTIAL. scripts/repl.sh + repl_client.py give a
-     human front door (key auth -> REPL) without netcat. Browser still
-     requires an already-booted image. Full "I logged into my computer"
-     browser path is auth.web-login.|) *)
+  (subsection multi-user-product
+   (doc "COMPLETE multi-user product: many humans, each with identity, session, garden, authorship")
+   (status planned)
+   (* agent note (|2026-07-12: authoritative multi-user auth product.
+     Replaces "single-tenant only" reading of single-image.auth.
+     Single-image = one binary to deploy; multi-user = many people.|) *)
    (verify
-    (smoke "human authenticates and lands in their live image REPL or browser session")
-    (smoke "unknown credential is denied without booting an image"))
+    (smoke "two users login independently; each sees own personal pins")
+    (smoke "Alice define does not create own pin on Bob's branch")
+    (smoke "non-admin cannot merge to system/main")
+    (smoke "agent install on Alice session writes alice/personal only")
+    (smoke "logout revokes session; next request requires login"))
    (details
     (doc (|
-         PRODUCT BAR (v1 experience):
-         1. User presents a credential (SSH public key by
-            default; password/web token via auth.web-login).
-         2. authd verifies; supervisor resolves identity.
-         3. Supervisor boots or attaches the user's image
-            (boot-on-connect default).
-         4. User lands in a live environment: SSH/line
-            REPL and/or browser session bound to that image.
-         5. Session end tears down boot-on-connect images;
-            store state survives.
+         ============================================================
+         MULTI-USER IS THE SYSTEM
+         ============================================================
 
-         NON-GOALS for this subsection:
-         - Implementing crypto (ssh-interface / awa path)
-         - Password hashing details (verification)
-         - Admin user CRUD (user-management)
+         Pricklypear is a multi-user Lisp OS. Multiple humans share
+         one deployment. Each human has:
+           - a user row + credentials
+           - a browser (and/or API) session
+           - a personal branch garden: <username>/personal
+           - authorship on their defines (function_defs.author)
+           - isolation from other users' gardens and (when fleet
+             is live) from other users' processes
 
-         Success looks like: "I logged into my computer",
-         not "I ran a smoke protocol against port 17822".
+         single-image.borg simplifies HOW WE SHIP THE BINARY
+         (one process to build/restart). It does NOT mean one human.
+         multi-user.isolation (per-user image process) remains the
+         isolation architecture for the complete system.
+
+         ============================================================
+         PERSONAS
+         ============================================================
+
+         Operator/admin — first user; can create users, merge to
+           system/main, manage credentials, revoke sessions.
+         Human user — logs in, works on <user>/personal, inherits
+           system/main defaults, cannot admin-merge to system.
+         Agent (as user) — authenticated as a human or service
+           account; installs Lisp on that identity's branch;
+           branch-locked for the task duration.
+         Anonymous — only public routes (/login, health as policy).
+
+         ============================================================
+         USER STORIES (complete set)
+         ============================================================
+
+         US-BOOTSTRAP — First admin
+           Empty users table → bootstrap admin from env
+           (PP_BOOTSTRAP_USER / PP_BOOTSTRAP_PASSWORD) OR one-time
+           /setup form that creates admin then disables itself.
+           is_admin=true. Site thereafter requires auth.
+
+         US-LOGIN — Browser sign-in
+           GET /login → username + password form.
+           POST /login → verify → mint session → Set-Cookie
+           pp_session (HttpOnly; Secure; SameSite=Lax; Path=/).
+           Redirect /. Bad credentials → generic error + auth_log.
+
+         US-LAND — Land in my computer
+           After login (or valid cookie):
+             1. Resolve user_id, username, is_admin from session.
+             2. Ensure branch <username>/personal exists as EMPTY
+                child of system/main (inheritance, not full copy).
+             3. Image runtime identity = that user.
+             4. Checkout <username>/personal if not already.
+             5. (whoami) / chrome meta / define author = username.
+           Alice never receives Bob's personal as current branch.
+
+         US-LOGOUT — Sign out
+           POST /logout → revoke auth_sessions row → clear cookie
+           → /login.
+
+         US-SESSION — Stay signed in
+           Every non-public request: load session by cookie →
+           valid unexpired unrevoked → attach identity; else
+           redirect /login (HTML) or 401 (API).
+
+         US-INVITE — Admin creates user
+           Admin UI/API: create_user(username, is_admin?),
+           set password credential, optional temp password.
+           New user can US-LOGIN and gets own personal garden.
+
+         US-AGENT — Agent or laptop as a user
+           Authenticate via same session cookie (cookie jar) OR
+           API key credential (Authorization: Bearer …) bound to
+           a user_id. install_function / define write that user's
+           current branch. Agent branch lock forbids checkout/
+           fork/merge mid-task. Author may be agent:<model> with
+           provenance; capability still runs as the user.
+
+         US-ISOLATION — Process isolation (complete multi-user)
+           Logging in boots or attaches that user's image process
+           (supervisor fleet; multi-user.isolation). Alice's wedge
+           does not take Bob offline. Auth never sees fleet; fleet
+           never sees raw passwords — only user_id from verify.
+
+         US-COTENANT — Logical multi-user in one process (allowed
+           implementation shape when fleet is not running):
+           One image process serves many sessions; identity is
+           per-request; personal branch is per-session; no cross-
+           user write to another's personal. Weaker blast radius
+           than process isolation but correct namespacing.
+           Complete system MUST support US-ISOLATION; cotenant is
+           not a substitute for the isolation model long-term.
+
+         US-PERMS — Authorization
+           - define/route/deftype → current branch only
+           - merge to system/* → admin only
+           - merge to own owner/* → free for that owner
+           - admin user CRUD → admin session only
+           - data_rows shared (existing rule) unless future
+             row-level owner column is added
+
+         US-AUDIT — Failures are boring and logged
+           auth_log for login success/fail, logout, admin acts.
+           No username enumeration in errors.
+
+         ============================================================
+         END-TO-END STORY
+         ============================================================
+
+         1. Deploy; bootstrap admin.
+         2. Admin opens https://host/ → /login → signs in →
+            admin/personal home.
+         3. Admin creates user "alice" + password.
+         4. Alice signs in → alice/personal (empty garden),
+            inherits system/main tools.
+         5. Alice edits ui/menu → pin on alice/personal only.
+         6. Bob signs in → bob/personal; does not see Alice's pin
+            as own; may inherit same main defaults.
+         7. Agent with Alice session installs helper → alice/personal.
+         8. Alice logout; cookie dead.
+         9. With fleet: Alice's image process is hers; Bob's is his.
+
+         ============================================================
+         OBJECTS (complete)
+         ============================================================
+
+         users(id, username UNIQUE, is_admin, created_at)
+         credentials(id, user_id, kind, public_data, secret_data,
+                     created_at, last_used_at)
+           kind: password | api_key | ssh_key | …
+         auth_sessions(id, user_id, token_hash, expires_at,
+                       created_at, revoked_at, user_agent, source_ip)
+         auth_log(id, user_id NULL, kind, success, source_ip,
+                  happened_at)
+
+         Runtime image session (per connection / request):
+           user_id, username, is_admin
+           store.branch_id → <username>/personal (default)
+           author for define = username | agent:<model>
+
+         Password hashing: argon2id (complete system). Interim
+         hash only acceptable until argon2 is available; must be
+         upgraded in place.
+
+         Session token: opaque random id; store only HMAC/hash in
+         DB; cookie carries raw id. Revocable. Expiry required.
+
+         ============================================================
+         HTTP SURFACE (complete)
+         ============================================================
+
+         Public:
+           GET  /login
+           POST /login
+           GET  /health   (policy: public or authed — choose public
+                           for ops probes)
+
+         Authenticated (any user):
+           POST /logout
+           all product routes (/, /todos, /notes, /api/eval, …)
+           identity-dependent branch + author
+
+         Admin:
+           /admin/users  (list, create, set password, revoke sessions)
+           merge policy to system/* already enforced in Lisp prims
+
+         API:
+           Cookie session OR Authorization: Bearer <api_key>
+           same identity attachment as browser
+
+         nginx: TLS termination; reverse proxy to image(s).
+         Complete system does NOT rely on htpasswd as the user
+         database. htpasswd may exist only as emergency break-glass.
+
+         ============================================================
+         FLEET ATTACH (complete multi-user isolation)
+         ============================================================
+
+         On successful login / SSH verify:
+           supervisor (or attach layer) resolves user_id →
+           Fleet.boot_or_attach(user) → image with env:
+             PP_USER_ID, PP_USERNAME, PP_BRANCH_ID, PP_BRANCH_NAME
+           Proxy HTTP/REPL to that instance.
+
+         Auth component: verify + mint only. Never boots images.
+         Image: trusts identity from supervisor/session attach;
+         does not re-verify password every request if session token
+         already verified at the edge of the image.
+
+         ============================================================
+         RELATION TO BRANCHES (already built)
+         ============================================================
+
+         system/main     — package defaults (seed from libs/*.pp)
+         <user>/personal — empty-child garden; pins are "own"
+         Effective Functions list = deduped closest-wins
+         Agent locked to current branch during agent-task
+
+         Auth does not replace branching; it answers WHO is
+         on which garden.
+
+         ============================================================
+         NON-GOALS
+         ============================================================
+
+         - OAuth / OIDC / social login
+         - Email magic links (unless added later as a credential kind)
+         - Sharing one password (htpasswd) among humans as the
+           permanent multi-user model
+    |))
+   )
+  )
+  (subsection login-experience
+   (doc "What log in means: I present credentials and land in MY live image")
+   (status planned)
+   (verify
+    (smoke "human authenticates and lands on username/personal")
+    (smoke "unknown credential denied; no image attach for stranger")
+    (smoke "two concurrent users keep distinct identities"))
+   (details
+    (doc (|
+         Product bar (from multi-user-product):
+         1. Present credential (password browser, API key,
+            or SSH key when SSH front door is live).
+         2. Verify → user_id (never proceed on failure).
+         3. Mint or resume session; attach identity.
+         4. Ensure <username>/personal; set runtime branch.
+         5. With fleet: boot/attach that user's image.
+         6. User works; logout/revoke ends session.
+
+         Success: "I logged into my computer as me."
+         Failure modes never leak other users' existence
+         beyond generic invalid-credentials.
     |))
    )
   )
   (subsection web-login
-   (doc "Browser login: password verify, mint token, cookie, attach to image UI")
+   (doc "Browser password login, session cookie, middleware, logout")
    (status planned)
-   (* agent note (|it32: still planned. Password verify + mint/verify_token
-     now work (interim sha256$salt$digest, not argon2). Still missing:
-     /login page, cookie wiring, supervisor attach/proxy to image UI.
-     user-management create_user/add_credential password path ships.|) *)
+   (implements image/lib/http.ml image/lib/session.ml)
    (verify
-    (build "dune build auth supervisor image")
-    (smoke "POST login with valid password -> token cookie -> image UI session")
-    (smoke "bad password denied + auth_log row"))
+    (build "dune build")
+    (smoke "POST /login valid -> Set-Cookie -> GET / as that user")
+    (smoke "POST /login invalid -> 401 + auth_log fail")
+    (smoke "POST /logout revokes; subsequent GET / redirects login")
+    (smoke "Alice and Bob cookies do not cross personal branches"))
    (details
     (doc (|
-         Planned flow:
-         1. User opens supervisor or image login page
-         2. POST username + password
-         3. authd verify_password (argon2id) -> user_id
-         4. authd mint_token -> Set-Cookie
-         5. Subsequent requests: verify_token -> attach
-            or route to that user's image HTTP surface
-         6. Logout revokes auth_sessions row
+         Complete browser path (part of multi-user-product):
 
-         v1 may keep login on supervisor and reverse-proxy
-         to the image; exact host split is a make-time
-         choice. SSH remains the primary admin/dev path
-         until web-login is verified.
+         GET  /login
+           Public form: username, password. No product chrome
+           that assumes identity.
+
+         POST /login
+           Body: username, password (+ CSRF token when forms
+           are cookie-authenticated for other posts).
+           verify_password against credentials.kind=password.
+           On success: insert auth_sessions; Set-Cookie
+           pp_session=<opaque>; redirect /.
+           On failure: auth_log; same error for bad user/pass.
+
+         Middleware (all non-public routes)
+           Read cookie → hash → lookup auth_sessions →
+           check expires_at / revoked_at → load users row →
+           bind Session identity (user_id, username, is_admin) →
+           ensure_personal + checkout if needed.
+
+         POST /logout
+           Revoke session; clear cookie; redirect /login.
+
+         Password: argon2id verify/hash in complete system.
+         Cookie flags: HttpOnly; Secure; SameSite=Lax; Path=/.
+
+         nginx: TLS + reverse_proxy only for this path.
+         htpasswd is not the user database.
     |))
    )
   )
   (subsection user-management
-   (doc "After bootstrap: create users, add credentials, list users (admin)")
-   (status implemented)
-   (* agent note (|it32: IMPLEMENTED. admin_api create_user +
-     add_credential ssh_key|password; HTTP
-     /admin/create_user|/admin/add_credential|/admin/list_users with
-     X-Admin header. Password hash interim sha256$salt$digest.
-     Smoke in scripts/dream_product_smoke.py.|) *)
-   (implements auth/lib/admin_api.ml)
+   (doc "Admin creates and manages users and credentials")
+   (status partial)
+   (* agent note (|admin_api create/list paths existed under authd;
+     complete system needs in-product /admin/users UI + password
+     credentials + revoke session, wired to the same users table.|) *)
    (verify
-    (build "dune build auth")
-    (smoke "admin creates user + adds ssh_key credential; new user can log in")
-    (smoke "non-admin caller denied"))
+    (smoke "admin creates user + password; new user logs in on own personal")
+    (smoke "non-admin cannot create users")
+    (smoke "admin can revoke all sessions for a user"))
    (details
     (doc (|
-         Admin-only operations (auth RPC + later admin UI):
-         - create_user(username, is_admin?)
-         - add_credential(user_id, kind, public_data,
-           secret_data)
-         - list_users / lookup_user
-         - revoke_credential / revoke_session (later)
+         Complete admin surface:
+           create_user(username, is_admin?)
+           set_password(user_id, password)
+           add_credential(user_id, kind, …)  ; api_key, ssh_key
+           list_users / get_user
+           revoke_sessions(user_id)
+           revoke_credential(id)
 
-         First admin continues to come from
-         bootstrap-admin env var on empty users table.
-         All later humans and service accounts go through
-         this section. Credentials supported in order:
-         ssh_key (v1), password (with web-login), api_key
-         (later).
+         First admin: bootstrap-admin (env) when users empty.
+         All later humans: this API/UI only.
 
-         Enforcement: caller must present an admin session
-         (token or supervisor-held admin capability).
-         auth/lib/admin_api.ml is the implementation home.
+         UI: /admin/users (admin session required).
+         Enforcement: is_admin on session; 403 otherwise.
+
+         Credentials order of support in complete system:
+           password (web-login), api_key (agents/pp_eval),
+           ssh_key (SSH front door when live).
+    |))
+   )
+  )
+  (subsection identity-and-branch
+   (doc "Session identity drives personal garden and authorship")
+   (status planned)
+   (verify
+    (smoke "whoami equals session username after login")
+    (smoke "define lands on username/personal")
+    (smoke "Functions origin own only for true personal pins"))
+   (details
+    (doc (|
+         On every authenticated request / image attach:
+
+           ensure_branch owner=username name=personal
+             parent=system/main  (EMPTY child; CTE inherit)
+           store.branch_id = that id
+           manifest.username = username
+           manifest.branch_name = username/personal
+
+         (define name body) persists with author=username
+         (or agent:<model> when agent installs under policy).
+
+         Functions UI: effective one-name-one-row; origin own
+         vs inherited (already implemented).
+
+         Agent-task: agent_branch_lock blocks checkout/fork/merge
+         (already implemented); must run under the user's session.
+
+         Changing user mid-process (cotenant): rebind identity +
+         checkout personal for that user; never leave previous
+         user's pins writable.
     |))
    )
   )

@@ -1,17 +1,16 @@
 (project pricklypear-multi-user
- (doc "Pricklypear book chapter: multi-user — RETIRED by the
-        single-image pivot (it35). Process isolation by per-user
-        image is dropped; the system is single-tenant.
-        Namespaces/budgets/permissions stay as Lisp-level
-        safeguards within the one image. Kept for historical
-        context. See single-image.borg.")
- (status deprecated)
- (* agent note (|it35 plan pass: the isolation-by-process model is
-                  retired. One image serves one tenant. The branch
-                  model (fork/merge) survives because it is Lisp-
-                  level, not process-level. (whoami)/(current-author)
-                  still return a real author from the users table for
-                  provenance on function_defs/data_rows. Status -> dropped.|) *)
+ (doc "Pricklypear book chapter: multi-user — MANY HUMANS.
+        Process-per-user isolation (this chapter) + auth identity
+        (auth.borg multi-user-product) are the complete multi-user
+        system. single-image.borg is about shipping ONE binary, not
+        one human. Do not read single-image as cancelling multi-user.")
+ (status partial)
+ (* agent note (|2026-07-12: PRODUCT CORRECTION. Multi-user is not
+                  deprecated. it35 single-image pivot retired the pain
+                  of coordinating three always-on daemons for deploy;
+                  it did not cancel multi-user product. Isolation-by-
+                  process remains the isolation model. Auth multi-user
+                  product is specified in auth.multi-user-product.|) *)
  (convention ocaml-dune)
  (section multi-user
   (doc "Per-user image instances, namespaces via branch ownership, budgets, author-runs-as-author")

@@ -175,35 +175,35 @@
     |)))
   )
   (subsection auth
-   (doc "How identity works with no authd")
+   (doc "Identity without requiring authd as a second always-on binary")
    (status planned)
+   (* agent note (|2026-07-12: NOT single-tenant-only. Multi-user product
+     is auth.multi-user-product. This subsection only constrains whether
+     verify runs in-process or as a separate authd.|) *)
    (details
     (doc (|
-      Single-tenant. Two viable options; pick at make time:
+      MULTI-USER is required (many humans, personal gardens).
+      See auth.multi-user-product for the complete user stories.
 
-      Option A (recommended, least code): nginx basic-auth
-        at the edge with an htpasswd file. The image trusts
-        the `Remote-User' header (or just trusts the
-        loopback proxy). The `users' table is kept only so
-        `(whoami)' / `(current-author)' return a real name
-        for provenance on function_defs and data_rows. No
-        password verify inside the image.
+      This pivot only answers: where does verify run?
 
-      Option B (if we want the image self-contained): fold
-        a thin `verify_password' prim into image/lib/session.ml
-        reading the `users' + `credentials' tables directly
-        over pgx_lwt. Sessions are a signed cookie or just
-        the basic-auth header re-checked per request. No
-        separate authd process, no HMAC token dance beyond
-        a cookie.
+      Option A — edge gate only (insufficient as product):
+        nginx basic-auth / htpasswd. NOT the multi-user user
+        database. Acceptable only as temporary break-glass.
 
-      Either way: NO separate authd binary. The `auth'
-      package as a process is deleted. wyo.auth (the
-      poohstack session glue) is an acceptable Option A
-      substitute if we want Dream-free session handling,
-      but the image already does htmx via httpaf (no
-      Dream), so basic-auth + loopback trust is the
-      simplest path until we need more.
+      Option B — in-image verify (fits one binary):
+        Password/session verify in the image process against
+        users + credentials + auth_sessions. /login cookie
+        middleware. No separate authd required for web login.
+        Still multi-user: many sessions, many personal branches.
+
+      Option C — authd process (fits fleet multi-user):
+        Separate verify service as originally designed; supervisor
+        attaches per-user images. Complete isolation story.
+
+      Complete system: multi-user product stories + either B or C
+      for verify placement + multi-user.isolation for process
+      isolation when fleet is live.
     |)))
   )
   (subsection deployment
