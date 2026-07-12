@@ -1540,6 +1540,76 @@ let uptime_seconds (t : t) : int =
 let branch_name (t : t) : string = t.manifest.branch_name
 let username (t : t) : string = t.manifest.username
 let store (t : t) : Store.t = t.store
+let branch_id (t : t) : string = t.manifest.branch_id
+
+(** Resolve owner/name ref and checkout. *)
+let checkout_ref (t : t) (branch_ref : string) : (unit, string) result Lwt.t =
+  let owner, name = split_branch_ref branch_ref in
+  let ref' = owner ^ "/" ^ name in
+  let* found = Store.lookup_branch_id_by_name t.store ~owner ~name in
+  match found with
+  | None -> Lwt.return (Error "no such branch")
+  | Some id ->
+      let* () = checkout_to t ~branch_id:id ~branch_ref:ref' in
+      Lwt.return (Ok ())
+
+(** Delete a function row on the current branch (unoverride). Rehydrates. *)
+let unoverride (t : t) (name : string) : (bool, string) result Lwt.t =
+  let bid = Store.current_branch_id t.store in
+  let* deleted =
+    Store.delete_function_on_branch t.store ~branch_id:bid ~name
+  in
+  let* () = rehydrate t in
+  let* () = refresh_ui_shell t in
+  Lwt.return (Ok deleted)
+
+(** Promote selected names from source ref onto system/main (admin policy). *)
+let promote_to_main (t : t) ~(source_ref : string) ~(names : string list)
+  : (int, string) result Lwt.t =
+  if names = [] then Lwt.return (Error "no names selected")
+  else
+    let owner, name = split_branch_ref source_ref in
+    let* src =
+      Store.lookup_branch_id_by_name t.store ~owner ~name
+    in
+    match src with
+    | None -> Lwt.return (Error "no such source branch")
+    | Some source_id ->
+        (* Policy: only admin username may write system/main via promote UI. *)
+        if t.manifest.username <> "admin"
+           && t.manifest.username <> "system" then
+          Lwt.return (Error "promote to system/main requires admin")
+        else
+          let* n =
+            Store.promote_functions t.store
+              ~source_id ~target_id:Store.system_main_id ~names
+          in
+          (* If we're on main, rehydrate so env sees new bodies. *)
+          let* () =
+            if Store.current_branch_id t.store = Store.system_main_id then
+              rehydrate t
+            else Lwt.return_unit
+          in
+          Lwt.return (Ok n)
+
+(** Full fork: parent_ref -> owner/child_name (uses Store.fork_branch copy). *)
+let fork_ref (t : t) ~(parent_ref : string) ~(child_ref : string)
+  : (string, string) result Lwt.t =
+  let p_owner, p_name = split_branch_ref parent_ref in
+  let c_owner, c_name = split_branch_ref child_ref in
+  let* parent_id =
+    Store.lookup_branch_id_by_name t.store ~owner:p_owner ~name:p_name
+  in
+  match parent_id with
+  | None -> Lwt.return (Error "no such parent branch")
+  | Some pid ->
+      let* created =
+        Store.fork_branch t.store ~parent_id:pid ~owner:c_owner
+          ~child_name:c_name
+      in
+      (match created with
+       | None -> Lwt.return (Error "fork failed")
+       | Some id -> Lwt.return (Ok id))
 
 (* Look up a route's handler name. Returns None if the route isn't
    registered on this branch. Called by http.ml's request_handler. *)

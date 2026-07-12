@@ -289,6 +289,256 @@ let list_function_names (t : t) : (string * Pricklypear_lisp.Ast.expr * string) 
             (Printexc.to_string exn);
           Lwt.return [])
 
+(* ---- own-branch stats / overrides (no recursive CTE) ---- *)
+
+let count_functions_on_branch (t : t) ~(branch_id : string) : int Lwt.t =
+  match t.conn with
+  | None -> Lwt.return 0
+  | Some conn ->
+      Lwt.catch
+        (fun () ->
+          let sql =
+            "SELECT COUNT(*)::text FROM function_defs WHERE branch_id = $1" in
+          let* rows =
+            Pg.execute conn ~params:[ Pgx.Value.of_string branch_id ] sql
+          in
+          (match rows with
+           | [ [ c ] ] ->
+               (match Pgx.Value.to_string c with
+                | Some s -> Lwt.return (int_of_string_opt s |> Option.value ~default:0)
+                | None -> Lwt.return 0)
+           | _ -> Lwt.return 0))
+        (fun exn ->
+          Printf.eprintf "[store] count_functions_on_branch: %s\n"
+            (Printexc.to_string exn);
+          Lwt.return 0)
+
+let count_routes_on_branch (t : t) ~(branch_id : string) : int Lwt.t =
+  match t.conn with
+  | None -> Lwt.return 0
+  | Some conn ->
+      Lwt.catch
+        (fun () ->
+          let sql =
+            "SELECT COUNT(*)::text FROM view_bindings WHERE branch_id = $1" in
+          let* rows =
+            Pg.execute conn ~params:[ Pgx.Value.of_string branch_id ] sql
+          in
+          (match rows with
+           | [ [ c ] ] ->
+               (match Pgx.Value.to_string c with
+                | Some s -> Lwt.return (int_of_string_opt s |> Option.value ~default:0)
+                | None -> Lwt.return 0)
+           | _ -> Lwt.return 0))
+        (fun exn ->
+          Printf.eprintf "[store] count_routes_on_branch: %s\n"
+            (Printexc.to_string exn);
+          Lwt.return 0)
+
+(** Own rows only: (name, author, updated_at). *)
+let list_own_functions (t : t) ~(branch_id : string)
+  : (string * string * string) list Lwt.t =
+  match t.conn with
+  | None -> Lwt.return []
+  | Some conn ->
+      Lwt.catch
+        (fun () ->
+          let sql =
+            "SELECT name, author, updated_at::text FROM function_defs " ^
+            "WHERE branch_id = $1 ORDER BY name" in
+          let* rows =
+            Pg.execute conn ~params:[ Pgx.Value.of_string branch_id ] sql
+          in
+          Lwt.return
+            (List.filter_map
+               (fun row ->
+                 match row with
+                 | [ n; a; u ] ->
+                     (match Pgx.Value.to_string n,
+                             Pgx.Value.to_string a,
+                             Pgx.Value.to_string u with
+                      | Some name, Some author, Some updated ->
+                          Some (name, author, updated)
+                      | _ -> None)
+                 | _ -> None)
+               rows))
+        (fun exn ->
+          Printf.eprintf "[store] list_own_functions: %s\n"
+            (Printexc.to_string exn);
+          Lwt.return [])
+
+let list_own_routes (t : t) ~(branch_id : string)
+  : (string * string) list Lwt.t =
+  match t.conn with
+  | None -> Lwt.return []
+  | Some conn ->
+      Lwt.catch
+        (fun () ->
+          let sql =
+            "SELECT route, handler FROM view_bindings WHERE branch_id = $1 " ^
+            "ORDER BY route" in
+          let* rows =
+            Pg.execute conn ~params:[ Pgx.Value.of_string branch_id ] sql
+          in
+          Lwt.return
+            (List.filter_map
+               (fun row ->
+                 match row with
+                 | [ r; h ] ->
+                     (match Pgx.Value.to_string r, Pgx.Value.to_string h with
+                      | Some route, Some handler -> Some (route, handler)
+                      | _ -> None)
+                 | _ -> None)
+               rows))
+        (fun exn ->
+          Printf.eprintf "[store] list_own_routes: %s\n"
+            (Printexc.to_string exn);
+          Lwt.return [])
+
+(** Child own names left-joined to parent: name, child_updated, parent_updated opt. *)
+let list_overrides (t : t) ~(branch_id : string) ~(parent_id : string option)
+  : (string * string * string option) list Lwt.t =
+  match t.conn, parent_id with
+  | None, _ -> Lwt.return []
+  | Some _, None ->
+      (* Root branch: every own def is "new". *)
+      let* own = list_own_functions t ~branch_id in
+      Lwt.return (List.map (fun (n, _, u) -> (n, u, None)) own)
+  | Some conn, Some pid ->
+      Lwt.catch
+        (fun () ->
+          let sql =
+            "SELECT c.name, c.updated_at::text, p.updated_at::text " ^
+            "FROM function_defs c " ^
+            "LEFT JOIN function_defs p " ^
+            "  ON p.branch_id = $2 AND p.name = c.name " ^
+            "WHERE c.branch_id = $1 ORDER BY c.name" in
+          let* rows =
+            Pg.execute conn
+              ~params:[ Pgx.Value.of_string branch_id;
+                        Pgx.Value.of_string pid ]
+              sql
+          in
+          Lwt.return
+            (List.filter_map
+               (fun row ->
+                 match row with
+                 | [ n; cu; pu ] ->
+                     (match Pgx.Value.to_string n, Pgx.Value.to_string cu with
+                      | Some name, Some child_u ->
+                          let parent_u =
+                            match Pgx.Value.to_string pu with
+                            | Some "" | None -> None
+                            | Some s -> Some s
+                          in
+                          Some (name, child_u, parent_u)
+                      | _ -> None)
+                 | _ -> None)
+               rows))
+        (fun exn ->
+          Printf.eprintf "[store] list_overrides: %s\n"
+            (Printexc.to_string exn);
+          Lwt.return [])
+
+let lookup_function_on_branch (t : t) ~(branch_id : string) ~(name : string)
+  : (Pricklypear_lisp.Ast.expr * string * string) option Lwt.t =
+  match t.conn with
+  | None -> Lwt.return_none
+  | Some conn ->
+      Lwt.catch
+        (fun () ->
+          let sql =
+            "SELECT body::text, author, updated_at::text FROM function_defs " ^
+            "WHERE branch_id = $1 AND name = $2" in
+          let* rows =
+            Pg.execute conn
+              ~params:[ Pgx.Value.of_string branch_id;
+                        Pgx.Value.of_string name ]
+              sql
+          in
+          (match rows with
+           | [ [ body_c; author_c; upd_c ] ] ->
+               (match Pgx.Value.to_string body_c,
+                       Pgx.Value.to_string author_c,
+                       Pgx.Value.to_string upd_c with
+                | Some body_str, Some author, Some updated ->
+                    (try
+                       match Pricklypear_lisp.Ast.expr_of_json
+                               (Yojson.Safe.from_string body_str) with
+                       | Ok e -> Lwt.return (Some (e, author, updated))
+                       | Error _ -> Lwt.return_none
+                     with _ -> Lwt.return_none)
+                | _ -> Lwt.return_none)
+           | _ -> Lwt.return_none))
+        (fun exn ->
+          Printf.eprintf "[store] lookup_function_on_branch: %s\n"
+            (Printexc.to_string exn);
+          Lwt.return_none)
+
+let delete_function_on_branch (t : t) ~(branch_id : string) ~(name : string)
+  : bool Lwt.t =
+  match t.conn with
+  | None -> Lwt.return false
+  | Some conn ->
+      Lwt.catch
+        (fun () ->
+          let sql =
+            "DELETE FROM function_defs WHERE branch_id = $1 AND name = $2 " ^
+            "RETURNING name" in
+          let* rows =
+            Pg.execute conn
+              ~params:[ Pgx.Value.of_string branch_id;
+                        Pgx.Value.of_string name ]
+              sql
+          in
+          Lwt.return (rows <> []))
+        (fun exn ->
+          Printf.eprintf "[store] delete_function_on_branch: %s\n"
+            (Printexc.to_string exn);
+          Lwt.return false)
+
+(** Copy selected function names from source branch to target (upsert). *)
+let promote_functions (t : t) ~(source_id : string) ~(target_id : string)
+    ~(names : string list) : int Lwt.t =
+  match t.conn with
+  | None -> Lwt.return 0
+  | Some _ when names = [] -> Lwt.return 0
+  | Some conn ->
+      Lwt.catch
+        (fun () ->
+          Lwt_list.fold_left_s
+            (fun acc name ->
+              let* src =
+                lookup_function_on_branch t ~branch_id:source_id ~name
+              in
+              match src with
+              | None -> Lwt.return acc
+              | Some (body, author, _) ->
+                  let body_json =
+                    Yojson.Safe.to_string
+                      (Pricklypear_lisp.Ast.expr_to_json body) in
+                  let sql =
+                    "INSERT INTO function_defs " ^
+                    "  (branch_id, name, body, author) " ^
+                    "VALUES ($1, $2, $3::jsonb, $4) " ^
+                    "ON CONFLICT (branch_id, name) DO UPDATE " ^
+                    "SET body = EXCLUDED.body, author = EXCLUDED.author, " ^
+                    "    updated_at = now() RETURNING name" in
+                  let* rows =
+                    Pg.execute conn
+                      ~params:[ Pgx.Value.of_string target_id;
+                                Pgx.Value.of_string name;
+                                Pgx.Value.of_string body_json;
+                                Pgx.Value.of_string author ]
+                      sql
+                  in
+                  Lwt.return (if rows = [] then acc else acc + 1))
+            0 names)
+        (fun exn ->
+          Printf.eprintf "[store] promote_functions: %s\n"
+            (Printexc.to_string exn);
+          Lwt.return 0)
+
 (* Persist a function def. INSERT ... ON CONFLICT (branch_id, name)
    DO UPDATE so redefining a name in the same branch upserts. The body
    is serialized to JSONB. *)
