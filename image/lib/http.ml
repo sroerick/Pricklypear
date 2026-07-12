@@ -48,6 +48,12 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
                list-style:none}
          nav a:visited{color:#000}
          nav a:hover,nav a:focus,.menu-drop-btn:hover{background:#fff}
+         nav.emergency-nav{width:100%;margin-top:.35rem}
+         .emergency-banner{display:block;width:100%;padding:.4rem .55rem;
+           border:2px solid #8b0000;background:#fff3cd;color:#1a1a1a;
+           font-size:.85rem;font-family:Courier,monospace}
+         .emergency-banner a{color:#000080}
+         .emergency-home{border:2px solid #8b0000;background:#fff3cd}
          /* Dropdown menus (details/summary — works without JS, mobile-friendly) */
          .menu-drop{position:relative;display:inline-block;margin:0}
          .menu-drop>summary{list-style:none}
@@ -249,15 +255,19 @@ let json_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (j : Yojson.Safe.t) : u
   let s = Yojson.Safe.to_string j in
   text_response reqd ~status ~content_type:"application/json" s
 
-let default_nav_nodes () : Pure_html.node list =
-  [ HTML.a [HTML.href "/"] [txt "home"]
-  ; HTML.a [HTML.href "/about"] [txt "about"]
-  ; HTML.a [HTML.href "/branches"] [txt "branches"]
-  ; HTML.a [HTML.href "/bindings"] [txt "functions"]
-  ; HTML.a [HTML.href "/types"] [txt "data"]
-  ; HTML.a [HTML.href "/pages"] [txt "pages"]
-  ; HTML.a [HTML.href "/repl"] [txt "repl"]
-  ; HTML.a [HTML.href "/agent"] [txt "agent"]
+(** Labeled emergency nav only — NOT a product menu twin.
+    Product chrome is Lisp (ui/nav). See image.system-browser. *)
+let emergency_nav_nodes () : Pure_html.node list =
+  [ HTML.span [HTML.class_ "emergency-banner"]
+      [ txt "EMERGENCY NAV — ui/nav missing or failed · "
+      ; HTML.a [HTML.href "/bindings?pkg=ui"] [txt "fix ui shell"]
+      ; txt " · "
+      ; HTML.a [HTML.href "/"] [txt "home"]
+      ; txt " · "
+      ; HTML.a [HTML.href "/login"] [txt "login"]
+      ; txt " · "
+      ; HTML.a [HTML.href "/health"] [txt "health"]
+      ]
   ]
 
 let value_to_html_string (v : Pricklypear_lisp.Ast.value) : string =
@@ -274,8 +284,13 @@ let try_ui_fn (session : Session.t) (name : string) : string option Lwt.t =
       let* r = Session.call_handler session name in
       match r with
       | Some v -> Lwt.return (Some (value_to_html_string v))
-      | None -> Lwt.return None)
-    (fun _ -> Lwt.return None)
+      | None ->
+          Printf.eprintf "[http] try_ui_fn %s: unbound or no value\n%!" name;
+          Lwt.return None)
+    (fun exn ->
+      Printf.eprintf "[http] try_ui_fn %s failed: %s\n%!"
+        name (Printexc.to_string exn);
+      Lwt.return None)
 
 (** Fragment / partial: no document chrome (htmx swap target). *)
 let is_partials_path (path : string) : bool =
@@ -442,7 +457,7 @@ let chrome ?nav_html ~(session : Session.t) ~(title : string)
     match nav_html with
     | Some html when String.trim html <> "" ->
         HTML.nav [] [txt ~raw:true "%s" html]
-    | _ -> HTML.nav [] (default_nav_nodes ())
+    | _ -> HTML.nav [HTML.class_ "emergency-nav"] (emergency_nav_nodes ())
   in
   HTML.div [] [
     HTML.header [] [
@@ -1553,63 +1568,31 @@ let pages_list_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit =
   in
   html_response reqd body
 
-let default_home_content (session : Session.t) : Pure_html.node list =
-  [ HTML.div [HTML.class_ "card"] [
-      HTML.h2 [] [txt "Workspace"];
+(** Labeled emergency home — NOT a second product workspace.
+    Real home is Lisp ui/home (libs/ui). See image.system-browser. *)
+let emergency_home_content (session : Session.t) : Pure_html.node list =
+  let who =
+    Printf.sprintf
+      "You are %s on branch %s. Product home is Lisp (ui/home); this page is host recovery only."
+      (Session.username session) (Session.branch_name session)
+  in
+  [ HTML.div [HTML.class_ "card emergency-home"] [
+      HTML.h2 [] [txt "EMERGENCY HOME — ui/home missing or failed"];
+      HTML.p [] [txt "%s" who];
       HTML.p [] [
-        txt "You are %s on branch %s."
-          (Session.username session) (Session.branch_name session);
-      ];
-      HTML.p [] [
-        HTML.a [HTML.href "/bindings?pkg=ui"] [txt "Customize ui/home and ui/nav"];
+        HTML.a [HTML.href "/bindings?pkg=ui"] [txt "Open ui package"];
+        txt " · ";
+        HTML.a [HTML.href "/bindings"] [txt "Functions"];
+        txt " · ";
+        HTML.a [HTML.href "/repl"] [txt "REPL"];
         txt " · ";
         HTML.a [HTML.href "/about"] [txt "About"];
+        txt " · ";
+        HTML.a [HTML.href "/login"] [txt "Login"];
       ];
-    ]
-  ; HTML.div [HTML.class_ "card"] [
-      HTML.h2 [] [txt "First-run: make a Hello page"];
-      HTML.p [] [txt "Creates hi-page + /hello via load-library hello."];
-      HTML.form [HTML.method_ `POST; HTML.action "/api/recipe/hello";
-                 HTML.enctype `urlencoded] [
-        HTML.button [HTML.type_ "submit"] [txt "Create Hello page"];
-      ];
-    ]
-  ; HTML.div [HTML.class_ "card"] [
-      HTML.h2 [] [txt "Library: todo package"];
-      HTML.p [] [txt "Install from libs/todo/lib.pp (load-library)."];
-      HTML.form [HTML.method_ `POST; HTML.action "/api/recipe/todo";
-                 HTML.enctype `urlencoded] [
-        HTML.button [HTML.type_ "submit"] [txt "Install todo library"];
-      ];
-    ]
-  ; HTML.div [HTML.class_ "card"] [
-      HTML.h2 [] [txt "Library: dabar (Bible study)"];
-      HTML.p [] [txt
-        "Unified Bible study: reader + Strong's + interlinear (libs/bible data + libs/dabar UI). Strips /bible; all routes under /dabar. Seeds: scripts/seed_bible_bsb.py, seed_strongs.py, seed_interlinear_dogfood.py."];
-      HTML.form [HTML.method_ `POST; HTML.action "/api/recipe/dabar";
-                 HTML.enctype `urlencoded] [
-        HTML.button [HTML.type_ "submit"] [txt "Install dabar library"];
-      ];
-    ]
-  ; HTML.div [HTML.class_ "card"] [
-      HTML.h2 [] [txt "AI propose (current branch)"];
-      HTML.form [HTML.method_ `POST; HTML.action "/api/ai/propose";
-                 HTML.enctype `urlencoded] [
-        HTML.p [] [
-          HTML.label [HTML.for_ "package"] [txt "package "];
-          HTML.input [HTML.type_ "text"; HTML.name "package"; HTML.id "package";
-                      HTML.placeholder "todo (optional)"];
-          txt " ";
-          HTML.label [HTML.for_ "local"] [txt "name "];
-          HTML.input [HTML.type_ "text"; HTML.name "local"; HTML.id "local";
-                      HTML.value "greet"; HTML.placeholder "greet"];
-        ];
-        HTML.p [] [
-          HTML.label [HTML.for_ "spec"] [txt "spec"];
-        ];
-        HTML.textarea [HTML.name "spec"; HTML.id "spec"; HTML.required]
-          "%s" "A lambda that takes one string name and returns a greeting string using string-append.";
-        HTML.p [] [HTML.button [HTML.type_ "submit"] [txt "Propose with AI"]];
+      HTML.p [HTML.class_ "muted"] [
+        txt "%s"
+          "Fix: ensure system/main has ui/* from seed, or delete a broken personal pin of ui/home / ui/menu / ui/nav.";
       ];
     ]
   ]
@@ -1621,7 +1604,7 @@ let home_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
     match home_html with
     | Some html when String.trim html <> "" ->
         [ txt ~raw:true "%s" html ]
-    | _ -> default_home_content session
+    | _ -> emergency_home_content session
   in
   let body = chrome ~session ~title:"Workspace" content in
   html_response reqd body;
