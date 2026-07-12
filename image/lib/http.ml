@@ -1336,25 +1336,24 @@ let contains_ci (hay : string) (needle : string) : bool =
     in
     loop 0
 
-(** Build function-name -> route list using static page graphs. *)
+(** function-name → routes that use it as the *direct* HTTP handler.
+
+    Previously this ran [page_function_graph] for every route (recursive
+    AST walk + Store.lookup_function per callee, depth 8) — hundreds of
+    PG round-trips on every /bindings load. "Used by" on the package
+    list only needs the direct handler mapping; deep graphs stay on
+    /page/<route> inspect. *)
 let used_by_pages_map (session : Session.t)
     : (string, string list) Hashtbl.t Lwt.t =
   let routes = Session.list_pages session in
   let tbl : (string, string list) Hashtbl.t = Hashtbl.create 32 in
-  let add fn route =
-    let prev = try Hashtbl.find tbl fn with Not_found -> [] in
-    if List.mem route prev then ()
-    else Hashtbl.replace tbl fn (route :: prev)
-  in
-  let rec fold_routes rs =
-    match rs with
-    | [] -> Lwt.return tbl
-    | (route, handler) :: rest ->
-        let* graph = page_function_graph session ~handler in
-        List.iter (fun (fn, _) -> add fn route) graph;
-        fold_routes rest
-  in
-  fold_routes routes
+  List.iter
+    (fun (route, handler) ->
+      let prev = try Hashtbl.find tbl handler with Not_found -> [] in
+      if List.mem route prev then ()
+      else Hashtbl.replace tbl handler (route :: prev))
+    routes;
+  Lwt.return tbl
 
 let list_bindings_page (session : Session.t) (reqd : Httpaf.Reqd.t)
     : unit Lwt.t =
