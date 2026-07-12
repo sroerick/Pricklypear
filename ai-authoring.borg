@@ -85,8 +85,11 @@
          - effect inference after parse (lisp-interpreter.effects)
          - policy gate before freeze
 
-         Primary guest surface is now agent-portal ((agent seed prompt)).
-         propose-function / llm-* remain specialized authoring helpers.
+         Primary guest surface is agent-portal: durable sessions +
+         one tool-capable loop ((agent-say sid prompt)). Full
+         message history is resubmitted each provider call.
+         propose-function / llm-* remain specialized authoring
+         helpers outside the conversation store.
 
          Sibling tools (exist as prims; product UX secondary):
          - ast-rewrite: llm-inner / llm-outer / llm-rewrite
@@ -95,101 +98,214 @@
    )
   )
   (subsection agent-portal
-   (doc "Unified guest AI portal: (agent seed prompt) + progress channel; tools are existing Lisp prims (read functions not files)")
-   (status in-progress)
-   (* agent note (|2026-07-11 design+build: radical simplify. One prim for
-     ask and author modes; kernels share Agent.run ~on_event; SSE at
-     POST /api/agent; capability effect Ai only (progress is not a new
-     lattice). OCaml 5 algebraic effects deferred.|) *)
+   (doc "One durable agent: sessions + messages in Postgres, one tool-capable loop, full history resubmitted each provider call")
+   (status planned)
+   (* agent note (|2026-07-12 plan: collapse agent / agent-task into one
+     conversation model. Provider chat/completions is stateless — every
+     turn POSTs the full messages[]. We own durability in ai_sessions +
+     ai_messages (migration 005). Storage interface is the first make
+     slice; runner/prims/HTTP wire next. Token streaming deferred
+     (Synthetic stream hangs; non-stream turns + progress events).|) *)
    (implements
+    (module migrations/005_ai_sessions.sql)
+    (module image/lib/ai_store.ml)
     (module image/lib/llm_client.ml)
     (module image/lib/session.ml)
     (module image/lib/http.ml)
-    (module lisp/lib/effect.ml)
     (module libs/ai/lib.pp))
    (verify
     (build "dune build image")
-    (smoke "(agent seed prompt) returns string when LLM_API_KEY set")
-    (smoke "POST /api/agent streams text/event-stream tokens then done"))
+    (smoke "migration 005 creates ai_sessions + ai_messages")
+    (smoke "ai_store create/list/append/load round-trips a multi-turn thread")
+    (smoke "(agent-say sid prompt) resumes prior messages across process restart")
+    (smoke "tool turns persist assistant tool_calls + tool results in order"))
    (details
     (doc (|
          ==========================================================
-         GUEST SURFACE (one prim)
+         PRODUCT (finished shape — small and closed)
          ==========================================================
 
-         (agent seed prompt) -> string
+         An agent conversation is a durable thread owned by a user:
+           - seed (system persona) fixed at create
+           - ordered messages (user / assistant / tool)
+           - optional tools allowlist on the session
+           - every model call resubmits [system seed] + history
 
-         - seed   = system instruction (copilot vs author persona)
-         - prompt = user message (may include context built in Lisp)
-         - result = final model text as VStr (or error string)
-         - effect = Ai  (lisp-interpreter.effects)
-         - does NOT auto-define functions; apply/define is separate
+         There is ONE loop. Tools are not a second product:
+           - model may answer in text, or request allowlisted tools
+           - kernel runs tools, appends results, continues
+           - one-shot Q&A is the same loop with a short history
 
-         Optional later opts (not required for v1):
-           :stream for job-id return shape; :tools allowlist
-
-         Lisp libraries wrap modes without new kernel APIs:
-
-           (define ai/ask
-             (lambda (q)
-               (agent *copilot-seed*
-                 (string-append (ai/context) "\n\n" q))))
-
-           (define ai/draft-fn
-             (lambda (name spec)
-               (agent *author-seed*
-                 (string-append "name=" name "\n" spec))))
-
-         Reading the world = existing Lisp (list-bindings, rows, get,
-         inspect AST via page/REPL). No filesystem tools in the image.
+         NOT in this product cut:
+           - separate (agent) vs (agent-task) kernels
+           - in-memory-only multi-turn that dies with the request
+           - token streaming as a requirement (progress events yes)
+           - chat UI polish (REPL/pp_eval + thin HTTP enough)
+           - propose-function / llm-* merge into sessions
+             (those stay specialized authoring helpers)
 
          ==========================================================
-         KERNEL: one runner, many sinks
+         PROVIDER CONTRACT (do not invent a second one)
          ==========================================================
 
-         Agent.run ~seed ~prompt ~on_event : string Lwt.t
+         OpenAI-compatible POST /chat/completions:
 
-         on_event receives:
-           `Token s | `Done | `Error s
+           { model, messages: [...full history...], tools?: [...] }
 
-         Sinks:
-           - Lisp/REPL: on_event ignore or eprintf; return final string
-           - HTTP POST /api/agent: text/event-stream
-               data: {"t":"token","s":"..."}
-               data: {"t":"done","text":"..."}
-               data: {"t":"error","s":"..."}
-           - WebSocket later only if mid-turn client input needed
+         The provider does not remember prior turns. "Multi-turn"
+         means WE store messages and resubmit them every call.
+         Tool rounds are ordinary messages in that list:
+           assistant + tool_calls, then role=tool results, then
+           another completions call with the longer list.
 
-         Streaming uses OpenAI stream:true when a sink wants live
-         tokens; non-stream POST when only final text is needed.
-
-         ==========================================================
-         CAPABILITY vs PROGRESS (do not confuse)
-         ==========================================================
-
-         A) Capability effects (existing): may this call AI?
-            Label prim agent with Ai. Gates/badges only.
-
-         B) Progress channel: what to show while it runs?
-            on_event / SSE. Not a new effect lattice.
-
-         C) Host algebraic effects (OCaml 5): later optional
-            implementation of yield; not a v1 dependency.
+         Default transport: non-stream chat_turn (reliable on
+         Synthetic). Progress via on_event:
+           Token | Tool of {name; summary} | Done | Fail
+         HTTP may SSE those control events. Token stream:true is
+         optional later, not part of acceptance for this cut.
 
          ==========================================================
-         TOOL LOOP (phase 2; design locked, implement after portal)
+         SCHEMA (migration 005_ai_sessions.sql)
          ==========================================================
 
-         When tools are enabled, the model may request PP prims:
-           list-bindings, get, rows, current-branch, whoami, ...
-         Kernel runs allowlisted prims and continues the chat.
-         Write-y tools (define, create, update) stay human-gated
-         or require elevated policy (same as propose effects).
+         Additive-only. Named to avoid clash with fleet `sessions`
+         and auth `auth_sessions`.
 
-         propose-function remains a convenience that:
-           1. builds an author seed
-           2. calls Agent.run
-           3. parse + effect gate + define_binding agent:<model>
+         ai_sessions:
+           id          uuid PK default gen_random_uuid()
+           owner       text NOT NULL   -- username (whoami)
+           title       text            -- optional; first user line ok
+           seed        text NOT NULL   -- system prompt; not a message row
+           branch_ref  text            -- branch at create / last say
+           tools       boolean NOT NULL DEFAULT true
+           model       text            -- snapshot of LLM_MODEL at create
+           created_at  timestamptz NOT NULL DEFAULT now()
+           updated_at  timestamptz NOT NULL DEFAULT now()
+
+         ai_messages:
+           id            uuid PK default gen_random_uuid()
+           session_id    uuid NOT NULL REFERENCES ai_sessions(id)
+                           ON DELETE CASCADE
+           seq           int  NOT NULL  -- dense order from 0
+           role          text NOT NULL  -- user|assistant|tool
+                                         -- (system is session.seed only)
+           content       text           -- nullable for pure tool-call
+                                         -- assistant turns
+           tool_calls    jsonb          -- [{id,name,arguments}] or null
+           tool_call_id  text           -- set when role=tool
+           created_at    timestamptz NOT NULL DEFAULT now()
+           UNIQUE (session_id, seq)
+
+         Indexes:
+           ai_sessions (owner, updated_at DESC)
+           ai_messages (session_id, seq)
+
+         Invariants:
+           - seed lives ONLY on ai_sessions (no role=system rows)
+           - messages are append-only in v1 (no edit/delete mid-thread
+             except whole-session delete)
+           - owner isolation: list/get/delete scoped to whoami
+           - tools flag is session-level; per-turn override later
+
+         ==========================================================
+         STORAGE INTERFACE (image/lib/ai_store.ml)
+         ==========================================================
+
+         Pure store module over Store.t / pgx. No LLM calls here.
+         Maps rows <-> Llm_client.chat_message for the runner.
+
+         Types:
+           type session = {
+             id; owner; title : string option; seed;
+             branch_ref : string option; tools : bool;
+             model : string option; created_at; updated_at
+           }
+
+         API (all Lwt):
+           create_session store ~owner ~seed
+             ?title ?branch_ref ?tools ?model () -> session
+           get_session store ~owner ~id -> session option
+             (* owner check; None if missing or not owned *)
+           list_sessions store ~owner ?limit () -> session list
+             (* updated_at DESC; default limit 50 *)
+           delete_session store ~owner ~id -> bool
+           list_messages store ~session_id -> chat_message list
+             (* ordered by seq; roles user|assistant|tool only *)
+           append_messages store ~session_id
+             (chat_message list) -> unit
+             (* assigns next seq values; touches updated_at *)
+           touch_session store ~id ?title () -> unit
+           messages_for_api session history -> chat_message list
+             (* Msg System seed :: history *)
+
+         chat_message encoding:
+           Msg {User|Assistant; content} ->
+             role, content, tool_calls=null, tool_call_id=null
+           Assistant_tools {content; tool_calls} ->
+             role=assistant, content, tool_calls=jsonb
+           Tool_result {tool_call_id; content} ->
+             role=tool, content, tool_call_id
+           System messages are NEVER stored; only injected at API build.
+
+         Errors: missing session, owner mismatch, bad role on write.
+         Use Store.current_conn so with-transaction works if needed.
+
+         ==========================================================
+         ONE RUNNER (after storage; same subsection product)
+         ==========================================================
+
+         Agent.run_loop ~session ~tools ~on_event ~max_steps
+           : string Lwt.t
+
+         Algorithm:
+           1. history = list_messages(session.id)
+           2. loop step:
+                msgs = messages_for_api session history
+                turn = chat_turn ~messages:msgs
+                         ~tools:(if session.tools then allowlist else [])
+                match turn with
+                | Final text ->
+                    append [Msg Assistant text]; on_event Done; return text
+                | Need_tools {content; tool_calls} ->
+                    append Assistant_tools;
+                    for each call: run allowlisted tool; append Tool_result;
+                    on_event Tool {...}; continue (cap max_steps)
+                | Turn_error e -> on_event Fail; return error string
+
+         Guest entry (prims; wire after store):
+           (agent-session-new seed) -> sid
+           (agent-say sid prompt)   -> text
+             append user msg, run_loop, return final assistant text
+           (agent-history sid)      -> list of role/content pairs
+           (agent-sessions)         -> recent threads for whoami
+           (agent-session-delete sid) -> ok
+
+         Library (libs/ai) becomes thin:
+           ai/ask = new-or-sticky session + say (tools may stay on)
+           ai/do  = same (explicit tools session)
+         Deprecated as peer kernels (keep temporary aliases):
+           (agent seed prompt)      -> new session + one say
+           (agent-task prompt)      -> new tools session + one say
+
+         propose-function / install-function remain OUTSIDE this
+         loop as one-shot authoring helpers (they may share
+         llm_client.chat_turn but not ai_sessions).
+
+         ==========================================================
+         CAPABILITY / PROGRESS / NON-GOALS
+         ==========================================================
+
+         Capability: prims labeled Ai (existing effect lattice).
+         Progress: on_event / optional SSE control events.
+         Not required: OCaml 5 effects, WebSocket mid-turn input,
+         message edit, shared multi-user threads, token streaming.
+
+         MAKE ORDER
+           1. migration 005 + scripts/dev.sh apply list
+           2. image/lib/ai_store.ml + dune + round-trip test
+           3. run_loop on ai_store (replace in-memory agent_task msgs)
+           4. prims + libs/ai aliases
+           5. HTTP session_id on /api/agent (thin)
     |))
    )
   )

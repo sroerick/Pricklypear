@@ -39,6 +39,12 @@
              The supervisor runs the migration but never
              connects as pricklypear_auth; only the auth
              image does.
+           003_data.sql      — shared data_rows
+           004_bible_ref_index.sql — bible lookup indexes
+           005_ai_sessions.sql — agent conversation store
+             (ai_sessions, ai_messages; NOT fleet sessions
+              and NOT auth_sessions). Spec:
+              ai-authoring.agent-portal.
 
          Applied idempotently: tracked in schema_migrations
          table. On supervisor boot:
