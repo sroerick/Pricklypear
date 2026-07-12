@@ -2,10 +2,10 @@
 ;; Embed on home via (weather/widget). Full page: /weather
 ;; (load-library "weather")
 
-;; Default habitat: Jackson, WY (wyo.town territory).
-(define weather/default-lat "43.4799")
-(define weather/default-lon "-110.7624")
-(define weather/default-label "Jackson, WY")
+;; Default habitat: Cody, WY.
+(define weather/default-lat "44.52634")
+(define weather/default-lon "-109.05653")
+(define weather/default-label "Cody, WY")
 
 ;; Inline CSS kept small so the card works even if chrome CSS lags.
 (define weather/style
