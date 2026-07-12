@@ -575,10 +575,17 @@
    (status partial)
    (* agent note (|Chrome + pages + page inspector ship. 2026-07-11 plan B:
      Functions browser with package grouping, search, used-by pages;
-     prefix packages (todo/list). Page≠function nav fixes already live.|) *)
+     prefix packages (todo/list). Page≠function nav fixes already live.
+     2026-07-12 PRODUCT SHELL RULE: product chrome is Lisp (ui/nav,
+     ui/menu, ui/home). OCaml must not ship a silent second product
+     nav/home. Silent default_nav_nodes / default_home_content are
+     debt — emergency chrome only, labeled when used. Load-order fix
+     (parents-first rehydrate) landed 653f5e5 so personal ui/menu pins
+     can depend on system menu/* helpers.|) *)
    (verify
     (build "dune build image")
     (smoke "GET / shows user+branch chrome and links to about/functions/repl")
+    (smoke "product nav comes from (ui/nav) when shell loaded; not silent OCaml product twin")
     (smoke "nav has no /edit/hello; Pages links to /pages")
     (smoke "GET /pages columns: page URL + handler function")
     (smoke "GET /page/hello shows route + handler + callee list")
@@ -644,14 +651,45 @@
          - used-by pages; create package+local form
          - Edit only for function_defs rows
 
-         UI SHELL AS LISP (2026-07-11):
-         - Optional bindings ui/nav and ui/home (render-html strings).
-         - If present, chrome nav and GET / use them; else OCaml defaults.
-         - libs/ui/lib.pp is the default editable shell; load-library "ui".
-         - Identity strip (brand, user, branch, uptime) stays OCaml.
-         - Edit via Functions → ui package (mobile drilldown works).
+         UI SHELL AS LISP (authoritative — 2026-07-12):
+
+         RULE: If a human thinks of it as "the environment UI"
+         (navbar, home workspace, app menus), it is Lisp on a
+         branch — not a parallel OCaml product skin.
+
+         - Product shell bindings (required when seed runs):
+             ui/menu  — menu tree (prefer zero-arg lambda that
+                        returns a list; eager lists are fragile
+                        if they call menu/* at define-time)
+             ui/nav   — (lambda () (render-html (menu/bar …)))
+             ui/home  — (lambda () …) home body HTML
+         - libs/ui/lib.pp seeds system/main (load-library "ui" /
+           seed_stdlib). Personal may pin overrides; inherit main
+           when no pin. Prefer thunks over eager value pins.
+         - Chrome nav uses (ui/nav); GET / uses (ui/home).
+         - Identity strip only (brand, username, branch, uptime)
+           stays OCaml — not product structure.
+         - Kernel OCaml pages stay OCaml until deliberately moved:
+           /login, /health, auth middleware, /bindings,/branches,
+           /edit, /inspect, emergency recovery. These are host UI,
+           not a second apps menu.
+         - EMERGENCY chrome (nav/home fail or unbound): minimal,
+           labeled failure (must not look like a healthy product
+           menu). Silent rich OCaml default_nav / default_home is
+           REJECTED architecture — debt to remove.
+         - Rehydrate load order: parents first, child overrides
+           last (so personal ui/menu can call system menu/link).
+         - Edit shell via Functions → package ui (mobile drilldown).
+
+         LAYERING SUMMARY:
+           Lisp  = the computer you live in (shell + app routes)
+           OCaml = host + gate (eval, store, auth, health, emergency)
 
          DEFERRED:
+         - Remove silent default_nav_nodes / default_home_content
+           (replace with labeled emergency only)
+         - ui/menu seed always lambda (load-order safe by default)
+         - Move softer system pages (/about copy) into Lisp packages
          - Data rows browser by type
          - Branch switcher; fork/merge UI
          - True three-column desktop layout (optional later)

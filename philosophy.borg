@@ -16,7 +16,9 @@
                    homoiconic: reader produces App(Var,...), AST JSON-
                    serialized persist_function round-trips. Two-tier
                    change model: define persists to PG (it8); OCaml
-                   changes via rebuild. Branches-not-namespaces:
+                   changes via rebuild. 2026-07-12: product shell is
+                   Lisp (ui/nav ui/home); OCaml emergency only — see
+                   image.system-browser. Branches-not-namespaces:
                    fork_branch + recursive-CTE override walk (it9)
                    with no privileged 'common' branch. Separate-
                    processes isolation: Fleet.boot spawns per-user image
@@ -58,8 +60,12 @@
         4. Two-tier change model. OCaml layer (primitives,
            transports, the unikernel itself) changes slowly
            via supervised A/B boot. Lisp layer (user
-           functions) changes fast via row updates. Schema
-           layer is merge-governed into 'main'.
+           functions AND product environment UI — nav, home,
+           app menus, user routes) changes fast via row
+           updates. Schema layer is merge-governed into
+           'main'. OCaml must not ship a silent second
+           product skin; host/gate/emergency only. See
+           image.system-browser shell rule.
 
         5. Branches, not namespaces. There is no privileged
            'common' namespace. There is 'main' (the system

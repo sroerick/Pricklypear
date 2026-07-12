@@ -6,9 +6,10 @@
   (doc "Human-facing product layer: concepts, access paths, legible vocabulary, first-run, horizon")
   (status partial)
   (* agent note (|it32: PARTIAL overall. concepts-guide, vocabulary,
-    first-run-recipe implemented; access-paths partial (repl.sh yes,
-    browser login no); horizon planned design-only. Markdown removed;
-    .borg is SoT. Verified by dream_product_smoke.py about/hello/pages.|) *)
+    first-run-recipe implemented; access-paths: browser login now
+    in-image (auth.web-login path); horizon planned design-only.
+    2026-07-12: product shell layering — environment UI is Lisp;
+    OCaml is host/gate/emergency only (see image.system-browser).|) *)
   (verify
    (build "dune build image")
    (smoke "GET /about teaches concepts; home offers first-run hello recipe")
@@ -23,6 +24,16 @@
         Product experience is the thin skin that makes the dense
         substrate legible. Without it, only authors understand
         the system.
+
+        LAYERING (aligned with image.system-browser, 2026-07-12):
+        - Environment UI humans live in (nav, home, app menus,
+          user routes) is Lisp on branches (libs/*.pp seed +
+          personal pins). That is the product.
+        - OCaml hosts Lisp: eval, store, auth gate, health,
+          kernel system pages (/bindings, /edit, …), and a
+          labeled emergency shell if ui/nav or ui/home fails.
+        - OCaml must not ship a silent second product nav/home.
+          Dual silent defaults are rejected architecture.
    |))
   )
   (subsection concepts-guide
@@ -35,29 +46,31 @@
     (smoke "GET /about contains Image, Store, Function, Branch, Route, AI"))
    (details
     (doc (|
-         GET /about (always-present OCaml page) MUST explain:
+         GET /about (kernel OCaml page today; may move to Lisp
+         later) MUST explain:
 
          WHAT: multi-user live Lisp environment; image=CPU,
          Postgres=disk; Smalltalk tradition without OOP image dump.
 
          GLOSSARY:
-         - Image: running personal process (REPL + HTTP)
+         - Image: running process (REPL + HTTP); single-image v1
          - Store: Postgres durable truth
          - Function/binding: named live value; define persists
          - Branch: versioned code world; data shared
          - Type/row: deftype + data_rows CRUD
          - Route/page: URL bound to a function
+         - Shell (ui/menu, ui/nav, ui/home): Lisp product chrome
          - AI propose: agent authors on current branch only
 
          ACCESS:
-         - scripts/dev.sh start
-         - scripts/repl.sh (key line protocol :17822)
-         - browser :18080 after image boot
-         - /repl /edit/<name> /bindings /about
-         - authd :17879 admin/token APIs
+         - scripts/dev.sh start (PG + image)
+         - Browser: /login (app session) then / /repl /edit /bindings
+         - scripts/pp_eval.py or Basic auth for agents
+         - scripts/repl.sh / line-protocol REPL when enabled
+         - nginx basic-auth may sit at edge; not the user DB
 
-         FIRST TOUR: define hi-page, route /hello, open page,
-         edit, optional propose-function.
+         FIRST TOUR: log in, define hi-page, route /hello, open page,
+         edit ui/menu for navbar, optional propose-function.
 
          Link from home nav and home body. Full horizon detail
          in product-experience.horizon.
@@ -67,24 +80,33 @@
   (subsection access-paths
    (doc "Documented ways humans reach a live image")
    (status partial)
-   (* agent note (|it32: PARTIAL (intentional). scripts/repl.sh + browser
-     after boot + about docs ship. Browser password login still
-     auth.web-login planned — keeps this subsection partial.|) *)
+   (* agent note (|2026-07-12: browser password login + session cookie
+     ship in-image (auth.web-login / multi-user-product Option B).
+     Still partial: edge nginx basic-auth, REPL path, fleet attach.|) *)
    (verify
-    (smoke "scripts/repl.sh connects and evaluates (+ 1 2)")
-    (smoke "unknown key denied"))
+    (smoke "GET /login form; POST /login mints pp_session")
+    (smoke "scripts/verify_auth.sh or auth_product_smoke passes")
+    (smoke "scripts/repl.sh connects when line-protocol enabled"))
    (details
     (doc (|
-         v1 SHIPPED paths:
-         1. scripts/repl.sh — interactive key auth + REPL
-         2. Browser UI once image booted (HTTP on image port)
-         3. Auth RPC for admin create_user / password / token
-         4. scripts/verify_dream_product.sh automated gate
+         v1 SHIPPED paths (single-image):
+         1. Browser: GET/POST /login → cookie pp_session →
+            land on username/personal; POST /logout revokes
+         2. Admin: /admin/users (create user, revoke sessions)
+         3. Agents: HTTP Basic or session cookie → /api/eval
+            (scripts/pp_eval.py)
+         4. scripts/dev.sh start — PG + image
+         5. scripts/verify_auth.sh product gate
+         6. Optional scripts/repl.sh / line-protocol REPL
+
+         Product chrome after login is Lisp (ui/nav, ui/home).
+         Auth gate and emergency shell are OCaml kernel.
 
          DEFERRED:
-         - Browser login page that boots/attaches image
-           (auth.web-login)
+         - Fleet boot/attach per user (process isolation path)
          - Default real SSH (awa 0.5.x path)
+         - Drop nginx htpasswd as primary human gate
+           (break-glass only)
     |))
    )
   )
@@ -194,11 +216,12 @@
             Semantic search deferred.
 
          Milestone ladder:
-           now   — hacker env (define/edit/route/AI propose)
-           next  — legibility (vocabulary, about, hello recipe,
-                   browser login)
-           later — environment feel (system browser density,
-                   branch browser + promote UI, permissions)
+           now   — hacker env + browser login + Lisp product shell
+                   (define/edit/route/AI; ui/nav ui/home; auth session)
+           next  — kill silent OCaml product defaults; emergency-only
+                   chrome; shell packages denser; branch promote UI
+           later — environment feel (more system UI in Lisp,
+                   permissions, multi-user fleet isolation)
            horizon — community + AI coworker + Solo5 product
 
          Branch UX + software updates: see branching.borg
