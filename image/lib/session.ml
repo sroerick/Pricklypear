@@ -850,8 +850,22 @@ let agent_say
         match sess.title with
         | Some _ -> None
         | None ->
-            let p = String.trim prompt in
-            if p = "" then None
+            let p =
+              let s = String.trim prompt in
+              let key = "\nUser:\n" in
+              let rec find i =
+                if i + String.length key > String.length s then None
+                else if String.sub s i (String.length key) = key then Some i
+                else find (i + 1)
+              in
+              match find 0 with
+              | Some i ->
+                  String.trim
+                    (String.sub s (i + String.length key)
+                       (String.length s - i - String.length key))
+              | None -> s
+            in
+            if String.trim p = "" then None
             else
               Some
                 (if String.length p > 80 then String.sub p 0 80 ^ "…" else p)

@@ -2373,6 +2373,40 @@ let default_http_agent_seed =
     Creates a session when session_id omitted; always returns session_id.
     Progress SSE when Accept prefers event-stream or stream:true; default
     is non-stream JSON (token streaming deferred / flaky on Synthetic). *)
+(** Pull the human line out of the HTTP agent prompt wrapper for titles/UI. *)
+let agent_user_visible_text (s : string) : string =
+  let s = String.trim s in
+  let key = "\nUser:\n" in
+  let rec find_sub hay needle i =
+    let nlen = String.length needle in
+    let hlen = String.length hay in
+    if i + nlen > hlen then None
+    else if String.sub hay i nlen = needle then Some i
+    else find_sub hay needle (i + 1)
+  in
+  match find_sub s key 0 with
+  | Some i ->
+      String.trim
+        (String.sub s (i + String.length key)
+           (String.length s - i - String.length key))
+  | None ->
+      if String.length s >= 20
+         && String.sub s 0 20 = "=== IMAGE CONTEXT ===" then
+        let n = min 80 (String.length s) in
+        String.sub s 0 n ^ (if String.length s > 80 then "…" else "")
+      else s
+
+let agent_session_label (s : Ai_store.session) : string =
+  match s.title with
+  | Some t when String.trim t <> "" ->
+      let t = agent_user_visible_text t in
+      if String.trim t = "" then String.sub s.id 0 (min 8 (String.length s.id))
+      else if String.length t > 72 then String.sub t 0 72 ^ "…"
+      else t
+  | _ ->
+      let short = String.sub s.id 0 (min 8 (String.length s.id)) in
+      "chat " ^ short
+
 let api_agent (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
   let* body = read_body reqd in
   let seed, prompt, session_id_opt, tools, max_steps, want_stream =
@@ -2441,8 +2475,8 @@ let api_agent (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
       | Some sid -> Lwt.return (Ok sid)
       | None ->
           let title_opt =
-            let p = String.trim prompt in
-            if p = "" then None
+            let p = agent_user_visible_text prompt in
+            if String.trim p = "" then None
             else
               Some
                 (if String.length p > 80 then String.sub p 0 80 ^ "…" else p)
@@ -2598,7 +2632,13 @@ let api_agent_task (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
     Lwt.return_unit
 
 let agent_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
-  (* Short live context only — full binding dumps bloat the page + prompt. *)
+  (* Durable chats: list + open with ?session=id (agent-portal UI). *)
+  let target = (Httpaf.Reqd.request reqd).Httpaf.Request.target in
+  let open_sid =
+    match query_param target "session" with
+    | Some s when String.trim s <> "" -> Some (String.trim s)
+    | _ -> None
+  in
   let ctx =
     Printf.sprintf "user=%s branch=%s"
       (Session.username session) (Session.branch_name session)
@@ -2609,6 +2649,109 @@ let agent_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
     "Prefer facts from the CONTEXT block. Use tools to inspect the live image " ^
     "when available. Answer clearly and briefly. Never invent bindings."
   in
+  let* sessions =
+    Ai_store.list_sessions (Session.store session)
+      ~owner:(Session.username session) ~limit:40 ()
+  in
+  let* open_sess, history =
+    match open_sid with
+    | None -> Lwt.return (None, [])
+    | Some id ->
+        let* s_opt =
+          Ai_store.get_session (Session.store session)
+            ~owner:(Session.username session) ~id
+        in
+        (match s_opt with
+         | None -> Lwt.return (None, [])
+         | Some s ->
+             let* pairs =
+               Ai_store.history_summaries (Session.store session) ~session_id:id
+             in
+             Lwt.return (Some s, pairs))
+  in
+  let seed_value =
+    match open_sess with
+    | Some s when String.trim s.seed <> "" -> s.seed
+    | _ -> default_seed
+  in
+  let tools_checked =
+    match open_sess with Some s -> s.tools | None -> true
+  in
+  let sid_display =
+    match open_sess with Some s -> s.id | None -> "(new on send)"
+  in
+  let history_nodes =
+    List.map
+      (fun (role, content) ->
+        let role_label =
+          match role with
+          | "user" -> "you"
+          | "assistant" -> "agent"
+          | other -> other
+        in
+        let shown =
+          if role = "user" then agent_user_visible_text content else content
+        in
+        let shown =
+          if String.length shown > 4000 then
+            String.sub shown 0 4000 ^ "\n…(truncated)"
+          else shown
+        in
+        HTML.div
+          [ HTML.class_ "card"; HTML.style_ "margin:.4rem 0" ]
+          [ HTML.b [] [txt "%s" role_label]
+          ; HTML.pre
+              [ HTML.style_ "white-space:pre-wrap;margin:.35rem 0 0" ]
+              [txt "%s" shown]
+          ])
+      history
+  in
+  let session_list_nodes =
+    if sessions = [] then
+      [ HTML.p [HTML.class_ "muted"] [txt "No chats yet — send a message."] ]
+    else
+      List.map
+        (fun (s : Ai_store.session) ->
+          let active =
+            match open_sess with
+            | Some o when o.id = s.id -> true
+            | _ -> false
+          in
+          let label = agent_session_label s in
+          let href = "/agent?session=" ^ s.id in
+          HTML.li
+            [ HTML.style_
+                (if active then "font-weight:700;margin:.25rem 0"
+                 else "margin:.25rem 0")
+            ]
+            [ HTML.a [HTML.href "%s" href] [txt "%s" label]
+            ; HTML.span [HTML.class_ "muted"]
+                [txt "%s" (" · " ^ s.updated_at)]
+            ])
+        sessions
+  in
+  let initial_sid_js =
+    match open_sess with
+    | Some s -> Yojson.Safe.to_string (`String s.id)
+    | None -> "null"
+  in
+  let tools_input =
+    if tools_checked then
+      HTML.input
+        [ HTML.type_ "checkbox"
+        ; HTML.name "tools"
+        ; HTML.id "tools"
+        ; HTML.value "1"
+        ; HTML.checked
+        ]
+    else
+      HTML.input
+        [ HTML.type_ "checkbox"
+        ; HTML.name "tools"
+        ; HTML.id "tools"
+        ; HTML.value "1"
+        ]
+  in
   let js =
     "const log=document.getElementById('log');" ^
     "const msg=document.getElementById('msg');" ^
@@ -2618,7 +2761,7 @@ let agent_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
     "const toolsEl=document.getElementById('tools');" ^
     "const seedEl=document.getElementById('seed');" ^
     "const baseCtx=" ^ Yojson.Safe.to_string (`String ctx) ^ ";" ^
-    "let sid=null;" ^
+    "let sid=" ^ initial_sid_js ^ ";" ^
     "function add(role,text){" ^
     "const d=document.createElement('div');" ^
     "d.className='card';" ^
@@ -2626,8 +2769,12 @@ let agent_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
     "d.innerHTML='<b>'+role+'</b><pre style=\"white-space:pre-wrap;margin:.35rem 0 0\">'+" ^
     "String(text).replace(/[&<>]/g,c=>({\"&\":\"&amp;\",\"<\":\"&lt;\",\">\":\"&gt;\"}[c]))+" ^
     "'</pre>';log.appendChild(d);log.scrollTop=log.scrollHeight;}" ^
-    "function setSid(s){sid=s||null;sidEl.textContent=sid?sid:'(new on send)';}" ^
-    "neu.onclick=()=>{setSid(null);log.innerHTML='';msg.focus();};" ^
+    "function setSid(s){sid=s||null;sidEl.textContent=sid?sid:'(new on send)';" ^
+    "if(sid){const u=new URL(window.location.href);u.searchParams.set('session',sid);" ^
+    "history.replaceState({},'',u.pathname+u.search);}" ^
+    "else{history.replaceState({},'','/agent');}}" ^
+    "setSid(sid);" ^
+    "neu.onclick=()=>{window.location.href='/agent';};" ^
     "send.onclick=async()=>{" ^
     "const q=msg.value.trim();if(!q)return;" ^
     "const seed=seedEl.value;" ^
@@ -2645,6 +2792,10 @@ let agent_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
     "const j=await r.json();" ^
     "if(j.session_id)setSid(j.session_id);" ^
     "add('agent',j.text||j.error||JSON.stringify(j));" ^
+    "if(j.session_id){" ^
+    "const href='/agent?session='+encodeURIComponent(j.session_id);" ^
+    "if(!document.querySelector('#chat-list a[href=\"'+href+'\"]'))" ^
+    " setTimeout(function(){window.location.href=href;},350);}" ^
     "}catch(e){add('error',String(e));}" ^
     "finally{send.disabled=false;msg.focus();}" ^
     "};" ^
@@ -2653,35 +2804,36 @@ let agent_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
   let body =
     chrome ~session ~title:"Agent" [
       HTML.div [HTML.class_ "card"] [
-        HTML.h2 [] [txt "Conversation"];
+        HTML.h2 [] [txt "Chats"];
         HTML.p [HTML.class_ "muted"] [txt
-          "One durable session. Each Send continues the same thread (tools optional). New chat starts a fresh session."];
+          "Durable threads in Postgres. Open one to resume; New chat starts empty."];
+        HTML.p [] [
+          HTML.a [HTML.href "/agent"; HTML.class_ "btn"] [txt "New chat"];
+        ];
+        HTML.ul [HTML.id "chat-list"] session_list_nodes;
+      ];
+      HTML.div [HTML.class_ "card"] [
+        HTML.h2 [] [txt "Conversation"];
         HTML.p [] [
           txt "session: ";
-          HTML.code [HTML.id "sid"] [txt "(new on send)"];
+          HTML.code [HTML.id "sid"] [txt "%s" sid_display];
         ];
         HTML.p [] [
           HTML.label [HTML.for_ "tools"] [
-            HTML.input
-              [ HTML.type_ "checkbox"
-              ; HTML.name "tools"
-              ; HTML.id "tools"
-              ; HTML.value "1"
-              ; HTML.checked
-              ]
-              ;
+            tools_input;
             txt " tools (inspect / install)"
           ];
         ];
         HTML.details [] [
           HTML.summary [] [txt "seed (system persona)"];
-          HTML.textarea [HTML.name "seed"; HTML.id "seed"] "%s" default_seed;
+          HTML.textarea [HTML.name "seed"; HTML.id "seed"] "%s" seed_value;
         ];
         HTML.div
           [ HTML.id "log"
-          ; HTML.style_ "max-height:28rem;overflow:auto;border:1px solid #ccc;padding:.5rem;margin:.5rem 0"
+          ; HTML.style_
+              "max-height:28rem;overflow:auto;border:1px solid #ccc;padding:.5rem;margin:.5rem 0"
           ]
-          [];
+          history_nodes;
         HTML.p [] [
           HTML.label [HTML.for_ "msg"] [txt "message"];
         ];
