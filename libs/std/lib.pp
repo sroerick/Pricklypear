@@ -77,6 +77,7 @@
 
 (define html/h1 (lambda (body) (html/tag "h1" "" body)))
 (define html/h2 (lambda (body) (html/tag "h2" "" body)))
+(define html/h3 (lambda (body) (html/tag "h3" "" body)))
 (define html/p
   (lambda (body)
     (html/tag "p" "" (html/text body))))
