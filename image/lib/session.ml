@@ -1405,6 +1405,7 @@ and seed_stdlib (t : t) : unit Lwt.t =
      the current branch still overwrites that branch (intentional). *)
   Store.with_branch t.store ~branch_id:Store.system_main_id (fun () ->
     let* () = seed_one t "std" in
+    let* () = seed_one t "weather" in
     let* () = seed_one t "ui" in
     let* () = seed_one t "ai" in
     let* () = seed_one t "outline" in

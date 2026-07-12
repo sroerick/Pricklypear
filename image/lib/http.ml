@@ -185,6 +185,15 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
            padding:.35rem 0;border-bottom:1px solid #ccc}
          .cal-time{font-size:.8rem;min-width:3.5rem;color:#333}
          .cal-day-panel label{display:block;margin-top:.4rem}
+         /* Weather widget */
+         .weather-card .wx-row{display:flex;align-items:baseline;gap:.75rem;flex-wrap:wrap}
+         .weather-card .wx-temp{font-size:2rem;font-weight:700;line-height:1}
+         .weather-card .wx-meta{font-size:.9rem;color:#333}
+         .weather-card .wx-loc{font-weight:700;margin:.25rem 0}
+         .weather-card .wx-form{display:flex;gap:.35rem;flex-wrap:wrap;margin-top:.5rem}
+         .weather-card .wx-form input[type=text]{flex:1 1 8rem;min-width:0}
+         .weather-card .wx-form button{width:auto;min-width:4.5rem}
+         .weather-card .wx-err{color:#800000;font-weight:700}
          /* Todo list */
          .todo-add-label{display:block;font-weight:bold;margin:0 0 .35rem}
          .todo-add-row{display:flex;gap:.5rem;align-items:stretch;flex-wrap:wrap}

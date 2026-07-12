@@ -13,6 +13,7 @@
           (menu/link "dabar" "/dabar")
           (menu/link "todos" "/todos")
           (menu/link "calendar" "/calendar")
+          (menu/link "weather" "/weather")
           (menu/link "strongs" "/strongs")
           (menu/link "agent" "/agent")))
       (menu/group "system"
@@ -37,6 +38,7 @@
   (lambda ()
     (html/page
       (list
+        (weather/widget)
         (html/div (html/attr "class" "card")
           (html/join
             (list
@@ -53,6 +55,7 @@
                     (html/li "" (html/a "/notes" "Notes"))
                     (html/li "" (html/a "/dabar" "Bible"))
                     (html/li "" (html/a "/todos" "Todos"))
+                    (html/li "" (html/a "/weather" "Weather"))
                     (html/li "" (html/a "/bindings?pkg=ui" "Edit ui"))))))))
         (html/div (html/attr "class" "card")
           (html/join
