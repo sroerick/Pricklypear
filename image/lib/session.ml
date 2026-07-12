@@ -373,7 +373,7 @@ let check_ai_body_effects (body_src : string) : (unit, string) result =
     else
       Error
         (Printf.sprintf
-           "effect policy denied (%s); allow pure|read-db|html by default; set PP_AI_ALLOW_WRITE=1 to elevate"
+           "effect policy denied (%s); allow pure|read-db|write-db|html by default; use register_route tool for routes (not (route ...) in body); set PP_AI_ALLOW_WRITE=1 for branch/publish elevate"
            (Pricklypear_lisp.Effect.EffSet.pp fx))
   with _ -> Ok ()  (* parse errors handled by define_binding *)
 
@@ -579,7 +579,7 @@ let agent_tool_defs : Llm_client.tool_def list =
     }
   ; { name = "install_function"
     ; description =
-        "Install a Lisp function on the current branch. body must be a lambda          s-expression only, e.g. (lambda (x) (* x 2)). Author becomes agent:<model>."
+        "Install a Lisp function on the current branch. body must be a lambda s-expression only, e.g. (lambda (x) (* x 2)) or (lambda () (html/page ...)). Do not put (route ...) in the body — use register_route. Author becomes agent:<model>."
     ; parameters =
         obj
           [ ("name",
@@ -594,6 +594,24 @@ let agent_tool_defs : Llm_client.tool_def list =
                ])
           ]
           [ "name"; "body" ]
+    }
+  ; { name = "register_route"
+    ; description =
+        "Bind an HTTP path to an already-installed handler function name on this branch. Use after install_function of the page handler. Example: path=/contacts handler=contacts/page. Do NOT put (route ...) inside install_function bodies."
+    ; parameters =
+        obj
+          [ ("path",
+             `Assoc
+               [ ("type", `String "string")
+               ; ("description", `String "URL path starting with /, e.g. /contacts")
+               ])
+          ; ("handler",
+             `Assoc
+               [ ("type", `String "string")
+               ; ("description", `String "function name, e.g. contacts/page")
+               ])
+          ]
+          [ "path"; "handler" ]
     }
   ; { name = "image_context"
     ; description = "Return user, branch, and a short summary of this image"
@@ -640,6 +658,32 @@ let run_agent_tool (t : t) ~(name : string) ~(arguments : string)
            let* v = install_ai_function t ~name:n ~body_src:body in
            Lwt.return (pp_value_short v)
        | _ -> Lwt.return "error: need name and body")
+  | "register_route" ->
+      (match json_string_field args_json "path", json_string_field args_json "handler" with
+       | Some path, Some handler ->
+           let path = String.trim path in
+           let handler = String.trim handler in
+           let bad_prefix =
+             List.exists
+               (fun p ->
+                 path = p
+                 || (String.length path > String.length p
+                     && String.sub path 0 (String.length p + 1) = p ^ "/"))
+               [ "/api"; "/admin"; "/login"; "/logout"; "/health"; "/agent" ]
+           in
+           if path = "" || path.[0] <> '/' then
+             Lwt.return "error: path must start with /"
+           else if bad_prefix then
+             Lwt.return ("error: path reserved: " ^ path)
+           else if handler = "" then
+             Lwt.return "error: need handler function name"
+           else begin
+             Hashtbl.replace t.routes path handler;
+             let* _ = Store.register_route t.store ~route:path ~handler in
+             Lwt.return
+               (Printf.sprintf "registered route %s -> %s" path handler)
+           end
+       | _ -> Lwt.return "error: need path and handler")
   | "image_context" ->
       let names =
         try
@@ -798,14 +842,33 @@ let default_agent_seed (t : t) : string =
   "(personal overrides shadow main; one name = one function).\n" ^
   "All install_function writes go to THIS branch only. " ^
   "Do NOT attempt checkout, fork, or merge.\n" ^
-  "Tools: image_context, list_bindings, list_routes, inspect_function, install_function.\n" ^
-  "Efficiency rules:\n" ^
-  "- Batch: emit MULTIPLE tool calls in ONE assistant turn when possible " ^
-  "(e.g. several install_function calls together).\n" ^
-  "- Do not re-list bindings after every install unless needed.\n" ^
-  "- install_function body = one lambda s-expression only, no prose.\n" ^
-  "- Prefer package/name names (demo/hello).\n" ^
-  "- When finished, respond with a SHORT text summary and NO tool calls.\n" ^
+  "Tools: image_context, list_bindings, list_routes, inspect_function, " ^
+  "install_function, register_route.\n" ^
+  "\n" ^
+  "How to build a small app (dogfood pattern — copy todo/notes style):\n" ^
+  "1) Persist with create/rows/get/update/delete on data_rows. " ^
+  "Build fields JSON with (dict-set* \"{}\" (list \"name\" n \"email\" e ...)). " ^
+  "Optional init: (lambda () (deftype 'contact 'name 'email 'phone 'notes)).\n" ^
+  "2) install_function name=pkg/page body=(lambda () ...) using html/* " ^
+  "helpers: html/page, html/form method action attrs body, html/join, " ^
+  "html/text-input, html/hidden, html/button. Never invent html/nil or " ^
+  "multi-arg html/attr bags like (html/attr \"a\" \"b\" \"c\" \"d\").\n" ^
+  "3) Row shape from (rows 'type): each row is (id . fields-json). " ^
+  "Use (car row) for id, (cdr row) for fields, (dict-get fields \"name\").\n" ^
+  "4) POST handlers: branch on (request-method) and (request-param \"action\"); " ^
+  "after mutate, (redirect \"/path\") or (render-html ...) for htmx.\n" ^
+  "5) NEVER use outline/* as a database. outline/* is for notes trees only.\n" ^
+  "6) Routes: call register_route path=/pkg handler=pkg/page. " ^
+  "Do NOT (route ...) inside install_function (publish effect is blocked there).\n" ^
+  "7) Inspect working apps first: inspect_function todo/page, notes/page, " ^
+  "todo/add, html/form.\n" ^
+  "\n" ^
+  "Tool discipline:\n" ^
+  "- Use ONLY the structured tool API. Never write <tool_call> XML in text.\n" ^
+  "- install_function body = one lambda s-expression only, no prose/markdown.\n" ^
+  "- Batch multiple tool calls in one turn when possible.\n" ^
+  "- Prefer package/name names (contacts/page).\n" ^
+  "- When finished, SHORT text summary and NO tool calls.\n" ^
   "- Do not invent bindings; use list_bindings / inspect_function."
 
 let agent_session_new

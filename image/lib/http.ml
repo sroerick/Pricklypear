@@ -2363,9 +2363,13 @@ let sse_write (body : [ `write ] Httpaf.Body.t) (event_json : string) : unit Lwt
     ]
 
 let default_http_agent_seed =
-  "You are the co-pilot for a Pricklypear multi-user Lisp OS image \
-   (software, not a cactus). Prefer CONTEXT; if unknown say so. Use tools \
-   to inspect the live image when available."
+  (* Short fallback when no session seed; tools sessions should prefer
+     Session.default_agent_seed (dogfood + register_route rules). *)
+  "You are the co-pilot for a Pricklypear multi-user Lisp OS image " ^
+  "(software, not a cactus). Prefer CONTEXT; if unknown say so. " ^
+  "Use structured tools only (never <tool_call> XML). " ^
+  "install_function for lambdas; register_route for HTTP paths; " ^
+  "data_rows via create/rows (not outline/*); inspect todo/page first."
 
 (** POST /api/agent — durable sessions.
     Body JSON:
@@ -2648,12 +2652,7 @@ let agent_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
     Printf.sprintf "user=%s branch=%s"
       (Session.username session) (Session.branch_name session)
   in
-  let default_seed =
-    "You are the co-pilot for a running Pricklypear IMAGE — a multi-user Lisp " ^
-    "operating system (software), NOT the cactus plant.\n" ^
-    "Prefer facts from the CONTEXT block. Use tools to inspect the live image " ^
-    "when available. Answer clearly and briefly. Never invent bindings."
-  in
+  let default_seed = Session.default_agent_seed session in
   let* sessions =
     Ai_store.list_sessions (Session.store session)
       ~owner:(Session.username session) ~limit:40 ()

@@ -114,6 +114,7 @@ let pure_prims = [
 
 let read_db_prims = [
   "get"; "rows"; "select-for-update";
+  "find-row"; "find-rows"; "find-text"; "find-random";
   "list-branches"; "current-branch"; "list-bindings";
   "whoami"; "current-author";
   "function-source"; "package-bindings"; "export-package";
@@ -208,9 +209,15 @@ let rec infer
       in
       EffSet.unions (head_fx :: special :: List.map go args)
 
-(** Default AI allowlist for generated code. *)
+(** Default AI allowlist for generated code (install_function bodies).
+
+    WriteDb is allowed so agents can build real apps (create/update/delete/
+    deftype on data_rows). Publish (route) stays denied here — use the
+    dedicated register_route tool so route registration is explicit and
+    not smuggled inside a lambda body. Elevate with PP_AI_ALLOW_WRITE for
+    Branch/Publish/Ai extras. *)
 let ai_default_allow : effect_set =
-  EffSet.normalize [ ReadDb; Html ]
+  EffSet.normalize [ ReadDb; WriteDb; Html ]
 
 let policy_allows ~(allow : effect_set) (got : effect_set) : bool =
   (* Pure always allowed; every effect in got must be in allow,

@@ -39,12 +39,19 @@ let checks = [
   ("policy allows pure", `Quick, fun () ->
     Alcotest.(check bool) "ok" true
       (Effect.policy_allows ~allow:Effect.ai_default_allow Effect.EffSet.empty));
-  ("policy denies write", `Quick, fun () ->
+  ("policy allows write-db for app scaffolding", `Quick, fun () ->
     let got = Effect.EffSet.singleton Effect.WriteDb in
-    Alcotest.(check bool) "deny" false
+    Alcotest.(check bool) "allow write" true
       (Effect.policy_allows ~allow:Effect.ai_default_allow got));
-  ("policy allows read+html", `Quick, fun () ->
-    let got = Effect.EffSet.normalize [ Effect.ReadDb; Effect.Html ] in
+  ("policy denies publish without elevate", `Quick, fun () ->
+    let got = Effect.EffSet.singleton Effect.Publish in
+    Alcotest.(check bool) "deny publish" false
+      (Effect.policy_allows ~allow:Effect.ai_default_allow got));
+  ("policy allows read+write+html", `Quick, fun () ->
+    let got =
+      Effect.EffSet.normalize
+        [ Effect.ReadDb; Effect.WriteDb; Effect.Html ]
+    in
     Alcotest.(check bool) "ok" true
       (Effect.policy_allows ~allow:Effect.ai_default_allow got));
 ]

@@ -391,6 +391,96 @@ let tool_def_to_json (t : tool_def) : Yojson.Safe.t =
          ])
     ]
 
+(** Recover when models dump tools as XML in content instead of API tool_calls.
+    Format seen in the wild (GLM etc.):
+      <tool_call>install_function
+      <arg_key>name</arg_key><arg_value>foo</arg_value>
+      <arg_key>body</arg_key><arg_value>(lambda () 1)</arg_value>
+      </tool_call> *)
+let find_substring ~(hay : string) ~(needle : string) ~(from : int) : int option =
+  let nlen = String.length needle in
+  let hlen = String.length hay in
+  let rec go i =
+    if i + nlen > hlen then None
+    else if String.sub hay i nlen = needle then Some i
+    else go (i + 1)
+  in
+  go from
+
+let parse_xml_tool_calls (text : string) : tool_call list =
+  let open_tag = "<tool_call>" in
+  let close_tag = "</tool_call>" in
+  let rec find_blocks acc from =
+    match find_substring ~hay:text ~needle:open_tag ~from with
+    | None -> List.rev acc
+    | Some start ->
+        let body_start = start + String.length open_tag in
+        (match find_substring ~hay:text ~needle:close_tag ~from:body_start with
+         | None -> List.rev acc
+         | Some stop ->
+             let block = String.sub text body_start (stop - body_start) in
+             find_blocks (block :: acc) (stop + String.length close_tag))
+  in
+  let parse_args block =
+    let rec collect acc from =
+      match find_substring ~hay:block ~needle:"<arg_key>" ~from with
+      | None -> List.rev acc
+      | Some k0 ->
+          let k1 = k0 + String.length "<arg_key>" in
+          (match find_substring ~hay:block ~needle:"</arg_key>" ~from:k1 with
+           | None -> List.rev acc
+           | Some k2 ->
+               let key = String.trim (String.sub block k1 (k2 - k1)) in
+               let after_key = k2 + String.length "</arg_key>" in
+               (match
+                  find_substring ~hay:block ~needle:"<arg_value>" ~from:after_key
+                with
+                | None -> List.rev acc
+                | Some v0 ->
+                    let v1 = v0 + String.length "<arg_value>" in
+                    (match
+                       find_substring ~hay:block ~needle:"</arg_value>" ~from:v1
+                     with
+                     | None -> List.rev acc
+                     | Some v2 ->
+                         let value = String.sub block v1 (v2 - v1) in
+                         collect ((key, value) :: acc)
+                           (v2 + String.length "</arg_value>"))))
+    in
+    collect [] 0
+  in
+  let parse_one idx block =
+    let block = String.trim block in
+    let name =
+      match find_substring ~hay:block ~needle:"<arg_key>" ~from:0 with
+      | Some i -> String.trim (String.sub block 0 i)
+      | None ->
+          (match String.split_on_char '\n' block with
+           | n :: _ -> String.trim n
+           | [] -> "")
+    in
+    let name =
+      match String.split_on_char ' ' (String.trim name) with
+      | x :: _ -> String.trim x
+      | [] -> String.trim name
+    in
+    if name = "" then None
+    else
+      let args = parse_args block in
+      let arguments =
+        Yojson.Safe.to_string
+          (`Assoc (List.map (fun (k, v) -> (k, `String v)) args))
+      in
+      Some
+        { id = Printf.sprintf "xml-tool-%d" (idx + 1)
+        ; name
+        ; arguments
+        }
+  in
+  find_blocks [] 0
+  |> List.mapi parse_one
+  |> List.filter_map (fun x -> x)
+
 let parse_tool_calls (msg : Yojson.Safe.t) : tool_call list =
   let open Yojson.Safe.Util in
   match msg |> member "tool_calls" with
@@ -433,16 +523,26 @@ let parse_turn_response (body : string) : turn_result =
         let tcs = parse_tool_calls msg in
         if tcs <> [] then
           Need_tools { content = content_opt; tool_calls = tcs }
-        else if finish = "tool_calls" then
-          Turn_error "LLM: finish_reason=tool_calls but no tool_calls payload"
         else
-          (match content_opt with
-           | Some c -> Final c
-           | None ->
-               (* some models put answer only in reasoning *)
-               (match msg |> member "reasoning_content" |> to_string_option with
-                | Some r when String.trim r <> "" -> Final r
-                | _ -> Turn_error (Printf.sprintf "LLM: empty content (finish=%s)" finish)))
+          (* Fallback: XML tool_call blocks in content (common model failure). *)
+          let xml_tcs =
+            match content_opt with
+            | Some c -> parse_xml_tool_calls c
+            | None -> []
+          in
+          if xml_tcs <> [] then
+            Need_tools { content = None; tool_calls = xml_tcs }
+          else if finish = "tool_calls" then
+            Turn_error "LLM: finish_reason=tool_calls but no tool_calls payload"
+          else
+            (match content_opt with
+             | Some c -> Final c
+             | None ->
+                 (match msg |> member "reasoning_content" |> to_string_option with
+                  | Some r when String.trim r <> "" -> Final r
+                  | _ ->
+                      Turn_error
+                        (Printf.sprintf "LLM: empty content (finish=%s)" finish)))
   with e ->
     let trunc =
       if String.length body > 300 then String.sub body 0 300 ^ "..." else body
