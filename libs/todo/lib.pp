@@ -347,7 +347,7 @@
                           (html/attr "required" "required")
                           (html/attr "placeholder" "buy milk")
                           (html/attr "autocomplete" "off"))))
-                    (html/button (html/attr "type" "submit") "Add")))))))))))
+                    (html/button (html/attr "type" "submit") "Add"))))))))))
 
 (define todo/items-html
   (lambda (view)

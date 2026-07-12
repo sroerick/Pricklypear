@@ -251,7 +251,7 @@
                                     (if (string-eq op "cycle-todo")
                                         (outline/update tree nid
                                           (lambda (n) (outline/cycle-todo n)))
-                                        tree))))))))))))
+                                        tree)))))))))))
 
 ;; (slug node-id title state)*
 (define notes/all-todos
