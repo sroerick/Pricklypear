@@ -4,20 +4,21 @@
 (define ui/menu
   (list
     (menu/link "home" "/")
-    (menu/group "browse"
-      (list
-        (menu/link "functions" "/bindings")
-        (menu/link "pages" "/pages")
-        (menu/link "data" "/types")
-        (menu/link "branches" "/branches")
-        (menu/link "about" "/about")))
     (menu/group "apps"
       (list
         (menu/link "notes" "/notes")
         (menu/link "dabar" "/dabar")
         (menu/link "todos" "/todos")
         (menu/link "calendar" "/calendar")
-        (menu/link "agent" "/agent")
+        (menu/link "strongs" "/strongs")
+        (menu/link "agent" "/agent")))
+    (menu/group "system"
+      (list
+        (menu/link "functions" "/bindings")
+        (menu/link "pages" "/pages")
+        (menu/link "data" "/types")
+        (menu/link "branches" "/branches")
+        (menu/link "about" "/about")
         (menu/link "repl" "/repl")))))
 
 ;; ui/menu may be a list (preferred) OR a zero-arg lambda that returns a list.
