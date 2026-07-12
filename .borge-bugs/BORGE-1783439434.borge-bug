@@ -49,3 +49,4 @@ body: |
   - When 0.5.x is upgraded: rewrite `ssh_awa.ml`'s db build to a
     single per-connection auth callback that calls authd's
     /verify_ssh_key — eliminates the snapshot refresh concern.
+  (* agent note (|2026-07-12 status-reconcile: awa-ssh identity constraint; largely moot for single-image default but remains if SSH front door returns.|) *)

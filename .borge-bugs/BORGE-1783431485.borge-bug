@@ -1,6 +1,6 @@
 (borge-bug (id "BORGE-1783431485")
   (title "Reader escape handler bug + CRUD list/rows naming")
-  (status triage)
+  (status resolved)
   (created 2026-07-07)
   (filed-by roerick)
   (doc "Two findings from iteration-13 CRUD primitive work, filed together because the second surfaced while debugging the first.
@@ -10,4 +10,6 @@
 (2) CRUD prim name '(list 'type)' collided with the pure list-constructor prim '(list 1 2 3)' — both were registered as 'list' and the later registration (CRUD) won, breaking primitives_test cases. Renamed CRUD's list-rows primitive to 'rows' (read as: '(rows 'type [limit])'). The spec text in [storage.types] / [lisp-interpreter.primitives] doesn't explicitly name the list-rows prim, so this is a v1 implementation choice; the spec should reflect '(rows ...)' rather than '(list ...)' when these sections are next updated in a plan pass.
 
 CRUD primitives on the Lwt-typed ABI (it12 refactor) are now fully functional: (get 'type id), (create 'type fields), (update 'type id fields), (delete 'type id), (rows 'type [limit]). Each returns its real DB result through the promise chain — '(define u (get 'user id))' then '(str u)' returns the row's fields, proving the read-side composition that the it12 ABI refactor was built to enable. Smoke test: /tmp/pp_crud_it13.py.")
+
+  (* agent note (|2026-07-12 status-reconcile: CRUD rows naming + reader escape work landed; rows prim is canonical.|) *)
 )

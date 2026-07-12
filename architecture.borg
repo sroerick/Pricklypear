@@ -16,6 +16,7 @@
  (section architecture
   (doc "The overall picture: hypervisor -> supervisor unikernel -> per-user image unikernels -> Postgres")
   (status partial)
+  (* agent note (|2026-07-12 status-reconcile: Doctrinal multi-unikernel picture superseded operationally by single-image; package-layout still accurate for lisp/common/migrations/image.|) *)
   (* agent note (|it23 plan-pass #5: architecture is partially
                    realized. Topology describes a supervisor +
                    per-user image + auth + PG layout that IS built,
@@ -40,6 +41,7 @@
   (subsection topology
    (doc "Physical and logical layout")
    (status partial)
+   (* agent note (|2026-07-12 status-reconcile: RUNNING topology is single-image (see single-image.borg): one image process + Postgres + nginx. Multi-process supervisor/authd/fleet diagram is historical. Solo5/A-B still deferred.|) *)
    (* agent note (|it23: topology diagram is implemented-by-construction.
                     PG cluster is real. Auth unikernel connects
                     as pricklypear_auth role (verified it5).
@@ -229,6 +231,7 @@
   (subsection transport-choices
    (doc "Why each transport + framework choice")
    (status partial)
+   (* agent note (|2026-07-12 status-reconcile: httpaf-lwt-unix + pure-html + pgx_lwt are the live stack. Supervisor SSH/awa path retired/optional. Solo5 deferred.|) *)
    (* agent note (|it23: transport choices are realized as documented,
                     with the same SSH caveat: the spec text says
                     'awa-ssh listens on :22' which IS the design; v1

@@ -9,4 +9,6 @@
       Session.ui_css + refresh; http emergency_css only;
       scripts/pp_theme_pathb_smoke.py ALL PASS.
   |))
+
+  (* agent note (|2026-07-12 status-reconcile: Product theme Path B shipped.|) *)
 )

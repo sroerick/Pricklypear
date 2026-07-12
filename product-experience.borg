@@ -89,7 +89,8 @@
   )
   (subsection access-paths
    (doc "Documented ways humans reach a live image")
-   (status partial)
+   (status implemented)
+   (* agent note (|2026-07-12 status-reconcile: Browser login, admin users, HTTP basic /api/eval, dev.sh PG+image, verify_auth path. Fleet/default real SSH deferred.|) *)
    (* agent note (|2026-07-12: browser password login + session cookie
      ship in-image (auth.web-login / multi-user-product Option B).
      Still partial: edge nginx basic-auth, REPL path, fleet attach.|) *)

@@ -1,7 +1,9 @@
 (borge-bug (id "BORGE-1783429340")
   (title "Lwt-typed evaluator ABI (eval returns value Lwt.t)")
-  (status triage)
+  (status resolved)
   (created 2026-07-07)
   (filed-by roerick)
   (doc "Changed Eval.eval from env -> expr -> value to env -> expr -> value Lwt.t. All recursive eval calls use let* via Lwt.Syntax. Pure primitives wrap their sync results in Lwt.return via a new register_sync helper (signature stays sync value list -> value; wrapping happens at registration time in primitives.ml). DB-touching control primitives (fork/merge/route/checkout) are now NORMAL primitives registered via register_session_control_prims capturing the session t — they return their real DB result (UUID / row count / route path / 'checked out') instead of fire-and-forget placeholders. This unblocks reads: (get 'type id) and (create 'type fields) can be normal prims in a future iteration because the prim ABI now supports returning a promise. (define) keeps the only AST-level intercept because its name argument is a Var that must not be evaluated. Pure interpreter still has no I/O; it's Lwt-typed, not I/O-doing. Tests (83) Lwt-wrapped via Lwt_main.run; smoke tests (9) updated to assert new real-return-value behavior. Filed in response to user directive on 2026-07-06. Related: BORGE-1783399614, BORGE-1783398327.")
+
+  (* agent note (|2026-07-12 status-reconcile: Lwt-typed evaluator ABI shipped and in production use.|) *)
 )

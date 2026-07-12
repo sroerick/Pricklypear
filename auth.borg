@@ -5,6 +5,7 @@
  (section auth
   (doc "Multi-user identity: credentials, sessions, login, and binding each human to their garden")
   (status partial)
+  (* agent note (|2026-07-12 status-reconcile: Web login + admin + personal garden identity ship in-image. argon2, full multi-user process isolation, rich credential kinds still open.|) *)
   (* agent note (|2026-07-12: PRODUCT CORRECTION. Multi-user is the system,
     not an optional phase and not cancelled by the single-image deploy
     pivot. Single-image simplified process topology (one binary to ship);
@@ -137,6 +138,7 @@
    (doc "verify(cred) / lookup / mint / verify_token — the four pure functions")
    (implements auth/lib/verify.ml auth/lib/tokens.ml)
    (status partial)
+   (* agent note (|2026-07-12 status-reconcile: Password verify works (interim sha256$). SSH-key/authd path retired with auth package. argon2id still deferred (BORGE-1783831698).|) *)
    (* agent note (|Implementation it5/verified it6 onward for the
      SSH-key path; token path verified by auth/test/auth_test.ml (4
      alcotest cases for HMAC determinism, random-opaque_id 32B,
@@ -307,7 +309,8 @@
   (subsection rpc-from-supervisor
    (doc "How supervisor calls auth: internal signed/mTLS RPC")
    (implements supervisor/lib/auth_client.ml)
-   (status partial)
+   (status deprecated)
+   (* agent note (|2026-07-12 status-reconcile: Supervisor+authd RPC retired by single-image pivot. Auth is in-process.|) *)
    (* agent note (|Implementation it6/verified it6 onward. supervisor/
      lib/auth_client.ml does an HTTP POST to authd's /verify_ssh_key
      endpoint (hand-rolled HTTP/1.1 over plain Lwt_unix socket; reads
@@ -380,7 +383,8 @@
   )
   (subsection multi-user-product
    (doc "COMPLETE multi-user product: many humans, each with identity, session, garden, authorship")
-   (status planned)
+   (status partial)
+   (* agent note (|2026-07-12 status-reconcile: Session+branch multi-user works (many users, personal gardens, admin gates). Process isolation / fleet remains deferred; argon2 deferred. Not full complete-system isolation story.|) *)
    (* agent note (|2026-07-12: authoritative multi-user auth product.
      Replaces "single-tenant only" reading of single-image.auth.
      Single-image = one binary to deploy; multi-user = many people.|) *)
@@ -607,7 +611,8 @@
   )
   (subsection login-experience
    (doc "What log in means: I present credentials and land in MY live image")
-   (status planned)
+   (status implemented)
+   (* agent note (|2026-07-12 status-reconcile: Login binds identity, ensure_personal + checkout personal, whoami is session user. Fleet attach deferred (single-image).|) *)
    (verify
     (smoke "human authenticates and lands on username/personal")
     (smoke "unknown credential denied; no image attach for stranger")
@@ -631,7 +636,8 @@
   )
   (subsection web-login
    (doc "Browser password login, session cookie, middleware, logout")
-   (status planned)
+   (status implemented)
+   (* agent note (|2026-07-12 status-reconcile: GET/POST /login, pp_session cookie, middleware, logout ship in image/lib/http.ml + auth_store.ml. Interim password hash sha256$ (BORGE-1783831698); argon2 still deferred.|) *)
    (implements image/lib/http.ml image/lib/session.ml)
    (verify
     (build "dune build")
@@ -674,7 +680,8 @@
   )
   (subsection user-management
    (doc "Admin creates and manages users and credentials")
-   (status partial)
+   (status implemented)
+   (* agent note (|2026-07-12 status-reconcile: /admin/users create user, set password, revoke sessions; bootstrap_admin_if_empty. api_key/ssh_key credential UX still thin.|) *)
    (* agent note (|admin_api create/list paths existed under authd;
      complete system needs in-product /admin/users UI + password
      credentials + revoke session, wired to the same users table.|) *)
@@ -706,7 +713,8 @@
   )
   (subsection identity-and-branch
    (doc "Session identity drives personal garden and authorship")
-   (status planned)
+   (status implemented)
+   (* agent note (|2026-07-12 status-reconcile: ensure_personal_branch + checkout_personal at session make; define authorship uses username; agent_branch_lock exists.|) *)
    (verify
     (smoke "whoami equals session username after login")
     (smoke "define lands on username/personal")

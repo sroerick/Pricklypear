@@ -1,6 +1,6 @@
 (borge-bug (id "BORGE-1783491378")
   (title "Spec divergence: data_rows is a generic shared JSONB table with no schema_vers / per-type DDL emission — spec branching.schema-authority + migrations.additive-only describe a system that doesn't exist in code")
-  (status triage)
+  (status open)
   (created 2026-07-08)
   (filed-by roerick)
   (doc "")
@@ -51,4 +51,6 @@ RELATED:
 
 NOT A DIRECTIVE: the building agent should not act on this during the current make phase. This is for roerick + the next plan pass to resolve. Filing now so it's tracked rather than buried in an agent note.|) *)
   (details (doc ""))
+
+  (* agent note (|2026-07-12 status-reconcile: data_rows generic JSONB vs schema-authority DDL emission — still real divergence.|) *)
 )

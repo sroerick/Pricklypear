@@ -12,8 +12,10 @@
 5) Coupled: the existing /bindings, /branches, /binding/<name> pages from it11 are not enumerated as system routes in the spec either. Same gap, same plan pass.
 
 Resolution: track for the next plan-mode pass; no urgent changes needed (all paths are additive over current spec, none contradict it).")
-  (status triage)
+  (status resolved)
   (created 2026-07-07)
   (filed-by roerick)
   (doc "")
+
+  (* agent note (|2026-07-12 status-reconcile: deftype + dict prims + render-html shipped.|) *)
 )

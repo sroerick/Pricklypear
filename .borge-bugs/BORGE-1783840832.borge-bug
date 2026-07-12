@@ -1,7 +1,9 @@
 (borge-bug (id "BORGE-1783840832")
   (title "agent-portal make complete: mark ai-authoring.agent-portal implemented after review; migration 005 + ai_store + run_loop + prims + HTTP session_id shipped")
-  (status triage)
+  (status resolved)
   (created 2026-07-12)
   (filed-by roerick)
   (doc "")
+
+  (* agent note (|2026-07-12 status-reconcile: agent-portal implemented (migration 005, ai_store, run_loop, prims, HTTP session_id).|) *)
 )

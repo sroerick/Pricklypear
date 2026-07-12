@@ -1,6 +1,6 @@
 (borge-bug (id "BORGE-1783398327")
   (title "Spec shift proposal: unify branch tree and AST tree — 'nodes as substrate, named branchable subtrees as the versioning unit' (replaces 'everything is a branch' as the operational model while keeping branches as the versioning model)")
-  (status triage)
+  (status open)
   (created 2026-07-06)
   (filed-by roerick)
   (doc "")
@@ -53,4 +53,6 @@ RELATED BUT SEPARATE (do not bundle into this issue): the 'agent-mediated REPL a
 
 Filed for roerick's review and a future plan pass. The building agent currently mid-make should NOT act on this — it stays in triage until the next plan cycle.|) *)
   (details (doc ""))
+
+  (* agent note (|2026-07-12 status-reconcile: AST nodes substrate design — still planned under branching.ast-nodes.|) *)
 )

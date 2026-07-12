@@ -2,8 +2,15 @@
  (doc "Book chapter: the single-image pivot. Supersedes the
        supervisor + per-user-image + authd topology described in
        architecture.borg, supervisor.borg, and multi-user.borg.
-       One process. One binary. One deployment. Single-tenant.")
- (status planned)
+       One process. One binary. One deployment. Multi-user at the
+       session/branch layer (not process isolation).")
+ (status implemented)
+ (* agent note (|2026-07-12 status-reconcile: single-image pivot IS the running system. supervisor/
+    and auth/ packages retired; image owns auth + HTTP + REPL; scripts/dev.sh
+    applies migrations and starts PG+image only. Multi-user remains at the
+    session/branch layer (auth.multi-user-product), not process isolation.
+    Deploy docs still mention legacy rc.d names in places — runtime is one
+    image binary.|) *)
  (* agent note (|it35 plan pass: this chapter is the architectural
                   pivot requested by roerick on 2026-07-11. The
                   MirageOS unikervisor + per-user spawn model is
@@ -11,17 +18,17 @@
                   binary: one process serving htmx HTTP directly,
                   talking to Postgres, reading its identity from env.
                   No supervisor. No authd sidecar. No fleet. No Solo5.
-                  No multi-user process isolation. Status is planned;
-                  the make pass deletes supervisor/ and auth/ and
-                  rewires boot + deploy. The lisp/ interpreter and the
-                  libs/*.pp product layer are untouched.|) *)
+                  No multi-user process isolation. 2026-07-12: make pass
+                  completed — supervisor/auth packages retired; image is
+                  the sole binary. Multi-user remains via auth sessions +
+                  personal branches.|) *)
  (convention ocaml-dune)
  (section single-image
   (doc "The pivot: one process, single-tenant, no Mirage abstraction")
-  (status planned)
+  (status implemented)
   (subsection thesis
    (doc "What the system IS after the pivot")
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       Pricklypear is ONE OCaml `unix' binary — the image — that:
@@ -59,7 +66,7 @@
   )
   (subsection removed
    (doc "What is deleted from the codebase and spec")
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       Packages deleted:
@@ -106,7 +113,7 @@
   )
   (subsection kept
    (doc "What survives the pivot unchanged in shape")
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       Untouched:
@@ -134,7 +141,7 @@
   )
   (subsection topology
    (doc "The new physical layout")
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       OpenBSD host (wyo.town / Vultr):
@@ -176,7 +183,7 @@
   )
   (subsection auth
    (doc "Identity without requiring authd as a second always-on binary")
-   (status planned)
+   (status implemented)
    (* agent note (|2026-07-12: NOT single-tenant-only. Multi-user product
      is auth.multi-user-product. This subsection only constrains whether
      verify runs in-process or as a separate authd.|) *)
@@ -208,7 +215,7 @@
   )
   (subsection deployment
    (doc "One binary, one rc.d service, one restart")
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       rc.d service `pricklypear':
@@ -242,7 +249,7 @@
   )
   (subsection migration-plan
    (doc "Order of operations for the make pass")
-   (status planned)
+   (status implemented)
    (details
     (doc (|
       Phase 1 — make the image standalone:

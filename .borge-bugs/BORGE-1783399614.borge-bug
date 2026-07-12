@@ -1,6 +1,6 @@
 (borge-bug (id "BORGE-1783399614")
   (title "Architecture: thread Lwt through Eval.eval (env -> expr -> value Lwt.t) before building CRUD — current sync prim ABI blocks reads, eval_one intercept pattern is deprecated")
-  (status triage)
+  (status resolved)
   (created 2026-07-06)
   (filed-by roerick)
   (doc "")
@@ -49,4 +49,6 @@ SCOPE OF SPEC CHANGES THIS WOULD REQUIRE (to be resolved in plan, not now):
 
 RELATED: BORGE-1783398327 (tree-as-substrate) is independent but compatible — node-level addressing and per-node CRUD both want the Lwt-prim ABI fixed first. This issue is the prerequisite.|) *)
   (details (doc ""))
+
+  (* agent note (|2026-07-12 status-reconcile: Lwt-typed Eval.eval shipped (it12); superseded by BORGE-1783429340.|) *)
 )

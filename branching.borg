@@ -289,7 +289,8 @@
   )
   (subsection package-updates
    (doc "How software updates work: kernel vs main packages vs personal pins")
-   (status planned)
+   (status partial)
+   (* agent note (|2026-07-12 status-reconcile: Kernel vs main seed vs personal pins behavior is real (seed_stdlib→system/main, personal inherits). unoverride prim + conscious update UX still planned.|) *)
    (details
     (doc (|
          THREE CHANNELS (not one monolithic version):
@@ -382,7 +383,8 @@
   )
   (subsection branch-browser-ui
    (doc "Git-like light /branches browser: list, open, stats, checkout, promote")
-   (status planned)
+   (status partial)
+   (* agent note (|2026-07-12 status-reconcile: GET /branches bare table exists. Checkout/stats/detail/promote UI still planned.|) *)
    (implements image/lib/http.ml image/lib/store.ml image/lib/session.ml)
    (details
     (doc (|

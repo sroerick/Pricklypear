@@ -1,25 +1,24 @@
 # Pricklypear — Agent Notes
 
-Pricklypear is a multi-user Lisp OS on MirageOS unikernels with Postgres
-as the object store and htmx as the interface layer. **The authoritative design is the multi-file borge book:** root [`pricklypear.borg`](pricklypear.borg) inlines chapter files (`philosophy.borg`, `lisp-interpreter.borg`, `ai-authoring.borg`, …). Read them in root inline order (literate book order). If code and spec
+Pricklypear is a multi-user Lisp OS: one unix image process, Postgres as
+the object store, htmx as the interface layer. **The authoritative design is the multi-file borge book:** root [`pricklypear.borg`](pricklypear.borg) inlines chapter files (`philosophy.borg`, `single-image.borg`, `lisp-interpreter.borg`, `ai-authoring.borg`, …). Read them in root inline order (literate book order). If code and spec
 disagree, code is wrong. Use borge to plan/make/review changes — don't
 edit the spec freely during a `make` phase, file a `borge issue new`
 instead.
 
-## Status (overnight foundation)
+## Status (2026-07-12 reconcile)
 
-Spec is a multi-file literate book (14 chapter `.borg` files + root).
-`borge report` tracks implemented/planned across chapters. Alcotest suite
-includes effect inference tests. Packages on poohstack; tests pass across
-all 5 packages on the poohstack opam switch. 14 end-to-end smoke tests
-(see `/tmp/pp_*_it*.py`) cover every major feature axis. Solo5 unikernel
-target is a v1.5 hardening axis (Phase 1 probe at `spikes/mirage_solo5/`
-is blocked on 6 missing Mirage runtime packages requiring user
-approval). The awa-ssh path is OPT-IN on `PP_AWA_SSH_PORT`; the default
-SSH front door is the non-crypto line protocol on `PP_SSH_PORT`. 11
-borge issues filed, each tracking a real spec gap surfaced by actual
-builds — see the `.borge-bugs/` directory. The monitor command is
-externally rerunnable (see the bottom of `README.md`).
+**Single-image v1 habitat is the running system.** Spec is a multi-file
+literate book (chapter `.borg` files + root). `borge report` after the
+status-reconcile pass is roughly **55 implemented / 10 planned /
+9 deprecated (~74%)** — planned items are real gaps (roam, promote UX,
+type-system, review-merge, argon2, full FTS), not stale foundation work.
+Packages on poohstack; build/tests on lisp + common + image. Product
+libs (notes/todo/outline/ui/bible/dabar/ai/…) seed to `system/main`.
+Supervisor/authd multi-process topology is retired (see
+`single-image.borg`). Open borge issues that still matter live in
+`.borge-bugs/` (quote compounds, AST nodes design, schema-authority,
+argon2, optional SSH). Monitor command: bottom of `README.md`.
 
 ## Live image eval (laptop / pi agent)
 
@@ -54,45 +53,24 @@ python3 "$PP_EVAL" -j '(load-library "todo")'
 ## Stack
 
 - OCaml 5.4.1 on the **`poohstack`** opam switch (NOT a dedicated
-  `pricklypear` switch — that earlier note was corrected at it3; the
-  dedicated switch never got the Mirage stack installed, poohstack has
-  it). `eval $(opam env --switch=poohstack --set-switch)` before building
-  any package.
-- Lwt for all unikernel I/O (Mirage's runtime is Lwt-based; supervisor,
-  auth, and image all use Lwt internally in v1 even though they run as
-  `mirage/unix` processes, not real Solo5 unikernels yet).
-- Mirage unikernels: `mirage/unix` for dev. Solo5 target is a v1.5
-  hardening axis (Phase 1 probe at `spikes/mirage_solo5/` confirmed
-  `mirage configure` round-trips but `dune build` fails with 6 missing
-  Mirage 4.x runtime packages requiring user approval per AGENTS.md).
-- `pgx_lwt` with a custom `Io_unix` shim — Postgres client in v1 (NOT
-  `pgx_lwt_mirage`; the v1 image/lib library uses POSIX-flavored libs.
-  `pgx_lwt_mirage` v2.2 IS installed but requires a real
-  `Tcpip.Stack.V4V6` device, satisfiable only inside a Mirage unikernel).
-- `httpaf-lwt-unix` for HTTP (NOT `httpaf-mirage` — that package doesn't
-  exist on opam; the spec's transport-choices text is inaccurate, see
-  BORGE-1783439434. The future mirage path is `gluten-mirage` + `httpaf`).
-- `awa-mirage` 0.3.1 for real SSH (OPT-IN side port on `PP_AWA_SSH_PORT`;
-  the awa 0.5.x upgrade path would expose the authenticated username
-  in the auth-event callback, enabling per-user identity propagation +
-  the line-protocol replacement as the default SSH front door —
-  deferred per BORGE-1783439434). The default SSH front door is the
-  non-crypto line protocol on `PP_SSH_PORT` for all 14 smoke tests.
-- `mirage-crypto-rng` initialized at supervisor + authd boot via
-  `Mirage_crypto_rng_unix.use_default ()` (mirage-crypto 1.x / Dream-
-  compatible poohstack). Hash/HMAC via Digestif; awa-mirage 0.6.x.
-- `pure-html` for type-safe HTML + `HTML.Hx.*` htmx attributes (the
-  dream_html core, usable without Dream). Use `txt ~raw:true "%s" s`
-  to bypass escaping for raw-HTML injection from Lisp route handlers.
+  `pricklypear` switch). `eval $(opam env --switch=poohstack --set-switch)`
+  before building any package.
+- Lwt for image I/O (`httpaf-lwt-unix`, `pgx_lwt` + custom `Io_unix` shim).
+- Single unix binary (`image/`) — not a Solo5 unikernel in v1. Solo5 remains
+  an optional later hardening axis (`spikes/mirage_solo5/`), not the product path.
+- Auth is in-process (`image/lib/auth_*.ml`). Password hashes are interim
+  `sha256$salt$digest` until argon2 (BORGE-1783831698).
+- `pure-html` for type-safe HTML + `HTML.Hx.*` htmx attributes. Use
+  `txt ~raw:true "%s" s` to bypass escaping for raw-HTML injection from
+  Lisp route handlers.
 - `alcotest` for tests, `yojson` for JSON (serialized Lisp ASTs are
-  JSONB; Lisp fields-pass-in/out as JSON strings — no VDict value type
-  needed in v1, dict prims cover field-level access).
-- Eio only for pure-unix dev tooling (e.g. `lisp/bin/repl.ml`, scripts);
-  NOT inside any unikernel.
+  JSONB; dict prims cover field-level access on JSON strings).
+- Eio only for pure-unix dev tooling if any — NOT inside the image.
+- Optional line-protocol REPL on `PP_REPL_PORT`; primary interactive
+  surfaces are browser `/repl` and `POST /api/eval`.
 
-The pure libraries (`lisp/`, `common/`) have no Mirage/Lwt deps and
-  could in principle build on either switch; in practice everyone uses
-  poohstack.
+The pure libraries (`lisp/`, `common/`) have no service deps and can be
+  tested without Postgres. Everyone uses the poohstack switch in practice.
 
 ## Layout
 

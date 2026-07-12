@@ -5,6 +5,7 @@
  (section image
   (doc "The per-user unikernel: Lisp interpreter, REPL endpoint, htmx interface")
   (status partial)
+  (* agent note (|2026-07-12 status-reconcile: Boot/repl/browser-repl/theme/packages ship. Inspector/editor/branch UI polish + some prims still partial.|) *)
   (* agent note (|it32: image still partial overall. browser-repl +
     function-editor implemented; system-browser + inspector partial;
     product-experience owns about/vocabulary/first-run. ssh still
@@ -76,7 +77,8 @@
   (subsection ssh-interface
    (doc "The SSH front door: supervisor authenticates, forwards to image REPL")
    (implements supervisor/lib/ssh.ml supervisor/lib/ssh_awa.ml supervisor/lib/ssh_awa_shims.ml supervisor/lib/ssh_keys.ml supervisor/lib/boot.ml)
-   (status partial)
+   (status deprecated)
+   (* agent note (|2026-07-12 status-reconcile: Supervisor SSH front door retired with single-image. Optional line-protocol REPL may remain on image; browser /repl + /api/eval are primary.|) *)
    (* agent note (|it23: the supervisor-fronts-SSH pattern is implemented
                     (supervisor/lib/ssh.ml). v1 uses a non-crypto line
                     protocol on PP_SSH_PORT (default 17822 dev / 2222 prod):
@@ -304,6 +306,7 @@
    (doc "httpaf-lwt-unix + pure-html, routes AS functions in the store")
    (implements image/lib/http.ml auth/lib/http.ml image/lib/session.ml image/lib/primitives.ml)
    (status partial)
+   (* agent note (|2026-07-12 status-reconcile: System pages + user GET/POST routes + request-param/redirect used by notes/todos. Keep partial: hx-* Lisp prims incomplete; Solo5 HTTP deferred.|) *)
    (* agent note (|it23 baseline: system pages + GET-only user routes +
      render-html dispatch shipped. it33 PLAN: user-route POST +
      request-context prims + redirect return (see details USER-ROUTE
@@ -526,6 +529,7 @@
    (doc "image/lib/primitives.ml: the ~20 impure fns registered at boot")
    (implements image/lib/primitives.ml image/lib/crud.ml image/lib/session.ml)
    (status partial)
+   (* agent note (|2026-07-12 status-reconcile: list-branches + current-branch now real (not VNil). Keep partial: query/describe/diff/hx helpers still missing or thin.|) *)
    (* agent note (|it31 plan-pass #7: demoted implemented -> partial in
     lockstep with lisp-interpreter.primitives. Registration path is real:
     image/lib/primitives.ml + crud.ml + session-control prims + env
@@ -573,6 +577,7 @@
   (subsection system-browser
    (doc "The live environment UI: browse branches, functions, types as a place you live")
    (status partial)
+   (* agent note (|2026-07-12 status-reconcile: Functions/pages/home/nav/theme shell live. Keep partial: branch browser promote/stats and full inspector polish still open.|) *)
    (* agent note (|Chrome + pages + page inspector ship. 2026-07-11 plan B:
      Functions browser with package grouping, search, used-by pages;
      prefix packages (todo/list). Page≠function nav fixes already live.
@@ -716,7 +721,8 @@
   )
   (subsection product-theme
    (doc "Product presentation as Lisp data: css/* sheet compiler, ui/theme + ui/css, emergency CSS only in OCaml")
-   (status planned)
+   (status implemented)
+   (* agent note (|2026-07-12 status-reconcile: Path B shipped: libs/std css/* + libs/ui ui/theme + ui/css; BORGE-1783837363 resolved.|) *)
    (* agent note (|2026-07-12 Path B locked (BORGE-1783837363). Rejects:
      (1) CSS-string-in-lambda hybrid (worst of both languages);
      (2) silent full design-system twin hard-coded in http.ml
@@ -933,7 +939,8 @@
   )
   (subsection packages
    (doc "In-branch prefix packages for organizing functions (not branch ownership)")
-   (status planned)
+   (status implemented)
+   (* agent note (|2026-07-12 status-reconcile: Prefix packages, load-library, seed_stdlib (std/ui/ai/outline/notes/todo/calendar/bible/dabar/…), export/function-source, bible dogfood. Study extras under dabar.borg.|) *)
    (* agent note (|2026-07-11 plan: packages = name prefixes with / separator.
      Orthogonal to multi-user.namespaces (branches). No new tables in v1.
      Reader already allows / in symbols (is_symbol_start).

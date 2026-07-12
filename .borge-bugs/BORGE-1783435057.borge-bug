@@ -1,4 +1,4 @@
-title: storage.transactions now genuinely implemented — mark (status implemented)
+title: storage.transactions now genuinely implemented — mark (status resolved)
 severity: low
 status: triage
 section: storage.transactions
@@ -50,3 +50,4 @@ depends-on:
   for the bulk transition, but this issue adds storage.transactions
   specifically with the realized-with-transaction-flow context that
   BORGE-1783433175 didn't have at filing time).
+  (* agent note (|2026-07-12 status-reconcile: storage.transactions implemented (with_transaction + SERIALIZABLE).|) *)

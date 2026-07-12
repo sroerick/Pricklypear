@@ -172,6 +172,7 @@
   (subsection primitives
    (doc "The ~20 impure functions the interpreter calls into")
    (status partial)
+   (* agent note (|2026-07-12 status-reconcile: list-branches + current-branch now real. Keep partial: query/describe/diff/hx helpers + author-scoped CRUD still open; quote compounds open (BORGE-1783383905).|) *)
    (* agent note (|it31 plan-pass #7: demoted implemented -> partial.
     Primitive DISPATCH + a useful core set are shipped, but the section's
     own details still enumerate missing/stub prims, so `implemented` was

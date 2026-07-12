@@ -42,8 +42,10 @@ Action requested from next plan pass:
 3. Add module declarations to resolve drift (defer to plan-mode discretion).
 4. Defer awa-ssh, Solo5 target, multi-image concurrency stress test to a future iteration's spike-and-specify pass.
 5. awa-ssh: spike confirmed feasible in it15 (see iteration log) — but actual SSH-crypto integration is still deferred.")
-  (status triage)
+  (status resolved)
   (created 2026-07-07)
   (filed-by roerick)
   (doc "")
+
+  (* agent note (|2026-07-12 status-reconcile: 2026-07-12 status-reconcile plan pass applied major status flips for single-image, auth web-login, notes, dabar, packages, product-theme, etc. Remaining planned are real gaps.|) *)
 )

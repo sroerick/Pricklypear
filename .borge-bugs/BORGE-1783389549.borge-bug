@@ -1,9 +1,11 @@
 (borge-bug (id "BORGE-1783389549")
   (title "pgx prepared-stmt protocol rejects multi-statement SQL; supervisor must split migrations")
-  (status triage)
+  (status resolved)
   (created 2026-07-06)
   (filed-by roerick)
   (doc "")
   (* agent note (|Discovered while building auth/ in iteration 5. pgx uses PG's extended (prepared) query protocol, which prohibits multiple statements in one Pg.execute_unit call — the server replies 42601 \"cannot insert multiple commands into a prepared statement\" or 42P18 \"could not determine data type of parameter $N\". Supervisor's apply_migration_file used to send the whole .sql file content as one execute_unit call, so migrations silently failed. Workaround now in supervisor/store.ml: split_sql_statements respects single-quoted string literals, dollar-quoted $$...$$ blocks ($tag$ too) AND `--` line comments (the actual real-world bug: `-- ...verification; null for password` had a `;` inside a comment line that was being treated as a statement separator). Comment-only statements are also filtered because PG returns EmptyQueryResponse (0 result sets) which pgx rejects. The spec's [migrations.applied-by-supervisor] should mention this constraint explicitly so future implementers don't trip on it. Related: migration 002_auth.sql's auth_log.id was missing DEFAULT gen_random_uuid() — also fixed in this iteration.|) *)
   (details (doc ""))
+
+  (* agent note (|2026-07-12 status-reconcile: Migration multi-statement split shipped (dev.sh applies SQL files; historical supervisor splitter also existed).|) *)
 )

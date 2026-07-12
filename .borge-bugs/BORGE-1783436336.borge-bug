@@ -1,6 +1,6 @@
 title: select-for-update prim landed; storage.transactions remains partial pending opt-in weaker-isolation query-isolation passthrough
 severity: low
-status: triage
+status: resolved
 section: storage.transactions
 reporter: agent (iteration 17, 2026-07-06)
 
@@ -66,4 +66,6 @@ verified-at-iteration:
 
 related-borge-issues:
   BORGE-1783435057 (storage.transactions plan-pass request — supersedes)
-  BORGE-1783433175 (comprehensive plan-pass request)
+  BORGE-1783433175 (comprehensive plan-pass request
+  (* agent note (|2026-07-12 status-reconcile: select-for-update prim registered; real scope via with-transaction (it29).|) *)
+)

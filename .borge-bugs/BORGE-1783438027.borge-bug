@@ -126,4 +126,6 @@ FOLLOWUP PLAN-PASS (when ready)
 |))
   (impact . "None on v1; select-for-update prim is functional but inert for cross-statement locking. Real concurrent-writer scenarios (compound read-modify-write transactions) need this before production use.")
   (proposed-resolution . "Implement Option A (session-level current_tx dynamic binding on Store.t / Session.t; prims consult it before store.conn). Add a (subsection with-transaction) to (section storage).")
+
+  (* agent note (|2026-07-12 status-reconcile: with-transaction special form shipped; already marked resolved earlier.|) *)
 )
