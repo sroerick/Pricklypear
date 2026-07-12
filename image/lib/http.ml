@@ -259,6 +259,19 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
          li.todo-item.is-done .todo-title{text-decoration:line-through;color:#666}
          li.todo-item .todo-del button,
          li.todo-item .todo-archive button{width:auto;padding:.25rem .45rem;font-size:.85rem}
+         li.todo-nav-list{display:flex;align-items:center;gap:.25rem;flex-wrap:wrap}
+         li.todo-nav-list > a{flex:1 1 auto;min-width:0}
+         li.todo-nav-list form.todo-list-del{margin:0;display:inline}
+         li.todo-nav-list .todo-list-del button{width:auto;min-width:1.6rem;
+           padding:.1rem .3rem;font-size:.8rem;line-height:1.2}
+         li.note-item{display:flex;align-items:center;gap:.5rem;
+           padding:.35rem 0;border-bottom:1px solid #c0c0c0}
+         li.note-item > a{flex:1 1 auto}
+         li.note-item form.note-del{margin:0}
+         li.note-item .note-del button{width:auto;padding:.25rem .45rem;font-size:.85rem}
+         .note-title-row{display:flex;flex-wrap:wrap;align-items:center;gap:.75rem}
+         .note-title-row h1{flex:1 1 auto;margin:0;border-bottom:none;padding:0}
+         .note-title-row .note-del-page button{width:auto}
          /* Bible chapter: only <sup> verse nums, not browser list markers */
          ol.bible-chapter{list-style:none;padding-left:0;margin:.25rem 0 1rem}
          ol.bible-chapter>li{margin:.35rem 0;line-height:1.45;padding-left:0}

@@ -133,6 +133,33 @@
   (lambda (id)
     (get 'todo-list id)))
 
+;; Delete every item on the list, then the list row. Refuses default/Inbox.
+(define todo/delete-list-items
+  (lambda (items lid)
+    (if (null? items)
+        ()
+        (seq
+          (if (string-eq (todo/item-list-id (cdr (car items))) (as-str lid))
+              (todo/delete (car (car items)))
+              ())
+          (todo/delete-list-items (cdr items) lid)))))
+
+(define todo/delete-list
+  (lambda (list-id)
+    (let ((lid (as-str list-id)))
+      (if (string-eq lid "")
+          "missing"
+          (let ((fields (todo/get-list lid)))
+            (if (null? fields)
+                "missing"
+                (if (todo/list-default? fields)
+                    "default"
+                    (seq
+                      (todo/delete-list-items (todo/all-items) lid)
+                      (seq
+                        (delete 'todo-list lid)
+                        "ok")))))))))
+
 ;; --- items ---
 
 (define todo/all-items
@@ -241,6 +268,45 @@
       (lambda (row) (todo/archived? (todo/item-state (cdr row))))
       (todo/all-items))))
 
+(define todo/nav-list-li
+  (lambda (view row)
+    (let ((id (car row))
+          (f (cdr row))
+          (items (todo/active-items (todo/items-for-list (car row)))))
+      (html/li
+        (html/attr "class"
+          (if (string-eq view id) "todo-nav-item is-active todo-nav-list"
+              "todo-nav-item todo-nav-list"))
+        (html/join
+          (list
+            (html/a
+              (string-append "/todos?view=" id)
+              (string-append (todo/list-title f)
+                " (" (todo/ratio items) ")"))
+            (if (todo/list-default? f)
+                ""
+                (html/form "POST" "/todos"
+                  (html/attrs
+                    (list
+                      (html/attr "class" "todo-list-del")
+                      (html/attr "hx-post" "/todos")
+                      (html/attr "hx-target" "#todo-main")
+                      (html/attr "hx-swap" "innerHTML")
+                      (html/attr "hx-confirm"
+                        "Delete this entire list and its items?")))
+                  (html/join
+                    (list
+                      (html/hidden "action" "delete-list")
+                      (html/hidden "list_id" id)
+                      (html/hidden "view" "everything")
+                      (html/button
+                        (html/attrs
+                          (list
+                            (html/attr "type" "submit")
+                            (html/attr "class" "secondary")
+                            (html/attr "title" "delete list")))
+                        "×")))))))))))
+
 (define todo/nav-html
   (lambda (view)
     (let ((lists (todo/lists))
@@ -255,14 +321,7 @@
               (string-append "(" (as-str arch-n) ")"))
             (list/foldl
               (lambda (acc row)
-                (let ((id (car row))
-                      (f (cdr row))
-                      (items (todo/active-items
-                               (todo/items-for-list (car row)))))
-                  (string-append acc
-                    (todo/nav-link view id
-                      (todo/list-title f)
-                      (string-append "(" (todo/ratio items) ")")))))
+                (string-append acc (todo/nav-list-li view row)))
               ""
               lists)
             (html/li (html/attr "class" "todo-nav-item")
@@ -656,20 +715,22 @@
                       (todo/add (request-param "list_id") (request-param "title"))
                       (if (string-eq action "create-list")
                           (todo/create-list (request-param "title"))
-                          (if (string-eq action "cycle-note")
-                              (notes/cycle-node-todo
-                                (request-param "slug")
-                                (request-param "node-id"))
-                              (if (string-eq action "save")
-                                  (todo/save
-                                    (request-param "id")
-                                    (request-param "title")
-                                    (request-param "notes")
-                                    (request-param "due")
-                                    (request-param "state")
-                                    (request-param "list_id"))
-                                  (todo/add (todo/ensure-inbox)
-                                    (request-param "title"))))))))))))
+                          (if (string-eq action "delete-list")
+                              (todo/delete-list (request-param "list_id"))
+                              (if (string-eq action "cycle-note")
+                                  (notes/cycle-node-todo
+                                    (request-param "slug")
+                                    (request-param "node-id"))
+                                  (if (string-eq action "save")
+                                      (todo/save
+                                        (request-param "id")
+                                        (request-param "title")
+                                        (request-param "notes")
+                                        (request-param "due")
+                                        (request-param "state")
+                                        (request-param "list_id"))
+                                      (todo/add (todo/ensure-inbox)
+                                        (request-param "title")))))))))))))
 
 (define todo/page
   (lambda ()

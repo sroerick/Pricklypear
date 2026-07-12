@@ -212,13 +212,41 @@
     (html/p*
       (html/attr "class" (if ok "ok" "err"))
       msg)))
+(define notes/delete
+  (lambda (slug)
+    (let ((row (notes/row (as-str slug))))
+      (if (null? row)
+          ()
+          (delete 'note (car row))))))
+
 (define notes/item-li
   (lambda (row)
-    (let ((f (cdr row)))
-      (html/li ""
-        (html/a
-          (string-append "/notes?slug=" (as-str (dict-get f "slug")))
-          (html/text (as-str (dict-get f "title"))))))))
+    (let ((f (cdr row))
+          (id (car row)))
+      (let ((slug (as-str (dict-get f "slug")))
+            (title (as-str (dict-get f "title"))))
+        (html/li (html/attr "class" "note-item")
+          (html/join
+            (list
+              (html/a
+                (string-append "/notes?slug=" slug)
+                (html/text title))
+              (html/form "POST" "/notes"
+                (html/attrs
+                  (list
+                    (html/attr "class" "note-del")
+                    (html/attr "hx-confirm" "Delete this note?")))
+                (html/join
+                  (list
+                    (html/hidden "action" "delete")
+                    (html/hidden "slug" slug)
+                    (html/button
+                      (html/attrs
+                        (list
+                          (html/attr "type" "submit")
+                          (html/attr "class" "secondary")
+                          (html/attr "title" "delete note")))
+                      "del")))))))))))
 (define notes/recent-list
   (lambda ()
     (list/foldl
@@ -282,7 +310,26 @@
               (html/a "/notes" "Notes")
               " / "
               (html/code (as-str slug)))))
-        (html/h1 (html/text title))
+        (html/div (html/attr "class" "note-title-row")
+          (html/join
+            (list
+              (html/h1 (html/text title))
+              (html/form "POST" "/notes"
+                (html/attrs
+                  (list
+                    (html/attr "class" "note-del note-del-page")
+                    (html/attr "hx-confirm" "Delete this entire note?")))
+                (html/join
+                  (list
+                    (html/hidden "action" "delete")
+                    (html/hidden "slug" (as-str slug))
+                    (html/button
+                      (html/attrs
+                        (list
+                          (html/attr "type" "submit")
+                          (html/attr "class" "secondary")
+                          (html/attr "title" "delete note")))
+                      "Delete note")))))))
         (html/p* (html/attr "class" "muted")
           (string-append "tags: " (as-str tags)))
         (outline/html slug outline)
@@ -350,6 +397,13 @@
                       "Saved to Inbox."))
                   (redirect "/notes?slug=inbox"))))))))
 
+(define notes/do-delete
+  (lambda ()
+    (let ((slug (as-str (request-param "slug"))))
+      (seq
+        (notes/delete slug)
+        (redirect "/notes")))))
+
 (define notes/handle-post
   (lambda ()
     (let ((action (as-str (request-param "action"))))
@@ -359,7 +413,9 @@
               (notes/do-save (request-param "slug") (request-param "outline"))
               (if (string-eq action "capture")
                   (notes/do-capture)
-                  (redirect "/notes")))))))
+                  (if (string-eq action "delete")
+                      (notes/do-delete)
+                      (redirect "/notes"))))))))
 
 (define notes/page
   (lambda ()
