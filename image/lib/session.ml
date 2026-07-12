@@ -613,11 +613,191 @@ let agent_tool_defs : Llm_client.tool_def list =
           ]
           [ "path"; "handler" ]
     }
+  ; { name = "eval_expr"
+    ; description =
+        "Evaluate a short Lisp expression in this image (same env as the branch). Use for smoke checks like (count (contacts/all)) or (contacts/name (cdr (car (contacts/all)))). Returns the printed value or an error. Prefer small expressions; no multi-form progn dumps."
+    ; parameters =
+        obj
+          [ ("expr",
+             `Assoc
+               [ ("type", `String "string")
+               ; ("description", `String "one Lisp expression")
+               ])
+          ]
+          [ "expr" ]
+    }
+  ; { name = "smoke_route"
+    ; description =
+        "Call a registered user route handler in-process (no real HTTP). method GET|POST; optional form/query params as a JSON object of strings; optional contains substring that must appear in the HTML/text result (or redirect Location). Use after register_route to verify wiring: smoke_route path=/contacts method=GET contains=Contacts. On failure, inspect_function the handler, fix with install_function, re-smoke."
+    ; parameters =
+        obj
+          [ ("path",
+             `Assoc
+               [ ("type", `String "string")
+               ; ("description", `String "route path e.g. /contacts")
+               ])
+          ; ("method",
+             `Assoc
+               [ ("type", `String "string")
+               ; ("description", `String "GET or POST (default GET)")
+               ])
+          ; ("params",
+             `Assoc
+               [ ("type", `String "object")
+               ; ("description", `String "form/query params as string values, e.g. {\"action\":\"create\",\"name\":\"Ada\"}")
+               ])
+          ; ("contains",
+             `Assoc
+               [ ("type", `String "string")
+               ; ("description", `String "optional substring that must appear in body or redirect location")
+               ])
+          ]
+          [ "path" ]
+    }
   ; { name = "image_context"
     ; description = "Return user, branch, and a short summary of this image"
     ; parameters = obj [] []
     }
   ]
+
+let json_object_string_pairs (j : Yojson.Safe.t) : (string * string) list =
+  match j with
+  | `Assoc items ->
+      List.filter_map
+        (fun (k, v) ->
+          match v with
+          | `String s -> Some (k, s)
+          | `Int n -> Some (k, string_of_int n)
+          | `Bool b -> Some (k, if b then "true" else "false")
+          | `Null -> Some (k, "")
+          | other -> Some (k, Yojson.Safe.to_string other))
+        items
+  | _ -> []
+
+let value_smoke_kind (v : Pricklypear_lisp.Ast.value) : string * string =
+  match Primitives.is_redirect v with
+  | Some loc -> ("redirect", loc)
+  | None ->
+      (match Primitives.is_raw_html v with
+       | Some html -> ("html", html)
+       | None ->
+           (match v with
+            | Pricklypear_lisp.Ast.VStr s -> ("text", s)
+            | _ -> ("value", Pricklypear_lisp.Reader.pp_value v)))
+
+let truncate_for_tool ~(limit : int) (s : string) : string =
+  if String.length s <= limit then s
+  else String.sub s 0 limit ^ "…(truncated)"
+
+let run_smoke_route
+    (t : t)
+    ~(path : string)
+    ~(meth : http_method)
+    ~(params : (string * string) list)
+    ~(contains : string option) : string Lwt.t =
+  let path = String.trim path in
+  let meth_s = match meth with `GET -> "GET" | `POST -> "POST" in
+  match Hashtbl.find_opt t.routes path with
+  | None ->
+      Lwt.return
+        (Printf.sprintf
+           "ok: false
+error: no route registered for %s
+(hint: register_route path=%s handler=...)"
+           path path)
+  | Some handler ->
+      (match Pricklypear_lisp.Env.lookup t.env handler with
+       | None ->
+           Lwt.return
+             (Printf.sprintf
+                "ok: false
+route: %s -> %s
+error: handler unbound in env"
+                path handler)
+       | Some _ ->
+           let req =
+             { method_ = meth
+             ; path
+             ; params
+             ; body = ""
+             ; headers =
+                 (match meth with
+                  | `POST ->
+                      [ ("content-type", "application/x-www-form-urlencoded") ]
+                  | `GET -> [])
+             }
+           in
+           t.current_request <- Some req;
+           let* v_res =
+             Lwt.finalize
+               (fun () ->
+                  Lwt.catch
+                    (fun () ->
+                       let* v =
+                         Pricklypear_lisp.Eval.eval_string ~prims:t.prims t.env
+                           ("(" ^ handler ^ ")")
+                       in
+                       Lwt.return (`Ok v))
+                    (fun exn ->
+                       Lwt.return
+                         (`Err ("handler error: " ^ Printexc.to_string exn))))
+               (fun () ->
+                  t.current_request <- None;
+                  Lwt.return_unit)
+           in
+           (match v_res with
+            | `Err msg ->
+                Lwt.return
+                  (Printf.sprintf
+                     "ok: false
+route: %s -> %s
+method: %s
+error: %s"
+                     path handler meth_s msg)
+            | `Ok v ->
+                let kind, body = value_smoke_kind v in
+                let contains_ok =
+                  match contains with
+                  | None | Some "" -> true
+                  | Some needle ->
+                      let nlen = String.length needle in
+                      let blen = String.length body in
+                      let rec find i =
+                        if i + nlen > blen then false
+                        else if String.sub body i nlen = needle then true
+                        else find (i + 1)
+                      in
+                      find 0
+                in
+                let ok = contains_ok in
+                let snippet = truncate_for_tool ~limit:500 body in
+                let lines =
+                  [ Printf.sprintf "ok: %s" (if ok then "true" else "false")
+                  ; Printf.sprintf "route: %s -> %s" path handler
+                  ; Printf.sprintf "method: %s" meth_s
+                  ; Printf.sprintf "kind: %s" kind
+                  ; Printf.sprintf "bytes: %d" (String.length body)
+                  ]
+                in
+                let lines =
+                  match contains with
+                  | None | Some "" -> lines
+                  | Some needle ->
+                      lines
+                      @ [ Printf.sprintf "contains %S: %s" needle
+                            (if contains_ok then "true" else "false") ]
+                in
+                let lines =
+                  if not ok then
+                    lines
+                    @ [ "error: smoke failed — inspect_function, fix, re-smoke" ]
+                  else lines
+                in
+                Lwt.return
+                  (String.concat "
+" lines ^ "
+--- snippet ---
+" ^ snippet)))
 
 let run_agent_tool (t : t) ~(name : string) ~(arguments : string)
     : string Lwt.t =
@@ -684,6 +864,60 @@ let run_agent_tool (t : t) ~(name : string) ~(arguments : string)
                (Printf.sprintf "registered route %s -> %s" path handler)
            end
        | _ -> Lwt.return "error: need path and handler")
+  | "eval_expr" ->
+      (match json_string_field args_json "expr" with
+       | None -> Lwt.return "error: need expr"
+       | Some expr ->
+           let expr = String.trim expr in
+           if expr = "" then Lwt.return "error: empty expr"
+           else if String.length expr > 4000 then
+             Lwt.return "error: expr too long (max 4000)"
+           else
+             Lwt.catch
+               (fun () ->
+                  let* v =
+                    Pricklypear_lisp.Eval.eval_string ~prims:t.prims t.env expr
+                  in
+                  let s = Pricklypear_lisp.Reader.pp_value v in
+                  Lwt.return
+                    ("ok: true\nvalue: " ^ truncate_for_tool ~limit:1500 s))
+               (fun exn ->
+                  let msg =
+                    match exn with
+                    | Pricklypear_lisp.Ast.Interp_error e ->
+                        (match e with
+                         | Pricklypear_lisp.Ast.User_error m -> m
+                         | Pricklypear_lisp.Ast.Unbound_var s -> "unbound: " ^ s
+                         | Pricklypear_lisp.Ast.Parse_error (m, l, c) ->
+                             Printf.sprintf "parse error: %s (%d:%d)" m l c
+                         | Pricklypear_lisp.Ast.Budget_exceeded ->
+                             "budget exceeded"
+                         | _ -> Printexc.to_string exn)
+                    | Pricklypear_lisp.Reader.Reader_error (m, l, c) ->
+                        Printf.sprintf "parse error: %s (%d:%d)" m l c
+                    | _ -> Printexc.to_string exn
+                  in
+                  Lwt.return ("ok: false\nerror: " ^ msg)))
+  | "smoke_route" ->
+      (match json_string_field args_json "path" with
+       | None -> Lwt.return "error: need path"
+       | Some path ->
+           let meth =
+             match json_string_field args_json "method" with
+             | Some m when String.uppercase_ascii (String.trim m) = "POST" ->
+                 `POST
+             | _ -> `GET
+           in
+           let params =
+             match args_json with
+             | `Assoc items ->
+                 (match List.assoc_opt "params" items with
+                  | Some p -> json_object_string_pairs p
+                  | None -> [])
+             | _ -> []
+           in
+           let contains = json_string_field args_json "contains" in
+           run_smoke_route t ~path ~meth ~params ~contains)
   | "image_context" ->
       let names =
         try
@@ -843,7 +1077,7 @@ let default_agent_seed (t : t) : string =
   "All install_function writes go to THIS branch only. " ^
   "Do NOT attempt checkout, fork, or merge.\n" ^
   "Tools: image_context, list_bindings, list_routes, inspect_function, " ^
-  "install_function, register_route.\n" ^
+  "install_function, register_route, smoke_route, eval_expr.\n" ^
   "\n" ^
   "How to build a small app (dogfood pattern — copy todo/notes style):\n" ^
   "1) Persist with create/rows/get/update/delete on data_rows. " ^
@@ -862,6 +1096,11 @@ let default_agent_seed (t : t) : string =
   "Do NOT (route ...) inside install_function (publish effect is blocked there).\n" ^
   "7) Inspect working apps first: inspect_function todo/page, notes/page, " ^
   "todo/add, html/form.\n" ^
+  "\n" ^
+  "Test loop (required for apps):\n" ^
+  "8) After register_route, smoke_route path=/app method=GET contains=Title.\n" ^
+  "9) Data: eval_expr (count (pkg/all)); POST via smoke_route params then GET.\n" ^
+  "10) If smoke fails: inspect_function, fix, re-smoke until ok:true.\n" ^
   "\n" ^
   "Tool discipline:\n" ^
   "- Use ONLY the structured tool API. Never write <tool_call> XML in text.\n" ^
