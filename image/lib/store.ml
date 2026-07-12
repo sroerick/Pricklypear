@@ -247,7 +247,12 @@ let lookup_function (t : t) (name : string)
 (* List all function names visible to this branch (via the same
    recursive-CTE override walk). Used at session-make time to load
    persisted definitions into the env. *)
-let list_function_names (t : t) : (string * Pricklypear_lisp.Ast.expr * string) list Lwt.t =
+(** Effective function defs for the current branch: parent-chain walk,
+    closest definition wins (depth ASC, first occurrence kept).
+    [depth] is 0 for rows owned by the current branch, >0 if inherited.
+    Callers that only need name/body/author can ignore depth. *)
+let list_function_names_meta (t : t)
+  : (string * Pricklypear_lisp.Ast.expr * string * int) list Lwt.t =
   match t.conn with
   | None -> Lwt.return []
   | Some conn ->
@@ -259,35 +264,53 @@ let list_function_names (t : t) : (string * Pricklypear_lisp.Ast.expr * string) 
             "  UNION ALL " ^
             "  SELECT b.id, b.parent_id, c.depth + 1 " ^
             "  FROM branches b JOIN chain c ON b.id = c.parent_id " ^
-            ") SELECT fd.name, fd.body, fd.author FROM function_defs fd " ^
+            ") SELECT fd.name, fd.body, fd.author, chain.depth " ^
+            "FROM function_defs fd " ^
             "JOIN chain ON fd.branch_id = chain.id " ^
-            "ORDER BY chain.depth ASC" in
+            "ORDER BY chain.depth ASC, fd.name ASC" in
           let* rows =
             Pg.execute conn
               ~params:[ Pgx.Value.of_string t.branch_id ]
               sql in
-          Lwt.return
-            (List.filter_map
-               (fun row ->
-                 match row with
-                 | [ name_c; body_cell; author_cell ] ->
-                     (match Pgx.Value.to_string name_c,
-                             Pgx.Value.to_string body_cell,
-                             Pgx.Value.to_string author_cell with
-                      | Some name, Some body_str, Some author ->
-                          (try
-                             let j = Yojson.Safe.from_string body_str in
-                             (match Pricklypear_lisp.Ast.expr_of_json j with
-                              | Ok e -> Some (name, e, author)
-                              | Error _ -> None)
-                           with Yojson.Json_error _ -> None)
-                      | _ -> None)
-                 | _ -> None)
-               rows))
+          let seen = Hashtbl.create 64 in
+          let acc =
+            List.filter_map
+              (fun row ->
+                match row with
+                | [ name_c; body_cell; author_cell; depth_c ] ->
+                    (match Pgx.Value.to_string name_c,
+                            Pgx.Value.to_string body_cell,
+                            Pgx.Value.to_string author_cell,
+                            Pgx.Value.to_string depth_c with
+                     | Some name, Some body_str, Some author, Some d_s ->
+                         if Hashtbl.mem seen name then None
+                         else begin
+                           Hashtbl.replace seen name ();
+                           let depth =
+                             int_of_string_opt d_s |> Option.value ~default:0
+                           in
+                           (try
+                              let j = Yojson.Safe.from_string body_str in
+                              (match Pricklypear_lisp.Ast.expr_of_json j with
+                               | Ok e -> Some (name, e, author, depth)
+                               | Error _ -> None)
+                            with Yojson.Json_error _ -> None)
+                         end
+                     | _ -> None)
+                | _ -> None)
+              rows
+          in
+          Lwt.return acc)
         (fun exn ->
           Printf.eprintf "[store] list_function_names error: %s\n"
             (Printexc.to_string exn);
           Lwt.return [])
+
+(** Effective defs only (deduped). Same as [list_function_names_meta] without depth. *)
+let list_function_names (t : t)
+  : (string * Pricklypear_lisp.Ast.expr * string) list Lwt.t =
+  let* rows = list_function_names_meta t in
+  Lwt.return (List.map (fun (n, e, a, _) -> (n, e, a)) rows)
 
 (* ---- own-branch stats / overrides (no recursive CTE) ---- *)
 

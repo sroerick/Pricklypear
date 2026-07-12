@@ -1362,17 +1362,39 @@ let list_bindings_page (session : Session.t) (reqd : Httpaf.Reqd.t)
   let q = Option.value (query_param target "q") ~default:"" |> String.trim in
   let pkg_q = query_param target "pkg" in
   let fn_q = query_param target "fn" in
-  let* defs = Store.list_function_names (Session.store session) in
+  let* defs_meta =
+    Store.list_function_names_meta (Session.store session)
+  in
+  (* Effective view only: one row per name (closest branch wins). *)
+  let defs =
+    List.map (fun (n, e, a, d) -> (n, e, a, d)) defs_meta
+  in
   let* used_by = used_by_pages_map session in
   let kernel = Session.kernel_catalog session in
-  let matches_ws (name, _body, author) =
+  let matches_ws (name, _body, author, _depth) =
     q = ""
     || contains_ci name q
     || contains_ci (Packages.package_of_name name) q
     || contains_ci author q
   in
   let defs_f = List.filter matches_ws defs in
-  let groups = Packages.group_by_package defs_f in
+  (* group_by_package expects 3-tuples; strip depth for grouping. *)
+  let defs_for_group =
+    List.map (fun (n, e, a, _) -> (n, e, a)) defs_f
+  in
+  let groups = Packages.group_by_package defs_for_group in
+  let depth_of name =
+    match List.find_opt (fun (n, _, _, _) -> n = name) defs_f with
+    | Some (_, _, _, d) -> d
+    | None -> 0
+  in
+  let origin_badge depth author =
+    if depth = 0 then
+      HTML.span [HTML.class_ "ok"] [txt "own"]
+    else
+      HTML.span [HTML.class_ "muted"]
+        [txt "inherited · %s" author]
+  in
   let used_links name =
     let routes = try Hashtbl.find used_by name with Not_found -> [] in
     match List.rev routes with
@@ -1459,6 +1481,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpaf.Reqd.t)
                 (Pricklypear_lisp.Effect.infer expr)
             in
             let pp = Pricklypear_lisp.Reader.pp_expr expr in
+            let depth = depth_of full in
             chrome ~session ~title:full [
               HTML.p [] [
                 HTML.a [HTML.href "/bindings"] [txt "Functions"];
@@ -1471,6 +1494,10 @@ let list_bindings_page (session : Session.t) (reqd : Httpaf.Reqd.t)
                 HTML.p [] [
                   HTML.span [HTML.class_ "muted"] [txt "kind: "];
                   txt "function (Lisp)";
+                ];
+                HTML.p [] [
+                  HTML.span [HTML.class_ "muted"] [txt "origin: "];
+                  origin_badge depth author;
                 ];
                 HTML.p [] [
                   HTML.span [HTML.class_ "muted"] [txt "author: "];
@@ -1543,12 +1570,12 @@ let list_bindings_page (session : Session.t) (reqd : Httpaf.Reqd.t)
       let pkg_key = if pkg = "(root)" || pkg = "root" then "" else pkg in
       let rows =
         List.filter
-          (fun (name, _, _) -> Packages.package_of_name name = pkg_key)
+          (fun (name, _, _, _) -> Packages.package_of_name name = pkg_key)
           defs_f
       in
       let items =
         List.map
-          (fun (name, body, author) ->
+          (fun (name, body, author, depth) ->
             let badge =
               Pricklypear_lisp.Effect.EffSet.badge
                 (Pricklypear_lisp.Effect.infer body)
@@ -1559,7 +1586,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpaf.Reqd.t)
                 HTML.a [HTML.href "%s" (fn_href pkg local)] [txt "%s" name];
               ];
               HTML.td [] [txt "%s" badge];
-              HTML.td [] [txt "%s" author];
+              HTML.td [] [origin_badge depth author];
               HTML.td [] [used_links name];
             ])
           rows
@@ -1567,6 +1594,10 @@ let list_bindings_page (session : Session.t) (reqd : Httpaf.Reqd.t)
       let body =
         chrome ~session ~title:("Package " ^ Packages.package_label pkg_key) [
           HTML.p [] [HTML.a [HTML.href "/bindings"] [txt "← all packages"]];
+          HTML.p [HTML.class_ "muted"] [
+            txt "Effective view for branch %s — one row per name (own or inherited)."
+              (Session.branch_name session);
+          ];
           (match items with
            | [] -> HTML.p [] [txt "(no functions in this package)"]
            | _ ->
@@ -1575,7 +1606,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpaf.Reqd.t)
                    HTML.tr [] [
                      HTML.th [] [txt "function"];
                      HTML.th [] [txt "effects"];
-                     HTML.th [] [txt "author"];
+                     HTML.th [] [txt "origin"];
                      HTML.th [] [txt "used by"];
                    ];
                  ];

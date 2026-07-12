@@ -40,6 +40,9 @@ type t = {
   mutable ui_nav_html : string option;
   (** Active HTTP request for user-route dispatch; None in REPL. *)
   mutable current_request : request option;
+  (** When true, (checkout)/(fork)/(merge) are blocked so the agent
+      cannot leave the current branch mid-task. *)
+  mutable agent_branch_lock : bool;
 }
 
 (* Load persisted function_defs + routes into the env.
@@ -129,6 +132,11 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
   (* (fork 'parent 'child) -> VStr new-branch-id | VStr "no such parent" *)
   Primitives.register tbl "fork"
     (fun args ->
+      if t.agent_branch_lock then
+        Lwt.return
+          (Pricklypear_lisp.Ast.VStr
+             "fork blocked: agent is locked to the current branch")
+      else
       match args with
       | [ Pricklypear_lisp.Ast.VStr parent_name;
           Pricklypear_lisp.Ast.VStr child_name ] ->
@@ -161,6 +169,11 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
      caller's own `owner/*` branches are free. *)
   Primitives.register tbl "merge"
     (fun args ->
+      if t.agent_branch_lock then
+        Lwt.return
+          (Pricklypear_lisp.Ast.VStr
+             "merge blocked: agent is locked to the current branch")
+      else
       match args with
       | [ Pricklypear_lisp.Ast.VStr source_ref;
           Pricklypear_lisp.Ast.VStr target_ref ] ->
@@ -215,22 +228,27 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
   (* (checkout 'branch-ref) -> VStr "checked out" | "no such branch".
      Mutates t.store.branch_id + t.manifest, then re-hydrates the env
      from the new branch's function_defs (sync — so the next form sees
-     the right bindings). *)
+     the right bindings). Blocked while agent_branch_lock is set. *)
   Primitives.register tbl "checkout"
     (fun args ->
-      match args with
-      | [ Pricklypear_lisp.Ast.VStr branch_ref ] ->
-          let owner, name = split_branch_ref branch_ref in
-          let* found =
-            Store.lookup_branch_id_by_name t.store ~owner ~name
-          in
-          (match found with
-           | None -> Lwt.return (Pricklypear_lisp.Ast.VStr "no such branch")
-           | Some new_id ->
-               let* () = checkout_to t ~branch_id:new_id ~branch_ref in
-               Lwt.return (Pricklypear_lisp.Ast.VStr "checked out"))
-      | _ ->
-          Lwt.return (Pricklypear_lisp.Ast.VStr "checkout: bad args"));
+      if t.agent_branch_lock then
+        Lwt.return
+          (Pricklypear_lisp.Ast.VStr
+             "checkout blocked: agent is locked to the current branch")
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr branch_ref ] ->
+            let owner, name = split_branch_ref branch_ref in
+            let* found =
+              Store.lookup_branch_id_by_name t.store ~owner ~name
+            in
+            (match found with
+             | None -> Lwt.return (Pricklypear_lisp.Ast.VStr "no such branch")
+             | Some new_id ->
+                 let* () = checkout_to t ~branch_id:new_id ~branch_ref in
+                 Lwt.return (Pricklypear_lisp.Ast.VStr "checked out"))
+        | _ ->
+            Lwt.return (Pricklypear_lisp.Ast.VStr "checkout: bad args"));
 
   (* Private prim used by the with-transaction special form in eval.ml.
      NOT USER-VISIBLE: it's looked up under name __with_transaction__ by
@@ -648,6 +666,12 @@ let agent_task
   let seed =
     "You are the agent for a running Pricklypear multi-user Lisp OS image " ^
     "(software, not a cactus).\n" ^
+    Printf.sprintf
+      "LOCKED BRANCH: %s — you see only the effective bindings on this branch "
+      t.manifest.branch_name ^
+    "(personal overrides shadow main; one name = one function).\n" ^
+    "All install_function writes go to THIS branch only. " ^
+    "Do NOT attempt checkout, fork, or merge.\n" ^
     "Tools: image_context, list_bindings, list_routes, inspect_function, install_function.\n" ^
     "Efficiency rules:\n" ^
     "- Batch: emit MULTIPLE tool calls in ONE assistant turn when possible " ^
@@ -658,6 +682,7 @@ let agent_task
     "- When finished, respond with a SHORT text summary and NO tool calls.\n" ^
     "- Do not invent bindings; use list_bindings / inspect_function."
   in
+  t.agent_branch_lock <- true;
   let open Llm_client in
   let msgs =
     ref
@@ -753,7 +778,11 @@ let agent_task
             loop (step + 1)
           end
   in
-  loop 1
+  Lwt.finalize
+    (fun () -> loop 1)
+    (fun () ->
+      t.agent_branch_lock <- false;
+      Lwt.return_unit)
 
 
 let llm_rewrite (t : t) ~(mode : string) ~(name : string) ~(concept : string)
@@ -1455,6 +1484,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
       kernel_catalog = [];  (* filled after all prims register *)
       ui_nav_html = None;
       current_request = None;
+      agent_branch_lock = false;
     }
   in
   (* Register the DB-touching control primitives on the prim_table,
