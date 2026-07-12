@@ -111,9 +111,10 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
          ul.actions li{margin:.4rem 0}
          /* Outline notes */
          .ol-root{margin:.5rem 0}
-         .ol-node{margin:.25rem 0 .25rem .35rem;border-left:2px solid #808080;padding-left:.35rem}
-         .ol-sum{cursor:pointer;font-weight:700;display:flex;align-items:flex-start;
-           gap:.35rem;flex-wrap:nowrap;min-width:0}
+         .ol-node{position:relative;margin:.25rem 0 .25rem .35rem;
+           border-left:2px solid #808080;padding-left:.35rem}
+         .ol-sum{cursor:pointer;font-weight:700;display:flex;align-items:center;
+           gap:.35rem;flex-wrap:nowrap;min-width:0;padding-right:11.5rem}
          .ol-fold{font-size:.7em;width:1em;flex:0 0 auto;display:inline-block;user-select:none;
            line-height:1.6}
          details.ol-node > .ol-sum .ol-fold::before{content:\"v\"}
@@ -128,9 +129,16 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
            outline:none;padding:.25rem;min-width:0;word-break:break-word}
          .ol-body:focus{background:#fff;border:1px solid #000}
          .ol-kids{margin-left:.15rem;min-width:0}
-         .ol-actions{display:flex;flex-wrap:wrap;justify-content:flex-start;gap:.3rem;
-           margin:.35rem 0 .5rem;opacity:1}
-         .ol-btn{font-size:.8rem;padding:.35rem .55rem;min-height:2.25rem;width:auto;
+         /* Actions: DOM before kids; desktop = right of title row; mobile = ··· menu */
+         details.ol-actions{position:absolute;top:.05rem;right:0;z-index:3;margin:0;display:block}
+         details.ol-actions > summary.ol-actions-sum{display:none;list-style:none;cursor:pointer;
+           user-select:none;width:auto;min-width:2.25rem;min-height:2.25rem;padding:.2rem .45rem;
+           border:1px solid #000;background:#c0c0c0;font-weight:700;text-align:center;line-height:1.4}
+         details.ol-actions > summary.ol-actions-sum::-webkit-details-marker{display:none}
+         .ol-actions-panel{display:flex !important;flex-direction:row;flex-wrap:nowrap;
+           justify-content:flex-end;align-items:center;gap:.25rem;margin:0;padding:0;
+           background:transparent;border:none}
+         .ol-btn{font-size:.75rem;padding:.25rem .45rem;min-height:2rem;width:auto;
            flex:0 0 auto;margin:0;border:1px solid #000;background:#d4d0c8;cursor:pointer}
          .ol-btn:hover{background:#fff}
          .ol-del{color:#800000}
@@ -235,19 +243,28 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
            button.ol-btn,button.ol-todo,button.ol-todo-btn,
            .ol-btn,.ol-todo,.ol-todo-btn{width:auto;margin:0}
            .ol-node{margin-left:.1rem;padding-left:.3rem}
-           .ol-actions{opacity:1;justify-content:flex-start}
-           .ol-sum{align-items:center}
+           .ol-sum{padding-right:2.75rem;align-items:center}
+           details.ol-actions > summary.ol-actions-sum{display:inline-block}
+           .ol-actions-panel{display:none !important;position:absolute;right:0;top:100%;
+             margin-top:2px;flex-direction:column;flex-wrap:nowrap;align-items:stretch;
+             min-width:7.5rem;padding:.25rem;background:#fff;border:2px solid #000;
+             box-shadow:2px 2px 0 #808080}
+           details.ol-actions[open] > .ol-actions-panel{display:flex !important}
+           details.ol-actions[open] > .ol-actions-panel .ol-btn{width:100%;text-align:left}
          }";
       (* htmx for create-in-place editor empty state *)
       HTML.script [HTML.src "https://unpkg.com/htmx.org@1.9.12"] "";
       (* Close nav dropdowns on outside click / when another opens *)
       HTML.script [] "%s"
         ("document.addEventListener('click',function(e){" ^
-         "document.querySelectorAll('details.menu-drop[open]').forEach(function(d){" ^
+         "document.querySelectorAll('details.menu-drop[open],details.ol-actions[open]').forEach(function(d){" ^
          "if(!d.contains(e.target))d.removeAttribute('open');});});" ^
          "document.addEventListener('toggle',function(e){" ^
-         "var d=e.target;if(!d||!d.classList||!d.classList.contains('menu-drop')||!d.open)return;" ^
-         "document.querySelectorAll('details.menu-drop[open]').forEach(function(o){" ^
+         "var d=e.target;if(!d||!d.classList)return;" ^
+         "var cls=d.classList.contains('menu-drop')?'menu-drop':" ^
+         "(d.classList.contains('ol-actions')?'ol-actions':null);" ^
+         "if(!cls||!d.open)return;" ^
+         "document.querySelectorAll('details.'+cls+'[open]').forEach(function(o){" ^
          "if(o!==d)o.removeAttribute('open');});},true);");
     ];
     HTML.body [] [body];

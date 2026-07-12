@@ -214,6 +214,50 @@
               (outline/swap-next (cdr kids) id))))))
 
 ;; --- HTML with editor controls ---
+;; Actions sit right after the title row (before body/kids) so parent
+;; controls never render under nested children. Desktop: right-justified
+;; on the title line. Mobile: ⋯ dropdown (see .ol-actions CSS).
+
+(define outline/action-btn
+  (lambda (slug nid op label class)
+    (html/tag "button"
+      (html/attrs
+        (list
+          (html/attr "class" class)
+          (html/attr "type" "button")
+          (html/attr "hx-post"
+            (string-append "/partials/notes-node-op?slug=" slug
+              "&op=" op "&node-id=" nid))
+          (html/attr "hx-target" "#outline")
+          (html/attr "hx-swap" "innerHTML")))
+      label)))
+
+(define outline/actions
+  (lambda (slug nid)
+    (html/tag "details" (html/attr "class" "ol-actions")
+      (html/join
+        (list
+          (html/tag "summary" (html/attr "class" "ol-actions-sum")
+            (html/text "···"))
+          (html/div (html/attr "class" "ol-actions-panel")
+            (html/join
+              (list
+                (outline/action-btn slug nid "add-child" "+child" "ol-btn")
+                (outline/action-btn slug nid "add-sibling" "+sib" "ol-btn")
+                (outline/action-btn slug nid "move-up" "up" "ol-btn")
+                (outline/action-btn slug nid "move-down" "down" "ol-btn")
+                (html/tag "button"
+                  (html/attrs
+                    (list
+                      (html/attr "class" "ol-btn ol-del")
+                      (html/attr "type" "button")
+                      (html/attr "hx-post"
+                        (string-append "/partials/notes-node-op?slug=" slug
+                          "&op=delete&node-id=" nid))
+                      (html/attr "hx-target" "#outline")
+                      (html/attr "hx-swap" "innerHTML")
+                      (html/attr "hx-confirm" "Delete this node?")))
+                  "del")))))))))
 
 (define outline/html-node
   (lambda (slug n)
@@ -256,6 +300,8 @@
                         (html/attr "data-id" nid)
                         (html/attr "data-field" "title")))
                     (html/text (outline/title n))))))
+            ;; Before body/kids so controls belong to this row, not under children.
+            (outline/actions slug nid)
             (if (string-eq body "")
                 ""
                 (html/div
@@ -271,61 +317,7 @@
                 (lambda (acc k)
                   (string-append acc (outline/html-node slug k)))
                 ""
-                kids))
-            (html/div (html/attr "class" "ol-actions")
-              (html/join
-                (list
-                  (html/tag "button"
-                    (html/attrs
-                      (list
-                        (html/attr "class" "ol-btn")
-                        (html/attr "hx-post"
-                          (string-append "/partials/notes-node-op?slug=" slug
-                            "&op=add-child&node-id=" nid))
-                        (html/attr "hx-target" "#outline")
-                        (html/attr "hx-swap" "innerHTML")))
-                    "+child")
-                  (html/tag "button"
-                    (html/attrs
-                      (list
-                        (html/attr "class" "ol-btn")
-                        (html/attr "hx-post"
-                          (string-append "/partials/notes-node-op?slug=" slug
-                            "&op=add-sibling&node-id=" nid))
-                        (html/attr "hx-target" "#outline")
-                        (html/attr "hx-swap" "innerHTML")))
-                    "+sib")
-                  (html/tag "button"
-                    (html/attrs
-                      (list
-                        (html/attr "class" "ol-btn")
-                        (html/attr "hx-post"
-                          (string-append "/partials/notes-node-op?slug=" slug
-                            "&op=move-up&node-id=" nid))
-                        (html/attr "hx-target" "#outline")
-                        (html/attr "hx-swap" "innerHTML")))
-                    "up")
-                  (html/tag "button"
-                    (html/attrs
-                      (list
-                        (html/attr "class" "ol-btn")
-                        (html/attr "hx-post"
-                          (string-append "/partials/notes-node-op?slug=" slug
-                            "&op=move-down&node-id=" nid))
-                        (html/attr "hx-target" "#outline")
-                        (html/attr "hx-swap" "innerHTML")))
-                    "down")
-                  (html/tag "button"
-                    (html/attrs
-                      (list
-                        (html/attr "class" "ol-btn ol-del")
-                        (html/attr "hx-post"
-                          (string-append "/partials/notes-node-op?slug=" slug
-                            "&op=delete&node-id=" nid))
-                        (html/attr "hx-target" "#outline")
-                        (html/attr "hx-swap" "innerHTML")
-                        (html/attr "hx-confirm" "Delete this node?")))
-                    "del"))))))))))
+                kids))))))))
 
 (define outline/html
   (lambda (slug root)
