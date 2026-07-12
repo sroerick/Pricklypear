@@ -574,6 +574,53 @@ let register_session_prims
   register_sync t "list-bindings" (prim_list_bindings_fn ~env)
 
 
+(* (date-today) -> VStr "YYYY-MM-DD" in local time. *)
+let prim_date_today (_args : value list) : value =
+  let tm = Unix.localtime (Unix.time ()) in
+  VStr
+    (Printf.sprintf "%04d-%02d-%02d"
+       (tm.Unix.tm_year + 1900) (tm.Unix.tm_mon + 1) tm.Unix.tm_mday)
+
+(* (parse-int s|n) -> VInt. Soft-fail to 0 on bad string. *)
+let prim_parse_int (args : value list) : value =
+  match args with
+  | [ VInt n ] -> VInt n
+  | [ VStr s ] ->
+      (try VInt (Int64.of_int (int_of_string (String.trim s)))
+       with _ -> VInt 0L)
+  | _ -> raise (Interp_error (User_error "parse-int needs string or int"))
+
+(* (date-weekday y m d) -> VInt 0=Sunday .. 6=Saturday (local). *)
+let prim_date_weekday (args : value list) : value =
+  match args with
+  | [ VInt y; VInt m; VInt d ] ->
+      let y = Int64.to_int y and m = Int64.to_int m and d = Int64.to_int d in
+      let tm =
+        { Unix.tm_sec = 0
+        ; tm_min = 0
+        ; tm_hour = 12
+        ; tm_mday = d
+        ; tm_mon = m - 1
+        ; tm_year = y - 1900
+        ; tm_wday = 0
+        ; tm_yday = 0
+        ; tm_isdst = false
+        }
+      in
+      let _, tm' = Unix.mktime tm in
+      VInt (Int64.of_int tm'.Unix.tm_wday)
+  | _ ->
+      raise (Interp_error (User_error "date-weekday needs year month day ints"))
+
+(* (date-format y m d) -> VStr "YYYY-MM-DD". *)
+let prim_date_format (args : value list) : value =
+  match args with
+  | [ VInt y; VInt m; VInt d ] ->
+      VStr
+        (Printf.sprintf "%04d-%02d-%02d"
+           (Int64.to_int y) (Int64.to_int m) (Int64.to_int d))
+  | _ -> raise (Interp_error (User_error "date-format needs year month day"))
+
 (* Register the minimal set. Returns the populated table. *)
 let make_with_defaults () : t =
   let t = make () in
@@ -618,6 +665,10 @@ let make_with_defaults () : t =
   register_sync t "count" prim_count;
   register_sync t "dict-get" prim_dict_get;
   register_sync t "dict-set" prim_dict_set;
+  register_sync t "date-today" prim_date_today;
+  register_sync t "parse-int" prim_parse_int;
+  register_sync t "date-weekday" prim_date_weekday;
+  register_sync t "date-format" prim_date_format;
   register_sync t "dict-keys" prim_dict_keys;
   register_sync t "render-html" prim_render_html;
   t
@@ -643,6 +694,10 @@ let prim_summary (name : string) : string =
   | "null?" -> "empty list?"
   | "pair?" -> "is pair?"
   | "count" -> "length of list"
+  | "date-today" -> "local date YYYY-MM-DD"
+  | "parse-int" -> "string or int to int"
+  | "date-weekday" -> "weekday 0=Sun for y m d"
+  | "date-format" -> "format y m d as YYYY-MM-DD"
   | "string-append" -> "concat strings"
   | "string-length" -> "length of string"
   | "substring" -> "substring start [len]"

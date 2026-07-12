@@ -1,0 +1,40 @@
+(project pricklypear-calendar
+ (doc "Pricklypear book chapter: calendar")
+ (status partial)
+ (convention ocaml-dune)
+ (section calendar
+  (doc "Month/day calendar: events + due todos + daily notes")
+  (status partial)
+  (subsection model
+   (doc "Naive local dates; shared data_rows; Lisp package")
+   (status implemented)
+   (implements libs/calendar/lib.pp image/lib/primitives.ml)
+   (details
+    (doc (|
+         CHOICES (v1):
+         - Day click opens day agenda (not auto-create)
+         - Naive local YYYY-MM-DD (no TZ UI)
+         - Seeded on boot after todo
+         - Month + day only (no week view yet)
+
+         DATA: calendar-event
+           title day start_time end_time all_day notes
+           location color source
+
+         OVERLAYS (read):
+           todo-item.due on day
+           notes daily-YYYY-MM-DD presence
+
+         PRIMS: date-today parse-int date-weekday date-format
+
+         ROUTES: /calendar ?ym= ?day=
+         Package: calendar/*
+    |))
+   )
+   (verify
+    (smoke "GET /calendar shows month grid")
+    (smoke "GET /calendar?day= shows agenda + add form")
+    (smoke "create event appears on day"))
+  )
+ )
+)

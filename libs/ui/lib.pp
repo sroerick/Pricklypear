@@ -16,6 +16,7 @@
         (menu/link "notes" "/notes")
         (menu/link "dabar" "/dabar")
         (menu/link "todos" "/todos")
+        (menu/link "calendar" "/calendar")
         (menu/link "agent" "/agent")
         (menu/link "repl" "/repl")))))
 

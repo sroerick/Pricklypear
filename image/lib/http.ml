@@ -148,6 +148,30 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
          .ol-todo-btn.st-TODO{background:#fff8dc}
          .ol-todo-btn.st-DONE{background:#cfc}
          .ol-todo-btn.st-WAITING{background:#e0e8ff}
+         /* Calendar */
+         .cal-nav{display:flex;align-items:center;gap:.75rem;margin:.5rem 0;flex-wrap:wrap}
+         .cal-nav a{text-decoration:none;font-weight:700}
+         .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:2px;
+           background:#808080;border:2px solid #000;max-width:42rem}
+         .cal-dow{background:#c0c0c0;text-align:center;font-weight:700;
+           padding:.25rem;font-size:.8rem}
+         .cal-cell{background:#fff;min-height:3.5rem;padding:.2rem;
+           display:block;color:#000;text-decoration:none}
+         a .cal-cell:hover{background:#fff8dc}
+         .cal-empty{background:#d4d0c8;min-height:3.5rem}
+         .cal-today{outline:2px solid #000;background:#ffffe0}
+         .cal-dom{font-weight:700;font-size:.85rem}
+         .cal-marks{display:flex;flex-wrap:wrap;gap:2px;margin-top:.15rem}
+         .cal-dot{font-size:.65rem;padding:0 .2rem;border:1px solid #000;
+           background:#c0c0c0;line-height:1.2}
+         .cal-dot-ev{background:#cfc}
+         .cal-dot-todo{background:#fff8dc}
+         .cal-dot-note{background:#e0e8ff}
+         .cal-list{list-style:none;padding:.25rem;margin:0}
+         .cal-event,.cal-todo{display:flex;gap:.5rem;align-items:center;
+           padding:.35rem 0;border-bottom:1px solid #ccc}
+         .cal-time{font-size:.8rem;min-width:3.5rem;color:#333}
+         .cal-day-panel label{display:block;margin-top:.4rem}
          /* Todo list */
          .todo-add-label{display:block;font-weight:bold;margin:0 0 .35rem}
          .todo-add-row{display:flex;gap:.5rem;align-items:stretch;flex-wrap:wrap}

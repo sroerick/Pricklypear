@@ -156,6 +156,10 @@
  (section notes
   (doc "Book chapter — outline-first notes (org/roam/obsidian-shaped); full text inlined from notes.borg")
   (inline notes.borg)
+
+ (section calendar
+  (doc "Book chapter — month/day calendar; full text inlined from calendar.borg")
+  (inline calendar.borg)
  )
  (section dabar
   (doc "Book chapter — BSB study libraries (dabar); full text inlined from dabar.borg")
