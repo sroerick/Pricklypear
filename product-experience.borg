@@ -198,8 +198,14 @@
            next  — legibility (vocabulary, about, hello recipe,
                    browser login)
            later — environment feel (system browser density,
-                   merge UI, permissions)
+                   branch browser + promote UI, permissions)
            horizon — community + AI coworker + Solo5 product
+
+         Branch UX + software updates: see branching.borg
+         subsections personal-workspace (implemented),
+         package-updates / promote / branch-browser-ui
+         (planned). Defaults on system/main; garden on
+         <user>/personal; promote is selective merge + git.
 
          Principles to preserve:
            live system over file tree; store is truth;

@@ -5,8 +5,10 @@
  (section branching
   (doc "Branches as the fundamental organizational primitive: code branches, shared data, fork/merge")
   (status partial)
-  (* agent note (|Section overall `partial` as of it17/it18 plan-pass:
-    fork = implemented, merge = partial, schema-authority = partial.
+  (* agent note (|Section overall `partial` as of personal-workspace plan:
+    fork = implemented, merge = partial, schema-authority = partial,
+    personal-workspace = implemented (boot + seed-on-main),
+    package-updates / promote / branch-browser-ui = planned.
     Per-subsection status below carries the per-feature detail.|) *)
   (details
    (doc (|
@@ -15,40 +17,38 @@
         Everything is a branch; everything else is built
         on top of that.
 
+        STORAGE (one Postgres, not one DB per branch):
+        - branches(id, parent_id, owner, name, ...)
+        - function_defs / type_defs / view_bindings
+          each keyed by (branch_id, name|route)
+        - data_rows has NO branch_id — shared data
+        No separate schemas/tables per branch. No
+        Postgres INHERITS (see storage.no-inheritance).
+
         KEY DISTINCTION: branches are for CODE, not data.
-        - BRANCHED (lives in branches): function
-          definitions, type schemas, view/route bindings.
-          Each row keyed by (branch_id, kind, name).
-        - SHARED (lives in main data tables): the actual
-          records those functions operate on. Event rows
-          are NOT branched. This is git's model applied
-          religiously.
+        - BRANCHED: function definitions, type schemas,
+          view/route bindings.
+        - SHARED: data_rows (todos, notes, bible, …).
+          Alice's experimental branch renders against
+          REAL shared data. She forks code, not data.
 
-        This split is critical. It means:
-        - Alice's experimental calendar branch can render
-          against her REAL events. She forks the code,
-          not the data.
-        - Forking is cheap: copy code-rows (a few hundred
-          inserts). Negligible cost.
-        - Multi-user data races on code are gone: each
-          branch is owned by one editor.
-        - Cache coherence is trivial: invalidate only on
-          merge, which is rare and explicit.
-        - The 'common namespace' political problem is just
-          git's merge-upstream politics.
+        TWO FORK SHAPES:
+        - EMPTY child (personal garden): parent pointer
+          only; inheritance via recursive CTE. Main
+          package updates stay visible unless overridden.
+        - FULL fork (experiment): copy code-rows from
+          parent (cheap snapshot). Parent updates do not
+          appear until merge.
 
-        A branch is identified by (owner, name):
-          main            the system baseline, root
-          alice/main      alice's fork of main
-          alice/experiment alice's fork of alice/main
-        Each branch has a parent. Forking = create new
-        branch row + copy code-rows from parent.
+        ROLES:
+          system/main     package defaults (vendor channel)
+          <user>/personal garden (user channel; boot default)
+          <user>/<name>   experiments (full fork)
 
-        Effective definition lookup (CLOS override, not
-        Postgres union): walk up the parent chain, return
-        first (closest) definition found. Plain SELECT
-        against function_defs WHERE branch_id IN (chain).
-        No Postgres INHERITS (see storage.no-inheritance).
+        Effective definition lookup (CLOS override):
+        walk parent chain, closest definition wins.
+        Writes (define/route) always hit the ACTIVE
+        branch only.
    |))
   )
   (subsection ast-nodes
@@ -247,6 +247,227 @@
          change, mirroring the OCaml-slow/Lisp-fast split.
    |))
    )
+  )
+  (subsection personal-workspace
+   (doc "Boot on empty <user>/personal; seed package defaults only onto system/main")
+   (status implemented)
+   (* agent note (|Shipped a934445 / 42f755b: Store.ensure_branch creates
+     EMPTY children; seed_stdlib uses Store.with_branch system/main;
+     boot ensure_personal → seed main → checkout personal → rehydrate
+     via Define AST (no pp_expr round-trip).|) *)
+   (details
+    (doc (|
+         PROBLEM: reseeding libs/*.pp onto the active branch
+         wiped live (define) edits after every deploy.
+
+         MODEL:
+         - system/main = package defaults (vendor channel).
+           Boot seed_stdlib ALWAYS writes libs/*.pp here
+           only (std, ui, ai, todo, bible, dabar today).
+         - <user>/personal = garden (user channel).
+           Empty child of system/main (parent pointer only).
+           Image boots here after seed. User (define) and
+           (route) write personal rows only.
+         - Inheritance: recursive CTE; personal overrides
+           shadow main; unpinned names auto-see main updates.
+
+         BOOT ORDER:
+         1. ensure_branch owner=username name=personal
+            parent=system/main (no code copy)
+         2. seed_stdlib with store.branch_id = system/main
+         3. checkout personal + rehydrate env from CTE
+         4. refresh ui/nav shell
+
+         load-library on CURRENT branch still overwrites
+         that branch (intentional). On personal that PINS
+         the whole package — prefer small overrides.
+
+         (checkout "system/main") / (checkout "admin/personal")
+         rehydrate sync; header shows current branch.
+    |))
+   )
+  )
+  (subsection package-updates
+   (doc "How software updates work: kernel vs main packages vs personal pins")
+   (status planned)
+   (details
+    (doc (|
+         THREE CHANNELS (not one monolithic version):
+
+         1. KERNEL — OCaml binary (HTTP, prims, loader,
+            chrome CSS). Updated by git push → promote →
+            restart. No branch involved.
+
+         2. PACKAGE DEFAULTS — function_defs on system/main
+            from libs/*.pp. Updated by boot seed after deploy.
+            Anyone who INHERITS a name (no personal row)
+            gets the new body automatically.
+
+         3. GARDEN PINS — function_defs rows on personal
+            (or any child). Never written by seed. Survive
+            every deploy. Shadow main until unoverride/merge.
+
+         DATA (data_rows) is never versioned by branch and
+         never wiped by push. New package code must tolerate
+         older row shapes (defaults in readers) or ship an
+         explicit data migrator.
+
+         UPDATE RULE:
+           inherited name  → auto-update on seed
+           overridden name → user must accept (unoverride
+                             or merge); show "main newer"
+
+         CONSCIOUS UPDATE UX (planned on branch browser):
+           per name: Use main's version | Keep mine | Diff
+           per package: Reset package pins to main
+           unoverride prim: delete personal row for name
+             so inheritance resumes (MISSING today)
+
+         load-library WARNING (planned): when current branch
+         is not system/main, warn that loading pins the
+         package on the garden.
+
+         Anti-patterns:
+           - reseed onto personal
+           - auto-merge main→personal on boot
+           - full copy-on-fork for personal (freezes forever)
+           - treat data_rows as package payload
+    |))
+   )
+  )
+  (subsection promote
+   (doc "Push garden work to system/main and/or git master (libs/*.pp)")
+   (status planned)
+   (details
+    (doc (|
+         Users will edit on personal and want to ship work
+         upstream. Two destinations — both matter:
+
+         A. LIVE main — (merge "admin/personal" "system/main")
+            Upserts function_defs personal → main now.
+            Admin-only into system/* (existing policy).
+            NOT durable alone: next seed reloads libs/*.pp
+            and can overwrite main unless git matches.
+
+         B. GIT master — pp_sync pull <pkg> while on personal
+            exports to libs/<pkg>/lib.pp; operator commits
+            and git push wyo. Next seed makes main durable.
+
+         FULL SHIP LOOP:
+           edit on personal → dogfood
+           → optional (merge personal main) for instant live
+           → pp_sync pull selected packages
+           → git commit + push
+           → seed refreshes system/main from files
+           → unoverride pins on personal so inheritance
+             is clean (don't keep stale full-package pins)
+
+         PROMOTE IS SELECTIVE:
+           Ship package functions (ui/*, notes/*, …),
+           NOT the entire garden (no personal-canary dump).
+           UI: multi-select packages/names, then
+             [ ] Merge into system/main
+             [ ] Export for git (operator runs pp_sync/commit)
+
+         Image does not git-push itself (no repo credentials
+         in the image). Export API + laptop/habitat operator
+         owns the commit.
+
+         Policy:
+           - merge to system/main: admin only
+           - merge to own branches: free
+           - data_rows never part of promote
+    |))
+   )
+  )
+  (subsection branch-browser-ui
+   (doc "Git-like light /branches browser: list, open, stats, checkout, promote")
+   (status planned)
+   (implements image/lib/http.ml image/lib/store.ml image/lib/session.ml)
+   (details
+    (doc (|
+         TODAY: GET /branches is a bare table
+         (owner/name, parent uuid prefix, created).
+         No checkout, stats, detail, or promote.
+
+         GOAL: tiny Gitea-ish branch page in classic
+         htmx chrome — browse, open, stats, checkout,
+         later promote — no SPA.
+
+         ROUTES:
+           GET  /branches
+           GET  /branches?ref=owner/name   detail
+           POST /branches/checkout         ref=…
+           POST /branches/fork             from + name
+           POST /branches/merge            src + dst (later)
+           POST /branches/promote          selective (later)
+
+         LIST PAGE:
+           Header strip: On: <current> ★ + quick links
+           Table columns:
+             ★ | branch | parent | own code |
+             overrides | routes | age | actions
+           own code = COUNT function_defs WHERE branch_id
+             (no CTE). overrides = own names also on parent.
+           actions: Open · Checkout (disabled if current)
+           Labels: system/main "defaults"; */personal "garden"
+           Create card: fork-from select + new name + Create
+             (full fork for experiments; personal stays empty)
+
+         DETAIL PAGE (?ref=):
+           Title, parent link, Checkout, back to list
+           Stats: own fns, overrides, own routes,
+             visible fn count (CTE), last define, authors
+           Sections (htmx partials):
+             Overrides (default for personal) — name,
+               author, updated, new|override, view, diff
+             All own code
+             Routes (own view_bindings)
+             Activity: ORDER BY updated_at on own defs
+               (revision log later)
+           Diff vs parent v1: two <pre> columns of pp_expr
+             (identical / changed / only-here / only-parent)
+
+         CHECKOUT:
+           POST → Session.checkout_to → 303 /branches
+           or HX-Redirect. Defines already persisted; no
+           "uncommitted" confirm.
+
+         PROMOTE PANEL (detail, admin):
+           package multi-select + name multi-select
+           [ ] Merge into system/main
+           [ ] Mark for export (pp_sync pull list)
+           Never dump whole garden by default.
+
+         UPDATES BADGE (package-updates):
+           override where main.updated_at > personal
+           → "main newer" + Accept (unoverride) | Keep | Diff
+
+         STORE HELPERS (own-branch, no CTE unless noted):
+           count_functions_on_branch
+           count_routes_on_branch
+           list_own_function_names
+           list_overrides (own ∩ parent names)
+           lookup_function_on_branch (no CTE)
+           delete_function_on_branch (unoverride)
+
+         PHASES:
+           A list: ★ current, checkout POST, open, own counts
+           B detail: overrides + link /binding/<name>
+           C diff vs parent (two pre)
+           D fork form + promote panel + unoverride
+           E activity / revision log
+
+         NON-GOALS (light):
+           git SHAs/commits, PR review UI, blame,
+           per-branch data, fancy fork-tree viz
+    |))
+   )
+   (verify
+    (build "dune build")
+    (smoke "GET /branches shows current ★ and checkout")
+    (smoke "POST checkout switches current-branch")
+    (smoke "detail lists personal overrides vs main"))
   )
  )
 )
