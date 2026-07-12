@@ -99,13 +99,18 @@
   )
   (subsection agent-portal
    (doc "One durable agent: sessions + messages in Postgres, one tool-capable loop, full history resubmitted each provider call")
-   (status planned)
-   (* agent note (|2026-07-12 plan: collapse agent / agent-task into one
-     conversation model. Provider chat/completions is stateless — every
-     turn POSTs the full messages[]. We own durability in ai_sessions +
-     ai_messages (migration 005). Storage interface is the first make
-     slice; runner/prims/HTTP wire next. Token streaming deferred
-     (Synthetic stream hangs; non-stream turns + progress events).|) *)
+   (status implemented)
+   (* agent note (|2026-07-12 IMPLEMENTED. Migration 005 + image/lib/ai_store.ml
+     + Session.run_loop (full history resubmit each chat_turn) +
+     prims agent-session-new/say/history/sessions/session-delete +
+     temporary aliases agent/agent-task + POST /api/agent session_id +
+     libs/ai wrappers. Verified: dune build image; ai_store alcotest
+     round-trip; live create/append multi-turn user rows in PG;
+     HTTP resume by session_id; delete clears thread. Token streaming
+     deferred (Synthetic hang); non-stream turns + progress events.
+     Full LLM tool-loop smoke needs LLM_API_KEY in image env
+     (dev.sh should forward LLM_* from the parent shell).
+     BORGE-1783840832 resolved.|) *)
    (implements
     (module migrations/005_ai_sessions.sql)
     (module image/lib/ai_store.ml)
@@ -115,6 +120,7 @@
     (module libs/ai/lib.pp))
    (verify
     (build "dune build image")
+    (test "image/test/ai_store_test.ml")
     (smoke "migration 005 creates ai_sessions + ai_messages")
     (smoke "ai_store create/list/append/load round-trips a multi-turn thread")
     (smoke "(agent-say sid prompt) resumes prior messages across process restart")

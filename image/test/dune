@@ -12,3 +12,8 @@
  (name auth_password_test)
  (modules auth_password_test)
  (libraries pricklypear-image alcotest mirage-crypto-rng.unix))
+
+(test
+ (name ai_store_test)
+ (modules ai_store_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest lwt lwt.unix yojson))

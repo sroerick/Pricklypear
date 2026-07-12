@@ -2362,16 +2362,27 @@ let sse_write (body : [ `write ] Httpaf.Body.t) (event_json : string) : unit Lwt
     ; (let* () = Lwt_unix.sleep 2.0 in Lwt.return_unit)
     ]
 
+let default_http_agent_seed =
+  "You are the co-pilot for a Pricklypear multi-user Lisp OS image \
+   (software, not a cactus). Prefer CONTEXT; if unknown say so. Use tools \
+   to inspect the live image when available."
+
+(** POST /api/agent — durable sessions.
+    Body JSON:
+      {prompt, seed?, session_id?, tools?, max_steps?}
+    Creates a session when session_id omitted; always returns session_id.
+    Progress SSE when Accept prefers event-stream or stream:true; default
+    is non-stream JSON (token streaming deferred / flaky on Synthetic). *)
 let api_agent (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
   let* body = read_body reqd in
-  let seed, prompt, want_stream =
+  let seed, prompt, session_id_opt, tools, max_steps, want_stream =
     try
       match Yojson.Safe.from_string body with
       | `Assoc items ->
           let seed =
             match List.assoc_opt "seed" items with
             | Some (`String s) -> s
-            | _ -> "You are the co-pilot for a Pricklypear multi-user Lisp OS image (software, not a cactus). Prefer CONTEXT; if unknown say so."
+            | _ -> default_http_agent_seed
           in
           let prompt =
             match List.assoc_opt "prompt" items with
@@ -2381,115 +2392,180 @@ let api_agent (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
                  | Some (`String s) -> s
                  | _ -> "")
           in
+          let sid =
+            match List.assoc_opt "session_id" items with
+            | Some (`String s) when String.trim s <> "" -> Some (String.trim s)
+            | _ -> None
+          in
+          let tools =
+            match List.assoc_opt "tools" items with
+            | Some (`Bool b) -> b
+            | Some (`String "0") | Some (`String "false") -> false
+            | _ -> true
+          in
+          let max_steps =
+            match List.assoc_opt "max_steps" items with
+            | Some (`Int n) -> n
+            | Some (`String s) ->
+                (match int_of_string_opt s with Some n -> n | None -> 16)
+            | _ -> 16
+          in
           let stream =
             match List.assoc_opt "stream" items with
             | Some (`Bool b) -> b
             | Some (`String "1") | Some (`String "true") -> true
             | Some (`String "0") | Some (`String "false") -> false
-            | _ -> true
+            | _ -> false
           in
-          (seed, prompt, stream)
-      | _ -> ("", "", true)
+          (seed, prompt, sid, tools, max_steps, stream)
+      | _ -> (default_http_agent_seed, "", None, true, 16, false)
     with _ ->
       let seed =
-        Option.value (form_field body "seed")
-          ~default:"You are the co-pilot for a Pricklypear multi-user Lisp OS image (software, not a cactus). Prefer CONTEXT; if unknown say so."
+        Option.value (form_field body "seed") ~default:default_http_agent_seed
       in
       let prompt =
         match form_field body "prompt" with
         | Some p -> p
         | None -> Option.value (form_field body "q") ~default:""
       in
-      (seed, prompt, true)
+      let sid = form_field body "session_id" in
+      (seed, prompt, sid, true, 16, false)
   in
   if String.trim prompt = "" then begin
     json_response reqd
       (`Assoc [ ("ok", `Bool false); ("error", `String "need prompt") ]);
     Lwt.return_unit
-  end else if not want_stream then begin
-    let* v = Session.agent session ~seed ~prompt () in
-    let text =
-      match v with
-      | Pricklypear_lisp.Ast.VStr s -> s
-      | _ -> Pricklypear_lisp.Reader.pp_value v
+  end else
+    let* sid_r =
+      match session_id_opt with
+      | Some sid -> Lwt.return (Ok sid)
+      | None ->
+          let title_opt =
+            let p = String.trim prompt in
+            if p = "" then None
+            else
+              Some
+                (if String.length p > 80 then String.sub p 0 80 ^ "…" else p)
+          in
+          let* v =
+            Session.agent_session_new session ~seed ~tools ?title:title_opt ()
+          in
+          (match v with
+           | Pricklypear_lisp.Ast.VStr s
+             when not (String.starts_with ~prefix:"agent-session-new error" s) ->
+               Lwt.return (Ok s)
+           | Pricklypear_lisp.Ast.VStr e -> Lwt.return (Error e)
+           | other ->
+               Lwt.return
+                 (Error (Pricklypear_lisp.Reader.pp_value other)))
     in
-    json_response reqd
-      (`Assoc [ ("ok", `Bool true); ("text", `String text) ]);
-    Lwt.return_unit
-  end else begin
-    (* Live SSE: stream tokens as they arrive. Fast-fail (no API key)
-       still works because on_event fires before any network wait. *)
-    let headers =
-      Httpaf.Headers.of_list
-        [ ("content-type", "text/event-stream; charset=utf-8")
-        ; ("cache-control", "no-cache")
-        ; ("connection", "keep-alive")
-        ; ("x-accel-buffering", "no")  (* disable nginx response buffering *)
-        ]
-    in
-    let resp = Httpaf.Response.create ~headers `OK in
-    let body_w =
-      Httpaf.Reqd.respond_with_streaming ~flush_headers_immediately:true
-        reqd resp
-    in
-    let queue : string Queue.t = Queue.create () in
-    let cond = Lwt_condition.create () in
-    let finished = ref false in
-    let push_json (j : string) : unit =
-      Queue.add j queue;
-      Lwt_condition.signal cond ()
-    in
-    let on_event = function
-      | Llm_client.Token tok ->
-          push_json
-            (Yojson.Safe.to_string
-               (`Assoc [ ("t", `String "token"); ("s", `String tok) ]))
-      | Llm_client.Done ->
-          push_json (Yojson.Safe.to_string (`Assoc [ ("t", `String "done") ]));
-          finished := true;
-          Lwt_condition.signal cond ()
-      | Llm_client.Fail e ->
-          push_json
-            (Yojson.Safe.to_string
-               (`Assoc [ ("t", `String "error"); ("s", `String e) ]));
-          finished := true;
-          Lwt_condition.signal cond ()
-    in
-    (* Producer: LLM stream (or immediate Fail). *)
-    Lwt.async (fun () ->
-      let* v =
-        Session.agent session ~stream:true ~on_event ~seed ~prompt ()
-      in
-      if not !finished then begin
-        (match v with
-         | Pricklypear_lisp.Ast.VStr s ->
-             push_json
-               (Yojson.Safe.to_string
-                  (`Assoc [ ("t", `String "done"); ("text", `String s) ]))
-         | _ ->
-             push_json
-               (Yojson.Safe.to_string (`Assoc [ ("t", `String "done") ])));
-        finished := true;
-        Lwt_condition.signal cond ()
-      end;
-      Lwt.return_unit);
-    (* Consumer: write SSE frames as they enqueue. *)
-    let rec drain () =
-      if not (Queue.is_empty queue) then
-        let j = Queue.take queue in
-        let* () = sse_write body_w j in
-        drain ()
-      else if !finished then begin
-        Httpaf.Body.close_writer body_w;
+    match sid_r with
+    | Error e ->
+        json_response reqd
+          (`Assoc [ ("ok", `Bool false); ("error", `String e) ]);
         Lwt.return_unit
-      end else
-        let* () = Lwt_condition.wait cond in
-        drain ()
-    in
-    drain ()
-  end
+    | Ok sid ->
+        if not want_stream then begin
+          let* v =
+            Session.agent_say session ~session_id:sid ~prompt ~max_steps ()
+          in
+          let text =
+            match v with
+            | Pricklypear_lisp.Ast.VStr s -> s
+            | _ -> Pricklypear_lisp.Reader.pp_value v
+          in
+          json_response reqd
+            (`Assoc
+               [ ("ok", `Bool true)
+               ; ("session_id", `String sid)
+               ; ("text", `String text)
+               ]);
+          Lwt.return_unit
+        end else begin
+          (* Progress SSE (tool/token events), not provider token stream. *)
+          let headers =
+            Httpaf.Headers.of_list
+              [ ("content-type", "text/event-stream; charset=utf-8")
+              ; ("cache-control", "no-cache")
+              ; ("connection", "keep-alive")
+              ; ("x-accel-buffering", "no")
+              ]
+          in
+          let resp = Httpaf.Response.create ~headers `OK in
+          let body_w =
+            Httpaf.Reqd.respond_with_streaming ~flush_headers_immediately:true
+              reqd resp
+          in
+          let queue : string Queue.t = Queue.create () in
+          let cond = Lwt_condition.create () in
+          let finished = ref false in
+          let push_json (j : string) : unit =
+            Queue.add j queue;
+            Lwt_condition.signal cond ()
+          in
+          push_json
+            (Yojson.Safe.to_string
+               (`Assoc
+                  [ ("t", `String "session")
+                  ; ("session_id", `String sid)
+                  ]));
+          let on_event = function
+            | Llm_client.Token tok ->
+                push_json
+                  (Yojson.Safe.to_string
+                     (`Assoc [ ("t", `String "token"); ("s", `String tok) ]))
+            | Llm_client.Done ->
+                push_json
+                  (Yojson.Safe.to_string (`Assoc [ ("t", `String "done") ]));
+                finished := true;
+                Lwt_condition.signal cond ()
+            | Llm_client.Fail e ->
+                push_json
+                  (Yojson.Safe.to_string
+                     (`Assoc [ ("t", `String "error"); ("s", `String e) ]));
+                finished := true;
+                Lwt_condition.signal cond ()
+          in
+          Lwt.async (fun () ->
+            let* v =
+              Session.agent_say session ~session_id:sid ~prompt ~max_steps
+                ~on_event ()
+            in
+            if not !finished then begin
+              (match v with
+               | Pricklypear_lisp.Ast.VStr s ->
+                   push_json
+                     (Yojson.Safe.to_string
+                        (`Assoc
+                           [ ("t", `String "done")
+                           ; ("text", `String s)
+                           ; ("session_id", `String sid)
+                           ]))
+               | _ ->
+                   push_json
+                     (Yojson.Safe.to_string
+                        (`Assoc [ ("t", `String "done") ])));
+              finished := true;
+              Lwt_condition.signal cond ()
+            end;
+            Lwt.return_unit);
+          let rec drain () =
+            if not (Queue.is_empty queue) then
+              let j = Queue.take queue in
+              let* () = sse_write body_w j in
+              drain ()
+            else if !finished then begin
+              Httpaf.Body.close_writer body_w;
+              Lwt.return_unit
+            end else
+              let* () = Lwt_condition.wait cond in
+              drain ()
+          in
+          drain ()
+        end
 
 let api_agent_task (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+  (* Alias: create tools session + say (same as /api/agent with tools). *)
   let* body = read_body reqd in
   let prompt =
     try
@@ -2553,6 +2629,7 @@ let agent_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
     "const out=document.getElementById('out');" ^
     "const run=document.getElementById('run');" ^
     "const baseCtx=" ^ Yojson.Safe.to_string (`String ctx) ^ ";" ^
+    "let sid=null;" ^
     "run.onclick=async()=>{" ^
     "const seed=document.getElementById('seed').value;" ^
     "const q=document.getElementById('prompt').value;" ^
@@ -2561,35 +2638,15 @@ let agent_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
     "baseCtx+'\\n=== END CONTEXT ===\\n\\nUser question:\\n'+q;" ^
     "out.textContent='…'; run.disabled=true;" ^
     "try{" ^
+    "const body={seed,prompt,stream:false};" ^
+    "if(sid)body.session_id=sid;" ^
     "const r=await fetch('/api/agent',{method:'POST'," ^
     "headers:{'content-type':'application/json'}," ^
-    "body:JSON.stringify({seed,prompt,stream:true})});" ^
-    "if(!r.ok){out.textContent='HTTP '+r.status;return;}" ^
-    "const ct=r.headers.get('content-type')||'';" ^
-    "if(ct.indexOf('application/json')>=0){" ^
+    "body:JSON.stringify(body)});" ^
     "const j=await r.json();" ^
-    "out.textContent=(j.text||j.error||JSON.stringify(j));" ^
-    "return;}" ^
-    "out.textContent='';" ^
-    "const reader=r.body.getReader();" ^
-    "const dec=new TextDecoder();" ^
-    "let buf='';" ^
-    "while(true){" ^
-    "const {value,done}=await reader.read();" ^
-    "if(done)break;" ^
-    "buf+=dec.decode(value,{stream:true});" ^
-    "const parts=buf.split('\\n\\n');" ^
-    "buf=parts.pop();" ^
-    "for(const p of parts){" ^
-    "const line=p.trim();" ^
-    "if(!line.startsWith('data:'))continue;" ^
-    "try{" ^
-    "const j=JSON.parse(line.slice(5).trim());" ^
-    "if(j.t==='token')out.textContent+=j.s;" ^
-    "else if(j.t==='error')out.textContent+=(out.textContent?'\\n':'')+'[error] '+j.s;" ^
-    "else if(j.t==='done'&&j.text&&!out.textContent)out.textContent=j.text;" ^
-    "}catch(_e){}}}" ^
-    "if(!out.textContent)out.textContent='(empty response)';" ^
+    "if(j.session_id)sid=j.session_id;" ^
+    "const label=sid?('[session '+sid.slice(0,8)+'…]\\n'):'';" ^
+    "out.textContent=label+(j.text||j.error||JSON.stringify(j));" ^
     "}catch(e){out.textContent=String(e);}" ^
     "finally{run.disabled=false;}" ^
     "};"
@@ -2598,9 +2655,9 @@ let agent_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
     chrome ~session ~title:"Agent" [
       HTML.div [HTML.class_ "card"] [
         HTML.p [] [txt
-          "Co-pilot for this image. Seed = persona; prompt = your question."];
+          "Durable co-pilot session. Seed = persona; prompt = your turn."];
         HTML.p [HTML.class_ "muted"] [txt
-          "Each run injects live context (user/branch/bindings). Lisp: (ai/ask \"…\")."];
+          "Same session continues on each Run. Lisp: (agent-session-new seed) then (agent-say sid \"…\")."];
         HTML.p [] [
           HTML.label [HTML.for_ "seed"] [txt "seed (system)"];
         ];

@@ -85,8 +85,8 @@ start_pg() {
     echo "[dev] creating database $PP_DB_NAME"
     createdb -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U "$PP_DB_USER" "$PP_DB_NAME"
   fi
-  echo "[dev] applying migrations 001 + 002 + 003 + 004"
-  for m in 001_branches 002_auth 003_data 004_bible_ref_index; do
+  echo "[dev] applying migrations 001 + 002 + 003 + 004 + 005"
+  for m in 001_branches 002_auth 003_data 004_bible_ref_index 005_ai_sessions; do
     psql -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U "$PP_DB_USER" -d "$PP_DB_NAME" \
       -f "$PP_ROOT/migrations/${m}.sql" -q
   done
@@ -107,6 +107,14 @@ start_image() {
     return
   fi
   echo "[dev] starting image: http=:$PP_HTTP_PORT repl=:$PP_REPL_PORT"
+  # Forward LLM_* if present (optional; agent-say needs LLM_API_KEY).
+  # Also load ~/.config/pricklypear/llm.env when it exists (mode 600, never commit).
+  if [ -f "${HOME}/.config/pricklypear/llm.env" ]; then
+    # shellcheck disable=SC1090
+    set -a
+    . "${HOME}/.config/pricklypear/llm.env"
+    set +a
+  fi
   PP_DB_HOST=127.0.0.1 \
   PP_DB_PORT="$PP_DB_PORT" \
   PP_DB_NAME="$PP_DB_NAME" \
@@ -120,6 +128,9 @@ start_image() {
   PP_AUTH_DISABLED="${PP_AUTH_DISABLED:-}" \
   PP_HTTP_PORT="$PP_HTTP_PORT" \
   PP_REPL_PORT="$PP_REPL_PORT" \
+  LLM_API_BASE="${LLM_API_BASE:-}" \
+  LLM_API_KEY="${LLM_API_KEY:-}" \
+  LLM_MODEL="${LLM_MODEL:-}" \
     "$PP_ROOT/_build/default/image/bin/main.exe" \
       >"$PP_DEV_DIR/image.log" 2>&1 &
   echo $! > "$image_pidfile"

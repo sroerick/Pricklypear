@@ -377,22 +377,7 @@ let check_ai_body_effects (body_src : string) : (unit, string) result =
            (Pricklypear_lisp.Effect.EffSet.pp fx))
   with _ -> Ok ()  (* parse errors handled by define_binding *)
 
-(** Unified agent portal: seed + prompt -> final text.
-    Progress via optional [on_event] (SSE / log). Does not define. *)
-let agent
-    (t : t)
-    ?(stream = false)
-    ?(on_event : Llm_client.agent_event -> unit = fun _ -> ())
-    ~(seed : string)
-    ~(prompt : string)
-    () : Pricklypear_lisp.Ast.value Lwt.t =
-  let _ = t in
-  let* res =
-    Llm_client.agent_chat ~stream ~on_event ~seed ~prompt ()
-  in
-  match res with
-  | Ok text -> Lwt.return (Pricklypear_lisp.Ast.VStr text)
-  | Error e -> Lwt.return (Pricklypear_lisp.Ast.VStr ("agent error: " ^ e))
+(* [agent] temporary alias defined after agent_session_new / agent_say. *)
 
 (** Install a Lisp body as [name] with AI provenance (parse + effect gate). *)
 let install_ai_function (t : t) ~(name : string) ~(body_src : string)
@@ -675,126 +660,127 @@ let run_agent_tool (t : t) ~(name : string) ~(arguments : string)
   | other ->
       Lwt.return ("error: unknown tool " ^ other)
 
-(** Multi-turn agent with tools: can install many functions to finish a task. *)
-let agent_task
+(** One durable tool-capable loop over an ai_sessions row.
+    Loads history from Postgres, resubmits full messages[] each turn,
+    appends user/assistant/tool rows as it goes. *)
+let run_loop
     (t : t)
+    ~(sess : Ai_store.session)
     ?(max_steps = 16)
     ?(on_event : Llm_client.agent_event -> unit = fun _ -> ())
-    ~(prompt : string)
-    () : Pricklypear_lisp.Ast.value Lwt.t =
-  let seed =
-    "You are the agent for a running Pricklypear multi-user Lisp OS image " ^
-    "(software, not a cactus).\n" ^
-    Printf.sprintf
-      "LOCKED BRANCH: %s — you see only the effective bindings on this branch "
-      t.manifest.branch_name ^
-    "(personal overrides shadow main; one name = one function).\n" ^
-    "All install_function writes go to THIS branch only. " ^
-    "Do NOT attempt checkout, fork, or merge.\n" ^
-    "Tools: image_context, list_bindings, list_routes, inspect_function, install_function.\n" ^
-    "Efficiency rules:\n" ^
-    "- Batch: emit MULTIPLE tool calls in ONE assistant turn when possible " ^
-    "(e.g. several install_function calls together).\n" ^
-    "- Do not re-list bindings after every install unless needed.\n" ^
-    "- install_function body = one lambda s-expression only, no prose.\n" ^
-    "- Prefer package/name names (demo/hello).\n" ^
-    "- When finished, respond with a SHORT text summary and NO tool calls.\n" ^
-    "- Do not invent bindings; use list_bindings / inspect_function."
-  in
+    () : string Lwt.t =
   t.agent_branch_lock <- true;
   let open Llm_client in
-  let msgs =
-    ref
-      [ Msg { role = System; content = seed }
-      ; Msg { role = User; content = prompt }
-      ]
-  in
   let installs : string list ref = ref [] in
   let rec loop step =
     if step > max_steps then begin
       let summary =
         match !installs with
         | [] ->
-            "agent-task: max steps exceeded (no installs recorded). " ^
-            "Try a smaller task or (agent-task prompt 24)."
+            "agent: max steps exceeded (no installs recorded). " ^
+            "Try a smaller task or raise max-steps."
         | xs ->
-            "agent-task: max steps exceeded after installs:\n- " ^
+            "agent: max steps exceeded after installs:\n- " ^
             String.concat "\n- " (List.rev xs) ^
-            "\n(Partial progress kept on this branch.)"
+            "\n(Partial progress kept on this branch and in the session.)"
       in
       on_event (Fail summary);
-      Lwt.return (Pricklypear_lisp.Ast.VStr summary)
+      Lwt.return summary
     end else
+      let* history = Ai_store.list_messages t.store ~session_id:sess.id in
+      let msgs = Ai_store.messages_for_api sess history in
       (* Last step: no tools — force a plain-text wrap-up. *)
       let tools_now =
-        if step = max_steps then [] else agent_tool_defs
+        if (not sess.tools) || step = max_steps then [] else agent_tool_defs
       in
       let* turn =
         chat_turn ~temperature:0.2 ~max_tokens:2048
-          ~tools:tools_now ~messages:!msgs ()
+          ~tools:tools_now ~messages:msgs ()
       in
       match turn with
       | Turn_error e ->
           on_event (Fail e);
-          Lwt.return (Pricklypear_lisp.Ast.VStr ("agent-task error: " ^ e))
+          Lwt.return ("agent error: " ^ e)
       | Final text ->
-          on_event (Token text);
-          on_event Done;
-          Lwt.return (Pricklypear_lisp.Ast.VStr text)
+          let* r =
+            Ai_store.append_messages t.store ~session_id:sess.id
+              [ Msg { role = Assistant; content = text } ]
+          in
+          (match r with
+           | Error e ->
+               on_event (Fail e);
+               Lwt.return ("agent error: " ^ e)
+           | Ok () ->
+               on_event (Token text);
+               on_event Done;
+               Lwt.return text)
       | Need_tools { content; tool_calls } ->
-          (* Empty tool_calls burns steps instantly — stop that loop. *)
           if tool_calls = [] then begin
             let fallback =
               match content with
               | Some c when String.trim c <> "" -> c
               | _ ->
-                  "agent-task: model requested tools but sent none; stopping."
+                  "agent: model requested tools but sent none; stopping."
+            in
+            let* _ =
+              Ai_store.append_messages t.store ~session_id:sess.id
+                [ Msg { role = Assistant; content = fallback } ]
             in
             on_event (Token fallback);
             on_event Done;
-            Lwt.return (Pricklypear_lisp.Ast.VStr fallback)
+            Lwt.return fallback
           end else begin
             (match content with
              | Some c when String.trim c <> "" -> on_event (Token (c ^ "\n"))
              | _ -> ());
-            msgs :=
-              !msgs
-              @ [ Assistant_tools { content; tool_calls } ];
-            let* () =
-              Lwt_list.iter_s
-                (fun (tc : tool_call) ->
-                  on_event (Token (Printf.sprintf "[tool %s]\n" tc.name));
-                  let* result =
-                    run_agent_tool t ~name:tc.name ~arguments:tc.arguments
-                  in
-                  if tc.name = "install_function" then begin
-                    let n =
-                      match
-                        try
-                          json_string_field
-                            (Yojson.Safe.from_string tc.arguments) "name"
-                        with _ -> None
-                      with
-                      | Some name -> name
-                      | None -> "?"
-                    in
-                    installs := n :: !installs
-                  end;
-                  on_event
-                    (Token
-                       (Printf.sprintf "→ %s\n"
-                          (if String.length result > 200 then
-                             String.sub result 0 200 ^ "…"
-                           else result)));
-                  msgs :=
-                    !msgs
-                    @ [ Tool_result
-                          { tool_call_id = tc.id; content = result }
-                      ];
-                  Lwt.return_unit)
-                tool_calls
+            let* r1 =
+              Ai_store.append_messages t.store ~session_id:sess.id
+                [ Assistant_tools { content; tool_calls } ]
             in
-            loop (step + 1)
+            match r1 with
+            | Error e ->
+                on_event (Fail e);
+                Lwt.return ("agent error: " ^ e)
+            | Ok () ->
+                let* tool_rows =
+                  Lwt_list.map_s
+                    (fun (tc : tool_call) ->
+                      on_event (Token (Printf.sprintf "[tool %s]\n" tc.name));
+                      let* result =
+                        run_agent_tool t ~name:tc.name ~arguments:tc.arguments
+                      in
+                      if tc.name = "install_function" then begin
+                        let n =
+                          match
+                            try
+                              json_string_field
+                                (Yojson.Safe.from_string tc.arguments) "name"
+                            with _ -> None
+                          with
+                          | Some name -> name
+                          | None -> "?"
+                        in
+                        installs := n :: !installs
+                      end;
+                      on_event
+                        (Token
+                           (Printf.sprintf "→ %s\n"
+                              (if String.length result > 200 then
+                                 String.sub result 0 200 ^ "…"
+                               else result)));
+                      Lwt.return
+                        (Tool_result
+                           { tool_call_id = tc.id; content = result }))
+                    tool_calls
+                in
+                let* r2 =
+                  Ai_store.append_messages t.store ~session_id:sess.id tool_rows
+                in
+                (match r2 with
+                 | Error e ->
+                     on_event (Fail e);
+                     Lwt.return ("agent error: " ^ e)
+                 | Ok () -> loop (step + 1))
           end
   in
   Lwt.finalize
@@ -802,6 +788,194 @@ let agent_task
     (fun () ->
       t.agent_branch_lock <- false;
       Lwt.return_unit)
+
+let default_agent_seed (t : t) : string =
+  "You are the agent for a running Pricklypear multi-user Lisp OS image " ^
+  "(software, not a cactus).\n" ^
+  Printf.sprintf
+    "LOCKED BRANCH: %s — you see only the effective bindings on this branch "
+    t.manifest.branch_name ^
+  "(personal overrides shadow main; one name = one function).\n" ^
+  "All install_function writes go to THIS branch only. " ^
+  "Do NOT attempt checkout, fork, or merge.\n" ^
+  "Tools: image_context, list_bindings, list_routes, inspect_function, install_function.\n" ^
+  "Efficiency rules:\n" ^
+  "- Batch: emit MULTIPLE tool calls in ONE assistant turn when possible " ^
+  "(e.g. several install_function calls together).\n" ^
+  "- Do not re-list bindings after every install unless needed.\n" ^
+  "- install_function body = one lambda s-expression only, no prose.\n" ^
+  "- Prefer package/name names (demo/hello).\n" ^
+  "- When finished, respond with a SHORT text summary and NO tool calls.\n" ^
+  "- Do not invent bindings; use list_bindings / inspect_function."
+
+let agent_session_new
+    (t : t)
+    ~(seed : string)
+    ?(tools = true)
+    ?title
+    () : Pricklypear_lisp.Ast.value Lwt.t =
+  let* r =
+    Ai_store.create_session t.store
+      ~owner:t.manifest.username
+      ~seed
+      ?title
+      ~branch_ref:t.manifest.branch_name
+      ~tools
+      ~model:(Llm_client.model ())
+      ()
+  in
+  match r with
+  | Ok s -> Lwt.return (Pricklypear_lisp.Ast.VStr s.id)
+  | Error e -> Lwt.return (Pricklypear_lisp.Ast.VStr ("agent-session-new error: " ^ e))
+
+let agent_say
+    (t : t)
+    ~(session_id : string)
+    ~(prompt : string)
+    ?(max_steps = 16)
+    ?(on_event : Llm_client.agent_event -> unit = fun _ -> ())
+    () : Pricklypear_lisp.Ast.value Lwt.t =
+  let* sess_opt =
+    Ai_store.get_session t.store
+      ~owner:t.manifest.username
+      ~id:session_id
+  in
+  match sess_opt with
+  | None ->
+      Lwt.return
+        (Pricklypear_lisp.Ast.VStr
+           ("agent-say: no session " ^ session_id ^ " for " ^ t.manifest.username))
+  | Some sess ->
+      let title =
+        match sess.title with
+        | Some _ -> None
+        | None ->
+            let p = String.trim prompt in
+            if p = "" then None
+            else
+              Some
+                (if String.length p > 80 then String.sub p 0 80 ^ "…" else p)
+      in
+      let* () =
+        Ai_store.touch_session t.store ~id:sess.id ?title
+          ~branch_ref:t.manifest.branch_name ()
+      in
+      let* ar =
+        Ai_store.append_messages t.store ~session_id:sess.id
+          [ Llm_client.Msg { role = Llm_client.User; content = prompt } ]
+      in
+      match ar with
+      | Error e ->
+          Lwt.return (Pricklypear_lisp.Ast.VStr ("agent-say error: " ^ e))
+      | Ok () ->
+          let* text =
+            run_loop t ~sess ~max_steps ~on_event ()
+          in
+          Lwt.return (Pricklypear_lisp.Ast.VStr text)
+
+let agent_history (t : t) ~(session_id : string)
+    : Pricklypear_lisp.Ast.value Lwt.t =
+  let* sess_opt =
+    Ai_store.get_session t.store
+      ~owner:t.manifest.username
+      ~id:session_id
+  in
+  match sess_opt with
+  | None ->
+      Lwt.return
+        (Pricklypear_lisp.Ast.VStr
+           ("agent-history: no session " ^ session_id))
+  | Some _ ->
+      let* pairs =
+        Ai_store.history_summaries t.store ~session_id
+      in
+      let rows =
+        List.map
+          (fun (role, content) ->
+            Pricklypear_lisp.Ast.VList
+              [ Pricklypear_lisp.Ast.VStr role
+              ; Pricklypear_lisp.Ast.VStr content
+              ])
+          pairs
+      in
+      Lwt.return (Pricklypear_lisp.Ast.VList rows)
+
+let agent_sessions (t : t) ?(limit = 50) ()
+    : Pricklypear_lisp.Ast.value Lwt.t =
+  let* xs =
+    Ai_store.list_sessions t.store
+      ~owner:t.manifest.username
+      ~limit
+      ()
+  in
+  let rows =
+    List.map
+      (fun (s : Ai_store.session) ->
+        let title = Option.value s.title ~default:"" in
+        Pricklypear_lisp.Ast.VList
+          [ Pricklypear_lisp.Ast.VStr s.id
+          ; Pricklypear_lisp.Ast.VStr title
+          ; Pricklypear_lisp.Ast.VStr s.updated_at
+          ])
+      xs
+  in
+  Lwt.return (Pricklypear_lisp.Ast.VList rows)
+
+let agent_session_delete (t : t) ~(session_id : string)
+    : Pricklypear_lisp.Ast.value Lwt.t =
+  let* ok =
+    Ai_store.delete_session t.store
+      ~owner:t.manifest.username
+      ~id:session_id
+  in
+  Lwt.return
+    (Pricklypear_lisp.Ast.VStr
+       (if ok then "deleted" else "not found"))
+
+(** Temporary alias: new session (tools on) + one say.
+    Prefer (agent-session-new) + (agent-say). [stream] ignored. *)
+let agent
+    (t : t)
+    ?(stream = false)
+    ?(on_event : Llm_client.agent_event -> unit = fun _ -> ())
+    ~(seed : string)
+    ~(prompt : string)
+    () : Pricklypear_lisp.Ast.value Lwt.t =
+  let _ = stream in
+  let title_opt =
+    let p = String.trim prompt in
+    if p = "" then None
+    else Some (if String.length p > 80 then String.sub p 0 80 ^ "…" else p)
+  in
+  let* created =
+    agent_session_new t ~seed ~tools:true ?title:title_opt ()
+  in
+  match created with
+  | Pricklypear_lisp.Ast.VStr sid
+    when not (String.starts_with ~prefix:"agent-session-new error" sid) ->
+      agent_say t ~session_id:sid ~prompt ~on_event ()
+  | other -> Lwt.return other
+
+(** Temporary alias: new tools session + one say. *)
+let agent_task
+    (t : t)
+    ?(max_steps = 16)
+    ?(on_event : Llm_client.agent_event -> unit = fun _ -> ())
+    ~(prompt : string)
+    () : Pricklypear_lisp.Ast.value Lwt.t =
+  let seed = default_agent_seed t in
+  let title_opt =
+    let p = String.trim prompt in
+    if p = "" then None
+    else Some (if String.length p > 80 then String.sub p 0 80 ^ "…" else p)
+  in
+  let* created =
+    agent_session_new t ~seed ~tools:true ?title:title_opt ()
+  in
+  match created with
+  | Pricklypear_lisp.Ast.VStr sid when not (String.starts_with ~prefix:"agent-session-new error" sid) ->
+      agent_say t ~session_id:sid ~prompt ~max_steps ~on_event ()
+  | other -> Lwt.return other
 
 
 let llm_rewrite (t : t) ~(mode : string) ~(name : string) ~(concept : string)
@@ -1084,8 +1258,60 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
   Primitives.register_sync tbl "current-branch"
     (fun _ -> Pricklypear_lisp.Ast.VStr t.manifest.branch_name);
 
-  (* (agent seed prompt) -> VStr final text | error string.
-     Unified AI portal. Effect Ai. Does not auto-define. *)
+  (* Durable agent sessions (ai-authoring.agent-portal). *)
+  Primitives.register tbl "agent-session-new"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr seed ] ->
+          agent_session_new t ~seed ~tools:true ()
+      | [ Pricklypear_lisp.Ast.VStr seed; Pricklypear_lisp.Ast.VBool tools ] ->
+          agent_session_new t ~seed ~tools ()
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr
+               "agent-session-new: need seed-str [, tools-bool]"));
+
+  Primitives.register tbl "agent-say"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr sid; Pricklypear_lisp.Ast.VStr prompt ] ->
+          agent_say t ~session_id:sid ~prompt ()
+      | [ Pricklypear_lisp.Ast.VStr sid; Pricklypear_lisp.Ast.VStr prompt;
+          Pricklypear_lisp.Ast.VInt n ] ->
+          agent_say t ~session_id:sid ~prompt ~max_steps:(Int64.to_int n) ()
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr
+               "agent-say: need session-id, prompt [, max-steps]"));
+
+  Primitives.register tbl "agent-history"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr sid ] -> agent_history t ~session_id:sid
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr "agent-history: need session-id"));
+
+  Primitives.register tbl "agent-sessions"
+    (fun args ->
+      match args with
+      | [] -> agent_sessions t ()
+      | [ Pricklypear_lisp.Ast.VInt n ] ->
+          agent_sessions t ~limit:(Int64.to_int n) ()
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr "agent-sessions: optional limit int"));
+
+  Primitives.register tbl "agent-session-delete"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr sid ] ->
+          agent_session_delete t ~session_id:sid
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr "agent-session-delete: need session-id"));
+
+  (* Temporary aliases: new session + one say. Prefer agent-session-new/say. *)
   Primitives.register tbl "agent"
     (fun args ->
       match args with
@@ -1097,7 +1323,6 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
             (Pricklypear_lisp.Ast.VStr
                "agent: need 2 strings (seed, prompt)"));
 
-  (* (agent-task prompt) multi-turn tools; may install many functions. *)
   Primitives.register tbl "agent-task"
     (fun args ->
       match args with
