@@ -266,7 +266,7 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
       (* Close nav dropdowns on outside click / when another opens *)
       HTML.script [] "%s"
         ("document.addEventListener('click',function(e){" ^
-         /* Outline: only .ol-fold on the summary toggles collapse. */
+         (* Outline: only .ol-fold on the summary toggles collapse. *)
          "var sum=e.target&&e.target.closest?e.target.closest('summary.ol-sum'):null;" ^
          "if(sum&&!(e.target.closest&&e.target.closest('.ol-fold'))){e.preventDefault();}" ^
          "document.querySelectorAll('details.menu-drop[open],details.ol-actions[open]').forEach(function(d){" ^
