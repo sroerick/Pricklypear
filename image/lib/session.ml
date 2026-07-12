@@ -59,7 +59,7 @@ let load_defs (t : t) : unit Lwt.t =
           Lwt.catch
             (fun () ->
                (* Eval the stored AST directly — NEVER pp_expr round-trip.
-                  Complex bodies (ui/home, notes/*) break under print/parse. *)
+                  Complex bodies (ui/home, notes) break under print/parse. *)
                let* _ =
                  Pricklypear_lisp.Eval.eval
                    ~budget:(Pricklypear_lisp.Eval.make_budget ())
