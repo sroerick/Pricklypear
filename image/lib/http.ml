@@ -480,7 +480,8 @@ let chrome ?nav_html ~(session : Session.t) ~(title : string)
       nav;
     ];
     HTML.main [] (
-      HTML.h1 [] [txt "%s" title] :: content
+      (if String.trim title = "" then content
+       else HTML.h1 [] [txt "%s" title] :: content)
     );
   ]
 
@@ -1615,7 +1616,7 @@ let home_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
         [ txt ~raw:true "%s" html ]
     | _ -> emergency_home_content session
   in
-  let body = chrome ~session ~title:"Workspace" content in
+  let body = chrome ~session ~title:"" content in
   html_response reqd body;
   Lwt.return_unit
 
