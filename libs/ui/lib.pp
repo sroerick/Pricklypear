@@ -38,4 +38,4 @@
   (lambda ()
     (html/page
       (list
-        (weather/widget))))))
+        (weather/widget)))))
