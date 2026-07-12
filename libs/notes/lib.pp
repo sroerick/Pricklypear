@@ -115,6 +115,48 @@
                 "inbox" "inbox" "")
               "inbox")))))))
 
+;; Compact capture control for the top nav (details dropdown).
+(define notes/capture-nav
+  (lambda ()
+    (html/tag "details" (html/attr "class" "menu-drop capture-drop")
+      (html/join
+        (list
+          (html/tag "summary" (html/attr "class" "menu-drop-btn") "capture")
+          (html/div (html/attr "class" "menu-drop-panel capture-panel")
+            (html/form "POST" "/notes"
+              (html/attrs
+                (list
+                  (html/attr "class" "capture-nav-form")
+                  (html/attr "hx-post" "/notes")
+                  (html/attr "hx-target" "#capture-status")
+                  (html/attr "hx-swap" "innerHTML")
+                  (html/attr "hx-on::after-request"
+                    "if(event.detail.successful){this.reset()}")))
+              (html/join
+                (list
+                  (html/hidden "action" "capture")
+                  (html/text-input "title"
+                    (html/attrs
+                      (list
+                        (html/attr "placeholder" "title (optional)")
+                        (html/attr "autocomplete" "off")
+                        (html/attr "class" "capture-nav-title"))))
+                  (html/textarea "body"
+                    (html/attrs
+                      (list
+                        (html/attr "rows" "3")
+                        (html/attr "class" "capture-body")
+                        (html/attr "placeholder" "Quick capture…")
+                        (html/attr "required" "required")))
+                    "")
+                  (html/div (html/attr "class" "capture-row")
+                    (html/join
+                      (list
+                        (html/button (html/attr "type" "submit") "Save")
+                        (html/a "/notes?slug=inbox" "inbox"))))
+                  (html/div (html/attr "id" "capture-status") ""))))))))))
+
+;; Full-page form (also used if someone hits /capture).
 (define notes/capture-form
   (lambda ()
     (html/form "POST" "/notes"
@@ -155,6 +197,15 @@
                 (html/button (html/attr "type" "submit") "Capture")
                 (html/a "/notes?slug=inbox" "Open inbox"))))
           (html/div (html/attr "id" "capture-status") ""))))))
+
+(define notes/capture-page
+  (lambda ()
+    (if (string-eq (request-method) "POST")
+        (notes/do-capture)
+        (html/page
+          (list
+            (html/h1 "Capture")
+            (notes/capture-form))))))
 
 (define notes/capture-status-html
   (lambda (ok msg)
@@ -409,5 +460,6 @@
                   (render-html (outline/html slug new-tree))))))))))
 
 (route "/notes" "notes/page")
+(route "/capture" "notes/capture-page")
 (route "/partials/notes-outline" "notes/outline-partial")
 (route "/partials/notes-node-op" "notes/node-op")

@@ -217,6 +217,11 @@
   (lambda (label kids)
     (list "group" (as-str label) kids)))
 
+;; Embed pre-rendered HTML as a nav item (e.g. capture dropdown form).
+(define menu/raw
+  (lambda (html-str)
+    (list "raw" (as-str html-str) "")))
+
 (define menu/render
   (lambda (item)
     (let ((kind (car item))
@@ -232,7 +237,9 @@
                       (html/text label))
                     (html/div (html/attr "class" "menu-drop-panel")
                       (html/join (list/map menu/render rest))))))
-              "")))))
+              (if (string-eq kind "raw")
+                  label
+                  ""))))))
 
 (define menu/bar
   (lambda (items)

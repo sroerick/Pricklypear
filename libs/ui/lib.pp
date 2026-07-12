@@ -3,13 +3,16 @@
 ;; personal pins cannot fail define-time load order.
 
 ;; Zero-arg lambda: menu tree built when called, after menu/* are bound.
+;; capture is a nav dropdown (notes/capture-nav) — not a home card.
 (define ui/menu
   (lambda ()
     (list
       (menu/link "home" "/")
+      (menu/raw (notes/capture-nav))
       (menu/group "apps"
         (list
           (menu/link "notes" "/notes")
+          (menu/link "inbox" "/notes?slug=inbox")
           (menu/link "dabar" "/dabar")
           (menu/link "todos" "/todos")
           (menu/link "calendar" "/calendar")
@@ -29,13 +32,16 @@
 (define ui/nav
   (lambda ()
     (render-html
-      (menu/bar
-        (if (string-eq (type-of ui/menu) "lambda")
-            (ui/menu)
-            ui/menu)))))
+      (html/join
+        (list
+          (ui/nav-style)
+          (menu/bar
+            (if (string-eq (type-of ui/menu) "lambda")
+                (ui/menu)
+                ui/menu)))))))
 
-;; Home-only CSS so nav equal-width + capture layout work before image rebuild.
-(define ui/home-style
+;; Chrome CSS for equal-width nav + capture dropdown (works before image rebuild).
+(define ui/nav-style
   (lambda ()
     (html/tag "style" ""
       (html/join
@@ -47,18 +53,20 @@
           "nav>a{display:block;text-align:center}"
           ".menu-drop-btn{display:block;width:100%;text-align:center;box-sizing:border-box}"
           "}"
-          ".capture-card label{display:block;margin:.35rem 0 .15rem;font-weight:700}"
-          ".capture-card .capture-body{width:100%;box-sizing:border-box;min-height:4.5rem}"
-          ".capture-card .capture-row{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-top:.5rem}"
-          ".capture-card .capture-row button{width:auto;min-width:6rem}"
-          ".capture-card #capture-status{margin-top:.35rem;font-size:.9rem}"
-          ".capture-card #capture-status.ok,.capture-card .ok{color:#226622;font-weight:700}"
-          ".capture-card #capture-status.err,.capture-card .err{color:#800000;font-weight:700}")))))
+          ".capture-panel{min-width:16rem;max-width:min(22rem,calc(100vw - 1rem));padding:.4rem}"
+          ".capture-nav-form{display:flex;flex-direction:column;gap:.35rem;margin:0}"
+          ".capture-nav-form input[type=text],.capture-nav-form textarea{"
+          "width:100%;box-sizing:border-box;font-size:.9rem}"
+          ".capture-nav-form .capture-body{min-height:4rem}"
+          ".capture-nav-form .capture-row{display:flex;flex-wrap:wrap;gap:.35rem;align-items:center}"
+          ".capture-nav-form .capture-row button{width:auto;min-width:4.5rem;margin:0}"
+          ".capture-nav-form .capture-row a{display:inline-block;padding:.35rem .45rem}"
+          ".capture-nav-form #capture-status{font-size:.85rem;min-height:1.1em}"
+          ".capture-nav-form .ok{color:#226622;font-weight:700}"
+          ".capture-nav-form .err{color:#800000;font-weight:700}")))))
 
 (define ui/home
   (lambda ()
     (html/page
       (list
-        (ui/home-style)
-        (notes/capture-form)
         (weather/widget)))))

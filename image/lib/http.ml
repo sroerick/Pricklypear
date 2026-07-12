@@ -226,15 +226,23 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (body : Pure_html.node)
          .weather-card .wx-form input[type=text]{flex:1 1 8rem;min-width:0}
          .weather-card .wx-form button{width:auto;min-width:4.5rem}
          .weather-card .wx-err{color:#800000;font-weight:700}
-         /* Home capture → inbox note */
+         /* Nav capture dropdown → inbox note */
+         .capture-panel{min-width:16rem;max-width:min(22rem,calc(100vw - 1rem));padding:.4rem}
+         .capture-nav-form{display:flex;flex-direction:column;gap:.35rem;margin:0}
+         .capture-nav-form input[type=text],.capture-nav-form textarea{
+           width:100%;box-sizing:border-box;font-size:.9rem}
+         .capture-nav-form .capture-body{min-height:4rem}
+         .capture-nav-form .capture-row{display:flex;flex-wrap:wrap;gap:.35rem;
+           align-items:center}
+         .capture-nav-form .capture-row button{width:auto;min-width:4.5rem;margin:0}
+         .capture-nav-form #capture-status{font-size:.85rem;min-height:1.1em}
+         .capture-nav-form .ok{color:#226622;font-weight:700}
+         .capture-nav-form .err{color:#800000;font-weight:700}
          .capture-card label{display:block;margin:.35rem 0 .15rem;font-weight:700}
          .capture-card .capture-body{width:100%;box-sizing:border-box;min-height:4.5rem}
          .capture-card .capture-row{display:flex;flex-wrap:wrap;gap:.5rem;
            align-items:center;margin-top:.5rem}
          .capture-card .capture-row button{width:auto;min-width:6rem}
-         .capture-card #capture-status{margin-top:.35rem;font-size:.9rem}
-         .capture-card #capture-status.ok{color:#226622;font-weight:700}
-         .capture-card #capture-status.err{color:#800000;font-weight:700}
          /* Todo list */
          .todo-add-label{display:block;font-weight:bold;margin:0 0 .35rem}
          .todo-add-row{display:flex;gap:.5rem;align-items:stretch;flex-wrap:wrap}
