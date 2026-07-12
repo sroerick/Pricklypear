@@ -49,10 +49,10 @@
   (lambda (s)
     (let ((t (as-str s)))
       (if (string-eq t "")
-          false
+          #f
           (if (string-eq t "DONE")
-              false
-              (if (string-eq t "CANCELLED") false true))))))
+              #f
+              (if (string-eq t "CANCELLED") #f #t))))))
 
 (define outline/cycle-todo
   (lambda (n)

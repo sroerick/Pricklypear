@@ -45,7 +45,7 @@
 (define todo/list-default?
   (lambda (fields)
     (let ((d (dict-get fields "is_default")))
-      (if (null? d) false (string-eq d "true")))))
+      (if (null? d) #f (string-eq d "true")))))
 
 (define todo/find-default-list
   (lambda ()
@@ -100,10 +100,10 @@
         (lambda (row)
           (let ((fl (todo/item-list-id (cdr row))))
             (if (string-eq fl lid)
-                true
+                #t
                 (if (string-eq fl "")
                     (string-eq lid inbox-id)
-                    false))))
+                    #f))))
         (todo/all-items)))))
 
 (define todo/add
