@@ -36,6 +36,14 @@
               "I live here now"
               "It's multiuser, and it's fun. I have bible study, todo, zettelkasten, flashcards, calendar. Writing apps is insanely easy. You aren't stuck with weird elisp or everything is a buffer rules.")))
         (layout/section
+          "5-minute tour"
+          (html/join
+            (list
+              (html/p "After you log in (or from scripts/repl.sh against a local image):")
+              (html/pre
+                (html/text
+                  "1. scripts/repl.sh\n2. (define hi-page (lambda () (render-html \"<h1>Hello</h1>\")))\n3. (route \"/hello\" \"hi-page\")\n4. open /hello in the browser\n5. edit at /edit/hi-page\n6. optional: (propose-function \"double\" \"lambda of int x -> (* x 2)\")")))))
+        (layout/section
           "Get in"
           (html/join
             (list
