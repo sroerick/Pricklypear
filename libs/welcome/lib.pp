@@ -13,28 +13,28 @@
             (list
               (layout/cta "/code" "Explore the source")
               (layout/cta "/book.pdf" "Download the book (PDF)")
-              (layout/cta "/src.tgz" "Source tarball")
               (layout/cta "/login" "Log in"))))
         (layout/section
-          "What is this?"
+          "No, seriously, what is this?"
           (html/join
             (list
-              (html/p "Pricklypear is Smalltalk-like (live, inspectable, editable) without being Smalltalk. The image is the CPU; Postgres is the disk. You write Lisp functions that persist as data, branch code like git while sharing rows, and bind functions to URLs.")
-              (html/p "This hosted instance is the release surface — not a separate marketing site. The PDF book is the literate reading of the codebase; the browser below is a convenience view of the same tree."))))
+              (html/p "Honestly, I don't know. It's kind of like a Smalltalk. You, or your agent, can write functions. They get saved in the database and reloaded. Those functions can render web pages, so it's kind of a web framework.")
+              (html/p "I gotta tell ya. Using it is beautiful. You don't need an API at all. Even your local agent can just use the REPL. I plugged in an LLM to it and it just... worked? It understood the harness and successfully started writing functions.")
+              (html/p "Look, I don't even care if anybody uses this at all. I just want people to know about this design pattern. For small and medium business this is insanely powerful."))))
         (layout/cards
           (list
             (layout/card
-              "Single image"
-              "One unix process serves HTTP, REPL, auth, and eval. Multi-user means sessions and garden branches, not a process fleet.")
+              "Fully Interpreted Lisp in Postgres"
+              "The AST is stored in Postgres. You can browse all the functions in the system. It's like the PHP interface of WordPress, except not terrifying.")
             (layout/card
-              "Lisp + Postgres"
-              "Functions, types, routes, and app data live in the store. (define …) persists; branches version code while data stays shared.")
+              "htmx forward"
+              "A lot of functions render htmx partials. This makes things pretty modular and composable. We have sexp wrappers for HTML and CSS.")
             (layout/card
-              "Literate book"
-              "borge book print linearizes .borg specs and OCaml sources into a paginated PDF — the primary way to read the system on paper.")
+              "The Great American Codebase"
+              "I designed the codebase to be read like a book. I like to print codebases out to read them. There's a lot of AI slop in here, but I mark where I've inserted my own comments.")
             (layout/card
-              "Live gardens"
-              "system/main holds package defaults; each user gets username/personal as an inheriting branch. Edit, fork, promote.")))
+              "I live here now"
+              "It's multiuser, and it's fun. I have bible study, todo, zettelkasten, flashcards, calendar. Writing apps is insanely easy. You aren't stuck with weird elisp or everything is a buffer rules.")))
         (layout/section
           "Get in"
           (html/join
