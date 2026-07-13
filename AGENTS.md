@@ -1,7 +1,7 @@
 # Pricklypear — Agent Notes
 
 Pricklypear is a multi-user Lisp OS: one unix image process, Postgres as
-the object store, htmx as the interface layer. **The authoritative design is the multi-file borge book:** root [`pricklypear.borg`](pricklypear.borg) inlines chapter files (`philosophy.borg`, `single-image.borg`, `lisp-interpreter.borg`, `ai-authoring.borg`, …). Read them in root inline order (literate book order). If code and spec
+the object store, htmx as the interface layer. **The authoritative design is the multi-file borge book:** root [`pricklypear.borg`](pricklypear.borg) inlines chapter files (`borge/philosophy.borg`, `borge/single-image.borg`, `borge/lisp-interpreter.borg`, `borge/ai-authoring.borg`, …). Read them in root inline order (literate book order). If code and spec
 disagree, code is wrong. Use borge to plan/make/review changes — don't
 edit the spec freely during a `make` phase, file a `borge issue new`
 instead.
@@ -16,7 +16,7 @@ type-system, review-merge, argon2, full FTS), not stale foundation work.
 Packages on poohstack; build/tests on lisp + common + image. Product
 libs (notes/todo/outline/ui/bible/dabar/ai/…) seed to `system/main`.
 Supervisor/authd multi-process topology is retired (see
-`single-image.borg`). Open borge issues that still matter live in
+`borge/single-image.borg`). Open borge issues that still matter live in
 `.borge-bugs/` (quote compounds, AST nodes design, schema-authority,
 argon2, optional SSH). Monitor command: bottom of `README.md`.
 

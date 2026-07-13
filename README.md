@@ -5,8 +5,8 @@ store, htmx as the interface. Humans and agents share the running
 system — the process **is** the API.
 
 Design is a multi-file borge book: root [`pricklypear.borg`](pricklypear.borg)
-inlines chapters (`philosophy.borg`, `single-image.borg`,
-`lisp-interpreter.borg`, …) in literate order. If code and spec
+inlines chapters (`borge/philosophy.borg`, `borge/single-image.borg`,
+`borge/lisp-interpreter.borg`, …) in literate order. If code and spec
 disagree, the code is wrong.
 
 ## Status

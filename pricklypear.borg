@@ -154,7 +154,10 @@
 
  (* roerick (|
 
-    OK, so, a lot of people have talked about how incredible 
+    Alright - I'll talk a little bit about what I think 
+    Pricklypear is good at, and where I see it going
+
+    A lot of people have talked about how incredible 
     Lisp is. Personally, I'm not totally sold. Don't get me 
     wrong, lisp is wonderful. But I think for larger projects 
     you just need static typing. I didn't like static typing for 
@@ -225,6 +228,13 @@
     understand the subtleties of async, and the OCaml landscape is pretty
     confusing.
 
+    On a similar note, I'd like to get some education on formal proofs 
+    in software. I think that it is absolutely work spending some time 
+    trying to add formal verification to the OCaml outershell of 
+    Pricklypear. Lisp gives a great surface for the LLM on top, and I'm 
+    perfectly happy with a little jank there, but the core really 
+    should be incredibly stable. 
+
     I want to really polish up the node editor and the code editor. 
     It should be a first class experience. Keyboard shortcuts, node 
     navigation. I want it to feel as good as vim. 
@@ -241,88 +251,88 @@
  |) *)
 
  (section philosophy
-  (doc "Book chapter — full text inlined from philosophy.borg")
-  (inline philosophy.borg)
+  (doc "Book chapter — full text inlined from borge/philosophy.borg")
+  (inline borge/philosophy.borg)
  )
  (section architecture
-  (doc "Book chapter — full text inlined from architecture.borg.
+  (doc "Book chapter — full text inlined from borge/architecture.borg.
         SUPERSEDED by single-image.borg (it35) for topology,
         package-layout, and transport-choices.")
-  (inline architecture.borg)
+  (inline borge/architecture.borg)
  )
  (section single-image
   (doc "Book chapter — the single-image pivot (it35). One process,
         single-tenant, no Mirage/Solo5, no supervisor, no authd.
         Successor to architecture/supervisor/multi-user.")
-  (inline single-image.borg)
+  (inline borge/single-image.borg)
  )
  (section object-model
-  (doc "Book chapter — full text inlined from object-model.borg")
-  (inline object-model.borg)
+  (doc "Book chapter — full text inlined from borge/object-model.borg")
+  (inline borge/object-model.borg)
  )
  (section branching
-  (doc "Book chapter — full text inlined from branching.borg")
-  (inline branching.borg)
+  (doc "Book chapter — full text inlined from borge/branching.borg")
+  (inline borge/branching.borg)
  )
  (section lisp-interpreter
-  (doc "Book chapter — full text inlined from lisp-interpreter.borg")
-  (inline lisp-interpreter.borg)
+  (doc "Book chapter — full text inlined from borge/lisp-interpreter.borg")
+  (inline borge/lisp-interpreter.borg)
  )
  (section storage
-  (doc "Book chapter — full text inlined from storage.borg")
-  (inline storage.borg)
+  (doc "Book chapter — full text inlined from borge/storage.borg")
+  (inline borge/storage.borg)
  )
  (section multi-user
   (doc "Book chapter — RETIRED by the single-image pivot (it35).
         Process-isolation model dropped; the system is single-tenant.
         Namespaces/budgets/permissions stay as Lisp-level safeguards.
         See single-image.borg. Kept for historical context; status dropped.")
-  (inline multi-user.borg)
+  (inline borge/multi-user.borg)
  )
  (section auth
-  (doc "Book chapter — full text inlined from auth.borg")
-  (inline auth.borg)
+  (doc "Book chapter — full text inlined from borge/auth.borg")
+  (inline borge/auth.borg)
  )
  (section supervisor
   (doc "Book chapter — RETIRED by the single-image pivot (it35).
         Kept for historical context; status dropped.
         See single-image.borg for the successor topology.")
-  (inline supervisor.borg)
+  (inline borge/supervisor.borg)
  )
  (section image
-  (doc "Book chapter — full text inlined from image.borg")
-  (inline image.borg)
+  (doc "Book chapter — full text inlined from borge/image.borg")
+  (inline borge/image.borg)
  )
  (section product-experience
-  (doc "Book chapter — full text inlined from product-experience.borg")
-  (inline product-experience.borg)
+  (doc "Book chapter — full text inlined from borge/product-experience.borg")
+  (inline borge/product-experience.borg)
  )
  (section notes
-  (doc "Book chapter — outline-first notes (org/roam/obsidian-shaped); full text inlined from notes.borg")
-  (inline notes.borg)
+  (doc "Book chapter — outline-first notes (org/roam/obsidian-shaped); full text inlined from borge/notes.borg")
+  (inline borge/notes.borg)
  )
  (section calendar
-  (doc "Book chapter — month/day calendar; full text inlined from calendar.borg")
-  (inline calendar.borg)
+  (doc "Book chapter — month/day calendar; full text inlined from borge/calendar.borg")
+  (inline borge/calendar.borg)
  )
  (section flashcards
-  (doc "Book chapter — flashcards / spaced repetition; full text inlined from flashcards.borg")
-  (inline flashcards.borg)
+  (doc "Book chapter — flashcards / spaced repetition; full text inlined from borge/flashcards.borg")
+  (inline borge/flashcards.borg)
  )
  (section dabar
-  (doc "Book chapter — BSB study libraries (dabar); full text inlined from dabar.borg")
-  (inline dabar.borg)
+  (doc "Book chapter — BSB study libraries (dabar); full text inlined from borge/dabar.borg")
+  (inline borge/dabar.borg)
  )
  (section migrations
-  (doc "Book chapter — full text inlined from migrations.borg")
-  (inline migrations.borg)
+  (doc "Book chapter — full text inlined from borge/migrations.borg")
+  (inline borge/migrations.borg)
  )
  (section workflow
-  (doc "Book chapter — full text inlined from workflow.borg")
-  (inline workflow.borg)
+  (doc "Book chapter — full text inlined from borge/workflow.borg")
+  (inline borge/workflow.borg)
  )
  (section ai-authoring
-  (doc "Book chapter — full text inlined from ai-authoring.borg")
-  (inline ai-authoring.borg)
+  (doc "Book chapter — full text inlined from borge/ai-authoring.borg")
+  (inline borge/ai-authoring.borg)
  )
 )

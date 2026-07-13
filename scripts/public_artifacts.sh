@@ -75,11 +75,11 @@ tar -C "$SRC" -czf "$TGZ" \
   2>/dev/null || {
     # OpenBSD tar may not like some long options — fallback
     (cd "$SRC" && tar -czf "$TGZ" \
-      pricklypear.borg philosophy.borg architecture.borg single-image.borg \
-      object-model.borg branching.borg lisp-interpreter.borg storage.borg \
-      multi-user.borg auth.borg image.borg product-experience.borg \
-      notes.borg calendar.borg flashcards.borg dabar.borg migrations.borg \
-      workflow.borg ai-authoring.borg \
+      pricklypear.borg borge/philosophy.borg borge/architecture.borg borge/single-image.borg \
+      borge/object-model.borg borge/branching.borg borge/lisp-interpreter.borg borge/storage.borg \
+      borge/multi-user.borg borge/auth.borg borge/image.borg borge/product-experience.borg \
+      borge/notes.borg borge/calendar.borg borge/flashcards.borg borge/dabar.borg borge/migrations.borg \
+      borge/workflow.borg borge/ai-authoring.borg \
       lisp common image migrations libs scripts docs README.md AGENTS.md \
       dune-project 2>/dev/null) || true
   }
