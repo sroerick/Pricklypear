@@ -143,9 +143,13 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
             (match result with
              | Some value ->
                  (* Public front-door pages: no product chrome (private nav). *)
-                 if path = "/welcome" || path = "/book" then begin
+                 if path = "/welcome" || path = "/book"
+                    || path = "/background" || path = "/roadmap"
+                 then begin
                    let title =
                      if path = "/book" then "Pricklypear book"
+                     else if path = "/background" then "Background"
+                     else if path = "/roadmap" then "Roadmap"
                      else "Pricklypear"
                    in
                    let body =
@@ -182,6 +186,14 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
   | `GET, "/" -> launch (fun () -> home_page session reqd)
   | `GET, "/welcome" ->
       launch_user_route_or (fun () -> Http_code.fallback_welcome reqd)
+  | `GET, "/background" ->
+      launch_user_route_or (fun () ->
+        Http_code.serve_public_body reqd ~title:"Background"
+          "<p><a href=\"/welcome\">welcome</a> · author background page not seeded yet.</p>")
+  | `GET, "/roadmap" ->
+      launch_user_route_or (fun () ->
+        Http_code.serve_public_body reqd ~title:"Roadmap"
+          "<p><a href=\"/welcome\">welcome</a> · roadmap page not seeded yet.</p>")
   | `GET, "/book" ->
       launch_user_route_or (fun () -> Http_code.fallback_book reqd)
   | `GET, "/book.pdf" ->
