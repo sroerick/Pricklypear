@@ -72,6 +72,12 @@ if [ -f "${target_dir}/pricklypear-promote.ksh" ]; then
     "${target_dir}/pricklypear-promote.ksh" /usr/local/sbin/pricklypear-promote
 fi
 
+# Install crash watchdog (cron should call this every minute).
+if [ -f "${target_dir}/pricklypear-watchdog.ksh" ]; then
+  install -o root -g wheel -m 0555 \
+    "${target_dir}/pricklypear-watchdog.ksh" /usr/local/sbin/pricklypear-watchdog
+fi
+
 # Env example always refreshed; live env only created if missing
 install -o root -g "${config_group}" -m 0640 \
   "${target_dir}/pricklypear.env.example" "${config_dir}/pricklypear.env.example"

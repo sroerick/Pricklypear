@@ -116,7 +116,9 @@ cp scripts/rc.d/pricklypear "$STAGE/rc.d/pricklypear"
 cp scripts/openbsd/run-image.ksh "$STAGE/bin/run-image.ksh"
 cp scripts/openbsd/pricklypear.env.example "$STAGE/pricklypear.env.example"
 cp scripts/openbsd/pricklypear-promote.ksh "$STAGE/pricklypear-promote.ksh"
-chmod 755 "$STAGE/bin/run-image.ksh" "$STAGE/pricklypear-promote.ksh"
+cp scripts/openbsd/pricklypear-watchdog.ksh "$STAGE/pricklypear-watchdog.ksh"
+chmod 755 "$STAGE/bin/run-image.ksh" "$STAGE/pricklypear-promote.ksh" \
+  "$STAGE/pricklypear-watchdog.ksh"
 chmod 555 "$STAGE/rc.d/pricklypear"
 
 {

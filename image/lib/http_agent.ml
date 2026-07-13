@@ -3,17 +3,39 @@ open Lwt.Syntax
 open Pure_html
 open Http_core
 
-let sse_write (body : [ `write ] Httpaf.Body.t) (event_json : string) : unit Lwt.t =
+(* Client disconnect mid-SSE closes the httpaf body writer. Writing after
+   that raises Failure("cannot write to closed writer") and — if uncaught —
+   kills the whole single-image process. Treat peer-gone as a normal end. *)
+let is_closed_writer_exn = function
+  | Failure msg ->
+      String.equal msg "cannot write to closed writer"
+      || String.starts_with ~prefix:"cannot write to closed writer" msg
+  | _ -> false
+
+let sse_write (body : [ `write ] Httpaf.Body.t) (event_json : string)
+  : [ `Ok | `Peer_gone ] Lwt.t =
   let chunk = "data: " ^ event_json ^ "\n\n" in
-  Httpaf.Body.write_string body chunk;
-  let promise, wakeup = Lwt.task () in
-  Httpaf.Body.flush body (fun () ->
-    if Lwt.state promise = Lwt.Sleep then Lwt.wakeup_later wakeup ());
-  (* Don't hang forever if the peer never acks the flush. *)
-  Lwt.pick
-    [ promise
-    ; (let* () = Lwt_unix.sleep 2.0 in Lwt.return_unit)
-    ]
+  try
+    Httpaf.Body.write_string body chunk;
+    let promise, wakeup = Lwt.task () in
+    let wake () =
+      if Lwt.state promise = Lwt.Sleep then Lwt.wakeup_later wakeup ()
+    in
+    (try
+       Httpaf.Body.flush body (fun () -> wake ())
+     with exn when is_closed_writer_exn exn -> wake ());
+    (* Don't hang forever if the peer never acks the flush. *)
+    let* () =
+      Lwt.pick
+        [ promise
+        ; (let* () = Lwt_unix.sleep 2.0 in Lwt.return_unit)
+        ]
+    in
+    Lwt.return `Ok
+  with exn when is_closed_writer_exn exn -> Lwt.return `Peer_gone
+
+let close_writer_quiet (body : [ `write ] Httpaf.Body.t) : unit =
+  try Httpaf.Body.close_writer body with exn when is_closed_writer_exn exn -> ()
 
 let default_http_agent_seed =
   (* Short fallback when no session seed; tools sessions should prefer
@@ -248,10 +270,15 @@ let api_agent (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
           let rec drain () =
             if not (Queue.is_empty queue) then
               let j = Queue.take queue in
-              let* () = sse_write body_w j in
-              drain ()
+              let* r = sse_write body_w j in
+              (match r with
+               | `Peer_gone ->
+                   finished := true;
+                   close_writer_quiet body_w;
+                   Lwt.return_unit
+               | `Ok -> drain ())
             else if !finished then begin
-              Httpaf.Body.close_writer body_w;
+              close_writer_quiet body_w;
               Lwt.return_unit
             end else
               let* () = Lwt_condition.wait cond in
