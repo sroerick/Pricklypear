@@ -52,7 +52,7 @@ let skip_dirs : string list =
 
 let allowed_ext (name : string) : bool =
   let lower = String.lowercase_ascii name in
-  if lower = "dune" || lower = "dune-project" then true
+  if lower = "dune" || lower = "dune-project" || lower = "pricklypear" then true
   else
     List.exists
       (fun suf -> Filename.check_suffix lower suf)
@@ -64,9 +64,11 @@ let allowed_ext (name : string) : bool =
       ; ".sql"
       ; ".sh"
       ; ".ksh"
+      ; ".py"
       ; ".dune"
       ; ".txt"
       ; ".opam"
+      ; ".example"
       ]
 
 let max_file_bytes = 2 * 1024 * 1024
