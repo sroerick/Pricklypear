@@ -40,9 +40,23 @@
           (html/join
             (list
               (html/p "After you log in (or from scripts/repl.sh against a local image):")
-              (html/pre
-                (html/text
-                  "1. scripts/repl.sh\n2. (define hi-page (lambda () (render-html \"<h1>Hello</h1>\")))\n3. (route \"/hello\" \"hi-page\")\n4. open /hello in the browser\n5. edit at /edit/hi-page\n6. optional: (propose-function \"double\" \"lambda of int x -> (* x 2)\")")))))
+              (html/ol ""
+                (html/join
+                  (list
+                    (html/li "" (html/code "scripts/repl.sh"))
+                    (html/li ""
+                      (html/code
+                        "(define hi-page (lambda () (render-html \"<h1>Hello</h1>\")))"))
+                    (html/li ""
+                      (html/code "(route \"/hello\" \"hi-page\")"))
+                    (html/li "" "open /hello in the browser")
+                    (html/li "" "edit at /edit/hi-page")
+                    (html/li ""
+                      (html/join
+                        (list
+                          "optional: "
+                          (html/code
+                            "(propose-function \"double\" \"lambda of int x -> (* x 2)\")"))))))))))
         (layout/section
           "Get in"
           (html/join
