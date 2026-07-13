@@ -316,7 +316,7 @@
   )
   (subsection analytics
    (doc "Product metrics page: viewers, logins, traffic — observation not work")
-   (status planned)
+   (status partial)
    (implements image/lib/ops_stats.ml image/lib/ops_log.ml image/lib/http_ops.ml libs/ops/lib.pp)
    (verify
     (build "dune build image")
@@ -382,7 +382,7 @@
   )
   (subsection reliability-work-queue
    (doc "Structured errors → fingerprint → note + todo; LLM enriches work items")
-   (status planned)
+   (status partial)
    (implements image/lib/ops_log.ml image/lib/ops_incidents.ml libs/ops/lib.pp)
    (verify
     (build "dune build image")
