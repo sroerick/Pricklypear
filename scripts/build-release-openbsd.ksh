@@ -31,7 +31,8 @@ IMG_BIN="$PP_ROOT/_build/default/image/bin/main.exe"
 
 log "stage $STAGE"
 rm -rf "$STAGE"
-mkdir -p "$STAGE/bin" "$STAGE/migrations" "$STAGE/rc.d" "$STAGE/libs"
+mkdir -p "$STAGE/bin" "$STAGE/migrations" "$STAGE/rc.d" "$STAGE/libs" \
+  "$STAGE/static" "$STAGE/src" "$STAGE/public"
 
 cp "$IMG_BIN" "$STAGE/bin/image"
 chmod 755 "$STAGE/bin/image"
@@ -40,6 +41,49 @@ cp migrations/*.sql "$STAGE/migrations/"
 # Lisp libraries (same text as in git) for load-library
 if [ -d libs ]; then
   cp -R libs/. "$STAGE/libs/"
+fi
+# Vendored browser assets (CodeMirror for /code)
+if [ -d image/static ]; then
+  cp -R image/static/. "$STAGE/static/"
+fi
+# Pruned source tree for public /code browser + /src.tgz
+log "pack public source tree"
+(
+  cd "$PP_ROOT"
+  tar -cf - \
+    --exclude='_build' \
+    --exclude='.git' \
+    --exclude='.pi' \
+    --exclude='.ralph' \
+    --exclude='node_modules' \
+    --exclude='_opam' \
+    --exclude='.opamswitch' \
+    --exclude='spikes' \
+    --exclude='supervisor' \
+    --exclude='.borge-bugs' \
+    --exclude='public-artifacts' \
+    --exclude='build' \
+    --exclude='*.pdf' \
+    --exclude='*.book.manifest' \
+    . \
+  | tar -C "$STAGE/src" -xf -
+) 2>/dev/null || {
+  # OpenBSD tar may lack GNU long options — copy key trees
+  for d in lisp common image migrations libs scripts docs; do
+    [ -d "$d" ] && cp -R "$d" "$STAGE/src/"
+  done
+  for f in *.borg README.md AGENTS.md dune-project; do
+    [ -f "$f" ] && cp "$f" "$STAGE/src/"
+  done
+}
+# Public artifacts (PDF book + tarball) if tools available
+if [ -x scripts/public_artifacts.sh ]; then
+  log "public artifacts → stage/public"
+  PP_ROOT="$PP_ROOT" PP_SOURCE_ROOT="$STAGE/src" PP_PUBLIC_DIR="$STAGE/public" \
+    /bin/ksh scripts/public_artifacts.sh "$STAGE/public" \
+    || log "WARN: public_artifacts failed (book/tgz may be incomplete)"
+else
+  log "WARN: scripts/public_artifacts.sh missing"
 fi
 cp scripts/rc.d/pricklypear "$STAGE/rc.d/pricklypear"
 cp scripts/openbsd/run-image.ksh "$STAGE/bin/run-image.ksh"

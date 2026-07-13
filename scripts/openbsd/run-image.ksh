@@ -27,6 +27,10 @@ export PP_BRANCH_ID="${PP_BRANCH_ID:-00000000-0000-0000-0000-000000000001}"
 export PP_HTTP_PORT="${PP_HTTP_PORT:-18080}"
 export PP_REPL_PORT="${PP_REPL_PORT:-17878}"
 export PP_LIBS_DIR="${PP_LIBS_DIR:-${RELEASE_ROOT}/libs}"
+# Public release face: code browser + static CM + book/tgz
+export PP_SOURCE_ROOT="${PP_SOURCE_ROOT:-${RELEASE_ROOT}/src}"
+export PP_STATIC_DIR="${PP_STATIC_DIR:-${RELEASE_ROOT}/static}"
+export PP_PUBLIC_DIR="${PP_PUBLIC_DIR:-${RELEASE_ROOT}/public}"
 
 mkdir -p "$(dirname "${PIDFILE}")" "${LOG_DIR}"
 print -r -- "$$" > "${PIDFILE}"
