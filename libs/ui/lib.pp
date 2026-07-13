@@ -28,6 +28,7 @@
           (menu/link "pages" "/pages")
           (menu/link "data" "/types")
           (menu/link "branches" "/branches")
+          (menu/link "analytics" "/analytics")
           (menu/link "about" "/about")
           (menu/link "repl" "/repl"))))))
 

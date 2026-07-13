@@ -5,7 +5,8 @@
           prims_pure primitives
           session_types agent_tools session
           crud packages loader repl_endpoint
-          http_core http_code http_data http_branches http_agent http_pages http
+          ops_log ops_stats ops_incidents
+          http_core http_code http_data http_branches http_agent http_pages http_ops http
           lineedit boot llm_client
           auth_password auth_store ai_store)
  (libraries

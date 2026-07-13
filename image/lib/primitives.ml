@@ -239,6 +239,9 @@ let prim_summary (name : string) : string =
   | "__with_transaction__" -> "internal transaction helper"
   | "load-string" -> "load Lisp source text (define/route/deftype)"
   | "load-library" -> "load libs/<name>/lib.pp into current branch"
+  | "log-tail" -> "recent structured ops log events"
+  | "ops/summary" -> "today analytics JSON (viewers, logins, errors)"
+  | "ops/incidents" -> "open reliability incident fingerprints"
   | _ -> "built-in primitive"
 
 (** All registered prim names with one-line summaries, sorted. *)

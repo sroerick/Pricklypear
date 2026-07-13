@@ -32,7 +32,9 @@ let sse_write (body : [ `write ] Httpaf.Body.t) (event_json : string)
         ]
     in
     Lwt.return `Ok
-  with exn when is_closed_writer_exn exn -> Lwt.return `Peer_gone
+  with exn when is_closed_writer_exn exn ->
+    ignore (Ops_log.info ~component:"sse" "peer gone (closed writer)");
+    Lwt.return `Peer_gone
 
 let close_writer_quiet (body : [ `write ] Httpaf.Body.t) : unit =
   try Httpaf.Body.close_writer body with exn when is_closed_writer_exn exn -> ()

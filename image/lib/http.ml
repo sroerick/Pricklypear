@@ -12,8 +12,9 @@ open Http_data
 open Http_branches
 open Http_agent
 open Http_pages
+open Http_ops
 
-let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
+let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
     (reqd : Httpaf.Reqd.t) : unit =
   let req = Httpaf.Reqd.request reqd in
   let target = req.Httpaf.Request.target in
@@ -78,15 +79,29 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
               end
             in
             if not proceed then Lwt.return_unit
-            else
+            else begin
+              (* Product analytics (in-memory day counters). *)
+              let uname = Session.username session in
+              let is_authed =
+                uname <> "anonymous" && uname <> "public" && uname <> ""
+              in
+              Ops_stats.record_request ~path ~is_authed
+                ~username:(if is_authed then Some uname else None)
+                ~headers ~sockaddr;
               (* Refresh ui/nav cache every request so Lisp chrome is shared
                  by home, system pages, and user routes — not only /. *)
               let* () = Session.refresh_ui_shell session in
-              page_fn ())
+              page_fn ()
+            end)
           (fun exn ->
+            let msg = Printexc.to_string exn in
+            Lwt.async (fun () ->
+              Ops_incidents.emit_and_maybe_file session
+                ~level:Ops_log.Error ~component:"http"
+                ~context:[("path", path)] msg);
             let body =
               chrome ~session ~title:"Error" [
-                HTML.p [HTML.class_ "err"] [txt "%s" (Printexc.to_string exn)];
+                HTML.p [HTML.class_ "err"] [txt "%s" msg];
               ]
             in
             html_response reqd ~session ~status:`Internal_server_error body;
@@ -184,6 +199,7 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
   | `POST, "/logout" -> launch (fun () -> post_logout session reqd)
   | `GET, "/admin/users" -> launch (fun () -> admin_users_page session reqd)
   | `POST, "/admin/users" -> launch (fun () -> post_admin_users session reqd)
+  | `GET, "/analytics" -> launch (fun () -> analytics_page session reqd)
   | `GET, "/" -> launch (fun () -> home_page session reqd)
   | `GET, "/welcome" ->
       launch_user_route_or (fun () -> Http_code.fallback_welcome reqd)

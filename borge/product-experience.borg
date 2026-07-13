@@ -314,6 +314,163 @@
     |))
    )
   )
+  (subsection analytics
+   (doc "Product metrics page: viewers, logins, traffic — observation not work")
+   (status planned)
+   (implements image/lib/ops_stats.ml image/lib/ops_log.ml image/lib/http_ops.ml libs/ops/lib.pp)
+   (verify
+    (build "dune build image")
+    (smoke "GET /analytics (authed) shows day rollup: viewers, page views, logins")
+    (smoke "(ops/summary) returns structured day stats via /api/eval")
+    (smoke "public /welcome increments viewer/page counters; /assets/* excluded")
+    (smoke "login success/fail counts match auth_log for the day"))
+   (details
+    (doc (|
+         PURPOSE
+         A habitat-native analytics page — not Datadog. Answers:
+         "who showed up, what did they hit, how many logins?"
+         Reliability *counts* appear here; reliability *work*
+         lives in notes/todos (see reliability-work-queue).
+
+         SPLIT (product law)
+         - /analytics  = observatory (numbers, trends)
+         - notes/todos = workshop (errors become fix work)
+         Never dump raw log lines into the analytics page as
+         the primary UX. Link out to open incident todos.
+
+         EMIT (request edge, one place in HTTP middleware)
+         After identity resolve, for each request record:
+           day, path_class, method, is_authed, status_bucket,
+           viewer_key = hash of (client_ip + day salt) — no raw
+           IP in the UI. Exclude /assets/*, /health, static bots
+           path classes (wp-admin, .env probes) from uniques or
+           bucket as "noise".
+         Prefer in-memory day counters flushed periodically;
+         do NOT insert one Postgres row per public request.
+
+         AUTH NUMBERS
+         Source of truth: existing auth_log (password/mint ok|fail).
+         Daily login_ok / login_fail via SQL count, not a second
+         write path on POST /login.
+
+         ROLLUP SHAPE (v1)
+         In-process Ops_stats for "today" + optional data_rows
+         type ops-daily for prior days (fields JSON):
+           day, unique_viewers, page_views, logins_ok, logins_fail,
+           authed_requests, errors, fatals, top_paths (list).
+         Flush end-of-day or hourly snapshot is enough for dogfood.
+
+         SURFACE
+         - GET /analytics  (hard-private; any logged-in user in v1,
+           admin-only later if multi-tenant sharpens)
+         - Lisp (ops/summary [day]) (ops/top-paths [n])
+         - Agent tool ops_summary (read-only)
+         - Nav: link from ui/nav under system/admin cluster when
+           package ops is seeded (or kernel chrome link)
+
+         UNIQUE VIEWERS (honest labels)
+         - public_uniques: distinct viewer_key on hard-public paths
+         - logins: successful auth_log password/mint that day
+         - active_users: distinct authed usernames that day
+         Do not conflate the three in the UI copy.
+
+         NON-GOALS v1
+         Session replay, heatmaps, off-box export, per-hit PG
+         inserts, GA-style retention cohorts.
+    |))
+   )
+  )
+  (subsection reliability-work-queue
+   (doc "Structured errors → fingerprint → note + todo; LLM enriches work items")
+   (status planned)
+   (implements image/lib/ops_log.ml image/lib/ops_incidents.ml libs/ops/lib.pp)
+   (verify
+    (build "dune build image")
+    (smoke "(log-tail 20) returns recent structured events")
+    (smoke "Error-level log creates/upserts one open incident fingerprint")
+    (smoke "repeat same error bumps count, does not create duplicate todo")
+    (smoke "incident filing creates a note body + open todo-item")
+    (smoke "optional LLM enrich rewrites title/body without changing counts"))
+   (details
+    (doc (|
+         PURPOSE
+         Errors should become work. The habitat already is notes +
+         todos; reliability must enter that queue, not only sit on
+         an ops dashboard. Analytics shows counts; this subsection
+         turns severe/new failures into fixable garden items.
+
+         STRUCTURED LOG (primary stream)
+         Ops_log ring in the image process:
+           {ts, level, component, msg, context alist, fingerprint}
+         Levels: info | warn | error | fatal.
+         Always mirror to stderr (/var/log/pricklypear/image.log)
+         for operator crash forensics. Bounded ring (e.g. 5k).
+         Closed-writer / handler / seed failures go through Log,
+         not bare Printf.eprintf forever (migrate hot sites).
+
+         FINGERPRINT
+         key = component + "|" + normalized msg head (strip UUIDs,
+         paths ids). One open incident per key. Upsert:
+           count++, last_seen, sample_msg, sample_context.
+         New key OR fatal OR watchdog restart → file work item.
+         Bot 404 noise stays analytics-only (warn or ignored).
+
+         WORK ITEM SHAPE
+         1. data_rows type ops-incident (machine state):
+              fingerprint, level, component, count, first_seen,
+              last_seen, status (open|resolved), note_slug,
+              todo_id, sample_msg
+         2. notes: durable human/agent readable writeup
+              slug ops-incident-<shortfp> or capture under inbox
+         3. todo-item: open TODO linked in notes field to the note
+         Dedup rule: if open ops-incident exists for fingerprint,
+         bump counts only — do not mint a second todo.
+
+         LLM ROLE (enrichment, not detection)
+         Detection = fingerprints + thresholds (deterministic).
+         LLM optional pass:
+           input = fingerprint + samples + counts + recent log-tail
+           output = better title, explanation, suggested fix/repro
+         Write into the note body / todo title. Never invent counts.
+         If LLM down: still file terse template note+todo.
+         Trigger: on new incident, or admin "Enrich" / hourly batch
+         for open incidents lacking ai_enriched flag.
+
+         CLOSE THE LOOP
+         status → resolved when:
+           - todo marked DONE, or
+           - no matching error for N hours (optional auto),
+           - admin resolves on /analytics
+         Resolved incidents do not re-open on single blip; require
+         count threshold or fatal to reopen.
+
+         PRIMS / AGENT
+         (log-tail n [level])
+         (ops/incidents [status])
+         (ops/file-incident ...)  ; mostly internal
+         Agent tools: read_logs, ops_summary, list_incidents (read);
+         write tools stay effect-gated as today.
+
+         WATCHDOG
+         OpenBSD cron watchdog remains the process safety net
+         (scripts/openbsd/pricklypear-watchdog.ksh). On restart it
+         may log fatal via syslog; image boot records a fatal/info
+         "boot after downtime" event when possible. Watchdog is
+         outside the image; do not pretend Lisp can restart itself
+         after a hard process death.
+
+         V1 CUT (implement now)
+         - Ops_log ring + stderr mirror
+         - Ops_stats request counters + auth_log login counts
+         - GET /analytics page (kernel or libs/ops)
+         - Fingerprint store in data_rows ops-incident
+         - Auto-file note+todo on new error/fatal
+         - Template body first; LLM enrich if Ai path available
+         - (log-tail) (ops/summary) prims
+         Defer: multi-week charts, bot ML, off-box shipping.
+    |))
+   )
+  )
   (subsection horizon
    (doc "Long-term possible futures built on this substrate (design only)")
    (status planned)

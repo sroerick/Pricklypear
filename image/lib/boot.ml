@@ -36,6 +36,7 @@ let manifest_from_env () : Pricklypear_common.Manifest.t =
     ()
 
 let start () : unit Lwt.t =
+  ignore (Ops_log.info ~component:"boot" "Pricklypear image starting up");
   Printf.eprintf "[boot] Pricklypear image starting up...\n";
   (* RNG required for password salt + session tokens (auth). *)
   Mirage_crypto_rng_unix.use_default ();

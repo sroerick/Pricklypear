@@ -742,7 +742,37 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
       | _ ->
           Lwt.return
             (Pricklypear_lisp.Ast.VStr
-               "llm-seed: need requirement-str [, max-steps int]"))
+               "llm-seed: need requirement-str [, max-steps int]"));
+
+  (* Ops: structured log tail + analytics summary (product-experience). *)
+  Primitives.register tbl "log-tail"
+    (fun args ->
+      let n, level =
+        match args with
+        | [] -> 50, None
+        | [ Pricklypear_lisp.Ast.VInt n ] -> Int64.to_int n, None
+        | [ Pricklypear_lisp.Ast.VStr lv ] -> 50, Ops_log.level_of_string lv
+        | [ Pricklypear_lisp.Ast.VInt n; Pricklypear_lisp.Ast.VStr lv ] ->
+            Int64.to_int n, Ops_log.level_of_string lv
+        | [ Pricklypear_lisp.Ast.VStr lv; Pricklypear_lisp.Ast.VInt n ] ->
+            Int64.to_int n, Ops_log.level_of_string lv
+        | _ -> 50, None
+      in
+      let evs = Ops_log.tail ~n ?level () in
+      Lwt.return
+        (Pricklypear_lisp.Ast.VList
+           (List.map Ops_log.event_to_value evs)));
+
+  Primitives.register tbl "ops/summary"
+    (fun _args ->
+      let* ok, fail = Ops_incidents.count_logins t.store in
+      let j = Ops_stats.summary_yojson ~logins_ok:ok ~logins_fail:fail in
+      Lwt.return (Pricklypear_lisp.Ast.VStr (Yojson.Safe.to_string j)));
+
+  Primitives.register tbl "ops/incidents"
+    (fun _args ->
+      let* j = Ops_incidents.list_open_incidents t.store in
+      Lwt.return (Pricklypear_lisp.Ast.VStr (Yojson.Safe.to_string j)))
 
 
 let method_to_string (m : http_method) : string =
@@ -925,8 +955,10 @@ and refresh_ui_shell (t : t) : unit Lwt.t =
                         Some (Pricklypear_lisp.Reader.pp_value v)));
             Lwt.return_unit)
           (fun exn ->
-            Printf.eprintf "[session] refresh_ui_shell (ui/nav) failed: %s\n%!"
-              (Printexc.to_string exn);
+            ignore
+              (Ops_log.warn ~component:"session"
+                 ~context:[("fn", "ui/nav")]
+                 ("refresh_ui_shell failed: " ^ Printexc.to_string exn));
             t.ui_nav_html <- None;
             Lwt.return_unit)
   in
@@ -948,8 +980,10 @@ and refresh_ui_shell (t : t) : unit Lwt.t =
                       Some (Pricklypear_lisp.Reader.pp_value v)));
           Lwt.return_unit)
         (fun exn ->
-          Printf.eprintf "[session] refresh_ui_shell (ui/css) failed: %s\n%!"
-            (Printexc.to_string exn);
+          ignore
+            (Ops_log.warn ~component:"session"
+               ~context:[("fn", "ui/css")]
+               ("refresh_ui_shell css failed: " ^ Printexc.to_string exn));
           t.ui_css <- None;
           Lwt.return_unit)
 
@@ -1358,8 +1392,11 @@ let call_handler (t : t) ?request (handler_name : string)
              in
              Lwt.return (Some v))
           (fun exn ->
-             Printf.eprintf "[session] call_handler %s: %s\n%!"
-               handler_name (pp_interp_exn exn);
+             Lwt.async (fun () ->
+               Ops_incidents.emit_and_maybe_file t
+                 ~level:Ops_log.Error ~component:"handler"
+                 ~context:[("handler", handler_name)]
+                 (pp_interp_exn exn));
              Lwt.return_none)
       in
       (match request with

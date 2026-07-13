@@ -187,6 +187,7 @@ let is_system_hard_public (path : string) : bool =
 let is_system_hard_private (path : string) : bool =
   let prefixes =
     [ "/admin"
+    ; "/analytics"
     ; "/data"
     ; "/api"
     ; "/bindings"
