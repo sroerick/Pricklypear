@@ -56,3 +56,6 @@ lisp/bin/read_test.ml
 
 # generated public release artifacts
 public-artifacts/
+
+# local-only ops notes (not shipped / not public)
+docs/openbsd-prod-branch-deploy.md

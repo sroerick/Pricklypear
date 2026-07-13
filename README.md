@@ -59,7 +59,7 @@ inheriting `system/main`. Not a process fleet.
 | `image/` | Sole runtime binary |
 | `libs/` | Lisp packages seeded to `system/main` |
 | `scripts/` | `dev.sh`, `pp_eval.py`, OpenBSD deploy, `public_artifacts.sh` |
-| `docs/` | Deploy notes + vendored `pricklypear-book.pdf` |
+| `docs/` | Vendored `pricklypear-book.pdf` (ops notes stay local) |
 | `spikes/` | Historical probes only (awa-ssh, mirage_solo5) |
 
 ## Stack
