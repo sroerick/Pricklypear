@@ -20,6 +20,12 @@ let reads_as name input expected =
 let reader_tests = [
   reads_as "int" "42" (Ast.VInt 42L);
   reads_as "negative int" "-7" (Ast.VInt (-7L));
+  ("reader: float literal", `Quick, fun () ->
+    match Reader.read_one "3.14" with
+    | Lit (Ast.VFloat f) ->
+        if abs_float (f -. 3.14) > 1e-9 then
+          Alcotest.failf "float value %g" f
+    | other -> Alcotest.failf "expected VFloat lit, got %s" (Reader.pp_expr other));
   reads_as "true" "#t" (Ast.VBool true);
   reads_as "false" "#f" (Ast.VBool false);
   reads_as "string" "\"hello\"" (Ast.VStr "hello");

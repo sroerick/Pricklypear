@@ -31,64 +31,117 @@ let register_sync (t : t) (name : string) (fn : prim_fn_sync) : unit =
 let lookup (t : t) (name : string) : prim_fn option =
   Hashtbl.find_opt t name
 
-(* "+" sums two-or-more numeric VInt args. Variadic. *)
+(* Numeric helpers: VInt | VFloat with promotion (int+float → float). *)
+type num = NInt of int64 | NFloat of float
+
+let num_of_value = function
+  | VInt n -> NInt n
+  | VFloat f -> NFloat f
+  | v ->
+      raise
+        (Interp_error
+           (User_error ("numeric op needs int or float, got " ^
+                       (match v with
+                        | VStr _ -> "string"
+                        | VBool _ -> "bool"
+                        | VNil -> "nil"
+                        | _ -> "other"))))
+
+let float_of_num = function
+  | NInt n -> Int64.to_float n
+  | NFloat f -> f
+
+let value_of_num = function
+  | NInt n -> VInt n
+  | NFloat f -> VFloat f
+
+let num_add a b =
+  match a, b with
+  | NInt x, NInt y -> NInt (Int64.add x y)
+  | _ -> NFloat (float_of_num a +. float_of_num b)
+
+let num_sub a b =
+  match a, b with
+  | NInt x, NInt y -> NInt (Int64.sub x y)
+  | _ -> NFloat (float_of_num a -. float_of_num b)
+
+let num_mul a b =
+  match a, b with
+  | NInt x, NInt y -> NInt (Int64.mul x y)
+  | _ -> NFloat (float_of_num a *. float_of_num b)
+
+let num_div a b =
+  let bf = float_of_num b in
+  if bf = 0. then
+    raise (Interp_error (User_error "div by zero"))
+  else
+    match a, b with
+    | NInt x, NInt y -> NInt (Int64.div x y)
+    | _ -> NFloat (float_of_num a /. bf)
+
+let num_neg = function
+  | NInt n -> NInt (Int64.neg n)
+  | NFloat f -> NFloat (~-. f)
+
+let num_compare a b =
+  match a, b with
+  | NInt x, NInt y -> Int64.compare x y
+  | _ -> compare (float_of_num a) (float_of_num b)
+
+(* "+" sums two-or-more numeric args. Variadic. *)
 let prim_add (args : value list) : value =
-  let sum =
-    List.fold_left
-      (fun acc v ->
-        match v with
-        | VInt n -> Int64.add acc n
-        | _ -> raise (Interp_error (User_error "+ needs VInt args")))
-      0L args
-  in
-  VInt sum
+  if args = [] then
+    raise (Interp_error (User_error "+ needs at least one arg"))
+  else
+    value_of_num
+      (List.fold_left
+         (fun acc v -> num_add acc (num_of_value v))
+         (num_of_value (List.hd args))
+         (List.tl args))
 
 (* "-" binary: (- a b) = a - b; unary: (- a) = -a. *)
 let prim_sub args =
   match args with
-  | [ VInt a ] -> VInt (Int64.neg a)
-  | [ VInt a; VInt b ] -> VInt (Int64.sub a b)
-  | _ -> raise (Interp_error (User_error "- needs one or two VInt args"))
+  | [ a ] -> value_of_num (num_neg (num_of_value a))
+  | [ a; b ] -> value_of_num (num_sub (num_of_value a) (num_of_value b))
+  | _ -> raise (Interp_error (User_error "- needs one or two numeric args"))
 
-(* "*". For now, two-or-more VInt args; bignum deferred. *)
+(* "*". Two-or-more numeric args. *)
 let prim_mul (args : value list) : value =
-  let prod =
-    List.fold_left
-      (fun acc v ->
-        match v with
-        | VInt n -> Int64.mul acc n
-        | _ -> raise (Interp_error (User_error "* needs VInt args")))
-      1L args
-  in
-  VInt prod
+  if args = [] then
+    raise (Interp_error (User_error "* needs at least one arg"))
+  else
+    value_of_num
+      (List.fold_left
+         (fun acc v -> num_mul acc (num_of_value v))
+         (num_of_value (List.hd args))
+         (List.tl args))
 
-(* "=" numeric equality for two VInt args. Returns VBool. *)
+(* "=" numeric equality (int/float). *)
 let prim_num_eq args =
   match args with
-  | [ VInt a; VInt b ] -> VBool (Int64.equal a b)
-  | _ -> raise (Interp_error (User_error "= needs two VInt args"))
+  | [ a; b ] -> VBool (num_compare (num_of_value a) (num_of_value b) = 0)
+  | _ -> raise (Interp_error (User_error "= needs two numeric args"))
 
-(* "<" numeric less-than for two VInt args *)
 let prim_lt args =
   match args with
-  | [ VInt a; VInt b ] -> VBool (Int64.compare a b < 0)
-  | _ -> raise (Interp_error (User_error "< needs two VInt args"))
+  | [ a; b ] -> VBool (num_compare (num_of_value a) (num_of_value b) < 0)
+  | _ -> raise (Interp_error (User_error "< needs two numeric args"))
 
-(* ">" numeric greater-than for two VInt args *)
 let prim_gt args =
   match args with
-  | [ VInt a; VInt b ] -> VBool (Int64.compare a b > 0)
-  | _ -> raise (Interp_error (User_error "> needs two VInt args"))
+  | [ a; b ] -> VBool (num_compare (num_of_value a) (num_of_value b) > 0)
+  | _ -> raise (Interp_error (User_error "> needs two numeric args"))
 
-(* "<=" ">=" numeric ordering for two VInt args *)
 let prim_le args =
   match args with
-  | [ VInt a; VInt b ] -> VBool (Int64.compare a b <= 0)
-  | _ -> raise (Interp_error (User_error "<= needs two VInt args"))
+  | [ a; b ] -> VBool (num_compare (num_of_value a) (num_of_value b) <= 0)
+  | _ -> raise (Interp_error (User_error "<= needs two numeric args"))
+
 let prim_ge args =
   match args with
-  | [ VInt a; VInt b ] -> VBool (Int64.compare a b >= 0)
-  | _ -> raise (Interp_error (User_error ">= needs two VInt args"))
+  | [ a; b ] -> VBool (num_compare (num_of_value a) (num_of_value b) >= 0)
+  | _ -> raise (Interp_error (User_error ">= needs two numeric args"))
 
 (* "not" boolean negation *)
 let prim_not args =
@@ -152,6 +205,7 @@ let prim_string_append args =
 let prim_type_of args =
   match args with
   | [ VInt _ ] -> VStr "int"
+  | [ VFloat _ ] -> VStr "float"
   | [ VStr _ ] -> VStr "str"
   | [ VBool _ ] -> VStr "bool"
   | [ VNil ] -> VStr "nil"
@@ -173,61 +227,81 @@ let prim_as_str args =
   match args with
   | [ VStr s ] -> VStr s
   | [ VInt n ] -> VStr (Int64.to_string n)
+  | [ VFloat f ] -> VStr (Printf.sprintf "%.12g" f)
   | [ VBool true ] -> VStr "true"
   | [ VBool false ] -> VStr "false"
   | [ VNil ] -> VStr ""
   | [ v ] -> VStr (Pricklypear_lisp.Reader.pp_value v)
   | _ -> raise (Interp_error (User_error "as-str needs one arg"))
 
-(* (div a b) integer division *)
+(* (parse-float s|n) -> VFloat *)
+let prim_parse_float args =
+  match args with
+  | [ VFloat f ] -> VFloat f
+  | [ VInt n ] -> VFloat (Int64.to_float n)
+  | [ VStr s ] ->
+      (try VFloat (float_of_string (String.trim s))
+       with _ -> VFloat 0.)
+  | _ -> raise (Interp_error (User_error "parse-float needs string or number"))
+
+(* (floor x) -> VInt *)
+let prim_floor args =
+  match args with
+  | [ VInt n ] -> VInt n
+  | [ VFloat f ] -> VInt (Int64.of_float (floor f))
+  | _ -> raise (Interp_error (User_error "floor needs one numeric arg"))
+
+(* (round x) -> VInt *)
+let prim_round args =
+  match args with
+  | [ VInt n ] -> VInt n
+  | [ VFloat f ] -> VInt (Int64.of_float (Float.round f))
+  | _ -> raise (Interp_error (User_error "round needs one numeric arg"))
+
+(* (div a b) — integer div when both int; else float. *)
 let prim_div args =
   match args with
-  | [ VInt a; VInt b ] when b <> 0L -> VInt (Int64.div a b)
-  | [ VInt _; VInt 0L ] ->
-      raise (Interp_error (User_error "div by zero"))
-  | _ -> raise (Interp_error (User_error "div needs two VInt args"))
+  | [ a; b ] -> value_of_num (num_div (num_of_value a) (num_of_value b))
+  | _ -> raise (Interp_error (User_error "div needs two numeric args"))
 
 let prim_mod args =
   match args with
   | [ VInt a; VInt b ] when b <> 0L -> VInt (Int64.rem a b)
   | [ VInt _; VInt 0L ] ->
       raise (Interp_error (User_error "mod by zero"))
-  | _ -> raise (Interp_error (User_error "mod needs two VInt args"))
+  | [ a; b ] ->
+      let bf = float_of_num (num_of_value b) in
+      if bf = 0. then raise (Interp_error (User_error "mod by zero"))
+      else VFloat (mod_float (float_of_num (num_of_value a)) bf)
+  | _ -> raise (Interp_error (User_error "mod needs two numeric args"))
 
 let prim_abs args =
   match args with
   | [ VInt a ] -> VInt (Int64.abs a)
-  | _ -> raise (Interp_error (User_error "abs needs one VInt"))
+  | [ VFloat f ] -> VFloat (abs_float f)
+  | _ -> raise (Interp_error (User_error "abs needs one numeric arg"))
 
 let prim_min args =
   match args with
-  | [] -> raise (Interp_error (User_error "min needs at least one VInt"))
-  | VInt h :: rest ->
-      let m =
-        List.fold_left
-          (fun acc v ->
-            match v with
-            | VInt n -> if Int64.compare n acc < 0 then n else acc
-            | _ -> raise (Interp_error (User_error "min needs VInt args")))
-          h rest
-      in
-      VInt m
-  | _ -> raise (Interp_error (User_error "min needs VInt args"))
+  | [] -> raise (Interp_error (User_error "min needs at least one numeric arg"))
+  | h :: rest ->
+      value_of_num
+        (List.fold_left
+           (fun acc v ->
+             let n = num_of_value v in
+             if num_compare n acc < 0 then n else acc)
+           (num_of_value h) rest)
 
 let prim_max args =
   match args with
-  | [] -> raise (Interp_error (User_error "max needs at least one VInt"))
-  | VInt h :: rest ->
-      let m =
-        List.fold_left
-          (fun acc v ->
-            match v with
-            | VInt n -> if Int64.compare n acc > 0 then n else acc
-            | _ -> raise (Interp_error (User_error "max needs VInt args")))
-          h rest
-      in
-      VInt m
-  | _ -> raise (Interp_error (User_error "max needs VInt args"))
+  | [] -> raise (Interp_error (User_error "max needs at least one numeric arg"))
+  | h :: rest ->
+      value_of_num
+        (List.fold_left
+           (fun acc v ->
+             let n = num_of_value v in
+             if num_compare n acc > 0 then n else acc)
+           (num_of_value h) rest)
 
 let prim_string_length args =
   match args with
@@ -678,6 +752,166 @@ let prim_date_add_days (args : value list) : value =
         (Interp_error
            (User_error "date-add-days needs (day n) or (n) for today+n"))
 
+(** (date-diff-days a b) -> VInt days (b - a), local calendar.
+    Args are YYYY-MM-DD strings. *)
+let prim_date_diff_days (args : value list) : value =
+  let parse s =
+    let s = String.trim s in
+    if String.length s < 10 then None
+    else
+      try
+        Some
+          ( int_of_string (String.sub s 0 4)
+          , int_of_string (String.sub s 5 2)
+          , int_of_string (String.sub s 8 2) )
+      with _ -> None
+  in
+  let epoch_days y m d =
+    let tm =
+      { Unix.tm_sec = 0; tm_min = 0; tm_hour = 12; tm_mday = d
+      ; tm_mon = m - 1; tm_year = y - 1900; tm_wday = 0; tm_yday = 0
+      ; tm_isdst = false }
+    in
+    let t, _ = Unix.mktime tm in
+    t /. 86400.
+  in
+  match args with
+  | [ VStr a; VStr b ] ->
+      (match parse a, parse b with
+       | Some (y1, m1, d1), Some (y2, m2, d2) ->
+           let n =
+             int_of_float
+               (Float.round (epoch_days y2 m2 d2 -. epoch_days y1 m1 d1))
+           in
+           VInt (Int64.of_int n)
+       | _ ->
+           raise (Interp_error (User_error "date-diff-days: bad date")))
+  | _ ->
+      raise
+        (Interp_error (User_error "date-diff-days needs two YYYY-MM-DD strings"))
+
+(** FSRS-4.5 schedule step (open-spaced-repetition defaults).
+
+    (fsrs-schedule stability difficulty elapsed_days rating)
+      stability/difficulty: float or int; use 0 0 for a new card
+      elapsed_days: days since last review (0 for first)
+      rating: 1..4 or again|hard|good|easy
+
+    Returns (list S' D' interval_days) where interval_days is int >= 0
+    (0 means relearn today). request_retention fixed at 0.9. *)
+let fsrs_w : float array =
+  [| 0.40255; 1.18385; 3.173; 15.69105; 7.1949; 0.5345; 1.4604; 0.0046;
+     1.54575; 0.1192; 1.01925; 1.9395; 0.11; 0.29605; 2.2698; 0.2315;
+     2.9898; 0.51655; 0.6621 |]
+
+let fsrs_clamp_d (d : float) : float = max 1. (min 10. d)
+
+let fsrs_init_stability (grade : int) : float =
+  (* w[0..3] for Again..Easy *)
+  max 0.1 fsrs_w.(grade - 1)
+
+let fsrs_init_difficulty (grade : int) : float =
+  fsrs_clamp_d (fsrs_w.(4) -. exp (fsrs_w.(5) *. float_of_int (grade - 1)) +. 1.)
+
+let fsrs_next_difficulty (d : float) (grade : int) : float =
+  let delta = -. fsrs_w.(6) *. float_of_int (grade - 3) in
+  let d' = d +. delta *. (10. -. d) /. 9. in
+  let d0_good = fsrs_init_difficulty 3 in
+  fsrs_clamp_d (fsrs_w.(7) *. d0_good +. (1. -. fsrs_w.(7)) *. d')
+
+let fsrs_retrievability ~(s : float) ~(elapsed : float) : float =
+  if s <= 0. then 0.
+  else (1. +. elapsed /. (9. *. s)) ** (-1.)
+
+let fsrs_next_stability_success ~(s : float) ~(d : float) ~(r : float)
+    ~(grade : int) : float =
+  let hard_pen = if grade = 2 then fsrs_w.(15) else 1. in
+  let easy_bon = if grade = 4 then fsrs_w.(16) else 1. in
+  let s' =
+    s
+    *. (exp fsrs_w.(8)
+        *. (11. -. d)
+        *. (s ** (-. fsrs_w.(9)))
+        *. (exp (fsrs_w.(10) *. (1. -. r)) -. 1.)
+        *. hard_pen
+        *. easy_bon
+        +. 1.)
+  in
+  max s' s  (* stability should not decrease on success in v1 *)
+
+let fsrs_next_stability_fail ~(s : float) ~(d : float) ~(r : float) : float =
+  let s' =
+    fsrs_w.(11)
+    *. (d ** (-. fsrs_w.(12)))
+    *. (((s +. 1.) ** fsrs_w.(13)) -. 1.)
+    *. exp (fsrs_w.(14) *. (1. -. r))
+  in
+  min s (max 0.1 s')
+
+let fsrs_interval_days ~(s : float) : int =
+  (* For R=0.9, t ≈ S (FSRS-4 power formula). *)
+  max 0 (int_of_float (Float.round (max 0. s)))
+
+let fsrs_parse_grade = function
+  | VInt n ->
+      let g = Int64.to_int n in
+      if g < 1 || g > 4 then None else Some g
+  | VStr s ->
+      (match String.lowercase_ascii (String.trim s) with
+       | "again" | "1" -> Some 1
+       | "hard" | "2" -> Some 2
+       | "good" | "3" -> Some 3
+       | "easy" | "4" -> Some 4
+       | _ -> None)
+  | _ -> None
+
+let float_arg v =
+  match num_of_value v with
+  | NInt n -> Int64.to_float n
+  | NFloat f -> f
+
+let prim_fsrs_schedule (args : value list) : value =
+  match args with
+  | [ s_v; d_v; elapsed_v; grade_v ] ->
+      (match fsrs_parse_grade grade_v with
+       | None ->
+           raise
+             (Interp_error
+                (User_error
+                   "fsrs-schedule: rating must be 1..4 or again|hard|good|easy"))
+       | Some grade ->
+           let s0 = float_arg s_v in
+           let d0 = float_arg d_v in
+           let elapsed = max 0. (float_arg elapsed_v) in
+           let is_new = s0 <= 0. || d0 <= 0. in
+           let s, d =
+             if is_new then
+               (fsrs_init_stability grade, fsrs_init_difficulty grade)
+             else
+               let r = fsrs_retrievability ~s:s0 ~elapsed in
+               let d' = fsrs_next_difficulty d0 grade in
+               let s' =
+                 if grade = 1 then
+                   fsrs_next_stability_fail ~s:s0 ~d:d0 ~r
+                 else
+                   fsrs_next_stability_success ~s:s0 ~d:d0 ~r ~grade
+               in
+               (s', d')
+           in
+           let interval =
+             if grade = 1 then 0
+             else if is_new && grade = 2 then 1
+             else if is_new && grade = 3 then max 1 (fsrs_interval_days ~s)
+             else if is_new && grade = 4 then max 2 (fsrs_interval_days ~s)
+             else max 1 (fsrs_interval_days ~s)
+           in
+           VList [ VFloat s; VFloat d; VInt (Int64.of_int interval) ])
+  | _ ->
+      raise
+        (Interp_error
+           (User_error
+              "fsrs-schedule needs stability difficulty elapsed rating"))
+
 (* Register the minimal set. Returns the populated table. *)
 let make_with_defaults () : t =
   let t = make () in
@@ -724,9 +958,14 @@ let make_with_defaults () : t =
   register_sync t "dict-set" prim_dict_set;
   register_sync t "date-today" prim_date_today;
   register_sync t "parse-int" prim_parse_int;
+  register_sync t "parse-float" prim_parse_float;
+  register_sync t "floor" prim_floor;
+  register_sync t "round" prim_round;
   register_sync t "date-weekday" prim_date_weekday;
   register_sync t "date-format" prim_date_format;
   register_sync t "date-add-days" prim_date_add_days;
+  register_sync t "date-diff-days" prim_date_diff_days;
+  register_sync t "fsrs-schedule" prim_fsrs_schedule;
   register_sync t "dict-keys" prim_dict_keys;
   register_sync t "render-html" prim_render_html;
   t
@@ -754,9 +993,13 @@ let prim_summary (name : string) : string =
   | "count" -> "length of list"
   | "date-today" -> "local date YYYY-MM-DD"
   | "parse-int" -> "string or int to int"
+  | "parse-float" -> "string or number to float"
+  | "floor" | "round" -> "float to int"
   | "date-weekday" -> "weekday 0=Sun for y m d"
   | "date-format" -> "format y m d as YYYY-MM-DD"
   | "date-add-days" -> "add n days to YYYY-MM-DD (or today)"
+  | "date-diff-days" -> "days between two YYYY-MM-DD strings"
+  | "fsrs-schedule" -> "FSRS-4.5: (S D elapsed rating) -> (S' D' interval)"
 
   | "string-append" -> "concat strings"
   | "string-length" -> "length of string"

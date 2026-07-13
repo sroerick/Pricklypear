@@ -37,6 +37,7 @@ type expr =
     (closures capture their defining env). *)
 and value =
   | VInt of int64
+  | VFloat of float                 (* IEEE float; arithmetic promotes int+float *)
   | VStr of string
   | VBool of bool
   | VNil
@@ -71,6 +72,7 @@ let _ = Obj.repr (fun (_ : interp_error) -> ())  (* keep type referenced *)
 (** Helper constructors for building AST in tests *)
 let var s = Var s
 let int n = Lit (VInt (Int64.of_int n))
+let float f = Lit (VFloat f)
 let str s = Lit (VStr s)
 let bool b = Lit (VBool b)
 let nil = Lit VNil
@@ -110,6 +112,7 @@ let rec expr_to_json (e : expr) : Yojson.Safe.t =
 and value_to_json (v : value) : Yojson.Safe.t =
   match v with
   | VInt n -> `Assoc [ ("int", `String (Int64.to_string n)) ]
+  | VFloat f -> `Assoc [ ("float", `Float f) ]
   | VStr s -> `Assoc [ ("str", `String s) ]
   | VBool b -> `Assoc [ ("bool", `Bool b) ]
   | VNil -> `Assoc [ ("nil", `Null) ]
@@ -208,6 +211,11 @@ and value_of_json (j : Yojson.Safe.t) : (value, string) result =
   | `Assoc [ ("int", `String s) ] ->
       (try Ok (VInt (Int64.of_string s))
        with _ -> Error ("bad int: " ^ s))
+  | `Assoc [ ("float", `Float f) ] -> Ok (VFloat f)
+  | `Assoc [ ("float", `Int n) ] -> Ok (VFloat (float_of_int n))
+  | `Assoc [ ("float", `String s) ] ->
+      (try Ok (VFloat (float_of_string s))
+       with _ -> Error ("bad float: " ^ s))
   | `Assoc [ ("str", `String s) ] -> Ok (VStr s)
   | `Assoc [ ("bool", `Bool b) ] -> Ok (VBool b)
   | `Assoc [ ("nil", `Null) ] -> Ok VNil

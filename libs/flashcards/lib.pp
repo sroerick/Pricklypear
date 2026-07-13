@@ -1,15 +1,17 @@
-;; Flashcards — decks + SM-2-ish spaced repetition on data_rows.
+;; Flashcards — decks + FSRS-4.5 spaced repetition on data_rows.
 ;; Prefix: flash/   Package dir: flashcards
 ;; Install: (load-library "flashcards") — seeded after calendar.
 ;;
 ;; Types: flash-deck, flash-card
-;; ease is stored as TENTHS (string int): "25" means 2.5 (SM-2 default).
+;; Scheduler: kernel prim (fsrs-schedule S D elapsed rating)
+;;   -> (S' D' interval_days). New cards use S=0 D=0.
 ;; due is YYYY-MM-DD; empty or due <= today means due now.
 
 (deftype 'flash-deck 'title 'description 'color 'archived)
 (deftype 'flash-card
   'deck_id 'front 'back 'tags 'suspended
-  'ease 'interval 'reps 'lapses 'due 'last_reviewed 'created)
+  'stability 'difficulty 'interval 'reps 'lapses
+  'due 'last_reviewed 'created)
 
 ;; --- helpers ---
 
@@ -21,6 +23,10 @@
 (define flash/as-int
   (lambda (v)
     (if (null? v) 0 (parse-int (as-str v)))))
+
+(define flash/as-float
+  (lambda (v)
+    (if (null? v) 0.0 (parse-float (as-str v)))))
 
 (define flash/true?
   (lambda (v) (string-eq (as-str v) "true")))
@@ -121,7 +127,8 @@
         "back" (as-str back)
         "tags" (as-str tags)
         "suspended" ""
-        "ease" "25"
+        "stability" "0"
+        "difficulty" "0"
         "interval" "0"
         "reps" "0"
         "lapses" "0"
@@ -165,68 +172,44 @@
 (define flash/suspended?
   (lambda (fields) (flash/true? (dict-get fields "suspended"))))
 
-;; --- SRS (ease tenths, integer math) ---
+;; --- FSRS-4.5 via kernel (fsrs-schedule) ---
 
-(define flash/iv-hard
-  (lambda (interval)
-    (if (= interval 0) 1 (max 1 (div (* interval 12) 10)))))
+(define flash/elapsed-days
+  (lambda (last today)
+    (if (flash/blank? last)
+        0
+        (date-diff-days (as-str last) (as-str today)))))
 
-(define flash/iv-easy
-  (lambda (interval ease reps)
-    (let ((iv (if (= reps 0) 4 (div (* (* interval ease) 13) 100))))
-      (if (< iv 1) 1 iv))))
-
-(define flash/iv-good
-  (lambda (interval ease reps)
-    (let ((iv
-            (if (= reps 0)
-                1
-                (if (= reps 1) 6 (div (* interval ease) 10)))))
-      (if (< iv 1) 1 iv))))
+(define flash/rating-again?
+  (lambda (r)
+    (let ((s (as-str r)))
+      (if (string-eq s "again") #t (string-eq s "1")))))
 
 (define flash/apply-rating
   (lambda (fields rating today)
-    (let ((ease0 (flash/as-int (dict-get fields "ease")))
-          (interval (flash/as-int (dict-get fields "interval")))
+    (let ((s (flash/as-float (dict-get fields "stability")))
+          (d (flash/as-float (dict-get fields "difficulty")))
+          (last (as-str (dict-get fields "last_reviewed")))
           (reps (flash/as-int (dict-get fields "reps")))
           (lapses (flash/as-int (dict-get fields "lapses")))
           (r (as-str rating)))
-      (let ((ease (if (= ease0 0) 25 ease0)))
-        (if (string-eq r "again")
+      (let ((elapsed (flash/elapsed-days last today)))
+        (let ((res (fsrs-schedule s d elapsed r)))
+          (let ((s2 (nth res 0))
+                (d2 (nth res 1))
+                (iv (flash/as-int (nth res 2))))
             (dict-set* fields
               (list
-                "ease" (str (max 13 (- ease 2)))
-                "interval" "0"
-                "reps" "0"
-                "lapses" (str (+ lapses 1))
-                "due" today
-                "last_reviewed" today))
-          (if (string-eq r "hard")
-              (let ((iv (flash/iv-hard interval)))
-                (dict-set* fields
-                  (list
-                    "ease" (str (max 13 (- ease 1)))
-                    "interval" (str iv)
-                    "reps" (str (+ reps 1))
-                    "due" (date-add-days today iv)
-                    "last_reviewed" today)))
-            (if (string-eq r "easy")
-                (let ((iv (flash/iv-easy interval ease reps)))
-                  (dict-set* fields
-                    (list
-                      "ease" (str (+ ease 1))
-                      "interval" (str iv)
-                      "reps" (str (+ reps 1))
-                      "due" (date-add-days today iv)
-                      "last_reviewed" today)))
-              (let ((iv (flash/iv-good interval ease reps)))
-                (dict-set* fields
-                  (list
-                    "ease" (str ease)
-                    "interval" (str iv)
-                    "reps" (str (+ reps 1))
-                    "due" (date-add-days today iv)
-                    "last_reviewed" today))))))))))
+                "stability" (as-str s2)
+                "difficulty" (as-str d2)
+                "interval" (str iv)
+                "reps"
+                  (str (if (flash/rating-again? r) 0 (+ reps 1)))
+                "lapses"
+                  (str (if (flash/rating-again? r) (+ lapses 1) lapses))
+                "due"
+                  (if (= iv 0) today (date-add-days today iv))
+                "last_reviewed" today))))))))
 
 (define flash/review
   (lambda (id rating)
@@ -379,7 +362,7 @@
           (list
             (flash/td (html/text (flash/esc (flash/card-front fields))))
             (flash/td (html/text (as-str (dict-get fields "due"))))
-            (flash/td (html/text (as-str (dict-get fields "ease"))))
+            (flash/td (html/text (as-str (dict-get fields "interval"))))
             (flash/td
               (html/form "POST"
                 (string-append "/flashcards/deck?id="
@@ -439,7 +422,7 @@
                                     (list
                                       (flash/th "Front")
                                       (flash/th "Due")
-                                      (flash/th "Ease")
+                                      (flash/th "Interval")
                                       (flash/th "")))))
                               (flash/tbody
                                 (html/join

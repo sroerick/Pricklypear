@@ -125,9 +125,19 @@ let read_atom (st : state) : expr =
   else if s = "#t" then Lit (VBool true)
   else if s = "#f" then Lit (VBool false)
   else
-    (* try int; otherwise it's a bare symbol -> a Var reference *)
-    (try Lit (VInt (Int64.of_string s))
-     with _ -> Var s)
+    (* Numbers: int first; if token has '.' or exponent, try float.
+       Bare symbols otherwise (Var). *)
+    let has_dot_or_exp =
+      String.contains s '.'
+      || String.contains s 'e'
+      || String.contains s 'E'
+    in
+    if has_dot_or_exp then
+      (try Lit (VFloat (float_of_string s))
+       with _ -> Var s)
+    else
+      (try Lit (VInt (Int64.of_string s))
+       with _ -> Var s)
 
 let rec read_list (st : state) : expr list =
   (* current char is '('; consume it *)
@@ -235,6 +245,12 @@ let is_complete (s : string) : bool =
 let rec pp_value (v : value) : string =
   match v with
   | VInt n -> Int64.to_string n
+  | VFloat f ->
+      (* Prefer a readable form; ensure a decimal so re-read is float. *)
+      let s = Printf.sprintf "%.12g" f in
+      if String.contains s '.' || String.contains s 'e' || String.contains s 'E'
+      then s
+      else s ^ ".0"
   | VStr s -> "\"" ^ String.escaped s ^ "\""
   | VBool b -> if b then "#t" else "#f"
   | VNil -> "()"

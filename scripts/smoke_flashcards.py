@@ -91,18 +91,19 @@ def main():
         {"action": "review", "id": cid, "rating": "good", "deck": deck},
     )
     must(st == 200 and "No cards due" in html, "after good review")
-    must(
-        "1" in str(ev(f'(dict-get (flash/card "{cid}") "interval")').get("value")),
-        "interval=1",
-    )
+    st_s = str(ev(f'(dict-get (flash/card "{cid}") "stability")').get("value"))
+    must(st_s not in ('"0"', '0', '""', ''), f"stability set {st_s}")
     must(
         "0" in str(ev(f'(count (flash/due "{deck}" 10))').get("value")),
         "none due",
     )
     must(
-        "2026-07-13" in str(ev('(date-add-days "2026-07-12" 1)').get("value"))
-        or "ok" in str(ev('(date-add-days 1)').get("ok")),
-        "date-add-days prim",
+        "3.5" in str(ev('(+ 1 2.5)').get("value")),
+        "float arithmetic",
+    )
+    must(
+        ev('(fsrs-schedule 0 0 0 "good")').get("ok"),
+        "fsrs-schedule prim",
     )
     print("ALL PASS")
 
