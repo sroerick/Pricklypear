@@ -128,7 +128,7 @@
    (status implemented)
    (details
     (doc (|
-      OpenBSD host (wyo.town / Vultr):
+      OpenBSD host (build + runtime habitat):
         +-- Postgres (shared object store, SERIALIZABLE
         |              defaults)
         |

@@ -67,22 +67,31 @@ log "pack public source tree"
     --exclude='.borge-bugs' \
     --exclude='public-artifacts' \
     --exclude='build' \
+    --exclude='__pycache__' \
+    --exclude='*.pyc' \
+    --exclude='scripts/ship-to-vultr.ksh' \
+    --exclude='scripts/post-receive-prod-hook.ksh' \
     --exclude='*.pdf' \
     --exclude='*.book.manifest' \
     . \
   | tar -C "$STAGE/src" -xf -
 ) 2>/dev/null || {
   # OpenBSD tar may lack GNU long options — copy key trees
-  for d in lisp common image migrations libs scripts docs; do
+  for d in lisp common image migrations libs scripts docs borge; do
     [ -d "$d" ] && cp -R "$d" "$STAGE/src/"
   done
   for f in *.borg README.md AGENTS.md dune-project; do
     [ -f "$f" ] && cp "$f" "$STAGE/src/"
   done
+  # habitat-private deploy automation stays out of public source
+  rm -f "$STAGE/src/scripts/ship-to-vultr.ksh" \
+        "$STAGE/src/scripts/post-receive-prod-hook.ksh"
+  find "$STAGE/src" -type d -name '__pycache__' -exec rm -rf {} +
+  find "$STAGE/src" -type f -name '*.pyc' -delete
 }
 # Public artifacts (PDF book + tarball).
 # Prefer regenerating via borge; falls back to docs/pricklypear-book.pdf
-# (vendored) when borge is not on the build host (wyo.town today).
+# (vendored) when borge/pdflatex are not on the build host.
 if [ -x scripts/public_artifacts.sh ]; then
   log "public artifacts → stage/public"
   # Ensure vendored book is in the staged src so fallback can find it

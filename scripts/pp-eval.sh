@@ -1,8 +1,8 @@
 #!/bin/ksh
 # Thin wrapper around scripts/pp_eval.py for agents and humans.
 #
-#   export PP_URL=http://155.138.208.45
-#   export PP_USER=pricklypear
+#   export PP_URL=http://127.0.0.1:18080
+#   export PP_USER=admin
 #   export PP_PASS=...
 #   scripts/pp-eval.sh '(+ 1 2)'
 #   scripts/pp-eval.sh -i

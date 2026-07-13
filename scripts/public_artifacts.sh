@@ -13,8 +13,8 @@ mkdir -p "$OUT"
 echo "[public] root=$ROOT src=$SRC out=$OUT"
 
 # --- PDF book via borge, else vendored docs/pricklypear-book.pdf ---
-# Build hosts (e.g. wyo.town) may lack borge; laptop regenerates the
-# vendored PDF with: borge book print . -o docs/pricklypear-book
+# Build hosts may lack borge; regenerate the vendored PDF with:
+#   borge book print . -o docs/pricklypear-book
 BORGE=""
 if command -v borge >/dev/null 2>&1; then
   BORGE="$(command -v borge)"
@@ -69,19 +69,29 @@ tar -C "$SRC" -czf "$TGZ" \
   --exclude='supervisor' \
   --exclude='.borge-bugs' \
   --exclude='public-artifacts' \
+  --exclude='__pycache__' \
+  --exclude='*.pyc' \
+  --exclude='scripts/ship-to-vultr.ksh' \
+  --exclude='scripts/post-receive-prod-hook.ksh' \
   --exclude='*.pdf' \
   --exclude='*.book.manifest' \
   . \
   2>/dev/null || {
     # OpenBSD tar may not like some long options — fallback
     (cd "$SRC" && tar -czf "$TGZ" \
-      pricklypear.borg borge/philosophy.borg borge/architecture.borg borge/single-image.borg \
-      borge/object-model.borg borge/branching.borg borge/lisp-interpreter.borg borge/storage.borg \
-      borge/multi-user.borg borge/auth.borg borge/image.borg borge/product-experience.borg \
-      borge/notes.borg borge/calendar.borg borge/flashcards.borg borge/dabar.borg borge/migrations.borg \
-      borge/workflow.borg borge/ai-authoring.borg \
+      pricklypear.borg borge \
       lisp common image migrations libs scripts docs README.md AGENTS.md \
       dune-project 2>/dev/null) || true
+    # strip habitat-private deploy scripts if fallback copied whole scripts/
+    if [ -f "$TGZ" ]; then
+      tmpdir="$(mktemp -d)"
+      (cd "$tmpdir" && tar -xzf "$TGZ" 2>/dev/null) || true
+      rm -f "$tmpdir/scripts/ship-to-vultr.ksh" \
+            "$tmpdir/scripts/post-receive-prod-hook.ksh"
+      find "$tmpdir" -type d -name '__pycache__' -exec rm -rf {} + 2>/dev/null || true
+      (cd "$tmpdir" && tar -czf "$TGZ" .) || true
+      rm -rf "$tmpdir"
+    fi
   }
 
 if [ -f "$TGZ" ]; then

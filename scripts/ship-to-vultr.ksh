@@ -1,31 +1,37 @@
 #!/bin/ksh
-# Ship Pricklypear to the Vultr runtime host.
+# Ship Pricklypear to a remote OpenBSD runtime host.
 #
 # Modes:
-#   1) On wyo.town (build host), from a checkout:
-#        /bin/ksh scripts/ship-to-vultr.ksh
-#   2) From laptop, rsync sources to wyo.town then remote-build+ship:
-#        /bin/ksh scripts/ship-to-vultr.ksh --from-laptop
+#   1) On the OpenBSD build host, from a checkout:
+#        TARGET_HOST=runtime.example /bin/ksh scripts/ship-to-vultr.ksh
+#   2) From a laptop, rsync sources to a build host then remote-build+ship:
+#        BUILD_HOST=build.example TARGET_HOST=runtime.example \
+#          /bin/ksh scripts/ship-to-vultr.ksh --from-laptop
 #
-# Env knobs:
-#   TARGET_HOST   default 155.138.208.45
+# Required env:
+#   TARGET_HOST   runtime host (no default — set per habitat)
+# Optional env:
 #   TARGET_USER   default deploy
-#   TARGET_ROOT   default root@TARGET_HOST for promote
-#   BUILD_HOST    default wyo.town (laptop mode)
-#   BUILD_DIR     default ~/apps/pricklypear on build host
+#   TARGET_STAGE  default /home/deploy/incoming
+#   BUILD_HOST    required for --from-laptop
+#   BUILD_DIR     default apps/pricklypear on build host
 
 set -eu
 
 PP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-TARGET_HOST="${TARGET_HOST:-155.138.208.45}"
+TARGET_HOST="${TARGET_HOST:-}"
 TARGET_USER="${TARGET_USER:-deploy}"
-TARGET_STAGE="/home/deploy/incoming"
-BUILD_HOST="${BUILD_HOST:-wyo.town}"
+TARGET_STAGE="${TARGET_STAGE:-/home/deploy/incoming}"
+BUILD_HOST="${BUILD_HOST:-}"
 BUILD_DIR="${BUILD_DIR:-apps/pricklypear}"
 MODE="${1:-}"
 
 log() { print -ru2 -- "[ship] $*"; }
 die() { log "$*"; exit 1; }
+
+require_target() {
+  [ -n "${TARGET_HOST}" ] || die "set TARGET_HOST to the runtime host (no default)"
+}
 
 build_and_pack() {
   cd "$PP_ROOT"
@@ -35,6 +41,7 @@ build_and_pack() {
 ship_archive() {
   archive="$1"
   [ -f "${archive}" ] || die "missing archive ${archive}"
+  require_target
 
   if git rev-parse HEAD >/dev/null 2>&1; then
     release_id="$(git rev-parse --short=12 HEAD)"
@@ -63,6 +70,8 @@ ship_archive() {
 
 case "${MODE}" in
   --from-laptop)
+    [ -n "${BUILD_HOST}" ] || die "set BUILD_HOST for --from-laptop (no default)"
+    require_target
     log "rsync sources to ${BUILD_HOST}:${BUILD_DIR}"
     ssh -o BatchMode=yes "${BUILD_HOST}" "mkdir -p ${BUILD_DIR}"
     rsync -az --delete \
@@ -76,15 +85,16 @@ case "${MODE}" in
     fi
     log "remote build + ship on ${BUILD_HOST}"
     ssh -o BatchMode=yes "${BUILD_HOST}" \
-      "cd ${BUILD_DIR} && /bin/ksh scripts/ship-to-vultr.ksh"
+      "cd ${BUILD_DIR} && TARGET_HOST=${TARGET_HOST} TARGET_USER=${TARGET_USER} TARGET_STAGE=${TARGET_STAGE} /bin/ksh scripts/ship-to-vultr.ksh"
     ;;
   "")
     # Assume we are already on OpenBSD build host
     uname -s | grep -q OpenBSD || die "build must run on OpenBSD (use --from-laptop)"
+    require_target
     archive="$(build_and_pack)"
     ship_archive "${archive}"
     ;;
   *)
-    die "usage: $0 [--from-laptop]"
+    die "usage: TARGET_HOST=… $0 [--from-laptop]"
     ;;
 esac

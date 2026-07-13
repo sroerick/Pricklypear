@@ -13,7 +13,7 @@ Auth: HTTP basic against the image credentials table (or a session cookie).
 Nginx edge basic auth on :80 is not required.
 
 Usage:
-  export PP_URL=http://155.138.208.45
+  export PP_URL=http://127.0.0.1:18080   # or your image base URL
   export PP_USER=admin
   export PP_PASS='…'          # or PP_PASS_FILE=/path/to/file
 

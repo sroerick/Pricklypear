@@ -1,10 +1,11 @@
 #!/bin/ksh
-# post-receive: build on wyo.town (poohstack) and ship to Vultr runtime.
+# post-receive: build on the OpenBSD build host (poohstack) and ship to runtime.
 #
 # Installed as the bare-repo hook (or called from a thin wrapper).
-# Env overrides:
-#   BRANCH WORKTREE TARGET_HOST TARGET_USER TARGET_STAGE REMOTE_PROMOTE
-#   OPAM_SWITCH
+# Habitat-specific values MUST be set in the hook wrapper / environment
+# (no production host defaults in-tree):
+#   TARGET_HOST   (required) runtime host
+#   BRANCH WORKTREE TARGET_USER TARGET_STAGE REMOTE_PROMOTE OPAM_SWITCH
 
 set -eu
 
@@ -14,7 +15,7 @@ BRANCH="${BRANCH:-master}"
 REF="refs/heads/${BRANCH}"
 WORKTREE="${WORKTREE:-${HOME}/apps/pricklypear}"
 OPAM_SWITCH="${OPAM_SWITCH:-poohstack}"
-TARGET_HOST="${TARGET_HOST:-155.138.208.45}"
+TARGET_HOST="${TARGET_HOST:-}"
 TARGET_USER="${TARGET_USER:-deploy}"
 TARGET_STAGE="${TARGET_STAGE:-/home/deploy/incoming}"
 REMOTE_PROMOTE="${REMOTE_PROMOTE:-/usr/local/sbin/pricklypear-promote}"
@@ -32,6 +33,7 @@ while read -r _oldrev newrev refname; do
 done
 
 [ -n "${target_rev}" ] || exit 0
+[ -n "${TARGET_HOST}" ] || die "set TARGET_HOST in the hook environment (no default)"
 
 BARE_REPO="${GIT_DIR:-}"
 if [ -z "${BARE_REPO}" ]; then
