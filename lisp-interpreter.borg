@@ -5,24 +5,9 @@
  (section lisp-interpreter
   (doc "Pure Scheme-flavored Lisp-1 interpreter, AST-as-source, primitives layer")
   (status partial)
-  (* agent note (|Section overall `partial` as of it18 plan-pass:
-    ast = implemented, reader = implemented, eval = partial
-    (Lwt-typed eval shipped it12; the per-call step-budget / cooperative
-    stepping described in eval subsection text is deferred),
-    primitives = implemented (the ~21 prim set + dict prims + render-html
-    + CRUD + select-for-update + deftype + branching control prims).|) *)
   (subsection ast
    (doc "The expr and value types")
    (status implemented)
-   (* agent note (|lisp/lib/ast.ml ships exactly the type schema documented
-     below (Var/Lit/App/Let/Letrec/If/Lambda/Prim/Seq/Quote on the expr
-     side; VInt/VStr/VBool/VNil/VPair/VLambda/VPrim/VRef/VList on the
-     value side). AST serializes to/from JSON via Ast.expr_of_json /
-     expr_to_json (Yojson) for storage in function_defs.body::jsonb.
-     Homoiconicity preserved (the reader produces the same shape eval
-     consumes; printer round-trips). Closed value type universe — no VDict
-     was ever introduced (v1 used VStr-JSON + dict prims instead; see
-     BORGE-1783432745).|) *)
    (details
     (doc (|
          type expr =
@@ -65,19 +50,6 @@
   (subsection reader
    (doc "S-expression reader: source text -> AST")
    (status implemented)
-   (* agent note (|lisp/lib/reader.ml. Recognizes standard s-expr
-     surface syntax: (foo bar baz), 'symbol, "string", 123, #t, #f,
-     (). Comments `;` to end-of-line. Special forms (lambda/let/letrec/
-     if/define/quote/fork/merge/route/checkout/deftype) are recognized
-     at EVAL time, not read time — the reader produces App (Var name, ...)
-     and eval dispatches on the head. is_complete correctly tracks
-     line-comment completeness at EOF (it1 fix). The `\\` escape handler
-     in read_string is correct as of it13 (was a stale advance-return bug;
-     see BORGE-1783431485). pp_value round-trips VPair chains as proper
-     lists and improper tails with `.` notation.
-     2026-07-11: symbol charset already allows `/` (package names like
-     todo/list are Vars). Keep that; add explicit smoke/tests when
-     image.packages lands. Do NOT treat `/` as a reader special form.|) *)
    (details
     (doc (|
          The reader parses Lisp surface syntax to expr
@@ -112,30 +84,6 @@
    (doc "The evaluator: env * expr -> value")
    (implements lisp/lib/env.ml lisp/lib/eval.ml)
    (status partial)
-   (* agent note (|it31 plan-pass #7: corrected stale it12 note.
-
-    SHIPPED:
-    - `Eval.eval : env -> expr -> value Lwt.t` (it12 Lwt-ABI).
-    - Pure prims via register_sync; DB prims return promises.
-    - Special forms: lambda/let/letrec/if/define/quote/seq/prim/
-      with-transaction.
-    - Per-call step budget IS implemented in lisp/lib/eval.ml:
-      type budget { mutable steps; limit }, default_limit = 100_000,
-      tick at every recursive eval step, raises Budget_exceeded.
-      Earlier agent notes claiming "NO step budget" were stale.
-    - 30 alcotest cases in lisp/test/eval_test.ml.
-
-    STILL PARTIAL:
-    (1) Quote of compounds: quote still accepts only Lit/Var;
-        (quote (a b)) and nested App forms raise User_error
-        "can only quote literals/symbols" (BORGE-1783383905).
-        Spec intent is full s-expr quote; this blocks quoted data
-        as first-class values.
-    (2) Memory budget tracking (multi-user.budgets layer) deferred.
-    (3) Explicit per-subcall budget raise + audit logging deferred.
-
-    Status stays partial primarily for quote semantics + memory
-    budget, NOT because step budgeting is missing.|) *)
    (details
     (doc (|
          The evaluator is PURE. It takes an env and an expr,
@@ -172,35 +120,6 @@
   (subsection primitives
    (doc "The ~20 impure functions the interpreter calls into")
    (status partial)
-   (* agent note (|2026-07-12 status-reconcile: list-branches + current-branch now real. Keep partial: query/describe/diff/hx helpers + author-scoped CRUD still open; quote compounds open (BORGE-1783383905).|) *)
-   (* agent note (|it31 plan-pass #7: demoted implemented -> partial.
-    Primitive DISPATCH + a useful core set are shipped, but the section's
-    own details still enumerate missing/stub prims, so `implemented` was
-    an overclaim.
-
-    v1 SHIPPED (image/lib/primitives.ml + crud.ml + session.ml):
-    pure math (+ - * = < > <= >= not), list/pair (list car cdr cons
-    null? pair? count), string (string-append str), reflection (type-of),
-    session-aware (whoami current-author list-bindings), CRUD (get create
-    update update-field delete rows select-for-update deftype), dict-over-
-    JSON (dict-get dict-set dict-keys), branching (fork merge checkout),
-    htmx (route render-html), with-transaction special form + private
-    __with_transaction__ prim. All on Lwt-typed ABI (it12). 48 alcotest
-    cases + multiple smoke tests.
-
-    STUB / MISSING (keep section partial until these land or are
-    explicitly removed from the doctrinal table):
-    (1) (query 'type where: ...) — only (rows 'type [limit])
-    (2) (describe 'type) / (inspect binding)
-    (3) (diff source target)
-    (4) (current-branch)
-    (5) (list-branches) — registered but returns VNil stub
-    (6) (hx-get)/(hx-post) — hx-get is a weak string-tag stub; hx-post
-        missing; authors currently embed Hx attrs inside render-html
-    (7) create returns VStr uuid, not VRef as details text says
-    (8) author-scoped data filtering on CRUD (permissions gap)
-
-    image.primitives-layer demoted in lockstep.|) *)
    (details
     (doc (|
          Primitives live in image/lib/primitives.ml. They
@@ -252,20 +171,6 @@
   (subsection effects
    (doc "Capability effects for Lisp programs: classify pure vs DB vs AI vs publish; infer; gate; display. Separate from OCaml 5 host effects and from Lwt async plumbing.")
    (status implemented)
-   (* agent note (|it34 IMPLEMENTED: lisp/lib/effect.ml + 12 tests +
-     /bindings badges + AI propose policy (PP_AI_ALLOW_WRITE elevate).
-     it33 design sketch (roerick asked for effects + async
-     clarity). IMPORTANT SPLIT:
-       (1) ASYNC composition is ALREADY SOLVED at runtime: Eval.eval
-           returns value Lwt.t; DB/AI prims return promises; pure prims
-           use register_sync. (define u (get 'note id)) composes.
-       (2) EFFECTS as policy/visibility are NOT solved: the language
-           does not yet label or enforce Pure/ReadDb/WriteDb/Ai/Publish.
-       (3) OCaml 5 algebraic effects are a possible FUTURE host runtime
-           for the interpreter, NOT a substitute for Lisp-level
-           capability effects. Do not migrate off Lwt for this feature.
-     This subsection is the source-of-truth design; implement later as
-     prim effect table + AST inference + UI badges + AI/route gates.|) *)
    (verify
     (build "dune build lisp image")
     (test "effect inference pure vs db vs ai on sample ASTs")

@@ -5,12 +5,6 @@
  (section ai-authoring
   (doc "AI as a first-class author of functions: propose, surgical AST rewrite/freeze, growth-from-seed, human merge gate, provenance")
   (status partial)
-  (* agent note (|it33: design expanded with growth-style coding tools
-    (llm-inner/outer/seed) discussed with roerick. Still PARTIAL:
-    blank-slate propose-function ships; surgical freeze rewrites and
-    recursive seed growth are planned. Effects gates reference
-    lisp-interpreter.effects. Runtime LLM-as-value holes are
-    explicitly secondary to coding-tool freeze-on-accept.|) *)
   (verify
    (build "dune build @all")
    (smoke "AI propose on user branch -> human inspect -> merge policy gate")
@@ -59,12 +53,6 @@
   (subsection tools
    (doc "How an AI proposes or patches functions into the store")
    (status implemented)
-   (* agent note (|it32: IMPLEMENTED blank-slate path. image/lib/
-     llm_client.ml OpenAI-compat via curl; Session.propose_function;
-     prim propose-function; POST /api/ai/propose; author agent:<model>.
-     Surgical rewrite + seed growth live in sibling subsections.
-     2026-07-11: agent-portal is the unified entry; propose remains a
-     thin authoring helper on top of (agent ...).|) *)
    (verify
     (build "dune build image")
     (smoke "POST /api/ai/propose ai-double then (ai-double 21) => 42"))
@@ -100,17 +88,6 @@
   (subsection agent-portal
    (doc "One durable agent: sessions + messages in Postgres, one tool-capable loop, full history resubmitted each provider call")
    (status implemented)
-   (* agent note (|2026-07-12 IMPLEMENTED. Migration 005 + image/lib/ai_store.ml
-     + Session.run_loop (full history resubmit each chat_turn) +
-     prims agent-session-new/say/history/sessions/session-delete +
-     temporary aliases agent/agent-task + POST /api/agent session_id +
-     libs/ai wrappers. Verified: dune build image; ai_store alcotest
-     round-trip; live create/append multi-turn user rows in PG;
-     HTTP resume by session_id; delete clears thread. Token streaming
-     deferred (Synthetic hang); non-stream turns + progress events.
-     Full LLM tool-loop smoke needs LLM_API_KEY in image env
-     (dev.sh should forward LLM_* from the parent shell).
-     BORGE-1783840832 resolved.|) *)
    (implements
     (module migrations/005_ai_sessions.sql)
     (module image/lib/ai_store.ml)
@@ -318,11 +295,6 @@
   (subsection ast-rewrite
    (doc "Surgical coding tools: llm-inner / llm-outer / llm-rewrite with freeze-on-accept into stored AST")
    (status implemented)
-   (* agent note (|it33: NEW. Roerick's coding-tool model: not primarily
-     runtime hole expansion; editor/session command that pings LLM to
-     write one AST component, previews, freezes into function_defs.
-     Emacs replace-region analogy. Depends on llm_client + AST
-     json round-trip (already ship) + effects inference (planned).|) *)
    (verify
     (build "dune build image")
     (smoke "llm-inner on a binding rewrites body AST and survives reload")
@@ -429,12 +401,6 @@
   (subsection growth-seed
    (doc "llm-seed: recursive bottom-up growth via smallest core + repeated llm-outer until requirements satisfied")
    (status implemented)
-   (* agent note (|it33: NEW. Roerick coding style operationalized:
-     start from one little function, grow outward. llm-seed orchestrates
-     propose/inner for the seed then recursive llm-outer with a planner
-     prompt until the high-level requirement is met or caps hit.
-     This is how LLMs can be made to work inside-out instead of only
-     top-down whole-app dumps.|) *)
    (verify
     (build "dune build image")
     (smoke "llm-seed on a tiny goal produces >=1 frozen function on a branch")
@@ -541,9 +507,6 @@
   (subsection review-merge
    (doc "Human gate: inspect AI changes, then merge with existing policy")
    (status planned)
-   (* agent note (|it33: still planned. Applies to propose, ast-rewrite
-     freezes, and growth-seed branches alike. Growth log should appear
-     in review UI when seed exists.|) *)
    (details
     (doc (|
          Review loop:
@@ -565,9 +528,6 @@
   (subsection provenance
    (doc "Attribution, audit, and trust labels for machine-authored code")
    (status partial)
-   (* agent note (|it32/it33: PARTIAL. author=agent:<model> on propose.
-     ast-rewrite/growth-seed must record the same plus optional run id
-     and parent step for seed rings.|) *)
    (details
     (doc (|
          v1 SHIPPED: author=agent:<model> on AI writes; visible in

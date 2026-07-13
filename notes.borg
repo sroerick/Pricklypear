@@ -2,18 +2,9 @@
  (doc "Pricklypear book chapter: notes — outline-first personal knowledge (org-roam / org-mode / Obsidian-shaped) as Lisp + data_rows")
  (status planned)
  (convention ocaml-dune)
- (* agent note (|2026-07-11: New chapter. Notes are NOT a markdown vault on disk
-   and NOT a separate service. Substrate = sexp outlines in data_rows;
-   behavior = libs/outline + libs/notes; UI = html/* + htmx partials;
-   agents use the vault via eval/pp_eval (image is the API).
-   Priority locked with roerick: OUTLINES first (org structure), then
-   roam links/backlinks/dailies/capture; graph view deferred.
-   Orthogonal to dabar personal notes (study bookmarks) — this chapter
-   is the general thinking tool / Zettelkasten.|) *)
  (section notes
   (doc "Outline-first notes OS: tree documents, wiki links, dailies, capture, hypermedia structure edit")
   (status partial)
-  (* agent note (|2026-07-12 status-reconcile: Phase-1/2 product shipped (outline, storage, UI, capture, daily, unified todos). links-and-roam + phase-3 comfort still open — chapter not fully done.|) *)
   (verify
    (build "dune build image")
    (smoke "(load-library \"outline\") then pure tree ops on a sample node tree")
@@ -78,7 +69,6 @@
   (subsection outline-model
    (doc "Sexp outline ADT: node tree with stable ids — org structure as data")
    (status implemented)
-   (* agent note (|2026-07-12 status-reconcile: libs/outline/lib.pp: node tree, find/update/delete/move, todo cycle, HTML render.|) *)
    (implements libs/outline/lib.pp)
    (verify
     (smoke "outline/node constructors and outline/html produce nested details")
@@ -138,7 +128,6 @@
   (subsection storage
    (doc "data_rows types for notes and optional link index; shared vault")
    (status implemented)
-   (* agent note (|2026-07-12 status-reconcile: note type via notes/*, upsert/get/list/search/delete on data_rows.|) *)
    (implements libs/notes/lib.pp)
    (verify
     (smoke "(deftype 'note …) via load-library notes")
@@ -249,7 +238,6 @@
   (subsection dailies-and-capture
    (doc "Daily outlines and quick capture (org-roam-dailies / org-capture shaped)")
    (status implemented)
-   (* agent note (|2026-07-12 status-reconcile: notes/daily, notes/capture, /capture, inbox ensure, navbar capture.|) *)
    (verify
     (smoke "(notes/daily) returns same slug for same day on second call")
     (smoke "(notes/capture title body) creates inbox-tagged note or appends")
@@ -279,7 +267,6 @@
   (subsection hypermedia-ui
    (doc "Routes, partials, structure-edit via htmx; menu entry")
    (status implemented)
-   (* agent note (|2026-07-12 status-reconcile: /notes, /capture, outline partials, node-op POST, menu integration.|) *)
    (implements libs/notes/lib.pp image/lib/http.ml)
    (verify
     (smoke "GET /notes lists recent notes")
@@ -327,7 +314,6 @@
   (subsection agent-access
    (doc "Agents use notes via eval — no separate notes HTTP API")
    (status implemented)
-   (* agent note (|2026-07-12 status-reconcile: Agents use pp_eval /api/eval on notes/*; no separate notes REST. Dedicated agent tools optional later.|) *)
    (verify
     (smoke "pp_eval notes/list and notes/get")
     (smoke "agent-task tool list may include notes_search later"))
@@ -353,7 +339,6 @@
   (subsection phases
    (doc "Implementation phases and acceptance")
    (status partial)
-   (* agent note (|2026-07-12 status-reconcile: Phase 1 + most of phase 2 (structure ops, daily, capture, menu) shipped. Roam/backlinks + phase 3 comfort remain.|) *)
    (verify
     (smoke "phase 1 dogfood: one project outline + list/show/save"))
    (details
@@ -394,7 +379,6 @@
   (subsection unified-todos
    (doc "Basecamp lists + org node todos; unified /todos with smart views")
    (status implemented)
-   (* agent note (|2026-07-12 status-reconcile: libs/todo full lists+items+ARCHIVED; notes node todos scrape/cycle; /todos views. Promote dual-copy still later.|) *)
    (implements libs/todo/lib.pp libs/outline/lib.pp libs/notes/lib.pp)
    (details
     (doc (|

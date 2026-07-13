@@ -2,14 +2,9 @@
  (doc "Pricklypear book chapter: dabar — BSB study library (reader + Strong's + interlinear)")
  (status planned)
  (convention ocaml-dune)
- (* agent note (|2026-07-11: New chapter. Dabar is NOT a separate unikernel.
-   It is Lisp library packages + data_rows seeds living inside the image.
-   Feature/data donor for study UX is the sibling repo wyo.tech/dabar
-   (Dream app; no .borg of its own). Semantic search is OUT OF SCOPE.|) *)
  (section dabar
   (doc "Bible study layer on the live image: plugin libs, seeds, routes")
   (status partial)
-  (* agent note (|2026-07-12 status-reconcile: Packaging, reader baseline, nav, Strong's, dogfood interlinear, search via find-text ship. Real FTS + richer study UX remain.|) *)
   (verify
    (build "dune build image")
    (smoke "(load-library \"bible\") then (bible/verse \"John\" 3 16) has God/world")
@@ -48,7 +43,6 @@
   (subsection packaging
    (doc "Library layout, boot policy, deps on std/bible")
    (status implemented)
-   (* agent note (|2026-07-12 status-reconcile: libs/bible + libs/dabar seed_stdlib; seed scripts present; routes /dabar /strongs.|) *)
    (implements libs/bible/lib.pp libs/dabar/lib.pp scripts/seed_bible_bsb.py)
    (verify
     (smoke "libs/bible/lib.pp loads via load-library bible")
@@ -83,10 +77,6 @@
   (subsection reader
    (doc "Existing bible/ reader — baseline for dabar")
    (status implemented)
-   (* agent note (|2026-07-12 status-reconcile: BSB reader + chapter UI + search panel; prev/next/random landed in bible/* used by dabar.|) *)
-   (* agent note (|Reader shipped: types bible-book/bible-verse, seed BSB
-     full text, /bible dropdowns + htmx panel, find-row/find-text.
-     Status partial until prev/next/random and FTS land (WP1/WP4).|) *)
    (verify
     (smoke "31086+ bible-verse rows after full seed")
     (smoke "GET /bible?book=John&chapter=3 renders chapter")
@@ -109,7 +99,6 @@
   (subsection navigation
    (doc "Prev/next chapter and random verse")
    (status implemented)
-   (* agent note (|2026-07-12 status-reconcile: bible/prev-ref next-ref random-row + UI links including /dabar?random=1.|) *)
    (verify
     (smoke "next from John 3 → John 4 panel")
     (smoke "prev from Genesis 1 stays or wraps per policy")
@@ -127,7 +116,6 @@
   (subsection strongs
    (doc "Strong's lexicon seed, lookup, pages")
    (status implemented)
-   (* agent note (|2026-07-12 status-reconcile: strongs-entry type, strongs/get, /strongs page, seed_strongs.py.|) *)
    (verify
     (build "python3 scripts/seed_strongs.py --help exits 0")
     (smoke "after seed: (strongs/get \"H430\") or G26 returns lemma/description")
@@ -153,7 +141,6 @@
   (subsection interlinear
    (doc "Word-level interlinear fragments + toggles")
    (status partial)
-   (* agent note (|2026-07-12 status-reconcile: bible-interlinear type + dabar/inter-html verse study path; dogfood seed only, not full corpus.|) *)
    (verify
     (smoke "seed loads tokens for at least John 1 or full corpus")
     (smoke "(bible/interlinear \"John\" 1 1) or dabar/inter returns HTML fragment")
@@ -179,7 +166,6 @@
   (subsection search-fts
    (doc "Postgres full-text search over verse text (not semantic)")
    (status partial)
-   (* agent note (|2026-07-12 status-reconcile: bible/search via find-text substring — not Postgres FTS/tsvector yet.|) *)
    (verify
     (smoke "bible/search love returns ranked hits better than bare ILIKE smoke"))
    (details

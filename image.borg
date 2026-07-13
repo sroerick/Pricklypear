@@ -5,34 +5,9 @@
  (section image
   (doc "The per-user unikernel: Lisp interpreter, REPL endpoint, htmx interface")
   (status partial)
-  (* agent note (|2026-07-12 status-reconcile: Boot/repl/browser-repl/theme/packages ship. Inspector/editor/branch UI polish + some prims still partial.|) *)
-  (* agent note (|it32: image still partial overall. browser-repl +
-    function-editor implemented; system-browser + inspector partial;
-    product-experience owns about/vocabulary/first-run. ssh still
-    line-protocol default; linenoise still deferred.|) *)
   (subsection boot
    (doc "Reading the manifest, loading initial env")
    (status implemented)
-   (* agent note (|it23: image/lib/boot.ml + bin/unikernel.ml.
-                    Reads manifest from env vars (PP_USER_ID,
-                    PP_USERNAME, PP_BRANCH_ID, PP_BRANCH_NAME,
-                    PP_IMAGE_VERSION, PP_HTTP_PORT, PP_REPL_PORT,
-                    PP_DB_* env vars). PG connect (non-fatal on
-                    failure).
-                    load_defs_async populates env from function_defs
-                    via recursive-CTE walk (it8). REPL endpoint +
-                    HTTP server started async. Health endpoint /health.
-                    The spec's 7th step 'marks self healthy, signals
-                    supervisor' is NOT explicitly wired — supervisor
-                    uses retry-on-connect backoff (it6) to detect image
-                    readiness instead.
-                    The spec describes the PROD flow as 'manifest fetched
-                    from PG by the supervisor before booting' — v1 dev
-                    flow uses env vars because boot-on-connect uses
-                    posix_spawn (it4); prod Solo5 + hypervisor VM request
-                    would carry the manifest forward, deferred. The 8-step
-                    boot sequence is implemented; the PG-fetched manifest
-                    is the prod-flow upgrade path.|) *)
    (verify
     (build "dune build image")
     (smoke "/tmp/pp_img_it7.py —   image boots + serves / and /health + REPL accepts connections"))
@@ -78,29 +53,6 @@
    (doc "The SSH front door: supervisor authenticates, forwards to image REPL")
    (implements supervisor/lib/ssh.ml supervisor/lib/ssh_awa.ml supervisor/lib/ssh_awa_shims.ml supervisor/lib/ssh_keys.ml supervisor/lib/boot.ml)
    (status deprecated)
-   (* agent note (|2026-07-12 status-reconcile: Supervisor SSH front door retired with single-image. Optional line-protocol REPL may remain on image; browser /repl + /api/eval are primary.|) *)
-   (* agent note (|it23: the supervisor-fronts-SSH pattern is implemented
-                    (supervisor/lib/ssh.ml). v1 uses a non-crypto line
-                    protocol on PP_SSH_PORT (default 17822 dev / 2222 prod):
-                    accept TCP, banner, read key as first line, auth via
-                    authd's /verify_ssh_key HTTP RPC, DENIED or OK+
-                    boot/attach image, byte-proxy TCP between SSH socket
-                    and image REPL socket. Real awa-ssh path (it21) is
-                    OPT-IN via PP_AWA_SSH_PORT; real SSH transport +
-                    pubkey auth works end-to-end but the exec_callback's
-                    REPL proxy bridge has a Cstruct<->Lwt_io bug, AND
-                    awa 0.3.1's static-auth-db constraint means the awa
-                    path can't propagate user identity into the image
-                    (see BORGE-1783439434). The line protocol IS the
-                    spec's design minus the cryptographic transport.
-                    Marked partial: the cryptographic SSH handshake
-                    isn't default; waiting on awa 0.5.x upgrade (its
-                    auth-event callback exposes username to exec_callback).
-                    Per the spec's own tradeoff section 'supervisor-to-image
-                    hop is internal (trusted hypervisor network), so no
-                    end-to-end SSH crypto between user terminal and image' —
-                    that has held. Image does NOT run full SSH — matches spec
-                    design.|) *)
    (verify
     (build "dune build @all")
     (smoke "/tmp/pp_e2e_it6.py — line-protocol SSH→auth→image→REPL→define→call")
@@ -157,19 +109,6 @@
   (subsection repl-endpoint
    (doc "Image's internal REPL endpoint, not full SSH")
    (status implemented)
-   (* agent note (|it23: image/lib/repl_endpoint.ml. TCP listener on
-                    PP_REPL_PORT. Accepts a connection, prints banner
-                    'Pricklypear REPL. Type :quit to exit.', prompts
-                    with prompt (branch_name + '> '). Read-eval-print loop
-                    driven by Lwt_io channels. Session.t IS shared across
-                    connections (one Session.t per image process), so
-                    `(define x 42)` in one socket persists to the next —
-                    matches the it18 smoke-test pattern. Graceful disconnect
-                    (it10): all post-disconnect cleanup wrapped in Lwt.catch,
-                    EBADF classified as 'peer disconnected' not fatal.
-                    No full SSH in the image — matches the spec's design.
-                    The supervisor connects and forwards SSH-to-image TCP
-                    bytes via Lwt_unix.read/write.|) *)
    (verify
     (build "dune build image")
     (smoke "/tmp/pp_persist_it8.py — define persists + /tmp/pp_e2e_it6.py — REPL proxy works"))
@@ -209,31 +148,6 @@
    (doc "What the user sees: prompt, multi-line, line editing, meta-commands")
    (implements image/lib/lineedit.ml)
    (status partial)
-   (* agent note (|it23: prompt + multi-line + meta-commands + session-state
-                    are implemented in image/lib/repl_endpoint.ml.
-                    Currently the prompt is '<branch-name>> ' (e.g.
-                    'main> '), NOT the spec's 'alice/main>' 2-token form.
-                    Multi-line: the reader's is_complete is consulted so
-                    a `(define square (lambda ...` spanning lines waits for
-                    the closing paren. Meta-commands (define, fork, checkout,
-                    merge, list-bindings) ARE implemented as Lisp special
-                    forms or prims (define is the only AST-level intercept
-                    since its name arg is a Var not to be evaluated before
-                    binding; others are Lwt prims on the it12 ABI). Session
-                    state: define persists to PG (it8); REPL locals are
-                    session-local, persist across REPL socket reconnections
-                    within an image's life; checkout mutates branch_id (it11).
-                    NOT IMPLEMENTED: real line EDITING (image/lib/lineedit.ml
-                    is a single-line stub). ocaml-linenoise is the candidate;
-                    v1 just uses raw input — no cursor movement, no history,
-                    no Ctrl-A/E. Editing is desired but not v1-blocking (the
-                    image IS usable via a wrapper that sends prepared lines).
-                    (edit name), (describe 'type), (load "file"), (help) —
-                    meta-commands not yet implemented (ergonomic gaps, see
-                    lisp-interpreter.primitives' agent note). Marked partial:
-                    the REPL usability core + meta-commands ship; real
-                    linenoise-style editing + the 4 missing meta-commands are
-                    the deferred v1.5 polish layer.|) *)
    (verify
     (build "dune build image")
     (smoke "/tmp/pp_e2e_it6.py — define + apply works through the REPL"))
@@ -306,12 +220,6 @@
    (doc "httpaf-lwt-unix + pure-html, routes AS functions in the store")
    (implements image/lib/http.ml auth/lib/http.ml image/lib/session.ml image/lib/primitives.ml)
    (status partial)
-   (* agent note (|2026-07-12 status-reconcile: System pages + user GET/POST routes + request-param/redirect used by notes/todos. Keep partial: hx-* Lisp prims incomplete; Solo5 HTTP deferred.|) *)
-   (* agent note (|it23 baseline: system pages + GET-only user routes +
-     render-html dispatch shipped. it33 PLAN: user-route POST +
-     request-context prims + redirect return (see details USER-ROUTE
-     HTTP METHODS / REQUEST CONTEXT). Dogfood: interactive todo recipe
-     forms. hx-* Lisp prims and Solo5 HTTP remain deferred.|) *)
    (verify
     (build "dune build image")
     (smoke "/tmp/pp_ui_it11.py — system pages / /branches / /bindings / /binding/<name>")
@@ -557,17 +465,6 @@
    (doc "image/lib/primitives.ml: the ~20 impure fns registered at boot")
    (implements image/lib/primitives.ml image/lib/crud.ml image/lib/session.ml)
    (status partial)
-   (* agent note (|2026-07-12 status-reconcile: list-branches + current-branch now real (not VNil). Keep partial: query/describe/diff/hx helpers still missing or thin.|) *)
-   (* agent note (|it31 plan-pass #7: demoted implemented -> partial in
-    lockstep with lisp-interpreter.primitives. Registration path is real:
-    image/lib/primitives.ml + crud.ml + session-control prims + env
-    auto-bind of VPrim names at session-make. Interpreter stays pure
-    (lisp/ tests with no services). Section is partial because the
-    registered universe still includes stubs/missing prims listed under
-    lisp-interpreter.primitives (list-branches VNil stub, missing query/
-    describe/inspect/diff/current-branch, hx helpers incomplete, create
-    returns VStr not VRef, no author-scoped CRUD filtering). Promote back
-    to implemented only when that table is honest and complete-or-trimmed.|) *)
    (verify
     (build "dune build image && cd lisp && dune build && dune runtest")
     (test "image/test/primitives_test.ml 48 alcotest cases; lisp/test/eval_test.ml 30 pure tests"))
@@ -605,20 +502,6 @@
   (subsection system-browser
    (doc "The live environment UI: browse branches, functions, types as a place you live")
    (status partial)
-   (* agent note (|2026-07-12 status-reconcile: Functions/pages/home/nav/theme shell live. Keep partial: branch browser promote/stats and full inspector polish still open.|) *)
-   (* agent note (|Chrome + pages + page inspector ship. 2026-07-11 plan B:
-     Functions browser with package grouping, search, used-by pages;
-     prefix packages (todo/list). Page≠function nav fixes already live.
-     2026-07-12 PRODUCT SHELL RULE: product chrome is Lisp (ui/nav,
-     ui/menu, ui/home). OCaml must not ship a silent second product
-     nav/home. Silent default_nav_nodes / default_home_content are
-     debt — emergency chrome only, labeled when used. Load-order fix
-     (parents-first rehydrate) landed 653f5e5 so personal ui/menu pins
-     can depend on system menu/* helpers.
-     2026-07-12 PRODUCT THEME (Path B, BORGE-1783837363): product
-     presentation is Lisp data too — css/* sheet compiler + ui/theme
-     + ui/css. Reject CSS-string-in-lambda hybrid and silent full
-     OCaml design-system twin. See image.product-theme.|) *)
    (verify
     (build "dune build image")
     (smoke "GET / shows user+branch chrome and links to about/functions/repl")
@@ -754,11 +637,6 @@
    (doc "Generic OCaml system UI for full CRUD over shared data_rows by type")
    (status planned)
    (implements image/lib/http.ml image/lib/crud.ml image/lib/store.ml)
-   (* agent note (|2026-07-12 plan: promote deferred 'Data rows browser by type'
-     from system-browser into its own subsection. Full CRUD (list/create/
-     read/update/delete) as host/gate OCaml pages — parallel to /types and
-     /bindings, not a Lisp product package. Product apps (todo/notes/bible)
-     keep their own UIs; this is the always-on object browser.|) *)
    (verify
     (build "dune build image")
     (smoke "GET /data lists types with row counts; shared-data banner present")
@@ -942,14 +820,6 @@
   (subsection product-theme
    (doc "Product presentation as Lisp data: css/* sheet compiler, ui/theme + ui/css, emergency CSS only in OCaml")
    (status implemented)
-   (* agent note (|2026-07-12 status-reconcile: Path B shipped: libs/std css/* + libs/ui ui/theme + ui/css; BORGE-1783837363 resolved.|) *)
-   (* agent note (|2026-07-12 Path B locked (BORGE-1783837363). Rejects:
-     (1) CSS-string-in-lambda hybrid (worst of both languages);
-     (2) silent full design-system twin hard-coded in http.ml
-     html_response as the product theme. Honest Lisp: styles are
-     sexps; css/render emits CSS; session caches string; kernel
-     injects or falls back to labeled emergency_css. Parallel to
-     ui/nav product-shell rule.|) *)
    (verify
     (build "dune build image")
     (smoke "(css/render (css/sheet (body margin 0 background \"#d4d0c8\"))) contains body{ and margin:0")
@@ -1160,16 +1030,6 @@
   (subsection packages
    (doc "In-branch prefix packages for organizing functions (not branch ownership)")
    (status implemented)
-   (* agent note (|2026-07-12 status-reconcile: Prefix packages, load-library, seed_stdlib (std/ui/ai/outline/notes/todo/calendar/bible/dabar/…), export/function-source, bible dogfood. Study extras under dabar.borg.|) *)
-   (* agent note (|2026-07-11 plan: packages = name prefixes with / separator.
-     Orthogonal to multi-user.namespaces (branches). No new tables in v1.
-     Reader already allows / in symbols (is_symbol_start).
-     2026-07-11: BIBLE LIBRARY dogfood locked — BSB in data_rows,
-     ref format BSB:Abbrev:C:V, bulk seed script, libs/bible/lib.pp,
-     URLs via query book/chapter/verse or ref= (see BIBLE LIBRARY).
-     Study layer (Strong's, interlinear, dabar package) is specified
-     in chapter dabar.borg (root pricklypear.borg inlines it) — not
-     expanded here.|) *)
    (verify
     (build "dune build lisp image")
     (smoke "reader accepts symbol todo/list as Var")
@@ -1454,10 +1314,6 @@
   (subsection browser-repl
    (doc "Evaluate Lisp from the browser against the live session env")
    (status implemented)
-   (* agent note (|it32: IMPLEMENTED. GET /repl + POST /api/eval invoke
-     Session.eval_one on the live env. Multi-line via textarea; errors
-     return JSON without killing session; (define ...) persists.
-     scripts/dream_product_smoke.py covers define+call.|) *)
    (verify
     (build "dune build image")
     (smoke "POST /api/eval (+ 20 22) => 42; define + call persists"))
@@ -1473,10 +1329,6 @@
   (subsection function-editor
    (doc "Load, edit, and save a binding's AST from the UI")
    (status partial)
-   (* agent note (|it32: base editor implemented. 2026-07-11 plan:
-     missing-fn empty state + htmx create-in-place; route-aware
-     choices when name matches a page handler path. Status back to
-     partial until those ship.|) *)
    (verify
     (build "dune build image")
     (smoke "POST /edit/editor-greet save -> callable via /api/eval")
@@ -1536,9 +1388,6 @@
   (subsection inspector
    (doc "Inspect values, rows, ASTs, and page→function graphs live")
    (status partial)
-   (* agent note (|it32: PARTIAL. GET /inspect/binding/<name> and
-     /inspect/row/<type>/<id> ship. 2026-07-11 plan: page call graph
-     — endpoint → handler + static user-function callees.|) *)
    (verify
     (build "dune build image")
     (smoke "GET /inspect/binding/<name> shows author + AST")

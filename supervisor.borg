@@ -3,25 +3,13 @@
         single-image pivot (it35). Kept for historical context.
         See single-image.borg for the successor topology.")
  (status deprecated)
- (* agent note (|it35 plan pass: this whole chapter is retired.
-                  The supervisor package will be deleted in the make
-                  pass. One image, one process, one deployment.
-                  No fleet, no boot-on-SSH, no A/B staging. The
-                  deployment pains of it1-it34 (EADDRINUSE on
-                  respawn, stale route tables, orphaned image PIDs,
-                  manual-vs-supervised spawn confusion) all trace
-                  to three coordinated processes. Status -> dropped.|) *)
  (convention ocaml-dune)
  (section supervisor
   (doc "The root unikernel: fleet management, A/B rollback, health checks, admin HTTP")
   (status deprecated)
-  (* agent note (|2026-07-12 status-reconcile: Retired by single-image pivot. Package directory is stub-only.|) *)
-  (* agent note (|plan-pass #4 (it20): supervisor/lib/{boot,fleet,health,process,store,ssh,auth_client,admin}.ml + supervisor/bin/supervisor.ml shipped it4. 5 admin routes served via httpaf-lwt-unix + pure-html (no Dream). Boots cleanly on temp PG cluster, runs migrations, serves fleet dashboard/health/fleet JSON. End-to-end SSH→auth→image supervision verified by /tmp/pp_e2e_it6.py through scripts/dev.sh. Partial (not implemented): Solo5 target — currently mirage/unix only (deferred per [architecture.mirage-vs-unix]). A/B rollback /fleet/:id/rollback route NOT built (Fleet only has boot/kill/list). VM-request boot path NOT built — Fleet spawns via posix_spawn only (dev model). See BORGE-1783433175.|) *)
   (subsection unikernel-target
    (doc "Solo5 in production, mirage/unix in dev")
    (status deprecated)
-   (* agent note (|2026-07-12 status-reconcile: Retired with supervisor package.|) *)
-   (* agent note (|it20: PARTIAL — currently mirage/unix only. The Process module (supervisor/lib/process.ml) abstracts boot behind a boot()/kill() interface; in dev that's posix_spawn over a configured PP_IMAGE_BIN path. The Solo5/hypervisor-VM-request path is NOT built — Solo5 target itself is deferred per spec [architecture.mirage-vs-unix] ("Solo5 is a build switch, not a rewrite"). The abstraction boundary the spec describes (one interface, two implementations) is in place in process.ml. No real switchover has been exercised.|) *)
    (details
     (doc (|
          The supervisor IS a unikernel, not a daemon. It
@@ -47,8 +35,6 @@
    (doc "Managing per-user image instances")
    (implements supervisor/lib/fleet.ml supervisor/lib/process.ml)
    (status deprecated)
-   (* agent note (|2026-07-12 status-reconcile: Retired with supervisor package.|) *)
-   (* agent note (|it20: PARTIAL. IMPLEMENTED — supervisor/lib/fleet.ml maintains an in-memory instance table keyed by instance_id (inst-001, -002, ...). boot/kill/list/find_by_user/mark_health operations work; ports allocated sequentially (http_port_base=18080, repl_port_base=17878) per Fleet.spawn. Verified by /tmp/pp_e2e_it6.py: SSH→auth→image spawn flow registers inst-001 with the verified user_id. NOT IMPLEMENTED — fleet table persistence to PG sessions table (currently in-memory only; supervisor reboot loses it), rollback(instance_id, to_version) A/B op (no route), always-on boot_mode pin (only the boot-on-connect default exists by behavior). The spec text's `(user, branch, image_version, ..., boot_mode, last_seen)` columns are partially populated (instance_id, user_id, ports, started_at mapped; branch/image_version/boot_mode/last_seen omitted).|) *)
    (details
     (doc (|
          The supervisor maintains a fleet table:
@@ -86,8 +72,6 @@
   (subsection health
    (doc "Pinging images, marking healthy/unhealthy")
    (status deprecated)
-   (* agent note (|2026-07-12 status-reconcile: Retired with supervisor package; image /health remains.|) *)
-   (* agent note (|it20: PARTIAL. IMPLEMENTED — supervisor/lib/health.ml is an HTTP /health client (plain Lwt_unix socket + minimal HTTP/1.0 GET). Parses the JSON response via the Protocol module (the { ok, branch, uptime, error } shape is shared with common/lib/protocol.ml and used by both the supervisor's own /health and the image's /health). Fleet.mark_health updates an instance's health_status field. NOT IMPLEMENTED — periodic background health-check loop (every 10s). Currently health is checked on-demand (e.g. before returning Fleet.list), not via a background Lwt.async tick. Unhealthy-then-autorestart logic for always-on instances is NOT built (no always-on mode to autorestart).|) *)
    (details
     (doc (|
          The supervisor health-checks each running image:
@@ -119,14 +103,6 @@
    (doc "Minimal admin surface, httpaf-lwt-unix + pure-html, no Dream")
    (implements supervisor/lib/admin.ml supervisor/lib/boot.ml)
    (status deprecated)
-   (* agent note (|2026-07-12 status-reconcile: Retired with supervisor package.|) *)
-   (* agent note (|it20/it31: PARTIAL. IMPLEMENTED — supervisor/lib/admin.ml
-     serves via httpaf-lwt-unix + pure-html (no Dream, consistent with
-     image/). Three routes live: GET / (fleet dashboard), GET /fleet
-     (JSON), GET /health (supervisor health JSON). Explicit content-length
-     headers. NOT IMPLEMENTED — POST /fleet/:id/kill and
-     POST /fleet/:id/rollback?to=vN; admin auth. Doctrinal text updated
-     it31 away from httpaf-mirage fiction.|) *)
    (details
     (doc (|
          The supervisor exposes a small admin surface over

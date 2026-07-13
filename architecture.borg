@@ -5,67 +5,13 @@
         Mirage unikernel diagram is the RETIRED design. Kept for
         historical context; the live architecture is single-image.")
  (status deprecated)
- (* agent note (|it35 plan pass: the topology below (hypervisor ->
-                  supervisor -> per-user image unikernels + authd)
-                  is retired. The live topology is ONE image binary
-                  + Postgres + nginx. See single-image.borg. This
-                  chapter is kept so the book records the prior
-                  design and the reason for the pivot; its section
-                  statuses are not authoritative after it35.|) *)
  (convention ocaml-dune)
  (section architecture
   (doc "The overall picture: hypervisor -> supervisor unikernel -> per-user image unikernels -> Postgres")
   (status partial)
-  (* agent note (|2026-07-12 status-reconcile: Doctrinal multi-unikernel picture superseded operationally by single-image; package-layout still accurate for lisp/common/migrations/image.|) *)
-  (* agent note (|it23 plan-pass #5: architecture is partially
-                   realized. Topology describes a supervisor +
-                   per-user image + auth + PG layout that IS built,
-                   except the production Solo5 + hypervisor-VM-
-                   request path is deferred (Solo5 spike still
-                   pending; v1 uses posix_spawn from Lwt_unix,
-                   not hypervisor VM requests). The SSH front
-                   door's awa-ssh path is ALSO real (it21) but is
-                   opt-in — the default v1 path is a non-crypto
-                   line protocol per BORGE-1783439434 (awa 0.3.1's
-                   static-auth-db constraint blocks user identity
-                   propagation through the awa path). The image's
-                   internal REPL endpoint matches the spec — the
-                   supervisor forwards SSH channels to it. The A/B
-                   rollback per image, always-on boot_mode, and
-                   health-check auto-restart loop are deferred
-                   sub-features of supervisor.fleet/health. Topology
-                   section as a whole is partial: implemented parts
-                   (the diagram) are accurate; deferred parts are
-                   called out explicitly in the agent notes in
-                   those subsections.|) *)
   (subsection topology
    (doc "Physical and logical layout")
    (status partial)
-   (* agent note (|2026-07-12 status-reconcile: RUNNING topology is single-image (see single-image.borg): one image process + Postgres + nginx. Multi-process supervisor/authd/fleet diagram is historical. Solo5/A-B still deferred.|) *)
-   (* agent note (|it23: topology diagram is implemented-by-construction.
-                    PG cluster is real. Auth unikernel connects
-                    as pricklypear_auth role (verified it5).
-                    Supervisor runs migrations + manages fleet +
-                    exposes admin HTTP + SSH front door (it4+it6).
-                    Per-user Image instances boot via Fleet.boot
-                    with PP_USER_ID manifest env vars (it4+it6).
-                    The 'flow for user adds function via SSH' (5
-                    steps) is verified end-to-end by
-                    /tmp/pp_e2e_it6.py — awa-ssh handshake replaced
-                    with non-crypto line protocol in v1 (see
-                    BORGE-1783316371 + BORGE-1783439434);
-                    image REPL endpoint accepts the forwarded
-                    session; define persists to function_defs and
-                    registers live. The 'flow for supervisor changes
-                    a primitive' (4 steps, A/B boot) is the deferred
-                    half — v1 has no A/B boot staging; primitive
-                    changes require a manual image rebuild +
-                    supervisor restart. Marked partial: the
-                    diagram-shaped intent is accurate as built; the
-                    A/B staging + auto-rollback is v1.5/v2 work.
-                    Carried-forward TODOs: Solo5 mirage target spike,
-                    A/B image staging, always-on boot_mode pin,
-                    health-check auto-restart loop.|) *)
    (verify
     (build "dune build @all")
     (test "all 92 alcotest cases pass")
@@ -129,23 +75,6 @@
    (doc "Directory and package structure")
    (implements lib/pricklypear_common/manifest.ml lib/pricklypear_common/branch.ml lib/pricklypear_common/protocol.ml lib/pricklypear_common/auth_types.ml)
    (status implemented)
-   (* agent note (|it23: package-layout matches the spec exactly.
-                    migrations/001_branches.sql + 002_auth.sql +
-                    003_data.sql. lisp/ (pure, no I/O; 30 alcotest
-                    cases). common/ (pure types; 10 alcotest cases).
-                    image/ at lib/{store,primitives,session,
-                    repl_endpoint,http,lineedit,boot,crud}.ml +
-                    bin/unikernel.ml (mirage/unix). supervisor/ at
-                    lib/{fleet,health,process,store,ssh,ssh_awa,
-                    ssh_awa_shims,ssh_keys,auth_client,admin,boot}.ml
-                    + bin/supervisor.ml. auth/ at lib/{verify,tokens,
-                    admin_api,store,http,boot}.ml + bin/authd.ml +
-                    test/auth_test.ml (4 alcotest cases). proto/ in spec
-                    is common/ in the actual code (the boot_manifest,
-                    health protocol, auth_types modules live there).
-                    scripts/dev.sh orchestrates PG + authd + supervisor.
-                    Spec text is accurate as the actual code structure,
-                    modulo proto/ -> common/ rename.|) *)
    (verify
     (build "dune build @all")
     (smoke "scripts/dev.sh start - boots PG + authd + supervisor on the documented directory layout"))
@@ -231,28 +160,6 @@
   (subsection transport-choices
    (doc "Why each transport + framework choice")
    (status partial)
-   (* agent note (|2026-07-12 status-reconcile: httpaf-lwt-unix + pure-html + pgx_lwt are the live stack. Supervisor SSH/awa path retired/optional. Solo5 deferred.|) *)
-   (* agent note (|it23: transport choices are realized as documented,
-                    with the same SSH caveat: the spec text says
-                    'awa-ssh listens on :22' which IS the design; v1
-                    uses a non-crypto line protocol on :PP_SSH_PORT as
-                    the default (deferred from it6) and the real awa-ssh
-                    path is opt-in on PP_AWA_SSH_PORT (it21) — see
-                    BORGE-1783439434 for the awa 0.3.1 constraint.
-                    htmx via httpaf-lwt-unix + pure-html IS realized on
-                    both supervisor (admin.ml) and image (http.ml) —
-                    pages use HTML.Hx.* htmx attributes (it11 UI
-                    pages, it14 render-html prim). Admin HTTP routes
-                    are ~3 currently (GET /, /fleet, /health). Postgres
-                    via pgx_lwt with custom Io_unix shim
-                    (BORGE-1783389549). SERIALIZABLE-by-default via
-                    Store.with_transaction (it16). ONE v1 stack on both
-                    unikernels (httpaf-lwt-unix + pure-html + pgx_lwt)
-                    — confirmed; doctrinal details rewritten it31 to
-                    match. No Dream. Marked partial: default SSH is
-                    still line-protocol; real awa default depends on
-                    awa 0.5.x (BORGE-1783439434); Solo5 transport swap
-                    deferred.|) *)
    (verify
     (build "dune build @all")
     (smoke "scripts/dev.sh start boots the documented stack"))

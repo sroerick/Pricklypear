@@ -2,14 +2,6 @@
  (doc "Pricklypear book chapter: flashcards — decks + spaced-repetition cards as Lisp + data_rows")
  (status planned)
  (convention ocaml-dune)
- (* agent note (|2026-07-12: New product chapter. Flashcards are NOT a
-   separate service and NOT Anki import-first. Substrate = data_rows
-   types flash-deck + flash-card; behavior = libs/flashcards/lib.pp;
-   UI = html/… + form POST study ratings; agents use pp_eval
-   flash package API. SRS v1 is a small SM-2-ish scheduler in Lisp (due dates
-   as YYYY-MM-DD strings). Data is branch-shared like all data_rows.
-   Orthogonal to notes (thinking tool) and bible/dabar (canon study)
-   — this chapter is deliberate memorization.|) *)
  (section flashcards
   (doc "Decks, cards, study queue, SM-2-ish review, hypermedia UI, agent API")
   (status planned)

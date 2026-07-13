@@ -5,15 +5,6 @@
  (section auth
   (doc "Multi-user identity: credentials, sessions, login, and binding each human to their garden")
   (status partial)
-  (* agent note (|2026-07-12 status-reconcile: Web login + admin + personal garden identity ship in-image. argon2, full multi-user process isolation, rich credential kinds still open.|) *)
-  (* agent note (|2026-07-12: PRODUCT CORRECTION. Multi-user is the system,
-    not an optional phase and not cancelled by the single-image deploy
-    pivot. Single-image simplified process topology (one binary to ship);
-    it does NOT mean single-human. Complete auth = many users, each with
-    credentials + session + personal branch + authorship; process-per-user
-    isolation remains the isolation model (multi-user.isolation) when the
-    fleet is live. nginx basic-auth is a temporary gate, not the product.
-    Spec below is the complete multi-user auth system for implementation.|) *)
   (details
    (doc (|
         Auth is its own unikernel, separate from the
@@ -59,22 +50,6 @@
   (subsection credentials-store
    (doc "The users, credentials, sessions, auth_log tables in Postgres")
    (status implemented)
-   (* agent note (|All tables shipped in migrations/002_auth.sql: users,
-     credentials, auth_sessions [renamed from sessions to avoid the
-     name clash with the image's sessions table, see BORGE-1783389549
-     note], auth_log, system_keys. The `pricklypear_auth` PG role is
-     GRANTed SELECT/INSERT/UPDATE ONLY on auth tables (not the
-     branches/function_defs/data_rows tables) — defense-in-depth role
-     isolation as the spec describes. auth/lib/store.ml connects as
-     `pricklypear_auth`. All id columns have DEFAULT
-     gen_random_uuid() (it5 migration fix). auth_log accumulates
-     ssh_key verify rows verified end-to-end through /tmp/pp_e2e_it6.py.
-
-     HARDENING TODO carried forward (documented in spec text below):
-     move the session_signing key from system_keys (on-disk in PG) to
-     auth-image MEMORY ONLY (env var on boot). v1 keeps the key in
-     system_keys for restart survival; the spec calls this an
-     accepted personal/small-team risk now.|) *)
    (details
     (doc (|
          Tables (added by migrations, see migrations):
@@ -138,37 +113,6 @@
    (doc "verify(cred) / lookup / mint / verify_token — the four pure functions")
    (implements auth/lib/verify.ml auth/lib/tokens.ml)
    (status partial)
-   (* agent note (|2026-07-12 status-reconcile: Password verify works (interim sha256$). SSH-key/authd path retired with auth package. argon2id still deferred (BORGE-1783831698).|) *)
-   (* agent note (|Implementation it5/verified it6 onward for the
-     SSH-key path; token path verified by auth/test/auth_test.ml (4
-     alcotest cases for HMAC determinism, random-opaque_id 32B,
-     round-trip, malformed-token rejection).
-
-     IMPLEMENTED:
-     - `verify_ssh_key(presented_key) -> May<user_id>` full path:
-       auth/lib/verify.ml + auth/lib/store.ml SELECT the
-       credential WHERE kind='ssh_key' AND public_data=jsonb;
-       returns Ok uid or Denied. End-to-end verified: denied key →
-       {"ok":false}; admin key → {"ok":true,"user_id":"<uuid>"}.
-     - `mint(user_id)` + `verify_token(token)` via auth/lib/tokens.ml:
-       HMAC-SHA256 with the system_keys signing key; opaque_id is
-       32 random bytes; token format is base64(opaque_id || sig);
-       verify recomputes HMAC + compares. Mirage_crypto_rng
-       initialized via Mirage_crypto_rng_unix.initialize (module
-       Fortuna) on authd boot.
-
-     NOT YET IMPLEMENTED (deferred — v1.5 / requires an opam install):
-     - `verify_password(username, password)`: STUB only — raises
-       `Not_implemented` because argon2 is NOT on the poohstack opam
-       switch. No web-login password verification. ACCEPTABLE for v1
-       because the SSH-first model means the primary credential IS
-       the SSH key; password verification is the future web-login
-       path. v1.5 will install `argon2` opam package + wire a real
-       argon2id verify.
-
-     Section marked `partial` until at least verify_password lands
-     (the four pure functions the spec enumerates include both
-     ssh_key AND password cred kinds).|) *)
    (details
     (doc (|
          SSH KEY VERIFICATION (for supervisor SSH front door):
@@ -226,17 +170,6 @@
    (doc "First-admin creation via env var on auth first boot")
    (implements auth/lib/admin_api.ml auth/lib/boot.ml)
    (status implemented)
-   (* agent note (|Implementation it5/verified it6 onward. auth/lib/
-     boot.ml checks: if users table is empty AND PP_BOOTSTRAP_ADMIN_KEY
-     env var is set, INSERT into users (username='admin',
-     is_admin=true) + INSERT into credentials (kind='ssh_key',
-     public_data=the key, user_id=admin). Verified end-to-end:
-     /tmp/pp_e2e_it6.py sends the SAME admin SSH key as authd was
-     supplied via env var on first boot; the verify_ssh_key call
-     returns the admin's user_id. (When users table is non-empty, the
-     env var is ignored on subsequent boots — idempotent bootstrap.)
-     Subsequent users are NOT part of this subsection's done bar —
-     see auth.user-management (planned; admin_api still stubs).|) *)
    (details
     (doc (|
          Bootstrapping the first user, with no users yet:
@@ -269,15 +202,6 @@
   (subsection audit-log
    (doc "Every verification logged to auth_log")
    (status implemented)
-   (* agent note (|Implementation it5: auth/lib/store.ml's `audit_log`
-     INSERTs a row (user_id, kind, success, source_ip=NULL,
-     happened_at default now()) per verify_ssh_key call. Verified:
-     `/tmp/pp_e2e_it6.py` succession of one successful admin verify
-     + one denied verify leave behind two auth_log rows
-     (kind='ssh_key', success=t then f). Use cases from the spec text
-     below — synthesized log for anomalies (cred misuse, brute-force,
-     insider abuse) — are achievable with the existing log shape; a
-     future stats page on the supervisor admin could surface these.|) *)
    (details
     (doc (|
          Every call to verify_ssh_key, password
@@ -310,36 +234,6 @@
    (doc "How supervisor calls auth: internal signed/mTLS RPC")
    (implements supervisor/lib/auth_client.ml)
    (status deprecated)
-   (* agent note (|2026-07-12 status-reconcile: Supervisor+authd RPC retired by single-image pivot. Auth is in-process.|) *)
-   (* agent note (|Implementation it6/verified it6 onward. supervisor/
-     lib/auth_client.ml does an HTTP POST to authd's /verify_ssh_key
-     endpoint (hand-rolled HTTP/1.1 over plain Lwt_unix socket; reads
-     response bytes until `}` or EOF; parses JSON; returns Ok uid or
-     Denied). Fail-closed: any transport error logs + returns Denied.
-     End-to-end verified by /tmp/pp_e2e_it6.py through the dev.sh stack:
-     python connects to supervisor SSH stub :17822 → supervisor calls
-     authd → authd verifies → image spawned. The supervisor itself never
-     holds raw credentials in memory past the initial in-flight RPC call.
-     (See BORGE-1783389549 for the note that hand-rolled HTTP-over-socket
-     was needed because Lwt_io channels triggered EBADF mixed with raw
-     Lwt_unix.read/write on the same fd.)
-
-     DEFERRED from spec text: the actual spec doctrinal text below
-     describes a signed/mTLS RPC. v1 uses plain HTTP+JSON on the
-     internal network (loopback in dev, the inter-unikernel fabric in
-     prod). The internal network IS the trust boundary in v1: images,
-     supervisor, and authd share an isolated fabric; spoofing the
-     authd address requires being on the fabric.
-
-     Section marked `partial` until (1) a real mTLS or signed-token RPC
-     layer lands (a future hardening iteration that would let authd
-     REJECT unauthenticated supervisor RPCs — currently the
-     supervisor's identity is implicit via network position). Also
-     deferred: token-result passing through the supervisor (v1 returns
-     the user_id straight from the SSH verify RPC, no separate token
-     minting on the SSH path because the SSH session IS the auth).TOKEN
-     verification RPC IS implemented (authd /verify_token endpoint)
-     for the future web-login path.|) *)
    (details
     (doc (|
          The supervisor calls auth over an internal RPC
@@ -384,10 +278,6 @@
   (subsection multi-user-product
    (doc "COMPLETE multi-user product: many humans, each with identity, session, garden, authorship")
    (status partial)
-   (* agent note (|2026-07-12 status-reconcile: Session+branch multi-user works (many users, personal gardens, admin gates). Process isolation / fleet remains deferred; argon2 deferred. Not full complete-system isolation story.|) *)
-   (* agent note (|2026-07-12: authoritative multi-user auth product.
-     Replaces "single-tenant only" reading of single-image.auth.
-     Single-image = one binary to deploy; multi-user = many people.|) *)
    (verify
     (smoke "two users login independently; each sees own personal pins")
     (smoke "Alice define does not create own pin on Bob's branch")
@@ -612,7 +502,6 @@
   (subsection login-experience
    (doc "What log in means: I present credentials and land in MY live image")
    (status implemented)
-   (* agent note (|2026-07-12 status-reconcile: Login binds identity, ensure_personal + checkout personal, whoami is session user. Fleet attach deferred (single-image).|) *)
    (verify
     (smoke "human authenticates and lands on username/personal")
     (smoke "unknown credential denied; no image attach for stranger")
@@ -637,7 +526,6 @@
   (subsection web-login
    (doc "Browser password login, session cookie, middleware, logout")
    (status implemented)
-   (* agent note (|2026-07-12 status-reconcile: GET/POST /login, pp_session cookie, middleware, logout ship in image/lib/http.ml + auth_store.ml. Interim password hash sha256$ (BORGE-1783831698); argon2 still deferred.|) *)
    (implements image/lib/http.ml image/lib/session.ml)
    (verify
     (build "dune build")
@@ -691,13 +579,6 @@
    (doc "Public vs private HTTP routes: store-backed visibility + OCaml request gate")
    (status planned)
    (implements image/lib/http.ml image/lib/session.ml image/lib/store.ml migrations/006_route_visibility.sql)
-   (* agent note (|2026-07-12 plan: Today is_public_path is a hard OCaml
-     allowlist (/login /health /logout); every other path including all
-     Lisp (route ...) pages requires auth. Product needs opt-in public
-     user pages (share links, public study, landing) without making
-     /data /admin /api/eval world-readable. Extend existing launch gate
-     — do not invent Express-style middleware chains. Visibility is
-     data on view_bindings; OCaml enforces before handler runs.|) *)
    (verify
     (build "dune build image")
     (smoke "migration 006 adds view_bindings.visibility default private")
@@ -899,10 +780,6 @@
   (subsection user-management
    (doc "Admin creates and manages users and credentials")
    (status implemented)
-   (* agent note (|2026-07-12 status-reconcile: /admin/users create user, set password, revoke sessions; bootstrap_admin_if_empty. api_key/ssh_key credential UX still thin.|) *)
-   (* agent note (|admin_api create/list paths existed under authd;
-     complete system needs in-product /admin/users UI + password
-     credentials + revoke session, wired to the same users table.|) *)
    (verify
     (smoke "admin creates user + password; new user logs in on own personal")
     (smoke "non-admin cannot create users")
@@ -932,7 +809,6 @@
   (subsection identity-and-branch
    (doc "Session identity drives personal garden and authorship")
    (status implemented)
-   (* agent note (|2026-07-12 status-reconcile: ensure_personal_branch + checkout_personal at session make; define authorship uses username; agent_branch_lock exists.|) *)
    (verify
     (smoke "whoami equals session username after login")
     (smoke "define lands on username/personal")

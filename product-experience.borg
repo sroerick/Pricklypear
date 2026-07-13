@@ -5,14 +5,6 @@
  (section product-experience
   (doc "Human-facing product layer: concepts, access paths, legible vocabulary, first-run, horizon")
   (status partial)
-  (* agent note (|it32: PARTIAL overall. concepts-guide, vocabulary,
-    first-run-recipe implemented; access-paths: browser login now
-    in-image (auth.web-login path); horizon planned design-only.
-    2026-07-12: product shell layering — environment UI is Lisp;
-    OCaml is host/gate/emergency only (see image.system-browser).
-    2026-07-12: product theme Path B planned (image.product-theme,
-    BORGE-1783837363) — presentation is Lisp css/* sheets, not a
-    hard-coded OCaml CSS twin.|) *)
   (verify
    (build "dune build image")
    (smoke "GET /about teaches concepts; home offers first-run hello recipe")
@@ -47,8 +39,6 @@
   (subsection concepts-guide
    (doc "In-app about page: glossary, access, first tour, horizon summary")
    (status implemented)
-   (* agent note (|it32: IMPLEMENTED. GET /about + home link. Markdown
-     docs/concepts-and-horizon.md removed; .borg is source of truth.|) *)
    (verify
     (build "dune build image")
     (smoke "GET /about contains Image, Store, Function, Branch, Route, AI"))
@@ -90,10 +80,6 @@
   (subsection access-paths
    (doc "Documented ways humans reach a live image")
    (status implemented)
-   (* agent note (|2026-07-12 status-reconcile: Browser login, admin users, HTTP basic /api/eval, dev.sh PG+image, verify_auth path. Fleet/default real SSH deferred.|) *)
-   (* agent note (|2026-07-12: browser password login + session cookie
-     ship in-image (auth.web-login / multi-user-product Option B).
-     Still partial: edge nginx basic-auth, REPL path, fleet attach.|) *)
    (verify
     (smoke "GET /login form; POST /login mints pp_session")
     (smoke "scripts/verify_auth.sh or auth_product_smoke passes")
@@ -125,9 +111,6 @@
   (subsection vocabulary
    (doc "Friendly UI labels over systems jargon")
    (status implemented)
-   (* agent note (|it32: IMPLEMENTED. Nav/home/pages use Functions,
-     Pages, Data, Workspace. Lisp prim names unchanged. Smoke checks
-     home vocabulary.|) *)
    (verify
     (smoke "nav/home use Functions (not only Bindings) and point to /about"))
    (details
@@ -161,8 +144,6 @@
   (subsection first-run-recipe
    (doc "One-click or one-form 'make a hello page' onboarding")
    (status implemented)
-   (* agent note (|it32: IMPLEMENTED. POST /api/recipe/hello + home
-     button create hi-page + /hello route. Smoke: GET /hello works.|) *)
    (verify
     (build "dune build image")
     (smoke "POST /api/recipe/hello creates hi-page route; GET /hello works"))
@@ -193,17 +174,6 @@
     image/lib/session.ml
     image/static/codemirror
     scripts/public_artifacts.sh)
-   (* agent note (|2026-07-12: Public release ships ON the image (not brochure
-     static site). layout/* = reusable page blocks (NOT named public/* —
-     public is auth visibility only). Code browser is kernel read-only FS
-     + CodeMirror 5 mllike. PDF via borge book print at deploy; tarball
-     same allowlist as /code.|) *)
-   (* agent note (|2026-07-12 IMPLEMENTED+smoke: dune build image OK;
-     unauth GET /welcome 200 layout-hero; /code 200 CM5 tree;
-     /code/raw/pricklypear.borg 200; /book.pdf 200 (~1.1M);
-     /src.tgz 200 (~0.9M); path-as-is ../ escape 403;
-     /bindings 303→login; / 303→/welcome. scripts/public_artifacts.sh
-     writes book.pdf+src.tgz. Seed layout+welcome on system/main.|) *)
    (verify
     (build "dune build image")
     (smoke "unauth GET /welcome returns 200 with hero")
@@ -339,9 +309,6 @@
   (subsection horizon
    (doc "Long-term possible futures built on this substrate (design only)")
    (status planned)
-   (* agent note (|it32: design-only. Migrated from
-     docs/concepts-and-horizon.md. Not an implementation checklist;
-     guides prioritization and pitching.|) *)
    (details
     (doc (|
          Possible futures (not commitments):

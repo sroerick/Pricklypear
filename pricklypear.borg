@@ -1,22 +1,6 @@
 (project pricklypear
  (doc "A multi-user Lisp operating system in the Smalltalk tradition: OCaml image binary, Postgres object store, htmx UI. Many humans, each with session + personal garden. Deploy topology may be one binary (single-image.borg); multi-user product is auth.multi-user-product + multi-user.isolation.")
  (status partial)
- (* agent note (|it31 plan-pass #7 (product-truth reconciliation):
-  Demoted project status implemented -> partial. The substrate
-  (5 packages, 3 migrations, scripts/dev.sh, 92 alcotest cases,
-  end-to-end smoke path SSH/line-protocol -> authd -> image ->
-  REPL -> define -> call) IS real and green. That is not the same
-  as the v1 product experience bar. Project stays partial until a
-  user can: (1) log in without developer ceremony, (2) use base
-  functions in a live image, (3) create/edit functions from the
-  environment (not only raw REPL typing), and (4) optionally accept
-  AI-proposed functions on a branch. New planned product surfaces
-  added this pass: auth.login-experience, auth.web-login,
-  auth.user-management, image.system-browser, image.browser-repl,
-  image.function-editor, image.inspector, ai-authoring.*, and
-  branching.ast-nodes. Systems sections remain mostly partial/
-  implemented as before; type-system stays planned (typed fields
-  deferred). Solo5 target remains a v1.5 hardening axis.|) *)
  (verify
   (build "dune build @all — exit 0 across all 5 packages + spikes/awa_ssh")
   (test "dune runtest — 92 alcotest cases pass (lisp 30 + common 10 + auth 4 + image 48)")
@@ -93,9 +77,6 @@
    disagrees, the implementation is wrong.
   |)
  )
- (* agent note (|it34 overnight foundation: monolithic pricklypear.borg split
-  into chapter files for literate book structure. Root inlines each chapter
-  project in book order. Backup: pricklypear.borg.monolith.bak.|) *)
  (section philosophy
   (doc "Book chapter — full text inlined from philosophy.borg")
   (inline philosophy.borg)

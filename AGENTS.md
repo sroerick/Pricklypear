@@ -152,19 +152,16 @@ auth is **in-process** in the image (Option B / auth.web-login).
 
 ## Conventions (mirrors the spec's `workflow.conventions`)
 
-- OCaml / dune, `mirage/unix` processes for v1 (Solo5 target deferred to
-  v1.5 per the Phase 1 probe at `spikes/mirage_solo5/`)
-- Lwt for all unikernel I/O (the it12 refactor made `Eval.eval` itself
+- OCaml / dune, single unix image process for v1 (Solo5 optional later —
+  `spikes/mirage_solo5/`, not the product path)
+- Lwt for image I/O (the it12 refactor made `Eval.eval` itself
   `value Lwt.t` — pure prims wrap results in `Lwt.return` via a
   `register_sync` helper at registration time)
 - `pure-html` for HTML generation; use `HTML.Hx.*` not raw htmx attribute
   strings (poohstack rule, preserved here via pure-html). Use
   `txt ~raw:true "%s" s` for raw-HTML injection (escape-bypass path);
   there is NO `Pure_html.of_string` — pure-html is tree-only.
-- `httpaf-lwt-unix` direct for HTTP (NOT `httpaf-mirage` — that package
-  doesn't exist on opam; the spec's transport-choices text is inaccurate,
-  see BORGE-1783439434. The future Mirage path is `gluten-mirage` +
-  `httpaf`, not pre-installed on poohstack)
+- `httpaf-lwt-unix` for HTTP; `pgx_lwt` + custom Io_unix for Postgres (no ORM)
 - `pgx_lwt` + custom `Io_unix` shim for Postgres in v1 (NOT
   `pgx_lwt_mirage`; v1 uses POSIX-flavored libs. `pgx_lwt_mirage` IS
   installed v2.2 but needs a real `Tcpip.Stack.V4V6` device). No ORM,
@@ -173,7 +170,7 @@ auth is **in-process** in the image (Option B / auth.web-login).
   functor; the `(with-transaction (lambda () body))` prim (it29) gives
   Lisp code a session-level transaction scope so `(select-for-update ...)`
   row locks persist across subsequent prims in the body.
-- Additive-only schema migrations; the supervisor's migration runner uses
+- Additive-only schema migrations; the migration runner uses
   `split_sql_statements` (handles dollar-quoted `$$...$$` blocks,
   single-quoted strings, `--` line comments, multi-statement splits —
   the pgx prepared-statement protocol can't do multi-statement natively).

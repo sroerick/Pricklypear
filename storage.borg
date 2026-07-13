@@ -5,32 +5,10 @@
  (section storage
   (doc "Postgres schema: branches, function_defs, type_defs, sessions. SERIALIZABLE defaults. NO inheritance.")
   (status implemented)
-  (* agent note (|Iteration 30 (2026-07-06) plan-pass #6: section status
-    lifted partial -> implemented. All four subsections are now
-    `implemented`: schema (it2), no-inheritance (it9), transactions
-    (SERIALIZABLE defaults it16 + select-for-update it17 + with-transaction
-    it29 + dynamic-tx-scope it29). The ONE remaining v1.5 ergonomics
-    addition is the opt-in weaker-isolation `(query ... isolation:
-    'read-committed)` passthrough (the with-transaction prim already
-    accepts the isolation arg shape, defaulting to SERIALIZABLE; the
-    weaker-isolation passthrough is additive when shipped). This is not
-    a v1 necessity; remember per-subsection details below for the
-    fine-grained status narrative.|) *)
   (subsection schema
    (doc "Core tables (in migrations/001_branches.sql)")
    (implements image/lib/store.ml supervisor/lib/store.ml auth/lib/store.ml)
    (status implemented)
-   (* agent note (|Schema lives in migrations/001_branches.sql (branches,
-     function_defs, type_defs, view_bindings, sessions,
-     schema_migrations) and migrations/003_data.sql (the shared
-     `data_rows` table for user-declared types). All SQL
-     applied cleanly by the supervisor's migration runner
-     (which owns `split_sql_statements` to work around pgx's
-     multi-statement prepared-statement protocol limitation —
-     see BORGE-1783527733). SERIALIZABLE-by-default lives in
-     image/lib/store.ml's `Store.with_transaction`. Verified
-     end-to-end against the temp PG 18.4 cluster at /tmp/pp-pgsup:
-     11 tables created, migrations idempotent on re-run.|) *)
    (details
     (doc (|
          -- The shared code store
@@ -115,17 +93,6 @@
   (subsection no-inheritance
    (doc "Why we do NOT use Postgres INHERITS")
    (status implemented)
-   (* agent note (|Confirmed in code (it1-it16): no INHERITS in any
-     migration; plain tables with `branch_id` FK + PRIMARY KEY
-     (branch_id, name). The override semantics the spec describes
-     is realized via a recursive-CTE walk up the parent chain
-     (closest-ancestor-wins), used in `Store.lookup_function`,
-     `Store.list_function_names`, `Store.list_routes`,
-     `Store.list_types`, and the CRUD data-row lookups. Override-vs-
-     union behavior verified end-to-end by /tmp/pp_override_it9.py:
-     alice/experiment overrides `greet`; system/main's `greet` is
-     unchanged (branch isolation), alice's session sees alice's
-     version (override wins).|) *)
    (details
     (doc (|
          Postgres table inheritance (INHERITS) is the
@@ -179,23 +146,6 @@
   (subsection transactions
    (doc "Transaction isolation: SERIALIZABLE by default")
    (status implemented)
-   (* agent note (|Iteration 30 (2026-07-06) plan-pass #6: status lifted
-     partial -> implemented. All v1 sub-features of this section are now
-     built and smoke-tested: SERIALIZABLE-by-default (it16), explicit
-     row locks via `(select-for-update 'type id)` (it17), and dynamic
-     transaction scoping via `(with-transaction (lambda () body))` (it29)
-     which gives select-for-update real cross-statement locking scope.
-     Rollback behavior verified end-to-end on live PG.
-
-     The ONE remaining unbuilt sub-feature is the opt-in weaker-isolation
-     `(query ... isolation: 'read-committed)` passthrough — a v1.5
-     ergonomics addition, not a v1 necessity. The `with-transaction` prim
-     already accepts the `isolation` arg shape (defaults to SERIALIZABLE);
-     lifting the v1.5 passthrough is purely additive when shipped.
-
-     Cache coherence (initial, NO caching — each call reads fresh from
-     PG) is the current reality and is implemented as documented.
-     LISTEN/NOTIFY-based invalidation is still deferred (later).|) *)
    (details
     (doc (|
          All Lisp-driven mutations run in SERIALIZABLE
@@ -242,15 +192,6 @@
   (subsection with-transaction
    (doc "Dynamic transaction scoping: (with-transaction (lambda () body))")
    (status implemented)
-   (* agent note (|Iteration 29 (2026-07-06): Option A from BORGE-1783438027
-     landed. Adds session-level dynamic transaction binding via a mutable
-     `current_tx : Pg.t option` field on `Store.t`; prims use
-     `Store.current_conn t` so they see the in-tx conn automatically.
-     New `with_transaction` special form in lisp/eval.ml dispatches the
-     lambda body through a privately-named `__with_transaction__` prim
-     registered from session.ml (keeps lisp/ pure-I/O-free). Nested
-     transactions raise a clean Interp_error. Body value passes through
-     verbatim. Borge issue BORGE-1783438027 status: triage -> resolved.|) *)
    (details
     (doc (|
          Dynamic transaction scope: all DB prims called inside the

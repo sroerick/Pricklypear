@@ -5,11 +5,6 @@
  (section branching
   (doc "Branches as the fundamental organizational primitive: code branches, shared data, fork/merge")
   (status partial)
-  (* agent note (|Section overall `partial` as of personal-workspace plan:
-    fork = implemented, merge = partial, schema-authority = partial,
-    personal-workspace = implemented (boot + seed-on-main),
-    package-updates / promote / branch-browser-ui = planned.
-    Per-subsection status below carries the per-feature detail.|) *)
   (details
    (doc (|
         Branches are to Pricklypear what files are to
@@ -54,12 +49,6 @@
   (subsection ast-nodes
    (doc "Design: addressable AST nodes as substrate for surgical edits and AI patches")
    (status planned)
-   (* agent note (|it31 plan-pass #7: NEW planned design subsection,
-     elevating BORGE-1783398327 out of bugs-only limbo. Not required
-     for v1 product cut (whole-function define/edit/AI propose is
-     enough). Captures the 'nodes as substrate, named branchable
-     subtrees as versioning unit' proposal so future plan/make work
-     has a home. No schema migration until explicitly planned.|) *)
    (details
     (doc (|
          TODAY: two trees, two models
@@ -92,17 +81,6 @@
   (subsection fork
    (doc "Forking a branch")
    (status implemented)
-   (* agent note (|Implementation it9 (2026-07-06); hardened with a
-     SERIALIZABLE transaction in it16. The 3-step implementation
-     matches the spec text below exactly: INSERT branches row,
-     INSERT function_defs copy, INSERT type_defs copy, INSERT
-     view_bindings copy. All 4 statements run in a single
-     `Store.with_transaction` (it16) — atomic, pgx-rolled-back on
-     exception. The primitive is a normal Lwt-typed prim registered
-     via `register_session_control_prims` (it12); its return value
-     is the new branch UUID. Smoke test `/tmp/pp_fork_it9.py` exercises
-     the full lifecycle; `/tmp/pp_override_it9.py` exercises the
-     branch isolation half of fork semantics.|) *)
    (details
     (doc (|
          (fork 'main 'alice/experiment)
@@ -136,31 +114,6 @@
   (subsection merge
    (doc "Merging a branch into its parent")
    (status partial)
-   (* agent note (|Implementation it10 (2026-07-06); hardened with a
-     SERIALIZABLE transaction in it16. The current implementation
-     does the basic case: INSERT INTO function_defs SELECT ... FROM
-     function_defs WHERE branch_id=source ON CONFLICT (branch_id,
-     name) DO UPDATE — full-source-to-target upsert of function_defs.
-     Returns `merged N rows` count via INSERT RETURNING.
-     Policy enforced at the Lisp prim layer (session.ml):
-     admin-only merges TO system branches (owner="system"),
-     per-user can merge into their own branches freely. Verified
-     end-to-end by /tmp/pp_merge_it10.py (both happy-path and
-     policy-rejection).
-
-     NOT YET IMPLEMENTED (deferred — these are nicer-to-haves over
-     the basic merge):
-     (1) diff-based merge (only fns whose updated_at > parent's
-         last_synced_with_child, OR whose name was added in child).
-     (2) per-function conflict detection (parent ALSO modified same
-         name since fork → conflict surfacing).
-     (3) type_defs schema-merge governance (only main accepts
-         schema changes via migration-governed merge).
-     (4) the real htmx inspector UI for per-function conflict
-         resolution.
-
-     Section marked `partial` until at least (1) and (2) land; (3)
-     and (4) are explicitly v2+ features.|) *)
    (details
     (doc (|
          (merge 'alice/experiment 'alice/main)
@@ -198,28 +151,6 @@
   (subsection schema-authority
    (doc "Types in main, branches read against main's schema")
    (status partial)
-   (* agent note (|Partially implemented as of it14 (2026-07-06): the
-     `(deftype 'name 'field1 ...)` prim lands type declarations into
-     the `type_defs` table on the current branch; `Store.list_types`
-     walks the recursive-CTE override chain so ancestor type
-     declarations are visible to descendant branches (the read side
-     of "branches read against main's schema"). The /types system page
-     surfaces them in the UI.
-
-     NOT YET IMPLEMENTED (deferred — explicitly v2+):
-     (1) the migration-governed schema-change accept flow ("only
-         main accepts schema changes via a special merge that runs
-         the migration"). Currently any admin-author on the system
-         branch can run (deftype ...) directly.
-     (2) schema_version bump + cache-invalidation broadcast on
-         schema change (LISTEN/NOTIFY or schema_version check).
-     (3) governance policy for proposed-vs-accepted schema changes
-         across non-system branches.
-
-     The read side (recursive-CTE type lookup) IS implemented and
-     spec-text-aligned. Marked `partial` until at least the
-     migration-governed merge-to-main accept flow and the
-     schema_version invalidation hook land.|) *)
    (details
     (doc (|
          Schema authority is 'main'. Branches CANNOT change
@@ -251,10 +182,6 @@
   (subsection personal-workspace
    (doc "Boot on empty <user>/personal; seed package defaults only onto system/main")
    (status implemented)
-   (* agent note (|Shipped a934445 / 42f755b: Store.ensure_branch creates
-     EMPTY children; seed_stdlib uses Store.with_branch system/main;
-     boot ensure_personal → seed main → checkout personal → rehydrate
-     via Define AST (no pp_expr round-trip).|) *)
    (details
     (doc (|
          PROBLEM: reseeding libs/*.pp onto the active branch
@@ -290,7 +217,6 @@
   (subsection package-updates
    (doc "How software updates work: kernel vs main packages vs personal pins")
    (status partial)
-   (* agent note (|2026-07-12 status-reconcile: Kernel vs main seed vs personal pins behavior is real (seed_stdlib→system/main, personal inherits). unoverride prim + conscious update UX still planned.|) *)
    (details
     (doc (|
          THREE CHANNELS (not one monolithic version):
@@ -384,7 +310,6 @@
   (subsection branch-browser-ui
    (doc "Git-like light /branches browser: list, open, stats, checkout, promote")
    (status partial)
-   (* agent note (|2026-07-12 status-reconcile: GET /branches bare table exists. Checkout/stats/detail/promote UI still planned.|) *)
    (implements image/lib/http.ml image/lib/store.ml image/lib/session.ml)
    (details
     (doc (|

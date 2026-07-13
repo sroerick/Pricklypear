@@ -5,23 +5,6 @@
        One process. One binary. One deployment. Multi-user at the
        session/branch layer (not process isolation).")
  (status implemented)
- (* agent note (|2026-07-12 status-reconcile: single-image pivot IS the running system. supervisor/
-    and auth/ packages retired; image owns auth + HTTP + REPL; scripts/dev.sh
-    applies migrations and starts PG+image only. Multi-user remains at the
-    session/branch layer (auth.multi-user-product), not process isolation.
-    Deploy docs still mention legacy rc.d names in places — runtime is one
-    image binary.|) *)
- (* agent note (|it35 plan pass: this chapter is the architectural
-                  pivot requested by roerick on 2026-07-11. The
-                  MirageOS unikervisor + per-user spawn model is
-                  retired. The image becomes a plain OCaml `unix'
-                  binary: one process serving htmx HTTP directly,
-                  talking to Postgres, reading its identity from env.
-                  No supervisor. No authd sidecar. No fleet. No Solo5.
-                  No multi-user process isolation. 2026-07-12: make pass
-                  completed — supervisor/auth packages retired; image is
-                  the sole binary. Multi-user remains via auth sessions +
-                  personal branches.|) *)
  (convention ocaml-dune)
  (section single-image
   (doc "The pivot: one process, single-tenant, no Mirage abstraction")
@@ -184,9 +167,6 @@
   (subsection auth
    (doc "Identity without requiring authd as a second always-on binary")
    (status implemented)
-   (* agent note (|2026-07-12: NOT single-tenant-only. Multi-user product
-     is auth.multi-user-product. This subsection only constrains whether
-     verify runs in-process or as a separate authd.|) *)
    (details
     (doc (|
       MULTI-USER is required (many humans, personal gardens).

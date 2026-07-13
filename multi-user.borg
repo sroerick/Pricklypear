@@ -5,42 +5,13 @@
         system. single-image.borg is about shipping ONE binary, not
         one human. Do not read single-image as cancelling multi-user.")
  (status partial)
- (* agent note (|2026-07-12: PRODUCT CORRECTION. Multi-user is not
-                  deprecated. it35 single-image pivot retired the pain
-                  of coordinating three always-on daemons for deploy;
-                  it did not cancel multi-user product. Isolation-by-
-                  process remains the isolation model. Auth multi-user
-                  product is specified in auth.multi-user-product.|) *)
  (convention ocaml-dune)
  (section multi-user
   (doc "Per-user image instances, namespaces via branch ownership, budgets, author-runs-as-author")
   (status partial)
-  (* agent note (|it31 plan-pass #7: section overall partial.
-    isolation = implemented; namespaces = partial (no cross-branch
-    qualified calls); budgets = partial (step budget SHIPPED in eval,
-    memory/raise-budget deferred — earlier notes wrongly said planned/
-    missing); permissions = partial (author column + admin merge yes,
-    runtime setuid + row scoping no). User-facing multi-user model is
-    in place at process/branch level; finer permission semantics remain.|) *)
   (subsection isolation
    (doc "Process-level isolation: one image per user")
    (status implemented)
-   (* agent note (|Implementation it6 / verified it6 onward: the
-     supervisor's `Fleet.boot` (supervisor/lib/fleet.ml) spawns a
-     per-user image (unix process) on SSH connect and sets
-     PP_USER_ID/USERNAME/BRANCH_ID/BRANCH_NAME env vars so each
-     image boots as the verified user. Auth is the separate authd
-     unikernel (auth/) that verifies the SSH key via the auth RPC;
-     the supervisor never sees raw credentials, just gets back the
-     user_id or denial. The image trusts the supervisor's identity
-     claim via PP_USER_ID (the internal network is the trust
-     boundary). End-to-end verified by /tmp/pp_e2e_it6.py: admin's
-     SSH key → auth verifies → supervisor spawns image inst-001 →
-     REPL proxy → (define square (lambda (x) (* x x))) → (square 7)
-     -> 49. An infinite loop OR bad function in alice's image takes
-     only alice's image offline; the supervisor's other connections
-     (admin, other users) are unaffected (each is its own Lwt.async
-     per supervisor/lib/ssh.ml's per-connection dispatch).|) *)
    (details
     (doc (|
          Multi-user is achieved by giving each user their
@@ -82,11 +53,6 @@
   (subsection namespaces
    (doc "Branch ownership namespaces; packages are a separate in-branch axis")
    (status partial)
-   (* agent note (|Branch half implemented: no privileged 'common';
-     key (branch_id, name); fork/override/merge verified.
-     2026-07-11: clarify ORTHOGONAL image.packages (prefix packages
-     like todo/list) — not this subsection's job. Cross-branch
-     qualified calls still deferred.|) *)
    (details
     (doc (|
          TWO AXES (do not conflate):
@@ -126,27 +92,6 @@
   (subsection budgets
    (doc "Per-call step budgets to bound runaway user code")
    (status partial)
-   (* agent note (|it31 plan-pass #7: corrected stale it23 note.
-
-    SHIPPED:
-    (1) Process isolation — each user gets their own image process
-        via Fleet.boot; a wedged image only takes that user offline.
-    (2) Per-call evaluator step budget — lisp/lib/eval.ml ticks a
-        budget at every recursive eval step; default_limit 100_000;
-        raises Budget_exceeded for that call. Earlier notes claiming
-        "step budget NOT shipped" were wrong after the budget code
-        landed in eval.
-
-    STILL DEFERRED (keeps section partial):
-    - Memory-budget tracking per session/call
-    - Explicit primitive to raise budget for a legitimate long
-      sub-call, with audit logging
-    - Configurable per-session default budget from manifest/config
-    - Supervisor-side kill/restart automation when an image is
-      wedged despite budgets (health auto-restart loop)
-
-    Step budget + process isolation are the two load-bearing layers
-    for runaway-code defense today.|) *)
    (verify
     (build "dune build @all")
     (smoke "scripts/dev.sh start + ssh admin@host -p 12223 boots an isolated image process"))
@@ -181,43 +126,6 @@
   (subsection permissions
    (doc "Author-runs-as-author: functions execute with their author's data perms")
    (status partial)
-   (* agent note (|Partially implemented as of it19 plan-pass #3.
-
-     IMPLEMENTED (the OCaml-side governance half):
-     - Admin-only merges to system branches IS enforced (it10; see
-       branching.merge) — this is half of the "admin owns main /
-       merges require admin approval" permissions story.
-     - function_defs and type_defs carry an `author` text column,
-       populated from manifest.username at (define ...) / (deftype ...)
-       / (route ...) time. Store.lookup_function + list_function_names
-       return author alongside the body; it's surfaced in the
-       /binding/<name> system page UI.
-     - `(current-author)` prim is registered (it7) returning the
-       session user — the FIRST HALF of the spec's author-runs-as-
-       author pattern (reading the author for visibility).
-
-     NOT YET IMPLEMENTED (the runtime-permission half):
-     - `(current-author)` is the SESSION user, NOT "the executed
-       binding's author" — the interpreter does NOT thread the
-       AUTHOR of the currently-executing binding through eval.
-       So a function authored by alice and called by bob runs as
-       bob (the session user), NOT as alice. This is a meaningful
-       security gap from the spec's setuid model: alice-authoring a
-       function that reads her calendar and bob calling it would
-       read bob's calendar today (or fail), not alice's.
-     - Data prims (get/create/update/delete/rows) do NOT consult
-       current-author for permission filtering — they operate on
-       the shared `data_rows` table without per-author row scoping.
-       In v1 every image sees every row in its data_rows-table shape;
-       isolation depends on per-user PG roles or per-user tables,
-       which isn't wired yet (data_rows is schema-shared).
-
-     Section marked `partial` until the runtime-author-threading +
-     per-author row scoping lands. v1 ships the SECURITY MODEL
-     halfway: governance policy (admin-only merges) yes; runtime
-     setuid semantics no. Documented honestly so a perusing user
-     knows what NOT to assume about a privileged function's blast
-     radius today.|) *)
    (details
     (doc (|
          A function executes with ITS AUTHOR's data

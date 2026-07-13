@@ -1,0 +1,7 @@
+(borge-bug (id "BORGE-1783910405")
+  (title "Docs cleanup 2026-07-12: stripped ~133 historical agent notes from chapter .borg files; philosophy rewritten for single-image. Retained open planned gaps in subsections (type-system, promote, roam, dabar FTS, review-merge, argon2). Solo5/process-isolation remains spikes/ + horizon only — not v1 principles.")
+  (status triage)
+  (created 2026-07-12)
+  (filed-by roerick)
+  (doc "")
+)

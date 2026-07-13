@@ -4,9 +4,7 @@
  (convention ocaml-dune)
  (section migrations
   (doc "Schema evolution: supervisor-applied, additive-only, schema authority in main")
-  (* agent note (|plan-pass #4 (it20): migrations shipped. supervisor/lib/store.ml's migration runner (Run_pending_migrations + split_sql_statements) applies 001_branches.sql + 002_auth.sql + 003_data.sql idempotently tracked via schema_migrations table, blocking image boot until applied (verified it4 supervisor smoke test + it5 auth smoke test + it6 e2e). Spec-consistent: 11 tables across 3 migrations, all additive. The type_defs-merged-to-main -> emitted-DDL migration (the second ordering paragraph in applied-by-supervisor's doc text) is NOT yet built — v1 uses a single generic data_rows table for all user-declared types (migration 003), sidestepping the per-type-DDL emission machinery. That sub-feature is what keeps this section at `partial` rather than `implemented`. See BORGE-1783433175 for the comprehensive plan-pass rationale.|) *)
   (status partial)
-  (* agent note (|2026-07-12 status-reconcile: Additive SQL migrations 001–005 real. DDL emission from type_defs still deferred.|) *)
   (verify
    (build "dune build supervisor")
    (build "psql ... — SELECT count(*) FROM schema_migrations expects 3")
@@ -14,8 +12,6 @@
   (subsection applied-by-supervisor
    (doc "Supervisor owns schema state before any image boots")
    (status partial)
-   (* agent note (|2026-07-12 status-reconcile: Single-image: scripts/dev.sh (and deploy hooks) apply 001–005 SQL, not supervisor. type_defs→DDL emission still absent; keep partial.|) *)
-   (* agent note (|it20: IMPLEMENTED — supervisor's Run_pending_migrations in supervisor/lib/store.ml creates schema_migrations if missing, reads applied versions, applies pending .sql files (001, 002, 003 declared statically) in order. Each migration is split via the hand-rolled split_sql_statements (handles single-quoted strings, dollar-quoted $$ blocks, -- comments — see BORGE-1783527733). Idempotent: re-applying is a no-op (no duplicate schema_migrations rows). Verified end-to-end by /tmp/pp_e2e_it6.py through scripts/dev.sh. The NOT-yet-built half: migrations EMITTED FROM type_defs merged to main — v1 uses a single shared data_rows table (migration 003) instead of per-type-DDL emission, so the type-declaration -> DDL migration machinery doesn't exist.|) *)
    (details
     (doc (|
          The SUPERVISOR, not the image, runs migrations.
@@ -72,7 +68,6 @@
   (subsection additive-only
    (doc "Schema changes can ADD, not remove or rename")
    (status implemented)
-   (* agent note (|it20: IMPLEMENTED by policy — all 3 migrations (001_branches.sql, 002_auth.sql, 003_data.sql) are strictly additive: CREATE TABLE statements only, no DROP COLUMN, no RENAME, no ALTER COLUMN TYPE except column additions with sensible defaults. Migration 002 added DEFAULT gen_random_uuid() on all id columns during the it5 fix. No non-additive migrations exist in migrations/. The runtime type_defs -> data_rows story (v1: a shared generic table holds all user-declared types as JSONB) is itself additive — new types add rows, not DDL. (See BORGE-1783432745.)|) *)
    (verify
     (build "grep -rE 'DROP|RENAME|ALTER COLUMN TYPE' migrations/ = 0 matches")
     (smoke "all 3 migrations idempotently re-appliable"))
@@ -117,18 +112,6 @@
   (subsection branching-interaction
    (doc "How migrations interact with branches")
    (status partial)
-   (* agent note (|it31 plan-pass #7: corrected factual error in it20 note.
-    IMPLEMENTED — migrations only touch shared data tables (data_rows has
-    no branch_id; shared across branches per branching.data). A branch can
-    propose a type change via (deftype ...); recursive-CTE lookup makes
-    ancestor type_defs visible. schema_vers DOES exist on type_defs in
-    migrations/001_branches.sql (integer NOT NULL DEFAULT 1, plus migrated
-    boolean) — earlier notes wrongly claimed the column was missing.
-    NOT IMPLEMENTED — runtime validation against schema_vers / main field
-    set ("field X not in current main schema"), cache invalidation on
-    schema change, and type_defs-merge-emitted DDL. v1 data_rows still
-    accepts any jsonb fields bag for any type_name. schema_vers column is
-    schema-ready; enforcement is the remaining partial.|) *)
    (details
     (doc (|
          Migrations only apply to the SHARED data tables
