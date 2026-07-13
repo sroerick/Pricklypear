@@ -40,7 +40,7 @@
           (html/join
             (list
               (html/p "After you log in (or from scripts/repl.sh against a local image):")
-              (html/ol ""
+              (html/tag "ol" ""
                 (html/join
                   (list
                     (html/li "" (html/code "scripts/repl.sh"))
