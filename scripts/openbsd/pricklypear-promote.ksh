@@ -81,18 +81,26 @@ if [ ! -f "${config_file}" ]; then
   log "created ${config_file} from example — edit secrets before relying on boot"
 fi
 
-# Point PP_IMAGE_BIN at the current release (unused by run-image.ksh directly,
-# but kept for operators / scripts that read it).
-if grep -q '^PP_IMAGE_BIN=' "${config_file}" 2>/dev/null; then
-  tmpf="${config_file}.new"
-  sed "s|^PP_IMAGE_BIN=.*|PP_IMAGE_BIN=${current_link}/bin/image|" \
-    "${config_file}" > "${tmpf}"
-  mv "${tmpf}" "${config_file}"
-  chown root:"${config_group}" "${config_file}"
-  chmod 640 "${config_file}"
-else
-  print -- "PP_IMAGE_BIN=${current_link}/bin/image" >> "${config_file}"
-fi
+# Point release paths at the current symlink (operators + run-image defaults).
+ensure_env_key() {
+  key="$1"
+  val="$2"
+  if grep -q "^${key}=" "${config_file}" 2>/dev/null; then
+    tmpf="${config_file}.new"
+    # OpenBSD sed: rewrite the key line
+    sed "s|^${key}=.*|${key}=${val}|" "${config_file}" > "${tmpf}"
+    mv "${tmpf}" "${config_file}"
+  else
+    print -- "${key}=${val}" >> "${config_file}"
+  fi
+}
+ensure_env_key PP_IMAGE_BIN "${current_link}/bin/image"
+ensure_env_key PP_LIBS_DIR "${current_link}/libs"
+ensure_env_key PP_SOURCE_ROOT "${current_link}/src"
+ensure_env_key PP_STATIC_DIR "${current_link}/static"
+ensure_env_key PP_PUBLIC_DIR "${current_link}/public"
+chown root:"${config_group}" "${config_file}"
+chmod 640 "${config_file}"
 
 if [ -L "${current_link}" ]; then
   previous_target="$(readlink "${current_link}")"
