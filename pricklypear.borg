@@ -30,9 +30,9 @@
 
         My background is largely as a python CRUDmonkey, hence my interest in 
         reinventing frameworks. I did a lot of data processing elbow grease 
-        work. I was CTO of a 13 person startup for a while. when I left that 
+        work. I was CTO of a 13 person startup for a while. When I left that 
         job I was pretty burnt out. I didn't think I enjoyed programming, 
-        but i still was obsessed with the idea of maybe I could make it easier. 
+        but I still was obsessed with the idea of maybe I could make it easier. 
 
         Then I found OCaml. Functional programming did it for me, man. It was 
         like learning to program all over again. I started learning about all the 
@@ -40,7 +40,7 @@
         low level languages. I took a freelance gig doing static analysis on 
         IBM HLASM assembly language. 
 
-        The only think I really wanted from code? I wanted to build 
+        The only thing I really wanted from code? I wanted to build 
         my dream zettelkasten. I just wanted a good notes app for my bible study.
         First I built a bible mode in Obsidian with markdown files. But as soon 
         as I tried to get Strong's Concordance in there, I absolutely hit the 
@@ -48,7 +48,7 @@
         LLMs were barely functional at this time, and they were really bad at lisp. 
         This was the "copy and paste from ChatGPT" era. My emacs / org-roam 
         zettelkasten worked amazingly. Honestly, I love emacs and I love org-roam. 
-        Absolutely beautiful peices of software. I also love the sense of calm that 
+        Absolutely beautiful pieces of software. I also love the sense of calm that 
         I get with emacs software. I pulled up this bible app in emacs 4 years later
         and it just... worked. Amazingly. None of the constant churn of the JS 
         ecosystem. 
@@ -75,7 +75,7 @@
         yet again, but I had a good feeling about this one. I had the LLM draw out 
         my Borge spec, and then started a ralph loop. I think it went for like, 25
         iterations? It ran for 4 days and it crashed a couple times and I think I 
-        maxxed out three different providers. It used a lot of tokens. I got an 
+        maxed out three different providers. It used a lot of tokens. I got an 
         email from one of my LLM providers the next day letting me know they were 
         tripling their costs.
 
@@ -222,7 +222,7 @@
     to this thing. Also I think the language itself is called Nopales, 
     but that isn't reflected anywhere right now. There is some sort of 
     rudimentary effects system. I have no idea how it works. I don't really 
-    understand the subtlties of async, and the OCaml landscape is pretty
+    understand the subtleties of async, and the OCaml landscape is pretty
     confusing.
 
     I want to really polish up the node editor and the code editor. 
