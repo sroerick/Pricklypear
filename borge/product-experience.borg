@@ -195,10 +195,13 @@
 
            /welcome   — landing (Lisp layout/* + welcome/page)
            /code      — read-only source browser (kernel + CM5)
-           /book      — book explainer (Lisp)
            /book.pdf  — borge book print artifact
            /src.tgz   — pruned source tarball
            /login     — enter the private workspace
+
+         /book (HTML explainer) is NOT public-facing — PDF + /code
+         cover the literate book story. Any welcome/book page is
+         private workspace chrome only, not a front-door path.
 
          Workspace home (/) stays HARD PRIVATE. Anon hitting /
          redirects to /welcome (or login with next=); logged-in
@@ -218,21 +221,24 @@
            layout/cta href label
            layout/theme  — css/sheet rules for .layout-*
 
-         Seeded on system/main; used by welcome and book pages.
+         Seeded on system/main; used by welcome (and private) pages.
          Personal gardens may override layout/* like any package.
 
          =========================================================
-         WELCOME + BOOK PAGES (libs/welcome)
+         WELCOME PAGE (libs/welcome)
          =========================================================
          welcome/page  — compose layout/* into landing
-         welcome/book  — short PDF + tarball explainer
          (public-route "/welcome" "welcome/page")
-         (public-route "/book" "welcome/book")
+
+         welcome/book may exist as a private helper, but MUST NOT be
+         registered public and MUST NOT be a SYSTEM_HARD_PUBLIC path.
+         Reseed should (route "/book" … 'private) or drop the binding
+         so older public /book rows flip closed on deploy.
 
          Also register hard-public kernel paths so the front door
          works even if seed/route table is empty (belt + suspenders):
-         /welcome /book are hard-public and dispatch to Lisp when
-         bound, else a minimal kernel fallback page.
+         /welcome is hard-public and dispatches to Lisp when bound,
+         else a minimal kernel fallback page.
 
          CTAs: Explore source → /code ; Download book → /book.pdf ;
          Source tarball → /src.tgz ; Log in → /login.
@@ -288,9 +294,10 @@
          AUTH GATE EXTENSIONS
          =========================================================
          SYSTEM_HARD_PUBLIC gains:
-           /welcome /book /book.pdf /src.tgz
+           /welcome /book.pdf /src.tgz
            /code and /code/*
            /assets and /assets/*
+           (/book is NOT hard-public)
 
          Still HARD PRIVATE: / /bindings /edit /repl /data /api
          /admin /branches /types /pages /agent …

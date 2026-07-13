@@ -569,9 +569,10 @@
 
          HARD PUBLIC (kernel, not user-route table):
            /login /health /logout
-           /welcome /book /book.pdf /src.tgz
+           /welcome /book.pdf /src.tgz
            /code /code/*  /assets /assets/*
-           (public release face — product-experience.public-release)
+           (public release face — product-experience.public-release;
+            /book HTML explainer is private, not hard-public)
          User-route public/private: auth.route-visibility.
     |))
    )
@@ -626,11 +627,12 @@
 
             A. SYSTEM_HARD_PUBLIC
                /login  /health  /logout
-               /welcome /book /book.pdf /src.tgz
+               /welcome /book.pdf /src.tgz
                /code and /code/*
                /assets and /assets/*
                (extend only by OCaml change; see
-                product-experience.public-release)
+                product-experience.public-release;
+                /book is NOT hard-public)
 
             B. SYSTEM_HARD_PRIVATE
                Always require identity (Lisp cannot open these):

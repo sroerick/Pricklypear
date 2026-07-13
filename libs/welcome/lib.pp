@@ -1,6 +1,7 @@
 ;; Public front door pages — uses layout/* components.
 ;; Registered public so anonymous visitors can read them.
-;; Kernel also marks /welcome /book hard-public (belt + suspenders).
+;; Kernel also marks /welcome hard-public (belt + suspenders).
+;; /book is private — PDF + /code are the public book story.
 
 (define welcome/page
   (lambda ()
@@ -70,7 +71,7 @@
                   (list
                     (layout/cta "/code" "Code browser")
                     " "
-                    (layout/cta "/book" "About the book")
+                    (layout/cta "/book.pdf" "Book PDF")
                     " "
                     (layout/cta "/login" "Sign in")))))))
         (html/div
@@ -111,7 +112,8 @@
           (html/a "/welcome" (html/text "← welcome")))))))
 
 (public-route "/welcome" "welcome/page")
-(public-route "/book" "welcome/book")
+;; /book explainer is not public-facing; reseed flips any prior public row.
+(route "/book" "welcome/book" "private")
 
 ;; Author voice essays (from root pricklypear.borg roerick notes).
 

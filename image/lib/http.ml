@@ -143,13 +143,12 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
             (match result with
              | Some value ->
                  (* Public front-door pages: no product chrome (private nav). *)
-                 if path = "/welcome" || path = "/book"
+                 if path = "/welcome"
                     || path = "/background" || path = "/roadmap"
                     || path = "/signup"
                  then begin
                    let title =
-                     if path = "/book" then "Pricklypear book"
-                     else if path = "/background" then "Background"
+                     if path = "/background" then "Background"
                      else if path = "/roadmap" then "Roadmap"
                      else if path = "/signup" then "Signup"
                      else "Pricklypear"

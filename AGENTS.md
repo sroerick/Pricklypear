@@ -92,8 +92,9 @@ auth is **in-process** in the image (Option B / auth.web-login).
 
 - Browser: `GET/POST /login`, `POST /logout`, cookie `pp_session` (HttpOnly).
 - Middleware hard-public: `/login`, `/health`, `/logout`, plus public
-  release face `/welcome`, `/book`, `/book.pdf`, `/src.tgz`, `/code`,
+  release face `/welcome`, `/book.pdf`, `/src.tgz`, `/code`,
   `/code/*`, `/assets/*`. Else session required. Anon `/` → `/welcome`.
+  (`/book` HTML explainer is private — not hard-public.)
 - Admin: `GET/POST /admin/users` (create user, set password, revoke sessions).
 - Bootstrap: `PP_BOOTSTRAP_USER` / `PP_BOOTSTRAP_PASSWORD` (default admin/admin)
   when users empty, or when admin has no password credential yet.
@@ -112,8 +113,9 @@ auth is **in-process** in the image (Option B / auth.web-login).
   5433 (PG) / 18080 (HTTP) / 17878 (REPL). Logs in `/tmp/pp-dev/`.
 - Public release face (no login): `/welcome` (layout/* landing),
   `/code` (read-only CodeMirror tree over `PP_SOURCE_ROOT`),
-  `/book` + `/book.pdf` + `/src.tgz` (from `PP_PUBLIC_DIR`; build with
+  `/book.pdf` + `/src.tgz` (from `PP_PUBLIC_DIR`; build with
   `scripts/public_artifacts.sh`), `/assets/cm/*` (vendored CM5).
+  (`/book` is not part of the public release face.)
   Packages: `libs/layout`, `libs/welcome`.
 - The image's HTTP UI exposes system pages: `/`, `/login`, `/health`,
   `/admin/users`, `/branches` (list all branches), `/bindings` (list

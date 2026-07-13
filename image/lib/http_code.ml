@@ -427,8 +427,7 @@ loadFile(FILE);
   <div><strong>Pricklypear source</strong> · read-only</div>
   <nav>
     <a href="/welcome">Welcome</a> ·
-    <a href="/book">Book</a> ·
-    <a href="/book.pdf">PDF</a> ·
+    <a href="/book.pdf">Book PDF</a> ·
     <a href="/src.tgz">.tgz</a> ·
     <a href="/login">Log in</a>
   </nav>
