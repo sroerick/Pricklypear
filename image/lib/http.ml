@@ -9,6 +9,8 @@ open Lwt.Syntax
 open Pure_html
 open Http_core
 open Http_data
+open Http_branches
+open Http_agent
 open Http_pages
 
 let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)

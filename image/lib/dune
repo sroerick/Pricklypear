@@ -3,8 +3,9 @@
  (public_name pricklypear-image)
  (modules store_db store
           prims_pure primitives
-          session crud packages loader repl_endpoint
-          http_core http_data http_pages http
+          session_types agent_tools session
+          crud packages loader repl_endpoint
+          http_core http_data http_branches http_agent http_pages http
           lineedit boot llm_client
           auth_password auth_store ai_store)
  (libraries
