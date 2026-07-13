@@ -83,20 +83,23 @@ let read_string (st : state) : string =
         ignore (advance st);
         Buffer.contents buf
     | Some '\\' ->
-        (* Escape: consume the backslash, then the next char is the
-           escape letter. Two-step: advance past '\\', then peek+advance
-           the escape char (NOT (match advance st with ...) — that
-           would match the '\\' we just peeked, not the next char). *)
-        ignore (advance st);  (* consume '\\' (we peeked it) *)
+        (* Escape sequences in string literals.
+           Named: n t r backslash double-quote single-quote.
+           Any other backslash-X is treated as literal X (forgiving),
+           so editor over-escapes and paste noise do not hard-fail. *)
+        ignore (advance st);  (* consume the backslash we peeked *)
         (match peek st with
          | None ->
              raise (Reader_error ("unterminated escape", st.line, st.col))
          | Some 'n' -> ignore (advance st); Buffer.add_char buf '\n'
          | Some 't' -> ignore (advance st); Buffer.add_char buf '\t'
+         | Some 'r' -> ignore (advance st); Buffer.add_char buf '\r'
          | Some '\\' -> ignore (advance st); Buffer.add_char buf '\\'
          | Some '"' -> ignore (advance st); Buffer.add_char buf '"'
+         | Some '\'' -> ignore (advance st); Buffer.add_char buf '\''
          | Some c ->
-             raise (Reader_error ("bad escape \\" ^ String.make 1 c, st.line, st.col)));
+             ignore (advance st);
+             Buffer.add_char buf c);
         loop ()
     | Some c ->
         Buffer.add_char buf c;

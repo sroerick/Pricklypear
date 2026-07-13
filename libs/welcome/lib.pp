@@ -33,7 +33,7 @@
               "A lot of functions render htmx partials. This makes things pretty modular and composable. We have sexp wrappers for HTML and CSS.")
             (layout/card
               "The Great American Codebase"
-              "I designed the codebase to be read like a book. I like to print codebases out to read them. There's a lot of AI slop in here, but I mark where I've inserted my own comments.")
+              "I designed the codebase to be read like a book. I like to print codebases out to read them. There's a lot of AI slop in here, but I mark where I've inserted my own comments. My LaTeX pipeline is kind of weird rn so please consider this PDF incomplete and aspirational.")
             (layout/card
               "I live here now"
               "It's multiuser, and it's fun. I have bible study, todo, zettelkasten, flashcards, calendar. Writing apps is insanely easy. You aren't stuck with weird elisp or everything is a buffer rules.")))
