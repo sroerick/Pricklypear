@@ -8,7 +8,7 @@
       (list
         (layout/hero
           "Pricklypear"
-          "A multi-user Lisp OS: one live image, Postgres as the object store, htmx as the interface. Humans and agents share the running system."
+          "What if WordPress was a Lisp Machine? (Nobody has asked this question)"
           (html/join
             (list
               (layout/cta "/code" "Explore the source")
