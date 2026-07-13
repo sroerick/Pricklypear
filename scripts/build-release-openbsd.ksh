@@ -20,6 +20,10 @@ log() { print -ru2 -- "[release] $*"; }
 
 cd "$PP_ROOT"
 
+# Prior releases stage a full source tree under build/release/src; if that
+# tree remains, dune sees a second dune-project and aborts. Clear it first.
+rm -rf "$STAGE"
+
 log "opam env (poohstack)"
 eval "$(opam env --switch=poohstack --set-switch)"
 
