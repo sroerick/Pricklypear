@@ -623,6 +623,61 @@ let prim_date_format (args : value list) : value =
            (Int64.to_int y) (Int64.to_int m) (Int64.to_int d))
   | _ -> raise (Interp_error (User_error "date-format needs year month day"))
 
+(** (date-add-days "YYYY-MM-DD" n) | (date-add-days n) with today.
+    Local calendar day arithmetic via Unix.mktime (flashcards SRS). *)
+let prim_date_add_days (args : value list) : value =
+  let add_from_ymd y m d n =
+    let tm =
+      { Unix.tm_sec = 0
+      ; tm_min = 0
+      ; tm_hour = 12
+      ; tm_mday = d + n
+      ; tm_mon = m - 1
+      ; tm_year = y - 1900
+      ; tm_wday = 0
+      ; tm_yday = 0
+      ; tm_isdst = false
+      }
+    in
+    let _, tm' = Unix.mktime tm in
+    VStr
+      (Printf.sprintf "%04d-%02d-%02d"
+         (tm'.Unix.tm_year + 1900)
+         (tm'.Unix.tm_mon + 1)
+         tm'.Unix.tm_mday)
+  in
+  let parse_ymd s =
+    let s = String.trim s in
+    if String.length s < 10 then None
+    else
+      try
+        let y = int_of_string (String.sub s 0 4) in
+        let m = int_of_string (String.sub s 5 2) in
+        let d = int_of_string (String.sub s 8 2) in
+        Some (y, m, d)
+      with _ -> None
+  in
+  match args with
+  | [ VStr day; VInt n ] ->
+      (match parse_ymd day with
+       | Some (y, m, d) -> add_from_ymd y m d (Int64.to_int n)
+       | None ->
+           raise (Interp_error (User_error "date-add-days: bad date string")))
+  | [ VInt n ] ->
+      let tm = Unix.localtime (Unix.time ()) in
+      add_from_ymd
+        (tm.Unix.tm_year + 1900) (tm.Unix.tm_mon + 1) tm.Unix.tm_mday
+        (Int64.to_int n)
+  | [ VStr day; VStr n ] ->
+      (match parse_ymd day, int_of_string_opt (String.trim n) with
+       | Some (y, m, d), Some n -> add_from_ymd y m d n
+       | _ ->
+           raise (Interp_error (User_error "date-add-days: bad args")))
+  | _ ->
+      raise
+        (Interp_error
+           (User_error "date-add-days needs (day n) or (n) for today+n"))
+
 (* Register the minimal set. Returns the populated table. *)
 let make_with_defaults () : t =
   let t = make () in
@@ -671,6 +726,7 @@ let make_with_defaults () : t =
   register_sync t "parse-int" prim_parse_int;
   register_sync t "date-weekday" prim_date_weekday;
   register_sync t "date-format" prim_date_format;
+  register_sync t "date-add-days" prim_date_add_days;
   register_sync t "dict-keys" prim_dict_keys;
   register_sync t "render-html" prim_render_html;
   t
@@ -700,6 +756,8 @@ let prim_summary (name : string) : string =
   | "parse-int" -> "string or int to int"
   | "date-weekday" -> "weekday 0=Sun for y m d"
   | "date-format" -> "format y m d as YYYY-MM-DD"
+  | "date-add-days" -> "add n days to YYYY-MM-DD (or today)"
+
   | "string-append" -> "concat strings"
   | "string-length" -> "length of string"
   | "substring" -> "substring start [len]"

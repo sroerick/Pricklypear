@@ -1,0 +1,570 @@
+;; Flashcards — decks + SM-2-ish spaced repetition on data_rows.
+;; Prefix: flash/   Package dir: flashcards
+;; Install: (load-library "flashcards") — seeded after calendar.
+;;
+;; Types: flash-deck, flash-card
+;; ease is stored as TENTHS (string int): "25" means 2.5 (SM-2 default).
+;; due is YYYY-MM-DD; empty or due <= today means due now.
+
+(deftype 'flash-deck 'title 'description 'color 'archived)
+(deftype 'flash-card
+  'deck_id 'front 'back 'tags 'suspended
+  'ease 'interval 'reps 'lapses 'due 'last_reviewed 'created)
+
+;; --- helpers ---
+
+(define flash/blank?
+  (lambda (s) (if (null? s) #t (string-eq (as-str s) ""))))
+
+(define flash/today (lambda () (date-today)))
+
+(define flash/as-int
+  (lambda (v)
+    (if (null? v) 0 (parse-int (as-str v)))))
+
+(define flash/true?
+  (lambda (v) (string-eq (as-str v) "true")))
+
+;; Empty due is always due; else ISO YYYY-MM-DD string order.
+(define flash/due-now?
+  (lambda (due today)
+    (let ((d (as-str due)))
+      (if (flash/blank? d)
+          #t
+          (if (string-eq d today)
+              #t
+              (flash/str-le? d today))))))
+
+(define flash/str-le?
+  (lambda (a b)
+    (let ((sa (as-str a))
+          (sb (as-str b)))
+      (if (string-eq sa sb)
+          #t
+          (flash/str-le-loop sa sb 0 (string-length sa) (string-length sb))))))
+
+(define flash/str-le-loop
+  (lambda (a b i na nb)
+    (if (>= i na)
+        #t
+        (if (>= i nb)
+            #f
+            (let ((ca (substring a i 1))
+                  (cb (substring b i 1)))
+              (if (string-eq ca cb)
+                  (flash/str-le-loop a b (+ i 1) na nb)
+                  (flash/char-le? ca cb)))))))
+
+(define flash/digit-rank
+  (lambda (c)
+    (if (string-eq c "-") 0
+      (if (string-eq c "0") 1
+        (if (string-eq c "1") 2
+          (if (string-eq c "2") 3
+            (if (string-eq c "3") 4
+              (if (string-eq c "4") 5
+                (if (string-eq c "5") 6
+                  (if (string-eq c "6") 7
+                    (if (string-eq c "7") 8
+                      (if (string-eq c "8") 9
+                        (if (string-eq c "9") 10 11)))))))))))))
+
+(define flash/char-le?
+  (lambda (ca cb)
+    (<= (flash/digit-rank ca) (flash/digit-rank cb))))
+
+(define flash/tr (lambda (body) (html/tag "tr" "" body)))
+(define flash/td (lambda (body) (html/tag "td" "" body)))
+(define flash/th (lambda (body) (html/tag "th" "" body)))
+(define flash/table (lambda (body) (html/tag "table" "" body)))
+(define flash/thead (lambda (body) (html/tag "thead" "" body)))
+(define flash/tbody (lambda (body) (html/tag "tbody" "" body)))
+
+;; --- decks ---
+
+(define flash/decks
+  (lambda ()
+    (list/filter
+      (lambda (row)
+        (not (flash/true? (dict-get (cdr row) "archived"))))
+      (rows 'flash-deck 200))))
+
+(define flash/deck
+  (lambda (id)
+    (get 'flash-deck (as-str id))))
+
+(define flash/deck-title
+  (lambda (fields) (as-str (dict-get fields "title"))))
+
+(define flash/deck-create
+  (lambda (title description)
+    (create 'flash-deck
+      (dict-set* "{}"
+        (list
+          "title" (as-str title)
+          "description" (as-str description)
+          "color" ""
+          "archived" "")))))
+
+(define flash/deck-archive
+  (lambda (id)
+    (update-field 'flash-deck (as-str id) "archived" "true")))
+
+;; --- cards ---
+
+(define flash/default-fields
+  (lambda (deck-id front back tags)
+    (dict-set* "{}"
+      (list
+        "deck_id" (as-str deck-id)
+        "front" (as-str front)
+        "back" (as-str back)
+        "tags" (as-str tags)
+        "suspended" ""
+        "ease" "25"
+        "interval" "0"
+        "reps" "0"
+        "lapses" "0"
+        "due" ""
+        "last_reviewed" ""
+        "created" (flash/today)))))
+
+(define flash/add
+  (lambda (deck-id front back tags)
+    (create 'flash-card (flash/default-fields deck-id front back tags))))
+
+(define flash/card
+  (lambda (id) (get 'flash-card (as-str id))))
+
+(define flash/delete
+  (lambda (id) (delete 'flash-card (as-str id))))
+
+(define flash/suspend
+  (lambda (id) (update-field 'flash-card (as-str id) "suspended" "true")))
+
+(define flash/unsuspend
+  (lambda (id) (update-field 'flash-card (as-str id) "suspended" "")))
+
+(define flash/cards
+  (lambda (deck-id)
+    (let ((did (as-str deck-id)))
+      (list/filter
+        (lambda (row)
+          (string-eq (as-str (dict-get (cdr row) "deck_id")) did))
+        (rows 'flash-card 500)))))
+
+(define flash/card-front
+  (lambda (fields) (as-str (dict-get fields "front"))))
+
+(define flash/card-back
+  (lambda (fields) (as-str (dict-get fields "back"))))
+
+(define flash/card-deck-id
+  (lambda (fields) (as-str (dict-get fields "deck_id"))))
+
+(define flash/suspended?
+  (lambda (fields) (flash/true? (dict-get fields "suspended"))))
+
+;; --- SRS (ease tenths, integer math) ---
+
+(define flash/iv-hard
+  (lambda (interval)
+    (if (= interval 0) 1 (max 1 (div (* interval 12) 10)))))
+
+(define flash/iv-easy
+  (lambda (interval ease reps)
+    (let ((iv (if (= reps 0) 4 (div (* (* interval ease) 13) 100))))
+      (if (< iv 1) 1 iv))))
+
+(define flash/iv-good
+  (lambda (interval ease reps)
+    (let ((iv
+            (if (= reps 0)
+                1
+                (if (= reps 1) 6 (div (* interval ease) 10)))))
+      (if (< iv 1) 1 iv))))
+
+(define flash/apply-rating
+  (lambda (fields rating today)
+    (let ((ease0 (flash/as-int (dict-get fields "ease")))
+          (interval (flash/as-int (dict-get fields "interval")))
+          (reps (flash/as-int (dict-get fields "reps")))
+          (lapses (flash/as-int (dict-get fields "lapses")))
+          (r (as-str rating)))
+      (let ((ease (if (= ease0 0) 25 ease0)))
+        (if (string-eq r "again")
+            (dict-set* fields
+              (list
+                "ease" (str (max 13 (- ease 2)))
+                "interval" "0"
+                "reps" "0"
+                "lapses" (str (+ lapses 1))
+                "due" today
+                "last_reviewed" today))
+          (if (string-eq r "hard")
+              (let ((iv (flash/iv-hard interval)))
+                (dict-set* fields
+                  (list
+                    "ease" (str (max 13 (- ease 1)))
+                    "interval" (str iv)
+                    "reps" (str (+ reps 1))
+                    "due" (date-add-days today iv)
+                    "last_reviewed" today)))
+            (if (string-eq r "easy")
+                (let ((iv (flash/iv-easy interval ease reps)))
+                  (dict-set* fields
+                    (list
+                      "ease" (str (+ ease 1))
+                      "interval" (str iv)
+                      "reps" (str (+ reps 1))
+                      "due" (date-add-days today iv)
+                      "last_reviewed" today)))
+              (let ((iv (flash/iv-good interval ease reps)))
+                (dict-set* fields
+                  (list
+                    "ease" (str ease)
+                    "interval" (str iv)
+                    "reps" (str (+ reps 1))
+                    "due" (date-add-days today iv)
+                    "last_reviewed" today))))))))))
+
+(define flash/review
+  (lambda (id rating)
+    (let ((fields (flash/card id)))
+      (if (null? fields)
+          "review: no such card"
+          (let ((updated (flash/apply-rating fields rating (flash/today))))
+            (seq
+              (update 'flash-card (as-str id) updated)
+              updated))))))
+
+(define flash/row-due?
+  (lambda (row today)
+    (let ((fields (cdr row)))
+      (if (flash/suspended? fields)
+          #f
+          (flash/due-now? (dict-get fields "due") today)))))
+
+(define flash/due
+  (lambda (deck-id limit)
+    (let ((today (flash/today))
+          (lim (if (null? limit) 20 (flash/as-int limit)))
+          (did (as-str deck-id)))
+      (let ((xs
+              (list/filter
+                (lambda (row)
+                  (if (flash/row-due? row today)
+                      (if (flash/blank? did)
+                          #t
+                          (string-eq (flash/card-deck-id (cdr row)) did))
+                      #f))
+                (rows 'flash-card 500))))
+        (flash/take xs lim)))))
+
+(define flash/take
+  (lambda (xs n)
+    (if (null? xs)
+        (list)
+        (if (<= n 0)
+            (list)
+            (append (list (car xs))
+                    (flash/take (cdr xs) (- n 1)))))))
+
+(define flash/due-count
+  (lambda (deck-id)
+    (count (flash/due deck-id 500))))
+
+(define flash/stats
+  (lambda (deck-id)
+    (let ((today (flash/today))
+          (did (as-str deck-id))
+          (all (rows 'flash-card 500)))
+      (let ((scoped
+              (if (flash/blank? did)
+                  all
+                  (list/filter
+                    (lambda (row)
+                      (string-eq (flash/card-deck-id (cdr row)) did))
+                    all))))
+        (list
+          (count scoped)
+          (count
+            (list/filter
+              (lambda (row) (flash/row-due? row today))
+              scoped))
+          (count
+            (list/filter
+              (lambda (row) (flash/suspended? (cdr row)))
+              scoped)))))))
+
+;; --- HTML ---
+
+(define flash/esc (lambda (s) (html-escape (as-str s))))
+
+(define flash/deck-row-html
+  (lambda (row)
+    (let ((id (as-str (car row)))
+          (fields (cdr row)))
+      (let ((title (flash/deck-title fields))
+            (n (flash/due-count id)))
+        (flash/tr
+          (html/join
+            (list
+              (flash/td
+                (html/a
+                  (string-append "/flashcards/deck?id=" id)
+                  (html/text title)))
+              (flash/td (html/text (str n)))
+              (flash/td
+                (html/a
+                  (string-append "/flashcards/study?deck=" id)
+                  "Study")))))))))
+
+(define flash/new-deck-form
+  (lambda ()
+    (html/div (html/attr "class" "card")
+      (html/join
+        (list
+          (html/h2 "New deck")
+          (html/form "POST" "/flashcards"
+            (html/attrs (list))
+            (html/join
+              (list
+                (html/hidden "action" "create-deck")
+                (html/label "" "Title")
+                (html/text-input "title" (html/attr "required" "required"))
+                (html/label "" "Description")
+                (html/text-input "description" "")
+                (html/button (html/attr "type" "submit") "Create")))))))))
+
+(define flash/decks-table
+  (lambda (ds)
+    (if (null? ds)
+        (html/p* (html/attr "class" "muted") "No decks yet.")
+        (flash/table
+          (html/join
+            (list
+              (flash/thead
+                (flash/tr
+                  (html/join
+                    (list
+                      (flash/th "Deck")
+                      (flash/th "Due")
+                      (flash/th "")))))
+              (flash/tbody
+                (html/join (list/map flash/deck-row-html ds)))))))))
+
+(define flash/home-html
+  (lambda ()
+    (let ((ds (flash/decks)))
+      (html/join
+        (list
+          (html/h1 "Flashcards")
+          (html/p* (html/attr "class" "meta")
+            "Spaced repetition on shared data_rows. Data is shared across branches.")
+          (html/p* "" (html/a "/flashcards/study" "Study all due"))
+          (flash/new-deck-form)
+          (html/div (html/attr "class" "card")
+            (html/join
+              (list
+                (html/h2 "Decks")
+                (flash/decks-table ds)))))))))
+
+(define flash/card-row-html
+  (lambda (row)
+    (let ((id (as-str (car row)))
+          (fields (cdr row)))
+      (flash/tr
+        (html/join
+          (list
+            (flash/td (html/text (flash/esc (flash/card-front fields))))
+            (flash/td (html/text (as-str (dict-get fields "due"))))
+            (flash/td (html/text (as-str (dict-get fields "ease"))))
+            (flash/td
+              (html/form "POST"
+                (string-append "/flashcards/deck?id="
+                  (flash/card-deck-id fields))
+                (html/attrs (list))
+                (html/join
+                  (list
+                    (html/hidden "action" "delete-card")
+                    (html/hidden "id" id)
+                    (html/button (html/attr "type" "submit") "Delete")))))))))))
+
+(define flash/deck-page-html
+  (lambda (deck-id)
+    (let ((fields (flash/deck deck-id))
+          (cards (flash/cards deck-id)))
+      (if (null? fields)
+          (html/p* (html/attr "class" "err") "Deck not found")
+          (html/join
+            (list
+              (html/p* "" (html/a "/flashcards" "← All decks"))
+              (html/h1 (flash/esc (flash/deck-title fields)))
+              (html/p* (html/attr "class" "meta")
+                (as-str (dict-get fields "description")))
+              (html/p* ""
+                (html/a
+                  (string-append "/flashcards/study?deck=" (as-str deck-id))
+                  "Study this deck"))
+              (html/div (html/attr "class" "card")
+                (html/join
+                  (list
+                    (html/h2 "Add card")
+                    (html/form "POST"
+                      (string-append "/flashcards/deck?id=" (as-str deck-id))
+                      (html/attrs (list))
+                      (html/join
+                        (list
+                          (html/hidden "action" "add-card")
+                          (html/label "" "Front")
+                          (html/text-input "front" (html/attr "required" "required"))
+                          (html/label "" "Back")
+                          (html/text-input "back" (html/attr "required" "required"))
+                          (html/label "" "Tags")
+                          (html/text-input "tags" "")
+                          (html/button (html/attr "type" "submit") "Add")))))))
+              (html/div (html/attr "class" "card")
+                (html/join
+                  (list
+                    (html/h2 "Cards")
+                    (if (null? cards)
+                        (html/p* (html/attr "class" "muted") "No cards yet.")
+                        (flash/table
+                          (html/join
+                            (list
+                              (flash/thead
+                                (flash/tr
+                                  (html/join
+                                    (list
+                                      (flash/th "Front")
+                                      (flash/th "Due")
+                                      (flash/th "Ease")
+                                      (flash/th "")))))
+                              (flash/tbody
+                                (html/join
+                                  (list/map flash/card-row-html cards))))))))))))))))
+
+(define flash/rating-form
+  (lambda (card-id deck rating label)
+    (html/form "POST" "/flashcards/study"
+      (html/attrs (list (html/attr "style" "display:inline;margin-right:.35rem")))
+      (html/join
+        (list
+          (html/hidden "action" "review")
+          (html/hidden "id" (as-str card-id))
+          (html/hidden "rating" rating)
+          (html/hidden "deck" (as-str deck))
+          (html/button (html/attr "type" "submit") label))))))
+
+(define flash/study-card-html
+  (lambda (row deck reveal)
+    (let ((id (as-str (car row)))
+          (fields (cdr row)))
+      (html/div (html/attr "class" "card")
+        (html/join
+          (list
+            (html/h2 "Front")
+            (html/p (flash/esc (flash/card-front fields)))
+            (if (flash/true? reveal)
+                (html/join
+                  (list
+                    (html/h2 "Back")
+                    (html/p (flash/esc (flash/card-back fields)))
+                    (html/p* ""
+                      (html/join
+                        (list
+                          (flash/rating-form id deck "again" "Again")
+                          (flash/rating-form id deck "hard" "Hard")
+                          (flash/rating-form id deck "good" "Good")
+                          (flash/rating-form id deck "easy" "Easy"))))))
+                (html/form "GET" "/flashcards/study"
+                  (html/attrs (list))
+                  (html/join
+                    (list
+                      (html/hidden "deck" (as-str deck))
+                      (html/hidden "id" id)
+                      (html/hidden "reveal" "true")
+                      (html/button (html/attr "type" "submit") "Reveal")))))))))))
+
+(define flash/study-html
+  (lambda (deck-id card-id reveal)
+    (let ((due (flash/due deck-id 1)))
+      (html/join
+        (list
+          (html/p* "" (html/a "/flashcards" "← Decks"))
+          (html/h1 "Study")
+          (if (null? due)
+              (html/div (html/attr "class" "card")
+                (html/join
+                  (list
+                    (html/p "No cards due. Nice work.")
+                    (html/p* "" (html/a "/flashcards" "Back to decks")))))
+              (let ((row
+                      (if (flash/blank? card-id)
+                          (car due)
+                          (let ((found
+                                  (list/filter
+                                    (lambda (r)
+                                      (string-eq (as-str (car r)) (as-str card-id)))
+                                    due)))
+                            (if (null? found) (car due) (car found))))))
+                (flash/study-card-html row deck-id reveal))))))))
+
+;; --- routes ---
+
+(define flash/home-page
+  (lambda ()
+    (if (string-eq (request-method) "POST")
+        (seq
+          (let ((action (as-str (request-param "action"))))
+            (if (string-eq action "create-deck")
+                (flash/deck-create
+                  (request-param "title")
+                  (request-param "description"))
+                ()))
+          (redirect "/flashcards"))
+        (html/page (list (flash/home-html))))))
+
+(define flash/deck-page
+  (lambda ()
+    (let ((id (as-str (request-param "id"))))
+      (if (string-eq (request-method) "POST")
+          (seq
+            (let ((action (as-str (request-param "action"))))
+              (if (string-eq action "add-card")
+                  (flash/add id
+                    (request-param "front")
+                    (request-param "back")
+                    (request-param "tags"))
+                  (if (string-eq action "delete-card")
+                      (flash/delete (request-param "id"))
+                      ())))
+            (redirect (string-append "/flashcards/deck?id=" id)))
+          (html/page (list (flash/deck-page-html id)))))))
+
+(define flash/study-page
+  (lambda ()
+    (let ((deck (as-str (request-param "deck")))
+          (id (as-str (request-param "id")))
+          (reveal (as-str (request-param "reveal"))))
+      (if (string-eq (request-method) "POST")
+          (seq
+            (let ((action (as-str (request-param "action"))))
+              (if (string-eq action "review")
+                  (flash/review
+                    (request-param "id")
+                    (request-param "rating"))
+                  ()))
+            (redirect
+              (if (flash/blank? deck)
+                  "/flashcards/study"
+                  (string-append "/flashcards/study?deck=" deck))))
+          (html/page
+            (list
+              (flash/study-html deck id
+                (if (string-eq reveal "true") "true" ""))))))))
+
+(route "/flashcards" "flash/home-page")
+(route "/flashcards/deck" "flash/deck-page")
+(route "/flashcards/study" "flash/study-page")

@@ -2159,6 +2159,7 @@ and seed_stdlib (t : t) : unit Lwt.t =
     let* () = seed_one t "contacts" in
     let* () = seed_one t "bookmarks" in
     let* () = seed_one t "calendar" in
+    let* () = seed_one t "flashcards" in
     let* () = seed_one t "bible" in
     let* () = seed_one t "dabar" in
     Lwt.return_unit)

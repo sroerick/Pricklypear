@@ -18,6 +18,7 @@
           (menu/link "dabar" "/dabar")
           (menu/link "todos" "/todos")
           (menu/link "calendar" "/calendar")
+          (menu/link "flashcards" "/flashcards")
           (menu/link "weather" "/weather")
           (menu/link "strongs" "/strongs")
           (menu/link "agent" "/agent")))
