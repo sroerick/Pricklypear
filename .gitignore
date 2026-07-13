@@ -53,3 +53,6 @@ id_rsa.pub
 .pi-subagents/
 __pycache__/
 lisp/bin/read_test.ml
+
+# generated public release artifacts
+public-artifacts/

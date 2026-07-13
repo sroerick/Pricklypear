@@ -679,7 +679,10 @@
          htpasswd is not the user database.
 
          HARD PUBLIC (kernel, not user-route table):
-           /login /health /logout  (status quo is_public_path)
+           /login /health /logout
+           /welcome /book /book.pdf /src.tgz
+           /code /code/*  /assets /assets/*
+           (public release face — product-experience.public-release)
          User-route public/private: auth.route-visibility.
     |))
    )
@@ -741,7 +744,11 @@
 
             A. SYSTEM_HARD_PUBLIC
                /login  /health  /logout
-               (exact match; extend only by OCaml change)
+               /welcome /book /book.pdf /src.tgz
+               /code and /code/*
+               /assets and /assets/*
+               (extend only by OCaml change; see
+                product-experience.public-release)
 
             B. SYSTEM_HARD_PRIVATE
                Always require identity (Lisp cannot open these):

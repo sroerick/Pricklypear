@@ -162,8 +162,24 @@ let auth_disabled () : bool =
   | Some ("1" | "true" | "TRUE" | "yes" | "YES") -> true
   | _ -> false
 
+let has_prefix (path : string) (prefix : string) : bool =
+  path = prefix
+  || (String.length path > String.length prefix
+      && String.sub path 0 (String.length prefix) = prefix
+      && path.[String.length prefix] = '/')
+
 let is_system_hard_public (path : string) : bool =
-  path = "/login" || path = "/health" || path = "/logout"
+  path = "/login"
+  || path = "/health"
+  || path = "/logout"
+  || path = "/welcome"
+  || path = "/book"
+  || path = "/book.pdf"
+  || path = "/src.tgz"
+  || path = "/code"
+  || has_prefix path "/code"
+  || path = "/assets"
+  || has_prefix path "/assets"
 
 (** Kernel paths Lisp cannot open to the world (auth.route-visibility). *)
 let is_system_hard_private (path : string) : bool =
@@ -460,6 +476,9 @@ let redirect_response (reqd : Httpaf.Reqd.t) (location : string) : unit =
 let require_login_redirect (reqd : Httpaf.Reqd.t) ~(path : string) : unit =
   if String.length path >= 5 && String.sub path 0 5 = "/api/" then
     unauthorized_api reqd
+  else if path = "/" then
+    (* Public host: anonymous workspace root → welcome landing. *)
+    redirect_response reqd "/welcome"
   else
     redirect_response reqd "/login"
 

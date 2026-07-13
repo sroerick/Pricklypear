@@ -92,6 +92,83 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
             html_response reqd ~session ~status:`Internal_server_error body;
             Lwt.return_unit)))
   in
+  (** Lisp user-route if bound; else kernel [fallback]. *)
+  let launch_user_route_or (fallback : unit -> unit) : unit =
+    match Session.lookup_route session path with
+    | None ->
+        launch (fun () ->
+          fallback ();
+          Lwt.return_unit)
+    | Some handler_name ->
+        let page () : unit Lwt.t =
+          let* body_str =
+            match meth with
+            | `POST -> read_body reqd
+            | _ -> Lwt.return ""
+          in
+          if String.length body_str > max_user_body_bytes then begin
+            text_response reqd ~status:`Payload_too_large
+              ~content_type:"text/plain"
+              "request body too large (max 64KiB)";
+            Lwt.return_unit
+          end else begin
+            let query = parse_query target in
+            let form =
+              match meth with
+              | `POST ->
+                  let ct =
+                    match Httpaf.Headers.get req.headers "content-type" with
+                    | Some s -> s
+                    | None -> ""
+                  in
+                  if String.length ct >= 33
+                     && String.sub ct 0 33
+                        = "application/x-www-form-urlencoded"
+                     || ct = "" && String.contains body_str '='
+                  then parse_form_body body_str
+                  else []
+              | _ -> []
+            in
+            let params = merge_params ~query ~form in
+            let fragment = wants_fragment ~path ~headers in
+            let method_ : Session.http_method =
+              match meth with `POST -> `POST | _ -> `GET
+            in
+            let request : Session.request =
+              { method_; path; params; body = body_str; headers }
+            in
+            let* result =
+              Session.call_handler session ~request handler_name
+            in
+            (match result with
+             | Some value ->
+                 (* Public front-door pages: no product chrome (private nav). *)
+                 if path = "/welcome" || path = "/book" then begin
+                   let title =
+                     if path = "/book" then "Pricklypear book"
+                     else "Pricklypear"
+                   in
+                   let body =
+                     match Primitives.is_raw_html value with
+                     | Some raw -> raw
+                     | None ->
+                         (match value with
+                          | Pricklypear_lisp.Ast.VStr s -> s
+                          | _ -> Pricklypear_lisp.Reader.pp_value value)
+                   in
+                   Http_code.serve_public_body reqd ~title body;
+                   Lwt.return_unit
+                 end else begin
+                   respond_handler_value ~session ~reqd ~path ~fragment value;
+                   Lwt.return_unit
+                 end
+             | None ->
+                 fallback ();
+                 Lwt.return_unit)
+          end
+        in
+        launch (fun () -> page ())
+  in
   match meth, path with
   | `GET, "/login" ->
       launch (fun () ->
@@ -103,6 +180,36 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
   | `GET, "/admin/users" -> launch (fun () -> admin_users_page session reqd)
   | `POST, "/admin/users" -> launch (fun () -> post_admin_users session reqd)
   | `GET, "/" -> launch (fun () -> home_page session reqd)
+  | `GET, "/welcome" ->
+      launch_user_route_or (fun () -> Http_code.fallback_welcome reqd)
+  | `GET, "/book" ->
+      launch_user_route_or (fun () -> Http_code.fallback_book reqd)
+  | `GET, "/book.pdf" ->
+      launch (fun () ->
+        Http_code.handle_public_artifact reqd ~name:"book.pdf";
+        Lwt.return_unit)
+  | `GET, "/src.tgz" ->
+      launch (fun () ->
+        Http_code.handle_public_artifact reqd ~name:"src.tgz";
+        Lwt.return_unit)
+  | `GET, "/code" ->
+      launch (fun () ->
+        Http_code.handle_code_page reqd ~target;
+        Lwt.return_unit)
+  | `GET, path when String.length path >= 10
+                 && String.sub path 0 10 = "/code/raw/" ->
+      let rel = String.sub path 10 (String.length path - 10) in
+      launch (fun () ->
+        Http_code.handle_raw reqd ~rel;
+        Lwt.return_unit)
+  | `GET, path when String.length path >= 11
+                 && String.sub path 0 11 = "/assets/cm/" ->
+      let rel =
+        "codemirror/" ^ String.sub path 11 (String.length path - 11)
+      in
+      launch (fun () ->
+        Http_code.handle_asset reqd ~rel;
+        Lwt.return_unit)
   | `GET, "/about" ->
       launch (fun () ->
         let* () = Lwt.return_unit in

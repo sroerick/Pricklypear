@@ -38,7 +38,7 @@ python3 "$PP_EVAL" -j '(load-library "todo")'
 ## Branches: defaults vs personal garden
 
 - **`system/main`** — package defaults. Boot `seed_stdlib` always writes
-  `libs/{std,weather,ui,ai,outline,notes,todo,contacts,bookmarks,calendar,bible,dabar}` here from git. Treat as read-mostly.
+  `libs/{std,weather,ui,layout,welcome,ai,outline,notes,todo,contacts,bookmarks,calendar,bible,dabar}` here from git. Treat as read-mostly.
 - **`<user>/personal`** — your garden. Image boots here after seed. Empty
   child of main (inherits via recursive CTE). Your `(define …)` and
   `(route …)` land here and **survive reseed/deploy**.
@@ -91,7 +91,9 @@ auth is **in-process** in the image (Option B / auth.web-login).
 ## Auth (single-image)
 
 - Browser: `GET/POST /login`, `POST /logout`, cookie `pp_session` (HttpOnly).
-- Middleware: public `/login`, `/health`, `/logout`; else session required.
+- Middleware hard-public: `/login`, `/health`, `/logout`, plus public
+  release face `/welcome`, `/book`, `/book.pdf`, `/src.tgz`, `/code`,
+  `/code/*`, `/assets/*`. Else session required. Anon `/` → `/welcome`.
 - Admin: `GET/POST /admin/users` (create user, set password, revoke sessions).
 - Bootstrap: `PP_BOOTSTRAP_USER` / `PP_BOOTSTRAP_PASSWORD` (default admin/admin)
   when users empty, or when admin has no password credential yet.
@@ -108,6 +110,11 @@ auth is **in-process** in the image (Option B / auth.web-login).
   image tests need the switch; auth smoke needs PG + image)
 - Dev stack: `scripts/dev.sh start` brings up PG + image on ports
   5433 (PG) / 18080 (HTTP) / 17878 (REPL). Logs in `/tmp/pp-dev/`.
+- Public release face (no login): `/welcome` (layout/* landing),
+  `/code` (read-only CodeMirror tree over `PP_SOURCE_ROOT`),
+  `/book` + `/book.pdf` + `/src.tgz` (from `PP_PUBLIC_DIR`; build with
+  `scripts/public_artifacts.sh`), `/assets/cm/*` (vendored CM5).
+  Packages: `libs/layout`, `libs/welcome`.
 - The image's HTTP UI exposes system pages: `/`, `/login`, `/health`,
   `/admin/users`, `/branches` (list all branches), `/bindings` (list
   visible function_defs on the current branch), `/binding/<name>`

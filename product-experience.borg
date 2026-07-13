@@ -181,6 +181,161 @@
     |))
    )
   )
+  (subsection public-release
+   (doc "Hosted public face on the image: layout components, welcome, code browser, book PDF, source tarball")
+   (status implemented)
+   (implements
+    libs/layout/lib.pp
+    libs/welcome/lib.pp
+    image/lib/http_code.ml
+    image/lib/http_core.ml
+    image/lib/http.ml
+    image/lib/session.ml
+    image/static/codemirror
+    scripts/public_artifacts.sh)
+   (* agent note (|2026-07-12: Public release ships ON the image (not brochure
+     static site). layout/* = reusable page blocks (NOT named public/* —
+     public is auth visibility only). Code browser is kernel read-only FS
+     + CodeMirror 5 mllike. PDF via borge book print at deploy; tarball
+     same allowlist as /code.|) *)
+   (* agent note (|2026-07-12 IMPLEMENTED+smoke: dune build image OK;
+     unauth GET /welcome 200 layout-hero; /code 200 CM5 tree;
+     /code/raw/pricklypear.borg 200; /book.pdf 200 (~1.1M);
+     /src.tgz 200 (~0.9M); path-as-is ../ escape 403;
+     /bindings 303→login; / 303→/welcome. scripts/public_artifacts.sh
+     writes book.pdf+src.tgz. Seed layout+welcome on system/main.|) *)
+   (verify
+    (build "dune build image")
+    (smoke "unauth GET /welcome returns 200 with hero")
+    (smoke "unauth GET /code returns tree + codemirror shell")
+    (smoke "unauth GET /code/raw/pricklypear.borg returns text")
+    (smoke "unauth GET /book.pdf or 404 if artifact missing")
+    (smoke "unauth GET /src.tgz or 404 if artifact missing")
+    (smoke "path escape /code/raw/../etc/passwd denied")
+    (smoke "unauth GET /bindings still redirects to login"))
+   (details
+    (doc (|
+         =========================================================
+         GOAL
+         =========================================================
+         Release pricklypear on the hosted instance itself — not
+         GitHub-as-homepage, not a sister brochure site. The live
+         image IS the public site:
+
+           /welcome   — landing (Lisp layout/* + welcome/page)
+           /code      — read-only source browser (kernel + CM5)
+           /book      — book explainer (Lisp)
+           /book.pdf  — borge book print artifact
+           /src.tgz   — pruned source tarball
+           /login     — enter the private workspace
+
+         Workspace home (/) stays HARD PRIVATE. Anon hitting /
+         redirects to /welcome (or login with next=); logged-in
+         users keep product home (ui/home).
+
+         =========================================================
+         LAYOUT COMPONENTS (libs/layout)
+         =========================================================
+         Namespace layout/* — NOT public/*.
+         "public" is reserved for route visibility / gate language.
+
+         Building blocks (pure HTML strings via html/*):
+           layout/hero title tagline actions-html
+           layout/card title body
+           layout/cards list-of-card-html
+           layout/section title body
+           layout/cta href label
+           layout/theme  — css/sheet rules for .layout-*
+
+         Seeded on system/main; used by welcome and book pages.
+         Personal gardens may override layout/* like any package.
+
+         =========================================================
+         WELCOME + BOOK PAGES (libs/welcome)
+         =========================================================
+         welcome/page  — compose layout/* into landing
+         welcome/book  — short PDF + tarball explainer
+         (public-route "/welcome" "welcome/page")
+         (public-route "/book" "welcome/book")
+
+         Also register hard-public kernel paths so the front door
+         works even if seed/route table is empty (belt + suspenders):
+         /welcome /book are hard-public and dispatch to Lisp when
+         bound, else a minimal kernel fallback page.
+
+         CTAs: Explore source → /code ; Download book → /book.pdf ;
+         Source tarball → /src.tgz ; Log in → /login.
+
+         =========================================================
+         CODE BROWSER (kernel, image/lib/http_code.ml)
+         =========================================================
+         Read-only filesystem browser over PP_SOURCE_ROOT
+         (default: repo root / PP_ROOT / cwd with libs+image+lisp).
+
+         Routes (all hard-public GET):
+           /code              — HTML shell: file tree + CodeMirror
+           /code?f=path       — open file in editor
+           /code/raw/<path>   — raw text (for fetch into CM)
+           /assets/cm/*       — vendored CodeMirror 5 assets
+
+         CodeMirror 5 (vendored, no npm at runtime):
+           codemirror.min.js + codemirror.min.css
+           mode/mllike (text/x-ocaml for .ml/.mli)
+           mode/markdown for .md
+           plain for .borg .pp .sql .sh
+           readOnly: true, lineNumbers: true
+
+         SANDBOX:
+           - realpath must stay under PP_SOURCE_ROOT
+           - allowlist extensions: .borg .ml .mli .pp .md .sql
+             .sh .ksh .dune (and dune files named "dune")
+           - skip dirs: _build .git .pi .ralph node_modules
+             _opam .opamswitch spikes (optional) supervisor
+             (deprecated — skip) image/static/codemirror is ok
+           - max file size ~2 MiB
+           - GET only; no write/eval
+
+         Default open file: pricklypear.borg when present.
+
+         =========================================================
+         BOOK PDF + TARBALL
+         =========================================================
+         Built at deploy/dev time, not per-request:
+
+           borge book print . -o pricklypear-book
+           scripts/public_artifacts.sh  → PP_PUBLIC_DIR/
+             book.pdf  (or pricklypear-book.pdf)
+             src.tgz   (same allowlist as /code)
+
+         Image serves:
+           GET /book.pdf  application/pdf
+           GET /src.tgz   application/gzip
+         from PP_PUBLIC_DIR (default /tmp/pp-public or beside source).
+         Missing artifact → 404 with short HTML hint, not crash.
+
+         =========================================================
+         AUTH GATE EXTENSIONS
+         =========================================================
+         SYSTEM_HARD_PUBLIC gains:
+           /welcome /book /book.pdf /src.tgz
+           /code and /code/*
+           /assets and /assets/*
+
+         Still HARD PRIVATE: / /bindings /edit /repl /data /api
+         /admin /branches /types /pages /agent …
+
+         Anon / → redirect /welcome (product choice for public host).
+         Logged-in / → ui/home as today.
+
+         =========================================================
+         ENV
+         =========================================================
+         PP_SOURCE_ROOT  — tree for /code and tarball input
+         PP_PUBLIC_DIR   — book.pdf + src.tgz
+         PP_LIBS_DIR     — existing; layout+welcome seed from here
+    |))
+   )
+  )
   (subsection horizon
    (doc "Long-term possible futures built on this substrate (design only)")
    (status planned)

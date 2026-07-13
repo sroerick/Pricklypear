@@ -118,6 +118,25 @@ scripts/dev.sh stop
 Logs under `/tmp/pp-dev/`. Env knobs are documented in the `dev.sh`
 header.
 
+## Public release face (hosted instance)
+
+The image itself is the public site (no separate brochure deploy):
+
+| Path | What |
+|---|---|
+| `/welcome` | Landing (`layout/*` + `welcome/page`) |
+| `/code` | Read-only source browser (CodeMirror 5 + mllike) |
+| `/book` / `/book.pdf` | Literate book (borge book print) |
+| `/src.tgz` | Pruned source tarball |
+| `/login` | Enter private workspace |
+
+Anon `/` redirects to `/welcome`. Workspace routes stay private.
+
+```bash
+ksh scripts/public_artifacts.sh   # → public-artifacts/{book.pdf,src.tgz}
+# image env: PP_SOURCE_ROOT PP_PUBLIC_DIR PP_STATIC_DIR (dev.sh sets these)
+```
+
 ## Laptop / agent eval (the image is the API)
 
 ```bash
