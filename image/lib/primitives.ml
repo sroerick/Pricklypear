@@ -181,6 +181,8 @@ let prim_summary (name : string) : string =
   | "html-escape" -> "escape text for HTML"
   | "json-parse" -> "parse JSON string to Lisp value"
   | "json-emit" -> "emit Lisp value as JSON string"
+  | "with-public-write" ->
+      "(with-public-write (lambda () …)) run body with write privs for public forms"
   | "request-method" -> "HTTP method of active request"
   | "request-path" -> "path of active request"
   | "request-param" -> "form/query param of active request"

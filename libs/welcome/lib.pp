@@ -15,6 +15,7 @@
               (layout/cta "/book.pdf" "Download the book (PDF)")
               (layout/cta "/background" "Background")
               (layout/cta "/roadmap" "Roadmap")
+              (layout/cta "/signup" "Email signup")
               (layout/cta "/login" "Log in"))))
         (layout/section
           "No, seriously, what is this?"
@@ -80,6 +81,8 @@
               (html/a "/background" (html/text "background"))
               (html/text " · ")
               (html/a "/roadmap" (html/text "roadmap"))
+              (html/text " · ")
+              (html/a "/signup" (html/text "signup"))
               (html/text " · ")
               (html/a "/about" (html/text "concepts (after login)")))))))))
 

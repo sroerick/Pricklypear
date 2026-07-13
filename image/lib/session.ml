@@ -310,7 +310,33 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
                  ~budget ~prims:t.prims lam [])
       | _ ->
           Lwt.return (Pricklypear_lisp.Ast.VStr
-                        "__with_transaction__: bad args (need a lambda)"))
+                        "__with_transaction__: bad args (need a lambda)"));
+
+  (* (with-public-write (lambda () body...)) — run body with write privilege
+     so public route handlers can create data_rows / notes captures.
+     Elevates anonymous only (logged-in sessions already write). Restores
+     identity afterward. Prefer for narrow public forms (signup), not general
+     unauth APIs. *)
+  Primitives.register tbl "with-public-write"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VLambda (_params, _body, _clo) as lam ] ->
+          let prev = t.manifest in
+          let need_elevate = prev.username = "anonymous" in
+          if need_elevate then
+            t.manifest <-
+              { prev with user_id = "public"; username = "public" };
+          Lwt.finalize
+            (fun () ->
+              let budget = Pricklypear_lisp.Eval.make_budget () in
+              Pricklypear_lisp.Eval.apply ~budget ~prims:t.prims lam [])
+            (fun () ->
+              if need_elevate then t.manifest <- prev;
+              Lwt.return_unit)
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr
+               "with-public-write: bad args (need a zero-arg lambda)"))
 
 (** If model returns a bare expression body, wrap as (lambda (x) ...). *)
 
@@ -950,6 +976,7 @@ and seed_stdlib (t : t) : unit Lwt.t =
     let* () = seed_one t "ai" in
     let* () = seed_one t "outline" in
     let* () = seed_one t "notes" in
+    let* () = seed_one t "signup" in
     let* () = seed_one t "todo" in
     let* () = seed_one t "contacts" in
     let* () = seed_one t "bookmarks" in
