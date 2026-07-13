@@ -9,15 +9,7 @@
  (section architecture
   (doc "The overall picture: hypervisor -> supervisor unikernel -> per-user image unikernels -> Postgres")
   (status partial)
-  (* agent note (|
-     BOOK INTRO SLOT — architecture — retired map (historical)
-     Write your author voice in a human comment immediately below this note:
-       (* roerick (|
-          …
-       |) *)
-     Editorial guidance (agent): Frame this chapter as the OLD map of the territory. One paragraph: what we thought multi-process Mirage would buy us, and that the reader should treat the following diagram as history. Point them forward to single-image for the living system.
-  |) *)
-
+  
   (subsection topology
    (doc "Physical and logical layout")
    (status partial)

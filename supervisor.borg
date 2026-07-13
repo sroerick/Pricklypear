@@ -5,15 +5,7 @@
  (status deprecated)
  (convention ocaml-dune)
  (section supervisor
-  (* agent note (|
-     BOOK INTRO SLOT — supervisor — retired topology (appendix energy)
-     Write your author voice in a human comment immediately below this note:
-       (* roerick (|
-          …
-       |) *)
-     Editorial guidance (agent): Optional short epitaph: why a supervisor fleet existed, why it is deprecated, what to steal from the design if process isolation returns. Permission to be brief or even dismissive.
-  |) *)
-
+  
   (doc "The root unikernel: fleet management, A/B rollback, health checks, admin HTTP")
   (status deprecated)
   (subsection unikernel-target

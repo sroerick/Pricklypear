@@ -5,15 +5,7 @@
  (section product-experience
   (doc "Human-facing product layer: concepts, access paths, legible vocabulary, first-run, horizon")
   (status partial)
-  (* agent note (|
-     BOOK INTRO SLOT — product-experience — making the substrate legible
-     Write your author voice in a human comment immediately below this note:
-       (* roerick (|
-          …
-       |) *)
-     Editorial guidance (agent): Voice of the product. Functions/Pages/Data vocabulary. Public /welcome vs private workspace. Why the environment UI must be Lisp. This pairs with the hosted release face.
-  |) *)
-
+  
   (verify
    (build "dune build image")
    (smoke "GET /about teaches concepts; home offers first-run hello recipe")

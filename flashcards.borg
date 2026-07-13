@@ -3,15 +3,7 @@
  (status planned)
  (convention ocaml-dune)
  (section flashcards
-  (* agent note (|
-     BOOK INTRO SLOT — flashcards — spaced repetition in the image
-     Write your author voice in a human comment immediately below this note:
-       (* roerick (|
-          …
-       |) *)
-     Editorial guidance (agent): Why SRS belongs in the same image as notes/bible. Scheduler honesty (what algorithm, what is rough).
-  |) *)
-
+  
   (doc "Decks, cards, study queue, SM-2-ish review, hypermedia UI, agent API")
   (status planned)
   (verify

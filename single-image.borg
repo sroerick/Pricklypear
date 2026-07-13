@@ -9,15 +9,7 @@
  (section single-image
   (doc "The pivot: one process, single-tenant, no Mirage abstraction")
   (status implemented)
-  (* agent note (|
-     BOOK INTRO SLOT — single-image — the pivot story
-     Write your author voice in a human comment immediately below this note:
-       (* roerick (|
-          …
-       |) *)
-     Editorial guidance (agent): This is the dramatic chapter. Tell the story of collapsing supervisor/authd/fleet into one binary: what broke, what got simpler, what multi-user still means (sessions + gardens). Write it so someone who only reads this chapter understands v1.
-  |) *)
-
+  
   (subsection thesis
    (doc "What the system IS after the pivot")
    (status implemented)

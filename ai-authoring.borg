@@ -5,15 +5,7 @@
  (section ai-authoring
   (doc "AI as a first-class author of functions: propose, surgical AST rewrite/freeze, growth-from-seed, human merge gate, provenance")
   (status partial)
-  (* agent note (|
-     BOOK INTRO SLOT — ai-authoring — AI as author, not god mode
-     Write your author voice in a human comment immediately below this note:
-       (* roerick (|
-          …
-       |) *)
-     Editorial guidance (agent): Your rules of engagement: propose on branch, human keeps/discards, no privileged runtime. What already works (propose-function, sessions) vs review-merge still open. Skeptical optimism welcome.
-  |) *)
-
+  
   (verify
    (build "dune build @all")
    (smoke "AI propose on user branch -> human inspect -> merge policy gate")

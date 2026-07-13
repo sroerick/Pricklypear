@@ -5,15 +5,7 @@
  (section branching
   (doc "Branches as the fundamental organizational primitive: code branches, shared data, fork/merge")
   (status partial)
-  (* agent note (|
-     BOOK INTRO SLOT — branching — gardens and main
-     Write your author voice in a human comment immediately below this note:
-       (* roerick (|
-          …
-       |) *)
-     Editorial guidance (agent): Explain code-branches / data-shared in one breath. system/main vs username/personal. Why fork is cheap and promote is political. Avoid git tutorial tone — this is how the OS organizes reality.
-  |) *)
-
+  
   (details
    (doc (|
         Branches are to Pricklypear what files are to

@@ -5,15 +5,7 @@
  (section philosophy
   (doc "Design principles for the single-image habitat")
   (status implemented)
-  (* agent note (|
-     BOOK INTRO SLOT — philosophy — why this system exists
-     Write your author voice in a human comment immediately below this note:
-       (* roerick (|
-          …
-       |) *)
-     Editorial guidance (agent): Open the book. Not a feature list — a stance. Why a live image + Postgres + Lisp, and what you refuse (e.g. dual product skins, brochure-as-truth). Keep it short enough to read on paper before principle 1.
-  |) *)
-
+  
   (verify
    (build "dune build @all")
    (smoke "one image process + Postgres object store + htmx UI"))

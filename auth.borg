@@ -5,15 +5,7 @@
  (section auth
   (doc "Multi-user identity: credentials, sessions, login, and binding each human to their garden")
   (status partial)
-  (* agent note (|
-     BOOK INTRO SLOT — auth — identity without a sidecar religion
-     Write your author voice in a human comment immediately below this note:
-       (* roerick (|
-          …
-       |) *)
-     Editorial guidance (agent): Today auth is in-process. Old prose below still smells like authd unikernel — your intro should say what is true now (pp_session, bootstrap admin, Basic for agents) and what remains interim (sha256 hashes, argon2 later). Trust boundary in plain language.
-  |) *)
-
+  
   (details
    (doc (|
         Auth is its own unikernel, separate from the

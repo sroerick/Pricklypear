@@ -10,87 +10,236 @@
  )
  (no-inline
  )
-  (* agent note (|
-     BOOK INTRO SLOT — BOOK FRONT MATTER (root)
-     Write your author voice in a human comment immediately below this note:
-       (* roerick (|
-          …
-       |) *)
-     Editorial guidance (agent): This is the title-page essay for the whole literate program. Rewrite or supersede the Mirage-era (roerick) block below if it no longer matches v1. Cover: what this book is (a program you can read / a system that runs), how to read full-dump order, what multi-user means now, and that deprecated chapters are historical branches of the same book. Aim for something you would leave on a table, not a README.
-  |) *)
-  (* agent note (|
-     EDITORIAL: The following (roerick (|…|)) block still describes Mirage
-     supervisor/authd fleet topology. When you write the front-matter slot
-     above, either revise this block in place or replace it so the root
-     human voice matches single-image v1 (one binary, session multi-user).
-  |) *)
- (roerick
+
+ (* roerick (|
+
+        An introduction: A little about me:
+
+        I'm super excited about what has emerged with Pricklypear.  
+        Pricklypear is the result of a kind of long, meandering journey. 
+        I see a lot of these cactus on my hike. In the middle of the desert, they 
+        are common, they are prickly, and they bear delicious fruit. I've also 
+        been told you can use them to harvest water kefir yeast, but I've yet to 
+        confirm this.
+
+        I quit my development job and now work at a dentist office and a restaurant. 
+        But I just can't seem to stop coding. For a while I was trying to make the 
+        ultimate "CRUDmonkey" platform. Basically, I spent a lot of time with 
+        half baked designs trying to reinvent web frameworks. Then, I became totally
+        taken with the idea of a tree-based structure editor. 
+
+        My background is largely as a python CRUDmonkey, hence my interest in 
+        reinventing frameworks. I did a lot of data processing elbow grease 
+        work. I was CTO of a 13 person startup for a while. when I left that 
+        job I was pretty burnt out. I didn't think I enjoyed programming, 
+        but i still was obsessed with the idea of maybe I could make it easier. 
+
+        Then I found OCaml. Functional programming did it for me, man. It was 
+        like learning to program all over again. I started learning about all the 
+        things I had basically ignored as a python guy. I learned about compilers, 
+        low level languages. I took a freelance gig doing static analysis on 
+        IBM HLASM assembly language. 
+
+        The only think I really wanted from code? I wanted to build 
+        my dream zettelkasten. I just wanted a good notes app for my bible study.
+        First I built a bible mode in Obsidian with markdown files. But as soon 
+        as I tried to get Strong's Concordance in there, I absolutely hit the 
+        limits of what Obsidian could do. Then, I decided to switch over to elisp. 
+        LLMs were barely functional at this time, and they were really bad at lisp. 
+        This was the "copy and paste from ChatGPT" era. My emacs / org-roam 
+        zettelkasten worked amazingly. Honestly, I love emacs and I love org-roam. 
+        Absolutely beautiful peices of software. I also love the sense of calm that 
+        I get with emacs software. I pulled up this bible app in emacs 4 years later
+        and it just... worked. Amazingly. None of the constant churn of the JS 
+        ecosystem. 
+
+        OK, so then I got into OCaml, and I was very anti LLM. They didn't work, 
+        they made you dumb, they were a scam, yada yada yada. So I built myself a
+        bible app, all by hand, in OCaml / Dream. I had a great time with this. 
+        I felt like I probably learned more about Dream than I did OCaml, but that's 
+        how I felt when I first learned Python also. 
+
+        Then I took a gig with some guys who were doing IBM mainframe LLM stuff. 
+        I started coding in TypeScript (which i had never really used), right 
+        around the time when the LLMs got really, really good. Like November of 
+        2025? I saw a massive increase in their ability to compose and build code. 
+
+        Then I went deep. I started building harnesses, orchestrators, I did the 
+        full LLM psychosis thing. I eventually settled on my Borge architecture. 
+        Without going too deeply into it, it's a DSL for defining spec and a series 
+        of CLI tools to get agents to implement, review, and build out that spec. 
+        I'm not sure it's any more efficient but it seems to work super well for me. 
+
+        So then one day I had the brainwave. Can I make an interpreted lisp where 
+        the functions are stored in postgres? The agent assured me I was a genius
+        yet again, but I had a good feeling about this one. I had the LLM draw out 
+        my Borge spec, and then started a ralph loop. I think it went for like, 25
+        iterations? It ran for 4 days and it crashed a couple times and I think I 
+        maxxed out three different providers. It used a lot of tokens. I got an 
+        email from one of my LLM providers the next day letting me know they were 
+        tripling their costs.
+
+        When I started playing with it, I actually couldn't figure out how to use 
+        it at first. I had the agent draw up a intro guide. Then I realized that 
+        not only did it work, I could write language functions to the database, 
+        but that also those functions were working as web endpoints. I realized I 
+        had a whole framework. 
+
+        It worked so well. I built a couple apps on top, it was effortless. I 
+        plugged an LLM into the system. Once I prompted it to realize Pricklypear
+        was not a cactus in this scenario, it completely understood the harness 
+        it was in and it just... started writing functions. I couldn't believe it. 
+        Then I gave my local LLM access to the full REPL, and I realized I wouldn't 
+        ever have to build an API or CLI interface for agents ever again. 
+
+        I'm delighted by this. I have wanted a Smalltalk type environment since I 
+        learned about what that was. But by incredible, happy accident, I also 
+        got my brand spanking new web framework, and I also got my tree based 
+        editor. I honestly feel, I don't need any more software. I'd be good. 
+        If I had my druthers, I would just work on this in private and read 
+        Functional Programming papers and Alonzo Church in my hammock for the 
+        next 5 years while I dogfood this thing. But, you know, "building in 
+        public" and all that. 
+
+        I'm hoping some people are as thrilled and inspired by this as I am. 
+        Maybe the code is useful, or maybe just hearing about the concept is 
+        enough to inspire people. Or maybe, and this may be more likely, nobody 
+        will give a crap. I don't know where LLMs will go in the future, but I 
+        am really happy right here. 
+        
+        I'll let the agent describe the system here for a bit, and then 
+        talk about why I think this system is really, really good. 
+       
+ |) *)
+
+ (agent
   (|
-   Pricklypear is an operating system in the Smalltalk tradition:
-   a live, inspectable image where programs are editable data
-   and the running state IS the system. It is NOT Smalltalk:
-   no OOP, no image snapshots, no single-address-space-only
-   single-user world.
+   Pricklypear is a multi-user Lisp operating system in the
+   Smalltalk tradition: a live, inspectable image where programs
+   are editable data and the running process is the system. It is
+   not Smalltalk — no OOP image dump, no single-user snapshot world.
 
-   It is built on three architectural pillars:
+   Three pillars (as the system runs today):
 
-   1. MirageOS unikernels. The "OS" is OCaml code linked into
-      a unikernel. No userspace/kernel split, no syscalls.
-      Everything is inspectable OCaml values. The unikernel
-      boots in ~2s, making "rebuild the world" a cheap
-      operation and A/B rollback viable as a routine
-      operation, not a disaster-recovery one.
+   1. One OCaml unix image binary. HTTP (httpaf-lwt-unix + pure-html
+      / htmx), optional line-protocol REPL, in-process auth, and Lisp
+      eval live in a single process. Supervisor fleets, authd sidecars,
+      and Mirage/Solo5 unikernel topology are retired for v1 (see
+      single-image.borg; Solo5 remains an optional later hardening
+      spike, not the product path).
 
-   2. Postgres as the object store. Durable state (function
-      definitions, type schemas, branch metadata, user
-      records, application data) lives in Postgres. The
-      image is ephemeral and rebuildable from the store.
-      This splits durability from execution cleanly.
+   2. Postgres as the object store. Function definitions, types,
+      routes, data rows, users, sessions, and AI history are durable
+      rows. The image is ephemeral and rebuildable from the store
+      plus package seed (libs/* → system/main).
 
-   3. A Lisp interpreter (Scheme-flavored, Lisp-1, lexically
-      scoped). Programmers write functions in Lisp; the AST
-      IS the source (homoiconicity); functions are stored
-      as JSONB rows in Postgres, editable live without
-      rebuilding the image. The OCaml layer (primitives,
-      interpreter, transports) changes slowly via
-      supervised A/B boot. The Lisp layer changes fast via
-      row updates in the store.
+   3. A Scheme-flavored Lisp-1. The AST is the source (homoiconic);
+      functions persist as JSONB, editable live without rebuilding
+      the binary. OCaml (primitives, transports, gate) changes slowly
+      via deploy; Lisp (apps and product shell: nav, home, routes,
+      theme) changes fast via define/route on a branch.
 
-   Two unikernels compose the runtime:
+   Multi-user means many humans with credentials, browser or agent
+   sessions, and username/personal garden branches inheriting
+   system/main — not one process per user. Isolation is session and
+   branch scoped. Author provenance and SERIALIZABLE defaults still
+   shape how code and data meet.
 
-   - The SUPERVISOR unikernel: booted directly by the
-     hypervisor, manages a fleet of per-user IMAGE
-     unikernels, handles A/B rollback and health checks,
-     serves a minimal admin HTTP surface. Targets Solo5
-     in production, mirage/unix in dev.
-
-   - The IMAGE unikernel: booted per-user-session, runs
-     the Lisp interpreter, exposes an internal REPL
-     endpoint (supervisor fronts SSH and forwards) and
-     an htmx HTTP endpoint. Runs as mirage/unix initially;
-     v1 uses httpaf-lwt-unix + pure-html + pgx_lwt
-     (+ Io_unix). Solo5 is a later build-axis swap
-     (gluten-mirage + httpaf + pgx_lwt_mirage), not a
-     rewrite of the Lisp/store model.
-
-   The hypervisor box runs: the supervisor unikernel,
-   Postgres, and the per-user image unikernels the
-   supervisor spawns. Nothing else. There is no OpenBSD
-   userland in the hot path; the hypervisor trusts exactly
-   one thing (the supervisor) and the supervisor manages
-   the rest.
-
-   Multi-user is achieved by process isolation: each user
-   gets their own image instance. Namespaces, budgets, and
-   author-runs-as-author permissions handle the remaining
-   concerns. Code is branched (git-style fork/merge) so
-   users can experiment without clobbering each other or
-   the system baseline ('main').
-
-   This file is the source of truth. If the implementation
-   disagrees, the implementation is wrong.
+   The public face of a hosted instance is the image itself
+   (/welcome, /code, /book.pdf). The private workspace is the same
+   image after login. This multi-file borge book is the source of
+   truth: if implementation disagrees, the implementation is wrong.
   |)
  )
+
+ (* roerick (|
+
+    OK, so, a lot of people have talked about how incredible 
+    Lisp is. Personally, I'm not totally sold. Don't get me 
+    wrong, lisp is wonderful. But I think for larger projects 
+    you just need static typing. I didn't like static typing for 
+    a long time, I totally get it. But for medium or big projects, 
+    I just don't know how you do big refactors without it. 
+
+    That said, I think Lisp is like Ruby a lot, it's a beautiful 
+    and expressive language. So this is a lisp machine. And I 
+    think it's good for the same types of programs that Ruby is 
+    good at. So I did my best to clone Basecamp, hah. 
+
+    Having an agent work with a REPL is incredible. I mean, it's 
+    spectacular. They can define functions. They can read and execute 
+    individual functions. They can build functions inside out or 
+    bottom up. They can build them top down. They can SSH in remotely
+    and access the REPL while they're developing. It's pretty tight. 
+
+    I don't think any other architecture can match Pricklypear for 
+    building web apps, and I honestly don't think it's even close. 
+    All of those LLM marketing idiots telling you about on-demand 
+    self healing software? Hey, this is it. It's right here. I don't 
+    think you can do this with any other stack? Maybe like erlang
+    or something. 
+
+    The future I see for Pricklypear or something like it is enabling
+    LLMs to build on demand software for small and medium businesses. 
+    I don't even think you need to have a Pricklypear guy on staff? 
+    I mean you could, it'd probably help. But I think literally users
+    can ask for features and they will be deployed. I've had some 
+    trouble getting the built-in agent to build out like a whole app
+    from start to finish, but it can certainly add features. And that 
+    loop is closing fast. 
+    
+    I'm biased and deep in AI psychosis, but I'm telling you this is 
+    a much bigger leap than OpenClaw. Oh, you put your little
+    crab agent inside a chat bot? Guess what? Mine lives inside a 
+    language which he is developing himself, and that language is also
+    a fully baked web app. (Sorry, OpenClaw is brilliant, but I had to.
+    You'll understand when you login the first time.)
+
+    Let's talk roadmap. I'm going to dogfood this thing for a while. 
+    Maybe some other people will do something similar. I don't really 
+    feel any obligation to build anything for anybody else. Get your 
+    own! But, I would like to get this thing to the point where it's 
+    functioning as a self contained unit, and like, my dad could hop 
+    on it and he wouldn't have to learn anything about Lisp Machines 
+    in order to use it. I think this is feasible. It's just a weird 
+    little platform to build apps on. 
+
+    I'm hoping to get those apps fleshed out a bit. This is my new homelab
+    center. I'm moving my life onto this thing. It's too good not to. 
+    So I'd like for those apps to feel really really good. Currently, 
+    they do not feel great. They are not cozy. I want calm, and I want
+    cozy. Even though I can change these apps every day - I want to run 
+    them without changes for 5 years. 
+
+    I initially spec'd this out to run on MirageOS, but we've scrapped 
+    that for now. I would like to make this happen eventually. For now, 
+    I remain an OpenBSD guy. If you want Linux compatibility, make your 
+    agent do it. (I use Arch for development, btw). So I think self 
+    contained image is a priority. 
+
+    I would like to get some academic grounding on building this Lisp out.
+    I don't know nothin about languages. Seriously. I just added floats
+    to this thing. Also I think the language itself is called Nopales, 
+    but that isn't reflected anywhere right now. There is some sort of 
+    rudimentary effects system. I have no idea how it works. I don't really 
+    understand the subtlties of async, and the OCaml landscape is pretty
+    confusing.
+
+    I want to really polish up the node editor and the code editor. 
+    It should be a first class experience. Keyboard shortcuts, node 
+    navigation. I want it to feel as good as vim. 
+
+    I'd like to see local-first LLMs, too. You really don't need much 
+    here. And the way it's designed, it would plug right into a local 
+    agent. That local agent really wants to generate his own lisp 
+    functions using a recursive bottom up function generator call! 
+    
+    OK, that's enough for now. This is about as much sharing as I do, 
+    generally speaking. I guess I could get on Twitter and try to shill 
+    this thing but I think I'd rather just build it instead. 
+       
+ |) *)
+
  (section philosophy
   (doc "Book chapter — full text inlined from philosophy.borg")
   (inline philosophy.borg)

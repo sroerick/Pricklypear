@@ -5,15 +5,7 @@
  (section storage
   (doc "Postgres schema: branches, function_defs, type_defs, sessions. SERIALIZABLE defaults. NO inheritance.")
   (status implemented)
-  (* agent note (|
-     BOOK INTRO SLOT — storage — Postgres as filesystem
-     Write your author voice in a human comment immediately below this note:
-       (* roerick (|
-          …
-       |) *)
-     Editorial guidance (agent): Sell the durable/ephemeral split. Name the core tables in prose. SERIALIZABLE by default as a moral choice. No inheritance — say why in one sharp sentence.
-  |) *)
-
+  
   (subsection schema
    (doc "Core tables (in migrations/001_branches.sql)")
    (implements image/lib/store.ml supervisor/lib/store.ml auth/lib/store.ml)
