@@ -80,12 +80,26 @@ log "pack public source tree"
     [ -f "$f" ] && cp "$f" "$STAGE/src/"
   done
 }
-# Public artifacts (PDF book + tarball) if tools available
+# Public artifacts (PDF book + tarball).
+# Prefer regenerating via borge; falls back to docs/pricklypear-book.pdf
+# (vendored) when borge is not on the build host (wyo.town today).
 if [ -x scripts/public_artifacts.sh ]; then
   log "public artifacts → stage/public"
+  # Ensure vendored book is in the staged src so fallback can find it
+  if [ -f docs/pricklypear-book.pdf ]; then
+    mkdir -p "$STAGE/src/docs"
+    cp -f docs/pricklypear-book.pdf "$STAGE/src/docs/pricklypear-book.pdf"
+  fi
   PP_ROOT="$PP_ROOT" PP_SOURCE_ROOT="$STAGE/src" PP_PUBLIC_DIR="$STAGE/public" \
     /bin/ksh scripts/public_artifacts.sh "$STAGE/public" \
     || log "WARN: public_artifacts failed (book/tgz may be incomplete)"
+  if [ ! -f "$STAGE/public/book.pdf" ] && [ -f docs/pricklypear-book.pdf ]; then
+    cp -f docs/pricklypear-book.pdf "$STAGE/public/book.pdf"
+    log "copied vendored docs/pricklypear-book.pdf → stage/public/book.pdf"
+  fi
+  if [ ! -f "$STAGE/public/book.pdf" ]; then
+    log "WARN: release has no book.pdf"
+  fi
 else
   log "WARN: scripts/public_artifacts.sh missing"
 fi
