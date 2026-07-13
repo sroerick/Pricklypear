@@ -1,0 +1,7 @@
+(borge-bug (id "BORGE-1783902420")
+  (title "auth.route-visibility implemented: migration 006, gate, route prim arity, anonymous; flip status planned→implemented; note public routes for anonymous resolve on system/main inheritance")
+  (status triage)
+  (created 2026-07-12)
+  (filed-by roerick)
+  (doc "")
+)

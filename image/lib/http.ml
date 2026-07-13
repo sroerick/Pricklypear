@@ -4,11 +4,12 @@
       /                  system browser shell
       /health            JSON health
       /branches /bindings /binding/<name> /types
+      /data …            data rows browser (CRUD)
       /repl              browser REPL UI
       /api/eval          POST {expr} -> {ok,value|error}
       /edit/<name>       function editor GET/POST
       /inspect/binding/<name>
-      /inspect/row/<type>/<id>
+      /inspect/row/<type>/<id>  (redirects to /data/…)
       /api/ai/propose    POST {name,spec} -> AI define on branch
       user routes via (route ...)
 *)
@@ -173,8 +174,49 @@ let auth_disabled () : bool =
   | Some ("1" | "true" | "TRUE" | "yes" | "YES") -> true
   | _ -> false
 
-let is_public_path (path : string) : bool =
+let is_system_hard_public (path : string) : bool =
   path = "/login" || path = "/health" || path = "/logout"
+
+(** Kernel paths Lisp cannot open to the world (auth.route-visibility). *)
+let is_system_hard_private (path : string) : bool =
+  let prefixes =
+    [ "/admin"
+    ; "/data"
+    ; "/api"
+    ; "/bindings"
+    ; "/binding"
+    ; "/edit"
+    ; "/repl"
+    ; "/branches"
+    ; "/types"
+    ; "/pages"
+    ; "/page"
+    ; "/inspect"
+    ; "/agent"
+    ]
+  in
+  List.exists
+    (fun p ->
+      path = p
+      || (String.length path > String.length p
+          && String.sub path 0 (String.length p) = p
+          && path.[String.length p] = '/'))
+    prefixes
+  || path = "/"
+
+(* Back-compat name used only for hard public. *)
+let is_public_path (path : string) : bool = is_system_hard_public path
+
+(** Classify path for the request gate.
+    Returns [`Hard_public | `Hard_private | `User of string * string
+    | `Unknown] where User is (handler, visibility). *)
+let classify_path (session : Session.t) (path : string) =
+  if is_system_hard_public path then `Hard_public
+  else if is_system_hard_private path then `Hard_private
+  else
+    match Session.lookup_route_meta session path with
+    | Some (handler, vis) -> `User (handler, vis)
+    | None -> `Unknown
 
 let parse_cookies (headers : (string * string) list) : (string * string) list =
   match List.assoc_opt "cookie" headers with
@@ -1278,15 +1320,22 @@ let list_types_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
       (fun (name, fields) ->
         let field_list = String.concat ", " fields in
         HTML.tr [] [
-          HTML.td [] [txt "%s" name];
+          HTML.td [] [
+            HTML.a [HTML.href "/data/%s" name] [txt "%s" name];
+          ];
           HTML.td [] [txt "%s" field_list];
+          HTML.td [] [
+            HTML.a [HTML.href "/data/%s" name] [txt "rows"];
+          ];
         ])
       types
   in
   let body =
     chrome ~session ~title:("Data types (" ^ Session.branch_name session ^ ")") [
       HTML.p [HTML.class_ "meta"] [
-        txt "Declared shapes for Data rows. Create instances via (create 'type \"{...}\") in the REPL.";
+        txt "Declared shapes for Data rows. Browse/edit instances at ";
+        HTML.a [HTML.href "/data"] [txt "/data"];
+        txt " or via (create 'type \"{...}\") in the REPL.";
       ];
       (match types with
        | [] ->
@@ -1297,6 +1346,7 @@ let list_types_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
                HTML.tr [] [
                  HTML.th [] [txt "type"];
                  HTML.th [] [txt "fields"];
+                 HTML.th [] [txt ""];
                ]
              ];
              HTML.tbody [] rows;
@@ -1305,6 +1355,603 @@ let list_types_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
   in
   html_response reqd ~session body;
   Lwt.return_unit
+
+(* ---- data browser (image.data-browser) ---- *)
+
+let data_type_name_ok (s : string) : bool =
+  let n = String.length s in
+  n > 0 && n <= 128 &&
+  (try
+     for i = 0 to n - 1 do
+       match s.[i] with
+       | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '-' | '_' | '/' | '.' -> ()
+       | _ -> raise Exit
+     done;
+     true
+   with Exit -> false)
+
+let json_object_assoc (s : string) : ((string * Yojson.Safe.t) list, string) result =
+  try
+    match Yojson.Safe.from_string s with
+    | `Assoc kvs -> Ok kvs
+    | _ -> Error "fields JSON must be an object"
+  with exn -> Error ("invalid JSON: " ^ Printexc.to_string exn)
+
+let fields_assoc_of_json (s : string) : (string * Yojson.Safe.t) list =
+  match json_object_assoc s with
+  | Ok kvs -> kvs
+  | Error _ -> []
+
+let string_of_json_field (v : Yojson.Safe.t) : string =
+  match v with
+  | `String s -> s
+  | `Int i -> string_of_int i
+  | `Intlit s -> s
+  | `Float f -> string_of_float f
+  | `Bool b -> if b then "true" else "false"
+  | `Null -> ""
+  | other -> Yojson.Safe.to_string other
+
+let truncate_cell (s : string) ~(max_len : int) : string =
+  if String.length s <= max_len then s
+  else String.sub s 0 max_len ^ "…"
+
+let short_id (id : string) : string =
+  if String.length id <= 8 then id else String.sub id 0 8
+
+(** Build fields JSON for create/update.
+    Prefer non-empty fields_json (must be object). Else declared form
+    fields as string values. On update, [base] preserves unknown keys. *)
+let build_fields_json
+    ~(declared : string list)
+    ~(form : (string * string) list)
+    ~(fields_json_opt : string option)
+    ~(base : (string * Yojson.Safe.t) list)
+    : (string, string) result =
+  match fields_json_opt with
+  | Some raw when String.trim raw <> "" ->
+      (match json_object_assoc (String.trim raw) with
+       | Ok kvs -> Ok (Yojson.Safe.to_string (`Assoc kvs))
+       | Error e -> Error e)
+  | _ ->
+      let form_tbl = Hashtbl.create 16 in
+      List.iter (fun (k, v) -> Hashtbl.replace form_tbl k v) form;
+      let declared_keys =
+        if declared = [] then
+          (* no type_defs: take every form key except control fields *)
+          Hashtbl.fold
+            (fun k _ acc ->
+              if k = "fields_json" || k = "action" then acc else k :: acc)
+            form_tbl []
+          |> List.sort_uniq String.compare
+        else declared
+      in
+      let updated =
+        List.fold_left
+          (fun acc key ->
+            match Hashtbl.find_opt form_tbl key with
+            | None -> acc
+            | Some v ->
+                (key, `String v) :: List.filter (fun (k, _) -> k <> key) acc)
+          base declared_keys
+      in
+      Ok (Yojson.Safe.to_string (`Assoc updated))
+
+let shared_data_banner () =
+  HTML.p [HTML.class_ "meta"] [
+    txt "Data rows are shared across branches (not versioned by branch). ";
+    HTML.a [HTML.href "/types"] [txt "Type defs"];
+    txt " · ";
+    HTML.a [HTML.href "/data"] [txt "All data"];
+  ]
+
+let data_index_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+  let store = Session.store session in
+  let* types = Store.list_types store in
+  let* orphan_names = Crud.list_data_type_names store in
+  let declared = List.map fst types in
+  let declared_set =
+    List.fold_left (fun acc n -> n :: acc) [] declared
+  in
+  let orphans =
+    List.filter (fun n -> not (List.mem n declared_set)) orphan_names
+  in
+  let* rows =
+    Lwt_list.map_s
+      (fun (name, fields) ->
+        let* n = Crud.count_by_type store ~type_name:name in
+        Lwt.return
+          (HTML.tr [] [
+             HTML.td [] [
+               HTML.a [HTML.href "/data/%s" name] [txt "%s" name];
+             ];
+             HTML.td [] [txt "%s" (String.concat ", " fields)];
+             HTML.td [] [txt "%d" n];
+             HTML.td [] [
+               HTML.a [HTML.href "/data/%s" name] [txt "browse"];
+               txt " · ";
+               HTML.a [HTML.href "/data/%s/new" name] [txt "new"];
+             ];
+           ]))
+      types
+  in
+  let* orphan_rows =
+    Lwt_list.map_s
+      (fun name ->
+        let* n = Crud.count_by_type store ~type_name:name in
+        Lwt.return
+          (HTML.tr [] [
+             HTML.td [] [
+               HTML.a [HTML.href "/data/%s" name] [txt "%s" name];
+             ];
+             HTML.td [] [txt "(no type_def)"];
+             HTML.td [] [txt "%d" n];
+             HTML.td [] [
+               HTML.a [HTML.href "/data/%s" name] [txt "browse"];
+             ];
+           ]))
+      orphans
+  in
+  let body =
+    chrome ~session ~title:"Data" [
+      shared_data_banner ();
+      HTML.div [HTML.class_ "card"] [
+        HTML.h2 [] [txt "Types with rows"];
+        (match rows @ orphan_rows with
+         | [] ->
+             HTML.p [] [
+               txt "(no data_rows yet; declare a type via (deftype …) or ";
+               HTML.a [HTML.href "/types"] [txt "/types"];
+               txt ")";
+             ]
+         | all ->
+             HTML.table [] [
+               HTML.thead [] [
+                 HTML.tr [] [
+                   HTML.th [] [txt "type"];
+                   HTML.th [] [txt "fields"];
+                   HTML.th [] [txt "rows"];
+                   HTML.th [] [txt ""];
+                 ];
+               ];
+               HTML.tbody [] all;
+             ]);
+      ];
+    ]
+  in
+  html_response reqd ~session body;
+  Lwt.return_unit
+
+let data_list_page (session : Session.t) (type_name : string)
+    (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+  if not (data_type_name_ok type_name) then begin
+    html_response reqd ~session ~status:`Bad_request
+      (chrome ~session ~title:"Bad type" [
+         HTML.p [HTML.class_ "err"] [txt "invalid type name"];
+         HTML.p [] [HTML.a [HTML.href "/data"] [txt "Back to /data"]];
+       ]);
+    Lwt.return_unit
+  end else
+    let store = Session.store session in
+    let target = (Httpaf.Reqd.request reqd).Httpaf.Request.target in
+    let limit =
+      match query_param target "limit" with
+      | Some s ->
+          (try max 1 (min 200 (int_of_string s)) with _ -> 50)
+      | None -> 50
+    in
+    let offset =
+      match query_param target "offset" with
+      | Some s -> (try max 0 (int_of_string s) with _ -> 0)
+      | None -> 0
+    in
+    let* types = Store.list_types store in
+    let declared =
+      match List.assoc_opt type_name types with
+      | Some fs -> fs
+      | None -> []
+    in
+    let* total = Crud.count_by_type store ~type_name in
+    let* rows = Crud.list_page store ~type_name ~limit ~offset () in
+    let col_fields =
+      if declared = [] then
+        (* infer columns from first row keys *)
+        match rows with
+        | r :: _ -> List.map fst (fields_assoc_of_json r.Crud.fields_json)
+        | [] -> []
+      else declared
+    in
+    let header_cells =
+      HTML.th [] [txt "id"]
+      :: List.map (fun f -> HTML.th [] [txt "%s" f]) col_fields
+    in
+    let data_rows =
+      List.map
+        (fun (r : Crud.row_record) ->
+          let assoc = fields_assoc_of_json r.Crud.fields_json in
+          let cells =
+            List.map
+              (fun f ->
+                let v =
+                  match List.assoc_opt f assoc with
+                  | Some j -> string_of_json_field j
+                  | None -> ""
+                in
+                HTML.td [] [txt "%s" (truncate_cell v ~max_len:48)])
+              col_fields
+          in
+          HTML.tr []
+            (HTML.td [] [
+               HTML.a
+                 [HTML.href "/data/%s/%s" type_name r.Crud.id]
+                 [txt "%s" (short_id r.Crud.id)];
+             ]
+             :: cells))
+        rows
+    in
+    let prev_off = max 0 (offset - limit) in
+    let next_off = offset + limit in
+    let has_prev = offset > 0 in
+    let has_next = next_off < total in
+    let body =
+      chrome ~session ~title:("Data · " ^ type_name) [
+        shared_data_banner ();
+        HTML.div [HTML.class_ "card"] [
+          HTML.h2 [] [txt "%s" type_name];
+          HTML.p [HTML.class_ "meta"] [
+            txt "%d row(s) · showing %d–%d · limit %d"
+              total
+              (if total = 0 then 0 else offset + 1)
+              (min total (offset + List.length rows))
+              limit;
+          ];
+          HTML.p [] [
+            HTML.a [HTML.href "/data/%s/new" type_name] [txt "New row"];
+            txt " · ";
+            HTML.a [HTML.href "/data"] [txt "All types"];
+            txt " · ";
+            HTML.a [HTML.href "/types"] [txt "Type defs"];
+          ];
+          (match data_rows with
+           | [] ->
+               HTML.p [] [
+                 txt "(no rows yet) ";
+                 HTML.a [HTML.href "/data/%s/new" type_name] [txt "Create one"];
+               ]
+           | _ ->
+               HTML.table [] [
+                 HTML.thead [] [HTML.tr [] header_cells];
+                 HTML.tbody [] data_rows;
+               ]);
+          HTML.p []
+            ((if has_prev then
+                [ HTML.a
+                    [ HTML.href "/data/%s?limit=%d&offset=%d"
+                        type_name limit prev_off ]
+                    [txt "← Prev"] ]
+              else [])
+             @ (if has_prev && has_next then [txt " · "] else [])
+             @ (if has_next then
+                  [ HTML.a
+                      [ HTML.href "/data/%s?limit=%d&offset=%d"
+                          type_name limit next_off ]
+                      [txt "Next →"] ]
+                else []));
+        ];
+      ]
+    in
+    html_response reqd ~session body;
+    Lwt.return_unit
+
+let field_inputs ~(declared : string list)
+    ~(values : (string * string) list) : Pure_html.node list =
+  let val_of k = Option.value (List.assoc_opt k values) ~default:"" in
+  if declared = [] then
+    [ HTML.p [HTML.class_ "meta"] [
+        txt "No declared fields — use raw JSON below (or deftype first).";
+      ] ]
+  else
+    List.map
+      (fun f ->
+        HTML.p [] [
+          HTML.label [] [txt "%s " f];
+          HTML.input
+            [ HTML.type_ "text"
+            ; HTML.name "%s" f
+            ; HTML.value "%s" (val_of f)
+            ];
+        ])
+      declared
+
+let data_new_page (session : Session.t) (type_name : string)
+    (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+  if not (data_type_name_ok type_name) then begin
+    html_response reqd ~session ~status:`Bad_request
+      (chrome ~session ~title:"Bad type" [
+         HTML.p [HTML.class_ "err"] [txt "invalid type name"];
+       ]);
+    Lwt.return_unit
+  end else
+    let* types = Store.list_types (Session.store session) in
+    let declared =
+      match List.assoc_opt type_name types with Some fs -> fs | None -> []
+    in
+    let body =
+      chrome ~session ~title:("New · " ^ type_name) [
+        shared_data_banner ();
+        HTML.div [HTML.class_ "card"] [
+          HTML.h2 [] [txt "Create %s" type_name];
+          HTML.form
+            [ HTML.method_ `POST; HTML.action "/data/%s" type_name ]
+            (field_inputs ~declared ~values:[]
+             @ [ HTML.p [] [
+                   HTML.label [] [txt "fields_json (optional; wins if set) "];
+                   HTML.textarea
+                     [ HTML.name "fields_json" ]
+                     "%s" "";
+                 ]
+               ; HTML.button [HTML.type_ "submit"] [txt "Create"]
+               ; HTML.p [] [
+                   HTML.a [HTML.href "/data/%s" type_name] [txt "Cancel"];
+                 ]
+               ]);
+        ];
+      ]
+    in
+    html_response reqd ~session body;
+    Lwt.return_unit
+
+let data_create (session : Session.t) (type_name : string)
+    (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+  if not (data_type_name_ok type_name) then begin
+    html_response reqd ~session ~status:`Bad_request
+      (chrome ~session ~title:"Bad type" [
+         HTML.p [HTML.class_ "err"] [txt "invalid type name"];
+       ]);
+    Lwt.return_unit
+  end else
+    let store = Session.store session in
+    let* body = read_body reqd in
+    let form = parse_form_body body in
+    let* types = Store.list_types store in
+    let declared =
+      match List.assoc_opt type_name types with Some fs -> fs | None -> []
+    in
+    let fields_json_opt = List.assoc_opt "fields_json" form in
+    match
+      build_fields_json ~declared ~form ~fields_json_opt ~base:[]
+    with
+    | Error e ->
+        html_response reqd ~session ~status:`Bad_request
+          (chrome ~session ~title:"Create failed" [
+             HTML.p [HTML.class_ "err"] [txt "%s" e];
+             HTML.p [] [
+               HTML.a [HTML.href "/data/%s/new" type_name] [txt "Back"];
+             ];
+           ]);
+        Lwt.return_unit
+    | Ok fields_json ->
+        let author = Session.username session in
+        let* v =
+          Crud.create store ~type_name ~fields_json ~author
+        in
+        (match v with
+         | Pricklypear_lisp.Ast.VStr id
+           when String.length id = 36 && not (String.contains id ' ') ->
+             redirect_response reqd
+               (Printf.sprintf "/data/%s/%s" type_name id);
+             Lwt.return_unit
+         | Pricklypear_lisp.Ast.VStr msg ->
+             html_response reqd ~session ~status:`Internal_server_error
+               (chrome ~session ~title:"Create failed" [
+                  HTML.p [HTML.class_ "err"] [txt "%s" msg];
+                  HTML.p [] [
+                    HTML.a [HTML.href "/data/%s/new" type_name] [txt "Back"];
+                  ];
+                ]);
+             Lwt.return_unit
+         | _ ->
+             html_response reqd ~session ~status:`Internal_server_error
+               (chrome ~session ~title:"Create failed" [
+                  HTML.p [HTML.class_ "err"] [txt "create failed"];
+                ]);
+             Lwt.return_unit)
+
+let data_detail_page (session : Session.t) (type_name : string)
+    (id : string) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+  if not (data_type_name_ok type_name) then begin
+    html_response reqd ~session ~status:`Bad_request
+      (chrome ~session ~title:"Bad type" [
+         HTML.p [HTML.class_ "err"] [txt "invalid type name"];
+       ]);
+    Lwt.return_unit
+  end else
+    let store = Session.store session in
+    let* row_opt = Crud.get_row store ~type_name ~id in
+    match row_opt with
+    | None ->
+        html_response reqd ~session ~status:`Not_found
+          (chrome ~session ~title:"Row not found" [
+             HTML.p [HTML.class_ "err"] [txt "row not found"];
+             HTML.p [] [
+               HTML.a [HTML.href "/data/%s" type_name] [txt "Back to list"];
+             ];
+           ]);
+        Lwt.return_unit
+    | Some row ->
+        let* types = Store.list_types store in
+        let declared =
+          match List.assoc_opt type_name types with
+          | Some fs -> fs
+          | None -> []
+        in
+        let assoc = fields_assoc_of_json row.Crud.fields_json in
+        let declared_set = declared in
+        let extra_keys =
+          List.filter_map
+            (fun (k, _) ->
+              if List.mem k declared_set then None else Some k)
+            assoc
+        in
+        let values =
+          List.map (fun (k, v) -> (k, string_of_json_field v)) assoc
+        in
+        (* Include extra keys so edit form can preserve/update unknowns. *)
+        let form_fields =
+          declared
+          @ List.map (fun k -> k) extra_keys
+        in
+        let meta_bits =
+          [ HTML.p [HTML.class_ "meta"] [txt "id: %s" row.Crud.id] ]
+          @ (match row.Crud.author with
+             | Some a -> [HTML.p [HTML.class_ "meta"] [txt "author: %s" a]]
+             | None -> [])
+          @ (match row.Crud.created_at with
+             | Some t -> [HTML.p [HTML.class_ "meta"] [txt "created: %s" t]]
+             | None -> [])
+          @ (match row.Crud.updated_at with
+             | Some t -> [HTML.p [HTML.class_ "meta"] [txt "updated: %s" t]]
+             | None -> [])
+        in
+        let pretty =
+          try Yojson.Safe.pretty_to_string
+                (Yojson.Safe.from_string row.Crud.fields_json)
+          with _ -> row.Crud.fields_json
+        in
+        let body =
+          chrome ~session
+            ~title:(Printf.sprintf "Data · %s · %s" type_name (short_id id))
+            [ shared_data_banner ()
+            ; HTML.div [HTML.class_ "card"] (
+                [ HTML.h2 [] [txt "%s" type_name] ]
+                @ meta_bits
+                @ [ HTML.p [] [
+                      HTML.a [HTML.href "/data/%s" type_name] [txt "← List"];
+                      txt " · ";
+                      HTML.a [HTML.href "/data"] [txt "All data"];
+                    ]
+                  ; HTML.h3 [] [txt "Fields"]
+                  ; HTML.pre [] [txt "%s" pretty]
+                  ]
+              )
+            ; HTML.div [HTML.class_ "card"] [
+                HTML.h3 [] [txt "Edit"];
+                HTML.form
+                  [ HTML.method_ `POST
+                  ; HTML.action "/data/%s/%s" type_name id
+                  ]
+                  (field_inputs ~declared:form_fields ~values
+                   @ [ HTML.p [] [
+                         HTML.label []
+                           [txt "fields_json (optional; full replace if set) "];
+                         HTML.textarea
+                           [ HTML.name "fields_json" ]
+                           "%s" "";
+                       ]
+                     ; HTML.button [HTML.type_ "submit"] [txt "Save"]
+                     ]);
+              ]
+            ; HTML.div [HTML.class_ "card"] [
+                HTML.h3 [] [txt "Delete"];
+                HTML.form
+                  [ HTML.method_ `POST
+                  ; HTML.action "/data/%s/%s/delete" type_name id
+                  ]
+                  [ HTML.button [HTML.type_ "submit"] [txt "Delete row"] ];
+              ]
+            ]
+        in
+        html_response reqd ~session body;
+        Lwt.return_unit
+
+let data_update (session : Session.t) (type_name : string) (id : string)
+    (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+  if not (data_type_name_ok type_name) then begin
+    html_response reqd ~session ~status:`Bad_request
+      (chrome ~session ~title:"Bad type" [
+         HTML.p [HTML.class_ "err"] [txt "invalid type name"];
+       ]);
+    Lwt.return_unit
+  end else
+    let store = Session.store session in
+    let* body = read_body reqd in
+    let form = parse_form_body body in
+    let* row_opt = Crud.get_row store ~type_name ~id in
+    match row_opt with
+    | None ->
+        html_response reqd ~session ~status:`Not_found
+          (chrome ~session ~title:"Row not found" [
+             HTML.p [HTML.class_ "err"] [txt "row not found"];
+           ]);
+        Lwt.return_unit
+    | Some row ->
+        let* types = Store.list_types store in
+        let declared =
+          match List.assoc_opt type_name types with
+          | Some fs -> fs
+          | None -> []
+        in
+        let base = fields_assoc_of_json row.Crud.fields_json in
+        let extra_keys =
+          List.filter_map
+            (fun (k, _) -> if List.mem k declared then None else Some k)
+            base
+        in
+        let form_fields = declared @ extra_keys in
+        let fields_json_opt = List.assoc_opt "fields_json" form in
+        (match
+           build_fields_json ~declared:form_fields ~form ~fields_json_opt
+             ~base
+         with
+         | Error e ->
+             html_response reqd ~session ~status:`Bad_request
+               (chrome ~session ~title:"Update failed" [
+                  HTML.p [HTML.class_ "err"] [txt "%s" e];
+                  HTML.p [] [
+                    HTML.a
+                      [HTML.href "/data/%s/%s" type_name id]
+                      [txt "Back"];
+                  ];
+                ]);
+             Lwt.return_unit
+         | Ok fields_json ->
+             let* v = Crud.update store ~type_name ~id ~fields_json in
+             (match v with
+              | Pricklypear_lisp.Ast.VStr _ ->
+                  redirect_response reqd
+                    (Printf.sprintf "/data/%s/%s" type_name id);
+                  Lwt.return_unit
+              | _ ->
+                  html_response reqd ~session ~status:`Not_found
+                    (chrome ~session ~title:"Update failed" [
+                       HTML.p [HTML.class_ "err"] [txt "row not found"];
+                     ]);
+                  Lwt.return_unit))
+
+let data_delete (session : Session.t) (type_name : string) (id : string)
+    (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+  if not (data_type_name_ok type_name) then begin
+    html_response reqd ~session ~status:`Bad_request
+      (chrome ~session ~title:"Bad type" [
+         HTML.p [HTML.class_ "err"] [txt "invalid type name"];
+       ]);
+    Lwt.return_unit
+  end else
+    let store = Session.store session in
+    let* v = Crud.delete store ~type_name ~id in
+    match v with
+    | Pricklypear_lisp.Ast.VStr _ ->
+        redirect_response reqd (Printf.sprintf "/data/%s" type_name);
+        Lwt.return_unit
+    | _ ->
+        html_response reqd ~session ~status:`Not_found
+          (chrome ~session ~title:"Delete failed" [
+             HTML.p [HTML.class_ "err"] [txt "row not found"];
+             HTML.p [] [
+               HTML.a [HTML.href "/data/%s" type_name] [txt "Back to list"];
+             ];
+           ]);
+        Lwt.return_unit
 
 let about_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit =
   let body =
@@ -1377,16 +2024,17 @@ let page_inspect_path (route : string) : string =
   else route
 
 let pages_list_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit =
-  let routes = Session.list_pages session in
+  let routes = Session.list_pages_meta session in
   let rows =
     List.map
-      (fun (route, handler) ->
+      (fun (route, handler, vis) ->
         let inspect = "/page/" ^ page_inspect_path route in
         HTML.tr [] [
           HTML.td [] [HTML.a [HTML.href "%s" route] [txt "%s" route]];
           HTML.td [] [
             HTML.a [HTML.href "%s" (Packages.edit_href handler)] [txt "%s" handler];
           ];
+          HTML.td [] [txt "%s" vis];
           HTML.td [] [
             HTML.a [HTML.href "%s" route] [txt "open"];
             txt " · ";
@@ -1400,7 +2048,8 @@ let pages_list_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit =
   let body =
     chrome ~session ~title:"Pages" [
       HTML.p [HTML.class_ "meta"] [
-        txt "Page = URL endpoint. Function = code it runs. Edit functions; open pages.";
+        txt "Page = URL endpoint. Function = code it runs. Visibility: private (login) or public (anonymous GET). ";
+        txt "(route path handler 'public) to open a page.";
       ];
       (match routes with
        | [] ->
@@ -1413,6 +2062,7 @@ let pages_list_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit =
                HTML.tr [] [
                  HTML.th [] [txt "page (URL)"];
                  HTML.th [] [txt "function (handler)"];
+                 HTML.th [] [txt "visibility"];
                  HTML.th [] [txt "actions"];
                ]
              ];
@@ -2116,7 +2766,7 @@ let api_edit_create (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
     | Ok _ ->
         let* () =
           if rebind then
-            Session.set_route session ~route:("/" ^ name) ~handler:name
+            Session.set_route session ~route:("/" ^ name) ~handler:name ()
           else Lwt.return_unit
         in
         let msg =
@@ -2257,29 +2907,10 @@ let inspect_binding_page (session : Session.t) (name : string)
 
 let inspect_row_page (session : Session.t) (type_name : string) (id : string)
     (reqd : Httpaf.Reqd.t) : unit Lwt.t =
-  let* v = Crud.get (Session.store session) ~type_name ~id in
-  let body =
-    match v with
-    | Pricklypear_lisp.Ast.VNil ->
-        chrome ~session ~title:("Inspect row " ^ type_name ^ "/" ^ id) [
-          HTML.p [HTML.class_ "err"] [txt "row not found"];
-        ]
-    | Pricklypear_lisp.Ast.VStr fields ->
-        let pretty =
-          try Yojson.Safe.pretty_to_string (Yojson.Safe.from_string fields)
-          with _ -> fields
-        in
-        chrome ~session ~title:("Inspect row " ^ type_name ^ "/" ^ id) [
-          HTML.div [HTML.class_ "card"] [
-            HTML.pre [] [txt "%s" pretty];
-          ];
-        ]
-    | other ->
-        chrome ~session ~title:("Inspect row " ^ type_name ^ "/" ^ id) [
-          HTML.pre [] [txt "%s" (Pricklypear_lisp.Reader.pp_value other)];
-        ]
-  in
-  html_response reqd ~session body;
+  (* Canonical row URL is /data/<type>/<id> (image.data-browser). *)
+  ignore session;
+  redirect_response reqd
+    (Printf.sprintf "/data/%s/%s" type_name id);
   Lwt.return_unit
 
 let api_eval (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
@@ -2973,28 +3604,57 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
   let meth = req.Httpaf.Request.meth in
   let headers = header_list req in
   (* Thunk page: Lwt promises are eager — must not start page work
-     before auth middleware decides proceed. *)
+     before auth middleware decides proceed (auth.route-visibility). *)
   let launch (page_fn : unit -> unit Lwt.t) : unit =
     Lwt.async (fun () ->
       Lwt_mutex.with_lock request_mutex (fun () ->
         Lwt.catch
           (fun () ->
             let* proceed =
-              if auth_disabled () || is_public_path path then
-                Lwt.return true
-              else
+              if auth_disabled () then begin
+                (* Dev escape: still try attach so whoami is real if cookie. *)
                 let* user_opt = resolve_identity session ~headers in
-                match user_opt with
-                | None ->
-                    require_login_redirect reqd ~path;
-                    Lwt.return false
-                | Some user ->
-                    let tok = cookie_value headers cookie_name in
-                    let* () =
+                let* () =
+                  match user_opt with
+                  | Some user ->
+                      let tok = cookie_value headers cookie_name in
                       attach_from_user session user ~auth_token:tok
                         ~checkout_personal_now:false ()
+                  | None -> Session.attach_anonymous session
+                in
+                Lwt.return true
+              end else begin
+                (* Attach identity BEFORE classify: route table is
+                   branch-scoped (inheritance CTE). Anonymous uses
+                   system/main so package public routes resolve. *)
+                let* user_opt = resolve_identity session ~headers in
+                let* () =
+                  match user_opt with
+                  | Some user ->
+                      let tok = cookie_value headers cookie_name in
+                      attach_from_user session user ~auth_token:tok
+                        ~checkout_personal_now:false ()
+                  | None -> Session.attach_anonymous session
+                in
+                let classif = classify_path session path in
+                let needs_auth =
+                  match classif with
+                  | `Hard_public -> false
+                  | `Hard_private | `Unknown -> true
+                  | `User (_, vis) -> vis <> "public"
+                in
+                match user_opt, needs_auth with
+                | Some _, _ -> Lwt.return true
+                | None, false -> Lwt.return true
+                | None, true ->
+                    let apiish =
+                      String.length path >= 4
+                      && String.sub path 0 4 = "/api"
                     in
-                    Lwt.return true
+                    if apiish then unauthorized_api reqd
+                    else require_login_redirect reqd ~path;
+                    Lwt.return false
+              end
             in
             if not proceed then Lwt.return_unit
             else
@@ -3179,6 +3839,43 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
   | `POST, "/branches/promote" -> launch (fun () -> branches_promote session reqd)
   | `GET, "/bindings" -> launch (fun () -> list_bindings_page session reqd)
   | `GET, "/types" -> launch (fun () -> list_types_page session reqd)
+  | `GET, "/data" | `GET, "/data/" ->
+      launch (fun () -> data_index_page session reqd)
+  | `GET, path when String.length path >= 6
+                 && String.sub path 0 6 = "/data/" ->
+      let rest = String.sub path 6 (String.length path - 6) in
+      let segs = String.split_on_char '/' rest |> List.filter ((<>) "") in
+      (match segs with
+       | [ty; "new"] ->
+           launch (fun () -> data_new_page session ty reqd)
+       | [ty; id; "delete"] ->
+           (* GET delete not supported — point at detail *)
+           launch (fun () -> data_detail_page session ty id reqd)
+       | [ty; id] ->
+           launch (fun () -> data_detail_page session ty id reqd)
+       | [ty] ->
+           launch (fun () -> data_list_page session ty reqd)
+       | _ ->
+           html_response reqd ~session ~status:`Bad_request
+             (chrome ~session ~title:"Bad data path" [
+                HTML.p [] [txt "use /data, /data/<type>, /data/<type>/new, /data/<type>/<id>"];
+              ]))
+  | `POST, path when String.length path >= 6
+                  && String.sub path 0 6 = "/data/" ->
+      let rest = String.sub path 6 (String.length path - 6) in
+      let segs = String.split_on_char '/' rest |> List.filter ((<>) "") in
+      (match segs with
+       | [ty; id; "delete"] ->
+           launch (fun () -> data_delete session ty id reqd)
+       | [ty; id] ->
+           launch (fun () -> data_update session ty id reqd)
+       | [ty] ->
+           launch (fun () -> data_create session ty reqd)
+       | _ ->
+           html_response reqd ~session ~status:`Bad_request
+             (chrome ~session ~title:"Bad data path" [
+                HTML.p [] [txt "POST /data/<type> | /data/<type>/<id> | …/delete"];
+              ]))
   | `GET, "/repl" ->
       launch (fun () ->
         let* () = Lwt.return_unit in

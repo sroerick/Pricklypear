@@ -112,8 +112,14 @@ auth is **in-process** in the image (Option B / auth.web-login).
   `/admin/users`, `/branches` (list all branches), `/bindings` (list
   visible function_defs on the current branch), `/binding/<name>`
   (pretty-print one function_def's AST), `/types` (list visible
-  type_defs on the current branch — fields shown comma-separated).
-  User routes via `(route "/x" 'fn)`.
+  type_defs on the current branch — fields shown comma-separated),
+  `/data` (generic data_rows browser: list types + counts, browse
+  `/data/<type>`, create/edit/delete rows at `/data/<type>/…`).
+  `/inspect/row/<type>/<id>` redirects to `/data/<type>/<id>`.
+  User routes via `(route "/x" "fn")` (private by default) or
+  `(route "/x" "fn" 'public)` / `(public-route …)` for anonymous GET.
+  Kernel paths (`/data`, `/admin`, `/api/eval`, …) stay hard-private.
+  Anonymous identity uses `system/main` (package public routes inherit).
 - Lisp primitives: pure (`+ - * = < > <= >= not list car cdr cons
   null? pair? count string-append str type-of whoami current-author
   list-bindings dict-get dict-set dict-keys render-html`), DB-

@@ -806,25 +806,48 @@ let ensure_branch (t : t) ~(parent_id : string) ~(owner : string)
 (* Persist a route binding: (route "/path" 'handler-fn-name).
    INSERT ... ON CONFLICT (branch_id, route) DO UPDATE — so re-defining
    a route overrides the existing binding. *)
+let normalize_visibility (v : string) : string =
+  match String.lowercase_ascii (String.trim v) with
+  | "public" -> "public"
+  | _ -> "private"
+
+(** Persist a route. [visibility_opt]:
+    - Some v → set visibility (public|private)
+    - None → on INSERT default private; on UPDATE keep existing visibility
+      (handler-only re-register does not clobber public). *)
 let register_route (t : t) ~(route : string) ~(handler : string)
+    ?visibility ()
   : unit Lwt.t =
   match t.conn with
   | None -> Lwt.return_unit
   | Some conn ->
       Lwt.catch
         (fun () ->
-          let sql =
-            "INSERT INTO view_bindings (branch_id, route, handler) " ^
-            "VALUES ($1, $2, $3) " ^
-            "ON CONFLICT (branch_id, route) DO UPDATE " ^
-            "SET handler = EXCLUDED.handler" in
-          let* _ =
-            Pg.execute conn
-              ~params:[ Pgx.Value.of_string t.branch_id;
-                        Pgx.Value.of_string route;
-                        Pgx.Value.of_string handler ]
-              sql
+          let sql, params =
+            match visibility with
+            | Some vis ->
+                let vis = normalize_visibility vis in
+                ( "INSERT INTO view_bindings " ^
+                  "  (branch_id, route, handler, visibility) " ^
+                  "VALUES ($1, $2, $3, $4) " ^
+                  "ON CONFLICT (branch_id, route) DO UPDATE " ^
+                  "SET handler = EXCLUDED.handler, " ^
+                  "    visibility = EXCLUDED.visibility"
+                , [ Pgx.Value.of_string t.branch_id
+                  ; Pgx.Value.of_string route
+                  ; Pgx.Value.of_string handler
+                  ; Pgx.Value.of_string vis ] )
+            | None ->
+                ( "INSERT INTO view_bindings " ^
+                  "  (branch_id, route, handler, visibility) " ^
+                  "VALUES ($1, $2, $3, 'private') " ^
+                  "ON CONFLICT (branch_id, route) DO UPDATE " ^
+                  "SET handler = EXCLUDED.handler"
+                , [ Pgx.Value.of_string t.branch_id
+                  ; Pgx.Value.of_string route
+                  ; Pgx.Value.of_string handler ] )
           in
+          let* _ = Pg.execute conn ~params sql in
           Lwt.return_unit)
         (fun exn ->
           Printf.eprintf "[store] register_route error: %s\n"
@@ -834,8 +857,8 @@ let register_route (t : t) ~(route : string) ~(handler : string)
 (* List all route bindings visible to this branch (recursive-CTE walk,
    same as list_function_names — annotations from ancestors are visible
    via inheritance, child's definition OVERRIDES parent's). Returns
-   (route, handler) pairs ordered with closest ancestor first. *)
-let list_routes (t : t) : (string * string) list Lwt.t =
+   (route, handler, visibility) ordered with closest ancestor first. *)
+let list_routes (t : t) : (string * string * string) list Lwt.t =
   match t.conn with
   | None -> Lwt.return []
   | Some conn ->
@@ -847,7 +870,9 @@ let list_routes (t : t) : (string * string) list Lwt.t =
             "  UNION ALL " ^
             "  SELECT b.id, b.parent_id, c.depth + 1 " ^
             "  FROM branches b JOIN chain c ON b.id = c.parent_id " ^
-            ") SELECT vb.route, vb.handler FROM view_bindings vb " ^
+            ") SELECT vb.route, vb.handler, " ^
+            "COALESCE(vb.visibility, 'private') " ^
+            "FROM view_bindings vb " ^
             "JOIN chain ON vb.branch_id = chain.id " ^
             "ORDER BY chain.depth ASC" in
           let* rows =
@@ -859,10 +884,22 @@ let list_routes (t : t) : (string * string) list Lwt.t =
             (List.filter_map
                (fun row ->
                  match row with
-                 | [ route_c; handler_c ] ->
+                 | [ route_c; handler_c; vis_c ] ->
                      (match Pgx.Value.to_string route_c,
                              Pgx.Value.to_string handler_c with
-                      | Some r, Some h -> Some (r, h)
+                      | Some r, Some h ->
+                          let vis =
+                            match Pgx.Value.to_string vis_c with
+                            | Some v -> normalize_visibility v
+                            | None -> "private"
+                          in
+                          Some (r, h, vis)
+                      | _ -> None)
+                 | [ route_c; handler_c ] ->
+                     (* Pre-migration fallback *)
+                     (match Pgx.Value.to_string route_c,
+                             Pgx.Value.to_string handler_c with
+                      | Some r, Some h -> Some (r, h, "private")
                       | _ -> None)
                  | _ -> None)
                rows))
@@ -1029,11 +1066,12 @@ let fork_branch (t : t) ~(parent_id : string) ~(owner : string)
                                     Pgx.Value.of_string parent_id ]
                           copy_types_sql
                       in
-                      (* 4. Copy view_bindings from parent. *)
+                      (* 4. Copy view_bindings from parent (incl. visibility). *)
                       let copy_views_sql =
                         "INSERT INTO view_bindings " ^
-                        "  (branch_id, route, handler) " ^
-                        "SELECT $1, route, handler " ^
+                        "  (branch_id, route, handler, visibility) " ^
+                        "SELECT $1, route, handler, " ^
+                        "  COALESCE(visibility, 'private') " ^
                         "FROM view_bindings WHERE branch_id = $2" in
                       let* _ =
                         Pg.execute conn

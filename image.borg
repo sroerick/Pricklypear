@@ -333,7 +333,9 @@
             /health            health check
             /inspect/:id       browse any stored value
             /branches          list + fork/merge UI
-            /types             type browser
+            /types             type browser (type_defs)
+            /data …            data rows browser (full CRUD;
+                               see image.data-browser)
             /bindings          function browser (per branch)
 
          2. USER pages (defined as functions in the store):
@@ -346,6 +348,14 @@
          = (route "/foo" 'foo-handler). This makes the
          user-facing UI part of the live image, editable
          via the same mechanisms as everything else.
+
+         ROUTE VISIBILITY (auth.route-visibility — planned):
+         User routes default private (session required).
+         (route path handler 'public) opts into anonymous GET.
+         Kernel paths (/data /admin /api/eval /bindings /edit …)
+         are hard-private in OCaml and cannot be opened by Lisp.
+         Gate runs before handler dispatch (extend launch, do not
+         invent a middleware framework).
 
          pure-html (the dream_html HTML generation core,
          usable WITHOUT Dream) is used for HTML generation
@@ -512,6 +522,23 @@
          - Solo5 / gluten-mirage HTTP
          - PUT/PATCH/DELETE user routes
 
+         =========================================================
+         ROUTE VISIBILITY (see auth.route-visibility — planned)
+         =========================================================
+         Authority for "may this request run this page?" is the
+         OCaml launch gate, not Lisp inside the handler.
+
+         - User routes default private (session or Basic required).
+         - (route path handler 'public) → anonymous GET allowed.
+         - System hard-private prefixes never become public via
+           view_bindings (/admin /data /api/eval /bindings /edit …).
+         - System hard-public remains /login /health /logout.
+         - Optional auth: resolve identity even on public paths.
+         - Anonymous: system/main, whoami anonymous, no writes v1.
+         - Migration 006: view_bindings.visibility text default
+           'private'. list_routes/register_route carry the flag.
+         - /pages shows visibility badge.
+
          v1 SHIPPED (pre-it33):
          - httpaf-lwt-unix HTTP server
          - system pages listed above (except /inspect)
@@ -522,6 +549,7 @@
          - (hx-get)/(hx-post) Lisp prims
          - Solo5 HTTP via gluten-mirage + httpaf
          - richer system-browser chrome (own subsection)
+         - public-write routes / CSRF (route-visibility phase 2)
    |))
    )
   )
@@ -710,12 +738,204 @@
            (image.product-theme make)
          - ui/menu seed always lambda (load-order safe by default)
          - Move softer system pages (/about copy) into Lisp packages
-         - Data rows browser by type
          - Branch switcher; fork/merge UI
          - True three-column desktop layout (optional later)
          - Import/require, private symbols, rename-with-rewrite
          - Authoring new prims from the UI
          - Dedicated /theme form UI (Functions edit is enough v1)
+
+         DATA BROWSER: full CRUD over data_rows is specified in
+         image.data-browser (OCaml system pages, not a Lisp package).
+         /types remains the type_defs index and links into /data/<type>.
+    |))
+   )
+  )
+  (subsection data-browser
+   (doc "Generic OCaml system UI for full CRUD over shared data_rows by type")
+   (status planned)
+   (implements image/lib/http.ml image/lib/crud.ml image/lib/store.ml)
+   (* agent note (|2026-07-12 plan: promote deferred 'Data rows browser by type'
+     from system-browser into its own subsection. Full CRUD (list/create/
+     read/update/delete) as host/gate OCaml pages — parallel to /types and
+     /bindings, not a Lisp product package. Product apps (todo/notes/bible)
+     keep their own UIs; this is the always-on object browser.|) *)
+   (verify
+    (build "dune build image")
+    (smoke "GET /data lists types with row counts; shared-data banner present")
+    (smoke "GET /data/<type> lists rows (default limit 50) with declared columns")
+    (smoke "GET /data/<type>?offset=50 pages next slice")
+    (smoke "GET /data/<type>/new shows create form from type_defs fields")
+    (smoke "POST /data/<type> creates row from form fields; 303 to detail")
+    (smoke "GET /data/<type>/<id> shows fields + edit form + delete")
+    (smoke "POST /data/<type>/<id> updates fields; 303/reload detail")
+    (smoke "POST /data/<type>/<id>/delete deletes row; 303 to type list")
+    (smoke "GET /types links each type to /data/<type>")
+    (smoke "GET /inspect/row/<type>/<id> redirects or aliases to /data/<type>/<id>")
+    (smoke "type with no type_defs fields still allows raw JSON create/edit")
+    (smoke "extra jsonb keys not in type_defs still shown on detail"))
+   (details
+    (doc (|
+         WHY:
+         /types shows declared shapes; /inspect/row dumps one row as
+         pretty JSON. Neither is a place to live in the object store.
+         Product packages (todo, notes, bible) have purpose-built UIs,
+         but agents and humans still need a generic browser when there
+         is no package UI, the package is broken, or the type is ad-hoc.
+
+         LAYERING (locked):
+         - OCaml system pages in image/lib/http.ml (+ thin helpers in
+           crud.ml / store.ml as needed). Host/gate tier — same as
+           /types, /bindings, /inspect, /edit.
+         - NOT a Lisp package. Product shell stays Lisp; this is
+           emergency/generic substrate UI that must work with empty
+           or broken gardens.
+         - Mutations call existing Crud/Store SQL paths. Do not invent
+           a second data access layer.
+         - data_rows are SHARED across branches (no branch_id). UI
+           must say so on every list/detail surface.
+
+         =========================================================
+         ROUTES (full CRUD)
+         =========================================================
+
+         Index (Read types + counts):
+           GET  /data
+             - Table: type_name | declared fields | row count | link
+             - Types = visible type_defs on current branch (Store.list_types)
+             - Also surface type_names that have data_rows but no
+               type_def (orphan data) so nothing is invisible
+             - Banner: "Data rows are shared across branches"
+             - Link back/forward with /types (types = schema index;
+               /data = instances)
+
+         List (Read many):
+           GET  /data/<type>
+             - Query: limit (default 50, max 200), offset (default 0)
+             - Columns: id (short) + each declared field (truncated)
+               + updated_at if cheap; link id → detail
+             - Pagination: Prev / Next when more rows exist
+             - Actions: [New row] → /data/<type>/new
+             - Empty state: no rows yet + create CTA
+             - Order: created_at ASC (match Crud.list) unless a later
+               plan picks something smarter
+
+         Create:
+           GET  /data/<type>/new
+             - Form: one input per declared field (text inputs v1)
+             - If type has ZERO declared fields OR user wants freeform:
+               textarea name=fields_json for raw JSON object
+             - POST target: /data/<type>
+           POST /data/<type>
+             - Content-Type application/x-www-form-urlencoded
+             - Build fields jsonb from declared field names present
+               in the form; if fields_json posted and non-empty, that
+               wins (power path)
+             - author = Session username
+             - On success: 303 Location: /data/<type>/<id>
+             - On failure: 400 with error card + back link
+
+         Detail / Update / Delete:
+           GET  /data/<type>/<id>
+             - Show all fields (declared first, then extra jsonb keys
+               not in type_defs — do not hide unknowns)
+             - Edit form prefilled (same field rules as create)
+             - Delete form POST /data/<type>/<id>/delete (confirm via
+               button label; no JS required)
+             - Meta: id, type, author, created_at, updated_at when
+               available
+             - Links: back to type list, /types, REPL hint
+           POST /data/<type>/<id>
+             - Update fields (full replace of fields jsonb from form,
+               same merge rules as create). Uses Crud.update path.
+             - 303 back to detail on success
+           POST /data/<type>/<id>/delete
+             - Crud.delete; 303 to /data/<type>
+             - Missing row: 404 card, not silent success
+
+         URL parsing notes:
+         - type_name may contain only safe path segments in v1
+           (letters, digits, hyphen, underscore). Reject or 400
+           weird paths; no path-param injection into SQL (always
+           parameterized — already true in Crud).
+         - id is UUID string.
+         - Prefer longest-match dispatch:
+             /data/<type>/new
+             /data/<type>/<id>/delete
+             /data/<type>/<id>
+             /data/<type>
+             /data
+           so "new" is never treated as an id.
+
+         =========================================================
+         FIELD / JSON RULES (v1)
+         =========================================================
+         - type_defs.fields is a JSON array of field-name strings
+           (no field types yet — object-model.type-system deferred).
+         - Form values are strings; store as JSON strings in the
+           fields object. Do NOT guess number/bool coercion in v1
+           unless the existing value is already that shape and a
+           later polish wants round-trip fidelity.
+         - Raw JSON textarea: must parse as a JSON object; reject
+           arrays/scalars with a clear error.
+         - Extra keys on existing rows: display on detail; include
+           in edit form as additional inputs OR preserve via hidden
+           merge so update does not drop them. REQUIRED: updates
+           must not silently strip unknown keys.
+
+         =========================================================
+         RELATIONSHIP TO EXISTING PAGES
+         =========================================================
+         - /types: keep as type_defs browser; each row links to
+           /data/<type>. Optional: add row count column on /types
+           once count helper exists (nice-to-have, not blocking).
+         - /inspect/row/<type>/<id>: redirect (302/303) to
+           /data/<type>/<id> OR thin alias rendering the same page.
+           Prefer redirect so one canonical URL.
+         - Product apps unchanged: /todos, /notes, /bible stay Lisp.
+         - Nav: emergency/system links may include Data → /data;
+           product ui/menu MAY add Data later (Lisp choice, not
+           required for make).
+
+         =========================================================
+         STORE / CRUD HELPERS (implementation discretion)
+         =========================================================
+         Add only what the UI needs if missing:
+         - count rows by type_name (for index)
+         - list type_names present in data_rows (orphans)
+         - list rows with limit+offset (Crud.list today is limit-only;
+           extend with offset or a store helper)
+         - optional: fetch author/created_at/updated_at for detail
+         Keep Lisp prim surface stable unless a prim gap blocks the
+         browser (prefer OCaml-only helpers for offset/count).
+
+         =========================================================
+         AUTH / SAFETY
+         =========================================================
+         - Same session gate as other authenticated system pages.
+         - Not admin-only in v1 (any logged-in user can browse/mutate
+           shared data — matches Lisp CRUD prims today).
+         - No CSRF token infrastructure in v1 (status quo for other
+           POSTs); cookie session + same-site assumptions hold.
+         - Never interpolate type/id into SQL strings.
+
+         =========================================================
+         NON-GOALS (v1)
+         =========================================================
+         - Field type system / validation beyond JSON object shape
+         - Full-text search UI (find-text exists for Lisp; wire later)
+         - Inline htmx row edit without full page (optional polish)
+         - Bulk delete / CSV import-export
+         - Per-row branch scoping (data is shared by design)
+         - Lisp-redefinable browser UI
+         - SPA / client-side routing
+
+         =========================================================
+         ACCEPTANCE NARRATIVE
+         =========================================================
+         Human can: open /data → pick a type → page through rows →
+         open a row → edit a field → save → create a new row →
+         delete a row → land back on the type list. All without
+         REPL. Agent can use the same URLs or keep using CRUD prims.
     |))
    )
   )

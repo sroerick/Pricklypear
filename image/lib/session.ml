@@ -31,8 +31,9 @@ type t = {
   (* In-memory route table mirroring view_bindings for the branch.
      Populated by load_defs_async at session-make time; (route ...)
      updates also live-persist to view_bindings AND update this table.
+     Value is (handler, visibility) where visibility is public|private.
      http.ml reads from here on every request (no DB round-trip). *)
-  routes : (string, string) Hashtbl.t;
+  routes : (string, string * string) Hashtbl.t;
   mutable started_at : float;
   (** Kernel prim catalog for Functions browser: (name, summary) list. *)
   mutable kernel_catalog : (string * string) list;
@@ -95,10 +96,10 @@ let load_defs (t : t) : unit Lwt.t =
   let* routes = Store.list_routes t.store in
   let seen_r = Hashtbl.create 16 in
   List.iter
-    (fun (route, handler) ->
+    (fun (route, handler, visibility) ->
       if not (Hashtbl.mem seen_r route) then begin
         Hashtbl.replace seen_r route ();
-        Hashtbl.replace t.routes route handler
+        Hashtbl.replace t.routes route (handler, visibility)
       end)
     routes;
   Lwt.return_unit
@@ -147,7 +148,9 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
   (* (fork 'parent 'child) -> VStr new-branch-id | VStr "no such parent" *)
   Primitives.register tbl "fork"
     (fun args ->
-      if t.agent_branch_lock then
+      if t.manifest.username = "anonymous" then
+        Lwt.return (Pricklypear_lisp.Ast.VStr "fork: denied for anonymous")
+      else if t.agent_branch_lock then
         Lwt.return
           (Pricklypear_lisp.Ast.VStr
              "fork blocked: agent is locked to the current branch")
@@ -184,7 +187,9 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
      caller's own `owner/*` branches are free. *)
   Primitives.register tbl "merge"
     (fun args ->
-      if t.agent_branch_lock then
+      if t.manifest.username = "anonymous" then
+        Lwt.return (Pricklypear_lisp.Ast.VStr "merge: denied for anonymous")
+      else if t.agent_branch_lock then
         Lwt.return
           (Pricklypear_lisp.Ast.VStr
              "merge blocked: agent is locked to the current branch")
@@ -227,19 +232,84 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
       | _ ->
           Lwt.return (Pricklypear_lisp.Ast.VStr "merge: bad args (need 2 strings)"));
 
-  (* (route "/path" 'handler-name) -> VStr "/path".
-     Updates the in-memory routes table immediately (so the next HTTP
-     request sees it) and persists to view_bindings. *)
+  (* (route "/path" handler [visibility]) -> VStr "/path".
+     Optional third arg 'public | "public" | 'private | "private".
+     Handler-only re-register keeps prior visibility (store ON CONFLICT).
+     Anonymous sessions may not register routes. *)
+  let parse_vis = function
+    | Pricklypear_lisp.Ast.VStr s ->
+        (match String.lowercase_ascii (String.trim s) with
+         | "public" -> Some "public"
+         | "private" -> Some "private"
+         | _ -> None)
+    | _ -> None
+  in
   Primitives.register tbl "route"
     (fun args ->
+      if t.manifest.username = "anonymous" then
+        Lwt.return (Pricklypear_lisp.Ast.VStr "route: denied for anonymous")
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr route_path;
+            Pricklypear_lisp.Ast.VStr handler ] ->
+            let vis =
+              match Hashtbl.find_opt t.routes route_path with
+              | Some (_, v) -> v
+              | None -> "private"
+            in
+            (* handler-only: pass None so DB keeps visibility on UPDATE;
+               memory keeps prior or private for new. *)
+            Hashtbl.replace t.routes route_path (handler, vis);
+            let* _ =
+              Store.register_route t.store ~route:route_path ~handler ()
+            in
+            Lwt.return (Pricklypear_lisp.Ast.VStr route_path)
+        | [ Pricklypear_lisp.Ast.VStr route_path;
+            Pricklypear_lisp.Ast.VStr handler;
+            vis_v ] ->
+            (match parse_vis vis_v with
+             | None ->
+                 Lwt.return
+                   (Pricklypear_lisp.Ast.VStr
+                      "route: visibility must be public or private")
+             | Some vis ->
+                 Hashtbl.replace t.routes route_path (handler, vis);
+                 let* _ =
+                   Store.register_route t.store ~route:route_path ~handler
+                     ~visibility:vis ()
+                 in
+                 Lwt.return (Pricklypear_lisp.Ast.VStr route_path))
+        | _ ->
+            Lwt.return (Pricklypear_lisp.Ast.VStr "route: bad args"));
+
+  (* (public-route path handler) sugar *)
+  Primitives.register tbl "public-route"
+    (fun args ->
+      if t.manifest.username = "anonymous" then
+        Lwt.return (Pricklypear_lisp.Ast.VStr "public-route: denied for anonymous")
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr route_path;
+            Pricklypear_lisp.Ast.VStr handler ] ->
+            Hashtbl.replace t.routes route_path (handler, "public");
+            let* _ =
+              Store.register_route t.store ~route:route_path ~handler
+                ~visibility:"public" ()
+            in
+            Lwt.return (Pricklypear_lisp.Ast.VStr route_path)
+        | _ ->
+            Lwt.return (Pricklypear_lisp.Ast.VStr "public-route: bad args"));
+
+  (* (route-visibility path) -> "public" | "private" | () *)
+  Primitives.register tbl "route-visibility"
+    (fun args ->
       match args with
-      | [ Pricklypear_lisp.Ast.VStr route_path;
-          Pricklypear_lisp.Ast.VStr handler ] ->
-          Hashtbl.replace t.routes route_path handler;
-          let* _ = Store.register_route t.store ~route:route_path ~handler in
-          Lwt.return (Pricklypear_lisp.Ast.VStr route_path)
-      | _ ->
-          Lwt.return (Pricklypear_lisp.Ast.VStr "route: bad args"));
+      | [ Pricklypear_lisp.Ast.VStr route_path ] ->
+          (match Hashtbl.find_opt t.routes route_path with
+           | Some (_, vis) ->
+               Lwt.return (Pricklypear_lisp.Ast.VStr vis)
+           | None -> Lwt.return Pricklypear_lisp.Ast.VNil)
+      | _ -> Lwt.return Pricklypear_lisp.Ast.VNil);
 
   (* (checkout 'branch-ref) -> VStr "checked out" | "no such branch".
      Mutates t.store.branch_id + t.manifest, then re-hydrates the env
@@ -247,7 +317,9 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
      the right bindings). Blocked while agent_branch_lock is set. *)
   Primitives.register tbl "checkout"
     (fun args ->
-      if t.agent_branch_lock then
+      if t.manifest.username = "anonymous" then
+        Lwt.return (Pricklypear_lisp.Ast.VStr "checkout: denied for anonymous")
+      else if t.agent_branch_lock then
         Lwt.return
           (Pricklypear_lisp.Ast.VStr
              "checkout blocked: agent is locked to the current branch")
@@ -783,7 +855,7 @@ let run_smoke_route
         (Printf.sprintf
            "ok: false\nerror: no route registered for %s\n(hint: register_route path=%s handler=...)"
            path path)
-  | Some handler ->
+  | Some (handler, _vis) ->
       (match Pricklypear_lisp.Env.lookup t.env handler with
        | None ->
            Lwt.return
@@ -890,7 +962,8 @@ let run_agent_tool (t : t) ~(name : string) ~(arguments : string)
   | "list_routes" ->
       let rs =
         Hashtbl.fold
-          (fun route handler acc -> (route ^ " -> " ^ handler) :: acc)
+          (fun route (handler, vis) acc ->
+            (Printf.sprintf "%s -> %s [%s]" route handler vis) :: acc)
           t.routes []
         |> List.sort String.compare
       in
@@ -927,10 +1000,19 @@ let run_agent_tool (t : t) ~(name : string) ~(arguments : string)
            else if handler = "" then
              Lwt.return "error: need handler function name"
            else begin
-             Hashtbl.replace t.routes path handler;
-             let* _ = Store.register_route t.store ~route:path ~handler in
+             let vis =
+               match json_string_field args_json "visibility" with
+               | Some v -> Store.normalize_visibility v
+               | None -> "private"
+             in
+             Hashtbl.replace t.routes path (handler, vis);
+             let* _ =
+               Store.register_route t.store ~route:path ~handler
+                 ~visibility:vis ()
+             in
              Lwt.return
-               (Printf.sprintf "registered route %s -> %s" path handler)
+               (Printf.sprintf "registered route %s -> %s (%s)"
+                  path handler vis)
            end
        | _ -> Lwt.return "error: need path and handler")
   | "eval_expr" ->
@@ -1464,9 +1546,14 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
   (* (deftype 'name 'field1 'field2 ...) -> VStr "defined type <name>".
      All args are quoted symbols (which evaluate to VStr). Persists
      the declaration into type_defs on the session's branch. *)
+  let deny_anon name =
+    Lwt.return
+      (Pricklypear_lisp.Ast.VStr (name ^ ": denied for anonymous"))
+  in
   Primitives.register tbl "deftype"
     (fun args ->
-      Crud.deftype t.store ~args ~author:t.manifest.username);
+      if t.manifest.username = "anonymous" then deny_anon "deftype"
+      else Crud.deftype t.store ~args ~author:t.manifest.username);
 
   (* (get 'type id) -> VStr fields-json | VNil *)
   Primitives.register tbl "get"
@@ -1480,45 +1567,63 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
   (* (create 'type "{fields-json}") -> VStr new-id | VStr "create failed" *)
   Primitives.register tbl "create"
     (fun args ->
-      match args with
-      | [ Pricklypear_lisp.Ast.VStr type_name;
-          Pricklypear_lisp.Ast.VStr fields_json ] ->
-          Crud.create t.store
-            ~type_name ~fields_json
-            ~author:t.manifest.username
-      | _ -> Lwt.return (Pricklypear_lisp.Ast.VStr "create: bad args (need type, fields)"));
+      if t.manifest.username = "anonymous" then deny_anon "create"
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr type_name;
+            Pricklypear_lisp.Ast.VStr fields_json ] ->
+            Crud.create t.store
+              ~type_name ~fields_json
+              ~author:t.manifest.username
+        | _ ->
+            Lwt.return
+              (Pricklypear_lisp.Ast.VStr "create: bad args (need type, fields)"));
 
   (* (update 'type id "{fields-json}") -> VStr id | VNil *)
   Primitives.register tbl "update"
     (fun args ->
-      match args with
-      | [ Pricklypear_lisp.Ast.VStr type_name;
-          Pricklypear_lisp.Ast.VStr id;
-          Pricklypear_lisp.Ast.VStr fields_json ] ->
-          Crud.update t.store ~type_name ~id ~fields_json
-      | _ -> Lwt.return (Pricklypear_lisp.Ast.VStr "update: bad args (need type, id, fields)"));
+      if t.manifest.username = "anonymous" then deny_anon "update"
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr type_name;
+            Pricklypear_lisp.Ast.VStr id;
+            Pricklypear_lisp.Ast.VStr fields_json ] ->
+            Crud.update t.store ~type_name ~id ~fields_json
+        | _ ->
+            Lwt.return
+              (Pricklypear_lisp.Ast.VStr
+                 "update: bad args (need type, id, fields)"));
 
   (* (update-field 'type id "field" "value") -> VStr id | VNil.
       Ergonomic shorthand: composes get + dict-set + update in one prim.
       Lands it18 (2026-07-06); resolves the it14 "verbose round-trip syntax" TODO. *)
   Primitives.register tbl "update-field"
     (fun args ->
-      match args with
-      | [ Pricklypear_lisp.Ast.VStr type_name;
-          Pricklypear_lisp.Ast.VStr id;
-          Pricklypear_lisp.Ast.VStr field;
-          Pricklypear_lisp.Ast.VStr value ] ->
-          Crud.update_field t.store ~type_name ~id ~field ~value
-      | _ -> Lwt.return (Pricklypear_lisp.Ast.VStr "update-field: bad args (need type, id, field, value)"));
+      if t.manifest.username = "anonymous" then deny_anon "update-field"
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr type_name;
+            Pricklypear_lisp.Ast.VStr id;
+            Pricklypear_lisp.Ast.VStr field;
+            Pricklypear_lisp.Ast.VStr value ] ->
+            Crud.update_field t.store ~type_name ~id ~field ~value
+        | _ ->
+            Lwt.return
+              (Pricklypear_lisp.Ast.VStr
+                 "update-field: bad args (need type, id, field, value)"));
 
   (* (delete 'type id) -> VStr id | VNil *)
   Primitives.register tbl "delete"
     (fun args ->
-      match args with
-      | [ Pricklypear_lisp.Ast.VStr type_name;
-          Pricklypear_lisp.Ast.VStr id ] ->
-          Crud.delete t.store ~type_name ~id
-      | _ -> Lwt.return (Pricklypear_lisp.Ast.VStr "delete: bad args (need type, id)"));
+      if t.manifest.username = "anonymous" then deny_anon "delete"
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr type_name;
+            Pricklypear_lisp.Ast.VStr id ] ->
+            Crud.delete t.store ~type_name ~id
+        | _ ->
+            Lwt.return
+              (Pricklypear_lisp.Ast.VStr "delete: bad args (need type, id)"));
 
   (* (select-for-update 'type id) -> VStr fields-json | VNil.
      Acquires an explicit SELECT ... FOR UPDATE row lock on the
@@ -1927,9 +2032,10 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value Lwt.t =
           [ Pricklypear_lisp.Ast.Var name; body_expr ]) ->
          (* Persist the body AST to the store for reload-on-boot. The
             env binding already happened via eval's Define case; this
-            DB write is non-fatal on PG-down. *)
-         Lwt.async (fun () ->
-           Store.persist_function t.store name body_expr t.manifest.username);
+            DB write is non-fatal on PG-down. Anonymous may not persist. *)
+         if t.manifest.username <> "anonymous" then
+           Lwt.async (fun () ->
+             Store.persist_function t.store name body_expr t.manifest.username);
          let* () =
            if name = "ui/nav" || name = "ui/home" || name = "ui/css"
               || name = "ui/theme"
@@ -1960,8 +2066,9 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
    | Pricklypear_lisp.Ast.App
        (Pricklypear_lisp.Ast.Var "define",
         [ Pricklypear_lisp.Ast.Var name; body_expr ]) ->
-       Lwt.async (fun () ->
-         Store.persist_function t.store name body_expr t.manifest.username);
+       if t.manifest.username <> "anonymous" then
+         Lwt.async (fun () ->
+           Store.persist_function t.store name body_expr t.manifest.username);
        let* () =
          if name = "ui/nav" || name = "ui/home" || name = "ui/css"
             || name = "ui/theme"
@@ -2255,6 +2362,26 @@ let attach_identity
   else
     Lwt.return_unit
 
+(** Anonymous request identity (auth.route-visibility).
+    system/main only; no personal garden; no admin. *)
+let attach_anonymous (t : t) : unit Lwt.t =
+  t.manifest <-
+    { t.manifest with
+      user_id = "anonymous"
+    ; username = "anonymous"
+    };
+  t.is_admin <- false;
+  t.auth_token <- None;
+  (* Prefer system/main for package defaults. *)
+  let* found =
+    Store.lookup_branch_id_by_name t.store ~owner:"system" ~name:"main"
+  in
+  match found with
+  | None -> Lwt.return_unit
+  | Some id ->
+      if t.manifest.branch_id = id then Lwt.return_unit
+      else checkout_to t ~branch_id:id ~branch_ref:"system/main"
+
 let clear_auth_token (t : t) : unit =
   t.auth_token <- None
 
@@ -2331,7 +2458,20 @@ let fork_ref (t : t) ~(parent_ref : string) ~(child_ref : string)
 (* Look up a route's handler name. Returns None if the route isn't
    registered on this branch. Called by http.ml's request_handler. *)
 let lookup_route (t : t) (route : string) : string option =
+  match Hashtbl.find_opt t.routes route with
+  | Some (handler, _) -> Some handler
+  | None -> None
+
+let lookup_route_meta (t : t) (route : string)
+  : (string * string) option =
   Hashtbl.find_opt t.routes route
+
+let route_visibility (t : t) (route : string) : string option =
+  match Hashtbl.find_opt t.routes route with
+  | Some (_, vis) -> Some vis
+  | None -> None
+
+let is_anonymous (t : t) : bool = t.manifest.username = "anonymous"
 
 let kernel_catalog (t : t) : (string * string) list = t.kernel_catalog
 
@@ -2345,12 +2485,33 @@ let set_ui_css (t : t) (s : string option) : unit = t.ui_css <- s
 
 
 let list_pages (t : t) : (string * string) list =
-  Hashtbl.fold (fun route handler acc -> (route, handler) :: acc) t.routes []
+  Hashtbl.fold
+    (fun route (handler, _) acc -> (route, handler) :: acc) t.routes []
   |> List.sort (fun (a, _) (b, _) -> String.compare a b)
 
-let set_route (t : t) ~(route : string) ~(handler : string) : unit Lwt.t =
-  Hashtbl.replace t.routes route handler;
-  let* _ = Store.register_route t.store ~route ~handler in
+let list_pages_meta (t : t) : (string * string * string) list =
+  Hashtbl.fold
+    (fun route (handler, vis) acc -> (route, handler, vis) :: acc) t.routes []
+  |> List.sort (fun (a, _, _) (b, _, _) -> String.compare a b)
+
+let set_route (t : t) ~(route : string) ~(handler : string)
+    ?visibility () : unit Lwt.t =
+  let vis =
+    match visibility with
+    | Some v -> Store.normalize_visibility v
+    | None ->
+        (match Hashtbl.find_opt t.routes route with
+         | Some (_, v) -> v
+         | None -> "private")
+  in
+  Hashtbl.replace t.routes route (handler, vis);
+  let* _ =
+    match visibility with
+    | Some v ->
+        Store.register_route t.store ~route ~handler
+          ~visibility:(Store.normalize_visibility v) ()
+    | None -> Store.register_route t.store ~route ~handler ()
+  in
   Lwt.return_unit
 
 (* Invoke a named handler function (looked up via env). The handler

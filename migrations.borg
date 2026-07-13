@@ -47,6 +47,10 @@
              (ai_sessions, ai_messages; NOT fleet sessions
               and NOT auth_sessions). Spec:
               ai-authoring.agent-portal.
+           006_route_visibility.sql — view_bindings.visibility
+             text NOT NULL DEFAULT 'private' (public|private).
+             Spec: auth.route-visibility. Additive column only;
+             existing routes stay private.
 
          Applied idempotently: tracked in schema_migrations
          table. On supervisor boot:

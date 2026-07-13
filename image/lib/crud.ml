@@ -423,3 +423,121 @@ let find_text
           rows
       in
       Lwt.return (VList lisp_rows)
+
+(* ---- OCaml UI helpers (image.data-browser) — not Lisp prims ---- *)
+
+type row_record = {
+  id : string;
+  fields_json : string;
+  author : string option;
+  created_at : string option;
+  updated_at : string option;
+}
+
+let count_by_type (store : Store.t) ~(type_name : string) : int Lwt.t =
+  match Store.current_conn store with
+  | None -> Lwt.return 0
+  | Some conn ->
+      let sql =
+        "SELECT COUNT(*)::int FROM data_rows WHERE type_name = $1"
+      in
+      let* rows =
+        Pg.execute conn
+          ~params:[ Pgx.Value.of_string type_name ]
+          sql
+      in
+      (match rows with
+       | [ cell :: _ ] ->
+           (match Pgx.Value.to_int cell with
+            | Some n -> Lwt.return n
+            | None -> Lwt.return 0)
+       | _ -> Lwt.return 0)
+
+let list_data_type_names (store : Store.t) : string list Lwt.t =
+  match Store.current_conn store with
+  | None -> Lwt.return []
+  | Some conn ->
+      let sql =
+        "SELECT DISTINCT type_name FROM data_rows ORDER BY type_name ASC"
+      in
+      let* rows = Pg.execute conn sql in
+      Lwt.return
+        (List.filter_map
+           (fun row ->
+             match row with
+             | [ cell ] -> Pgx.Value.to_string cell
+             | _ -> None)
+           rows)
+
+let list_page
+    (store : Store.t) ~(type_name : string)
+    ?(limit : int = 50) ?(offset : int = 0) ()
+    : row_record list Lwt.t =
+  match Store.current_conn store with
+  | None -> Lwt.return []
+  | Some conn ->
+      let lim = max 1 (min limit 200) in
+      let off = max 0 offset in
+      let sql =
+        "SELECT id::text, fields::text, author, " ^
+        "created_at::text, updated_at::text " ^
+        "FROM data_rows WHERE type_name = $1 " ^
+        "ORDER BY created_at ASC LIMIT $2 OFFSET $3"
+      in
+      let* rows =
+        Pg.execute conn
+          ~params:[ Pgx.Value.of_string type_name
+                  ; Pgx.Value.of_int lim
+                  ; Pgx.Value.of_int off ]
+          sql
+      in
+      Lwt.return
+        (List.filter_map
+           (fun row ->
+             match row with
+             | [ id_c; fields_c; author_c; created_c; updated_c ] ->
+                 (match Pgx.Value.to_string id_c,
+                         Pgx.Value.to_string fields_c with
+                  | Some id, Some fields_json ->
+                      Some {
+                        id;
+                        fields_json;
+                        author = Pgx.Value.to_string author_c;
+                        created_at = Pgx.Value.to_string created_c;
+                        updated_at = Pgx.Value.to_string updated_c;
+                      }
+                  | _ -> None)
+             | _ -> None)
+           rows)
+
+let get_row
+    (store : Store.t) ~(type_name : string) ~(id : string)
+    : row_record option Lwt.t =
+  match Store.current_conn store with
+  | None -> Lwt.return None
+  | Some conn ->
+      let sql =
+        "SELECT id::text, fields::text, author, " ^
+        "created_at::text, updated_at::text " ^
+        "FROM data_rows WHERE type_name = $1 AND id = $2::uuid"
+      in
+      let* rows =
+        Pg.execute conn
+          ~params:[ Pgx.Value.of_string type_name
+                  ; Pgx.Value.of_string id ]
+          sql
+      in
+      (match rows with
+       | [ id_c; fields_c; author_c; created_c; updated_c ] :: _ ->
+           (match Pgx.Value.to_string id_c, Pgx.Value.to_string fields_c with
+            | Some id, Some fields_json ->
+                Lwt.return
+                  (Some {
+                     id;
+                     fields_json;
+                     author = Pgx.Value.to_string author_c;
+                     created_at = Pgx.Value.to_string created_c;
+                     updated_at = Pgx.Value.to_string updated_c;
+                   })
+            | _ -> Lwt.return None)
+       | _ -> Lwt.return None)

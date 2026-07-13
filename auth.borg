@@ -661,11 +661,13 @@
            pp_session=<opaque>; redirect /.
            On failure: auth_log; same error for bad user/pass.
 
-         Middleware (all non-public routes)
-           Read cookie → hash → lookup auth_sessions →
-           check expires_at / revoked_at → load users row →
-           bind Session identity (user_id, username, is_admin) →
-           ensure_personal + checkout if needed.
+         Middleware (request gate — see auth.route-visibility)
+           Always ATTEMPT identity resolve (cookie then Basic).
+           Classify path (system public / system private / user
+           route visibility). Private + no identity → login
+           redirect (HTML) or 401 (API). Public may proceed
+           anonymously. Identity present → attach user even on
+           public paths (optional auth).
 
          POST /logout
            Revoke session; clear cookie; redirect /login.
@@ -675,6 +677,215 @@
 
          nginx: TLS + reverse_proxy only for this path.
          htpasswd is not the user database.
+
+         HARD PUBLIC (kernel, not user-route table):
+           /login /health /logout  (status quo is_public_path)
+         User-route public/private: auth.route-visibility.
+    |))
+   )
+  )
+  (subsection route-visibility
+   (doc "Public vs private HTTP routes: store-backed visibility + OCaml request gate")
+   (status planned)
+   (implements image/lib/http.ml image/lib/session.ml image/lib/store.ml migrations/006_route_visibility.sql)
+   (* agent note (|2026-07-12 plan: Today is_public_path is a hard OCaml
+     allowlist (/login /health /logout); every other path including all
+     Lisp (route ...) pages requires auth. Product needs opt-in public
+     user pages (share links, public study, landing) without making
+     /data /admin /api/eval world-readable. Extend existing launch gate
+     — do not invent Express-style middleware chains. Visibility is
+     data on view_bindings; OCaml enforces before handler runs.|) *)
+   (verify
+    (build "dune build image")
+    (smoke "migration 006 adds view_bindings.visibility default private")
+    (smoke "(route \"/x\" \"h\") stays private; unauth GET /x → login redirect")
+    (smoke "(route \"/pub\" \"h\" 'public) ; unauth GET /pub → 200 handler")
+    (smoke "logged-in GET /pub still attaches whoami (optional auth)")
+    (smoke "unauth GET /data and /admin/users and /api/eval still denied")
+    (smoke "unauth GET /bindings /edit/foo /repl denied")
+    (smoke "/pages shows public|private badge per route")
+    (smoke "child branch inherits parent public route until override")
+    (smoke "re-(route path handler) without visibility keeps existing visibility OR defaults private — document choice; prefer KEEP on handler-only update"))
+   (details
+    (doc (|
+         =========================================================
+         WHY
+         =========================================================
+         The image already has a single request gate (launch in
+         image/lib/http.ml): hard public allowlist, else require
+         session/Basic. That is correct kernel shape — but it cannot
+         express "this Lisp page is a public share link."
+
+         Product needs:
+           - Default-private user routes (todos, notes, gardens)
+           - Opt-in public user routes (marketing, shared deck view)
+           - Kernel paths that are NEVER public via Lisp
+           - Optional auth: public page still richer when logged in
+
+         NOT this subsection:
+           - Per-row ACLs / Alice-vs-Bob data isolation
+             (multi-user.permissions — later)
+           - Capability bits on functions (separate)
+           - OAuth / JWT (still out; wyo.auth / session cookie)
+
+         =========================================================
+         GATE ALGORITHM (authoritative)
+         =========================================================
+         For every HTTP request to the image:
+
+         1. Parse path (strip query).
+         2. Resolve identity OPTIONALLY:
+              cookie pp_session → else HTTP Basic → else None.
+            Do not fail yet; just compute user_opt.
+         3. Classify path into one of:
+
+            A. SYSTEM_HARD_PUBLIC
+               /login  /health  /logout
+               (exact match; extend only by OCaml change)
+
+            B. SYSTEM_HARD_PRIVATE
+               Always require identity (Lisp cannot open these):
+               /admin and /admin/*
+               /data and /data/*
+               /api/eval /api/agent /api/agent-task /api/ai/*
+               /api/edit/* /api/recipe/*
+               /bindings /binding/* /edit/* /repl
+               /branches and /branches/*
+               /types /pages /page/* /inspect/*
+               /agent
+               (Implementation: prefix/exact table in http.ml;
+                when unsure, DEFAULT PRIVATE.)
+
+            C. USER_ROUTE
+               Session.lookup_route path succeeds →
+               visibility from route record:
+                 "private" (default) | "public"
+
+            D. UNKNOWN
+               No system page, no user route → still require auth
+               before 404 (do not leak route existence to anonymous
+               via different status; v1 may 302 login then 404 after
+               login — acceptable). Prefer: unauth → login redirect
+               for HTML; 401 for API Accept.
+
+         4. Decision:
+            - If class A → proceed (login form has no product chrome).
+            - If class B or C-private or D:
+                user_opt None → deny (302 /login?next= or 401)
+                user_opt Some → attach_from_user → proceed
+            - If class C-public:
+                user_opt Some → attach_from_user → proceed
+                user_opt None → proceed as ANONYMOUS (below)
+
+         5. PP_AUTH_DISABLED=1 → proceed all (dev escape; unchanged).
+
+         No multi-layer middleware DSL. One gate function.
+
+         =========================================================
+         ANONYMOUS SESSION (public + no identity)
+         =========================================================
+         - (whoami) → "anonymous" (string) or document VNil — pick
+           one in make; prefer VStr "anonymous" for easy tests.
+         - Branch: system/main (read package defaults). Do NOT create
+           or checkout a personal garden for anonymous.
+         - author for any accidental write: "anonymous"
+         - WRITE POLICY v1: CRUD prims (create/update/delete) and
+           define/route/fork/merge/checkout are DENIED for anonymous
+           (raise clear error or return error VStr). Public pages are
+           read-oriented. public-write (POST forms that mutate) is
+           PHASE 2 — not v1.
+         - Chrome: product ui/nav MAY render; avoid admin links.
+           If ui/nav fails, emergency chrome only.
+
+         =========================================================
+         SCHEMA (additive migration 006_route_visibility.sql)
+         =========================================================
+         ALTER TABLE view_bindings
+           ADD COLUMN IF NOT EXISTS visibility text
+           NOT NULL DEFAULT 'private';
+         -- allowed values: 'private' | 'public'
+         -- no CHECK required if app validates; optional CHECK OK
+
+         Fork copy of view_bindings MUST copy visibility
+         (UPDATE fork INSERT column lists).
+
+         list_routes / register_route SELECT/INSERT visibility.
+         Default private for all existing rows (DEFAULT).
+
+         scripts/dev.sh migration loop: add 006_route_visibility.
+
+         =========================================================
+         LISP API
+         =========================================================
+         (route path handler)
+           → register private route (default). If route already
+             exists and only handler changes, KEEP prior visibility
+             (so re-seed does not clobber an intentional public).
+             If brand-new route → private.
+
+         (route path handler 'public)
+         (route path handler "public")
+           → register/update route with visibility=public.
+           Third arg also accepts 'private / "private".
+
+         (public-route path handler)
+           → sugar for (route path handler 'public)
+
+         (route-visibility path) → "public" | "private" | ()
+           () if no visible route on current branch chain.
+
+         Agent tools: register_route gains optional visibility
+         field (default private).
+
+         =========================================================
+         INHERITANCE
+         =========================================================
+         Same recursive CTE as today: nearest branch wins for a
+         path. Child can override parent public→private or
+         private→public by re-routing on personal.
+
+         =========================================================
+         UI
+         =========================================================
+         /pages table: column Visibility (public|private).
+         Optional: make-public / make-private forms later;
+         v1 Lisp/REPL is enough.
+
+         =========================================================
+         SECURITY NOTES
+         =========================================================
+         - Public handler still runs full Lisp: author must not
+           leak secrets in public pages. Document footgun.
+         - System hard-private list is deny-by-default for kernel
+           surfaces; never consult view_bindings to open /admin.
+         - data_rows remain shared storage; public route ≠ row ACL.
+           Sharing one deck is handler logic (filter by id), not
+           "all flash-card rows are public."
+         - /api/eval stays hard-private (agents use Basic auth).
+
+         =========================================================
+         PHASES
+         =========================================================
+         Phase 1 (this subsection make):
+           migration 006, store/session route record, route prim
+           arity, gate algorithm, anonymous read, /pages badge,
+           smokes above.
+         Phase 2:
+           public POST / public-write visibility value;
+           next= return path after login; CSRF for cookie posts.
+         Phase 3:
+           share tokens / signed URLs for single-resource public
+           access without opening a whole route (flashcards).
+
+         =========================================================
+         ACCEPTANCE NARRATIVE
+         =========================================================
+         Dev marks (route "/hello" "hi-page" 'public). Logged-out
+         browser opens /hello and sees the page. Same browser on
+         /todos still hits login. /data still login. After login,
+         /hello shows whoami in chrome. Re-seed of private routes
+         does not wipe an intentional public flag when only the
+         handler is updated.
     |))
    )
   )

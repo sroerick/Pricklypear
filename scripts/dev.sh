@@ -54,15 +54,39 @@ build_all() {
 pg_pidfile="$PP_DEV_DIR/pg.pid"
 image_pidfile="$PP_DEV_DIR/image.pid"
 
+apply_migrations() {
+  # Idempotent SQL files — safe when PG already running (new 006 etc.).
+  if ! psql -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U "$PP_DB_USER" \
+       -d postgres -lqt 2>/dev/null | cut -d'|' -f1 | grep -qw "$PP_DB_NAME"; then
+    echo "[dev] creating database $PP_DB_NAME"
+    createdb -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U "$PP_DB_USER" "$PP_DB_NAME"
+  fi
+  echo "[dev] applying migrations 001..006"
+  for m in 001_branches 002_auth 003_data 004_bible_ref_index 005_ai_sessions 006_route_visibility; do
+    psql -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U "$PP_DB_USER" -d "$PP_DB_NAME" \
+      -f "$PP_ROOT/migrations/${m}.sql" -q
+  done
+  # Seed system/main branch if not present (001 should do this; idempotent)
+  psql -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U "$PP_DB_USER" -d "$PP_DB_NAME" -q <<EOF
+INSERT INTO branches (id, parent_id, owner, name)
+  SELECT '00000000-0000-0000-0000-000000000001', NULL, 'system', 'main'
+  WHERE NOT EXISTS (
+    SELECT 1 FROM branches WHERE owner='system' AND name='main'
+  );
+EOF
+}
+
 start_pg() {
   if [ -f "$pg_pidfile" ] && kill -0 "$(cat "$pg_pidfile")" 2>/dev/null; then
     echo "[dev] pg already running (pid $(cat "$pg_pidfile"))"
+    apply_migrations
     return
   fi
   if [ -d "$PP_DATA_DIR" ]; then
     if pg_ctl -D "$PP_DATA_DIR" status >/dev/null 2>&1; then
       echo "[dev] pg already running (cluster_exists)"
       pg_ctl -D "$PP_DATA_DIR" status | head -1
+      apply_migrations
       return
     fi
   else
@@ -80,24 +104,7 @@ start_pg() {
     echo "[dev] FATAL: PG didn't come up; check $PP_DEV_DIR/pg.log" >&2
     exit 1
   fi
-  if ! psql -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U "$PP_DB_USER" \
-       -d postgres -lqt 2>/dev/null | cut -d'|' -f1 | grep -qw "$PP_DB_NAME"; then
-    echo "[dev] creating database $PP_DB_NAME"
-    createdb -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U "$PP_DB_USER" "$PP_DB_NAME"
-  fi
-  echo "[dev] applying migrations 001 + 002 + 003 + 004 + 005"
-  for m in 001_branches 002_auth 003_data 004_bible_ref_index 005_ai_sessions; do
-    psql -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U "$PP_DB_USER" -d "$PP_DB_NAME" \
-      -f "$PP_ROOT/migrations/${m}.sql" -q
-  done
-  # Seed system/main branch if not present (001 should do this; idempotent)
-  psql -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U "$PP_DB_USER" -d "$PP_DB_NAME" -q <<EOF
-INSERT INTO branches (id, parent_id, owner, name)
-  SELECT '00000000-0000-0000-0000-000000000001', NULL, 'system', 'main'
-  WHERE NOT EXISTS (
-    SELECT 1 FROM branches WHERE owner='system' AND name='main'
-  );
-EOF
+  apply_migrations
   echo "[dev] pg ready (db=$PP_DB_NAME on :$PP_DB_PORT)"
 }
 

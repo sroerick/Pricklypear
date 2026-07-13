@@ -161,6 +161,10 @@
   (doc "Book chapter — month/day calendar; full text inlined from calendar.borg")
   (inline calendar.borg)
  )
+ (section flashcards
+  (doc "Book chapter — flashcards / spaced repetition; full text inlined from flashcards.borg")
+  (inline flashcards.borg)
+ )
  (section dabar
   (doc "Book chapter — BSB study libraries (dabar); full text inlined from dabar.borg")
   (inline dabar.borg)
