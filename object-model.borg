@@ -3,6 +3,15 @@
  (status partial)
  (convention ocaml-dune)
  (section object-model
+  (* agent note (|
+     BOOK INTRO SLOT — object-model — data as first-class
+     Write your author voice in a human comment immediately below this note:
+       (* roerick (|
+          …
+       |) *)
+     Editorial guidance (agent): Bridge from 'code in the store' to types/rows. What is a type_def vs a data_row in human terms? Why no ORM? What is deliberately unfinished (typed fields / v1.5)?
+  |) *)
+
   (doc "Typed records in Postgres, schema declared in Lisp, SQL-via-primitives, no ORM")
   (status partial)
   (verify

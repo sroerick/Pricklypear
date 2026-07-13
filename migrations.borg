@@ -3,6 +3,15 @@
  (status partial)
  (convention ocaml-dune)
  (section migrations
+  (* agent note (|
+     BOOK INTRO SLOT — migrations — additive discipline
+     Write your author voice in a human comment immediately below this note:
+       (* roerick (|
+          …
+       |) *)
+     Editorial guidance (agent): Boring on purpose. Why additive-only is a philosophical stance. How deploys apply SQL before the image serves.
+  |) *)
+
   (doc "Schema evolution: supervisor-applied, additive-only, schema authority in main")
   (status partial)
   (verify

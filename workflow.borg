@@ -5,6 +5,15 @@
  (section workflow
   (doc "Build/test workflow and conventions")
   (status partial)
+  (* agent note (|
+     BOOK INTRO SLOT — workflow — how the book gets built and changed
+     Write your author voice in a human comment immediately below this note:
+       (* roerick (|
+          …
+       |) *)
+     Editorial guidance (agent): Operator/author chapter: dune, dev.sh, borge plan/make/review, deploy. Tie to 'two-tier change' — when you rebuild OCaml vs when you (define) in Lisp.
+  |) *)
+
   (subsection build
    (doc "How to build and test each component")
    (status implemented)

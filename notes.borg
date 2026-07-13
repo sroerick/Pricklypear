@@ -5,6 +5,15 @@
  (section notes
   (doc "Outline-first notes OS: tree documents, wiki links, dailies, capture, hypermedia structure edit")
   (status partial)
+  (* agent note (|
+     BOOK INTRO SLOT — notes — living in the outline
+     Write your author voice in a human comment immediately below this note:
+       (* roerick (|
+          …
+       |) *)
+     Editorial guidance (agent): Personal: why outline-first (org-shaped) on a multi-user Lisp OS. What is done vs roam-still-planned. One sentence on agents using notes via eval.
+  |) *)
+
   (verify
    (build "dune build image")
    (smoke "(load-library \"outline\") then pure tree ops on a sample node tree")

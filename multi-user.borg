@@ -9,6 +9,15 @@
  (section multi-user
   (doc "Per-user image instances, namespaces via branch ownership, budgets, author-runs-as-author")
   (status partial)
+  (* agent note (|
+     BOOK INTRO SLOT — multi-user — many humans (read carefully)
+     Write your author voice in a human comment immediately below this note:
+       (* roerick (|
+          …
+       |) *)
+     Editorial guidance (agent): Clarify the tension: this chapter still talks process-per-user; single-image v1 does session+branch multi-user. Your intro should reconcile: multi-user PRODUCT is real; process isolation is the deferred hard version. Do not let readers think single-image means single-human.
+  |) *)
+
   (subsection isolation
    (doc "Process-level isolation: one image per user")
    (status implemented)

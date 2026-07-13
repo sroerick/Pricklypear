@@ -5,6 +5,15 @@
  (section image
   (doc "The per-user unikernel: Lisp interpreter, REPL endpoint, htmx interface")
   (status partial)
+  (* agent note (|
+     BOOK INTRO SLOT — image — the binary you actually run
+     Write your author voice in a human comment immediately below this note:
+       (* roerick (|
+          …
+       |) *)
+     Editorial guidance (agent): Despite the old 'per-user unikernel' doc string, this is the living habitat process. Intro: boot, HTTP, REPL, seed libs, emergency vs Lisp shell. Orient the reader before the long subsection crawl.
+  |) *)
+
   (subsection boot
    (doc "Reading the manifest, loading initial env")
    (status implemented)

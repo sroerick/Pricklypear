@@ -5,6 +5,15 @@
  (section lisp-interpreter
   (doc "Pure Scheme-flavored Lisp-1 interpreter, AST-as-source, primitives layer")
   (status partial)
+  (* agent note (|
+     BOOK INTRO SLOT — lisp-interpreter — the language that is the source
+     Write your author voice in a human comment immediately below this note:
+       (* roerick (|
+          …
+       |) *)
+     Editorial guidance (agent): Homoiconicity for operators: AST is source, JSONB is disk. What the Lisp is (Lisp-1, Scheme-flavored) and is not. Why eval is Lwt-typed. Promise the reader the .ml that follows is the whole language kernel.
+  |) *)
+
   (subsection ast
    (doc "The expr and value types")
    (status implemented)

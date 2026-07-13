@@ -10,6 +10,20 @@
  )
  (no-inline
  )
+  (* agent note (|
+     BOOK INTRO SLOT — BOOK FRONT MATTER (root)
+     Write your author voice in a human comment immediately below this note:
+       (* roerick (|
+          …
+       |) *)
+     Editorial guidance (agent): This is the title-page essay for the whole literate program. Rewrite or supersede the Mirage-era (roerick) block below if it no longer matches v1. Cover: what this book is (a program you can read / a system that runs), how to read full-dump order, what multi-user means now, and that deprecated chapters are historical branches of the same book. Aim for something you would leave on a table, not a README.
+  |) *)
+  (* agent note (|
+     EDITORIAL: The following (roerick (|…|)) block still describes Mirage
+     supervisor/authd fleet topology. When you write the front-matter slot
+     above, either revise this block in place or replace it so the root
+     human voice matches single-image v1 (one binary, session multi-user).
+  |) *)
  (roerick
   (|
    Pricklypear is an operating system in the Smalltalk tradition:

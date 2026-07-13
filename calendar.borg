@@ -3,6 +3,15 @@
  (status partial)
  (convention ocaml-dune)
  (section calendar
+  (* agent note (|
+     BOOK INTRO SLOT — calendar — time as a surface
+     Write your author voice in a human comment immediately below this note:
+       (* roerick (|
+          …
+       |) *)
+     Editorial guidance (agent): Short: what the calendar is for in this OS (not a Google clone pitch). How it composes with todos/notes if you care.
+  |) *)
+
   (doc "Month/day calendar: events + due todos + daily notes")
   (status partial)
   (subsection model

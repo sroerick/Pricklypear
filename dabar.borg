@@ -5,6 +5,15 @@
  (section dabar
   (doc "Bible study layer on the live image: plugin libs, seeds, routes")
   (status partial)
+  (* agent note (|
+     BOOK INTRO SLOT — dabar — study as libraries, not a second app
+     Write your author voice in a human comment immediately below this note:
+       (* roerick (|
+          …
+       |) *)
+     Editorial guidance (agent): Theological/product intent without sermon. BSB + Strong's + interlinear as load-library packages. What is corpus/seed vs code. Multi-user study without forking the canon.
+  |) *)
+
   (verify
    (build "dune build image")
    (smoke "(load-library \"bible\") then (bible/verse \"John\" 3 16) has God/world")
