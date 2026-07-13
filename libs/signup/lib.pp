@@ -86,18 +86,12 @@
       (list
         (layout/hero
           "You're on the list"
-          (string-append "Thanks — " (as-str email) " is saved.")
+          (string-append "Thanks — " (as-str email) ".")
           (html/join
             (list
               (layout/cta "/welcome" "Back to welcome")
               (layout/cta "/code" "Browse the source")
               (layout/cta "/login" "Log in"))))
-        (layout/section
-          "What happens next"
-          (html/join
-            (list
-              (html/p "Your email is stored as a signup row in Postgres. I also get a capture in my notes inbox so I notice.")
-              (html/p "No autoresponder yet — this is the dogfood era."))))
         (html/div
           (html/attr "class" "layout-foot")
           (html/a "/welcome" (html/text "welcome")))))))
