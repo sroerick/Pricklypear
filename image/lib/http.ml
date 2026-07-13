@@ -204,9 +204,16 @@ let request_handler (session : Session.t) (_sockaddr : Unix.sockaddr)
         Lwt.return_unit)
   | `GET, path when String.length path >= 11
                  && String.sub path 0 11 = "/assets/cm/" ->
+      (* Back-compat alias: /assets/cm/* → static/codemirror/* *)
       let rel =
         "codemirror/" ^ String.sub path 11 (String.length path - 11)
       in
+      launch (fun () ->
+        Http_code.handle_asset reqd ~rel;
+        Lwt.return_unit)
+  | `GET, path when String.length path >= 8
+                 && String.sub path 0 8 = "/assets/" ->
+      let rel = String.sub path 8 (String.length path - 8) in
       launch (fun () ->
         Http_code.handle_asset reqd ~rel;
         Lwt.return_unit)

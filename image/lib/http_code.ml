@@ -179,6 +179,12 @@ let mime_for_name (name : string) : string =
   else if Filename.check_suffix lower ".tgz"
        || Filename.check_suffix lower ".gz" then "application/gzip"
   else if Filename.check_suffix lower ".svg" then "image/svg+xml"
+  else if Filename.check_suffix lower ".png" then "image/png"
+  else if Filename.check_suffix lower ".jpg"
+       || Filename.check_suffix lower ".jpeg" then "image/jpeg"
+  else if Filename.check_suffix lower ".gif" then "image/gif"
+  else if Filename.check_suffix lower ".webp" then "image/webp"
+  else if Filename.check_suffix lower ".ico" then "image/x-icon"
   else "application/octet-stream"
 
 let cm_mode_for (name : string) : string =

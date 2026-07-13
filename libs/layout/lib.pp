@@ -11,12 +11,25 @@
           (html/attr "href" href)))
       (html/text label))))
 
+;; Wordmark / mark from image/static (served at /assets/…).
+(define layout/logo
+  (lambda ()
+    (html/void "img"
+      (html/attrs
+        (list
+          (html/attr "src" "/assets/pplogo.png")
+          (html/attr "alt" "Pricklypear")
+          (html/attr "class" "layout-logo")
+          (html/attr "width" "160")
+          (html/attr "height" "156"))))))
+
 (define layout/hero
   (lambda (title tagline actions-html)
     (html/div
       (html/attr "class" "layout-hero")
       (html/join
         (list
+          (layout/logo)
           (html/tag "h1" (html/attr "class" "layout-hero-title")
             (html/text title))
           (html/tag "p" (html/attr "class" "layout-hero-tagline")
@@ -62,6 +75,14 @@
             "border-bottom" "2px solid #000"
             "background" "#faf7f4"
             "margin" "0 0 1.25rem"))
+        (css/rule ".layout-logo"
+          (list
+            "display" "block"
+            "width" "10rem"
+            "height" "auto"
+            "max-width" "40vw"
+            "margin" "0 auto 1rem"
+            "image-rendering" "auto"))
         (css/rule ".layout-hero-title"
           (list
             "font-size" "2rem"
