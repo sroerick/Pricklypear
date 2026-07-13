@@ -1,7 +1,11 @@
 (library
  (name pricklypear_image_lib)
  (public_name pricklypear-image)
- (modules store primitives session crud packages loader repl_endpoint http lineedit boot llm_client
+ (modules store_db store
+          prims_pure primitives
+          session crud packages loader repl_endpoint
+          http_core http_data http_pages http
+          lineedit boot llm_client
           auth_password auth_store ai_store)
  (libraries
    pricklypear-lisp
