@@ -281,26 +281,14 @@
         (list "background" theme/panel "border" "1px solid #000"))
       (css/rule ".ol-kids"
         (list "margin-left" ".15rem" "min-width" "0"))
-      (css/rule "details.ol-actions"
+      (css/rule ".ol-actions"
         (list
           "position" "absolute" "top" ".1rem" "right" "0"
-          "z-index" "3" "margin" "0" "display" "block"))
-      (css/rule "details.ol-actions[open]"
-        (list "z-index" "40"))
-      (css/rule "details.ol-actions > summary.ol-actions-sum"
-        (list
-          "display" "none" "list-style" "none" "cursor" "pointer"
-          "user-select" "none" "width" "auto" "min-width" "1.75rem"
-          "min-height" "1.75rem" "padding" ".1rem .3rem" "border" "1px solid #666"
-          "background" "transparent" "font-weight" "700" "color" theme/muted
-          "text-align" "center" "line-height" "1.3" "border-radius" "0"))
-      (css/rule "details.ol-actions > summary.ol-actions-sum:hover, details.ol-actions[open] > summary.ol-actions-sum"
-        (list "background" theme/panel "border-color" theme/ink))
-      (css/rule "details.ol-actions > summary.ol-actions-sum::-webkit-details-marker"
-        (list "display" "none"))
+          "z-index" "3" "margin" "0" "display" "block"
+          "max-width" "calc(100% - .5rem)"))
       (css/rule ".ol-actions-panel"
         (list
-          "display" "flex !important" "flex-direction" "row" "flex-wrap" "nowrap"
+          "display" "flex" "flex-direction" "row" "flex-wrap" "wrap"
           "justify-content" "flex-end" "align-items" "center" "gap" ".25rem"
           "margin" "0" "padding" "0" "background" "transparent"
           "border" "none"))
@@ -601,21 +589,17 @@
           (css/rule ".ol-node"
             (list "margin-left" ".1rem" "padding-left" ".3rem"))
           (css/rule ".ol-sum"
-            (list "padding-right" "2.75rem" "align-items" "center"))
-          (css/rule "details.ol-actions > summary.ol-actions-sum"
-            (list "display" "inline-block"))
+            (list "padding-right" ".25rem" "align-items" "center"))
+          (css/rule ".ol-actions"
+            (list
+              "position" "static" "max-width" "none"
+              "margin" ".2rem 0 .35rem"))
           (css/rule ".ol-actions-panel"
             (list
-              "display" "none !important" "position" "absolute" "right" "0"
-              "top" "100%" "margin-top" "2px" "flex-direction" "column"
-              "flex-wrap" "nowrap" "align-items" "stretch" "min-width" "7rem"
-              "padding" ".2rem" "background" theme/panel "border" "1px solid #000"))
-          (css/rule "details.ol-actions[open] > .ol-actions-panel"
-            (list "display" "flex !important"))
-          (css/rule "details.ol-actions[open] > .ol-actions-panel .ol-btn"
+              "justify-content" "flex-start" "flex-wrap" "wrap"))
+          (css/rule ".ol-actions-panel .ol-btn"
             (list
-              "width" "100%" "text-align" "left" "min-height" "2.1rem"
-              "background" theme/panel))))))))
+              "min-height" "2.1rem" "background" theme/panel))))))))
 
 
 ;; Nav layout + capture dropdown (formerly ui/nav-style inline <style>)
