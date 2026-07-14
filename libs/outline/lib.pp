@@ -258,38 +258,37 @@
           (html/attr "hx-swap" "outerHTML")))
       label)))
 
+;; Always-visible control bar (div). A closed <details> hides non-summary
+;; children in browsers, so desktop CSS that hid the ··· summary made the
+;; whole panel disappear. Mobile still wraps buttons via CSS.
 (define outline/actions
   (lambda (slug nid todo show-archived)
-    (html/tag "details" (html/attr "class" "ol-actions")
-      (html/join
-        (list
-          (html/tag "summary" (html/attr "class" "ol-actions-sum")
-            (html/text "···"))
-          (html/div (html/attr "class" "ol-actions-panel")
-            (html/join
-              (list
-                (outline/action-btn slug nid "cycle-todo" "toggle todo" "ol-btn" show-archived)
-                (if (outline/archived? todo)
-                    (outline/action-btn slug nid "unarchive" "unarchive" "ol-btn" show-archived)
-                    (outline/action-btn slug nid "archive" "archive" "ol-btn" show-archived))
-                (outline/action-btn slug nid "add-child" "+child" "ol-btn" show-archived)
-                (outline/action-btn slug nid "add-sibling" "+sib" "ol-btn" show-archived)
-                (outline/action-btn slug nid "move-up" "up" "ol-btn" show-archived)
-                (outline/action-btn slug nid "move-down" "down" "ol-btn" show-archived)
-                (outline/extra-actions slug nid)
-                (html/tag "button"
-                  (html/attrs
-                    (list
-                      (html/attr "class" "ol-btn ol-del")
-                      (html/attr "type" "button")
-                      (html/attr "hx-post"
-                        (string-append "/partials/notes-node-op?slug=" slug
-                          "&op=delete&node-id=" nid
-                          (if show-archived "&show=archived" "")))
-                      (html/attr "hx-target" "#outline")
-                      (html/attr "hx-swap" "outerHTML")
-                      (html/attr "hx-confirm" "Delete this node?")))
-                  "del")))))))))
+    (html/div (html/attr "class" "ol-actions")
+      (html/div (html/attr "class" "ol-actions-panel")
+        (html/join
+          (list
+            (outline/action-btn slug nid "cycle-todo" "toggle todo" "ol-btn" show-archived)
+            (if (outline/archived? todo)
+                (outline/action-btn slug nid "unarchive" "unarchive" "ol-btn" show-archived)
+                (outline/action-btn slug nid "archive" "archive" "ol-btn" show-archived))
+            (outline/action-btn slug nid "add-child" "+child" "ol-btn" show-archived)
+            (outline/action-btn slug nid "add-sibling" "+sib" "ol-btn" show-archived)
+            (outline/action-btn slug nid "move-up" "up" "ol-btn" show-archived)
+            (outline/action-btn slug nid "move-down" "down" "ol-btn" show-archived)
+            (outline/extra-actions slug nid)
+            (html/tag "button"
+              (html/attrs
+                (list
+                  (html/attr "class" "ol-btn ol-del")
+                  (html/attr "type" "button")
+                  (html/attr "hx-post"
+                    (string-append "/partials/notes-node-op?slug=" slug
+                      "&op=delete&node-id=" nid
+                      (if show-archived "&show=archived" "")))
+                  (html/attr "hx-target" "#outline")
+                  (html/attr "hx-swap" "outerHTML")
+                  (html/attr "hx-confirm" "Delete this node?")))
+              "del")))))))
 
 ;; Non-interactive badge — when node has a non-empty todo/state.
 (define outline/todo-badge
