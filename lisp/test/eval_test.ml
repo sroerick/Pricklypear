@@ -173,6 +173,47 @@ let eval_tests = [
       Alcotest.fail "expected Unbound_var"
     with Ast.Interp_error (Ast.Unbound_var name) ->
       Alcotest.(check string) "nope" "nope" name);
+  ("eval: seq empty returns nil", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let got = Lwt_main.run (Eval.eval_string ~prims env "(seq)") in
+    Alcotest.(check string) "nil" "()" (Reader.pp_value got));
+  ("eval: seq single returns body", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let got = Lwt_main.run (Eval.eval_string ~prims env "(seq 7)") in
+    Alcotest.(check string) "7" "7" (Reader.pp_value got));
+  ("eval: seq binary returns last", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let got = Lwt_main.run (Eval.eval_string ~prims env "(seq 1 2)") in
+    Alcotest.(check string) "2" "2" (Reader.pp_value got));
+  ("eval: seq multi returns last", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let got = Lwt_main.run (Eval.eval_string ~prims env "(seq 1 2 3)") in
+    Alcotest.(check string) "3" "3" (Reader.pp_value got));
+  ("eval: seq nested multi", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let got = Lwt_main.run (Eval.eval_string ~prims env
+                              "(seq 1 (seq 2 3) 4)") in
+    Alcotest.(check string) "4" "4" (Reader.pp_value got));
+  ("eval: seq side effects left-to-right", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let got = Lwt_main.run (Eval.eval_string ~prims env
+      "(seq (define a 1) (define b 2) (define c 3) c)") in
+    Alcotest.(check string) "c" "3" (Reader.pp_value got);
+    (match Env.lookup env "a", Env.lookup env "b" with
+     | Some (Ast.VInt 1L), Some (Ast.VInt 2L) -> ()
+     | _ -> Alcotest.fail "expected a=1 b=2 after seq defines"));
+  ("eval: seq in lambda body multi", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let got = Lwt_main.run (Eval.eval_string ~prims env
+      "((lambda () (seq (define x 10) (define y 20) y)))") in
+    Alcotest.(check string) "20" "20" (Reader.pp_value got));
 ]
 
 let pretty_print_tests = [

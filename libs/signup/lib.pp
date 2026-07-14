@@ -105,9 +105,9 @@
               "email: " (string-trim (as-str email)) "\n"
               "note: " (as-str note) "\n"
               "source: web")))
-      ;; notes/capture is seeded on system/main; no-op if notes missing.
-      (if (string-eq (type-of notes/capture) "lambda")
-          (notes/capture title body)
+      ;; notes/capture/add is seeded on system/main; no-op if notes missing.
+      (if (string-eq (type-of notes/capture/add) "lambda")
+          (notes/capture/add title body)
           "no-notes"))))
 
 (define signup/record

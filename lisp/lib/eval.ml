@@ -242,9 +242,18 @@ and eval_special_form
       Lwt.return v
   | "quote", [ _; e' ] ->
       Lwt.return (quote_to_value e')
-  | "seq", [ _; a; b ] ->
-      let* _ = eval ~budget ~prims env a in
-      eval ~budget ~prims env b
+  | "seq", _head :: bodies ->
+      (* Surface (seq e1 e2 … en): evaluate left-to-right for effects,
+         return the last body's value. (seq) → VNil; (seq e) → e.
+         Binary Ast.Seq constructor remains for internal chains; this
+         branch handles the reader App form with any arity. *)
+      (match bodies with
+       | [] -> Lwt.return VNil
+       | [only] -> eval ~budget ~prims env only
+       | first :: rest ->
+           let* _ = eval ~budget ~prims env first in
+           eval_special_form ~budget ~prims env "seq"
+             (Var "seq" :: rest))
   | "prim", _ ->
       (* (prim name args...) — full_args = [Var "prim"; Var name; args...] *)
       (match full_args with

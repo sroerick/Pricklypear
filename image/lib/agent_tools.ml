@@ -125,7 +125,8 @@ let install_ai_function (t : t) ~(name : string) ~(body_src : string)
                   (Pricklypear_lisp.Ast.VStr
                      (Printf.sprintf "ai body invalid: %s\n---\n%s" e body_src))))
 
-(** Pretty source body for a binding (env lambda or store). *)
+(** Pretty source body for a binding (env lambda or store).
+    Special forms are not stored; return a short language card instead. *)
 let function_source (t : t) (name : string) : string option Lwt.t =
   let* found = Store.lookup_function t.store name in
   match found with
@@ -138,7 +139,16 @@ let function_source (t : t) (name : string) : string option Lwt.t =
              Pricklypear_lisp.Ast.Lambda (params, body)
            in
            Lwt.return (Some (Pricklypear_lisp.Reader.pp_expr e))
-       | _ -> Lwt.return_none)
+       | _ ->
+           (match Pricklypear_lisp.Special_forms.find name with
+            | Some e ->
+                let card =
+                  Printf.sprintf
+                    ";; special form (evaluator) — not a Lisp binding\n;; %s\n;; %s\n%s"
+                    e.arity e.summary e.examples
+                in
+                Lwt.return (Some card)
+            | None -> Lwt.return_none))
 
 let package_binding_names (t : t) (pkg : string) : string list Lwt.t =
   let* defs = Store.list_function_names t.store in
@@ -470,7 +480,7 @@ let html_helpers_cheatsheet : string =
   "                         (html/hidden \"id\" id)\n" ^
   "                         (html/button (html/attr \"type\" \"submit\") \"Delete\")))))))\n" ^
   "\n" ^
-  "Also: inspect_function html/form | html/a | contacts/form-html | todo/add-form\n"
+  "Also: inspect_function html/form | html/a | contacts/form-html | todo/ui/add-form\n"
 
 let truncate_for_tool ~(limit : int) (s : string) : string =
   if String.length s <= limit then s
@@ -868,7 +878,7 @@ let default_agent_seed (t : t) : string =
   "6) Routes: call register_route path=/pkg handler=pkg/page. " ^
   "Do NOT (route ...) inside install_function (publish effect is blocked there).\n" ^
   "7) Inspect working apps first: inspect_function todo/page, notes/page, " ^
-  "todo/add, html/form.\n" ^
+  "todo/item/add, html/form.\n" ^
   "\n" ^
   "Test loop (required for apps):\n" ^
   "8) After register_route, smoke_route path=/app method=GET contains=Title.\n" ^

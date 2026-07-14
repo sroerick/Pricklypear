@@ -79,10 +79,10 @@ let file_todo_and_note (session : Session_types.t) ~(title : string)
   let body_e = escape_lisp_str body in
   let expr =
     Printf.sprintf
-      {|(let ((tid (todo/add (todo/ensure-inbox) "%s")))
+      {|(let ((tid (todo/item/add (todo/list/ensure-inbox) "%s")))
           (seq
             (if (null? tid) () (update-field 'todo-item tid "notes" "%s"))
-            (notes/capture "%s" "%s")
+            (notes/capture/add "%s" "%s")
             tid))|}
       title_e body_e title_e body_e
   in

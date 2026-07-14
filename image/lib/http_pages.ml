@@ -390,6 +390,55 @@ let list_bindings_page (session : Session.t) (reqd : Httpaf.Reqd.t)
     ^ Packages.name_encode fn
   in
   match pkg_q, fn_q with
+  | Some "special-forms", Some fname ->
+      let entry =
+        Pricklypear_lisp.Special_forms.find fname
+      in
+      let body =
+        match entry with
+        | None ->
+            chrome ~session ~title:("Special form " ^ fname) [
+              HTML.p [] [
+                HTML.a [HTML.href "/bindings"] [txt "Functions"];
+                txt " › ";
+                HTML.a [HTML.href "/bindings?pkg=special-forms"]
+                  [txt "(special-forms)"];
+              ];
+              HTML.p [HTML.class_ "err"] [txt "unknown special form %s" fname];
+            ]
+        | Some e ->
+            chrome ~session ~title:("Special form " ^ e.name) [
+              HTML.p [] [
+                HTML.a [HTML.href "/bindings"] [txt "Functions"];
+                txt " › ";
+                HTML.a [HTML.href "/bindings?pkg=special-forms"]
+                  [txt "(special-forms)"];
+                txt " › %s" e.name;
+              ];
+              HTML.div [HTML.class_ "card"] [
+                HTML.p [] [
+                  HTML.span [HTML.class_ "muted"] [txt "kind: "];
+                  txt "special form (evaluator)";
+                ];
+                HTML.p [] [
+                  HTML.span [HTML.class_ "muted"] [txt "name: "];
+                  txt "%s" e.name;
+                ];
+                HTML.p [] [
+                  HTML.span [HTML.class_ "muted"] [txt "arity: "];
+                  txt "%s" e.arity;
+                ];
+                HTML.p [] [txt "%s" e.summary];
+                HTML.h2 [] [txt "example"];
+                HTML.pre [] [txt "%s" e.examples];
+                HTML.p [HTML.class_ "muted"] [
+                  txt "Handled in lisp/lib/eval.ml — not an env binding, not a prim, not editable as Lisp. Change requires OCaml + tests + image deploy.";
+                ];
+              ];
+            ]
+      in
+      html_response reqd ~session body;
+      Lwt.return_unit
   | Some "kernel", Some fname ->
       let summary =
         match List.assoc_opt fname kernel with
@@ -499,6 +548,44 @@ let list_bindings_page (session : Session.t) (reqd : Httpaf.Reqd.t)
       in
       html_response reqd ~session body;
       Lwt.return_unit
+  | Some "special-forms", None ->
+      let rows =
+        let all = Pricklypear_lisp.Special_forms.summaries in
+        if q = "" then all
+        else List.filter (fun (n, s) -> contains_ci n q || contains_ci s q) all
+      in
+      let items =
+        List.map
+          (fun (n, summary) ->
+            HTML.tr [] [
+              HTML.td [] [
+                HTML.a [HTML.href "%s" (fn_href "special-forms" n)] [txt "%s" n];
+              ];
+              HTML.td [] [txt "special form"];
+              HTML.td [] [txt "%s" summary];
+            ])
+          rows
+      in
+      let body =
+        chrome ~session ~title:"Package (special-forms)" [
+          HTML.p [] [HTML.a [HTML.href "/bindings"] [txt "← all packages"]];
+          HTML.p [HTML.class_ "meta"] [
+            txt "Evaluator special forms (syntax). Not env bindings, not prims. Read-only.";
+          ];
+          HTML.table [] [
+            HTML.thead [] [
+              HTML.tr [] [
+                HTML.th [] [txt "name"];
+                HTML.th [] [txt "kind"];
+                HTML.th [] [txt "summary"];
+              ];
+            ];
+            HTML.tbody [] items;
+          ];
+        ]
+      in
+      html_response reqd ~session body;
+      Lwt.return_unit
   | Some "kernel", None ->
       let rows =
         if q = "" then kernel
@@ -605,10 +692,14 @@ let list_bindings_page (session : Session.t) (reqd : Httpaf.Reqd.t)
           groups
       in
       let all_pkgs =
-        ( "(kernel)"
-        , "/bindings?pkg=kernel"
-        , List.length kernel
-        , "kernel" )
+        ( "(special-forms)"
+        , "/bindings?pkg=special-forms"
+        , List.length Pricklypear_lisp.Special_forms.summaries
+        , "language" )
+        :: ( "(kernel)"
+           , "/bindings?pkg=kernel"
+           , List.length kernel
+           , "kernel" )
         :: ws_pkgs
       in
       let filtered =
@@ -677,7 +768,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpaf.Reqd.t)
               HTML.tbody [] items;
             ]
           ; HTML.p [HTML.class_ "muted"] [
-              txt "Tip: open (kernel) to browse create, +, render-html, propose-function, …";
+              txt "Tip: open (special-forms) for seq/if/lambda, (kernel) for create/+/render-html, …";
             ]
           ]
       in

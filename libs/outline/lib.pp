@@ -53,11 +53,28 @@
           #f
           (if (string-eq t "DONE")
               #f
-              (if (string-eq t "CANCELLED") #f #t))))))
+              (if (string-eq t "CANCELLED")
+                  #f
+                  (if (string-eq t "ARCHIVED") #f #t)))))))
+
+(define outline/archived?
+  (lambda (s)
+    (string-eq (as-str s) "ARCHIVED")))
+
+;; Terminal state (not in cycle). Unarchive returns to TODO.
+(define outline/archive
+  (lambda (n)
+    (outline/set-todo n "ARCHIVED")))
+
+(define outline/unarchive
+  (lambda (n)
+    (outline/set-todo n "TODO")))
 
 (define outline/cycle-todo
   (lambda (n)
-    (outline/set-todo n (outline/todo-next (outline/todo n)))))
+    (if (outline/archived? (outline/todo n))
+        n
+        (outline/set-todo n (outline/todo-next (outline/todo n))))))
 
 ;; Collect (id title state) for every node with non-empty todo.
 (define outline/todos
@@ -219,8 +236,15 @@
 ;; controls never render under nested children. Desktop: right-justified
 ;; on the title line. Mobile: ⋯ dropdown (see .ol-actions CSS).
 
+;; Optional extra action HTML (e.g. refile form). Notes redefines this after load.
+(define outline/extra-actions
+  (lambda (slug nid) ""))
+
+;; hx-swap outerHTML: response is a full #outline root from outline/html.
+;; innerHTML nested a second #outline and broke subsequent ops.
+;; show-archived: when #t, append &show=archived so partials keep the filter on.
 (define outline/action-btn
-  (lambda (slug nid op label class)
+  (lambda (slug nid op label class show-archived)
     (html/tag "button"
       (html/attrs
         (list
@@ -228,13 +252,14 @@
           (html/attr "type" "button")
           (html/attr "hx-post"
             (string-append "/partials/notes-node-op?slug=" slug
-              "&op=" op "&node-id=" nid))
+              "&op=" op "&node-id=" nid
+              (if show-archived "&show=archived" "")))
           (html/attr "hx-target" "#outline")
-          (html/attr "hx-swap" "innerHTML")))
+          (html/attr "hx-swap" "outerHTML")))
       label)))
 
 (define outline/actions
-  (lambda (slug nid)
+  (lambda (slug nid todo show-archived)
     (html/tag "details" (html/attr "class" "ol-actions")
       (html/join
         (list
@@ -243,11 +268,15 @@
           (html/div (html/attr "class" "ol-actions-panel")
             (html/join
               (list
-                (outline/action-btn slug nid "cycle-todo" "toggle todo" "ol-btn")
-                (outline/action-btn slug nid "add-child" "+child" "ol-btn")
-                (outline/action-btn slug nid "add-sibling" "+sib" "ol-btn")
-                (outline/action-btn slug nid "move-up" "up" "ol-btn")
-                (outline/action-btn slug nid "move-down" "down" "ol-btn")
+                (outline/action-btn slug nid "cycle-todo" "toggle todo" "ol-btn" show-archived)
+                (if (outline/archived? todo)
+                    (outline/action-btn slug nid "unarchive" "unarchive" "ol-btn" show-archived)
+                    (outline/action-btn slug nid "archive" "archive" "ol-btn" show-archived))
+                (outline/action-btn slug nid "add-child" "+child" "ol-btn" show-archived)
+                (outline/action-btn slug nid "add-sibling" "+sib" "ol-btn" show-archived)
+                (outline/action-btn slug nid "move-up" "up" "ol-btn" show-archived)
+                (outline/action-btn slug nid "move-down" "down" "ol-btn" show-archived)
+                (outline/extra-actions slug nid)
                 (html/tag "button"
                   (html/attrs
                     (list
@@ -255,13 +284,14 @@
                       (html/attr "type" "button")
                       (html/attr "hx-post"
                         (string-append "/partials/notes-node-op?slug=" slug
-                          "&op=delete&node-id=" nid))
+                          "&op=delete&node-id=" nid
+                          (if show-archived "&show=archived" "")))
                       (html/attr "hx-target" "#outline")
-                      (html/attr "hx-swap" "innerHTML")
+                      (html/attr "hx-swap" "outerHTML")
                       (html/attr "hx-confirm" "Delete this node?")))
                   "del")))))))))
 
-;; Non-interactive badge — only when node is a todo (TODO or DONE).
+;; Non-interactive badge — when node has a non-empty todo/state.
 (define outline/todo-badge
   (lambda (todo)
     (let ((t (as-str todo)))
@@ -272,7 +302,7 @@
             (html/text t))))))
 
 (define outline/html-node
-  (lambda (slug n)
+  (lambda (slug n show-archived)
     (let ((nid (outline/id n))
           (todo (outline/todo n))
           (body (outline/body n))
@@ -302,7 +332,7 @@
                         (html/attr "data-field" "title")))
                     (html/text (outline/title n))))))
             ;; Before body/kids so controls belong to this row, not under children.
-            (outline/actions slug nid)
+            (outline/actions slug nid todo show-archived)
             (if (string-eq body "")
                 ""
                 (html/div
@@ -316,14 +346,19 @@
             (html/div (html/attr "class" "ol-kids")
               (list/foldl
                 (lambda (acc k)
-                  (string-append acc (outline/html-node slug k)))
+                  (if (if (outline/archived? (outline/todo k))
+                          show-archived
+                          #t)
+                      (string-append acc (outline/html-node slug k show-archived))
+                      acc))
                 ""
                 kids))))))))
 
+;; show-archived: #f hides ARCHIVED kids (default). Root always rendered.
 (define outline/html
-  (lambda (slug root)
+  (lambda (slug root show-archived)
     (html/div (html/attr "id" "outline")
-      (outline/html-node slug root))))
+      (outline/html-node slug root show-archived))))
 
 (define outline/encode
   (lambda (root) (json-emit root)))
