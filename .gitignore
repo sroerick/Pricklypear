@@ -19,15 +19,6 @@ _build/
 # opam local switch (if ever created in-tree)
 _opam/
 
-# Mirage generated (spikes may regenerate)
-**/mirage_solo5/main.ml
-**/mirage_solo5/dune.build
-**/mirage_solo5/dune.config
-**/mirage_solo5/dune-workspace
-**/mirage_solo5/dune-project
-**/mirage_solo5/Makefile
-**/mirage_solo5/*.opam
-
 # secrets / local env
 .env
 .env.*
@@ -52,10 +43,21 @@ id_rsa.pub
 *.pid
 .pi-subagents/
 __pycache__/
+*.pyc
 lisp/bin/read_test.ml
+
+# agent / design-session debris (never re-commit)
+.ralph/
+.borge-bugs/
+*.bak
+spikes/
+supervisor/
 
 # generated public release artifacts
 public-artifacts/
 
 # local-only ops notes (not shipped / not public)
 docs/openbsd-prod-branch-deploy.md
+
+# local agent notes (not part of public source tree)
+AGENTS.md

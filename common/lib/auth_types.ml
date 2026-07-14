@@ -1,9 +1,8 @@
 (** Pricklypear Common — Auth types.
 
-    Shared between the supervisor (which calls auth via RPC) and the auth
-    unikernel (which serves the RPC). Per spec [auth]: auth is the only
-    thing that verifies credentials and mints tokens; the supervisor never
-    sees raw credentials past the verify call. *)
+    Shared JSON/types for users, credentials, and auth results. Single-image
+    v1 verifies passwords and sessions in-process (image/lib/auth_*.ml);
+    there is no separate authd/supervisor RPC path. *)
 open Yojson.Safe
 
 type user_id = string

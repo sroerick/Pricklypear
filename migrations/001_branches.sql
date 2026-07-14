@@ -1,8 +1,8 @@
 -- Pricklypear migration 001: the code store.
 --
--- These tables hold BRANCHED code (functions, types, view bindings) and
--- session/supervisor bookkeeping. They are applied by the supervisor on
--- boot, before any image is allowed to start. Tracked in schema_migrations.
+-- Branched code (functions, types, view bindings) plus a lightweight
+-- sessions table for process bookkeeping. Applied by the image on boot
+-- (and by scripts/dev.sh / deploy hooks). Tracked in schema_migrations.
 --
 -- Per spec [storage.schema]. NOTE: NO Postgres INHERITANCE anywhere
 -- (see storage.no-inheritance — branches are an OVERRIDE primitive, not
@@ -54,13 +54,13 @@ CREATE TABLE IF NOT EXISTS view_bindings (
   PRIMARY KEY (branch_id, route)
 );
 
--- sessions = supervisor's fleet tracking of per-user image instances.
--- (Auth sessions live in auth_sessions in 002_auth.sql.)
+-- sessions = optional process bookkeeping (health/uptime style).
+-- Auth login sessions live in auth_sessions (002_auth.sql).
 CREATE TABLE IF NOT EXISTS sessions (
   id          uuid PRIMARY KEY,
   user_id     text NOT NULL,
   branch_id   uuid NOT NULL REFERENCES branches(id),
-  pid         integer,             -- image instance pid (mirage/unix dev)
+  pid         integer,             -- image process pid when recorded
   boot_mode   text NOT NULL,       -- 'on-connect' | 'always-on'
   health      text NOT NULL DEFAULT 'unknown',  -- see Protocol.health_status
   started_at  timestamptz NOT NULL DEFAULT now(),

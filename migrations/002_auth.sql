@@ -1,15 +1,13 @@
 -- Pricklypear migration 002: the auth tables.
 --
--- Applied by the supervisor (which owns schema state for the whole
--- system) but the [system_keys] table is granted ONLY to a dedicated
--- pg role [pricklypear_auth] that ONLY the auth unikernel connects as.
--- A DB dump from any other role doesn't include the signing key
--- (defense-in-depth, free; see auth.credentials-store).
+-- Applied by the single-image process (same migration runner as 001).
+-- Auth is in-process in v1; the optional pricklypear_auth role and
+-- system_keys grants below are defense-in-depth leftovers from the
+-- earlier multi-process sketch — harmless if unused.
 --
--- KNOWN RISK (per spec): a DB dump from auth's role, or an auth-image
--- compromise, leaks the signing key -> all web sessions forgeable.
--- Accepted for personal/small-team scope. HARDENING GOAL (when this
--- becomes stable): move the signing key to auth-image memory only.
+-- KNOWN RISK: a DB dump that includes system_keys (or the app role that
+-- can read it) can forge session tokens. Accepted for personal/small-team
+-- scope. HARDENING: keep signing material out of shared dumps.
 
 CREATE TABLE IF NOT EXISTS users (
   id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -31,9 +29,8 @@ CREATE TABLE IF NOT EXISTS credentials (
 CREATE INDEX IF NOT EXISTS credentials_user_idx ON credentials (user_id);
 CREATE INDEX IF NOT EXISTS credentials_kind_idx ON credentials (kind);
 
--- auth_sessions: NOT to be confused with the supervisor's `sessions` table
--- (which tracks image instances). auth_sessions are login sessions (web
--- tokens). Named to avoid the clash.
+-- auth_sessions: browser/API login sessions (token hash + expiry).
+-- Not the same as the process `sessions` table in 001_branches.sql.
 CREATE TABLE IF NOT EXISTS auth_sessions (
   id          uuid PRIMARY KEY DEFAULT gen_random_uuid(),           -- the token's opaque id
   user_id     uuid NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -64,10 +61,9 @@ CREATE TABLE IF NOT EXISTS system_keys (
   created_at  timestamptz NOT NULL DEFAULT now()
 );
 
--- Role isolation: only the auth unikernel connects as pricklypear_auth.
--- It gets its own role (separate from the supervisor's role) with
--- SELECT/INSERT/UPDATE on auth tables only. system_keys is restricted
--- further: only pricklypear_auth can SELECT it.
+-- Optional role isolation (historical multi-process sketch).
+-- Single-image v1 typically uses the main app DB role; this grant is
+-- retained for deployments that still create pricklypear_auth.
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'pricklypear_auth') THEN

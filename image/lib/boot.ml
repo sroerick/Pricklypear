@@ -1,20 +1,15 @@
 (** Pricklypear Image — Boot.
 
-    Per spec [image.boot]:
-      1. Read boot manifest.
-      2. Loads function_defs and type_defs for branch_id from Postgres
-         (TODO — for minimal image, the env starts empty; lookups still
-         hit the store on demand).
-      3. Start the REPL endpoint (internal line protocol).
-      4. Start the htmx server (httpaf-lwt-unix).
-      5. Register health (handled by Http.serve's /health route).
-      6. Mark self healthy, signal supervisor (TODO: signal via sessions
-         table; minimal image just runs).
+    Single-image entry (see [image.boot] / [single-image]):
+      1. Build boot manifest from env (or defaults).
+      2. Connect store, apply migrations, bootstrap admin if needed.
+      3. Load function_defs for the branch into the session env.
+      4. Start optional TCP REPL (loopback line protocol).
+      5. Start HTTP (httpaf-lwt-unix) including /health.
 
-    Reads env vars PP_USER, PP_USERNAME, PP_BRANCH_ID, PP_BRANCH_NAME,
-    PP_BOOT_MODE, PP_IMAGE_VERSION for the manifest. These are set by
-    the supervisor when it spawns the image (or by [scripts/dev.sh] for
-    standalone dev runs). *)
+    Env knobs include PP_USERNAME, PP_BRANCH_ID, PP_BRANCH_NAME,
+    PP_BOOT_MODE, PP_IMAGE_VERSION, PP_HTTP_PORT, PP_REPL_PORT — set by
+    [scripts/dev.sh] or the host service unit. *)
 open Lwt.Syntax
 
 let env_or name dft = match Sys.getenv_opt name with Some s -> s | None -> dft

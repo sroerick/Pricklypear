@@ -1,29 +1,45 @@
 # Pricklypear
 
-A multi-user Lisp OS: one live image process, Postgres as the object
-store, htmx as the interface. Humans and agents share the running
-system — the process **is** the API.
+A multi-user Lisp OS habitat: **one** OCaml image process, Postgres as
+the object store, htmx as the interface. Humans and agents share the
+running system — the process **is** the API.
 
-Design is a multi-file borge book: root [`pricklypear.borg`](pricklypear.borg)
-inlines chapters (`borge/philosophy.borg`, `borge/single-image.borg`,
-`borge/lisp-interpreter.borg`, …) in literate order. If code and spec
-disagree, the code is wrong.
+This is a dogfooded personal system that happens to be multi-user, not a
+polished product suite. Design lives in a multi-file borge book
+([`pricklypear.borg`](pricklypear.borg) + `borge/*.borg`). If code and
+spec disagree, the code is wrong.
 
-## Status
+License: [ISC](LICENSE).
 
-**v1 single-image habitat** — built, dogfooded, publicly hosted.
+## What you get
 
 | | |
 |---|---|
-| Architecture | One OCaml image + Postgres + nginx |
+| Runtime | One unix binary (`image/`) + Postgres |
 | Auth | In-process web login (`pp_session`) + HTTP Basic for agents |
-| Product | notes, todos, outline, ui/theme, bible/dabar, agent sessions |
+| Code store | Branched `function_defs` with parent override (not PG inheritance) |
+| Data store | Shared `data_rows` (JSON fields) across branches |
+| UI | Server-rendered htmx; Lisp packages in `libs/` |
 | Public face | `/welcome`, `/code`, `/book.pdf`, `/src.tgz` |
 
-Real planned gaps (not stale foundation): type-system design, branch
-promote UX, notes roam, dabar FTS/corpus polish, AI review-merge UI,
-argon2. Deprecated multi-process chapters remain in the book as
-history (`supervisor.*`, old SSH-front-door notes).
+Dogfood packages seeded on boot include todo, notes/outline, calendar,
+contacts, bookmarks, flashcards, bible/dabar, weather, AI helpers, and
+the welcome/layout shell. Treat them as a living garden, not a frozen
+SDK.
+
+## Honest limitations (read before deploying)
+
+- Password hashing is interim **`sha256$salt$digest`** (argon2 planned).
+- First boot defaults bootstrap admin to **`admin` / `admin`** unless
+  `PP_BOOTSTRAP_USER` / `PP_BOOTSTRAP_PASSWORD` are set. Change these
+  before any network exposure.
+- Optional TCP REPL (`PP_REPL_PORT`) has **no application auth** — bind
+  loopback only (or tunnel). Do not expose it on a public interface.
+- Session cookies are `HttpOnly; SameSite=Lax` (no `Secure` on plain
+  HTTP). Put TLS on a reverse proxy for real use.
+- CSRF tokens are not implemented yet; same-site cookie policy is the
+  current mitigation.
+- `PP_AUTH_DISABLED=1` skips the HTTP auth gate — **dev only**.
 
 ## Architecture
 
@@ -31,7 +47,7 @@ history (`supervisor.*`, old SSH-front-door notes).
 Browser / pp_eval / browser REPL
         │
         ▼
-nginx (TLS / reverse proxy)
+reverse proxy (TLS optional)
         │
         ▼
 image  (one OCaml unix binary)
@@ -46,8 +62,10 @@ Postgres  (branches, function_defs, type_defs, view_bindings,
            data_rows, users, credentials, auth_sessions, …)
 ```
 
-Multi-user = credentials + sessions + `<user>/personal` garden branches
-inheriting `system/main`. Not a process fleet.
+Multi-user means credentials + sessions + `<user>/personal` garden
+branches inheriting `system/main`. Not a process fleet. (Older
+multi-process / supervisor chapters remain in the design book as
+history only.)
 
 ## Layout
 
@@ -55,19 +73,18 @@ inheriting `system/main`. Not a process fleet.
 |---|---|
 | `lisp/` | Pure Lisp-1 interpreter (`Eval.eval : env -> expr -> value Lwt.t`) |
 | `common/` | Shared types |
-| `migrations/` | Additive SQL |
+| `migrations/` | Additive SQL applied on boot / deploy |
 | `image/` | Sole runtime binary |
 | `libs/` | Lisp packages seeded to `system/main` |
-| `scripts/` | `dev.sh`, `pp_eval.py`, OpenBSD deploy, `public_artifacts.sh` |
-| `docs/` | Vendored `pricklypear-book.pdf` (ops notes stay local) |
-| `spikes/` | Historical probes only (awa-ssh, mirage_solo5) |
+| `scripts/` | `dev.sh`, `pp_eval.py`, smokes, `public_artifacts.sh`, deploy helpers |
+| `docs/` | Vendored book PDF (host-specific ops notes stay local) |
+| `borge/` | Design chapters |
 
 ## Stack
 
-- OCaml 5.4.1 on **`poohstack`**
+- OCaml 5.4.x on the **`poohstack`** opam switch
 - Lwt + `httpaf-lwt-unix` + `pgx_lwt`
-- `pure-html` / `HTML.Hx.*`
-- Interim password hash `sha256$salt$digest` (argon2 deferred)
+- `pure-html` / `HTML.Hx.*` for type-safe markup
 
 ## Build & dev
 
@@ -76,41 +93,49 @@ eval $(opam env --switch=poohstack --set-switch)
 dune build @all && dune runtest --force
 
 scripts/dev.sh start    # PG :5433 + image :18080 / :17878
+scripts/dev.sh status
+scripts/dev.sh stop
 ```
 
-## Public release (hosted instance)
-
-| Path | What |
-|---|---|
-| `/welcome` | Landing (`layout/*` + `welcome/page`) |
-| `/code` | Read-only source browser |
-| `/book.pdf` | Literate book (vendored or `borge book print`) |
-| `/src.tgz` | Pruned source tarball |
-| `/login` | Workspace |
+Useful checks against a running image:
 
 ```bash
-ksh scripts/public_artifacts.sh   # refresh PDF/tarball when tools allow
-# deploy ships docs/pricklypear-book.pdf if borge is missing on the build host
+ksh scripts/verify_auth.sh
+python3 scripts/auth_product_smoke.py
 ```
 
-## Agent eval
+## Agent eval (against a live image)
 
 ```bash
-set -a; . ~/.config/pricklypear/env; set +a
-python3 "$PP_EVAL" -j '(whoami)'
-python3 "$PP_EVAL" -j '(load-library "todo")'
+set -a; . ~/.config/pricklypear/env; set +a   # local secrets, mode 600
+python3 scripts/pp_eval.py -j '(whoami)'
+python3 scripts/pp_eval.py -j '(load-library "todo")'
 ```
 
 ## Branches
 
-- **`system/main`** — package defaults from `libs/*` at seed
-- **`<user>/personal`** — garden overrides; survive reseed
+- **`system/main`** — package defaults from `libs/*` at seed (read-mostly)
+- **`<user>/personal`** — garden overrides; survive reseed/deploy
+
+## Public artifacts
+
+```bash
+ksh scripts/public_artifacts.sh   # refresh book.pdf + src.tgz when tools allow
+```
+
+| Path | What |
+|---|---|
+| `/welcome` | Landing |
+| `/code` | Read-only source browser |
+| `/book.pdf` | Literate design book |
+| `/src.tgz` | Pruned source tarball |
+| `/login` | Workspace login |
 
 ## Spec workflow
 
-Use borge (`plan` / `make` / `review`). Open issues that still matter
-live under `.borge-bugs/` (quote compounds, AST nodes design, argon2,
-schema-authority, optional SSH notes).
+Use borge (`plan` / `make` / `review`) when changing design-backed
+behavior. Planned product gaps include type-system work, branch promote
+UX, notes roam, dabar FTS polish, AI review-merge UI, and argon2.
 
 ## Monitor
 

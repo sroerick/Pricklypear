@@ -73,6 +73,7 @@ tar -C "$SRC" -czf "$TGZ" \
   --exclude='*.pyc' \
   --exclude='scripts/ship-to-vultr.ksh' \
   --exclude='scripts/post-receive-prod-hook.ksh' \
+  --exclude='AGENTS.md' \
   --exclude='*.pdf' \
   --exclude='*.book.manifest' \
   . \
@@ -80,7 +81,7 @@ tar -C "$SRC" -czf "$TGZ" \
     # OpenBSD tar may not like some long options — fallback
     (cd "$SRC" && tar -czf "$TGZ" \
       pricklypear.borg borge \
-      lisp common image migrations libs scripts docs README.md AGENTS.md \
+      lisp common image migrations libs scripts docs README.md LICENSE \
       dune-project 2>/dev/null) || true
     # strip habitat-private deploy scripts if fallback copied whole scripts/
     if [ -f "$TGZ" ]; then

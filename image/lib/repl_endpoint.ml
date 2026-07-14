@@ -1,20 +1,15 @@
-(** Pricklypear Image — Internal REPL endpoint.
+(** Pricklypear Image — optional TCP REPL endpoint.
 
-    Per spec [image.repl-endpoint]: the image does NOT run a full SSH server.
-    Instead it exposes an internal TCP socket on [repl_port] that speaks a
-    minimal line protocol. The supervisor connects here and forwards the
-    user's PTY stream.
+    Loopback line-protocol REPL on [repl_port] (default 7878; dev often
+    17878 via PP_REPL_PORT). Not an SSH server.
 
-    Protocol (minimal, framed):
-      Connect: supervisor opens TCP to image:repl_port
-      Auth: none (internal network; supervisor already authed the user)
-      Exchange: lines of UTF-8. User input flows in; REPL output flows out.
-      The session.ml tracks this connection as a session; on disconnect
-      session ends.
+    Protocol (minimal):
+      Connect: TCP to 127.0.0.1:repl_port
+      Auth: none at the application layer — bind loopback only (or tunnel).
+      Exchange: UTF-8 lines in; REPL output out. :quit closes.
 
-    For the minimal image: accept ONE connection, run a basic read-eval-print
-    loop on it, drop the connection on EOF. The supervisor will provide
-    line buffering and framing later. *)
+    Accepts one connection at a time for v1. Primary interactive surfaces
+    are browser /repl and POST /api/eval (HTTP-authenticated). *)
 open Lwt.Syntax
 open Lwt.Infix
 
@@ -76,13 +71,11 @@ let repl_turn
 (* Accept connections on [port]. For the minimal image we handle ONE
    at a time (blocking accept). TODO: concurrent sessions.
 
-   HARDENING: when the supervisor closes the proxy fd on `:quit` (or
-   on its own exit), Lwt_io.close raises EBADF because (a) the fd
-   was already closed by the peer, OR (b) `ic` and `oc` share the
-   underlying fd so closing one invalidates the other. We wrap all
-   post-disconnect cleanup in Lwt.catch to swallow these expected
-   errors so the image survives REPL disconnect — HTTP server keeps
-   serving, and boot-on-connect images can accept a new REPL session. *)
+   HARDENING: on `:quit` or peer close, Lwt_io.close may raise EBADF
+   because (a) the fd was already closed by the peer, or (b) `ic` and
+   `oc` share the underlying fd so closing one invalidates the other.
+   Post-disconnect cleanup is wrapped in Lwt.catch so the image keeps
+   serving HTTP and can accept a new REPL connection. *)
 let serve ~(session : Session.t) ?(port = default_port) () : unit Lwt.t =
   let addr = Lwt_unix.ADDR_INET (Unix.inet_addr_loopback, port) in
   let sock = Lwt_unix.socket Lwt_unix.PF_INET Lwt_unix.SOCK_STREAM 0 in

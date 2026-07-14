@@ -1,9 +1,0 @@
-(borge-bug (id "BORGE-1783383905")
-  (title "Lambda quote of lists/symbols is too restrictive — current image/lib/eval.ml's quote special form rejects (quote (a b)) and (quote foo-list). Spec image.repl-experience implies quote works on any s-expr (so that quoted data is first-class, standard Lisp). Quote should turn any expr into its value form: Lit->value, Var->VStr of the name, App (head, args) -> VList of [quoted head; quoted args...], recursively. Currently only Lit and Var are accepted; App falls through to 'can only quote literals/symbols' User_error. File: lisp/lib/eval.ml eval_special_form 'quote' case. Found during iteration-3 image smoke test of REPL endpoint over the line protocol. Should be filed against spec lisp-interpreter.eval (quote semantics are unspecified for non-atoms — spec gap).")
-  (status open)
-  (created 2026-07-06)
-  (filed-by roerick)
-  (doc "")
-
-  (* agent note (|2026-07-12 status-reconcile: Quote of compounds still restricted — real lisp gap.|) *)
-)

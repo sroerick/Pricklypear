@@ -402,7 +402,7 @@ def main() -> int:
         ver = psql(args, "SELECT version FROM schema_migrations WHERE version = 4")
         if ver != "4":
             print(
-                "warn: migration 004 not applied — restart supervisor",
+                "warn: migration 004 not applied — restart the image (dev.sh restart)",
                 file=sys.stderr,
             )
 

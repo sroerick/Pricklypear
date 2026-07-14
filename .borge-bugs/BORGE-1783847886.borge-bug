@@ -1,7 +1,0 @@
-(borge-bug (id "BORGE-1783847886")
-  (title "image.data-browser implemented: /data CRUD pages + helpers; flip status planned→implemented and record smoke scripts/smoke_data_browser.py")
-  (status triage)
-  (created 2026-07-12)
-  (filed-by roerick)
-  (doc "")
-)

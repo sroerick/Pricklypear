@@ -1,12 +1,11 @@
 (** Pricklypear Common — Branch reference.
 
-    Shared between supervisor, auth, and image. A branch is identified by
-    (owner, name); each has a parent (the branch it was forked from). The
-    root branch is [main], which has owner="system", name="main", no parent.
+    A branch is identified by (owner, name); each has a parent (the branch
+    it was forked from). The root is system/main (owner="system",
+    name="main", no parent).
 
-    Per spec [branching]: branches are the fundamental organizational
-    primitive. Code lives in branches (keyed by branch_id in Postgres);
-    shared data lives in main's data tables. *)
+    Per spec [branching]: branches organize code (keyed by branch_id in
+    Postgres). Shared product data lives in data_rows (not branch-scoped). *)
 open Yojson.Safe
 
 type t = {

@@ -1,15 +1,13 @@
 (** Pricklypear Common — Boot manifest.
 
-    Per spec [image.boot]: the supervisor reads a per-user manifest from
-    Postgres (or constructs it on SSH connect) and passes it to the image
-    on boot. The image uses it to know which branch to load, which user
-    it's running as, whether it's boot-on-connect or always-on, and what
-    budgets/flags apply.
+    Built from env (or defaults) at image boot — see [image.boot] and
+    [scripts/dev.sh]. Tells the image which branch to load, which user
+    it is running as, boot mode, and budgets/flags.
 
-    The manifest carries an IDENTITY CLAIM the image trusts because the
-    supervisor asserted it (and the supervisor got the user_id from auth
-    after verifying the SSH key — see [auth.verification]). The image
-    itself does no credential verification. *)
+    In single-image v1, identity for HTTP comes from in-process auth
+    (session cookie or Basic). The manifest is the process-level default
+    claim used before a request attaches a user (and for the optional
+    TCP REPL). *)
 open Yojson.Safe
 
 type boot_mode =
@@ -61,7 +59,7 @@ let config_of_json (j : Yojson.Safe.t) : (config, string) result =
   with Failure msg -> Error msg
 
 type t = {
-  user_id : string;        (* identity claim, asserted by supervisor (from auth) *)
+  user_id : string;        (* process default identity; HTTP may re-attach per request *)
   username : string;       (* for the REPL prompt and author tracking *)
   branch_id : string;      (* default branch UUID, usually user/main *)
   branch_name : string;    (* qualified: "alice/main" *)
