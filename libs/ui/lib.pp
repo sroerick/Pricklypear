@@ -3,12 +3,12 @@
 ;; personal pins cannot fail define-time load order.
 
 ;; Zero-arg lambda: menu tree built when called, after menu/* are bound.
-;; capture is a nav dropdown (notes/capture-nav) — not a home card.
+;; capture is a nav dropdown (notes/capture/nav) — not a home card.
 (define ui/menu
   (lambda ()
     (list
       (menu/link "home" "/")
-      (menu/raw (notes/capture-nav))
+      (menu/raw (notes/capture/nav))
       (menu/group "apps"
         (list
           (menu/link "notes" "/notes")
@@ -142,7 +142,17 @@
           (css/rule "header,nav"
             (list "overflow" "visible"))
           (css/rule ".menu-drop-panel"
-            (list "left" "auto" "right" "0" "max-width" "calc(100vw - .75rem)"))))
+            (list "left" "auto" "right" "0" "max-width" "calc(100vw - .75rem)"))
+          ;; Capture is wider than Apps menus; right-align still overflows
+          ;; left of the viewport on narrow screens. Pin to the viewport
+          ;; edges under the nav instead of the trigger's right edge.
+          (css/rule ".capture-drop"
+            (list "position" "static"))
+          (css/rule ".capture-drop > .menu-drop-panel.capture-panel"
+            (list
+              "left" ".5rem" "right" ".5rem" "width" "auto"
+              "min-width" "0" "max-width" "none"
+              "box-sizing" "border-box"))))
       (css/rule "main"
         (list "padding" ".75rem" "max-width" "52rem" "margin" "0 auto"))
       (css/rule "h1"
@@ -246,8 +256,14 @@
         (list "border-color" "#886600" "color" "#664400" "background" "#fff8dc"))
       (css/rule ".ol-todo.st-DONE"
         (list "border-color" "#226622" "color" "#226622" "background" "#e8f5e8"))
+      (css/rule ".ol-todo.st-ARCHIVED"
+        (list "border-color" "#666" "color" "#555" "background" "#eee"))
       (css/rule ".ol-node.st-DONE > .ol-sum .ol-title"
         (list "text-decoration" "line-through" "color" "#555" "font-weight" "500"))
+      (css/rule ".ol-node.st-ARCHIVED > .ol-sum .ol-title"
+        (list "color" "#777" "font-style" "italic" "font-weight" "500"))
+      (css/rule ".ol-node.st-ARCHIVED"
+        (list "opacity" "0.72"))
       (css/rule ".ol-title"
         (list
           "outline" "none" "padding" ".15rem .25rem" "border-radius" "0"
@@ -297,6 +313,17 @@
         (list "background" theme/panel))
       (css/rule ".ol-del"
         (list "color" theme/err))
+      (css/rule "form.ol-refile"
+        (list
+          "display" "flex" "flex-wrap" "wrap" "gap" ".25rem"
+          "align-items" "center" "margin" ".15rem 0 0" "width" "100%"))
+      (css/rule "form.ol-refile .ol-refile-sel"
+        (list
+          "flex" "1 1 6rem" "min-width" "0" "max-width" "12rem"
+          "font-size" ".75rem" "padding" ".2rem"))
+      (css/rule "form.ol-refile button"
+        (list "width" "auto" "min-width" "0" "font-size" ".75rem"
+              "padding" ".25rem .45rem" "margin" "0"))
       (css/rule ".ol-debug"
         (list "margin" ".75rem 0" "opacity" ".6"))
       (css/rule ".ol-debug > summary"
@@ -436,7 +463,11 @@
       (css/rule ".weather-card .wx-err"
         (list "color" theme/err "font-weight" "700"))
       (css/rule ".capture-panel"
-        (list "min-width" "16rem" "max-width" "min(22rem,calc(100vw - 1rem))" "padding" ".4rem"))
+        (list
+          "min-width" "min(16rem, calc(100vw - 1rem))"
+          "max-width" "min(22rem, calc(100vw - 1rem))"
+          "padding" ".4rem"
+          "box-sizing" "border-box"))
       (css/rule ".capture-nav-form"
         (list
           "display" "flex" "flex-direction" "column" "gap" ".35rem"
@@ -607,8 +638,20 @@
               (list "display" "block" "width" "100%" "text-align" "center"
                     "box-sizing" "border-box"))))
         (css/rule ".capture-panel"
-          (list "min-width" "16rem" "max-width" "min(22rem,calc(100vw - 1rem))"
-                "padding" ".4rem"))
+          (list
+            "min-width" "min(16rem, calc(100vw - 1rem))"
+            "max-width" "min(22rem, calc(100vw - 1rem))"
+            "padding" ".4rem"
+            "box-sizing" "border-box"))
+        (css/media "max-width:40rem"
+          (list
+            (css/rule ".capture-drop"
+              (list "position" "static"))
+            (css/rule ".capture-drop > .menu-drop-panel.capture-panel"
+              (list
+                "left" ".5rem" "right" ".5rem" "width" "auto"
+                "min-width" "0" "max-width" "none"
+                "box-sizing" "border-box"))))
         (css/rule ".capture-nav-form"
           (list "display" "flex" "flex-direction" "column" "gap" ".35rem" "margin" "0"))
         (css/rule ".capture-nav-form input[type=text], .capture-nav-form textarea"

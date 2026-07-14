@@ -135,7 +135,7 @@
           (if (null? due)
               #f
               (calendar/day-eq? due day))))
-      (todo/all-items))))
+      (todo/item/all))))
 
 (define calendar/count-events-on
   (lambda (day)
@@ -148,7 +148,7 @@
 (define calendar/has-daily?
   (lambda (day)
     (let ((slug (string-append "daily-" (as-str day))))
-      (if (null? (notes/get slug)) #f #t))))
+      (if (null? (notes/doc/get slug)) #f #t))))
 
 ;; --- HTML: month cell ---
 
