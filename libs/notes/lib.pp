@@ -605,7 +605,7 @@
                                             (if (string-eq op "unarchive")
                                                 (outline/update tree nid
                                                   (lambda (n) (outline/unarchive n)))
-                                                tree))))))))))))
+                                                tree)))))))))))))
 
 ;; (slug node-id title state)*
 (define notes/outline/all-todos
@@ -662,7 +662,7 @@
                 (seq
                   (notes/doc/upsert slug title new-tree tags kind day)
                   (render-html
-                    (outline/html slug new-tree show-archived)))))))))))
+                    (outline/html slug new-tree show-archived))))))))))
 
 (route "/notes" "notes/page")
 (route "/capture" "notes/capture/page")
