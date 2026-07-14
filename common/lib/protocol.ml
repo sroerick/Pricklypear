@@ -1,10 +1,8 @@
 (** Pricklypear Common — Health-check protocol.
 
-    The supervisor pings each running image's HTTP /health endpoint
-    periodically. Response carries the image's branch, uptime, and
-    current status.
-
-    Per spec [supervisor.health] / [image.boot]. *)
+    JSON shape for GET /health on the image (branch, uptime, status).
+    Used by reverse proxies, watchdogs, and smoke scripts — not a
+    multi-process supervisor fleet. *)
 open Yojson.Safe
 
 type health_status =

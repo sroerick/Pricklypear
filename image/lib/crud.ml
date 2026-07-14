@@ -1,31 +1,22 @@
 (** Pricklypear Image — CRUD primitives over the `data_rows` table.
 
-    Each of get/create/update/delete/list is a NORMAL PRIMITIVE on the
-    Lwt-typed evaluator ABI (post-iteration-12 refactor): prim_fn is
-    `value list -> value Lwt.t`, so these prims return their real DB
-    result as a promise. They compose normally:
+    get/create/update/delete/rows are normal prims on the Lwt-typed
+    evaluator ABI (`value list -> value Lwt.t`) and return real DB
+    results. They compose:
       (define u (get 'user 42))
       (str u)
-    `(get 'note id)` returning the note as its value is what unblocked
-    CRUD on the new ABI.
 
     Per spec [storage.types] / migration 003:
       - `data_rows(id uuid PK, type_name text, fields jsonb, author text, ...)`
       - Data rows are SHARED across branches (no branch_id column);
-        fork/merge only copies code, not data. All branches see the
-        same data_rows.
-      - The `fields` payload is a JSON document; the Lisp layer sees
-        it as a string for now. A future iteration can add a parser
-        that converts to/from Lisp assoc lists or a dict value type.
-      - No ORM; plain parameterized SQL via pgx. SERIALIZABLE
-        transactions by default for mutations — once our pgx wrapper
-        exposes BEGIN/COMMIT, wrap create/update/delete in a
-        transaction. For now, each op is one statement (atomic by
-        itself, multi-step ops would need wrapping).
+        fork/merge copies code, not data.
+      - `fields` is JSON; Lisp sees it as a string, with dict-* prims
+        for field access (no separate dict value type yet).
+      - No ORM; parameterized SQL via pgx. Multi-step atomicity uses
+        Store.with_dynamic_transaction / (with-transaction …).
 
-    The store handle is shared with [Store.t]; we reuse its [Pg.t]
-    via [Store.conn_of]. Returns VNil with no DB or no rows so the
-    REPL prints `()` and Lisp code can do `(if (get 'user id) ...)`. *)
+    Uses [Store.current_conn] so in-tx calls see the bound connection.
+    Misses return VNil so Lisp can branch on `(if (get 'user id) ...)`. *)
 open Lwt.Syntax
 open Pricklypear_lisp.Ast
 

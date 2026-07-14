@@ -4,12 +4,12 @@
    evaluates them, prints results. Useful for testing the interpreter
    without booting the full image.
 
-   Per spec [architecture.package-layout]: lisp/bin/repl.ml is a dev
-   convenience, not the production REPL (which lives in the image and
-   is reached over the supervisor-fronted SSH -> image REPL endpoint).
+   Dev convenience only — not the image REPL. The live system uses
+   browser /repl, POST /api/eval, and an optional loopback TCP line
+   protocol on the image.
 
-   The interpreter is Lwt-typed (post-refactor), so this dev REPL drives
-   each turn through [Lwt_main.run (Eval.eval_string ...)]. *)
+   The interpreter is Lwt-typed, so each turn runs through
+   [Lwt_main.run (Eval.eval_string ...)]. *)
 open Lwt
 open Lwt.Syntax
 open Pricklypear_lisp

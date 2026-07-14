@@ -1,9 +1,0 @@
-(borge-bug (id "BORGE-1783316371")
-  (title "Confirmed stack: Mirage + Lwt throughout (supervisor, auth, image all Mirage unikernels). Eio only for pure-unix dev tooling (lisp/bin/repl.ml, scripts). pgx_lwt_mirage, httpaf-mirage, awa-mirage, pure-html. Spec's Lwt choices were correct for Mirage; not a deviation.")
-  (status resolved)
-  (created 2026-07-05)
-  (filed-by roerick)
-  (doc "")
-
-  (* agent note (|2026-07-12 status-reconcile: Historical decision record: Mirage+Lwt confirmed for multi-process era; single-image pivot later retired supervisor/authd but kept Lwt+pgx_lwt+httpaf-lwt-unix.|) *)
-)

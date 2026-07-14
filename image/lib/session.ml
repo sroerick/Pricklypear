@@ -1,8 +1,8 @@
-(** Pricklypear Image — REPL session.
+(** Pricklypear Image — session state for eval / HTTP / REPL.
 
-    A per-connection session holds the env (function defs loaded for the
-    session's branch, plus any (define)'d locals), the manifest (identity
-    claim asserted by supervisor), and the store handle.
+    Holds the env (function defs for the current branch, plus any
+    (define)'d locals), the boot manifest (default identity), auth
+    attachment fields, and the store handle.
 
     Per spec [image.repl-experience]:
       - (define ...) persists to the store: survives image reboot.
