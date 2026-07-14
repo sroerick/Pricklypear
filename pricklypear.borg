@@ -2,10 +2,10 @@
  (doc "A multi-user Lisp operating system in the Smalltalk tradition: OCaml image binary, Postgres object store, htmx UI. Many humans, each with session + personal garden. Deploy topology may be one binary (single-image.borg); multi-user product is auth.multi-user-product + multi-user.isolation.")
  (status partial)
  (verify
-  (build "dune build @all — exit 0 across all 5 packages + spikes/awa_ssh")
-  (test "dune runtest — 92 alcotest cases pass (lisp 30 + common 10 + auth 4 + image 48)")
-  (smoke "scripts/dev.sh start boots PG + authd + supervisor; ssh admin@host -p 17822 → \"hello\" from the image REPL")
-  (smoke "v1 product cut (not yet): login + base fns + define/edit in browser + optional AI propose on branch"))
+  (build "dune build @all — exit 0 (lisp + common + image)")
+  (test "dune runtest — alcotest across lisp/common/image (some prim edge cases may fail; track separately)")
+  (smoke "scripts/dev.sh start boots PG + single image; curl /health and /login")
+  (smoke "python3 scripts/auth_product_smoke.py against PP_HTTP_PORT"))
  (convention ocaml-dune
  )
  (no-inline
