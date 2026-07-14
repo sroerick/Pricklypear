@@ -341,6 +341,102 @@
             (outline/encode outline))
           (html/p* ""
             (html/button (html/attr "type" "submit") "Save outline")))))))
+
+;; Desktop top toolbar: acts on selected node (#ol-selected-id). Hidden on mobile.
+(define notes/ui/tb-btn
+  (lambda (op label)
+    (html/tag "button"
+      (html/attrs
+        (list
+          (html/attr "type" "button")
+          (html/attr "class" "ol-btn")
+          (html/attr "title" op)
+          (html/attr "data-ol-op" op)))
+      label)))
+
+(define notes/ui/toolbar
+  (lambda (slug show-archived)
+    (html/div (html/attr "class" "ol-toolbar")
+      (html/join
+        (list
+          (html/span (html/attr "class" "ol-toolbar-label") "Selected:")
+          (html/span (html/attr "id" "ol-selected-label") "root")
+          (html/void "input"
+            (html/attrs
+              (list
+                (html/attr "type" "hidden")
+                (html/attr "id" "ol-selected-id")
+                (html/attr "value" "root"))))
+          (notes/ui/tb-btn "cycle-todo" "todo")
+          (notes/ui/tb-btn "archive" "arch")
+          (notes/ui/tb-btn "unarchive" "unarch")
+          (notes/ui/tb-btn "add-child" "+kid")
+          (notes/ui/tb-btn "add-sibling" "+sib")
+          (notes/ui/tb-btn "move-up" "up")
+          (notes/ui/tb-btn "move-down" "dn")
+          (notes/ui/tb-btn "delete" "del")
+          (html/form "POST" "/notes"
+            (html/attr "class" "ol-refile")
+            (html/join
+              (list
+                (html/hidden "action" "refile")
+                (html/hidden "src_slug" (as-str slug))
+                (html/void "input"
+                  (html/attrs
+                    (list
+                      (html/attr "type" "hidden")
+                      (html/attr "name" "node_id")
+                      (html/attr "id" "ol-refile-nid")
+                      (html/attr "value" "root"))))
+                (html/select "dst_slug"
+                  (html/attr "class" "ol-refile-sel")
+                  (notes/refile/options slug))
+                (html/button
+                  (html/attrs
+                    (list
+                      (html/attr "type" "submit")
+                      (html/attr "class" "ol-btn")
+                      (html/attr "title" "refile selected node")))
+                  "refile"))))
+          (if show-archived
+              (html/a (string-append "/notes?slug=" slug) "Hide archived")
+              (html/a (string-append "/notes?slug=" slug "&show=archived")
+                "Show archived")))))))
+
+(define notes/ui/outline-script
+  (lambda (slug show-archived)
+    (html/tag "script" ""
+      (string-append
+        "(function(){var slug='"
+        (as-str slug)
+        "';var showArch="
+        (if show-archived "true" "false")
+        ";function selId(){var el=document.getElementById('ol-selected-id');return el?el.value:'root';}"
+        "function setSel(id){var hid=document.getElementById('ol-selected-id');if(hid)hid.value=id;"
+        "var lab=document.getElementById('ol-selected-label');if(lab)lab.textContent=id;"
+        "var rf=document.getElementById('ol-refile-nid');if(rf)rf.value=id;"
+        "document.querySelectorAll('.ol-node.is-selected').forEach(function(n){n.classList.remove('is-selected');});"
+        "var node=document.querySelector('.ol-node[data-id=\"'+id+'\"]');if(node)node.classList.add('is-selected');}"
+        "function postOp(op){var id=selId();if(op==='delete'&&!confirm('Delete this node?'))return;"
+        "var q='slug='+encodeURIComponent(slug)+'&op='+encodeURIComponent(op)+'&node-id='+encodeURIComponent(id);"
+        "if(showArch)q+='&show=archived';"
+        "if(window.htmx){htmx.ajax('POST','/partials/notes-node-op?'+q,{target:'#outline',swap:'outerHTML'});}"
+        "else{fetch('/partials/notes-node-op?'+q,{method:'POST'}).then(function(r){return r.text();}).then(function(html){"
+        "var t=document.getElementById('outline');if(t)t.outerHTML=html;});}}"
+        "document.addEventListener('click',function(e){"
+        "var btn=e.target.closest&&e.target.closest('[data-ol-op]');"
+        "if(btn){e.preventDefault();postOp(btn.getAttribute('data-ol-op'));return;}"
+        "var node=e.target.closest&&e.target.closest('.ol-node');"
+        "if(node&&node.dataset&&node.dataset.id&&!e.target.closest('.ol-actions')&&!(e.target.closest&&e.target.closest('[contenteditable=true]'))){"
+        "setSel(node.dataset.id);}},true);"
+        "var root=document.getElementById('outline');if(root){root.addEventListener('blur',function(e){"
+        "var t=e.target;if(!t.dataset||!t.dataset.field)return;"
+        "var p='slug='+encodeURIComponent(slug)+'&op=set-'+t.dataset.field+'&node-id='+encodeURIComponent(t.dataset.id);"
+        "if(showArch)p+='&show=archived';"
+        "p+='&'+t.dataset.field+'='+encodeURIComponent(t.innerText);"
+        "fetch('/partials/notes-node-op',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:p);},true);}"
+        "setSel('root');document.body.addEventListener('htmx:afterSwap',function(){setSel(selId());});})();"))))
+
 (define notes/ui/show-body
   (lambda (slug title outline tags show-archived)
     (html/join
@@ -350,12 +446,7 @@
             (list
               (html/a "/notes" "Notes")
               " / "
-              (html/code (as-str slug))
-              " · "
-              (if show-archived
-                  (html/a (string-append "/notes?slug=" slug) "Hide archived")
-                  (html/a (string-append "/notes?slug=" slug "&show=archived")
-                    "Show archived")))))
+              (html/code (as-str slug)))))
         (html/div (html/attr "class" "note-title-row")
           (html/join
             (list
@@ -378,21 +469,15 @@
                       "Delete note")))))))
         (html/p* (html/attr "class" "muted")
           (string-append "tags: " (as-str tags)))
+        (notes/ui/toolbar slug show-archived)
         (outline/html slug outline show-archived)
         (html/tag "details" (html/attr "class" "ol-debug")
           (html/join
             (list
               (html/tag "summary" (html/attr "class" "muted") "Raw JSON (debug)")
               (notes/ui/edit-form slug outline))))
-        (html/tag "script" ""
-          (string-append
-            "document.getElementById('outline').addEventListener('blur',function(e){"
-            "var t=e.target;if(!t.dataset||!t.dataset.field)return;"
-            "var p='slug=" slug "&op=set-'+t.dataset.field+'&node-id='+t.dataset.id;"
-            (if show-archived "p+='&show=archived';" "")
-            "p+='&'+t.dataset.field+'='+encodeURIComponent(t.innerText);"
-            "fetch('/partials/notes-node-op',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:p});"
-            "},true);"))))))
+        (notes/ui/outline-script slug show-archived)))))
+
 (define notes/ui/show
   (lambda (slug)
     (let ((n (notes/doc/get slug))
