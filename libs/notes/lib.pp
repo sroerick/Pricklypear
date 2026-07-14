@@ -123,7 +123,9 @@
                 "capture"
                 (if (<= (string-length b) 48)
                     b
-                    (string-append (substring b 0 45) "…"))))))))
+                    ;; ASCII ellipsis: substring is byte-based; a UTF-8 "…"
+                    ;; cut mid-sequence used to corrupt titles (u2026 garbage).
+                    (string-append (substring b 0 45) "..."))))))))
 
 (define notes/capture/node-id
   (lambda (tree)

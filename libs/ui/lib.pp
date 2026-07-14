@@ -231,7 +231,7 @@
         (list
           "cursor" "default" "font-weight" "700" "display" "flex"
           "align-items" "center" "gap" ".35rem" "flex-wrap" "nowrap"
-          "min-width" "0" "padding-right" "16rem"))
+          "min-width" "0" "padding-right" "0"))
       (css/rule ".ol-fold"
         (list
           "font-size" ".75em" "flex" "0 0 auto" "display" "inline-flex"
@@ -281,22 +281,23 @@
         (list "background" theme/panel "border" "1px solid #000"))
       (css/rule ".ol-kids"
         (list "margin-left" ".15rem" "min-width" "0"))
+      ;; Toolbar under the title row (not absolute) so buttons never cover text.
       (css/rule ".ol-actions"
         (list
-          "position" "absolute" "top" ".1rem" "right" "0"
-          "z-index" "3" "margin" "0" "display" "block"
-          "max-width" "calc(100% - .5rem)"))
+          "position" "static" "display" "block"
+          "margin" ".15rem 0 .4rem" "max-width" "100%"))
       (css/rule ".ol-actions-panel"
         (list
           "display" "flex" "flex-direction" "row" "flex-wrap" "wrap"
-          "justify-content" "flex-end" "align-items" "center" "gap" ".25rem"
+          "justify-content" "flex-start" "align-items" "center" "gap" ".2rem"
           "margin" "0" "padding" "0" "background" "transparent"
           "border" "none"))
       (css/rule ".ol-btn"
         (list
-          "font-size" ".75rem" "padding" ".25rem .45rem" "min-height" "2rem"
+          "font-size" ".7rem" "padding" ".15rem .35rem" "min-height" "1.7rem"
           "width" "auto" "flex" "0 0 auto" "margin" "0"
-          "border" "1px solid #000" "background" theme/bg "cursor" "pointer"))
+          "border" "1px solid #000" "background" theme/bg "cursor" "pointer"
+          "line-height" "1.2"))
       (css/rule ".ol-btn:hover"
         (list "background" theme/panel))
       (css/rule ".ol-del"
@@ -304,14 +305,15 @@
       (css/rule "form.ol-refile"
         (list
           "display" "flex" "flex-wrap" "wrap" "gap" ".25rem"
-          "align-items" "center" "margin" ".15rem 0 0" "width" "100%"))
+          "align-items" "center" "margin" ".25rem 0 0"
+          "width" "auto" "max-width" "100%"))
       (css/rule "form.ol-refile .ol-refile-sel"
         (list
-          "flex" "1 1 6rem" "min-width" "0" "max-width" "12rem"
+          "flex" "1 1 8rem" "min-width" "6rem" "max-width" "16rem"
           "font-size" ".75rem" "padding" ".2rem"))
       (css/rule "form.ol-refile button"
-        (list "width" "auto" "min-width" "0" "font-size" ".75rem"
-              "padding" ".25rem .45rem" "margin" "0"))
+        (list "width" "auto" "min-width" "0" "font-size" ".7rem"
+              "padding" ".15rem .35rem" "margin" "0" "min-height" "1.7rem"))
       (css/rule ".ol-debug"
         (list "margin" ".75rem 0" "opacity" ".6"))
       (css/rule ".ol-debug > summary"
@@ -589,17 +591,11 @@
           (css/rule ".ol-node"
             (list "margin-left" ".1rem" "padding-left" ".3rem"))
           (css/rule ".ol-sum"
-            (list "padding-right" ".25rem" "align-items" "center"))
+            (list "padding-right" "0" "align-items" "center"))
           (css/rule ".ol-actions"
-            (list
-              "position" "static" "max-width" "none"
-              "margin" ".2rem 0 .35rem"))
-          (css/rule ".ol-actions-panel"
-            (list
-              "justify-content" "flex-start" "flex-wrap" "wrap"))
+            (list "margin" ".2rem 0 .35rem"))
           (css/rule ".ol-actions-panel .ol-btn"
-            (list
-              "min-height" "2.1rem" "background" theme/panel))))))))
+            (list "min-height" "1.9rem" "background" theme/panel))))))))
 
 
 ;; Nav layout + capture dropdown (formerly ui/nav-style inline <style>)

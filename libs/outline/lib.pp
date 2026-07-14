@@ -250,6 +250,7 @@
         (list
           (html/attr "class" class)
           (html/attr "type" "button")
+          (html/attr "title" op)
           (html/attr "hx-post"
             (string-append "/partials/notes-node-op?slug=" slug
               "&op=" op "&node-id=" nid
@@ -267,14 +268,14 @@
       (html/div (html/attr "class" "ol-actions-panel")
         (html/join
           (list
-            (outline/action-btn slug nid "cycle-todo" "toggle todo" "ol-btn" show-archived)
+            (outline/action-btn slug nid "cycle-todo" "todo" "ol-btn" show-archived)
             (if (outline/archived? todo)
-                (outline/action-btn slug nid "unarchive" "unarchive" "ol-btn" show-archived)
-                (outline/action-btn slug nid "archive" "archive" "ol-btn" show-archived))
-            (outline/action-btn slug nid "add-child" "+child" "ol-btn" show-archived)
+                (outline/action-btn slug nid "unarchive" "unarch" "ol-btn" show-archived)
+                (outline/action-btn slug nid "archive" "arch" "ol-btn" show-archived))
+            (outline/action-btn slug nid "add-child" "+kid" "ol-btn" show-archived)
             (outline/action-btn slug nid "add-sibling" "+sib" "ol-btn" show-archived)
             (outline/action-btn slug nid "move-up" "up" "ol-btn" show-archived)
-            (outline/action-btn slug nid "move-down" "down" "ol-btn" show-archived)
+            (outline/action-btn slug nid "move-down" "dn" "ol-btn" show-archived)
             (outline/extra-actions slug nid)
             (html/tag "button"
               (html/attrs
