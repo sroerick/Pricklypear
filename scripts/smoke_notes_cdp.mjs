@@ -211,7 +211,53 @@ async function main() {
     const beforeN = before.result?.value ?? 0;
     ok(`nodes before=${beforeN}`);
 
-    // Selection via TITLE click (contenteditable) — real user path; was broken.
+    // Regression: root selected → click second title → must STAY on second (not snap to root).
+    await send("Runtime.evaluate", {
+      expression: `
+        (function(){
+          var root=document.querySelector('.ol-node[data-id="root"]');
+          if(root){var t=root.querySelector('.ol-title'); if(t) t.click();}
+          document.getElementById('ol-selected-id').value='root';
+        })()
+      `,
+      returnByValue: true,
+    });
+    await sleep(200);
+    const switchSel = await send("Runtime.evaluate", {
+      expression: `
+        (function(){
+          var kids=[...document.querySelectorAll('.ol-node')].filter(n=>n.dataset.id&&n.dataset.id!=='root');
+          if(kids.length<1) return JSON.stringify({err:'no-child'});
+          var child=kids[0];
+          var title=child.querySelector('.ol-title');
+          title.dispatchEvent(new MouseEvent('mousedown',{bubbles:true,cancelable:true,button:0}));
+          title.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true}));
+          title.focus();
+          title.dispatchEvent(new FocusEvent('focusin',{bubbles:true}));
+          var id1=document.getElementById('ol-selected-id').value;
+          return new Promise(function(res){
+            setTimeout(function(){
+              var id2=document.getElementById('ol-selected-id').value;
+              var lab=document.getElementById('ol-selected-label').textContent;
+              res(JSON.stringify({want:child.dataset.id,id1:id1,id2:id2,lab:lab}));
+            },300);
+          });
+        })()
+      `,
+      awaitPromise: true,
+      returnByValue: true,
+    });
+    {
+      const v = switchSel.result?.value;
+      ok(`switch-from-root ${v}`);
+      let p = {};
+      try { p = JSON.parse(v); } catch {}
+      if (p.err) fail(p.err);
+      if (p.id2 !== p.want)
+        fail(`selection snapped back (id1=${p.id1} id2=${p.id2} want ${p.want})`);
+    }
+
+    // Selection via TITLE click (contenteditable) — real user path.
     const sel = await send("Runtime.evaluate", {
       expression: `
         (function(){
