@@ -182,6 +182,7 @@ let prim_type_of args =
   | [ VPair _ ] -> VStr "pair"
   | [ VList _ ] -> VStr "list"
   | [ VLambda _ ] -> VStr "lambda"
+  | [ VMacro _ ] -> VStr "macro"
   | [ VPrim name ] -> VStr ("prim:" ^ name)
   | [ VRef (t, _) ] -> VStr ("ref:" ^ t)
   | _ -> raise (Interp_error (User_error "type-of needs one arg"))

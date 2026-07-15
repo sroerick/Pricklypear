@@ -175,6 +175,22 @@ and read_expr (st : state) : expr =
       ignore (advance st);
       let e = read_expr st in
       App (Var "quote", [ e ])
+  | Some '`' ->
+      (* quasiquote sugar: `x -> (quasiquote x) *)
+      ignore (advance st);
+      let e = read_expr st in
+      App (Var "quasiquote", [ e ])
+  | Some ',' ->
+      (* unquote / unquote-splicing: ,x or ,@x *)
+      ignore (advance st);
+      (match peek st with
+       | Some '@' ->
+           ignore (advance st);
+           let e = read_expr st in
+           App (Var "unquote-splicing", [ e ])
+       | _ ->
+           let e = read_expr st in
+           App (Var "unquote", [ e ]))
   | Some '"' -> Lit (VStr (read_string st))
   | Some c when is_token_start c ->
       (* atom: symbol (-> Var), number, or #t/#f (-> Lit) *)
@@ -276,6 +292,7 @@ let rec pp_value (v : value) : string =
            ^ " . " ^ pp_value tail ^ ")"
        | None -> assert false)
   | VLambda _ -> "#<lambda>"
+  | VMacro _ -> "#<macro>"
   | VPrim name -> "#<prim:" ^ name ^ ">"
   | VRef (t, i) -> "#<ref:" ^ t ^ ":" ^ String.sub i 0 (min 8 (String.length i)) ^ ">"
   | VList vs -> "(" ^ String.concat " " (List.map pp_value vs) ^ ")"

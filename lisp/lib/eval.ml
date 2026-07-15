@@ -68,8 +68,15 @@ let lookup_prim (tbl : prim_table) (name : string) : prim_fn option =
 let is_special_form (name : string) : bool =
   match name with
   | "lambda" | "let" | "letrec" | "if" | "define" | "quote" | "seq"
-  | "prim" | "with-transaction" -> true
+  | "prim" | "with-transaction"
+  | "quasiquote" | "unquote" | "unquote-splicing" | "defmacro"
+  | "macroexpand-1" | "macroexpand" | "gensym" -> true
   | _ -> false
+
+let kernel_special_names =
+  [ "lambda"; "let"; "letrec"; "if"; "define"; "quote"; "seq"; "prim";
+    "with-transaction"; "quasiquote"; "unquote"; "unquote-splicing";
+    "defmacro"; "macroexpand-1"; "macroexpand"; "gensym" ]
 
 (* Quote any expr into a first-class value (full s-expr quote).
    Compounds become nested VLists so quoted data is usable in Lisp. *)
@@ -101,6 +108,56 @@ let rec quote_to_value (e : expr) : value =
       VList [ VStr "seq"; quote_to_value a; quote_to_value b ]
   | Prim (name, args) ->
       VList (VStr name :: List.map quote_to_value args)
+
+(** Inverse of [quote_to_value] for macro expansion (lisp-interpreter.macros).
+    VStr in list-head position becomes [Var]; self-evaluating atoms stay [Lit].
+    Live closures/refs cannot be reified. *)
+let rec value_to_expr (v : value) : expr =
+  match v with
+  | VInt _ | VFloat _ | VBool _ | VNil | VStr _ as lit -> Lit lit
+  | VList [] -> Lit VNil
+  | VList (VStr "quote" :: [x]) -> Quote (value_to_expr x)
+  | VList (VStr "if" :: [t; th; el]) ->
+      If (value_to_expr t, value_to_expr th, value_to_expr el)
+  | VList (VStr "lambda" :: VList params :: [body]) ->
+      let ps =
+        List.map
+          (function
+            | VStr p -> p
+            | _ -> raise (Interp_error (User_error "value_to_expr: lambda param")))
+          params
+      in
+      Lambda (ps, value_to_expr body)
+  | VList (VStr "define" :: VStr name :: [body]) ->
+      Define (name, value_to_expr body)
+  | VList (VStr "seq" :: a :: b :: rest) ->
+      (* flatten multi-seq into nested Seq *)
+      let rec fold x xs =
+        match xs with
+        | [] -> value_to_expr x
+        | y :: ys -> Seq (value_to_expr x, fold y ys)
+      in
+      fold a (b :: rest)
+  | VList (h :: t) ->
+      (* VStr in any list position → Var (symbol/string collapse; macros v1). *)
+      let elem = function
+        | VStr s -> Var s
+        | other -> value_to_expr other
+      in
+      App (elem h, List.map elem t)
+  | VPair (a, b) ->
+      (* improper pair → (cons a b) shape as App *)
+      App (Var "cons", [ value_to_expr a; value_to_expr b ])
+  | VLambda _ | VPrim _ | VRef _ | VMacro _ ->
+      raise
+        (Interp_error
+           (User_error "value_to_expr: cannot reify live closure/prim/ref/macro"))
+
+let gensym_counter = ref 0
+
+let gensym ?(prefix = "g") () : string =
+  incr gensym_counter;
+  prefix ^ "$" ^ string_of_int !gensym_counter
 
 let rec eval
   ~(budget : budget)
@@ -160,18 +217,52 @@ let rec eval
        | Some fn -> fn arg_vals
        | None -> raise (Interp_error (Prim_error (name, "unregistered primitive"))))
   | App (head, args) ->
-      (* First: is this a special form? Special forms are recognized
-         when the head is a [Var] naming one. Note: [args] here is the
-         list AFTER the head; we prepend head when dispatching so the
-         special-form handler sees the full argument list. *)
+      (* Special forms first; then macro expand if head is bound to VMacro;
+         else ordinary application. *)
       (match head with
        | Var name when is_special_form name ->
            eval_special_form ~budget ~prims env name (head :: args)
+       | Var name ->
+           (match Env.lookup env name with
+            | Some (VMacro (params, body, clo_env)) ->
+                expand_and_eval_macro ~budget ~prims env
+                  ~params ~body ~clo_env ~arg_exprs:args
+            | _ ->
+                let* f = eval ~budget ~prims env head in
+                let* arg_vals = Lwt_list.map_s (eval ~budget ~prims env) args in
+                apply ~budget ~prims f arg_vals)
        | _ ->
-           (* ordinary application *)
            let* f = eval ~budget ~prims env head in
            let* arg_vals = Lwt_list.map_s (eval ~budget ~prims env) args in
            apply ~budget ~prims f arg_vals)
+
+and expand_and_eval_macro
+  ~(budget : budget)
+  ~(prims : prim_table)
+  (call_env : env)
+  ~(params : string list)
+  ~(body : expr)
+  ~(clo_env : env)
+  ~(arg_exprs : expr list)
+  : value Lwt.t =
+  tick budget;
+  let expected = List.length params
+  and got = List.length arg_exprs in
+  if expected <> got then
+    raise (Interp_error (Arity_mismatch ("macro", expected, got)));
+  let arg_vals = List.map quote_to_value arg_exprs in
+  let menv = Env.child clo_env in
+  List.iter2 (fun p a -> Env.define menv p a) params arg_vals;
+  let* expansion_v = eval ~budget ~prims menv body in
+  let expansion_e =
+    try value_to_expr expansion_v
+    with Interp_error _ as ex -> raise ex
+       | _ ->
+           raise
+             (Interp_error
+                (User_error "macro expansion is not a valid expr tree"))
+  in
+  eval ~budget ~prims call_env expansion_e
 
 and eval_special_form
   ~(budget : budget)
@@ -314,8 +405,139 @@ and eval_special_form
        | _ ->
            raise (Interp_error
                     (User_error "with-transaction needs a lambda body")))
+  | "gensym", [ _ ] ->
+      Lwt.return (VStr (gensym ()))
+  | "gensym", [ _; Lit (VStr prefix) ] | "gensym", [ _; Var prefix ] ->
+      Lwt.return (VStr (gensym ~prefix ()))
+  | "quasiquote", [ _; template ] ->
+      eval_quasiquote ~budget ~prims env ~depth:1 template
+  | "unquote", _ | "unquote-splicing", _ ->
+      raise (Interp_error (User_error "unquote outside quasiquote"))
+  | "defmacro", [ _; Var name; params_expr; body ] ->
+      if List.mem name kernel_special_names then
+        raise
+          (Interp_error
+             (User_error ("cannot defmacro kernel special form: " ^ name)));
+      let params =
+        match params_expr with
+        | Lit VNil -> []
+        | App (Var p, rest) ->
+            p
+            :: List.map
+                 (function
+                   | Var s -> s
+                   | _ ->
+                       raise
+                         (Interp_error
+                            (User_error "defmacro param not a symbol")))
+                 rest
+        | _ -> raise (Interp_error (User_error "malformed defmacro params"))
+      in
+      let m = VMacro (params, body, env) in
+      Env.define env name m;
+      Lwt.return m
+  | "macroexpand-1", [ _; form ] ->
+      (match form with
+       | App (Var name, args) ->
+           (match Env.lookup env name with
+            | Some (VMacro (params, body, clo_env)) ->
+                let expected = List.length params
+                and got = List.length args in
+                if expected <> got then
+                  raise (Interp_error (Arity_mismatch ("macro", expected, got)));
+                let arg_vals = List.map quote_to_value args in
+                let menv = Env.child clo_env in
+                List.iter2 (fun p a -> Env.define menv p a) params arg_vals;
+                eval ~budget ~prims menv body
+            | _ -> Lwt.return (quote_to_value form))
+       | _ -> Lwt.return (quote_to_value form))
+  | "macroexpand", [ _; form ] as whole ->
+      (* expand until fixed point or budget *)
+      let rec loop e =
+        tick budget;
+        match e with
+        | App (Var name, args) ->
+            (match Env.lookup env name with
+             | Some (VMacro (params, body, clo_env)) ->
+                 let expected = List.length params
+                 and got = List.length args in
+                 if expected <> got then
+                   raise
+                     (Interp_error (Arity_mismatch ("macro", expected, got)));
+                 let arg_vals = List.map quote_to_value args in
+                 let menv = Env.child clo_env in
+                 List.iter2 (fun p a -> Env.define menv p a) params arg_vals;
+                 let* v = eval ~budget ~prims menv body in
+                 let e' = value_to_expr v in
+                 loop e'
+             | _ -> Lwt.return (quote_to_value e))
+        | _ -> Lwt.return (quote_to_value e)
+      in
+      let _ = whole in
+      loop form
   | _ ->
       raise (Interp_error (User_error ("malformed special form: " ^ name)))
+
+and eval_quasiquote
+  ~(budget : budget)
+  ~(prims : prim_table)
+  (env : env)
+  ~(depth : int)
+  (template : expr)
+  : value Lwt.t =
+  tick budget;
+  match template with
+  | App (Var "unquote", [ e ]) when depth = 1 ->
+      eval ~budget ~prims env e
+  | App (Var "unquote", [ e ]) ->
+      let* inner = eval_quasiquote ~budget ~prims env ~depth:(depth - 1) e in
+      Lwt.return (VList [ VStr "unquote"; inner ])
+  | App (Var "unquote-splicing", _) when depth = 1 ->
+      raise
+        (Interp_error
+           (User_error "unquote-splicing not in list context"))
+  | App (Var "quasiquote", [ e ]) ->
+      let* inner = eval_quasiquote ~budget ~prims env ~depth:(depth + 1) e in
+      Lwt.return (VList [ VStr "quasiquote"; inner ])
+  | App (h, args) ->
+      (* list template: map qq; splice unquote-splicing at depth 1 *)
+      let* head_part =
+        match h with
+        | Var "unquote-splicing" when depth = 1 ->
+            raise
+              (Interp_error
+                 (User_error "unquote-splicing as list head not supported"))
+        | _ ->
+            let* hv = eval_quasiquote ~budget ~prims env ~depth h in
+            Lwt.return [ hv ]
+      in
+      let* tail_parts =
+        Lwt_list.map_s
+          (fun a ->
+            match a with
+            | App (Var "unquote-splicing", [ e ]) when depth = 1 ->
+                let* v = eval ~budget ~prims env e in
+                (match v with
+                 | VList xs -> Lwt.return xs
+                 | VNil -> Lwt.return []
+                 | _ ->
+                     raise
+                       (Interp_error
+                          (User_error "unquote-splicing needs a list")))
+            | _ ->
+                let* v = eval_quasiquote ~budget ~prims env ~depth a in
+                Lwt.return [ v ])
+          args
+      in
+      Lwt.return (VList (head_part @ List.concat tail_parts))
+  | Lit v -> Lwt.return v
+  | Var s -> Lwt.return (VStr s)
+  | Quote e ->
+      let* v = eval_quasiquote ~budget ~prims env ~depth e in
+      Lwt.return (VList [ VStr "quote"; v ])
+  | other ->
+      (* If/Lambda/etc. — quote_to_value shape *)
+      Lwt.return (quote_to_value other)
 
 and apply
   ~(budget : budget)
@@ -332,6 +554,10 @@ and apply
       let call_env = Env.child clo_env in
       List.iter2 (fun p a -> Env.define call_env p a) params args;
       eval ~budget ~prims call_env body
+  | VMacro _ ->
+      raise
+        (Interp_error
+           (User_error "macro must be applied by name (not as first-class apply)"))
   | VPrim name ->
       (match lookup_prim prims name with
        | Some fn -> fn args

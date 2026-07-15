@@ -43,6 +43,8 @@ and value =
   | VNil
   | VPair of value * value         (* cons cells *)
   | VLambda of string list * expr * env
+  | VMacro of string list * expr * env
+      (* defmacro transformer; params bind to unevaluated arg values *)
   | VPrim of string                 (* primitive name; resolved at apply *)
   | VRef of type_name * id
   | VList of value list             (* sugar for nested pairs; reader interns *)
@@ -118,6 +120,7 @@ and value_to_json (v : value) : Yojson.Safe.t =
   | VNil -> `Assoc [ ("nil", `Null) ]
   | VPair (a, b) -> `Assoc [ ("pair", `List [ value_to_json a; value_to_json b ]) ]
   | VLambda _ -> `Assoc [ ("lambda", `String "#<lambda>") ]  (* closures aren't serializable *)
+  | VMacro _ -> `Assoc [ ("macro", `String "#<macro>") ]
   | VPrim name -> `Assoc [ ("prim", `String name) ]
   | VRef (t, i) -> `Assoc [ ("ref", `List [ `String t; `String i ]) ]
   | VList vs -> `Assoc [ ("list", `List (List.map value_to_json vs)) ]

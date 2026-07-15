@@ -238,10 +238,62 @@ let pretty_print_tests = [
     Alcotest.(check string) "compact" "(+ 1 2)" pp);
 ]
 
+let macro_tests = [
+  ("value_to_expr roundtrip quote list", `Quick, fun () ->
+    let e = Reader.read_one "(a b c)" in
+    let v = Eval.quote_to_value e in
+    let e' = Eval.value_to_expr v in
+    Alcotest.(check string) "pp"
+      (Reader.pp_expr_flat e) (Reader.pp_expr_flat e'));
+  ("quasiquote unquote", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    Eval.register_prim prims "+" (function
+      | [Ast.VInt a; Ast.VInt b] -> Lwt.return (Ast.VInt (Int64.add a b))
+      | _ -> raise (Ast.Interp_error (Ast.User_error "+")));
+    let env = Env.create () in
+    Env.define env "+" (Ast.VPrim "+");
+    let got = Lwt_main.run (Eval.eval_string ~prims env "`(a ,(+ 1 2) c)") in
+    match got with
+    | Ast.VList [Ast.VStr "a"; Ast.VInt 3L; Ast.VStr "c"] -> ()
+    | other -> Alcotest.failf "qq got %s" (Reader.pp_value other));
+  ("quasiquote splice", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let got = Lwt_main.run (Eval.eval_string ~prims env "`(a ,@'(b c) d)") in
+    match got with
+    | Ast.VList [Ast.VStr "a"; Ast.VStr "b"; Ast.VStr "c"; Ast.VStr "d"] -> ()
+    | other -> Alcotest.failf "splice got %s" (Reader.pp_value other));
+  ("defmacro when", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let _ =
+      Lwt_main.run
+        (Eval.eval_string ~prims env
+           "(defmacro when (t b) `(if ,t ,b ()))")
+    in
+    let got =
+      Lwt_main.run (Eval.eval_string ~prims env "(when #t 42)")
+    in
+    Alcotest.(check string) "42" "42" (Reader.pp_value got);
+    let got2 =
+      Lwt_main.run (Eval.eval_string ~prims env "(when #f 42)")
+    in
+    Alcotest.(check string) "nil" "()" (Reader.pp_value got2));
+  ("gensym unique", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let a = Lwt_main.run (Eval.eval_string ~prims env "(gensym)") in
+    let b = Lwt_main.run (Eval.eval_string ~prims env "(gensym)") in
+    match a, b with
+    | Ast.VStr sa, Ast.VStr sb when sa <> sb -> ()
+    | _ -> Alcotest.fail "gensym not unique");
+]
+
 let () =
   Alcotest.run "pricklypear-lisp" [
     "reader", reader_tests @ reader_list_tests @ reader_completeness_tests;
     "ast-roundtrip", ast_roundtrip_tests;
     "pretty-print", pretty_print_tests;
     "eval", eval_tests;
+    "macros", macro_tests;
   ]

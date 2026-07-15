@@ -85,6 +85,26 @@ let catalog : entry list =
       arity = "(with-transaction (lambda () body…))";
       examples = "(with-transaction (lambda () (create 'note …)))";
     };
+    {
+      name = "quasiquote";
+      summary =
+        "Template quote with unquote / unquote-splicing. Reader sugar `x.";
+      arity = "(quasiquote template)  or  `template";
+      examples = "`(a ,@'(b c) d)";
+    };
+    {
+      name = "defmacro";
+      summary =
+        "Define a syntactic macro (unevaluated args; body returns code as data).";
+      arity = "(defmacro name (params) body)";
+      examples = "(defmacro when (t b) `(if ,t ,b ()))";
+    };
+    {
+      name = "gensym";
+      summary = "Fresh symbol name string for unhygienic macros.";
+      arity = "(gensym)  or  (gensym prefix)";
+      examples = "(gensym) → g$1";
+    };
   ]
 
 let names : string list = List.map (fun e -> e.name) catalog
