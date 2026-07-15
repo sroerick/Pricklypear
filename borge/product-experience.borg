@@ -101,11 +101,23 @@
          ui/theme/ui/css). Auth gate and emergency shell/CSS are
          OCaml kernel only.
 
+         MULTI-USER ACCESS (planned — auth.* subsections):
+         - Per-user subdomain: https://{user}.{PP_BASE_DOMAIN}/
+           (auth.user-subdomains); apex login redirects home
+         - Per-user LLM key: credentials llm_key; /settings/keys
+           (auth.user-llm-keys); env LLM_API_KEY is fallback only
+         - SSH → REPL: credentials ssh_key; PP_SSH_PORT opt-in
+           or OpenBSD sshd bridge (auth.user-ssh-repl)
+
+         MULTI-USER SOCIAL (planned — multi-user.*):
+         - Chat lobby + DMs: /chat, (chat/say …) (multi-user.chat)
+         - Unix .plan: /plan, /u/:user, (plan "…") (multi-user.user-plan)
+
          DEFERRED:
          - Fleet boot/attach per user (process isolation path)
-         - Default real SSH (awa 0.5.x path)
+         - Custom domains per user
          - Drop nginx htpasswd as primary human gate
-           (break-glass only)
+           (break-glass only; already not the user DB)
     |))
    )
   )

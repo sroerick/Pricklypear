@@ -21,7 +21,10 @@
            | Lambda of string list * expr
            | Prim of string * expr list
            | Seq of expr * expr
-           | Quote of expr                 (* for macros later *)
+           | Quote of expr                 (* data quote; see macros *)
+           | Quasiquote of expr            (* macros.quasiquote *)
+           | Unquote of expr
+           | UnquoteSplicing of expr
 
          type value =
            | VInt of int64
@@ -30,6 +33,11 @@
            | VNil
            | VPair of value * value           (* cons cells *)
            | VLambda of string list * expr * env
+           | VMacro of string list * expr * env
+               (* defmacro transformer; params bind to UNEVALUATED
+                  arg exprs reified as values via quote_to_value;
+                  body returns a value tree that value_to_expr
+                  turns back into an expr for re-eval. See macros. *)
            | VPrim of string                  (* primitive name *)
            | VRef of type_name * id           (* tagged ref into store *)
            | VList of value list              (* sugar for nested pairs *)
@@ -71,10 +79,21 @@
            (if test then else)
            (define name expr)        (* top-level binding *)
            (quote x)
+           (quasiquote x)            (* macros; sugar `x *)
+           (unquote x)               (* macros; sugar ,x *)
+           (unquote-splicing x)      (* macros; sugar ,@x *)
+           (defmacro name (params) body)  (* macros *)
            (deftype name (fields ...))
            (fork parent child)
            (merge source target)
            (app "prim-name" args)    (* explicit prim call *)
+
+         Reader sugar for macros (in addition to 'x -> (quote x)):
+           `x   -> (quasiquote x)
+           ,x   -> (unquote x)
+           ,@x  -> (unquote-splicing x)
+         Comma forms are only meaningful under quasiquote; bare
+         unquote at top-level is a reader-or-eval error.
 
          Comments: ; to end of line. Docstrings: a leading
          string in a body position is the function's doc.
@@ -113,9 +132,376 @@
          knows nothing about Postgres or htmx.
 
          Special forms handled in eval, not reader: lambda,
-         let, letrec, if, define, quote. The reader just
-         produces App/Variants of these as plain AST.
+         let, letrec, if, define, quote, quasiquote,
+         unquote, unquote-splicing, defmacro. The reader just
+         produces App/Variants of these as plain AST (or the
+         dedicated Quote/Quasiquote/Unquote constructors when
+         sugar is used — either representation is fine as long
+         as quote_to_value / expand / pp round-trip).
+
+         Macro expansion is part of eval application (and of
+         define/load — see macros.expansion-timing). Eval must
+         call expand before ordinary arg evaluation when the
+         operator resolves to a VMacro.
    |))
+   )
+  )
+  (subsection macros
+   (doc "User-defined syntactic macros: defmacro, quasiquote, value<->expr bridge, expand-at-define")
+   (status planned)
+   (implements lisp/lib/eval.ml lisp/lib/reader.ml lisp/lib/ast.ml lisp/lib/special_forms.ml)
+   (verify
+    (build "dune build lisp")
+    (test "dune runtest -- lisp  — macro/quasiquote/value_to_expr cases")
+    (smoke "(defmacro when (t b) `(if ,t ,b ())) then (when #t 1) => 1")
+    (smoke "top-level defmacro persists; reload expands call sites on load"))
+   (details
+    (doc (|
+         ==========================================================
+         0. WHY MACROS, WHY NOW
+         ==========================================================
+
+         Philosophy parked macros ("can come later"). The habitat
+         is past that: product packages, AI authoring, and agents
+         writing Lisp all want surface sugar without growing the
+         OCaml special-form table forever. Homoiconicity is already
+         real (AST-as-JSONB); macros are the missing half — code
+         that writes code as data, then re-enters eval.
+
+         Goals for v1:
+           - Users/agents can define (when / unless / and / or …)
+             in Lisp packages without OCaml changes
+           - Macro bodies use quasiquote so templates are readable
+           - Expansion is inspectable (macroexpand-1)
+           - Persisted function bodies remain readable source ASTs
+             (macro CALL sites stored; expand on load/define)
+           - No hygiene engine; gensym for accidental capture
+
+         Non-goals for v1:
+           - Hygienic macros / syntax-case / syntax-rules
+           - Reader macros / custom dispatch chars
+           - Compiler-style whole-program expand
+           - Separate macro package object type (macros are
+             ordinary bindings of value VMacro on a branch)
+           - Macro-defining macros (allowed if it falls out;
+             not a success criterion)
+           - Changing the Lwt eval ABI
+
+         ==========================================================
+         1. SURFACE SYNTAX
+         ==========================================================
+
+         (defmacro name (p1 p2 …) body)
+           - Special form (name not evaluated; params not evaluated)
+           - Binds name in the CURRENT env to a VMacro
+           - Top-level defmacro ALSO persists like define:
+             image layer writes function_defs (or equivalent)
+             with a kind/tag distinguishing macro from lambda
+             so reload reinstalls VMacro, not VLambda.
+             v1 acceptable encoding: store body AST as
+               (defmacro name (params) body)  OR
+               body with metadata flag is_macro=true.
+             Prefer a boolean/kind on function_defs if a column
+             already exists for kind; else store the defmacro
+             wrapper AST so load can detect head=defmacro.
+           - Returns the VMacro (or name string) — mirror define's
+             "return the bound value" convention unless image
+             layer already normalizes define returns.
+
+         (quote x) / 'x
+           - Unchanged: expr -> value via quote_to_value
+
+         (quasiquote template) / `template
+           - Evaluates template structure, interpolating unquotes
+           - Outside any quasiquote, bare unquote is an error
+
+         (unquote x) / ,x
+           - Only valid inside quasiquote; evaluates x in the
+             current env and splices the resulting VALUE into
+             the template as a single element
+
+         (unquote-splicing x) / ,@x
+           - Only valid inside quasiquote list position
+           - x must evaluate to a VList (or proper list of pairs);
+             elements are spliced into the parent list
+           - Error if used in non-list / atomic template position
+
+         (macroexpand-1 form)
+           - Special form OR pure prim: if form is (name . args)
+             and name is bound to VMacro, run ONE expansion step
+             and return the expansion as a value tree (quoted
+             shape). If not a macro call, return form unchanged
+             (as value via quote_to_value).
+           - Does not eval the expansion.
+
+         (macroexpand form)
+           - Repeat macroexpand-1 until fixed point or budget
+             tick limit; return final value tree.
+
+         (gensym) / (gensym prefix)
+           - Pure prim: returns a fresh symbol name as VStr
+             (e.g. "g$42" or "prefix$42"). Counter is process-
+             local (image or lisp package ref cell). Enough for
+             unhygienic capture avoidance in v1.
+
+         ==========================================================
+         2. VALUE <-> EXPR BRIDGE (the hard kernel)
+         ==========================================================
+
+         Already exists:
+           quote_to_value : expr -> value
+             Lit v -> v
+             Var s -> VStr s
+             App/special constructors -> nested VList with
+               head symbol strings ("if", "lambda", …)
+
+         REQUIRED for macros:
+           value_to_expr : value -> expr
+             Inverse, best-effort, for trees macros produce.
+
+         Rules (v1):
+           VInt/VFloat/VBool/VNil/VStr that are self-evaluating
+             literals -> Lit v
+           VStr s  used in OPERATOR / BINDING / PARAM position
+             of a list tree -> Var s
+             (i.e. when value_to_expr sees VList (VStr head :: args),
+              head becomes Var head unless head is a known self-
+              quoting literal form — see below)
+           VList [] -> Lit VNil   (* empty list *)
+           VList (VStr "quote" :: [x]) -> Quote (value_to_expr x)
+             or App(Var "quote", …) — either OK if eval handles both
+           VList (h :: t) -> App (value_to_expr h, map value_to_expr t)
+           VPair chain treated like list if proper; improper pair
+             error or dotted App — v1: require proper lists from
+             macros; raise User_error on improper
+           VLambda / VMacro / VPrim / VRef as template leaves:
+             error (cannot reify live closures into source expr)
+
+         Symbol problem (Lisp-1 without VSymbol):
+           Today quote turns symbols into VStr. That collapses
+           the string "hello" and the symbol hello at the value
+           layer. v1 ACCEPTS this collapse (status quo):
+             - (quote hello) => VStr "hello"
+             - (quote "hello") => VStr "hello"
+             - value_to_expr on VStr in list-head position => Var
+             - value_to_expr on VStr in atom position when the
+               parent context expects an expression statement
+               uses Var for bare identifiers produced by macros
+           Optional later: VSymbol distinct from VStr. Do NOT
+           block macros on VSymbol; document the collapse.
+
+         Round-trip invariant (tests):
+           For any expr e built from reader surface (no live
+           closures): value_to_expr (quote_to_value e) is
+           alpha-equivalent / pp-equal enough to eval the same
+           for pure programs. Exact AST equality preferred where
+           constructors align.
+
+         ==========================================================
+         3. EXPANSION SEMANTICS
+         ==========================================================
+
+         A VMacro is (params, body_expr, defining_env).
+
+         When applying a macro (name a1 a2 … an):
+           1. Do NOT eval a1…an.
+           2. Reify each ai with quote_to_value -> vi
+           3. Bind params to vi in a child of defining_env
+              (lexical macro env — captures helpers at defmacro)
+           4. Eval body in that env -> expansion_value
+           5. expansion_expr = value_to_expr expansion_value
+           6. Eval expansion_expr in the ORIGINAL call-site env
+              (not the macro's defining env) — standard Lisp
+              macro call-site evaluation of the expansion.
+
+         Recursive expansion:
+           If expansion_expr is itself a macro call, expand again
+           (macroexpand loop) subject to the same Budget.t as
+           eval. Infinite macro recursion => Budget_exceeded.
+
+         Shadowing:
+           If a local binding shadows a macro name with a non-
+           macro value, App uses ordinary application.
+           is_special_form still wins over macros for the fixed
+           kernel names (lambda, if, quote, defmacro, …).
+           defmacro names MUST NOT be allowed to override kernel
+           special forms; define/defmacro of those names errors.
+
+         ==========================================================
+         4. EXPANSION TIMING (define / load / REPL)
+         ==========================================================
+
+         Two moments matter:
+
+         A) Interactive / one-shot eval (REPL, /api/eval):
+            Expand at use (call time), as in §3. Simple and
+            correct for ad-hoc forms.
+
+         B) Top-level (define name body) and image load of
+            function_defs:
+            After reading body AST, run a FULL macroexpand on
+            the body BEFORE storing the evaluated VLambda in
+            the session env. Rationale:
+              - Call sites stay fast (already expanded in the
+                in-memory lambda body)
+              - Effect inference (lisp-interpreter.effects) sees
+                real prims, not macro heads
+              - AI/tools that read env closures see expanded code
+
+         Persistence choice (IMPORTANT):
+           Store the SOURCE body AST (with macro call sites),
+           not only the expanded form.
+             function_defs.body = source (what user/agent wrote)
+             On session install / load-library / define:
+               expand(source) -> eval -> VLambda in env
+           Why: tree editor, pp, package export (lib.pp), and
+           AI rewrite tools must show what the author wrote.
+           Expanded-only storage would destroy macro use sites.
+
+           Optional later cache column expanded_body — not v1.
+
+         defmacro persistence:
+           On load, re-bind VMacro from stored defmacro AST
+           BEFORE expanding other defines that might call it.
+           Install order on a branch:
+             1. all macros (defmacro forms)
+             2. then functions (define forms), each expanded
+                against the macro env so far
+           Within a single load batch, dependency order may be
+           imperfect; document that macros should be defined
+           before use in packages. v1 may expand with whatever
+           macros are already in env (seed order / name order).
+           Package seed should list macro files/bindings first
+           when this matters.
+
+         ==========================================================
+         5. QUASIQUOTE EVALUATION MODEL
+         ==========================================================
+
+         quasiquote is a special form, not a macro on quote.
+
+         qq(depth, template):
+           depth starts at 1 when entering (quasiquote …)
+           - (unquote e) at depth=1 -> eval e
+           - (unquote e) at depth>1 -> rebuild unquote wrapper
+             with qq(depth-1, e)  (nested quasiquote support)
+           - (quasiquote e) -> rebuild with qq(depth+1, e)
+           - (unquote-splicing e) at depth=1, list context ->
+             eval e, must be list, splice
+           - atoms / Vars / Lits at any depth -> quote_to_value
+           - lists: map qq over elements; splicing flattens
+
+         v1 MUST support single-level quasiquote well; nested
+         quasiquote depth counting is required for correctness
+         of macros-that-write-macros but can be tested lightly.
+
+         Reader:
+           `  introduces quasiquote of next expr
+           ,  introduces unquote of next expr
+           ,@ introduces unquote-splicing of next expr
+         Prefer producing App(Var "quasiquote",[e]) etc. so
+         existing App special-form path works; dedicated AST
+         constructors (Quasiquote/Unquote/UnquoteSplicing) are
+         allowed if JSON + pp + quote_to_value are updated in
+         lockstep. Pick ONE representation in implementation
+         and use it consistently (recommend App form for less
+         JSON schema churn; dedicated constructors OK if cleaner).
+
+         ==========================================================
+         6. INTERACTION WITH EFFECTS / AI / BRANCHES
+         ==========================================================
+
+         Effects (lisp-interpreter.effects):
+           - infer_effects runs on EXPANDED bodies when possible
+           - quote / quasiquote templates contribute no runtime
+             effects except through unquote subexpressions
+           - defmacro body effects are Meta/code-time; the
+             expanded call site carries the real effects
+           - prim_effects: gensym = Pure; macroexpand* = Meta/Pure
+
+         AI authoring (ai-authoring):
+           - propose-function may emit defmacro and macro call
+             sites; freeze path stores source AST as today
+           - ast-rewrite tools edit source AST; expansion is
+             re-done on next define/load
+
+         Branches:
+           Macros are bindings; they inherit/override via the
+           same function_defs branch visibility as functions.
+           A personal branch can override a system macro.
+
+         ==========================================================
+         7. ERRORS
+         ==========================================================
+
+           - arity mismatch on macro params (like lambda)
+           - value_to_expr failure -> User_error with context
+           - unquote outside quasiquote
+           - unquote-splicing of non-list
+           - defmacro/define of kernel special-form name
+           - macro expansion budget exceeded
+           - improper list from macro body (v1)
+
+         ==========================================================
+         8. IMPLEMENTATION PHASES
+         ==========================================================
+
+         Phase 1 — Bridge + quasiquote (no defmacro yet)
+           - value_to_expr + round-trip tests with quote_to_value
+           - reader sugar ` , ,@
+           - eval quasiquote / unquote / unquote-splicing
+           - special_forms catalog entries
+           - gensym prim
+
+         Phase 2 — defmacro + call-time expand
+           - VMacro value
+           - defmacro special form
+           - App path: if operator evals to VMacro, expand
+             (note: operator is a Var lookup without evaluating
+              args — for (mac …) head is Var; do not eval head
+              as function-before-expand in a way that forces
+              args. Pattern: lookup Var name; if VMacro, expand;
+              else existing eval head + eval args + apply.)
+           - macroexpand-1 / macroexpand
+           - tests: when/unless style macros
+
+         Phase 3 — define/load expand + persistence
+           - expand body on define before env install of lambdas
+           - image load order: macros first
+           - persist defmacro so reload restores VMacro
+           - package seed: allow macros in libs/*
+
+         Phase 4 — Product sugar (optional same PR / follow-up)
+           - stdlib macros: when, unless, and, or, begin~seq alias
+             if desired — only if they do not fight existing prims
+           - UI: show macro badge on /bindings (kind=macro)
+
+         ==========================================================
+         9. SUCCESS CRITERIA
+         ==========================================================
+
+         - (defmacro when (t b) `(if ,t ,b ())) works in REPL
+         - (when #t 42) => 42; (when #f 42) => ()
+         - ,@ splices: `(a ,@'(b c) d) => (a b c d) as value list
+         - quote/value_to_expr round-trip tests green
+         - defmacro survives image restart / branch checkout
+         - define of a function using macros expands so effects
+           badges see real prims
+         - dune build lisp + dune runtest lisp pass
+         - No regression to pure-prim Lwt ABI
+
+         ==========================================================
+         10. DECISIONS LOCKED BY THIS SPEC
+         ==========================================================
+
+         - Name: defmacro (not define-macro)
+         - Hygiene: unhygienic + gensym (no syntax-case)
+         - Expansion: call-time always; ALSO expand-at-define/load
+           for installed lambdas; store SOURCE AST
+         - Symbol/string collapse accepted for v1 (no VSymbol yet)
+         - Quasiquote is a special form, not a user macro
+         - Kernel special forms cannot be redefined as macros
+    |))
    )
   )
   (subsection primitives
@@ -308,6 +694,11 @@
            - higher-order unknown fn => Effects.top or {ReadDb,WriteDb,Ai,Publish,Branch} policy knob
            - lambda body effects = function effects
            - quote bodies contribute no runtime effects
+           - quasiquote: only unquote / unquote-splicing
+             subexpressions contribute; template skeleton is Pure
+           - infer on EXPANDED bodies when macros are present
+             (lisp-interpreter.macros); macro heads themselves
+             are not prims
 
          On successful (define name body):
            store inferred effect set next to function
