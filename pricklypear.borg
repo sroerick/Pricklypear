@@ -331,6 +331,12 @@
   (doc "Book chapter — full text inlined from borge/workflow.borg")
   (inline borge/workflow.borg)
  )
+ (section formal-verification
+  (doc "Book chapter — formal verification of the OCaml outer shell
+        (QCheck foothold → proofs later). Full text inlined from
+        borge/formal-verification.borg.")
+  (inline borge/formal-verification.borg)
+ )
  (section ai-authoring
   (doc "Book chapter — full text inlined from borge/ai-authoring.borg")
   (inline borge/ai-authoring.borg)
