@@ -288,12 +288,15 @@
         (list "background" theme/panel "border" "1px solid #000"))
       (css/rule ".ol-kids"
         (list "margin-left" ".15rem" "min-width" "0"))
-      ;; Desktop: top selection toolbar. Mobile: per-node ··· menu.
+      ;; Desktop: sticky selection toolbar (Word/Docs-style — stays while scrolling).
+      ;; Mobile: hidden; per-node ··· menu is used instead.
       (css/rule ".ol-toolbar"
         (list
           "display" "flex" "flex-wrap" "wrap" "align-items" "center"
           "gap" ".35rem" "margin" "0 0 .65rem" "padding" ".4rem .5rem"
-          "background" theme/panel "border" "2px solid #000"))
+          "background" theme/panel "border" "2px solid #000"
+          "position" "sticky" "top" "0" "z-index" "40"
+          "box-shadow" "0 2px 0 #808080"))
       (css/rule ".ol-toolbar-label"
         (list
           "font-size" ".8rem" "color" theme/muted "margin-right" ".25rem"
