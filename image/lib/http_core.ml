@@ -786,3 +786,132 @@ let respond_handler_value
         in
         html_response reqd ~session body
 
+(** /settings/keys — per-user LLM provider key (auth.user-llm-keys). *)
+let settings_keys_page (session : Session.t) (reqd : Httpaf.Reqd.t)
+  : unit Lwt.t =
+  let username = Session.username session in
+  if username = "anonymous" then begin
+    redirect_response reqd "/login";
+    Lwt.return_unit
+  end else
+    let* user_opt =
+      Auth_store.get_user_by_username (Session.store session) username
+    in
+    match user_opt with
+    | None ->
+        html_response reqd ~session ~status:`Unauthorized
+          (chrome ~session ~title:"Keys" [
+             HTML.p [HTML.class_ "err"] [txt "not signed in"];
+           ]);
+        Lwt.return_unit
+    | Some user ->
+        let* meta =
+          Auth_store.get_llm_key_meta (Session.store session)
+            ~user_id:user.Auth_store.id
+        in
+        let status_line =
+          match meta with
+          | None ->
+              if Llm_client.api_key () <> "" then
+                "No personal key. Operator LLM_API_KEY env is set (fallback)."
+              else
+                "No personal key and no LLM_API_KEY env."
+          | Some m ->
+              Printf.sprintf "Configured · last4=%s%s%s"
+                m.last4
+                (match m.base with Some b -> " · base=" ^ b | None -> "")
+                (match m.model with Some mo -> " · model=" ^ mo | None -> "")
+        in
+        let body =
+          chrome ~session ~title:"LLM keys" [
+            HTML.h1 [] [txt "LLM keys"];
+            HTML.p [HTML.class_ "muted"] [
+              txt "Bring your own provider key. Never shown again after save — only last4.";
+            ];
+            HTML.p [] [txt "%s" status_line];
+            HTML.div [HTML.class_ "card"] [
+              HTML.form [HTML.method_ `POST; HTML.action "/settings/keys"] [
+                HTML.input [HTML.type_ "hidden"; HTML.name "action"; HTML.value "set"];
+                HTML.p [] [
+                  HTML.label [] [txt "API key"];
+                  HTML.input [HTML.type_ "password"; HTML.name "api_key"; HTML.required];
+                ];
+                HTML.p [] [
+                  HTML.label [] [txt "Base URL (optional)"];
+                  HTML.input [HTML.type_ "text"; HTML.name "base";
+                              HTML.placeholder "https://api.synthetic.new/openai/v1"];
+                ];
+                HTML.p [] [
+                  HTML.label [] [txt "Model (optional)"];
+                  HTML.input [HTML.type_ "text"; HTML.name "model"];
+                ];
+                HTML.button [HTML.type_ "submit"] [txt "Save key"];
+              ];
+            ];
+            HTML.div [HTML.class_ "card"] [
+              HTML.form [HTML.method_ `POST; HTML.action "/settings/keys"] [
+                HTML.input [HTML.type_ "hidden"; HTML.name "action"; HTML.value "clear"];
+                HTML.button [HTML.type_ "submit"] [txt "Clear key"];
+              ];
+            ];
+          ]
+        in
+        html_response reqd ~session body;
+        Lwt.return_unit
+
+let post_settings_keys (session : Session.t) (reqd : Httpaf.Reqd.t)
+  : unit Lwt.t =
+  let username = Session.username session in
+  if username = "anonymous" then begin
+    redirect_response reqd "/login";
+    Lwt.return_unit
+  end else
+    let* user_opt =
+      Auth_store.get_user_by_username (Session.store session) username
+    in
+    match user_opt with
+    | None ->
+        redirect_response reqd "/login";
+        Lwt.return_unit
+    | Some user ->
+        let* body = read_body reqd in
+        let action =
+          Option.value (form_field body "action") ~default:"set" |> String.trim
+        in
+        if action = "clear" then
+          let* _r =
+            Auth_store.clear_llm_key (Session.store session)
+              ~user_id:user.Auth_store.id
+          in
+          redirect_response reqd "/settings/keys";
+          Lwt.return_unit
+        else
+          let api_key =
+            Option.value (form_field body "api_key") ~default:"" |> String.trim
+          in
+          let base =
+            match form_field body "base" with
+            | Some s when String.trim s <> "" -> Some (String.trim s)
+            | _ -> None
+          in
+          let model =
+            match form_field body "model" with
+            | Some s when String.trim s <> "" -> Some (String.trim s)
+            | _ -> None
+          in
+          let* r =
+            Auth_store.set_llm_key (Session.store session)
+              ~user_id:user.Auth_store.id ~api_key ~base ~model ()
+          in
+          (match r with
+           | Error e ->
+               html_response reqd ~session ~status:`Bad_request
+                 (chrome ~session ~title:"LLM keys" [
+                    HTML.p [HTML.class_ "err"] [txt "%s" e];
+                    HTML.p [] [HTML.a [HTML.href "/settings/keys"] [txt "Back"]];
+                  ]);
+               Lwt.return_unit
+           | Ok _ ->
+               redirect_response reqd "/settings/keys";
+               Lwt.return_unit)
+

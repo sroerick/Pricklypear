@@ -3,6 +3,30 @@
 open Lwt.Syntax
 open Session_types
 
+(** Resolve per-user LLM key (auth.user-llm-keys); env fallback inside client. *)
+let with_user_llm (t : t) (f : unit -> 'a Lwt.t) : 'a Lwt.t =
+  let uid = t.manifest.user_id in
+  if uid = "" || uid = "anonymous" || uid = "public" then f ()
+  else
+    let* secret = Auth_store.get_llm_key_secret t.store ~user_id:uid in
+    match secret with
+    | None -> f ()
+    | Some (key, meta) ->
+        let base =
+          match meta.Auth_store.base with
+          | Some b when b <> "" -> b
+          | _ -> Llm_client.api_base ()
+        in
+        let model =
+          match meta.Auth_store.model with
+          | Some m when m <> "" -> m
+          | _ -> Llm_client.model ()
+        in
+        let creds =
+          { Llm_client.api_key = key; api_base = base; model }
+        in
+        Llm_client.with_creds creds f
+
 let ensure_callable_body (body_src : string) : string =
   try
     let e = Pricklypear_lisp.Reader.read_one body_src in
@@ -105,7 +129,7 @@ let install_ai_function (t : t) ~(name : string) ~(body_src : string)
              (Pricklypear_lisp.Ast.VStr
                 (Printf.sprintf "ai rejected by effects: %s\n---\n%s" pe body_src))
        | Ok () ->
-           let author = "agent:" ^ Llm_client.model () in
+           let author = "agent:" ^ Llm_client.active_model () in
            let* def = define_binding t ~name ~body_src ~author in
            (match def with
             | Ok _ ->
@@ -203,6 +227,7 @@ let export_package (t : t) (pkg : string) : string Lwt.t =
 (* AI propose: draft via agent portal, then install on current branch. *)
 let propose_function (t : t) ~(name : string) ~(spec : string)
     : Pricklypear_lisp.Ast.value Lwt.t =
+  with_user_llm t (fun () ->
   let seed =
     "You write Pricklypear Lisp function bodies.\n" ^
     "OUTPUT RULES (strict):\n" ^
@@ -228,7 +253,7 @@ let propose_function (t : t) ~(name : string) ~(spec : string)
   | Error e ->
       Lwt.return (Pricklypear_lisp.Ast.VStr ("agent error: " ^ e))
   | Ok body_src ->
-      install_ai_function t ~name ~body_src
+      install_ai_function t ~name ~body_src)
 
 (** Pretty-print a stored function body, or default stub. *)
 let current_fn_pretty (t : t) (name : string) : string Lwt.t =
@@ -1080,6 +1105,7 @@ let agent_task
 
 let llm_rewrite (t : t) ~(mode : string) ~(name : string) ~(concept : string)
     : Pricklypear_lisp.Ast.value Lwt.t =
+  with_user_llm t (fun () ->
   let* current = current_fn_pretty t name in
   let* res =
     Llm_client.rewrite_component_source ~mode ~name ~concept
@@ -1094,7 +1120,7 @@ let llm_rewrite (t : t) ~(mode : string) ~(name : string) ~(concept : string)
              (Pricklypear_lisp.Ast.VStr
                 (Printf.sprintf "ai rejected by effects: %s\n---\n%s" pe body_src))
        | Ok () ->
-           let author = "agent:" ^ Llm_client.model () in
+           let author = "agent:" ^ Llm_client.active_model () in
            let* def = define_binding t ~name ~body_src ~author in
            (match def with
             | Ok _ ->
@@ -1105,7 +1131,7 @@ let llm_rewrite (t : t) ~(mode : string) ~(name : string) ~(concept : string)
             | Error e ->
                 Lwt.return
                   (Pricklypear_lisp.Ast.VStr
-                     (Printf.sprintf "freeze failed: %s\n---\n%s" e body_src))))
+                     (Printf.sprintf "freeze failed: %s\n---\n%s" e body_src)))))
 
 let llm_inner t ~name ~concept =
   llm_rewrite t ~mode:"replace" ~name ~concept
@@ -1116,6 +1142,7 @@ let llm_outer t ~name ~concept =
 (** Growth-from-seed: smallest core then recursive outer wraps. *)
 let llm_seed (t : t) ~(requirement : string) ?(max_steps = 5) ()
     : Pricklypear_lisp.Ast.value Lwt.t =
+  with_user_llm t (fun () ->
   let tip = "seed" in
   let* seed_res = Llm_client.seed_core_source ~requirement () in
   match seed_res with
@@ -1126,7 +1153,7 @@ let llm_seed (t : t) ~(requirement : string) ?(max_steps = 5) ()
            Lwt.return
              (Pricklypear_lisp.Ast.VStr ("seed rejected: " ^ pe ^ "\n" ^ body_src))
        | Ok () ->
-           let author = "agent:" ^ Llm_client.model () in
+           let author = "agent:" ^ Llm_client.active_model () in
            let* def = define_binding t ~name:tip ~body_src ~author in
            (match def with
             | Error e ->
@@ -1174,7 +1201,7 @@ let llm_seed (t : t) ~(requirement : string) ?(max_steps = 5) ()
                             (Pricklypear_lisp.Reader.pp_value wr ^ "\n");
                           grow (step + 1)
                 in
-                grow 1))
+                grow 1)))
 
 (* Register the 5 CRUD primitives (get/create/update/delete/list) over
    the shared `data_rows` table. These are NORMAL prims on the Lwt-typed

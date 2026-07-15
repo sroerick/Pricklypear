@@ -32,6 +32,7 @@
           (menu/link "data" "/types")
           (menu/link "branches" "/branches")
           (menu/link "analytics" "/analytics")
+          (menu/link "llm keys" "/settings/keys")
           (menu/link "about" "/about")
           (menu/link "repl" "/repl"))))))
 
