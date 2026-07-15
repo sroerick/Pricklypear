@@ -238,7 +238,9 @@
           "align-items" "center" "gap" ".35rem" "flex-wrap" "nowrap"
           "min-width" "0" "padding-right" "2.5rem"))
       (css/rule ".ol-node.is-selected > .ol-sum"
-        (list "background" "#fff8dc" "outline" "1px solid #000"))
+        (list
+          "background" "#fff8dc" "outline" "2px solid #000"
+          "box-shadow" "inset 3px 0 0 #000080"))
       (css/rule ".ol-fold"
         (list
           "font-size" ".75em" "flex" "0 0 auto" "display" "inline-flex"
@@ -293,16 +295,21 @@
       (css/rule ".ol-toolbar"
         (list
           "display" "flex" "flex-wrap" "wrap" "align-items" "center"
-          "gap" ".35rem" "margin" "0 0 .65rem" "padding" ".4rem .5rem"
+          "gap" ".3rem" "margin" "0 0 .65rem" "padding" ".35rem .5rem"
           "background" theme/panel "border" "2px solid #000"
           "position" "sticky" "top" "0" "z-index" "40"
           "box-shadow" "0 2px 0 #808080"))
       (css/rule ".ol-toolbar-label"
         (list
-          "font-size" ".8rem" "color" theme/muted "margin-right" ".25rem"
-          "min-width" "4rem"))
+          "font-size" ".8rem" "color" theme/muted "margin-right" ".2rem"
+          "min-width" "auto" "font-weight" "700"))
+      (css/rule "#ol-selected-label"
+        (list
+          "font-size" ".85rem" "max-width" "12rem" "overflow" "hidden"
+          "text-overflow" "ellipsis" "white-space" "nowrap"
+          "margin-right" ".35rem"))
       (css/rule ".ol-toolbar .ol-btn"
-        (list "min-height" "1.9rem"))
+        (list "min-height" "2rem" "padding" ".2rem .45rem"))
       (css/rule ".ol-toolbar form.ol-refile"
         (list "margin" "0" "display" "inline-flex" "width" "auto"))
       (css/rule "details.ol-actions"
