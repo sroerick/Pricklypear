@@ -419,7 +419,9 @@
         "var rf=document.getElementById('ol-refile-nid');if(rf)rf.value=id;"
         "document.querySelectorAll('.ol-node.is-selected').forEach(function(n){n.classList.remove('is-selected');});"
         "if(node)node.classList.add('is-selected');}"
-        "function postOp(op){var id=selId();if(op==='delete'&&!confirm('Delete this node?'))return;"
+        "function postOp(op){var id=selId();"
+        "if(op==='delete'){if(id==='root'){alert('Cannot delete the root node.');return;}if(!confirm('Delete this node?'))return;}"
+        "if(op==='archive'&&id==='root'){alert('Cannot archive the root node.');return;}"
         "var q='slug='+encodeURIComponent(slug)+'&op='+encodeURIComponent(op)+'&node-id='+encodeURIComponent(id);"
         "if(showArch)q+='&show=archived';"
         "fetch('/partials/notes-node-op?'+q,{method:'POST',credentials:'same-origin'}).then(function(r){return r.text();}).then(function(html){"
@@ -678,7 +680,10 @@
       ((string-eq op "add-sibling")
        (outline/insert-sibling tree nid (notes/outline/new-node)))
       ((string-eq op "delete")
-       (outline/delete tree nid))
+       ;; Guard root even if outline/delete also refuses — clear product rule.
+       (if (string-eq (as-str nid) "root")
+           tree
+           (outline/delete tree nid)))
       ((string-eq op "move-up")
        (outline/move-up tree nid))
       ((string-eq op "move-down")
@@ -696,11 +701,15 @@
        (outline/update tree nid
          (lambda (n) (outline/cycle-todo n))))
       ((string-eq op "archive")
-       (outline/update tree nid
-         (lambda (n) (outline/archive n))))
+       (if (string-eq (as-str nid) "root")
+           tree
+           (outline/update tree nid
+             (lambda (n) (outline/archive n)))))
       ((string-eq op "unarchive")
-       (outline/update tree nid
-         (lambda (n) (outline/unarchive n))))
+       (if (string-eq (as-str nid) "root")
+           tree
+           (outline/update tree nid
+             (lambda (n) (outline/unarchive n)))))
       (else tree))))
 
 ;; (slug node-id title state)*

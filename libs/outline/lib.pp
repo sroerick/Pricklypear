@@ -137,11 +137,12 @@
         (cons (outline/update (car kids) id f)
           (outline/update-kids (cdr kids) id f)))))
 
-;; delete node by id (returns tree without it)
+;; delete node by id (returns tree without it).
+;; NEVER delete root — that wiped the whole note (empty tree → Untitled).
 (define outline/delete
   (lambda (tree id)
     (if (string-eq (outline/id tree) id)
-        ()  ; deleting root = nil (shouldn't happen)
+        tree
         (outline/set-kids tree
           (outline/delete-from-kids (outline/kids tree) id)))))
 
@@ -347,11 +348,10 @@
             (html/div (html/attr "class" "ol-kids")
               (list/foldl
                 (lambda (acc k)
-                  (if (if (outline/archived? (outline/todo k))
-                          show-archived
-                          #t)
-                      (string-append acc (outline/html-node slug k show-archived))
-                      acc))
+                  ;; Always show ARCHIVED kids (dimmed via .st-ARCHIVED).
+                  ;; Hiding them made archive look like a no-op / silent delete.
+                  ;; show-archived reserved for future filter toggles.
+                  (string-append acc (outline/html-node slug k show-archived)))
                 ""
                 kids))))))))
 
