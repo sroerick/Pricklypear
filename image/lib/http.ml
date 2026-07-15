@@ -80,6 +80,35 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
             in
             if not proceed then Lwt.return_unit
             else begin
+              (* Subdomain garden mismatch: private paths require whoami = garden owner. *)
+              let host_mode = classify_host headers in
+              let uname_now = Session.username session in
+              let classif_now = classify_path session path in
+              let path_private =
+                match classif_now with
+                | `Hard_public -> false
+                | `User (_, vis) -> vis <> "public"
+                | `Hard_private | `Unknown -> true
+              in
+              let mismatch =
+                match host_mode with
+                | Host_garden g
+                  when path_private && uname_now <> "anonymous"
+                       && uname_now <> g -> true
+                | Host_unknown when base_domain () <> None -> true
+                | _ -> false
+              in
+              if mismatch then begin
+                (match host_mode, base_domain () with
+                 | Host_garden _, Some base when uname_now <> "anonymous" ->
+                     redirect_response reqd
+                       ("http://" ^ uname_now ^ "." ^ base ^ "/")
+                 | Host_unknown, _ ->
+                     text_response reqd ~status:`Not_found
+                       ~content_type:"text/plain" "unknown host"
+                 | _ -> redirect_response reqd "/");
+                Lwt.return_unit
+              end else begin
               (* Product analytics (in-memory day counters). *)
               let uname = Session.username session in
               let is_authed =
@@ -92,6 +121,7 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
                  by home, system pages, and user routes — not only /. *)
               let* () = Session.refresh_ui_shell session in
               page_fn ()
+              end
             end)
           (fun exn ->
             let msg = Printexc.to_string exn in

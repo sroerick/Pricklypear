@@ -142,8 +142,30 @@ let get_user_by_id (store : Store.t) (user_id : string) : user option Lwt.t =
             (Printexc.to_string exn);
           Lwt.return_none)
 
+let username_dns_ok (name : string) : bool =
+  let name = String.lowercase_ascii (String.trim name) in
+  let n = String.length name in
+  n > 0 && n <= 63
+  && (match name.[0] with 'a' .. 'z' | '0' .. '9' -> true | _ -> false)
+  && (match name.[n - 1] with 'a' .. 'z' | '0' .. '9' -> true | _ -> false)
+  &&
+  let rec loop i =
+    if i >= n then true
+    else
+      match name.[i] with
+      | 'a' .. 'z' | '0' .. '9' | '-' -> loop (i + 1)
+      | _ -> false
+  in
+  loop 0
+
 let create_user (store : Store.t) ~(username : string) ~(is_admin : bool)
   : (user, string) result Lwt.t =
+  let username = String.lowercase_ascii (String.trim username) in
+  if not (username_dns_ok username) then
+    Lwt.return
+      (Error
+         "username must be a DNS label: [a-z0-9]([a-z0-9-]*[a-z0-9])?")
+  else
   match pg_conn store with
   | None -> Lwt.return (Error "no database")
   | Some conn ->

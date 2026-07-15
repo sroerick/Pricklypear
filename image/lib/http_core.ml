@@ -153,6 +153,71 @@ let wants_fragment ~(path : string) ~(headers : (string * string) list) : bool =
 
 let cookie_name = "pp_session"
 
+(** Per-user subdomains (auth.user-subdomains). Empty PP_BASE_DOMAIN = off. *)
+let base_domain () =
+  match Sys.getenv_opt "PP_BASE_DOMAIN" with
+  | Some s when String.trim s <> "" -> Some (String.lowercase_ascii (String.trim s))
+  | _ -> None
+
+let host_header (headers : (string * string) list) : string option =
+  let rec find = function
+    | [] -> None
+    | (k, v) :: _ when String.lowercase_ascii k = "host" ->
+        let host =
+          match String.index_opt v ':' with
+          | Some i -> String.sub v 0 i
+          | None -> v
+        in
+        Some (String.lowercase_ascii host)
+    | _ :: rest -> find rest
+  in
+  find headers
+
+type host_mode =
+  | Host_legacy
+  | Host_apex
+  | Host_garden of string
+  | Host_unknown
+
+let username_dns_ok (name : string) : bool =
+  let n = String.length name in
+  n > 0 && n <= 63
+  && (match name.[0] with 'a' .. 'z' | '0' .. '9' -> true | _ -> false)
+  && (match name.[n - 1] with 'a' .. 'z' | '0' .. '9' -> true | _ -> false)
+  &&
+  let rec loop i =
+    if i >= n then true
+    else
+      match name.[i] with
+      | 'a' .. 'z' | '0' .. '9' | '-' -> loop (i + 1)
+      | _ -> false
+  in
+  loop 0
+
+let classify_host (headers : (string * string) list) : host_mode =
+  match base_domain (), host_header headers with
+  | None, _ -> Host_legacy
+  | Some base, None -> Host_apex
+  | Some base, Some host ->
+      if host = base then Host_apex
+      else
+        let suffix = "." ^ base in
+        let hl = String.length host
+        and sl = String.length suffix in
+        if hl > sl && String.sub host (hl - sl) sl = suffix then
+          let name = String.sub host 0 (hl - sl) in
+          if username_dns_ok name && not (String.contains name '.') then
+            Host_garden name
+          else Host_unknown
+        else Host_unknown
+
+let garden_url ~(username : string) ~(path : string) : string =
+  match base_domain () with
+  | None -> path
+  | Some base ->
+      let p = if path = "" then "/" else path in
+      "https://" ^ username ^ "." ^ base ^ p
+
 (** Serialize request identity attach — cotenant multi-user shares one
     Session.t; concurrent Alice/Bob would otherwise race branch/env. *)
 let request_mutex = Lwt_mutex.create ()
@@ -281,13 +346,24 @@ let parse_basic_auth (headers : (string * string) list)
                    Some (u, p))
 
 let set_cookie_header ~(token : string) : string =
-  (* Dev is plain HTTP — omit Secure. Path=/; HttpOnly; SameSite=Lax. *)
-  Printf.sprintf "%s=%s; Path=/; HttpOnly; SameSite=Lax; Max-Age=%d"
-    cookie_name token (60 * 60 * 24 * 14)
+  (* Dev is plain HTTP — omit Secure. Path=/; HttpOnly; SameSite=Lax.
+     PP_BASE_DOMAIN scopes cookie across subdomains. *)
+  let domain =
+    match base_domain () with
+    | Some b -> "; Domain=." ^ b
+    | None -> ""
+  in
+  Printf.sprintf "%s=%s; Path=/; HttpOnly; SameSite=Lax; Max-Age=%d%s"
+    cookie_name token (60 * 60 * 24 * 14) domain
 
 let clear_cookie_header () : string =
+  let domain =
+    match base_domain () with
+    | Some b -> "; Domain=." ^ b
+    | None -> ""
+  in
   Printf.sprintf
-    "%s=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0" cookie_name
+    "%s=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0%s" cookie_name domain
 
 let redirect_with_cookie (reqd : Httpaf.Reqd.t) ~(location : string)
     ~(set_cookie : string) : unit =
@@ -565,7 +641,18 @@ let post_login (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
                attach_from_user session user ~auth_token:(Some token)
                  ~checkout_personal_now:true ()
              in
-             redirect_with_cookie reqd ~location:"/"
+             let location =
+               match base_domain () with
+               | Some base ->
+                   (* Prefer relative if already on garden host; else absolute. *)
+                   let headers = header_list (Httpaf.Reqd.request reqd) in
+                   (match classify_host headers with
+                    | Host_garden g when g = user.Auth_store.username -> "/"
+                    | _ ->
+                        "http://" ^ user.Auth_store.username ^ "." ^ base ^ "/")
+               | None -> "/"
+             in
+             redirect_with_cookie reqd ~location
                ~set_cookie:(set_cookie_header ~token);
              Lwt.return_unit)
 
