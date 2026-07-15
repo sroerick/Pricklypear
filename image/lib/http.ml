@@ -199,6 +199,8 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
   | `POST, "/logout" -> launch (fun () -> post_logout session reqd)
   | `GET, "/admin/users" -> launch (fun () -> admin_users_page session reqd)
   | `POST, "/admin/users" -> launch (fun () -> post_admin_users session reqd)
+  | `GET, "/settings/keys" -> launch (fun () -> settings_keys_page session reqd)
+  | `POST, "/settings/keys" -> launch (fun () -> post_settings_keys session reqd)
   | `GET, "/analytics" -> launch (fun () -> analytics_page session reqd)
   | `GET, "/" -> launch (fun () -> home_page session reqd)
   | `GET, "/welcome" ->

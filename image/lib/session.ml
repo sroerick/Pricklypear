@@ -712,6 +712,93 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
           Lwt.return
             (Pricklypear_lisp.Ast.VStr "export-package: need package-str"));
 
+  (* Per-user LLM keys (auth.user-llm-keys) *)
+  Primitives.register tbl "set-llm-key"
+    (fun args ->
+      if t.manifest.username = "anonymous" then
+        Lwt.return (Pricklypear_lisp.Ast.VStr "set-llm-key: denied for anonymous")
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr key ] ->
+            let* r =
+              Auth_store.set_llm_key t.store ~user_id:t.manifest.user_id
+                ~api_key:key ()
+            in
+            (match r with
+             | Ok m ->
+                 Lwt.return
+                   (Pricklypear_lisp.Ast.VStr ("ok last4=" ^ m.Auth_store.last4))
+             | Error e ->
+                 Lwt.return (Pricklypear_lisp.Ast.VStr ("set-llm-key: " ^ e)))
+        | [ Pricklypear_lisp.Ast.VStr key; Pricklypear_lisp.Ast.VStr base ] ->
+            let* r =
+              Auth_store.set_llm_key t.store ~user_id:t.manifest.user_id
+                ~api_key:key ~base:(Some base) ()
+            in
+            (match r with
+             | Ok m ->
+                 Lwt.return
+                   (Pricklypear_lisp.Ast.VStr ("ok last4=" ^ m.Auth_store.last4))
+             | Error e ->
+                 Lwt.return (Pricklypear_lisp.Ast.VStr ("set-llm-key: " ^ e)))
+        | [ Pricklypear_lisp.Ast.VStr key; Pricklypear_lisp.Ast.VStr base;
+            Pricklypear_lisp.Ast.VStr model ] ->
+            let* r =
+              Auth_store.set_llm_key t.store ~user_id:t.manifest.user_id
+                ~api_key:key ~base:(Some base) ~model:(Some model) ()
+            in
+            (match r with
+             | Ok m ->
+                 Lwt.return
+                   (Pricklypear_lisp.Ast.VStr ("ok last4=" ^ m.Auth_store.last4))
+             | Error e ->
+                 Lwt.return (Pricklypear_lisp.Ast.VStr ("set-llm-key: " ^ e)))
+        | _ ->
+            Lwt.return
+              (Pricklypear_lisp.Ast.VStr
+                 "set-llm-key: need key-str [, base] [, model]"));
+
+  Primitives.register tbl "clear-llm-key"
+    (fun _args ->
+      if t.manifest.username = "anonymous" then
+        Lwt.return (Pricklypear_lisp.Ast.VStr "clear-llm-key: denied for anonymous")
+      else
+        let* r =
+          Auth_store.clear_llm_key t.store ~user_id:t.manifest.user_id
+        in
+        match r with
+        | Ok () -> Lwt.return Pricklypear_lisp.Ast.VNil
+        | Error e ->
+            Lwt.return (Pricklypear_lisp.Ast.VStr ("clear-llm-key: " ^ e)));
+
+  Primitives.register tbl "llm-key-status"
+    (fun _args ->
+      if t.manifest.username = "anonymous" then
+        Lwt.return (Pricklypear_lisp.Ast.VStr "llm-key-status: denied for anonymous")
+      else
+        let* meta =
+          Auth_store.get_llm_key_meta t.store ~user_id:t.manifest.user_id
+        in
+        match meta with
+        | None ->
+            let env_set = Llm_client.api_key () <> "" in
+            Lwt.return
+              (Pricklypear_lisp.Ast.VStr
+                 (if env_set then
+                    "configured=false env_fallback=true"
+                  else "configured=false env_fallback=false"))
+        | Some m ->
+            let base =
+              match m.base with Some b -> " base=" ^ b | None -> ""
+            in
+            let model =
+              match m.model with Some m -> " model=" ^ m | None -> ""
+            in
+            Lwt.return
+              (Pricklypear_lisp.Ast.VStr
+                 (Printf.sprintf "configured=true last4=%s%s%s"
+                    m.last4 base model)));
+
   (* Coding tools: freeze AST rewrites into store *)
   Primitives.register tbl "llm-inner"
     (fun args ->

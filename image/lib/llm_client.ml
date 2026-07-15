@@ -19,6 +19,35 @@ let api_base () = env_or "LLM_API_BASE" "https://api.synthetic.new/openai/v1"
 let api_key () = env_or "LLM_API_KEY" ""
 let model () = env_or "LLM_MODEL" "hf:zai-org/GLM-4.7-Flash"
 
+(** Optional per-request / per-session override (auth.user-llm-keys). *)
+type creds = {
+  api_key : string;
+  api_base : string;
+  model : string;
+}
+
+let current_creds : creds option ref = ref None
+
+let with_creds (c : creds) (f : unit -> 'a Lwt.t) : 'a Lwt.t =
+  let prev = !current_creds in
+  current_creds := Some c;
+  Lwt.finalize f (fun () -> current_creds := prev; Lwt.return_unit)
+
+let active_api_key () =
+  match !current_creds with
+  | Some c when c.api_key <> "" -> c.api_key
+  | _ -> api_key ()
+
+let active_api_base () =
+  match !current_creds with
+  | Some c when c.api_base <> "" -> c.api_base
+  | _ -> api_base ()
+
+let active_model () =
+  match !current_creds with
+  | Some c when c.model <> "" -> c.model
+  | _ -> model ()
+
 type call_result = (string, string) result
 
 (** Progress events for live sinks (SSE / REPL). Not a capability effect. *)
@@ -75,13 +104,15 @@ let extract_content (body : string) : call_result =
 
 let call ?(temperature = 0.2) ?(max_tokens = 4096)
     ~(system : string) ~(user : string) () : call_result Lwt.t =
-  let key = api_key () in
+  let key = active_api_key () in
   if key = "" then
-    Lwt.return (Error "LLM_API_KEY not set")
+    Lwt.return
+      (Error
+         "no LLM key configured (add one in /settings/keys or set LLM_API_KEY)")
   else
     let body_json =
       `Assoc
-        [ ("model", `String (model ()))
+        [ ("model", `String (active_model ()))
         ; ("messages",
            `List
              [ `Assoc [("role", `String "system"); ("content", `String system)]
@@ -92,7 +123,7 @@ let call ?(temperature = 0.2) ?(max_tokens = 4096)
         ]
     in
     let body_str = Yojson.Safe.to_string body_json in
-    let url = api_base () ^ "/chat/completions" in
+    let url = active_api_base () ^ "/chat/completions" in
     (* Write body to a temp file to avoid shell length limits. *)
     let tmp = Filename.temp_file "pp_llm_" ".json" in
     let oc = open_out tmp in
@@ -107,7 +138,7 @@ let call ?(temperature = 0.2) ?(max_tokens = 4096)
         (shell_quote ("Authorization: Bearer " ^ key))
         (shell_quote tmp)
     in
-    Printf.eprintf "[llm] POST %s model=%s\n" url (model ());
+    Printf.eprintf "[llm] POST %s model=%s\n" url (active_model ());
     Lwt.catch
       (fun () ->
         let* stdout =
@@ -218,10 +249,13 @@ let agent_chat
     ~(seed : string)
     ~(prompt : string)
     () : call_result Lwt.t =
-  let key = api_key () in
+  let key = active_api_key () in
   if key = "" then begin
-    on_event (Fail "LLM_API_KEY not set");
-    Lwt.return (Error "LLM_API_KEY not set")
+    let msg =
+      "no LLM key configured (add one in /settings/keys or set LLM_API_KEY)"
+    in
+    on_event (Fail msg);
+    Lwt.return (Error msg)
   end else if not stream then begin
     let* res = call ~temperature ~max_tokens ~system:seed ~user:prompt () in
     (match res with
@@ -230,7 +264,7 @@ let agent_chat
   end else
     let body_json =
       `Assoc
-        [ ("model", `String (model ()))
+        [ ("model", `String (active_model ()))
         ; ("messages",
            `List
              [ `Assoc [("role", `String "system"); ("content", `String seed)]
@@ -242,7 +276,7 @@ let agent_chat
         ]
     in
     let body_str = Yojson.Safe.to_string body_json in
-    let url = api_base () ^ "/chat/completions" in
+    let url = active_api_base () ^ "/chat/completions" in
     let tmp = Filename.temp_file "pp_llm_stream_" ".json" in
     let oc = open_out tmp in
     output_string oc body_str;
@@ -256,7 +290,7 @@ let agent_chat
         (shell_quote ("Authorization: Bearer " ^ key))
         (shell_quote tmp)
     in
-    Printf.eprintf "[llm] STREAM %s model=%s\n" url (model ());
+    Printf.eprintf "[llm] STREAM %s model=%s\n" url (active_model ());
     let buf = Buffer.create 4096 in
     Lwt.catch
       (fun () ->
@@ -556,13 +590,15 @@ let chat_turn
     ?(tools : tool_def list = [])
     ~(messages : chat_message list)
     () : turn_result Lwt.t =
-  let key = api_key () in
+  let key = active_api_key () in
   if key = "" then
-    Lwt.return (Turn_error "LLM_API_KEY not set")
+    Lwt.return
+      (Turn_error
+         "no LLM key configured (add one in /settings/keys or set LLM_API_KEY)")
   else
     let msgs = `List (List.map message_to_json messages) in
     let fields =
-      [ ("model", `String (model ()))
+      [ ("model", `String (active_model ()))
       ; ("messages", msgs)
       ; ("temperature", `Float temperature)
       ; ("max_tokens", `Int max_tokens)
@@ -576,7 +612,7 @@ let chat_turn
         :: fields
     in
     let body_str = Yojson.Safe.to_string (`Assoc fields) in
-    let url = api_base () ^ "/chat/completions" in
+    let url = active_api_base () ^ "/chat/completions" in
     let tmp = Filename.temp_file "pp_llm_turn_" ".json" in
     let oc = open_out tmp in
     output_string oc body_str;
@@ -591,7 +627,7 @@ let chat_turn
         (shell_quote tmp)
     in
     Printf.eprintf "[llm] TURN %s model=%s tools=%d msgs=%d\n%!"
-      url (model ()) (List.length tools) (List.length messages);
+      url (active_model ()) (List.length tools) (List.length messages);
     Lwt.catch
       (fun () ->
         let* stdout =

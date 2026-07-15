@@ -439,6 +439,213 @@ let revoke_all_sessions (store : Store.t) ~(user_id : string) : int Lwt.t =
             (Printexc.to_string exn);
           Lwt.return 0)
 
+(** Per-user LLM provider key (auth.user-llm-keys). Not api_key (auth INTO PP). *)
+type llm_key_meta = {
+  last4 : string;
+  label : string option;
+  base : string option;
+  model : string option;
+}
+
+let last4_of_key (key : string) : string =
+  let n = String.length key in
+  if n <= 4 then key else String.sub key (n - 4) 4
+
+let set_llm_key (store : Store.t) ~(user_id : string) ~(api_key : string)
+    ?(base : string option = None) ?(model : string option = None)
+    ?(label : string option = None) () : (llm_key_meta, string) result Lwt.t =
+  if String.trim api_key = "" then
+    Lwt.return (Error "empty api_key")
+  else
+    match pg_conn store with
+    | None -> Lwt.return (Error "no database")
+    | Some conn ->
+        Lwt.catch
+          (fun () ->
+            let last4 = last4_of_key api_key in
+            let public_fields =
+              [ ("last4", `String last4) ]
+              @ (match label with Some l when l <> "" -> [ ("label", `String l) ] | _ -> [])
+              @ (match base with Some b when b <> "" -> [ ("base", `String b) ] | _ -> [])
+              @ (match model with Some m when m <> "" -> [ ("model", `String m) ] | _ -> [])
+            in
+            let public_json =
+              Yojson.Safe.to_string (`Assoc public_fields)
+            in
+            let secret_json =
+              Yojson.Safe.to_string
+                (`Assoc [ ("api_key", `String api_key) ])
+            in
+            let* _ =
+              Store.Pg.execute conn
+                ~params:[ Pgx.Value.of_string user_id ]
+                "DELETE FROM credentials WHERE user_id = $1::uuid AND kind = 'llm_key'"
+            in
+            let sql =
+              "INSERT INTO credentials (user_id, kind, public_data, secret_data) " ^
+              "VALUES ($1::uuid, 'llm_key', $2::jsonb, $3::jsonb)"
+            in
+            let* _ =
+              Store.Pg.execute conn
+                ~params:
+                  [ Pgx.Value.of_string user_id;
+                    Pgx.Value.of_string public_json;
+                    Pgx.Value.of_string secret_json ]
+                sql
+            in
+            Lwt.return
+              (Ok
+                 { last4;
+                   label;
+                   base;
+                   model }))
+          (fun exn ->
+            let msg = Printexc.to_string exn in
+            Printf.eprintf "[auth_store] set_llm_key: %s\n%!" msg;
+            Lwt.return (Error msg))
+
+let clear_llm_key (store : Store.t) ~(user_id : string)
+  : (unit, string) result Lwt.t =
+  match pg_conn store with
+  | None -> Lwt.return (Error "no database")
+  | Some conn ->
+      Lwt.catch
+        (fun () ->
+          let* _ =
+            Store.Pg.execute conn
+              ~params:[ Pgx.Value.of_string user_id ]
+              "DELETE FROM credentials WHERE user_id = $1::uuid AND kind = 'llm_key'"
+          in
+          Lwt.return (Ok ()))
+        (fun exn ->
+          let msg = Printexc.to_string exn in
+          Printf.eprintf "[auth_store] clear_llm_key: %s\n%!" msg;
+          Lwt.return (Error msg))
+
+let get_llm_key_meta (store : Store.t) ~(user_id : string)
+  : llm_key_meta option Lwt.t =
+  match pg_conn store with
+  | None -> Lwt.return_none
+  | Some conn ->
+      Lwt.catch
+        (fun () ->
+          let sql =
+            "SELECT public_data::text FROM credentials " ^
+            "WHERE user_id = $1::uuid AND kind = 'llm_key' " ^
+            "ORDER BY created_at DESC LIMIT 1"
+          in
+          let* rows =
+            Store.Pg.execute conn
+              ~params:[ Pgx.Value.of_string user_id ] sql
+          in
+          match rows with
+          | row :: _ ->
+              (match cell_string row 0 with
+               | None -> Lwt.return_none
+               | Some js ->
+                   (try
+                      match Yojson.Safe.from_string js with
+                      | `Assoc a ->
+                          let last4 =
+                            match List.assoc_opt "last4" a with
+                            | Some (`String s) -> s
+                            | _ -> "????"
+                          in
+                          let opt_str k =
+                            match List.assoc_opt k a with
+                            | Some (`String s) when s <> "" -> Some s
+                            | _ -> None
+                          in
+                          Lwt.return_some
+                            { last4;
+                              label = opt_str "label";
+                              base = opt_str "base";
+                              model = opt_str "model" }
+                      | _ -> Lwt.return_none
+                    with _ -> Lwt.return_none))
+          | [] -> Lwt.return_none)
+        (fun exn ->
+          Printf.eprintf "[auth_store] get_llm_key_meta: %s\n%!"
+            (Printexc.to_string exn);
+          Lwt.return_none)
+
+let get_llm_key_secret (store : Store.t) ~(user_id : string)
+  : (string * llm_key_meta) option Lwt.t =
+  match pg_conn store with
+  | None -> Lwt.return_none
+  | Some conn ->
+      Lwt.catch
+        (fun () ->
+          let sql =
+            "SELECT secret_data::text, public_data::text FROM credentials " ^
+            "WHERE user_id = $1::uuid AND kind = 'llm_key' " ^
+            "ORDER BY created_at DESC LIMIT 1"
+          in
+          let* rows =
+            Store.Pg.execute conn
+              ~params:[ Pgx.Value.of_string user_id ] sql
+          in
+          match rows with
+          | row :: _ ->
+              (match cell_string row 0, cell_string row 1 with
+               | Some secret_js, public_js_opt ->
+                   let key_opt =
+                     try
+                       match Yojson.Safe.from_string secret_js with
+                       | `Assoc a ->
+                           (match List.assoc_opt "api_key" a with
+                            | Some (`String k) when k <> "" -> Some k
+                            | _ -> None)
+                       | _ -> None
+                     with _ -> None
+                   in
+                   (match key_opt with
+                    | None -> Lwt.return_none
+                    | Some key ->
+                        let meta =
+                          match public_js_opt with
+                          | Some js ->
+                              (try
+                                 match Yojson.Safe.from_string js with
+                                 | `Assoc a ->
+                                     let last4 =
+                                       match List.assoc_opt "last4" a with
+                                       | Some (`String s) -> s
+                                       | _ -> last4_of_key key
+                                     in
+                                     let opt_str k =
+                                       match List.assoc_opt k a with
+                                       | Some (`String s) when s <> "" -> Some s
+                                       | _ -> None
+                                     in
+                                     { last4;
+                                       label = opt_str "label";
+                                       base = opt_str "base";
+                                       model = opt_str "model" }
+                                 | _ ->
+                                     { last4 = last4_of_key key;
+                                       label = None;
+                                       base = None;
+                                       model = None }
+                               with _ ->
+                                 { last4 = last4_of_key key;
+                                   label = None;
+                                   base = None;
+                                   model = None })
+                          | None ->
+                              { last4 = last4_of_key key;
+                                label = None;
+                                base = None;
+                                model = None }
+                        in
+                        Lwt.return_some (key, meta))
+               | _ -> Lwt.return_none)
+          | [] -> Lwt.return_none)
+        (fun exn ->
+          Printf.eprintf "[auth_store] get_llm_key_secret: %s\n%!"
+            (Printexc.to_string exn);
+          Lwt.return_none)
+
 let list_users (store : Store.t) : user list Lwt.t =
   match pg_conn store with
   | None -> Lwt.return []
