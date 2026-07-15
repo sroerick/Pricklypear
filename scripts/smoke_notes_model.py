@@ -80,7 +80,7 @@ def main() -> None:
     ).strip('"')
     assert_true(len(kid_id) > 0, f"kid id non-empty ({kid_id!r})")
 
-    # add-sibling
+    # add-sibling on CHILD
     ev(
         f'(notes/doc/upsert "{SLUG}" "UI Fixture" '
         f'(notes/outline/apply-op "{SLUG}" '
@@ -91,6 +91,23 @@ def main() -> None:
         f'(count (outline/kids (notes/doc/outline (notes/doc/get "{SLUG}"))))'
     )
     assert_true(kids2.strip('"') == "2", f"after add-sibling kids=2 (got {kids2})")
+
+    # add-sibling on ROOT = new top-level child (was silent no-op)
+    kids_before_root_sib = int(kids2.strip('"'))
+    ev(
+        f'(notes/doc/upsert "{SLUG}" "UI Fixture" '
+        f'(notes/outline/apply-op "{SLUG}" '
+        f'(notes/doc/outline (notes/doc/get "{SLUG}")) '
+        f'"add-sibling" "root") "" "note" "")'
+    )
+    kids_after_root_sib = int(ev(
+        f'(count (outline/kids (notes/doc/outline (notes/doc/get "{SLUG}"))))'
+    ).strip('"'))
+    assert_true(
+        kids_after_root_sib == kids_before_root_sib + 1,
+        f"sibling of root must add top-level kid "
+        f"({kids_before_root_sib}->{kids_after_root_sib})",
+    )
 
     id_a = ev(
         f'(outline/id (car (outline/kids '
