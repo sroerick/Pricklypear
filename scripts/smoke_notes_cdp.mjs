@@ -211,35 +211,90 @@ async function main() {
     const beforeN = before.result?.value ?? 0;
     ok(`nodes before=${beforeN}`);
 
-    // Select first non-root node by driving the same setSel path (force hidden id + class)
+    // Selection via TITLE click (contenteditable) — real user path; was broken.
     const sel = await send("Runtime.evaluate", {
       expression: `
         (function(){
           var nodes=[...document.querySelectorAll('.ol-node[data-id]')];
           var child=nodes.find(n=>n.dataset.id && n.dataset.id!=='root');
           if(!child) return 'no-child';
-          var id=child.dataset.id;
+          var title=child.querySelector(':scope > .ol-sum .ol-title') || child.querySelector('.ol-title');
+          if(!title) return 'no-title';
+          title.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true,view:window}));
+          title.dispatchEvent(new FocusEvent('focusin',{bubbles:true}));
           var hid=document.getElementById('ol-selected-id');
-          if(hid) hid.value=id;
           var lab=document.getElementById('ol-selected-label');
-          var t=child.querySelector('.ol-title');
-          if(lab) lab.textContent=(t&&t.innerText)?t.innerText.trim():id;
-          var rf=document.getElementById('ol-refile-nid'); if(rf) rf.value=id;
-          document.querySelectorAll('.ol-node.is-selected').forEach(function(n){n.classList.remove('is-selected');});
-          child.classList.add('is-selected');
-          // also click title row to exercise real handler
-          var sum=child.querySelector('.ol-sum');
-          if(sum) sum.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true}));
-          return JSON.stringify({id: hid&&hid.value, lab: lab&&lab.textContent, cls: child.className});
+          return JSON.stringify({id: hid&&hid.value, lab: lab&&lab.textContent, want: child.dataset.id});
         })()
       `,
       returnByValue: true,
     });
     {
       const v = sel.result?.value;
-      ok(`selected ${v}`);
-      if (v === "no-child") fail("no child to select");
+      ok(`selected via title ${v}`);
+      if (v === "no-child" || v === "no-title") fail(`select failed ${v}`);
+      let parsed;
+      try { parsed = JSON.parse(v); } catch { parsed = {}; }
+      if (parsed.id !== parsed.want)
+        fail(`title click did not select child (got ${parsed.id} want ${parsed.want})`);
     }
+
+    // Top-level +sib with root selected must grow root's children
+    await send("Runtime.evaluate", {
+      expression: `
+        (function(){
+          var root=document.querySelector('.ol-node[data-id=root]');
+          if(root){var t=root.querySelector(':scope > .ol-sum .ol-title'); if(t) t.click();}
+          document.getElementById('ol-selected-id').value='root';
+        })()
+      `,
+      returnByValue: true,
+    });
+    const kidsBeforeRootSib = parseInt(
+      String(
+        await evalApi(
+          `(str (count (outline/kids (notes/doc/outline (notes/doc/get "${SLUG}")))))`
+        )
+      ).replace(/"/g, ""),
+      10
+    );
+    await send("Runtime.evaluate", {
+      expression: `
+        (function(){
+          var btn=document.querySelector('.ol-toolbar [data-ol-op="add-sibling"]');
+          if(!btn) return 'no-btn';
+          btn.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true}));
+          return 'ok';
+        })()
+      `,
+      returnByValue: true,
+    });
+    await sleep(1500);
+    const kidsAfterRootSib = parseInt(
+      String(
+        await evalApi(
+          `(str (count (outline/kids (notes/doc/outline (notes/doc/get "${SLUG}")))))`
+        )
+      ).replace(/"/g, ""),
+      10
+    );
+    ok(`root +sib kids ${kidsBeforeRootSib}->${kidsAfterRootSib}`);
+    if (kidsAfterRootSib !== kidsBeforeRootSib + 1)
+      fail(`top-level sibling broken (${kidsBeforeRootSib}->${kidsAfterRootSib})`);
+
+    // Re-select first non-root for remaining ops
+    await send("Runtime.evaluate", {
+      expression: `
+        (function(){
+          var child=[...document.querySelectorAll('.ol-node')].find(n=>n.dataset.id&&n.dataset.id!=='root');
+          if(!child) return;
+          var t=child.querySelector('.ol-title');
+          if(t) t.click();
+          document.getElementById('ol-selected-id').value=child.dataset.id;
+        })()
+      `,
+      returnByValue: true,
+    });
 
     // Click toolbar +kid (desktop JS path)
     const click = await send("Runtime.evaluate", {

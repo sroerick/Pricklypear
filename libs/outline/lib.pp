@@ -169,7 +169,10 @@
 (define outline/insert-sibling-kids
   (lambda (tree id new-node)
     (if (string-eq (outline/id tree) id)
-        tree  ; can't add sibling to root
+        ;; Sibling of root = new top-level item under root (last child).
+        ;; Previously a silent no-op — felt like +sib was broken at top level.
+        (outline/set-kids tree
+          (append (outline/kids tree) (list new-node)))
         (outline/set-kids tree
           (outline/insert-sib-list (outline/kids tree) id new-node)))))
 
