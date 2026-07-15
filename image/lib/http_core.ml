@@ -915,3 +915,142 @@ let post_settings_keys (session : Session.t) (reqd : Httpaf.Reqd.t)
                redirect_response reqd "/settings/keys";
                Lwt.return_unit)
 
+let settings_ssh_page (session : Session.t) (reqd : Httpaf.Reqd.t)
+  : unit Lwt.t =
+  let username = Session.username session in
+  if username = "anonymous" then begin
+    redirect_response reqd "/login";
+    Lwt.return_unit
+  end else
+    let* user_opt =
+      Auth_store.get_user_by_username (Session.store session) username
+    in
+    match user_opt with
+    | None ->
+        redirect_response reqd "/login";
+        Lwt.return_unit
+    | Some user ->
+        let* keys =
+          Auth_store.list_ssh_keys (Session.store session)
+            ~user_id:user.Auth_store.id
+        in
+        let key_rows =
+          List.map
+            (fun (k : Auth_store.ssh_key_meta) ->
+              let label =
+                match k.label with Some l -> l | None -> ""
+              in
+              HTML.tr [] [
+                HTML.td [] [HTML.code [] [txt "%s" k.fingerprint]];
+                HTML.td [] [txt "%s" label];
+                HTML.td [] [
+                  HTML.form
+                    [ HTML.method_ `POST; HTML.action "/settings/ssh" ]
+                    [ HTML.input
+                        [ HTML.type_ "hidden"; HTML.name "action";
+                          HTML.value "revoke" ];
+                      HTML.input
+                        [ HTML.type_ "hidden"; HTML.name "id";
+                          HTML.value "%s" k.id ];
+                      HTML.button [HTML.type_ "submit"] [txt "Revoke"];
+                    ];
+                ];
+              ])
+            keys
+        in
+        let body =
+          chrome ~session ~title:"SSH keys" [
+            HTML.h1 [] [txt "SSH keys"];
+            HTML.p [HTML.class_ "muted"] [
+              txt "Register an OpenSSH public key for the REPL door (auth.user-ssh-repl).";
+            ];
+            HTML.div [HTML.class_ "card"] [
+              HTML.h2 [] [txt "Your keys"];
+              (if keys = [] then
+                 HTML.p [HTML.class_ "muted"] [txt "No keys yet."]
+               else
+                 HTML.table [] (
+                   HTML.thead [] [
+                     HTML.tr [] [
+                       HTML.th [] [txt "fingerprint"];
+                       HTML.th [] [txt "label"];
+                       HTML.th [] [txt ""];
+                     ];
+                   ]
+                   :: key_rows
+                 ));
+            ];
+            HTML.div [HTML.class_ "card"] [
+              HTML.h2 [] [txt "Add key"];
+              HTML.form [HTML.method_ `POST; HTML.action "/settings/ssh"] [
+                HTML.input [HTML.type_ "hidden"; HTML.name "action"; HTML.value "add"];
+                HTML.p [] [
+                  HTML.label [] [txt "OpenSSH public key"];
+                  HTML.textarea [HTML.name "openssh"; HTML.required] "%s" "";
+                ];
+                HTML.p [] [
+                  HTML.label [] [txt "Label (optional)"];
+                  HTML.input [HTML.type_ "text"; HTML.name "label"; HTML.placeholder "laptop"];
+                ];
+                HTML.button [HTML.type_ "submit"] [txt "Add key"];
+              ];
+            ];
+          ]
+        in
+        html_response reqd ~session body;
+        Lwt.return_unit
+
+let post_settings_ssh (session : Session.t) (reqd : Httpaf.Reqd.t)
+  : unit Lwt.t =
+  let username = Session.username session in
+  if username = "anonymous" then begin
+    redirect_response reqd "/login";
+    Lwt.return_unit
+  end else
+    let* user_opt =
+      Auth_store.get_user_by_username (Session.store session) username
+    in
+    match user_opt with
+    | None ->
+        redirect_response reqd "/login";
+        Lwt.return_unit
+    | Some user ->
+        let* body = read_body reqd in
+        let action =
+          Option.value (form_field body "action") ~default:"add" |> String.trim
+        in
+        if action = "revoke" then
+          let id =
+            Option.value (form_field body "id") ~default:"" |> String.trim
+          in
+          let* _r =
+            Auth_store.revoke_ssh_key (Session.store session)
+              ~user_id:user.Auth_store.id ~id_or_fingerprint:id
+          in
+          redirect_response reqd "/settings/ssh";
+          Lwt.return_unit
+        else
+          let openssh =
+            Option.value (form_field body "openssh") ~default:"" |> String.trim
+          in
+          let label =
+            match form_field body "label" with
+            | Some s when String.trim s <> "" -> Some (String.trim s)
+            | _ -> None
+          in
+          let* r =
+            Auth_store.add_ssh_key (Session.store session)
+              ~user_id:user.Auth_store.id ~openssh ~label ()
+          in
+          (match r with
+           | Error e ->
+               html_response reqd ~session ~status:`Bad_request
+                 (chrome ~session ~title:"SSH keys" [
+                    HTML.p [HTML.class_ "err"] [txt "%s" e];
+                    HTML.p [] [HTML.a [HTML.href "/settings/ssh"] [txt "Back"]];
+                  ]);
+               Lwt.return_unit
+           | Ok _ ->
+               redirect_response reqd "/settings/ssh";
+               Lwt.return_unit)
+

@@ -712,6 +712,86 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
           Lwt.return
             (Pricklypear_lisp.Ast.VStr "export-package: need package-str"));
 
+  (* SSH keys (auth.user-ssh-repl phase 1) *)
+  Primitives.register tbl "add-ssh-key"
+    (fun args ->
+      if t.manifest.username = "anonymous" then
+        Lwt.return (Pricklypear_lisp.Ast.VStr "add-ssh-key: denied for anonymous")
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr openssh ] ->
+            let* r =
+              Auth_store.add_ssh_key t.store ~user_id:t.manifest.user_id
+                ~openssh ()
+            in
+            (match r with
+             | Ok m ->
+                 Lwt.return (Pricklypear_lisp.Ast.VStr m.Auth_store.fingerprint)
+             | Error e ->
+                 Lwt.return (Pricklypear_lisp.Ast.VStr ("add-ssh-key: " ^ e)))
+        | [ Pricklypear_lisp.Ast.VStr openssh; Pricklypear_lisp.Ast.VStr label ] ->
+            let* r =
+              Auth_store.add_ssh_key t.store ~user_id:t.manifest.user_id
+                ~openssh ~label:(Some label) ()
+            in
+            (match r with
+             | Ok m ->
+                 Lwt.return (Pricklypear_lisp.Ast.VStr m.Auth_store.fingerprint)
+             | Error e ->
+                 Lwt.return (Pricklypear_lisp.Ast.VStr ("add-ssh-key: " ^ e)))
+        | _ ->
+            Lwt.return
+              (Pricklypear_lisp.Ast.VStr "add-ssh-key: need openssh-str [, label]"));
+
+  Primitives.register tbl "list-ssh-keys"
+    (fun _args ->
+      if t.manifest.username = "anonymous" then
+        Lwt.return (Pricklypear_lisp.Ast.VStr "list-ssh-keys: denied for anonymous")
+      else
+        let* keys =
+          Auth_store.list_ssh_keys t.store ~user_id:t.manifest.user_id
+        in
+        let vs =
+          List.map
+            (fun (k : Auth_store.ssh_key_meta) ->
+              Pricklypear_lisp.Ast.VStr k.fingerprint)
+            keys
+        in
+        Lwt.return (Pricklypear_lisp.Ast.VList vs));
+
+  Primitives.register tbl "revoke-ssh-key"
+    (fun args ->
+      if t.manifest.username = "anonymous" then
+        Lwt.return (Pricklypear_lisp.Ast.VStr "revoke-ssh-key: denied for anonymous")
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr id_or_fp ] ->
+            let* r =
+              Auth_store.revoke_ssh_key t.store ~user_id:t.manifest.user_id
+                ~id_or_fingerprint:id_or_fp
+            in
+            (match r with
+             | Ok () -> Lwt.return Pricklypear_lisp.Ast.VNil
+             | Error e ->
+                 Lwt.return (Pricklypear_lisp.Ast.VStr ("revoke-ssh-key: " ^ e)))
+        | _ ->
+            Lwt.return
+              (Pricklypear_lisp.Ast.VStr "revoke-ssh-key: need fingerprint-or-id"));
+
+  (* Smoke/admin: resolve openssh pubkey -> username | () *)
+  Primitives.register tbl "verify-ssh-key"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr openssh ] ->
+          let* u = Auth_store.verify_ssh_key t.store ~openssh_or_blob:openssh () in
+          (match u with
+           | Some user ->
+               Lwt.return (Pricklypear_lisp.Ast.VStr user.Auth_store.username)
+           | None -> Lwt.return Pricklypear_lisp.Ast.VNil)
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr "verify-ssh-key: need openssh-pubkey-str"));
+
   (* Per-user LLM keys (auth.user-llm-keys) *)
   Primitives.register tbl "set-llm-key"
     (fun args ->

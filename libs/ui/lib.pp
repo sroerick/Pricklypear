@@ -33,6 +33,7 @@
           (menu/link "branches" "/branches")
           (menu/link "analytics" "/analytics")
           (menu/link "llm keys" "/settings/keys")
+          (menu/link "ssh keys" "/settings/ssh")
           (menu/link "about" "/about")
           (menu/link "repl" "/repl"))))))
 

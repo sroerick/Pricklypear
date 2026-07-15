@@ -646,6 +646,223 @@ let get_llm_key_secret (store : Store.t) ~(user_id : string)
             (Printexc.to_string exn);
           Lwt.return_none)
 
+(** SSH public keys for REPL door (auth.user-ssh-repl phase 1). *)
+type ssh_key_meta = {
+  id : string;
+  fingerprint : string;
+  label : string option;
+  openssh : string;
+}
+
+let ssh_fingerprint (openssh : string) : string =
+  let open Digestif.SHA256 in
+  let dig = digest_string (String.trim openssh) |> to_raw_string in
+  let b64 = Base64.encode_string dig in
+  "SHA256:" ^ b64
+
+let parse_openssh_pubkey (s : string) : (string, string) result =
+  let s = String.trim s in
+  if s = "" then Error "empty key"
+  else
+    let parts =
+      String.split_on_char ' ' s |> List.filter (fun p -> p <> "")
+    in
+    match parts with
+    | typ :: _blob :: _ when String.starts_with ~prefix:"ssh-" typ ->
+        if typ = "ssh-ed25519" || typ = "ssh-rsa" || typ = "ecdsa-sha2-nistp256"
+        then Ok s
+        else Error ("unsupported key type: " ^ typ)
+    | _ -> Error "expected OpenSSH public key (ssh-ed25519 AAAA… [comment])"
+
+let add_ssh_key (store : Store.t) ~(user_id : string) ~(openssh : string)
+    ?(label : string option = None) () : (ssh_key_meta, string) result Lwt.t =
+  match parse_openssh_pubkey openssh with
+  | Error e -> Lwt.return (Error e)
+  | Ok openssh ->
+      match pg_conn store with
+      | None -> Lwt.return (Error "no database")
+      | Some conn ->
+          Lwt.catch
+            (fun () ->
+              let fp = ssh_fingerprint openssh in
+              let public_fields =
+                [ ("openssh", `String openssh)
+                ; ("fingerprint", `String fp)
+                ]
+                @ (match label with
+                   | Some l when l <> "" -> [ ("label", `String l) ]
+                   | _ -> [])
+              in
+              let public_json =
+                Yojson.Safe.to_string (`Assoc public_fields)
+              in
+              let sql =
+                "INSERT INTO credentials (user_id, kind, public_data, secret_data) " ^
+                "VALUES ($1::uuid, 'ssh_key', $2::jsonb, NULL) " ^
+                "RETURNING id::text"
+              in
+              let* rows =
+                Store.Pg.execute conn
+                  ~params:
+                    [ Pgx.Value.of_string user_id;
+                      Pgx.Value.of_string public_json ]
+                  sql
+              in
+              match rows with
+              | row :: _ ->
+                  (match cell_string row 0 with
+                   | Some id ->
+                       Lwt.return
+                         (Ok
+                            { id;
+                              fingerprint = fp;
+                              label;
+                              openssh })
+                   | None -> Lwt.return (Error "add_ssh_key: no id"))
+              | [] -> Lwt.return (Error "add_ssh_key: no row"))
+            (fun exn ->
+              let msg = Printexc.to_string exn in
+              Printf.eprintf "[auth_store] add_ssh_key: %s\n%!" msg;
+              Lwt.return (Error msg))
+
+let list_ssh_keys (store : Store.t) ~(user_id : string)
+  : ssh_key_meta list Lwt.t =
+  match pg_conn store with
+  | None -> Lwt.return []
+  | Some conn ->
+      Lwt.catch
+        (fun () ->
+          let sql =
+            "SELECT id::text, public_data::text FROM credentials " ^
+            "WHERE user_id = $1::uuid AND kind = 'ssh_key' " ^
+            "ORDER BY created_at"
+          in
+          let* rows =
+            Store.Pg.execute conn
+              ~params:[ Pgx.Value.of_string user_id ] sql
+          in
+          let metas =
+            List.filter_map
+              (fun row ->
+                match cell_string row 0, cell_string row 1 with
+                | Some id, Some js ->
+                    (try
+                       match Yojson.Safe.from_string js with
+                       | `Assoc a ->
+                           let openssh =
+                             match List.assoc_opt "openssh" a with
+                             | Some (`String s) -> s
+                             | _ -> ""
+                           in
+                           let fingerprint =
+                             match List.assoc_opt "fingerprint" a with
+                             | Some (`String s) -> s
+                             | _ -> ssh_fingerprint openssh
+                           in
+                           let label =
+                             match List.assoc_opt "label" a with
+                             | Some (`String s) when s <> "" -> Some s
+                             | _ -> None
+                           in
+                           if openssh = "" then None
+                           else Some { id; fingerprint; label; openssh }
+                       | _ -> None
+                     with _ -> None)
+                | _ -> None)
+              rows
+          in
+          Lwt.return metas)
+        (fun exn ->
+          Printf.eprintf "[auth_store] list_ssh_keys: %s\n%!"
+            (Printexc.to_string exn);
+          Lwt.return [])
+
+let revoke_ssh_key (store : Store.t) ~(user_id : string)
+    ~(id_or_fingerprint : string) : (unit, string) result Lwt.t =
+  match pg_conn store with
+  | None -> Lwt.return (Error "no database")
+  | Some conn ->
+      Lwt.catch
+        (fun () ->
+          (* Delete by credential id OR fingerprint match in public_data *)
+          let sql =
+            "DELETE FROM credentials WHERE user_id = $1::uuid AND kind = 'ssh_key' " ^
+            "AND (id::text = $2 OR public_data->>'fingerprint' = $2 " ^
+            "     OR public_data->>'openssh' = $2)"
+          in
+          let* _ =
+            Store.Pg.execute conn
+              ~params:
+                [ Pgx.Value.of_string user_id;
+                  Pgx.Value.of_string (String.trim id_or_fingerprint) ]
+              sql
+          in
+          Lwt.return (Ok ()))
+        (fun exn ->
+          let msg = Printexc.to_string exn in
+          Printf.eprintf "[auth_store] revoke_ssh_key: %s\n%!" msg;
+          Lwt.return (Error msg))
+
+let verify_ssh_key (store : Store.t) ~(openssh_or_blob : string)
+    ?source_ip () : user option Lwt.t =
+  match pg_conn store with
+  | None -> Lwt.return_none
+  | Some conn ->
+      Lwt.catch
+        (fun () ->
+          let presented = String.trim openssh_or_blob in
+          let fp = ssh_fingerprint presented in
+          let sql =
+            "SELECT u.id::text, u.username, u.is_admin::text, c.id::text " ^
+            "FROM credentials c JOIN users u ON u.id = c.user_id " ^
+            "WHERE c.kind = 'ssh_key' " ^
+            "AND (c.public_data->>'openssh' = $1 " ^
+            "     OR c.public_data->>'fingerprint' = $2) " ^
+            "LIMIT 1"
+          in
+          let* rows =
+            Store.Pg.execute conn
+              ~params:
+                [ Pgx.Value.of_string presented;
+                  Pgx.Value.of_string fp ]
+              sql
+          in
+          match rows with
+          | row :: _ ->
+              (match cell_string row 0, cell_string row 1 with
+               | Some id, Some uname ->
+                   let user =
+                     { id; username = uname; is_admin = cell_bool row 2 }
+                   in
+                   let* () =
+                     log_auth store ~user_id:id ~kind:"ssh_key" ~success:true
+                       ?source_ip ()
+                   in
+                   (match cell_string row 3 with
+                    | Some cid ->
+                        let* _ =
+                          Store.Pg.execute conn
+                            ~params:[ Pgx.Value.of_string cid ]
+                            "UPDATE credentials SET last_used_at = now() \
+                             WHERE id = $1::uuid"
+                        in
+                        Lwt.return_some user
+                    | None -> Lwt.return_some user)
+               | _ ->
+                   let* () =
+                     log_auth store ~kind:"ssh_key" ~success:false ?source_ip ()
+                   in
+                   Lwt.return_none)
+          | [] ->
+              let* () =
+                log_auth store ~kind:"ssh_key" ~success:false ?source_ip ()
+              in
+              Lwt.return_none)
+        (fun exn ->
+          Printf.eprintf "[auth_store] verify_ssh_key: %s\n%!"
+            (Printexc.to_string exn);
+          Lwt.return_none)
+
 let list_users (store : Store.t) : user list Lwt.t =
   match pg_conn store with
   | None -> Lwt.return []
