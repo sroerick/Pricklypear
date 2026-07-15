@@ -307,15 +307,16 @@
         (list "margin" "0" "display" "inline-flex" "width" "auto"))
       (css/rule "details.ol-actions"
         (list
-          "display" "none" "position" "absolute" "top" ".1rem" "right" "0"
-          "z-index" "3" "margin" "0"))
+          "display" "none" "position" "absolute" "top" "0" "right" "0"
+          "z-index" "5" "margin" "0"))
       (css/rule "details.ol-actions > summary.ol-actions-sum"
         (list
-          "display" "inline-block" "list-style" "none" "cursor" "pointer"
-          "user-select" "none" "width" "auto" "min-width" "1.75rem"
-          "min-height" "1.75rem" "padding" ".1rem .3rem" "border" "1px solid #666"
-          "background" "transparent" "font-weight" "700" "color" theme/muted
-          "text-align" "center" "line-height" "1.3"))
+          "display" "inline-flex" "align-items" "center" "justify-content" "center"
+          "list-style" "none" "cursor" "pointer"
+          "user-select" "none" "width" "auto" "min-width" "2.25rem"
+          "min-height" "2.25rem" "padding" ".2rem .35rem" "border" "1px solid #666"
+          "background" theme/chrome "font-weight" "700" "color" theme/ink
+          "text-align" "center" "line-height" "1.2"))
       (css/rule "details.ol-actions > summary.ol-actions-sum::-webkit-details-marker"
         (list "display" "none"))
       (css/rule "details.ol-actions > summary.ol-actions-sum:hover, details.ol-actions[open] > summary.ol-actions-sum"
@@ -634,8 +635,16 @@
             (list "display" "none"))
           (css/rule "details.ol-actions"
             (list "display" "block"))
+          (css/rule ".ol-sum"
+            (list "padding-right" "2.75rem")) ; room for ··· hit target
+          (css/rule "details.ol-actions[open] > .ol-actions-panel"
+            (list
+              "min-width" "9rem" "padding" ".35rem"
+              "box-shadow" "2px 2px 0 #808080"))
           (css/rule "details.ol-actions[open] > .ol-actions-panel .ol-btn"
-            (list "min-height" "2.1rem" "background" theme/panel))))))))
+            (list
+              "min-height" "2.4rem" "width" "100%" "margin" "0 0 .25rem"
+              "background" theme/panel "text-align" "left"))))))))
 
 
 ;; Nav layout + capture dropdown (formerly ui/nav-style inline <style>)
