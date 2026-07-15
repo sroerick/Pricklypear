@@ -663,37 +663,42 @@
 
 ;; --- node op handler ---
 
+(define notes/outline/new-node
+  (lambda ()
+    (outline/node (gensym "n") "New node")))
+
 (define notes/outline/apply-op
   (lambda (slug tree op nid)
-    (if (string-eq op "add-child")
-        (outline/add-child-by-id tree nid (outline/node "n-new" "New node"))
-        (if (string-eq op "add-sibling")
-            (outline/insert-sibling tree nid (outline/node "n-new" "New node"))
-            (if (string-eq op "delete")
-                (outline/delete tree nid)
-                (if (string-eq op "move-up")
-                    (outline/move-up tree nid)
-                    (if (string-eq op "move-down")
-                        (outline/move-down tree nid)
-                        (if (string-eq op "set-title")
-                            (outline/update tree nid
-                              (lambda (n) (outline/set-title n (request-param "title"))))
-                            (if (string-eq op "set-body")
-                                (outline/update tree nid
-                                  (lambda (n) (outline/set-body n (request-param "body"))))
-                                (if (string-eq op "set-todo")
-                                    (outline/update tree nid
-                                      (lambda (n) (outline/set-todo n (request-param "todo"))))
-                                    (if (string-eq op "cycle-todo")
-                                        (outline/update tree nid
-                                          (lambda (n) (outline/cycle-todo n)))
-                                        (if (string-eq op "archive")
-                                            (outline/update tree nid
-                                              (lambda (n) (outline/archive n)))
-                                            (if (string-eq op "unarchive")
-                                                (outline/update tree nid
-                                                  (lambda (n) (outline/unarchive n)))
-                                                tree)))))))))))))
+    (cond
+      ((string-eq op "add-child")
+       (outline/add-child-by-id tree nid (notes/outline/new-node)))
+      ((string-eq op "add-sibling")
+       (outline/insert-sibling tree nid (notes/outline/new-node)))
+      ((string-eq op "delete")
+       (outline/delete tree nid))
+      ((string-eq op "move-up")
+       (outline/move-up tree nid))
+      ((string-eq op "move-down")
+       (outline/move-down tree nid))
+      ((string-eq op "set-title")
+       (outline/update tree nid
+         (lambda (n) (outline/set-title n (request-param "title")))))
+      ((string-eq op "set-body")
+       (outline/update tree nid
+         (lambda (n) (outline/set-body n (request-param "body")))))
+      ((string-eq op "set-todo")
+       (outline/update tree nid
+         (lambda (n) (outline/set-todo n (request-param "todo")))))
+      ((string-eq op "cycle-todo")
+       (outline/update tree nid
+         (lambda (n) (outline/cycle-todo n))))
+      ((string-eq op "archive")
+       (outline/update tree nid
+         (lambda (n) (outline/archive n))))
+      ((string-eq op "unarchive")
+       (outline/update tree nid
+         (lambda (n) (outline/unarchive n))))
+      (else tree))))
 
 ;; (slug node-id title state)*
 (define notes/outline/all-todos
