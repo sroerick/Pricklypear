@@ -272,10 +272,109 @@ async function main() {
       `(outline/encode (notes/doc/outline (notes/doc/get "${SLUG}")))`
     );
     const encStr = String(enc);
-    // count "n$ or "root" id occurrences roughly via New node titles / n$
     const nMarks = (encStr.match(/n\$/g) || []).length;
     if (nMarks < 2) fail(`model expected >=2 generated nodes, got ${nMarks} in ${encStr.slice(0, 200)}`);
     ok(`model gen-nodes=${nMarks}`);
+
+    // --- more toolbar ops on selection ---
+    async function toolbar(op) {
+      const r = await send("Runtime.evaluate", {
+        expression: `
+          (function(){
+            var btn=document.querySelector('.ol-toolbar [data-ol-op="${op}"]');
+            if(!btn) return 'no-btn:${op}';
+            var sel=(document.getElementById('ol-selected-id')||{}).value;
+            btn.dispatchEvent(new MouseEvent('click',{bubbles:true,cancelable:true}));
+            return 'ok:'+sel;
+          })()
+        `,
+        returnByValue: true,
+      });
+      const v = r.result?.value || "";
+      if (!String(v).startsWith("ok:")) fail(`toolbar ${op} ${v}`);
+      await sleep(1200);
+      return v;
+    }
+
+    async function evalDom(expr) {
+      const r = await send("Runtime.evaluate", {
+        expression: expr,
+        returnByValue: true,
+      });
+      return r.result?.value;
+    }
+
+    // selection restored after swap?
+    const selAfterKid = await evalDom(
+      `(function(){var s=document.querySelector('.ol-node.is-selected');return s?s.dataset.id:'none';})()`
+    );
+    ok(`selection after +kid swap=${selAfterKid}`);
+    if (selAfterKid === "none") fail("selection lost after outline swap");
+
+    // cycle-todo
+    await toolbar("cycle-todo");
+    const todoCls = await evalDom(
+      `(function(){var s=document.querySelector('.ol-node.is-selected');return s?s.className:'none';})()`
+    );
+    ok(`after cycle-todo class=${todoCls}`);
+    if (!String(todoCls).includes("st-TODO") && !String(todoCls).includes("st-DONE"))
+      fail(`cycle-todo did not set state class (${todoCls})`);
+
+    // archive (default view hides ARCHIVED kids — assert model, not DOM class)
+    await toolbar("archive");
+    await sleep(500);
+    const encArch = String(
+      await evalApi(
+        `(outline/encode (notes/doc/outline (notes/doc/get "${SLUG}")))`
+      )
+    );
+    if (!encArch.includes("ARCHIVED"))
+      fail(`archive not in model: ${encArch.slice(0, 240)}`);
+    ok("archive reflected in model (hidden in default view)");
+
+    // unarchive (best-effort)
+    await toolbar("unarchive").catch(() => {});
+    await sleep(800);
+
+    // +sib then move-down
+    const nBeforeSib = await evalDom(`document.querySelectorAll('.ol-node').length`);
+    await toolbar("add-sibling");
+    const nAfterSib = await evalDom(`document.querySelectorAll('.ol-node').length`);
+    ok(`+sib nodes ${nBeforeSib}->${nAfterSib}`);
+    if (nAfterSib <= nBeforeSib) fail("+sib did not add node");
+
+    await toolbar("move-down");
+    await toolbar("move-up");
+    ok("move-down/up clicked");
+
+    // delete selection (not root)
+    const nBeforeDel = await evalDom(`document.querySelectorAll('.ol-node').length`);
+    // ensure selection is not root
+    await send("Runtime.evaluate", {
+      expression: `
+        (function(){
+          var s=document.querySelector('.ol-node.is-selected');
+          if(s && s.dataset.id==='root'){
+            var c=[...document.querySelectorAll('.ol-node')].find(n=>n.dataset.id&&n.dataset.id!=='root');
+            if(c){document.getElementById('ol-selected-id').value=c.dataset.id;c.classList.add('is-selected');}
+          }
+          // auto-confirm delete
+          window.confirm=function(){return true;};
+          return document.getElementById('ol-selected-id').value;
+        })()
+      `,
+      returnByValue: true,
+    });
+    await toolbar("delete");
+    const nAfterDel = await evalDom(`document.querySelectorAll('.ol-node').length`);
+    ok(`delete nodes ${nBeforeDel}->${nAfterDel}`);
+    if (nAfterDel >= nBeforeDel) fail("delete did not remove a node");
+
+    // selection still present after delete swap
+    const selAfterDel = await evalDom(
+      `(function(){return document.getElementById('ol-selected-id')?document.getElementById('ol-selected-id').value:'none';})()`
+    );
+    ok(`selection id after delete=${selAfterDel}`);
 
     // Screenshot
     const shot = await send("Page.captureScreenshot", { format: "png" });
@@ -298,7 +397,6 @@ async function main() {
     });
     ok(`toolbar computed ${sticky.result?.value}`);
     if (!String(sticky.result?.value || "").includes("sticky")) {
-      // mobile hide? desktop should be sticky
       console.warn("WARN toolbar not sticky (maybe narrow viewport)");
     }
 
