@@ -330,7 +330,12 @@ async function main() {
     );
     if (!encArch.includes("ARCHIVED"))
       fail(`archive not in model: ${encArch.slice(0, 240)}`);
-    ok("archive reflected in model (hidden in default view)");
+    ok("archive reflected in model");
+    // Archived kids stay visible (dimmed); ensure DOM still has selection or node
+    const archDom = await evalDom(
+      `(function(){return document.querySelector('.st-ARCHIVED')?'yes':'no';})()`
+    );
+    ok(`archive visible in DOM=${archDom}`);
 
     // unarchive (best-effort)
     await toolbar("unarchive").catch(() => {});

@@ -157,6 +157,48 @@ def main() -> None:
     ).strip('"'))
     assert_true(after == before - 1, f"delete removed kid ({before}->{after})")
 
+    # delete root must NOT wipe tree
+    root_title = ev(
+        f'(outline/title (notes/doc/outline (notes/doc/get "{SLUG}")))'
+    ).strip('"')
+    ev(
+        f'(notes/doc/upsert "{SLUG}" "UI Fixture" '
+        f'(notes/outline/apply-op "{SLUG}" '
+        f'(notes/doc/outline (notes/doc/get "{SLUG}")) '
+        f'"delete" "root") "" "note" "")'
+    )
+    root_title2 = ev(
+        f'(outline/title (notes/doc/outline (notes/doc/get "{SLUG}")))'
+    ).strip('"')
+    kids_r = ev(
+        f'(count (outline/kids (notes/doc/outline (notes/doc/get "{SLUG}"))))'
+    ).strip('"')
+    assert_true(
+        root_title2 == root_title and root_title2 != "Untitled",
+        f"delete root must keep tree (title {root_title!r}->{root_title2!r} kids={kids_r})",
+    )
+
+    # archive keeps node in tree (visible)
+    kid2 = ev(
+        f'(outline/id (car (outline/kids '
+        f'(notes/doc/outline (notes/doc/get "{SLUG}")))))'
+    ).strip('"')
+    if kid2:
+        ev(
+            f'(notes/doc/upsert "{SLUG}" "UI Fixture" '
+            f'(notes/outline/apply-op "{SLUG}" '
+            f'(notes/doc/outline (notes/doc/get "{SLUG}")) '
+            f'"archive" "{kid2}") "" "note" "")'
+        )
+        enc = ev(
+            f'(outline/encode (notes/doc/outline (notes/doc/get "{SLUG}")))'
+        )
+        assert_true("ARCHIVED" in enc, f"archive sets ARCHIVED ({enc[:120]})")
+        kids_a = int(ev(
+            f'(count (outline/kids (notes/doc/outline (notes/doc/get "{SLUG}"))))'
+        ).strip('"'))
+        assert_true(kids_a >= 1, f"archive must not remove kid (kids={kids_a})")
+
     print("SMOKE_NOTES_MODEL OK")
 
 
