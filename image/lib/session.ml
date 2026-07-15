@@ -551,6 +551,23 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
       in
       Lwt.return (Pricklypear_lisp.Ast.VList names));
 
+  (* (list-usernames) -> VList of VStr; any authenticated user.
+     Usernames are public identifiers on the box (multi-user.chat DMs). *)
+  Primitives.register tbl "list-usernames"
+    (fun _args ->
+      if t.manifest.username = "anonymous" then
+        Lwt.return
+          (Pricklypear_lisp.Ast.VStr "list-usernames: denied for anonymous")
+      else
+        let* users = Auth_store.list_users t.store in
+        let names =
+          List.map
+            (fun (u : Auth_store.user) ->
+              Pricklypear_lisp.Ast.VStr u.Auth_store.username)
+            users
+        in
+        Lwt.return (Pricklypear_lisp.Ast.VList names));
+
   (* (current-branch) -> VStr *)
   Primitives.register_sync tbl "current-branch"
     (fun _ -> Pricklypear_lisp.Ast.VStr t.manifest.branch_name);
@@ -1013,6 +1030,8 @@ and seed_stdlib (t : t) : unit Lwt.t =
     let* () = seed_one t "signup" in
     let* () = seed_one t "todo" in
     let* () = seed_one t "contacts" in
+    let* () = seed_one t "plan" in
+    let* () = seed_one t "chat" in
     let* () = seed_one t "bookmarks" in
     let* () = seed_one t "calendar" in
     let* () = seed_one t "flashcards" in

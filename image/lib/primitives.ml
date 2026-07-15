@@ -205,6 +205,7 @@ let prim_summary (name : string) : string =
   | "whoami" | "current-author" -> "session identity"
   | "list-bindings" -> "names in env"
   | "list-branches" -> "list branch refs"
+  | "list-usernames" -> "list usernames (authenticated; for chat/DM picker)"
   | "current-branch" -> "current branch name"
   | "fork" -> "fork a branch"
   | "merge" -> "merge branches"
