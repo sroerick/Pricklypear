@@ -321,7 +321,7 @@ let agent_tool_defs : Llm_client.tool_def list =
     }
   ; { name = "install_function"
     ; description =
-        "Install a Lisp function on the current branch. body must be a lambda s-expression only, e.g. (lambda (x) (* x 2)) or (lambda () (html/page ...)). Do not put (route ...) in the body — use register_route. Author becomes agent:<model>."
+        "Install a Lisp function on the current branch. body must be a lambda s-expression only, e.g. (lambda (x) (* x 2)) or (lambda () (html/page ...)). Install only parses+binds the lambda — it does NOT run the body. After install: register_route (if page), then smoke_route and/or eval_expr until ok:true. For chrome CSS (ui/css, ui/theme, layout/theme) prove with eval_expr (string-contains? (ui/css) \"...\"). Do not put (route ...) in the body — use register_route. Author becomes agent:<model>."
     ; parameters =
         obj
           [ ("name",
@@ -357,7 +357,7 @@ let agent_tool_defs : Llm_client.tool_def list =
     }
   ; { name = "eval_expr"
     ; description =
-        "Evaluate a short Lisp expression in this image (same env as the branch). Use for smoke checks like (count (contacts/all)) or (contacts/name (cdr (car (contacts/all)))). Returns the printed value or an error. Prefer small expressions; no multi-form progn dumps."
+        "Evaluate a short Lisp expression in this image (same env as the branch). Use to prove non-route work actually runs: (count (contacts/all)), (type-of ui/css), (string-contains? (ui/css) \"#2d5a27\"), ((pkg/helper)). Install alone is not enough. Returns printed value or error. Prefer small expressions; no multi-form progn dumps."
     ; parameters =
         obj
           [ ("expr",
@@ -370,7 +370,7 @@ let agent_tool_defs : Llm_client.tool_def list =
     }
   ; { name = "smoke_route"
     ; description =
-        "Call a registered user route handler in-process (no real HTTP). method GET|POST; optional form/query params as a JSON object of strings; optional contains substring that must appear in the HTML/text result (or redirect Location). Use after register_route to verify wiring: smoke_route path=/contacts method=GET contains=Contacts. On failure, inspect_function the handler, fix with install_function, re-smoke."
+        "REQUIRED proof that a page runs. Call a registered user route handler in-process (no real HTTP). method GET|POST; optional form/query params as a JSON object of strings; optional contains substring that must appear in the HTML/text result (or redirect Location). Always smoke after install_function+register_route of a page handler. Example: smoke_route path=/contacts method=GET contains=Contacts. On failure: html_helpers, inspect_function, fix install_function, re-smoke until ok:true. Do not claim success without a successful smoke_route for that path."
     ; parameters =
         obj
           [ ("path",
@@ -887,6 +887,12 @@ let default_agent_seed (t : t) : string =
   "Tools: image_context, list_bindings, list_routes, inspect_function, " ^
   "install_function, register_route, smoke_route, eval_expr, html_helpers.\n" ^
   "\n" ^
+  "CRITICAL — no compile step; install is not proof:\n" ^
+  "- install_function only parses + binds a lambda. It does NOT run the body.\n" ^
+  "- A green install (\"installed X [pure]\") is NEVER enough to claim success.\n" ^
+  "- You MUST prove work runs with smoke_route (pages) and/or eval_expr " ^
+  "(helpers, CSS, data) before finishing. If you cannot show ok:true, say so.\n" ^
+  "\n" ^
   "How to build a small app (dogfood pattern — copy todo/notes style):\n" ^
   "1) Persist with create/rows/get/update/delete on data_rows. " ^
   "Build fields JSON with (dict-set* \"{}\" (list \"name\" n \"email\" e ...)). " ^
@@ -905,10 +911,22 @@ let default_agent_seed (t : t) : string =
   "7) Inspect working apps first: inspect_function todo/page, notes/page, " ^
   "todo/item/add, html/form.\n" ^
   "\n" ^
-  "Test loop (required for apps):\n" ^
-  "8) After register_route, smoke_route path=/app method=GET contains=Title.\n" ^
-  "9) Data: eval_expr (count (pkg/all)); POST via smoke_route params then GET.\n" ^
-  "10) If smoke fails: call html_helpers, inspect_function, fix install_function, re-smoke until ok:true.\n" ^
+  "Definition of done (required — do not skip):\n" ^
+  "8) Pages: after install_function + register_route, smoke_route path=/app " ^
+  "method=GET contains=<visible title or unique marker>. Must return ok:true.\n" ^
+  "9) Data / helpers: eval_expr e.g. (count (pkg/all)) or ((pkg/helper arg)) " ^
+  "and confirm the value. POST via smoke_route params then GET again.\n" ^
+  "10) CSS / chrome: product chrome uses (ui/css), NOT only layout/theme. " ^
+  "If the task is theming or global style, install into ui/css and/or " ^
+  "ui/theme (or compose layout/theme into ui/css). Prove with:\n" ^
+  "    eval_expr (string-contains? (ui/css) \"<unique token>\")\n" ^
+  "    and smoke_route path=/ method=GET contains=<token or class>.\n" ^
+  "    Do NOT only edit layout/theme and claim the site is themed.\n" ^
+  "11) If smoke/eval fails: html_helpers, inspect_function, fix " ^
+  "install_function, re-smoke/re-eval until ok:true. Never finish on a " ^
+  "failed smoke with a confident success message.\n" ^
+  "12) Final message must name the smoke_route / eval_expr proofs you ran " ^
+  "(path + contains, or expression + result). No proofs → not done.\n" ^
   "\n" ^
   "HTML: call html_helpers before install_function of *page/*form/*list* bodies.\n" ^
   "Tool discipline:\n" ^
@@ -916,7 +934,7 @@ let default_agent_seed (t : t) : string =
   "- install_function body = one lambda s-expression only, no prose/markdown.\n" ^
   "- Batch multiple tool calls in one turn when possible.\n" ^
   "- Prefer package/name names (contacts/page).\n" ^
-  "- When finished, SHORT text summary and NO tool calls.\n" ^
+  "- When finished, SHORT text summary listing proofs, and NO tool calls.\n" ^
   "- Do not invent bindings; use list_bindings / inspect_function."
 
 let agent_session_new
