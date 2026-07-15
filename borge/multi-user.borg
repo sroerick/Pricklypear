@@ -3,7 +3,10 @@
         Process-per-user isolation (this chapter) + auth identity
         (auth.borg multi-user-product) are the complete multi-user
         system. single-image.borg is about shipping ONE binary, not
-        one human. Do not read single-image as cancelling multi-user.")
+        one human. Do not read single-image as cancelling multi-user.
+        Access surfaces that ship on cotenant first: user subdomains,
+        per-user LLM keys, SSH→REPL (auth.user-subdomains /
+        user-llm-keys / user-ssh-repl).")
  (status partial)
  (convention ocaml-dune)
  (section multi-user
@@ -159,7 +162,261 @@
          we wanted a Lisp-machine feel (shared trusted
          environment), we'd pick differently, but
          SSH-first implies Unix-style multi-user.
+
+         SOCIAL LAYER (chat + plan) uses SHARED data_rows
+         (existing storage rule) with handler-enforced
+         filters by (whoami). That is intentional: messages
+         and plans are multi-user objects, not personal-branch
+         pins. Branch gardens stay code/UI; social state is
+         rows. See multi-user.chat and multi-user.user-plan.
    |))
+   )
+  )
+  (subsection chat
+   (doc "Multi-user chat: site lobby + DMs so humans on the box can talk")
+   (status planned)
+   (implements libs/chat/lib.pp image/lib/http.ml)
+   (verify
+    (build "dune build image")
+    (smoke "alice and bob post to /chat lobby; each sees both messages")
+    (smoke "alice DM to bob visible to both; not to carol")
+    (smoke "unauth /chat redirects login; public face does not leak messages")
+    (smoke "(chat/say \"hi\") and (chat/inbox) work via /api/eval"))
+   (details
+    (doc (|
+         ==========================================================
+         0. WHY
+         ==========================================================
+
+         Multi-user is not only isolation — people on the same
+         habitat need a way to talk. Chat is a first-class
+         product surface (like notes/todo), not an external app.
+         Agents authenticated as users may post too (same
+         identity rules).
+
+         ==========================================================
+         1. SHAPE (v1)
+         ==========================================================
+
+         Two conversation kinds:
+
+           A. LOBBY (site-wide room)
+              room_id = "lobby" (singleton)
+              All authenticated users can read/write.
+              Default /chat UI.
+
+           B. DM (direct message thread)
+              room_id = canonical pair key:
+                dm:alice:bob  where alice < bob lexicographically
+              Participants = the two usernames only.
+              List/create from /chat/dm or (chat/dm "bob").
+
+         Out of scope v1:
+           - Arbitrary named rooms / channels (phase 2)
+           - WebSockets / SSE push (htmx poll is enough)
+           - File attachments, reactions, threads, edit history
+           - End-to-end encryption
+           - Cross-deployment federation
+
+         ==========================================================
+         2. DATA (shared data_rows)
+         ==========================================================
+
+         Package libs/chat seeds:
+
+           (deftype 'chat-room
+             'kind          ; "lobby" | "dm"
+             'room_id       ; "lobby" | "dm:a:b"
+             'title         ; display
+             'members       ; JSON array of usernames; lobby = []
+             'created_by
+             'created_at)   ; ISO string from Lisp or server
+
+           (deftype 'chat-message
+             'room_id
+             'from          ; username (whoami at post)
+             'body          ; plain text (escape on render)
+             'created_at)
+
+         data_rows are SHARED across branches (storage rule).
+         Access control is in chat/* handlers:
+           - post: from MUST equal (whoami); reject spoof
+           - list lobby: any authenticated user
+           - list dm: whoami is member
+           - create dm room: both users must exist
+
+         Retention v1: keep all messages (personal OS scale).
+         Optional later: max list limit + archive.
+
+         Seed: ensure lobby room row exists on load-library
+         (idempotent create-if-missing).
+
+         ==========================================================
+         3. LISP API (libs/chat)
+         ==========================================================
+
+           (chat/say body)              ; post to lobby as whoami
+           (chat/say-in room_id body)   ; post to room if allowed
+           (chat/lobby [limit])         ; recent lobby messages
+           (chat/history room_id [limit])
+           (chat/dm peer)               ; ensure dm room; return room_id
+           (chat/dms)                   ; rooms where whoami is member
+           (chat/users)                 ; list usernames (for DM picker)
+                                        ; needs thin OCaml prim
+                                        ; (list-usernames) for any authed
+
+         New OCaml prim if missing (image):
+           (list-usernames) → VList of VStr
+             authenticated only; usernames are public identifiers
+             on the box (no email/admin leak).
+
+         ==========================================================
+         4. HTTP / HTMX UI
+         ==========================================================
+
+         Routes (private by default — auth required):
+
+           GET  /chat              lobby page
+           GET  /chat/partial      message list fragment (poll)
+           POST /chat/say          body=text → append + refresh
+           GET  /chat/dm           list DM threads
+           GET  /chat/dm/:peer     DM thread with peer
+           POST /chat/dm/:peer     send DM
+
+         Polling: hx-get /chat/partial hx-trigger every 3s-5s.
+         No WebSocket in v1.
+
+         Chrome: ui/nav link Chat when package loaded.
+         Render: escape body text; show from + time + body.
+         Empty state: Say hi to the box.
+
+         ==========================================================
+         5. SECURITY / POLICY
+         ==========================================================
+
+         - No anonymous chat (kernel private routes)
+         - Body max length (e.g. 4k chars) enforced in chat/say
+         - Rate: soft — eval budget enough for v1
+         - XSS: escape user body on render; never raw untrusted HTML
+         - Spoof: ignore client-supplied from; always whoami
+
+         ==========================================================
+         6. PHASES
+         ==========================================================
+
+         Phase 1: deftype + lobby say/history + /chat UI poll
+         Phase 2: DMs + list-usernames + /chat/dm
+         Phase 3: nav seed, optional presence / unread
+
+         Success: two browser sessions (alice, bob) talk in
+         lobby without leaving the habitat; agent as alice can
+         (chat/say "deployed") visible to bob.
+    |))
+   )
+  )
+  (subsection user-plan
+   (doc "Unix-style .plan: short per-user status of what they intend to work on")
+   (status planned)
+   (implements libs/plan/lib.pp)
+   (verify
+    (build "dune build image")
+    (smoke "(plan \"macros + chat\") sets alice plan; (plan-of \"alice\") returns it")
+    (smoke "GET /u/alice shows plan text; bob can read alice plan")
+    (smoke "only owner can set own plan; bob cannot set alice")
+    (smoke "empty plan shows friendly placeholder"))
+   (details
+    (doc (|
+         ==========================================================
+         0. WHY (finger / .plan)
+         ==========================================================
+
+         Classic Unix: each user has a ~/.plan file; finger(1)
+         shows it. On a multi-user Lisp OS this is the lightest
+         coordination tool — not a task tracker (todo exists),
+         not chat, just what I'm working on / intend next.
+
+         Complements chat: plan is sticky status; chat is
+         conversation.
+
+         ==========================================================
+         1. DATA
+         ==========================================================
+
+         (deftype 'user-plan
+           'username      ; owner; unique logical key
+           'body          ; free text (plain)
+           'updated_at)   ; ISO string
+
+         One logical plan per username. Implementation:
+           find existing row where username matches whoami;
+           update body + updated_at, or create if missing.
+         Shared data_rows; filter by username field.
+
+         Optional later: project / until date — not v1.
+
+         ==========================================================
+         2. LISP API (libs/plan)
+         ==========================================================
+
+           (plan body)           ; set MY plan (whoami); return body
+           (plan)                ; get MY plan body or empty string
+           (plan-of user)        ; get that user's plan body or empty
+           (plan-clear)          ; set my body to empty
+           (plan-list)           ; list of (username . body) for
+                                 ; users with non-empty plans
+
+         Spoof: (plan) always writes username=(whoami).
+         There is no (plan-as other body).
+
+         ==========================================================
+         3. HTTP UI
+         ==========================================================
+
+         Private (auth required) unless noted:
+
+           GET  /plan              edit-or-view MY plan form
+           POST /plan              save body
+           GET  /plans             directory: who has a plan set
+           GET  /u/:username       profile stub: username +
+                                   plan body + updated_at +
+                                   link to garden subdomain if
+                                   auth.user-subdomains on
+                                   (finger alice)
+
+         Public option (phase 2, with route-visibility):
+           public /u/:user so plans can be world-readable like
+           classic finger. v1: authenticated users on the box only.
+
+         Chrome: show MY plan one-liner under whoami in header
+         or on home (ui/home snippet) — optional phase 2.
+         Nav: Plan → /plan; People → /plans.
+
+         ==========================================================
+         4. UX COPY
+         ==========================================================
+
+         Placeholder when empty:
+           No plan yet. What are you working on?
+
+         Form label:
+           Your plan (like a Unix .plan file)
+
+         Help text:
+           Short note other users on this box can read.
+           Examples: shipping macros, out until Thursday.
+
+         ==========================================================
+         5. PHASES
+         ==========================================================
+
+         Phase 1: deftype + plan/plan-of/plan-list + /plan + /u/:user
+         Phase 2: /plans directory + home/chrome snippet
+         Phase 3: optional public /u/:user; subdomain profile page
+
+         Success: alice sets plan macros + multi-user chat;
+         bob opens /u/alice and knows what she's doing; chat
+         stays for the actual conversation.
+    |))
    )
   )
  )

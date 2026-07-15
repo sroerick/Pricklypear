@@ -34,7 +34,10 @@
         3. Lisp-1, homoiconic. The AST is the source. Functions
            persist as JSONB. Editing the AST is editing the
            code. Closures, let, lambda, application are first-
-           class; macros can come later.
+           class. Macros (defmacro + quasiquote) are specified
+           under lisp-interpreter.macros — unhygienic v1 with
+           gensym; expand at use and at define/load; store
+           source AST with macro call sites.
 
         4. Two-tier change model. OCaml (primitives, HTTP, store,
            auth gate) changes slowly via rebuild/deploy. Lisp

@@ -59,11 +59,12 @@
                   is_admin bool, created_at timestamptz)
 
            credentials (id uuid PK, user_id uuid FK,
-                        kind text,        -- 'ssh_key'|'password'|'web_token'|'api_key'
-                        public_data jsonb,  -- SSH key material for verification;
+                        kind text,        -- 'ssh_key'|'password'|'web_token'|'api_key'|'llm_key'
+                        public_data jsonb,  -- SSH key material / llm last4+meta;
                                             -- null for password (hash is secret)
                         secret_data jsonb,   -- argon2 hash for password;
-                                            -- reference for api_key
+                                            -- api_key token hash/reference;
+                                            -- llm_key provider secret (never list)
                         created_at timestamptz,
                         last_used_at timestamptz)
 
@@ -366,6 +367,36 @@
            fork/merge mid-task. Author may be agent:<model> with
            provenance; capability still runs as the user.
 
+         US-SUBDOMAIN — Personal host name
+           Each user has a stable URL on a wildcard base domain:
+             https://{username}.{PP_BASE_DOMAIN}/
+           After login Alice lands on her subdomain (or is
+           redirected there). Private work and public garden
+           pages resolve against her branch chain. See
+           auth.user-subdomains.
+
+         US-LLM-KEY — Bring your own model key
+           Each user may store an LLM provider key (credentials
+           kind llm_key). AI prims (propose-function, llm-*) use
+           the session user's key; operator env LLM_API_KEY is
+           fallback only. See auth.user-llm-keys.
+
+         US-SSH-REPL — Key-based shell into my image
+           User registers an SSH public key (credentials kind
+           ssh_key). Real SSH (or approved OpenBSD ForceCommand
+           bridge) authenticates the key, attaches identity,
+           opens the Lisp REPL on <user>/personal. See
+           auth.user-ssh-repl.
+
+         US-CHAT — Talk to other humans on the box
+           Authenticated users share a lobby and DMs
+           (multi-user.chat). (chat/say …) / /chat. Not email;
+           same-deployment only.
+
+         US-PLAN — Unix .plan status
+           Each user sets a short sticky plan (multi-user.user-plan).
+           (plan "…") / /plan / /u/:user (finger). Complements chat.
+
          US-ISOLATION — Process isolation (complete multi-user)
            Logging in boots or attaches that user's image process
            (supervisor fleet; multi-user.isolation). Alice's wedge
@@ -398,17 +429,23 @@
          ============================================================
 
          1. Deploy; bootstrap admin.
-         2. Admin opens https://host/ → /login → signs in →
-            admin/personal home.
+         2. Admin opens https://{PP_BASE_DOMAIN}/ → /login →
+            signs in → redirect https://admin.{PP_BASE_DOMAIN}/
+            on admin/personal.
          3. Admin creates user "alice" + password.
-         4. Alice signs in → alice/personal (empty garden),
-            inherits system/main tools.
-         5. Alice edits ui/menu → pin on alice/personal only.
-         6. Bob signs in → bob/personal; does not see Alice's pin
-            as own; may inherit same main defaults.
-         7. Agent with Alice session installs helper → alice/personal.
-         8. Alice logout; cookie dead.
-         9. With fleet: Alice's image process is hers; Bob's is his.
+         4. Alice signs in → https://alice.{PP_BASE_DOMAIN}/
+            on alice/personal (empty garden), inherits main.
+         5. Alice pastes her LLM key in /settings/keys; AI tools
+            bill her provider, not the operator's env key.
+         6. Alice registers ~/.ssh/id_ed25519.pub; later
+            `ssh alice@host -p PP_SSH_PORT` opens her REPL.
+         7. Alice edits ui/menu → pin on alice/personal only.
+         8. Bob signs in on bob.* → bob/personal; no Alice pins.
+         9. Agent with Alice session/API key installs → alice/personal.
+         10. Alice logout; cookie dead on her host.
+         11. With fleet (later): Alice's process is hers; Bob's is his.
+             Cotenant single-image remains valid for v1 of
+             subdomain + keys (identity per request / SSH session).
 
          ============================================================
          OBJECTS (complete)
@@ -417,7 +454,10 @@
          users(id, username UNIQUE, is_admin, created_at)
          credentials(id, user_id, kind, public_data, secret_data,
                      created_at, last_used_at)
-           kind: password | api_key | ssh_key | …
+           kind: password | api_key | ssh_key | llm_key | …
+           ssh_key.public_data: { "openssh": "ssh-ed25519 AAAA… comment" }
+           llm_key.secret_data: { "api_key": "…" }  (* never echo back *)
+           llm_key.public_data: { "last4": "…", "base"?: url, "model"?: str }
          auth_sessions(id, user_id, token_hash, expires_at,
                        created_at, revoked_at, user_agent, source_ip)
          auth_log(id, user_id NULL, kind, success, source_ip,
@@ -497,6 +537,438 @@
          - Email magic links (unless added later as a credential kind)
          - Sharing one password (htpasswd) among humans as the
            permanent multi-user model
+         - Per-user process isolation as a blocker for subdomain/
+           llm_key/ssh_key (those ship on cotenant single-image first)
+         - Custom domains per user (only {user}.{PP_BASE_DOMAIN} v1)
+    |))
+   )
+  )
+  (subsection user-subdomains
+   (doc "Per-user Host: {username}.{PP_BASE_DOMAIN} as personal garden URL")
+   (status planned)
+   (implements image/lib/http.ml image/lib/http_core.ml image/lib/session.ml)
+   (verify
+    (build "dune build image")
+    (smoke "Host: alice.example → garden context username=alice")
+    (smoke "logged-in alice on alice.example sees alice/personal")
+    (smoke "logged-in alice on bob.example cannot write bob garden")
+    (smoke "apex base domain serves welcome/login; post-login redirects to user host"))
+   (details
+    (doc (|
+         ==========================================================
+         1. WHY
+         ==========================================================
+
+         Multi-user needs stable personal URLs, not only paths:
+           https://alice.pp.example/     Alice's computer
+           https://bob.pp.example/       Bob's computer
+           https://pp.example/           apex: welcome + login
+
+         Subdomains make gardens shareable, cookie-scoped, and
+         legible ("this tab is Alice"). They do NOT require a
+         process-per-user fleet: single-image cotenant resolves
+         Host → garden owner on each request.
+
+         ==========================================================
+         2. CONFIG
+         ==========================================================
+
+         PP_BASE_DOMAIN   e.g. pp.example or pricklypear.local
+                          empty/unset → subdomain feature OFF;
+                          all hosts behave as today (path-only).
+
+         Optional:
+         PP_APEX_HOSTS    comma list extra apex names (www.)
+         Cookie: when base domain set, session cookie Domain=
+         .{PP_BASE_DOMAIN} so login on apex works on subdomains.
+         When unset, cookie stays host-only (current behavior).
+
+         TLS/DNS (ops, not OCaml):
+           - Wildcard DNS *.PP_BASE_DOMAIN → edge
+           - Wildcard cert (acme) or multi-SAN
+           - nginx/relayd: server_name _.PP_BASE_DOMAIN; proxy
+             to single image loopback (v1). No per-user upstream.
+
+         ==========================================================
+         3. HOST PARSE (image gate)
+         ==========================================================
+
+         On each request, parse Host header (strip port):
+
+           host == PP_BASE_DOMAIN OR in PP_APEX_HOSTS
+             → mode = Apex
+           host == "{name}." ^ PP_BASE_DOMAIN
+             AND name matches username charset
+                 [a-z0-9]([a-z0-9-]*[a-z0-9])?  (DNS label)
+             AND users.username = name (case-fold: store lower)
+             → mode = Garden { username = name }
+           else if base domain set
+             → unknown host → 404 or apex redirect (pick 404)
+           else
+             → legacy single-host mode
+
+         Username registry: users.username MUST be valid DNS
+         labels (enforce on create_user). Reject underscores,
+         uppercase-only variants: canonicalize lowercase.
+
+         ==========================================================
+         4. IDENTITY + BRANCH RULES
+         ==========================================================
+
+         Apex:
+           - Hard-public release face + /login as today
+           - After successful login → 302
+             https://{username}.{PP_BASE_DOMAIN}/ (or Path /)
+           - Authenticated apex may show account switcher later;
+             v1 just redirects home.
+
+         Garden host (alice.base):
+           - Optional identity resolution (cookie/Basic) first
+           - garden_owner = alice (from Host), independent of
+             cookie until auth decides
+
+           A. Anonymous on garden host:
+              - Public user routes: resolve view_bindings on
+                branch chain alice/personal → … → system/main
+                (so Alice can publish public pages on her garden)
+              - Private routes → /login (prefer login URL on apex
+                or same host; v1 same host /login OK)
+              - (whoami) → "anonymous"; no personal checkout
+              - Writes denied (same as route-visibility anonymous)
+
+           B. Authenticated user U on garden host of G:
+              - If U == G: attach as today; branch default
+                U/personal; full write on own garden
+              - If U != G (Alice cookie on bob.base):
+                  READ of Bob's PUBLIC routes: allowed (anonymous
+                    garden view with optional richer chrome)
+                  PRIVATE routes /api/eval /admin /data:
+                    DENY (403) or redirect to alice.base
+                  WRITES always as U on U's branch only — never
+                    write Bob's personal because Host said bob.
+                  v1 SIMPLE RULE (recommended ship):
+                    private/kernel paths require U == G;
+                    mismatch → 302 https://{U}.{base}/
+                    public paths may render garden G read-only.
+
+         Kernel hard-private paths never become public via Host.
+
+         ==========================================================
+         5. LISP / PRODUCT SURFACES
+         ==========================================================
+
+         (current-host) → VStr host
+         (garden-owner) → VStr username | VNil on apex
+         (my-url path?) → absolute URL on caller's garden host
+
+         /settings or chrome: show "Your computer:
+         https://you.base/" when feature on.
+
+         Admin create-user: validate DNS-safe username.
+
+         ==========================================================
+         6. PHASES
+         ==========================================================
+
+         Phase 1: parse Host; garden_owner on request; login
+           redirect to subdomain; cookie Domain when configured;
+           mismatch private → redirect home; username DNS rules.
+         Phase 2: anonymous public routes resolve on garden
+           owner's branch chain (needs route-visibility public).
+         Phase 3: docs/nginx/acme wildcard recipe in
+           docs/openbsd-prod-branch-deploy.md; optional apex
+           account switcher.
+
+         ==========================================================
+         7. NON-GOALS
+         ==========================================================
+
+         - Custom domains (CNAME to customer.com)
+         - Per-subdomain process routing (fleet later)
+         - Multi-level subdomains (a.b.base)
+         - Email-style user%host URLs
+    |))
+   )
+  )
+  (subsection user-llm-keys
+   (doc "Per-user LLM provider keys; session AI uses user key with env fallback")
+   (status planned)
+   (implements image/lib/auth_store.ml image/lib/llm_client.ml image/lib/session.ml image/lib/http_pages.ml)
+   (verify
+    (build "dune build image")
+    (smoke "user sets llm_key; propose-function uses it not empty env")
+    (smoke "user without key falls back to LLM_API_KEY env if set")
+    (smoke "GET settings never returns raw api_key; last4 only")
+    (smoke "Bob cannot read Alice llm_key credential"))
+   (details
+    (doc (|
+         ==========================================================
+         1. WHY
+         ==========================================================
+
+         Today llm_client reads process env LLM_API_KEY only.
+         Multi-user means Alice's AI spend and provider choice
+         cannot be the operator's single key. Each human brings
+         (or is issued) their own key; the image selects by
+         session identity.
+
+         ==========================================================
+         2. CREDENTIAL SHAPE
+         ==========================================================
+
+         kind = 'llm_key'
+
+         secret_data jsonb (NEVER returned on list/get APIs):
+           { "api_key": "<provider secret>" }
+
+         public_data jsonb (safe to show):
+           { "last4": "ab12"           // last 4 of key
+           , "label": "synthetic"      // optional
+           , "base":  "https://…"      // optional override of LLM_API_BASE
+           , "model": "hf:…"           // optional override of LLM_MODEL
+           }
+
+         Policy v1: at most ONE active llm_key per user
+         (replace on set, like password). Multiple providers
+         later via label/id.
+
+         Storage: Postgres credentials row; same role as other
+         secrets. No encryption-at-rest beyond PG in v1 (same
+         acceptance as password hashes / session signing risk
+         profile — personal/small-team). Document footgun.
+
+         NOT the same as kind=api_key (that authenticates
+         INTO pricklypear as Bearer). llm_key authenticates
+         OUT to an LLM provider.
+
+         ==========================================================
+         3. RESOLUTION ORDER (llm_client)
+         ==========================================================
+
+         When a session invokes AI (propose-function, llm-inner,
+         llm-outer, llm-rewrite, llm-seed, agent portal, …):
+
+           1. If session has user_id AND credentials llm_key
+              present → use that api_key; apply public_data
+              base/model overrides if set.
+           2. Else if env LLM_API_KEY non-empty → operator
+              fallback (dev / single-tenant dogfood).
+           3. Else → clear error "no LLM key configured
+              (add one in /settings/keys or set LLM_API_KEY)".
+
+         Threading: llm_client functions take optional
+         ~auth_ctx / ~api_key / ~base / ~model rather than only
+         reading env. Session layer fills from credential lookup
+         (cached per request OK; invalidate on set/delete).
+
+         Anonymous / no session: AI prims denied (hard-private
+         routes already); no env key leak via public pages.
+
+         ==========================================================
+         4. HTTP + LISP SURFACE
+         ==========================================================
+
+         Browser (authenticated user, self-service):
+           GET  /settings/keys     form: status last4, set, clear
+           POST /settings/keys     body: api_key, optional base, model
+           POST /settings/keys/clear
+
+         Admin may set/clear for another user via /admin/users
+         (optional v1; self-service is enough for dogfood).
+
+         Lisp prims (session user only unless admin):
+           (set-llm-key key [base] [model]) → "ok" / last4
+           (clear-llm-key) → VNil
+           (llm-key-status) → dict/list: configured?, last4, base?, model?
+             NEVER returns raw secret.
+
+         auth_store:
+           set_llm_key user_id ~key ?base ?model
+           clear_llm_key user_id
+           get_llm_key_meta user_id → public_data option
+           get_llm_key_secret user_id → string option
+             (* only called from server-side AI path *)
+
+         ==========================================================
+         5. SECURITY
+         ==========================================================
+
+         - Raw key only in POST body / Lisp arg / secret_data
+         - Logs: never print full key (llm_client already prints
+           model/url — keep it that way)
+         - CSRF: same cookie session rules as other POSTs
+         - User A cannot get_llm_key_secret for user B
+         - Export/pp_sync: do NOT dump secret_data into lib.pp
+
+         ==========================================================
+         6. PHASES
+         ==========================================================
+
+         Phase 1: auth_store llm_key CRUD + llm_client ~api_key
+           threading + session resolution + (llm-key-status)
+         Phase 2: /settings/keys UI + set/clear prims
+         Phase 3: optional per-user base/model; admin override UI
+
+         Success: two users, two keys, simultaneous propose-
+         function calls hit distinct Authorization headers
+         (observable via mock/test double or request log redacted).
+    |))
+   )
+  )
+  (subsection user-ssh-repl
+   (doc "Per-user SSH public keys open an identity-bound Lisp REPL")
+   (status planned)
+   (implements image/lib/auth_store.ml image/lib/repl_endpoint.ml)
+   (verify
+    (build "dune build image")
+    (smoke "add ssh_key credential for alice; verify_ssh_key resolves alice")
+    (smoke "SSH or bridge session attaches whoami=alice branch=alice/personal")
+    (smoke "unknown key denied + auth_log")
+    (smoke "password-only user without ssh_key cannot SSH"))
+   (details
+    (doc (|
+         ==========================================================
+         1. WHY
+         ==========================================================
+
+         Multi-user OS framing wants a real shell path:
+           ssh alice@pricklypear.host -p $PP_SSH_PORT
+         → Lisp REPL as alice on alice/personal.
+
+         credentials.kind=ssh_key is already in the schema and
+         historical supervisor/awa design. Single-image retired
+         the supervisor fleet, so SSH must attach identity
+         in-process (or via OpenBSD sshd ForceCommand bridge).
+
+         Browser login remains primary for v1 web; SSH is the
+         power-user / agent-adjacent REPL door.
+
+         ==========================================================
+         2. CREDENTIAL SHAPE
+         ==========================================================
+
+         kind = 'ssh_key'
+         public_data jsonb:
+           { "openssh": "ssh-ed25519 AAAA…[ comment]"
+           , "fingerprint": "SHA256:…"   // computed on insert
+           , "label": "laptop"           // optional
+           }
+         secret_data: null (public keys only; no private keys)
+
+         Multiple ssh_key rows per user allowed (laptop, desktop).
+         Admin or self-service add/revoke.
+
+         auth_store:
+           add_ssh_key user_id ~openssh_pubkey ?label
+             → parse type (ed25519 required v1; rsa deferred)
+             → store normalized openssh string + fingerprint
+           list_ssh_keys user_id → public metas
+           revoke_ssh_key credential_id
+           verify_ssh_key presented_openssh_or_blob → user option
+             (* compare fingerprint or canonical blob *)
+
+         auth_log kind='ssh_key' success true/false.
+
+         ==========================================================
+         3. TRANSPORT OPTIONS (pick primary + ops escape)
+         ==========================================================
+
+         Option A — awa-ssh IN THE IMAGE (product primary)
+           - Image listens on PP_SSH_PORT when set (opt-in;
+             unset = no SSH listener — same spirit as old
+             PP_AWA_SSH_PORT).
+           - Host key: seed in system_keys id
+             'image_ssh_hostkey_seed' (or reuse naming from
+             historical supervisor_ssh_hostkey_seed).
+           - Pubkey auth against credentials ssh_key for the
+             claimed username (SSH user name = users.username).
+           - On success: create/attach in-process session
+             identity (user_id, username, branch personal),
+             bridge channel to existing REPL endpoint semantics
+             (line editor / eval loop).
+           - CRITICAL: authenticated username MUST propagate
+             into the REPL session (historical awa 0.3.1 gap
+             where exec_callback lacked username — use awa
+             version on poohstack that exposes auth identity,
+             or map channel after auth event). No anonymous REPL.
+
+         Option B — OpenBSD sshd ForceCommand (ops escape)
+           - System sshd on a dedicated port/user
+           - authorized_keys generated/synced from credentials
+             (periodic script or AuthorizedKeysCommand)
+           - ForceCommand runs pp_repl_bridge that speaks to
+             image REPL with fixed identity from key mapping
+           - Document in openbsd-prod-branch-deploy.md
+           - Acceptable if awa-in-image slips; product stories
+             still require verify_ssh_key + key management UI.
+
+         v1 make should implement credential CRUD + verify +
+         ONE working door (A preferred). B is documented backup.
+
+         Line-protocol pubkey pipe (nc + raw key) is DEV ONLY;
+         not the multi-user product surface.
+
+         ==========================================================
+         4. SESSION ATTACH AFTER SSH AUTH
+         ==========================================================
+
+         Same as US-LAND / identity-and-branch:
+           ensure <username>/personal
+           checkout personal
+           whoami = username
+           author = username
+           budgets from multi-user.budgets
+
+         REPL eval uses that session's env/prims — same as
+         browser /api/eval for that user. No shared global env
+         across SSH users on cotenant: each SSH connection has
+         its own Session.t (or equivalent).
+
+         Disconnect: drop session memory; do not revoke browser
+         cookies. Optional: no auth_sessions row for SSH (ephemeral
+         connection identity) OR mint a short-lived session for
+         audit — v1 ephemeral is fine; auth_log the login.
+
+         ==========================================================
+         5. HTTP / UI
+         ==========================================================
+
+         GET/POST /settings/ssh  — list fingerprints, add pubkey,
+           revoke. Self-service.
+         Admin /admin/users — add/revoke ssh keys for a user.
+
+         Lisp:
+           (add-ssh-key "ssh-ed25519 AAAA…") → fingerprint
+           (list-ssh-keys) → list of {fingerprint,label}
+           (revoke-ssh-key fingerprint-or-id)
+
+         ==========================================================
+         6. RELATION TO DEPRECATED PATHS
+         ==========================================================
+
+         image.ssh-interface and supervisor.* remain deprecated
+         as multi-process topology. This subsection is the
+         single-image successor: keys in auth credentials,
+         listener in image (or sshd bridge), identity in-process.
+
+         Do not revive authd RPC for verify_ssh_key in v1;
+         call auth_store directly inside the image.
+
+         ==========================================================
+         7. PHASES
+         ==========================================================
+
+         Phase 1: auth_store ssh_key add/list/revoke/verify +
+           /settings/ssh + Lisp prims + auth_log
+         Phase 2: awa-ssh (or sshd bridge) attach → REPL with
+           real whoami; PP_SSH_PORT opt-in
+         Phase 3: harden hostkey rotation docs; agent use of
+           SSH as alternative to HTTP Basic
+
+         Success narrative:
+           Admin creates alice; alice pastes pubkey; alice runs
+           ssh alice@host -p $PP_SSH_PORT; REPL prints
+           whoami => alice; (define …) pins alice/personal.
     |))
    )
   )
@@ -804,8 +1276,13 @@
          Enforcement: is_admin on session; 403 otherwise.
 
          Credentials order of support in complete system:
-           password (web-login), api_key (agents/pp_eval),
-           ssh_key (SSH front door when live).
+           password (web-login),
+           api_key (agents/pp_eval Bearer — auth INTO the OS),
+           ssh_key (SSH REPL door — auth.user-ssh-repl),
+           llm_key (provider key OUT to LLM — auth.user-llm-keys).
+
+         Admin UI should grow links to manage ssh_key and llm_key
+         per user; self-service /settings/* is the human path.
     |))
    )
   )

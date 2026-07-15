@@ -1098,6 +1098,8 @@
            libs/bible/lib.pp   — bible/* API + /bible (canon is data_rows)
            libs/ui/lib.pp      — ui/menu ui/nav ui/home ui/theme ui/css
            libs/ai/lib.pp      — ai/ask ai/do wrappers
+           libs/chat/lib.pp    — multi-user lobby+DM (multi-user.chat)
+           libs/plan/lib.pp    — Unix .plan status (multi-user.user-plan)
 
          Loader API:
            (load-string SRC)     read_all forms; eval_one each (define
@@ -1108,6 +1110,7 @@
 
          Boot / recipes:
            seed_stdlib → load-library "std" then "ui" then "ai"
+             then (when present) "chat" and "plan" for multi-user social
            recipe_todo → load-library "todo"
            recipe_hello → load-library "hello"
            recipe_bible → load-library "bible"  (types+fns+route ONLY;
