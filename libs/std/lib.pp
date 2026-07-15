@@ -347,3 +347,37 @@
             (if (string-eq (as-str (car sheet)) "sheet")
                 (css/render-items (car (cdr sheet)))
                 (css/render-item sheet))))))
+
+;; --- control / macros (loaded after kernel cond/and/or) ---
+
+;; Null or empty string (after as-str). Shared by contacts/plan/chat/…
+(define blank?
+  (lambda (s)
+    (if (null? s)
+        #t
+        (string-eq (as-str s) ""))))
+
+(defmacro when (test body)
+  `(if ,test ,body ()))
+
+(defmacro unless (test body)
+  `(if ,test () ,body))
+
+;; HTTP page helper: POST runs action then hx fragment or redirect;
+;; GET renders page body (already a full html/page or raw fragment).
+;; get-html and post-html are expressions (usually (html/page …)).
+(defmacro respond-post (redirect-path post-action get-html)
+  `(if (string-eq (request-method) "POST")
+       (seq
+         ,post-action
+         (if (hx-request?)
+             (render-html ,get-html)
+             (redirect ,redirect-path)))
+       (html/page ,get-html)))
+
+;; Empty list → muted message; else map items into a ul.
+(defmacro list-or-empty (xs empty-msg item-fn)
+  `(if (null? ,xs)
+       (html/p* (html/attr "class" "muted") ,empty-msg)
+       (html/ul ""
+         (html/join (list/map ,item-fn ,xs)))))

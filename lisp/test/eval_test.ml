@@ -239,9 +239,15 @@ let pretty_print_tests = [
 ]
 
 let macro_tests = [
-  ("value_to_expr roundtrip quote list", `Quick, fun () ->
+  ("value_to_expr roundtrip reify list", `Quick, fun () ->
     let e = Reader.read_one "(a b c)" in
-    let v = Eval.quote_to_value e in
+    let v = Eval.reify_expr e in
+    let e' = Eval.value_to_expr v in
+    Alcotest.(check string) "pp"
+      (Reader.pp_expr_flat e) (Reader.pp_expr_flat e'));
+  ("value_to_expr keeps string lits", `Quick, fun () ->
+    let e = Reader.read_one "(html/attr \"class\" \"muted\")" in
+    let v = Eval.reify_expr e in
     let e' = Eval.value_to_expr v in
     Alcotest.(check string) "pp"
       (Reader.pp_expr_flat e) (Reader.pp_expr_flat e'));
@@ -287,6 +293,50 @@ let macro_tests = [
     match a, b with
     | Ast.VStr sa, Ast.VStr sb when sa <> sb -> ()
     | _ -> Alcotest.fail "gensym not unique");
+  ("cond first match", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let got =
+      Lwt_main.run
+        (Eval.eval_string ~prims env
+           "(cond (#f 1) (#t 2) (#t 3))")
+    in
+    Alcotest.(check string) "2" "2" (Reader.pp_value got));
+  ("cond else", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let got =
+      Lwt_main.run
+        (Eval.eval_string ~prims env "(cond (#f 1) (else 9))")
+    in
+    Alcotest.(check string) "9" "9" (Reader.pp_value got));
+  ("cond empty", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let got = Lwt_main.run (Eval.eval_string ~prims env "(cond)") in
+    Alcotest.(check string) "nil" "()" (Reader.pp_value got));
+  ("and short-circuit", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let got =
+      Lwt_main.run (Eval.eval_string ~prims env "(and #t 1 2)")
+    in
+    Alcotest.(check string) "2" "2" (Reader.pp_value got);
+    let got2 =
+      Lwt_main.run (Eval.eval_string ~prims env "(and #t #f 3)")
+    in
+    Alcotest.(check string) "false" "#f" (Reader.pp_value got2);
+    let got3 = Lwt_main.run (Eval.eval_string ~prims env "(and)") in
+    Alcotest.(check string) "true" "#t" (Reader.pp_value got3));
+  ("or short-circuit", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let got =
+      Lwt_main.run (Eval.eval_string ~prims env "(or #f 0 1)")
+    in
+    Alcotest.(check string) "0" "0" (Reader.pp_value got);
+    let got2 = Lwt_main.run (Eval.eval_string ~prims env "(or)") in
+    Alcotest.(check string) "false" "#f" (Reader.pp_value got2));
 ]
 
 let () =

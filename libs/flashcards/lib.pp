@@ -15,8 +15,7 @@
 
 ;; --- helpers ---
 
-(define flash/blank?
-  (lambda (s) (if (null? s) #t (string-eq (as-str s) ""))))
+(define flash/blank? blank?)
 
 (define flash/today (lambda () (date-today)))
 
@@ -501,11 +500,10 @@
     (if (string-eq (request-method) "POST")
         (seq
           (let ((action (as-str (request-param "action"))))
-            (if (string-eq action "create-deck")
-                (flash/deck-create
-                  (request-param "title")
-                  (request-param "description"))
-                ()))
+            (when (string-eq action "create-deck")
+              (flash/deck-create
+                (request-param "title")
+                (request-param "description"))))
           (redirect "/flashcards"))
         (html/page (list (flash/home-html))))))
 
@@ -515,14 +513,15 @@
       (if (string-eq (request-method) "POST")
           (seq
             (let ((action (as-str (request-param "action"))))
-              (if (string-eq action "add-card")
-                  (flash/add id
-                    (request-param "front")
-                    (request-param "back")
-                    (request-param "tags"))
-                  (if (string-eq action "delete-card")
-                      (flash/delete (request-param "id"))
-                      ())))
+              (cond
+                ((string-eq action "add-card")
+                 (flash/add id
+                   (request-param "front")
+                   (request-param "back")
+                   (request-param "tags")))
+                ((string-eq action "delete-card")
+                 (flash/delete (request-param "id")))
+                (else ())))
             (redirect (string-append "/flashcards/deck?id=" id)))
           (html/page (list (flash/deck-page-html id)))))))
 
@@ -534,11 +533,10 @@
       (if (string-eq (request-method) "POST")
           (seq
             (let ((action (as-str (request-param "action"))))
-              (if (string-eq action "review")
-                  (flash/review
-                    (request-param "id")
-                    (request-param "rating"))
-                  ()))
+              (when (string-eq action "review")
+                (flash/review
+                  (request-param "id")
+                  (request-param "rating"))))
             (redirect
               (if (flash/blank? deck)
                   "/flashcards/study"

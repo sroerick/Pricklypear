@@ -379,15 +379,16 @@
 (define calendar/handle-post
   (lambda ()
     (let ((action (as-str (request-param "action"))))
-      (if (string-eq action "create")
-          (calendar/create
-            (request-param "title")
-            (request-param "day")
-            (request-param "start_time")
-            (request-param "notes"))
-          (if (string-eq action "delete")
-              (calendar/delete (request-param "id"))
-              ())))))
+      (cond
+        ((string-eq action "create")
+         (calendar/create
+           (request-param "title")
+           (request-param "day")
+           (request-param "start_time")
+           (request-param "notes")))
+        ((string-eq action "delete")
+         (calendar/delete (request-param "id")))
+        (else ())))))
 
 (define calendar/page
   (lambda ()

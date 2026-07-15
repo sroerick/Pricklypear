@@ -4,9 +4,6 @@
 
 (deftype 'bookmark 'title 'url)
 
-(define bookmarks/blank?
-  (lambda (s) (if (null? s) #t (string-eq (as-str s) ""))))
-
 (define bookmarks/fields
   (lambda (title url)
     (dict-set* "{}"
@@ -48,12 +45,8 @@
 
 (define bookmarks/list-html
   (lambda ()
-    (let ((xs (bookmarks/all)))
-      (html/div (html/attr "id" "bookmarks-list")
-        (if (null? xs)
-            (html/p* (html/attr "class" "muted") "No bookmarks yet.")
-            (html/ul ""
-              (html/join (list/map bookmarks/item-li xs))))))))
+    (html/div (html/attr "id" "bookmarks-list")
+      (list-or-empty (bookmarks/all) "No bookmarks yet." bookmarks/item-li))))
 
 (define bookmarks/form-html
   (lambda ()
@@ -100,17 +93,15 @@
 (define bookmarks/handle-post
   (lambda ()
     (let ((action (as-str (request-param "action"))))
-      (if (string-eq action "delete")
-          (bookmarks/delete (request-param "id"))
-          (if (string-eq action "create")
-              (let ((title (request-param "title"))
-                    (url (request-param "url")))
-                (if (bookmarks/blank? title)
-                    ()
-                    (if (bookmarks/blank? url)
-                        ()
-                        (bookmarks/create title url))))
-              ())))))
+      (cond
+        ((string-eq action "delete")
+         (bookmarks/delete (request-param "id")))
+        ((string-eq action "create")
+         (let ((title (request-param "title"))
+               (url (request-param "url")))
+           (when (and (not (blank? title)) (not (blank? url)))
+             (bookmarks/create title url))))
+        (else ())))))
 
 (define bookmarks/page
   (lambda ()

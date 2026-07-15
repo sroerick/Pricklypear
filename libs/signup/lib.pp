@@ -5,7 +5,7 @@
 
 (define signup/blank?
   (lambda (s)
-    (if (null? s) #t (string-eq (string-trim (as-str s)) ""))))
+    (blank? (string-trim (as-str s)))))
 
 (define signup/looks-like-email?
   (lambda (email)
