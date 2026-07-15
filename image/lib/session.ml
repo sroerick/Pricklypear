@@ -20,14 +20,35 @@ let load_defs (t : t) : unit Lwt.t =
         Lwt.catch
           (fun () ->
              (* Eval the stored AST directly — NEVER pp_expr round-trip.
-                Complex bodies (ui/home, notes) break under print/parse. *)
-             let* _ =
-               Pricklypear_lisp.Eval.eval
-                 ~budget:(Pricklypear_lisp.Eval.make_budget ())
-                 ~prims:t.prims t.env
-                 (Pricklypear_lisp.Ast.Define (name, body))
-             in
-             Lwt.return_unit)
+                Complex bodies (ui/home, notes) break under print/parse.
+                Macro bodies are stored as (__macro__ params body). *)
+             (match body with
+              | Pricklypear_lisp.Ast.App
+                  (Pricklypear_lisp.Ast.Var "__macro__",
+                   [ params_expr; body_expr ]) ->
+                  let params =
+                    match params_expr with
+                    | Pricklypear_lisp.Ast.Lit Pricklypear_lisp.Ast.VNil -> []
+                    | Pricklypear_lisp.Ast.App (Pricklypear_lisp.Ast.Var p, rest) ->
+                        p
+                        :: List.filter_map
+                             (function
+                               | Pricklypear_lisp.Ast.Var s -> Some s
+                               | _ -> None)
+                             rest
+                    | _ -> []
+                  in
+                  Pricklypear_lisp.Env.define t.env name
+                    (Pricklypear_lisp.Ast.VMacro (params, body_expr, t.env));
+                  Lwt.return_unit
+              | _ ->
+                  let* _ =
+                    Pricklypear_lisp.Eval.eval
+                      ~budget:(Pricklypear_lisp.Eval.make_budget ())
+                      ~prims:t.prims t.env
+                      (Pricklypear_lisp.Ast.Define (name, body))
+                  in
+                  Lwt.return_unit))
           (fun exn ->
              Printf.eprintf "[session] load def %s failed: %s\n%!"
                name (Printexc.to_string exn);
@@ -1077,6 +1098,19 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value Lwt.t =
            else Lwt.return_unit
          in
          Lwt.return v
+     | Pricklypear_lisp.Ast.App
+         (Pricklypear_lisp.Ast.Var "defmacro",
+          [ Pricklypear_lisp.Ast.Var name; params_expr; body_expr ]) ->
+         if t.manifest.username <> "anonymous" then begin
+           let stored =
+             Pricklypear_lisp.Ast.App
+               (Pricklypear_lisp.Ast.Var "__macro__",
+                [ params_expr; body_expr ])
+           in
+           Lwt.async (fun () ->
+             Store.persist_function t.store name stored t.manifest.username)
+         end;
+         Lwt.return v
      | _ -> Lwt.return v)
   with
   | Pricklypear_lisp.Ast.Interp_error e as exn -> Lwt.fail exn
@@ -1109,6 +1143,19 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
          then refresh_ui_shell t
          else Lwt.return_unit
        in
+       Lwt.return v
+   | Pricklypear_lisp.Ast.App
+       (Pricklypear_lisp.Ast.Var "defmacro",
+        [ Pricklypear_lisp.Ast.Var name; params_expr; body_expr ]) ->
+       if t.manifest.username <> "anonymous" then begin
+         let stored =
+           Pricklypear_lisp.Ast.App
+             (Pricklypear_lisp.Ast.Var "__macro__",
+              [ params_expr; body_expr ])
+         in
+         Lwt.async (fun () ->
+           Store.persist_function t.store name stored t.manifest.username)
+       end;
        Lwt.return v
    | _ -> Lwt.return v)
 
