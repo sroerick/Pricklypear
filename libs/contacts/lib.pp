@@ -1,10 +1,8 @@
 ;; Contacts — name/email/phone/notes on data_rows.
 ;; Install: (load-library "contacts") — also seeded on system/main.
+;; Uses std blank?/when/unless/cond/list-or-empty.
 
 (deftype 'contact 'name 'email 'phone 'notes)
-
-(define contacts/blank?
-  (lambda (s) (if (null? s) #t (string-eq (as-str s) ""))))
 
 (define contacts/fields
   (lambda (name email phone notes)
@@ -45,16 +43,13 @@
             (list
               (html/div (html/attr "class" "contact-name")
                 (html/strong (html/text name)))
-              (if (contacts/blank? email)
-                  ""
-                  (html/p* (html/attr "class" "muted")
-                    (html/a (string-append "mailto:" email) email)))
-              (if (contacts/blank? phone)
-                  ""
-                  (html/p* (html/attr "class" "muted") (html/text phone)))
-              (if (contacts/blank? notes)
-                  ""
-                  (html/p (html/text notes)))
+              (unless (blank? email)
+                (html/p* (html/attr "class" "muted")
+                  (html/a (string-append "mailto:" email) email)))
+              (unless (blank? phone)
+                (html/p* (html/attr "class" "muted") (html/text phone)))
+              (unless (blank? notes)
+                (html/p (html/text notes)))
               (html/form "POST" "/contacts"
                 (html/attrs
                   (list
@@ -70,12 +65,8 @@
 
 (define contacts/list-html
   (lambda ()
-    (let ((xs (contacts/all)))
-      (html/div (html/attr "id" "contacts-list")
-        (if (null? xs)
-            (html/p* (html/attr "class" "muted") "No contacts yet.")
-            (html/ul ""
-              (html/join (list/map contacts/item-li xs))))))))
+    (html/div (html/attr "id" "contacts-list")
+      (list-or-empty (contacts/all) "No contacts yet." contacts/item-li))))
 
 (define contacts/form-html
   (lambda ()
@@ -138,18 +129,18 @@
 (define contacts/handle-post
   (lambda ()
     (let ((action (as-str (request-param "action"))))
-      (if (string-eq action "delete")
-          (contacts/delete (request-param "id"))
-          (if (string-eq action "create")
-              (let ((name (request-param "name")))
-                (if (contacts/blank? name)
-                    ()
-                    (contacts/create
-                      name
-                      (request-param "email")
-                      (request-param "phone")
-                      (request-param "notes"))))
-              ())))))
+      (cond
+        ((string-eq action "delete")
+         (contacts/delete (request-param "id")))
+        ((string-eq action "create")
+         (let ((name (request-param "name")))
+           (unless (blank? name)
+             (contacts/create
+               name
+               (request-param "email")
+               (request-param "phone")
+               (request-param "notes")))))
+        (else ())))))
 
 (define contacts/page
   (lambda ()

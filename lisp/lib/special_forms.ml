@@ -105,6 +105,29 @@ let catalog : entry list =
       arity = "(gensym)  or  (gensym prefix)";
       examples = "(gensym) → g$1";
     };
+    {
+      name = "cond";
+      summary =
+        "Multi-branch conditional. First truthy test's body wins. \
+         Use else or #t as final catch-all. Empty cond → nil.";
+      arity = "(cond (test body) …)";
+      examples = "(cond ((null? xs) 'empty) (#t 'full))";
+    };
+    {
+      name = "and";
+      summary =
+        "Short-circuit AND. (and) → #t. Returns last value if all truthy, \
+         else first falsey (#f or nil).";
+      arity = "(and e1 e2 …)";
+      examples = "(and #t 1 2) → 2";
+    };
+    {
+      name = "or";
+      summary =
+        "Short-circuit OR. (or) → #f. Returns first truthy value, else last.";
+      arity = "(or e1 e2 …)";
+      examples = "(or #f 0 'x) → 0 (0 is truthy)";
+    };
   ]
 
 let names : string list = List.map (fun e -> e.name) catalog

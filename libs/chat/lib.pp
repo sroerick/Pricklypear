@@ -5,9 +5,6 @@
 (deftype 'chat-room 'kind 'room_id 'title 'members 'created_by 'created_at)
 (deftype 'chat-message 'room_id 'from 'body 'created_at)
 
-(define chat/blank?
-  (lambda (s) (if (null? s) #t (string-eq (as-str s) ""))))
-
 (define chat/row-id (lambda (row) (as-str (car row))))
 (define chat/row-fields (lambda (row) (cdr row)))
 
@@ -88,7 +85,7 @@
     (let ((text (as-str body))
           (user (as-str (whoami)))
           (rid (as-str room-id)))
-      (if (chat/blank? text)
+      (if (blank? text)
           ""
           (if (> (string-length text) 4000)
               "chat: body too long (max 4000)"
@@ -158,7 +155,7 @@
   (lambda (peer)
     (let ((them (as-str peer))
           (me (as-str (whoami))))
-      (if (chat/blank? them)
+      (if (blank? them)
           ""
           (if (string-eq them me)
           ""
@@ -199,7 +196,7 @@
 (define chat/say-dm
   (lambda (peer body)
     (let ((rid (chat/dm peer)))
-      (if (chat/blank? rid)
+      (if (blank? rid)
           "chat: bad peer"
           (chat/say-in rid body)))))
 
@@ -387,7 +384,7 @@
 (define chat/dm-page
   (lambda ()
     (let ((peer (as-str (request-param "peer"))))
-      (if (chat/blank? peer)
+      (if (blank? peer)
           (chat/dm-list-page)
           (if (string-eq (request-method) "POST")
               (seq

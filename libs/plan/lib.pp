@@ -4,9 +4,6 @@
 
 (deftype 'user-plan 'username 'body 'updated_at)
 
-(define plan/blank?
-  (lambda (s) (if (null? s) #t (string-eq (as-str s) ""))))
-
 (define plan/row-id (lambda (row) (as-str (car row))))
 (define plan/row-fields (lambda (row) (cdr row)))
 
@@ -82,7 +79,7 @@
   (lambda ()
     (list/filter
       (lambda (pair)
-        (not (plan/blank? (cdr pair))))
+        (not (blank? (cdr pair))))
       (list/map
         (lambda (row)
           (let ((f (plan/row-fields row)))
@@ -120,7 +117,7 @@
 (define plan/mine-display
   (lambda (body)
     (html/div (html/attr "class" "card")
-      (if (plan/blank? body)
+      (if (blank? body)
           (html/p* (html/attr "class" "muted")
             "No plan yet. What are you working on?")
           (html/p (html/text body))))))
@@ -185,7 +182,7 @@
 (define plan/profile-page
   (lambda ()
     (let ((user (as-str (request-param "user"))))
-      (if (plan/blank? user)
+      (if (blank? user)
           (html/page
             (list
               (html/h1 "Profile")
@@ -196,7 +193,7 @@
               (list
                 (html/h1 (html/text user))
                 (html/p* (html/attr "class" "muted") "Plan (finger)")
-                (if (plan/blank? body)
+                (if (blank? body)
                     (html/p* (html/attr "class" "muted")
                       "No plan yet. What are you working on?")
                     (html/div (html/attr "class" "card")

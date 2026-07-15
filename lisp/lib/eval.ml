@@ -70,16 +70,24 @@ let is_special_form (name : string) : bool =
   | "lambda" | "let" | "letrec" | "if" | "define" | "quote" | "seq"
   | "prim" | "with-transaction"
   | "quasiquote" | "unquote" | "unquote-splicing" | "defmacro"
-  | "macroexpand-1" | "macroexpand" | "gensym" -> true
+  | "macroexpand-1" | "macroexpand" | "gensym"
+  | "cond" | "and" | "or" -> true
   | _ -> false
 
 let kernel_special_names =
   [ "lambda"; "let"; "letrec"; "if"; "define"; "quote"; "seq"; "prim";
     "with-transaction"; "quasiquote"; "unquote"; "unquote-splicing";
-    "defmacro"; "macroexpand-1"; "macroexpand"; "gensym" ]
+    "defmacro"; "macroexpand-1"; "macroexpand"; "gensym";
+    "cond"; "and"; "or" ]
+
+let truthy (v : value) : bool =
+  match v with
+  | VBool false | VNil -> false
+  | _ -> true
 
 (* Quote any expr into a first-class value (full s-expr quote).
    Compounds become nested VLists so quoted data is usable in Lisp. *)
+(* Public quote: symbols and strings both become VStr (historical collapse). *)
 let rec quote_to_value (e : expr) : value =
   match e with
   | Lit v -> v
@@ -109,12 +117,44 @@ let rec quote_to_value (e : expr) : value =
   | Prim (name, args) ->
       VList (VStr name :: List.map quote_to_value args)
 
-(** Inverse of [quote_to_value] for macro expansion (lisp-interpreter.macros).
-    VStr in list-head position becomes [Var]; self-evaluating atoms stay [Lit].
-    Live closures/refs cannot be reified. *)
+(** Macro reify: tag string literals so they survive value_to_expr as Lit VStr
+    rather than Var (symbols are plain VStr). *)
+let rec reify_expr (e : expr) : value =
+  match e with
+  | Lit (VStr s) -> VList [ VStr "__str__"; VStr s ]
+  | Lit v -> v
+  | Var s -> VStr s
+  | App (h, args) ->
+      VList (reify_expr h :: List.map reify_expr args)
+  | Quote e' -> VList [ VStr "quote"; reify_expr e' ]
+  | If (t, th, el) ->
+      VList [ VStr "if"; reify_expr t; reify_expr th; reify_expr el ]
+  | Lambda (params, body) ->
+      VList [ VStr "lambda"
+            ; VList (List.map (fun p -> VStr p) params)
+            ; reify_expr body ]
+  | Let (name, v, body) ->
+      VList [ VStr "let"
+            ; VList [ VList [ VStr name; reify_expr v ] ]
+            ; reify_expr body ]
+  | Letrec (bindings, body) ->
+      VList [ VStr "letrec"
+            ; VList (List.map (fun (n, e') ->
+                VList [ VStr n; reify_expr e' ]) bindings)
+            ; reify_expr body ]
+  | Define (name, v) ->
+      VList [ VStr "define"; VStr name; reify_expr v ]
+  | Seq (a, b) ->
+      VList [ VStr "seq"; reify_expr a; reify_expr b ]
+  | Prim (name, args) ->
+      VList (VStr name :: List.map reify_expr args)
+
+(** Inverse of [reify_expr] / tagged quasiquote for macro expansion. *)
 let rec value_to_expr (v : value) : expr =
   match v with
-  | VInt _ | VFloat _ | VBool _ | VNil | VStr _ as lit -> Lit lit
+  | VList [ VStr "__str__"; VStr s ] -> Lit (VStr s)
+  | VInt _ | VFloat _ | VBool _ | VNil as lit -> Lit lit
+  | VStr s -> Var s
   | VList [] -> Lit VNil
   | VList (VStr "quote" :: [x]) -> Quote (value_to_expr x)
   | VList (VStr "if" :: [t; th; el]) ->
@@ -130,8 +170,14 @@ let rec value_to_expr (v : value) : expr =
       Lambda (ps, value_to_expr body)
   | VList (VStr "define" :: VStr name :: [body]) ->
       Define (name, value_to_expr body)
+  | VList (VStr "let" :: VList binds :: [body]) ->
+      (* only single-bind sugar from reify; multi via App form *)
+      (match binds with
+       | [ VList [ VStr name; v ] ] ->
+           Let (name, value_to_expr v, value_to_expr body)
+       | _ ->
+           App (Var "let", [ value_to_expr (VList binds); value_to_expr body ]))
   | VList (VStr "seq" :: a :: b :: rest) ->
-      (* flatten multi-seq into nested Seq *)
       let rec fold x xs =
         match xs with
         | [] -> value_to_expr x
@@ -139,14 +185,8 @@ let rec value_to_expr (v : value) : expr =
       in
       fold a (b :: rest)
   | VList (h :: t) ->
-      (* VStr in any list position → Var (symbol/string collapse; macros v1). *)
-      let elem = function
-        | VStr s -> Var s
-        | other -> value_to_expr other
-      in
-      App (elem h, List.map elem t)
+      App (value_to_expr h, List.map value_to_expr t)
   | VPair (a, b) ->
-      (* improper pair → (cons a b) shape as App *)
       App (Var "cons", [ value_to_expr a; value_to_expr b ])
   | VLambda _ | VPrim _ | VRef _ | VMacro _ ->
       raise
@@ -250,7 +290,7 @@ and expand_and_eval_macro
   and got = List.length arg_exprs in
   if expected <> got then
     raise (Interp_error (Arity_mismatch ("macro", expected, got)));
-  let arg_vals = List.map quote_to_value arg_exprs in
+  let arg_vals = List.map reify_expr arg_exprs in
   let menv = Env.child clo_env in
   List.iter2 (fun p a -> Env.define menv p a) params arg_vals;
   let* expansion_v = eval ~budget ~prims menv body in
@@ -409,6 +449,59 @@ and eval_special_form
       Lwt.return (VStr (gensym ()))
   | "gensym", [ _; Lit (VStr prefix) ] | "gensym", [ _; Var prefix ] ->
       Lwt.return (VStr (gensym ~prefix ()))
+  | "and", _head :: args ->
+      (* (and e1 e2 …) short-circuit; (and) → #t; returns last truthy / first falsey *)
+      let rec loop = function
+        | [] -> Lwt.return (VBool true)
+        | [ last ] -> eval ~budget ~prims env last
+        | e :: rest ->
+            let* v = eval ~budget ~prims env e in
+            if truthy v then loop rest else Lwt.return v
+      in
+      loop args
+  | "or", _head :: args ->
+      (* (or e1 e2 …) short-circuit; (or) → #f; returns first truthy / last falsey *)
+      let rec loop = function
+        | [] -> Lwt.return (VBool false)
+        | [ last ] -> eval ~budget ~prims env last
+        | e :: rest ->
+            let* v = eval ~budget ~prims env e in
+            if truthy v then Lwt.return v else loop rest
+      in
+      loop args
+  | "cond", _head :: clauses ->
+      (* (cond (test body) …) — body is single expr; test #t or else is always true *)
+      let rec loop = function
+        | [] -> Lwt.return VNil
+        | clause :: rest ->
+            let test_e, body_e =
+              match clause with
+              | App (t, [ b ]) -> (t, b)
+              | App (t, b :: bs) ->
+                  (* multi-body: treat as seq *)
+                  let rec fold x xs =
+                    match xs with
+                    | [] -> x
+                    | y :: ys -> Seq (x, fold y ys)
+                  in
+                  (t, fold b bs)
+              | Lit _ | Var _ as t ->
+                  (* bare test with no body → return test value if truthy *)
+                  (t, t)
+              | _ ->
+                  raise (Interp_error (User_error "cond clause must be (test body)"))
+            in
+            let always =
+              match test_e with
+              | Var "else" | Lit (VBool true) -> true
+              | _ -> false
+            in
+            if always then eval ~budget ~prims env body_e
+            else
+              let* tv = eval ~budget ~prims env test_e in
+              if truthy tv then eval ~budget ~prims env body_e else loop rest
+      in
+      loop clauses
   | "quasiquote", [ _; template ] ->
       eval_quasiquote ~budget ~prims env ~depth:1 template
   | "unquote", _ | "unquote-splicing", _ ->
@@ -445,12 +538,12 @@ and eval_special_form
                 and got = List.length args in
                 if expected <> got then
                   raise (Interp_error (Arity_mismatch ("macro", expected, got)));
-                let arg_vals = List.map quote_to_value args in
+                let arg_vals = List.map reify_expr args in
                 let menv = Env.child clo_env in
                 List.iter2 (fun p a -> Env.define menv p a) params arg_vals;
                 eval ~budget ~prims menv body
-            | _ -> Lwt.return (quote_to_value form))
-       | _ -> Lwt.return (quote_to_value form))
+            | _ -> Lwt.return (reify_expr form))
+       | _ -> Lwt.return (reify_expr form))
   | "macroexpand", [ _; form ] as whole ->
       (* expand until fixed point or budget *)
       let rec loop e =
@@ -464,14 +557,14 @@ and eval_special_form
                  if expected <> got then
                    raise
                      (Interp_error (Arity_mismatch ("macro", expected, got)));
-                 let arg_vals = List.map quote_to_value args in
+                 let arg_vals = List.map reify_expr args in
                  let menv = Env.child clo_env in
                  List.iter2 (fun p a -> Env.define menv p a) params arg_vals;
                  let* v = eval ~budget ~prims menv body in
                  let e' = value_to_expr v in
                  loop e'
-             | _ -> Lwt.return (quote_to_value e))
-        | _ -> Lwt.return (quote_to_value e)
+             | _ -> Lwt.return (reify_expr e))
+        | _ -> Lwt.return (reify_expr e)
       in
       let _ = whole in
       loop form
@@ -530,14 +623,16 @@ and eval_quasiquote
           args
       in
       Lwt.return (VList (head_part @ List.concat tail_parts))
+  | Lit (VStr s) ->
+      (* Tag so macro value_to_expr keeps string lits (not symbols). *)
+      Lwt.return (VList [ VStr "__str__"; VStr s ])
   | Lit v -> Lwt.return v
   | Var s -> Lwt.return (VStr s)
   | Quote e ->
       let* v = eval_quasiquote ~budget ~prims env ~depth e in
       Lwt.return (VList [ VStr "quote"; v ])
   | other ->
-      (* If/Lambda/etc. — quote_to_value shape *)
-      Lwt.return (quote_to_value other)
+      Lwt.return (reify_expr other)
 
 and apply
   ~(budget : budget)
