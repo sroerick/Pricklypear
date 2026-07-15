@@ -422,9 +422,10 @@
         "function postOp(op){var id=selId();if(op==='delete'&&!confirm('Delete this node?'))return;"
         "var q='slug='+encodeURIComponent(slug)+'&op='+encodeURIComponent(op)+'&node-id='+encodeURIComponent(id);"
         "if(showArch)q+='&show=archived';"
-        "if(window.htmx){htmx.ajax('POST','/partials/notes-node-op?'+q,{target:'#outline',swap:'outerHTML'});}"
-        "else{fetch('/partials/notes-node-op?'+q,{method:'POST'}).then(function(r){return r.text();}).then(function(html){"
-        "var t=document.getElementById('outline');if(t)t.outerHTML=html;});}}"
+        "fetch('/partials/notes-node-op?'+q,{method:'POST',credentials:'same-origin'}).then(function(r){return r.text();}).then(function(html){"
+        "var t=document.getElementById('outline');if(t)t.outerHTML=html;setSel(selId());"
+        "if(window.htmx){try{htmx.process(document.getElementById('outline'));}catch(e){}}"
+        "}).catch(function(e){console.error('notes postOp',e);});}"
         "document.addEventListener('click',function(e){"
         "var btn=e.target.closest&&e.target.closest('[data-ol-op]');"
         "if(btn){e.preventDefault();postOp(btn.getAttribute('data-ol-op'));return;}"
@@ -436,7 +437,7 @@
         "var p='slug='+encodeURIComponent(slug)+'&op=set-'+t.dataset.field+'&node-id='+encodeURIComponent(t.dataset.id);"
         "if(showArch)p+='&show=archived';"
         "p+='&'+t.dataset.field+'='+encodeURIComponent(t.innerText);"
-        "fetch('/partials/notes-node-op',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:p);},true);}"
+        "fetch('/partials/notes-node-op',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:p});},true);}"
         "setSel('root');document.body.addEventListener('htmx:afterSwap',function(){setSel(selId());});})();"))))
 
 (define notes/ui/show-body
