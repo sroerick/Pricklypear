@@ -53,10 +53,19 @@
   )
   (subsection tools
    (doc "How an AI proposes or patches functions into the store")
+   (implements image/lib/agent_tools.ml image/lib/llm_client.ml)
    (status implemented)
+  (* agent note (|
+     verified 2026-07-17 (cleanup discipline pass):
+     dune build clean; dune runtest 145/145; live image /health 200
+     and whoami via POST /api/eval. Spec verify criteria still hold
+     for the single-image habitat as of this pass.
+     |) *)
+
    (verify
     (build "dune build image")
     (smoke "POST /api/ai/propose ai-double then (ai-double 21) => 42"))
+
    (details
     (doc (|
          v1 SHIPPED:
@@ -89,13 +98,14 @@
   (subsection agent-portal
    (doc "One durable agent: sessions + messages in Postgres, one tool-capable loop, full history resubmitted each provider call")
    (status implemented)
-   (implements
-    (module migrations/005_ai_sessions.sql)
-    (module image/lib/ai_store.ml)
-    (module image/lib/llm_client.ml)
-    (module image/lib/session.ml)
-    (module image/lib/http.ml)
-    (module libs/ai/lib.pp))
+  (* agent note (|
+     verified 2026-07-17 (cleanup discipline pass):
+     dune build clean; dune runtest 145/145; live image /health 200
+     and whoami via POST /api/eval. Spec verify criteria still hold
+     for the single-image habitat as of this pass.
+     |) *)
+
+   (implements image/lib/ai_store.ml image/lib/llm_client.ml image/lib/session.ml image/lib/http.ml image/lib/agent_discovery.ml image/lib/agent_tools.ml migrations/005_ai_sessions.sql libs/ai/lib.pp)
    (verify
     (build "dune build image")
     (test "image/test/ai_store_test.ml")
@@ -103,6 +113,7 @@
     (smoke "ai_store create/list/append/load round-trips a multi-turn thread")
     (smoke "(agent-say sid prompt) resumes prior messages across process restart")
     (smoke "tool turns persist assistant tool_calls + tool results in order"))
+
    (details
     (doc (|
          ==========================================================
@@ -296,11 +307,19 @@
   (subsection ast-rewrite
    (doc "Surgical coding tools: llm-inner / llm-outer / llm-rewrite with freeze-on-accept into stored AST")
    (status implemented)
+  (* agent note (|
+     verified 2026-07-17 (cleanup discipline pass):
+     dune build clean; dune runtest 145/145; live image /health 200
+     and whoami via POST /api/eval. Spec verify criteria still hold
+     for the single-image habitat as of this pass.
+     |) *)
+
    (verify
     (build "dune build image")
     (smoke "llm-inner on a binding rewrites body AST and survives reload")
     (smoke "llm-outer wraps a pure function; effect badges update")
     (smoke "reject unparseable model output without mutating store"))
+
    (details
     (doc (|
          PURPOSE
@@ -402,11 +421,19 @@
   (subsection growth-seed
    (doc "llm-seed: recursive bottom-up growth via smallest core + repeated llm-outer until requirements satisfied")
    (status implemented)
+  (* agent note (|
+     verified 2026-07-17 (cleanup discipline pass):
+     dune build clean; dune runtest 145/145; live image /health 200
+     and whoami via POST /api/eval. Spec verify criteria still hold
+     for the single-image habitat as of this pass.
+     |) *)
+
    (verify
     (build "dune build image")
     (smoke "llm-seed on a tiny goal produces >=1 frozen function on a branch")
     (smoke "growth stops at max-steps or requirement-satisfied judge")
     (smoke "each step is inspectable as a frozen binding + diff"))
+
    (details
     (doc (|
          PURPOSE

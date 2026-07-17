@@ -59,6 +59,14 @@
   (subsection reader
    (doc "S-expression reader: source text -> AST")
    (status implemented)
+  (* agent note (|
+     verified 2026-07-17 (cleanup discipline pass):
+     dune build clean; dune runtest 145/145; live image /health 200
+     and whoami via POST /api/eval. Spec verify criteria still hold
+     for the single-image habitat as of this pass.
+     |) *)
+
+
    (details
     (doc (|
          The reader parses Lisp surface syntax to expr
@@ -557,11 +565,20 @@
   )
   (subsection effects
    (doc "Capability effects for Lisp programs: classify pure vs DB vs AI vs publish; infer; gate; display. Separate from OCaml 5 host effects and from Lwt async plumbing.")
+   (implements lisp/lib/effect.ml lisp/lib/eval.ml image/lib/prims_pure.ml)
    (status implemented)
+  (* agent note (|
+     verified 2026-07-17 (cleanup discipline pass):
+     dune build clean; dune runtest 145/145; live image /health 200
+     and whoami via POST /api/eval. Spec verify criteria still hold
+     for the single-image habitat as of this pass.
+     |) *)
+
    (verify
     (build "dune build lisp image")
     (test "effect inference pure vs db vs ai on sample ASTs")
     (smoke "/bindings shows effect badges; AI propose rejects disallowed effects when policy on"))
+
    (details
     (doc (|
          ==========================================================

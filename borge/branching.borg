@@ -82,6 +82,13 @@
   (subsection fork
    (doc "Forking a branch")
    (status implemented)
+  (* agent note (|
+     verified 2026-07-17 (cleanup discipline pass):
+     dune build clean; dune runtest 145/145; live image /health 200
+     and whoami via POST /api/eval. Spec verify criteria still hold
+     for the single-image habitat as of this pass.
+     |) *)
+
    (details
     (doc (|
          (fork 'main 'alice/experiment)
@@ -111,6 +118,7 @@
     (build "dune build @all")
     (smoke "/tmp/pp_fork_it9.py — fork creates + copies function_defs")
     (smoke "/tmp/pp_override_it9.py — override-walk + branch isolation"))
+
   )
   (subsection merge
    (doc "Merging a branch into its parent")

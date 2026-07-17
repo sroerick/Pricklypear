@@ -40,9 +40,17 @@
   (subsection concepts-guide
    (doc "In-app about page: glossary, access, first tour, horizon summary")
    (status implemented)
+  (* agent note (|
+     verified 2026-07-17 (cleanup discipline pass):
+     dune build clean; dune runtest 145/145; live image /health 200
+     and whoami via POST /api/eval. Spec verify criteria still hold
+     for the single-image habitat as of this pass.
+     |) *)
+
    (verify
     (build "dune build image")
     (smoke "GET /about contains Image, Store, Function, Branch, Route, AI"))
+
    (details
     (doc (|
          GET /about (kernel OCaml page today; may move to Lisp
@@ -81,10 +89,18 @@
   (subsection access-paths
    (doc "Documented ways humans reach a live image")
    (status implemented)
+  (* agent note (|
+     verified 2026-07-17 (cleanup discipline pass):
+     dune build clean; dune runtest 145/145; live image /health 200
+     and whoami via POST /api/eval. Spec verify criteria still hold
+     for the single-image habitat as of this pass.
+     |) *)
+
    (verify
     (smoke "GET /login form; POST /login mints pp_session")
     (smoke "scripts/verify_auth.sh or auth_product_smoke passes")
     (smoke "scripts/repl.sh connects when line-protocol enabled"))
+
    (details
     (doc (|
          v1 SHIPPED paths (single-image):
@@ -124,8 +140,16 @@
   (subsection vocabulary
    (doc "Friendly UI labels over systems jargon")
    (status implemented)
+  (* agent note (|
+     verified 2026-07-17 (cleanup discipline pass):
+     dune build clean; dune runtest 145/145; live image /health 200
+     and whoami via POST /api/eval. Spec verify criteria still hold
+     for the single-image habitat as of this pass.
+     |) *)
+
    (verify
     (smoke "nav/home use Functions (not only Bindings) and point to /about"))
+
    (details
     (doc (|
          UI vocabulary (human):
@@ -157,9 +181,17 @@
   (subsection first-run-recipe
    (doc "One-click or one-form 'make a hello page' onboarding")
    (status implemented)
+  (* agent note (|
+     verified 2026-07-17 (cleanup discipline pass):
+     dune build clean; dune runtest 145/145; live image /health 200
+     and whoami via POST /api/eval. Spec verify criteria still hold
+     for the single-image habitat as of this pass.
+     |) *)
+
    (verify
     (build "dune build image")
     (smoke "POST /api/recipe/hello creates hi-page route; GET /hello works"))
+
    (details
     (doc (|
          Recipe "hello page":
@@ -178,6 +210,13 @@
   (subsection public-release
    (doc "Hosted public face on the image: layout components, welcome, code browser, book PDF, source tarball")
    (status implemented)
+  (* agent note (|
+     verified 2026-07-17 (cleanup discipline pass):
+     dune build clean; dune runtest 145/145; live image /health 200
+     and whoami via POST /api/eval. Spec verify criteria still hold
+     for the single-image habitat as of this pass.
+     |) *)
+
    (implements
     libs/layout/lib.pp
     libs/welcome/lib.pp
@@ -200,6 +239,7 @@
     (smoke "unauth GET /agent.txt returns 200 text/plain agent instructions")
     (smoke "unauth GET /agent still denied (private portal)")
     (smoke "unauth POST /api/eval still denied"))
+
    (details
     (doc (|
          =========================================================

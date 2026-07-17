@@ -245,6 +245,7 @@
    (verify
     (smoke "(deftype …) via load; (flash/add) creates flash-card row")
     (smoke "flash-card has ease interval reps lapses due fields after review"))
+
   )
   (subsection srs
    (doc "Lisp scheduler flash/apply-rating; ratings again|hard|good|easy")
@@ -268,6 +269,7 @@
    (status planned)
    (verify
     (smoke "pp_eval flash/decks and flash/due"))
+
   )
  )
 
