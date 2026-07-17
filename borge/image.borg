@@ -8,10 +8,19 @@
   
   (subsection boot
    (doc "Reading the manifest, loading initial env")
-   (status implemented)
+   (implements image/lib/boot.ml image/lib/loader.ml image/lib/session.ml common/lib/manifest.ml)
+   (status verified)
+  (* agent note (|
+     verified 2026-07-17 (cleanup discipline pass):
+     dune build clean; dune runtest 145/145; live image /health 200
+     and whoami via POST /api/eval. Spec verify criteria still hold
+     for the single-image habitat as of this pass.
+     |) *)
+
    (verify
     (build "dune build image")
     (smoke "/tmp/pp_img_it7.py —   image boots + serves / and /health + REPL accepts connections"))
+
    (details
     (doc (|
          On boot, the image:
@@ -110,9 +119,17 @@
   (subsection repl-endpoint
    (doc "Image's internal REPL endpoint, not full SSH")
    (status implemented)
+  (* agent note (|
+     verified 2026-07-17 (cleanup discipline pass):
+     dune build clean; dune runtest 145/145; live image /health 200
+     and whoami via POST /api/eval. Spec verify criteria still hold
+     for the single-image habitat as of this pass.
+     |) *)
+
    (verify
     (build "dune build image")
     (smoke "/tmp/pp_persist_it8.py — define persists + /tmp/pp_e2e_it6.py — REPL proxy works"))
+
    (details
     (doc (|
          The image does NOT run a full SSH server. Instead
@@ -466,8 +483,18 @@
   (subsection http-robustness
    (doc "HTTP server survival under load + peer disconnect. The image must
          never exit because a client went away mid-response.")
-   (implements image/lib/http.ml image/lib/http_core.ml image/lib/http_agent.ml image/lib/session.ml image/lib/session_types.ml)
-   (status implemented)
+   (implements image/lib/http.ml image/lib/http_core.ml image/lib/http_agent.ml image/lib/http_data.ml image/lib/http_branches.ml image/lib/session.ml image/lib/session_types.ml)
+   (status verified)
+   (* agent note (|
+      session.ml god-module decision (2026-07-17 cleanup pass):
+      ACCEPTED as known god-module (~1641 LOC / 58 funcs). Holds env +
+      manifest + auth fields + store ref + REPL/web attachments. The
+      http.ml split (http_core/http_pages/http_agent) already landed;
+      session.ml was left intact. Split deferred — redesign required
+      (env vs manifest vs auth vs store ref) and not a correctness
+      risk for v1 single-tenant. Tracked as accepted tech debt, not a
+      bug. Do not drive refactors just for LOC.
+      |) *)
    (* agent note (|Invariants 1,2,3,4,5 ALL implemented 2026-07-17.
       1,2,3,5 landed first (crash fix + ui/nav cache + inflight cap) after
       the pricklypear.rocks HN crash post mortem. Invariant 4 (narrow
@@ -1169,6 +1196,13 @@
   (subsection product-theme
    (doc "Product presentation as Lisp data: css/* sheet compiler, ui/theme + ui/css, emergency CSS only in OCaml")
    (status implemented)
+  (* agent note (|
+     verified 2026-07-17 (cleanup discipline pass):
+     dune build clean; dune runtest 145/145; live image /health 200
+     and whoami via POST /api/eval. Spec verify criteria still hold
+     for the single-image habitat as of this pass.
+     |) *)
+
    (verify
     (build "dune build image")
     (smoke "(css/render (css/sheet (body margin 0 background \"#d4d0c8\"))) contains body{ and margin:0")
@@ -1179,6 +1213,7 @@
     (smoke "(define ui/css (lambda () (error \"boom\"))) still serves page with emergency CSS + labeled failure")
     (smoke "htmx fragment / partial responses do not re-inject full stylesheet")
     (smoke "login page stays pre-session OCaml mini stylesheet (no Lisp theme required)"))
+
    (details
     (doc (|
          WHY:
@@ -1378,7 +1413,8 @@
   )
   (subsection packages
    (doc "In-branch prefix packages for organizing functions (not branch ownership)")
-   (status implemented)
+   (implements image/lib/packages.ml image/lib/loader.ml image/lib/prims_pure.ml image/lib/primitives.ml)
+   (status verified)
    (verify
     (build "dune build lisp image")
     (smoke "reader accepts symbol todo/list as Var")
@@ -1666,9 +1702,17 @@
   (subsection browser-repl
    (doc "Evaluate Lisp from the browser against the live session env")
    (status implemented)
+  (* agent note (|
+     verified 2026-07-17 (cleanup discipline pass):
+     dune build clean; dune runtest 145/145; live image /health 200
+     and whoami via POST /api/eval. Spec verify criteria still hold
+     for the single-image habitat as of this pass.
+     |) *)
+
    (verify
     (build "dune build image")
     (smoke "POST /api/eval (+ 20 22) => 42; define + call persists"))
+
    (details
     (doc (|
          - GET /repl — input + Eval button

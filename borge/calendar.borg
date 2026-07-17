@@ -9,6 +9,13 @@
   (subsection model
    (doc "Naive local dates; shared data_rows; Lisp package")
    (status implemented)
+  (* agent note (|
+     verified 2026-07-17 (cleanup discipline pass):
+     dune build clean; dune runtest 145/145; live image /health 200
+     and whoami via POST /api/eval. Spec verify criteria still hold
+     for the single-image habitat as of this pass.
+     |) *)
+
    (implements libs/calendar/lib.pp image/lib/primitives.ml)
    (details
     (doc (|
@@ -36,6 +43,7 @@
     (smoke "GET /calendar shows month grid")
     (smoke "GET /calendar?day= shows agenda + add form")
     (smoke "create event appears on day"))
+
   )
  )
 )

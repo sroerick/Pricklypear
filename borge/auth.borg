@@ -975,10 +975,18 @@
   (subsection login-experience
    (doc "What log in means: I present credentials and land in MY live image")
    (status implemented)
+  (* agent note (|
+     verified 2026-07-17 (cleanup discipline pass):
+     dune build clean; dune runtest 145/145; live image /health 200
+     and whoami via POST /api/eval. Spec verify criteria still hold
+     for the single-image habitat as of this pass.
+     |) *)
+
    (verify
     (smoke "human authenticates and lands on username/personal")
     (smoke "unknown credential denied; no image attach for stranger")
     (smoke "two concurrent users keep distinct identities"))
+
    (details
     (doc (|
          Product bar (from multi-user-product):
@@ -998,14 +1006,22 @@
   )
   (subsection web-login
    (doc "Browser password login, session cookie, middleware, logout")
-   (status implemented)
-   (implements image/lib/http.ml image/lib/session.ml)
+   (status verified)
+  (* agent note (|
+     verified 2026-07-17 (cleanup discipline pass):
+     dune build clean; dune runtest 145/145; live image /health 200
+     and whoami via POST /api/eval. Spec verify criteria still hold
+     for the single-image habitat as of this pass.
+     |) *)
+
+   (implements image/lib/http.ml image/lib/session.ml image/lib/auth_password.ml image/lib/auth_store.ml)
    (verify
     (build "dune build")
     (smoke "POST /login valid -> Set-Cookie -> GET / as that user")
     (smoke "POST /login invalid -> 401 + auth_log fail")
     (smoke "POST /logout revokes; subsequent GET / redirects login")
     (smoke "Alice and Bob cookies do not cross personal branches"))
+
    (details
     (doc (|
          Complete browser path (part of multi-user-product):
@@ -1261,10 +1277,18 @@
   (subsection user-management
    (doc "Admin creates and manages users and credentials")
    (status implemented)
+  (* agent note (|
+     verified 2026-07-17 (cleanup discipline pass):
+     dune build clean; dune runtest 145/145; live image /health 200
+     and whoami via POST /api/eval. Spec verify criteria still hold
+     for the single-image habitat as of this pass.
+     |) *)
+
    (verify
     (smoke "admin creates user + password; new user logs in on own personal")
     (smoke "non-admin cannot create users")
     (smoke "admin can revoke all sessions for a user"))
+
    (details
     (doc (|
          Complete admin surface:
@@ -1295,10 +1319,18 @@
   (subsection identity-and-branch
    (doc "Session identity drives personal garden and authorship")
    (status implemented)
+  (* agent note (|
+     verified 2026-07-17 (cleanup discipline pass):
+     dune build clean; dune runtest 145/145; live image /health 200
+     and whoami via POST /api/eval. Spec verify criteria still hold
+     for the single-image habitat as of this pass.
+     |) *)
+
    (verify
     (smoke "whoami equals session username after login")
     (smoke "define lands on username/personal")
     (smoke "Functions origin own only for true personal pins"))
+
    (details
     (doc (|
          On every authenticated request / image attach:

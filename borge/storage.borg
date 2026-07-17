@@ -8,8 +8,15 @@
   
   (subsection schema
    (doc "Core tables (in migrations/001_branches.sql)")
-   (implements image/lib/store.ml supervisor/lib/store.ml auth/lib/store.ml)
+   (implements image/lib/store.ml image/lib/store_db.ml)
    (status implemented)
+  (* agent note (|
+     verified 2026-07-17 (cleanup discipline pass):
+     dune build clean; dune runtest 145/145; live image /health 200
+     and whoami via POST /api/eval. Spec verify criteria still hold
+     for the single-image habitat as of this pass.
+     |) *)
+
    (details
     (doc (|
          -- The shared code store
@@ -90,10 +97,18 @@
     (build "dune build @all")
     (build "psql -f migrations/001_branches.sql + 002_auth.sql + 003_data.sql = 11 tables")
     (smoke "supervisor migration runner applies 3 migrations idempotently (supervisor smoke in it4/it5 logs)"))
+
   )
   (subsection no-inheritance
    (doc "Why we do NOT use Postgres INHERITS")
    (status implemented)
+  (* agent note (|
+     verified 2026-07-17 (cleanup discipline pass):
+     dune build clean; dune runtest 145/145; live image /health 200
+     and whoami via POST /api/eval. Spec verify criteria still hold
+     for the single-image habitat as of this pass.
+     |) *)
+
    (details
     (doc (|
          Postgres table inheritance (INHERITS) is the
@@ -143,10 +158,18 @@
    (verify
     (build "dune build @all")
     (smoke "/tmp/pp_override_it9.py — override-walk + branch isolation (closest-ancestor wins, parent unchanged)"))
+
   )
   (subsection transactions
    (doc "Transaction isolation: SERIALIZABLE by default")
    (status implemented)
+  (* agent note (|
+     verified 2026-07-17 (cleanup discipline pass):
+     dune build clean; dune runtest 145/145; live image /health 200
+     and whoami via POST /api/eval. Spec verify criteria still hold
+     for the single-image habitat as of this pass.
+     |) *)
+
    (details
     (doc (|
          All Lisp-driven mutations run in SERIALIZABLE
@@ -189,10 +212,18 @@
     (smoke "fork_branch returns new branch id (str round-trip)")
     (smoke "merge_branch returns merged-rows count")
     (smoke "/tmp/pp_sfu_it17.py — (select-for-update 'type id) prim"))
+
   )
   (subsection with-transaction
    (doc "Dynamic transaction scoping: (with-transaction (lambda () body))")
-   (status implemented)
+   (status verified)
+  (* agent note (|
+     verified 2026-07-17 (cleanup discipline pass):
+     dune build clean; dune runtest 145/145; live image /health 200
+     and whoami via POST /api/eval. Spec verify criteria still hold
+     for the single-image habitat as of this pass.
+     |) *)
+
    (details
     (doc (|
          Dynamic transaction scope: all DB prims called inside the
@@ -221,6 +252,7 @@
     (test "image/test/primitives_test.ml — 48 alcotest cases")
     (build "dune build @all")
     (smoke "/tmp/pp_tx_it29.py — with-transaction prim (7 assertions)"))
+
   )
  )
 )

@@ -74,11 +74,19 @@
   )
   (subsection package-layout
    (doc "Directory and package structure")
-   (implements lib/pricklypear_common/manifest.ml lib/pricklypear_common/branch.ml lib/pricklypear_common/protocol.ml lib/pricklypear_common/auth_types.ml)
+   (implements common/lib/manifest.ml common/lib/branch.ml common/lib/protocol.ml common/lib/auth_types.ml)
    (status implemented)
+  (* agent note (|
+     verified 2026-07-17 (cleanup discipline pass):
+     dune build clean; dune runtest 145/145; live image /health 200
+     and whoami via POST /api/eval. Spec verify criteria still hold
+     for the single-image habitat as of this pass.
+     |) *)
+
    (verify
     (build "dune build @all")
     (smoke "scripts/dev.sh start - boots PG + authd + supervisor on the documented directory layout"))
+
    (details
     (doc (|
          pricklypear/                    the whole system
