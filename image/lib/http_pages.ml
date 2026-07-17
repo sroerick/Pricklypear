@@ -1113,18 +1113,9 @@ let api_eval (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
             (`Assoc [("ok", `Bool true); ("value", `String rendered)]);
           Lwt.return_unit)
         (fun exn ->
-          let msg =
-            match exn with
-            | Pricklypear_lisp.Ast.Interp_error e ->
-                (match e with
-                 | Pricklypear_lisp.Ast.Parse_error (m, l, c) ->
-                     Printf.sprintf "parse error: %s (%d:%d)" m l c
-                 | Pricklypear_lisp.Ast.User_error m -> m
-                 | Pricklypear_lisp.Ast.Unbound_var s -> "unbound: " ^ s
-                 | Pricklypear_lisp.Ast.Budget_exceeded -> "budget exceeded"
-                 | _ -> Printexc.to_string exn)
-            | _ -> Printexc.to_string exn
-          in
+          (* Use the full printer — partial match left Arity_mismatch /
+             Type_mismatch / etc. as opaque "Interp_error(_)" to agents. *)
+          let msg = Agent_tools.pp_interp_exn exn in
           json_response reqd
             (`Assoc [("ok", `Bool false); ("error", `String msg)]);
           Lwt.return_unit)
