@@ -37,6 +37,12 @@ type t = {
   mutable ui_nav_retry_at : float;
   mutable ui_css_refreshed_at : float;
   mutable ui_css_retry_at : float;
+  (** When true, the eval_one define-interceptor suppresses its
+      refresh_ui_shell call. Used during seed_stdlib so that defining
+      ui/nav mid-seed (before notes/capture/nav is bound) does not
+      trigger an eager refresh that fails with unbound: notes/capture/nav.
+      The boot sequence calls refresh_ui_shell once AFTER seeding completes. *)
+  mutable suppress_refresh_on_define : bool;
   (** Active HTTP request for user-route dispatch; None in REPL. *)
   mutable current_request : request option;
   (** When true, (checkout)/(fork)/(merge) are blocked so the agent
