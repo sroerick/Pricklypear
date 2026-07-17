@@ -77,7 +77,20 @@ let load_defs_async (t : t) : unit =
     Re-binds kernel prims from [t.kernel_catalog] first so checkout does
     not lose +/define/load-library/etc. *)
 let rehydrate (t : t) : unit Lwt.t =
-  Hashtbl.clear t.env.bindings;
+  (* image.http-robustness invariant 4a: build a FRESH env record and
+     SWAP t.env to it. Do NOT Hashtbl.clear the old env's bindings —
+     VLambda closures capture `env` by reference, so clearing in place
+     would empty the binding table an in-flight page (holding the old
+     env via its captured closures) is still reading. The old record
+     stays alive for any closure that captured it; new requests see
+     the fresh env. This makes concurrent rehydrate safe to run
+     alongside lock-free page work (invariant 4b). *)
+  let fresh =
+    match t.env.parent with
+    | None -> Pricklypear_lisp.Env.create ()
+    | Some p -> Pricklypear_lisp.Env.create ~parent:(Some p) ()
+  in
+  t.env <- fresh;
   Hashtbl.clear t.routes;
   List.iter
     (fun (name, _) ->

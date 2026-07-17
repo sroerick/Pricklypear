@@ -13,7 +13,14 @@ type request = {
 type t = {
   mutable manifest : Pricklypear_common.Manifest.t;
   store : Store.t;
-  env : Pricklypear_lisp.Ast.env;
+  (* image.http-robustness invariant 4a: env is mutable so rehydrate can
+     SWAP it to a fresh record (new Hashtbl, same parent chain) instead
+     of clearing the existing binding table in place. VLambda closures
+     capture `env` by reference; clearing in place would corrupt an
+     in-flight page's captured environment. Swapping leaves the old
+     record intact for any closure that still holds it, so concurrent
+     rehydrate cannot break a running page. *)
+  mutable env : Pricklypear_lisp.Ast.env;
   mutable prims : Pricklypear_lisp.Eval.prim_table;
   (* In-memory route table mirroring view_bindings for the branch.
      Populated by load_defs_async at session-make time; (route ...)
