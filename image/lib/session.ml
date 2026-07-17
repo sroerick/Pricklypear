@@ -1096,9 +1096,10 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value Lwt.t =
            Lwt.async (fun () ->
              Store.persist_function t.store name body_expr t.manifest.username);
          let* () =
-           if name = "ui/nav" || name = "ui/home" || name = "ui/css"
-              || name = "ui/theme"
-              || String.starts_with ~prefix:"theme/" name
+           if not t.suppress_refresh_on_define
+              && (name = "ui/nav" || name = "ui/home" || name = "ui/css"
+                  || name = "ui/theme"
+                  || String.starts_with ~prefix:"theme/" name)
            then refresh_ui_shell t
            else Lwt.return_unit
          in
@@ -1142,9 +1143,10 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
          Lwt.async (fun () ->
            Store.persist_function t.store name body_expr t.manifest.username);
        let* () =
-         if name = "ui/nav" || name = "ui/home" || name = "ui/css"
-            || name = "ui/theme"
-            || String.starts_with ~prefix:"theme/" name
+         if not t.suppress_refresh_on_define
+            && (name = "ui/nav" || name = "ui/home" || name = "ui/css"
+                || name = "ui/theme"
+                || String.starts_with ~prefix:"theme/" name)
          then refresh_ui_shell t
          else Lwt.return_unit
        in
@@ -1180,6 +1182,12 @@ and refresh_ui_shell (t : t) : unit Lwt.t =
      is unchanged: when ui_nav_html is None, http serves emergency nav. *)
   let shell_ttl = 60.0 in
   let now = Unix.gettimeofday () in
+  let pp_exn exn =
+    match exn with
+    | Pricklypear_lisp.Ast.Interp_error e ->
+        Pricklypear_lisp.Ast.pp_interp_error e
+    | _ -> Printexc.to_string exn
+  in
   let* () =
     match Pricklypear_lisp.Env.lookup t.env "ui/nav" with
     | None ->
@@ -1209,13 +1217,14 @@ and refresh_ui_shell (t : t) : unit Lwt.t =
               t.ui_nav_retry_at <- 0.0;
               Lwt.return_unit)
             (fun exn ->
-              (* Warn once per retry window, then go quiet. *)
+              (* Warn once per retry window, then go quiet. Print the
+                 full message so the failure is diagnosable. *)
               ignore
                 (Ops_log.warn ~component:"session"
                    ~context:[("fn", "ui/nav")]
                    ("refresh_ui_shell failed (retry in "
                     ^ string_of_float shell_ttl ^ "s): "
-                    ^ Printexc.to_string exn));
+                    ^ pp_exn exn));
               t.ui_nav_html <- None;
               t.ui_nav_retry_at <- now +. shell_ttl;
               Lwt.return_unit)
@@ -1251,7 +1260,7 @@ and refresh_ui_shell (t : t) : unit Lwt.t =
                ~context:[("fn", "ui/css")]
                ("refresh_ui_shell css failed (retry in "
                 ^ string_of_float shell_ttl ^ "s): "
-                ^ Printexc.to_string exn));
+                ^ pp_exn exn));
             t.ui_css <- None;
             t.ui_css_retry_at <- now +. shell_ttl;
             Lwt.return_unit)
@@ -1269,9 +1278,22 @@ and seed_stdlib (t : t) : unit Lwt.t =
      (define)s write overrides on personal and survive reseed/deploy.
 
      Canonical source is libs/*.pp in git. Explicit (load-library ...) on
-     the current branch still overwrites that branch (intentional). *)
+     the current branch still overwrites that branch (intentional).
+
+     suppress_refresh_on_define: the eval_one define-interceptor would
+     otherwise fire refresh_ui_shell when ui/nav is defined mid-seed
+     (before notes/capture/nav is bound) and fail with
+     `unbound: notes/capture/nav`. The boot sequence does one explicit
+     refresh_ui_shell AFTER all packages are loaded. *)
   Store.with_branch t.store ~branch_id:Store.system_main_id (fun () ->
-    let* () = seed_one t "std" in
+    t.suppress_refresh_on_define <- true;
+    let finally () =
+      t.suppress_refresh_on_define <- false;
+      Lwt.return_unit
+    in
+    Lwt.finalize
+      (fun () ->
+        let* () = seed_one t "std" in
     let* () = seed_one t "weather" in
     let* () = seed_one t "ui" in
     let* () = seed_one t "layout" in
@@ -1290,6 +1312,7 @@ and seed_stdlib (t : t) : unit Lwt.t =
     let* () = seed_one t "bible" in
     let* () = seed_one t "dabar" in
     Lwt.return_unit)
+      finally)
 
 (** Ensure username/personal exists as an EMPTY child of system/main.
     Inheritance (not copy) means main defaults stay visible; personal
@@ -1371,6 +1394,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
       ui_nav_retry_at = 0.0;
       ui_css_refreshed_at = 0.0;
       ui_css_retry_at = 0.0;
+      suppress_refresh_on_define = false;
       current_request = None;
       agent_branch_lock = false;
       is_admin = (manifest.username = "admin");

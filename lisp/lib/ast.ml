@@ -71,6 +71,39 @@ exception Interp_error of interp_error
 
 let _ = Obj.repr (fun (_ : interp_error) -> ())  (* keep type referenced *)
 
+(** Human-readable form of an [interp_error]. Used by logging/REPL so a
+    refresh_ui_shell warn names the actual failure (Unbound_var x /
+    User_error ... / Prim_error ...) instead of the opaque
+    `Interp_error(_)` Printexc produces. *)
+let rec pp_value_short (v : value) : string =
+  match v with
+  | VStr s -> "\"" ^ s ^ "\""
+  | VInt i -> Int64.to_string i
+  | VNil -> "nil"
+  | VBool b -> string_of_bool b
+  | VFloat f -> string_of_float f
+  | VList xs -> "[" ^ String.concat ", " (List.map pp_value_short xs) ^ "]"
+  | VPair (a, b) -> "(" ^ pp_value_short a ^ " . " ^ pp_value_short b ^ ")"
+  | VLambda _ -> "<lambda>"
+  | VMacro _ -> "<macro>"
+  | VPrim n -> "<prim " ^ n ^ ">"
+  | VRef (t, _) -> "<ref " ^ t ^ ">"
+
+let pp_interp_error (e : interp_error) : string =
+  match e with
+  | Unbound_var s -> "unbound: " ^ s
+  | Not_a_function v -> "not a function: " ^ pp_value_short v
+  | Arity_mismatch (n, exp, got) ->
+      Printf.sprintf "arity mismatch in %s: expected %d, got %d" n exp got
+  | Wrong_arg_count (n, exp, got) ->
+      Printf.sprintf "wrong arg count in %s: expected %d, got %d" n exp got
+  | Type_mismatch (exp, v) ->
+      "type mismatch: expected " ^ exp ^ ", got " ^ pp_value_short v
+  | Budget_exceeded -> "budget exceeded"
+  | Prim_error (p, m) -> "prim " ^ p ^ ": " ^ m
+  | Parse_error (m, l, c) -> Printf.sprintf "parse error: %s (%d:%d)" m l c
+  | User_error m -> m
+
 (** Helper constructors for building AST in tests *)
 let var s = Var s
 let int n = Lit (VInt (Int64.of_int n))
