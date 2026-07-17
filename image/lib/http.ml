@@ -3,6 +3,7 @@
     System pages + browser product surfaces:
       /  /health  /branches  /bindings  /types  /data …
       /repl  /api/eval  /edit  /inspect  /agent
+      public agent bootstrap: /.well-known/agent.json  /agent.txt
       user routes via (route ...)
 *)
 open Lwt.Syntax
@@ -468,6 +469,11 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
       let j = Pricklypear_common.Protocol.health_response_to_json h in
       text_response reqd ~content_type:"application/json"
         (Yojson.Safe.pretty_to_string j)
+  (* Public agent bootstrap — no auth, no secrets. /agent stays private. *)
+  | `GET, "/.well-known/agent.json" ->
+      Agent_discovery.serve_agent_json reqd ~headers
+  | `GET, "/agent.txt" ->
+      Agent_discovery.serve_agent_txt reqd ~headers
   | `GET, "/branches" -> launch (fun () -> branches_page session reqd)
   | `POST, "/branches/checkout" -> launch (fun () -> branches_checkout session reqd)
   | `POST, "/branches/fork" -> launch (fun () -> branches_fork session reqd)

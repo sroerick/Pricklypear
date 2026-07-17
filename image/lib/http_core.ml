@@ -326,6 +326,8 @@ let is_system_hard_public (path : string) : bool =
   || has_prefix path "/code"
   || path = "/assets"
   || has_prefix path "/assets"
+  || path = "/.well-known/agent.json"
+  || path = "/agent.txt"
 
 (** Kernel paths Lisp cannot open to the world (auth.route-visibility). *)
 let is_system_hard_private (path : string) : bool =
