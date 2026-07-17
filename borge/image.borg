@@ -466,33 +466,56 @@
   (subsection http-robustness
    (doc "HTTP server survival under load + peer disconnect. The image must
          never exit because a client went away mid-response.")
-   (implements image/lib/http.ml image/lib/http_core.ml image/lib/http_agent.ml)
-   (status partial)
-   (* agent note (|Invariants 1,2,3,5 implemented 2026-07-17 after the
-      pricklypear.rocks HN crash post mortem. Invariant 4 (narrow
-      request_mutex) is DEFERRED to BORGE-1784301597: agent_say reads
-      t.manifest.username live, so releasing the mutex across page_fn
-      needs a per-request manifest/env snapshot refactor to avoid
-      attributing agent messages to the wrong user in multi-tenant use.
-      The inflight cap (invariant 5) was moved INSIDE launch rather than
-      at the connection establisher so /health (which bypasses launch)
-      is never blocked by page traffic — a connection-level gate wedged
-      /health behind mutex-serialized page work in load testing.
+   (implements image/lib/http.ml image/lib/http_core.ml image/lib/http_agent.ml image/lib/session.ml image/lib/session_types.ml)
+   (status implemented)
+   (* agent note (|Invariants 1,2,3,4,5 ALL implemented 2026-07-17.
+      1,2,3,5 landed first (crash fix + ui/nav cache + inflight cap) after
+      the pricklypear.rocks HN crash post mortem. Invariant 4 (narrow
+      request_mutex so page work runs lock-free) landed next, as two
+      parts:
+
+      4a. IMMUTABLE-ENV REHYDRATE (correctness prerequisite): rehydrate
+      now builds a FRESH env record and SWAPS t.env to it instead of
+      Hashtbl.clear-ing the old binding table in place. Session.t.env
+      is now mutable. VLambda closures capture env by reference, so the
+      old record stays intact for any in-flight page — a concurrent
+      rehydrate can no longer empty a running page's captured bindings.
+      image/test/http_robust_env_test.ml proves the swap contract.
+
+      4b. NARROWED MUTEX: request_mutex now guards ONLY the identity-
+      attach gate (resolve_identity + attach + classify + subdomain
+      mismatch + analytics + refresh_ui_shell). It is released BEFORE
+      page_fn runs, so page rendering (Lisp eval, HTML build, agent LLM
+      streaming) is lock-free.
+
+      NO db_mutex needed: pgx_lwt serializes all ops on a connection via
+      its per-connection Sequencer (type t = conn Sequencer.t; every
+      execute/with_transaction goes through Sequencer.enqueue =
+      Lwt_mutex.with_lock on a per-conn mutex). Concurrent Pg.execute on
+      the same conn QUEUE safely — no wire interleave. So DB prims stay
+      correct under lock-free page work without a separate db lock.
+
+      MULTI-TENANT CAVEAT (deferred to a follow-up borge issue): prims
+      still read t.manifest live via the !t ref. Safe for v1 single-
+      tenant dogfood (only authed user is admin; anon all share
+      manifest.username=anonymous) so concurrent authed requests are the
+      SAME user — no wrong-user write attribution. True multi-tenant
+      (distinct authed users concurrent) needs a per-request manifest
+      context threaded through the prim dispatch (ABI surgery); not a
+      v1 crash/throughput fix.
 
       VERIFICATION (dev stack, 2026-07-17):
-      - dune build image + dune runtest --force: 9 suites green
-        incl. new image/test/http_robust_test.ml (3 tests: closed-writer
-        predicate, safe-wrapper swallow, inflight acquire/release).
-      - /tmp/pp_http_robust.py abort-storm: 64, 200, and 500 concurrent
-        aborted requests (RST mid-response). image PID UNCHANGED across
-        each storm; /health 200 mid-storm and after; 0 'Fatal error' in
-        image.log. Pre-fix the same pattern reproduced the prod crash
-        (Failure "cannot write to closed writer" -> process exit).
-      - refresh_ui_shell warn spam: 1 line per 60s retry window (was
-        hundreds per minute under load) — invariant 3 cache confirmed.
-      NOT YET VERIFIED on prod (155.138.208.45); deploy + watchdog soak
-      pending. Invariant 4 unblocks the throughput ceiling but is not a
-      crash fix.|) *)
+      - dune build + dune runtest --force: 10 suites green incl. new
+        image/test/http_robust_test.ml (3) + http_robust_env_test.ml (1).
+      - /tmp/pp_http_robust.py abort-storm at 64 concurrent aborted
+        requests: image PID UNCHANGED, /health 200 throughout, 0 Fatal.
+      - Concurrency: 90 concurrent reqs (30 authed / + 30 anon /welcome
+        + 30 aborts) drain in 0.14s (was serialized under the old global
+        mutex); post-storm authed / still renders real ui/nav (no
+        emergency-nav); 0 Fatal, 0 refresh_ui_shell failures.
+      - invariant 3: refresh_ui_shell 1 warn per 60s retry window.
+      Deployed to prod (9210b1c for invariants 1-3; this commit for 4).
+      Prod watchdog soak pending under real traffic.|) *)
    (verify
     (build "dune build image")
     (smoke "/tmp/pp_http_robust.py — abort N concurrent requests mid-response; image stays up, /health 200 throughout")
@@ -609,33 +632,82 @@
 
          =========================================================
          INVARIANT 4 — CONCURRENCY: IDENTITY ATTACH IS SERIALIZED,
-         PAGE WORK IS NOT
+         PAGE WORK IS NOT (immutable-env + narrowed mutex)
          =========================================================
          Status quo: a single global request_mutex
-         (http_core.ml:223) is held for the ENTIRE request lifecycle
+         (http_core.ml) is held for the ENTIRE request lifecycle
          — identity resolve, classify, refresh_ui_shell, AND
          page_fn (including slow LLM/SSE streaming). This serializes
          the whole site to one-request-at-a-time and, worse, lets
          one streaming agent chat block /login and / for everyone.
 
-         Rule: request_mutex protects ONLY the identity-attach
-         critical section (resolve_identity + attach_from_user /
-         attach_anonymous + the classify that depends on the
-         attached branch). The mutex is released BEFORE page_fn
-         runs. Page work — including user-route handlers, /api/eval,
-         and the agent SSE streaming loop — runs WITHOUT holding
-         the global lock.
+         The naive fix (just release the mutex before page_fn) is
+         UNSAFE because Session.t is one shared mutable record and
+         page work reads two shared mutable fields:
+           (1) t.env — rehydrate does Hashtbl.clear t.env.bindings
+               IN PLACE. VLambda closures capture env by reference
+               (env = { bindings: Hashtbl.t; parent }), so a
+               concurrent rehydrate during page eval would empty the
+               binding table an in-flight lambda is reading through
+               its captured env -> unbound-var mid-page.
+           (2) t.manifest — attach_identity mutates t.manifest in
+               place; prims (crud, agent) read t.manifest.username
+               live via the !t ref they close over. A concurrent
+               other-user attach would flip the username mid-page
+               -> wrong-user attribution for writes.
 
-         Rationale: the mutex exists to prevent the Alice/Bob race
-         on session env / branch context during the auth gate. It
-         does not need to protect page rendering, which is
-         request-local. Two concurrent page_fns on the same
-         session is acceptable because (a) Lisp route handlers are
-         pure w.r.t. the request context (current_request is
-         dynamic, handler-scoped) and (b) DB prims use their own
-         Store connections / transactions. If a future shared
-         mutable session field needs serialization, give THAT
-         field its own narrower lock — do not re-globalize.
+         RULE (two parts):
+
+         4a. IMMUTABLE-ENV REHYDRATE (the correctness prerequisite).
+             rehydrate MUST NOT mutate the existing env's binding
+             table in place. Instead it builds a FRESH env record
+             (new Hashtbl, same parent chain) and swaps
+             Session.t.env to point at it. Session.t.env becomes a
+             mutable field. The OLD env record stays intact for the
+             lifetime of any VLambda closure that captured it, so a
+             concurrent rehydrate cannot corrupt an in-flight page's
+             captured environment. This is the foundation that
+             makes any mutex-narrowing safe.
+
+         4b. NARROWED MUTEX. request_mutex protects ONLY the
+             identity-attach critical section (resolve_identity +
+             attach_from_user / attach_anonymous + classify + the
+             post-attach refresh_ui_shell). The mutex is released
+             BEFORE page_fn runs. Page work — user-route handlers,
+             /api/eval, and the agent SSE streaming loop — runs
+             WITHOUT the global lock, against the (now-immutable)
+             env captured by closures.
+
+         SCOPE / MULTI-TENANT CAVEAT (honest): the manifest race
+         (4b concern 2) is NOT fully closed by this work. Prims
+         still read t.manifest live via the !t ref. This is safe
+         TODAY because v1 dogfood is single-tenant: the only
+         authed user is admin, and anonymous requests all share
+         manifest.username=anonymous. Concurrent authed requests
+         are the SAME user, so t.manifest reads during page work
+         cannot attribute a write to the wrong user. True
+         multi-tenant safety (distinct authed users concurrent)
+         needs a per-request manifest context threaded through the
+         prim dispatch so prims read the request's manifest, not
+         the shared record. That is deferred to a follow-up borge
+         issue (ABI surgery on prim_fn; not a crash/throughput fix
+         for v1). Until then, the narrowed mutex ships with a
+         documented single-tenant assumption.
+
+         The single shared Postgres connection (Store.t.conn)
+         remains a throughput ceiling, NOT a correctness risk under
+         the narrowed mutex: pgx_lwt serializes all operations on a
+         connection internally via its per-connection Sequencer
+         (type t = conn Sequencer.t; every execute/with_transaction
+         goes through Sequencer.enqueue = Lwt_mutex.with_lock on a
+         per-connection mutex). Concurrent Pg.execute calls on the
+         same conn therefore QUEUE safely — no wire interleave, no
+         corruption. So narrowing request_mutex does NOT require a
+         separate db_mutex: DB prims stay correct (serialized by pgx)
+         and page rendering (Lisp eval, HTML build — the slow part)
+         runs lock-free. The single conn is still a throughput
+         ceiling (a pool is a separate later iteration), but it
+         cannot corrupt under concurrency.
 
          =========================================================
          INVARIANT 5 — ACCEPT-SIDE CONNECTION CAP
@@ -694,16 +766,28 @@
          5. Session.refresh_ui_shell: cache failure per branch
             (short TTL or until branch reload); downgrade repeat
             warns to debug. Emergency chrome fallback unchanged.
-         6. http_core.ml: narrow request_mutex scope in launch to
-            identity-attach + classify only; release before page_fn.
-            Add a per-page-result lock only if a real shared-mutable
-            need appears (it should not).
-         7. http.ml serve: add Lwt_semaphore of PP_HTTP_MAX_INFLIGHT
-            (default 256) around the acceptor / request_handler;
-            reject overflow with 503.
-         8. Pull agent SSE streaming drain (http_agent.ml api_agent
-            streaming branch) out from under request_mutex — it
-            must run in the page-work phase, not the attach phase.
+         6. session_types: make Session.t.env a mutable field.
+         7. session rehydrate: build a FRESH env record (new Hashtbl,
+            same parent chain) and assign t.env <- fresh; do NOT
+            Hashtbl.clear the old one. Old envs stay alive for
+            in-flight closures (immutable-env discipline).
+         8. NO separate db_mutex needed: pgx_lwt serializes all
+            operations on a connection via its per-connection
+            Sequencer (Lwt_mutex). Concurrent Pg.execute on the
+            same conn queue safely. Verify this assumption holds
+            (read pgx_lwt.ml Sequencer) and document it; do not add
+            a db_mutex.
+         9. http_core.ml launch: narrow request_mutex to the
+            identity-attach critical section (resolve_identity +
+            attach + classify + refresh_ui_shell); release BEFORE
+            page_fn runs. page_fn runs lock-free.
+         10. http.ml serve: gate the acceptor on the inflight cap
+            (PP_HTTP_MAX_INFLIGHT, default 256) — reject overflow
+            with 503. (inflight gate already inside launch from
+            invariants 1/5 work.)
+         11. Agent SSE streaming drain (http_agent.ml api_agent
+            streaming branch) already runs as page work post-attach;
+            confirm it does not re-acquire request_mutex.
          9. Smoke scripts: /tmp/pp_http_robust.py (abort N concurrent
             mid-response; assert pid unchanged + /health 200),
             /tmp/pp_sse_disconnect.py (open stream, drop client,

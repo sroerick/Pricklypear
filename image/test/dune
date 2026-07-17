@@ -27,3 +27,8 @@
  (name http_robust_test)
  (modules http_robust_test)
  (libraries pricklypear-image alcotest lwt lwt.unix))
+
+(test
+ (name http_robust_env_test)
+ (modules http_robust_env_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest))

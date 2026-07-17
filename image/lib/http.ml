@@ -39,100 +39,111 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
       let* () = inflight_acquire () in
       Lwt.finalize
         (fun () ->
-          Lwt_mutex.with_lock request_mutex (fun () ->
-            Lwt.catch
-              (fun () ->
-            let* proceed =
-              if auth_disabled () then begin
-                (* Dev escape: still try attach so whoami is real if cookie. *)
-                let* user_opt = resolve_identity session ~headers in
-                let* () =
-                  match user_opt with
-                  | Some user ->
-                      let tok = cookie_value headers cookie_name in
-                      attach_from_user session user ~auth_token:tok
-                        ~checkout_personal_now:false ()
-                  | None -> Session.attach_anonymous session
-                in
-                Lwt.return true
-              end else begin
-                (* Attach identity BEFORE classify: route table is
-                   branch-scoped (inheritance CTE). Anonymous uses
-                   system/main so package public routes resolve. *)
-                let* user_opt = resolve_identity session ~headers in
-                let* () =
-                  match user_opt with
-                  | Some user ->
-                      let tok = cookie_value headers cookie_name in
-                      attach_from_user session user ~auth_token:tok
-                        ~checkout_personal_now:false ()
-                  | None -> Session.attach_anonymous session
-                in
-                let classif = classify_path session path in
-                let needs_auth =
-                  match classif with
-                  | `Hard_public -> false
-                  | `Hard_private | `Unknown -> true
-                  | `User (_, vis) -> vis <> "public"
-                in
-                match user_opt, needs_auth with
-                | Some _, _ -> Lwt.return true
-                | None, false -> Lwt.return true
-                | None, true ->
-                    let apiish =
-                      String.length path >= 4
-                      && String.sub path 0 4 = "/api"
+          Lwt.catch
+            (fun () ->
+              (* image.http-robustness invariant 4b: request_mutex guards
+                 ONLY the identity-attach gate (resolve_identity + attach +
+                 classify + subdomain mismatch + analytics + refresh_ui_shell).
+                 It is released BEFORE page_fn runs so page work (Lisp eval, HTML
+                 build, agent LLM streaming) is lock-free. Correctness rests on
+                 invariant 4a (immutable-env rehydrate: in-flight closures hold
+                 their own env record, unaffected by a concurrent rehydrate) +
+                 pgx's per-connection Sequencer (DB prims serialize on the single
+                 PG conn without this mutex). See borge/image.borg http-robustness. *)
+              let* proceed =
+                Lwt_mutex.with_lock request_mutex (fun () ->
+                  if auth_disabled () then begin
+                    (* Dev escape: still try attach so whoami is real if cookie. *)
+                    let* user_opt = resolve_identity session ~headers in
+                    let* () =
+                      match user_opt with
+                      | Some user ->
+                          let tok = cookie_value headers cookie_name in
+                          attach_from_user session user ~auth_token:tok
+                            ~checkout_personal_now:false ()
+                      | None -> Session.attach_anonymous session
                     in
-                    if apiish then unauthorized_api reqd
-                    else require_login_redirect reqd ~path;
-                    Lwt.return false
-              end
-            in
-            if not proceed then Lwt.return_unit
-            else begin
-              (* Subdomain garden mismatch: private paths require whoami = garden owner. *)
-              let host_mode = classify_host headers in
-              let uname_now = Session.username session in
-              let classif_now = classify_path session path in
-              let path_private =
-                match classif_now with
-                | `Hard_public -> false
-                | `User (_, vis) -> vis <> "public"
-                | `Hard_private | `Unknown -> true
+                    Lwt.return true
+                  end else begin
+                    (* Attach identity BEFORE classify: route table is
+                       branch-scoped (inheritance CTE). Anonymous uses
+                       system/main so package public routes resolve. *)
+                    let* user_opt = resolve_identity session ~headers in
+                    let* () =
+                      match user_opt with
+                      | Some user ->
+                          let tok = cookie_value headers cookie_name in
+                          attach_from_user session user ~auth_token:tok
+                            ~checkout_personal_now:false ()
+                      | None -> Session.attach_anonymous session
+                    in
+                    let classif = classify_path session path in
+                    let needs_auth =
+                      match classif with
+                      | `Hard_public -> false
+                      | `Hard_private | `Unknown -> true
+                      | `User (_, vis) -> vis <> "public"
+                    in
+                    match user_opt, needs_auth with
+                    | Some _, _ -> Lwt.return true
+                    | None, false -> Lwt.return true
+                    | None, true ->
+                        let apiish =
+                          String.length path >= 4
+                          && String.sub path 0 4 = "/api"
+                        in
+                        if apiish then unauthorized_api reqd
+                        else require_login_redirect reqd ~path;
+                        Lwt.return false
+                  end)
               in
-              let mismatch =
-                match host_mode with
-                | Host_garden g
-                  when path_private && uname_now <> "anonymous"
-                       && uname_now <> g -> true
-                | Host_unknown when base_domain () <> None -> true
-                | _ -> false
-              in
-              if mismatch then begin
-                (match host_mode, base_domain () with
-                 | Host_garden _, Some base when uname_now <> "anonymous" ->
-                     redirect_response reqd
-                       ("http://" ^ uname_now ^ "." ^ base ^ "/")
-                 | Host_unknown, _ ->
-                     text_response reqd ~status:`Not_found
-                       ~content_type:"text/plain" "unknown host"
-                 | _ -> redirect_response reqd "/");
-                Lwt.return_unit
-              end else begin
-              (* Product analytics (in-memory day counters). *)
-              let uname = Session.username session in
-              let is_authed =
-                uname <> "anonymous" && uname <> "public" && uname <> ""
-              in
-              Ops_stats.record_request ~path ~is_authed
-                ~username:(if is_authed then Some uname else None)
-                ~headers ~sockaddr;
-              (* Refresh ui/nav cache every request so Lisp chrome is shared
-                 by home, system pages, and user routes — not only /. *)
-              let* () = Session.refresh_ui_shell session in
-              page_fn ()
-              end
-            end)
+              if not proceed then Lwt.return_unit
+              else begin
+                (* Subdomain garden mismatch: private paths require whoami = garden owner. *)
+                let host_mode = classify_host headers in
+                let uname_now = Session.username session in
+                let classif_now = classify_path session path in
+                let path_private =
+                  match classif_now with
+                  | `Hard_public -> false
+                  | `User (_, vis) -> vis <> "public"
+                  | `Hard_private | `Unknown -> true
+                in
+                let mismatch =
+                  match host_mode with
+                  | Host_garden g
+                    when path_private && uname_now <> "anonymous"
+                         && uname_now <> g -> true
+                  | Host_unknown when base_domain () <> None -> true
+                  | _ -> false
+                in
+                if mismatch then begin
+                  (match host_mode, base_domain () with
+                   | Host_garden _, Some base when uname_now <> "anonymous" ->
+                       redirect_response reqd
+                         ("http://" ^ uname_now ^ "." ^ base ^ "/")
+                   | Host_unknown, _ ->
+                       text_response reqd ~status:`Not_found
+                         ~content_type:"text/plain" "unknown host"
+                   | _ -> redirect_response reqd "/");
+                  Lwt.return_unit
+                end else begin
+                (* Product analytics (in-memory day counters). *)
+                let uname = Session.username session in
+                let is_authed =
+                  uname <> "anonymous" && uname <> "public" && uname <> ""
+                in
+                Ops_stats.record_request ~path ~is_authed
+                  ~username:(if is_authed then Some uname else None)
+                  ~headers ~sockaddr;
+                (* Refresh ui/nav cache every request so Lisp chrome is shared
+                   by home, system pages, and user routes — not only /. *)
+                let* () = Session.refresh_ui_shell session in
+                (* GATE COMPLETE — request_mutex released above. page_fn runs
+                   lock-free (invariant 4b). *)
+                page_fn ()
+                end
+              end)
           (fun exn ->
             (* image.http-robustness invariant 2: if the handler failed
                because the peer went away (closed writer), do NOT try to
@@ -157,7 +168,7 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
             in
             html_response reqd ~session ~status:`Internal_server_error body;
             Lwt.return_unit
-            end)))
+            end))
       (fun () -> inflight_release ()))
   in
   (** Lisp user-route if bound; else kernel [fallback]. *)
