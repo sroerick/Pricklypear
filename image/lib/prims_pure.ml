@@ -58,16 +58,13 @@ let num_compare a b =
   | NInt x, NInt y -> Int64.compare x y
   | _ -> compare (float_of_num a) (float_of_num b)
 
-(* "+" sums two-or-more numeric args. Variadic. *)
+(* "+" sums zero-or-more numeric args. Variadic; (+) = 0 (additive identity). *)
 let prim_add (args : value list) : value =
-  if args = [] then
-    raise (Interp_error (User_error "+ needs at least one arg"))
-  else
-    value_of_num
-      (List.fold_left
-         (fun acc v -> num_add acc (num_of_value v))
-         (num_of_value (List.hd args))
-         (List.tl args))
+  value_of_num
+    (List.fold_left
+       (fun acc v -> num_add acc (num_of_value v))
+       (NInt 0L)
+       args)
 
 (* "-" binary: (- a b) = a - b; unary: (- a) = -a. *)
 let prim_sub args =
@@ -76,16 +73,13 @@ let prim_sub args =
   | [ a; b ] -> value_of_num (num_sub (num_of_value a) (num_of_value b))
   | _ -> raise (Interp_error (User_error "- needs one or two numeric args"))
 
-(* "*". Two-or-more numeric args. *)
+(* "*". Zero-or-more numeric args. Variadic; empty product is 1 (multiplicative identity). *)
 let prim_mul (args : value list) : value =
-  if args = [] then
-    raise (Interp_error (User_error "* needs at least one arg"))
-  else
-    value_of_num
-      (List.fold_left
-         (fun acc v -> num_mul acc (num_of_value v))
-         (num_of_value (List.hd args))
-         (List.tl args))
+  value_of_num
+    (List.fold_left
+       (fun acc v -> num_mul acc (num_of_value v))
+       (NInt 1L)
+       args)
 
 (* "=" numeric equality (int/float). *)
 let prim_num_eq args =
