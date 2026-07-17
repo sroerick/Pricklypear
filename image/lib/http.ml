@@ -128,6 +128,7 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
             Lwt.async (fun () ->
               Ops_incidents.emit_and_maybe_file session
                 ~level:Ops_log.Error ~component:"http"
+                ~file:(not (Ops_incidents.is_expected_runtime_error exn))
                 ~context:[("path", path)] msg);
             let body =
               chrome ~session ~title:"Error" [

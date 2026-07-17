@@ -17,3 +17,8 @@
  (name ai_store_test)
  (modules ai_store_test)
  (libraries pricklypear-image pricklypear-lisp alcotest lwt lwt.unix yojson))
+
+(test
+ (name ops_incidents_test)
+ (modules ops_incidents_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest))
