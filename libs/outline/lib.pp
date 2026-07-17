@@ -367,10 +367,26 @@
 (define outline/encode
   (lambda (root) (json-emit root)))
 
+;; A node is a 5-element list (id title body todo kids). Decode is the
+;; boundary where untrusted DB text enters the pure outline model, so
+;; validate here: anything that isn't a 5-element list falls back to a
+;; default root node instead of crashing field accessors with
+;; "car needs a list or pair" on a short/atom/nil decode.
+(define outline/valid?
+  (lambda (n)
+    (if (null? n)
+        ()
+        (if (pair? n)
+            (= (count n) 5)
+            ()))))
+
 (define outline/decode
   (lambda (s)
     (if (null? s)
         (outline/node "root" "Untitled")
         (if (string-eq (as-str s) "")
             (outline/node "root" "Untitled")
-            (json-parse (as-str s))))))
+            (let ((parsed (json-parse (as-str s))))
+              (if (outline/valid? parsed)
+                  parsed
+                  (outline/node "root" "Untitled")))))))
