@@ -318,7 +318,9 @@ and eval_special_form
   | "lambda", [ _head; params_expr; body ] ->
       (* full_args = [Var "lambda"; params_expr; body]. Params can be:
          - ()  -> Lit VNil (zero params)
-         - (p1 p2 ...) -> App(Var p1, [Var p2; ...]) — collect head + args *)
+         - (p1 p2 ...) -> App(Var p1, [Var p2; ...]) — collect head + args
+         Reader does NOT treat "." as dotted-pair syntax, so (a . b) is
+         four symbols including ".". Reject that with a clear error. *)
       let params =
         match params_expr with
         | Lit VNil -> []
@@ -331,6 +333,12 @@ and eval_special_form
               rest
         | _ -> raise (Interp_error (User_error "malformed lambda params"))
       in
+      if List.mem "." params then
+        raise
+          (Interp_error
+             (User_error
+                "dotted rest params not supported (reader treats \".\" as a \
+                 symbol); use fixed-arity params"));
       Lwt.return (VLambda (params, body, env))
   | "let", _ ->
       (* (let ((name val) ...) body) — full_args = [Var "let"; bindings; body] *)
@@ -526,6 +534,14 @@ and eval_special_form
                  rest
         | _ -> raise (Interp_error (User_error "malformed defmacro params"))
       in
+      (* Same reader limitation as lambda: "." is a symbol, not rest syntax.
+         Inbox c7-2611 repro used (name val . body) and looked like a let-crash. *)
+      if List.mem "." params then
+        raise
+          (Interp_error
+             (User_error
+                "dotted rest params not supported (reader treats \".\" as a \
+                 symbol); use fixed-arity params, e.g. (name val body)"));
       let m = VMacro (params, body, env) in
       Env.define env name m;
       Lwt.return m

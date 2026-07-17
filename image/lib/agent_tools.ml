@@ -3,6 +3,17 @@
 open Lwt.Syntax
 open Session_types
 
+(** Human-readable message from evaluator/reader exceptions (for agent tools
+    and POST /api/eval). Delegates to [Ast.pp_interp_error] so every
+    [interp_error] variant is covered — never emit opaque [Interp_error(_)]. *)
+let pp_interp_exn (exn : exn) : string =
+  match exn with
+  | Pricklypear_lisp.Ast.Interp_error e ->
+      Pricklypear_lisp.Ast.pp_interp_error e
+  | Pricklypear_lisp.Reader.Reader_error (m, l, c) ->
+      Printf.sprintf "parse error: %s (%d:%d)" m l c
+  | _ -> Printexc.to_string exn
+
 (** Resolve per-user LLM key (auth.user-llm-keys); env fallback inside client. *)
 let with_user_llm (t : t) (f : unit -> 'a Lwt.t) : 'a Lwt.t =
   let uid = t.manifest.user_id in
@@ -65,20 +76,7 @@ let define_binding (t : t) ~(name : string) ~(body_src : string)
            (* Still bound in env if define special-form ran *)
            Lwt.return (Ok v)))
     (fun exn ->
-      let msg =
-        match exn with
-        | Pricklypear_lisp.Ast.Interp_error e ->
-            (match e with
-             | Pricklypear_lisp.Ast.Parse_error (m, l, c) ->
-                 Printf.sprintf "parse error: %s (%d:%d)" m l c
-             | Pricklypear_lisp.Ast.User_error m -> m
-             | Pricklypear_lisp.Ast.Unbound_var s -> "unbound: " ^ s
-             | Pricklypear_lisp.Ast.Budget_exceeded -> "budget exceeded"
-             | _ -> Printexc.to_string exn)
-        | Pricklypear_lisp.Reader.Reader_error (m, l, c) ->
-            Printf.sprintf "parse error: %s (%d:%d)" m l c
-        | _ -> Printexc.to_string exn
-      in
+      let msg = pp_interp_exn exn in
       Lwt.return (Error msg))
 
 (* First-run recipe: hello page function + route. No Lisp knowledge required. *)
@@ -431,30 +429,6 @@ let value_smoke_kind (v : Pricklypear_lisp.Ast.value) : string * string =
            (match v with
             | Pricklypear_lisp.Ast.VStr s -> ("text", s)
             | _ -> ("value", Pricklypear_lisp.Reader.pp_value v)))
-
-(** Human-readable message from evaluator/reader exceptions (for agent tools). *)
-let pp_interp_exn (exn : exn) : string =
-  match exn with
-  | Pricklypear_lisp.Ast.Interp_error e ->
-      (match e with
-       | Pricklypear_lisp.Ast.Unbound_var s -> "unbound: " ^ s
-       | Pricklypear_lisp.Ast.User_error m -> m
-       | Pricklypear_lisp.Ast.Not_a_function _ -> "not a function"
-       | Pricklypear_lisp.Ast.Arity_mismatch (name, exp, got) ->
-           Printf.sprintf "arity mismatch: %s expected %d got %d" name exp got
-       | Pricklypear_lisp.Ast.Wrong_arg_count (name, exp, got) ->
-           Printf.sprintf "wrong arg count: %s expected %d got %d" name exp got
-       | Pricklypear_lisp.Ast.Type_mismatch (expected, v) ->
-           Printf.sprintf "type mismatch: expected %s got %s" expected
-             (Pricklypear_lisp.Reader.pp_value v)
-       | Pricklypear_lisp.Ast.Budget_exceeded -> "budget exceeded"
-       | Pricklypear_lisp.Ast.Prim_error (prim, msg) ->
-           Printf.sprintf "prim %s: %s" prim msg
-       | Pricklypear_lisp.Ast.Parse_error (m, l, c) ->
-           Printf.sprintf "parse error: %s (%d:%d)" m l c)
-  | Pricklypear_lisp.Reader.Reader_error (m, l, c) ->
-      Printf.sprintf "parse error: %s (%d:%d)" m l c
-  | _ -> Printexc.to_string exn
 
 let html_helpers_cheatsheet : string =
   "Pricklypear html/* cheatsheet (WRONG shapes are the #1 agent failure).\n" ^

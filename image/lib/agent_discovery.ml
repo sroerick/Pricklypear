@@ -53,15 +53,24 @@ let first_calls =
   ; "(list-bindings)"
   ; "(load-library \"todo\")"
   ; "(todo/list)"
+  ; "(load-library \"bible\")"
+  ; "(bible/chapter \"John\" 3)"
   ]
 
 let rules =
   [ "One Lisp expression per POST /api/eval unless you own multi-step state yourself."
   ; "Load libraries before calling package functions: (load-library \"todo\")."
   ; "Prefer a personal branch before defining things: (checkout \"USER/personal\")."
+  ; "Two function kinds: DATA builders take explicit args and work from /api/eval \
+     (e.g. bible/chapter, bible/chapter-html with book/chapter); HTTP HANDLERS \
+     (*/page, */reader) use request-method/request-param and return \
+     \"no active request\" outside a browser hit — that is expected, not a crash."
   ; "Do not invent app-specific REST APIs — call Lisp instead."
   ; "Never put passwords in code you write back to the image."
   ; "Unauthenticated /api/eval is rejected; /agent (HTML portal) is private."
+  ; "Dotted rest params (a . b) are NOT supported; use fixed-arity params."
+  ; "File product issues as notes in the inbox when you cannot fix OCaml; \
+     do not invent REST for filing."
   ]
 
 let curl_example (base : string) : string =
@@ -107,7 +116,7 @@ let agent_json ?(base_url : string option = None) () : Yojson.Safe.t =
   in
   `Assoc
     ( [ ("name", `String "pricklypear")
-      ; ("version", `Int 1)
+      ; ("version", `Int 2)
       ; ( "philosophy"
         , `String philosophy )
       ]
@@ -263,10 +272,33 @@ let agent_markdown ?(base_url : string option = None) () : string =
     ; "    {\"ok\": false, \"error\": \"unbound: foo\"}"
     ; ""
     ; "Unauthenticated calls are rejected (401)."
+    ; "Errors are plain strings (arity mismatch, unbound, no active request)."
     ; ""
     ; "## First calls"
     ; ""
     ; first
+    ; ""
+    ; "## Two kinds of functions"
+    ; ""
+    ; "1. DATA / builders — take explicit arguments; safe from /api/eval:"
+    ; "     (bible/chapter \"John\" 3)"
+    ; "     (bible/chapter-html \"John\" 3 ())"
+    ; "     (todo/list) after (load-library \"todo\")"
+    ; "2. HTTP HANDLERS — read (request-method)/(request-param ...);"
+    ; "     from /api/eval they return: no active request"
+    ; "     Examples: bible/chapter-reader, todo/page, notes/page, */page."
+    ; "     That message is expected. Call data functions, or hit the route"
+    ; "     in a browser / with a real HTTP request."
+    ; ""
+    ; "Inspect source: (function-source \"bible/chapter-html\")"
+    ; "List a package: (package-bindings \"bible\") after load-library."
+    ; ""
+    ; "## Application libraries (load-library)"
+    ; ""
+    ; "- std, ui, layout, welcome — shell / HTML helpers"
+    ; "- todo, notes, outline, plan, contacts, bookmarks, chat"
+    ; "- calendar, flashcards, bible, dabar, weather, signup, ai"
+    ; "Cold image after restart: (load-library \"NAME\") before calling."
     ; ""
     ; "## Rules"
     ; ""
@@ -276,11 +308,19 @@ let agent_markdown ?(base_url : string option = None) () : string =
     ; ""
     ; "    " ^ curl_example origin
     ; ""
+    ; "BusyBox wget often lacks --user/--password; prefer curl or python."
+    ; ""
     ; "## python example"
     ; ""
     ; "```python"
     ; python_example origin
     ; "```"
+    ; ""
+    ; "## Filing issues"
+    ; ""
+    ; "Prefer notes inbox (notes/doc/ensure-inbox + outline nodes) over"
+    ; "inventing bug-tracker REST. Keep OCaml-kernel bugs precise with"
+    ; "repro expressions."
     ; ""
     ; "## Related public surfaces"
     ; ""
@@ -296,6 +336,7 @@ let agent_markdown ?(base_url : string option = None) () : string =
     ; "- Do not open or rely on the raw TCP REPL port from the internet."
     ; "- Do not invent per-app REST endpoints."
     ; "- Do not put secrets into (define …) forms or public routes."
+    ; "- Do not treat \"no active request\" as a host crash — call a data fn."
     ; ""
     ]
 

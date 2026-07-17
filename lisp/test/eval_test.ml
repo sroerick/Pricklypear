@@ -285,6 +285,57 @@ let macro_tests = [
       Lwt_main.run (Eval.eval_string ~prims env "(when #f 42)")
     in
     Alcotest.(check string) "nil" "()" (Reader.pp_value got2));
+  ("defmacro expands to let (qq)", `Quick, fun () ->
+    (* Inbox c7-2611: macros expanding to let crashed with opaque
+       Interp_error. Must evaluate to the bound value. *)
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let _ =
+      Lwt_main.run
+        (Eval.eval_string ~prims env
+           "(defmacro let1 (name val body) `(let ((,name ,val)) ,body))")
+    in
+    let got =
+      Lwt_main.run (Eval.eval_string ~prims env "(let1 a 1 a)")
+    in
+    Alcotest.(check string) "let1 => 1" "1" (Reader.pp_value got));
+  ("defmacro expands to let (list)", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    Eval.register_prim prims "list" (fun args -> Lwt.return (Ast.VList args));
+    let env = Env.create () in
+    (* Image binds registered prims into env as VPrim; pure tests must too. *)
+    Env.define env "list" (Ast.VPrim "list");
+    let _ =
+      Lwt_main.run
+        (Eval.eval_string ~prims env
+           "(defmacro let1 (name val body)\
+             (list (quote let) (list (list name val)) body))")
+    in
+    let got =
+      try Lwt_main.run (Eval.eval_string ~prims env "(let1 a 1 a)")
+      with Ast.Interp_error e ->
+        Alcotest.failf "let1 list failed: %s" (Ast.pp_interp_error e)
+    in
+    Alcotest.(check string) "let1 list => 1" "1" (Reader.pp_value got));
+  ("defmacro rejects dotted rest params", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    match
+      try
+        ignore
+          (Lwt_main.run
+             (Eval.eval_string ~prims env
+                "(defmacro bad (a . b) a)"));
+        `Ok
+      with Ast.Interp_error (Ast.User_error m) -> `Err m
+         | Ast.Interp_error e -> `Err (Ast.pp_interp_error e)
+    with
+    | `Err m ->
+        if not (String.starts_with ~prefix:"dotted rest" m
+                || String.length m >= 6
+                   && String.sub m 0 6 = "dotted") then
+          Alcotest.failf "expected dotted rest error, got: %s" m
+    | `Ok -> Alcotest.fail "expected dotted rest rejection");
   ("gensym unique", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
