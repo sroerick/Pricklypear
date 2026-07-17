@@ -26,12 +26,22 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
   let meth = req.Httpaf.Request.meth in
   let headers = header_list req in
   (* Thunk page: Lwt promises are eager — must not start page work
-     before auth middleware decides proceed (auth.route-visibility). *)
+     before auth middleware decides proceed (auth.route-visibility).
+
+     image.http-robustness invariant 5: bound the expensive page-work queue
+     with the inflight cap so a traffic spike can't accumulate unbounded
+     queued work (memory/fds). Acquired here (inside launch) so cheap probes
+     like /health that bypass launch are NEVER blocked by page traffic —
+     liveness must stay servable under load. Released in finalize so a slot
+     is freed whether page_fn succeeded, failed, or the peer went away. *)
   let launch (page_fn : unit -> unit Lwt.t) : unit =
     Lwt.async (fun () ->
-      Lwt_mutex.with_lock request_mutex (fun () ->
-        Lwt.catch
-          (fun () ->
+      let* () = inflight_acquire () in
+      Lwt.finalize
+        (fun () ->
+          Lwt_mutex.with_lock request_mutex (fun () ->
+            Lwt.catch
+              (fun () ->
             let* proceed =
               if auth_disabled () then begin
                 (* Dev escape: still try attach so whoami is real if cookie. *)
@@ -124,6 +134,16 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
               end
             end)
           (fun exn ->
+            (* image.http-robustness invariant 2: if the handler failed
+               because the peer went away (closed writer), do NOT try to
+               render a 500 page onto the same dead writer — that re-throw
+               was the actual crash mechanism. Just close quietly and end. *)
+            if is_closed_writer_exn exn then begin
+              ignore (Ops_log.info ~component:"http"
+                        ~context:[("path", path)]
+                        "peer gone (closed writer); skipping 500");
+              Lwt.return_unit
+            end else begin
             let msg = Printexc.to_string exn in
             Lwt.async (fun () ->
               Ops_incidents.emit_and_maybe_file session
@@ -136,7 +156,9 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
               ]
             in
             html_response reqd ~session ~status:`Internal_server_error body;
-            Lwt.return_unit)))
+            Lwt.return_unit
+            end)))
+      (fun () -> inflight_release ()))
   in
   (** Lisp user-route if bound; else kernel [fallback]. *)
   let launch_user_route_or (fallback : unit -> unit) : unit =
@@ -657,18 +679,46 @@ let error_handler (_sockaddr : Unix.sockaddr)
        ("content-length", string_of_int (String.length body_str))]
   in
   let body_w = respond headers in
-  Httpaf.Body.write_string body_w body_str;
-  Httpaf.Body.close_writer body_w
+  try
+    Httpaf.Body.write_string body_w body_str;
+    safe_close_writer body_w
+  with exn when is_closed_writer_exn exn -> ()
 
 let serve ~(session : Session.t) ?(port = default_port) () : unit Lwt.t =
   let handler = request_handler session in
-  let establisher =
+  let inner_establisher =
     Httpaf_lwt_unix.Server.create_connection_handler
       ~request_handler:handler
       ~error_handler
   in
+  (* image.http-robustness invariant 1 (defense-in-depth): any exception
+     that escapes the inner establisher reaches Lwt.async_exception_hook and
+     TERMINATES the process (the actual pricklypear.rocks death vector).
+     Catch connection-level failures here so a gone peer or bad connection
+     ends the request, not the image.
+
+     NOTE: the inflight cap (invariant 5) is applied INSIDE [launch] in
+     request_handler, not here. Keeping it at the connection level would
+     gate /health (a cheap probe that bypasses launch) behind queued page
+     work and wedge the liveness check under load. Gating inside launch
+     bounds the expensive page-work queue while leaving /health and other
+     hard-public probes always servable. *)
+  let establisher sockaddr fd =
+    Lwt.catch
+      (fun () -> inner_establisher sockaddr fd)
+      (fun exn ->
+         if is_closed_writer_exn exn then
+           ignore (Ops_log.info ~component:"http"
+                     "connection handler: peer gone (closed writer)")
+         else
+           ignore (Ops_log.warn ~component:"http"
+                     ~context:[("phase", "connection")]
+                     ("connection handler failed: "
+                      ^ Printexc.to_string exn));
+         Lwt.return_unit)
+  in
   let addr = Lwt_unix.ADDR_INET (Unix.inet_addr_any, port) in
-  Printf.eprintf "[http] serving htmx on 0.0.0.0:%d\n" port;
+  Printf.eprintf "[http] serving htmx on 0.0.0.0:%d (max_inflight=%d)\n" port max_inflight;
   let* _server = Lwt_io.establish_server_with_client_socket addr establisher in
   let waiter, _waker = Lwt.wait () in
   waiter

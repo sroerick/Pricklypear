@@ -462,6 +462,270 @@
    |))
    )
   )
+
+  (subsection http-robustness
+   (doc "HTTP server survival under load + peer disconnect. The image must
+         never exit because a client went away mid-response.")
+   (implements image/lib/http.ml image/lib/http_core.ml image/lib/http_agent.ml)
+   (status partial)
+   (* agent note (|Invariants 1,2,3,5 implemented 2026-07-17 after the
+      pricklypear.rocks HN crash post mortem. Invariant 4 (narrow
+      request_mutex) is DEFERRED to BORGE-1784301597: agent_say reads
+      t.manifest.username live, so releasing the mutex across page_fn
+      needs a per-request manifest/env snapshot refactor to avoid
+      attributing agent messages to the wrong user in multi-tenant use.
+      The inflight cap (invariant 5) was moved INSIDE launch rather than
+      at the connection establisher so /health (which bypasses launch)
+      is never blocked by page traffic — a connection-level gate wedged
+      /health behind mutex-serialized page work in load testing.
+
+      VERIFICATION (dev stack, 2026-07-17):
+      - dune build image + dune runtest --force: 9 suites green
+        incl. new image/test/http_robust_test.ml (3 tests: closed-writer
+        predicate, safe-wrapper swallow, inflight acquire/release).
+      - /tmp/pp_http_robust.py abort-storm: 64, 200, and 500 concurrent
+        aborted requests (RST mid-response). image PID UNCHANGED across
+        each storm; /health 200 mid-storm and after; 0 'Fatal error' in
+        image.log. Pre-fix the same pattern reproduced the prod crash
+        (Failure "cannot write to closed writer" -> process exit).
+      - refresh_ui_shell warn spam: 1 line per 60s retry window (was
+        hundreds per minute under load) — invariant 3 cache confirmed.
+      NOT YET VERIFIED on prod (155.138.208.45); deploy + watchdog soak
+      pending. Invariant 4 unblocks the throughput ceiling but is not a
+      crash fix.|) *)
+   (verify
+    (build "dune build image")
+    (smoke "/tmp/pp_http_robust.py — abort N concurrent requests mid-response; image stays up, /health 200 throughout")
+    (smoke "open SSE /api/agent stream, disconnect client; no Fatal error in image.log, process pid unchanged")
+    (smoke "fire M concurrent mixed routes (page + SSE + /api/eval); all complete or peer-gone, zero process exits")
+    (test "image/test/http_robust_test.ml — closed-writer guard returns () not raises; catch-body does not re-write to dead writer"))
+   (details
+    (doc (|
+         =========================================================
+         MOTIVATION (production incident 2026-07-16)
+         =========================================================
+         pricklypear.rocks was shared on Hacker News. Under real
+         traffic (humans clicking, reloading, aborting requests
+         mid-response) the image process crashed repeatedly —
+         ~15 watchdog restarts over ~26h, including a 4-crash
+         burst in 5 minutes. Root cause was NOT load exhaustion:
+         each crash was a single top-level uncaught exception
+            Fatal error: exception
+              Failure("cannot write to closed writer")
+         which exits the single-image process. The watchdog (root
+         cron, 1-minute granularity) restarted it each time, but
+         the same aborted-request pattern killed it again.
+
+         The httpaf body writer raises Failure("cannot write to
+         closed writer") when you write to a response whose client
+         has already disconnected. The agent SSE path was already
+         hardened against this (is_closed_writer_exn /
+         close_writer_quiet in http_agent.ml) but EVERY OTHER
+         response path was unguarded: html_response, text_response,
+         json_response, fragment_response, redirect_response, and
+         the httpaf error_handler itself.
+
+         The trap: launch's Lwt.catch error branch tried to render a
+         500 page by calling html_response on the SAME dead writer
+         the original handler failed on — so the recovery write
+         threw the same Failure, now inside the catch handler where
+         nothing guards it, and it propagated to top level.
+
+         This subsection specifies the invariants that make a
+         peer-disconnect a non-event, plus the concurrency model
+         needed so the server does not serialize all traffic behind
+         one lock (which would make it fall over on throughput
+         even once crashes are fixed).
+
+         =========================================================
+         INVARIANT 1 — PEER-DISCONNECT IS NEVER FATAL
+         =========================================================
+         Every code path that writes an HTTP response body MUST
+         tolerate a closed/gone writer by returning () (or a
+         benign `Peer_gone signal), never by raising. A client
+         closing its tab is the single most common event on a web
+         server; it must not take the process down.
+
+         Mechanism: generalize the existing SSE hardening up into
+         http_core and apply it everywhere a response is written:
+
+           - is_closed_writer_exn : exn -> bool
+               (already in http_agent.ml; move to http_core, export)
+           - safe_write : Body.t -> string -> unit
+               write_string wrapped; swallows closed-writer Failure
+           - safe_close : Body.t -> unit
+               close_writer wrapped; swallows closed-writer Failure
+
+         Wrap the body of EVERY response helper:
+           html_response, text_response, json_response,
+           fragment_response, redirect_response.
+         These all currently call Httpaf.Reqd.respond_with_string
+         or Body.write_string + close_writer directly; they must
+         instead route through safe_write / safe_close (or catch
+         the Failure around respond_with_string).
+
+         The httpaf error_handler (http.ml error_handler) writes
+         unguarded via Body.write_string + close_writer; it MUST
+         be guarded the same way — it runs on connection-level
+         errors where the peer is very often already gone.
+
+         =========================================================
+         INVARIANT 2 — ERROR RECOVERY MUST NOT RE-WRITE A DEAD WRITER
+         =========================================================
+         launch's Lwt.catch exception branch (http.ml) currently
+         responds to a handler failure by calling html_response
+         ... ~status:`Internal_server_error on the same reqd. If
+         the original failure was a closed-writer (peer gone), the
+         recovery write fails the same way and escapes the catch.
+
+         Rule: the catch branch MUST detect the closed-writer case
+         (is_closed_writer_exn on the caught exn) and, instead of
+         rendering a 500 page, just safe_close the (already-dead)
+         writer and return. Only when the writer is still alive do
+         we render the 500 error page.
+
+         Concretely: in the (fun exn -> ...) handler, branch:
+           if is_closed_writer_exn exn -> safe_close; Lwt.return_unit
+           else -> Ops_incidents emit + html_response 500 (as today)
+         This breaks the throw-in-the-catch loop that was the
+         actual crash mechanism.
+
+         =========================================================
+         INVARIANT 3 — ui/nav FAILURE IS NOT PER-REQUEST NOISE
+         =========================================================
+         refresh_ui_shell runs on every request (http.ml launch).
+         When ui/nav is broken on the branch it logs a [warn]
+         line PER REQUEST — under HN traffic this produced
+         hundreds of warn lines and wasted a Lisp eval per page.
+
+         Rule: refresh_ui_shell MUST cache its failure state per
+         branch (at least short-TTL in-memory): once ui/nav has
+         failed on a branch, do not re-attempt and re-warn on every
+         request; downgrade to a single debug line (or a periodic
+         retry on the order of minutes, not per-request). The
+         emergency chrome fallback already serves the page; the
+         spam is pure waste. This is not a crash fix but a
+         log-hygiene + cost fix surfaced by the same incident.
+
+         =========================================================
+         INVARIANT 4 — CONCURRENCY: IDENTITY ATTACH IS SERIALIZED,
+         PAGE WORK IS NOT
+         =========================================================
+         Status quo: a single global request_mutex
+         (http_core.ml:223) is held for the ENTIRE request lifecycle
+         — identity resolve, classify, refresh_ui_shell, AND
+         page_fn (including slow LLM/SSE streaming). This serializes
+         the whole site to one-request-at-a-time and, worse, lets
+         one streaming agent chat block /login and / for everyone.
+
+         Rule: request_mutex protects ONLY the identity-attach
+         critical section (resolve_identity + attach_from_user /
+         attach_anonymous + the classify that depends on the
+         attached branch). The mutex is released BEFORE page_fn
+         runs. Page work — including user-route handlers, /api/eval,
+         and the agent SSE streaming loop — runs WITHOUT holding
+         the global lock.
+
+         Rationale: the mutex exists to prevent the Alice/Bob race
+         on session env / branch context during the auth gate. It
+         does not need to protect page rendering, which is
+         request-local. Two concurrent page_fns on the same
+         session is acceptable because (a) Lisp route handlers are
+         pure w.r.t. the request context (current_request is
+         dynamic, handler-scoped) and (b) DB prims use their own
+         Store connections / transactions. If a future shared
+         mutable session field needs serialization, give THAT
+         field its own narrower lock — do not re-globalize.
+
+         =========================================================
+         INVARIANT 5 — ACCEPT-SIDE CONNECTION CAP
+         =========================================================
+         Status quo: serve (http.ml) calls
+         Httpaf_lwt_unix.Server.create_connection_handler with no
+         limit and Lwt_io.establish_server_with_client_socket with
+         no backlog/fd cap. Under a spike the accept loop can
+         exhaust fds or memory even after crashes are fixed.
+
+         Rule: gate the acceptor on a bounded semaphore (an
+         Lwt_semaphore or a counter with a max, default 256
+         in-flight requests, configurable via PP_HTTP_MAX_INFLIGHT).
+         Requests beyond the cap are rejected early with a 503
+         (or simply not accepted until a slot frees). This bounds
+         fd/memory usage to a known ceiling regardless of traffic.
+         The cap is a safety valve, not a throughput target —
+         normal load should be well under it.
+
+         NOTE: this is defense-in-depth on top of the crash fix.
+         The crash fix (invariants 1-3) is what stops the death
+         loop; the cap (invariant 5) plus the mutex narrowing
+         (invariant 4) are what make the server survive the next
+         traffic spike on throughput, not just on not-crashing.
+
+         =========================================================
+         WHAT THIS IS NOT
+         =========================================================
+         - Not a general middleware framework. The launch gate
+           stays; we just narrow the lock scope.
+         - Not a PG connection pool. The single Store conn remains
+           v1; throughput of DB prims is bounded by it, but that
+           is acceptable for v1 dogfood load. A pool is a separate
+           later iteration if measured needed.
+         - Not async LLM token streaming over the wire. The SSE
+           path stays progress events; this work just makes it
+           not hold the global mutex and not crash on disconnect.
+         - Does not change route visibility / auth gate semantics.
+           The gate still runs before page_fn; only the lock scope
+           around it changes.
+
+         =========================================================
+         MAKE CHECKLIST (implementation order)
+         =========================================================
+         1. http_core.ml: add is_closed_writer_exn, safe_write,
+            safe_close (promote from http_agent.ml; keep the SSE
+            copies as thin aliases or refactor to shared).
+         2. Wrap html_response, text_response, json_response,
+            fragment_response, redirect_response body writes with
+            safe_write/safe_close (or catch respond_with_string).
+         3. http.ml error_handler: guard Body.write_string +
+            close_writer with safe_*.
+         4. http.ml launch Lwt.catch branch: if is_closed_writer_exn
+            on the caught exn, safe_close + return; else 500 as
+            today. Do NOT render 500 onto a dead writer.
+         5. Session.refresh_ui_shell: cache failure per branch
+            (short TTL or until branch reload); downgrade repeat
+            warns to debug. Emergency chrome fallback unchanged.
+         6. http_core.ml: narrow request_mutex scope in launch to
+            identity-attach + classify only; release before page_fn.
+            Add a per-page-result lock only if a real shared-mutable
+            need appears (it should not).
+         7. http.ml serve: add Lwt_semaphore of PP_HTTP_MAX_INFLIGHT
+            (default 256) around the acceptor / request_handler;
+            reject overflow with 503.
+         8. Pull agent SSE streaming drain (http_agent.ml api_agent
+            streaming branch) out from under request_mutex — it
+            must run in the page-work phase, not the attach phase.
+         9. Smoke scripts: /tmp/pp_http_robust.py (abort N concurrent
+            mid-response; assert pid unchanged + /health 200),
+            /tmp/pp_sse_disconnect.py (open stream, drop client,
+            assert no Fatal error in log).
+         10. Keep all existing smoke tests green (route, eval, ui,
+             types, post routes, e2e).
+
+         =========================================================
+         VERIFICATION BARS
+         =========================================================
+         - dune build image && dune runtest (image) green.
+         - /tmp/pp_http_robust.py: fire 64 concurrent requests that
+           abort at 50ms; after, image pid is UNCHANGED and
+           /health returns 200. (Pre-fix this reproduces the crash.)
+         - /tmp/pp_sse_disconnect.py: open /api/agent stream,
+           close the socket after 1s; grep image.log for 'Fatal
+           error' over the next 10s -> zero matches.
+         - Watchdog log over a 1h soak under mixed traffic: zero
+           'pricklypear down' lines.
+   |))
+   )
+  )
   (subsection primitives-layer
    (doc "image/lib/primitives.ml: the ~20 impure fns registered at boot")
    (implements image/lib/primitives.ml image/lib/crud.ml image/lib/session.ml)

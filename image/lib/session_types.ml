@@ -28,6 +28,15 @@ type t = {
   mutable ui_nav_html : string option;
   (** Cached CSS from (ui/css) when defined; None = emergency_css in http. *)
   mutable ui_css : string option;
+  (** image.http-robustness invariant 3: refresh_ui_shell runs on every
+      request. Without caching it re-evals ui/nav + ui/css per request
+      (wasteful) and, when they fail, warns per request (log spam). These
+      fields cache success (refreshed_at, TTL 60s) and suppress re-attempt
+      + warn for 60s after a failure (retry_at). Reset to 0.0 on checkout. *)
+  mutable ui_nav_refreshed_at : float;
+  mutable ui_nav_retry_at : float;
+  mutable ui_css_refreshed_at : float;
+  mutable ui_css_retry_at : float;
   (** Active HTTP request for user-route dispatch; None in REPL. *)
   mutable current_request : request option;
   (** When true, (checkout)/(fork)/(merge) are blocked so the agent

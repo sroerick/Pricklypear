@@ -954,7 +954,7 @@ let api_edit_create (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
             ; ("content-length", string_of_int (String.length s)) ]
         in
         let resp = Httpaf.Response.create ~headers `OK in
-        Httpaf.Reqd.respond_with_string reqd resp s;
+        safe_respond_with_string reqd resp s;
         Lwt.return_unit
 
 let page_inspector (session : Session.t) (path_seg : string)

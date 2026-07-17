@@ -99,9 +99,14 @@ let checkout_to (t : t) ~(branch_id : string) ~(branch_ref : string)
       Pricklypear_common.Manifest.branch_id = branch_id;
       branch_name = branch_ref };
   (* Drop shell caches — ui/nav and ui/css are branch-visible. Next
-     refresh_ui_shell (request launch / load) repopulates from new env. *)
+     refresh_ui_shell (request launch / load) repopulates from new env.
+     Reset the invariant-3 retry/refresh timestamps too. *)
   t.ui_nav_html <- None;
   t.ui_css <- None;
+  t.ui_nav_refreshed_at <- 0.0;
+  t.ui_nav_retry_at <- 0.0;
+  t.ui_css_refreshed_at <- 0.0;
+  t.ui_css_retry_at <- 0.0;
   rehydrate t
 
 let split_branch_ref (s : string) : string * string =
@@ -1166,57 +1171,90 @@ and load_library (t : t) (name : string) : (string, string) result Lwt.t =
   Loader.load_library ~eval_form:(eval_form t) name
 
 and refresh_ui_shell (t : t) : unit Lwt.t =
-  (* Product shell: nav HTML + theme CSS (image.product-theme). *)
+  (* Product shell: nav HTML + theme CSS (image.product-theme).
+     image.http-robustness invariant 3: this runs on every request, so
+     it must NOT re-eval + re-warn per request. Cache success for 60s
+     (ui_nav_refreshed_at / ui_css_refreshed_at) and, on failure, suppress
+     re-attempt + warn for 60s (ui_nav_retry_at / ui_css_retry_at). Both
+     are reset on checkout (branch switch). Emergency chrome fallback
+     is unchanged: when ui_nav_html is None, http serves emergency nav. *)
+  let shell_ttl = 60.0 in
+  let now = Unix.gettimeofday () in
   let* () =
     match Pricklypear_lisp.Env.lookup t.env "ui/nav" with
     | None ->
         t.ui_nav_html <- None;
         Lwt.return_unit
     | Some _ ->
-        Lwt.catch
-          (fun () ->
-            let* v = eval_one t "(ui/nav)" in
-            (match Primitives.is_raw_html v with
-             | Some s -> t.ui_nav_html <- Some s
-             | None ->
-                 (match v with
-                  | Pricklypear_lisp.Ast.VStr s -> t.ui_nav_html <- Some s
-                  | _ ->
-                      t.ui_nav_html <-
-                        Some (Pricklypear_lisp.Reader.pp_value v)));
-            Lwt.return_unit)
-          (fun exn ->
-            ignore
-              (Ops_log.warn ~component:"session"
-                 ~context:[("fn", "ui/nav")]
-                 ("refresh_ui_shell failed: " ^ Printexc.to_string exn));
-            t.ui_nav_html <- None;
-            Lwt.return_unit)
+        if t.ui_nav_html <> None
+           && now -. t.ui_nav_refreshed_at < shell_ttl then
+          (* Cache fresh: serve cached nav, skip re-eval. *)
+          Lwt.return_unit
+        else if t.ui_nav_html = None && now < t.ui_nav_retry_at then
+          (* Recently failed on this branch: skip re-eval + skip warn. *)
+          Lwt.return_unit
+        else
+          Lwt.catch
+            (fun () ->
+              let* v = eval_one t "(ui/nav)" in
+              (match Primitives.is_raw_html v with
+               | Some s -> t.ui_nav_html <- Some s
+               | None ->
+                   (match v with
+                    | Pricklypear_lisp.Ast.VStr s -> t.ui_nav_html <- Some s
+                    | _ ->
+                        t.ui_nav_html <-
+                          Some (Pricklypear_lisp.Reader.pp_value v)));
+              t.ui_nav_refreshed_at <- now;
+              t.ui_nav_retry_at <- 0.0;
+              Lwt.return_unit)
+            (fun exn ->
+              (* Warn once per retry window, then go quiet. *)
+              ignore
+                (Ops_log.warn ~component:"session"
+                   ~context:[("fn", "ui/nav")]
+                   ("refresh_ui_shell failed (retry in "
+                    ^ string_of_float shell_ttl ^ "s): "
+                    ^ Printexc.to_string exn));
+              t.ui_nav_html <- None;
+              t.ui_nav_retry_at <- now +. shell_ttl;
+              Lwt.return_unit)
   in
   match Pricklypear_lisp.Env.lookup t.env "ui/css" with
   | None ->
       t.ui_css <- None;
       Lwt.return_unit
   | Some _ ->
-      Lwt.catch
-        (fun () ->
-          let* v = eval_one t "(ui/css)" in
-          (match Primitives.is_raw_html v with
-           | Some s -> t.ui_css <- Some s
-           | None ->
-               (match v with
-                | Pricklypear_lisp.Ast.VStr s -> t.ui_css <- Some s
-                | _ ->
-                    t.ui_css <-
-                      Some (Pricklypear_lisp.Reader.pp_value v)));
-          Lwt.return_unit)
-        (fun exn ->
-          ignore
-            (Ops_log.warn ~component:"session"
+      if t.ui_css <> None
+         && now -. t.ui_css_refreshed_at < shell_ttl then
+        Lwt.return_unit
+      else if t.ui_css = None && now < t.ui_css_retry_at then
+        Lwt.return_unit
+      else
+        Lwt.catch
+          (fun () ->
+            let* v = eval_one t "(ui/css)" in
+            (match Primitives.is_raw_html v with
+             | Some s -> t.ui_css <- Some s
+             | None ->
+                 (match v with
+                  | Pricklypear_lisp.Ast.VStr s -> t.ui_css <- Some s
+                  | _ ->
+                      t.ui_css <-
+                        Some (Pricklypear_lisp.Reader.pp_value v)));
+            t.ui_css_refreshed_at <- now;
+            t.ui_css_retry_at <- 0.0;
+            Lwt.return_unit)
+          (fun exn ->
+            ignore
+              (Ops_log.warn ~component:"session"
                ~context:[("fn", "ui/css")]
-               ("refresh_ui_shell css failed: " ^ Printexc.to_string exn));
-          t.ui_css <- None;
-          Lwt.return_unit)
+               ("refresh_ui_shell css failed (retry in "
+                ^ string_of_float shell_ttl ^ "s): "
+                ^ Printexc.to_string exn));
+            t.ui_css <- None;
+            t.ui_css_retry_at <- now +. shell_ttl;
+            Lwt.return_unit)
 
 and seed_one (t : t) (name : string) : unit Lwt.t =
   let* r = load_library t name in
@@ -1329,6 +1367,10 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
       kernel_catalog = [];  (* filled after all prims register *)
       ui_nav_html = None;
       ui_css = None;
+      ui_nav_refreshed_at = 0.0;
+      ui_nav_retry_at = 0.0;
+      ui_css_refreshed_at = 0.0;
+      ui_css_retry_at = 0.0;
       current_request = None;
       agent_branch_lock = false;
       is_admin = (manifest.username = "admin");
