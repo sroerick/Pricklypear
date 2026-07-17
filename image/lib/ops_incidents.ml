@@ -196,11 +196,37 @@ let record_event (session : Session_types.t) (ev : Ops_log.event)
                 | None -> ""));
            Lwt.return_unit)
 
+(** Classify an exception as an *expected* runtime/user error that
+    should be logged but NOT filed as a reliability incident.
+
+    Route-handler eval can raise deterministic [Interp_error] variants
+    that are the user's fault (bad input, wrong arity, runaway step
+    budget), not a reliability fault in the image. These still get
+    emitted to the ops log (stderr + ring) so they're observable, but
+    [record_event] is skipped so they don't spawn a TODO/incident row
+    for every user mistake.
+
+    Genuine faults — [Not_a_function], [Prim_error], [Unbound_var],
+    [Parse_error] (a seeded route shouldn't fail to parse at runtime),
+    and any non-[Interp_error] exception — are still filed. *)
+let is_expected_runtime_error (exn : exn) : bool =
+  match exn with
+  | Interp_error e ->
+      (match e with
+       | Budget_exceeded -> true
+       | User_error _ -> true
+       | Arity_mismatch _ -> true
+       | Wrong_arg_count _ -> true
+       | Type_mismatch _ -> true
+       | _ -> false)
+  | _ -> false
+
 let emit_and_maybe_file (session : Session_types.t) ?(context = [])
-    ~(level : Ops_log.level) ~(component : string) (msg : string)
+    ?(file = true) ~(level : Ops_log.level) ~(component : string)
+    (msg : string)
   : unit Lwt.t =
   let ev = Ops_log.emit ~context ~level ~component msg in
-  record_event session ev
+  if file then record_event session ev else Lwt.return_unit
 
 let list_open_incidents (store : Store.t) : Yojson.Safe.t Lwt.t =
   let* listed = Crud.list store ~type_name ~limit:100 () in

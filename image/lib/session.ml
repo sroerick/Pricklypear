@@ -1628,6 +1628,7 @@ let call_handler (t : t) ?request (handler_name : string)
              Lwt.async (fun () ->
                Ops_incidents.emit_and_maybe_file t
                  ~level:Ops_log.Error ~component:"handler"
+                 ~file:(not (Ops_incidents.is_expected_runtime_error exn))
                  ~context:[("handler", handler_name)]
                  (pp_interp_exn exn));
              Lwt.return_none)
