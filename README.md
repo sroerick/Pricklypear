@@ -20,7 +20,7 @@ License: [ISC](LICENSE).
 | Code store | Branched `function_defs` with parent override (not PG inheritance) |
 | Data store | Shared `data_rows` (JSON fields) across branches |
 | UI | Server-rendered htmx; Lisp packages in `libs/` |
-| Public face | `/welcome`, `/code`, `/book.pdf`, `/src.tgz` |
+| Public face | `/welcome`, `/code`, `/book.pdf`, `/src.tgz`, `/.well-known/agent.json`, `/agent.txt` |
 
 Dogfood packages seeded on boot include todo, notes/outline, calendar,
 contacts, bookmarks, flashcards, bible/dabar, weather, AI helpers, and
@@ -77,14 +77,15 @@ history only.)
 | `image/` | Sole runtime binary |
 | `libs/` | Lisp packages seeded to `system/main` |
 | `scripts/` | `dev.sh`, `pp_eval.py`, smokes, `public_artifacts.sh`, deploy helpers |
-| `docs/` | Vendored book PDF (host-specific ops notes stay local) |
+| `docs/` | Book PDF, ops notes, [`runtime-effects-transition.md`](docs/runtime-effects-transition.md) (OCaml 5 / effects path) |
 | `borge/` | Design chapters |
 
 ## Stack
 
 - OCaml 5.4.x on the **`poohstack`** opam switch
-- Lwt + `httpaf-lwt-unix` + `pgx_lwt`
+- Lwt + `httpaf-lwt-unix` + `pgx_lwt` (today; effects/direct-style transition: `docs/runtime-effects-transition.md`)
 - `pure-html` / `HTML.Hx.*` for type-safe markup
+- Guest capability effects: `lisp/lib/effect.ml` (separate from host I/O runtime)
 
 ## Build & dev
 

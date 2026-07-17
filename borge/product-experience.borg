@@ -195,7 +195,11 @@
     (smoke "unauth GET /book.pdf or 404 if artifact missing")
     (smoke "unauth GET /src.tgz or 404 if artifact missing")
     (smoke "path escape /code/raw/../etc/passwd denied")
-    (smoke "unauth GET /bindings still redirects to login"))
+    (smoke "unauth GET /bindings still redirects to login")
+    (smoke "unauth GET /.well-known/agent.json returns 200 application/json with auth+eval contract")
+    (smoke "unauth GET /agent.txt returns 200 text/plain agent instructions")
+    (smoke "unauth GET /agent still denied (private portal)")
+    (smoke "unauth POST /api/eval still denied"))
    (details
     (doc (|
          =========================================================
@@ -209,7 +213,13 @@
            /code      — read-only source browser (kernel + CM5)
            /book.pdf  — borge book print artifact
            /src.tgz   — pruned source tarball
+           /.well-known/agent.json — machine agent bootstrap
+           /agent.txt — prose agent instructions (auth + eval)
            /login     — enter the private workspace
+
+         NOTE: /agent is the PRIVATE in-image agent portal (HTML),
+         not the public discovery doc. Public agent onboarding is
+         /.well-known/agent.json + /agent.txt only.
 
          /book (HTML explainer) is NOT public-facing — PDF + /code
          cover the literate book story. Any welcome/book page is
@@ -309,10 +319,42 @@
            /welcome /book.pdf /src.tgz
            /code and /code/*
            /assets and /assets/*
+           /.well-known/agent.json
+           /agent.txt
            (/book is NOT hard-public)
+           (/agent is NOT hard-public — private portal)
 
          Still HARD PRIVATE: / /bindings /edit /repl /data /api
          /admin /branches /types /pages /agent …
+
+         =========================================================
+         AGENT DISCOVERY (public bootstrap, no secrets)
+         =========================================================
+         Remote agents (Agora, pi, curl on a phone) need a front
+         door that explains how to talk to the image WITHOUT a
+         checked-out repo. Ship two hard-public kernel GETs:
+
+           GET /.well-known/agent.json
+             Content-Type: application/json
+             Machine contract: name, version, philosophy, auth
+             scheme (HTTP Basic / session cookie), eval endpoint
+             (POST /api/eval request+response shapes), bootstrap
+             first_calls, rules, curl/python examples, related
+             public links. NEVER include passwords or tokens.
+
+           GET /agent.txt
+             Content-Type: text/plain; charset=utf-8
+             Same content as prose Markdown/plain instructions a
+             freeform agent can ingest wholesale.
+
+         Implementation: kernel handlers in image/lib (stable
+         contract), not Lisp routes — discovery must work even
+         when seed/route table is empty. base_url may be derived
+         from Host / X-Forwarded-* when present, else omitted or
+         a relative-friendly note.
+
+         Eval stays hard-private: unauth POST /api/eval → 401.
+         Agents supply image credentials (same as /login).
 
          Anon / → redirect /welcome (product choice for public host).
          Logged-in / → ui/home as today.

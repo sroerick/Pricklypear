@@ -1043,8 +1043,11 @@
            /login /health /logout
            /welcome /book.pdf /src.tgz
            /code /code/*  /assets /assets/*
+           /.well-known/agent.json
+           /agent.txt
            (public release face — product-experience.public-release;
-            /book HTML explainer is private, not hard-public)
+            /book HTML explainer is private, not hard-public;
+            /agent private portal stays hard-private)
          User-route public/private: auth.route-visibility.
     |))
    )
@@ -1102,9 +1105,12 @@
                /welcome /book.pdf /src.tgz
                /code and /code/*
                /assets and /assets/*
+               /.well-known/agent.json
+               /agent.txt
                (extend only by OCaml change; see
                 product-experience.public-release;
-                /book is NOT hard-public)
+                /book is NOT hard-public;
+                /agent is NOT hard-public)
 
             B. SYSTEM_HARD_PRIVATE
                Always require identity (Lisp cannot open these):

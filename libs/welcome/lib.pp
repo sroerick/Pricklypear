@@ -14,6 +14,7 @@
             (list
               (layout/cta "/code" "Explore the source")
               (layout/cta "/book.pdf" "Download the book (PDF)")
+              (layout/cta "/agent.txt" "Agent instructions")
               (layout/cta "/background" "Background")
               (layout/cta "/roadmap" "Roadmap")
               (layout/cta "/signup" "Email signup")
@@ -62,6 +63,26 @@
                           (html/code
                             "(propose-function \"double\" \"lambda of int x -> (* x 2)\")"))))))))))
         (layout/section
+          "Agents: no special API"
+          (html/join
+            (list
+              (html/p "Remote agents (Agora, pi, curl on a phone) do not need a custom REST surface. Fetch the public bootstrap doc, take a username/password from a human once, then POST Lisp to /api/eval.")
+              (html/p* ""
+                (html/join
+                  (list
+                    "Machine contract: "
+                    (html/a "/.well-known/agent.json"
+                      (html/code "/.well-known/agent.json"))
+                    " · Prose: "
+                    (html/a "/agent.txt" (html/code "/agent.txt"))
+                    ". No secrets in either document.")))
+              (html/div ""
+                (html/join
+                  (list
+                    (layout/cta "/agent.txt" "Read agent.txt")
+                    " "
+                    (layout/cta "/.well-known/agent.json" "agent.json")))))))
+        (layout/section
           "Get in"
           (html/join
             (list
@@ -72,6 +93,8 @@
                     (layout/cta "/code" "Code browser")
                     " "
                     (layout/cta "/book.pdf" "Book PDF")
+                    " "
+                    (layout/cta "/agent.txt" "Agent instructions")
                     " "
                     (layout/cta "/login" "Sign in")))))))
         (html/div
@@ -84,6 +107,8 @@
               (html/a "/roadmap" (html/text "roadmap"))
               (html/text " · ")
               (html/a "/signup" (html/text "signup"))
+              (html/text " · ")
+              (html/a "/agent.txt" (html/text "agent instructions"))
               (html/text " · ")
               (html/a "/about" (html/text "concepts (after login)")))))))))
 
