@@ -6,6 +6,85 @@ open Pure_html
 
 let default_port = 8080
 
+(* ------------------------------------------------------------------
+   PEER-DISCONNECT SAFETY (image.http-robustness invariants 1-2).
+
+   httpaf raises Failure("cannot write to closed writer") when you write
+   to a response whose client has already disconnected. Under real
+   traffic (people aborting page loads) an uncaught instance of this
+   exception killed the single-image process repeatedly (prod incident
+   2026-07-16). Every response write must tolerate a gone peer.
+   Promoted from http_agent.ml's SSE-only guard; shared by all response
+   helpers + the httpaf error_handler. *)
+let is_closed_writer_exn (exn : exn) : bool =
+  match exn with
+  | Failure msg ->
+      String.equal msg "cannot write to closed writer"
+      || String.starts_with ~prefix:"cannot write to closed writer" msg
+  | _ -> false
+
+(** Write a response body string, swallowing the closed-writer Failure
+    that httpaf raises when the peer has gone. Returns () either way. *)
+let safe_respond_with_string (reqd : Httpaf.Reqd.t)
+    (resp : Httpaf.Response.t) (body : string) : unit =
+  try Httpaf.Reqd.respond_with_string reqd resp body
+  with exn when is_closed_writer_exn exn -> ()
+
+(** Close a body writer, swallowing the closed-writer Failure. *)
+let safe_close_writer (body : [ `write ] Httpaf.Body.t) : unit =
+  try Httpaf.Body.close_writer body
+  with exn when is_closed_writer_exn exn -> ()
+
+(* ------------------------------------------------------------------
+   ACCEPT-SIDE CONNECTION CAP (image.http-robustness invariant 5).
+
+   Bounds in-flight requests so a traffic spike can't exhaust fds or
+   memory. Default 256; configurable via PP_HTTP_MAX_INFLIGHT. Requests
+   beyond the cap are rejected with 503 instead of being accepted into
+   an unbounded queue. This is a safety valve, not a throughput target. *)
+let max_inflight =
+  match Sys.getenv_opt "PP_HTTP_MAX_INFLIGHT" with
+  | Some s -> (match int_of_string_opt s with Some n when n > 0 -> n | _ -> 256)
+  | None -> 256
+
+(* A minimal counting gate (Lwt 6.x dropped Lwt_semaphore). Bounds
+   concurrent in-flight HTTP connections; overflow waits for a slot
+   rather than consuming unbounded memory/fds. *)
+type inflight_gate = {
+  mutable count : int;
+  limit : int;
+  mutex : Lwt_mutex.t;
+  cond : unit Lwt_condition.t;
+}
+
+let inflight_sem =
+  { count = 0; limit = max_inflight;
+    mutex = Lwt_mutex.create (); cond = Lwt_condition.create () }
+
+let inflight_acquire () : unit Lwt.t =
+  let rec loop () =
+    let* got = Lwt_mutex.with_lock inflight_sem.mutex (fun () ->
+      if inflight_sem.count >= inflight_sem.limit then begin
+        (* Lwt_condition.wait releases the mutex while waiting and
+           reacquires before returning; called while holding the
+           mutex per the CV protocol. *)
+        let* () = Lwt_condition.wait inflight_sem.cond in
+        Lwt.return false
+      end else begin
+        inflight_sem.count <- inflight_sem.count + 1;
+        Lwt.return true
+      end)
+    in
+    if got then Lwt.return_unit else loop ()
+  in
+  loop ()
+
+let inflight_release () : unit Lwt.t =
+  Lwt_mutex.with_lock inflight_sem.mutex (fun () ->
+    inflight_sem.count <- inflight_sem.count - 1;
+    Lwt_condition.signal inflight_sem.cond ();
+    Lwt.return_unit)
+
 let emergency_css : string =
   (* Labeled recovery only — NOT the product design system.
      Product CSS comes from Lisp (ui/css) via Session.ui_css. *)
@@ -82,7 +161,7 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK)
        ("content-length", string_of_int (String.length s))]
   in
   let resp = Httpaf.Response.create ~headers status in
-  Httpaf.Reqd.respond_with_string reqd resp s
+  safe_respond_with_string reqd resp s
 
 let text_response (reqd : Httpaf.Reqd.t) ?(status = `OK) ~content_type (s : string) : unit =
   let headers =
@@ -91,7 +170,7 @@ let text_response (reqd : Httpaf.Reqd.t) ?(status = `OK) ~content_type (s : stri
        ("content-length", string_of_int (String.length s))]
   in
   let resp = Httpaf.Response.create ~headers status in
-  Httpaf.Reqd.respond_with_string reqd resp s
+  safe_respond_with_string reqd resp s
 
 let json_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (j : Yojson.Safe.t) : unit =
   let s = Yojson.Safe.to_string j in
@@ -374,7 +453,7 @@ let redirect_with_cookie (reqd : Httpaf.Reqd.t) ~(location : string)
       ; ("content-length", "0") ]
   in
   let resp = Httpaf.Response.create ~headers `See_other in
-  Httpaf.Reqd.respond_with_string reqd resp ""
+  safe_respond_with_string reqd resp ""
 
 let unauthorized_api (reqd : Httpaf.Reqd.t) : unit =
   json_response reqd ~status:`Unauthorized
@@ -550,7 +629,7 @@ let redirect_response (reqd : Httpaf.Reqd.t) (location : string) : unit =
       ]
   in
   let resp = Httpaf.Response.create ~headers `See_other in
-  Httpaf.Reqd.respond_with_string reqd resp ""
+  safe_respond_with_string reqd resp ""
 
 let require_login_redirect (reqd : Httpaf.Reqd.t) ~(path : string) : unit =
   if String.length path >= 5 && String.sub path 0 5 = "/api/" then

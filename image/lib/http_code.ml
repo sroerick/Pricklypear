@@ -280,7 +280,7 @@ let serve_bytes (reqd : Httpaf.Reqd.t) ?(status = `OK) ~content_type
       ]
   in
   let resp = Httpaf.Response.create ~headers status in
-  Httpaf.Reqd.respond_with_string reqd resp body
+  Http_core.safe_respond_with_string reqd resp body
 
 let serve_file_path (reqd : Httpaf.Reqd.t) ~(path : string) : unit =
   match read_file_limited path with

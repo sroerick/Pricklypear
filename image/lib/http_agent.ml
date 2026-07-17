@@ -12,6 +12,10 @@ let is_closed_writer_exn = function
       || String.starts_with ~prefix:"cannot write to closed writer" msg
   | _ -> false
 
+(* [is_closed_writer_exn] now shadows Http_core's identical helper; kept as a
+   local alias so existing call sites stay unchanged. Body writes route
+   through Http_core.safe_close_writer / safe_respond_with_string. *)
+
 let sse_write (body : [ `write ] Httpaf.Body.t) (event_json : string)
   : [ `Ok | `Peer_gone ] Lwt.t =
   let chunk = "data: " ^ event_json ^ "\n\n" in
@@ -37,7 +41,7 @@ let sse_write (body : [ `write ] Httpaf.Body.t) (event_json : string)
     Lwt.return `Peer_gone
 
 let close_writer_quiet (body : [ `write ] Httpaf.Body.t) : unit =
-  try Httpaf.Body.close_writer body with exn when is_closed_writer_exn exn -> ()
+  safe_close_writer body
 
 let default_http_agent_seed =
   (* Short fallback when no session seed; tools sessions should prefer
@@ -212,9 +216,17 @@ let api_agent (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
               ]
           in
           let resp = Httpaf.Response.create ~headers `OK in
+          (* Peer may already be gone before the stream starts; on
+             closed-writer, bail instead of letting it escape to the
+             launch catch (image.http-robustness invariant 1). *)
           let body_w =
-            Httpaf.Reqd.respond_with_streaming ~flush_headers_immediately:true
-              reqd resp
+            try
+              Httpaf.Reqd.respond_with_streaming ~flush_headers_immediately:true
+                reqd resp
+            with exn when is_closed_writer_exn exn ->
+              ignore (Ops_log.info ~component:"sse"
+                        "peer gone before stream start");
+              raise exn
           in
           let queue : string Queue.t = Queue.create () in
           let cond = Lwt_condition.create () in

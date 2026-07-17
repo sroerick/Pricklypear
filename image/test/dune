@@ -22,3 +22,8 @@
  (name ops_incidents_test)
  (modules ops_incidents_test)
  (libraries pricklypear-image pricklypear-lisp alcotest))
+
+(test
+ (name http_robust_test)
+ (modules http_robust_test)
+ (libraries pricklypear-image alcotest lwt lwt.unix))

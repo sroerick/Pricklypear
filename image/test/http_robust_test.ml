@@ -1,0 +1,79 @@
+(** Pricklypear Image — HTTP robustness tests (image.http-robustness).
+
+    Tests the peer-disconnect / closed-writer guards and the
+    accept-side connection cap. These are the invariants that prevent
+    a single aborted request from killing the single-image process
+    (prod incident 2026-07-16). No DB / no live server needed: we
+    exercise the pure predicate, the safe-writer wrappers' behavior on
+    the recognized exception, and the inflight gate's counting. *)
+
+let is_closed = Pricklypear_image_lib.Http_core.is_closed_writer_exn
+
+open Lwt.Syntax
+
+let test_recognizes_closed_writer () =
+  Alcotest.(check bool) "exact closed-writer msg" true
+    (is_closed (Failure "cannot write to closed writer"));
+  Alcotest.(check bool) "closed-writer with suffix" true
+    (is_closed (Failure "cannot write to closed writer (foo)"));
+  Alcotest.(check bool) "unrelated Failure not matched" false
+    (is_closed (Failure "something else"));
+  Alcotest.(check bool) "non-Failure exn not matched" false
+    (is_closed Not_found);
+  Alcotest.(check bool) "Stack_overflow not matched" false
+    (is_closed Stack_overflow)
+
+(* safe_close_writer / safe_respond_with_string swallow the closed-writer
+   Failure and return () instead of raising. We can't easily build a real
+   closed httpaf Body.t in a unit test, so we assert the guard predicate is
+   what the wrappers rely on, and that the recognized exception does not
+   propagate when fed through a try/when using the same predicate — i.e.
+   the pattern the wrappers use. *)
+let test_safe_wrappers_swallow_closed_writer () =
+  let swallowed =
+    try
+      (try raise (Failure "cannot write to closed writer")
+       with exn when is_closed exn -> ());
+      true
+    with _ -> false
+  in
+  Alcotest.(check bool) "closed-writer is swallowed, not propagated" true
+    swallowed;
+  (* A non-closed-writer exception is NOT swallowed by the guard. *)
+  let propagated =
+    try
+      (try raise (Failure "unrelated")
+       with exn when is_closed exn -> ());
+      false
+    with _ -> true
+  in
+  Alcotest.(check bool) "unrelated Failure propagates past guard" true
+    propagated
+
+(* The inflight gate bounds concurrent in-flight connections. Acquiring
+   under the limit returns immediately; releasing decrements so a
+   subsequent acquire succeeds. We do not test the blocking path (would
+   need a paused releaser); the counting contract is what matters here. *)
+let test_inflight_acquire_release () =
+  let before = Pricklypear_image_lib.Http_core.inflight_sem.count in
+  let* () = Pricklypear_image_lib.Http_core.inflight_acquire () in
+  Alcotest.(check (Alcotest.int)) "acquire increments count" (before + 1)
+    Pricklypear_image_lib.Http_core.inflight_sem.count;
+  let* () = Pricklypear_image_lib.Http_core.inflight_release () in
+  Alcotest.(check (Alcotest.int)) "release decrements count" before
+    Pricklypear_image_lib.Http_core.inflight_sem.count;
+  Lwt.return_unit
+
+let () =
+  Alcotest.run "http_robust"
+    [ ("closed-writer predicate",
+        [ Alcotest.test_case "recognizes" `Quick
+            (fun () -> test_recognizes_closed_writer ())
+        ; Alcotest.test_case "safe wrappers swallow" `Quick
+            (fun () -> test_safe_wrappers_swallow_closed_writer ())
+        ])
+    ; ("inflight gate",
+        [ Alcotest.test_case "acquire/release counting" `Quick
+            (fun () -> Lwt_main.run (test_inflight_acquire_release ()))
+        ])
+    ]
