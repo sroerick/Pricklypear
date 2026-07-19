@@ -77,7 +77,7 @@ history only.)
 | `image/` | Sole runtime binary |
 | `libs/` | Lisp packages seeded to `system/main` |
 | `scripts/` | `dev.sh`, `pp_eval.py`, smokes, `public_artifacts.sh`, deploy helpers |
-| `docs/` | Book PDF, ops notes, [`runtime-effects-transition.md`](docs/runtime-effects-transition.md) (OCaml 5 / effects path) |
+| `docs/` | Book PDF, ops notes, [`runtime-effects-transition.md`](docs/runtime-effects-transition.md) (OCaml 5 / effects path), [`agent-ui-harness.md`](docs/agent-ui-harness.md) (agent FE verify research) |
 | `borge/` | Design chapters |
 
 ## Stack

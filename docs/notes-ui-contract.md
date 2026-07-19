@@ -42,3 +42,6 @@ Filled by `scripts/inventory_notes_ui.py` (and human notes). See
 2. One control / scenario per Ralph iteration when repairing.
 3. Prefer git `libs/notes` + `libs/outline`; reseed or load-library on main.
 4. Screenshots only for layout; clicks/ops for correctness.
+
+General agent FE verify research (a11y snapshots, tiered checks, htmx
+gotchas): [`agent-ui-harness.md`](agent-ui-harness.md).
