@@ -1,57 +1,81 @@
 (project pricklypear-multi-user
  (doc "Pricklypear book chapter: multi-user — MANY HUMANS.
-        Process-per-user isolation (this chapter) + auth identity
-        (auth.borg multi-user-product) are the complete multi-user
-        system. single-image.borg is about shipping ONE binary, not
-        one human. Do not read single-image as cancelling multi-user.
+        Cotenant isolation (this chapter) is the shipping model:
+        one process, many sessions, isolation by session + branch.
+        Process-per-user isolation (multi-user.isolation) is a
+        future hardening axis. single-image.borg is about shipping
+        ONE binary, not one human. Do not read single-image as
+        cancelling multi-user.
         Access surfaces that ship on cotenant first: user subdomains,
         per-user LLM keys, SSH→REPL (auth.user-subdomains /
         user-llm-keys / user-ssh-repl).")
  (status partial)
  (convention ocaml-dune)
  (section multi-user
-  (doc "Per-user image instances, namespaces via branch ownership, budgets, author-runs-as-author")
+  (doc "Cotenant isolation (one process, session + branch scoped), namespaces via branch ownership, budgets, author-runs-as-author")
   (status partial)
   
-  (subsection isolation
-   (doc "Process-level isolation: one image per user")
+  (subsection cotenant-isolation
+   (doc "Session-level isolation in one process — THE v1 model")
    (status implemented)
    (details
     (doc (|
-         Multi-user is achieved by giving each user their
-         OWN image unikernel, not by namespacing within one
-         shared image. This is the Unix/POSIX model:
-         - Each user has a "home" (their branch bindings)
-         - Logging in = booting your image
-         - Each image is a separate process
+         One image process serves many authenticated sessions.
+         Isolation is session + branch scoped, not process
+         scoped:
 
-         Wins:
-         - Alice's infinite loop wedges Alice's image only
-         - Alice's bad function definition takes only her
-           image offline; she recovers by rolling back to
-           her last-good branch
-         - The interpreter doesn't need cooperative
-           scheduling for cross-user safety (only for
-           in-session budgeting)
-         - Per-user A/B rollback (finer than whole-image)
+         - Each session carries its own identity (user_id,
+           username, is_admin) resolved at login and attached
+           per request.
+         - Each session has its own default branch
+           (<username>/personal); defines, routes, and type
+           declarations land on the session's current branch.
+         - No session writes to another user's personal
+           branch; overrides on a personal branch shadow
+           system/main only for that branch's readers.
+         - Session state is not shared; a wedged call aborts
+           its own session's work, not another user's.
 
-         Costs:
-         - N images always running if "always-on" pinned
-           (RAM committed)
-         - Boot-on-connect default mitigates this: idle
-           users' images aren't running
+         What cotenant does NOT provide (honest limits):
+         - No per-user process boundary: a hard process
+           crash takes all sessions down together (the
+           watchdog restarts the one image for everyone).
+         - Resource contention is shared: one user's
+           expensive eval competes with everyone else's
+           (mitigated by per-session step budgets — see
+           budgets).
+         Per-user image processes (multi-user.isolation)
+         remain the future hardening axis for a stronger
+         blast radius.
+    |))
+   )
+  )
+  (subsection isolation
+   (doc "Future hardening axis: process-level isolation, one image per user")
+   (status deprecated)
+   (details
+    (doc (|
+         DESIGN SKETCH (not the shipping topology).
 
-         Auth: a SEPARATE auth unikernel (see section
-         auth) verifies credentials and resolves user
-         identities. The supervisor never sees raw
-         credentials — it passes them to auth and gets
-         back a user_id (or denial). The image trusts the
-         supervisor's identity claim because: the
-         supervisor asserted it AND the supervisor got it
-         from auth, AND image/supervisor are on the
-         internal network. The image itself does no
-         credential verification.
-   |))
+         The retired fleet design gave each user their OWN
+         image process rather than namespacing within one
+         shared image — the Unix/POSIX model: each user has
+         a home (their branch bindings); logging in boots
+         or attaches their image; each image is a separate
+         process.
+
+         Wins it would buy: a user's infinite loop or bad
+         define wedges only their image; per-user A/B
+         rollback; no reliance on cooperative scheduling
+         for cross-user safety.
+
+         Why it is not v1: it needs a supervisor/fleet
+         layer (boot-on-connect, attach, per-user RAM),
+         which the single-image pivot retired. Cotenant
+         isolation (above) is the shipping model; this
+         remains the future hardening axis if a stronger
+         blast radius is ever needed.
+    |))
    )
   )
   (subsection namespaces
@@ -98,7 +122,7 @@
    (status partial)
    (verify
     (build "dune build @all")
-    (smoke "scripts/dev.sh start + ssh admin@host -p 12223 boots an isolated image process"))
+    (smoke "a Lisp call that exceeds its step budget aborts cleanly; the session survives"))
    (details
     (doc (|
          Each Lisp primitive invocation runs with a step

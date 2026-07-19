@@ -1,267 +1,126 @@
 (project pricklypear-single-image
- (doc "Book chapter: the single-image pivot. Supersedes the
-       supervisor + per-user-image + authd topology described in
-       architecture.borg, supervisor.borg, and multi-user.borg.
-       One process. One binary. One deployment. Multi-user at the
-       session/branch layer (not process isolation).")
+ (doc "Book chapter: the single-image process model. One unix
+       binary, one Postgres, one deployment. Multi-user at the
+       session/branch layer, not process isolation. This chapter
+       is the authority for process topology; an earlier
+       multi-process design (supervisor + authd + per-user
+       unikernels) was retired.")
  (status implemented)
  (convention ocaml-dune)
  (section single-image
-  (doc "The pivot: one process, single-tenant, no Mirage abstraction")
+  (doc "One unix image process: model, topology, auth placement, deployment")
   (status implemented)
-  
+
   (subsection thesis
-   (doc "What the system IS after the pivot")
+   (doc "What the system IS")
    (status implemented)
    (details
     (doc (|
-      Pricklypear is ONE OCaml `unix' binary — the image — that:
+      Pricklypear is ONE OCaml unix binary — the image — that:
+
         1. Serves htmx HTTP directly on a port (httpaf-lwt-unix
            + pure-html). This is the only user-facing surface.
-        2. Talks to Postgres directly (pgx_lwt + Io_unix).
+        2. Talks to Postgres directly (pgx_lwt + Io_unix shim).
            Postgres is the durable object store; the image is
-           ephemeral and rebuildable from it.
+           ephemeral and rebuildable from the store plus the
+           package seed (libs/*.pp -> system/main).
         3. Reads its identity (branch, author) from process env
-           at boot — no boot manifest, no supervisor injection.
+           at boot — no boot manifest, no external injection.
         4. Optionally exposes a line-protocol REPL on a second
-           port for operator access. No SSH front door. The
-           browser REPL (/repl) and HTTP eval (/api/eval) are
-           the primary interactive surfaces.
+           port for operator access. The browser REPL (/repl)
+           and HTTP eval (/api/eval) are the primary
+           interactive surfaces.
 
-      What the system is NOT, after the pivot:
-        - NOT a MirageOS unikernel. No Solo5 target. No
-          mirage/unix target. No hypervisor VM-request spawn.
-          `dune build` + restart is how you change the image.
-        - NOT multi-user at the process level. One tenant.
-          The branch model (fork/merge) stays for
-          experimentation, but there is no per-user image
-          instance, no fleet, no per-user isolation.
-        - NOT fronted by a supervisor. No authd sidecar.
-          The image is the only Pricklypear process.
+      Scope — what the system is NOT:
 
-      This is a deliberate simplification. The unikervisor
-      model was sound in theory but every deployment pain in
-      it1-it34 (EADDRINUSE on respawn, stale route tables,
-      orphaned image PIDs, the awa-ssh identity block, manual
-      spawn-vs-supervised-spawn confusion) traces back to
-      having three coordinated processes. One process cannot
-      have those failures.
+        - Not a MirageOS unikernel. No Solo5 target in v1.
+          `dune build` + restart is how the image changes.
+          (Solo5 remains an optional later hardening spike —
+          spikes/mirage_solo5/ — not the product path.)
+        - Not multi-process. No supervisor, no authd sidecar,
+          no fleet. The image is the only Pricklypear process.
+        - Isolation between humans lives at the session and
+          branch layer, not the process layer. There is no
+          per-user image instance.
+
+      Rationale: one process cannot fail the ways a
+      coordinated multi-process topology can — no port races
+      on respawn, no stale route tables, no orphaned children,
+      no cross-process identity handoff.
     |)))
   )
-  (subsection removed
-   (doc "What is deleted from the codebase and spec")
-   (status implemented)
-   (details
-    (doc (|
-      Packages deleted:
-        - supervisor/        (fleet, health, process, ssh,
-                             ssh_awa, ssh_awa_shims,
-                             ssh_keys, auth_client, admin,
-                             boot, store) — ALL of it.
-        - auth/              (verify, tokens, admin_api,
-                             store, http, boot, authd.ml) —
-                             ALL of it as a SEPARATE process.
-                             The users table stays; the
-                             verify logic (password/pubkey)
-                             either folds into the image as a
-                             thin prim or is replaced by
-                             nginx basic-auth at the edge.
 
-      Spec chapters demoted (status -> dropped, cross-link
-      here as the successor):
-        - supervisor.borg     whole chapter: dropped
-        - multi-user.borg     isolation by process: dropped;
-                              namespaces/budgets/permissions
-                              stay as Lisp-level safeguards
-                              within the one image
-        - architecture.borg   topology + transport-choices +
-                              package-layout: rewritten by this
-                              chapter
-
-      Migrations trimmed:
-        - 002_auth.sql: keep `users'; drop `credentials',
-          `auth_sessions', `auth_log', `system_keys' UNLESS
-          the image does its own verify (then keep only what
-          the folded verify reads). Additive-only — no
-          destructive migration; orphaned tables are inert.
-
-      rc.d services collapsed:
-        - pricklypear_supervisor, pricklypear_authd  ->  DELETE
-        - pricklypear (single image)                  ->  ADD
-        One service. One binary. nginx fronts it.
-
-      scripts/dev.sh simplified:
-        - start  -> PG + image (two things, not three)
-        - stop/restart/status -> the image only
-    |)))
-  )
-  (subsection kept
-   (doc "What survives the pivot unchanged in shape")
-   (status implemented)
-   (details
-    (doc (|
-      Untouched:
-        - lisp/            pure interpreter; no I/O dep
-        - common/          manifest.ml, branch.ml (trim
-                           auth_types.ml, protocol.ml health)
-        - image/lib/       store, primitives, session, http,
-                           crud, repl_endpoint, lineedit
-        - libs/*.pp        all Lisp libraries (std, ui, ai,
-                           todo, bible, dabar, notes, outline)
-        - migrations/      001_branches, 003_data, 004_bible
-                           (002_auth trimmed, not dropped)
-        - scripts/seed_*   bible/strongs/interlinear seeds
-
-      Refactored (not deleted):
-        - image/lib/boot.ml   reads PP_USERNAME/PP_BRANCH_NAME/
-                              PP_BRANCH_ID from env directly;
-                              drops the supervisor-manifest path
-        - image/bin/unikernel.ml  renamed image/bin/main.ml;
-                                  plain `unix' entry, no mirage
-        - image/lib/dune      `(executable ... public_name image)';
-                              drop mirage/unix stanza
-        - dune-project        drop mirage/unix enabled flag
-    |)))
-  )
   (subsection topology
-   (doc "The new physical layout")
+   (doc "The physical layout")
    (status implemented)
    (details
     (doc (|
       OpenBSD host (build + runtime habitat):
+
         +-- Postgres (shared object store, SERIALIZABLE
         |              defaults)
         |
-        +-- pricklypear image (ONE `unix' binary)
+        +-- pricklypear image (ONE unix binary)
         |   +-- httpaf-lwt-unix on PP_HTTP_PORT (htmx UI,
-        |   |   /api/eval, /repl, /dabar, /todos, /notes)
+        |   |   /api/eval, /repl, user routes)
         |   +-- optional line-protocol REPL on
         |   |   PP_REPL_PORT (operator only)
-        |   +-- pgx_lwt to Postgres (functions, data_rows,
-        |       branches)
+        |   +-- pgx_lwt to Postgres (function_defs,
+        |       data_rows, branches, auth tables)
         |
         +-- nginx (edge)
-            +-- TLS / basic-auth -> proxy_pass
-                http://127.0.0.1:PP_HTTP_PORT
+            +-- TLS -> proxy_pass http://127.0.0.1:PP_HTTP_PORT
 
       Flow for "user adds a function":
         1. Open the browser (nginx front door).
-        2. /repl or /edit/<name>: define persists to
-           function_defs, registered live.
-        3. New htmx route serves it immediately.
-
-      Flow for "operator changes a primitive":
-        1. Edit image/lib/primitives.ml.
-        2. `dune build' + git push (post-receive rebuilds +
-           promotes the release).
-        3. `rcctl restart pricklypear' — one process, one
-           restart. No fleet, no A/B, no respawn race.
-
-      Flow for "operator deploys":
-        1. git push wyo master.
-        2. post-receive: dune build -> promote to
-           /usr/local/libexec/pricklypear/releases/<sha> ->
-           `current' symlink.
-        3. rcctl restart pricklypear.
+        2. /repl or the function editor: the define persists
+           to function_defs and is registered live.
+        3. Routes serve it immediately.
     |)))
   )
+
   (subsection auth
-   (doc "Identity without requiring authd as a second always-on binary")
+   (doc "Where verify runs")
    (status implemented)
    (details
     (doc (|
-      MULTI-USER is required (many humans, personal gardens).
-      See auth.multi-user-product for the complete user stories.
+      Verify runs IN the image. Password and session verify
+      happen in-process against the users, credentials, and
+      auth_sessions tables; the /login cookie middleware
+      guards the HTTP surface. No separate authd exists.
 
-      This pivot only answers: where does verify run?
+      nginx basic-auth/htpasswd is an emergency edge gate
+      only — it is NOT the user database.
 
-      Option A — edge gate only (insufficient as product):
-        nginx basic-auth / htpasswd. NOT the multi-user user
-        database. Acceptable only as temporary break-glass.
-
-      Option B — in-image verify (fits one binary):
-        Password/session verify in the image process against
-        users + credentials + auth_sessions. /login cookie
-        middleware. No separate authd required for web login.
-        Still multi-user: many sessions, many personal branches.
-
-      Option C — authd process (fits fleet multi-user):
-        Separate verify service as originally designed; supervisor
-        attaches per-user images. Complete isolation story.
-
-      Complete system: multi-user product stories + either B or C
-      for verify placement + multi-user.isolation for process
-      isolation when fleet is live.
+      Multi-user (many humans, sessions, personal garden
+      branches) is a product layer above this process model;
+      see auth.multi-user-product for the user stories.
     |)))
   )
+
   (subsection deployment
    (doc "One binary, one rc.d service, one restart")
    (status implemented)
    (details
     (doc (|
-      rc.d service `pricklypear':
-        /etc/rc.d/pricklypear
-          start -> /usr/local/libexec/pricklypear/current/bin/image
+      rc.d service `pricklypear' (scripts/rc.d/pricklypear):
+        start   -> /usr/local/libexec/pricklypear/current/bin/image
                    with env from /etc/pricklypear/pricklypear.env
-          stop  -> kill the single PID
-          restart -> stop + start (no EADDRINUSE because
-                    one process, one port, clean shutdown)
+        stop    -> kill the single PID
+        restart -> stop + start (one process, one port,
+                   clean shutdown)
 
-      post-receive hook (existing, simplified):
-        1. dune build @all (lisp + common + image only;
-           no supervisor, no auth)
-        2. promote to releases/<sha>
-        3. swap `current' symlink
+      Release promotion (git push to prod):
+        1. build the release (lisp + common + image)
+        2. extract to /usr/local/libexec/pricklypear/releases/<id>
+        3. swap the `current' symlink
         4. rcctl restart pricklypear
 
-      nginx (existing, simplified):
-        - one server block: auth_basic + proxy_pass to
-          127.0.0.1:PP_HTTP_PORT
-        - drop the /admin -> 17880 block (supervisor gone)
+      (Full hook/runbook detail: docs/openbsd-prod-branch-deploy.md.)
 
-      What this fixes (the deployment pains of it1-it34):
-        - No stale image PID holding a port after restart
-        - No supervisor/child respawn race (EADDRINUSE)
-        - No "boot-on-SSH" spawn that needs a trigger
-        - No two DB roles to keep in sync
-        - No first-run ceremony from the supervisor's
-          auth-client handshake
-    |)))
-  )
-  (subsection migration-plan
-   (doc "Order of operations for the make pass")
-   (status implemented)
-   (details
-    (doc (|
-      Phase 1 — make the image standalone:
-        1. image/bin/unikernel.ml: drop mirage, plain unix
-           main reading PP_* from env
-        2. image/lib/boot.ml: drop manifest path, read env
-        3. image/lib/dune + dune-project: drop mirage/unix
-        4. Verify `dune build image' green; image runs alone
-
-      Phase 2 — delete the other two packages:
-        5. rm -r supervisor/ auth/ (+ dune stanzas)
-        6. common/: trim auth_types.ml, protocol.ml
-        7. Verify `dune build @all' green (lisp + common +
-           image only)
-
-      Phase 3 — deploy machinery:
-        8. Add /etc/rc.d/pricklypear (single service)
-        9. Update post-receive hook (build 3 packages,
-           restart one service)
-       10. nginx: drop /admin block; keep / proxy
-       11. scripts/dev.sh: PG + image only
-
-      Phase 4 — prod cutover:
-       12. Push, deploy, start single service
-       13. Delete supervisor + authd rc.d entries
-       14. Verify /dabar /todos /notes /repl live
-
-      Rollback (if needed): revert the commit; the old
-      supervisor+authd binaries still exist in prior
-      releases until pruned. No data migration needed —
-      002_auth tables are additive and inert if unread.
+      Changing a primitive: edit image/lib, push, the promote
+      step rebuilds and restarts. Changing an app: define or
+      route on a branch in the live image — no deploy at all.
     |)))
   )
  )

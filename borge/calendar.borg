@@ -9,16 +9,14 @@
   (subsection model
    (doc "Naive local dates; shared data_rows; Lisp package")
    (status implemented)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
    (implements libs/calendar/lib.pp image/lib/primitives.ml)
    (details
     (doc (|
+         A calendar should load fast and stay out of the
+         way: month grid + day agenda is enough to plan a
+         week, and naive local dates keep the model honest
+         (no timezone UI pretending to be correct).
+
          CHOICES (v1):
          - Day click opens day agenda (not auto-create)
          - Naive local YYYY-MM-DD (no TZ UI)
@@ -33,7 +31,7 @@
            todo-item.due on day
            notes daily-YYYY-MM-DD presence
 
-         PRIMS: date-today parse-int date-weekday date-format
+         PRIMS: date-today date-weekday date-format
 
          ROUTES: /calendar ?ym= ?day=
          Package: calendar/*

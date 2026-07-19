@@ -3,65 +3,51 @@
  (status partial)
  (convention ocaml-dune)
  (section migrations
-  
-  (doc "Schema evolution: supervisor-applied, additive-only, schema authority in main")
+
+  (doc "Schema evolution: image-applied, additive-only, schema authority in main")
   (status partial)
   (verify
-   (build "dune build supervisor")
-   (build "psql ... — SELECT count(*) FROM schema_migrations expects 3")
-   (smoke "/tmp/pp_e2e_it6.py — supervisor runs migrations on boot before serving image-boot requests"))
-  (subsection applied-by-supervisor
-   (doc "Supervisor owns schema state before any image boots")
+   (build "dune build image")
+   (smoke "image boots against a fresh database; schema_migrations records 001..006; re-boot is a no-op"))
+  (subsection applied-by-image
+   (doc "The image owns schema state before it serves")
    (status partial)
    (details
     (doc (|
-         The SUPERVISOR, not the image, runs migrations.
-         It owns schema state because it owns image
-         lifecycle. Images assume "the schema is current".
+         The IMAGE runs migrations. On boot it applies any
+         pending migrations in version order, and only then
+         starts serving. (scripts/dev.sh applies them
+         directly in the dev habitat.) Images assume "the
+         schema is current" once boot completes.
 
          Migration source: SQL files in migrations/
-         (version-numbered), PLUS migrations emitted from
-         type_defs that have been merged to main (the
-         type-declaration -> DDL emission).
+         (version-numbered). Tracked in the
+         schema_migrations table; application is
+         idempotent (IF NOT EXISTS guards), so re-applying
+         is a no-op.
 
          Initial migrations:
            001_branches.sql  — code store tables
              (branches, function_defs, type_defs,
              view_bindings, sessions, schema_migrations)
            002_auth.sql      — auth tables
-             (users, credentials, sessions
-              [NAMED auth_sessions to avoid clash],
-              auth_log, system_keys)
-             + CREATE ROLE pricklypear_auth with
-             SELECT-only on its own tables;
-             system_keys GRANTed ONLY to that role.
-             The supervisor runs the migration but never
-             connects as pricklypear_auth; only the auth
-             image does.
+             (users, credentials, auth_sessions, auth_log;
+             system_keys is inert legacy)
            003_data.sql      — shared data_rows
            004_bible_ref_index.sql — bible lookup indexes
            005_ai_sessions.sql — agent conversation store
-             (ai_sessions, ai_messages; NOT fleet sessions
-              and NOT auth_sessions). Spec:
-              ai-authoring.agent-portal.
+             (ai_sessions, ai_messages; NOT auth_sessions).
+             Spec: ai-authoring.agent-portal.
            006_route_visibility.sql — view_bindings.visibility
              text NOT NULL DEFAULT 'private' (public|private).
              Spec: auth.route-visibility. Additive column only;
              existing routes stay private.
 
-         Applied idempotently: tracked in schema_migrations
-         table. On supervisor boot:
-           1. Read applied versions from schema_migrations.
-           2. Apply any pending migrations in order.
-           3. Only then: start serving image-boot requests.
-
-         A migration in flight blocks new image boots until
-         it completes (or fails). This guarantees images
-         always see a consistent schema.
-
-         Migration failure: supervisor refuses to boot
-         images, alerts admin, requires manual intervention.
-         No half-applied state. (Additive-only policy makes
+         A migration in flight blocks serving until it
+         completes (or fails). This guarantees the image
+         always sees a consistent schema. Migration failure
+         aborts boot and requires manual intervention — no
+         half-applied state. (The additive-only policy makes
          failure recovery simpler.)
    |))
    )
@@ -69,16 +55,9 @@
   (subsection additive-only
    (doc "Schema changes can ADD, not remove or rename")
    (status implemented)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
    (verify
     (build "grep -rE 'DROP|RENAME|ALTER COLUMN TYPE' migrations/ = 0 matches")
-    (smoke "all 3 migrations idempotently re-appliable"))
+    (smoke "all migrations idempotently re-appliable"))
 
    (details
     (doc (|
@@ -108,9 +87,9 @@
            correctness.
 
          When a field truly must go: a manual migration
-         (off-cycle, supervisor downtime, admin-run) that
-         also updates affected branch code. This is rare
-         and treated as an incident, not routine.
+         (off-cycle, admin-run during scheduled downtime)
+         that also updates affected branch code. This is
+         rare and treated as an incident, not routine.
 
          This policy is set early because retrofitting it
          later (after non-additive migrations exist) is
@@ -123,15 +102,15 @@
    (status partial)
    (details
     (doc (|
-         Migrations only apply to the SHARED data tables
-         (event, user, etc.), governed by main's type_defs
-         (which are merge-governed into main).
+         Migrations only apply to the SHARED data tables,
+         governed by main's type_defs (which are
+         merge-governed into main).
 
          Branches CANNOT migrate data tables. A branch
          can PROPOSE a type change in its type_defs, but
          the underlying table doesn't change until that
-         proposal is merged to main and the supervisor
-         runs the resulting migration.
+         proposal is merged to main and the image applies
+         the resulting migration at next boot.
 
          A branch running code that references a field
          added in main but not yet handled by the branch's

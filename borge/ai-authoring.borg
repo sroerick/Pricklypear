@@ -55,13 +55,6 @@
    (doc "How an AI proposes or patches functions into the store")
    (implements image/lib/agent_tools.ml image/lib/llm_client.ml)
    (status implemented)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
    (verify
     (build "dune build image")
     (smoke "POST /api/ai/propose ai-double then (ai-double 21) => 42"))
@@ -98,14 +91,7 @@
   (subsection agent-portal
    (doc "One durable agent: sessions + messages in Postgres, one tool-capable loop, full history resubmitted each provider call")
    (status implemented)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
-   (implements image/lib/ai_store.ml image/lib/llm_client.ml image/lib/session.ml image/lib/http.ml image/lib/agent_discovery.ml image/lib/agent_tools.ml migrations/005_ai_sessions.sql libs/ai/lib.pp)
+   (implements image/lib/ai_store.ml image/lib/llm_client.ml image/lib/session.ml image/lib/http_agent.ml image/lib/agent_discovery.ml image/lib/agent_tools.ml migrations/005_ai_sessions.sql libs/ai/lib.pp)
    (verify
     (build "dune build image")
     (test "image/test/ai_store_test.ml")
@@ -209,24 +195,12 @@
          Pure store module over Store.t / pgx. No LLM calls here.
          Maps rows <-> Llm_client.chat_message for the runner.
 
-         Types:
-           type session = {
-             id; owner; title : string option; seed;
-             branch_ref : string option; tools : bool;
-             model : string option; created_at; updated_at
-           }
-
-         API (all Lwt):
-           create_session store ~owner ~seed
-             ?title ?branch_ref ?tools ?model () -> session
-           get_session store ~owner ~id -> session option
-             (* owner check; None if missing or not owned *)
-           list_sessions store ~owner ?limit () -> session list
-             (* updated_at DESC; default limit 50 *)
-           delete_session store ~owner ~id -> bool
-           list_messages store ~session_id -> chat_message list
-             (* ordered by seq; roles user|assistant|tool only *)
-           append_messages store ~session_id
+         Storage interface (ai_store.ml): create / get /
+         list / delete sessions (owner-scoped); list and
+         append messages (ordered by seq; roles
+         user|assistant|tool only). Session row: id, owner,
+         title, seed, branch_ref, tools allowlist, model,
+         timestamps.
              (chat_message list) -> unit
              (* assigns next seq values; touches updated_at *)
            touch_session store ~id ?title () -> unit
@@ -307,13 +281,6 @@
   (subsection ast-rewrite
    (doc "Surgical coding tools: llm-inner / llm-outer / llm-rewrite with freeze-on-accept into stored AST")
    (status implemented)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
    (verify
     (build "dune build image")
     (smoke "llm-inner on a binding rewrites body AST and survives reload")
@@ -421,13 +388,6 @@
   (subsection growth-seed
    (doc "llm-seed: recursive bottom-up growth via smallest core + repeated llm-outer until requirements satisfied")
    (status implemented)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
    (verify
     (build "dune build image")
     (smoke "llm-seed on a tiny goal produces >=1 frozen function on a branch")
@@ -480,8 +440,9 @@
                 responsibility (surgical wrap prompt)
              d. Freeze wrapper as new tip (or replace tip name
                 while keeping -vN history / old symbol)
-             e. Record step in a growth log (session + optional
-                data_rows type 'ai-growth-step)
+             e. Record step in the run's growth log
+                (in-memory; durable step history is a later
+                addition)
 
          Step Final — Optional publish surface
            If requirement implies a page and effects allow:

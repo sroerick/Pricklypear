@@ -1,5 +1,5 @@
 (project pricklypear
- (doc "A multi-user Lisp operating system in the Smalltalk tradition: OCaml image binary, Postgres object store, htmx UI. Many humans, each with session + personal garden. Deploy topology may be one binary (single-image.borg); multi-user product is auth.multi-user-product + multi-user.isolation.")
+ (doc "A multi-user Lisp operating system in the Smalltalk tradition: OCaml image binary, Postgres object store, htmx UI. Many humans, each with session + personal garden. One binary serves all sessions (single-image.borg); the multi-user product is auth.multi-user-product; isolation is multi-user.cotenant-isolation — session + branch scoped, one process.")
  (status partial)
  (verify
   (build "dune build @all — exit 0 (lisp + common + image)")
@@ -254,16 +254,9 @@
   (doc "Book chapter — full text inlined from borge/philosophy.borg")
   (inline borge/philosophy.borg)
  )
- (section architecture
-  (doc "Book chapter — full text inlined from borge/architecture.borg.
-        SUPERSEDED by single-image.borg (it35) for topology,
-        package-layout, and transport-choices.")
-  (inline borge/architecture.borg)
- )
  (section single-image
-  (doc "Book chapter — the single-image pivot (it35). One process,
-        single-tenant, no Mirage/Solo5, no supervisor, no authd.
-        Successor to architecture/supervisor/multi-user.")
+  (doc "Book chapter — one unix image process. No supervisor, no
+        authd, no Mirage/Solo5 in v1.")
   (inline borge/single-image.borg)
  )
  (section object-model
@@ -283,21 +276,12 @@
   (inline borge/storage.borg)
  )
  (section multi-user
-  (doc "Book chapter — RETIRED by the single-image pivot (it35).
-        Process-isolation model dropped; the system is single-tenant.
-        Namespaces/budgets/permissions stay as Lisp-level safeguards.
-        See single-image.borg. Kept for historical context; status dropped.")
+  (doc "Book chapter — full text inlined from borge/multi-user.borg")
   (inline borge/multi-user.borg)
  )
  (section auth
   (doc "Book chapter — full text inlined from borge/auth.borg")
   (inline borge/auth.borg)
- )
- (section supervisor
-  (doc "Book chapter — RETIRED by the single-image pivot (it35).
-        Kept for historical context; status dropped.
-        See single-image.borg for the successor topology.")
-  (inline borge/supervisor.borg)
  )
  (section image
   (doc "Book chapter — full text inlined from borge/image.borg")
@@ -326,10 +310,6 @@
  (section migrations
   (doc "Book chapter — full text inlined from borge/migrations.borg")
   (inline borge/migrations.borg)
- )
- (section workflow
-  (doc "Book chapter — full text inlined from borge/workflow.borg")
-  (inline borge/workflow.borg)
  )
  (section formal-verification
   (doc "Book chapter — formal verification of the OCaml outer shell

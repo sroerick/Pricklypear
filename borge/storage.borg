@@ -3,20 +3,13 @@
  (status partial)
  (convention ocaml-dune)
  (section storage
-  (doc "Postgres schema: branches, function_defs, type_defs, sessions. SERIALIZABLE defaults. NO inheritance.")
+  (doc "Postgres schema: branches, function_defs, type_defs, data_rows. SERIALIZABLE defaults. NO inheritance.")
   (status implemented)
   
   (subsection schema
    (doc "Core tables (in migrations/001_branches.sql)")
    (implements image/lib/store.ml image/lib/store_db.ml)
    (status implemented)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
    (details
     (doc (|
          -- The shared code store
@@ -71,11 +64,16 @@
            started_at  timestamptz NOT NULL DEFAULT now(),
            last_seen   timestamptz
          );
+         -- LEGACY/INERT: process bookkeeping from the
+         -- retired fleet design. The image never reads or
+         -- writes it. Kept because migrations are
+         -- additive-only.
 
-         -- Shared data tables (event, user, etc.) are
-         -- created by migrations emitted from type_defs
-         -- merged to main. Their shape is whatever main
-         -- says. They are NOT branched.
+         -- All Lisp-declared types share ONE table,
+         -- data_rows (migration 003), keyed by
+         -- (type_name, id) with fields packed as jsonb.
+         -- There are no per-type tables; deftype emits no
+         -- DDL. data_rows is NOT branched.
 
          CREATE TABLE schema_migrations (
            version     int PRIMARY KEY,
@@ -83,10 +81,8 @@
            description text
          );
 
-         The data tables themselves (e.g. events, users)
-         live alongside these system tables, created by the
-         supervisor's migration runner when type_defs are
-         accepted into main.
+         The shared data_rows table lives alongside these
+         system tables (migration 003; see object-model).
 
          SERIALIZABLE is the transaction isolation default
          for ALL Lisp-driven mutations. Weaker isolation is
@@ -95,20 +91,13 @@
    )
    (verify
     (build "dune build @all")
-    (build "psql -f migrations/001_branches.sql + 002_auth.sql + 003_data.sql = 11 tables")
-    (smoke "supervisor migration runner applies 3 migrations idempotently (supervisor smoke in it4/it5 logs)"))
+    (build "psql -f migrations/00{1,2,3}*.sql applies clean on a fresh database")
+    (smoke "image applies migrations on boot (see image/lib/session.ml boot sequence)"))
 
   )
   (subsection no-inheritance
    (doc "Why we do NOT use Postgres INHERITS")
    (status implemented)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
    (details
     (doc (|
          Postgres table inheritance (INHERITS) is the
@@ -157,19 +146,12 @@
    )
    (verify
     (build "dune build @all")
-    (smoke "/tmp/pp_override_it9.py — override-walk + branch isolation (closest-ancestor wins, parent unchanged)"))
+    (smoke "override-walk + branch isolation (closest-ancestor wins, parent unchanged)"))
 
   )
   (subsection transactions
    (doc "Transaction isolation: SERIALIZABLE by default")
    (status implemented)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
    (details
     (doc (|
          All Lisp-driven mutations run in SERIALIZABLE
@@ -191,7 +173,7 @@
            (select-for-update 'type id)
          Exposed as a primitive for finer control.
          Persists across subsequent prims in the same
-         with-transaction body (it29).
+         with-transaction body.
 
          Cache coherence (initial): NO caching of stored
          function defs in image memory. Each call reads
@@ -208,22 +190,15 @@
    (verify
     (test "image/test/primitives_test.ml — 48 alcotest cases")
     (build "dune build @all")
-    (smoke "duplicate-fork UNIQUE violation triggers pgx auto-rollback (it16)")
+    (smoke "duplicate-fork UNIQUE violation triggers pgx auto-rollback")
     (smoke "fork_branch returns new branch id (str round-trip)")
     (smoke "merge_branch returns merged-rows count")
-    (smoke "/tmp/pp_sfu_it17.py — (select-for-update 'type id) prim"))
+    (smoke "(select-for-update 'type id) takes a row lock visible to concurrent transactions"))
 
   )
   (subsection with-transaction
    (doc "Dynamic transaction scoping: (with-transaction (lambda () body))")
    (status verified)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
    (details
     (doc (|
          Dynamic transaction scope: all DB prims called inside the
@@ -251,7 +226,7 @@
    (verify
     (test "image/test/primitives_test.ml — 48 alcotest cases")
     (build "dune build @all")
-    (smoke "/tmp/pp_tx_it29.py — with-transaction prim (7 assertions)"))
+    (smoke "with-transaction body runs its prims on one transactional connection; row locks persist across prims"))
 
   )
  )
