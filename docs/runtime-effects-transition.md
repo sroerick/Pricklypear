@@ -313,8 +313,8 @@ Not a schedule — a preferred order for the *next* dedicated slices:
 
 - [x] Nopales has a trustworthy capability story (H0).
 - [x] Printed `eval.ml` has no promise plumbing (H1).
-- [ ] Image domain code reads direct-style (H2).
-- [ ] Backend is one module we could replace (H2/H3).
+- [x] Image domain code reads direct-style (H2). — DB via Io; session HTTP boundary still Lwt.t (Appendix F).
+- [x] Backend is one module we could replace (H2/H3). — `Io_lwt.Db`; Eio optional H3.
 - [ ] Guest language unchanged; composition and transactions hold.
 - [ ] Eio is a choice we *can* make, not a religion we already made.
 
@@ -432,6 +432,27 @@ Counts of `Lwt` mentions per `image/lib` module (approx):
 **Must decolor:** `session.ml`, `crud.ml`, `store.ml`, `auth_store.ml`, `ai_store.ml`, `agent_tools.ml`, `loader.ml`, `ops_incidents.ml`.
 
 
+
+## Appendix F — H2 exit posture (2026-07-18 overnight)
+
+**DB path (done):** all domain SQL via `Io_lwt.Db` (`store`, `crud`,
+`auth_store`, `ai_store`, `ops_incidents`). Lint: `ksh scripts/check_io_rim.sh`.
+
+**Still Lwt-typed (allowed rim / deferred H2.5 full decolor):**
+- `session.ml` / `agent_tools.ml` — HTTP and prim callbacks return
+  `value Lwt.t` because the process rim is still Lwt (H2.7 / H3).
+  Eval interior is already direct-style under `Control_rim`.
+- `http*.ml`, `boot.ml`, `repl_endpoint.ml`, `llm_client.ml` — rim.
+- `store.ml` / `auth_store.ml` function signatures remain
+  `'a Lwt.t` (Io_lwt is Lwt-backed); direct-style signatures wait for
+  H3 second backend or a sync-looking wrapper over `Lwt_main` (not wanted).
+
+**H2 success for mandate:** backend DB is one replaceable module
+(`Io_lwt.Db`). Reading `crud.ml` shows Io_lwt not raw pgx. Session still
+shows `let*` at the HTTP/prim boundary — acceptable until H3 or a later
+decolor pass; not a product regression.
+
+
 ## Appendix A — Glossary
 
 | Term | Meaning |
@@ -461,6 +482,7 @@ Counts of `Lwt` mentions per `image/lib` module (approx):
 | 2026-07-18 | **H1.0/H1.1** Appendix D control-effects design; `Control.Prim_call` + `eval_eff` dual path; `PP_EVAL_CONTROL` (default lwt). |
 | 2026-07-18 | **H2.1/H2.2** Lwt inventory (Appendix E); `Io`/`Io_lwt.Db` port introduced (execute/tx/connect). |
 | 2026-07-18 | **H2.3** `store.ml` + `crud.ml` + `ai_store` + `ops_incidents` execute via `Io_lwt.Db` (only `io_lwt`/`store_db` call pgx). |
+| 2026-07-18 | **H2.5/H2.6/H2.7** session tx via Io_lwt.Db; rim lint script; HTTP rim OK; Appendix F exit posture. |
 | 2026-07-18 | **H2.4** `auth_store.ml` execute via `Io_lwt.Db`. |
 | 2026-07-18 | **H1.7** lisp Lwt-free: eval=direct-style + Control.Prim_call; Control_rim.run_lwt in image; dune lisp deps yojson only. H1 EXITED. |
 | 2026-07-18 | **H1.6** default `PP_EVAL_CONTROL` / `control_mode_from_env` → **eff**; local CRUD/tx/qq soak green; rollback via `PP_EVAL_CONTROL=lwt`. |
