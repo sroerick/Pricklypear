@@ -455,6 +455,37 @@ let eval_eff_tests = [
      | Ast.Interp_error Ast.Budget_exceeded -> ()
      | exn ->
          Alcotest.failf "wrong exn: %s" (Printexc.to_string exn)));
+  (* H1.3: with-transaction → __with_transaction__ via Prim_call; nested
+     apply_eff under run_lwt so body prims still perform. *)
+  ("eval_eff: with-transaction nests prims", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let seen = ref [] in
+    Eval.register_prim prims "create"
+      (fun args ->
+        seen := "create" :: !seen;
+        match args with
+        | [ Ast.VStr t; Ast.VStr _ ] -> Lwt.return (Ast.VStr ("id-" ^ t))
+        | _ -> Lwt.fail_with "bad create");
+    Eval.register_prim prims "__with_transaction__"
+      (fun args ->
+        seen := "tx-enter" :: !seen;
+        match args with
+        | [ lam ] ->
+            let budget = Eval.make_budget () in
+            (* image-shaped: nested run_lwt + apply_eff *)
+            Control.run_lwt ~prims (fun () ->
+                Eval.apply_eff ~budget ~prims lam [])
+        | _ -> Lwt.fail_with "bad tx");
+    let env = Env.create () in
+    Env.define env "create" (Ast.VPrim "create");
+    let got =
+      Lwt_main.run
+        (Eval.eval_string_eff_lwt ~prims env
+           "(with-transaction (lambda () (create \"note\" \"{}\")))")
+    in
+    Alcotest.(check string) "id" "\"id-note\"" (Reader.pp_value got);
+    Alcotest.(check bool) "tx ran" true (List.mem "tx-enter" !seen);
+    Alcotest.(check bool) "create nested" true (List.mem "create" !seen));
 ]
 
 let () =
