@@ -374,6 +374,16 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
 
      Returns the lambda body's result. Nested transactions raise a clean
      Interp_error (see with_dynamic_transaction). *)
+  (* Apply a VLambda under the active control mode (H1.3). *)
+  let apply_lambda_auto (lam : Pricklypear_lisp.Ast.value) : Pricklypear_lisp.Ast.value Lwt.t =
+    let budget = Pricklypear_lisp.Eval.make_budget () in
+    match Pricklypear_lisp.Control.control_mode_from_env () with
+    | Pricklypear_lisp.Control.Eff_mode ->
+        Pricklypear_lisp.Control.run_lwt ~prims:t.prims (fun () ->
+            Pricklypear_lisp.Eval.apply_eff ~budget ~prims:t.prims lam [])
+    | Pricklypear_lisp.Control.Lwt_mode ->
+        Pricklypear_lisp.Eval.apply ~budget ~prims:t.prims lam []
+  in
   Primitives.register tbl "__with_transaction__"
     (fun args ->
       match args with
@@ -382,11 +392,10 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
              shouldn't take args. *)
           let _ = params in
           let _ = clo_env in
-          Store.with_dynamic_transaction t.store
-            (fun () ->
-               let budget = Pricklypear_lisp.Eval.make_budget () in
-               Pricklypear_lisp.Eval.apply
-                 ~budget ~prims:t.prims lam [])
+          (* H1.3: body re-enters apply_eff under Control.run_lwt when
+             PP_EVAL_CONTROL=eff so nested prims Prim_call while seeing
+             Store.current_conn from with_dynamic_transaction. *)
+          Store.with_dynamic_transaction t.store (fun () -> apply_lambda_auto lam)
       | _ ->
           Lwt.return (Pricklypear_lisp.Ast.VStr
                         "__with_transaction__: bad args (need a lambda)"));
@@ -406,9 +415,7 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
             t.manifest <-
               { prev with user_id = "public"; username = "public" };
           Lwt.finalize
-            (fun () ->
-              let budget = Pricklypear_lisp.Eval.make_budget () in
-              Pricklypear_lisp.Eval.apply ~budget ~prims:t.prims lam [])
+            (fun () -> apply_lambda_auto lam)
             (fun () ->
               if need_elevate then t.manifest <- prev;
               Lwt.return_unit)
@@ -1150,9 +1157,10 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value Lwt.t =
     (* Pre-eval intercept: (define name <body>) is the only AST-level
        special case left, because the name argument is a Var that must
        not be evaluated. Everything else (fork/merge/route/checkout)
-       dispatches through Eval.apply via the prim_table. *)
+       dispatches through Eval.apply via the prim_table.
+       H1: [eval_string_auto] honors PP_EVAL_CONTROL=lwt|eff (default lwt). *)
     let* v =
-      Pricklypear_lisp.Eval.eval_string ~prims:t.prims t.env input
+      Pricklypear_lisp.Eval.eval_string_auto ~prims:t.prims t.env input
     in
     (match expr with
      | Pricklypear_lisp.Ast.App
@@ -1200,9 +1208,13 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value Lwt.t =
 and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
     : Pricklypear_lisp.Ast.value Lwt.t =
   (* Like eval_one but takes AST — avoids pp_expr string round-trip. *)
+  let budget = Pricklypear_lisp.Eval.make_budget () in
   let* v =
-    Pricklypear_lisp.Eval.eval ~budget:(Pricklypear_lisp.Eval.make_budget ())
-      ~prims:t.prims t.env expr
+    match Pricklypear_lisp.Control.control_mode_from_env () with
+    | Pricklypear_lisp.Control.Eff_mode ->
+        Pricklypear_lisp.Eval.eval_eff_lwt ~budget ~prims:t.prims t.env expr
+    | Pricklypear_lisp.Control.Lwt_mode ->
+        Pricklypear_lisp.Eval.eval ~budget ~prims:t.prims t.env expr
   in
   (match expr with
    | Pricklypear_lisp.Ast.App
