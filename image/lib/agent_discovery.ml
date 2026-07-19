@@ -51,6 +51,8 @@ let first_calls =
   [ "(whoami)"
   ; "(current-branch)"
   ; "(list-bindings)"
+  ; "(load-library \"notes\")"
+  ; "(notes/doc/get \"agents\")"
   ; "(load-library \"todo\")"
   ; "(todo/list)"
   ; "(load-library \"bible\")"
@@ -71,6 +73,11 @@ let rules =
   ; "Dotted rest params (a . b) are NOT supported; use fixed-arity params."
   ; "File product issues as notes in the inbox when you cannot fix OCaml; \
      do not invent REST for filing."
+  ; "After (load-library \"notes\"), read the live agents note: \
+     (notes/doc/get \"agents\"). It is the habitat AGENTS.md — edit it \
+     with notes/doc/upsert when agent guidance should change."
+  ; "Knowledge wiki (Karpathy loop): (wiki/ingest-from-source …), \
+     (wiki/query …), (wiki/lint); wiki links are [[slug]] on outline bodies."
   ]
 
 let curl_example (base : string) : string =
@@ -116,9 +123,32 @@ let agent_json ?(base_url : string option = None) () : Yojson.Safe.t =
   in
   `Assoc
     ( [ ("name", `String "pricklypear")
-      ; ("version", `Int 2)
+      ; ("version", `Int 3)
       ; ( "philosophy"
         , `String philosophy )
+      ; ( "live_docs"
+        , `Assoc
+            [ ( "agents_note"
+              , `Assoc
+                  [ ("slug", `String "agents")
+                  ; ( "how"
+                    , `String
+                        "(load-library \"notes\") then \
+                         (notes/doc/get \"agents\"). Living AGENTS.md \
+                         for this habitat; agents may notes/doc/upsert it."
+                    )
+                  ; ("browser_path", `String "/notes?slug=agents")
+                  ] )
+            ; ( "wiki_schema"
+              , `Assoc
+                  [ ("slug", `String "wiki-schema")
+                  ; ( "how"
+                    , `String
+                        "(wiki/schema) or (notes/doc/get \"wiki-schema\"). \
+                         LLM preamble for wiki ingest/query/lint."
+                    )
+                  ] )
+            ] )
       ]
     @ base_field
     @ [ ( "auth"
@@ -300,6 +330,33 @@ let agent_markdown ?(base_url : string option = None) () : string =
     ; "- calendar, flashcards, bible, dabar, weather, signup, ai"
     ; "Cold image after restart: (load-library \"NAME\") before calling."
     ; ""
+    ; "## Live agents note (habitat AGENTS.md)"
+    ; ""
+    ; "After (load-library \"notes\"), read:"
+    ; ""
+    ; "    (notes/doc/get \"agents\")"
+    ; ""
+    ; "Browser: " ^ origin ^ "/notes?slug=agents"
+    ; "This note is the living agent playbook for this habitat. Agents"
+    ; "SHOULD update it (notes/doc/upsert) when they learn durable"
+    ; "conventions, new libraries, or wiki workflow changes — same as"
+    ; "editing AGENTS.md in a git repo, but durable in Postgres on the"
+    ; "current branch. Also see (notes/doc/get \"wiki-schema\") for the"
+    ; "wiki LLM preamble."
+    ; ""
+    ; "## Notes / wiki (image is the API)"
+    ; ""
+    ; "    (load-library \"notes\")"
+    ; "    (notes/doc/list)"
+    ; "    (notes/doc/get \"pricklypear\")"
+    ; "    (roam/backlinks \"pricklypear\")"
+    ; "    (wiki/ingest-from-source \"…raw source text…\")"
+    ; "    (wiki/query \"…\")"
+    ; "    (wiki/lint)"
+    ; ""
+    ; "Outline nodes support op=eval (Lisp with self/doc/slug bound)."
+    ; "Wiki links in bodies: [[slug]] or [[slug|label]]."
+    ; ""
     ; "## Rules"
     ; ""
     ; rule_lines
@@ -320,7 +377,8 @@ let agent_markdown ?(base_url : string option = None) () : string =
     ; ""
     ; "Prefer notes inbox (notes/doc/ensure-inbox + outline nodes) over"
     ; "inventing bug-tracker REST. Keep OCaml-kernel bugs precise with"
-    ; "repro expressions."
+    ; "repro expressions. Durable agent guidance belongs in the live"
+    ; "agents note (slug agents), not only in git AGENTS.md."
     ; ""
     ; "## Related public surfaces"
     ; ""
