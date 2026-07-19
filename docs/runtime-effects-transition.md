@@ -454,36 +454,41 @@ decolor pass; not a product regression.
 
 
 
-## Appendix G — H3 exit (B): stay on Io_lwt (2026-07-18 overnight)
+## Appendix G — H3 Eio dual-run (2026-07-19)
 
-**Preconditions met:** H1 exited (lisp direct-style); H2 exited (DB only via
-`Io_lwt.Db`).
+**Preconditions met:** H1 exited; H2 exited (`Io_lwt.Db`).
 
-**Decision: ending B** — keep `Io_lwt` as the sole shipping backend.
+### Implemented
+- **`Io_eio.Db`**: pure [pgx] over Eio.Net (identity monad, ambient
+  switch/net via `Io_eio.with_ctx`). Direct-style `*_sync` API + Lwt
+  wrappers via `Lwt_eio.run_eio` / `run_lwt`.
+- **`PP_IO=lwt|eio`** (default **`lwt`**):
+  - `lwt` — `Lwt_main.run (Boot.start ())` (shipping).
+  - `eio` — `Eio_main.run` + `Lwt_eio.with_event_loop` + ambient
+    `Io_eio` ctx; boot-time `Io_eio.Db` `SELECT 1` smoke; then same
+    `Boot.start` (HTTP/store still Lwt via lwt_eio).
+- **Test:** `image/test/io_eio_test.ml` (set `PP_REQUIRE_EIO_DB=1` to
+  enforce against local PG).
+- **dev.sh** forwards `PP_IO` (default lwt).
 
-**Why not Eio tonight:**
-- poohstack *has* `eio`, `eio_posix`, `httpun-eio`, `gluten-eio`, `caqti-eio`.
-- A real swap still needs: `Io_eio.Db` over a PG driver (pgx is Lwt-shaped;
-  caqti-eio is a different stack), HTTP adapter swap off httpaf-lwt-unix,
-  Control_rim Eio fiber variant, dual-run soak, OpenBSD prod validation.
-- Mandate success is “backend is one module we *can* replace” — Io port
-  already provides that. Flipping scheduler overnight risks prod without soak.
+### Not yet (follow-ups)
+- Store/crud domain defaulting to `Io_eio.Db` types (still `Store_db` /
+  pgx_lwt for product path).
+- Native httpun-eio server (HTTP remains httpaf-lwt-unix under lwt_eio).
+- Prod default flip — soak on laptop/`PP_IO=eio` first; OpenBSD +
+  lwt_eio validation required.
 
-**Spike deferred (not blocked forever):**
-```
-H3.1 Io_eio: health + one query behind PP_IO=eio
-H3.2 httpun-eio / gluten-eio adapter
-H3.3 parity smokes; default only after soak
-```
-Track opportunistically when scheduler pain appears. Until then
-`PP_IO` is implicitly `lwt`; no flag required.
+### Why this shape
+Full scheduler cut is multi-week. Dual-run proves the Eio PG stack and
+event-loop host without risking the Lwt product path. Mandate
+“replaceable backend” is stronger: two real Db implementations exist.
 
-**Lint / rim list (shipping):**
-- DB: `io_lwt.ml`, `store_db.ml`
+**Lint / rim list (shipping default lwt):**
+- DB lwt: `io_lwt.ml`, `store_db.ml`
+- DB eio: `io_eio.ml` (opt-in)
 - Control: `control_rim.ml`
-- HTTP/boot: `http*.ml`, `boot.ml`, `repl_endpoint.ml`, `lineedit.ml`
-- Net: `llm_client.ml`
-- Domain SQL: must use `Io_lwt.Db` (`ksh scripts/check_io_rim.sh`)
+- HTTP/boot: `http*.ml`, `boot.ml`, `main.ml`, `repl_endpoint.ml`
+- Domain SQL (lwt path): `Io_lwt.Db` only (`ksh scripts/check_io_rim.sh`)
 
 
 ## Appendix A — Glossary
@@ -516,6 +521,7 @@ Track opportunistically when scheduler pain appears. Until then
 | 2026-07-18 | **H2.1/H2.2** Lwt inventory (Appendix E); `Io`/`Io_lwt.Db` port introduced (execute/tx/connect). |
 | 2026-07-18 | **H2.3** `store.ml` + `crud.ml` + `ai_store` + `ops_incidents` execute via `Io_lwt.Db` (only `io_lwt`/`store_db` call pgx). |
 | 2026-07-18 | **overnight deploy** push wyo master (H0–H3B runtime effects loop). |
+| 2026-07-19 | **H3 Eio dual-run** `Io_eio.Db` (pgx+Eio.Net) + `PP_IO=eio` via Lwt_eio; default remains lwt. |
 | 2026-07-18 | **H3 exit B** stay on Io_lwt; Eio packages present on poohstack but deferred (Appendix G). |
 | 2026-07-18 | **H2.5/H2.6/H2.7** session tx via Io_lwt.Db; rim lint script; HTTP rim OK; Appendix F exit posture. |
 | 2026-07-18 | **H2.4** `auth_store.ml` execute via `Io_lwt.Db`. |
