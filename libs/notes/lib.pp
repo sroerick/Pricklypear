@@ -868,10 +868,48 @@
         (redirect
           (string-append "/notes?slug=" src))))))
 
-;; Hook refile form into outline action panels (after outline lib loads).
+;; Eval form: run a Lisp expr with self/doc/slug bound, splice result.
+(define notes/outline/eval-form
+  (lambda (slug nid)
+    (html/form "POST" "/partials/notes-node-op"
+      (html/attrs
+        (list
+          (html/attr "class" "ol-eval")
+          (html/attr "hx-post" "/partials/notes-node-op")
+          (html/attr "hx-target" "#outline")
+          (html/attr "hx-swap" "outerHTML")))
+      (html/join
+        (list
+          (html/hidden "slug" (as-str slug))
+          (html/hidden "op" "eval")
+          (html/hidden "node-id" (as-str nid))
+          (html/text-input "expr"
+            (html/attrs
+              (list
+                (html/attr "placeholder" "(outline/node (gensym \"n\") \"hi\")")
+                (html/attr "class" "ol-eval-expr")
+                (html/attr "style" "width:12rem"))))
+          (html/select "target" (html/attr "class" "ol-eval-tgt")
+            (html/join
+              (list
+                (html/option "child" "child" #t)
+                (html/option "sibling" "sibling" #f)
+                (html/option "body" "body" #f))))
+          (html/button
+            (html/attrs
+              (list
+                (html/attr "type" "submit")
+                (html/attr "class" "ol-btn")
+                (html/attr "title" "eval Lisp and splice result")))
+            "eval"))))))
+
+;; Hook refile + eval into outline action panels (after outline lib loads).
 (define outline/extra-actions
   (lambda (slug nid)
-    (notes/refile/form slug nid)))
+    (html/join
+      (list
+        (notes/refile/form slug nid)
+        (notes/outline/eval-form slug nid)))))
 
 (define notes/ui/handle-post
   (lambda ()
@@ -990,6 +1028,41 @@
                       (lambda (n) (outline/cycle-todo n)))))
               (notes/doc/upsert slug title new-tree tags kind day)))))))
 
+;; Evaluate expr with self/doc/slug bound. Uses load-string to install a
+;; temp lambda (REPL-equivalent; auth gate is the only boundary — v1).
+(define notes/outline/eval-result
+  (lambda (slug nid expr)
+    (let ((prev (notes/doc/get slug)))
+      (if (null? prev)
+          ()
+          (let ((tree (notes/doc/outline prev)))
+            (let ((node (outline/find tree (as-str nid))))
+              (if (null? node)
+                  ()
+                  (seq
+                    (load-string
+                      (string-append
+                        "(define __notes_eval_fn (lambda (self doc slug) "
+                        (as-str expr)
+                        "))"))
+                    (__notes_eval_fn node prev (as-str slug))))))))))
+
+;; Splice eval result into the tree at nid.
+;; target: body | child | sibling (default child).
+(define notes/outline/splice-eval
+  (lambda (tree nid target result)
+    (let ((t (as-str target)))
+      (if (string-eq t "body")
+          (outline/update tree nid
+            (lambda (n) (outline/set-body n (as-str result))))
+          (let ((child
+                  (if (outline/valid? result)
+                      result
+                      (outline/node (gensym "n") (as-str result)))))
+            (if (string-eq t "sibling")
+                (outline/insert-sibling tree nid child)
+                (outline/add-child-by-id tree nid child)))))))
+
 (define notes/outline/node-op
   (lambda ()
     (let ((slug (as-str (request-param "slug")))
@@ -1004,7 +1077,16 @@
                   (tags (notes/doc/tags prev))
                   (kind (notes/doc/kind prev))
                   (day (notes/doc/day prev)))
-              (let ((new-tree (notes/outline/apply-op slug tree op nid)))
+              (let ((new-tree
+                      (if (string-eq op "eval")
+                          (notes/outline/splice-eval tree nid
+                            (let ((tg (request-param "target")))
+                              (if (if (null? tg) #t (string-eq (as-str tg) ""))
+                                  "child"
+                                  (as-str tg)))
+                            (notes/outline/eval-result slug nid
+                              (request-param "expr")))
+                          (notes/outline/apply-op slug tree op nid))))
                 (seq
                   (notes/doc/upsert slug title new-tree tags kind day)
                   (render-html
