@@ -460,7 +460,8 @@ Counts of `Lwt` mentions per `image/lib` module (approx):
 | 2026-07-18 | **H0.4/H0.5** soft `txn_lint` on binding inspect + concepts section (capabilities ≠ async ≠ host effects). |
 | 2026-07-18 | **H1.0/H1.1** Appendix D control-effects design; `Control.Prim_call` + `eval_eff` dual path; `PP_EVAL_CONTROL` (default lwt). |
 | 2026-07-18 | **H2.1/H2.2** Lwt inventory (Appendix E); `Io`/`Io_lwt.Db` port introduced (execute/tx/connect). |
-| 2026-07-18 | **H2.3** partial: `crud.ml` uses `Io_lwt.Db.current_conn`/`execute`. |
+| 2026-07-18 | **H2.3** `store.ml` + `crud.ml` + `ai_store` + `ops_incidents` execute via `Io_lwt.Db` (only `io_lwt`/`store_db` call pgx). |
+| 2026-07-18 | **H2.4** `auth_store.ml` execute via `Io_lwt.Db`. |
 | 2026-07-18 | **H1.7** lisp Lwt-free: eval=direct-style + Control.Prim_call; Control_rim.run_lwt in image; dune lisp deps yojson only. H1 EXITED. |
 | 2026-07-18 | **H1.6** default `PP_EVAL_CONTROL` / `control_mode_from_env` → **eff**; local CRUD/tx/qq soak green; rollback via `PP_EVAL_CONTROL=lwt`. |
 | 2026-07-18 | **H1.5** eval_eff special-form parity (cond/qq/defmacro/macroexpand); local image smoke under `PP_EVAL_CONTROL=eff` (whoami/+ /cond/branch); `dev.sh` forwards flag. |

@@ -16,7 +16,7 @@ type session = {
   updated_at : string;
 }
 
-let pg_conn (store : Store.t) : Store.Pg.t option = Store.current_conn store
+let pg_conn (store : Store.t) : Io_lwt.Db.conn option = Io_lwt.Db.current_conn store
 
 let cell_string row i =
   match List.nth_opt row i with
@@ -86,7 +86,7 @@ let create_session
              RETURNING " ^ session_select_cols
           in
           let* rows =
-            Store.Pg.execute conn
+            Io_lwt.Db.execute conn
               ~params:
                 [ Pgx.Value.of_string owner
                 ; (match title with
@@ -125,7 +125,7 @@ let get_session (store : Store.t) ~(owner : string) ~(id : string)
             " FROM ai_sessions WHERE id = $1::uuid AND owner = $2 LIMIT 1"
           in
           let* rows =
-            Store.Pg.execute conn
+            Io_lwt.Db.execute conn
               ~params:
                 [ Pgx.Value.of_string id; Pgx.Value.of_string owner ]
               sql
@@ -151,7 +151,7 @@ let list_sessions (store : Store.t) ~(owner : string) ?(limit = 50) ()
              ORDER BY updated_at DESC LIMIT $2"
           in
           let* rows =
-            Store.Pg.execute conn
+            Io_lwt.Db.execute conn
               ~params:
                 [ Pgx.Value.of_string owner
                 ; Pgx.Value.of_string (string_of_int limit)
@@ -177,7 +177,7 @@ let delete_session (store : Store.t) ~(owner : string) ~(id : string)
              RETURNING id::text"
           in
           let* rows =
-            Store.Pg.execute conn
+            Io_lwt.Db.execute conn
               ~params:
                 [ Pgx.Value.of_string id; Pgx.Value.of_string owner ]
               sql
@@ -207,7 +207,7 @@ let touch_session
              WHERE id = $1::uuid"
           in
           let* _ =
-            Store.Pg.execute conn
+            Io_lwt.Db.execute conn
               ~params:
                 [ Pgx.Value.of_string id
                 ; (match title with
@@ -338,13 +338,13 @@ let row_to_chat_message
                 }))
   | _ -> None
 
-let next_seq (conn : Store.Pg.t) ~(session_id : string) : int Lwt.t =
+let next_seq (conn : Io_lwt.Db.conn) ~(session_id : string) : int Lwt.t =
   let sql =
     "SELECT COALESCE(MAX(seq), -1)::text FROM ai_messages \
      WHERE session_id = $1::uuid"
   in
   let* rows =
-    Store.Pg.execute conn ~params:[ Pgx.Value.of_string session_id ] sql
+    Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string session_id ] sql
   in
   match rows with
   | row :: _ ->
@@ -368,7 +368,7 @@ let list_messages (store : Store.t) ~(session_id : string)
              ORDER BY seq ASC"
           in
           let* rows =
-            Store.Pg.execute conn
+            Io_lwt.Db.execute conn
               ~params:[ Pgx.Value.of_string session_id ]
               sql
           in
@@ -415,7 +415,7 @@ let append_messages
                           VALUES ($1::uuid, $2, $3, $4, $5::jsonb, $6)"
                        in
                        let* _ =
-                         Store.Pg.execute conn
+                         Io_lwt.Db.execute conn
                            ~params:
                              [ Pgx.Value.of_string session_id
                              ; Pgx.Value.of_string (string_of_int i)
