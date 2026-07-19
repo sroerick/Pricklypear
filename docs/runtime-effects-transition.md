@@ -453,6 +453,39 @@ shows `let*` at the HTTP/prim boundary — acceptable until H3 or a later
 decolor pass; not a product regression.
 
 
+
+## Appendix G — H3 exit (B): stay on Io_lwt (2026-07-18 overnight)
+
+**Preconditions met:** H1 exited (lisp direct-style); H2 exited (DB only via
+`Io_lwt.Db`).
+
+**Decision: ending B** — keep `Io_lwt` as the sole shipping backend.
+
+**Why not Eio tonight:**
+- poohstack *has* `eio`, `eio_posix`, `httpun-eio`, `gluten-eio`, `caqti-eio`.
+- A real swap still needs: `Io_eio.Db` over a PG driver (pgx is Lwt-shaped;
+  caqti-eio is a different stack), HTTP adapter swap off httpaf-lwt-unix,
+  Control_rim Eio fiber variant, dual-run soak, OpenBSD prod validation.
+- Mandate success is “backend is one module we *can* replace” — Io port
+  already provides that. Flipping scheduler overnight risks prod without soak.
+
+**Spike deferred (not blocked forever):**
+```
+H3.1 Io_eio: health + one query behind PP_IO=eio
+H3.2 httpun-eio / gluten-eio adapter
+H3.3 parity smokes; default only after soak
+```
+Track opportunistically when scheduler pain appears. Until then
+`PP_IO` is implicitly `lwt`; no flag required.
+
+**Lint / rim list (shipping):**
+- DB: `io_lwt.ml`, `store_db.ml`
+- Control: `control_rim.ml`
+- HTTP/boot: `http*.ml`, `boot.ml`, `repl_endpoint.ml`, `lineedit.ml`
+- Net: `llm_client.ml`
+- Domain SQL: must use `Io_lwt.Db` (`ksh scripts/check_io_rim.sh`)
+
+
 ## Appendix A — Glossary
 
 | Term | Meaning |
@@ -482,6 +515,7 @@ decolor pass; not a product regression.
 | 2026-07-18 | **H1.0/H1.1** Appendix D control-effects design; `Control.Prim_call` + `eval_eff` dual path; `PP_EVAL_CONTROL` (default lwt). |
 | 2026-07-18 | **H2.1/H2.2** Lwt inventory (Appendix E); `Io`/`Io_lwt.Db` port introduced (execute/tx/connect). |
 | 2026-07-18 | **H2.3** `store.ml` + `crud.ml` + `ai_store` + `ops_incidents` execute via `Io_lwt.Db` (only `io_lwt`/`store_db` call pgx). |
+| 2026-07-18 | **H3 exit B** stay on Io_lwt; Eio packages present on poohstack but deferred (Appendix G). |
 | 2026-07-18 | **H2.5/H2.6/H2.7** session tx via Io_lwt.Db; rim lint script; HTTP rim OK; Appendix F exit posture. |
 | 2026-07-18 | **H2.4** `auth_store.ml` execute via `Io_lwt.Db`. |
 | 2026-07-18 | **H1.7** lisp Lwt-free: eval=direct-style + Control.Prim_call; Control_rim.run_lwt in image; dune lisp deps yojson only. H1 EXITED. |
