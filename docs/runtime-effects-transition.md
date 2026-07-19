@@ -515,6 +515,7 @@ Track opportunistically when scheduler pain appears. Until then
 | 2026-07-18 | **H1.0/H1.1** Appendix D control-effects design; `Control.Prim_call` + `eval_eff` dual path; `PP_EVAL_CONTROL` (default lwt). |
 | 2026-07-18 | **H2.1/H2.2** Lwt inventory (Appendix E); `Io`/`Io_lwt.Db` port introduced (execute/tx/connect). |
 | 2026-07-18 | **H2.3** `store.ml` + `crud.ml` + `ai_store` + `ops_incidents` execute via `Io_lwt.Db` (only `io_lwt`/`store_db` call pgx). |
+| 2026-07-18 | **overnight deploy** push wyo master (H0–H3B runtime effects loop). |
 | 2026-07-18 | **H3 exit B** stay on Io_lwt; Eio packages present on poohstack but deferred (Appendix G). |
 | 2026-07-18 | **H2.5/H2.6/H2.7** session tx via Io_lwt.Db; rim lint script; HTTP rim OK; Appendix F exit posture. |
 | 2026-07-18 | **H2.4** `auth_store.ml` execute via `Io_lwt.Db`. |
