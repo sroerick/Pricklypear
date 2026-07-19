@@ -692,3 +692,304 @@ let eval_string
   let budget = make_budget () in
   let e = Reader.read_one s in
   eval ~budget ~prims env e
+
+(** Alias: current monadic path (default). *)
+let eval_lwt = eval
+let eval_string_lwt = eval_string
+
+(* ------------------------------------------------------------------ *)
+(* H1 dual path: direct-style eval via host control effects (Control).  *)
+(* Prim I/O is Effect.perform (Prim_call …); image rim uses Control.run_lwt. *)
+(* Special-form coverage grows toward parity with eval_lwt (H1.5).       *)
+(* ------------------------------------------------------------------ *)
+
+let rec eval_eff
+  ~(budget : budget)
+  ~(prims : prim_table)
+  (env : env)
+  (e : expr)
+  : value =
+  tick budget;
+  match e with
+  | Var name ->
+      (match Env.lookup env name with
+       | Some v -> v
+       | None -> raise (Interp_error (Unbound_var name)))
+  | Lit v -> v
+  | Quote e' -> quote_to_value e'
+  | If (test, then_e, else_e) ->
+      let v = eval_eff ~budget ~prims env test in
+      (match v with
+       | VBool b ->
+           if b then eval_eff ~budget ~prims env then_e
+           else eval_eff ~budget ~prims env else_e
+       | VNil -> eval_eff ~budget ~prims env else_e
+       | _ -> eval_eff ~budget ~prims env then_e)
+  | Seq (a, b) ->
+      ignore (eval_eff ~budget ~prims env a);
+      eval_eff ~budget ~prims env b
+  | Let (name, val_expr, body) ->
+      let v = eval_eff ~budget ~prims env val_expr in
+      let env' = Env.child env in
+      Env.define env' name v;
+      eval_eff ~budget ~prims env' body
+  | Letrec (bindings, body) ->
+      let env' = Env.child env in
+      List.iter (fun (n, _) -> Env.define env' n VNil) bindings;
+      List.iter
+        (fun (n, e') ->
+          let v = eval_eff ~budget ~prims env' e' in
+          Env.define env' n v)
+        bindings;
+      eval_eff ~budget ~prims env' body
+  | Lambda (params, body) -> VLambda (params, body, env)
+  | Define (name, val_expr) ->
+      let v = eval_eff ~budget ~prims env val_expr in
+      Env.define env name v;
+      v
+  | Prim (name, args) ->
+      let arg_vals = List.map (eval_eff ~budget ~prims env) args in
+      (match lookup_prim prims name with
+       | Some _ -> Control.perform_prim name arg_vals
+       | None ->
+           raise (Interp_error (Prim_error (name, "unregistered primitive"))))
+  | App (head, args) ->
+      (match head with
+       | Var name when is_special_form name ->
+           eval_special_form_eff ~budget ~prims env name (head :: args)
+       | Var name ->
+           (match Env.lookup env name with
+            | Some (VMacro (params, body, clo_env)) ->
+                expand_and_eval_macro_eff ~budget ~prims env
+                  ~params ~body ~clo_env ~arg_exprs:args
+            | _ ->
+                let f = eval_eff ~budget ~prims env head in
+                let arg_vals = List.map (eval_eff ~budget ~prims env) args in
+                apply_eff ~budget ~prims f arg_vals)
+       | _ ->
+           let f = eval_eff ~budget ~prims env head in
+           let arg_vals = List.map (eval_eff ~budget ~prims env) args in
+           apply_eff ~budget ~prims f arg_vals)
+
+and expand_and_eval_macro_eff
+  ~(budget : budget)
+  ~(prims : prim_table)
+  (call_env : env)
+  ~(params : string list)
+  ~(body : expr)
+  ~(clo_env : env)
+  ~(arg_exprs : expr list)
+  : value =
+  tick budget;
+  let expected = List.length params
+  and got = List.length arg_exprs in
+  if expected <> got then
+    raise (Interp_error (Arity_mismatch ("macro", expected, got)));
+  let arg_vals =
+    List.map
+      (fun e ->
+        match e with
+        | Lit v -> v
+        | _ -> reify_expr e)
+      arg_exprs
+  in
+  let menv = Env.child clo_env in
+  List.iter2 (fun p a -> Env.define menv p a) params arg_vals;
+  let expansion_v = eval_eff ~budget ~prims menv body in
+  let expansion_e =
+    try value_to_expr expansion_v
+    with Interp_error _ as ex -> raise ex
+       | _ ->
+           raise
+             (Interp_error
+                (User_error "macro expansion is not a valid expr tree"))
+  in
+  eval_eff ~budget ~prims call_env expansion_e
+
+and eval_special_form_eff
+  ~(budget : budget)
+  ~(prims : prim_table)
+  (env : env)
+  (name : string)
+  (full_args : expr list)
+  : value =
+  match name, full_args with
+  | "lambda", [ _head; params_expr; body ] ->
+      let params =
+        match params_expr with
+        | Lit VNil -> []
+        | App (Var p, rest) ->
+            p
+            :: List.map
+                 (fun e ->
+                   match e with
+                   | Var s -> s
+                   | _ ->
+                       raise
+                         (Interp_error (User_error "lambda param not a symbol")))
+                 rest
+        | _ -> raise (Interp_error (User_error "malformed lambda params"))
+      in
+      if List.mem "." params then
+        raise
+          (Interp_error
+             (User_error
+                "dotted rest params not supported (reader treats \".\" as a \
+                 symbol); use fixed-arity params"));
+      VLambda (params, body, env)
+  | "let", _ ->
+      (match full_args with
+       | [ _; bindings_expr; body ] ->
+           (match bindings_expr with
+            | Lit VNil -> eval_eff ~budget ~prims env body
+            | App (App (Var _, _) as first_binding, rest_bindings) ->
+                let all_bindings = first_binding :: rest_bindings in
+                let env' = Env.child env in
+                List.iter
+                  (fun bp ->
+                    match bp with
+                    | App (Var n, [ val_expr ]) ->
+                        let v = eval_eff ~budget ~prims env val_expr in
+                        Env.define env' n v
+                    | _ -> raise (Interp_error (User_error "bad let binding")))
+                  all_bindings;
+                eval_eff ~budget ~prims env' body
+            | _ -> raise (Interp_error (User_error "bad let bindings")))
+       | _ -> raise (Interp_error (User_error "let needs bindings + body")))
+  | "if", [ _; test; then_e; else_e ] ->
+      let v = eval_eff ~budget ~prims env test in
+      (match v with
+       | VBool b -> eval_eff ~budget ~prims env (if b then then_e else else_e)
+       | VNil -> eval_eff ~budget ~prims env else_e
+       | _ -> eval_eff ~budget ~prims env then_e)
+  | "define", [ _; Var n; val_expr ] ->
+      let v = eval_eff ~budget ~prims env val_expr in
+      Env.define env n v;
+      v
+  | "quote", [ _; e' ] -> quote_to_value e'
+  | "seq", _head :: bodies ->
+      (match bodies with
+       | [] -> VNil
+       | [ only ] -> eval_eff ~budget ~prims env only
+       | first :: rest ->
+           ignore (eval_eff ~budget ~prims env first);
+           eval_special_form_eff ~budget ~prims env "seq" (Var "seq" :: rest))
+  | "prim", _ ->
+      (match full_args with
+       | [ _; Var prim_name; body ] ->
+           let arg_vals = [ eval_eff ~budget ~prims env body ] in
+           (match lookup_prim prims prim_name with
+            | Some _ -> Control.perform_prim prim_name arg_vals
+            | None ->
+                raise
+                  (Interp_error
+                     (Prim_error (prim_name, "unregistered primitive"))))
+       | _ -> raise (Interp_error (User_error "prim needs name + arg")))
+  | "with-transaction", _ ->
+      let body_expr_opt =
+        match full_args with
+        | [ _; body_expr ] -> Some body_expr
+        | [ _; _isolation; body_expr ] -> Some body_expr
+        | _ -> None
+      in
+      (match body_expr_opt with
+       | None ->
+           raise
+             (Interp_error
+                (User_error "with-transaction needs a lambda body"))
+       | Some body_expr ->
+           let lambda_v = eval_eff ~budget ~prims env body_expr in
+           (match lambda_v with
+            | VLambda _ ->
+                (match lookup_prim prims "__with_transaction__" with
+                 | Some _ ->
+                     Control.perform_prim "__with_transaction__" [ lambda_v ]
+                 | None ->
+                     raise
+                       (Interp_error
+                          (Prim_error
+                             ( "with-transaction"
+                             , "no __with_transaction__ prim registered" ))))
+            | _ ->
+                raise
+                  (Interp_error
+                     (User_error "with-transaction body must be a lambda"))))
+  | "gensym", [ _ ] -> VStr (gensym ())
+  | "gensym", [ _; Lit (VStr prefix) ] | "gensym", [ _; Var prefix ] ->
+      VStr (gensym ~prefix ())
+  | "and", _head :: args ->
+      let rec loop = function
+        | [] -> VBool true
+        | [ last ] -> eval_eff ~budget ~prims env last
+        | e' :: rest ->
+            let v = eval_eff ~budget ~prims env e' in
+            if truthy v then loop rest else v
+      in
+      loop args
+  | "or", _head :: args ->
+      let rec loop = function
+        | [] -> VBool false
+        | [ last ] -> eval_eff ~budget ~prims env last
+        | e' :: rest ->
+            let v = eval_eff ~budget ~prims env e' in
+            if truthy v then v else loop rest
+      in
+      loop args
+  | other, _ ->
+      (* Cond/quasiquote/defmacro: fall back incomplete until H1.5 parity. *)
+      raise
+        (Interp_error
+           (User_error
+              ("eval_eff: special form not yet on eff path: " ^ other)))
+
+and apply_eff
+  ~(budget : budget)
+  ~(prims : prim_table)
+  (f : value)
+  (args : value list)
+  : value =
+  match f with
+  | VLambda (params, body, clo_env) ->
+      let expected = List.length params
+      and got = List.length args in
+      if expected <> got then
+        raise (Interp_error (Arity_mismatch ("lambda", expected, got)));
+      let call_env = Env.child clo_env in
+      List.iter2 (fun p a -> Env.define call_env p a) params args;
+      eval_eff ~budget ~prims call_env body
+  | VMacro _ ->
+      raise
+        (Interp_error
+           (User_error
+              "macro must be applied by name (not as first-class apply)"))
+  | VPrim name ->
+      (match lookup_prim prims name with
+       | Some _ -> Control.perform_prim name args
+       | None ->
+           raise (Interp_error (Prim_error (name, "unregistered primitive"))))
+  | other -> raise (Interp_error (Not_a_function other))
+
+let eval_string_eff ~(prims : prim_table) (env : env) (s : string) : value =
+  let budget = make_budget () in
+  let e = Reader.read_one s in
+  eval_eff ~budget ~prims env e
+
+(** Run [eval_eff] under [Control.run_lwt] so callers still get [value Lwt.t]. *)
+let eval_eff_lwt
+  ~(budget : budget)
+  ~(prims : prim_table)
+  (env : env)
+  (e : expr)
+  : value Lwt.t =
+  Control.run_lwt ~prims (fun () -> eval_eff ~budget ~prims env e)
+
+let eval_string_eff_lwt ~(prims : prim_table) (env : env) (s : string)
+  : value Lwt.t =
+  Control.run_lwt ~prims (fun () -> eval_string_eff ~prims env s)
+
+(** Dispatch by [PP_EVAL_CONTROL] (default lwt). *)
+let eval_string_auto ~(prims : prim_table) (env : env) (s : string)
+  : value Lwt.t =
+  match Control.control_mode_from_env () with
+  | Control.Eff_mode -> eval_string_eff_lwt ~prims env s
+  | Control.Lwt_mode -> eval_string_lwt ~prims env s

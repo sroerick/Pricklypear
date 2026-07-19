@@ -320,6 +320,81 @@ Not a schedule — a preferred order for the *next* dedicated slices:
 
 ---
 
+## Appendix D — H1.0 Host control effects design (2026-07-18)
+
+### Constructors (coarse → refine later)
+
+```ocaml
+(* lisp/lib/control.ml — host only; never guest-visible *)
+type _ Effect.t +=
+  | Prim_call : string * Ast.value list -> Ast.value Effect.t
+```
+
+- **One coarse effect** for all registered prims (pure + DB + AI).
+  Pure prims still go through the table (image wraps them in `Lwt.return`
+  today; under eff they return values synchronously from the handler).
+- Finer effects (`Db_query`, `Tx_begin`, …) deferred until Io port (H2).
+- Guest capabilities (`effect.ml`) stay AST-level; orthogonal.
+
+### Eval shape
+
+| Path | Type | Prim dispatch |
+|------|------|----------------|
+| `eval` / `eval_lwt` (default) | `value Lwt.t` | direct `prim_fn` call |
+| `eval_eff` | `value` (direct) | `Effect.perform (Prim_call …)` |
+
+Flag: **`PP_EVAL_CONTROL=lwt|eff`** (default **`lwt`**). Image
+`eval_one` / tests may opt into eff; prod stays lwt until H1.6 soak.
+
+### Handler rim (image session)
+
+```ocaml
+Control.run_lwt ~prims (fun () -> Eval.eval_eff ~budget ~prims env expr)
+```
+
+`run_lwt` uses `Effect.Deep.match_with`:
+- `Prim_call (name, args)` → look up Lwt `prim_fn`, bind, `continue`
+- exceptions → `discontinue` / `Lwt.fail`
+- return → `Lwt.return`
+
+HTTP/REPL remain Lwt at the rim; only the eval interior becomes direct-style.
+
+### `with-transaction`
+
+Unchanged guest syntax. Special form still evaluates the lambda value then
+calls prim `__with_transaction__` (image installs dynamic PG conn).
+On eff path that is `perform (Prim_call ("__with_transaction__", [lam]))`.
+Image prim body uses `Eval.apply` / `eval_eff` under the same handler so
+nested prims see the tx conn (today’s `Store.with_dynamic_transaction`).
+
+### Budget
+
+Same `budget` record + `tick` at every eval step / prim. Exceed →
+`Interp_error Budget_exceeded` on both paths. One bad eval aborts one call.
+
+### Nesting / composition invariants
+
+1. `(define u (get …)); (str u)` — `get` result is a plain `value` on both paths.
+2. Nested `perform` inside prim handlers must not install a second Deep
+   handler unless intentional; image prims that re-enter eval should call
+   `eval_eff` under the *existing* handler (or `run_lwt` only at the outer rim).
+3. Macros: expand via direct eval of macro body (reify args), then eval
+   expansion — same as lwt path, without monadic map on reify.
+
+### Dual-run rules
+
+- Default lwt until smokes soak on eff.
+- Golden lisp tests run on **both** when `eval_eff` claims parity for a form.
+- Feature growth: new special forms update both paths until H1.7 deletes lwt.
+- Capability inference unchanged.
+
+### Exit (H1.7)
+
+- `lisp/` drops `lwt` library dep; only `eval_eff` remains (rename to `eval`).
+- Image always `Control.run_lwt` (or later `run_eio`) at session boundary.
+
+---
+
 ## Appendix A — Glossary
 
 | Term | Meaning |
@@ -346,5 +421,6 @@ Not a schedule — a preferred order for the *next* dedicated slices:
 | 2026-07-18 | **H0.1** prim↔effect audit: all 112 registered image prims classified in `lisp/lib/effect.ml` buckets; effect tests extended. |
 | 2026-07-18 | **H0.2/H0.3** `known_fn_of_bindings` (memo + cycle break); badges + AI install/rewrite/seed use store bindings; public route gate on handler lattice (allow pure|read|write|html|txn). |
 | 2026-07-18 | **H0.4/H0.5** soft `txn_lint` on binding inspect + concepts section (capabilities ≠ async ≠ host effects). |
+| 2026-07-18 | **H1.0/H1.1** Appendix D control-effects design; `Control.Prim_call` + `eval_eff` dual path; `PP_EVAL_CONTROL` (default lwt). |
 
 When a horizon unit ships, add a row here (or point at commit).
