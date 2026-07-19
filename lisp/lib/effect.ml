@@ -100,16 +100,27 @@ end
 
 type effect_set = EffSet.t
 
-(** Default pure prim names (image may add more). *)
+(** Default pure prim names (image may add more).
+    H0.1 audit 2026-07-18: every registered image prim must appear in
+    exactly one capability bucket (or the special-case arms in
+    [effects_for_prim]). Guest-visible only — not host control effects. *)
 let pure_prims = [
-  "+"; "-"; "*"; "="; "<"; ">"; "<="; ">="; "not";
+  "+"; "-"; "*"; "div"; "mod"; "abs"; "min"; "max";
+  "="; "<"; ">"; "<="; ">="; "not";
   "list"; "car"; "cdr"; "cons"; "null?"; "pair?"; "count";
+  "append"; "reverse"; "nth";
   "string-append"; "str"; "type-of"; "as-str";
   "string-eq"; "string-trim"; "string-length"; "substring"; "string-contains?";
   "html-escape"; "json-parse"; "json-emit";
-  "hx-request?"; "request-header";
   "dict-get"; "dict-set"; "dict-keys";
-  "hx-get"; "hx-post";
+  "hx-get"; "hx-post"; "hx-request?";
+  "request-header"; "request-method"; "request-path";
+  "request-param"; "request-params"; "request-body";
+  "date-today"; "date-weekday"; "date-format";
+  "date-add-days"; "date-diff-days";
+  "parse-int"; "parse-float"; "floor"; "round";
+  "fsrs-schedule";
+  "verify-ssh-key";  (* pure crypto check on args; no store *)
 ]
 
 let read_db_prims = [
@@ -118,21 +129,31 @@ let read_db_prims = [
   "list-branches"; "current-branch"; "list-bindings";
   "whoami"; "current-author";
   "function-source"; "package-bindings"; "export-package";
+  "route-visibility";
+  "list-usernames"; "list-ssh-keys";
+  "llm-key-status";
+  "log-tail"; "ops/summary"; "ops/incidents";
+  "agent-history"; "agent-sessions";
 ]
 
 let write_db_prims = [
   "create"; "update"; "update-field"; "delete"; "deftype";
+  "load-string"; "load-library";  (* persist defs/routes onto branch *)
+  "add-ssh-key"; "revoke-ssh-key";
+  "set-llm-key"; "clear-llm-key";
+  "with-public-write";  (* elevates anon → may write data_rows *)
 ]
 
 let branch_prims = [ "fork"; "merge"; "checkout" ]
-let publish_prims = [ "route" ]
-let html_prims = [ "render-html" ]
-(* Author tools that freeze into function_defs (Ai + WriteDb). *)
+let publish_prims = [ "route"; "public-route" ]
+let html_prims = [ "render-html"; "redirect" ]
+(* Author tools that freeze into function_defs or drive the model (Ai + WriteDb). *)
 let ai_write_prims = [
   "propose-function"; "install-function"; "agent-task";
   "llm-inner"; "llm-outer"; "llm-rewrite"; "llm-seed";
+  "agent-session-new"; "agent-say"; "agent-session-delete";
 ]
-(* Portal that only talks to the model (Ai only). *)
+(* Portal that only talks to the model (Ai only) — legacy one-shot. *)
 let ai_prims = "agent" :: ai_write_prims
 
 let effects_for_prim (name : string) : effect_set =
