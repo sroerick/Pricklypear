@@ -149,7 +149,7 @@
   )
   (subsection macros
    (doc "User-defined syntactic macros: defmacro, quasiquote, value<->expr bridge, expand-at-define")
-   (status planned)
+   (status partial)
    (implements lisp/lib/eval.ml lisp/lib/reader.ml lisp/lib/ast.ml lisp/lib/special_forms.ml)
    (verify
     (build "dune build lisp")
@@ -233,7 +233,7 @@
              and return the expansion as a value tree (quoted
              shape). If not a macro call, return form unchanged
              (as value via quote_to_value).
-           - Does not eval the expansion.
+           - Does not eval the expansion. (Current impl: evals macro body to produce the value tree; matches inbox language-design note c11-4013 contract for REPL inspection.)
 
          (macroexpand form)
            - Repeat macroexpand-1 until fixed point or budget

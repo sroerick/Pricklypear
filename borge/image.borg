@@ -157,7 +157,7 @@
    )
   )
   (subsection htmx-interface
-   (doc "User routes accept GET and POST; request context available via dynamic-binding prims")
+   (doc "User routes accept GET and POST; request context available via dynamic-binding prims. bible/* and other handler-only fns now guarded (require_request raises Interp_error User_error on direct /api/eval; api_eval catches as clean JSON error — fixes inbox c5-1054).")
    (implements image/lib/http.ml auth/lib/http.ml image/lib/session.ml image/lib/primitives.ml)
    (status partial)
    (verify
