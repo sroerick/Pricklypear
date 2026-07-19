@@ -32,3 +32,8 @@
  (name http_robust_env_test)
  (modules http_robust_env_test)
  (libraries pricklypear-image pricklypear-lisp alcotest))
+
+(test
+ (name io_eio_test)
+ (modules io_eio_test)
+ (libraries pricklypear-image eio_main))
