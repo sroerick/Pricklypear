@@ -288,6 +288,14 @@
           "word-break" "break-word"))
       (css/rule ".ol-body:focus"
         (list "background" theme/panel "border" "1px solid #000"))
+      ;; [[media:uuid]] embeds from roam/render-media
+      (css/rule "img.note-media"
+        (list
+          "display" "block" "max-width" "100%" "max-height" "28rem"
+          "height" "auto" "margin" ".5rem 0" "border" "1px solid #000"
+          "background" theme/panel))
+      (css/rule ".note-media-cap"
+        (list "margin" "0 0 .5rem" "font-size" ".85rem"))
       (css/rule ".ol-kids"
         (list "margin-left" ".15rem" "min-width" "0"))
       ;; Desktop: sticky selection toolbar (Word/Docs-style — stays while scrolling).

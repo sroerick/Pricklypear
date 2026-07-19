@@ -128,6 +128,17 @@
 (define html/a
   (lambda (href body)
     (html/tag "a" (html/attr "href" href) body)))
+;; Void <img>. src/alt required; optional class via third arg ("" ok).
+(define html/img
+  (lambda (src alt class)
+    (html/void "img"
+      (html/attrs
+        (list
+          (html/attr "src" src)
+          (html/attr "alt" alt)
+          (if (string-eq (as-str class) "")
+              ""
+              (html/attr "class" class)))))))
 (define html/form
   (lambda (method action attrs body)
     (html/tag "form"

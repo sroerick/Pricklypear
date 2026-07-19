@@ -112,20 +112,23 @@
                 (to (as-str (car (cdr t))))
                 (lab (as-str (car (cdr (cdr t))))))
             (let ((key (string-append fid "\t" to)))
-              (if (roam/seen? seen key)
+              ;; Skip media embeds [[media:uuid]] — not note wiki links.
+              (if (roam/media-slug? to)
                   (roam/insert-collected from-slug (cdr triples) seen)
-                  (seq
-                    (create 'note-link
-                      (dict-set* "{}"
-                        (list
-                          "from_slug" (as-str from-slug)
-                          "from_id" fid
-                          "to_slug" to
-                          "to_id" ""
-                          "label" lab
-                          "kind" "wikilink")))
-                    (roam/insert-collected from-slug (cdr triples)
-                      (cons key seen))))))))))
+                  (if (roam/seen? seen key)
+                      (roam/insert-collected from-slug (cdr triples) seen)
+                      (seq
+                        (create 'note-link
+                          (dict-set* "{}"
+                            (list
+                              "from_slug" (as-str from-slug)
+                              "from_id" fid
+                              "to_slug" to
+                              "to_id" ""
+                              "label" lab
+                              "kind" "wikilink")))
+                        (roam/insert-collected from-slug (cdr triples)
+                          (cons key seen)))))))))))
 
 ;; Rebuild note-link rows for one note (called on every upsert).
 (define roam/reindex
@@ -171,6 +174,41 @@
       (string-append "/notes?slug=" slug)
       (html/text lab))))
 
+;; Media embeds in note bodies: [[media:<uuid>]] or [[media:<uuid>|alt text]].
+;; Renders an authenticated <img src="/media/<uuid>"> (session cookie required).
+;; Not a note wiki link — media: prefix is reserved.
+(define roam/media-slug?
+  (lambda (slug)
+    (let ((s (as-str slug)))
+      (if (< (string-length s) 7)
+          #f
+          (string-eq (substring s 0 6) "media:")))))
+
+(define roam/media-id
+  (lambda (slug)
+    (let ((s (as-str slug)))
+      (substring s 6 (- (string-length s) 6)))))
+
+(define roam/render-media
+  (lambda (id alt)
+    (let ((mid (as-str id))
+          (lab (as-str alt)))
+      (let ((href (string-append "/media/" mid))
+            (label (if (string-eq lab "") mid lab)))
+        (html/join
+          (list
+            (html/a href
+              (html/img href label "note-media"))
+            (html/p*
+              (html/attr "class" "muted note-media-cap")
+              (html/a href (html/text label)))))))))
+
+(define roam/render-wiki-or-media
+  (lambda (slug lab)
+    (if (roam/media-slug? slug)
+        (roam/render-media (roam/media-id slug) lab)
+        (roam/render-link slug lab))))
+
 (define roam/render-acc
   (lambda (s i acc)
     (if (>= i (string-length s))
@@ -191,7 +229,7 @@
                                   (substring s i (- (+ end 2) i)))))
                             (roam/render-acc s (+ end 2)
                               (string-append acc
-                                (roam/render-link slug lab)))))))))
+                                (roam/render-wiki-or-media slug lab)))))))))
             (roam/render-acc s (+ i 1)
               (string-append acc (html-escape (substring s i 1))))))))
 
