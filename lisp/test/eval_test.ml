@@ -390,6 +390,73 @@ let macro_tests = [
     Alcotest.(check string) "false" "#f" (Reader.pp_value got2));
 ]
 
+(* H1 dual-path: eval_eff + Control.run_lwt (PP_EVAL_CONTROL=eff shape). *)
+let eval_eff_tests = [
+  ("eval_eff: int literal", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let got =
+      Lwt_main.run (Eval.eval_string_eff_lwt ~prims env "42")
+    in
+    Alcotest.(check string) "42" "42" (Reader.pp_value got));
+  ("eval_eff: define + lookup", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let _ = Lwt_main.run (Eval.eval_string_eff_lwt ~prims env "(define x 99)") in
+    let got = Lwt_main.run (Eval.eval_string_eff_lwt ~prims env "x") in
+    Alcotest.(check string) "99" "99" (Reader.pp_value got));
+  ("eval_eff: if + lambda app", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let got =
+      Lwt_main.run
+        (Eval.eval_string_eff_lwt ~prims env "((lambda (x) (if #t x 0)) 7)")
+    in
+    Alcotest.(check string) "7" "7" (Reader.pp_value got));
+  ("eval_eff: prim via Prim_call", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    Eval.register_prim prims "add-one"
+      (fun args ->
+        match args with
+        | [ Ast.VInt n ] -> Lwt.return (Ast.VInt (Int64.add n 1L))
+        | _ -> Lwt.fail_with "bad args");
+    let env = Env.create () in
+    let got =
+      Lwt_main.run (Eval.eval_string_eff_lwt ~prims env "(prim add-one 41)")
+    in
+    Alcotest.(check string) "42" "42" (Reader.pp_value got));
+  ("eval_eff: composition bind then prim", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    Eval.register_prim prims "get"
+      (fun args ->
+        match args with
+        | [ Ast.VStr _; Ast.VInt id ] ->
+            Lwt.return (Ast.VStr ("row-" ^ Int64.to_string id))
+        | _ -> Lwt.fail_with "bad get");
+    let env = Env.create () in
+    Env.define env "get" (Ast.VPrim "get");
+    let got =
+      Lwt_main.run
+        (Eval.eval_string_eff_lwt ~prims env
+           "(let ((u (get \"user\" 1))) u)")
+    in
+    Alcotest.(check string) "row" "\"row-1\"" (Reader.pp_value got));
+  ("eval_eff: budget still aborts", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let budget = Eval.make_budget ~limit:3 () in
+    let e = Reader.read_one "(seq 1 2 3 4 5 6 7 8 9 10)" in
+    (try
+       let _ =
+         Lwt_main.run (Eval.eval_eff_lwt ~budget ~prims env e)
+       in
+       Alcotest.fail "expected Budget_exceeded"
+     with
+     | Ast.Interp_error Ast.Budget_exceeded -> ()
+     | exn ->
+         Alcotest.failf "wrong exn: %s" (Printexc.to_string exn)));
+]
+
 let () =
   Alcotest.run "pricklypear-lisp" [
     "reader", reader_tests @ reader_list_tests @ reader_completeness_tests;
@@ -397,4 +464,5 @@ let () =
     "pretty-print", pretty_print_tests;
     "eval", eval_tests;
     "macros", macro_tests;
+    "eval-eff", eval_eff_tests;
   ]
