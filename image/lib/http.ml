@@ -786,8 +786,10 @@ let serve_eio
   in
   let net = Eio.Stdenv.net env in
   let listen_addr = `Tcp (Eio.Net.Ipaddr.V4.any, port) in
+  (* reuse_port off: OpenBSD SO_REUSEPORT semantics differ and caused
+     EADDRINUSE races on rcctl restart when dual-binding. reuse_addr is enough. *)
   let socket =
-    Eio.Net.listen ~reuse_addr:true ~reuse_port:true ~backlog:128 ~sw net
+    Eio.Net.listen ~reuse_addr:true ~reuse_port:false ~backlog:128 ~sw net
       listen_addr
   in
   Printf.eprintf
