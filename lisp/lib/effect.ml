@@ -272,3 +272,55 @@ let policy_allows ~(allow : effect_set) (got : effect_set) : bool =
      except Pure which is absent from sets. WriteDb not allowed unless in allow. *)
   EffSet.subset got allow
   || (EffSet.is_pure got)
+
+(** Soft transactional hygiene hints (H0.4). Advisory only — does not
+    reject eval. Looks for multi-write bodies and [select-for-update]
+    without a surrounding [with-transaction] / Txn effect. *)
+let count_write_sites (e : expr) : int =
+  let rec go = function
+    | Prim (name, args) ->
+        let here = if List.mem name write_db_prims then 1 else 0 in
+        here + List.fold_left (fun n a -> n + go a) 0 args
+    | App (Var name, args) when List.mem name write_db_prims ->
+        1 + List.fold_left (fun n a -> n + go a) 0 args
+    | App (h, args) -> go h + List.fold_left (fun n a -> n + go a) 0 args
+    | Lambda (_, body) | Define (_, body) -> go body
+    | If (t, a, b) -> go t + go a + go b
+    | Let (_, v, body) | Seq (v, body) -> go v + go body
+    | Letrec (bs, body) ->
+        List.fold_left (fun n (_, e') -> n + go e') (go body) bs
+    | Var _ | Lit _ | Quote _ -> 0
+  in
+  go e
+
+let has_select_for_update (e : expr) : bool =
+  let rec go = function
+    | Prim ("select-for-update", _) -> true
+    | App (Var "select-for-update", _) -> true
+    | Prim (_, args) -> List.exists go args
+    | App (h, args) -> go h || List.exists go args
+    | Lambda (_, body) | Define (_, body) -> go body
+    | If (t, a, b) -> go t || go a || go b
+    | Let (_, v, body) | Seq (v, body) -> go v || go body
+    | Letrec (bs, body) -> go body || List.exists (fun (_, e') -> go e') bs
+    | Var _ | Lit _ | Quote _ -> false
+  in
+  go e
+
+let txn_lint ?(known_fn : known_fn_lookup = fun _ -> None) (e : expr)
+  : string list =
+  let fx = infer ~known_fn e in
+  let has_txn = EffSet.mem Txn fx in
+  let writes = count_write_sites e in
+  let hints = ref [] in
+  if writes >= 2 && not has_txn then
+    hints :=
+      (Printf.sprintf
+         "soft txn: %d write-db sites without with-transaction — consider wrapping multi-step mutations"
+         writes)
+      :: !hints;
+  if has_select_for_update e && not has_txn then
+    hints :=
+      "soft txn: select-for-update without with-transaction — row lock will not span later prims"
+      :: !hints;
+  List.rev !hints

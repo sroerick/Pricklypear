@@ -357,6 +357,20 @@ let list_bindings_page (session : Session.t) (reqd : Httpaf.Reqd.t)
     Pricklypear_lisp.Effect.EffSet.badge
       (Pricklypear_lisp.Effect.infer ~known_fn expr)
   in
+  let txn_hints_of expr =
+    Pricklypear_lisp.Effect.txn_lint ~known_fn expr
+  in
+  let txn_hint_nodes expr =
+    match txn_hints_of expr with
+    | [] -> []
+    | hs ->
+        [ HTML.div [HTML.class_ "card"]
+            (HTML.p [HTML.class_ "muted"] [txt "txn lint (soft):"]
+             :: List.map
+                  (fun h -> HTML.p [HTML.class_ "err"] [txt "%s" h])
+                  hs)
+        ]
+  in
   (* group_by_package expects 3-tuples; strip depth for grouping. *)
   let defs_for_group =
     List.map (fun (n, e, a, _) -> (n, e, a)) defs_f
@@ -507,50 +521,54 @@ let list_bindings_page (session : Session.t) (reqd : Httpaf.Reqd.t)
             let badge = badge_of expr in
             let pp = Pricklypear_lisp.Reader.pp_expr expr in
             let depth = depth_of full in
-            chrome ~session ~title:full [
-              HTML.p [] [
-                HTML.a [HTML.href "/bindings"] [txt "Functions"];
-                txt " › ";
-                HTML.a [HTML.href "%s" (pkg_href pkg)]
-                  [txt "%s" (Packages.package_label crumb_pkg)];
-                txt " › %s" (Packages.local_name full);
-              ];
-              HTML.div [HTML.class_ "card"] [
-                HTML.p [] [
-                  HTML.span [HTML.class_ "muted"] [txt "kind: "];
-                  txt "function (Lisp)";
-                ];
-                HTML.p [] [
-                  HTML.span [HTML.class_ "muted"] [txt "origin: "];
-                  origin_badge depth author;
-                ];
-                HTML.p [] [
-                  HTML.span [HTML.class_ "muted"] [txt "author: "];
-                  txt "%s" author;
-                ];
-                HTML.p [] [
-                  HTML.span [HTML.class_ "muted"] [txt "effects: "];
-                  txt "%s" badge;
-                ];
-                HTML.p [] [
-                  HTML.span [HTML.class_ "muted"] [txt "used by: "];
-                  used_links full;
-                ];
-                HTML.h2 [] [txt "definition"];
-                HTML.pre [] [txt "%s" pp];
-                HTML.p [] [
-                  HTML.a
-                    [ HTML.href "%s" (Packages.edit_href full)
-                    ; HTML.class_ "btn" ]
-                    [txt "Edit"];
-                  txt " ";
-                  HTML.a
-                    [ HTML.href "%s" (Packages.inspect_href full)
-                    ; HTML.class_ "btn secondary" ]
-                    [txt "Inspect AST"];
-                ];
-              ];
-            ]
+            chrome ~session ~title:full
+              ([ HTML.p [] [
+                   HTML.a [HTML.href "/bindings"] [txt "Functions"];
+                   txt " › ";
+                   HTML.a [HTML.href "%s" (pkg_href pkg)]
+                     [txt "%s" (Packages.package_label crumb_pkg)];
+                   txt " › %s" (Packages.local_name full);
+                 ];
+                 HTML.div [HTML.class_ "card"] [
+                   HTML.p [] [
+                     HTML.span [HTML.class_ "muted"] [txt "kind: "];
+                     txt "function (Lisp)";
+                   ];
+                   HTML.p [] [
+                     HTML.span [HTML.class_ "muted"] [txt "origin: "];
+                     origin_badge depth author;
+                   ];
+                   HTML.p [] [
+                     HTML.span [HTML.class_ "muted"] [txt "author: "];
+                     txt "%s" author;
+                   ];
+                   HTML.p [] [
+                     HTML.span [HTML.class_ "muted"] [txt "effects: "];
+                     txt "%s" badge;
+                   ];
+                   HTML.p [] [
+                     HTML.span [HTML.class_ "muted"] [txt "used by: "];
+                     used_links full;
+                   ];
+                 ];
+               ]
+               @ txn_hint_nodes expr
+               @ [ HTML.div [HTML.class_ "card"] [
+                     HTML.h2 [] [txt "definition"];
+                     HTML.pre [] [txt "%s" pp];
+                     HTML.p [] [
+                       HTML.a
+                         [ HTML.href "%s" (Packages.edit_href full)
+                         ; HTML.class_ "btn" ]
+                         [txt "Edit"];
+                       txt " ";
+                       HTML.a
+                         [ HTML.href "%s" (Packages.inspect_href full)
+                         ; HTML.class_ "btn secondary" ]
+                         [txt "Inspect AST"];
+                     ];
+                   ];
+                 ])
       in
       html_response reqd ~session body;
       Lwt.return_unit
@@ -1049,6 +1067,11 @@ let page_inspector (session : Session.t) (path_seg : string)
 let inspect_binding_page (session : Session.t) (name : string)
     (reqd : Httpaf.Reqd.t) : unit Lwt.t =
   let* found = Store.lookup_function (Session.store session) name in
+  let* defs = Store.list_function_names (Session.store session) in
+  let known_fn =
+    Pricklypear_lisp.Effect.known_fn_of_bindings
+      (List.map (fun (n, e, _) -> (n, e)) defs)
+  in
   let body =
     match found with
     | None ->
@@ -1062,19 +1085,36 @@ let inspect_binding_page (session : Session.t) (name : string)
                 (Pricklypear_lisp.Ast.expr_to_json expr)
           with _ -> "(json unavailable)"
         in
-        chrome ~session ~title:("Inspect binding " ^ name) [
-          HTML.div [HTML.class_ "card"] [
-            HTML.p [] [txt "author: %s" author];
-            HTML.p [] [txt "branch: %s" (Session.branch_name session)];
-            HTML.h2 [] [txt "pretty"];
-            HTML.pre [] [txt "%s" pp];
-            HTML.h2 [] [txt "AST JSON"];
-            HTML.pre [] [txt "%s" j];
-            HTML.p [] [
-              HTML.a [HTML.href "%s" (Packages.edit_href name)] [txt "edit"];
-            ];
-          ];
-        ]
+        let badge =
+          Pricklypear_lisp.Effect.EffSet.badge
+            (Pricklypear_lisp.Effect.infer ~known_fn expr)
+        in
+        let txn_nodes =
+          match Pricklypear_lisp.Effect.txn_lint ~known_fn expr with
+          | [] -> []
+          | hs ->
+              [ HTML.div [HTML.class_ "card"]
+                  (HTML.p [HTML.class_ "muted"] [txt "txn lint (soft):"]
+                   :: List.map
+                        (fun h -> HTML.p [HTML.class_ "err"] [txt "%s" h])
+                        hs)
+              ]
+        in
+        chrome ~session ~title:("Inspect binding " ^ name)
+          ([ HTML.div [HTML.class_ "card"] [
+               HTML.p [] [txt "author: %s" author];
+               HTML.p [] [txt "branch: %s" (Session.branch_name session)];
+               HTML.p [] [txt "effects: %s" badge];
+               HTML.h2 [] [txt "pretty"];
+               HTML.pre [] [txt "%s" pp];
+               HTML.h2 [] [txt "AST JSON"];
+               HTML.pre [] [txt "%s" j];
+               HTML.p [] [
+                 HTML.a [HTML.href "%s" (Packages.edit_href name)] [txt "edit"];
+               ];
+             ];
+           ]
+           @ txn_nodes)
   in
   html_response reqd ~session body;
   Lwt.return_unit

@@ -7,6 +7,15 @@ let infer s =
 
 let pp_fx e = Effect.EffSet.pp e
 
+let contains ~sub s =
+  let n = String.length s and m = String.length sub in
+  let rec find i =
+    if i + m > n then false
+    else if String.sub s i m = sub then true
+    else find (i + 1)
+  in
+  m = 0 || find 0
+
 let checks = [
   ("pure arithmetic", `Quick, fun () ->
     let fx = infer "(* x x)" in
@@ -91,6 +100,29 @@ let checks = [
     let known = Effect.known_fn_of_bindings [("a", a); ("b", b)] in
     let fx = Effect.infer ~known_fn:known (Reader.read_one "(a)") in
     Alcotest.(check bool) "pure cycle" true (Effect.EffSet.is_pure fx));
+  (* H0.4 soft txn lint *)
+  ("txn_lint multi-write without txn", `Quick, fun () ->
+    let e =
+      Reader.read_one
+        "(lambda () (create 'n \"{}\") (delete 'n id))"
+    in
+    let hs = Effect.txn_lint e in
+    Alcotest.(check bool) "has hint" true (hs <> []);
+    Alcotest.(check bool) "mentions write-db sites" true
+      (List.exists (contains ~sub:"write-db sites") hs));
+  ("txn_lint quiet with with-transaction", `Quick, fun () ->
+    let e =
+      Reader.read_one
+        "(with-transaction (lambda () (create 'n \"{}\") (delete 'n id)))"
+    in
+    let hs = Effect.txn_lint e in
+    Alcotest.(check bool) "no multi-write hint" true
+      (not (List.exists (contains ~sub:"write-db sites") hs)));
+  ("txn_lint select-for-update bare", `Quick, fun () ->
+    let e = Reader.read_one "(lambda () (select-for-update 'n id))" in
+    let hs = Effect.txn_lint e in
+    Alcotest.(check bool) "s4u hint" true
+      (List.exists (contains ~sub:"select-for-update") hs));
 ]
 
 let () =
