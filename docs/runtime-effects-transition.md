@@ -422,6 +422,7 @@ Same `budget` record + `tick` at every eval step / prim. Exceed →
 | 2026-07-18 | **H0.2/H0.3** `known_fn_of_bindings` (memo + cycle break); badges + AI install/rewrite/seed use store bindings; public route gate on handler lattice (allow pure|read|write|html|txn). |
 | 2026-07-18 | **H0.4/H0.5** soft `txn_lint` on binding inspect + concepts section (capabilities ≠ async ≠ host effects). |
 | 2026-07-18 | **H1.0/H1.1** Appendix D control-effects design; `Control.Prim_call` + `eval_eff` dual path; `PP_EVAL_CONTROL` (default lwt). |
+| 2026-07-18 | **H1.5** eval_eff special-form parity (cond/qq/defmacro/macroexpand); local image smoke under `PP_EVAL_CONTROL=eff` (whoami/+ /cond/branch); `dev.sh` forwards flag. |
 | 2026-07-18 | **H1.3/H1.4** `__with_transaction__` + `with-public-write` re-enter via `apply_eff`/`Control.run_lwt` when `PP_EVAL_CONTROL=eff`; session `eval_one`/`eval_form` use auto mode; budget tests on both paths. |
 
 When a horizon unit ships, add a row here (or point at commit).

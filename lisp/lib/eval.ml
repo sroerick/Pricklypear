@@ -935,12 +935,190 @@ and eval_special_form_eff
             if truthy v then v else loop rest
       in
       loop args
-  | other, _ ->
-      (* Cond/quasiquote/defmacro: fall back incomplete until H1.5 parity. *)
+  | "cond", _head :: clauses ->
+      let rec loop = function
+        | [] -> VNil
+        | clause :: rest ->
+            let test_e, body_e =
+              match clause with
+              | App (t, [ b ]) -> (t, b)
+              | App (t, b :: bs) ->
+                  let rec fold x xs =
+                    match xs with
+                    | [] -> x
+                    | y :: ys -> Seq (x, fold y ys)
+                  in
+                  (t, fold b bs)
+              | Lit _ | Var _ as t -> (t, t)
+              | _ ->
+                  raise
+                    (Interp_error
+                       (User_error "cond clause must be (test body)"))
+            in
+            let always =
+              match test_e with
+              | Var "else" | Lit (VBool true) -> true
+              | _ -> false
+            in
+            if always then eval_eff ~budget ~prims env body_e
+            else
+              let tv = eval_eff ~budget ~prims env test_e in
+              if truthy tv then eval_eff ~budget ~prims env body_e
+              else loop rest
+      in
+      loop clauses
+  | "quasiquote", [ _; template ] ->
+      eval_quasiquote_eff ~budget ~prims env ~depth:1 template
+  | "unquote", _ | "unquote-splicing", _ ->
+      raise (Interp_error (User_error "unquote outside quasiquote"))
+  | "defmacro", [ _; Var name; params_expr; body ] ->
+      if List.mem name kernel_special_names then
+        raise
+          (Interp_error
+             (User_error ("cannot defmacro kernel special form: " ^ name)));
+      let params =
+        match params_expr with
+        | Lit VNil -> []
+        | App (Var p, rest) ->
+            p
+            :: List.map
+                 (function
+                   | Var s -> s
+                   | _ ->
+                       raise
+                         (Interp_error
+                            (User_error "defmacro param not a symbol")))
+                 rest
+        | _ -> raise (Interp_error (User_error "malformed defmacro params"))
+      in
+      if List.mem "." params then
+        raise
+          (Interp_error
+             (User_error
+                "dotted rest params not supported (reader treats \".\" as a \
+                 symbol); use fixed-arity params, e.g. (name val body)"));
+      let m = VMacro (params, body, env) in
+      Env.define env name m;
+      m
+  | "macroexpand-1", [ _; form ] ->
+      (match form with
+       | App (Var name, args) ->
+           (match Env.lookup env name with
+            | Some (VMacro (params, body, clo_env)) ->
+                let expected = List.length params
+                and got = List.length args in
+                if expected <> got then
+                  raise
+                    (Interp_error (Arity_mismatch ("macro", expected, got)));
+                let arg_vals =
+                  List.map
+                    (fun e ->
+                      match e with
+                      | Lit v -> v
+                      | _ -> reify_expr e)
+                    args
+                in
+                let menv = Env.child clo_env in
+                List.iter2 (fun p a -> Env.define menv p a) params arg_vals;
+                eval_eff ~budget ~prims menv body
+            | _ -> reify_expr form)
+       | _ -> reify_expr form)
+  | "macroexpand", [ _; form ] ->
+      let rec loop e =
+        tick budget;
+        match e with
+        | App (Var name, args) ->
+            (match Env.lookup env name with
+             | Some (VMacro (params, body, clo_env)) ->
+                 let expected = List.length params
+                 and got = List.length args in
+                 if expected <> got then
+                   raise
+                     (Interp_error (Arity_mismatch ("macro", expected, got)));
+                 let arg_vals =
+                   List.map
+                     (fun e' ->
+                       match e' with
+                       | Lit v -> v
+                       | _ -> reify_expr e')
+                     args
+                 in
+                 let menv = Env.child clo_env in
+                 List.iter2 (fun p a -> Env.define menv p a) params arg_vals;
+                 let v = eval_eff ~budget ~prims menv body in
+                 let e' = value_to_expr v in
+                 loop e'
+             | _ -> reify_expr e)
+        | _ -> reify_expr e
+      in
+      loop form
+  | "letrec", _ ->
       raise
         (Interp_error
-           (User_error
-              ("eval_eff: special form not yet on eff path: " ^ other)))
+           (User_error "letrec via App form not yet supported"))
+  | other, _ ->
+      raise
+        (Interp_error (User_error ("malformed special form: " ^ other)))
+
+and eval_quasiquote_eff
+  ~(budget : budget)
+  ~(prims : prim_table)
+  (env : env)
+  ~(depth : int)
+  (template : expr)
+  : value =
+  tick budget;
+  match template with
+  | App (Var "unquote", [ e ]) when depth = 1 ->
+      eval_eff ~budget ~prims env e
+  | App (Var "unquote", [ e ]) ->
+      let inner = eval_quasiquote_eff ~budget ~prims env ~depth:(depth - 1) e in
+      VList [ VStr "unquote"; inner ]
+  | App (Var "unquote-splicing", _) when depth = 1 ->
+      raise
+        (Interp_error (User_error "unquote-splicing not in list context"))
+  | App (Var "quasiquote", [ e ]) ->
+      let inner =
+        eval_quasiquote_eff ~budget ~prims env ~depth:(depth + 1) e
+      in
+      VList [ VStr "quasiquote"; inner ]
+  | App (h, args) ->
+      let head_part =
+        match h with
+        | Var "unquote-splicing" when depth = 1 ->
+            raise
+              (Interp_error
+                 (User_error "unquote-splicing as list head not supported"))
+        | _ ->
+            let hv = eval_quasiquote_eff ~budget ~prims env ~depth h in
+            [ hv ]
+      in
+      let tail_parts =
+        List.map
+          (fun a ->
+            match a with
+            | App (Var "unquote-splicing", [ e ]) when depth = 1 ->
+                let v = eval_eff ~budget ~prims env e in
+                (match v with
+                 | VList xs -> xs
+                 | VNil -> []
+                 | _ ->
+                     raise
+                       (Interp_error
+                          (User_error "unquote-splicing needs a list")))
+            | _ ->
+                let v = eval_quasiquote_eff ~budget ~prims env ~depth a in
+                [ v ])
+          args
+      in
+      VList (head_part @ List.concat tail_parts)
+  | Lit (VStr s) -> VList [ VStr "__str__"; VStr s ]
+  | Lit v -> v
+  | Var s -> VStr s
+  | Quote e ->
+      let v = eval_quasiquote_eff ~budget ~prims env ~depth e in
+      VList [ VStr "quote"; v ]
+  | other -> reify_expr other
 
 and apply_eff
   ~(budget : budget)
