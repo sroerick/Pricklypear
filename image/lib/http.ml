@@ -7,6 +7,8 @@
       user routes via (route ...)
 *)
 open Lwt.Syntax
+open Lwt
+open Request_context
 open Pure_html
 open Http_core
 open Http_data
@@ -100,6 +102,14 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
               in
               if not proceed then Lwt.return_unit
               else begin
+                (* Phase-1 per-request context (invariant 4c / BORGE-1784434193):
+                   snapshot attached manifest and bind it for the rest of this
+                   request so prims (whoami/current-branch/author checks) do not
+                   observe a concurrent attach flipping Session.t mid-page. *)
+                let req_ctx =
+                  Request_context.make ~manifest:(Session.manifest session)
+                in
+                Lwt.with_value Request_context.current (Some req_ctx) @@ fun () ->
                 (* Subdomain garden mismatch: private paths require whoami = garden owner. *)
                 let host_mode = classify_host headers in
                 let uname_now = Session.username session in

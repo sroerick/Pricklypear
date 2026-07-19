@@ -358,6 +358,42 @@
              WITHOUT the global lock, against the (now-immutable)
              env captured by closures.
 
+         4c. PER-REQUEST CONTEXT (fix for BORGE-1784434193 cotenant
+             race). After the identity gate, a fresh Request_context.t
+             is built from the attached manifest/env/routes and passed
+             to all page work. Prims and dispatch read the context
+             instead of live Session.t fields. Anonymous attach can
+             no longer flip an in-flight personal-branch page.
+
+  (subsection per-request-context
+   (doc "Request_context.t + prim ABI change to eliminate cotenant race")
+   (status planned)
+   (implements
+     image/lib/request_context.ml
+     image/lib/http.ml
+     image/lib/session.ml
+     image/lib/primitives.ml
+     image/lib/crud.ml)
+   (verify
+     (build "dune build image")
+     (smoke "admin/personal route survives concurrent anonymous attach")
+     (test "image/test/http_robust_env_test.ml extended for manifest isolation"))
+   (details
+    (doc (|
+         Required code:
+         - Request_context.t record (manifest, env, routes, store, request)
+         - Prim ABI: prim_fn = Request_context.t -> value list -> value Lwt.t
+         - After attach in http.ml: build context, release mutex, pass to page_fn
+         - All prim registrations updated to take context first arg
+         - whoami/current-branch/author checks read context.manifest
+         - Route dispatch and env lookup use context.routes / context.env
+         - Session.t still used for attach gate + rehydrate/checkout_to
+         - Phase 1: only manifest isolated; env/routes in later phases
+    |))
+   )
+
+         
+
          SCOPE / MULTI-TENANT CAVEAT (honest): the manifest race
          (4b concern 2) is NOT fully closed by this work. Prims
          still read t.manifest live via the !t ref. This is safe

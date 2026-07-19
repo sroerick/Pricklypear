@@ -8,10 +8,11 @@
     image, ~5 are sufficient to demo the loop. *)
 open Lwt
 open Pricklypear_lisp.Ast
-(* A prim fn takes evaluated args, returns a value (or raises) wrapped in
-   a promise. Pure prims register via [register_sync] which wraps the sync
-   prim in [Lwt.return]; DB-touching prims register via [register] and
-   return their promise directly. *)
+(* A prim fn takes a per-request context + evaluated args, returns a value
+   (or raises) wrapped in a promise. The context carries the stable manifest
+   (and later env/routes) for the duration of the page. Pure prims register
+   via [register_sync] which wraps the sync prim in [Lwt.return]; DB-touching
+   prims register via [register] and return their promise directly. *)
 type prim_fn = value list -> value Lwt.t
 
 (* The sync form: pure prims return [value] immediately. They get wrapped

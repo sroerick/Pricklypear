@@ -554,7 +554,11 @@ and eval_special_form
                 and got = List.length args in
                 if expected <> got then
                   raise (Interp_error (Arity_mismatch ("macro", expected, got)));
-                let arg_vals = List.map reify_expr args in
+                let arg_vals = List.map (fun e ->
+                  match e with
+                  | Lit v -> v
+                  | _ -> reify_expr e
+                ) args in
                 let menv = Env.child clo_env in
                 List.iter2 (fun p a -> Env.define menv p a) params arg_vals;
                 eval ~budget ~prims menv body
@@ -573,7 +577,11 @@ and eval_special_form
                  if expected <> got then
                    raise
                      (Interp_error (Arity_mismatch ("macro", expected, got)));
-                 let arg_vals = List.map reify_expr args in
+                 let arg_vals = List.map (fun e ->
+                   match e with
+                   | Lit v -> v
+                   | _ -> reify_expr e
+                 ) args in
                  let menv = Env.child clo_env in
                  List.iter2 (fun p a -> Env.define menv p a) params arg_vals;
                  let* v = eval ~budget ~prims menv body in
