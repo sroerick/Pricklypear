@@ -9,7 +9,7 @@
 ;; Outline-first notes. Depends on outline/ + html/*.
 ;; (load-library "outline") then (load-library "notes")
 
-(deftype 'note 'title 'slug 'outline 'tags 'kind 'day 'body)
+(deftype 'note 'title 'slug 'outline 'tags 'kind 'day 'body 'folder)
 (deftype 'note-link 'from_slug 'from_id 'to_slug 'to_id 'label 'kind)
 
 ;; =========================================================
@@ -224,6 +224,14 @@
 (define notes/doc/tags (lambda (n) (car (cdr (cdr (cdr (cdr n)))))))
 (define notes/doc/kind (lambda (n) (car (cdr (cdr (cdr (cdr (cdr n))))))))
 (define notes/doc/day (lambda (n) (car (cdr (cdr (cdr (cdr (cdr (cdr n)))))))))
+;; 8th field (id slug title outline tags kind day folder)
+(define notes/doc/folder
+  (lambda (n)
+    (if (null? n)
+        ""
+        (let ((f (car (cdr (cdr (cdr (cdr (cdr (cdr (cdr n))))))))))
+          (if (null? f) "" (as-str f))))))
+
 (define notes/doc/empty-outline
   (lambda (title)
     (outline/node "root" title)))
@@ -232,6 +240,13 @@
   (lambda (slug)
     (let ((rs (find-rows 'note "slug" (as-str slug) 1)))
       (if (null? rs) () (car rs)))))
+
+(define notes/doc/row-folder
+  (lambda (row)
+    (if (null? row)
+        ""
+        (let ((f (dict-get (cdr row) "folder")))
+          (if (null? f) "" (as-str f))))))
 
 (define notes/doc/get
   (lambda (slug)
@@ -246,10 +261,12 @@
               (outline/decode (dict-get f "outline"))
               (dict-get f "tags")
               (dict-get f "kind")
-              (dict-get f "day")))))))
+              (dict-get f "day")
+              (let ((folder (dict-get f "folder")))
+                (if (null? folder) "" folder))))))))
 
 (define notes/doc/make-fields
-  (lambda (slug title outline tags kind day)
+  (lambda (slug title outline tags kind day folder)
     (dict-set* "{}"
       (list
         "slug" (as-str slug)
@@ -257,18 +274,68 @@
         "outline" (outline/encode outline)
         "tags" (as-str tags)
         "kind" (as-str kind)
-        "day" (as-str day)))))
+        "day" (as-str day)
+        "folder" (as-str folder)))))
 
+;; Upsert preserves existing folder on update; new notes get "".
+;; Use notes/doc/set-folder to place/move a note.
 (define notes/doc/upsert
   (lambda (slug title outline tags kind day)
     (let ((row (notes/doc/row slug)))
-      (let ((fields (notes/doc/make-fields slug title outline tags kind day)))
+      (let ((folder (notes/doc/row-folder row))
+            (fields
+              (notes/doc/make-fields slug title outline tags kind day
+                (notes/doc/row-folder row))))
         (seq
           (if (null? row)
               (create 'note fields)
               (update 'note (car row) fields))
           ;; Rebuild wiki-link index for this note (links-and-roam).
           (roam/reindex (as-str slug) outline))))))
+
+(define notes/doc/set-folder
+  (lambda (slug folder)
+    (let ((row (notes/doc/row (as-str slug))))
+      (if (null? row)
+          ()
+          (update-field 'note (car row) "folder" (as-str folder))))))
+
+;; Create or update and force folder in one call.
+(define notes/doc/upsert-in
+  (lambda (slug title outline tags kind day folder)
+    (seq
+      (notes/doc/upsert slug title outline tags kind day)
+      (notes/doc/set-folder slug folder)
+      slug)))
+
+;; Filter notes by folder ("" = uncategorized only).
+(define notes/doc/list-folder
+  (lambda (folder)
+    (let ((want (as-str folder)))
+      (list/filter
+        (lambda (row)
+          (string-eq (notes/doc/row-folder row) want))
+        (notes/doc/index-list)))))
+
+;; Unique folder names among visible notes, sorted loosely via fold.
+(define notes/doc/folder-names
+  (lambda ()
+    (list/foldl
+      (lambda (acc row)
+        (let ((f (notes/doc/row-folder row)))
+          (if (notes/doc/folder-seen? acc f)
+              acc
+              (append acc (list f)))))
+      (list)
+      (notes/doc/index-list))))
+
+(define notes/doc/folder-seen?
+  (lambda (xs f)
+    (if (null? xs)
+        #f
+        (if (string-eq (car xs) f)
+            #t
+            (notes/doc/folder-seen? (cdr xs) f)))))
 (define notes/doc/list (lambda () (rows 'note 100)))
 
 ;; Hide system/hidden docs from the main Recent index.
@@ -473,13 +540,18 @@
     (let ((f (cdr row))
           (id (car row)))
       (let ((slug (as-str (dict-get f "slug")))
-            (title (as-str (dict-get f "title"))))
+            (title (as-str (dict-get f "title")))
+            (folder (notes/doc/row-folder row)))
         (html/li (html/attr "class" "note-item")
           (html/join
             (list
               (html/a
                 (string-append "/notes?slug=" slug)
                 (html/text title))
+              (if (string-eq folder "")
+                  ""
+                  (html/span (html/attr "class" "muted")
+                    (html/text (string-append " · " folder))))
               (html/form "POST" "/notes"
                 (html/attrs
                   (list
@@ -496,6 +568,43 @@
                           (html/attr "class" "secondary")
                           (html/attr "title" "delete note")))
                       "del")))))))))))
+
+(define notes/ui/folder-list
+  (lambda (folder)
+    (list/foldl
+      (lambda (acc row) (string-append acc (notes/ui/item-li row)))
+      ""
+      (notes/doc/list-folder folder))))
+
+(define notes/ui/folder-section
+  (lambda (folder)
+    (let ((label
+            (if (string-eq (as-str folder) "")
+                "(uncategorized)"
+                (as-str folder)))
+          (href
+            (if (string-eq (as-str folder) "")
+                "/notes?folder="
+                (string-append "/notes?folder=" (as-str folder)))))
+      (html/div (html/attr "class" "notes-folder card")
+        (html/join
+          (list
+            (html/h3
+              (html/a href (html/text label)))
+            (html/ul "" (notes/ui/folder-list folder))))))))
+
+(define notes/ui/folders-html
+  (lambda ()
+    (let ((names (notes/doc/folder-names))
+          (filter (request-param "folder")))
+      (if (if (null? filter) #f (not (string-eq (as-str filter) "")))
+          ;; Single-folder view when ?folder= is set (including empty = uncategorized)
+          (notes/ui/folder-section (as-str filter))
+          (if (null? names)
+              (html/p* (html/attr "class" "muted") "No notes yet.")
+              (html/join
+                (list/map notes/ui/folder-section names)))))))
+
 (define notes/ui/recent-list
   (lambda ()
     (list/foldl
@@ -515,22 +624,28 @@
           (html/label "" "Slug ")
           (html/text-input "slug" (html/attr "placeholder" "my-note"))
           " "
+          (html/label "" "Folder ")
+          (html/text-input "folder" (html/attr "placeholder" "wiki/entities"))
+          " "
           (html/button (html/attr "type" "submit") "Create"))))))
+
 (define notes/ui/index
   (lambda ()
     (html/join
       (list
         (html/h1 "Notes")
         (html/p* (html/attr "class" "muted")
-          "Outline-first notes. Create or open a slug.")
+          "Outline-first notes. Grouped by folder (optional path like wiki/entities).")
         (html/p* (html/attr "class" "muted")
           (html/join
             (list
               (html/a "/notes?slug=inbox" "Open inbox")
-              " · system notes (inbox) are hidden from Recent.")))
+              " · "
+              (html/a "/notes" "All folders")
+              " · system notes (inbox) are hidden from the index.")))
         (notes/ui/create-form)
-        (html/h2 "Recent")
-        (html/ul (html/attr "class" "card") (notes/ui/recent-list))))))
+        (html/h2 "Folders")
+        (notes/ui/folders-html)))))
 (define notes/ui/missing
   (lambda (slug)
     (html/join
@@ -678,14 +793,39 @@
         "fetch('/partials/notes-node-op',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:p});},true);}"
         "setSel('root');document.body.addEventListener('htmx:afterSwap',function(){setSel(selId());});})();"))))
 
+(define notes/ui/folder-form
+  (lambda (slug folder)
+    (html/form "POST" "/notes" (html/attr "class" "notes-folder-form")
+      (html/join
+        (list
+          (html/hidden "action" "set-folder")
+          (html/hidden "slug" (as-str slug))
+          (html/label "" "folder ")
+          (html/text-input "folder"
+            (html/attrs
+              (list
+                (html/attr "value" (as-str folder))
+                (html/attr "placeholder" "wiki/entities")
+                (html/attr "style" "width:12rem"))))
+          " "
+          (html/button (html/attr "type" "submit") "move"))))))
+
 (define notes/ui/show-body
-  (lambda (slug title outline tags show-archived)
+  (lambda (slug title outline tags show-archived folder)
     (html/join
       (list
         (html/p* (html/attr "class" "muted")
           (html/join
             (list
               (html/a "/notes" "Notes")
+              (if (string-eq (as-str folder) "")
+                  ""
+                  (html/join
+                    (list
+                      " / "
+                      (html/a
+                        (string-append "/notes?folder=" (as-str folder))
+                        (html/text (as-str folder))))))
               " / "
               (html/code (as-str slug)))))
         (html/div (html/attr "class" "note-title-row")
@@ -710,6 +850,7 @@
                       "Delete note")))))))
         (html/p* (html/attr "class" "muted")
           (string-append "tags: " (as-str tags)))
+        (notes/ui/folder-form slug folder)
         (notes/ui/toolbar slug show-archived)
         (outline/html slug outline show-archived)
         (html/div (html/attr "class" "roam-backlinks-panel")
@@ -734,17 +875,20 @@
             (notes/doc/title n)
             (notes/doc/outline n)
             (notes/doc/tags n)
-            show-archived)))))
+            show-archived
+            (notes/doc/folder n))))))
 (define notes/ui/do-create
-  (lambda (title slug)
+  (lambda (title slug folder)
     (let ((s
             (if (if (null? slug) #t (string-eq (string-trim (as-str slug)) ""))
                 (string-append "note-" (as-str (count (notes/doc/list))))
-                (string-trim (as-str slug)))))
+                (string-trim (as-str slug))))
+          (fld
+            (if (null? folder) "" (string-trim (as-str folder)))))
       (seq
-        (notes/doc/upsert s (as-str title)
+        (notes/doc/upsert-in s (as-str title)
           (notes/doc/empty-outline (as-str title))
-          "" "note" "")
+          "" "note" "" fld)
         (redirect (string-append "/notes?slug=" s))))))
 (define notes/ui/do-save
   (lambda (slug raw)
@@ -916,7 +1060,20 @@
     (let ((action (as-str (request-param "action"))))
       (cond
         ((string-eq action "create")
-         (notes/ui/do-create (request-param "title") (request-param "slug")))
+         (notes/ui/do-create
+           (request-param "title")
+           (request-param "slug")
+           (request-param "folder")))
+        ((string-eq action "set-folder")
+         (seq
+           (notes/doc/set-folder
+             (request-param "slug")
+             (if (null? (request-param "folder"))
+                 ""
+                 (request-param "folder")))
+           (redirect
+             (string-append "/notes?slug="
+               (as-str (request-param "slug"))))))
         ((string-eq action "save")
          (notes/ui/do-save (request-param "slug") (request-param "outline")))
         ((string-eq action "capture")
@@ -1123,9 +1280,9 @@
     (let ((n (notes/doc/get "wiki-schema")))
       (if (null? n)
           (seq
-            (notes/doc/upsert "wiki-schema" "Wiki Schema"
+            (notes/doc/upsert-in "wiki-schema" "Wiki Schema"
               (outline/node* "root" "Wiki Schema" wiki/default-schema "" (list))
-              "schema" "schema" "")
+              "schema" "schema" "" "wiki")
             wiki/default-schema)
           (outline/body (notes/doc/outline n))))))
 
@@ -1226,7 +1383,10 @@
                         "1"
                         (as-str (+ 1 (parse-int (as-str raw)))))))))
         (seq
-          (notes/doc/upsert slug title tree tags kind day)
+          (notes/doc/upsert-in slug title tree tags kind day
+            (if (null? prev)
+                (if (string-eq kind "source") "wiki/sources" "wiki/entities")
+                (notes/doc/folder prev)))
           ;; stamp frontmatter after upsert (fields not in make-fields)
           (let ((row (notes/doc/row slug)))
             (if (null? row)
