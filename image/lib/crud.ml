@@ -15,12 +15,11 @@
       - No ORM; parameterized SQL via pgx. Multi-step atomicity uses
         Store.with_dynamic_transaction / (with-transaction …).
 
-    Uses [Store.current_conn] so in-tx calls see the bound connection.
+    Uses [Io_lwt.Db.current_conn] so in-tx calls see the bound connection.
     Misses return VNil so Lisp can branch on `(if (get 'user id) ...)`. *)
 open Lwt.Syntax
 open Pricklypear_lisp.Ast
 
-module Pg = Store.Pg
 
 let value_of_id cell : value =
   (* Pgx.Value.to_string returns string option; normalize to VStr/VNil *)
@@ -58,14 +57,14 @@ let deftype (store : Store.t) ~(args : value list)
     Returns the row's `fields` JSON as a VStr so Lisp can pass it
     onward; or VNil if not found. *)
 let get (store : Store.t) ~(type_name : string) ~(id : string) : value Lwt.t =
-  match Store.current_conn store with
+  match Io_lwt.Db.current_conn store with
   | None -> Lwt.return VNil
   | Some conn ->
       let sql =
         "SELECT fields::text FROM data_rows " ^
         "WHERE type_name = $1 AND id = $2::uuid" in
       let* rows =
-        Pg.execute conn
+        Io_lwt.Db.execute conn
           ~params:[ Pgx.Value.of_string type_name;
                     Pgx.Value.of_string id ]
           sql
@@ -105,7 +104,7 @@ let get (store : Store.t) ~(type_name : string) ~(id : string) : value Lwt.t =
     prim will give this real meaning. *)
 let select_for_update
     (store : Store.t) ~(type_name : string) ~(id : string) : value Lwt.t =
-  match Store.current_conn store with
+  match Io_lwt.Db.current_conn store with
   | None -> Lwt.return VNil
   | Some conn ->
       let sql =
@@ -113,7 +112,7 @@ let select_for_update
         "WHERE type_name = $1 AND id = $2::uuid " ^
         "FOR UPDATE" in
       let* rows =
-        Pg.execute conn
+        Io_lwt.Db.execute conn
           ~params:[ Pgx.Value.of_string type_name;
                     Pgx.Value.of_string id ]
           sql
@@ -141,14 +140,14 @@ let create
     (store : Store.t) ~(type_name : string) ~(fields_json : string)
     ~(author : string)
     : value Lwt.t =
-  match Store.current_conn store with
+  match Io_lwt.Db.current_conn store with
   | None -> Lwt.return (VStr "create failed: no DB")
   | Some conn ->
       let sql =
         "INSERT INTO data_rows (type_name, fields, author) " ^
         "VALUES ($1, $2::jsonb, $3) RETURNING id::text" in
       let* rows =
-        Pg.execute conn
+        Io_lwt.Db.execute conn
           ~params:[ Pgx.Value.of_string type_name;
                     Pgx.Value.of_string fields_json;
                     Pgx.Value.of_string author ]
@@ -168,7 +167,7 @@ let update
     (store : Store.t) ~(type_name : string) ~(id : string)
     ~(fields_json : string)
     : value Lwt.t =
-  match Store.current_conn store with
+  match Io_lwt.Db.current_conn store with
   | None -> Lwt.return VNil
   | Some conn ->
       let sql =
@@ -176,7 +175,7 @@ let update
         "WHERE type_name = $1 AND id = $2::uuid " ^
         "RETURNING id::text" in
       let* rows =
-        Pg.execute conn
+        Io_lwt.Db.execute conn
           ~params:[ Pgx.Value.of_string type_name;
                     Pgx.Value.of_string id;
                     Pgx.Value.of_string fields_json ]
@@ -237,7 +236,7 @@ let update_field
     DELETEs one row by (type_name, id). Returns the id on success
     (echo), VNil if no row matched. *)
 let delete (store : Store.t) ~(type_name : string) ~(id : string) : value Lwt.t =
-  match Store.current_conn store with
+  match Io_lwt.Db.current_conn store with
   | None -> Lwt.return VNil
   | Some conn ->
       let sql =
@@ -245,7 +244,7 @@ let delete (store : Store.t) ~(type_name : string) ~(id : string) : value Lwt.t 
         "WHERE type_name = $1 AND id = $2::uuid " ^
         "RETURNING id::text" in
       let* rows =
-        Pg.execute conn
+        Io_lwt.Db.execute conn
           ~params:[ Pgx.Value.of_string type_name;
                     Pgx.Value.of_string id ]
           sql
@@ -264,14 +263,14 @@ let delete (store : Store.t) ~(type_name : string) ~(id : string) : value Lwt.t 
 let list
     (store : Store.t) ~(type_name : string) ?(limit : int = 100) ()
     : value Lwt.t =
-  match Store.current_conn store with
+  match Io_lwt.Db.current_conn store with
   | None -> Lwt.return (VList [])
   | Some conn ->
       let sql =
         "SELECT id::text, fields::text FROM data_rows " ^
         "WHERE type_name = $1 ORDER BY created_at ASC LIMIT $2" in
       let* rows =
-        Pg.execute conn
+        Io_lwt.Db.execute conn
           ~params:[ Pgx.Value.of_string type_name;
                     Pgx.Value.of_int limit ]
           sql
@@ -292,7 +291,7 @@ let list
 let find_row
     (store : Store.t) ~(type_name : string) ~(field : string) ~(value : string)
     : value Lwt.t =
-  match Store.current_conn store with
+  match Io_lwt.Db.current_conn store with
   | None -> Lwt.return VNil
   | Some conn ->
       let sql =
@@ -301,7 +300,7 @@ let find_row
         "ORDER BY created_at ASC LIMIT 1"
       in
       let* rows =
-        Pg.execute conn
+        Io_lwt.Db.execute conn
           ~params:[ Pgx.Value.of_string type_name
                   ; Pgx.Value.of_string field
                   ; Pgx.Value.of_string value ]
@@ -322,7 +321,7 @@ let find_rows
     (store : Store.t) ~(type_name : string)
     ~(filters : (string * string) list) ?(limit : int = 500) ()
     : value Lwt.t =
-  match Store.current_conn store with
+  match Io_lwt.Db.current_conn store with
   | None -> Lwt.return (VList [])
   | Some conn ->
       if filters = [] then list store ~type_name ~limit ()
@@ -345,7 +344,7 @@ let find_rows
              " ORDER BY COALESCE((fields->>'verse')::int, 0) ASC, created_at ASC LIMIT $%d"
              !i);
         params := !params @ [ Pgx.Value.of_int limit ];
-        let* rows = Pg.execute conn ~params:!params (Buffer.contents buf) in
+        let* rows = Io_lwt.Db.execute conn ~params:!params (Buffer.contents buf) in
         let lisp_rows =
           List.map
             (fun row ->
@@ -360,7 +359,7 @@ let find_rows
 (** (find-random 'type) -> (id . fields) pair | VNil.
     One random row of the given type (for bible/random etc.). *)
 let find_random (store : Store.t) ~(type_name : string) : value Lwt.t =
-  match Store.current_conn store with
+  match Io_lwt.Db.current_conn store with
   | None -> Lwt.return VNil
   | Some conn ->
       let sql =
@@ -368,7 +367,7 @@ let find_random (store : Store.t) ~(type_name : string) : value Lwt.t =
         "WHERE type_name = $1 ORDER BY random() LIMIT 1"
       in
       let* rows =
-        Pg.execute conn
+        Io_lwt.Db.execute conn
           ~params:[ Pgx.Value.of_string type_name ]
           sql
       in
@@ -387,7 +386,7 @@ let find_text
     (store : Store.t) ~(type_name : string) ~(field : string)
     ~(needle : string) ?(limit : int = 50) ()
     : value Lwt.t =
-  match Store.current_conn store with
+  match Io_lwt.Db.current_conn store with
   | None -> Lwt.return (VList [])
   | Some conn ->
       let sql =
@@ -397,7 +396,7 @@ let find_text
       in
       let pat = "%" ^ needle ^ "%" in
       let* rows =
-        Pg.execute conn
+        Io_lwt.Db.execute conn
           ~params:[ Pgx.Value.of_string type_name
                   ; Pgx.Value.of_string field
                   ; Pgx.Value.of_string pat
@@ -426,14 +425,14 @@ type row_record = {
 }
 
 let count_by_type (store : Store.t) ~(type_name : string) : int Lwt.t =
-  match Store.current_conn store with
+  match Io_lwt.Db.current_conn store with
   | None -> Lwt.return 0
   | Some conn ->
       let sql =
         "SELECT COUNT(*)::int FROM data_rows WHERE type_name = $1"
       in
       let* rows =
-        Pg.execute conn
+        Io_lwt.Db.execute conn
           ~params:[ Pgx.Value.of_string type_name ]
           sql
       in
@@ -445,13 +444,13 @@ let count_by_type (store : Store.t) ~(type_name : string) : int Lwt.t =
        | _ -> Lwt.return 0)
 
 let list_data_type_names (store : Store.t) : string list Lwt.t =
-  match Store.current_conn store with
+  match Io_lwt.Db.current_conn store with
   | None -> Lwt.return []
   | Some conn ->
       let sql =
         "SELECT DISTINCT type_name FROM data_rows ORDER BY type_name ASC"
       in
-      let* rows = Pg.execute conn sql in
+      let* rows = Io_lwt.Db.execute conn sql in
       Lwt.return
         (List.filter_map
            (fun row ->
@@ -464,7 +463,7 @@ let list_page
     (store : Store.t) ~(type_name : string)
     ?(limit : int = 50) ?(offset : int = 0) ()
     : row_record list Lwt.t =
-  match Store.current_conn store with
+  match Io_lwt.Db.current_conn store with
   | None -> Lwt.return []
   | Some conn ->
       let lim = max 1 (min limit 200) in
@@ -476,7 +475,7 @@ let list_page
         "ORDER BY created_at ASC LIMIT $2 OFFSET $3"
       in
       let* rows =
-        Pg.execute conn
+        Io_lwt.Db.execute conn
           ~params:[ Pgx.Value.of_string type_name
                   ; Pgx.Value.of_int lim
                   ; Pgx.Value.of_int off ]
@@ -504,7 +503,7 @@ let list_page
 let get_row
     (store : Store.t) ~(type_name : string) ~(id : string)
     : row_record option Lwt.t =
-  match Store.current_conn store with
+  match Io_lwt.Db.current_conn store with
   | None -> Lwt.return None
   | Some conn ->
       let sql =
@@ -513,7 +512,7 @@ let get_row
         "FROM data_rows WHERE type_name = $1 AND id = $2::uuid"
       in
       let* rows =
-        Pg.execute conn
+        Io_lwt.Db.execute conn
           ~params:[ Pgx.Value.of_string type_name
                   ; Pgx.Value.of_string id ]
           sql
