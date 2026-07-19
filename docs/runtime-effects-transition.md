@@ -319,5 +319,6 @@ Not a schedule — a preferred order for the *next* dedicated slices:
 | 2026-07-17 | Plan written. H0 partially done. H1–H3 not started. Default runtime still Lwt end-to-end. |
 | 2026-07-18 | Overnight ralph `runtime-effects-overnight` started. Baseline: phase-1 `Request_context` (manifest snapshot + `Lwt.with_value` after identity gate); plan doc committed. |
 | 2026-07-18 | **H0.1** prim↔effect audit: all 112 registered image prims classified in `lisp/lib/effect.ml` buckets; effect tests extended. |
+| 2026-07-18 | **H0.2/H0.3** `known_fn_of_bindings` (memo + cycle break); badges + AI install/rewrite/seed use store bindings; public route gate on handler lattice (allow pure|read|write|html|txn). |
 
 When a horizon unit ships, add a row here (or point at commit).

@@ -71,6 +71,26 @@ let checks = [
   ("redirect is html", `Quick, fun () ->
     let fx = Effect.effects_for_prim "redirect" in
     Alcotest.(check bool) "html" true (Effect.EffSet.mem Effect.Html fx));
+  (* H0.2 known_fn derive-on-read *)
+  ("known_fn pulls callee write-db", `Quick, fun () ->
+    let save =
+      Reader.read_one "(lambda (j) (create 'note j))"
+    in
+    let page =
+      Reader.read_one "(lambda () (save \"{}\"))"
+    in
+    let known =
+      Effect.known_fn_of_bindings [("save", save)]
+    in
+    let fx = Effect.infer ~known_fn:known page in
+    Alcotest.(check bool) "write via callee" true
+      (Effect.EffSet.mem Effect.WriteDb fx));
+  ("known_fn cycle does not diverge", `Quick, fun () ->
+    let a = Reader.read_one "(lambda () (b))" in
+    let b = Reader.read_one "(lambda () (a))" in
+    let known = Effect.known_fn_of_bindings [("a", a); ("b", b)] in
+    let fx = Effect.infer ~known_fn:known (Reader.read_one "(a)") in
+    Alcotest.(check bool) "pure cycle" true (Effect.EffSet.is_pure fx));
 ]
 
 let () =

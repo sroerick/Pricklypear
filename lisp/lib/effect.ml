@@ -178,11 +178,38 @@ type known_fn_lookup = string -> effect_set option
 
 let default_prim_lookup = effects_for_prim
 
+(** Build a [known_fn] lookup from visible bindings [(name, body)].
+    Memoized; cycles break by treating the in-progress name as pure so
+    mutual recursion does not diverge. Used by badges, AI install gate,
+    and route publish policy (H0.2 / H0.3). *)
+let rec known_fn_of_bindings (bindings : (string * expr) list) : known_fn_lookup =
+  let bodies : (string, expr) Hashtbl.t =
+    Hashtbl.create (max 16 (List.length bindings))
+  in
+  List.iter (fun (n, e) -> Hashtbl.replace bodies n e) bindings;
+  let cache : (string, effect_set) Hashtbl.t =
+    Hashtbl.create (max 16 (List.length bindings))
+  in
+  let rec lookup (name : string) : effect_set option =
+    match Hashtbl.find_opt cache name with
+    | Some s -> Some s
+    | None ->
+        (match Hashtbl.find_opt bodies name with
+         | None -> None
+         | Some body ->
+             (* cycle break *)
+             Hashtbl.replace cache name EffSet.empty;
+             let s = infer ~known_fn:lookup body in
+             Hashtbl.replace cache name s;
+             Some s)
+  in
+  lookup
+
 (** Conservative AST effect inference.
     [known_fn] resolves user function names when known; unknown globals
     contribute no extra effects (overapprox only on prims). Higher-order
     unknown application does not explode to top — callers may wrap. *)
-let rec infer
+and infer
     ?(prims = default_prim_lookup)
     ?(known_fn : known_fn_lookup = fun _ -> None)
     (e : expr) : effect_set =
