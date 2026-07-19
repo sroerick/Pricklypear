@@ -58,7 +58,9 @@ let define_binding (t : t) ~(name : string) ~(body_src : string)
     (fun () ->
       let expr = Pricklypear_lisp.Reader.read_one input in
       let* v =
-        Pricklypear_lisp.Eval.eval_string ~prims:t.prims t.env input
+        Control_rim.run_lwt ~prims:t.prims (fun () ->
+          Pricklypear_lisp.Eval.eval_string_direct
+            ~prims:Pricklypear_lisp.Eval.empty_prims t.env input)
       in
       (match expr with
        | Pricklypear_lisp.Ast.App
@@ -535,8 +537,10 @@ let run_smoke_route
                   Lwt.catch
                     (fun () ->
                        let* v =
-                         Pricklypear_lisp.Eval.eval_string ~prims:t.prims t.env
-                           ("(" ^ handler ^ ")")
+                         Control_rim.run_lwt ~prims:t.prims (fun () ->
+                             Pricklypear_lisp.Eval.eval_string_direct
+                               ~prims:Pricklypear_lisp.Eval.empty_prims t.env
+                               ("(" ^ handler ^ ")"))
                        in
                        Lwt.return (`Ok v))
                     (fun exn ->
@@ -680,7 +684,9 @@ let run_agent_tool (t : t) ~(name : string) ~(arguments : string)
              Lwt.catch
                (fun () ->
                   let* v =
-                    Pricklypear_lisp.Eval.eval_string ~prims:t.prims t.env expr
+                    Control_rim.run_lwt ~prims:t.prims (fun () ->
+                        Pricklypear_lisp.Eval.eval_string_direct
+                          ~prims:Pricklypear_lisp.Eval.empty_prims t.env expr)
                   in
                   let s = Pricklypear_lisp.Reader.pp_value v in
                   Lwt.return

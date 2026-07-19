@@ -89,8 +89,9 @@ let file_todo_and_note (session : Session_types.t) ~(title : string)
   Lwt.catch
     (fun () ->
       let* v =
-        Pricklypear_lisp.Eval.eval_string ~prims:session.prims session.env
-          expr
+        Control_rim.run_lwt ~prims:session.prims (fun () ->
+            Pricklypear_lisp.Eval.eval_string_direct
+              ~prims:Pricklypear_lisp.Eval.empty_prims session.env expr)
       in
       match v with
       | VStr s when String.trim s <> "" -> Lwt.return (Some s)

@@ -5,9 +5,8 @@
     Session.make builds them. We don't actually call Session (which
     needs manifest + store); instead we build the table directly.
 
-    The interpreter is Lwt-typed (post-refactor), so each test drive
-    uses [Lwt_main.run] to obtain the value from the promise. Pure
-    prims wrap their results in [Lwt.return] via [register_sync]. *)
+    H1.7: lisp eval is direct-style; pure image prims still register as
+    Lwt via [register_sync], serviced by [Control_rim.run_lwt]. *)
 open Pricklypear_lisp.Ast
 
 (* Build a prim_table + an env with all prims auto-defined as VPrim,
@@ -19,14 +18,15 @@ let make_test_env () =
     (fun name _ ->
       Pricklypear_lisp.Env.define env name (VPrim name))
     prim_table;
-  (env, Pricklypear_image_lib.Primitives.to_eval_table prim_table)
+  (env, prim_table)
 
-(* Helper: eval a Lisp form string against the test env, return the
-   resulting value (driving the Lwt promise via [Lwt_main.run]).
-   Rethrows Interp_error so the test message shows it. *)
+(* Helper: eval a Lisp form string against the test env under the Lwt rim. *)
 let eval s =
   let (env, prims) = make_test_env () in
-  Lwt_main.run (Pricklypear_lisp.Eval.eval_string ~prims env s)
+  Lwt_main.run
+    (Pricklypear_image_lib.Control_rim.run_lwt ~prims (fun () ->
+        Pricklypear_lisp.Eval.eval_string_direct
+          ~prims:Pricklypear_lisp.Eval.empty_prims env s))
 
 (* Helper: eval to a string-pretty form. *)
 let eval_str s =

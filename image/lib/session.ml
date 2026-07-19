@@ -11,6 +11,22 @@
 open Lwt.Syntax
 include Session_types
 
+(** Run direct-style eval under the Lwt prim rim (H1.7). *)
+let eval_under_rim (t : t) (thunk : unit -> 'a) : 'a Lwt.t =
+  Control_rim.run_lwt ~prims:t.prims thunk
+
+let eval_string_rim (t : t) (input : string) : Pricklypear_lisp.Ast.value Lwt.t =
+  eval_under_rim t (fun () ->
+      Pricklypear_lisp.Eval.eval_string_direct
+        ~prims:Pricklypear_lisp.Eval.empty_prims t.env input)
+
+let eval_expr_rim (t : t) (expr : Pricklypear_lisp.Ast.expr)
+  : Pricklypear_lisp.Ast.value Lwt.t =
+  let budget = Pricklypear_lisp.Eval.make_budget () in
+  eval_under_rim t (fun () ->
+      Pricklypear_lisp.Eval.eval
+        ~budget ~prims:Pricklypear_lisp.Eval.empty_prims t.env expr)
+
 let load_defs (t : t) : unit Lwt.t =
   let* defs = Store.list_function_names_for_load t.store in
   let* _ =
@@ -43,9 +59,7 @@ let load_defs (t : t) : unit Lwt.t =
                   Lwt.return_unit
               | _ ->
                   let* _ =
-                    Pricklypear_lisp.Eval.eval
-                      ~budget:(Pricklypear_lisp.Eval.make_budget ())
-                      ~prims:t.prims t.env
+                    eval_expr_rim t
                       (Pricklypear_lisp.Ast.Define (name, body))
                   in
                   Lwt.return_unit))
@@ -374,15 +388,12 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
 
      Returns the lambda body's result. Nested transactions raise a clean
      Interp_error (see with_dynamic_transaction). *)
-  (* Apply a VLambda under the active control mode (H1.3). *)
+  (* Apply a VLambda under the effect rim (H1.7). *)
   let apply_lambda_auto (lam : Pricklypear_lisp.Ast.value) : Pricklypear_lisp.Ast.value Lwt.t =
     let budget = Pricklypear_lisp.Eval.make_budget () in
-    match Pricklypear_lisp.Control.control_mode_from_env () with
-    | Pricklypear_lisp.Control.Eff_mode ->
-        Pricklypear_lisp.Control.run_lwt ~prims:t.prims (fun () ->
-            Pricklypear_lisp.Eval.apply_eff ~budget ~prims:t.prims lam [])
-    | Pricklypear_lisp.Control.Lwt_mode ->
-        Pricklypear_lisp.Eval.apply ~budget ~prims:t.prims lam []
+    Control_rim.run_lwt ~prims:t.prims (fun () ->
+        Pricklypear_lisp.Eval.apply
+          ~budget ~prims:Pricklypear_lisp.Eval.empty_prims lam [])
   in
   Primitives.register tbl "__with_transaction__"
     (fun args ->
@@ -1159,9 +1170,7 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value Lwt.t =
        not be evaluated. Everything else (fork/merge/route/checkout)
        dispatches through Eval.apply via the prim_table.
        H1: [eval_string_auto] honors PP_EVAL_CONTROL=lwt|eff (default lwt). *)
-    let* v =
-      Pricklypear_lisp.Eval.eval_string_auto ~prims:t.prims t.env input
-    in
+    let* v = eval_string_rim t input in
     (match expr with
      | Pricklypear_lisp.Ast.App
          (Pricklypear_lisp.Ast.Var "define",
@@ -1208,14 +1217,7 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value Lwt.t =
 and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
     : Pricklypear_lisp.Ast.value Lwt.t =
   (* Like eval_one but takes AST — avoids pp_expr string round-trip. *)
-  let budget = Pricklypear_lisp.Eval.make_budget () in
-  let* v =
-    match Pricklypear_lisp.Control.control_mode_from_env () with
-    | Pricklypear_lisp.Control.Eff_mode ->
-        Pricklypear_lisp.Eval.eval_eff_lwt ~budget ~prims:t.prims t.env expr
-    | Pricklypear_lisp.Control.Lwt_mode ->
-        Pricklypear_lisp.Eval.eval ~budget ~prims:t.prims t.env expr
-  in
+  let* v = eval_expr_rim t expr in
   (match expr with
    | Pricklypear_lisp.Ast.App
        (Pricklypear_lisp.Ast.Var "define",
@@ -1465,7 +1467,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
       manifest;
       store;
       env;
-      prims = Primitives.to_eval_table prim_table;  (* temporary; replaced below *)
+      prims = prim_table;  (* temporary; replaced below *)
       routes;
       started_at = Unix.gettimeofday ();
       kernel_catalog = [];  (* filled after all prims register *)
@@ -1537,7 +1539,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
       | _ ->
           Lwt.return
             (Pricklypear_lisp.Ast.VStr "load-library: need 1 string"));
-  let final_prims = Primitives.to_eval_table prim_table in
+  let final_prims = prim_table in
   let kernel_catalog = Primitives.catalog prim_table in
   (* Mutate the prims field in place (rather than building a fresh
      record via { (!t) with prims = ... }). Closures captured by
@@ -1774,8 +1776,7 @@ let call_handler (t : t) ?request (handler_name : string)
         Lwt.catch
           (fun () ->
              let* v =
-               Pricklypear_lisp.Eval.eval_string ~prims:t.prims t.env
-                 ("(" ^ handler_name ^ ")")
+               eval_string_rim t ("(" ^ handler_name ^ ")")
              in
              Lwt.return (Some v))
           (fun exn ->
