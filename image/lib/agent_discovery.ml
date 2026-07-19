@@ -340,7 +340,7 @@ let agent_markdown ?(base_url : string option = None) () : string =
     ; ""
     ]
 
-let serve_agent_json (reqd : Httpaf.Reqd.t)
+let serve_agent_json (reqd : Httpun.Reqd.t)
     ~(headers : (string * string) list) : unit =
   let base_url = base_url_of_headers headers in
   let j = agent_json ~base_url () in
@@ -348,7 +348,7 @@ let serve_agent_json (reqd : Httpaf.Reqd.t)
     ~content_type:"application/json; charset=utf-8"
     (Yojson.Safe.pretty_to_string j)
 
-let serve_agent_txt (reqd : Httpaf.Reqd.t)
+let serve_agent_txt (reqd : Httpun.Reqd.t)
     ~(headers : (string * string) list) : unit =
   let base_url = base_url_of_headers headers in
   let body = agent_markdown ~base_url () in

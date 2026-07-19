@@ -7,7 +7,7 @@ open Http_branches
 open Http_agent
 
 let show_binding_page (session : Session.t) (name : string)
-    (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+    (reqd : Httpun.Reqd.t) : unit Lwt.t =
   let* found = Store.lookup_function (Session.store session) name in
   let body =
     match found with
@@ -33,7 +33,7 @@ let show_binding_page (session : Session.t) (name : string)
 
 open Http_data
 
-let about_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit =
+let about_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
   let body =
     chrome ~session ~title:"About Pricklypear" [
       HTML.div [HTML.class_ "card"] [
@@ -103,7 +103,7 @@ let page_inspect_path (route : string) : string =
     String.sub route 1 (String.length route - 1)
   else route
 
-let pages_list_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit =
+let pages_list_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
   let routes = Session.list_pages_meta session in
   let rows =
     List.map
@@ -181,7 +181,7 @@ let emergency_home_content (session : Session.t) : Pure_html.node list =
     ]
   ]
 
-let home_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+let home_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
   (* Nav comes from Session.ui_nav_html (refreshed in request launch). *)
   let* home_html = try_ui_fn session "ui/home" in
   let content =
@@ -194,7 +194,7 @@ let home_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
   html_response reqd ~session body;
   Lwt.return_unit
 
-let repl_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit =
+let repl_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
   let js =
     "const out=document.getElementById('out');" ^
     "document.getElementById('run').onclick=async()=>{" ^
@@ -326,9 +326,9 @@ let used_by_pages_map (session : Session.t)
     routes;
   Lwt.return tbl
 
-let list_bindings_page (session : Session.t) (reqd : Httpaf.Reqd.t)
+let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
     : unit Lwt.t =
-  let target = (Httpaf.Reqd.request reqd).Httpaf.Request.target in
+  let target = (Httpun.Reqd.request reqd).Httpun.Request.target in
   let q = Option.value (query_param target "q") ~default:"" |> String.trim in
   let pkg_q = query_param target "pkg" in
   let fn_q = query_param target "fn" in
@@ -909,7 +909,7 @@ let missing_editor_card (session : Session.t) (name : string) : Pure_html.node =
   HTML.div [HTML.id "editor-root"] [route_block; create_form]
 
 let editor_page (session : Session.t) (name : string) ?(msg = "")
-    ?(body_src = "") (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+    ?(body_src = "") (reqd : Httpun.Reqd.t) : unit Lwt.t =
   let* found = Store.lookup_function (Session.store session) name in
   let body =
     match found, body_src with
@@ -927,7 +927,7 @@ let editor_page (session : Session.t) (name : string) ?(msg = "")
   html_response reqd ~session body;
   Lwt.return_unit
 
-let api_edit_create (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+let api_edit_create (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
   let* body = read_body reqd in
   let name =
     match form_field body "name" with
@@ -970,16 +970,16 @@ let api_edit_create (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
         (* Partial only — htmx swaps into #editor-root *)
         let s = Pure_html.to_string node in
         let headers =
-          Httpaf.Headers.of_list
+          Httpun.Headers.of_list
             [ ("content-type", "text/html; charset=utf-8")
             ; ("content-length", string_of_int (String.length s)) ]
         in
-        let resp = Httpaf.Response.create ~headers `OK in
+        let resp = Httpun.Response.create ~headers `OK in
         safe_respond_with_string reqd resp s;
         Lwt.return_unit
 
 let page_inspector (session : Session.t) (path_seg : string)
-    (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+    (reqd : Httpun.Reqd.t) : unit Lwt.t =
   let route =
     if path_seg = "" then "/"
     else if path_seg.[0] = '/' then path_seg
@@ -1065,7 +1065,7 @@ let page_inspector (session : Session.t) (path_seg : string)
       Lwt.return_unit
 
 let inspect_binding_page (session : Session.t) (name : string)
-    (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+    (reqd : Httpun.Reqd.t) : unit Lwt.t =
   let* found = Store.lookup_function (Session.store session) name in
   let* defs = Store.list_function_names (Session.store session) in
   let known_fn =
@@ -1120,14 +1120,14 @@ let inspect_binding_page (session : Session.t) (name : string)
   Lwt.return_unit
 
 let inspect_row_page (session : Session.t) (type_name : string) (id : string)
-    (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+    (reqd : Httpun.Reqd.t) : unit Lwt.t =
   (* Canonical row URL is /data/<type>/<id> (image.data-browser). *)
   ignore session;
   redirect_response reqd
     (Printf.sprintf "/data/%s/%s" type_name id);
   Lwt.return_unit
 
-let api_eval (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+let api_eval (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
   let* body = read_body reqd in
   let expr_opt =
     try
@@ -1164,7 +1164,7 @@ let api_eval (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
           Lwt.return_unit)
 
 let save_edit (session : Session.t) (path_name : string)
-    (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+    (reqd : Httpun.Reqd.t) : unit Lwt.t =
   let* body = read_body reqd in
   let name =
     match form_field body "name" with

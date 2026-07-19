@@ -3,7 +3,7 @@ open Lwt.Syntax
 open Pure_html
 open Http_core
 
-let list_types_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+let list_types_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
   let* types = Store.list_types (Session.store session) in
   let rows =
     List.map
@@ -135,7 +135,7 @@ let shared_data_banner () =
     HTML.a [HTML.href "/data"] [txt "All data"];
   ]
 
-let data_index_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+let data_index_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
   let store = Session.store session in
   let* types = Store.list_types store in
   let* orphan_names = Crud.list_data_type_names store in
@@ -213,7 +213,7 @@ let data_index_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
   Lwt.return_unit
 
 let data_list_page (session : Session.t) (type_name : string)
-    (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+    (reqd : Httpun.Reqd.t) : unit Lwt.t =
   if not (data_type_name_ok type_name) then begin
     html_response reqd ~session ~status:`Bad_request
       (chrome ~session ~title:"Bad type" [
@@ -223,7 +223,7 @@ let data_list_page (session : Session.t) (type_name : string)
     Lwt.return_unit
   end else
     let store = Session.store session in
-    let target = (Httpaf.Reqd.request reqd).Httpaf.Request.target in
+    let target = (Httpun.Reqd.request reqd).Httpun.Request.target in
     let limit =
       match query_param target "limit" with
       | Some s ->
@@ -354,7 +354,7 @@ let field_inputs ~(declared : string list)
       declared
 
 let data_new_page (session : Session.t) (type_name : string)
-    (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+    (reqd : Httpun.Reqd.t) : unit Lwt.t =
   if not (data_type_name_ok type_name) then begin
     html_response reqd ~session ~status:`Bad_request
       (chrome ~session ~title:"Bad type" [
@@ -392,7 +392,7 @@ let data_new_page (session : Session.t) (type_name : string)
     Lwt.return_unit
 
 let data_create (session : Session.t) (type_name : string)
-    (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+    (reqd : Httpun.Reqd.t) : unit Lwt.t =
   if not (data_type_name_ok type_name) then begin
     html_response reqd ~session ~status:`Bad_request
       (chrome ~session ~title:"Bad type" [
@@ -448,7 +448,7 @@ let data_create (session : Session.t) (type_name : string)
              Lwt.return_unit)
 
 let data_detail_page (session : Session.t) (type_name : string)
-    (id : string) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+    (id : string) (reqd : Httpun.Reqd.t) : unit Lwt.t =
   if not (data_type_name_ok type_name) then begin
     html_response reqd ~session ~status:`Bad_request
       (chrome ~session ~title:"Bad type" [
@@ -555,7 +555,7 @@ let data_detail_page (session : Session.t) (type_name : string)
         Lwt.return_unit
 
 let data_update (session : Session.t) (type_name : string) (id : string)
-    (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+    (reqd : Httpun.Reqd.t) : unit Lwt.t =
   if not (data_type_name_ok type_name) then begin
     html_response reqd ~session ~status:`Bad_request
       (chrome ~session ~title:"Bad type" [
@@ -619,7 +619,7 @@ let data_update (session : Session.t) (type_name : string) (id : string)
                   Lwt.return_unit))
 
 let data_delete (session : Session.t) (type_name : string) (id : string)
-    (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+    (reqd : Httpun.Reqd.t) : unit Lwt.t =
   if not (data_type_name_ok type_name) then begin
     html_response reqd ~session ~status:`Bad_request
       (chrome ~session ~title:"Bad type" [
