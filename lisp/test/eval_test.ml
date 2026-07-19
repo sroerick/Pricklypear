@@ -486,6 +486,45 @@ let eval_eff_tests = [
     Alcotest.(check string) "id" "\"id-note\"" (Reader.pp_value got);
     Alcotest.(check bool) "tx ran" true (List.mem "tx-enter" !seen);
     Alcotest.(check bool) "create nested" true (List.mem "create" !seen));
+  (* H1.5 special-form parity *)
+  ("eval_eff: cond else", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let got =
+      Lwt_main.run
+        (Eval.eval_string_eff_lwt ~prims env
+           "(cond (#f 1) (else 2))")
+    in
+    Alcotest.(check string) "2" "2" (Reader.pp_value got));
+  ("eval_eff: quasiquote unquote", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    Eval.register_prim prims "+"
+      (fun args ->
+        match args with
+        | [ Ast.VInt a; Ast.VInt b ] -> Lwt.return (Ast.VInt (Int64.add a b))
+        | _ -> Lwt.fail_with "+");
+    let env = Env.create () in
+    Env.define env "+" (Ast.VPrim "+");
+    let got =
+      Lwt_main.run
+        (Eval.eval_string_eff_lwt ~prims env "`(a ,(+ 1 2) c)")
+    in
+    match got with
+    | Ast.VList [ Ast.VStr "a"; Ast.VInt 3L; Ast.VStr "c" ] -> ()
+    | other -> Alcotest.failf "qq got %s" (Reader.pp_value other));
+  ("eval_eff: defmacro when", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let _ =
+      Lwt_main.run
+        (Eval.eval_string_eff_lwt ~prims env
+           "(defmacro when (test body) `(if ,test ,body ()))")
+    in
+    let got =
+      Lwt_main.run
+        (Eval.eval_string_eff_lwt ~prims env "(when #t 42)")
+    in
+    Alcotest.(check string) "42" "42" (Reader.pp_value got));
 ]
 
 let () =
