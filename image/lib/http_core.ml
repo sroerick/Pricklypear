@@ -589,6 +589,39 @@ let url_decode (s : string) : string =
   in
   loop 0
 
+(** application/x-www-form-urlencoded / query component encode. *)
+let url_encode (s : string) : string =
+  let buf = Buffer.create (String.length s * 2) in
+  String.iter
+    (function
+      | ('A' .. 'Z' | 'a' .. 'z' | '0' .. '9' | '-' | '_' | '.' | '~') as c ->
+          Buffer.add_char buf c
+      | ' ' -> Buffer.add_string buf "%20"
+      | c -> Buffer.add_string buf (Printf.sprintf "%%%02X" (Char.code c)))
+    s;
+  Buffer.contents buf
+
+(** Same-origin relative path (+ optional query/hash) for post-login return.
+    Rejects scheme-relative URLs, off-site targets, and control chars.
+    Colons are allowed only in the query/fragment (e.g. url=https://…),
+    never in the path (blocks scheme smuggling). *)
+let safe_internal_next (candidate : string) : string option =
+  let s = String.trim candidate in
+  let len = String.length s in
+  if len = 0 || len > 2048 then None
+  else if s.[0] <> '/' then None
+  else if len >= 2 && s.[1] = '/' then None
+  else if String.contains s '\n' || String.contains s '\r' then None
+  else
+    let path_part =
+      match String.index_opt s '?', String.index_opt s '#' with
+      | Some q, Some h -> String.sub s 0 (min q h)
+      | Some q, None -> String.sub s 0 q
+      | None, Some h -> String.sub s 0 h
+      | None, None -> s
+    in
+    if String.contains path_part ':' then None else Some s
+
 let form_field (body : string) (name : string) : string option =
   let pairs = String.split_on_char '&' body in
   let rec find = function
@@ -650,19 +683,43 @@ let redirect_response (reqd : Httpun.Reqd.t) (location : string) : unit =
   let resp = Httpun.Response.create ~headers `See_other in
   safe_respond_with_string reqd resp ""
 
-let require_login_redirect (reqd : Httpun.Reqd.t) ~(path : string) : unit =
+let require_login_redirect (reqd : Httpun.Reqd.t) ~(path : string)
+    ~(target : string) : unit =
   if String.length path >= 5 && String.sub path 0 5 = "/api/" then
     unauthorized_api reqd
   else if path = "/" then
     (* Public host: anonymous workspace root → welcome landing. *)
     redirect_response reqd "/welcome"
   else
-    redirect_response reqd "/login"
+    match safe_internal_next target with
+    | Some next when next <> "/login" && not (String.starts_with ~prefix:"/login?" next)
+      ->
+        redirect_response reqd ("/login?next=" ^ url_encode next)
+    | _ -> redirect_response reqd "/login"
 
-let login_form_page ?(error = "") (reqd : Httpun.Reqd.t) : unit =
+let login_form_page ?(error = "") ?(next = "") (reqd : Httpun.Reqd.t) : unit =
   let err =
     if error = "" then HTML.div [] []
     else HTML.p [HTML.class_ "err"] [txt "%s" error]
+  in
+  let next =
+    let from_arg = String.trim next in
+    let candidate =
+      if from_arg <> "" then from_arg
+      else
+        let target = (Httpun.Reqd.request reqd).Httpun.Request.target in
+        Option.value (query_param target "next") ~default:""
+    in
+    match safe_internal_next candidate with Some n -> n | None -> ""
+  in
+  let next_field =
+    if next = "" then HTML.div [] []
+    else
+      HTML.input
+        [ HTML.type_ "hidden"
+        ; HTML.name "next"
+        ; HTML.value "%s" next
+        ]
   in
   let body =
     HTML.html [HTML.lang "en"] [
@@ -689,6 +746,7 @@ let login_form_page ?(error = "") (reqd : Httpun.Reqd.t) : unit =
           HTML.h1 [] [txt "Sign in"];
           err;
           HTML.form [HTML.method_ `POST; HTML.action "/login"] [
+            next_field;
             HTML.label [HTML.for_ "username"] [txt "Username"];
             HTML.input [HTML.type_ "text"; HTML.name "username";
                         HTML.id "username"; HTML.required;
@@ -714,8 +772,11 @@ let post_login (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
     Option.value (form_field body "username") ~default:"" |> String.trim
   in
   let password = Option.value (form_field body "password") ~default:"" in
+  let next_raw = Option.value (form_field body "next") ~default:"" in
+  let next_ok = safe_internal_next next_raw in
   if username = "" || password = "" then begin
-    login_form_page ~error:"Invalid username or password" reqd;
+    login_form_page ~error:"Invalid username or password"
+      ?next:(match next_ok with Some n -> Some n | None -> None) reqd;
     Lwt.return_unit
   end else
     let store = Session.store session in
@@ -724,7 +785,8 @@ let post_login (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
     in
     match user_opt with
     | None ->
-        login_form_page ~error:"Invalid username or password" reqd;
+        login_form_page ~error:"Invalid username or password"
+          ?next:(match next_ok with Some n -> Some n | None -> None) reqd;
         Lwt.return_unit
     | Some user ->
         let* minted =
@@ -732,7 +794,8 @@ let post_login (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
         in
         (match minted with
          | Error e ->
-             login_form_page ~error:("Login failed: " ^ e) reqd;
+             login_form_page ~error:("Login failed: " ^ e)
+               ?next:(match next_ok with Some n -> Some n | None -> None) reqd;
              Lwt.return_unit
          | Ok token ->
              let* () =
@@ -740,15 +803,18 @@ let post_login (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
                  ~checkout_personal_now:true ()
              in
              let location =
-               match base_domain () with
-               | Some base ->
-                   (* Prefer relative if already on garden host; else absolute. *)
-                   let headers = header_list (Httpun.Reqd.request reqd) in
-                   (match classify_host headers with
-                    | Host_garden g when g = user.Auth_store.username -> "/"
-                    | _ ->
-                        "http://" ^ user.Auth_store.username ^ "." ^ base ^ "/")
-               | None -> "/"
+               match next_ok with
+               | Some n -> n
+               | None ->
+                   (match base_domain () with
+                    | Some base ->
+                        (* Prefer relative if already on garden host; else absolute. *)
+                        let headers = header_list (Httpun.Reqd.request reqd) in
+                        (match classify_host headers with
+                         | Host_garden g when g = user.Auth_store.username -> "/"
+                         | _ ->
+                             "http://" ^ user.Auth_store.username ^ "." ^ base ^ "/")
+                    | None -> "/")
              in
              redirect_with_cookie reqd ~location
                ~set_cookie:(set_cookie_header ~token);

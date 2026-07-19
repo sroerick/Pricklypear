@@ -108,7 +108,7 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
                           && String.sub path 0 4 = "/api"
                         in
                         if apiish then unauthorized_api reqd
-                        else require_login_redirect reqd ~path;
+                        else require_login_redirect reqd ~path ~target;
                         Lwt.return None
                   end)
               in
