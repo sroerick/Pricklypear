@@ -27,6 +27,7 @@
    lwt_eio
    eio
    eio_main
+   eio.unix
    unix
    yojson
    pure-html

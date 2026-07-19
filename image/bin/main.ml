@@ -1,8 +1,8 @@
 (** Pricklypear Image — entry point.
 
-    Default: Lwt_main (PP_IO=lwt or unset).
-    H3: PP_IO=eio runs the same Boot.start under Eio_main + Lwt_eio, with
-    an ambient Io_eio context (and a boot-time Eio PG health query). *)
+    PP_IO=lwt (default): Lwt_main + httpun-lwt-unix + Io_lwt PG.
+    PP_IO=eio: Eio_main + native Httpun_eio + Io_eio PG (Lwt_eio only for
+    REPL + prepare bootstrap). *)
 
 open Pricklypear_image_lib
 
@@ -16,7 +16,6 @@ let run_eio_main () =
     { sw; net = (Eio.Stdenv.net env :> [ `Generic ] Eio.Net.ty Eio.Std.r) }
   in
   Io_eio.with_ctx ctx (fun () ->
-      (* H3.1: prove Eio PG path before handing off to Lwt image. *)
       (try
          let cfg = Io_eio.Db.config_from_env () in
          let st =
@@ -28,11 +27,12 @@ let run_eio_main () =
        with e ->
          Printf.eprintf "[boot] PP_IO=eio Io_eio.Db health failed: %s\n%!"
            (Printexc.to_string e));
-      Lwt_eio.run_lwt (fun () -> Boot.start ()))
+      Boot.start_eio ~env ~sw)
 
 let () =
   match Io_eio.io_mode_from_env () with
   | `Eio ->
-      Printf.eprintf "[boot] PP_IO=eio (Eio_main + Lwt_eio + Io_eio.Db smoke)\n%!";
+      Printf.eprintf
+        "[boot] PP_IO=eio (Eio_main + Httpun_eio + Io_eio PG)\n%!";
       run_eio_main ()
   | `Lwt -> run_lwt_main ()

@@ -5,7 +5,7 @@
       2. Connect store, apply migrations, bootstrap admin if needed.
       3. Load function_defs for the branch into the session env.
       4. Start optional TCP REPL (loopback line protocol).
-      5. Start HTTP (httpun-lwt-unix) including /health.
+      5. Start HTTP — httpun-lwt-unix ([start]) or httpun-eio ([start_eio]).
 
     Env knobs include PP_USERNAME, PP_BRANCH_ID, PP_BRANCH_NAME,
     PP_BOOT_MODE, PP_IMAGE_VERSION, PP_HTTP_PORT, PP_REPL_PORT — set by
@@ -30,27 +30,37 @@ let manifest_from_env () : Pricklypear_common.Manifest.t =
     ~image_version:(env_or "PP_IMAGE_VERSION" "0.1.0-dev")
     ()
 
-let start () : unit Lwt.t =
+(** Shared setup: RNG, store connect, session, REPL. Returns session + ports. *)
+let prepare () : (Session.t * int * int) Lwt.t =
   ignore (Ops_log.info ~component:"boot" "Pricklypear image starting up");
-  Printf.eprintf "[boot] Pricklypear image starting up...\n";
-  (* RNG required for password salt + session tokens (auth). *)
+  Printf.eprintf "[boot] Pricklypear image starting up...\n%!";
   Mirage_crypto_rng_unix.use_default ();
   let manifest = manifest_from_env () in
   let cfg = Store.config_from_env () in
   let store = Store.make ~cfg ~branch_id:manifest.branch_id () in
-  (* Try to connect to PG but don't fail boot if it's down — the
-     minimal image serves system pages with no DB. *)
   let* () = Store.connect store in
-  (* First-boot admin when users table is empty (auth.bootstrap-admin). *)
   let* _ = Auth_store.bootstrap_admin_if_empty store in
   let session = Session.make ~manifest ~store () in
   let http_port = int_of_string (env_or "PP_HTTP_PORT" "8080") in
   let repl_port = int_of_string (env_or "PP_REPL_PORT" "7878") in
   let _ = Lwt.async (fun () -> Repl_endpoint.serve ~session ~port:repl_port ()) in
-  Printf.eprintf "[boot] serving http://0.0.0.0:%d/  (htmx)\n" http_port;
-  Printf.eprintf "[boot] REPL endpoint 127.0.0.1:%d (internal)\n" repl_port;
-  Printf.eprintf "[boot] user=%s branch=%s version=%s\n"
+  Printf.eprintf "[boot] REPL endpoint 127.0.0.1:%d (internal)\n%!" repl_port;
+  Printf.eprintf "[boot] user=%s branch=%s version=%s\n%!"
     manifest.username manifest.branch_name manifest.image_version;
-  (* Block on the HTTP server promise (never resolves until shutdown).
-     The REPL endpoint runs in async. *)
+  Lwt.return (session, http_port, repl_port)
+
+(** Lwt path: httpun-lwt-unix HTTP (default PP_IO=lwt). *)
+let start () : unit Lwt.t =
+  let* session, http_port, _repl = prepare () in
+  Printf.eprintf "[boot] serving http://0.0.0.0:%d/  (htmx, lwt)\n%!" http_port;
   Http.serve ~session ~port:http_port ()
+
+(** Eio path: prepare via Lwt_eio, then native Httpun_eio accept loop.
+    Call under Eio_main + Io_eio.with_ctx + Lwt_eio.with_event_loop. *)
+let start_eio ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t) : unit =
+  let session, http_port, _repl =
+    Lwt_eio.run_lwt (fun () -> prepare ())
+  in
+  Printf.eprintf "[boot] serving http://0.0.0.0:%d/  (htmx, httpun-eio)\n%!"
+    http_port;
+  Http.serve_eio ~session ~env ~sw ~port:http_port ()

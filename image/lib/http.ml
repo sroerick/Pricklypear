@@ -749,7 +749,63 @@ let serve ~(session : Session.t) ?(port = default_port) () : unit Lwt.t =
          Lwt.return_unit)
   in
   let addr = Lwt_unix.ADDR_INET (Unix.inet_addr_any, port) in
-  Printf.eprintf "[http] serving htmx on 0.0.0.0:%d (max_inflight=%d)\n" port max_inflight;
+  Printf.eprintf
+    "[http] serving htmx (httpun-lwt-unix) on 0.0.0.0:%d (max_inflight=%d)\n%!"
+    port max_inflight;
   let* _server = Lwt_io.establish_server_with_client_socket addr establisher in
   let waiter, _waker = Lwt.wait () in
   waiter
+
+(** Convert Eio stream sockaddr → Unix.sockaddr for shared request_handler. *)
+let unix_sockaddr_of_eio (sa : Eio.Net.Sockaddr.stream) : Unix.sockaddr =
+  match sa with
+  | `Unix path -> Unix.ADDR_UNIX path
+  | `Tcp (ip, port) ->
+      let uip = Eio_unix.Net.Ipaddr.to_unix ip in
+      Unix.ADDR_INET (uip, port)
+
+(** Native Eio accept loop via Httpun_eio (H3). Call under Eio_main +
+    ambient Io_eio.with_ctx. Blocks the fiber forever. *)
+let serve_eio
+    ~(session : Session.t)
+    ~(env : Eio_unix.Stdenv.base)
+    ~(sw : Eio.Switch.t)
+    ?(port = default_port)
+    () : unit =
+  let handler = request_handler session in
+  let request_handler (sa : Eio.Net.Sockaddr.stream)
+      (g : Httpun.Reqd.t Gluten.reqd) : unit =
+    handler (unix_sockaddr_of_eio sa) g.Gluten.reqd
+  in
+  let error_handler (sa : Eio.Net.Sockaddr.stream) =
+    error_handler (unix_sockaddr_of_eio sa)
+  in
+  let conn_handler =
+    Httpun_eio.Server.create_connection_handler
+      ~request_handler ~error_handler ~sw
+  in
+  let net = Eio.Stdenv.net env in
+  let listen_addr = `Tcp (Eio.Net.Ipaddr.V4.any, port) in
+  let socket =
+    Eio.Net.listen ~reuse_addr:true ~reuse_port:true ~backlog:128 ~sw net
+      listen_addr
+  in
+  Printf.eprintf
+    "[http] serving htmx (httpun-eio) on 0.0.0.0:%d (max_inflight=%d)\n%!"
+    port max_inflight;
+  let on_error ex =
+    if is_closed_writer_exn ex then
+      ignore
+        (Ops_log.info ~component:"http"
+           "eio connection: peer gone (closed writer)")
+    else
+      ignore
+        (Ops_log.warn ~component:"http"
+           ~context:[("phase", "eio-connection")]
+           ("eio connection handler failed: " ^ Printexc.to_string ex))
+  in
+  while true do
+    Eio.Net.accept_fork socket ~sw ~on_error (fun client_sock client_addr ->
+        try conn_handler client_addr client_sock
+        with exn -> on_error exn)
+  done
