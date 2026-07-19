@@ -260,6 +260,12 @@
            value_to_expr : value -> expr
              Inverse, best-effort, for trees macros produce.
 
+         Macro parameter contract (updated):
+           Macro arguments are bound as self-evaluated literal VALUES
+           (plain VStr for strings, VInt/VFloat/etc. for numbers).
+           No __str__ tagging at the macro call boundary.
+           The __str__ emit workaround is deprecated.
+
          Rules (v1):
            VInt/VFloat/VBool/VNil/VStr that are self-evaluating
              literals -> Lit v
@@ -281,15 +287,14 @@
          Symbol problem (Lisp-1 without VSymbol):
            Today quote turns symbols into VStr. That collapses
            the string "hello" and the symbol hello at the value
-           layer. v1 ACCEPTS this collapse (status quo):
+           layer. v1 ACCEPTS this collapse for quote and value_to_expr
+           context rules (status quo). However, the macro call
+           boundary now delivers plain literal values (VStr for
+           strings) rather than __str__-tagged forms.
              - (quote hello) => VStr "hello"
              - (quote "hello") => VStr "hello"
-             - value_to_expr on VStr in list-head position => Var
-             - value_to_expr on VStr in atom position when the
-               parent context expects an expression statement
-               uses Var for bare identifiers produced by macros
-           Optional later: VSymbol distinct from VStr. Do NOT
-           block macros on VSymbol; document the collapse.
+             - Macro params receive plain VStr, not (__str__ ...)
+           Optional later: VSymbol distinct from VStr.
 
          Round-trip invariant (tests):
            For any expr e built from reader surface (no live

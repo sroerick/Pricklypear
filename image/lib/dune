@@ -2,7 +2,7 @@
  (name pricklypear_image_lib)
  (public_name pricklypear-image)
  (modules store_db store
-          prims_pure primitives
+          prims_pure primitives request_context
           session_types agent_tools session
           crud packages loader repl_endpoint
           ops_log ops_stats ops_incidents

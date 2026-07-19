@@ -410,8 +410,13 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
   in
   Primitives.register tbl "deftype"
     (fun args ->
-      if t.manifest.username = "anonymous" then deny_anon "deftype"
-      else Crud.deftype t.store ~args ~author:t.manifest.username);
+      let uname =
+        match Lwt.get Request_context.current with
+        | Some c -> (Request_context.manifest c).username
+        | None -> t.manifest.username
+      in
+      if uname = "anonymous" then deny_anon "deftype"
+      else Crud.deftype t.store ~args ~author:uname);
 
   (* (get 'type id) -> VStr fields-json | VNil *)
   Primitives.register tbl "get"
@@ -425,7 +430,12 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
   (* (create 'type "{fields-json}") -> VStr new-id | VStr "create failed" *)
   Primitives.register tbl "create"
     (fun args ->
-      if t.manifest.username = "anonymous" then deny_anon "create"
+      let uname =
+        match Lwt.get Request_context.current with
+        | Some c -> (Request_context.manifest c).username
+        | None -> t.manifest.username
+      in
+      if uname = "anonymous" then deny_anon "create"
       else
         match args with
         | [ Pricklypear_lisp.Ast.VStr type_name;
@@ -609,7 +619,13 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
 
   (* (current-branch) -> VStr *)
   Primitives.register_sync tbl "current-branch"
-    (fun _ -> Pricklypear_lisp.Ast.VStr t.manifest.branch_name);
+    (fun _ ->
+      let branch =
+        match Lwt.get Request_context.current with
+        | Some c -> (Request_context.manifest c).branch_name
+        | None -> t.manifest.branch_name
+      in
+      Pricklypear_lisp.Ast.VStr branch);
 
   (* Durable agent sessions (ai-authoring.agent-portal). *)
   Primitives.register tbl "agent-session-new"
@@ -1418,7 +1434,11 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
      list-bindings). username_fn re-reads t.manifest so per-request
      identity attach updates (whoami) without re-registering. *)
   Primitives.register_session_prims prim_table
-    ~username_fn:(fun () -> (!t).manifest.username) ~env;
+    ~username_fn:(fun () ->
+      (match Lwt.get Request_context.current with
+       | Some c -> (Request_context.manifest c).username
+       | None -> (!t).manifest.username)
+    ) ~env;
   (* Register the DB-touching control primitives on the prim_table,
      then rebind t.prims to the populated table. These prims capture
      (!t), so they read/write store+manifest on each invocation. *)
@@ -1503,6 +1523,9 @@ let uptime_seconds (t : t) : int =
 
 let branch_name (t : t) : string = t.manifest.branch_name
 let username (t : t) : string = t.manifest.username
+(** Snapshot of the attached identity/branch fields for per-request context.
+    Record copy is shallow; all fields are immutable strings/ints. *)
+let manifest (t : t) : Pricklypear_common.Manifest.t = t.manifest
 let is_admin (t : t) : bool = t.is_admin
 let store (t : t) : Store.t = t.store
 let branch_id (t : t) : string = t.manifest.branch_id
