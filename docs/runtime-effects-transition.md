@@ -470,15 +470,15 @@ soak + ops decision.
 | `io_eio_test` | health + `current_database` (`PP_REQUIRE_EIO_DB=1`) |
 | `eio_enter_depth` | prevents nested `run_eio` (tx isolation) |
 
-### HTTP (C1 — honest gap)
-When `PP_IO=eio`, **HTTP remains httpaf-lwt-unix**, scheduled by
-**Lwt_eio** on the Eio event loop. There is **no** httpun-eio server yet.
-DB is the Eio-native path; the process host is dual-scheduled.
+### HTTP
+- `PP_IO=lwt` — **httpun-lwt-unix** accept loop
+- `PP_IO=eio` — **native Httpun_eio** (`Eio.Net.listen` + `accept_fork`);
+  REPL still via Lwt_eio from `Boot.prepare`
 
-### Not done / deferred
-- Native httpun-eio (or gluten-eio) accept loop
-- Prod `PP_IO=eio` default
-- OpenBSD soak of lwt_eio + eio pgx in rc.d
+### Prod
+Set `PP_IO=eio` in `/etc/pricklypear/pricklypear.env` then
+`rcctl restart pricklypear`. Rollback: `PP_IO=lwt` + restart.
+Expect log lines: `PP_IO=eio`, `connected (eio)`, `serving htmx (httpun-eio)`.
 
 ### Ops
 ```sh
@@ -520,6 +520,7 @@ ksh scripts/check_io_rim.sh
 | 2026-07-18 | **H2.1/H2.2** Lwt inventory (Appendix E); `Io`/`Io_lwt.Db` port introduced (execute/tx/connect). |
 | 2026-07-18 | **H2.3** `store.ml` + `crud.ml` + `ai_store` + `ops_incidents` execute via `Io_lwt.Db` (only `io_lwt`/`store_db` call pgx). |
 | 2026-07-18 | **overnight deploy** push wyo master (H0–H3B runtime effects loop). |
+| 2026-07-19 | **Httpun-eio native** + prod PP_IO=eio path (httpun migrate, serve_eio). |
 | 2026-07-19 | **H3 eio finish** product SQL on Eio conn; lwt+eio parity soak; HTTP still lwt_eio (Appendix G). |
 | 2026-07-19 | **H3 Store dual conn** `Store_db.conn` Lwt|Eio; product SQL via `exec` under PP_IO. |
 | 2026-07-19 | **H3 Eio dual-run** `Io_eio.Db` (pgx+Eio.Net) + `PP_IO=eio` via Lwt_eio; default remains lwt. |
