@@ -81,16 +81,15 @@ let ast_roundtrip_tests = [
 
 (* --- Evaluator tests --- *)
 
-(* The interpreter is Lwt-typed: Eval.eval returns `value Lwt.t`. Each test
-   body that calls the evaluator uses [Lwt_main.run] to drive the promise;
-   reader/AST-roundtrip tests are pure and don't need Lwt wrapping. *)
+(* H1.7: interpreter is direct-style; [Eval.eval_string] runs under
+   [Control.run_sync]. Pure tests — no services. *)
 
 let evals_to name expr expected =
   ("eval: " ^ name, `Quick, fun () ->
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
     let budget = Eval.make_budget () in
-    let got = Lwt_main.run (Eval.eval ~budget ~prims env expr) in
+    let got = (Eval.eval ~budget ~prims env expr) in
     Alcotest.(check string)
       (Reader.pp_value expected) (Reader.pp_value expected)
       (Reader.pp_value got))
@@ -100,7 +99,7 @@ let eval_tests = [
   ("eval: define binds var", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
-    let _ = Lwt_main.run (Eval.eval_string ~prims env "(define x 99)") in
+    let _ = (Eval.eval_string ~prims env "(define x 99)") in
     (match Env.lookup env "x" with
      | Some (Ast.VInt n) ->
         Alcotest.(check int64) "x's value" 99L n
@@ -110,22 +109,22 @@ let eval_tests = [
   ("eval: if-true branch", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
-    let got = Lwt_main.run (Eval.eval_string ~prims env "(if #t 1 2)") in
+    let got = (Eval.eval_string ~prims env "(if #t 1 2)") in
     Alcotest.(check string) "1" "1" (Reader.pp_value got));
   ("eval: if-false branch", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
-    let got = Lwt_main.run (Eval.eval_string ~prims env "(if #f 1 2)") in
+    let got = (Eval.eval_string ~prims env "(if #f 1 2)") in
     Alcotest.(check string) "2" "2" (Reader.pp_value got));
   ("eval: lambda application", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
-    let got = Lwt_main.run (Eval.eval_string ~prims env "((lambda (x) x) 42)") in
+    let got = (Eval.eval_string ~prims env "((lambda (x) x) 42)") in
     Alcotest.(check string) "42" "42" (Reader.pp_value got));
   ("eval: quote compound list", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
-    let got = Lwt_main.run (Eval.eval_string ~prims env "'(a b c)") in
+    let got = (Eval.eval_string ~prims env "'(a b c)") in
     (match got with
      | Ast.VList [Ast.VStr "a"; Ast.VStr "b"; Ast.VStr "c"] -> ()
      | other -> Alcotest.failf "expected (a b c) list, got %s"
@@ -133,7 +132,7 @@ let eval_tests = [
   ("eval: quote nested", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
-    let got = Lwt_main.run (Eval.eval_string ~prims env "'(1 (2 3))") in
+    let got = (Eval.eval_string ~prims env "'(1 (2 3))") in
     (match got with
      | Ast.VList [Ast.VInt 1L; Ast.VList [Ast.VInt 2L; Ast.VInt 3L]] -> ()
      | other -> Alcotest.failf "expected nested quote, got %s"
@@ -142,15 +141,15 @@ let eval_tests = [
     let prims = Eval.make_prim_table () in
     Eval.register_prim prims "add-one"
       (fun args -> match args with
-        | [Ast.VInt n] -> Lwt.return (Ast.VInt (Int64.add n 1L))
-        | _ -> Lwt.return Ast.VNil);
+        | [Ast.VInt n] -> (Ast.VInt (Int64.add n 1L))
+        | _ -> Ast.VNil);
     let env = Env.create () in
-    let got = Lwt_main.run (Eval.eval_string ~prims env "(prim add-one 41)") in
+    let got = (Eval.eval_string ~prims env "(prim add-one 41)") in
     Alcotest.(check string) "42" "42" (Reader.pp_value got));
   ("eval: let binds locally", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
-    let got = Lwt_main.run (Eval.eval_string ~prims env "(let ((y 5)) y)") in
+    let got = (Eval.eval_string ~prims env "(let ((y 5)) y)") in
     Alcotest.(check string) "5" "5" (Reader.pp_value got));
   ("eval: budget exceeded", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
@@ -162,47 +161,47 @@ let eval_tests = [
     in
     let e = nest 20 (Ast.int 0) in
     try
-      let _ = Lwt_main.run (Eval.eval ~budget ~prims env e) in
+      let _ = (Eval.eval ~budget ~prims env e) in
       Alcotest.fail "expected budget exceeded"
     with Ast.Interp_error Ast.Budget_exceeded -> ());
   ("eval: unbound var raises", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
     try
-      let _ = Lwt_main.run (Eval.eval_string ~prims env "nope") in
+      let _ = (Eval.eval_string ~prims env "nope") in
       Alcotest.fail "expected Unbound_var"
     with Ast.Interp_error (Ast.Unbound_var name) ->
       Alcotest.(check string) "nope" "nope" name);
   ("eval: seq empty returns nil", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
-    let got = Lwt_main.run (Eval.eval_string ~prims env "(seq)") in
+    let got = (Eval.eval_string ~prims env "(seq)") in
     Alcotest.(check string) "nil" "()" (Reader.pp_value got));
   ("eval: seq single returns body", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
-    let got = Lwt_main.run (Eval.eval_string ~prims env "(seq 7)") in
+    let got = (Eval.eval_string ~prims env "(seq 7)") in
     Alcotest.(check string) "7" "7" (Reader.pp_value got));
   ("eval: seq binary returns last", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
-    let got = Lwt_main.run (Eval.eval_string ~prims env "(seq 1 2)") in
+    let got = (Eval.eval_string ~prims env "(seq 1 2)") in
     Alcotest.(check string) "2" "2" (Reader.pp_value got));
   ("eval: seq multi returns last", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
-    let got = Lwt_main.run (Eval.eval_string ~prims env "(seq 1 2 3)") in
+    let got = (Eval.eval_string ~prims env "(seq 1 2 3)") in
     Alcotest.(check string) "3" "3" (Reader.pp_value got));
   ("eval: seq nested multi", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
-    let got = Lwt_main.run (Eval.eval_string ~prims env
+    let got = (Eval.eval_string ~prims env
                               "(seq 1 (seq 2 3) 4)") in
     Alcotest.(check string) "4" "4" (Reader.pp_value got));
   ("eval: seq side effects left-to-right", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
-    let got = Lwt_main.run (Eval.eval_string ~prims env
+    let got = (Eval.eval_string ~prims env
       "(seq (define a 1) (define b 2) (define c 3) c)") in
     Alcotest.(check string) "c" "3" (Reader.pp_value got);
     (match Env.lookup env "a", Env.lookup env "b" with
@@ -211,7 +210,7 @@ let eval_tests = [
   ("eval: seq in lambda body multi", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
-    let got = Lwt_main.run (Eval.eval_string ~prims env
+    let got = (Eval.eval_string ~prims env
       "((lambda () (seq (define x 10) (define y 20) y)))") in
     Alcotest.(check string) "20" "20" (Reader.pp_value got));
 ]
@@ -254,18 +253,18 @@ let macro_tests = [
   ("quasiquote unquote", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
     Eval.register_prim prims "+" (function
-      | [Ast.VInt a; Ast.VInt b] -> Lwt.return (Ast.VInt (Int64.add a b))
+      | [Ast.VInt a; Ast.VInt b] -> (Ast.VInt (Int64.add a b))
       | _ -> raise (Ast.Interp_error (Ast.User_error "+")));
     let env = Env.create () in
     Env.define env "+" (Ast.VPrim "+");
-    let got = Lwt_main.run (Eval.eval_string ~prims env "`(a ,(+ 1 2) c)") in
+    let got = (Eval.eval_string ~prims env "`(a ,(+ 1 2) c)") in
     match got with
     | Ast.VList [Ast.VStr "a"; Ast.VInt 3L; Ast.VStr "c"] -> ()
     | other -> Alcotest.failf "qq got %s" (Reader.pp_value other));
   ("quasiquote splice", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
-    let got = Lwt_main.run (Eval.eval_string ~prims env "`(a ,@'(b c) d)") in
+    let got = (Eval.eval_string ~prims env "`(a ,@'(b c) d)") in
     match got with
     | Ast.VList [Ast.VStr "a"; Ast.VStr "b"; Ast.VStr "c"; Ast.VStr "d"] -> ()
     | other -> Alcotest.failf "splice got %s" (Reader.pp_value other));
@@ -273,16 +272,15 @@ let macro_tests = [
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
     let _ =
-      Lwt_main.run
-        (Eval.eval_string ~prims env
+      (Eval.eval_string ~prims env
            "(defmacro when (t b) `(if ,t ,b ()))")
     in
     let got =
-      Lwt_main.run (Eval.eval_string ~prims env "(when #t 42)")
+      (Eval.eval_string ~prims env "(when #t 42)")
     in
     Alcotest.(check string) "42" "42" (Reader.pp_value got);
     let got2 =
-      Lwt_main.run (Eval.eval_string ~prims env "(when #f 42)")
+      (Eval.eval_string ~prims env "(when #f 42)")
     in
     Alcotest.(check string) "nil" "()" (Reader.pp_value got2));
   ("defmacro expands to let (qq)", `Quick, fun () ->
@@ -291,28 +289,26 @@ let macro_tests = [
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
     let _ =
-      Lwt_main.run
-        (Eval.eval_string ~prims env
+      (Eval.eval_string ~prims env
            "(defmacro let1 (name val body) `(let ((,name ,val)) ,body))")
     in
     let got =
-      Lwt_main.run (Eval.eval_string ~prims env "(let1 a 1 a)")
+      (Eval.eval_string ~prims env "(let1 a 1 a)")
     in
     Alcotest.(check string) "let1 => 1" "1" (Reader.pp_value got));
   ("defmacro expands to let (list)", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
-    Eval.register_prim prims "list" (fun args -> Lwt.return (Ast.VList args));
+    Eval.register_prim prims "list" (fun args -> (Ast.VList args));
     let env = Env.create () in
     (* Image binds registered prims into env as VPrim; pure tests must too. *)
     Env.define env "list" (Ast.VPrim "list");
     let _ =
-      Lwt_main.run
-        (Eval.eval_string ~prims env
+      (Eval.eval_string ~prims env
            "(defmacro let1 (name val body)\
              (list (quote let) (list (list name val)) body))")
     in
     let got =
-      try Lwt_main.run (Eval.eval_string ~prims env "(let1 a 1 a)")
+      try (Eval.eval_string ~prims env "(let1 a 1 a)")
       with Ast.Interp_error e ->
         Alcotest.failf "let1 list failed: %s" (Ast.pp_interp_error e)
     in
@@ -323,8 +319,7 @@ let macro_tests = [
     match
       try
         ignore
-          (Lwt_main.run
-             (Eval.eval_string ~prims env
+          ((Eval.eval_string ~prims env
                 "(defmacro bad (a . b) a)"));
         `Ok
       with Ast.Interp_error (Ast.User_error m) -> `Err m
@@ -339,8 +334,8 @@ let macro_tests = [
   ("gensym unique", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
-    let a = Lwt_main.run (Eval.eval_string ~prims env "(gensym)") in
-    let b = Lwt_main.run (Eval.eval_string ~prims env "(gensym)") in
+    let a = (Eval.eval_string ~prims env "(gensym)") in
+    let b = (Eval.eval_string ~prims env "(gensym)") in
     match a, b with
     | Ast.VStr sa, Ast.VStr sb when sa <> sb -> ()
     | _ -> Alcotest.fail "gensym not unique");
@@ -348,8 +343,7 @@ let macro_tests = [
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
     let got =
-      Lwt_main.run
-        (Eval.eval_string ~prims env
+      (Eval.eval_string ~prims env
            "(cond (#f 1) (#t 2) (#t 3))")
     in
     Alcotest.(check string) "2" "2" (Reader.pp_value got));
@@ -357,36 +351,35 @@ let macro_tests = [
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
     let got =
-      Lwt_main.run
-        (Eval.eval_string ~prims env "(cond (#f 1) (else 9))")
+      (Eval.eval_string ~prims env "(cond (#f 1) (else 9))")
     in
     Alcotest.(check string) "9" "9" (Reader.pp_value got));
   ("cond empty", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
-    let got = Lwt_main.run (Eval.eval_string ~prims env "(cond)") in
+    let got = (Eval.eval_string ~prims env "(cond)") in
     Alcotest.(check string) "nil" "()" (Reader.pp_value got));
   ("and short-circuit", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
     let got =
-      Lwt_main.run (Eval.eval_string ~prims env "(and #t 1 2)")
+      (Eval.eval_string ~prims env "(and #t 1 2)")
     in
     Alcotest.(check string) "2" "2" (Reader.pp_value got);
     let got2 =
-      Lwt_main.run (Eval.eval_string ~prims env "(and #t #f 3)")
+      (Eval.eval_string ~prims env "(and #t #f 3)")
     in
     Alcotest.(check string) "false" "#f" (Reader.pp_value got2);
-    let got3 = Lwt_main.run (Eval.eval_string ~prims env "(and)") in
+    let got3 = (Eval.eval_string ~prims env "(and)") in
     Alcotest.(check string) "true" "#t" (Reader.pp_value got3));
   ("or short-circuit", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
     let got =
-      Lwt_main.run (Eval.eval_string ~prims env "(or #f 0 1)")
+      (Eval.eval_string ~prims env "(or #f 0 1)")
     in
     Alcotest.(check string) "0" "0" (Reader.pp_value got);
-    let got2 = Lwt_main.run (Eval.eval_string ~prims env "(or)") in
+    let got2 = (Eval.eval_string ~prims env "(or)") in
     Alcotest.(check string) "false" "#f" (Reader.pp_value got2));
 ]
 
@@ -396,21 +389,20 @@ let eval_eff_tests = [
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
     let got =
-      Lwt_main.run (Eval.eval_string_eff_lwt ~prims env "42")
+      (Eval.eval_string ~prims env "42")
     in
     Alcotest.(check string) "42" "42" (Reader.pp_value got));
   ("eval_eff: define + lookup", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
-    let _ = Lwt_main.run (Eval.eval_string_eff_lwt ~prims env "(define x 99)") in
-    let got = Lwt_main.run (Eval.eval_string_eff_lwt ~prims env "x") in
+    let _ = (Eval.eval_string ~prims env "(define x 99)") in
+    let got = (Eval.eval_string ~prims env "x") in
     Alcotest.(check string) "99" "99" (Reader.pp_value got));
   ("eval_eff: if + lambda app", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
     let got =
-      Lwt_main.run
-        (Eval.eval_string_eff_lwt ~prims env "((lambda (x) (if #t x 0)) 7)")
+      (Eval.eval_string ~prims env "((lambda (x) (if #t x 0)) 7)")
     in
     Alcotest.(check string) "7" "7" (Reader.pp_value got));
   ("eval_eff: prim via Prim_call", `Quick, fun () ->
@@ -418,11 +410,11 @@ let eval_eff_tests = [
     Eval.register_prim prims "add-one"
       (fun args ->
         match args with
-        | [ Ast.VInt n ] -> Lwt.return (Ast.VInt (Int64.add n 1L))
-        | _ -> Lwt.fail_with "bad args");
+        | [ Ast.VInt n ] -> (Ast.VInt (Int64.add n 1L))
+        | _ -> failwith "bad args");
     let env = Env.create () in
     let got =
-      Lwt_main.run (Eval.eval_string_eff_lwt ~prims env "(prim add-one 41)")
+      (Eval.eval_string ~prims env "(prim add-one 41)")
     in
     Alcotest.(check string) "42" "42" (Reader.pp_value got));
   ("eval_eff: composition bind then prim", `Quick, fun () ->
@@ -431,13 +423,12 @@ let eval_eff_tests = [
       (fun args ->
         match args with
         | [ Ast.VStr _; Ast.VInt id ] ->
-            Lwt.return (Ast.VStr ("row-" ^ Int64.to_string id))
-        | _ -> Lwt.fail_with "bad get");
+            (Ast.VStr ("row-" ^ Int64.to_string id))
+        | _ -> failwith "bad get");
     let env = Env.create () in
     Env.define env "get" (Ast.VPrim "get");
     let got =
-      Lwt_main.run
-        (Eval.eval_string_eff_lwt ~prims env
+      (Eval.eval_string ~prims env
            "(let ((u (get \"user\" 1))) u)")
     in
     Alcotest.(check string) "row" "\"row-1\"" (Reader.pp_value got));
@@ -448,7 +439,7 @@ let eval_eff_tests = [
     let e = Reader.read_one "(seq 1 2 3 4 5 6 7 8 9 10)" in
     (try
        let _ =
-         Lwt_main.run (Eval.eval_eff_lwt ~budget ~prims env e)
+         Control.run_sync ~prims (fun () -> Eval.eval ~budget ~prims env e)
        in
        Alcotest.fail "expected Budget_exceeded"
      with
@@ -464,8 +455,8 @@ let eval_eff_tests = [
       (fun args ->
         seen := "create" :: !seen;
         match args with
-        | [ Ast.VStr t; Ast.VStr _ ] -> Lwt.return (Ast.VStr ("id-" ^ t))
-        | _ -> Lwt.fail_with "bad create");
+        | [ Ast.VStr t; Ast.VStr _ ] -> (Ast.VStr ("id-" ^ t))
+        | _ -> failwith "bad create");
     Eval.register_prim prims "__with_transaction__"
       (fun args ->
         seen := "tx-enter" :: !seen;
@@ -473,14 +464,13 @@ let eval_eff_tests = [
         | [ lam ] ->
             let budget = Eval.make_budget () in
             (* image-shaped: nested run_lwt + apply_eff *)
-            Control.run_lwt ~prims (fun () ->
-                Eval.apply_eff ~budget ~prims lam [])
-        | _ -> Lwt.fail_with "bad tx");
+            Control.run_sync ~prims (fun () ->
+                Eval.apply ~budget ~prims lam [])
+        | _ -> failwith "bad tx");
     let env = Env.create () in
     Env.define env "create" (Ast.VPrim "create");
     let got =
-      Lwt_main.run
-        (Eval.eval_string_eff_lwt ~prims env
+      (Eval.eval_string ~prims env
            "(with-transaction (lambda () (create \"note\" \"{}\")))")
     in
     Alcotest.(check string) "id" "\"id-note\"" (Reader.pp_value got);
@@ -491,8 +481,7 @@ let eval_eff_tests = [
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
     let got =
-      Lwt_main.run
-        (Eval.eval_string_eff_lwt ~prims env
+      (Eval.eval_string ~prims env
            "(cond (#f 1) (else 2))")
     in
     Alcotest.(check string) "2" "2" (Reader.pp_value got));
@@ -501,13 +490,12 @@ let eval_eff_tests = [
     Eval.register_prim prims "+"
       (fun args ->
         match args with
-        | [ Ast.VInt a; Ast.VInt b ] -> Lwt.return (Ast.VInt (Int64.add a b))
-        | _ -> Lwt.fail_with "+");
+        | [ Ast.VInt a; Ast.VInt b ] -> (Ast.VInt (Int64.add a b))
+        | _ -> failwith "+");
     let env = Env.create () in
     Env.define env "+" (Ast.VPrim "+");
     let got =
-      Lwt_main.run
-        (Eval.eval_string_eff_lwt ~prims env "`(a ,(+ 1 2) c)")
+      (Eval.eval_string ~prims env "`(a ,(+ 1 2) c)")
     in
     match got with
     | Ast.VList [ Ast.VStr "a"; Ast.VInt 3L; Ast.VStr "c" ] -> ()
@@ -516,13 +504,11 @@ let eval_eff_tests = [
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
     let _ =
-      Lwt_main.run
-        (Eval.eval_string_eff_lwt ~prims env
+      (Eval.eval_string ~prims env
            "(defmacro when (test body) `(if ,test ,body ()))")
     in
     let got =
-      Lwt_main.run
-        (Eval.eval_string_eff_lwt ~prims env "(when #t 42)")
+      (Eval.eval_string ~prims env "(when #t 42)")
     in
     Alcotest.(check string) "42" "42" (Reader.pp_value got));
 ]

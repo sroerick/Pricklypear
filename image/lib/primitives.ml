@@ -262,11 +262,6 @@ let catalog (t : t) : (string * string) list =
 let list_names (t : t) : string list =
   List.map fst (catalog t)
 
-(* Convert the table into the shape Pricklypear_lisp.Eval.prim_table
-   expects. Delegating to a separate function so the integration with
-   the interpreter is explicit. *)
-let to_eval_table (t : t) : Pricklypear_lisp.Eval.prim_table =
-  let module E = Pricklypear_lisp.Eval in
-  let tbl = E.make_prim_table () in
-  Hashtbl.iter (fun name fn -> E.register_prim tbl name fn) t;
-  tbl
+(* H1.7: image stores this table directly for Control_rim; lisp Eval no
+   longer carries Lwt prim_fn. Identity helper kept for call-site clarity. *)
+let to_eval_table (t : t) : t = t

@@ -3,12 +3,15 @@
     Orthogonal to guest capability effects in [effect.ml].
     Nopales users never see [perform], Lwt, or these constructors.
 
-    See docs/runtime-effects-transition.md Appendix D. *)
+    See docs/runtime-effects-transition.md Appendix D.
+
+    H1.7: this module is Lwt-free. The image rim provides
+    [Control_rim.run_lwt] to service [Prim_call] with Lwt prim tables. *)
 
 open Ast
 module Effect = Stdlib.Effect
 
-(** Coarse prim dispatch. Image Lwt (or later Eio) handlers interpret this. *)
+(** Coarse prim dispatch. Handlers (sync tests or image Lwt rim) interpret. *)
 type _ Effect.t +=
   | Prim_call : string * value list -> value Effect.t
 
@@ -18,25 +21,26 @@ let perform_prim (name : string) (args : value list) : value =
 type control_mode = Lwt_mode | Eff_mode
 
 let control_mode_of_string = function
-  | "eff" | "effect" | "effects" -> Eff_mode
-  | "lwt" | "promise" | _ -> Lwt_mode
+  | "lwt" | "promise" -> Lwt_mode
+  | "eff" | "effect" | "effects" | _ -> Eff_mode
 
-(** [PP_EVAL_CONTROL=lwt|eff] — default **eff** after H1.6 soak (2026-07-18).
-    Set PP_EVAL_CONTROL=lwt to force the legacy monadic path. *)
+(** [PP_EVAL_CONTROL=lwt|eff] — default **eff** (H1.6).
+    [lwt] is a legacy escape; after H1.7 the monadic eval path is gone and
+    lwt mode only changes nothing if the image always uses the rim handler. *)
 let control_mode_from_env () : control_mode =
   match Sys.getenv_opt "PP_EVAL_CONTROL" with
   | Some s -> control_mode_of_string (String.lowercase_ascii (String.trim s))
   | None -> Eff_mode
 
-(** Run a direct-style thunk, servicing [Prim_call] via an Lwt prim table.
-    This is the session/HTTP rim bridge while the image still speaks Lwt. *)
-let run_lwt
-    ~(prims : (string, value list -> value Lwt.t) Hashtbl.t)
-    (thunk : unit -> 'a) : 'a Lwt.t =
+(** Sync prim table for pure lisp tests (no services). *)
+type sync_prim_fn = value list -> value
+type sync_prim_table = (string, sync_prim_fn) Hashtbl.t
+
+let run_sync ~(prims : sync_prim_table) (thunk : unit -> 'a) : 'a =
   let open Effect.Deep in
   match_with thunk ()
-    { retc = (fun v -> Lwt.return v)
-    ; exnc = (fun e -> Lwt.fail e)
+    { retc = (fun v -> v)
+    ; exnc = (fun e -> raise e)
     ; effc =
         (fun (type a) (eff : a Effect.t) ->
           match eff with
@@ -45,13 +49,11 @@ let run_lwt
                 (fun (k : (a, _) continuation) ->
                   match Hashtbl.find_opt prims name with
                   | None ->
-                      Effect.Deep.discontinue k
+                      discontinue k
                         (Interp_error
                            (Prim_error (name, "unregistered primitive")))
                   | Some fn ->
-                      Lwt.try_bind
-                        (fun () -> fn args)
-                        (fun v -> Effect.Deep.continue k v)
-                        (fun exn -> Effect.Deep.discontinue k exn))
+                      try continue k (fn args)
+                      with exn -> discontinue k exn)
           | _ -> None)
     }

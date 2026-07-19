@@ -8,19 +8,14 @@
    browser /repl, POST /api/eval, and an optional loopback TCP line
    protocol on the image.
 
-   The interpreter is Lwt-typed, so each turn runs through
-   [Lwt_main.run (Eval.eval_string ...)]. *)
-open Lwt
-open Lwt.Syntax
+   H1.7: interpreter is direct-style via [Control.run_sync]. *)
 open Pricklypear_lisp
 
 let prompt = "lisp> "
 
-(* Run one evaluation, print the result or error, return either cleanly.
-   [loop] loops on the result. *)
 let run_one env prims input : unit =
   (try
-     let v = Lwt_main.run (Eval.eval_string ~prims env input) in
+     let v = Eval.eval_string ~prims env input in
      print_endline (Reader.pp_value v)
    with
    | Reader.Reader_error (msg, ln, col) ->
@@ -38,7 +33,6 @@ let rec loop env prims =
     else
       let () =
         if not (Reader.is_complete line) then
-          (* keep reading until parens balance *)
           let buf = Buffer.create 64 in
           Buffer.add_string buf line;
           let rec more () =
@@ -62,20 +56,16 @@ let rec loop env prims =
 let () =
   let env = Env.create () in
   let prims = Eval.make_prim_table () in
-  (* Register a couple of demo primitives for the dev REPL. Post-refactor,
-     prim_fn = `value list -> value Lwt.t`, so pure prims wrap their
-     results in `Lwt.return`. *)
   Eval.register_prim prims "+"
     (fun args ->
-      (* variadic + over ints *)
       let n =
         List.fold_left (fun acc v ->
           match v with Ast.VInt i -> Int64.add acc i | _ -> acc) 0L args
       in
-      Lwt.return (Ast.VInt n));
+      Ast.VInt n);
   Eval.register_prim prims "println"
     (fun args ->
       List.iter (fun v -> print_endline (Reader.pp_value v)) args;
-      Lwt.return Ast.VNil);
+      Ast.VNil);
   print_endline "Pricklypear Lisp dev REPL. Ctrl-D to quit.";
   loop env prims

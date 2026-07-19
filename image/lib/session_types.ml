@@ -21,7 +21,9 @@ type t = {
      record intact for any closure that still holds it, so concurrent
      rehydrate cannot break a running page. *)
   mutable env : Pricklypear_lisp.Ast.env;
-  mutable prims : Pricklypear_lisp.Eval.prim_table;
+  (** Lwt prim table for [Control_rim.run_lwt] (H1.7). Interpreter is
+      direct-style; I/O prims are serviced only at this rim. *)
+  mutable prims : Primitives.t;
   (* In-memory route table mirroring view_bindings for the branch.
      Populated by load_defs_async at session-make time; (route ...)
      updates also live-persist to view_bindings AND update this table.

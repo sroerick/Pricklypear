@@ -1,7 +1,7 @@
 (test
  (name eval_test)
  (modules eval_test)
- (libraries pricklypear-lisp alcotest yojson lwt lwt.unix))
+ (libraries pricklypear-lisp alcotest yojson))
 
 (test
  (name effect_test)
