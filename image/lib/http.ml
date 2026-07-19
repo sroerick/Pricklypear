@@ -18,15 +18,15 @@ open Http_pages
 open Http_ops
 
 let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
-    (reqd : Httpaf.Reqd.t) : unit =
-  let req = Httpaf.Reqd.request reqd in
-  let target = req.Httpaf.Request.target in
+    (reqd : Httpun.Reqd.t) : unit =
+  let req = Httpun.Reqd.request reqd in
+  let target = req.Httpun.Request.target in
   let path =
     match String.index_opt target '?' with
     | Some i -> String.sub target 0 i
     | None -> target
   in
-  let meth = req.Httpaf.Request.meth in
+  let meth = req.Httpun.Request.meth in
   let headers = header_list req in
   (* Thunk page: Lwt promises are eager — must not start page work
      before auth middleware decides proceed (auth.route-visibility).
@@ -207,7 +207,7 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
               match meth with
               | `POST ->
                   let ct =
-                    match Httpaf.Headers.get req.headers "content-type" with
+                    match Httpun.Headers.get req.headers "content-type" with
                     | Some s -> s
                     | None -> ""
                   in
@@ -615,7 +615,7 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
                  | `POST ->
                      let ct =
                        match
-                         Httpaf.Headers.get req.headers "content-type"
+                         Httpun.Headers.get req.headers "content-type"
                        with
                        | Some s -> s
                        | None -> ""
@@ -679,9 +679,9 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
            ])
 
 let error_handler (_sockaddr : Unix.sockaddr)
-    ?(request : Httpaf.Request.t option)
-    (err : Httpaf.Server_connection.error)
-    (respond : Httpaf.Headers.t -> [> `write ] Httpaf.Body.t) : unit =
+    ?(request : Httpun.Request.t option)
+    (err : Httpun.Server_connection.error)
+    (respond : Httpun.Headers.t -> Httpun.Body.Writer.t) : unit =
   let status, msg =
     match err with
     | `Bad_request -> `Bad_request, "bad request"
@@ -701,21 +701,25 @@ let error_handler (_sockaddr : Unix.sockaddr)
        ])
   in
   let headers =
-    Httpaf.Headers.of_list
+    Httpun.Headers.of_list
       [("content-type", "text/html");
        ("content-length", string_of_int (String.length body_str))]
   in
   let body_w = respond headers in
   try
-    Httpaf.Body.write_string body_w body_str;
+    Httpun.Body.Writer.write_string body_w body_str;
     safe_close_writer body_w
   with exn when is_closed_writer_exn exn -> ()
 
 let serve ~(session : Session.t) ?(port = default_port) () : unit Lwt.t =
   let handler = request_handler session in
+  (* httpun-lwt hands a Gluten-upgradable reqd wrapper; unwrap .reqd. *)
+  let request_handler addr (g : Httpun.Reqd.t Gluten.reqd) : unit =
+    handler addr g.Gluten.reqd
+  in
   let inner_establisher =
-    Httpaf_lwt_unix.Server.create_connection_handler
-      ~request_handler:handler
+    Httpun_lwt_unix.Server.create_connection_handler
+      ~request_handler
       ~error_handler
   in
   (* image.http-robustness invariant 1 (defense-in-depth): any exception

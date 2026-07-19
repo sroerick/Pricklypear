@@ -3,7 +3,7 @@ open Lwt.Syntax
 open Pure_html
 open Http_core
 
-let analytics_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+let analytics_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
   let store = Session.store session in
   let* logins_ok, logins_fail = Ops_incidents.count_logins store in
   let summary = Ops_stats.summary_yojson ~logins_ok ~logins_fail in

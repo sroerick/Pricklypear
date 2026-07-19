@@ -25,14 +25,14 @@ let is_closed_writer_exn (exn : exn) : bool =
 
 (** Write a response body string, swallowing the closed-writer Failure
     that httpaf raises when the peer has gone. Returns () either way. *)
-let safe_respond_with_string (reqd : Httpaf.Reqd.t)
-    (resp : Httpaf.Response.t) (body : string) : unit =
-  try Httpaf.Reqd.respond_with_string reqd resp body
+let safe_respond_with_string (reqd : Httpun.Reqd.t)
+    (resp : Httpun.Response.t) (body : string) : unit =
+  try Httpun.Reqd.respond_with_string reqd resp body
   with exn when is_closed_writer_exn exn -> ()
 
 (** Close a body writer, swallowing the closed-writer Failure. *)
-let safe_close_writer (body : [ `write ] Httpaf.Body.t) : unit =
-  try Httpaf.Body.close_writer body
+let safe_close_writer (body : Httpun.Body.Writer.t) : unit =
+  try Httpun.Body.Writer.close body
   with exn when is_closed_writer_exn exn -> ()
 
 (* ------------------------------------------------------------------
@@ -112,7 +112,7 @@ let emergency_css : string =
    box-sizing:border-box;border:1px solid #000;padding:.4rem}\n\
    "
 
-let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK)
+let html_response (reqd : Httpun.Reqd.t) ?(status = `OK)
     ?session ?(css : string option) (body : Pure_html.node) : unit =
   let css =
     match css with
@@ -156,23 +156,23 @@ let html_response (reqd : Httpaf.Reqd.t) ?(status = `OK)
   ] in
   let s = Pure_html.to_string html_doc in
   let headers =
-    Httpaf.Headers.of_list
+    Httpun.Headers.of_list
       [("content-type", "text/html; charset=utf-8");
        ("content-length", string_of_int (String.length s))]
   in
-  let resp = Httpaf.Response.create ~headers status in
+  let resp = Httpun.Response.create ~headers status in
   safe_respond_with_string reqd resp s
 
-let text_response (reqd : Httpaf.Reqd.t) ?(status = `OK) ~content_type (s : string) : unit =
+let text_response (reqd : Httpun.Reqd.t) ?(status = `OK) ~content_type (s : string) : unit =
   let headers =
-    Httpaf.Headers.of_list
+    Httpun.Headers.of_list
       [("content-type", content_type);
        ("content-length", string_of_int (String.length s))]
   in
-  let resp = Httpaf.Response.create ~headers status in
+  let resp = Httpun.Response.create ~headers status in
   safe_respond_with_string reqd resp s
 
-let json_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (j : Yojson.Safe.t) : unit =
+let json_response (reqd : Httpun.Reqd.t) ?(status = `OK) (j : Yojson.Safe.t) : unit =
   let s = Yojson.Safe.to_string j in
   text_response reqd ~status ~content_type:"application/json" s
 
@@ -217,8 +217,8 @@ let try_ui_fn (session : Session.t) (name : string) : string option Lwt.t =
 let is_partials_path (path : string) : bool =
   String.length path >= 10 && String.sub path 0 10 = "/partials/"
 
-let header_list (req : Httpaf.Request.t) : (string * string) list =
-  Httpaf.Headers.to_list req.headers
+let header_list (req : Httpun.Request.t) : (string * string) list =
+  Httpun.Headers.to_list req.headers
   |> List.map (fun (k, v) -> (String.lowercase_ascii k, v))
 
 let wants_fragment ~(path : string) ~(headers : (string * string) list) : bool =
@@ -446,18 +446,18 @@ let clear_cookie_header () : string =
   Printf.sprintf
     "%s=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0%s" cookie_name domain
 
-let redirect_with_cookie (reqd : Httpaf.Reqd.t) ~(location : string)
+let redirect_with_cookie (reqd : Httpun.Reqd.t) ~(location : string)
     ~(set_cookie : string) : unit =
   let headers =
-    Httpaf.Headers.of_list
+    Httpun.Headers.of_list
       [ ("location", location)
       ; ("set-cookie", set_cookie)
       ; ("content-length", "0") ]
   in
-  let resp = Httpaf.Response.create ~headers `See_other in
+  let resp = Httpun.Response.create ~headers `See_other in
   safe_respond_with_string reqd resp ""
 
-let unauthorized_api (reqd : Httpaf.Reqd.t) : unit =
+let unauthorized_api (reqd : Httpun.Reqd.t) : unit =
   json_response reqd ~status:`Unauthorized
     (`Assoc
        [ ("ok", `Bool false)
@@ -501,7 +501,7 @@ let attach_from_user (session : Session.t) (user : Auth_store.user)
     ~checkout_personal_now
     ()
 
-let fragment_response (reqd : Httpaf.Reqd.t) ?(status = `OK) (html : string)
+let fragment_response (reqd : Httpun.Reqd.t) ?(status = `OK) (html : string)
     : unit =
   text_response reqd ~status ~content_type:"text/html; charset=utf-8" html
 
@@ -540,12 +540,12 @@ let chrome_lwt ~(session : Session.t) ~(title : string)
   let* nav_html = try_ui_fn session "ui/nav" in
   Lwt.return (chrome ?nav_html ~session ~title content)
 
-let read_body (reqd : Httpaf.Reqd.t) : string Lwt.t =
-  let body = Httpaf.Reqd.request_body reqd in
+let read_body (reqd : Httpun.Reqd.t) : string Lwt.t =
+  let body = Httpun.Reqd.request_body reqd in
   let promise, wakeup = Lwt.task () in
   let buf = Buffer.create 1024 in
   let rec sched () =
-    Httpaf.Body.schedule_read body
+    Httpun.Body.Reader.schedule_read body
       ~on_eof:(fun () -> Lwt.wakeup_later wakeup (Buffer.contents buf))
       ~on_read:(fun bs ~off ~len ->
         Buffer.add_string buf (Bigstringaf.substring bs ~off ~len);
@@ -623,17 +623,17 @@ let query_param (target : string) (key : string) : string option =
 
 let max_user_body_bytes = 64 * 1024
 
-let redirect_response (reqd : Httpaf.Reqd.t) (location : string) : unit =
+let redirect_response (reqd : Httpun.Reqd.t) (location : string) : unit =
   let headers =
-    Httpaf.Headers.of_list
+    Httpun.Headers.of_list
       [ ("location", location)
       ; ("content-length", "0")
       ]
   in
-  let resp = Httpaf.Response.create ~headers `See_other in
+  let resp = Httpun.Response.create ~headers `See_other in
   safe_respond_with_string reqd resp ""
 
-let require_login_redirect (reqd : Httpaf.Reqd.t) ~(path : string) : unit =
+let require_login_redirect (reqd : Httpun.Reqd.t) ~(path : string) : unit =
   if String.length path >= 5 && String.sub path 0 5 = "/api/" then
     unauthorized_api reqd
   else if path = "/" then
@@ -642,7 +642,7 @@ let require_login_redirect (reqd : Httpaf.Reqd.t) ~(path : string) : unit =
   else
     redirect_response reqd "/login"
 
-let login_form_page ?(error = "") (reqd : Httpaf.Reqd.t) : unit =
+let login_form_page ?(error = "") (reqd : Httpun.Reqd.t) : unit =
   let err =
     if error = "" then HTML.div [] []
     else HTML.p [HTML.class_ "err"] [txt "%s" error]
@@ -691,7 +691,7 @@ let login_form_page ?(error = "") (reqd : Httpaf.Reqd.t) : unit =
   in
   html_response reqd body
 
-let post_login (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+let post_login (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
   let* body = read_body reqd in
   let username =
     Option.value (form_field body "username") ~default:"" |> String.trim
@@ -726,7 +726,7 @@ let post_login (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
                match base_domain () with
                | Some base ->
                    (* Prefer relative if already on garden host; else absolute. *)
-                   let headers = header_list (Httpaf.Reqd.request reqd) in
+                   let headers = header_list (Httpun.Reqd.request reqd) in
                    (match classify_host headers with
                     | Host_garden g when g = user.Auth_store.username -> "/"
                     | _ ->
@@ -737,8 +737,8 @@ let post_login (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
                ~set_cookie:(set_cookie_header ~token);
              Lwt.return_unit)
 
-let post_logout (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
-  let headers = header_list (Httpaf.Reqd.request reqd) in
+let post_logout (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
+  let headers = header_list (Httpun.Reqd.request reqd) in
   let token = cookie_value headers cookie_name in
   let store = Session.store session in
   let* () =
@@ -751,7 +751,7 @@ let post_logout (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
     ~set_cookie:(clear_cookie_header ());
   Lwt.return_unit
 
-let admin_users_page (session : Session.t) (reqd : Httpaf.Reqd.t)
+let admin_users_page (session : Session.t) (reqd : Httpun.Reqd.t)
   : unit Lwt.t =
   if not (Session.is_admin session) then begin
     html_response reqd ~session ~status:`Forbidden
@@ -833,7 +833,7 @@ let admin_users_page (session : Session.t) (reqd : Httpaf.Reqd.t)
     html_response reqd ~session body;
     Lwt.return_unit
 
-let post_admin_users (session : Session.t) (reqd : Httpaf.Reqd.t)
+let post_admin_users (session : Session.t) (reqd : Httpun.Reqd.t)
   : unit Lwt.t =
   if not (Session.is_admin session) then begin
     html_response reqd ~session ~status:`Forbidden
@@ -918,7 +918,7 @@ let post_admin_users (session : Session.t) (reqd : Httpaf.Reqd.t)
 
 let respond_handler_value
     ~(session : Session.t)
-    ~(reqd : Httpaf.Reqd.t)
+    ~(reqd : Httpun.Reqd.t)
     ~(path : string)
     ~(fragment : bool)
     (value : Pricklypear_lisp.Ast.value) : unit =
@@ -955,7 +955,7 @@ let respond_handler_value
         html_response reqd ~session body
 
 (** /settings/keys — per-user LLM provider key (auth.user-llm-keys). *)
-let settings_keys_page (session : Session.t) (reqd : Httpaf.Reqd.t)
+let settings_keys_page (session : Session.t) (reqd : Httpun.Reqd.t)
   : unit Lwt.t =
   let username = Session.username session in
   if username = "anonymous" then begin
@@ -1027,7 +1027,7 @@ let settings_keys_page (session : Session.t) (reqd : Httpaf.Reqd.t)
         html_response reqd ~session body;
         Lwt.return_unit
 
-let post_settings_keys (session : Session.t) (reqd : Httpaf.Reqd.t)
+let post_settings_keys (session : Session.t) (reqd : Httpun.Reqd.t)
   : unit Lwt.t =
   let username = Session.username session in
   if username = "anonymous" then begin
@@ -1083,7 +1083,7 @@ let post_settings_keys (session : Session.t) (reqd : Httpaf.Reqd.t)
                redirect_response reqd "/settings/keys";
                Lwt.return_unit)
 
-let settings_ssh_page (session : Session.t) (reqd : Httpaf.Reqd.t)
+let settings_ssh_page (session : Session.t) (reqd : Httpun.Reqd.t)
   : unit Lwt.t =
   let username = Session.username session in
   if username = "anonymous" then begin
@@ -1168,7 +1168,7 @@ let settings_ssh_page (session : Session.t) (reqd : Httpaf.Reqd.t)
         html_response reqd ~session body;
         Lwt.return_unit
 
-let post_settings_ssh (session : Session.t) (reqd : Httpaf.Reqd.t)
+let post_settings_ssh (session : Session.t) (reqd : Httpun.Reqd.t)
   : unit Lwt.t =
   let username = Session.username session in
   if username = "anonymous" then begin

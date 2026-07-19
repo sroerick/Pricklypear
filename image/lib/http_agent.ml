@@ -16,17 +16,17 @@ let is_closed_writer_exn = function
    local alias so existing call sites stay unchanged. Body writes route
    through Http_core.safe_close_writer / safe_respond_with_string. *)
 
-let sse_write (body : [ `write ] Httpaf.Body.t) (event_json : string)
+let sse_write (body : Httpun.Body.Writer.t) (event_json : string)
   : [ `Ok | `Peer_gone ] Lwt.t =
   let chunk = "data: " ^ event_json ^ "\n\n" in
   try
-    Httpaf.Body.write_string body chunk;
+    Httpun.Body.Writer.write_string body chunk;
     let promise, wakeup = Lwt.task () in
     let wake () =
       if Lwt.state promise = Lwt.Sleep then Lwt.wakeup_later wakeup ()
     in
     (try
-       Httpaf.Body.flush body (fun () -> wake ())
+       Httpun.Body.Writer.flush body (fun () -> wake ())
      with exn when is_closed_writer_exn exn -> wake ());
     (* Don't hang forever if the peer never acks the flush. *)
     let* () =
@@ -40,7 +40,7 @@ let sse_write (body : [ `write ] Httpaf.Body.t) (event_json : string)
     ignore (Ops_log.info ~component:"sse" "peer gone (closed writer)");
     Lwt.return `Peer_gone
 
-let close_writer_quiet (body : [ `write ] Httpaf.Body.t) : unit =
+let close_writer_quiet (body : Httpun.Body.Writer.t) : unit =
   safe_close_writer body
 
 let default_http_agent_seed =
@@ -97,7 +97,7 @@ let agent_session_label (s : Ai_store.session) : string =
       else t
   | _ -> "chat " ^ short
 
-let api_agent (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+let api_agent (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
   let* body = read_body reqd in
   let seed, prompt, session_id_opt, tools, max_steps, want_stream =
     try
@@ -208,20 +208,20 @@ let api_agent (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
         end else begin
           (* Progress SSE (tool/token events), not provider token stream. *)
           let headers =
-            Httpaf.Headers.of_list
+            Httpun.Headers.of_list
               [ ("content-type", "text/event-stream; charset=utf-8")
               ; ("cache-control", "no-cache")
               ; ("connection", "keep-alive")
               ; ("x-accel-buffering", "no")
               ]
           in
-          let resp = Httpaf.Response.create ~headers `OK in
+          let resp = Httpun.Response.create ~headers `OK in
           (* Peer may already be gone before the stream starts; on
              closed-writer, bail instead of letting it escape to the
              launch catch (image.http-robustness invariant 1). *)
           let body_w =
             try
-              Httpaf.Reqd.respond_with_streaming ~flush_headers_immediately:true
+              Httpun.Reqd.respond_with_streaming ~flush_headers_immediately:true
                 reqd resp
             with exn when is_closed_writer_exn exn ->
               ignore (Ops_log.info ~component:"sse"
@@ -301,7 +301,7 @@ let api_agent (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
           drain ()
         end
 
-let api_agent_task (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+let api_agent_task (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
   (* Alias: create tools session + say (same as /api/agent with tools). *)
   let* body = read_body reqd in
   let prompt =
@@ -334,9 +334,9 @@ let api_agent_task (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
       (`Assoc [ ("ok", `Bool true); ("text", `String text) ]);
     Lwt.return_unit
 
-let agent_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+let agent_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
   (* Durable chats: list + open with ?session=id (agent-portal UI). *)
-  let target = (Httpaf.Reqd.request reqd).Httpaf.Request.target in
+  let target = (Httpun.Reqd.request reqd).Httpun.Request.target in
   let open_sid =
     match query_param target "session" with
     | Some s when String.trim s <> "" -> Some (String.trim s)
@@ -585,7 +585,7 @@ let agent_page (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
   html_response reqd ~session body;
   Lwt.return_unit
 
-let ai_propose (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
+let ai_propose (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
   let* body = read_body reqd in
   let name_opt, spec_opt =
     try
@@ -620,7 +620,7 @@ let ai_propose (session : Session.t) (reqd : Httpaf.Reqd.t) : unit Lwt.t =
       let* v = Session.propose_function session ~name ~spec in
       let rendered = Pricklypear_lisp.Reader.pp_value v in
       let wants_html =
-        match Httpaf.Headers.get (Httpaf.Reqd.request reqd).headers "content-type" with
+        match Httpun.Headers.get (Httpun.Reqd.request reqd).headers "content-type" with
         | Some ct when String.length ct >= 33
             && String.sub ct 0 33 = "application/x-www-form-urlencoded" -> true
         | _ ->

@@ -16,7 +16,10 @@
    pricklypear-common
    pgx_lwt
    pgx
-   httpaf-lwt-unix
+   httpun-lwt-unix
+   httpun
+   httpun-eio
+   gluten-eio
    bigstringaf
    cstruct
    lwt

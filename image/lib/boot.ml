@@ -5,7 +5,7 @@
       2. Connect store, apply migrations, bootstrap admin if needed.
       3. Load function_defs for the branch into the session env.
       4. Start optional TCP REPL (loopback line protocol).
-      5. Start HTTP (httpaf-lwt-unix) including /health.
+      5. Start HTTP (httpun-lwt-unix) including /health.
 
     Env knobs include PP_USERNAME, PP_BRANCH_ID, PP_BRANCH_NAME,
     PP_BOOT_MODE, PP_IMAGE_VERSION, PP_HTTP_PORT, PP_REPL_PORT — set by

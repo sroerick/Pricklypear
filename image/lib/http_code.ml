@@ -270,19 +270,19 @@ let code_css : string =
    .code-side{width:auto;max-width:none;max-height:30vh;border-right:none;\n\
    border-bottom:2px solid #000}}\n"
 
-let serve_bytes (reqd : Httpaf.Reqd.t) ?(status = `OK) ~content_type
+let serve_bytes (reqd : Httpun.Reqd.t) ?(status = `OK) ~content_type
     (body : string) : unit =
   let headers =
-    Httpaf.Headers.of_list
+    Httpun.Headers.of_list
       [ ("content-type", content_type)
       ; ("content-length", string_of_int (String.length body))
       ; ("cache-control", "public, max-age=3600")
       ]
   in
-  let resp = Httpaf.Response.create ~headers status in
+  let resp = Httpun.Response.create ~headers status in
   Http_core.safe_respond_with_string reqd resp body
 
-let serve_file_path (reqd : Httpaf.Reqd.t) ~(path : string) : unit =
+let serve_file_path (reqd : Httpun.Reqd.t) ~(path : string) : unit =
   match read_file_limited path with
   | Error msg ->
       serve_bytes reqd ~status:`Not_found ~content_type:"text/plain; charset=utf-8"
@@ -291,7 +291,7 @@ let serve_file_path (reqd : Httpaf.Reqd.t) ~(path : string) : unit =
       let ct = mime_for_name (Filename.basename path) in
       serve_bytes reqd ~content_type:ct body
 
-let handle_asset (reqd : Httpaf.Reqd.t) ~(rel : string) : unit =
+let handle_asset (reqd : Httpun.Reqd.t) ~(rel : string) : unit =
   let rel = pct_decode rel in
   match resolve_under ~root:(static_root ()) rel with
   | None ->
@@ -304,7 +304,7 @@ let handle_asset (reqd : Httpaf.Reqd.t) ~(rel : string) : unit =
         serve_bytes reqd ~status:`Not_found ~content_type:"text/plain; charset=utf-8"
           "not found"
 
-let handle_public_artifact (reqd : Httpaf.Reqd.t) ~(name : string) : unit =
+let handle_public_artifact (reqd : Httpun.Reqd.t) ~(name : string) : unit =
   let root = public_dir () in
   match resolve_under ~root name with
   | None ->
@@ -325,7 +325,7 @@ let handle_public_artifact (reqd : Httpaf.Reqd.t) ~(name : string) : unit =
            ^ "</code>. Run <code>scripts/public_artifacts.sh</code>.</p>\
               <p><a href=\"/welcome\">welcome</a> · <a href=\"/code\">code</a></p>")
 
-let handle_raw (reqd : Httpaf.Reqd.t) ~(rel : string) : unit =
+let handle_raw (reqd : Httpun.Reqd.t) ~(rel : string) : unit =
   let root = source_root () in
   let rel = pct_decode rel in
   match resolve_under ~root rel with
@@ -365,7 +365,7 @@ let query_param (target : string) (key : string) : string option =
           | _ -> None)
         pairs
 
-let handle_code_page (reqd : Httpaf.Reqd.t) ~(target : string) : unit =
+let handle_code_page (reqd : Httpun.Reqd.t) ~(target : string) : unit =
   let root = source_root () in
   let active =
     match query_param target "f" with
@@ -453,7 +453,7 @@ loadFile(FILE);
   serve_bytes reqd ~content_type:"text/html; charset=utf-8" html
 
 (** Public Lisp pages: body HTML only (no product chrome / private nav). *)
-let serve_public_body (reqd : Httpaf.Reqd.t) ?(title = "Pricklypear")
+let serve_public_body (reqd : Httpun.Reqd.t) ?(title = "Pricklypear")
     (body_html : string) : unit =
   let doc =
     Printf.sprintf
@@ -476,7 +476,7 @@ a{color:#000080}
   in
   serve_bytes reqd ~content_type:"text/html; charset=utf-8" doc
 
-let fallback_welcome (reqd : Httpaf.Reqd.t) : unit =
+let fallback_welcome (reqd : Httpun.Reqd.t) : unit =
   let body =
     {|<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
 <title>Pricklypear</title>
@@ -499,7 +499,7 @@ a{color:#000080;font-weight:700} h1{letter-spacing:-.02em}
   in
   serve_bytes reqd ~content_type:"text/html; charset=utf-8" body
 
-let fallback_book (reqd : Httpaf.Reqd.t) : unit =
+let fallback_book (reqd : Httpun.Reqd.t) : unit =
   let body =
     {|<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
 <title>Pricklypear book</title>
