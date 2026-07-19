@@ -4,6 +4,11 @@
  (libraries pricklypear-image pricklypear-lisp alcotest lwt lwt.unix))
 
 (test
+ (name media_test)
+ (modules media_test)
+ (libraries pricklypear-image alcotest base64))
+
+(test
  (name packages_test)
  (modules packages_test)
  (libraries pricklypear-image alcotest))

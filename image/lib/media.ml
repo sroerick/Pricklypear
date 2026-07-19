@@ -1,0 +1,349 @@
+(** Pricklypear Image — binary media blob store (storage.media).
+
+    Table: media_blobs (migration 007). Shared across branches like
+    data_rows; ownership is [author]. Bytes live in bytea; meta path
+    never returns the payload over Lisp eval. *)
+open Lwt.Syntax
+
+type meta = {
+  id : string;
+  author : string;
+  content_type : string;
+  filename : string option;
+  byte_size : int;
+  sha256 : string;
+  meta_json : string;
+  created_at : string;
+}
+
+type put_result = {
+  id : string;
+  content_type : string;
+  filename : string option;
+  byte_size : int;
+  sha256 : string;
+}
+
+let max_http_bytes = 5 * 1024 * 1024
+let max_eval_put_bytes = 256 * 1024
+
+let allowed_content_types =
+  [ "image/png"
+  ; "image/jpeg"
+  ; "image/gif"
+  ; "image/webp"
+  ; "image/svg+xml"
+  ; "application/pdf"
+  ]
+
+let normalize_content_type (ct : string) : string =
+  let ct = String.trim (String.lowercase_ascii ct) in
+  match String.index_opt ct ';' with
+  | None -> ct
+  | Some i -> String.trim (String.sub ct 0 i)
+
+let content_type_allowed (ct : string) : bool =
+  List.mem (normalize_content_type ct) allowed_content_types
+
+let sanitize_filename (name : string option) : string option =
+  match name with
+  | None -> None
+  | Some raw ->
+      let s = String.trim raw in
+      if s = "" then None
+      else
+        let base =
+          match String.rindex_opt s '/' with
+          | Some i -> String.sub s (i + 1) (String.length s - i - 1)
+          | None ->
+              (match String.rindex_opt s '\\' with
+               | Some i -> String.sub s (i + 1) (String.length s - i - 1)
+               | None -> s)
+        in
+        let base = String.trim base in
+        if base = "" || base = "." || base = ".." then None
+        else
+          let capped =
+            if String.length base > 200 then String.sub base 0 200 else base
+          in
+          Some capped
+
+let sha256_hex (bytes : string) : string = Auth_password.sha256_hex bytes
+
+let b64_decode_opt (s : string) : string option =
+  match Base64.decode ~pad:true s with
+  | Ok raw -> Some raw
+  | Error _ ->
+      (match Base64.decode ~pad:false s with
+       | Ok raw -> Some raw
+       | Error _ -> None)
+
+let url_of_id (id : string) : string = "/media/" ^ id
+
+let meta_to_yojson (m : meta) : Yojson.Safe.t =
+  `Assoc
+    [ ("id", `String m.id)
+    ; ("author", `String m.author)
+    ; ("content_type", `String m.content_type)
+    ; ( "filename"
+      , match m.filename with Some f -> `String f | None -> `Null )
+    ; ("byte_size", `Int m.byte_size)
+    ; ("sha256", `String m.sha256)
+    ; ("url", `String (url_of_id m.id))
+    ; ("created_at", `String m.created_at)
+    ; ( "meta"
+      , try Yojson.Safe.from_string m.meta_json with _ -> `Assoc [] )
+    ]
+
+let meta_to_json_string (m : meta) : string =
+  Yojson.Safe.to_string (meta_to_yojson m)
+
+let put_result_to_yojson (r : put_result) : Yojson.Safe.t =
+  `Assoc
+    [ ("ok", `Bool true)
+    ; ("id", `String r.id)
+    ; ("content_type", `String r.content_type)
+    ; ( "filename"
+      , match r.filename with Some f -> `String f | None -> `Null )
+    ; ("byte_size", `Int r.byte_size)
+    ; ("sha256", `String r.sha256)
+    ; ("url", `String (url_of_id r.id))
+    ]
+
+let cell_string row i =
+  match List.nth_opt row i with
+  | Some c -> Pgx.Value.to_string c
+  | None -> None
+
+let cell_int row i =
+  match cell_string row i with
+  | Some s -> (try Some (int_of_string s) with _ -> None)
+  | None -> None
+
+let row_to_meta (row : Pgx.row) : meta option =
+  match
+    ( cell_string row 0
+    , cell_string row 1
+    , cell_string row 2
+    , cell_string row 3
+    , cell_int row 4
+    , cell_string row 5
+    , cell_string row 6
+    , cell_string row 7 )
+  with
+  | ( Some id
+    , Some author
+    , Some content_type
+    , filename_opt
+    , Some byte_size
+    , Some sha256
+    , Some meta_json
+    , Some created_at ) ->
+      Some
+        { id
+        ; author
+        ; content_type
+        ; filename = filename_opt
+        ; byte_size
+        ; sha256
+        ; meta_json
+        ; created_at
+        }
+  | _ -> None
+
+let put
+    (store : Store.t)
+    ~(author : string)
+    ~(content_type : string)
+    ~(data : string)
+    ?(filename : string option = None)
+    ?(meta_json : string = "{}")
+    ?(max_bytes : int = max_http_bytes)
+    () : (put_result, string) result Lwt.t =
+  let ct = normalize_content_type content_type in
+  if not (content_type_allowed ct) then
+    Lwt.return (Error ("disallowed content_type: " ^ ct))
+  else
+    let byte_size = String.length data in
+    if byte_size <= 0 then Lwt.return (Error "empty body")
+    else if byte_size > max_bytes then
+      Lwt.return
+        (Error
+           (Printf.sprintf "payload too large (%d > %d)" byte_size max_bytes))
+    else
+      match Io_lwt.Db.current_conn store with
+      | None -> Lwt.return (Error "no db connection")
+      | Some conn ->
+          let fname = sanitize_filename filename in
+          let digest = sha256_hex data in
+          let meta =
+            let m = String.trim meta_json in
+            if m = "" then "{}"
+            else
+              try
+                ignore (Yojson.Safe.from_string m);
+                m
+              with _ -> "{}"
+          in
+          let sql =
+            "INSERT INTO media_blobs \
+             (author, content_type, filename, byte_size, sha256, data, meta) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb) \
+             RETURNING id::text"
+          in
+          Lwt.catch
+            (fun () ->
+              let* rows =
+                Io_lwt.Db.execute conn
+                  ~params:
+                    [ Pgx.Value.of_string author
+                    ; Pgx.Value.of_string ct
+                    ; (match fname with
+                       | Some f -> Pgx.Value.of_string f
+                       | None -> Pgx.Value.of_string "")
+                    ; Pgx.Value.of_int byte_size
+                    ; Pgx.Value.of_string digest
+                    ; Pgx.Value.of_binary data
+                    ; Pgx.Value.of_string meta
+                    ]
+                  sql
+              in
+              match rows with
+              | row :: _ ->
+                  (match cell_string row 0 with
+                   | Some id ->
+                       (* Normalize empty filename column to None. *)
+                       let filename =
+                         match fname with
+                         | Some f when f <> "" -> Some f
+                         | _ -> None
+                       in
+                       Lwt.return
+                         (Ok
+                            { id
+                            ; content_type = ct
+                            ; filename
+                            ; byte_size
+                            ; sha256 = digest
+                            })
+                   | None -> Lwt.return (Error "insert returned no id"))
+              | [] -> Lwt.return (Error "insert returned no row"))
+            (fun exn ->
+              Lwt.return
+                (Error ("store failed: " ^ Printexc.to_string exn)))
+
+let get_meta (store : Store.t) ~(id : string) : meta option Lwt.t =
+  match Io_lwt.Db.current_conn store with
+  | None -> Lwt.return None
+  | Some conn ->
+      let sql =
+        "SELECT id::text, author, content_type, \
+         NULLIF(filename, ''), byte_size::text, sha256, meta::text, \
+         created_at::text \
+         FROM media_blobs WHERE id = $1::uuid"
+      in
+      Lwt.catch
+        (fun () ->
+          let* rows =
+            Io_lwt.Db.execute conn
+              ~params:[ Pgx.Value.of_string id ]
+              sql
+          in
+          match rows with
+          | row :: _ -> Lwt.return (row_to_meta row)
+          | [] -> Lwt.return None)
+        (fun _ -> Lwt.return None)
+
+let get_bytes (store : Store.t) ~(id : string)
+  : (meta * string) option Lwt.t =
+  match Io_lwt.Db.current_conn store with
+  | None -> Lwt.return None
+  | Some conn ->
+      let sql =
+        "SELECT id::text, author, content_type, \
+         NULLIF(filename, ''), byte_size::text, sha256, meta::text, \
+         created_at::text, data \
+         FROM media_blobs WHERE id = $1::uuid"
+      in
+      Lwt.catch
+        (fun () ->
+          let* rows =
+            Io_lwt.Db.execute conn
+              ~params:[ Pgx.Value.of_string id ]
+              sql
+          in
+          match rows with
+          | row :: _ ->
+              (match row_to_meta row, List.nth_opt row 8 with
+               | Some m, Some data_cell ->
+                   (match Pgx.Value.to_binary data_cell with
+                    | Some bytes -> Lwt.return (Some (m, bytes))
+                    | None ->
+                        (* Text-mode fallback if driver surfaces bytea as hex/escape. *)
+                        (match Pgx.Value.to_string data_cell with
+                         | Some s -> Lwt.return (Some (m, s))
+                         | None -> Lwt.return None))
+               | _ -> Lwt.return None)
+          | [] -> Lwt.return None)
+        (fun _ -> Lwt.return None)
+
+let list
+    (store : Store.t)
+    ?(author : string option = None)
+    ?(limit : int = 50)
+    () : meta list Lwt.t =
+  match Io_lwt.Db.current_conn store with
+  | None -> Lwt.return []
+  | Some conn ->
+      let limit = max 1 (min 200 limit) in
+      let sql, params =
+        match author with
+        | Some a ->
+            ( "SELECT id::text, author, content_type, \
+               NULLIF(filename, ''), byte_size::text, sha256, meta::text, \
+               created_at::text \
+               FROM media_blobs WHERE author = $1 \
+               ORDER BY created_at DESC LIMIT $2"
+            , [ Pgx.Value.of_string a; Pgx.Value.of_int limit ] )
+        | None ->
+            ( "SELECT id::text, author, content_type, \
+               NULLIF(filename, ''), byte_size::text, sha256, meta::text, \
+               created_at::text \
+               FROM media_blobs \
+               ORDER BY created_at DESC LIMIT $1"
+            , [ Pgx.Value.of_int limit ] )
+      in
+      Lwt.catch
+        (fun () ->
+          let* rows = Io_lwt.Db.execute conn ~params sql in
+          Lwt.return (List.filter_map row_to_meta rows))
+        (fun _ -> Lwt.return [])
+
+let delete
+    (store : Store.t)
+    ~(id : string)
+    ~(actor : string)
+    ~(is_admin : bool)
+  : ([ `Ok of string | `Not_found | `Forbidden ], string) result Lwt.t =
+  let* meta = get_meta store ~id in
+  match meta with
+  | None -> Lwt.return (Ok `Not_found)
+  | Some m ->
+      if (not is_admin) && m.author <> actor then
+        Lwt.return (Ok `Forbidden)
+      else
+        match Io_lwt.Db.current_conn store with
+        | None -> Lwt.return (Error "no db connection")
+        | Some conn ->
+            let sql = "DELETE FROM media_blobs WHERE id = $1::uuid" in
+            Lwt.catch
+              (fun () ->
+                let* _ =
+                  Io_lwt.Db.execute conn
+                    ~params:[ Pgx.Value.of_string id ]
+                    sql
+                in
+                Lwt.return (Ok (`Ok id)))
+              (fun exn ->
+                Lwt.return
+                  (Error ("delete failed: " ^ Printexc.to_string exn)))

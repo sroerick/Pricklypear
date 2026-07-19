@@ -78,6 +78,11 @@ let rules =
      with notes/doc/upsert when agent guidance should change."
   ; "Knowledge wiki (Karpathy loop): (wiki/ingest-from-source …), \
      (wiki/query …), (wiki/lint); wiki links are [[slug]] on outline bodies."
+  ; "Binary media (images/PDF): do NOT push multi-KiB bytes through /api/eval \
+     (64 KiB cap). Use POST /api/media (Basic auth; raw body, JSON data_b64, or \
+     multipart field name=file; up to 5 MiB) or scripts/pp_media.py. Browser UI: \
+     GET /media + POST /media/upload. Serve via GET /media/<id>. Meta via \
+     (media-meta id) / (media-list); tiny fixtures only via (media-put …)."
   ]
 
 let curl_example (base : string) : string =
@@ -200,6 +205,56 @@ let agent_json ?(base_url : string option = None) () : Yojson.Safe.t =
                   [ ("method", `String "GET")
                   ; ("path", `String "/health")
                   ; ("auth", `String "none")
+                  ] )
+            ; ( "media_upload"
+              , `Assoc
+                  [ ("method", `String "POST")
+                  ; ("path", `String "/api/media")
+                  ; ("auth", `String "required")
+                  ; ( "content_type"
+                    , `String
+                        "image/*|application/pdf (raw body); application/json with data_b64; \
+                         or multipart/form-data field name=file" )
+                  ; ( "max_bytes"
+                    , `Int 5242880 )
+                  ; ( "headers"
+                    , `Assoc
+                        [ ( "X-Filename"
+                          , `String "optional original filename (raw body mode)" )
+                        ] )
+                  ; ( "response_ok"
+                    , `Assoc
+                        [ ("ok", `Bool true)
+                        ; ("id", `String "uuid")
+                        ; ("url", `String "/media/<uuid>")
+                        ; ("content_type", `String "image/png")
+                        ; ("byte_size", `Int 1234)
+                        ; ("sha256", `String "hex")
+                        ] )
+                  ; ( "client"
+                    , `String "scripts/pp_media.py put ./shot.png" )
+                  ] )
+            ; ( "media_get"
+              , `Assoc
+                  [ ("method", `String "GET")
+                  ; ("path", `String "/media/<uuid>")
+                  ; ("auth", `String "required")
+                  ; ("returns", `String "raw bytes with stored Content-Type")
+                  ] )
+            ; ( "media_list"
+              , `Assoc
+                  [ ("method", `String "GET")
+                  ; ("path", `String "/api/media")
+                  ; ("auth", `String "required")
+                  ; ("returns", `String "JSON meta only (no bytes)")
+                  ] )
+            ; ( "media_browser"
+              , `Assoc
+                  [ ("method", `String "GET")
+                  ; ("path", `String "/media")
+                  ; ("auth", `String "session or basic")
+                  ; ( "upload"
+                    , `String "POST /media/upload multipart field name=file" )
                   ] )
             ; ( "repl_ui"
               , `Assoc

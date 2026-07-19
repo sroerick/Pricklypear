@@ -229,5 +229,166 @@
     (smoke "with-transaction body runs its prims on one transactional connection; row locks persist across prims"))
 
   )
+  (subsection media
+   (doc "Binary media blobs in Postgres: agent upload + authenticated serve")
+   (status implemented)
+   (implements image/lib/media.ml image/lib/http_media.ml
+               migrations/007_media.sql scripts/pp_media.py)
+   (details
+    (doc (|
+         WHY A SEPARATE TABLE (not data_rows jsonb)
+         -----------------------------------------
+         data_rows packs field documents as jsonb. Binary
+         payloads do not belong there: base64-in-jsonb wastes
+         ~33% space, blows GIN indexes, and fights the 64 KiB
+         /api/eval body cap that protects the Lisp path.
+         Media is first-class storage — same "Postgres is the
+         object store" thesis, different physical shape.
+
+         SCHEMA (migration 007_media.sql)
+         --------------------------------
+         CREATE TABLE media_blobs (
+           id            uuid PRIMARY KEY
+                           DEFAULT gen_random_uuid(),
+           author        text NOT NULL,
+           content_type  text NOT NULL,
+           filename      text,              -- optional original name
+           byte_size     int  NOT NULL,
+           sha256        text NOT NULL,     -- hex digest of bytes
+           data          bytea NOT NULL,
+           meta          jsonb NOT NULL DEFAULT '{}',
+           created_at    timestamptz NOT NULL DEFAULT now(),
+           updated_at    timestamptz NOT NULL DEFAULT now()
+         );
+         CREATE INDEX media_blobs_author_idx
+           ON media_blobs (author);
+         CREATE INDEX media_blobs_created_idx
+           ON media_blobs (created_at DESC);
+         CREATE INDEX media_blobs_sha256_idx
+           ON media_blobs (sha256);
+
+         Shared across branches (same rule as data_rows):
+         fork/merge copies code, not media. Ownership is the
+         author column + session identity, not branch_id.
+
+         AGENT PUSH (primary write path)
+         -------------------------------
+         Agents MUST NOT push multi-KiB binaries through
+         POST /api/eval (max_user_body_bytes = 64 KiB).
+         Dedicated authenticated endpoints:
+
+           POST /api/media
+             Auth: HTTP Basic or session cookie (same as eval).
+             Body modes (Content-Type decides):
+               1. Raw binary — request Content-Type is the
+                  media type (image/png, image/jpeg, …).
+                  Optional header X-Filename: original name.
+               2. JSON — application/json
+                    { "content_type": "image/png"
+                    , "data_b64": "…"
+                    , "filename": "shot.png"   // optional
+                    , "meta": {…} }            // optional
+             Body limit for this route: 5 MiB (not the 64 KiB
+             eval cap). Reject oversize with 413.
+             MIME whitelist (v1):
+               image/png image/jpeg image/gif image/webp
+               image/svg+xml application/pdf
+             On success 201:
+               { "ok": true
+               , "id": "<uuid>"
+               , "content_type": "…"
+               , "byte_size": N
+               , "sha256": "…"
+               , "url": "/media/<uuid>"
+               , "filename": "…" | null }
+             Errors: 400 bad args / bad b64 / disallowed type,
+                     401 unauth, 413 too large, 500 store fail.
+
+           GET /media/<uuid>
+             Auth required (private by default — same gate as
+             /data). Serves raw bytes with Content-Type from
+             the row, Content-Length, Cache-Control: private,
+             optional Content-Disposition inline; filename=
+             when filename is set. 404 if missing.
+
+           DELETE /api/media/<uuid>
+             Auth required. Author-or-admin may delete.
+             200 {ok,id} or 404/403.
+
+           GET /api/media  (optional list)
+             Auth required. JSON array of meta rows for the
+             caller (id, content_type, byte_size, sha256,
+             filename, author, created_at) — NO data bytes.
+             Query: ?limit=N (default 50, max 200).
+
+         Client helper: scripts/pp_media.py
+           python3 scripts/pp_media.py put ./shot.png
+           python3 scripts/pp_media.py get <id> -o out.png
+           python3 scripts/pp_media.py list
+           python3 scripts/pp_media.py delete <id>
+         Same env as pp_eval (PP_URL / PP_USER / PP_PASS).
+
+         LISP PRIMITIVES (meta + small ops; not bulk upload)
+         --------------------------------------------------
+         Registered next to CRUD. Anonymous denied on writes.
+
+           (media-meta id) -> VStr json | VNil
+             id, author, content_type, filename, byte_size,
+             sha256, meta, created_at, url — never the bytes.
+
+           (media-list [limit]) -> VList of meta json strings
+
+           (media-delete id) -> VStr id | VNil
+             Author-or-admin; others get a denial string.
+
+           (media-put content-type data-b64 [filename])
+             -> VStr new-id | error string
+             Convenience for TINY payloads that already fit
+             eval (icons, test fixtures). Same whitelist +
+             256 KiB ceiling on decoded size so eval cannot
+             be abused as a bulk pipe. Real agent pushes use
+             POST /api/media.
+
+           (media-url id) -> VStr "/media/<id>"
+
+         No (media-get-bytes) over eval in v1 — serve via HTTP.
+
+         IMPLEMENTATION NOTES
+         --------------------
+         - image/lib/media.ml: store helpers (put/get/meta/
+           list/delete) over pgx; Pgx.Value.of_binary /
+           to_binary for bytea; Digestif SHA256 hex.
+         - image/lib/http_media.ml: route handlers; own body
+           reader with max_media_body_bytes = 5 MiB.
+         - Wire in http.ml dispatch; keep /api/media behind
+           the normal auth middleware (NOT hard-public).
+         - session.ml register_media_prims alongside CRUD.
+         - agent_discovery.ml: document POST /api/media and
+           pp_media.py in agent.json / agent.txt rules.
+         - scripts/dev.sh migration loop: add 007_media.
+         - migrations.borg applied-by-image list: 007.
+
+         NON-GOALS (v1)
+         --------------
+         - Public unauthenticated media URLs (later: flag or
+           signed token if product needs it)
+         - Per-user byte quotas (multi-user.budgets memory
+           track stays deferred; soft 5 MiB/request is enough)
+         - Image transforms / thumbnails / EXIF strip
+         - S3 or filesystem offload (bytea in PG is the v1
+           habitat; hoist later if measured hot)
+         - Multipart form parsing (raw + JSON b64 cover agents
+           and simple curl; multipart is a later browser nicety)
+         - Dedup-by-sha256 on put (index exists; policy later)
+   |))
+   )
+   (verify
+    (build "dune build @all")
+    (test "image/test/media_test.ml — put/meta/list/delete + mime reject")
+    (smoke "scripts/dev.sh applies 007; POST /api/media with basic auth stores png; GET /media/<id> returns image/png bytes")
+    (smoke "python3 scripts/pp_media.py put <fixture.png> prints id; get round-trips bytes")
+    (smoke "POST /api/eval still capped at 64 KiB; media route accepts up to 5 MiB"))
+
+  )
  )
 )
