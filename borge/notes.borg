@@ -187,36 +187,239 @@
    (doc "Wiki links [[slug]], forward links, backlinks partial")
    (status planned)
    (verify
-    (smoke "body with [[other]] creates note-link on save")
-    (smoke "notes/backlinks shows inbound from other notes")
+    (smoke "body with [[other]] creates note-link row on save")
+    (smoke "(roam/backlinks slug) lists inbound links")
     (smoke "render turns [[other]] into anchor to /notes?slug=other"))
+   (implements libs/notes/lib.pp)
    (details
     (doc (|
-         SYNTAX (v1 only):
-           [[slug]]           — link to note slug
-           [[slug|label]]     — optional display label (if easy)
-         No #heading deep links required v1; optional #node-id later.
+         TYPE note-link (rows; org-roam shape — one row per directed
+         link; branch-shared per the data_rows rule):
+           from_slug  — source note slug
+           from_id    — source node id ("" for whole-note/title)
+           to_slug    — target note slug
+           to_id      — target node id ("" for whole-note)
+           label      — optional display label
+           kind       — "wikilink" (default) | future "refs"
+         Indexable by (from_slug, to_slug). NOT in function_defs.
 
-         PARSE:
-           notes/parse-links body -> list of slugs
-           notes/reindex-links slug outline-tree
+         SYNTAX (v1):
+           [[slug]]         — link by slug
+           [[slug|label]]   — labeled link (if easy)
+         No #node-id deep links v1; optional later.
+
+         PARSE / REINDEX:
+           (roam/parse-links body)          -> list of slugs
+           (roam/reindex slug outline-tree) -> delete rows where
+             from_slug=slug; insert one row per discovered link
+             (de-duped). Called on notes/save and on body-touching
+             structure ops (set-body, the new eval op).
+
+         QUERY:
+           (roam/backlinks slug) -> list of
+             {from_slug, from_title, from_id}
+           Consumed by /partials/notes-backlinks?slug=
 
          RENDER:
-           notes/render-body body -> HTML string
-             html-escape then substitute links
-           notes/render-outline tree -> nested foldable HTML
-             each title/summary + rendered body + children
-
-         BACKLINKS:
-           (notes/backlinks slug) -> list of {from_slug, from_id, title}
-           UI partial /partials/notes-backlinks?slug=
+           (roam/render-body body) -> HTML: html-escape then
+             substitute [[slug]] -> <a href="/notes?slug=slug">...</a>
+           (outline/html) folds the tree as <details>.
 
          MISSING TARGETS:
-           Link to unknown slug still renders as link; open page
-           offers create-stub capture.
+           Unknown slug still links; target page offers create-stub.
 
-         UNLINKED MENTIONS (phase 3):
-           find-text on body for title string — optional.
+         NOT v1 (deferred):
+           - graph view renderer (rows hold the structure; view later)
+           - unlinked-mentions auto-discovery
+             (roam/find-unlinked-mentions)
+           - block-ref transclusion
+    |))
+   )
+  )
+
+  (subsection outline-actions
+   (doc "Per-node outline action menu; the eval op turns nodes into a live Lisp surface")
+   (status planned)
+   (implements libs/notes/lib.pp image/lib/http.ml)
+   (verify
+    (smoke "structure ops include the existing set plus op=eval")
+    (smoke "op=eval target=child splices returned string as a new child node")
+    (smoke "op=eval target=sibling splices; target=body replaces this node body")
+    (smoke "eval expr binds self/doc/slug to current context")
+    (smoke "eval reindexes roam links when a body changes"))
+   (details
+    (doc (|
+         Every outline node carries the existing action menu
+         (promote/demote/move-up/move-down/archive/cycle-todo) plus:
+
+         op = eval  (POST /partials/notes-op with op=eval)
+           params: slug, id, expr, target in {child, sibling, body}
+
+         expr is evaluated in the session env with these bound:
+           self  — this node value (kind title body state kids)
+           doc   — the enclosing note row
+           slug  — this note's slug
+
+         result handling by target:
+           target=body     result (any value) coerced to a string
+                            via as-str and written into this node body.
+           target=child    result forms a new node under this node:
+                            string -> node (title=result, body="")
+                            list (sexp node shape
+                              (kind title body state kids)) -> spliced
+                            as a subtree.
+           target=sibling  same as child, but as a sibling after id.
+
+         Persistence goes through the existing outline/update
+         primitives (no new storage) + roam/reindex when a body
+         changes. Response: the updated outline partial (same as
+         every other structure op).
+
+         WHY:
+           The notes view becomes a live Lisp surface. wiki-llm-loop
+           (below) is the first major consumer: the LLM builds a
+           node subtree and a single eval op splices it in.
+
+         SECURITY:
+           eval runs Lisp in the session env — full prim set incl
+           DB. Treat like REPL access. No sandbox v1; the existing
+           auth gate (route visibility) is the only boundary. v2 may
+           prompt-confirm before destructive prims.
+    |))
+   )
+  )
+
+  (subsection wiki-llm-loop
+   (doc "LLM-maintained wiki over the notes corpus — ingest, query, lint as Lisp ops")
+   (status planned)
+   (implements libs/notes/lib.pp)
+   (verify
+    (smoke "(wiki/ingest-from-source TEXT) creates/updates a source note + entity/concept notes + note-link rows")
+    (smoke "(wiki/query QUESTION) synthesizes with [[slug]] citations; may file-back a kind=query note")
+    (smoke "(wiki/lint) returns orphans/contradictions/missing-pages/suggested-sources")
+    (smoke "each top-level wiki op writes one wiki-event row; (wiki/events) lists them")
+    (smoke "agents drive ingest/query/lint via eval (pp_eval); no /wiki/* routes require registration"))
+   (details
+    (doc (|
+         PATTERN:
+           A persistent, compounding wiki over curated sources: the
+           LLM does not retrieve raw chunks per query; it reads the
+           existing corpus, integrates each new source into the
+           notes (page updates, cross-links, contradiction flags),
+           and keeps synthesis current. The corpus IS the knowledge
+           base.
+
+         SHAPE:
+           Notes ARE wiki pages; kind discriminates role. The agent
+           drives operations through ordinary Lisp functions exposed
+           to the REPL; the user reaches the same operations through
+           the outline-actions eval op on a source node. No /wiki/*
+           routes for v1 — the existing /notes surface plus the live
+           eval surface cover the user-facing flow.
+
+         BUILD ORDER (dependencies):
+           1. image.per-request-context — so notes routes survive the
+              cotenant race: anonymous attach flips the shared
+              Session.t routes/env mid-request and any
+              personal-branch route 404s under traffic until
+              per-request-context lands. Deployable on system/main
+              as a documented workaround in the meantime.
+           2. notes.links-and-roam (note-link rows + roam/parse-links
+              + roam/reindex + roam/backlinks).
+           3. notes.outline-actions (the eval op for LLM splices).
+
+         NOTE KINDS (convention over the existing note row schema;
+         widening the note.kind vocabulary — no new storage):
+           note       existing default (behavior preserved)
+           daily      existing dailies
+           source     source-summary page (per ingested raw source)
+           entity     a named thing (person, place, work)
+           concept    an abstract topic
+           query      a filed-back synthesis with citations
+           synthesis  cross-source integration/comparison
+           schema     the corpus preamble note (see below)
+           log        reserve; not used v1 (audit is wiki-event rows)
+
+         DOC-LEVEL FRONTMATTER (extends the note row, NOT per-node
+         metadata — avoids a node-schema migration):
+           updated_at   timestamp of last ingest/query touch
+           updated_by   "llm" | username | "agent"
+           source_count for source/entity/concept: number of distinct
+                        sources contributing; incremented on ingest
+
+         SCHEMA-NOTE CONVENTION:
+           A note with kind=schema holds prose describing this
+           corpus's conventions, page disciplines, and ingest
+           emphasis; co-evolved by the human and the LLM.
+           (wiki/schema) returns its body string, seeded with a
+           sensible default at first call. ingest/query/lint read it
+           as the LLM preamble. There is no separate schema-agent
+           path — it is just another note the loop reads.
+
+         OPS (each is one top-level Lisp call; each writes one
+         wiki-event row on success):
+           (wiki/ingest-from-source source-text [slug-hint])
+             1. create/update a source note (kind=source) carrying
+                the source text + extracted summary outline.
+             2. read (wiki/schema) + (roam/backlinks)/index over the
+                current corpus; build the prompt.
+             3. (ai/ask prompt) -> a JSON plan:
+                  { summary_node, entities[], concepts[],
+                    links[{from,to,kind}], followups[] }
+             4. notes/upsert each entity/concept page (kind=entity |
+                concept), composed with the source's contribution;
+                bump source_count; stamp updated_at / updated_by.
+             5. (roam/reindex) the affected slugs.
+             6. write one wiki-event row (kind=ingest, op-slug, ts,
+                summary).
+             Return the new source-summary slug + the list of pages
+             touched.
+
+           (wiki/query question)
+             read (wiki/schema) + the most relevant pages (roam /
+             find-text over the corpus index); synthesize with
+             [[slug]] citations. Optionally file-back as a kind=query
+             note that child-references its cited pages. One
+             wiki-event row (kind=query).
+
+           (wiki/lint)
+             one (ai/ask) pass over schema + index + note-link edges;
+             report orphans, contradictions, stale claims, missing
+             pages (concepts mentioned but lacking their own page),
+             suggested new sources. Optionally draft stubs for
+             missing entities (opt-in create-stubs? arg). One
+             wiki-event row (kind=lint).
+
+         AUDIT:
+           TYPE wiki-event (rows; fields: kind op slug ts summary):
+             append-only, branch-shared, one row per top-level wiki
+             op (ingest/query/lint). NOT autonomic — only these
+             three top-level ops write events. Helper calls
+             (roam/backlinks, outline/eval, etc.) do not write
+             events. Retention is opt-in:
+               (wiki/events [since])    -> list recent events
+               (wiki/prune-events days) -> drop events older than N
+                                           days (explicit, manual)
+             Corpus content evolution is recorded in the notes
+             themselves (updated_at/by frontmatter); the wiki-event
+             stream is operational audit, not content of record.
+
+         LIVE TELEMETRY (separate stream, unchanged infra):
+           ingest/query/lint emit Info/Error into the existing
+           Ops_log ring (component "wiki") so a long op is visible
+           via (log-tail). Bounded 5000 + rotates; not a permanent
+           audit. Two streams, two purposes: Ops_log = live
+           observability of this request; wiki-event rows = audit
+           trail of what the wiki has done to itself.
+
+         NOT v1 (deferred):
+           - URL fetch / clipper (user pastes text first)
+           - markdown (outlines ARE the substrate; no marked.js)
+           - graph view renderer (note-link rows hold the structure)
+           - unlinked-mentions auto-discovery
+           - block-ref transclusion
+           - images / attachments
+           - batch / unsupervised ingest sweep
     |))
    )
   )

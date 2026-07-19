@@ -360,16 +360,28 @@ let is_system_hard_private (path : string) : bool =
 (* Back-compat name used only for hard public. *)
 let is_public_path (path : string) : bool = is_system_hard_public path
 
-(** Classify path for the request gate.
-    Returns [`Hard_public | `Hard_private | `User of string * string
-    | `Unknown] where User is (handler, visibility). *)
-let classify_path (session : Session.t) (path : string) =
+type path_class =
+  [ `Hard_public | `Hard_private | `User of string * string | `Unknown ]
+
+(** Classify path against a routes table. The table is the per-request
+    snapshot when called post-gate (image.per-request-context), or the
+    live Session.routes when called under the request_mutex (pre-gate —
+    attach has not run for THIS request, but the mutex excludes concurrent
+    rehydrate, so live is correct there). Returns `User (handler, visibility). *)
+let classify_path_with_routes
+    (routes : (string, string * string) Hashtbl.t) (path : string) : path_class =
   if is_system_hard_public path then `Hard_public
   else if is_system_hard_private path then `Hard_private
   else
-    match Session.lookup_route_meta session path with
+    match Hashtbl.find_opt routes path with
     | Some (handler, vis) -> `User (handler, vis)
     | None -> `Unknown
+
+(** Classify path for the request gate.
+    Returns [`Hard_public | `Hard_private | `User of string * string
+    | `Unknown] where User is (handler, visibility). *)
+let classify_path (session : Session.t) (path : string) : path_class =
+  classify_path_with_routes (Session.routes session) path
 
 let parse_cookies (headers : (string * string) list) : (string * string) list =
   match List.assoc_opt "cookie" headers with
@@ -505,7 +517,8 @@ let fragment_response (reqd : Httpun.Reqd.t) ?(status = `OK) (html : string)
     : unit =
   text_response reqd ~status ~content_type:"text/html; charset=utf-8" html
 
-let chrome ?nav_html ~(session : Session.t) ~(title : string)
+let chrome ?nav_html ~(session : Session.t)
+    ?(manifest = Session.manifest session) ~(title : string)
     (content : Pure_html.node list) : Pure_html.node =
   let nav_html =
     match nav_html with
@@ -518,13 +531,17 @@ let chrome ?nav_html ~(session : Session.t) ~(title : string)
         HTML.nav [] [txt ~raw:true "%s" html]
     | _ -> HTML.nav [HTML.class_ "emergency-nav"] (emergency_nav_nodes ())
   in
+  (* Metadata reads the SNAPSHOT manifest when callers pass one
+     (image.per-request-context), so a concurrent attach_anonymous
+     cannot paint "user=anonymous" on an authed page's header. Callers
+     outside the HTTP gate fall back to the live session manifest. *)
   HTML.div [] [
     HTML.header [] [
       HTML.span [HTML.class_ "brand"] [txt "Pricklypear"];
       HTML.span [HTML.class_ "meta"] [
         txt "user=%s  branch=%s  up=%ds"
-          (Session.username session)
-          (Session.branch_name session)
+          manifest.username
+          manifest.branch_name
           (Session.uptime_seconds session);
       ];
       nav;
@@ -922,6 +939,14 @@ let respond_handler_value
     ~(path : string)
     ~(fragment : bool)
     (value : Pricklypear_lisp.Ast.value) : unit =
+  (* Pull the per-request snapshot manifest (if bound, sync via Lwt.get)
+     so chrome renders this request's identity, not whatever a concurrent
+     attach flipped. *)
+  let manifest =
+    match Lwt.get Request_context.current with
+    | Some ctx -> Request_context.manifest ctx
+    | None -> Session.manifest session
+  in
   match Primitives.is_redirect value with
   | Some loc -> redirect_response reqd loc
   | None ->
@@ -939,16 +964,16 @@ let respond_handler_value
         let body =
           match Primitives.is_raw_html value with
           | Some raw_html ->
-              chrome ~session ~title:path [ txt ~raw:true "%s" raw_html ]
+              chrome ~manifest ~session ~title:path [ txt ~raw:true "%s" raw_html ]
           | None ->
               (match value with
                | Pricklypear_lisp.Ast.VStr s ->
-                   chrome ~session ~title:path [ HTML.p [] [txt "%s" s] ]
+                   chrome ~manifest ~session ~title:path [ HTML.p [] [txt "%s" s] ]
                | _ ->
                    let rendered =
                      Pricklypear_lisp.Reader.pp_value value
                    in
-                   chrome ~session ~title:path [
+                   chrome ~manifest ~session ~title:path [
                      HTML.pre [] [txt "%s" rendered];
                    ])
         in

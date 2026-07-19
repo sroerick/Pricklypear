@@ -1584,6 +1584,15 @@ let manifest (t : t) : Pricklypear_common.Manifest.t = t.manifest
 let is_admin (t : t) : bool = t.is_admin
 let store (t : t) : Store.t = t.store
 let branch_id (t : t) : string = t.manifest.branch_id
+
+(** Snapshot accessors for per-request context build (image.per-request-context).
+    env is swapped by reference on rehydrate (invariant 4a — old record stays
+    alive for captured closures), so holding this reference is a snapshot.
+    routes is cleared in place on rehydrate, so the caller must copy it via
+    Request_context.copy_routes when building the snapshot. *)
+let env (t : t) : Pricklypear_lisp.Ast.env = t.env
+
+let routes (t : t) : (string, string * string) Hashtbl.t = t.routes
 let auth_token (t : t) : string option = t.auth_token
 
 (** Attach authenticated identity for this request (auth.web-login).
@@ -1768,7 +1777,17 @@ let set_route (t : t) ~(route : string) ~(handler : string)
    the duration of the call (cleared in finalize). *)
 let call_handler (t : t) ?request (handler_name : string)
   : Pricklypear_lisp.Ast.value option Lwt.t =
-  match Pricklypear_lisp.Env.lookup t.env handler_name with
+  (* Resolve the handler env against the per-request snapshot when bound
+     (image.per-request-context): a concurrent attach_anonymous +
+     checkout_to mid-request would otherwise rehydrate t.env to system/main
+     and this lookup would miss personal-branch handlers. Fall back to t.env
+     when no context (REPL, /api/eval outside HTTP gate, pre-gate paths). *)
+  let env =
+    match Lwt.get Request_context.current with
+    | Some ctx -> Request_context.env ctx
+    | None -> t.env
+  in
+  match Pricklypear_lisp.Env.lookup env handler_name with
   | None -> Lwt.return_none
   | Some _fn ->
       (* Evaluate (handler-name) — zero args. Re-uses eval's apply path

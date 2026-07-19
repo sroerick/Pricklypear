@@ -53,7 +53,19 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
                  their own env record, unaffected by a concurrent rehydrate) +
                  pgx's per-connection Sequencer (DB prims serialize on the single
                  PG conn without this mutex). See borge/image.borg http-robustness. *)
-              let* proceed =
+              (* Per-request context snapshot (image.per-request-context):
+                 built INSIDE the mutex so it is consistent with this request's
+                 attach, then bound via Lwt.with_value so page work reads the
+                 snapshot (env/routes/manifest) instead of live Session.t,
+                 immune to a concurrent attach_anonymous + checkout_to
+                 rehydrating the shared session mid-page. *)
+              let snapshot_ctx () =
+                Request_context.make
+                  ~manifest:(Session.manifest session)
+                  ~env:(Session.env session)
+                  ~routes:(Request_context.copy_routes (Session.routes session))
+              in
+              let* proceed_ctx =
                 Lwt_mutex.with_lock request_mutex (fun () ->
                   if auth_disabled () then begin
                     (* Dev escape: still try attach so whoami is real if cookie. *)
@@ -66,7 +78,7 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
                             ~checkout_personal_now:false ()
                       | None -> Session.attach_anonymous session
                     in
-                    Lwt.return true
+                    Lwt.return (Some (snapshot_ctx ()))
                   end else begin
                     (* Attach identity BEFORE classify: route table is
                        branch-scoped (inheritance CTE). Anonymous uses
@@ -88,8 +100,8 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
                       | `User (_, vis) -> vis <> "public"
                     in
                     match user_opt, needs_auth with
-                    | Some _, _ -> Lwt.return true
-                    | None, false -> Lwt.return true
+                    | Some _, _ -> Lwt.return (Some (snapshot_ctx ()))
+                    | None, false -> Lwt.return (Some (snapshot_ctx ()))
                     | None, true ->
                         let apiish =
                           String.length path >= 4
@@ -97,23 +109,24 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
                         in
                         if apiish then unauthorized_api reqd
                         else require_login_redirect reqd ~path;
-                        Lwt.return false
+                        Lwt.return None
                   end)
               in
-              if not proceed then Lwt.return_unit
-              else begin
-                (* Phase-1 per-request context (invariant 4c / BORGE-1784434193):
-                   snapshot attached manifest and bind it for the rest of this
-                   request so prims (whoami/current-branch/author checks) do not
-                   observe a concurrent attach flipping Session.t mid-page. *)
-                let req_ctx =
-                  Request_context.make ~manifest:(Session.manifest session)
-                in
-                Lwt.with_value Request_context.current (Some req_ctx) @@ fun () ->
-                (* Subdomain garden mismatch: private paths require whoami = garden owner. *)
-                let host_mode = classify_host headers in
-                let uname_now = Session.username session in
-                let classif_now = classify_path session path in
+              (match proceed_ctx with
+               | None -> Lwt.return_unit
+               | Some req_ctx ->
+              Lwt.with_value Request_context.current (Some req_ctx) @@ fun () ->
+              (* Per-request context bound; page work below reads it for
+                 env/routes/manifest (call_handler, lookup_route, chrome). *)
+              (* Subdomain garden mismatch: private paths require
+                 whoami = garden owner. Reads the SNAPSHOT manifest so a
+                 concurrent attach cannot flip identity under this check. *)
+              let host_mode = classify_host headers in
+              let manifest_now = Request_context.manifest req_ctx in
+              let uname_now = manifest_now.username in
+              let classif_now =
+                classify_path_with_routes (Request_context.routes req_ctx) path
+              in
                 let path_private =
                   match classif_now with
                   | `Hard_public -> false
@@ -154,7 +167,7 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
                    lock-free (invariant 4b). *)
                 page_fn ()
                 end
-              end)
+              ))
           (fun exn ->
             (* image.http-robustness invariant 2: if the handler failed
                because the peer went away (closed writer), do NOT try to
@@ -184,18 +197,28 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
   in
   (** Lisp user-route if bound; else kernel [fallback]. *)
   let launch_user_route_or (fallback : unit -> unit) : unit =
-    match Session.lookup_route session path with
-    | None ->
-        launch (fun () ->
+    (* Resolve the route INSIDE page work, after the gate has attached
+       identity and bound the per-request context (image.per-request-context).
+       Pre-gate the routes table could be whatever a previous request left
+       behind (e.g. anonymous attach -> system/main), causing a personal-branch
+       route 404 before THIS request's attach even runs. *)
+    launch (fun () ->
+      let route_opt =
+        match Lwt.get Request_context.current with
+        | Some ctx -> Request_context.lookup_route ctx path
+        | None -> Session.lookup_route session path
+      in
+      match route_opt with
+      | None ->
           fallback ();
-          Lwt.return_unit)
-    | Some handler_name ->
-        let page () : unit Lwt.t =
-          let* body_str =
-            match meth with
-            | `POST -> read_body reqd
-            | _ -> Lwt.return ""
-          in
+          Lwt.return_unit
+      | Some handler_name ->
+          let page () : unit Lwt.t =
+            let* body_str =
+              match meth with
+              | `POST -> read_body reqd
+              | _ -> Lwt.return ""
+            in
           if String.length body_str > max_user_body_bytes then begin
             text_response reqd ~status:`Payload_too_large
               ~content_type:"text/plain"
@@ -262,7 +285,7 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
                  Lwt.return_unit)
           end
         in
-        launch (fun () -> page ())
+        page ())
   in
   match meth, path with
   | `GET, "/login" ->
@@ -593,8 +616,16 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
       launch (fun () -> save_edit session name reqd)
   | ((`GET | `POST) as umeth), _ ->
       (* User routes: GET + POST (it33). Same path → same handler;
-         request-* prims expose method/params for branching. *)
-      (match Session.lookup_route session path with
+         request-* prims expose method/params for branching. Route is
+         resolved INSIDE launch (after the gate binds the per-request
+         context) so a concurrent attach cannot flip the table under us. *)
+      launch (fun () ->
+      let route_opt =
+        match Lwt.get Request_context.current with
+        | Some ctx -> Request_context.lookup_route ctx path
+        | None -> Session.lookup_route session path
+      in
+      match route_opt with
        | Some handler_name ->
            let page () : unit Lwt.t =
              let* body_str =
@@ -657,7 +688,7 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
                     Lwt.return_unit)
              end
            in
-           launch (fun () -> page ())
+           page ()
        | None ->
            let headers = header_list req in
            if wants_fragment ~path ~headers then
@@ -667,7 +698,8 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
              html_response reqd ~session ~status:`Not_found
                (chrome ~session ~title:"Not found" [
                   HTML.p [] [txt "no route for %s" path];
-                ]))
+                ]);
+           Lwt.return_unit)
   | _, _ ->
       let headers = header_list req in
       if wants_fragment ~path ~headers then
