@@ -21,11 +21,12 @@ let control_mode_of_string = function
   | "eff" | "effect" | "effects" -> Eff_mode
   | "lwt" | "promise" | _ -> Lwt_mode
 
-(** [PP_EVAL_CONTROL=lwt|eff] — default lwt (no behavior change). *)
+(** [PP_EVAL_CONTROL=lwt|eff] — default **eff** after H1.6 soak (2026-07-18).
+    Set PP_EVAL_CONTROL=lwt to force the legacy monadic path. *)
 let control_mode_from_env () : control_mode =
   match Sys.getenv_opt "PP_EVAL_CONTROL" with
   | Some s -> control_mode_of_string (String.lowercase_ascii (String.trim s))
-  | None -> Lwt_mode
+  | None -> Eff_mode
 
 (** Run a direct-style thunk, servicing [Prim_call] via an Lwt prim table.
     This is the session/HTTP rim bridge while the image still speaks Lwt. *)
