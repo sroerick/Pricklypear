@@ -311,7 +311,7 @@ Not a schedule — a preferred order for the *next* dedicated slices:
 
 ## Success criteria (whole mandate)
 
-- [ ] Nopales has a trustworthy capability story (H0).
+- [x] Nopales has a trustworthy capability story (H0).
 - [x] Printed `eval.ml` has no promise plumbing (H1).
 - [ ] Image domain code reads direct-style (H2).
 - [ ] Backend is one module we could replace (H2/H3).
@@ -395,6 +395,43 @@ Same `budget` record + `tick` at every eval step / prim. Exceed →
 
 ---
 
+
+## Appendix E — H2.1 Lwt inventory (2026-07-18)
+
+Counts of `Lwt` mentions per `image/lib` module (approx):
+
+| Module | ~Lwt refs | Role / H2 fate |
+|--------|----------:|----------------|
+| session.ml | 213 | domain — collapse under Control_rim (H2.5) |
+| auth_store.ml | 146 | DB — behind Io (H2.4) |
+| store.ml | 132 | DB queries — behind Io (H2.3) |
+| agent_tools.ml | 105 | domain + LLM |
+| http_core.ml | 71 | HTTP rim — OK until H3 |
+| crud.ml | 71 | DB — behind Io (H2.3) |
+| http.ml | 59 | HTTP rim |
+| ai_store.ml | 48 | DB |
+| llm_client.ml | 42 | net I/O |
+| http_pages.ml | 41 | HTTP |
+| repl_endpoint.ml | 39 | rim |
+| http_agent.ml | 38 | HTTP |
+| http_data.ml | 35 | HTTP |
+| store_db.ml | 31 | **Io_lwt substrate** (allowed) |
+| ops_incidents.ml | 26 | domain |
+| http_branches.ml | 17 | HTTP |
+| loader.ml | 13 | domain |
+| control_rim.ml | 7 | **rim** (allowed) |
+| primitives.ml | 6 | sync wrap |
+| lineedit.ml | 4 | rim |
+| http_ops.ml | 3 | HTTP |
+| boot.ml | 3 | rim |
+| request_context.ml | 2 | Lwt.key (rim binding) |
+| session_types.ml | 1 | types |
+
+**Allowed rim after H2 exit:** `io_lwt.ml`, `store_db.ml`, `control_rim.ml`, `boot.ml`, `http*.ml`, `repl_endpoint.ml`, `lineedit.ml`, `llm_client.ml` (net), `request_context.ml` (key).
+
+**Must decolor:** `session.ml`, `crud.ml`, `store.ml`, `auth_store.ml`, `ai_store.ml`, `agent_tools.ml`, `loader.ml`, `ops_incidents.ml`.
+
+
 ## Appendix A — Glossary
 
 | Term | Meaning |
@@ -422,6 +459,7 @@ Same `budget` record + `tick` at every eval step / prim. Exceed →
 | 2026-07-18 | **H0.2/H0.3** `known_fn_of_bindings` (memo + cycle break); badges + AI install/rewrite/seed use store bindings; public route gate on handler lattice (allow pure|read|write|html|txn). |
 | 2026-07-18 | **H0.4/H0.5** soft `txn_lint` on binding inspect + concepts section (capabilities ≠ async ≠ host effects). |
 | 2026-07-18 | **H1.0/H1.1** Appendix D control-effects design; `Control.Prim_call` + `eval_eff` dual path; `PP_EVAL_CONTROL` (default lwt). |
+| 2026-07-18 | **H2.1/H2.2** Lwt inventory (Appendix E); `Io`/`Io_lwt.Db` port introduced (execute/tx/connect). |
 | 2026-07-18 | **H1.7** lisp Lwt-free: eval=direct-style + Control.Prim_call; Control_rim.run_lwt in image; dune lisp deps yojson only. H1 EXITED. |
 | 2026-07-18 | **H1.6** default `PP_EVAL_CONTROL` / `control_mode_from_env` → **eff**; local CRUD/tx/qq soak green; rollback via `PP_EVAL_CONTROL=lwt`. |
 | 2026-07-18 | **H1.5** eval_eff special-form parity (cond/qq/defmacro/macroexpand); local image smoke under `PP_EVAL_CONTROL=eff` (whoami/+ /cond/branch); `dev.sh` forwards flag. |
