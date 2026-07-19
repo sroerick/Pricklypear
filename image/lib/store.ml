@@ -1,8 +1,7 @@
 (** Pricklypear Image — Storage layer (branch-aware queries + fork/merge).
     Connection/tx substrate is [Store_db], included below.
-    H2.3: SQL execute goes through [Io_lwt.Db] (not raw Pgx). *)
+    H3: SQL via [exec] on dual conn (lwt|eio from PP_IO). *)
 include Store_db
-(* H2.6: domain SQL must use Io_lwt.Db.execute — not raw pgx from here. *)
 open Lwt.Syntax
 
 (* Branch-aware lookup. Walks the branch parent chain via a recursive
@@ -33,7 +32,7 @@ let lookup_function (t : t) (name : string)
             "WHERE fd.name = $2 " ^
             "ORDER BY chain.depth ASC LIMIT 1" in
           let* rows =
-            Io_lwt.Db.execute conn
+            exec conn
               ~params:[ Pgx.Value.of_string t.branch_id;
                         Pgx.Value.of_string name ]
               sql in
@@ -92,7 +91,7 @@ let list_function_names_meta (t : t)
             "JOIN chain ON fd.branch_id = chain.id " ^
             "ORDER BY chain.depth ASC, fd.name ASC" in
           let* rows =
-            Io_lwt.Db.execute conn
+            exec conn
               ~params:[ Pgx.Value.of_string t.branch_id ]
               sql in
           let seen = Hashtbl.create 64 in
@@ -156,7 +155,7 @@ let list_function_names_for_load (t : t)
             "JOIN chain ON fd.branch_id = chain.id " ^
             "ORDER BY chain.depth DESC, fd.name ASC" in
           let* rows =
-            Io_lwt.Db.execute conn
+            exec conn
               ~params:[ Pgx.Value.of_string t.branch_id ]
               sql in
           let acc =
@@ -195,7 +194,7 @@ let count_functions_on_branch (t : t) ~(branch_id : string) : int Lwt.t =
           let sql =
             "SELECT COUNT(*)::text FROM function_defs WHERE branch_id = $1" in
           let* rows =
-            Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string branch_id ] sql
+            exec conn ~params:[ Pgx.Value.of_string branch_id ] sql
           in
           (match rows with
            | [ [ c ] ] ->
@@ -217,7 +216,7 @@ let count_routes_on_branch (t : t) ~(branch_id : string) : int Lwt.t =
           let sql =
             "SELECT COUNT(*)::text FROM view_bindings WHERE branch_id = $1" in
           let* rows =
-            Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string branch_id ] sql
+            exec conn ~params:[ Pgx.Value.of_string branch_id ] sql
           in
           (match rows with
            | [ [ c ] ] ->
@@ -242,7 +241,7 @@ let list_own_functions (t : t) ~(branch_id : string)
             "SELECT name, author, updated_at::text FROM function_defs " ^
             "WHERE branch_id = $1 ORDER BY name" in
           let* rows =
-            Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string branch_id ] sql
+            exec conn ~params:[ Pgx.Value.of_string branch_id ] sql
           in
           Lwt.return
             (List.filter_map
@@ -273,7 +272,7 @@ let list_own_routes (t : t) ~(branch_id : string)
             "SELECT route, handler FROM view_bindings WHERE branch_id = $1 " ^
             "ORDER BY route" in
           let* rows =
-            Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string branch_id ] sql
+            exec conn ~params:[ Pgx.Value.of_string branch_id ] sql
           in
           Lwt.return
             (List.filter_map
@@ -309,7 +308,7 @@ let list_overrides (t : t) ~(branch_id : string) ~(parent_id : string option)
             "  ON p.branch_id = $2 AND p.name = c.name " ^
             "WHERE c.branch_id = $1 ORDER BY c.name" in
           let* rows =
-            Io_lwt.Db.execute conn
+            exec conn
               ~params:[ Pgx.Value.of_string branch_id;
                         Pgx.Value.of_string pid ]
               sql
@@ -346,7 +345,7 @@ let lookup_function_on_branch (t : t) ~(branch_id : string) ~(name : string)
             "SELECT body::text, author, updated_at::text FROM function_defs " ^
             "WHERE branch_id = $1 AND name = $2" in
           let* rows =
-            Io_lwt.Db.execute conn
+            exec conn
               ~params:[ Pgx.Value.of_string branch_id;
                         Pgx.Value.of_string name ]
               sql
@@ -381,7 +380,7 @@ let delete_function_on_branch (t : t) ~(branch_id : string) ~(name : string)
             "DELETE FROM function_defs WHERE branch_id = $1 AND name = $2 " ^
             "RETURNING name" in
           let* rows =
-            Io_lwt.Db.execute conn
+            exec conn
               ~params:[ Pgx.Value.of_string branch_id;
                         Pgx.Value.of_string name ]
               sql
@@ -420,7 +419,7 @@ let promote_functions (t : t) ~(source_id : string) ~(target_id : string)
                     "SET body = EXCLUDED.body, author = EXCLUDED.author, " ^
                     "    updated_at = now() RETURNING name" in
                   let* rows =
-                    Io_lwt.Db.execute conn
+                    exec conn
                       ~params:[ Pgx.Value.of_string target_id;
                                 Pgx.Value.of_string name;
                                 Pgx.Value.of_string body_json;
@@ -455,7 +454,7 @@ let persist_function (t : t) (name : string)
             "SET body = EXCLUDED.body, author = EXCLUDED.author, " ^
             "    updated_at = now()" in
           let* _ =
-            Io_lwt.Db.execute conn
+            exec conn
               ~params:[ Pgx.Value.of_string t.branch_id;
                         Pgx.Value.of_string name;
                         Pgx.Value.of_string body_json;
@@ -478,7 +477,7 @@ let list_branches (t : t) : Pricklypear_common.Branch.t list Lwt.t =
             "       owner, name, created_at::text, " ^
             "       COALESCE(last_synced::text, '') " ^
             "FROM branches ORDER BY owner, name" in
-          let* rows = Io_lwt.Db.execute conn sql in
+          let* rows = exec conn sql in
           Lwt.return
             (List.filter_map
                (fun row ->
@@ -528,7 +527,7 @@ let lookup_branch_id_by_name (t : t) ~(owner : string) ~(name : string)
         (fun () ->
           let sql = "SELECT id::text FROM branches WHERE owner = $1 AND name = $2" in
           let* rows =
-            Io_lwt.Db.execute conn
+            exec conn
               ~params:[ Pgx.Value.of_string owner;
                         Pgx.Value.of_string name ]
               sql
@@ -588,7 +587,7 @@ let ensure_branch (t : t) ~(parent_id : string) ~(owner : string)
                  "ON CONFLICT (owner, name) DO UPDATE SET name = EXCLUDED.name " ^
                  "RETURNING id::text" in
                let* rows =
-                 Io_lwt.Db.execute conn
+                 exec conn
                    ~params:[ Pgx.Value.of_string parent_id;
                              Pgx.Value.of_string owner;
                              Pgx.Value.of_string name ]
@@ -670,7 +669,7 @@ let register_route (t : t) ~(route : string) ~(handler : string)
                   ; Pgx.Value.of_string route
                   ; Pgx.Value.of_string handler ] )
           in
-          let* _ = Io_lwt.Db.execute conn ~params sql in
+          let* _ = exec conn ~params sql in
           Lwt.return_unit)
         (fun exn ->
           Printf.eprintf "[store] register_route error: %s\n"
@@ -699,7 +698,7 @@ let list_routes (t : t) : (string * string * string) list Lwt.t =
             "JOIN chain ON vb.branch_id = chain.id " ^
             "ORDER BY chain.depth ASC" in
           let* rows =
-            Io_lwt.Db.execute conn
+            exec conn
               ~params:[ Pgx.Value.of_string t.branch_id ]
               sql
           in
@@ -767,7 +766,7 @@ let persist_type (t : t) ~(name : string) ~(fields : string list)
             "SET fields = EXCLUDED.fields, author = EXCLUDED.author, " ^
             "    updated_at = now()" in
           let* _ =
-            Io_lwt.Db.execute conn
+            exec conn
               ~params:[ Pgx.Value.of_string t.branch_id;
                         Pgx.Value.of_string name;
                         Pgx.Value.of_string fields_json;
@@ -799,7 +798,7 @@ let list_types (t : t) : (string * string list) list Lwt.t =
             "JOIN chain ON td.branch_id = chain.id " ^
             "ORDER BY chain.depth ASC" in
           let* rows =
-            Io_lwt.Db.execute conn
+            exec conn
               ~params:[ Pgx.Value.of_string t.branch_id ]
               sql
           in
@@ -853,7 +852,7 @@ let fork_branch (t : t) ~(parent_id : string) ~(owner : string)
               "VALUES (gen_random_uuid(), $1, $2, $3) " ^
               "RETURNING id::text" in
             let* rows =
-              Io_lwt.Db.execute conn
+              exec conn
                 ~params:[ Pgx.Value.of_string parent_id;
                           Pgx.Value.of_string owner;
                           Pgx.Value.of_string child_name ]
@@ -870,7 +869,7 @@ let fork_branch (t : t) ~(parent_id : string) ~(owner : string)
                         "SELECT $1, name, body, author, updated_at " ^
                         "FROM function_defs WHERE branch_id = $2" in
                       let* _ =
-                        Io_lwt.Db.execute conn
+                        exec conn
                           ~params:[ Pgx.Value.of_string new_branch_id;
                                     Pgx.Value.of_string parent_id ]
                           copy_fns_sql
@@ -884,7 +883,7 @@ let fork_branch (t : t) ~(parent_id : string) ~(owner : string)
                         "       author, updated_at " ^
                         "FROM type_defs WHERE branch_id = $2" in
                       let* _ =
-                        Io_lwt.Db.execute conn
+                        exec conn
                           ~params:[ Pgx.Value.of_string new_branch_id;
                                     Pgx.Value.of_string parent_id ]
                           copy_types_sql
@@ -897,7 +896,7 @@ let fork_branch (t : t) ~(parent_id : string) ~(owner : string)
                         "  COALESCE(visibility, 'private') " ^
                         "FROM view_bindings WHERE branch_id = $2" in
                       let* _ =
-                        Io_lwt.Db.execute conn
+                        exec conn
                           ~params:[ Pgx.Value.of_string new_branch_id;
                                     Pgx.Value.of_string parent_id ]
                           copy_views_sql
@@ -949,7 +948,7 @@ let merge_branch (t : t) ~(source_id : string) ~(target_id : string)
               "      updated_at = EXCLUDED.updated_at " ^
               "RETURNING name" in
             let* rows =
-              Io_lwt.Db.execute conn
+              exec conn
                 ~params:[ Pgx.Value.of_string target_id;
                           Pgx.Value.of_string source_id ]
                 sql

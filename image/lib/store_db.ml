@@ -1,10 +1,11 @@
 (** Pricklypear Image — Store connection, config, transactions.
-    Query/branch APIs live in [Store] (includes this module). *)
+
+    H3 dual-run: [conn] is either pgx_lwt or Io_eio.Pg. [PP_IO=eio] selects
+    the Eio backend at [make] time; default remains Lwt. Query APIs live in
+    [Store] (includes this module). *)
 open Lwt.Syntax
 
-(* A [Pgx_lwt.Io_intf.S] implementation backed by [Lwt_unix]. Pgx_lwt's
-   Make functor requires this; it provides the low-level read/write/flush
-   primitives over a TCP or Unix-domain socket. *)
+(* A [Pgx_lwt.Io_intf.S] implementation backed by [Lwt_unix]. *)
 module Io_unix = struct
   type in_channel = Lwt_io.input_channel
   type out_channel = Lwt_io.output_channel
@@ -35,8 +36,11 @@ module Io_unix = struct
                     Lwt_io.of_fd ~mode:Lwt_io.Output sock)
 end
 
-(* Concrete pgx connection module, built with our Lwt_unix Io. *)
-module Pg = Pgx_lwt.Make (Io_unix)
+module Pg_lwt = Pgx_lwt.Make (Io_unix)
+
+(** @deprecated Prefer [Pg_lwt] / dual [conn]. Kept so older references
+    to [Store.Pg] still resolve for type errors that should migrate. *)
+module Pg = Pg_lwt
 
 type config = {
   database : string;
@@ -46,7 +50,17 @@ type config = {
   password : string;
 }
 
+type backend = Lwt_backend | Eio_backend
+
 let env_or name dft = match Sys.getenv_opt name with Some s -> s | None -> dft
+
+let backend_from_env () : backend =
+  match Sys.getenv_opt "PP_IO" with
+  | Some s ->
+      (match String.lowercase_ascii (String.trim s) with
+       | "eio" -> Eio_backend
+       | _ -> Lwt_backend)
+  | None -> Lwt_backend
 
 let config_from_env () : config =
   {
@@ -57,116 +71,131 @@ let config_from_env () : config =
     password = env_or "PP_DB_PASS" "";
   }
 
+(** Opaque dual connection handle. *)
+type conn =
+  | Lwt_conn of Pg_lwt.t
+  | Eio_conn of Io_eio.Pg.t
+
 type t = {
   cfg : config;
-  mutable conn : Pg.t option;
-  mutable branch_id : string;  (* (checkout 'branch) reassigns it *)
-  (* Session-level dynamic transaction binding (option A from
-     BORGE-1783438027, lands it29). Points to the transaction-scoped
-     pgx connection while inside (with-transaction ...), so all DB
-     prims called from within the body see the SAME connection (and
-     thus the same transaction — including row locks acquired by
-     select-for-update). None when not inside a transaction, in
-     which case prims fall back to [conn_of] (the default pool conn). *)
-  mutable current_tx : Pg.t option;
+  backend : backend;
+  mutable conn : conn option;
+  mutable branch_id : string;
+  mutable current_tx : conn option;
 }
 
-let make ~cfg ~branch_id () : t = { cfg; conn = None; branch_id; current_tx = None }
+let make ~cfg ~branch_id () : t =
+  {
+    cfg;
+    backend = backend_from_env ();
+    conn = None;
+    branch_id;
+    current_tx = None;
+  }
 
-(* Expose the optional pool connection to sibling modules. [conn_of]
-   always returns the long-lived pool connection; prims should prefer
-     [current_conn t]
-   which returns the in-transaction connection (if set) or falls
-   back to the pool conn. *)
-let conn_of (t : t) : Pg.t option = t.conn
+let backend (t : t) = t.backend
 
-(* Active connection for DB prims to use: in-transaction connection if
-   we're inside a (with-transaction ...) body, else the default pool
-   connection. Returns None when there's no DB at all. *)
-let current_conn (t : t) : Pg.t option =
+let conn_of (t : t) : conn option = t.conn
+
+let current_conn (t : t) : conn option =
   match t.current_tx with
   | Some tx -> Some tx
   | None -> t.conn
 
-(* Run [f] inside a Postgres transaction with SERIALIZABLE isolation
-   (per AGENTS.md / spec [storage.transactions]: SERIALIZABLE by
-   default for mutations). [f] receives the upgraded transactional
-   connection (pgx returns a new `t` representing the in-transaction
-   state); all execute calls against that connection participate in the
-   transaction.
+(** Execute SQL on a dual [conn]. Shared by store/crud/auth. *)
+let exec (c : conn) ?params sql : Pgx.row list Lwt.t =
+  match c with
+  | Lwt_conn pg ->
+      (match params with
+       | None -> Pg_lwt.execute pg sql
+       | Some params -> Pg_lwt.execute pg ~params sql)
+  | Eio_conn pg ->
+      Lwt_eio.run_eio (fun () ->
+          match params with
+          | None -> Io_eio.Pg.execute pg sql
+          | Some params -> Io_eio.Pg.execute ~params pg sql)
 
-   If [f] raises, pgx automatically ROLLS BACK and propagates the
-   exception to with_transaction's caller. Per pgx's mli it's an error
-   to call commit/rollback manually inside [f].
-
-   On no-DB (t.conn = None), still calls [f] with None so the caller
-   can implement their no-DB fallback (rare case; stores without DB
-   aren't writable).
-
-   Resolves the carried-forward TODO on fork_branch and merge_branch.
-   Both now run all their SQL statements as a SINGLE atomic
-   transaction. *)
 let with_transaction ?(isolation = Pgx.Isolation.Serializable)
-    (t : t) (f : Pg.t option -> 'a Lwt.t) : 'a Lwt.t =
+    (t : t) (f : conn option -> 'a Lwt.t) : 'a Lwt.t =
   match t.conn with
   | None -> f None
-  | Some conn ->
-      Pg.with_transaction ~isolation conn (fun tx_conn -> f (Some tx_conn))
+  | Some (Lwt_conn pg) ->
+      Pg_lwt.with_transaction ~isolation pg (fun tx ->
+          f (Some (Lwt_conn tx)))
+  | Some (Eio_conn pg) ->
+      Lwt_eio.run_eio (fun () ->
+          Io_eio.Pg.with_transaction ~isolation pg (fun tx ->
+              Lwt_eio.run_lwt (fun () -> f (Some (Eio_conn tx)))))
 
-(** Session-scoped dynamic transaction binding (option A from
-    BORGE-1783438027, lands it29). Used by the (with-transaction ...)
-    Lisp prim: sets [t.current_tx] to the transactional pgx connection
-    BEFORE [f] runs, so DB prims called from within the body consult
-    [current_conn] (which they already use) and see the SAME
-    transaction — including row locks acquired via
-    (select-for-update 'type id).
-
-    The cleanup at the end is a [finally]-shaped try-with that clears
-    [t.current_tx] whether [f] succeeds or raises. CRITICAL: the
-    error handler retries the body's value-type raise AFTER restoring
-    the [current_tx = None] invariant; pgx still sees the propagated
-    exception via its own finally and ROLLS BACK the transaction.
-
-    Nested transactions (a (with-transaction ...) inside another) are
-    NOT supported — at the pgx level [Pg.with_transaction] on the
-    in-transaction conn would error. We raise [Interp_error] if
-    someone tries it. *)
 let with_dynamic_transaction
     ?(isolation = Pgx.Isolation.Serializable) (t : t)
     (f : unit -> 'a Lwt.t) : 'a Lwt.t =
   match t.conn with
   | None -> f ()
-  | Some conn ->
+  | Some (Lwt_conn pg) ->
       if t.current_tx <> None then
-        Lwt.fail (Pricklypear_lisp.Ast.Interp_error
-                    (Pricklypear_lisp.Ast.User_error
-                       "with-transaction: nested transactions not supported"))
+        Lwt.fail
+          (Pricklypear_lisp.Ast.Interp_error
+             (Pricklypear_lisp.Ast.User_error
+                "with-transaction: nested transactions not supported"))
       else
-        Pg.with_transaction ~isolation conn
-          (fun tx_conn ->
-             t.current_tx <- Some tx_conn;
-             Lwt.finalize f
-               (fun () -> t.current_tx <- None; Lwt.return_unit))
-
+        Pg_lwt.with_transaction ~isolation pg (fun tx_conn ->
+            t.current_tx <- Some (Lwt_conn tx_conn);
+            Lwt.finalize f (fun () ->
+                t.current_tx <- None;
+                Lwt.return_unit))
+  | Some (Eio_conn pg) ->
+      if t.current_tx <> None then
+        Lwt.fail
+          (Pricklypear_lisp.Ast.Interp_error
+             (Pricklypear_lisp.Ast.User_error
+                "with-transaction: nested transactions not supported"))
+      else
+        Lwt_eio.run_eio (fun () ->
+            Io_eio.Pg.with_transaction ~isolation pg (fun tx_conn ->
+                t.current_tx <- Some (Eio_conn tx_conn);
+                Fun.protect
+                  ~finally:(fun () -> t.current_tx <- None)
+                  (fun () -> Lwt_eio.run_lwt f)))
 
 let connect (t : t) : unit Lwt.t =
   match t.conn with
   | Some _ -> Lwt.return_unit
   | None ->
-      Lwt.catch
-        (fun () ->
-          let* conn =
-            Pg.connect
-              ~host:t.cfg.host ~port:t.cfg.port
-              ~user:t.cfg.user ~password:t.cfg.password
-              ~database:t.cfg.database ()
-          in
-          t.conn <- Some conn;
-          Printf.eprintf "[store] connected to PG %s:%d/%s as %s\n"
-            t.cfg.host t.cfg.port t.cfg.database t.cfg.user;
-          Lwt.return_unit)
-        (fun exn ->
-          Printf.eprintf "[store] PG connect failed: %s\n"
-            (Printexc.to_string exn);
-          Lwt.return_unit)
-
+      (match t.backend with
+       | Lwt_backend ->
+           Lwt.catch
+             (fun () ->
+               let* c =
+                 Pg_lwt.connect
+                   ~host:t.cfg.host ~port:t.cfg.port
+                   ~user:t.cfg.user ~password:t.cfg.password
+                   ~database:t.cfg.database ()
+               in
+               t.conn <- Some (Lwt_conn c);
+               Printf.eprintf
+                 "[store] connected (lwt) to PG %s:%d/%s as %s\n%!"
+                 t.cfg.host t.cfg.port t.cfg.database t.cfg.user;
+               Lwt.return_unit)
+             (fun exn ->
+               Printf.eprintf "[store] PG connect failed (lwt): %s\n%!"
+                 (Printexc.to_string exn);
+               Lwt.return_unit)
+       | Eio_backend ->
+           Lwt.catch
+             (fun () ->
+               Lwt_eio.run_eio (fun () ->
+                   let c =
+                     Io_eio.Pg.connect
+                       ~host:t.cfg.host ~port:t.cfg.port
+                       ~user:t.cfg.user ~password:t.cfg.password
+                       ~database:t.cfg.database ()
+                   in
+                   t.conn <- Some (Eio_conn c);
+                   Printf.eprintf
+                     "[store] connected (eio) to PG %s:%d/%s as %s\n%!"
+                     t.cfg.host t.cfg.port t.cfg.database t.cfg.user))
+             (fun exn ->
+               Printf.eprintf "[store] PG connect failed (eio): %s\n%!"
+                 (Printexc.to_string exn);
+               Lwt.return_unit))

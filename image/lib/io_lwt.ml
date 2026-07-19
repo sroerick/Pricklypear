@@ -1,12 +1,11 @@
-(** Lwt + pgx_lwt implementation of the Io.Db port (H2.2).
+(** Lwt-facing Db port (H2.2 / H3 dual-run).
 
-    Allowed to call [Store_db]/[Pgx_lwt]/[Lwt_unix] directly.
-    Domain modules migrate onto [Io_lwt.Db] in H2.3+ (crud/store/auth). *)
-
-open Lwt.Syntax
+    Delegates to [Store_db], which holds either a pgx_lwt or Io_eio
+    connection depending on [PP_IO]. Domain code keeps calling
+    [Io_lwt.Db.*]; backend selection is inside [Store_db]. *)
 
 module Db = struct
-  type conn = Store_db.Pg.t
+  type conn = Store_db.conn
   type store = Store_db.t
 
   type config = Store_db.config = {
@@ -25,9 +24,7 @@ module Db = struct
   let set_branch_id (s : store) id = s.Store_db.branch_id <- id
 
   let execute (conn : conn) ?params sql =
-    match params with
-    | None -> Store_db.Pg.execute conn sql
-    | Some params -> Store_db.Pg.execute conn ~params sql
+    Store_db.exec conn ?params sql
 
   let with_transaction ?isolation store f =
     Store_db.with_transaction ?isolation store f

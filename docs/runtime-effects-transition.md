@@ -472,8 +472,8 @@ decolor pass; not a product regression.
 - **dev.sh** forwards `PP_IO` (default lwt).
 
 ### Not yet (follow-ups)
-- Store/crud domain defaulting to `Io_eio.Db` types (still `Store_db` /
-  pgx_lwt for product path).
+- ~~Store/crud on Io_eio~~ **done**: `Store_db.conn = Lwt_conn | Eio_conn`;
+  `exec` dispatches; `PP_IO=eio` uses eio pgx for all product SQL.
 - Native httpun-eio server (HTTP remains httpaf-lwt-unix under lwt_eio).
 - Prod default flip — soak on laptop/`PP_IO=eio` first; OpenBSD +
   lwt_eio validation required.
@@ -521,6 +521,7 @@ event-loop host without risking the Lwt product path. Mandate
 | 2026-07-18 | **H2.1/H2.2** Lwt inventory (Appendix E); `Io`/`Io_lwt.Db` port introduced (execute/tx/connect). |
 | 2026-07-18 | **H2.3** `store.ml` + `crud.ml` + `ai_store` + `ops_incidents` execute via `Io_lwt.Db` (only `io_lwt`/`store_db` call pgx). |
 | 2026-07-18 | **overnight deploy** push wyo master (H0–H3B runtime effects loop). |
+| 2026-07-19 | **H3 Store dual conn** `Store_db.conn` Lwt|Eio; product SQL via `exec` under PP_IO. |
 | 2026-07-19 | **H3 Eio dual-run** `Io_eio.Db` (pgx+Eio.Net) + `PP_IO=eio` via Lwt_eio; default remains lwt. |
 | 2026-07-18 | **H3 exit B** stay on Io_lwt; Eio packages present on poohstack but deferred (Appendix G). |
 | 2026-07-18 | **H2.5/H2.6/H2.7** session tx via Io_lwt.Db; rim lint script; HTTP rim OK; Appendix F exit posture. |
