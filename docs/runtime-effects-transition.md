@@ -32,6 +32,31 @@ The path is **effects from the language core outward**.
 
 Guest Lisp never sees `perform`, Lwt, or Eio.
 
+### H0.5 — Concepts (capabilities ≠ async ≠ host effects)
+
+Keep these three stories separate in docs and UI copy:
+
+1. **Capabilities (layer A)** — labels on *what a Nopales expression needs*:
+   `pure`, `read-db`, `write-db`, `branch`, `publish`, `ai`, `html`, `txn`.
+   Shown as badges on `/bindings`, enforced by AI install gate and public
+   route policy. Soft `txn` lint warns about multi-write / `select-for-update`
+   without `with-transaction`. This is the **language product**.
+
+2. **Async / promises (historical plumbing)** — today’s `value Lwt.t` in
+   eval is an implementation accident from it12 composition, **not** a
+   guest concept. Users do not write async/await. H1 deletes this coloring
+   from `lisp/` without changing Lisp syntax.
+
+3. **Host control effects (layer B)** — OCaml 5 `Effect.perform` used
+   *inside* the image so eval can be direct-style. Never exposed to
+   Nopales. Orthogonal to capability badges.
+
+4. **Scheduler / rim (layer C)** — Lwt or Eio at the process edge only.
+   Choosing Eio does not change capabilities or guest syntax.
+
+**One-liner for welcome/about:** “Effects badges are capabilities (what
+your code may touch), not threads or promises.”
+
 ---
 
 ## Non-goals
@@ -320,5 +345,6 @@ Not a schedule — a preferred order for the *next* dedicated slices:
 | 2026-07-18 | Overnight ralph `runtime-effects-overnight` started. Baseline: phase-1 `Request_context` (manifest snapshot + `Lwt.with_value` after identity gate); plan doc committed. |
 | 2026-07-18 | **H0.1** prim↔effect audit: all 112 registered image prims classified in `lisp/lib/effect.ml` buckets; effect tests extended. |
 | 2026-07-18 | **H0.2/H0.3** `known_fn_of_bindings` (memo + cycle break); badges + AI install/rewrite/seed use store bindings; public route gate on handler lattice (allow pure|read|write|html|txn). |
+| 2026-07-18 | **H0.4/H0.5** soft `txn_lint` on binding inspect + concepts section (capabilities ≠ async ≠ host effects). |
 
 When a horizon unit ships, add a row here (or point at commit).
