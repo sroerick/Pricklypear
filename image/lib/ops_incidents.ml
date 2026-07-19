@@ -260,7 +260,7 @@ let list_open_incidents (store : Store.t) : Yojson.Safe.t Lwt.t =
   Lwt.return (`List items)
 
 let count_logins (store : Store.t) : (int * int) Lwt.t =
-  match Store.current_conn store with
+  match Io_lwt.Db.current_conn store with
   | None -> Lwt.return (0, 0)
   | Some conn ->
       let day = Ops_stats.today_str () in
@@ -273,7 +273,7 @@ let count_logins (store : Store.t) : (int * int) Lwt.t =
         Lwt.catch
           (fun () ->
             let* rows =
-              Store.Pg.execute conn
+              Io_lwt.Db.execute conn
                 ~params:
                   [ Pgx.Value.of_bool success; Pgx.Value.of_string day ]
                 sql
