@@ -93,10 +93,18 @@ let ai_allow_set () =
         ]
   | _ -> Pricklypear_lisp.Effect.ai_default_allow
 
-let check_ai_body_effects (body_src : string) : (unit, string) result =
+(** Derive-on-read [known_fn] from branch-visible function_defs (H0.2). *)
+let known_fn_from_store (t : t)
+  : Pricklypear_lisp.Effect.known_fn_lookup Lwt.t =
+  let* rows = Store.list_function_names t.store in
+  let bindings = List.map (fun (n, e, _) -> (n, e)) rows in
+  Lwt.return (Pricklypear_lisp.Effect.known_fn_of_bindings bindings)
+
+let check_ai_body_effects ?(known_fn = fun _ -> None) (body_src : string)
+  : (unit, string) result =
   try
     let expr = Pricklypear_lisp.Reader.read_one body_src in
-    let fx = Pricklypear_lisp.Effect.infer expr in
+    let fx = Pricklypear_lisp.Effect.infer ~known_fn expr in
     if Pricklypear_lisp.Effect.policy_allows ~allow:(ai_allow_set ()) fx then
       Ok ()
     else
@@ -121,7 +129,8 @@ let install_ai_function (t : t) ~(name : string) ~(body_src : string)
         (Pricklypear_lisp.Ast.VStr
            (Printf.sprintf "ai body invalid: %s\n---\n%s" e preview))
   | Ok body_src ->
-      (match check_ai_body_effects body_src with
+      let* known_fn = known_fn_from_store t in
+      (match check_ai_body_effects ~known_fn body_src with
        | Error pe ->
            Lwt.return
              (Pricklypear_lisp.Ast.VStr
@@ -135,7 +144,7 @@ let install_ai_function (t : t) ~(name : string) ~(body_src : string)
                   try
                     let e = Pricklypear_lisp.Reader.read_one body_src in
                     Pricklypear_lisp.Effect.EffSet.badge
-                      (Pricklypear_lisp.Effect.infer e)
+                      (Pricklypear_lisp.Effect.infer ~known_fn e)
                   with _ -> "?"
                 in
                 Lwt.return
@@ -1106,7 +1115,8 @@ let llm_rewrite (t : t) ~(mode : string) ~(name : string) ~(concept : string)
   match res with
   | Error e -> Lwt.return (Pricklypear_lisp.Ast.VStr ("ai error: " ^ e))
   | Ok body_src ->
-      (match check_ai_body_effects body_src with
+      let* known_fn = known_fn_from_store t in
+      (match check_ai_body_effects ~known_fn body_src with
        | Error pe ->
            Lwt.return
              (Pricklypear_lisp.Ast.VStr
@@ -1140,7 +1150,8 @@ let llm_seed (t : t) ~(requirement : string) ?(max_steps = 5) ()
   match seed_res with
   | Error e -> Lwt.return (Pricklypear_lisp.Ast.VStr ("seed error: " ^ e))
   | Ok body_src ->
-      (match check_ai_body_effects body_src with
+      let* known_fn = known_fn_from_store t in
+      (match check_ai_body_effects ~known_fn body_src with
        | Error pe ->
            Lwt.return
              (Pricklypear_lisp.Ast.VStr ("seed rejected: " ^ pe ^ "\n" ^ body_src))

@@ -219,7 +219,11 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
   (* (route "/path" handler [visibility]) -> VStr "/path".
      Optional third arg 'public | "public" | 'private | "private".
      Handler-only re-register keeps prior visibility (store ON CONFLICT).
-     Anonymous sessions may not register routes. *)
+     Anonymous sessions may not register routes.
+     H0.3: public targets must pass the public-route lattice (same as AI
+     allow minus elevate): pure|read-db|write-db|html|txn. Branch/Ai/
+     Publish on a public handler is denied. Missing handler body is OK
+     (define-after-route still works). *)
   let parse_vis = function
     | Pricklypear_lisp.Ast.VStr s ->
         (match String.lowercase_ascii (String.trim s) with
@@ -227,6 +231,53 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
          | "private" -> Some "private"
          | _ -> None)
     | _ -> None
+  in
+  let public_route_allow =
+    Pricklypear_lisp.Effect.EffSet.normalize
+      [ Pricklypear_lisp.Effect.ReadDb
+      ; Pricklypear_lisp.Effect.WriteDb
+      ; Pricklypear_lisp.Effect.Html
+      ; Pricklypear_lisp.Effect.Txn
+      ]
+  in
+  let check_public_handler (handler : string) : (unit, string) result Lwt.t =
+    let* rows = Store.list_function_names t.store in
+    let known_fn =
+      Pricklypear_lisp.Effect.known_fn_of_bindings
+        (List.map (fun (n, e, _) -> (n, e)) rows)
+    in
+    match List.find_opt (fun (n, _, _) -> n = handler) rows with
+    | None -> Lwt.return (Ok ())
+    | Some (_, body, _) ->
+        let fx = Pricklypear_lisp.Effect.infer ~known_fn body in
+        if Pricklypear_lisp.Effect.policy_allows ~allow:public_route_allow fx
+        then Lwt.return (Ok ())
+        else
+          Lwt.return
+            (Error
+               (Printf.sprintf
+                  "public route denied: handler %S effects %s (allow pure|read-db|write-db|html|txn; no branch/ai/publish)"
+                  handler
+                  (Pricklypear_lisp.Effect.EffSet.pp fx)))
+  in
+  let register_route_checked ~route_path ~handler ~visibility
+      ~(pass_vis_to_store : bool) : Pricklypear_lisp.Ast.value Lwt.t =
+    let* gate =
+      if visibility = "public" then check_public_handler handler
+      else Lwt.return (Ok ())
+    in
+    match gate with
+    | Error msg -> Lwt.return (Pricklypear_lisp.Ast.VStr msg)
+    | Ok () ->
+        Hashtbl.replace t.routes route_path (handler, visibility);
+        let* _ =
+          if pass_vis_to_store then
+            Store.register_route t.store ~route:route_path ~handler
+              ~visibility ()
+          else
+            Store.register_route t.store ~route:route_path ~handler ()
+        in
+        Lwt.return (Pricklypear_lisp.Ast.VStr route_path)
   in
   Primitives.register tbl "route"
     (fun args ->
@@ -241,13 +292,10 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
               | Some (_, v) -> v
               | None -> "private"
             in
-            (* handler-only: pass None so DB keeps visibility on UPDATE;
-               memory keeps prior or private for new. *)
-            Hashtbl.replace t.routes route_path (handler, vis);
-            let* _ =
-              Store.register_route t.store ~route:route_path ~handler ()
-            in
-            Lwt.return (Pricklypear_lisp.Ast.VStr route_path)
+            (* handler-only: pass_vis_to_store=false so DB keeps visibility
+               on UPDATE; memory keeps prior or private for new. *)
+            register_route_checked ~route_path ~handler ~visibility:vis
+              ~pass_vis_to_store:false
         | [ Pricklypear_lisp.Ast.VStr route_path;
             Pricklypear_lisp.Ast.VStr handler;
             vis_v ] ->
@@ -257,12 +305,8 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
                    (Pricklypear_lisp.Ast.VStr
                       "route: visibility must be public or private")
              | Some vis ->
-                 Hashtbl.replace t.routes route_path (handler, vis);
-                 let* _ =
-                   Store.register_route t.store ~route:route_path ~handler
-                     ~visibility:vis ()
-                 in
-                 Lwt.return (Pricklypear_lisp.Ast.VStr route_path))
+                 register_route_checked ~route_path ~handler ~visibility:vis
+                   ~pass_vis_to_store:true)
         | _ ->
             Lwt.return (Pricklypear_lisp.Ast.VStr "route: bad args"));
 
@@ -275,12 +319,8 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
         match args with
         | [ Pricklypear_lisp.Ast.VStr route_path;
             Pricklypear_lisp.Ast.VStr handler ] ->
-            Hashtbl.replace t.routes route_path (handler, "public");
-            let* _ =
-              Store.register_route t.store ~route:route_path ~handler
-                ~visibility:"public" ()
-            in
-            Lwt.return (Pricklypear_lisp.Ast.VStr route_path)
+            register_route_checked ~route_path ~handler ~visibility:"public"
+              ~pass_vis_to_store:true
         | _ ->
             Lwt.return (Pricklypear_lisp.Ast.VStr "public-route: bad args"));
 

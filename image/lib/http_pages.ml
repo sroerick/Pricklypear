@@ -348,6 +348,15 @@ let list_bindings_page (session : Session.t) (reqd : Httpaf.Reqd.t)
     || contains_ci author q
   in
   let defs_f = List.filter matches_ws defs in
+  (* H0.2: derive-on-read known_fn so badges account for callees. *)
+  let known_fn =
+    Pricklypear_lisp.Effect.known_fn_of_bindings
+      (List.map (fun (n, e, _, _) -> (n, e)) defs_f)
+  in
+  let badge_of expr =
+    Pricklypear_lisp.Effect.EffSet.badge
+      (Pricklypear_lisp.Effect.infer ~known_fn expr)
+  in
   (* group_by_package expects 3-tuples; strip depth for grouping. *)
   let defs_for_group =
     List.map (fun (n, e, a, _) -> (n, e, a)) defs_f
@@ -495,10 +504,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpaf.Reqd.t)
               ];
             ]
         | Some (expr, author) ->
-            let badge =
-              Pricklypear_lisp.Effect.EffSet.badge
-                (Pricklypear_lisp.Effect.infer expr)
-            in
+            let badge = badge_of expr in
             let pp = Pricklypear_lisp.Reader.pp_expr expr in
             let depth = depth_of full in
             chrome ~session ~title:full [
@@ -633,10 +639,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpaf.Reqd.t)
       let items =
         List.map
           (fun (name, body, author, depth) ->
-            let badge =
-              Pricklypear_lisp.Effect.EffSet.badge
-                (Pricklypear_lisp.Effect.infer body)
-            in
+            let badge = badge_of body in
             let local = Packages.local_name name in
             HTML.tr [] [
               HTML.td [] [
