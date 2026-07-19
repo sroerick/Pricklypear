@@ -406,7 +406,8 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
           (* H1.3: body re-enters apply_eff under Control.run_lwt when
              PP_EVAL_CONTROL=eff so nested prims Prim_call while seeing
              Store.current_conn from with_dynamic_transaction. *)
-          Store.with_dynamic_transaction t.store (fun () -> apply_lambda_auto lam)
+          Io_lwt.Db.with_dynamic_transaction t.store (fun () ->
+              apply_lambda_auto lam)
       | _ ->
           Lwt.return (Pricklypear_lisp.Ast.VStr
                         "__with_transaction__: bad args (need a lambda)"));

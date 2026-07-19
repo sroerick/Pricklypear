@@ -2,6 +2,8 @@
     Connection/tx substrate is [Store_db], included below.
     H2.3: SQL execute goes through [Io_lwt.Db] (not raw Pgx). *)
 include Store_db
+(* H2.6: [Pg] is re-exported for historical boot/connect helpers but
+   domain SQL must use [Io_lwt.Db.execute]. Lint: no new Store.Pg.execute. *)
 open Lwt.Syntax
 
 (* Branch-aware lookup. Walks the branch parent chain via a recursive
