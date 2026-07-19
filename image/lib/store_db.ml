@@ -110,7 +110,7 @@ let exec (c : conn) ?params sql : Pgx.row list Lwt.t =
        | None -> Pg_lwt.execute pg sql
        | Some params -> Pg_lwt.execute pg ~params sql)
   | Eio_conn pg ->
-      Lwt_eio.run_eio (fun () ->
+      Io_eio.on_eio (fun () ->
           match params with
           | None -> Io_eio.Pg.execute pg sql
           | Some params -> Io_eio.Pg.execute ~params pg sql)
@@ -123,7 +123,8 @@ let with_transaction ?(isolation = Pgx.Isolation.Serializable)
       Pg_lwt.with_transaction ~isolation pg (fun tx ->
           f (Some (Lwt_conn tx)))
   | Some (Eio_conn pg) ->
-      Lwt_eio.run_eio (fun () ->
+      (* Stay on one Eio fiber for the whole tx so SET ISOLATION sticks. *)
+      Io_eio.on_eio (fun () ->
           Io_eio.Pg.with_transaction ~isolation pg (fun tx ->
               Lwt_eio.run_lwt (fun () -> f (Some (Eio_conn tx)))))
 
@@ -151,7 +152,7 @@ let with_dynamic_transaction
              (Pricklypear_lisp.Ast.User_error
                 "with-transaction: nested transactions not supported"))
       else
-        Lwt_eio.run_eio (fun () ->
+        Io_eio.on_eio (fun () ->
             Io_eio.Pg.with_transaction ~isolation pg (fun tx_conn ->
                 t.current_tx <- Some (Eio_conn tx_conn);
                 Fun.protect

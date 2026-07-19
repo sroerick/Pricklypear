@@ -27,9 +27,26 @@ module Ctx = struct
     let prev = !current in
     current := Some c;
     Fun.protect ~finally:(fun () -> current := prev) f
+
+  (** True when [with_ctx] is active (Eio_main path). *)
+  let installed () = !current <> None
 end
 
 let with_ctx = Ctx.with_ctx
+let ctx_installed = Ctx.installed
+
+(** Nesting depth inside [Lwt_eio.run_eio] for this domain. When >0 we are
+    already on an Eio fiber entered via run_eio (e.g. open transaction),
+    so further SQL must run directly — nested run_eio breaks isolation. *)
+let eio_enter_depth = ref 0
+
+(** Run [f] via [Lwt_eio.run_eio], or directly if already inside one. *)
+let on_eio (f : unit -> 'a) : 'a Lwt.t =
+  if !eio_enter_depth > 0 then Lwt.return (f ())
+  else
+    Lwt_eio.run_eio (fun () ->
+        incr eio_enter_depth;
+        Fun.protect ~finally:(fun () -> decr eio_enter_depth) f)
 
 (** Pgx Io backend: direct-style ('a t = 'a) over one Eio two-way flow. *)
 module Pgx_io = struct
