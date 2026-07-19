@@ -456,39 +456,38 @@ decolor pass; not a product regression.
 
 ## Appendix G — H3 Eio dual-run (2026-07-19)
 
-**Preconditions met:** H1 exited; H2 exited (`Io_lwt.Db`).
+### Shipping default
+**`PP_IO=lwt`** (unset = lwt). Prod must stay on lwt until an explicit
+soak + ops decision.
 
 ### Implemented
-- **`Io_eio.Db`**: pure [pgx] over Eio.Net (identity monad, ambient
-  switch/net via `Io_eio.with_ctx`). Direct-style `*_sync` API + Lwt
-  wrappers via `Lwt_eio.run_eio` / `run_lwt`.
-- **`PP_IO=lwt|eio`** (default **`lwt`**):
-  - `lwt` — `Lwt_main.run (Boot.start ())` (shipping).
-  - `eio` — `Eio_main.run` + `Lwt_eio.with_event_loop` + ambient
-    `Io_eio` ctx; boot-time `Io_eio.Db` `SELECT 1` smoke; then same
-    `Boot.start` (HTTP/store still Lwt via lwt_eio).
-- **Test:** `image/test/io_eio_test.ml` (set `PP_REQUIRE_EIO_DB=1` to
-  enforce against local PG).
-- **dev.sh** forwards `PP_IO` (default lwt).
+| Piece | Status |
+|-------|--------|
+| `Io_eio.Db` / `Io_eio.Pg` | pure pgx over Eio.Net |
+| `Store_db.conn` | `Lwt_conn \| Eio_conn`; `exec` / tx dispatch |
+| `PP_IO=eio` main | `Eio_main` + `Lwt_eio` + ambient `with_ctx` |
+| Product SQL under eio | **yes** — connect log `connected (eio)`; CRUD + `with-transaction` |
+| `io_eio_test` | health + `current_database` (`PP_REQUIRE_EIO_DB=1`) |
+| `eio_enter_depth` | prevents nested `run_eio` (tx isolation) |
 
-### Not yet (follow-ups)
-- ~~Store/crud on Io_eio~~ **done**: `Store_db.conn = Lwt_conn | Eio_conn`;
-  `exec` dispatches; `PP_IO=eio` uses eio pgx for all product SQL.
-- Native httpun-eio server (HTTP remains httpaf-lwt-unix under lwt_eio).
-- Prod default flip — soak on laptop/`PP_IO=eio` first; OpenBSD +
-  lwt_eio validation required.
+### HTTP (C1 — honest gap)
+When `PP_IO=eio`, **HTTP remains httpaf-lwt-unix**, scheduled by
+**Lwt_eio** on the Eio event loop. There is **no** httpun-eio server yet.
+DB is the Eio-native path; the process host is dual-scheduled.
 
-### Why this shape
-Full scheduler cut is multi-week. Dual-run proves the Eio PG stack and
-event-loop host without risking the Lwt product path. Mandate
-“replaceable backend” is stronger: two real Db implementations exist.
+### Not done / deferred
+- Native httpun-eio (or gluten-eio) accept loop
+- Prod `PP_IO=eio` default
+- OpenBSD soak of lwt_eio + eio pgx in rc.d
 
-**Lint / rim list (shipping default lwt):**
-- DB lwt: `io_lwt.ml`, `store_db.ml`
-- DB eio: `io_eio.ml` (opt-in)
-- Control: `control_rim.ml`
-- HTTP/boot: `http*.ml`, `boot.ml`, `main.ml`, `repl_endpoint.ml`
-- Domain SQL (lwt path): `Io_lwt.Db` only (`ksh scripts/check_io_rim.sh`)
+### Ops
+```sh
+PP_IO=lwt   # default shipping
+PP_IO=eio   # dual-run: Eio PG + Lwt HTTP via lwt_eio
+PP_REQUIRE_EIO_DB=1 dune exec image/test/io_eio_test.exe
+ksh scripts/check_io_rim.sh
+```
+
 
 
 ## Appendix A — Glossary
@@ -521,6 +520,7 @@ event-loop host without risking the Lwt product path. Mandate
 | 2026-07-18 | **H2.1/H2.2** Lwt inventory (Appendix E); `Io`/`Io_lwt.Db` port introduced (execute/tx/connect). |
 | 2026-07-18 | **H2.3** `store.ml` + `crud.ml` + `ai_store` + `ops_incidents` execute via `Io_lwt.Db` (only `io_lwt`/`store_db` call pgx). |
 | 2026-07-18 | **overnight deploy** push wyo master (H0–H3B runtime effects loop). |
+| 2026-07-19 | **H3 eio finish** product SQL on Eio conn; lwt+eio parity soak; HTTP still lwt_eio (Appendix G). |
 | 2026-07-19 | **H3 Store dual conn** `Store_db.conn` Lwt|Eio; product SQL via `exec` under PP_IO. |
 | 2026-07-19 | **H3 Eio dual-run** `Io_eio.Db` (pgx+Eio.Net) + `PP_IO=eio` via Lwt_eio; default remains lwt. |
 | 2026-07-18 | **H3 exit B** stay on Io_lwt; Eio packages present on poohstack but deferred (Appendix G). |
