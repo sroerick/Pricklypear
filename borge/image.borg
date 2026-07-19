@@ -7,158 +7,80 @@
   (status partial)
   
   (subsection boot
-   (doc "Reading the manifest, loading initial env")
-   (implements image/lib/boot.ml image/lib/loader.ml image/lib/session.ml common/lib/manifest.ml)
+   (doc "Single-image boot process: initialize Postgres, load stdlib, start services")
+   (implements image/lib/boot.ml image/lib/loader.ml image/lib/session.ml)
    (status verified)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
    (verify
     (build "dune build image")
-    (smoke "/tmp/pp_img_it7.py —   image boots + serves / and /health + REPL accepts connections"))
+    (smoke "image boots + serves / and /health + REPL accepts connections"))
 
    (details
     (doc (|
          On boot, the image:
-         1. Reads its boot manifest (from common/lib/manifest.ml
-            type, fetched from Postgres by the supervisor
-            before booting).
-         2. Manifest specifies:
-            - user_id (who this image is; asserted by
-              supervisor after auth verified the
-              credential — see section auth. The image
-              trusts this because supervisor+auth did the
-              verification; the image does no auth itself.)
-            - username (for the REPL prompt and author
-              tracking)
-            - branch_id (default branch, usually user/main)
-            - boot_mode ('on-connect' | 'always-on')
-            - image_version (for A/B tracking)
-            - config (budgets, feature flags)
-         3. Loads all function_defs and type_defs for
-            branch_id from Postgres into the in-memory
-            env (or, with no-caching policy, sets up the
-            branch-aware lookup that reads on each call).
-         4. Starts the REPL endpoint (internal line
-            protocol; the supervisor forwards SSH channels
-            here — see ssh-interface). NOT a full SSH server.
-         5. Starts the htmx server (httpaf-lwt-unix in v1)
-            on configured port.
-         6. Registers health endpoint.
-         7. Marks self healthy, signals supervisor.
+         1. Reads identity from process environment:
+            PP_USERNAME (REPL prompt), PP_BRANCH_NAME, PP_BRANCH_ID.
+         2. Connects to Postgres via pgx_lwt.
+         3. Applies pending migrations (additive-only).
+         4. Runs seed_stdlib: loads libs/*.pp into system/main.
+         5. Starts the REPL endpoint (internal line protocol
+            on PP_REPL_PORT if set).
+         6. Starts the htmx server (httpaf-lwt-unix) on PP_HTTP_PORT.
+         7. Registers health endpoint at /health.
 
          The image is STATELESS across reboots w.r.t. user
          data: anything that must survive is in Postgres.
-         In-memory REPL state (define'd locals in a
-         session) does NOT survive reboot unless the user
-         persisted via (store) or similar.
+         In-memory REPL state (define'd locals in a session)
+         does NOT survive reboot unless the user persisted
+         via (store) or similar.
    |))
    )
   )
   (subsection ssh-interface
-   (doc "The SSH front door: supervisor authenticates, forwards to image REPL")
-   (implements supervisor/lib/ssh.ml supervisor/lib/ssh_awa.ml supervisor/lib/ssh_awa_shims.ml supervisor/lib/ssh_keys.ml supervisor/lib/boot.ml)
+   (doc "Deprecated: SSH access removed in single-image pivot")
    (status deprecated)
    (verify
     (build "dune build @all")
-    (smoke "/tmp/pp_e2e_it6.py — line-protocol SSH→auth→image→REPL→define→call")
-    (smoke "PP_AWA_SSH_PORT=12223 + real ed25519 key in DB → awa-ssh handshake + pubkey auth"))
+    (smoke "SSH access removed — use browser /repl or POST /api/eval"))
    (details
     (doc (|
-         THE SSH PATH (end to end):
-
-         1. User runs: ssh alice@pricklypear.host
-         2. SUPERVISOR listens on port 22 (awa-ssh,
-            Mirage-compatible) and accepts the connection.
-         3. SSH handshake + key exchange (awa-ssh, pure
-            OCaml, no libssh).
-         4. Authentication: supervisor calls pricklypear
-            authd (NOT wyo.auth — deliberate v1 choice;
-            see workflow.conventions) via verify_ssh_key
-            RPC to resolve the presented public key to a
-            user_id. Key -> user mapping is authd's job.
-         5. Supervisor boots (boot-on-connect) or attaches
-            (always-on) the user's image unikernel.
-         6. Supervisor opens a channel to the image's
-            internal REPL endpoint (see repl_endpoint
-            below) and FORWARDS the SSH channel's PTY
-            stream to it. The user's terminal is now
-            talking to the image's REPL.
-         7. Image presents the REPL prompt (see
-            repl-experience).
-         8. On disconnect, supervisor notes session end;
-            boot-on-connect images die, always-on images
-            keep running.
-
-         WHY SUPERVISOR-FRONTS-SSH (not each image on its
-         own port):
-         - One door, one auth, one image per user. Matches
-           'SSH-first OS' — it's THE login, not N logins.
-         - Users don't need to know their image's port.
-         - authd integration happens in one place
-           (supervisor), not N places (each image).
-         - The image doesn't need full SSH — just a REPL
-           endpoint. Simpler image.
-
-         TRADEOFF: supervisor-to-image hop is internal
-         (trusted hypervisor network), so no end-to-end
-         SSH crypto between user terminal and image. For
-         a personal OS on a trusted hypervisor, this is
-         acceptable. If it becomes a concern, the image
-         can run its own awa-ssh on an internal port and
-         the supervisor does TCP forwarding of the
-         encrypted SSH stream (then the image decrypts).
-         Defer this until it's a felt concern.
+         The single-image pivot removed supervisor and SSH.
+         Interactive access is via:
+         - Browser REPL at /repl
+         - Agent API at POST /api/eval
+         - Optional line-protocol REPL on PP_REPL_PORT (if set)
    |))
    )
   )
   (subsection repl-endpoint
    (doc "Image's internal REPL endpoint, not full SSH")
    (status implemented)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
    (verify
     (build "dune build image")
-    (smoke "/tmp/pp_persist_it8.py — define persists + /tmp/pp_e2e_it6.py — REPL proxy works"))
+    (smoke "define over the line REPL persists to the store; a second session sees it"))
 
    (details
     (doc (|
-         The image does NOT run a full SSH server. Instead
-         it exposes an internal REPL endpoint — a simple
-         line protocol over a TCP socket (or Mirage
-         channel) on an internal port. The supervisor
-         connects to this and forwards the user's PTY
-         stream.
+         The image does NOT run an SSH server. It optionally
+         exposes a line-protocol REPL — a simple TCP socket
+         on PP_REPL_PORT (unset = no listener), intended as
+         an operator surface on a trusted network. The
+         primary interactive surfaces are the browser /repl
+         and POST /api/eval (both authenticated).
 
          Protocol (minimal, framed):
-           - Connect: supervisor opens TCP to image:REPL_PORT
-           - Auth: none needed (internal network; the
-             supervisor already authenticated the user)
+           - Connect: operator opens TCP to image:PP_REPL_PORT
+           - Auth: none on the socket itself — the port is
+             bound for operators only; do not expose it
+             beyond the trusted network
            - Exchange: lines of UTF-8. User input flows
              in; REPL output flows out.
            - The image's session.ml tracks this connection
              as a session; on disconnect, session ends.
 
-         WHY NOT FULL SSH IN THE IMAGE:
-         - Removes awa-ssh dependency from the image
-           (keeps image smaller; awa crypto is non-trivial).
-         - One SSH implementation (in supervisor) to
-           maintain, not N.
-         - authd resolution stays in supervisor.
-
          The endpoint is in image/lib/repl_endpoint.ml.
-         It owns: accepting the supervisor's connection,
-         wiring PTY stream to the line editor (lineedit.ml),
-         and the REPL read-eval-print loop itself.
+         It owns: accepting connections, wiring the stream
+         to the line editor (lineedit.ml), and the REPL
+         read-eval-print loop itself.
    |))
    )
   )
@@ -168,7 +90,7 @@
    (status partial)
    (verify
     (build "dune build image")
-    (smoke "/tmp/pp_e2e_it6.py — define + apply works through the REPL"))
+    (smoke "define + apply works end to end through the REPL"))
    (details
     (doc (|
          THE PROMPT:
@@ -235,15 +157,11 @@
    )
   )
   (subsection htmx-interface
-   (doc "httpaf-lwt-unix + pure-html, routes AS functions in the store")
+   (doc "User routes accept GET and POST; request context available via dynamic-binding prims")
    (implements image/lib/http.ml auth/lib/http.ml image/lib/session.ml image/lib/primitives.ml)
    (status partial)
    (verify
     (build "dune build image")
-    (smoke "/tmp/pp_ui_it11.py — system pages / /branches / /bindings / /binding/<name>")
-    (smoke "/tmp/pp_route_it9.py — (route ...) registers + dispatches user pages")
-    (smoke "/tmp/pp_types_it14.py — /types page + render-html tagged VStr dispatch")
-    (smoke "GET user route still calls zero-arg handler (compat)")
     (smoke "POST user route hits same path handler; (request-method) => POST")
     (smoke "POST form-urlencoded body: (request-param \"title\") returns field")
     (smoke "GET query: (request-param \"q\") returns query value")
@@ -251,13 +169,12 @@
     (smoke "POST /api/recipe/todo then POST /todos title=… creates row + redirects; GET /todos lists it"))
    (details
     (doc (|
-         The image's htmx endpoint serves two kinds of
-         pages:
+         The image's htmx endpoint serves two kinds of pages:
 
-         1. SYSTEM pages (always present, part of the
-            OCaml image):
+         1. SYSTEM pages (always present, part of the OCaml image):
             /health            health check
-            /inspect/:id       browse any stored value
+            /inspect/binding/<name>  pretty-print one function_def's AST
+            /inspect/row/<type>/<id> browse any stored value
             /branches          list + fork/merge UI
             /types             type browser (type_defs)
             /data …            data rows browser (full CRUD;
@@ -275,317 +192,59 @@
          user-facing UI part of the live image, editable
          via the same mechanisms as everything else.
 
-         ROUTE VISIBILITY (auth.route-visibility — planned):
+         ROUTE VISIBILITY:
          User routes default private (session required).
          (route path handler 'public) opts into anonymous GET.
          Kernel paths (/data /admin /api/eval /bindings /edit …)
          are hard-private in OCaml and cannot be opened by Lisp.
-         Gate runs before handler dispatch (extend launch, do not
-         invent a middleware framework).
+         Gate runs before handler dispatch.
 
          pure-html (the dream_html HTML generation core,
          usable WITHOUT Dream) is used for HTML generation
-         (per poohstack convention; use Hx.* not raw
-         strings at the OCaml layer).
+         (use Hx.* not raw strings at the OCaml layer).
 
-         =========================================================
-         USER-ROUTE HTTP METHODS (it33 — PLAN, not yet shipped)
-         =========================================================
-
-         GOAL: Lisp pages can accept browser forms. Todo and every
-         other dogfood app need POST without leaving the image.
-
-         METHODS on user routes (view_bindings paths):
-         - GET  — already shipped (call handler, render value)
-         - POST — REQUIRED this plan
-         - PUT / PATCH / DELETE — deferred (not needed for form
-           dogfood; may map later; do not invent now)
-
-         MATCHING: exact path string only (status quo). No path
-         params (/todos/:id) in this plan. Method does NOT select
-         a different handler — same route path → same handler name
-         for GET and POST. Handler branches on (request-method).
-
-         SYSTEM routes keep exclusive claim on their paths:
-         /api/*, /edit/*, /health, /bindings, … never fall through
-         to user routes (status quo dispatch order).
-
-         BODY (POST):
-         - Read full body (reuse existing body reader in http.ml).
-         - Content-Type application/x-www-form-urlencoded:
-           parse into string key→value map (reuse form_field style
-           decode; empty values allowed; last wins on dup keys).
-         - Other content-types: raw body available via
-           (request-body); params map empty unless also on query.
-         - Size: soft cap 64 KiB for v1; oversize → 413 text error
-           (do not eval handler).
-
-         QUERY (GET and POST):
-         - Parse target query string into the same params map.
-         - Conflict rule: form field WINS over query key of same
-           name (POST body is the intentional write path).
-
-         =========================================================
-         REQUEST CONTEXT (dynamic, handler-scoped)
-         =========================================================
-
-         Design choice: DYNAMIC BINDING, not a mandatory handler
-         argument. Zero-arg handlers keep working:
-           (define hi-page (lambda () (render-html "…")))
+         REQUEST CONTEXT (dynamic, handler-scoped):
+         Zero-arg handlers keep working: (define hi-page (lambda () (render-html "…")))
          Interactive handlers read request via prims while the
          HTTP dispatch is inside call_handler:
-
-           (request-method)     -> VStr "GET" | "POST"
+           (request-method)     -> VStr \"GET\" | \"POST\"
            (request-path)       -> VStr path without query
            (request-param k)    -> VStr value | VNil if missing
            (request-params)     -> VStr JSON object of all params
-           (request-body)       -> VStr raw body ("" on GET)
+           (request-body)       -> VStr raw body (\"\" on GET)
 
-         Implementation sketch (mirrors with-transaction scope):
-         - Session.t gains mutable current_request : request option
-         - type request = {
-             method_ : [`GET|`POST];
-             path : string;
-             params : (string * string) list;  (* or Hashtbl *)
-             body : string;
-           }
-         - http.ml builds request from meth + path + query + body
-         - Session.call_handler ~request sets current_request,
-           runs (handler-name) zero-arg apply, clears in finalize
-         - Prims registered at session-make (image layer, like
-           whoami) read Session.current_request; if None:
-             (request-method) etc raise clean User_error
-             "no active request" (REPL/eval outside HTTP)
-
-         WHY NOT pass (lambda (req) …) as required arity:
-         - Breaks every existing zero-arg page (hello, current todo)
-         - Forces a VDict / record convention early
-         - Dynamic prims match (whoami) / with-transaction style
-         Optional later: also pass req dict as single arg if handler
-         arity is 1 — NOT in this plan.
-
-         =========================================================
-         HANDLER RETURN VALUES
-         =========================================================
-
-         Keep existing render rules, add redirect:
-
+         HANDLER RETURN VALUES:
          1. render-html tagged VStr (__html__:…)
             -> 200 text/html, body = raw HTML inside chrome
-            (status quo; chrome wrap stays for full pages)
          2. bare VStr -> 200 text/html, <p> escaped text
          3. other values -> 200 text/html, <pre> pp_value
-         4. NEW: (redirect path) -> tagged VStr __redirect__:path
+         4. (redirect path) -> tagged VStr __redirect__:path
             -> HTTP 303 See Other, Location: path, empty/minimal body
-            Path must be absolute-on-host ("/todos") for v1;
-            reject off-site (no "http://…") — User_error at prim
-            or 500 if somehow returned.
-
-         PRG: POST handlers that mutate SHOULD (redirect …) so
-         refresh does not re-POST. Dogfood todo does this.
-
-         Htmx partials: if request has header HX-Request: true,
-         v1 MAY still wrap chrome (acceptable); optional later:
-         skip chrome when HX-Request. Not required for form POST
-         dogfood.
-
-         Handler errors (Interp_error / missing handler):
-         - GET: 500 HTML error page (status quo)
-         - POST: 500 HTML error page (same); do not redirect
-
-         =========================================================
-         DOGFOOD: INTERACTIVE TODO (acceptance for this plan)
-         =========================================================
-
-         Upgrade Session.recipe_todo so /todos is a real form app:
-
-         Type: todo-item {title, done}  (unchanged)
-
-         Functions (illustrative; exact HTML may vary):
-           todo/add     — (lambda (title) (create …))
-           todo/list    — (lambda () (rows 'todo-item 50))
-           todo/toggle  — flip done via update-field / get+dict-set
-           todo/page    — method-aware page:
-             POST: (todo/add (request-param "title"))
-                   then (redirect "/todos")
-             GET:  render-html with:
-                   - <form method="POST" action="/todos">
-                       <input name="title"> + submit
-                   - list of items (title + done)
-                   - optional small POST forms/buttons for toggle
-                     (same path with action=toggle&id=… OR
-                      separate route /todos/toggle — pick one in make;
-                      prefer same-path + request-param "action")
-
-         Route: (route "/todos" "todo/page") only is enough if
-         action dispatch is param-based. Extra routes OK if clearer.
-
-         Smoke path:
-           POST /api/recipe/todo
-           POST /todos  title=milk   -> 303 /todos
-           GET  /todos               -> body contains milk
-           Functions browser shows package todo
-
-         =========================================================
-         MAKE CHECKLIST (implementation order)
-         =========================================================
-
-         1. Session.request type + current_request field + accessors
-         2. Register request-* and redirect prims (session-scoped)
-         3. http.ml: parse query+form into request; allow POST on
-            user-route fallthrough; call_handler ~request
-         4. http.ml: dispatch redirect sentinel -> 303 Location
-         5. Upgrade recipe_todo + home copy if needed
-         6. Smoke script (e.g. /tmp/pp_post_routes_it33.py)
-         7. Keep GET zero-arg hello recipe green
-
-         OUT OF SCOPE THIS PLAN:
-         - path parameters (/items/:id)
-         - multipart file upload
-         - JSON body auto-parse to dict prims
-         - CSRF tokens (localhost/dev trust; file issue if prod needs)
-         - (hx-get)/(hx-post) Lisp prims (still embed in HTML strings)
-         - Solo5 / gluten-mirage HTTP
-         - PUT/PATCH/DELETE user routes
-
-         =========================================================
-         ROUTE VISIBILITY (see auth.route-visibility — planned)
-         =========================================================
-         Authority for "may this request run this page?" is the
-         OCaml launch gate, not Lisp inside the handler.
-
-         - User routes default private (session or Basic required).
-         - (route path handler 'public) → anonymous GET allowed.
-         - System hard-private prefixes never become public via
-           view_bindings (/admin /data /api/eval /bindings /edit …).
-         - System hard-public remains /login /health /logout.
-         - Optional auth: resolve identity even on public paths.
-         - Anonymous: system/main, whoami anonymous, no writes v1.
-         - Migration 006: view_bindings.visibility text default
-           'private'. list_routes/register_route carry the flag.
-         - /pages shows visibility badge.
-
-         v1 SHIPPED (pre-it33):
-         - httpaf-lwt-unix HTTP server
-         - system pages listed above (except /inspect)
-         - user routes via (route ...) + render-html (GET only)
-
-         DEFERRED beyond it33:
-         - /inspect/:id (see image.inspector)
-         - (hx-get)/(hx-post) Lisp prims
-         - Solo5 HTTP via gluten-mirage + httpaf
-         - richer system-browser chrome (own subsection)
-         - public-write routes / CSRF (route-visibility phase 2)
+            Path must be absolute-on-host.
    |))
    )
   )
 
   (subsection http-robustness
-   (doc "HTTP server survival under load + peer disconnect. The image must
-         never exit because a client went away mid-response.")
+   (doc "HTTP server robustness under load and peer disconnect")
    (implements image/lib/http.ml image/lib/http_core.ml image/lib/http_agent.ml image/lib/http_data.ml image/lib/http_branches.ml image/lib/session.ml image/lib/session_types.ml)
    (status verified)
-   (* agent note (|
-      session.ml god-module decision (2026-07-17 cleanup pass):
-      ACCEPTED as known god-module (~1641 LOC / 58 funcs). Holds env +
-      manifest + auth fields + store ref + REPL/web attachments. The
-      http.ml split (http_core/http_pages/http_agent) already landed;
-      session.ml was left intact. Split deferred — redesign required
-      (env vs manifest vs auth vs store ref) and not a correctness
-      risk for v1 single-tenant. Tracked as accepted tech debt, not a
-      bug. Do not drive refactors just for LOC.
-      |) *)
-   (* agent note (|Invariants 1,2,3,4,5 ALL implemented 2026-07-17.
-      1,2,3,5 landed first (crash fix + ui/nav cache + inflight cap) after
-      the pricklypear.rocks HN crash post mortem. Invariant 4 (narrow
-      request_mutex so page work runs lock-free) landed next, as two
-      parts:
-
-      4a. IMMUTABLE-ENV REHYDRATE (correctness prerequisite): rehydrate
-      now builds a FRESH env record and SWAPS t.env to it instead of
-      Hashtbl.clear-ing the old binding table in place. Session.t.env
-      is now mutable. VLambda closures capture env by reference, so the
-      old record stays intact for any in-flight page — a concurrent
-      rehydrate can no longer empty a running page's captured bindings.
-      image/test/http_robust_env_test.ml proves the swap contract.
-
-      4b. NARROWED MUTEX: request_mutex now guards ONLY the identity-
-      attach gate (resolve_identity + attach + classify + subdomain
-      mismatch + analytics + refresh_ui_shell). It is released BEFORE
-      page_fn runs, so page rendering (Lisp eval, HTML build, agent LLM
-      streaming) is lock-free.
-
-      NO db_mutex needed: pgx_lwt serializes all ops on a connection via
-      its per-connection Sequencer (type t = conn Sequencer.t; every
-      execute/with_transaction goes through Sequencer.enqueue =
-      Lwt_mutex.with_lock on a per-conn mutex). Concurrent Pg.execute on
-      the same conn QUEUE safely — no wire interleave. So DB prims stay
-      correct under lock-free page work without a separate db lock.
-
-      MULTI-TENANT CAVEAT (deferred to a follow-up borge issue): prims
-      still read t.manifest live via the !t ref. Safe for v1 single-
-      tenant dogfood (only authed user is admin; anon all share
-      manifest.username=anonymous) so concurrent authed requests are the
-      SAME user — no wrong-user write attribution. True multi-tenant
-      (distinct authed users concurrent) needs a per-request manifest
-      context threaded through the prim dispatch (ABI surgery); not a
-      v1 crash/throughput fix.
-
-      VERIFICATION (dev stack, 2026-07-17):
-      - dune build + dune runtest --force: 10 suites green incl. new
-        image/test/http_robust_test.ml (3) + http_robust_env_test.ml (1).
-      - /tmp/pp_http_robust.py abort-storm at 64 concurrent aborted
-        requests: image PID UNCHANGED, /health 200 throughout, 0 Fatal.
-      - Concurrency: 90 concurrent reqs (30 authed / + 30 anon /welcome
-        + 30 aborts) drain in 0.14s (was serialized under the old global
-        mutex); post-storm authed / still renders real ui/nav (no
-        emergency-nav); 0 Fatal, 0 refresh_ui_shell failures.
-      - invariant 3: refresh_ui_shell 1 warn per 60s retry window.
-      Deployed to prod (9210b1c for invariants 1-3; this commit for 4).
-      Prod watchdog soak pending under real traffic.|) *)
    (verify
     (build "dune build image")
-    (smoke "/tmp/pp_http_robust.py — abort N concurrent requests mid-response; image stays up, /health 200 throughout")
+    (smoke "abort N concurrent requests mid-response; image stays up, /health 200 throughout")
     (smoke "open SSE /api/agent stream, disconnect client; no Fatal error in image.log, process pid unchanged")
     (smoke "fire M concurrent mixed routes (page + SSE + /api/eval); all complete or peer-gone, zero process exits")
     (test "image/test/http_robust_test.ml — closed-writer guard returns () not raises; catch-body does not re-write to dead writer"))
    (details
     (doc (|
-         =========================================================
-         MOTIVATION (production incident 2026-07-16)
-         =========================================================
-         pricklypear.rocks was shared on Hacker News. Under real
-         traffic (humans clicking, reloading, aborting requests
-         mid-response) the image process crashed repeatedly —
-         ~15 watchdog restarts over ~26h, including a 4-crash
-         burst in 5 minutes. Root cause was NOT load exhaustion:
-         each crash was a single top-level uncaught exception
-            Fatal error: exception
-              Failure("cannot write to closed writer")
-         which exits the single-image process. The watchdog (root
-         cron, 1-minute granularity) restarted it each time, but
-         the same aborted-request pattern killed it again.
-
-         The httpaf body writer raises Failure("cannot write to
-         closed writer") when you write to a response whose client
-         has already disconnected. The agent SSE path was already
-         hardened against this (is_closed_writer_exn /
-         close_writer_quiet in http_agent.ml) but EVERY OTHER
-         response path was unguarded: html_response, text_response,
-         json_response, fragment_response, redirect_response, and
-         the httpaf error_handler itself.
-
-         The trap: launch's Lwt.catch error branch tried to render a
-         500 page by calling html_response on the SAME dead writer
-         the original handler failed on — so the recovery write
-         threw the same Failure, now inside the catch handler where
-         nothing guards it, and it propagated to top level.
-
-         This subsection specifies the invariants that make a
-         peer-disconnect a non-event, plus the concurrency model
-         needed so the server does not serialize all traffic behind
-         one lock (which would make it fall over on throughput
-         even once crashes are fixed).
+         The httpaf body writer raises
+         Failure("cannot write to closed writer") when you write
+         to a response whose client has disconnected. On a
+         single-image process, one uncaught closed-writer
+         exception is a process exit. These invariants make a
+         peer-disconnect a non-event, and define the concurrency
+         model so the server does not serialize all traffic
+         behind one lock.
 
          =========================================================
          INVARIANT 1 — PEER-DISCONNECT IS NEVER FATAL
@@ -596,23 +255,17 @@
          closing its tab is the single most common event on a web
          server; it must not take the process down.
 
-         Mechanism: generalize the existing SSE hardening up into
-         http_core and apply it everywhere a response is written:
+         Mechanism (http_core.ml):
 
            - is_closed_writer_exn : exn -> bool
-               (already in http_agent.ml; move to http_core, export)
-           - safe_write : Body.t -> string -> unit
-               write_string wrapped; swallows closed-writer Failure
-           - safe_close : Body.t -> unit
-               close_writer wrapped; swallows closed-writer Failure
+           - safe_respond_with_string : respond_with_string
+             wrapped; swallows the closed-writer Failure
+           - safe_close_writer : close_writer wrapped;
+             swallows the closed-writer Failure
 
-         Wrap the body of EVERY response helper:
-           html_response, text_response, json_response,
-           fragment_response, redirect_response.
-         These all currently call Httpaf.Reqd.respond_with_string
-         or Body.write_string + close_writer directly; they must
-         instead route through safe_write / safe_close (or catch
-         the Failure around respond_with_string).
+         EVERY response helper routes through the guarded
+         path: html_response, text_response, json_response,
+         fragment_response, redirect_response.
 
          The httpaf error_handler (http.ml error_handler) writes
          unguarded via Body.write_string + close_writer; it MUST
@@ -630,15 +283,15 @@
 
          Rule: the catch branch MUST detect the closed-writer case
          (is_closed_writer_exn on the caught exn) and, instead of
-         rendering a 500 page, just safe_close the (already-dead)
-         writer and return. Only when the writer is still alive do
-         we render the 500 error page.
+         rendering a 500 page, just safe_close_writer the
+         (already-dead) writer and return. Only when the writer
+         is still alive do we render the 500 error page.
 
          Concretely: in the (fun exn -> ...) handler, branch:
-           if is_closed_writer_exn exn -> safe_close; Lwt.return_unit
-           else -> Ops_incidents emit + html_response 500 (as today)
-         This breaks the throw-in-the-catch loop that was the
-         actual crash mechanism.
+           if is_closed_writer_exn exn -> safe_close_writer; Lwt.return_unit
+           else -> Ops_incidents emit + html_response 500
+         This breaks the throw-in-the-catch loop that would
+         otherwise turn one peer-disconnect into a process exit.
 
          =========================================================
          INVARIANT 3 — ui/nav FAILURE IS NOT PER-REQUEST NOISE
@@ -708,18 +361,18 @@
          SCOPE / MULTI-TENANT CAVEAT (honest): the manifest race
          (4b concern 2) is NOT fully closed by this work. Prims
          still read t.manifest live via the !t ref. This is safe
-         TODAY because v1 dogfood is single-tenant: the only
-         authed user is admin, and anonymous requests all share
-         manifest.username=anonymous. Concurrent authed requests
-         are the SAME user, so t.manifest reads during page work
-         cannot attribute a write to the wrong user. True
-         multi-tenant safety (distinct authed users concurrent)
-         needs a per-request manifest context threaded through the
-         prim dispatch so prims read the request's manifest, not
-         the shared record. That is deferred to a follow-up borge
-         issue (ABI surgery on prim_fn; not a crash/throughput fix
-         for v1). Until then, the narrowed mutex ships with a
-         documented single-tenant assumption.
+         ONLY while concurrent requests share one identity (one
+         authed user, plus anonymous traffic sharing
+         manifest.username=anonymous): t.manifest reads during
+         page work then cannot attribute a write to the wrong
+         user. Cotenant operation with DISTINCT authed users
+         concurrent needs a per-request manifest context threaded
+         through the prim dispatch so prims read the request's
+         manifest, not the shared record. That is deferred to a
+         follow-up borge issue (ABI surgery on prim_fn; not a
+         crash/throughput fix). Until it lands, cotenant hosting
+         of multiple simultaneously-active users carries this
+         documented caveat.
 
          The single shared Postgres connection (Store.t.conn)
          remains a throughput ceiling, NOT a correctness risk under
@@ -760,85 +413,11 @@
          (invariant 4) are what make the server survive the next
          traffic spike on throughput, not just on not-crashing.
 
-         =========================================================
-         WHAT THIS IS NOT
-         =========================================================
-         - Not a general middleware framework. The launch gate
-           stays; we just narrow the lock scope.
-         - Not a PG connection pool. The single Store conn remains
-           v1; throughput of DB prims is bounded by it, but that
-           is acceptable for v1 dogfood load. A pool is a separate
-           later iteration if measured needed.
-         - Not async LLM token streaming over the wire. The SSE
-           path stays progress events; this work just makes it
-           not hold the global mutex and not crash on disconnect.
-         - Does not change route visibility / auth gate semantics.
-           The gate still runs before page_fn; only the lock scope
-           around it changes.
-
-         =========================================================
-         MAKE CHECKLIST (implementation order)
-         =========================================================
-         1. http_core.ml: add is_closed_writer_exn, safe_write,
-            safe_close (promote from http_agent.ml; keep the SSE
-            copies as thin aliases or refactor to shared).
-         2. Wrap html_response, text_response, json_response,
-            fragment_response, redirect_response body writes with
-            safe_write/safe_close (or catch respond_with_string).
-         3. http.ml error_handler: guard Body.write_string +
-            close_writer with safe_*.
-         4. http.ml launch Lwt.catch branch: if is_closed_writer_exn
-            on the caught exn, safe_close + return; else 500 as
-            today. Do NOT render 500 onto a dead writer.
-         5. Session.refresh_ui_shell: cache failure per branch
-            (short TTL or until branch reload); downgrade repeat
-            warns to debug. Emergency chrome fallback unchanged.
-         6. session_types: make Session.t.env a mutable field.
-         7. session rehydrate: build a FRESH env record (new Hashtbl,
-            same parent chain) and assign t.env <- fresh; do NOT
-            Hashtbl.clear the old one. Old envs stay alive for
-            in-flight closures (immutable-env discipline).
-         8. NO separate db_mutex needed: pgx_lwt serializes all
-            operations on a connection via its per-connection
-            Sequencer (Lwt_mutex). Concurrent Pg.execute on the
-            same conn queue safely. Verify this assumption holds
-            (read pgx_lwt.ml Sequencer) and document it; do not add
-            a db_mutex.
-         9. http_core.ml launch: narrow request_mutex to the
-            identity-attach critical section (resolve_identity +
-            attach + classify + refresh_ui_shell); release BEFORE
-            page_fn runs. page_fn runs lock-free.
-         10. http.ml serve: gate the acceptor on the inflight cap
-            (PP_HTTP_MAX_INFLIGHT, default 256) — reject overflow
-            with 503. (inflight gate already inside launch from
-            invariants 1/5 work.)
-         11. Agent SSE streaming drain (http_agent.ml api_agent
-            streaming branch) already runs as page work post-attach;
-            confirm it does not re-acquire request_mutex.
-         9. Smoke scripts: /tmp/pp_http_robust.py (abort N concurrent
-            mid-response; assert pid unchanged + /health 200),
-            /tmp/pp_sse_disconnect.py (open stream, drop client,
-            assert no Fatal error in log).
-         10. Keep all existing smoke tests green (route, eval, ui,
-             types, post routes, e2e).
-
-         =========================================================
-         VERIFICATION BARS
-         =========================================================
-         - dune build image && dune runtest (image) green.
-         - /tmp/pp_http_robust.py: fire 64 concurrent requests that
-           abort at 50ms; after, image pid is UNCHANGED and
-           /health returns 200. (Pre-fix this reproduces the crash.)
-         - /tmp/pp_sse_disconnect.py: open /api/agent stream,
-           close the socket after 1s; grep image.log for 'Fatal
-           error' over the next 10s -> zero matches.
-         - Watchdog log over a 1h soak under mixed traffic: zero
-           'pricklypear down' lines.
    |))
    )
   )
   (subsection primitives-layer
-   (doc "image/lib/primitives.ml: the ~20 impure fns registered at boot")
+   (doc "image/lib/primitives.ml: the impure fns registered at boot")
    (implements image/lib/primitives.ml image/lib/crud.ml image/lib/session.ml)
    (status partial)
    (verify
@@ -948,7 +527,7 @@
          - used-by pages; create package+local form
          - Edit only for function_defs rows
 
-         UI SHELL AS LISP (authoritative — 2026-07-12):
+         UI SHELL AS LISP (authoritative):
 
          RULE: If a human thinks of it as "the environment UI"
          (navbar, home workspace, app menus), it is Lisp on a
@@ -1011,7 +590,7 @@
   )
   (subsection data-browser
    (doc "Generic OCaml system UI for full CRUD over shared data_rows by type")
-   (status planned)
+   (status implemented)
    (implements image/lib/http.ml image/lib/crud.ml image/lib/store.ml)
    (verify
     (build "dune build image")
@@ -1196,13 +775,6 @@
   (subsection product-theme
    (doc "Product presentation as Lisp data: css/* sheet compiler, ui/theme + ui/css, emergency CSS only in OCaml")
    (status implemented)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
    (verify
     (build "dune build image")
     (smoke "(css/render (css/sheet (body margin 0 background \"#d4d0c8\"))) contains body{ and margin:0")
@@ -1404,7 +976,7 @@
          5. Shrink OCaml to emergency_css (+ login mini)
          6. Smokes: seed marker, personal override, failure
             fallback, fragment no-reinject
-         7. borge drift / resolve BORGE-1783837363
+         7. borge drift / resolve HTTP robustness verification
 
          STATUS: planned until make lands and silent full OCaml
          product CSS twin is gone.
@@ -1503,7 +1075,7 @@
          Release build MUST copy libs/ into the tarball.
 
          =========================================================
-         LIBRARY SYNC CLI (2026-07-11 — implement)
+         LIBRARY SYNC CLI
          =========================================================
          PROBLEM: live function_defs drift from git libs/*.pp when users
          or AI edit in the browser. Push of kernel does NOT overwrite DB.
@@ -1555,7 +1127,7 @@
            - push ui after edit reloads live
 
          =========================================================
-         BIBLE LIBRARY (BSB dogfood — PLAN locked 2026-07-11)
+         BIBLE LIBRARY (BSB dogfood)
          =========================================================
 
          GOAL: read BSB from the live image via Lisp + /bible page.
@@ -1702,13 +1274,6 @@
   (subsection browser-repl
    (doc "Evaluate Lisp from the browser against the live session env")
    (status implemented)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
    (verify
     (build "dune build image")
     (smoke "POST /api/eval (+ 20 22) => 42; define + call persists"))

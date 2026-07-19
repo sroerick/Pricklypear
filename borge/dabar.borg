@@ -44,18 +44,11 @@
   (subsection packaging
    (doc "Library layout, boot policy, deps on std/bible")
    (status implemented)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
    (implements libs/bible/lib.pp libs/dabar/lib.pp scripts/seed_bible_bsb.py)
    (verify
     (smoke "libs/bible/lib.pp loads via load-library bible")
     (smoke "libs/dabar/lib.pp loads via load-library dabar after bible")
-    (smoke "boot seed_stdlib loads bible; dabar remains opt-in recipe until stable"))
+    (smoke "boot seed_stdlib loads bible and dabar"))
 
    (details
     (doc (|
@@ -67,9 +60,8 @@
            scripts/seed_interlinear.py  (from dabar extract)
 
          BOOT:
-           seed_stdlib loads: std, ui, ai, todo, bible
-           dabar: POST /api/recipe/dabar or (load-library "dabar")
-           — not auto-boot until study layer is dogfood-stable.
+           seed_stdlib loads: std, weather, ui, layout, welcome, ai, outline, notes, signup, todo, contacts, plan, chat, bookmarks, calendar, flashcards, bible, dabar.
+           dabar is seeded on boot; no separate recipe step required.
 
          DEPS:
            dabar assumes bible/* and html/* (std) already bound.
@@ -86,13 +78,6 @@
   (subsection reader
    (doc "Existing bible/ reader — baseline for dabar")
    (status implemented)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
    (verify
     (smoke "31086+ bible-verse rows after full seed")
     (smoke "GET /bible?book=John&chapter=3 renders chapter")
@@ -106,9 +91,8 @@
          - /bible + /partials/bible-chapter
          - html/* selects for book/chapter/verse
 
-         STILL IN READER WP1:
-         - (bible/prev-chapter) / (bible/next-chapter) + UI
-         - (bible/random) + Surprise control
+         - (bible/prev-ref) / (bible/next-ref) + UI
+         - (bible/random-row) + Surprise control
          - empty/missing chapter UX
     |))
    )
@@ -116,17 +100,10 @@
   (subsection navigation
    (doc "Prev/next chapter and random verse")
    (status implemented)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
    (verify
     (smoke "next from John 3 → John 4 panel")
     (smoke "prev from Genesis 1 stays or wraps per policy")
-    (smoke "(bible/random) returns a ref+text; UI button works"))
+    (smoke "(bible/random-row) returns a ref+text; UI button works"))
 
    (details
     (doc (|
@@ -134,20 +111,13 @@
          Wrap policy v1: stop at ends (no wrap), or wrap OT/NT —
          pick stop-at-ends for clarity.
          Random: SQL ORDER BY random() LIMIT 1 via thin prim or
-         store helper; expose (bible/random) in bible/ or dabar/.
+         store helper; exposed as (bible/random-row).
     |))
    )
   )
   (subsection strongs
    (doc "Strong's lexicon seed, lookup, pages")
    (status implemented)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
    (verify
     (build "python3 scripts/seed_strongs.py --help exits 0")
     (smoke "after seed: (strongs/get \"H430\") or G26 returns lemma/description")
@@ -173,7 +143,7 @@
   )
   (subsection interlinear
    (doc "Word-level interlinear fragments + toggles")
-   (status partial)
+   (status planned)
    (verify
     (smoke "seed loads tokens for at least John 1 or full corpus")
     (smoke "(bible/interlinear \"John\" 1 1) or dabar/inter returns HTML fragment")
@@ -200,7 +170,7 @@
    (doc "Postgres full-text search over verse text (not semantic)")
    (status partial)
    (verify
-    (smoke "bible/search love returns ranked hits better than bare ILIKE smoke"))
+    (smoke "bible/search love returns ranked hits"))
    (details
     (doc (|
          OPTIONAL WP: expression index / tsvector on
@@ -212,16 +182,13 @@
    )
   )
   (subsection work-packages
-   (doc "Implementation order")
+   (doc "Core dabar features")
    (status planned)
    (details
     (doc (|
-         WP0  This chapter + root inline + image.packages cross-link
-         WP1  Navigation: prev/next + random (bible/)
-         WP2  Strong's seed + dabar/strongs + /strongs
-         WP3  Interlinear seed + toggle + Strong's links
-         WP4  FTS (optional parallel)
-         WP5  Multi-file library / require (when packages grow)
+         Provides Strong's lexicon lookup and word-level interlinear study tools
+         that build upon the bible/ reader. Includes navigation (prev/next/random)
+         and optional full-text search over verse text.
 
          NOT THIS CHAPTER: personal notes/bookmarks — separate module.
 

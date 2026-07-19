@@ -47,48 +47,9 @@
         branch only.
    |))
   )
-  (subsection ast-nodes
-   (doc "Design: addressable AST nodes as substrate for surgical edits and AI patches")
-   (status planned)
-   (details
-    (doc (|
-         TODAY: two trees, two models
-         - Branch tree: rows in branches, fork/merge,
-           recursive CTE lookup, unit = whole function
-         - AST tree: JSONB blob in function_defs.body,
-           in-memory eval walk, no node ids, edit =
-           replace whole body
-
-         PROPOSAL (design only):
-         Give AST nodes identity so AI/human tools can
-         patch subexpressions without rewriting whole
-         functions, while keeping branches as the
-         versioning model over named subtrees.
-
-         Sketch (non-normative until a later plan pass):
-           nodes(id, branch_id, kind, payload, parent_id,
-                 position, ...)
-         function_defs may become a view/root pointer
-         over a node tree, or remain a cache of the
-         root expression.
-
-         Non-goals for first product cut:
-         - Do not block function-editor or ai-authoring
-           tools on this redesign
-         - Whole-function propose/edit ships first
-    |))
-   )
-  )
   (subsection fork
    (doc "Forking a branch")
    (status implemented)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
    (details
     (doc (|
          (fork 'main 'alice/experiment)
@@ -116,8 +77,8 @@
    (verify
     (test "image/test/primitives_test.ml — 48 alcotest cases")
     (build "dune build @all")
-    (smoke "/tmp/pp_fork_it9.py — fork creates + copies function_defs")
-    (smoke "/tmp/pp_override_it9.py — override-walk + branch isolation"))
+    (smoke "fork creates a branch and copies function_defs")
+    (smoke "override-walk resolves child overrides before parent; branches isolate writes"))
 
   )
   (subsection merge
@@ -133,58 +94,47 @@
            freely.
          - Expandable later (PR/review flow).
 
-         Implementation:
-         1. Compute diff: code rows in alice/experiment
-            whose updated_at > parent's last_sync_with_child,
-            OR whose name was added in child.
-         2. For each changed function, apply to parent.
-            Conflict if parent ALSO modified same name
-            since fork. Per-function conflict (coarse, not
-            line-level): pick a version, or write a new one.
-         3. Schema changes (type_defs) are merge-governed
-            separately: only main accepts schema changes.
-            A branch can propose; main accepts via a
-            special merge that runs the migration.
+         Implementation (Store.merge_branch, image/lib/store.ml):
+         upserts all function_defs rows from source into target
+         via INSERT ... ON CONFLICT (branch_id, name) DO UPDATE,
+         wrapped in a SERIALIZABLE transaction. Initial cut
+         copies the full set; diff-based merge (only changed
+         rows, per-function conflict resolution) is not yet
+         implemented.
 
-         The merge needs a real htmx UI (in the inspector):
-         list changed functions, show diffs (whole function
-         bodies since functions are atomic units), let user
-         resolve per-function.
+         type_defs merge: not yet implemented. A branch cannot
+         propose a schema change through merge today; schema
+         changes land via migrations applied on boot
+         (see migrations.additive-only) and are visible to all
+         branches on next lookup.
    |))
    )
    (verify
     (test "image/test/primitives_test.ml — 48 alcotest cases")
     (build "dune build @all")
-    (smoke "/tmp/pp_merge_it10.py — merge basic upsert + admin-only policy"))
+    (smoke "merge upserts changed rows; merges into system/* require admin"))
   )
   (subsection schema-authority
    (doc "Types in main, branches read against main's schema")
    (status partial)
    (details
     (doc (|
-         Schema authority is 'main'. Branches CANNOT change
-         the underlying table shape directly; they propose
-         schema changes which only take effect when merged
-         to main.
+         Schema authority is 'main'. Branches cannot change
+         the underlying table shape directly; schema changes
+         land via additive-only migrations applied on boot
+         (see migrations.additive-only), and are visible to
+         all branches immediately on next function lookup.
 
-         When main accepts a schema change:
-         1. Run migration on shared data table
-            (additive-only: see migrations.additive-only)
-         2. Bump schema_version
-         3. All branches see new shape on next function
-            lookup (cache invalidation: schema_version
-            check, or LISTEN/NOTIFY)
+         data_rows has no branch_id; type_defs are stored
+         per-branch but the underlying table shape is shared
+         (see object-model). Branch code that ignores new
+         fields reads a subset without error. Branch code
+         that expects removed fields would fail, but
+         additive-only means removed fields do not occur.
 
-         Branch code that ignores new fields: fine, reads
-         subset. Branch code that expects old fields:
-         errors at runtime (additive-only means removed
-         fields don't happen, but renamed/reused-semantic
-         fields could; document expectations).
-
-         This makes type_defs the slow-changing,
-         merge-governed layer; function_defs the
-         fast-changing, per-branch layer. Two tiers of
-         change, mirroring the OCaml-slow/Lisp-fast split.
+         type_defs merge: not yet implemented. Today all
+         data lives in the shared data_rows table; per-type
+         Postgres tables are not created by deftype.
    |))
    )
   )
@@ -257,7 +207,8 @@
            per name: Use main's version | Keep mine | Diff
            per package: Reset package pins to main
            unoverride prim: delete personal row for name
-             so inheritance resumes (MISSING today)
+             so inheritance resumes (Session.unoverride;
+             POST /branches/unoverride)
 
          load-library WARNING (planned): when current branch
          is not system/main, warn that loading pins the
@@ -387,13 +338,6 @@
            lookup_function_on_branch (no CTE)
            delete_function_on_branch (unoverride)
 
-         PHASES:
-           A list: ★ current, checkout POST, open, own counts
-           B detail: overrides + link /binding/<name>
-           C diff vs parent (two pre)
-           D fork form + promote panel + unoverride
-           E activity / revision log
-
          NON-GOALS (light):
            git SHAs/commits, PR review UI, blame,
            per-branch data, fancy fork-tree viz
@@ -404,6 +348,38 @@
     (smoke "GET /branches shows current ★ and checkout")
     (smoke "POST checkout switches current-branch")
     (smoke "detail lists personal overrides vs main"))
+  )
+  (subsection ast-nodes
+   (doc "Design: addressable AST nodes as substrate for surgical edits and AI patches")
+   (status planned)
+   (details
+    (doc (|
+         TODAY: two trees, two models
+         - Branch tree: rows in branches, fork/merge,
+           recursive CTE lookup, unit = whole function
+         - AST tree: JSONB blob in function_defs.body,
+           in-memory eval walk, no node ids, edit =
+           replace whole body
+
+         PROPOSAL (design only):
+         Give AST nodes identity so AI/human tools can
+         patch subexpressions without rewriting whole
+         functions, while keeping branches as the
+         versioning model over named subtrees.
+
+         Sketch (non-normative until a later plan pass):
+           nodes(id, branch_id, kind, payload, parent_id,
+                 position, ...)
+         function_defs may become a view/root pointer
+         over a node tree, or remain a cache of the
+         root expression.
+
+         Non-goals for first product cut:
+         - Do not block function-editor or ai-authoring
+           tools on this redesign
+         - Whole-function propose/edit ships first
+    |))
+   )
   )
  )
 )

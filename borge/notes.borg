@@ -29,7 +29,7 @@
         NOT file-backed markdown under libs/ or the VPS disk.
         Notes are durable OBJECTS in Postgres (data_rows), edited live.
 
-        KILLER PROPERTY ON THIS OS:
+        WHY THIS OS:
           Every note/outline is a Lisp value. Agents and humans use
           the same functions via REPL / pp_eval / htmx. No notes REST
           API to invent — the image is the API.
@@ -70,13 +70,6 @@
   (subsection outline-model
    (doc "Sexp outline ADT: node tree with stable ids — org structure as data")
    (status verified)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
    (implements libs/outline/lib.pp)
    (verify
     (smoke "outline/node constructors and outline/html produce nested details")
@@ -137,13 +130,6 @@
   (subsection storage
    (doc "data_rows types for notes and optional link index; shared vault")
    (status implemented)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
    (implements libs/notes/lib.pp)
    (verify
     (smoke "(deftype 'note …) via load-library notes")
@@ -191,25 +177,8 @@
            v1 overwrite on save (updated_at). Revision log is a
            future chapter; do not block on Doltgres.
 
-         STORAGE ALTERNATIVES (decision 2026-07-11):
-           Phase 1 PRIMARY: whole outline as JSON (or list-encoded
-           JSON) on the note row — document = tree (org buffer model).
-           Lisp structure ops on in-memory lists; encode/decode at
-           DB boundary (json-emit / json-parse prims).
-
-           NOT phase 1: PostgreSQL ltree. ltree is a solid contrib for
-           path queries (a.b.c, ancestors/descendants) when every
-           headline is its own row. It does not replace sexp trees for
-           org-like structure editing of one note. Path rewrites on
-           promote/demote/move-subtree are painful if ltree is sole truth.
-
-           Phase 2+ IF needed: note_node adjacency (parent_id, pos,
-           note_slug) for huge notes / concurrent section edit;
-           optional ltree OR closure table as a query index, not the
-           only representation. Recursive CTEs (already used for
-           branches) remain the default SQL hierarchy tool.
-
-           Do not install ltree only to start notes.
+         STORAGE:
+           Outlines are stored as JSON on the note row. The ltree extension is not used.
     |))
    )
   )
@@ -255,13 +224,6 @@
   (subsection dailies-and-capture
    (doc "Daily outlines and quick capture (org-roam-dailies / org-capture shaped)")
    (status implemented)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
    (verify
     (smoke "(notes/daily) returns same slug for same day on second call")
     (smoke "(notes/capture title body) creates inbox-tagged note or appends")
@@ -292,13 +254,6 @@
   (subsection hypermedia-ui
    (doc "Routes, partials, structure-edit via htmx; menu entry")
    (status implemented)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
    (implements libs/notes/lib.pp image/lib/http.ml)
    (verify
     (smoke "GET /notes lists recent notes")
@@ -347,13 +302,6 @@
   (subsection agent-access
    (doc "Agents use notes via eval — no separate notes HTTP API")
    (status implemented)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
    (verify
     (smoke "pp_eval notes/list and notes/get")
     (smoke "agent-task tool list may include notes_search later"))
@@ -377,61 +325,15 @@
    )
   )
 
-  (subsection phases
-   (doc "Implementation phases and acceptance")
-   (status partial)
-   (verify
-    (smoke "phase 1 dogfood: one project outline + list/show/save"))
-   (details
-    (doc (|
-         PHASE 1 — Outline core (ship first):
-           - libs/outline/lib.pp pure tree + html
-           - libs/notes/lib.pp deftype note, upsert/get/list
-           - store outline JSON on note
-           - /notes index + /notes?slug= foldable view
-           - whole-outline save (textarea sexp or JSON editor OK)
-           - load-library notes recipe
 
-         PHASE 2 — Roam + structure:
-           - note-link reindex, backlinks partial
-           - [[slug]] render
-           - htmx structure ops (promote/demote/move/insert)
-           - daily + capture
-           - menu entry
-
-         PHASE 3 — Comfort:
-           - tags filter, better search UI
-           - light typography
-           - unlinked mentions optional
-           - agent-task tools
-
-         PHASE 4 — Optional:
-           - graph page
-           - node-level rows if single-blob hurts
-           - revision history
-           - per-user vault field
-
-         ACCEPTANCE FOR "v1 notes":
-           Phase 1 + backlinks + daily + capture (phase 2 subset).
-           Graph not required.
-    |))
-   )
-  )
   (subsection unified-todos
    (doc "Basecamp lists + org node todos; unified /todos with smart views")
    (status implemented)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
    (implements libs/todo/lib.pp libs/outline/lib.pp libs/notes/lib.pp)
    (details
     (doc (|
          Real lists: todo-list + todo-item (list_id, title, notes,
-         state, due, position). state in todo/states (Lisp).
+         state, due, position). state in todo/state/list (Lisp).
          Note todos: outline node.todo; scrape + write-back.
          Smart views: everything, from-notes, default Inbox.
          /todos nav + body; cycle state; create list; add item.

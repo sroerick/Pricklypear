@@ -57,15 +57,8 @@
    )
   )
   (subsection reader
-   (doc "S-expression reader: source text -> AST")
+   (doc "The reader turns source text into AST; the AST is the source of truth (homoiconic, persisted as JSONB); read/print roundtrip fidelity is what makes stored code trustworthy.")
    (status implemented)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
 
    (details
     (doc (|
@@ -423,7 +416,7 @@
            - infer_effects runs on EXPANDED bodies when possible
            - quote / quasiquote templates contribute no runtime
              effects except through unquote subexpressions
-           - defmacro body effects are Meta/code-time; the
+           - defmacro body effects are Meta/code-time (top-level define persists via the session layer); the
              expanded call site carries the real effects
            - prim_effects: gensym = Pure; macroexpand* = Meta/Pure
 
@@ -513,7 +506,7 @@
    )
   )
   (subsection primitives
-   (doc "The ~20 impure functions the interpreter calls into")
+   (doc "Primitives are the boundary between the pure interpreter and the outside world; pure prims are wrapped via register_sync (results in Lwt.return); DB-touching prims are normal prim_fns returning value Lwt.t. The impure functions the interpreter calls into")
    (status partial)
    (details
     (doc (|
@@ -527,7 +520,6 @@
            (get 'type id) -> record value
            (update 'type id {fields...}) -> VRef
            (delete 'type id) -> VNil
-           (query 'type where: ...) -> VList of records
            (select-for-update 'type id) -> record (locked)
 
          Branching:
@@ -545,14 +537,13 @@
 
          Reflection:
            (type-of value) -> type-tag
-           (describe 'type) -> schema
-           (inspect binding) -> AST + metadata
+
+
            (list-bindings) -> VList
 
          Sessions:
            (whoami) -> username
            (current-author) -> username (* for perm checks *)
-           (call-fn name args...)       (* resolves+calls *)
 
          All primitives that touch data consult the
          CURRENT-AUTHOR (from the binding being executed)
@@ -567,13 +558,6 @@
    (doc "Capability effects for Lisp programs: classify pure vs DB vs AI vs publish; infer; gate; display. Separate from OCaml 5 host effects and from Lwt async plumbing.")
    (implements lisp/lib/effect.ml lisp/lib/eval.ml image/lib/prims_pure.ml)
    (status implemented)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
    (verify
     (build "dune build lisp image")
     (test "effect inference pure vs db vs ai on sample ASTs")
@@ -638,7 +622,7 @@
            Ai        propose-function / LLM client
            Html      render-html (soft; display intent, not security)
            Txn       body expects with-transaction scope
-           Meta      define-persist side channel? (see note)
+
 
          A function's effect set is a SET of labels, e.g.
            {ReadDb, Html}
@@ -651,9 +635,9 @@
            optional sugar: Db = ReadDb∪WriteDb
 
          NOTE on (define ...):
-           Top-level define persists code. That is a Meta/code-store
-           write performed by the REPL/session layer, not always an
-           effect inside the defined body. Distinguish:
+           Top-level define persists code — a code-store write
+           performed by the session layer, NOT an effect tracked
+           in the lattice. Distinguish:
              - effects OF a function body (what it does when called)
              - effects OF defining it (session install + persist)
 

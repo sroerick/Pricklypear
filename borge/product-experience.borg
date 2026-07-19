@@ -40,13 +40,6 @@
   (subsection concepts-guide
    (doc "In-app about page: glossary, access, first tour, horizon summary")
    (status implemented)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
    (verify
     (build "dune build image")
     (smoke "GET /about contains Image, Store, Function, Branch, Route, AI"))
@@ -89,13 +82,6 @@
   (subsection access-paths
    (doc "Documented ways humans reach a live image")
    (status implemented)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
    (verify
     (smoke "GET /login form; POST /login mints pp_session")
     (smoke "scripts/verify_auth.sh or auth_product_smoke passes")
@@ -140,13 +126,6 @@
   (subsection vocabulary
    (doc "Friendly UI labels over systems jargon")
    (status implemented)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
    (verify
     (smoke "nav/home use Functions (not only Bindings) and point to /about"))
 
@@ -181,13 +160,6 @@
   (subsection first-run-recipe
    (doc "One-click or one-form 'make a hello page' onboarding")
    (status implemented)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
    (verify
     (build "dune build image")
     (smoke "POST /api/recipe/hello creates hi-page route; GET /hello works"))
@@ -210,13 +182,6 @@
   (subsection public-release
    (doc "Hosted public face on the image: layout components, welcome, code browser, book PDF, source tarball")
    (status implemented)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
    (implements
     libs/layout/lib.pp
     libs/welcome/lib.pp
@@ -411,7 +376,7 @@
   (subsection analytics
    (doc "Product metrics page: viewers, logins, traffic — observation not work")
    (status partial)
-   (implements image/lib/ops_stats.ml image/lib/ops_log.ml image/lib/http_ops.ml libs/ops/lib.pp)
+   (implements image/lib/ops_stats.ml image/lib/ops_log.ml image/lib/http_ops.ml)
    (verify
     (build "dune build image")
     (smoke "GET /analytics (authed) shows day rollup: viewers, page views, logins")
@@ -452,7 +417,9 @@
          type ops-daily for prior days (fields JSON):
            day, unique_viewers, page_views, logins_ok, logins_fail,
            authed_requests, errors, fatals, top_paths (list).
-         Flush end-of-day or hourly snapshot is enough for dogfood.
+         Counters flush periodically (in-memory day counters
+         plus optional ops-daily rows); there are NO
+         per-request Postgres inserts.
 
          SURFACE
          - GET /analytics  (hard-private; any logged-in user in v1,
@@ -477,7 +444,7 @@
   (subsection reliability-work-queue
    (doc "Structured errors → fingerprint → note + todo; LLM enriches work items")
    (status partial)
-   (implements image/lib/ops_log.ml image/lib/ops_incidents.ml libs/ops/lib.pp)
+   (implements image/lib/ops_log.ml image/lib/ops_incidents.ml)
    (verify
     (build "dune build image")
     (smoke "(log-tail 20) returns recent structured events")
@@ -553,10 +520,10 @@
          outside the image; do not pretend Lisp can restart itself
          after a hard process death.
 
-         V1 CUT (implement now)
+         V1 CUT (shipped)
          - Ops_log ring + stderr mirror
          - Ops_stats request counters + auth_log login counts
-         - GET /analytics page (kernel or libs/ops)
+         - GET /analytics page (kernel)
          - Fingerprint store in data_rows ops-incident
          - Auto-file note+todo on new error/fatal
          - Template body first; LLM enrich if Ai path available

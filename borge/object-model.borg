@@ -9,7 +9,7 @@
   (verify
    (build "dune build @all")
    (test "image/test/primitives_test.ml 48 alcotest cases incl. CRUD + deftype + dict + render-html")
-   (smoke "/tmp/pp_crud_it13.py + /tmp/pp_types_it14.py + /tmp/pp_sfu_it17.py + /tmp/pp_uf_it18.py"))
+   (smoke "CRUD + deftype + dict + render-html exercised end to end"))
   (details
    (doc (|
         An "object" is a typed record with an id, a set of
@@ -29,10 +29,11 @@
             (owner :ref user)
             (attendees :array (ref user))))
 
-        The declaration lives in function_defs-equivalent
-        table (type_defs, branched like code). On
-        declaration/merge to main, the system creates or
-        ALTERs the underlying Postgres table.
+        The declaration lives in a code-store table
+        (type_defs, branched like code). It registers the
+        type — it does NOT emit DDL. All data rows of all
+        types live in the shared data_rows table keyed by
+        (type_name, id), fields packed as jsonb.
 
         The type is itself inspectable data: the htmx UI
         can render "list all types, show fields, browse
@@ -45,7 +46,8 @@
           (get 'event id)            -> row fetch
           (update 'event id {...})   -> row update
           (delete 'event id)         -> row delete
-          (query 'event where: ...)  -> parameterized SQL
+          (rows 'event)              -> all rows of a type
+          (find-row / find-rows / find-text ...) -> lookup
           (select-for-update ...)    -> explicit row lock
 
         References are first-class values: a :ref user
@@ -58,9 +60,9 @@
         take event values, return bool, no DB. The DB and
         the Lisp have a clean seam.
 
-        NO ORM. SQL is the query language. (query ...)
-        desugars to parameterized SQL; the primitive layer
-        parses results into typed Lisp values.
+        NO ORM. The primitive layer reads and writes the
+        shared data_rows table with plain SQL and parses
+        results into typed Lisp values.
    |))
   )
   (subsection type-system
@@ -73,9 +75,13 @@
            :int            int8
            :bool           bool
            :timestamptz    timestamptz
-           :ref <type>     uuid FK to <type>_table.id
+           :ref <type>     id of a data_rows row of <type>
            :array <type>   <type>[] (homogeneous)
            :json           jsonb (schemaless escape hatch)
+
+         Field values are stored in the data_rows.fields
+         jsonb — there are no per-type tables (see
+         storage.schema).
 
          A (ref user) value is a tagged id: the value
          carries its target type so the interpreter can

@@ -8,44 +8,9 @@
   
   (details
    (doc (|
-        Auth is its own unikernel, separate from the
-        supervisor. This is deliberate, not just
-        componentization:
-
-        - AUDIT/TRUST BOUNDARY: auth holds credentials
-          and verifies them. If compromised, the whole
-          system is compromised. This image should be
-          small, boring, never touched. The supervisor
-          changes often; auth changes rarely. Separating
-          means supervisor changes never risk auth code.
-        - BLAST RADIUS: a memory bug in the supervisor
-          cannot reach into auth's address space to read
-          credentials. (Both are unikernels with their
-          own address spaces; no shared memory.)
-        - RESTART INDEPENDENCE: supervisor restarts
-          (new fleet logic shipped) don't kill active
-          sessions (auth keeps running, tokens stay
-          valid). Auth restarts (rare) are explicit.
-        - DEPENDENCY HYGIENE: auth pulls crypto
-          primitives (argon2, ed25519, HMAC). Supervisor
-          pulls process management. Each unikernel's
-          dep surface stays small and Mirage-idiomatic.
-
-        Auth's job is FOUR PURE FUNCTIONS of the
-        credential store (in Postgres):
-          verify(cred) -> May<user_id>
-          lookup(user_id) -> May<User>
-          mint(user_id) -> token
-          verify_token(token) -> May<user_id>
-        Plus boot/attach provisioning, which is the
-        supervisor's job, NOT auth's. Auth knows
-        nothing about the fleet.
-
-        Auth is the ONLY thing that holds the session
-        token signing key. The supervisor never sees
-        raw credentials (passwords, keys) past the
-        initial verify call — it only sees user_ids and
-        signed tokens. Good separation.
+        Auth is in-process in the single image (image/lib/auth_password.ml,
+        image/lib/auth_store.ml). It provides password verify, session mint/verify,
+        SSH-key verify, and user CRUD; topology per single-image.borg.
    |))
   )
   (subsection credentials-store
@@ -70,7 +35,7 @@
 
            sessions (id uuid PK,            -- the token's opaque id
                      user_id uuid FK,
-                     token_hash text,      -- HMAC of token; lookup target
+                     token_hash text,      -- SHA-256 of token; lookup target
                      expires_at timestamptz,
                      created_at timestamptz,
                      revoked_at timestamptz NULL)
@@ -80,29 +45,8 @@
                      source_ip text,
                      happened_at timestamptz)
 
-           system_keys (id text PK,        -- 'session_signing'
-                        key_data bytea,    -- the HMAC signing key, raw
-                        created_at timestamptz)
-
          KEY STORAGE (
           in-Postgres, role-isolated):
-         - The session signing key lives in
-           system_keys, read on auth boot.
-         - system_keys is in a dedicated PG role
-           that ONLY the auth image connects as.
-           A DB dump from any other role does not
-           include it (defense-in-depth, free).
-         - KNOWN RISK: a DB dump from auth's role,
-           or an auth-image compromise, leaks the
-           signing key -> all web sessions forgeable.
-           Accepted for now (personal/small-team OS).
-         - HARDENING GOAL (when this becomes stable &
-           useful): move the signing key to
-           auth-image MEMORY ONLY (env var on boot,
-           never touches disk). Tokens survive auth
-           restart only if the same key re-supplied.
-           Invalidating all sessions on key rotation
-           is acceptable then.
          - Other credentials (password hashes via
            argon2id, SSH public keys) in Postgres
            permanently; that's correct and stable
@@ -113,26 +57,19 @@
   )
   (subsection verification
    (doc "verify(cred) / lookup / mint / verify_token — the four pure functions")
-   (implements auth/lib/verify.ml auth/lib/tokens.ml)
+   (implements image/lib/auth_store.ml image/lib/auth_password.ml)
    (status partial)
    (details
     (doc (|
-         SSH KEY VERIFICATION (for supervisor SSH front door):
-         1. Supervisor does SSH handshake, receives
-            the presented public key.
-         2. Supervisor calls auth:
-            verify_ssh_key(presented_key) -> May<user_id>
-         3. Auth: parse key, SELECT FROM credentials
+         SSH KEY VERIFICATION:
+         1. Call verify_ssh_key(presented_key) -> May<user_id>
+         2. Auth: parse key, SELECT FROM credentials
             WHERE kind='ssh_key' AND public_data = key.
             Return user_id or denied.
-         4. Supervisor calls auth.lookup(user_id) ->
-            User record (for is_admin, etc.).
-         5. Auth logs to auth_log.
+         3. Auth logs to auth_log.
 
          PASSWORD VERIFICATION (for web login):
-         1. User POSTs username+password to the
-            supervisor's /login (or the auth image's
-            own endpoint — TBD; either way).
+         1. User POSTs username+password to /login.
          2. Auth: SELECT secret_data FROM credentials
             WHERE kind='password' AND user_id=
             (SELECT id FROM users WHERE username=$1).
@@ -142,20 +79,21 @@
 
          TOKEN MINTING (after web login):
          1. Auth: generate random token bytes (32B),
-            HMAC-sign with the session_signing key
-            from system_keys, opaque_id = random,
+            HMAC-sign with the session signing key
+            from the credentials row (stored alongside
+            the password hash), opaque_id = random,
             signed = HMAC(opaque_id).
-         2. Auth: INSERT INTO sessions (id=opaque_id,
-            user_id, token_hash=signed, expires_at=...).
+         2. Auth: INSERT INTO auth_sessions
+            (id=opaque_id, user_id, token_hash=signed,
+             expires_at=...).
          3. Auth: return token = base64(opaque_id ||
             signed). Client stores as cookie.
 
          TOKEN VERIFICATION (on web requests):
-         1. Client sends token cookie. Routing layer
-            (supervisor or relayd-style proxy) calls
+         1. Client sends token cookie. The image calls
             auth.verify_token(token).
          2. Auth: split token, recompute HMAC,
-            compare; if match, lookup sessions row,
+            compare; if match, lookup auth_sessions row,
             check not revoked and not expired. Return
             user_id or denied.
          3. Auth logs to auth_log.
@@ -164,37 +102,38 @@
          opaque_id (32B random) || HMAC(opaque_id)
          We control both ends; don't need JWT's
          cross-system interop claims. Hash stored in
-         sessions table enables revocation.
+         auth_sessions table enables revocation.
     |))
    )
   )
   (subsection bootstrap-admin
    (doc "First-admin creation via env var on auth first boot")
-   (implements auth/lib/admin_api.ml auth/lib/boot.ml)
+   (implements image/lib/auth_store.ml)
    (status implemented)
    (details
     (doc (|
          Bootstrapping the first user, with no users yet:
 
-         1. Operator sets env var on the auth unikernel
-            at first boot:
-              PRICKLYPEAR_BOOTSTRAP_ADMIN_KEY=<ssh-ed25519 AAAA...>
-         2. Auth boot: if users table is empty AND the
-            env var is set, INSERT into users
-            (username='admin', is_admin=true) and into
-            credentials (kind='ssh_key',
-            public_data=the key, user_id=admin).
+         1. At auth boot, if the users table is empty,
+            check env vars PP_BOOTSTRAP_USER and
+            PP_BOOTSTRAP_PASSWORD (default: admin/admin).
+         2. If set, INSERT into users
+            (username=$PP_BOOTSTRAP_USER, is_admin=true)
+            and into credentials (kind='password',
+            public_data=null,
+            secret_data=argon2 hash of $PP_BOOTSTRAP_PASSWORD,
+            user_id=the new user).
          3. Auth boot: warn loudly in logs that
             bootstrap was used, and recommend clearing
-            the env var afterward.
-         4. After first boot, the env var is ignored.
+            the env vars afterward.
+         4. After first boot, the env vars are ignored.
 
          Subsequent users: added by an admin via the
-         supervisor's admin UI (which itself authenticates
-         via auth) calling an auth primitive
-         (create-user username, add-credential user_id
-         ssh_key, etc.). These primitives require
-         is_admin=true on the calling session.
+         admin UI (which authenticates via auth) calling
+         an auth primitive (create-user username,
+         add-credential user_id ssh_key, etc.). These
+         primitives require is_admin=true on the calling
+         session.
 
          No interactive bootstrap flow needed; the env-var
          pattern is simple, standard, and audit-logged.
@@ -233,47 +172,12 @@
    )
   )
   (subsection rpc-from-supervisor
-   (doc "How supervisor calls auth: internal signed/mTLS RPC")
-   (implements supervisor/lib/auth_client.ml)
+   (doc "Deprecated: auth is in-process; no RPC boundary")
    (status deprecated)
    (details
     (doc (|
-         The supervisor calls auth over an internal RPC
-         (HTTP+JSON, or a tighter binary protocol — HTTP
-         is simpler and auth doesn't need throughput).
-         On the internal hypervisor network.
-
-         AuthENTICATION OF THE RPC ITSELF:
-         - mTLS between supervisor and auth:
-           both present certs signed by a shared CA
-           (the CA is the hypervisor itself, or a
-           generated root for the deployment).
-         - OR simpler: a shared static secret in a
-           header, both images load from env vars,
-           rotated manually. Less secure but v1-OK
-           for a trusted internal network.
-         - Either way: auth refuses calls from anything
-           that doesn't present the right credential.
-           The supervisor is the only legitimate caller.
-
-         Endpoints auth exposes (internal only):
-           POST /verify_ssh_key   (key) -> {user_id or denied}
-           POST /verify_password  (user, pw) -> {user_id or denied}
-           POST /mint_token       (user_id) -> {token, expires_at}
-           POST /verify_token     (token) -> {user_id or denied}
-           GET  /lookup/:user_id             -> {user} (admin only)
-           POST /admin/create_user (admin only)
-           POST /admin/add_credential (admin only)
-
-         The supervisor holds a long-lived client cert
-         (or shared secret) for these calls. It is the
-         only caller; auth refuses all others.
-
-         v1 SHIPPED: plain HTTP+JSON on internal network,
-         /verify_ssh_key and token paths live.
-         DEFERRED: mTLS/shared-secret RPC auth of the
-         caller; full admin endpoint wiring (see
-         auth.user-management).
+        Retired by the single-image pivot: auth is in-process.
+        The supervisor no longer calls auth over RPC.
     |))
    )
   )
@@ -303,8 +207,10 @@
 
          single-image.borg simplifies HOW WE SHIP THE BINARY
          (one process to build/restart). It does NOT mean one human.
-         multi-user.isolation (per-user image process) remains the
-         isolation architecture for the complete system.
+         multi-user.cotenant-isolation (one process, session +
+         branch scoped) is the v1 isolation model;
+         multi-user.isolation (per-user image process) remains a
+         future hardening axis, not the shipping topology.
 
          ============================================================
          PERSONAS
@@ -397,20 +303,19 @@
            Each user sets a short sticky plan (multi-user.user-plan).
            (plan "…") / /plan / /u/:user (finger). Complements chat.
 
-         US-ISOLATION — Process isolation (complete multi-user)
-           Logging in boots or attaches that user's image process
-           (supervisor fleet; multi-user.isolation). Alice's wedge
-           does not take Bob offline. Auth never sees fleet; fleet
-           never sees raw passwords — only user_id from verify.
-
-         US-COTENANT — Logical multi-user in one process (allowed
-           implementation shape when fleet is not running):
+         US-COTENANT — Logical multi-user in one process (THE v1
+           model):
            One image process serves many sessions; identity is
            per-request; personal branch is per-session; no cross-
-           user write to another's personal. Weaker blast radius
-           than process isolation but correct namespacing.
-           Complete system MUST support US-ISOLATION; cotenant is
-           not a substitute for the isolation model long-term.
+           user write to another's personal. Correct namespacing
+           with a shared-process blast radius.
+
+         US-ISOLATION — Process isolation (future hardening axis)
+           Logging in boots or attaches that user's image process
+           (multi-user.isolation). Alice's wedge does not take Bob
+           offline. Auth never sees fleet; fleet never sees raw
+           passwords — only user_id from verify. Not the shipping
+           topology in v1.
 
          US-PERMS — Authorization
            - define/route/deftype → current branch only
@@ -503,19 +408,18 @@
          database. htpasswd may exist only as emergency break-glass.
 
          ============================================================
-         FLEET ATTACH (complete multi-user isolation)
+         FLEET ATTACH (future design sketch — per-user processes)
          ============================================================
 
-         On successful login / SSH verify:
-           supervisor (or attach layer) resolves user_id →
-           Fleet.boot_or_attach(user) → image with env:
-             PP_USER_ID, PP_USERNAME, PP_BRANCH_ID, PP_BRANCH_NAME
-           Proxy HTTP/REPL to that instance.
+         v1 REALITY: identity attaches in-process at login;
+         one image serves all sessions (see single-image.auth).
 
-         Auth component: verify + mint only. Never boots images.
-         Image: trusts identity from supervisor/session attach;
-         does not re-verify password every request if session token
-         already verified at the edge of the image.
+         In a future per-user-process topology, on successful
+         login / SSH verify an attach layer would resolve
+         user_id → boot-or-attach a per-user image with env:
+           PP_USER_ID, PP_USERNAME, PP_BRANCH_ID, PP_BRANCH_NAME
+         and proxy HTTP/REPL to that instance. Auth's component
+         verifies + mints only; it never boots images.
 
          ============================================================
          RELATION TO BRANCHES (already built)
@@ -545,7 +449,7 @@
   )
   (subsection user-subdomains
    (doc "Per-user Host: {username}.{PP_BASE_DOMAIN} as personal garden URL")
-   (status planned)
+   (status partial)
    (implements image/lib/http.ml image/lib/http_core.ml image/lib/session.ml)
    (verify
     (build "dune build image")
@@ -555,138 +459,12 @@
     (smoke "apex base domain serves welcome/login; post-login redirects to user host"))
    (details
     (doc (|
-         ==========================================================
-         1. WHY
-         ==========================================================
-
-         Multi-user needs stable personal URLs, not only paths:
-           https://alice.pp.example/     Alice's computer
-           https://bob.pp.example/       Bob's computer
-           https://pp.example/           apex: welcome + login
-
-         Subdomains make gardens shareable, cookie-scoped, and
-         legible ("this tab is Alice"). They do NOT require a
-         process-per-user fleet: single-image cotenant resolves
-         Host → garden owner on each request.
-
-         ==========================================================
-         2. CONFIG
-         ==========================================================
-
-         PP_BASE_DOMAIN   e.g. pp.example or pricklypear.local
-                          empty/unset → subdomain feature OFF;
-                          all hosts behave as today (path-only).
-
-         Optional:
-         PP_APEX_HOSTS    comma list extra apex names (www.)
-         Cookie: when base domain set, session cookie Domain=
-         .{PP_BASE_DOMAIN} so login on apex works on subdomains.
-         When unset, cookie stays host-only (current behavior).
-
-         TLS/DNS (ops, not OCaml):
-           - Wildcard DNS *.PP_BASE_DOMAIN → edge
-           - Wildcard cert (acme) or multi-SAN
-           - nginx/relayd: server_name _.PP_BASE_DOMAIN; proxy
-             to single image loopback (v1). No per-user upstream.
-
-         ==========================================================
-         3. HOST PARSE (image gate)
-         ==========================================================
-
-         On each request, parse Host header (strip port):
-
-           host == PP_BASE_DOMAIN OR in PP_APEX_HOSTS
-             → mode = Apex
-           host == "{name}." ^ PP_BASE_DOMAIN
-             AND name matches username charset
-                 [a-z0-9]([a-z0-9-]*[a-z0-9])?  (DNS label)
-             AND users.username = name (case-fold: store lower)
-             → mode = Garden { username = name }
-           else if base domain set
-             → unknown host → 404 or apex redirect (pick 404)
-           else
-             → legacy single-host mode
-
-         Username registry: users.username MUST be valid DNS
-         labels (enforce on create_user). Reject underscores,
-         uppercase-only variants: canonicalize lowercase.
-
-         ==========================================================
-         4. IDENTITY + BRANCH RULES
-         ==========================================================
-
-         Apex:
-           - Hard-public release face + /login as today
-           - After successful login → 302
-             https://{username}.{PP_BASE_DOMAIN}/ (or Path /)
-           - Authenticated apex may show account switcher later;
-             v1 just redirects home.
-
-         Garden host (alice.base):
-           - Optional identity resolution (cookie/Basic) first
-           - garden_owner = alice (from Host), independent of
-             cookie until auth decides
-
-           A. Anonymous on garden host:
-              - Public user routes: resolve view_bindings on
-                branch chain alice/personal → … → system/main
-                (so Alice can publish public pages on her garden)
-              - Private routes → /login (prefer login URL on apex
-                or same host; v1 same host /login OK)
-              - (whoami) → "anonymous"; no personal checkout
-              - Writes denied (same as route-visibility anonymous)
-
-           B. Authenticated user U on garden host of G:
-              - If U == G: attach as today; branch default
-                U/personal; full write on own garden
-              - If U != G (Alice cookie on bob.base):
-                  READ of Bob's PUBLIC routes: allowed (anonymous
-                    garden view with optional richer chrome)
-                  PRIVATE routes /api/eval /admin /data:
-                    DENY (403) or redirect to alice.base
-                  WRITES always as U on U's branch only — never
-                    write Bob's personal because Host said bob.
-                  v1 SIMPLE RULE (recommended ship):
-                    private/kernel paths require U == G;
-                    mismatch → 302 https://{U}.{base}/
-                    public paths may render garden G read-only.
-
-         Kernel hard-private paths never become public via Host.
-
-         ==========================================================
-         5. LISP / PRODUCT SURFACES
-         ==========================================================
-
-         (current-host) → VStr host
-         (garden-owner) → VStr username | VNil on apex
-         (my-url path?) → absolute URL on caller's garden host
-
-         /settings or chrome: show "Your computer:
-         https://you.base/" when feature on.
-
-         Admin create-user: validate DNS-safe username.
-
-         ==========================================================
-         6. PHASES
-         ==========================================================
-
-         Phase 1: parse Host; garden_owner on request; login
-           redirect to subdomain; cookie Domain when configured;
-           mismatch private → redirect home; username DNS rules.
-         Phase 2: anonymous public routes resolve on garden
-           owner's branch chain (needs route-visibility public).
-         Phase 3: docs/nginx/acme wildcard recipe in
-           docs/openbsd-prod-branch-deploy.md; optional apex
-           account switcher.
-
-         ==========================================================
-         7. NON-GOALS
-         ==========================================================
-
-         - Custom domains (CNAME to customer.com)
-         - Per-subdomain process routing (fleet later)
-         - Multi-level subdomains (a.b.base)
-         - Email-style user%host URLs
+        Subdomain feature: when PP_BASE_DOMAIN is set, requests to
+        {username}.{PP_BASE_DOMAIN} resolve to the user's personal
+        branch garden (<username>/personal). The image parses the
+        Host header, validates the username against the users table,
+        and attaches that identity; otherwise, legacy single-host
+        mode (path-only) applies.
     |))
    )
   )
@@ -752,7 +530,7 @@
               present → use that api_key; apply public_data
               base/model overrides if set.
            2. Else if env LLM_API_KEY non-empty → operator
-              fallback (dev / single-tenant dogfood).
+              fallback (dev).
            3. Else → clear error "no LLM key configured
               (add one in /settings/keys or set LLM_API_KEY)".
 
@@ -975,13 +753,6 @@
   (subsection login-experience
    (doc "What log in means: I present credentials and land in MY live image")
    (status implemented)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
    (verify
     (smoke "human authenticates and lands on username/personal")
     (smoke "unknown credential denied; no image attach for stranger")
@@ -1007,13 +778,6 @@
   (subsection web-login
    (doc "Browser password login, session cookie, middleware, logout")
    (status verified)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
    (implements image/lib/http.ml image/lib/session.ml image/lib/auth_password.ml image/lib/auth_store.ml)
    (verify
     (build "dune build")
@@ -1277,13 +1041,6 @@
   (subsection user-management
    (doc "Admin creates and manages users and credentials")
    (status implemented)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
    (verify
     (smoke "admin creates user + password; new user logs in on own personal")
     (smoke "non-admin cannot create users")
@@ -1319,13 +1076,6 @@
   (subsection identity-and-branch
    (doc "Session identity drives personal garden and authorship")
    (status implemented)
-  (* agent note (|
-     verified 2026-07-17 (cleanup discipline pass):
-     dune build clean; dune runtest 145/145; live image /health 200
-     and whoami via POST /api/eval. Spec verify criteria still hold
-     for the single-image habitat as of this pass.
-     |) *)
-
    (verify
     (smoke "whoami equals session username after login")
     (smoke "define lands on username/personal")
