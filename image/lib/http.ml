@@ -16,6 +16,7 @@ open Http_branches
 open Http_agent
 open Http_pages
 open Http_ops
+open Http_media
 
 let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
     (reqd : Httpun.Reqd.t) : unit =
@@ -557,6 +558,32 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
          repl_page session reqd;
          Lwt.return_unit)
   | `POST, "/api/eval" -> launch (fun () -> api_eval session reqd)
+  | `POST, "/api/media" -> launch (fun () -> api_media_post session reqd)
+  | `GET, "/api/media" ->
+      launch (fun () -> api_media_list session reqd ~target)
+  | `DELETE, path when String.length path > 11
+                    && String.sub path 0 11 = "/api/media/" ->
+      let id = String.sub path 11 (String.length path - 11) in
+      launch (fun () -> api_media_delete session reqd ~id)
+  | `GET, "/media" | `GET, "/media/" ->
+      launch (fun () -> media_page session reqd ~target)
+  | `POST, "/media/upload" ->
+      launch (fun () -> media_upload_post session reqd)
+  | `POST, path when String.length path > 7
+                  && String.sub path 0 7 = "/media/"
+                  && String.ends_with ~suffix:"/delete" path ->
+      let id =
+        let rest = String.sub path 7 (String.length path - 7) in
+        (* strip trailing /delete *)
+        if String.length rest > 7 then
+          String.sub rest 0 (String.length rest - 7)
+        else rest
+      in
+      launch (fun () -> media_delete_post session reqd ~id)
+  | `GET, path when String.length path > 7
+                 && String.sub path 0 7 = "/media/" ->
+      let id = String.sub path 7 (String.length path - 7) in
+      launch (fun () -> media_get session reqd ~id)
   | `POST, "/api/agent" -> launch (fun () -> api_agent session reqd)
   | `POST, "/api/agent-task" -> launch (fun () -> api_agent_task session reqd)
   | `POST, "/api/ai/propose" -> launch (fun () -> ai_propose session reqd)

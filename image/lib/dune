@@ -4,9 +4,10 @@
  (modules store_db store
           prims_pure primitives request_context control_rim io io_lwt io_eio
           session_types agent_tools session
-          crud packages loader repl_endpoint
+          crud media packages loader repl_endpoint
           ops_log ops_stats ops_incidents
           http_core http_code http_data http_branches http_agent http_pages http_ops
+          http_media
           agent_discovery http
           lineedit boot llm_client
           auth_password auth_store ai_store)

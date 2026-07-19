@@ -459,6 +459,123 @@ let llm_outer = Agent_tools.llm_outer
 let llm_seed = Agent_tools.llm_seed
 let pp_interp_exn = Agent_tools.pp_interp_exn
 
+let register_media_prims (t : t) (tbl : Primitives.t) : unit =
+  let deny_anon name =
+    Lwt.return
+      (Pricklypear_lisp.Ast.VStr (name ^ ": denied for anonymous"))
+  in
+  let actor () =
+    match Lwt.get Request_context.current with
+    | Some c -> (Request_context.manifest c).username
+    | None -> t.manifest.username
+  in
+  (* (media-meta id) -> VStr json | VNil *)
+  Primitives.register tbl "media-meta"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr id ] ->
+          let* m = Media.get_meta t.store ~id in
+          (match m with
+           | None -> Lwt.return Pricklypear_lisp.Ast.VNil
+           | Some meta ->
+               Lwt.return
+                 (Pricklypear_lisp.Ast.VStr (Media.meta_to_json_string meta)))
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr "media-meta: need id"));
+  (* (media-list [limit]) -> VList of meta json strings *)
+  Primitives.register tbl "media-list"
+    (fun args ->
+      let uname = actor () in
+      if uname = "anonymous" then deny_anon "media-list"
+      else
+        let limit =
+          match args with
+          | [] -> 50
+          | [ Pricklypear_lisp.Ast.VInt n ] -> Int64.to_int n
+          | _ -> 50
+        in
+        let* rows =
+          Media.list t.store ~author:(Some uname) ~limit ()
+        in
+        let items =
+          List.map
+            (fun m ->
+              Pricklypear_lisp.Ast.VStr (Media.meta_to_json_string m))
+            rows
+        in
+        Lwt.return (Pricklypear_lisp.Ast.VList items));
+  (* (media-delete id) -> VStr id | VNil | denial *)
+  Primitives.register tbl "media-delete"
+    (fun args ->
+      let uname = actor () in
+      if uname = "anonymous" then deny_anon "media-delete"
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr id ] ->
+            let* res =
+              Media.delete t.store ~id ~actor:uname ~is_admin:t.is_admin
+            in
+            (match res with
+             | Ok (`Ok id') ->
+                 Lwt.return (Pricklypear_lisp.Ast.VStr id')
+             | Ok `Not_found -> Lwt.return Pricklypear_lisp.Ast.VNil
+             | Ok `Forbidden ->
+                 Lwt.return
+                   (Pricklypear_lisp.Ast.VStr
+                      "media-delete: not author or admin")
+             | Error e ->
+                 Lwt.return
+                   (Pricklypear_lisp.Ast.VStr ("media-delete: " ^ e)))
+        | _ ->
+            Lwt.return
+              (Pricklypear_lisp.Ast.VStr "media-delete: need id"));
+  (* (media-put content-type data-b64 [filename]) -> VStr id | error
+     Tiny payloads only (icons/fixtures). Real pushes: POST /api/media. *)
+  Primitives.register tbl "media-put"
+    (fun args ->
+      let uname = actor () in
+      if uname = "anonymous" then deny_anon "media-put"
+      else
+        let parse =
+          match args with
+          | [ Pricklypear_lisp.Ast.VStr ct
+            ; Pricklypear_lisp.Ast.VStr b64 ] ->
+              Ok (ct, b64, None)
+          | [ Pricklypear_lisp.Ast.VStr ct
+            ; Pricklypear_lisp.Ast.VStr b64
+            ; Pricklypear_lisp.Ast.VStr filename ] ->
+              Ok (ct, b64, Some filename)
+          | _ -> Error "media-put: need content-type, data-b64 [, filename]"
+        in
+        match parse with
+        | Error e -> Lwt.return (Pricklypear_lisp.Ast.VStr e)
+        | Ok (ct, b64, filename) ->
+            (match Media.b64_decode_opt (String.trim b64) with
+             | None ->
+                 Lwt.return
+                   (Pricklypear_lisp.Ast.VStr "media-put: invalid data-b64")
+             | Some data ->
+                 let* res =
+                   Media.put t.store ~author:uname ~content_type:ct ~data
+                     ~filename ~max_bytes:Media.max_eval_put_bytes ()
+                 in
+                 (match res with
+                  | Ok r -> Lwt.return (Pricklypear_lisp.Ast.VStr r.id)
+                  | Error e ->
+                      Lwt.return
+                        (Pricklypear_lisp.Ast.VStr ("media-put: " ^ e)))));
+  (* (media-url id) -> VStr "/media/<id>" *)
+  Primitives.register tbl "media-url"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr id ] ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr (Media.url_of_id id))
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr "media-url: need id"))
+
 let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
   (* (deftype 'name 'field1 'field2 ...) -> VStr "defined type <name>".
      All args are quoted symbols (which evaluate to VStr). Persists
@@ -658,6 +775,10 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
           bs
       in
       Lwt.return (Pricklypear_lisp.Ast.VList names));
+
+  (* storage.media Lisp surface — meta/list/delete + tiny put.
+     Bulk agent pushes use POST /api/media (5 MiB), not eval. *)
+  register_media_prims t tbl;
 
   (* (list-usernames) -> VList of VStr; any authenticated user.
      Usernames are public identifiers on the box (multi-user.chat DMs). *)

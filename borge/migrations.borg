@@ -8,7 +8,7 @@
   (status partial)
   (verify
    (build "dune build image")
-   (smoke "image boots against a fresh database; schema_migrations records 001..006; re-boot is a no-op"))
+   (smoke "image boots against a fresh database; schema_migrations records 001..007; re-boot is a no-op"))
   (subsection applied-by-image
    (doc "The image owns schema state before it serves")
    (status partial)
@@ -42,6 +42,10 @@
              text NOT NULL DEFAULT 'private' (public|private).
              Spec: auth.route-visibility. Additive column only;
              existing routes stay private.
+           007_media.sql — media_blobs (bytea object store for
+             agent/browser image upload). Spec: storage.media.
+             Shared across branches like data_rows; ownership
+             via author column. Additive table only.
 
          A migration in flight blocks serving until it
          completes (or fails). This guarantees the image

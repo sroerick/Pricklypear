@@ -336,6 +336,7 @@ let is_system_hard_private (path : string) : bool =
     ; "/analytics"
     ; "/data"
     ; "/api"
+    ; "/media"
     ; "/bindings"
     ; "/binding"
     ; "/edit"
