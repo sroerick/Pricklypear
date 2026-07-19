@@ -306,6 +306,13 @@
             (html/attr "class" (string-append "ol-todo st-" t))
             (html/text t))))))
 
+;; Body-render hook. Pure default escapes the body as text. Notes redefines
+;; this to roam/render-body so [[slug]] wiki links become anchors. Keep the
+;; name outline/render-body so outline stays free of a notes dependency.
+(define outline/render-body
+  (lambda (body)
+    (html/text (as-str body))))
+
 (define outline/html-node
   (lambda (slug n show-archived)
     (let ((nid (outline/id n))
@@ -347,7 +354,9 @@
                       (html/attr "contenteditable" "true")
                       (html/attr "data-id" nid)
                       (html/attr "data-field" "body")))
-                  (html/text body)))
+                  ;; outline/render-body is a hook: default = html/text (escaped).
+                  ;; notes redefines it to roam/render-body so [[slug]] becomes links.
+                  (outline/render-body body)))
             (html/div (html/attr "class" "ol-kids")
               (list/foldl
                 (lambda (acc k)

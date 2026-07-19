@@ -10,6 +10,214 @@
 ;; (load-library "outline") then (load-library "notes")
 
 (deftype 'note 'title 'slug 'outline 'tags 'kind 'day 'body)
+(deftype 'note-link 'from_slug 'from_id 'to_slug 'to_id 'label 'kind)
+
+;; =========================================================
+;; links-and-roam: [[slug]] / [[slug|label]] wiki links
+;; =========================================================
+
+;; Find index of "]]" starting at i, or () if missing.
+(define roam/find-close
+  (lambda (s i)
+    (if (>= i (- (string-length s) 1))
+        ()
+        (if (if (string-eq (substring s i 1) "]")
+                (string-eq (substring s (+ i 1) 1) "]")
+                #f)
+            i
+            (roam/find-close s (+ i 1))))))
+
+;; Split "slug|label" → (slug label); no pipe → (slug slug).
+(define roam/split-label
+  (lambda (inner)
+    (let ((s (string-trim (as-str inner))))
+      (roam/split-label-at s 0))))
+
+(define roam/split-label-at
+  (lambda (s i)
+    (if (>= i (string-length s))
+        (list s s)
+        (if (string-eq (substring s i 1) "|")
+            (list
+              (string-trim (substring s 0 i))
+              (string-trim (substring s (+ i 1) (- (string-length s) (+ i 1)))))
+            (roam/split-label-at s (+ i 1))))))
+
+;; Parse body → list of (slug label) pairs, left-to-right, de-duped later.
+(define roam/parse-links
+  (lambda (body)
+    (roam/parse-links-acc (as-str body) 0 (list))))
+
+(define roam/parse-links-acc
+  (lambda (s i acc)
+    (if (>= i (- (string-length s) 3))
+        (reverse acc)
+        (if (if (string-eq (substring s i 1) "[")
+                (string-eq (substring s (+ i 1) 1) "[")
+                #f)
+            (let ((end (roam/find-close s (+ i 2))))
+              (if (null? end)
+                  (roam/parse-links-acc s (+ i 1) acc)
+                  (let ((inner (substring s (+ i 2) (- end (+ i 2)))))
+                    (let ((pair (roam/split-label inner)))
+                      (if (string-eq (car pair) "")
+                          (roam/parse-links-acc s (+ end 2) acc)
+                          (roam/parse-links-acc s (+ end 2) (cons pair acc)))))))
+            (roam/parse-links-acc s (+ i 1) acc)))))
+
+;; Collect (from_id slug label) from every node body in the tree.
+(define roam/collect-from-tree
+  (lambda (tree)
+    (roam/collect-node tree (list))))
+
+(define roam/collect-node
+  (lambda (n acc)
+    (let ((id (as-str (outline/id n)))
+          (links (roam/parse-links (outline/body n))))
+      (let ((acc1
+              (list/foldl
+                (lambda (a pair)
+                  (cons (list id (car pair) (car (cdr pair))) a))
+                acc
+                links)))
+        (list/foldl
+          (lambda (a k) (roam/collect-node k a))
+          acc1
+          (outline/kids n))))))
+
+;; Delete every note-link row with from_slug = slug (scan + delete by id).
+(define roam/delete-from-slug
+  (lambda (slug)
+    (list/foldl
+      (lambda (_ row)
+        (seq (delete 'note-link (car row)) 0))
+      0
+      (find-rows 'note-link "from_slug" (as-str slug) 500))))
+
+;; Seen-key = from_id + "\t" + to_slug. Returns #t if already present.
+(define roam/seen?
+  (lambda (seen key)
+    (if (null? seen)
+        #f
+        (if (string-eq (car seen) key)
+            #t
+            (roam/seen? (cdr seen) key)))))
+
+(define roam/insert-collected
+  (lambda (from-slug triples seen)
+    (if (null? triples)
+        seen
+        (let ((t (car triples)))
+          (let ((fid (as-str (car t)))
+                (to (as-str (car (cdr t))))
+                (lab (as-str (car (cdr (cdr t))))))
+            (let ((key (string-append fid "\t" to)))
+              (if (roam/seen? seen key)
+                  (roam/insert-collected from-slug (cdr triples) seen)
+                  (seq
+                    (create 'note-link
+                      (dict-set* "{}"
+                        (list
+                          "from_slug" (as-str from-slug)
+                          "from_id" fid
+                          "to_slug" to
+                          "to_id" ""
+                          "label" lab
+                          "kind" "wikilink")))
+                    (roam/insert-collected from-slug (cdr triples)
+                      (cons key seen))))))))))
+
+;; Rebuild note-link rows for one note (called on every upsert).
+(define roam/reindex
+  (lambda (slug outline-tree)
+    (seq
+      (roam/delete-from-slug slug)
+      (roam/insert-collected slug
+        (roam/collect-from-tree outline-tree)
+        (list))
+      slug)))
+
+;; Inbound links: list of (from_slug from_id from_title label).
+(define roam/backlinks
+  (lambda (slug)
+    (list/map
+      (lambda (row)
+        (let ((f (cdr row)))
+          (let ((fs (as-str (dict-get f "from_slug")))
+                (fid (as-str (dict-get f "from_id")))
+                (lab (as-str (dict-get f "label"))))
+            (let ((src (notes/doc/get fs)))
+              (list fs fid
+                (if (null? src) fs (notes/doc/title src))
+                lab)))))
+      (find-rows 'note-link "to_slug" (as-str slug) 200))))
+
+;; Render body with [[slug]] / [[slug|label]] → anchors. Escapes plain text.
+(define roam/render-body
+  (lambda (body)
+    (roam/render-acc (as-str body) 0 "")))
+
+(define roam/at-open?
+  (lambda (s i)
+    (if (>= i (- (string-length s) 3))
+        #f
+        (if (string-eq (substring s i 1) "[")
+            (string-eq (substring s (+ i 1) 1) "[")
+            #f))))
+
+(define roam/render-link
+  (lambda (slug lab)
+    (html/a
+      (string-append "/notes?slug=" slug)
+      (html/text lab))))
+
+(define roam/render-acc
+  (lambda (s i acc)
+    (if (>= i (string-length s))
+        acc
+        (if (roam/at-open? s i)
+            (let ((end (roam/find-close s (+ i 2))))
+              (if (null? end)
+                  (roam/render-acc s (+ i 1)
+                    (string-append acc (html-escape (substring s i 1))))
+                  (let ((inner (substring s (+ i 2) (- end (+ i 2)))))
+                    (let ((pair (roam/split-label inner)))
+                      (let ((slug (car pair))
+                            (lab (car (cdr pair))))
+                        (if (string-eq slug "")
+                            (roam/render-acc s (+ end 2)
+                              (string-append acc
+                                (html-escape
+                                  (substring s i (- (+ end 2) i)))))
+                            (roam/render-acc s (+ end 2)
+                              (string-append acc
+                                (roam/render-link slug lab)))))))))
+            (roam/render-acc s (+ i 1)
+              (string-append acc (html-escape (substring s i 1))))))))
+
+;; Wire wiki-link rendering into outline HTML (hook defined in outline/).
+(define outline/render-body roam/render-body)
+
+;; Backlinks partial HTML for a note page.
+(define roam/backlinks-html
+  (lambda (slug)
+    (let ((bls (roam/backlinks slug)))
+      (if (null? bls)
+          (html/p* (html/attr "class" "muted") "No backlinks yet.")
+          (html/ul (html/attr "class" "roam-backlinks")
+            (html/join
+              (list/map
+                (lambda (b)
+                  (html/li ""
+                    (html/join
+                      (list
+                        (html/a
+                          (string-append "/notes?slug=" (car b))
+                          (html/text (car (cdr (cdr b)))))
+                        (html/span (html/attr "class" "muted")
+                          (html/text
+                            (string-append " · " (car (cdr b)))))))))
+                bls)))))))
 
 (define notes/doc/title (lambda (n) (car (cdr (cdr n)))))
 (define notes/doc/outline (lambda (n) (car (cdr (cdr (cdr n))))))
@@ -55,9 +263,12 @@
   (lambda (slug title outline tags kind day)
     (let ((row (notes/doc/row slug)))
       (let ((fields (notes/doc/make-fields slug title outline tags kind day)))
-        (if (null? row)
-            (create 'note fields)
-            (update 'note (car row) fields))))))
+        (seq
+          (if (null? row)
+              (create 'note fields)
+              (update 'note (car row) fields))
+          ;; Rebuild wiki-link index for this note (links-and-roam).
+          (roam/reindex (as-str slug) outline))))))
 (define notes/doc/list (lambda () (rows 'note 100)))
 
 ;; Hide system/hidden docs from the main Recent index.
@@ -253,7 +464,9 @@
     (let ((row (notes/doc/row (as-str slug))))
       (if (null? row)
           ()
-          (delete 'note (car row))))))
+          (seq
+            (roam/delete-from-slug (as-str slug))
+            (delete 'note (car row)))))))
 
 (define notes/ui/item-li
   (lambda (row)
@@ -499,6 +712,11 @@
           (string-append "tags: " (as-str tags)))
         (notes/ui/toolbar slug show-archived)
         (outline/html slug outline show-archived)
+        (html/div (html/attr "class" "roam-backlinks-panel")
+          (html/join
+            (list
+              (html/h3 "Backlinks")
+              (roam/backlinks-html slug))))
         (html/tag "details" (html/attr "class" "ol-debug")
           (html/join
             (list
