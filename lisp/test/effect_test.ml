@@ -54,6 +54,23 @@ let checks = [
     in
     Alcotest.(check bool) "ok" true
       (Effect.policy_allows ~allow:Effect.ai_default_allow got));
+  (* H0.1 audit coverage for previously unlisted registered prims *)
+  ("div/abs pure", `Quick, fun () ->
+    let fx = infer "(div (abs x) 2)" in
+    Alcotest.(check bool) "pure" true (Effect.EffSet.is_pure fx));
+  ("public-route is publish", `Quick, fun () ->
+    let fx = Effect.effects_for_prim "public-route" in
+    Alcotest.(check bool) "pub" true (Effect.EffSet.mem Effect.Publish fx));
+  ("load-library is write-db", `Quick, fun () ->
+    let fx = Effect.effects_for_prim "load-library" in
+    Alcotest.(check bool) "write" true (Effect.EffSet.mem Effect.WriteDb fx));
+  ("agent-say is ai+write", `Quick, fun () ->
+    let fx = Effect.effects_for_prim "agent-say" in
+    Alcotest.(check bool) "ai" true (Effect.EffSet.mem Effect.Ai fx);
+    Alcotest.(check bool) "write" true (Effect.EffSet.mem Effect.WriteDb fx));
+  ("redirect is html", `Quick, fun () ->
+    let fx = Effect.effects_for_prim "redirect" in
+    Alcotest.(check bool) "html" true (Effect.EffSet.mem Effect.Html fx));
 ]
 
 let () =
