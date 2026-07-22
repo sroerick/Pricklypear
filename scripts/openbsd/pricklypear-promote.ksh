@@ -138,12 +138,12 @@ if ! rcctl restart "${service}"; then
   }
 fi
 
-# Health check (best-effort)
+# Health check (best-effort): require ok:true, not mere "ok" substring.
 ok=0
 attempts=0
 while [ "${attempts}" -lt 20 ]; do
   body="$(ftp -o - "${health_url}" 2>/dev/null || true)"
-  if print -r -- "${body}" | grep -qi '"ok"'; then
+  if print -r -- "${body}" | grep -q '"ok"[[:space:]]*:[[:space:]]*true'; then
     ok=1
     break
   fi

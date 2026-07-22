@@ -36,7 +36,13 @@ if rcctl check "${service}" >/dev/null 2>&1; then
   exit 0
 fi
 
-log "${service} down; attempting start"
+# Live-but-unhealthy is common after Eio mutex poison / lost pidfile:
+# process may still hold :18080 while rc_check fails on ok:false or missing
+# pid. Always stop (pkill + pidfile clear via rc_stop) before start so we
+# never hit EADDRINUSE and leave the habitat dark.
+log "${service} down or unhealthy; attempting restart"
+rcctl stop "${service}" >/dev/null 2>&1 || true
+sleep 1
 if rcctl start "${service}" >/dev/null 2>&1; then
   # Give boot a moment (stdlib seed + PG) before recheck.
   sleep 3

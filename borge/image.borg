@@ -226,15 +226,18 @@
   )
 
   (subsection http-robustness
-   (doc "HTTP server robustness under load and peer disconnect")
-   (implements image/lib/http.ml image/lib/http_core.ml image/lib/http_agent.ml image/lib/http_data.ml image/lib/http_branches.ml image/lib/session.ml image/lib/session_types.ml)
-   (status verified)
+   (doc "HTTP server robustness under load, peer disconnect, and DB liveness")
+   (implements image/lib/http.ml image/lib/http_core.ml image/lib/http_agent.ml image/lib/http_data.ml image/lib/http_branches.ml image/lib/session.ml image/lib/session_types.ml image/lib/io_eio.ml image/lib/store_db.ml scripts/rc.d/pricklypear scripts/openbsd/pricklypear-watchdog.ksh scripts/openbsd/pricklypear-promote.ksh)
+   (status partial)
    (verify
     (build "dune build image")
     (smoke "abort N concurrent requests mid-response; image stays up, /health 200 throughout")
     (smoke "open SSE /api/agent stream, disconnect client; no Fatal error in image.log, process pid unchanged")
     (smoke "fire M concurrent mixed routes (page + SSE + /api/eval); all complete or peer-gone, zero process exits")
-    (test "image/test/http_robust_test.ml — closed-writer guard returns () not raises; catch-body does not re-write to dead writer"))
+    (smoke "GET /health returns ok:true only when SELECT 1 on store succeeds; ok:false + non-2xx when DB path is dead")
+    (smoke "rcctl check fails when /health reports ok:false; watchdog restarts a live-but-poisoned image")
+    (test "image/test/http_robust_test.ml — closed-writer guard returns () not raises; catch-body does not re-write to dead writer")
+    (test "image/test/io_eio_test.ml — Sequencer.enqueue survives a raised SQL-like exception and subsequent enqueue still runs"))
    (details
     (doc (|
          The httpaf body writer raises
@@ -448,6 +451,71 @@
          loop; the cap (invariant 5) plus the mutex narrowing
          (invariant 4) are what make the server survive the next
          traffic spike on throughput, not just on not-crashing.
+
+         =========================================================
+         INVARIANT 6 — EIO PG SEQUENCER MUST NOT PERMANENTLY POISON
+         =========================================================
+         Incident 2026-07-22 (pricklypear.rocks): under PP_IO=eio the
+         live image kept serving /health 200 while every auth/DB call
+         failed with Eio__Eio_mutex.Poisoned(_). Login and Basic auth
+         both surfaced as "Invalid username or password" because
+         auth_store.password_hash_for_user catches all exceptions and
+         returns None. The process stayed up for days; the watchdog
+         never fired because /health never touched the DB.
+
+         Root cause: Io_eio.Pgx_io.Sequencer.enqueue used
+         Eio.Mutex.use_rw ~protect:true. Eio documents that use_rw
+         DISABLES the mutex forever if fn raises — any SQL error
+         (or cancel) permanently kills the single shared PG conn
+         sequencer. Subsequent enqueues raise Poisoned.
+
+         Rule: the pgx Sequencer critical section MUST unlock on
+         exception (use_ro-style unlock-and-re-raise), while still
+         using Cancel.protect so cancellation cannot leave the
+         wire mid-message. Do NOT call use_rw for the sequencer:
+         a raised Pgx/PostgreSQL error does not mean the mutex
+         resource invariant is broken — the connection protocol
+         recovers; only the operation failed. Optional later:
+         detect hard I/O death and reconnect Store.t.conn; that is
+         separate from not poisoning the lock.
+
+         Mechanism (io_eio.ml Sequencer.enqueue):
+
+           lock; Cancel.protect (fun () -> f v); unlock
+           on exception: unlock; re-raise
+
+         Never poison. Never leave the mutex locked.
+
+         =========================================================
+         INVARIANT 7 — /health PROBES DB LIVENESS
+         =========================================================
+         /health remains hard-public and outside the inflight page
+         cap (invariant 5 note). But "ok" MUST mean the image can
+         still talk to Postgres on the store path used by auth and
+         prims — not merely "process is alive and JSON encodes".
+
+         Rule:
+           - GET /health runs SELECT 1 (or Store.health_check) on
+             Session.store via the same dual-conn exec path.
+           - On success: HTTP 200, {"ok": true, ... error: null}.
+           - On failure (no conn, query error, Poisoned residual,
+             timeout): HTTP 503, {"ok": false, error: "..."}.
+           - Cheap: one round-trip; must not take request_mutex or
+             the inflight page semaphore.
+           - rc.d rc_check and the promote health loop MUST match
+             ok:true (not merely the substring "ok" — "ok": false
+             must fail the check).
+           - Watchdog: when rcctl check fails, stop/kill stale
+             image (pidfile + pkill -U runtime user on bin/image)
+             then start. Plain rcctl start is insufficient when a
+             live-but-poisoned process still holds :18080 without a
+             usable pidfile (EADDRINUSE on start).
+           - rc_stop / promote restart path: always clear the port
+             before start (pkill runtime image; rm stale pidfile).
+
+         This closes the class of failures where the accept loop
+         is healthy but the DB mutex/conn is dead — the failure
+         mode that locked out all logins while looking green.
 
    |))
    )
