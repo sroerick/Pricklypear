@@ -34,9 +34,29 @@ rc_check() {
 	[ -f "${pidfile}" ] || return 1
 	pid="$(cat "${pidfile}" 2>/dev/null)" || return 1
 	kill -0 "${pid}" 2>/dev/null || return 1
-	# Health probe (best-effort)
+	# Health probe: require ok:true (not mere substring "ok" — ok:false
+	# must fail so a live-but-DB-dead image is restarted).
 	port="${PP_HTTP_PORT:-18080}"
-	ftp -o - "http://127.0.0.1:${port}/health" 2>/dev/null | grep -qi '"ok"' || return 1
+	body="$(ftp -o - "http://127.0.0.1:${port}/health" 2>/dev/null)" || return 1
+	print -r -- "${body}" | grep -q '"ok"[[:space:]]*:[[:space:]]*true' || return 1
+}
+
+# Drop any leftover image listener before start/restart. A poisoned process
+# can hold :18080 after pidfile loss; plain start then fails EADDRINUSE.
+rc_stop() {
+	if [ -f "${pidfile}" ]; then
+		pid="$(cat "${pidfile}" 2>/dev/null)" || true
+		if [ -n "${pid}" ]; then
+			kill "${pid}" 2>/dev/null || true
+			sleep 1
+			kill -0 "${pid}" 2>/dev/null && kill -KILL "${pid}" 2>/dev/null || true
+		fi
+	fi
+	# Belt: any leftover runtime-user image binary on this host.
+	pkill -U "${daemon_user}" -f '/bin/image' 2>/dev/null || true
+	sleep 1
+	rm -f "${pidfile}" 2>/dev/null || true
+	return 0
 }
 
 rc_post() {

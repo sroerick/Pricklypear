@@ -148,8 +148,23 @@ module Pgx_io = struct
 
     let create v = { v; m = Eio.Mutex.create () }
 
+    (** Serialize [f] on the connection.
+
+        MUST NOT use [Eio.Mutex.use_rw]: that permanently poisons the mutex
+        when [f] raises (any SQL/Pgx error). A poisoned sequencer kills every
+        subsequent DB op (auth included) while the accept loop stays up — the
+        2026-07-22 login outage. Unlock-on-exception (use_ro style) plus
+        [Cancel.protect] keeps the wire section non-cancellable without
+        destroying the lock. image.http-robustness invariant 6. *)
     let enqueue t f =
-      Eio.Mutex.use_rw ~protect:true t.m (fun () -> f t.v)
+      Eio.Mutex.lock t.m;
+      match Eio.Cancel.protect (fun () -> f t.v) with
+      | v ->
+          Eio.Mutex.unlock t.m;
+          v
+      | exception ex ->
+          Eio.Mutex.unlock t.m;
+          raise ex
   end
 end
 
@@ -281,6 +296,24 @@ module Db = struct
               row)
           rows
 end
+
+(** Self-test for image.http-robustness invariant 6: after [enqueue] raises,
+    a later [enqueue] must still run (mutex not poisoned). Call under Eio. *)
+let sequencer_survives_raise () : bool =
+  let s = Pgx_io.Sequencer.create 0 in
+  let raised =
+    try
+      ignore
+        (Pgx_io.Sequencer.enqueue s (fun _ -> failwith "io_eio sequencer probe"));
+      false
+    with Failure _ -> true
+  in
+  if not raised then false
+  else
+    match Pgx_io.Sequencer.enqueue s (fun n -> n + 1) with
+    | 1 -> true
+    | _ -> false
+    | exception _ -> false
 
 (** [PP_IO=lwt|eio] — default lwt. *)
 let io_mode_from_env () =

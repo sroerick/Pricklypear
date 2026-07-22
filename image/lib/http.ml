@@ -494,15 +494,32 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
              html_response reqd ~session ~status:`Internal_server_error body;
              Lwt.return_unit)
   | `GET, "/health" ->
-      let h =
-        { Pricklypear_common.Protocol.ok = true;
-          branch = Session.branch_name session;
-          uptime_seconds = Session.uptime_seconds session;
-          error = None }
-      in
-      let j = Pricklypear_common.Protocol.health_response_to_json h in
-      text_response reqd ~content_type:"application/json"
-        (Yojson.Safe.pretty_to_string j)
+      (* image.http-robustness invariant 7: /health must probe the same
+         store path auth/prims use. Memory-only ok:true hid Eio mutex
+         poison and locked out all logins while watchdog saw green. *)
+      Lwt.async (fun () ->
+        let branch = Session.branch_name session in
+        let uptime = Session.uptime_seconds session in
+        let* check = Store.health_check (Session.store session) in
+        let h, status =
+          match check with
+          | Ok () ->
+              ( { Pricklypear_common.Protocol.ok = true;
+                  branch;
+                  uptime_seconds = uptime;
+                  error = None },
+                `OK )
+          | Error msg ->
+              ( { Pricklypear_common.Protocol.ok = false;
+                  branch;
+                  uptime_seconds = uptime;
+                  error = Some msg },
+                `Service_unavailable )
+        in
+        let j = Pricklypear_common.Protocol.health_response_to_json h in
+        text_response reqd ~status ~content_type:"application/json"
+          (Yojson.Safe.pretty_to_string j);
+        Lwt.return_unit)
   (* Public agent bootstrap — no auth, no secrets. /agent stays private. *)
   | `GET, "/.well-known/agent.json" ->
       Agent_discovery.serve_agent_json reqd ~headers

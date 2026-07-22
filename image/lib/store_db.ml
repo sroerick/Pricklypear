@@ -200,3 +200,19 @@ let connect (t : t) : unit Lwt.t =
                Printf.eprintf "[store] PG connect failed (eio): %s\n%!"
                  (Printexc.to_string exn);
                Lwt.return_unit))
+
+(** Liveness probe for GET /health (image.http-robustness invariant 7).
+    Runs [SELECT 1] on the live dual-conn path used by auth/prims.
+    [Ok ()] = store can still serve queries; [Error msg] = dead/poisoned/unconnected. *)
+let health_check (t : t) : (unit, string) result Lwt.t =
+  match current_conn t with
+  | None -> Lwt.return (Error "no database connection")
+  | Some conn ->
+      Lwt.catch
+        (fun () ->
+          let* rows = exec conn "SELECT 1" in
+          match rows with
+          | _ :: _ -> Lwt.return (Ok ())
+          | [] -> Lwt.return (Error "SELECT 1 returned no rows"))
+        (fun exn ->
+          Lwt.return (Error (Printexc.to_string exn)))
