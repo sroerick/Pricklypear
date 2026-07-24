@@ -16,23 +16,30 @@ set -e
 PP_ROOT="${PP_ROOT:-$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)}"
 cd "$PP_ROOT"
 
-if [ -z "${PP_EVAL:-}" ]; then
-  PP_EVAL="$PP_ROOT/scripts/pp_eval.py"
-fi
 if [ -z "${PP_URL:-}" ]; then
   PP_URL="http://127.0.0.1:18080"
 fi
-export PP_URL PP_EVAL
+export PP_URL
 export PP_USER="${PP_USER:-admin}"
 export PP_PASS="${PP_PASS:-admin}"
 
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "verify_habitat: python3 required only for thin pp_eval client" >&2
-  exit 2
+# Prefer OCaml pp-eval (no Python).
+PP_EVAL_BIN="${PP_EVAL_BIN:-}"
+if [ -z "$PP_EVAL_BIN" ]; then
+  if [ -n "${PP_EVAL:-}" ] && [ -x "$PP_EVAL" ] && ! echo "$PP_EVAL" | grep -q '\.py$'; then
+    PP_EVAL_BIN="$PP_EVAL"
+  elif [ -x "$PP_ROOT/_build/default/cli/bin/pp_eval.exe" ]; then
+    PP_EVAL_BIN="$PP_ROOT/_build/default/cli/bin/pp_eval.exe"
+  elif command -v pp-eval >/dev/null 2>&1; then
+    PP_EVAL_BIN="pp-eval"
+  else
+    PP_EVAL_BIN="$PP_ROOT/scripts/pp-eval.sh"
+  fi
 fi
+export PP_EVAL_BIN
 
 eval_j() {
-  python3 "$PP_EVAL" -j "$1"
+  "$PP_EVAL_BIN" -j "$1"
 }
 
 echo "[verify_habitat] PP_URL=$PP_URL"
