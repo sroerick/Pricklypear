@@ -116,6 +116,8 @@ let make_with_defaults () : t =
   register_sync t "html-escape" prim_html_escape;
   register_sync t "json-parse" prim_json_parse;
   register_sync t "json-emit" prim_json_emit;
+  register_sync t "read-string" prim_read_string;
+  register_sync t "read-all-string" prim_read_all_string;
   register_sync t "type-of" prim_type_of;
   register_sync t "str" prim_str;
   register_sync t "as-str" prim_as_str;
@@ -185,6 +187,8 @@ let prim_summary (name : string) : string =
   | "html-escape" -> "escape text for HTML"
   | "json-parse" -> "parse JSON string to Lisp value"
   | "json-emit" -> "emit Lisp value as JSON string"
+  | "read-string" -> "read one s-expr from string → quoted data (no eval)"
+  | "read-all-string" -> "read all top-level s-exprs from string → list"
   | "with-public-write" ->
       "(with-public-write (lambda () …)) run body with write privs for public forms"
   | "request-method" -> "HTTP method of active request"

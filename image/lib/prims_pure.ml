@@ -545,6 +545,48 @@ let prim_json_emit args =
   | [ v ] -> VStr (Yojson.Safe.to_string (value_to_json v))
   | _ -> raise (Interp_error (User_error "json-emit needs 1 value"))
 
+(* (read-string s) -> quoted value tree. Same reader as load-string / the
+   REPL, then quote_to_value — NO eval. Pair with (function-ast name):
+   both yield walkable s-expr data. Clojure-style twin of load-string.
+   (read-all-string s) -> VList of forms (multi top-level). *)
+let prim_read_string args =
+  match args with
+  | [ VStr s ] ->
+      (try
+         let e = Pricklypear_lisp.Reader.read_one s in
+         Pricklypear_lisp.Eval.quote_to_value e
+       with
+       | Pricklypear_lisp.Reader.Reader_error (msg, line, col) ->
+           raise
+             (Interp_error
+                (User_error
+                   (Printf.sprintf "read-string: %s (%d:%d)" msg line col)))
+       | exn ->
+           raise
+             (Interp_error
+                (User_error
+                   ("read-string: " ^ Printexc.to_string exn))))
+  | _ -> raise (Interp_error (User_error "read-string needs 1 string"))
+
+let prim_read_all_string args =
+  match args with
+  | [ VStr s ] ->
+      (try
+         let es = Pricklypear_lisp.Reader.read_all s in
+         VList (List.map Pricklypear_lisp.Eval.quote_to_value es)
+       with
+       | Pricklypear_lisp.Reader.Reader_error (msg, line, col) ->
+           raise
+             (Interp_error
+                (User_error
+                   (Printf.sprintf "read-all-string: %s (%d:%d)" msg line col)))
+       | exn ->
+           raise
+             (Interp_error
+                (User_error
+                   ("read-all-string: " ^ Printexc.to_string exn))))
+  | _ -> raise (Interp_error (User_error "read-all-string needs 1 string"))
+
 (* (html-escape s) -> VStr. Escape amp lt gt quote apos for HTML text/attrs. *)
 let rec prim_html_escape args =
   match args with
