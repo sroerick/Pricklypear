@@ -210,6 +210,8 @@ let prim_summary (name : string) : string =
   | "list-bindings" -> "names in env"
   | "list-branches" -> "list branch refs"
   | "list-usernames" -> "list usernames (authenticated; for chat/DM picker)"
+  | "is-admin?" -> "true if calling identity is admin"
+  | "create-user" -> "admin: create user + password -> user id"
   | "add-ssh-key" -> "register OpenSSH public key for SSH REPL auth"
   | "list-ssh-keys" -> "list SSH key fingerprints for current user"
   | "revoke-ssh-key" -> "revoke SSH key by fingerprint or id"

@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import http.cookiejar
 import os
+import re
 import sys
 import urllib.error
 import urllib.parse
@@ -247,6 +248,44 @@ def main() -> int:
         else:
             fail("non-admin create", f"status={st} body={body[:160]}")
 
+    section("lisp create-user admin gate")
+    # Admin can create via prim; non-admin gets denied string (ok:true, value error).
+    j = api_eval(c, '(is-admin?)')
+    if j.get("ok") and "#t" in str(j.get("value", "")):
+        ok("admin is-admin? #t")
+    else:
+        fail("admin is-admin?", str(j))
+    j = api_eval(
+        c, '(create-user "lisp-user" "lisp-pass-1")'
+    )
+    val = str(j.get("value", ""))
+    if j.get("ok") and re.search(r"[0-9a-f-]{36}", val):
+        ok("admin create-user prim returns uuid")
+    else:
+        fail("admin create-user prim", str(j))
+    j = api_eval(ca, "(is-admin?)")
+    if j.get("ok") and "#f" in str(j.get("value", "")):
+        ok("alice is-admin? #f")
+    else:
+        fail("alice is-admin?", str(j))
+    j = api_eval(ca, '(create-user "should-fail" "x")')
+    val = str(j.get("value", ""))
+    if j.get("ok") and "admin only" in val:
+        ok("non-admin create-user denied")
+    else:
+        fail("non-admin create-user", str(j))
+    # New lisp-user can log in
+    cl = Client()
+    cl.request(
+        "POST", "/login",
+        {"username": "lisp-user", "password": "lisp-pass-1"},
+    )
+    j = api_eval(cl, "(whoami)")
+    if j.get("ok") and "lisp-user" in str(j.get("value", "")):
+        ok("lisp-user login after create-user prim")
+    else:
+        fail("lisp-user login", str(j))
+
     section("admin revoke_sessions")
     # Re-login admin (may have switched during alice checks)
     c_admin = Client()
@@ -260,8 +299,6 @@ def main() -> int:
     else:
         ok("revoke button present")
     # find alice user_id from list page (code block)
-    import re
-
     alice_ids = re.findall(
         r'name="user_id"\s+value="([0-9a-f-]{36})"', body, flags=re.I
     )
@@ -275,28 +312,25 @@ def main() -> int:
     c_admin.request(
         "POST",
         "/admin/users",
-        {"username": "bob_auth", "password": "bob-pass-1", "action": "create"},
+        # usernames are DNS labels — underscore is rejected
+        {"username": "bob-auth", "password": "bob-pass-1", "action": "create"},
     )
     st, _, body = c_admin.request("GET", "/admin/users")
+    # Row shape: <td>user</td><td>yes|no</td><td><code>uuid</code></td>…
+    # (hidden form user_id is after the code; match username	o code uuid.)
     m = re.search(
-        r"bob_auth.*name=\"user_id\"\s+value=\"([0-9a-f-]{36})\"",
+        r"<td>\s*bob-auth\s*</td>\s*<td>[^<]*</td>\s*<td>\s*"
+        r"<code>\s*([0-9a-f-]{36})\s*</code>",
         body,
         flags=re.I | re.S,
     )
-    if not m:
-        # fallback: all user_ids on page, last create is bob
-        ids = re.findall(
-            r'name="user_id"\s+value="([0-9a-f-]{36})"', body, flags=re.I
-        )
-        bob_id = ids[-1] if ids else ""
-    else:
-        bob_id = m.group(1)
+    bob_id = m.group(1) if m else ""
     cb = Client()
     cb.request(
-        "POST", "/login", {"username": "bob_auth", "password": "bob-pass-1"}
+        "POST", "/login", {"username": "bob-auth", "password": "bob-pass-1"}
     )
     j = api_eval(cb, "(whoami)")
-    if not (j.get("ok") and "bob_auth" in str(j.get("value", ""))):
+    if not (j.get("ok") and "bob-auth" in str(j.get("value", ""))):
         fail("bob login before revoke", str(j))
     else:
         ok("bob logged in before revoke")
@@ -307,7 +341,7 @@ def main() -> int:
             {"action": "revoke_sessions", "user_id": bob_id},
         )
         j = api_eval(cb, "(whoami)")
-        if j.get("ok") and "bob_auth" in str(j.get("value", "")):
+        if j.get("ok") and "bob-auth" in str(j.get("value", "")):
             fail("bob still authed after revoke_sessions", str(j))
         else:
             ok("bob denied after admin revoke_sessions")

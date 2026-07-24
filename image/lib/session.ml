@@ -845,6 +845,103 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
         in
         Lwt.return (Pricklypear_lisp.Ast.VList names));
 
+  (* Admin gating for Lisp auth surface (auth.user-management /
+     auth.bootstrap-admin). Prefer the per-request snapshot username
+     and re-check users.is_admin in PG so a concurrent attach cannot
+     flip t.is_admin under an in-flight /api/eval. *)
+  let caller_username () =
+    match Lwt.get Request_context.current with
+    | Some c -> (Request_context.manifest c).username
+    | None -> t.manifest.username
+  in
+  let require_admin (op : string) (k : unit -> Pricklypear_lisp.Ast.value Lwt.t)
+    : Pricklypear_lisp.Ast.value Lwt.t =
+    let uname = caller_username () in
+    if uname = "anonymous" then
+      Lwt.return
+        (Pricklypear_lisp.Ast.VStr (op ^ ": denied for anonymous"))
+    else
+      let* u = Auth_store.get_user_by_username t.store uname in
+      match u with
+      | Some u when u.Auth_store.is_admin -> k ()
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr (op ^ ": denied: admin only"))
+  in
+
+  (* (is-admin?) -> VBool. True iff the calling identity has users.is_admin. *)
+  Primitives.register tbl "is-admin?"
+    (fun _args ->
+      let uname = caller_username () in
+      if uname = "anonymous" then
+        Lwt.return (Pricklypear_lisp.Ast.VBool false)
+      else
+        let* u = Auth_store.get_user_by_username t.store uname in
+        match u with
+        | Some u -> Lwt.return (Pricklypear_lisp.Ast.VBool u.Auth_store.is_admin)
+        | None -> Lwt.return (Pricklypear_lisp.Ast.VBool false));
+
+  (* (create-user username password [is-admin]) -> VStr new-user-id | error VStr.
+     Admin only. Mirrors POST /admin/users action=create (create + set password
+     + auth_log admin_create_user). Optional third arg: bool / truthy str/int. *)
+  Primitives.register tbl "create-user"
+    (fun args ->
+      require_admin "create-user" (fun () ->
+        let parse_is_admin = function
+          | Pricklypear_lisp.Ast.VBool b -> b
+          | Pricklypear_lisp.Ast.VStr s ->
+              (match String.lowercase_ascii (String.trim s) with
+               | "1" | "true" | "yes" | "on" -> true
+               | _ -> false)
+          | Pricklypear_lisp.Ast.VInt n -> n <> 0L
+          | _ -> false
+        in
+        let run ~username ~password ~is_admin =
+          if String.trim username = "" || password = "" then
+            Lwt.return
+              (Pricklypear_lisp.Ast.VStr
+                 "create-user: username and password required")
+          else
+            let* created =
+              Auth_store.create_user t.store ~username ~is_admin
+            in
+            match created with
+            | Error e ->
+                Lwt.return
+                  (Pricklypear_lisp.Ast.VStr ("create-user: " ^ e))
+            | Ok user ->
+                let* pw =
+                  Auth_store.set_password t.store
+                    ~user_id:user.Auth_store.id ~password
+                in
+                (match pw with
+                 | Error e ->
+                     Lwt.return
+                       (Pricklypear_lisp.Ast.VStr
+                          ("create-user: password: " ^ e))
+                 | Ok () ->
+                     let* () =
+                       Auth_store.log_auth t.store
+                         ~user_id:user.Auth_store.id
+                         ~kind:"admin_create_user"
+                         ~success:true ()
+                     in
+                     Lwt.return
+                       (Pricklypear_lisp.Ast.VStr user.Auth_store.id))
+        in
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr username;
+            Pricklypear_lisp.Ast.VStr password ] ->
+            run ~username ~password ~is_admin:false
+        | [ Pricklypear_lisp.Ast.VStr username;
+            Pricklypear_lisp.Ast.VStr password;
+            flag ] ->
+            run ~username ~password ~is_admin:(parse_is_admin flag)
+        | _ ->
+            Lwt.return
+              (Pricklypear_lisp.Ast.VStr
+                 "create-user: need username password [is-admin]")));
+
   (* (current-branch) -> VStr *)
   Primitives.register_sync tbl "current-branch"
     (fun _ ->
