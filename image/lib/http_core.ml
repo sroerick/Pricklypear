@@ -204,9 +204,12 @@ let try_ui_fn (session : Session.t) (name : string) : string option Lwt.t =
     (fun () ->
       let* r = Session.call_handler session name in
       match r with
-      | Some v -> Lwt.return (Some (value_to_html_string v))
-      | None ->
-          Printf.eprintf "[http] try_ui_fn %s: unbound or no value\n%!" name;
+      | Session.Handler_ok v -> Lwt.return (Some (value_to_html_string v))
+      | Session.Handler_unbound ->
+          Printf.eprintf "[http] try_ui_fn %s: unbound\n%!" name;
+          Lwt.return None
+      | Session.Handler_error msg ->
+          Printf.eprintf "[http] try_ui_fn %s: %s\n%!" name msg;
           Lwt.return None)
     (fun exn ->
       Printf.eprintf "[http] try_ui_fn %s failed: %s\n%!"

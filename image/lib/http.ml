@@ -255,7 +255,7 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
               Session.call_handler session ~request handler_name
             in
             (match result with
-             | Some value ->
+             | Session.Handler_ok value ->
                  (* Public front-door pages: no product chrome (private nav). *)
                  if path = "/welcome"
                     || path = "/background" || path = "/roadmap"
@@ -281,8 +281,21 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
                    respond_handler_value ~session ~reqd ~path ~fragment value;
                    Lwt.return_unit
                  end
-             | None ->
+             | Session.Handler_unbound ->
                  fallback ();
+                 Lwt.return_unit
+             | Session.Handler_error msg ->
+                 if fragment then
+                   fragment_response reqd ~status:`Internal_server_error
+                     ("handler " ^ handler_name ^ ": " ^ msg)
+                 else
+                   html_response reqd ~session ~status:`Internal_server_error
+                     (chrome ~session ~title:"Route handler error" [
+                        HTML.h1 [] [txt "Route handler error"];
+                        HTML.p []
+                          [txt "handler %s" handler_name];
+                        HTML.pre [] [txt "%s" msg];
+                      ]);
                  Lwt.return_unit)
           end
         in
@@ -716,18 +729,30 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
                  Session.call_handler session ~request handler_name
                in
                (match result with
-                | Some value ->
+                | Session.Handler_ok value ->
                     respond_handler_value ~session ~reqd ~path ~fragment value;
                     Lwt.return_unit
-                | None ->
+                | Session.Handler_unbound ->
                     if fragment then
                       fragment_response reqd ~status:`Internal_server_error
-                        ("handler " ^ handler_name ^ " returned no value")
+                        ("handler " ^ handler_name ^ " unbound")
                     else
                       html_response reqd ~session ~status:`Internal_server_error
                         (chrome ~session ~title:"Route handler error" [
                            HTML.p []
-                             [txt "handler %s returned no value" handler_name];
+                             [txt "handler %s unbound" handler_name];
+                         ]);
+                    Lwt.return_unit
+                | Session.Handler_error msg ->
+                    if fragment then
+                      fragment_response reqd ~status:`Internal_server_error
+                        ("handler " ^ handler_name ^ ": " ^ msg)
+                    else
+                      html_response reqd ~session ~status:`Internal_server_error
+                        (chrome ~session ~title:"Route handler error" [
+                           HTML.h1 [] [txt "Route handler error"];
+                           HTML.p [] [txt "handler %s" handler_name];
+                           HTML.pre [] [txt "%s" msg];
                          ]);
                     Lwt.return_unit)
              end
