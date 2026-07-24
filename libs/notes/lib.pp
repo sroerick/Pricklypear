@@ -2,7 +2,7 @@
 ;;   notes/doc/*      note rows + field accessors + index filters
 ;;   notes/capture/*  quick capture + inbox append
 ;;   notes/outline/*  node ops / partials / outline todos
-;;   notes/refile/*   move nodes between notes
+;;   notes/refile/*   move nodes between notes; extract node → new note
 ;;   notes/ui/*       HTML + POST handlers
 ;; Public routes stay shallow where useful: notes/page;
 ;;   notes/capture/page, notes/outline/partial, notes/outline/node-op.
@@ -767,6 +767,26 @@
                       (html/attr "class" "ol-btn")
                       (html/attr "title" "refile selected node")))
                   "refile"))))
+          (html/form "POST" "/notes"
+            (html/attr "class" "ol-extract")
+            (html/join
+              (list
+                (html/hidden "action" "extract")
+                (html/hidden "src_slug" (as-str slug))
+                (html/void "input"
+                  (html/attrs
+                    (list
+                      (html/attr "type" "hidden")
+                      (html/attr "name" "node_id")
+                      (html/attr "id" "ol-extract-nid")
+                      (html/attr "value" "root"))))
+                (html/button
+                  (html/attrs
+                    (list
+                      (html/attr "type" "submit")
+                      (html/attr "class" "ol-btn")
+                      (html/attr "title" "extract selected node into its own note")))
+                  "extract"))))
           (if show-archived
               (html/a (string-append "/notes?slug=" slug) "Hide archived")
               (html/a (string-append "/notes?slug=" slug "&show=archived")
@@ -793,6 +813,7 @@
         "if(lab){var t=ownTitle(node);if(!t)t=node.querySelector('.ol-title');"
         "lab.textContent=(t&&t.innerText)?t.innerText.trim():id;lab.title=id;}"
         "var rf=document.getElementById('ol-refile-nid');if(rf)rf.value=id;"
+        "var ex=document.getElementById('ol-extract-nid');if(ex)ex.value=id;"
         "document.querySelectorAll('.ol-node.is-selected').forEach(function(n){n.classList.remove('is-selected');});"
         "node.classList.add('is-selected');"
         "if(id!=='root'){__selPin=id;if(__selPinT)clearTimeout(__selPinT);__selPinT=setTimeout(function(){__selPin=null;},400);}"
@@ -1053,6 +1074,119 @@
         (redirect
           (string-append "/notes?slug=" src))))))
 
+;; ---- extract: node → its own note ----
+;; Takes a non-root node out of src, creates a new note whose root title/body
+;; match the node (kids preserved under root), deletes the node from src.
+;; Returns new slug string, or () on failure.
+
+(define notes/refile/slug-char-ok?
+  (lambda (c)
+    (string-contains?
+      "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+      (as-str c))))
+
+(define notes/refile/slugify-acc
+  (lambda (s i acc last-hyphen?)
+    (if (>= i (string-length s))
+        acc
+        (let ((c (substring s i 1)))
+          (if (notes/refile/slug-char-ok? c)
+              (notes/refile/slugify-acc s (+ i 1)
+                (string-append acc c) #f)
+              (if last-hyphen?
+                  (notes/refile/slugify-acc s (+ i 1) acc #t)
+                  (notes/refile/slugify-acc s (+ i 1)
+                    (string-append acc "-") #t)))))))
+
+(define notes/refile/slugify
+  (lambda (title)
+    (let ((raw
+            (notes/refile/slugify-acc
+              (string-trim (as-str title)) 0 "" #t)))
+      (let ((n (string-length raw)))
+        (let ((s
+                (if (if (> n 0)
+                        (string-eq (substring raw (- n 1) 1) "-")
+                        #f)
+                    (substring raw 0 (- n 1))
+                    raw)))
+          (if (string-eq s "")
+              (string-append "note-" (as-str (gensym "n")))
+              (if (> (string-length s) 48)
+                  (substring s 0 48)
+                  s)))))))
+
+(define notes/refile/unique-slug
+  (lambda (base)
+    (if (null? (notes/doc/row (as-str base)))
+        (as-str base)
+        (notes/refile/unique-slug
+          (string-append (as-str base) "-" (as-str (gensym "x")))))))
+
+(define notes/refile/extract
+  (lambda (src-slug nid)
+    (let ((src (notes/doc/get src-slug))
+          (id (as-str nid)))
+      (if (null? src)
+          ()
+          (if (string-eq id "root")
+              ()
+              (let ((src-tree (notes/doc/outline src)))
+                (let ((node (outline/find src-tree id)))
+                  (if (null? node)
+                      ()
+                      (let ((title (as-str (outline/title node)))
+                            (body (as-str (outline/body node)))
+                            (kids (outline/kids node))
+                            (tags (notes/doc/tags src)))
+                        (let ((new-slug
+                                (notes/refile/unique-slug
+                                  (notes/refile/slugify title)))
+                              (new-tree
+                                (outline/set-kids
+                                  (outline/set-body
+                                    (outline/node "root" title)
+                                    body)
+                                  kids)))
+                          (seq
+                            (notes/doc/upsert new-slug title new-tree
+                              tags "note" "")
+                            (notes/doc/upsert (as-str src-slug)
+                              (notes/doc/title src)
+                              (outline/delete src-tree id)
+                              (notes/doc/tags src)
+                              (notes/doc/kind src)
+                              (notes/doc/day src))
+                            new-slug)))))))))))
+
+(define notes/refile/extract-handle
+  (lambda ()
+    (let ((src (as-str (request-param "src_slug")))
+          (nid (as-str (request-param "node_id"))))
+      (let ((new (notes/refile/extract src nid)))
+        (if (null? new)
+            (redirect (string-append "/notes?slug=" src))
+            (redirect (string-append "/notes?slug=" new)))))))
+
+(define notes/refile/extract-form
+  (lambda (src-slug nid)
+    (if (string-eq (as-str nid) "root")
+        ""
+        (html/form "POST" "/notes"
+          (html/attr "class" "ol-extract")
+          (html/join
+            (list
+              (html/hidden "action" "extract")
+              (html/hidden "src_slug" (as-str src-slug))
+              (html/hidden "node_id" (as-str nid))
+              (html/button
+                (html/attrs
+                  (list
+                    (html/attr "type" "submit")
+                    (html/attr "class" "ol-btn")
+                    (html/attr "title" "extract node into its own note")))
+                "extract")))))))
+
 ;; Eval form: run a Lisp expr with self/doc/slug bound, splice result.
 (define notes/outline/eval-form
   (lambda (slug nid)
@@ -1094,6 +1228,7 @@
     (html/join
       (list
         (notes/refile/form slug nid)
+        (notes/refile/extract-form slug nid)
         (notes/outline/eval-form slug nid)))))
 
 (define notes/ui/handle-post
@@ -1123,6 +1258,8 @@
          (notes/ui/do-delete))
         ((string-eq action "refile")
          (notes/refile/handle))
+        ((string-eq action "extract")
+         (notes/refile/extract-handle))
         (else (redirect "/notes"))))))
 
 (define notes/page
