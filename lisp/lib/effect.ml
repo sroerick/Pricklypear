@@ -112,6 +112,7 @@ let pure_prims = [
   "string-append"; "str"; "type-of"; "as-str";
   "string-eq"; "string-trim"; "string-length"; "substring"; "string-contains?";
   "html-escape"; "json-parse"; "json-emit";
+  "read-string"; "read-all-string";
   "dict-get"; "dict-set"; "dict-keys";
   "hx-get"; "hx-post"; "hx-request?";
   "request-header"; "request-method"; "request-path";
