@@ -1940,13 +1940,19 @@ let set_route (t : t) ~(route : string) ~(handler : string)
   in
   Lwt.return_unit
 
+(** Result of invoking a route handler. Errors keep the real message
+    (e.g. "budget exceeded") so HTTP can show it — never mask as bare None. *)
+type handler_call =
+  | Handler_ok of Pricklypear_lisp.Ast.value
+  | Handler_unbound
+  | Handler_error of string
+
 (* Invoke a named handler function (looked up via env). The handler
-   must be a zero-arg VLambda or a VPrim name. Returns its value, or
-   raises Interp_error if the handler doesn't resolve.
+   must be a zero-arg VLambda or a VPrim name.
    When [~request] is provided, request-* prims see that context for
    the duration of the call (cleared in finalize). *)
 let call_handler (t : t) ?request (handler_name : string)
-  : Pricklypear_lisp.Ast.value option Lwt.t =
+  : handler_call Lwt.t =
   (* Resolve the handler env against the per-request snapshot when bound
      (image.per-request-context): a concurrent attach_anonymous +
      checkout_to mid-request would otherwise rehydrate t.env to system/main
@@ -1958,7 +1964,7 @@ let call_handler (t : t) ?request (handler_name : string)
     | None -> t.env
   in
   match Pricklypear_lisp.Env.lookup env handler_name with
-  | None -> Lwt.return_none
+  | None -> Lwt.return Handler_unbound
   | Some _fn ->
       (* Evaluate (handler-name) — zero args. Re-uses eval's apply path
          so VLambda closures AND VPrim dispatch both work. *)
@@ -1968,15 +1974,16 @@ let call_handler (t : t) ?request (handler_name : string)
              let* v =
                eval_string_rim t ("(" ^ handler_name ^ ")")
              in
-             Lwt.return (Some v))
+             Lwt.return (Handler_ok v))
           (fun exn ->
+             let msg = pp_interp_exn exn in
              Lwt.async (fun () ->
                Ops_incidents.emit_and_maybe_file t
                  ~level:Ops_log.Error ~component:"handler"
                  ~file:(not (Ops_incidents.is_expected_runtime_error exn))
                  ~context:[("handler", handler_name)]
-                 (pp_interp_exn exn));
-             Lwt.return_none)
+                 msg);
+             Lwt.return (Handler_error msg))
       in
       (match request with
        | None -> run ()

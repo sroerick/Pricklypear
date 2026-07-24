@@ -1225,13 +1225,13 @@
             "eval"))))))
 
 ;; Hook refile + eval into outline action panels (after outline lib loads).
+;; Per-node extras must stay CHEAP: notes/refile/options scans the whole
+;; vault. Putting that form on every node (N × vault size) blew the 100k
+;; eval budget on inbox (~20 kids). Toolbar owns refile (one options list);
+;; per-node menu only gets extract (fixed size) — eval stays toolbar/partial.
 (define outline/extra-actions
   (lambda (slug nid)
-    (html/join
-      (list
-        (notes/refile/form slug nid)
-        (notes/refile/extract-form slug nid)
-        (notes/outline/eval-form slug nid)))))
+    (notes/refile/extract-form slug nid)))
 
 (define notes/ui/handle-post
   (lambda ()

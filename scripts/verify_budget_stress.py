@@ -388,6 +388,35 @@ def main() -> int:
     check("2 upsert 10x8k + reindex", upsert_reindex)
     check("3a render 10-node wiki+media", render_large)
     check("3b render single big body", render_single_big_body)
+
+    def render_with_extra_actions() -> None:
+        """Regression: per-node refile/options used to N×scan vault and OOM budget."""
+        # notes load defines outline/extra-actions; must stay cheap per node
+        must_ok("notes", '(load-library "notes")')
+        src = must_ok("src", '(function-source "outline/extra-actions")')
+        if "notes/refile/options" in src or "notes/refile/form" in src:
+            raise AssertionError(
+                "outline/extra-actions must not embed refile/options per node "
+                f"(budget N×vault); got {src[:200]}"
+            )
+        v = must_ok(
+            "html25",
+            """
+(let ((kids (list/map (lambda (i)
+        (list (string-append "n" (as-str i)) (string-append "T" (as-str i))
+              (string-append "body [[x" (as-str i) "]] more text here")
+              "" (list)))
+      (list/range 25))))
+  (let ((tree (list "root" "R" "" "" kids)))
+    (list (string-length (outline/html "x" tree #f))
+          (budget-remaining))))
+""",
+        )
+        rem = int(re.findall(r"\d+", v)[-1])
+        if rem < FLOOR_AFTER_RENDER:
+            raise AssertionError(f"budget floor after 25-node html: {v}")
+
+    check("3c render 25-node with notes extra-actions", render_with_extra_actions)
     check("4 many-node ops + extract/refile", many_node_ops_safe)
     check("cleanup after", cleanup)
 
