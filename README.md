@@ -76,7 +76,7 @@ history only.)
 | `migrations/` | Additive SQL applied on boot / deploy |
 | `image/` | Sole runtime binary |
 | `libs/` | Lisp packages seeded to `system/main` |
-| `scripts/` | `dev.sh`, `pp_eval.py`, smokes, `public_artifacts.sh`, deploy helpers |
+| `scripts/` | `dev.sh`, thin `pp_eval.py` client, `verify_habitat.sh` (on-image `libs/verify`), seed ETL, deploy helpers |
 | `docs/` | Book PDF, ops notes, [`runtime-effects-transition.md`](docs/runtime-effects-transition.md) (OCaml 5 / effects path), [`agent-ui-harness.md`](docs/agent-ui-harness.md) (agent FE verify research) |
 | `borge/` | Design chapters |
 
@@ -102,7 +102,8 @@ Useful checks against a running image:
 
 ```bash
 ksh scripts/verify_auth.sh
-python3 scripts/auth_product_smoke.py
+ksh scripts/verify_habitat.sh   # product/budget suites on-image (libs/verify)
+python3 scripts/auth_product_smoke.py   # auth HTTP only; prefer not to grow new .py smokes
 ```
 
 ## Agent eval (against a live image)
