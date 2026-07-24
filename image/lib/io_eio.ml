@@ -207,6 +207,7 @@ module Db = struct
   let set_branch_id (s : store) id = s.branch_id <- id
   let current_conn (s : store) =
     match s.current_tx with Some tx -> Some tx | None -> s.conn
+  let in_transaction (s : store) = s.current_tx <> None
 
   (** Direct (non-Lwt) connect — call under Eio ctx. *)
   let connect_sync (s : store) : unit =

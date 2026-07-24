@@ -20,6 +20,17 @@ let default_limit = 100_000
 
 let make_budget ?(limit = default_limit) () : budget = { steps = 0; limit }
 
+(** Dynamic binding for the budget of the eval currently on the stack.
+    Lets OCaml prims like [budget-remaining] and nested apply helpers
+    share the caller's step counter without threading budget through
+    the prim ABI. *)
+let current_budget : budget option ref = ref None
+
+let budget_remaining_steps () : int =
+  match !current_budget with
+  | None -> 0
+  | Some b -> max 0 (b.limit - b.steps)
+
 let tick (b : budget) : unit =
   b.steps <- b.steps + 1;
   if b.steps > b.limit then raise (Interp_error Budget_exceeded)
@@ -45,14 +56,18 @@ let is_special_form (name : string) : bool =
   | "prim" | "with-transaction"
   | "quasiquote" | "unquote" | "unquote-splicing" | "defmacro"
   | "macroexpand-1" | "macroexpand" | "gensym"
-  | "cond" | "and" | "or" -> true
+  | "cond" | "and" | "or"
+  (* Higher-order list ops: OCaml loops + apply, not recursive Lisp.
+     Avoids ~O(n) eval-frame overhead per element (budget P0). *)
+  | "list/map" | "list/filter" | "list/foldl" -> true
   | _ -> false
 
 let kernel_special_names =
   [ "lambda"; "let"; "letrec"; "if"; "define"; "quote"; "seq"; "prim";
     "with-transaction"; "quasiquote"; "unquote"; "unquote-splicing";
     "defmacro"; "macroexpand-1"; "macroexpand"; "gensym";
-    "cond"; "and"; "or" ]
+    "cond"; "and"; "or";
+    "list/map"; "list/filter"; "list/foldl" ]
 
 let truthy (v : value) : bool =
   match v with
@@ -173,12 +188,26 @@ let gensym ?(prefix = "g") () : string =
   incr gensym_counter;
   prefix ^ "$" ^ string_of_int !gensym_counter
 
+(** Flatten a Lisp list value (VList or VPair chain or VNil) to OCaml list. *)
+let rec value_to_list (v : value) : value list =
+  match v with
+  | VNil | VList [] -> []
+  | VList xs -> xs
+  | VPair (a, b) -> a :: value_to_list b
+  | other ->
+      raise
+        (Interp_error
+           (User_error
+              ("list op needs a list, got " ^ pp_value_short other)))
+
 let rec eval
   ~(budget : budget)
   ~(prims : prim_table)
   (env : env)
   (e : expr)
   : value =
+  (* Publish budget for prims (budget-remaining) and nested helpers. *)
+  current_budget := Some budget;
   tick budget;
   match e with
   | Var name ->
@@ -512,6 +541,33 @@ and eval_special_form
       raise
         (Interp_error
            (User_error "letrec via App form not yet supported"))
+  (* list/map, list/filter, list/foldl — OCaml loops + apply.
+     One special-form tick total instead of O(n) recursive Lisp frames.
+     Closure bodies still tick normally via apply. *)
+  | "list/map", [ _; f_expr; xs_expr ] ->
+      let f = eval ~budget ~prims env f_expr in
+      let xs = value_to_list (eval ~budget ~prims env xs_expr) in
+      VList (List.map (fun x -> apply ~budget ~prims f [ x ]) xs)
+  | "list/filter", [ _; p_expr; xs_expr ] ->
+      let p = eval ~budget ~prims env p_expr in
+      let xs = value_to_list (eval ~budget ~prims env xs_expr) in
+      VList
+        (List.filter
+           (fun x -> truthy (apply ~budget ~prims p [ x ]))
+           xs)
+  | "list/foldl", [ _; f_expr; init_expr; xs_expr ] ->
+      let f = eval ~budget ~prims env f_expr in
+      let init = eval ~budget ~prims env init_expr in
+      let xs = value_to_list (eval ~budget ~prims env xs_expr) in
+      List.fold_left
+        (fun acc x -> apply ~budget ~prims f [ acc; x ])
+        init xs
+  | "list/map", _ ->
+      raise (Interp_error (User_error "list/map needs (f xs)"))
+  | "list/filter", _ ->
+      raise (Interp_error (User_error "list/filter needs (p xs)"))
+  | "list/foldl", _ ->
+      raise (Interp_error (User_error "list/foldl needs (f init xs)"))
   | other, _ ->
       raise
         (Interp_error (User_error ("malformed special form: " ^ other)))

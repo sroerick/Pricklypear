@@ -513,6 +513,79 @@ let eval_eff_tests = [
     Alcotest.(check string) "42" "42" (Reader.pp_value got));
 ]
 
+(* list/map|filter|foldl are kernel special forms (OCaml loops + apply). *)
+let list_hof_tests =
+  let setup () =
+    let prims = Eval.make_prim_table () in
+    Eval.register_prim prims "+"
+      (fun args ->
+        match args with
+        | [ Ast.VInt a; Ast.VInt b ] -> Ast.VInt (Int64.add a b)
+        | _ -> failwith "+");
+    Eval.register_prim prims "*"
+      (fun args ->
+        match args with
+        | [ Ast.VInt a; Ast.VInt b ] -> Ast.VInt (Int64.mul a b)
+        | _ -> failwith "*");
+    Eval.register_prim prims "="
+      (fun args ->
+        match args with
+        | [ Ast.VInt a; Ast.VInt b ] -> Ast.VBool (Int64.equal a b)
+        | _ -> Ast.VBool false);
+    Eval.register_prim prims "list" (fun args -> Ast.VList args);
+    Eval.register_prim prims "null?"
+      (function
+        | [ Ast.VNil ] | [ Ast.VList [] ] -> Ast.VBool true
+        | _ -> Ast.VBool false);
+    Eval.register_prim prims "car"
+      (function
+        | [ Ast.VList (h :: _) ] -> h
+        | _ -> failwith "car");
+    Eval.register_prim prims "cdr"
+      (function
+        | [ Ast.VList (_ :: t) ] -> Ast.VList t
+        | _ -> failwith "cdr");
+    Eval.register_prim prims "cons"
+      (function
+        | [ a; Ast.VList xs ] -> Ast.VList (a :: xs)
+        | [ a; b ] -> Ast.VPair (a, b)
+        | _ -> failwith "cons");
+    let env = Env.create () in
+    List.iter
+      (fun n -> Env.define env n (Ast.VPrim n))
+      [ "+"; "*"; "="; "list"; "null?"; "car"; "cdr"; "cons" ];
+    (prims, env)
+  in
+  [ ("list/map doubles", `Quick, fun () ->
+      let prims, env = setup () in
+      let got =
+        Eval.eval_string ~prims env
+          "(list/map (lambda (x) (* x 2)) (list 1 2 3))"
+      in
+      Alcotest.(check string) "map" "(2 4 6)" (Reader.pp_value got));
+    ("list/filter evens", `Quick, fun () ->
+      let prims, env = setup () in
+      let got =
+        Eval.eval_string ~prims env
+          "(list/filter (lambda (x) (= x 2)) (list 1 2 3 2))"
+      in
+      Alcotest.(check string) "filter" "(2 2)" (Reader.pp_value got));
+    ("list/foldl sum", `Quick, fun () ->
+      let prims, env = setup () in
+      let got =
+        Eval.eval_string ~prims env
+          "(list/foldl (lambda (a x) (+ a x)) 0 (list 1 2 3 4))"
+      in
+      Alcotest.(check string) "fold" "10" (Reader.pp_value got));
+    ("list/map empty", `Quick, fun () ->
+      let prims, env = setup () in
+      let got =
+        Eval.eval_string ~prims env
+          "(list/map (lambda (x) x) (list))"
+      in
+      Alcotest.(check string) "empty" "()" (Reader.pp_value got));
+  ]
+
 let () =
   Alcotest.run "pricklypear-lisp" [
     "reader", reader_tests @ reader_list_tests @ reader_completeness_tests;
@@ -521,4 +594,5 @@ let () =
     "eval", eval_tests;
     "macros", macro_tests;
     "eval-eff", eval_eff_tests;
+    "list-hof", list_hof_tests;
   ]

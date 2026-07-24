@@ -87,45 +87,41 @@ let get (store : Store.t) ~(type_name : string) ~(id : string) : value Lwt.t =
     (select-for-update 'type id) Exposed as a primitive for finer
     control."
 
-    IMPORTANT: This MUST be called inside a (with-transaction ...)
-    block (or the prim-level equivalent) for the lock to have
-    transactional scope. If called outside any transaction, pgx will
-    wrap the single statement in an implicit transaction; the lock
-    is released as soon as the statement returns (i.e. useless).
-    Usage pattern (v1, pre-with-transaction prim — i.e. today):
-      (define u (select-for-update 'user id))  ; lock acquired
-      (define u2 (dict-set u "active" "false"))
-      (update 'user id u2)                       ; update within tx
-    When the transaction commits/rolls back, the lock is released.
-
-    In v1 (no with-transaction prim YET), this is essentially a
-    hinted-get. Improper use outside a transaction is non-fatal but
-    provides no concurrency protection. A future (with-transaction ...)
-    prim will give this real meaning. *)
+    MUST be called inside (with-transaction ...). Outside a dynamic
+    transaction this raises a clean Interp_error (User_error) instead of
+    issuing FOR UPDATE on the pool conn — which previously could poison
+    Eio mutexes and cascade into auth failures (observed 2026-07-22). *)
 let select_for_update
     (store : Store.t) ~(type_name : string) ~(id : string) : value Lwt.t =
-  match Io_lwt.Db.current_conn store with
-  | None -> Lwt.return VNil
-  | Some conn ->
-      let sql =
-        "SELECT fields::text FROM data_rows " ^
-        "WHERE type_name = $1 AND id = $2::uuid " ^
-        "FOR UPDATE" in
-      let* rows =
-        Io_lwt.Db.execute conn
-          ~params:[ Pgx.Value.of_string type_name;
-                    Pgx.Value.of_string id ]
-          sql
-      in
-      (match rows with
-       | [] -> Lwt.return VNil
-       | row :: _ ->
-           (match row with
-            | [ fields_cell ] ->
-                (match Pgx.Value.to_string fields_cell with
-                 | Some s -> Lwt.return (VStr s)
-                 | None -> Lwt.return VNil)
-            | _ -> Lwt.return VNil))
+  if not (Io_lwt.Db.in_transaction store) then
+    Lwt.fail
+      (Interp_error
+         (User_error
+            "select-for-update requires (with-transaction ...); \
+             refusing FOR UPDATE outside a transaction"))
+  else
+    match Io_lwt.Db.current_conn store with
+    | None -> Lwt.return VNil
+    | Some conn ->
+        let sql =
+          "SELECT fields::text FROM data_rows " ^
+          "WHERE type_name = $1 AND id = $2::uuid " ^
+          "FOR UPDATE" in
+        let* rows =
+          Io_lwt.Db.execute conn
+            ~params:[ Pgx.Value.of_string type_name;
+                      Pgx.Value.of_string id ]
+            sql
+        in
+        (match rows with
+         | [] -> Lwt.return VNil
+         | row :: _ ->
+             (match row with
+              | [ fields_cell ] ->
+                  (match Pgx.Value.to_string fields_cell with
+                   | Some s -> Lwt.return (VStr s)
+                   | None -> Lwt.return VNil)
+              | _ -> Lwt.return VNil))
 
 (** (create 'type "{fields-json}") -> VStr new-id | VStr "create failed".
     INSERTs a row with the given JSON fields, returning the new UUID.

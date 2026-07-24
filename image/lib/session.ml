@@ -376,6 +376,54 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
         | _ ->
             Lwt.return (Pricklypear_lisp.Ast.VStr "checkout: bad args"));
 
+  (* (bench expr-string [n]) -> VFloat average microseconds per iteration.
+     Parses once, warms up once, runs n times (default 1000) under a max
+     budget so the bench loop itself never hits Budget_exceeded. Uses the
+     current session env. Prefer pure expressions (side-effecting bodies
+     will run for real). *)
+  let bench_run (expr_str : string) (n : int) : Pricklypear_lisp.Ast.value Lwt.t =
+    let n = max 1 n in
+    let e =
+      try Pricklypear_lisp.Reader.read_one expr_str
+      with exn ->
+        raise
+          (Pricklypear_lisp.Ast.Interp_error
+             (Pricklypear_lisp.Ast.User_error
+                ("bench: parse failed: " ^ Printexc.to_string exn)))
+    in
+    let run_once () =
+      let budget =
+        Pricklypear_lisp.Eval.make_budget ~limit:max_int ()
+      in
+      Control_rim.run_lwt ~prims:t.prims (fun () ->
+          Pricklypear_lisp.Eval.eval
+            ~budget ~prims:Pricklypear_lisp.Eval.empty_prims t.env e)
+    in
+    (* warmup (discard) *)
+    let* _ = run_once () in
+    let t0 = Unix.gettimeofday () in
+    let rec loop i =
+      if i >= n then Lwt.return_unit
+      else
+        let* _ = run_once () in
+        loop (i + 1)
+    in
+    let* () = loop 0 in
+    let t1 = Unix.gettimeofday () in
+    let avg_us = ((t1 -. t0) *. 1_000_000.) /. float_of_int n in
+    Lwt.return (Pricklypear_lisp.Ast.VFloat avg_us)
+  in
+  Primitives.register tbl "bench"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr s ] -> bench_run s 1000
+      | [ Pricklypear_lisp.Ast.VStr s; Pricklypear_lisp.Ast.VInt n ] ->
+          bench_run s (Int64.to_int n)
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr
+               "bench: need (bench expr-string [iterations])"));
+
   (* Private prim used by the with-transaction special form in eval.ml.
      NOT USER-VISIBLE: it's looked up under name __with_transaction__ by
      the special form handler, never `(with-transaction-call ...)` from Lisp.
@@ -1516,6 +1564,7 @@ and seed_stdlib (t : t) : unit Lwt.t =
     let* () = seed_one t "flashcards" in
     let* () = seed_one t "bible" in
     let* () = seed_one t "dabar" in
+    let* () = seed_one t "bi" in
     Lwt.return_unit)
       finally)
 

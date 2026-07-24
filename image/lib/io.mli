@@ -26,6 +26,8 @@ module type DB = sig
   val make : cfg:config -> branch_id:string -> unit -> store
   val connect : store -> unit Lwt.t
   val current_conn : store -> conn option
+  (** True when inside (with-transaction ...). *)
+  val in_transaction : store -> bool
   val branch_id : store -> string
   val set_branch_id : store -> string -> unit
 

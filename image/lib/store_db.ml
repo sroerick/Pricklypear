@@ -102,6 +102,9 @@ let current_conn (t : t) : conn option =
   | Some tx -> Some tx
   | None -> t.conn
 
+(** True iff a dynamic (with-transaction ...) is active on this store. *)
+let in_transaction (t : t) : bool = t.current_tx <> None
+
 (** Execute SQL on a dual [conn]. Shared by store/crud/auth. *)
 let exec (c : conn) ?params sql : Pgx.row list Lwt.t =
   match c with

@@ -44,10 +44,13 @@
             (roam/split-label-at s (+ i 1))))))
 
 ;; Parse body → list of (slug label) pairs, left-to-right, de-duped later.
+;; OCaml extract-links prim (1 budget tick) — Lisp char-scanner blew 100k
+;; steps on ~2-4k char bodies and left reindex silently half-done.
 (define roam/parse-links
   (lambda (body)
-    (roam/parse-links-acc (as-str body) 0 (list))))
+    (extract-links (as-str body))))
 
+;; Kept for debugging / fallback; prefer roam/parse-links.
 (define roam/parse-links-acc
   (lambda (s i acc)
     (if (>= i (- (string-length s) 3))

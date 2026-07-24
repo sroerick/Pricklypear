@@ -2,6 +2,9 @@
 ;; Loaded by (load-library "std") at image boot.
 
 ;; --- list/ ---
+;; list/map, list/filter, list/foldl are KERNEL SPECIAL FORMS (eval.ml):
+;; OCaml loops + apply, not recursive Lisp. These defines are fallbacks
+;; only if the special forms are unavailable (should not happen in image).
 
 (define list/map
   (lambda (f xs)
@@ -22,6 +25,17 @@
     (if (null? xs)
         acc
         (list/foldl f (f acc (car xs)) (cdr xs)))))
+
+;; (list/range n) → (0 1 ... n-1) for synthetic tests / generators.
+(define list/range
+  (lambda (n)
+    (list/range-acc n (list))))
+
+(define list/range-acc
+  (lambda (n acc)
+    (if (<= n 0)
+        acc
+        (list/range-acc (- n 1) (cons (- n 1) acc)))))
 
 ;; --- dict/ ---
 
