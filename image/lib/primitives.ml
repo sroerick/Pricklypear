@@ -141,6 +141,7 @@ let make_with_defaults () : t =
   register_sync t "dict-keys" prim_dict_keys;
   register_sync t "render-html" prim_render_html;
   register_sync t "extract-links" prim_extract_links;
+  register_sync t "render-links" prim_render_links;
   register_sync t "budget-remaining" prim_budget_remaining;
   t
 
@@ -233,6 +234,7 @@ let prim_summary (name : string) : string =
   | "find-random" -> "one random data row of a type"
   | "select-for-update" -> "lock row in transaction (requires with-transaction)"
   | "extract-links" -> "parse [[wiki]] / [[slug|label]] from body → list of pairs"
+  | "render-links" -> "body with [[wiki]]/[[media:]] → HTML (budget-safe)"
   | "budget-remaining" -> "steps left in current eval budget"
   | "bench" -> "avg microseconds per eval of expr-string [n]"
   | "agent-session-new" -> "create durable AI session: (agent-session-new seed [tools?])"

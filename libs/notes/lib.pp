@@ -158,10 +158,12 @@
                 lab)))))
       (find-rows 'note-link "to_slug" (as-str slug) 200))))
 
-;; Render body with [[slug]] / [[slug|label]] → anchors. Escapes plain text.
+;; Render body with [[slug]] / [[slug|label]] / [[media:…]] → HTML.
+;; OCaml render-links (1 budget tick) — Lisp roam/render-acc blew the
+;; 100k step limit on multi-kB bodies during outline/html.
 (define roam/render-body
   (lambda (body)
-    (roam/render-acc (as-str body) 0 "")))
+    (render-links (as-str body))))
 
 (define roam/at-open?
   (lambda (s i)

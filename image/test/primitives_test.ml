@@ -269,6 +269,31 @@ let extract_links_tests = [
     | other ->
         Alcotest.failf "budget-remaining got %s"
           (Pricklypear_lisp.Reader.pp_value other));
+  ("render-links wiki + media", `Quick, fun () ->
+    let contains hay needle =
+      let n = String.length needle in
+      let rec loop i =
+        if i + n > String.length hay then false
+        else if String.sub hay i n = needle then true
+        else loop (i + 1)
+      in
+      loop 0
+    in
+    let v =
+      eval
+        "(render-links \"hi [[a|A]] [[media:uuid-1|alt]]\")"
+    in
+    match v with
+    | VStr s ->
+        if not (contains s "/notes?slug=a") then
+          Alcotest.failf "missing wiki href: %s" s;
+        if not (contains s "note-media") then
+          Alcotest.failf "missing media class: %s" s;
+        if not (contains s ">A</a>") then
+          Alcotest.failf "missing label: %s" s
+    | other ->
+        Alcotest.failf "render-links got %s"
+          (Pricklypear_lisp.Reader.pp_value other));
 ]
 
 let () =
