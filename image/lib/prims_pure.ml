@@ -155,13 +155,28 @@ let prim_pair_p args =
   | [ VList (_ :: _) ] -> VBool true
   | _ -> VBool false
 
-(* (string-append s1 s2 ...) -> VStr. Variadic over VStr. *)
+(** Unwrap macro string tags produced by expand_and_eval_macro:
+    (__str__ "foo") is a VList that must behave like VStr for string prims. *)
+let rec coerce_str ?(ctx = "string") (v : value) : string =
+  match v with
+  | VStr s -> s
+  | VList [ VStr "__str__"; VStr s ] -> s
+  | VInt n -> Int64.to_string n
+  | VFloat f -> Printf.sprintf "%.12g" f
+  | VBool true -> "true"
+  | VBool false -> "false"
+  | VNil -> ""
+  | _ ->
+      raise
+        (Interp_error
+           (User_error (ctx ^ " needs a string (got " ^
+                        Pricklypear_lisp.Reader.pp_value v ^ ")")))
+
+(* (string-append s1 s2 ...) -> VStr. Variadic over VStr / __str__ tags. *)
 let prim_string_append args =
   let buf = Buffer.create 32 in
-  List.iter (fun v ->
-    match v with
-    | VStr s -> Buffer.add_string buf s
-    | _ -> raise (Interp_error (User_error "string-append needs VStr args")))
+  List.iter
+    (fun v -> Buffer.add_string buf (coerce_str ~ctx:"string-append" v))
     args;
   VStr (Buffer.contents buf)
 
@@ -171,6 +186,7 @@ let prim_type_of args =
   | [ VInt _ ] -> VStr "int"
   | [ VFloat _ ] -> VStr "float"
   | [ VStr _ ] -> VStr "str"
+  | [ VList [ VStr "__str__"; VStr _ ] ] -> VStr "str"
   | [ VBool _ ] -> VStr "bool"
   | [ VNil ] -> VStr "nil"
   | [ VPair _ ] -> VStr "pair"
@@ -190,13 +206,7 @@ let prim_str args =
 (* (as-str x) -> VStr without Lisp quotes (for path/ref building). *)
 let prim_as_str args =
   match args with
-  | [ VStr s ] -> VStr s
-  | [ VInt n ] -> VStr (Int64.to_string n)
-  | [ VFloat f ] -> VStr (Printf.sprintf "%.12g" f)
-  | [ VBool true ] -> VStr "true"
-  | [ VBool false ] -> VStr "false"
-  | [ VNil ] -> VStr ""
-  | [ v ] -> VStr (Pricklypear_lisp.Reader.pp_value v)
+  | [ v ] -> VStr (coerce_str ~ctx:"as-str" v)
   | _ -> raise (Interp_error (User_error "as-str needs one arg"))
 
 (* (parse-float s|n) -> VFloat *)
@@ -270,12 +280,15 @@ let prim_max args =
 
 let prim_string_length args =
   match args with
-  | [ VStr s ] -> VInt (Int64.of_int (String.length s))
+  | [ v ] ->
+      let s = coerce_str ~ctx:"string-length" v in
+      VInt (Int64.of_int (String.length s))
   | _ -> raise (Interp_error (User_error "string-length needs one VStr"))
 
 let prim_substring args =
   match args with
-  | [ VStr s; VInt start; VInt len ] ->
+  | [ sv; VInt start; VInt len ] ->
+      let s = coerce_str ~ctx:"substring" sv in
       let st = Int64.to_int start in
       let n = Int64.to_int len in
       let sl = String.length s in
@@ -284,7 +297,8 @@ let prim_substring args =
       else
         let n = min n (sl - st) in
         VStr (String.sub s st n)
-  | [ VStr s; VInt start ] ->
+  | [ sv; VInt start ] ->
+      let s = coerce_str ~ctx:"substring" sv in
       let st = Int64.to_int start in
       let sl = String.length s in
       if st < 0 || st > sl then
@@ -297,7 +311,9 @@ let prim_substring args =
 
 let prim_string_contains args =
   match args with
-  | [ VStr hay; VStr needle ] ->
+  | [ hay_v; needle_v ] ->
+      let hay = coerce_str ~ctx:"string-contains?" hay_v in
+      let needle = coerce_str ~ctx:"string-contains?" needle_v in
       let rec loop i =
         if needle = "" then true
         else if i + String.length needle > String.length hay then false
@@ -467,13 +483,17 @@ let is_redirect (v : value) : string option =
 (* (string-eq a b) -> VBool. String equality for request-method checks etc. *)
 let prim_string_eq args =
   match args with
-  | [ VStr a; VStr b ] -> VBool (String.equal a b)
+  | [ a; b ] ->
+      VBool
+        (String.equal
+           (coerce_str ~ctx:"string-eq" a)
+           (coerce_str ~ctx:"string-eq" b))
   | _ -> raise (Interp_error (User_error "string-eq needs 2 strings"))
 
 (* (string-trim s) -> VStr. Trim leading/trailing whitespace. *)
 let prim_string_trim args =
   match args with
-  | [ VStr s ] -> VStr (String.trim s)
+  | [ v ] -> VStr (String.trim (coerce_str ~ctx:"string-trim" v))
   | _ -> raise (Interp_error (User_error "string-trim needs 1 string"))
 
 (* JSON <-> Lisp values for outline trees and generic data.

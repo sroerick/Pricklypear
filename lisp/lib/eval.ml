@@ -283,10 +283,16 @@ and expand_and_eval_macro
   and got = List.length arg_exprs in
   if expected <> got then
     raise (Interp_error (Arity_mismatch ("macro", expected, got)));
+  (* Bind macro args as values (not evaluated). Distinguish string
+     literals from bare symbols so expansion can round-trip:
+       "foo"  -> (__str__ "foo")  => value_to_expr => Lit VStr
+       foo    -> VStr "foo"       => value_to_expr => Var
+     String prims unwrap (__str__ …) via image prims_pure. *)
   let arg_vals =
     List.map
       (fun e ->
         match e with
+        | Lit (VStr s) -> VList [ VStr "__str__"; VStr s ]
         | Lit v -> v
         | _ -> reify_expr e)
       arg_exprs

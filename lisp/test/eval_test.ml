@@ -513,6 +513,42 @@ let eval_eff_tests = [
     Alcotest.(check string) "42" "42" (Reader.pp_value got));
 ]
 
+(* Macro string args: Lit VStr bound as (__str__ s) so expansion + unquote
+   round-trip to Lit VStr (inbox c11-4013). *)
+let macro_str_tests =
+  let setup () =
+    let prims = Eval.make_prim_table () in
+    Eval.register_prim prims "string-append"
+      (fun args ->
+        let buf = Buffer.create 16 in
+        List.iter
+          (function
+            | Ast.VStr s -> Buffer.add_string buf s
+            | Ast.VList [ Ast.VStr "__str__"; Ast.VStr s ] ->
+                Buffer.add_string buf s
+            | _ -> failwith "string-append")
+          args;
+        Ast.VStr (Buffer.contents buf));
+    let env = Env.create () in
+    Env.define env "string-append" (Ast.VPrim "string-append");
+    (prims, env)
+  in
+  [ ("macro string lit via quasiquote unquote", `Quick, fun () ->
+      let prims, env = setup () in
+      ignore
+        (Eval.eval_string ~prims env
+           "(defmacro m-str (x) `(string-append ,x \"-a\"))");
+      let got = Eval.eval_string ~prims env "(m-str \"foo\")" in
+      Alcotest.(check string) "foo-a" "\"foo-a\"" (Reader.pp_value got));
+    ("macro string lit builds lambda body literal", `Quick, fun () ->
+      let prims, env = setup () in
+      ignore
+        (Eval.eval_string ~prims env
+           "(defmacro m-lam (x) `(lambda () ,x))");
+      let got = Eval.eval_string ~prims env "((m-lam \"A\"))" in
+      Alcotest.(check string) "A" "\"A\"" (Reader.pp_value got));
+  ]
+
 (* list/map|filter|foldl are kernel special forms (OCaml loops + apply). *)
 let list_hof_tests =
   let setup () =
@@ -593,6 +629,7 @@ let () =
     "pretty-print", pretty_print_tests;
     "eval", eval_tests;
     "macros", macro_tests;
+    "macro-str", macro_str_tests;
     "eval-eff", eval_eff_tests;
     "list-hof", list_hof_tests;
   ]
