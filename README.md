@@ -76,7 +76,8 @@ history only.)
 | `migrations/` | Additive SQL applied on boot / deploy |
 | `image/` | Sole runtime binary |
 | `libs/` | Lisp packages seeded to `system/main` |
-| `scripts/` | `dev.sh`, thin `pp_eval.py` client, `verify_habitat.sh` (on-image `libs/verify`), seed ETL, deploy helpers |
+| `cli/` | OCaml laptop clients: `pp-eval`, `pp-sync` (no Python) |
+| `scripts/` | `dev.sh`, `pp-eval.sh` wrappers, `verify_habitat.sh` (on-image `libs/verify`), seed ETL |
 | `docs/` | Book PDF, ops notes, [`runtime-effects-transition.md`](docs/runtime-effects-transition.md) (OCaml 5 / effects path), [`agent-ui-harness.md`](docs/agent-ui-harness.md) (agent FE verify research) |
 | `borge/` | Design chapters |
 
@@ -108,10 +109,13 @@ python3 scripts/auth_product_smoke.py   # auth HTTP only; prefer not to grow new
 
 ## Agent eval (against a live image)
 
+OCaml CLI (no Python). Build once: `dune build cli/bin/pp_eval.exe`.
+
 ```bash
 set -a; . ~/.config/pricklypear/env; set +a   # local secrets, mode 600
-python3 scripts/pp_eval.py -j '(whoami)'
-python3 scripts/pp_eval.py -j '(load-library "todo")'
+export PP_EVAL=$PWD/_build/default/cli/bin/pp_eval.exe
+"$PP_EVAL" -j '(whoami)'
+scripts/pp-eval.sh -j '(load-library "todo")'
 ```
 
 ## Branches

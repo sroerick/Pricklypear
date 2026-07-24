@@ -1,0 +1,6 @@
+(library
+ (name pricklypear_cli_lib)
+ (public_name pricklypear-cli.lib)
+ (wrapped false)
+ (modules pp_client)
+ (libraries yojson unix))

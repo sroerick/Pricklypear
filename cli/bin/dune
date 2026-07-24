@@ -1,0 +1,13 @@
+(executable
+ (name pp_eval)
+ (public_name pp-eval)
+ (package pricklypear-cli)
+ (modules pp_eval)
+ (libraries pricklypear-cli.lib cmdliner yojson unix))
+
+(executable
+ (name pp_sync)
+ (public_name pp-sync)
+ (package pricklypear-cli)
+ (modules pp_sync)
+ (libraries pricklypear-cli.lib cmdliner yojson unix re))
