@@ -622,6 +622,99 @@ let list_hof_tests =
       Alcotest.(check string) "empty" "()" (Reader.pp_value got));
   ]
 
+(* Tail-call optimization: trampoline keeps OCaml stack flat. *)
+let tco_tests =
+  let setup () =
+    let prims = Eval.make_prim_table () in
+    Eval.register_prim prims "+"
+      (fun args ->
+        match args with
+        | [ Ast.VInt a; Ast.VInt b ] -> Ast.VInt (Int64.add a b)
+        | _ -> failwith "+");
+    Eval.register_prim prims "-"
+      (fun args ->
+        match args with
+        | [ Ast.VInt a; Ast.VInt b ] -> Ast.VInt (Int64.sub a b)
+        | [ Ast.VInt a ] -> Ast.VInt (Int64.neg a)
+        | _ -> failwith "-");
+    Eval.register_prim prims "*"
+      (fun args ->
+        match args with
+        | [ Ast.VInt a; Ast.VInt b ] -> Ast.VInt (Int64.mul a b)
+        | _ -> failwith "*");
+    Eval.register_prim prims "="
+      (fun args ->
+        match args with
+        | [ Ast.VInt a; Ast.VInt b ] -> Ast.VBool (Int64.equal a b)
+        | _ -> Ast.VBool false);
+    Eval.register_prim prims "<"
+      (fun args ->
+        match args with
+        | [ Ast.VInt a; Ast.VInt b ] -> Ast.VBool (a < b)
+        | _ -> Ast.VBool false);
+    let env = Env.create () in
+    List.iter
+      (fun n -> Env.define env n (Ast.VPrim n))
+      [ "+"; "-"; "*"; "="; "<" ];
+    (prims, env)
+  in
+  [
+    ("tail sum does not stack-overflow", `Quick, fun () ->
+      let prims, env = setup () in
+      (* Self-tail recursion: depth far above typical OCaml stack. *)
+      ignore
+        (Eval.eval_string ~prims env
+           "(define sumt (lambda (n acc)\n\
+               (if (= n 0) acc (sumt (- n 1) (+ acc n)))))");
+      let budget = Eval.make_budget ~limit:2_000_000 () in
+      let got =
+        Control.run_sync ~prims (fun () ->
+            Eval.eval ~budget ~prims:Eval.empty_prims env
+              (Reader.read_one "(sumt 100000 0)"))
+      in
+      (* 100000*100001/2 = 5_000_050_000 *)
+      Alcotest.(check string) "sum" "5000050000" (Reader.pp_value got));
+    ("non-tail factorial still works", `Quick, fun () ->
+      let prims, env = setup () in
+      ignore
+        (Eval.eval_string ~prims env
+           "(define fac (lambda (n)\n\
+               (if (= n 0) 1 (* n (fac (- n 1))))))");
+      let got = Eval.eval_string ~prims env "(fac 10)" in
+      Alcotest.(check string) "10!" "3628800" (Reader.pp_value got));
+    ("infinite tail loop hits budget", `Quick, fun () ->
+      let prims, env = setup () in
+      ignore
+        (Eval.eval_string ~prims env
+           "(define loop (lambda () (loop)))");
+      let raised =
+        try
+          ignore (Eval.eval_string ~prims env "(loop)");
+          false
+        with
+        | Ast.Interp_error Ast.Budget_exceeded -> true
+        | _ -> false
+      in
+      Alcotest.(check bool) "budget" true raised);
+    ("mutual tail via if", `Quick, fun () ->
+      let prims, env = setup () in
+      ignore
+        (Eval.eval_string ~prims env
+           "(define even? (lambda (n)\n\
+               (if (= n 0) #t (odd? (- n 1)))))");
+      ignore
+        (Eval.eval_string ~prims env
+           "(define odd? (lambda (n)\n\
+               (if (= n 0) #f (even? (- n 1)))))");
+      let budget = Eval.make_budget ~limit:2_000_000 () in
+      let got =
+        Control.run_sync ~prims (fun () ->
+            Eval.eval ~budget ~prims:Eval.empty_prims env
+              (Reader.read_one "(even? 100000)"))
+      in
+      Alcotest.(check string) "even" "#t" (Reader.pp_value got));
+  ]
+
 let () =
   Alcotest.run "pricklypear-lisp" [
     "reader", reader_tests @ reader_list_tests @ reader_completeness_tests;
@@ -632,4 +725,5 @@ let () =
     "macro-str", macro_str_tests;
     "eval-eff", eval_eff_tests;
     "list-hof", list_hof_tests;
+    "tco", tco_tests;
   ]

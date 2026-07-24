@@ -105,6 +105,12 @@
    (doc "The evaluator: env * expr -> value")
    (implements lisp/lib/env.ml lisp/lib/eval.ml)
    (status partial)
+   (verify
+    (build "dune build lisp")
+    (test "dune runtest — lisp eval + TCO cases")
+    (smoke "tail self-recursion depth >> OCaml stack without overflow")
+    (smoke "non-tail recursion still correct (e.g. factorial)")
+    (smoke "infinite tail loop hits Budget_exceeded, not hang/stack"))
    (details
     (doc (|
          The evaluator is PURE. It takes an env and an expr,
@@ -150,6 +156,43 @@
          define/load — see macros.expansion-timing). Eval must
          call expand before ordinary arg evaluation when the
          operator resolves to a VMacro.
+
+         =========================================================
+         TAIL-CALL OPTIMIZATION (TCO)
+         =========================================================
+         Proper Scheme-style TCO via an explicit trampoline in
+         eval.ml (OCaml does not guarantee TCO on recursive calls).
+
+         Model:
+           eval_step returns Done value | Tail (env, expr)
+           eval / eval_force runs a loop: while Tail, continue
+           without growing the OCaml stack.
+
+         Tail positions (must bounce, not OCaml-recurse):
+           - if/cond: chosen branch
+           - and/or: last subform (and short-circuit non-tails force)
+           - seq: last form; earlier forms forced
+           - let / letrec: body
+           - lambda application: body after binding args
+             (the App node is always tail in its own frame;
+              nested Apps as arguments are forced first)
+           - macro expansion result: evaluated in tail position
+           - list/map|filter|foldl: stay OCaml loops; closure
+             bodies use eval_force (each element is non-tail
+             relative to the list form)
+
+         Non-tail positions force to a value (may use OCaml stack
+         for the force frame only, not for the tail chain inside).
+
+         Budget: every step still ticks. Infinite tail loops hit
+         Budget_exceeded — never hang, never exhaust OS stack.
+
+         Effects: Prim_call still perform; after return, continue
+         the trampoline. Rim re-entry (with-transaction,
+         apply_lambda) uses the same eval_force entry point.
+
+         Not required: full CPS, custom VM, or rest-args frames.
+         Heap env frames still allocate per call (TCO saves stack).
    |))
    )
   )
