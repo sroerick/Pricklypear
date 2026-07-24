@@ -490,6 +490,7 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
 let define_binding = Agent_tools.define_binding
 let install_ai_function = Agent_tools.install_ai_function
 let function_source = Agent_tools.function_source
+let function_ast = Agent_tools.function_ast
 let package_binding_names = Agent_tools.package_binding_names
 let export_package = Agent_tools.export_package
 let propose_function = Agent_tools.propose_function
@@ -1067,6 +1068,20 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
       | _ ->
           Lwt.return
             (Pricklypear_lisp.Ast.VStr "function-source: need name-str"));
+
+  (* (function-ast name) -> quoted body value tree | VNil.
+     Does not eval the body; reifies the stored AST via quote_to_value. *)
+  Primitives.register tbl "function-ast"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr name ] ->
+          let* ast = function_ast t name in
+          (match ast with
+           | Some v -> Lwt.return v
+           | None -> Lwt.return Pricklypear_lisp.Ast.VNil)
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr "function-ast: need name-str"));
 
   (* (package-bindings pkg) -> VList of name strings *)
   Primitives.register tbl "package-bindings"

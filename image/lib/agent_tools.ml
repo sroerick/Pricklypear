@@ -183,6 +183,34 @@ let function_source (t : t) (name : string) : string option Lwt.t =
                 Lwt.return (Some card)
             | None -> Lwt.return_none))
 
+(** Raw function body as quoted data (no eval, no pretty-print).
+    Store body (or env lambda) reified via [Eval.quote_to_value] so the
+    result is a first-class Lisp value tree agents can walk/rewrite.
+    Missing / special-form / non-lambda → None. *)
+let function_ast (t : t) (name : string)
+  : Pricklypear_lisp.Ast.value option Lwt.t =
+  let* found = Store.lookup_function t.store name in
+  match found with
+  | Some (expr, _) ->
+      Lwt.return (Some (Pricklypear_lisp.Eval.quote_to_value expr))
+  | None ->
+      (match Pricklypear_lisp.Env.lookup t.env name with
+       | Some (Pricklypear_lisp.Ast.VLambda (params, body, _)) ->
+           let e = Pricklypear_lisp.Ast.Lambda (params, body) in
+           Lwt.return (Some (Pricklypear_lisp.Eval.quote_to_value e))
+       | Some (Pricklypear_lisp.Ast.VMacro (params, body, _)) ->
+           (* Same shape as lambda; tagged head so agents can tell macros apart. *)
+           let v =
+             Pricklypear_lisp.Ast.VList
+               [ Pricklypear_lisp.Ast.VStr "defmacro"
+               ; Pricklypear_lisp.Ast.VList
+                   (List.map (fun p -> Pricklypear_lisp.Ast.VStr p) params)
+               ; Pricklypear_lisp.Eval.quote_to_value body
+               ]
+           in
+           Lwt.return (Some v)
+       | _ -> Lwt.return_none)
+
 let package_binding_names (t : t) (pkg : string) : string list Lwt.t =
   let* defs = Store.list_function_names t.store in
   let pkg =

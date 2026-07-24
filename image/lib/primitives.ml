@@ -249,6 +249,7 @@ let prim_summary (name : string) : string =
   | "propose-function" -> "AI draft+install function on branch"
   | "install-function" -> "install AI body string as named function"
   | "function-source" -> "pretty-print stored function body"
+  | "function-ast" -> "raw stored function body as quoted data (no eval)"
   | "package-bindings" -> "list binding names in a package"
   | "export-package" -> "export package as lib.pp text"
   | "llm-inner" | "llm-outer" | "llm-rewrite" | "llm-seed" ->
