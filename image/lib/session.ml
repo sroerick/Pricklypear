@@ -1565,6 +1565,7 @@ and seed_stdlib (t : t) : unit Lwt.t =
     let* () = seed_one t "bible" in
     let* () = seed_one t "dabar" in
     let* () = seed_one t "bi" in
+    let* () = seed_one t "verify" in
     Lwt.return_unit)
       finally)
 
