@@ -230,6 +230,47 @@ let render_html_tests = [
       (Pricklypear_image_lib.Primitives.is_raw_html (VStr "plain")));
 ]
 
+(* --- extract-links (OCaml wiki scanner) --- *)
+let extract_links_tests = [
+  ("three wiki links", `Quick, fun () ->
+    let v =
+      eval
+        "(extract-links \"see [[a]] and [[b|Bee]] plus [[c]]\")"
+    in
+    match v with
+    | VList
+        [ VList [ VStr "a"; VStr "a" ]
+        ; VList [ VStr "b"; VStr "Bee" ]
+        ; VList [ VStr "c"; VStr "c" ] ] -> ()
+    | other ->
+        Alcotest.failf "links got %s" (Pricklypear_lisp.Reader.pp_value other));
+  ("zero links", `Quick, fun () ->
+    Alcotest.(check string) "empty" "()"
+      (eval_str "(extract-links \"no links here\")"));
+  ("unclosed bracket no hang", `Quick, fun () ->
+    Alcotest.(check string) "unclosed" "()"
+      (eval_str "(extract-links \"text [[oops\")"));
+  ("empty brackets skipped", `Quick, fun () ->
+    Alcotest.(check string) "empty pair" "()"
+      (eval_str "(extract-links \"[[]]\")"));
+  ("media syntax included", `Quick, fun () ->
+    let v =
+      eval
+        "(extract-links \"[[media:uuid-1|alt text]]\")"
+    in
+    match v with
+    | VList [ VList [ VStr "media:uuid-1"; VStr "alt text" ] ] -> ()
+    | other ->
+        Alcotest.failf "media got %s" (Pricklypear_lisp.Reader.pp_value other));
+  ("budget-remaining positive mid-eval", `Quick, fun () ->
+    let v = eval "(budget-remaining)" in
+    match v with
+    | VInt n when n > 0L -> ()
+    | other ->
+        Alcotest.failf "budget-remaining got %s"
+          (Pricklypear_lisp.Reader.pp_value other));
+]
+
 let () =
   Alcotest.run "pricklypear-image-primitives" [
     "arithmetic", arithmetic_tests;
@@ -239,4 +280,5 @@ let () =
     "dict", dict_tests;
     "render-html", render_html_tests;
     "composition", composition_tests;
+    "extract-links", extract_links_tests;
   ]

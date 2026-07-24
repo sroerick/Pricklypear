@@ -20,6 +20,7 @@ module Db = struct
   let make = Store_db.make
   let connect = Store_db.connect
   let current_conn = Store_db.current_conn
+  let in_transaction = Store_db.in_transaction
   let branch_id (s : store) = s.Store_db.branch_id
   let set_branch_id (s : store) id = s.Store_db.branch_id <- id
 

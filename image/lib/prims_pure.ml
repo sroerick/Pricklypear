@@ -835,3 +835,81 @@ let prim_fsrs_schedule (args : value list) : value =
            (User_error
               "fsrs-schedule needs stability difficulty elapsed rating"))
 
+(* ---- extract-links: OCaml wiki-link scanner (budget P1) ----
+
+   (extract-links body-string) -> list of (slug label) pairs.
+   Parses [[slug]] and [[slug|label]] left-to-right.
+   Empty targets ([[]]) are skipped. Unclosed [[ is ignored (no hang).
+   Media syntax [[media:uuid|alt]] is included (caller may filter);
+   roam/insert-collected already skips media: via roam/media-slug?.
+
+   Char-by-char Lisp recursion was ~4-6 steps/char and blew the 100k
+   budget on ~2-4k bodies. This prim is O(n) in OCaml = 1 budget tick. *)
+
+let extract_links_from_string (s : string) : (string * string) list =
+  let len = String.length s in
+  let rec find_close i =
+    if i >= len - 1 then None
+    else if s.[i] = ']' && s.[i + 1] = ']' then Some i
+    else find_close (i + 1)
+  in
+  let split_label inner =
+    let inner = String.trim inner in
+    match String.index_opt inner '|' with
+    | None -> (inner, inner)
+    | Some p ->
+        let slug = String.trim (String.sub inner 0 p) in
+        let lab =
+          String.trim
+            (String.sub inner (p + 1) (String.length inner - p - 1))
+        in
+        (slug, lab)
+  in
+  let rec loop i acc =
+    if i >= len - 3 then List.rev acc
+    else if s.[i] = '[' && s.[i + 1] = '[' then
+      match find_close (i + 2) with
+      | None -> loop (i + 1) acc
+      | Some end_i ->
+          let inner = String.sub s (i + 2) (end_i - (i + 2)) in
+          let slug, lab = split_label inner in
+          if slug = "" then loop (end_i + 2) acc
+          else loop (end_i + 2) ((slug, lab) :: acc)
+    else loop (i + 1) acc
+  in
+  loop 0 []
+
+let prim_extract_links args =
+  let of_body body =
+    let pairs = extract_links_from_string body in
+    VList
+      (List.map
+         (fun (slug, lab) -> VList [ VStr slug; VStr lab ])
+         pairs)
+  in
+  match args with
+  | [ VStr body ] -> of_body body
+  | [ VNil ] -> VList []
+  | [ other ] ->
+      let body =
+        match other with
+        | VStr s -> s
+        | VInt n -> Int64.to_string n
+        | VFloat f -> string_of_float f
+        | VBool true -> "true"
+        | VBool false -> "false"
+        | VNil -> ""
+        | _ ->
+            raise
+              (Interp_error
+                 (User_error "extract-links needs a string body"))
+      in
+      of_body body
+  | _ ->
+      raise
+        (Interp_error (User_error "extract-links needs one string arg"))
+
+(* (budget-remaining) -> VInt steps left in current eval call. *)
+let prim_budget_remaining _args =
+  VInt (Int64.of_int (Pricklypear_lisp.Eval.budget_remaining_steps ()))
+

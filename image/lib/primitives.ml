@@ -140,6 +140,8 @@ let make_with_defaults () : t =
   register_sync t "fsrs-schedule" prim_fsrs_schedule;
   register_sync t "dict-keys" prim_dict_keys;
   register_sync t "render-html" prim_render_html;
+  register_sync t "extract-links" prim_extract_links;
+  register_sync t "budget-remaining" prim_budget_remaining;
   t
 
 (* Short docs for the Functions browser (kernel package). *)
@@ -229,7 +231,10 @@ let prim_summary (name : string) : string =
   | "find-rows" -> "rows filtered by fields"
   | "find-text" -> "substring search on a field"
   | "find-random" -> "one random data row of a type"
-  | "select-for-update" -> "lock row in transaction"
+  | "select-for-update" -> "lock row in transaction (requires with-transaction)"
+  | "extract-links" -> "parse [[wiki]] / [[slug|label]] from body → list of pairs"
+  | "budget-remaining" -> "steps left in current eval budget"
+  | "bench" -> "avg microseconds per eval of expr-string [n]"
   | "agent-session-new" -> "create durable AI session: (agent-session-new seed [tools?])"
   | "agent-say" -> "append user msg + run tool loop: (agent-say sid prompt)"
   | "agent-history" -> "list messages in AI session"
