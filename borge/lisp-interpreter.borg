@@ -116,11 +116,15 @@
          Cooperative evaluation: the eval loop is stepped;
          each Prim invocation yields back to the image's
          event loop. This gives per-session budgeting:
-         - A step counter per call, configurable per session
+         - A step counter per call (default_limit 100_000)
          - When exceeded, that ONE call aborts
          - The session continues
+         - (budget-remaining) reads the active call's leftover
+           steps (dynamic current_budget)
+         - OCaml prim bodies do not tick; only the call site
          This prevents "user's bad function wedges the
-         image" entirely.
+         image" entirely. Scale bugs are fixed by cheaper
+         paths (notes.budget-scale), not by raising the limit.
 
          (define name expr) at top-level adds binding to
          current session's env AND persists to store. Edit
@@ -134,7 +138,9 @@
 
          Special forms handled in eval, not reader: lambda,
          let, letrec, if, define, quote, quasiquote,
-         unquote, unquote-splicing, defmacro. The reader just
+         unquote, unquote-splicing, defmacro, plus higher-order
+         list forms list/map, list/filter, list/foldl (OCaml
+         loops + apply — not recursive Lisp frames). The reader
          produces App/Variants of these as plain AST (or the
          dedicated Quote/Quasiquote/Unquote constructors when
          sugar is used — either representation is fine as long

@@ -913,3 +913,138 @@ let prim_extract_links args =
 let prim_budget_remaining _args =
   VInt (Int64.of_int (Pricklypear_lisp.Eval.budget_remaining_steps ()))
 
+(* ---- render-links: OCaml wiki/media body → HTML (budget view path) ----
+
+   (render-links body-string) -> HTML string matching roam/render-body:
+   plain text html-escaped; [[slug]]/[[slug|label]] → notes anchors;
+   [[media:uuid|alt]] → linked img + caption. Unclosed [[ escapes one
+   char and continues. Empty [[]] emits escaped brackets. *)
+
+let html_escape_to_buffer buf s =
+  String.iter
+    (function
+      | '&' -> Buffer.add_string buf "&amp;"
+      | '<' -> Buffer.add_string buf "&lt;"
+      | '>' -> Buffer.add_string buf "&gt;"
+      | '"' -> Buffer.add_string buf "&quot;"
+      | '\'' -> Buffer.add_string buf "&#39;"
+      | c -> Buffer.add_char buf c)
+    s
+
+let html_escape_str s =
+  let buf = Buffer.create (String.length s + 8) in
+  html_escape_to_buffer buf s;
+  Buffer.contents buf
+
+let media_prefix = "media:"
+
+let is_media_slug slug =
+  let n = String.length media_prefix in
+  String.length slug >= n && String.sub slug 0 n = media_prefix
+
+let media_id_of slug =
+  let n = String.length media_prefix in
+  String.sub slug n (String.length slug - n)
+
+let render_links_from_string (s : string) : string =
+  let len = String.length s in
+  let buf = Buffer.create (len + 64) in
+  let rec find_close i =
+    if i >= len - 1 then None
+    else if s.[i] = ']' && s.[i + 1] = ']' then Some i
+    else find_close (i + 1)
+  in
+  let split_label inner =
+    let inner = String.trim inner in
+    match String.index_opt inner '|' with
+    | None -> (inner, inner)
+    | Some p ->
+        let slug = String.trim (String.sub inner 0 p) in
+        let lab =
+          String.trim
+            (String.sub inner (p + 1) (String.length inner - p - 1))
+        in
+        (slug, lab)
+  in
+  let emit_wiki slug lab =
+    Buffer.add_string buf "<a href=\"/notes?slug=";
+    html_escape_to_buffer buf slug;
+    Buffer.add_string buf "\">";
+    html_escape_to_buffer buf lab;
+    Buffer.add_string buf "</a>"
+  in
+  let emit_media id alt =
+    let href = "/media/" ^ id in
+    let label = if alt = "" then id else alt in
+    Buffer.add_string buf "<a href=\"";
+    html_escape_to_buffer buf href;
+    Buffer.add_string buf "\"><img src=\"";
+    html_escape_to_buffer buf href;
+    Buffer.add_string buf "\" alt=\"";
+    html_escape_to_buffer buf label;
+    Buffer.add_string buf "\" class=\"note-media\"></a>";
+    Buffer.add_string buf "<p class=\"muted note-media-cap\"><a href=\"";
+    html_escape_to_buffer buf href;
+    Buffer.add_string buf "\">";
+    html_escape_to_buffer buf label;
+    Buffer.add_string buf "</a></p>"
+  in
+  let at_open i =
+    i < len - 1 && s.[i] = '[' && s.[i + 1] = '['
+  in
+  let rec loop i =
+    if i >= len then ()
+    else if at_open i then
+      match find_close (i + 2) with
+      | None ->
+          html_escape_to_buffer buf (String.sub s i 1);
+          loop (i + 1)
+      | Some end_i ->
+          let inner = String.sub s (i + 2) (end_i - (i + 2)) in
+          let slug, lab = split_label inner in
+          if slug = "" then begin
+            html_escape_to_buffer buf
+              (String.sub s i (end_i + 2 - i));
+            loop (end_i + 2)
+          end else if is_media_slug slug then begin
+            emit_media (media_id_of slug) lab;
+            loop (end_i + 2)
+          end else begin
+            emit_wiki slug lab;
+            loop (end_i + 2)
+          end
+    else
+      let j = ref i in
+      while !j < len && not (at_open !j) do
+        incr j
+      done;
+      html_escape_to_buffer buf (String.sub s i (!j - i));
+      loop !j
+  in
+  loop 0;
+  Buffer.contents buf
+
+let prim_render_links args =
+  let of_body body = VStr (render_links_from_string body) in
+  match args with
+  | [ VStr body ] -> of_body body
+  | [ VNil ] -> VStr ""
+  | [ other ] ->
+      let body =
+        match other with
+        | VStr s -> s
+        | VInt n -> Int64.to_string n
+        | VFloat f -> string_of_float f
+        | VBool true -> "true"
+        | VBool false -> "false"
+        | VNil -> ""
+        | _ ->
+            raise
+              (Interp_error
+                 (User_error "render-links needs a string body"))
+      in
+      of_body body
+  | _ ->
+      raise
+        (Interp_error (User_error "render-links needs one string arg"))
+

@@ -185,12 +185,16 @@
 
   (subsection links-and-roam
    (doc "Wiki links [[slug]], forward links, backlinks partial")
-   (status planned)
+   (status partial)
    (verify
     (smoke "body with [[other]] creates note-link row on save")
     (smoke "(roam/backlinks slug) lists inbound links")
-    (smoke "render turns [[other]] into anchor to /notes?slug=other"))
-   (implements libs/notes/lib.pp)
+    (smoke "render turns [[other]] into anchor to /notes?slug=other")
+    (smoke "[[media:uuid|alt]] renders img; not indexed as note-link")
+    (smoke "(extract-links body) matches roam/parse-links edge cases")
+    (test "image primitives_test extract-links cases")
+    (smoke "scripts/verify_budget_stress.py parse/reindex suite"))
+   (implements libs/notes/lib.pp image/lib/prims_pure.ml)
    (details
     (doc (|
          TYPE note-link (rows; org-roam shape — one row per directed
@@ -204,16 +208,30 @@
          Indexable by (from_slug, to_slug). NOT in function_defs.
 
          SYNTAX (v1):
-           [[slug]]         — link by slug
-           [[slug|label]]   — labeled link (if easy)
+           [[slug]]              — link by slug
+           [[slug|label]]        — labeled link
+           [[media:uuid|alt]]    — inline media embed (not a note link)
          No #node-id deep links v1; optional later.
 
-         PARSE / REINDEX:
-           (roam/parse-links body)          -> list of slugs
+         PARSE / REINDEX (budget-safe):
+           Link scanning MUST NOT be char-by-char Lisp recursion.
+           Kernel prim (extract-links body-string) -> list of
+           (slug label) pairs in O(n) OCaml (one eval tick).
+           Edge cases pinned by tests:
+             - three wiki links -> three pairs
+             - zero links -> ()
+             - unclosed "[[oops" -> (), no hang
+             - empty "[[]]" skipped
+             - media: prefix included in extract-links; insert path
+               skips media: so note-link rows are wiki-only
+
+           (roam/parse-links body) wraps extract-links.
            (roam/reindex slug outline-tree) -> delete rows where
-             from_slug=slug; insert one row per discovered link
-             (de-duped). Called on notes/save and on body-touching
-             structure ops (set-body, the new eval op).
+             from_slug=slug; insert one row per discovered wiki link
+             (de-duped). Called on notes/doc/upsert and body-touching
+             structure ops. Write MUST leave a correct index: if
+             reindex aborts (budget), that is a bug — not silent
+             half-done state. Scale targets in notes.budget-scale.
 
          QUERY:
            (roam/backlinks slug) -> list of
@@ -221,9 +239,16 @@
            Consumed by /partials/notes-backlinks?slug=
 
          RENDER:
-           (roam/render-body body) -> HTML: html-escape then
-             substitute [[slug]] -> <a href="/notes?slug=slug">...</a>
-           (outline/html) folds the tree as <details>.
+           (roam/render-body body) -> HTML: plain text escaped;
+             [[slug]] / [[slug|label]] -> anchors;
+             [[media:uuid|alt]] -> img + caption (no backlink).
+           (outline/html) uses outline/render-body hook; notes
+           rebinds it to roam/render-body so bodies are not
+           html/text-escaped raw wiki syntax.
+           Render path is also under the per-call step budget
+           (see notes.budget-scale); large bodies must complete
+           inside one request. OCaml render-links is the planned
+           fix if Lisp render-acc still fails stress.
 
          MISSING TARGETS:
            Unknown slug still links; target page offers create-stub.
@@ -237,20 +262,122 @@
    )
   )
 
+  (subsection budget-scale
+   (doc "Per-call eval budget: stress contracts for notes/roam/outline so large trees and bodies never Budget_exceeded on ordinary UI/agent paths")
+   (status planned)
+   (implements
+    lisp/lib/eval.ml
+    image/lib/prims_pure.ml
+    libs/notes/lib.pp
+    libs/outline/lib.pp
+    libs/std/lib.pp
+    scripts/verify_budget_stress.py
+    scripts/verify_notes_execute_all.py)
+   (verify
+    (build "dune build")
+    (test "dune runtest — lisp list-hof + image extract-links")
+    (smoke "scripts/verify_budget_stress.py (monitor-rerunnable)")
+    (smoke "parse: 500+ wiki links in one body completes; count matches")
+    (smoke "reindex/upsert: 10 nodes x ~8k body with links indexes all links")
+    (smoke "render: outline/html on large tree/body returns HTML, no budget error")
+    (smoke "many-node ops: N structure ops each in own eval (HTTP-shaped)")
+    (smoke "(budget-remaining) positive mid-call; floor asserted after stress cases"))
+   (details
+    (doc (|
+         WHY:
+           The 100k step default_limit is a safety net, not a perf
+           governor. Char-scanners and recursive list walks in Lisp
+           burned the budget on ordinary notes (upsert reindex,
+           large inbox render) while the write sometimes committed
+           first — silent stale links. Hot paths move to OCaml or
+           kernel special forms; stress tests guard regressions.
+
+         BUDGET MODEL (lisp-interpreter.eval):
+           - One budget per eval/call_handler invocation
+           - tick on each eval step; Budget_exceeded aborts that call
+           - OCaml prims cost one tick at the call site (body free)
+           - (budget-remaining) -> steps left (dynamic current budget)
+           - (bench expr-string [n]) -> avg us/iter for calibration
+           Do NOT "fix" scale bugs by raising default_limit.
+
+         KERNEL / HOT PATHS (required):
+           - list/map, list/filter, list/foldl: special forms
+             (OCaml loop + apply); not O(n) Lisp recursion frames
+           - extract-links: OCaml; roam/parse-links uses it
+           - select-for-update: error outside with-transaction
+             (reliability adjacent to long evals)
+           Planned if stress fails render/tree:
+             OCaml render-links (or roam/render-body prim)
+             cheaper outline encode/decode/find if tree ops dominate
+
+         STRESS SUITE (scripts/verify_budget_stress.py):
+           Monitor-rerunnable against a running image (dev or
+           habitat) via pp_eval. Synthetic fixtures only — do not
+           mutate user garden notes without a dedicated test slug
+           prefix (e.g. budget-stress-*) cleaned up after.
+
+           Suites:
+           1. PARSE / EXTRACT
+              - correctness edges (3 links, 0, unclosed, [[]], media)
+              - scale: single body with >=500 links completes
+              - optional: 10k-char link-free body still cheap
+           2. REINDEX / UPSERT
+              - tree: >=10 nodes, each body >=8k with >=1 link
+              - notes/doc/upsert returns ok (not budget exceeded)
+              - note-link count for slug == expected wiki links
+              - budget-remaining floor after call (implementation
+                picks a conservative floor; document in script)
+           3. RENDER
+              - outline/html (or show-body without request deps) on
+                large tree: many nodes and/or one ~32k+ body
+              - must return non-empty HTML string; no budget error
+              - wiki + media syntax appear as anchors/img when hook
+                is roam/render-body
+           4. MANY-NODE ACTIONS
+              - create synthetic note with >=50 child nodes
+              - each op in its own eval (mirrors HTTP call_handler):
+                cycle-todo, move-up/down, archive, set-title
+              - extract one node to its own note; refile one node
+              - every op ok; final tree consistent; cleanup slugs
+           5. THRESHOLD PIN (optional / nightly)
+              - binary-search max body size for parse vs render
+              - log or store result; not a hard CI flake gate unless
+                threshold collapses below known-good baseline
+
+         ACCEPTANCE:
+           verify_budget_stress.py exits 0 on local dev.sh image
+           and on habitat after deploy. verify_notes_execute_all.py
+           remains the broader feature smoke; budget script owns
+           scale. Failures file as product bugs (reindex/render),
+           not "raise the limit".
+
+         OUT OF SCOPE HERE:
+           - Jane Street Incremental / BI pipelines
+           - raising default_limit as the primary fix
+           - preemptive multi-request chunking of a single note view
+    |))
+   )
+  )
+
   (subsection outline-actions
    (doc "Per-node outline action menu; the eval op turns nodes into a live Lisp surface")
-   (status planned)
+   (status partial)
    (implements libs/notes/lib.pp image/lib/http.ml)
    (verify
     (smoke "structure ops include the existing set plus op=eval")
     (smoke "op=eval target=child splices returned string as a new child node")
     (smoke "op=eval target=sibling splices; target=body replaces this node body")
     (smoke "eval expr binds self/doc/slug to current context")
-    (smoke "eval reindexes roam links when a body changes"))
+    (smoke "eval reindexes roam links when a body changes")
+    (smoke "extract: node becomes its own note; removed from source")
+    (smoke "scripts/verify_budget_stress.py many-node actions suite"))
    (details
     (doc (|
          Every outline node carries the existing action menu
-         (promote/demote/move-up/move-down/archive/cycle-todo) plus:
+         (promote/demote/move-up/move-down/archive/cycle-todo) plus
+         refile (move node to another existing note) and extract
+         (notes/refile/extract: node title/body/kids become a new
+         note root; node removed from source; redirect to new slug).
 
          op = eval  (POST /partials/notes-op with op=eval)
            params: slug, id, expr, target in {child, sibling, body}
