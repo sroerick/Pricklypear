@@ -166,6 +166,9 @@ let rec coerce_str ?(ctx = "string") (v : value) : string =
   | VBool true -> "true"
   | VBool false -> "false"
   | VNil -> ""
+  (* Empty list is null? in Lisp and used as empty html attrs: (html/p* (list) body).
+     Treat like nil so as-str/html/tag do not blow up product home widgets. *)
+  | VList [] -> ""
   | _ ->
       raise
         (Interp_error
