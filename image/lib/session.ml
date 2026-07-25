@@ -626,14 +626,27 @@ let register_media_prims (t : t) (tbl : Primitives.t) : unit =
             (Pricklypear_lisp.Ast.VStr "media-url: need id"))
 
 let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
+  (* Quoted type/field names are VSymbol after Phase 1; CRUD still wants
+     string payloads for SQL. Coerce symbols→strings at the CRUD boundary
+     only (do not collapse in symbol=? / general prims). *)
+  let coerce_sym_args (args : Pricklypear_lisp.Ast.value list) =
+    List.map
+      (function
+        | Pricklypear_lisp.Ast.VSymbol s -> Pricklypear_lisp.Ast.VStr s
+        | v -> v)
+      args
+  in
+  let register_crud name fn =
+    Primitives.register tbl name (fun args -> fn (coerce_sym_args args))
+  in
   (* (deftype 'name 'field1 'field2 ...) -> VStr "defined type <name>".
-     All args are quoted symbols (which evaluate to VStr). Persists
+     All args are quoted symbols (now VSymbol; coerced above). Persists
      the declaration into type_defs on the session's branch. *)
   let deny_anon name =
     Lwt.return
       (Pricklypear_lisp.Ast.VStr (name ^ ": denied for anonymous"))
   in
-  Primitives.register tbl "deftype"
+  register_crud "deftype"
     (fun args ->
       let uname =
         match Lwt.get Request_context.current with
@@ -644,7 +657,7 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
       else Crud.deftype t.store ~args ~author:uname);
 
   (* (get 'type id) -> VStr fields-json | VNil *)
-  Primitives.register tbl "get"
+  register_crud "get"
     (fun args ->
       match args with
       | [ Pricklypear_lisp.Ast.VStr type_name;
@@ -653,7 +666,7 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
       | _ -> Lwt.return (Pricklypear_lisp.Ast.VStr "get: bad args (need type, id)"));
 
   (* (create 'type "{fields-json}") -> VStr new-id | VStr "create failed" *)
-  Primitives.register tbl "create"
+  register_crud "create"
     (fun args ->
       let uname =
         match Lwt.get Request_context.current with
@@ -673,7 +686,7 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
               (Pricklypear_lisp.Ast.VStr "create: bad args (need type, fields)"));
 
   (* (update 'type id "{fields-json}") -> VStr id | VNil *)
-  Primitives.register tbl "update"
+  register_crud "update"
     (fun args ->
       if t.manifest.username = "anonymous" then deny_anon "update"
       else
@@ -690,7 +703,7 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
   (* (update-field 'type id "field" "value") -> VStr id | VNil.
       Ergonomic shorthand: composes get + dict-set + update in one prim.
       Lands it18 (2026-07-06); resolves the it14 "verbose round-trip syntax" TODO. *)
-  Primitives.register tbl "update-field"
+  register_crud "update-field"
     (fun args ->
       if t.manifest.username = "anonymous" then deny_anon "update-field"
       else
@@ -706,7 +719,7 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
                  "update-field: bad args (need type, id, field, value)"));
 
   (* (delete 'type id) -> VStr id | VNil *)
-  Primitives.register tbl "delete"
+  register_crud "delete"
     (fun args ->
       if t.manifest.username = "anonymous" then deny_anon "delete"
       else
@@ -724,7 +737,7 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
      Per spec [storage.transactions] (prim lands it17, 2026-07-06).
      See Crud.select_for_update doc for transactional-scoping caveat:
      outside a transaction, this is a hinted-get with no real lock. *)
-  Primitives.register tbl "select-for-update"
+  register_crud "select-for-update"
     (fun args ->
       match args with
       | [ Pricklypear_lisp.Ast.VStr type_name;
@@ -737,7 +750,7 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
      `list` — the latter is the pure VList-constructor prim. Earlier
      tentative naming collided and broke `(list 1 2 3)`; renamed to
      avoid that. *)
-  Primitives.register tbl "rows"
+  register_crud "rows"
     (fun args ->
       match args with
       | [ Pricklypear_lisp.Ast.VStr type_name ] ->
@@ -748,7 +761,7 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
       | _ -> Lwt.return (Pricklypear_lisp.Ast.VStr "rows: bad args (need type[, limit])"));
 
   (* (find-row 'type "field" "value") -> fields JSON | () *)
-  Primitives.register tbl "find-row"
+  register_crud "find-row"
     (fun args ->
       match args with
       | [ Pricklypear_lisp.Ast.VStr type_name;
@@ -761,7 +774,7 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
                "find-row: need type, field, value"));
 
   (* (find-rows 'type "f" "v" … [limit]) -> list of (id . fields) *)
-  Primitives.register tbl "find-rows"
+  register_crud "find-rows"
     (fun args ->
       let rec parse_filters acc = function
         | [] -> Ok (List.rev acc, 500)
@@ -783,7 +796,7 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
                "find-rows: need type and field/value pairs"));
 
   (* (find-text 'type "field" "needle" [limit]) *)
-  Primitives.register tbl "find-text"
+  register_crud "find-text"
     (fun args ->
       match args with
       | [ Pricklypear_lisp.Ast.VStr type_name;
@@ -802,7 +815,7 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
                "find-text: need type, field, needle [, limit]"));
 
   (* (find-random 'type) -> (id . fields) | () *)
-  Primitives.register tbl "find-random"
+  register_crud "find-random"
     (fun args ->
       match args with
       | [ Pricklypear_lisp.Ast.VStr type_name ] ->
