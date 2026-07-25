@@ -382,6 +382,70 @@ let branch_detail_page (session : Session.t) (reqd : Httpun.Reqd.t)
                       ])
                ]
            ; HTML.div [HTML.class_ "card"]
+               [ HTML.h2 [] [txt "Changes (activity)"]
+               ; HTML.p [HTML.class_ "muted"]
+                   [txt "Own function_defs on this branch, newest first. "]
+               ; HTML.p []
+                   [ HTML.a [HTML.href "%s" ("/changes?ref=" ^ ref_)]
+                       [txt "Open /changes"] ]
+               ; (if own_rows = [] then
+                    HTML.p [HTML.class_ "muted"] [txt "(empty branch)"]
+                  else
+                    let sorted =
+                      List.sort
+                        (fun (_, _, a) (_, _, b) -> String.compare b a)
+                        own
+                    in
+                    let change_rows =
+                      List.map
+                        (fun (fname, author, upd) ->
+                          let kind =
+                            match
+                              List.find_opt
+                                (fun (n, _, _) -> n = fname) ov
+                            with
+                            | Some (_, _, None) -> "new"
+                            | Some (_, _, Some _) -> "override"
+                            | None -> "own"
+                          in
+                          HTML.tr []
+                            [ HTML.td [HTML.class_ "muted"]
+                                [txt "%s" (short_ts upd)]
+                            ; HTML.td []
+                                [ HTML.a
+                                    [HTML.href "%s" ("/binding/" ^ fname)]
+                                    [txt "%s" fname] ]
+                            ; HTML.td [] [txt "%s" kind]
+                            ; HTML.td [] [txt "%s" author]
+                            ; HTML.td []
+                                [ HTML.a
+                                    [ HTML.href "%s"
+                                        ("/branches?ref=" ^ ref_
+                                         ^ "&diff=" ^ fname) ]
+                                    [txt "diff"]
+                                ; txt " "
+                                ; HTML.a
+                                    [HTML.href "%s"
+                                       (Packages.edit_href fname)]
+                                    [txt "edit"]
+                                ]
+                            ])
+                        sorted
+                    in
+                    HTML.table [HTML.class_ "br-table"]
+                      [ HTML.thead []
+                          [ HTML.tr []
+                              [ HTML.th [] [txt "when"]
+                              ; HTML.th [] [txt "name"]
+                              ; HTML.th [] [txt "class"]
+                              ; HTML.th [] [txt "author"]
+                              ; HTML.th [] [txt "actions"]
+                              ]
+                          ]
+                      ; HTML.tbody [] change_rows
+                      ])
+               ]
+           ; HTML.div [HTML.class_ "card"]
                [ HTML.h2 [] [txt "All own code"]
                ; (if own_rows = [] then
                     HTML.p [HTML.class_ "muted"] [txt "(empty branch)"]
@@ -447,6 +511,122 @@ let branches_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
   | Some ref_ when String.trim ref_ <> "" ->
       branch_detail_page session reqd ~ref_:(String.trim ref_) ()
   | _ -> list_branches_page session reqd ()
+
+(** GET /changes[?ref=owner/name] — branch change set (branching.change-set). *)
+let changes_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
+  let target = (Httpun.Reqd.request reqd).target in
+  let ref_ =
+    match query_param target "ref" with
+    | Some r when String.trim r <> "" -> String.trim r
+    | _ -> Session.branch_name session
+  in
+  let owner, name =
+    match String.split_on_char '/' ref_ with
+    | [o; n] -> (o, n)
+    | _ -> (Session.username session, ref_)
+  in
+  let store = Session.store session in
+  let* bid_opt = Store.lookup_branch_id_by_name store ~owner ~name in
+  match bid_opt with
+  | None ->
+      html_response reqd ~session ~status:`Not_found
+        (chrome ~session ~title:"Changes"
+           [ HTML.p [HTML.class_ "err"] [txt "unknown branch %s" ref_] ]);
+      Lwt.return_unit
+  | Some bid ->
+      let* parent_id = Store.branch_parent_id store ~branch_id:bid in
+      let* own = Store.list_own_functions store ~branch_id:bid in
+      let* routes = Store.list_own_routes store ~branch_id:bid in
+      let* ov = Store.list_overrides store ~branch_id:bid ~parent_id in
+      let sorted =
+        List.sort (fun (_, _, a) (_, _, b) -> String.compare b a) own
+      in
+      let rows =
+        List.map
+          (fun (fname, author, upd) ->
+            let kind =
+              match List.find_opt (fun (n, _, _) -> n = fname) ov with
+              | Some (_, _, None) -> "new"
+              | Some (_, _, Some _) -> "override"
+              | None -> "own"
+            in
+            HTML.tr []
+              [ HTML.td [HTML.class_ "muted"] [txt "%s" (short_ts upd)]
+              ; HTML.td []
+                  [ HTML.a [HTML.href "%s" ("/binding/" ^ fname)]
+                      [txt "%s" fname] ]
+              ; HTML.td [] [txt "%s" kind]
+              ; HTML.td [] [txt "%s" author]
+              ; HTML.td []
+                  [ HTML.a
+                      [HTML.href "%s" (Packages.edit_href fname)]
+                      [txt "edit"]
+                  ; txt " "
+                  ; HTML.a
+                      [ HTML.href "%s"
+                          ("/branches?ref=" ^ ref_ ^ "&diff=" ^ fname) ]
+                      [txt "diff"]
+                  ]
+              ])
+          sorted
+      in
+      let route_rows =
+        List.map
+          (fun (path, handler) ->
+            HTML.tr []
+              [ HTML.td [] [HTML.code [] [txt "%s" path]]
+              ; HTML.td [] [txt "%s" handler]
+              ; HTML.td [] [txt "route"]
+              ])
+          routes
+      in
+      let body =
+        chrome ~session ~title:("Changes · " ^ ref_)
+          [ HTML.p []
+              [ HTML.a [HTML.href "/branches"] [txt "Branches"]
+              ; txt " · "
+              ; HTML.a [HTML.href "%s" ("/branches?ref=" ^ ref_)]
+                  [txt "%s" ref_]
+              ; txt " · change set"
+              ]
+          ; HTML.div [HTML.class_ "card"]
+              [ HTML.h2 [] [txt "Functions"]
+              ; (if rows = [] then
+                   HTML.p [HTML.class_ "muted"] [txt "(no own functions)"]
+                 else
+                   HTML.table [HTML.class_ "br-table"]
+                     [ HTML.thead []
+                         [ HTML.tr []
+                             [ HTML.th [] [txt "when"]
+                             ; HTML.th [] [txt "name"]
+                             ; HTML.th [] [txt "class"]
+                             ; HTML.th [] [txt "author"]
+                             ; HTML.th [] [txt "actions"]
+                             ]
+                         ]
+                     ; HTML.tbody [] rows
+                     ])
+              ]
+          ; HTML.div [HTML.class_ "card"]
+              [ HTML.h2 [] [txt "Own routes"]
+              ; (if route_rows = [] then
+                   HTML.p [HTML.class_ "muted"] [txt "(none)"]
+                 else
+                   HTML.table [HTML.class_ "br-table"]
+                     [ HTML.thead []
+                         [ HTML.tr []
+                             [ HTML.th [] [txt "route"]
+                             ; HTML.th [] [txt "handler"]
+                             ; HTML.th [] [txt "class"]
+                             ]
+                         ]
+                     ; HTML.tbody [] route_rows
+                     ])
+              ]
+          ]
+      in
+      html_response reqd ~session body;
+      Lwt.return_unit
 
 let branches_checkout (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
   let* body = read_body reqd in

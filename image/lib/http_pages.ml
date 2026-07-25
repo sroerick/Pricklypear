@@ -233,67 +233,9 @@ let repl_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
 let stub_body (name : string) : string =
   Printf.sprintf "(lambda ()\n  \"TODO: implement %s\")" name
 
-(* Static user-function callees: walk AST App heads that are Vars. *)
-let rec collect_var_apps (acc : string list) (e : Pricklypear_lisp.Ast.expr)
-    : string list =
-  match e with
-  | Pricklypear_lisp.Ast.Var _ | Pricklypear_lisp.Ast.Lit _ -> acc
-  | Pricklypear_lisp.Ast.App (Pricklypear_lisp.Ast.Var f, args) ->
-      List.fold_left collect_var_apps (f :: acc) args
-  | Pricklypear_lisp.Ast.App (f, args) ->
-      List.fold_left collect_var_apps (collect_var_apps acc f) args
-  | Pricklypear_lisp.Ast.Let (_, e1, e2) ->
-      collect_var_apps (collect_var_apps acc e1) e2
-  | Pricklypear_lisp.Ast.Letrec (binds, body) ->
-      let acc =
-        List.fold_left (fun a (_, e) -> collect_var_apps a e) acc binds
-      in
-      collect_var_apps acc body
-  | Pricklypear_lisp.Ast.If (c, t, e) ->
-      collect_var_apps (collect_var_apps (collect_var_apps acc c) t) e
-  | Pricklypear_lisp.Ast.Lambda (_, body) -> collect_var_apps acc body
-  | Pricklypear_lisp.Ast.Prim (_, args) ->
-      List.fold_left collect_var_apps acc args
-  | Pricklypear_lisp.Ast.Seq (a, b) ->
-      collect_var_apps (collect_var_apps acc a) b
-  | Pricklypear_lisp.Ast.Quote _ -> acc
-  | Pricklypear_lisp.Ast.Define (_, body) -> collect_var_apps acc body
-
-let page_function_graph (session : Session.t) ~(handler : string)
-    : (string * string) list Lwt.t =
-  let max_depth = 8 in
-  let rec walk depth seen name role acc =
-    if depth > max_depth || List.mem name seen then Lwt.return acc
-    else
-      let* found = Store.lookup_function (Session.store session) name in
-      match found with
-      | None -> Lwt.return ((name, role ^ " (missing)") :: acc)
-      | Some (expr, _) ->
-          let acc = (name, role) :: acc in
-          let seen = name :: seen in
-          let candidates = collect_var_apps [] expr in
-          let rec filter_bind names out =
-            match names with
-            | [] -> Lwt.return (List.rev out)
-            | n :: rest ->
-                let* f = Store.lookup_function (Session.store session) n in
-                (match f with
-                 | Some _ when n <> name && not (List.mem n out) ->
-                     filter_bind rest (n :: out)
-                 | _ -> filter_bind rest out)
-          in
-          let* callees = filter_bind candidates [] in
-          let rec fold_c cs acc =
-            match cs with
-            | [] -> Lwt.return acc
-            | c :: rest ->
-                let* acc = walk (depth + 1) seen c "callee" acc in
-                fold_c rest acc
-          in
-          fold_c callees acc
-  in
-  let* rows = walk 0 [] handler "handler" [] in
-  Lwt.return (List.rev rows)
+(* Static call graph — shared module (image.inspector I1). *)
+let collect_var_apps = Call_graph.collect_var_apps
+let page_function_graph = Call_graph.page_function_graph
 
 let contains_ci (hay : string) (needle : string) : bool =
   if needle = "" then true
@@ -502,33 +444,131 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
       in
       let* found = Store.lookup_function (Session.store session) full in
       let crumb_pkg = if pkg = "(root)" then "" else pkg in
-      let body =
+      let* body =
         match found with
         | None ->
-            chrome ~session ~title:full [
-              HTML.p [] [
-                HTML.a [HTML.href "/bindings"] [txt "Functions"];
-                txt " › ";
-                HTML.a [HTML.href "%s" (pkg_href pkg)]
-                  [txt "%s" (Packages.package_label crumb_pkg)];
-              ];
-              HTML.p [HTML.class_ "err"] [txt "no function %s" full];
-              HTML.p [] [
-                HTML.a [HTML.href "%s" (Packages.edit_href full)] [txt "create it"];
-              ];
-            ]
+            Lwt.return
+              (chrome ~session ~title:full [
+                HTML.p [] [
+                  HTML.a [HTML.href "/bindings"] [txt "Functions"];
+                  txt " › ";
+                  HTML.a [HTML.href "%s" (pkg_href pkg)]
+                    [txt "%s" (Packages.package_label crumb_pkg)];
+                ];
+                HTML.p [HTML.class_ "err"] [txt "no function %s" full];
+                HTML.p [] [
+                  HTML.a [HTML.href "%s" (Packages.edit_href full)] [txt "create it"];
+                ];
+              ])
         | Some (expr, author) ->
             let badge = badge_of expr in
             let pp = Pricklypear_lisp.Reader.pp_expr expr in
             let depth = depth_of full in
-            chrome ~session ~title:full
-              ([ HTML.p [] [
+            let* snap = Call_graph.snapshot_of_session session in
+            let callees = Call_graph.callees snap ~name:full ~depth:1 in
+            let callers = Call_graph.callers snap full in
+            let routes_ub = Call_graph.used_by_routes snap full in
+            let holes = Call_graph.holes snap full in
+            let impact_badge =
+              match
+                List.find_opt
+                  (fun (e : Session_types.impact_event) -> e.name = full)
+                  session.impact_queue
+              with
+              | Some e when e.status = "pending" ->
+                  HTML.p [] [
+                    HTML.span [HTML.class_ "badge impact"]
+                      [txt "impact pending · %d dependents · %d routes"
+                         (List.length e.dependents) (List.length e.routes)];
+                  ]
+              | _ -> HTML.p [HTML.class_ "muted"] [txt ""]
+            in
+            let name_href n =
+              let pkg = Packages.package_of_name n in
+              let local = Packages.local_name n in
+              fn_href pkg local
+            in
+            let name_links names =
+              if names = [] then [txt "(none)"]
+              else
+                List.concat_map
+                  (fun n ->
+                    [ HTML.a [HTML.href "%s" (name_href n)] [txt "%s" n]
+                    ; txt " "
+                    ])
+                  names
+            in
+            let route_links paths =
+              if paths = [] then [txt "(none)"]
+              else
+                List.concat_map
+                  (fun p ->
+                    let seg =
+                      if String.length p > 0 && p.[0] = '/' then
+                        String.sub p 1 (String.length p - 1)
+                      else p
+                    in
+                    [ HTML.a [HTML.href "%s" ("/page/" ^ seg)] [txt "%s" p]
+                    ; txt " "
+                    ])
+                  paths
+            in
+            let hole_nodes =
+              if holes = [] then HTML.p [HTML.class_ "muted"] [txt "no holes"]
+              else
+                HTML.ul []
+                  (List.map
+                     (fun h ->
+                       HTML.li [] [
+                         txt "%s " h;
+                         HTML.a
+                           [ HTML.href "%s" (Packages.edit_href h)
+                           ; HTML.class_ "btn secondary" ]
+                           [txt "Stub/Edit"];
+                       ])
+                     holes)
+            in
+            let pkg_col =
+              HTML.div [HTML.class_ "card bb-col"] [
+                HTML.h3 [] [txt "Packages"];
+                HTML.ul []
+                  (List.map
+                     (fun (p, _) ->
+                       let key = if p = "" then "root" else p in
+                       let lab = Packages.package_label p in
+                       HTML.li [] [
+                         HTML.a [HTML.href "%s" (pkg_href key)] [txt "%s" lab];
+                       ])
+                     groups);
+              ]
+            in
+            let fns_in_pkg =
+              let rows =
+                try List.assoc crumb_pkg groups with Not_found ->
+                  (try List.assoc pkg groups with Not_found -> [])
+              in
+              HTML.div [HTML.class_ "card bb-col"] [
+                HTML.h3 [] [txt "%s" (Packages.package_label crumb_pkg)];
+                HTML.ul []
+                  (List.map
+                     (fun (n, _, _) ->
+                       let loc = Packages.local_name n in
+                       HTML.li [] [
+                         HTML.a [HTML.href "%s" (fn_href pkg loc)] [txt "%s" loc];
+                       ])
+                     rows);
+              ]
+            in
+            let detail =
+              HTML.div [HTML.class_ "bb-col bb-detail"] (
+              [ HTML.p [] [
                    HTML.a [HTML.href "/bindings"] [txt "Functions"];
                    txt " › ";
                    HTML.a [HTML.href "%s" (pkg_href pkg)]
                      [txt "%s" (Packages.package_label crumb_pkg)];
                    txt " › %s" (Packages.local_name full);
                  ];
+                 impact_badge;
                  HTML.div [HTML.class_ "card"] [
                    HTML.p [] [
                      HTML.span [HTML.class_ "muted"] [txt "kind: "];
@@ -547,9 +587,25 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
                      txt "%s" badge;
                    ];
                    HTML.p [] [
-                     HTML.span [HTML.class_ "muted"] [txt "used by: "];
+                     HTML.span [HTML.class_ "muted"] [txt "used by (handler): "];
                      used_links full;
                    ];
+                   HTML.p []
+                     ([ HTML.span [HTML.class_ "muted"] [txt "used-by-routes: "] ]
+                      @ route_links routes_ub);
+                   HTML.p []
+                     ([ HTML.span [HTML.class_ "muted"] [txt "callers: "] ]
+                      @ name_links callers);
+                   HTML.p []
+                     ([ HTML.span [HTML.class_ "muted"] [txt "callees: "] ]
+                      @ name_links callees);
+                   HTML.p [] [
+                     HTML.a [HTML.href "/changes"] [txt "Branch changes"];
+                   ];
+                 ];
+                 HTML.div [HTML.class_ "card"] [
+                   HTML.h2 [] [txt "Holes (unbound App heads)"];
+                   hole_nodes;
                  ];
                ]
                @ txn_hint_nodes expr
@@ -569,6 +625,11 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
                      ];
                    ];
                  ])
+            in
+            Lwt.return
+              (chrome ~session ~title:full
+                 [ HTML.div [HTML.class_ "bb-three"]
+                     [ pkg_col; fns_in_pkg; detail ] ])
       in
       html_response reqd ~session body;
       Lwt.return_unit
@@ -1168,6 +1229,12 @@ let api_eval (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
                   ; ("kind", `String (Pricklypear_lisp.Ast.interp_error_kind e))
                   ]
                 in
+                let base =
+                  match e with
+                  | Pricklypear_lisp.Ast.Unbound_var name ->
+                      base @ [ ("name", `String name) ]
+                  | _ -> base
+                in
                 (match Pricklypear_lisp.Ast.interp_error_loc e with
                  | Some (line, col) ->
                      base
@@ -1201,9 +1268,11 @@ let save_edit (session : Session.t) (path_name : string)
   in
   match res with
   | Ok v ->
+      let* () = Call_graph.record_define_side_effects session ~name in
+      let impact = Call_graph.impact_summary_text session name in
       let msg =
-        Printf.sprintf "saved %s => %s" name
-          (Pricklypear_lisp.Reader.pp_value v)
+        Printf.sprintf "saved %s => %s\n%s" name
+          (Pricklypear_lisp.Reader.pp_value v) impact
       in
       editor_page session name ~msg ~body_src reqd
   | Error e ->

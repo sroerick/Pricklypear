@@ -575,7 +575,10 @@
     (smoke "GET /bindings?pkg=todo lists todo/* functions")
     (smoke "GET /bindings?pkg=todo&fn=list shows function detail + edit link")
     (smoke "GET /bindings?q=todo filters; mobile-width usable (nav wraps)")
-    (smoke "define todo/list + call (todo/list); used-by shows /todos when routed"))
+    (smoke "define todo/list + call (todo/list); used-by shows /todos when routed")
+    (smoke "function detail shows Callers + Callees panels from shared graph")
+    (smoke "function detail links Impact / Changes / Inspect / Edit")
+    (smoke "wide desktop: three panes packages|functions|detail when viewport wide"))
    (details
     (doc (|
          VOCABULARY (must not conflate):
@@ -586,12 +589,33 @@
          A page RUNS a function; you EDIT functions, OPEN pages.
          Packages ORGANIZE functions inside one branch.
 
+         ==========================================================
+         SMALLTALK COMBO PACK — browser is the hub
+         ==========================================================
+         Steal five things; they compound through THIS surface:
+
+           1. Senders + change impact  → image.inspector
+           2. Branch change set        → branching.change-set
+           3. Value + closure inspect  → image.inspector (shipped+)
+           4. doesNotUnderstand holes  → image.dnu-stubs
+           5. Three-pane package browser → THIS section
+
+         Shared spine (do not rebuild per feature):
+           - static App-Var graph (collect_var_apps + reverse)
+           - define/install hooks (persist_define + impact + transcript)
+           - AST pretty / inspect routes already on host UI
+
+         The browser is where a human or agent LIVES: pick a package,
+         open a function, see callers/callees/routes/impact/holes,
+         jump to edit or inspect, open branch changes. Not five apps.
+
          v1 SHIPPED:
          - Chrome: whoami, branch, uptime, nav
          - Home entry points + AI propose form
          - /about concepts guide
          - /pages list + /page/<path> inspector
          - Flat /bindings table (name, effects, author, edit, inspect)
+         - Mobile three-step drilldown (?pkg=&fn=)
 
          FUNCTIONS BROWSER (/bindings) — Smalltalk-ish drilldown:
 
@@ -612,13 +636,31 @@
                    → list functions in that package
                    Kernel: list prim names in catalog
            Step 3  GET /bindings?pkg=todo&fn=list
-                   → detail: source/docs, effects, author, used-by,
-                     edit/inspect links (workspace) OR read-only
-                     kernel doc (primitives)
-         Desktop MAY show a wider table when no pkg selected
-         (grouped overview), but pkg/fn drilldown is the canonical
-         model and must work at ~390px width.
+                   → detail pane (DETAIL CONTRACT below)
+                     workspace OR read-only kernel doc (primitives)
          Back links: Functions → package → (back to packages).
+         Mobile stacked drilldown remains canonical at ~390px.
+
+         DESKTOP THREE-PANE (combo pack — same URLs, wider layout):
+           When viewport ~900px+, ONE page MAY show three columns:
+             left: packages | middle: functions in pkg | right: detail
+           Selection still ?pkg=&fn= (shareable, no SPA). htmx MAY
+           refresh middle/right; full GET without JS still correct.
+           Do not force three columns on phones.
+
+         DETAIL CONTRACT (step 3 / right pane) — compounds the pack:
+           Workspace function_defs always show:
+             - kind, effects, author, updated
+             - source pretty + Inspect AST/JSON
+             - [Edit] → /edit/<name>
+             - Callers (direct reverse) + Callees (direct forward)
+               from image.inspector shared graph helpers
+             - Used-by routes via used-by-routes on DETAIL only
+               (package index stays handler-direct — no N*depth)
+             - Impact badge if name pending in impact-queue
+             - Holes: unbound App Vars (image.dnu-stubs) + [Stub]
+             - Link to branch Changes when name is own-row override
+           Kernel prims: read-only docs only (no Edit/Stub).
 
          KERNEL CATALOG:
          - Virtual package name: "(kernel)" (not a real binding prefix)
@@ -674,14 +716,19 @@
            Lisp  = the computer you live in (shell + theme + apps)
            OCaml = host + gate (eval, store, auth, health, emergency)
 
+         NAV / ENTRY (combo pack discoverability):
+           - Functions (/bindings) = primary code home
+           - Branches detail → Changes (branching.change-set)
+           - Optional chrome badge: pending impact count (light)
+           - Unbound handler pages → Create stub (dnu-stubs)
+
          DEFERRED:
          - Remove silent default_nav_nodes / default_home_content
            and shrink html_response style blob to emergency_css
            (image.product-theme make)
          - ui/menu seed always lambda (load-order safe by default)
          - Move softer system pages (/about copy) into Lisp packages
-         - Branch switcher; fork/merge UI
-         - True three-column desktop layout (optional later)
+         - Branch switcher in chrome (detail checkout exists)
          - Import/require, private symbols, rename-with-rewrite
          - Authoring new prims from the UI
          - Dedicated /theme form UI (Functions edit is enough v1)
@@ -1453,48 +1500,310 @@
   (subsection inspector
    (doc "Inspect values, rows, ASTs, and page→function graphs live")
    (status partial)
+   (implements image/lib/http_pages.ml image/lib/session.ml image/lib/agent_tools.ml)
    (verify
     (build "dune build image")
     (smoke "GET /inspect/binding/<name> shows author + AST")
     (smoke "GET /page/hello after recipe: handler hi-page listed")
-    (smoke "page inspector lists callees of handler when body calls other fns"))
+    (smoke "page inspector lists callees of handler when body calls other fns")
+    (smoke "(callees \"ui/nav\") returns list; (callers \"ui/menu\") non-empty when nav calls menu")
+    (smoke "after redefine of a callee, impact-queue lists dependents + routes")
+    (smoke "agent install_function result text names impact routes to smoke"))
    (details
     (doc (|
-         v1 SHIPPED: binding AST pretty+JSON; data row JSON pretty.
+         ==========================================================
+         SHIPPED (v1 inspector)
+         ==========================================================
+         - binding AST pretty+JSON; data row JSON pretty
+         - GET /page/<path>: routing panel + STATIC callee graph
+           (App heads that are Vars → visible function_defs;
+            depth cap 8; cycles skipped)
+         - /bindings "used by": DIRECT handler→route only
+           (not full transitive reverse graph — perf; deep graph
+            stays on /page inspect). Implementation note 2026-07:
+           used_by_pages_map is handler-only to avoid N*depth PG
+           lookups on every /bindings load.
 
-         REQUIRED NEXT — page → functions graph:
-         GET /page/<path> (also linked from /pages "inspect"):
+         ==========================================================
+         CHANGE IMPACT (planned) — reverse deps → test obligations
+         ==========================================================
+         Motivation (language + OS):
+           Live define/install is not proof the habitat still works.
+           We already pay for a static call graph on inspect. Use it
+           like Smalltalk senders + Nx "affected": when F changes,
+           flag who depends on F and which routes to re-smoke.
 
-         A. Routing panel
-            - Page URL (canonical route key)
-            - Handler function name
-            - Links: open page, edit handler, change handler (deferred UI)
+         Industry analogues (do not overbuild):
+           IDE Find References, Bazel/Nx affected, Smalltalk senders,
+           coverage-guided test selection. We want the live-image
+           version, not a full CI product.
 
-         B. Functions this page uses (STATIC analysis)
-            - Always include the handler as root
-            - Walk handler body AST; collect App heads that are Vars
-              naming a visible function_def on the current branch
-            - Depth: transitive closure of user bindings (cap depth
-              e.g. 8 to avoid cycles; mark cycles)
-            - Do not list pure prims as first-class rows; optional
-              dim note "also uses prims: render-html, ..." is OK
-            - Each row: name, role (handler|callee), edit + inspect links
+         ----------------------------------------------------------
+         A. STATIC GRAPH API (shared kernel)
+         ----------------------------------------------------------
+         Reuse collect_var_apps / page_function_graph style analysis.
 
-         C. Entry body
-            - Pretty source or pp_expr of the handler (read-only here;
-              edit goes to /edit/<handler>)
+         Forward (already):
+           callees(name) → user functions F statically calls
+             (direct App Var heads that resolve to function_defs;
+              optional ~depth default 1 for prims, 8 for inspect)
 
-         This answers: "which functions does this endpoint touch?"
+         Reverse (NEW — function→function, not only routes):
+           Build once per request or cache short-TTL on branch:
+             for each visible binding B with body expr:
+               for each direct callee C in collect_var_apps(body):
+                 callers[C] := callers[C] ∪ {B}
+           callers(name) → list of B that directly App-call name
+           dependents(name, ~depth) → BFS reverse edges, cap depth
+             (default 8), cycle-safe; exclude name itself
 
-         REVERSE INDEX (function → pages) — now REQUIRED for the
-         Functions browser (system-browser), not only deferred:
-         - For each visible route, compute handler + static callee set.
-         - Invert to map function-name -> list of route keys.
-         - Expose on /bindings rows as "used by" links to /page/<path>.
-         - Same static analysis as page inspector (no runtime traces).
+         Routes (extend used_by):
+           used_by_routes(name):
+             - always include routes whose handler = name
+             - PLUS routes whose handler's transitive callees
+               include name (reuse page_function_graph or reverse
+               map from cached forward graphs). Cap cost: compute
+               reverse route index when building callers map once
+               per branch snapshot, not per /bindings row naively.
 
-         DEFERRED: eval-result inspect, type-def deep inspect,
-         runtime request traces, mutate actions from inspector.
+         Lisp prims (session-aware, read-only, any authed user):
+           (callees name [depth])     → VList of VStr names
+           (callers name)             → VList of VStr names (direct)
+           (dependents name [depth])  → VList of VStr names
+           (used-by-routes name)      → VList of route path strings
+
+         Missing name → () or empty list (not error).
+         Prims/kernel names: callers may be empty; still OK.
+         IMPORTANT (image.dnu-stubs): callers(name) MUST work when
+         name is not yet a function_def — reverse index is built
+         from all visible bodies' App-Var heads, not only defined
+         callees. holes(name) lives in dnu-stubs; shares walk.
+
+         ----------------------------------------------------------
+         B. IMPACT QUEUE (on define / install)
+         ----------------------------------------------------------
+         When a binding is successfully defined or install_function
+         succeeds for NAME on the current branch:
+
+           impact = {
+             name: NAME
+             at: timestamp
+             branch: current branch ref
+             author: whoami
+             dependents: dependents(NAME)
+             routes: used-by-routes(NAME)
+             status: pending | smoked | dismissed
+           }
+
+         Storage (v1):
+           Session-local ring buffer (last N=32 impacts) on Session.t
+           is enough for agent + UI banner. Optional later: data_rows
+           type impact-event for cross-request durability.
+
+         Surfaces:
+           1) Lisp:
+                (impact-queue) → list of impact dicts/JSON strings
+                (impact-clear [name|all])
+                (impact-mark name 'smoked|'dismissed)
+           2) define / install_function return path (agent tools):
+                append human-readable block:
+                  "impact: dependents=…; smoke routes: /a /b"
+                If routes empty: "impact: no routes; eval dependents
+                  or smoke parents manually"
+           3) UI (light):
+                /bindings or /edit/<name>: badge "N dependents" +
+                link to impact panel; optional site chrome banner
+                when queue has pending items for this branch
+                (do not block editing).
+
+         Do NOT fail define because dependents exist — only notify.
+
+         ----------------------------------------------------------
+         C. "NEEDS TESTING" LADDER
+         ----------------------------------------------------------
+         L0 (MVP — ship first): awareness only (queue + agent text)
+         L1: optional auto eval of pure dependents (if effect pure)
+         L2: recommend/auto smoke_route for each used-by-routes entry
+             (agent definition-of-done already requires smoke; impact
+              tells WHICH paths)
+         L3 (later): hard badge red until smoke or dismiss
+
+         Default ship L0+L2-hints. No blocking L3 in v1.
+
+         ----------------------------------------------------------
+         D. AGENT SEED
+         ----------------------------------------------------------
+         After install_function / eval define of a package function:
+           - Read impact (tool result or (impact-queue))
+           - smoke_route every listed route (GET, contains marker)
+           - eval_expr key pure dependents if no routes
+           - Final summary must mention impact smokes
+
+         ----------------------------------------------------------
+         E. LIMITS (honest static analysis)
+         ----------------------------------------------------------
+           - No dynamic apply / computed names
+           - Higher-order (map f xs) may miss f unless App head
+           - Macros: graph is source App Vars (post-expand ideal
+             later; v1 source walk matches today's inspector)
+           - False negatives possible — route smokes remain truth
+           - Noise control: only enqueue when NAME is a stored
+             function_def (not every let-bound local); skip if
+             dependents and routes both empty
+
+         ----------------------------------------------------------
+         F. NON-GOALS
+         ----------------------------------------------------------
+           - Runtime request traces / dynamic call sampling
+           - Full CI product / GitHub integration
+           - Coverage-guided line maps
+           - Blocking save on dirty dependents
+           - Cross-branch impact (only current branch visibility)
+
+         ----------------------------------------------------------
+         G. IMPLEMENTATION PHASES
+         ----------------------------------------------------------
+         Phase I1: shared graph helpers + (callees)/(callers)/
+                   (dependents)/(used-by-routes); unit/smoke
+                   (callers works for missing names — DNU)
+         Phase I2: impact-queue on define + install_function text;
+                   (impact-queue)/(impact-clear)/(impact-mark);
+                   same hook appends change-transcript
+                   (branching.change-set)
+         Phase I3: /bindings detail Callers/Callees/Impact badge;
+                   agent seed paragraph
+         Phase I4 (optional): short-TTL cache; L1 pure auto-eval
+
+         Combo-pack build order (whole five):
+           I1 graph → I2 define hooks (impact+changeset) →
+           browser detail panels → dnu-stubs → desktop 3-pane
+
+         ----------------------------------------------------------
+         H. SUCCESS
+         ----------------------------------------------------------
+           - Changing ui/menu shows ui/nav (or similar) in callers
+           - used-by-routes for a shared helper lists real pages
+           - Agent after install is told which routes to smoke
+           - /bindings stays fast (no per-row depth-8 walk regress)
+
+         DEFERRED (still): eval-result inspect, type-def deep
+         inspect, runtime traces, mutate-from-inspector.
+
+         ==========================================================
+         COMBO-PACK NOTE
+         ==========================================================
+         Inspector owns graph + impact + value inspect (#1, #3).
+         Browser hub: image.system-browser. Change transcript:
+         branching.change-set. Holes: image.dnu-stubs. Define hook
+         is the shared write path for impact + change-set append.
+    |))
+   )
+  )
+  (subsection dnu-stubs
+   (doc "doesNotUnderstand-style holes: unbound names → stub + callers for agents")
+   (status planned)
+   (implements image/lib/http_pages.ml image/lib/session.ml image/lib/http.ml)
+   (verify
+    (build "dune build image")
+    (smoke "eval unbound foo yields structured unbound_var with name=foo")
+    (smoke "(holes \"ui/nav\") lists App-Var names in body not bound as fn/prim")
+    (smoke "POST stub create missing name → callable lambda TODO stub")
+    (smoke "unbound route handler page offers Create stub + Callers")
+    (smoke "agent after unbound error can stub then see callers of stub name"))
+   (details
+    (doc (|
+         ==========================================================
+         WHY (Smalltalk doesNotUnderstand, agent-friendly)
+         ==========================================================
+         Live images fill holes instead of failing closed forever.
+         Agents hit unbound names constantly (typos, planned fns,
+         half-migrated packages). Today: bare Unbound_var / handler
+         unbound cards. Goal: a closed loop without becoming CI:
+
+           missing name
+             → structured error (kind + name)
+             → who already calls it? (static callers — may be empty)
+             → one-click / one-tool stub (lambda TODO)
+             → edit + impact/smoke via existing inspector paths
+
+         This is NOT a full condition system (see
+         lisp-interpreter.errors-and-locations for guard/catch).
+         DNU here = product UX + agent affordance on holes.
+
+         ==========================================================
+         A. STRUCTURED UNBOUND (host)
+         ==========================================================
+         Keep raising Interp_error (Unbound_var name). Surfaces must
+         expose machine fields (align with errors-and-locations C):
+           kind: unbound_var
+           name: <missing>
+           source: optional define/handler context
+         /api/eval JSON and agent tool errors include name= so agents
+         do not regex the message. REPL print may stay one-line.
+
+         ==========================================================
+         B. STATIC HOLES IN A BODY
+         ==========================================================
+         holes(name) — for stored function NAME:
+           walk body with collect_var_apps (same as graph)
+           candidate = App-Var heads
+           hole if not in: prim registry ∪ visible function_defs
+                           ∪ special forms ∪ lambda params / lets
+                           (best-effort; App heads only; accept
+                            false negatives on dynamic names)
+         Lisp: (holes name) → VList of VStr
+         UI: browser detail + editor show Holes list.
+
+         ==========================================================
+         C. STUB CREATE
+         ==========================================================
+         Default stub body (same spirit as function-editor missing):
+           (lambda ()
+             "TODO: implement <name>")
+         Zero-arg v1; agent/human edits signature. Never invent args.
+
+         Paths:
+           1) function-editor missing card [Create] — already
+              specified; dnu-stubs REUSES it (POST /api/edit/create)
+           2) Lisp (stub-function name) → define stub if missing;
+              error if already bound (use install/edit to overwrite)
+           3) Unbound handler HTTP response: card with
+                handler H unbound
+                [Create stub H] [Edit if exists] [Callers of H]
+           4) Agent tool optional stub_function name= — thin wrap
+              over same define_binding; seed text: on unbound_var,
+              stub → install real body → smoke impact routes
+
+         Creating a stub is a normal define: fires impact-queue +
+         change-set transcript hooks.
+
+         ==========================================================
+         D. CALLERS OF A HOLE
+         ==========================================================
+         Even when NAME is unbound, reverse graph still finds B
+         whose body App-calls NAME (static). (callers name) must
+         work for missing names (build from all visible bodies),
+         not only defined callees. Critical for "who wanted this?"
+
+         ==========================================================
+         E. NON-GOALS
+         ==========================================================
+           - Runtime doesNotUnderstand method dispatch / prototype OO
+           - Auto-generating real implementations via LLM on every miss
+           - Catching unbound inside every page without guard (that's
+             errors-and-locations phase 2)
+           - Stubbing kernel prim names
+
+         ==========================================================
+         F. PHASES
+         ==========================================================
+         D1: structured unbound name in /api/eval + (holes)
+         D2: callers works for missing names; UI holes on detail
+         D3: stub-function + unbound handler card + agent note
+         D4: wire browser detail Holes panel (system-browser)
+
+         SUCCESS: agent sees unbound: foo with name field, stubs
+         foo, finds callers, fills body, impact lists routes.
     |))
    )
   )

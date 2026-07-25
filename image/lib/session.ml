@@ -1404,6 +1404,253 @@ let require_request (t : t) : request =
         (Pricklypear_lisp.Ast.Interp_error
            (Pricklypear_lisp.Ast.User_error "no active request"))
 
+let str_name = function
+  | Pricklypear_lisp.Ast.VStr s | Pricklypear_lisp.Ast.VSymbol s -> Some s
+  | _ -> None
+
+let depth_arg = function
+  | None -> 1
+  | Some (Pricklypear_lisp.Ast.VInt n) -> Int64.to_int n
+  | Some (Pricklypear_lisp.Ast.VStr s) ->
+      (try int_of_string s with _ -> 1)
+  | Some _ -> 1
+
+let vlist_strs xs =
+  Pricklypear_lisp.Ast.VList (List.map (fun s -> Pricklypear_lisp.Ast.VStr s) xs)
+
+let impact_to_json (e : impact_event) : string =
+  let open Yojson.Safe in
+  to_string
+    (`Assoc
+       [ ("name", `String e.name)
+       ; ("at", `Float e.at)
+       ; ("branch", `String e.branch)
+       ; ("author", `String e.author)
+       ; ("dependents", `List (List.map (fun s -> `String s) e.dependents))
+       ; ("routes", `List (List.map (fun s -> `String s) e.routes))
+       ; ("status", `String e.status)
+       ])
+
+let change_to_json (e : change_event) : string =
+  Yojson.Safe.to_string
+    (`Assoc
+       [ ("op", `String e.op)
+       ; ("name", `String e.name)
+       ; ("at", `Float e.at)
+       ; ("branch", `String e.branch)
+       ; ("author", `String e.author)
+       ])
+
+let record_define_side_effects = Call_graph.record_define_side_effects
+let impact_summary_text = Call_graph.impact_summary_text
+
+(** Graph + impact + change-set + DNU prims (image.inspector / dnu-stubs). *)
+let register_graph_prims (t : t) (tbl : Primitives.t) : unit =
+  Primitives.register tbl "callees"
+    (fun args ->
+      match args with
+      | [ n ] | [ n; _ ] as a ->
+          (match str_name n with
+           | None -> Lwt.return (vlist_strs [])
+           | Some name ->
+               let depth =
+                 match a with
+                 | [ _; d ] -> depth_arg (Some d)
+                 | _ -> 1
+               in
+               let* snap = Call_graph.snapshot_of_session t in
+               Lwt.return (vlist_strs (Call_graph.callees snap ~name ~depth)))
+      | _ -> Lwt.return (vlist_strs []));
+  Primitives.register tbl "callers"
+    (fun args ->
+      match args with
+      | [ n ] ->
+          (match str_name n with
+           | None -> Lwt.return (vlist_strs [])
+           | Some name ->
+               let* snap = Call_graph.snapshot_of_session t in
+               Lwt.return (vlist_strs (Call_graph.callers snap name)))
+      | _ -> Lwt.return (vlist_strs []));
+  Primitives.register tbl "dependents"
+    (fun args ->
+      match args with
+      | [ n ] | [ n; _ ] as a ->
+          (match str_name n with
+           | None -> Lwt.return (vlist_strs [])
+           | Some name ->
+               let depth =
+                 match a with
+                 | [ _; d ] -> depth_arg (Some d)
+                 | _ -> 8
+               in
+               let* snap = Call_graph.snapshot_of_session t in
+               Lwt.return
+                 (vlist_strs (Call_graph.dependents snap ~name ~depth)))
+      | _ -> Lwt.return (vlist_strs []));
+  Primitives.register tbl "used-by-routes"
+    (fun args ->
+      match args with
+      | [ n ] ->
+          (match str_name n with
+           | None -> Lwt.return (vlist_strs [])
+           | Some name ->
+               let* snap = Call_graph.snapshot_of_session t in
+               Lwt.return (vlist_strs (Call_graph.used_by_routes snap name)))
+      | _ -> Lwt.return (vlist_strs []));
+  Primitives.register tbl "holes"
+    (fun args ->
+      match args with
+      | [ n ] ->
+          (match str_name n with
+           | None -> Lwt.return (vlist_strs [])
+           | Some name ->
+               let* snap = Call_graph.snapshot_of_session t in
+               Lwt.return (vlist_strs (Call_graph.holes snap name)))
+      | _ -> Lwt.return (vlist_strs []));
+  Primitives.register tbl "impact-queue"
+    (fun _args ->
+      let xs =
+        List.map
+          (fun e -> Pricklypear_lisp.Ast.VStr (impact_to_json e))
+          t.impact_queue
+      in
+      Lwt.return (Pricklypear_lisp.Ast.VList xs));
+  Primitives.register tbl "impact-clear"
+    (fun args ->
+      (match args with
+       | [] | [ Pricklypear_lisp.Ast.VStr "all" ]
+       | [ Pricklypear_lisp.Ast.VSymbol "all" ] ->
+           t.impact_queue <- []
+       | [ n ] ->
+           (match str_name n with
+            | Some name ->
+                t.impact_queue <-
+                  List.filter
+                    (fun (e : impact_event) -> e.name <> name)
+                    t.impact_queue
+            | None -> ())
+       | _ -> ());
+      Lwt.return Pricklypear_lisp.Ast.VNil);
+  Primitives.register tbl "impact-mark"
+    (fun args ->
+      match args with
+      | [ n; st ] ->
+          (match str_name n, str_name st with
+           | Some name, Some status ->
+               t.impact_queue <-
+                 List.map
+                   (fun (e : impact_event) ->
+                     if e.name = name then { e with status } else e)
+                   t.impact_queue;
+               Lwt.return (Pricklypear_lisp.Ast.VStr status)
+           | _ -> Lwt.return Pricklypear_lisp.Ast.VNil)
+      | _ -> Lwt.return Pricklypear_lisp.Ast.VNil);
+  Primitives.register tbl "change-transcript"
+    (fun _args ->
+      let xs =
+        List.map
+          (fun e -> Pricklypear_lisp.Ast.VStr (change_to_json e))
+          t.change_transcript
+      in
+      Lwt.return (Pricklypear_lisp.Ast.VList xs));
+  Primitives.register tbl "branch-changes"
+    (fun args ->
+      let* branch_id =
+        match args with
+        | [] -> Lwt.return (Some t.manifest.branch_id)
+        | [ n ] ->
+            (match str_name n with
+             | None -> Lwt.return None
+             | Some ref_ ->
+                 let owner, name = split_branch_ref ref_ in
+                 Store.lookup_branch_id_by_name t.store ~owner ~name)
+        | _ -> Lwt.return None
+      in
+      match branch_id with
+      | None -> Lwt.return (Pricklypear_lisp.Ast.VList [])
+      | Some bid ->
+          let* own = Store.list_own_functions t.store ~branch_id:bid in
+          let* routes = Store.list_own_routes t.store ~branch_id:bid in
+          let* parent_id = Store.branch_parent_id t.store ~branch_id:bid in
+          let* ov =
+            Store.list_overrides t.store ~branch_id:bid ~parent_id
+          in
+          let class_of name =
+            match List.find_opt (fun (n, _, _) -> n = name) ov with
+            | Some (_, _, None) -> "new"
+            | Some (_, _, Some _) -> "override"
+            | None -> "own"
+          in
+          let fn_items =
+            List.map
+              (fun (name, author, updated) ->
+                let j =
+                  Yojson.Safe.to_string
+                    (`Assoc
+                       [ ("name", `String name)
+                       ; ("kind", `String "fn")
+                       ; ("author", `String author)
+                       ; ("updated_at", `String updated)
+                       ; ("class", `String (class_of name))
+                       ])
+                in
+                Pricklypear_lisp.Ast.VStr j)
+              own
+          in
+          let route_items =
+            List.map
+              (fun (path, handler) ->
+                let j =
+                  Yojson.Safe.to_string
+                    (`Assoc
+                       [ ("name", `String path)
+                       ; ("kind", `String "route")
+                       ; ("handler", `String handler)
+                       ; ("class", `String "route")
+                       ])
+                in
+                Pricklypear_lisp.Ast.VStr j)
+              routes
+          in
+          Lwt.return (Pricklypear_lisp.Ast.VList (fn_items @ route_items)));
+  Primitives.register tbl "stub-function"
+    (fun args ->
+      match args with
+      | [ n ] ->
+          (match str_name n with
+           | None ->
+               Lwt.return
+                 (Pricklypear_lisp.Ast.VStr "stub-function: need name")
+           | Some name ->
+               let* existing = Store.lookup_function t.store name in
+               (match existing with
+                | Some _ ->
+                    Lwt.return
+                      (Pricklypear_lisp.Ast.VStr
+                         ("stub-function: already bound: " ^ name))
+                | None ->
+                    let body_src =
+                      Printf.sprintf
+                        "(lambda ()\n  \"TODO: implement %s\")" name
+                    in
+                    let* r =
+                      Agent_tools.define_binding t ~name ~body_src
+                        ~author:t.manifest.username
+                    in
+                    (match r with
+                     | Error e ->
+                         Lwt.return
+                           (Pricklypear_lisp.Ast.VStr ("stub-function: " ^ e))
+                     | Ok _ ->
+                         let* () = record_define_side_effects t ~name in
+                         Lwt.return
+                           (Pricklypear_lisp.Ast.VStr
+                              ("stubbed " ^ name ^ "; "
+                               ^ impact_summary_text t name)))))
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr "stub-function: need 1 name"))
+
 (** Register request-* + redirect prims. Closures capture [t] and read
     [current_request] at call time (handler-scoped dynamic binding). *)
 let register_request_prims (t : t) (tbl : Primitives.t) : unit =
@@ -1504,6 +1751,7 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value Lwt.t =
         then refresh_ui_shell t
         else Lwt.return_unit
       in
+      let* () = record_define_side_effects t ~name in
       Lwt.return v
     in
     (match expr with
@@ -1578,6 +1826,7 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
       then refresh_ui_shell t
       else Lwt.return_unit
     in
+    let* () = record_define_side_effects t ~name in
     Lwt.return v
   in
   (match expr with
@@ -1858,6 +2107,8 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
       agent_branch_lock = false;
       is_admin = (manifest.username = "admin");
       auth_token = None;
+      impact_queue = [];
+      change_transcript = [];
     }
   in
   (* Register session-aware primitives (whoami, current-author,
@@ -1876,6 +2127,8 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
   (* HTTP request-context prims (it33): request-method/path/param(s)/body +
      redirect. Dynamic scope via current_request while call_handler runs. *)
   register_request_prims !t prim_table;
+  (* Call graph + impact + change-set + DNU (image.inspector combo pack). *)
+  register_graph_prims !t prim_table;
   (* Register CRUD primitives (get/create/update/delete/list) over
      the shared data_rows table. Same pattern as control prims:
      they capture (!t) and return their real DB result via Lwt. *)

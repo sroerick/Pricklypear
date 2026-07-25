@@ -73,6 +73,8 @@ let define_binding (t : t) ~(name : string) ~(body_src : string)
               || String.starts_with ~prefix:"theme/" n then (
              t.ui_nav_html <- None;
              t.ui_css <- None);
+           (* Impact + change transcript filled by Session after define when
+              called via Session.eval paths; install_function appends text. *)
            Lwt.return (Ok v)
        | _ ->
            (* Still bound in env if define special-form ran *)
@@ -142,6 +144,7 @@ let install_ai_function (t : t) ~(name : string) ~(body_src : string)
            let* def = define_binding t ~name ~body_src ~author in
            (match def with
             | Ok _ ->
+                let* () = Call_graph.record_define_side_effects t ~name in
                 let badge =
                   try
                     let e = Pricklypear_lisp.Reader.read_one body_src in
@@ -149,10 +152,11 @@ let install_ai_function (t : t) ~(name : string) ~(body_src : string)
                       (Pricklypear_lisp.Effect.infer ~known_fn e)
                   with _ -> "?"
                 in
+                let impact = Call_graph.impact_summary_text t name in
                 Lwt.return
                   (Pricklypear_lisp.Ast.VStr
-                     (Printf.sprintf "installed %s by %s [%s]\n%s"
-                        name author badge body_src))
+                     (Printf.sprintf "installed %s by %s [%s]\n%s\n%s"
+                        name author badge body_src impact))
             | Error e ->
                 Lwt.return
                   (Pricklypear_lisp.Ast.VStr
@@ -1019,6 +1023,11 @@ let default_agent_seed (t : t) : string =
   "11) If smoke/eval fails: html_helpers, inspect_function, fix " ^
   "install_function, re-smoke/re-eval until ok:true. Never finish on a " ^
   "failed smoke with a confident success message.\n" ^
+  "11b) On unbound_var: read error name field; (stub-function name) or " ^
+  "install_function a real body; (callers name) for who wanted it; " ^
+  "then smoke used-by-routes / impact text from install result.\n" ^
+  "11c) After install_function, read impact: dependents + smoke routes " ^
+  "line; smoke_route each listed path when present.\n" ^
   "12) Final message must name the smoke_route / eval_expr proofs you ran " ^
   "(path + contains, or expression + result). No proofs → not done.\n" ^
   "\n" ^
