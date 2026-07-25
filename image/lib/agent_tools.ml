@@ -62,11 +62,11 @@ let define_binding (t : t) ~(name : string) ~(body_src : string)
           Pricklypear_lisp.Eval.eval_string_direct
             ~prims:Pricklypear_lisp.Eval.empty_prims t.env input)
       in
-      (match expr with
-       | Pricklypear_lisp.Ast.App
-           (Pricklypear_lisp.Ast.Var "define",
-            [ Pricklypear_lisp.Ast.Var n; body_expr ]) ->
-           let* () = Store.persist_function t.store n body_expr author in
+      (match Pricklypear_lisp.Eval.parse_top_define expr with
+       | Some { name = n; body = body_expr; doc } ->
+           let* () =
+             Store.persist_function t.store n body_expr ~doc author
+           in
            (* Stale chrome nav was the "bible only on home" bug: home
               live-calls ui/nav; other pages used a cached string. *)
            if n = "ui/nav" || n = "ui/home" || n = "ui/css" || n = "ui/theme"
@@ -76,7 +76,7 @@ let define_binding (t : t) ~(name : string) ~(body_src : string)
            (* Impact + change transcript filled by Session after define when
               called via Session.eval paths; install_function appends text. *)
            Lwt.return (Ok v)
-       | _ ->
+       | None ->
            (* Still bound in env if define special-form ran *)
            Lwt.return (Ok v)))
     (fun exn ->
@@ -167,7 +167,7 @@ let install_ai_function (t : t) ~(name : string) ~(body_src : string)
 let function_source (t : t) (name : string) : string option Lwt.t =
   let* found = Store.lookup_function t.store name in
   match found with
-  | Some (expr, _) ->
+  | Some (expr, _, _) ->
       Lwt.return (Some (Pricklypear_lisp.Reader.pp_expr expr))
   | None ->
       (match Pricklypear_lisp.Env.lookup t.env name with
@@ -195,7 +195,7 @@ let function_ast (t : t) (name : string)
   : Pricklypear_lisp.Ast.value option Lwt.t =
   let* found = Store.lookup_function t.store name in
   match found with
-  | Some (expr, _) ->
+  | Some (expr, _, _) ->
       Lwt.return (Some (Pricklypear_lisp.Eval.quote_to_value expr))
   | None ->
       (match Pricklypear_lisp.Env.lookup t.env name with
@@ -300,7 +300,7 @@ let propose_function (t : t) ~(name : string) ~(spec : string)
 let current_fn_pretty (t : t) (name : string) : string Lwt.t =
   let* found = Store.lookup_function t.store name in
   match found with
-  | Some (expr, _) ->
+  | Some (expr, _, _) ->
       Lwt.return (Pricklypear_lisp.Reader.pp_expr expr)
   | None ->
       (match Pricklypear_lisp.Env.lookup t.env name with

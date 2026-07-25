@@ -1076,6 +1076,28 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
           Lwt.return
             (Pricklypear_lisp.Ast.VStr "function-source: need name-str"));
 
+  (* (function-doc name) -> VStr docstring | VNil
+     Store metadata first; special-form / prim blurbs as fallback. *)
+  Primitives.register tbl "function-doc"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr name ] ->
+          let* doc = Store.lookup_function_doc t.store name in
+          (match doc with
+           | Some s -> Lwt.return (Pricklypear_lisp.Ast.VStr s)
+           | None ->
+               (match Pricklypear_lisp.Special_forms.find name with
+                | Some e ->
+                    Lwt.return (Pricklypear_lisp.Ast.VStr e.summary)
+                | None ->
+                    let blurb = Primitives.prim_summary name in
+                    if blurb = "built-in primitive" then
+                      Lwt.return Pricklypear_lisp.Ast.VNil
+                    else Lwt.return (Pricklypear_lisp.Ast.VStr blurb)))
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr "function-doc: need name-str"));
+
   (* (function-ast name) -> quoted body value tree | VNil.
      Does not eval the body; reifies the stored AST via quote_to_value. *)
   Primitives.register tbl "function-ast"
@@ -1099,7 +1121,7 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
     ; "string-contains?"; "string-trim"; "html-escape"; "as-str"; "str"
     ; "symbol?"; "string?"; "symbol=?"; "symbol->string"; "string->symbol"
     ; "not"; "type-of"; "read-string"; "read-all-string"; "function-ast"
-    ; "function-source"
+    ; "function-source"; "function-doc"
     ]
   in
   Primitives.register tbl "package-exports"
@@ -1739,10 +1761,11 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value Lwt.t =
        dispatches through Eval.apply via the prim_table.
        H1: [eval_string_auto] honors PP_EVAL_CONTROL=lwt|eff (default lwt). *)
     let* v = eval_string_rim t input in
-    let persist_define name body_expr =
+    let persist_define name body_expr doc =
       if t.manifest.username <> "anonymous" then
         Lwt.async (fun () ->
-          Store.persist_function t.store name body_expr t.manifest.username);
+          Store.persist_function t.store name body_expr ~doc
+            t.manifest.username);
       let* () =
         if not t.suppress_refresh_on_define
            && (name = "ui/nav" || name = "ui/home" || name = "ui/css"
@@ -1754,38 +1777,12 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value Lwt.t =
       let* () = record_define_side_effects t ~name in
       Lwt.return v
     in
-    (match expr with
-     | Pricklypear_lisp.Ast.App
-         (Pricklypear_lisp.Ast.Var "define",
-          [ Pricklypear_lisp.Ast.Var name; body_expr ]) ->
-         (* Persist the body AST to the store for reload-on-boot. The
-            env binding already happened via eval's Define case; this
-            DB write is non-fatal on PG-down. Anonymous may not persist. *)
-         persist_define name body_expr
-     | Pricklypear_lisp.Ast.App
-         (Pricklypear_lisp.Ast.Var "define",
-          Pricklypear_lisp.Ast.App
-            (Pricklypear_lisp.Ast.Var name, param_exprs) :: bodies) ->
-         (* (define (f x…) body…) sugar — store as Lambda AST. *)
-         let params =
-           List.filter_map
-             (function
-               | Pricklypear_lisp.Ast.Var p -> Some p
-               | _ -> None)
-             param_exprs
-         in
-         let body =
-           match bodies with
-           | [] -> Pricklypear_lisp.Ast.Lit Pricklypear_lisp.Ast.VNil
-           | [ e ] -> e
-           | e1 :: e2 :: rest ->
-               let rec fold a = function
-                 | [] -> a
-                 | x :: xs -> Pricklypear_lisp.Ast.Seq (a, fold x xs)
-               in
-               fold e1 (e2 :: rest)
-         in
-         persist_define name (Pricklypear_lisp.Ast.Lambda (params, body))
+    (match Pricklypear_lisp.Eval.parse_top_define expr with
+     | Some { name; body; doc } ->
+         (* Persist peeled body + docstring. Env bind already ran via eval. *)
+         persist_define name body doc
+     | None ->
+     (match expr with
      | Pricklypear_lisp.Ast.App
          (Pricklypear_lisp.Ast.Var "defmacro",
           [ Pricklypear_lisp.Ast.Var name; params_expr; body_expr ]) ->
@@ -1799,7 +1796,7 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value Lwt.t =
              Store.persist_function t.store name stored t.manifest.username)
          end;
          Lwt.return v
-     | _ -> Lwt.return v)
+     | _ -> Lwt.return v))
   with
   | Pricklypear_lisp.Ast.Interp_error e as exn -> Lwt.fail exn
   | Pricklypear_lisp.Reader.Reader_error (msg, line, col) ->
@@ -1814,10 +1811,11 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
     : Pricklypear_lisp.Ast.value Lwt.t =
   (* Like eval_one but takes AST — avoids pp_expr string round-trip. *)
   let* v = eval_expr_rim t expr in
-  let persist_define name body_expr =
+  let persist_define name body_expr doc =
     if t.manifest.username <> "anonymous" then
       Lwt.async (fun () ->
-        Store.persist_function t.store name body_expr t.manifest.username);
+        Store.persist_function t.store name body_expr ~doc
+          t.manifest.username);
     let* () =
       if not t.suppress_refresh_on_define
          && (name = "ui/nav" || name = "ui/home" || name = "ui/css"
@@ -1829,34 +1827,10 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
     let* () = record_define_side_effects t ~name in
     Lwt.return v
   in
-  (match expr with
-   | Pricklypear_lisp.Ast.App
-       (Pricklypear_lisp.Ast.Var "define",
-        [ Pricklypear_lisp.Ast.Var name; body_expr ]) ->
-       persist_define name body_expr
-   | Pricklypear_lisp.Ast.App
-       (Pricklypear_lisp.Ast.Var "define",
-        Pricklypear_lisp.Ast.App
-          (Pricklypear_lisp.Ast.Var name, param_exprs) :: bodies) ->
-       let params =
-         List.filter_map
-           (function
-             | Pricklypear_lisp.Ast.Var p -> Some p
-             | _ -> None)
-           param_exprs
-       in
-       let body =
-         match bodies with
-         | [] -> Pricklypear_lisp.Ast.Lit Pricklypear_lisp.Ast.VNil
-         | [ e ] -> e
-         | e1 :: e2 :: rest ->
-             let rec fold a = function
-               | [] -> a
-               | x :: xs -> Pricklypear_lisp.Ast.Seq (a, fold x xs)
-             in
-             fold e1 (e2 :: rest)
-       in
-       persist_define name (Pricklypear_lisp.Ast.Lambda (params, body))
+  (match Pricklypear_lisp.Eval.parse_top_define expr with
+   | Some { name; body; doc } -> persist_define name body doc
+   | None ->
+   (match expr with
    | Pricklypear_lisp.Ast.App
        (Pricklypear_lisp.Ast.Var "defmacro",
         [ Pricklypear_lisp.Ast.Var name; params_expr; body_expr ]) ->
@@ -1870,7 +1844,7 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
            Store.persist_function t.store name stored t.manifest.username)
        end;
        Lwt.return v
-   | _ -> Lwt.return v)
+   | _ -> Lwt.return v))
 
 and load_string (t : t) (src : string) : (string, string) result Lwt.t =
   Loader.load_string ~eval_form:(eval_form t) src
@@ -2018,6 +1992,7 @@ and seed_stdlib (t : t) : unit Lwt.t =
     let* () = seed_one t "bible" in
     let* () = seed_one t "dabar" in
     let* () = seed_one t "bi" in
+    let* () = seed_one t "ref" in
     let* () = seed_one t "verify" in
     Lwt.return_unit)
       finally)

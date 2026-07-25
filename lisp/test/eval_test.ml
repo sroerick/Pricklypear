@@ -735,6 +735,63 @@ let dialect_tests = [
     ignore (Eval.eval_string ~prims env "(define (add1 x) (+ x 1))");
     let got = Eval.eval_string ~prims env "(add1 41)" in
     Alcotest.(check string) "42" "42" (Reader.pp_value got));
+  ("define docstring trailing", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let v = Eval.eval_string ~prims env "(define d1 1 \"one\")" in
+    Alcotest.(check string) "bind" "1" (Reader.pp_value v);
+    let got = Eval.eval_string ~prims env "d1" in
+    Alcotest.(check string) "lookup" "1" (Reader.pp_value got);
+    (match Eval.parse_top_define (Reader.read_one "(define d1 1 \"one\")") with
+     | Some { name = "d1"; doc = Some "one"; _ } -> ()
+     | _ -> Alcotest.fail "parse_top_define trailing"));
+  ("define sugar leading docstring", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    Eval.register_prim prims "+" (function
+      | [Ast.VInt a; Ast.VInt b] -> Ast.VInt (Int64.add a b)
+      | _ -> raise (Ast.Interp_error (Ast.User_error "+")));
+    let env = Env.create () in
+    Env.define env "+" (Ast.VPrim "+");
+    ignore (Eval.eval_string ~prims env
+              "(define (inc x) \"add one\" (+ x 1))");
+    let got = Eval.eval_string ~prims env "(inc 2)" in
+    Alcotest.(check string) "3" "3" (Reader.pp_value got);
+    (match
+       Eval.parse_top_define
+         (Reader.read_one "(define (inc x) \"add one\" (+ x 1))")
+     with
+     | Some { name = "inc"; doc = Some "add one"; body = Ast.Lambda (["x"], _) } ->
+         ()
+     | _ -> Alcotest.fail "parse sugar docstring"));
+  ("define lambda leading docstring", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    Eval.register_prim prims "+" (function
+      | [Ast.VInt a; Ast.VInt b] -> Ast.VInt (Int64.add a b)
+      | _ -> raise (Ast.Interp_error (Ast.User_error "+")));
+    let env = Env.create () in
+    Env.define env "+" (Ast.VPrim "+");
+    ignore (Eval.eval_string ~prims env
+              "(define f (lambda (x) \"lam\" (+ x 1)))");
+    let got = Eval.eval_string ~prims env "(f 10)" in
+    Alcotest.(check string) "11" "11" (Reader.pp_value got);
+    (match
+       Eval.parse_top_define
+         (Reader.read_one "(define f (lambda (x) \"lam\" (+ x 1)))")
+     with
+     | Some { doc = Some "lam"; body = Ast.App (Ast.Var "lambda", _); _ } ->
+         ()
+     | other ->
+         Alcotest.failf "lambda doc peel: %s"
+           (match other with None -> "none" | Some _ -> "bad shape")));
+  ("define lone string body is value not doc", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    ignore (Eval.eval_string ~prims env "(define (hi) \"hello\")");
+    let got = Eval.eval_string ~prims env "(hi)" in
+    Alcotest.(check string) "hello" "\"hello\"" (Reader.pp_value got);
+    (match Eval.parse_top_define (Reader.read_one "(define (hi) \"hello\")") with
+     | Some { doc = None; _ } -> ()
+     | _ -> Alcotest.fail "lone string must not be docstring"));
   ("begin multi-body", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
     let env = Env.create () in

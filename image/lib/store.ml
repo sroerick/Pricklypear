@@ -9,10 +9,10 @@ open Lwt.Syntax
    and a definition in the child OVERRIDES the same name in main
    (per spec storage.no-inheritance: OVERRIDE, not UNION).
 
-   Returns the definition's parsed AST and author. Errors/misses are
-   logged and return None so the REPL keeps working with no DB. *)
+   Returns (body, author, doc option). Errors/misses are logged and
+   return None so the REPL keeps working with no DB. *)
 let lookup_function (t : t) (name : string)
-  : (Pricklypear_lisp.Ast.expr * string) option Lwt.t =
+  : (Pricklypear_lisp.Ast.expr * string * string option) option Lwt.t =
   match t.conn with
   | None -> Lwt.return_none
   | Some conn ->
@@ -27,7 +27,7 @@ let lookup_function (t : t) (name : string)
             "  UNION ALL " ^
             "  SELECT b.id, b.parent_id, c.depth + 1 " ^
             "  FROM branches b JOIN chain c ON b.id = c.parent_id " ^
-            ") SELECT fd.body, fd.author FROM function_defs fd " ^
+            ") SELECT fd.body, fd.author, fd.doc FROM function_defs fd " ^
             "JOIN chain ON fd.branch_id = chain.id " ^
             "WHERE fd.name = $2 " ^
             "ORDER BY chain.depth ASC LIMIT 1" in
@@ -39,17 +39,17 @@ let lookup_function (t : t) (name : string)
           (match rows with
            | [] -> Lwt.return_none
            | row :: _ ->
-               (* Each row is [cell; cell] where cell = v option;
-                  first is jsonb body, second is author text. *)
+               (* body jsonb, author text, doc text nullable. *)
                (match row with
-                | [ body_cell; author_cell ] ->
+                | [ body_cell; author_cell; doc_cell ] ->
                     (match Pgx.Value.to_string body_cell,
                              Pgx.Value.to_string author_cell with
                      | Some body_str, Some author ->
+                        let doc = Pgx.Value.to_string doc_cell in
                         (match Yojson.Safe.from_string body_str with
                          | j ->
                              (match Pricklypear_lisp.Ast.expr_of_json j with
-                              | Ok e -> Lwt.return (Some (e, author))
+                              | Ok e -> Lwt.return (Some (e, author, doc))
                               | Error msg ->
                                   Printf.eprintf
                                     "[store] lookup_function: parse %s\n" msg;
@@ -356,14 +356,14 @@ let list_overrides (t : t) ~(branch_id : string) ~(parent_id : string option)
           Lwt.return [])
 
 let lookup_function_on_branch (t : t) ~(branch_id : string) ~(name : string)
-  : (Pricklypear_lisp.Ast.expr * string * string) option Lwt.t =
+  : (Pricklypear_lisp.Ast.expr * string * string * string option) option Lwt.t =
   match t.conn with
   | None -> Lwt.return_none
   | Some conn ->
       Lwt.catch
         (fun () ->
           let sql =
-            "SELECT body::text, author, updated_at::text FROM function_defs " ^
+            "SELECT body::text, author, updated_at::text, doc FROM function_defs " ^
             "WHERE branch_id = $1 AND name = $2" in
           let* rows =
             exec conn
@@ -372,15 +372,16 @@ let lookup_function_on_branch (t : t) ~(branch_id : string) ~(name : string)
               sql
           in
           (match rows with
-           | [ [ body_c; author_c; upd_c ] ] ->
+           | [ [ body_c; author_c; upd_c; doc_c ] ] ->
                (match Pgx.Value.to_string body_c,
                        Pgx.Value.to_string author_c,
                        Pgx.Value.to_string upd_c with
                 | Some body_str, Some author, Some updated ->
+                    let doc = Pgx.Value.to_string doc_c in
                     (try
                        match Pricklypear_lisp.Ast.expr_of_json
                                (Yojson.Safe.from_string body_str) with
-                       | Ok e -> Lwt.return (Some (e, author, updated))
+                       | Ok e -> Lwt.return (Some (e, author, updated, doc))
                        | Error _ -> Lwt.return_none
                      with _ -> Lwt.return_none)
                 | _ -> Lwt.return_none)
@@ -428,23 +429,29 @@ let promote_functions (t : t) ~(source_id : string) ~(target_id : string)
               in
               match src with
               | None -> Lwt.return acc
-              | Some (body, author, _) ->
+              | Some (body, author, _, doc) ->
                   let body_json =
                     Yojson.Safe.to_string
                       (Pricklypear_lisp.Ast.expr_to_json body) in
                   let sql =
                     "INSERT INTO function_defs " ^
-                    "  (branch_id, name, body, author) " ^
-                    "VALUES ($1, $2, $3::jsonb, $4) " ^
+                    "  (branch_id, name, body, author, doc) " ^
+                    "VALUES ($1, $2, $3::jsonb, $4, $5) " ^
                     "ON CONFLICT (branch_id, name) DO UPDATE " ^
                     "SET body = EXCLUDED.body, author = EXCLUDED.author, " ^
-                    "    updated_at = now() RETURNING name" in
+                    "    doc = EXCLUDED.doc, updated_at = now() RETURNING name" in
+                  let doc_param =
+                    match doc with
+                    | Some s -> Pgx.Value.of_string s
+                    | None -> Pgx.Value.null
+                  in
                   let* rows =
                     exec conn
                       ~params:[ Pgx.Value.of_string target_id;
                                 Pgx.Value.of_string name;
                                 Pgx.Value.of_string body_json;
-                                Pgx.Value.of_string author ]
+                                Pgx.Value.of_string author;
+                                doc_param ]
                       sql
                   in
                   Lwt.return (if rows = [] then acc else acc + 1))
@@ -456,9 +463,12 @@ let promote_functions (t : t) ~(source_id : string) ~(target_id : string)
 
 (* Persist a function def. INSERT ... ON CONFLICT (branch_id, name)
    DO UPDATE so redefining a name in the same branch upserts. The body
-   is serialized to JSONB. *)
+   is serialized to JSONB. [doc] writes function_defs.doc; None clears
+   (NULL) so stale docs do not survive a docstring-free redefine. *)
 let persist_function (t : t) (name : string)
-    (body : Pricklypear_lisp.Ast.expr) (author : string)
+    (body : Pricklypear_lisp.Ast.expr)
+    ?(doc : string option = None)
+    (author : string)
   : unit Lwt.t =
   match t.conn with
   | None -> Lwt.return_unit  (* no DB; env binding still happened in-memory *)
@@ -469,23 +479,36 @@ let persist_function (t : t) (name : string)
             Yojson.Safe.to_string
               (Pricklypear_lisp.Ast.expr_to_json body) in
           let sql =
-            "INSERT INTO function_defs (branch_id, name, body, author) " ^
-            "VALUES ($1, $2, $3::jsonb, $4) " ^
+            "INSERT INTO function_defs (branch_id, name, body, author, doc) " ^
+            "VALUES ($1, $2, $3::jsonb, $4, $5) " ^
             "ON CONFLICT (branch_id, name) DO UPDATE " ^
             "SET body = EXCLUDED.body, author = EXCLUDED.author, " ^
-            "    updated_at = now()" in
+            "    doc = EXCLUDED.doc, updated_at = now()" in
+          let doc_param =
+            match doc with
+            | Some s -> Pgx.Value.of_string s
+            | None -> Pgx.Value.null
+          in
           let* _ =
             exec conn
               ~params:[ Pgx.Value.of_string t.branch_id;
                         Pgx.Value.of_string name;
                         Pgx.Value.of_string body_json;
-                        Pgx.Value.of_string author ]
+                        Pgx.Value.of_string author;
+                        doc_param ]
               sql in
           Lwt.return_unit)
         (fun exn ->
           Printf.eprintf "[store] persist_function error: %s\n"
             (Printexc.to_string exn);
           Lwt.return_unit)
+
+(** Visible docstring for [name], or None. *)
+let lookup_function_doc (t : t) (name : string) : string option Lwt.t =
+  let* found = lookup_function t name in
+  match found with
+  | Some (_, _, Some d) when String.trim d <> "" -> Lwt.return_some d
+  | _ -> Lwt.return_none
 
 let list_branches (t : t) : Pricklypear_common.Branch.t list Lwt.t =
   match t.conn with
@@ -886,8 +909,8 @@ let fork_branch (t : t) ~(parent_id : string) ~(owner : string)
                       (* 2. Copy function_defs from parent. *)
                       let copy_fns_sql =
                         "INSERT INTO function_defs " ^
-                        "  (branch_id, name, body, author, updated_at) " ^
-                        "SELECT $1, name, body, author, updated_at " ^
+                        "  (branch_id, name, body, author, doc, updated_at) " ^
+                        "SELECT $1, name, body, author, doc, updated_at " ^
                         "FROM function_defs WHERE branch_id = $2" in
                       let* _ =
                         exec conn
@@ -961,12 +984,12 @@ let merge_branch (t : t) ~(source_id : string) ~(target_id : string)
             (* Upsert all function_defs from source into target. Returns
                the count of merged rows via Pg's INSERT RETURNING. *)
             let sql =
-              "INSERT INTO function_defs (branch_id, name, body, author, updated_at) " ^
-              "SELECT $1, name, body, author, updated_at " ^
+              "INSERT INTO function_defs (branch_id, name, body, author, doc, updated_at) " ^
+              "SELECT $1, name, body, author, doc, updated_at " ^
               "FROM function_defs WHERE branch_id = $2 " ^
               "ON CONFLICT (branch_id, name) DO UPDATE " ^
               "  SET body = EXCLUDED.body, author = EXCLUDED.author, " ^
-              "      updated_at = EXCLUDED.updated_at " ^
+              "      doc = EXCLUDED.doc, updated_at = EXCLUDED.updated_at " ^
               "RETURNING name" in
             let* rows =
               exec conn

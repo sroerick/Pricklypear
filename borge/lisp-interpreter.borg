@@ -504,8 +504,17 @@
          Comma forms are only meaningful under quasiquote; bare
          unquote at top-level is a reader-or-eval error.
 
-         Comments: ; to end of line. Docstrings: a leading
-         string in a body position is the function's doc.
+         Comments: ; to end of line.
+
+         Docstrings (see define-docstring): optional metadata on
+         a top-level binding. Surface forms the reader already
+         produces as plain AST (no dedicated constructor):
+           (define name expr "doc")
+           (define (name p…) "doc" body…)
+           (define name (lambda (p…) "doc" body…))
+         The string is not a value binding; eval and the image
+         strip it into function_defs.doc (column already on
+         storage.schema).
    |))
    )
   )
@@ -544,6 +553,11 @@
          current session's env AND persists to store. Edit
          = redefine (update the row). No versioning at the
          binding level beyond what branches provide.
+
+         Optional docstring (define-docstring): trailing string
+         after the value, or leading string in a multi-body
+         define/lambda, is accepted by eval (not bound as the
+         value) and persisted by the image into function_defs.doc.
 
          Application: evaluate operator + args, apply.
          Primitives are dispatched by name through a table
@@ -1345,6 +1359,137 @@
 
          SUCCESS: new package code can look like ordinary Scheme
          procedures; old libs keep working without rewrite.
+
+         Docstrings on define are specified in define-docstring
+         (orthogonal; may land before or with this sugar).
+    |))
+   )
+  )
+
+  (subsection define-docstring
+   (doc "Optional docstring on define; persist to function_defs.doc; (function-doc name)")
+   (implements lisp/lib/eval.ml lisp/lib/special_forms.ml image/lib/session.ml image/lib/store.ml image/lib/agent_tools.ml image/lib/primitives.ml)
+   (status implemented)
+   (verify
+    (build "dune build && dune runtest")
+    (test "(define d1 1 \"one\") binds 1; (function-doc \"d1\") => \"one\"")
+    (test "(define (inc x) \"add one\" (+ x 1)); (inc 2) => 3; function-doc has docstring")
+    (test "(define f (lambda (x) \"lam\" (+ x 1))); function-doc and body without dead string")
+    (test "redefine without docstring clears or leaves prior doc per documented rule")
+    (test "(function-doc \"missing\") => ()")
+    (test "old two-arg define still works; load-library packages without docs")
+    (smoke "function_defs.doc round-trips across persist + lookup")
+    (smoke "fork/merge copy doc with body"))
+   (details
+    (doc (|
+         PURPOSE
+           Make every binding documentable in-language so agents
+           and humans can build a live reference (apropos, /ref,
+           platform-ref notes) without a parallel docs system.
+           Inbox SPEC "define docstring" is the product brief;
+           this subsection is the book authority for the OCaml
+           kernel half. Lisp package doc coverage, /ref, and
+           apropos are follow-on product work once this lands.
+
+         SCHEMA (already present — no migration)
+           function_defs.doc text  — see storage.schema /
+           migrations/001_branches.sql. Column exists; writers
+           and readers historically ignored it. This work wires
+           it. Do NOT add a second description column.
+
+         SURFACE SYNTAX (all optional doc)
+           1. (define name expr)
+                no docstring; bind eval(expr)
+           2. (define name expr "doc")
+                bind eval(expr); doc = the string literal
+           3. (define (name p…) body…)
+                sugar → lambda; no doc unless (4)
+           4. (define (name p…) "doc" body body*…)
+                leading string literal in the body list is the
+                docstring and is NOT part of the evaluated body
+                (requires at least one real body form after it;
+                 a lone string body is a value-returning thunk,
+                 not a docstring)
+           5. (define name (lambda (p…) "doc" body…))
+                same leading-string rule inside lambda bodies
+                when the define is top-level: strip into doc and
+                store/bind the lambda WITHOUT the dead string so
+                function-source stays clean
+
+           Docstring MUST be a string literal (Lit VStr / reader
+           "…"). A computed expression in the doc slot is a
+           syntax error (User_error), not silently evaluated.
+
+         EVAL (pure lisp/)
+           - Accept forms (1)–(5) without error.
+           - Binding value is unchanged vs pre-docstring define.
+           - Pure env does not store docs (no env metadata in v1).
+           - Prefer one shared helper (e.g. split_define /
+             peel_docstring) used by eval and by the image
+             intercept so sugar and doc rules cannot drift.
+           - value_to_expr / quote of Define need not round-trip
+             the doc string inside the AST (doc is store metadata,
+             not part of expr). Body AST after peel has no doc.
+
+         IMAGE PERSIST
+           session eval_one / eval_form define intercept and
+           agent_tools.define_binding:
+             - peel name, body_expr, doc option
+             - eval as today (env bind)
+             - Store.persist_function … ?doc
+           Redefine rules:
+             - docstring present → write that string to doc
+             - docstring absent → set doc NULL (explicit clear).
+               Rationale: edit/save and load-library without docs
+               must not leave stale blurbs from an older body.
+               Packages that care keep the string in source.
+           Anonymous may not persist (unchanged).
+           defmacro: out of scope for v1 docstring slot (no
+           third-arg / leading-string capture); follow-up if needed.
+
+         STORE
+           persist_function : t -> name -> body -> author ->
+             ?doc:string option -> unit Lwt.t
+           INSERT/UPDATE sets doc (NULL when None).
+           lookup_function / list paths that feed function-doc
+           must SELECT fd.doc (nullable).
+           fork copy, merge upsert, promote_functions: copy doc
+           with body/author so docs survive branch ops.
+
+         PRIMITIVE (function-doc name) → string | ()
+           - name: string (binding name)
+           - If visible function_defs row has non-null non-empty
+             doc → VStr doc
+           - Else if name is a special form → that form's summary
+             from special_forms catalog (discoverability)
+           - Else if name is a registered prim with a help blurb
+             → that blurb when one exists
+           - Else VNil
+           Effect class: ReadDb (store lookup); pure fallbacks
+           after miss are fine inside the same prim.
+           Register next to function-source / function-ast.
+           package-exports kernel/std list should include
+           function-doc once shipped.
+
+         SPECIAL-FORMS CATALOG
+           Update define entry arity/examples to show optional
+           docstring forms.
+
+         NON-GOALS (this subsection)
+           - /ref page, apropos, nav link, ai/context wiring
+             (product docs layer; build after kernel works)
+           - Mass docstring backfill of libs/*.pp
+           - doc on type_defs or routes
+           - Markdown rendering of docs in OCaml UI (plain text)
+           - Changing function_defs PRIMARY KEY or body JSON shape
+
+         SUCCESS
+           - One define with a docstring round-trips through
+             persist and (function-doc …)
+           - Sugar and lambda leading-string forms agree
+           - Existing libs without docs load unchanged
+           - Agents can document bindings in-language and read
+             them back without scraping function-source comments
     |))
    )
   )

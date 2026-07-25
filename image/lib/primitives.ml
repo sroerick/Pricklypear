@@ -263,6 +263,7 @@ let prim_summary (name : string) : string =
   | "propose-function" -> "AI draft+install function on branch"
   | "install-function" -> "install AI body string as named function"
   | "function-source" -> "pretty-print stored function body"
+  | "function-doc" -> "docstring for a binding (function_defs.doc)"
   | "function-ast" -> "raw stored function body as quoted data (no eval)"
   | "package-exports" -> "public export names for a package (std freeze)"
   | "package-bindings" -> "list binding names in a package"

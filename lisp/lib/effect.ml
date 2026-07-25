@@ -130,7 +130,7 @@ let read_db_prims = [
   "find-row"; "find-rows"; "find-text"; "find-random";
   "list-branches"; "current-branch"; "list-bindings";
   "whoami"; "current-author";
-  "function-source"; "function-ast"; "package-bindings"; "package-exports";
+  "function-source"; "function-doc"; "function-ast"; "package-bindings"; "package-exports";
   "export-package";
   "route-visibility";
   "list-usernames"; "list-ssh-keys";

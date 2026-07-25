@@ -28,6 +28,7 @@
       (menu/group "system"
         (list
           (menu/link "functions" "/bindings")
+          (menu/link "ref" "/ref")
           (menu/link "pages" "/pages")
           (menu/link "data" "/types")
           (menu/link "branches" "/branches")
