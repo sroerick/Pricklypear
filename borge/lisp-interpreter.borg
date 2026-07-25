@@ -5,7 +5,122 @@
  (section lisp-interpreter
   (doc "Pure Scheme-flavored Lisp-1 interpreter, AST-as-source, primitives layer")
   (status partial)
-  
+
+  (subsection language-roadmap
+   (doc "Nopales trajectory phases 1–3: code-as-data law, dialect ergonomics, production capabilities")
+   (status planned)
+   (verify
+    (smoke "phase exit criteria listed per phase; no phase-N work starts until phase N-1 exit green"))
+   (details
+    (doc (|
+         NORTH STAR
+           Nopales is a small Scheme-family impure functional language
+           for a live multi-user image (humans + agents + Postgres).
+           Not pure FP. Not R7RS-complete. Not a static-typed ML.
+
+         TRAJECTORY (do in order; dogfood between phases)
+           Phase 1 — Honest code-as-data
+           Phase 2 — Pleasant dialect
+           Phase 3 — Production capabilities
+           (Phase 4+ modules-lite / hygiene / maps: OUT OF SCOPE here;
+            open only after 1–3 exit and real dogfood pain.)
+
+         ==========================================================
+         PHASE 1 — HONEST CODE-AS-DATA
+         ==========================================================
+         Goal: programs-as-values are Scheme-honest; errors are
+         debuggable; print/read is law.
+
+         Work items (subsections):
+           symbols              VSymbol; non-lossy quote; symbol prims
+           errors-and-locations structured errors + source locations
+           (reader/eval touch-ups for pp laws — fold into symbols)
+
+         Exit criteria:
+           - (quote a) vs (quote "a") distinct (type-of + equality)
+           - (car (read-string "(lambda (x) x)")) is symbol?
+           - (car (function-ast <lambda-fn>)) is symbol?
+           - __str__ not required for new macros
+           - Interp errors carry location when expr has span
+           - dune runtest lisp green; ui/home + libs/verify smoke green
+           - agent seed documents symbol=? for AST walks
+
+         Non-goals this phase: match, define sugar, effect enforcement.
+
+         ==========================================================
+         PHASE 2 — PLEASANT DIALECT
+         ==========================================================
+         Goal: humans and LLMs write real packages without fighting
+         the dialect every screenful.
+
+         Work items (subsections):
+           binding-sugar        (define (f x) …), multi-body/begin
+           match                destructuring for lists/AST
+           std-library          freeze blessed list/string helpers
+           errors-and-locations catch/guard surface (builds on P1)
+
+         Exit criteria:
+           - (define (f x y) body…) ≡ (define f (lambda (x y) body…))
+           - multi-expr procedure bodies via begin/seq sugar
+           - (match x ((list 'lambda params body) …) (_ …))
+             or equivalent documented destructuring
+           - std: map/filter/foldl/reverse/append/… documented +
+             verify suite; no silent renames after freeze
+           - (guard …) or with-handlers can catch User_error
+           - one package (e.g. flash or calendar widget) rewritten
+             to use sugar+match as the style exemplar
+
+         Non-goals: modules, hygiene, maps, static types.
+
+         ==========================================================
+         PHASE 3 — PRODUCTION CAPABILITIES
+         ==========================================================
+         Goal: untrusted surfaces cannot casually escalate; packages
+         have a promised API; agents run under allowlists.
+
+         Work items (subsections):
+           effects              extend: ENFORCE not only badge
+           capability-enforcement public routes + agent sessions
+           package-surface      blessed exports / stability rules
+           (budgets already exist — document + align timeouts here)
+
+         Exit criteria:
+           - public user routes rejected (or sandboxed) if handler
+             effects ⊄ allowlist (pure|read-db|html|… policy table)
+           - agent tool / agent-say path has configurable effect mask
+           - AI propose-function still policy-gated (already started)
+           - system/main packages declare export list OR documented
+             public names; breaking changes require promote discipline
+           - smoke: non-admin cannot publish WriteDb+Branch handler
+             as public route; agent without WriteDb cannot create row
+             via tool when mask forbids it
+           - habitat verify + auth smokes green
+
+         Non-goals: setuid-as-user lattice completion, OCaml 5
+         Effect.perform in guest Lisp, full RBAC redesign.
+
+         ==========================================================
+         ORDERING LAW
+         ==========================================================
+           Do not start Phase 2 implementation until Phase 1 exit.
+           Do not start Phase 3 enforcement until Phase 2 exit
+           (sugar may land in libs that enforcement will load).
+           Spec for all three may be written now (this pass).
+
+         ==========================================================
+         DECISION DEFAULTS (locked for 1–3)
+         ==========================================================
+           - Impure functional Scheme-family dialect
+           - Dynamic typing + effects + data schemas (not HM types)
+           - Unhygienic macros + gensym (no syntax-case in 1–3)
+           - No call/cc
+           - No in-Lisp fiber/async API (host owns concurrency)
+           - Branches remain the override model; modules-lite = P4+
+           - JSON/dict prims for records; no VMap required in 1–3
+    |))
+   )
+  )
+
   (subsection ast
    (doc "The expr and value types")
    (status implemented)
@@ -28,7 +143,9 @@
 
          type value =
            | VInt of int64
+           | VFloat of float
            | VStr of string
+           | VSymbol of string               (* see subsection symbols *)
            | VBool of bool
            | VNil
            | VPair of value * value           (* cons cells *)
@@ -53,9 +170,292 @@
          VRef carries its target type so the interpreter
          can verify derefs at call time before querying
          the store.
+
+         VALUE ATOMS vs CODE NAMES:
+           At the expr layer, Var s and Lit (VStr s) are already
+           distinct. At the value layer, v1 collapsed both to VStr
+           ("historical collapse"). Subsection symbols plans the
+           move to VSymbol so quote/read-string/function-ast trees
+           match Scheme-family code-as-data.
    |))
    )
   )
+  (subsection symbols
+   (doc "Distinguish symbols from strings at the value layer (undo v1 collapse)")
+   (status planned)
+   (verify
+    (test "quote hello is symbol; quote \"hello\" is string; not equal")
+    (test "read-string and function-ast heads are symbols (car is symbol?)")
+    (test "value_to_expr round-trip preserves Var vs Lit VStr without __str__")
+    (test "gensym returns VSymbol; symbol->string / string->symbol")
+    (test "string-eq rejects symbols; symbol-eq compares names")
+    (smoke "(function-ast \"ui/nav\") car is lambda symbol; ui/home still renders")
+    (smoke "agent seed: read-string + car/cdr walk still works with symbol-eq or as-str"))
+   (details
+    (doc (|
+         WHY (decision 2026-07-24)
+           v1 accepted symbol/string collapse so the value heap stayed
+           tiny and HTML/JSON APIs stayed stringly. That was right for
+           shipping the image. It is wrong as the steady state for a
+           homoiconic agent OS: macros, function-ast, read-string, and
+           LLM-written code all want Scheme's distinction.
+
+           Spec previously said "optional later: VSymbol". This section
+           promotes that to a planned language change with phases.
+
+         GOAL
+           (quote hello)     => VSymbol "hello"
+           (quote "hello")   => VStr "hello"
+           (eq? (quote a) (quote a))     ; name equality on symbols
+           (string-eq "a" "a")           ; strings only
+           (symbol? 'lambda) => #t
+           (string? "lambda") => #t
+           (car (read-string "(lambda (x) x)")) => symbol lambda
+           (car (function-ast "f")) when f is a lambda => symbol lambda
+
+         NON-GOALS (v1 of symbols)
+           - Full interning table / eq identity across processes
+             (name equality on the string payload is enough;
+              process-local intern optional later)
+           - Keyword type (:foo) — out of scope
+           - Changing expr JSONB shape (Var/Lit already distinct)
+           - Forcing all libs to rewrite in one patch
+
+         ==========================================================
+         TYPE + PRINT/READ
+         ==========================================================
+
+         OCaml:
+           | VSymbol of string
+
+         JSON value encoding (if/when values are serialized):
+           {"sym": "hello"} vs {"str": "hello"}
+           expr JSON already has {"var":…} vs {"str":…} — leave it.
+
+         Printer (pp_value / REPL / api/eval JSON):
+           VSymbol s  ->  s          (unquoted bare token, escape if needed)
+           VStr s     ->  "s"        (double-quoted, escaped)
+         Reader:
+           bare token -> Var (unchanged at expr)
+           "…"        -> Lit VStr (unchanged)
+         Quote bridge is where the new type appears (see below).
+
+         ==========================================================
+         BRIDGE RULES (replace collapse)
+         ==========================================================
+
+         quote_to_value:
+           Var s           -> VSymbol s
+           Lit (VStr s)    -> VStr s
+           Lit other       -> other
+           App/specials    -> VList with symbolic heads where heads
+                              were Vars (VSymbol "if", VSymbol "lambda",
+                              VSymbol "+", …)
+
+         value_to_expr:
+           VSymbol s       -> Var s
+           VStr s          -> Lit (VStr s)     (* ALWAYS lit, not Var *)
+           VList (VSymbol h :: t) -> App/special decode as today
+           VList (VStr h :: t) -> prefer treat h as symbol name only
+             for a short COMPAT window (see phase B); then error or
+             require explicit string->symbol
+
+         DROP __str__ tagging as the primary mechanism:
+           reify_expr / macro arg bind use quote_to_value only.
+           __str__ unwrap in coerce_str stays one release for old
+           macro expansions in flight, then delete.
+
+         gensym:
+           returns VSymbol (not VStr). Optional prefix still string.
+
+         ==========================================================
+         PRIMITIVES
+         ==========================================================
+
+         New (pure):
+           (symbol? x) -> bool
+           (string? x) -> bool   (* VStr only; not symbols *)
+           (symbol=? a b) -> bool   (* both symbols, name= *)
+           (symbol->string sym) -> VStr
+           (string->symbol s) -> VSymbol
+
+         Update:
+           (type-of x) -> "symbol" | "str" | …
+           (str x) / pp: symbols bare, strings quoted (already ideal)
+           (as-str x): ACCEPT VSymbol (name payload) for HTML/path
+             convenience — product APIs stay ergonomic
+           (string-eq a b): strings only (do NOT coerce symbols
+             silently forever — that re-collapses). During compat,
+             may accept symbol via as-str only inside html/* if needed;
+             prefer libs use symbol=? for car walks.
+           string-append / substring / etc.: strings only; symbols
+             must go through symbol->string
+
+         ==========================================================
+         PHASES
+         ==========================================================
+
+         Phase A — Core (lisp package, no product break if pp hides it)
+           1. Add VSymbol to ast.ml; pp_value; expr_of_json/value JSON
+              if any; type-of; equality helpers.
+           2. quote_to_value: Var -> VSymbol; Lit VStr stays VStr.
+           3. value_to_expr: VSymbol -> Var; VStr -> Lit VStr.
+           4. gensym -> VSymbol.
+           5. Tests: quote distinct; round-trip without __str__;
+              read_one + quote_to_value heads are symbols.
+           6. Keep coerce_str accepting VSymbol and __str__ lists
+              so html/* and string-eq call sites do not mass-break.
+
+         Phase B — Surface prims + agent API
+           1. symbol? string? symbol=? symbol->string string->symbol.
+           2. function-ast / read-string naturally emit symbols
+              (they already go through quote_to_value).
+           3. Agent discovery / ai seeds: document car heads are
+              symbols; show (symbol=? (car form) 'lambda) and
+              (string-eq (symbol->string (car form)) "lambda").
+           4. Compat: string-eq may still coerce VSymbol via as-str
+              for one deploy cycle if smoke finds package damage;
+              log or count coercions.
+
+         Phase C — Cleanup
+           1. Remove __str__ reify path and tests that require it.
+           2. Stop string-eq coercing symbols (strict).
+           3. value_to_expr: VStr in head position is Lit-only;
+              building code from string heads needs string->symbol.
+           4. Update locked macros decision: collapse REJECTED.
+           5. Habitat smoke: ui/home, notes, flash, calendar, verify.
+
+         ==========================================================
+         PACKAGE / AGENT IMPACT
+         ==========================================================
+
+         Low risk (as-str / coerce_str accepts symbols):
+           html/tag, html/attr, layout/*, most UI string building.
+
+         Medium risk (explicit string-eq on car of forms):
+           any macro or agent walker that does
+             (string-eq (car form) "lambda")
+           Fix pattern:
+             (symbol=? (car form) 'lambda)
+             OR (string-eq (as-str (car form)) "lambda") during B.
+
+         function-ast / read-string consumers:
+           printed api/eval JSON will show bare lambda not "lambda"
+           for heads — agents parsing JSON strings need a heads-up.
+
+         Stored function_defs JSONB:
+           unchanged (expr encoding). No migration of bodies.
+
+         ==========================================================
+         ROLLBACK
+         ==========================================================
+
+           Feature is pure interpreter + prims. Revert the lisp/image
+           commit if habitat smoke fails; no DB migration.
+
+         ==========================================================
+         SUCCESS
+         ==========================================================
+
+           - 'a and "a" are different values (type-of + equality)
+           - code-as-data trees use symbols for names
+           - macros need no __str__
+           - product home and libs/verify green
+           - agent docs teach symbol=? for AST walks
+
+         ROADMAP: Phase 1 item 1 — see language-roadmap.
+         Pair with errors-and-locations in the same phase.
+    |))
+   )
+  )
+
+  (subsection errors-and-locations
+   (doc "Structured interpreter errors with source locations; catch surface for packages")
+   (status planned)
+   (verify
+    (test "parse error includes line:col")
+    (test "unbound var error includes name and optional span")
+    (test "guard/with-handlers catches User_error and continues")
+    (smoke "/api/eval error JSON includes loc fields when available"))
+   (details
+    (doc (|
+         ROADMAP: Phase 1 (locations) + Phase 2 (catch surface).
+
+         ==========================================================
+         PROBLEM
+         ==========================================================
+           Today many failures are bare strings / Interp_error without
+           a stable shape. Agents and humans cannot reliably:
+             - jump to the offending form
+             - catch and recover in Lisp
+             - distinguish unbound vs type vs prim vs budget
+
+         ==========================================================
+         PHASE 1 — ERROR VALUES + LOCATIONS
+         ==========================================================
+
+         A) Keep OCaml Interp_error as the host signal, but ensure
+            every raise site can carry optional location:
+              type loc = { source: string option; line: int; col: int }
+                (* source = function name, "repl", "load-string", path *)
+
+         B) Reader already has line/col — propagate into Parse_error
+            and into expr spans IF cheap (optional span on expr is
+            a larger change; minimum is error-time loc from reader
+            state + current define name from session).
+
+         C) /api/eval error JSON (and REPL print):
+              { ok: false, error: "unbound: foo",
+                kind: "unbound_var", name: "foo",
+                line: 12, col: 4, source: "ui/home" }
+            Fields optional when unknown; never break old clients
+            that only read .error string.
+
+         D) Budget_exceeded, arity, type mismatch get stable kind
+            tags (snake_case strings).
+
+         ==========================================================
+         PHASE 2 — CATCH IN LISP
+         ==========================================================
+
+         Special form (pick one name; prefer guard):
+
+           (guard
+             (lambda (err)  ; err is a dict-like or tagged list
+               …handler value or re-raise…)
+             body…)
+
+         Or Scheme-ish:
+           (with-handlers ((pred handler) …) body…)
+
+         v1 contract:
+           - Catches User_error and Prim_error wrapped as data
+           - Does NOT catch Budget_exceeded by default (or only
+             if pred says so) — budgets stay a hard leash
+           - Handler runs in the same env; must return a value
+           - Nested guard OK
+
+         (error msg) or (error kind msg) prim/special:
+           raises User_error with optional kind for handlers.
+
+         ==========================================================
+         NON-GOALS
+         ==========================================================
+           - Full CL condition system / restarts
+           - Stack traces as first-class list (nice-to-have later)
+           - Catching OCaml segfaults / host bugs
+
+         ==========================================================
+         SUCCESS
+         ==========================================================
+           Phase 1: every common eval failure has kind + message;
+           locations present for read/load-string paths.
+           Phase 2: a lib can guard a fallible get/parse and
+           render a friendly HTML error without killing the page.
+    |))
+   )
+  )
+
   (subsection reader
    (doc "The reader turns source text into AST; the AST is the source of truth (homoiconic, persisted as JSONB); read/print roundtrip fidelity is what makes stored code trustworthy.")
    (status implemented)
@@ -333,17 +733,15 @@
            VLambda / VMacro / VPrim / VRef as template leaves:
              error (cannot reify live closures into source expr)
 
-         Symbol problem (Lisp-1 without VSymbol):
-           Today quote turns symbols into VStr. That collapses
-           the string "hello" and the symbol hello at the value
-           layer. v1 ACCEPTS this collapse for quote and value_to_expr
-           context rules (status quo). However, the macro call
-           boundary now delivers plain literal values (VStr for
-           strings) rather than __str__-tagged forms.
-             - (quote hello) => VStr "hello"
-             - (quote "hello") => VStr "hello"
-             - Macro params receive plain VStr, not (__str__ ...)
-           Optional later: VSymbol distinct from VStr.
+         Symbol problem (Lisp-1 + VSymbol — see subsection symbols):
+           v1 collapsed quote of hello and "hello" both to VStr.
+           That is SUPERSEDED: planned VSymbol makes
+             (quote hello) => VSymbol "hello"
+             (quote "hello") => VStr "hello"
+           Macro args use quote_to_value (symbols for Vars, strings
+           for Lit VStr). __str__ tagging is transitional only until
+           symbols phase C removes it.
+           Until symbols ships, status quo remains VStr collapse.
 
          Round-trip invariant (tests):
            For any expr e built from reader surface (no live
@@ -553,7 +951,9 @@
          - Hygiene: unhygienic + gensym (no syntax-case)
          - Expansion: call-time always; ALSO expand-at-define/load
            for installed lambdas; store SOURCE AST
-         - Symbol/string collapse accepted for v1 (no VSymbol yet)
+         - Symbol/string collapse was accepted for v1; SUPERSEDED by
+           subsection symbols (planned VSymbol). Do not build new
+           macros that rely on collapse or __str__.
          - Quasiquote is a special form, not a user macro
          - Kernel special forms cannot be redefined as macros
     |))
@@ -841,8 +1241,14 @@
          Phase 3: badges on /bindings + /edit + inspect
          Phase 4: AI propose allowlist gate (configurable)
          Phase 5: route publish warnings
-         Phase 6 (later): session capability masks, setuid authority effect
+         Phase 6: session capability masks + ENFORCEMENT
+           (see capability-enforcement; language-roadmap Phase 3)
          Phase 7 (optional research): OCaml effect handlers under eval
+
+         NOTE: Phases 1–5 of THIS effects subsection are largely
+         done (table, infer, badges, AI gate). Roadmap Phase 3 is
+         about turning metadata into hard gates on public routes
+         and agent sessions — not redoing inference.
 
          ==========================================================
          9. DATA SHAPES (sketch)
@@ -870,6 +1276,328 @@
          - Pure functions remain testable without Postgres
          - Async composition remains intact (no regression of Lwt ABI)
          - Spec/docs stop conflating async with effects
+    |))
+   )
+  )
+
+  (subsection binding-sugar
+   (doc "Define and body ergonomics: function define, begin/multi-body")
+   (status planned)
+   (verify
+    (test "(define (f x) (+ x 1)) installs lambda; (f 2) => 3")
+    (test "multi-body define evaluates to last form")
+    (test "function-source prefers short form when body is lambda")
+    (smoke "load-library still accepts old (define name (lambda …)) form"))
+   (details
+    (doc (|
+         ROADMAP: Phase 2.
+
+         ==========================================================
+         FUNCTION DEFINE SUGAR
+         ==========================================================
+
+           (define (name param…) body body* …)
+             ≡  (define name (lambda (param…) (begin body body* …)))
+
+           Single body may omit begin.
+           Rest args: only if lambda already supports dotted lists;
+             else out of scope for this subsection.
+
+           MUST remain valid:
+             (define name expr)           ; values, not only fns
+             (define name (lambda …))     ; explicit lambda
+
+         ==========================================================
+         BEGIN / MULTI-BODY
+         ==========================================================
+
+           (begin e1 e2 … en) => value of en; e1…e(n-1) for effect.
+           Implement as seq chain or dedicated special form.
+           Alias: if seq is the kernel name, begin is user sugar
+           (prefer exporting begin for Scheme familiarity).
+
+           Lambda / define-function bodies accept multiple exprs
+           by desugaring to begin.
+
+         ==========================================================
+         PRINT PREFERENCE (optional same phase)
+         ==========================================================
+           function-source / pp may print
+             (define (f x) …)
+           when stored body is Lambda — cosmetic only; AST store
+           stays Define(name, Lambda(…)).
+
+         ==========================================================
+         NON-GOALS
+         ==========================================================
+           - Internal define (define in middle of body) — later
+           - let function sugar (let ((f (x) …)) …) — later
+           - defmacro (name p…) sugar — do with define sugar pattern
+             if cheap; else follow-up
+
+         SUCCESS: new package code can look like ordinary Scheme
+         procedures; old libs keep working without rewrite.
+    |))
+   )
+  )
+
+  (subsection match
+   (doc "Pattern match / destructuring for lists and code-as-data trees")
+   (status planned)
+   (verify
+    (test "match list pattern binds vars")
+    (test "match symbol literal ('lambda) works with VSymbol")
+    (test "match fallthrough / else")
+    (smoke "read-string tree walked with match not only car/cdr"))
+   (details
+    (doc (|
+         ROADMAP: Phase 2. Depends on Phase 1 symbols so patterns
+         can match symbolic heads honestly.
+
+         ==========================================================
+         WHY
+         ==========================================================
+           Agents and macros spend their lives on trees.
+           car/cdr chains are correct but hostile. match is the
+           highest-leverage ergonomics feature after symbols.
+
+         ==========================================================
+         SURFACE (v1 sketch — lock in plan before make)
+         ==========================================================
+
+           (match scrutinee
+             (pat1 body1…)
+             (pat2 body2…)
+             (_     else-body…))
+
+         Patterns (minimum set):
+           _                 wildcard
+           x                 bind variable (symbol)
+           lit               number / bool / nil / string
+           'sym              quoted symbol literal (VSymbol)
+           "str"             string literal
+           (p1 p2 …)         proper list of patterns
+           (p1 p2 … . rest)  optional dotted tail if pairs allow
+
+         Optional v1.1:
+           (? pred p)        predicate guard
+           (and p1 p2)
+           (or p1 p2)
+
+         Non-goals v1:
+           - record/struct patterns
+           - exhaustiveness checking
+           - Racket-style syntax-parse
+           - regexp patterns
+
+         ==========================================================
+         SEMANTICS
+         ==========================================================
+           First matching clause wins.
+           No match => User_error kind match_error (catchable).
+           Bindings visible in clause body (lexical).
+           Scrutinee evaluated once.
+
+         Implementation sketch:
+           special form in eval; compile patterns to decision tree
+           or linear backtracking — linear fine for v1.
+
+         ==========================================================
+         SUCCESS
+         ==========================================================
+           Idiomatic AST walk:
+             (match form
+               ((list 'lambda params body) …)
+               ((list 'define name body) …)
+               (_ …))
+           works with symbols from read-string/function-ast.
+    |))
+   )
+  )
+
+  (subsection std-library
+   (doc "Blessed std list/string helpers: freeze surface for packages and agents")
+   (status planned)
+   (verify
+    (test "libs/verify or lisp tests cover each frozen std name")
+    (smoke "export-package std lists frozen names; load-library std idempotent"))
+   (details
+    (doc (|
+         ROADMAP: Phase 2.
+
+         ==========================================================
+         PROBLEM
+         ==========================================================
+           list/map, list/foldl, string helpers, etc. accreted in
+           libs/std and OCaml prims without a freeze. Agents invent
+           duplicates; renames break gardens.
+
+         ==========================================================
+         RULES
+         ==========================================================
+           1. Document the FROZEN SET in this subsection (table).
+           2. Frozen names: behavior may bugfix; signatures must
+              not change without a new name (map2, etc.).
+           3. Prefer OCaml prims for hot loops; Lisp std may wrap.
+           4. New helpers go to std only with a verify case.
+
+         ==========================================================
+         FROZEN SET (initial — adjust at make time to match code)
+         ==========================================================
+           Lists:
+             list/map list/filter list/foldl list/foldr?
+             reverse append length/count nth
+             null? pair? car cdr cons list
+           Strings:
+             string-append string-length substring string-eq
+             string-contains? string-trim html-escape
+             as-str str
+           Symbols (after Phase 1):
+             symbol? string? symbol=? symbol->string string->symbol
+           Misc:
+             not type-of
+
+         html/* and layout/* are packages, not kernel std freeze
+         (they may evolve faster) — but should prefer frozen std.
+
+         ==========================================================
+         SUCCESS
+         ==========================================================
+           One page in concepts or /bindings kernel docs lists the
+           freeze; verify suite fails if a frozen name disappears.
+    |))
+   )
+  )
+
+  (subsection capability-enforcement
+   (doc "Hard gates: public routes and agent sessions obey effect allowlists")
+   (status planned)
+   (verify
+    (smoke "public route with WriteDb+Branch handler rejected or forced private")
+    (smoke "agent session with ReadDb-only mask cannot create data row via tool")
+    (smoke "admin private routes still allow full effects")
+    (test "subset checks unit-tested on effect sets"))
+   (details
+    (doc (|
+         ROADMAP: Phase 3. Builds on effects inference (implemented).
+
+         ==========================================================
+         PROBLEM
+         ==========================================================
+           Effects are visible (badges) and partly used (AI propose).
+           Public routes and agent tools still need HARD policy:
+           metadata without enforcement is documentation.
+
+         ==========================================================
+         SURFACES TO GATE
+         ==========================================================
+
+           1) User routes with visibility=public
+                When (route path handler 'public) or equivalent:
+                infer_effects(handler) must be ⊆ PUBLIC_ALLOW.
+                Default PUBLIC_ALLOW:
+                  Pure, ReadDb, Html
+                  (optional: WriteDb only with explicit opt-in flag
+                   later — default OFF for v1 enforcement)
+                Forbidden by default: Branch, Ai, Publish-of-nested,
+                  Txn (unless explicitly allowed).
+                On violate: refuse to mark public (keep private) OR
+                403 at serve time — prefer refuse at route-bind.
+
+           2) Agent sessions / tool loops
+                Session or agent-session carries effect_mask.
+                Each tool prim call: prim_effects ⊆ mask.
+                Default agent mask: ReadDb ∪ Pure ∪ Html ∪ Ai
+                  (no Branch merge to system; no admin auth prims).
+                Configurable per session seed for trusted agents.
+
+           3) AI propose-function (already gated — keep + unify
+                on the same subset helper).
+
+           4) Optional: eval budget already hard — document as
+                part of the same "production leash" story.
+
+         ==========================================================
+         MECHANICS
+         ==========================================================
+           - Single OCaml helper: allow : got:effect_set -> mask -> bool
+           - infer at define/route time; cache on binding meta if cheap
+           - Fail closed on unknown prim (treat as max capability
+             or reject) — pick reject-unknown for public surface
+
+         ==========================================================
+         AUTH INTERACTION
+         ==========================================================
+           Enforcement is orthogonal to is_admin:
+             admin on private branch: full powers
+             admin publishing public route: still PUBLIC_ALLOW
+             anonymous hitting public route: handler already constrained
+
+         ==========================================================
+         NON-GOALS
+         ==========================================================
+           - Full setuid / run-as-author lattice (effects § phase 6 note)
+           - Per-row RLS in Postgres as substitute for effects
+           - User-authored effect declarations required (inference first;
+             optional declare later)
+
+         SUCCESS: a malicious or sloppy public handler cannot fork
+         branches or call admin create-user; agent tools respect mask.
+    |))
+   )
+  )
+
+  (subsection package-surface
+   (doc "Blessed package exports and stability rules for system/main")
+   (status planned)
+   (verify
+    (smoke "export-package or package-bindings lists public names for std/ui")
+    (smoke "docs or /bindings marks public vs internal"))
+   (details
+    (doc (|
+         ROADMAP: Phase 3 (ecosystem law, light).
+
+         ==========================================================
+         PROBLEM
+         ==========================================================
+           system/main packages are de facto public API for all
+           gardens. No export list → agents depend on internals;
+           renames break personal branches silently.
+
+         ==========================================================
+         v1 RULES (no heavy module system)
+         ==========================================================
+           1. Each libs/<pkg>/lib.pp MAY start with a declaration:
+                (package pkg-name
+                  (export name1 name2 …))
+              If absent, all defines are public (status quo).
+              If present, non-exported names are "internal":
+                still callable (Lisp-1) but documented as unstable;
+                optional lint/warn on other packages referencing them.
+
+           2. Stability tiers:
+                kernel prims     — strongest freeze (with std-library)
+                exported package — prefer compat; rename = new name
+                internal         — may change any deploy
+                personal branch  — user owns breakage
+
+           3. Promote discipline (existing branching.promote):
+                only exported names should be promoted to main
+                without explicit force.
+
+           4. Agent seeds: prefer exported names only.
+
+         ==========================================================
+         NON-GOALS
+         ==========================================================
+           - Import forms / separate namespaces per file
+           - Version numbers in-package (git/branch is version)
+           - Sealing that makes internal uncallable (too hostile
+             for a Lisp OS v1)
+
+         SUCCESS: std + ui + layout have export lists; concepts
+         doc explains public vs internal; agents stop depending
+         on clearly internal helpers by default.
     |))
    )
   )
