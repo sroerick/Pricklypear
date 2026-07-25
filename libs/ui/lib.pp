@@ -402,6 +402,34 @@
         (list
           (css/rule ".todo-layout"
             (list "grid-template-columns" "1fr"))))
+      ;; Functions browser three-pane (image.system-browser combo pack).
+      ;; Markup is OCaml (.bb-three); layout must live in product (ui/css),
+      ;; not only emergency_css — logged-in pages never see emergency rules.
+      (css/rule ".badge.impact"
+        (list
+          "background" "#ffe8a3" "border" "1px solid #8b6914"
+          "padding" ".15rem .4rem" "font-size" ".85rem"))
+      (css/rule ".bb-three"
+        (list "display" "block"))
+      (css/rule ".bb-three .bb-col"
+        (list "margin" ".5rem 0"))
+      (css/rule ".bb-three .bb-col ul"
+        (list "list-style" "none" "padding" "0" "margin" ".25rem 0"))
+      (css/rule ".bb-three .bb-col li"
+        (list "margin" ".2rem 0" "line-height" "1.35"))
+      (css/media "min-width:900px"
+        (list
+          (css/rule ".bb-three"
+            (list
+              "display" "grid"
+              "grid-template-columns" "11rem 13rem 1fr"
+              "gap" ".75rem"
+              "align-items" "start"))
+          (css/rule ".bb-three .bb-col"
+            (list
+              "max-height" "80vh" "overflow" "auto" "margin" "0"))
+          (css/rule ".bb-three .bb-col.bb-detail"
+            (list "max-height" "none" "overflow" "visible"))))
       (css/rule ".todo-nav"
         (list "list-style" "none" "padding" "0" "margin" "0"))
       (css/rule ".todo-nav-item"
