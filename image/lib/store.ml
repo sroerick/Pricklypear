@@ -229,6 +229,27 @@ let count_routes_on_branch (t : t) ~(branch_id : string) : int Lwt.t =
             (Printexc.to_string exn);
           Lwt.return 0)
 
+(** Parent branch id for [branch_id], if any. *)
+let branch_parent_id (t : t) ~(branch_id : string) : string option Lwt.t =
+  match t.conn with
+  | None -> Lwt.return None
+  | Some conn ->
+      Lwt.catch
+        (fun () ->
+          let sql =
+            "SELECT COALESCE(parent_id::text, '') FROM branches WHERE id = $1"
+          in
+          let* rows =
+            exec conn ~params:[ Pgx.Value.of_string branch_id ] sql
+          in
+          match rows with
+          | [ [ pid ] ] ->
+              (match Pgx.Value.to_string pid with
+               | Some "" | None -> Lwt.return None
+               | Some s -> Lwt.return (Some s))
+          | _ -> Lwt.return None)
+        (fun _ -> Lwt.return None)
+
 (** Own rows only: (name, author, updated_at). *)
 let list_own_functions (t : t) ~(branch_id : string)
   : (string * string * string) list Lwt.t =

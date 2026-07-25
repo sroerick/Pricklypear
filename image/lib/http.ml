@@ -539,6 +539,7 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
   | `GET, "/agent.txt" ->
       Agent_discovery.serve_agent_txt reqd ~headers
   | `GET, "/branches" -> launch (fun () -> branches_page session reqd)
+  | `GET, "/changes" -> launch (fun () -> changes_page session reqd)
   | `POST, "/branches/checkout" -> launch (fun () -> branches_checkout session reqd)
   | `POST, "/branches/fork" -> launch (fun () -> branches_fork session reqd)
   | `POST, "/branches/unoverride" -> launch (fun () -> branches_unoverride session reqd)
@@ -733,16 +734,56 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
                     respond_handler_value ~session ~reqd ~path ~fragment value;
                     Lwt.return_unit
                 | Session.Handler_unbound ->
-                    if fragment then
+                    if fragment then begin
                       fragment_response reqd ~status:`Internal_server_error
-                        ("handler " ^ handler_name ^ " unbound")
-                    else
-                      html_response reqd ~session ~status:`Internal_server_error
-                        (chrome ~session ~title:"Route handler error" [
-                           HTML.p []
-                             [txt "handler %s unbound" handler_name];
+                        ("handler " ^ handler_name ^ " unbound");
+                      Lwt.return_unit
+                    end else
+                      let* snap = Call_graph.snapshot_of_session session in
+                      let callers = Call_graph.callers snap handler_name in
+                      let caller_nodes =
+                        if callers = [] then [txt "(none yet)"]
+                        else
+                          List.concat_map
+                            (fun n ->
+                              [ HTML.a
+                                  [HTML.href "%s" (Packages.binding_href n)]
+                                  [txt "%s" n]
+                              ; txt " "
+                              ])
+                            callers
+                      in
+                      html_response reqd ~session ~status:`Not_found
+                        (chrome ~session ~title:"Handler unbound" [
+                           HTML.div [HTML.class_ "card"] [
+                             HTML.h1 [] [txt "Handler unbound"];
+                             HTML.p [] [
+                               txt "Route ";
+                               HTML.code [] [txt "%s" path];
+                               txt " points at ";
+                               HTML.code [] [txt "%s" handler_name];
+                               txt " which is not bound.";
+                             ];
+                             HTML.p [] [
+                               HTML.a
+                                 [ HTML.href "%s"
+                                     (Packages.edit_href handler_name)
+                                 ; HTML.class_ "btn" ]
+                                 [txt "Create stub %s" handler_name];
+                               txt " ";
+                               HTML.a
+                                 [ HTML.href "%s"
+                                     (Packages.binding_href handler_name)
+                                 ; HTML.class_ "btn secondary" ]
+                                 [txt "Inspect"];
+                             ];
+                             HTML.p []
+                               ([ HTML.span [HTML.class_ "muted"]
+                                    [txt "static callers: "] ]
+                                @ caller_nodes);
+                           ];
                          ]);
-                    Lwt.return_unit
+                      Lwt.return_unit
                 | Session.Handler_error msg ->
                     if fragment then
                       fragment_response reqd ~status:`Internal_server_error

@@ -310,8 +310,8 @@
                author, updated, new|override, view, diff
              All own code
              Routes (own view_bindings)
-             Activity: ORDER BY updated_at on own defs
-               (revision log later)
+             Activity / Changes: branching.change-set
+               (ORDER BY updated_at on own defs + transcript)
            Diff vs parent v1: two <pre> columns of pp_expr
              (identical / changed / only-here / only-parent)
 
@@ -347,7 +347,119 @@
     (build "dune build")
     (smoke "GET /branches shows current ★ and checkout")
     (smoke "POST checkout switches current-branch")
-    (smoke "detail lists personal overrides vs main"))
+    (smoke "detail lists personal overrides vs main")
+    (smoke "detail Changes section lists own defs by updated_at"))
+  )
+  (subsection change-set
+   (doc "Branch change set / transcript: what changed on this branch")
+   (status planned)
+   (implements image/lib/store.ml image/lib/http_branches.ml image/lib/session.ml)
+   (verify
+    (build "dune build image")
+    (smoke "GET /branches?ref=u/personal&view=changes lists own fns by updated_at")
+    (smoke "(branch-changes) returns own function names + updated_at on current branch")
+    (smoke "after define on personal, name appears at top of changes")
+    (smoke "change row links to /edit and /bindings detail + parent diff when override"))
+   (details
+    (doc (|
+         ==========================================================
+         WHY (Smalltalk change set / method transcript)
+         ==========================================================
+         Combo pack item #2. After live defines, humans and agents
+         need "what did I change on this garden?" without git.
+         Not a full VCS — a living transcript of own-branch code
+         rows + optional session ring of recent defines.
+
+         Compounds with:
+           - image.inspector impact-queue (same define hook)
+           - image.system-browser detail → link here for overrides
+           - branching.branch-browser-ui detail Activity section
+           - promote / package-updates (know what is dirty)
+
+         ==========================================================
+         A. DERIVED CHANGE SET (no new table required v1)
+         ==========================================================
+         Source of truth already exists:
+           Store.list_own_functions ~branch_id
+             → (name, author, updated_at)
+           Store.list_own_routes ~branch_id
+           Store.list_overrides ~branch_id ~parent_id
+             → new | override vs parent
+
+         "Changes" for branch B =
+           own function_defs ∪ own view_bindings on B,
+           sorted by updated_at DESC (activity order).
+         Classify each fn row:
+           - new: no parent row of same name
+           - override: parent has name (optionally note if
+             parent.updated_at > child → main-newer badge)
+           - route: own view_bindings entries (path → handler)
+
+         Lisp prims (read-only, current branch default):
+           (branch-changes) → list of dict/JSON strings
+             {name, kind: fn|route, author, updated_at,
+              class: new|override|route}
+           (branch-changes "owner/name") optional other branch
+             if visible to user (same rules as /branches detail)
+
+         ==========================================================
+         B. SESSION TRANSCRIPT (define hook)
+         ==========================================================
+         Same write path as impact-queue (persist_define /
+         install_function success):
+           append {name, at, branch, author, op: define|route|delete}
+           to session ring (last N=64). Optional; derived list
+           from PG is enough if ring is empty after restart.
+
+         Lisp: (change-transcript) → recent session ops
+         Do not require durable data_rows log in v1.
+
+         ==========================================================
+         C. UI SURFACES
+         ==========================================================
+         1) Branch detail (primary):
+              GET /branches?ref=owner/name&view=changes
+              or default Activity section expanded for personal
+              Table: when | name | class | author | open | diff
+              open → /bindings?pkg=&fn= or /edit/<name>
+              diff → existing ?diff= two-column pp_expr
+
+         2) Optional GET /changes on current branch (short alias
+            redirecting to /branches?ref=<current>&view=changes)
+
+         3) system-browser function detail: if name is own-row,
+            badge "on this branch" + link into Changes highlight
+
+         ==========================================================
+         D. AGENT
+         ==========================================================
+         After a multi-define session, agent can (branch-changes)
+         or read /changes to summarize dirty garden before promote.
+         install_function result may append "changeset: N own fns"
+         lightly — impact text remains primary for smoke routes.
+
+         ==========================================================
+         E. NON-GOALS
+         ==========================================================
+           - Per-edit revision history table (later; updated_at only)
+           - git commits / SHAs / blame
+           - Diff of data_rows (code only)
+           - Cross-user global firehose
+           - Blocking define on "uncommitted" state
+
+         ==========================================================
+         F. PHASES
+         ==========================================================
+         C1: UI Activity/Changes from list_own_* + overrides class
+         C2: (branch-changes) prim + /changes alias
+         C3: session transcript ring on define (shared hook w/ impact)
+         C4: browser detail deep-link + agent one-liner
+
+         SUCCESS: on personal after editing ui/nav, Changes shows
+         ui/nav at top as override; diff vs main works; agent can
+         list dirty names without scraping HTML.
+    |))
+   )
   )
   (subsection ast-nodes
    (doc "Design: addressable AST nodes as substrate for surgical edits and AI patches")

@@ -10,6 +10,25 @@ type request = {
   headers : (string * string) list;
 }
 
+(** Impact of a successful define/install (image.inspector I2). *)
+type impact_event = {
+  name : string;
+  at : float;
+  branch : string;
+  author : string;
+  dependents : string list;
+  routes : string list;
+  status : string; (** pending | smoked | dismissed *)
+}
+
+type change_event = {
+  op : string; (** define | route | delete *)
+  name : string;
+  at : float;
+  branch : string;
+  author : string;
+}
+
 type t = {
   mutable manifest : Pricklypear_common.Manifest.t;
   store : Store.t;
@@ -61,6 +80,10 @@ type t = {
   mutable is_admin : bool;
   (** Raw pp_session cookie for the active HTTP request, if any. *)
   mutable auth_token : string option;
+  (** image.inspector I2: recent define impacts (newest first, max 32). *)
+  mutable impact_queue : impact_event list;
+  (** branching.change-set: recent define/route ops (newest first, max 64). *)
+  mutable change_transcript : change_event list;
 }
 
 (* Load persisted function_defs + routes into the env.

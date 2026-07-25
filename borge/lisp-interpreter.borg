@@ -439,6 +439,14 @@
            raises User_error with optional kind for handlers.
 
          ==========================================================
+         RELATED — image.dnu-stubs (product holes, not catch)
+         ==========================================================
+         doesNotUnderstand-style stub+callers UX lives in
+         image.dnu-stubs. It reuses unbound_var kind/name fields
+         from Phase 1 JSON but does not replace guard/catch.
+         Coordinate: stable unbound_var shape first; stubs second.
+
+         ==========================================================
          NON-GOALS
          ==========================================================
            - Full CL condition system / restarts
