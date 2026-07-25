@@ -699,12 +699,7 @@ let run_agent_tool (t : t) ~(name : string) ~(arguments : string)
                      (List.map (fun (n, e, _) -> (n, e)) rows)
                  in
                  let public_allow =
-                   Pricklypear_lisp.Effect.EffSet.normalize
-                     [ Pricklypear_lisp.Effect.ReadDb
-                     ; Pricklypear_lisp.Effect.WriteDb
-                     ; Pricklypear_lisp.Effect.Html
-                     ; Pricklypear_lisp.Effect.Txn
-                     ]
+                   Pricklypear_lisp.Effect.public_route_allow ()
                  in
                  match List.find_opt (fun (n, _, _) -> n = handler) rows with
                  | None -> Lwt.return (Ok ())
@@ -719,9 +714,10 @@ let run_agent_tool (t : t) ~(name : string) ~(arguments : string)
                        Lwt.return
                          (Error
                             (Printf.sprintf
-                               "public route denied: handler %S effects %s"
+                               "public route denied: handler %S effects %s (allow %s)"
                                handler
-                               (Pricklypear_lisp.Effect.EffSet.pp fx)))
+                               (Pricklypear_lisp.Effect.EffSet.pp fx)
+                               (Pricklypear_lisp.Effect.public_route_allow_pp ())))
                end else Lwt.return (Ok ())
              in
              match gate with
@@ -976,6 +972,18 @@ let default_agent_seed (t : t) : string =
   "- You MUST prove work runs with smoke_route (pages) and/or eval_expr " ^
   "(helpers, CSS, data) before finishing. If you cannot show ok:true, say so.\n" ^
   "\n" ^
+  "Code-as-data / symbols (Nopales):\n" ^
+  "- Bare names in source are symbols at runtime when quoted or from " ^
+  "(read-string)/(function-ast). Strings use double quotes.\n" ^
+  "- (quote lambda) and \"lambda\" are DIFFERENT types. " ^
+  "(symbol? 'lambda) => #t, (string? \"lambda\") => #t.\n" ^
+  "- Walk ASTs with (symbol=? (car form) 'lambda), NOT string-eq on car.\n" ^
+  "  OK: (string-eq (symbol->string (car form)) \"lambda\") if you must.\n" ^
+  "- (function-ast \"pkg/fn\") returns a list tree with symbolic heads; " ^
+  "(function-source …) is pretty text only.\n" ^
+  "- (read-string \"(lambda (x) x)\") parses LLM text to the same tree shape.\n" ^
+  "- Prefer package-exports / package-bindings over inventing names.\n" ^
+  "\n" ^
   "How to build a small app (dogfood pattern — copy todo/notes style):\n" ^
   "1) Persist with create/rows/get/update/delete on data_rows. " ^
   "Build fields JSON with (dict-set* \"{}\" (list \"name\" n \"email\" e ...)). " ^
@@ -991,6 +999,9 @@ let default_agent_seed (t : t) : string =
   "5) NEVER use outline/* as a database. outline/* is for notes trees only.\n" ^
   "6) Routes: call register_route path=/pkg handler=pkg/page. " ^
   "Do NOT (route ...) inside install_function (publish effect is blocked there).\n" ^
+  "   Public routes: handler effects must be ⊆ pure|read-db|html|txn " ^
+  "(no branch/ai/publish). Write-db on public needs PP_PUBLIC_ALLOW_WRITE=1 " ^
+  "and prefer (with-public-write …) for the write body.\n" ^
   "7) Inspect working apps first: inspect_function todo/page, notes/page, " ^
   "todo/item/add, html/form.\n" ^
   "\n" ^

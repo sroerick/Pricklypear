@@ -63,6 +63,22 @@ let checks = [
     in
     Alcotest.(check bool) "ok" true
       (Effect.policy_allows ~allow:Effect.ai_default_allow got));
+  ("public_route_allow default has no write-db", `Quick, fun () ->
+    Unix.putenv "PP_PUBLIC_ALLOW_WRITE" "0";
+    let allow = Effect.public_route_allow () in
+    Alcotest.(check bool) "no write" false
+      (Effect.EffSet.mem Effect.WriteDb allow);
+    Alcotest.(check bool) "has read" true
+      (Effect.EffSet.mem Effect.ReadDb allow);
+    let got = Effect.EffSet.singleton Effect.WriteDb in
+    Alcotest.(check bool) "deny write" false
+      (Effect.policy_allows ~allow got));
+  ("public_route_allow write opt-in", `Quick, fun () ->
+    Unix.putenv "PP_PUBLIC_ALLOW_WRITE" "1";
+    let allow = Effect.public_route_allow () in
+    Alcotest.(check bool) "write" true
+      (Effect.EffSet.mem Effect.WriteDb allow);
+    Unix.putenv "PP_PUBLIC_ALLOW_WRITE" "0");
   (* H0.1 audit coverage for previously unlisted registered prims *)
   ("div/abs pure", `Quick, fun () ->
     let fx = infer "(div (abs x) 2)" in

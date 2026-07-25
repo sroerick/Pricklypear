@@ -246,33 +246,27 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
          | _ -> None)
     | _ -> None
   in
-  let public_route_allow =
-    Pricklypear_lisp.Effect.EffSet.normalize
-      [ Pricklypear_lisp.Effect.ReadDb
-      ; Pricklypear_lisp.Effect.WriteDb
-      ; Pricklypear_lisp.Effect.Html
-      ; Pricklypear_lisp.Effect.Txn
-      ]
-  in
   let check_public_handler (handler : string) : (unit, string) result Lwt.t =
     let* rows = Store.list_function_names t.store in
     let known_fn =
       Pricklypear_lisp.Effect.known_fn_of_bindings
         (List.map (fun (n, e, _) -> (n, e)) rows)
     in
+    let allow = Pricklypear_lisp.Effect.public_route_allow () in
     match List.find_opt (fun (n, _, _) -> n = handler) rows with
     | None -> Lwt.return (Ok ())
     | Some (_, body, _) ->
         let fx = Pricklypear_lisp.Effect.infer ~known_fn body in
-        if Pricklypear_lisp.Effect.policy_allows ~allow:public_route_allow fx
+        if Pricklypear_lisp.Effect.policy_allows ~allow fx
         then Lwt.return (Ok ())
         else
           Lwt.return
             (Error
                (Printf.sprintf
-                  "public route denied: handler %S effects %s (allow pure|read-db|write-db|html|txn; no branch/ai/publish)"
+                  "public route denied: handler %S effects %s (allow %s; set PP_PUBLIC_ALLOW_WRITE=1 for write-db)"
                   handler
-                  (Pricklypear_lisp.Effect.EffSet.pp fx)))
+                  (Pricklypear_lisp.Effect.EffSet.pp fx)
+                  (Pricklypear_lisp.Effect.public_route_allow_pp ())))
   in
   let register_route_checked ~route_path ~handler ~visibility
       ~(pass_vis_to_store : bool) : Pricklypear_lisp.Ast.value Lwt.t =

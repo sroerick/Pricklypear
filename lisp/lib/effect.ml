@@ -270,6 +270,25 @@ and infer
 let ai_default_allow : effect_set =
   EffSet.normalize [ ReadDb; WriteDb; Html ]
 
+let env_truthy (name : string) : bool =
+  match Sys.getenv_opt name with
+  | Some ("1" | "true" | "TRUE" | "yes" | "on") -> true
+  | _ -> false
+
+(** Public user-route allowlist (capability-enforcement).
+    Default: pure | read-db | html | txn — no WriteDb/Branch/Ai/Publish.
+    Set PP_PUBLIC_ALLOW_WRITE=1 to permit WriteDb (signup forms, public
+    capture). Prefer (with-public-write …) inside those handlers so the
+    write runs as elevated identity, not the anonymous user. *)
+let public_route_allow () : effect_set =
+  let base = [ ReadDb; Html; Txn ] in
+  let base =
+    if env_truthy "PP_PUBLIC_ALLOW_WRITE" then WriteDb :: base else base
+  in
+  EffSet.normalize base
+
+let public_route_allow_pp () : string = EffSet.pp (public_route_allow ())
+
 let policy_allows ~(allow : effect_set) (got : effect_set) : bool =
   (* Pure always allowed; every effect in got must be in allow,
      except Pure which is absent from sets. WriteDb not allowed unless in allow. *)
