@@ -39,6 +39,7 @@ and value =
   | VInt of int64
   | VFloat of float                 (* IEEE float; arithmetic promotes int+float *)
   | VStr of string
+  | VSymbol of string               (* code names as data; distinct from VStr *)
   | VBool of bool
   | VNil
   | VPair of value * value         (* cons cells *)
@@ -78,6 +79,7 @@ let _ = Obj.repr (fun (_ : interp_error) -> ())  (* keep type referenced *)
 let rec pp_value_short (v : value) : string =
   match v with
   | VStr s -> "\"" ^ s ^ "\""
+  | VSymbol s -> s
   | VInt i -> Int64.to_string i
   | VNil -> "nil"
   | VBool b -> string_of_bool b
@@ -88,6 +90,23 @@ let rec pp_value_short (v : value) : string =
   | VMacro _ -> "<macro>"
   | VPrim n -> "<prim " ^ n ^ ">"
   | VRef (t, _) -> "<ref " ^ t ^ ">"
+
+let interp_error_kind (e : interp_error) : string =
+  match e with
+  | Unbound_var _ -> "unbound_var"
+  | Not_a_function _ -> "not_a_function"
+  | Arity_mismatch _ -> "arity_mismatch"
+  | Wrong_arg_count _ -> "wrong_arg_count"
+  | Type_mismatch _ -> "type_mismatch"
+  | Budget_exceeded -> "budget_exceeded"
+  | Prim_error _ -> "prim_error"
+  | Parse_error _ -> "parse_error"
+  | User_error _ -> "user_error"
+
+let interp_error_loc (e : interp_error) : (int * int) option =
+  match e with
+  | Parse_error (_, line, col) -> Some (line, col)
+  | _ -> None
 
 let pp_interp_error (e : interp_error) : string =
   match e with
@@ -149,6 +168,7 @@ and value_to_json (v : value) : Yojson.Safe.t =
   | VInt n -> `Assoc [ ("int", `String (Int64.to_string n)) ]
   | VFloat f -> `Assoc [ ("float", `Float f) ]
   | VStr s -> `Assoc [ ("str", `String s) ]
+  | VSymbol s -> `Assoc [ ("sym", `String s) ]
   | VBool b -> `Assoc [ ("bool", `Bool b) ]
   | VNil -> `Assoc [ ("nil", `Null) ]
   | VPair (a, b) -> `Assoc [ ("pair", `List [ value_to_json a; value_to_json b ]) ]
@@ -253,6 +273,7 @@ and value_of_json (j : Yojson.Safe.t) : (value, string) result =
       (try Ok (VFloat (float_of_string s))
        with _ -> Error ("bad float: " ^ s))
   | `Assoc [ ("str", `String s) ] -> Ok (VStr s)
+  | `Assoc [ ("sym", `String s) ] -> Ok (VSymbol s)
   | `Assoc [ ("bool", `Bool b) ] -> Ok (VBool b)
   | `Assoc [ ("nil", `Null) ] -> Ok VNil
   | `Assoc [ ("pair", `List [ a; b ]) ] ->

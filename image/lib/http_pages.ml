@@ -1159,8 +1159,31 @@ let api_eval (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
           (* Use the full printer — partial match left Arity_mismatch /
              Type_mismatch / etc. as opaque "Interp_error(_)" to agents. *)
           let msg = Agent_tools.pp_interp_exn exn in
-          json_response reqd
-            (`Assoc [("ok", `Bool false); ("error", `String msg)]);
+          let fields =
+            match exn with
+            | Pricklypear_lisp.Ast.Interp_error e ->
+                let base =
+                  [ ("ok", `Bool false)
+                  ; ("error", `String msg)
+                  ; ("kind", `String (Pricklypear_lisp.Ast.interp_error_kind e))
+                  ]
+                in
+                (match Pricklypear_lisp.Ast.interp_error_loc e with
+                 | Some (line, col) ->
+                     base
+                     @ [ ("line", `Int line); ("col", `Int col) ]
+                 | None -> base)
+            | Pricklypear_lisp.Reader.Reader_error (m, line, col) ->
+                [ ("ok", `Bool false)
+                ; ("error", `String (Printf.sprintf "%s (%d:%d)" m line col))
+                ; ("kind", `String "parse_error")
+                ; ("line", `Int line)
+                ; ("col", `Int col)
+                ]
+            | _ ->
+                [ ("ok", `Bool false); ("error", `String msg) ]
+          in
+          json_response reqd (`Assoc fields);
           Lwt.return_unit)
 
 let save_edit (session : Session.t) (path_name : string)

@@ -53,6 +53,7 @@ let lookup_prim (tbl : prim_table) (name : string) : prim_fn option =
 let is_special_form (name : string) : bool =
   match name with
   | "lambda" | "let" | "letrec" | "if" | "define" | "quote" | "seq"
+  | "begin" | "match" | "guard" | "error"
   | "prim" | "with-transaction"
   | "quasiquote" | "unquote" | "unquote-splicing" | "defmacro"
   | "macroexpand-1" | "macroexpand" | "gensym"
@@ -63,11 +64,67 @@ let is_special_form (name : string) : bool =
   | _ -> false
 
 let kernel_special_names =
-  [ "lambda"; "let"; "letrec"; "if"; "define"; "quote"; "seq"; "prim";
+  [ "lambda"; "let"; "letrec"; "if"; "define"; "quote"; "seq"; "begin";
+    "match"; "guard"; "error"; "prim";
     "with-transaction"; "quasiquote"; "unquote"; "unquote-splicing";
     "defmacro"; "macroexpand-1"; "macroexpand"; "gensym";
     "cond"; "and"; "or";
     "list/map"; "list/filter"; "list/foldl" ]
+
+(** Desugar multiple body exprs to a single expr (begin/seq chain). *)
+let body_of_exprs = function
+  | [] -> Lit VNil
+  | [ e ] -> e
+  | e1 :: e2 :: rest ->
+      let rec fold a = function
+        | [] -> a
+        | x :: xs -> Seq (a, fold x xs)
+      in
+      fold e1 (e2 :: rest)
+
+(** Match pattern against value; returns Some binding list or None. *)
+let rec match_pat (pat : expr) (v : value) : (string * value) list option =
+  match pat, v with
+  | Var "_", _ -> Some []
+  | Var name, _ -> Some [ (name, v) ]
+  | Lit lit, v when lit = v -> Some []
+  | Lit (VInt n), VInt m when n = m -> Some []
+  | Lit (VFloat f), VFloat g when f = g -> Some []
+  | Lit (VStr s), VStr t when s = t -> Some []
+  | Lit (VBool b), VBool c when b = c -> Some []
+  | Lit VNil, VNil -> Some []
+  | Lit VNil, VList [] -> Some []
+  | Quote (Var s), VSymbol t when s = t -> Some []
+  | Quote (Var s), VStr t when s = t -> Some [] (* compat *)
+  | Quote (Lit lit), v when lit = v -> Some []
+  | App (Var "quote", [ Var s ]), VSymbol t when s = t -> Some []
+  | App (Var "quote", [ Var s ]), VStr t when s = t -> Some []
+  | App (Var "list", pats), VList vs -> match_list_pats pats vs
+  | App (Var "list", pats), VNil when pats = [] -> Some []
+  | App (Var head, pats), VList (vh :: vt) ->
+      (* (lambda params body) as pattern => list starting with symbol head *)
+      let head_ok =
+        match vh with
+        | VSymbol s | VStr s -> s = head
+        | _ -> false
+      in
+      if head_ok then match_list_pats pats vt else None
+  | App (Var head, []), VSymbol s when s = head -> Some []
+  | App (Var head, []), VStr s when s = head -> Some []
+  | _ -> None
+
+and match_list_pats (pats : expr list) (vs : value list)
+  : (string * value) list option =
+  match pats, vs with
+  | [], [] -> Some []
+  | [], _ | _, [] -> None
+  | p :: ps, v :: vs ->
+      (match match_pat p v with
+       | None -> None
+       | Some b1 ->
+           (match match_list_pats ps vs with
+            | None -> None
+            | Some b2 -> Some (b1 @ b2)))
 
 let truthy (v : value) : bool =
   match v with
@@ -75,106 +132,97 @@ let truthy (v : value) : bool =
   | _ -> true
 
 (* Quote any expr into a first-class value (full s-expr quote).
-   Compounds become nested VLists so quoted data is usable in Lisp. *)
-(* Public quote: symbols and strings both become VStr (historical collapse). *)
+   Compounds become nested VLists so quoted data is usable in Lisp.
+   Vars become VSymbol; string lits stay VStr (no collapse). *)
 let rec quote_to_value (e : expr) : value =
+  let sym s = VSymbol s in
   match e with
   | Lit v -> v
-  | Var s -> VStr s
+  | Var s -> VSymbol s
   | App (h, args) ->
       VList (quote_to_value h :: List.map quote_to_value args)
-  | Quote e' -> VList [ VStr "quote"; quote_to_value e' ]
+  | Quote e' -> VList [ sym "quote"; quote_to_value e' ]
   | If (t, th, el) ->
-      VList [ VStr "if"; quote_to_value t; quote_to_value th; quote_to_value el ]
+      VList [ sym "if"; quote_to_value t; quote_to_value th; quote_to_value el ]
   | Lambda (params, body) ->
-      VList [ VStr "lambda"
-            ; VList (List.map (fun p -> VStr p) params)
+      VList [ sym "lambda"
+            ; VList (List.map (fun p -> VSymbol p) params)
             ; quote_to_value body ]
   | Let (name, v, body) ->
-      VList [ VStr "let"
-            ; VList [ VList [ VStr name; quote_to_value v ] ]
+      VList [ sym "let"
+            ; VList [ VList [ VSymbol name; quote_to_value v ] ]
             ; quote_to_value body ]
   | Letrec (bindings, body) ->
-      VList [ VStr "letrec"
+      VList [ sym "letrec"
             ; VList (List.map (fun (n, e') ->
-                VList [ VStr n; quote_to_value e' ]) bindings)
+                VList [ VSymbol n; quote_to_value e' ]) bindings)
             ; quote_to_value body ]
   | Define (name, v) ->
-      VList [ VStr "define"; VStr name; quote_to_value v ]
+      VList [ sym "define"; VSymbol name; quote_to_value v ]
   | Seq (a, b) ->
-      VList [ VStr "seq"; quote_to_value a; quote_to_value b ]
+      VList [ sym "seq"; quote_to_value a; quote_to_value b ]
   | Prim (name, args) ->
-      VList (VStr name :: List.map quote_to_value args)
+      VList (sym name :: List.map quote_to_value args)
 
-(** Macro reify: tag string literals so they survive value_to_expr as Lit VStr
-    rather than Var (symbols are plain VStr). *)
-let rec reify_expr (e : expr) : value =
-  match e with
-  | Lit (VStr s) -> VList [ VStr "__str__"; VStr s ]
-  | Lit v -> v
-  | Var s -> VStr s
-  | App (h, args) ->
-      VList (reify_expr h :: List.map reify_expr args)
-  | Quote e' -> VList [ VStr "quote"; reify_expr e' ]
-  | If (t, th, el) ->
-      VList [ VStr "if"; reify_expr t; reify_expr th; reify_expr el ]
-  | Lambda (params, body) ->
-      VList [ VStr "lambda"
-            ; VList (List.map (fun p -> VStr p) params)
-            ; reify_expr body ]
-  | Let (name, v, body) ->
-      VList [ VStr "let"
-            ; VList [ VList [ VStr name; reify_expr v ] ]
-            ; reify_expr body ]
-  | Letrec (bindings, body) ->
-      VList [ VStr "letrec"
-            ; VList (List.map (fun (n, e') ->
-                VList [ VStr n; reify_expr e' ]) bindings)
-            ; reify_expr body ]
-  | Define (name, v) ->
-      VList [ VStr "define"; VStr name; reify_expr v ]
-  | Seq (a, b) ->
-      VList [ VStr "seq"; reify_expr a; reify_expr b ]
-  | Prim (name, args) ->
-      VList (VStr name :: List.map reify_expr args)
+(** Macro reify: same as quote_to_value now that symbols exist.
+    __str__ tagging retained only via value_to_expr compat path. *)
+let reify_expr (e : expr) : value = quote_to_value e
 
-(** Inverse of [reify_expr] / tagged quasiquote for macro expansion. *)
+(** Name atom: VSymbol preferred; bare VStr still accepted as a name
+    during compat (old trees / hand-built lists of strings). *)
+let name_of_atom ?(ctx = "value_to_expr") = function
+  | VSymbol s | VStr s -> s
+  | _ ->
+      raise (Interp_error (User_error (ctx ^ ": expected symbol or string name")))
+
+let head_name = function
+  | VSymbol s | VStr s -> Some s
+  | _ -> None
+
+(** Inverse of quote_to_value / macro expansion trees. *)
 let rec value_to_expr (v : value) : expr =
   match v with
-  | VList [ VStr "__str__"; VStr s ] -> Lit (VStr s)
+  | VList [ VStr "__str__"; VStr s ] -> Lit (VStr s) (* transitional *)
+  | VList [ VSymbol "__str__"; VStr s ] -> Lit (VStr s)
   | VInt _ | VFloat _ | VBool _ | VNil as lit -> Lit lit
-  | VStr s -> Var s
+  | VSymbol s -> Var s
+  | VStr s -> Lit (VStr s) (* string data, not a name *)
   | VList [] -> Lit VNil
-  | VList (VStr "quote" :: [x]) -> Quote (value_to_expr x)
-  | VList (VStr "if" :: [t; th; el]) ->
-      If (value_to_expr t, value_to_expr th, value_to_expr el)
-  | VList (VStr "lambda" :: VList params :: [body]) ->
-      let ps =
-        List.map
-          (function
-            | VStr p -> p
-            | _ -> raise (Interp_error (User_error "value_to_expr: lambda param")))
-          params
-      in
-      Lambda (ps, value_to_expr body)
-  | VList (VStr "define" :: VStr name :: [body]) ->
-      Define (name, value_to_expr body)
-  | VList (VStr "let" :: VList binds :: [body]) ->
-      (* only single-bind sugar from reify; multi via App form *)
-      (match binds with
-       | [ VList [ VStr name; v ] ] ->
-           Let (name, value_to_expr v, value_to_expr body)
-       | _ ->
-           App (Var "let", [ value_to_expr (VList binds); value_to_expr body ]))
-  | VList (VStr "seq" :: a :: b :: rest) ->
-      let rec fold x xs =
-        match xs with
-        | [] -> value_to_expr x
-        | y :: ys -> Seq (value_to_expr x, fold y ys)
-      in
-      fold a (b :: rest)
   | VList (h :: t) ->
-      App (value_to_expr h, List.map value_to_expr t)
+      (match head_name h, t with
+       | Some "quote", [ x ] -> Quote (value_to_expr x)
+       | Some "if", [ te; th; el ] ->
+           If (value_to_expr te, value_to_expr th, value_to_expr el)
+       | Some "lambda", [ VList params; body ] ->
+           let ps =
+             List.map
+               (fun p -> name_of_atom ~ctx:"value_to_expr:lambda" p)
+               params
+           in
+           Lambda (ps, value_to_expr body)
+       | Some "define", [ name_v; body ] ->
+           Define
+             ( name_of_atom ~ctx:"value_to_expr:define" name_v
+             , value_to_expr body )
+       | Some "let", [ VList binds; body ] ->
+           (match binds with
+            | [ VList [ name_v; bv ] ] ->
+                Let
+                  ( name_of_atom ~ctx:"value_to_expr:let" name_v
+                  , value_to_expr bv
+                  , value_to_expr body )
+            | _ ->
+                App
+                  ( Var "let"
+                  , [ value_to_expr (VList binds); value_to_expr body ] ))
+       | Some "seq", a :: b :: rest ->
+           let rec fold x xs =
+             match xs with
+             | [] -> value_to_expr x
+             | y :: ys -> Seq (value_to_expr x, fold y ys)
+           in
+           fold a (b :: rest)
+       | _ -> App (value_to_expr h, List.map value_to_expr t))
   | VPair (a, b) ->
       App (Var "cons", [ value_to_expr a; value_to_expr b ])
   | VLambda _ | VPrim _ | VRef _ | VMacro _ ->
@@ -299,20 +347,9 @@ and expand_and_eval_macro
   and got = List.length arg_exprs in
   if expected <> got then
     raise (Interp_error (Arity_mismatch ("macro", expected, got)));
-  (* Bind macro args as values (not evaluated). Distinguish string
-     literals from bare symbols so expansion can round-trip:
-       "foo"  -> (__str__ "foo")  => value_to_expr => Lit VStr
-       foo    -> VStr "foo"       => value_to_expr => Var
-     String prims unwrap (__str__ …) via image prims_pure. *)
-  let arg_vals =
-    List.map
-      (fun e ->
-        match e with
-        | Lit (VStr s) -> VList [ VStr "__str__"; VStr s ]
-        | Lit v -> v
-        | _ -> reify_expr e)
-      arg_exprs
-  in
+  (* Bind macro args as quoted values (not evaluated).
+       "foo" -> VStr; bare foo -> VSymbol. *)
+  let arg_vals = List.map reify_expr arg_exprs in
   let menv = Env.child clo_env in
   List.iter2 (fun p a -> Env.define menv p a) params arg_vals;
   let expansion_v = eval ~budget ~prims menv body in
@@ -334,7 +371,8 @@ and eval_special_form
   (full_args : expr list)
   : step =
   match name, full_args with
-  | "lambda", [ _head; params_expr; body ] ->
+  | "lambda", _head :: params_expr :: bodies ->
+      let body = body_of_exprs bodies in
       let params =
         match params_expr with
         | Lit VNil -> []
@@ -385,14 +423,130 @@ and eval_special_form
       let v = eval ~budget ~prims env val_expr in
       Env.define env n v;
       Done v
+  | "define", _head :: App (Var n, param_exprs) :: bodies ->
+      (* (define (f x y) body…) sugar *)
+      let params =
+        List.map
+          (function
+            | Var p -> p
+            | _ ->
+                raise
+                  (Interp_error
+                     (User_error "define function params must be names")))
+          param_exprs
+      in
+      if List.mem "." params then
+        raise
+          (Interp_error
+             (User_error "dotted rest params not supported in define sugar"));
+      let body = body_of_exprs bodies in
+      let v = VLambda (params, body, env) in
+      Env.define env n v;
+      Done v
+  | "define", _ ->
+      raise
+        (Interp_error
+           (User_error "define needs (define name expr) or (define (name args…) body…)"))
   | "quote", [ _; e' ] -> Done (quote_to_value e')
-  | "seq", _head :: bodies ->
+  | "begin", _head :: bodies | "seq", _head :: bodies ->
       (match bodies with
        | [] -> Done VNil
        | [ only ] -> Cont (env, only)
        | first :: rest ->
            ignore (eval ~budget ~prims env first);
            eval_special_form ~budget ~prims env "seq" (Var "seq" :: rest))
+  | "error", _head :: args ->
+      let msg =
+        match args with
+        | [ Lit (VStr m) ] | [ Lit (VSymbol m) ] | [ Var m ] -> m
+        | [ e ] ->
+            (match eval ~budget ~prims env e with
+             | VStr m | VSymbol m -> m
+             | other -> pp_value_short other)
+        | [ ke; me ] ->
+            let k =
+              match eval ~budget ~prims env ke with
+              | VStr s | VSymbol s -> s
+              | other -> pp_value_short other
+            in
+            let m =
+              match eval ~budget ~prims env me with
+              | VStr s | VSymbol s -> s
+              | other -> pp_value_short other
+            in
+            k ^ ": " ^ m
+        | _ -> "error"
+      in
+      raise (Interp_error (User_error msg))
+  | "guard", _head :: handler_expr :: bodies when bodies <> [] ->
+      let body = body_of_exprs bodies in
+      (try Done (eval ~budget ~prims env body)
+       with
+       | Interp_error Budget_exceeded as ex -> raise ex
+       | Interp_error e ->
+           let kind =
+             match e with
+             | Unbound_var _ -> "unbound_var"
+             | Not_a_function _ -> "not_a_function"
+             | Arity_mismatch _ -> "arity_mismatch"
+             | Wrong_arg_count _ -> "wrong_arg_count"
+             | Type_mismatch _ -> "type_mismatch"
+             | Budget_exceeded -> "budget_exceeded"
+             | Prim_error _ -> "prim_error"
+             | Parse_error _ -> "parse_error"
+             | User_error _ -> "user_error"
+           in
+           let err_v =
+             VList
+               [ VSymbol "error"
+               ; VStr (pp_interp_error e)
+               ; VSymbol kind
+               ]
+           in
+           let hv = eval ~budget ~prims env handler_expr in
+           (match hv with
+            | VLambda (params, hbody, clo) ->
+                let call = Env.child clo in
+                (match params with
+                 | [] -> Done (eval ~budget ~prims call hbody)
+                 | [ p ] ->
+                     Env.define call p err_v;
+                     Done (eval ~budget ~prims call hbody)
+                 | _ ->
+                     raise
+                       (Interp_error
+                          (User_error "guard handler must be 0- or 1-arg lambda")))
+            | _ ->
+                raise
+                  (Interp_error
+                     (User_error "guard handler must be a lambda"))))
+  | "guard", _ ->
+      raise
+        (Interp_error
+           (User_error "guard needs (guard handler-lambda body…)"))
+  | "match", _head :: scrut_expr :: clauses ->
+      let scrut = eval ~budget ~prims env scrut_expr in
+      let rec try_clauses = function
+        | [] ->
+            raise
+              (Interp_error (User_error "match: no matching clause"))
+        | clause :: rest ->
+            let pat, bodies =
+              match clause with
+              | App (pat, bs) -> pat, bs
+              | _ ->
+                  raise
+                    (Interp_error
+                       (User_error "match clause must be (pat body…)"))
+            in
+            (match match_pat pat scrut with
+             | None -> try_clauses rest
+             | Some binds ->
+                 let env' = Env.child env in
+                 List.iter (fun (n, v) -> Env.define env' n v) binds;
+                 Cont (env', body_of_exprs bodies))
+      in
+      try_clauses clauses
   | "prim", _ ->
       (match full_args with
        | [ _; Var prim_name; body ] ->
@@ -421,9 +575,10 @@ and eval_special_form
                 raise
                   (Interp_error
                      (User_error "with-transaction body must be a lambda"))))
-  | "gensym", [ _ ] -> Done (VStr (gensym ()))
-  | "gensym", [ _; Lit (VStr prefix) ] | "gensym", [ _; Var prefix ] ->
-      Done (VStr (gensym ~prefix ()))
+  | "gensym", [ _ ] -> Done (VSymbol (gensym ()))
+  | "gensym", [ _; Lit (VStr prefix) ] | "gensym", [ _; Var prefix ]
+  | "gensym", [ _; Lit (VSymbol prefix) ] ->
+      Done (VSymbol (gensym ~prefix ()))
   | "and", _head :: args ->
       let rec loop = function
         | [] -> Done (VBool true)
@@ -609,7 +764,7 @@ and eval_quasiquote
       eval ~budget ~prims env e
   | App (Var "unquote", [ e ]) ->
       let inner = eval_quasiquote ~budget ~prims env ~depth:(depth - 1) e in
-      VList [ VStr "unquote"; inner ]
+      VList [ VSymbol "unquote"; inner ]
   | App (Var "unquote-splicing", _) when depth = 1 ->
       raise
         (Interp_error (User_error "unquote-splicing not in list context"))
@@ -617,7 +772,7 @@ and eval_quasiquote
       let inner =
         eval_quasiquote ~budget ~prims env ~depth:(depth + 1) e
       in
-      VList [ VStr "quasiquote"; inner ]
+      VList [ VSymbol "quasiquote"; inner ]
   | App (h, args) ->
       let head_part =
         match h with
@@ -648,12 +803,11 @@ and eval_quasiquote
           args
       in
       VList (head_part @ List.concat tail_parts)
-  | Lit (VStr s) -> VList [ VStr "__str__"; VStr s ]
   | Lit v -> v
-  | Var s -> VStr s
+  | Var s -> VSymbol s
   | Quote e ->
       let v = eval_quasiquote ~budget ~prims env ~depth e in
-      VList [ VStr "quote"; v ]
+      VList [ VSymbol "quote"; v ]
   | other -> reify_expr other
 
 and apply_step

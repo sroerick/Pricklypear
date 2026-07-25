@@ -690,14 +690,51 @@ let run_agent_tool (t : t) ~(name : string) ~(arguments : string)
                | Some v -> Store.normalize_visibility v
                | None -> "private"
              in
-             Hashtbl.replace t.routes path (handler, vis);
-             let* _ =
-               Store.register_route t.store ~route:path ~handler
-                 ~visibility:vis ()
+             (* Phase 3: same public-route effect gate as (route … 'public). *)
+             let* gate =
+               if vis = "public" then begin
+                 let* rows = Store.list_function_names t.store in
+                 let known_fn =
+                   Pricklypear_lisp.Effect.known_fn_of_bindings
+                     (List.map (fun (n, e, _) -> (n, e)) rows)
+                 in
+                 let public_allow =
+                   Pricklypear_lisp.Effect.EffSet.normalize
+                     [ Pricklypear_lisp.Effect.ReadDb
+                     ; Pricklypear_lisp.Effect.WriteDb
+                     ; Pricklypear_lisp.Effect.Html
+                     ; Pricklypear_lisp.Effect.Txn
+                     ]
+                 in
+                 match List.find_opt (fun (n, _, _) -> n = handler) rows with
+                 | None -> Lwt.return (Ok ())
+                 | Some (_, body, _) ->
+                     let fx =
+                       Pricklypear_lisp.Effect.infer ~known_fn body
+                     in
+                     if Pricklypear_lisp.Effect.policy_allows
+                          ~allow:public_allow fx
+                     then Lwt.return (Ok ())
+                     else
+                       Lwt.return
+                         (Error
+                            (Printf.sprintf
+                               "public route denied: handler %S effects %s"
+                               handler
+                               (Pricklypear_lisp.Effect.EffSet.pp fx)))
+               end else Lwt.return (Ok ())
              in
-             Lwt.return
-               (Printf.sprintf "registered route %s -> %s (%s)"
-                  path handler vis)
+             match gate with
+             | Error e -> Lwt.return ("error: " ^ e)
+             | Ok () ->
+                 Hashtbl.replace t.routes path (handler, vis);
+                 let* _ =
+                   Store.register_route t.store ~route:path ~handler
+                     ~visibility:vis ()
+                 in
+                 Lwt.return
+                   (Printf.sprintf "registered route %s -> %s (%s)"
+                      path handler vis)
            end
        | _ -> Lwt.return "error: need path and handler")
   | "eval_expr" ->
@@ -708,19 +745,48 @@ let run_agent_tool (t : t) ~(name : string) ~(arguments : string)
            if expr = "" then Lwt.return "error: empty expr"
            else if String.length expr > 4000 then
              Lwt.return "error: expr too long (max 4000)"
-           else
-             Lwt.catch
-               (fun () ->
-                  let* v =
-                    Control_rim.run_lwt ~prims:t.prims (fun () ->
-                        Pricklypear_lisp.Eval.eval_string_direct
-                          ~prims:Pricklypear_lisp.Eval.empty_prims t.env expr)
-                  in
-                  let s = Pricklypear_lisp.Reader.pp_value v in
-                  Lwt.return
-                    ("ok: true\nvalue: " ^ truncate_for_tool ~limit:1500 s))
-               (fun exn ->
-                  Lwt.return ("ok: false\nerror: " ^ pp_interp_exn exn)))
+           else begin
+             (* Phase 3 agent mask: deny Branch/Publish/admin-ish prims in tool eval. *)
+             let agent_eval_allow =
+               Pricklypear_lisp.Effect.EffSet.normalize
+                 [ Pricklypear_lisp.Effect.ReadDb
+                 ; Pricklypear_lisp.Effect.WriteDb
+                 ; Pricklypear_lisp.Effect.Html
+                 ; Pricklypear_lisp.Effect.Txn
+                 ; Pricklypear_lisp.Effect.Ai
+                 ]
+             in
+             let denied =
+               try
+                 let e = Pricklypear_lisp.Reader.read_one expr in
+                 let fx = Pricklypear_lisp.Effect.infer e in
+                 if Pricklypear_lisp.Effect.policy_allows
+                      ~allow:agent_eval_allow fx
+                 then None
+                 else Some (Pricklypear_lisp.Effect.EffSet.pp fx)
+               with _ -> None
+             in
+             match denied with
+             | Some fx ->
+                 Lwt.return
+                   ("ok: false\nerror: agent effect mask denied (" ^ fx
+                    ^ "; no branch/publish)")
+             | None ->
+                 Lwt.catch
+                   (fun () ->
+                      let* v =
+                        Control_rim.run_lwt ~prims:t.prims (fun () ->
+                            Pricklypear_lisp.Eval.eval_string_direct
+                              ~prims:Pricklypear_lisp.Eval.empty_prims t.env
+                              expr)
+                      in
+                      let s = Pricklypear_lisp.Reader.pp_value v in
+                      Lwt.return
+                        ("ok: true\nvalue: "
+                         ^ truncate_for_tool ~limit:1500 s))
+                   (fun exn ->
+                      Lwt.return ("ok: false\nerror: " ^ pp_interp_exn exn))
+           end)
   | "smoke_route" ->
       (match json_string_field args_json "path" with
        | None -> Lwt.return "error: need path"

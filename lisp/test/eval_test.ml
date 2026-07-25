@@ -126,7 +126,7 @@ let eval_tests = [
     let env = Env.create () in
     let got = (Eval.eval_string ~prims env "'(a b c)") in
     (match got with
-     | Ast.VList [Ast.VStr "a"; Ast.VStr "b"; Ast.VStr "c"] -> ()
+     | Ast.VList [Ast.VSymbol "a"; Ast.VSymbol "b"; Ast.VSymbol "c"] -> ()
      | other -> Alcotest.failf "expected (a b c) list, got %s"
                   (Reader.pp_value other)));
   ("eval: quote nested", `Quick, fun () ->
@@ -259,14 +259,14 @@ let macro_tests = [
     Env.define env "+" (Ast.VPrim "+");
     let got = (Eval.eval_string ~prims env "`(a ,(+ 1 2) c)") in
     match got with
-    | Ast.VList [Ast.VStr "a"; Ast.VInt 3L; Ast.VStr "c"] -> ()
+    | Ast.VList [Ast.VSymbol "a"; Ast.VInt 3L; Ast.VSymbol "c"] -> ()
     | other -> Alcotest.failf "qq got %s" (Reader.pp_value other));
   ("quasiquote splice", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
     let got = (Eval.eval_string ~prims env "`(a ,@'(b c) d)") in
     match got with
-    | Ast.VList [Ast.VStr "a"; Ast.VStr "b"; Ast.VStr "c"; Ast.VStr "d"] -> ()
+    | Ast.VList [Ast.VSymbol "a"; Ast.VSymbol "b"; Ast.VSymbol "c"; Ast.VSymbol "d"] -> ()
     | other -> Alcotest.failf "splice got %s" (Reader.pp_value other));
   ("defmacro when", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
@@ -337,7 +337,7 @@ let macro_tests = [
     let a = (Eval.eval_string ~prims env "(gensym)") in
     let b = (Eval.eval_string ~prims env "(gensym)") in
     match a, b with
-    | Ast.VStr sa, Ast.VStr sb when sa <> sb -> ()
+    | Ast.VSymbol sa, Ast.VSymbol sb when sa <> sb -> ()
     | _ -> Alcotest.fail "gensym not unique");
   ("cond first match", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
@@ -498,7 +498,7 @@ let eval_eff_tests = [
       (Eval.eval_string ~prims env "`(a ,(+ 1 2) c)")
     in
     match got with
-    | Ast.VList [ Ast.VStr "a"; Ast.VInt 3L; Ast.VStr "c" ] -> ()
+    | Ast.VList [ Ast.VSymbol "a"; Ast.VInt 3L; Ast.VSymbol "c" ] -> ()
     | other -> Alcotest.failf "qq got %s" (Reader.pp_value other));
   ("eval_eff: defmacro when", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
@@ -715,6 +715,53 @@ let tco_tests =
       Alcotest.(check string) "even" "#t" (Reader.pp_value got));
   ]
 
+let dialect_tests = [
+  ("symbols: quote distinct from string", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let a = Eval.eval_string ~prims env "'hello" in
+    let b = Eval.eval_string ~prims env "\"hello\"" in
+    (match a, b with
+     | Ast.VSymbol "hello", Ast.VStr "hello" -> ()
+     | _ -> Alcotest.failf "got %s and %s"
+              (Reader.pp_value a) (Reader.pp_value b)));
+  ("define sugar", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    Eval.register_prim prims "+" (function
+      | [Ast.VInt a; Ast.VInt b] -> Ast.VInt (Int64.add a b)
+      | _ -> raise (Ast.Interp_error (Ast.User_error "+")));
+    let env = Env.create () in
+    Env.define env "+" (Ast.VPrim "+");
+    ignore (Eval.eval_string ~prims env "(define (add1 x) (+ x 1))");
+    let got = Eval.eval_string ~prims env "(add1 41)" in
+    Alcotest.(check string) "42" "42" (Reader.pp_value got));
+  ("begin multi-body", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let got = Eval.eval_string ~prims env "(begin 1 2 3)" in
+    Alcotest.(check string) "3" "3" (Reader.pp_value got));
+  ("match list lambda", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let got =
+      Eval.eval_string ~prims env
+        "(match '(lambda (x) y)\n\
+          ((lambda params body) params)\n\
+          (_ 0))"
+    in
+    match got with
+    | Ast.VList [Ast.VSymbol "x"] -> ()
+    | other -> Alcotest.failf "match got %s" (Reader.pp_value other));
+  ("guard catches user error", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let got =
+      Eval.eval_string ~prims env
+        "(guard (lambda (e) 99) (error \"boom\"))"
+    in
+    Alcotest.(check string) "99" "99" (Reader.pp_value got));
+]
+
 let () =
   Alcotest.run "pricklypear-lisp" [
     "reader", reader_tests @ reader_list_tests @ reader_completeness_tests;
@@ -726,4 +773,5 @@ let () =
     "eval-eff", eval_eff_tests;
     "list-hof", list_hof_tests;
     "tco", tco_tests;
+    "dialect", dialect_tests;
   ]
