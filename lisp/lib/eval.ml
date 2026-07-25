@@ -82,6 +82,76 @@ let body_of_exprs = function
       in
       fold e1 (e2 :: rest)
 
+(** Leading string literal is a docstring only when followed by ≥1 body form.
+    A lone string body is a value-returning body, not metadata.
+    Per spec [lisp-interpreter.define-docstring]. *)
+let peel_leading_doc (bodies : expr list) : string option * expr list =
+  match bodies with
+  | Lit (VStr doc) :: (_ :: _ as rest) -> (Some doc, rest)
+  | _ -> (None, bodies)
+
+let params_of_define_sugar (param_exprs : expr list) : string list =
+  List.map
+    (function
+      | Var p -> p
+      | _ ->
+          raise
+            (Interp_error
+               (User_error "define function params must be names")))
+    param_exprs
+
+(** Rewrite a lambda-shaped expr so a leading multi-body docstring is removed
+    from the stored/bound body. Returns (body_expr, doc_opt). *)
+let strip_lambda_doc (e : expr) : expr * string option =
+  match e with
+  | App (Var "lambda", params_expr :: bodies) ->
+      let doc, bodies' = peel_leading_doc bodies in
+      (App (Var "lambda", params_expr :: bodies'), doc)
+  | Lambda (params, body) ->
+      (* Constructor form is already a single body; only Seq-peel if the
+         first side of a top Seq is a string lit and we want cleanliness.
+         Keep simple: no peel on pre-built Lambda (tests/AST path). *)
+      let _ = params in
+      (Lambda (params, body), None)
+  | _ -> (e, None)
+
+(** Parsed top-level (define …) for eval + image persist.
+    [body] is the expr to bind/persist (lambda leading-doc already stripped). *)
+type define_shape = {
+  name : string;
+  body : expr;
+  doc : string option;
+}
+
+let parse_top_define (e : expr) : define_shape option =
+  match e with
+  | App (Var "define", [ Var name; body_expr ]) ->
+      let body, doc = strip_lambda_doc body_expr in
+      Some { name; body; doc }
+  | App (Var "define", [ Var name; body_expr; Lit (VStr doc) ]) ->
+      let body, _lam_doc = strip_lambda_doc body_expr in
+      (* Trailing define docstring wins over lambda-internal. *)
+      Some { name; body; doc = Some doc }
+  | App (Var "define", [ Var _; _; other ]) ->
+      let _ = other in
+      raise
+        (Interp_error
+           (User_error
+              "define docstring must be a string literal \"…\""))
+  | App (Var "define", App (Var name, param_exprs) :: bodies) ->
+      let doc, bodies' = peel_leading_doc bodies in
+      let params = params_of_define_sugar param_exprs in
+      if List.mem "." params then
+        raise
+          (Interp_error
+             (User_error "dotted rest params not supported in define sugar"));
+      let body = body_of_exprs bodies' in
+      Some { name; body = Lambda (params, body); doc }
+  | Define (name, body_expr) ->
+      let body, doc = strip_lambda_doc body_expr in
+      Some { name; body; doc }
+  | _ -> None
+
 (** Match pattern against value; returns Some binding list or None. *)
 let rec match_pat (pat : expr) (v : value) : (string * value) list option =
   match pat, v with
@@ -294,9 +364,19 @@ let rec eval_step
       Cont (env', body)
   | Lambda (params, body) -> Done (VLambda (params, body, env))
   | Define (name, val_expr) ->
-      let v = eval ~budget ~prims env val_expr in
-      Env.define env name v;
-      Done v
+      (match parse_top_define (Define (name, val_expr)) with
+       | Some { name = n; body; doc = _ } ->
+           let v =
+             match body with
+             | Lambda (params, b) -> VLambda (params, b, env)
+             | other -> eval ~budget ~prims env other
+           in
+           Env.define env n v;
+           Done v
+       | None ->
+           let v = eval ~budget ~prims env val_expr in
+           Env.define env name v;
+           Done v)
   | Prim (name, args) ->
       let arg_vals = List.map (eval ~budget ~prims env) args in
       let _ = prims in
@@ -372,7 +452,8 @@ and eval_special_form
   : step =
   match name, full_args with
   | "lambda", _head :: params_expr :: bodies ->
-      let body = body_of_exprs bodies in
+      let _doc, bodies' = peel_leading_doc bodies in
+      let body = body_of_exprs bodies' in
       let params =
         match params_expr with
         | Lit VNil -> []
@@ -419,34 +500,25 @@ and eval_special_form
       (match v with
        | VBool false | VNil -> Cont (env, else_e)
        | _ -> Cont (env, then_e))
-  | "define", [ _; Var n; val_expr ] ->
-      let v = eval ~budget ~prims env val_expr in
-      Env.define env n v;
-      Done v
-  | "define", _head :: App (Var n, param_exprs) :: bodies ->
-      (* (define (f x y) body…) sugar *)
-      let params =
-        List.map
-          (function
-            | Var p -> p
-            | _ ->
-                raise
-                  (Interp_error
-                     (User_error "define function params must be names")))
-          param_exprs
-      in
-      if List.mem "." params then
-        raise
-          (Interp_error
-             (User_error "dotted rest params not supported in define sugar"));
-      let body = body_of_exprs bodies in
-      let v = VLambda (params, body, env) in
-      Env.define env n v;
-      Done v
   | "define", _ ->
-      raise
-        (Interp_error
-           (User_error "define needs (define name expr) or (define (name args…) body…)"))
+      (* Rebuild App without the head name already consumed: full_args is
+         head :: rest where head is Var "define". parse_top_define wants
+         the whole (define …) app. *)
+      (match parse_top_define (App (Var "define", List.tl full_args)) with
+       | Some { name = n; body; doc = _ } ->
+           let v =
+             match body with
+             | Lambda (params, b) -> VLambda (params, b, env)
+             | other -> eval ~budget ~prims env other
+           in
+           Env.define env n v;
+           Done v
+       | None ->
+           raise
+             (Interp_error
+                (User_error
+                   "define needs (define name expr [\"doc\"]) or \
+                    (define (name args…) [\"doc\"] body…)")))
   | "quote", [ _; e' ] -> Done (quote_to_value e')
   | "begin", _head :: bodies | "seq", _head :: bodies ->
       (match bodies with

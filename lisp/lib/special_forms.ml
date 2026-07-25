@@ -57,9 +57,13 @@ let catalog : entry list =
       name = "define";
       summary =
         "Bind name to value in the current env (and image persists \
-         top-level defines to function_defs). Name is not evaluated.";
-      arity = "(define name value)";
-      examples = "(define double (lambda (x) (+ x x)))";
+         top-level defines to function_defs). Optional docstring \
+         (string literal) is store metadata via function_defs.doc; \
+         read back with (function-doc name). Name is not evaluated.";
+      arity =
+        "(define name expr [\"doc\"]) | (define (name p…) [\"doc\"] body…)";
+      examples =
+        "(define double (lambda (x) \"2x\" (+ x x)))  ; or trailing \"doc\"";
     };
     {
       name = "quote";

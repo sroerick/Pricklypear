@@ -555,6 +555,12 @@
          v1 SHIPPED registration path: real.
          DEFERRED: full prim table completeness (see
          lisp-interpreter.primitives); Solo5 pgx path.
+
+         define-docstring (lisp-interpreter): image registers
+         (function-doc name) and wires Store.persist_function
+         ?doc so top-level define can document bindings into
+         function_defs.doc. See that subsection for surface
+         syntax and redefine/clear rules.
    |))
    )
   )

@@ -309,7 +309,7 @@ let branch_detail_page (session : Session.t) (reqd : Httpun.Reqd.t)
                   [ HTML.h2 [] [txt "Diff: %s (no parent)" dname]
                   ; (match child with
                      | None -> HTML.p [] [txt "(missing)"]
-                     | Some (e, _, _) ->
+                     | Some (e, _, _, _) ->
                          HTML.pre []
                            [txt "%s" (Pricklypear_lisp.Reader.pp_expr e)])
                   ]
@@ -323,7 +323,7 @@ let branch_detail_page (session : Session.t) (reqd : Httpun.Reqd.t)
             in
             let show = function
               | None -> "(absent)"
-              | Some (e, _, _) -> Pricklypear_lisp.Reader.pp_expr e
+              | Some (e, _, _, _) -> Pricklypear_lisp.Reader.pp_expr e
             in
             Lwt.return
               [ HTML.div [HTML.class_ "card"]

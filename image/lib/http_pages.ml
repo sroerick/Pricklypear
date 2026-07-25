@@ -16,7 +16,7 @@ let show_binding_page (session : Session.t) (name : string)
           HTML.p [] [txt "(no such binding on this branch)"];
           HTML.p [] [HTML.a [HTML.href "%s" ("/edit/" ^ name)] [txt "create it"]];
         ]
-    | Some (expr, author) ->
+    | Some (expr, author, _doc) ->
         let pp = Pricklypear_lisp.Reader.pp_expr expr in
         chrome ~session ~title:name [
           HTML.p [] [txt "author: %s" author];
@@ -460,7 +460,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
                   HTML.a [HTML.href "%s" (Packages.edit_href full)] [txt "create it"];
                 ];
               ])
-        | Some (expr, author) ->
+        | Some (expr, author, _doc) ->
             let badge = badge_of expr in
             let pp = Pricklypear_lisp.Reader.pp_expr expr in
             let depth = depth_of full in
@@ -993,7 +993,7 @@ let editor_page (session : Session.t) (name : string) ?(msg = "")
     | _, src when src <> "" ->
         chrome ~session ~title:("Edit " ^ name)
           [ editor_form_partial ~name ~body_src:src ~msg () ]
-    | Some (expr, _), _ ->
+    | Some (expr, _, _), _ ->
         let initial = Pricklypear_lisp.Reader.pp_expr expr in
         chrome ~session ~title:("Edit " ^ name)
           [ editor_form_partial ~name ~body_src:initial ~msg () ]
@@ -1077,7 +1077,7 @@ let page_inspector (session : Session.t) (path_seg : string)
         match found with
         | None ->
             HTML.p [HTML.class_ "err"] [txt "handler function missing in store"]
-        | Some (expr, author) ->
+        | Some (expr, author, _doc) ->
             HTML.div [] [
               HTML.p [HTML.class_ "muted"] [txt "author: %s" author];
               HTML.pre [] [txt "%s" (Pricklypear_lisp.Reader.pp_expr expr)];
@@ -1155,7 +1155,7 @@ let inspect_binding_page (session : Session.t) (name : string)
         chrome ~session ~title:("Inspect " ^ name) [
           HTML.p [HTML.class_ "err"] [txt "not found"];
         ]
-    | Some (expr, author) ->
+    | Some (expr, author, _doc) ->
         let pp = Pricklypear_lisp.Reader.pp_expr expr in
         let j =
           try Yojson.Safe.pretty_to_string

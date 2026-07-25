@@ -406,3 +406,46 @@
        (html/p* (html/attr "class" "muted") ,empty-msg)
        (html/ul ""
          (html/join (list/map ,item-fn ,xs)))))
+
+;; --- discoverability (define-docstring companion) ---
+
+;; Find first index of delim in s at or after start, or -1.
+(define string-find-pos
+  (lambda (s delim start dlen)
+    "Index of delim in s starting at start, or -1."
+    (if (>= start (- (string-length s) (- dlen 1)))
+        -1
+        (if (string-eq (substring s start dlen) delim)
+            start
+            (string-find-pos s delim (+ start 1) dlen)))))
+
+;; Split s on delim (string). Empty or no match → single-element list.
+(define string-split
+  (lambda (s delim)
+    "Split string s on delimiter string delim."
+    (let ((dlen (string-length delim))
+          (slen (string-length s)))
+      (if (or (= slen 0) (not (string-contains? s delim)))
+          (list s)
+          (let ((pos (string-find-pos s delim 0 dlen)))
+            (if (= pos -1)
+                (list s)
+                (cons
+                  (substring s 0 pos)
+                  (string-split
+                    (substring s (+ pos dlen) (- slen (+ pos dlen)))
+                    delim))))))))
+
+;; Package prefix before first / (or whole name).
+(define prefix-of
+  (lambda (name)
+    "First path segment of a binding name (before /)."
+    (car (string-split (as-str name) "/"))))
+
+;; Substring search over visible binding names.
+(define apropos
+  (lambda (pat)
+    "Names from (list-bindings) whose string form contains pat."
+    (list/filter
+      (lambda (n) (string-contains? (as-str n) (as-str pat)))
+      (list-bindings))))
