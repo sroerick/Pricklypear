@@ -160,7 +160,9 @@ let prim_pair_p args =
 let rec coerce_str ?(ctx = "string") (v : value) : string =
   match v with
   | VStr s -> s
+  | VSymbol s -> s (* product HTML/paths; symbols print as names *)
   | VList [ VStr "__str__"; VStr s ] -> s
+  | VList [ VSymbol "__str__"; VStr s ] -> s
   | VInt n -> Int64.to_string n
   | VFloat f -> Printf.sprintf "%.12g" f
   | VBool true -> "true"
@@ -189,7 +191,9 @@ let prim_type_of args =
   | [ VInt _ ] -> VStr "int"
   | [ VFloat _ ] -> VStr "float"
   | [ VStr _ ] -> VStr "str"
+  | [ VSymbol _ ] -> VStr "symbol"
   | [ VList [ VStr "__str__"; VStr _ ] ] -> VStr "str"
+  | [ VList [ VSymbol "__str__"; VStr _ ] ] -> VStr "str"
   | [ VBool _ ] -> VStr "bool"
   | [ VNil ] -> VStr "nil"
   | [ VPair _ ] -> VStr "pair"
@@ -199,6 +203,33 @@ let prim_type_of args =
   | [ VPrim name ] -> VStr ("prim:" ^ name)
   | [ VRef (t, _) ] -> VStr ("ref:" ^ t)
   | _ -> raise (Interp_error (User_error "type-of needs one arg"))
+
+let prim_symbol_p = function
+  | [ VSymbol _ ] -> VBool true
+  | [ _ ] -> VBool false
+  | _ -> raise (Interp_error (User_error "symbol? needs one arg"))
+
+let prim_string_p = function
+  | [ VStr _ ] -> VBool true
+  | [ VList [ VStr "__str__"; VStr _ ] ]
+  | [ VList [ VSymbol "__str__"; VStr _ ] ] -> VBool true
+  | [ _ ] -> VBool false
+  | _ -> raise (Interp_error (User_error "string? needs one arg"))
+
+let prim_symbol_eq = function
+  | [ VSymbol a; VSymbol b ] -> VBool (String.equal a b)
+  | [ _; _ ] -> VBool false
+  | _ -> raise (Interp_error (User_error "symbol=? needs two args"))
+
+let prim_symbol_to_string = function
+  | [ VSymbol s ] -> VStr s
+  | [ VStr s ] -> VStr s (* soft: already a string *)
+  | _ -> raise (Interp_error (User_error "symbol->string needs a symbol"))
+
+let prim_string_to_symbol = function
+  | [ VStr s ] -> VSymbol s
+  | [ VSymbol s ] -> VSymbol s
+  | _ -> raise (Interp_error (User_error "string->symbol needs a string"))
 
 (* (str x) -> VStr. Coerces any value to its pretty-printed form. *)
 let prim_str args =

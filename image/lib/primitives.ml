@@ -119,6 +119,11 @@ let make_with_defaults () : t =
   register_sync t "read-string" prim_read_string;
   register_sync t "read-all-string" prim_read_all_string;
   register_sync t "type-of" prim_type_of;
+  register_sync t "symbol?" prim_symbol_p;
+  register_sync t "string?" prim_string_p;
+  register_sync t "symbol=?" prim_symbol_eq;
+  register_sync t "symbol->string" prim_symbol_to_string;
+  register_sync t "string->symbol" prim_string_to_symbol;
   register_sync t "str" prim_str;
   register_sync t "as-str" prim_as_str;
   register_sync t "append" prim_append;
@@ -205,6 +210,11 @@ let prim_summary (name : string) : string =
   | "str" -> "value to string"
   | "as-str" -> "plain string coerce (no quotes)"
   | "type-of" -> "runtime type tag"
+  | "symbol?" -> "true if value is a symbol"
+  | "string?" -> "true if value is a string"
+  | "symbol=?" -> "symbol name equality"
+  | "symbol->string" -> "symbol name as string"
+  | "string->symbol" -> "intern string as symbol"
   | "dict-get" -> "JSON object field get"
   | "dict-set" -> "JSON object field set"
   | "dict-keys" -> "JSON object keys"
@@ -254,6 +264,7 @@ let prim_summary (name : string) : string =
   | "install-function" -> "install AI body string as named function"
   | "function-source" -> "pretty-print stored function body"
   | "function-ast" -> "raw stored function body as quoted data (no eval)"
+  | "package-exports" -> "public export names for a package (std freeze)"
   | "package-bindings" -> "list binding names in a package"
   | "export-package" -> "export package as lib.pp text"
   | "llm-inner" | "llm-outer" | "llm-rewrite" | "llm-seed" ->

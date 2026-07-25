@@ -271,6 +271,9 @@ let rec pp_value (v : value) : string =
       then s
       else s ^ ".0"
   | VStr s -> "\"" ^ String.escaped s ^ "\""
+  | VSymbol s ->
+      (* Bare token; quote odd names as |…| if needed later. *)
+      s
   | VBool b -> if b then "#t" else "#f"
   | VNil -> "()"
   | VPair (a, b) ->

@@ -110,6 +110,7 @@ let pure_prims = [
   "list"; "car"; "cdr"; "cons"; "null?"; "pair?"; "count";
   "append"; "reverse"; "nth";
   "string-append"; "str"; "type-of"; "as-str";
+  "symbol?"; "string?"; "symbol=?"; "symbol->string"; "string->symbol";
   "string-eq"; "string-trim"; "string-length"; "substring"; "string-contains?";
   "html-escape"; "json-parse"; "json-emit";
   "read-string"; "read-all-string";
@@ -129,7 +130,8 @@ let read_db_prims = [
   "find-row"; "find-rows"; "find-text"; "find-random";
   "list-branches"; "current-branch"; "list-bindings";
   "whoami"; "current-author";
-  "function-source"; "function-ast"; "package-bindings"; "export-package";
+  "function-source"; "function-ast"; "package-bindings"; "package-exports";
+  "export-package";
   "route-visibility";
   "list-usernames"; "list-ssh-keys";
   "llm-key-status";
