@@ -402,34 +402,70 @@
         (list
           (css/rule ".todo-layout"
             (list "grid-template-columns" "1fr"))))
-      ;; Functions browser three-pane (image.system-browser combo pack).
-      ;; Markup is OCaml (.bb-three); layout must live in product (ui/css),
-      ;; not only emergency_css — logged-in pages never see emergency rules.
+      ;; Functions package browser (Smalltalk/iTunes columns).
+      ;; Top: packages | functions | meta. Bottom: full-width code pane.
       (css/rule ".badge.impact"
         (list
           "background" "#ffe8a3" "border" "1px solid #8b6914"
           "padding" ".15rem .4rem" "font-size" ".85rem"))
+      (css/rule ".bb-browser"
+        (list "display" "flex" "flex-direction" "column" "gap" ".75rem"))
       (css/rule ".bb-three"
         (list "display" "block"))
       (css/rule ".bb-three .bb-col"
         (list "margin" ".5rem 0"))
-      (css/rule ".bb-three .bb-col ul"
+      (css/rule ".bb-list"
         (list "list-style" "none" "padding" "0" "margin" ".25rem 0"))
-      (css/rule ".bb-three .bb-col li"
-        (list "margin" ".2rem 0" "line-height" "1.35"))
+      (css/rule ".bb-item"
+        (list "margin" "0" "line-height" "1.35"))
+      (css/rule ".bb-item a"
+        (list
+          "display" "block" "padding" ".2rem .35rem"
+          "text-decoration" "none" "color" theme/link
+          "border-left" "3px solid transparent"))
+      (css/rule ".bb-item.is-active a"
+        (list
+          "font-weight" "700" "background" theme/row-alt
+          "border-left" "3px solid #000" "color" theme/ink))
+      (css/rule ".bb-item a:hover"
+        (list "background" theme/chrome "color" theme/ink))
+      (css/rule ".bb-crumb"
+        (list "margin" "0 0 .5rem" "font-size" ".9rem"))
+      (css/rule ".bb-meta h3"
+        (list "margin" ".75rem 0 .35rem" "font-size" "1rem"))
+      (css/rule ".bb-code"
+        (list "margin" "0"))
+      (css/rule ".bb-code-head"
+        (list
+          "display" "flex" "flex-wrap" "wrap" "align-items" "baseline"
+          "justify-content" "space-between" "gap" ".5rem"
+          "margin-bottom" ".5rem"))
+      (css/rule ".bb-code-head h2"
+        (list "margin" "0" "font-size" "1.1rem"))
+      (css/rule ".bb-code-actions"
+        (list "margin" "0"))
+      (css/rule ".bb-source"
+        (list
+          "margin" "0" "max-height" "55vh" "overflow" "auto"
+          "background" theme/panel "border" "1px solid #000"
+          "padding" ".6rem" "font-size" ".9rem"))
       (css/media "min-width:900px"
         (list
           (css/rule ".bb-three"
             (list
               "display" "grid"
-              "grid-template-columns" "11rem 13rem 1fr"
+              "grid-template-columns" "12rem 14rem 1fr"
               "gap" ".75rem"
-              "align-items" "start"))
+              "align-items" "stretch"
+              "min-height" "16rem"))
           (css/rule ".bb-three .bb-col"
             (list
-              "max-height" "80vh" "overflow" "auto" "margin" "0"))
-          (css/rule ".bb-three .bb-col.bb-detail"
-            (list "max-height" "none" "overflow" "visible"))))
+              "max-height" "42vh" "overflow" "auto" "margin" "0"
+              "display" "flex" "flex-direction" "column"))
+          (css/rule ".bb-three .bb-col .bb-list"
+            (list "flex" "1 1 auto" "overflow" "auto"))
+          (css/rule ".bb-code .bb-source"
+            (list "max-height" "50vh"))))
       (css/rule ".todo-nav"
         (list "list-style" "none" "padding" "0" "margin" "0"))
       (css/rule ".todo-nav-item"

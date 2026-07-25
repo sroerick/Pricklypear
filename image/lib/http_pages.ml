@@ -528,15 +528,25 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
                        ])
                      holes)
             in
+            (* Smalltalk/iTunes column browser:
+               top = packages | functions | meta
+               bottom = full-width definition (code pane). *)
+            let pkg_selected p =
+              let key = if p = "" then "root" else p in
+              key = pkg || p = crumb_pkg || Packages.package_label p = pkg
+            in
             let pkg_col =
               HTML.div [HTML.class_ "card bb-col"] [
                 HTML.h3 [] [txt "Packages"];
-                HTML.ul []
+                HTML.ul [HTML.class_ "bb-list"]
                   (List.map
                      (fun (p, _) ->
                        let key = if p = "" then "root" else p in
                        let lab = Packages.package_label p in
-                       HTML.li [] [
+                       let cls =
+                         if pkg_selected p then "bb-item is-active" else "bb-item"
+                       in
+                       HTML.li [HTML.class_ "%s" cls] [
                          HTML.a [HTML.href "%s" (pkg_href key)] [txt "%s" lab];
                        ])
                      groups);
@@ -549,87 +559,93 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
               in
               HTML.div [HTML.class_ "card bb-col"] [
                 HTML.h3 [] [txt "%s" (Packages.package_label crumb_pkg)];
-                HTML.ul []
+                HTML.ul [HTML.class_ "bb-list"]
                   (List.map
                      (fun (n, _, _) ->
                        let loc = Packages.local_name n in
-                       HTML.li [] [
+                       let cls =
+                         if n = full then "bb-item is-active" else "bb-item"
+                       in
+                       HTML.li [HTML.class_ "%s" cls] [
                          HTML.a [HTML.href "%s" (fn_href pkg loc)] [txt "%s" loc];
                        ])
                      rows);
               ]
             in
-            let detail =
-              HTML.div [HTML.class_ "bb-col bb-detail"] (
-              [ HTML.p [] [
+            let meta_col =
+              HTML.div [HTML.class_ "card bb-col bb-meta"] (
+              [ HTML.p [HTML.class_ "bb-crumb"] [
                    HTML.a [HTML.href "/bindings"] [txt "Functions"];
                    txt " › ";
                    HTML.a [HTML.href "%s" (pkg_href pkg)]
                      [txt "%s" (Packages.package_label crumb_pkg)];
-                   txt " › %s" (Packages.local_name full);
+                   txt " › ";
+                   HTML.strong [] [txt "%s" (Packages.local_name full)];
                  ];
                  impact_badge;
-                 HTML.div [HTML.class_ "card"] [
-                   HTML.p [] [
-                     HTML.span [HTML.class_ "muted"] [txt "kind: "];
-                     txt "function (Lisp)";
-                   ];
-                   HTML.p [] [
-                     HTML.span [HTML.class_ "muted"] [txt "origin: "];
-                     origin_badge depth author;
-                   ];
-                   HTML.p [] [
-                     HTML.span [HTML.class_ "muted"] [txt "author: "];
-                     txt "%s" author;
-                   ];
-                   HTML.p [] [
-                     HTML.span [HTML.class_ "muted"] [txt "effects: "];
-                     txt "%s" badge;
-                   ];
-                   HTML.p [] [
-                     HTML.span [HTML.class_ "muted"] [txt "used by (handler): "];
-                     used_links full;
-                   ];
-                   HTML.p []
-                     ([ HTML.span [HTML.class_ "muted"] [txt "used-by-routes: "] ]
-                      @ route_links routes_ub);
-                   HTML.p []
-                     ([ HTML.span [HTML.class_ "muted"] [txt "callers: "] ]
-                      @ name_links callers);
-                   HTML.p []
-                     ([ HTML.span [HTML.class_ "muted"] [txt "callees: "] ]
-                      @ name_links callees);
-                   HTML.p [] [
-                     HTML.a [HTML.href "/changes"] [txt "Branch changes"];
-                   ];
+                 HTML.p [] [
+                   HTML.span [HTML.class_ "muted"] [txt "kind: "];
+                   txt "function (Lisp)";
                  ];
-                 HTML.div [HTML.class_ "card"] [
-                   HTML.h2 [] [txt "Holes (unbound App heads)"];
-                   hole_nodes;
+                 HTML.p [] [
+                   HTML.span [HTML.class_ "muted"] [txt "origin: "];
+                   origin_badge depth author;
                  ];
+                 HTML.p [] [
+                   HTML.span [HTML.class_ "muted"] [txt "author: "];
+                   txt "%s" author;
+                 ];
+                 HTML.p [] [
+                   HTML.span [HTML.class_ "muted"] [txt "effects: "];
+                   txt "%s" badge;
+                 ];
+                 HTML.p [] [
+                   HTML.span [HTML.class_ "muted"] [txt "used by (handler): "];
+                   used_links full;
+                 ];
+                 HTML.p []
+                   ([ HTML.span [HTML.class_ "muted"] [txt "used-by-routes: "] ]
+                    @ route_links routes_ub);
+                 HTML.p []
+                   ([ HTML.span [HTML.class_ "muted"] [txt "callers: "] ]
+                    @ name_links callers);
+                 HTML.p []
+                   ([ HTML.span [HTML.class_ "muted"] [txt "callees: "] ]
+                    @ name_links callees);
+                 HTML.p [] [
+                   HTML.a [HTML.href "/changes"] [txt "Branch changes"];
+                 ];
+                 HTML.h3 [] [txt "Holes"];
+                 hole_nodes;
                ]
-               @ txn_hint_nodes expr
-               @ [ HTML.div [HTML.class_ "card"] [
-                     HTML.h2 [] [txt "definition"];
-                     HTML.pre [] [txt "%s" pp];
-                     HTML.p [] [
-                       HTML.a
-                         [ HTML.href "%s" (Packages.edit_href full)
-                         ; HTML.class_ "btn" ]
-                         [txt "Edit"];
-                       txt " ";
-                       HTML.a
-                         [ HTML.href "%s" (Packages.inspect_href full)
-                         ; HTML.class_ "btn secondary" ]
-                         [txt "Inspect AST"];
-                     ];
-                   ];
-                 ])
+               @ txn_hint_nodes expr)
+            in
+            let code_pane =
+              HTML.div [HTML.class_ "card bb-code"] [
+                HTML.div [HTML.class_ "bb-code-head"] [
+                  HTML.h2 [] [txt "definition · %s" full];
+                  HTML.p [HTML.class_ "bb-code-actions"] [
+                    HTML.a
+                      [ HTML.href "%s" (Packages.edit_href full)
+                      ; HTML.class_ "btn" ]
+                      [txt "Edit"];
+                    txt " ";
+                    HTML.a
+                      [ HTML.href "%s" (Packages.inspect_href full)
+                      ; HTML.class_ "btn secondary" ]
+                      [txt "Inspect AST"];
+                  ];
+                ];
+                HTML.pre [HTML.class_ "bb-source"] [txt "%s" pp];
+              ]
             in
             Lwt.return
               (chrome ~session ~title:full
-                 [ HTML.div [HTML.class_ "bb-three"]
-                     [ pkg_col; fns_in_pkg; detail ] ])
+                 [ HTML.div [HTML.class_ "bb-browser"]
+                     [ HTML.div [HTML.class_ "bb-three"]
+                         [ pkg_col; fns_in_pkg; meta_col ]
+                     ; code_pane
+                     ] ])
       in
       html_response reqd ~session body;
       Lwt.return_unit

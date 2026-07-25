@@ -111,12 +111,18 @@ let emergency_css : string =
    font-family:ui-monospace,Menlo,monospace;width:100%;\n\
    box-sizing:border-box;border:1px solid #000;padding:.4rem}\n\
    .badge.impact{background:#ffe8a3;border:1px solid #8b6914;padding:.15rem .4rem}\n\
+   .bb-browser{display:flex;flex-direction:column;gap:.75rem}\n\
    .bb-three{display:block}\n\
    .bb-three .bb-col{margin:.5rem 0}\n\
+   .bb-list{list-style:none;padding:0;margin:.25rem 0}\n\
+   .bb-item a{display:block;padding:.2rem .35rem;text-decoration:none;\n\
+   border-left:3px solid transparent}\n\
+   .bb-item.is-active a{font-weight:700;background:#ece9e0;border-left:3px solid #000}\n\
+   .bb-source{max-height:55vh;overflow:auto;padding:.6rem;border:1px solid #000}\n\
    @media (min-width:900px){\n\
-   .bb-three{display:grid;grid-template-columns:11rem 13rem 1fr;gap:.75rem;align-items:start}\n\
-   .bb-three .bb-col{max-height:80vh;overflow:auto;margin:0}\n\
-   .bb-three .bb-col.bb-detail{max-height:none}\n\
+   .bb-three{display:grid;grid-template-columns:12rem 14rem 1fr;gap:.75rem;\n\
+   align-items:stretch;min-height:16rem}\n\
+   .bb-three .bb-col{max-height:42vh;overflow:auto;margin:0}\n\
    }\n\
    "
 
