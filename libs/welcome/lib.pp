@@ -18,6 +18,7 @@
               (layout/cta "/background" "Background")
               (layout/cta "/roadmap" "Roadmap")
               (layout/cta "/signup" "Email signup")
+              (layout/cta "/guestbook" "Sign guestbook")
               (layout/cta "/login" "Log in"))))
         (layout/section
           "No, seriously, what is this?"
@@ -107,6 +108,8 @@
               (html/a "/roadmap" (html/text "roadmap"))
               (html/text " · ")
               (html/a "/signup" (html/text "signup"))
+              (html/text " · ")
+              (html/a "/guestbook" (html/text "guestbook"))
               (html/text " · ")
               (html/a "/agent.txt" (html/text "agent instructions"))
               (html/text " · ")
@@ -226,3 +229,132 @@
 
 (public-route "/background" "welcome/background")
 (public-route "/roadmap" "welcome/roadmap")
+
+;; ---- guestbook (public, data_rows 'guestbook_entry) ----
+;; Modeled on libs/signup: deftype + with-public-write + create/rows.
+
+(deftype 'guestbook_entry 'name 'site 'message)
+
+(define welcome/guestbook-fields
+  (lambda (name site message)
+    (dict-set* "{}"
+      (list
+        "name" (string-trim (as-str name))
+        "site" (string-trim (as-str site))
+        "message" (string-trim (as-str message)))))
+  "Build guestbook_entry fields dict from name/site/message.")
+
+(define welcome/guestbook-record
+  (lambda (name site message)
+    (create 'guestbook_entry (welcome/guestbook-fields name site message)))
+  "Create a guestbook_entry row, return fields.")
+
+(define welcome/guestbook-row-html
+  (lambda (row)
+    (let ((f (cdr row)))
+      (let ((name (as-str (dict-get f "name")))
+            (site (as-str (dict-get f "site")))
+            (message (as-str (dict-get f "message"))))
+        (html/li
+          (html/attr "class" "gb-entry")
+          (html/join
+            (list
+              (html/tag "span" (html/attr "class" "gb-name") (html/text name))
+              (if (blank? site)
+                  ""
+                  (html/join
+                    (list
+                      " "
+                      (html/tag "a"
+                        (html/attrs
+                          (list
+                            (html/attr "class" "gb-site")
+                            (html/attr "href" site)))
+                        (html/text site)))))
+              (html/tag "div" (html/attr "class" "gb-msg") (html/text message))))))))
+  "Render one guestbook row to an <li>.")
+
+(define welcome/guestbook-entries
+  (lambda ()
+    (let ((rs (rows 'guestbook_entry 200)))
+      (if (null? rs)
+          (html/p "No one has signed the guestbook yet. Be the first!")
+          (html/ul
+            (html/attr "class" "gb-list")
+            (html/join (list/map welcome/guestbook-row-html rs))))))
+  "Render all guestbook entries as a <ul>.")
+
+(define welcome/guestbook-form
+  (lambda (msg err)
+    (layout/page
+      (list
+        (layout/hero
+          "Guestbook"
+          "Sign my guestbook!! Leave a note. Tell me what you think. 🌵"
+          (html/join
+            (list
+              (layout/cta "/welcome" "Welcome")
+              (layout/cta "/code" "Source")
+              (layout/cta "/login" "Log in"))))
+        (if (blank? err)
+            ""
+            (html/p* (html/attr "class" "err") (html/text err)))
+        (if (blank? msg)
+            ""
+            (html/p* (html/attr "class" "ok") (html/text msg)))
+        (layout/section
+          "Sign it"
+          (html/form "POST" "/guestbook"
+            (html/attr "class" "gb-form")
+            (html/join
+              (list
+                (html/p "Your name")
+                (html/text-input "name"
+                  (html/attrs
+                    (list
+                      (html/attr "required" "required")
+                      (html/attr "placeholder" "anon")
+                      (html/attr "maxlength" "60"))))
+                (html/p "Your site (optional)")
+                (html/text-input "site"
+                  (html/attrs
+                    (list
+                      (html/attr "placeholder" "https://your.site")
+                      (html/attr "maxlength" "120"))))
+                (html/p "Message")
+                (html/textarea "message"
+                  (html/attrs
+                    (list
+                      (html/attr "rows" "3")
+                      (html/attr "required" "required")
+                      (html/attr "placeholder" "say hi")
+                      (html/attr "maxlength" "500")))
+                  "")
+                (html/hidden "source" "web")
+                (html/div ""
+                  (html/button
+                    (html/attrs (list (html/attr "type" "submit")))
+                    "Sign it!"))))))
+        (layout/section "Entries" (welcome/guestbook-entries))
+        (html/div
+          (html/attr "class" "layout-foot")
+          (html/a "/welcome" (html/text "welcome"))))))
+  "Guestbook page; msg and err are status strings (may be empty).")
+
+(define welcome/guestbook
+  (lambda ()
+    (if (string-eq (request-method) "POST")
+        (let ((name (request-param "name"))
+              (site (request-param "site"))
+              (message (request-param "message")))
+          (if (or (blank? (string-trim (as-str name)))
+                  (blank? (string-trim (as-str message))))
+              (welcome/guestbook-form "" "Need a name and a message.")
+              (seq
+                (with-public-write
+                  (lambda () (welcome/guestbook-record name site message)))
+                (welcome/guestbook-form "Thanks for signing! 🌵" ""))))
+        (welcome/guestbook-form "" "")))
+  "GET/POST /guestbook public handler.")
+
+(public-route "/guestbook" "welcome/guestbook")

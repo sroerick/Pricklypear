@@ -337,6 +337,7 @@ let is_system_hard_public (path : string) : bool =
   || path = "/background"
   || path = "/roadmap"
   || path = "/signup"
+  || path = "/guestbook"
   || path = "/book.pdf"
   || path = "/src.tgz"
   || path = "/code"
