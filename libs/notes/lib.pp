@@ -259,8 +259,8 @@
   "Lisp fallback body renderer (prefer roam/render-body).")
 
 ;; Wire wiki-link rendering into outline HTML (hook defined in outline/).
-(define outline/render-body roam/render-body
-  "Hook: outline body rendering uses roam/render-body.")
+(define outline/render-body (lambda (body) (roam/render-body body))
+  "Hook: outline body rendering uses roam/render-body (delayed lookup).")
 
 ;; Backlinks partial HTML for a note page.
 (define roam/backlinks-html
@@ -895,8 +895,14 @@
         "if(showArch)q+='&show=archived';"
         "var keep=id;__selPin=keep;"
         "fetch('/partials/notes-node-op?'+q,{method:'POST',credentials:'same-origin'}).then(function(r){return r.text();}).then(function(html){"
-        "var t=document.getElementById('outline');if(t)t.outerHTML=html;"
-        "if(findNode(keep))setSel(keep);else{__selPin=null;setSel('root');}"
+        "var doc=new DOMParser().parseFromString(html,'text/html');"
+        "var oobSel=doc.querySelector('#ol-selected-id[hx-swap-oob]');"
+        "var olHTML=doc.querySelector('#outline');"
+        "if(olHTML){var t=document.getElementById('outline');if(t)t.outerHTML=olHTML.outerHTML;}"
+        "var selIdVal=oobSel?oobSel.getAttribute('value'):null;"
+        "if(selIdVal){var hid=document.getElementById('ol-selected-id');if(hid)hid.value=selIdVal;}"
+        "var target=selIdVal||keep;"
+        "if(findNode(target))setSel(target);else if(findNode(keep))setSel(keep);else{__selPin=null;setSel('root');}"
         "if(window.htmx){try{htmx.process(document.getElementById('outline'));}catch(e){}}"
         "}).catch(function(e){console.error('notes postOp',e);});}"
         "function pickNode(e){"
@@ -1438,6 +1444,71 @@
       (else tree)))
   "Apply named outline op to note tree and save.")
 
+;; apply-op-sel: like apply-op but returns (list tree' selection') so the
+;; POST handler can return the new selection authoritatively (op-protocol).
+;; Selection semantics:
+;;   add-child / add-sibling -> the new node
+;;   delete                  -> next sibling of old position, else prev, else parent
+;;   splice                  -> first lifted child, else parent
+;;   everything else         -> stays on nid
+;; Unknown op / no-op -> (list tree nid).
+;; selection-after-delete: next sib of old pos, else prev, else parent.
+(define notes/outline/sel-after-delete
+  (lambda (tree nid)
+    (let ((parent (structed/find-parent outline/kids tree nid)))
+      (if (null? parent) nid
+        (notes/outline/sel-after-delete-in parent (outline/kids parent)
+          (structed/sibling-index outline/kids tree nid)))))
+  "Selection id after deleting nid.")
+
+(define notes/outline/sel-after-delete-in
+  (lambda (parent sibs i)
+    (let ((after (structed/list/drop sibs (+ i 1))))
+      (if (not (null? after)) (structed/id (car after))
+        (if (> i 0) (structed/id (structed/list/nth sibs (- i 1)))
+          (structed/id parent)))))
+  "Pick next/prev/parent given parent, sibs, index of deleted node.")
+
+;; selection after add-child: the new (first) child of nid.
+(define notes/outline/sel-after-add-child
+  (lambda (new-tree nid)
+    (let ((node (structed/find outline/kids new-tree nid)))
+      (if (null? node) nid
+        (let ((ks (outline/kids node)))
+          (if (null? ks) nid (structed/id (structed/list/nth ks 0)))))))
+  "Selection id after add-child: the new first child.")
+
+;; selection after add-sibling: the new sibling after nid.
+(define notes/outline/sel-after-add-sibling
+  (lambda (new-tree nid)
+    (let ((parent (structed/find-parent outline/kids new-tree nid)))
+      (if (null? parent) nid
+        (let ((sibs (outline/kids parent)))
+          (let ((i (structed/sibling-index outline/kids new-tree nid)))
+            (if (>= (+ i 1) (structed/count sibs)) nid
+              (structed/id (structed/list/nth sibs (+ i 1)))))))))
+  "Selection id after add-sibling: the new next sibling.")
+
+;; apply-op-sel: like apply-op but returns (list tree' selection') so the
+;; POST handler can return the new selection authoritatively (op-protocol).
+(define notes/outline/apply-op-sel
+  (lambda (slug tree op nid)
+    (let ((new-tree (notes/outline/apply-op slug tree op nid)))
+      (let ((sel (notes/outline/sel-for op nid new-tree tree)))
+        (list new-tree sel))))
+  "Apply op and return (list tree' selection') for the op-protocol.")
+
+(define notes/outline/sel-for
+  (lambda (op nid new-tree old-tree)
+    (cond
+      ((string-eq op "delete")
+       (if (string-eq (as-str nid) "root") nid
+         (notes/outline/sel-after-delete old-tree nid)))
+      ((string-eq op "add-child") (notes/outline/sel-after-add-child new-tree nid))
+      ((string-eq op "add-sibling") (notes/outline/sel-after-add-sibling new-tree nid))
+      (else nid)))
+  "Compute the post-op selection id per op-protocol semantics.")
+
 ;; (slug node-id title state)*
 (define notes/outline/all-todos
   (lambda ()
@@ -1515,6 +1586,20 @@
                 (outline/add-child-by-id tree nid child))))))
   "Splice eval result into outline at node.")
 
+(define notes/outline/node-op-eval
+  (lambda (tree nid slug)
+    (let ((et (notes/outline/splice-eval tree nid
+              (notes/outline/eval-target)
+              (notes/outline/eval-result slug nid (request-param "expr")))))
+      (list et nid)))
+  "Build (list tree sel) for the eval op.")
+
+(define notes/outline/eval-target
+  (lambda ()
+    (let ((tg (request-param "target")))
+      (if (if (null? tg) #t (string-eq (as-str tg) "")) "child" (as-str tg))))
+  "eval op target: child (default) | sibling | body.")
+
 (define notes/outline/node-op
   (lambda ()
     (let ((slug (as-str (request-param "slug")))
@@ -1529,21 +1614,24 @@
                   (tags (notes/doc/tags prev))
                   (kind (notes/doc/kind prev))
                   (day (notes/doc/day prev)))
-              (let ((new-tree
-                      (if (string-eq op "eval")
-                          (notes/outline/splice-eval tree nid
-                            (let ((tg (request-param "target")))
-                              (if (if (null? tg) #t (string-eq (as-str tg) ""))
-                                  "child"
-                                  (as-str tg)))
-                            (notes/outline/eval-result slug nid
-                              (request-param "expr")))
-                          (notes/outline/apply-op slug tree op nid))))
-                (seq
-                  (notes/doc/upsert slug title new-tree tags kind day)
-                  (render-html
-                    (outline/html slug new-tree show-archived)))))))))
-  "HTTP node-op entry: apply outline mutation.")
+              (let ((res (if (string-eq op "eval")
+                             (notes/outline/node-op-eval tree nid slug)
+                             (notes/outline/apply-op-sel slug tree op nid))))
+                (let ((new-tree (car res))
+                      (sel (as-str (car (cdr res)))))
+                  (seq
+                    (notes/doc/upsert slug title new-tree tags kind day)
+                    (render-html
+                      (string-append
+                        (outline/html slug new-tree show-archived)
+                        (html/void "input"
+                          (html/attrs
+                            (list
+                              (html/attr "type" "hidden")
+                              (html/attr "id" "ol-selected-id")
+                              (html/attr "hx-swap-oob" "true")
+                              (html/attr "value" sel))))))))))))))
+  "HTTP node-op entry: apply outline mutation; returns #outline + OOB selection.")
 
 
 ;; =========================================================
