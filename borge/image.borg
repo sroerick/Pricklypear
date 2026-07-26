@@ -1498,8 +1498,10 @@
               /edit/ joined back to todo/list, or /edit?name=todo%2Flist.
               Prefer path join if http router is easy; document choice.
 
-         DEFERRED: optimistic concurrency / stale-body reject,
-         structural AST tree-editor (branching.ast-nodes).
+         DEFERRED: optimistic concurrency / stale-body reject.
+         The structural AST tree-editor now lives in
+         structural-editing.ast-structure-view (paths first; stable
+         node storage still via branching.ast-nodes).
     |))
    )
   )
