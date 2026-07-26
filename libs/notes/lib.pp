@@ -743,6 +743,8 @@
           (notes/ui/tb-btn "unarchive" "unarch")
           (notes/ui/tb-btn "add-child" "+kid")
           (notes/ui/tb-btn "add-sibling" "+sib")
+          (notes/ui/tb-btn "promote" "<<")
+          (notes/ui/tb-btn "demote" ">>")
           (notes/ui/tb-btn "move-up" "up")
           (notes/ui/tb-btn "move-down" "dn")
           (notes/ui/tb-btn "delete" "del")
@@ -1032,6 +1034,8 @@
                 "refile")))))))
 
 ;; Move node nid from src-slug into dst-slug under root. Keeps node id/title/body/todo/kids.
+;; Pure detach on the sexp tree, then two upserts inside one transaction so a
+;; half-move cannot leave the node in both notes (or neither).
 (define notes/refile/move
   (lambda (src-slug nid dst-slug)
     (let ((src (notes/doc/get src-slug))
@@ -1047,24 +1051,27 @@
                   #f
                   (let ((src-tree (notes/doc/outline src))
                         (dst-tree (notes/doc/outline dst)))
-                    (let ((node (outline/find src-tree id)))
-                      (if (null? node)
+                    (let ((pair (outline/detach src-tree id)))
+                      (if (null? pair)
                           #f
-                          (seq
-                            (notes/doc/upsert did
-                              (notes/doc/title dst)
-                              (outline/add-child-by-id dst-tree "root" node)
-                              (notes/doc/tags dst)
-                              (notes/doc/kind dst)
-                              (notes/doc/day dst))
-                            (seq
-                              (notes/doc/upsert sid
-                                (notes/doc/title src)
-                                (outline/delete src-tree id)
-                                (notes/doc/tags src)
-                                (notes/doc/kind src)
-                                (notes/doc/day src))
-                              #t)))))))))))
+                          (let ((node (car pair))
+                                (src-without (car (cdr pair))))
+                            (with-transaction
+                              (lambda ()
+                                (seq
+                                  (notes/doc/upsert did
+                                    (notes/doc/title dst)
+                                    (outline/add-child-by-id dst-tree "root" node)
+                                    (notes/doc/tags dst)
+                                    (notes/doc/kind dst)
+                                    (notes/doc/day dst))
+                                  (notes/doc/upsert sid
+                                    (notes/doc/title src)
+                                    src-without
+                                    (notes/doc/tags src)
+                                    (notes/doc/kind src)
+                                    (notes/doc/day src))
+                                  #t)))))))))))))
 
 (define notes/refile/handle
   (lambda ()
@@ -1134,32 +1141,36 @@
           (if (string-eq id "root")
               ()
               (let ((src-tree (notes/doc/outline src)))
-                (let ((node (outline/find src-tree id)))
-                  (if (null? node)
+                (let ((pair (outline/detach src-tree id)))
+                  (if (null? pair)
                       ()
-                      (let ((title (as-str (outline/title node)))
-                            (body (as-str (outline/body node)))
-                            (kids (outline/kids node))
-                            (tags (notes/doc/tags src)))
-                        (let ((new-slug
-                                (notes/refile/unique-slug
-                                  (notes/refile/slugify title)))
-                              (new-tree
-                                (outline/set-kids
-                                  (outline/set-body
-                                    (outline/node "root" title)
-                                    body)
-                                  kids)))
-                          (seq
-                            (notes/doc/upsert new-slug title new-tree
-                              tags "note" "")
-                            (notes/doc/upsert (as-str src-slug)
-                              (notes/doc/title src)
-                              (outline/delete src-tree id)
-                              (notes/doc/tags src)
-                              (notes/doc/kind src)
-                              (notes/doc/day src))
-                            new-slug)))))))))))
+                      (let ((node (car pair))
+                            (src-without (car (cdr pair))))
+                        (let ((title (as-str (outline/title node)))
+                              (body (as-str (outline/body node)))
+                              (kids (outline/kids node))
+                              (tags (notes/doc/tags src)))
+                          (let ((new-slug
+                                  (notes/refile/unique-slug
+                                    (notes/refile/slugify title)))
+                                (new-tree
+                                  (outline/set-kids
+                                    (outline/set-body
+                                      (outline/node "root" title)
+                                      body)
+                                    kids)))
+                            (with-transaction
+                              (lambda ()
+                                (seq
+                                  (notes/doc/upsert new-slug title new-tree
+                                    tags "note" "")
+                                  (notes/doc/upsert (as-str src-slug)
+                                    (notes/doc/title src)
+                                    src-without
+                                    (notes/doc/tags src)
+                                    (notes/doc/kind src)
+                                    (notes/doc/day src))
+                                  new-slug))))))))))))))
 
 (define notes/refile/extract-handle
   (lambda ()
@@ -1304,6 +1315,14 @@
        (outline/move-up tree nid))
       ((string-eq op "move-down")
        (outline/move-down tree nid))
+      ((string-eq op "promote")
+       (if (string-eq (as-str nid) "root")
+           tree
+           (outline/promote tree nid)))
+      ((string-eq op "demote")
+       (if (string-eq (as-str nid) "root")
+           tree
+           (outline/demote tree nid)))
       ((string-eq op "set-title")
        (outline/update tree nid
          (lambda (n) (outline/set-title n (request-param "title")))))
