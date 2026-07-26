@@ -85,7 +85,7 @@
            just ignores the column.
          - Removing/renaming breaks running images that
            reference the field, with no compile-time error
-           to catch it (Lisp is dynamic).
+           to catch it (Nopales is dynamic).
          - The cost is cruft accumulation: dead fields
            pile up over time. Tradeoff accepted for
            correctness.

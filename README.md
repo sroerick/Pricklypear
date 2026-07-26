@@ -1,8 +1,8 @@
 # Pricklypear
 
-A multi-user Lisp OS habitat: **one** OCaml image process, Postgres as
-the object store, htmx as the interface. Humans and agents share the
-running system — the process **is** the API.
+A multi-user Lisp OS habitat — the language is **Nopales** (a Scheme-family
+Lisp-1): **one** OCaml image process, Postgres as the object store, htmx as
+the interface. Humans and agents share the running system — the process **is** the API.
 
 This is a dogfooded personal system that happens to be multi-user, not a
 polished product suite. Design lives in a multi-file borge book
@@ -19,7 +19,7 @@ License: [ISC](LICENSE).
 | Auth | In-process web login (`pp_session`) + HTTP Basic for agents |
 | Code store | Branched `function_defs` with parent override (not PG inheritance) |
 | Data store | Shared `data_rows` (JSON fields) across branches |
-| UI | Server-rendered htmx; Lisp packages in `libs/` |
+| UI | Server-rendered htmx; Nopales packages in `libs/` |
 | Public face | `/welcome`, `/code`, `/book.pdf`, `/src.tgz`, `/.well-known/agent.json`, `/agent.txt` |
 
 Dogfood packages seeded on boot include todo, notes/outline, calendar,
@@ -71,11 +71,11 @@ history only.)
 
 | Path | Role |
 |---|---|
-| `lisp/` | Pure Lisp-1 interpreter (`Eval.eval : env -> expr -> value Lwt.t`) |
+| `lisp/` | Pure interpreter for **Nopales** (Lisp-1; `Eval.eval : env -> expr -> value Lwt.t`) |
 | `common/` | Shared types |
 | `migrations/` | Additive SQL applied on boot / deploy |
 | `image/` | Sole runtime binary |
-| `libs/` | Lisp packages seeded to `system/main` |
+| `libs/` | Nopales packages seeded to `system/main` |
 | `cli/` | OCaml laptop clients: `pp-eval`, `pp-sync` (no Python) |
 | `scripts/` | `dev.sh`, `pp-eval.sh` wrappers, `verify_habitat.sh` (on-image `libs/verify`), seed ETL |
 | `docs/` | Book PDF, ops notes, [`runtime-effects-transition.md`](docs/runtime-effects-transition.md) (OCaml 5 / effects path), [`agent-ui-harness.md`](docs/agent-ui-harness.md) (agent FE verify research) |

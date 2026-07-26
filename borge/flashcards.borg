@@ -1,5 +1,5 @@
 (project pricklypear-flashcards
- (doc "Pricklypear book chapter: flashcards — decks + spaced-repetition cards as Lisp + data_rows")
+ (doc "Pricklypear book chapter: flashcards — decks + spaced-repetition cards as Nopales + data_rows")
  (status planned)
  (convention ocaml-dune)
  (section flashcards
@@ -23,14 +23,14 @@
         A first-class memorization app on the live image, inspired by:
           - Anki: decks, front/back cards, spaced review grades
           - SuperMemo/FSRS: stability + difficulty + due, scheduled by algorithm
-          - Pricklypear: objects in Postgres, UI as Lisp routes,
+          - Pricklypear: objects in Postgres, UI as Nopales routes,
             agents study/create via eval — no parallel REST API
 
         NOT a port of Anki desktop.
         NOT file-backed .apkg as the authority (import may come later).
-        NOT OCaml system pages — this is a product package (Lisp).
+        NOT OCaml system pages — this is a product package (Nopales).
 
-        Killer property: flashcards are Lisp values; agents and humans use the same functions.
+        Killer property: flashcards are Nopales values; agents and humans use the same functions.
 
         =========================================================
         LAYERING
@@ -115,7 +115,7 @@
         The core scheduling is delegated to the kernel prim
         (fsrs-schedule stability difficulty elapsed rating) which returns
         (stability' difficulty' interval_days). See libs/flashcards/lib.pp
-        flash/apply-rating for the thin Lisp wrapper.
+        flash/apply-rating for the thin Nopales wrapper.
 
         Date math: reuse calendar/image date prims if present
         (date-today, and a day-add helper). If day-add is missing, file
@@ -232,7 +232,7 @@
 
   )
   (subsection srs
-   (doc "Lisp scheduler flash/apply-rating; ratings again|hard|good|easy")
+   (doc "Nopales scheduler flash/apply-rating; ratings again|hard|good|easy")
    (status planned)
    (implements libs/flashcards/lib.pp)
    (verify

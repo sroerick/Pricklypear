@@ -20,7 +20,7 @@
         — not a port of the Dream dabar server.
 
         PILLARS:
-        1. Plugin-shaped Lisp packages (libs/*/lib.pp + load-library).
+        1. Plugin-shaped Nopales packages (libs/*/lib.pp + load-library).
         2. Canon + lexicons in Postgres data_rows (shared across
            branches). Personal notes/bookmarks are a SEPARATE module
            (not this chapter).

@@ -1,5 +1,5 @@
 (project pricklypear-notes
- (doc "Pricklypear book chapter: notes — outline-first personal knowledge (org-roam / org-mode / Obsidian-shaped) as Lisp + data_rows")
+ (doc "Pricklypear book chapter: notes — outline-first personal knowledge (org-roam / org-mode / Obsidian-shaped) as Nopales + data_rows")
  (status planned)
  (convention ocaml-dune)
  (section notes
@@ -30,7 +30,7 @@
         Notes are durable OBJECTS in Postgres (data_rows), edited live.
 
         WHY THIS OS:
-          Every note/outline is a Lisp value. Agents and humans use
+          Every note/outline is a Nopales value. Agents and humans use
           the same functions via REPL / pp_eval / htmx. No notes REST
           API to invent — the image is the API.
 
@@ -87,7 +87,7 @@
              todo   — "" | "TODO" | "DONE" | future keywords
              kids   — list of child nodes (order matters)
 
-         Suggested Lisp construction helpers:
+         Suggested Nopales construction helpers:
 
            (outline/node title) 
            (outline/node title body)
@@ -117,7 +117,7 @@
            Store as JSON in data_rows.fields (Yojson-friendly:
            nested objects/arrays), OR as a single sexp string field.
            Recommendation: JSON tree in fields.outline object for
-           robust DB tooling; Lisp constructors convert to/from
+           robust DB tooling; Nopales constructors convert to/from
            internal list representation.
 
          PURE PACKAGE:
@@ -214,7 +214,7 @@
          No #node-id deep links v1; optional later.
 
          PARSE / REINDEX (budget-safe):
-           Link scanning MUST NOT be char-by-char Lisp recursion.
+           Link scanning MUST NOT be char-by-char Nopales recursion.
            Kernel prim (extract-links body-string) -> list of
            (slug label) pairs in O(n) OCaml (one eval tick).
            Edge cases pinned by tests:
@@ -248,7 +248,7 @@
            Render path is also under the per-call step budget
            (see notes.budget-scale); large bodies must complete
            inside one request. OCaml render-links is the planned
-           fix if Lisp render-acc still fails stress.
+           fix if Nopales render-acc still fails stress.
 
          MISSING TARGETS:
            Unknown slug still links; target page offers create-stub.
@@ -286,7 +286,7 @@
     (doc (|
          WHY:
            The 100k step default_limit is a safety net, not a perf
-           governor. Char-scanners and recursive list walks in Lisp
+           governor. Char-scanners and recursive list walks in Nopales
            burned the budget on ordinary notes (upsert reindex,
            large inbox render) while the write sometimes committed
            first — silent stale links. Hot paths move to OCaml or
@@ -302,7 +302,7 @@
 
          KERNEL / HOT PATHS (required):
            - list/map, list/filter, list/foldl: special forms
-             (OCaml loop + apply); not O(n) Lisp recursion frames
+             (OCaml loop + apply); not O(n) Nopales recursion frames
            - extract-links: OCaml; roam/parse-links uses it
            - select-for-update: error outside with-transaction
              (reliability adjacent to long evals)
@@ -360,7 +360,7 @@
   )
 
   (subsection outline-actions
-   (doc "Per-node outline action menu; the eval op turns nodes into a live Lisp surface")
+   (doc "Per-node outline action menu; the eval op turns nodes into a live Nopales surface")
    (status partial)
    (implements libs/notes/lib.pp image/lib/http.ml)
    (verify
@@ -403,12 +403,12 @@
          every other structure op).
 
          WHY:
-           The notes view becomes a live Lisp surface. wiki-llm-loop
+           The notes view becomes a live Nopales surface. wiki-llm-loop
            (below) is the first major consumer: the LLM builds a
            node subtree and a single eval op splices it in.
 
          SECURITY:
-           eval runs Lisp in the session env — full prim set incl
+           eval runs Nopales in the session env — full prim set incl
            DB. Treat like REPL access. No sandbox v1; the existing
            auth gate (route visibility) is the only boundary. v2 may
            prompt-confirm before destructive prims.
@@ -417,7 +417,7 @@
   )
 
   (subsection wiki-llm-loop
-   (doc "LLM-maintained wiki over the notes corpus — ingest, query, lint as Lisp ops")
+   (doc "LLM-maintained wiki over the notes corpus — ingest, query, lint as Nopales ops")
    (status planned)
    (implements libs/notes/lib.pp)
    (verify
@@ -438,7 +438,7 @@
 
          SHAPE:
            Notes ARE wiki pages; kind discriminates role. The agent
-           drives operations through ordinary Lisp functions exposed
+           drives operations through ordinary Nopales functions exposed
            to the REPL; the user reaches the same operations through
            the outline-actions eval op on a source node. No /wiki/*
            routes for v1 — the existing /notes surface plus the live
@@ -483,7 +483,7 @@
            as the LLM preamble. There is no separate schema-agent
            path — it is just another note the loop reads.
 
-         OPS (each is one top-level Lisp call; each writes one
+         OPS (each is one top-level Nopales call; each writes one
          wiki-event row on success):
            (wiki/ingest-from-source source-text [slug-hint])
              1. create/update a source note (kind=source) carrying
@@ -649,7 +649,7 @@
            Do not grant blind outline/delete without policy.
 
          PRINCIPLE:
-           Adding a notes feature = adding Lisp functions.
+           Adding a notes feature = adding Nopales functions.
            Remote agents gain them automatically through eval.
     |))
    )
@@ -663,7 +663,7 @@
    (details
     (doc (|
          Real lists: todo-list + todo-item (list_id, title, notes,
-         state, due, position). state in todo/state/list (Lisp).
+         state, due, position). state in todo/state/list (Nopales).
          Note todos: outline node.todo; scrape + write-back.
          Smart views: everything, from-notes, default Inbox.
          /todos nav + body; cycle state; create list; add item.

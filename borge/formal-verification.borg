@@ -3,7 +3,7 @@
  (status planned)
  (convention ocaml-dune)
  (section formal-verification
-   (doc "Machine-checked stability for the pure OCaml core; the Lisp garden may stay janky.
+   (doc "Machine-checked stability for the pure OCaml core; the Nopales garden may stay janky.
           Formal verification proceeds via property-based testing (QCheck) and proof tools.
           The detailed plan (islands, tooling, passes, success criteria) lives in
           docs/formal-verification-plan.md.")

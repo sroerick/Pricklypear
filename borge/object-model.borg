@@ -4,7 +4,7 @@
  (convention ocaml-dune)
  (section object-model
   
-  (doc "Typed records in Postgres, schema declared in Lisp, SQL-via-primitives, no ORM")
+  (doc "Typed records in Postgres, schema declared in Nopales, SQL-via-primitives, no ORM")
   (status partial)
   (verify
    (build "dune build @all")
@@ -54,15 +54,15 @@
         field holds an id + type tag. Dereferencing is
         explicit: (get 'user (event-owner ev)).
 
-        The Lisp still has plain values (int, string, bool,
+        The Nopales still has plain values (int, string, bool,
         lambda, list, ref) for logic that doesn't touch the
         DB. Pure functions for "does this event conflict?"
         take event values, return bool, no DB. The DB and
-        the Lisp have a clean seam.
+        Nopales have a clean seam.
 
         NO ORM. The primitive layer reads and writes the
         shared data_rows table with plain SQL and parses
-        results into typed Lisp values.
+        results into typed Nopales values.
    |))
   )
   (subsection type-system

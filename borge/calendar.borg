@@ -7,7 +7,7 @@
   (doc "Month/day calendar: events + due todos + daily notes")
   (status partial)
   (subsection model
-   (doc "Naive local dates; shared data_rows; Lisp package")
+   (doc "Naive local dates; shared data_rows; Nopales package")
    (status implemented)
    (implements libs/calendar/lib.pp image/lib/primitives.ml)
    (details

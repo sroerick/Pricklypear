@@ -12,7 +12,7 @@
   (details
    (doc (|
         These principles describe the system as it runs today:
-        one unix image binary, Postgres as durable store, Lisp
+        one unix image binary, Postgres as durable store, Nopales
         product shell, multi-user via sessions and branches.
 
         Historical multi-process / Mirage-fleet language lived
@@ -40,7 +40,7 @@
            source AST with macro call sites.
 
         4. Two-tier change model. OCaml (primitives, HTTP, store,
-           auth gate) changes slowly via rebuild/deploy. Lisp
+           auth gate) changes slowly via rebuild/deploy. Nopales
            (user functions AND product environment UI — nav,
            home, routes, theme) changes fast via row updates.
            OCaml must not ship a silent second product skin;
@@ -62,7 +62,7 @@
 
         8. SERIALIZABLE by default. Mutating store paths default
            to SERIALIZABLE transactions. Weaker isolation is
-           opt-in; most Lisp never sees the dial.
+           opt-in; most Nopales never sees the dial.
 
         9. Additive-only schema evolution. Types and migrations
            grow; they do not casually drop or rename. Cruft may
