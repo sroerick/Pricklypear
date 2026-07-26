@@ -122,10 +122,10 @@
    (status partial)
    (verify
     (build "dune build @all")
-    (smoke "a Lisp call that exceeds its step budget aborts cleanly; the session survives"))
+    (smoke "a Nopales call that exceeds its step budget aborts cleanly; the session survives"))
    (details
     (doc (|
-         Each Lisp primitive invocation runs with a step
+         Each Nopales primitive invocation runs with a step
          counter. When exceeded, that ONE call aborts;
          the session continues. This prevents "one user's
          bad function wedges the whole image" at the
@@ -254,7 +254,7 @@
              'title         ; display
              'members       ; JSON array of usernames; lobby = []
              'created_by
-             'created_at)   ; ISO string from Lisp or server
+             'created_at)   ; ISO string from Nopales or server
 
            (deftype 'chat-message
              'room_id

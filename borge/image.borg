@@ -3,7 +3,7 @@
  (status partial)
  (convention ocaml-dune)
  (section image
-  (doc "The per-user unikernel: Lisp interpreter, REPL endpoint, htmx interface")
+  (doc "The per-user unikernel: Nopales interpreter, REPL endpoint, htmx interface")
   (status partial)
   
   (subsection boot
@@ -100,7 +100,7 @@
          READING INPUT:
          - The REPL reads s-expressions. It keeps reading
            lines until parens are balanced and strings
-           closed (standard Lisp REPL behavior). The
+           closed (standard Nopales REPL behavior). The
            reader tells us 'incomplete' so we know to
            prompt for more, not to evaluate yet.
          - One REPL turn = one s-expression (which may
@@ -127,7 +127,7 @@
            possible (line/col from the reader), then a
            continuation prompt. Don't kill the session.
 
-         META-COMMANDS (Lisp forms, not a separate
+         META-COMMANDS (Nopales forms, not a separate
          command lexer — the reader handles them, the
          eval loop recognizes them as special forms):
            (define name expr)         bind + persist to store
@@ -139,7 +139,7 @@
            (list-bindings)           current env
            (load "file")              eval a file's contents
            (help)                     list specials
-           Any other Lisp form        evaluate + print result
+           Any other Nopales form        evaluate + print result
 
          SESSION STATE:
          - (define ...) persists to the store: survives
@@ -196,7 +196,7 @@
          User routes default private (session required).
          (route path handler 'public) opts into anonymous GET.
          Kernel paths (/data /admin /api/eval /bindings /edit …)
-         are hard-private in OCaml and cannot be opened by Lisp.
+         are hard-private in OCaml and cannot be opened by Nopales.
          Gate runs before handler dispatch.
 
          pure-html (the dream_html HTML generation core,
@@ -302,7 +302,7 @@
          refresh_ui_shell runs on every request (http.ml launch).
          When ui/nav is broken on the branch it logs a [warn]
          line PER REQUEST — under HN traffic this produced
-         hundreds of warn lines and wasted a Lisp eval per page.
+         hundreds of warn lines and wasted a Nopales eval per page.
 
          Rule: refresh_ui_shell MUST cache its failure state per
          branch (at least short-TTL in-memory): once ui/nav has
@@ -423,7 +423,7 @@
          same conn therefore QUEUE safely — no wire interleave, no
          corruption. So narrowing request_mutex does NOT require a
          separate db_mutex: DB prims stay correct (serialized by pgx)
-         and page rendering (Lisp eval, HTML build — the slow part)
+         and page rendering (Nopales eval, HTML build — the slow part)
          runs lock-free. The single conn is still a throughput
          ceiling (a pool is a separate later iteration), but it
          cannot corrupt under concurrency.
@@ -626,7 +626,7 @@
          FUNCTIONS BROWSER (/bindings) — Smalltalk-ish drilldown:
 
          PHILOSOPHY:
-         - Majority of programs are Lisp bindings in function_defs.
+         - Majority of programs are Nopales bindings in function_defs.
          - Kernel primitives are OCaml (performant, trusted); still
            BROWSABLE so the system is legible, but read-only.
          - Optional future: mark some OCaml modules as "image libs"
@@ -682,7 +682,7 @@
          UI SHELL AS LISP (authoritative):
 
          RULE: If a human thinks of it as "the environment UI"
-         (navbar, home workspace, app menus), it is Lisp on a
+         (navbar, home workspace, app menus), it is Nopales on a
          branch — not a parallel OCaml product skin.
 
          - Product shell bindings (required when seed runs):
@@ -691,7 +691,7 @@
                          if they call menu/* at define-time)
              ui/nav    — (lambda () (render-html (menu/bar …)))
              ui/home   — (lambda () …) home body HTML
-             ui/theme  — css/sheet data (tokens + rules); Lisp,
+             ui/theme  — css/sheet data (tokens + rules); Nopales,
                          not a CSS string blob
              ui/css    — (lambda () (css/render ui/theme))
                          adapter only; session caches its string
@@ -719,7 +719,7 @@
            including ui/theme and theme/* tokens.
 
          LAYERING SUMMARY:
-           Lisp  = the computer you live in (shell + theme + apps)
+           Nopales  = the computer you live in (shell + theme + apps)
            OCaml = host + gate (eval, store, auth, health, emergency)
 
          NAV / ENTRY (combo pack discoverability):
@@ -733,14 +733,14 @@
            and shrink html_response style blob to emergency_css
            (image.product-theme make)
          - ui/menu seed always lambda (load-order safe by default)
-         - Move softer system pages (/about copy) into Lisp packages
+         - Move softer system pages (/about copy) into Nopales packages
          - Branch switcher in chrome (detail checkout exists)
          - Import/require, private symbols, rename-with-rewrite
          - Authoring new prims from the UI
          - Dedicated /theme form UI (Functions edit is enough v1)
 
          DATA BROWSER: full CRUD over data_rows is specified in
-         image.data-browser (OCaml system pages, not a Lisp package).
+         image.data-browser (OCaml system pages, not a Nopales package).
          /types remains the type_defs index and links into /data/<type>.
     |))
    )
@@ -776,7 +776,7 @@
          - OCaml system pages in image/lib/http.ml (+ thin helpers in
            crud.ml / store.ml as needed). Host/gate tier — same as
            /types, /bindings, /inspect, /edit.
-         - NOT a Lisp package. Product shell stays Lisp; this is
+         - NOT a Nopales package. Product shell stays Nopales; this is
            emergency/generic substrate UI that must work with empty
            or broken gardens.
          - Mutations call existing Crud/Store SQL paths. Do not invent
@@ -881,9 +881,9 @@
          - /inspect/row/<type>/<id>: redirect (302/303) to
            /data/<type>/<id> OR thin alias rendering the same page.
            Prefer redirect so one canonical URL.
-         - Product apps unchanged: /todos, /notes, /bible stay Lisp.
+         - Product apps unchanged: /todos, /notes, /bible stay Nopales.
          - Nav: emergency/system links may include Data → /data;
-           product ui/menu MAY add Data later (Lisp choice, not
+           product ui/menu MAY add Data later (Nopales choice, not
            required for make).
 
          =========================================================
@@ -895,7 +895,7 @@
          - list rows with limit+offset (Crud.list today is limit-only;
            extend with offset or a store helper)
          - optional: fetch author/created_at/updated_at for detail
-         Keep Lisp prim surface stable unless a prim gap blocks the
+         Keep Nopales prim surface stable unless a prim gap blocks the
          browser (prefer OCaml-only helpers for offset/count).
 
          =========================================================
@@ -903,7 +903,7 @@
          =========================================================
          - Same session gate as other authenticated system pages.
          - Not admin-only in v1 (any logged-in user can browse/mutate
-           shared data — matches Lisp CRUD prims today).
+           shared data — matches Nopales CRUD prims today).
          - No CSRF token infrastructure in v1 (status quo for other
            POSTs); cookie session + same-site assumptions hold.
          - Never interpolate type/id into SQL strings.
@@ -912,11 +912,11 @@
          NON-GOALS (v1)
          =========================================================
          - Field type system / validation beyond JSON object shape
-         - Full-text search UI (find-text exists for Lisp; wire later)
+         - Full-text search UI (find-text exists for Nopales; wire later)
          - Inline htmx row edit without full page (optional polish)
          - Bulk delete / CSV import-export
          - Per-row branch scoping (data is shared by design)
-         - Lisp-redefinable browser UI
+         - Nopales-redefinable browser UI
          - SPA / client-side routing
 
          =========================================================
@@ -930,7 +930,7 @@
    )
   )
   (subsection product-theme
-   (doc "Product presentation as Lisp data: css/* sheet compiler, ui/theme + ui/css, emergency CSS only in OCaml")
+   (doc "Product presentation as Nopales data: css/* sheet compiler, ui/theme + ui/css, emergency CSS only in OCaml")
    (status implemented)
    (verify
     (build "dune build image")
@@ -941,20 +941,20 @@
     (smoke "personal (define theme/bg …) or ui/theme pin changes next full-page CSS; checkout main restores")
     (smoke "(define ui/css (lambda () (error \"boom\"))) still serves page with emergency CSS + labeled failure")
     (smoke "htmx fragment / partial responses do not re-inject full stylesheet")
-    (smoke "login page stays pre-session OCaml mini stylesheet (no Lisp theme required)"))
+    (smoke "login page stays pre-session OCaml mini stylesheet (no Nopales theme required)"))
 
    (details
     (doc (|
          WHY:
          Today almost all product CSS is a giant inline string in
          image/lib/http.ml html_response — inaccessible from the
-         garden, unversioned as Lisp, dual to the product-shell
+         garden, unversioned as Nopales, dual to the product-shell
          rule that already moved nav/home into libs/ui. Widget
          packages emit class names that only work because that
          OCaml blob knows them. That is a black box.
 
-         DECISION (Path B — honest Lisp):
-         Presentation is Lisp data, same substrate as shell and
+         DECISION (Path B — honest Nopales):
+         Presentation is Nopales data, same substrate as shell and
          apps. A small css/* compiler (sibling of html/* in std)
          turns sheets into CSS text. ui/theme holds the sheet;
          ui/css is a thin (lambda () (css/render ui/theme))
@@ -965,19 +965,19 @@
 
          REJECTED:
          - Path hybrid: (define ui/css (lambda () "body{…}"))
-           as the primary form (CSS-in-string wearing Lisp hat)
+           as the primary form (CSS-in-string wearing Nopales hat)
          - Path A as native store: bare CSS document / data_rows
            stylesheet type as the only theme representation
            (allowed later as import/export sugar, not authority)
          - Static /assets/*.css as the product theme path
-         - Silent full OCaml design-system twin beside Lisp theme
+         - Silent full OCaml design-system twin beside Nopales theme
          - Per-request uncached re-eval of ui/css without shell
            refresh discipline (mirror ui/nav caching lessons)
 
          =========================================================
          css/*  (libs/std/lib.pp — seed with std, before ui)
          =========================================================
-         Parallel to html/*: structure in Lisp, render to string.
+         Parallel to html/*: structure in Nopales, render to string.
 
          Core bindings (v1 — keep small):
            (css/sheet rule…)     → sheet value (list-tagged data)
@@ -1089,7 +1089,7 @@
 
            login_form_page (pre-session):
              keeps a tiny OCaml-only mini stylesheet. Must not
-             require Lisp theme. Not the product design system.
+             require Nopales theme. Not the product design system.
 
          =========================================================
          Emergency CSS (OCaml kernel — labeled, minimal)
@@ -1201,13 +1201,13 @@
            routing is awkward — pick one and document in agent note.
 
          LIBRARY LOADER (implemented):
-         Same Lisp source text in git repos and in the live system.
+         Same Nopales source text in git repos and in the live system.
          OCaml provides only a pure loader (no app string blobs).
 
          On-disk layout (shipped in release tarball as libs/):
            libs/std/lib.pp     — list/*, html/*, css/*, menu/*, data/*
            libs/todo/lib.pp    — deftype + todo/* + routes + partials
-           libs/hello/lib.pp   — optional hi-page recipe as Lisp
+           libs/hello/lib.pp   — optional hi-page recipe as Nopales
            libs/bible/lib.pp   — bible/* API + /bible (canon is data_rows)
            libs/ui/lib.pp      — ui/menu ui/nav ui/home ui/theme ui/css
            libs/ai/lib.pp      — ai/ask ai/do wrappers
@@ -1287,7 +1287,7 @@
          BIBLE LIBRARY (BSB dogfood)
          =========================================================
 
-         GOAL: read BSB from the live image via Lisp + /bible page.
+         GOAL: read BSB from the live image via Nopales + /bible page.
          Canon lives in Postgres data_rows (shared across branches).
          Functions live in package bible/ via load-library.
 
@@ -1304,7 +1304,7 @@
          - data_rows.id stays UUID PK (migration 003). Ref is NOT the PK.
            fields.ref holds BSB:Abbrev:C:V uniquely.
          - Optional seed optimization: deterministic UUID v5 from ref so
-           tooling can recompute id; Lisp users still call bible/* not raw
+           tooling can recompute id; Nopales users still call bible/* not raw
            get-by-uuid. Either UUID-default or v5 is fine if ref unique.
 
          TYPES (deftype from libs/bible/lib.pp):
@@ -1399,7 +1399,7 @@
 
          RENDER:
            v1: simple HTML chapter list + optional verse highlight is OK.
-           Optional: ?view=sexp returns chapter as Lisp list via bare value.
+           Optional: ?view=sexp returns chapter as Nopales list via bare value.
            Attribution footer: Berean Standard Bible / license line.
 
          PERSONAL LAYER: notes/bookmarks are NOT bible/dabar — a
@@ -1424,12 +1424,12 @@
          multi-file manifests, load from HTTP.
 
          Kernel prims (OCaml) stay under (kernel) browser package.
-         Majority of app code remains Lisp in .pp files.
+         Majority of app code remains Nopales in .pp files.
     |))
    )
   )
   (subsection browser-repl
-   (doc "Evaluate Lisp from the browser against the live session env")
+   (doc "Evaluate Nopales from the browser against the live session env")
    (status implemented)
    (verify
     (build "dune build image")
@@ -1574,7 +1574,7 @@
                reverse route index when building callers map once
                per branch snapshot, not per /bindings row naively.
 
-         Lisp prims (session-aware, read-only, any authed user):
+         Nopales prims (session-aware, read-only, any authed user):
            (callees name [depth])     → VList of VStr names
            (callers name)             → VList of VStr names (direct)
            (dependents name [depth])  → VList of VStr names
@@ -1609,7 +1609,7 @@
            type impact-event for cross-request durability.
 
          Surfaces:
-           1) Lisp:
+           1) Nopales:
                 (impact-queue) → list of impact dicts/JSON strings
                 (impact-clear [name|all])
                 (impact-mark name 'smoked|'dismissed)
@@ -1759,7 +1759,7 @@
                            ∪ special forms ∪ lambda params / lets
                            (best-effort; App heads only; accept
                             false negatives on dynamic names)
-         Lisp: (holes name) → VList of VStr
+         Nopales: (holes name) → VList of VStr
          UI: browser detail + editor show Holes list.
 
          ==========================================================
@@ -1773,7 +1773,7 @@
          Paths:
            1) function-editor missing card [Create] — already
               specified; dnu-stubs REUSES it (POST /api/edit/create)
-           2) Lisp (stub-function name) → define stub if missing;
+           2) Nopales (stub-function name) → define stub if missing;
               error if already bound (use install/edit to overwrite)
            3) Unbound handler HTTP response: card with
                 handler H unbound

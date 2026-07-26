@@ -221,7 +221,7 @@
          Human user — logs in, works on <user>/personal, inherits
            system/main defaults, cannot admin-merge to system.
          Agent (as user) — authenticated as a human or service
-           account; installs Lisp on that identity's branch;
+           account; installs Nopales on that identity's branch;
            branch-locked for the task duration.
          Anonymous — only public routes (/login, health as policy).
 
@@ -291,7 +291,7 @@
            User registers an SSH public key (credentials kind
            ssh_key). Real SSH (or approved OpenBSD ForceCommand
            bridge) authenticates the key, attaches identity,
-           opens the Lisp REPL on <user>/personal. See
+           opens the Nopales REPL on <user>/personal. See
            auth.user-ssh-repl.
 
          US-CHAT — Talk to other humans on the box
@@ -397,7 +397,7 @@
 
          Admin:
            /admin/users  (list, create, set password, revoke sessions)
-           merge policy to system/* already enforced in Lisp prims
+           merge policy to system/* already enforced in Nopales prims
 
          API:
            Cookie session OR Authorization: Bearer <api_key>
@@ -554,7 +554,7 @@
          Admin may set/clear for another user via /admin/users
          (optional v1; self-service is enough for dogfood).
 
-         Lisp prims (session user only unless admin):
+         Nopales prims (session user only unless admin):
            (set-llm-key key [base] [model]) → "ok" / last4
            (clear-llm-key) → VNil
            (llm-key-status) → dict/list: configured?, last4, base?, model?
@@ -571,7 +571,7 @@
          5. SECURITY
          ==========================================================
 
-         - Raw key only in POST body / Lisp arg / secret_data
+         - Raw key only in POST body / Nopales arg / secret_data
          - Logs: never print full key (llm_client already prints
            model/url — keep it that way)
          - CSRF: same cookie session rules as other POSTs
@@ -594,7 +594,7 @@
    )
   )
   (subsection user-ssh-repl
-   (doc "Per-user SSH public keys open an identity-bound Lisp REPL")
+   (doc "Per-user SSH public keys open an identity-bound Nopales REPL")
    (status planned)
    (implements image/lib/auth_store.ml image/lib/repl_endpoint.ml)
    (verify
@@ -611,7 +611,7 @@
 
          Multi-user OS framing wants a real shell path:
            ssh alice@pricklypear.host -p $PP_SSH_PORT
-         → Lisp REPL as alice on alice/personal.
+         → Nopales REPL as alice on alice/personal.
 
          credentials.kind=ssh_key is already in the schema and
          historical supervisor/awa design. Single-image retired
@@ -715,7 +715,7 @@
            revoke. Self-service.
          Admin /admin/users — add/revoke ssh keys for a user.
 
-         Lisp:
+         Nopales:
            (add-ssh-key "ssh-ed25519 AAAA…") → fingerprint
            (list-ssh-keys) → list of {fingerprint,label}
            (revoke-ssh-key fingerprint-or-id)
@@ -737,7 +737,7 @@
          ==========================================================
 
          Phase 1: auth_store ssh_key add/list/revoke/verify +
-           /settings/ssh + Lisp prims + auth_log
+           /settings/ssh + Nopales prims + auth_log
          Phase 2: awa-ssh (or sshd bridge) attach → REPL with
            real whoami; PP_SSH_PORT opt-in
          Phase 3: harden hostkey rotation docs; agent use of
@@ -855,12 +855,12 @@
          The image already has a single request gate (launch in
          image/lib/http.ml): hard public allowlist, else require
          session/Basic. That is correct kernel shape — but it cannot
-         express "this Lisp page is a public share link."
+         express "this Nopales page is a public share link."
 
          Product needs:
            - Default-private user routes (todos, notes, gardens)
            - Opt-in public user routes (marketing, shared deck view)
-           - Kernel paths that are NEVER public via Lisp
+           - Kernel paths that are NEVER public via Nopales
            - Optional auth: public page still richer when logged in
 
          NOT this subsection:
@@ -893,7 +893,7 @@
                 /agent is NOT hard-public)
 
             B. SYSTEM_HARD_PRIVATE
-               Always require identity (Lisp cannot open these):
+               Always require identity (Nopales cannot open these):
                /admin and /admin/*
                /data and /data/*
                /api/eval /api/agent /api/agent-task /api/ai/*
@@ -998,12 +998,12 @@
          =========================================================
          /pages table: column Visibility (public|private).
          Optional: make-public / make-private forms later;
-         v1 Lisp/REPL is enough.
+         v1 Nopales/REPL is enough.
 
          =========================================================
          SECURITY NOTES
          =========================================================
-         - Public handler still runs full Lisp: author must not
+         - Public handler still runs full Nopales: author must not
            leak secrets in public pages. Document footgun.
          - System hard-private list is deny-by-default for kernel
            surfaces; never consult view_bindings to open /admin.

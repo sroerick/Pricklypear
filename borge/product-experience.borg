@@ -13,7 +13,7 @@
   (details
    (doc (|
         Pricklypear is a multi-user live computing environment:
-        log into your image, write Lisp functions stored as data,
+        log into your image, write Nopales functions stored as data,
         branch code while sharing data, bind functions to URLs,
         let AI propose functions onto a branch.
 
@@ -24,16 +24,16 @@
         LAYERING (aligned with image.system-browser +
         image.product-theme, 2026-07-12):
         - Environment UI humans live in (nav, home, app menus,
-          theme/presentation, user routes) is Lisp on branches
+          theme/presentation, user routes) is Nopales on branches
           (libs/*.pp seed + personal pins). That is the product.
-        - OCaml hosts Lisp: eval, store, auth gate, health,
+        - OCaml hosts Nopales: eval, store, auth gate, health,
           kernel system pages (/bindings, /edit, …), and a
           labeled emergency shell if ui/nav, ui/home, or ui/css
           fails.
         - OCaml must not ship a silent second product nav/home
           or a silent full design-system CSS twin in http.ml.
           Dual silent defaults are rejected architecture.
-        - Theme is Path B (honest Lisp): css/* sheets + tokens,
+        - Theme is Path B (honest Nopales): css/* sheets + tokens,
           not CSS-string-in-lambda as the native form.
    |))
   )
@@ -46,10 +46,10 @@
 
    (details
     (doc (|
-         GET /about (kernel OCaml page today; may move to Lisp
+         GET /about (kernel OCaml page today; may move to Nopales
          later) MUST explain:
 
-         WHAT: multi-user live Lisp environment; image=CPU,
+         WHAT: multi-user live Nopales environment; image=CPU,
          Postgres=disk; Smalltalk tradition without OOP image dump.
 
          GLOSSARY:
@@ -60,7 +60,7 @@
          - Type/row: deftype + data_rows CRUD
          - Route/page: URL bound to a function
          - Shell (ui/menu, ui/nav, ui/home, ui/theme, ui/css):
-           Lisp product chrome + presentation
+           Nopales product chrome + presentation
          - Theme tokens (theme/bg, …): branch-visible style knobs
          - AI propose: agent authors on current branch only
 
@@ -99,7 +99,7 @@
          5. scripts/verify_auth.sh product gate
          6. Optional scripts/repl.sh / line-protocol REPL
 
-         Product chrome after login is Lisp (ui/nav, ui/home,
+         Product chrome after login is Nopales (ui/nav, ui/home,
          ui/theme/ui/css). Auth gate and emergency shell/CSS are
          OCaml kernel only.
 
@@ -152,7 +152,7 @@
            Functions browser groups by package; branch chrome stays
            whoami + current branch.
 
-         Lisp/REPL vocabulary stays technical (define, route,
+         Nopales/REPL vocabulary stays technical (define, route,
          deftype, rows). The browser skin translates.
     |))
    )
@@ -214,7 +214,7 @@
          GitHub-as-homepage, not a sister brochure site. The live
          image IS the public site:
 
-           /welcome   — landing (Lisp layout/* + welcome/page)
+           /welcome   — landing (Nopales layout/* + welcome/page)
            /code      — read-only source browser (kernel + CM5)
            /book.pdf  — borge book print artifact
            /src.tgz   — pruned source tarball
@@ -264,7 +264,7 @@
 
          Also register hard-public kernel paths so the front door
          works even if seed/route table is empty (belt + suspenders):
-         /welcome is hard-public and dispatches to Lisp when bound,
+         /welcome is hard-public and dispatches to Nopales when bound,
          else a minimal kernel fallback page.
 
          CTAs: Explore source → /code ; Download book → /book.pdf ;
@@ -353,7 +353,7 @@
              freeform agent can ingest wholesale.
 
          Implementation: kernel handlers in image/lib (stable
-         contract), not Lisp routes — discovery must work even
+         contract), not Nopales routes — discovery must work even
          when seed/route table is empty. base_url may be derived
          from Host / X-Forwarded-* when present, else omitted or
          a relative-friendly note.
@@ -424,7 +424,7 @@
          SURFACE
          - GET /analytics  (hard-private; any logged-in user in v1,
            admin-only later if multi-tenant sharpens)
-         - Lisp (ops/summary [day]) (ops/top-paths [n])
+         - Nopales (ops/summary [day]) (ops/top-paths [n])
          - Agent tool ops_summary (read-only)
          - Nav: link from ui/nav under system/admin cluster when
            package ops is seeded (or kernel chrome link)
@@ -517,7 +517,7 @@
          (scripts/openbsd/pricklypear-watchdog.ksh). On restart it
          may log fatal via syslog; image boot records a fatal/info
          "boot after downtime" event when possible. Watchdog is
-         outside the image; do not pretend Lisp can restart itself
+         outside the image; do not pretend Nopales can restart itself
          after a hard process death.
 
          V1 CUT (shipped)
@@ -554,7 +554,7 @@
 
          D. Internal tools platform
             Team branches; shared business objects; live
-            inspectable tools without redeploy for Lisp-tier
+            inspectable tools without redeploy for Nopales-tier
             changes.
 
          E. Education / research lab
@@ -576,13 +576,13 @@
             Semantic search deferred.
 
          Milestone ladder:
-           now   — hacker env + browser login + Lisp product shell
+           now   — hacker env + browser login + Nopales product shell
                    (define/edit/route/AI; ui/nav ui/home; auth session)
            next  — product theme Path B (css/* + ui/theme); kill
                    silent OCaml product defaults (nav/home/CSS);
                    emergency-only chrome+css; shell denser; branch
                    promote UI
-           later — environment feel (more system UI in Lisp,
+           later — environment feel (more system UI in Nopales,
                    permissions, multi-user fleet isolation)
            horizon — community + AI coworker + Solo5 product
 

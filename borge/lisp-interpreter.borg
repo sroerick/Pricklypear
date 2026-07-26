@@ -3,7 +3,7 @@
  (status partial)
  (convention ocaml-dune)
  (section lisp-interpreter
-  (doc "Pure Scheme-flavored Lisp-1 interpreter, AST-as-source, primitives layer")
+  (doc "Pure interpreter for Nopales (a Scheme-flavored Lisp-1), AST-as-source, primitives layer")
   (status partial)
 
   (subsection language-roadmap
@@ -97,7 +97,7 @@
            - habitat verify + auth smokes green
 
          Non-goals: setuid-as-user lattice completion, OCaml 5
-         Effect.perform in guest Lisp, full RBAC redesign.
+         Effect.perform in guest Nopales, full RBAC redesign.
 
          ==========================================================
          ORDERING LAW
@@ -114,9 +114,137 @@
            - Dynamic typing + effects + data schemas (not HM types)
            - Unhygienic macros + gensym (no syntax-case in 1–3)
            - No call/cc
-           - No in-Lisp fiber/async API (host owns concurrency)
+           - No in-Nopales fiber/async API (host owns concurrency)
            - Branches remain the override model; modules-lite = P4+
            - JSON/dict prims for records; no VMap required in 1–3
+    |))
+   )
+  )
+
+  (subsection core-freeze
+   (doc "Nopales core 1.0 freeze: the frozen language contract and the slow-change rule that produces long-term stability")
+   (status planned)
+   (verify
+    (smoke "core 1.0 frozen-surface list is enumerated and matches the reader, value, special-form, primitive, effect, and error chapters")
+    (smoke "a proposed core change is classifiable as additive, deprecate-then-remove, or break against this rule")
+    (smoke "conformance suite exists, is service-free, and runs green on a clean core"))
+   (details
+    (doc (|
+         THE FREEZE. After Phases 1–3 exit green and dogfood has
+         exercised the surface, Nopales core 1.0 is FROZEN. The
+         core is the set of things every product package and user
+         branch depends on without thinking; the framework
+         (Pricklypear) moves on top of it, not the other way round.
+
+         FROZEN SURFACE (core 1.0):
+           - Reader surface syntax: s-expressions, quote/quasiquote/
+             unquote/unquote-splicing shorthand, parse errors with
+             line and column.
+           - Value model: VStr, VInt, VFloat, VBool, VSymbol, VPair,
+             VList, VLambda, VPrim, VRef, VNil, and the JSON codec
+             that serializes them into function_defs JSONB.
+           - Special forms: quote, quasiquote, unquote,
+             unquote-splicing, define, lambda, if, let, begin,
+             match, guard, defmacro, with-transaction, checkout,
+             fork, merge, route. New special forms may be added;
+             the meaning of an existing one is not changed in place.
+           - Pure primitive set: arithmetic, comparison, list,
+             string, symbol, predicate, type-of, whoami,
+             current-author, and dict-* prims. A prim may gain
+             optional arguments with defaults that preserve old
+             behavior; it must not silently change return shape.
+           - Effect lattice: the capability tags, infer, and
+             policy_allows. Adding a tag is additive; redefining an
+             existing tag's meaning is a core bump.
+           - Error kinds and source locations (reader, eval, prim).
+
+         SLOW-CHANGE RULE. Once frozen, a core change is one of:
+           - ADDITIVE: a new prim, a new special form, a new effect
+             tag, or an optional argument with a default that
+             preserves old behavior. Always allowed.
+           - DEPRECATE-THEN-REMOVE: to change a meaning, add the
+             new name or behavior, keep the old working under a
+             deprecation marker, and remove the old only across a
+             named release boundary. Never silently.
+           - BREAK: only with an explicit core version bump
+             (Nopales 2.0) and a migration path for product code.
+             This is the rare, loud, planned event.
+
+         PRODUCT LAYER IS NOT FROZEN. Packages in libs/*, user
+         branches, routes, themes, and product UI are Nopales
+         programs and change freely via define and route on a
+         branch (philosophy principle 4: OCaml slow, Nopales fast).
+         The freeze is the seam between the slow core and the fast
+         product; it is what makes the fast layer safe to live in.
+
+         ENFORCEMENT. The freeze is enforced by the conformance
+         suite (see conformance): real Nopales programs, including
+         the product packages' headline usage, with expected eval
+         results, run on every core change. A core change that
+         reddens the suite does not land until the suite is updated
+         intentionally, so a silent break is impossible by
+         construction. borge drift guards the structural seam
+         between spec and code; the conformance suite guards the
+         semantic seam of the language.
+
+         VERSIONING. Nopales core is versioned separately from the
+         Pricklypear framework. A frozen-surface change bumps the
+         core version; the framework version moves on its own
+         cadence. The two are coupled only at a major core bump.
+
+         RELATION TO PHASES. The core is legitimately moving during
+         Phases 1–3 (symbols, match, guard, and capabilities are
+         still landing). The freeze is declared when Phase 3 exits
+         green and dogfood has exercised the surface; until then
+         this subsection states the target contract, not a current
+         fact.
+    |))
+   )
+  )
+
+  (subsection conformance
+   (doc "Conformance suite: real Nopales programs with expected eval results, run on every core change as the semantic gate of the freeze")
+   (status planned)
+   (verify
+    (smoke "suite loads and evaluates each program against its expected value with no services")
+    (smoke "a deliberate core change that alters a program's result is caught as a failure")
+    (smoke "the suite runs in the default dune test target"))
+   (details
+    (doc (|
+         WHAT IT IS. A set of real Nopales programs, each paired
+         with the value it must evaluate to, run by the pure
+         interpreter with no services. It is the test tier that sits
+         between the OCaml-level interpreter tests and the HTTP
+         smoke tests: the OCaml tests cover the interpreter's
+         internals; the smokes cover the image's routes; the
+         conformance suite covers the LANGUAGE — that the product's
+         Nopales code still evaluates to what it did.
+
+         CONTENTS. The suite includes the headline usage of every
+         product package (todo, notes, outline, calendar, bible,
+         weather, ui) plus focused cases for each frozen surface
+         element: reader forms, each value type, each special form,
+         each pure primitive, the effect lattice, and error
+         shapes. New product code worth keeping gets a case; a case
+         that has to change is a signal, not a nuisance.
+
+         RUN MODEL. Service-free: the pure interpreter (lisp/)
+         loads and evaluates each program; no Postgres, no HTTP,
+         no image. It runs in the default dune test target so a
+         core change reddens it before it reaches a smoke. A
+         counterexample becomes a named regression case.
+
+         THE GATE. A core change that reddens the conformance suite
+         does not land until the suite is updated intentionally and
+         the change is reclassified against core-freeze (additive,
+         deprecate-then-remove, or break). This is what makes the
+         freeze real: the product's own code is the oracle, so a
+         silent break in the language is impossible by construction.
+
+         SCOPE. The suite asserts eval results for pure programs.
+         DB-touching prims and route handlers stay in the smoke
+         tier; the conformance suite covers the language core they
+         are built on.
     |))
    )
   )
@@ -387,7 +515,7 @@
            Today many failures are bare strings / Interp_error without
            a stable shape. Agents and humans cannot reliably:
              - jump to the offending form
-             - catch and recover in Lisp
+             - catch and recover in Nopales
              - distinguish unbound vs type vs prim vs budget
 
          ==========================================================
@@ -470,7 +598,7 @@
 
    (details
     (doc (|
-         The reader parses Lisp surface syntax to expr
+         The reader parses Nopales surface syntax to expr
          values. Standard s-expressions: (foo bar baz),
          'symbol, "string", 123, #t, #f, ().
 
@@ -568,7 +696,7 @@
          let, letrec, if, define, quote, quasiquote,
          unquote, unquote-splicing, defmacro, plus higher-order
          list forms list/map, list/filter, list/foldl (OCaml
-         loops + apply — not recursive Lisp frames). The reader
+         loops + apply — not recursive Nopales frames). The reader
          produces App/Variants of these as plain AST (or the
          dedicated Quote/Quasiquote/Unquote constructors when
          sugar is used — either representation is fine as long
@@ -635,14 +763,14 @@
 
          Philosophy parked macros ("can come later"). The habitat
          is past that: product packages, AI authoring, and agents
-         writing Lisp all want surface sugar without growing the
+         writing Nopales all want surface sugar without growing the
          OCaml special-form table forever. Homoiconicity is already
          real (AST-as-JSONB); macros are the missing half — code
          that writes code as data, then re-enters eval.
 
          Goals for v1:
            - Users/agents can define (when / unless / and / or …)
-             in Lisp packages without OCaml changes
+             in Nopales packages without OCaml changes
            - Macro bodies use quasiquote so templates are readable
            - Expansion is inspectable (macroexpand-1)
            - Persisted function bodies remain readable source ASTs
@@ -786,7 +914,7 @@
            4. Eval body in that env -> expansion_value
            5. expansion_expr = value_to_expr expansion_value
            6. Eval expansion_expr in the ORIGINAL call-site env
-              (not the macro's defining env) — standard Lisp
+              (not the macro's defining env) — standard Nopales
               macro call-site evaluation of the expansion.
 
          Recursive expansion:
@@ -989,7 +1117,7 @@
          Primitives live in image/lib/primitives.ml. They
          are REAL OCaml, typed at the boundary, fast.
          Anything that touches Postgres, htmx, or the OS
-         is a primitive, never user-Lisp.
+         is a primitive, never user-Nopales.
 
          CRUD:
            (create 'type {fields...}) -> VRef
@@ -1031,7 +1159,7 @@
    )
   )
   (subsection effects
-   (doc "Capability effects for Lisp programs: classify pure vs DB vs AI vs publish; infer; gate; display. Separate from OCaml 5 host effects and from Lwt async plumbing.")
+   (doc "Capability effects for Nopales programs: classify pure vs DB vs AI vs publish; infer; gate; display. Separate from OCaml 5 host effects and from Lwt async plumbing.")
    (implements lisp/lib/effect.ml lisp/lib/eval.ml image/lib/prims_pure.ml)
    (status implemented)
    (verify
@@ -1053,7 +1181,7 @@
             Mechanism: eval : env -> expr -> value Lwt.t
             Pure prims: register_sync wraps Lwt.return
             DB/AI prims: return promises directly
-            This is the "async problem" for data-in-Lisp.
+            This is the "async problem" for data-in-Nopales.
             It is runtime plumbing, not an effect system.
 
          B) CAPABILITY EFFECTS  (NOT DONE — this section)
@@ -1065,7 +1193,7 @@
          C) HOST ALGEBRAIC EFFECTS (OPTIONAL LATER)
             OCaml 5 Effect.perform / handlers inside the
             interpreter implementation. Could one day replace
-            some Lwt coloring. Does NOT give Lisp programs
+            some Lwt coloring. Does NOT give Nopales programs
             effects for free. Guest language still needs B.
 
          Do not block B on C. Do not re-solve A while building B.
@@ -1154,7 +1282,7 @@
              select-for-update meaningful only under Txn
 
          Image layer owns the table (primitives live in image/).
-         Lisp package may define the effect datatype only.
+         Nopales package may define the effect datatype only.
 
          ==========================================================
          4. INFERENCE (syntactic, conservative)
@@ -1217,7 +1345,7 @@
          Solved:
            - eval returns value Lwt.t
            - prim_fn = value list -> value Lwt.t
-           - composition of DB reads in Lisp works
+           - composition of DB reads in Nopales works
            - with-transaction threads dynamic connection
 
          Not the same as effects:
@@ -1241,10 +1369,10 @@
 
          Explicit non-goals for first effects delivery:
            - do not replace Lwt in Mirage/httpaf/pgx stack
-           - do not expose Effect.perform to Lisp users
-           - do not require monadic syntax in Lisp
+           - do not expose Effect.perform to Nopales users
+           - do not require monadic syntax in Nopales
 
-         Guest programs keep looking like normal Lisp.
+         Guest programs keep looking like normal Nopales.
          Effects are metadata + checks, not new call syntax
          (unless we add optional declare forms later).
 
@@ -1388,7 +1516,7 @@
            platform-ref notes) without a parallel docs system.
            Inbox SPEC "define docstring" is the product brief;
            this subsection is the book authority for the OCaml
-           kernel half. Lisp package doc coverage, /ref, and
+           kernel half. Nopales package doc coverage, /ref, and
            apropos are follow-on product work once this lands.
 
          SCHEMA (already present — no migration)
@@ -1591,7 +1719,7 @@
            1. Document the FROZEN SET in this subsection (table).
            2. Frozen names: behavior may bugfix; signatures must
               not change without a new name (map2, etc.).
-           3. Prefer OCaml prims for hot loops; Lisp std may wrap.
+           3. Prefer OCaml prims for hot loops; Nopales std may wrap.
            4. New helpers go to std only with a verify case.
 
          ==========================================================

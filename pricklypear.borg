@@ -122,7 +122,7 @@
    Three pillars (as the system runs today):
 
    1. One OCaml unix image binary. HTTP (httpaf-lwt-unix + pure-html
-      / htmx), optional line-protocol REPL, in-process auth, and Lisp
+      / htmx), optional line-protocol REPL, in-process auth, and Nopales
       eval live in a single process. Supervisor fleets, authd sidecars,
       and Mirage/Solo5 unikernel topology are retired for v1 (see
       single-image.borg; Solo5 remains an optional later hardening
@@ -136,7 +136,7 @@
    3. A Scheme-flavored Lisp-1. The AST is the source (homoiconic);
       functions persist as JSONB, editable live without rebuilding
       the binary. OCaml (primitives, transports, gate) changes slowly
-      via deploy; Lisp (apps and product shell: nav, home, routes,
+      via deploy; Nopales (apps and product shell: nav, home, routes,
       theme) changes fast via define/route on a branch.
 
    Multi-user means many humans with credentials, browser or agent

@@ -62,7 +62,7 @@
    (implements libs/structed/lib.pp)
    (details
     (doc (|
-         PACKAGE: structed/ (nopales — pure Lisp, no DB, no I/O).
+         PACKAGE: structed/ (Nopales — pure, no DB, no I/O).
          Load: (load-library "structed").
 
          HIGHER-ORDER OVER CHILD ACCESS. One op implementation
@@ -107,7 +107,7 @@
            delete (domain op)              : next sibling, else prev, else parent
            add-child / add-sibling         : the new node
 
-         PROPERTIES TO TEST (Lisp-level via load-string + eval; no
+         PROPERTIES TO TEST (Nopales-level via load-string + eval; no
          services, no browser):
            slurp-forward then barf-forward  = identity on the tree
            wrap then splice                 = identity on the tree

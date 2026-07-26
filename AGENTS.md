@@ -1,7 +1,8 @@
 # Pricklypear — Agent Notes
 
-Pricklypear is a multi-user Lisp OS: one unix image process, Postgres as
-the object store, htmx as the interface layer. **The authoritative design is the multi-file borge book:** root [`pricklypear.borg`](pricklypear.borg) inlines chapter files (`borge/philosophy.borg`, `borge/single-image.borg`, `borge/lisp-interpreter.borg`, `borge/ai-authoring.borg`, …). Read them in root inline order (literate book order). If code and spec
+Pricklypear is a multi-user Lisp OS — the language is **Nopales** (a
+Scheme-family Lisp-1): one unix image process, Postgres as the object
+store, htmx as the interface layer. **The authoritative design is the multi-file borge book:** root [`pricklypear.borg`](pricklypear.borg) inlines chapter files (`borge/philosophy.borg`, `borge/single-image.borg`, `borge/lisp-interpreter.borg`, `borge/ai-authoring.borg`, …). Read them in root inline order (literate book order). If code and spec
 disagree, code is wrong. Use borge to plan/make/review changes — don't
 edit the spec freely during a `make` phase, file a `borge issue new`
 instead.
@@ -84,12 +85,12 @@ curl -sS "$PP_URL/agent.txt" | head
 
 **Authority (branching.package-updates / seed-policy):**
 - Kernel (OCaml/migrations) → git is source of truth.
-- Package Lisp → Postgres branches are live source; git is a **vault**.
+- Package Nopales → Postgres branches are live source; git is a **vault**.
 - Boot seed is **additive** into `system/main` only (fills missing names
   from `libs/*.pp`; never overwrites existing main rows after promote).
 - Explicit `(reseed-package "notes")` / `pp-sync reseed notes` (admin)
   is the only intentional git→main clobber.
-- Daily product Lisp: work on personal/dev on the habitat → **promote**
+- Daily product Nopales: work on personal/dev on the habitat → **promote**
   to main → optional `pp-sync snapshot` into the repo.
 - Local `scripts/dev.sh` PG is kernel-lab only; agents default to prod
   via `~/.config/pricklypear/env`.
@@ -119,8 +120,8 @@ curl -sS "$PP_URL/agent.txt" | head
   `sha256$salt$digest` until argon2 (BORGE-1783831698).
 - `pure-html` for type-safe HTML + `HTML.Hx.*` htmx attributes. Use
   `txt ~raw:true "%s" s` to bypass escaping for raw-HTML injection from
-  Lisp route handlers.
-- `alcotest` for tests, `yojson` for JSON (serialized Lisp ASTs are
+  Nopales route handlers.
+- `alcotest` for tests, `yojson` for JSON (serialized Nopales ASTs are
   JSONB; dict prims cover field-level access on JSON strings).
 - Eio only for pure-unix dev tooling if any — NOT inside the image (H3 deferred; shipping rim is Io_lwt — see docs/runtime-effects-transition.md).
 - Optional line-protocol REPL on `PP_REPL_PORT`; primary interactive
@@ -136,10 +137,10 @@ Per spec `single-image.topology`. The order of build dependency is:
 Supervisor/authd packages were retired by the single-image pivot;
 auth is **in-process** in the image.
 
-- `lisp/` — pure interpreter (no I/O). Testable with no services.
+- `lisp/` — pure interpreter for Nopales (no I/O). Testable with no services.
 - `common/` — pure shared types (incl. `auth_types.ml`).
 - `migrations/` — SQL applied by `scripts/dev.sh` (and deploy hooks).
-- `image/` — the single unix binary: Lisp, REPL, htmx, Postgres, **auth**.
+- `image/` — the single unix binary: Nopales, REPL, htmx, Postgres, **auth**.
   Auth modules: `image/lib/auth_password.ml`, `image/lib/auth_store.ml`.
 - `scripts/` — dev orchestration. `scripts/dev.sh start` brings up PG
   (initdb if needed) + the image; `stop`/`restart`/`status`/`clean`
@@ -191,7 +192,7 @@ auth is **in-process** in the image.
   `(route "/x" "fn" 'public)` / `(public-route …)` for anonymous GET.
   Kernel paths (`/data`, `/admin`, `/api/eval`, …) stay hard-private.
   Anonymous identity uses `system/main` (package public routes inherit).
-- Lisp primitives: pure (`+ - * = < > <= >= not list car cdr cons
+- Nopales primitives: pure (`+ - * = < > <= >= not list car cdr cons
   null? pair? count string-append str type-of whoami current-author
   list-bindings dict-get dict-set dict-keys render-html`), DB-
   touching control (`fork merge route checkout`), admin auth
@@ -202,7 +203,7 @@ auth is **in-process** in the image.
   `(define u (get 'user id))` then `(str u)` returns the bound DB
   row. The list-rows prim is named `rows`, NOT `list` (the latter
   is the pure VList-constructor). Dict prims operate on the VStr
-  JSON returned by `(get 'type id)` so Lisp code can do field-level
+  JSON returned by `(get 'type id)` so Nopales code can do field-level
   access (`(dict-get u "name")`) WITHOUT a new value type — v1
   implementation choice, accept pre-formalization. `(deftype 'name
   'field1 'field2 ...)` registers a type on the current branch
@@ -240,7 +241,7 @@ auth is **in-process** in the image.
   no inheritance, plain SQL. SERIALIZABLE transactions by default for
   mutations — `Store.with_transaction` (it16) wraps pgx's native
   functor; the `(with-transaction (lambda () body))` prim (it29) gives
-  Lisp code a session-level transaction scope so `(select-for-update ...)`
+  Nopales code a session-level transaction scope so `(select-for-update ...)`
   row locks persist across subsequent prims in the body.
 - Additive-only schema migrations; the migration runner uses
   `split_sql_statements` (handles dollar-quoted `$$...$$` blocks,

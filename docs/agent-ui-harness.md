@@ -154,7 +154,7 @@ we should respect when writing smokes or agent instructions:
    mutations — re-render them via OOB on each mutation response if a
    smoke depends on those attrs.
 5. Server returns **HTML**, not JSON, for UI routes. Agent prompts that
-   invent REST for todo/notes/etc. are wrong; use `/api/eval` / Lisp.
+   invent REST for todo/notes/etc. are wrong; use `/api/eval` / Nopales.
 
 ---
 
@@ -226,7 +226,7 @@ Match method to question — lightest tool that gives confidence:
 ### Suggested loop for product UI work
 
 ```text
-change template / Lisp route / pure-html
+change template / Nopales route / pure-html
     ↓
 dune build (and restart image if needed)
     ↓

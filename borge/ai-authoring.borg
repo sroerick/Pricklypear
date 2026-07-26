@@ -36,7 +36,7 @@
            (llm-seed "build an app that ...")
            Recursively: create smallest clean core, then
            llm-outer until requirements are satisfied.
-           Bottom-up / inside-out Lisp style operationalized.
+           Bottom-up / inside-out Nopales style operationalized.
 
         4) Runtime generative eval (SECONDARY / later)
            Eval-time expansion of AI holes without freeze.
@@ -62,7 +62,7 @@
    (details
     (doc (|
          v1 SHIPPED:
-         - propose-function Lisp prim + /api/ai/propose
+         - propose-function Nopales prim + /api/ai/propose
          - whole-function body from model, define on current branch
          - author = agent:<model>
          - never merges to system/*
@@ -334,11 +334,11 @@
          11. On reject: no store mutation
 
          This is NOT leaving (llm-inner ...) in the program.
-         After accept, the program contains real Lisp AST only.
+         After accept, the program contains real Nopales AST only.
 
          PROMPT CONTRACT (surgical AST author)
          System:
-           You are editing a Pricklypear Lisp AST.
+           You are editing a Pricklypear Nopales AST.
            Return ONLY one replacement form: a single
            s-expression (or JSON AST). No markdown, no essay.
            You write ONE component of a larger program tree.
@@ -397,7 +397,7 @@
    (details
     (doc (|
          PURPOSE
-         Operationalize inside-out Lisp development for AI:
+         Operationalize inside-out Nopales development for AI:
            seed a minimal clean function, then wrap/grow until
            the stated requirements are satisfied.
 
@@ -459,7 +459,7 @@
          WHY RECURSIVE OUTER NOT ONE-SHOT APP DUMP
            - preserves a working center at every step
            - each layer is runnable/testable in the image
-           - matches bottom-up Lisp craft
+           - matches bottom-up Nopales craft
            - forces LLMs into step-sized commits
            - diffs remain reviewable
 

@@ -44,9 +44,9 @@
           <user>/<name>   experiments (full fork when isolation
                           from evolving main is required)
 
-        AUTHORITY (Lisp vs kernel) — see package-updates:
+        AUTHORITY (Nopales vs kernel) — see package-updates:
           Kernel (OCaml/migrations)  → git is source of truth
-          Package Lisp               → Postgres branches are live
+          Package Nopales               → Postgres branches are live
                                        source; git holds snapshots
           Boot seed                  → additive into system/main
                                        only (never clobber existing)
@@ -188,7 +188,7 @@
    )
   )
   (subsection package-updates
-   (doc "Authority model: live Postgres Lisp, git kernel + vault, additive seed")
+   (doc "Authority model: live Postgres Nopales, git kernel + vault, additive seed")
    (status partial)
    (implements image/lib/session.ml image/lib/store.ml image/lib/loader.ml cli/bin/pp_sync.ml)
    (details
@@ -221,21 +221,21 @@
 
          GIT'S TWO JOBS (do not mix):
            A. Kernel repo — authoritative for OCaml/migrations.
-           B. Lisp vault — exported snapshots of packages/
+           B. Nopales vault — exported snapshots of packages/
               branches (backup, bootstrap, clone-to-laptop).
-              Not the daily Lisp editor. See lisp-snapshot.
+              Not the daily Nopales editor. See lisp-snapshot.
 
          DATA (data_rows) is never versioned by branch and
          never wiped by deploy. New package code must tolerate
          older row shapes or ship an explicit data migrator.
 
-         DEFAULT WORK LOOP (product Lisp):
+         DEFAULT WORK LOOP (product Nopales):
            work on personal or dev on the ONE habitat (prod)
            → dogfood against real shared data
            → promote selected names → system/main
            → optional snapshot/export into repo (vault)
            → optional unoverride so inheritance is clean
-           Local dev.sh PG is kernel-lab only, not daily Lisp.
+           Local dev.sh PG is kernel-lab only, not daily Nopales.
 
          UPDATE RULE (after additive seed):
            new name in libs, absent on main → appears on seed
@@ -336,7 +336,7 @@
    (implements image/lib/session.ml image/lib/store.ml image/lib/http_branches.ml cli/bin/pp_sync.ml)
    (details
     (doc (|
-         Promote is the blessed path for product Lisp.
+         Promote is the blessed path for product Nopales.
          Git export is optional vault/checkpoint, not required
          for main to keep the change across deploys (seed-policy).
 
@@ -368,7 +368,7 @@
 
          PRIM / CLI (v1 make):
            keep promote UI + Session.promote_to_main
-           optional Lisp: (promote-to-main "name") or
+           optional Nopales: (promote-to-main "name") or
              (promote-to-main '("n1" "n2")) on current branch
            pp-sync does not promote (image policy stays in image)
 
@@ -386,13 +386,13 @@
     (smoke "non-admin promote to system/main denied"))
   )
   (subsection lisp-snapshot
-   (doc "Clone habitat Lisp state into the git repo as vault/backup")
+   (doc "Clone habitat Nopales state into the git repo as vault/backup")
    (status planned)
    (implements image/lib/session.ml image/lib/primitives.ml cli/bin/pp_sync.ml)
    (details
     (doc (|
          PURPOSE:
-         Postgres is the live Lisp store. The repo must still
+         Postgres is the live Nopales store. The repo must still
          be able to hold a clone of package/branch state for
          backup, new-machine bootstrap material, and explicit
          reseed inputs — without becoming the daily editor.
@@ -575,7 +575,7 @@
              parent.updated_at > child → main-newer badge)
            - route: own view_bindings entries (path → handler)
 
-         Lisp prims (read-only, current branch default):
+         Nopales prims (read-only, current branch default):
            (branch-changes) → list of dict/JSON strings
              {name, kind: fn|route, author, updated_at,
               class: new|override|route}
@@ -591,7 +591,7 @@
            to session ring (last N=64). Optional; derived list
            from PG is enough if ring is empty after restart.
 
-         Lisp: (change-transcript) → recent session ops
+         Nopales: (change-transcript) → recent session ops
          Do not require durable data_rows log in v1.
 
          ==========================================================

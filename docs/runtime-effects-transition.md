@@ -22,7 +22,7 @@ The path is **effects from the language core outward**.
 
 | Layer | Question | Mechanism | User-visible? |
 |-------|----------|-----------|----------------|
-| **A. Guest capabilities** | What powers does this Lisp need? | `lisp/lib/effect.ml` lattice, infer, gates | badges, AI policy, route policy |
+| **A. Guest capabilities** | What powers does this Nopales need? | `lisp/lib/effect.ml` lattice, infer, gates | badges, AI policy, route policy |
 | **B. Host control effects** | How does eval do I/O without monads? | OCaml 5 `Effect.perform` + handlers | no (implementation) |
 | **C. I/O runtime** | Who schedules sockets/DB/fibers? | Lwt today → maybe Eio/Miou later | maybe perf only |
 
@@ -30,7 +30,7 @@ The path is **effects from the language core outward**.
 - Doing **B** removes monadic coloring from the core you read.
 - **C** is the power company; pick it last.
 
-Guest Lisp never sees `perform`, Lwt, or Eio.
+Guest Nopales never sees `perform`, Lwt, or Eio.
 
 ### H0.5 — Concepts (capabilities ≠ async ≠ host effects)
 
@@ -45,7 +45,7 @@ Keep these three stories separate in docs and UI copy:
 2. **Async / promises (historical plumbing)** — today’s `value Lwt.t` in
    eval is an implementation accident from it12 composition, **not** a
    guest concept. Users do not write async/await. H1 deletes this coloring
-   from `lisp/` without changing Lisp syntax.
+   from `lisp/` without changing Nopales syntax.
 
 3. **Host control effects (layer B)** — OCaml 5 `Effect.perform` used
    *inside* the image so eval can be direct-style. Never exposed to

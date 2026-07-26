@@ -6,7 +6,7 @@ Everything here is sequencing, tooling, and done-criteria for the make side.
 
 ## Verification islands (priority order)
 
-- **Island A — Pure Lisp kernel (first).** `lisp/`: effect.ml, ast.ml,
+- **Island A — Pure Nopales kernel (first).** `lisp/`: effect.ml, ast.ml,
   reader.ml, eval.ml, env.ml. Already pure, no Postgres/HTTP, small, high
   leverage under every product path. Starter properties: `effect.*`,
   `reader.*`, `budget.*`.
@@ -92,7 +92,7 @@ Equality oracles (locked defaults):
 **Proofs (later).** Only after Passes A–E are boring: Gospel specs adjacent
 to effect.ml / pure helpers; Cameleer or Why3 discharge lattice laws and
 pure-sound fragments; Coq/Rocq only if a kernel is both critical and tiny.
-Proof work must not block product Lisp packages; the runtime image must not
+Proof work must not block product Nopales packages; the runtime image must not
 depend on proof tooling.
 
 **Auth + branch islands (second/third waves).** Auth: properties on
