@@ -5,7 +5,8 @@
 
 (define signup/blank?
   (lambda (s)
-    (blank? (string-trim (as-str s)))))
+    (blank? (string-trim (as-str s))))
+  "True if trimmed string is blank (via blank?).")
 
 (define signup/looks-like-email?
   (lambda (email)
@@ -16,7 +17,8 @@
               (if (> (string-length e) 3)
                   #t
                   #f)
-              #f)))))
+              #f))))
+  "Heuristic email check: non-blank, contains @, length > 3.")
 
 (define signup/fields
   (lambda (email note source ua)
@@ -25,7 +27,8 @@
         "email" (string-trim (as-str email))
         "note" (as-str note)
         "source" (as-str source)
-        "user_agent" (as-str ua)))))
+        "user_agent" (as-str ua))))
+  "Build signup data_row fields dict from email/note/source/ua.")
 
 (define signup/form
   (lambda (msg err)
@@ -78,7 +81,8 @@
             (list
               (html/a "/welcome" (html/text "welcome"))
               (html/text " · ")
-              (html/a "/roadmap" (html/text "roadmap")))))))))
+              (html/a "/roadmap" (html/text "roadmap"))))))))
+  "Signup form page; msg and err are status strings (may be empty).")
 
 (define signup/thanks
   (lambda (email)
@@ -94,7 +98,8 @@
               (layout/cta "/login" "Log in"))))
         (html/div
           (html/attr "class" "layout-foot")
-          (html/a "/welcome" (html/text "welcome")))))))
+          (html/a "/welcome" (html/text "welcome"))))))
+  "Post-signup thank-you page for email.")
 
 (define signup/notify-inbox
   (lambda (email note)
@@ -108,7 +113,8 @@
       ;; notes/capture/add is seeded on system/main; no-op if notes missing.
       (if (string-eq (type-of notes/capture/add) "lambda")
           (notes/capture/add title body)
-          "no-notes"))))
+          "no-notes")))
+  "Capture signup into notes inbox when notes/capture/add exists.")
 
 (define signup/record
   (lambda (email note)
@@ -117,7 +123,8 @@
         (create 'signup fields)
         (seq
           (signup/notify-inbox email note)
-          email)))))
+          email))))
+  "Create signup row, notify inbox, return email.")
 
 (define signup/page
   (lambda ()
@@ -131,6 +138,7 @@
                     (signup/record email note)))
                 (signup/thanks email))
               (signup/form "" "Need a real-looking email (with @).")))
-        (signup/form "" ""))))
+        (signup/form "" "")))
+  "GET/POST /signup public handler.")
 
 (public-route "/signup" "signup/page")

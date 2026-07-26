@@ -15,20 +15,25 @@
 
 ;; --- helpers ---
 
-(define flash/blank? blank?)
+(define flash/blank? blank?
+  "True if value is blank after as-str trim.")
 
-(define flash/today (lambda () (date-today)))
+(define flash/today (lambda () (date-today))
+  "Today date string YYYY-MM-DD.")
 
 (define flash/as-int
   (lambda (v)
-    (if (null? v) 0 (parse-int (as-str v)))))
+    (if (null? v) 0 (parse-int (as-str v))))
+  "Coerce value to int.")
 
 (define flash/as-float
   (lambda (v)
-    (if (null? v) 0.0 (parse-float (as-str v)))))
+    (if (null? v) 0.0 (parse-float (as-str v))))
+  "Coerce value to float.")
 
 (define flash/true?
-  (lambda (v) (string-eq (as-str v) "true")))
+  (lambda (v) (string-eq (as-str v) "true"))
+  "Truthy check for bool-ish field strings.")
 
 ;; Empty due is always due; else ISO YYYY-MM-DD string order.
 (define flash/due-now?
@@ -38,7 +43,8 @@
           #t
           (if (string-eq d today)
               #t
-              (flash/str-le? d today))))))
+              (flash/str-le? d today)))))
+  "True if due date empty or on/before today (ISO order).")
 
 (define flash/str-le?
   (lambda (a b)
@@ -46,7 +52,8 @@
           (sb (as-str b)))
       (if (string-eq sa sb)
           #t
-          (flash/str-le-loop sa sb 0 (string-length sa) (string-length sb))))))
+          (flash/str-le-loop sa sb 0 (string-length sa) (string-length sb)))))
+  "Lexicographic string <= comparison.")
 
 (define flash/str-le-loop
   (lambda (a b i na nb)
@@ -58,7 +65,8 @@
                   (cb (substring b i 1)))
               (if (string-eq ca cb)
                   (flash/str-le-loop a b (+ i 1) na nb)
-                  (flash/char-le? ca cb)))))))
+                  (flash/char-le? ca cb))))))
+  "Internal loop for flash/str-le?.")
 
 (define flash/digit-rank
   (lambda (c)
@@ -72,18 +80,26 @@
                   (if (string-eq c "6") 7
                     (if (string-eq c "7") 8
                       (if (string-eq c "8") 9
-                        (if (string-eq c "9") 10 11)))))))))))))
+                        (if (string-eq c "9") 10 11))))))))))))
+  "Rank of digit character for comparisons.")
 
 (define flash/char-le?
   (lambda (ca cb)
-    (<= (flash/digit-rank ca) (flash/digit-rank cb))))
+    (<= (flash/digit-rank ca) (flash/digit-rank cb)))
+  "Character <= comparison helper.")
 
-(define flash/tr (lambda (body) (html/tag "tr" "" body)))
-(define flash/td (lambda (body) (html/tag "td" "" body)))
-(define flash/th (lambda (body) (html/tag "th" "" body)))
-(define flash/table (lambda (body) (html/tag "table" "" body)))
-(define flash/thead (lambda (body) (html/tag "thead" "" body)))
-(define flash/tbody (lambda (body) (html/tag "tbody" "" body)))
+(define flash/tr (lambda (body) (html/tag "tr" "" body))
+  "HTML tr tag helper.")
+(define flash/td (lambda (body) (html/tag "td" "" body))
+  "HTML td tag helper.")
+(define flash/th (lambda (body) (html/tag "th" "" body))
+  "HTML th tag helper.")
+(define flash/table (lambda (body) (html/tag "table" "" body))
+  "HTML table tag helper.")
+(define flash/thead (lambda (body) (html/tag "thead" "" body))
+  "HTML thead tag helper.")
+(define flash/tbody (lambda (body) (html/tag "tbody" "" body))
+  "HTML tbody tag helper.")
 
 ;; --- decks ---
 
@@ -92,14 +108,17 @@
     (list/filter
       (lambda (row)
         (not (flash/true? (dict-get (cdr row) "archived"))))
-      (rows 'flash-deck 200))))
+      (rows 'flash-deck 200)))
+  "List flashcard deck rows.")
 
 (define flash/deck
   (lambda (id)
-    (get 'flash-deck (as-str id))))
+    (get 'flash-deck (as-str id)))
+  "Fetch deck row by id.")
 
 (define flash/deck-title
-  (lambda (fields) (as-str (dict-get fields "title"))))
+  (lambda (fields) (as-str (dict-get fields "title")))
+  "Deck title from fields.")
 
 (define flash/deck-create
   (lambda (title description)
@@ -109,11 +128,13 @@
           "title" (as-str title)
           "description" (as-str description)
           "color" ""
-          "archived" "")))))
+          "archived" ""))))
+  "Create a new deck with title.")
 
 (define flash/deck-archive
   (lambda (id)
-    (update-field 'flash-deck (as-str id) "archived" "true")))
+    (update-field 'flash-deck (as-str id) "archived" "true"))
+  "Archive deck by id.")
 
 ;; --- cards ---
 
@@ -133,23 +154,29 @@
         "lapses" "0"
         "due" ""
         "last_reviewed" ""
-        "created" (flash/today)))))
+        "created" (flash/today))))
+  "Default card scheduling fields dict.")
 
 (define flash/add
   (lambda (deck-id front back tags)
-    (create 'flash-card (flash/default-fields deck-id front back tags))))
+    (create 'flash-card (flash/default-fields deck-id front back tags)))
+  "Add card to deck with front/back.")
 
 (define flash/card
-  (lambda (id) (get 'flash-card (as-str id))))
+  (lambda (id) (get 'flash-card (as-str id)))
+  "Fetch card row by id.")
 
 (define flash/delete
-  (lambda (id) (delete 'flash-card (as-str id))))
+  (lambda (id) (delete 'flash-card (as-str id)))
+  "Delete card by id.")
 
 (define flash/suspend
-  (lambda (id) (update-field 'flash-card (as-str id) "suspended" "true")))
+  (lambda (id) (update-field 'flash-card (as-str id) "suspended" "true"))
+  "Suspend card from review.")
 
 (define flash/unsuspend
-  (lambda (id) (update-field 'flash-card (as-str id) "suspended" "")))
+  (lambda (id) (update-field 'flash-card (as-str id) "suspended" ""))
+  "Unsuspend card for review.")
 
 (define flash/cards
   (lambda (deck-id)
@@ -157,19 +184,24 @@
       (list/filter
         (lambda (row)
           (string-eq (as-str (dict-get (cdr row) "deck_id")) did))
-        (rows 'flash-card 500)))))
+        (rows 'flash-card 500))))
+  "Cards belonging to deck id.")
 
 (define flash/card-front
-  (lambda (fields) (as-str (dict-get fields "front"))))
+  (lambda (fields) (as-str (dict-get fields "front")))
+  "Card front text from fields.")
 
 (define flash/card-back
-  (lambda (fields) (as-str (dict-get fields "back"))))
+  (lambda (fields) (as-str (dict-get fields "back")))
+  "Card back text from fields.")
 
 (define flash/card-deck-id
-  (lambda (fields) (as-str (dict-get fields "deck_id"))))
+  (lambda (fields) (as-str (dict-get fields "deck_id")))
+  "Deck id from card fields.")
 
 (define flash/suspended?
-  (lambda (fields) (flash/true? (dict-get fields "suspended"))))
+  (lambda (fields) (flash/true? (dict-get fields "suspended")))
+  "True if card is suspended.")
 
 ;; --- FSRS-4.5 via kernel (fsrs-schedule) ---
 
@@ -177,12 +209,14 @@
   (lambda (last today)
     (if (flash/blank? last)
         0
-        (date-diff-days (as-str last) (as-str today)))))
+        (date-diff-days (as-str last) (as-str today))))
+  "Days elapsed since last review field.")
 
 (define flash/rating-again?
   (lambda (r)
     (let ((s (as-str r)))
-      (if (string-eq s "again") #t (string-eq s "1")))))
+      (if (string-eq s "again") #t (string-eq s "1"))))
+  "True if rating means Again.")
 
 (define flash/apply-rating
   (lambda (fields rating today)
@@ -208,7 +242,8 @@
                   (str (if (flash/rating-again? r) (+ lapses 1) lapses))
                 "due"
                   (if (= iv 0) today (date-add-days today iv))
-                "last_reviewed" today))))))))
+                "last_reviewed" today)))))))
+  "Apply FSRS rating to card fields via kernel.")
 
 (define flash/review
   (lambda (id rating)
@@ -218,14 +253,16 @@
           (let ((updated (flash/apply-rating fields rating (flash/today))))
             (seq
               (update 'flash-card (as-str id) updated)
-              updated))))))
+              updated)))))
+  "Record review rating for card id.")
 
 (define flash/row-due?
   (lambda (row today)
     (let ((fields (cdr row)))
       (if (flash/suspended? fields)
           #f
-          (flash/due-now? (dict-get fields "due") today)))))
+          (flash/due-now? (dict-get fields "due") today))))
+  "True if card row is due for review.")
 
 (define flash/due
   (lambda (deck-id limit)
@@ -241,7 +278,8 @@
                           (string-eq (flash/card-deck-id (cdr row)) did))
                       #f))
                 (rows 'flash-card 500))))
-        (flash/take xs lim)))))
+        (flash/take xs lim))))
+  "Due cards for deck (or all), unsuspended.")
 
 (define flash/take
   (lambda (xs n)
@@ -250,11 +288,13 @@
         (if (<= n 0)
             (list)
             (append (list (car xs))
-                    (flash/take (cdr xs) (- n 1)))))))
+                    (flash/take (cdr xs) (- n 1))))))
+  "Take first n items from list.")
 
 (define flash/due-count
   (lambda (deck-id)
-    (count (flash/due deck-id 500))))
+    (count (flash/due deck-id 500)))
+  "Count of due cards for deck.")
 
 (define flash/stats
   (lambda (deck-id)
@@ -277,11 +317,13 @@
           (count
             (list/filter
               (lambda (row) (flash/suspended? (cdr row)))
-              scoped)))))))
+              scoped))))))
+  "Deck stats dict (due, new, suspended counts).")
 
 ;; --- HTML ---
 
-(define flash/esc (lambda (s) (html-escape (as-str s))))
+(define flash/esc (lambda (s) (html-escape (as-str s)))
+  "HTML-escape helper alias.")
 
 (define flash/deck-row-html
   (lambda (row)
@@ -300,7 +342,8 @@
               (flash/td
                 (html/a
                   (string-append "/flashcards/study?deck=" id)
-                  "Study")))))))))
+                  "Study"))))))))
+  "Table row HTML for one deck.")
 
 (define flash/new-deck-form
   (lambda ()
@@ -317,7 +360,8 @@
                 (html/text-input "title" (html/attr "required" "required"))
                 (html/label "" "Description")
                 (html/text-input "description" "")
-                (html/button (html/attr "type" "submit") "Create")))))))))
+                (html/button (html/attr "type" "submit") "Create"))))))))
+  "Form HTML to create a deck.")
 
 (define flash/decks-table
   (lambda (ds)
@@ -334,7 +378,8 @@
                       (flash/th "Due")
                       (flash/th "")))))
               (flash/tbody
-                (html/join (list/map flash/deck-row-html ds)))))))))
+                (html/join (list/map flash/deck-row-html ds))))))))
+  "Table of all decks.")
 
 (define flash/home-html
   (lambda ()
@@ -350,7 +395,8 @@
             (html/join
               (list
                 (html/h2 "Decks")
-                (flash/decks-table ds)))))))))
+                (flash/decks-table ds))))))))
+  "Flashcards home panel HTML.")
 
 (define flash/card-row-html
   (lambda (row)
@@ -371,7 +417,8 @@
                   (list
                     (html/hidden "action" "delete-card")
                     (html/hidden "id" id)
-                    (html/button (html/attr "type" "submit") "Delete")))))))))))
+                    (html/button (html/attr "type" "submit") "Delete"))))))))))
+  "Table row HTML for one card in deck view.")
 
 (define flash/deck-page-html
   (lambda (deck-id)
@@ -425,7 +472,8 @@
                                       (flash/th "")))))
                               (flash/tbody
                                 (html/join
-                                  (list/map flash/card-row-html cards))))))))))))))))
+                                  (list/map flash/card-row-html cards)))))))))))))))
+  "Deck detail page HTML with cards list.")
 
 (define flash/rating-form
   (lambda (card-id deck rating label)
@@ -437,7 +485,8 @@
           (html/hidden "id" (as-str card-id))
           (html/hidden "rating" rating)
           (html/hidden "deck" (as-str deck))
-          (html/button (html/attr "type" "submit") label))))))
+          (html/button (html/attr "type" "submit") label)))))
+  "Study rating buttons form for card.")
 
 (define flash/study-card-html
   (lambda (row deck reveal)
@@ -467,7 +516,8 @@
                       (html/hidden "deck" (as-str deck))
                       (html/hidden "id" id)
                       (html/hidden "reveal" "true")
-                      (html/button (html/attr "type" "submit") "Reveal")))))))))))
+                      (html/button (html/attr "type" "submit") "Reveal"))))))))))
+  "Single study card face HTML.")
 
 (define flash/study-html
   (lambda (deck-id card-id reveal)
@@ -491,7 +541,8 @@
                                       (string-eq (as-str (car r)) (as-str card-id)))
                                     due)))
                             (if (null? found) (car due) (car found))))))
-                (flash/study-card-html row deck-id reveal))))))))
+                (flash/study-card-html row deck-id reveal)))))))
+  "Study session panel HTML for deck.")
 
 ;; --- routes ---
 
@@ -505,7 +556,8 @@
                 (request-param "title")
                 (request-param "description"))))
           (redirect "/flashcards"))
-        (html/page (list (flash/home-html))))))
+        (html/page (list (flash/home-html)))))
+  "GET/POST /flashcards home handler.")
 
 (define flash/deck-page
   (lambda ()
@@ -523,7 +575,8 @@
                  (flash/delete (request-param "id")))
                 (else ())))
             (redirect (string-append "/flashcards/deck?id=" id)))
-          (html/page (list (flash/deck-page-html id)))))))
+          (html/page (list (flash/deck-page-html id))))))
+  "GET/POST deck detail handler.")
 
 (define flash/study-page
   (lambda ()
@@ -544,7 +597,8 @@
           (html/page
             (list
               (flash/study-html deck id
-                (if (string-eq reveal "true") "true" ""))))))))
+                (if (string-eq reveal "true") "true" "")))))))
+  "GET/POST study session handler.")
 
 (route "/flashcards" "flash/home-page")
 (route "/flashcards/deck" "flash/deck-page")

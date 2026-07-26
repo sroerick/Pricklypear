@@ -15,10 +15,12 @@
 
 ;; Literal list so rehydrate does not depend on outline/todo-states load order.
 ;; ARCHIVED is terminal (not in the cycle); set via archive action from DONE.
-(define todo/state/list (list "" "TODO" "DONE" "WAITING" "CANCELLED"))
+(define todo/state/list (list "" "TODO" "DONE" "WAITING" "CANCELLED")
+  "Checklist states cycle list (empty, TODO, DONE, WAITING, CANCELLED).")
 
 (define todo/state/next
-  (lambda (cur) (outline/todo-next-in todo/state/list (as-str cur))))
+  (lambda (cur) (outline/todo-next-in todo/state/list (as-str cur)))
+  "Next state after cur in todo/state/list (via outline/todo-next-in).")
 
 ;; Open = actionable work. DONE / CANCELLED / ARCHIVED / empty are closed.
 (define todo/state/open?
@@ -30,10 +32,12 @@
               #f
               (if (string-eq t "CANCELLED")
                   #f
-                  (if (string-eq t "ARCHIVED") #f #t)))))))
+                  (if (string-eq t "ARCHIVED") #f #t))))))
+  "True if state is actionable (not empty/DONE/CANCELLED/ARCHIVED).")
 
 (define todo/state/archived?
-  (lambda (s) (string-eq (as-str s) "ARCHIVED")))
+  (lambda (s) (string-eq (as-str s) "ARCHIVED"))
+  "True if state is ARCHIVED.")
 
 (define todo/item/state
   (lambda (fields)
@@ -43,30 +47,36 @@
             (if (null? d)
                 "TODO"
                 (if (string-eq d "true") "DONE" "TODO")))
-          (as-str s)))))
+          (as-str s))))
+  "Read item state from fields (falls back to done bool then TODO or DONE).")
 
 (define todo/item/title
   (lambda (fields)
-    (as-str (dict-get fields "title"))))
+    (as-str (dict-get fields "title")))
+  "Item title string from fields.")
 
 (define todo/item/list-id
   (lambda (fields)
     (let ((lid (dict-get fields "list_id")))
-      (if (null? lid) "" (as-str lid)))))
+      (if (null? lid) "" (as-str lid))))
+  "Item list_id string from fields (empty if missing).")
 
 (define todo/item/notes
   (lambda (fields)
     (let ((n (dict-get fields "notes")))
-      (if (null? n) "" (as-str n)))))
+      (if (null? n) "" (as-str n))))
+  "Item notes string from fields.")
 
 (define todo/item/due
   (lambda (fields)
     (let ((d (dict-get fields "due")))
-      (if (null? d) "" (as-str d)))))
+      (if (null? d) "" (as-str d))))
+  "Item due date string from fields.")
 
 (define todo/item/get
   (lambda (id)
-    (get 'todo-item id)))
+    (get 'todo-item id))
+  "Fetch todo-item row by id.")
 
 (define todo/item/save
   (lambda (id title notes due state list-id)
@@ -84,24 +94,29 @@
                   "notes" (as-str notes)
                   "due" (as-str due)
                   "state" (as-str state)
-                  "list_id" lid))))))))
+                  "list_id" lid)))))))
+  "Update title/notes/due/state/list_id on an existing item.")
 
 ;; --- lists ---
 
 (define todo/list/all
-  (lambda () (rows 'todo-list 50)))
+  (lambda () (rows 'todo-list 50))
+  "Up to 50 todo-list rows.")
 
 (define todo/list/title
-  (lambda (fields) (as-str (dict-get fields "title"))))
+  (lambda (fields) (as-str (dict-get fields "title")))
+  "List title string from fields.")
 
 (define todo/list/default?
   (lambda (fields)
     (let ((d (dict-get fields "is_default")))
-      (if (null? d) #f (string-eq d "true")))))
+      (if (null? d) #f (string-eq d "true"))))
+  "True if list is_default flag equals the string true.")
 
 (define todo/list/find-default
   (lambda ()
-    (todo/list/find-default-in (todo/list/all))))
+    (todo/list/find-default-in (todo/list/all)))
+  "Find default or Inbox list row among all lists.")
 
 (define todo/list/find-default-in
   (lambda (xs)
@@ -112,7 +127,8 @@
             (let ((t (todo/list/title (cdr (car xs)))))
               (if (string-eq t "Inbox")
                   (car xs)
-                  (todo/list/find-default-in (cdr xs))))))))
+                  (todo/list/find-default-in (cdr xs)))))))
+  "Scan xs for default or title Inbox; return row or empty.")
 
 (define todo/list/ensure-inbox
   (lambda ()
@@ -124,7 +140,8 @@
                 "title" "Inbox"
                 "description" "Default list"
                 "is_default" "true")))
-          (car found)))))
+          (car found))))
+  "Return default list id, creating Inbox if needed.")
 
 (define todo/list/create
   (lambda (title)
@@ -133,11 +150,13 @@
         (list
           "title" (as-str title)
           "description" ""
-          "is_default" "false")))))
+          "is_default" "false"))))
+  "Create a non-default list with title; return id.")
 
 (define todo/list/get
   (lambda (id)
-    (get 'todo-list id)))
+    (get 'todo-list id))
+  "Fetch todo-list row by id.")
 
 ;; Delete every item on the list, then the list row. Refuses default/Inbox.
 (define todo/list/delete-items
@@ -148,7 +167,8 @@
           (if (string-eq (todo/item/list-id (cdr (car items))) (as-str lid))
               (todo/item/delete (car (car items)))
               ())
-          (todo/list/delete-items (cdr items) lid)))))
+          (todo/list/delete-items (cdr items) lid))))
+  "Delete items whose list_id matches lid (walk items).")
 
 (define todo/list/delete
   (lambda (list-id)
@@ -164,12 +184,14 @@
                       (todo/list/delete-items (todo/item/all) lid)
                       (seq
                         (delete 'todo-list lid)
-                        "ok")))))))))
+                        "ok"))))))))
+  "Delete list and its items; refuses default. Returns ok, missing, or default.")
 
 ;; --- items ---
 
 (define todo/item/all
-  (lambda () (rows 'todo-item 200)))
+  (lambda () (rows 'todo-item 200))
+  "Up to 200 todo-item rows.")
 
 (define todo/item/for-list
   (lambda (list-id)
@@ -183,7 +205,8 @@
                 (if (string-eq fl "")
                     (string-eq lid inbox-id)
                     #f))))
-        (todo/item/all)))))
+        (todo/item/all))))
+  "Items belonging to list-id (empty list_id counts as inbox).")
 
 (define todo/item/add
   (lambda (list-id title)
@@ -198,11 +221,13 @@
             "notes" ""
             "state" "TODO"
             "due" ""
-            "position" "0"))))))
+            "position" "0")))))
+  "Create TODO item on list-id (default inbox) with title.")
 
 (define todo/item/set-state
   (lambda (id state)
-    (update-field 'todo-item id "state" (as-str state))))
+    (update-field 'todo-item id "state" (as-str state)))
+  "Set todo-item state field.")
 
 (define todo/item/cycle
   (lambda (id)
@@ -213,15 +238,18 @@
           (let ((cur (todo/item/state row)))
             (if (todo/state/archived? cur)
                 cur
-                (todo/item/set-state id (todo/state/next cur))))))))
+                (todo/item/set-state id (todo/state/next cur)))))))
+  "Advance item state; leaves ARCHIVED unchanged.")
 
 (define todo/item/archive
   (lambda (id)
-    (todo/item/set-state id "ARCHIVED")))
+    (todo/item/set-state id "ARCHIVED"))
+  "Set item state to ARCHIVED.")
 
 (define todo/item/delete
   (lambda (id)
-    (delete 'todo-item id)))
+    (delete 'todo-item id))
+  "Delete todo-item by id.")
 
 (define todo/item/count-open
   (lambda (items)
@@ -231,24 +259,28 @@
             (+ acc 1)
             acc))
       0
-      items)))
+      items))
+  "Count open (actionable) items in a row list.")
 
 (define todo/item/count-all
   (lambda (items)
-    (list/foldl (lambda (acc _) (+ acc 1)) 0 items)))
+    (list/foldl (lambda (acc _) (+ acc 1)) 0 items))
+  "Count rows in items list.")
 
 (define todo/ui/ratio
   (lambda (items)
     (let ((n (todo/item/count-all items))
           (open (todo/item/count-open items)))
-      (string-append (as-str (- n open)) "/" (as-str n)))))
+      (string-append (as-str (- n open)) "/" (as-str n))))
+  "Done/total ratio string for items as closed/total.")
 
 ;; --- view key: everything | from-notes | <list-uuid> ---
 
 (define todo/ui/view
   (lambda ()
     (let ((v (request-param "view")))
-      (if (null? v) "everything" (as-str v)))))
+      (if (null? v) "everything" (as-str v))))
+  "Current view key from request view param (default everything).")
 
 ;; --- HTML ---
 
@@ -260,19 +292,22 @@
       (html/a
         (string-append "/todos?view=" key)
         (string-append label
-          (if (string-eq extra "") "" (string-append " " extra)))))))
+          (if (string-eq extra "") "" (string-append " " extra))))))
+  "Sidebar nav li linking to /todos with view key.")
 
 (define todo/item/active
   (lambda (items)
     (list/filter
       (lambda (row) (not (todo/state/archived? (todo/item/state (cdr row)))))
-      items)))
+      items))
+  "Filter out ARCHIVED items.")
 
 (define todo/item/archived
   (lambda ()
     (list/filter
       (lambda (row) (todo/state/archived? (todo/item/state (cdr row))))
-      (todo/item/all))))
+      (todo/item/all)))
+  "All ARCHIVED items.")
 
 (define todo/list/nav-li
   (lambda (view row)
@@ -311,7 +346,8 @@
                             (html/attr "type" "submit")
                             (html/attr "class" "secondary")
                             (html/attr "title" "delete list")))
-                        "×")))))))))))
+                        "×"))))))))))
+  "Sidebar li for one list with ratio and optional delete.")
 
 (define todo/ui/nav
   (lambda (view)
@@ -348,7 +384,8 @@
                           (html/attr "placeholder" "New list")
                           (html/attr "required" "required")
                           (html/attr "class" "todo-new-list-input"))))
-                    (html/button (html/attr "type" "submit") "+ list")))))))))))
+                    (html/button (html/attr "type" "submit") "+ list"))))))))))
+  "Full todos sidebar: views, lists, and new-list form.")
 
 (define todo/item/list-li
   (lambda (row view)
@@ -430,7 +467,8 @@
                           (html/attr "type" "submit")
                           (html/attr "class" "secondary")
                           (html/attr "title" "delete")))
-                      "del")))))))))))
+                      "del"))))))))))
+  "One list-item row: cycle, title link, archive, delete.")
 
 (define todo/item/note-li
   (lambda (t view)
@@ -471,7 +509,8 @@
               (html/a
                 (string-append "/notes?slug=" slug)
                 (html/span (html/attr "class" "muted todo-src")
-                  (html/text slug))))))))))
+                  (html/text slug)))))))))
+  "One from-notes row: cycle note TODO and link to note.")
 
 (define todo/ui/add-form
   (lambda (view list-id)
@@ -511,7 +550,8 @@
                           (html/attr "required" "required")
                           (html/attr "placeholder" "buy milk")
                           (html/attr "autocomplete" "off"))))
-                    (html/button (html/attr "type" "submit") "Add")))))))))))
+                    (html/button (html/attr "type" "submit") "Add"))))))))))
+  "Add-item form (or muted help for from-notes/archived).")
 
 (define todo/item/html
   (lambda (view)
@@ -554,7 +594,8 @@
                     (lambda (acc row)
                       (string-append acc (todo/item/list-li row view)))
                     ""
-                    (todo/item/active (todo/item/for-list view)))))))))
+                    (todo/item/active (todo/item/for-list view))))))))
+  "Main list HTML for view (everything/from-notes/archived/list id).")
 
 (define todo/list/options
   (lambda (selected)
@@ -565,7 +606,8 @@
             (string-append acc
               (html/option id title (string-eq (as-str id) (as-str selected)))))))
       ""
-      (todo/list/all))))
+      (todo/list/all)))
+  "HTML option tags for all lists; selected id marked.")
 
 (define todo/state/options
   (lambda (selected)
@@ -575,14 +617,16 @@
           (string-append acc
             (html/option st lab (string-eq st (as-str selected))))))
       ""
-      todo/state/list)))
+      todo/state/list))
+  "HTML options for todo/state/list.")
 
 ;; Detail form: cycle states + ARCHIVED (terminal).
 (define todo/state/options-all
   (lambda (selected)
     (todo/state/options-from
       selected
-      (append todo/state/list (list "ARCHIVED")))))
+      (append todo/state/list (list "ARCHIVED"))))
+  "State options including terminal ARCHIVED.")
 
 (define todo/state/options-from
   (lambda (selected states)
@@ -592,7 +636,8 @@
           (string-append acc
             (html/option st lab (string-eq st (as-str selected))))))
       ""
-      states)))
+      states))
+  "HTML options from explicit states list.")
 
 (define todo/ui/detail
   (lambda (id view)
@@ -665,7 +710,8 @@
                                       " "
                                       (html/a
                                         (string-append "/todos?view=" view)
-                                        "Cancel")))))))))))))))))))
+                                        "Cancel"))))))))))))))))))
+  "Item detail card/form for id under view.")
 
 (define todo/ui/main
   (lambda (view)
@@ -706,7 +752,8 @@
                           (html/join
                             (list
                               (todo/ui/add-form view list-id)
-                              (todo/item/html view)))))))))))))))
+                              (todo/item/html view))))))))))))))
+  "Layout: nav plus body (list or GET detail).")
 
 (define todo/ui/handle-post
   (lambda ()
@@ -738,7 +785,8 @@
            (request-param "list_id")))
         (else
          (todo/item/add (todo/list/ensure-inbox)
-           (request-param "title")))))))
+           (request-param "title"))))))
+  "Dispatch POST action (cycle/add/save/delete and friends).")
 
 (define todo/page
   (lambda ()
@@ -761,13 +809,15 @@
               (html/h1 "To-dos")
               (html/p* (html/attr "class" "muted")
                 "Lists (Basecamp) + notes scrape (org). Click a title for details.")
-              (todo/ui/main (todo/ui/view))))))))
+              (todo/ui/main (todo/ui/view)))))))
+  "GET/POST /todos page handler.")
 
 (define todo/partial
   (lambda ()
     (seq
       (todo/list/ensure-inbox)
-      (render-html (todo/ui/main (todo/ui/view))))))
+      (render-html (todo/ui/main (todo/ui/view)))))
+  "HTMX partial: render todo/ui/main for current view.")
 
 (route "/todos" "todo/page")
 (route "/partials/todo-list" "todo/partial")

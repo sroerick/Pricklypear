@@ -18,17 +18,20 @@
 
 (define strongs/get
   (lambda (number)
-    (find-row 'strongs-entry "number" (as-str number))))
+    (find-row 'strongs-entry "number" (as-str number)))
+  "Fetch strongs-entry row by number field.")
 
 (define strongs/lemma
   (lambda (number)
     (let ((row (strongs/get number)))
-      (if (null? row) () (dict-get row "lemma")))))
+      (if (null? row) () (dict-get row "lemma"))))
+  "Lemma string for Strong number, or empty.")
 
 (define strongs/description
   (lambda (number)
     (let ((row (strongs/get number)))
-      (if (null? row) () (dict-get row "description")))))
+      (if (null? row) () (dict-get row "description"))))
+  "Description string for Strong number, or empty.")
 
 (define strongs/entry-html
   (lambda (row)
@@ -45,7 +48,8 @@
                     (as-str (dict-get row "xlit"))
                     " / "
                     (as-str (dict-get row "pronounce")))))
-              (html/p (dict-get row "description"))))))))
+              (html/p (dict-get row "description")))))))
+  "HTML card for one Strong entry row.")
 
 (define strongs/lookup-form
   (lambda (n)
@@ -69,7 +73,8 @@
                       (html/attr "value" (if (null? n) "" (as-str n)))
                       (html/attr "placeholder" "H430 or G26")))))))
           " "
-          (html/button (html/attr "type" "submit") "Look up"))))))
+          (html/button (html/attr "type" "submit") "Look up")))))
+  "Strong lookup form prefilled with n.")
 
 (define strongs/panel
   (lambda ()
@@ -87,7 +92,8 @@
               (list
                 (html/a "/dabar?book=John&chapter=3" "Bible")
                 " · "
-                (html/a "/dabar?book=John&chapter=3&verse=16" "Dabar study")))))))))
+                (html/a "/dabar?book=John&chapter=3&verse=16" "Dabar study"))))))))
+  "Strong panel from request param n.")
 
 (define strongs/page
   (lambda ()
@@ -96,12 +102,14 @@
         (html/page
           (list
             (html/div (html/attr "id" "strongs-panel")
-              (strongs/panel)))))))
+              (strongs/panel))))))
+  "GET /strongs page or htmx panel.")
 
 (define dabar/inter-row
   (lambda (book chapter verse)
     (find-row 'bible-interlinear "ref"
-      (bible/ref book chapter verse))))
+      (bible/ref book chapter verse)))
+  "bible-interlinear row for book/chapter/verse ref.")
 
 (define dabar/inter-html
   (lambda (book chapter verse)
@@ -117,7 +125,8 @@
             (if (null? pre)
                 (html/p* (html/attr "class" "muted")
                   "interlinear row has no html field")
-                pre))))))
+                pre)))))
+  "Interlinear HTML or muted fallback for verse.")
 
 (define dabar/verse-study
   (lambda (book chapter verse)
@@ -150,7 +159,8 @@
                     (as-str ch))
                   "open in reader")
                 " · "
-                (html/a "/strongs" "Strong's")))))))))
+                (html/a "/strongs" "Strong's"))))))))
+  "Verse study block: BSB, interlinear, nav links.")
 
 (define dabar/verse-study-from-params
   (lambda (book chapter verse)
@@ -160,7 +170,8 @@
       (dabar/verse-study
         b
         (bible/safe-chapter b c)
-        (bible/parse-int v)))))
+        (bible/parse-int v))))
+  "Verse study from book/chapter/verse params with defaults.")
 
 (define dabar/verse-study-from-ref
   (lambda (ref)
@@ -177,7 +188,8 @@
             (html/join
               (list
                 (bible/go-form book chapter verse)
-                (dabar/verse-study book chapter verse))))))))
+                (dabar/verse-study book chapter verse)))))))
+  "Verse study from BSB ref string, or error.")
 
 ;; Dispatch: ref > verse study, otherwise chapter reader (handles random/search).
 (define dabar/panel-for-request
@@ -197,7 +209,8 @@
                   (request-param "book")
                   (request-param "chapter")
                   verse)
-                (bible/chapter-reader)))))))
+                (bible/chapter-reader))))))
+  "Dispatch dabar panel: ref, verse study, or chapter reader.")
 
 (define dabar/page
   (lambda ()
@@ -221,7 +234,8 @@
             (html/page
               (list
                 (html/div (html/attr "id" "dabar-panel")
-                  (dabar/panel-for-request))))))))
+                  (dabar/panel-for-request)))))))
+  "GET/POST /dabar handler (POST redirects to query).")
 
 (route "/dabar" "dabar/page")
 (route "/strongs" "strongs/page")

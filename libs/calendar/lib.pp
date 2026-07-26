@@ -7,19 +7,24 @@
 
 ;; --- date helpers ---
 
-(define calendar/today (lambda () (date-today)))
+(define calendar/today (lambda () (date-today))
+  "Today date string YYYY-MM-DD.")
 
 (define calendar/year
-  (lambda (day) (parse-int (substring (as-str day) 0 4))))
+  (lambda (day) (parse-int (substring (as-str day) 0 4)))
+  "Year int from YYYY-MM-DD string.")
 
 (define calendar/month
-  (lambda (day) (parse-int (substring (as-str day) 5 2))))
+  (lambda (day) (parse-int (substring (as-str day) 5 2)))
+  "Month int from YYYY-MM-DD string.")
 
 (define calendar/dom
-  (lambda (day) (parse-int (substring (as-str day) 8 2))))
+  (lambda (day) (parse-int (substring (as-str day) 8 2)))
+  "Day-of-month int from YYYY-MM-DD string.")
 
 (define calendar/ym
-  (lambda (day) (substring (as-str day) 0 7)))
+  (lambda (day) (substring (as-str day) 0 7))
+  "YYYY-MM prefix string from date.")
 
 (define calendar/leap?
   (lambda (y)
@@ -27,7 +32,8 @@
         #t
         (if (= (mod y 100) 0)
             #f
-            (= (mod y 4) 0)))))
+            (= (mod y 4) 0))))
+  "True if year is leap year.")
 
 (define calendar/days-in-month
   (lambda (y m)
@@ -36,16 +42,19 @@
         (if (= m 4) 30
           (if (= m 6) 30
             (if (= m 9) 30
-              (if (= m 11) 30 31)))))))
+              (if (= m 11) 30 31))))))
+  "Number of days in year/month.")
 
 (define calendar/pad2
   (lambda (n)
     (if (< n 10)
         (string-append "0" (as-str n))
-        (as-str n))))
+        (as-str n)))
+  "Zero-pad int to two digits.")
 
 (define calendar/ymd
-  (lambda (y m d) (date-format y m d)))
+  (lambda (y m d) (date-format y m d))
+  "Build YYYY-MM-DD from year month day.")
 
 (define calendar/add-month
   (lambda (ym delta)
@@ -56,54 +65,65 @@
               (string-append (as-str (+ y 1)) "-" (calendar/pad2 (- m2 12)))
               (if (< m2 1)
                   (string-append (as-str (- y 1)) "-" (calendar/pad2 (+ m2 12)))
-                  (string-append (as-str y) "-" (calendar/pad2 m2)))))))))
+                  (string-append (as-str y) "-" (calendar/pad2 m2))))))))
+  "Add delta months to YYYY-MM-DD; return YMD in month.")
 
 (define calendar/weekday
-  (lambda (y m d) (date-weekday y m d)))
+  (lambda (y m d) (date-weekday y m d))
+  "Weekday index for date (via host prim if any).")
 
 (define calendar/day-eq?
-  (lambda (a b) (string-eq (as-str a) (as-str b))))
+  (lambda (a b) (string-eq (as-str a) (as-str b)))
+  "True if two date strings equal.")
 
 (define calendar/day-prefix?
   (lambda (day ym)
-    (string-eq (substring (as-str day) 0 7) (as-str ym))))
+    (string-eq (substring (as-str day) 0 7) (as-str ym)))
+  "True if date starts with prefix (month filter).")
 
 ;; --- events CRUD ---
 
 (define calendar/all-events
-  (lambda () (rows 'calendar-event 500)))
+  (lambda () (rows 'calendar-event 500))
+  "Up to N calendar-event rows.")
 
 (define calendar/event-title
-  (lambda (f) (as-str (dict-get f "title"))))
+  (lambda (f) (as-str (dict-get f "title")))
+  "Event title from fields.")
 
 (define calendar/event-day
-  (lambda (f) (as-str (dict-get f "day"))))
+  (lambda (f) (as-str (dict-get f "day")))
+  "Event day YYYY-MM-DD from fields.")
 
 (define calendar/event-start
   (lambda (f)
     (let ((s (dict-get f "start_time")))
-      (if (null? s) "" (as-str s)))))
+      (if (null? s) "" (as-str s))))
+  "Event start time string from fields.")
 
 (define calendar/event-all-day?
   (lambda (f)
     (let ((a (dict-get f "all_day")))
       (if (null? a)
           (string-eq (calendar/event-start f) "")
-          (string-eq (as-str a) "true")))))
+          (string-eq (as-str a) "true"))))
+  "True if event is all-day.")
 
 (define calendar/events-on-day
   (lambda (day)
     (list/filter
       (lambda (row)
         (calendar/day-eq? (calendar/event-day (cdr row)) day))
-      (calendar/all-events))))
+      (calendar/all-events)))
+  "Events whose day equals day string.")
 
 (define calendar/events-in-month
   (lambda (ym)
     (list/filter
       (lambda (row)
         (calendar/day-prefix? (calendar/event-day (cdr row)) ym))
-      (calendar/all-events))))
+      (calendar/all-events)))
+  "Events in YYYY-MM month prefix.")
 
 (define calendar/create
   (lambda (title day start notes)
@@ -120,10 +140,12 @@
             "notes" (as-str notes)
             "location" ""
             "color" ""
-            "source" "calendar")))))))
+            "source" "calendar"))))))
+  "Create calendar-event row.")
 
 (define calendar/delete
-  (lambda (id) (delete 'calendar-event id)))
+  (lambda (id) (delete 'calendar-event id))
+  "Delete calendar-event by id.")
 
 ;; --- overlays: todos with due, daily notes ---
 
@@ -135,20 +157,24 @@
           (if (null? due)
               #f
               (calendar/day-eq? due day))))
-      (todo/item/all))))
+      (todo/item/all)))
+  "Open todos with due date equal to day.")
 
 (define calendar/count-events-on
   (lambda (day)
-    (list/foldl (lambda (acc _) (+ acc 1)) 0 (calendar/events-on-day day))))
+    (list/foldl (lambda (acc _) (+ acc 1)) 0 (calendar/events-on-day day)))
+  "Count events on day.")
 
 (define calendar/count-todos-on
   (lambda (day)
-    (list/foldl (lambda (acc _) (+ acc 1)) 0 (calendar/todos-due-on day))))
+    (list/foldl (lambda (acc _) (+ acc 1)) 0 (calendar/todos-due-on day)))
+  "Count todos due on day.")
 
 (define calendar/has-daily?
   (lambda (day)
     (let ((slug (string-append "daily-" (as-str day))))
-      (if (null? (notes/doc/get slug)) #f #t))))
+      (if (null? (notes/doc/get slug)) #f #t)))
+  "True if a daily note exists for day (notes hook).")
 
 ;; --- HTML: month cell ---
 
@@ -171,7 +197,8 @@
             (if daily
                 (html/span (html/attr "class" "cal-dot cal-dot-note")
                   (html/text "n"))
-                "")))))))))
+                ""))))))))
+  "HTML marks string for month cell (events/todos/daily).")
 
 (define calendar/day-cell
   (lambda (y m d today ym)
@@ -189,7 +216,8 @@
                 (list
                   (html/span (html/attr "class" "cal-dom")
                     (html/text (as-str d)))
-                  (calendar/cell-marks day)))))))))
+                  (calendar/cell-marks day))))))))
+  "One month-grid day cell HTML.")
 
 (define calendar/build-cells
   (lambda (y m dim start-wd today ym d acc)
@@ -197,7 +225,8 @@
         acc
         (calendar/build-cells y m dim start-wd today ym (+ d 1)
           (string-append acc
-            (calendar/day-cell y m d today ym))))))
+            (calendar/day-cell y m d today ym)))))
+  "Build day cell list for month starting at day.")
 
 (define calendar/pad-start
   (lambda (n acc)
@@ -205,7 +234,8 @@
         acc
         (calendar/pad-start (- n 1)
           (string-append acc
-            (html/div (html/attr "class" "cal-cell cal-empty") ""))))))
+            (html/div (html/attr "class" "cal-cell cal-empty") "")))))
+  "Leading empty cells before first weekday.")
 
 (define calendar/month-grid
   (lambda (ym)
@@ -225,7 +255,8 @@
               (html/div (html/attr "class" "cal-dow") (html/text "Fr"))
               (html/div (html/attr "class" "cal-dow") (html/text "Sa"))
               (calendar/pad-start wd "")
-              (calendar/build-cells y m dim wd today ym 1 "")))))))))))
+              (calendar/build-cells y m dim wd today ym 1 ""))))))))))
+  "Full month grid HTML for year/month.")
 
 (define calendar/month-nav
   (lambda (ym)
@@ -237,7 +268,8 @@
             (html/a (string-append "/calendar?ym=" prev) "◀")
             (html/strong ym)
             (html/a (string-append "/calendar?ym=" next) "▶")
-            (html/a "/calendar" "Today"))))))))
+            (html/a "/calendar" "Today")))))))
+  "Prev/next month navigation HTML.")
 
 ;; --- day agenda ---
 
@@ -272,7 +304,8 @@
                       (list
                         (html/attr "type" "submit")
                         (html/attr "class" "secondary ol-btn")))
-                    "del")))))))))))
+                    "del"))))))))))
+  "Agenda li for one event with delete.")
 
 (define calendar/todo-due-li
   (lambda (row)
@@ -283,7 +316,8 @@
           (list
             (html/span (html/attr "class" "cal-time") (html/text "todo"))
             (html/a "/todos"
-              (html/text (as-str (dict-get f "title")))))))))))
+              (html/text (as-str (dict-get f "title"))))))))))
+  "Agenda li for a todo due that day.")
 
 (define calendar/day-html
   (lambda (day)
@@ -352,7 +386,8 @@
                             (html/attr "id" "notes")
                             (html/attr "placeholder" ""))))
                       (html/button (html/attr "type" "submit")
-                        "Add event"))))))))))))
+                        "Add event")))))))))))
+  "Day agenda panel: events, todos, add form.")
 
 (define calendar/month-html
   (lambda (ym)
@@ -362,7 +397,8 @@
           (calendar/month-nav ym)
           (calendar/month-grid ym)
           (html/p* (html/attr "class" "muted")
-            "Dots: events · todos due · daily note. Click a day for agenda."))))))
+            "Dots: events · todos due · daily note. Click a day for agenda.")))))
+  "Month view: nav plus grid.")
 
 (define calendar/main-html
   (lambda ()
@@ -374,7 +410,8 @@
               (if (null? ym)
                   (calendar/ym (calendar/today))
                   (as-str ym)))
-            (calendar/day-html (as-str day)))))))
+            (calendar/day-html (as-str day))))))
+  "Main calendar panel for month and optional day.")
 
 (define calendar/handle-post
   (lambda ()
@@ -388,7 +425,8 @@
            (request-param "notes")))
         ((string-eq action "delete")
          (calendar/delete (request-param "id")))
-        (else ())))))
+        (else ()))))
+  "Dispatch create/delete POST actions.")
 
 (define calendar/page
   (lambda ()
@@ -411,7 +449,8 @@
             (html/h1 "Calendar")
             (html/p* (html/attr "class" "muted")
               "Month grid · day agenda · events + due todos + daily notes")
-            (calendar/main-html))))))
+            (calendar/main-html)))))
+  "GET/POST /calendar page handler.")
 
 (route "/calendar" "calendar/page")
 (route "/partials/calendar" "calendar/main-html")

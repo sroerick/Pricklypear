@@ -1,11 +1,15 @@
 ;; Weather widget — client-side Open-Meteo (no API key).
 ;; Embed on home via (weather/widget). Full page: /weather
 ;; (load-library "weather")
+;; Docs: trailing string on define (safe for string constants).
 
 ;; Default habitat: Cody, WY.
-(define weather/default-lat "44.52634")
-(define weather/default-lon "-109.05653")
-(define weather/default-label "Cody, WY")
+(define weather/default-lat "44.52634"
+  "Default latitude (Cody, WY).")
+(define weather/default-lon "-109.05653"
+  "Default longitude (Cody, WY).")
+(define weather/default-label "Cody, WY"
+  "Default location label for the weather card.")
 
 ;; Inline CSS kept small so the card works even if chrome CSS lags.
 (define weather/style
@@ -21,7 +25,8 @@
           ".weather-card .wx-form input[type=text]{flex:1 1 8rem;min-width:0}"
           ".weather-card .wx-form button{width:auto;min-width:4.5rem}"
           ".weather-card .wx-err{color:#800000;font-weight:700}"
-          ".weather-card .wx-updated{font-size:.8rem;color:#555;margin-top:.35rem}")))))
+          ".weather-card .wx-updated{font-size:.8rem;color:#555;margin-top:.35rem}"))))
+  "Inline CSS for the weather card.")
 
 ;; Client fetch + render. Uses localStorage key pp.weather.loc when set.
 (define weather/script
@@ -106,7 +111,8 @@
         "});"
         "}"
         "fetchWx(loadLoc());"
-        "})();"))))
+        "})();")))
+  "Client JS: Open-Meteo fetch, geocode, localStorage location.")
 
 ;; Embeddable card (home / any page). Pure HTML string — wrap with render-html if top-level.
 (define weather/widget
@@ -144,7 +150,8 @@
                 (html/button (html/attr "type" "submit") "Set"))))
           (weather/style)
           (weather/script weather/default-lat weather/default-lon
-            weather/default-label))))))
+            weather/default-label)))))
+  "Embeddable weather card HTML (style + script + form).")
 
 (define weather/page
   (lambda ()
@@ -153,6 +160,7 @@
         (html/h1 "Weather")
         (html/p* (html/attr "class" "muted")
           "Browser fetch via Open-Meteo. Location is stored in this browser only.")
-        (weather/widget)))))
+        (weather/widget))))
+  "GET /weather — full-page weather widget.")
 
 (route "/weather" "weather/page")

@@ -36,7 +36,8 @@
           (menu/link "llm keys" "/settings/keys")
           (menu/link "ssh keys" "/settings/ssh")
           (menu/link "about" "/about")
-          (menu/link "repl" "/repl"))))))
+          (menu/link "repl" "/repl")))))
+  "Zero-arg thunk returning the product navbar menu tree.")
 
 ;; ui/menu may be a list OR a zero-arg lambda (seed uses lambda).
 (define ui/nav
@@ -45,25 +46,38 @@
       (menu/bar
         (if (string-eq (type-of ui/menu) "lambda")
             (ui/menu)
-            ui/menu)))))
+            ui/menu))))
+  "render-html of menu/bar over ui/menu (list or thunk).")
 
 
 ;; Product theme — Path B (image.product-theme / BORGE-1783837363).
 ;; Styles are Lisp data (css/sheet); (ui/css) renders to CSS text.
 ;; Tokens are branch-visible knobs; personal gardens may redefine them.
 
-(define theme/bg "#d4d0c8")
-(define theme/ink "#000")
-(define theme/panel "#fff")
-(define theme/chrome "#c0c0c0")
-(define theme/link "#000080")
-(define theme/visited "#551a8b")
-(define theme/err "#800000")
-(define theme/ok "#006600")
-(define theme/border "#000")
-(define theme/muted "#333")
-(define theme/row-alt "#ece9e0")
-(define theme/shadow "#808080")
+(define theme/bg "#d4d0c8"
+  "Product theme token: page background color.")
+(define theme/ink "#000"
+  "Product theme token: body text color.")
+(define theme/panel "#fff"
+  "Product theme token: panel/card background.")
+(define theme/chrome "#c0c0c0"
+  "Product theme token: chrome/chrome-bar color.")
+(define theme/link "#000080"
+  "Product theme token: link color.")
+(define theme/visited "#551a8b"
+  "Product theme token: visited link color.")
+(define theme/err "#800000"
+  "Product theme token: error text color.")
+(define theme/ok "#006600"
+  "Product theme token: success text color.")
+(define theme/border "#000"
+  "Product theme token: border color.")
+(define theme/muted "#333"
+  "Product theme token: muted text color.")
+(define theme/row-alt "#ece9e0"
+  "Product theme token: alternating row background.")
+(define theme/shadow "#808080"
+  "Product theme token: shadow color.")
 
 (define ui/theme
   (lambda ()
@@ -724,7 +738,8 @@
           (css/rule "details.ol-actions[open] > .ol-actions-panel .ol-btn"
             (list
               "min-height" "2.4rem" "width" "100%" "margin" "0 0 .25rem"
-              "background" theme/panel "text-align" "left"))))))))
+              "background" theme/panel "text-align" "left")))))))
+  "Main product CSS sheet AST (body, cards, forms, outline, …).")
 
 
 ;; Nav layout + capture dropdown (formerly ui/nav-style inline <style>)
@@ -778,7 +793,8 @@
         (css/rule ".capture-nav-form .ok"
           (list "color" theme/ok "font-weight" "700"))
         (css/rule ".capture-nav-form .err"
-          (list "color" theme/err "font-weight" "700"))))))
+          (list "color" theme/err "font-weight" "700")))))
+  "Nav and capture-dropdown CSS sheet AST.")
 
 (define ui/css
   (lambda ()
@@ -788,7 +804,8 @@
         (css/sheet
           (list
             (css/use (ui/theme))
-            (css/use (ui/theme-nav))))))))
+            (css/use (ui/theme-nav)))))))
+  "Rendered CSS string combining ui/theme and ui/theme-nav.")
 
 
 
@@ -796,4 +813,5 @@
   (lambda ()
     (html/page
       (list
-        (weather/widget)))))
+        (weather/widget))))
+  "Authenticated home page body (weather widget).")

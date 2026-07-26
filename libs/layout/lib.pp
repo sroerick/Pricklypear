@@ -9,7 +9,8 @@
         (list
           (html/attr "class" "layout-cta")
           (html/attr "href" href)))
-      (html/text label))))
+      (html/text label)))
+  "Hero/action link with layout-cta class.")
 
 ;; Wordmark / mark from image/static (served at /assets/…).
 (define layout/logo
@@ -21,7 +22,8 @@
           (html/attr "alt" "Pricklypear")
           (html/attr "class" "layout-logo")
           (html/attr "width" "160")
-          (html/attr "height" "156"))))))
+          (html/attr "height" "156")))))
+  "Pricklypear wordmark img pointing at /assets/pplogo.png.")
 
 (define layout/hero
   (lambda (title tagline actions-html)
@@ -36,7 +38,8 @@
             (html/text tagline))
           (html/div
             (html/attr "class" "layout-hero-actions")
-            actions-html))))))
+            actions-html)))))
+  "Centered hero block: logo, title, tagline, actions HTML.")
 
 (define layout/card
   (lambda (title body)
@@ -46,13 +49,15 @@
         (list
           (html/tag "h3" (html/attr "class" "layout-card-title")
             (html/text title))
-          (html/div (html/attr "class" "layout-card-body") body))))))
+          (html/div (html/attr "class" "layout-card-body") body)))))
+  "Single card with title and body HTML.")
 
 (define layout/cards
   (lambda (card-htmls)
     (html/div
       (html/attr "class" "layout-cards")
-      (html/join card-htmls))))
+      (html/join card-htmls)))
+  "Responsive grid wrapping a list of card HTML strings.")
 
 (define layout/section
   (lambda (title body)
@@ -62,7 +67,8 @@
         (list
           (html/tag "h2" (html/attr "class" "layout-section-title")
             (html/text title))
-          (html/div (html/attr "class" "layout-section-body") body))))))
+          (html/div (html/attr "class" "layout-section-body") body)))))
+  "Section with title and body HTML.")
 
 (define layout/theme
   (lambda ()
@@ -174,12 +180,14 @@
             (css/rule ".layout-hero"
               (list "padding" "1.5rem .75rem 1.25rem"))
             (css/rule ".layout-hero-title"
-              (list "font-size" "1.55rem"))))))))
+              (list "font-size" "1.55rem")))))))
+  "CSS sheet AST for layout/* classes.")
 
 ;; Inject layout CSS once per page body (works with product chrome too).
 (define layout/style
   (lambda ()
-    (html/tag "style" "" (css/render (layout/theme)))))
+    (html/tag "style" "" (css/render (layout/theme))))
+  "style tag rendering layout/theme CSS.")
 
 (define layout/page
   (lambda (parts)
@@ -189,4 +197,5 @@
           (layout/style)
           (html/div
             (html/attr "class" "layout-page")
-            (html/join parts)))))))
+            (html/join parts))))))
+  "render-html page shell with layout style and joined parts.")

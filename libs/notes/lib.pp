@@ -25,13 +25,15 @@
                 (string-eq (substring s (+ i 1) 1) "]")
                 #f)
             i
-            (roam/find-close s (+ i 1))))))
+            (roam/find-close s (+ i 1)))))
+  "Index of closing wiki-link brackets from i, or empty.")
 
 ;; Split "slug|label" → (slug label); no pipe → (slug slug).
 (define roam/split-label
   (lambda (inner)
     (let ((s (string-trim (as-str inner))))
-      (roam/split-label-at s 0))))
+      (roam/split-label-at s 0)))
+  "Split slug|label pair; default label equals slug.")
 
 (define roam/split-label-at
   (lambda (s i)
@@ -41,14 +43,16 @@
             (list
               (string-trim (substring s 0 i))
               (string-trim (substring s (+ i 1) (- (string-length s) (+ i 1)))))
-            (roam/split-label-at s (+ i 1))))))
+            (roam/split-label-at s (+ i 1)))))
+  "split-label helper from character index.")
 
 ;; Parse body → list of (slug label) pairs, left-to-right, de-duped later.
 ;; OCaml extract-links prim (1 budget tick) — Lisp char-scanner blew 100k
 ;; steps on ~2-4k char bodies and left reindex silently half-done.
 (define roam/parse-links
   (lambda (body)
-    (extract-links (as-str body))))
+    (extract-links (as-str body)))
+  "Parse wiki links from body via kernel extract-links prim.")
 
 ;; Kept for debugging / fallback; prefer roam/parse-links.
 (define roam/parse-links-acc
@@ -66,12 +70,14 @@
                       (if (string-eq (car pair) "")
                           (roam/parse-links-acc s (+ end 2) acc)
                           (roam/parse-links-acc s (+ end 2) (cons pair acc)))))))
-            (roam/parse-links-acc s (+ i 1) acc)))))
+            (roam/parse-links-acc s (+ i 1) acc))))
+  "Lisp fallback wiki-link scanner (prefer roam/parse-links).")
 
 ;; Collect (from_id slug label) from every node body in the tree.
 (define roam/collect-from-tree
   (lambda (tree)
-    (roam/collect-node tree (list))))
+    (roam/collect-node tree (list)))
+  "Collect link triples from every node body in tree.")
 
 (define roam/collect-node
   (lambda (n acc)
@@ -86,7 +92,8 @@
         (list/foldl
           (lambda (a k) (roam/collect-node k a))
           acc1
-          (outline/kids n))))))
+          (outline/kids n)))))
+  "Collect links from one node and its kids.")
 
 ;; Delete every note-link row with from_slug = slug (scan + delete by id).
 (define roam/delete-from-slug
@@ -95,7 +102,8 @@
       (lambda (_ row)
         (seq (delete 'note-link (car row)) 0))
       0
-      (find-rows 'note-link "from_slug" (as-str slug) 500))))
+      (find-rows 'note-link "from_slug" (as-str slug) 500)))
+  "Delete all note-link rows with from_slug.")
 
 ;; Seen-key = from_id + "\t" + to_slug. Returns #t if already present.
 (define roam/seen?
@@ -104,7 +112,8 @@
         #f
         (if (string-eq (car seen) key)
             #t
-            (roam/seen? (cdr seen) key)))))
+            (roam/seen? (cdr seen) key))))
+  "True if from_id/to_slug already in seen set.")
 
 (define roam/insert-collected
   (lambda (from-slug triples seen)
@@ -131,7 +140,8 @@
                               "label" lab
                               "kind" "wikilink")))
                         (roam/insert-collected from-slug (cdr triples)
-                          (cons key seen)))))))))))
+                          (cons key seen))))))))))
+  "Insert collected link rows skipping duplicates.")
 
 ;; Rebuild note-link rows for one note (called on every upsert).
 (define roam/reindex
@@ -141,7 +151,8 @@
       (roam/insert-collected slug
         (roam/collect-from-tree outline-tree)
         (list))
-      slug)))
+      slug))
+  "Rebuild note-link index for one note slug.")
 
 ;; Inbound links: list of (from_slug from_id from_title label).
 (define roam/backlinks
@@ -156,14 +167,16 @@
               (list fs fid
                 (if (null? src) fs (notes/doc/title src))
                 lab)))))
-      (find-rows 'note-link "to_slug" (as-str slug) 200))))
+      (find-rows 'note-link "to_slug" (as-str slug) 200)))
+  "Inbound links list for slug.")
 
 ;; Render body with [[slug]] / [[slug|label]] / [[media:…]] → HTML.
 ;; OCaml render-links (1 budget tick) — Lisp roam/render-acc blew the
 ;; 100k step limit on multi-kB bodies during outline/html.
 (define roam/render-body
   (lambda (body)
-    (render-links (as-str body))))
+    (render-links (as-str body)))
+  "Render body with wiki/media links via kernel prim.")
 
 (define roam/at-open?
   (lambda (s i)
@@ -171,13 +184,15 @@
         #f
         (if (string-eq (substring s i 1) "[")
             (string-eq (substring s (+ i 1) 1) "[")
-            #f))))
+            #f)))
+  "True if index is at open wiki-link brackets.")
 
 (define roam/render-link
   (lambda (slug lab)
     (html/a
       (string-append "/notes?slug=" slug)
-      (html/text lab))))
+      (html/text lab)))
+  "HTML for one wiki link slug/label.")
 
 ;; Media embeds in note bodies: [[media:<uuid>]] or [[media:<uuid>|alt text]].
 ;; Renders an authenticated <img src="/media/<uuid>"> (session cookie required).
@@ -187,12 +202,14 @@
     (let ((s (as-str slug)))
       (if (< (string-length s) 7)
           #f
-          (string-eq (substring s 0 6) "media:")))))
+          (string-eq (substring s 0 6) "media:"))))
+  "True if slug is a media: embed reference.")
 
 (define roam/media-id
   (lambda (slug)
     (let ((s (as-str slug)))
-      (substring s 6 (- (string-length s) 6)))))
+      (substring s 6 (- (string-length s) 6))))
+  "Extract media uuid from media: slug.")
 
 (define roam/render-media
   (lambda (id alt)
@@ -206,13 +223,15 @@
               (html/img href label "note-media"))
             (html/p*
               (html/attr "class" "muted note-media-cap")
-              (html/a href (html/text label)))))))))
+              (html/a href (html/text label))))))))
+  "HTML img tag for media uuid with alt.")
 
 (define roam/render-wiki-or-media
   (lambda (slug lab)
     (if (roam/media-slug? slug)
         (roam/render-media (roam/media-id slug) lab)
-        (roam/render-link slug lab))))
+        (roam/render-link slug lab)))
+  "Dispatch wiki link vs media embed rendering.")
 
 (define roam/render-acc
   (lambda (s i acc)
@@ -236,10 +255,12 @@
                               (string-append acc
                                 (roam/render-wiki-or-media slug lab)))))))))
             (roam/render-acc s (+ i 1)
-              (string-append acc (html-escape (substring s i 1))))))))
+              (string-append acc (html-escape (substring s i 1)))))))
+  "Lisp fallback body renderer (prefer roam/render-body).")
 
 ;; Wire wiki-link rendering into outline HTML (hook defined in outline/).
-(define outline/render-body roam/render-body)
+(define outline/render-body roam/render-body
+  "Hook: outline body rendering uses roam/render-body.")
 
 ;; Backlinks partial HTML for a note page.
 (define roam/backlinks-html
@@ -260,36 +281,46 @@
                         (html/span (html/attr "class" "muted")
                           (html/text
                             (string-append " · " (car (cdr b)))))))))
-                bls)))))))
+                bls))))))
+  "Backlinks section HTML for a note page.")
 
-(define notes/doc/title (lambda (n) (car (cdr (cdr n)))))
-(define notes/doc/outline (lambda (n) (car (cdr (cdr (cdr n))))))
-(define notes/doc/tags (lambda (n) (car (cdr (cdr (cdr (cdr n)))))))
-(define notes/doc/kind (lambda (n) (car (cdr (cdr (cdr (cdr (cdr n))))))))
-(define notes/doc/day (lambda (n) (car (cdr (cdr (cdr (cdr (cdr (cdr n)))))))))
+(define notes/doc/title (lambda (n) (car (cdr (cdr n))))
+  "Note title from doc fields.")
+(define notes/doc/outline (lambda (n) (car (cdr (cdr (cdr n)))))
+  "Note outline tree from doc fields.")
+(define notes/doc/tags (lambda (n) (car (cdr (cdr (cdr (cdr n))))))
+  "Note tags from doc fields.")
+(define notes/doc/kind (lambda (n) (car (cdr (cdr (cdr (cdr (cdr n)))))))
+  "Note kind from doc fields.")
+(define notes/doc/day (lambda (n) (car (cdr (cdr (cdr (cdr (cdr (cdr n))))))))
+  "Note day field from doc fields.")
 ;; 8th field (id slug title outline tags kind day folder)
 (define notes/doc/folder
   (lambda (n)
     (if (null? n)
         ""
         (let ((f (car (cdr (cdr (cdr (cdr (cdr (cdr (cdr n))))))))))
-          (if (null? f) "" (as-str f))))))
+          (if (null? f) "" (as-str f)))))
+  "Note folder field from doc fields.")
 
 (define notes/doc/empty-outline
   (lambda (title)
-    (outline/node "root" title)))
+    (outline/node "root" title))
+  "Empty root outline tree for a new note.")
 
 (define notes/doc/row
   (lambda (slug)
     (let ((rs (find-rows 'note "slug" (as-str slug) 1)))
-      (if (null? rs) () (car rs)))))
+      (if (null? rs) () (car rs))))
+  "Raw note data_row by slug.")
 
 (define notes/doc/row-folder
   (lambda (row)
     (if (null? row)
         ""
         (let ((f (dict-get (cdr row) "folder")))
-          (if (null? f) "" (as-str f))))))
+          (if (null? f) "" (as-str f)))))
+  "Folder string from a note row.")
 
 (define notes/doc/get
   (lambda (slug)
@@ -306,7 +337,8 @@
               (dict-get f "kind")
               (dict-get f "day")
               (let ((folder (dict-get f "folder")))
-                (if (null? folder) "" folder))))))))
+                (if (null? folder) "" folder)))))))
+  "Fetch note fields by slug.")
 
 (define notes/doc/make-fields
   (lambda (slug title outline tags kind day folder)
@@ -318,7 +350,8 @@
         "tags" (as-str tags)
         "kind" (as-str kind)
         "day" (as-str day)
-        "folder" (as-str folder)))))
+        "folder" (as-str folder))))
+  "Build note fields dict for create/update.")
 
 ;; Upsert preserves existing folder on update; new notes get "".
 ;; Use notes/doc/set-folder to place/move a note.
@@ -334,14 +367,16 @@
               (create 'note fields)
               (update 'note (car row) fields))
           ;; Rebuild wiki-link index for this note (links-and-roam).
-          (roam/reindex (as-str slug) outline))))))
+          (roam/reindex (as-str slug) outline)))))
+  "Create or update note by slug; reindex links.")
 
 (define notes/doc/set-folder
   (lambda (slug folder)
     (let ((row (notes/doc/row (as-str slug))))
       (if (null? row)
           ()
-          (update-field 'note (car row) "folder" (as-str folder))))))
+          (update-field 'note (car row) "folder" (as-str folder)))))
+  "Set folder on existing note slug.")
 
 ;; Create or update and force folder in one call.
 (define notes/doc/upsert-in
@@ -349,7 +384,8 @@
     (seq
       (notes/doc/upsert slug title outline tags kind day)
       (notes/doc/set-folder slug folder)
-      slug)))
+      slug))
+  "Upsert note and force folder in one call.")
 
 ;; Filter notes by folder ("" = uncategorized only).
 (define notes/doc/list-folder
@@ -358,7 +394,8 @@
       (list/filter
         (lambda (row)
           (string-eq (notes/doc/row-folder row) want))
-        (notes/doc/index-list)))))
+        (notes/doc/index-list))))
+  "List notes in folder (empty string = uncategorized).")
 
 ;; Unique folder names among visible notes, sorted loosely via fold.
 (define notes/doc/folder-names
@@ -370,7 +407,8 @@
               acc
               (append acc (list f)))))
       (list)
-      (notes/doc/index-list))))
+      (notes/doc/index-list)))
+  "Unique folder names among visible notes.")
 
 (define notes/doc/folder-seen?
   (lambda (xs f)
@@ -378,8 +416,10 @@
         #f
         (if (string-eq (car xs) f)
             #t
-            (notes/doc/folder-seen? (cdr xs) f)))))
-(define notes/doc/list (lambda () (rows 'note 100)))
+            (notes/doc/folder-seen? (cdr xs) f))))
+  "True if folder name already in accumulator list.")
+(define notes/doc/list (lambda () (rows 'note 100))
+  "List visible note rows.")
 
 ;; Hide system/hidden docs from the main Recent index.
 ;; Direct /notes?slug=… still opens them with the same outline UI.
@@ -395,21 +435,25 @@
                 #t
                 (if (string-eq slug "inbox")
                     #t
-                    (string-contains? tags "hidden"))))))))
+                    (string-contains? tags "hidden")))))))
+  "True if note should hide from main index.")
 
 (define notes/doc/index-list
   (lambda ()
     (list/filter
       (lambda (row) (not (notes/doc/hidden? row)))
-      (notes/doc/list))))
+      (notes/doc/list)))
+  "Notes for index respecting archived filter.")
 
 (define notes/doc/show-archived?
   (lambda ()
-    (string-eq (as-str (request-param "show")) "archived")))
+    (string-eq (as-str (request-param "show")) "archived"))
+  "True if request asks to show archived notes.")
 
 (define notes/doc/search
   (lambda (q)
-    (find-text 'note "title" (as-str q) 40)))
+    (find-text 'note "title" (as-str q) 40))
+  "Search notes by query string.")
 
 (define notes/doc/daily
   (lambda (day)
@@ -421,7 +465,8 @@
               (notes/doc/empty-outline (string-append "Daily " (as-str day)))
               "daily" "daily" (as-str day))
             (notes/doc/get slug))
-          (notes/doc/get slug)))))
+          (notes/doc/get slug))))
+  "Get or create daily note for day string.")
 
 ;; One durable note doc (slug "inbox"). Captures are child nodes under root.
 (define notes/doc/ensure-inbox
@@ -432,7 +477,8 @@
             (notes/doc/empty-outline "Inbox")
             "inbox" "inbox" "")
           (notes/doc/get "inbox"))
-        (notes/doc/get "inbox"))))
+        (notes/doc/get "inbox")))
+  "Ensure inbox note exists; return slug inbox.")
 
 (define notes/capture/title
   (lambda (title body)
@@ -446,14 +492,16 @@
                     b
                     ;; ASCII ellipsis: substring is byte-based; a UTF-8 "…"
                     ;; cut mid-sequence used to corrupt titles (u2026 garbage).
-                    (string-append (substring b 0 45) "..."))))))))
+                    (string-append (substring b 0 45) "...")))))))
+  "Normalize capture title string.")
 
 (define notes/capture/node-id
   (lambda (tree)
     (string-append "c"
       (as-str (count (outline/kids tree)))
       "-"
-      (as-str (string-length (outline/encode tree))))))
+      (as-str (string-length (outline/encode tree)))))
+  "Fresh node id for a capture child.")
 
 ;; Append a capture as a child of the Inbox outline root. Returns "inbox".
 (define notes/capture/add
@@ -470,7 +518,8 @@
             (seq
               (notes/doc/upsert "inbox" "Inbox" new-tree
                 "inbox" "inbox" "")
-              "inbox")))))))
+              "inbox"))))))
+  "Append capture under inbox outline root.")
 
 ;; Compact capture control for the top nav (details dropdown).
 (define notes/capture/nav
@@ -511,7 +560,8 @@
                       (list
                         (html/button (html/attr "type" "submit") "Save")
                         (html/a "/notes?slug=inbox" "inbox"))))
-                  (html/div (html/attr "id" "capture-status") ""))))))))))
+                  (html/div (html/attr "id" "capture-status") "")))))))))
+  "Nav dropdown HTML for quick capture.")
 
 ;; Full-page form (also used if someone hits /capture).
 (define notes/capture/form
@@ -553,7 +603,8 @@
               (list
                 (html/button (html/attr "type" "submit") "Capture")
                 (html/a "/notes?slug=inbox" "Open inbox"))))
-          (html/div (html/attr "id" "capture-status") ""))))))
+          (html/div (html/attr "id" "capture-status") "")))))
+  "Full-page capture form HTML.")
 
 (define notes/capture/page
   (lambda ()
@@ -562,13 +613,15 @@
         (html/page
           (list
             (html/h1 "Capture")
-            (notes/capture/form))))))
+            (notes/capture/form)))))
+  "GET/POST /capture handler.")
 
 (define notes/capture/status
   (lambda (ok msg)
     (html/p*
       (html/attr "class" (if ok "ok" "err"))
-      msg)))
+      msg))
+  "Capture status fragment HTML.")
 (define notes/doc/delete
   (lambda (slug)
     (let ((row (notes/doc/row (as-str slug))))
@@ -576,7 +629,8 @@
           ()
           (seq
             (roam/delete-from-slug (as-str slug))
-            (delete 'note (car row)))))))
+            (delete 'note (car row))))))
+  "Delete note by slug and its link rows.")
 
 (define notes/ui/item-li
   (lambda (row)
@@ -610,14 +664,16 @@
                           (html/attr "type" "submit")
                           (html/attr "class" "secondary")
                           (html/attr "title" "delete note")))
-                      "del")))))))))))
+                      "del"))))))))))
+  "Index list item HTML for one note.")
 
 (define notes/ui/folder-list
   (lambda (folder)
     (list/foldl
       (lambda (acc row) (string-append acc (notes/ui/item-li row)))
       ""
-      (notes/doc/list-folder folder))))
+      (notes/doc/list-folder folder)))
+  "List notes HTML for one folder name.")
 
 (define notes/ui/folder-section
   (lambda (folder)
@@ -634,7 +690,8 @@
           (list
             (html/h3
               (html/a href (html/text label)))
-            (html/ul "" (notes/ui/folder-list folder))))))))
+            (html/ul "" (notes/ui/folder-list folder)))))))
+  "Folder section card for index.")
 
 (define notes/ui/folders-html
   (lambda ()
@@ -646,14 +703,16 @@
           (if (null? names)
               (html/p* (html/attr "class" "muted") "No notes yet.")
               (html/join
-                (list/map notes/ui/folder-section names)))))))
+                (list/map notes/ui/folder-section names))))))
+  "All folder sections HTML.")
 
 (define notes/ui/recent-list
   (lambda ()
     (list/foldl
       (lambda (acc row) (string-append acc (notes/ui/item-li row)))
       ""
-      (notes/doc/index-list))))
+      (notes/doc/index-list)))
+  "Recent notes list HTML (optional folder filter).")
 
 (define notes/ui/create-form
   (lambda ()
@@ -670,7 +729,8 @@
           (html/label "" "Folder ")
           (html/text-input "folder" (html/attr "placeholder" "wiki/entities"))
           " "
-          (html/button (html/attr "type" "submit") "Create"))))))
+          (html/button (html/attr "type" "submit") "Create")))))
+  "New note create form HTML.")
 
 (define notes/ui/index
   (lambda ()
@@ -688,7 +748,8 @@
               " · system notes (inbox) are hidden from the index.")))
         (notes/ui/create-form)
         (html/h2 "Folders")
-        (notes/ui/folders-html)))))
+        (notes/ui/folders-html))))
+  "Notes index page body HTML.")
 (define notes/ui/missing
   (lambda (slug)
     (html/join
@@ -696,7 +757,8 @@
         (html/h1 "Missing")
         (html/p* (html/attr "class" "err")
           (string-append "No note " (as-str slug)))
-        (html/p* "" (html/a "/notes" "All notes"))))))
+        (html/p* "" (html/a "/notes" "All notes")))))
+  "Missing-note message HTML for slug.")
 (define notes/ui/edit-form
   (lambda (slug outline)
     (html/form "POST" "/notes" ""
@@ -711,7 +773,8 @@
                 (html/attr "rows" "16")))
             (outline/encode outline))
           (html/p* ""
-            (html/button (html/attr "type" "submit") "Save outline")))))))
+            (html/button (html/attr "type" "submit") "Save outline"))))))
+  "Note metadata edit form HTML.")
 
 ;; Desktop top toolbar: acts on selected node (#ol-selected-id). Hidden on mobile.
 (define notes/ui/tb-btn
@@ -723,7 +786,8 @@
           (html/attr "class" "ol-btn")
           (html/attr "title" op)
           (html/attr "data-ol-op" op)))
-      label)))
+      label))
+  "Toolbar button HTML helper.")
 
 (define notes/ui/toolbar
   (lambda (slug show-archived)
@@ -794,7 +858,8 @@
           (if show-archived
               (html/a (string-append "/notes?slug=" slug) "Hide archived")
               (html/a (string-append "/notes?slug=" slug "&show=archived")
-                "Show archived")))))))
+                "Show archived"))))))
+  "Desktop outline toolbar HTML.")
 
 (define notes/ui/outline-script
   (lambda (slug show-archived)
@@ -857,7 +922,8 @@
         "if(showArch)p+='&show=archived';"
         "p+='&'+t.dataset.field+'='+encodeURIComponent(t.innerText);"
         "fetch('/partials/notes-node-op',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:p});},true);}"
-        "setSel('root');document.body.addEventListener('htmx:afterSwap',function(){setSel(selId());});})();"))))
+        "setSel('root');document.body.addEventListener('htmx:afterSwap',function(){setSel(selId());});})();")))
+  "Client script for outline selection/actions.")
 
 (define notes/ui/folder-form
   (lambda (slug folder)
@@ -874,7 +940,8 @@
                 (html/attr "placeholder" "wiki/entities")
                 (html/attr "style" "width:12rem"))))
           " "
-          (html/button (html/attr "type" "submit") "move"))))))
+          (html/button (html/attr "type" "submit") "move")))))
+  "Folder assignment form for current note.")
 
 (define notes/ui/show-body
   (lambda (slug title outline tags show-archived folder)
@@ -929,7 +996,8 @@
             (list
               (html/tag "summary" (html/attr "class" "muted") "Raw JSON (debug)")
               (notes/ui/edit-form slug outline))))
-        (notes/ui/outline-script slug show-archived)))))
+        (notes/ui/outline-script slug show-archived))))
+  "Note show panel body (outline + backlinks).")
 
 (define notes/ui/show
   (lambda (slug)
@@ -942,7 +1010,8 @@
             (notes/doc/outline n)
             (notes/doc/tags n)
             show-archived
-            (notes/doc/folder n))))))
+            (notes/doc/folder n)))))
+  "Full note show page HTML for slug.")
 (define notes/ui/do-create
   (lambda (title slug folder)
     (let ((s
@@ -955,7 +1024,8 @@
         (notes/doc/upsert-in s (as-str title)
           (notes/doc/empty-outline (as-str title))
           "" "note" "" fld)
-        (redirect (string-append "/notes?slug=" s))))))
+        (redirect (string-append "/notes?slug=" s)))))
+  "POST handler: create note from request.")
 (define notes/ui/do-save
   (lambda (slug raw)
     (let ((tree (outline/decode raw))
@@ -966,7 +1036,8 @@
             (day (if (null? prev) "" (notes/doc/day prev))))
         (seq
           (notes/doc/upsert (as-str slug) title tree tags kind day)
-          (redirect (string-append "/notes?slug=" (as-str slug))))))))
+          (redirect (string-append "/notes?slug=" (as-str slug)))))))
+  "POST handler: save note metadata/outline.")
 (define notes/capture/handle
   (lambda ()
     (let ((title (request-param "title"))
@@ -985,14 +1056,16 @@
                   (render-html
                     (notes/capture/status #t
                       "Saved to Inbox."))
-                  (redirect "/notes?slug=inbox"))))))))
+                  (redirect "/notes?slug=inbox")))))))
+  "POST handler for capture form.")
 
 (define notes/ui/do-delete
   (lambda ()
     (let ((slug (as-str (request-param "slug"))))
       (seq
         (notes/doc/delete slug)
-        (redirect "/notes")))))
+        (redirect "/notes"))))
+  "POST handler: delete note.")
 
 ;; Target note <option> list for refile (exclude source slug).
 (define notes/refile/options
@@ -1009,7 +1082,8 @@
                     (if (string-eq title "") slug title)
                     #f))))))
       ""
-      (notes/doc/list))))
+      (notes/doc/list)))
+  "HTML options of target notes for refile.")
 
 (define notes/refile/form
   (lambda (src-slug nid)
@@ -1031,7 +1105,8 @@
                     (html/attr "type" "submit")
                     (html/attr "class" "ol-btn")
                     (html/attr "title" "move node to another note")))
-                "refile")))))))
+                "refile"))))))
+  "Refile form HTML for node.")
 
 ;; Move node nid from src-slug into dst-slug under root. Keeps node id/title/body/todo/kids.
 ;; Pure detach on the sexp tree, then two upserts inside one transaction so a
@@ -1071,7 +1146,8 @@
                                     (notes/doc/tags src)
                                     (notes/doc/kind src)
                                     (notes/doc/day src))
-                                  #t)))))))))))))
+                                  #t))))))))))))
+  "Move node between notes transactionally.")
 
 (define notes/refile/handle
   (lambda ()
@@ -1081,7 +1157,8 @@
       (seq
         (notes/refile/move src nid dst)
         (redirect
-          (string-append "/notes?slug=" src))))))
+          (string-append "/notes?slug=" src)))))
+  "POST handler for refile move.")
 
 ;; ---- extract: node → its own note ----
 ;; Takes a non-root node out of src, creates a new note whose root title/body
@@ -1092,7 +1169,8 @@
   (lambda (c)
     (string-contains?
       "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-      (as-str c))))
+      (as-str c)))
+  "True if char allowed in generated slug.")
 
 (define notes/refile/slugify-acc
   (lambda (s i acc last-hyphen?)
@@ -1105,7 +1183,8 @@
               (if last-hyphen?
                   (notes/refile/slugify-acc s (+ i 1) acc #t)
                   (notes/refile/slugify-acc s (+ i 1)
-                    (string-append acc "-") #t)))))))
+                    (string-append acc "-") #t))))))
+  "Accumulator for slugify.")
 
 (define notes/refile/slugify
   (lambda (title)
@@ -1123,14 +1202,16 @@
               (string-append "note-" (as-str (gensym "n")))
               (if (> (string-length s) 48)
                   (substring s 0 48)
-                  s)))))))
+                  s))))))
+  "Slugify title string to note slug candidate.")
 
 (define notes/refile/unique-slug
   (lambda (base)
     (if (null? (notes/doc/row (as-str base)))
         (as-str base)
         (notes/refile/unique-slug
-          (string-append (as-str base) "-" (as-str (gensym "x")))))))
+          (string-append (as-str base) "-" (as-str (gensym "x"))))))
+  "Unique slug derived from title.")
 
 (define notes/refile/extract
   (lambda (src-slug nid)
@@ -1170,7 +1251,8 @@
                                     (notes/doc/tags src)
                                     (notes/doc/kind src)
                                     (notes/doc/day src))
-                                  new-slug))))))))))))))
+                                  new-slug)))))))))))))
+  "Extract node into its own new note.")
 
 (define notes/refile/extract-handle
   (lambda ()
@@ -1179,7 +1261,8 @@
       (let ((new (notes/refile/extract src nid)))
         (if (null? new)
             (redirect (string-append "/notes?slug=" src))
-            (redirect (string-append "/notes?slug=" new)))))))
+            (redirect (string-append "/notes?slug=" new))))))
+  "POST handler for extract-to-note.")
 
 (define notes/refile/extract-form
   (lambda (src-slug nid)
@@ -1198,7 +1281,8 @@
                     (html/attr "type" "submit")
                     (html/attr "class" "ol-btn")
                     (html/attr "title" "extract node into its own note")))
-                "extract")))))))
+                "extract"))))))
+  "Extract-to-note form HTML.")
 
 ;; Eval form: run a Lisp expr with self/doc/slug bound, splice result.
 (define notes/outline/eval-form
@@ -1233,7 +1317,8 @@
                 (html/attr "type" "submit")
                 (html/attr "class" "ol-btn")
                 (html/attr "title" "eval Lisp and splice result")))
-            "eval"))))))
+            "eval")))))
+  "Eval-and-splice form HTML for outline toolbar.")
 
 ;; Hook refile + eval into outline action panels (after outline lib loads).
 ;; Per-node extras must stay CHEAP: notes/refile/options scans the whole
@@ -1242,7 +1327,8 @@
 ;; per-node menu only gets extract (fixed size) — eval stays toolbar/partial.
 (define outline/extra-actions
   (lambda (slug nid)
-    (notes/refile/extract-form slug nid)))
+    (notes/refile/extract-form slug nid))
+  "Hook: per-node extra outline actions (extract).")
 
 (define notes/ui/handle-post
   (lambda ()
@@ -1273,7 +1359,8 @@
          (notes/refile/handle))
         ((string-eq action "extract")
          (notes/refile/extract-handle))
-        (else (redirect "/notes"))))))
+        (else (redirect "/notes")))))
+  "Dispatch notes UI POST actions.")
 
 (define notes/page
   (lambda ()
@@ -1282,7 +1369,8 @@
         (let ((slug (request-param "slug")))
           (if (if (null? slug) #t (string-eq (as-str slug) ""))
               (html/page (list (notes/ui/index)))
-              (html/page (list (notes/ui/show (as-str slug)))))))))
+              (html/page (list (notes/ui/show (as-str slug))))))))
+  "GET/POST /notes main handler.")
 (define notes/outline/partial
   (lambda ()
     (let ((n (notes/doc/get (request-param "slug")))
@@ -1291,13 +1379,15 @@
           (render-html (html/p* (html/attr "class" "err") "missing"))
           (render-html
             (outline/html (as-str (request-param "slug"))
-              (notes/doc/outline n) show-archived))))))
+              (notes/doc/outline n) show-archived)))))
+  "htmx partial for outline region.")
 
 ;; --- node op handler ---
 
 (define notes/outline/new-node
   (lambda ()
-    (outline/node (gensym "n") "New node")))
+    (outline/node (gensym "n") "New node"))
+  "Construct a fresh outline child node.")
 
 (define notes/outline/apply-op
   (lambda (slug tree op nid)
@@ -1345,7 +1435,8 @@
            tree
            (outline/update tree nid
              (lambda (n) (outline/unarchive n)))))
-      (else tree))))
+      (else tree)))
+  "Apply named outline op to note tree and save.")
 
 ;; (slug node-id title state)*
 (define notes/outline/all-todos
@@ -1361,13 +1452,15 @@
               acc
               (outline/todos tree)))))
       (list)
-      (notes/doc/list))))
+      (notes/doc/list)))
+  "All todo nodes across notes as tuples.")
 
 (define notes/outline/open-todos
   (lambda ()
     (list/filter
       (lambda (t) (outline/todo-open? (car (cdr (cdr (cdr t))))))
-      (notes/outline/all-todos))))
+      (notes/outline/all-todos)))
+  "Open (actionable) todos across notes.")
 
 (define notes/outline/cycle-todo
   (lambda (slug nid)
@@ -1382,7 +1475,8 @@
             (let ((new-tree
                     (outline/update tree nid
                       (lambda (n) (outline/cycle-todo n)))))
-              (notes/doc/upsert slug title new-tree tags kind day)))))))
+              (notes/doc/upsert slug title new-tree tags kind day))))))
+  "Cycle todo state on node in note slug.")
 
 ;; Evaluate expr with self/doc/slug bound. Uses load-string to install a
 ;; temp lambda (REPL-equivalent; auth gate is the only boundary — v1).
@@ -1401,7 +1495,8 @@
                         "(define __notes_eval_fn (lambda (self doc slug) "
                         (as-str expr)
                         "))"))
-                    (__notes_eval_fn node prev (as-str slug))))))))))
+                    (__notes_eval_fn node prev (as-str slug)))))))))
+  "Eval expr with self/doc/slug bound; return value.")
 
 ;; Splice eval result into the tree at nid.
 ;; target: body | child | sibling (default child).
@@ -1417,7 +1512,8 @@
                       (outline/node (gensym "n") (as-str result)))))
             (if (string-eq t "sibling")
                 (outline/insert-sibling tree nid child)
-                (outline/add-child-by-id tree nid child)))))))
+                (outline/add-child-by-id tree nid child))))))
+  "Splice eval result into outline at node.")
 
 (define notes/outline/node-op
   (lambda ()
@@ -1446,7 +1542,8 @@
                 (seq
                   (notes/doc/upsert slug title new-tree tags kind day)
                   (render-html
-                    (outline/html slug new-tree show-archived))))))))))
+                    (outline/html slug new-tree show-archived)))))))))
+  "HTTP node-op entry: apply outline mutation.")
 
 
 ;; =========================================================
@@ -1463,7 +1560,8 @@
     "- Cross-links use [[slug]] or [[slug|label]].\\n"
     "- Prefer updating existing entity/concept pages over creating duplicates.\\n"
     "- Keep titles short; put detail in outline bodies.\\n"
-    "- When asked for JSON, reply with ONE JSON object only (no markdown fences).\\n"))
+    "- When asked for JSON, reply with ONE JSON object only (no markdown fences).\\n")
+  "Default wiki entity schema prompt fragment.")
 
 ;; Plain LLM completion (no agent tools). tools=#f forces a single text turn.
 (define wiki/ask
@@ -1472,7 +1570,8 @@
             (agent-session-new
               "You help maintain a personal knowledge wiki. Reply with plain text or JSON as asked. Do not call tools."
               #f)))
-      (agent-say sid (as-str prompt)))))
+      (agent-say sid (as-str prompt))))
+  "Plain LLM completion without agent tools.")
 
 (define wiki/schema
   (lambda ()
@@ -1483,11 +1582,13 @@
               (outline/node* "root" "Wiki Schema" wiki/default-schema "" (list))
               "schema" "schema" "" "wiki")
             wiki/default-schema)
-          (outline/body (notes/doc/outline n))))))
+          (outline/body (notes/doc/outline n)))))
+  "Active wiki schema string.")
 
 (define wiki/now
   (lambda ()
-    (as-str (date-today))))
+    (as-str (date-today)))
+  "Current timestamp string for wiki events.")
 
 (define wiki/log-event
   (lambda (kind op slug summary)
@@ -1498,11 +1599,13 @@
           "op" (as-str op)
           "slug" (as-str slug)
           "ts" (wiki/now)
-          "summary" (as-str summary))))))
+          "summary" (as-str summary)))))
+  "Append wiki pipeline event row.")
 
 (define wiki/events
   (lambda ()
-    (rows 'wiki-event 100)))
+    (rows 'wiki-event 100))
+  "Recent wiki event rows.")
 
 (define wiki/prune-events
   (lambda (days)
@@ -1515,13 +1618,15 @@
                   (seq (delete 'wiki-event (car row)) (+ n 1))
                   n))))
         0
-        (wiki/events)))))
+        (wiki/events))))
+  "Drop old wiki events beyond limit.")
 
 ;; Extract a JSON object substring from LLM text (first { ... last }).
 (define wiki/extract-json
   (lambda (s)
     (let ((t (as-str s)))
-      (wiki/extract-json-scan t 0 () ()))))
+      (wiki/extract-json-scan t 0 () ())))
+  "Extract first JSON object substring from LLM text.")
 
 (define wiki/extract-json-scan
   (lambda (s i start end)
@@ -1536,11 +1641,13 @@
                 end)
               (if (string-eq c "}")
                   (wiki/extract-json-scan s (+ i 1) start i)
-                  (wiki/extract-json-scan s (+ i 1) start end)))))))
+                  (wiki/extract-json-scan s (+ i 1) start end))))))
+  "Scan helper for wiki/extract-json.")
 
 (define wiki/parse-plan
   (lambda (text)
-    (json-parse (wiki/extract-json text))))
+    (json-parse (wiki/extract-json text)))
+  "Parse wiki plan structure from JSON text.")
 
 (define wiki/plan-list
   (lambda (plan key)
@@ -1552,7 +1659,8 @@
                 parsed
                 (if (null? parsed)
                     (list)
-                    (list))))))))
+                    (list)))))))
+  "List entity maps from parsed plan.")
 
 (define wiki/slugify
   (lambda (title)
@@ -1561,7 +1669,8 @@
           (string-append "wiki-" (as-str (count (notes/doc/list))))
           (string-append "w-"
             (substring t 0
-              (if (< (string-length t) 32) (string-length t) 32)))))))
+              (if (< (string-length t) 32) (string-length t) 32))))))
+  "Slugify string for wiki page names.")
 
 (define wiki/upsert-page
   (lambda (slug title body kind)
@@ -1594,7 +1703,8 @@
                   (update-field 'note (car row) "updated_at" (wiki/now))
                   (update-field 'note (car row) "updated_by" "llm")
                   (update-field 'note (car row) "source_count" sc)
-                  slug))))))))
+                  slug)))))))
+  "Upsert a wiki note page from entity fields.")
 
 (define wiki/apply-entity
   (lambda (ent source-slug touched)
@@ -1612,14 +1722,16 @@
                     "entity")))
         (seq
           (wiki/upsert-page s t b k)
-          (append touched (list s)))))))
+          (append touched (list s))))))
+  "Apply one planned entity to the wiki corpus.")
 
 (define wiki/apply-entities
   (lambda (ents source-slug touched)
     (if (null? ents)
         touched
         (wiki/apply-entities (cdr ents) source-slug
-          (wiki/apply-entity (car ents) source-slug touched)))))
+          (wiki/apply-entity (car ents) source-slug touched))))
+  "Apply list of entities via wiki/apply-entity.")
 
 (define wiki/ingest-prompt
   (lambda (source-text source-slug)
@@ -1631,7 +1743,8 @@
       "Reply with ONE JSON object only, shape:\\n"
       "{\"summary\":\"...\",\"entities\":[{\"slug\":\"...\",\"title\":\"...\","
       "\"body\":\"... with [[links]]\",\"kind\":\"entity|concept\"}]}\\n"
-      "Create 1-5 entities/concepts. Bodies may include [[slug]] links.\\n")))
+      "Create 1-5 entities/concepts. Bodies may include [[slug]] links.\\n"))
+  "Build LLM prompt for wiki ingest from source text.")
 
 (define wiki/ingest-from-source
   (lambda (source-text)
@@ -1659,7 +1772,8 @@
                     (wiki/log-event "ingest" "wiki/ingest-from-source" src-slug
                       (string-append "touched "
                         (as-str (count touched)) " pages"))
-                    (list src-slug touched raw)))))))))))
+                    (list src-slug touched raw))))))))))
+  "Ingest source text into wiki via LLM plan.")
 
 (define wiki/corpus-index
   (lambda ()
@@ -1671,7 +1785,8 @@
                 (kind (as-str (dict-get f "kind"))))
             (string-append acc "- [" kind "] " title " ([[" slug "]])\\n"))))
       ""
-      (notes/doc/index-list))))
+      (notes/doc/index-list)))
+  "Index summary of wiki corpus notes.")
 
 (define wiki/query-prompt
   (lambda (question)
@@ -1680,7 +1795,8 @@
       "\\n\\nCorpus index:\\n" (wiki/corpus-index)
       "\\n\\nQuestion: " (as-str question) "\\n\\n"
       "Answer using the corpus. Cite pages as [[slug]]. "
-      "If you create a synthesis, say so. Plain prose is fine.\\n")))
+      "If you create a synthesis, say so. Plain prose is fine.\\n"))
+  "Build LLM prompt for wiki query.")
 
 (define wiki/query
   (lambda (question)
@@ -1691,7 +1807,8 @@
             (if (< (string-length (as-str question)) 80)
                 (string-length (as-str question))
                 80)))
-        answer))))
+        answer)))
+  "Answer query against wiki corpus via LLM.")
 
 (define wiki/lint-prompt
   (lambda ()
@@ -1703,14 +1820,16 @@
       "2. Missing pages (mentioned via [[slug]] but absent)\\n"
       "3. Contradictions or stale claims\\n"
       "4. Suggested new sources or questions\\n"
-      "Be concise. Use bullet lists.\\n")))
+      "Be concise. Use bullet lists.\\n"))
+  "Build LLM prompt for wiki lint.")
 
 (define wiki/lint
   (lambda ()
     (let ((report (wiki/ask (wiki/lint-prompt))))
       (seq
         (wiki/log-event "lint" "wiki/lint" "" "lint pass")
-        report))))
+        report)))
+  "Lint wiki corpus via LLM; return findings.")
 
 
 (route "/notes" "notes/page")

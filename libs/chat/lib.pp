@@ -5,19 +5,26 @@
 (deftype 'chat-room 'kind 'room_id 'title 'members 'created_by 'created_at)
 (deftype 'chat-message 'room_id 'from 'body 'created_at)
 
-(define chat/row-id (lambda (row) (as-str (car row))))
-(define chat/row-fields (lambda (row) (cdr row)))
+(define chat/row-id (lambda (row) (as-str (car row)))
+  "Row id string from chat row pair.")
+(define chat/row-fields (lambda (row) (cdr row))
+  "Fields cdr of chat row.")
 
 (define chat/msg-from
-  (lambda (fields) (as-str (dict-get fields "from"))))
+  (lambda (fields) (as-str (dict-get fields "from")))
+  "Message author from fields.")
 (define chat/msg-body
-  (lambda (fields) (as-str (dict-get fields "body"))))
+  (lambda (fields) (as-str (dict-get fields "body")))
+  "Message body text from fields.")
 (define chat/msg-room
-  (lambda (fields) (as-str (dict-get fields "room_id"))))
+  (lambda (fields) (as-str (dict-get fields "room_id")))
+  "Room id from message fields.")
 (define chat/room-id-of
-  (lambda (fields) (as-str (dict-get fields "room_id"))))
+  (lambda (fields) (as-str (dict-get fields "room_id")))
+  "Room id field from room fields.")
 
-(define chat/lobby-id "lobby")
+(define chat/lobby-id "lobby"
+  "Default public lobby room id string.")
 
 (define chat/find-room
   (lambda (room-id)
@@ -30,7 +37,8 @@
                   acc)
               acc))
         ()
-        (rows 'chat-room 50)))))
+        (rows 'chat-room 50))))
+  "Find chat-room row by room id.")
 
 (define chat/ensure-lobby
   (lambda ()
@@ -45,10 +53,12 @@
                 "members" "[]"
                 "created_by" (as-str (whoami))
                 "created_at" "")))
-          (chat/row-id found)))))
+          (chat/row-id found))))
+  "Ensure lobby room exists; return its id.")
 
 (define chat/all-messages
-  (lambda () (rows 'chat-message 200)))
+  (lambda () (rows 'chat-message 200))
+  "Recent chat-message rows.")
 
 (define chat/can-access?
   (lambda (room-id)
@@ -62,7 +72,8 @@
                 (let ((f (chat/row-fields row)))
                   (if (string-eq (as-str (dict-get f "kind")) "lobby")
                       #t
-                      (chat/member? (dict-get f "members") me)))))))))
+                      (chat/member? (dict-get f "members") me))))))))
+  "True if user may access room (lobby or DM member).")
 
 (define chat/history
   (lambda (room-id)
@@ -72,13 +83,15 @@
             (lambda (row)
               (string-eq (chat/msg-room (chat/row-fields row)) want))
             (chat/all-messages))
-          (list)))))
+          (list))))
+  "Messages for room_id the user can access.")
 
 (define chat/lobby
   (lambda ()
     (seq
       (chat/ensure-lobby)
-      (chat/history chat/lobby-id))))
+      (chat/history chat/lobby-id)))
+  "History for the lobby room.")
 
 (define chat/say-in
   (lambda (room-id body)
@@ -102,16 +115,19 @@
                           "body" text
                           "created_at" "")))
                     text)
-                  "chat: not a member of room"))))))
+                  "chat: not a member of room")))))
+  "Post body to room as whoami; return message id.")
 
 (define chat/say
-  (lambda (body) (chat/say-in chat/lobby-id body)))
+  (lambda (body) (chat/say-in chat/lobby-id body))
+  "Post body to lobby.")
 
 ;; --- DMs (phase 2) ---
 ;; Room id: dm:user1:user2 with user1 <= user2 (lexicographic via char ranks).
 
 (define chat/alphabet
-  " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~")
+  " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~"
+  "Alphabet string for DM room id ordering.")
 
 (define chat/char-rank-loop
   (lambda (c alphabet i n)
@@ -119,11 +135,13 @@
         999
         (if (string-eq (substring alphabet i 1) c)
             i
-            (chat/char-rank-loop c alphabet (+ i 1) n)))))
+            (chat/char-rank-loop c alphabet (+ i 1) n))))
+  "Internal: rank of char c in alphabet from index i.")
 
 (define chat/char-rank
   (lambda (c)
-    (chat/char-rank-loop c chat/alphabet 0 (string-length chat/alphabet))))
+    (chat/char-rank-loop c chat/alphabet 0 (string-length chat/alphabet)))
+  "Rank of character in chat/alphabet.")
 
 (define chat/str-le?
   (lambda (a b)
@@ -137,7 +155,8 @@
                       (cb (substring b 0 1)))
                   (if (string-eq ca cb)
                       (chat/str-le? (substring a 1) (substring b 1))
-                      (<= (chat/char-rank ca) (chat/char-rank cb)))))))))
+                      (<= (chat/char-rank ca) (chat/char-rank cb))))))))
+  "Lexicographic <= on two strings via char ranks.")
 
 (define chat/dm-room-id
   (lambda (peer)
@@ -145,11 +164,13 @@
           (them (as-str peer)))
       (if (chat/str-le? me them)
           (string-append "dm:" me ":" them)
-          (string-append "dm:" them ":" me)))))
+          (string-append "dm:" them ":" me))))
+  "Deterministic DM room id for two usernames.")
 
 (define chat/members-json
   (lambda (a b)
-    (string-append "[\"" (as-str a) "\",\"" (as-str b) "\"]")))
+    (string-append "[\"" (as-str a) "\",\"" (as-str b) "\"]"))
+  "JSON array string of two member usernames.")
 
 (define chat/dm
   (lambda (peer)
@@ -173,11 +194,13 @@
                         "created_by" me
                         "created_at" "")))
                   rid)
-                rid)))))))
+                rid))))))
+  "Ensure DM room between whoami and peer; return room id.")
 
 (define chat/member?
   (lambda (members-json user)
-    (string-contains? (as-str members-json) (as-str user))))
+    (string-contains? (as-str members-json) (as-str user)))
+  "True if username is in room members list.")
 
 (define chat/dms
   (lambda ()
@@ -188,17 +211,20 @@
             (if (string-eq (as-str (dict-get f "kind")) "dm")
                 (chat/member? (dict-get f "members") me)
                 #f)))
-        (rows 'chat-room 100)))))
+        (rows 'chat-room 100))))
+  "List of DM rooms involving whoami.")
 
 (define chat/users
-  (lambda () (list-usernames)))
+  (lambda () (list-usernames))
+  "Visible usernames for DM picker.")
 
 (define chat/say-dm
   (lambda (peer body)
     (let ((rid (chat/dm peer)))
       (if (blank? rid)
           "chat: bad peer"
-          (chat/say-in rid body)))))
+          (chat/say-in rid body))))
+  "Post body into DM with peer.")
 
 ;; --- HTML ---
 
@@ -213,7 +239,8 @@
                 (list
                   (html/strong (chat/msg-from f))
                   (html/span (html/attr "class" "muted") " · "))))
-            (html/p (html/text (chat/msg-body f)))))))))
+            (html/p (html/text (chat/msg-body f))))))))
+  "HTML li for one chat message.")
 
 (define chat/messages-html
   (lambda ()
@@ -228,7 +255,8 @@
         (if (null? xs)
             (html/p* (html/attr "class" "muted") "Say hi to the box.")
             (html/ul (html/attr "class" "chat-list")
-              (html/join (list/map chat/msg-li xs))))))))
+              (html/join (list/map chat/msg-li xs)))))))
+  "Message list HTML for room.")
 
 (define chat/form-html
   (lambda ()
@@ -253,7 +281,8 @@
                   (html/attr "placeholder" "Hello from the lobby…")
                   (html/attr "maxlength" "4000")))
               "")
-            (html/button (html/attr "type" "submit") "Send")))))))
+            (html/button (html/attr "type" "submit") "Send"))))))
+  "Compose form posting to room.")
 
 (define chat/main-html
   (lambda ()
@@ -262,7 +291,8 @@
         (list
           (chat/form-html)
           (html/h2 "Lobby")
-          (chat/messages-html))))))
+          (chat/messages-html)))))
+  "Main lobby chat panel.")
 
 (define chat/partial
   (lambda ()
@@ -271,7 +301,8 @@
         (if (null? xs)
             (html/p* (html/attr "class" "muted") "Say hi to the box.")
             (html/ul (html/attr "class" "chat-list")
-              (html/join (list/map chat/msg-li xs))))))))
+              (html/join (list/map chat/msg-li xs)))))))
+  "htmx partial of chat main.")
 
 (define chat/page
   (lambda ()
@@ -289,7 +320,8 @@
                 "Lobby for everyone on this box. You are "
                 (as-str (whoami))
                 "."))
-            (chat/main-html))))))
+            (chat/main-html)))))
+  "GET/POST /chat lobby handler.")
 
 (define chat/dm-peer-from-title
   (lambda (title me)
@@ -303,7 +335,8 @@
                 (if (string-contains? rest (string-append "/" me))
                     (substring rest 0 (- (string-length rest) (+ (string-length me) 1)))
                     rest)))
-          t))))
+          t)))
+  "Peer username from DM room title fields.")
 
 (define chat/dm-list-li
   (lambda (row)
@@ -315,7 +348,8 @@
           (html/li (html/attr "class" "card")
             (html/p* ""
               (html/a (string-append "/chat/dm?peer=" peer)
-                (html/text peer)))))))))
+                (html/text peer))))))))
+  "Directory li linking to a DM.")
 
 (define chat/dm-list-page
   (lambda ()
@@ -340,7 +374,8 @@
           (if (null? xs)
               (html/p* (html/attr "class" "muted") "No DMs yet.")
               (html/ul ""
-                (html/join (list/map chat/dm-list-li xs)))))))))
+                (html/join (list/map chat/dm-list-li xs))))))))
+  "GET /chat/dms list of conversations.")
 
 (define chat/dm-messages-html
   (lambda (peer)
@@ -350,7 +385,8 @@
         (if (null? xs)
             (html/p* (html/attr "class" "muted") "No messages yet.")
             (html/ul (html/attr "class" "chat-list")
-              (html/join (list/map chat/msg-li xs))))))))
+              (html/join (list/map chat/msg-li xs)))))))
+  "Message list HTML for a DM room.")
 
 (define chat/dm-main-html
   (lambda (peer)
@@ -379,7 +415,8 @@
                         (html/attr "maxlength" "4000")))
                     "")
                   (html/button (html/attr "type" "submit") "Send")))))
-          (chat/dm-messages-html peer))))))
+          (chat/dm-messages-html peer)))))
+  "Main DM conversation panel for peer.")
 
 (define chat/dm-page
   (lambda ()
@@ -401,7 +438,8 @@
                         (html/a "/chat" "Lobby")
                         (html/span "" " · ")
                         (html/a "/chat/dm" "All DMs"))))
-                  (chat/dm-main-html peer))))))))
+                  (chat/dm-main-html peer)))))))
+  "GET/POST /chat/dm DM conversation handler.")
 
 (route "/chat" "chat/page")
 (route "/chat/partial" "chat/partial")
