@@ -29,6 +29,13 @@
         (structed/list/drop (cdr xs) (- n 1))))
   "xs without the first n elements.")
 
+;; count that works on both VList and VPair/cons chains (the kernel
+;; `count` prim only accepts proper VList, but cons-based kids are VPairs).
+(define structed/count
+  (lambda (xs)
+    (if (null? xs) 0 (+ 1 (structed/count (cdr xs)))))
+  "Length of xs via cdr-walk (handles VList and VPair chains).")
+
 (define structed/list/nth
   (lambda (xs i)
     (if (null? xs)
@@ -184,7 +191,7 @@
           (list tree id)
           (let ((sibs (get-kids parent)))
             (let ((i (structed/sibling-index get-kids tree id)))
-              (if (>= (+ i 1) (count sibs))
+              (if (>= (+ i 1) (structed/count sibs))
                   (list tree id)
                   (let ((next (structed/list/nth sibs (+ i 1))))
                     (let ((absorbed (set-kids (structed/list/nth sibs i)
@@ -232,10 +239,10 @@
       (if (or (not target) (string-eq id (structed/id tree)))
           (list tree id)
           (let ((kids (get-kids target)))
-            (if (<= (count kids) 0)
+            (if (<= (structed/count kids) 0)
                 (list tree id)
-                (let ((last-kid (structed/list/nth kids (- (count kids) 1))))
-                  (let ((shrunk (set-kids target (structed/list/take kids (- (count kids) 1)))))
+                (let ((last-kid (structed/list/nth kids (- (structed/count kids) 1))))
+                  (let ((shrunk (set-kids target (structed/list/take kids (- (structed/count kids) 1)))))
                     (let ((parent (structed/find-parent get-kids tree id)))
                       (if (not parent)
                           ;; target is root: barf is a no-op (no sibling to push to)
@@ -259,7 +266,7 @@
       (if (or (not target) (string-eq id (structed/id tree)))
           (list tree id)
           (let ((kids (get-kids target)))
-            (if (<= (count kids) 0)
+            (if (<= (structed/count kids) 0)
                 (list tree id)
                 (let ((first-kid (structed/list/nth kids 0)))
                   (let ((shrunk (set-kids target (structed/list/drop kids 1))))
@@ -412,7 +419,7 @@
           (list tree id)
           (let ((sibs (get-kids parent)))
             (let ((i (structed/sibling-index get-kids tree id)))
-              (if (>= (+ i 1) (count sibs))
+              (if (>= (+ i 1) (structed/count sibs))
                   (list tree id)
                   (let ((me (structed/list/nth sibs i))
                         (next (structed/list/nth sibs (+ i 1))))
@@ -435,9 +442,9 @@
           (list tree id)
           (let ((sibs (get-kids parent)))
             (let ((i (structed/sibling-index get-kids tree id)))
-              (if (< (count sibs) 2)
+              (if (< (structed/count sibs) 2)
                   (list tree id)
-                  (let ((j (if (>= (+ i 1) (count sibs)) (- i 1) (+ i 1))))
+                  (let ((j (if (>= (+ i 1) (structed/count sibs)) (- i 1) (+ i 1))))
                     (let ((a (structed/list/nth sibs i))
                           (b (structed/list/nth sibs j)))
                       (let ((new-sibs (structed/list/replace-at

@@ -2175,6 +2175,7 @@ and seed_stdlib (t : t) : unit Lwt.t =
     let* () = seed_one t "welcome" in
     let* () = seed_one t "ai" in
     let* () = seed_one t "outline" in
+    let* () = seed_one t "structed" in
     let* () = seed_one t "notes" in
     let* () = seed_agents_note t in
     let* () = seed_one t "signup" in
