@@ -278,8 +278,25 @@
                           (string-eq (flash/card-deck-id (cdr row)) did))
                       #f))
                 (rows 'flash-card 500))))
-        (flash/take xs lim))))
-  "Due cards for deck (or all), unsuspended.")
+        ;; Session-fresh cards (last_reviewed < today or blank) come before
+        ;; cards already reviewed today, so a card rated Again sinks to the
+        ;; bottom of the stack and is not re-shown until the rest of the due
+        ;; batch is cleared. Created/id order preserved within each part.
+        (let ((seen
+                (list/filter
+                  (lambda (row)
+                    (string-eq (as-str (dict-get (cdr row) "last_reviewed")) today))
+                  xs))
+              (fresh
+                (list/filter
+                  (lambda (row)
+                    (not (string-eq (as-str (dict-get (cdr row) "last_reviewed")) today)))
+                  xs)))
+          (flash/take (append fresh seen) lim)))))
+  "Due cards for deck (or all), unsuspended. Session-fresh cards (not yet
+  reviewed today) come before cards already reviewed today, so a card rated
+  Again sinks to the bottom of the stack and is not re-shown until the rest
+  of the due batch is cleared.")
 
 (define flash/take
   (lambda (xs n)
