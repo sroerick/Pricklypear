@@ -206,7 +206,7 @@
         ".nc-blink{animation:nc-blink 1.1s steps(2,start) infinite}"
         "@keyframes nc-blink{50%{opacity:0}}"
         ".nc-banner{text-align:center;padding:.6rem .5rem;font-family:monospace;font-size:.85rem}"
-        ".nc-construction{display:inline-block;background:repeating-linear-gradient(45deg,#000 0 8px,#fc0 8px 16px);color:#000;font-weight:700;padding:.12rem .4rem;border:2px solid #000;letter-spacing:.05em}"
+        ".nc-construction{display:inline-block;background:repeating-linear-gradient(45deg,#fc0 0 12px,#000 12px 16px);color:#000;font-weight:700;padding:.12rem .4rem;border:2px solid #000;letter-spacing:.05em;text-shadow:0 0 2px #fc0,0 0 2px #fc0}"
         ".nc-foot{background:#000040;color:#cdd;border-top:2px solid #000;padding:1rem .75rem;text-align:center;font-family:monospace;font-size:.8rem}"
         ".nc-foot a{color:#9cf}"
         ".nc-webring{font-family:monospace;font-size:.8rem;margin:.4rem 0}"
