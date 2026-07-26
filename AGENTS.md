@@ -41,13 +41,17 @@ seed policy, package gotchas, UI contracts).
 
 ```lisp
 (load-library "notes")
-(notes/doc/get "agents")                    ; read full outline/body
-;; update when guidance should change (upsert title + outline/body):
-(notes/doc/upsert "agents" …)               ; see notes package / wiki-schema
+(notes/doc/get "agents")   ; (id slug title outline tags kind day)
+;; Upsert signature: (notes/doc/upsert slug title outline tags kind day)
+;; Prefer edit via browser /notes?slug=agents or read-modify-upsert:
+;;   keep title/outline from get; change outline nodes; upsert back.
+(notes/doc/upsert "agents" title outline tags kind day)
 ```
 
 Browser: `/notes?slug=agents`. Same note is advertised in `/agent.txt`
-and `/.well-known/agent.json`. Prefer writing durable agent lore **there**
+and `/.well-known/agent.json`. **Agents may and should edit this note**
+when they learn durable habitat conventions — that is the intended
+feedback loop (not a human-only doc). Prefer writing agent lore **there**
 (Postgres on the habitat) over only editing git `AGENTS.md`. Git
 `AGENTS.md` is the laptop/repo mirror for humans and offline agents;
 keep the two roughly aligned when you change authority/workflow rules.
