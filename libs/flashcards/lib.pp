@@ -323,7 +323,11 @@
 ;; --- HTML ---
 
 (define flash/esc (lambda (s) (html-escape (as-str s)))
-  "HTML-escape helper alias.")
+  "HTML-escape helper. Use ONLY with raw-body builders (html/h1, flash/td
+  WITHOUT an inner html/text) — those do not escape. The auto-escaping
+  builders html/p and html/text already call html-escape, so wrapping their
+  args with flash/esc DOUBLE-escapes (\" -> &quot; -> &amp;quot;, which the
+  browser shows as the literal text '&quot;').")
 
 (define flash/deck-row-html
   (lambda (row)
@@ -405,7 +409,7 @@
       (flash/tr
         (html/join
           (list
-            (flash/td (html/text (flash/esc (flash/card-front fields))))
+            (flash/td (html/text (flash/card-front fields)))
             (flash/td (html/text (as-str (dict-get fields "due"))))
             (flash/td (html/text (as-str (dict-get fields "interval"))))
             (flash/td
@@ -496,12 +500,12 @@
         (html/join
           (list
             (html/h2 "Front")
-            (html/p (flash/esc (flash/card-front fields)))
+            (html/p (flash/card-front fields))
             (if (flash/true? reveal)
                 (html/join
                   (list
                     (html/h2 "Back")
-                    (html/p (flash/esc (flash/card-back fields)))
+                    (html/p (flash/card-back fields))
                     (html/p* ""
                       (html/join
                         (list
