@@ -11,17 +11,21 @@
 (define bookmarks/fields
   (lambda (title url)
     (dict-set* "{}"
-      (list "title" (as-str title) "url" (as-str url)))))
+      (list "title" (as-str title) "url" (as-str url))))
+  "Build bookmark fields dict from title and url.")
 
 (define bookmarks/all
-  (lambda () (rows 'bookmark 100)))
+  (lambda () (rows 'bookmark 100))
+  "Up to 100 bookmark rows.")
 
 (define bookmarks/create
   (lambda (title url)
-    (create 'bookmark (bookmarks/fields title url))))
+    (create 'bookmark (bookmarks/fields title url)))
+  "Create bookmark row; return id.")
 
 (define bookmarks/delete
-  (lambda (id) (delete 'bookmark (as-str id))))
+  (lambda (id) (delete 'bookmark (as-str id)))
+  "Delete bookmark by id.")
 
 ;; --- helpers -----------------------------------------------------------
 
@@ -31,22 +35,26 @@
           (p (as-str prefix)))
       (let ((n (string-length p)))
         (and (>= (string-length ss) n)
-             (string-eq (substring ss 0 n) p))))))
+             (string-eq (substring ss 0 n) p)))))
+  "True if s begins with prefix.")
 
 (define bookmarks/url-ok?
   (lambda (url)
     (let ((u (as-str url)))
       (or (bookmarks/starts-with? u "https://")
-          (bookmarks/starts-with? u "http://")))))
+          (bookmarks/starts-with? u "http://"))))
+  "True if url starts with http:// or https://.")
 
 (define bookmarks/clip-title
   (lambda (title url)
     (let ((t (string-trim (as-str title))))
-      (if (blank? t) (as-str url) t))))
+      (if (blank? t) (as-str url) t)))
+  "Title for clip; falls back to url when title blank.")
 
 (define bookmarks/find-by-url
   (lambda (url)
-    (bookmarks/find-by-url-in (bookmarks/all) (as-str url))))
+    (bookmarks/find-by-url-in (bookmarks/all) (as-str url)))
+  "Find bookmark row by exact url among all.")
 
 (define bookmarks/find-by-url-in
   (lambda (rows-list url)
@@ -56,7 +64,8 @@
           (let ((fields (cdr row)))
             (if (string-eq (as-str (dict-get fields "url")) url)
                 row
-                (bookmarks/find-by-url-in (cdr rows-list) url)))))))
+                (bookmarks/find-by-url-in (cdr rows-list) url))))))
+  "Scan rows-list for matching url; return row or empty.")
 
 ;; --- list / form UI ----------------------------------------------------
 
@@ -82,7 +91,8 @@
                   (list
                     (html/hidden "action" "delete")
                     (html/hidden "id" id)
-                    (html/button (html/attr "type" "submit") "Delete")))))))))))
+                    (html/button (html/attr "type" "submit") "Delete"))))))))))
+  "HTML li for one bookmark with delete form.")
 
 (define bookmarks/list-html
   (lambda ()
@@ -92,7 +102,8 @@
             (html/p* (html/attr "class" "muted")
               (html/text "No bookmarks yet."))
             (html/ul ""
-              (html/join (list/map bookmarks/item-li xs))))))))
+              (html/join (list/map bookmarks/item-li xs)))))))
+  "Bookmarks list markup.")
 
 (define bookmarks/form-html
   (lambda ()
@@ -125,7 +136,8 @@
                       (html/attr "id" "bm-url")
                       (html/attr "required" "required")
                       (html/attr "placeholder" "https://..."))))
-                (html/button (html/attr "type" "submit") "Add")))))))))
+                (html/button (html/attr "type" "submit") "Add"))))))))
+  "Add-bookmark form card.")
 
 ;; Bookmarklet origin from Host (+ X-Forwarded-Proto when present).
 (define bookmarks/public-origin
@@ -139,7 +151,8 @@
                   "http")))
         (if (blank? host)
             ""
-            (string-append scheme "://" host))))))
+            (string-append scheme "://" host)))))
+  "Scheme://host from request headers for bookmarklet.")
 
 ;; javascript: URL — navigates to /bookmarks/clip with page url+title.
 (define bookmarks/bookmarklet-js
@@ -153,7 +166,8 @@
         "var u=encodeURIComponent(location.href);"
         "var t=encodeURIComponent(document.title||'');"
         "location.href=o+'/bookmarks/clip?url='+u+'&title='+t;"
-        "})();"))))
+        "})();")))
+  "javascript: bookmarklet URL targeting /bookmarks/clip.")
 
 (define bookmarks/install-html
   (lambda ()
@@ -173,7 +187,8 @@
               (html/text "Save to Pricklypear")))
           (html/p* (html/attr "class" "muted")
             (html/text
-              "If logged out, you will sign in and return to finish the save.")))))))
+              "If logged out, you will sign in and return to finish the save."))))))
+  "Card with drag-to-bar bookmarklet install link.")
 
 (define bookmarks/main-html
   (lambda ()
@@ -183,7 +198,8 @@
           (bookmarks/install-html)
           (bookmarks/form-html)
           (html/h2 "All bookmarks")
-          (bookmarks/list-html))))))
+          (bookmarks/list-html)))))
+  "Main panel: install, form, and list.")
 
 (define bookmarks/handle-post
   (lambda ()
@@ -196,7 +212,8 @@
                (url (request-param "url")))
            (when (and (not (blank? title)) (not (blank? url)))
              (bookmarks/create title url))))
-        (else ())))))
+        (else ()))))
+  "Dispatch create/delete POST actions.")
 
 (define bookmarks/page
   (lambda ()
@@ -212,7 +229,8 @@
             (html/p* (html/attr "class" "muted")
               (html/text
                 "Save links on data_rows (type bookmark). Hosted bookmarklet clips the current tab."))
-            (bookmarks/main-html))))))
+            (bookmarks/main-html)))))
+  "GET/POST /bookmarks page handler.")
 
 ;; GET /bookmarks/clip?url=&title= — bookmarklet target (auth required).
 (define bookmarks/clip-page
@@ -252,7 +270,8 @@
                          (html/a url (html/text url)))
                        (html/tag "p" ""
                          (html/a "/bookmarks"
-                           (html/text "View all bookmarks")))))))))))))))
+                           (html/text "View all bookmarks"))))))))))))))
+  "GET /bookmarks/clip bookmarklet target; save if new.")
 
 (route "/bookmarks" "bookmarks/page")
 (route "/bookmarks/clip" "bookmarks/clip-page")

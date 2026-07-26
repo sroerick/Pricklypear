@@ -486,6 +486,10 @@ let install_ai_function = Agent_tools.install_ai_function
 let function_source = Agent_tools.function_source
 let function_ast = Agent_tools.function_ast
 let package_binding_names = Agent_tools.package_binding_names
+let package_export_names = Agent_tools.package_export_names
+let list_package_names = Agent_tools.list_package_names
+let apropos_docs = Agent_tools.apropos_docs
+let describe = Agent_tools.describe
 let export_package = Agent_tools.export_package
 let propose_function = Agent_tools.propose_function
 let default_agent_seed = Agent_tools.default_agent_seed
@@ -1113,7 +1117,7 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
             (Pricklypear_lisp.Ast.VStr "function-ast: need name-str"));
 
   (* (package-exports pkg) -> VList of public names (Phase 3 package-surface).
-     Kernel/std: frozen set. Other packages: all package-bindings (status quo). *)
+     Kernel/std: frozen set. Other packages: shallow names (pkg or pkg/local). *)
   let kernel_std_exports =
     [ "list/map"; "list/filter"; "list/foldl"; "reverse"; "append"; "nth"
     ; "null?"; "pair?"; "car"; "cdr"; "cons"; "list"; "count"
@@ -1121,7 +1125,9 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
     ; "string-contains?"; "string-trim"; "html-escape"; "as-str"; "str"
     ; "symbol?"; "string?"; "symbol=?"; "symbol->string"; "string->symbol"
     ; "not"; "type-of"; "read-string"; "read-all-string"; "function-ast"
-    ; "function-source"; "function-doc"
+    ; "function-source"; "function-doc"; "apropos"; "apropos-docs"
+    ; "describe"; "list-packages"; "package-bindings"; "package-exports"
+    ; "prefix-of"
     ]
   in
   Primitives.register tbl "package-exports"
@@ -1136,7 +1142,7 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
                     (fun n -> Pricklypear_lisp.Ast.VStr n)
                     kernel_std_exports))
           else
-            let* names = package_binding_names t pkg in
+            let* names = package_export_names t pkg in
             Lwt.return
               (Pricklypear_lisp.Ast.VList
                  (List.map (fun n -> Pricklypear_lisp.Ast.VStr n) names))
@@ -1144,7 +1150,7 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
           Lwt.return
             (Pricklypear_lisp.Ast.VStr "package-exports: need package-str"));
 
-  (* (package-bindings pkg) -> VList of name strings *)
+  (* (package-bindings pkg) -> VList of name strings (prefix pkg/ any depth) *)
   Primitives.register tbl "package-bindings"
     (fun args ->
       match args with
@@ -1156,6 +1162,50 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
       | _ ->
           Lwt.return
             (Pricklypear_lisp.Ast.VStr "package-bindings: need package-str"));
+
+  (* (list-packages) -> VList of top-level package prefix strings *)
+  Primitives.register tbl "list-packages"
+    (fun args ->
+      match args with
+      | [] | [ Pricklypear_lisp.Ast.VNil ] ->
+          let* names = list_package_names t in
+          Lwt.return
+            (Pricklypear_lisp.Ast.VList
+               (List.map (fun n -> Pricklypear_lisp.Ast.VStr n) names))
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr "list-packages: takes no args"));
+
+  (* (apropos-docs pat) -> VList of (name . doc) pairs *)
+  Primitives.register tbl "apropos-docs"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr pat ] ->
+          let* pairs = apropos_docs t pat in
+          let rows =
+            List.map
+              (fun (n, d) ->
+                Pricklypear_lisp.Ast.VList
+                  [ Pricklypear_lisp.Ast.VStr n
+                  ; Pricklypear_lisp.Ast.VStr d
+                  ])
+              pairs
+          in
+          Lwt.return (Pricklypear_lisp.Ast.VList rows)
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr "apropos-docs: need pattern-str"));
+
+  (* (describe name-or-pkg) -> VStr selective reveal text *)
+  Primitives.register tbl "describe"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr needle ] ->
+          let* s = describe t needle in
+          Lwt.return (Pricklypear_lisp.Ast.VStr s)
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr "describe: need name-or-package-str"));
 
   (* (export-package pkg) -> VStr lib.pp text *)
   Primitives.register tbl "export-package"
@@ -1952,6 +2002,72 @@ and seed_one (t : t) (name : string) : unit Lwt.t =
    | Error e -> Printf.eprintf "[session] %s load: %s\n%!" name e);
   Lwt.return_unit
 
+(** Ensure living agents note exists on system/main after notes seed.
+    Idempotent: skip if slug agents already present. *)
+and seed_agents_note (t : t) : unit Lwt.t =
+  let body =
+    String.concat "\n"
+      [ "# Agents (living AGENTS.md)"
+      ; ""
+      ; "This note is the habitat AGENTS.md. Edit with notes/doc/upsert."
+      ; ""
+      ; "## Entry path"
+      ; "1. Public bootstrap (no secrets): GET /agent.txt and GET /.well-known/agent.json"
+      ; "2. Those docs explain HTTP Basic auth and how to build a REPL client (POST /api/eval)."
+      ; "3. Local helper: pp-eval CLI or curl with Basic auth."
+      ; "4. Then explore live:"
+      ; "   (whoami)"
+      ; "   (list-packages)"
+      ; "   (load-library \"todo\")"
+      ; "   (describe \"todo\")"
+      ; "   (apropos-docs \"todo/item\")"
+      ; "   (function-doc \"todo/item/add\")"
+      ; "   (function-source \"todo/item/add\")"
+      ; ""
+      ; "## Selective discovery"
+      ; "- (list-packages) — top-level package prefixes"
+      ; "- (package-bindings \"pkg\") — all names under pkg/ (any depth)"
+      ; "- (package-exports \"pkg\") — shallow pkg or pkg/local names"
+      ; "- (apropos \"pat\") / (apropos-docs \"pat\") — search names (+ docs)"
+      ; "- (describe \"name-or-pkg\") — one-shot orientation"
+      ; "- Prefer DATA builders from /api/eval; */page handlers need a real HTTP request."
+      ; ""
+      ; "## Libraries"
+      ; "Load before use: std ui notes todo outline bible dabar chat calendar"
+      ; "flashcards bookmarks contacts plan bi weather ref verify ai layout welcome."
+      ]
+  in
+  (* Escape body for a Lisp string literal. *)
+  let escaped =
+    let b = Buffer.create (String.length body + 32) in
+    String.iter
+      (function
+        | '\\' -> Buffer.add_string b "\\\\"
+        | '"' -> Buffer.add_string b "\\\""
+        | '\n' -> Buffer.add_string b "\\n"
+        | c -> Buffer.add_char b c)
+      body;
+    Buffer.contents b
+  in
+  let expr =
+    Printf.sprintf
+      {| (if (null? (notes/doc/get "agents"))
+            (notes/doc/upsert "agents" "Agents (living AGENTS.md)"
+              (outline/node* "root" "Agents (living AGENTS.md)" "%s" "" (list))
+              "" "note" "")
+            "agents-note-exists") |} 
+      escaped
+  in
+  Lwt.catch
+    (fun () ->
+      let* v = eval_one t expr in
+      Printf.eprintf "[session] agents-note: %s\n%!"
+        (Pricklypear_lisp.Reader.pp_value v);
+      Lwt.return_unit)
+    (fun exn ->
+      Printf.eprintf "[session] agents-note seed: %s\n%!" (pp_interp_exn exn);
+      Lwt.return_unit)
+
 and seed_stdlib (t : t) : unit Lwt.t =
   (* Package defaults always land on system/main — NEVER on the user's
      personal branch. Personal inherits main via the recursive CTE; user
@@ -1981,6 +2097,7 @@ and seed_stdlib (t : t) : unit Lwt.t =
     let* () = seed_one t "ai" in
     let* () = seed_one t "outline" in
     let* () = seed_one t "notes" in
+    let* () = seed_agents_note t in
     let* () = seed_one t "signup" in
     let* () = seed_one t "todo" in
     let* () = seed_one t "contacts" in

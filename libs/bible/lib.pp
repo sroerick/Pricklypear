@@ -17,14 +17,16 @@
       (let ((by-ab (find-row 'bible-book "abbrev" b)))
         (if (null? by-ab)
             (find-row 'bible-book "name" b)
-            by-ab)))))
+            by-ab))))
+  "bible-book row for book name or abbrev.")
 
 (define bible/abbrev-of
   (lambda (book)
     (let ((row (bible/book-row book)))
       (if (null? row)
           (as-str book)
-          (dict-get row "abbrev")))))
+          (dict-get row "abbrev"))))
+  "Canonical abbrev string for a book.")
 
 (define bible/ref
   (lambda (book chapter verse)
@@ -34,37 +36,44 @@
       ":"
       (as-str chapter)
       ":"
-      (as-str verse))))
+      (as-str verse)))
+  "Build BSB ref string book/chapter/verse.")
 
 (define bible/verse-row
   (lambda (book chapter verse)
-    (find-row 'bible-verse "ref" (bible/ref book chapter verse))))
+    (find-row 'bible-verse "ref" (bible/ref book chapter verse)))
+  "bible-verse data row for book/chapter/verse.")
 
 (define bible/verse
   (lambda (book chapter verse)
     (let ((row (bible/verse-row book chapter verse)))
       (if (null? row)
           ()
-          (dict-get row "text")))))
+          (dict-get row "text"))))
+  "Verse text string for book/chapter/verse.")
 
 (define bible/chapter
   (lambda (book chapter)
     (find-rows 'bible-verse
       "abbrev" (bible/abbrev-of book)
       "chapter" (as-str chapter)
-      200)))
+      200))
+  "List of verse rows for book/chapter.")
 
 (define bible/books
   (lambda ()
-    (rows 'bible-book 100)))
+    (rows 'bible-book 100))
+  "All bible-book rows.")
 
 (define bible/search
   (lambda (q)
-    (find-text 'bible-verse "text" (as-str q) 40)))
+    (find-text 'bible-verse "text" (as-str q) 40))
+  "Search bible verses by query string.")
 
 (define bible/parse-ref
   (lambda (ref)
-    (find-row 'bible-verse "ref" (as-str ref))))
+    (find-row 'bible-verse "ref" (as-str ref)))
+  "Parse BSB:Book:ch:vs ref into fields dict or empty.")
 
 ;; Parse small positive ints from request strings (1..max).
 (define bible/parse-int-from
@@ -73,18 +82,21 @@
         0
         (if (string-eq (as-str s) (as-str i))
             i
-            (bible/parse-int-from s (+ i 1) max)))))
+            (bible/parse-int-from s (+ i 1) max))))
+  "Parse int from string starting at index with max.")
 
 (define bible/parse-int
   (lambda (s)
-    (bible/parse-int-from s 1 200)))
+    (bible/parse-int-from s 1 200))
+  "Parse small positive int from string (1..max helper).")
 
 (define bible/book-ordinal
   (lambda (book)
     (let ((row (bible/book-row book)))
       (if (null? row)
           0
-          (bible/parse-int (dict-get row "ordinal"))))))
+          (bible/parse-int (dict-get row "ordinal")))))
+  "Ordinal index of book among bible/books.")
 
 (define bible/book-by-ordinal
   (lambda (ord)
@@ -95,7 +107,8 @@
               f
               acc)))
       ()
-      (bible/books))))
+      (bible/books)))
+  "Book name at ordinal index.")
 
 ;; -> (abbrev chapter-str) or ()
 (define bible/prev-ref
@@ -112,7 +125,8 @@
                     (list (dict-get prev "abbrev")
                           (as-str (bible/chapter-count
                                     (dict-get prev "abbrev"))))))
-              ())))))
+              ()))))
+  "Previous chapter ref dict from book/chapter.")
 
 (define bible/next-ref
   (lambda (book chapter)
@@ -127,7 +141,8 @@
                 (if (null? nxt)
                     ()
                     (list (dict-get nxt "abbrev") "1")))
-              ())))))
+              ()))))
+  "Next chapter ref dict from book/chapter.")
 
 (define bible/href-chapter
   (lambda (pair)
@@ -137,7 +152,8 @@
           "/dabar?book="
           (as-str (car pair))
           "&chapter="
-          (as-str (car (cdr pair)))))))
+          (as-str (car (cdr pair))))))
+  "Href string for dabar chapter reader.")
 
 (define bible/nav-links
   (lambda (book chapter)
@@ -164,11 +180,13 @@
                 "&chapter="
                 (bible/safe-chapter book chapter)
                 "&verse=1")
-              "study")))))))
+              "study"))))))
+  "Prev/next chapter nav HTML for abbrev/chapter.")
 
 (define bible/random-row
   (lambda ()
-    (find-random 'bible-verse)))
+    (find-random 'bible-verse))
+  "Random bible-verse row.")
 
 (define bible/verse-li
   (lambda (row)
@@ -181,7 +199,8 @@
             (list
               (html/tag "sup" "" (html/text (as-str n)))
               " "
-              (html/text text))))))))
+              (html/text text)))))))
+  "HTML li for one verse row (optional focus).")
 
 ;; Fragment: chapter body only (htmx #dabar-panel).
 (define bible/chapter-panel
@@ -214,12 +233,14 @@
                   "Focus verse "
                   (as-str focus-verse)
                   ": "
-                  (as-str (bible/verse book chapter focus-verse))))))))))
+                  (as-str (bible/verse book chapter focus-verse)))))))))
+  "htmx chapter body fragment for book/chapter.")
 
 ;; Alias for older call sites (lambda, not bare var — safe on DB reload).
 (define bible/chapter-html
   (lambda (book chapter focus-verse)
-    (bible/chapter-panel book chapter focus-verse)))
+    (bible/chapter-panel book chapter focus-verse))
+  "Alias of bible/chapter-panel for older call sites.")
 
 (define bible/search-panel
   (lambda (q)
@@ -246,7 +267,8 @@
               hits))
           (html/p*
             (html/attr "class" "muted")
-            "Berean Standard Bible"))))))
+            "Berean Standard Bible")))))
+  "Search results panel HTML for query.")
 
 ;; Protestant BSB chapter counts (abbrev . n). Used for chapter <select>.
 (define bible/chapter-counts
@@ -267,7 +289,8 @@
     (list "1Thess" 5) (list "2Thess" 3) (list "1Tim" 6) (list "2Tim" 4)
     (list "Titus" 3) (list "Phlm" 1) (list "Heb" 13) (list "Jas" 5)
     (list "1Pet" 5) (list "2Pet" 3) (list "1John" 5) (list "2John" 1)
-    (list "3John" 1) (list "Jude" 1) (list "Rev" 22)))
+    (list "3John" 1) (list "Jude" 1) (list "Rev" 22))
+  "Alist of book abbrev to chapter count (BSB).")
 
 (define bible/chapter-count
   (lambda (abbrev)
@@ -277,11 +300,13 @@
             (car (cdr pair))
             acc))
       1
-      bible/chapter-counts)))
+      bible/chapter-counts))
+  "Chapter count for book abbrev.")
 
 (define bible/int-in-range?
   (lambda (s lo hi)
-    (bible/int-in-range-from? s lo hi lo)))
+    (bible/int-in-range-from? s lo hi lo))
+  "True if n is int in inclusive lo..hi.")
 
 (define bible/int-in-range-from?
   (lambda (s lo hi i)
@@ -289,17 +314,20 @@
         #f
         (if (string-eq (as-str s) (as-str i))
             #t
-            (bible/int-in-range-from? s lo hi (+ i 1))))))
+            (bible/int-in-range-from? s lo hi (+ i 1)))))
+  "Parse string then int-in-range?.")
 
 (define bible/safe-chapter
   (lambda (book chapter)
     (let ((max (bible/chapter-count (bible/abbrev-of book)))
           (c (if (null? chapter) "1" (as-str chapter))))
-      (if (bible/int-in-range? c 1 max) c "1"))))
+      (if (bible/int-in-range? c 1 max) c "1")))
+  "Clamp/parse chapter number for book.")
 
 (define bible/option-range
   (lambda (n selected)
-    (bible/option-range-from 1 n selected)))
+    (bible/option-range-from 1 n selected))
+  "HTML option tags for integer range 1..n.")
 
 (define bible/option-range-from
   (lambda (i n selected)
@@ -308,7 +336,8 @@
         (string-append
           (html/option (as-str i) (as-str i)
             (string-eq (as-str selected) (as-str i)))
-          (bible/option-range-from (+ i 1) n selected)))))
+          (bible/option-range-from (+ i 1) n selected))))
+  "option-range starting at lo through hi.")
 
 (define bible/book-options
   (lambda (current)
@@ -323,7 +352,8 @@
                     #t
                     (string-eq (as-str current) (as-str name))))))))
       ""
-      (bible/books))))
+      (bible/books)))
+  "HTML book select options; selected abbrev marked.")
 
 (define bible/verse-options
   (lambda (book chapter selected)
@@ -337,7 +367,8 @@
               (html/option (as-str n) (as-str n)
                 (string-eq (as-str selected) (as-str n))))))
         ""
-        (bible/chapter book chapter)))))
+        (bible/chapter book chapter))))
+  "HTML verse select options for book/chapter.")
 
 ;; Dropdown navigator: book / chapter / verse.
 ;; change from:select reloads #dabar-panel so option lists stay valid.
@@ -379,7 +410,8 @@
                   (html/select "verse" ""
                     (bible/verse-options ab ch vs)))))
             " "
-            (html/button (html/attr "type" "submit") "Go")))))))
+            (html/button (html/attr "type" "submit") "Go"))))))
+  "Book/chapter/verse navigator form (htmx).")
 
 (define bible/search-form
   (lambda (q)
@@ -403,7 +435,8 @@
                       (html/attr "value" (if (null? q) "" (as-str q)))
                       (html/attr "placeholder" "love")))))))
           " "
-          (html/button (html/attr "type" "submit") "Find"))))))
+          (html/button (html/attr "type" "submit") "Find")))))
+  "Search form for bible query.")
 
 ;; Chapter reader body: forms + reading (swapped by htmx into #dabar-panel).
 (define bible/chapter-reader
@@ -479,4 +512,5 @@
                           (html/attr "class" "muted")
                           (string-append
                             "random · "
-                            (as-str (dict-get f "ref"))))))))))))))
+                            (as-str (dict-get f "ref")))))))))))))
+  "Full chapter reader body: forms plus reading panel.")

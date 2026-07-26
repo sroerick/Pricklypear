@@ -110,7 +110,8 @@
               (html/text " · ")
               (html/a "/agent.txt" (html/text "agent instructions"))
               (html/text " · ")
-              (html/a "/about" (html/text "concepts (after login)")))))))))
+              (html/a "/about" (html/text "concepts (after login)"))))))))
+  "Public GET /welcome landing page (layout hero, cards, tour).")
 
 (define welcome/book
   (lambda ()
@@ -134,7 +135,8 @@
               (html/p "If the PDF is missing on this host, the deploy step that runs scripts/public_artifacts.sh has not installed it yet — the code browser and tarball still cover the tree."))))
         (html/div
           (html/attr "class" "layout-foot")
-          (html/a "/welcome" (html/text "← welcome")))))))
+          (html/a "/welcome" (html/text "← welcome"))))))
+  "Private /book explainer page for PDF and source artifacts.")
 
 (public-route "/welcome" "welcome/page")
 ;; /book explainer is not public-facing; reseed flips any prior public row.
@@ -178,7 +180,8 @@
             (list
               (html/a "/roadmap" (html/text "roadmap"))
               (html/text " · ")
-              (html/a "/welcome" (html/text "welcome")))))))))
+              (html/a "/welcome" (html/text "welcome"))))))))
+  "Public /background author essay page.")
 
 (define welcome/roadmap
   (lambda ()
@@ -218,7 +221,8 @@
             (list
               (html/a "/background" (html/text "background"))
               (html/text " · ")
-              (html/a "/welcome" (html/text "welcome")))))))))
+              (html/a "/welcome" (html/text "welcome"))))))))
+  "Public /roadmap product direction essay page.")
 
 (public-route "/background" "welcome/background")
 (public-route "/roadmap" "welcome/roadmap")

@@ -50,11 +50,13 @@ let philosophy =
 let first_calls =
   [ "(whoami)"
   ; "(current-branch)"
-  ; "(list-bindings)"
+  ; "(list-packages)"
   ; "(load-library \"notes\")"
   ; "(notes/doc/get \"agents\")"
   ; "(load-library \"todo\")"
-  ; "(todo/list)"
+  ; "(describe \"todo\")"
+  ; "(apropos-docs \"todo/item\")"
+  ; "(function-doc \"todo/item/add\")"
   ; "(load-library \"bible\")"
   ; "(bible/chapter \"John\" 3)"
   ]
@@ -76,6 +78,12 @@ let rules =
   ; "After (load-library \"notes\"), read the live agents note: \
      (notes/doc/get \"agents\"). It is the habitat AGENTS.md — edit it \
      with notes/doc/upsert when agent guidance should change."
+  ; "Discover selectively — do not dump all bindings into context: \
+     (list-packages), (describe \"pkg\"), (package-bindings \"pkg\"), \
+     (package-exports \"pkg\"), (apropos-docs \"pat\"), (function-doc name)."
+  ; "Build a REPL client from this document: HTTP Basic + POST /api/eval \
+     JSON {\"expr\":\"…\"}. Prefer that over inventing REST. curl and Python \
+     examples are below; local hosts may use the pp-eval CLI."
   ; "Knowledge wiki (Karpathy loop): (wiki/ingest-from-source …), \
      (wiki/query …), (wiki/lint); wiki links are [[slug]] on outline bodies."
   ; "Binary media (images/PDF): do NOT push multi-KiB bytes through /api/eval \
@@ -280,6 +288,28 @@ let agent_json ?(base_url : string option = None) () : Yojson.Safe.t =
             [ ( "first_calls"
               , `List (List.map (fun s -> `String s) first_calls) )
             ; ("rules", `List (List.map (fun s -> `String s) rules))
+            ; ( "discovery"
+              , `Assoc
+                  [ ( "list_packages"
+                    , `String "(list-packages) → top-level package prefixes" )
+                  ; ( "describe"
+                    , `String
+                        "(describe \"todo\") or (describe \"todo/item/add\")" )
+                  ; ( "package_bindings"
+                    , `String
+                        "(package-bindings \"todo\") → all names under todo/" )
+                  ; ( "package_exports"
+                    , `String
+                        "(package-exports \"todo\") → shallow pkg/local names" )
+                  ; ( "apropos_docs"
+                    , `String
+                        "(apropos-docs \"todo/item\") → ((name doc) …)" )
+                  ; ( "function_doc"
+                    , `String "(function-doc \"name\") → docstring | ()" )
+                  ; ( "repl_client"
+                    , `String
+                        "Build client: HTTP Basic + POST /api/eval JSON {expr}. See examples.curl / examples.python; local pp-eval CLI." )
+                  ] )
             ] )
       ; ( "examples"
         , `Assoc
@@ -375,11 +405,47 @@ let agent_markdown ?(base_url : string option = None) () : string =
     ; "     That message is expected. Call data functions, or hit the route"
     ; "     in a browser / with a real HTTP request."
     ; ""
-    ; "Inspect source: (function-source \"bible/chapter-html\")"
-    ; "Raw AST (no eval): (function-ast \"bible/chapter-html\")"
-    ; "Parse LLM Lisp text: (read-string \"(lambda (x) x)\")"
-    ; "List a package: (package-bindings \"bible\") after load-library."
-    ; "Public exports (std freeze): (package-exports \"std\")"
+    ; "## Selective discovery (REPL)"
+    ; ""
+    ; "Do not dump (list-bindings) into the model context (hundreds of names)."
+    ; "Expand one package or name at a time:"
+    ; ""
+    ; "  (list-packages)"
+    ; "  (load-library \"todo\")"
+    ; "  (describe \"todo\")              ; package summary + shallow exports"
+    ; "  (package-exports \"todo\")       ; shallow pkg/local names"
+    ; "  (package-bindings \"todo\")      ; ALL names under todo/ (any depth)"
+    ; "  (apropos-docs \"todo/item\")     ; ((name doc) …)"
+    ; "  (function-doc \"todo/item/add\")"
+    ; "  (function-source \"todo/item/add\")"
+    ; "  (function-ast \"todo/item/add\")"
+    ; "  (read-string \"(lambda (x) x)\")  ; parse LLM Lisp text to data"
+    ; "  (package-exports \"std\")         ; frozen kernel/std surface"
+    ; ""
+    ; "Human browser: " ^ origin ^ "/ref (packages) or " ^ origin ^ "/ref?q=todo"
+    ; ""
+    ; "## How to build a REPL client"
+    ; ""
+    ; "The image is the API. Your client only needs:"
+    ; "  1. Base URL (this host)"
+    ; "  2. HTTP Basic username/password (from a human; never in this file)"
+    ; "  3. POST /api/eval with JSON body {\"expr\":\"(whoami)\"}"
+    ; "  4. Parse JSON {ok, value|error}"
+    ; ""
+    ; "curl:"
+    ; ""
+    ; "```"
+    ; curl_example origin
+    ; "```"
+    ; ""
+    ; "Python:"
+    ; ""
+    ; "```"
+    ; python_example origin
+    ; "```"
+    ; ""
+    ; "Local laptop: OCaml pp-eval CLI (see repo skill pricklypear-eval) or"
+    ; "scripts/pp-eval.sh after sourcing ~/.config/pricklypear/env."
     ; ""
     ; "## Symbols vs strings (code-as-data)"
     ; ""

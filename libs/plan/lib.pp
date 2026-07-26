@@ -4,20 +4,26 @@
 
 (deftype 'user-plan 'username 'body 'updated_at)
 
-(define plan/row-id (lambda (row) (as-str (car row))))
-(define plan/row-fields (lambda (row) (cdr row)))
+(define plan/row-id (lambda (row) (as-str (car row)))
+  "Row id string from plan row pair.")
+(define plan/row-fields (lambda (row) (cdr row))
+  "Fields cdr of plan row.")
 
 (define plan/fields-username
-  (lambda (fields) (as-str (dict-get fields "username"))))
+  (lambda (fields) (as-str (dict-get fields "username")))
+  "Username field from plan fields.")
 (define plan/fields-body
-  (lambda (fields) (as-str (dict-get fields "body"))))
+  (lambda (fields) (as-str (dict-get fields "body")))
+  "Plan body text from fields.")
 (define plan/fields-updated
   (lambda (fields)
     (let ((u (dict-get fields "updated_at")))
-      (if (null? u) "" (as-str u)))))
+      (if (null? u) "" (as-str u))))
+  "Updated timestamp string from fields.")
 
 (define plan/all-rows
-  (lambda () (rows 'user-plan 200)))
+  (lambda () (rows 'user-plan 200))
+  "All user-plan rows (limit).")
 
 (define plan/find-row
   (lambda (username)
@@ -30,17 +36,20 @@
                   acc)
               acc))
         ()
-        (plan/all-rows)))))
+        (plan/all-rows))))
+  "Find plan row for username.")
 
 (define plan/of
   (lambda (username)
     (let ((row (plan/find-row username)))
       (if (null? row)
           ""
-          (plan/fields-body (plan/row-fields row))))))
+          (plan/fields-body (plan/row-fields row)))))
+  "Plan body text for user, or empty.")
 
 (define plan/mine
-  (lambda () (plan/of (whoami))))
+  (lambda () (plan/of (whoami)))
+  "Current user plan body via plan/of whoami.")
 
 (define plan/set!
   (lambda (body)
@@ -63,17 +72,22 @@
                   "username" user
                   "body" text
                   "updated_at" "")))
-            text)))))
+            text))))
+  "Upsert current user plan body; return body.")
 
 (define plan/clear!
-  (lambda () (plan/set! "")))
+  (lambda () (plan/set! ""))
+  "Clear current user plan body.")
 
 ;; Public Lisp API (multi-user.user-plan).
 ;; Fixed-arity Lisp: (plan body) sets; (plan/mine) / (plan-of u) get.
 ;; Zero-arg (plan) is not expressible without optional params — use plan/mine.
-(define plan (lambda (body) (plan/set! body)))
-(define plan-of (lambda (user) (plan/of user)))
-(define plan-clear (lambda () (plan/clear!)))
+(define plan (lambda (body) (plan/set! body))
+  "Public setter: (plan body) aliases plan/set!.")
+(define plan-of (lambda (user) (plan/of user))
+  "Public getter: plan body for user.")
+(define plan-clear (lambda () (plan/clear!))
+  "Public clear of current user plan.")
 
 (define plan-list
   (lambda ()
@@ -84,7 +98,8 @@
         (lambda (row)
           (let ((f (plan/row-fields row)))
             (cons (plan/fields-username f) (plan/fields-body f))))
-        (plan/all-rows)))))
+        (plan/all-rows))))
+  "List of (username body) for directory.")
 
 ;; --- HTML ---
 
@@ -112,7 +127,8 @@
                       (html/attr "rows" "4")
                       (html/attr "placeholder" "shipping macros, out Thursday, …")))
                   (as-str body))
-                (html/button (html/attr "type" "submit") "Save plan")))))))))
+                (html/button (html/attr "type" "submit") "Save plan"))))))))
+  "Edit form for current user plan.")
 
 (define plan/mine-display
   (lambda (body)
@@ -120,7 +136,8 @@
       (if (blank? body)
           (html/p* (html/attr "class" "muted")
             "No plan yet. What are you working on?")
-          (html/p (html/text body))))))
+          (html/p (html/text body)))))
+  "Card showing current user plan text.")
 
 (define plan/main-html
   (lambda ()
@@ -129,7 +146,8 @@
         (html/join
           (list
             (plan/mine-display body)
-            (plan/form-html body)))))))
+            (plan/form-html body))))))
+  "Main /plan panel: form plus display.")
 
 (define plan/page
   (lambda ()
@@ -146,7 +164,8 @@
               (string-append "Signed in as " (as-str (whoami))))
             (plan/main-html)
             (html/p* ""
-              (html/a "/plans" "Everyone's plans")))))))
+              (html/a "/plans" "Everyone's plans"))))))
+  "GET/POST /plan page handler.")
 
 (define plan/directory-li
   (lambda (pair)
@@ -158,7 +177,8 @@
             (html/p* ""
               (html/a (string-append "/profile?user=" user)
                 (html/strong user)))
-            (html/p (html/text body))))))))
+            (html/p (html/text body)))))))
+  "Directory li for one user plan.")
 
 (define plan/directory-html
   (lambda ()
@@ -167,7 +187,8 @@
           (html/p* (html/attr "class" "muted")
             "No one has set a plan yet.")
           (html/ul ""
-            (html/join (list/map plan/directory-li xs)))))))
+            (html/join (list/map plan/directory-li xs))))))
+  "HTML list of all user plans.")
 
 (define plan/plans-page
   (lambda ()
@@ -177,7 +198,8 @@
         (html/p* (html/attr "class" "muted")
           "Who is working on what (Unix .plan directory).")
         (html/p* "" (html/a "/plan" "Edit my plan"))
-        (plan/directory-html)))))
+        (plan/directory-html))))
+  "GET /plans directory page.")
 
 (define plan/profile-page
   (lambda ()
@@ -199,7 +221,8 @@
                     (html/div (html/attr "class" "card")
                       (html/p (html/text body))))
                 (html/p* "" (html/a "/plans" "All plans"))
-                (html/p* "" (html/a "/plan" "My plan")))))))))
+                (html/p* "" (html/a "/plan" "My plan"))))))))
+  "GET /profile?user=NAME plan profile page.")
 
 (route "/plan" "plan/page")
 (route "/plans" "plan/plans-page")

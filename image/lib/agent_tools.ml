@@ -215,20 +215,209 @@ let function_ast (t : t) (name : string)
            Lwt.return (Some v)
        | _ -> Lwt.return_none)
 
+(** Names in package [pkg].
+
+    Match policy (agent discovery):
+    - [pkg] empty / root → names with no [/]
+    - else → exact [name = pkg] OR prefix [pkg/…] (any depth).
+
+    Previous implementation used [Packages.package_of_name] (last [/]
+    segment parent), so [(package-bindings "todo")] missed
+    [todo/item/add] (parent [todo/item]). Prefix match is what
+    agent.txt and explorers expect. *)
 let package_binding_names (t : t) (pkg : string) : string list Lwt.t =
   let* defs = Store.list_function_names t.store in
   let pkg =
-    if pkg = "(root)" || pkg = "root" then "" else pkg
+    let p = String.trim pkg in
+    if p = "(root)" || p = "root" then "" else p
+  in
+  let matches name =
+    if pkg = "" then not (String.contains name '/')
+    else if name = pkg then true
+    else
+      let prefix = pkg ^ "/" in
+      let plen = String.length prefix in
+      String.length name >= plen && String.sub name 0 plen = prefix
   in
   let names =
     List.filter_map
-      (fun (name, _, _) ->
-        let p = Packages.package_of_name name in
-        if p = pkg then Some name else None)
+      (fun (name, _, _) -> if matches name then Some name else None)
       defs
     |> List.sort_uniq String.compare
   in
   Lwt.return names
+
+(** Shallow export names: [pkg] itself or [pkg/local] with no further [/].
+    Progressive disclosure surface for [(package-exports pkg)] on apps. *)
+let package_export_names (t : t) (pkg : string) : string list Lwt.t =
+  let* names = package_binding_names t pkg in
+  let pkg = String.trim pkg in
+  let pkg = if pkg = "(root)" || pkg = "root" then "" else pkg in
+  if pkg = "" then Lwt.return names
+  else
+    let prefix = pkg ^ "/" in
+    let plen = String.length prefix in
+    let shallow =
+      List.filter
+        (fun name ->
+          name = pkg
+          || (String.length name > plen
+              && String.sub name 0 plen = prefix
+              && not (String.contains_from name plen '/')))
+        names
+    in
+    Lwt.return shallow
+
+(** Unique top-level package prefixes from visible function_defs. *)
+let list_package_names (t : t) : string list Lwt.t =
+  let* defs = Store.list_function_names t.store in
+  let tbl = Hashtbl.create 32 in
+  List.iter
+    (fun (name, _, _) ->
+      match String.index_opt name '/' with
+      | None -> ()
+      | Some i ->
+          let p = String.sub name 0 i in
+          if p <> "" then Hashtbl.replace tbl p ())
+    defs;
+  let pkgs =
+    Hashtbl.fold (fun k _ acc -> k :: acc) tbl []
+    |> List.sort String.compare
+  in
+  Lwt.return pkgs
+
+let name_contains (name : string) (pat : string) : bool =
+  if pat = "" then true
+  else
+    let n = String.length name and p = String.length pat in
+    let rec loop i =
+      if i + p > n then false
+      else if String.sub name i p = pat then true
+      else loop (i + 1)
+    in
+    loop 0
+
+(** [(name, doc)] for visible defs whose name contains [pat].
+    Doc falls back to empty string when unset (still listed). *)
+let apropos_docs (t : t) (pat : string) : (string * string) list Lwt.t =
+  let* defs = Store.list_function_names t.store in
+  let pat = String.trim pat in
+  let names =
+    List.filter_map
+      (fun (name, _, _) ->
+        if name_contains name pat then Some name else None)
+      defs
+    |> List.sort_uniq String.compare
+  in
+  let rec go acc = function
+    | [] -> Lwt.return (List.rev acc)
+    | name :: rest ->
+        let* doc_opt = Store.lookup_function_doc t.store name in
+        let doc =
+          match doc_opt with
+          | Some s -> s
+          | None ->
+              (match Pricklypear_lisp.Special_forms.find name with
+               | Some e -> e.summary
+               | None ->
+                   let b = Primitives.prim_summary name in
+                   if b = "built-in primitive" then "" else b)
+        in
+        go ((name, doc) :: acc) rest
+  in
+  go [] names
+
+(** Package or binding description for selective agent reveal. *)
+let describe (t : t) (needle : string) : string Lwt.t =
+  let needle = String.trim needle in
+  if needle = "" then
+    Lwt.return "describe: need name or package string"
+  else
+    let* pkgs = list_package_names t in
+    let* pkg_names = package_binding_names t needle in
+    let is_pkg =
+      List.mem needle pkgs || List.length pkg_names > 0
+    in
+    (* Prefer exact binding describe when name is a concrete def and not
+       only a package prefix with many children — if needle equals a
+       binding name, show that binding. *)
+    let* exact_doc = Store.lookup_function_doc t.store needle in
+    let* exact_src = function_source t needle in
+    let has_exact = match exact_src with Some _ -> true | None -> false in
+    if has_exact && not (List.length pkg_names > 1 && List.mem needle pkgs)
+    then
+      let doc =
+        match exact_doc with
+        | Some s -> s
+        | None ->
+            (match Pricklypear_lisp.Special_forms.find needle with
+             | Some e -> e.summary
+             | None ->
+                 let b = Primitives.prim_summary needle in
+                 if b = "built-in primitive" then "(no docstring)" else b)
+      in
+      Lwt.return
+        (Printf.sprintf
+           "%s\n  doc: %s\n  next: (function-source %S) (function-ast %S)"
+           needle doc needle needle)
+    else if is_pkg then
+      let* exports = package_export_names t needle in
+      let* pairs =
+        let rec go acc = function
+          | [] -> Lwt.return (List.rev acc)
+          | name :: rest ->
+              let* d = Store.lookup_function_doc t.store name in
+              let doc = match d with Some s -> s | None -> "" in
+              go ((name, doc) :: acc) rest
+        in
+        go [] exports
+      in
+      let lines =
+        List.map
+          (fun (n, d) ->
+            if d = "" then Printf.sprintf "  - %s" n
+            else Printf.sprintf "  - %s — %s" n d)
+          pairs
+      in
+      let body =
+        Printf.sprintf
+          "package %s (%d bindings, %d shallow exports)\n\
+           shallow exports (package-exports):\n%s\n\
+           full list: (package-bindings %S)\n\
+           search docs: (apropos-docs %S)\n\
+           one binding: (describe \"name\") or (function-doc \"name\")"
+          needle (List.length pkg_names) (List.length exports)
+          (if lines = [] then "  (none)" else String.concat "\n" lines)
+          needle (needle ^ "/")
+      in
+      Lwt.return body
+    else
+      (* Fallback: treat as apropos hit list *)
+      let* pairs = apropos_docs t needle in
+      if pairs = [] then
+        Lwt.return
+          (Printf.sprintf
+             "%s: not a binding or package. Try (apropos %S) or (list-packages)."
+             needle needle)
+      else
+        let lines =
+          List.map
+            (fun (n, d) ->
+              if d = "" then Printf.sprintf "  - %s" n
+              else Printf.sprintf "  - %s — %s" n d)
+            (let rec take n xs =
+               match n, xs with
+               | _, [] -> []
+               | 0, _ -> []
+               | n, x :: xs -> x :: take (n - 1) xs
+             in
+             take 30 pairs)
+        in
+        Lwt.return
+          (Printf.sprintf
+             "apropos %S (%d matches, showing up to 30):\n%s\n\
+              refine: (apropos-docs %S) (describe \"pkg\")"
+             needle (List.length pairs) (String.concat "\n" lines) needle)
 
 (** Export package as lib.pp text: (define name body)… pretty-printed. *)
 let export_package (t : t) (pkg : string) : string Lwt.t =

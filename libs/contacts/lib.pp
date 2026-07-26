@@ -11,24 +11,34 @@
         "name" (as-str name)
         "email" (as-str email)
         "phone" (as-str phone)
-        "notes" (as-str notes)))))
+        "notes" (as-str notes))))
+  "Build contact fields dict from name/email/phone/notes.")
 
 (define contacts/all
-  (lambda () (rows 'contact 100)))
+  (lambda () (rows 'contact 100))
+  "Up to 100 contact rows.")
 
 (define contacts/create
   (lambda (name email phone notes)
-    (create 'contact (contacts/fields name email phone notes))))
+    (create 'contact (contacts/fields name email phone notes)))
+  "Create contact row; return id.")
 
 (define contacts/delete
-  (lambda (id) (delete 'contact (as-str id))))
+  (lambda (id) (delete 'contact (as-str id)))
+  "Delete contact by id.")
 
-(define contacts/row-id (lambda (row) (as-str (car row))))
-(define contacts/row-fields (lambda (row) (cdr row)))
-(define contacts/name (lambda (fields) (as-str (dict-get fields "name"))))
-(define contacts/email (lambda (fields) (as-str (dict-get fields "email"))))
-(define contacts/phone (lambda (fields) (as-str (dict-get fields "phone"))))
-(define contacts/notes (lambda (fields) (as-str (dict-get fields "notes"))))
+(define contacts/row-id (lambda (row) (as-str (car row)))
+  "Row id string from (id . fields) pair.")
+(define contacts/row-fields (lambda (row) (cdr row))
+  "Fields cdr of contact row.")
+(define contacts/name (lambda (fields) (as-str (dict-get fields "name")))
+  "Name field from contact fields.")
+(define contacts/email (lambda (fields) (as-str (dict-get fields "email")))
+  "Email field from contact fields.")
+(define contacts/phone (lambda (fields) (as-str (dict-get fields "phone")))
+  "Phone field from contact fields.")
+(define contacts/notes (lambda (fields) (as-str (dict-get fields "notes")))
+  "Notes field from contact fields.")
 
 (define contacts/item-li
   (lambda (row)
@@ -61,12 +71,14 @@
                   (list
                     (html/hidden "action" "delete")
                     (html/hidden "id" id)
-                    (html/button (html/attr "type" "submit") "Delete")))))))))))
+                    (html/button (html/attr "type" "submit") "Delete"))))))))))
+  "HTML li for one contact with delete form.")
 
 (define contacts/list-html
   (lambda ()
     (html/div (html/attr "id" "contacts-list")
-      (list-or-empty (contacts/all) "No contacts yet." contacts/item-li))))
+      (list-or-empty (contacts/all) "No contacts yet." contacts/item-li)))
+  "Contacts list div (empty message or items).")
 
 (define contacts/form-html
   (lambda ()
@@ -115,7 +127,8 @@
                       (html/attr "rows" "2")
                       (html/attr "placeholder" "optional")))
                   "")
-                (html/button (html/attr "type" "submit") "Add")))))))))
+                (html/button (html/attr "type" "submit") "Add"))))))))
+  "Add-contact form card.")
 
 (define contacts/main-html
   (lambda ()
@@ -124,7 +137,8 @@
         (list
           (contacts/form-html)
           (html/h2 "All contacts")
-          (contacts/list-html))))))
+          (contacts/list-html)))))
+  "Main contacts panel: form plus list.")
 
 (define contacts/handle-post
   (lambda ()
@@ -140,7 +154,8 @@
                (request-param "email")
                (request-param "phone")
                (request-param "notes")))))
-        (else ())))))
+        (else ()))))
+  "Dispatch create/delete POST actions.")
 
 (define contacts/page
   (lambda ()
@@ -155,6 +170,7 @@
             (html/h1 "Contacts")
             (html/p* (html/attr "class" "muted")
               "Simple address book on data_rows (type contact).")
-            (contacts/main-html))))))
+            (contacts/main-html)))))
+  "GET/POST /contacts page handler.")
 
 (route "/contacts" "contacts/page")

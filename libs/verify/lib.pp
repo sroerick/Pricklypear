@@ -10,23 +10,28 @@
 ;;   (verify/summary-of (verify/suite-list-hof))
 
 (define verify/pass
-  (lambda (name) (list "PASS" name)))
+  (lambda (name) (list "PASS" name))
+  "Result tuple (PASS name).")
 
 (define verify/fail
-  (lambda (name) (list "FAIL" name)))
+  (lambda (name) (list "FAIL" name))
+  "Result tuple (FAIL name).")
 
 (define verify/check
   (lambda (name pred)
-    (if pred (verify/pass name) (verify/fail name))))
+    (if pred (verify/pass name) (verify/fail name)))
+  "PASS name if pred truthy else FAIL name.")
 
 (define verify/failed?
-  (lambda (r) (string-eq (as-str (car r)) "FAIL")))
+  (lambda (r) (string-eq (as-str (car r)) "FAIL"))
+  "True if result car is FAIL.")
 
 (define verify/count-fails
   (lambda (rs)
     (list/foldl
       (lambda (n r) (if (verify/failed? r) (+ n 1) n))
-      0 rs)))
+      0 rs))
+  "Count FAIL results in rs.")
 
 (define verify/fail-names
   (lambda (rs)
@@ -34,14 +39,16 @@
       (lambda (acc r)
         (if (verify/failed? r) (cons (car (cdr r)) acc) acc))
       (list)
-      rs)))
+      rs))
+  "List of names from FAIL results.")
 
 (define verify/summary-of
   (lambda (rs)
     (let ((nfails (verify/count-fails rs)))
       (if (= nfails 0)
           (string-append "ALL PASSED (" (as-str (count rs)) " checks)")
-          (string-append "FAILED: " (str (verify/fail-names rs)))))))
+          (string-append "FAILED: " (str (verify/fail-names rs))))))
+  "Human summary string: ALL PASSED or FAILED: names.")
 
 ;; ---------- suites (each intended as one eval call) ----------
 
@@ -63,7 +70,8 @@
       (verify/check "render-links media"
         (string-contains?
           (render-links "[[media:uuid-1|alt]]")
-          "note-media")))))
+          "note-media"))))
+  "Suite: notes link extraction checks.")
 
 (define verify/suite-list-hof
   (lambda ()
@@ -77,7 +85,8 @@
           (str (list/filter (lambda (x) (= x 2)) (list 1 2 3 2)))
           "(2 2)"))
       (verify/check "list/foldl sum"
-        (= (list/foldl (lambda (a x) (+ a x)) 0 (list 1 2 3 4)) 10)))))
+        (= (list/foldl (lambda (a x) (+ a x)) 0 (list 1 2 3 4)) 10))))
+  "Suite: list higher-order helper checks.")
 
 (define verify/suite-budget-parse
   (lambda ()
@@ -91,7 +100,8 @@
             (left (budget-remaining)))
         (list
           (verify/check "parse-links 500" (= n 500))
-          (verify/check "parse budget floor" (> left 20000)))))))
+          (verify/check "parse budget floor" (> left 20000))))))
+  "Suite: notes budget parse checks.")
 
 (define verify/suite-outline-render
   (lambda ()
@@ -119,7 +129,8 @@
               (not
                 (string-contains?
                   (function-source "outline/extra-actions")
-                  "refile/options")))))))))
+                  "refile/options"))))))))
+  "Suite: outline render checks.")
 
 (define verify/suite-upsert-reindex
   (lambda ()
@@ -154,7 +165,8 @@
                   (string-eq (as-str up) slug))
                 (verify/check "reindex 10 links" (= nlinks 10))
                 (verify/check "upsert budget floor"
-                  (> left 10000))))))))))
+                  (> left 10000)))))))))
+  "Suite: notes upsert and reindex checks.")
 
 (define verify/suite-extra-actions-contract
   (lambda ()
@@ -163,7 +175,8 @@
         (let ((src (function-source "outline/extra-actions")))
           (if (string-contains? src "refile/form")
               #f
-              (string-contains? src "extract")))))))
+              (string-contains? src "extract"))))))
+  "Suite: outline extra-actions contract checks.")
 
 ;; Named suite table for drivers.
 (define verify/suite-names
@@ -173,7 +186,8 @@
     "budget-parse"
     "outline-render"
     "upsert-reindex"
-    "extra-actions-contract"))
+    "extra-actions-contract")
+  "List of suite name strings for drivers.")
 
 (define verify/run-suite
   (lambda (name)
@@ -189,4 +203,5 @@
        (seq (load-library "notes") (verify/suite-upsert-reindex)))
       ((string-eq name "extra-actions-contract")
        (seq (load-library "notes") (verify/suite-extra-actions-contract)))
-      (else (list (verify/fail (string-append "unknown-suite:" name)))))))
+      (else (list (verify/fail (string-append "unknown-suite:" name))))))
+  "Dispatch suite by name; loads deps as needed.")

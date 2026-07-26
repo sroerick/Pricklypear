@@ -265,8 +265,11 @@ let prim_summary (name : string) : string =
   | "function-source" -> "pretty-print stored function body"
   | "function-doc" -> "docstring for a binding (function_defs.doc)"
   | "function-ast" -> "raw stored function body as quoted data (no eval)"
-  | "package-exports" -> "public export names for a package (std freeze)"
-  | "package-bindings" -> "list binding names in a package"
+  | "package-exports" -> "shallow public names for a package (std freeze or pkg/local)"
+  | "package-bindings" -> "all binding names with package prefix (any depth)"
+  | "list-packages" -> "top-level package prefixes from function_defs"
+  | "apropos-docs" -> "(name doc) pairs for names containing pattern"
+  | "describe" -> "selective reveal: package summary or one binding doc"
   | "export-package" -> "export package as lib.pp text"
   | "llm-inner" | "llm-outer" | "llm-rewrite" | "llm-seed" ->
       "AI rewrite / growth tool"

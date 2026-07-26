@@ -49,46 +49,54 @@
                       "amount" "350.00" "note" "week 3")))
             0)
           0)
-      "seeded")))
+      "seeded"))
+  "Idempotent-ish seed of sample expense/revenue rows.")
 
 ;; ---------- helpers ----------
 
 (define bi/parse-amount
   (lambda (s)
     (let ((f (parse-float (as-str s))))
-      (if (null? f) 0.0 f))))
+      (if (null? f) 0.0 f)))
+  "Parse amount field to number (string-safe).")
 
 (define bi/row-amount
   (lambda (row)
-    (bi/parse-amount (dict-get (cdr row) "amount"))))
+    (bi/parse-amount (dict-get (cdr row) "amount")))
+  "Numeric amount from a mart row.")
 
 (define bi/sum-amounts
   (lambda (rows)
     (list/foldl
       (lambda (acc row) (+ acc (bi/row-amount row)))
       0.0
-      rows)))
+      rows))
+  "Sum amounts across rows.")
 
 ;; ---------- governed metrics (read-only contract for agents) ----------
 
 (define bi/metric/expense-total
   (lambda ()
-    (bi/sum-amounts (rows 'bi-expense 500))))
+    (bi/sum-amounts (rows 'bi-expense 500)))
+  "Governed metric: total expenses.")
 
 (define bi/metric/revenue-total
   (lambda ()
-    (bi/sum-amounts (rows 'bi-revenue 500))))
+    (bi/sum-amounts (rows 'bi-revenue 500)))
+  "Governed metric: total revenue.")
 
 (define bi/metric/profit
   (lambda ()
-    (- (bi/metric/revenue-total) (bi/metric/expense-total))))
+    (- (bi/metric/revenue-total) (bi/metric/expense-total)))
+  "Governed metric: revenue minus expenses.")
 
 (define bi/metric/profit-margin
   (lambda ()
     (let ((rev (bi/metric/revenue-total)))
       (if (= rev 0.0)
           0.0
-          (div (bi/metric/profit) rev)))))
+          (div (bi/metric/profit) rev))))
+  "Governed metric: profit / revenue ratio.")
 
 (define bi/metric/expense-by-category
   (lambda ()
@@ -101,7 +109,8 @@
               (as-str
                 (if (null? prev) amt (+ (bi/parse-amount prev) amt)))))))
       "{}"
-      (rows 'bi-expense 500))))
+      (rows 'bi-expense 500)))
+  "Governed metric: expense totals grouped by category.")
 
 (define bi/metrics-snapshot
   (lambda ()
@@ -112,7 +121,8 @@
         "expenses" (as-str (bi/metric/expense-total))
         "profit" (as-str (bi/metric/profit))
         "margin" (as-str (bi/metric/profit-margin))
-        "by_category" (bi/metric/expense-by-category)))))
+        "by_category" (bi/metric/expense-by-category))))
+  "JSON-ish snapshot of all governed metrics (API).")
 
 ;; Optional MVP cache: write computed snapshot into data_rows.
 (define bi/cache-metrics!
@@ -126,7 +136,8 @@
                 (list "name" "snapshot" "value" snap "updated_at" now)))
             (update 'bi-metric-cache (car existing)
               (dict-set* "{}"
-                (list "name" "snapshot" "value" snap "updated_at" now))))))))
+                (list "name" "snapshot" "value" snap "updated_at" now)))))))
+  "Write metrics snapshot into data_rows cache type.")
 
 ;; ---------- Vega-Lite helper ----------
 
@@ -146,7 +157,8 @@
               "function go(){if(window.vegaEmbed){vegaEmbed('#" id "',"
               spec
               ",{actions:false}).catch(function(e){el.textContent=String(e);});}"
-              "else{setTimeout(go,50);}}go();})();")))))))
+              "else{setTimeout(go,50);}}go();})();"))))))
+  "Embed Vega-Lite chart from JSON spec string.")
 
 (define bi/vega-cdn
   (lambda ()
@@ -160,7 +172,8 @@
           "")
         (html/tag "script"
           (html/attr "src" "https://cdn.jsdelivr.net/npm/vega-embed@6")
-          "")))))
+          ""))))
+  "Script tags for Vega/Vega-Lite CDN.")
 
 (define bi/join-json-array
   (lambda (xs)
@@ -170,7 +183,8 @@
             x
             (string-append acc "," x)))
       ""
-      xs)))
+      xs))
+  "Join list of JSON object strings into a JSON array.")
 
 (define bi/spec-expense-bars
   (lambda ()
@@ -197,13 +211,15 @@
             "\"encoding\":{"
             "\"x\":{\"field\":\"category\",\"type\":\"nominal\",\"title\":\"Category\"},"
             "\"y\":{\"field\":\"amount\",\"type\":\"quantitative\",\"title\":\"Amount\"}"
-            "}}"))))))
+            "}}")))))
+  "Vega-Lite bar spec string for expense-by-category.")
 
 ;; ---------- reference dashboard ----------
 
 (define bi/fmt-money
   (lambda (n)
-    (string-append "$" (as-str n))))
+    (string-append "$" (as-str n)))
+  "Format number as money-ish string.")
 
 (define bi/metric-card
   (lambda (label value)
@@ -212,7 +228,8 @@
         (list
           (html/div (html/attr "class" "bi-card-label") (html/text label))
           (html/div (html/attr "class" "bi-card-value")
-            (html/text (as-str value))))))))
+            (html/text (as-str value)))))))
+  "HTML card for a labeled metric value.")
 
 (define bi/dashboard-html
   (lambda ()
@@ -251,19 +268,22 @@
                 (html/text " · ")
                 (html/code "(bi/dashboard/source)")
                 (html/text " · ")
-                (html/a "/bi" (html/text "refresh"))))))))))
+                (html/a "/bi" (html/text "refresh")))))))))
+  "Reference dashboard HTML body (metrics + chart).")
 
 (define bi/dashboard
   (lambda ()
     (seq
       (bi/seed-sample-data)
-      (bi/dashboard-html))))
+      (bi/dashboard-html)))
+  "GET /bi dashboard page handler.")
 
 ;; ---------- agent tools (layout only; metrics read-only) ----------
 
 (define bi/dashboard/source
   (lambda ()
-    (function-source "bi/dashboard-html")))
+    (function-source "bi/dashboard-html"))
+  "function-source of bi/dashboard-html for agents.")
 
 (define bi/dashboard/read
   (lambda ()
@@ -272,7 +292,8 @@
       (list
         "metrics" (bi/metrics-snapshot)
         "source" (bi/dashboard/source)
-        "route" "/bi"))))
+        "route" "/bi")))
+  "Current dashboard HTML via calling bi/dashboard-html.")
 
 ;; Install new dashboard HTML function body (string) and record revision.
 ;; Does NOT redefine bi/metric/* — trust boundary.
@@ -288,13 +309,15 @@
             "prompt" (as-str prompt)
             "author" (whoami)
             "created_at" (date-today))))
-      "published")))
+      "published"))
+  "Install new dashboard-html body and record revision.")
 
 ;; Preview helper: eval source string to HTML without installing.
 ;; (Agents draft on a branch via fork/checkout/merge for true preview.)
 (define bi/dashboard/preview-note
   (lambda ()
-    "Branch preview: (fork \"bi-preview\") (checkout \"…/bi-preview\") then edit bi/dashboard-html; merge when ready. Metrics functions stay on main and are read-only to layout agents."))
+    "Branch preview: (fork \"bi-preview\") (checkout \"…/bi-preview\") then edit bi/dashboard-html; merge when ready. Metrics functions stay on main and are read-only to layout agents.")
+  "Returns branch-preview workflow note string for agents.")
 
 ;; ---------- routes ----------
 

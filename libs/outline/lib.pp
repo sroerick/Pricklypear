@@ -2,40 +2,52 @@
 ;; Node = (id title body todo kids)  — kids is a list of nodes.
 ;; Load: (load-library "outline")
 
-(define outline/id (lambda (n) (car n)))
-(define outline/title (lambda (n) (car (cdr n))))
-(define outline/body (lambda (n) (car (cdr (cdr n)))))
-(define outline/todo (lambda (n) (car (cdr (cdr (cdr n))))))
-(define outline/kids (lambda (n) (car (cdr (cdr (cdr (cdr n)))))))
+(define outline/id (lambda (n) (car n))
+  "Node id field.")
+(define outline/title (lambda (n) (car (cdr n)))
+  "Node title field.")
+(define outline/body (lambda (n) (car (cdr (cdr n))))
+  "Node body field.")
+(define outline/todo (lambda (n) (car (cdr (cdr (cdr n)))))
+  "Node todo state field.")
+(define outline/kids (lambda (n) (car (cdr (cdr (cdr (cdr n))))))
+  "Node children list field.")
 
 (define outline/node
   (lambda (id title)
-    (list (as-str id) (as-str title) "" "" (list))))
+    (list (as-str id) (as-str title) "" "" (list)))
+  "Construct outline node dict from id title body todo kids.")
 
 (define outline/node*
   (lambda (id title body todo kids)
-    (list (as-str id) (as-str title) (as-str body) (as-str todo) kids)))
+    (list (as-str id) (as-str title) (as-str body) (as-str todo) kids))
+  "Construct node with defaults for missing pieces.")
 
 (define outline/set-title
   (lambda (n title)
-    (outline/node* (outline/id n) title (outline/body n) (outline/todo n) (outline/kids n))))
+    (outline/node* (outline/id n) title (outline/body n) (outline/todo n) (outline/kids n)))
+  "Return node with updated title.")
 
 (define outline/set-body
   (lambda (n body)
-    (outline/node* (outline/id n) (outline/title n) body (outline/todo n) (outline/kids n))))
+    (outline/node* (outline/id n) (outline/title n) body (outline/todo n) (outline/kids n)))
+  "Return node with updated body.")
 
 (define outline/set-todo
   (lambda (n todo)
-    (outline/node* (outline/id n) (outline/title n) (outline/body n) todo (outline/kids n))))
+    (outline/node* (outline/id n) (outline/title n) (outline/body n) todo (outline/kids n)))
+  "Return node with updated todo state.")
 
 ;; Outline checklist states. Empty = not a todo. Cycle: "" → TODO → DONE → "".
 ;; (Legacy WAITING/CANCELLED map to TODO on next cycle via todo-next-in miss.)
 (define outline/todo-states
-  (list "" "TODO" "DONE"))
+  (list "" "TODO" "DONE")
+  "Default todo state cycle list.")
 
 (define outline/todo-next
   (lambda (cur)
-    (outline/todo-next-in outline/todo-states (as-str cur))))
+    (outline/todo-next-in outline/todo-states (as-str cur)))
+  "Next todo state after cur in default cycle.")
 
 (define outline/todo-next-in
   (lambda (xs cur)
@@ -44,7 +56,8 @@
         (if (string-eq (as-str (car xs)) cur)
             (if (null? (cdr xs)) (as-str (car outline/todo-states))
                 (as-str (car (cdr xs))))
-            (outline/todo-next-in (cdr xs) cur)))))
+            (outline/todo-next-in (cdr xs) cur))))
+  "Next todo state after cur in explicit states list.")
 
 (define outline/todo-open?
   (lambda (s)
@@ -55,31 +68,37 @@
               #f
               (if (string-eq t "CANCELLED")
                   #f
-                  (if (string-eq t "ARCHIVED") #f #t)))))))
+                  (if (string-eq t "ARCHIVED") #f #t))))))
+  "True if todo state is actionable.")
 
 (define outline/archived?
   (lambda (s)
-    (string-eq (as-str s) "ARCHIVED")))
+    (string-eq (as-str s) "ARCHIVED"))
+  "True if node todo is ARCHIVED.")
 
 ;; Terminal state (not in cycle). Unarchive returns to TODO.
 (define outline/archive
   (lambda (n)
-    (outline/set-todo n "ARCHIVED")))
+    (outline/set-todo n "ARCHIVED"))
+  "Set node todo to ARCHIVED.")
 
 (define outline/unarchive
   (lambda (n)
-    (outline/set-todo n "TODO")))
+    (outline/set-todo n "TODO"))
+  "Clear ARCHIVED back to TODO.")
 
 (define outline/cycle-todo
   (lambda (n)
     (if (outline/archived? (outline/todo n))
         n
-        (outline/set-todo n (outline/todo-next (outline/todo n))))))
+        (outline/set-todo n (outline/todo-next (outline/todo n)))))
+  "Advance node todo state in cycle.")
 
 ;; Collect (id title state) for every node with non-empty todo.
 (define outline/todos
   (lambda (tree)
-    (outline/todos-acc tree (list))))
+    (outline/todos-acc tree (list)))
+  "Collect todo-bearing nodes under tree.")
 
 (define outline/todos-acc
   (lambda (n acc)
@@ -91,20 +110,24 @@
         (list/foldl
           (lambda (a k) (outline/todos-acc k a))
           acc1
-          (outline/kids n))))))
+          (outline/kids n)))))
+  "Accumulator helper for outline/todos.")
 
 (define outline/set-kids
   (lambda (n kids)
-    (outline/node* (outline/id n) (outline/title n) (outline/body n) (outline/todo n) kids)))
+    (outline/node* (outline/id n) (outline/title n) (outline/body n) (outline/todo n) kids))
+  "Return node with kids list replaced.")
 
 (define outline/add-child
   (lambda (n child)
-    (outline/set-kids n (cons child (outline/kids n)))))
+    (outline/set-kids n (cons child (outline/kids n))))
+  "Append child node under parent.")
 
 ;; fresh id generator (simple counter-based; good enough for UI)
 (define outline/fresh-id
   (lambda ()
-    (string-append "n" (as-str (string-length (as-str (list)))))))
+    (string-append "n" (as-str (string-length (as-str (list))))))
+  "Fresh outline node id string.")
 
 ;; --- tree traversal: find, update, delete by id ---
 
@@ -112,7 +135,8 @@
   (lambda (tree id)
     (if (string-eq (outline/id tree) id)
         tree
-        (outline/find-in-kids (outline/kids tree) id))))
+        (outline/find-in-kids (outline/kids tree) id)))
+  "Find node by id in tree.")
 
 (define outline/find-in-kids
   (lambda (kids id)
@@ -121,21 +145,24 @@
         (let ((found (outline/find (car kids) id)))
           (if (null? found)
               (outline/find-in-kids (cdr kids) id)
-              found)))))
+              found))))
+  "Find node by id among kids list.")
 
 (define outline/update
   (lambda (tree id f)
     (if (string-eq (outline/id tree) id)
         (f tree)
         (outline/set-kids tree
-          (outline/update-kids (outline/kids tree) id f)))))
+          (outline/update-kids (outline/kids tree) id f))))
+  "Map update-fn over node matching id.")
 
 (define outline/update-kids
   (lambda (kids id f)
     (if (null? kids)
         (list)
         (cons (outline/update (car kids) id f)
-          (outline/update-kids (cdr kids) id f)))))
+          (outline/update-kids (cdr kids) id f))))
+  "update helper over kids list.")
 
 ;; delete node by id (returns tree without it).
 ;; NEVER delete root — that wiped the whole note (empty tree → Untitled).
@@ -144,7 +171,8 @@
     (if (string-eq (outline/id tree) id)
         tree
         (outline/set-kids tree
-          (outline/delete-from-kids (outline/kids tree) id)))))
+          (outline/delete-from-kids (outline/kids tree) id))))
+  "Delete node id from tree; return new tree.")
 
 (define outline/delete-from-kids
   (lambda (kids id)
@@ -153,18 +181,21 @@
         (if (string-eq (outline/id (car kids)) id)
             (cdr kids)
             (cons (outline/delete (car kids) id)
-              (outline/delete-from-kids (cdr kids) id))))))
+              (outline/delete-from-kids (cdr kids) id)))))
+  "Delete helper over kids list.")
 
 ;; add child to node by id
 (define outline/add-child-by-id
   (lambda (tree id child)
     (outline/update tree id
-      (lambda (n) (outline/add-child n child)))))
+      (lambda (n) (outline/add-child n child))))
+  "Add child under parent id in tree.")
 
 ;; insert sibling after node by id
 (define outline/insert-sibling
   (lambda (tree id new-node)
-    (outline/insert-sibling-kids tree id new-node)))
+    (outline/insert-sibling-kids tree id new-node))
+  "Insert sibling after node id.")
 
 (define outline/insert-sibling-kids
   (lambda (tree id new-node)
@@ -174,7 +205,8 @@
         (outline/set-kids tree
           (append (outline/kids tree) (list new-node)))
         (outline/set-kids tree
-          (outline/insert-sib-list (outline/kids tree) id new-node)))))
+          (outline/insert-sib-list (outline/kids tree) id new-node))))
+  "insert-sibling helper on kids.")
 
 (define outline/insert-sib-list
   (lambda (kids id new-node)
@@ -183,7 +215,8 @@
         (if (string-eq (outline/id (car kids)) id)
             (cons (car kids) (cons new-node (cdr kids)))
             (cons (outline/insert-sibling-kids (car kids) id new-node)
-              (outline/insert-sib-list (cdr kids) id new-node))))))
+              (outline/insert-sib-list (cdr kids) id new-node)))))
+  "Insert node into list after target id.")
 
 ;; --- pure structural movement (sexp trees only; no DB) ---
 ;;
@@ -203,7 +236,8 @@
               (if (null? rest)
                   ()
                   (list (car rest)
-                        (cons (car kids) (car (cdr rest))))))))))
+                        (cons (car kids) (car (cdr rest)))))))))
+  "Remove and return node id from list as (node rest).")
 
 ;; Detach direct child id from node n -> (child new-n) | ()
 (define outline/detach-direct
@@ -212,7 +246,8 @@
       (if (null? pair)
           ()
           (list (car pair)
-                (outline/set-kids n (car (cdr pair))))))))
+                (outline/set-kids n (car (cdr pair)))))))
+  "Detach node id from immediate kids.")
 
 ;; Detach id anywhere under tree (not the root itself).
 ;; -> (node tree-without-node) | ()
@@ -225,7 +260,8 @@
             (if (null? pair)
                 ()
                 (list (car pair)
-                      (outline/set-kids tree (car (cdr pair))))))))))
+                      (outline/set-kids tree (car (cdr pair)))))))))
+  "Detach node id from tree; return (node tree).")
 
 (define outline/detach-in-kids
   (lambda (kids id)
@@ -241,7 +277,8 @@
                         (list (car rest)
                               (cons (car kids) (car (cdr rest))))))
                   (list (car sub)
-                        (cons (car (cdr sub)) (cdr kids)))))))))
+                        (cons (car (cdr sub)) (cdr kids))))))))
+  "detach helper over kids.")
 
 ;; promote: remove node from its parent; insert as sibling after that parent.
 ;; No-op if missing, root, or direct child of root (nowhere above root).
@@ -251,14 +288,16 @@
       (if (string-eq (outline/id tree) tid)
           tree
           (outline/set-kids tree
-            (outline/promote-kids (outline/kids tree) tid))))))
+            (outline/promote-kids (outline/kids tree) tid)))))
+  "Promote node id one level up.")
 
 (define outline/promote-kids
   (lambda (kids id)
     ;; Deeper promotions first, then lift any direct-grandchild at this level.
     (outline/promote-lift
       (list/map (lambda (k) (outline/promote k id)) kids)
-      id)))
+      id))
+  "promote helper over kids.")
 
 (define outline/promote-lift
   (lambda (kids id)
@@ -269,7 +308,8 @@
               (cons (car kids) (outline/promote-lift (cdr kids) id))
               ;; pair = (node parent-without-node); splice node after parent.
               (cons (car (cdr pair))
-                    (cons (car pair) (cdr kids))))))))
+                    (cons (car pair) (cdr kids)))))))
+  "Lift node after parent in grandparent list.")
 
 ;; demote: become last child of the previous sibling. No-op if first sibling.
 (define outline/demote
@@ -278,7 +318,8 @@
       (if (string-eq (outline/id tree) tid)
           tree
           (outline/set-kids tree
-            (outline/demote-kids (outline/kids tree) tid))))))
+            (outline/demote-kids (outline/kids tree) tid)))))
+  "Demote node id under previous sibling.")
 
 (define outline/demote-kids
   (lambda (kids id)
@@ -295,19 +336,22 @@
                       (append (outline/kids prev) (list node)))
                     rest))
                 (cons (outline/demote (car kids) id)
-                      (outline/demote-kids (cdr kids) id)))))))
+                      (outline/demote-kids (cdr kids) id))))))
+  "demote helper over kids.")
 
 ;; move-up: swap with previous sibling
 (define outline/move-up
   (lambda (tree id)
-    (outline/move-up-kids tree id)))
+    (outline/move-up-kids tree id))
+  "Swap node id with previous sibling.")
 
 (define outline/move-up-kids
   (lambda (tree id)
     (if (string-eq (outline/id tree) (as-str id))
         tree
         (outline/set-kids tree
-          (outline/swap-prev (outline/kids tree) (as-str id))))))
+          (outline/swap-prev (outline/kids tree) (as-str id)))))
+  "move-up helper over kids.")
 
 (define outline/swap-prev
   (lambda (kids id)
@@ -318,19 +362,22 @@
             (if (string-eq (outline/id (car (cdr kids))) id)
                 (cons (car (cdr kids)) (cons (car kids) (cdr (cdr kids))))
                 (cons (outline/move-up-kids (car kids) id)
-                  (outline/swap-prev (cdr kids) id)))))))
+                  (outline/swap-prev (cdr kids) id))))))
+  "Swap item with previous in list by id.")
 
 ;; move-down: swap with next sibling
 (define outline/move-down
   (lambda (tree id)
-    (outline/move-down-kids tree id)))
+    (outline/move-down-kids tree id))
+  "Swap node id with next sibling.")
 
 (define outline/move-down-kids
   (lambda (tree id)
     (if (string-eq (outline/id tree) (as-str id))
         tree
         (outline/set-kids tree
-          (outline/swap-next (outline/kids tree) (as-str id))))))
+          (outline/swap-next (outline/kids tree) (as-str id)))))
+  "move-down helper over kids.")
 
 (define outline/swap-next
   (lambda (kids id)
@@ -341,7 +388,8 @@
                 kids
                 (cons (car (cdr kids)) (cons (car kids) (cdr (cdr kids)))))
             (cons (outline/move-down-kids (car kids) id)
-              (outline/swap-next (cdr kids) id))))))
+              (outline/swap-next (cdr kids) id)))))
+  "Swap item with next in list by id.")
 
 ;; --- HTML with editor controls ---
 ;; Desktop: top selection toolbar (notes/ui/toolbar) acts on selected node.
@@ -349,7 +397,8 @@
 
 ;; Optional extra action HTML (e.g. refile form). Notes redefines this after load.
 (define outline/extra-actions
-  (lambda (slug nid) ""))
+  (lambda (slug nid) "")
+  "Extra action specs list for outline UI.")
 
 ;; hx-swap outerHTML: response is a full #outline root from outline/html.
 ;; show-archived: when #t, append &show=archived so partials keep the filter on.
@@ -367,7 +416,8 @@
               (if show-archived "&show=archived" "")))
           (html/attr "hx-target" "#outline")
           (html/attr "hx-swap" "outerHTML")))
-      label)))
+      label))
+  "HTML button for one outline action.")
 
 ;; Mobile per-node menu (hidden on wide screens via CSS).
 (define outline/actions
@@ -404,7 +454,8 @@
                       (html/attr "hx-target" "#outline")
                       (html/attr "hx-swap" "outerHTML")
                       (html/attr "hx-confirm" "Delete this node?")))
-                  "del")))))))))
+                  "del"))))))))
+  "Action toolbar HTML for node.")
 
 ;; Non-interactive badge — when node has a non-empty todo/state.
 (define outline/todo-badge
@@ -414,14 +465,16 @@
           ""
           (html/span
             (html/attr "class" (string-append "ol-todo st-" t))
-            (html/text t))))))
+            (html/text t)))))
+  "HTML badge for todo state.")
 
 ;; Body-render hook. Pure default escapes the body as text. Notes redefines
 ;; this to roam/render-body so [[slug]] wiki links become anchors. Keep the
 ;; name outline/render-body so outline stays free of a notes dependency.
 (define outline/render-body
   (lambda (body)
-    (html/text (as-str body))))
+    (html/text (as-str body)))
+  "Render node body HTML (links etc.).")
 
 (define outline/html-node
   (lambda (slug n show-archived)
@@ -475,16 +528,19 @@
                   ;; show-archived reserved for future filter toggles.
                   (string-append acc (outline/html-node slug k show-archived)))
                 ""
-                kids))))))))
+                kids)))))))
+  "Recursive HTML for one outline node.")
 
 ;; show-archived: #f hides ARCHIVED kids (default). Root always rendered.
 (define outline/html
   (lambda (slug root show-archived)
     (html/div (html/attr "id" "outline")
-      (outline/html-node slug root show-archived))))
+      (outline/html-node slug root show-archived)))
+  "Render full outline tree to HTML.")
 
 (define outline/encode
-  (lambda (root) (json-emit root)))
+  (lambda (root) (json-emit root))
+  "Encode outline tree to transport string/JSON.")
 
 ;; A node is a 5-element list (id title body todo kids). Decode is the
 ;; boundary where untrusted DB text enters the pure outline model, so
@@ -497,7 +553,8 @@
         ()
         (if (pair? n)
             (= (count n) 5)
-            ()))))
+            ())))
+  "True if value looks like an outline node tree.")
 
 (define outline/decode
   (lambda (s)
@@ -508,4 +565,5 @@
             (let ((parsed (json-parse (as-str s))))
               (if (outline/valid? parsed)
                   parsed
-                  (outline/node "root" "Untitled")))))))
+                  (outline/node "root" "Untitled"))))))
+  "Decode transport string to outline tree.")

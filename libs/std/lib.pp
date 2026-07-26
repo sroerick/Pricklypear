@@ -1,5 +1,6 @@
 ;; Standard Lisp helpers (package list/, html/, css/, menu/, data/)
 ;; Loaded by (load-library "std") at image boot.
+;; Docs: trailing string on define (or leading multi-body lambda string).
 
 ;; --- list/ ---
 ;; list/map, list/filter, list/foldl are KERNEL SPECIAL FORMS (eval.ml):
@@ -10,7 +11,8 @@
   (lambda (f xs)
     (if (null? xs)
         (list)
-        (cons (f (car xs)) (list/map f (cdr xs))))))
+        (cons (f (car xs)) (list/map f (cdr xs)))))
+  "Map f over xs (Lisp fallback; image prefers special form).")
 
 (define list/filter
   (lambda (p xs)
@@ -18,24 +20,28 @@
         (list)
         (if (p (car xs))
             (cons (car xs) (list/filter p (cdr xs)))
-            (list/filter p (cdr xs))))))
+            (list/filter p (cdr xs)))))
+  "Keep elements of xs where p is truthy (Lisp fallback).")
 
 (define list/foldl
   (lambda (f acc xs)
     (if (null? xs)
         acc
-        (list/foldl f (f acc (car xs)) (cdr xs)))))
+        (list/foldl f (f acc (car xs)) (cdr xs))))
+  "Left fold f over xs starting from acc (Lisp fallback).")
 
 ;; (list/range n) → (0 1 ... n-1) for synthetic tests / generators.
 (define list/range
   (lambda (n)
-    (list/range-acc n (list))))
+    (list/range-acc n (list)))
+  "List of integers 0 .. n-1.")
 
 (define list/range-acc
   (lambda (n acc)
     (if (<= n 0)
         acc
-        (list/range-acc (- n 1) (cons (- n 1) acc)))))
+        (list/range-acc (- n 1) (cons (- n 1) acc))))
+  "Internal accumulator for list/range.")
 
 ;; --- dict/ ---
 
@@ -49,7 +55,8 @@
             json
             (dict-set*
               (dict-set json (car kvs) (car (cdr kvs)))
-              (cdr (cdr kvs)))))))
+              (cdr (cdr kvs))))))
+  "Apply flat key/value pairs from kvs onto json via dict-set.")
 
 ;; --- html/  (strings → render-html; no raw tag soup in apps) ---
 ;;
@@ -67,14 +74,17 @@
     (list/foldl
       (lambda (acc x) (string-append acc (as-str x)))
       ""
-      xs)))
+      xs))
+  "Concatenate list of values into one string.")
 
 (define html/text
-  (lambda (s) (html-escape s)))
+  (lambda (s) (html-escape s))
+  "HTML-escape s for safe text content.")
 
 (define html/attr
   (lambda (k v)
-    (string-append (as-str k) "=\"" (html-escape (as-str v)) "\"")))
+    (string-append (as-str k) "=\"" (html-escape (as-str v)) "\""))
+  "One HTML attribute k=\"escaped-v\".")
 
 (define html/attrs
   (lambda (xs)
@@ -84,7 +94,8 @@
             (as-str a)
             (string-append acc " " (as-str a))))
       ""
-      xs)))
+      xs))
+  "Space-join attribute strings.")
 
 (define html/tag
   (lambda (name attrs body)
@@ -93,7 +104,8 @@
           (b (as-str body)))
       (if (string-eq a "")
           (string-append "<" n ">" b "</" n ">")
-          (string-append "<" n " " a ">" b "</" n ">")))))
+          (string-append "<" n " " a ">" b "</" n ">"))))
+  "Element <name attrs>body</name>; attrs may be empty string.")
 
 (define html/void
   (lambda (name attrs)
@@ -101,47 +113,81 @@
           (a (as-str attrs)))
       (if (string-eq a "")
           (string-append "<" n ">")
-          (string-append "<" n " " a ">")))))
+          (string-append "<" n " " a ">"))))
+  "Void element <name attrs> (no close tag).")
 
-(define html/h1 (lambda (body) (html/tag "h1" "" body)))
-(define html/h2 (lambda (body) (html/tag "h2" "" body)))
-(define html/h3 (lambda (body) (html/tag "h3" "" body)))
+(define html/h1
+  (lambda (body) (html/tag "h1" "" body))
+  "h1 with raw body string (caller escapes if needed).")
+
+(define html/h2
+  (lambda (body) (html/tag "h2" "" body))
+  "h2 with raw body string.")
+
+(define html/h3
+  (lambda (body) (html/tag "h3" "" body))
+  "h3 with raw body string.")
+
 (define html/p
   (lambda (body)
-    (html/tag "p" "" (html/text body))))
+    (html/tag "p" "" (html/text body)))
+  "Paragraph with HTML-escaped text body.")
+
 (define html/p*
   (lambda (attrs body)
-    (html/tag "p" attrs body)))
+    (html/tag "p" attrs body))
+  "Paragraph with attrs and raw body (no auto-escape).")
+
 (define html/span
   (lambda (attrs body)
-    (html/tag "span" attrs body)))
+    (html/tag "span" attrs body))
+  "span with attrs and raw body.")
+
 (define html/div
   (lambda (attrs body)
-    (html/tag "div" attrs body)))
+    (html/tag "div" attrs body))
+  "div with attrs and raw body.")
+
 (define html/ul
   (lambda (attrs body)
-    (html/tag "ul" attrs body)))
+    (html/tag "ul" attrs body))
+  "ul with attrs and raw body (usually joined li strings).")
+
 (define html/li
   (lambda (attrs body)
-    (html/tag "li" attrs body)))
+    (html/tag "li" attrs body))
+  "li with attrs and raw body.")
+
 (define html/strong
   (lambda (body)
-    (html/tag "strong" "" (html/text body))))
+    (html/tag "strong" "" (html/text body)))
+  "strong with HTML-escaped text.")
+
 (define html/code
   (lambda (body)
-    (html/tag "code" "" (html/text body))))
+    (html/tag "code" "" (html/text body)))
+  "code with HTML-escaped text.")
+
 (define html/pre
   (lambda (body)
-    (html/tag "pre" "" body)))
+    (html/tag "pre" "" body))
+  "pre with raw body (no auto-escape).")
+
 (define html/label
   (lambda (attrs body)
-    (html/tag "label" attrs body)))
+    (html/tag "label" attrs body))
+  "label with attrs and raw body.")
+
 (define html/button
   (lambda (attrs body)
-    (html/tag "button" attrs body)))
+    (html/tag "button" attrs body))
+  "button with attrs and raw body.")
+
 (define html/a
   (lambda (href body)
-    (html/tag "a" (html/attr "href" href) body)))
+    (html/tag "a" (html/attr "href" href) body))
+  "Anchor with href attr and raw body.")
+
 ;; Void <img>. src/alt required; optional class via third arg ("" ok).
 (define html/img
   (lambda (src alt class)
@@ -152,7 +198,9 @@
           (html/attr "alt" alt)
           (if (string-eq (as-str class) "")
               ""
-              (html/attr "class" class)))))))
+              (html/attr "class" class))))))
+  "img void tag; class may be empty string to omit.")
+
 (define html/form
   (lambda (method action attrs body)
     (html/tag "form"
@@ -161,10 +209,14 @@
           (html/attr "method" method)
           (html/attr "action" action)
           attrs))
-      body)))
+      body))
+  "form with method, action, extra attrs string, and body.")
+
 (define html/input
   (lambda (attrs)
-    (html/void "input" attrs)))
+    (html/void "input" attrs))
+  "input void tag from attrs string.")
+
 (define html/hidden
   (lambda (name value)
     (html/input
@@ -172,7 +224,9 @@
         (list
           (html/attr "type" "hidden")
           (html/attr "name" name)
-          (html/attr "value" value))))))
+          (html/attr "value" value)))))
+  "Hidden input name/value.")
+
 (define html/text-input
   (lambda (name attrs)
     (html/input
@@ -180,7 +234,8 @@
         (list
           (html/attr "type" "text")
           (html/attr "name" name)
-          attrs)))))
+          attrs))))
+  "Text input with name and extra attrs string.")
 
 (define html/textarea
   (lambda (name attrs body)
@@ -189,7 +244,8 @@
         (list
           (html/attr "name" name)
           attrs))
-      (html-escape (as-str body)))))
+      (html-escape (as-str body))))
+  "textarea; body is HTML-escaped.")
 
 ;; (html/option value label selected?) — selected? is bool/truthy
 (define html/option
@@ -201,7 +257,8 @@
               (html/attr "value" value)
               (html/attr "selected" "selected")))
           (html/attr "value" value))
-      (html/text label))))
+      (html/text label)))
+  "option element; selected? adds selected attr.")
 
 ;; (html/select name attrs body) — body is options HTML string
 (define html/select
@@ -211,7 +268,8 @@
         (list
           (html/attr "name" name)
           attrs))
-      body)))
+      body))
+  "select with name, attrs, and options body HTML.")
 
 (define html/wrap
   (lambda (title body)
@@ -220,11 +278,13 @@
         (html/join
           (list
             (html/h1 (html/text title))
-            (html/div "" body)))))))
+            (html/div "" body))))))
+  "render-html article with h1 title and body div.")
 
 (define html/page
   (lambda (parts)
-    (render-html (html/join parts))))
+    (render-html (html/join parts)))
+  "render-html of joined page parts (list of HTML strings).")
 
 ;; --- menu/  (navbar trees as plain lists) ---
 ;;
@@ -236,16 +296,19 @@
 
 (define menu/link
   (lambda (label href)
-    (list "link" (as-str label) (as-str href))))
+    (list "link" (as-str label) (as-str href)))
+  "Nav leaf: (\"link\" label href).")
 
 (define menu/group
   (lambda (label kids)
-    (list "group" (as-str label) kids)))
+    (list "group" (as-str label) kids))
+  "Nav dropdown group: (\"group\" label kids-list).")
 
 ;; Embed pre-rendered HTML as a nav item (e.g. capture dropdown form).
 (define menu/raw
   (lambda (html-str)
-    (list "raw" (as-str html-str) "")))
+    (list "raw" (as-str html-str) ""))
+  "Nav raw HTML item: (\"raw\" html \"\").")
 
 (define menu/render
   (lambda (item)
@@ -264,17 +327,20 @@
                       (html/join (list/map menu/render rest))))))
               (if (string-eq kind "raw")
                   label
-                  ""))))))
+                  "")))))
+  "Render one menu item (link, group, or raw) to HTML string.")
 
 (define menu/bar
   (lambda (items)
-    (html/join (list/map menu/render items))))
+    (html/join (list/map menu/render items)))
+  "Render menu item list to a nav HTML fragment.")
 
 ;; --- data/ ---
 
 (define data/get-field
   (lambda (type-name id field)
-    (dict-get (get type-name id) field)))
+    (dict-get (get type-name id) field))
+  "dict-get field from (get type-name id) row.")
 
 ;; --- css/  (sheets → css/render; no raw rule soup in apps) ---
 ;;
@@ -291,31 +357,38 @@
 
 (define css/rule
   (lambda (selector props)
-    (list "rule" (as-str selector) props)))
+    (list "rule" (as-str selector) props))
+  "CSS rule node: (\"rule\" selector flat-props).")
 
 (define css/media
   (lambda (query items)
-    (list "media" (as-str query) items)))
+    (list "media" (as-str query) items))
+  "CSS @media node wrapping child items.")
 
 (define css/raw
   (lambda (s)
-    (list "raw" (as-str s))))
+    (list "raw" (as-str s)))
+  "Raw CSS text node (escape hatch).")
 
 (define css/use
   (lambda (sheet)
-    (list "use" sheet)))
+    (list "use" sheet))
+  "Include another sheet node by reference.")
 
 (define css/sheet
   (lambda (items)
-    (list "sheet" items)))
+    (list "sheet" items))
+  "Top-level CSS sheet: (\"sheet\" items).")
 
 (define css/prop-name
   (lambda (k)
-    (as-str k)))
+    (as-str k))
+  "CSS property name as string.")
 
 (define css/prop-value
   (lambda (v)
-    (as-str v)))
+    (as-str v))
+  "CSS property value as string.")
 
 (define css/render-decls
   (lambda (props)
@@ -328,7 +401,8 @@
               ":"
               (css/prop-value (car (cdr props)))
               ";"
-              (css/render-decls (cdr (cdr props))))))))
+              (css/render-decls (cdr (cdr props)))))))
+  "Render flat k v k v prop list to CSS declarations.")
 
 (define css/render-items
   (lambda (items)
@@ -336,7 +410,8 @@
       (lambda (acc it)
         (string-append acc (css/render-item it)))
       ""
-      items)))
+      items))
+  "Render list of CSS AST items to a CSS string.")
 
 (define css/render-item
   (lambda (item)
@@ -361,7 +436,8 @@
                           (css/render (car (cdr item)))
                           (if (string-eq kind "sheet")
                               (css/render-items (car (cdr item)))
-                              "")))))))))
+                              ""))))))))
+  "Render one CSS AST node (rule/media/raw/use/sheet).")
 
 (define css/render
   (lambda (sheet)
@@ -371,7 +447,8 @@
             ""
             (if (string-eq (as-str (car sheet)) "sheet")
                 (css/render-items (car (cdr sheet)))
-                (css/render-item sheet))))))
+                (css/render-item sheet)))))
+  "Render sheet AST or thunk to CSS text.")
 
 ;; --- control / macros (loaded after kernel cond/and/or) ---
 
@@ -380,7 +457,8 @@
   (lambda (s)
     (if (null? s)
         #t
-        (string-eq (as-str s) ""))))
+        (string-eq (as-str s) "")))
+  "True if s is nil or empty string.")
 
 (defmacro when (test body)
   `(if ,test ,body ()))
