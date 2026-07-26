@@ -151,12 +151,17 @@
             rating in again|hard|good|easy
           (flash/stats [deck-id]) -> simple counts
             (due, new, learning, suspended) as printable structure
+          (flash/explain front back) -> explanation text from the LLM
+            Ask the LLM to explain a card the user doesn't understand.
+            Uses agent-session-new with a tutor seed (no tools); returns
+            the model's text. Wrapped in an escaped HTML div by the route.
 
         HTML / routes (handlers are flash/…-page functions):
           (flash/install) or load-side effects:
             (route "/flashcards" "flash/home-page")
             (route "/flashcards/deck" "flash/deck-page")
             (route "/flashcards/study" "flash/study-page")
+            (route "/flashcards/explain" "flash/explain-page")
             (route "/flashcards/card" "flash/card-edit-page")  ; optional
           Exact query keys are implementation discretion; document in
           lib.pp header. Prefer ?deck=uuid & ?id=uuid.
@@ -186,6 +191,14 @@
               [Reveal] → show BACK + rating buttons
           - POST rating → flash/review → redirect next due
           - plain form POST (same as todos); htmx partials optional polish
+
+        /flashcards/explain?id=  (htmx GET, returns an HTML div)
+          - reads the card front+back, asks the LLM to explain it in plain
+            language, returns an escaped <div> with the explanation.
+          - On the study card (after reveal), an Explain button does an htmx
+            GET to this route; the response swaps into a #flash-explain div
+            below the card. A htmx-indicator span shows Thinking… during the
+            request. No tools on the LLM session; no image context needed.
 
         Mobile-first: big rating buttons, minimal chrome noise.
 

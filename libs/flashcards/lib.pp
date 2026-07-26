@@ -256,6 +256,43 @@
               updated)))))
   "Record review rating for card id.")
 
+;; --- explain (LLM) ---
+
+(define flash/explain-seed
+  "You are a patient tutor helping someone understand a flashcard. Explain the concept clearly and concisely in plain language. Use short paragraphs separated by blank lines. Do not use markdown headings or code fences unless the card itself is about code. If the card is about a specific system (e.g. Pricklypear, OCaml), assume the reader is learning that system."
+  "System seed for card-explanation LLM sessions (no tools).")
+
+(define flash/explain
+  (lambda (front back)
+    (let ((sid (agent-session-new flash/explain-seed #f)))
+      (agent-say sid
+        (string-append
+          "I don't understand this flashcard. Can you explain it to me?\n\n"
+          "Front:\n" front "\n\n"
+          "Back:\n" back "\n\n"
+          "Please explain what this means in plain language."))))
+  "Ask the LLM to explain a card's front/back in plain language; returns explanation text.")
+
+(define flash/explain-html
+  (lambda (text)
+    (string-append
+      "<div class=\"card\" style=\"margin-top:1rem\">"
+      "<h3>Explanation</h3>"
+      "<div style=\"white-space:pre-wrap\">" (flash/esc text) "</div>"
+      "</div>"))
+  "HTML for the explanation panel. Escapes LLM text; preserves newlines via CSS.")
+
+(define flash/explain-page
+  (lambda ()
+    (let ((id (as-str (request-param "id"))))
+      (let ((fields (flash/card id)))
+        (if (null? fields)
+            (render-html (flash/explain-html "Card not found."))
+            (render-html
+              (flash/explain-html
+                (flash/explain (flash/card-front fields) (flash/card-back fields))))))))
+  "GET /flashcards/explain?id= — LLM explanation of a card as a raw HTML div.")
+
 (define flash/row-due?
   (lambda (row today)
     (let ((fields (cdr row)))
@@ -529,7 +566,33 @@
                           (flash/rating-form id deck "again" "Again")
                           (flash/rating-form id deck "hard" "Hard")
                           (flash/rating-form id deck "good" "Good")
-                          (flash/rating-form id deck "easy" "Easy"))))))
+                          (flash/rating-form id deck "easy" "Easy"))))
+                    (html/p* ""
+                      (html/join
+                        (list
+                          (html/button
+                            (html/attrs
+                              (list
+                                (html/attr "type" "button")
+                                (html/attr "class" "secondary")
+                                (html/attr "hx-get"
+                                  (string-append "/flashcards/explain?id=" id))
+                                (html/attr "hx-target" "#flash-explain")
+                                (html/attr "hx-swap" "innerHTML")
+                                (html/attr "hx-indicator" "#explain-spinner")
+                                (html/attr "hx-disabled-elt" "this")))
+                            "Explain")
+                          (html/span
+                            (html/attrs
+                              (list
+                                (html/attr "id" "explain-spinner")
+                                (html/attr "class" "htmx-indicator")))
+                            "Thinking…"))))
+                    (html/div
+                      (html/attrs
+                        (list
+                          (html/attr "id" "flash-explain")))
+                      "")))
                 (html/form "GET" "/flashcards/study"
                   (html/attrs (list))
                   (html/join
@@ -624,3 +687,4 @@
 (route "/flashcards" "flash/home-page")
 (route "/flashcards/deck" "flash/deck-page")
 (route "/flashcards/study" "flash/study-page")
+(route "/flashcards/explain" "flash/explain-page")
