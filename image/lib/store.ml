@@ -503,6 +503,45 @@ let persist_function (t : t) (name : string)
             (Printexc.to_string exn);
           Lwt.return_unit)
 
+(** branching.seed-policy: insert only if (branch_id, name) absent.
+    Existing main (or any branch) rows are left untouched. Used by boot
+    seed so deploy cannot clobber live promote. *)
+let persist_function_if_absent (t : t) (name : string)
+    (body : Pricklypear_lisp.Ast.expr)
+    ?(doc : string option = None)
+    (author : string)
+  : unit Lwt.t =
+  match t.conn with
+  | None -> Lwt.return_unit
+  | Some conn ->
+      Lwt.catch
+        (fun () ->
+          let body_json =
+            Yojson.Safe.to_string
+              (Pricklypear_lisp.Ast.expr_to_json body) in
+          let sql =
+            "INSERT INTO function_defs (branch_id, name, body, author, doc) " ^
+            "VALUES ($1, $2, $3::jsonb, $4, $5) " ^
+            "ON CONFLICT (branch_id, name) DO NOTHING" in
+          let doc_param =
+            match doc with
+            | Some s -> Pgx.Value.of_string s
+            | None -> Pgx.Value.null
+          in
+          let* _ =
+            exec conn
+              ~params:[ Pgx.Value.of_string t.branch_id;
+                        Pgx.Value.of_string name;
+                        Pgx.Value.of_string body_json;
+                        Pgx.Value.of_string author;
+                        doc_param ]
+              sql in
+          Lwt.return_unit)
+        (fun exn ->
+          Printf.eprintf "[store] persist_function_if_absent error: %s\n"
+            (Printexc.to_string exn);
+          Lwt.return_unit)
+
 (** Visible docstring for [name], or None. *)
 let lookup_function_doc (t : t) (name : string) : string option Lwt.t =
   let* found = lookup_function t name in
@@ -717,6 +756,41 @@ let register_route (t : t) ~(route : string) ~(handler : string)
           Lwt.return_unit)
         (fun exn ->
           Printf.eprintf "[store] register_route error: %s\n"
+            (Printexc.to_string exn);
+          Lwt.return_unit)
+
+(** branching.seed-policy: insert route only if absent on this branch. *)
+let register_route_if_absent (t : t) ~(route : string) ~(handler : string)
+    ?visibility ()
+  : unit Lwt.t =
+  match t.conn with
+  | None -> Lwt.return_unit
+  | Some conn ->
+      Lwt.catch
+        (fun () ->
+          let vis =
+            match visibility with
+            | Some v -> normalize_visibility v
+            | None -> "private"
+          in
+          let sql =
+            "INSERT INTO view_bindings " ^
+            "  (branch_id, route, handler, visibility) " ^
+            "VALUES ($1, $2, $3, $4) " ^
+            "ON CONFLICT (branch_id, route) DO NOTHING"
+          in
+          let* _ =
+            exec conn
+              ~params:
+                [ Pgx.Value.of_string t.branch_id
+                ; Pgx.Value.of_string route
+                ; Pgx.Value.of_string handler
+                ; Pgx.Value.of_string vis ]
+              sql
+          in
+          Lwt.return_unit)
+        (fun exn ->
+          Printf.eprintf "[store] register_route_if_absent error: %s\n"
             (Printexc.to_string exn);
           Lwt.return_unit)
 

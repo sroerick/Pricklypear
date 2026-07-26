@@ -37,9 +37,21 @@
           appear until merge.
 
         ROLES:
-          system/main     package defaults (vendor channel)
-          <user>/personal garden (user channel; boot default)
-          <user>/<name>   experiments (full fork)
+          system/main     package defaults (inheritance root)
+          <user>/personal garden (boot default; long-lived pins)
+          <user>/dev      optional workshop (empty child of main;
+                          active product work intended to promote)
+          <user>/<name>   experiments (full fork when isolation
+                          from evolving main is required)
+
+        AUTHORITY (Lisp vs kernel) — see package-updates:
+          Kernel (OCaml/migrations)  → git is source of truth
+          Package Lisp               → Postgres branches are live
+                                       source; git holds snapshots
+          Boot seed                  → additive into system/main
+                                       only (never clobber existing)
+          Explicit reseed            → git libs may overwrite main
+                                       when an admin asks
 
         Effective definition lookup (CLOS override):
         walk parent chain, closest definition wins.
@@ -143,30 +155,32 @@
    (status implemented)
    (details
     (doc (|
-         PROBLEM: reseeding libs/*.pp onto the active branch
-         wiped live (define) edits after every deploy.
-
          MODEL:
-         - system/main = package defaults (vendor channel).
-           Boot seed_stdlib ALWAYS writes libs/*.pp here
-           only (std, ui, ai, todo, bible, dabar today).
+         - system/main = package defaults (inheritance root).
+           Boot seed_stdlib writes libs/*.pp here only,
+           under seed-policy (additive — see below).
          - <user>/personal = garden (user channel).
            Empty child of system/main (parent pointer only).
            Image boots here after seed. User (define) and
            (route) write personal rows only.
-         - Inheritance: recursive CTE; personal overrides
+         - <user>/dev = optional workshop (also empty child).
+           Prefer for product spikes you intend to promote;
+           keep personal for long-lived custom pins.
+         - Inheritance: recursive CTE; child overrides
            shadow main; unpinned names auto-see main updates.
 
          BOOT ORDER:
          1. ensure_branch owner=username name=personal
             parent=system/main (no code copy)
          2. seed_stdlib with store.branch_id = system/main
+            (additive persist — see seed-policy)
          3. checkout personal + rehydrate env from CTE
          4. refresh ui/nav shell
 
-         load-library on CURRENT branch still overwrites
-         that branch (intentional). On personal that PINS
-         the whole package — prefer small overrides.
+         load-library on CURRENT branch still upserts that
+         branch (intentional pin). On personal/dev that pins
+         the whole package — prefer small overrides or work
+         name-by-name via define.
 
          (checkout "system/main") / (checkout "admin/personal")
          rehydrate sync; header shows current branch.
@@ -174,98 +188,264 @@
    )
   )
   (subsection package-updates
-   (doc "How software updates work: kernel vs main packages vs personal pins")
+   (doc "Authority model: live Postgres Lisp, git kernel + vault, additive seed")
    (status partial)
+   (implements image/lib/session.ml image/lib/store.ml image/lib/loader.ml cli/bin/pp_sync.ml)
    (details
     (doc (|
-         THREE CHANNELS (not one monolithic version):
+         ==========================================================
+         DUAL-ERA AUTHORITY (intentional, long-lived)
+         ==========================================================
+         Destination: stable OCaml core; most product change is
+         live define/promote on the habitat. Until the core is
+         calm, both surfaces exist — but each has one job.
 
-         1. KERNEL — OCaml binary (HTTP, prims, loader,
-            chrome CSS). Updated by git push → promote →
-            restart. No branch involved.
+         THREE CHANNELS:
 
-         2. PACKAGE DEFAULTS — function_defs on system/main
-            from libs/*.pp. Updated by boot seed after deploy.
-            Anyone who INHERITS a name (no personal row)
-            gets the new body automatically.
+         1. KERNEL — OCaml binary (HTTP, prims, loader, chrome).
+            Source of truth: git. Update: push → build → restart.
+            No branch involved.
 
-         3. GARDEN PINS — function_defs rows on personal
-            (or any child). Never written by seed. Survive
-            every deploy. Shadow main until unoverride/merge.
+         2. PACKAGE DEFAULTS — function_defs on system/main.
+            Source of truth while running: Postgres system/main.
+            Daily update path: promote from personal/dev
+            (see promote). Boot seed is ADDITIVE only
+            (see seed-policy): fills missing names from
+            libs/*.pp; never overwrites an existing main row.
+            Explicit reseed is the only git→main clobber.
+
+         3. GARDEN / WORKSHOP PINS — rows on personal, dev, or
+            other children. Never written by boot seed.
+            Survive every deploy. Shadow main until unoverride
+            or promote+unoverride.
+
+         GIT'S TWO JOBS (do not mix):
+           A. Kernel repo — authoritative for OCaml/migrations.
+           B. Lisp vault — exported snapshots of packages/
+              branches (backup, bootstrap, clone-to-laptop).
+              Not the daily Lisp editor. See lisp-snapshot.
 
          DATA (data_rows) is never versioned by branch and
-         never wiped by push. New package code must tolerate
-         older row shapes (defaults in readers) or ship an
-         explicit data migrator.
+         never wiped by deploy. New package code must tolerate
+         older row shapes or ship an explicit data migrator.
 
-         UPDATE RULE:
-           inherited name  → auto-update on seed
-           overridden name → user must accept (unoverride
-                             or merge); show "main newer"
+         DEFAULT WORK LOOP (product Lisp):
+           work on personal or dev on the ONE habitat (prod)
+           → dogfood against real shared data
+           → promote selected names → system/main
+           → optional snapshot/export into repo (vault)
+           → optional unoverride so inheritance is clean
+           Local dev.sh PG is kernel-lab only, not daily Lisp.
 
-         CONSCIOUS UPDATE UX (planned on branch browser):
-           per name: Use main's version | Keep mine | Diff
-           per package: Reset package pins to main
-           unoverride prim: delete personal row for name
-             so inheritance resumes (Session.unoverride;
-             POST /branches/unoverride)
+         UPDATE RULE (after additive seed):
+           new name in libs, absent on main → appears on seed
+           existing main name              → unchanged by seed
+           personal/dev override           → still shadows main
+           want git body on main           → explicit reseed
+           want garden body on main        → promote
 
-         load-library WARNING (planned): when current branch
-         is not system/main, warn that loading pins the
-         package on the garden.
+         CONSCIOUS UPDATE UX (branch browser; partial today):
+           per name: Use main (unoverride) | Keep | Diff
+           per package: Reset garden pins to main (bulk unoverride)
+           load-library on non-main: warn that it pins the package
 
          Anti-patterns:
-           - reseed onto personal
+           - boot seed overwriting existing main defs
+           - reseed onto personal/dev
            - auto-merge main→personal on boot
            - full copy-on-fork for personal (freezes forever)
            - treat data_rows as package payload
+           - editing libs/*.pp as the primary product path
+             while also defining the same names live without
+             promote (split brain)
     |))
    )
+   (verify
+    (build "dune build image cli")
+    (smoke "boot seed does not change body of existing system/main fn")
+    (smoke "boot seed inserts a libs name missing from system/main")
+    (smoke "personal define survives image restart without pp_sync"))
   )
-  (subsection promote
-   (doc "Push garden work to system/main and/or git master (libs/*.pp)")
+  (subsection seed-policy
+   (doc "Additive boot seed into system/main; explicit reseed may clobber")
    (status planned)
+   (implements image/lib/session.ml image/lib/store.ml image/lib/loader.ml image/lib/primitives.ml)
    (details
     (doc (|
-         Users will edit on personal and want to ship work
-         upstream. Two destinations — both matter:
+         PROBLEM TODAY:
+         persist_function is INSERT ... ON CONFLICT DO UPDATE.
+         seed_stdlib load-library therefore CLOBBERS every
+         system/main name present in libs/*.pp on every boot.
+         Live promote to main is not durable across deploy.
 
-         A. LIVE main — (merge "admin/personal" "system/main")
-            Upserts function_defs personal → main now.
-            Admin-only into system/* (existing policy).
-            NOT durable alone: next seed reloads libs/*.pp
-            and can overwrite main unless git matches.
+         OPTION A (chosen):
 
-         B. GIT master — pp_sync pull <pkg> while on personal
-            exports to libs/<pkg>/lib.pp; operator commits
-            and git push wyo. Next seed makes main durable.
+         1. ADDITIVE BOOT SEED
+            seed_stdlib still runs on boot, still targets only
+            system/main, still reads PP_LIBS_DIR/<pkg>/lib.pp.
+            Persist path used by seed MUST NOT overwrite:
+              INSERT ... ON CONFLICT (branch_id, name) DO NOTHING
+            or equivalent "insert if absent" helper
+            (Store.persist_function_if_absent / seed mode flag).
+            Missing package files: skip + log (unchanged).
+            Routes/deftype seeded from libs: same additive rule
+            where a natural key exists (branch_id, route|name).
 
-         FULL SHIP LOOP:
-           edit on personal → dogfood
-           → optional (merge personal main) for instant live
-           → pp_sync pull selected packages
-           → git commit + push
-           → seed refreshes system/main from files
-           → unoverride pins on personal so inheritance
-             is clean (don't keep stale full-package pins)
+         2. EXPLICIT RESEED (git → main clobber, admin only)
+            Prim: (reseed-package "notes")
+              optional (reseed-package "notes" 'force) same.
+            Behavior:
+              - require admin (same gate as promote to system/*)
+              - read libs/<pkg>/lib.pp via loader
+              - eval/persist onto system/main with UPSERT
+                (full overwrite for names in that file)
+              - does not touch personal/dev rows
+              - rehydrate callers as needed
+            CLI: pp-sync reseed <pkg>  (calls the prim)
+            Optional later: pp-sync reseed --all
 
-         PROMOTE IS SELECTIVE:
-           Ship package functions (ui/*, notes/*, …),
-           NOT the entire garden (no personal-canary dump).
-           UI: multi-select packages/names, then
-             [ ] Merge into system/main
-             [ ] Export for git (operator runs pp_sync/commit)
+         3. load-library / load-string (interactive)
+            Unchanged intent: write the CURRENT branch with
+            upsert. Still the pin hammer. Not used by boot
+            seed once seed has its own absent-only persist.
+            Warn when current branch is not system/main
+            (package-updates UX; may land with change-set).
 
-         Image does not git-push itself (no repo credentials
-         in the image). Export API + laptop/habitat operator
-         owns the commit.
+         4. FRESH DATABASE
+            Additive seed on empty main = full bootstrap from
+            libs/*.pp. No separate first-boot mode required.
 
-         Policy:
-           - merge to system/main: admin only
-           - merge to own branches: free
-           - data_rows never part of promote
+         5. NON-GOALS
+            - seed writing personal/dev
+            - auto reseed on git push without admin prim
+            - deleting main names absent from libs
+              (additive never removes; cleanup is manual
+               or a future prune tool)
     |))
    )
+   (verify
+    (build "dune build image cli")
+    (smoke "after promote name to main, restart leaves body intact")
+    (smoke "(reseed-package pkg) admin overwrites main from libs")
+    (smoke "non-admin reseed-package errors")
+    (smoke "reseed-package does not write personal rows"))
+  )
+  (subsection promote
+   (doc "Graduate garden/workshop code to system/main; optional vault export")
+   (status partial)
+   (implements image/lib/session.ml image/lib/store.ml image/lib/http_branches.ml cli/bin/pp_sync.ml)
+   (details
+    (doc (|
+         Promote is the blessed path for product Lisp.
+         Git export is optional vault/checkpoint, not required
+         for main to keep the change across deploys (seed-policy).
+
+         A. LIVE MAIN (required for shared defaults)
+            Selective upsert of named function_defs from a
+            source branch (personal/dev/…) → system/main.
+            Already: Session.promote_to_main, Store.promote_functions,
+            POST /branches/promote (admin only into system/*).
+            Also: (merge src dst) for coarser branch merges;
+            promote remains the selective UI/prim path.
+
+         B. VAULT EXPORT (optional durability in git)
+            export-package / pp-sync pull writes libs/<pkg>/lib.pp
+            (or snapshot tree — see lisp-snapshot). Operator
+            commits. This does NOT change live main by itself.
+            Useful for backup, laptop clone, and explicit reseed.
+
+         HAPPY PATH:
+           edit on personal or dev → dogfood
+           → promote selected names → system/main
+           → optional unoverride on source (clean inheritance)
+           → optional pp-sync snapshot/pull + git commit (vault)
+
+         SELECTIVE:
+           Ship named functions (ui/nav, notes/save, …),
+           not the entire garden by default.
+           UI: name multi-select on branch detail (exists);
+           package-group select may come later.
+
+         PRIM / CLI (v1 make):
+           keep promote UI + Session.promote_to_main
+           optional Lisp: (promote-to-main "name") or
+             (promote-to-main '("n1" "n2")) on current branch
+           pp-sync does not promote (image policy stays in image)
+
+         Policy:
+           - promote/merge into system/*: admin only
+           - merge into own branches: free
+           - data_rows never part of promote
+           - image never git-pushes (no repo credentials)
+    |))
+   )
+   (verify
+    (build "dune build image")
+    (smoke "POST /branches/promote copies selected names to system/main")
+    (smoke "promoted main body survives restart under additive seed")
+    (smoke "non-admin promote to system/main denied"))
+  )
+  (subsection lisp-snapshot
+   (doc "Clone habitat Lisp state into the git repo as vault/backup")
+   (status planned)
+   (implements image/lib/session.ml image/lib/primitives.ml cli/bin/pp_sync.ml)
+   (details
+    (doc (|
+         PURPOSE:
+         Postgres is the live Lisp store. The repo must still
+         be able to hold a clone of package/branch state for
+         backup, new-machine bootstrap material, and explicit
+         reseed inputs — without becoming the daily editor.
+
+         V1 SURFACES (compose existing export):
+
+         1. Package pull (exists)
+            (export-package "notes") → lib.pp text
+            pp-sync pull <pkg>       → libs/<pkg>/lib.pp
+            pp-sync pull-all         → every discovered pkg
+            Default export reads the SESSION's current branch
+            visibility (CTE). For vault of defaults, checkout
+            system/main first OR pass an explicit branch
+            (v1 make: add optional branch ref).
+
+         2. Snapshot command (new CLI)
+            pp-sync snapshot
+              - checkout-aware: export all packages with
+                bindings on the chosen branch
+              - writes libs/<pkg>/lib.pp by default (main vault)
+            pp-sync snapshot --branch system/main
+            pp-sync snapshot --branch admin/personal \
+              --out backups/personal/
+              - garden pins land under backups/ not libs/
+                so bootstrap seed does not treat pins as defaults
+
+         3. Image prim (thin)
+            (export-package pkg) already returns text.
+            Optional: (snapshot-packages) → list of pkg names
+            with own or visible bindings (helper for CLI).
+            No git commit inside the image.
+
+         4. Operator habit
+            Before risky reseed or migration: snapshot main
+            (+ personal if desired) and git commit.
+            Cadence backups may be cron + pp-sync snapshot.
+
+         LAYOUT CONVENTION:
+           libs/<pkg>/lib.pp     bootstrap + main vault (seed input)
+           backups/<ref>/...     non-main branch dumps (not seeded)
+
+         NON-GOALS v1:
+           - automatic git commit from image or CLI
+           - pg_dump of data_rows as part of pp-sync
+           - encrypting snapshots
+           - bidirectional sync daemon
+    |))
+   )
+   (verify
+    (build "dune build cli")
+    (smoke "pp-sync pull notes writes libs/notes/lib.pp")
+    (smoke "pp-sync snapshot --branch system/main refreshes libs")
+    (smoke "pp-sync snapshot --branch u/personal --out backups/personal does not write libs"))
   )
   (subsection branch-browser-ui
    (doc "Git-like light /branches browser: list, open, stats, checkout, promote")

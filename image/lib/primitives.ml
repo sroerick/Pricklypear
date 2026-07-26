@@ -276,6 +276,7 @@ let prim_summary (name : string) : string =
   | "__with_transaction__" -> "internal transaction helper"
   | "load-string" -> "load Lisp source text (define/route/deftype)"
   | "load-library" -> "load libs/<name>/lib.pp into current branch"
+  | "reseed-package" -> "admin: upsert libs/<pkg> onto system/main (clobber)"
   | "callees" -> "static forward callees of a function (App-Var heads)"
   | "callers" -> "static direct callers (senders) of a name"
   | "dependents" -> "reverse-graph dependents of a function"
