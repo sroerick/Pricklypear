@@ -1046,16 +1046,38 @@
   "POST handler: create note from request.")
 (define notes/ui/do-save
   (lambda (slug raw)
-    (let ((tree (outline/decode raw))
-          (prev (notes/doc/get slug)))
-      (let ((title (if (null? prev) (as-str slug) (notes/doc/title prev)))
+    (let ((slug-s (as-str slug))
+          (prev (notes/doc/get (as-str slug))))
+      (let ((title (if (null? prev) slug-s (notes/doc/title prev)))
             (tags (if (null? prev) "" (notes/doc/tags prev)))
             (kind (if (null? prev) "note" (notes/doc/kind prev)))
             (day (if (null? prev) "" (notes/doc/day prev))))
-        (seq
-          (notes/doc/upsert (as-str slug) title tree tags kind day)
-          (redirect (string-append "/notes?slug=" (as-str slug)))))))
-  "POST handler: save note metadata/outline.")
+        (if (or (null? raw) (string-eq (string-trim (as-str raw)) ""))
+            ;; Blank: preserve prior behavior (bare Untitled root).
+            (seq
+              (notes/doc/upsert slug-s title (outline/node "root" "Untitled") tags kind day)
+              (redirect (string-append "/notes?slug=" slug-s)))
+            ;; Non-empty: validate the root before upsert. outline/decode
+            ;; silently falls back to ("root" "Untitled") when the root is
+            ;; not a 5-element node, so a hand-edited JSON outline that drops a
+            ;; field would WIPE the note's title + kids on save. Parse + check
+            ;; outline/valid? ourselves and refuse to write on a malformed root.
+            (let ((parsed (json-parse (as-str raw))))
+              (if (outline/valid? parsed)
+                  (seq
+                    (notes/doc/upsert slug-s title parsed tags kind day)
+                    (redirect (string-append "/notes?slug=" slug-s)))
+                  (html/page
+                    (list
+                      (html/h1 (string-append "Could not save " slug-s))
+                      (html/p* (html/attr "class" "err")
+                        "The outline is malformed. Each node must be a 5-element list [id title body todo kids]. The note was not changed.")
+                      (html/p* ""
+                        (html/a (string-append "/notes?slug=" slug-s) "Back to the note"))
+                      (html/tag "pre"
+                        (html/attrs (list (html/attr "class" "err")))
+                        (as-str raw))))))))))
+  "POST handler: save note metadata/outline. Refuses to wipe a note on a malformed outline root; shows an error page instead.")
 (define notes/capture/handle
   (lambda ()
     (let ((title (request-param "title"))
