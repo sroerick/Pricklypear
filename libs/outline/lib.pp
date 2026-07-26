@@ -185,9 +185,117 @@
             (cons (outline/insert-sibling-kids (car kids) id new-node)
               (outline/insert-sib-list (cdr kids) id new-node))))))
 
-;; promote: move node up one level (remove from parent, insert as sibling after parent)
-;; demote: move node down one level (become child of previous sibling)
-;; These are complex; v1 simplified versions:
+;; --- pure structural movement (sexp trees only; no DB) ---
+;;
+;; detach: pull a non-root node out; returns (node new-tree) or ().
+;; promote / demote: org-style indent levels (spec outline-model).
+;; move-up / move-down: reorder among siblings.
+
+;; Remove first occurrence of id from a sibling list.
+;; -> (node remaining-kids) | ()
+(define outline/take-from-list
+  (lambda (kids id)
+    (if (null? kids)
+        ()
+        (if (string-eq (outline/id (car kids)) (as-str id))
+            (list (car kids) (cdr kids))
+            (let ((rest (outline/take-from-list (cdr kids) id)))
+              (if (null? rest)
+                  ()
+                  (list (car rest)
+                        (cons (car kids) (car (cdr rest))))))))))
+
+;; Detach direct child id from node n -> (child new-n) | ()
+(define outline/detach-direct
+  (lambda (n id)
+    (let ((pair (outline/take-from-list (outline/kids n) id)))
+      (if (null? pair)
+          ()
+          (list (car pair)
+                (outline/set-kids n (car (cdr pair))))))))
+
+;; Detach id anywhere under tree (not the root itself).
+;; -> (node tree-without-node) | ()
+(define outline/detach
+  (lambda (tree id)
+    (let ((tid (as-str id)))
+      (if (string-eq (outline/id tree) tid)
+          ()
+          (let ((pair (outline/detach-in-kids (outline/kids tree) tid)))
+            (if (null? pair)
+                ()
+                (list (car pair)
+                      (outline/set-kids tree (car (cdr pair))))))))))
+
+(define outline/detach-in-kids
+  (lambda (kids id)
+    (if (null? kids)
+        ()
+        (if (string-eq (outline/id (car kids)) id)
+            (list (car kids) (cdr kids))
+            (let ((sub (outline/detach (car kids) id)))
+              (if (null? sub)
+                  (let ((rest (outline/detach-in-kids (cdr kids) id)))
+                    (if (null? rest)
+                        ()
+                        (list (car rest)
+                              (cons (car kids) (car (cdr rest))))))
+                  (list (car sub)
+                        (cons (car (cdr sub)) (cdr kids)))))))))
+
+;; promote: remove node from its parent; insert as sibling after that parent.
+;; No-op if missing, root, or direct child of root (nowhere above root).
+(define outline/promote
+  (lambda (tree id)
+    (let ((tid (as-str id)))
+      (if (string-eq (outline/id tree) tid)
+          tree
+          (outline/set-kids tree
+            (outline/promote-kids (outline/kids tree) tid))))))
+
+(define outline/promote-kids
+  (lambda (kids id)
+    ;; Deeper promotions first, then lift any direct-grandchild at this level.
+    (outline/promote-lift
+      (list/map (lambda (k) (outline/promote k id)) kids)
+      id)))
+
+(define outline/promote-lift
+  (lambda (kids id)
+    (if (null? kids)
+        (list)
+        (let ((pair (outline/detach-direct (car kids) id)))
+          (if (null? pair)
+              (cons (car kids) (outline/promote-lift (cdr kids) id))
+              ;; pair = (node parent-without-node); splice node after parent.
+              (cons (car (cdr pair))
+                    (cons (car pair) (cdr kids))))))))
+
+;; demote: become last child of the previous sibling. No-op if first sibling.
+(define outline/demote
+  (lambda (tree id)
+    (let ((tid (as-str id)))
+      (if (string-eq (outline/id tree) tid)
+          tree
+          (outline/set-kids tree
+            (outline/demote-kids (outline/kids tree) tid))))))
+
+(define outline/demote-kids
+  (lambda (kids id)
+    (if (null? kids)
+        (list)
+        (if (null? (cdr kids))
+            (list (outline/demote (car kids) id))
+            (if (string-eq (outline/id (car (cdr kids))) id)
+                (let ((prev (car kids))
+                      (node (car (cdr kids)))
+                      (rest (cdr (cdr kids))))
+                  (cons
+                    (outline/set-kids prev
+                      (append (outline/kids prev) (list node)))
+                    rest))
+                (cons (outline/demote (car kids) id)
+                      (outline/demote-kids (cdr kids) id)))))))
 
 ;; move-up: swap with previous sibling
 (define outline/move-up
@@ -196,10 +304,10 @@
 
 (define outline/move-up-kids
   (lambda (tree id)
-    (if (string-eq (outline/id tree) id)
+    (if (string-eq (outline/id tree) (as-str id))
         tree
         (outline/set-kids tree
-          (outline/swap-prev (outline/kids tree) id)))))
+          (outline/swap-prev (outline/kids tree) (as-str id))))))
 
 (define outline/swap-prev
   (lambda (kids id)
@@ -219,10 +327,10 @@
 
 (define outline/move-down-kids
   (lambda (tree id)
-    (if (string-eq (outline/id tree) id)
+    (if (string-eq (outline/id tree) (as-str id))
         tree
         (outline/set-kids tree
-          (outline/swap-next (outline/kids tree) id)))))
+          (outline/swap-next (outline/kids tree) (as-str id))))))
 
 (define outline/swap-next
   (lambda (kids id)
@@ -278,6 +386,8 @@
                     (outline/action-btn slug nid "archive" "arch" "ol-btn" show-archived))
                 (outline/action-btn slug nid "add-child" "+kid" "ol-btn" show-archived)
                 (outline/action-btn slug nid "add-sibling" "+sib" "ol-btn" show-archived)
+                (outline/action-btn slug nid "promote" "<<" "ol-btn" show-archived)
+                (outline/action-btn slug nid "demote" ">>" "ol-btn" show-archived)
                 (outline/action-btn slug nid "move-up" "up" "ol-btn" show-archived)
                 (outline/action-btn slug nid "move-down" "dn" "ol-btn" show-archived)
                 (outline/extra-actions slug nid)
