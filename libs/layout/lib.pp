@@ -183,6 +183,140 @@
               (list "font-size" "1.55rem")))))))
   "CSS sheet AST for layout/* classes.")
 
+;; ---- neocities chrome: raw CSS (keyframes, tiled bg, 88x31 badges, counter) ----
+;; html/tag passes its body string through UNESCAPED, so a <style> tag built via
+;; (html/tag "style" "" <css-string>) emits raw CSS — including @keyframes,
+;; which the css/* AST cannot express. Injected AFTER layout/style so it wins
+;; the cascade for equal-specificity rules (.layout-page, .layout-hero, …).
+
+(define layout/neocities-theme
+  (lambda ()
+    (html/join
+      (list
+        "body{background-color:#2a6a6a;background-image:repeating-linear-gradient(45deg,rgba(255,255,255,.05) 0 2px,transparent 2px 14px),repeating-linear-gradient(-45deg,rgba(0,0,0,.06) 0 2px,transparent 2px 14px)}"
+        ".layout-page{background:#faf7f4;border:2px solid #000;box-shadow:6px 6px 0 #000}"
+        ".layout-hero{border:2px solid #000;background:linear-gradient(180deg,#ffd1a4,#ffe9c8);margin:1rem 0;box-shadow:4px 4px 0 #000}"
+        ".layout-card{box-shadow:3px 3px 0 #000}"
+        "a.layout-cta{box-shadow:3px 3px 0 #000}"
+        "a.layout-cta:hover{background:#000;color:#ff0}"
+        "a.layout-cta:visited:hover{color:#ff0}"
+        ".nc-marquee-bar{background:#000;color:#ff0;border-bottom:2px solid #000;overflow:hidden;white-space:nowrap;font-family:monospace;font-size:.85rem;padding:.3rem 0}"
+        ".nc-marquee-track{display:inline-block;white-space:nowrap;animation:nc-scroll 30s linear infinite}"
+        "@keyframes nc-scroll{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}"
+        ".nc-blink{animation:nc-blink 1.1s steps(2,start) infinite}"
+        "@keyframes nc-blink{50%{opacity:0}}"
+        ".nc-banner{text-align:center;padding:.6rem .5rem;font-family:monospace;font-size:.85rem}"
+        ".nc-construction{display:inline-block;background:repeating-linear-gradient(45deg,#000 0 8px,#fc0 8px 16px);color:#000;font-weight:700;padding:.12rem .4rem;border:2px solid #000;letter-spacing:.05em}"
+        ".nc-foot{background:#000040;color:#cdd;border-top:2px solid #000;padding:1rem .75rem;text-align:center;font-family:monospace;font-size:.8rem}"
+        ".nc-foot a{color:#9cf}"
+        ".nc-webring{font-family:monospace;font-size:.8rem;margin:.4rem 0}"
+        ".nc-webring a{color:#ff0;text-decoration:none}"
+        ".nc-webring a:hover{text-decoration:underline}"
+        ".nc-badges{display:flex;flex-wrap:wrap;gap:.4rem;justify-content:center;margin:.6rem 0}"
+        "a.nc-badge{display:inline-flex;align-items:center;justify-content:center;width:88px;height:31px;border:2px outset #bbb;font-family:monospace;font-size:8px;line-height:1.1;text-align:center;text-decoration:none;padding:1px;box-sizing:border-box;overflow:hidden}"
+        "a.nc-badge:hover{border-style:inset}"
+        ".nc-counter{display:inline-flex;align-items:center;gap:.35rem;font-family:monospace;font-size:.78rem;margin:.5rem 0}"
+        ".nc-counter-digits{background:#000;border:2px inset #555;color:#0f0;padding:.12rem .4rem;font-family:monospace;font-weight:700;letter-spacing:.18em}"
+        ".nc-counter-label{color:#9cf}"
+        ".nc-rainbow-hr{height:4px;border:0;background:linear-gradient(90deg,red,orange,#fc0,green,blue,#a0f);margin:1rem auto;width:80%}"
+        ".nc-colophon{color:#88a;font-size:.72rem;margin-top:.4rem;line-height:1.5}"
+        ".err{color:#c00;font-weight:700}"
+        ".ok{color:#070;font-weight:700}"
+        ".gb-list{list-style:none;padding:0;margin:1rem 0}"
+        ".gb-entry{border:2px solid #000;background:#fff;padding:.6rem;margin:.5rem 0;box-shadow:3px 3px 0 #000}"
+        ".gb-name{font-weight:700;color:#000}"
+        ".gb-site{color:#000080;text-decoration:underline;font-size:.85rem}"
+        ".gb-msg{margin-top:.3rem;color:#222;line-height:1.4}"
+        ".gb-form{max-width:30rem}"
+        ".gb-form input,.gb-form textarea{width:100%;font-family:monospace;padding:.3rem;margin:.2rem 0;border:2px solid #000;background:#fff}")))
+  "Raw CSS string for neocities chrome (keyframes, tiled bg, 88x31 badges, counter, guestbook). Injected after layout/style so it wins the cascade.")
+
+(define layout/neocities-style
+  (lambda ()
+    (html/tag "style" "" (layout/neocities-theme)))
+  "style tag rendering raw neocities CSS (html/tag passes body unescaped).")
+
+(define layout/nc-badge
+  (lambda (href bg fg label)
+    (html/tag "a"
+      (html/attrs
+        (list
+          (html/attr "class" "nc-badge")
+          (html/attr "href" href)
+          (html/attr "style" (string-append "background:" bg ";color:" fg))))
+      (html/text label)))
+  "88x31 neocities badge link. bg/fg are CSS colors; label is short caps text.")
+
+(define layout/neocities-marquee-msg
+  (lambda ()
+    (html/tag "span" (html/attr "class" "nc-marquee-msg")
+      (html/text "🚧 UNDER CONSTRUCTION 🚧 welcome to pricklypear 🌵 a lisp machine that lives in postgres · sign the guestbook · best viewed in netscape 4.0 at 800x600 · built in public · ")))
+  "One copy of the marquee scrolling message (track holds two for a seamless -50% loop).")
+
+(define layout/neocities-top
+  (lambda ()
+    (html/div
+      (html/attr "class" "nc-marquee-bar")
+      (html/div
+        (html/attr "class" "nc-marquee-track")
+        (html/join
+          (list
+            (layout/neocities-marquee-msg)
+            (layout/neocities-marquee-msg))))))
+  "Full-width top marquee bar (black bg, yellow scrolling text). Rendered before .layout-page.")
+
+(define layout/neocities-banner
+  (lambda ()
+    (html/div
+      (html/attr "class" "nc-banner")
+      (html/join
+        (list
+          (html/tag "span" (html/attr "class" "nc-construction") (html/text "UNDER CONSTRUCTION"))
+          (html/text " ")
+          (html/tag "span" (html/attr "class" "nc-blink") (html/text "welcome to my homepage!!"))
+          (html/text " — last updated 2026 — ")))))
+  "In-page banner: blinking construction badge + welcome line. First child of .layout-page on every page.")
+
+(define layout/neocities-foot
+  (lambda ()
+    (html/div
+      (html/attr "class" "nc-foot")
+      (html/join
+        (list
+          (html/div (html/attr "class" "nc-webring")
+            (html/join
+              (list
+                (html/text "[ ")
+                (html/tag "a" (html/attr "href" "/welcome") (html/text "prev"))
+                (html/text " | ")
+                (html/tag "a" (html/attr "href" "/background") (html/text "list"))
+                (html/text " | ")
+                (html/tag "a" (html/attr "href" "/roadmap") (html/text "random"))
+                (html/text " | ")
+                (html/tag "a" (html/attr "href" "/code") (html/text "next"))
+                (html/text " ]  the pricklypear webring"))))
+          (html/div (html/attr "class" "nc-badges")
+            (html/join
+              (list
+                (layout/nc-badge "/welcome" "#000080" "#ff0" "BEST VIEWED IN NETSCAPE")
+                (layout/nc-badge "/code" "#000" "#fff" "HAND-CODED LISP")
+                (layout/nc-badge "/book.pdf" "#600" "#fff" "NO JAVASCRIPT")
+                (layout/nc-badge "/code" "#070" "#fff" "POSTGRES POWERED")
+                (layout/nc-badge "/agent.txt" "#036" "#fff" "AGENT READY")
+                (layout/nc-badge "/guestbook" "#609" "#fff" "SIGN GUESTBOOK")
+                (layout/nc-badge "/welcome" "#fc0" "#000" "Y2K READY")
+                (layout/nc-badge "/welcome" "#fff" "#000" "VALID HTML 4.01"))))
+          (html/div (html/attr "class" "nc-counter")
+            (html/join
+              (list
+                (html/tag "span" (html/attr "class" "nc-counter-label") (html/text "you are visitor"))
+                (html/tag "span" (html/attr "class" "nc-counter-digits") (html/text "0000042"))
+                (html/tag "span" (html/attr "class" "nc-counter-label") (html/text "since 2026")))))
+          (html/void "hr" (html/attr "class" "nc-rainbow-hr"))
+          (html/div (html/attr "class" "nc-colophon")
+            (html/text "this site is hand-coded in a lisp machine and rendered by a cactus 🌵 powered by postgres, htmx, and questionable life choices. no javascript was harmed. best viewed at 800x600."))))))
+  "Full-width foot chrome: webring nav, 88x31 badges, visitor counter, rainbow hr, colophon.")
+
 ;; Inject layout CSS once per page body (works with product chrome too).
 (define layout/style
   (lambda ()
@@ -195,7 +329,13 @@
       (html/join
         (list
           (layout/style)
+          (layout/neocities-style)
+          (layout/neocities-top)
           (html/div
             (html/attr "class" "layout-page")
-            (html/join parts))))))
-  "render-html page shell with layout style and joined parts.")
+            (html/join
+              (list
+                (layout/neocities-banner)
+                (html/join parts))))
+          (layout/neocities-foot)))))
+  "render-html page shell: layout CSS + neocities CSS + top marquee, then .layout-page (banner + parts), then neocities foot. Every layout/page page inherits the neocities chrome.")

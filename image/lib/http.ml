@@ -260,11 +260,13 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
                  if path = "/welcome"
                     || path = "/background" || path = "/roadmap"
                     || path = "/signup"
+                    || path = "/guestbook"
                  then begin
                    let title =
                      if path = "/background" then "Background"
                      else if path = "/roadmap" then "Roadmap"
                      else if path = "/signup" then "Signup"
+                     else if path = "/guestbook" then "Guestbook"
                      else "Pricklypear"
                    in
                    let body =
@@ -331,6 +333,10 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
       launch_user_route_or (fun () ->
         Http_code.serve_public_body reqd ~title:"Signup"
           "<p><a href=\"/welcome\">welcome</a> · signup page not seeded yet.</p>")
+  | `GET, "/guestbook" | `POST, "/guestbook" ->
+      launch_user_route_or (fun () ->
+        Http_code.serve_public_body reqd ~title:"Guestbook"
+          "<p><a href=\"/welcome\">welcome</a> · guestbook page not seeded yet.</p>")
   | `GET, "/book" ->
       launch_user_route_or (fun () -> Http_code.fallback_book reqd)
   | `GET, "/book.pdf" ->
