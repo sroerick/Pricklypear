@@ -295,6 +295,10 @@
   (doc "Book chapter — outline-first notes (org/roam/obsidian-shaped); full text inlined from borge/notes.borg")
   (inline borge/notes.borg)
  )
+ (section structural-editing
+  (doc "Book chapter — structural editing as one shared tree-op protocol (outlines + code ASTs); full text inlined from borge/structural-editing.borg")
+  (inline borge/structural-editing.borg)
+ )
  (section calendar
   (doc "Book chapter — month/day calendar; full text inlined from borge/calendar.borg")
   (inline borge/calendar.borg)

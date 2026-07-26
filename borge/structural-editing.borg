@@ -1,0 +1,357 @@
+(project pricklypear-structural-editing
+ (doc "Pricklypear book chapter: structural editing — paredit-shaped tree surgery as one shared protocol over outlines and code ASTs")
+ (status planned)
+ (convention ocaml-dune)
+ (section structural-editing
+  (doc "Structural editing: named tree ops over one shared protocol — outlines and code ASTs are edited as trees, never as paren text")
+  (status planned)
+  (details
+   (doc (|
+        =========================================================
+        PRODUCT INTENT
+        =========================================================
+        Programs are trees. Outlines are trees. Editing either one
+        should be TREE SURGERY with named operations — slurp, barf,
+        wrap, splice, raise — never character editing over a
+        serialized rendering. This chapter defines ONE interaction
+        protocol for structural editing, shared by the notes
+        outline editor (notes.hypermedia-ui) and the function
+        editor's structure view (image.function-editor), and later
+        by any tree-shaped surface.
+
+        The paredit vocabulary (slurp / barf / wrap / splice /
+        raise / split / join / transpose) is the headline, but the
+        chapter is really three rules:
+
+          RULE 1 — You type inside atoms; you never type structure.
+            contenteditable is for LEAVES (titles, bodies, atom
+            text). Structure changes only via named commands.
+            Unbalanced structure is unrepresentable.
+
+          RULE 2 — The server is authoritative for structure.
+            The browser sends (op, target, args); the image applies
+            a PURE function to the tree and returns a re-render
+            plus the new selection. The client never mutates
+            structure in the DOM — no optimistic/predictive
+            structural updates.
+
+          RULE 3 — Selection is part of the op algebra.
+            Every op returns (tree', selection'): where the cursor
+            lands after delete/slurp/wrap is computed by the same
+            pure function that computed the tree, and travels back
+            with the response.
+
+        STORAGE IS UNCHANGED. Outlines stay JSON strings in
+        data_rows; function bodies stay JSONB in function_defs.
+        The unification is the value model (nested lists/atoms)
+        and the op protocol — NOT a storage codec migration.
+        Whole-document write remains the conflict domain.
+
+        =========================================================
+        SUBSECTIONS
+        =========================================================
+        structed-algebra     — pure higher-order op library
+        op-protocol          — the POST contract + selection OOB
+        keymap               — chords now, modal target
+        ast-structure-view   — /edit Text|Structure toggle
+        non-goals            — what this chapter refuses to build
+   |)))
+  (subsection structed-algebra
+   (doc "Pure higher-order tree-surgery library (structed) usable from REPL, routes, and agents")
+   (status planned)
+   (implements libs/structed/lib.pp)
+   (details
+    (doc (|
+         PACKAGE: structed/ (nopales — pure Lisp, no DB, no I/O).
+         Load: (load-library "structed").
+
+         HIGHER-ORDER OVER CHILD ACCESS. One op implementation
+         serves any tree whose domain supplies child accessors:
+
+           (structed/slurp-forward get-kids set-kids tree target)
+
+         The outline backend passes (outline/kids, outline/set-kids);
+         the AST backend passes expr-children accessors. Do NOT
+         duplicate op logic per domain, and do NOT force one node
+         shape across domains.
+
+         OP SET (v1):
+           slurp-forward    target absorbs its next sibling as new last child
+           slurp-backward   target absorbs its prev sibling as new first child
+           barf-forward     target's last child becomes its next sibling
+           barf-backward    target's first child becomes its prev sibling
+           wrap             target becomes sole child of a fresh node
+                            (fresh-node shape is domain-supplied; the
+                            expr domain takes an optional head-atom arg:
+                            (wrap t "f") on x -> (f x), so wrapping
+                            never needs an empty head — see
+                            ast-structure-view)
+           splice           target removed; its children take its place, in order
+           raise            target replaces its parent
+           split            target divides at a position into two adjacent siblings
+           join             target merges with its next sibling
+           transpose        target swaps with an adjacent sibling
+         The existing outline ops promote / demote / move-up /
+         move-down are the outline-domain special cases of this
+         vocabulary and stay where they are.
+
+         TOTALITY: every op is total. Unknown target, missing
+         sibling, root-guard violation, wrong shape -> identity
+         tree and UNCHANGED selection. A structure key must never
+         produce an error page.
+
+         RETURN SHAPE: (list tree' selection'). Selection rules:
+           slurp / barf / wrap / transpose : selection stays on target
+           splice                          : first lifted child, else parent
+           raise                           : stays on target (now at parent's place)
+           delete (domain op)              : next sibling, else prev, else parent
+           add-child / add-sibling         : the new node
+
+         PROPERTIES TO TEST (Lisp-level via load-string + eval; no
+         services, no browser):
+           slurp-forward then barf-forward  = identity on the tree
+           wrap then splice                 = identity on the tree
+           any op on empty / atom / unknown target = identity
+    |)))
+   (verify
+    (smoke "(load-library \"structed\") exposes structed/*")
+    (smoke "slurp+barf and wrap+splice round-trip to identity on a sample tree")
+    (smoke "ops against root/unknown/empty targets return input unchanged")))
+  (subsection op-protocol
+   (doc "One POST contract: (op, target, args) -> re-render + out-of-band selection")
+   (status planned)
+   (implements libs/notes/lib.pp libs/outline/lib.pp)
+   (details
+    (doc (|
+         WIRE: structure edits and leaf edits are the same protocol.
+
+           POST {op, target, field args...}
+           -> 200 HTML: re-rendered tree fragment (outerHTML swap)
+              + out-of-band selection state (hidden element swapped
+              via hx-swap-oob carrying the new selection address).
+
+         The client shell restores highlight + caret after each
+         swap. This extends the notes/outline/apply-op pattern:
+         dispatch by op name to a pure fn; unknown op -> (tree,
+         same selection), still a 200 re-render.
+
+         SURGICAL WIRE, WHOLE-DOC STORAGE. Payloads name a node
+         and small args — never the whole document. The server
+         decodes the whole tree, applies the pure op, encodes,
+         writes the whole document (data_rows field or
+         function_defs body). The DOCUMENT is the conflict domain;
+         no per-node storage in v1.
+
+         ABSTRACT TARGET IDENTITY. Outline surfaces address nodes
+         by stable id (already true). The AST surface addresses
+         nodes by PATH (data-path="0.2.1") until
+         branching.ast-nodes provides stable node ids. Op
+         responses always return the selection's CURRENT address,
+         so path invalidation after reorder is handled by
+         construction. Upgrading identity (paths -> ids) must not
+         change the protocol or the client.
+
+         RESPONSIVENESS WITHOUT PREDICTION. No optimistic DOM. The
+         client shell may ignore structure keys while one op POST
+         is in flight (single-flight), and restores selection +
+         focus from the OOB payload on completion.
+
+         FLUSH RULE. Any structure POST first flushes the focused
+         leaf's pending edit (set-title / set-body / set-atom) —
+         either folded into the same request or as a forced
+         blur-commit — so a tree re-render can never destroy
+         in-progress leaf text. This replaces any narrower
+         "commit on blur" rule.
+
+         UNDO. Whole-tree snapshots per op are the undo model —
+         trees are persistent values, snapshots are cheap. Ring
+         placement (client or server session) is v1 implementation
+         discretion.
+    |)))
+   (verify
+    (smoke "POST outline op returns tree partial + OOB selection element")
+    (smoke "delete selects next sibling; at end of siblings selects parent")
+    (smoke "unknown op name re-renders unchanged tree with 200")))
+  (subsection keymap
+   (doc "Chord-first keyboard map; modal structure/text interaction is the documented target")
+   (status planned)
+   (implements libs/notes/lib.pp)
+   (details
+    (doc (|
+         V1 — MODIFIER CHORDS ONLY. Plain keys always edit text
+         when a caret sits inside a contenteditable leaf; structure
+         never fires on an unmodified key. Required chord set
+         (outline surface; AST surface mirrors):
+
+           Alt+ArrowUp / Alt+ArrowDown   transpose with prev / next sibling
+           Alt+Shift+ArrowLeft / Right   promote / demote
+           Alt+ArrowRight                slurp-forward
+           Alt+ArrowLeft                 barf-forward
+           Alt+Enter                     add sibling
+
+         The full op set stays reachable via toolbar/menu.
+         No structure key fires during IME composition.
+
+         CHORD CONFLICT (known — verify early). Alt+ArrowLeft /
+         Alt+ArrowRight is browser history back/forward on Linux
+         and Windows. The map relies on preventDefault winning
+         when the editor has focus: VERIFY THIS FIRST in the
+         keymap work, in the target browsers, before building
+         more on it. If preventDefault does not hold, slurp/barf
+         move to Alt+Shift+ArrowLeft/Right and promote/demote
+         relocate (e.g. Alt+, / Alt+.) — update the table then.
+         Do not add per-OS keymaps in v1.
+
+         TARGET — MODAL (not v1 acceptance): a structure mode (a
+         whole node is selected; plain keys move selection and
+         operate; Enter enters the title as text) and a text mode
+         (caret in leaf; Esc returns to structure mode). Server and
+         protocol are mode-agnostic — modal is a pure client
+         evolution. Client code MUST keep a distinct keymap layer
+         (a data-driven chord table, not scattered hardcoded
+         checks) so the modal map can replace the chord map without
+         touching op dispatch.
+
+         ONE CLIENT SHELL. Selection state, postOp, blur-commit,
+         restore-after-swap, and the keymap layer are ONE script
+         pattern shared by the outline editor and the AST
+         structure view — generalized from the notes outline
+         script, not forked per surface.
+    |)))
+   (verify
+    (smoke "Alt+ArrowRight on a selected node slurps its next sibling")
+    (smoke "Alt+ArrowLeft/Right never trigger browser history navigation while the editor is focused")
+    (smoke "plain keys with caret inside a leaf edit text only")
+    (smoke "structure op in flight: second chord ignored; selection restored after swap")))
+  (subsection ast-structure-view
+   (doc "Function editor gains a Text | Structure toggle over the same function_defs row")
+   (status planned)
+   (implements image/lib/http_pages.ml image/lib/session.ml)
+   (details
+    (doc (|
+         /edit/<name> gains a view toggle: Text (existing textarea,
+         parse whole body on save) | Structure (AST rendered as
+         addressable nested HTML — the outline/html-node ADDRESSING
+         pattern (data-path on every node) applied to exprs, NOT
+         the outline's row layout). Lists are structural
+         containers; atoms are contenteditable leaves.
+
+         LAYOUT IS A PRETTY-PRINT, NOT AN OUTLINE. The structure
+         view must NOT render one node per line — that would make
+         (+ 1 2) taller than it is wide and code unreadable. The
+         renderer is a pretty-printer over the AST:
+           - atoms, and lists that fit within a width budget,
+             render INLINE on one line: (+ 1 2), (dict-get u "name")
+           - a list breaks vertical only when over budget, or by
+             form-aware convention (define / lambda / let / cond
+             bodies one form per line; operator applications stay
+             horizontal while they fit)
+           - vertical children indent by depth; all whitespace is
+             derived, never stored — the AST carries no layout bytes
+         Selection and data-path addressing are layout-independent:
+         a node keeps the same path whether its children flow
+         horizontally or vertically, and structural ops behave
+         identically either way. Layout direction is a per-domain
+         RENDER decision — outlines render one node per row because
+         that IS the outline reading experience; code renders as a
+         pretty-print. The shared op protocol does not care.
+
+         BUILD ORDER (layout):
+           1. VERTICAL RENDERER FIRST: every list breaks vertical,
+              one node per line — the degenerate pretty-printer
+              (width budget zero). Easiest correct render, and it
+              exercises the hard parts (data-path addressing,
+              selection restore, ops, atom edits, re-render) before
+              any layout engineering. NOT a throwaway: because
+              addressing and ops are layout-independent, stage 2
+              changes only the renderer.
+           2. INLINE PACKING: introduce the width budget and
+              form-aware conventions; short forms collapse onto one
+              line. Pure renderer change — protocol, ops, paths,
+              and the client shell are untouched.
+
+         BACKEND: the same structed algebra with expr accessors.
+         The AST is an expr tree (App / Lambda / Let / If / Quote
+         ...), NOT a tree of VLists: child access is defined PER
+         CONSTRUCTOR as the subexpressions in reader/surface
+         order (App -> head then args; Lambda -> params then
+         body; If -> test, then-branch, else-branch). Quoted
+         literals are OPAQUE LEAVES in v1 — no descending into
+         quoted data. The exact per-constructor child table is
+         implementation discretion within that constraint.
+         Domain differences: wrap takes an optional head-atom —
+         (wrap t "f") on x -> (f x); with no arg it wraps in a
+         fresh one-element list. split/join operate on list
+         element runs; there is no promote/demote — raise/splice
+         cover that space.
+
+         ATOM EDITS ARE TRANSACTIONAL AND TYPE-AWARE. The
+         renderer tags each leaf with its atom type. Blur sends
+         set-atom {path, text}; the server validates PER TYPE:
+           - string leaves: text is accepted RAW — spaces and
+             parens are data, not syntax
+           - symbol / number / bool leaves: text must read-string
+             as exactly one atom of a compatible shape, else the
+             old value is kept and the tree re-renders unchanged
+           - converting a leaf's TYPE (symbol -> string, number
+             -> symbol) is an explicit op, never a side effect
+             of editing text
+         Because invalid text never enters the AST, HOLES are not
+         needed in v1; a hole node type is a possible later
+         extension, deliberately out of scope here.
+
+         SAVE IS UNCHANGED: whole function body, JSONB, via the
+         existing value<->JSON codec and the function_defs row.
+         The structure view is a second editor over the same
+         storage — not a new persistence path.
+
+         AI AUTHORING: op + path + args with whole-body write is
+         the surgical patch surface ai-authoring asks for, ahead
+         of branching.ast-nodes. When ast-nodes lands, paths
+         upgrade to stable ids behind the same protocol (see
+         op-protocol abstract identity).
+    |)))
+   (verify
+    (smoke "GET /edit/<fn> structure view renders nested tree with data-path leaves")
+    (smoke "layout stage 2: a short form like (+ 1 2) renders on ONE line, not one node per line")
+    (smoke "layout stage 2: define/lambda body breaks vertical by convention; selection paths stable across both layouts")
+    (smoke "set-atom with unparseable text keeps old value and re-renders")
+    (smoke "set-atom on a string leaf accepts raw text containing spaces and parens")
+    (smoke "slurp via POST re-renders; saved body reflects the change on reload")))
+  (subsection non-goals
+   (doc "What this chapter deliberately does not build")
+   (status planned)
+   (details
+    (doc (|
+         - NO paredit-over-text: no paren surgery inside a textarea
+           or CodeMirror buffer. The tree is the editor; text
+           buffers remain for the Text view and /code browsing.
+         - NO one-node-per-line as the FINAL code layout: vertical
+           rendering is build stage 1 (degenerate pretty-printer),
+           not the accepted end state — the end state is inline
+           flow with width/convention breaks (ast-structure-view).
+         - NO optimistic structural DOM mutation (op-protocol).
+         - NO storage codec migration: outlines stay JSON strings
+           in data_rows; code ASTs stay JSONB in function_defs. A
+           canonical sexp writer prim (write-string) for
+           agent-facing output may be added independently under
+           lisp-interpreter.primitives; this chapter does not
+           depend on it.
+         - NO per-node storage and NO multi-user concurrent node
+           editing: the document is the conflict domain.
+         - Modal keymap is the documented target, not v1
+           acceptance (keymap).
+         - Hole AST nodes (ast-structure-view).
+         - SINGLE-NODE SELECTION ONLY in v1: no ranges, no
+           multi-select, no region ops.
+         - KILL / YANK (subtree cut-copy-paste, ideally as sexp
+           text on the system clipboard) is deferred, not ruled
+           out — it is how larger code moves will work later.
+         - STALE WRITES: whole-document save makes two tabs on
+           one document last-write-wins in v1. This inherits
+           image.function-editor's deferred optimistic-
+           concurrency / stale-body-reject item; resolve both
+           together.
+    |))))
+ )
+)
