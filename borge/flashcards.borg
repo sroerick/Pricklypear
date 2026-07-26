@@ -110,7 +110,11 @@
 
         New cards: due empty or due <= today, reps=0 → introduce in study.
         Suspended cards never enter the queue.
-        Order: due ASC, then created/id; limit batch (default 20) per study page.
+        Order: due ASC, then session-freshness (last_reviewed < today or
+        blank, before last_reviewed == today), then created/id; so a card
+        rated Again — due today, last_reviewed today — sinks to the bottom of
+        the current stack and is not re-shown until the rest of the due
+        batch is cleared. Limit batch (default 20) per study page.
 
         The core scheduling is delegated to the kernel prim
         (fsrs-schedule stability difficulty elapsed rating) which returns
