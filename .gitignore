@@ -56,6 +56,9 @@ supervisor/
 # generated public release artifacts
 public-artifacts/
 
+# habitat Lisp vault dumps (pp-sync snapshot --out backups/…)
+backups/
+
 # local-only ops notes (not shipped / not public)
 docs/openbsd-prod-branch-deploy.md
 

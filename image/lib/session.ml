@@ -279,7 +279,14 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
     | Ok () ->
         Hashtbl.replace t.routes route_path (handler, visibility);
         let* _ =
-          if pass_vis_to_store then
+          if t.seed_additive then
+            if pass_vis_to_store then
+              Store.register_route_if_absent t.store ~route:route_path
+                ~handler ~visibility ()
+            else
+              Store.register_route_if_absent t.store ~route:route_path
+                ~handler ()
+          else if pass_vis_to_store then
             Store.register_route t.store ~route:route_path ~handler
               ~visibility ()
           else
@@ -1811,11 +1818,17 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value Lwt.t =
        dispatches through Eval.apply via the prim_table.
        H1: [eval_string_auto] honors PP_EVAL_CONTROL=lwt|eff (default lwt). *)
     let* v = eval_string_rim t input in
+    let persist_fn name body_expr doc =
+      if t.seed_additive then
+        Store.persist_function_if_absent t.store name body_expr ~doc
+          t.manifest.username
+      else
+        Store.persist_function t.store name body_expr ~doc
+          t.manifest.username
+    in
     let persist_define name body_expr doc =
       if t.manifest.username <> "anonymous" then
-        Lwt.async (fun () ->
-          Store.persist_function t.store name body_expr ~doc
-            t.manifest.username);
+        Lwt.async (fun () -> persist_fn name body_expr doc);
       let* () =
         if not t.suppress_refresh_on_define
            && (name = "ui/nav" || name = "ui/home" || name = "ui/css"
@@ -1842,8 +1855,7 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value Lwt.t =
                (Pricklypear_lisp.Ast.Var "__macro__",
                 [ params_expr; body_expr ])
            in
-           Lwt.async (fun () ->
-             Store.persist_function t.store name stored t.manifest.username)
+           Lwt.async (fun () -> persist_fn name stored None)
          end;
          Lwt.return v
      | _ -> Lwt.return v))
@@ -1861,11 +1873,17 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
     : Pricklypear_lisp.Ast.value Lwt.t =
   (* Like eval_one but takes AST — avoids pp_expr string round-trip. *)
   let* v = eval_expr_rim t expr in
+  let persist_fn name body_expr doc =
+    if t.seed_additive then
+      Store.persist_function_if_absent t.store name body_expr ~doc
+        t.manifest.username
+    else
+      Store.persist_function t.store name body_expr ~doc
+        t.manifest.username
+  in
   let persist_define name body_expr doc =
     if t.manifest.username <> "anonymous" then
-      Lwt.async (fun () ->
-        Store.persist_function t.store name body_expr ~doc
-          t.manifest.username);
+      Lwt.async (fun () -> persist_fn name body_expr doc);
     let* () =
       if not t.suppress_refresh_on_define
          && (name = "ui/nav" || name = "ui/home" || name = "ui/css"
@@ -1890,8 +1908,7 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
              (Pricklypear_lisp.Ast.Var "__macro__",
               [ params_expr; body_expr ])
          in
-         Lwt.async (fun () ->
-           Store.persist_function t.store name stored t.manifest.username)
+         Lwt.async (fun () -> persist_fn name stored None)
        end;
        Lwt.return v
    | _ -> Lwt.return v))
@@ -1901,6 +1918,38 @@ and load_string (t : t) (src : string) : (string, string) result Lwt.t =
 
 and load_library (t : t) (name : string) : (string, string) result Lwt.t =
   Loader.load_library ~eval_form:(eval_form t) name
+
+(** branching.seed-policy: admin-only upsert of libs/<pkg>/lib.pp onto
+    system/main (full clobber for names in that file). Does not touch
+    personal/dev rows. seed_additive stays false so persist upserts. *)
+and reseed_package (t : t) (pkg : string) : (string, string) result Lwt.t =
+  let pkg = String.trim pkg in
+  if pkg = "" then Lwt.return (Error "empty package name")
+  else if (not t.is_admin)
+          && t.manifest.username <> "admin"
+          && t.manifest.username <> "system" then
+    Lwt.return (Error "requires admin")
+  else begin
+    t.seed_additive <- false;
+    t.suppress_refresh_on_define <- true;
+    let finally () =
+      t.suppress_refresh_on_define <- false;
+      t.seed_additive <- false;
+      Lwt.return_unit
+    in
+    Lwt.finalize
+      (fun () ->
+        Store.with_branch t.store ~branch_id:Store.system_main_id (fun () ->
+          let* r = load_library t pkg in
+          let* () = rehydrate t in
+          let* () = refresh_ui_shell t in
+          match r with
+          | Ok msg ->
+              Lwt.return
+                (Ok (Printf.sprintf "reseeded %s → system/main: %s" pkg msg))
+          | Error e -> Lwt.return (Error e)))
+      finally
+  end
 
 and refresh_ui_shell (t : t) : unit Lwt.t =
   (* Product shell: nav HTML + theme CSS (image.product-theme).
@@ -2073,8 +2122,12 @@ and seed_stdlib (t : t) : unit Lwt.t =
      personal branch. Personal inherits main via the recursive CTE; user
      (define)s write overrides on personal and survive reseed/deploy.
 
-     Canonical source is libs/*.pp in git. Explicit (load-library ...) on
-     the current branch still overwrites that branch (intentional).
+     branching.seed-policy OPTION A: boot seed is ADDITIVE —
+     persist_function_if_absent / register_route_if_absent via
+     t.seed_additive. Existing system/main rows (e.g. from promote)
+     are not clobbered on deploy/restart. Explicit (reseed-package)
+     upserts from libs when an admin asks. Interactive load-library
+     still upserts the CURRENT branch.
 
      suppress_refresh_on_define: the eval_one define-interceptor would
      otherwise fire refresh_ui_shell when ui/nav is defined mid-seed
@@ -2083,8 +2136,10 @@ and seed_stdlib (t : t) : unit Lwt.t =
      refresh_ui_shell AFTER all packages are loaded. *)
   Store.with_branch t.store ~branch_id:Store.system_main_id (fun () ->
     t.suppress_refresh_on_define <- true;
+    t.seed_additive <- true;
     let finally () =
       t.suppress_refresh_on_define <- false;
+      t.seed_additive <- false;
       Lwt.return_unit
     in
     Lwt.finalize
@@ -2195,6 +2250,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
       ui_css_refreshed_at = 0.0;
       ui_css_retry_at = 0.0;
       suppress_refresh_on_define = false;
+      seed_additive = false;
       current_request = None;
       agent_branch_lock = false;
       is_admin = (manifest.username = "admin");
@@ -2260,6 +2316,19 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
       | _ ->
           Lwt.return
             (Pricklypear_lisp.Ast.VStr "load-library: need 1 string"));
+  (* (reseed-package pkg) — admin-only upsert libs/<pkg> onto system/main. *)
+  Primitives.register prim_table "reseed-package"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr pkg ] ->
+          let* r = reseed_package !t pkg in
+          (match r with
+           | Ok msg -> Lwt.return (Pricklypear_lisp.Ast.VStr msg)
+           | Error e ->
+               Lwt.return (Pricklypear_lisp.Ast.VStr ("reseed-package: " ^ e)))
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr "reseed-package: need package-str"));
   let final_prims = prim_table in
   let kernel_catalog = Primitives.catalog prim_table in
   (* Mutate the prims field in place (rather than building a fresh
@@ -2277,6 +2346,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
   (* Bind load prims into env (registered after the bulk VPrim bind). *)
   Pricklypear_lisp.Env.define env "load-string" (Pricklypear_lisp.Ast.VPrim "load-string");
   Pricklypear_lisp.Env.define env "load-library" (Pricklypear_lisp.Ast.VPrim "load-library");
+  Pricklypear_lisp.Env.define env "reseed-package" (Pricklypear_lisp.Ast.VPrim "reseed-package");
   let session : t = !t in
   (* Boot order (personal-branch safety):
        1. ensure username/personal exists (empty child of system/main)

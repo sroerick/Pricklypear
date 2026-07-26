@@ -4,6 +4,8 @@
       pp-sync pull <pkg>
       pp-sync push <pkg>
       pp-sync pull-all
+      pp-sync reseed <pkg>          admin: upsert libs → system/main
+      pp-sync snapshot [--branch R] [--out DIR]
 *)
 
 open Cmdliner
@@ -44,9 +46,18 @@ let read_file path =
     ~finally:(fun () -> close_in_noerr ic)
     (fun () -> really_input_string ic (in_channel_length ic))
 
+let rec mkdir_p path =
+  if path = "" || path = "." || path = "/" then ()
+  else if Sys.file_exists path then ()
+  else begin
+    mkdir_p (Filename.dirname path);
+    try Unix.mkdir path 0o755
+    with Unix.Unix_error (Unix.EEXIST, _, _) -> ()
+  end
+
 let write_file path text =
   let dir = Filename.dirname path in
-  (try Unix.mkdir dir 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
+  mkdir_p dir;
   let oc = open_out_bin path in
   Fun.protect
     ~finally:(fun () -> close_out_noerr oc)
@@ -54,6 +65,19 @@ let write_file path text =
       output_string oc text;
       if text = "" || text.[String.length text - 1] <> '\n' then
         output_char oc '\n')
+
+let sanitize_ref ref_ =
+  let buf = Buffer.create (String.length ref_) in
+  String.iter
+    (fun c ->
+      match c with
+      | 'a' .. 'z' | 'A' .. 'Z' | '0' .. '9' | '-' | '_' | '.' ->
+          Buffer.add_char buf c
+      | '/' | ' ' -> Buffer.add_char buf '-'
+      | _ -> Buffer.add_char buf '_')
+    ref_;
+  let s = Buffer.contents buf in
+  if s = "" then "branch" else s
 
 let parse_local_defines text =
   let strip_comments s =
@@ -249,6 +273,103 @@ let cmd_pull_all ~url ~user ~password ~timeout =
       if code <> 0 then code else rc)
     0 pkgs
 
+let cmd_reseed ~url ~user ~password ~timeout package =
+  if package = "" then begin
+    prerr_endline "reseed: need package name";
+    2
+  end else
+    match
+      live ~url ~user ~password ~timeout
+        (Printf.sprintf "(reseed-package %S)" package)
+      |> live_value
+    with
+    | Error e ->
+        prerr_endline e;
+        1
+    | Ok msg ->
+        print_endline msg;
+        0
+
+let pkg_path_under root pkg =
+  if pkg = "" || pkg = "(root)" || pkg = "root" then
+    Filename.concat (Filename.concat root "_root") "lib.pp"
+  else Filename.concat (Filename.concat root pkg) "lib.pp"
+
+let cmd_snapshot ~url ~user ~password ~timeout ~branch ~out_dir =
+  let prev_branch =
+    match live ~url ~user ~password ~timeout "(current-branch)" |> live_value with
+    | Ok s -> String.trim s
+    | Error _ -> ""
+  in
+  let target =
+    if branch <> "" then branch
+    else if prev_branch <> "" then prev_branch
+    else "system/main"
+  in
+  let out_root =
+    if out_dir <> "" then
+      if Filename.is_relative out_dir then
+        Filename.concat (repo_root ()) out_dir
+      else out_dir
+    else if target = "system/main" || target = "main" then libs_dir ()
+    else
+      Filename.concat
+        (Filename.concat (repo_root ()) "backups")
+        (sanitize_ref target)
+  in
+  (* Optional checkout to target branch for export visibility. *)
+  let checkout_rc =
+    if target = prev_branch || target = "" then 0
+    else
+      match
+        live ~url ~user ~password ~timeout
+          (Printf.sprintf "(checkout %S)" target)
+        |> live_value
+      with
+      | Error e ->
+          prerr_endline ("snapshot checkout: " ^ e);
+          1
+      | Ok msg ->
+          if String.trim msg = "checked out" then 0
+          else begin
+            prerr_endline ("snapshot checkout: " ^ msg);
+            1
+          end
+  in
+  if checkout_rc <> 0 then checkout_rc
+  else begin
+    Printf.printf "snapshot branch=%s → %s\n%!" target out_root;
+    let pkgs = discover_packages ~url ~user ~password ~timeout in
+    let rc =
+      List.fold_left
+        (fun rc pkg ->
+          match
+            live ~url ~user ~password ~timeout
+              (Printf.sprintf "(export-package %S)" pkg)
+            |> live_value
+          with
+          | Error e ->
+              Printf.eprintf "%s: %s\n%!" pkg e;
+              if rc <> 0 then rc else 1
+          | Ok text ->
+              if String.trim text = "" then rc
+              else begin
+                let path = pkg_path_under out_root pkg in
+                write_file path text;
+                Printf.printf "  wrote %s (%d bytes)\n%!" path
+                  (String.length text);
+                rc
+              end)
+        0 pkgs
+    in
+    (* Restore previous branch when we switched. *)
+    (if prev_branch <> "" && prev_branch <> target then
+       ignore
+         (live ~url ~user ~password ~timeout
+            (Printf.sprintf "(checkout %S)" prev_branch)));
+    rc
+  end
+
 let env_url =
   Pp_client.getenv_default "PP_URL" "http://127.0.0.1:18080"
 
@@ -259,7 +380,8 @@ let env_timeout =
   | Some s -> (try float_of_string s with _ -> 180.)
   | None -> 180.
 
-let main command package verbose url user password password_file timeout =
+let main command package verbose url user password password_file timeout branch
+    out_dir =
   let password =
     Pp_client.resolve_password ~password ~password_file
   in
@@ -273,12 +395,16 @@ let main command package verbose url user password password_file timeout =
     | "pull" -> cmd_pull ~url ~user ~password ~timeout package
     | "push" -> cmd_push ~url ~user ~password ~timeout package
     | "pull-all" -> cmd_pull_all ~url ~user ~password ~timeout
+    | "reseed" -> cmd_reseed ~url ~user ~password ~timeout package
+    | "snapshot" ->
+        cmd_snapshot ~url ~user ~password ~timeout ~branch ~out_dir
     | _ ->
-        prerr_endline "unknown command";
+        prerr_endline
+          "unknown command (status|pull|push|pull-all|reseed|snapshot)";
         2
 
 let command =
-  let doc = "status | pull | push | pull-all" in
+  let doc = "status | pull | push | pull-all | reseed | snapshot" in
   Arg.(
     required
     & pos 0 (some string) None
@@ -306,13 +432,25 @@ let password_file =
 let timeout =
   Arg.(value & opt float env_timeout & info [ "timeout" ] ~docv:"SEC" ~doc:"Timeout seconds.")
 
+let branch =
+  let doc = "Branch ref for snapshot (default: current; e.g. system/main)." in
+  Arg.(value & opt string "" & info [ "branch"; "b" ] ~docv:"REF" ~doc)
+
+let out_dir =
+  let doc =
+    "Output dir for snapshot (default: libs/ for system/main, else backups/<ref>/)."
+  in
+  Arg.(value & opt string "" & info [ "out"; "o" ] ~docv:"DIR" ~doc)
+
 let term =
   Term.(
     const main $ command $ package $ verbose $ url $ user $ password
-    $ password_file $ timeout)
+    $ password_file $ timeout $ branch $ out_dir)
 
 let cmd =
-  let doc = "Sync libs/*.pp with live Pricklypear image (no Python)." in
+  let doc =
+    "Sync / snapshot / reseed Pricklypear packages (live image ↔ repo vault)."
+  in
   Cmd.v (Cmd.info "pp-sync" ~doc) term
 
 let () = exit (Cmd.eval' cmd)

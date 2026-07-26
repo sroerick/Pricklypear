@@ -71,6 +71,10 @@ type t = {
       trigger an eager refresh that fails with unbound: notes/capture/nav.
       The boot sequence calls refresh_ui_shell once AFTER seeding completes. *)
   mutable suppress_refresh_on_define : bool;
+  (** branching.seed-policy: when true, define/route persist is
+      insert-if-absent (boot seed into system/main). Interactive
+      load-library / define keep upsert (false). *)
+  mutable seed_additive : bool;
   (** Active HTTP request for user-route dispatch; None in REPL. *)
   mutable current_request : request option;
   (** When true, (checkout)/(fork)/(merge) are blocked so the agent
