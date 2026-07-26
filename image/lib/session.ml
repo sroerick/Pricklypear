@@ -465,7 +465,14 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
      so public route handlers can create data_rows / notes captures.
      Elevates anonymous only (logged-in sessions already write). Restores
      identity afterward. Prefer for narrow public forms (signup), not general
-     unauth APIs. *)
+     unauth APIs.
+
+     Elevates BOTH the live session manifest AND the per-request context
+     manifest. CRUD prims (create/deftype) read their anon guard from
+     Request_context.manifest (the gate-time snapshot, per BORGE-1784434193
+     cotenant fix); without elevating the snapshot, the guard sees the stale
+     "anonymous" and silently denies (create returns a VStr, seq discards it,
+     the handler renders its thanks page with no row written). *)
   Primitives.register tbl "with-public-write"
     (fun args ->
       match args with
@@ -475,8 +482,25 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
           if need_elevate then
             t.manifest <-
               { prev with user_id = "public"; username = "public" };
+          let run_body =
+            match Lwt.get Request_context.current with
+            | Some ctx when need_elevate ->
+                let elevated_manifest =
+                  { (Request_context.manifest ctx) with
+                    user_id = "public"; username = "public" }
+                in
+                let elevated_ctx =
+                  Request_context.make
+                    ~manifest:elevated_manifest
+                    ~env:(Request_context.env ctx)
+                    ~routes:(Request_context.routes ctx)
+                in
+                Lwt.with_value Request_context.current (Some elevated_ctx)
+                  (fun () -> apply_lambda_auto lam)
+            | _ -> apply_lambda_auto lam
+          in
           Lwt.finalize
-            (fun () -> apply_lambda_auto lam)
+            (fun () -> run_body)
             (fun () ->
               if need_elevate then t.manifest <- prev;
               Lwt.return_unit)
