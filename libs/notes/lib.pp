@@ -928,6 +928,18 @@
         "if(showArch)p+='&show=archived';"
         "p+='&'+t.dataset.field+'='+encodeURIComponent(t.innerText);"
         "fetch('/partials/notes-node-op',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:p});},true);}"
+        "document.addEventListener('keydown',function(e){"
+        "if(!e.altKey)return;"
+        "var k=e.key;var op=null;"
+        "if(e.shiftKey&&k==='ArrowLeft')op='promote';"
+        "else if(e.shiftKey&&k==='ArrowRight')op='demote';"
+        "else if(k==='ArrowUp')op='move-up';"
+        "else if(k==='ArrowDown')op='move-down';"
+        "else if(k==='Enter')op='add-sibling';"
+        "else if(k==='ArrowRight')op='slurp-forward';"
+        "else if(k==='ArrowLeft')op='barf-forward';"
+        "if(op){e.preventDefault();postOp(op);}"
+        "},true);"
         "setSel('root');document.body.addEventListener('htmx:afterSwap',function(){setSel(selId());});})();")))
   "Client script for outline selection/actions.")
 
@@ -1441,6 +1453,14 @@
            tree
            (outline/update tree nid
              (lambda (n) (outline/unarchive n)))))
+      ((string-eq op "slurp-forward")
+       (if (string-eq (as-str nid) "root")
+           tree
+           (car (structed/slurp-forward outline/kids outline/set-kids tree nid))))
+      ((string-eq op "barf-forward")
+       (if (string-eq (as-str nid) "root")
+           tree
+           (car (structed/barf-forward outline/kids outline/set-kids tree nid))))
       (else tree)))
   "Apply named outline op to note tree and save.")
 
