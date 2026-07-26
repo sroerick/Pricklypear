@@ -813,5 +813,6 @@
   (lambda ()
     (html/page
       (list
-        (weather/widget))))
-  "Authenticated home page body (weather widget).")
+        (weather/widget)
+        (astro/widget))))
+  "Authenticated home page body (weather + sun/moon widgets).")
