@@ -87,18 +87,20 @@
 
 (define astro/days-since-epoch
   (lambda (d)
-    (- (abs (date-diff-days d astro/new-moon-epoch)) astro/epoch-frac))
-  "Days from the 2000-01-06 new moon (midnights + 18:14 correction). Dates before 2000-01-06 are not supported.")
+    (- (date-diff-days astro/new-moon-epoch d) astro/epoch-frac))
+  "Days from the 2000-01-06 new moon to date d (midnights + 18:14 correction). Negative before the epoch; works for any historical date.")
 
 (define astro/phase-fraction
   (lambda (d)
-    (mod (div (astro/days-since-epoch d) astro/synodic-month) 1.0))
-  "Cycle phase 0..1 (0 = new, 0.25 = first quarter, 0.5 = full, 0.75 = last quarter).")
+    (let ((p (mod (div (astro/days-since-epoch d) astro/synodic-month) 1.0)))
+      (if (< p 0) (+ p 1.0) p)))
+  "Cycle phase 0..1 (0 = new, 0.25 = first quarter, 0.5 = full, 0.75 = last quarter). Handles negative mod for pre-epoch dates.")
 
 (define astro/phase-age
   (lambda (d)
-    (mod (astro/days-since-epoch d) astro/synodic-month))
-  "Age within the current cycle, 0..29.53 days.")
+    (let ((a (mod (astro/days-since-epoch d) astro/synodic-month)))
+      (if (< a 0) (+ a astro/synodic-month) a)))
+  "Age within the current cycle, 0..29.53 days (positive for pre-epoch dates).")
 
 (define astro/sin-0-pi
   (lambda (theta)
@@ -205,8 +207,29 @@
           ".astro-card .astro-form button{width:auto;min-width:4.5rem}"
           ".astro-card .astro-loc{font-weight:700;margin:.25rem 0}"
           ".astro-card .astro-err{color:#800000;font-weight:700}"
-          ".astro-card .astro-updated{font-size:.8rem;color:#555;margin-top:.35rem}"))))
+          ".astro-card .astro-updated{font-size:.8rem;color:#555;margin-top:.35rem}"
+          ".astro-card .astro-historical{margin-top:1.5rem;padding-top:1rem;border-top:1px solid #eee}"
+          ".astro-card .astro-historical h3{margin:.25rem 0}"
+          ".astro-card .astro-hist-card{display:flex;gap:1.5rem;flex-wrap:wrap;align-items:center;margin-top:.5rem}"
+          ".astro-card .astro-hist-date{font-weight:700;font-size:1.1rem}"
+          ".astro-card .astro-hist-sun .lbl{color:#666;display:inline-block;min-width:4.5rem}"
+          ".astro-card .astro-hist-sun div{margin:.15rem 0}"
+          ".astro-card .astro-form input[type=date]{flex:0 0 auto}"
+          ".astro-card .astro-hist-moon .astro-glyph{font-size:2.5rem}"))))
   "Inline CSS for the astro card.")
+
+(define astro/moon-card-html
+  (lambda (d)
+    (html/div (html/attr "class" "astro-moon-big")
+      (html/join
+        (list
+          (html/span (html/attr "class" "astro-glyph") (astro/phase-glyph d))
+          (html/div (html/attr "class" "astro-mname") (astro/phase-name d))
+          (html/div (html/attr "class" "astro-illum")
+            (string-append (as-str (astro/illum-percent d)) "% illuminated"))
+          (html/div (html/attr "class" "astro-age")
+            (string-append "Age " (as-str (round (astro/phase-age d))) " days"))))))
+  "Reusable moon card (big glyph + name + illum% + age) for any date. Used by today card, historical lookup, and /astro/moon-for.")
 
 (define astro/today-card-html
   (lambda ()
@@ -214,15 +237,7 @@
       (html/div (html/attr "class" "astro-today")
         (html/join
           (list
-            (html/div (html/attr "class" "astro-moon-big")
-              (html/join
-                (list
-                  (html/span (html/attr "class" "astro-glyph") (astro/phase-glyph d))
-                  (html/div (html/attr "class" "astro-mname") (astro/phase-name d))
-                  (html/div (html/attr "class" "astro-illum")
-                    (string-append (as-str (astro/illum-percent d)) "% illuminated"))
-                  (html/div (html/attr "class" "astro-age")
-                    (string-append "Age " (as-str (round (astro/phase-age d))) " days")))))
+            (astro/moon-card-html d)
             (html/div (html/attr "class" "astro-sun-today")
               (html/join
                 (list
@@ -336,6 +351,81 @@
         "})();")))
   "Client JS: Open-Meteo daily sunrise/sunset/daylight fetch + geocode + localStorage.")
 
+(define astro/historical-panel-html
+  (lambda ()
+    (html/div (html/attr "class" "astro-historical")
+      (html/join
+        (list
+          (html/h3 "Look up a date")
+          (html/p* (html/attr "class" "muted")
+            "Enter any past date to see its sunrise/sunset (Open-Meteo Archive) and moon phase (computed on the image). Uses the location set above.")
+          (html/tag "form"
+            (html/attrs
+              (list
+                (html/attr "id" "astro-hist-form")
+                (html/attr "class" "astro-form")
+                (html/attr "action" "#")
+                (html/attr "method" "get")))
+            (html/join
+              (list
+                (html/input
+                  (html/attrs
+                    (list
+                      (html/attr "type" "date")
+                      (html/attr "id" "astro-hist-date")
+                      (html/attr "name" "date")
+                      (html/attr "value" (date-today)))))
+                (html/button (html/attr "type" "submit") "Look up"))))
+          (html/div (html/attr "id" "astro-hist-result") "")))))
+  "Historical date lookup panel: date input + Look up button + result container. Placed on the /astro page (not the home widget).")
+
+(define astro/historical-script
+  (lambda ()
+    (html/tag "script" ""
+      (string-append
+        "(function(){"
+        "var root=document.getElementById('astro-widget');"
+        "if(!root)return;"
+        "var form=document.getElementById('astro-hist-form');"
+        "var dateEl=document.getElementById('astro-hist-date');"
+        "var result=document.getElementById('astro-hist-result');"
+        "var errEl=document.getElementById('astro-err');"
+        "var KEY='pp.astro.loc';"
+        "var defLoc={lat:" (as-str astro/default-lat) ",lon:" (as-str astro/default-lon) "};"
+        "function loadLoc(){try{var s=localStorage.getItem(KEY);if(s)return JSON.parse(s);}catch(e){}return defLoc;}"
+        "function fmtTime(iso){if(!iso)return '-';var t=String(iso).split('T')[1]||'';return t.slice(0,5);}"
+        "function fmtDur(sec){if(sec==null)return '-';sec=Math.round(sec);var h=Math.floor(sec/3600),m=Math.floor((sec%3600)/60);return h+'h '+m+'m';}"
+        "function fail(msg){if(errEl)errEl.textContent=msg;result.innerHTML='';}"
+        "function lookup(date,loc){"
+        "result.innerHTML='<p class=\"muted\">Loading...</p>';"
+        "if(errEl)errEl.textContent='';"
+        "var sunUrl='https://archive-api.open-meteo.com/v1/archive?latitude='+encodeURIComponent(loc.lat)"
+        "+'&longitude='+encodeURIComponent(loc.lon)"
+        "+'&start_date='+encodeURIComponent(date)+'&end_date='+encodeURIComponent(date)"
+        "+'&daily=sunrise,sunset,daylight_duration&timezone=auto';"
+        "var moonUrl='/partials/astro/moon-for?date='+encodeURIComponent(date);"
+        "Promise.all([fetch(sunUrl).then(function(r){if(!r.ok)throw new Error('Archive HTTP '+r.status);return r.json();}),fetch(moonUrl).then(function(r){if(!r.ok)throw new Error('Moon HTTP '+r.status);return r.text();})])"
+        ".then(function(res){var j=res[0];var moonHtml=res[1];"
+        "var d=(j.daily||{});var sr=(d.sunrise||[])[0];var ss=(d.sunset||[])[0];var dl=(d.daylight_duration||[])[0];"
+        "result.innerHTML="
+        "'<div class=\"astro-hist-card\">'"
+        "+'<div class=\"astro-hist-date\">'+date+'</div>'"
+        "+'<div class=\"astro-hist-sun\">'"
+        "+'<div><span class=\"lbl\">Sunrise </span><strong>'+(fmtTime(sr)||'-')+'</strong></div>'"
+        "+'<div><span class=\"lbl\">Sunset </span><strong>'+(fmtTime(ss)||'-')+'</strong></div>'"
+        "+'<div><span class=\"lbl\">Daylight </span><strong>'+fmtDur(dl)+'</strong></div>'"
+        "+'</div>'"
+        "+'<div class=\"astro-hist-moon\">'+moonHtml+'</div>'"
+        "+'</div>';"
+        "})"
+        ".catch(function(e){fail('Lookup failed: '+(e&&e.message?e.message:e));});"
+        "}"
+        "if(form){form.addEventListener('submit',function(e){"
+        "e.preventDefault();var q=(dateEl&&dateEl.value||'').trim();if(!q)return;lookup(q,loadLoc());"
+        "});}"
+        "})();")))
+  "Client JS: historical date lookup. Fetches Open-Meteo Archive API for sunrise/sunset + /astro/moon-for for moon phase, renders into #astro-hist-result.")
+
 (define astro/widget
   (lambda ()
     (html/div
@@ -374,6 +464,13 @@
           (astro/script astro/default-lat astro/default-lon astro/default-label)))))
   "Embeddable Sun & Moon card (form + today card + 7-day table + script).")
 
+(define astro/moon-for
+  (lambda ()
+    (let ((raw (request-param "date")))
+      (let ((d (if (or (null? raw) (string-eq (as-str raw) "")) (date-today) (as-str raw))))
+        (astro/moon-card-html d))))
+  "GET /astro/moon-for?date=YYYY-MM-DD - moon card HTML partial for any date (defaults to today). Reuses the on-image moon math.")
+
 (define astro/page
   (lambda ()
     (html/page
@@ -381,7 +478,11 @@
         (html/h1 "Sun & Moon")
         (html/p* (html/attr "class" "muted")
           "Sunrise & sunset via Open-Meteo (browser fetch). Moon phase computed on the image.")
-        (astro/widget))))
-  "GET /astro - full Sun & Moon page.")
+        (astro/widget)
+        (astro/historical-panel-html)
+        (astro/historical-script))))
+  "GET /astro - full Sun & Moon page (today + 7-day forecast + historical date lookup).")
 
 (route "/astro" "astro/page")
+(route "/astro/moon-for" "astro/moon-for")
+(route "/partials/astro/moon-for" "astro/moon-for")
