@@ -62,8 +62,6 @@ backups/
 # local-only ops notes (not shipped / not public)
 docs/openbsd-prod-branch-deploy.md
 
-# local agent notes (not part of public source tree)
-AGENTS.md
 
 # borge session lock (ephemeral)
 .borge.lock/
