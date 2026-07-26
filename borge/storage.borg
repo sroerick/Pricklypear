@@ -377,8 +377,6 @@
          - Image transforms / thumbnails / EXIF strip
          - S3 or filesystem offload (bytea in PG is the v1
            habitat; hoist later if measured hot)
-         - Multipart form parsing (raw + JSON b64 cover agents
-           and simple curl; multipart is a later browser nicety)
          - Dedup-by-sha256 on put (index exists; policy later)
    |))
    )

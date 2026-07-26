@@ -264,7 +264,7 @@
 
   (subsection budget-scale
    (doc "Per-call eval budget: stress contracts for notes/roam/outline so large trees and bodies never Budget_exceeded on ordinary UI/agent paths")
-   (status planned)
+   (status implemented)
    (implements
     lisp/lib/eval.ml
     image/lib/prims_pure.ml

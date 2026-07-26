@@ -189,6 +189,7 @@
     image/lib/http_core.ml
     image/lib/http.ml
     image/lib/session.ml
+    image/lib/agent_discovery.ml
     image/static/codemirror
     scripts/public_artifacts.sh)
    (verify
