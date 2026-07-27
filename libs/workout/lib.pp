@@ -777,28 +777,38 @@
   "Space-join numbers for notes/detail.")
 
 (define workout/log/ksk-write
-  (lambda (date program intensity doc load unit total notes rung-str)
-    (let ((prog0 (workout/doc-progress doc)))
+  (lambda (date program intensity doc load unit total-l total-r notes rungs-l-str rungs-r-str)
+    (let ((prog0 (workout/doc-progress doc))
+          (tl (workout/as-int total-l))
+          (tr (workout/as-int total-r))
+          (rsl (as-str rungs-l-str))
+          (rsr (as-str rungs-r-str)))
       (let ((prog
               (dict-set* "{}"
                 (list
                   "ladder" (workout/pget prog0 "ladder")
                   "rung_index" (workout/pget prog0 "rung_index")
                   "side" "L"
-                  "reps_l" (as-str total)
-                  "reps_r" (as-str total)
-                  "sets_done" (as-str (if (blank? rung-str) 0 0))
+                  "reps_l" (as-str tl)
+                  "reps_r" (as-str tr)
+                  "sets_done" "0"
                   "started" ""
                   "elapsed_sec" ""
                   "logged" "true"
-                  "rungs" (as-str rung-str))))
-            )
+                  "rungs_l" rsl
+                  "rungs_r" rsr))))
         (let ((doc2 (dict-set doc "progress" prog))
               (n (if (blank? (as-str notes))
-                     (string-append
-                       (as-str program) " log: " (as-str rung-str)
-                       " @ " (as-str load) (as-str unit)
-                       " (" (as-str total) "/hand)")
+                     (if (string-eq (as-str tl) (as-str tr))
+                         (string-append
+                           (as-str program) " log: " rsl
+                           " @ " (as-str load) (as-str unit)
+                           " (" (as-str tl) "/hand)")
+                         (string-append
+                           (as-str program) " log L:" rsl
+                           " R:" rsr
+                           " @ " (as-str load) (as-str unit)
+                           " (" (as-str tl) "/" (as-str tr) ")"))
                      (as-str notes))))
           (let ((sid
                   (create "workout-session"
@@ -812,10 +822,12 @@
                       ""
                       (as-str (whoami))))))
             (seq
-              (workout/exercise-log sid "Snatch L" load unit total "" rung-str)
-              (workout/exercise-log sid "Snatch R" load unit total "" rung-str)
+              (if (< tl 1) ()
+                  (workout/exercise-log sid "Snatch L" load unit tl "" rsl))
+              (if (< tr 1) ()
+                  (workout/exercise-log sid "Snatch R" load unit tr "" rsr))
               sid))))))
-  "Write complete KSK session + L/R facts; return session id.")
+  "Write complete KSK session + L/R facts (totals may differ); return id.")
 
 (define workout/log/ksk1
   (lambda (date phase day load unit rungs notes)
@@ -824,8 +836,22 @@
           (rs (workout/join-nums rungs))
           (inten (string-append "p" (as-str phase) "d" (as-str day)))
           (n (if (null? notes) "" notes)))
-      (workout/log/ksk-write date "ksk1" inten doc load unit total n rs)))
-  "Log finished KSK 1.0 session. rungs = (1 2 3 4 5 …) per-hand sequence.")
+      (workout/log/ksk-write date "ksk1" inten doc load unit
+        total total n rs rs)))
+  "Log finished KSK 1.0 (both hands same rung list).")
+
+(define workout/log/ksk1-sides
+  (lambda (date phase day load unit rungs-l rungs-r notes)
+    (let ((doc (workout/ksk1-plan phase day load unit))
+          (tl (workout/sum rungs-l))
+          (tr (workout/sum rungs-r))
+          (rsl (workout/join-nums rungs-l))
+          (rsr (workout/join-nums rungs-r))
+          (inten (string-append "p" (as-str phase) "d" (as-str day)))
+          (n (if (null? notes) "" notes)))
+      (workout/log/ksk-write date "ksk1" inten doc load unit
+        tl tr n rsl rsr)))
+  "Log KSK 1.0 with different L/R rung lists (missed reps, fail mid-ladder).")
 
 (define workout/log/ksk2
   (lambda (date phase day load unit sets notes)
@@ -834,7 +860,8 @@
           (rs (workout/join-nums sets))
           (inten (string-append "p" (as-str phase) "d" (as-str day)))
           (n (if (null? notes) "" notes)))
-      (workout/log/ksk-write date "ksk2" inten doc load unit total n rs)))
+      (workout/log/ksk-write date "ksk2" inten doc load unit
+        total total n rs rs)))
   "Log finished KSK 2.0 session. sets = per-hand set sizes in order (10 10 10 …).")
 
 (define workout/log/ksk3
@@ -844,7 +871,8 @@
           (rs (workout/join-nums sets))
           (inten (string-append "w" (as-str week) "d" (as-str day)))
           (n (if (null? notes) "" notes)))
-      (workout/log/ksk-write date "ksk3" inten doc load unit total n rs)))
+      (workout/log/ksk-write date "ksk3" inten doc load unit
+        total total n rs rs)))
   "Log finished KSK 3.0 session. sets = per-hand set sizes; rm-total = L+R test sum.")
 
 (define workout/insert-session-desc
