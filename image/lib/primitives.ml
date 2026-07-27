@@ -91,6 +91,7 @@ let make_with_defaults () : t =
   register_sync t "-" prim_sub;
   register_sync t "*" prim_mul;
   register_sync t "div" prim_div;
+  register_sync t "/" prim_div; (* Scheme-style alias of div *)
   register_sync t "mod" prim_mod;
   register_sync t "abs" prim_abs;
   register_sync t "min" prim_min;
@@ -158,7 +159,7 @@ let prim_summary (name : string) : string =
   | "+" -> "add numbers"
   | "-" -> "subtract / negate"
   | "*" -> "multiply"
-  | "div" -> "integer divide"
+  | "div" | "/" -> "divide (int when both int; else float)"
   | "mod" -> "integer remainder"
   | "abs" -> "absolute value"
   | "min" -> "minimum of VInts"

@@ -46,6 +46,12 @@ let arithmetic_tests = [
     Alcotest.(check string) "prod" "24" (eval_str "(* 2 3 4)"));
   ("* identity", `Quick, fun () ->
     Alcotest.(check string) "1 mul" "1" (eval_str "(*)"));
+  ("div integer", `Quick, fun () ->
+    Alcotest.(check string) "div" "5" (eval_str "(div 10 2)"));
+  ("/ alias of div", `Quick, fun () ->
+    Alcotest.(check string) "/" "5" (eval_str "(/ 10 2)"));
+  ("/ truncates ints", `Quick, fun () ->
+    Alcotest.(check string) "/ trunc" "2" (eval_str "(/ 5 2)"));
   ("= numeric equality true", `Quick, fun () ->
     Alcotest.(check string) "eq true" "#t" (eval_str "(= 5 5)"));
   ("= numeric equality false", `Quick, fun () ->
