@@ -126,6 +126,27 @@ let string_tests = [
   ("type-of bool", `Quick, fun () ->
     Alcotest.(check string) "type bool" "\"bool\""
       (eval_str "(type-of #f)"));
+  ("string<? lexicographic", `Quick, fun () ->
+    Alcotest.(check string) "lt" "#t"
+      (eval_str "(string<? \"abc\" \"abd\")"));
+  ("string<? false on equal", `Quick, fun () ->
+    Alcotest.(check string) "eq" "#f"
+      (eval_str "(string<? \"abc\" \"abc\")"));
+  ("string<? orders ISO dates", `Quick, fun () ->
+    Alcotest.(check string) "dates" "#t"
+      (eval_str "(string<? \"2026-07-16\" \"2026-07-23\")"));
+  ("string<? is lexicographic not numeric", `Quick, fun () ->
+    Alcotest.(check string) "coerced ints compare as strings" "#t"
+      (eval_str "(string<? 10 9)"));
+  ("string<=? true on equal", `Quick, fun () ->
+    Alcotest.(check string) "le eq" "#t"
+      (eval_str "(string<=? \"abc\" \"abc\")"));
+  ("string>? lexicographic", `Quick, fun () ->
+    Alcotest.(check string) "gt" "#t"
+      (eval_str "(string>? \"abd\" \"abc\")"));
+  ("string>=? true on equal", `Quick, fun () ->
+    Alcotest.(check string) "ge eq" "#t"
+      (eval_str "(string>=? \"abc\" \"abc\")"));
 ]
 
 (* --- composition: define + call + nested arithmetic --- *)

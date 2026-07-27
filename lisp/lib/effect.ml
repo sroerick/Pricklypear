@@ -112,6 +112,7 @@ let pure_prims = [
   "string-append"; "str"; "type-of"; "as-str";
   "symbol?"; "string?"; "symbol=?"; "symbol->string"; "string->symbol";
   "string-eq"; "string-trim"; "string-length"; "substring"; "string-contains?";
+  "string<?"; "string<=?"; "string>?"; "string>=?";
   "html-escape"; "json-parse"; "json-emit";
   "read-string"; "read-all-string";
   "dict-get"; "dict-set"; "dict-keys";

@@ -524,6 +524,28 @@ let prim_string_eq args =
            (coerce_str ~ctx:"string-eq" b))
   | _ -> raise (Interp_error (User_error "string-eq needs 2 strings"))
 
+(* (string<? a b), (string<=? a b), (string>? a b), (string>=? a b) -> VBool.
+   Byte-wise lexicographic comparison (NOT numeric). Correct ordering for
+   ISO dates (YYYY-MM-DD) and other fixed-width formats. *)
+let prim_string_cmp name op args =
+  match args with
+  | [ a; b ] ->
+      VBool
+        (op
+           (String.compare
+              (coerce_str ~ctx:name a)
+              (coerce_str ~ctx:name b))
+           0)
+  | _ ->
+      raise
+        (Interp_error
+           (User_error (Printf.sprintf "%s needs 2 strings" name)))
+
+let prim_string_lt args = prim_string_cmp "string<?" ( < ) args
+let prim_string_le args = prim_string_cmp "string<=?" ( <= ) args
+let prim_string_gt args = prim_string_cmp "string>?" ( > ) args
+let prim_string_ge args = prim_string_cmp "string>=?" ( >= ) args
+
 (* (string-trim s) -> VStr. Trim leading/trailing whitespace. *)
 let prim_string_trim args =
   match args with

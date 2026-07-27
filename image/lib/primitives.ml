@@ -113,6 +113,10 @@ let make_with_defaults () : t =
   register_sync t "substring" prim_substring;
   register_sync t "string-contains?" prim_string_contains;
   register_sync t "string-eq" prim_string_eq;
+  register_sync t "string<?" prim_string_lt;
+  register_sync t "string<=?" prim_string_le;
+  register_sync t "string>?" prim_string_gt;
+  register_sync t "string>=?" prim_string_ge;
   register_sync t "string-trim" prim_string_trim;
   register_sync t "html-escape" prim_html_escape;
   register_sync t "json-parse" prim_json_parse;
@@ -189,6 +193,10 @@ let prim_summary (name : string) : string =
   | "substring" -> "substring start [len]"
   | "string-contains?" -> "haystack contains needle?"
   | "string-eq" -> "string equality"
+  | "string<?" -> "string less-than (lexicographic)"
+  | "string<=?" -> "string less-or-equal (lexicographic)"
+  | "string>?" -> "string greater-than (lexicographic)"
+  | "string>=?" -> "string greater-or-equal (lexicographic)"
   | "string-trim" -> "trim whitespace from string"
   | "html-escape" -> "escape text for HTML"
   | "json-parse" -> "parse JSON string to Lisp value"

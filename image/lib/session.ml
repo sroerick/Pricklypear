@@ -1373,6 +1373,7 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
     ; "null?"; "pair?"; "car"; "cdr"; "cons"; "list"; "count"
     ; "string-append"; "string-length"; "substring"; "string-eq"
     ; "string-contains?"; "string-trim"; "html-escape"; "as-str"; "str"
+    ; "string<?"; "string<=?"; "string>?"; "string>=?"
     ; "symbol?"; "string?"; "symbol=?"; "symbol->string"; "string->symbol"
     ; "not"; "type-of"; "read-string"; "read-all-string"; "function-ast"
     ; "function-source"; "function-doc"; "apropos"; "apropos-docs"
