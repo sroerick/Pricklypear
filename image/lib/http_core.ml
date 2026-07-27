@@ -457,6 +457,18 @@ let parse_basic_auth (headers : (string * string) list)
                    in
                    Some (u, p))
 
+(** Parse an Authorization: Bearer <token> header. Returns the raw token. *)
+let parse_bearer_auth (headers : (string * string) list) : string option =
+  match List.assoc_opt "authorization" headers with
+  | None -> None
+  | Some v ->
+      let v = String.trim v in
+      if String.length v < 8 then None
+      else
+        let scheme = String.lowercase_ascii (String.sub v 0 6) in
+        if scheme <> "bearer" then None
+        else Some (String.trim (String.sub v 6 (String.length v - 6)))
+
 let set_cookie_header ~(token : string) : string =
   (* Dev is plain HTTP — omit Secure. Path=/; HttpOnly; SameSite=Lax.
      PP_BASE_DOMAIN scopes cookie across subdomains. *)
@@ -505,10 +517,12 @@ let resolve_identity (session : Session.t)
       let* row = Auth_store.lookup_session store ~raw_token:token in
       (match row with
        | Some s ->
-           Lwt.return_some
-             { Auth_store.id = s.user_id;
-               username = s.username;
-               is_admin = s.is_admin }
+           (* Fetch the full user (user_type, parent_user_id) — the session
+              row only carries id/username/is_admin. *)
+           let* user_opt = Auth_store.get_user_by_id store s.user_id in
+           (match user_opt with
+            | Some u -> Lwt.return_some u
+            | None -> Lwt.return_none)
        | None ->
            (* Fall through to Basic if cookie stale. *)
            (match parse_basic_auth headers with
@@ -516,10 +530,15 @@ let resolve_identity (session : Session.t)
             | Some (u, p) ->
                 Auth_store.verify_password store ~username:u ~password:p ()))
   | _ ->
-      (match parse_basic_auth headers with
-       | None -> Lwt.return_none
-       | Some (u, p) ->
-           Auth_store.verify_password store ~username:u ~password:p ())
+      (* No cookie: try Bearer token, then Basic. *)
+      (match parse_bearer_auth headers with
+       | Some token when token <> "" ->
+           Auth_store.verify_token store ~raw_token:token ()
+       | _ ->
+           (match parse_basic_auth headers with
+            | None -> Lwt.return_none
+            | Some (u, p) ->
+                Auth_store.verify_password store ~username:u ~password:p ()))
 
 let attach_from_user (session : Session.t) (user : Auth_store.user)
     ?(auth_token : string option = None)
@@ -530,6 +549,8 @@ let attach_from_user (session : Session.t) (user : Auth_store.user)
     ~is_admin:user.Auth_store.is_admin
     ~auth_token
     ~checkout_personal_now
+    ~user_type:user.Auth_store.user_type
+    ~parent_user_id:user.Auth_store.parent_user_id
     ()
 
 let fragment_response (reqd : Httpun.Reqd.t) ?(status = `OK) (html : string)

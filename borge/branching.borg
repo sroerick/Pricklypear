@@ -126,6 +126,30 @@
     (build "dune build @all")
     (smoke "merge upserts changed rows; merges into system/* require admin"))
   )
+  (subsection promote
+   (doc "Agent promotes from its workshop into the parent human's personal")
+   (status planned)
+   (details
+    (doc (|
+         promote(source=<parent>/agent, target=<parent>/personal):
+         Selective upsert of function_defs from the agent's
+         workshop into the parent human's personal branch (same
+         mechanism as promote_to_main, different target). The
+         agent's work lands in the human's garden.
+
+         Permission: gated by the parent human's allow_agent_promote
+         toggle (users table, default true). The human can revoke
+         it to freeze the agent out of their personal branch; the
+         agent still works in <parent>/agent but cannot promote.
+
+         This is the human-in-the-loop gate: the agent builds in
+         its own branch; nothing reaches the shared tree
+         (system/main) or the human's garden until the agent
+         promotes and the human allows it. promote to system/main
+         remains admin-only.
+    |))
+   )
+  )
   (subsection schema-authority
    (doc "Types in main, branches read against main's schema")
    (status partial)
@@ -166,6 +190,12 @@
          - <user>/dev = optional workshop (also empty child).
            Prefer for product spikes you intend to promote;
            keep personal for long-lived custom pins.
+         - <parent>/agent = agent user's default workshop.
+           Empty child of system/main (sibling of the parent
+           human's personal). An agent user boots here, not into
+           the parent's personal. The agent works in its own
+           branch and promotes into the parent's personal when
+           the human allows it (see promote).
          - Inheritance: recursive CTE; child overrides
            shadow main; unpinned names auto-see main updates.
 

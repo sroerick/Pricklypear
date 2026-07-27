@@ -10,6 +10,8 @@ type user = {
   id : string;
   username : string;
   is_admin : bool;
+  user_type : string;           (* "human" | "agent" *)
+  parent_user_id : string option;  (* the human an agent belongs to; None for humans *)
 }
 
 type session_row = {
@@ -19,6 +21,18 @@ type session_row = {
   is_admin : bool;
   expires_at : string;
 }
+
+let cell_uuid_opt row i =
+  match List.nth_opt row i with
+  | Some v ->
+      (match Pgx.Value.to_string v with
+       | Some s when s <> "" -> Some s
+       | _ -> None)
+  | None -> None
+
+let last4_of_key (key : string) : string =
+  let n = String.length key in
+  if n <= 4 then key else String.sub key (n - 4) 4
 
 let env_or name dft =
   match Sys.getenv_opt name with Some s -> s | None -> dft
@@ -88,6 +102,17 @@ let count_users (store : Store.t) : int Lwt.t =
             (Printexc.to_string exn);
           Lwt.return 0)
 
+let user_cols = "id::text, username, is_admin::text, user_type, parent_user_id::text"
+
+let user_of_row row =
+  match cell_string row 0, cell_string row 1, cell_string row 3 with
+  | Some id, Some uname, Some utype ->
+      Some { id; username = uname;
+             is_admin = cell_bool row 2;
+             user_type = utype;
+             parent_user_id = cell_uuid_opt row 4 }
+  | _ -> None
+
 let get_user_by_username (store : Store.t) (username : string)
   : user option Lwt.t =
   match pg_conn store with
@@ -96,8 +121,7 @@ let get_user_by_username (store : Store.t) (username : string)
       Lwt.catch
         (fun () ->
           let sql =
-            "SELECT id::text, username, is_admin::text FROM users " ^
-            "WHERE username = $1 LIMIT 1"
+            "SELECT " ^ user_cols ^ " FROM users WHERE username = $1 LIMIT 1"
           in
           let* rows =
             Io_lwt.Db.execute conn
@@ -105,11 +129,9 @@ let get_user_by_username (store : Store.t) (username : string)
           in
           match rows with
           | row :: _ ->
-              (match cell_string row 0, cell_string row 1 with
-               | Some id, Some uname ->
-                   Lwt.return_some
-                     { id; username = uname; is_admin = cell_bool row 2 }
-               | _ -> Lwt.return_none)
+              (match user_of_row row with
+               | Some u -> Lwt.return_some u
+               | None -> Lwt.return_none)
           | [] -> Lwt.return_none)
         (fun exn ->
           Printf.eprintf "[auth_store] get_user_by_username: %s\n%!"
@@ -123,8 +145,7 @@ let get_user_by_id (store : Store.t) (user_id : string) : user option Lwt.t =
       Lwt.catch
         (fun () ->
           let sql =
-            "SELECT id::text, username, is_admin::text FROM users " ^
-            "WHERE id = $1::uuid LIMIT 1"
+            "SELECT " ^ user_cols ^ " FROM users WHERE id = $1::uuid LIMIT 1"
           in
           let* rows =
             Io_lwt.Db.execute conn
@@ -132,11 +153,9 @@ let get_user_by_id (store : Store.t) (user_id : string) : user option Lwt.t =
           in
           match rows with
           | row :: _ ->
-              (match cell_string row 0, cell_string row 1 with
-               | Some id, Some uname ->
-                   Lwt.return_some
-                     { id; username = uname; is_admin = cell_bool row 2 }
-               | _ -> Lwt.return_none)
+              (match user_of_row row with
+               | Some u -> Lwt.return_some u
+               | None -> Lwt.return_none)
           | [] -> Lwt.return_none)
         (fun exn ->
           Printf.eprintf "[auth_store] get_user_by_id: %s\n%!"
@@ -174,7 +193,7 @@ let create_user (store : Store.t) ~(username : string) ~(is_admin : bool)
         (fun () ->
           let sql =
             "INSERT INTO users (username, is_admin) VALUES ($1, $2) " ^
-            "RETURNING id::text, username, is_admin::text"
+            "RETURNING " ^ user_cols
           in
           let* rows =
             Io_lwt.Db.execute conn
@@ -185,18 +204,62 @@ let create_user (store : Store.t) ~(username : string) ~(is_admin : bool)
           in
           match rows with
           | row :: _ ->
-              (match cell_string row 0, cell_string row 1 with
-               | Some id, Some uname ->
-                   Lwt.return
-                     (Ok
-                        { id; username = uname;
-                          is_admin = cell_bool row 2 })
-               | _ -> Lwt.return (Error "create_user: bad row"))
+              (match user_of_row row with
+               | Some u -> Lwt.return (Ok u)
+               | None -> Lwt.return (Error "create_user: bad row"))
           | [] -> Lwt.return (Error "create_user: no row"))
         (fun exn ->
           let msg = Printexc.to_string exn in
           Printf.eprintf "[auth_store] create_user: %s\n%!" msg;
           Lwt.return (Error msg))
+
+(** Create an agent user attached to a parent human.
+    username = "<parent>/agent", user_type='agent', parent_user_id=parent.
+    is_admin=false (agents never admin). Idempotent: returns existing if any. *)
+let create_agent (store : Store.t) ~(parent_username : string)
+  : (user, string) result Lwt.t =
+  let parent_username = String.lowercase_ascii (String.trim parent_username) in
+  let agent_username = parent_username ^ "/agent" in
+  (* Idempotent: return existing agent if one exists for this parent. *)
+  let* existing = get_user_by_username store agent_username in
+  match existing with
+  | Some u when u.user_type = "agent" -> Lwt.return (Ok u)
+  | _ ->
+      (match pg_conn store with
+       | None -> Lwt.return (Error "no database")
+       | Some conn ->
+           let* parent = get_user_by_username store parent_username in
+           (match parent with
+            | None ->
+                Lwt.return (Error ("no such parent user: " ^ parent_username))
+            | Some p when p.user_type = "agent" ->
+                Lwt.return (Error "agent cannot be a parent of another agent")
+            | Some p ->
+                Lwt.catch
+                  (fun () ->
+                    let sql =
+                      "INSERT INTO users " ^
+                      "(username, is_admin, user_type, parent_user_id) " ^
+                      "VALUES ($1, false, 'agent', $2::uuid) " ^
+                      "RETURNING " ^ user_cols
+                    in
+                    let* rows =
+                      Io_lwt.Db.execute conn
+                        ~params:
+                          [ Pgx.Value.of_string agent_username;
+                            Pgx.Value.of_string p.id ]
+                        sql
+                    in
+                    match rows with
+                    | row :: _ ->
+                        (match user_of_row row with
+                         | Some u -> Lwt.return (Ok u)
+                         | None -> Lwt.return (Error "create_agent: bad row"))
+                    | [] -> Lwt.return (Error "create_agent: no row"))
+                  (fun exn ->
+                    let msg = Printexc.to_string exn in
+                    Printf.eprintf "[auth_store] create_agent: %s\n%!" msg;
+                    Lwt.return (Error msg))))
 
 let set_password (store : Store.t) ~(user_id : string) ~(password : string)
   : (unit, string) result Lwt.t =
@@ -240,8 +303,8 @@ let password_hash_for_user (store : Store.t) ~(username : string)
       Lwt.catch
         (fun () ->
           let sql =
-            "SELECT u.id::text, u.username, u.is_admin::text, " ^
-            "       c.secret_data::text " ^
+            "SELECT u.id::text, u.username, u.is_admin::text, u.user_type, " ^
+            "       u.parent_user_id::text, c.secret_data::text " ^
             "FROM users u " ^
             "JOIN credentials c ON c.user_id = u.id " ^
             "WHERE u.username = $1 AND c.kind = 'password' " ^
@@ -254,7 +317,7 @@ let password_hash_for_user (store : Store.t) ~(username : string)
           match rows with
           | row :: _ ->
               (match
-                 cell_string row 0, cell_string row 1, cell_string row 3
+                 cell_string row 0, cell_string row 1, cell_string row 5
                with
                | Some id, Some uname, Some secret_json ->
                    let hash_opt =
@@ -272,7 +335,11 @@ let password_hash_for_user (store : Store.t) ~(username : string)
                     | Some h ->
                         Lwt.return_some
                           ( { id; username = uname;
-                              is_admin = cell_bool row 2 },
+                              is_admin = cell_bool row 2;
+                              user_type =
+                                (match cell_string row 3 with
+                                 | Some s -> s | None -> "human");
+                              parent_user_id = cell_uuid_opt row 4 },
                             h )
                     | None -> Lwt.return_none)
                | _ -> Lwt.return_none)
@@ -462,6 +529,234 @@ let revoke_all_sessions (store : Store.t) ~(user_id : string) : int Lwt.t =
             (Printexc.to_string exn);
           Lwt.return 0)
 
+(** API token (Bearer) credentials — auth INTO the OS for agents/pp_eval.
+    kind='api_key' rows. Raw token returned ONCE at issue time; only the
+    SHA-256 hash is stored. Per-user; no global tokens. *)
+let issue_token (store : Store.t) ~(user_id : string)
+    ?(label : string option = None) () : (string, string) result Lwt.t =
+  match pg_conn store with
+  | None -> Lwt.return (Error "no database")
+  | Some conn ->
+      Lwt.catch
+        (fun () ->
+          let raw =
+            Base64.encode_string ~pad:false
+              (Auth_password.random_bytes 32)
+          in
+          let th = token_hash raw in
+          let public_fields =
+            [ ("token_last4", `String (last4_of_key raw)) ]
+            @ (match label with
+               | Some l when l <> "" -> [ ("label", `String l) ]
+               | _ -> [])
+          in
+          let public_json = Yojson.Safe.to_string (`Assoc public_fields) in
+          let secret_json =
+            Yojson.Safe.to_string (`Assoc [ ("token_hash", `String th) ])
+          in
+          let sql =
+            "INSERT INTO credentials (user_id, kind, public_data, secret_data) " ^
+            "VALUES ($1::uuid, 'api_key', $2::jsonb, $3::jsonb) " ^
+            "RETURNING id::text"
+          in
+          let* _ =
+            Io_lwt.Db.execute conn
+              ~params:
+                [ Pgx.Value.of_string user_id;
+                  Pgx.Value.of_string public_json;
+                  Pgx.Value.of_string secret_json ]
+              sql
+          in
+          let* () =
+            log_auth store ~user_id ~kind:"issue_token" ~success:true ()
+          in
+          Lwt.return (Ok raw))
+        (fun exn ->
+          let msg = Printexc.to_string exn in
+          Printf.eprintf "[auth_store] issue_token: %s\n%!" msg;
+          Lwt.return (Error msg))
+
+let verify_token (store : Store.t) ~(raw_token : string) ?source_ip ()
+  : user option Lwt.t =
+  if raw_token = "" then Lwt.return_none
+  else
+    match pg_conn store with
+    | None -> Lwt.return_none
+    | Some conn ->
+        Lwt.catch
+          (fun () ->
+            let th = token_hash raw_token in
+            let sql =
+              "SELECT " ^
+              "  u.id::text, u.username, u.is_admin::text, u.user_type, " ^
+              "  u.parent_user_id::text, c.id::text " ^
+              "FROM credentials c JOIN users u ON u.id = c.user_id " ^
+              "WHERE c.kind = 'api_key' " ^
+              "  AND c.secret_data->>'token_hash' = $1 " ^
+              "LIMIT 1"
+            in
+            let* rows =
+              Io_lwt.Db.execute conn
+                ~params:[ Pgx.Value.of_string th ] sql
+            in
+            match rows with
+            | row :: _ ->
+                (match user_of_row row with
+                 | Some user ->
+                     (match cell_string row 5 with
+                      | Some cid ->
+                          let* _ =
+                            Io_lwt.Db.execute conn
+                              ~params:[ Pgx.Value.of_string cid ]
+                              ("UPDATE credentials SET last_used_at = now() " ^
+                               "WHERE id = $1::uuid")
+                          in
+                          let* () =
+                            log_auth store ~user_id:user.id ~kind:"api_key"
+                              ~success:true ?source_ip ()
+                          in
+                          Lwt.return_some user
+                      | None ->
+                          let* () =
+                            log_auth store ~user_id:user.id ~kind:"api_key"
+                              ~success:true ?source_ip ()
+                          in
+                          Lwt.return_some user)
+                 | None ->
+                     let* () =
+                       log_auth store ~kind:"api_key" ~success:false ?source_ip ()
+                     in
+                     Lwt.return_none)
+            | [] ->
+                let* () =
+                  log_auth store ~kind:"api_key" ~success:false ?source_ip ()
+                in
+                Lwt.return_none)
+          (fun exn ->
+            Printf.eprintf "[auth_store] verify_token: %s\n%!"
+              (Printexc.to_string exn);
+            Lwt.return_none)
+
+type token_meta = {
+  id : string;
+  label : string option;
+  token_last4 : string;
+  created_at : string;
+  last_used_at : string option;
+}
+
+let list_tokens (store : Store.t) ~(user_id : string) : token_meta list Lwt.t =
+  match pg_conn store with
+  | None -> Lwt.return []
+  | Some conn ->
+      Lwt.catch
+        (fun () ->
+          let sql =
+            "SELECT id::text, public_data::text, created_at::text, " ^
+            "       last_used_at::text FROM credentials " ^
+            "WHERE user_id = $1::uuid AND kind = 'api_key' " ^
+            "ORDER BY created_at"
+          in
+          let* rows =
+            Io_lwt.Db.execute conn
+              ~params:[ Pgx.Value.of_string user_id ] sql
+          in
+          let metas =
+            List.filter_map
+              (fun row ->
+                match cell_string row 0, cell_string row 1, cell_string row 2 with
+                | Some id, Some js, Some created ->
+                    let label, token_last4 =
+                      match Yojson.Safe.from_string js with
+                      | `Assoc a ->
+                          let opt_str k =
+                            match List.assoc_opt k a with
+                            | Some (`String s) when s <> "" -> Some s
+                            | _ -> None
+                          in
+                          let tl4 =
+                            match List.assoc_opt "token_last4" a with
+                            | Some (`String s) -> s
+                            | _ -> "????"
+                          in
+                          (opt_str "label", tl4)
+                      | _ -> (None, "????")
+                    in
+                    Some { id; label; token_last4; created_at = created;
+                           last_used_at = cell_string row 3 }
+                | _ -> None)
+              rows
+          in
+          Lwt.return metas)
+        (fun exn ->
+          Printf.eprintf "[auth_store] list_tokens: %s\n%!"
+            (Printexc.to_string exn);
+          Lwt.return [])
+
+let revoke_token (store : Store.t) ~(credential_id : string)
+  : (unit, string) result Lwt.t =
+  match pg_conn store with
+  | None -> Lwt.return (Error "no database")
+  | Some conn ->
+      Lwt.catch
+        (fun () ->
+          let* _ =
+            Io_lwt.Db.execute conn
+              ~params:[ Pgx.Value.of_string credential_id ]
+              "DELETE FROM credentials WHERE id = $1::uuid AND kind = 'api_key'"
+          in
+          Lwt.return (Ok ()))
+        (fun exn ->
+          let msg = Printexc.to_string exn in
+          Printf.eprintf "[auth_store] revoke_token: %s\n%!" msg;
+          Lwt.return (Error msg))
+
+(** rotate_token: revoke old + issue new. Returns the new raw token. *)
+let rotate_token (store : Store.t) ~(credential_id : string)
+    ~(user_id : string) ?label () : (string, string) result Lwt.t =
+  let* rev = revoke_token store ~credential_id in
+  match rev with
+  | Error e -> Lwt.return (Error e)
+  | Ok () -> issue_token store ~user_id ~label ()
+
+(** allow_agent_promote toggle (on the human's user row). *)
+let get_allow_agent_promote (store : Store.t) ~(user_id : string)
+  : bool Lwt.t =
+  match pg_conn store with
+  | None -> Lwt.return true
+  | Some conn ->
+      Lwt.catch
+        (fun () ->
+          let* rows =
+            Io_lwt.Db.execute conn
+              ~params:[ Pgx.Value.of_string user_id ]
+              "SELECT allow_agent_promote::text FROM users WHERE id = $1::uuid"
+          in
+          match rows with
+          | row :: _ -> Lwt.return (cell_bool row 0)
+          | [] -> Lwt.return true)
+        (fun _ -> Lwt.return true)
+
+let set_allow_agent_promote (store : Store.t) ~(user_id : string)
+    ~(value : bool) : (unit, string) result Lwt.t =
+  match pg_conn store with
+  | None -> Lwt.return (Error "no database")
+  | Some conn ->
+      Lwt.catch
+        (fun () ->
+          let* _ =
+            Io_lwt.Db.execute conn
+              ~params:
+                [ Pgx.Value.of_bool value;
+                  Pgx.Value.of_string user_id ]
+              "UPDATE users SET allow_agent_promote = $1 WHERE id = $2::uuid"
+          in
+          Lwt.return (Ok ()))
+        (fun exn ->
+          let msg = Printexc.to_string exn in
+          Printf.eprintf "[auth_store] set_allow_agent_promote: %s\n%!" msg;
+          Lwt.return (Error msg))
+
 (** Per-user LLM provider key (auth.user-llm-keys). Not api_key (auth INTO PP). *)
 type llm_key_meta = {
   last4 : string;
@@ -469,10 +764,6 @@ type llm_key_meta = {
   base : string option;
   model : string option;
 }
-
-let last4_of_key (key : string) : string =
-  let n = String.length key in
-  if n <= 4 then key else String.sub key (n - 4) 4
 
 let set_llm_key (store : Store.t) ~(user_id : string) ~(api_key : string)
     ?(base : string option = None) ?(model : string option = None)
@@ -545,7 +836,7 @@ let clear_llm_key (store : Store.t) ~(user_id : string)
           Printf.eprintf "[auth_store] clear_llm_key: %s\n%!" msg;
           Lwt.return (Error msg))
 
-let get_llm_key_meta (store : Store.t) ~(user_id : string)
+let get_llm_key_meta_direct (store : Store.t) ~(user_id : string)
   : llm_key_meta option Lwt.t =
   match pg_conn store with
   | None -> Lwt.return_none
@@ -587,12 +878,24 @@ let get_llm_key_meta (store : Store.t) ~(user_id : string)
                       | _ -> Lwt.return_none
                     with _ -> Lwt.return_none))
           | [] -> Lwt.return_none)
-        (fun exn ->
-          Printf.eprintf "[auth_store] get_llm_key_meta: %s\n%!"
-            (Printexc.to_string exn);
-          Lwt.return_none)
+        (fun _ -> Lwt.return_none)
 
-let get_llm_key_secret (store : Store.t) ~(user_id : string)
+(** get_llm_key_meta with agent fallback to parent's key. *)
+let get_llm_key_meta (store : Store.t) ~(user_id : string)
+  : llm_key_meta option Lwt.t =
+  let* direct = get_llm_key_meta_direct store ~user_id in
+  match direct with
+  | Some _ -> Lwt.return direct
+  | None ->
+      let* user_opt = get_user_by_id store user_id in
+      (match user_opt with
+       | Some u when u.user_type = "agent" ->
+           (match u.parent_user_id with
+            | Some pid -> get_llm_key_meta_direct store ~user_id:pid
+            | None -> Lwt.return_none)
+       | _ -> Lwt.return_none)
+
+let get_llm_key_secret_direct (store : Store.t) ~(user_id : string)
   : (string * llm_key_meta) option Lwt.t =
   match pg_conn store with
   | None -> Lwt.return_none
@@ -665,9 +968,27 @@ let get_llm_key_secret (store : Store.t) ~(user_id : string)
                | _ -> Lwt.return_none)
           | [] -> Lwt.return_none)
         (fun exn ->
-          Printf.eprintf "[auth_store] get_llm_key_secret: %s\n%!"
+          Printf.eprintf "[auth_store] get_llm_key_secret_direct: %s\n%!"
             (Printexc.to_string exn);
           Lwt.return_none)
+
+(** get_llm_key_secret with agent fallback: if the user has no own llm_key
+    and is an agent (user_type='agent', parent_user_id set), look up the
+    parent human's llm_key. *)
+let get_llm_key_secret (store : Store.t) ~(user_id : string)
+  : (string * llm_key_meta) option Lwt.t =
+  let* direct = get_llm_key_secret_direct store ~user_id in
+  match direct with
+  | Some _ -> Lwt.return direct
+  | None ->
+      (* Fall back to parent only if this user is an agent. *)
+      let* user_opt = get_user_by_id store user_id in
+      (match user_opt with
+       | Some u when u.user_type = "agent" ->
+           (match u.parent_user_id with
+            | Some pid -> get_llm_key_secret_direct store ~user_id:pid
+            | None -> Lwt.return_none)
+       | _ -> Lwt.return_none)
 
 (** SSH public keys for REPL door (auth.user-ssh-repl phase 1). *)
 type ssh_key_meta = {
@@ -836,7 +1157,8 @@ let verify_ssh_key (store : Store.t) ~(openssh_or_blob : string)
           let presented = String.trim openssh_or_blob in
           let fp = ssh_fingerprint presented in
           let sql =
-            "SELECT u.id::text, u.username, u.is_admin::text, c.id::text " ^
+            "SELECT u.id::text, u.username, u.is_admin::text, u.user_type, " ^
+            "       u.parent_user_id::text, c.id::text " ^
             "FROM credentials c JOIN users u ON u.id = c.user_id " ^
             "WHERE c.kind = 'ssh_key' " ^
             "AND (c.public_data->>'openssh' = $1 " ^
@@ -852,16 +1174,13 @@ let verify_ssh_key (store : Store.t) ~(openssh_or_blob : string)
           in
           match rows with
           | row :: _ ->
-              (match cell_string row 0, cell_string row 1 with
-               | Some id, Some uname ->
-                   let user =
-                     { id; username = uname; is_admin = cell_bool row 2 }
-                   in
+              (match user_of_row row with
+               | Some user ->
                    let* () =
-                     log_auth store ~user_id:id ~kind:"ssh_key" ~success:true
+                     log_auth store ~user_id:user.id ~kind:"ssh_key" ~success:true
                        ?source_ip ()
                    in
-                   (match cell_string row 3 with
+                   (match cell_string row 5 with
                     | Some cid ->
                         let* _ =
                           Io_lwt.Db.execute conn
@@ -871,7 +1190,7 @@ let verify_ssh_key (store : Store.t) ~(openssh_or_blob : string)
                         in
                         Lwt.return_some user
                     | None -> Lwt.return_some user)
-               | _ ->
+               | None ->
                    let* () =
                      log_auth store ~kind:"ssh_key" ~success:false ?source_ip ()
                    in
@@ -894,20 +1213,9 @@ let list_users (store : Store.t) : user list Lwt.t =
         (fun () ->
           let* rows =
             Io_lwt.Db.execute conn
-              "SELECT id::text, username, is_admin::text \
-               FROM users ORDER BY username"
+              ("SELECT " ^ user_cols ^ " FROM users ORDER BY username")
           in
-          let users =
-            List.filter_map
-              (fun row ->
-                match cell_string row 0, cell_string row 1 with
-                | Some id, Some uname ->
-                    Some
-                      { id; username = uname;
-                        is_admin = cell_bool row 2 }
-                | _ -> None)
-              rows
-          in
+          let users = List.filter_map user_of_row rows in
           Lwt.return users)
         (fun exn ->
           Printf.eprintf "[auth_store] list_users: %s\n%!"

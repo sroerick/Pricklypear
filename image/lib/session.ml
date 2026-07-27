@@ -654,6 +654,60 @@ let register_media_prims (t : t) (tbl : Primitives.t) : unit =
           Lwt.return
             (Pricklypear_lisp.Ast.VStr "media-url: need id"))
 
+(** Agent promotes from its current branch (admin/agent) into the parent
+    human's personal branch. Gated by the parent's allow_agent_promote
+    toggle. Empty names = all functions defined ON the current branch
+    (depth 0, not inherited). Defined here (before register_crud_prims) so
+    the (promote) prim can reference it. *)
+let promote_to_personal (t : t) ~(names : string list)
+  : (int, string) result Lwt.t =
+  let* me_opt = Auth_store.get_user_by_username t.store t.manifest.username in
+  match me_opt with
+  | None -> Lwt.return (Error "no such user")
+  | Some me when me.user_type <> "agent" ->
+      Lwt.return (Error "promote-to-personal is for agent users")
+  | Some me ->
+      (match me.parent_user_id with
+       | None -> Lwt.return (Error "agent has no parent")
+       | Some pid ->
+           let* parent_opt = Auth_store.get_user_by_id t.store pid in
+           (match parent_opt with
+            | None -> Lwt.return (Error "parent user not found")
+            | Some parent ->
+                let* allowed =
+                  Auth_store.get_allow_agent_promote t.store
+                    ~user_id:parent.id
+                in
+                if not allowed then
+                  Lwt.return (Error "agent promote disabled by parent")
+                else
+                  let* final_names =
+                    if names <> [] then Lwt.return names
+                    else
+                      let* meta = Store.list_function_names_meta t.store in
+                      let own =
+                        List.filter (fun (_, _, _, d) -> d = 0) meta
+                      in
+                      Lwt.return (List.map (fun (n, _, _, _) -> n) own)
+                  in
+                  if final_names = [] then
+                    Lwt.return (Error "no functions defined on this branch")
+                  else
+                    let source_id = Store.current_branch_id t.store in
+                    let* tgt_opt =
+                      Store.lookup_branch_id_by_name t.store
+                        ~owner:parent.username ~name:"personal"
+                    in
+                    (match tgt_opt with
+                     | None ->
+                         Lwt.return (Error "parent personal branch not found")
+                     | Some target_id ->
+                         let* n =
+                           Store.promote_functions t.store
+                             ~source_id ~target_id ~names:final_names
+                         in
+                         Lwt.return (Ok n))))
+
 let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
   (* Quoted type/field names are VSymbol after Phase 1; CRUD still wants
      string payloads for SQL. Coerce symbols→strings at the CRUD boundary
@@ -984,6 +1038,171 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
             Lwt.return
               (Pricklypear_lisp.Ast.VStr
                  "create-user: need username password [is-admin]")));
+
+  (* (create-agent parent-username) -> VStr agent-user-id. Admin only. *)
+  Primitives.register tbl "create-agent"
+    (fun args ->
+      require_admin "create-agent" (fun () ->
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr parent ] ->
+            let* r = Auth_store.create_agent t.store ~parent_username:parent in
+            (match r with
+             | Error e ->
+                 Lwt.return (Pricklypear_lisp.Ast.VStr ("create-agent: " ^ e))
+             | Ok u ->
+                 Lwt.return (Pricklypear_lisp.Ast.VStr u.Auth_store.id))
+        | _ ->
+            Lwt.return
+              (Pricklypear_lisp.Ast.VStr "create-agent: need parent-username")));
+
+  (* (issue-token [label]) -> VStr raw-token (returned ONCE). Caller's own user. *)
+  (* (issue-token user-id [label]) -> VStr raw token. Admin only when user-id given. *)
+  Primitives.register tbl "issue-token"
+    (fun args ->
+      let caller = caller_username () in
+      let parse_label = function
+        | Pricklypear_lisp.Ast.VStr s when s <> "" -> Some s
+        | _ -> None
+      in
+      (match args with
+       | [] ->
+           (* issue for the caller themselves, no label *)
+           let* u = Auth_store.get_user_by_username t.store caller in
+           (match u with
+            | None -> Lwt.return (Pricklypear_lisp.Ast.VStr "issue-token: no such user")
+            | Some user ->
+                let* r = Auth_store.issue_token t.store ~user_id:user.id () in
+                (match r with
+                 | Error e -> Lwt.return (Pricklypear_lisp.Ast.VStr ("issue-token: " ^ e))
+                 | Ok raw -> Lwt.return (Pricklypear_lisp.Ast.VStr raw)))
+       | [ label ] ->
+           (* issue for the caller themselves, with label *)
+           let* u = Auth_store.get_user_by_username t.store caller in
+           (match u with
+            | None -> Lwt.return (Pricklypear_lisp.Ast.VStr "issue-token: no such user")
+            | Some user ->
+                let* r = Auth_store.issue_token t.store ~user_id:user.id ~label:(parse_label label) () in
+                (match r with
+                 | Error e -> Lwt.return (Pricklypear_lisp.Ast.VStr ("issue-token: " ^ e))
+                 | Ok raw -> Lwt.return (Pricklypear_lisp.Ast.VStr raw)))
+       | [ Pricklypear_lisp.Ast.VStr uid; label ] ->
+           require_admin "issue-token" (fun () ->
+             let* r = Auth_store.issue_token t.store ~user_id:uid ~label:(parse_label label) () in
+             (match r with
+              | Error e -> Lwt.return (Pricklypear_lisp.Ast.VStr ("issue-token: " ^ e))
+              | Ok raw -> Lwt.return (Pricklypear_lisp.Ast.VStr raw)))
+       | _ -> Lwt.return (Pricklypear_lisp.Ast.VStr "issue-token: need [label] (own) or user-id label (admin)")));
+
+  (* (list-tokens [user-id]) -> VList of (id label last4 created last_used). *)
+  Primitives.register tbl "list-tokens"
+    (fun args ->
+      let uname = caller_username () in
+      let* caller_opt = Auth_store.get_user_by_username t.store uname in
+      let caller_id =
+        match caller_opt with Some x -> x.Auth_store.id | None -> ""
+      in
+      let is_admin =
+        match caller_opt with Some x -> x.Auth_store.is_admin | None -> false
+      in
+      let target_uid =
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr uid ] when uid <> "" -> uid
+        | _ -> caller_id
+      in
+      if not is_admin && target_uid <> caller_id then
+        Lwt.return (Pricklypear_lisp.Ast.VStr "list-tokens: denied: admin only")
+      else if target_uid = "" then
+        Lwt.return (Pricklypear_lisp.Ast.VStr "list-tokens: no such user")
+      else
+        let* metas = Auth_store.list_tokens t.store ~user_id:target_uid in
+        let rows =
+          List.map
+            (fun (m : Auth_store.token_meta) ->
+              Pricklypear_lisp.Ast.VList
+                [ Pricklypear_lisp.Ast.VStr m.id;
+                  Pricklypear_lisp.Ast.VStr (Option.value m.label ~default:"");
+                  Pricklypear_lisp.Ast.VStr m.token_last4;
+                  Pricklypear_lisp.Ast.VStr m.created_at;
+                  Pricklypear_lisp.Ast.VStr (Option.value m.last_used_at ~default:"") ])
+            metas
+        in
+        Lwt.return (Pricklypear_lisp.Ast.VList rows));
+
+  (* (revoke-token credential-id) -> VStr ok|error. Caller may revoke own; admin any. *)
+  Primitives.register tbl "revoke-token"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr cid ] when cid <> "" ->
+          let* r = Auth_store.revoke_token t.store ~credential_id:cid in
+          (match r with
+           | Error e -> Lwt.return (Pricklypear_lisp.Ast.VStr ("revoke-token: " ^ e))
+           | Ok () -> Lwt.return (Pricklypear_lisp.Ast.VStr "ok"))
+      | _ -> Lwt.return (Pricklypear_lisp.Ast.VStr "revoke-token: need credential-id"));
+
+  (* (rotate-token credential-id [label]) -> VStr new-raw-token. Admin: rotates any;
+     non-admin rotates own (credential must belong to caller). Returns new raw token ONCE. *)
+  Primitives.register tbl "rotate-token"
+    (fun args ->
+      let uname = caller_username () in
+      (match args with
+       | [ Pricklypear_lisp.Ast.VStr cid ] when cid <> "" ->
+           (* Verify the credential belongs to the caller (or admin). *)
+           let* caller = Auth_store.get_user_by_username t.store uname in
+           let caller_id = match caller with Some x -> x.Auth_store.id | None -> "" in
+           let is_admin = match caller with Some x -> x.Auth_store.is_admin | None -> false in
+           let* metas = Auth_store.list_tokens t.store ~user_id:caller_id in
+           let owns = List.exists (fun (m : Auth_store.token_meta) -> m.id = cid) metas in
+           if not is_admin && not owns then
+             Lwt.return (Pricklypear_lisp.Ast.VStr "rotate-token: denied: not your token")
+           else
+             let* r = Auth_store.rotate_token t.store ~credential_id:cid ~user_id:caller_id () in
+             (match r with
+              | Error e -> Lwt.return (Pricklypear_lisp.Ast.VStr ("rotate-token: " ^ e))
+              | Ok raw -> Lwt.return (Pricklypear_lisp.Ast.VStr raw))
+       | _ -> Lwt.return (Pricklypear_lisp.Ast.VStr "rotate-token: need credential-id")));
+
+  (* (set-allow-agent-promote bool) -> VStr ok|error. Sets the CALLER's own toggle. *)
+  Primitives.register tbl "set-allow-agent-promote"
+    (fun args ->
+      let parse_bool = function
+        | Pricklypear_lisp.Ast.VBool b -> b
+        | Pricklypear_lisp.Ast.VStr s ->
+            (match String.lowercase_ascii (String.trim s) with
+             | "1" | "true" | "yes" | "on" -> true
+             | _ -> false)
+        | Pricklypear_lisp.Ast.VInt n -> n <> 0L
+        | _ -> false
+      in
+      let caller = caller_username () in
+      if caller = "anonymous" then
+        Lwt.return (Pricklypear_lisp.Ast.VStr "set-allow-agent-promote: denied for anonymous")
+      else
+        (match args with
+         | [ flag ] ->
+             let* u = Auth_store.get_user_by_username t.store caller in
+             (match u with
+              | None -> Lwt.return (Pricklypear_lisp.Ast.VStr "set-allow-agent-promote: no such user")
+              | Some user ->
+                  let v = parse_bool flag in
+                  let* r = Auth_store.set_allow_agent_promote t.store ~user_id:user.id ~value:v in
+                  (match r with
+                   | Error e -> Lwt.return (Pricklypear_lisp.Ast.VStr ("set-allow-agent-promote: " ^ e))
+                   | Ok () -> Lwt.return (Pricklypear_lisp.Ast.VStr "ok")))
+         | _ -> Lwt.return (Pricklypear_lisp.Ast.VStr "set-allow-agent-promote: need bool")));
+
+  (* (promote [name...]) -> VStr count|error. Agent: promote own defs (or named)
+     into parent's personal. Human: denied (use promote-to-main admin path). *)
+  Primitives.register tbl "promote"
+    (fun args ->
+      let names =
+        List.filter_map
+          (fun a -> match a with Pricklypear_lisp.Ast.VStr s -> Some s | _ -> None)
+          args
+      in
+      let* r = promote_to_personal t ~names in
+      (match r with
+       | Error e -> Lwt.return (Pricklypear_lisp.Ast.VStr ("promote: " ^ e))
+       | Ok n -> Lwt.return (Pricklypear_lisp.Ast.VStr (string_of_int n))));
 
   (* (current-branch) -> VStr *)
   Primitives.register_sync tbl "current-branch"
@@ -2236,6 +2455,36 @@ and checkout_personal (t : t) : unit Lwt.t =
       Printf.eprintf "[session] checkout %s (%s)\n%!" branch_ref id;
       checkout_to t ~branch_id:id ~branch_ref
 
+(** Agent branch: owner = parent human's username, name = "agent".
+    Sibling of the parent's personal; agent boots here, not in personal. *)
+and ensure_agent_branch (t : t) ~(parent_username : string)
+  : string option Lwt.t =
+  let* main_id_opt =
+    Store.lookup_branch_id_by_name t.store ~owner:"system" ~name:"main"
+  in
+  let parent_id =
+    match main_id_opt with
+    | Some id -> id
+    | None -> Store.system_main_id
+  in
+  Store.ensure_branch t.store ~parent_id ~owner:parent_username ~name:"agent"
+
+and checkout_agent (t : t) ~(parent_username : string) : unit Lwt.t =
+  let branch_ref = parent_username ^ "/agent" in
+  let* found =
+    Store.lookup_branch_id_by_name t.store ~owner:parent_username
+      ~name:"agent"
+  in
+  match found with
+  | None ->
+      Printf.eprintf
+        "[session] agent branch missing; staying on %s\n%!"
+        t.manifest.branch_name;
+      rehydrate t
+  | Some id ->
+      Printf.eprintf "[session] checkout %s (%s)\n%!" branch_ref id;
+      checkout_to t ~branch_id:id ~branch_ref
+
 and recipe_hello (t : t) : (string, string) result Lwt.t =
   load_library t "hello"
 
@@ -2431,6 +2680,8 @@ let attach_identity
     ~(is_admin : bool)
     ?(auth_token : string option = None)
     ?(checkout_personal_now = false)
+    ?(user_type : string = "human")
+    ?(parent_user_id : string option = None)
     () : unit Lwt.t =
   let prev = t.manifest.username in
   t.manifest <-
@@ -2438,8 +2689,28 @@ let attach_identity
   t.is_admin <- is_admin;
   t.auth_token <- auth_token;
   if checkout_personal_now || prev <> username then
-    let* _ = ensure_personal_branch t in
-    checkout_personal t
+    if user_type = "agent" then
+      (* Agent boots into <parent>/agent, not <username>/personal. *)
+      (match parent_user_id with
+       | Some pid ->
+           let* parent_opt = Auth_store.get_user_by_id t.store pid in
+           (match parent_opt with
+            | Some p ->
+                let* _ = ensure_agent_branch t ~parent_username:p.username in
+                checkout_agent t ~parent_username:p.username
+            | None ->
+                Printf.eprintf
+                  "[session] agent %s has no parent; staying on %s\n%!"
+                  username t.manifest.branch_name;
+                Lwt.return_unit)
+       | None ->
+           Printf.eprintf
+             "[session] agent %s has no parent_user_id; staying on %s\n%!"
+             username t.manifest.branch_name;
+           Lwt.return_unit)
+    else
+      let* _ = ensure_personal_branch t in
+      checkout_personal t
   else
     Lwt.return_unit
 
@@ -2517,6 +2788,10 @@ let promote_to_main (t : t) ~(source_ref : string) ~(names : string list)
           in
           Lwt.return (Ok n)
 
+(** Agent promotes from its current branch (admin/agent) into the parent
+    human's personal branch. Gated by the parent's allow_agent_promote
+    toggle. Empty names = all functions defined ON the current branch
+    (depth 0, not inherited). *)
 (** Full fork: parent_ref -> owner/child_name (uses Store.fork_branch copy). *)
 let fork_ref (t : t) ~(parent_ref : string) ~(child_ref : string)
   : (string, string) result Lwt.t =
