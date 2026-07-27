@@ -785,6 +785,66 @@
     (workout/log/ksk-write date "ksk3" inten doc load unit
       total total n rs rs)))
 
+;; --- scheduler (KSK 1.0 → calendar) ---
+
+(define (workout/member? x xs)
+  "True if integer x is in list xs."
+  (if (null? xs) #f
+      (if (= (car xs) x) #t (workout/member? x (cdr xs)))))
+
+(define (workout/next-training-day date weekdays)
+  "Next date on/after date whose weekday (0=Sun..6=Sat) is in weekdays."
+  (let* ((parts (string-split (as-str date) "-"))
+         (y (parse-int (nth parts 0)))
+         (m (parse-int (nth parts 1)))
+         (d (parse-int (nth parts 2)))
+         (wd (date-weekday y m d)))
+    (if (workout/member? wd weekdays)
+        (as-str date)
+        (workout/next-training-day (date-add-days (as-str date) 1) weekdays))))
+
+(define (workout/ksk1-next phase week day)
+  "Next (phase week day) in KSK 1.0 canonical order; () after P3W3D3."
+  (cond
+    ((< day 3) (list phase week (+ day 1)))
+    ((< week 3) (list phase (+ week 1) 1))
+    ((< phase 3) (list (+ phase 1) 1 1))
+    (else (list))))
+
+(define (workout/ksk1-sched-from date weekdays load unit skip phase week day notes create? acc)
+  "Walk KSK 1.0 (phase week day) sequence; skip first `skip`; schedule rest."
+  (if (> phase 3)
+      (if create? (count acc) acc)
+      (let* ((pat (workout/ksk1-pattern phase day))
+             (title (string-append "KSK1 P" (as-str phase) " W" (as-str week) " D" (as-str day)
+                       " · " pat " · " (as-str load) (as-str unit) " · "
+                       (as-str (workout/ksk-time-cap "ksk1")) "m"))
+             (nxt (workout/ksk1-next phase week day)))
+        (if (> skip 0)
+            (if (null? nxt)
+                (if create? (count acc) acc)
+                (workout/ksk1-sched-from date weekdays load unit (- skip 1)
+                                         (nth nxt 0) (nth nxt 1) (nth nxt 2) notes create? acc))
+            (let* ((acc2 (append acc (list (list date title))))
+                   (next-date (workout/next-training-day (date-add-days date 1) weekdays)))
+              (seq
+                (if create? (calendar/create title date "" notes) ())
+                (if (null? nxt)
+                    (if create? (count acc2) acc2)
+                    (workout/ksk1-sched-from next-date weekdays load unit 0
+                                             (nth nxt 0) (nth nxt 1) (nth nxt 2) notes create? acc2))))))))
+
+(define (workout/ksk1-schedule start-date weekdays load unit skip notes create?)
+  "Schedule remaining KSK 1.0 sessions on allowed weekdays.
+   start-date: YYYY-MM-DD inclusive (first session falls on/after it).
+   weekdays: list of weekday ints, 0=Sun..6=Sat (e.g. (4 6 1) = Thu Sat Mon).
+   load/unit: bell weight + unit for titles.
+   skip: canonical KSK 1.0 sessions already done (skip them; 1=P1W1D1 ...).
+   notes: notes string for each calendar event.
+   create?: #t writes calendar events and returns count; #f dry-run returns (date title) list."
+  (workout/ksk1-sched-from (workout/next-training-day start-date weekdays)
+                           weekdays load unit skip 1 1 1 notes create? (list)))
+
 (define (workout/insert-session-desc sorted row)
   "Insert into date-desc list."
   (if (null? sorted)
