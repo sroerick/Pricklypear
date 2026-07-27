@@ -307,6 +307,10 @@
   (doc "Book chapter — flashcards / spaced repetition; full text inlined from borge/flashcards.borg")
   (inline borge/flashcards.borg)
  )
+ (section workout
+  (doc "Book chapter — workout journal (fluid program docs + queryable facts); full text inlined from borge/workout.borg")
+  (inline borge/workout.borg)
+ )
  (section dabar
   (doc "Book chapter — BSB study libraries (dabar); full text inlined from borge/dabar.borg")
   (inline borge/dabar.borg)
