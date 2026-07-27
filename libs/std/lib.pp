@@ -43,6 +43,27 @@
         (list/range-acc (- n 1) (cons (- n 1) acc))))
   "Internal accumulator for list/range.")
 
+;; --- binding/control macros ---
+;; Unhygienic defmacro + quasiquote (language-roadmap decision default).
+;; Single-body only: defmacro params do not support dotted rest args.
+
+;; (let* ((a 1) (b (+ a 1))) body) — sequential bindings; each value
+;; sees earlier names. Expands to nested parallel let.
+(defmacro let* (bindings body)
+  (if (null? bindings)
+      body
+      (quasiquote
+        (let ((unquote (car bindings)))
+          (let* (unquote (cdr bindings)) (unquote body))))))
+
+;; (when test body) — evaluate body only when test is truthy; else ().
+(defmacro when (test body)
+  (quasiquote (if (unquote test) (unquote body) ())))
+
+;; (unless test body) — evaluate body only when test is falsey.
+(defmacro unless (test body)
+  (quasiquote (if (unquote test) () (unquote body))))
+
 ;; --- dict/ ---
 
 ;; (dict-set* json (list "k1" v1 "k2" v2 …)) — flat multi-field update.
