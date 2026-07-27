@@ -61,49 +61,16 @@
         "blocks" "[]")))
   "Minimal fluid doc envelope (JSON tree).")
 
-;; Lexicographic compare for YYYY-MM-DD strings.
-(define workout/char-rank
-  (lambda (c)
-    (let ((s (as-str c)))
-      (cond
-        ((string-eq s "0") 0) ((string-eq s "1") 1) ((string-eq s "2") 2)
-        ((string-eq s "3") 3) ((string-eq s "4") 4) ((string-eq s "5") 5)
-        ((string-eq s "6") 6) ((string-eq s "7") 7) ((string-eq s "8") 8)
-        ((string-eq s "9") 9) ((string-eq s "-") 10)
-        (else 50))))
-  "Rank digit/dash for date compare.")
-
-(define workout/str-lt-loop
-  (lambda (a b i)
-    (let ((la (string-length a))
-          (lb (string-length b)))
-      (if (>= i la)
-          (if (>= i lb) #f #t)
-          (if (>= i lb)
-              #f
-              (let ((ca (substring a i 1))
-                    (cb (substring b i 1)))
-                (if (string-eq ca cb)
-                    (workout/str-lt-loop a b (+ i 1))
-                    (< (workout/char-rank ca) (workout/char-rank cb))))))))
-  "Internal str < loop.")
-
-(define workout/str-lt?
-  (lambda (a b)
-    (let ((sa (as-str a))
-          (sb (as-str b)))
-      (if (string-eq sa sb) #f (workout/str-lt-loop sa sb 0))))
-  "True if a < b lexicographically.")
-
+;; Date ordering via the string<? prim family (byte-wise; correct for
+;; zero-padded ISO YYYY-MM-DD from date-format/date-today). Replaces the
+;; hand-rolled char-rank/str-lt loop deleted when string<? landed.
 (define workout/date-ge?
-  (lambda (a b)
-    (if (string-eq (as-str a) (as-str b)) #t (not (workout/str-lt? a b))))
-  "a >= b.")
+  (lambda (a b) (string>=? (as-str a) (as-str b)))
+  "a >= b (ISO date strings).")
 
 (define workout/date-le?
-  (lambda (a b)
-    (if (string-eq (as-str a) (as-str b)) #t (workout/str-lt? a b)))
-  "a <= b.")
+  (lambda (a b) (string<=? (as-str a) (as-str b)))
+  "a <= b (ISO date strings).")
 
 (define workout/date-in-range?
   (lambda (day from to)
@@ -699,29 +666,29 @@
                   (rr (workout/as-int (workout/pget prog "reps_r")))
                   (ri (workout/as-int (workout/pget prog "rung_index")))
                   (lad (workout/as-int (workout/pget prog "ladder")))
-                  (sd (workout/as-int (workout/pget prog "sets_done"))))
+                  (sd (workout/as-int (workout/pget prog "sets_done")))
+                  (advance-rung (string-eq side "R"))
+                  (is-sets (string-eq kind "sets"))
+                  (n-rungs (workout/len (workout/pattern-rungs pat))))
               (let ((rl2 (if (string-eq side "L") (+ rl target) rl))
-                    (rr2 (if (string-eq side "R") (+ rr target) rr))
-                    (next-side (if (string-eq side "L") "R" "L"))
-                    (advance-rung (string-eq side "R")))
-                (let ((ri2
-                        (if (string-eq kind "sets")
-                            ri
-                            (if advance-rung
-                                (let ((n (workout/len (workout/pattern-rungs pat))))
-                                  (if (>= (+ ri 1) n) 0 (+ ri 1)))
-                                ri)))
-                      (lad2
-                        (if (string-eq kind "sets")
-                            lad
-                            (if advance-rung
-                                (let ((n (workout/len (workout/pattern-rungs pat))))
-                                  (if (>= (+ ri 1) n) (+ lad 1) lad))
-                                lad)))
-                      (sd2
-                        (if (string-eq kind "sets")
-                            (if advance-rung (+ sd 1) sd)
-                            sd)))
+                    (rr2 (if advance-rung (+ rr target) rr))
+                    (next-side (if advance-rung "L" "R"))
+                    (ri2
+                      (if is-sets
+                          ri
+                          (if advance-rung
+                              (if (>= (+ ri 1) n-rungs) 0 (+ ri 1))
+                              ri)))
+                    (lad2
+                      (if is-sets
+                          lad
+                          (if advance-rung
+                              (if (>= (+ ri 1) n-rungs) (+ lad 1) lad)
+                              lad)))
+                    (sd2
+                      (if is-sets
+                          (if advance-rung (+ sd 1) sd)
+                          sd)))
                   (let ((prog2
                           (dict-set* "{}"
                             (list
@@ -737,7 +704,7 @@
                       (seq
                         (workout/ksk-save-doc session-id doc2)
                         (workout/ksk-upsert-facts session-id doc2)
-                        doc2))))))))))
+                        doc2)))))))))
   "Complete current rung/set side; advance progress; upsert facts.")
 
 (define workout/ksk-capture
