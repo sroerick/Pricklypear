@@ -143,6 +143,19 @@
           (workout/empty-doc prog inten) "" (as-str (whoami))))))
   "Create in_progress session; return id.")
 
+(define workout/session-create-with-doc
+  (lambda (program intensity doc)
+    (let ((prog (if (blank? (as-str program)) "free" (as-str program)))
+          (inten (if (null? intensity) "" (as-str intensity)))
+          (d (if (blank? (as-str doc))
+                 (workout/empty-doc prog inten)
+                 (as-str doc))))
+      (create 'workout-session
+        (workout/session-fields
+          (workout/today) prog inten "in_progress" ""
+          d "" (as-str (whoami))))))
+  "Create in_progress session with full fluid doc; return id.")
+
 (define workout/session-create-complete
   (lambda (program intensity date notes)
     (let ((prog (if (blank? (as-str program)) "free" (as-str program)))
@@ -377,8 +390,363 @@
   "Total reps in a session.")
 
 (define workout/programs
-  (lambda () (list "free"))
-  "Available programs (v1: free).")
+  (lambda () (list "free" "ksk1" "ksk2" "ksk3"))
+  "Available program ids.")
+
+(define workout/ksk-program?
+  (lambda (p)
+    (let ((s (as-str p)))
+      (if (string-eq s "ksk1") #t
+          (if (string-eq s "ksk2") #t
+              (string-eq s "ksk3")))))
+  "True if program is a KSK variant.")
+
+;; --- integer helpers (for KSK 3.0 %) ---
+
+(define workout/max0
+  (lambda (n) (if (< n 1) 1 n))
+  "Clamp to at least 1.")
+
+(define workout/len
+  (lambda (xs)
+    (list/foldl (lambda (acc _) (+ acc 1)) 0 xs))
+  "Length of list or pair-chain (count only accepts true lists).")
+
+;; --- KSK prescription tables (structure only; personal program use) ---
+
+;; Returns comma-joined rungs for ladder, or "S:N" for straight sets of N.
+(define workout/ksk1-pattern
+  (lambda (phase day)
+    (let ((p (workout/as-int phase))
+          (d (workout/as-int day)))
+      (cond
+        ((= p 1)
+         (cond ((= d 1) "1,2,3,4,5")
+               ((= d 2) "1,2,3")
+               (else "1,2,3,4")))
+        ((= p 2)
+         (cond ((= d 1) "3,6,9")
+               ((= d 2) "3,6")
+               (else "3,6,9,12")))
+        (else
+         (cond ((= d 1) "S:9")
+               ((= d 2) "S:15")
+               (else "S:12"))))))
+  "KSK 1.0 pattern string for phase/day.")
+
+(define workout/ksk2-set-size
+  (lambda (phase day)
+    (let ((p (workout/as-int phase))
+          (d (workout/as-int day)))
+      (cond
+        ((= p 1) (cond ((= d 1) 10) ((= d 2) 20) (else 15)))
+        ((= p 2) (cond ((= d 1) 12) ((= d 2) 24) (else 18)))
+        (else (cond ((= d 1) 15) ((= d 2) 30) (else 20))))))
+  "KSK 2.0 per-hand set size for phase/day.")
+
+(define workout/ksk3-pct
+  (lambda (week day)
+    (let ((w (workout/as-int week))
+          (d (workout/as-int day)))
+      (cond
+        ((= d 1) (if (or (= w 1) (= w 3)) 50 60))
+        ((= d 2) (if (or (= w 1) (= w 3)) 65 75))
+        (else (if (or (= w 1) (= w 3)) 70 80)))))
+  "KSK 3.0 percentage of RM-total for week/day.")
+
+(define workout/ksk3-per-hand
+  (lambda (rm-total pct)
+    (workout/max0 (floor (div (* (workout/as-int rm-total) (workout/as-int pct)) 200))))
+  "Per-hand reps = floor(rm_total * pct / 200).")
+
+(define workout/pattern-kind
+  (lambda (pat)
+    (let ((s (as-str pat)))
+      (if (string-eq (substring s 0 (if (< (string-length s) 2) 0 2)) "S:")
+          "sets"
+          "ladder")))
+  "ladder | sets from pattern string.")
+
+(define workout/pattern-rungs
+  (lambda (pat)
+    (let ((s (as-str pat)))
+      (if (string-eq (workout/pattern-kind s) "sets")
+          (list)
+          (string-split s ","))))
+  "List of rung size strings for ladder pattern.")
+
+(define workout/pattern-set-size
+  (lambda (pat)
+    (let ((s (as-str pat)))
+      (if (string-eq (workout/pattern-kind s) "sets")
+          (workout/as-int (substring s 2 (- (string-length s) 2)))
+          0)))
+  "Straight-set size from S:N pattern.")
+
+(define workout/ksk-time-cap
+  (lambda (program)
+    (if (string-eq (as-str program) "ksk3") 15 20))
+  "Minutes: ksk3=15, else 20.")
+
+(define workout/ksk-build-doc
+  (lambda (program phase day week load unit pattern rm-total pct per-hand)
+    (dict-set* "{}"
+      (list
+        "program" (as-str program)
+        "exercise" "Snatch"
+        "params"
+        (dict-set* "{}"
+          (list
+            "phase" (as-str phase)
+            "day" (as-str day)
+            "week" (as-str week)
+            "time_cap_min" (as-str (workout/ksk-time-cap program))
+            "load" (as-str load)
+            "unit" (workout/normalize-unit unit)
+            "pattern" (as-str pattern)
+            "kind" (workout/pattern-kind pattern)
+            "rm_total" (as-str rm-total)
+            "pct" (as-str pct)
+            "per_hand" (as-str per-hand)
+            "hand_policy" "per-rung-both"))
+        "progress"
+        (dict-set* "{}"
+          (list
+            "ladder" "0"
+            "rung_index" "0"
+            "side" "L"
+            "reps_l" "0"
+            "reps_r" "0"
+            "sets_done" "0"
+            "started" ""
+            "elapsed_sec" "0"))
+        "blocks" "[]")))
+  "Full KSK session.doc tree.")
+
+(define workout/ksk1-plan
+  (lambda (phase day load unit)
+    (let ((p (workout/as-int phase))
+          (d (workout/as-int day))
+          (pat (workout/ksk1-pattern phase day)))
+      (workout/ksk-build-doc "ksk1" p d "" load unit pat "" "" "")))
+  "KSK 1.0 plan doc for phase day load unit.")
+
+(define workout/ksk2-plan
+  (lambda (phase day load unit)
+    (let ((p (workout/as-int phase))
+          (d (workout/as-int day))
+          (n (workout/ksk2-set-size phase day)))
+      (workout/ksk-build-doc "ksk2" p d "" load unit
+        (string-append "S:" (as-str n)) "" "" "")))
+  "KSK 2.0 plan doc (straight sets).")
+
+(define workout/ksk3-plan
+  (lambda (week day load unit rm-total)
+    (let ((w (workout/as-int week))
+          (d (workout/as-int day))
+          (rm (workout/as-int rm-total))
+          (pct (workout/ksk3-pct week day)))
+      (let ((ph (workout/ksk3-per-hand rm pct)))
+        (workout/ksk-build-doc "ksk3" "" d w load unit
+          (string-append "S:" (as-str ph))
+          rm pct ph))))
+  "KSK 3.0 plan doc from week/day/rm-total.")
+
+(define workout/doc-params
+  (lambda (doc) (dict-get doc "params"))
+  "params sub-dict of session doc.")
+
+(define workout/doc-progress
+  (lambda (doc) (dict-get doc "progress"))
+  "progress sub-dict of session doc.")
+
+(define workout/pget
+  (lambda (dict key)
+    (if (null? dict) ""
+        (let ((v (dict-get dict (as-str key))))
+          (if (null? v) "" (as-str v)))))
+  "String get from nested dict.")
+
+(define workout/parse-session-doc
+  (lambda (id)
+    (let ((f (workout/session id)))
+      (if (null? f) ()
+          (let ((raw (workout/session-doc f)))
+            (if (blank? raw) () raw)))))
+  "Raw doc string for session (JSON tree).")
+
+(define workout/ksk-current-target
+  (lambda (doc)
+    (let ((params (workout/doc-params doc))
+          (prog (workout/doc-progress doc)))
+      (let ((kind (workout/pget params "kind"))
+            (pat (workout/pget params "pattern"))
+            (ri (workout/as-int (workout/pget prog "rung_index"))))
+        (if (string-eq kind "sets")
+            (let ((ph (workout/pget params "per_hand")))
+              (if (blank? ph)
+                  (workout/pattern-set-size pat)
+                  (workout/as-int ph)))
+            (let ((rungs (workout/pattern-rungs pat)))
+              (if (null? rungs) 0
+                  (let ((idx ri)
+                        (n (workout/len rungs)))
+                    (let ((i (if (< idx 0) 0 (if (>= idx n) 0 idx))))
+                      (workout/as-int (nth rungs i))))))))))
+  "Reps target for current step (per hand).")
+
+(define workout/ksk-label
+  (lambda (doc)
+    (let ((params (workout/doc-params doc))
+          (prog (as-str (dict-get doc "program"))))
+      (let ((phase (workout/pget params "phase"))
+            (day (workout/pget params "day"))
+            (week (workout/pget params "week"))
+            (pat (workout/pget params "pattern"))
+            (load (workout/pget params "load"))
+            (unit (workout/pget params "unit"))
+            (cap (workout/pget params "time_cap_min")))
+        (string-append
+          (as-str prog)
+          (if (blank? phase) "" (string-append " P" phase))
+          (if (blank? week) "" (string-append " W" week))
+          " D" day
+          " · " pat
+          " · " load (if (blank? unit) "" (string-append " " unit))
+          " · " cap "m"))))
+  "Short human label for a KSK doc.")
+
+(define workout/ksk-start
+  (lambda (program phase day week load unit rm-total)
+    (let ((p (as-str program)))
+      (let ((doc
+              (cond
+                ((string-eq p "ksk1")
+                 (workout/ksk1-plan phase day load unit))
+                ((string-eq p "ksk2")
+                 (workout/ksk2-plan phase day load unit))
+                ((string-eq p "ksk3")
+                 (workout/ksk3-plan week day load unit rm-total))
+                (else ()))))
+        (if (null? doc)
+            ()
+            (let ((params (workout/doc-params doc))
+                  (inten
+                    (if (string-eq p "ksk3")
+                        (string-append "w" (as-str week) "d" (as-str day))
+                        (string-append "p" (as-str phase) "d" (as-str day)))))
+              (workout/session-create-with-doc p inten doc))))))
+  "Create in_progress KSK session from plan args; return id.")
+
+(define workout/ksk-upsert-facts
+  (lambda (session-id doc)
+    (let ((params (workout/doc-params doc))
+          (prog (workout/doc-progress doc)))
+      (let ((load (workout/pget params "load"))
+            (unit (workout/pget params "unit"))
+            (rl (workout/pget prog "reps_l"))
+            (rr (workout/pget prog "reps_r"))
+            (sid (as-str session-id)))
+        (seq
+          (workout/ksk-replace-side sid "Snatch L" load unit rl)
+          (workout/ksk-replace-side sid "Snatch R" load unit rr)))))
+  "Project L/R totals into exercise facts (idempotent replace).")
+
+(define workout/ksk-replace-side
+  (lambda (sid name load unit reps)
+    (seq
+      (list/map
+        (lambda (row)
+          (let ((f (workout/row-fields row)))
+            (if (string-eq (workout/field f "exercise") (as-str name))
+                (workout/exercise-delete (workout/row-id row))
+                ())))
+        (workout/exercises sid))
+      (if (or (blank? (as-str reps)) (string-eq (as-str reps) "0"))
+          ()
+          (workout/exercise-log sid name load unit reps "" ""))))
+  "Delete existing name rows then log fresh total.")
+
+(define workout/ksk-save-doc
+  (lambda (id doc)
+    (let ((cur (workout/session id)))
+      (if (null? cur)
+          ()
+          (workout/session-update id
+            (workout/session-fields
+              (workout/session-date cur)
+              (workout/session-program cur)
+              (workout/session-intensity cur)
+              (workout/session-state cur)
+              (workout/session-notes cur)
+              doc
+              (workout/field cur "duration_sec")
+              (workout/field cur "author"))))))
+  "Write doc back onto session row.")
+
+(define workout/ksk-step
+  (lambda (session-id)
+    (let ((doc (workout/parse-session-doc session-id)))
+      (if (null? doc)
+          ()
+          (let ((params (workout/doc-params doc))
+                (prog (workout/doc-progress doc))
+                (target (workout/ksk-current-target doc))
+                (side (workout/pget (workout/doc-progress doc) "side"))
+                (kind (workout/pget (workout/doc-params doc) "kind"))
+                (pat (workout/pget (workout/doc-params doc) "pattern")))
+            (let ((rl (workout/as-int (workout/pget prog "reps_l")))
+                  (rr (workout/as-int (workout/pget prog "reps_r")))
+                  (ri (workout/as-int (workout/pget prog "rung_index")))
+                  (lad (workout/as-int (workout/pget prog "ladder")))
+                  (sd (workout/as-int (workout/pget prog "sets_done"))))
+              (let ((rl2 (if (string-eq side "L") (+ rl target) rl))
+                    (rr2 (if (string-eq side "R") (+ rr target) rr))
+                    (next-side (if (string-eq side "L") "R" "L"))
+                    (advance-rung (string-eq side "R")))
+                (let ((ri2
+                        (if (string-eq kind "sets")
+                            ri
+                            (if advance-rung
+                                (let ((n (workout/len (workout/pattern-rungs pat))))
+                                  (if (>= (+ ri 1) n) 0 (+ ri 1)))
+                                ri)))
+                      (lad2
+                        (if (string-eq kind "sets")
+                            lad
+                            (if advance-rung
+                                (let ((n (workout/len (workout/pattern-rungs pat))))
+                                  (if (>= (+ ri 1) n) (+ lad 1) lad))
+                                lad)))
+                      (sd2
+                        (if (string-eq kind "sets")
+                            (if advance-rung (+ sd 1) sd)
+                            sd)))
+                  (let ((prog2
+                          (dict-set* "{}"
+                            (list
+                              "ladder" (as-str lad2)
+                              "rung_index" (as-str ri2)
+                              "side" next-side
+                              "reps_l" (as-str rl2)
+                              "reps_r" (as-str rr2)
+                              "sets_done" (as-str sd2)
+                              "started" (workout/pget prog "started")
+                              "elapsed_sec" (workout/pget prog "elapsed_sec")))))
+                    (let ((doc2 (dict-set doc "progress" prog2)))
+                      (seq
+                        (workout/ksk-save-doc session-id doc2)
+                        (workout/ksk-upsert-facts session-id doc2)
+                        doc2))))))))))
+  "Complete current rung/set side; advance progress; upsert facts.")
+
+(define workout/ksk-capture
+  (lambda (session-id)
+    (let ((doc (workout/parse-session-doc session-id)))
+      (seq
+        (if (null? doc) () (workout/ksk-upsert-facts session-id doc))
+        (workout/session-complete session-id ""))))
+  "Final project + mark session complete.")
 
 (define workout/insert-session-desc
   (lambda (sorted row)
@@ -444,16 +812,26 @@
           (let ((f (workout/session id)))
             (if (null? f)
                 ""
-                (html/div (html/attr "class" "card")
-                  (html/join
-                    (list
-                      (html/h2 "Continue")
-                      (html/p
-                        (string-append
-                          (workout/session-title f) " is in progress."))
-                      (html/p* ""
-                        (html/a (string-append "/workout/session?id=" id)
-                          "Open session"))))))))))
+                (let ((prog (workout/session-program f))
+                      (run-href (string-append "/workout/run?id=" id))
+                      (sess-href (string-append "/workout/session?id=" id)))
+                  (html/div (html/attr "class" "card")
+                    (html/join
+                      (list
+                        (html/h2 "Continue")
+                        (html/p
+                          (string-append
+                            (workout/session-title f) " is in progress."))
+                        (html/p* ""
+                          (html/join
+                            (list
+                              (if (workout/ksk-program? prog)
+                                  (html/a run-href "Resume run")
+                                  "")
+                              (if (workout/ksk-program? prog)
+                                  (html/text " · ")
+                                  "")
+                              (html/a sess-href "Open session")))))))))))))
   "Continue in_progress card or empty string.")
 
 (define workout/start-bar
@@ -467,20 +845,80 @@
               (list
                 (html/hidden "action" "start")
                 (html/hidden "program" "free")
-                (html/label (html/attr "for" "w-inten") "Intensity (optional)")
+                (html/label (html/attr "for" "w-inten") "Note (optional)")
                 (html/text-input "intensity"
                   (html/attrs
                     (list
                       (html/attr "id" "w-inten")
-                      (html/attr "placeholder" "easy / medium / hard"))))
-                (html/button (html/attr "type" "submit") "Start free session"))))
+                      (html/attr "placeholder" "optional tag"))))
+                (html/button (html/attr "type" "submit")
+                  "Start free session"))))
+          (html/h3 "King-Sized Killer")
+          (html/p* (html/attr "class" "muted")
+            (html/text
+              "Single-bell snatch programs (1.0 ladders, 2.0 high sets, 3.0 %RM)."))
+          (html/form "POST" "/workout" ""
+            (html/join
+              (list
+                (html/hidden "action" "start-ksk")
+                (html/label (html/attr "for" "ksk-prog") "Program")
+                (html/select "program"
+                  (html/attr "id" "ksk-prog")
+                  (html/join
+                    (list
+                      (html/option "ksk1" "KSK 1.0" #t)
+                      (html/option "ksk2" "KSK 2.0" #f)
+                      (html/option "ksk3" "KSK 3.0" #f))))
+                (html/label (html/attr "for" "ksk-phase") "Phase (1.0/2.0)")
+                (html/text-input "phase"
+                  (html/attrs
+                    (list
+                      (html/attr "id" "ksk-phase")
+                      (html/attr "value" "1")
+                      (html/attr "inputmode" "numeric"))))
+                (html/label (html/attr "for" "ksk-week") "Week (3.0)")
+                (html/text-input "week"
+                  (html/attrs
+                    (list
+                      (html/attr "id" "ksk-week")
+                      (html/attr "value" "1")
+                      (html/attr "inputmode" "numeric"))))
+                (html/label (html/attr "for" "ksk-day") "Day 1–3")
+                (html/text-input "day"
+                  (html/attrs
+                    (list
+                      (html/attr "id" "ksk-day")
+                      (html/attr "value" "1")
+                      (html/attr "inputmode" "numeric"))))
+                (html/label (html/attr "for" "ksk-load") "Load")
+                (html/text-input "load"
+                  (html/attrs
+                    (list
+                      (html/attr "id" "ksk-load")
+                      (html/attr "placeholder" "24")
+                      (html/attr "required" "required"))))
+                (html/label (html/attr "for" "ksk-unit") "Unit")
+                (html/text-input "unit"
+                  (html/attrs
+                    (list
+                      (html/attr "id" "ksk-unit")
+                      (html/attr "value" "kg"))))
+                (html/label (html/attr "for" "ksk-rm")
+                  "RM total (3.0 — L+R max test)")
+                (html/text-input "rm_total"
+                  (html/attrs
+                    (list
+                      (html/attr "id" "ksk-rm")
+                      (html/attr "placeholder" "50")
+                      (html/attr "inputmode" "numeric"))))
+                (html/button (html/attr "type" "submit") "Start KSK run"))))
           (html/p* (html/attr "class" "muted")
             (html/join
               (list
                 (html/text "Or ")
                 (html/a "/workout/log" "quick log")
                 (html/text " a completed free workout."))))))))
-  "Start free session controls.")
+  "Start free or KSK session controls.")
 
 (define workout/recent-list
   (lambda ()
@@ -589,10 +1027,19 @@
 
 (define workout/session-actions
   (lambda (id state)
+    (let ((f (workout/session id))
+          (prog (if (null? (workout/session id)) ""
+                    (workout/session-program (workout/session id)))))
     (html/div (html/attr "class" "card")
       (html/join
         (list
           (html/h2 "Session")
+          (if (and (string-eq (as-str state) "in_progress")
+                   (workout/ksk-program? prog))
+              (html/p* ""
+                (html/a (string-append "/workout/run?id=" (as-str id))
+                  "→ Open run UI"))
+              "")
           (if (string-eq (as-str state) "in_progress")
               (html/join
                 (list
@@ -626,7 +1073,7 @@
                 (html/hidden "id" (as-str id))
                 (html/button (html/attr "type" "submit")
                   "Delete session"))))
-          (html/p* "" (html/a "/workout" "← All workouts"))))))
+          (html/p* "" (html/a "/workout" "← All workouts")))))))
   "Complete/abandon/delete controls.")
 
 (define workout/session-main
@@ -769,6 +1216,18 @@
                      (request-param "program")
                      (request-param "intensity"))))
            (redirect (string-append "/workout/session?id=" (as-str id)))))
+        ((string-eq action "start-ksk")
+         (let ((id (workout/ksk-start
+                     (request-param "program")
+                     (request-param "phase")
+                     (request-param "day")
+                     (request-param "week")
+                     (request-param "load")
+                     (request-param "unit")
+                     (request-param "rm_total"))))
+           (if (null? id)
+               (redirect "/workout")
+               (redirect (string-append "/workout/run?id=" (as-str id))))))
         (else (redirect "/workout")))))
   "POST /workout.")
 
@@ -794,11 +1253,22 @@
            (redirect (string-append "/workout/session?id=" id))))
         ((string-eq action "complete")
          (seq
-           (workout/session-complete id (request-param "notes"))
+           (if (workout/ksk-program?
+                 (workout/session-program (workout/session id)))
+               (workout/ksk-capture id)
+               (workout/session-complete id (request-param "notes")))
            (redirect (string-append "/workout/session?id=" id))))
         ((string-eq action "abandon")
          (seq
            (workout/session-abandon id)
+           (redirect (string-append "/workout/session?id=" id))))
+        ((string-eq action "ksk-step")
+         (seq
+           (workout/ksk-step id)
+           (redirect (string-append "/workout/run?id=" id))))
+        ((string-eq action "ksk-capture")
+         (seq
+           (workout/ksk-capture id)
            (redirect (string-append "/workout/session?id=" id))))
         ((string-eq action "delete-session")
          (seq
@@ -854,7 +1324,7 @@
             (html/h1 "Workout")
             (html/p* (html/attr "class" "muted")
               (html/text
-                "Training journal — free log now; structured programs later."))
+                "Training journal — free log + King-Sized Killer (snatch)."))
             (workout/home-main)))))
   "GET/POST /workout.")
 
@@ -884,17 +1354,183 @@
             (workout/log-form)))))
   "GET/POST /workout/log.")
 
+(define workout/timer-script
+  (lambda (cap-min)
+    (html/tag "script" ""
+      (string-append
+        "(function(){"
+        "var el=document.getElementById('ksk-timer');"
+        "if(!el)return;"
+        "var cap=" (as-str (workout/as-int cap-min)) "*60;"
+        "var key='pp.ksk.t.'+ (el.getAttribute('data-sid')||'');"
+        "var start=0;"
+        "try{start=parseInt(sessionStorage.getItem(key)||'0',10)||0;}catch(e){}"
+        "if(!start){start=Date.now();try{sessionStorage.setItem(key,String(start));}catch(e){}}"
+        "function tick(){"
+        "var s=Math.floor((Date.now()-start)/1000);"
+        "var left=Math.max(0,cap-s);"
+        "var m=Math.floor(left/60), r=left%60;"
+        "el.textContent=(m<10?'0':'')+m+':'+(r<10?'0':'')+r"
+        "+(left===0?' DONE':'');"
+        "if(left>0)setTimeout(tick,250);"
+        "}"
+        "tick();"
+        "})();")))
+  "Client countdown timer for KSK cap minutes.")
+
+(define workout/run-style
+  (lambda ()
+    (html/tag "style" ""
+      (html/join
+        (list
+          ".ksk-run .ksk-timer{font-size:2.5rem;font-weight:700;letter-spacing:.05em}"
+          ".ksk-run .ksk-target{font-size:2rem;font-weight:700;margin:.5rem 0}"
+          ".ksk-run .ksk-side{font-size:1.4rem}"
+          ".ksk-run form button{font-size:1.2rem;padding:.75rem 1.25rem;margin:.35rem .35rem .35rem 0}"
+          ".ksk-run .ksk-totals{font-size:1.1rem;margin-top:.75rem}"))))
+  "Inline CSS for run page.")
+
+(define workout/run-main
+  (lambda (id)
+    (let ((f (workout/session id)))
+      (if (null? f)
+          (html/div ""
+            (html/join
+              (list
+                (html/p "Session not found.")
+                (html/p* "" (html/a "/workout" "← Back")))))
+          (let ((doc (workout/parse-session-doc id))
+                (st (workout/session-state f))
+                (prog-name (workout/session-program f)))
+            (if (not (workout/ksk-program? prog-name))
+                (html/div ""
+                  (html/join
+                    (list
+                      (html/p "Not a KSK session.")
+                      (html/p* ""
+                        (html/a (string-append "/workout/session?id=" id)
+                          "Open session")))))
+                (let ((params (workout/doc-params doc))
+                      (prog (workout/doc-progress doc))
+                      (target (workout/ksk-current-target doc))
+                      (side (workout/pget (workout/doc-progress doc) "side"))
+                      (cap (workout/pget (workout/doc-params doc) "time_cap_min"))
+                      (kind (workout/pget (workout/doc-params doc) "kind"))
+                      (pat (workout/pget (workout/doc-params doc) "pattern"))
+                      (rl (workout/pget (workout/doc-progress doc) "reps_l"))
+                      (rr (workout/pget (workout/doc-progress doc) "reps_r"))
+                      (lad (workout/pget (workout/doc-progress doc) "ladder"))
+                      (sd (workout/pget (workout/doc-progress doc) "sets_done"))
+                      (ri (workout/pget (workout/doc-progress doc) "rung_index")))
+                  (html/div (html/attr "class" "ksk-run")
+                    (html/join
+                      (list
+                        (workout/run-style)
+                        (html/h1 (html/text (workout/ksk-label doc)))
+                        (html/p* (html/attr "class" "muted")
+                          (html/text (string-append "state: " st)))
+                        (html/div
+                          (html/attrs
+                            (list
+                              (html/attr "id" "ksk-timer")
+                              (html/attr "class" "ksk-timer")
+                              (html/attr "data-sid" id)))
+                          (html/text "--:--"))
+                        (workout/timer-script cap)
+                        (html/p* (html/attr "class" "ksk-side")
+                          (html/text
+                            (string-append "Hand: " side
+                              (if (string-eq kind "ladder")
+                                  (string-append " · rung #"
+                                    (as-str (+ (workout/as-int ri) 1))
+                                    " · ladder " lad)
+                                  (string-append " · sets done " sd)))))
+                        (html/p* (html/attr "class" "ksk-target")
+                          (html/text
+                            (string-append (as-str target)
+                              " snatches (" side ")")))
+                        (html/p* (html/attr "class" "muted")
+                          (html/text
+                            (string-append "pattern " pat
+                              " · per-rung both hands")))
+                        (if (string-eq st "in_progress")
+                            (html/join
+                              (list
+                                (html/form "POST" "/workout/run" ""
+                                  (html/join
+                                    (list
+                                      (html/hidden "action" "ksk-step")
+                                      (html/hidden "id" id)
+                                      (html/button (html/attr "type" "submit")
+                                        (string-append "Done "
+                                          (as-str target) " " side)))))
+                                (html/form "POST" "/workout/run" ""
+                                  (html/join
+                                    (list
+                                      (html/hidden "action" "ksk-capture")
+                                      (html/hidden "id" id)
+                                      (html/button (html/attr "type" "submit")
+                                        "Finish session"))))
+                                (html/form "POST" "/workout/run"
+                                  (html/attr "style" "display:inline")
+                                  (html/join
+                                    (list
+                                      (html/hidden "action" "abandon")
+                                      (html/hidden "id" id)
+                                      (html/button (html/attr "type" "submit")
+                                        "Abandon"))))))
+                            "")
+                        (html/p* (html/attr "class" "ksk-totals")
+                          (html/text
+                            (string-append "Totals — L: " rl " · R: " rr
+                              " · all: "
+                              (as-str (+ (workout/as-int rl)
+                                         (workout/as-int rr))))))
+                        (html/p* ""
+                          (html/join
+                            (list
+                              (html/a
+                                (string-append "/workout/session?id=" id)
+                                "Session detail")
+                              (html/text " · ")
+                              (html/a "/workout" "All workouts")))))))))))))
+  "KSK live run panel.")
+
+(define workout/handle-run-post
+  (lambda ()
+    (let ((action (as-str (request-param "action")))
+          (id (as-str (request-param "id"))))
+      (cond
+        ((string-eq action "ksk-step")
+         (seq
+           (workout/ksk-step id)
+           (redirect (string-append "/workout/run?id=" id))))
+        ((string-eq action "ksk-capture")
+         (seq
+           (workout/ksk-capture id)
+           (redirect (string-append "/workout/session?id=" id))))
+        ((string-eq action "abandon")
+         (seq
+           (workout/session-abandon id)
+           (redirect (string-append "/workout/session?id=" id))))
+        (else (redirect "/workout")))))
+  "POST /workout/run.")
+
 (define workout/run-page
   (lambda ()
-    (html/page
-      (list
-        (html/h1 "Run")
-        (html/p* (html/attr "class" "muted")
-          (html/text
-            "Structured program runners (ksk/qd) are not shipped yet."))
-        (html/p* "" (html/a "/workout" "← Workouts"))
-        (html/p* "" (html/a "/workout/log" "Quick log instead")))))
-  "Placeholder /workout/run.")
+    (if (string-eq (request-method) "POST")
+        (workout/handle-run-post)
+        (let ((id (as-str (request-param "id"))))
+          (html/page
+            (list
+              (if (blank? id)
+                  (html/join
+                    (list
+                      (html/h1 "Run")
+                      (html/p "Missing session id.")
+                      (html/p* "" (html/a "/workout" "← Back"))))
+                  (workout/run-main id)))))))
+  "GET/POST /workout/run?id=.")
 
 (route "/workout" "workout/home-page")
 (route "/workout/session" "workout/session-page")
