@@ -748,6 +748,105 @@
         (workout/session-complete session-id ""))))
   "Final project + mark session complete.")
 
+;; --- historic log DSL (backfill / agent journal) ---
+;;
+;; Prefer program-specific loggers:
+;;   (workout/log/ksk1 date phase day load unit rungs [notes])
+;;   (workout/log/ksk2 date phase day load unit sets  [notes])
+;;   (workout/log/ksk3 date week day load unit rm-total sets [notes])
+;; rungs/sets = list of per-hand rep counts in order performed.
+;; Both hands assumed equal (Snatch L and Snatch R get the same total).
+
+(define workout/sum
+  (lambda (xs)
+    (list/foldl
+      (lambda (acc x) (+ acc (workout/as-int x)))
+      0
+      xs))
+  "Sum numeric list/pair-chain.")
+
+(define workout/join-nums
+  (lambda (xs)
+    (list/foldl
+      (lambda (acc x)
+        (if (blank? acc)
+            (as-str x)
+            (string-append acc " " (as-str x))))
+      ""
+      xs))
+  "Space-join numbers for notes/detail.")
+
+(define workout/log/ksk-write
+  (lambda (date program intensity doc load unit total notes rung-str)
+    (let ((prog0 (workout/doc-progress doc)))
+      (let ((prog
+              (dict-set* "{}"
+                (list
+                  "ladder" (workout/pget prog0 "ladder")
+                  "rung_index" (workout/pget prog0 "rung_index")
+                  "side" "L"
+                  "reps_l" (as-str total)
+                  "reps_r" (as-str total)
+                  "sets_done" (as-str (if (blank? rung-str) 0 0))
+                  "started" ""
+                  "elapsed_sec" ""
+                  "logged" "true"
+                  "rungs" (as-str rung-str))))
+            )
+        (let ((doc2 (dict-set doc "progress" prog))
+              (n (if (blank? (as-str notes))
+                     (string-append
+                       (as-str program) " log: " (as-str rung-str)
+                       " @ " (as-str load) (as-str unit)
+                       " (" (as-str total) "/hand)")
+                     (as-str notes))))
+          (let ((sid
+                  (create "workout-session"
+                    (workout/session-fields
+                      (if (blank? (as-str date)) (workout/today) (as-str date))
+                      (as-str program)
+                      (as-str intensity)
+                      "complete"
+                      n
+                      doc2
+                      ""
+                      (as-str (whoami))))))
+            (seq
+              (workout/exercise-log sid "Snatch L" load unit total "" rung-str)
+              (workout/exercise-log sid "Snatch R" load unit total "" rung-str)
+              sid))))))
+  "Write complete KSK session + L/R facts; return session id.")
+
+(define workout/log/ksk1
+  (lambda (date phase day load unit rungs notes)
+    (let ((doc (workout/ksk1-plan phase day load unit))
+          (total (workout/sum rungs))
+          (rs (workout/join-nums rungs))
+          (inten (string-append "p" (as-str phase) "d" (as-str day)))
+          (n (if (null? notes) "" notes)))
+      (workout/log/ksk-write date "ksk1" inten doc load unit total n rs)))
+  "Log finished KSK 1.0 session. rungs = (1 2 3 4 5 …) per-hand sequence.")
+
+(define workout/log/ksk2
+  (lambda (date phase day load unit sets notes)
+    (let ((doc (workout/ksk2-plan phase day load unit))
+          (total (workout/sum sets))
+          (rs (workout/join-nums sets))
+          (inten (string-append "p" (as-str phase) "d" (as-str day)))
+          (n (if (null? notes) "" notes)))
+      (workout/log/ksk-write date "ksk2" inten doc load unit total n rs)))
+  "Log finished KSK 2.0 session. sets = per-hand set sizes in order (10 10 10 …).")
+
+(define workout/log/ksk3
+  (lambda (date week day load unit rm-total sets notes)
+    (let ((doc (workout/ksk3-plan week day load unit rm-total))
+          (total (workout/sum sets))
+          (rs (workout/join-nums sets))
+          (inten (string-append "w" (as-str week) "d" (as-str day)))
+          (n (if (null? notes) "" notes)))
+      (workout/log/ksk-write date "ksk3" inten doc load unit total n rs)))
+  "Log finished KSK 3.0 session. sets = per-hand set sizes; rm-total = L+R test sum.")
+
 (define workout/insert-session-desc
   (lambda (sorted row)
     (if (null? sorted)
