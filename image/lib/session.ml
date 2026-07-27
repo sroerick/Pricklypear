@@ -1851,8 +1851,11 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value Lwt.t =
           t.manifest.username
     in
     let persist_define name body_expr doc =
-      if t.manifest.username <> "anonymous" then
-        Lwt.async (fun () -> persist_fn name body_expr doc);
+      let* () =
+        if t.manifest.username <> "anonymous" then
+          persist_fn name body_expr doc
+        else Lwt.return_unit
+      in
       let* () =
         if not t.suppress_refresh_on_define
            && (name = "ui/nav" || name = "ui/home" || name = "ui/css"
@@ -1873,14 +1876,16 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value Lwt.t =
      | Pricklypear_lisp.Ast.App
          (Pricklypear_lisp.Ast.Var "defmacro",
           [ Pricklypear_lisp.Ast.Var name; params_expr; body_expr ]) ->
-         if t.manifest.username <> "anonymous" then begin
-           let stored =
-             Pricklypear_lisp.Ast.App
-               (Pricklypear_lisp.Ast.Var "__macro__",
-                [ params_expr; body_expr ])
-           in
-           Lwt.async (fun () -> persist_fn name stored None)
-         end;
+         let* () =
+           if t.manifest.username <> "anonymous" then begin
+             let stored =
+               Pricklypear_lisp.Ast.App
+                 (Pricklypear_lisp.Ast.Var "__macro__",
+                  [ params_expr; body_expr ])
+             in
+             persist_fn name stored None
+           end else Lwt.return_unit
+         in
          Lwt.return v
      | _ -> Lwt.return v))
   with
@@ -1906,8 +1911,11 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
         t.manifest.username
   in
   let persist_define name body_expr doc =
-    if t.manifest.username <> "anonymous" then
-      Lwt.async (fun () -> persist_fn name body_expr doc);
+    let* () =
+      if t.manifest.username <> "anonymous" then
+        persist_fn name body_expr doc
+      else Lwt.return_unit
+    in
     let* () =
       if not t.suppress_refresh_on_define
          && (name = "ui/nav" || name = "ui/home" || name = "ui/css"
@@ -1926,14 +1934,16 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
    | Pricklypear_lisp.Ast.App
        (Pricklypear_lisp.Ast.Var "defmacro",
         [ Pricklypear_lisp.Ast.Var name; params_expr; body_expr ]) ->
-       if t.manifest.username <> "anonymous" then begin
-         let stored =
-           Pricklypear_lisp.Ast.App
-             (Pricklypear_lisp.Ast.Var "__macro__",
-              [ params_expr; body_expr ])
-         in
-         Lwt.async (fun () -> persist_fn name stored None)
-       end;
+       let* () =
+         if t.manifest.username <> "anonymous" then begin
+           let stored =
+             Pricklypear_lisp.Ast.App
+               (Pricklypear_lisp.Ast.Var "__macro__",
+                [ params_expr; body_expr ])
+           in
+           persist_fn name stored None
+         end else Lwt.return_unit
+       in
        Lwt.return v
    | _ -> Lwt.return v))
 
