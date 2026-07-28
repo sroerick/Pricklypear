@@ -919,6 +919,62 @@ let dialect_tests = [
     Alcotest.(check string) "99" "99" (Reader.pp_value got));
 ]
 
+(* --- public-route gate (Route_gate) ---
+   Pure fail-closed gate: infer a handler's effects from the in-memory
+   env and check against the public-route allowlist. Unknown / non-function
+   handlers are DENIED. No DB, no Lwt — tests build an env with lambda
+   handlers whose bodies mention prims (the bodies are not evaluated at
+   define time, so no prim table is needed). *)
+let gate_ok env handler =
+  match Route_gate.check_public_handler ~env handler with
+  | Ok () -> true
+  | Error _ -> false
+
+let gate_tests = [
+  ("gate: pure handler allowed", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    ignore (Eval.eval_string ~prims env "(define h (lambda () 1))");
+    Alcotest.(check bool) "pure allowed" true (gate_ok env "h"));
+  ("gate: write-db handler denied", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    ignore (Eval.eval_string ~prims env "(define h (lambda () (create)))");
+    Alcotest.(check bool) "write denied" false (gate_ok env "h"));
+  ("gate: read-db handler allowed", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    ignore (Eval.eval_string ~prims env "(define h (lambda () (get)))");
+    Alcotest.(check bool) "read allowed" true (gate_ok env "h"));
+  ("gate: branch handler denied", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    ignore (Eval.eval_string ~prims env "(define h (lambda () (fork)))");
+    Alcotest.(check bool) "branch denied" false (gate_ok env "h"));
+  ("gate: unknown handler denied (fail-closed)", `Quick, fun () ->
+    let env = Env.create () in
+    Alcotest.(check bool) "unknown denied" false (gate_ok env "nope"));
+  ("gate: non-function binding denied", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    ignore (Eval.eval_string ~prims env "(define x 5)");
+    Alcotest.(check bool) "non-fn denied" false (gate_ok env "x"));
+  ("gate: handler calling a write-db sibling denied (env known_fn)", `Quick, fun () ->
+    (* Cross-reference via the in-memory env: h calls bad; bad writes.
+       The known_fn built from env lambdas must resolve bad → WriteDb. *)
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    ignore (Eval.eval_string ~prims env "(define bad (lambda () (create)))");
+    ignore (Eval.eval_string ~prims env "(define h (lambda () (bad)))");
+    Alcotest.(check bool) "sibling write denied" false (gate_ok env "h"));
+  ("gate: handler calling a read-db sibling allowed", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    ignore (Eval.eval_string ~prims env "(define reader (lambda () (get)))");
+    ignore (Eval.eval_string ~prims env "(define h (lambda () (reader)))");
+    Alcotest.(check bool) "sibling read allowed" true (gate_ok env "h"));
+]
+
 let () =
   Alcotest.run "pricklypear-lisp" [
     "reader", reader_tests @ reader_list_tests @ reader_completeness_tests
@@ -932,4 +988,5 @@ let () =
     "list-hof", list_hof_tests;
     "tco", tco_tests;
     "dialect", dialect_tests;
+    "gate", gate_tests;
   ]
