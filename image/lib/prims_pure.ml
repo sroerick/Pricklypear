@@ -692,6 +692,13 @@ let prim_count args =
   | [ VNil ] -> VInt 0L
   | _ -> raise (Interp_error (User_error "count needs a list"))
 
+(* (length xs) -> VInt. Like count but accepts VList, VNil, and proper
+   VPair chains (the conventional Lisp `length`). Frozen std name. *)
+let prim_length args =
+  match args with
+  | [ xs ] -> VInt (Int64.of_int (List.length (list_of_value xs)))
+  | _ -> raise (Interp_error (User_error "length needs one list"))
+
 (* Structural deep equality (equal?): recurses VList/VPair/VStr/VInt/
    VFloat/VBool/VSymbol/VNil. VList and VPair chains are compared
    element-wise as sequences, so `(list 1 2 3)` is equal? to the
