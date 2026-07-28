@@ -213,6 +213,35 @@ let eval_tests = [
     let got = (Eval.eval_string ~prims env
       "((lambda () (seq (define x 10) (define y 20) y)))") in
     Alcotest.(check string) "20" "20" (Reader.pp_value got));
+  ("eval: letrec simple lambda", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let got = (Eval.eval_string ~prims env
+      "(letrec ((f (lambda (n) n))) (f 5))") in
+    Alcotest.(check string) "5" "5" (Reader.pp_value got));
+  ("eval: letrec self-recursion", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    (* loop calls itself once: #t -> recurse on #f -> base case 7.
+       Prim-free: exercises the self-binding backpatch. *)
+    let got = (Eval.eval_string ~prims env
+      "(letrec ((loop (lambda (x) (if x (loop #f) 7)))) (loop #t))") in
+    Alcotest.(check string) "7" "7" (Reader.pp_value got));
+  ("eval: letrec mutual recursion", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    (* a's body calls b; b's body is a constant. Prim-free proof that
+       each binding closes over env' and can reach its sibling. *)
+    let got = (Eval.eval_string ~prims env
+      "(letrec ((a (lambda () (b)))\
+               (b (lambda () 42)))\
+        (a))") in
+    Alcotest.(check string) "42" "42" (Reader.pp_value got));
+  ("eval: letrec empty bindings", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let got = (Eval.eval_string ~prims env "(letrec () 42)") in
+    Alcotest.(check string) "42" "42" (Reader.pp_value got));
 ]
 
 let pretty_print_tests = [

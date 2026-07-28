@@ -787,9 +787,35 @@ and eval_special_form
       in
       Done (loop form)
   | "letrec", _ ->
-      raise
-        (Interp_error
-           (User_error "letrec via App form not yet supported"))
+      (match full_args with
+       | [ _; bindings_expr; body ] ->
+           (match bindings_expr with
+            | Lit VNil -> Cont (env, body)
+            | App (App (Var _, _) as first_binding, rest_bindings) ->
+                let all_bindings = first_binding :: rest_bindings in
+                let env' = Env.child env in
+                (* Backpatch: pre-bind all names to VNil so binding exprs
+                   (lambdas) can close over env' and refer to each other
+                   for mutual recursion, then evaluate and overwrite. *)
+                List.iter
+                  (fun bp ->
+                    match bp with
+                    | App (Var n, _) -> Env.define env' n VNil
+                    | _ ->
+                        raise (Interp_error (User_error "bad letrec binding")))
+                  all_bindings;
+                List.iter
+                  (fun bp ->
+                    match bp with
+                    | App (Var n, [ val_expr ]) ->
+                        let v = eval ~budget ~prims env' val_expr in
+                        Env.define env' n v
+                    | _ ->
+                        raise (Interp_error (User_error "bad letrec binding")))
+                  all_bindings;
+                Cont (env', body)
+            | _ -> raise (Interp_error (User_error "bad letrec bindings")))
+       | _ -> raise (Interp_error (User_error "letrec needs bindings + body")))
   (* list/map, list/filter, list/foldl — OCaml loops + apply.
      One special-form tick total instead of O(n) recursive Lisp frames.
      Closure bodies still tick normally via apply. *)
