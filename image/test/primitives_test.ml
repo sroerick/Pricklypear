@@ -323,6 +323,78 @@ let extract_links_tests = [
           (Pricklypear_lisp.Reader.pp_value other));
 ]
 
+let equality_tests = [
+  ("equal? lists same", `Quick, fun () ->
+    Alcotest.(check string) "eq" "#t"
+      (eval_str "(equal? (list 1 2 3) (list 1 2 3))"));
+  ("equal? lists differ", `Quick, fun () ->
+    Alcotest.(check string) "ne" "#f"
+      (eval_str "(equal? (list 1 2) (list 1 2 3))"));
+  ("equal? strings", `Quick, fun () ->
+    Alcotest.(check string) "str eq" "#t"
+      (eval_str "(equal? \"a\" \"a\")"));
+  ("equal? int vs float distinct", `Quick, fun () ->
+    Alcotest.(check string) "int!=float" "#f"
+      (eval_str "(equal? 1 1.0)"));
+  ("equal? cons-chain equals list", `Quick, fun () ->
+    Alcotest.(check string) "cons==list" "#t"
+      (eval_str "(equal? (list 1 2 3) (cons 1 (cons 2 (cons 3 ()))))"));
+  ("equal? dotted pair not equal to proper list", `Quick, fun () ->
+    Alcotest.(check string) "dotted!=proper" "#f"
+      (eval_str "(equal? (cons 1 (cons 2 3)) (list 1 2 3))"));
+  ("equal? symbols", `Quick, fun () ->
+    Alcotest.(check string) "sym eq" "#t"
+      (eval_str "(equal? 'a 'a)"));
+  ("equal? nil and empty list", `Quick, fun () ->
+    Alcotest.(check string) "nil==empty" "#t"
+      (eval_str "(equal? () (list))"));
+]
+
+let cadr_tests = [
+  ("cadr", `Quick, fun () ->
+    Alcotest.(check string) "cadr" "2"
+      (eval_str "(cadr (list 1 2 3))"));
+  ("caddr", `Quick, fun () ->
+    Alcotest.(check string) "caddr" "3"
+      (eval_str "(caddr (list 1 2 3))"));
+  ("caar", `Quick, fun () ->
+    Alcotest.(check string) "caar" "1"
+      (eval_str "(caar (list (list 1 2) 3))"));
+  ("cddr", `Quick, fun () ->
+    Alcotest.(check string) "cddr" "(3)"
+      (eval_str "(cddr (list 1 2 3))"));
+]
+
+let assoc_member_tests = [
+  ("assoc hit", `Quick, fun () ->
+    Alcotest.(check string) "assoc hit" "(b 2)"
+      (eval_str "(assoc 'b (list (list 'a 1) (list 'b 2)))"));
+  ("assoc miss is nil", `Quick, fun () ->
+    Alcotest.(check string) "assoc miss" "()"
+      (eval_str "(assoc 'z (list (list 'a 1)))"));
+  ("assoc on pair entries", `Quick, fun () ->
+    Alcotest.(check string) "assoc pair" "(c . 3)"
+      (eval_str "(assoc 'c (list (cons 'a 1) (cons 'c 3)))"));
+  ("member hit returns tail", `Quick, fun () ->
+    Alcotest.(check string) "member hit" "(2 3)"
+      (eval_str "(member 2 (list 1 2 3))"));
+  ("member miss is #f", `Quick, fun () ->
+    Alcotest.(check string) "member miss" "#f"
+      (eval_str "(member 9 (list 1 2 3))"));
+]
+
+let apply_tests = [
+  ("apply prim with list", `Quick, fun () ->
+    Alcotest.(check string) "apply +" "3"
+      (eval_str "(apply + (list 1 2))"));
+  ("apply prim with quoted list", `Quick, fun () ->
+    Alcotest.(check string) "apply + quote" "10"
+      (eval_str "(apply + '(2 8))"));
+  ("apply lambda", `Quick, fun () ->
+    Alcotest.(check string) "apply lambda" "12"
+      (eval_str "(apply (lambda (a b) (* a b)) (list 3 4))"));
+]
+
 let () =
   Alcotest.run "pricklypear-image-primitives" [
     "arithmetic", arithmetic_tests;
@@ -333,4 +405,8 @@ let () =
     "render-html", render_html_tests;
     "composition", composition_tests;
     "extract-links", extract_links_tests;
+    "equality", equality_tests;
+    "cadr", cadr_tests;
+    "assoc-member", assoc_member_tests;
+    "apply", apply_tests;
   ]

@@ -242,6 +242,34 @@ let eval_tests = [
     let env = Env.create () in
     let got = (Eval.eval_string ~prims env "(letrec () 42)") in
     Alcotest.(check string) "42" "42" (Reader.pp_value got));
+  ("eval: apply special form on lambda", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let got = (Eval.eval_string ~prims env
+      "(apply (lambda (a b) b) '(1 2))") in
+    Alcotest.(check string) "2" "2" (Reader.pp_value got));
+  ("eval: apply special form on prim", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    Eval.register_prim prims "add2"
+      (fun args -> match args with
+       | [Ast.VInt a; Ast.VInt b] -> Ast.VInt (Int64.add a b)
+       | _ -> Ast.VNil);
+    let env = Env.create () in
+    Env.define env "add2" (Ast.VPrim "add2");
+    let got = (Eval.eval_string ~prims env
+      "(apply add2 '(1 2))") in
+    Alcotest.(check string) "3" "3" (Reader.pp_value got));
+  ("eval: apply errors on wrong arity", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let raised =
+      try
+      let _ = (Eval.eval_string ~prims env
+        "(apply (lambda (a b) a) '(1))") in
+      false
+      with Ast.Interp_error _ -> true
+    in
+    Alcotest.(check bool) "arity mismatch raises" true raised);
 ]
 
 let pretty_print_tests = [

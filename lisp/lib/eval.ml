@@ -60,7 +60,7 @@ let is_special_form (name : string) : bool =
   | "cond" | "and" | "or"
   (* Higher-order list ops: OCaml loops + apply, not recursive Lisp.
      Avoids ~O(n) eval-frame overhead per element (budget P0). *)
-  | "list/map" | "list/filter" | "list/foldl" -> true
+  | "apply" | "list/map" | "list/filter" | "list/foldl" -> true
   | _ -> false
 
 let kernel_special_names =
@@ -69,7 +69,7 @@ let kernel_special_names =
     "with-transaction"; "quasiquote"; "unquote"; "unquote-splicing";
     "defmacro"; "macroexpand-1"; "macroexpand"; "gensym";
     "cond"; "and"; "or";
-    "list/map"; "list/filter"; "list/foldl" ]
+    "apply"; "list/map"; "list/filter"; "list/foldl" ]
 
 (** Desugar multiple body exprs to a single expr (begin/seq chain). *)
 let body_of_exprs = function
@@ -816,6 +816,14 @@ and eval_special_form
                 Cont (env', body)
             | _ -> raise (Interp_error (User_error "bad letrec bindings")))
        | _ -> raise (Interp_error (User_error "letrec needs bindings + body")))
+  (* apply: (apply f args-list) applies f to the list of args.
+     First-class function application — reuses the same apply helper
+     that list/map etc. use, so closures and VPrims both work. *)
+  | "apply", [ _; f_expr; args_expr ] ->
+      let f = eval ~budget ~prims env f_expr in
+      let args = value_to_list (eval ~budget ~prims env args_expr) in
+      Done (apply ~budget ~prims f args)
+  | "apply", _ -> raise (Interp_error (User_error "apply needs (f args)"))
   (* list/map, list/filter, list/foldl — OCaml loops + apply.
      One special-form tick total instead of O(n) recursive Lisp frames.
      Closure bodies still tick normally via apply. *)

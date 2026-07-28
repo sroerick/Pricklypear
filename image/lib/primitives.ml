@@ -138,6 +138,13 @@ let make_with_defaults () : t =
   register_sync t "hx-get" prim_hx_get;
   register_sync t "hx-post" prim_hx_post;
   register_sync t "count" prim_count;
+  register_sync t "equal?" prim_equal_p;
+  register_sync t "cadr" prim_cadr;
+  register_sync t "caar" prim_caar;
+  register_sync t "caddr" prim_caddr;
+  register_sync t "cddr" prim_cddr;
+  register_sync t "assoc" prim_assoc;
+  register_sync t "member" prim_member;
   register_sync t "dict-get" prim_dict_get;
   register_sync t "dict-set" prim_dict_set;
   register_sync t "date-today" prim_date_today;
@@ -178,6 +185,13 @@ let prim_summary (name : string) : string =
   | "null?" -> "empty list?"
   | "pair?" -> "is pair?"
   | "count" -> "length of list"
+  | "equal?" -> "structural deep equality"
+  | "cadr" -> "second element (car of cdr)"
+  | "caar" -> "car of car"
+  | "caddr" -> "third element (car of cdr of cdr)"
+  | "cddr" -> "cdr of cdr"
+  | "assoc" -> "lookup key in alist; entry or nil"
+  | "member" -> "sublist starting at x, or #f"
   | "date-today" -> "local date YYYY-MM-DD"
   | "parse-int" -> "string or int to int"
   | "parse-float" -> "string or number to float"
