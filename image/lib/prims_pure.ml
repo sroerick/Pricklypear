@@ -692,6 +692,99 @@ let prim_count args =
   | [ VNil ] -> VInt 0L
   | _ -> raise (Interp_error (User_error "count needs a list"))
 
+(* Structural deep equality (equal?): recurses VList/VPair/VStr/VInt/
+   VFloat/VBool/VSymbol/VNil. VList and VPair chains are compared
+   element-wise as sequences, so `(list 1 2 3)` is equal? to the
+   equivalent cons-chain; a dotted/improper pair is NOT equal? to the
+   same proper list (the atom tail falls through to a type mismatch).
+   VNil and the empty VList are equal (both the empty list). Different
+   value types are not equal? (1 is not 1.0). *)
+let rec value_equal (a : value) (b : value) : bool =
+  match a, b with
+  | VInt x, VInt y -> Int64.equal x y
+  | VFloat x, VFloat y -> x = y
+  | VBool x, VBool y -> x = y
+  | VStr x, VStr y -> String.equal x y
+  | VSymbol x, VSymbol y -> String.equal x y
+  | VNil, VNil -> true
+  | VList [], VNil | VNil, VList [] | VList [], VList [] -> true
+  | VList (h1 :: t1), VList (h2 :: t2) ->
+      value_equal h1 h2 && value_equal (VList t1) (VList t2)
+  | VList (h1 :: t1), VPair (h2, t2) ->
+      value_equal h1 h2 && value_equal (VList t1) t2
+  | VPair (h1, t1), VList (h2 :: t2) ->
+      value_equal h1 h2 && value_equal t1 (VList t2)
+  | VPair (h1, t1), VPair (h2, t2) ->
+      value_equal h1 h2 && value_equal t1 t2
+  | _ -> false
+
+let prim_equal_p args =
+  match args with
+  | [ a; b ] -> VBool (value_equal a b)
+  | _ -> raise (Interp_error (User_error "equal? needs two args"))
+
+(* c*r compositions: reuse car/cdr so error messages + VPair/VList
+   handling stay consistent. cadr/caddr/caar/cddr are bread-and-butter
+   for code-as-data walking. *)
+let prim_cadr args =
+  match args with
+  | [ v ] -> prim_car [ prim_cdr [ v ] ]
+  | _ -> raise (Interp_error (User_error "cadr needs one arg"))
+
+let prim_caar args =
+  match args with
+  | [ v ] -> prim_car [ prim_car [ v ] ]
+  | _ -> raise (Interp_error (User_error "caar needs one arg"))
+
+let prim_caddr args =
+  match args with
+  | [ v ] -> prim_car [ prim_cdr [ prim_cdr [ v ] ] ]
+  | _ -> raise (Interp_error (User_error "caddr needs one arg"))
+
+let prim_cddr args =
+  match args with
+  | [ v ] -> prim_cdr [ prim_cdr [ v ] ]
+  | _ -> raise (Interp_error (User_error "cddr needs one arg"))
+
+(* (assoc key alist) -> the first entry (pair or list) whose car is
+   equal? to key, or VNil if absent. Entries may be (k . v) pairs or
+   (k v) two-element lists. *)
+let prim_assoc args =
+  match args with
+  | [ key; alist ] ->
+      let rec search = function
+      | VNil | VList [] -> VNil
+      | VList (entry :: rest) ->
+          (match entry with
+           | VPair (k, _) when value_equal k key -> entry
+           | VList (k :: _) when value_equal k key -> entry
+           | _ -> search (VList rest))
+      | VPair (entry, rest) ->
+          (match entry with
+           | VPair (k, _) when value_equal k key -> entry
+           | VList (k :: _) when value_equal k key -> entry
+           | _ -> search rest)
+      | _ -> VNil
+      in
+      search alist
+  | _ -> raise (Interp_error (User_error "assoc needs key and alist"))
+
+(* (member x list) -> the sublist starting at the first element
+   equal? to x (truthy), or #f if absent. *)
+let prim_member args =
+  match args with
+  | [ x; lst ] ->
+      let rec search = function
+      | VNil | VList [] -> VBool false
+      | VList (h :: t) ->
+          if value_equal h x then VList (h :: t) else search (VList t)
+      | VPair (h, t) ->
+          if value_equal h x then VPair (h, t) else search t
+      | _ -> VBool false
+      in
+      search lst
+  | _ -> raise (Interp_error (User_error "member needs x and list"))
+
 let prim_date_today (_args : value list) : value =
   let tm = Unix.localtime (Unix.time ()) in
   VStr
