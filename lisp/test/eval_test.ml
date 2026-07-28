@@ -973,6 +973,11 @@ let gate_tests = [
     ignore (Eval.eval_string ~prims env "(define reader (lambda () (get)))");
     ignore (Eval.eval_string ~prims env "(define h (lambda () (reader)))");
     Alcotest.(check bool) "sibling read allowed" true (gate_ok env "h"));
+  ("gate: http-get handler denied (Net effect)", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    ignore (Eval.eval_string ~prims env "(define h (lambda () (http-get)))");
+    Alcotest.(check bool) "net denied by default" false (gate_ok env "h"));
 ]
 
 let () =

@@ -1266,3 +1266,380 @@ let prim_render_links args =
       raise
         (Interp_error (User_error "render-links needs one string arg"))
 
+(* ---- string helpers (P2 from kernel-io-primitives note) ---- *)
+
+let prim_string_replace args =
+  match args with
+  | [ VStr s; VStr pat; VStr repl ] ->
+      let plen = String.length pat in
+      if plen = 0 then VStr s
+      else
+        let buf = Buffer.create (String.length s) in
+        let rec loop i =
+          if i + plen > String.length s then begin
+            Buffer.add_substring buf s i (String.length s - i);
+            Buffer.contents buf
+          end else if String.sub s i plen = pat then begin
+            Buffer.add_string buf repl;
+            loop (i + plen)
+          end else begin
+            Buffer.add_char buf s.[i];
+            loop (i + 1)
+          end
+        in
+        VStr (loop 0)
+  | _ -> raise (Interp_error (User_error "string-replace needs (s pat repl)"))
+
+let prim_string_downcase args =
+  match args with
+  | [ v ] -> VStr (String.lowercase_ascii (coerce_str ~ctx:"string-downcase" v))
+  | _ -> raise (Interp_error (User_error "string-downcase needs 1 string"))
+
+let prim_string_upcase args =
+  match args with
+  | [ v ] -> VStr (String.uppercase_ascii (coerce_str ~ctx:"string-upcase" v))
+  | _ -> raise (Interp_error (User_error "string-upcase needs 1 string"))
+
+let prim_string_starts_with_p args =
+  match args with
+  | [ VStr s; VStr pfx ] -> VBool (String.starts_with ~prefix:pfx s)
+  | [ a; b ] ->
+      VBool (String.starts_with
+               ~prefix:(coerce_str ~ctx:"string-starts-with?" b)
+               (coerce_str ~ctx:"string-starts-with?" a))
+  | _ -> raise (Interp_error (User_error "string-starts-with? needs 2 strings"))
+
+let prim_string_ends_with_p args =
+  match args with
+  | [ VStr s; VStr sfx ] -> VBool (String.ends_with ~suffix:sfx s)
+  | [ a; b ] ->
+      VBool (String.ends_with
+               ~suffix:(coerce_str ~ctx:"string-ends-with?" b)
+               (coerce_str ~ctx:"string-ends-with?" a))
+  | _ -> raise (Interp_error (User_error "string-ends-with? needs 2 strings"))
+
+(* ---- url-encode / url-decode (percent-encoding) ---- *)
+
+let prim_url_encode args =
+  let encode s =
+    let buf = Buffer.create (String.length s) in
+    String.iter
+      (fun c ->
+        match c with
+        | 'A'..'Z' | 'a'..'z' | '0'..'9' | '-' | '.' | '_' | '~' ->
+            Buffer.add_char buf c
+        | _ ->
+            Buffer.add_string buf
+              (Printf.sprintf "%%%02X" (Char.code c)))
+      s;
+    Buffer.contents buf
+  in
+  match args with
+  | [ v ] -> VStr (encode (coerce_str ~ctx:"url-encode" v))
+  | _ -> raise (Interp_error (User_error "url-encode needs 1 string"))
+
+let prim_url_decode args =
+  let decode s =
+    let len = String.length s in
+    let buf = Buffer.create len in
+    let rec loop i =
+      if i >= len then ()
+      else if s.[i] = '%' && i + 2 < len then
+        (try
+           let n = int_of_string ("0x" ^ String.sub s (i + 1) 2) in
+           Buffer.add_char buf (Char.chr n);
+           loop (i + 3)
+         with _ -> Buffer.add_char buf s.[i]; loop (i + 1))
+      else if s.[i] = '+' then begin Buffer.add_char buf ' '; loop (i + 1) end
+      else begin Buffer.add_char buf s.[i]; loop (i + 1) end
+    in
+    loop 0;
+    Buffer.contents buf
+  in
+  match args with
+  | [ v ] -> VStr (decode (coerce_str ~ctx:"url-decode" v))
+  | _ -> raise (Interp_error (User_error "url-decode needs 1 string"))
+
+(* ---- sha1 (digestif) ---- *)
+
+let prim_sha1 args =
+  match args with
+  | [ v ] ->
+      let s = coerce_str ~ctx:"sha1" v in
+      VStr (Digestif.SHA1.to_hex (Digestif.SHA1.digest_string s))
+  | _ -> raise (Interp_error (User_error "sha1 needs 1 string"))
+
+(* ---- html-decode (entity decode) ----
+
+   Handles &amp; &lt; &gt; &quot; &apos; &#NN; &#xHH; and common named entities.
+   Best-effort; unknown entities are left as-is. *)
+
+let named_entities =
+  [ "amp", "&"; "lt", "<"; "gt", ">"; "quot", "\""; "apos", "'";
+    "nbsp", "\240"; "copy", "\169"; "reg", "\174";
+    "mdash", "\226\128\148"; "ndash", "\226\128\147";
+    "hellip", "\226\128\166"; "rsquo", "\226\128\153"; "lsquo", "\226\128\152";
+    "ldquo", "\226\128\156"; "rdquo", "\226\128\157"; "euro", "\226\130\172";
+    "trade", "\226\132\162"; "deg", "\176"; "plusmn", "\191"; (* actual ± U+00B1 *)
+    "times", "\195\151"; "divide", "\195\183"; "bull", "\226\128\162";
+    "middot", "\194\183"; "laquo", "\194\171"; "raquo", "\194\187" ]
+
+let prim_html_decode args =
+  let decode s =
+    let len = String.length s in
+    let buf = Buffer.create len in
+    let lookup_named name =
+      try Some (List.assoc name named_entities) with Not_found -> None
+    in
+    let rec loop i =
+      if i >= len then ()
+      else if s.[i] <> '&' then begin Buffer.add_char buf s.[i]; loop (i + 1) end
+      else begin
+        (* find ';' within a reasonable window *)
+        let rec find_semi j =
+          if j >= len || j > i + 12 then None
+          else if s.[j] = ';' then Some j else find_semi (j + 1)
+        in
+        match find_semi (i + 1) with
+        | None -> Buffer.add_char buf '&'; loop (i + 1)
+        | Some e ->
+            let body = String.sub s (i + 1) (e - i - 1) in
+            let decoded =
+              if String.length body >= 1 && body.[0] = '#' then
+                let num = String.sub body 1 (String.length body - 1) in
+                let n =
+                  if String.length num >= 1 && (num.[0] = 'x' || num.[0] = 'X')
+                  then
+                    (try Some (int_of_string ("0x" ^ String.sub num 1 (String.length num - 1)))
+                     with _ -> None)
+                  else (try Some (int_of_string num) with _ -> None)
+                in
+                (match n with
+                 | Some n when n >= 0 && n < 0x110000 ->
+                     (* encode as UTF-8 *)
+                     let rec utf8 n =
+                       if n < 0x80 then String.make 1 (Char.chr n)
+                       else if n < 0x800 then
+                         String.make 1 (Char.chr (0xC0 lor (n lsr 6)))
+                         ^ String.make 1 (Char.chr (0x80 lor (n land 0x3F)))
+                       else if n < 0x10000 then
+                         String.make 1 (Char.chr (0xE0 lor (n lsr 12)))
+                         ^ String.make 1 (Char.chr (0x80 lor ((n lsr 6) land 0x3F)))
+                         ^ String.make 1 (Char.chr (0x80 lor (n land 0x3F)))
+                       else
+                         String.make 1 (Char.chr (0xF0 lor (n lsr 18)))
+                         ^ String.make 1 (Char.chr (0x80 lor ((n lsr 12) land 0x3F)))
+                         ^ String.make 1 (Char.chr (0x80 lor ((n lsr 6) land 0x3F)))
+                         ^ String.make 1 (Char.chr (0x80 lor (n land 0x3F)))
+                     in
+                     Some (utf8 n)
+                 | _ -> None)
+              else lookup_named body
+            in
+            (match decoded with
+             | Some txt -> Buffer.add_string buf txt
+             | None -> Buffer.add_string buf ("&" ^ body ^ ";"));
+            loop (e + 1)
+      end
+    in
+    loop 0;
+    Buffer.contents buf
+  in
+  match args with
+  | [ v ] -> VStr (decode (coerce_str ~ctx:"html-decode" v))
+  | _ -> raise (Interp_error (User_error "html-decode needs 1 string"))
+
+(* ---- parse-date -> UTC epoch int (VInt) ----
+
+   Accepts RFC-822, ISO-8601, and bare YYYY-MM-DD forms. Returns seconds
+   since the Unix epoch (UTC) as a VInt, or VInt 0 on failure so Lisp can
+   fall back to document order. UTC-anchored via a days-from-civil formula
+   (no timezone drift). *)
+
+let days_from_civil ~year ~month ~day =
+  (* Howard Hinnant's algorithm; works for proleptic Gregorian, year >= 0. *)
+  let y = if month <= 2 then year - 1 else year in
+  let era = if y >= 0 then y / 400 else (y - 399) / 400 in
+  let yoe = y - era * 400 in
+  let m = month in
+  let doy = (153 * (if m > 2 then m - 3 else m + 9) + 2) / 5 + day - 1 in
+  let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy in
+  era * 146097 + doe - 719468
+
+let parse_int_sub s off len =
+  try Some (int_of_string (String.sub s off len)) with _ -> None
+
+let prim_parse_date args =
+  let parse s =
+    let s = String.trim s in
+    let len = String.length s in
+    (* strip optional leading day-of-week: "Tue, " or "Tue " *)
+    let s =
+      match String.index_opt s ',' with
+      | Some i -> String.trim (String.sub s (i + 1) (len - i - 1))
+      | None -> s
+    in
+    let len = String.length s in
+    let months =
+      [| "Jan", 1; "Feb", 2; "Mar", 3; "Apr", 4; "May", 5; "Jun", 6;
+         "Jul", 7; "Aug", 8; "Sep", 9; "Oct", 10; "Nov", 11; "Dec", 12 |]
+    in
+    let month_of_name nm =
+      let rec i = ref 0 in
+      let found = ref None in
+      while !i < 12 && !found = None do
+        let (n, m) = months.(!i) in
+        if String.equal (String.lowercase_ascii n) (String.lowercase_ascii nm)
+        then found := Some m;
+        incr i
+      done;
+      !found
+    in
+    (* ISO-8601: YYYY-MM-DDTHH:MM:SS[.f][Z|+HH:MM] or YYYY-MM-DD HH:MM:SS *)
+    let try_iso () =
+      if len >= 10
+         && String.length s >= 10
+         && String.sub s 0 4 |> String.for_all (fun c -> c >= '0' && c <= '9')
+         && (s.[4] = '-' || s.[4] = '/')
+      then
+        let y = parse_int_sub s 0 4 in
+        let mo = parse_int_sub s 5 2 in
+        let d = parse_int_sub s 8 2 in
+        let h, mi, sec =
+          if len >= 19 && (s.[10] = 'T' || s.[10] = 't' || s.[10] = ' ') then
+            (parse_int_sub s 11 2, parse_int_sub s 14 2, parse_int_sub s 17 2)
+          else (Some 0, Some 0, Some 0)
+        in
+        match y, mo, d, h, mi, sec with
+        | Some y, Some mo, Some d, Some h, Some mi, Some sec ->
+            let days = days_from_civil ~year:y ~month:mo ~day:d in
+            Some (Int64.of_int (days * 86400 + h * 3600 + mi * 60 + sec))
+        | _ -> None
+      else None
+    in
+    (* RFC-822: "28 Jul 2026 02:56:21 GMT" (day-of-week already stripped) *)
+    let try_rfc822 () =
+      let tokens = String.split_on_char ' ' s in
+      let strip_tz = function
+        | [ d; mo; y; t; _tz ] -> [ d; mo; y; t ]
+        | other -> other
+      in
+      match strip_tz tokens with
+      | [ d_str; mon_str; y_str; time_str ] ->
+          (match parse_int_sub d_str 0 (String.length d_str),
+                 month_of_name mon_str,
+                 parse_int_sub y_str 0 (String.length y_str) with
+           | Some d, Some mo, Some y ->
+               let parts = String.split_on_char ':' time_str in
+               (match parts with
+                | [ hh; mm; ss ] ->
+                    (match parse_int_sub hh 0 2, parse_int_sub mm 0 2,
+                            parse_int_sub ss 0 2 with
+                     | Some h, Some mi, Some se ->
+                         let days = days_from_civil ~year:y ~month:mo ~day:d in
+                         Some (Int64.of_int (days * 86400 + h * 3600 + mi * 60 + se))
+                     | _ -> None)
+                | [ hh; mm ] ->
+                    (match parse_int_sub hh 0 2, parse_int_sub mm 0 2 with
+                     | Some h, Some mi ->
+                         let days = days_from_civil ~year:y ~month:mo ~day:d in
+                         Some (Int64.of_int (days * 86400 + h * 3600 + mi * 60))
+                     | _ -> None)
+                | _ -> None)
+           | _ -> None)
+      | _ -> None
+    in
+    (* bare YYYY-MM-DD *)
+    let try_bare () =
+      if len >= 10 && (s.[4] = '-' || s.[4] = '/') then
+        match parse_int_sub s 0 4, parse_int_sub s 5 2, parse_int_sub s 8 2 with
+        | Some y, Some mo, Some d ->
+            let days = days_from_civil ~year:y ~month:mo ~day:d in
+            Some (Int64.of_int (days * 86400))
+        | _ -> None
+      else None
+    in
+    try_iso () |> function Some e -> Some e | None ->
+    try_rfc822 () |> function Some e -> Some e | None ->
+    try_bare ()
+  in
+  match args with
+  | [ v ] ->
+      (match parse (coerce_str ~ctx:"parse-date" v) with
+       | Some e -> VInt e
+       | None -> VInt 0L)
+  | _ -> raise (Interp_error (User_error "parse-date needs 1 string"))
+
+(* ---- xml-parse (markup) ----
+
+   (xml-parse text) -> Lisp tree. Node shape (per note):
+     ("tag" (("k" . "v") ...) child1 child2 ...)
+   text node = bare VStr (already entity-decoded). comments/PI dropped.
+   Namespaces: raw prefixed names preserved verbatim. Tag names are strings
+   so string-eq/car walks are safe. On hard failure returns
+   ("error" message). *)
+
+(* Coerce a Markup.name (namespace_uri, local_name) to a single string.
+   For lenient RSS/Atom with no namespace declaration, the raw prefix is
+   preserved in the local part, so snd alone is correct. When a namespace URI
+   is present we still return the local name (Lisp-side normalizes prefixes). *)
+let xml_name_to_string (_ns : string) (local : string) : string = local
+
+let rec xml_tree_to_value = function
+  | `Text s -> VStr s
+  | `Elem (name, attrs, children) ->
+      let tag = xml_name_to_string (fst name) (snd name) in
+      let attr_pairs =
+        List.map
+          (fun (k, v) ->
+            VPair (VStr (xml_name_to_string (fst k) (snd k)), VStr v))
+          attrs
+      in
+      VList (VStr tag :: VList attr_pairs :: List.map xml_tree_to_value children)
+
+let prim_xml_parse args =
+  let parse s =
+    let open Markup in
+    try
+      let parsed =
+        s |> string |> parse_xml |> signals
+        |> tree
+            ~text:(fun ss -> `Text (String.concat "" ss))
+            ~element:(fun name attrs children ->
+              `Elem (name, attrs, children))
+      in
+      match parsed with
+      | None -> VList [ VStr "error"; VStr "empty document" ]
+      | Some t -> xml_tree_to_value t
+    with exn ->
+      VList [ VStr "error"; VStr (Printexc.to_string exn) ]
+  in
+  match args with
+  | [ v ] -> parse (coerce_str ~ctx:"xml-parse" v)
+  | _ -> raise (Interp_error (User_error "xml-parse needs 1 string"))
+
+(* ---- http response header parsing (helper for http-get prim) ----
+
+   curl -D writes headers like:
+     HTTP/2 200\r\n  (or "HTTP/1.1 200 OK")
+     content-type: text/html\r\n
+   Returns a JSON object string with lowercased keys. *)
+let http_parse_headers (blob : string) : string =
+  let lines = String.split_on_char '\n' blob in
+  let acc = ref [] in
+  List.iter
+    (fun line ->
+      let line = String.trim line in
+      if line = "" then ()
+      else
+        (match String.index_opt line ':' with
+         | Some i ->
+             let k = String.lowercase_ascii (String.trim (String.sub line 0 i)) in
+             let v = String.trim (String.sub line (i + 1) (String.length line - i - 1)) in
+             acc := (k, v) :: !acc
+         | None ->
+             (* status line; ignore — we capture status separately *)
+             ()))
+    lines;
+  Yojson.Safe.to_string (`Assoc (List.map (fun (k, v) -> (k, `String v)) (List.rev !acc)))
+
