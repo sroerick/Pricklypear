@@ -17,6 +17,7 @@ type eff =
   | Ai
   | Html
   | Txn
+  | Net
 
 let eff_to_string = function
   | Pure -> "pure"
@@ -27,6 +28,7 @@ let eff_to_string = function
   | Ai -> "ai"
   | Html -> "html"
   | Txn -> "txn"
+  | Net -> "net"
 
 let eff_of_string = function
   | "pure" -> Some Pure
@@ -37,6 +39,7 @@ let eff_of_string = function
   | "ai" -> Some Ai
   | "html" -> Some Html
   | "txn" -> Some Txn
+  | "net" -> Some Net
   | _ -> None
 
 let eff_rank = function
@@ -48,6 +51,7 @@ let eff_rank = function
   | Publish -> 5
   | Branch -> 6
   | Ai -> 7
+  | Net -> 8
 
 module EffSet = struct
   type t = eff list  (* unique, sorted by rank then name *)
@@ -92,6 +96,7 @@ module EffSet = struct
     else if mem Ai s then "ai"
     else if mem Publish s then "page"
     else if mem Branch s then "branch"
+    else if mem Net s then "net"
     else if mem WriteDb s then "db-write"
     else if mem ReadDb s then "db-read"
     else if mem Html s then "html"
@@ -151,6 +156,10 @@ let write_db_prims = [
 let branch_prims = [ "fork"; "merge"; "checkout" ]
 let publish_prims = [ "route"; "public-route" ]
 let html_prims = [ "render-html"; "redirect" ]
+(* Outbound network (HTTP fetch). Gated to admin/agent at the prim level
+   (session.ml); tracked as a capability badge so public routes and AI install
+   policy can deny it by default. *)
+let net_prims = [ "http-get" ]
 (* Author tools that freeze into function_defs or drive the model (Ai + WriteDb). *)
 let ai_write_prims = [
   "propose-function"; "install-function"; "agent-task";
@@ -167,6 +176,7 @@ let effects_for_prim (name : string) : effect_set =
   else if List.mem name branch_prims then EffSet.singleton Branch
   else if List.mem name publish_prims then EffSet.singleton Publish
   else if List.mem name html_prims then EffSet.singleton Html
+  else if List.mem name net_prims then EffSet.singleton Net
   else if name = "agent" then EffSet.singleton Ai
   else if List.mem name ai_write_prims then
     EffSet.union (EffSet.singleton Ai) (EffSet.singleton WriteDb)
@@ -231,6 +241,7 @@ and infer
               || List.mem name publish_prims
               || List.mem name html_prims
               || List.mem name ai_prims
+              || List.mem name net_prims
            then prims name
            else EffSet.empty)
   | Lit _ -> EffSet.empty

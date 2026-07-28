@@ -33,6 +33,7 @@
    yojson
    pure-html
    digestif
+   markup
    mirage-crypto
    mirage-crypto-rng
    mirage-crypto-rng.unix

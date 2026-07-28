@@ -163,6 +163,18 @@ let make_with_defaults () : t =
   register_sync t "extract-links" prim_extract_links;
   register_sync t "render-links" prim_render_links;
   register_sync t "budget-remaining" prim_budget_remaining;
+  (* kernel I/O primitives (from notes inbox kernel-io-primitives-2026-07-27) *)
+  register_sync t "string-replace" prim_string_replace;
+  register_sync t "string-downcase" prim_string_downcase;
+  register_sync t "string-upcase" prim_string_upcase;
+  register_sync t "string-starts-with?" prim_string_starts_with_p;
+  register_sync t "string-ends-with?" prim_string_ends_with_p;
+  register_sync t "url-encode" prim_url_encode;
+  register_sync t "url-decode" prim_url_decode;
+  register_sync t "sha1" prim_sha1;
+  register_sync t "html-decode" prim_html_decode;
+  register_sync t "parse-date" prim_parse_date;
+  register_sync t "xml-parse" prim_xml_parse;
   t
 
 (* Short docs for the Functions browser (kernel package). *)
@@ -277,6 +289,17 @@ let prim_summary (name : string) : string =
   | "extract-links" -> "parse [[wiki]] / [[slug|label]] from body → list of pairs"
   | "render-links" -> "body with [[wiki]]/[[media:]] → HTML (budget-safe)"
   | "budget-remaining" -> "steps left in current eval budget"
+  | "string-replace" -> "replace all occurrences of pat with repl"
+  | "string-downcase" -> "lowercase ASCII"
+  | "string-upcase" -> "uppercase ASCII"
+  | "string-starts-with?" -> "prefix test"
+  | "string-ends-with?" -> "suffix test"
+  | "url-encode" -> "percent-encode a string"
+  | "url-decode" -> "percent-decode a string"
+  | "sha1" -> "SHA-1 hex digest of a string"
+  | "html-decode" -> "decode HTML entities in a string"
+  | "parse-date" -> "parse RFC-822/ISO-8601/date -> UTC epoch int"
+  | "xml-parse" -> "lenient XML text -> Lisp tree"
   | "bench" -> "avg microseconds per eval of expr-string [n]"
   | "agent-session-new" -> "create durable AI session: (agent-session-new seed [tools?])"
   | "agent-say" -> "append user msg + run tool loop: (agent-say sid prompt)"

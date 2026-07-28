@@ -424,6 +424,104 @@ let std_freeze_tests = [
       (eval_str "(list/foldl + 0 (list 1 2 3 4))"));
 ]
 
+(* --- kernel I/O primitives (from notes inbox kernel-io-primitives) --- *)
+(* pp_value wraps VStr in outer quotes; q builds the expected form so we
+   avoid nested-quote escaping pain in the test source. *)
+let q s = "\"" ^ s ^ "\""
+let io_prim_tests = [
+  ("string-replace", `Quick, fun () ->
+    Alcotest.(check string) "replace" (q "xxx")
+      (eval_str "(string-replace \"axa\" \"a\" \"x\")"));
+  ("string-replace empty pat no-op", `Quick, fun () ->
+    Alcotest.(check string) "empty pat" (q "abc")
+      (eval_str "(string-replace \"abc\" \"\" \"X\")"));
+  ("string-downcase", `Quick, fun () ->
+    Alcotest.(check string) "down" (q "abc")
+      (eval_str "(string-downcase \"ABC\")"));
+  ("string-upcase", `Quick, fun () ->
+    Alcotest.(check string) "up" (q "ABC")
+      (eval_str "(string-upcase \"abc\")"));
+  ("string-starts-with?", `Quick, fun () ->
+    Alcotest.(check string) "starts" "#t"
+      (eval_str "(string-starts-with? \"hello world\" \"hello\")"));
+  ("string-ends-with?", `Quick, fun () ->
+    Alcotest.(check string) "ends" "#t"
+      (eval_str "(string-ends-with? \"hello.txt\" \".txt\")"));
+  ("url-encode", `Quick, fun () ->
+    Alcotest.(check string) "enc" (q "a%20b%2Cc")
+      (eval_str "(url-encode \"a b,c\")"));
+  ("url-decode", `Quick, fun () ->
+    Alcotest.(check string) "dec" (q "a b,c")
+      (eval_str "(url-decode \"a%20b%2Cc\")"));
+  ("url roundtrip", `Quick, fun () ->
+    Alcotest.(check string) "roundtrip" (q "hello & world?")
+      (eval_str "(url-decode (url-encode \"hello & world?\"))"));
+  ("sha1", `Quick, fun () ->
+    Alcotest.(check string) "sha1 abc"
+      (q "a9993e364706816aba3e25717850c26c9cd0d89d")
+      (eval_str "(sha1 \"abc\")"));
+  ("html-decode named", `Quick, fun () ->
+    Alcotest.(check string) "decode named" (q "Hi & bye")
+      (eval_str "(html-decode \"Hi &amp; bye\")"));
+  ("html-decode numeric", `Quick, fun () ->
+    let v = eval "(html-decode \"&#169;\")" in
+    (match v with
+     | Pricklypear_lisp.Ast.VStr s when String.length s = 2
+          && Char.code s.[0] = 0xC2 && Char.code s.[1] = 0xA9 -> ()
+     | other ->
+         Alcotest.failf "decode num got %s" (Pricklypear_lisp.Reader.pp_value other)));
+  ("html-decode leaves unknown", `Quick, fun () ->
+    Alcotest.(check string) "decode unknown" (q "&nope;")
+      (eval_str "(html-decode \"&nope;\")"));
+  ("parse-date ISO", `Quick, fun () ->
+    let v = eval "(parse-date \"2026-07-18T07:57:43Z\")" in
+    (match v with
+     | VInt n when n > 0L -> ()
+     | other ->
+         Alcotest.failf "parse-date ISO got %s" (Pricklypear_lisp.Reader.pp_value other)));
+  ("parse-date RFC-822", `Quick, fun () ->
+    let v = eval "(parse-date \"Tue, 28 Jul 2026 02:56:21 GMT\")" in
+    (match v with
+     | VInt n when n > 0L -> ()
+     | other ->
+         Alcotest.failf "parse-date RFC822 got %s" (Pricklypear_lisp.Reader.pp_value other)));
+  ("parse-date bare", `Quick, fun () ->
+    let v = eval "(parse-date \"2026-07-18\")" in
+    (match v with
+     | VInt n when n > 0L -> ()
+     | other ->
+         Alcotest.failf "parse-date bare got %s" (Pricklypear_lisp.Reader.pp_value other)));
+  ("parse-date garbage -> 0", `Quick, fun () ->
+    Alcotest.(check string) "garbage" "0"
+      (eval_str "(parse-date \"not a date\")"));
+  ("xml-parse simple", `Quick, fun () ->
+    let v = eval "(xml-parse \"<rss><channel><item><title>Hi &amp; bye</title></item></channel></rss>\")" in
+    (match v with
+     | VList [ VStr "rss"; VList []; body ] ->
+         (match body with
+          | VList [ VStr "channel"; _; item ] ->
+              (match item with
+               | VList [ VStr "item"; _; title ] ->
+                   (match title with
+                    | VList [ VStr "title"; _; VStr "Hi & bye" ] -> ()
+                    | _ -> Alcotest.fail "title body")
+               | _ -> Alcotest.fail "item")
+          | _ -> Alcotest.fail "channel")
+     | other ->
+         Alcotest.failf "xml got %s" (Pricklypear_lisp.Reader.pp_value other)));
+  ("xml-parse attrs", `Quick, fun () ->
+    let v = eval "(xml-parse \"<a href=\\\"x\\\">t</a>\")" in
+    (match v with
+     | VList [ VStr "a"; VList [ VPair (VStr "href", VStr "x") ]; VStr "t" ] -> ()
+     | other ->
+         Alcotest.failf "xml attrs got %s" (Pricklypear_lisp.Reader.pp_value other)));
+  ("xml-parse error on garbage", `Quick, fun () ->
+    (* Lenient parser may recover (VStr text) or return a tree/error VList;
+       just check it returns something without raising. *)
+    let _v = eval "(xml-parse \"<<<\")" in
+    ());
+]
+
 let () =
   Alcotest.run "pricklypear-image-primitives" [
     "arithmetic", arithmetic_tests;
@@ -439,4 +537,5 @@ let () =
     "assoc-member", assoc_member_tests;
     "apply", apply_tests;
     "std-freeze", std_freeze_tests;
+    "io-prims", io_prim_tests;
   ]
