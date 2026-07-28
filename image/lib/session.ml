@@ -715,9 +715,8 @@ let do_http_get (t : t) (url : string)
           | [] -> 0
           | line :: rest ->
               let line = String.trim line in
-              if String.length line >= 12
-                 && (String.sub line 0 5 = "HTTP/"
-                     || String.sub line 0 5 = "HTTP/")
+              if String.length line >= 8
+                 && String.sub line 0 5 = "HTTP/"
               then
                 (match String.split_on_char ' ' line with
                  | _ :: n :: _ ->
