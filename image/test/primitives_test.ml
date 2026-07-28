@@ -395,6 +395,35 @@ let apply_tests = [
       (eval_str "(apply (lambda (a b) (* a b)) (list 3 4))"));
 ]
 
+let std_freeze_tests = [
+  ("length on list", `Quick, fun () ->
+    Alcotest.(check string) "length" "3"
+      (eval_str "(length (list 1 2 3))"));
+  ("length on nil", `Quick, fun () ->
+    Alcotest.(check string) "length nil" "0"
+      (eval_str "(length ())"));
+  ("length on cons chain", `Quick, fun () ->
+    Alcotest.(check string) "length cons" "3"
+      (eval_str "(length (cons 1 (cons 2 (cons 3 ()))))"));
+  ("count still works", `Quick, fun () ->
+    Alcotest.(check string) "count" "2"
+      (eval_str "(count (list 1 2))"));
+  ("list/foldr right fold", `Quick, fun () ->
+    (* foldr cons 0 (1 2 3) = (1 (2 (3 0))) — nested cons/list *)
+    Alcotest.(check string) "foldr nest" "(1 (2 (3 0)))"
+      (eval_str "(list/foldr (lambda (x acc) (cons x (list acc))) 0 (list 1 2 3))"));
+  ("list/foldr sum right", `Quick, fun () ->
+    (* foldr + 0 (1 2 3 4) = 10 *)
+    Alcotest.(check string) "foldr sum" "10"
+      (eval_str "(list/foldr + 0 (list 1 2 3 4))"));
+  ("list/foldr on empty is init", `Quick, fun () ->
+    Alcotest.(check string) "foldr empty" "42"
+      (eval_str "(list/foldr + 42 (list))"));
+  ("list/foldl still works", `Quick, fun () ->
+    Alcotest.(check string) "foldl sum" "10"
+      (eval_str "(list/foldl + 0 (list 1 2 3 4))"));
+]
+
 let () =
   Alcotest.run "pricklypear-image-primitives" [
     "arithmetic", arithmetic_tests;
@@ -409,4 +438,5 @@ let () =
     "cadr", cadr_tests;
     "assoc-member", assoc_member_tests;
     "apply", apply_tests;
+    "std-freeze", std_freeze_tests;
   ]

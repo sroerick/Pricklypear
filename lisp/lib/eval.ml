@@ -60,7 +60,7 @@ let is_special_form (name : string) : bool =
   | "cond" | "and" | "or"
   (* Higher-order list ops: OCaml loops + apply, not recursive Lisp.
      Avoids ~O(n) eval-frame overhead per element (budget P0). *)
-  | "apply" | "list/map" | "list/filter" | "list/foldl" -> true
+  | "apply" | "list/map" | "list/filter" | "list/foldl" | "list/foldr" -> true
   | _ -> false
 
 let kernel_special_names =
@@ -69,7 +69,7 @@ let kernel_special_names =
     "with-transaction"; "quasiquote"; "unquote"; "unquote-splicing";
     "defmacro"; "macroexpand-1"; "macroexpand"; "gensym";
     "cond"; "and"; "or";
-    "apply"; "list/map"; "list/filter"; "list/foldl" ]
+    "apply"; "list/map"; "list/filter"; "list/foldl"; "list/foldr" ]
 
 (** Desugar multiple body exprs to a single expr (begin/seq chain). *)
 let body_of_exprs = function
@@ -847,12 +847,26 @@ and eval_special_form
         (List.fold_left
            (fun acc x -> apply ~budget ~prims f [ acc; x ])
            init xs)
+  | "list/foldr", [ _; f_expr; init_expr; xs_expr ] ->
+      (* Right fold via reverse + left fold with swapped arg order:
+         foldr f init [a;b;c] = f a (f b (f c init))
+         = foldl (fun acc x -> f x acc) init (rev xs).
+         Tail-recursive (OCaml loops), one special-form tick. *)
+      let f = eval ~budget ~prims env f_expr in
+      let init = eval ~budget ~prims env init_expr in
+      let xs = value_to_list (eval ~budget ~prims env xs_expr) in
+      Done
+        (List.fold_left
+           (fun acc x -> apply ~budget ~prims f [ x; acc ])
+           init (List.rev xs))
   | "list/map", _ ->
       raise (Interp_error (User_error "list/map needs (f xs)"))
   | "list/filter", _ ->
       raise (Interp_error (User_error "list/filter needs (p xs)"))
   | "list/foldl", _ ->
       raise (Interp_error (User_error "list/foldl needs (f init xs)"))
+  | "list/foldr", _ ->
+      raise (Interp_error (User_error "list/foldr needs (f init xs)"))
   | other, _ ->
       raise
         (Interp_error (User_error ("malformed special form: " ^ other)))

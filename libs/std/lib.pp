@@ -43,6 +43,23 @@
         (list/range-acc (- n 1) (cons (- n 1) acc))))
   "Internal accumulator for list/range.")
 
+;; --- unprefixed list aliases (conventional Lisp names; thin wrappers
+;;     over the kernel list/ special forms). Not part of the frozen
+;;     list/ set, but provided by std for ergonomics so (map f xs) etc.
+;;     work without the list/ prefix. ---
+(define map
+  (lambda (f xs) (list/map f xs))
+  "Map f over xs (alias of list/map).")
+(define filter
+  (lambda (p xs) (list/filter p xs))
+  "Keep elements of xs where p is truthy (alias of list/filter).")
+(define foldl
+  (lambda (f init xs) (list/foldl f init xs))
+  "Left fold f over xs from init (alias of list/foldl).")
+(define foldr
+  (lambda (f init xs) (list/foldr f init xs))
+  "Right fold f over xs from init (alias of list/foldr).")
+
 ;; --- binding/control macros ---
 ;; Unhygienic defmacro + quasiquote (language-roadmap decision default).
 ;; Single-body only: defmacro params do not support dotted rest args.

@@ -138,6 +138,7 @@ let make_with_defaults () : t =
   register_sync t "hx-get" prim_hx_get;
   register_sync t "hx-post" prim_hx_post;
   register_sync t "count" prim_count;
+  register_sync t "length" prim_length;
   register_sync t "equal?" prim_equal_p;
   register_sync t "cadr" prim_cadr;
   register_sync t "caar" prim_caar;
@@ -185,6 +186,7 @@ let prim_summary (name : string) : string =
   | "null?" -> "empty list?"
   | "pair?" -> "is pair?"
   | "count" -> "length of list"
+  | "length" -> "length of list (accepts proper lists and cons chains)"
   | "equal?" -> "structural deep equality"
   | "cadr" -> "second element (car of cdr)"
   | "caar" -> "car of car"
