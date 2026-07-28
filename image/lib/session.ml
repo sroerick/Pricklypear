@@ -526,8 +526,13 @@ let pp_interp_exn = Agent_tools.pp_interp_exn
 
 let register_media_prims (t : t) (tbl : Primitives.t) : unit =
   let deny_anon name =
-    Lwt.return
-      (Pricklypear_lisp.Ast.VStr (name ^ ": denied for anonymous"))
+    (* Raise, don't return a VStr: a returned string is silently dropped
+       by (seq …), so a multi-write handler could partially succeed past
+       an anonymous denial. Raising aborts the whole eval. (BORGE-1785213376) *)
+    raise
+      (Pricklypear_lisp.Ast.Interp_error
+         (Pricklypear_lisp.Ast.User_error
+            (name ^ ": denied for anonymous")))
   in
   let actor () =
     match Lwt.get Request_context.current with
@@ -713,8 +718,20 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
      All args are quoted symbols (now VSymbol; coerced above). Persists
      the declaration into type_defs on the session's branch. *)
   let deny_anon name =
-    Lwt.return
-      (Pricklypear_lisp.Ast.VStr (name ^ ": denied for anonymous"))
+    (* Raise, don't return a VStr: a returned string is silently dropped
+       by (seq …), so a multi-write handler could partially succeed past
+       an anonymous denial. Raising aborts the whole eval. (BORGE-1785213376) *)
+    raise
+      (Pricklypear_lisp.Ast.Interp_error
+         (Pricklypear_lisp.Ast.User_error
+            (name ^ ": denied for anonymous")))
+  in
+  (* Per-request identity snapshot (avoids the cotenant race where the
+     live t.manifest is mid-swap). Falls back to t.manifest outside HTTP. *)
+  let actor () =
+    match Lwt.get Request_context.current with
+    | Some c -> (Request_context.manifest c).username
+    | None -> t.manifest.username
   in
   register_crud "deftype"
     (fun args ->
@@ -748,9 +765,11 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
         match args with
         | [ Pricklypear_lisp.Ast.VStr type_name;
             Pricklypear_lisp.Ast.VStr fields_json ] ->
+            (* Attribute to the per-request identity, not the live manifest
+               (which can be mid-swap under the cotenant race). *)
             Crud.create t.store
               ~type_name ~fields_json
-              ~author:t.manifest.username
+              ~author:uname
         | _ ->
             Lwt.return
               (Pricklypear_lisp.Ast.VStr "create: bad args (need type, fields)"));
@@ -758,7 +777,8 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
   (* (update 'type id "{fields-json}") -> VStr id | VNil *)
   register_crud "update"
     (fun args ->
-      if t.manifest.username = "anonymous" then deny_anon "update"
+      let uname = actor () in
+      if uname = "anonymous" then deny_anon "update"
       else
         match args with
         | [ Pricklypear_lisp.Ast.VStr type_name;
@@ -775,7 +795,8 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
       Lands it18 (2026-07-06); resolves the it14 "verbose round-trip syntax" TODO. *)
   register_crud "update-field"
     (fun args ->
-      if t.manifest.username = "anonymous" then deny_anon "update-field"
+      let uname = actor () in
+      if uname = "anonymous" then deny_anon "update-field"
       else
         match args with
         | [ Pricklypear_lisp.Ast.VStr type_name;
@@ -791,7 +812,8 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
   (* (delete 'type id) -> VStr id | VNil *)
   register_crud "delete"
     (fun args ->
-      if t.manifest.username = "anonymous" then deny_anon "delete"
+      let uname = actor () in
+      if uname = "anonymous" then deny_anon "delete"
       else
         match args with
         | [ Pricklypear_lisp.Ast.VStr type_name;
