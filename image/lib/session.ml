@@ -247,26 +247,13 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
     | _ -> None
   in
   let check_public_handler (handler : string) : (unit, string) result Lwt.t =
-    let* rows = Store.list_function_names t.store in
-    let known_fn =
-      Pricklypear_lisp.Effect.known_fn_of_bindings
-        (List.map (fun (n, e, _) -> (n, e)) rows)
-    in
-    let allow = Pricklypear_lisp.Effect.public_route_allow () in
-    match List.find_opt (fun (n, _, _) -> n = handler) rows with
-    | None -> Lwt.return (Ok ())
-    | Some (_, body, _) ->
-        let fx = Pricklypear_lisp.Effect.infer ~known_fn body in
-        if Pricklypear_lisp.Effect.policy_allows ~allow fx
-        then Lwt.return (Ok ())
-        else
-          Lwt.return
-            (Error
-               (Printf.sprintf
-                  "public route denied: handler %S effects %s (allow %s; set PP_PUBLIC_ALLOW_WRITE=1 for write-db)"
-                  handler
-                  (Pricklypear_lisp.Effect.EffSet.pp fx)
-                  (Pricklypear_lisp.Effect.public_route_allow_pp ())))
+    (* Fail-closed public-route gate (BORGE-1785212463 / 1785212603).
+       Infer effects from the in-memory env (synchronous, fresh) via the
+       pure [Route_gate] module. The previous store read was stale after
+       the define persist race and DEFAULTED TO ALLOW on unknown handlers;
+       now unknown / non-function handlers are DENIED. *)
+    Lwt.return
+      (Pricklypear_lisp.Route_gate.check_public_handler ~env:t.env handler)
   in
   let register_route_checked ~route_path ~handler ~visibility
       ~(pass_vis_to_store : bool) : Pricklypear_lisp.Ast.value Lwt.t =
