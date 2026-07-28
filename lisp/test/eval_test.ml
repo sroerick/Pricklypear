@@ -56,6 +56,48 @@ let reader_completeness_tests = [
     Alcotest.(check bool) "comment" true (Reader.is_complete "; comment only"));
 ]
 
+(* Dotted-pair notation is rejected at read time (improper lists are not
+   supported). A lone '.' must raise a clean Reader_error instead of
+   silently becoming a symbol named "." that corrupts list length. *)
+let reader_dotted_tests = [
+  ("reader: dotted pair (1 . 2) raises", `Quick, fun () ->
+    let raised =
+      try
+        let _ = Reader.read_one "(1 . 2)" in
+        false
+      with Reader.Reader_error _ -> true
+    in
+    Alcotest.(check bool) "dotted pair raises" true raised);
+  ("reader: dotted rest (1 2 . 3) raises", `Quick, fun () ->
+    let raised =
+      try
+        let _ = Reader.read_one "(1 2 . 3)" in
+        false
+      with Reader.Reader_error _ -> true
+    in
+    Alcotest.(check bool) "dotted rest raises" true raised);
+  ("reader: bare dot raises", `Quick, fun () ->
+    let raised =
+      try
+        let _ = Reader.read_one "." in
+        false
+      with Reader.Reader_error _ -> true
+    in
+    Alcotest.(check bool) "bare dot raises" true raised);
+  ("reader: float .5 still parses", `Quick, fun () ->
+    match Reader.read_one ".5" with
+    | Lit (Ast.VFloat f) ->
+        if abs_float (f -. 0.5) > 1e-9 then
+          Alcotest.failf "expected 0.5, got %g" f
+    | other ->
+        Alcotest.failf "expected VFloat lit, got %s" (Reader.pp_expr other));
+  ("reader: ellipsis ... still a symbol", `Quick, fun () ->
+    match Reader.read_one "..." with
+    | Ast.Var "..." -> ()
+    | other ->
+        Alcotest.failf "expected Var ..., got %s" (Reader.pp_expr other));
+]
+
 (* --- AST JSON round-trip tests --- *)
 
 let roundtrip name e =
@@ -381,6 +423,7 @@ let macro_tests = [
         `Ok
       with Ast.Interp_error (Ast.User_error m) -> `Err m
          | Ast.Interp_error e -> `Err (Ast.pp_interp_error e)
+         | Reader.Reader_error (m, _, _) -> `Err m
     with
     | `Err m ->
         if not (String.starts_with ~prefix:"dotted rest" m
@@ -878,7 +921,8 @@ let dialect_tests = [
 
 let () =
   Alcotest.run "pricklypear-lisp" [
-    "reader", reader_tests @ reader_list_tests @ reader_completeness_tests;
+    "reader", reader_tests @ reader_list_tests @ reader_completeness_tests
+               @ reader_dotted_tests;
     "ast-roundtrip", ast_roundtrip_tests;
     "pretty-print", pretty_print_tests;
     "eval", eval_tests;

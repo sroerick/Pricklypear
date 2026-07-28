@@ -127,6 +127,15 @@ let read_atom (st : state) : expr =
     raise (Reader_error ("empty token", st.line, st.col))
   else if s = "#t" then Lit (VBool true)
   else if s = "#f" then Lit (VBool false)
+  else if s = "." then
+    (* A lone '.' is Scheme dotted-pair notation. Improper lists are
+       not supported; reject at read time with a clear error instead
+       of silently reading it as a symbol named "." (which would
+       corrupt list length and trap macro authors). Float literals
+       like .5 still parse below because they are not exactly ".". *)
+    raise
+      (Reader_error
+         ("dotted-pair notation (.) is not supported", st.line, st.col))
   else
     (* Numbers: int first; if token has '.' or exponent, try float.
        Bare symbols otherwise (Var). *)
