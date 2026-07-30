@@ -82,6 +82,7 @@ CREATE OR REPLACE FUNCTION tree_mirror_function_defs() RETURNS trigger
 LANGUAGE plpgsql AS $$
 DECLARE p ltree; body jsonb; h text; env jsonb;
 BEGIN
+  PERFORM set_config('pp.tree_mirror','1', true);  -- guard: our tree write must not bounce back
   IF (TG_OP = 'DELETE') THEN
     DELETE FROM tree_nodes
      WHERE path = ('b.' || tree_uuid_label(OLD.branch_id) || '.fn.'
@@ -107,6 +108,7 @@ CREATE OR REPLACE FUNCTION tree_mirror_type_defs() RETURNS trigger
 LANGUAGE plpgsql AS $$
 DECLARE p ltree; body jsonb; h text; env jsonb;
 BEGIN
+  PERFORM set_config('pp.tree_mirror','1', true);  -- guard: our tree write must not bounce back
   IF (TG_OP = 'DELETE') THEN
     DELETE FROM tree_nodes
      WHERE path = ('b.' || tree_uuid_label(OLD.branch_id) || '.type.'
@@ -132,6 +134,7 @@ CREATE OR REPLACE FUNCTION tree_mirror_view_bindings() RETURNS trigger
 LANGUAGE plpgsql AS $$
 DECLARE p ltree; body jsonb; h text; env jsonb; vis text;
 BEGIN
+  PERFORM set_config('pp.tree_mirror','1', true);  -- guard: our tree write must not bounce back
   IF (TG_OP = 'DELETE') THEN
     DELETE FROM tree_nodes
      WHERE path = ('b.' || tree_uuid_label(OLD.branch_id) || '.route.'
@@ -159,6 +162,7 @@ CREATE OR REPLACE FUNCTION tree_mirror_data_rows() RETURNS trigger
 LANGUAGE plpgsql AS $$
 DECLARE p ltree; body jsonb; h text; env jsonb;
 BEGIN
+  PERFORM set_config('pp.tree_mirror','1', true);  -- guard: our tree write must not bounce back
   IF (TG_OP = 'DELETE') THEN
     DELETE FROM tree_nodes
      WHERE path = ('data.' || tree_enc_label(OLD.type_name) || '.'
@@ -319,6 +323,89 @@ LANGUAGE sql AS $$
 $$;
 
 -- ---------------------------------------------------------------------------
+-- P4 REVERSE MIRROR: tree_nodes -> scaffolding tables. Lets the image write
+-- the TREE as truth while the legacy tables (and every tool/read path that
+-- still hits them) stay in lockstep. Recursion-guarded via a transaction-
+-- scoped GUC: table->tree triggers set it, tree->table triggers skip when
+-- set, so a table write mirrors to tree and STOPS (no ping-pong).
+-- Deferred to commit, same-transaction => identical durability semantics.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION tree_in_mirror() RETURNS boolean
+LANGUAGE sql STABLE AS $$
+  SELECT COALESCE(current_setting('pp.tree_mirror', true), '') = '1'
+$$;
+
+CREATE OR REPLACE FUNCTION tree_from_nodes() RETURNS trigger
+LANGUAGE plpgsql AS $$
+DECLARE bid uuid; lbl text; docv text;
+BEGIN
+  IF tree_in_mirror() THEN
+    IF TG_OP = 'DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
+  END IF;
+  IF (TG_OP = 'DELETE') THEN
+    bid := tree_path_branch(OLD.path);
+    IF OLD.kind = 'fn' THEN
+      lbl := (string_to_array(OLD.path::text,'.'))[4];
+      DELETE FROM function_defs WHERE branch_id=bid AND name=tree_dec_label(lbl);
+    ELSIF OLD.kind = 'type' THEN
+      lbl := (string_to_array(OLD.path::text,'.'))[4];
+      DELETE FROM type_defs WHERE branch_id=bid AND name=tree_dec_label(lbl);
+    ELSIF OLD.kind = 'route' THEN
+      DELETE FROM view_bindings WHERE branch_id=bid AND route=OLD.payload->'body'->>'route';
+    ELSIF OLD.kind = 'datum' THEN
+      DELETE FROM data_rows WHERE id=((string_to_array(OLD.path::text,'.'))[3])::uuid;
+    END IF;
+    RETURN OLD;
+  END IF;
+  docv := NEW.payload->>'doc';
+  IF NEW.kind = 'fn' THEN
+    bid := tree_path_branch(NEW.path);
+    lbl := (string_to_array(NEW.path::text,'.'))[4];
+    INSERT INTO function_defs (branch_id,name,body,author,doc)
+    VALUES (bid, tree_dec_label(lbl), NEW.payload->'body',
+            NEW.payload->>'author', docv)
+    ON CONFLICT (branch_id,name) DO UPDATE
+      SET body=EXCLUDED.body, author=EXCLUDED.author, doc=EXCLUDED.doc,
+          updated_at=now();
+  ELSIF NEW.kind = 'type' THEN
+    bid := tree_path_branch(NEW.path);
+    lbl := (string_to_array(NEW.path::text,'.'))[4];
+    INSERT INTO type_defs (branch_id,name,fields,author)
+    VALUES (bid, tree_dec_label(lbl), NEW.payload->'body', NEW.payload->>'author')
+    ON CONFLICT (branch_id,name) DO UPDATE
+      SET fields=EXCLUDED.fields, author=EXCLUDED.author, updated_at=now();
+  ELSIF NEW.kind = 'route' THEN
+    bid := tree_path_branch(NEW.path);
+    INSERT INTO view_bindings (branch_id,route,handler,visibility)
+    VALUES (bid, NEW.payload->'body'->>'route', NEW.payload->'body'->>'handler',
+            COALESCE(NEW.payload->'body'->>'visibility','private'))
+    ON CONFLICT (branch_id,route) DO UPDATE
+      SET handler=EXCLUDED.handler, visibility=EXCLUDED.visibility;
+  ELSIF NEW.kind = 'datum' THEN
+    INSERT INTO data_rows (id,type_name,fields,author)
+    VALUES (((string_to_array(NEW.path::text,'.'))[3])::uuid,
+            NEW.type_name, NEW.payload->'body', NEW.payload->>'author')
+    ON CONFLICT (id) DO UPDATE
+      SET fields=EXCLUDED.fields, author=EXCLUDED.author, updated_at=now();
+  END IF;
+  RETURN NEW;
+END $$;
+
+DROP TRIGGER IF EXISTS tree_from_nodes_trg ON tree_nodes;
+CREATE CONSTRAINT TRIGGER tree_from_nodes_trg
+  AFTER INSERT OR UPDATE OR DELETE ON tree_nodes
+  DEFERRABLE INITIALLY DEFERRED
+  FOR EACH ROW EXECUTE FUNCTION tree_from_nodes();
+
+-- Re-point the forward (table->tree) triggers to set the guard so the
+-- tree write they cause does NOT bounce back into the table.
+CREATE OR REPLACE FUNCTION tree_mirror_guard_set() RETURNS void
+LANGUAGE plpgsql AS $$
+BEGIN
+  PERFORM set_config('pp.tree_mirror','1', true);
+END $$;
+
+-- ---------------------------------------------------------------------------
 -- P3 READ VIEWS: tree-backed relations that reproduce the exact column shape
 -- of the scaffolding tables, so store.ml / crud.ml can read from the tree
 -- behind the unchanged prim ABI by swapping the relation (flag-gated via
@@ -338,13 +425,16 @@ BEGIN
   RETURN convert_from(decode(b64, 'base64'), 'UTF8');
 END $$;
 
--- branch_id (uuid) from a b.<uuidhex>.... path.
+-- branch_id (uuid) from a b.<uuidhex>.... path. Shared subtrees
+-- (data.*, meta.*) have NO branch prefix -> return NULL (caller checks).
 CREATE OR REPLACE FUNCTION tree_path_branch(p ltree) RETURNS uuid
-LANGUAGE sql IMMUTABLE AS $$
-  SELECT (substr(p::text, 3, 8) || '-' || substr(p::text, 11, 4) || '-' ||
+LANGUAGE plpgsql IMMUTABLE AS $$
+BEGIN
+  IF p::text NOT LIKE 'b.%' THEN RETURN NULL; END IF;
+  RETURN (substr(p::text, 3, 8) || '-' || substr(p::text, 11, 4) || '-' ||
           substr(p::text, 15, 4) || '-' || substr(p::text, 19, 4) || '-' ||
-          substr(p::text, 23, 12))::uuid
-$$;
+          substr(p::text, 23, 12))::uuid;
+END $$;
 
 CREATE OR REPLACE VIEW tree_function_defs AS
 SELECT tree_path_branch(path) AS branch_id,
