@@ -9,6 +9,11 @@
  (libraries pricklypear-image alcotest base64))
 
 (test
+ (name tree_store_test)
+ (modules tree_store_test)
+ (libraries pricklypear-image alcotest))
+
+(test
  (name packages_test)
  (modules packages_test)
  (libraries pricklypear-image alcotest))
