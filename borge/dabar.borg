@@ -166,6 +166,47 @@
     |))
    )
   )
+  (subsection note-bible-links
+   (doc "Sexp bible refs in note bodies render to dabar routes")
+   (status planned)
+   (implements libs/bible/lib.pp libs/dabar/lib.pp libs/roam/lib.pp)
+   (verify
+    (smoke "(bible/link-html \"Gen\" 1 1) anchors to /dabar?book=Gen&chapter=1&verse=1")
+    (smoke "(bible/parse-ref …) accepts Gen/Genesis forms used by link helper")
+    (smoke "note body with (bible John 3 16) renders clickable study link")
+    (smoke "bad book degrades to escaped prose, no crash"))
+   (details
+    (doc (|
+         notes.links-and-roam owns authoring syntax and reindex rules.
+         This subsection owns the RENDER TARGET helpers.
+
+         SYNTAX (canonical in note bodies):
+           (bible BOOK chapter)
+           (bible BOOK chapter verse)
+           (bible BOOK chapter verse-from verse-to)
+           (bible BOOK chapter verse "label")  ; optional label string
+
+         HELPERS (bible/ package; dabar may wrap chrome):
+           (bible/link-href book ch verse?) -> "/dabar?book=&chapter=&verse="
+           (bible/link-html book ch verse? label?) -> anchor HTML
+           Reuse bible/abbrev-of + bible/parse-ref + safe-chapter.
+
+         RENDER PIPELINE:
+           roam/render-body (or kernel render-links) recognizes the
+           bible sexp form and calls bible/link-html. Optional htmx
+           onto #dabar-panel when the page includes dabar chrome;
+           plain href navigation is always correct.
+
+         IMPORT:
+           Obsidian [[bible:Genesis2:3|L]] normalizes to sexps in
+           notes.garden-import — not re-parsed as wiki slugs.
+
+         NON-GOAL: storing bible edges in note-link; canon text stays
+         shared data_rows (bible-verse), not duplicated into gardens.
+    |))
+   )
+  )
+
   (subsection search-fts
    (doc "Postgres full-text search over verse text (not semantic)")
    (status partial)

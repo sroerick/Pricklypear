@@ -133,6 +133,13 @@
              route  b.<branch_id>.route.<route>
            DATA (shared, branch-free — branching.data kept):
              datum  data.<type_name>.<id>
+           NOTES HIERARCHY (exception; notes.storage — NOT kind=datum):
+             folder   data.note.u.<user>.<folder-segs…>
+             note     data.note.u.<user>.….<slug>
+             heading  data.note.u.<user>.….<slug>.h.<nid>
+             Reverse-mirror ignores non-datum kinds; hierarchical
+             notes must never be written as kind=datum. Flat CRUD
+             types (todo, bible-verse, …) stay data.<type>.<id>.
            META (system, branch-free):
              user/cred/session/media  meta.<kind>.<id>
 

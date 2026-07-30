@@ -321,6 +321,33 @@ let extract_links_tests = [
     | other ->
         Alcotest.failf "render-links got %s"
           (Pricklypear_lisp.Reader.pp_value other));
+  ("render-links bible sexp", `Quick, fun () ->
+    let contains hay needle =
+      let n = String.length needle in
+      let rec loop i =
+        if i + n > String.length hay then false
+        else if String.sub hay i n = needle then true
+        else loop (i + 1)
+      in
+      loop 0
+    in
+    let v =
+      eval
+        "(render-links \"see (bible John 3 16) and [[x]]\")"
+    in
+    match v with
+    | VStr s ->
+        if not (contains s "/dabar?book=John") then
+          Alcotest.failf "missing dabar href: %s" s;
+        if not (contains s "chapter=3") then
+          Alcotest.failf "missing chapter: %s" s;
+        if not (contains s "verse=16") then
+          Alcotest.failf "missing verse: %s" s;
+        if not (contains s "/notes?slug=x") then
+          Alcotest.failf "wiki still works: %s" s
+    | other ->
+        Alcotest.failf "render-links bible got %s"
+          (Pricklypear_lisp.Reader.pp_value other));
 ]
 
 let equality_tests = [

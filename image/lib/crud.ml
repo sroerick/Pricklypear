@@ -592,3 +592,82 @@ let type_fields (store : Store.t) ~(type_name : string) : value Lwt.t =
   match fs with
   | None -> Lwt.return VNil
   | Some fields -> Lwt.return (VList (List.map (fun f -> VStr f) fields))
+
+(* ---- hierarchical tree prims (notes.tree-cutover K0) ---- *)
+
+let tree_get (store : Store.t) ~(path : string) : value Lwt.t =
+  match Io_lwt.Db.current_conn store with
+  | None -> Lwt.return VNil
+  | Some conn ->
+      let* n = Tree_store.get_by_path conn ~path in
+      (match n with
+       | None -> Lwt.return VNil
+       | Some node -> Lwt.return (VStr (Tree_store.node_to_json node)))
+
+let tree_list (store : Store.t) ~(prefix : string) ?(depth : int option)
+    ?(limit : int = 1000) () : value Lwt.t =
+  match Io_lwt.Db.current_conn store with
+  | None -> Lwt.return (VList [])
+  | Some conn ->
+      let* nodes =
+        match depth with
+        | Some 1 -> Tree_store.list_children conn ~prefix ~limit ()
+        | _ -> Tree_store.list_subtree conn ~prefix ~limit ()
+      in
+      Lwt.return
+        (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes))
+
+let tree_upsert (store : Store.t) ~(path : string) ~(kind : string)
+    ~(type_name : string) ~(body_json : string) ~(author : string) : value Lwt.t =
+  match Io_lwt.Db.current_conn store with
+  | None -> Lwt.return (VStr "tree/upsert: no DB")
+  | Some conn ->
+      let* r =
+        Tree_store.upsert_hier conn ~path ~kind ~type_name ~body_json ~author
+      in
+      (match r with
+       | Ok p -> Lwt.return (VStr p)
+       | Error e -> Lwt.return (VStr e))
+
+let tree_delete (store : Store.t) ~(path : string) ~(recursive : bool)
+    : value Lwt.t =
+  match Io_lwt.Db.current_conn store with
+  | None -> Lwt.return (VInt 0L)
+  | Some conn ->
+      let* n = Tree_store.delete_path conn ~path ~recursive in
+      Lwt.return (VInt (Int64.of_int n))
+
+let tree_move (store : Store.t) ~(old_path : string) ~(new_path : string)
+    : value Lwt.t =
+  match Io_lwt.Db.current_conn store with
+  | None -> Lwt.return (VStr "tree/move: no DB")
+  | Some conn ->
+      let* r = Tree_store.move_subtree conn ~old_path ~new_path in
+      (match r with
+       | Ok n -> Lwt.return (VInt (Int64.of_int n))
+       | Error e -> Lwt.return (VStr e))
+
+let tree_get_uuid (store : Store.t) ~(uuid : string) : value Lwt.t =
+  match Io_lwt.Db.current_conn store with
+  | None -> Lwt.return VNil
+  | Some conn ->
+      let* n = Tree_store.get_by_uuid conn ~uuid in
+      (match n with
+       | None -> Lwt.return VNil
+       | Some node -> Lwt.return (VStr (Tree_store.node_to_json node)))
+
+let tree_find_by (store : Store.t) ~(kind : string option) ~(field : string)
+    ~(value : string) ?(limit : int = 50) () : value Lwt.t =
+  match Io_lwt.Db.current_conn store with
+  | None -> Lwt.return (VList [])
+  | Some conn ->
+      let* nodes =
+        Tree_store.find_by_body_field conn ~kind ~field ~value ~limit ()
+      in
+      Lwt.return
+        (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes))
+
+let tree_path_label (s : string) : value = VStr (Tree_store.path_label s)
+
+let tree_garden_root ~(user : string) : value =
+  VStr (Tree_store.garden_root ~user)

@@ -103,7 +103,7 @@ let hash_body (canonical_body_json : string) : string =
 type node = {
   id : string;
   path : string;
-  kind : string;             (* fn | type | route | datum *)
+  kind : string;             (* fn | type | route | datum | folder | note | heading *)
   type_name : string option; (* datum: the Nopales type *)
   body : Yojson.Safe.t;      (* canonical body (AST / fields / route) *)
   author : string;
@@ -467,3 +467,334 @@ let verify (conn : Store_db.conn) : (string * int * int * bool) list Lwt.t =
                   | _ -> None)
              | _ -> None)
            rows)
+
+(* ---- hierarchical notes helpers (notes.storage / notes.tree-cutover K0) ----
+
+   folder | note | heading are first-class tree kinds. They are NOT kind=datum
+   and must never use data.<type>.<uuid> paths — reverse-mirror only handles
+   fn/type/route/datum. Path labels are ltree-safe: [A-Za-z0-9_] only.
+   Readable slug policy: path_label lowercases and maps non [a-z0-9] to _.
+   Original slug (with hyphens) lives in payload body when needed. *)
+
+(** Sanitize one path segment for ltree. Empty -> "x". *)
+let path_label (s : string) : string =
+  let b = Buffer.create (String.length s) in
+  let last_us = ref false in
+  String.iter
+    (fun c ->
+      let c =
+        if c >= 'A' && c <= 'Z' then Char.chr (Char.code c + 32) else c
+      in
+      if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') then begin
+        Buffer.add_char b c;
+        last_us := false
+      end else if not !last_us then begin
+        Buffer.add_char b '_';
+        last_us := true
+      end)
+    s;
+  let out = Buffer.contents b in
+  let out =
+    let len = String.length out in
+    let start = if len > 0 && out.[0] = '_' then 1 else 0 in
+    let stop =
+      if len > start && out.[len - 1] = '_' then len - 1 else len
+    in
+    if stop <= start then "" else String.sub out start (stop - start)
+  in
+  if out = "" then "x" else out
+
+let allowed_hier_kinds = [ "folder"; "note"; "heading" ]
+
+let is_hier_kind (k : string) : bool =
+  List.mem k allowed_hier_kinds
+
+(** Validate a full dotted path: every label must be ltree-safe. *)
+let valid_path (path : string) : bool =
+  path <> ""
+  &&
+  List.for_all
+    (fun lab ->
+      lab <> ""
+      && String.for_all
+           (fun c ->
+             (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+             || (c >= '0' && c <= '9') || c = '_')
+           lab)
+    (String.split_on_char '.' path)
+
+let garden_root ~user =
+  Printf.sprintf "data.note.u.%s" (path_label user)
+
+let node_to_json (n : node) : string =
+  let body = n.body in
+  Yojson.Safe.to_string
+    (`Assoc
+       [ ("id", `String n.id)
+       ; ("path", `String n.path)
+       ; ("kind", `String n.kind)
+       ; ( "type"
+         , match n.type_name with Some t -> `String t | None -> `String n.kind )
+       ; ("body", body)
+       ; ("author", `String n.author)
+       ; ("hash", `String n.hash)
+       ])
+
+let parse_body_json (fields_json : string) : (Yojson.Safe.t, string) result =
+  try Ok (Yojson.Safe.from_string fields_json)
+  with Yojson.Json_error e -> Error ("bad body json: " ^ e)
+
+let body_string_field (body : Yojson.Safe.t) (field : string) : string option =
+  match body with
+  | `Assoc kvs ->
+      (match List.assoc_opt field kvs with
+       | Some (`String s) when s <> "" -> Some s
+       | Some (`Int i) -> Some (string_of_int i)
+       | _ -> None)
+  | _ -> None
+
+let string_contains hay needle =
+  let hlen = String.length hay and nlen = String.length needle in
+  let rec loop i =
+    if i + nlen > hlen then false
+    else if String.sub hay i nlen = needle then true
+    else loop (i + 1)
+  in
+  nlen = 0 || loop 0
+
+(** Lookup by payload body.uuid (notes identity). *)
+let get_by_uuid (conn : Store_db.conn) ~(uuid : string) : node option Lwt.t =
+  let sql =
+    "SELECT " ^ select_cols ^ " FROM tree_nodes "
+    ^ "WHERE payload #>> '{body,uuid}' = $1 LIMIT 1"
+  in
+  let* rows =
+    Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string uuid ] sql
+  in
+  match rows with
+  | row :: _ -> Lwt.return (node_of_row row)
+  | [] -> Lwt.return_none
+
+(** Find hierarchical nodes where body->>field = value (e.g. slug). *)
+let find_by_body_field (conn : Store_db.conn) ~(kind : string option)
+    ~(field : string) ~(value : string) ?(limit : int = 50) () : node list Lwt.t =
+  let sql =
+    match kind with
+    | Some k ->
+        "SELECT " ^ select_cols ^ " FROM tree_nodes "
+        ^ "WHERE kind = $1 AND payload #>> ARRAY['body',$2] = $3 "
+        ^ "ORDER BY path::text ASC LIMIT $4"
+    | None ->
+        "SELECT " ^ select_cols ^ " FROM tree_nodes "
+        ^ "WHERE payload #>> ARRAY['body',$1] = $2 "
+        ^ "ORDER BY path::text ASC LIMIT $3"
+  in
+  let* rows =
+    match kind with
+    | Some k ->
+        Io_lwt.Db.execute conn
+          ~params:
+            [ Pgx.Value.of_string k
+            ; Pgx.Value.of_string field
+            ; Pgx.Value.of_string value
+            ; Pgx.Value.of_int limit
+            ]
+          sql
+    | None ->
+        Io_lwt.Db.execute conn
+          ~params:
+            [ Pgx.Value.of_string field
+            ; Pgx.Value.of_string value
+            ; Pgx.Value.of_int limit
+            ]
+          sql
+  in
+  Lwt.return (List.filter_map node_of_row rows)
+
+(** Upsert a hierarchical node at [path]. [body_json] is the payload body
+    object (fields). [kind] must be folder|note|heading.
+    K1: notes enforce unique (author, slug); folder+note unique body.uuid. *)
+let upsert_hier (conn : Store_db.conn) ~(path : string) ~(kind : string)
+    ~(type_name : string) ~(body_json : string) ~(author : string)
+    : (string, string) result Lwt.t =
+  if not (is_hier_kind kind) then
+    Lwt.return (Error ("upsert_hier: kind must be folder|note|heading, got " ^ kind))
+  else if not (valid_path path) then
+    Lwt.return (Error ("upsert_hier: invalid path labels: " ^ path))
+  else
+    match parse_body_json body_json with
+    | Error e -> Lwt.return (Error e)
+    | Ok body ->
+        let* slug_clash =
+          if kind <> "note" then Lwt.return_none
+          else
+            match body_string_field body "slug" with
+            | None -> Lwt.return_none
+            | Some slug ->
+                let* hits =
+                  find_by_body_field conn ~kind:(Some "note") ~field:"slug"
+                    ~value:slug ~limit:5 ()
+                in
+                let other =
+                  List.find_opt
+                    (fun n -> n.path <> path && n.author = author)
+                    hits
+                in
+                Lwt.return
+                  (match other with
+                   | Some n ->
+                       Some
+                         (Printf.sprintf
+                            "upsert_hier: slug %S already used at %s" slug n.path)
+                   | None -> None)
+        in
+        (match slug_clash with
+         | Some err -> Lwt.return (Error err)
+         | None ->
+             let* uuid_clash =
+               if kind <> "folder" && kind <> "note" then Lwt.return_none
+               else
+                 match body_string_field body "uuid" with
+                 | None -> Lwt.return_none
+                 | Some uuid ->
+                     let* existing = get_by_uuid conn ~uuid in
+                     Lwt.return
+                       (match existing with
+                        | Some n when n.path <> path ->
+                            Some
+                              (Printf.sprintf
+                                 "upsert_hier: uuid %s already at %s" uuid n.path)
+                        | _ -> None)
+             in
+             (match uuid_clash with
+              | Some err -> Lwt.return (Error err)
+              | None ->
+                  let hash = hash_body (Yojson.Safe.to_string body) in
+                  let sql =
+                    "INSERT INTO tree_nodes (path, kind, type_name, payload, hash, author, updated_at) "
+                    ^ "VALUES ($1::ltree, $2::text, $3::text, "
+                    ^ "  jsonb_build_object('v',1,'kind',$2::text,'path',$1::text,'type',$3::text, "
+                    ^ "    'body',$4::jsonb,'author',$5::text,'doc',NULL,'hash',$6::text), "
+                    ^ "  $6::text, $5::text, now()) "
+                    ^ "ON CONFLICT (path) DO UPDATE SET "
+                    ^ "  kind = EXCLUDED.kind, type_name = EXCLUDED.type_name, "
+                    ^ "  payload = EXCLUDED.payload, hash = EXCLUDED.hash, "
+                    ^ "  author = EXCLUDED.author, updated_at = now() "
+                    ^ "RETURNING path::text"
+                  in
+                  Lwt.catch
+                    (fun () ->
+                      let* rows =
+                        Io_lwt.Db.execute conn
+                          ~params:
+                            [ Pgx.Value.of_string path
+                            ; Pgx.Value.of_string kind
+                            ; Pgx.Value.of_string type_name
+                            ; Pgx.Value.of_string body_json
+                            ; Pgx.Value.of_string author
+                            ; Pgx.Value.of_string hash
+                            ]
+                          sql
+                      in
+                      match rows with
+                      | [ [ p ] ] ->
+                          (match Pgx.Value.to_string p with
+                           | Some s -> Lwt.return (Ok s)
+                           | None ->
+                               Lwt.return (Error "upsert_hier: no path returned"))
+                      | _ -> Lwt.return (Error "upsert_hier: failed"))
+                    (fun exn ->
+                      let msg = Printexc.to_string exn in
+                      if
+                        string_contains msg "tree_nodes_note_slug"
+                        || string_contains msg "tree_nodes_hier_uuid"
+                        || string_contains msg "unique"
+                      then
+                        Lwt.return
+                          (Error ("upsert_hier: unique constraint: " ^ msg))
+                      else Lwt.fail exn)))
+
+(** Delete one node, or the whole subtree when [recursive] is true. *)
+let delete_path (conn : Store_db.conn) ~(path : string) ~(recursive : bool)
+    : int Lwt.t =
+  if not (valid_path path) then Lwt.return 0
+  else
+    let sql =
+      if recursive then
+        "DELETE FROM tree_nodes WHERE path <@ $1::ltree RETURNING path::text"
+      else
+        "DELETE FROM tree_nodes WHERE path = $1::ltree RETURNING path::text"
+    in
+    let* rows =
+      Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string path ] sql
+    in
+    Lwt.return (List.length rows)
+
+(** Move subtree rooted at [old_path] to [new_path]. Rewrites every descendant
+    path and payload.path. Fails if new_path already exists or labels invalid. *)
+let move_subtree (conn : Store_db.conn) ~(old_path : string) ~(new_path : string)
+    : (int, string) result Lwt.t =
+  if not (valid_path old_path && valid_path new_path) then
+    Lwt.return (Error "move_subtree: invalid path labels")
+  else if old_path = new_path then Lwt.return (Ok 0)
+  else
+    (* Refuse moving under itself. *)
+    let prefix = old_path ^ "." in
+    if
+      String.length new_path > String.length old_path
+      && String.sub new_path 0 (String.length prefix) = prefix
+    then Lwt.return (Error "move_subtree: cannot move under self")
+    else
+      let* existing = get_by_path conn ~path:new_path in
+      match existing with
+      | Some _ -> Lwt.return (Error ("move_subtree: target exists: " ^ new_path))
+      | None ->
+          let sql =
+            "WITH moved AS ( "
+            ^ "  UPDATE tree_nodes SET "
+            ^ "    path = CASE WHEN path = $1::ltree THEN $2::ltree "
+            ^ "                ELSE ($2::ltree || subpath(path, nlevel($1::ltree))) END, "
+            ^ "    payload = jsonb_set(payload, '{path}', to_jsonb( "
+            ^ "      (CASE WHEN path = $1::ltree THEN $2::ltree "
+            ^ "            ELSE ($2::ltree || subpath(path, nlevel($1::ltree))) END)::text)), "
+            ^ "    updated_at = now() "
+            ^ "  WHERE path <@ $1::ltree "
+            ^ "  RETURNING path::text "
+            ^ ") SELECT count(*)::int FROM moved"
+          in
+          let* rows =
+            Io_lwt.Db.execute conn
+              ~params:
+                [ Pgx.Value.of_string old_path; Pgx.Value.of_string new_path ]
+              sql
+          in
+          (match rows with
+           | [ [ c ] ] ->
+               (match Pgx.Value.to_int c with
+                | Some n -> Lwt.return (Ok n)
+                | None -> Lwt.return (Error "move_subtree: bad count"))
+           | _ -> Lwt.return (Error "move_subtree: failed"))
+
+(** Covering children under [prefix]: nodes under the prefix with no other
+    tree_nodes between them and the prefix. Handles both one-label children
+    (folder/note) and note outline roots at prefix.h.<nid> (two labels). *)
+let list_children (conn : Store_db.conn) ~(prefix : string) ?(limit : int = 500)
+    () : node list Lwt.t =
+  if not (valid_path prefix) then Lwt.return []
+  else
+    let sql =
+      "SELECT " ^ select_cols ^ " FROM tree_nodes n "
+      ^ "WHERE n.path <@ $1::ltree AND n.path <> $1::ltree "
+      ^ "AND NOT EXISTS ( "
+      ^ "  SELECT 1 FROM tree_nodes mid "
+      ^ "  WHERE mid.path <@ $1::ltree AND mid.path <> $1::ltree "
+      ^ "    AND n.path <@ mid.path AND n.path <> mid.path "
+      ^ ") "
+      ^ "ORDER BY n.path::text ASC LIMIT $2"
+    in
+    let* rows =
+      Io_lwt.Db.execute conn
+        ~params:[ Pgx.Value.of_string prefix; Pgx.Value.of_int limit ]
+        sql
+    in
+    Lwt.return (List.filter_map node_of_row rows)

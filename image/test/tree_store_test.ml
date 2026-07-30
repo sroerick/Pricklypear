@@ -98,12 +98,27 @@ let test_validate () =
    | Ok () -> ()
    | Error e -> fail e)
 
+let test_path_label () =
+  check string "plain" "john" (T.path_label "john");
+  check string "hyphen to us" "my_note" (T.path_label "my-note");
+  check string "upper" "genesis" (T.path_label "Genesis");
+  check string "spaces" "a_b" (T.path_label "a  b");
+  check string "empty" "x" (T.path_label "");
+  check string "trim edge us" "ab" (T.path_label "-ab-");
+  check bool "ltree safe" true (T.valid_path "data.note.u.admin.garden.wiki");
+  check bool "hyphen invalid path" false (T.valid_path "data.note.my-note");
+  check string "garden root" "data.note.u.admin" (T.garden_root ~user:"admin");
+  check bool "hier kinds" true
+    (T.is_hier_kind "folder" && T.is_hier_kind "note" && T.is_hier_kind "heading");
+  check bool "datum not hier" false (T.is_hier_kind "datum")
+
 let () =
   run "tree_store"
     [ "codec", [ test_case "roundtrip" `Quick test_label_roundtrip
                ; test_case "ltree-safe" `Quick test_label_ltree_safe
                ; test_case "uuid label" `Quick test_uuid_label ]
-    ; "paths", [ test_case "constructors" `Quick test_paths ]
+    ; "paths", [ test_case "constructors" `Quick test_paths
+               ; test_case "path_label" `Quick test_path_label ]
     ; "envelope", [ test_case "hash" `Quick test_hash
                   ; test_case "build" `Quick test_envelope ]
     ; "typed", [ test_case "validate_fields" `Quick test_validate ]
