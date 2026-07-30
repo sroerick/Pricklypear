@@ -318,6 +318,67 @@ LANGUAGE sql AS $$
            (SELECT count(*) FROM tree_nodes WHERE kind='datum')
 $$;
 
+-- ---------------------------------------------------------------------------
+-- P3 READ VIEWS: tree-backed relations that reproduce the exact column shape
+-- of the scaffolding tables, so store.ml / crud.ml can read from the tree
+-- behind the unchanged prim ABI by swapping the relation (flag-gated via
+-- PP_TREE_READS). branch_id is recovered from the path's 2nd label (the
+-- uuid-hex); names/routes are decoded from their labels.
+-- ---------------------------------------------------------------------------
+CREATE OR REPLACE FUNCTION tree_dec_label(lbl text) RETURNS text
+LANGUAGE plpgsql IMMUTABLE AS $$
+DECLARE pad int; core text; b64 text;
+BEGIN
+  IF lbl IS NULL THEN RETURN NULL; END IF;
+  IF lbl = 'x' THEN RETURN ''; END IF;
+  pad := substr(lbl, length(lbl), 1)::int;   -- trailing pad count 0/1/2
+  core := substr(lbl, 1, length(lbl) - 1);
+  b64 := replace(replace(core, '_', '+'), '-', '/');
+  b64 := b64 || repeat('=', pad);
+  RETURN convert_from(decode(b64, 'base64'), 'UTF8');
+END $$;
+
+-- branch_id (uuid) from a b.<uuidhex>.... path.
+CREATE OR REPLACE FUNCTION tree_path_branch(p ltree) RETURNS uuid
+LANGUAGE sql IMMUTABLE AS $$
+  SELECT (substr(p::text, 3, 8) || '-' || substr(p::text, 11, 4) || '-' ||
+          substr(p::text, 15, 4) || '-' || substr(p::text, 19, 4) || '-' ||
+          substr(p::text, 23, 12))::uuid
+$$;
+
+CREATE OR REPLACE VIEW tree_function_defs AS
+SELECT tree_path_branch(path) AS branch_id,
+       tree_dec_label((string_to_array(path::text, '.'))[4]) AS name,
+       payload->'body' AS body,
+       payload->>'author' AS author,
+       payload->>'doc' AS doc,
+       created_at, updated_at
+FROM tree_nodes WHERE kind = 'fn';
+
+CREATE OR REPLACE VIEW tree_type_defs AS
+SELECT tree_path_branch(path) AS branch_id,
+       tree_dec_label((string_to_array(path::text, '.'))[4]) AS name,
+       payload->'body' AS fields,
+       payload->>'author' AS author,
+       created_at, updated_at
+FROM tree_nodes WHERE kind = 'type';
+
+CREATE OR REPLACE VIEW tree_view_bindings AS
+SELECT tree_path_branch(path) AS branch_id,
+       payload->'body'->>'route' AS route,
+       payload->'body'->>'handler' AS handler,
+       COALESCE(payload->'body'->>'visibility', 'private') AS visibility,
+       created_at, updated_at
+FROM tree_nodes WHERE kind = 'route';
+
+CREATE OR REPLACE VIEW tree_data_rows AS
+SELECT ((string_to_array(path::text, '.'))[3])::uuid AS id,
+       type_name,
+       payload->'body' AS fields,
+       payload->>'author' AS author,
+       created_at, updated_at
+FROM tree_nodes WHERE kind = 'datum';
+
 INSERT INTO schema_migrations (version, description)
-SELECT 9, 'one-tree substrate: tree_nodes + tree_branches + deferred shadow mirror'
+SELECT 9, 'one-tree substrate: tree_nodes + tree_branches + deferred shadow mirror + read views'
 WHERE NOT EXISTS (SELECT 1 FROM schema_migrations WHERE version = 9);
