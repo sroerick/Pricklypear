@@ -1,0 +1,449 @@
+(project pricklypear-one-tree
+ (doc "Pricklypear book chapter: one-tree — ONE BIG TREE as the storage substrate, typed nodes for data modelling")
+ (status planned)
+ (convention ocaml-dune)
+ (section one-tree
+
+  (doc "One tree is the storage truth. Tables become projections. Nodes carry types.")
+  (status planned)
+  (verify
+   (build "dune build @all")
+   (smoke "prim ABI unchanged: get/create/update/delete/rows/list-bindings/deftype behave identically against tree store")
+   (smoke "shadow tree mirrors function_defs/data_rows on commit (phase 1)"))
+  (details
+   (doc (|
+        =========================================================
+        THE IDEA
+        =========================================================
+        Everything in Pricklypear is stored in ONE BIG TREE.
+        The tree is the source of truth. Code, types, routes,
+        data, docs — all of it lives as nodes in one rooted,
+        typed, path-addressed tree. Nopales code IS tree
+        content: a function's AST is a subtree.
+
+        Today the image already simulates this tree on top of
+        relational tables: branches/function_defs/type_defs/
+        view_bindings reconstruct hierarchy via branch_id
+        columns, parent pointers, and recursive-CTE override
+        walks. Merge and promote are tree-diff algorithms
+        written in SQL. The relational layer is scaffolding
+        around what is already a tree. This chapter removes
+        the scaffolding.
+
+        This is the Smalltalk/GemStone lineage Pricklypear
+        comes from: the persistent thing is the object graph,
+        and queries are programs over the graph. One unix
+        image process serializes structural mutation, so the
+        classic one-tree-store objection (concurrent writers)
+        mostly evaporates — one writer, and a "transaction"
+        is: evaluate, commit the new root.
+
+        WHAT CHANGES:
+          - The tree is TRUTH. Rows are DERIVED.
+          - Storage addressing is by PATH, not by
+            (table, branch_id, name).
+          - Merge/promote become honest three-way tree diffs
+            instead of row-level branch inheritance.
+        WHAT DOES NOT CHANGE:
+          - The Nopales prim ABI. get/create/update/delete/
+            rows/list-bindings/describe/deftype keep their
+            signatures. The prim/effect seam — the core
+            performs I/O via Control.perform_prim (OCaml 5
+            effects; see runtime-effects-transition) and the
+            rim handler answers through the Io.DB port — was
+            built for exactly this swap. Nopales code and
+            route handlers never see the difference. Lwt
+            remains only as the v1 rim backend (Io_lwt); the
+            direction is effects everywhere, Lwt is the
+            replaceable power company, not the model.
+          - Postgres remains the physical substrate (byte
+            durability, backups, pg_dump). The tree is a
+            Postgres-RESIDENT structure, not a new database.
+          - additive-only migrations still govern whatever
+            physical tables the tree store itself uses.
+          - The effects direction (runtime-effects-transition):
+            one-tree changes WHAT the rim reads/writes, not HOW
+            the core talks to the rim. Core stays direct-style
+            via Control.perform_prim; any Lwt still present is
+            vestigial rim plumbing (Io_lwt), to be replaced
+            (Eio or other) on the H3 schedule — it is NOT the
+            model and should not grow.
+   |))
+  )
+  (subsection tree-model
+   (doc "The tree: one root, typed nodes, path addressing")
+   (status planned)
+   (details
+    (doc (|
+         ONE TREE, ONE ROOT:
+
+           /
+           ├── sys
+           │   ├── pkg/<package>/<name>     function AST subtrees
+           │   ├── type/<type>              type declarations
+           │   └── route/<route>            route → handler bindings
+           ├── user/<username>/...          same shape per user
+           └── data
+               └── <type>/<id>              typed data nodes
+                                             (shared — see
+                                             branching-interaction)
+
+         BRANCHES ARE LENSES, NOT COPIES. A branch is a
+         name → subtree-root pointer into the one tree
+         (system/main, <user>/personal, <user>/dev are views).
+         Fork = record a new pointer. Override = pin a subtree.
+         Unpinned names resolve through the lens to main.
+         This replaces today's "recursive CTE up the parent
+         chain" with pointer chasing in the structure the data
+         actually has.
+
+         PHYSICAL FORM (v1, Postgres-resident):
+           - Tree nodes serialized as JSONB (Nopales ASTs are
+             already JSONB today — this formalizes it).
+           - Path index: materialized path per node
+             (ltree or text path column) so "give me all of
+             /data/todo" and "give me subtree /sys/pkg/notes"
+             are indexed lookups, not tree walks.
+           - Per-subtree hashes (content-addressing later;
+             detection + vault integrity now). A corrupt root
+             must be detectable, and pp-sync snapshot must
+             stay meaningful.
+
+         ADDRESSES ARE STABLE. A node address
+         (/user/alice/pkg/notes/doc/get, /data/flash-card/<id>)
+         is the durable name other nodes reference. Moves go
+         through an explicit refile op so references can be
+         rewritten (see notes links-and-roam refile, and
+         structural-editing for the shared tree-op protocol
+         this plugs into).
+
+         =========================================================
+         PINNED (P0) — concrete v1 decisions
+         =========================================================
+         The tree is realized over TODAY's tables first; each
+         existing row maps to exactly ONE typed node. Paths are
+         DERIVED from row identity (no behavior change):
+
+           PATH GRAMMAR (branch-aware code/types/routes):
+             fn     b.<branch_id>.fn.<name>
+             type   b.<branch_id>.type.<name>
+             route  b.<branch_id>.route.<route>
+           DATA (shared, branch-free — branching.data kept):
+             datum  data.<type_name>.<id>
+           META (system, branch-free):
+             user/cred/session/media  meta.<kind>.<id>
+
+           Branch inheritance is NOT baked into the path. The
+           override-walk (recursive CTE up branches.parent_id,
+           depth ASC, first-occurrence dedup) is REPLACED at
+           read time by: try path under self, then parent, up
+           the chain — first hit wins. Rehydrate loads
+           ancestors-first (depth DESC) so child pins override
+           by re-define. Same semantics, honest representation.
+
+           NODE ENVELOPE (jsonb payload per node):
+             { v: 1,
+               kind: fn|type|route|datum|user|cred|session|media,
+               path: text (materialized),
+               type: text (datum: type_name; else node class),
+               body: json (fn AST / type fields / route
+                     {handler,visibility} / datum fields),
+               author: text,
+               doc: text|null (fn only),
+               hash: hex (sha256 over canonical body),
+               created_at, updated_at }
+           Hash covers ONLY canonical body (not path/author) so
+           content-corruption is detectable independent of
+           placement. Per-subtree root hashes compose from leaf
+           hashes (content-addressing later).
+
+           PHYSICAL LAYOUT (migration 009_tree.sql; additive):
+             tree_nodes(
+               id uuid PK DEFAULT gen_random_uuid(),
+               path ltree NOT NULL UNIQUE,
+               kind text NOT NULL,
+               type_name text,                 -- datum only
+               payload jsonb NOT NULL,
+               hash text NOT NULL,
+               author text NOT NULL,
+               created_at timestamptz DEFAULT now(),
+               updated_at timestamptz DEFAULT now())
+             -- GIN on payload; btree (kind,type_name);
+             -- ltree GiST on path for subtree queries.
+             tree_branches(                    -- lens registry
+               branch_id uuid PK REFERENCES branches(id),
+               root_path ltree NOT NULL,       -- b.<branch_id>
+               parent_id uuid,                 -- kept in v1
+               head_hash text)                 -- subtree root hash
+           branches table stays in v1 (branch_id uuid + parent
+           chain); tree_branches adds lens pointer + head hash.
+           /data and /meta are NOT under any b.<id> — shared
+           subtrees every lens can see.
+
+           LENS = branch_id + its parent chain. A read resolves
+           a logical name by walking the chain's path prefixes.
+           This is the v1 lens; true content-addressed pointer
+           moves (fork = new pointer, promote = move main head)
+           arrive in P5 once the tree is truth.
+
+         NEXT FREE MIGRATION: 009 (001..008 exist). tree_store
+         module: image/lib/tree_store.ml.
+
+         SINGLE WRITER: the one image process serializes
+         structural mutation. A commit is "evaluate, publish
+         new root." No lock manager, no merge-on-write races
+         inside a commit. Concurrency control moves up to
+         with-transaction over tree subtrees.
+   |))
+   )
+   (verify
+    (build "dune build @all")
+    (smoke "addressing: resolve /data/todo/<id> and /sys/pkg/notes/<fn> to nodes via path index")
+    (smoke "subtree hash detects corruption of a stored node")))
+  (subsection typed-nodes
+   (doc "Every node has a type; types are the data-modelling layer")
+   (status planned)
+   (details
+    (doc (|
+         Every node in the tree carries a TYPE. This realizes
+         object-model.type-system (planned) as the tree's
+         data-modelling layer — types are how the tree is
+         structured, not an annotation on rows.
+
+         KINDS OF TYPED NODE:
+           - CODE nodes — type is the AST shape (defn, deftype,
+             route). A function IS a subtree whose root is a
+             `defn` node.
+           - DATA nodes — a product type, declared in Nopales:
+               (deftype note        (fields (title :string)
+                                     (body :string) (tags :array :string)))
+               (deftype flash-card  (fields (front :string)
+                                     (back :string) (due :timestamptz)
+                                     (deck :ref flash-deck)))
+               (deftype flash-deck  (fields (title :string) ...))
+             Notes, flash cards, todos, calendar events,
+             workouts — every product's data model is a set of
+             typed node shapes under /data/<type>/.
+           - SCHEMA nodes — the type declarations themselves
+             live in the tree under /sys/type/, so a type is
+             inspectable data like everything else (the
+             Smalltalk metamodel-browser feeling).
+
+         FIELD TYPES: as object-model.type-system —
+           :string :int :bool :timestamptz :json
+           :ref <type>      → a PATH reference to a typed node
+           :array <type>    → homogeneous
+         In one-tree, a :ref is literally a tree path, not an
+         opaque id — dereferencing is a path lookup, and the
+         tree can answer "what points at this node" (backlinks)
+         from the path index. This is the query roam wants.
+
+         VALIDATION AT THE BOUNDARY: the prim layer checks a
+         node's fields against its type declaration on
+         create/update. Nopales stays dynamically typed
+         internally (per roerick: the product surface tolerates
+         jank); the tree boundary is where shapes are enforced.
+         The OCaml outer shell is where correctness is proven
+         (formal-verification).
+
+         NO INHERITANCE, NO SUBTYPING — composition via :ref,
+         exactly as object-model.type-system already rules and
+         storage.no-inheritance already argues. One-tree does
+         not re-open that decision; typed nodes are flat shapes
+         composed by reference.
+
+         RELATION TO TODAY: data_rows rows ARE these typed data
+         nodes, packed as jsonb; type_defs rows ARE the schema
+         nodes. One-tree does not invent new data semantics —
+         it gives the existing semantics their natural shape
+         and makes types load-bearing (validation, backlinks,
+         structural ops) instead of documentary.
+   |))
+   )
+   (verify
+    (build "dune build @all")
+    (smoke "create a flash-card node missing a required field → clean rejection naming the field")
+    (smoke ":ref deref resolves via path; backlink query lists nodes referencing a given node")))
+  (subsection projections
+   (doc "SQL over the tree: relational rows are derived, not truth")
+   (status planned)
+   (details
+    (doc (|
+         The tree is truth, but ad-hoc relational query is how
+         you SEE it. Postgres stored procedures / views /
+         materialized projections DERIVE (type_name, id,
+         fields) rows from the tree:
+
+           - /data browsing, /types, admin grep-queries
+           - reporting, pp-sync export, debugging
+           - the existing CRUD prim RESULT SHAPES (rows returns
+             (id . fields) pairs) are served from a projection
+             even once the store is a tree
+
+         DEPENDENCY DIRECTION FLIPS. Today rows are truth and
+         the tree is reconstructed by CTE; after one-tree the
+         tree is truth and rows are a cache. Projections are
+         REBUILDABLE — drop and regenerate from the tree at
+         any time. Nothing authoritative lives only in a
+         projection.
+
+         OPTION, NOT GATE: the stored-procedure projection
+         layer is how relational tooling keeps working during
+         and after the cutover. Nopales product code keeps
+         calling the same prims; only the prim layer's backing
+         moves from tables to tree + projection.
+
+         INDEXING: projections and the path index are what make
+         "all nodes of type X" and "subtree at P" fast. A full
+         tree walk is never the query path for product or admin
+         surfaces.
+
+         OUT OF SCOPE (v1): exposing raw SQL to Nopales
+         product code. The projection layer serves the image
+         and admin tooling; the Nopales surface stays prims.
+   |))
+   )
+   (verify
+    (build "dune build @all")
+    (smoke "rows 'todo' returns the same (id . fields) pairs backed by a projection over the tree")
+    (smoke "rebuild projection from tree; diff against pre-rebuild state: identical")))
+  (subsection branching-interaction
+   (doc "Branches as tree lenses; the /data question; merge as tree-diff")
+   (status planned)
+   (details
+    (doc (|
+         BRANCH = POINTER INTO THE ONE TREE. Fork records a
+         new lens; override pins a subtree; promote moves main's
+         pointer to the lens's subtree. This is a strict
+         simplification of today's parent_id + branch_id-row
+         model: the semantics are IDENTICAL, the representation
+         is honest.
+
+         MERGE / PROMOTE = THREE-WAY TREE DIFF. With ASTs as
+         subtrees, merge diffing is structural (per-node), and
+         last_synced becomes a root-hash comparison. This
+         realizes branching.ast-nodes (planned) and feeds
+         branching.change-set and review-merge: a change set IS
+         a tree diff.
+
+         THE /data DECISION (the one real semantic change).
+         Today: data_rows has NO branch_id — shared data
+         (branching.data). One-tree offers two placements:
+           A. SHARED SUBTREE — /data/<type>/<id> lives outside
+              any branch, lenses reference it. Closest to
+              today's semantics; data never versioned.
+           B. VERSIONED DATA — /data lives inside each lens,
+              fork versions data too.
+         DEFAULT: A (shared /data subtree), preserving
+         branching.data exactly. B is deferred and NOT v1 —
+         branching.borg's "data is never versioned by branch
+         and never wiped by deploy" rule is load-bearing
+         product behavior.
+
+         TYPE_DECLS: today per-branch rows, table shape shared
+         (branching.schema-authority). Under one-tree, schema
+         nodes at /sys/type/ follow CODE branching rules
+         (branchable, promoted), while /data instances stay
+         shared. Branch code reading shared data against a
+         newer/older type decl follows the existing
+         additive-only tolerance rule.
+
+         COTENANT ISOLATION: lenses enforce
+         multi-user.cotenant-isolation — a session's lens
+         confines reads/writes to its visible subtree plus
+         shared /data, same guarantee as today's
+         session+branch scoping, expressed as path confinement.
+   |))
+   )
+   (verify
+    (build "dune build @all")
+    (smoke "fork = new lens; override on lens A invisible to lens B; promote moves main pointer")
+    (smoke "shared /data: a todo created on alice/personal is visible from bob/dev (today's rule)")))
+  (subsection migration-plan
+   (doc "Phased cutover: shadow tree → flip reads → projections derive → retire tables")
+   (status planned)
+   (details
+    (doc (|
+         NO BIG BANG. The prim ABI is stable throughout; each
+         phase is reversible.
+
+         PHASE 0 — ADDRESSING SCHEME (pure design; this chapter).
+           Freeze the path grammar (/sys/…, /user/…, /data/…),
+           node envelope (type tag + payload + hash), and the
+           lens model. No code.
+
+         PHASE 1 — SHADOW TREE.
+           A writer mirrors function_defs/type_defs/
+           view_bindings/data_rows into the one tree on every
+           commit. Tables remain truth; the tree is a derived
+           copy. Proves addressing, path indexing, hashing —
+           fully reversible.
+
+         PHASE 2 — FLIP READS.
+           The rim's store backend (Io.DB impl; Io_lwt today)
+           serves reads from the tree behind the unchanged
+           prim ABI; tables become the write-through fallback.
+           Diff tree-read vs table-read in CI for a soak
+           period.
+
+         PHASE 3 — TREE IS TRUTH, ROWS ARE PROJECTIONS.
+           Writes commit to the tree; the relational shape
+           becomes a stored-procedure/view projection for /data,
+           /types, admin. Retire the scaffolding tables (via
+           additive-only migration leaving them inert, per
+           house rule — never DROP).
+
+         MIGRATIONS AS TREE TRANSFORMS. Schema change stops
+         being DDL and becomes Nopales-level migration
+         FUNCTIONS over subtrees (more in-spirit; real work).
+         Physical tables the tree store uses still change only
+         via additive-only SQL migrations.
+
+         BLAST RADIUS: per-subtree hashes + pp-sync snapshot as
+         the vault keep corruption detectable and recoverable;
+         a corrupt subtree is rebuildable from snapshot.
+
+         DEPENDS ON / FEEDS:
+           - object-model.type-system (planned) — realized here
+             as typed-nodes.
+           - branching.ast-nodes, change-set, review-merge —
+             tree diff is their substrate.
+           - structural-editing — one shared tree-op protocol
+             over outlines AND the storage tree.
+           - notes links-and-roam — backlinks come from :ref
+             path references.
+           - migrations.additive-only — physical-shape rule
+             unchanged.
+   |))
+   )
+   (verify
+    (build "dune build @all")
+    (smoke "phase 1: every commit appears in shadow tree within the same transaction")
+    (smoke "phase 2 soak: zero diffs between tree-read and table-read over CI window")
+    (smoke "phase 3: drop-write to scaffolding tables; /data + /types served from projection")))
+  (subsection non-goals
+   (doc "What one-tree is NOT")
+   (status planned)
+   (details
+    (doc (|
+         - NOT a new database. Postgres stays the physical
+           substrate; the tree is Postgres-resident JSONB.
+         - NOT versioned user data in v1. /data stays shared
+           (branching.data preserved); per-branch data
+           versioning is explicitly deferred.
+         - NOT a type system for Nopales. Typing lives at the
+           tree/storage boundary; the language stays dynamic
+           (roerick: product surface tolerates jank; the OCaml
+           shell is where proofs live).
+         - NOT re-opening inheritance. No INHERITS, no
+           subtyping (storage.no-inheritance, object-model
+           .type-system stand).
+         - NOT a REST/GraphQL surface. The image remains the
+           API via prims + eval.
+         - NOT raw SQL in product code. Projections serve the
+           image and admin tooling only.
+   |))
+   )
+  )
+ )
+)
