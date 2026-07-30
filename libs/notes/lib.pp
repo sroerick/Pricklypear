@@ -3239,18 +3239,29 @@
         ;; Flat index via tree/note-index (budget-safe). Nested folder
         ;; tree render remains available as notes/tree/render for later.
         (let
-          ((rows (notes/doc/index-list)))
+          ((rows (notes/doc/index-list))
+            (cap 80))
           (if
             (null? rows)
             (html/p* (html/attr "class" "muted") "No notes yet.")
-            (html/ul
-              (html/attr "class" "card notes-flat-index")
-              (list/foldl
-                (lambda
-                  (acc row)
-                  (string-append acc (notes/ui/item-li row)))
-                ""
-                rows))))))))
+            (html/join
+              (list
+                (html/p*
+                  (html/attr "class" "muted")
+                  (string-append
+                    "Showing first "
+                    (as-str cap)
+                    " of "
+                    (as-str (count rows))
+                    " notes (use ?folder= to filter)."))
+                (html/ul
+                  (html/attr "class" "card notes-flat-index")
+                  (list/foldl
+                    (lambda
+                      (acc row)
+                      (string-append acc (notes/ui/item-li-lite row)))
+                    ""
+                    (notes/list-take rows cap)))))))))))
 
 (define notes/ui/handle-post
   (lambda
@@ -3308,6 +3319,37 @@
         (html/h2 "Folders")
         (notes/ui/folders-html)))))
 
+(define notes/list-take
+  (lambda
+    (xs n)
+    (if
+      (or (null? xs) (<= n 0))
+      (list)
+      (cons (car xs) (notes/list-take (cdr xs) (- n 1))))))
+
+(define notes/ui/item-li-lite
+  (lambda
+    (row)
+    (let
+      ((f (cdr row)))
+      (let
+        ((slug (as-str (dict-get f "slug")))
+          (title (as-str (dict-get f "title")))
+          (folder (notes/doc/row-folder row)))
+        (html/li
+          (html/attr "class" "note-item")
+          (html/join
+            (list
+              (html/a
+                (string-append "/notes?slug=" slug)
+                (html/text title))
+              (if
+                (string-eq folder "")
+                ""
+                (html/span
+                  (html/attr "class" "muted")
+                  (html/text (string-append " · " folder)))))))))))
+
 (define notes/ui/item-li
   (lambda
     (row)
@@ -3329,7 +3371,7 @@
                 ""
                 (html/span
                   (html/attr "class" "muted")
-                  (html/text (string-append " \194\183 " folder))))
+                  (html/text (string-append " · " folder))))
               (html/form
                 "POST"
                 "/notes"
