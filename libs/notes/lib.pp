@@ -278,16 +278,7 @@
         (notes/tree/node->row (car hits) #t)))))
 
 (define notes/tree/list-notes
-  (lambda
-    ()
-    (list/foldl
-      (lambda
-        (acc nj)
-        (let
-          ((row (notes/tree/node->row nj #f)))
-          (if (null? row) acc (append acc (list row)))))
-      (list)
-      (tree/list-kind (notes/tree/root) "note" 2000))))
+  (lambda () (tree/note-index (notes/tree/root) 2000)))
 
 ;; ---- M0: migrate legacy data_rows type=note → tree ----
 
