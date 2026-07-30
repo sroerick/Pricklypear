@@ -775,6 +775,77 @@ let move_subtree (conn : Store_db.conn) ~(old_path : string) ~(new_path : string
                 | None -> Lwt.return (Error "move_subtree: bad count"))
            | _ -> Lwt.return (Error "move_subtree: failed"))
 
+(** Lightweight note index rows: (uuid, fields_json) for kind=note under prefix.
+    fields_json has slug/title/tags/kind/day/folder/_path — no outline. *)
+let list_note_index (conn : Store_db.conn) ~(prefix : string) ?(limit : int = 2000)
+    () : (string * string) list Lwt.t =
+  if not (valid_path prefix) then Lwt.return []
+  else
+    let sql =
+      "SELECT path::text, "
+      ^ "coalesce(payload #>> '{body,uuid}', ''), "
+      ^ "coalesce(payload #>> '{body,slug}', ''), "
+      ^ "coalesce(payload #>> '{body,title}', ''), "
+      ^ "coalesce(payload #>> '{body,tags}', ''), "
+      ^ "coalesce(payload #>> '{body,kind}', 'note'), "
+      ^ "coalesce(payload #>> '{body,day}', '') "
+      ^ "FROM tree_nodes WHERE path <@ $1::ltree AND kind = 'note' "
+      ^ "ORDER BY path::text ASC LIMIT $2"
+    in
+    let* rows =
+      Io_lwt.Db.execute conn
+        ~params:[ Pgx.Value.of_string prefix; Pgx.Value.of_int limit ]
+        sql
+    in
+    let root = prefix ^ "." in
+    let folder_of path =
+      if not (String.length path > String.length root && String.sub path 0 (String.length root) = root)
+      then ""
+      else
+        let rest =
+          String.sub path (String.length root)
+            (String.length path - String.length root)
+        in
+        let parts = String.split_on_char '.' rest in
+        (match List.rev parts with
+         | _slug :: rev_dirs -> String.concat "/" (List.rev rev_dirs)
+         | [] -> "")
+    in
+    Lwt.return
+      (List.filter_map
+         (function
+           | [ path_c; uuid_c; slug_c; title_c; tags_c; kind_c; day_c ] ->
+               (match
+                  Pgx.Value.to_string path_c,
+                  Pgx.Value.to_string uuid_c,
+                  Pgx.Value.to_string slug_c,
+                  Pgx.Value.to_string title_c,
+                  Pgx.Value.to_string tags_c,
+                  Pgx.Value.to_string kind_c,
+                  Pgx.Value.to_string day_c
+                with
+                | Some path, Some uuid, Some slug, Some title, Some tags, Some kind, Some day
+                  ->
+                    let folder = folder_of path in
+                    let id = if uuid = "" then path else uuid in
+                    let fields =
+                      Yojson.Safe.to_string
+                        (`Assoc
+                           [ ("slug", `String slug)
+                           ; ("title", `String title)
+                           ; ("tags", `String tags)
+                           ; ("kind", `String kind)
+                           ; ("day", `String day)
+                           ; ("folder", `String folder)
+                           ; ("outline", `String "[]")
+                           ; ("_path", `String path)
+                           ])
+                    in
+                    Some (id, fields)
+                | _ -> None)
+           | _ -> None)
+         rows)
+
 (** List nodes of a given kind under path prefix (e.g. all notes in a garden). *)
 let list_by_kind (conn : Store_db.conn) ~(prefix : string) ~(kind : string)
     ?(limit : int = 2000) () : node list Lwt.t =

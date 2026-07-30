@@ -1234,6 +1234,21 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
             (Pricklypear_lisp.Ast.VStr
                "tree/list-kind: need prefix kind [, limit]"));
 
+  register_crud "tree/note-index"
+    (fun args ->
+      match args with
+      | [] ->
+          Crud.tree_note_index t.store
+            ~prefix:(Tree_store.garden_root ~user:(actor ())) ()
+      | [ Pricklypear_lisp.Ast.VStr prefix ] ->
+          Crud.tree_note_index t.store ~prefix ()
+      | [ Pricklypear_lisp.Ast.VStr prefix; Pricklypear_lisp.Ast.VInt n ] ->
+          Crud.tree_note_index t.store ~prefix ~limit:(Int64.to_int n) ()
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr
+               "tree/note-index: [] | prefix [, limit]"));
+
   (* Pure path helpers (no DB). *)
   register_crud "tree/path-label"
     (fun args ->
