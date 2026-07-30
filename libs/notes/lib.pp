@@ -214,7 +214,7 @@
 
 (define notes/tree/node->row
   (lambda
-    (nj)
+    (nj load-outline?)
     (let
       ((n (notes/tree/parse nj)))
       (if
@@ -233,16 +233,14 @@
                     (if
                       (null? u)
                       (as-str (dict-get n "id"))
-                      (as-str u))))
-                (cons
-                  uuid
-                  (dict-set*
-                    "{}"
+                      (as-str u)))
+                  (title (as-str (dict-get b "title")))
+                  (fields
                     (list
                       "slug"
                       (as-str (dict-get b "slug"))
                       "title"
-                      (as-str (dict-get b "title"))
+                      title
                       "tags"
                       (as-str (dict-get b "tags"))
                       "kind"
@@ -251,20 +249,33 @@
                       (as-str (dict-get b "day"))
                       "folder"
                       (notes/tree/folder-of-path path)
-                      "outline"
-                      (outline/encode
-                        (notes/tree/load-outline
-                          path
-                          (as-str (dict-get b "title"))))
                       "_path"
-                      path)))))))))))
+                      path)))
+                (cons
+                  uuid
+                  (dict-set*
+                    "{}"
+                    (if
+                      load-outline?
+                      (append
+                        fields
+                        (list
+                          "outline"
+                          (outline/encode
+                            (notes/tree/load-outline path title))))
+                      (append
+                        fields
+                        (list "outline" "[]")))))))))))))
 
 (define notes/tree/find-slug
   (lambda
     (slug)
     (let
       ((hits (tree/find-by "note" "slug" (as-str slug) 5)))
-      (if (null? hits) () (notes/tree/node->row (car hits))))))
+      (if
+        (null? hits)
+        ()
+        (notes/tree/node->row (car hits) #t)))))
 
 (define notes/tree/list-notes
   (lambda
@@ -273,10 +284,10 @@
       (lambda
         (acc nj)
         (let
-          ((row (notes/tree/node->row nj)))
+          ((row (notes/tree/node->row nj #f)))
           (if (null? row) acc (append acc (list row)))))
       (list)
-      (tree/list (notes/tree/root)))))
+      (tree/list-kind (notes/tree/root) "note" 2000))))
 
 ;; ---- M0: migrate legacy data_rows type=note → tree ----
 
