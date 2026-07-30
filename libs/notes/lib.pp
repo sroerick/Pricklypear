@@ -2414,7 +2414,7 @@
         (html/p*
           (html/attr "class" "muted")
           (string-append "tags: " (as-str tags)))
-        (outline/html slug outline)
+        (outline/html-lite slug outline #f)
         (html/tag
           "details"
           (html/attr "class" "ol-debug")
@@ -3520,7 +3520,7 @@
           (string-append "tags: " (as-str tags)))
         (notes/ui/folder-form slug folder)
         (notes/ui/toolbar slug show-archived)
-        (outline/html slug outline show-archived)
+        (outline/html-lite slug outline show-archived)
         (html/div
           (html/attr "class" "roam-backlinks-panel")
           (html/join

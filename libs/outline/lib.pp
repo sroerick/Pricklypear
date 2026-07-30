@@ -321,11 +321,19 @@
     (slug root show-archived)
     (html/div
       (html/attr "id" "outline")
-      (outline/html-node slug root show-archived))))
+      (outline/html-node slug root show-archived #t))))
+
+;; Lite show path: no per-node action panels (budget). Toolbar still edits.
+(define outline/html-lite
+  (lambda
+    (slug root show-archived)
+    (html/div
+      (html/attr "id" "outline")
+      (outline/html-node slug root show-archived #f))))
 
 (define outline/html-node
   (lambda
-    (slug n show-archived)
+    (slug n show-archived with-actions)
     (let
       ((nid (outline/id n))
         (todo (outline/todo n))
@@ -360,7 +368,10 @@
                         (html/attr "data-id" nid)
                         (html/attr "data-field" "title")))
                     (html/text (outline/title n))))))
-            (outline/actions slug nid todo show-archived)
+            (if
+              with-actions
+              (outline/actions slug nid todo show-archived)
+              "")
             (if
               (string-eq body "")
               ""
@@ -379,7 +390,7 @@
                   (acc k)
                   (string-append
                     acc
-                    (outline/html-node slug k show-archived)))
+                    (outline/html-node slug k show-archived with-actions)))
                 ""
                 kids))))))))
 
