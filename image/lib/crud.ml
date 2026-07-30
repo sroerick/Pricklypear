@@ -26,6 +26,21 @@ open Pricklypear_lisp.Ast
    Store.tree_reads. Result shape is unchanged -> prim ABI preserved. *)
 let data_rel () = if Store.tree_reads () then "tree_data_rows" else "data_rows"
 
+(** If [type_name] is declared on the store's branch, validate [fields_json]
+    against its field list. Undeclared types are free-form (no schema).
+    Returns None on ok, Some error_message on reject. *)
+let check_type_fields (store : Store.t) ~(type_name : string)
+    ~(fields_json : string) : string option Lwt.t =
+  let* declared = Store.lookup_type_fields store ~name:type_name in
+  match declared with
+  | None -> Lwt.return_none
+  | Some fields ->
+      (match Tree_store.validate_fields ~declared:fields fields_json with
+       | Ok () -> Lwt.return_none
+       | Error msg ->
+           Lwt.return_some
+             (Printf.sprintf "create/update %s: %s" type_name msg))
+
 let value_of_id cell : value =
   (* Pgx.Value.to_string returns string option; normalize to VStr/VNil *)
   match Pgx.Value.to_string cell with
@@ -141,6 +156,10 @@ let create
     (store : Store.t) ~(type_name : string) ~(fields_json : string)
     ~(author : string)
     : value Lwt.t =
+  let* reject = check_type_fields store ~type_name ~fields_json in
+  match reject with
+  | Some msg -> Lwt.return (VStr msg)
+  | None ->
   match Io_lwt.Db.current_conn store with
   | None -> Lwt.return (VStr "create failed: no DB")
   | Some conn ->
@@ -174,6 +193,10 @@ let update
     (store : Store.t) ~(type_name : string) ~(id : string)
     ~(fields_json : string)
     : value Lwt.t =
+  let* reject = check_type_fields store ~type_name ~fields_json in
+  match reject with
+  | Some msg -> Lwt.return (VStr msg)
+  | None ->
   match Io_lwt.Db.current_conn store with
   | None -> Lwt.return VNil
   | Some conn ->
@@ -548,3 +571,24 @@ let get_row
                    })
             | _ -> Lwt.return None)
        | _ -> Lwt.return None)
+
+
+(** (node-path 'type id) -> VStr path. Pure path constructor. *)
+let node_path ~(type_name : string) ~(id : string) : value =
+  VStr (Tree_store.datum_path ~type_name ~id)
+
+(** (backlinks id-or-path [limit]) -> VList of VStr paths. *)
+let backlinks (store : Store.t) ~(needle : string) ?(limit : int = 200) ()
+  : value Lwt.t =
+  match Io_lwt.Db.current_conn store with
+  | None -> Lwt.return (VList [])
+  | Some conn ->
+      let* paths = Tree_store.backlinks conn ~needle ~limit () in
+      Lwt.return (VList (List.map (fun p -> VStr p) paths))
+
+(** (type-fields 'type) -> VList of VStr field names | VNil if undeclared. *)
+let type_fields (store : Store.t) ~(type_name : string) : value Lwt.t =
+  let* fs = Store.lookup_type_fields store ~name:type_name in
+  match fs with
+  | None -> Lwt.return VNil
+  | Some fields -> Lwt.return (VList (List.map (fun f -> VStr f) fields))

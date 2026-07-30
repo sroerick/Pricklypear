@@ -1080,6 +1080,38 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
           Lwt.return
             (Pricklypear_lisp.Ast.VStr "find-random: need type"));
 
+  (* one-tree P6: typed nodes + path addressing + backlinks *)
+  register_crud "node-path"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr type_name;
+          Pricklypear_lisp.Ast.VStr id ] ->
+          Lwt.return (Crud.node_path ~type_name ~id)
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr "node-path: need type, id"));
+
+  register_crud "type-fields"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr type_name ] ->
+          Crud.type_fields t.store ~type_name
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr "type-fields: need type"));
+
+  register_crud "backlinks"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr needle ] ->
+          Crud.backlinks t.store ~needle ()
+      | [ Pricklypear_lisp.Ast.VStr needle;
+          Pricklypear_lisp.Ast.VInt n ] ->
+          Crud.backlinks t.store ~needle ~limit:(Int64.to_int n) ()
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr "backlinks: need id-or-path [, limit]"));
+
   (* (list-branches) -> VList of "owner/name" strings *)
   Primitives.register tbl "list-branches"
     (fun _args ->

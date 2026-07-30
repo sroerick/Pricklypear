@@ -82,6 +82,22 @@ let test_envelope () =
       check bool "has hash" true (List.mem_assoc "hash" kvs)
   | _ -> fail "envelope not assoc"
 
+let test_validate () =
+  let open T in
+  (match validate_fields ~declared:["a";"b"] "{\"a\":1,\"b\":2}" with
+   | Ok () -> ()
+   | Error e -> fail e);
+  (match validate_fields ~declared:["a";"b"] "{\"a\":1}" with
+   | Error msg ->
+       check bool "mentions missing" true (String.contains msg 'b' || String.length msg > 0)
+   | Ok () -> fail "should reject missing b");
+  (match validate_fields ~declared:["a"] "{\"a\":1,\"extra\":true}" with
+   | Ok () -> ()  (* extra keys allowed *)
+   | Error e -> fail e);
+  (match validate_fields ~declared:[] "{}" with
+   | Ok () -> ()
+   | Error e -> fail e)
+
 let () =
   run "tree_store"
     [ "codec", [ test_case "roundtrip" `Quick test_label_roundtrip
@@ -90,4 +106,5 @@ let () =
     ; "paths", [ test_case "constructors" `Quick test_paths ]
     ; "envelope", [ test_case "hash" `Quick test_hash
                   ; test_case "build" `Quick test_envelope ]
+    ; "typed", [ test_case "validate_fields" `Quick test_validate ]
     ]
