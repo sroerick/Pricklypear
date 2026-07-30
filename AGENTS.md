@@ -115,7 +115,7 @@ Postgres still holds bytes, but the **logical store is ONE TREE**
 `borge/one-tree.borg`. Overview: `docs/one-tree.md`.
 
 - **Paths:** `b.<branch>.{fn,type,route}.<label>` · `data.<type>.<id>`
-- **Default ON:** `PP_TREE_READS=1` `PP_TREE_WRITES=1` (opt out with `=0`)
+- **Default OFF (opt-in):** `PP_TREE_READS` / `PP_TREE_WRITES` (set `=1` to exercise tree path; tables + forward mirror remain source of truth for prims until verified)
 - **Mirrors:** deferred triggers keep scaffolding tables
   (`function_defs` / `type_defs` / `view_bindings` / `data_rows`) in
   lockstep with the tree (bidirectional, recursion-guarded).

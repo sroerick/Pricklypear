@@ -11,9 +11,12 @@ open Lwt.Syntax
    scaffolding tables. SQL shape + OCaml result mapping unchanged —
    only the relation name differs — so the prim ABI is preserved. *)
 let tree_reads () : bool =
+  (* Default OFF while tree write path is opt-in. Forward mirror keeps
+     tree_nodes updated for inspection; prim reads use scaffolding tables
+     until PP_TREE_READS=1 is explicitly enabled after verify_one_tree. *)
   match Sys.getenv_opt "PP_TREE_READS" with
-  | Some "0" | Some "false" | Some "no" | Some "off" -> false
-  | _ -> true
+  | Some "1" | Some "true" | Some "yes" | Some "on" -> true
+  | _ -> false
 
 let fn_rel () = if tree_reads () then "tree_function_defs" else "function_defs"
 let ty_rel () = if tree_reads () then "tree_type_defs" else "type_defs"
