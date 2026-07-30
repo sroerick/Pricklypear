@@ -46,6 +46,10 @@
              agent/browser image upload). Spec: storage.media.
              Shared across branches like data_rows; ownership
              via author column. Additive table only.
+           008_agent_users.sql — agent user rows / allow flags.
+           009_tree.sql — one-tree substrate (tree_nodes,
+             tree_branches, bidirectional deferred mirrors,
+             tree_* read views, tree_verify). Spec: one-tree.
 
          A migration in flight blocks serving until it
          completes (or fails). This guarantees the image

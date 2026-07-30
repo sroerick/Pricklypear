@@ -1,15 +1,17 @@
 (project pricklypear-one-tree
  (doc "Pricklypear book chapter: one-tree — ONE BIG TREE as the storage substrate, typed nodes for data modelling")
- (status planned)
+ (status partial)
  (convention ocaml-dune)
  (section one-tree
 
   (doc "One tree is the storage truth. Tables become projections. Nodes carry types.")
-  (status planned)
+  (status partial)
+  (implements image/lib/tree_store.ml image/lib/store.ml image/lib/crud.ml
+              migrations/009_tree.sql scripts/verify_one_tree.sh)
   (verify
    (build "dune build @all")
-   (smoke "prim ABI unchanged: get/create/update/delete/rows/list-bindings/deftype behave identically against tree store")
-   (smoke "shadow tree mirrors function_defs/data_rows on commit (phase 1)"))
+   (test "image/test/tree_store_test.ml — 7 alcotest cases")
+   (smoke "ksh scripts/verify_one_tree.sh (tree_verify + eval smoke on :18080)"))
   (details
    (doc (|
         =========================================================
@@ -72,7 +74,8 @@
   )
   (subsection tree-model
    (doc "The tree: one root, typed nodes, path addressing")
-   (status planned)
+   (status implemented)
+   (implements image/lib/tree_store.ml migrations/009_tree.sql)
    (details
     (doc (|
          ONE TREE, ONE ROOT:
@@ -202,7 +205,8 @@
     (smoke "subtree hash detects corruption of a stored node")))
   (subsection typed-nodes
    (doc "Every node has a type; types are the data-modelling layer")
-   (status planned)
+   (status implemented)
+   (implements image/lib/tree_store.ml image/lib/crud.ml image/lib/session.ml)
    (details
     (doc (|
          Every node in the tree carries a TYPE. This realizes
@@ -266,7 +270,8 @@
     (smoke ":ref deref resolves via path; backlink query lists nodes referencing a given node")))
   (subsection projections
    (doc "SQL over the tree: relational rows are derived, not truth")
-   (status planned)
+   (status implemented)
+   (implements migrations/009_tree.sql)
    (details
     (doc (|
          The tree is truth, but ad-hoc relational query is how
@@ -309,7 +314,8 @@
     (smoke "rebuild projection from tree; diff against pre-rebuild state: identical")))
   (subsection branching-interaction
    (doc "Branches as tree lenses; the /data question; merge as tree-diff")
-   (status planned)
+   (status partial)
+   (implements image/lib/store.ml image/lib/tree_store.ml)
    (details
     (doc (|
          BRANCH = POINTER INTO THE ONE TREE. Fork records a
@@ -361,7 +367,8 @@
     (smoke "shared /data: a todo created on alice/personal is visible from bob/dev (today's rule)")))
   (subsection migration-plan
    (doc "Phased cutover: shadow tree → flip reads → projections derive → retire tables")
-   (status planned)
+   (status partial)
+   (implements migrations/009_tree.sql image/lib/store.ml image/lib/crud.ml)
    (details
     (doc (|
          NO BIG BANG. The prim ABI is stable throughout; each
@@ -423,7 +430,7 @@
     (smoke "phase 3: drop-write to scaffolding tables; /data + /types served from projection")))
   (subsection non-goals
    (doc "What one-tree is NOT")
-   (status planned)
+   (status implemented)
    (details
     (doc (|
          - NOT a new database. Postgres stays the physical

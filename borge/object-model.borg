@@ -67,7 +67,8 @@
   )
   (subsection type-system
    (doc "Field types and reference semantics")
-   (status planned)
+   (status partial)
+   (* agent note (|one-tree P6: boundary validation + type-fields/node-path/backlinks prims land the declared-field half; :ref as path + full field-type lattice still open.|) *)
    (details
     (doc (|
          Field types (initial cut, grow as needed):
