@@ -108,6 +108,23 @@ curl -sS "$PP_URL/agent.txt" | head
   `pp-sync snapshot [--branch system/main] [--out backups/…]`.
   `libs/` = main vault (seed input); `backups/<ref>/` = non-main dumps.
 
+## One-tree storage (default)
+
+Postgres still holds bytes, but the **logical store is ONE TREE**
+(`tree_nodes` + `tree_branches`, migration `009_tree.sql`). Spec:
+`borge/one-tree.borg`. Overview: `docs/one-tree.md`.
+
+- **Paths:** `b.<branch>.{fn,type,route}.<label>` · `data.<type>.<id>`
+- **Default ON:** `PP_TREE_READS=1` `PP_TREE_WRITES=1` (opt out with `=0`)
+- **Mirrors:** deferred triggers keep scaffolding tables
+  (`function_defs` / `type_defs` / `view_bindings` / `data_rows`) in
+  lockstep with the tree (bidirectional, recursion-guarded).
+- **Fork:** empty lens (parent pointer only); inheritance via CTE.
+- **Typed boundary:** declared types require all fields on create/update.
+  Prims: `(type-fields 't)`, `(node-path 't id)`, `(backlinks needle)`.
+- **Verify:** `ksh scripts/verify_one_tree.sh` (needs `scripts/dev.sh start`).
+- **Module:** `image/lib/tree_store.ml`
+
 ## Stack
 
 - OCaml 5.4.1 on the **`poohstack`** opam switch (NOT a dedicated
