@@ -144,6 +144,11 @@ let create
   match Io_lwt.Db.current_conn store with
   | None -> Lwt.return (VStr "create failed: no DB")
   | Some conn ->
+  if Tree_store.tree_writes () then begin
+    (* one-tree P4: write the tree; reverse trigger mirrors to data_rows *)
+    let* id = Tree_store.insert_datum conn ~type_name ~fields_json ~author in
+    Lwt.return (match id with Some s -> VStr s | None -> VStr "create failed")
+  end else begin
       let sql =
         "INSERT INTO data_rows (type_name, fields, author) " ^
         "VALUES ($1, $2::jsonb, $3) RETURNING id::text" in
@@ -160,6 +165,7 @@ let create
            (match row with
             | [ id_cell ] -> Lwt.return (value_of_id id_cell)
             | _ -> Lwt.return (VStr "create failed")))
+  end
 
 (** (update 'type id "{fields-json}") -> VStr id | VNil.
     UPDATE fields for ONE row by (type_name, id). Returns the id
@@ -171,6 +177,10 @@ let update
   match Io_lwt.Db.current_conn store with
   | None -> Lwt.return VNil
   | Some conn ->
+  if Tree_store.tree_writes () then begin
+    let* id' = Tree_store.update_datum conn ~type_name ~id ~fields_json in
+    Lwt.return (match id' with Some s -> VStr s | None -> VNil)
+  end else begin
       let sql =
         "UPDATE data_rows SET fields = $3::jsonb, updated_at = now() " ^
         "WHERE type_name = $1 AND id = $2::uuid " ^
@@ -188,6 +198,7 @@ let update
            (match row with
             | [ id_cell ] -> Lwt.return (value_of_id id_cell)
             | _ -> Lwt.return VNil))
+  end
 
 (** (update-field 'type id "field" "value") -> VStr id | VNil.
     Ergonomic shorthand for the v1 dict-set + update round-trip:
@@ -240,6 +251,10 @@ let delete (store : Store.t) ~(type_name : string) ~(id : string) : value Lwt.t 
   match Io_lwt.Db.current_conn store with
   | None -> Lwt.return VNil
   | Some conn ->
+  if Tree_store.tree_writes () then begin
+    let* id' = Tree_store.delete_datum conn ~type_name ~id in
+    Lwt.return (match id' with Some s -> VStr s | None -> VNil)
+  end else begin
       let sql =
         "DELETE FROM data_rows " ^
         "WHERE type_name = $1 AND id = $2::uuid " ^
@@ -256,6 +271,7 @@ let delete (store : Store.t) ~(type_name : string) ~(id : string) : value Lwt.t 
            (match row with
             | [ id_cell ] -> Lwt.return (value_of_id id_cell)
             | _ -> Lwt.return VNil))
+  end
 
 (** (list 'type [limit]) -> VList of (VStr id, VStr fields) pairs.
     With no limit, defaults to 100 (avoid OOM on a huge table).

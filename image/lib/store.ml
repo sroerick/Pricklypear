@@ -4,18 +4,16 @@
 include Store_db
 open Lwt.Syntax
 
-(* ---- one-tree P3: read-from-tree flag (spec one-tree.migration-plan) ----
-   When PP_TREE_READS=1, branch-aware reads source from the tree-backed
-   views (tree_function_defs / tree_type_defs / tree_view_bindings) and
-   data reads from tree_data_rows — the scaffolding tables become
-   write-through (kept in lockstep by the 009 shadow triggers). Default
-   OFF (read from tables) so the swap is independently revertible and
-   soak-testable. The SQL shape and OCaml result mapping are unchanged —
-   only the relation name differs — so the prim ABI is preserved exactly. *)
+(* ---- one-tree P3/P4: read-from-tree flag (spec one-tree.migration-plan) ----
+   Default ON: branch-aware reads source from the tree-backed views
+   (tree_function_defs / tree_type_defs / tree_view_bindings) and data
+   reads from tree_data_rows. Set PP_TREE_READS=0 to fall back to the
+   scaffolding tables. SQL shape + OCaml result mapping unchanged —
+   only the relation name differs — so the prim ABI is preserved. *)
 let tree_reads () : bool =
   match Sys.getenv_opt "PP_TREE_READS" with
-  | Some "1" | Some "true" | Some "yes" -> true
-  | _ -> false
+  | Some "0" | Some "false" | Some "no" | Some "off" -> false
+  | _ -> true
 
 let fn_rel () = if tree_reads () then "tree_function_defs" else "function_defs"
 let ty_rel () = if tree_reads () then "tree_type_defs" else "type_defs"
@@ -415,6 +413,9 @@ let delete_function_on_branch (t : t) ~(branch_id : string) ~(name : string)
   | Some conn ->
       Lwt.catch
         (fun () ->
+          if Tree_store.tree_writes () then
+            Tree_store.delete_fn conn ~branch_id ~name
+          else begin
           let sql =
             "DELETE FROM function_defs WHERE branch_id = $1 AND name = $2 " ^
             "RETURNING name" in
@@ -424,7 +425,8 @@ let delete_function_on_branch (t : t) ~(branch_id : string) ~(name : string)
                         Pgx.Value.of_string name ]
               sql
           in
-          Lwt.return (rows <> []))
+          Lwt.return (rows <> [])
+          end)
         (fun exn ->
           Printf.eprintf "[store] delete_function_on_branch: %s\n"
             (Printexc.to_string exn);
@@ -495,6 +497,11 @@ let persist_function (t : t) (name : string)
           let body_json =
             Yojson.Safe.to_string
               (Pricklypear_lisp.Ast.expr_to_json body) in
+          if Tree_store.tree_writes () then begin
+            (* one-tree P4: write the tree; reverse trigger mirrors to table *)
+            Tree_store.upsert_fn conn ~branch_id:t.branch_id ~name
+              ~body_json ~author ~doc
+          end else begin
           let sql =
             "INSERT INTO function_defs (branch_id, name, body, author, doc) " ^
             "VALUES ($1, $2, $3::jsonb, $4, $5) " ^
@@ -514,7 +521,8 @@ let persist_function (t : t) (name : string)
                         Pgx.Value.of_string author;
                         doc_param ]
               sql in
-          Lwt.return_unit)
+          Lwt.return_unit
+          end)
         (fun exn ->
           Printf.eprintf "[store] persist_function error: %s\n"
             (Printexc.to_string exn);
@@ -536,6 +544,16 @@ let persist_function_if_absent (t : t) (name : string)
           let body_json =
             Yojson.Safe.to_string
               (Pricklypear_lisp.Ast.expr_to_json body) in
+          if Tree_store.tree_writes () then begin
+            let* exists =
+              Tree_store.get_by_path conn
+                ~path:(Tree_store.fn_path ~branch_id:t.branch_id ~name) in
+            (match exists with
+             | Some _ -> Lwt.return_unit   (* seed-policy: never overwrite *)
+             | None ->
+                 Tree_store.upsert_fn conn ~branch_id:t.branch_id ~name
+                   ~body_json ~author ~doc)
+          end else begin
           let sql =
             "INSERT INTO function_defs (branch_id, name, body, author, doc) " ^
             "VALUES ($1, $2, $3::jsonb, $4, $5) " ^
@@ -553,7 +571,8 @@ let persist_function_if_absent (t : t) (name : string)
                         Pgx.Value.of_string author;
                         doc_param ]
               sql in
-          Lwt.return_unit)
+          Lwt.return_unit
+          end)
         (fun exn ->
           Printf.eprintf "[store] persist_function_if_absent error: %s\n"
             (Printexc.to_string exn);
@@ -745,6 +764,15 @@ let register_route (t : t) ~(route : string) ~(handler : string)
   | Some conn ->
       Lwt.catch
         (fun () ->
+          if Tree_store.tree_writes () then begin
+            let vis =
+              match visibility with
+              | Some v -> normalize_visibility v
+              | None -> "private"
+            in
+            Tree_store.upsert_route conn ~branch_id:t.branch_id ~route ~handler
+              ~visibility:vis
+          end else begin
           let sql, params =
             match visibility with
             | Some vis ->
@@ -770,7 +798,8 @@ let register_route (t : t) ~(route : string) ~(handler : string)
                   ; Pgx.Value.of_string handler ] )
           in
           let* _ = exec conn ~params sql in
-          Lwt.return_unit)
+          Lwt.return_unit
+          end)
         (fun exn ->
           Printf.eprintf "[store] register_route error: %s\n"
             (Printexc.to_string exn);
@@ -790,6 +819,16 @@ let register_route_if_absent (t : t) ~(route : string) ~(handler : string)
             | Some v -> normalize_visibility v
             | None -> "private"
           in
+          if Tree_store.tree_writes () then begin
+            let* exists =
+              Tree_store.get_by_path conn
+                ~path:(Tree_store.route_path ~branch_id:t.branch_id ~route) in
+            (match exists with
+             | Some _ -> Lwt.return_unit
+             | None ->
+                 Tree_store.upsert_route conn ~branch_id:t.branch_id ~route
+                   ~handler ~visibility:vis)
+          end else begin
           let sql =
             "INSERT INTO view_bindings " ^
             "  (branch_id, route, handler, visibility) " ^
@@ -805,7 +844,8 @@ let register_route_if_absent (t : t) ~(route : string) ~(handler : string)
                 ; Pgx.Value.of_string vis ]
               sql
           in
-          Lwt.return_unit)
+          Lwt.return_unit
+          end)
         (fun exn ->
           Printf.eprintf "[store] register_route_if_absent error: %s\n"
             (Printexc.to_string exn);
@@ -894,6 +934,10 @@ let persist_type (t : t) ~(name : string) ~(fields : string list)
           let fields_json =
             Yojson.Safe.to_string
               (`List (List.map (fun s -> `String s) fields)) in
+          if Tree_store.tree_writes () then begin
+            Tree_store.upsert_type conn ~branch_id:t.branch_id ~name
+              ~fields_json ~author
+          end else begin
           let sql =
             "INSERT INTO type_defs (branch_id, name, fields, author) " ^
             "VALUES ($1, $2, $3::jsonb, $4) " ^
@@ -908,7 +952,8 @@ let persist_type (t : t) ~(name : string) ~(fields : string list)
                         Pgx.Value.of_string author ]
               sql
           in
-          Lwt.return_unit)
+          Lwt.return_unit
+          end)
         (fun exn ->
           Printf.eprintf "[store] persist_type error: %s\n"
             (Printexc.to_string exn);
