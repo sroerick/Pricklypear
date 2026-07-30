@@ -441,40 +441,44 @@ let promote_functions (t : t) ~(source_id : string) ~(target_id : string)
   | Some conn ->
       Lwt.catch
         (fun () ->
-          Lwt_list.fold_left_s
-            (fun acc name ->
-              let* src =
-                lookup_function_on_branch t ~branch_id:source_id ~name
-              in
-              match src with
-              | None -> Lwt.return acc
-              | Some (body, author, _, doc) ->
-                  let body_json =
-                    Yojson.Safe.to_string
-                      (Pricklypear_lisp.Ast.expr_to_json body) in
-                  let sql =
-                    "INSERT INTO function_defs " ^
-                    "  (branch_id, name, body, author, doc) " ^
-                    "VALUES ($1, $2, $3::jsonb, $4, $5) " ^
-                    "ON CONFLICT (branch_id, name) DO UPDATE " ^
-                    "SET body = EXCLUDED.body, author = EXCLUDED.author, " ^
-                    "    doc = EXCLUDED.doc, updated_at = now() RETURNING name" in
-                  let doc_param =
-                    match doc with
-                    | Some s -> Pgx.Value.of_string s
-                    | None -> Pgx.Value.null
-                  in
-                  let* rows =
-                    exec conn
-                      ~params:[ Pgx.Value.of_string target_id;
-                                Pgx.Value.of_string name;
-                                Pgx.Value.of_string body_json;
-                                Pgx.Value.of_string author;
-                                doc_param ]
-                      sql
-                  in
-                  Lwt.return (if rows = [] then acc else acc + 1))
-            0 names)
+          let* n =
+            Lwt_list.fold_left_s
+              (fun acc name ->
+                let* src =
+                  lookup_function_on_branch t ~branch_id:source_id ~name
+                in
+                match src with
+                | None -> Lwt.return acc
+                | Some (body, author, _, doc) ->
+                    let body_json =
+                      Yojson.Safe.to_string
+                        (Pricklypear_lisp.Ast.expr_to_json body) in
+                    let sql =
+                      "INSERT INTO function_defs " ^
+                      "  (branch_id, name, body, author, doc) " ^
+                      "VALUES ($1, $2, $3::jsonb, $4, $5) " ^
+                      "ON CONFLICT (branch_id, name) DO UPDATE " ^
+                      "SET body = EXCLUDED.body, author = EXCLUDED.author, " ^
+                      "    doc = EXCLUDED.doc, updated_at = now() RETURNING name" in
+                    let doc_param =
+                      match doc with
+                      | Some s -> Pgx.Value.of_string s
+                      | None -> Pgx.Value.null
+                    in
+                    let* rows =
+                      exec conn
+                        ~params:[ Pgx.Value.of_string target_id;
+                                  Pgx.Value.of_string name;
+                                  Pgx.Value.of_string body_json;
+                                  Pgx.Value.of_string author;
+                                  doc_param ]
+                        sql
+                    in
+                    Lwt.return (if rows = [] then acc else acc + 1))
+              0 names
+          in
+          let* () = Tree_store.recompute_head_hash conn ~branch_id:target_id in
+          Lwt.return n)
         (fun exn ->
           Printf.eprintf "[store] promote_functions: %s\n"
             (Printexc.to_string exn);
@@ -722,28 +726,11 @@ let ensure_branch (t : t) ~(parent_id : string) ~(owner : string)
                  (Printexc.to_string exn);
                lookup_branch_id_by_name t ~owner ~name))
 
-(* Fork a branch: create a new branch with parent_id as its parent,
-   then copy all function_defs, type_defs, view_bindings from the
-   parent into the new branch.
-
-   Per spec [branching.fork]:
-     (fork 'main 'alice/experiment)
-   -> INSERT INTO branches (id, parent_id, owner, name) VALUES ...
-   -> INSERT INTO function_defs (branch_id, name, body, ...)
-      SELECT new_uuid, name, body, ... FROM function_defs
-      WHERE branch_id = parent_id
-   -> Same for type_defs, view_bindings
-
-   Cost: O(num code rows in parent). For ~100 fns + ~20 types,
-   a few hundred row inserts — well under a second.
-
-   Forking does NOT copy data table rows (those live in main's
-   data tables and are shared across all branches).
-
-   Returns the new branch_id as a string (or raises/fails-closed).
-   The fork is one logical operation; the 3 copy INSERTs run in a
-   single SERIALIZABLE transaction via [with_transaction] (it16).
-   If any statement fails, the entire fork is rolled back. *)
+(* Fork a branch: create an EMPTY lens with parent_id as its parent.
+   one-tree P5 / branching.personal-workspace: NO copy of code rows.
+   Inheritance is the recursive-CTE / path-prefix walk; child pins are
+   rows written later on the child. Data stays shared (branching.data).
+   Returns the new branch_id. Single SERIALIZABLE insert. *)
 (* Persist a route binding: (route "/path" 'handler-fn-name).
    INSERT ... ON CONFLICT (branch_id, route) DO UPDATE — so re-defining
    a route overrides the existing binding. *)
@@ -1013,20 +1000,21 @@ let list_types (t : t) : (string * string list) list Lwt.t =
 
 let fork_branch (t : t) ~(parent_id : string) ~(owner : string)
     ~(child_name : string) : string option Lwt.t =
-  (* All four SQL statements (branch row + 3 copies) run inside a
-     single SERIALIZABLE transaction via [with_transaction]. If any
-     statement raises, pgx AUTOMATICALLY ROLLS BACK and propagates the
-     exception to [with_transaction]'s caller. We catch the exception
-     OUTSIDE [with_transaction] (after pgx has rolled back) so a partial
-     fork doesn't leave a half-forked branch row in PG; the caller sees
-     [None] with an [e]printf diagnostic, REPL stays alive.*)
+  (* one-tree P5: EMPTY LENS fork.
+     Create a branch row with parent_id only — NO copy of function_defs /
+     type_defs / view_bindings. Inheritance is the recursive-CTE / path-
+     prefix walk (child shadows parent). Matches ensure_branch and
+     branching.personal-workspace ("empty child of main"). Copy-on-fork
+     froze inheritance and contradicted the lens model.
+     tree_branches lens registry is maintained by the branches→tree
+     deferred trigger (009). head_hash is recomputed (empty → null/empty).
+     Single SERIALIZABLE tx; rollback-safe. *)
   Lwt.catch
     (fun () ->
       with_transaction t (fun conn ->
         match conn with
-        | None -> Lwt.return_none  (* no DB; can't fork *)
+        | None -> Lwt.return_none
         | Some conn ->
-            (* 1. Create the new branch row, returning its id. *)
             let insert_branch_sql =
               "INSERT INTO branches (id, parent_id, owner, name) " ^
               "VALUES (gen_random_uuid(), $1, $2, $3) " ^
@@ -1042,44 +1030,10 @@ let fork_branch (t : t) ~(parent_id : string) ~(owner : string)
              | [ [ id_cell ] ] ->
                  (match Pgx.Value.to_string id_cell with
                   | Some new_branch_id ->
-                      (* 2. Copy function_defs from parent. *)
-                      let copy_fns_sql =
-                        "INSERT INTO function_defs " ^
-                        "  (branch_id, name, body, author, doc, updated_at) " ^
-                        "SELECT $1, name, body, author, doc, updated_at " ^
-                        "FROM function_defs WHERE branch_id = $2" in
-                      let* _ =
-                        exec conn
-                          ~params:[ Pgx.Value.of_string new_branch_id;
-                                    Pgx.Value.of_string parent_id ]
-                          copy_fns_sql
-                      in
-                      (* 3. Copy type_defs from parent. *)
-                      let copy_types_sql =
-                        "INSERT INTO type_defs " ^
-                        "  (branch_id, name, fields, migrated, schema_vers, " ^
-                        "   author, updated_at) " ^
-                        "SELECT $1, name, fields, migrated, schema_vers, " ^
-                        "       author, updated_at " ^
-                        "FROM type_defs WHERE branch_id = $2" in
-                      let* _ =
-                        exec conn
-                          ~params:[ Pgx.Value.of_string new_branch_id;
-                                    Pgx.Value.of_string parent_id ]
-                          copy_types_sql
-                      in
-                      (* 4. Copy view_bindings from parent (incl. visibility). *)
-                      let copy_views_sql =
-                        "INSERT INTO view_bindings " ^
-                        "  (branch_id, route, handler, visibility) " ^
-                        "SELECT $1, route, handler, " ^
-                        "  COALESCE(visibility, 'private') " ^
-                        "FROM view_bindings WHERE branch_id = $2" in
-                      let* _ =
-                        exec conn
-                          ~params:[ Pgx.Value.of_string new_branch_id;
-                                    Pgx.Value.of_string parent_id ]
-                          copy_views_sql
+                      (* Refresh head_hash on the new empty lens (0 own nodes). *)
+                      let* () =
+                        Tree_store.recompute_head_hash conn
+                          ~branch_id:new_branch_id
                       in
                       Lwt.return (Some new_branch_id)
                   | None -> Lwt.return_none)
@@ -1133,6 +1087,7 @@ let merge_branch (t : t) ~(source_id : string) ~(target_id : string)
                           Pgx.Value.of_string source_id ]
                 sql
             in
+            let* () = Tree_store.recompute_head_hash conn ~branch_id:target_id in
             Lwt.return (Some (List.length rows))))
     (fun exn ->
       Printf.eprintf "[store] merge_branch error: %s\n"

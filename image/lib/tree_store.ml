@@ -326,6 +326,23 @@ let delete_datum (conn : Store_db.conn) ~(type_name : string) ~(id : string) : s
             | _ -> Lwt.return_none)
        | _ -> Lwt.return_none)
 
+(** Recompute tree_branches.head_hash for [branch_id] as the sha256 of the
+    sorted concatenation of own-node hashes under b.<uuidhex>. Empty lens →
+    empty string. Used after fork (empty) and after promote/merge batches. *)
+let recompute_head_hash (conn : Store_db.conn) ~(branch_id : string) : unit Lwt.t =
+  let root = "b." ^ uuid_label branch_id in
+  let sql =
+    "UPDATE tree_branches SET head_hash = COALESCE(( " ^
+    "  SELECT encode(digest(string_agg(hash, '' ORDER BY path::text), 'sha256'), 'hex') " ^
+    "  FROM tree_nodes WHERE path <@ $1::ltree AND nlevel(path) > 1 " ^
+    "), '') WHERE branch_id = $2::uuid" in
+  let* _ =
+    Io_lwt.Db.execute conn
+      ~params:[ Pgx.Value.of_string root; Pgx.Value.of_string branch_id ]
+      sql
+  in
+  Lwt.return_unit
+
 (* ---- DB helpers (read/verify; mirror writes happen in SQL triggers) ---- *)
 
 let select_cols = "id::text, path::text, kind, type_name, payload::text, hash, author"
