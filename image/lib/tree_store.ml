@@ -775,6 +775,27 @@ let move_subtree (conn : Store_db.conn) ~(old_path : string) ~(new_path : string
                 | None -> Lwt.return (Error "move_subtree: bad count"))
            | _ -> Lwt.return (Error "move_subtree: failed"))
 
+(** List nodes of a given kind under path prefix (e.g. all notes in a garden). *)
+let list_by_kind (conn : Store_db.conn) ~(prefix : string) ~(kind : string)
+    ?(limit : int = 2000) () : node list Lwt.t =
+  if not (valid_path prefix) then Lwt.return []
+  else
+    let sql =
+      "SELECT " ^ select_cols ^ " FROM tree_nodes "
+      ^ "WHERE path <@ $1::ltree AND kind = $2 "
+      ^ "ORDER BY path::text ASC LIMIT $3"
+    in
+    let* rows =
+      Io_lwt.Db.execute conn
+        ~params:
+          [ Pgx.Value.of_string prefix
+          ; Pgx.Value.of_string kind
+          ; Pgx.Value.of_int limit
+          ]
+        sql
+    in
+    Lwt.return (List.filter_map node_of_row rows)
+
 (** Covering children under [prefix]: nodes under the prefix with no other
     tree_nodes between them and the prefix. Handles both one-label children
     (folder/note) and note outline roots at prefix.h.<nid> (two labels). *)

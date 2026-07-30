@@ -667,6 +667,17 @@ let tree_find_by (store : Store.t) ~(kind : string option) ~(field : string)
       Lwt.return
         (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes))
 
+let tree_list_kind (store : Store.t) ~(prefix : string) ~(kind : string)
+    ?(limit : int = 2000) () : value Lwt.t =
+  match Io_lwt.Db.current_conn store with
+  | None -> Lwt.return (VList [])
+  | Some conn ->
+      let* nodes =
+        Tree_store.list_by_kind conn ~prefix ~kind ~limit ()
+      in
+      Lwt.return
+        (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes))
+
 let tree_path_label (s : string) : value = VStr (Tree_store.path_label s)
 
 let tree_garden_root ~(user : string) : value =

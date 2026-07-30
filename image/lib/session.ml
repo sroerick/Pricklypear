@@ -1219,6 +1219,21 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
             (Pricklypear_lisp.Ast.VStr
                "tree/find-by: need kind field value [, limit]"));
 
+  register_crud "tree/list-kind"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr prefix; Pricklypear_lisp.Ast.VStr kind ] ->
+          Crud.tree_list_kind t.store ~prefix ~kind ()
+      | [ Pricklypear_lisp.Ast.VStr prefix
+        ; Pricklypear_lisp.Ast.VStr kind
+        ; Pricklypear_lisp.Ast.VInt n
+        ] ->
+          Crud.tree_list_kind t.store ~prefix ~kind ~limit:(Int64.to_int n) ()
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr
+               "tree/list-kind: need prefix kind [, limit]"));
+
   (* Pure path helpers (no DB). *)
   register_crud "tree/path-label"
     (fun args ->
