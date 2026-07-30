@@ -20,6 +20,11 @@
 open Lwt.Syntax
 open Pricklypear_lisp.Ast
 
+(* one-tree P3: when PP_TREE_READS=1, data reads source from the
+   tree-backed tree_data_rows view; writes still go to data_rows (the
+   009 shadow trigger mirrors them into the tree in the same tx). See
+   Store.tree_reads. Result shape is unchanged -> prim ABI preserved. *)
+let data_rel () = if Store.tree_reads () then "tree_data_rows" else "data_rows"
 
 let value_of_id cell : value =
   (* Pgx.Value.to_string returns string option; normalize to VStr/VNil *)
@@ -61,7 +66,7 @@ let get (store : Store.t) ~(type_name : string) ~(id : string) : value Lwt.t =
   | None -> Lwt.return VNil
   | Some conn ->
       let sql =
-        "SELECT fields::text FROM data_rows " ^
+        "SELECT fields::text FROM " ^ data_rel () ^ " " ^
         "WHERE type_name = $1 AND id = $2::uuid" in
       let* rows =
         Io_lwt.Db.execute conn
@@ -104,7 +109,7 @@ let select_for_update
     | None -> Lwt.return VNil
     | Some conn ->
         let sql =
-          "SELECT fields::text FROM data_rows " ^
+          "SELECT fields::text FROM " ^ data_rel () ^ " " ^
           "WHERE type_name = $1 AND id = $2::uuid " ^
           "FOR UPDATE" in
         let* rows =
@@ -263,7 +268,7 @@ let list
   | None -> Lwt.return (VList [])
   | Some conn ->
       let sql =
-        "SELECT id::text, fields::text FROM data_rows " ^
+        "SELECT id::text, fields::text FROM " ^ data_rel () ^ " " ^
         "WHERE type_name = $1 ORDER BY created_at ASC LIMIT $2" in
       let* rows =
         Io_lwt.Db.execute conn
@@ -291,7 +296,7 @@ let find_row
   | None -> Lwt.return VNil
   | Some conn ->
       let sql =
-        "SELECT fields::text FROM data_rows " ^
+        "SELECT fields::text FROM " ^ data_rel () ^ " " ^
         "WHERE type_name = $1 AND fields->>$2 = $3 " ^
         "ORDER BY created_at ASC LIMIT 1"
       in
@@ -324,7 +329,7 @@ let find_rows
       else
         let buf = Buffer.create 128 in
         Buffer.add_string buf
-          "SELECT id::text, fields::text FROM data_rows WHERE type_name = $1";
+          ("SELECT id::text, fields::text FROM " ^ data_rel () ^ " WHERE type_name = $1");
         let params = ref [ Pgx.Value.of_string type_name ] in
         let i = ref 2 in
         List.iter
@@ -359,7 +364,7 @@ let find_random (store : Store.t) ~(type_name : string) : value Lwt.t =
   | None -> Lwt.return VNil
   | Some conn ->
       let sql =
-        "SELECT id::text, fields::text FROM data_rows " ^
+        "SELECT id::text, fields::text FROM " ^ data_rel () ^ " " ^
         "WHERE type_name = $1 ORDER BY random() LIMIT 1"
       in
       let* rows =
@@ -386,7 +391,7 @@ let find_text
   | None -> Lwt.return (VList [])
   | Some conn ->
       let sql =
-        "SELECT id::text, fields::text FROM data_rows " ^
+        "SELECT id::text, fields::text FROM " ^ data_rel () ^ " " ^
         "WHERE type_name = $1 AND fields->>$2 ILIKE $3 " ^
         "ORDER BY created_at ASC LIMIT $4"
       in
@@ -425,7 +430,7 @@ let count_by_type (store : Store.t) ~(type_name : string) : int Lwt.t =
   | None -> Lwt.return 0
   | Some conn ->
       let sql =
-        "SELECT COUNT(*)::int FROM data_rows WHERE type_name = $1"
+        "SELECT COUNT(*)::int FROM " ^ data_rel () ^ " WHERE type_name = $1"
       in
       let* rows =
         Io_lwt.Db.execute conn
@@ -444,7 +449,7 @@ let list_data_type_names (store : Store.t) : string list Lwt.t =
   | None -> Lwt.return []
   | Some conn ->
       let sql =
-        "SELECT DISTINCT type_name FROM data_rows ORDER BY type_name ASC"
+        "SELECT DISTINCT type_name FROM " ^ data_rel () ^ " ORDER BY type_name ASC"
       in
       let* rows = Io_lwt.Db.execute conn sql in
       Lwt.return
@@ -467,7 +472,7 @@ let list_page
       let sql =
         "SELECT id::text, fields::text, author, " ^
         "created_at::text, updated_at::text " ^
-        "FROM data_rows WHERE type_name = $1 " ^
+        "FROM " ^ data_rel () ^ " WHERE type_name = $1 " ^
         "ORDER BY created_at ASC LIMIT $2 OFFSET $3"
       in
       let* rows =
@@ -505,7 +510,7 @@ let get_row
       let sql =
         "SELECT id::text, fields::text, author, " ^
         "created_at::text, updated_at::text " ^
-        "FROM data_rows WHERE type_name = $1 AND id = $2::uuid"
+        "FROM " ^ data_rel () ^ " WHERE type_name = $1 AND id = $2::uuid"
       in
       let* rows =
         Io_lwt.Db.execute conn

@@ -4,6 +4,23 @@
 include Store_db
 open Lwt.Syntax
 
+(* ---- one-tree P3: read-from-tree flag (spec one-tree.migration-plan) ----
+   When PP_TREE_READS=1, branch-aware reads source from the tree-backed
+   views (tree_function_defs / tree_type_defs / tree_view_bindings) and
+   data reads from tree_data_rows — the scaffolding tables become
+   write-through (kept in lockstep by the 009 shadow triggers). Default
+   OFF (read from tables) so the swap is independently revertible and
+   soak-testable. The SQL shape and OCaml result mapping are unchanged —
+   only the relation name differs — so the prim ABI is preserved exactly. *)
+let tree_reads () : bool =
+  match Sys.getenv_opt "PP_TREE_READS" with
+  | Some "1" | Some "true" | Some "yes" -> true
+  | _ -> false
+
+let fn_rel () = if tree_reads () then "tree_function_defs" else "function_defs"
+let ty_rel () = if tree_reads () then "tree_type_defs" else "type_defs"
+let rt_rel () = if tree_reads () then "tree_view_bindings" else "view_bindings"
+
 (* Branch-aware lookup. Walks the branch parent chain via a recursive
    CTE so that a definition in [main] is visible from a child branch,
    and a definition in the child OVERRIDES the same name in main
@@ -27,7 +44,7 @@ let lookup_function (t : t) (name : string)
             "  UNION ALL " ^
             "  SELECT b.id, b.parent_id, c.depth + 1 " ^
             "  FROM branches b JOIN chain c ON b.id = c.parent_id " ^
-            ") SELECT fd.body, fd.author, fd.doc FROM function_defs fd " ^
+            ") SELECT fd.body, fd.author, fd.doc FROM " ^ fn_rel () ^ " fd " ^
             "JOIN chain ON fd.branch_id = chain.id " ^
             "WHERE fd.name = $2 " ^
             "ORDER BY chain.depth ASC LIMIT 1" in
@@ -87,7 +104,7 @@ let list_function_names_meta (t : t)
             "  SELECT b.id, b.parent_id, c.depth + 1 " ^
             "  FROM branches b JOIN chain c ON b.id = c.parent_id " ^
             ") SELECT fd.name, fd.body, fd.author, chain.depth " ^
-            "FROM function_defs fd " ^
+            "FROM " ^ fn_rel () ^ " fd " ^
             "JOIN chain ON fd.branch_id = chain.id " ^
             "ORDER BY chain.depth ASC, fd.name ASC" in
           let* rows =
@@ -151,7 +168,7 @@ let list_function_names_for_load (t : t)
             "  SELECT b.id, b.parent_id, c.depth + 1 " ^
             "  FROM branches b JOIN chain c ON b.id = c.parent_id " ^
             ") SELECT fd.name, fd.body, fd.author, chain.depth " ^
-            "FROM function_defs fd " ^
+            "FROM " ^ fn_rel () ^ " fd " ^
             "JOIN chain ON fd.branch_id = chain.id " ^
             "ORDER BY chain.depth DESC, fd.name ASC" in
           let* rows =
@@ -812,7 +829,7 @@ let list_routes (t : t) : (string * string * string) list Lwt.t =
             "  FROM branches b JOIN chain c ON b.id = c.parent_id " ^
             ") SELECT vb.route, vb.handler, " ^
             "COALESCE(vb.visibility, 'private') " ^
-            "FROM view_bindings vb " ^
+            "FROM " ^ rt_rel () ^ " vb " ^
             "JOIN chain ON vb.branch_id = chain.id " ^
             "ORDER BY chain.depth ASC" in
           let* rows =
@@ -912,7 +929,7 @@ let list_types (t : t) : (string * string list) list Lwt.t =
             "  UNION ALL " ^
             "  SELECT b.id, b.parent_id, c.depth + 1 " ^
             "  FROM branches b JOIN chain c ON b.id = c.parent_id " ^
-            ") SELECT td.name, td.fields::text FROM type_defs td " ^
+            ") SELECT td.name, td.fields::text FROM " ^ ty_rel () ^ " td " ^
             "JOIN chain ON td.branch_id = chain.id " ^
             "ORDER BY chain.depth ASC" in
           let* rows =
