@@ -1,196 +1,214 @@
-;; layout/* — reusable page composition blocks (hero, cards, sections).
-;; NOT named public/*: "public" is auth/route visibility only.
-;; Pure HTML strings via html/*; wrap with render-html at page level.
+;; package layout -- exported from live branch system/main
+;; Sync: scripts/pp_sync.py pull|push
+
+(define layout/card
+  (lambda
+    (title body)
+    (html/div
+      (html/attr "class" "layout-card")
+      (html/join
+        (list
+          (html/tag
+            "h3"
+            (html/attr "class" "layout-card-title")
+            (html/text title))
+          (html/div (html/attr "class" "layout-card-body") body))))))
+
+(define layout/cards
+  (lambda
+    (card-htmls)
+    (html/div
+      (html/attr "class" "layout-cards")
+      (html/join card-htmls))))
 
 (define layout/cta
-  (lambda (href label)
-    (html/tag "a"
+  (lambda
+    (href label)
+    (html/tag
+      "a"
       (html/attrs
         (list
           (html/attr "class" "layout-cta")
           (html/attr "href" href)))
-      (html/text label)))
-  "Hero/action link with layout-cta class.")
+      (html/text label))))
 
-;; Wordmark / mark from image/static (served at /assets/…).
+(define layout/hero
+  (lambda
+    (title tagline actions-html)
+    (html/div
+      (html/attr "class" "layout-hero")
+      (html/join
+        (list
+          (layout/logo)
+          (html/tag
+            "h1"
+            (html/attr "class" "layout-hero-title")
+            (html/text title))
+          (html/tag
+            "p"
+            (html/attr "class" "layout-hero-tagline")
+            (html/text tagline))
+          (html/div
+            (html/attr "class" "layout-hero-actions")
+            actions-html))))))
+
 (define layout/logo
-  (lambda ()
-    (html/void "img"
+  (lambda
+    ()
+    (html/void
+      "img"
       (html/attrs
         (list
           (html/attr "src" "/assets/pplogo.png")
           (html/attr "alt" "Pricklypear")
           (html/attr "class" "layout-logo")
           (html/attr "width" "160")
-          (html/attr "height" "156")))))
-  "Pricklypear wordmark img pointing at /assets/pplogo.png.")
+          (html/attr "height" "156"))))))
 
-(define layout/hero
-  (lambda (title tagline actions-html)
+(define layout/nc-badge
+  (lambda
+    (href bg fg label)
+    (html/tag
+      "a"
+      (html/attrs
+        (list
+          (html/attr "class" "nc-badge")
+          (html/attr "href" href)
+          (html/attr
+            "style"
+            (string-append "background:" bg ";color:" fg))))
+      (html/text label))))
+
+(define layout/neocities-banner
+  (lambda
+    ()
     (html/div
-      (html/attr "class" "layout-hero")
+      (html/attr "class" "nc-banner")
       (html/join
         (list
-          (layout/logo)
-          (html/tag "h1" (html/attr "class" "layout-hero-title")
-            (html/text title))
-          (html/tag "p" (html/attr "class" "layout-hero-tagline")
-            (html/text tagline))
+          (html/tag
+            "span"
+            (html/attr "class" "nc-construction")
+            (html/text "UNDER CONSTRUCTION"))
+          (html/text " ")
+          (html/tag
+            "span"
+            (html/attr "class" "nc-blink")
+            (html/text "welcome to my homepage!!"))
+          (html/text
+            " \226\128\148 last updated 2026 \226\128\148 "))))))
+
+(define layout/neocities-foot
+  (lambda
+    ()
+    (html/div
+      (html/attr "class" "nc-foot")
+      (html/join
+        (list
           (html/div
-            (html/attr "class" "layout-hero-actions")
-            actions-html)))))
-  "Centered hero block: logo, title, tagline, actions HTML.")
+            (html/attr "class" "nc-webring")
+            (html/join
+              (list
+                (html/text "[ ")
+                (html/tag
+                  "a"
+                  (html/attr "href" "/welcome")
+                  (html/text "prev"))
+                (html/text " | ")
+                (html/tag
+                  "a"
+                  (html/attr "href" "/background")
+                  (html/text "list"))
+                (html/text " | ")
+                (html/tag
+                  "a"
+                  (html/attr "href" "/roadmap")
+                  (html/text "random"))
+                (html/text " | ")
+                (html/tag
+                  "a"
+                  (html/attr "href" "/code")
+                  (html/text "next"))
+                (html/text " ]  the pricklypear webring"))))
+          (html/div
+            (html/attr "class" "nc-badges")
+            (html/join
+              (list
+                (layout/nc-badge
+                  "/welcome"
+                  "#000080"
+                  "#ff0"
+                  "BEST VIEWED IN NETSCAPE")
+                (layout/nc-badge
+                  "/code"
+                  "#000"
+                  "#fff"
+                  "HAND-CODED LISP")
+                (layout/nc-badge
+                  "/book.pdf"
+                  "#600"
+                  "#fff"
+                  "NO JAVASCRIPT")
+                (layout/nc-badge
+                  "/code"
+                  "#070"
+                  "#fff"
+                  "POSTGRES POWERED")
+                (layout/nc-badge
+                  "/agent.txt"
+                  "#036"
+                  "#fff"
+                  "AGENT READY")
+                (layout/nc-badge
+                  "/guestbook"
+                  "#609"
+                  "#fff"
+                  "SIGN GUESTBOOK")
+                (layout/nc-badge "/welcome" "#fc0" "#000" "Y2K READY")
+                (layout/nc-badge
+                  "/welcome"
+                  "#fff"
+                  "#000"
+                  "VALID HTML 4.01"))))
+          (html/div
+            (html/attr "class" "nc-counter")
+            (html/join
+              (list
+                (html/tag
+                  "span"
+                  (html/attr "class" "nc-counter-label")
+                  (html/text "you are visitor"))
+                (html/tag
+                  "span"
+                  (html/attr "class" "nc-counter-digits")
+                  (html/text "0000042"))
+                (html/tag
+                  "span"
+                  (html/attr "class" "nc-counter-label")
+                  (html/text "since 2026")))))
+          (html/void "hr" (html/attr "class" "nc-rainbow-hr"))
+          (html/div
+            (html/attr "class" "nc-colophon")
+            (html/text
+              "this site is hand-coded in a lisp machine and rendered by a cactus \240\159\140\181 powered by postgres, htmx, and questionable life choices. no javascript was harmed. best viewed at 800x600.")))))))
 
-(define layout/card
-  (lambda (title body)
-    (html/div
-      (html/attr "class" "layout-card")
-      (html/join
-        (list
-          (html/tag "h3" (html/attr "class" "layout-card-title")
-            (html/text title))
-          (html/div (html/attr "class" "layout-card-body") body)))))
-  "Single card with title and body HTML.")
+(define layout/neocities-marquee-msg
+  (lambda
+    ()
+    (html/tag
+      "span"
+      (html/attr "class" "nc-marquee-msg")
+      (html/text
+        "\240\159\154\167 UNDER CONSTRUCTION \240\159\154\167 welcome to pricklypear \240\159\140\181 a lisp machine that lives in postgres \194\183 sign the guestbook \194\183 best viewed in netscape 4.0 at 800x600 \194\183 built in public \194\183 "))))
 
-(define layout/cards
-  (lambda (card-htmls)
-    (html/div
-      (html/attr "class" "layout-cards")
-      (html/join card-htmls)))
-  "Responsive grid wrapping a list of card HTML strings.")
-
-(define layout/section
-  (lambda (title body)
-    (html/div
-      (html/attr "class" "layout-section")
-      (html/join
-        (list
-          (html/tag "h2" (html/attr "class" "layout-section-title")
-            (html/text title))
-          (html/div (html/attr "class" "layout-section-body") body)))))
-  "Section with title and body HTML.")
-
-(define layout/theme
-  (lambda ()
-    (css/sheet
-      (list
-        (css/rule ".layout-hero"
-          (list
-            "padding" "2.5rem 1.25rem 2rem"
-            "text-align" "center"
-            "border-bottom" "2px solid #000"
-            "background" "#faf7f4"
-            "margin" "0 0 1.25rem"))
-        (css/rule ".layout-logo"
-          (list
-            "display" "block"
-            "width" "10rem"
-            "height" "auto"
-            "max-width" "40vw"
-            "margin" "0 auto 1rem"
-            "image-rendering" "auto"))
-        (css/rule ".layout-hero-title"
-          (list
-            "font-size" "2rem"
-            "font-weight" "700"
-            "margin" "0 0 .5rem"
-            "letter-spacing" "-0.02em"))
-        (css/rule ".layout-hero-tagline"
-          (list
-            "font-size" "1.1rem"
-            "max-width" "36rem"
-            "margin" "0 auto 1.25rem"
-            "line-height" "1.5"
-            "color" "#333"))
-        (css/rule ".layout-hero-actions"
-          (list
-            "display" "flex"
-            "flex-wrap" "wrap"
-            "gap" ".5rem"
-            "justify-content" "center"
-            "align-items" "center"))
-        (css/rule "a.layout-cta"
-          (list
-            "display" "inline-block"
-            "padding" ".45rem .9rem"
-            "border" "2px solid #000"
-            "background" "#fff"
-            "color" "#000"
-            "text-decoration" "none"
-            "font-weight" "700"
-            "font-size" ".95rem"))
-        (css/rule "a.layout-cta:hover"
-          (list
-            "background" "#000"
-            "color" "#fff"))
-        (css/rule "a.layout-cta:visited"
-          (list "color" "#000"))
-        (css/rule "a.layout-cta:visited:hover"
-          (list "color" "#fff"))
-        (css/rule ".layout-cards"
-          (list
-            "display" "grid"
-            "grid-template-columns" "repeat(auto-fit,minmax(14rem,1fr))"
-            "gap" ".75rem"
-            "margin" "1rem 0"))
-        (css/rule ".layout-card"
-          (list
-            "border" "2px solid #000"
-            "background" "#fff"
-            "padding" ".85rem"
-            "text-align" "left"))
-        (css/rule ".layout-card-title"
-          (list
-            "margin" "0 0 .4rem"
-            "font-size" "1.05rem"))
-        (css/rule ".layout-card-body"
-          (list
-            "font-size" ".95rem"
-            "line-height" "1.45"
-            "color" "#222"))
-        (css/rule ".layout-section"
-          (list
-            "margin" "1.5rem 0"
-            "padding" "0 .25rem"))
-        (css/rule ".layout-section-title"
-          (list
-            "font-size" "1.25rem"
-            "border-bottom" "1px solid #808080"
-            "padding-bottom" ".25rem"
-            "margin" "0 0 .75rem"))
-        (css/rule ".layout-section-body"
-          (list
-            "line-height" "1.55"
-            "max-width" "40rem"))
-        (css/rule ".layout-page"
-          (list
-            "max-width" "52rem"
-            "margin" "0 auto"
-            "padding" "0 .75rem 2rem"))
-        (css/rule ".layout-foot"
-          (list
-            "margin-top" "2rem"
-            "padding-top" ".75rem"
-            "border-top" "1px solid #808080"
-            "font-size" ".85rem"
-            "color" "#333"
-            "text-align" "center"))
-        (css/media "max-width:40rem"
-          (list
-            (css/rule ".layout-hero"
-              (list "padding" "1.5rem .75rem 1.25rem"))
-            (css/rule ".layout-hero-title"
-              (list "font-size" "1.55rem")))))))
-  "CSS sheet AST for layout/* classes.")
-
-;; ---- neocities chrome: raw CSS (keyframes, tiled bg, 88x31 badges, counter) ----
-;; html/tag passes its body string through UNESCAPED, so a <style> tag built via
-;; (html/tag "style" "" <css-string>) emits raw CSS — including @keyframes,
-;; which the css/* AST cannot express. Injected AFTER layout/style so it wins
-;; the cascade for equal-specificity rules (.layout-page, .layout-hero, …).
+(define layout/neocities-style
+  (lambda
+    ()
+    (html/tag "style" "" (layout/neocities-theme))))
 
 (define layout/neocities-theme
-  (lambda ()
+  (lambda
+    ()
     (html/join
       (list
         "body{background-color:#2a6a6a;background-image:repeating-linear-gradient(45deg,rgba(255,255,255,.05) 0 2px,transparent 2px 14px),repeating-linear-gradient(-45deg,rgba(0,0,0,.06) 0 2px,transparent 2px 14px)}"
@@ -228,33 +246,11 @@
         ".gb-site{color:#000080;text-decoration:underline;font-size:.85rem}"
         ".gb-msg{margin-top:.3rem;color:#222;line-height:1.4}"
         ".gb-form{max-width:30rem}"
-        ".gb-form input,.gb-form textarea{width:100%;font-family:monospace;padding:.3rem;margin:.2rem 0;border:2px solid #000;background:#fff}")))
-  "Raw CSS string for neocities chrome (keyframes, tiled bg, 88x31 badges, counter, guestbook). Injected after layout/style so it wins the cascade.")
-
-(define layout/neocities-style
-  (lambda ()
-    (html/tag "style" "" (layout/neocities-theme)))
-  "style tag rendering raw neocities CSS (html/tag passes body unescaped).")
-
-(define layout/nc-badge
-  (lambda (href bg fg label)
-    (html/tag "a"
-      (html/attrs
-        (list
-          (html/attr "class" "nc-badge")
-          (html/attr "href" href)
-          (html/attr "style" (string-append "background:" bg ";color:" fg))))
-      (html/text label)))
-  "88x31 neocities badge link. bg/fg are CSS colors; label is short caps text.")
-
-(define layout/neocities-marquee-msg
-  (lambda ()
-    (html/tag "span" (html/attr "class" "nc-marquee-msg")
-      (html/text "🚧 UNDER CONSTRUCTION 🚧 welcome to pricklypear 🌵 a lisp machine that lives in postgres · sign the guestbook · best viewed in netscape 4.0 at 800x600 · built in public · ")))
-  "One copy of the marquee scrolling message (track holds two for a seamless -50% loop).")
+        ".gb-form input,.gb-form textarea{width:100%;font-family:monospace;padding:.3rem;margin:.2rem 0;border:2px solid #000;background:#fff}"))))
 
 (define layout/neocities-top
-  (lambda ()
+  (lambda
+    ()
     (html/div
       (html/attr "class" "nc-marquee-bar")
       (html/div
@@ -262,69 +258,11 @@
         (html/join
           (list
             (layout/neocities-marquee-msg)
-            (layout/neocities-marquee-msg))))))
-  "Full-width top marquee bar (black bg, yellow scrolling text). Rendered before .layout-page.")
-
-(define layout/neocities-banner
-  (lambda ()
-    (html/div
-      (html/attr "class" "nc-banner")
-      (html/join
-        (list
-          (html/tag "span" (html/attr "class" "nc-construction") (html/text "UNDER CONSTRUCTION"))
-          (html/text " ")
-          (html/tag "span" (html/attr "class" "nc-blink") (html/text "welcome to my homepage!!"))
-          (html/text " — last updated 2026 — ")))))
-  "In-page banner: blinking construction badge + welcome line. First child of .layout-page on every page.")
-
-(define layout/neocities-foot
-  (lambda ()
-    (html/div
-      (html/attr "class" "nc-foot")
-      (html/join
-        (list
-          (html/div (html/attr "class" "nc-webring")
-            (html/join
-              (list
-                (html/text "[ ")
-                (html/tag "a" (html/attr "href" "/welcome") (html/text "prev"))
-                (html/text " | ")
-                (html/tag "a" (html/attr "href" "/background") (html/text "list"))
-                (html/text " | ")
-                (html/tag "a" (html/attr "href" "/roadmap") (html/text "random"))
-                (html/text " | ")
-                (html/tag "a" (html/attr "href" "/code") (html/text "next"))
-                (html/text " ]  the pricklypear webring"))))
-          (html/div (html/attr "class" "nc-badges")
-            (html/join
-              (list
-                (layout/nc-badge "/welcome" "#000080" "#ff0" "BEST VIEWED IN NETSCAPE")
-                (layout/nc-badge "/code" "#000" "#fff" "HAND-CODED LISP")
-                (layout/nc-badge "/book.pdf" "#600" "#fff" "NO JAVASCRIPT")
-                (layout/nc-badge "/code" "#070" "#fff" "POSTGRES POWERED")
-                (layout/nc-badge "/agent.txt" "#036" "#fff" "AGENT READY")
-                (layout/nc-badge "/guestbook" "#609" "#fff" "SIGN GUESTBOOK")
-                (layout/nc-badge "/welcome" "#fc0" "#000" "Y2K READY")
-                (layout/nc-badge "/welcome" "#fff" "#000" "VALID HTML 4.01"))))
-          (html/div (html/attr "class" "nc-counter")
-            (html/join
-              (list
-                (html/tag "span" (html/attr "class" "nc-counter-label") (html/text "you are visitor"))
-                (html/tag "span" (html/attr "class" "nc-counter-digits") (html/text "0000042"))
-                (html/tag "span" (html/attr "class" "nc-counter-label") (html/text "since 2026")))))
-          (html/void "hr" (html/attr "class" "nc-rainbow-hr"))
-          (html/div (html/attr "class" "nc-colophon")
-            (html/text "this site is hand-coded in a lisp machine and rendered by a cactus 🌵 powered by postgres, htmx, and questionable life choices. no javascript was harmed. best viewed at 800x600."))))))
-  "Full-width foot chrome: webring nav, 88x31 badges, visitor counter, rainbow hr, colophon.")
-
-;; Inject layout CSS once per page body (works with product chrome too).
-(define layout/style
-  (lambda ()
-    (html/tag "style" "" (css/render (layout/theme))))
-  "style tag rendering layout/theme CSS.")
+            (layout/neocities-marquee-msg)))))))
 
 (define layout/page
-  (lambda (parts)
+  (lambda
+    (parts)
     (render-html
       (html/join
         (list
@@ -334,8 +272,241 @@
           (html/div
             (html/attr "class" "layout-page")
             (html/join
-              (list
-                (layout/neocities-banner)
-                (html/join parts))))
-          (layout/neocities-foot)))))
-  "render-html page shell: layout CSS + neocities CSS + top marquee, then .layout-page (banner + parts), then neocities foot. Every layout/page page inherits the neocities chrome.")
+              (list (layout/neocities-banner) (html/join parts))))
+          (layout/neocities-foot))))))
+
+(define layout/page-with-css
+  (lambda
+    (parts)
+    (render-html
+      (html/join
+        (list
+          (layout/style)
+          (html/div
+            (html/attr "class" "layout-page")
+            (html/join parts)))))))
+
+(define layout/section
+  (lambda
+    (title body)
+    (html/div
+      (html/attr "class" "layout-section")
+      (html/join
+        (list
+          (html/tag
+            "h2"
+            (html/attr "class" "layout-section-title")
+            (html/text title))
+          (html/div
+            (html/attr "class" "layout-section-body")
+            body))))))
+
+(define layout/style
+  (lambda
+    ()
+    (html/tag "style" "" (css/render (layout/theme)))))
+
+(define layout/theme
+  (lambda
+    ()
+    (css/sheet
+      (list
+        (css/rule
+          ".layout-hero"
+          (list
+            "padding"
+            "2.5rem 1.25rem 2rem"
+            "text-align"
+            "center"
+            "border-bottom"
+            "2px solid #000"
+            "background"
+            "#faf7f4"
+            "margin"
+            "0 0 1.25rem"))
+        (css/rule
+          ".layout-logo"
+          (list
+            "display"
+            "block"
+            "width"
+            "10rem"
+            "height"
+            "auto"
+            "max-width"
+            "40vw"
+            "margin"
+            "0 auto 1rem"
+            "image-rendering"
+            "auto"))
+        (css/rule
+          ".layout-hero-title"
+          (list
+            "font-size"
+            "2rem"
+            "font-weight"
+            "700"
+            "margin"
+            "0 0 .5rem"
+            "letter-spacing"
+            "-0.02em"))
+        (css/rule
+          ".layout-hero-tagline"
+          (list
+            "font-size"
+            "1.1rem"
+            "max-width"
+            "36rem"
+            "margin"
+            "0 auto 1.25rem"
+            "line-height"
+            "1.5"
+            "color"
+            "#333"))
+        (css/rule
+          ".layout-hero-actions"
+          (list
+            "display"
+            "flex"
+            "flex-wrap"
+            "wrap"
+            "gap"
+            ".5rem"
+            "justify-content"
+            "center"
+            "align-items"
+            "center"))
+        (css/rule
+          "a.layout-cta"
+          (list
+            "display"
+            "inline-block"
+            "padding"
+            ".45rem .9rem"
+            "border"
+            "2px solid #000"
+            "background"
+            "#fff"
+            "color"
+            "#000"
+            "text-decoration"
+            "none"
+            "font-weight"
+            "700"
+            "font-size"
+            ".95rem"))
+        (css/rule
+          "a.layout-cta:hover"
+          (list "background" "#000" "color" "#fff"))
+        (css/rule "a.layout-cta:visited" (list "color" "#000"))
+        (css/rule
+          "a.layout-cta:visited:hover"
+          (list "color" "#fff"))
+        (css/rule
+          ".layout-cards"
+          (list
+            "display"
+            "grid"
+            "grid-template-columns"
+            "repeat(auto-fit,minmax(14rem,1fr))"
+            "gap"
+            ".75rem"
+            "margin"
+            "1rem 0"))
+        (css/rule
+          ".layout-card"
+          (list
+            "border"
+            "2px solid #000"
+            "background"
+            "#fff"
+            "padding"
+            ".85rem"
+            "text-align"
+            "left"))
+        (css/rule
+          ".layout-card-title"
+          (list "margin" "0 0 .4rem" "font-size" "1.05rem"))
+        (css/rule
+          ".layout-card-body"
+          (list
+            "font-size"
+            ".95rem"
+            "line-height"
+            "1.45"
+            "color"
+            "#222"))
+        (css/rule
+          ".layout-section"
+          (list "margin" "1.5rem 0" "padding" "0 .25rem"))
+        (css/rule
+          ".layout-section-title"
+          (list
+            "font-size"
+            "1.25rem"
+            "border-bottom"
+            "1px solid #808080"
+            "padding-bottom"
+            ".25rem"
+            "margin"
+            "0 0 .75rem"))
+        (css/rule
+          ".layout-section-body"
+          (list "line-height" "1.55" "max-width" "40rem"))
+        (css/rule
+          ".layout-page"
+          (list
+            "max-width"
+            "52rem"
+            "margin"
+            "0 auto"
+            "padding"
+            "0 .75rem 2rem"))
+        (css/rule
+          ".layout-foot"
+          (list
+            "margin-top"
+            "2rem"
+            "padding-top"
+            ".75rem"
+            "border-top"
+            "1px solid #808080"
+            "font-size"
+            ".85rem"
+            "color"
+            "#333"
+            "text-align"
+            "center"))
+        (css/media
+          "max-width:40rem"
+          (list
+            (css/rule
+              ".layout-hero"
+              (list "padding" "1.5rem .75rem 1.25rem"))
+            (css/rule
+              ".layout-hero-title"
+              (list "font-size" "1.55rem"))))))))
+
+(define layout/theme-vars
+  (lambda
+    ()
+    (css/sheet
+      (list
+        (css/rule
+          ":root"
+          (list
+            "--cactus-green"
+            "#2d5a27"
+            "--cactus-light"
+            "#4a7c43"
+            "--cactus-lighter"
+            "#6b9b5c"
+            "--cactus-yellow"
+            "#f4d03f"
+            "--cactus-flower"
+            "#e74c3c"
+            "--cactus-spike"
+            "#1a1a1a"
+            "--cactus-shadow"
+            "4px 4px 0 #1a1a1a"))))))
+

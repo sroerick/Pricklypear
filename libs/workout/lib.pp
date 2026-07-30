@@ -1,8 +1,9 @@
-;; package workout -- exported from live branch admin/personal
+;; package workout -- exported from live branch system/main
 ;; Sync: scripts/pp_sync.py pull|push
 
 (define workout/add-exercise-form
-  (lambda (session-id)
+  (lambda
+    (session-id)
     (html/div
       (html/attr "class" "card")
       (html/join
@@ -58,7 +59,8 @@
                 (html/button (html/attr "type" "submit") "Add")))))))))
 
 (define workout/as-int
-  (lambda (x)
+  (lambda
+    (x)
     (let ((s (as-str x))) (if (blank? s) 0 (parse-int s)))))
 
 (define workout/char-rank
@@ -81,7 +83,8 @@
         (else 50)))))
 
 (define workout/continue-card
-  (lambda ()
+  (lambda
+    ()
     (let
       ((id (workout/session-in-progress ())))
       (if
@@ -115,7 +118,7 @@
                             "")
                           (if
                             (workout/ksk-program? prog)
-                            (html/text " \194\183 ")
+                            (html/text " 194183 ")
                             "")
                           (html/a sess-href "Open session"))))))))))))))
 
@@ -123,7 +126,8 @@
   (lambda (a b) (string>=? (as-str a) (as-str b))))
 
 (define workout/date-in-range?
-  (lambda (day from to)
+  (lambda
+    (day from to)
     (let
       ((d (as-str day)))
       (if
@@ -146,7 +150,8 @@
   (lambda (doc) (dict-get doc "progress")))
 
 (define workout/empty-doc
-  (lambda (program intensity)
+  (lambda
+    (program intensity)
     (dict-set*
       "{}"
       (list
@@ -162,11 +167,19 @@
         "[]"))))
 
 (define workout/exercise-delete
-  (lambda (id)
+  (lambda
+    (id)
     (delete (quote workout-exercise) (as-str id))))
 
 (define workout/exercise-fields
-  (lambda (session-id exercise weight unit reps notes detail)
+  (lambda
+    (session-id
+      exercise
+      weight
+      unit
+      reps
+      notes
+      detail)
     (dict-set*
       "{}"
       (list
@@ -186,7 +199,8 @@
         (as-str detail)))))
 
 (define workout/exercise-li
-  (lambda (row)
+  (lambda
+    (row)
     (let
       ((id (workout/row-id row)) (f (workout/row-fields row)))
       (let
@@ -212,7 +226,7 @@
                 (html/div
                   ""
                   (html/strong
-                    (string-append ex " \226\128\148 " r " reps" load)))
+                    (string-append ex " 226128148 " r " reps" load)))
                 (if
                   (blank? n)
                   ""
@@ -229,7 +243,14 @@
                       (html/button (html/attr "type" "submit") "Delete"))))))))))))
 
 (define workout/exercise-log
-  (lambda (session-id exercise weight unit reps notes detail)
+  (lambda
+    (session-id
+      exercise
+      weight
+      unit
+      reps
+      notes
+      detail)
     (let
       ((name (workout/normalize-exercise exercise)))
       (if
@@ -247,7 +268,8 @@
             (if (null? detail) "" detail)))))))
 
 (define workout/exercise-names
-  (lambda (limit)
+  (lambda
+    (limit)
     (let
       ((lim (if (null? limit) 100 (workout/as-int limit))))
       (list/foldl
@@ -263,7 +285,8 @@
         (rows (quote workout-exercise) lim)))))
 
 (define workout/exercises
-  (lambda (session-id)
+  (lambda
+    (session-id)
     (let
       ((sid (as-str session-id)))
       (list/filter
@@ -275,13 +298,15 @@
         (rows (quote workout-exercise) 500)))))
 
 (define workout/field
-  (lambda (fields key)
+  (lambda
+    (fields key)
     (let
       ((v (dict-get fields (as-str key))))
       (if (null? v) "" (as-str v)))))
 
 (define workout/handle-home-post
-  (lambda ()
+  (lambda
+    ()
     (let
       ((action (as-str (request-param "action"))))
       (cond
@@ -361,7 +386,8 @@
         (else (redirect "/workout/log"))))))
 
 (define workout/handle-run-post
-  (lambda ()
+  (lambda
+    ()
     (let
       ((action (as-str (request-param "action")))
         (id (as-str (request-param "id"))))
@@ -381,7 +407,8 @@
         (else (redirect "/workout"))))))
 
 (define workout/handle-session-post
-  (lambda ()
+  (lambda
+    ()
     (let
       ((action (as-str (request-param "action")))
         (id (as-str (request-param "id"))))
@@ -426,7 +453,8 @@
         (else (redirect "/workout"))))))
 
 (define workout/history
-  (lambda (from-date to-date limit)
+  (lambda
+    (from-date to-date limit)
     (let
       ((lim (if (null? limit) 50 (workout/as-int limit))))
       (list/filter
@@ -439,7 +467,8 @@
         (workout/session-list lim)))))
 
 (define workout/home-main
-  (lambda ()
+  (lambda
+    ()
     (html/div
       (html/attr "id" "workout-main")
       (html/join
@@ -449,7 +478,8 @@
           (workout/recent-list))))))
 
 (define workout/home-page
-  (lambda ()
+  (lambda
+    ()
     (if
       (string-eq (request-method) "POST")
       (workout/handle-home-post)
@@ -459,11 +489,12 @@
           (html/p*
             (html/attr "class" "muted")
             (html/text
-              "Training journal \226\128\148 free log + King-Sized Killer (snatch)."))
+              "Training journal 226128148 free log + King-Sized Killer (snatch)."))
           (workout/home-main))))))
 
 (define workout/insert-session-desc
-  (lambda (sorted row)
+  (lambda
+    (sorted row)
     (if
       (null? sorted)
       (list row)
@@ -479,7 +510,8 @@
             (workout/insert-session-desc (cdr sorted) row)))))))
 
 (define workout/join-nums
-  (lambda (xs)
+  (lambda
+    (xs)
     (list/foldl
       (lambda
         (acc x)
@@ -491,7 +523,17 @@
       xs)))
 
 (define workout/ksk-build-doc
-  (lambda (program phase day week load unit pattern rm-total pct per-hand)
+  (lambda
+    (program
+      phase
+      day
+      week
+      load
+      unit
+      pattern
+      rm-total
+      pct
+      per-hand)
     (dict-set*
       "{}"
       (list
@@ -551,7 +593,8 @@
         "[]"))))
 
 (define workout/ksk-capture
-  (lambda (session-id)
+  (lambda
+    (session-id)
     (let
       ((doc (workout/parse-session-doc session-id)))
       (seq
@@ -561,7 +604,8 @@
         (workout/session-complete session-id "")))))
 
 (define workout/ksk-current-target
-  (lambda (doc)
+  (lambda
+    (doc)
     (let*
       ((params (workout/doc-params doc))
         (prog (workout/doc-progress doc))
@@ -583,7 +627,8 @@
           (if (null? rungs) 0 (workout/as-int (nth rungs i))))))))
 
 (define workout/ksk-label
-  (lambda (doc)
+  (lambda
+    (doc)
     (let
       ((params (workout/doc-params doc))
         (prog (as-str (dict-get doc "program"))))
@@ -601,17 +646,18 @@
           (if (blank? week) "" (string-append " W" week))
           " D"
           day
-          " \194\183 "
+          " 194183 "
           pat
-          " \194\183 "
+          " 194183 "
           load
           (if (blank? unit) "" (string-append " " unit))
-          " \194\183 "
+          " 194183 "
           cap
           "m")))))
 
 (define workout/ksk-program?
-  (lambda (p)
+  (lambda
+    (p)
     (let
       ((s (as-str p)))
       (if
@@ -620,7 +666,8 @@
         (if (string-eq s "ksk2") #t (string-eq s "ksk3"))))))
 
 (define workout/ksk-replace-side
-  (lambda (sid name load unit reps)
+  (lambda
+    (sid name load unit reps)
     (seq
       (list/map
         (lambda
@@ -646,7 +693,8 @@
           "")))))
 
 (define workout/ksk-save-doc
-  (lambda (id doc)
+  (lambda
+    (id doc)
     (let
       ((cur (workout/session id)))
       (if
@@ -665,7 +713,14 @@
             (workout/field cur "author")))))))
 
 (define workout/ksk-start
-  (lambda (program phase day week load unit rm-total)
+  (lambda
+    (program
+      phase
+      day
+      week
+      load
+      unit
+      rm-total)
     (let*
       ((p (as-str program))
         (doc
@@ -688,7 +743,8 @@
         (workout/session-create-with-doc p inten doc)))))
 
 (define workout/ksk-step
-  (lambda (session-id)
+  (lambda
+    (session-id)
     (let
       ((doc (workout/parse-session-doc session-id)))
       (if
@@ -756,11 +812,13 @@
             doc2))))))
 
 (define workout/ksk-time-cap
-  (lambda (program)
+  (lambda
+    (program)
     (if (string-eq (as-str program) "ksk3") 15 20)))
 
 (define workout/ksk-upsert-facts
-  (lambda (session-id doc)
+  (lambda
+    (session-id doc)
     (let
       ((params (workout/doc-params doc))
         (prog (workout/doc-progress doc)))
@@ -775,7 +833,8 @@
           (workout/ksk-replace-side sid "Snatch R" load unit rr))))))
 
 (define workout/ksk1-next
-  (lambda (phase week day)
+  (lambda
+    (phase week day)
     (cond
       ((< day 3) (list phase week (+ day 1)))
       ((< week 3) (list phase (+ week 1) 1))
@@ -783,7 +842,8 @@
       (else (list)))))
 
 (define workout/ksk1-pattern
-  (lambda (phase day)
+  (lambda
+    (phase day)
     (let
       ((p (workout/as-int phase)) (d (workout/as-int day)))
       (cond
@@ -801,7 +861,8 @@
           (cond ((= d 1) "S:9") ((= d 2) "S:15") (else "S:12")))))))
 
 (define workout/ksk1-plan
-  (lambda (phase day load unit)
+  (lambda
+    (phase day load unit)
     (let
       ((p (workout/as-int phase))
         (d (workout/as-int day))
@@ -819,7 +880,18 @@
         ""))))
 
 (define workout/ksk1-sched-from
-  (lambda (date weekdays load unit skip phase week day notes create? acc)
+  (lambda
+    (date
+      weekdays
+      load
+      unit
+      skip
+      phase
+      week
+      day
+      notes
+      create?
+      acc)
     (if
       (> phase 3)
       (if create? (count acc) acc)
@@ -833,12 +905,12 @@
               (as-str week)
               " D"
               (as-str day)
-              " \194\183 "
+              " 194183 "
               pat
-              " \194\183 "
+              " 194183 "
               (as-str load)
               (as-str unit)
-              " \194\183 "
+              " 194183 "
               (as-str (workout/ksk-time-cap "ksk1"))
               "m"))
           (nxt (workout/ksk1-next phase week day)))
@@ -884,7 +956,14 @@
                   acc2)))))))))
 
 (define workout/ksk1-schedule
-  (lambda (start-date weekdays load unit skip notes create?)
+  (lambda
+    (start-date
+      weekdays
+      load
+      unit
+      skip
+      notes
+      create?)
     (workout/ksk1-sched-from
       (workout/next-training-day start-date weekdays)
       weekdays
@@ -899,7 +978,8 @@
       (list))))
 
 (define workout/ksk2-plan
-  (lambda (phase day load unit)
+  (lambda
+    (phase day load unit)
     (let
       ((p (workout/as-int phase))
         (d (workout/as-int day))
@@ -917,7 +997,8 @@
         ""))))
 
 (define workout/ksk2-set-size
-  (lambda (phase day)
+  (lambda
+    (phase day)
     (let
       ((p (workout/as-int phase)) (d (workout/as-int day)))
       (cond
@@ -926,7 +1007,8 @@
         (else (cond ((= d 1) 15) ((= d 2) 30) (else 20)))))))
 
 (define workout/ksk3-pct
-  (lambda (week day)
+  (lambda
+    (week day)
     (let
       ((w (workout/as-int week)) (d (workout/as-int day)))
       (cond
@@ -935,7 +1017,8 @@
         (else (if (or (= w 1) (= w 3)) 70 80))))))
 
 (define workout/ksk3-per-hand
-  (lambda (rm-total pct)
+  (lambda
+    (rm-total pct)
     (workout/max0
       (floor
         (div
@@ -943,7 +1026,8 @@
           200)))))
 
 (define workout/ksk3-plan
-  (lambda (week day load unit rm-total)
+  (lambda
+    (week day load unit rm-total)
     (let
       ((w (workout/as-int week))
         (d (workout/as-int day))
@@ -964,11 +1048,13 @@
           ph)))))
 
 (define workout/len
-  (lambda (xs)
+  (lambda
+    (xs)
     (list/foldl (lambda (acc _) (+ acc 1)) 0 xs)))
 
 (define workout/log-form
-  (lambda ()
+  (lambda
+    ()
     (html/div
       (html/attr "class" "card")
       (html/join
@@ -1081,7 +1167,7 @@
                 (html/button (html/attr "type" "submit") "Save workout"))))
           (html/p*
             ""
-            (html/a "/workout" "\226\134\144 All workouts")))))))
+            (html/a "/workout" "226134144 All workouts")))))))
 
 (define workout/log-page
   (lambda
@@ -1096,7 +1182,18 @@
           (workout/walk-form))))))
 
 (define workout/log/ksk-write
-  (lambda (date program intensity doc load unit total-l total-r notes rungs-l-str rungs-r-str)
+  (lambda
+    (date
+      program
+      intensity
+      doc
+      load
+      unit
+      total-l
+      total-r
+      notes
+      rungs-l-str
+      rungs-r-str)
     (let*
       ((tl (workout/as-int total-l))
         (tr (workout/as-int total-r))
@@ -1199,7 +1296,14 @@
         sid))))
 
 (define workout/log/ksk1
-  (lambda (date phase day load unit rungs notes)
+  (lambda
+    (date
+      phase
+      day
+      load
+      unit
+      rungs
+      notes)
     (let
       ((doc (workout/ksk1-plan phase day load unit))
         (total (workout/sum rungs))
@@ -1221,7 +1325,15 @@
         rs))))
 
 (define workout/log/ksk1-sides
-  (lambda (date phase day load unit rungs-l rungs-r notes)
+  (lambda
+    (date
+      phase
+      day
+      load
+      unit
+      rungs-l
+      rungs-r
+      notes)
     (let
       ((doc (workout/ksk1-plan phase day load unit))
         (tl (workout/sum rungs-l))
@@ -1245,7 +1357,14 @@
         rsr))))
 
 (define workout/log/ksk2
-  (lambda (date phase day load unit sets notes)
+  (lambda
+    (date
+      phase
+      day
+      load
+      unit
+      sets
+      notes)
     (let
       ((doc (workout/ksk2-plan phase day load unit))
         (total (workout/sum sets))
@@ -1267,7 +1386,15 @@
         rs))))
 
 (define workout/log/ksk3
-  (lambda (date week day load unit rm-total sets notes)
+  (lambda
+    (date
+      week
+      day
+      load
+      unit
+      rm-total
+      sets
+      notes)
     (let
       ((doc (workout/ksk3-plan week day load unit rm-total))
         (total (workout/sum sets))
@@ -1292,7 +1419,8 @@
   (lambda (n) (if (< n 1) 1 n)))
 
 (define workout/maybe-log
-  (lambda (sid name weight unit reps)
+  (lambda
+    (sid name weight unit reps)
     (if
       (blank? (as-str name))
       ()
@@ -1306,14 +1434,16 @@
         ""))))
 
 (define workout/member?
-  (lambda (x xs)
+  (lambda
+    (x xs)
     (if
       (null? xs)
       #f
       (if (= (car xs) x) #t (workout/member? x (cdr xs))))))
 
 (define workout/name-seen?
-  (lambda (lst name)
+  (lambda
+    (lst name)
     (list/foldl
       (lambda
         (acc x)
@@ -1322,7 +1452,8 @@
       lst)))
 
 (define workout/next-training-day
-  (lambda (date weekdays)
+  (lambda
+    (date weekdays)
     (let*
       ((parts (string-split (as-str date) "-"))
         (y (parse-int (nth parts 0)))
@@ -1340,7 +1471,8 @@
   (lambda (name) (string-trim (as-str name))))
 
 (define workout/normalize-unit
-  (lambda (u)
+  (lambda
+    (u)
     (let
       ((s (as-str u)))
       (cond
@@ -1354,7 +1486,8 @@
         (else s)))))
 
 (define workout/parse-session-doc
-  (lambda (id)
+  (lambda
+    (id)
     (let
       ((f (workout/session id)))
       (if
@@ -1365,7 +1498,8 @@
           (if (blank? raw) () raw))))))
 
 (define workout/pattern-kind
-  (lambda (pat)
+  (lambda
+    (pat)
     (let
       ((s (as-str pat)))
       (if
@@ -1376,7 +1510,8 @@
         "ladder"))))
 
 (define workout/pattern-rungs
-  (lambda (pat)
+  (lambda
+    (pat)
     (let
       ((s (as-str pat)))
       (if
@@ -1385,7 +1520,8 @@
         (string-split s ",")))))
 
 (define workout/pattern-set-size
-  (lambda (pat)
+  (lambda
+    (pat)
     (let
       ((s (as-str pat)))
       (if
@@ -1394,7 +1530,8 @@
         0))))
 
 (define workout/pget
-  (lambda (dict key)
+  (lambda
+    (dict key)
     (if
       (null? dict)
       ""
@@ -1432,7 +1569,8 @@
   (lambda (row) (as-str (car row))))
 
 (define workout/run-main
-  (lambda (id)
+  (lambda
+    (id)
     (let
       ((f (workout/session id)))
       (if
@@ -1442,7 +1580,7 @@
           (html/join
             (list
               (html/p "Session not found.")
-              (html/p* "" (html/a "/workout" "\226\134\144 Back")))))
+              (html/p* "" (html/a "/workout" "226134144 Back")))))
         (let
           ((doc (workout/parse-session-doc id))
             (st (workout/session-state f))
@@ -1501,11 +1639,11 @@
                           (if
                             (string-eq kind "ladder")
                             (string-append
-                              " \194\183 rung #"
+                              " 194183 rung #"
                               (as-str (+ (workout/as-int ri) 1))
-                              " \194\183 ladder "
+                              " 194183 ladder "
                               lad)
-                            (string-append " \194\183 sets done " sd)))))
+                            (string-append " 194183 sets done " sd)))))
                     (html/p*
                       (html/attr "class" "ksk-target")
                       (html/text
@@ -1516,7 +1654,7 @@
                         (string-append
                           "pattern "
                           pat
-                          " \194\183 per-rung both hands")))
+                          " 194183 per-rung both hands")))
                     (if
                       (string-eq st "in_progress")
                       (html/join
@@ -1557,11 +1695,11 @@
                       (html/attr "class" "ksk-totals")
                       (html/text
                         (string-append
-                          "Totals \226\128\148 L: "
+                          "Totals 226128148 L: "
                           rl
-                          " \194\183 R: "
+                          " 194183 R: "
                           rr
-                          " \194\183 all: "
+                          " 194183 all: "
                           (as-str (+ (workout/as-int rl) (workout/as-int rr))))))
                     (html/p*
                       ""
@@ -1570,11 +1708,12 @@
                           (html/a
                             (string-append "/workout/session?id=" id)
                             "Session detail")
-                          (html/text " \194\183 ")
+                          (html/text " 194183 ")
                           (html/a "/workout" "All workouts"))))))))))))))
 
 (define workout/run-page
-  (lambda ()
+  (lambda
+    ()
     (if
       (string-eq (request-method) "POST")
       (workout/handle-run-post)
@@ -1588,11 +1727,12 @@
                 (list
                   (html/h1 "Run")
                   (html/p "Missing session id.")
-                  (html/p* "" (html/a "/workout" "\226\134\144 Back"))))
+                  (html/p* "" (html/a "/workout" "226134144 Back"))))
               (workout/run-main id))))))))
 
 (define workout/run-style
-  (lambda ()
+  (lambda
+    ()
     (html/tag
       "style"
       ""
@@ -1605,13 +1745,15 @@
           ".ksk-run .ksk-totals{font-size:1.1rem;margin-top:.75rem}")))))
 
 (define workout/session
-  (lambda (id)
+  (lambda
+    (id)
     (let
       ((f (get (quote workout-session) (as-str id))))
       (if (null? f) () f))))
 
 (define workout/session-abandon
-  (lambda (id)
+  (lambda
+    (id)
     (let
       ((cur (workout/session id)))
       (if
@@ -1630,7 +1772,8 @@
             (workout/field cur "author")))))))
 
 (define workout/session-actions
-  (lambda (id state)
+  (lambda
+    (id state)
     (let
       ((f (workout/session id))
         (prog
@@ -1651,7 +1794,7 @@
                 ""
                 (html/a
                   (string-append "/workout/run?id=" (as-str id))
-                  "\226\134\146 Open run UI"))
+                  "226134146 Open run UI"))
               "")
             (if
               (string-eq (as-str state) "in_progress")
@@ -1695,10 +1838,11 @@
                     "Delete session"))))
             (html/p*
               ""
-              (html/a "/workout" "\226\134\144 All workouts"))))))))
+              (html/a "/workout" "226134144 All workouts"))))))))
 
 (define workout/session-complete
-  (lambda (id notes)
+  (lambda
+    (id notes)
     (let
       ((cur (workout/session id)))
       (if
@@ -1723,7 +1867,8 @@
               (workout/field cur "author"))))))))
 
 (define workout/session-create
-  (lambda (program intensity)
+  (lambda
+    (program intensity)
     (let
       ((prog
           (if (blank? (as-str program)) "free" (as-str program)))
@@ -1741,7 +1886,8 @@
           (as-str (whoami)))))))
 
 (define workout/session-create-complete
-  (lambda (program intensity date notes)
+  (lambda
+    (program intensity date notes)
     (let
       ((prog
           (if (blank? (as-str program)) "free" (as-str program)))
@@ -1765,7 +1911,8 @@
           (as-str (whoami)))))))
 
 (define workout/session-create-with-doc
-  (lambda (program intensity doc)
+  (lambda
+    (program intensity doc)
     (let
       ((prog
           (if (blank? (as-str program)) "free" (as-str program)))
@@ -1791,13 +1938,15 @@
   (lambda (f) (workout/field f "date")))
 
 (define workout/session-date-of
-  (lambda (session-id)
+  (lambda
+    (session-id)
     (let
       ((f (workout/session session-id)))
       (if (null? f) "" (workout/session-date f)))))
 
 (define workout/session-delete
-  (lambda (id)
+  (lambda
+    (id)
     (let
       ((sid (as-str id)))
       (seq
@@ -1812,7 +1961,15 @@
   (lambda (f) (workout/field f "doc")))
 
 (define workout/session-fields
-  (lambda (date program intensity state notes doc duration_sec author)
+  (lambda
+    (date
+      program
+      intensity
+      state
+      notes
+      doc
+      duration_sec
+      author)
     (dict-set*
       "{}"
       (list
@@ -1834,7 +1991,8 @@
         (as-str author)))))
 
 (define workout/session-in-progress
-  (lambda (program)
+  (lambda
+    (program)
     (let
       ((want (if (null? program) "" (as-str program))))
       (list/foldl
@@ -1891,7 +2049,8 @@
                   (html/text (string-append (as-str reps) " total reps")))))))))))
 
 (define workout/session-list
-  (lambda (limit)
+  (lambda
+    (limit)
     (let
       ((n (if (null? limit) 50 (workout/as-int limit))))
       (rows (quote workout-session) (if (< n 1) 50 n)))))
@@ -1952,7 +2111,8 @@
   (lambda (f) (workout/field f "notes")))
 
 (define workout/session-page
-  (lambda ()
+  (lambda
+    ()
     (if
       (string-eq (request-method) "POST")
       (workout/handle-session-post)
@@ -1966,7 +2126,7 @@
                 (list
                   (html/h1 "Session")
                   (html/p "Missing id.")
-                  (html/p* "" (html/a "/workout" "\226\134\144 Back"))))
+                  (html/p* "" (html/a "/workout" "226134144 Back"))))
               (workout/session-main id))))))))
 
 (define workout/session-program
@@ -1976,24 +2136,27 @@
   (lambda (f) (workout/field f "state")))
 
 (define workout/session-summary
-  (lambda (id)
+  (lambda
+    (id)
     (let
       ((f (workout/session id)))
       (if (null? f) () (list id f (workout/exercises id))))))
 
 (define workout/session-title
-  (lambda (f)
+  (lambda
+    (f)
     (let
       ((date (workout/session-date f))
         (prog (workout/session-program f))
         (inten (workout/session-intensity f)))
       (if
         (blank? inten)
-        (string-append date " \194\183 " prog)
-        (string-append date " \194\183 " prog " / " inten)))))
+        (string-append date " 194183 " prog)
+        (string-append date " 194183 " prog " / " inten)))))
 
 (define workout/session-total-reps
-  (lambda (session-id)
+  (lambda
+    (session-id)
     (list/foldl
       (lambda
         (acc row)
@@ -2005,18 +2168,21 @@
       (workout/exercises session-id))))
 
 (define workout/session-update
-  (lambda (id fields)
+  (lambda
+    (id fields)
     (update (quote workout-session) (as-str id) fields)))
 
 (define workout/sessions-sorted
-  (lambda ()
+  (lambda
+    ()
     (list/foldl
       workout/insert-session-desc
       ()
       (workout/session-list 100))))
 
 (define workout/start-bar
-  (lambda ()
+  (lambda
+    ()
     (html/div
       (html/attr "class" "card")
       (html/join
@@ -2083,7 +2249,7 @@
                       (html/attr "inputmode" "numeric"))))
                 (html/label
                   (html/attr "for" "ksk-day")
-                  "Day 1\226\128\1473")
+                  "Day 12261281473")
                 (html/text-input
                   "day"
                   (html/attrs
@@ -2108,7 +2274,7 @@
                       (html/attr "value" "kg"))))
                 (html/label
                   (html/attr "for" "ksk-rm")
-                  "RM total (3.0 \226\128\148 L+R max test)")
+                  "RM total (3.0 226128148 L+R max test)")
                 (html/text-input
                   "rm_total"
                   (html/attrs
@@ -2128,7 +2294,8 @@
                 (html/text " a completed free workout.")))))))))
 
 (define workout/state-badge
-  (lambda (state)
+  (lambda
+    (state)
     (html/span
       (html/attr "class" "muted")
       (html/text (as-str state)))))
@@ -2159,14 +2326,16 @@
       (if (string-eq sa sb) #f (workout/str-lt-loop sa sb 0)))))
 
 (define workout/sum
-  (lambda (xs)
+  (lambda
+    (xs)
     (list/foldl
       (lambda (acc x) (+ acc (workout/as-int x)))
       0
       xs)))
 
 (define workout/timer-script
-  (lambda (cap-min)
+  (lambda
+    (cap-min)
     (html/tag
       "script"
       ""
@@ -2196,7 +2365,8 @@
   (lambda () (date-today)))
 
 (define workout/volume
-  (lambda (exercise from-date to-date weight unit)
+  (lambda
+    (exercise from-date to-date weight unit)
     (let
       ((ex (workout/normalize-exercise exercise))
         (w (as-str weight))
