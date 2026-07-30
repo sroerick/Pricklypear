@@ -1,37 +1,32 @@
-;; Weather widget — client-side Open-Meteo (no API key).
-;; Embed on home via (weather/widget). Full page: /weather
-;; (load-library "weather")
-;; Docs: trailing string on define (safe for string constants).
+;; package weather -- exported from live branch system/main
+;; Sync: scripts/pp_sync.py pull|push
 
-;; Default habitat: Cody, WY.
-(define weather/default-lat "44.52634"
-  "Default latitude (Cody, WY).")
-(define weather/default-lon "-109.05653"
-  "Default longitude (Cody, WY).")
-(define weather/default-label "Cody, WY"
-  "Default location label for the weather card.")
+(define weather/default-label
+  "Cody, WY")
 
-;; Inline CSS kept small so the card works even if chrome CSS lags.
-(define weather/style
-  (lambda ()
-    (html/tag "style" ""
-      (html/join
-        (list
-          ".weather-card .wx-row{display:flex;align-items:baseline;gap:.75rem;flex-wrap:wrap}"
-          ".weather-card .wx-temp{font-size:2rem;font-weight:700;line-height:1}"
-          ".weather-card .wx-meta{font-size:.9rem;color:#333}"
-          ".weather-card .wx-loc{font-weight:700;margin:.25rem 0}"
-          ".weather-card .wx-form{display:flex;gap:.35rem;flex-wrap:wrap;margin-top:.5rem}"
-          ".weather-card .wx-form input[type=text]{flex:1 1 8rem;min-width:0}"
-          ".weather-card .wx-form button{width:auto;min-width:4.5rem}"
-          ".weather-card .wx-err{color:#800000;font-weight:700}"
-          ".weather-card .wx-updated{font-size:.8rem;color:#555;margin-top:.35rem}"))))
-  "Inline CSS for the weather card.")
+(define weather/default-lat
+  "44.52634")
 
-;; Client fetch + render. Uses localStorage key pp.weather.loc when set.
+(define weather/default-lon
+  "-109.05653")
+
+(define weather/page
+  (lambda
+    ()
+    (html/page
+      (list
+        (html/h1 "Weather")
+        (html/p*
+          (html/attr "class" "muted")
+          "Browser fetch via Open-Meteo. Location is stored in this browser only.")
+        (weather/widget)))))
+
 (define weather/script
-  (lambda (lat lon label)
-    (html/tag "script" ""
+  (lambda
+    (lat lon label)
+    (html/tag
+      "script"
+      ""
       (string-append
         "(function(){"
         "var root=document.getElementById('weather-widget');"
@@ -41,15 +36,20 @@
         "var form=document.getElementById('weather-loc-form');"
         "var input=document.getElementById('weather-city');"
         "var KEY='pp.weather.loc';"
-        "var def={lat:" (as-str lat) ",lon:" (as-str lon)
-        ",label:" (json-emit (as-str label)) "};"
+        "var def={lat:"
+        (as-str lat)
+        ",lon:"
+        (as-str lon)
+        ",label:"
+        (json-emit (as-str label))
+        "};"
         "function codes(c){"
         "c=String(c);"
         "return({0:'Clear',1:'Mainly clear',2:'Partly cloudy',3:'Overcast',"
         "45:'Fog',48:'Rime fog',51:'Light drizzle',53:'Drizzle',55:'Heavy drizzle',"
         "61:'Light rain',63:'Rain',65:'Heavy rain',71:'Light snow',73:'Snow',"
         "75:'Heavy snow',80:'Rain showers',81:'Rain showers',82:'Heavy showers',"
-        "95:'Thunderstorm'}[c]||'—');"
+        "95:'Thunderstorm'}[c]||'\226\128\148');"
         "}"
         "function loadLoc(){"
         "try{var s=localStorage.getItem(KEY);if(s)return JSON.parse(s);}catch(e){}"
@@ -62,7 +62,7 @@
         "if(locEl)locEl.textContent=loc.label||(loc.lat+', '+loc.lon);"
         "if(!cur){body.innerHTML='<p class=\"muted\">No data</p>';return;}"
         "var t=Math.round(cur.temperature_2m);"
-        "var u=cur.temperature_2m!=null?'°F':'';"
+        "var u=cur.temperature_2m!=null?'\194\176F':'';"
         "var w=codes(cur.weather_code);"
         "var hum=cur.relative_humidity_2m!=null?(cur.relative_humidity_2m+'% rh'):'';"
         "var wind=cur.wind_speed_10m!=null?(Math.round(cur.wind_speed_10m)+' mph'):'';"
@@ -70,16 +70,16 @@
         "'<div class=\"wx-row\">'"
         "+'<div class=\"wx-temp\">'+t+u+'</div>'"
         "+'<div><div><strong>'+w+'</strong></div>'"
-        "+'<div class=\"wx-meta\">'+[hum,wind].filter(Boolean).join(' · ')+'</div></div>'"
+        "+'<div class=\"wx-meta\">'+[hum,wind].filter(Boolean).join(' \194\183 ')+'</div></div>'"
         "+'</div>'"
-        "+'<div class=\"wx-updated muted\">via Open-Meteo · local browser fetch</div>';"
+        "+'<div class=\"wx-updated muted\">via Open-Meteo \194\183 local browser fetch</div>';"
         "}"
         "function fail(msg){"
         "body.innerHTML='<p class=\"wx-err\">'+msg+'</p>';"
         "}"
         "function fetchWx(loc){"
-        "body.innerHTML='<p class=\"muted\">Loading…</p>';"
-        "if(locEl)locEl.textContent=loc.label||'…';"
+        "body.innerHTML='<p class=\"muted\">Loading\226\128\166</p>';"
+        "if(locEl)locEl.textContent=loc.label||'\226\128\166';"
         "var url='https://api.open-meteo.com/v1/forecast'"
         "+'?latitude='+encodeURIComponent(loc.lat)"
         "+'&longitude='+encodeURIComponent(loc.lon)"
@@ -105,18 +105,35 @@
         "e.preventDefault();"
         "var q=(input&&input.value||'').trim();"
         "if(!q)return;"
-        "body.innerHTML='<p class=\"muted\">Looking up…</p>';"
+        "body.innerHTML='<p class=\"muted\">Looking up\226\128\166</p>';"
         "geocode(q).then(function(loc){saveLoc(loc);fetchWx(loc);})"
         ".catch(function(err){fail(err&&err.message?err.message:String(err));});"
         "});"
         "}"
         "fetchWx(loadLoc());"
-        "})();")))
-  "Client JS: Open-Meteo fetch, geocode, localStorage location.")
+        "})();"))))
 
-;; Embeddable card (home / any page). Pure HTML string — wrap with render-html if top-level.
+(define weather/style
+  (lambda
+    ()
+    (html/tag
+      "style"
+      ""
+      (html/join
+        (list
+          ".weather-card .wx-row{display:flex;align-items:baseline;gap:.75rem;flex-wrap:wrap}"
+          ".weather-card .wx-temp{font-size:2rem;font-weight:700;line-height:1}"
+          ".weather-card .wx-meta{font-size:.9rem;color:#333}"
+          ".weather-card .wx-loc{font-weight:700;margin:.25rem 0}"
+          ".weather-card .wx-form{display:flex;gap:.35rem;flex-wrap:wrap;margin-top:.5rem}"
+          ".weather-card .wx-form input[type=text]{flex:1 1 8rem;min-width:0}"
+          ".weather-card .wx-form button{width:auto;min-width:4.5rem}"
+          ".weather-card .wx-err{color:#800000;font-weight:700}"
+          ".weather-card .wx-updated{font-size:.8rem;color:#555;margin-top:.35rem}")))))
+
 (define weather/widget
-  (lambda ()
+  (lambda
+    ()
     (html/div
       (html/attrs
         (list
@@ -125,12 +142,18 @@
       (html/join
         (list
           (html/h2 "Weather")
-          (html/div (html/attr "class" "wx-loc")
-            (html/span (html/attr "id" "weather-loc-label")
+          (html/div
+            (html/attr "class" "wx-loc")
+            (html/span
+              (html/attr "id" "weather-loc-label")
               (html/text weather/default-label)))
-          (html/div (html/attr "id" "weather-body")
-            (html/p* (html/attr "class" "muted") "Loading…"))
-          (html/tag "form"
+          (html/div
+            (html/attr "id" "weather-body")
+            (html/p*
+              (html/attr "class" "muted")
+              "Loading\226\128\166"))
+          (html/tag
+            "form"
             (html/attrs
               (list
                 (html/attr "id" "weather-loc-form")
@@ -145,22 +168,12 @@
                       (html/attr "type" "text")
                       (html/attr "id" "weather-city")
                       (html/attr "name" "city")
-                      (html/attr "placeholder" "City…")
+                      (html/attr "placeholder" "City\226\128\166")
                       (html/attr "autocomplete" "off"))))
                 (html/button (html/attr "type" "submit") "Set"))))
           (weather/style)
-          (weather/script weather/default-lat weather/default-lon
-            weather/default-label)))))
-  "Embeddable weather card HTML (style + script + form).")
+          (weather/script
+            weather/default-lat
+            weather/default-lon
+            weather/default-label))))))
 
-(define weather/page
-  (lambda ()
-    (html/page
-      (list
-        (html/h1 "Weather")
-        (html/p* (html/attr "class" "muted")
-          "Browser fetch via Open-Meteo. Location is stored in this browser only.")
-        (weather/widget))))
-  "GET /weather — full-page weather widget.")
-
-(route "/weather" "weather/page")

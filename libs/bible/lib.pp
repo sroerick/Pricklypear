@@ -1,178 +1,399 @@
-;; Bible data + helpers (BSB) — pure functions, no routes.
-;; Routes/UI now live in libs/dabar/lib.pp.
-;;
-;; Ref format: BSB:<Abbrev>:<chapter>:<verse>  e.g. BSB:John:3:16
-;; Install: (load-library "bible") — types + data helpers only.
-;; UI dispatch: /dabar (see dabar/lib.pp).
-;;
-;; Text: Berean Standard Bible (see seed script NOTICE / attribution).
-;; HTML via std html/* helpers.
-
-(deftype 'bible-book 'name 'abbrev 'ordinal 'testament)
-(deftype 'bible-verse 'translation 'book 'abbrev 'chapter 'verse 'text 'ref)
-
-(define bible/book-row
-  (lambda (book)
-    (let ((b (as-str book)))
-      (let ((by-ab (find-row 'bible-book "abbrev" b)))
-        (if (null? by-ab)
-            (find-row 'bible-book "name" b)
-            by-ab))))
-  "bible-book row for book name or abbrev.")
+;; package bible -- exported from live branch system/main
+;; Sync: scripts/pp_sync.py pull|push
 
 (define bible/abbrev-of
-  (lambda (book)
-    (let ((row (bible/book-row book)))
-      (if (null? row)
-          (as-str book)
-          (dict-get row "abbrev"))))
-  "Canonical abbrev string for a book.")
-
-(define bible/ref
-  (lambda (book chapter verse)
-    (string-append
-      "BSB:"
-      (bible/abbrev-of book)
-      ":"
-      (as-str chapter)
-      ":"
-      (as-str verse)))
-  "Build BSB ref string book/chapter/verse.")
-
-(define bible/verse-row
-  (lambda (book chapter verse)
-    (find-row 'bible-verse "ref" (bible/ref book chapter verse)))
-  "bible-verse data row for book/chapter/verse.")
-
-(define bible/verse
-  (lambda (book chapter verse)
-    (let ((row (bible/verse-row book chapter verse)))
-      (if (null? row)
-          ()
-          (dict-get row "text"))))
-  "Verse text string for book/chapter/verse.")
-
-(define bible/chapter
-  (lambda (book chapter)
-    (find-rows 'bible-verse
-      "abbrev" (bible/abbrev-of book)
-      "chapter" (as-str chapter)
-      200))
-  "List of verse rows for book/chapter.")
-
-(define bible/books
-  (lambda ()
-    (rows 'bible-book 100))
-  "All bible-book rows.")
-
-(define bible/search
-  (lambda (q)
-    (find-text 'bible-verse "text" (as-str q) 40))
-  "Search bible verses by query string.")
-
-(define bible/parse-ref
-  (lambda (ref)
-    (find-row 'bible-verse "ref" (as-str ref)))
-  "Parse BSB:Book:ch:vs ref into fields dict or empty.")
-
-;; Parse small positive ints from request strings (1..max).
-(define bible/parse-int-from
-  (lambda (s i max)
-    (if (> i max)
-        0
-        (if (string-eq (as-str s) (as-str i))
-            i
-            (bible/parse-int-from s (+ i 1) max))))
-  "Parse int from string starting at index with max.")
-
-(define bible/parse-int
-  (lambda (s)
-    (bible/parse-int-from s 1 200))
-  "Parse small positive int from string (1..max helper).")
-
-(define bible/book-ordinal
-  (lambda (book)
-    (let ((row (bible/book-row book)))
-      (if (null? row)
-          0
-          (bible/parse-int (dict-get row "ordinal")))))
-  "Ordinal index of book among bible/books.")
+  (lambda
+    (book)
+    (let
+      ((row (bible/book-row book)))
+      (if (null? row) (as-str book) (dict-get row "abbrev")))))
 
 (define bible/book-by-ordinal
-  (lambda (ord)
+  (lambda
+    (ord)
     (list/foldl
-      (lambda (acc row)
-        (let ((f (cdr row)))
-          (if (string-eq (as-str (dict-get f "ordinal")) (as-str ord))
-              f
-              acc)))
+      (lambda
+        (acc row)
+        (let
+          ((f (cdr row)))
+          (if
+            (string-eq (as-str (dict-get f "ordinal")) (as-str ord))
+            f
+            acc)))
       ()
-      (bible/books)))
-  "Book name at ordinal index.")
+      (bible/books))))
 
-;; -> (abbrev chapter-str) or ()
-(define bible/prev-ref
-  (lambda (book chapter)
-    (let ((ab (bible/abbrev-of book))
-          (c (bible/parse-int (bible/safe-chapter book chapter)))
-          (ord (bible/book-ordinal book)))
-      (if (> c 1)
-          (list ab (as-str (- c 1)))
-          (if (> ord 1)
-              (let ((prev (bible/book-by-ordinal (- ord 1))))
-                (if (null? prev)
-                    ()
-                    (list (dict-get prev "abbrev")
-                          (as-str (bible/chapter-count
-                                    (dict-get prev "abbrev"))))))
-              ()))))
-  "Previous chapter ref dict from book/chapter.")
+(define bible/book-options
+  (lambda
+    (current)
+    (list/foldl
+      (lambda
+        (acc row)
+        (let
+          ((f (cdr row)))
+          (let
+            ((name (dict-get f "name"))
+              (abbrev (dict-get f "abbrev")))
+            (string-append
+              acc
+              (html/option
+                (as-str abbrev)
+                (as-str name)
+                (if
+                  (string-eq (as-str current) (as-str abbrev))
+                  #t
+                  (string-eq (as-str current) (as-str name))))))))
+      ""
+      (bible/books))))
 
-(define bible/next-ref
-  (lambda (book chapter)
-    (let ((ab (bible/abbrev-of book))
-          (c (bible/parse-int (bible/safe-chapter book chapter)))
-          (maxc (bible/chapter-count (bible/abbrev-of book)))
-          (ord (bible/book-ordinal book)))
-      (if (< c maxc)
-          (list ab (as-str (+ c 1)))
-          (if (< ord 66)
-              (let ((nxt (bible/book-by-ordinal (+ ord 1))))
-                (if (null? nxt)
-                    ()
-                    (list (dict-get nxt "abbrev") "1")))
-              ()))))
-  "Next chapter ref dict from book/chapter.")
+(define bible/book-ordinal
+  (lambda
+    (book)
+    (let
+      ((row (bible/book-row book)))
+      (if
+        (null? row)
+        0
+        (bible/parse-int (dict-get row "ordinal"))))))
+
+(define bible/book-row
+  (lambda
+    (book)
+    (let
+      ((b (as-str book)))
+      (let
+        ((by-ab (find-row (quote bible-book) "abbrev" b)))
+        (if
+          (null? by-ab)
+          (find-row (quote bible-book) "name" b)
+          by-ab)))))
+
+(define bible/books
+  (lambda () (rows (quote bible-book) 100)))
+
+(define bible/chapter
+  (lambda
+    (book chapter)
+    (find-rows
+      (quote bible-verse)
+      "abbrev"
+      (bible/abbrev-of book)
+      "chapter"
+      (as-str chapter)
+      200)))
+
+(define bible/chapter-count
+  (lambda
+    (abbrev)
+    (list/foldl
+      (lambda
+        (acc pair)
+        (if
+          (string-eq (car pair) (as-str abbrev))
+          (car (cdr pair))
+          acc))
+      1
+      bible/chapter-counts)))
+
+(define bible/chapter-counts
+  (list
+    (list "Gen" 50)
+    (list "Exod" 40)
+    (list "Lev" 27)
+    (list "Num" 36)
+    (list "Deut" 34)
+    (list "Josh" 24)
+    (list "Judg" 21)
+    (list "Ruth" 4)
+    (list "1Sam" 31)
+    (list "2Sam" 24)
+    (list "1Kgs" 22)
+    (list "2Kgs" 25)
+    (list "1Chr" 29)
+    (list "2Chr" 36)
+    (list "Ezra" 10)
+    (list "Neh" 13)
+    (list "Esth" 10)
+    (list "Job" 42)
+    (list "Ps" 150)
+    (list "Prov" 31)
+    (list "Eccl" 12)
+    (list "Song" 8)
+    (list "Isa" 66)
+    (list "Jer" 52)
+    (list "Lam" 5)
+    (list "Ezek" 48)
+    (list "Dan" 12)
+    (list "Hos" 14)
+    (list "Joel" 3)
+    (list "Amos" 9)
+    (list "Obad" 1)
+    (list "Jonah" 4)
+    (list "Mic" 7)
+    (list "Nah" 3)
+    (list "Hab" 3)
+    (list "Zeph" 3)
+    (list "Hag" 2)
+    (list "Zech" 14)
+    (list "Mal" 4)
+    (list "Matt" 28)
+    (list "Mark" 16)
+    (list "Luke" 24)
+    (list "John" 21)
+    (list "Acts" 28)
+    (list "Rom" 16)
+    (list "1Cor" 16)
+    (list "2Cor" 13)
+    (list "Gal" 6)
+    (list "Eph" 6)
+    (list "Phil" 4)
+    (list "Col" 4)
+    (list "1Thess" 5)
+    (list "2Thess" 3)
+    (list "1Tim" 6)
+    (list "2Tim" 4)
+    (list "Titus" 3)
+    (list "Phlm" 1)
+    (list "Heb" 13)
+    (list "Jas" 5)
+    (list "1Pet" 5)
+    (list "2Pet" 3)
+    (list "1John" 5)
+    (list "2John" 1)
+    (list "3John" 1)
+    (list "Jude" 1)
+    (list "Rev" 22)))
+
+(define bible/chapter-html
+  (lambda
+    (book chapter focus-verse)
+    (bible/chapter-panel book chapter focus-verse)))
+
+(define bible/chapter-panel
+  (lambda
+    (book chapter focus-verse)
+    (let
+      ((rows (bible/chapter book chapter))
+        (ab (bible/abbrev-of book))
+        (ch (bible/safe-chapter book chapter)))
+      (html/join
+        (list
+          (html/h1
+            (string-append (as-str book) " " (as-str chapter)))
+          (bible/nav-links ab ch)
+          (html/tag
+            "ol"
+            (html/attrs
+              (list
+                (html/attr "class" "bible-chapter")
+                (html/attr
+                  "style"
+                  "list-style:none;padding-left:0;margin:.25rem 0")))
+            (list/foldl
+              (lambda
+                (acc row)
+                (string-append acc (bible/verse-li row)))
+              ""
+              rows))
+          (bible/nav-links ab ch)
+          (if
+            (null? focus-verse)
+            ""
+            (html/p*
+              (html/attr "class" "muted")
+              (string-append
+                "Focus verse "
+                (as-str focus-verse)
+                ": "
+                (as-str (bible/verse book chapter focus-verse))))))))))
+
+(define bible/chapter-reader
+  (lambda
+    ()
+    (let
+      ((ref (request-param "ref"))
+        (q (request-param "q"))
+        (rnd (request-param "random")))
+      (if
+        (null? rnd)
+        (if
+          (null? q)
+          (if
+            (null? ref)
+            (let
+              ((book (request-param "book"))
+                (chapter (request-param "chapter"))
+                (verse (request-param "verse")))
+              (let
+                ((b (if (null? book) "John" (as-str book)))
+                  (c
+                    (bible/safe-chapter
+                      (if (null? book) "John" book)
+                      (if (null? chapter) "3" chapter)))
+                  (v (if (null? verse) () verse)))
+                (html/join
+                  (list
+                    (bible/go-form b c v)
+                    (bible/search-form ())
+                    (bible/chapter-panel b c v)
+                    (html/p*
+                      (html/attr "class" "muted")
+                      (html/join
+                        (list
+                          "Berean Standard Bible \194\183 "
+                          (bible/ref b c (if (null? v) 1 v))
+                          " \194\183 "
+                          (html/a "/strongs" "Strong's"))))))))
+            (let
+              ((row (bible/parse-ref ref)))
+              (if
+                (null? row)
+                (html/join
+                  (list
+                    (bible/go-form "John" "3" ())
+                    (html/p*
+                      (html/attr "class" "err")
+                      (string-append "Unknown ref " (as-str ref)))))
+                (let
+                  ((book (dict-get row "book"))
+                    (chapter (dict-get row "chapter"))
+                    (verse (dict-get row "verse")))
+                  (html/join
+                    (list
+                      (bible/go-form book chapter verse)
+                      (bible/search-form ())
+                      (bible/chapter-panel book chapter verse)
+                      (html/p*
+                        (html/attr "class" "muted")
+                        (string-append
+                          "ref "
+                          (as-str ref)
+                          " \194\183 Berean Standard Bible"))))))))
+          (html/join
+            (list
+              (bible/go-form "John" "3" ())
+              (bible/search-form q)
+              (bible/search-panel q))))
+        (let
+          ((row (bible/random-row)))
+          (if
+            (null? row)
+            (html/p* (html/attr "class" "err") "no verses seeded")
+            (let
+              ((f (cdr row)))
+              (let
+                ((book (dict-get f "abbrev"))
+                  (chapter (dict-get f "chapter"))
+                  (verse (dict-get f "verse")))
+                (html/join
+                  (list
+                    (bible/go-form book chapter verse)
+                    (bible/search-form ())
+                    (bible/chapter-panel book chapter verse)
+                    (html/p*
+                      (html/attr "class" "muted")
+                      (string-append
+                        "random \194\183 "
+                        (as-str (dict-get f "ref"))))))))))))))
+
+(define bible/go-form
+  (lambda
+    (b c verse)
+    (let
+      ((ab (bible/abbrev-of b))
+        (ch (bible/safe-chapter b c))
+        (vs (if (null? verse) "" (as-str verse))))
+      (html/form
+        "GET"
+        "/dabar"
+        (html/attrs
+          (list
+            (html/attr "class" "card bible-go")
+            (html/attr "hx-get" "/dabar")
+            (html/attr "hx-target" "#dabar-panel")
+            (html/attr "hx-swap" "innerHTML")
+            (html/attr "hx-push-url" "true")
+            (html/attr "hx-trigger" "submit, change from:select")))
+        (html/join
+          (list
+            (html/label
+              ""
+              (html/join
+                (list
+                  "Book "
+                  (html/select "book" "" (bible/book-options ab)))))
+            " "
+            (html/label
+              ""
+              (html/join
+                (list
+                  "Chapter "
+                  (html/select
+                    "chapter"
+                    ""
+                    (bible/option-range (bible/chapter-count ab) ch)))))
+            " "
+            (html/label
+              ""
+              (html/join
+                (list
+                  "Verse "
+                  (html/select "verse" "" (bible/verse-options ab ch vs)))))
+            " "
+            (html/button (html/attr "type" "submit") "Go")))))))
 
 (define bible/href-chapter
-  (lambda (pair)
-    (if (null? pair)
-        "#"
-        (string-append
-          "/dabar?book="
-          (as-str (car pair))
-          "&chapter="
-          (as-str (car (cdr pair))))))
-  "Href string for dabar chapter reader.")
+  (lambda
+    (pair)
+    (if
+      (null? pair)
+      "#"
+      (string-append
+        "/dabar?book="
+        (as-str (car pair))
+        "&chapter="
+        (as-str (car (cdr pair)))))))
+
+(define bible/int-in-range-from?
+  (lambda
+    (s lo hi i)
+    (if
+      (> i hi)
+      #f
+      (if
+        (string-eq (as-str s) (as-str i))
+        #t
+        (bible/int-in-range-from? s lo hi (+ i 1))))))
+
+(define bible/int-in-range?
+  (lambda (s lo hi) (bible/int-in-range-from? s lo hi lo)))
 
 (define bible/nav-links
-  (lambda (book chapter)
-    (let ((prev (bible/prev-ref book chapter))
-          (next (bible/next-ref book chapter)))
+  (lambda
+    (book chapter)
+    (let
+      ((prev (bible/prev-ref book chapter))
+        (next (bible/next-ref book chapter)))
       (html/p*
         (html/attr "class" "bible-nav")
         (html/join
           (list
-            (if (null? prev)
-                (html/span (html/attr "class" "muted") "← prev")
-                (html/a (bible/href-chapter prev) "← prev"))
-            " · "
+            (if
+              (null? prev)
+              (html/span
+                (html/attr "class" "muted")
+                "\226\134\144 prev")
+              (html/a (bible/href-chapter prev) "\226\134\144 prev"))
+            " \194\183 "
             (html/a "/dabar?random=1" "random")
-            " · "
-            (if (null? next)
-                (html/span (html/attr "class" "muted") "next →")
-                (html/a (bible/href-chapter next) "next →"))
-            " · "
+            " \194\183 "
+            (if
+              (null? next)
+              (html/span
+                (html/attr "class" "muted")
+                "next \226\134\146")
+              (html/a (bible/href-chapter next) "next \226\134\146"))
+            " \194\183 "
             (html/a
               (string-append
                 "/dabar?book="
@@ -180,80 +401,160 @@
                 "&chapter="
                 (bible/safe-chapter book chapter)
                 "&verse=1")
-              "study"))))))
-  "Prev/next chapter nav HTML for abbrev/chapter.")
+              "study")))))))
+
+(define bible/next-ref
+  (lambda
+    (book chapter)
+    (let
+      ((ab (bible/abbrev-of book))
+        (c (bible/parse-int (bible/safe-chapter book chapter)))
+        (maxc (bible/chapter-count (bible/abbrev-of book)))
+        (ord (bible/book-ordinal book)))
+      (if
+        (< c maxc)
+        (list ab (as-str (+ c 1)))
+        (if
+          (< ord 66)
+          (let
+            ((nxt (bible/book-by-ordinal (+ ord 1))))
+            (if (null? nxt) () (list (dict-get nxt "abbrev") "1")))
+          ())))))
+
+(define bible/option-range
+  (lambda
+    (n selected)
+    (bible/option-range-from 1 n selected)))
+
+(define bible/option-range-from
+  (lambda
+    (i n selected)
+    (if
+      (> i n)
+      ""
+      (string-append
+        (html/option
+          (as-str i)
+          (as-str i)
+          (string-eq (as-str selected) (as-str i)))
+        (bible/option-range-from (+ i 1) n selected)))))
+
+(define bible/parse-int
+  (lambda (s) (bible/parse-int-from s 1 200)))
+
+(define bible/parse-int-from
+  (lambda
+    (s i max)
+    (if
+      (> i max)
+      0
+      (if
+        (string-eq (as-str s) (as-str i))
+        i
+        (bible/parse-int-from s (+ i 1) max)))))
+
+(define bible/parse-ref
+  (lambda
+    (ref)
+    (find-row (quote bible-verse) "ref" (as-str ref))))
+
+(define bible/prev-ref
+  (lambda
+    (book chapter)
+    (let
+      ((ab (bible/abbrev-of book))
+        (c (bible/parse-int (bible/safe-chapter book chapter)))
+        (ord (bible/book-ordinal book)))
+      (if
+        (> c 1)
+        (list ab (as-str (- c 1)))
+        (if
+          (> ord 1)
+          (let
+            ((prev (bible/book-by-ordinal (- ord 1))))
+            (if
+              (null? prev)
+              ()
+              (list
+                (dict-get prev "abbrev")
+                (as-str (bible/chapter-count (dict-get prev "abbrev"))))))
+          ())))))
 
 (define bible/random-row
-  (lambda ()
-    (find-random 'bible-verse))
-  "Random bible-verse row.")
+  (lambda () (find-random (quote bible-verse))))
 
-(define bible/verse-li
-  (lambda (row)
-    (let ((fields (cdr row)))
-      (let ((n (dict-get fields "verse"))
-            (text (dict-get fields "text"))
-            (ref (dict-get fields "ref")))
-        (html/li (html/attr "id" (as-str ref))
-          (html/join
-            (list
-              (html/tag "sup" "" (html/text (as-str n)))
-              " "
-              (html/text text)))))))
-  "HTML li for one verse row (optional focus).")
+(define bible/ref
+  (lambda
+    (book chapter verse)
+    (string-append
+      "BSB:"
+      (bible/abbrev-of book)
+      ":"
+      (as-str chapter)
+      ":"
+      (as-str verse))))
 
-;; Fragment: chapter body only (htmx #dabar-panel).
-(define bible/chapter-panel
-  (lambda (book chapter focus-verse)
-    (let ((rows (bible/chapter book chapter))
-          (ab (bible/abbrev-of book))
-          (ch (bible/safe-chapter book chapter)))
+(define bible/safe-chapter
+  (lambda
+    (book chapter)
+    (let
+      ((max (bible/chapter-count (bible/abbrev-of book)))
+        (c (if (null? chapter) "1" (as-str chapter))))
+      (if (bible/int-in-range? c 1 max) c "1"))))
+
+(define bible/search
+  (lambda
+    (q)
+    (find-text (quote bible-verse) "text" (as-str q) 40)))
+
+(define bible/search-form
+  (lambda
+    (q)
+    (html/form
+      "GET"
+      "/dabar"
+      (html/attrs
+        (list
+          (html/attr "class" "card bible-search")
+          (html/attr "hx-get" "/dabar")
+          (html/attr "hx-target" "#dabar-panel")
+          (html/attr "hx-swap" "innerHTML")
+          (html/attr "hx-push-url" "true")))
       (html/join
         (list
-          (html/h1
-            (string-append (as-str book) " " (as-str chapter)))
-          (bible/nav-links ab ch)
-          ;; list-style:none — <ol> markers + <sup> verse nums was double-numbering
-          (html/tag "ol"
-            (html/attrs
+          (html/label
+            ""
+            (html/join
               (list
-                (html/attr "class" "bible-chapter")
-                (html/attr "style"
-                  "list-style:none;padding-left:0;margin:.25rem 0")))
-            (list/foldl
-              (lambda (acc row) (string-append acc (bible/verse-li row)))
-              ""
-              rows))
-          (bible/nav-links ab ch)
-          (if (null? focus-verse)
-              ""
-              (html/p*
-                (html/attr "class" "muted")
-                (string-append
-                  "Focus verse "
-                  (as-str focus-verse)
-                  ": "
-                  (as-str (bible/verse book chapter focus-verse)))))))))
-  "htmx chapter body fragment for book/chapter.")
-
-;; Alias for older call sites (lambda, not bare var — safe on DB reload).
-(define bible/chapter-html
-  (lambda (book chapter focus-verse)
-    (bible/chapter-panel book chapter focus-verse))
-  "Alias of bible/chapter-panel for older call sites.")
+                "Search "
+                (html/text-input
+                  "q"
+                  (html/attrs
+                    (list
+                      (html/attr "value" (if (null? q) "" (as-str q)))
+                      (html/attr "placeholder" "love")))))))
+          " "
+          (html/button (html/attr "type" "submit") "Find"))))))
 
 (define bible/search-panel
-  (lambda (q)
-    (let ((hits (bible/search q)))
+  (lambda
+    (q)
+    (let
+      ((hits (bible/search q)))
       (html/join
         (list
           (html/h1 (string-append "Search: " (as-str q)))
-          (html/ul (html/attr "class" "bible-hits")
+          (html/ul
+            (html/attr "class" "bible-hits")
             (list/foldl
-              (lambda (acc row)
-                (let ((f (cdr row)))
-                  (string-append acc
-                    (html/li ""
+              (lambda
+                (acc row)
+                (let
+                  ((f (cdr row)))
+                  (string-append
+                    acc
+                    (html/li
+                      ""
                       (html/join
                         (list
                           (html/a
@@ -267,250 +568,62 @@
               hits))
           (html/p*
             (html/attr "class" "muted")
-            "Berean Standard Bible")))))
-  "Search results panel HTML for query.")
+            "Berean Standard Bible"))))))
 
-;; Protestant BSB chapter counts (abbrev . n). Used for chapter <select>.
-(define bible/chapter-counts
-  (list
-    (list "Gen" 50) (list "Exod" 40) (list "Lev" 27) (list "Num" 36)
-    (list "Deut" 34) (list "Josh" 24) (list "Judg" 21) (list "Ruth" 4)
-    (list "1Sam" 31) (list "2Sam" 24) (list "1Kgs" 22) (list "2Kgs" 25)
-    (list "1Chr" 29) (list "2Chr" 36) (list "Ezra" 10) (list "Neh" 13)
-    (list "Esth" 10) (list "Job" 42) (list "Ps" 150) (list "Prov" 31)
-    (list "Eccl" 12) (list "Song" 8) (list "Isa" 66) (list "Jer" 52)
-    (list "Lam" 5) (list "Ezek" 48) (list "Dan" 12) (list "Hos" 14)
-    (list "Joel" 3) (list "Amos" 9) (list "Obad" 1) (list "Jonah" 4)
-    (list "Mic" 7) (list "Nah" 3) (list "Hab" 3) (list "Zeph" 3)
-    (list "Hag" 2) (list "Zech" 14) (list "Mal" 4)
-    (list "Matt" 28) (list "Mark" 16) (list "Luke" 24) (list "John" 21)
-    (list "Acts" 28) (list "Rom" 16) (list "1Cor" 16) (list "2Cor" 13)
-    (list "Gal" 6) (list "Eph" 6) (list "Phil" 4) (list "Col" 4)
-    (list "1Thess" 5) (list "2Thess" 3) (list "1Tim" 6) (list "2Tim" 4)
-    (list "Titus" 3) (list "Phlm" 1) (list "Heb" 13) (list "Jas" 5)
-    (list "1Pet" 5) (list "2Pet" 3) (list "1John" 5) (list "2John" 1)
-    (list "3John" 1) (list "Jude" 1) (list "Rev" 22))
-  "Alist of book abbrev to chapter count (BSB).")
+(define bible/verse
+  (lambda
+    (book chapter verse)
+    (let
+      ((row (bible/verse-row book chapter verse)))
+      (if (null? row) () (dict-get row "text")))))
 
-(define bible/chapter-count
-  (lambda (abbrev)
-    (list/foldl
-      (lambda (acc pair)
-        (if (string-eq (car pair) (as-str abbrev))
-            (car (cdr pair))
-            acc))
-      1
-      bible/chapter-counts))
-  "Chapter count for book abbrev.")
-
-(define bible/int-in-range?
-  (lambda (s lo hi)
-    (bible/int-in-range-from? s lo hi lo))
-  "True if n is int in inclusive lo..hi.")
-
-(define bible/int-in-range-from?
-  (lambda (s lo hi i)
-    (if (> i hi)
-        #f
-        (if (string-eq (as-str s) (as-str i))
-            #t
-            (bible/int-in-range-from? s lo hi (+ i 1)))))
-  "Parse string then int-in-range?.")
-
-(define bible/safe-chapter
-  (lambda (book chapter)
-    (let ((max (bible/chapter-count (bible/abbrev-of book)))
-          (c (if (null? chapter) "1" (as-str chapter))))
-      (if (bible/int-in-range? c 1 max) c "1")))
-  "Clamp/parse chapter number for book.")
-
-(define bible/option-range
-  (lambda (n selected)
-    (bible/option-range-from 1 n selected))
-  "HTML option tags for integer range 1..n.")
-
-(define bible/option-range-from
-  (lambda (i n selected)
-    (if (> i n)
-        ""
-        (string-append
-          (html/option (as-str i) (as-str i)
-            (string-eq (as-str selected) (as-str i)))
-          (bible/option-range-from (+ i 1) n selected))))
-  "option-range starting at lo through hi.")
-
-(define bible/book-options
-  (lambda (current)
-    (list/foldl
-      (lambda (acc row)
-        (let ((f (cdr row)))
-          (let ((name (dict-get f "name"))
-                (abbrev (dict-get f "abbrev")))
-            (string-append acc
-              (html/option (as-str abbrev) (as-str name)
-                (if (string-eq (as-str current) (as-str abbrev))
-                    #t
-                    (string-eq (as-str current) (as-str name))))))))
-      ""
-      (bible/books)))
-  "HTML book select options; selected abbrev marked.")
+(define bible/verse-li
+  (lambda
+    (row)
+    (let
+      ((fields (cdr row)))
+      (let
+        ((n (dict-get fields "verse"))
+          (text (dict-get fields "text"))
+          (ref (dict-get fields "ref")))
+        (html/li
+          (html/attr "id" (as-str ref))
+          (html/join
+            (list
+              (html/tag "sup" "" (html/text (as-str n)))
+              " "
+              (html/text text))))))))
 
 (define bible/verse-options
-  (lambda (book chapter selected)
+  (lambda
+    (book chapter selected)
     (string-append
-      (html/option "" "—"
-        (if (null? selected) #t (string-eq (as-str selected) "")))
+      (html/option
+        ""
+        "\226\128\148"
+        (if
+          (null? selected)
+          #t
+          (string-eq (as-str selected) "")))
       (list/foldl
-        (lambda (acc row)
-          (let ((n (dict-get (cdr row) "verse")))
-            (string-append acc
-              (html/option (as-str n) (as-str n)
+        (lambda
+          (acc row)
+          (let
+            ((n (dict-get (cdr row) "verse")))
+            (string-append
+              acc
+              (html/option
+                (as-str n)
+                (as-str n)
                 (string-eq (as-str selected) (as-str n))))))
         ""
-        (bible/chapter book chapter))))
-  "HTML verse select options for book/chapter.")
+        (bible/chapter book chapter)))))
 
-;; Dropdown navigator: book / chapter / verse.
-;; change from:select reloads #dabar-panel so option lists stay valid.
-;; Selecting a verse drops you into the verse study view.
-(define bible/go-form
-  (lambda (b c verse)
-    (let ((ab (bible/abbrev-of b))
-          (ch (bible/safe-chapter b c))
-          (vs (if (null? verse) "" (as-str verse))))
-      (html/form "GET" "/dabar"
-        (html/attrs
-          (list
-            (html/attr "class" "card bible-go")
-            (html/attr "hx-get" "/dabar")
-            (html/attr "hx-target" "#dabar-panel")
-            (html/attr "hx-swap" "innerHTML")
-            (html/attr "hx-push-url" "true")
-            (html/attr "hx-trigger" "submit, change from:select")))
-        (html/join
-          (list
-            (html/label ""
-              (html/join
-                (list
-                  "Book "
-                  (html/select "book" "" (bible/book-options ab)))))
-            " "
-            (html/label ""
-              (html/join
-                (list
-                  "Chapter "
-                  (html/select "chapter" ""
-                    (bible/option-range
-                      (bible/chapter-count ab) ch)))))
-            " "
-            (html/label ""
-              (html/join
-                (list
-                  "Verse "
-                  (html/select "verse" ""
-                    (bible/verse-options ab ch vs)))))
-            " "
-            (html/button (html/attr "type" "submit") "Go"))))))
-  "Book/chapter/verse navigator form (htmx).")
+(define bible/verse-row
+  (lambda
+    (book chapter verse)
+    (find-row
+      (quote bible-verse)
+      "ref"
+      (bible/ref book chapter verse))))
 
-(define bible/search-form
-  (lambda (q)
-    (html/form "GET" "/dabar"
-      (html/attrs
-        (list
-          (html/attr "class" "card bible-search")
-          (html/attr "hx-get" "/dabar")
-          (html/attr "hx-target" "#dabar-panel")
-          (html/attr "hx-swap" "innerHTML")
-          (html/attr "hx-push-url" "true")))
-      (html/join
-        (list
-          (html/label ""
-            (html/join
-              (list
-                "Search "
-                (html/text-input "q"
-                  (html/attrs
-                    (list
-                      (html/attr "value" (if (null? q) "" (as-str q)))
-                      (html/attr "placeholder" "love")))))))
-          " "
-          (html/button (html/attr "type" "submit") "Find")))))
-  "Search form for bible query.")
-
-;; Chapter reader body: forms + reading (swapped by htmx into #dabar-panel).
-(define bible/chapter-reader
-  (lambda ()
-    (let ((ref (request-param "ref"))
-          (q (request-param "q"))
-          (rnd (request-param "random")))
-      (if (null? rnd)
-          (if (null? q)
-              (if (null? ref)
-                  (let ((book (request-param "book"))
-                        (chapter (request-param "chapter"))
-                        (verse (request-param "verse")))
-                    (let ((b (if (null? book) "John" (as-str book)))
-                          (c (bible/safe-chapter
-                                (if (null? book) "John" book)
-                                (if (null? chapter) "3" chapter)))
-                          (v (if (null? verse) () verse)))
-                      (html/join
-                        (list
-                          (bible/go-form b c v)
-                          (bible/search-form ())
-                          (bible/chapter-panel b c v)
-                          (html/p*
-                            (html/attr "class" "muted")
-                            (html/join
-                              (list
-                                "Berean Standard Bible · "
-                                (bible/ref b c (if (null? v) 1 v))
-                                " · "
-                                (html/a "/strongs" "Strong's"))))))))
-                  (let ((row (bible/parse-ref ref)))
-                    (if (null? row)
-                        (html/join
-                          (list
-                            (bible/go-form "John" "3" ())
-                            (html/p*
-                              (html/attr "class" "err")
-                              (string-append "Unknown ref " (as-str ref)))))
-                        (let ((book (dict-get row "book"))
-                              (chapter (dict-get row "chapter"))
-                              (verse (dict-get row "verse")))
-                          (html/join
-                            (list
-                              (bible/go-form book chapter verse)
-                              (bible/search-form ())
-                              (bible/chapter-panel book chapter verse)
-                              (html/p*
-                                (html/attr "class" "muted")
-                                (string-append
-                                  "ref "
-                                  (as-str ref)
-                                  " · Berean Standard Bible"))))))))
-              (html/join
-                (list
-                  (bible/go-form "John" "3" ())
-                  (bible/search-form q)
-                  (bible/search-panel q))))
-          ;; random=1 → pick a verse, show its chapter with focus
-          (let ((row (bible/random-row)))
-            (if (null? row)
-                (html/p* (html/attr "class" "err") "no verses seeded")
-                (let ((f (cdr row)))
-                  (let ((book (dict-get f "abbrev"))
-                        (chapter (dict-get f "chapter"))
-                        (verse (dict-get f "verse")))
-                    (html/join
-                      (list
-                        (bible/go-form book chapter verse)
-                        (bible/search-form ())
-                        (bible/chapter-panel book chapter verse)
-                        (html/p*
-                          (html/attr "class" "muted")
-                          (string-append
-                            "random · "
-                            (as-str (dict-get f "ref")))))))))))))
-  "Full chapter reader body: forms plus reading panel.")

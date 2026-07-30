@@ -1,0 +1,100 @@
+;; package structed/list -- exported from live branch system/main
+;; Sync: scripts/pp_sync.py pull|push
+
+(define structed/list/drop
+  (lambda
+    (xs n)
+    (if
+      (or (null? xs) (<= n 0))
+      xs
+      (structed/list/drop (cdr xs) (- n 1)))))
+
+(define structed/list/index-of
+  (lambda
+    (xs x eq?)
+    (structed/list/index-of-acc xs x eq? 0)))
+
+(define structed/list/index-of-acc
+  (lambda
+    (xs x eq? i)
+    (if
+      (null? xs)
+      -1
+      (if
+        (eq? (car xs) x)
+        i
+        (structed/list/index-of-acc (cdr xs) x eq? (+ i 1))))))
+
+(define structed/list/insert-at
+  (lambda
+    (xs i v)
+    (if
+      (or (null? xs) (<= i 0))
+      (cons v xs)
+      (cons
+        (car xs)
+        (structed/list/insert-at (cdr xs) (- i 1) v)))))
+
+(define structed/list/insert-list-at
+  (lambda
+    (xs i ys)
+    (if
+      (null? ys)
+      xs
+      (structed/list/insert-list-at
+        (structed/list/insert-at xs i (car ys))
+        (+ i 1)
+        (cdr ys)))))
+
+(define structed/list/nth
+  (lambda
+    (xs i)
+    (if
+      (null? xs)
+      ()
+      (if
+        (<= i 0)
+        (car xs)
+        (structed/list/nth (cdr xs) (- i 1))))))
+
+(define structed/list/remove-at
+  (lambda
+    (xs i)
+    (if
+      (null? xs)
+      (list)
+      (if
+        (<= i 0)
+        (cdr xs)
+        (cons
+          (car xs)
+          (structed/list/remove-at (cdr xs) (- i 1)))))))
+
+(define structed/list/replace-at
+  (lambda
+    (xs i v)
+    (if
+      (null? xs)
+      (list)
+      (if
+        (<= i 0)
+        (cons v (cdr xs))
+        (cons
+          (car xs)
+          (structed/list/replace-at (cdr xs) (- i 1) v))))))
+
+(define structed/list/split-at
+  (lambda
+    (xs i)
+    (list
+      (structed/list/take xs i)
+      (structed/list/drop xs i))))
+
+(define structed/list/take
+  (lambda
+    (xs n)
+    (if
+      (or (null? xs) (<= n 0))
+      (list)
+      (cons (car xs) (structed/list/take (cdr xs) (- n 1))))))
+

@@ -1,15 +1,17 @@
-;; package weight -- exported from live branch admin/personal
+;; package weight -- exported from live branch system/main
 ;; Sync: scripts/pp_sync.py pull|push
 
 (define weight/all
-  (lambda ()
+  (lambda
+    ()
     (list/foldl
       weight/insert-sorted
       ()
       (rows (quote weight-log) 500))))
 
 (define weight/chart-svg
-  (lambda (rows)
+  (lambda
+    (rows)
     (let
       ((n (weight/len rows)))
       (if
@@ -42,7 +44,8 @@
                 "</svg>"))))))))
 
 (define weight/coords
-  (lambda (rows i n wmin wmax)
+  (lambda
+    (rows i n wmin wmax)
     (if
       (null? rows)
       (list)
@@ -56,7 +59,8 @@
   (lambda (id) (delete (quote weight-log) id)))
 
 (define weight/dots
-  (lambda (coords)
+  (lambda
+    (coords)
     (list/foldl
       (lambda
         (acc p)
@@ -71,13 +75,15 @@
       coords)))
 
 (define weight/field
-  (lambda (fields key)
+  (lambda
+    (fields key)
     (let
       ((v (dict-get fields key)))
       (if (null? v) "" (as-str v)))))
 
 (define weight/fields
-  (lambda (ts weight)
+  (lambda
+    (ts weight)
     (dict-set*
       "{}"
       (list
@@ -89,13 +95,15 @@
         (as-str (whoami))))))
 
 (define weight/fmt
-  (lambda (w)
+  (lambda
+    (w)
     (let
       ((s (as-str w)))
       (if (blank? s) s (as-str (parse-float s))))))
 
 (define weight/form
-  (lambda ()
+  (lambda
+    ()
     (html/div
       (html/attr "class" "card")
       (html/join
@@ -119,7 +127,8 @@
                 (html/hidden "action" "log")))))))))
 
 (define weight/insert-sorted
-  (lambda (sorted row)
+  (lambda
+    (sorted row)
     (if
       (null? sorted)
       (list row)
@@ -134,19 +143,23 @@
             (weight/insert-sorted (cdr sorted) row)))))))
 
 (define weight/last
-  (lambda (xs)
+  (lambda
+    (xs)
     (if (null? (cdr xs)) (car xs) (weight/last (cdr xs)))))
 
 (define weight/len
-  (lambda (xs)
+  (lambda
+    (xs)
     (list/foldl (lambda (acc x) (+ acc 1)) 0 xs)))
 
 (define weight/log
-  (lambda (date weight)
+  (lambda
+    (date weight)
     (create (quote weight-log) (weight/fields date weight))))
 
 (define weight/max-w
-  (lambda (rows)
+  (lambda
+    (rows)
     (if
       (null? rows)
       0.0
@@ -158,7 +171,8 @@
         (cdr rows)))))
 
 (define weight/min-w
-  (lambda (rows)
+  (lambda
+    (rows)
     (if
       (null? rows)
       0.0
@@ -170,7 +184,8 @@
         (cdr rows)))))
 
 (define weight/page
-  (lambda ()
+  (lambda
+    ()
     (if
       (string-eq (request-method) "POST")
       (let
@@ -193,7 +208,8 @@
             (weight/summary rows)))))))
 
 (define weight/pts-str
-  (lambda (coords)
+  (lambda
+    (coords)
     (list/foldl
       (lambda
         (acc p)
@@ -207,7 +223,8 @@
       coords)))
 
 (define weight/summary
-  (lambda (rows)
+  (lambda
+    (rows)
     (let
       ((n (weight/len rows)))
       (if
@@ -233,7 +250,8 @@
   (lambda (row) (weight/field (cdr row) "ts")))
 
 (define weight/wt-num
-  (lambda (row)
+  (lambda
+    (row)
     (let
       ((s (weight/wt-of row)))
       (if (blank? s) 0.0 (parse-float s)))))
@@ -242,13 +260,15 @@
   (lambda (row) (weight/field (cdr row) "weight")))
 
 (define weight/x-of
-  (lambda (i n)
+  (lambda
+    (i n)
     (if
       (<= n 1)
       (+ 60.0 (/ 680.0 2.0))
       (+ 60.0 (* (+ 0.0 i) (/ 680.0 (+ 0.0 (- n 1))))))))
 
 (define weight/y-of
-  (lambda (w wmin wmax)
+  (lambda
+    (w wmin wmax)
     (+ 20.0 (* (- 1.0 (/ (- w wmin) (- wmax wmin))) 300.0))))
 
