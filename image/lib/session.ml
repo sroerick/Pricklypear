@@ -1112,6 +1112,134 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
           Lwt.return
             (Pricklypear_lisp.Ast.VStr "backlinks: need id-or-path [, limit]"));
 
+  (* Hierarchical tree prims (notes.tree-cutover K0). Direct tree_nodes
+     access for folder/note/heading — not kind=datum CRUD. *)
+  register_crud "tree/get"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr path ] -> Crud.tree_get t.store ~path
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr "tree/get: need path"));
+
+  register_crud "tree/list"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr prefix ] ->
+          Crud.tree_list t.store ~prefix ()
+      | [ Pricklypear_lisp.Ast.VStr prefix; Pricklypear_lisp.Ast.VInt depth ] ->
+          Crud.tree_list t.store ~prefix ~depth:(Int64.to_int depth) ()
+      | [ Pricklypear_lisp.Ast.VStr prefix
+        ; Pricklypear_lisp.Ast.VInt depth
+        ; Pricklypear_lisp.Ast.VInt lim
+        ] ->
+          Crud.tree_list t.store ~prefix ~depth:(Int64.to_int depth)
+            ~limit:(Int64.to_int lim) ()
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr
+               "tree/list: need prefix [, depth [, limit]]"));
+
+  register_crud "tree/upsert"
+    (fun args ->
+      let uname = actor () in
+      if uname = "anonymous" then deny_anon "tree/upsert"
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr path
+          ; Pricklypear_lisp.Ast.VStr kind
+          ; Pricklypear_lisp.Ast.VStr type_name
+          ; Pricklypear_lisp.Ast.VStr body_json
+          ] ->
+            Crud.tree_upsert t.store ~path ~kind ~type_name ~body_json
+              ~author:uname
+        | _ ->
+            Lwt.return
+              (Pricklypear_lisp.Ast.VStr
+                 "tree/upsert: need path kind type body-json"));
+
+  register_crud "tree/delete"
+    (fun args ->
+      let uname = actor () in
+      if uname = "anonymous" then deny_anon "tree/delete"
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr path ] ->
+            Crud.tree_delete t.store ~path ~recursive:false
+        | [ Pricklypear_lisp.Ast.VStr path; Pricklypear_lisp.Ast.VBool rec_ ] ->
+            Crud.tree_delete t.store ~path ~recursive:rec_
+        | [ Pricklypear_lisp.Ast.VStr path; Pricklypear_lisp.Ast.VStr flag ]
+          when flag = "recursive" || flag = "r" || flag = "#t" ->
+            Crud.tree_delete t.store ~path ~recursive:true
+        | _ ->
+            Lwt.return
+              (Pricklypear_lisp.Ast.VStr
+                 "tree/delete: need path [, recursive]"));
+
+  register_crud "tree/move"
+    (fun args ->
+      let uname = actor () in
+      if uname = "anonymous" then deny_anon "tree/move"
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr old_path
+          ; Pricklypear_lisp.Ast.VStr new_path
+          ] ->
+            Crud.tree_move t.store ~old_path ~new_path
+        | _ ->
+            Lwt.return
+              (Pricklypear_lisp.Ast.VStr "tree/move: need old-path new-path"));
+
+  register_crud "tree/get-uuid"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr uuid ] ->
+          Crud.tree_get_uuid t.store ~uuid
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr "tree/get-uuid: need uuid"));
+
+  register_crud "tree/find-by"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr kind
+        ; Pricklypear_lisp.Ast.VStr field
+        ; Pricklypear_lisp.Ast.VStr value
+        ] ->
+          Crud.tree_find_by t.store ~kind:(Some kind) ~field ~value ()
+      | [ Pricklypear_lisp.Ast.VStr kind
+        ; Pricklypear_lisp.Ast.VStr field
+        ; Pricklypear_lisp.Ast.VStr value
+        ; Pricklypear_lisp.Ast.VInt n
+        ] ->
+          Crud.tree_find_by t.store ~kind:(Some kind) ~field ~value
+            ~limit:(Int64.to_int n) ()
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr
+               "tree/find-by: need kind field value [, limit]"));
+
+  (* Pure path helpers (no DB). *)
+  register_crud "tree/path-label"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr s ] ->
+          Lwt.return (Crud.tree_path_label s)
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr "tree/path-label: need string"));
+
+  register_crud "tree/garden-root"
+    (fun args ->
+      match args with
+      | [] ->
+          Lwt.return (Crud.tree_garden_root ~user:(actor ()))
+      | [ Pricklypear_lisp.Ast.VStr user ] ->
+          Lwt.return (Crud.tree_garden_root ~user)
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr "tree/garden-root: [] or user"));
+
   (* (list-branches) -> VList of "owner/name" strings *)
   Primitives.register tbl "list-branches"
     (fun _args ->

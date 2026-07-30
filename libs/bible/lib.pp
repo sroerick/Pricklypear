@@ -354,6 +354,49 @@
         "&chapter="
         (as-str (car (cdr pair)))))))
 
+;; notes.links-and-roam / dabar.note-bible-links: sexp bible refs → /dabar
+(define bible/link-href
+  (lambda
+    (book chapter verse)
+    (let
+      ((ab (bible/abbrev-of book))
+        (ch (bible/safe-chapter book chapter))
+        (v (if (null? verse) "" (as-str verse))))
+      (if
+        (string-eq v "")
+        (string-append "/dabar?book=" ab "&chapter=" ch)
+        (string-append
+          "/dabar?book="
+          ab
+          "&chapter="
+          ch
+          "&verse="
+          v)))))
+
+(define bible/link-html
+  (lambda
+    (book chapter verse label)
+    (let
+      ((ab (bible/abbrev-of book))
+        (ch (bible/safe-chapter book chapter))
+        (v (if (null? verse) "" (as-str verse)))
+        (lab
+          (if
+            (or (null? label) (string-eq (as-str label) ""))
+            (if
+              (or (null? verse) (string-eq (as-str verse) ""))
+              (string-append (as-str book) " " (as-str chapter))
+              (string-append
+                (as-str book)
+                " "
+                (as-str chapter)
+                ":"
+                (as-str verse)))
+            (as-str label))))
+      (html/a
+        (bible/link-href ab ch (if (string-eq v "") () v))
+        (html/text lab)))))
+
 (define bible/int-in-range-from?
   (lambda
     (s lo hi i)

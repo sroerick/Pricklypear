@@ -35,6 +35,7 @@ let prepare () : (Session.t * int * int) Lwt.t =
   ignore (Ops_log.info ~component:"boot" "Pricklypear image starting up");
   Printf.eprintf "[boot] Pricklypear image starting up...\n%!";
   Mirage_crypto_rng_unix.use_default ();
+  Random.self_init ();
   let manifest = manifest_from_env () in
   let cfg = Store.config_from_env () in
   let store = Store.make ~cfg ~branch_id:manifest.branch_id () in

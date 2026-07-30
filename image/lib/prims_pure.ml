@@ -1164,6 +1164,101 @@ let media_id_of slug =
   let n = String.length media_prefix in
   String.sub slug n (String.length slug - n)
 
+(* Parse (bible BOOK ch [verse] [verse-to] ["label"]) starting at '('. Returns
+   Some (end_exclusive, book, chapter, verse_opt, label). verse_opt is "" if
+   chapter-only. label defaults to a human ref. *)
+let parse_bible_sexp_at (s : string) (start : int) :
+    (int * string * string * string * string) option =
+  let len = String.length s in
+  if start >= len || s.[start] <> '(' then None
+  else
+    let skip_ws i =
+      let rec go i =
+        if i < len && (s.[i] = ' ' || s.[i] = '\t' || s.[i] = '\n' || s.[i] = '\r')
+        then go (i + 1)
+        else i
+      in
+      go i
+    in
+    let i0 = skip_ws (start + 1) in
+    if i0 + 5 > len then None
+    else if String.lowercase_ascii (String.sub s i0 5) <> "bible" then None
+    else
+      let after_kw = i0 + 5 in
+      let ok_kw_end =
+        after_kw >= len
+        ||
+        let c = s.[after_kw] in
+        c = ' ' || c = '\t' || c = '\n' || c = '\r' || c = '"' || c = ')'
+        || (c >= '0' && c <= '9')
+      in
+      if not ok_kw_end then None
+      else
+        let parse_token i =
+          let i = skip_ws i in
+          if i >= len then None
+          else if s.[i] = ')' then Some (`Close, i + 1)
+          else if s.[i] = '"' then
+            let rec find_q j =
+              if j >= len then None
+              else if s.[j] = '\\' && j + 1 < len then find_q (j + 2)
+              else if s.[j] = '"' then Some j
+              else find_q (j + 1)
+            in
+            (match find_q (i + 1) with
+             | None -> None
+             | Some q ->
+                 let raw = String.sub s (i + 1) (q - i - 1) in
+                 Some (`Str raw, q + 1))
+          else
+            let rec end_atom j =
+              if j >= len then j
+              else
+                match s.[j] with
+                | ' ' | '\t' | '\n' | '\r' | ')' | '"' -> j
+                | _ -> end_atom (j + 1)
+            in
+            let j = end_atom i in
+            if j = i then None
+            else Some (`Atom (String.sub s i (j - i)), j)
+        in
+        let rec gather i acc =
+          match parse_token i with
+          | None -> None
+          | Some (`Close, i') -> Some (List.rev acc, i')
+          | Some (`Str v, i') | Some (`Atom v, i') -> gather i' (v :: acc)
+        in
+        match gather after_kw [] with
+        | None -> None
+        | Some (args, end_i) ->
+            (match args with
+             | book :: ch :: rest when book <> "" && ch <> "" ->
+                 let verse, label =
+                   match rest with
+                   | [] -> ("", book ^ " " ^ ch)
+                   | [ v ] ->
+                       (* verse or label-only? prefer verse if numeric *)
+                       let numeric =
+                         String.length v > 0
+                         && String.for_all (function '0' .. '9' -> true | _ -> false) v
+                       in
+                       if numeric then (v, book ^ " " ^ ch ^ ":" ^ v)
+                       else ("", v)
+                   | v :: lab :: _ ->
+                       let numeric =
+                         String.length v > 0
+                         && String.for_all (function '0' .. '9' -> true | _ -> false) v
+                       in
+                       if numeric then
+                         let lab =
+                           if lab = "" then book ^ " " ^ ch ^ ":" ^ v else lab
+                         in
+                         (v, lab)
+                       else ("", v)
+                 in
+                 Some (end_i, book, ch, verse, label)
+             | _ -> None)
+
 let render_links_from_string (s : string) : string =
   let len = String.length s in
   let buf = Buffer.create (len + 64) in
@@ -1187,6 +1282,19 @@ let render_links_from_string (s : string) : string =
   let emit_wiki slug lab =
     Buffer.add_string buf "<a href=\"/notes?slug=";
     html_escape_to_buffer buf slug;
+    Buffer.add_string buf "\">";
+    html_escape_to_buffer buf lab;
+    Buffer.add_string buf "</a>"
+  in
+  let emit_bible book ch verse lab =
+    Buffer.add_string buf "<a class=\"bible-ref\" href=\"/dabar?book=";
+    html_escape_to_buffer buf book;
+    Buffer.add_string buf "&chapter=";
+    html_escape_to_buffer buf ch;
+    if verse <> "" then begin
+      Buffer.add_string buf "&verse=";
+      html_escape_to_buffer buf verse
+    end;
     Buffer.add_string buf "\">";
     html_escape_to_buffer buf lab;
     Buffer.add_string buf "</a>"
@@ -1232,12 +1340,25 @@ let render_links_from_string (s : string) : string =
             loop (end_i + 2)
           end
     else
-      let j = ref i in
-      while !j < len && not (at_open !j) do
-        incr j
-      done;
-      html_escape_to_buffer buf (String.sub s i (!j - i));
-      loop !j
+      match parse_bible_sexp_at s i with
+      | Some (end_i, book, ch, verse, lab) ->
+          emit_bible book ch verse lab;
+          loop end_i
+      | None ->
+          let j = ref i in
+          while !j < len && not (at_open !j) && s.[!j] <> '(' do
+            incr j
+          done;
+          (* If we stopped on '(', try bible; else emit through j. If '(' but
+             not bible, emit the paren and continue. *)
+          if !j > i then begin
+            html_escape_to_buffer buf (String.sub s i (!j - i));
+            loop !j
+          end else if s.[i] = '(' then begin
+            html_escape_to_buffer buf "(";
+            loop (i + 1)
+          end else
+            loop (i + 1)
   in
   loop 0;
   Buffer.contents buf
@@ -1624,6 +1745,24 @@ let prim_xml_parse args =
      HTTP/2 200\r\n  (or "HTTP/1.1 200 OK")
      content-type: text/html\r\n
    Returns a JSON object string with lowercased keys. *)
+(** (random-uuid) -> VStr canonical uuid. Uses stdlib Random (seeded at process start). *)
+let prim_random_uuid (_args : value list) : value =
+  let b = Bytes.create 16 in
+  for i = 0 to 15 do Bytes.set b i (Char.chr (Random.int 256)) done;
+  (* RFC 4122 version 4 + variant 10xx *)
+  Bytes.set b 6 (Char.chr ((Char.code (Bytes.get b 6) land 0x0f) lor 0x40));
+  Bytes.set b 8 (Char.chr ((Char.code (Bytes.get b 8) land 0x3f) lor 0x80));
+  let hex_byte i = Printf.sprintf "%02x" (Char.code (Bytes.get b i)) in
+  VStr
+    (String.concat ""
+       [ hex_byte 0; hex_byte 1; hex_byte 2; hex_byte 3; "-"
+       ; hex_byte 4; hex_byte 5; "-"
+       ; hex_byte 6; hex_byte 7; "-"
+       ; hex_byte 8; hex_byte 9; "-"
+       ; hex_byte 10; hex_byte 11; hex_byte 12; hex_byte 13; hex_byte 14;
+         hex_byte 15
+       ])
+
 let http_parse_headers (blob : string) : string =
   let lines = String.split_on_char '\n' blob in
   let acc = ref [] in

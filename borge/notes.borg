@@ -1,9 +1,9 @@
 (project pricklypear-notes
- (doc "Pricklypear book chapter: notes — outline-first personal knowledge (org-roam / org-mode / Obsidian-shaped) as Nopales + data_rows")
+ (doc "Pricklypear book chapter: notes — outline-first personal knowledge (org-roam / org-mode / Obsidian-shaped) as Nopales on the one-tree substrate")
  (status planned)
  (convention ocaml-dune)
  (section notes
-  (doc "Outline-first notes OS: tree documents, wiki links, dailies, capture, hypermedia structure edit")
+  (doc "Outline-first notes OS: tree documents, wiki links, dailies, capture, hypermedia structure edit, garden import")
   (status partial)
   
   (verify
@@ -12,8 +12,11 @@
    (smoke "(load-library \"notes\") installs /notes and notes/*")
    (smoke "create note with nested outline; GET /notes?slug=… shows foldable tree")
    (smoke "[[slug]] in node body becomes link; backlinks partial lists inbound")
+   (smoke "(bible Gen 2 3) in body renders dabar href; unknown book degrades")
    (smoke "(notes/daily) get-or-creates today's daily outline")
-   (smoke "pp_eval '(notes/get \"…\")' returns outline value for agents"))
+   (smoke "pp_eval '(notes/get \"…\")' returns outline value for agents")
+   (smoke "tree: folder + note + heading children round-trip via notes/doc/*")
+   (smoke "import dry-run of vault md reports counts without writing"))
   (details
    (doc (|
         =========================================================
@@ -23,11 +26,12 @@
         inspired by:
           - org-mode: hierarchical OUTLINES as the document model
           - org-roam: stable ids/slugs, backlinks, dailies, capture
-          - Obsidian: fast browse, wiki links, search (not FS religion)
+          - Obsidian: fast browse, wiki links, folder garden
 
         NOT a port of Electron Obsidian or Emacs.
-        NOT file-backed markdown under libs/ or the VPS disk.
-        Notes are durable OBJECTS in Postgres (data_rows), edited live.
+        NOT continuous file-backed markdown under libs/ or disk.
+        Notes are durable TREE NODES in Postgres, edited live.
+        One-shot vault import (Obsidian md) is in-scope; sync is not.
 
         WHY THIS OS:
           Every note/outline is a Nopales value. Agents and humans use
@@ -37,20 +41,23 @@
         =========================================================
         PRIORITY ORDER (locked)
         =========================================================
-        1. Outline tree (structure, fold, structure edit)
-        2. Wiki links [[slug]] + backlinks
-        3. Daily notes
-        4. Capture / inbox
-        5. Tags / search polish
-        6. Graph visualization (optional, late)
+        1. One-tree note substrate (folders, notes, heading children)
+        2. Outline algebra on heading nodes (structed/outline ops)
+        3. UUID wiki links + backlinks; bible sexp refs → dabar
+        4. Personal garden isolation (not system/main content)
+        5. Daily notes + capture / inbox
+        6. Migrate existing PP notes; import Obsidian vault md
+        7. Tags / search polish
+        8. Graph visualization (optional, late)
 
         =========================================================
-        TWO PACKAGES
+        PACKAGES
         =========================================================
-        outline/  — pure tree ADT + print/parse/html + structure ops
-                    (no DB; testable offline)
-        notes/    — persistence, routes, link index, dailies, capture
-                    (depends on outline/, html/*, find-row/find-text)
+        outline/   — pure tree ADT + structure ops (no DB)
+        structed/  — generic structural-edit algebra
+        notes/     — persistence façade, routes, dailies, capture
+        roam/      — link parse/reindex/render (UUID-backed)
+        bible/ + dabar/ — reader + study; bible sexp render target
 
         =========================================================
         OUT OF SCOPE (v1)
@@ -58,12 +65,13 @@
         - Full org-mode syntax (drawers, babel, agenda, clock)
         - Full CommonMark / markdown WYSIWYG
         - Force-directed graph as launch requirement
-        - File vault sync (Obsidian folder)
+        - Continuous Obsidian/FS vault sync (one-shot import only)
+        - TeX/PDF/video/EXPORT pipeline ingest from vault
         - Doltgres / DB engine swap for note history
         - Per-note function_defs (notes are data, not code)
         - Real-time multiplayer CRDT on one outline
-        - Branching data_rows (notes stay shared vault until
-          multi-user vault field is designed)
+        - Full per-lens versioned /data (one-tree placement B);
+          garden isolation is path+author scoped (see personal-garden)
    |))
   )
 
@@ -93,7 +101,9 @@
            (outline/node title body)
            (outline/node* props kids)   ; props = alist or dict JSON
 
-         Tree = root node (the note's outline field stores this tree).
+         Tree = root node. In-memory ADT unchanged. Persistence is
+         heading children under the note path (notes.storage); the
+         legacy fields.outline JSON blob is retired after cutover.
 
          WHY SEXPS:
            Nested lists ARE outlines. No heading-level parser.
@@ -114,150 +124,184 @@
            Optional later: collapsed-ids set in note props or session.
 
          PRINT/PARSE:
-           Store as JSON in data_rows.fields (Yojson-friendly:
-           nested objects/arrays), OR as a single sexp string field.
-           Recommendation: JSON tree in fields.outline object for
-           robust DB tooling; Nopales constructors convert to/from
-           internal list representation.
+           In-memory: list/ADT via outline/* constructors.
+           On disk after cutover: one heading tree_node per outline
+           node (notes.storage). encode/decode helpers still exist
+           for import, tests, and whole-subtree replace serialization.
 
          PURE PACKAGE:
-           libs/outline/lib.pp must not touch data_rows so it can
+           libs/outline/lib.pp must not touch storage so it can
            be unit-tested / reused by other apps (e.g. project plans).
     |))
    )
   )
 
   (subsection storage
-   (doc "data_rows types for notes and optional link index; shared vault")
-   (status implemented)
-   (implements libs/notes/lib.pp)
+   (doc "Notes as one-tree nodes: folders, note leaves, heading children; notes/* façade")
+   (status partial)
+   (implements libs/notes/lib.pp image/lib/tree_store.ml image/lib/crud.ml)
    (verify
-    (smoke "(deftype 'note …) via load-library notes")
     (smoke "notes/upsert then notes/get by slug returns outline")
-    (smoke "second upsert same slug updates in place (idempotent)"))
+    (smoke "second upsert same slug updates in place (idempotent)")
+    (smoke "folder path nesting depth > 1 via tree list")
+    (smoke "outline headings persist as heading children under note path")
+    (smoke "rename/move note keeps uuid; links still resolve")
+    (build "dune build image"))
 
    (details
     (doc (|
-         TYPE note (fields):
-           title    — display title
-           slug     — stable human id for URLs and [[slug]] (unique
-                      among notes; enforce via find-row + app logic;
-                      optional unique index migration later)
-           outline  — JSON tree (root node object) OR sexp string;
-                      see outline-model. Prefer JSON object.
-           tags     — string (comma-separated) or JSON array string
-           kind     — "note" | "daily" | "project" | future
-           day      — "YYYY-MM-DD" for dailies, else ""
-           body     — optional root-level prose; may be empty if all
-                      content lives in outline nodes
+         =========================================================
+         ONE-TREE NOTES (replaces flat data_rows note blob)
+         =========================================================
+         Flat CRUD (get/create/update/rows on type note) remains for
+         other product types. Notes leave that path.
 
-         TYPE note-link (optional but recommended early):
-           from_slug — source note
-           from_id   — source node id (or "" for whole-note)
-           to_slug   — target note
-           to_id     — target node id optional
-           label     — optional
+         PATH GRAMMAR (hierarchical; not data.<type>.<uuid>):
+           data.note.u.<user>.…                 — user garden root
+           data.note.u.<user>.<folder>…         — folder (kind=folder)
+           data.note.u.<user>.….<slug>          — note leaf (kind=note)
+           data.note.u.<user>.….<slug>.h.<nid>  — outline heading
+                                                   (kind=heading)
 
-         On notes/save:
-           1. upsert note row by slug
-           2. parse [[wikilinks]] from all node bodies (+ title?)
-           3. replace note-link rows for from_slug
+         Readable slug labels: [a-z0-9-]+ only (ltree-safe). Type
+         name segment stays literal "note" (not enc_label base64).
 
-         SHARED VAULT:
-           data_rows are branch-shared (existing storage rule).
-           v1 = one vault per Postgres. Multi-user isolation later
-           via author field filter or vault id — not blocking v1.
+         KINDS (tree_nodes.kind; reverse-mirror ignores these — they
+         must NEVER be written as kind=datum or path segment-3 will
+         be misread as a uuid by tree_from_nodes):
+           folder   payload body: {uuid, title}
+           note     payload body: {uuid, slug, title, tags, kind, day,
+                                   source_id?, source_path?}
+                    NO outline blob — children are truth
+           heading  payload body: {id, title, body, todo}
+                    kids = real child heading nodes under path
 
-         NOT IN function_defs:
-           Note content is not code. pp_sync does not pull notes.
-           Language packages notes/* and outline/* ARE code and
-           sync with pp_sync like todo/ui.
+         IDENTITY:
+           uuid  — stable; wiki links and refile target this
+           slug  — last path label of the note; globally unique
+                   per user garden (enforce on upsert)
+           title — display only; independent of slug
 
-         HISTORY:
-           v1 overwrite on save (updated_at). Revision log is a
-           future chapter; do not block on Doltgres.
+         OUTLINE LOAD/SAVE:
+           In-memory ADT stays outline/* + structed/* (id title body
+           todo kids). Load rebuilds ADT from heading subtree.
+           Save v1 may whole-replace heading children under note.h
+           in one transaction; fine-grained op→tree/move is a
+           tighten pass, not a blocker.
 
-         STORAGE:
-           Outlines are stored as JSON on the note row. The ltree extension is not used.
+         FAÇADE (preserve call shapes where possible):
+           notes/doc/get|upsert|list|set-folder|… keep agent/UI ABI.
+           Internals call tree prims, not (create 'note …).
+
+         KERNEL PRIMS (tree_store + thin register; additive):
+           (tree/get path)
+           (tree/list prefix [depth])
+           (tree/upsert path kind type body-json)
+           (tree/delete path [recursive?])
+           (tree/move old-path new-path)   — subtree path rewrite
+           (tree/find-by type field value)
+           (tree/get-uuid uuid)
+         Flat get/create/update/rows ABI unchanged for todos/etc.
+
+         NOTE-LINK: see links-and-roam (UUID edges).
+
+         NOT IN function_defs / system/main seed:
+           Note *content* is never package defaults. pp_sync does
+           not pull garden notes. notes/* outline/* roam/* CODE may
+           promote to main; content stays in the user garden path.
+
+         LEGACY:
+           Existing data_rows type=note rows migrate once (M0) into
+           tree nodes; after cutover notes/* does not write them.
+           folder string field and JSON outline field are retired.
+
+         HISTORY: v1 overwrite on save (updated_at). No Doltgres.
     |))
    )
   )
 
   (subsection links-and-roam
-   (doc "Wiki links [[slug]], forward links, backlinks partial")
+   (doc "Wiki links [[slug]] as UUID edges; bible sexps → dabar; media embeds")
    (status partial)
    (verify
-    (smoke "body with [[other]] creates note-link row on save")
-    (smoke "(roam/backlinks slug) lists inbound links")
-    (smoke "render turns [[other]] into anchor to /notes?slug=other")
+    (smoke "body with [[other]] creates note-link UUID edge on save")
+    (smoke "(roam/backlinks slug) lists inbound links after resolve")
+    (smoke "render turns [[other]] into anchor using current slug/title")
+    (smoke "move/rename note does not require reindex; links still resolve")
     (smoke "[[media:uuid|alt]] renders img; not indexed as note-link")
+    (smoke "(bible Gen 2 3) renders /dabar href; (bible …) not a note-link")
+    (smoke "Obsidian [[bible:Genesis2:3|…]] import normalizes to bible sexp")
     (smoke "(extract-links body) matches roam/parse-links edge cases")
-    (test "image primitives_test extract-links cases")
-    (smoke "scripts/verify_budget_stress.py parse/reindex suite"))
-   (implements libs/notes/lib.pp image/lib/prims_pure.ml)
+    (test "image primitives_test extract-links cases"))
+   (implements libs/roam/lib.pp libs/notes/lib.pp libs/bible/lib.pp libs/dabar/lib.pp image/lib/prims_pure.ml)
    (details
     (doc (|
-         TYPE note-link (rows; org-roam shape — one row per directed
-         link; branch-shared per the data_rows rule):
-           from_slug  — source note slug
-           from_id    — source node id ("" for whole-note/title)
-           to_slug    — target note slug
-           to_id      — target node id ("" for whole-note)
+         =========================================================
+         NOTE-LINK = UUID EDGE (not slug pair as source of truth)
+         =========================================================
+         TYPE note-link (data row or tree datum — implementation
+         choice; shape is what matters):
+           from_uuid  — source note uuid (stable)
+           from_id    — source heading id ("" = whole-note)
+           to_uuid    — target note uuid (stable)
+           to_id      — target heading id optional
            label      — optional display label
-           kind       — "wikilink" (default) | future "refs"
-         Indexable by (from_slug, to_slug). NOT in function_defs.
+           kind       — "wikilink" | future
+         Optional cached from_slug/to_slug for debug only — never
+         authoritative. Index by (from_uuid, to_uuid).
 
-         SYNTAX (v1):
-           [[slug]]              — link by slug
-           [[slug|label]]        — labeled link
-           [[media:uuid|alt]]    — inline media embed (not a note link)
-         No #node-id deep links v1; optional later.
+         AUTHORING SYNTAX (bodies, still human-friendly):
+           [[slug]]              — wiki by slug at write time
+           [[slug|label]]        — labeled wiki
+           [[media:uuid|alt]]    — media embed (not note-link)
+           (bible BOOK ch [verse]) — sexp bible ref (not note-link)
+           (bible BOOK ch verse-from verse-to) — optional range
+         BOOK accepts full name or bible abbrev (Gen, John, …);
+         normalized via bible/abbrev-of + bible/parse-ref helpers.
+         No #node-id deep links v1.
 
-         PARSE / REINDEX (budget-safe):
-           Link scanning MUST NOT be char-by-char Nopales recursion.
-           Kernel prim (extract-links body-string) -> list of
-           (slug label) pairs in O(n) OCaml (one eval tick).
-           Edge cases pinned by tests:
-             - three wiki links -> three pairs
-             - zero links -> ()
-             - unclosed "[[oops" -> (), no hang
-             - empty "[[]]" skipped
-             - media: prefix included in extract-links; insert path
-               skips media: so note-link rows are wiki-only
+         SAVE-TIME RESOLUTION:
+           [[slug]] -> lookup note uuid (tree/find-by); store edge
+           uuid→uuid. Missing target: still emit dangling edge with
+           to_uuid empty + unresolved slug cookie OR skip edge and
+           render stub — prefer stub-link without edge until target
+           exists (simpler). Bible sexps are NOT note-link rows.
 
-           (roam/parse-links body) wraps extract-links.
-           (roam/reindex slug outline-tree) -> delete rows where
-             from_slug=slug; insert one row per discovered wiki link
-             (de-duped). Called on notes/doc/upsert and body-touching
-             structure ops. Write MUST leave a correct index: if
-             reindex aborts (budget), that is a bug — not silent
-             half-done state. Scale targets in notes.budget-scale.
-
-         QUERY:
-           (roam/backlinks slug) -> list of
-             {from_slug, from_title, from_id}
-           Consumed by /partials/notes-backlinks?slug=
+         REINDEX:
+           (roam/reindex note-uuid outline-tree) replaces edges for
+           from_uuid. Called on content-touching saves only.
+           Move/rename/refile does NOT reindex (uuid stable).
 
          RENDER:
-           (roam/render-body body) -> HTML: plain text escaped;
-             [[slug]] / [[slug|label]] -> anchors;
-             [[media:uuid|alt]] -> img + caption (no backlink).
-           (outline/html) uses outline/render-body hook; notes
-           rebinds it to roam/render-body so bodies are not
-           html/text-escaped raw wiki syntax.
-           Render path is also under the per-call step budget
-           (see notes.budget-scale); large bodies must complete
-           inside one request. OCaml render-links is the planned
-           fix if Nopales render-acc still fails stress.
+           Wiki: resolve to_uuid → current slug/title/path; anchor
+           /notes?slug=<current>. Broken uuid → muted missing.
+           Media: unchanged img path.
+           Bible sexp: template via bible/dabar —
+             (bible/link-html book ch verse [label])
+               -> <a href="/dabar?book=…&chapter=…&verse=…">…</a>
+             optional hx-get into #dabar-panel when chrome present.
+           Kernel extract-links / render-links gain bible-sexp
+           recognition (budget-safe OCaml), or Nopales pre-pass
+           normalizes sexps before render-links — prefer OCaml once
+           syntax is frozen.
 
-         MISSING TARGETS:
-           Unknown slug still links; target page offers create-stub.
+         IMPORT NORMALIZE (garden-import):
+           Obsidian [[bible:Genesis2:3|Label]] and bare
+           [[bible:Hosea4:6]] become (bible Hosea 4 6) text in
+           heading bodies (Label dropped or becomes visible prose
+           adjacent — keep label as link text via
+           (bible Hosea 4 6 "Hosea 4:6") if three-or-four arg form
+           includes optional label string).
 
-         NOT v1 (deferred):
-           - graph view renderer (rows hold the structure; view later)
+         QUERY:
+           (roam/backlinks slug-or-uuid) -> inbound with current
+           titles/slugs for display. Partial: notes-backlinks.
+
+         NOT v1:
+           - graph view renderer
            - unlinked-mentions auto-discovery
-             (roam/find-unlinked-mentions)
            - block-ref transclusion
+           - path-qualified wiki links for duplicate slugs
     |))
    )
   )
@@ -655,6 +699,138 @@
    )
   )
 
+
+  (subsection personal-garden
+   (doc "Garden notes are personal content — not system/main; path+author isolation")
+   (status planned)
+   (verify
+    (smoke "notes created while on <user>/personal land under data.note.u.<user>")
+    (smoke "notes/* list default scope is current user garden only")
+    (smoke "pp-sync snapshot/pull never writes garden note bodies into libs/")
+    (smoke "system/main checkout does not seed or clobber garden notes"))
+   (details
+    (doc (|
+         CODE vs CONTENT:
+           notes/* roam/* outline/* packages may live on and promote
+           to system/main (shared product code).
+           Note *bodies*, folders, heading trees, note-link edges for
+           the garden MUST NOT be treated as package defaults and MUST
+           NOT be seeded from libs/*.
+
+         WHY NOT "data branch" literally (v1):
+           branching.data and one-tree placement A keep /data shared
+           (no branch_id). Full per-lens versioned data is placement B
+           and deferred. Garden isolation v1 is:
+             1. path prefix data.note.u.<username>.…
+             2. author = session user on write
+             3. notes/* list/get/search default to that prefix
+             4. never promote note rows via package seed/reseed
+         That meets "none of these notes live in main" as product
+         content without breaking shared bible/todo data.
+
+         MULTI-USER:
+           Alice does not list Bob's data.note.u.bob subtree via the
+           default notes UI/API. Admin escape hatches are explicit.
+
+         WORK BRANCH:
+           Humans edit garden while checked out on <user>/personal
+           (or dev for code spikes). Content path is user-keyed, not
+           branch-keyed, so checkout does not hide your notes.
+    |))
+   )
+  )
+
+  (subsection garden-import
+   (doc "One-shot Obsidian/markdown vault import into the personal garden tree")
+   (status planned)
+   (verify
+    (smoke "dry-run on vault root reports md/folder/link counts; zero writes")
+    (smoke "apply imports md under data.note.u.<user>.garden.…")
+    (smoke "headings become heading nodes; frontmatter title/org_id kept")
+    (smoke "[[wiki]] resolved to uuid edges in pass 2")
+    (smoke "[[bible:…]] normalized to (bible …) sexps")
+    (smoke "skip EXPORT, .obsidian, tex/pdf/video/aux")
+    (smoke "re-import same source_path/org_id updates in place"))
+   (details
+    (doc (|
+         SOURCE (example): /home/roerick/obsidian_vault
+         ~227 md files; also tex/pdf/EXPORT/video — not imported.
+
+         SKIP:
+           .obsidian/**, EXPORT/**, templates/** (optional later),
+           *.{tex,aux,log,pdf,mp4,webm,mov,pyc,png,base}
+
+         ROOT PREFIX:
+           data.note.u.<user>.garden.<vault-relative folders…>.<slug>
+           Keeps import namespace clear of native PP wiki paths;
+           refile later is tree/move.
+
+         FILE MAP:
+           directory          -> folder nodes (title = dir name)
+           file.md            -> note leaf
+           slug               <- filename stem sanitized [a-z0-9-]+
+           title              <- yaml title | first H1 | stem
+           source_id          <- yaml org_id if present
+           source_path        <- vault-relative path (re-import key)
+           tags               <- yaml tags
+           kind/day           <- Diary/YYYY-MM-DD.md => daily + day
+           # / ## / …         -> heading spine; preamble = root body
+           body markdown      -> heading body text (light normalize)
+
+         LINKS (two-pass):
+           Pass 1: create folders + notes + headings (no edges).
+           Pass 2: scan bodies for [[…]] and bible forms; write
+           uuid edges; normalize bible: Obsidian links to sexps.
+
+         SLUG COLLISIONS:
+           Global per-user uniqueness. On clash, prefix with parent
+           folder label or numeric suffix; report in import log.
+
+         TOOLING:
+           Offline importer (OCaml CLI or pp-eval batch driver).
+           --dry-run required before apply. Not an image hot path.
+           Idempotent on source_id/source_path.
+
+         NON-GOALS:
+           Continuous sync, tex pipeline, quartz theme fidelity,
+           dataview, round-trip export to the vault.
+    |))
+   )
+  )
+
+  (subsection tree-cutover
+   (doc "Phased delivery: kernel tree prims → façade → UUID links → M0 PP migrate → M1 vault")
+   (status planned)
+   (verify
+    (smoke "K0: tree/get list upsert delete move on folder/note/heading")
+    (smoke "K1: tree/get-uuid + slug uniqueness reject")
+    (smoke "N0: notes/doc/* round-trip on tree with heading children")
+    (smoke "N1: folders via path; no folder string field on write")
+    (smoke "R0: uuid note-link + bible sexp render")
+    (smoke "M0: existing PP notes migrated; spot-check agents + inbox")
+    (smoke "M1: vault dry-run + apply on personal garden"))
+   (details
+    (doc (|
+         SLICES (one initiative, shippable checkpoints):
+           K0  tree prims + readable note path labels
+           K1  get-uuid + slug unique constraint/index
+           N0  notes façade on tree; outline↔heading (whole-replace ok)
+           N1  folders via path; retire folder field writes
+           R0  UUID links + bible sexp render via bible/dabar
+           M0  migrate data_rows note → tree (same uuids)
+           M1  Obsidian md import (garden-import)
+           D0  docs: one-tree flag defaults truth; design note appendix
+
+         DEPENDENCY:
+           Does NOT wait on global PP_TREE_READS=1 for all CRUD.
+           Notes use tree_* prims directly. Flat types keep CRUD.
+
+         RISK:
+           Never write hierarchical notes as kind=datum.
+           Reverse mirror only handles fn/type/route/datum.
+    |))
+   )
+  )
 
   (subsection unified-todos
    (doc "Basecamp lists + org node todos; unified /todos with smart views")

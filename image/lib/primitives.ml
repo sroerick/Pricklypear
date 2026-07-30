@@ -175,6 +175,7 @@ let make_with_defaults () : t =
   register_sync t "html-decode" prim_html_decode;
   register_sync t "parse-date" prim_parse_date;
   register_sync t "xml-parse" prim_xml_parse;
+  register_sync t "random-uuid" prim_random_uuid;
   t
 
 (* Short docs for the Functions browser (kernel package). *)
@@ -286,6 +287,18 @@ let prim_summary (name : string) : string =
   | "find-text" -> "substring search on a field"
   | "find-random" -> "one random data row of a type"
   | "select-for-update" -> "lock row in transaction (requires with-transaction)"
+  | "node-path" -> "pure path constructor data.<type>.<id>"
+  | "backlinks" -> "paths that reference needle"
+  | "type-fields" -> "declared fields for a type"
+  | "tree/get" -> "get hierarchical tree node by path → JSON"
+  | "tree/list" -> "list subtree (depth 1 = children) under path"
+  | "tree/upsert" -> "upsert folder|note|heading at path"
+  | "tree/delete" -> "delete path [, recursive]"
+  | "tree/move" -> "move subtree old-path → new-path"
+  | "tree/get-uuid" -> "lookup node by payload body.uuid"
+  | "tree/find-by" -> "find nodes by kind + body field"
+  | "tree/path-label" -> "sanitize string to ltree-safe label"
+  | "tree/garden-root" -> "data.note.u.<user> path prefix"
   | "extract-links" -> "parse [[wiki]] / [[slug|label]] from body → list of pairs"
   | "render-links" -> "body with [[wiki]]/[[media:]] → HTML (budget-safe)"
   | "budget-remaining" -> "steps left in current eval budget"
@@ -300,6 +313,7 @@ let prim_summary (name : string) : string =
   | "html-decode" -> "decode HTML entities in a string"
   | "parse-date" -> "parse RFC-822/ISO-8601/date -> UTC epoch int"
   | "xml-parse" -> "lenient XML text -> Lisp tree"
+  | "random-uuid" -> "generate a random UUID string"
   | "bench" -> "avg microseconds per eval of expr-string [n]"
   | "agent-session-new" -> "create durable AI session: (agent-session-new seed [tools?])"
   | "agent-say" -> "append user msg + run tool loop: (agent-say sid prompt)"

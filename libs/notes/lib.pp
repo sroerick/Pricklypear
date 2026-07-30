@@ -1,5 +1,342 @@
 ;; package notes -- exported from live branch system/main
 ;; Sync: scripts/pp_sync.py pull|push
+;;
+;; notes.tree-cutover: hierarchical storage under data.note.u.<user>.…
+;; Dual-read: tree first, legacy data_rows type=note fallback until M0 done.
+
+(define notes/tree/enabled?
+  (lambda () #t))
+
+(define notes/tree/root
+  (lambda () (tree/garden-root)))
+
+(define notes/tree/parse
+  (lambda (s)
+    (if (null? s) () (json-parse (as-str s)))))
+
+(define notes/tree/body
+  (lambda (node)
+    (if (null? node) () (dict-get node "body"))))
+
+(define notes/tree/ensure-folder
+  (lambda
+    (path title)
+    (let
+      ((cur (tree/get path)))
+      (if
+        (null? cur)
+        (tree/upsert
+          path
+          "folder"
+          "note"
+          (dict-set*
+            "{}"
+            (list
+              "uuid"
+              (random-uuid)
+              "title"
+              (as-str title))))
+        path))))
+
+(define notes/tree/ensure-chain
+  (lambda
+    (base segs)
+    (if
+      (null? segs)
+      base
+      (let
+        ((next
+            (string-append base "." (tree/path-label (car segs)))))
+        (seq
+          (notes/tree/ensure-folder next (car segs))
+          (notes/tree/ensure-chain next (cdr segs)))))))
+
+(define notes/tree/split-folder
+  (lambda
+    (folder)
+    (list/filter
+      (lambda (s) (not (string-eq (as-str s) "")))
+      (string-split (as-str folder) "/"))))
+
+(define notes/tree/note-path
+  (lambda
+    (folder slug)
+    (let
+      ((base
+          (notes/tree/ensure-chain
+            (notes/tree/root)
+            (notes/tree/split-folder folder))))
+      (string-append base "." (tree/path-label slug)))))
+
+(define notes/tree/join-slash
+  (lambda
+    (xs)
+    (if
+      (null? xs)
+      ""
+      (if
+        (null? (cdr xs))
+        (as-str (car xs))
+        (string-append
+          (as-str (car xs))
+          "/"
+          (notes/tree/join-slash (cdr xs)))))))
+
+(define notes/tree/butlast
+  (lambda
+    (xs)
+    (if
+      (null? xs)
+      (list)
+      (if (null? (cdr xs)) (list) (cons (car xs) (notes/tree/butlast (cdr xs)))))))
+
+(define notes/tree/folder-of-path
+  (lambda
+    (path)
+    (let
+      ((root (notes/tree/root))
+        (p (as-str path)))
+      (if
+        (string-starts-with? p (string-append root "."))
+        (let
+          ((rest
+              (substring
+                p
+                (+ (string-length root) 1)
+                (- (string-length p) (+ (string-length root) 1)))))
+          (let
+            ((parts (string-split rest ".")))
+            (notes/tree/join-slash (notes/tree/butlast parts))))
+        ""))))
+
+(define notes/tree/heading-kids
+  (lambda
+    (parent-path)
+    (list/foldl
+      (lambda
+        (acc nj)
+        (let
+          ((n (notes/tree/parse nj)))
+          (if
+            (null? n)
+            acc
+            (if
+              (string-eq (as-str (dict-get n "kind")) "heading")
+              (let
+                ((b (notes/tree/body n)))
+                (let
+                  ((p (as-str (dict-get n "path"))))
+                  (append
+                    acc
+                    (list
+                      (outline/node*
+                        (as-str (dict-get b "id"))
+                        (as-str (dict-get b "title"))
+                        (as-str (dict-get b "body"))
+                        (as-str (dict-get b "todo"))
+                        (notes/tree/heading-kids p))))))
+              acc))))
+      (list)
+      (tree/list parent-path 1))))
+
+(define notes/tree/load-outline
+  (lambda
+    (note-path title)
+    (outline/node*
+      "root"
+      (as-str title)
+      ""
+      ""
+      (notes/tree/heading-kids note-path))))
+
+(define notes/tree/clear-headings
+  (lambda
+    (note-path)
+    (list/foldl
+      (lambda
+        (acc nj)
+        (let
+          ((n (notes/tree/parse nj)))
+          (if
+            (null? n)
+            acc
+            (if
+              (string-eq (as-str (dict-get n "kind")) "heading")
+              (seq
+                (tree/delete (as-str (dict-get n "path")) "recursive")
+                acc)
+              acc))))
+      0
+      (tree/list note-path 1))))
+
+(define notes/tree/write-heading
+  (lambda
+    (parent-path node)
+    (let
+      ((nid (tree/path-label (outline/id node)))
+        (path (string-append parent-path ".h." (tree/path-label (outline/id node)))))
+      (seq
+        (tree/upsert
+          path
+          "heading"
+          "note"
+          (dict-set*
+            "{}"
+            (list
+              "id"
+              (as-str (outline/id node))
+              "title"
+              (as-str (outline/title node))
+              "body"
+              (as-str (outline/body node))
+              "todo"
+              (as-str (outline/todo node)))))
+        (list/foldl
+          (lambda
+            (acc kid)
+            (seq (notes/tree/write-heading path kid) acc))
+          0
+          (outline/kids node))
+        path))))
+
+(define notes/tree/save-outline
+  (lambda
+    (note-path outline)
+    (seq
+      (notes/tree/clear-headings note-path)
+      (list/foldl
+        (lambda
+          (acc kid)
+          (seq (notes/tree/write-heading note-path kid) acc))
+        0
+        (outline/kids outline))
+      note-path)))
+
+(define notes/tree/node->row
+  (lambda
+    (nj)
+    (let
+      ((n (notes/tree/parse nj)))
+      (if
+        (null? n)
+        ()
+        (if
+          (not (string-eq (as-str (dict-get n "kind")) "note"))
+          ()
+          (let
+            ((b (notes/tree/body n))
+              (path (as-str (dict-get n "path"))))
+            (let
+              ((u (dict-get b "uuid")))
+              (let
+                ((uuid
+                    (if
+                      (null? u)
+                      (as-str (dict-get n "id"))
+                      (as-str u))))
+                (cons
+                  uuid
+                  (dict-set*
+                    "{}"
+                    (list
+                      "slug"
+                      (as-str (dict-get b "slug"))
+                      "title"
+                      (as-str (dict-get b "title"))
+                      "tags"
+                      (as-str (dict-get b "tags"))
+                      "kind"
+                      (as-str (dict-get b "kind"))
+                      "day"
+                      (as-str (dict-get b "day"))
+                      "folder"
+                      (notes/tree/folder-of-path path)
+                      "outline"
+                      (outline/encode
+                        (notes/tree/load-outline
+                          path
+                          (as-str (dict-get b "title"))))
+                      "_path"
+                      path)))))))))))
+
+(define notes/tree/find-slug
+  (lambda
+    (slug)
+    (let
+      ((hits (tree/find-by "note" "slug" (as-str slug) 5)))
+      (if (null? hits) () (notes/tree/node->row (car hits))))))
+
+(define notes/tree/list-notes
+  (lambda
+    ()
+    (list/foldl
+      (lambda
+        (acc nj)
+        (let
+          ((row (notes/tree/node->row nj)))
+          (if (null? row) acc (append acc (list row)))))
+      (list)
+      (tree/list (notes/tree/root)))))
+
+;; ---- M0: migrate legacy data_rows type=note → tree ----
+
+(define notes/migrate/legacy-one
+  (lambda
+    (row)
+    (if
+      (null? row)
+      "skip-empty"
+      (let
+        ((id (as-str (car row)))
+          (f (cdr row)))
+        (let
+          ((slug (as-str (dict-get f "slug")))
+            (title (as-str (dict-get f "title")))
+            (tags (as-str (dict-get f "tags")))
+            (kind (as-str (dict-get f "kind")))
+            (day (as-str (dict-get f "day")))
+            (folder (as-str (dict-get f "folder")))
+            (outline (outline/decode (dict-get f "outline"))))
+          (let
+            ((existing (tree/get-uuid id))
+              (by-slug (notes/tree/find-slug slug)))
+            (if
+              (not (null? existing))
+              (string-append "exists-uuid:" slug)
+              (if
+                (not (null? by-slug))
+                (string-append "exists-slug:" slug)
+                (let
+                  ((path (notes/tree/note-path folder slug))
+                    (body
+                      (dict-set*
+                        "{}"
+                        (list
+                          "uuid"
+                          id
+                          "slug"
+                          slug
+                          "title"
+                          title
+                          "tags"
+                          tags
+                          "kind"
+                          (if (string-eq kind "") "note" kind)
+                          "day"
+                          day))))
+                  (seq
+                    (notes/tree/ensure-folder (notes/tree/root) (whoami))
+                    (tree/upsert path "note" "note" body)
+                    (notes/tree/save-outline path outline)
+                    (roam/reindex slug outline)
+                    (string-append "migrated:" slug)))))))))))
+
+(define notes/migrate/legacy-all
+  (lambda
+    ()
+    (list/map
+      notes/migrate/legacy-one
+      (rows (quote note) 2000))))
 
 (define notes/all-todos
   (lambda
@@ -628,7 +965,13 @@
         ()
         (seq
           (roam/delete-from-slug (as-str slug))
-          (delete (quote note) (car row)))))))
+          (let
+            ((p (notes/doc/row-path row)))
+            (if
+              (and (notes/tree/enabled?) (not (string-eq p "")))
+              (tree/delete p "recursive")
+              (delete (quote note) (car row))))
+          slug)))))
 
 (define notes/doc/empty-outline
   (lambda (title) (outline/node "root" title)))
@@ -738,7 +1081,15 @@
   (lambda (n) (car (cdr (cdr (cdr (cdr (cdr n))))))))
 
 (define notes/doc/list
-  (lambda () (rows (quote note) 100)))
+  (lambda
+    ()
+    (let
+      ((tree-rows
+          (if (notes/tree/enabled?) (notes/tree/list-notes) (list))))
+      (if
+        (null? tree-rows)
+        (rows (quote note) 500)
+        tree-rows))))
 
 (define notes/doc/list-folder
   (lambda
@@ -785,8 +1136,14 @@
   (lambda
     (slug)
     (let
-      ((rs (find-rows (quote note) "slug" (as-str slug) 1)))
-      (if (null? rs) () (car rs)))))
+      ((tr
+          (if (notes/tree/enabled?) (notes/tree/find-slug slug) ())))
+      (if
+        (null? tr)
+        (let
+          ((rs (find-rows (quote note) "slug" (as-str slug) 1)))
+          (if (null? rs) () (car rs)))
+        tr))))
 
 (define notes/doc/row-folder
   (lambda
@@ -798,10 +1155,28 @@
         ((f (dict-get (cdr row) "folder")))
         (if (null? f) "" (as-str f))))))
 
+(define notes/doc/row-path
+  (lambda
+    (row)
+    (if
+      (null? row)
+      ""
+      (let
+        ((p (dict-get (cdr row) "_path")))
+        (if (null? p) "" (as-str p))))))
+
 (define notes/doc/search
   (lambda
     (q)
-    (find-text (quote note) "title" (as-str q) 40)))
+    (let
+      ((needle (as-str q)))
+      (list/filter
+        (lambda
+          (row)
+          (string-contains?
+            (as-str (dict-get (cdr row) "title"))
+            needle))
+        (notes/doc/list)))))
 
 (define notes/doc/set-folder
   (lambda
@@ -811,11 +1186,31 @@
       (if
         (null? row)
         ()
-        (update-field
-          (quote note)
-          (car row)
-          "folder"
-          (as-str folder))))))
+        (if
+          (notes/tree/enabled?)
+          (let
+            ((old (notes/doc/row-path row))
+              (newp
+                (notes/tree/note-path folder (as-str slug))))
+            (if
+              (string-eq old "")
+              (notes/doc/upsert-in
+                slug
+                (dict-get (cdr row) "title")
+                (outline/decode (dict-get (cdr row) "outline"))
+                (dict-get (cdr row) "tags")
+                (dict-get (cdr row) "kind")
+                (dict-get (cdr row) "day")
+                folder)
+              (if
+                (string-eq old newp)
+                old
+                (tree/move old newp))))
+          (update-field
+            (quote note)
+            (car row)
+            "folder"
+            (as-str folder)))))))
 
 (define notes/doc/show-archived?
   (lambda
@@ -833,8 +1228,65 @@
     (slug title outline tags kind day)
     (let
       ((row (notes/doc/row slug)))
+      (notes/doc/upsert-in
+        slug
+        title
+        outline
+        tags
+        kind
+        day
+        (if (null? row) "" (notes/doc/row-folder row))))))
+
+(define notes/doc/upsert-in
+  (lambda
+    (slug title outline tags kind day folder)
+    (if
+      (notes/tree/enabled?)
       (let
-        ((folder (notes/doc/row-folder row))
+        ((prev (notes/doc/row slug)))
+        (let
+          ((uuid (if (null? prev) (random-uuid) (car prev)))
+            (oldp (if (null? prev) "" (notes/doc/row-path prev))))
+          (let
+            ((path
+                (if
+                  (string-eq oldp "")
+                  (notes/tree/note-path folder slug)
+                  oldp))
+              (body
+                (dict-set*
+                  "{}"
+                  (list
+                    "uuid"
+                    uuid
+                    "slug"
+                    (as-str slug)
+                    "title"
+                    (as-str title)
+                    "tags"
+                    (as-str tags)
+                    "kind"
+                    (as-str kind)
+                    "day"
+                    (as-str day)))))
+            (seq
+              (notes/tree/ensure-folder (notes/tree/root) (whoami))
+              (tree/upsert path "note" "note" body)
+              (notes/tree/save-outline path outline)
+              (if
+                (and
+                  (not (null? prev))
+                  (not (string-eq oldp ""))
+                  (not
+                    (string-eq
+                      (as-str folder)
+                      (notes/doc/row-folder prev))))
+                (notes/doc/set-folder slug folder)
+                0)
+              (roam/reindex (as-str slug) outline)
+              slug))))
+      (let
+        ((row (notes/doc/row slug))
           (fields
             (notes/doc/make-fields
               slug
@@ -843,33 +1295,14 @@
               tags
               kind
               day
-              (notes/doc/row-folder row))))
+              folder)))
         (seq
           (if
             (null? row)
             (create (quote note) fields)
             (update (quote note) (car row) fields))
-          (roam/reindex (as-str slug) outline))))))
-
-(define notes/doc/upsert-in
-  (lambda
-    (slug
-      title
-      outline
-      tags
-      kind
-      day
-      folder)
-    (seq
-      (notes/doc/upsert
-        slug
-        title
-        outline
-        tags
-        kind
-        day)
-      (notes/doc/set-folder slug folder)
-      slug)))
+          (roam/reindex (as-str slug) outline)
+          slug)))))
 
 (define notes/edit-form
   (lambda

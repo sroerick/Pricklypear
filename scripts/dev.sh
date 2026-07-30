@@ -64,8 +64,8 @@ apply_migrations() {
     echo "[dev] creating database $PP_DB_NAME"
     createdb -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U "$PP_DB_USER" "$PP_DB_NAME"
   fi
-  echo "[dev] applying migrations 001..009"
-  for m in 001_branches 002_auth 003_data 004_bible_ref_index 005_ai_sessions 006_route_visibility 007_media 008_agent_users 009_tree; do
+  echo "[dev] applying migrations 001..010"
+  for m in 001_branches 002_auth 003_data 004_bible_ref_index 005_ai_sessions 006_route_visibility 007_media 008_agent_users 009_tree 010_notes_tree; do
     psql -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U "$PP_DB_USER" -d "$PP_DB_NAME" \
       -f "$PP_ROOT/migrations/${m}.sql" -q
   done

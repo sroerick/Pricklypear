@@ -12,30 +12,45 @@
         (string-eq (substring s (+ i 1) 1) "[")
         #f))))
 
+(define roam/note-uuid
+  (lambda
+    (slug)
+    (let
+      ((row (notes/doc/row (as-str slug))))
+      (if (null? row) "" (as-str (car row))))))
+
 (define roam/backlinks
   (lambda
     (slug)
-    (list/map
-      (lambda
-        (row)
-        (let
-          ((f (cdr row)))
+    (let
+      ((target (as-str slug))
+        (tu (roam/note-uuid slug)))
+      (list/map
+        (lambda
+          (row)
           (let
-            ((fs (as-str (dict-get f "from_slug")))
-              (fid (as-str (dict-get f "from_id")))
-              (lab (as-str (dict-get f "label"))))
+            ((f (cdr row)))
             (let
-              ((src (notes/doc/get fs)))
-              (list
-                fs
-                fid
-                (if (null? src) fs (notes/doc/title src))
-                lab)))))
-      (find-rows
-        (quote note-link)
-        "to_slug"
-        (as-str slug)
-        200))))
+              ((fs (as-str (dict-get f "from_slug")))
+                (fid (as-str (dict-get f "from_id")))
+                (lab (as-str (dict-get f "label"))))
+              (let
+                ((src (notes/doc/get fs)))
+                (list
+                  fs
+                  fid
+                  (if (null? src) fs (notes/doc/title src))
+                  lab)))))
+        (if
+          (string-eq tu "")
+          (find-rows (quote note-link) "to_slug" target 200)
+          (let
+            ((by-uuid
+                (find-rows (quote note-link) "to_uuid" tu 200)))
+            (if
+              (null? by-uuid)
+              (find-rows (quote note-link) "to_slug" target 200)
+              by-uuid)))))))
 
 (define roam/backlinks-html
   (lambda
@@ -118,6 +133,13 @@
 (define roam/insert-collected
   (lambda
     (from-slug triples seen)
+    (let
+      ((from-uuid (roam/note-uuid from-slug)))
+      (roam/insert-collected-acc from-slug from-uuid triples seen))))
+
+(define roam/insert-collected-acc
+  (lambda
+    (from-slug from-uuid triples seen)
     (if
       (null? triples)
       seen
@@ -131,32 +153,47 @@
             ((key (string-append fid "\t" to)))
             (if
               (roam/media-slug? to)
-              (roam/insert-collected from-slug (cdr triples) seen)
+              (roam/insert-collected-acc
+                from-slug
+                from-uuid
+                (cdr triples)
+                seen)
               (if
                 (roam/seen? seen key)
-                (roam/insert-collected from-slug (cdr triples) seen)
-                (seq
-                  (create
-                    (quote note-link)
-                    (dict-set*
-                      "{}"
-                      (list
-                        "from_slug"
-                        (as-str from-slug)
-                        "from_id"
-                        fid
-                        "to_slug"
-                        to
-                        "to_id"
-                        ""
-                        "label"
-                        lab
-                        "kind"
-                        "wikilink")))
-                  (roam/insert-collected
-                    from-slug
-                    (cdr triples)
-                    (cons key seen)))))))))))
+                (roam/insert-collected-acc
+                  from-slug
+                  from-uuid
+                  (cdr triples)
+                  seen)
+                (let
+                  ((to-uuid (roam/note-uuid to)))
+                  (seq
+                    (create
+                      (quote note-link)
+                      (dict-set*
+                        "{}"
+                        (list
+                          "from_slug"
+                          (as-str from-slug)
+                          "from_uuid"
+                          (as-str from-uuid)
+                          "from_id"
+                          fid
+                          "to_slug"
+                          to
+                          "to_uuid"
+                          (as-str to-uuid)
+                          "to_id"
+                          ""
+                          "label"
+                          lab
+                          "kind"
+                          "wikilink")))
+                    (roam/insert-collected-acc
+                      from-slug
+                      from-uuid
+                      (cdr triples)
+                      (cons key seen))))))))))))
 
 (define roam/media-id
   (lambda
@@ -260,9 +297,28 @@
 (define roam/render-link
   (lambda
     (slug lab)
-    (html/a
-      (string-append "/notes?slug=" slug)
-      (html/text lab))))
+    (let
+      ((s (as-str slug))
+        (row (notes/doc/row slug)))
+      (let
+        ((href-slug
+            (if
+              (null? row)
+              s
+              (as-str (dict-get (cdr row) "slug"))))
+          (title
+            (if
+              (null? row)
+              (as-str lab)
+              (let
+                ((t (dict-get (cdr row) "title")))
+                (if
+                  (or (null? t) (string-eq (as-str lab) s))
+                  (if (null? t) (as-str lab) (as-str t))
+                  (as-str lab))))))
+        (html/a
+          (string-append "/notes?slug=" href-slug)
+          (html/text title))))))
 
 (define roam/render-media
   (lambda
