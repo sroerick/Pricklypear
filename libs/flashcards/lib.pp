@@ -105,11 +105,15 @@
 
 (define flash/decks
   (lambda ()
-    (list/filter
-      (lambda (row)
-        (not (flash/true? (dict-get (cdr row) "archived"))))
-      (rows 'flash-deck 200)))
-  "List flashcard deck rows.")
+    ;; Cap list size: each home row used to call flash/due-count (full card
+    ;; scan). With hundreds of decks that blows the eval budget (100k steps).
+    (flash/take
+      (list/filter
+        (lambda (row)
+          (not (flash/true? (dict-get (cdr row) "archived"))))
+        (rows 'flash-deck 80))
+      40))
+  "List flashcard deck rows (max 40 non-archived for home UI).")
 
 (define flash/deck
   (lambda (id)
@@ -285,12 +289,14 @@
 (define flash/explain-page
   (lambda ()
     (let ((id (as-str (request-param "id"))))
-      (let ((fields (flash/card id)))
-        (if (null? fields)
-            (render-html (flash/explain-html "Card not found."))
-            (render-html
-              (flash/explain-html
-                (flash/explain (flash/card-front fields) (flash/card-back fields))))))))
+      (if (flash/blank? id)
+          (render-html (flash/explain-html "Missing card id."))
+          (let ((fields (flash/card id)))
+            (if (null? fields)
+                (render-html (flash/explain-html "Card not found."))
+                (render-html
+                  (flash/explain-html
+                    (flash/explain (flash/card-front fields) (flash/card-back fields)))))))))
   "GET /flashcards/explain?id= — LLM explanation of a card as a raw HTML div.")
 
 (define flash/row-due?
@@ -387,8 +393,7 @@
   (lambda (row)
     (let ((id (as-str (car row)))
           (fields (cdr row)))
-      (let ((title (flash/deck-title fields))
-            (n (flash/due-count id)))
+      (let ((title (flash/deck-title fields)))
         (flash/tr
           (html/join
             (list
@@ -396,12 +401,11 @@
                 (html/a
                   (string-append "/flashcards/deck?id=" id)
                   (html/text title)))
-              (flash/td (html/text (str n)))
               (flash/td
                 (html/a
                   (string-append "/flashcards/study?deck=" id)
                   "Study"))))))))
-  "Table row HTML for one deck.")
+  "Table row HTML for one deck (no per-row due scan — budget-safe).")
 
 (define flash/new-deck-form
   (lambda ()
@@ -433,7 +437,6 @@
                   (html/join
                     (list
                       (flash/th "Deck")
-                      (flash/th "Due")
                       (flash/th "")))))
               (flash/tbody
                 (html/join (list/map flash/deck-row-html ds))))))))
@@ -646,20 +649,22 @@
 (define flash/deck-page
   (lambda ()
     (let ((id (as-str (request-param "id"))))
-      (if (string-eq (request-method) "POST")
-          (seq
-            (let ((action (as-str (request-param "action"))))
-              (cond
-                ((string-eq action "add-card")
-                 (flash/add id
-                   (request-param "front")
-                   (request-param "back")
-                   (request-param "tags")))
-                ((string-eq action "delete-card")
-                 (flash/delete (request-param "id")))
-                (else ())))
-            (redirect (string-append "/flashcards/deck?id=" id)))
-          (html/page (list (flash/deck-page-html id))))))
+      (if (flash/blank? id)
+          (redirect "/flashcards")
+          (if (string-eq (request-method) "POST")
+              (seq
+                (let ((action (as-str (request-param "action"))))
+                  (cond
+                    ((string-eq action "add-card")
+                     (flash/add id
+                       (request-param "front")
+                       (request-param "back")
+                       (request-param "tags")))
+                    ((string-eq action "delete-card")
+                     (flash/delete (request-param "id")))
+                    (else ())))
+                (redirect (string-append "/flashcards/deck?id=" id)))
+              (html/page (list (flash/deck-page-html id)))))))
   "GET/POST deck detail handler.")
 
 (define flash/study-page
