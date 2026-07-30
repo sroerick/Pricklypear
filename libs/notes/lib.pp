@@ -227,45 +227,46 @@
             ((b (notes/tree/body n))
               (path (as-str (dict-get n "path"))))
             (let
-              ((u (dict-get b "uuid")))
+              ((u (dict-get b "uuid"))
+                (title (as-str (dict-get b "title"))))
               (let
                 ((uuid
                     (if
                       (null? u)
                       (as-str (dict-get n "id"))
-                      (as-str u)))
-                  (title (as-str (dict-get b "title")))
-                  (fields
-                    (list
-                      "slug"
-                      (as-str (dict-get b "slug"))
-                      "title"
-                      title
-                      "tags"
-                      (as-str (dict-get b "tags"))
-                      "kind"
-                      (as-str (dict-get b "kind"))
-                      "day"
-                      (as-str (dict-get b "day"))
-                      "folder"
-                      (notes/tree/folder-of-path path)
-                      "_path"
-                      path)))
-                (cons
-                  uuid
-                  (dict-set*
-                    "{}"
-                    (if
-                      load-outline?
-                      (append
-                        fields
-                        (list
-                          "outline"
-                          (outline/encode
-                            (notes/tree/load-outline path title))))
-                      (append
-                        fields
-                        (list "outline" "[]")))))))))))))
+                      (as-str u))))
+                (let
+                  ((fields
+                      (list
+                        "slug"
+                        (as-str (dict-get b "slug"))
+                        "title"
+                        title
+                        "tags"
+                        (as-str (dict-get b "tags"))
+                        "kind"
+                        (as-str (dict-get b "kind"))
+                        "day"
+                        (as-str (dict-get b "day"))
+                        "folder"
+                        (notes/tree/folder-of-path path)
+                        "_path"
+                        path)))
+                  (cons
+                    uuid
+                    (dict-set*
+                      "{}"
+                      (if
+                        load-outline?
+                        (append
+                          fields
+                          (list
+                            "outline"
+                            (outline/encode
+                              (notes/tree/load-outline path title))))
+                        (append
+                          fields
+                          (list "outline" "[]"))))))))))))))
 
 (define notes/tree/find-slug
   (lambda
