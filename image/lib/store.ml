@@ -998,6 +998,14 @@ let list_types (t : t) : (string * string list) list Lwt.t =
             (Printexc.to_string exn);
           Lwt.return [])
 
+(** Field names for a type visible on the current branch (CTE walk).
+    None if the type is not declared. *)
+let lookup_type_fields (t : t) ~(name : string) : string list option Lwt.t =
+  let* types = list_types t in
+  match List.find_opt (fun (n, _) -> n = name) types with
+  | Some (_, fields) -> Lwt.return_some fields
+  | None -> Lwt.return_none
+
 let fork_branch (t : t) ~(parent_id : string) ~(owner : string)
     ~(child_name : string) : string option Lwt.t =
   (* one-tree P5: EMPTY LENS fork.

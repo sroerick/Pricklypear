@@ -326,6 +326,52 @@ let delete_datum (conn : Store_db.conn) ~(type_name : string) ~(id : string) : s
             | _ -> Lwt.return_none)
        | _ -> Lwt.return_none)
 
+(** Validate [fields_json] against a declared type's field names.
+    Rules (one-tree.typed-nodes / object-model.type-system v1):
+      - fields_json must be a JSON object
+      - every declared field must be present as a key (value may be null/"")
+      - extra keys ARE allowed (additive tolerance; branching.schema-authority)
+    Returns Ok () or Error message. Pure — no DB. *)
+let validate_fields ~(declared : string list) (fields_json : string)
+  : (unit, string) result =
+  if declared = [] then Ok ()
+  else
+    try
+      match Yojson.Safe.from_string fields_json with
+      | `Assoc kvs ->
+          let missing =
+            List.filter (fun f -> not (List.mem_assoc f kvs)) declared
+          in
+          if missing = [] then Ok ()
+          else
+            Error
+              ("missing fields: " ^ String.concat ", " missing
+               ^ " (declared: " ^ String.concat ", " declared ^ ")")
+      | _ -> Error "fields must be a JSON object"
+    with Yojson.Json_error msg -> Error ("invalid JSON: " ^ msg)
+
+(** Backlinks: datum nodes whose fields JSON has any value equal to [needle]
+    (typically a uuid id or a tree path). Uses jsonb_each_text over body.
+    Caps at [limit] (default 200). *)
+let backlinks (conn : Store_db.conn) ~(needle : string) ?(limit : int = 200)
+    () : string list Lwt.t =
+  let sql =
+    "SELECT n.path::text FROM tree_nodes n, " ^
+    "LATERAL jsonb_each_text(COALESCE(n.payload->'body', '{}'::jsonb)) e " ^
+    "WHERE n.kind = 'datum' AND e.value = $1::text " ^
+    "ORDER BY n.path::text ASC LIMIT $2" in
+  let* rows =
+    Io_lwt.Db.execute conn
+      ~params:[ Pgx.Value.of_string needle; Pgx.Value.of_int limit ]
+      sql
+  in
+  Lwt.return
+    (List.filter_map
+       (function
+         | [ c ] -> Pgx.Value.to_string c
+         | _ -> None)
+       rows)
+
 (** Recompute tree_branches.head_hash for [branch_id] as the sha256 of the
     sorted concatenation of own-node hashes under b.<uuidhex>. Empty lens →
     empty string. Used after fork (empty) and after promote/merge batches. *)
