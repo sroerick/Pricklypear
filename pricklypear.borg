@@ -263,6 +263,10 @@
   (doc "Book chapter — full text inlined from borge/object-model.borg")
   (inline borge/object-model.borg)
  )
+ (section one-tree
+  (doc "Book chapter — ONE BIG TREE storage substrate + typed nodes; full text inlined from borge/one-tree.borg")
+  (inline borge/one-tree.borg)
+ )
  (section branching
   (doc "Book chapter — full text inlined from borge/branching.borg")
   (inline borge/branching.borg)
