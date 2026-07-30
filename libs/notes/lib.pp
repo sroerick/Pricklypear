@@ -1480,7 +1480,7 @@
                       "del")))))))))))
 
 (define notes/list
-  (lambda () (rows (quote note) 100)))
+  (lambda () (notes/doc/list)))
 
 (define notes/make-fields
   (lambda
@@ -3236,12 +3236,21 @@
           #f
           (not (string-eq (as-str filter) "")))
         (notes/ui/folder-section (as-str filter))
+        ;; Flat index via tree/note-index (budget-safe). Nested folder
+        ;; tree render remains available as notes/tree/render for later.
         (let
-          ((names (notes/doc/folder-names)))
+          ((rows (notes/doc/index-list)))
           (if
-            (null? names)
+            (null? rows)
             (html/p* (html/attr "class" "muted") "No notes yet.")
-            (notes/tree/render)))))))
+            (html/ul
+              (html/attr "class" "card notes-flat-index")
+              (list/foldl
+                (lambda
+                  (acc row)
+                  (string-append acc (notes/ui/item-li row)))
+                ""
+                rows))))))))
 
 (define notes/ui/handle-post
   (lambda
