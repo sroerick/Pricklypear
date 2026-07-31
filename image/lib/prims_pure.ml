@@ -798,6 +798,15 @@ let prim_date_today (_args : value list) : value =
     (Printf.sprintf "%04d-%02d-%02d"
        (tm.Unix.tm_year + 1900) (tm.Unix.tm_mon + 1) tm.Unix.tm_mday)
 
+(** (now) -> VInt unix epoch seconds (UTC). Wall clock for apps;
+    pairs with date-today for calendar day. BORGE-1785211069. *)
+let prim_now (_args : value list) : value =
+  VInt (Int64.of_float (Unix.gettimeofday ()))
+
+(** (now-ms) -> VInt unix epoch milliseconds. *)
+let prim_now_ms (_args : value list) : value =
+  VInt (Int64.of_float (Unix.gettimeofday () *. 1000.0))
+
 (* (parse-int s|n) -> VInt. Soft-fail to 0 on bad string. *)
 let prim_parse_int (args : value list) : value =
   match args with

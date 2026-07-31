@@ -1111,7 +1111,7 @@
   )
   (subsection primitives
    (doc "Primitives are the boundary between the pure interpreter and the outside world; pure prims are wrapped via register_sync (results in Lwt.return); DB-touching prims are normal prim_fns returning value Lwt.t. The impure functions the interpreter calls into")
-   (status partial)
+   (status implemented)
    (details
     (doc (|
          Primitives live in image/lib/primitives.ml. They
