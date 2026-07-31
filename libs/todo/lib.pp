@@ -18,7 +18,8 @@
     todo/list/all
     todo/list/create
     todo/list/delete
-    todo/ensure-inbox))
+    todo/ensure-inbox
+))
 
 (define todo/active-items
   (lambda
@@ -63,7 +64,7 @@
       (string-eq view "from-notes")
       (html/p*
         (html/attr "class" "muted")
-        "Mark nodes TODO in notes \226\128\148 they appear here. Toggle writes back.")
+        "Mark nodes TODO in notes — they appear here. Toggle writes back.")
       (if
         (string-eq view "archived")
         (html/p*
@@ -222,9 +223,7 @@
           (html/join
             (list
               (html/p* (html/attr "class" "err") "Item not found.")
-              (html/a
-                (string-append "/todos?view=" view)
-                "\226\134\144 back"))))
+              (html/a (string-append "/todos?view=" view) "← back"))))
         (let
           ((title (todo/item-title fields)))
           (let
@@ -243,7 +242,7 @@
                           (html/attr "class" "muted")
                           (html/a
                             (string-append "/todos?view=" view)
-                            "\226\134\144 back to list"))
+                            "← back to list"))
                         (html/h2 (html/text title))
                         (html/form
                           "POST"
@@ -713,7 +712,7 @@
                           (html/attr "type" "submit")
                           (html/attr "class" (string-append "todo-box st-" state))
                           (html/attr "title" "cycle state")))
-                      (if (string-eq state "") "\194\183" state)))))
+                      (if (string-eq state "") "·" state)))))
               (html/a
                 (string-append "/todos?id=" id "&view=" view)
                 (html/span
@@ -805,7 +804,7 @@
                           (html/attr "type" "submit")
                           (html/attr "class" (string-append "todo-box st-" state))
                           (html/attr "title" "cycle note TODO")))
-                      (if (string-eq state "") "\194\183" state)))))
+                      (if (string-eq state "") "·" state)))))
               (html/span
                 (html/attr "class" "todo-title")
                 (html/text title))
@@ -953,6 +952,9 @@
               ""
               (todo/active-items (todo/items-for-list view)))))))))
 
+(define todo/land-ping
+  1)
+
 (define todo/list
   (lambda () (rows (quote todo-item) 50)))
 
@@ -1016,7 +1018,7 @@
                           (html/attr "type" "submit")
                           (html/attr "class" (string-append "todo-box st-" state))
                           (html/attr "title" "cycle state")))
-                      (if (string-eq state "") "\194\183" state)))))
+                      (if (string-eq state "") "·" state)))))
               (html/a
                 (string-append "/todos?id=" id "&view=" view)
                 (html/span
@@ -1242,7 +1244,7 @@
                           (html/attr "type" "submit")
                           (html/attr "class" "secondary")
                           (html/attr "title" "delete list")))
-                      "\195\151")))))))))))
+                      "×")))))))))))
 
 (define todo/list/options
   (lambda
@@ -1438,7 +1440,7 @@
                           (html/attr "type" "submit")
                           (html/attr "class" "secondary")
                           (html/attr "title" "delete list")))
-                      "\195\151")))))))))))
+                      "×")))))))))))
 
 (define todo/next-state
   (lambda
@@ -1485,7 +1487,7 @@
                           (html/attr "type" "submit")
                           (html/attr "class" (string-append "todo-box st-" state))
                           (html/attr "title" "cycle note TODO")))
-                      (if (string-eq state "") "\194\183" state)))))
+                      (if (string-eq state "") "·" state)))))
               (html/span
                 (html/attr "class" "todo-title")
                 (html/text title))
@@ -1713,7 +1715,7 @@
       (string-eq view "from-notes")
       (html/p*
         (html/attr "class" "muted")
-        "Mark nodes TODO in notes \226\128\148 they appear here. Toggle writes back.")
+        "Mark nodes TODO in notes — they appear here. Toggle writes back.")
       (if
         (string-eq view "archived")
         (html/p*
@@ -1768,9 +1770,7 @@
           (html/join
             (list
               (html/p* (html/attr "class" "err") "Item not found.")
-              (html/a
-                (string-append "/todos?view=" view)
-                "\226\134\144 back"))))
+              (html/a (string-append "/todos?view=" view) "← back"))))
         (let
           ((title (todo/item/title fields)))
           (let
@@ -1789,7 +1789,7 @@
                           (html/attr "class" "muted")
                           (html/a
                             (string-append "/todos?view=" view)
-                            "\226\134\144 back to list"))
+                            "← back to list"))
                         (html/h2 (html/text title))
                         (html/form
                           "POST"
