@@ -143,7 +143,10 @@
   (lambda (n) (car (cdr (cdr (cdr (cdr (cdr n))))))))
 
 (define notes/doc/list
-  (lambda () (rows (quote note) 100)))
+  (lambda
+    ()
+    ;; index-read-path I4: tree only — no data_rows fallback
+    (if (notes/tree/enabled?) (notes/tree/list-notes) (list))))
 
 (define notes/doc/list-folder
   (lambda
@@ -189,9 +192,8 @@
 (define notes/doc/row
   (lambda
     (slug)
-    (let
-      ((rs (find-rows (quote note) "slug" (as-str slug) 1)))
-      (if (null? rs) () (car rs)))))
+    ;; index-read-path I4: tree only — no find-rows fallback
+    (if (notes/tree/enabled?) (notes/tree/find-slug slug) ())))
 
 (define notes/doc/row-folder
   (lambda
