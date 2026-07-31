@@ -536,7 +536,7 @@
   )
   (subsection land
    (doc "pp-sync land: promote + vault snapshot + git commit as one operator step")
-   (status planned)
+   (status implemented)
    (implements cli/bin/pp_sync.ml scripts/pp-sync.sh)
    (details
     (doc (|
