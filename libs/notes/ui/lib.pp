@@ -1,4 +1,4 @@
-;; package notes/ui -- exported from live branch system/main
+;; package notes/ui -- exported from live branch admin/personal
 ;; Sync: scripts/pp_sync.py pull|push
 
 (define notes/ui/create-form
@@ -190,43 +190,8 @@
             (html/h3 (html/a href (html/text label)))
             (html/ul "" (notes/ui/folder-list folder))))))))
 
-(define notes/ui/folders-html
-  (lambda
-    ()
-    (let
-      ((filter (request-param "folder")))
-      (if
-        (if
-          (null? filter)
-          #f
-          (not (string-eq (as-str filter) "")))
-        (notes/ui/folder-section (as-str filter))
-        ;; Flat index via tree/note-index (budget-safe). Nested
-        ;; notes/tree/render retired (index-read-path I2).
-        (let
-          ((rows (notes/doc/index-list))
-            (cap 80))
-          (if
-            (null? rows)
-            (html/p* (html/attr "class" "muted") "No notes yet.")
-            (html/join
-              (list
-                (html/p*
-                  (html/attr "class" "muted")
-                  (string-append
-                    "Showing first "
-                    (as-str cap)
-                    " of "
-                    (as-str (count rows))
-                    " notes (use ?folder= to filter)."))
-                (html/ul
-                  (html/attr "class" "card notes-flat-index")
-                  (list/foldl
-                    (lambda
-                      (acc row)
-                      (string-append acc (notes/ui/item-li-lite row)))
-                    ""
-                    (notes/list-take rows cap)))))))))))
+
+
 
 (define notes/ui/handle-post
   (lambda
@@ -262,27 +227,6 @@
           (notes/refile/extract-handle))
         (else (redirect "/notes"))))))
 
-(define notes/ui/index
-  (lambda
-    ()
-    (html/join
-      (list
-        (notes/tree/style)
-        (html/h1 "Notes")
-        (html/p*
-          (html/attr "class" "muted")
-          "Outline-first notes. Grouped by folder (optional path like wiki/entities).")
-        (html/p*
-          (html/attr "class" "muted")
-          (html/join
-            (list
-              (html/a "/notes?slug=inbox" "Open inbox")
-              " \194\183 "
-              (html/a "/notes" "All folders")
-              " \194\183 system notes (inbox) are hidden from the index.")))
-        (notes/ui/create-form)
-        (html/h2 "Folders")
-        (notes/ui/folders-html)))))
 
 (define notes/ui/item-li
   (lambda
@@ -324,6 +268,29 @@
                           (html/attr "class" "secondary")
                           (html/attr "title" "delete note")))
                       "del")))))))))))
+
+(define notes/ui/item-li-lite
+  (lambda
+    (row)
+    (let
+      ((f (cdr row)))
+      (let
+        ((slug (as-str (dict-get f "slug")))
+          (title (as-str (dict-get f "title")))
+          (folder (notes/doc/row-folder row)))
+        (html/li
+          (html/attr "class" "note-item")
+          (html/join
+            (list
+              (html/a
+                (string-append "/notes?slug=" slug)
+                (html/text title))
+              (if
+                (string-eq folder "")
+                ""
+                (html/span
+                  (html/attr "class" "muted")
+                  (html/text (string-append " \194\183 " folder)))))))))))
 
 (define notes/ui/missing
   (lambda
@@ -496,7 +463,7 @@
           (string-append "tags: " (as-str tags)))
         (notes/ui/folder-form slug folder)
         (notes/ui/toolbar slug show-archived)
-        (outline/html slug outline show-archived)
+        (outline/html-lite slug outline show-archived)
         (html/div
           (html/attr "class" "roam-backlinks-panel")
           (html/join
@@ -614,4 +581,172 @@
             (html/a
               (string-append "/notes?slug=" slug "&show=archived")
               "Show archived")))))))
+
+(define notes/ui/path-label
+  (lambda
+    (path)
+    (let
+      ((parts (string-split (as-str path) ".")))
+      (if
+        (null? parts)
+        ""
+        (string-replace (notes/light/last parts) "_" "-")))))
+
+(define notes/ui/node-path
+  (lambda (n) (as-str (dict-get n "path"))))
+
+(define notes/ui/node-kind
+  (lambda (n) (as-str (dict-get n "kind"))))
+
+(define notes/ui/node-title
+  (lambda
+    (n)
+    (let
+      ((b (dict-get n "body")))
+      (let
+        ((t (dict-get b "title"))
+          (s (dict-get b "slug")))
+        (if
+          (if (null? t) #t (string-eq (as-str t) ""))
+          (if
+            (if (null? s) #t (string-eq (as-str s) ""))
+            (notes/ui/path-label (notes/ui/node-path n))
+            (as-str s))
+          (as-str t))))))
+
+(define notes/ui/is-garden-folder?
+  (lambda
+    (n root)
+    (if
+      (not (string-eq (notes/ui/node-kind n) "folder"))
+      #f
+      (string-eq
+        (notes/ui/node-path n)
+        (string-append (as-str root) ".garden")))))
+
+(define notes/ui/note-li-from-node
+  (lambda
+    (n)
+    (let
+      ((slug (as-str (dict-get (dict-get n "body") "slug")))
+        (title (notes/ui/node-title n)))
+      (let
+        ((s
+          (if (string-eq slug "") (notes/ui/path-label (notes/ui/node-path n)) slug)))
+        (html/li
+          (html/attr "class" "tree-item")
+          (html/a
+            (string-append "/notes?slug=" s)
+            (html/text title)))))))
+
+(define notes/ui/folder-details
+  (lambda
+    (n)
+    (let
+      ((path (notes/ui/node-path n))
+        (label (notes/ui/node-title n)))
+      (html/tag
+        "details"
+        (html/attrs
+          (list
+            (html/attr "class" "tree-folder")
+            (html/attr "hx-get"
+              (string-append
+                "/partials/notes-tree?path="
+                path))
+            (html/attr "hx-trigger" "toggle once")
+            (html/attr "hx-target" "find .tree-children")
+            (html/attr "hx-swap" "innerHTML")))
+        (html/join
+          (list
+            (html/tag
+              "summary"
+              (html/attr "class" "tree-folder-header")
+              (html/join
+                (list
+                  (html/span
+                    (html/attr "class" "tree-folder-icon")
+                    "&#x1F4C1; ")
+                  (html/text label))))
+            (html/div
+              (html/attr "class" "tree-children")
+              (html/span
+                (html/attr "class" "muted")
+                "open to load…"))))))))
+
+(define notes/ui/render-child
+  (lambda
+    (n root)
+    (let
+      ((k (notes/ui/node-kind n)))
+      (if
+        (string-eq k "heading")
+        ""
+        (if
+          (notes/ui/is-garden-folder? n root)
+          (notes/ui/tree-children-html (notes/ui/node-path n) root)
+          (if
+            (string-eq k "folder")
+            (notes/ui/folder-details n)
+            (if
+              (string-eq k "note")
+              (notes/ui/note-li-from-node n)
+              "")))))))
+
+(define notes/ui/tree-children-html
+  (lambda
+    (path root)
+    (let
+      ((kids (tree/list (as-str path) 1)))
+      (if
+        (null? kids)
+        (html/p* (html/attr "class" "muted") "(empty)")
+        (html/join
+          (list/map
+            (lambda (n) (notes/ui/render-child n root))
+            kids))))))
+
+(define notes/ui/tree-partial
+  (lambda
+    ()
+    (let
+      ((path (as-str (request-param "path")))
+        (root (notes/tree/root)))
+      (if
+        (string-eq path "")
+        (render-html (html/p* (html/attr "class" "muted") "missing path"))
+        (render-html
+          (html/div
+            (html/attr "class" "tree-children-inner")
+            (notes/ui/tree-children-html path root)))))))
+
+(define notes/ui/folders-html
+  (lambda
+    ()
+    (let
+      ((root (notes/tree/root)))
+      (html/div
+        (html/attr "class" "notes-tree")
+        (notes/ui/tree-children-html root root)))))
+
+(define notes/ui/index
+  (lambda
+    ()
+    (html/join
+      (list
+        (notes/tree/style)
+        (html/h1 "Notes")
+        (html/p*
+          (html/attr "class" "muted")
+          "Outline-first notes. Folders load on open (htmx).")
+        (html/p*
+          (html/attr "class" "muted")
+          (html/join
+            (list
+              (html/a "/notes?slug=inbox" "Open inbox")
+              " · "
+              (html/a "/notes" "All folders"))))
+        (notes/ui/create-form)
+        (html/h2 "Folders")
+        (notes/ui/folders-html)))))
 
