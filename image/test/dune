@@ -52,3 +52,8 @@
  (name history_test)
  (modules history_test)
  (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx))
+
+(test
+ (name merge_promote_test)
+ (modules merge_promote_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))
