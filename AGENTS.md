@@ -59,6 +59,19 @@ keep the two roughly aligned when you change authority/workflow rules.
 
 Also: `(notes/doc/get "wiki-schema")` for the notes/wiki shape.
 
+### Session ritual (habitat-workflow)
+
+Live authority: agents note section **Session ritual (habitat-workflow)**
+plus `log/issues`, `log/sessions`, and per-package `spec/<pkg>` notes
+docs (seeded: `spec/todo`). Spec chapter: `borge/habitat-workflow.borg`.
+
+1. **Work on your branch** — define/route on `<user>/personal` or dev, not
+   directly on `system/main`. Promote is the gate.
+2. **Obituary rule** — no silent reversals; before replacing an
+   implementation, write what/why in `spec/<pkg>` DECISIONS.
+3. **File, don't fix** — out-of-scope items → `log/issues` (one line).
+4. **Handoff** — end of session ~3 lines → `log/sessions`.
+
 From this machine (after bootstrap + secrets):
 
 ```bash
