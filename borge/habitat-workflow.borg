@@ -259,7 +259,7 @@
   )
   (subsection spec-health
    (doc "Habitat health page: packages x (flows verified, doc coverage, drift holes) — borge report as a browser page")
-   (status planned)
+   (status implemented)
    (verify
     (smoke "GET /spec lists every package with a spec doc, its flow resolution status, and doc coverage"))
    (details
