@@ -71,6 +71,30 @@ let skip_ws_and_comments (st : state) : unit =
   in
   loop ()
 
+let is_digit c = c >= '0' && c <= '9'
+
+let digit_val c = Char.code c - Char.code '0'
+
+(** Escape a string for Nopales source. Keep UTF-8 bytes as-is so
+    round-trip through the reader preserves non-ASCII text. Only quote,
+    backslash, and a few controls get named escapes; other controls use
+    exactly-three-digit decimal [\\ddd] (OCaml-compatible). *)
+let escape_string (s : string) : string =
+  let buf = Buffer.create (String.length s + 8) in
+  String.iter
+    (fun c ->
+      match c with
+      | '"' -> Buffer.add_string buf "\\\""
+      | '\\' -> Buffer.add_string buf "\\\\"
+      | '\n' -> Buffer.add_string buf "\\n"
+      | '\t' -> Buffer.add_string buf "\\t"
+      | '\r' -> Buffer.add_string buf "\\r"
+      | c when Char.code c < 0x20 ->
+          Buffer.add_string buf (Printf.sprintf "\\%03d" (Char.code c))
+      | c -> Buffer.add_char buf c)
+    s;
+  Buffer.contents buf
+
 let read_string (st : state) : string =
   (* assumes current char is the opening quote *)
   ignore (advance st);  (* consume the opening quote *)
@@ -85,8 +109,10 @@ let read_string (st : state) : string =
     | Some '\\' ->
         (* Escape sequences in string literals.
            Named: n t r backslash double-quote single-quote.
-           Any other backslash-X is treated as literal X (forgiving),
-           so editor over-escapes and paste noise do not hard-fail. *)
+           Exactly three decimal digits [\\ddd] → byte (OCaml String.escaped
+           form; needed so export/pull vaults with non-ASCII still load).
+           Any other backslash-X is treated as literal X (forgiving), so
+           editor over-escapes and paste noise do not hard-fail. *)
         ignore (advance st);  (* consume the backslash we peeked *)
         (match peek st with
          | None ->
@@ -97,6 +123,34 @@ let read_string (st : state) : string =
          | Some '\\' -> ignore (advance st); Buffer.add_char buf '\\'
          | Some '"' -> ignore (advance st); Buffer.add_char buf '"'
          | Some '\'' -> ignore (advance st); Buffer.add_char buf '\''
+         | Some d1 when is_digit d1 ->
+             ignore (advance st);
+             (match peek st with
+              | Some d2 when is_digit d2 ->
+                  ignore (advance st);
+                  (match peek st with
+                   | Some d3 when is_digit d3 ->
+                       ignore (advance st);
+                       let n =
+                         (digit_val d1 * 100) + (digit_val d2 * 10) + digit_val d3
+                       in
+                       if n > 255 then
+                         raise
+                           (Reader_error
+                              ( "bad decimal escape \\"
+                                ^ String.make 1 d1
+                                ^ String.make 1 d2
+                                ^ String.make 1 d3
+                              , st.line
+                              , st.col ));
+                       Buffer.add_char buf (Char.chr n)
+                   | _ ->
+                       (* two digits only: forgiving literal digits *)
+                       Buffer.add_char buf d1;
+                       Buffer.add_char buf d2)
+              | _ ->
+                  (* one digit only: forgiving literal digit *)
+                  Buffer.add_char buf d1)
          | Some c ->
              ignore (advance st);
              Buffer.add_char buf c);
@@ -279,7 +333,7 @@ let rec pp_value (v : value) : string =
       if String.contains s '.' || String.contains s 'e' || String.contains s 'E'
       then s
       else s ^ ".0"
-  | VStr s -> "\"" ^ String.escaped s ^ "\""
+  | VStr s -> "\"" ^ escape_string s ^ "\""
   | VSymbol s ->
       (* Bare token; quote odd names as |…| if needed later. *)
       s

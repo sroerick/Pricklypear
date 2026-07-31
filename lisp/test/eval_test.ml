@@ -30,6 +30,36 @@ let reader_tests = [
   reads_as "false" "#f" (Ast.VBool false);
   reads_as "string" "\"hello\"" (Ast.VStr "hello");
   reads_as "nil" "()" Ast.VNil;
+  (* UTF-8 degree sign as raw bytes must round-trip via pp_value (not
+     OCaml String.escaped \\194\\176, which the old reader turned into
+     literal digits "194176" and broke the weather widget). *)
+  ("reader: utf8 string round-trip", `Quick, fun () ->
+    let deg = "\xC2\xB0" in
+    let original = "71" ^ deg ^ "F" in
+    let printed = Reader.pp_value (Ast.VStr original) in
+    (* printer keeps UTF-8 bytes; must not emit \\194\\176 *)
+    Alcotest.(check string) "escape_string keeps utf8"
+      original (Reader.escape_string original);
+    Alcotest.(check bool) "pp has no backslash-digit for degree"
+      false (String.contains printed '\\' &&
+             let i = try String.index printed '\\' with Not_found -> -1 in
+             i >= 0 && i + 1 < String.length printed &&
+             printed.[i + 1] >= '0' && printed.[i + 1] <= '9');
+    match Reader.read_one printed with
+    | Lit (Ast.VStr s) ->
+        Alcotest.(check string) "utf8 round-trip" original s
+    | other -> Alcotest.failf "expected string lit, got %s" (Reader.pp_expr other));
+  ("reader: decimal \\ddd byte escape", `Quick, fun () ->
+    (* Legacy OCaml String.escaped form still loads: \\194\\176 → UTF-8 ° *)
+    match Reader.read_one "\"\\194\\176F\"" with
+    | Lit (Ast.VStr s) ->
+        Alcotest.(check string) "ddd escape" "\xC2\xB0F" s
+    | other -> Alcotest.failf "expected string lit, got %s" (Reader.pp_expr other));
+  ("reader: named escapes", `Quick, fun () ->
+    match Reader.read_one "\"a\\nb\\tc\\\"d\"" with
+    | Lit (Ast.VStr s) ->
+        Alcotest.(check string) "named" "a\nb\tc\"d" s
+    | other -> Alcotest.failf "expected string lit, got %s" (Reader.pp_expr other));
 ]
 
 let reader_list_tests = [
@@ -978,7 +1008,73 @@ let gate_tests = [
     let env = Env.create () in
     ignore (Eval.eval_string ~prims env "(define h (lambda () (http-get)))");
     Alcotest.(check bool) "net denied by default" false (gate_ok env "h"));
+  ("gate: macro hiding create is denied after expand", `Quick, fun () ->
+    (* BORGE-1785212882: (wq …) expands to (create …); gate must see WriteDb. *)
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    ignore (Eval.eval_string ~prims env
+      "(defmacro wq (t) `(create ,t))");
+    ignore (Eval.eval_string ~prims env
+      "(define h (lambda () (wq note)))");
+    Alcotest.(check bool) "macro write denied" false (gate_ok env "h"));
+  ("gate: pure macro still allowed", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    ignore (Eval.eval_string ~prims env
+      "(defmacro twice (x) `(+ ,x ,x))");
+    ignore (Eval.eval_string ~prims env
+      "(define h (lambda () (twice 3)))");
+    Alcotest.(check bool) "pure macro allowed" true (gate_ok env "h"));
 ]
+
+let contains_sub ~sub s =
+  let n = String.length s and m = String.length sub in
+  let rec find i =
+    if i + m > n then false
+    else if String.sub s i m = sub then true
+    else find (i + 1)
+  in
+  m = 0 || find 0
+
+let shadow_tests = [
+  ("define cannot shadow VPrim", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    Env.define env "create" (Ast.VPrim "create");
+    (match
+       try
+         ignore (Eval.eval_string ~prims env "(define create (lambda () 1))");
+         None
+       with Ast.Interp_error (Ast.User_error m) -> Some m
+          | exn -> Alcotest.failf "unexpected: %s" (Printexc.to_string exn)
+     with
+     | Some m ->
+         Alcotest.(check bool) "mentions primitive" true
+           (contains_sub ~sub:"primitive" m)
+     | None -> Alcotest.fail "expected define to reject prim shadow"));
+  ("define cannot shadow special form name", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    (match
+       try
+         ignore (Eval.eval_string ~prims env "(define if (lambda () 1))");
+         None
+       with Ast.Interp_error (Ast.User_error m) -> Some m
+          | exn -> Alcotest.failf "unexpected: %s" (Printexc.to_string exn)
+     with
+     | Some m ->
+         Alcotest.(check bool) "mentions special form" true
+           (contains_sub ~sub:"special form" m)
+     | None -> Alcotest.fail "expected define to reject special form"));
+  ("define of ordinary name still works", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let v = Eval.eval_string ~prims env "(define ok (lambda () 42))" in
+    match v with
+    | Ast.VLambda _ -> ()
+    | other -> Alcotest.failf "got %s" (Reader.pp_value other));
+]
+
 
 let () =
   Alcotest.run "pricklypear-lisp" [
@@ -994,4 +1090,5 @@ let () =
     "tco", tco_tests;
     "dialect", dialect_tests;
     "gate", gate_tests;
+    "shadow", shadow_tests;
   ]

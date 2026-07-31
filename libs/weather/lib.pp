@@ -1,5 +1,9 @@
 ;; package weather -- exported from live branch system/main
 ;; Sync: scripts/pp_sync.py pull|push
+;;
+;; Keep JS string bodies ASCII-safe (use JS \\u00B0 etc). Nopales used to
+;; print non-ASCII via OCaml String.escaped (\\194\\176); the reader treated
+;; those as literal digits, so 71 deg F became 71194176F in the browser.
 
 (define weather/default-label
   "Cody, WY")
@@ -49,7 +53,7 @@
         "45:'Fog',48:'Rime fog',51:'Light drizzle',53:'Drizzle',55:'Heavy drizzle',"
         "61:'Light rain',63:'Rain',65:'Heavy rain',71:'Light snow',73:'Snow',"
         "75:'Heavy snow',80:'Rain showers',81:'Rain showers',82:'Heavy showers',"
-        "95:'Thunderstorm'}[c]||'\226\128\148');"
+        "95:'Thunderstorm'}[c]||'-');"
         "}"
         "function loadLoc(){"
         "try{var s=localStorage.getItem(KEY);if(s)return JSON.parse(s);}catch(e){}"
@@ -62,7 +66,7 @@
         "if(locEl)locEl.textContent=loc.label||(loc.lat+', '+loc.lon);"
         "if(!cur){body.innerHTML='<p class=\"muted\">No data</p>';return;}"
         "var t=Math.round(cur.temperature_2m);"
-        "var u=cur.temperature_2m!=null?'\194\176F':'';"
+        "var u=cur.temperature_2m!=null?'\\u00B0F':'';"
         "var w=codes(cur.weather_code);"
         "var hum=cur.relative_humidity_2m!=null?(cur.relative_humidity_2m+'% rh'):'';"
         "var wind=cur.wind_speed_10m!=null?(Math.round(cur.wind_speed_10m)+' mph'):'';"
@@ -70,16 +74,16 @@
         "'<div class=\"wx-row\">'"
         "+'<div class=\"wx-temp\">'+t+u+'</div>'"
         "+'<div><div><strong>'+w+'</strong></div>'"
-        "+'<div class=\"wx-meta\">'+[hum,wind].filter(Boolean).join(' \194\183 ')+'</div></div>'"
+        "+'<div class=\"wx-meta\">'+[hum,wind].filter(Boolean).join(' | ')+'</div></div>'"
         "+'</div>'"
-        "+'<div class=\"wx-updated muted\">via Open-Meteo \194\183 local browser fetch</div>';"
+        "+'<div class=\"wx-updated muted\">via Open-Meteo | local browser fetch</div>';"
         "}"
         "function fail(msg){"
         "body.innerHTML='<p class=\"wx-err\">'+msg+'</p>';"
         "}"
         "function fetchWx(loc){"
-        "body.innerHTML='<p class=\"muted\">Loading\226\128\166</p>';"
-        "if(locEl)locEl.textContent=loc.label||'\226\128\166';"
+        "body.innerHTML='<p class=\"muted\">Loading...</p>';"
+        "if(locEl)locEl.textContent=loc.label||'...';"
         "var url='https://api.open-meteo.com/v1/forecast'"
         "+'?latitude='+encodeURIComponent(loc.lat)"
         "+'&longitude='+encodeURIComponent(loc.lon)"
@@ -105,7 +109,7 @@
         "e.preventDefault();"
         "var q=(input&&input.value||'').trim();"
         "if(!q)return;"
-        "body.innerHTML='<p class=\"muted\">Looking up\226\128\166</p>';"
+        "body.innerHTML='<p class=\"muted\">Looking up...</p>';"
         "geocode(q).then(function(loc){saveLoc(loc);fetchWx(loc);})"
         ".catch(function(err){fail(err&&err.message?err.message:String(err));});"
         "});"
@@ -151,7 +155,7 @@
             (html/attr "id" "weather-body")
             (html/p*
               (html/attr "class" "muted")
-              "Loading\226\128\166"))
+              "Loading..."))
           (html/tag
             "form"
             (html/attrs
@@ -168,7 +172,7 @@
                       (html/attr "type" "text")
                       (html/attr "id" "weather-city")
                       (html/attr "name" "city")
-                      (html/attr "placeholder" "City\226\128\166")
+                      (html/attr "placeholder" "City...")
                       (html/attr "autocomplete" "off"))))
                 (html/button (html/attr "type" "submit") "Set"))))
           (weather/style)
@@ -176,4 +180,3 @@
             weather/default-lat
             weather/default-lon
             weather/default-label))))))
-
