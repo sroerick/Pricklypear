@@ -12,17 +12,29 @@
     Addresses BORGE-1785212463 / BORGE-1785212603: the previous gate read
     function_defs from the store (stale after the define persist race)
     and DEFAULTED TO ALLOW when the handler was absent — so a typo or an
-    eval-order race silently published a route with no effect check. *)
+    eval-order race silently published a route with no effect check.
+
+    BORGE-1785212882: bodies are macroexpanded before [Effect.infer] so a
+    macro cannot hide WriteDb/Publish/etc. from the allowlist. Expansion
+    uses [Eval.macroexpand_expr]; [Effect.infer] stays pure. *)
 open Ast
 
+(** Macroexpand [body] in [env]. Propagates [Interp_error]; other
+    failures leave the body unexpanded (still fail-closed if effects
+    remain hidden — prefer a correct expand, don't crash the gate). *)
+let expand_body (env : Env.env) (body : expr) : expr =
+  try Eval.macroexpand_expr env body
+  with Interp_error _ as ex -> raise ex
+     | _ -> body
+
 (** Collect (name, body) for every VLambda visible in [env] (walks the
-    parent chain). Used to build the known_fn cross-reference so a
-    handler's calls to sibling user functions resolve during inference. *)
+    parent chain). Bodies are macroexpanded so sibling known_fn resolution
+    also sees through macros. *)
 let env_lambda_bindings (env : Env.env) : (string * expr) list =
   Env.fold env
     (fun name v acc ->
       match v with
-      | VLambda (_, body, _) -> (name, body) :: acc
+      | VLambda (_, body, _) -> (name, expand_body env body) :: acc
       | _ -> acc)
     []
 
@@ -46,7 +58,18 @@ let check_public_handler ~(env : Env.env) (handler : string)
            (Effect.public_route_allow_pp ()))
   in
   match Env.lookup env handler with
-  | Some (VLambda (_, body, _)) -> check (Effect.infer ~known_fn body)
+  | Some (VLambda (_, body, _)) ->
+      (try check (Effect.infer ~known_fn (expand_body env body))
+       with Interp_error e ->
+         Error
+           (Printf.sprintf
+              "public route denied: handler %S macroexpand failed: %s"
+              handler
+              (match e with
+               | User_error m -> m
+               | Arity_mismatch (n, exp, got) ->
+                   Printf.sprintf "%s arity %d vs %d" n exp got
+               | _ -> "interp error")))
   | Some (VPrim name) -> check (Effect.effects_for_prim name)
   | Some _ | None ->
       Error
