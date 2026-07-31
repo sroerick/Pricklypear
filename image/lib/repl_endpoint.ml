@@ -1,17 +1,9 @@
 (** Pricklypear Image — optional TCP REPL endpoint.
 
-    Loopback line-protocol REPL on [repl_port] (default 7878; dev often
-    17878 via PP_REPL_PORT). Not an SSH server.
-
-    Protocol (minimal):
-      Connect: TCP to 127.0.0.1:repl_port
-      Auth: none at the application layer — bind loopback only (or tunnel).
-      Exchange: UTF-8 lines in; REPL output out. :quit closes.
-
-    Accepts one connection at a time for v1. Primary interactive surfaces
-    are browser /repl and POST /api/eval (HTTP-authenticated). *)
+    Loopback line-protocol REPL. Still Lwt_unix sockets; boot runs this
+    under Lwt_eio.run_lwt from an Eio fiber. Primary interactive surfaces
+    remain browser /repl and POST /api/eval. *)
 open Lwt.Syntax
-open Lwt.Infix
 
 let default_port = 7878
 
@@ -19,8 +11,8 @@ let pp_error (e : Pricklypear_lisp.Ast.interp_error) : string =
   let open Pricklypear_lisp.Ast in
   match e with
   | Unbound_var s -> Printf.sprintf "unbound variable: %s" s
-  | Not_a_function v -> Printf.sprintf "not a function: %s"
-                          (Pricklypear_lisp.Reader.pp_value v)
+  | Not_a_function v ->
+      Printf.sprintf "not a function: %s" (Pricklypear_lisp.Reader.pp_value v)
   | Arity_mismatch (n, e_doc, g) ->
       Printf.sprintf "arity mismatch in %s: expected %d, got %d" n e_doc g
   | Wrong_arg_count (n, e_doc, g) ->
@@ -35,47 +27,35 @@ let pp_error (e : Pricklypear_lisp.Ast.interp_error) : string =
 let prompt (s : Session.t) : string =
   Printf.sprintf "%s> " (Session.branch_name s)
 
-(* Run a single REPL turn on the given connected channel pair.
-   Returns false if the connection is closed (EOF), true to continue. *)
-let repl_turn
-    ~(session : Session.t)
-    ~(ic : Lwt_io.input_channel)
+let repl_turn ~(session : Session.t) ~(ic : Lwt_io.input_channel)
     ~(oc : Lwt_io.output_channel) : bool Lwt.t =
   let* () = Lwt_io.write oc (prompt session) in
   let* () = Lwt_io.flush oc in
   let* line = Lwt_io.read_line_opt ic in
   match line with
-  | None -> Lwt.return_false
-  | Some "" -> Lwt.return_true  (* empty line: just re-prompt *)
-  | Some input ->
-      Lwt.catch
-        (fun () ->
-          match input with
-          | ":quit" | ":q" -> Lwt.return_false
-          | _ ->
-              let* result = Session.eval_one session input in
+  | None -> Lwt.return false
+  | Some "" -> Lwt.return true
+  | Some input -> (
+      match input with
+      | ":quit" | ":q" -> Lwt.return false
+      | _ ->
+          Lwt.catch
+            (fun () ->
+              let result = Session.eval_one session input in
               let output = Pricklypear_lisp.Reader.pp_value result in
               let* () = Lwt_io.write oc (output ^ "\n") in
               let* () = Lwt_io.flush oc in
-              Lwt.return_true)
-        (fun exn ->
-          let msg =
-            match exn with
-            | Pricklypear_lisp.Ast.Interp_error e -> pp_error e
-            | _ -> Printexc.to_string exn
-          in
-          let* () = Lwt_io.write oc ("error: " ^ msg ^ "\n") in
-          let* () = Lwt_io.flush oc in
-          Lwt.return_true)
+              Lwt.return true)
+            (fun exn ->
+              let msg =
+                match exn with
+                | Pricklypear_lisp.Ast.Interp_error e -> pp_error e
+                | _ -> Printexc.to_string exn
+              in
+              let* () = Lwt_io.write oc ("error: " ^ msg ^ "\n") in
+              let* () = Lwt_io.flush oc in
+              Lwt.return true))
 
-(* Accept connections on [port]. For the minimal image we handle ONE
-   at a time (blocking accept). TODO: concurrent sessions.
-
-   HARDENING: on `:quit` or peer close, Lwt_io.close may raise EBADF
-   because (a) the fd was already closed by the peer, or (b) `ic` and
-   `oc` share the underlying fd so closing one invalidates the other.
-   Post-disconnect cleanup is wrapped in Lwt.catch so the image keeps
-   serving HTTP and can accept a new REPL connection. *)
 let serve ~(session : Session.t) ?(port = default_port) () : unit Lwt.t =
   let addr = Lwt_unix.ADDR_INET (Unix.inet_addr_loopback, port) in
   let sock = Lwt_unix.socket Lwt_unix.PF_INET Lwt_unix.SOCK_STREAM 0 in
@@ -85,37 +65,33 @@ let serve ~(session : Session.t) ?(port = default_port) () : unit Lwt.t =
   Printf.eprintf "[repl] listening on 127.0.0.1:%d\n" port;
   flush stderr;
   let rec loop () =
-    let* (fd, _peer) = Lwt_unix.accept sock in
+    let* fd, _peer = Lwt_unix.accept sock in
     let ic = Lwt_io.of_fd ~mode:Lwt_io.Input fd in
     let oc = Lwt_io.of_fd ~mode:Lwt_io.Output fd in
-    let* () = Lwt_io.write oc "Pricklypear REPL. Type :quit to exit.\n" in
+    let* () =
+      Lwt_io.write oc "Pricklypear REPL. Type :quit to exit.\n"
+    in
     let* () = Lwt_io.flush oc in
     let rec turn_loop () =
       let* cont = repl_turn ~session ~ic ~oc in
       if cont then turn_loop () else Lwt.return_unit
     in
-    (* Run the turn loop; on any exception (expected: EBADF on peer-close,
-       or actually any user-lob exn) just log and proceed to cleanup. *)
-    let* () = Lwt.catch turn_loop
-      (fun exn ->
-        (* Don't log normal peer-disconnect EBADF as a scary error. *)
-        (match exn with
-         | Unix.Unix_error (Unix.EBADF, _, _) ->
-             Printf.eprintf "[repl] peer disconnected\n"
-         | _ ->
-             Printf.eprintf "[repl] connection error: %s\n"
-               (Printexc.to_string exn));
-        flush stderr;
-        Lwt.return_unit)
+    let* () =
+      Lwt.catch turn_loop (fun exn ->
+          (match exn with
+           | Unix.Unix_error (Unix.EBADF, _, _) ->
+               Printf.eprintf "[repl] peer disconnected\n"
+           | _ ->
+               Printf.eprintf "[repl] connection error: %s\n"
+                 (Printexc.to_string exn));
+          flush stderr;
+          Lwt.return_unit)
     in
-    (* Cleanup: close ic and oc. These share the underlying fd, so the
-       second close may raise EBADF. Swallow it. *)
-    let* () = Lwt.catch (fun () -> Lwt_io.close ic)
-      (fun _ -> Lwt.return_unit) in
-    let* () = Lwt.catch (fun () -> Lwt_io.close oc)
-      (fun _ -> Lwt.return_unit) in
-    let* () = Lwt.catch (fun () -> Lwt_unix.close fd)
-      (fun _ -> Lwt.return_unit) in
+    let* () = Lwt.catch (fun () -> Lwt_io.close ic) (fun _ -> Lwt.return_unit) in
+    let* () = Lwt.catch (fun () -> Lwt_io.close oc) (fun _ -> Lwt.return_unit) in
+    let* () =
+      Lwt.catch (fun () -> Lwt_unix.close fd) (fun _ -> Lwt.return_unit)
+    in
     loop ()
   in
   loop ()

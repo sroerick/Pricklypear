@@ -1,6 +1,5 @@
 (** AI agent tools, propose/install, LLM rewrite/growth loops.
     Operates on [Session_types.t]; re-exported from [Session]. *)
-open Lwt.Syntax
 open Session_types
 
 (** Human-readable message from evaluator/reader exceptions (for agent tools
@@ -15,11 +14,11 @@ let pp_interp_exn (exn : exn) : string =
   | _ -> Printexc.to_string exn
 
 (** Resolve per-user LLM key (auth.user-llm-keys); env fallback inside client. *)
-let with_user_llm (t : t) (f : unit -> 'a Lwt.t) : 'a Lwt.t =
+let with_user_llm (t : t) (f : unit -> 'a) : 'a =
   let uid = t.manifest.user_id in
   if uid = "" || uid = "anonymous" || uid = "public" then f ()
   else
-    let* secret = Auth_store.get_llm_key_secret t.store ~user_id:uid in
+    let secret = Auth_store.get_llm_key_secret t.store ~user_id:uid in
     match secret with
     | None -> f ()
     | Some (key, meta) ->
@@ -51,20 +50,19 @@ let ensure_callable_body (body_src : string) : string =
    HTTP and AI propose. [author] is recorded on function_defs. *)
 let define_binding (t : t) ~(name : string) ~(body_src : string)
     ~(author : string)
-    : (Pricklypear_lisp.Ast.value, string) result Lwt.t =
+    : (Pricklypear_lisp.Ast.value, string) result =
   let body_src = ensure_callable_body body_src in
   let input = Printf.sprintf "(define %s %s)" name body_src in
-  Lwt.catch
-    (fun () ->
+  (try
       let expr = Pricklypear_lisp.Reader.read_one input in
-      let* v =
+      let v =
         Control_rim.run_lwt ~prims:t.prims (fun () ->
           Pricklypear_lisp.Eval.eval_string_direct
             ~prims:Pricklypear_lisp.Eval.empty_prims t.env input)
       in
       (match Pricklypear_lisp.Eval.parse_top_define expr with
        | Some { name = n; body = body_expr; doc } ->
-           let* () =
+           let () =
              Store.persist_function t.store n body_expr ~doc author
            in
            (* Stale chrome nav was the "bible only on home" bug: home
@@ -75,13 +73,13 @@ let define_binding (t : t) ~(name : string) ~(body_src : string)
              t.ui_css <- None);
            (* Impact + change transcript filled by Session after define when
               called via Session.eval paths; install_function appends text. *)
-           Lwt.return (Ok v)
+           (Ok v)
        | None ->
            (* Still bound in env if define special-form ran *)
-           Lwt.return (Ok v)))
-    (fun exn ->
+           (Ok v))
+    with exn ->
       let msg = pp_interp_exn exn in
-      Lwt.return (Error msg))
+      (Error msg))
 
 (* First-run recipe: hello page function + route. No Lisp knowledge required. *)
 (* Optional elevate: PP_AI_ALLOW_WRITE=1 allows WriteDb/Publish/etc. *)
@@ -99,10 +97,10 @@ let ai_allow_set () =
 
 (** Derive-on-read [known_fn] from branch-visible function_defs (H0.2). *)
 let known_fn_from_store (t : t)
-  : Pricklypear_lisp.Effect.known_fn_lookup Lwt.t =
-  let* rows = Store.list_function_names t.store in
+  : Pricklypear_lisp.Effect.known_fn_lookup =
+  let rows = Store.list_function_names t.store in
   let bindings = List.map (fun (n, e, _) -> (n, e)) rows in
-  Lwt.return (Pricklypear_lisp.Effect.known_fn_of_bindings bindings)
+  (Pricklypear_lisp.Effect.known_fn_of_bindings bindings)
 
 let check_ai_body_effects ?(known_fn = fun _ -> None)
     ?env (body_src : string) : (unit, string) result =
@@ -131,29 +129,27 @@ let check_ai_body_effects ?(known_fn = fun _ -> None)
 
 (** Install a Lisp body as [name] with AI provenance (parse + effect gate). *)
 let install_ai_function (t : t) ~(name : string) ~(body_src : string)
-    : Pricklypear_lisp.Ast.value Lwt.t =
+    : Pricklypear_lisp.Ast.value =
   match Llm_client.extract_lisp_sexpr body_src with
   | Error e ->
       let preview =
         let s = String.trim body_src in
         if String.length s > 240 then String.sub s 0 240 ^ "…" else s
       in
-      Lwt.return
-        (Pricklypear_lisp.Ast.VStr
+      (Pricklypear_lisp.Ast.VStr
            (Printf.sprintf "ai body invalid: %s\n---\n%s" e preview))
   | Ok body_src ->
-      let* known_fn = known_fn_from_store t in
+      let known_fn = known_fn_from_store t in
       (match check_ai_body_effects ~known_fn ~env:t.env body_src with
        | Error pe ->
-           Lwt.return
-             (Pricklypear_lisp.Ast.VStr
+           (Pricklypear_lisp.Ast.VStr
                 (Printf.sprintf "ai rejected by effects: %s\n---\n%s" pe body_src))
        | Ok () ->
            let author = "agent:" ^ Llm_client.active_model () in
-           let* def = define_binding t ~name ~body_src ~author in
+           let def = define_binding t ~name ~body_src ~author in
            (match def with
             | Ok _ ->
-                let* () = Call_graph.record_define_side_effects t ~name in
+                let () = Call_graph.record_define_side_effects t ~name in
                 let badge =
                   try
                     let e = Pricklypear_lisp.Reader.read_one body_src in
@@ -162,29 +158,27 @@ let install_ai_function (t : t) ~(name : string) ~(body_src : string)
                   with _ -> "?"
                 in
                 let impact = Call_graph.impact_summary_text t name in
-                Lwt.return
-                  (Pricklypear_lisp.Ast.VStr
+                (Pricklypear_lisp.Ast.VStr
                      (Printf.sprintf "installed %s by %s [%s]\n%s\n%s"
                         name author badge body_src impact))
             | Error e ->
-                Lwt.return
-                  (Pricklypear_lisp.Ast.VStr
+                (Pricklypear_lisp.Ast.VStr
                      (Printf.sprintf "ai body invalid: %s\n---\n%s" e body_src))))
 
 (** Pretty source body for a binding (env lambda or store).
     Special forms are not stored; return a short language card instead. *)
-let function_source (t : t) (name : string) : string option Lwt.t =
-  let* found = Store.lookup_function t.store name in
+let function_source (t : t) (name : string) : string option =
+  let found = Store.lookup_function t.store name in
   match found with
   | Some (expr, _, _) ->
-      Lwt.return (Some (Pricklypear_lisp.Reader.pp_expr expr))
+      (Some (Pricklypear_lisp.Reader.pp_expr expr))
   | None ->
       (match Pricklypear_lisp.Env.lookup t.env name with
        | Some (Pricklypear_lisp.Ast.VLambda (params, body, _)) ->
            let e =
              Pricklypear_lisp.Ast.Lambda (params, body)
            in
-           Lwt.return (Some (Pricklypear_lisp.Reader.pp_expr e))
+           (Some (Pricklypear_lisp.Reader.pp_expr e))
        | _ ->
            (match Pricklypear_lisp.Special_forms.find name with
             | Some e ->
@@ -193,24 +187,24 @@ let function_source (t : t) (name : string) : string option Lwt.t =
                     ";; special form (evaluator) — not a Lisp binding\n;; %s\n;; %s\n%s"
                     e.arity e.summary e.examples
                 in
-                Lwt.return (Some card)
-            | None -> Lwt.return_none))
+                (Some card)
+            | None -> None))
 
 (** Raw function body as quoted data (no eval, no pretty-print).
     Store body (or env lambda) reified via [Eval.quote_to_value] so the
     result is a first-class Lisp value tree agents can walk/rewrite.
     Missing / special-form / non-lambda → None. *)
 let function_ast (t : t) (name : string)
-  : Pricklypear_lisp.Ast.value option Lwt.t =
-  let* found = Store.lookup_function t.store name in
+  : Pricklypear_lisp.Ast.value option =
+  let found = Store.lookup_function t.store name in
   match found with
   | Some (expr, _, _) ->
-      Lwt.return (Some (Pricklypear_lisp.Eval.quote_to_value expr))
+      (Some (Pricklypear_lisp.Eval.quote_to_value expr))
   | None ->
       (match Pricklypear_lisp.Env.lookup t.env name with
        | Some (Pricklypear_lisp.Ast.VLambda (params, body, _)) ->
            let e = Pricklypear_lisp.Ast.Lambda (params, body) in
-           Lwt.return (Some (Pricklypear_lisp.Eval.quote_to_value e))
+           (Some (Pricklypear_lisp.Eval.quote_to_value e))
        | Some (Pricklypear_lisp.Ast.VMacro (params, body, _)) ->
            (* Same shape as lambda; tagged head so agents can tell macros apart. *)
            let v =
@@ -221,8 +215,8 @@ let function_ast (t : t) (name : string)
                ; Pricklypear_lisp.Eval.quote_to_value body
                ]
            in
-           Lwt.return (Some v)
-       | _ -> Lwt.return_none)
+           (Some v)
+       | _ -> None)
 
 (** Names in package [pkg].
 
@@ -234,8 +228,8 @@ let function_ast (t : t) (name : string)
     segment parent), so [(package-bindings "todo")] missed
     [todo/item/add] (parent [todo/item]). Prefix match is what
     agent.txt and explorers expect. *)
-let package_binding_names (t : t) (pkg : string) : string list Lwt.t =
-  let* defs = Store.list_function_names t.store in
+let package_binding_names (t : t) (pkg : string) : string list =
+  let defs = Store.list_function_names t.store in
   let pkg =
     let p = String.trim pkg in
     if p = "(root)" || p = "root" then "" else p
@@ -254,23 +248,23 @@ let package_binding_names (t : t) (pkg : string) : string list Lwt.t =
       defs
     |> List.sort_uniq String.compare
   in
-  Lwt.return names
+  names
 
 (** Public export names for [pkg].
     Resolution: declared package_registry exports (if non-empty) →
     shallow heuristic ([pkg] or [pkg/local] with no further [/]).
     Kernel/std freeze is applied by the session prim wrapper. *)
-let package_export_names (t : t) (pkg : string) : string list Lwt.t =
+let package_export_names (t : t) (pkg : string) : string list =
   let pkg = String.trim pkg in
   let pkg = if pkg = "(root)" || pkg = "root" then "" else pkg in
-  let* reg =
-    if pkg = "" then Lwt.return_none else Store.lookup_package t.store pkg
+  let reg =
+    if pkg = "" then None else Store.lookup_package t.store pkg
   in
   match reg with
-  | Some r when r.exports <> [] -> Lwt.return r.exports
+  | Some r when r.exports <> [] -> r.exports
   | _ ->
-      let* names = package_binding_names t pkg in
-      if pkg = "" then Lwt.return names
+      let names = package_binding_names t pkg in
+      if pkg = "" then names
       else
         let prefix = pkg ^ "/" in
         let plen = String.length prefix in
@@ -283,11 +277,11 @@ let package_export_names (t : t) (pkg : string) : string list Lwt.t =
                   && not (String.contains_from name plen '/')))
             names
         in
-        Lwt.return shallow
+        shallow
 
 (** Unique top-level package prefixes from visible function_defs. *)
-let list_package_names (t : t) : string list Lwt.t =
-  let* defs = Store.list_function_names t.store in
+let list_package_names (t : t) : string list =
+  let defs = Store.list_function_names t.store in
   let tbl = Hashtbl.create 32 in
   List.iter
     (fun (name, _, _) ->
@@ -301,7 +295,7 @@ let list_package_names (t : t) : string list Lwt.t =
     Hashtbl.fold (fun k _ acc -> k :: acc) tbl []
     |> List.sort String.compare
   in
-  Lwt.return pkgs
+  pkgs
 
 let name_contains (name : string) (pat : string) : bool =
   if pat = "" then true
@@ -316,8 +310,8 @@ let name_contains (name : string) (pat : string) : bool =
 
 (** [(name, doc)] for visible defs whose name contains [pat].
     Doc falls back to empty string when unset (still listed). *)
-let apropos_docs (t : t) (pat : string) : (string * string) list Lwt.t =
-  let* defs = Store.list_function_names t.store in
+let apropos_docs (t : t) (pat : string) : (string * string) list =
+  let defs = Store.list_function_names t.store in
   let pat = String.trim pat in
   let names =
     List.filter_map
@@ -327,9 +321,9 @@ let apropos_docs (t : t) (pat : string) : (string * string) list Lwt.t =
     |> List.sort_uniq String.compare
   in
   let rec go acc = function
-    | [] -> Lwt.return (List.rev acc)
+    | [] -> (List.rev acc)
     | name :: rest ->
-        let* doc_opt = Store.lookup_function_doc t.store name in
+        let doc_opt = Store.lookup_function_doc t.store name in
         let doc =
           match doc_opt with
           | Some s -> s
@@ -345,21 +339,21 @@ let apropos_docs (t : t) (pat : string) : (string * string) list Lwt.t =
   go [] names
 
 (** Package or binding description for selective agent reveal. *)
-let describe (t : t) (needle : string) : string Lwt.t =
+let describe (t : t) (needle : string) : string =
   let needle = String.trim needle in
   if needle = "" then
-    Lwt.return "describe: need name or package string"
+    "describe: need name or package string"
   else
-    let* pkgs = list_package_names t in
-    let* pkg_names = package_binding_names t needle in
+    let pkgs = list_package_names t in
+    let pkg_names = package_binding_names t needle in
     let is_pkg =
       List.mem needle pkgs || List.length pkg_names > 0
     in
     (* Prefer exact binding describe when name is a concrete def and not
        only a package prefix with many children — if needle equals a
        binding name, show that binding. *)
-    let* exact_doc = Store.lookup_function_doc t.store needle in
-    let* exact_src = function_source t needle in
+    let exact_doc = Store.lookup_function_doc t.store needle in
+    let exact_src = function_source t needle in
     let has_exact = match exact_src with Some _ -> true | None -> false in
     if has_exact && not (List.length pkg_names > 1 && List.mem needle pkgs)
     then
@@ -373,17 +367,16 @@ let describe (t : t) (needle : string) : string Lwt.t =
                  let b = Primitives.prim_summary needle in
                  if b = "built-in primitive" then "(no docstring)" else b)
       in
-      Lwt.return
-        (Printf.sprintf
+      (Printf.sprintf
            "%s\n  doc: %s\n  next: (function-source %S) (function-ast %S)"
            needle doc needle needle)
     else if is_pkg then
-      let* exports = package_export_names t needle in
-      let* pairs =
+      let exports = package_export_names t needle in
+      let pairs =
         let rec go acc = function
-          | [] -> Lwt.return (List.rev acc)
+          | [] -> (List.rev acc)
           | name :: rest ->
-              let* d = Store.lookup_function_doc t.store name in
+              let d = Store.lookup_function_doc t.store name in
               let doc = match d with Some s -> s | None -> "" in
               go ((name, doc) :: acc) rest
         in
@@ -407,13 +400,12 @@ let describe (t : t) (needle : string) : string Lwt.t =
           (if lines = [] then "  (none)" else String.concat "\n" lines)
           needle (needle ^ "/")
       in
-      Lwt.return body
+      body
     else
       (* Fallback: treat as apropos hit list *)
-      let* pairs = apropos_docs t needle in
+      let pairs = apropos_docs t needle in
       if pairs = [] then
-        Lwt.return
-          (Printf.sprintf
+        (Printf.sprintf
              "%s: not a binding or package. Try (apropos %S) or (list-packages)."
              needle needle)
       else
@@ -430,23 +422,22 @@ let describe (t : t) (needle : string) : string Lwt.t =
              in
              take 30 pairs)
         in
-        Lwt.return
-          (Printf.sprintf
+        (Printf.sprintf
              "apropos %S (%d matches, showing up to 30):\n%s\n\
               refine: (apropos-docs %S) (describe \"pkg\")"
              needle (List.length pairs) (String.concat "\n" lines) needle)
 
 (** Export package as lib.pp text: (define name body)… pretty-printed. *)
-let export_package (t : t) (pkg : string) : string Lwt.t =
-  let* names = package_binding_names t pkg in
+let export_package (t : t) (pkg : string) : string =
+  let names = package_binding_names t pkg in
   let label = if pkg = "" || pkg = "(root)" then "(root)" else pkg in
   let buf = Buffer.create 4096 in
   Buffer.add_string buf
     (Printf.sprintf
        ";; package %s -- exported from live branch %s\n;; Sync: scripts/pp_sync.py pull|push\n\n"
        label t.manifest.branch_name);
-  let* reg =
-    if pkg = "" || pkg = "(root)" then Lwt.return_none
+  let reg =
+    if pkg = "" || pkg = "(root)" then None
     else Store.lookup_package t.store pkg
   in
   (match reg with
@@ -458,9 +449,9 @@ let export_package (t : t) (pkg : string) : string Lwt.t =
        Buffer.add_string buf "))\n\n"
    | _ -> ());
   let rec go = function
-    | [] -> Lwt.return (Buffer.contents buf)
+    | [] -> (Buffer.contents buf)
     | name :: rest ->
-        let* src = function_source t name in
+        let src = function_source t name in
         (match src with
          | None -> go rest
          | Some body ->
@@ -485,7 +476,7 @@ let export_package (t : t) (pkg : string) : string Lwt.t =
 
 (* AI propose: draft via agent portal, then install on current branch. *)
 let propose_function (t : t) ~(name : string) ~(spec : string)
-    : Pricklypear_lisp.Ast.value Lwt.t =
+    : Pricklypear_lisp.Ast.value =
   with_user_llm t (fun () ->
   let seed =
     "You write Pricklypear Lisp function bodies.\n" ^
@@ -504,22 +495,22 @@ let propose_function (t : t) ~(name : string) ~(spec : string)
       name spec
   in
   (* Low temperature; authoring is not chat. *)
-  let* res =
+  let res =
     Llm_client.agent_chat ~temperature:0.1 ~max_tokens:512
       ~seed ~prompt ()
   in
   match res with
   | Error e ->
-      Lwt.return (Pricklypear_lisp.Ast.VStr ("agent error: " ^ e))
+      (Pricklypear_lisp.Ast.VStr ("agent error: " ^ e))
   | Ok body_src ->
       install_ai_function t ~name ~body_src)
 
 (** Pretty-print a stored function body, or default stub. *)
-let current_fn_pretty (t : t) (name : string) : string Lwt.t =
-  let* found = Store.lookup_function t.store name in
+let current_fn_pretty (t : t) (name : string) : string =
+  let found = Store.lookup_function t.store name in
   match found with
   | Some (expr, _, _) ->
-      Lwt.return (Pricklypear_lisp.Reader.pp_expr expr)
+      (Pricklypear_lisp.Reader.pp_expr expr)
   | None ->
       (match Pricklypear_lisp.Env.lookup t.env name with
        | Some (Pricklypear_lisp.Ast.VLambda (params, body, _)) ->
@@ -527,8 +518,8 @@ let current_fn_pretty (t : t) (name : string) : string Lwt.t =
              "(lambda (" ^ String.concat " " params ^ ") " ^
              Pricklypear_lisp.Reader.pp_expr body ^ ")"
            in
-           Lwt.return p
-       | _ -> Lwt.return "(lambda () #f)")
+           p
+       | _ -> "(lambda () #f)")
 
 (** Freeze AI rewrite into store (coding tool). mode: replace|wrap *)
 (* ---- Tool-using agent loop (multi-function tasks) ---- *)
@@ -751,20 +742,18 @@ let run_smoke_route
     ~(path : string)
     ~(meth : http_method)
     ~(params : (string * string) list)
-    ~(contains : string option) : string Lwt.t =
+    ~(contains : string option) : string =
   let path = String.trim path in
   let meth_s = match meth with `GET -> "GET" | `POST -> "POST" in
   match Hashtbl.find_opt t.routes path with
   | None ->
-      Lwt.return
-        (Printf.sprintf
+      (Printf.sprintf
            "ok: false\nerror: no route registered for %s\n(hint: register_route path=%s handler=...)"
            path path)
   | Some (handler, _vis) ->
       (match Pricklypear_lisp.Env.lookup t.env handler with
        | None ->
-           Lwt.return
-             (Printf.sprintf
+           (Printf.sprintf
                 "ok: false\nroute: %s -> %s\nerror: handler unbound in env"
                 path handler)
        | Some _ ->
@@ -781,29 +770,21 @@ let run_smoke_route
              }
            in
            t.current_request <- Some req;
-           let* v_res =
-             Lwt.finalize
-               (fun () ->
-                  Lwt.catch
-                    (fun () ->
-                       let* v =
+           let v_res =
+             (Fun.protect ~finally:(fun () -> t.current_request <- None) (fun () -> (try
+      let v =
                          Control_rim.run_lwt ~prims:t.prims (fun () ->
                              Pricklypear_lisp.Eval.eval_string_direct
                                ~prims:Pricklypear_lisp.Eval.empty_prims t.env
                                ("(" ^ handler ^ ")"))
                        in
-                       Lwt.return (`Ok v))
-                    (fun exn ->
-                       Lwt.return
-                         (`Err ("handler error: " ^ pp_interp_exn exn))))
-               (fun () ->
-                  t.current_request <- None;
-                  Lwt.return_unit)
+                       (`Ok v)
+    with exn ->
+      (`Err ("handler error: " ^ pp_interp_exn exn)))))
            in
            (match v_res with
             | `Err msg ->
-                Lwt.return
-                  (Printf.sprintf
+                (Printf.sprintf
                      "ok: false\nroute: %s -> %s\nmethod: %s\nerror: %s"
                      path handler meth_s msg)
             | `Ok v ->
@@ -845,11 +826,10 @@ let run_smoke_route
                     @ [ "error: smoke failed — inspect_function, fix, re-smoke" ]
                   else lines
                 in
-                Lwt.return
-                  (String.concat "\n" lines ^ "\n--- snippet ---\n" ^ snippet)))
+                (String.concat "\n" lines ^ "\n--- snippet ---\n" ^ snippet)))
 
 let run_agent_tool (t : t) ~(name : string) ~(arguments : string)
-    : string Lwt.t =
+    : string =
   let args_json =
     try Yojson.Safe.from_string arguments with _ -> `Assoc []
   in
@@ -865,7 +845,7 @@ let run_agent_tool (t : t) ~(name : string) ~(arguments : string)
           | _ -> []
         with _ -> []
       in
-      Lwt.return (if names = [] then "(no bindings)" else String.concat "\n" names)
+      (if names = [] then "(no bindings)" else String.concat "\n" names)
   | "list_routes" ->
       let rs =
         Hashtbl.fold
@@ -874,19 +854,19 @@ let run_agent_tool (t : t) ~(name : string) ~(arguments : string)
           t.routes []
         |> List.sort String.compare
       in
-      Lwt.return (if rs = [] then "(no routes)" else String.concat "\n" rs)
+      (if rs = [] then "(no routes)" else String.concat "\n" rs)
   | "inspect_function" ->
       (match json_string_field args_json "name" with
-       | None -> Lwt.return "error: need name"
+       | None -> "error: need name"
        | Some n ->
-           let* pretty = current_fn_pretty t n in
-           Lwt.return pretty)
+           let pretty = current_fn_pretty t n in
+           pretty)
   | "install_function" ->
       (match json_string_field args_json "name", json_string_field args_json "body" with
        | Some n, Some body ->
-           let* v = install_ai_function t ~name:n ~body_src:body in
-           Lwt.return (pp_value_short v)
-       | _ -> Lwt.return "error: need name and body")
+           let v = install_ai_function t ~name:n ~body_src:body in
+           (pp_value_short v)
+       | _ -> "error: need name and body")
   | "register_route" ->
       (match json_string_field args_json "path", json_string_field args_json "handler" with
        | Some path, Some handler ->
@@ -901,11 +881,11 @@ let run_agent_tool (t : t) ~(name : string) ~(arguments : string)
                [ "/api"; "/admin"; "/login"; "/logout"; "/health"; "/agent" ]
            in
            if path = "" || path.[0] <> '/' then
-             Lwt.return "error: path must start with /"
+             "error: path must start with /"
            else if bad_prefix then
-             Lwt.return ("error: path reserved: " ^ path)
+             ("error: path reserved: " ^ path)
            else if handler = "" then
-             Lwt.return "error: need handler function name"
+             "error: need handler function name"
            else begin
              let vis =
                match json_string_field args_json "visibility" with
@@ -913,9 +893,9 @@ let run_agent_tool (t : t) ~(name : string) ~(arguments : string)
                | None -> "private"
              in
              (* Phase 3: same public-route effect gate as (route … 'public). *)
-             let* gate =
+             let gate =
                if vis = "public" then begin
-                 let* rows = Store.list_function_names t.store in
+                 let rows = Store.list_function_names t.store in
                  let known_fn =
                    Pricklypear_lisp.Effect.known_fn_of_bindings
                      (List.map (fun (n, e, _) -> (n, e)) rows)
@@ -924,45 +904,43 @@ let run_agent_tool (t : t) ~(name : string) ~(arguments : string)
                    Pricklypear_lisp.Effect.public_route_allow ()
                  in
                  match List.find_opt (fun (n, _, _) -> n = handler) rows with
-                 | None -> Lwt.return (Ok ())
+                 | None -> (Ok ())
                  | Some (_, body, _) ->
                      let fx =
                        Pricklypear_lisp.Effect.infer ~known_fn body
                      in
                      if Pricklypear_lisp.Effect.policy_allows
                           ~allow:public_allow fx
-                     then Lwt.return (Ok ())
+                     then (Ok ())
                      else
-                       Lwt.return
-                         (Error
+                       (Error
                             (Printf.sprintf
                                "public route denied: handler %S effects %s (allow %s)"
                                handler
                                (Pricklypear_lisp.Effect.EffSet.pp fx)
                                (Pricklypear_lisp.Effect.public_route_allow_pp ())))
-               end else Lwt.return (Ok ())
+               end else (Ok ())
              in
              match gate with
-             | Error e -> Lwt.return ("error: " ^ e)
+             | Error e -> ("error: " ^ e)
              | Ok () ->
                  Hashtbl.replace t.routes path (handler, vis);
-                 let* _ =
+                 let _ =
                    Store.register_route t.store ~route:path ~handler
                      ~visibility:vis ()
                  in
-                 Lwt.return
-                   (Printf.sprintf "registered route %s -> %s (%s)"
+                 (Printf.sprintf "registered route %s -> %s (%s)"
                       path handler vis)
            end
-       | _ -> Lwt.return "error: need path and handler")
+       | _ -> "error: need path and handler")
   | "eval_expr" ->
       (match json_string_field args_json "expr" with
-       | None -> Lwt.return "error: need expr"
+       | None -> "error: need expr"
        | Some expr ->
            let expr = String.trim expr in
-           if expr = "" then Lwt.return "error: empty expr"
+           if expr = "" then "error: empty expr"
            else if String.length expr > 4000 then
-             Lwt.return "error: expr too long (max 4000)"
+             "error: expr too long (max 4000)"
            else begin
              (* Phase 3 agent mask: deny Branch/Publish/admin-ish prims in tool eval. *)
              let agent_eval_allow =
@@ -986,28 +964,25 @@ let run_agent_tool (t : t) ~(name : string) ~(arguments : string)
              in
              match denied with
              | Some fx ->
-                 Lwt.return
-                   ("ok: false\nerror: agent effect mask denied (" ^ fx
+                 ("ok: false\nerror: agent effect mask denied (" ^ fx
                     ^ "; no branch/publish)")
              | None ->
-                 Lwt.catch
-                   (fun () ->
-                      let* v =
+                 (try
+      let v =
                         Control_rim.run_lwt ~prims:t.prims (fun () ->
                             Pricklypear_lisp.Eval.eval_string_direct
                               ~prims:Pricklypear_lisp.Eval.empty_prims t.env
                               expr)
                       in
                       let s = Pricklypear_lisp.Reader.pp_value v in
-                      Lwt.return
-                        ("ok: true\nvalue: "
-                         ^ truncate_for_tool ~limit:1500 s))
-                   (fun exn ->
-                      Lwt.return ("ok: false\nerror: " ^ pp_interp_exn exn))
+                      ("ok: true\nvalue: "
+                         ^ truncate_for_tool ~limit:1500 s)
+    with exn ->
+      ("ok: false\nerror: " ^ pp_interp_exn exn))
            end)
   | "smoke_route" ->
       (match json_string_field args_json "path" with
-       | None -> Lwt.return "error: need path"
+       | None -> "error: need path"
        | Some path ->
            let meth =
              match json_string_field args_json "method" with
@@ -1026,7 +1001,7 @@ let run_agent_tool (t : t) ~(name : string) ~(arguments : string)
            let contains = json_string_field args_json "contains" in
            run_smoke_route t ~path ~meth ~params ~contains)
   | "html_helpers" ->
-      Lwt.return html_helpers_cheatsheet
+      html_helpers_cheatsheet
   | "image_context" ->
       let names =
         try
@@ -1040,12 +1015,11 @@ let run_agent_tool (t : t) ~(name : string) ~(arguments : string)
       in
       let nshow = List.length names in
       let sample = String.concat ", " (List.filteri (fun i _ -> i < 40) names) in
-      Lwt.return
-        (Printf.sprintf
+      (Printf.sprintf
            "user=%s\nbranch=%s\nbinding_count=%d\nbindings_sample=%s"
            t.manifest.username t.manifest.branch_name nshow sample)
   | other ->
-      Lwt.return ("error: unknown tool " ^ other)
+      ("error: unknown tool " ^ other)
 
 (** One durable tool-capable loop over an ai_sessions row.
     Loads history from Postgres, resubmits full messages[] each turn,
@@ -1055,7 +1029,7 @@ let run_loop
     ~(sess : Ai_store.session)
     ?(max_steps = 16)
     ?(on_event : Llm_client.agent_event -> unit = fun _ -> ())
-    () : string Lwt.t =
+    () : string =
   t.agent_branch_lock <- true;
   let open Llm_client in
   let installs : string list ref = ref [] in
@@ -1072,35 +1046,35 @@ let run_loop
             "\n(Partial progress kept on this branch and in the session.)"
       in
       on_event (Fail summary);
-      Lwt.return summary
+      summary
     end else
-      let* history = Ai_store.list_messages t.store ~session_id:sess.id in
+      let history = Ai_store.list_messages t.store ~session_id:sess.id in
       let msgs = Ai_store.messages_for_api sess history in
       (* Last step: no tools — force a plain-text wrap-up. *)
       let tools_now =
         if (not sess.tools) || step = max_steps then [] else agent_tool_defs
       in
-      let* turn =
+      let turn =
         chat_turn ~temperature:0.2 ~max_tokens:2048
           ~tools:tools_now ~messages:msgs ()
       in
       match turn with
       | Turn_error e ->
           on_event (Fail e);
-          Lwt.return ("agent error: " ^ e)
+          ("agent error: " ^ e)
       | Final text ->
-          let* r =
+          let r =
             Ai_store.append_messages t.store ~session_id:sess.id
               [ Msg { role = Assistant; content = text } ]
           in
           (match r with
            | Error e ->
                on_event (Fail e);
-               Lwt.return ("agent error: " ^ e)
+               ("agent error: " ^ e)
            | Ok () ->
                on_event (Token text);
                on_event Done;
-               Lwt.return text)
+               text)
       | Need_tools { content; tool_calls } ->
           if tool_calls = [] then begin
             let fallback =
@@ -1109,31 +1083,31 @@ let run_loop
               | _ ->
                   "agent: model requested tools but sent none; stopping."
             in
-            let* _ =
+            let _ =
               Ai_store.append_messages t.store ~session_id:sess.id
                 [ Msg { role = Assistant; content = fallback } ]
             in
             on_event (Token fallback);
             on_event Done;
-            Lwt.return fallback
+            fallback
           end else begin
             (match content with
              | Some c when String.trim c <> "" -> on_event (Token (c ^ "\n"))
              | _ -> ());
-            let* r1 =
+            let r1 =
               Ai_store.append_messages t.store ~session_id:sess.id
                 [ Assistant_tools { content; tool_calls } ]
             in
             match r1 with
             | Error e ->
                 on_event (Fail e);
-                Lwt.return ("agent error: " ^ e)
+                ("agent error: " ^ e)
             | Ok () ->
-                let* tool_rows =
-                  Lwt_list.map_s
+                let tool_rows =
+                  List.map
                     (fun (tc : tool_call) ->
                       on_event (Token (Printf.sprintf "[tool %s]\n" tc.name));
-                      let* result =
+                      let result =
                         run_agent_tool t ~name:tc.name ~arguments:tc.arguments
                       in
                       if tc.name = "install_function" then begin
@@ -1155,26 +1129,21 @@ let run_loop
                               (if String.length result > 200 then
                                  String.sub result 0 200 ^ "…"
                                else result)));
-                      Lwt.return
-                        (Tool_result
+                      (Tool_result
                            { tool_call_id = tc.id; content = result }))
                     tool_calls
                 in
-                let* r2 =
+                let r2 =
                   Ai_store.append_messages t.store ~session_id:sess.id tool_rows
                 in
                 (match r2 with
                  | Error e ->
                      on_event (Fail e);
-                     Lwt.return ("agent error: " ^ e)
+                     ("agent error: " ^ e)
                  | Ok () -> loop (step + 1))
           end
   in
-  Lwt.finalize
-    (fun () -> loop 1)
-    (fun () ->
-      t.agent_branch_lock <- false;
-      Lwt.return_unit)
+  (Fun.protect ~finally:(fun () -> t.agent_branch_lock <- false) (fun () -> loop 1))
 
 let default_agent_seed (t : t) : string =
   "You are the agent for a running Pricklypear multi-user Lisp OS image " ^
@@ -1263,8 +1232,8 @@ let agent_session_new
     ~(seed : string)
     ?(tools = true)
     ?title
-    () : Pricklypear_lisp.Ast.value Lwt.t =
-  let* r =
+    () : Pricklypear_lisp.Ast.value =
+  let r =
     Ai_store.create_session t.store
       ~owner:t.manifest.username
       ~seed
@@ -1275,8 +1244,8 @@ let agent_session_new
       ()
   in
   match r with
-  | Ok s -> Lwt.return (Pricklypear_lisp.Ast.VStr s.id)
-  | Error e -> Lwt.return (Pricklypear_lisp.Ast.VStr ("agent-session-new error: " ^ e))
+  | Ok s -> (Pricklypear_lisp.Ast.VStr s.id)
+  | Error e -> (Pricklypear_lisp.Ast.VStr ("agent-session-new error: " ^ e))
 
 let agent_say
     (t : t)
@@ -1284,16 +1253,15 @@ let agent_say
     ~(prompt : string)
     ?(max_steps = 16)
     ?(on_event : Llm_client.agent_event -> unit = fun _ -> ())
-    () : Pricklypear_lisp.Ast.value Lwt.t =
-  let* sess_opt =
+    () : Pricklypear_lisp.Ast.value =
+  let sess_opt =
     Ai_store.get_session t.store
       ~owner:t.manifest.username
       ~id:session_id
   in
   match sess_opt with
   | None ->
-      Lwt.return
-        (Pricklypear_lisp.Ast.VStr
+      (Pricklypear_lisp.Ast.VStr
            ("agent-say: no session " ^ session_id ^ " for " ^ t.manifest.username))
   | Some sess ->
       let title =
@@ -1320,37 +1288,36 @@ let agent_say
               Some
                 (if String.length p > 80 then String.sub p 0 80 ^ "…" else p)
       in
-      let* () =
+      let () =
         Ai_store.touch_session t.store ~id:sess.id ?title
           ~branch_ref:t.manifest.branch_name ()
       in
-      let* ar =
+      let ar =
         Ai_store.append_messages t.store ~session_id:sess.id
           [ Llm_client.Msg { role = Llm_client.User; content = prompt } ]
       in
       match ar with
       | Error e ->
-          Lwt.return (Pricklypear_lisp.Ast.VStr ("agent-say error: " ^ e))
+          (Pricklypear_lisp.Ast.VStr ("agent-say error: " ^ e))
       | Ok () ->
-          let* text =
+          let text =
             run_loop t ~sess ~max_steps ~on_event ()
           in
-          Lwt.return (Pricklypear_lisp.Ast.VStr text)
+          (Pricklypear_lisp.Ast.VStr text)
 
 let agent_history (t : t) ~(session_id : string)
-    : Pricklypear_lisp.Ast.value Lwt.t =
-  let* sess_opt =
+    : Pricklypear_lisp.Ast.value =
+  let sess_opt =
     Ai_store.get_session t.store
       ~owner:t.manifest.username
       ~id:session_id
   in
   match sess_opt with
   | None ->
-      Lwt.return
-        (Pricklypear_lisp.Ast.VStr
+      (Pricklypear_lisp.Ast.VStr
            ("agent-history: no session " ^ session_id))
   | Some _ ->
-      let* pairs =
+      let pairs =
         Ai_store.history_summaries t.store ~session_id
       in
       let rows =
@@ -1362,11 +1329,11 @@ let agent_history (t : t) ~(session_id : string)
               ])
           pairs
       in
-      Lwt.return (Pricklypear_lisp.Ast.VList rows)
+      (Pricklypear_lisp.Ast.VList rows)
 
 let agent_sessions (t : t) ?(limit = 50) ()
-    : Pricklypear_lisp.Ast.value Lwt.t =
-  let* xs =
+    : Pricklypear_lisp.Ast.value =
+  let xs =
     Ai_store.list_sessions t.store
       ~owner:t.manifest.username
       ~limit
@@ -1383,17 +1350,16 @@ let agent_sessions (t : t) ?(limit = 50) ()
           ])
       xs
   in
-  Lwt.return (Pricklypear_lisp.Ast.VList rows)
+  (Pricklypear_lisp.Ast.VList rows)
 
 let agent_session_delete (t : t) ~(session_id : string)
-    : Pricklypear_lisp.Ast.value Lwt.t =
-  let* ok =
+    : Pricklypear_lisp.Ast.value =
+  let ok =
     Ai_store.delete_session t.store
       ~owner:t.manifest.username
       ~id:session_id
   in
-  Lwt.return
-    (Pricklypear_lisp.Ast.VStr
+  (Pricklypear_lisp.Ast.VStr
        (if ok then "deleted" else "not found"))
 
 (** Temporary alias: new session (tools on) + one say.
@@ -1404,21 +1370,21 @@ let agent
     ?(on_event : Llm_client.agent_event -> unit = fun _ -> ())
     ~(seed : string)
     ~(prompt : string)
-    () : Pricklypear_lisp.Ast.value Lwt.t =
+    () : Pricklypear_lisp.Ast.value =
   let _ = stream in
   let title_opt =
     let p = String.trim prompt in
     if p = "" then None
     else Some (if String.length p > 80 then String.sub p 0 80 ^ "…" else p)
   in
-  let* created =
+  let created =
     agent_session_new t ~seed ~tools:true ?title:title_opt ()
   in
   match created with
   | Pricklypear_lisp.Ast.VStr sid
     when not (String.starts_with ~prefix:"agent-session-new error" sid) ->
       agent_say t ~session_id:sid ~prompt ~on_event ()
-  | other -> Lwt.return other
+  | other -> other
 
 (** Temporary alias: new tools session + one say. *)
 let agent_task
@@ -1426,51 +1392,48 @@ let agent_task
     ?(max_steps = 16)
     ?(on_event : Llm_client.agent_event -> unit = fun _ -> ())
     ~(prompt : string)
-    () : Pricklypear_lisp.Ast.value Lwt.t =
+    () : Pricklypear_lisp.Ast.value =
   let seed = default_agent_seed t in
   let title_opt =
     let p = String.trim prompt in
     if p = "" then None
     else Some (if String.length p > 80 then String.sub p 0 80 ^ "…" else p)
   in
-  let* created =
+  let created =
     agent_session_new t ~seed ~tools:true ?title:title_opt ()
   in
   match created with
   | Pricklypear_lisp.Ast.VStr sid when not (String.starts_with ~prefix:"agent-session-new error" sid) ->
       agent_say t ~session_id:sid ~prompt ~max_steps ~on_event ()
-  | other -> Lwt.return other
+  | other -> other
 
 
 let llm_rewrite (t : t) ~(mode : string) ~(name : string) ~(concept : string)
-    : Pricklypear_lisp.Ast.value Lwt.t =
+    : Pricklypear_lisp.Ast.value =
   with_user_llm t (fun () ->
-  let* current = current_fn_pretty t name in
-  let* res =
+  let current = current_fn_pretty t name in
+  let res =
     Llm_client.rewrite_component_source ~mode ~name ~concept
       ~current_pretty:current ()
   in
   match res with
-  | Error e -> Lwt.return (Pricklypear_lisp.Ast.VStr ("ai error: " ^ e))
+  | Error e -> (Pricklypear_lisp.Ast.VStr ("ai error: " ^ e))
   | Ok body_src ->
-      let* known_fn = known_fn_from_store t in
+      let known_fn = known_fn_from_store t in
       (match check_ai_body_effects ~known_fn ~env:t.env body_src with
        | Error pe ->
-           Lwt.return
-             (Pricklypear_lisp.Ast.VStr
+           (Pricklypear_lisp.Ast.VStr
                 (Printf.sprintf "ai rejected by effects: %s\n---\n%s" pe body_src))
        | Ok () ->
            let author = "agent:" ^ Llm_client.active_model () in
-           let* def = define_binding t ~name ~body_src ~author in
+           let def = define_binding t ~name ~body_src ~author in
            (match def with
             | Ok _ ->
-                Lwt.return
-                  (Pricklypear_lisp.Ast.VStr
+                (Pricklypear_lisp.Ast.VStr
                      (Printf.sprintf "froze %s (%s) by %s\n%s"
                         name mode author body_src))
             | Error e ->
-                Lwt.return
-                  (Pricklypear_lisp.Ast.VStr
+                (Pricklypear_lisp.Ast.VStr
                      (Printf.sprintf "freeze failed: %s\n---\n%s" e body_src)))))
 
 let llm_inner t ~name ~concept =
@@ -1481,49 +1444,45 @@ let llm_outer t ~name ~concept =
 
 (** Growth-from-seed: smallest core then recursive outer wraps. *)
 let llm_seed (t : t) ~(requirement : string) ?(max_steps = 5) ()
-    : Pricklypear_lisp.Ast.value Lwt.t =
+    : Pricklypear_lisp.Ast.value =
   with_user_llm t (fun () ->
   let tip = "seed" in
-  let* seed_res = Llm_client.seed_core_source ~requirement () in
+  let seed_res = Llm_client.seed_core_source ~requirement () in
   match seed_res with
-  | Error e -> Lwt.return (Pricklypear_lisp.Ast.VStr ("seed error: " ^ e))
+  | Error e -> (Pricklypear_lisp.Ast.VStr ("seed error: " ^ e))
   | Ok body_src ->
-      let* known_fn = known_fn_from_store t in
+      let known_fn = known_fn_from_store t in
       (match check_ai_body_effects ~known_fn ~env:t.env body_src with
        | Error pe ->
-           Lwt.return
-             (Pricklypear_lisp.Ast.VStr ("seed rejected: " ^ pe ^ "\n" ^ body_src))
+           (Pricklypear_lisp.Ast.VStr ("seed rejected: " ^ pe ^ "\n" ^ body_src))
        | Ok () ->
            let author = "agent:" ^ Llm_client.active_model () in
-           let* def = define_binding t ~name:tip ~body_src ~author in
+           let def = define_binding t ~name:tip ~body_src ~author in
            (match def with
             | Error e ->
-                Lwt.return (Pricklypear_lisp.Ast.VStr ("seed freeze failed: " ^ e))
+                (Pricklypear_lisp.Ast.VStr ("seed freeze failed: " ^ e))
             | Ok _ ->
                 let log = Buffer.create 256 in
                 Buffer.add_string log (Printf.sprintf "step0 seed %s\n%s\n" tip body_src);
                 let rec grow step =
                   if step > max_steps then
-                    Lwt.return
-                      (Pricklypear_lisp.Ast.VStr
+                    (Pricklypear_lisp.Ast.VStr
                          (Buffer.contents log ^ "stopped: max-steps\n"))
                   else
-                    let* pretty = current_fn_pretty t tip in
-                    let* judge =
+                    let pretty = current_fn_pretty t tip in
+                    let judge =
                       Llm_client.growth_judge ~requirement ~current_pretty:pretty
                         ~step ()
                     in
                     match judge with
                     | Error e ->
-                        Lwt.return
-                          (Pricklypear_lisp.Ast.VStr
+                        (Pricklypear_lisp.Ast.VStr
                              (Buffer.contents log ^ "judge error: " ^ e))
                     | Ok line ->
                         let upper = String.uppercase_ascii (String.trim line) in
                         if String.length upper >= 4 && String.sub upper 0 4 = "DONE"
                         then
-                          Lwt.return
-                            (Pricklypear_lisp.Ast.VStr
+                          (Pricklypear_lisp.Ast.VStr
                                (Buffer.contents log ^ "DONE at step " ^
                                 string_of_int step ^ "\n" ^ pretty))
                         else
@@ -1535,7 +1494,7 @@ let llm_seed (t : t) ~(requirement : string) ?(max_steps = 5) ()
                           in
                           Buffer.add_string log
                             (Printf.sprintf "step%d NEXT %s\n" step concept);
-                          let* wr =
+                          let wr =
                             llm_outer t ~name:tip ~concept
                           in
                           Buffer.add_string log
@@ -1546,7 +1505,7 @@ let llm_seed (t : t) ~(requirement : string) ?(max_steps = 5) ()
 
 (* Register the 5 CRUD primitives (get/create/update/delete/list) over
    the shared `data_rows` table. These are NORMAL prims on the Lwt-typed
-   ABI (post-iteration-12): prim_fn = value list -> value Lwt.t. They
+   ABI (post-iteration-12): prim_fn = value list -> value. They
    return their real DB result through the promise chain — e.g.
    (get 'user 42) returns the user's JSON fields as a VStr in `(str (get
    'user 42))`; `(mapcar (lambda (id) (get 'user id)) ids)` works.

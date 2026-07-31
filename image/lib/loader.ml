@@ -2,7 +2,6 @@
 
     Same source files live in git (libs/<name>/lib.pp) and load into the
     live branch. Evaluates AST forms directly (no pp_expr round-trip). *)
-open Lwt.Syntax
 open Pricklypear_lisp.Ast
 
 let libs_dir () : string =
@@ -62,22 +61,21 @@ let strip_line_comments (s : string) : string =
   loop 0 false
 
 let load_string
-    ~(eval_form : expr -> value Lwt.t)
+    ~(eval_form : expr -> value)
     (src : string)
-    : (string, string) result Lwt.t =
+    : (string, string) result =
   try
     let src = strip_line_comments src in
     let forms = Pricklypear_lisp.Reader.read_all src in
     let rec go i = function
       | [] ->
-          Lwt.return (Ok (Printf.sprintf "loaded %d form(s)" i))
+          (Ok (Printf.sprintf "loaded %d form(s)" i))
       | e :: rest ->
-          Lwt.catch
-            (fun () ->
-              let* _ = eval_form e in
-              go (i + 1) rest)
-            (fun exn ->
-              let msg =
+          (try
+      let _ = eval_form e in
+              go (i + 1) rest
+    with exn ->
+      let msg =
                 match exn with
                 | Interp_error err ->
                     (match err with
@@ -93,26 +91,25 @@ let load_string
                       (min 80 (String.length (Pricklypear_lisp.Reader.pp_expr e)))
                 with _ -> "?"
               in
-              Lwt.return
-                (Error
+              (Error
                    (Printf.sprintf "form %d failed: %s\n  in: %s" (i + 1) msg
                       snippet)))
     in
     go 0 forms
   with
   | Pricklypear_lisp.Reader.Reader_error (m, l, c) ->
-      Lwt.return (Error (Printf.sprintf "reader: %s (%d:%d)" m l c))
-  | exn -> Lwt.return (Error (Printexc.to_string exn))
+      (Error (Printf.sprintf "reader: %s (%d:%d)" m l c))
+  | exn -> (Error (Printexc.to_string exn))
 
 let load_library
-    ~(eval_form : expr -> value Lwt.t)
+    ~(eval_form : expr -> value)
     (name : string)
-    : (string, string) result Lwt.t =
+    : (string, string) result =
   let path = library_path name in
   match read_file path with
-  | Error e -> Lwt.return (Error e)
+  | Error e -> (Error e)
   | Ok src ->
-      let* r = load_string ~eval_form src in
+      let r = load_string ~eval_form src in
       (match r with
-       | Ok msg -> Lwt.return (Ok (Printf.sprintf "%s from %s" msg path))
-       | Error e -> Lwt.return (Error e))
+       | Ok msg -> (Ok (Printf.sprintf "%s from %s" msg path))
+       | Error e -> (Error e))

@@ -1,5 +1,4 @@
 (** Agent portal + AI propose HTTP handlers. *)
-open Lwt.Syntax
 open Pure_html
 open Http_core
 
@@ -17,28 +16,23 @@ let is_closed_writer_exn = function
    through Http_core.safe_close_writer / safe_respond_with_string. *)
 
 let sse_write (body : Httpun.Body.Writer.t) (event_json : string)
-  : [ `Ok | `Peer_gone ] Lwt.t =
+  : [ `Ok | `Peer_gone ] =
   let chunk = "data: " ^ event_json ^ "\n\n" in
   try
     Httpun.Body.Writer.write_string body chunk;
-    let promise, wakeup = Lwt.task () in
+    let promise, resolver = Eio.Promise.create () in
     let wake () =
-      if Lwt.state promise = Lwt.Sleep then Lwt.wakeup_later wakeup ()
+      if not (Eio.Promise.is_resolved promise) then
+        Eio.Promise.resolve resolver ()
     in
-    (try
-       Httpun.Body.Writer.flush body (fun () -> wake ())
-     with exn when is_closed_writer_exn exn -> wake ());
-    (* Don't hang forever if the peer never acks the flush. *)
-    let* () =
-      Lwt.pick
-        [ promise
-        ; (let* () = Lwt_unix.sleep 2.0 in Lwt.return_unit)
-        ]
-    in
-    Lwt.return `Ok
+    (try Httpun.Body.Writer.flush body (fun () -> wake ()) with
+     | exn when is_closed_writer_exn exn -> wake ());
+    (* Await flush ack (Httpun callback). *)
+    Eio.Promise.await promise;
+    `Ok
   with exn when is_closed_writer_exn exn ->
     ignore (Ops_log.info ~component:"sse" "peer gone (closed writer)");
-    Lwt.return `Peer_gone
+    `Peer_gone
 
 let close_writer_quiet (body : Httpun.Body.Writer.t) : unit =
   safe_close_writer body
@@ -97,8 +91,8 @@ let agent_session_label (s : Ai_store.session) : string =
       else t
   | _ -> "chat " ^ short
 
-let api_agent (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
-  let* body = read_body reqd in
+let api_agent (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
+  let body = read_body reqd in
   let seed, prompt, session_id_opt, tools, max_steps, want_stream =
     try
       match Yojson.Safe.from_string body with
@@ -158,11 +152,11 @@ let api_agent (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
   if String.trim prompt = "" then begin
     json_response reqd
       (`Assoc [ ("ok", `Bool false); ("error", `String "need prompt") ]);
-    Lwt.return_unit
+    ()
   end else
-    let* sid_r =
+    let sid_r =
       match session_id_opt with
-      | Some sid -> Lwt.return (Ok sid)
+      | Some sid -> (Ok sid)
       | None ->
           let title_opt =
             let p = agent_user_visible_text prompt in
@@ -171,26 +165,25 @@ let api_agent (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
               Some
                 (if String.length p > 80 then String.sub p 0 80 ^ "…" else p)
           in
-          let* v =
+          let v =
             Session.agent_session_new session ~seed ~tools ?title:title_opt ()
           in
           (match v with
            | Pricklypear_lisp.Ast.VStr s
              when not (String.starts_with ~prefix:"agent-session-new error" s) ->
-               Lwt.return (Ok s)
-           | Pricklypear_lisp.Ast.VStr e -> Lwt.return (Error e)
+               (Ok s)
+           | Pricklypear_lisp.Ast.VStr e -> (Error e)
            | other ->
-               Lwt.return
-                 (Error (Pricklypear_lisp.Reader.pp_value other)))
+               (Error (Pricklypear_lisp.Reader.pp_value other)))
     in
     match sid_r with
     | Error e ->
         json_response reqd
           (`Assoc [ ("ok", `Bool false); ("error", `String e) ]);
-        Lwt.return_unit
+        ()
     | Ok sid ->
         if not want_stream then begin
-          let* v =
+          let v =
             Session.agent_say session ~session_id:sid ~prompt ~max_steps ()
           in
           let text =
@@ -204,7 +197,7 @@ let api_agent (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
                ; ("session_id", `String sid)
                ; ("text", `String text)
                ]);
-          Lwt.return_unit
+          ()
         end else begin
           (* Progress SSE (tool/token events), not provider token stream. *)
           let headers =
@@ -229,11 +222,14 @@ let api_agent (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
               raise exn
           in
           let queue : string Queue.t = Queue.create () in
-          let cond = Lwt_condition.create () in
+          let mutex = Eio.Mutex.create () in
+          let cond = Eio.Condition.create () in
           let finished = ref false in
           let push_json (j : string) : unit =
+            Eio.Mutex.lock mutex;
             Queue.add j queue;
-            Lwt_condition.signal cond ()
+            Eio.Condition.broadcast cond;
+            Eio.Mutex.unlock mutex
           in
           push_json
             (Yojson.Safe.to_string
@@ -250,60 +246,69 @@ let api_agent (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
                 push_json
                   (Yojson.Safe.to_string (`Assoc [ ("t", `String "done") ]));
                 finished := true;
-                Lwt_condition.signal cond ()
+                Eio.Mutex.lock mutex;
+                Eio.Condition.broadcast cond;
+                Eio.Mutex.unlock mutex
             | Llm_client.Fail e ->
                 push_json
                   (Yojson.Safe.to_string
                      (`Assoc [ ("t", `String "error"); ("s", `String e) ]));
                 finished := true;
-                Lwt_condition.signal cond ()
+                Eio.Mutex.lock mutex;
+                Eio.Condition.broadcast cond;
+                Eio.Mutex.unlock mutex
           in
-          Lwt.async (fun () ->
-            let* v =
-              Session.agent_say session ~session_id:sid ~prompt ~max_steps
-                ~on_event ()
-            in
-            if not !finished then begin
-              (match v with
-               | Pricklypear_lisp.Ast.VStr s ->
-                   push_json
-                     (Yojson.Safe.to_string
-                        (`Assoc
-                           [ ("t", `String "done")
-                           ; ("text", `String s)
-                           ; ("session_id", `String sid)
-                           ]))
-               | _ ->
-                   push_json
-                     (Yojson.Safe.to_string
-                        (`Assoc [ ("t", `String "done") ])));
-              finished := true;
-              Lwt_condition.signal cond ()
-            end;
-            Lwt.return_unit);
+          (* Producer + drain under a local switch so tokens stream. *)
+          Eio.Switch.run @@ fun sw ->
+          Eio.Fiber.fork ~sw (fun () ->
+              let v =
+                Session.agent_say session ~session_id:sid ~prompt ~max_steps
+                  ~on_event ()
+              in
+              if not !finished then begin
+                (match v with
+                 | Pricklypear_lisp.Ast.VStr s ->
+                     push_json
+                       (Yojson.Safe.to_string
+                          (`Assoc
+                             [ ("t", `String "done")
+                             ; ("text", `String s)
+                             ; ("session_id", `String sid)
+                             ]))
+                 | _ ->
+                     push_json
+                       (Yojson.Safe.to_string
+                          (`Assoc [ ("t", `String "done") ])));
+                finished := true;
+                Eio.Mutex.lock mutex;
+                Eio.Condition.broadcast cond;
+                Eio.Mutex.unlock mutex
+              end);
           let rec drain () =
-            if not (Queue.is_empty queue) then
+            Eio.Mutex.lock mutex;
+            if not (Queue.is_empty queue) then begin
               let j = Queue.take queue in
-              let* r = sse_write body_w j in
-              (match r with
-               | `Peer_gone ->
-                   finished := true;
-                   close_writer_quiet body_w;
-                   Lwt.return_unit
-               | `Ok -> drain ())
-            else if !finished then begin
-              close_writer_quiet body_w;
-              Lwt.return_unit
-            end else
-              let* () = Lwt_condition.wait cond in
+              Eio.Mutex.unlock mutex;
+              match sse_write body_w j with
+              | `Peer_gone ->
+                  finished := true;
+                  close_writer_quiet body_w
+              | `Ok -> drain ()
+            end else if !finished then begin
+              Eio.Mutex.unlock mutex;
+              close_writer_quiet body_w
+            end else begin
+              Eio.Condition.await cond mutex;
+              Eio.Mutex.unlock mutex;
               drain ()
+            end
           in
           drain ()
         end
 
-let api_agent_task (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
+let api_agent_task (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
   (* Alias: create tools session + say (same as /api/agent with tools). *)
-  let* body = read_body reqd in
+  let body = read_body reqd in
   let prompt =
     try
       match Yojson.Safe.from_string body with
@@ -322,9 +327,9 @@ let api_agent_task (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
   if String.trim prompt = "" then begin
     json_response reqd
       (`Assoc [ ("ok", `Bool false); ("error", `String "need prompt/task") ]);
-    Lwt.return_unit
+    ()
   end else
-    let* v = Session.agent_task session ~prompt () in
+    let v = Session.agent_task session ~prompt () in
     let text =
       match v with
       | Pricklypear_lisp.Ast.VStr s -> s
@@ -332,9 +337,9 @@ let api_agent_task (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
     in
     json_response reqd
       (`Assoc [ ("ok", `Bool true); ("text", `String text) ]);
-    Lwt.return_unit
+    ()
 
-let agent_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
+let agent_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
   (* Durable chats: list + open with ?session=id (agent-portal UI). *)
   let target = (Httpun.Reqd.request reqd).Httpun.Request.target in
   let open_sid =
@@ -347,25 +352,25 @@ let agent_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
       (Session.username session) (Session.branch_name session)
   in
   let default_seed = Session.default_agent_seed session in
-  let* sessions =
+  let sessions =
     Ai_store.list_sessions (Session.store session)
       ~owner:(Session.username session) ~limit:40 ()
   in
-  let* open_sess, history =
+  let open_sess, history =
     match open_sid with
-    | None -> Lwt.return (None, [])
+    | None -> (None, [])
     | Some id ->
-        let* s_opt =
+        let s_opt =
           Ai_store.get_session (Session.store session)
             ~owner:(Session.username session) ~id
         in
         (match s_opt with
-         | None -> Lwt.return (None, [])
+         | None -> (None, [])
          | Some s ->
-             let* pairs =
+             let pairs =
                Ai_store.history_summaries (Session.store session) ~session_id:id
              in
-             Lwt.return (Some s, pairs))
+             (Some s, pairs))
   in
   let seed_value =
     match open_sess with
@@ -583,10 +588,10 @@ let agent_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
     ]
   in
   html_response reqd ~session body;
-  Lwt.return_unit
+  ()
 
-let ai_propose (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
-  let* body = read_body reqd in
+let ai_propose (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
+  let body = read_body reqd in
   let name_opt, spec_opt =
     try
       match Yojson.Safe.from_string body with
@@ -617,7 +622,7 @@ let ai_propose (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
   in
   match name_opt, spec_opt with
   | Some name, Some spec when name <> "" && spec <> "" ->
-      let* v = Session.propose_function session ~name ~spec in
+      let v = Session.propose_function session ~name ~spec in
       let rendered = Pricklypear_lisp.Reader.pp_value v in
       let wants_html =
         match Httpun.Headers.get (Httpun.Reqd.request reqd).headers "content-type" with
@@ -642,16 +647,16 @@ let ai_propose (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
           ]
         in
         html_response reqd ~session body_node;
-        Lwt.return_unit
+        ()
       else begin
         json_response reqd
           (`Assoc [ ("ok", `Bool true)
                   ; ("result", `String rendered)
                   ; ("name", `String name) ]);
-        Lwt.return_unit
+        ()
       end
   | _ ->
       json_response reqd ~status:`Bad_request
         (`Assoc [("ok", `Bool false); ("error", `String "name and spec required")]);
-      Lwt.return_unit
+      ()
 

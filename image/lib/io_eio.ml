@@ -35,18 +35,27 @@ end
 let with_ctx = Ctx.with_ctx
 let ctx_installed = Ctx.installed
 
-(** Nesting depth inside [Lwt_eio.run_eio] for this domain. When >0 we are
-    already on an Eio fiber entered via run_eio (e.g. open transaction),
-    so further SQL must run directly — nested run_eio breaks isolation. *)
-let eio_enter_depth = ref 0
+(** Fiber-local: true while this fiber is inside [Lwt_eio.run_eio] / an
+    ambient Eio SQL section. A process-global ref is wrong under Httpun_eio
+    (many fibers): fiber A in a tx yields at [run_lwt], fiber B would see
+    depth>0 and skip [run_eio], racing the shared PG wire. *)
+let eio_enter_key : bool Eio.Fiber.key = Eio.Fiber.create_key ()
 
-(** Run [f] via [Lwt_eio.run_eio], or directly if already inside one. *)
+let in_eio_enter () =
+  match Eio.Fiber.get eio_enter_key with Some true -> true | _ -> false
+
+(** Run [f] via [Lwt_eio.run_eio], or directly if this fiber is already in one. *)
 let on_eio (f : unit -> 'a) : 'a Lwt.t =
-  if !eio_enter_depth > 0 then Lwt.return (f ())
+  if in_eio_enter () then Lwt.return (f ())
   else
     Lwt_eio.run_eio (fun () ->
-        incr eio_enter_depth;
-        Fun.protect ~finally:(fun () -> decr eio_enter_depth) f)
+        Eio.Fiber.with_binding eio_enter_key true f)
+
+(** Same as [on_eio] but for call sites already on an Eio fiber that need to
+    mark the enter-key for nested SQL (e.g. whole-tx critical sections). *)
+let with_eio_enter (f : unit -> 'a) : 'a =
+  if in_eio_enter () then f ()
+  else Eio.Fiber.with_binding eio_enter_key true f
 
 (** Pgx Io backend: direct-style ('a t = 'a) over one Eio two-way flow. *)
 module Pgx_io = struct
@@ -316,11 +325,11 @@ let sequencer_survives_raise () : bool =
     | _ -> false
     | exception _ -> false
 
-(** [PP_IO=lwt|eio] — default lwt. *)
+(** [PP_IO=lwt|eio] — default eio. Explicit [PP_IO=lwt] is rollback. *)
 let io_mode_from_env () =
   match Sys.getenv_opt "PP_IO" with
   | Some s ->
       (match String.lowercase_ascii (String.trim s) with
-       | "eio" -> `Eio
-       | _ -> `Lwt)
-  | None -> `Lwt
+       | "lwt" -> `Lwt
+       | _ -> `Eio)
+  | None -> `Eio

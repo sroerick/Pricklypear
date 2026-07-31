@@ -2,7 +2,6 @@
 
     Detection is deterministic. LLM enrichment is optional later.
     See product-experience.reliability-work-queue. *)
-open Lwt.Syntax
 open Pricklypear_lisp.Ast
 
 let type_name = "ops-incident"
@@ -41,8 +40,8 @@ let json_get_int fields key default =
   | _ -> default
 
 let find_open_incident (store : Store.t) ~(fingerprint : string)
-  : (string * (string * Yojson.Safe.t) list) option Lwt.t =
-  let* listed =
+  : (string * (string * Yojson.Safe.t) list) option =
+  let listed =
     Crud.find_rows store ~type_name
       ~filters:[ ("fingerprint", fingerprint) ]
       ~limit:20 ()
@@ -50,16 +49,16 @@ let find_open_incident (store : Store.t) ~(fingerprint : string)
   match listed with
   | VList items ->
       let rec go = function
-        | [] -> Lwt.return_none
+        | [] -> None
         | VPair (VStr id, VStr fj) :: rest ->
             let fields = fields_of_json fj in
             let st = json_get fields "status" in
-            if st = "open" || st = "" then Lwt.return_some (id, fields)
+            if st = "open" || st = "" then Some (id, fields)
             else go rest
         | _ :: rest -> go rest
       in
       go items
-  | _ -> Lwt.return_none
+  | _ -> None
 
 let escape_lisp_str (s : string) : string =
   let buf = Buffer.create (String.length s + 8) in
@@ -74,7 +73,7 @@ let escape_lisp_str (s : string) : string =
   Buffer.contents buf
 
 let file_todo_and_note (session : Session_types.t) ~(title : string)
-    ~(body : string) : string option Lwt.t =
+    ~(body : string) : string option =
   let title_e = escape_lisp_str title in
   let body_e = escape_lisp_str body in
   let expr =
@@ -86,17 +85,16 @@ let file_todo_and_note (session : Session_types.t) ~(title : string)
             tid))|}
       title_e body_e title_e body_e
   in
-  Lwt.catch
-    (fun () ->
-      let* v =
+  (try
+      let v =
         Control_rim.run_lwt ~prims:session.prims (fun () ->
             Pricklypear_lisp.Eval.eval_string_direct
               ~prims:Pricklypear_lisp.Eval.empty_prims session.env expr)
       in
       match v with
-      | VStr s when String.trim s <> "" -> Lwt.return (Some s)
-      | _ -> Lwt.return_none)
-    (fun exn ->
+      | VStr s when String.trim s <> "" -> (Some s)
+      | _ -> None
+    with exn ->
       ignore
         (Ops_log.warn ~component:"ops"
            ("file_todo_and_note failed: " ^ Printexc.to_string exn));
@@ -111,21 +109,21 @@ let file_todo_and_note (session : Session_types.t) ~(title : string)
              ; ("position", `String "0")
              ])
       in
-      let* v =
+      let v =
         Crud.create session.store ~type_name:"todo-item" ~fields_json
           ~author:"ops"
       in
-      match v with VStr s -> Lwt.return (Some s) | _ -> Lwt.return_none)
+      match v with VStr s -> (Some s) | _ -> None)
 
 let record_event (session : Session_types.t) (ev : Ops_log.event)
-  : unit Lwt.t =
+  : unit =
   match ev.Ops_log.level with
-  | Ops_log.Info | Ops_log.Warn -> Lwt.return_unit
+  | Ops_log.Info | Ops_log.Warn -> ()
   | Ops_log.Error | Ops_log.Fatal ->
       Ops_stats.note_error ~fatal:(ev.level = Ops_log.Fatal);
       let store = session.store in
       let now = iso_now () in
-      let* existing = find_open_incident store ~fingerprint:ev.fingerprint in
+      let existing = find_open_incident store ~fingerprint:ev.fingerprint in
       (match existing with
        | Some (id, fields) ->
            let count = json_get_int fields "count" 1 + 1 in
@@ -145,8 +143,8 @@ let record_event (session : Session_types.t) (ev : Ops_log.event)
                   ; ("ai_enriched", `String (json_get fields "ai_enriched"))
                   ])
            in
-           let* _ = Crud.update store ~type_name ~id ~fields_json in
-           Lwt.return_unit
+           let _ = Crud.update store ~type_name ~id ~fields_json in
+           ()
        | None ->
            let sfp = short_fp ev.fingerprint in
            let title =
@@ -167,7 +165,7 @@ let record_event (session : Session_types.t) (ev : Ops_log.event)
                (Ops_log.level_to_string ev.level)
                now ev.msg
            in
-           let* todo_id = file_todo_and_note session ~title ~body in
+           let todo_id = file_todo_and_note session ~title ~body in
            let fields_json =
              Yojson.Safe.to_string
                (`Assoc
@@ -185,7 +183,7 @@ let record_event (session : Session_types.t) (ev : Ops_log.event)
                   ; ("ai_enriched", `String "false")
                   ])
            in
-           let* _ =
+           let _ =
              Crud.create store ~type_name ~fields_json ~author:"ops"
            in
            ignore
@@ -195,7 +193,7 @@ let record_event (session : Session_types.t) (ev : Ops_log.event)
                 match todo_id with
                 | Some t -> " todo=" ^ t
                 | None -> ""));
-           Lwt.return_unit)
+           ())
 
 (** Classify an exception as an *expected* runtime/user error that
     should be logged but NOT filed as a reliability incident.
@@ -225,12 +223,12 @@ let is_expected_runtime_error (exn : exn) : bool =
 let emit_and_maybe_file (session : Session_types.t) ?(context = [])
     ?(file = true) ~(level : Ops_log.level) ~(component : string)
     (msg : string)
-  : unit Lwt.t =
+  : unit =
   let ev = Ops_log.emit ~context ~level ~component msg in
-  if file then record_event session ev else Lwt.return_unit
+  if file then record_event session ev else ()
 
-let list_open_incidents (store : Store.t) : Yojson.Safe.t Lwt.t =
-  let* listed = Crud.list store ~type_name ~limit:100 () in
+let list_open_incidents (store : Store.t) : Yojson.Safe.t =
+  let listed = Crud.list store ~type_name ~limit:100 () in
   let items =
     match listed with
     | VList rows ->
@@ -257,11 +255,11 @@ let list_open_incidents (store : Store.t) : Yojson.Safe.t Lwt.t =
           rows
     | _ -> []
   in
-  Lwt.return (`List items)
+  (`List items)
 
-let count_logins (store : Store.t) : (int * int) Lwt.t =
+let count_logins (store : Store.t) : (int * int) =
   match Io_lwt.Db.current_conn store with
-  | None -> Lwt.return (0, 0)
+  | None -> (0, 0)
   | Some conn ->
       let day = Ops_stats.today_str () in
       let count ~success =
@@ -270,9 +268,8 @@ let count_logins (store : Store.t) : (int * int) Lwt.t =
           "WHERE success = $1 AND kind IN ('password','mint') " ^
           "AND happened_at::date = $2::date"
         in
-        Lwt.catch
-          (fun () ->
-            let* rows =
+        (try
+      let rows =
               Io_lwt.Db.execute conn
                 ~params:
                   [ Pgx.Value.of_bool success; Pgx.Value.of_string day ]
@@ -281,11 +278,12 @@ let count_logins (store : Store.t) : (int * int) Lwt.t =
             match rows with
             | [ cell ] :: _ ->
                 (match Pgx.Value.to_int cell with
-                 | Some n -> Lwt.return n
-                 | None -> Lwt.return 0)
-            | _ -> Lwt.return 0)
-          (fun _ -> Lwt.return 0)
+                 | Some n -> n
+                 | None -> 0)
+            | _ -> 0
+    with _ ->
+      0)
       in
-      let* ok = count ~success:true in
-      let* fail = count ~success:false in
-      Lwt.return (ok, fail)
+      let ok = count ~success:true in
+      let fail = count ~success:false in
+      (ok, fail)

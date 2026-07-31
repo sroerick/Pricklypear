@@ -1,7 +1,7 @@
 (** Pricklypear Image — CRUD primitives over the `data_rows` table.
 
     get/create/update/delete/rows are normal prims on the Lwt-typed
-    evaluator ABI (`value list -> value Lwt.t`) and return real DB
+    evaluator ABI (`value list -> value`) and return real DB
     results. They compose:
       (define u (get 'user 42))
       (str u)
@@ -17,7 +17,6 @@
 
     Uses [Io_lwt.Db.current_conn] so in-tx calls see the bound connection.
     Misses return VNil so Lisp can branch on `(if (get 'user id) ...)`. *)
-open Lwt.Syntax
 open Pricklypear_lisp.Ast
 
 (* one-tree P3: when PP_TREE_READS=1, data reads source from the
@@ -30,15 +29,15 @@ let data_rel () = if Store.tree_reads () then "tree_data_rows" else "data_rows"
     against its field list. Undeclared types are free-form (no schema).
     Returns None on ok, Some error_message on reject. *)
 let check_type_fields (store : Store.t) ~(type_name : string)
-    ~(fields_json : string) : string option Lwt.t =
-  let* declared = Store.lookup_type_fields store ~name:type_name in
+    ~(fields_json : string) : string option =
+  let declared = Store.lookup_type_fields store ~name:type_name in
   match declared with
-  | None -> Lwt.return_none
+  | None -> None
   | Some fields ->
       (match Tree_store.validate_fields ~declared:fields fields_json with
-       | Ok () -> Lwt.return_none
+       | Ok () -> None
        | Error msg ->
-           Lwt.return_some
+           Some
              (Printf.sprintf "create/update %s: %s" type_name msg))
 
 let value_of_id cell : value =
@@ -60,44 +59,44 @@ let value_of_id cell : value =
     so they arrive as VStr (quote of a bare symbol evaluates to VStr).
     Bare symbols would be looked up as variables and fail. *)
 let deftype (store : Store.t) ~(args : value list)
-    ~(author : string) : value Lwt.t =
+    ~(author : string) : value =
   let field_strs =
     List.filter_map
       (fun v -> match v with VStr s -> Some s | _ -> None)
       args
   in
   (match field_strs with
-   | [] -> Lwt.return (VStr "deftype: need at least a type name")
+   | [] -> (VStr "deftype: need at least a type name")
    | name :: fields ->
-       let* _ = Store.persist_type store ~name ~fields ~author in
-       Lwt.return (VStr (Printf.sprintf "defined type %s" name)))
+       let _ = Store.persist_type store ~name ~fields ~author in
+       (VStr (Printf.sprintf "defined type %s" name)))
 
 (** (get 'type id) -> VStr fields-json | VNil.
     Reads ONE row by (type_name, id). The id is a UUID string.
     Returns the row's `fields` JSON as a VStr so Lisp can pass it
     onward; or VNil if not found. *)
-let get (store : Store.t) ~(type_name : string) ~(id : string) : value Lwt.t =
+let get (store : Store.t) ~(type_name : string) ~(id : string) : value =
   match Io_lwt.Db.current_conn store with
-  | None -> Lwt.return VNil
+  | None -> VNil
   | Some conn ->
       let sql =
         "SELECT fields::text FROM " ^ data_rel () ^ " " ^
         "WHERE type_name = $1 AND id = $2::uuid" in
-      let* rows =
+      let rows =
         Io_lwt.Db.execute conn
           ~params:[ Pgx.Value.of_string type_name;
                     Pgx.Value.of_string id ]
           sql
       in
       (match rows with
-       | [] -> Lwt.return VNil
+       | [] -> VNil
        | row :: _ ->
            (match row with
             | [ fields_cell ] ->
                 (match Pgx.Value.to_string fields_cell with
-                 | Some s -> Lwt.return (VStr s)
-                 | None -> Lwt.return VNil)
-            | _ -> Lwt.return VNil))
+                 | Some s -> (VStr s)
+                 | None -> VNil)
+            | _ -> VNil))
 
 (** (select-for-update 'type id) -> VStr fields-json | VNil.
     Reads ONE row by (type_name, id) AND locks it with SELECT ... FOR
@@ -112,36 +111,36 @@ let get (store : Store.t) ~(type_name : string) ~(id : string) : value Lwt.t =
     issuing FOR UPDATE on the pool conn — which previously could poison
     Eio mutexes and cascade into auth failures (observed 2026-07-22). *)
 let select_for_update
-    (store : Store.t) ~(type_name : string) ~(id : string) : value Lwt.t =
+    (store : Store.t) ~(type_name : string) ~(id : string) : value =
   if not (Io_lwt.Db.in_transaction store) then
-    Lwt.fail
+    raise
       (Interp_error
          (User_error
             "select-for-update requires (with-transaction ...); \
              refusing FOR UPDATE outside a transaction"))
   else
     match Io_lwt.Db.current_conn store with
-    | None -> Lwt.return VNil
+    | None -> VNil
     | Some conn ->
         let sql =
           "SELECT fields::text FROM " ^ data_rel () ^ " " ^
           "WHERE type_name = $1 AND id = $2::uuid " ^
           "FOR UPDATE" in
-        let* rows =
+        let rows =
           Io_lwt.Db.execute conn
             ~params:[ Pgx.Value.of_string type_name;
                       Pgx.Value.of_string id ]
             sql
         in
         (match rows with
-         | [] -> Lwt.return VNil
+         | [] -> VNil
          | row :: _ ->
              (match row with
               | [ fields_cell ] ->
                   (match Pgx.Value.to_string fields_cell with
-                   | Some s -> Lwt.return (VStr s)
-                   | None -> Lwt.return VNil)
-              | _ -> Lwt.return VNil))
+                   | Some s -> (VStr s)
+                   | None -> VNil)
+              | _ -> VNil))
 
 (** (create 'type "{fields-json}") -> VStr new-id | VStr "create failed".
     INSERTs a row with the given JSON fields, returning the new UUID.
@@ -155,23 +154,23 @@ let select_for_update
 let create
     (store : Store.t) ~(type_name : string) ~(fields_json : string)
     ~(author : string)
-    : value Lwt.t =
-  let* reject = check_type_fields store ~type_name ~fields_json in
+    : value =
+  let reject = check_type_fields store ~type_name ~fields_json in
   match reject with
-  | Some msg -> Lwt.return (VStr msg)
+  | Some msg -> (VStr msg)
   | None ->
   match Io_lwt.Db.current_conn store with
-  | None -> Lwt.return (VStr "create failed: no DB")
+  | None -> (VStr "create failed: no DB")
   | Some conn ->
   if Tree_store.tree_writes () then begin
     (* one-tree P4: write the tree; reverse trigger mirrors to data_rows *)
-    let* id = Tree_store.insert_datum conn ~type_name ~fields_json ~author in
-    Lwt.return (match id with Some s -> VStr s | None -> VStr "create failed")
+    let id = Tree_store.insert_datum conn ~type_name ~fields_json ~author in
+    (match id with Some s -> VStr s | None -> VStr "create failed")
   end else begin
       let sql =
         "INSERT INTO data_rows (type_name, fields, author) " ^
         "VALUES ($1, $2::jsonb, $3) RETURNING id::text" in
-      let* rows =
+      let rows =
         Io_lwt.Db.execute conn
           ~params:[ Pgx.Value.of_string type_name;
                     Pgx.Value.of_string fields_json;
@@ -179,11 +178,11 @@ let create
           sql
       in
       (match rows with
-       | [] -> Lwt.return (VStr "create failed")
+       | [] -> (VStr "create failed")
        | row :: _ ->
            (match row with
-            | [ id_cell ] -> Lwt.return (value_of_id id_cell)
-            | _ -> Lwt.return (VStr "create failed")))
+            | [ id_cell ] -> (value_of_id id_cell)
+            | _ -> (VStr "create failed")))
   end
 
 (** (update 'type id "{fields-json}") -> VStr id | VNil.
@@ -192,23 +191,23 @@ let create
 let update
     (store : Store.t) ~(type_name : string) ~(id : string)
     ~(fields_json : string)
-    : value Lwt.t =
-  let* reject = check_type_fields store ~type_name ~fields_json in
+    : value =
+  let reject = check_type_fields store ~type_name ~fields_json in
   match reject with
-  | Some msg -> Lwt.return (VStr msg)
+  | Some msg -> (VStr msg)
   | None ->
   match Io_lwt.Db.current_conn store with
-  | None -> Lwt.return VNil
+  | None -> VNil
   | Some conn ->
   if Tree_store.tree_writes () then begin
-    let* id' = Tree_store.update_datum conn ~type_name ~id ~fields_json in
-    Lwt.return (match id' with Some s -> VStr s | None -> VNil)
+    let id' = Tree_store.update_datum conn ~type_name ~id ~fields_json in
+    (match id' with Some s -> VStr s | None -> VNil)
   end else begin
       let sql =
         "UPDATE data_rows SET fields = $3::jsonb, updated_at = now() " ^
         "WHERE type_name = $1 AND id = $2::uuid " ^
         "RETURNING id::text" in
-      let* rows =
+      let rows =
         Io_lwt.Db.execute conn
           ~params:[ Pgx.Value.of_string type_name;
                     Pgx.Value.of_string id;
@@ -216,11 +215,11 @@ let update
           sql
       in
       (match rows with
-       | [] -> Lwt.return VNil
+       | [] -> VNil
        | row :: _ ->
            (match row with
-            | [ id_cell ] -> Lwt.return (value_of_id id_cell)
-            | _ -> Lwt.return VNil))
+            | [ id_cell ] -> (value_of_id id_cell)
+            | _ -> VNil))
   end
 
 (** (update-field 'type id "field" "value") -> VStr id | VNil.
@@ -239,10 +238,10 @@ let update
 let update_field
     (store : Store.t) ~(type_name : string) ~(id : string)
     ~(field : string) ~(value : string)
-    : value Lwt.t =
-  let* current = get store ~type_name ~id in
+    : value =
+  let current = get store ~type_name ~id in
   (match current with
-   | VNil -> Lwt.return VNil  (* no such row *)
+   | VNil -> VNil  (* no such row *)
    | _ ->
        let json_str =
          match current with VStr s -> s | _ -> "{}"
@@ -270,30 +269,30 @@ let update_field
 (** (delete 'type id) -> VStr id | VNil.
     DELETEs one row by (type_name, id). Returns the id on success
     (echo), VNil if no row matched. *)
-let delete (store : Store.t) ~(type_name : string) ~(id : string) : value Lwt.t =
+let delete (store : Store.t) ~(type_name : string) ~(id : string) : value =
   match Io_lwt.Db.current_conn store with
-  | None -> Lwt.return VNil
+  | None -> VNil
   | Some conn ->
   if Tree_store.tree_writes () then begin
-    let* id' = Tree_store.delete_datum conn ~type_name ~id in
-    Lwt.return (match id' with Some s -> VStr s | None -> VNil)
+    let id' = Tree_store.delete_datum conn ~type_name ~id in
+    (match id' with Some s -> VStr s | None -> VNil)
   end else begin
       let sql =
         "DELETE FROM data_rows " ^
         "WHERE type_name = $1 AND id = $2::uuid " ^
         "RETURNING id::text" in
-      let* rows =
+      let rows =
         Io_lwt.Db.execute conn
           ~params:[ Pgx.Value.of_string type_name;
                     Pgx.Value.of_string id ]
           sql
       in
       (match rows with
-       | [] -> Lwt.return VNil
+       | [] -> VNil
        | row :: _ ->
            (match row with
-            | [ id_cell ] -> Lwt.return (value_of_id id_cell)
-            | _ -> Lwt.return VNil))
+            | [ id_cell ] -> (value_of_id id_cell)
+            | _ -> VNil))
   end
 
 (** (list 'type [limit]) -> VList of (VStr id, VStr fields) pairs.
@@ -302,14 +301,14 @@ let delete (store : Store.t) ~(type_name : string) ~(id : string) : value Lwt.t 
     `(mapcar (lambda (row) (car row)) rows)` to get ids, etc. *)
 let list
     (store : Store.t) ~(type_name : string) ?(limit : int = 100) ()
-    : value Lwt.t =
+    : value =
   match Io_lwt.Db.current_conn store with
-  | None -> Lwt.return (VList [])
+  | None -> (VList [])
   | Some conn ->
       let sql =
         "SELECT id::text, fields::text FROM " ^ data_rel () ^ " " ^
         "WHERE type_name = $1 ORDER BY created_at ASC LIMIT $2" in
-      let* rows =
+      let rows =
         Io_lwt.Db.execute conn
           ~params:[ Pgx.Value.of_string type_name;
                     Pgx.Value.of_int limit ]
@@ -324,22 +323,22 @@ let list
             | _ -> VNil)
           rows
       in
-      Lwt.return (VList lisp_rows)
+      (VList lisp_rows)
 
 (** (find-row 'type "field" "value") -> VStr fields-json | VNil.
     First row where fields->>field = value (text equality). *)
 let find_row
     (store : Store.t) ~(type_name : string) ~(field : string) ~(value : string)
-    : value Lwt.t =
+    : value =
   match Io_lwt.Db.current_conn store with
-  | None -> Lwt.return VNil
+  | None -> VNil
   | Some conn ->
       let sql =
         "SELECT fields::text FROM " ^ data_rel () ^ " " ^
         "WHERE type_name = $1 AND fields->>$2 = $3 " ^
         "ORDER BY created_at ASC LIMIT 1"
       in
-      let* rows =
+      let rows =
         Io_lwt.Db.execute conn
           ~params:[ Pgx.Value.of_string type_name
                   ; Pgx.Value.of_string field
@@ -347,11 +346,11 @@ let find_row
           sql
       in
       (match rows with
-       | [] -> Lwt.return VNil
+       | [] -> VNil
        | row :: _ ->
            (match row with
-            | [ fields_cell ] -> Lwt.return (value_of_id fields_cell)
-            | _ -> Lwt.return VNil))
+            | [ fields_cell ] -> (value_of_id fields_cell)
+            | _ -> VNil))
 
 (** (find-rows 'type "f1" "v1" "f2" "v2" ... [limit])
     -> VList of (id . fields) pairs.
@@ -360,9 +359,9 @@ let find_row
 let find_rows
     (store : Store.t) ~(type_name : string)
     ~(filters : (string * string) list) ?(limit : int = 500) ()
-    : value Lwt.t =
+    : value =
   match Io_lwt.Db.current_conn store with
-  | None -> Lwt.return (VList [])
+  | None -> (VList [])
   | Some conn ->
       if filters = [] then list store ~type_name ~limit ()
       else
@@ -384,7 +383,7 @@ let find_rows
              " ORDER BY COALESCE((fields->>'verse')::int, 0) ASC, created_at ASC LIMIT $%d"
              !i);
         params := !params @ [ Pgx.Value.of_int limit ];
-        let* rows = Io_lwt.Db.execute conn ~params:!params (Buffer.contents buf) in
+        let rows = Io_lwt.Db.execute conn ~params:!params (Buffer.contents buf) in
         let lisp_rows =
           List.map
             (fun row ->
@@ -394,40 +393,39 @@ let find_rows
               | _ -> VNil)
             rows
         in
-        Lwt.return (VList lisp_rows)
+        (VList lisp_rows)
 
 (** (find-random 'type) -> (id . fields) pair | VNil.
     One random row of the given type (for bible/random etc.). *)
-let find_random (store : Store.t) ~(type_name : string) : value Lwt.t =
+let find_random (store : Store.t) ~(type_name : string) : value =
   match Io_lwt.Db.current_conn store with
-  | None -> Lwt.return VNil
+  | None -> VNil
   | Some conn ->
       let sql =
         "SELECT id::text, fields::text FROM " ^ data_rel () ^ " " ^
         "WHERE type_name = $1 ORDER BY random() LIMIT 1"
       in
-      let* rows =
+      let rows =
         Io_lwt.Db.execute conn
           ~params:[ Pgx.Value.of_string type_name ]
           sql
       in
       (match rows with
-       | [] -> Lwt.return VNil
+       | [] -> VNil
        | row :: _ ->
            (match row with
             | [ id_cell; fields_cell ] ->
-                Lwt.return
-                  (VPair (value_of_id id_cell, value_of_id fields_cell))
-            | _ -> Lwt.return VNil))
+                (VPair (value_of_id id_cell, value_of_id fields_cell))
+            | _ -> VNil))
 
 (** (find-text 'type "field" "needle" [limit]) -> VList of (id . fields).
     Case-insensitive substring match on fields->>field. *)
 let find_text
     (store : Store.t) ~(type_name : string) ~(field : string)
     ~(needle : string) ?(limit : int = 50) ()
-    : value Lwt.t =
+    : value =
   match Io_lwt.Db.current_conn store with
-  | None -> Lwt.return (VList [])
+  | None -> (VList [])
   | Some conn ->
       let sql =
         "SELECT id::text, fields::text FROM " ^ data_rel () ^ " " ^
@@ -435,7 +433,7 @@ let find_text
         "ORDER BY created_at ASC LIMIT $4"
       in
       let pat = "%" ^ needle ^ "%" in
-      let* rows =
+      let rows =
         Io_lwt.Db.execute conn
           ~params:[ Pgx.Value.of_string type_name
                   ; Pgx.Value.of_string field
@@ -452,7 +450,7 @@ let find_text
             | _ -> VNil)
           rows
       in
-      Lwt.return (VList lisp_rows)
+      (VList lisp_rows)
 
 (* ---- OCaml UI helpers (image.data-browser) — not Lisp prims ---- *)
 
@@ -464,14 +462,14 @@ type row_record = {
   updated_at : string option;
 }
 
-let count_by_type (store : Store.t) ~(type_name : string) : int Lwt.t =
+let count_by_type (store : Store.t) ~(type_name : string) : int =
   match Io_lwt.Db.current_conn store with
-  | None -> Lwt.return 0
+  | None -> 0
   | Some conn ->
       let sql =
         "SELECT COUNT(*)::int FROM " ^ data_rel () ^ " WHERE type_name = $1"
       in
-      let* rows =
+      let rows =
         Io_lwt.Db.execute conn
           ~params:[ Pgx.Value.of_string type_name ]
           sql
@@ -479,20 +477,19 @@ let count_by_type (store : Store.t) ~(type_name : string) : int Lwt.t =
       (match rows with
        | [ cell :: _ ] ->
            (match Pgx.Value.to_int cell with
-            | Some n -> Lwt.return n
-            | None -> Lwt.return 0)
-       | _ -> Lwt.return 0)
+            | Some n -> n
+            | None -> 0)
+       | _ -> 0)
 
-let list_data_type_names (store : Store.t) : string list Lwt.t =
+let list_data_type_names (store : Store.t) : string list =
   match Io_lwt.Db.current_conn store with
-  | None -> Lwt.return []
+  | None -> []
   | Some conn ->
       let sql =
         "SELECT DISTINCT type_name FROM " ^ data_rel () ^ " ORDER BY type_name ASC"
       in
-      let* rows = Io_lwt.Db.execute conn sql in
-      Lwt.return
-        (List.filter_map
+      let rows = Io_lwt.Db.execute conn sql in
+      (List.filter_map
            (fun row ->
              match row with
              | [ cell ] -> Pgx.Value.to_string cell
@@ -502,9 +499,9 @@ let list_data_type_names (store : Store.t) : string list Lwt.t =
 let list_page
     (store : Store.t) ~(type_name : string)
     ?(limit : int = 50) ?(offset : int = 0) ()
-    : row_record list Lwt.t =
+    : row_record list =
   match Io_lwt.Db.current_conn store with
-  | None -> Lwt.return []
+  | None -> []
   | Some conn ->
       let lim = max 1 (min limit 200) in
       let off = max 0 offset in
@@ -514,15 +511,14 @@ let list_page
         "FROM " ^ data_rel () ^ " WHERE type_name = $1 " ^
         "ORDER BY created_at ASC LIMIT $2 OFFSET $3"
       in
-      let* rows =
+      let rows =
         Io_lwt.Db.execute conn
           ~params:[ Pgx.Value.of_string type_name
                   ; Pgx.Value.of_int lim
                   ; Pgx.Value.of_int off ]
           sql
       in
-      Lwt.return
-        (List.filter_map
+      (List.filter_map
            (fun row ->
              match row with
              | [ id_c; fields_c; author_c; created_c; updated_c ] ->
@@ -542,16 +538,16 @@ let list_page
 
 let get_row
     (store : Store.t) ~(type_name : string) ~(id : string)
-    : row_record option Lwt.t =
+    : row_record option =
   match Io_lwt.Db.current_conn store with
-  | None -> Lwt.return None
+  | None -> None
   | Some conn ->
       let sql =
         "SELECT id::text, fields::text, author, " ^
         "created_at::text, updated_at::text " ^
         "FROM " ^ data_rel () ^ " WHERE type_name = $1 AND id = $2::uuid"
       in
-      let* rows =
+      let rows =
         Io_lwt.Db.execute conn
           ~params:[ Pgx.Value.of_string type_name
                   ; Pgx.Value.of_string id ]
@@ -561,16 +557,15 @@ let get_row
        | [ id_c; fields_c; author_c; created_c; updated_c ] :: _ ->
            (match Pgx.Value.to_string id_c, Pgx.Value.to_string fields_c with
             | Some id, Some fields_json ->
-                Lwt.return
-                  (Some {
+                (Some {
                      id;
                      fields_json;
                      author = Pgx.Value.to_string author_c;
                      created_at = Pgx.Value.to_string created_c;
                      updated_at = Pgx.Value.to_string updated_c;
                    })
-            | _ -> Lwt.return None)
-       | _ -> Lwt.return None)
+            | _ -> None)
+       | _ -> None)
 
 
 (** (node-path 'type id) -> VStr path. Pure path constructor. *)
@@ -579,113 +574,109 @@ let node_path ~(type_name : string) ~(id : string) : value =
 
 (** (backlinks id-or-path [limit]) -> VList of VStr paths. *)
 let backlinks (store : Store.t) ~(needle : string) ?(limit : int = 200) ()
-  : value Lwt.t =
+  : value =
   match Io_lwt.Db.current_conn store with
-  | None -> Lwt.return (VList [])
+  | None -> (VList [])
   | Some conn ->
-      let* paths = Tree_store.backlinks conn ~needle ~limit () in
-      Lwt.return (VList (List.map (fun p -> VStr p) paths))
+      let paths = Tree_store.backlinks conn ~needle ~limit () in
+      (VList (List.map (fun p -> VStr p) paths))
 
 (** (type-fields 'type) -> VList of VStr field names | VNil if undeclared. *)
-let type_fields (store : Store.t) ~(type_name : string) : value Lwt.t =
-  let* fs = Store.lookup_type_fields store ~name:type_name in
+let type_fields (store : Store.t) ~(type_name : string) : value =
+  let fs = Store.lookup_type_fields store ~name:type_name in
   match fs with
-  | None -> Lwt.return VNil
-  | Some fields -> Lwt.return (VList (List.map (fun f -> VStr f) fields))
+  | None -> VNil
+  | Some fields -> (VList (List.map (fun f -> VStr f) fields))
 
 (* ---- hierarchical tree prims (notes.tree-cutover K0) ---- *)
 
-let tree_get (store : Store.t) ~(path : string) : value Lwt.t =
+let tree_get (store : Store.t) ~(path : string) : value =
   match Io_lwt.Db.current_conn store with
-  | None -> Lwt.return VNil
+  | None -> VNil
   | Some conn ->
-      let* n = Tree_store.get_by_path conn ~path in
+      let n = Tree_store.get_by_path conn ~path in
       (match n with
-       | None -> Lwt.return VNil
-       | Some node -> Lwt.return (VStr (Tree_store.node_to_json node)))
+       | None -> VNil
+       | Some node -> (VStr (Tree_store.node_to_json node)))
 
 let tree_list (store : Store.t) ~(prefix : string) ?(depth : int option)
-    ?(limit : int = 1000) () : value Lwt.t =
+    ?(limit : int = 1000) () : value =
   match Io_lwt.Db.current_conn store with
-  | None -> Lwt.return (VList [])
+  | None -> (VList [])
   | Some conn ->
-      let* nodes =
+      let nodes =
         match depth with
         | Some 1 -> Tree_store.list_children conn ~prefix ~limit ()
         | _ -> Tree_store.list_subtree conn ~prefix ~limit ()
       in
-      Lwt.return
-        (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes))
+      (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes))
 
 let tree_upsert (store : Store.t) ~(path : string) ~(kind : string)
-    ~(type_name : string) ~(body_json : string) ~(author : string) : value Lwt.t =
+    ~(type_name : string) ~(body_json : string) ~(author : string) : value =
   match Io_lwt.Db.current_conn store with
-  | None -> Lwt.return (VStr "tree/upsert: no DB")
+  | None -> (VStr "tree/upsert: no DB")
   | Some conn ->
-      let* r =
+      let r =
         Tree_store.upsert_hier conn ~path ~kind ~type_name ~body_json ~author
       in
       (match r with
-       | Ok p -> Lwt.return (VStr p)
-       | Error e -> Lwt.return (VStr e))
+       | Ok p -> (VStr p)
+       | Error e -> (VStr e))
 
 let tree_delete (store : Store.t) ~(path : string) ~(recursive : bool)
-    : value Lwt.t =
+    : value =
   match Io_lwt.Db.current_conn store with
-  | None -> Lwt.return (VInt 0L)
+  | None -> (VInt 0L)
   | Some conn ->
-      let* n = Tree_store.delete_path conn ~path ~recursive in
-      Lwt.return (VInt (Int64.of_int n))
+      let n = Tree_store.delete_path conn ~path ~recursive in
+      (VInt (Int64.of_int n))
 
 let tree_move (store : Store.t) ~(old_path : string) ~(new_path : string)
-    : value Lwt.t =
+    : value =
   match Io_lwt.Db.current_conn store with
-  | None -> Lwt.return (VStr "tree/move: no DB")
+  | None -> (VStr "tree/move: no DB")
   | Some conn ->
-      let* r = Tree_store.move_subtree conn ~old_path ~new_path in
+      let r = Tree_store.move_subtree conn ~old_path ~new_path in
       (match r with
-       | Ok n -> Lwt.return (VInt (Int64.of_int n))
-       | Error e -> Lwt.return (VStr e))
+       | Ok n -> (VInt (Int64.of_int n))
+       | Error e -> (VStr e))
 
-let tree_get_uuid (store : Store.t) ~(uuid : string) : value Lwt.t =
+let tree_get_uuid (store : Store.t) ~(uuid : string) : value =
   match Io_lwt.Db.current_conn store with
-  | None -> Lwt.return VNil
+  | None -> VNil
   | Some conn ->
-      let* n = Tree_store.get_by_uuid conn ~uuid in
+      let n = Tree_store.get_by_uuid conn ~uuid in
       (match n with
-       | None -> Lwt.return VNil
-       | Some node -> Lwt.return (VStr (Tree_store.node_to_json node)))
+       | None -> VNil
+       | Some node -> (VStr (Tree_store.node_to_json node)))
 
 let tree_find_by (store : Store.t) ~(kind : string option) ~(field : string)
-    ~(value : string) ?(limit : int = 50) () : value Lwt.t =
+    ~(value : string) ?(limit : int = 50) () : value =
   match Io_lwt.Db.current_conn store with
-  | None -> Lwt.return (VList [])
+  | None -> (VList [])
   | Some conn ->
-      let* nodes =
+      let nodes =
         Tree_store.find_by_body_field conn ~kind ~field ~value ~limit ()
       in
-      Lwt.return
-        (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes))
+      (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes))
 
 let tree_list_kind (store : Store.t) ~(prefix : string) ~(kind : string)
-    ?(limit : int = 2000) () : value Lwt.t =
+    ?(limit : int = 2000) () : value =
   match Io_lwt.Db.current_conn store with
-  | None -> Lwt.return (VList [])
+  | None -> (VList [])
   | Some conn ->
-      let* nodes =
+      let nodes =
         Tree_store.list_by_kind conn ~prefix ~kind ~limit ()
       in
-      Lwt.return
-        (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes))
+      (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes))
 
 let tree_note_index (store : Store.t) ~(prefix : string) ?(limit : int = 2000)
-    () : value Lwt.t =
+    () : value =
   match Io_lwt.Db.current_conn store with
-  | None -> Lwt.return (VList [])
+  | None -> (VList [])
   | Some conn ->
-      let* rows = Tree_store.list_note_index conn ~prefix ~limit () in
-      Lwt.return
-        (VList
+      let rows = Tree_store.list_note_index conn ~prefix ~limit () in
+      (VList
            (List.map
               (fun (id, fields) -> VPair (VStr id, VStr fields))
               rows))

@@ -9,7 +9,6 @@
 
 let is_closed = Pricklypear_image_lib.Http_core.is_closed_writer_exn
 
-open Lwt.Syntax
 
 let test_recognizes_closed_writer () =
   Alcotest.(check bool) "exact closed-writer msg" true
@@ -55,14 +54,15 @@ let test_safe_wrappers_swallow_closed_writer () =
    subsequent acquire succeeds. We do not test the blocking path (would
    need a paused releaser); the counting contract is what matters here. *)
 let test_inflight_acquire_release () =
+  (* Eio.Mutex requires an Eio loop. *)
+  Eio_main.run @@ fun _env ->
   let before = Pricklypear_image_lib.Http_core.inflight_sem.count in
-  let* () = Pricklypear_image_lib.Http_core.inflight_acquire () in
-  Alcotest.(check (Alcotest.int)) "acquire increments count" (before + 1)
+  Pricklypear_image_lib.Http_core.inflight_acquire ();
+  Alcotest.(check int) "acquire increments count" (before + 1)
     Pricklypear_image_lib.Http_core.inflight_sem.count;
-  let* () = Pricklypear_image_lib.Http_core.inflight_release () in
-  Alcotest.(check (Alcotest.int)) "release decrements count" before
-    Pricklypear_image_lib.Http_core.inflight_sem.count;
-  Lwt.return_unit
+  Pricklypear_image_lib.Http_core.inflight_release ();
+  Alcotest.(check int) "release decrements count" before
+    Pricklypear_image_lib.Http_core.inflight_sem.count
 
 let () =
   Alcotest.run "http_robust"
@@ -74,6 +74,6 @@ let () =
         ])
     ; ("inflight gate",
         [ Alcotest.test_case "acquire/release counting" `Quick
-            (fun () -> Lwt_main.run (test_inflight_acquire_release ()))
+            (fun () ->  (test_inflight_acquire_release ()))
         ])
     ]

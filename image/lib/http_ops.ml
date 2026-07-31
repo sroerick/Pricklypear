@@ -1,13 +1,12 @@
 (** /analytics page + ops HTTP helpers. *)
-open Lwt.Syntax
 open Pure_html
 open Http_core
 
-let analytics_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
+let analytics_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
   let store = Session.store session in
-  let* logins_ok, logins_fail = Ops_incidents.count_logins store in
+  let logins_ok, logins_fail = Ops_incidents.count_logins store in
   let summary = Ops_stats.summary_yojson ~logins_ok ~logins_fail in
-  let* incidents = Ops_incidents.list_open_incidents store in
+  let incidents = Ops_incidents.list_open_incidents store in
   let recent = Ops_log.tail ~n:30 ~level:Ops_log.Warn () in
   let day =
     match summary with
@@ -104,7 +103,7 @@ let analytics_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
           ])
       (List.rev recent)
   in
-  let* body =
+  let body =
     chrome_lwt ~session ~title:"Analytics"
       [ HTML.h1 [] [txt "Analytics"]
       ; HTML.p []
@@ -170,4 +169,4 @@ let analytics_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
       ]
   in
   html_response reqd ~session body;
-  Lwt.return_unit
+  ()

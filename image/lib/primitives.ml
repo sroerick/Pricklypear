@@ -6,17 +6,12 @@
 
     Spec [lisp-interpreter.primitives] lists the full ~20; for the minimal
     image, ~5 are sufficient to demo the loop. *)
-open Lwt
 open Pricklypear_lisp.Ast
-(* A prim fn takes a per-request context + evaluated args, returns a value
-   (or raises) wrapped in a promise. The context carries the stable manifest
-   (and later env/routes) for the duration of the page. Pure prims register
-   via [register_sync] which wraps the sync prim in [Lwt.return]; DB-touching
-   prims register via [register] and return their promise directly. *)
-type prim_fn = value list -> value Lwt.t
+(* Prim fn: evaluated args -> value (or raise). Direct-style under Eio floor.
+   Pure and DB-touching prims share the same ABI; I/O blocks the fiber. *)
+type prim_fn = value list -> value
 
-(* The sync form: pure prims return [value] immediately. They get wrapped
-   in [Lwt.return] when registered via [register_sync]. *)
+(* Alias: same as prim_fn after decolor. *)
 type prim_fn_sync = value list -> value
 
 type t = (string, prim_fn) Hashtbl.t
@@ -27,7 +22,7 @@ let register (t : t) (name : string) (fn : prim_fn) : unit =
   Hashtbl.replace t name fn
 
 let register_sync (t : t) (name : string) (fn : prim_fn_sync) : unit =
-  Hashtbl.replace t name (fun args -> Lwt.return (fn args))
+  Hashtbl.replace t name (fun args -> (fn args))
 
 let lookup (t : t) (name : string) : prim_fn option =
   Hashtbl.find_opt t name

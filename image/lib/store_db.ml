@@ -1,46 +1,8 @@
-(** Pricklypear Image — Store connection, config, transactions.
+(** Pricklypear Image — Store connection, config, transactions (Eio floor).
 
-    H3 dual-run: [conn] is either pgx_lwt or Io_eio.Pg. [PP_IO=eio] selects
-    the Eio backend at [make] time; default remains Lwt. Query APIs live in
-    [Store] (includes this module). *)
-open Lwt.Syntax
-
-(* A [Pgx_lwt.Io_intf.S] implementation backed by [Lwt_unix]. *)
-module Io_unix = struct
-  type in_channel = Lwt_io.input_channel
-  type out_channel = Lwt_io.output_channel
-  type sockaddr =
-    | Unix of string
-    | Inet of string * int
-
-  let output_char = Lwt_io.write_char
-  let output_string oc s = Lwt_io.write oc s
-  let flush = Lwt_io.flush
-  let input_char = Lwt_io.read_char
-  let really_input ic buf pos len = Lwt_io.read_into_exactly ic buf pos len
-  let close_in = Lwt_io.close
-  let getlogin () = Lwt.return "pricklypear"
-  let open_connection = function
-    | Unix path ->
-        let sock =
-          Lwt_unix.socket Lwt_unix.PF_UNIX Lwt_unix.SOCK_STREAM 0 in
-        let* () = Lwt_unix.connect sock (Lwt_unix.ADDR_UNIX path) in
-        Lwt.return (Lwt_io.of_fd ~mode:Lwt_io.Input sock,
-                    Lwt_io.of_fd ~mode:Lwt_io.Output sock)
-    | Inet (host, port) ->
-        let sock =
-          Lwt_unix.socket Lwt_unix.PF_INET Lwt_unix.SOCK_STREAM 0 in
-        let addr = Lwt_unix.ADDR_INET (Unix.inet_addr_of_string host, port) in
-        let* () = Lwt_unix.connect sock addr in
-        Lwt.return (Lwt_io.of_fd ~mode:Lwt_io.Input sock,
-                    Lwt_io.of_fd ~mode:Lwt_io.Output sock)
-end
-
-module Pg_lwt = Pgx_lwt.Make (Io_unix)
-
-(** @deprecated Prefer [Pg_lwt] / dual [conn]. Kept so older references
-    to [Store.Pg] still resolve for type errors that should migrate. *)
-module Pg = Pg_lwt
+    Domain-facing API returns plain ['a] (blocks the calling Eio fiber).
+    Single backend: Io_eio.Pg (pure pgx over Eio.Net). Process always runs
+    under Eio_main (image/bin/main.ml). *)
 
 type config = {
   database : string;
@@ -50,17 +12,7 @@ type config = {
   password : string;
 }
 
-type backend = Lwt_backend | Eio_backend
-
 let env_or name dft = match Sys.getenv_opt name with Some s -> s | None -> dft
-
-let backend_from_env () : backend =
-  match Sys.getenv_opt "PP_IO" with
-  | Some s ->
-      (match String.lowercase_ascii (String.trim s) with
-       | "eio" -> Eio_backend
-       | _ -> Lwt_backend)
-  | None -> Lwt_backend
 
 let config_from_env () : config =
   {
@@ -71,151 +23,108 @@ let config_from_env () : config =
     password = env_or "PP_DB_PASS" "";
   }
 
-(** Opaque dual connection handle. *)
-type conn =
-  | Lwt_conn of Pg_lwt.t
-  | Eio_conn of Io_eio.Pg.t
+(** Connection handle + mutex: identity-monad pgx only locks per SQL op, so
+    concurrent Httpun_eio fibers would interleave BEGIN/SELECT on one wire.
+    All SQL (exec + whole transactions) takes this lock; same-fiber re-entry
+    is allowed via [eio_lock_depth_key] so a tx body can exec. *)
+type conn = Io_eio.Pg.t * Eio.Mutex.t
+
+let eio_lock_depth_key : int Eio.Fiber.key = Eio.Fiber.create_key ()
+
+let with_eio_conn_lock (mu : Eio.Mutex.t) (f : unit -> 'a) : 'a =
+  match Eio.Fiber.get eio_lock_depth_key with
+  | Some d when d > 0 ->
+      Eio.Fiber.with_binding eio_lock_depth_key (d + 1) f
+  | _ ->
+      Eio.Mutex.lock mu;
+      (match
+         Eio.Fiber.with_binding eio_lock_depth_key 1 (fun () ->
+             Eio.Cancel.protect f)
+       with
+       | v ->
+           Eio.Mutex.unlock mu;
+           v
+       | exception ex ->
+           Eio.Mutex.unlock mu;
+           raise ex)
 
 type t = {
   cfg : config;
-  backend : backend;
   mutable conn : conn option;
   mutable branch_id : string;
   mutable current_tx : conn option;
 }
 
 let make ~cfg ~branch_id () : t =
-  {
-    cfg;
-    backend = backend_from_env ();
-    conn = None;
-    branch_id;
-    current_tx = None;
-  }
-
-let backend (t : t) = t.backend
+  { cfg; conn = None; branch_id; current_tx = None }
 
 let conn_of (t : t) : conn option = t.conn
 
 let current_conn (t : t) : conn option =
-  match t.current_tx with
-  | Some tx -> Some tx
-  | None -> t.conn
+  match t.current_tx with Some tx -> Some tx | None -> t.conn
 
-(** True iff a dynamic (with-transaction ...) is active on this store. *)
 let in_transaction (t : t) : bool = t.current_tx <> None
 
-(** Execute SQL on a dual [conn]. Shared by store/crud/auth. *)
-let exec (c : conn) ?params sql : Pgx.row list Lwt.t =
-  match c with
-  | Lwt_conn pg ->
-      (match params with
-       | None -> Pg_lwt.execute pg sql
-       | Some params -> Pg_lwt.execute pg ~params sql)
-  | Eio_conn pg ->
-      Io_eio.on_eio (fun () ->
-          match params with
-          | None -> Io_eio.Pg.execute pg sql
-          | Some params -> Io_eio.Pg.execute ~params pg sql)
+let exec ((pg, mu) : conn) ?params sql : Pgx.row list =
+  with_eio_conn_lock mu (fun () ->
+      match params with
+      | None -> Io_eio.Pg.execute pg sql
+      | Some params -> Io_eio.Pg.execute ~params pg sql)
 
-let with_transaction ?(isolation = Pgx.Isolation.Serializable)
-    (t : t) (f : conn option -> 'a Lwt.t) : 'a Lwt.t =
+let with_transaction ?(isolation = Pgx.Isolation.Serializable) (t : t)
+    (f : conn option -> 'a) : 'a =
   match t.conn with
   | None -> f None
-  | Some (Lwt_conn pg) ->
-      Pg_lwt.with_transaction ~isolation pg (fun tx ->
-          f (Some (Lwt_conn tx)))
-  | Some (Eio_conn pg) ->
-      (* Stay on one Eio fiber for the whole tx so SET ISOLATION sticks. *)
-      Io_eio.on_eio (fun () ->
+  | Some (pg, mu) ->
+      with_eio_conn_lock mu (fun () ->
           Io_eio.Pg.with_transaction ~isolation pg (fun tx ->
-              Lwt_eio.run_lwt (fun () -> f (Some (Eio_conn tx)))))
+              f (Some (tx, mu))))
 
-let with_dynamic_transaction
-    ?(isolation = Pgx.Isolation.Serializable) (t : t)
-    (f : unit -> 'a Lwt.t) : 'a Lwt.t =
+let with_dynamic_transaction ?(isolation = Pgx.Isolation.Serializable)
+    (t : t) (f : unit -> 'a) : 'a =
   match t.conn with
   | None -> f ()
-  | Some (Lwt_conn pg) ->
-      if t.current_tx <> None then
-        Lwt.fail
-          (Pricklypear_lisp.Ast.Interp_error
-             (Pricklypear_lisp.Ast.User_error
-                "with-transaction: nested transactions not supported"))
-      else
-        Pg_lwt.with_transaction ~isolation pg (fun tx_conn ->
-            t.current_tx <- Some (Lwt_conn tx_conn);
-            Lwt.finalize f (fun () ->
-                t.current_tx <- None;
-                Lwt.return_unit))
-  | Some (Eio_conn pg) ->
-      if t.current_tx <> None then
-        Lwt.fail
-          (Pricklypear_lisp.Ast.Interp_error
-             (Pricklypear_lisp.Ast.User_error
-                "with-transaction: nested transactions not supported"))
-      else
-        Io_eio.on_eio (fun () ->
+  | Some (pg, mu) ->
+      with_eio_conn_lock mu (fun () ->
+          if t.current_tx <> None then
+            raise
+              (Pricklypear_lisp.Ast.Interp_error
+                 (Pricklypear_lisp.Ast.User_error
+                    "with-transaction: nested transactions not supported"))
+          else
             Io_eio.Pg.with_transaction ~isolation pg (fun tx_conn ->
-                t.current_tx <- Some (Eio_conn tx_conn);
+                t.current_tx <- Some (tx_conn, mu);
                 Fun.protect
                   ~finally:(fun () -> t.current_tx <- None)
-                  (fun () -> Lwt_eio.run_lwt f)))
+                  f))
 
-let connect (t : t) : unit Lwt.t =
+let connect (t : t) : unit =
   match t.conn with
-  | Some _ -> Lwt.return_unit
-  | None ->
-      (match t.backend with
-       | Lwt_backend ->
-           Lwt.catch
-             (fun () ->
-               let* c =
-                 Pg_lwt.connect
-                   ~host:t.cfg.host ~port:t.cfg.port
-                   ~user:t.cfg.user ~password:t.cfg.password
-                   ~database:t.cfg.database ()
-               in
-               t.conn <- Some (Lwt_conn c);
-               Printf.eprintf
-                 "[store] connected (lwt) to PG %s:%d/%s as %s\n%!"
-                 t.cfg.host t.cfg.port t.cfg.database t.cfg.user;
-               Lwt.return_unit)
-             (fun exn ->
-               Printf.eprintf "[store] PG connect failed (lwt): %s\n%!"
-                 (Printexc.to_string exn);
-               Lwt.return_unit)
-       | Eio_backend ->
-           Lwt.catch
-             (fun () ->
-               Lwt_eio.run_eio (fun () ->
-                   let c =
-                     Io_eio.Pg.connect
-                       ~host:t.cfg.host ~port:t.cfg.port
-                       ~user:t.cfg.user ~password:t.cfg.password
-                       ~database:t.cfg.database ()
-                   in
-                   t.conn <- Some (Eio_conn c);
-                   Printf.eprintf
-                     "[store] connected (eio) to PG %s:%d/%s as %s\n%!"
-                     t.cfg.host t.cfg.port t.cfg.database t.cfg.user))
-             (fun exn ->
-               Printf.eprintf "[store] PG connect failed (eio): %s\n%!"
-                 (Printexc.to_string exn);
-               Lwt.return_unit))
+  | Some _ -> ()
+  | None -> (
+      try
+        let c =
+          Io_eio.Pg.connect ~host:t.cfg.host ~port:t.cfg.port
+            ~user:t.cfg.user ~password:t.cfg.password
+            ~database:t.cfg.database ()
+        in
+        let mu = Eio.Mutex.create () in
+        t.conn <- Some (c, mu);
+        Printf.eprintf "[store] connected (eio) to PG %s:%d/%s as %s\n%!"
+          t.cfg.host t.cfg.port t.cfg.database t.cfg.user
+      with exn ->
+        Printf.eprintf "[store] PG connect failed (eio): %s\n%!"
+          (Printexc.to_string exn))
 
-(** Liveness probe for GET /health (image.http-robustness invariant 7).
-    Runs [SELECT 1] on the live dual-conn path used by auth/prims.
-    [Ok ()] = store can still serve queries; [Error msg] = dead/poisoned/unconnected. *)
-let health_check (t : t) : (unit, string) result Lwt.t =
+let health_check (t : t) : (unit, string) result =
   match current_conn t with
-  | None -> Lwt.return (Error "no database connection")
-  | Some conn ->
-      Lwt.catch
-        (fun () ->
-          let* rows = exec conn "SELECT 1" in
-          match rows with
-          | _ :: _ -> Lwt.return (Ok ())
-          | [] -> Lwt.return (Error "SELECT 1 returned no rows"))
-        (fun exn ->
-          Lwt.return (Error (Printexc.to_string exn)))
+  | None -> Error "no database connection"
+  | Some conn -> (
+      try
+        match exec conn "SELECT 1" with
+        | _ :: _ -> Ok ()
+        | [] -> Error "SELECT 1 returned no rows"
+      with exn -> Error (Printexc.to_string exn))
+
+(** @deprecated compatibility alias — was Pg_lwt. *)
+module Pg = Io_eio.Pg

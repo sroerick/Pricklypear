@@ -6,8 +6,6 @@
       public agent bootstrap: /.well-known/agent.json  /agent.txt
       user routes via (route ...)
 *)
-open Lwt.Syntax
-open Lwt
 open Request_context
 open Pure_html
 open Http_core
@@ -18,8 +16,8 @@ open Http_pages
 open Http_ops
 open Http_media
 
-let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
-    (reqd : Httpun.Reqd.t) : unit =
+let request_handler ~(sw : Eio.Switch.t) (session : Session.t)
+    (sockaddr : Unix.sockaddr) (reqd : Httpun.Reqd.t) : unit =
   let req = Httpun.Reqd.request reqd in
   let target = req.Httpun.Request.target in
   let path =
@@ -29,8 +27,10 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
   in
   let meth = req.Httpun.Request.meth in
   let headers = header_list req in
-  (* Thunk page: Lwt promises are eager — must not start page work
-     before auth middleware decides proceed (auth.route-visibility).
+  (* Fork page work off the connection fiber (gluten_eio runs request_handler
+     on the same fiber as the read loop). Awaiting body reads without forking
+     deadlocks: schedule_read callbacks never fire. Same role as the old
+     Lwt.async launch under httpun-lwt.
 
      image.http-robustness invariant 5: bound the expensive page-work queue
      with the inflight cap so a traffic spike can't accumulate unbounded
@@ -38,14 +38,12 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
      like /health that bypass launch are NEVER blocked by page traffic —
      liveness must stay servable under load. Released in finalize so a slot
      is freed whether page_fn succeeded, failed, or the peer went away. *)
-  let launch (page_fn : unit -> unit Lwt.t) : unit =
-    Lwt.async (fun () ->
-      let* () = inflight_acquire () in
-      Lwt.finalize
-        (fun () ->
-          Lwt.catch
-            (fun () ->
-              (* image.http-robustness invariant 4b: request_mutex guards
+  let launch (page_fn : unit -> unit) : unit =
+    Eio.Fiber.fork ~sw (fun () ->
+    let () = inflight_acquire () in
+    Fun.protect ~finally:(fun () -> inflight_release ()) (fun () ->
+      (try
+      (* image.http-robustness invariant 4b: request_mutex guards
                  ONLY the identity-attach gate (resolve_identity + attach +
                  classify + subdomain mismatch + analytics + refresh_ui_shell).
                  It is released BEFORE page_fn runs so page work (Lisp eval, HTML
@@ -66,12 +64,12 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
                   ~env:(Session.env session)
                   ~routes:(Request_context.copy_routes (Session.routes session))
               in
-              let* proceed_ctx =
-                Lwt_mutex.with_lock request_mutex (fun () ->
+              let proceed_ctx =
+                Eio.Mutex.use_ro request_mutex (fun () ->
                   if auth_disabled () then begin
                     (* Dev escape: still try attach so whoami is real if cookie. *)
-                    let* user_opt = resolve_identity session ~headers in
-                    let* () =
+                    let user_opt = resolve_identity session ~headers in
+                    let () =
                       match user_opt with
                       | Some user ->
                           let tok = cookie_value headers cookie_name in
@@ -79,13 +77,13 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
                             ~checkout_personal_now:false ()
                       | None -> Session.attach_anonymous session
                     in
-                    Lwt.return (Some (snapshot_ctx ()))
+                    (Some (snapshot_ctx ()))
                   end else begin
                     (* Attach identity BEFORE classify: route table is
                        branch-scoped (inheritance CTE). Anonymous uses
                        system/main so package public routes resolve. *)
-                    let* user_opt = resolve_identity session ~headers in
-                    let* () =
+                    let user_opt = resolve_identity session ~headers in
+                    let () =
                       match user_opt with
                       | Some user ->
                           let tok = cookie_value headers cookie_name in
@@ -101,8 +99,8 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
                       | `User (_, vis) -> vis <> "public"
                     in
                     match user_opt, needs_auth with
-                    | Some _, _ -> Lwt.return (Some (snapshot_ctx ()))
-                    | None, false -> Lwt.return (Some (snapshot_ctx ()))
+                    | Some _, _ -> (Some (snapshot_ctx ()))
+                    | None, false -> (Some (snapshot_ctx ()))
                     | None, true ->
                         let apiish =
                           String.length path >= 4
@@ -110,13 +108,13 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
                         in
                         if apiish then unauthorized_api reqd
                         else require_login_redirect reqd ~path ~target;
-                        Lwt.return None
+                        None
                   end)
               in
               (match proceed_ctx with
-               | None -> Lwt.return_unit
+               | None -> ()
                | Some req_ctx ->
-              Lwt.with_value Request_context.current (Some req_ctx) @@ fun () ->
+              Request_context.with_current req_ctx @@ fun () ->
               (* Per-request context bound; page work below reads it for
                  env/routes/manifest (call_handler, lookup_route, chrome). *)
               (* Subdomain garden mismatch: private paths require
@@ -151,7 +149,7 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
                        text_response reqd ~status:`Not_found
                          ~content_type:"text/plain" "unknown host"
                    | _ -> redirect_response reqd "/");
-                  Lwt.return_unit
+                  ()
                 end else begin
                 (* Product analytics (in-memory day counters). *)
                 let uname = Session.username session in
@@ -163,14 +161,14 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
                   ~headers ~sockaddr;
                 (* Refresh ui/nav cache every request so Lisp chrome is shared
                    by home, system pages, and user routes — not only /. *)
-                let* () = Session.refresh_ui_shell session in
+                let () = Session.refresh_ui_shell session in
                 (* GATE COMPLETE — request_mutex released above. page_fn runs
                    lock-free (invariant 4b). *)
                 page_fn ()
                 end
-              ))
-          (fun exn ->
-            (* image.http-robustness invariant 2: if the handler failed
+              )
+    with exn ->
+      (* image.http-robustness invariant 2: if the handler failed
                because the peer went away (closed writer), do NOT try to
                render a 500 page onto the same dead writer — that re-throw
                was the actual crash mechanism. Just close quietly and end. *)
@@ -178,23 +176,21 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
               ignore (Ops_log.info ~component:"http"
                         ~context:[("path", path)]
                         "peer gone (closed writer); skipping 500");
-              Lwt.return_unit
+              ()
             end else begin
             let msg = Printexc.to_string exn in
-            Lwt.async (fun () ->
-              Ops_incidents.emit_and_maybe_file session
-                ~level:Ops_log.Error ~component:"http"
-                ~file:(not (Ops_incidents.is_expected_runtime_error exn))
-                ~context:[("path", path)] msg);
+            Ops_incidents.emit_and_maybe_file session
+              ~level:Ops_log.Error ~component:"http"
+              ~file:(not (Ops_incidents.is_expected_runtime_error exn))
+              ~context:[("path", path)] msg;
             let body =
               chrome ~session ~title:"Error" [
                 HTML.p [HTML.class_ "err"] [txt "%s" msg];
               ]
             in
             html_response reqd ~session ~status:`Internal_server_error body;
-            Lwt.return_unit
-            end))
-      (fun () -> inflight_release ()))
+            ()
+            end)))
   in
   (** Lisp user-route if bound; else kernel [fallback]. *)
   let launch_user_route_or (fallback : unit -> unit) : unit =
@@ -205,26 +201,26 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
        route 404 before THIS request's attach even runs. *)
     launch (fun () ->
       let route_opt =
-        match Lwt.get Request_context.current with
+        match Request_context.get () with
         | Some ctx -> Request_context.lookup_route ctx path
         | None -> Session.lookup_route session path
       in
       match route_opt with
       | None ->
           fallback ();
-          Lwt.return_unit
+          ()
       | Some handler_name ->
-          let page () : unit Lwt.t =
-            let* body_str =
+          let page () : unit =
+            let body_str =
               match meth with
               | `POST -> read_body reqd
-              | _ -> Lwt.return ""
+              | _ -> ""
             in
           if String.length body_str > max_user_body_bytes then begin
             text_response reqd ~status:`Payload_too_large
               ~content_type:"text/plain"
               "request body too large (max 64KiB)";
-            Lwt.return_unit
+            ()
           end else begin
             let query = parse_query target in
             let form =
@@ -251,7 +247,7 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
             let request : Session.request =
               { method_; path; params; body = body_str; headers }
             in
-            let* result =
+            let result =
               Session.call_handler session ~request handler_name
             in
             (match result with
@@ -278,14 +274,14 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
                           | _ -> Pricklypear_lisp.Reader.pp_value value)
                    in
                    Http_code.serve_public_body reqd ~title body;
-                   Lwt.return_unit
+                   ()
                  end else begin
                    respond_handler_value ~session ~reqd ~path ~fragment value;
-                   Lwt.return_unit
+                   ()
                  end
              | Session.Handler_unbound ->
                  fallback ();
-                 Lwt.return_unit
+                 ()
              | Session.Handler_error msg ->
                  if fragment then
                    fragment_response reqd ~status:`Internal_server_error
@@ -298,7 +294,7 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
                           [txt "handler %s" handler_name];
                         HTML.pre [] [txt "%s" msg];
                       ]);
-                 Lwt.return_unit)
+                 ())
           end
         in
         page ())
@@ -306,9 +302,9 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
   match meth, path with
   | `GET, "/login" ->
       launch (fun () ->
-        let* () = Lwt.return_unit in
+        let () = () in
          login_form_page reqd;
-         Lwt.return_unit)
+         ())
   | `POST, "/login" -> launch (fun () -> post_login session reqd)
   | `POST, "/logout" -> launch (fun () -> post_logout session reqd)
   | `GET, "/admin/users" -> launch (fun () -> admin_users_page session reqd)
@@ -342,21 +338,21 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
   | `GET, "/book.pdf" ->
       launch (fun () ->
         Http_code.handle_public_artifact reqd ~name:"book.pdf";
-        Lwt.return_unit)
+        ())
   | `GET, "/src.tgz" ->
       launch (fun () ->
         Http_code.handle_public_artifact reqd ~name:"src.tgz";
-        Lwt.return_unit)
+        ())
   | `GET, "/code" ->
       launch (fun () ->
         Http_code.handle_code_page reqd ~target;
-        Lwt.return_unit)
+        ())
   | `GET, path when String.length path >= 10
                  && String.sub path 0 10 = "/code/raw/" ->
       let rel = String.sub path 10 (String.length path - 10) in
       launch (fun () ->
         Http_code.handle_raw reqd ~rel;
-        Lwt.return_unit)
+        ())
   | `GET, path when String.length path >= 11
                  && String.sub path 0 11 = "/assets/cm/" ->
       (* Back-compat alias: /assets/cm/* → static/codemirror/* *)
@@ -365,26 +361,26 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
       in
       launch (fun () ->
         Http_code.handle_asset reqd ~rel;
-        Lwt.return_unit)
+        ())
   | `GET, path when String.length path >= 8
                  && String.sub path 0 8 = "/assets/" ->
       let rel = String.sub path 8 (String.length path - 8) in
       launch (fun () ->
         Http_code.handle_asset reqd ~rel;
-        Lwt.return_unit)
+        ())
   | `GET, "/about" ->
       launch (fun () ->
-        let* () = Lwt.return_unit in
+        let () = () in
          about_page session reqd;
-         Lwt.return_unit)
+         ())
   | `GET, "/pages" ->
       launch (fun () ->
-        let* () = Lwt.return_unit in
+        let () = () in
          pages_list_page session reqd;
-         Lwt.return_unit)
+         ())
   | `POST, "/api/recipe/hello" ->
       launch (fun () ->
-        let* res = Session.recipe_hello session in
+        let res = Session.recipe_hello session in
          match res with
          | Ok msg ->
              let body =
@@ -404,7 +400,7 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
                ]
              in
              html_response reqd ~session body;
-             Lwt.return_unit
+             ()
          | Error e ->
              let body =
                chrome ~session ~title:"Hello recipe failed" [
@@ -413,10 +409,10 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
                ]
              in
              html_response reqd ~session ~status:`Internal_server_error body;
-             Lwt.return_unit)
+             ())
   | `POST, "/api/recipe/todo" ->
       launch (fun () ->
-        let* res = Session.recipe_todo session in
+        let res = Session.recipe_todo session in
          match res with
          | Ok msg ->
              let body =
@@ -434,7 +430,7 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
                ]
              in
              html_response reqd ~session body;
-             Lwt.return_unit
+             ()
          | Error e ->
              let body =
                chrome ~session ~title:"Todo recipe failed" [
@@ -443,10 +439,10 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
                ]
              in
              html_response reqd ~session ~status:`Internal_server_error body;
-             Lwt.return_unit)
+             ())
   | `POST, "/api/recipe/notes" ->
       launch (fun () ->
-        let* res = Session.recipe_notes session in
+        let res = Session.recipe_notes session in
          match res with
          | Ok msg ->
              let body =
@@ -467,7 +463,7 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
                ]
              in
              html_response reqd ~session body;
-             Lwt.return_unit
+             ()
          | Error e ->
              let body =
                chrome ~session ~title:"Notes recipe failed" [
@@ -476,10 +472,10 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
                ]
              in
              html_response reqd ~session ~status:`Internal_server_error body;
-             Lwt.return_unit)
+             ())
   | `POST, "/api/recipe/dabar" ->
       launch (fun () ->
-        let* res = Session.recipe_dabar session in
+        let res = Session.recipe_dabar session in
          match res with
          | Ok msg ->
              let body =
@@ -502,7 +498,7 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
                ]
              in
              html_response reqd ~session body;
-             Lwt.return_unit
+             ()
          | Error e ->
              let body =
                chrome ~session ~title:"Dabar recipe failed" [
@@ -511,34 +507,32 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
                ]
              in
              html_response reqd ~session ~status:`Internal_server_error body;
-             Lwt.return_unit)
+             ())
   | `GET, "/health" ->
       (* image.http-robustness invariant 7: /health must probe the same
          store path auth/prims use. Memory-only ok:true hid Eio mutex
          poison and locked out all logins while watchdog saw green. *)
-      Lwt.async (fun () ->
-        let branch = Session.branch_name session in
-        let uptime = Session.uptime_seconds session in
-        let* check = Store.health_check (Session.store session) in
-        let h, status =
-          match check with
-          | Ok () ->
-              ( { Pricklypear_common.Protocol.ok = true;
-                  branch;
-                  uptime_seconds = uptime;
-                  error = None },
-                `OK )
-          | Error msg ->
-              ( { Pricklypear_common.Protocol.ok = false;
-                  branch;
-                  uptime_seconds = uptime;
-                  error = Some msg },
-                `Service_unavailable )
-        in
-        let j = Pricklypear_common.Protocol.health_response_to_json h in
-        text_response reqd ~status ~content_type:"application/json"
-          (Yojson.Safe.pretty_to_string j);
-        Lwt.return_unit)
+      let branch = Session.branch_name session in
+      let uptime = Session.uptime_seconds session in
+      let check = Store.health_check (Session.store session) in
+      let h, status =
+        match check with
+        | Ok () ->
+            ( { Pricklypear_common.Protocol.ok = true;
+                branch;
+                uptime_seconds = uptime;
+                error = None },
+              `OK )
+        | Error msg ->
+            ( { Pricklypear_common.Protocol.ok = false;
+                branch;
+                uptime_seconds = uptime;
+                error = Some msg },
+              `Service_unavailable )
+      in
+      let j = Pricklypear_common.Protocol.health_response_to_json h in
+      text_response reqd ~status ~content_type:"application/json"
+        (Yojson.Safe.pretty_to_string j)
   (* Public agent bootstrap — no auth, no secrets. /agent stays private. *)
   | `GET, "/.well-known/agent.json" ->
       Agent_discovery.serve_agent_json reqd ~headers
@@ -591,9 +585,9 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
               ]))
   | `GET, "/repl" ->
       launch (fun () ->
-        let* () = Lwt.return_unit in
+        let () = () in
          repl_page session reqd;
-         Lwt.return_unit)
+         ())
   | `POST, "/api/eval" -> launch (fun () -> api_eval session reqd)
   | `POST, "/api/media" -> launch (fun () -> api_media_post session reqd)
   | `GET, "/api/media" ->
@@ -685,23 +679,23 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
          context) so a concurrent attach cannot flip the table under us. *)
       launch (fun () ->
       let route_opt =
-        match Lwt.get Request_context.current with
+        match Request_context.get () with
         | Some ctx -> Request_context.lookup_route ctx path
         | None -> Session.lookup_route session path
       in
       match route_opt with
        | Some handler_name ->
-           let page () : unit Lwt.t =
-             let* body_str =
+           let page () : unit =
+             let body_str =
                match umeth with
                | `POST -> read_body reqd
-               | `GET -> Lwt.return ""
+               | `GET -> ""
              in
              if String.length body_str > max_user_body_bytes then begin
                text_response reqd ~status:`Payload_too_large
                  ~content_type:"text/plain"
                  "request body too large (max 64KiB)";
-               Lwt.return_unit
+               ()
              end else begin
                let query = parse_query target in
                let form =
@@ -732,20 +726,20 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
                let request : Session.request =
                  { method_; path; params; body = body_str; headers }
                in
-               let* result =
+               let result =
                  Session.call_handler session ~request handler_name
                in
                (match result with
                 | Session.Handler_ok value ->
                     respond_handler_value ~session ~reqd ~path ~fragment value;
-                    Lwt.return_unit
+                    ()
                 | Session.Handler_unbound ->
                     if fragment then begin
                       fragment_response reqd ~status:`Internal_server_error
                         ("handler " ^ handler_name ^ " unbound");
-                      Lwt.return_unit
+                      ()
                     end else
-                      let* snap = Call_graph.snapshot_of_session session in
+                      let snap = Call_graph.snapshot_of_session session in
                       let callers = Call_graph.callers snap handler_name in
                       let caller_nodes =
                         if callers = [] then [txt "(none yet)"]
@@ -789,7 +783,7 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
                                 @ caller_nodes);
                            ];
                          ]);
-                      Lwt.return_unit
+                      ()
                 | Session.Handler_error msg ->
                     if fragment then
                       fragment_response reqd ~status:`Internal_server_error
@@ -801,7 +795,7 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
                            HTML.p [] [txt "handler %s" handler_name];
                            HTML.pre [] [txt "%s" msg];
                          ]);
-                    Lwt.return_unit)
+                    ())
              end
            in
            page ()
@@ -815,7 +809,7 @@ let request_handler (session : Session.t) (sockaddr : Unix.sockaddr)
                (chrome ~session ~title:"Not found" [
                   HTML.p [] [txt "no route for %s" path];
                 ]);
-           Lwt.return_unit)
+           ())
   | _, _ ->
       let headers = header_list req in
       if wants_fragment ~path ~headers then
@@ -859,50 +853,11 @@ let error_handler (_sockaddr : Unix.sockaddr)
     safe_close_writer body_w
   with exn when is_closed_writer_exn exn -> ()
 
+(** Legacy httpun-lwt-unix accept loop — retired. Process always uses [serve_eio]. *)
 let serve ~(session : Session.t) ?(port = default_port) () : unit Lwt.t =
-  let handler = request_handler session in
-  (* httpun-lwt hands a Gluten-upgradable reqd wrapper; unwrap .reqd. *)
-  let request_handler addr (g : Httpun.Reqd.t Gluten.reqd) : unit =
-    handler addr g.Gluten.reqd
-  in
-  let inner_establisher =
-    Httpun_lwt_unix.Server.create_connection_handler
-      ~request_handler
-      ~error_handler
-  in
-  (* image.http-robustness invariant 1 (defense-in-depth): any exception
-     that escapes the inner establisher reaches Lwt.async_exception_hook and
-     TERMINATES the process (the actual pricklypear.rocks death vector).
-     Catch connection-level failures here so a gone peer or bad connection
-     ends the request, not the image.
-
-     NOTE: the inflight cap (invariant 5) is applied INSIDE [launch] in
-     request_handler, not here. Keeping it at the connection level would
-     gate /health (a cheap probe that bypasses launch) behind queued page
-     work and wedge the liveness check under load. Gating inside launch
-     bounds the expensive page-work queue while leaving /health and other
-     hard-public probes always servable. *)
-  let establisher sockaddr fd =
-    Lwt.catch
-      (fun () -> inner_establisher sockaddr fd)
-      (fun exn ->
-         if is_closed_writer_exn exn then
-           ignore (Ops_log.info ~component:"http"
-                     "connection handler: peer gone (closed writer)")
-         else
-           ignore (Ops_log.warn ~component:"http"
-                     ~context:[("phase", "connection")]
-                     ("connection handler failed: "
-                      ^ Printexc.to_string exn));
-         Lwt.return_unit)
-  in
-  let addr = Lwt_unix.ADDR_INET (Unix.inet_addr_any, port) in
-  Printf.eprintf
-    "[http] serving htmx (httpun-lwt-unix) on 0.0.0.0:%d (max_inflight=%d)\n%!"
-    port max_inflight;
-  let* _server = Lwt_io.establish_server_with_client_socket addr establisher in
-  let waiter, _waker = Lwt.wait () in
-  waiter
+  let _ = session in
+  let _ = port in
+  failwith "Http.serve (lwt-unix): retired; use serve_eio under Eio_main"
 
 (** Convert Eio stream sockaddr → Unix.sockaddr for shared request_handler. *)
 let unix_sockaddr_of_eio (sa : Eio.Net.Sockaddr.stream) : Unix.sockaddr =
@@ -920,10 +875,9 @@ let serve_eio
     ~(sw : Eio.Switch.t)
     ?(port = default_port)
     () : unit =
-  let handler = request_handler session in
   let request_handler (sa : Eio.Net.Sockaddr.stream)
       (g : Httpun.Reqd.t Gluten.reqd) : unit =
-    handler (unix_sockaddr_of_eio sa) g.Gluten.reqd
+    request_handler ~sw session (unix_sockaddr_of_eio sa) g.Gluten.reqd
   in
   let error_handler (sa : Eio.Net.Sockaddr.stream) =
     error_handler (unix_sockaddr_of_eio sa)

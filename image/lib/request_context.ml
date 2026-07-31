@@ -54,8 +54,13 @@ let lookup_handler (ctx : t) (name : string)
   : Pricklypear_lisp.Ast.value option =
   Pricklypear_lisp.Env.lookup (ctx.env : Pricklypear_lisp.Ast.env) name
 
-(** Lwt dynamic binding key for the current request context.
+(** Fiber-local binding for the current request context (Eio floor).
     Set by the HTTP handler after the identity gate; read by prims
     that need stable manifest (whoami, current-branch, author checks, etc.).
     This avoids the cotenant race without changing the prim_fn ABI. *)
-let current : t Lwt.key = Lwt.new_key ()
+let current_key : t Eio.Fiber.key = Eio.Fiber.create_key ()
+
+let get () : t option = Eio.Fiber.get current_key
+
+let with_current (ctx : t) (f : unit -> 'a) : 'a =
+  Eio.Fiber.with_binding current_key ctx f

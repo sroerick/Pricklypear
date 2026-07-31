@@ -26,7 +26,7 @@
 (test
  (name ai_store_test)
  (modules ai_store_test)
- (libraries pricklypear-image pricklypear-lisp alcotest lwt lwt.unix yojson))
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson))
 
 (test
  (name ops_incidents_test)
@@ -36,7 +36,7 @@
 (test
  (name http_robust_test)
  (modules http_robust_test)
- (libraries pricklypear-image alcotest lwt lwt.unix))
+ (libraries pricklypear-image alcotest eio_main))
 
 (test
  (name http_robust_env_test)

@@ -2,7 +2,6 @@
 
     Spec [ai-authoring.agent-portal]: ai_sessions + ai_messages.
     No LLM calls here — maps rows <-> Llm_client.chat_message. *)
-open Lwt.Syntax
 
 type session = {
   id : string;
@@ -73,19 +72,18 @@ let create_session
     ?branch_ref
     ?(tools = true)
     ?model
-    () : (session, string) result Lwt.t =
+    () : (session, string) result =
   match pg_conn store with
-  | None -> Lwt.return (Error "ai_store: no database")
+  | None -> (Error "ai_store: no database")
   | Some conn ->
-      Lwt.catch
-        (fun () ->
-          let sql =
+      (try
+      let sql =
             "INSERT INTO ai_sessions \
              (owner, title, seed, branch_ref, tools, model) \
              VALUES ($1, $2, $3, $4, $5, $6) \
              RETURNING " ^ session_select_cols
           in
-          let* rows =
+          let rows =
             Io_lwt.Db.execute conn
               ~params:
                 [ Pgx.Value.of_string owner
@@ -106,51 +104,48 @@ let create_session
           match rows with
           | row :: _ ->
               (match row_to_session row with
-               | Some s -> Lwt.return (Ok s)
-               | None -> Lwt.return (Error "ai_store: create parse failed"))
-          | [] -> Lwt.return (Error "ai_store: create returned no row"))
-        (fun exn ->
-          Lwt.return
-            (Error ("ai_store create: " ^ Printexc.to_string exn)))
+               | Some s -> (Ok s)
+               | None -> (Error "ai_store: create parse failed"))
+          | [] -> (Error "ai_store: create returned no row")
+    with exn ->
+      (Error ("ai_store create: " ^ Printexc.to_string exn)))
 
 let get_session (store : Store.t) ~(owner : string) ~(id : string)
-    : session option Lwt.t =
+    : session option =
   match pg_conn store with
-  | None -> Lwt.return_none
+  | None -> None
   | Some conn ->
-      Lwt.catch
-        (fun () ->
-          let sql =
+      (try
+      let sql =
             "SELECT " ^ session_select_cols ^
             " FROM ai_sessions WHERE id = $1::uuid AND owner = $2 LIMIT 1"
           in
-          let* rows =
+          let rows =
             Io_lwt.Db.execute conn
               ~params:
                 [ Pgx.Value.of_string id; Pgx.Value.of_string owner ]
               sql
           in
           match rows with
-          | row :: _ -> Lwt.return (row_to_session row)
-          | [] -> Lwt.return_none)
-        (fun exn ->
-          Printf.eprintf "[ai_store] get_session: %s\n%!"
+          | row :: _ -> (row_to_session row)
+          | [] -> None
+    with exn ->
+      Printf.eprintf "[ai_store] get_session: %s\n%!"
             (Printexc.to_string exn);
-          Lwt.return_none)
+          None)
 
 let list_sessions (store : Store.t) ~(owner : string) ?(limit = 50) ()
-    : session list Lwt.t =
+    : session list =
   match pg_conn store with
-  | None -> Lwt.return []
+  | None -> []
   | Some conn ->
-      Lwt.catch
-        (fun () ->
-          let sql =
+      (try
+      let sql =
             "SELECT " ^ session_select_cols ^
             " FROM ai_sessions WHERE owner = $1 \
              ORDER BY updated_at DESC LIMIT $2"
           in
-          let* rows =
+          let rows =
             Io_lwt.Db.execute conn
               ~params:
                 [ Pgx.Value.of_string owner
@@ -158,55 +153,53 @@ let list_sessions (store : Store.t) ~(owner : string) ?(limit = 50) ()
                 ]
               sql
           in
-          Lwt.return (List.filter_map row_to_session rows))
-        (fun exn ->
-          Printf.eprintf "[ai_store] list_sessions: %s\n%!"
+          (List.filter_map row_to_session rows)
+    with exn ->
+      Printf.eprintf "[ai_store] list_sessions: %s\n%!"
             (Printexc.to_string exn);
-          Lwt.return [])
+          [])
 
 let delete_session (store : Store.t) ~(owner : string) ~(id : string)
-    : bool Lwt.t =
+    : bool =
   match pg_conn store with
-  | None -> Lwt.return false
+  | None -> false
   | Some conn ->
-      Lwt.catch
-        (fun () ->
-          let sql =
+      (try
+      let sql =
             "DELETE FROM ai_sessions \
              WHERE id = $1::uuid AND owner = $2 \
              RETURNING id::text"
           in
-          let* rows =
+          let rows =
             Io_lwt.Db.execute conn
               ~params:
                 [ Pgx.Value.of_string id; Pgx.Value.of_string owner ]
               sql
           in
-          Lwt.return (rows <> []))
-        (fun exn ->
-          Printf.eprintf "[ai_store] delete_session: %s\n%!"
+          (rows <> [])
+    with exn ->
+      Printf.eprintf "[ai_store] delete_session: %s\n%!"
             (Printexc.to_string exn);
-          Lwt.return false)
+          false)
 
 let touch_session
     (store : Store.t)
     ~(id : string)
     ?title
     ?branch_ref
-    () : unit Lwt.t =
+    () : unit =
   match pg_conn store with
-  | None -> Lwt.return_unit
+  | None -> ()
   | Some conn ->
-      Lwt.catch
-        (fun () ->
-          let sql =
+      (try
+      let sql =
             "UPDATE ai_sessions SET \
              updated_at = now(), \
              title = COALESCE($2, title), \
              branch_ref = COALESCE($3, branch_ref) \
              WHERE id = $1::uuid"
           in
-          let* _ =
+          let _ =
             Io_lwt.Db.execute conn
               ~params:
                 [ Pgx.Value.of_string id
@@ -219,11 +212,11 @@ let touch_session
                 ]
               sql
           in
-          Lwt.return_unit)
-        (fun exn ->
-          Printf.eprintf "[ai_store] touch_session: %s\n%!"
+          ()
+    with exn ->
+      Printf.eprintf "[ai_store] touch_session: %s\n%!"
             (Printexc.to_string exn);
-          Lwt.return_unit)
+          ())
 
 (** Encode tool_calls list as JSON for jsonb column. *)
 let tool_calls_to_json (tcs : Llm_client.tool_call list) : string =
@@ -338,36 +331,35 @@ let row_to_chat_message
                 }))
   | _ -> None
 
-let next_seq (conn : Io_lwt.Db.conn) ~(session_id : string) : int Lwt.t =
+let next_seq (conn : Io_lwt.Db.conn) ~(session_id : string) : int =
   let sql =
     "SELECT COALESCE(MAX(seq), -1)::text FROM ai_messages \
      WHERE session_id = $1::uuid"
   in
-  let* rows =
+  let rows =
     Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string session_id ] sql
   in
   match rows with
   | row :: _ ->
       (match cell_string row 0 with
        | Some s ->
-           Lwt.return ((int_of_string_opt s |> Option.value ~default:(-1)) + 1)
-       | None -> Lwt.return 0)
-  | [] -> Lwt.return 0
+           ((int_of_string_opt s |> Option.value ~default:(-1)) + 1)
+       | None -> 0)
+  | [] -> 0
 
 let list_messages (store : Store.t) ~(session_id : string)
-    : Llm_client.chat_message list Lwt.t =
+    : Llm_client.chat_message list =
   match pg_conn store with
-  | None -> Lwt.return []
+  | None -> []
   | Some conn ->
-      Lwt.catch
-        (fun () ->
-          let sql =
+      (try
+      let sql =
             "SELECT role, content, tool_calls::text, tool_call_id \
              FROM ai_messages \
              WHERE session_id = $1::uuid \
              ORDER BY seq ASC"
           in
-          let* rows =
+          let rows =
             Io_lwt.Db.execute conn
               ~params:[ Pgx.Value.of_string session_id ]
               sql
@@ -385,26 +377,25 @@ let list_messages (store : Store.t) ~(session_id : string)
                       ~tool_call_id:(cell_string row 3))
               rows
           in
-          Lwt.return msgs)
-        (fun exn ->
-          Printf.eprintf "[ai_store] list_messages: %s\n%!"
+          msgs
+    with exn ->
+      Printf.eprintf "[ai_store] list_messages: %s\n%!"
             (Printexc.to_string exn);
-          Lwt.return [])
+          [])
 
 let append_messages
     (store : Store.t)
     ~(session_id : string)
-    (msgs : Llm_client.chat_message list) : (unit, string) result Lwt.t =
-  if msgs = [] then Lwt.return (Ok ())
+    (msgs : Llm_client.chat_message list) : (unit, string) result =
+  if msgs = [] then (Ok ())
   else
     match pg_conn store with
-    | None -> Lwt.return (Error "ai_store: no database")
+    | None -> (Error "ai_store: no database")
     | Some conn ->
-        Lwt.catch
-          (fun () ->
-            let* start = next_seq conn ~session_id in
+        (try
+      let start = next_seq conn ~session_id in
             let rec go i = function
-              | [] -> Lwt.return (Ok ())
+              | [] -> (Ok ())
               | m :: rest ->
                   (match chat_message_to_row m with
                    | None -> go i rest (* skip system *)
@@ -414,7 +405,7 @@ let append_messages
                           (session_id, seq, role, content, tool_calls, tool_call_id) \
                           VALUES ($1::uuid, $2, $3, $4, $5::jsonb, $6)"
                        in
-                       let* _ =
+                       let _ =
                          Io_lwt.Db.execute conn
                            ~params:
                              [ Pgx.Value.of_string session_id
@@ -434,15 +425,14 @@ let append_messages
                        in
                        go (i + 1) rest)
             in
-            let* r = go start msgs in
+            let r = go start msgs in
             (match r with
-             | Error _ as e -> Lwt.return e
+             | Error _ as e -> e
              | Ok () ->
-                 let* () = touch_session store ~id:session_id () in
-                 Lwt.return (Ok ())))
-          (fun exn ->
-            Lwt.return
-              (Error ("ai_store append: " ^ Printexc.to_string exn)))
+                 let () = touch_session store ~id:session_id () in
+                 (Ok ()))
+    with exn ->
+      (Error ("ai_store append: " ^ Printexc.to_string exn)))
 
 (** Build the full messages list for a provider call:
     system seed (not stored) + durable history. *)
@@ -453,10 +443,10 @@ let messages_for_api (sess : session) (history : Llm_client.chat_message list)
 
 (** Pretty history for Lisp/HTTP (no tool_calls detail required). *)
 let history_summaries (store : Store.t) ~(session_id : string)
-    : (string * string) list Lwt.t =
-  let* msgs = list_messages store ~session_id in
+    : (string * string) list =
+  let msgs = list_messages store ~session_id in
   let rec go acc = function
-    | [] -> Lwt.return (List.rev acc)
+    | [] -> (List.rev acc)
     | Llm_client.Msg { role; content } :: rest ->
         let r =
           match role with

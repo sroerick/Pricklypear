@@ -130,7 +130,10 @@ Postgres still holds bytes, but the **logical store is ONE TREE**
 - OCaml 5.4.1 on the **`poohstack`** opam switch (NOT a dedicated
   `pricklypear` switch). `eval $(opam env --switch=poohstack --set-switch)`
   before building any package.
-- Lwt for image I/O (`httpaf-lwt-unix`, `pgx_lwt` + custom `Io_unix` shim).
+- **Default I/O rim is Eio** (`Httpun_eio` + `Io_eio.Pg` / pure pgx over
+  Eio.Net). Set `PP_IO=lwt` for the rollback path (`httpun-lwt-unix` +
+  `pgx_lwt`). See `borge/single-image.borg` § runtime and
+  `docs/eio-floor-checklist.md` / `docs/runtime-effects-transition.md`.
 - Single unix binary (`image/`) — not a Solo5 unikernel in v1. Solo5 remains
   an optional later hardening axis (`spikes/mirage_solo5/`), not the product path.
 - Auth is in-process (`image/lib/auth_*.ml`). Password hashes are interim
@@ -140,7 +143,6 @@ Postgres still holds bytes, but the **logical store is ONE TREE**
   Nopales route handlers.
 - `alcotest` for tests, `yojson` for JSON (serialized Nopales ASTs are
   JSONB; dict prims cover field-level access on JSON strings).
-- Eio only for pure-unix dev tooling if any — NOT inside the image (H3 deferred; shipping rim is Io_lwt — see docs/runtime-effects-transition.md).
 - Optional line-protocol REPL on `PP_REPL_PORT`; primary interactive
   surfaces are browser `/repl` and `POST /api/eval`.
 
@@ -237,12 +239,10 @@ auth is **in-process** in the image.
 
 - OCaml / dune, single unix image process for v1 (Solo5 optional later —
   `spikes/mirage_solo5/`, not the product path)
-- Lwt for image I/O (the it12 refactor made `Eval.eval` itself
-  `value Lwt.t` — pure prims wrap results in `Lwt.return` via a
-  `register_sync` helper at registration time). **Long-term:** direct-style
-  core via OCaml 5 effects, Lwt only at the rim — see
-  [`docs/runtime-effects-transition.md`](docs/runtime-effects-transition.md)
-  (slow, opportunistic path; not a freeze on product work).
+- Eval core is direct-style (`lisp/` Lwt-free; `Control.Prim_call` +
+  rim). Image domain still has monadic coloring at the prim ABI until the
+  Eio-floor decolor pass (`docs/eio-floor-checklist.md` Phase 3). Default
+  process rim is Eio; `PP_IO=lwt` remains rollback until Phase 5 deletes it.
 - `pure-html` for HTML generation; use `HTML.Hx.*` not raw htmx attribute
   strings (poohstack rule, preserved here via pure-html). Use
   `txt ~raw:true "%s" s` for raw-HTML injection (escape-bypass path);
@@ -251,15 +251,12 @@ auth is **in-process** in the image.
   a11y snapshots over CSS selectors, graduate green flows into smokes.
   Research wiki: [`docs/agent-ui-harness.md`](docs/agent-ui-harness.md).
   Example contract: [`docs/notes-ui-contract.md`](docs/notes-ui-contract.md).
-- `httpaf-lwt-unix` for HTTP; `pgx_lwt` + custom Io_unix for Postgres (no ORM)
-- `pgx_lwt` + custom `Io_unix` shim for Postgres in v1 (NOT
-  `pgx_lwt_mirage`; v1 uses POSIX-flavored libs. `pgx_lwt_mirage` IS
-  installed v2.2 but needs a real `Tcpip.Stack.V4V6` device). No ORM,
-  no inheritance, plain SQL. SERIALIZABLE transactions by default for
-  mutations — `Store.with_transaction` (it16) wraps pgx's native
-  functor; the `(with-transaction (lambda () body))` prim (it29) gives
-  Nopales code a session-level transaction scope so `(select-for-update ...)`
-  row locks persist across subsequent prims in the body.
+- HTTP: `Httpun_eio` default accept loop; `httpun-lwt-unix` under `PP_IO=lwt`.
+  Postgres: pure pgx over Eio.Net (`Io_eio`) default; `pgx_lwt` rollback.
+  No ORM, plain SQL. SERIALIZABLE transactions by default —
+  `Store.with_transaction` / `(with-transaction (lambda () body))` keep
+  `(select-for-update ...)` locks across prims in the body. Under Eio the
+  store holds a reentrant per-connection mutex for whole-tx wire sections.
 - Additive-only schema migrations; the migration runner uses
   `split_sql_statements` (handles dollar-quoted `$$...$$` blocks,
   single-quoted strings, `--` line comments, multi-statement splits —
