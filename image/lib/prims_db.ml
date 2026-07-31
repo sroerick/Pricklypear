@@ -1316,5 +1316,68 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
   Primitives.register tbl "ops/incidents"
     (fun _args ->
       let j = Ops_incidents.list_open_incidents t.store in
-      (Pricklypear_lisp.Ast.VStr (Yojson.Safe.to_string j)))
+      (Pricklypear_lisp.Ast.VStr (Yojson.Safe.to_string j)));
 
+  (* (code-history "name") / (code-history "name" "owner/branch")
+     → VStr JSON list newest-first. Spec: branching.code-history. *)
+  Primitives.register tbl "code-history"
+    (fun args ->
+      let resolve_branch_id ref_opt =
+        match ref_opt with
+        | None -> Store.current_branch_id t.store
+        | Some branch_ref ->
+            let owner, name =
+              match String.split_on_char '/' branch_ref with
+              | [ o; n ] when o <> "" && n <> "" -> (o, n)
+              | _ -> ("", branch_ref)
+            in
+            (match
+               Store.lookup_branch_id_by_name t.store ~owner ~name
+             with
+             | Some id -> id
+             | None -> "")
+      in
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr name ] ->
+          let bid = resolve_branch_id None in
+          if bid = "" then
+            (Pricklypear_lisp.Ast.VStr "[]")
+          else
+            (Pricklypear_lisp.Ast.VStr
+               (Store.list_code_history_json t.store ~branch_id:bid ~name))
+      | [ Pricklypear_lisp.Ast.VStr name
+        ; Pricklypear_lisp.Ast.VStr branch_ref ] ->
+          let bid = resolve_branch_id (Some branch_ref) in
+          if bid = "" then
+            (Pricklypear_lisp.Ast.VStr
+               (Printf.sprintf
+                  "code-history: no such branch: %s" branch_ref))
+          else
+            (Pricklypear_lisp.Ast.VStr
+               (Store.list_code_history_json t.store ~branch_id:bid ~name))
+      | _ ->
+          (Pricklypear_lisp.Ast.VStr
+             "code-history: need name [owner/branch]"));
+
+  (* (code-diff "name" n) → VStr text diff of current vs nth-newest history. *)
+  Primitives.register tbl "code-diff"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr name; Pricklypear_lisp.Ast.VInt n64 ] ->
+          let n = Int64.to_int n64 in
+          let bid = Store.current_branch_id t.store in
+          (match Store.code_diff t.store ~branch_id:bid ~name ~n with
+           | Ok s -> (Pricklypear_lisp.Ast.VStr s)
+           | Error e -> (Pricklypear_lisp.Ast.VStr e))
+      | [ Pricklypear_lisp.Ast.VStr name
+        ; Pricklypear_lisp.Ast.VStr n_s ] ->
+          (match int_of_string_opt n_s with
+           | None ->
+               (Pricklypear_lisp.Ast.VStr "code-diff: n must be int")
+           | Some n ->
+               let bid = Store.current_branch_id t.store in
+               (match Store.code_diff t.store ~branch_id:bid ~name ~n with
+                | Ok s -> (Pricklypear_lisp.Ast.VStr s)
+                | Error e -> (Pricklypear_lisp.Ast.VStr e)))
+      | _ ->
+          (Pricklypear_lisp.Ast.VStr "code-diff: need name n"));
