@@ -126,8 +126,15 @@ let pure_prims = [
   "request-param"; "request-params"; "request-body";
   "date-today"; "date-weekday"; "date-format";
   "date-add-days"; "date-diff-days";
+  "now"; "now-ms"; "sleep";
   "parse-int"; "parse-float"; "floor"; "round";
   "fsrs-schedule";
+  "length"; "equal?";
+  "cadr"; "caar"; "caddr"; "cddr"; "assoc"; "member";
+  "string-replace"; "string-downcase"; "string-upcase";
+  "string-starts-with?"; "string-ends-with?";
+  "url-encode"; "url-decode"; "sha1"; "html-decode";
+  "parse-date"; "xml-parse"; "random-uuid";
   "verify-ssh-key";  (* pure crypto check on args; no store *)
 ]
 

@@ -776,6 +776,27 @@ let register_net_prims (t : t) (tbl : Primitives.t) : unit =
          (Pricklypear_lisp.Ast.User_error
             (name ^ ": denied for anonymous")))
   in
+  (* (sleep seconds) -> VNil after delay. Host-owned concurrency surface
+     (BORGE-1785211069). Caps at 60s per call so a runaway form cannot
+     park the image forever. Uses Lwt_unix.sleep (yields; does not block
+     the OS thread for the full duration under Lwt). *)
+  Primitives.register tbl "sleep"
+    (fun args ->
+      let secs =
+        match args with
+        | [ Pricklypear_lisp.Ast.VInt n ] -> Int64.to_float n
+        | [ Pricklypear_lisp.Ast.VFloat f ] -> f
+        | [ Pricklypear_lisp.Ast.VStr s ] ->
+            (try float_of_string (String.trim s) with _ -> -1.0)
+        | _ -> -1.0
+      in
+      if secs < 0.0 then
+        Lwt.return
+          (Pricklypear_lisp.Ast.VStr "sleep: need non-negative seconds")
+      else
+        let secs = min secs 60.0 in
+        let* () = Lwt_unix.sleep secs in
+        Lwt.return Pricklypear_lisp.Ast.VNil);
   let is_admin_or_agent () =
     let uname =
       match Lwt.get Request_context.current with

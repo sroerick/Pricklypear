@@ -542,7 +542,21 @@ let io_prim_tests = [
      | VList [ VStr "a"; VList [ VPair (VStr "href", VStr "x") ]; VStr "t" ] -> ()
      | other ->
          Alcotest.failf "xml attrs got %s" (Pricklypear_lisp.Reader.pp_value other)));
+  ("now returns positive epoch", `Quick, fun () ->
+    let v = eval "(now)" in
+    (match v with
+     | VInt n when n > 1_700_000_000L -> ()
+     | other ->
+         Alcotest.failf "now got %s" (Pricklypear_lisp.Reader.pp_value other)));
+  ("now-ms larger than now", `Quick, fun () ->
+    let a = eval "(now)" in
+    let b = eval "(now-ms)" in
+    (match a, b with
+     | VInt s, VInt ms when ms >= Int64.mul s 1000L -> ()
+     | other ->
+         Alcotest.failf "now-ms relation bad"));
   ("xml-parse error on garbage", `Quick, fun () ->
+
     (* Lenient parser may recover (VStr text) or return a tree/error VList;
        just check it returns something without raising. *)
     let _v = eval "(xml-parse \"<<<\")" in

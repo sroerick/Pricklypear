@@ -149,6 +149,8 @@ let make_with_defaults () : t =
   register_sync t "dict-get" prim_dict_get;
   register_sync t "dict-set" prim_dict_set;
   register_sync t "date-today" prim_date_today;
+  register_sync t "now" prim_now;
+  register_sync t "now-ms" prim_now_ms;
   register_sync t "parse-int" prim_parse_int;
   register_sync t "parse-float" prim_parse_float;
   register_sync t "floor" prim_floor;
@@ -208,6 +210,9 @@ let prim_summary (name : string) : string =
   | "assoc" -> "lookup key in alist; entry or nil"
   | "member" -> "sublist starting at x, or #f"
   | "date-today" -> "local date YYYY-MM-DD"
+  | "now" -> "unix epoch seconds (UTC int)"
+  | "now-ms" -> "unix epoch milliseconds (UTC int)"
+  | "sleep" -> "sleep N seconds (float or int); yields on Lwt"
   | "parse-int" -> "string or int to int"
   | "parse-float" -> "string or number to float"
   | "floor" | "round" -> "float to int"

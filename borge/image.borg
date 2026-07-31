@@ -522,8 +522,8 @@
   )
   (subsection primitives-layer
    (doc "image/lib/primitives.ml: the impure fns registered at boot")
-   (implements image/lib/primitives.ml image/lib/crud.ml image/lib/session.ml)
-   (status partial)
+   (implements image/lib/primitives.ml image/lib/crud.ml image/lib/session.ml image/lib/prims_pure.ml)
+   (status implemented)
    (verify
     (build "dune build image && cd lisp && dune build && dune runtest")
     (test "image/test/primitives_test.ml 48 alcotest cases; lisp/test/eval_test.ml 30 pure tests"))
@@ -553,8 +553,11 @@
          lisp/test/eval_test.ml, no DB, no HTTP).
 
          v1 SHIPPED registration path: real.
-         DEFERRED: full prim table completeness (see
-         lisp-interpreter.primitives); Solo5 pgx path.
+         Kernel I/O prims shipped (Effect.pure_prims / Net):
+           http-get (Net; admin/agent), xml-parse, html-decode,
+           parse-date, url-encode/decode, sha1, string helpers,
+           random-uuid, now, now-ms, sleep (Lwt, max 60s/call).
+         DEFERRED: Solo5 pgx path; host cron/scheduler table.
 
          define-docstring (lisp-interpreter): image registers
          (function-doc name) and wires Store.persist_function
