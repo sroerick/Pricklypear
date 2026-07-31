@@ -28,6 +28,24 @@ let eval_expr_rim (t : t) (expr : Pricklypear_lisp.Ast.expr)
         ~budget ~prims:Pricklypear_lisp.Eval.empty_prims t.env expr)
 
 let load_defs (t : t) : unit Lwt.t =
+  let* disabled = Store.disabled_package_names t.store in
+  let disabled_set = Hashtbl.create 16 in
+  List.iter (fun p -> Hashtbl.replace disabled_set p ()) disabled;
+  (** Hide when package provenance is disabled, or (legacy untagged) when
+      the binding name is under a disabled package prefix. *)
+  let name_disabled name =
+    Hashtbl.fold
+      (fun d _ acc ->
+        acc
+        || name = d
+        || String.starts_with ~prefix:(d ^ "/") name)
+      disabled_set false
+  in
+  let binding_disabled name pkg =
+    match pkg with
+    | Some p -> Hashtbl.mem disabled_set p || name_disabled name
+    | None -> name_disabled name
+  in
   let* defs = Store.list_function_names_for_load t.store in
   (* Kernel prim names already bound as VPrim on rehydrate. Never let a
      stale function_defs row re-poison them (BORGE-1785213238). *)
@@ -36,8 +54,9 @@ let load_defs (t : t) : unit Lwt.t =
   in
   let* _ =
     Lwt_list.iter_s
-      (fun (name, body, _author) ->
-        if is_kernel_prim name then begin
+      (fun (name, body, _author, pkg) ->
+        if binding_disabled name pkg then Lwt.return_unit
+        else if is_kernel_prim name then begin
           Printf.eprintf
             "[session] load def %s skipped: kernel prim name (shadow blocked)\n%!"
             name;
@@ -83,12 +102,16 @@ let load_defs (t : t) : unit Lwt.t =
   (* Also load view_bindings into the in-memory routes table. The
      recursive-CTE returns ancestors first, so a route defined in both
      the child and parent: child's wins (Hashtbl.replace on the
-     first-seen only — skip further matches). *)
+     first-seen only — skip further matches). Skip routes whose handler
+     belongs to a disabled package. *)
+  let* pkg_of_fn = Store.function_package_map t.store in
   let* routes = Store.list_routes t.store in
   let seen_r = Hashtbl.create 16 in
   List.iter
     (fun (route, handler, visibility) ->
-      if not (Hashtbl.mem seen_r route) then begin
+      let handler_pkg = Hashtbl.find_opt pkg_of_fn handler in
+      if binding_disabled handler handler_pkg then ()
+      else if not (Hashtbl.mem seen_r route) then begin
         Hashtbl.replace seen_r route ();
         Hashtbl.replace t.routes route (handler, visibility)
       end)
@@ -1769,8 +1792,9 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
           Lwt.return
             (Pricklypear_lisp.Ast.VStr "function-ast: need name-str"));
 
-  (* (package-exports pkg) -> VList of public names (Phase 3 package-surface).
-     Kernel/std: frozen set. Other packages: shallow names (pkg or pkg/local). *)
+  (* (package-exports pkg) -> VList of public names (package-surface).
+     Resolution: declared registry exports -> kernel_std_exports for
+     std/kernel -> shallow heuristic. *)
   let kernel_std_exports =
     [ "list/map"; "list/filter"; "list/foldl"; "reverse"; "append"; "nth"
     ; "null?"; "pair?"; "car"; "cdr"; "cons"; "list"; "count"
@@ -1781,7 +1805,7 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
     ; "not"; "type-of"; "read-string"; "read-all-string"; "function-ast"
     ; "function-source"; "function-doc"; "apropos"; "apropos-docs"
     ; "describe"; "list-packages"; "package-bindings"; "package-exports"
-    ; "prefix-of"
+    ; "packages"; "package-enable"; "package-disable"; "prefix-of"
     ]
   in
   Primitives.register tbl "package-exports"
@@ -1795,11 +1819,21 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
                  (List.map
                     (fun n -> Pricklypear_lisp.Ast.VStr n)
                     kernel_std_exports))
-          else
-            let* names = package_export_names t pkg in
-            Lwt.return
-              (Pricklypear_lisp.Ast.VList
-                 (List.map (fun n -> Pricklypear_lisp.Ast.VStr n) names))
+          else begin
+            let* reg = Store.lookup_package t.store pkg in
+            match reg with
+            | Some r when r.exports <> [] ->
+                Lwt.return
+                  (Pricklypear_lisp.Ast.VList
+                     (List.map
+                        (fun n -> Pricklypear_lisp.Ast.VStr n)
+                        r.exports))
+            | _ ->
+                let* names = package_export_names t pkg in
+                Lwt.return
+                  (Pricklypear_lisp.Ast.VList
+                     (List.map (fun n -> Pricklypear_lisp.Ast.VStr n) names))
+          end
       | _ ->
           Lwt.return
             (Pricklypear_lisp.Ast.VStr "package-exports: need package-str"));
@@ -1829,6 +1863,117 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
       | _ ->
           Lwt.return
             (Pricklypear_lisp.Ast.VStr "list-packages: takes no args"));
+
+  (* (packages) -> VList of (name enabled exports-count) rows from registry +
+     prefix-discovered packages (enabled=true, exports=0 if unregistered). *)
+  Primitives.register tbl "packages"
+    (fun args ->
+      match args with
+      | [] | [ Pricklypear_lisp.Ast.VNil ] ->
+          let* reg = Store.list_packages t.store in
+          let* prefixes = list_package_names t in
+          let seen = Hashtbl.create 32 in
+          let rows = ref [] in
+          List.iter
+            (fun (r : Store.package_row) ->
+              Hashtbl.replace seen r.name ();
+              rows :=
+                Pricklypear_lisp.Ast.VList
+                  [ Pricklypear_lisp.Ast.VStr r.name
+                  ; Pricklypear_lisp.Ast.VBool r.enabled
+                  ; Pricklypear_lisp.Ast.VInt
+                      (Int64.of_int (List.length r.exports))
+                  ]
+                :: !rows)
+            reg;
+          List.iter
+            (fun p ->
+              if not (Hashtbl.mem seen p) then
+                rows :=
+                  Pricklypear_lisp.Ast.VList
+                    [ Pricklypear_lisp.Ast.VStr p
+                    ; Pricklypear_lisp.Ast.VBool true
+                    ; Pricklypear_lisp.Ast.VInt 0L
+                    ]
+                  :: !rows)
+            prefixes;
+          let sorted =
+            List.sort
+              (fun a b ->
+                match a, b with
+                | Pricklypear_lisp.Ast.VList (Pricklypear_lisp.Ast.VStr na :: _),
+                  Pricklypear_lisp.Ast.VList (Pricklypear_lisp.Ast.VStr nb :: _) ->
+                    String.compare na nb
+                | _ -> 0)
+              !rows
+          in
+          Lwt.return (Pricklypear_lisp.Ast.VList sorted)
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr "packages: takes no args"));
+
+  let protected_pkg name =
+    let n = String.lowercase_ascii (String.trim name) in
+    n = "std" || n = "kernel" || n = "(kernel)"
+  in
+
+  (* (package-enable name) — flip enabled=true on current branch + rehydrate *)
+  Primitives.register tbl "package-enable"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr name ]
+      | [ Pricklypear_lisp.Ast.VSymbol name ] ->
+          let name = String.trim name in
+          if name = "" then
+            Lwt.return (Pricklypear_lisp.Ast.VStr "package-enable: empty name")
+          else if protected_pkg name then
+            Lwt.return
+              (Pricklypear_lisp.Ast.VStr
+                 ("package-enable: " ^ name ^ " is always enabled"))
+          else if t.manifest.username = "anonymous" then
+            Lwt.return
+              (Pricklypear_lisp.Ast.VStr "package-enable: auth required")
+          else begin
+            let* () =
+              Store.set_package_enabled t.store ~name ~enabled:true
+                ~author:t.manifest.username
+            in
+            let* () = rehydrate t in
+            Lwt.return
+              (Pricklypear_lisp.Ast.VStr ("enabled " ^ name))
+          end
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr "package-enable: need package-str"));
+
+  (* (package-disable name) — hide package bindings on current branch *)
+  Primitives.register tbl "package-disable"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr name ]
+      | [ Pricklypear_lisp.Ast.VSymbol name ] ->
+          let name = String.trim name in
+          if name = "" then
+            Lwt.return (Pricklypear_lisp.Ast.VStr "package-disable: empty name")
+          else if protected_pkg name then
+            Lwt.return
+              (Pricklypear_lisp.Ast.VStr
+                 ("package-disable: cannot disable " ^ name))
+          else if t.manifest.username = "anonymous" then
+            Lwt.return
+              (Pricklypear_lisp.Ast.VStr "package-disable: auth required")
+          else begin
+            let* () =
+              Store.set_package_enabled t.store ~name ~enabled:false
+                ~author:t.manifest.username
+            in
+            let* () = rehydrate t in
+            Lwt.return
+              (Pricklypear_lisp.Ast.VStr ("disabled " ^ name))
+          end
+      | _ ->
+          Lwt.return
+            (Pricklypear_lisp.Ast.VStr "package-disable: need package-str"));
 
   (* (apropos-docs pat) -> VList of (name . doc) pairs *)
   Primitives.register tbl "apropos-docs"
@@ -2464,14 +2609,21 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value Lwt.t =
        not be evaluated. Everything else (fork/merge/route/checkout)
        dispatches through Eval.apply via the prim_table.
        H1: [eval_string_auto] honors PP_EVAL_CONTROL=lwt|eff (default lwt). *)
+    (* package-surface: (package NAME (export ...)) is a directive, not a value. *)
+    (match expr with
+     | Pricklypear_lisp.Ast.App
+         (Pricklypear_lisp.Ast.Var "package", args) ->
+         handle_package_form t args
+     | _ ->
     let* v = eval_string_rim t input in
+    let pkg = t.current_package in
     let persist_fn name body_expr doc =
       if t.seed_additive then
         Store.persist_function_if_absent t.store name body_expr ~doc
-          t.manifest.username
+          ~package:pkg t.manifest.username
       else
         Store.persist_function t.store name body_expr ~doc
-          t.manifest.username
+          ~package:pkg t.manifest.username
     in
     let persist_define name body_expr doc =
       let* () =
@@ -2510,7 +2662,7 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value Lwt.t =
            end else Lwt.return_unit
          in
          Lwt.return v
-     | _ -> Lwt.return v))
+     | _ -> Lwt.return v)))
   with
   | Pricklypear_lisp.Ast.Interp_error e as exn -> Lwt.fail exn
   | Pricklypear_lisp.Reader.Reader_error (msg, line, col) ->
@@ -2521,17 +2673,75 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value Lwt.t =
 
 (* --- Library loader: same .pp text as in git libs/ --- *)
 
+and handle_package_form (t : t) (args : Pricklypear_lisp.Ast.expr list)
+  : Pricklypear_lisp.Ast.value Lwt.t =
+  let name_of = function
+    | Pricklypear_lisp.Ast.Var s -> Some s
+    | Pricklypear_lisp.Ast.Lit (Pricklypear_lisp.Ast.VStr s) -> Some s
+    | _ -> None
+  in
+  let export_names = function
+    | Pricklypear_lisp.Ast.App (Pricklypear_lisp.Ast.Var "export", xs) ->
+        List.filter_map name_of xs
+    | _ -> []
+  in
+  match args with
+  | name_e :: rest ->
+      (match name_of name_e with
+       | None ->
+           Lwt.return
+             (Pricklypear_lisp.Ast.VStr "package: need name symbol/string")
+       | Some name ->
+           let name = String.trim name in
+           if name = "" then
+             Lwt.return
+               (Pricklypear_lisp.Ast.VStr "package: empty name")
+           else if name = "kernel" then
+             Lwt.return
+               (Pricklypear_lisp.Ast.VStr "package: reserved name: kernel")
+           else begin
+             let exports =
+               match rest with
+               | [ exp_form ] -> export_names exp_form
+               | _ ->
+                   List.concat_map export_names rest
+             in
+             t.current_package <- Some name;
+             let* () =
+               if t.manifest.username = "anonymous" then Lwt.return_unit
+               else begin
+                 let* () =
+                   Store.upsert_package_registry t.store ~name ~exports
+                     ~author:t.manifest.username ~enabled_preserve:true ()
+                 in
+                 Store.stamp_package_bindings t.store ~package:name ~exports
+               end
+             in
+             Lwt.return
+               (Pricklypear_lisp.Ast.VStr
+                  (Printf.sprintf "package %s (%d exports)" name
+                     (List.length exports)))
+           end)
+  | [] ->
+      Lwt.return (Pricklypear_lisp.Ast.VStr "package: need name")
+
 and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
     : Pricklypear_lisp.Ast.value Lwt.t =
   (* Like eval_one but takes AST — avoids pp_expr string round-trip. *)
+  (match expr with
+   | Pricklypear_lisp.Ast.App
+       (Pricklypear_lisp.Ast.Var "package", args) ->
+       handle_package_form t args
+   | _ ->
   let* v = eval_expr_rim t expr in
+  let pkg = t.current_package in
   let persist_fn name body_expr doc =
     if t.seed_additive then
       Store.persist_function_if_absent t.store name body_expr ~doc
-        t.manifest.username
+        ~package:pkg t.manifest.username
     else
       Store.persist_function t.store name body_expr ~doc
-        t.manifest.username
+        ~package:pkg t.manifest.username
   in
   let persist_define name body_expr doc =
     let* () =
@@ -2568,13 +2778,25 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
          end else Lwt.return_unit
        in
        Lwt.return v
-   | _ -> Lwt.return v))
+   | _ -> Lwt.return v)))
 
 and load_string (t : t) (src : string) : (string, string) result Lwt.t =
-  Loader.load_string ~eval_form:(eval_form t) src
+  let prev = t.current_package in
+  t.current_package <- None;
+  Lwt.finalize
+    (fun () -> Loader.load_string ~eval_form:(eval_form t) src)
+    (fun () ->
+      t.current_package <- prev;
+      Lwt.return_unit)
 
 and load_library (t : t) (name : string) : (string, string) result Lwt.t =
-  Loader.load_library ~eval_form:(eval_form t) name
+  let prev = t.current_package in
+  t.current_package <- None;
+  Lwt.finalize
+    (fun () -> Loader.load_library ~eval_form:(eval_form t) name)
+    (fun () ->
+      t.current_package <- prev;
+      Lwt.return_unit)
 
 (** branching.seed-policy: admin-only upsert of libs/<pkg>/lib.pp onto
     system/main (full clobber for names in that file). Does not touch
@@ -2969,6 +3191,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
       auth_token = None;
       impact_queue = [];
       change_transcript = [];
+      current_package = None;
     }
   in
   (* Register session-aware primitives (whoami, current-author,

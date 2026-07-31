@@ -88,6 +88,10 @@ type t = {
   mutable impact_queue : impact_event list;
   (** branching.change-set: recent define/route ops (newest first, max 64). *)
   mutable change_transcript : change_event list;
+  (** lisp-interpreter.package-surface: while loading a lib.pp that opened
+      with (package NAME (export …)), stamp new defines with this package
+      name. None outside a package load / REPL package form. *)
+  mutable current_package : string option;
 }
 
 (* Load persisted function_defs + routes into the env.

@@ -2,6 +2,63 @@
 ;; Loaded by (load-library "std") at image boot.
 ;; Docs: trailing string on define (or leading multi-body lambda string).
 
+(package std
+  (export
+    list/map
+    list/filter
+    list/foldl
+    list/range
+    map
+    filter
+    foldl
+    foldr
+    dict-set*
+    html/join
+    html/text
+    html/attr
+    html/attrs
+    html/tag
+    html/void
+    html/h1
+    html/h2
+    html/h3
+    html/p
+    html/p*
+    html/span
+    html/div
+    html/ul
+    html/li
+    html/strong
+    html/code
+    html/pre
+    html/label
+    html/button
+    html/a
+    html/img
+    html/form
+    html/input
+    html/hidden
+    html/text-input
+    html/textarea
+    html/option
+    html/select
+    html/wrap
+    html/page
+    menu/link
+    menu/group
+    menu/raw
+    menu/render
+    menu/bar
+    data/get-field
+    css/rule
+    css/media
+    css/raw
+    css/use
+    css/sheet
+    css/render
+    blank?
+    string-find-pos))
+
 ;; --- list/ ---
 ;; list/map, list/filter, list/foldl are KERNEL SPECIAL FORMS (eval.ml):
 ;; OCaml loops + apply, not recursive Lisp. These defines are fallbacks

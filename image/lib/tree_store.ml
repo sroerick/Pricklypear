@@ -90,6 +90,9 @@ let type_path ~branch_id ~name =
 let route_path ~branch_id ~route =
   Printf.sprintf "b.%s.route.%s" (uuid_label branch_id) (enc_label route)
 
+let pkg_path ~branch_id ~name =
+  Printf.sprintf "b.%s.pkg.%s" (uuid_label branch_id) (enc_label name)
+
 let datum_path ~type_name ~id =
   Printf.sprintf "data.%s.%s" (enc_label type_name) (uuid_label id)
 

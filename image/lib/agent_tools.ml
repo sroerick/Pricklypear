@@ -256,26 +256,34 @@ let package_binding_names (t : t) (pkg : string) : string list Lwt.t =
   in
   Lwt.return names
 
-(** Shallow export names: [pkg] itself or [pkg/local] with no further [/].
-    Progressive disclosure surface for [(package-exports pkg)] on apps. *)
+(** Public export names for [pkg].
+    Resolution: declared package_registry exports (if non-empty) →
+    shallow heuristic ([pkg] or [pkg/local] with no further [/]).
+    Kernel/std freeze is applied by the session prim wrapper. *)
 let package_export_names (t : t) (pkg : string) : string list Lwt.t =
-  let* names = package_binding_names t pkg in
   let pkg = String.trim pkg in
   let pkg = if pkg = "(root)" || pkg = "root" then "" else pkg in
-  if pkg = "" then Lwt.return names
-  else
-    let prefix = pkg ^ "/" in
-    let plen = String.length prefix in
-    let shallow =
-      List.filter
-        (fun name ->
-          name = pkg
-          || (String.length name > plen
-              && String.sub name 0 plen = prefix
-              && not (String.contains_from name plen '/')))
-        names
-    in
-    Lwt.return shallow
+  let* reg =
+    if pkg = "" then Lwt.return_none else Store.lookup_package t.store pkg
+  in
+  match reg with
+  | Some r when r.exports <> [] -> Lwt.return r.exports
+  | _ ->
+      let* names = package_binding_names t pkg in
+      if pkg = "" then Lwt.return names
+      else
+        let prefix = pkg ^ "/" in
+        let plen = String.length prefix in
+        let shallow =
+          List.filter
+            (fun name ->
+              name = pkg
+              || (String.length name > plen
+                  && String.sub name 0 plen = prefix
+                  && not (String.contains_from name plen '/')))
+            names
+        in
+        Lwt.return shallow
 
 (** Unique top-level package prefixes from visible function_defs. *)
 let list_package_names (t : t) : string list Lwt.t =
@@ -437,6 +445,18 @@ let export_package (t : t) (pkg : string) : string Lwt.t =
     (Printf.sprintf
        ";; package %s -- exported from live branch %s\n;; Sync: scripts/pp_sync.py pull|push\n\n"
        label t.manifest.branch_name);
+  let* reg =
+    if pkg = "" || pkg = "(root)" then Lwt.return_none
+    else Store.lookup_package t.store pkg
+  in
+  (match reg with
+   | Some r when r.exports <> [] ->
+       Buffer.add_string buf (Printf.sprintf "(package %s\n  (export\n" pkg);
+       List.iter
+         (fun n -> Buffer.add_string buf (Printf.sprintf "    %s\n" n))
+         r.exports;
+       Buffer.add_string buf "))\n\n"
+   | _ -> ());
   let rec go = function
     | [] -> Lwt.return (Buffer.contents buf)
     | name :: rest ->

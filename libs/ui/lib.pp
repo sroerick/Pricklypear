@@ -1,6 +1,17 @@
 ;; package ui -- exported from live branch system/main
 ;; Sync: scripts/pp_sync.py pull|push
 
+(package ui
+  (export
+    ui/css
+    ui/home
+    ui/home-style
+    ui/menu
+    ui/nav
+    ui/nav-style
+    ui/theme
+    ui/theme-nav))
+
 (define ui/css
   (lambda
     ()

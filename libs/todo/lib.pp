@@ -1,6 +1,25 @@
 ;; package todo -- exported from live branch system/main
 ;; Sync: scripts/pp_sync.py pull|push
 
+(package todo
+  (export
+    todo/add
+    todo/active-items
+    todo/list
+    todo/page
+    todo/archive
+    todo/cycle
+    todo/delete
+    todo/item/add
+    todo/item/active
+    todo/item/archive
+    todo/item/cycle
+    todo/item/delete
+    todo/list/all
+    todo/list/create
+    todo/list/delete
+    todo/ensure-inbox))
+
 (define todo/active-items
   (lambda
     (items)
