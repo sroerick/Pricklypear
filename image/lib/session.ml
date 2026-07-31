@@ -2708,6 +2708,40 @@ and seed_one (t : t) (name : string) : unit Lwt.t =
    | Error e -> Printf.eprintf "[session] %s load: %s\n%!" name e);
   Lwt.return_unit
 
+(** Boot seed order (BORGE-1785211333).
+    Preferred prefix preserves dependency-ish order (std/ui before notes,
+    outline before notes, …). Any other [libs/<name>/lib.pp] is appended
+    alphabetically so adding a package no longer requires an OCaml edit. *)
+and seed_package_priority : string list =
+  [ "std"; "weather"; "ui"; "layout"; "welcome"; "ai"; "outline"
+  ; "structed"; "notes"; "signup"; "todo"; "contacts"; "plan"; "chat"
+  ; "bookmarks"; "calendar"; "workout"; "flashcards"; "bible"; "dabar"
+  ; "bi"; "ref"; "verify" ]
+
+and discover_seed_packages () : string list =
+  let preferred = seed_package_priority in
+  let root = Loader.libs_dir () in
+  let discovered =
+    try
+      Sys.readdir root
+      |> Array.to_list
+      |> List.filter (fun name ->
+             name <> ""
+             && name.[0] <> '_'
+             && name.[0] <> '.'
+             &&
+             let pp =
+               Filename.concat root (Filename.concat name "lib.pp")
+             in
+             Sys.file_exists pp)
+      |> List.sort String.compare
+    with _ -> []
+  in
+  let extras =
+    List.filter (fun n -> not (List.mem n preferred)) discovered
+  in
+  preferred @ extras
+
 (** Ensure living agents note exists on system/main after notes seed.
     Idempotent: skip if slug agents already present. *)
 and seed_agents_note (t : t) : unit Lwt.t =
@@ -2801,31 +2835,20 @@ and seed_stdlib (t : t) : unit Lwt.t =
     in
     Lwt.finalize
       (fun () ->
-        let* () = seed_one t "std" in
-    let* () = seed_one t "weather" in
-    let* () = seed_one t "ui" in
-    let* () = seed_one t "layout" in
-    let* () = seed_one t "welcome" in
-    let* () = seed_one t "ai" in
-    let* () = seed_one t "outline" in
-    let* () = seed_one t "structed" in
-    let* () = seed_one t "notes" in
-    let* () = seed_agents_note t in
-    let* () = seed_one t "signup" in
-    let* () = seed_one t "todo" in
-    let* () = seed_one t "contacts" in
-    let* () = seed_one t "plan" in
-    let* () = seed_one t "chat" in
-    let* () = seed_one t "bookmarks" in
-    let* () = seed_one t "calendar" in
-    let* () = seed_one t "workout" in
-    let* () = seed_one t "flashcards" in
-    let* () = seed_one t "bible" in
-    let* () = seed_one t "dabar" in
-    let* () = seed_one t "bi" in
-    let* () = seed_one t "ref" in
-    let* () = seed_one t "verify" in
-    Lwt.return_unit)
+        let pkgs = discover_seed_packages () in
+        Printf.eprintf "[session] seed_stdlib packages (%d): %s\n%!"
+          (List.length pkgs) (String.concat " " pkgs);
+        let rec go = function
+          | [] -> Lwt.return_unit
+          | "notes" :: rest ->
+              let* () = seed_one t "notes" in
+              let* () = seed_agents_note t in
+              go rest
+          | name :: rest ->
+              let* () = seed_one t name in
+              go rest
+        in
+        go pkgs)
       finally)
 
 (** Ensure username/personal exists as an EMPTY child of system/main.
