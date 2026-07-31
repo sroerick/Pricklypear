@@ -874,6 +874,33 @@ let post_logout (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
     ~set_cookie:(clear_cookie_header ());
   Lwt.return_unit
 
+(** One-shot display of a freshly issued API token (never stored in URL). *)
+let admin_token_once_page ~(session : Session.t) ~(reqd : Httpun.Reqd.t)
+    ~(username : string) ~(raw : string) : unit =
+  html_response reqd ~session
+    (chrome ~session ~title:"API token" [
+       HTML.div [HTML.class_ "card"] [
+         HTML.h2 [] [txt "Token issued"];
+         HTML.p [] [
+           txt "Copy now — shown once. User: ";
+           HTML.code [] [txt "%s" username];
+         ];
+         HTML.p [] [HTML.code [] [txt "%s" raw]];
+         HTML.p [HTML.class_ "muted"] [
+           txt "Use as Authorization: Bearer <token> for /api/eval.";
+         ];
+         HTML.p [] [HTML.a [HTML.href "/admin/users"] [txt "Back to users"]];
+       ];
+     ])
+
+let admin_err ~(session : Session.t) ~(reqd : Httpun.Reqd.t) ~title msg =
+  html_response reqd ~session ~status:`Bad_request
+    (chrome ~session ~title [
+       HTML.p [HTML.class_ "err"] [txt "%s" msg];
+       HTML.p [] [HTML.a [HTML.href "/admin/users"] [txt "Back"]];
+     ]);
+  Lwt.return_unit
+
 let admin_users_page (session : Session.t) (reqd : Httpun.Reqd.t)
   : unit Lwt.t =
   if not (Session.is_admin session) then begin
@@ -885,13 +912,58 @@ let admin_users_page (session : Session.t) (reqd : Httpun.Reqd.t)
   end else
     let store = Session.store session in
     let* users = Auth_store.list_users store in
+    (* Per-user promote flag + API tokens (admin agent/token surface —
+       BORGE-1785120601). *)
+    let* user_extras =
+      Lwt_list.map_s
+        (fun (u : Auth_store.user) ->
+          let* promote =
+            if u.Auth_store.user_type = "human" then
+              Auth_store.get_allow_agent_promote store ~user_id:u.id
+            else Lwt.return false
+          in
+          let* tokens = Auth_store.list_tokens store ~user_id:u.id in
+          Lwt.return (u, promote, tokens))
+        users
+    in
+    let human_names =
+      List.filter_map
+        (fun (u : Auth_store.user) ->
+          if u.user_type = "human" then Some u.username else None)
+        users
+    in
     let rows =
       List.map
-        (fun (u : Auth_store.user) ->
+        (fun ((u : Auth_store.user), promote, _tokens) ->
+          let promote_cell =
+            if u.user_type <> "human" then
+              HTML.td [] [txt "—"]
+            else
+              HTML.td [] [
+                HTML.form
+                  [ HTML.method_ `POST; HTML.action "/admin/users" ]
+                  [ HTML.input
+                      [ HTML.type_ "hidden"; HTML.name "action";
+                        HTML.value "set_allow_agent_promote" ]
+                  ; HTML.input
+                      [ HTML.type_ "hidden"; HTML.name "user_id";
+                        HTML.value "%s" u.id ]
+                  ; HTML.input
+                      [ HTML.type_ "hidden"; HTML.name "value";
+                        HTML.value (if promote then "0" else "1") ]
+                  ; HTML.button [HTML.type_ "submit"]
+                      [ txt "%s"
+                          (if promote then "on (click=off)"
+                           else "off (click=on)") ]
+                  ]
+              ]
+          in
           HTML.tr [] [
-            HTML.td [] [txt "%s" u.Auth_store.username];
-            HTML.td [] [txt "%s" (if u.Auth_store.is_admin then "yes" else "no")];
-            HTML.td [] [HTML.code [] [txt "%s" u.Auth_store.id]];
+            HTML.td [] [txt "%s" u.username];
+            HTML.td [] [txt "%s" u.user_type];
+            HTML.td [] [txt "%s" (if u.is_admin then "yes" else "no")];
+            promote_cell;
+            HTML.td [] [HTML.code [] [txt "%s" u.id]];
             HTML.td [] [
               HTML.form
                 [ HTML.method_ `POST; HTML.action "/admin/users" ]
@@ -900,22 +972,120 @@ let admin_users_page (session : Session.t) (reqd : Httpun.Reqd.t)
                       HTML.value "revoke_sessions" ]
                 ; HTML.input
                     [ HTML.type_ "hidden"; HTML.name "user_id";
-                      HTML.value "%s" u.Auth_store.id ]
+                      HTML.value "%s" u.id ]
                 ; HTML.button [HTML.type_ "submit"] [txt "Revoke sessions"]
-                ]
+                ];
+              HTML.form
+                [ HTML.method_ `POST; HTML.action "/admin/users" ]
+                [ HTML.input
+                    [ HTML.type_ "hidden"; HTML.name "action";
+                      HTML.value "issue_token" ]
+                ; HTML.input
+                    [ HTML.type_ "hidden"; HTML.name "user_id";
+                      HTML.value "%s" u.id ]
+                ; HTML.input
+                    [ HTML.type_ "text"; HTML.name "label";
+                      HTML.placeholder "label (optional)" ]
+                ; HTML.button [HTML.type_ "submit"] [txt "Issue token"]
+                ];
             ];
           ])
-        users
+        user_extras
+    in
+    let token_sections =
+      List.filter_map
+        (fun ((u : Auth_store.user), _p, tokens) ->
+          match tokens with
+          | [] -> None
+          | ts ->
+              let trows =
+                List.map
+                  (fun (tm : Auth_store.token_meta) ->
+                    let lab =
+                      match tm.label with Some l -> l | None -> "(none)"
+                    in
+                    let last =
+                      match tm.last_used_at with
+                      | Some s -> s
+                      | None -> "never"
+                    in
+                    HTML.tr [] [
+                      HTML.td [] [HTML.code [] [txt "%s" tm.id]];
+                      HTML.td [] [txt "%s" lab];
+                      HTML.td [] [txt "…%s" tm.token_last4];
+                      HTML.td [] [txt "%s" tm.created_at];
+                      HTML.td [] [txt "%s" last];
+                      HTML.td [] [
+                        HTML.form
+                          [ HTML.method_ `POST; HTML.action "/admin/users" ]
+                          [ HTML.input
+                              [ HTML.type_ "hidden"; HTML.name "action";
+                                HTML.value "rotate_token" ]
+                          ; HTML.input
+                              [ HTML.type_ "hidden"; HTML.name "credential_id";
+                                HTML.value "%s" tm.id ]
+                          ; HTML.input
+                              [ HTML.type_ "hidden"; HTML.name "user_id";
+                                HTML.value "%s" u.id ]
+                          ; HTML.button [HTML.type_ "submit"] [txt "Rotate"]
+                          ];
+                        HTML.form
+                          [ HTML.method_ `POST; HTML.action "/admin/users" ]
+                          [ HTML.input
+                              [ HTML.type_ "hidden"; HTML.name "action";
+                                HTML.value "revoke_token" ]
+                          ; HTML.input
+                              [ HTML.type_ "hidden"; HTML.name "credential_id";
+                                HTML.value "%s" tm.id ]
+                          ; HTML.button [HTML.type_ "submit"] [txt "Revoke"]
+                          ];
+                      ];
+                    ])
+                  ts
+              in
+              Some
+                (HTML.div [HTML.class_ "card"] [
+                   HTML.h3 [] [txt "Tokens: %s" u.username];
+                   HTML.table [] [
+                     HTML.thead [] [
+                       HTML.tr [] [
+                         HTML.th [] [txt "id"];
+                         HTML.th [] [txt "label"];
+                         HTML.th [] [txt "last4"];
+                         HTML.th [] [txt "created"];
+                         HTML.th [] [txt "last used"];
+                         HTML.th [] [txt "actions"];
+                       ];
+                     ];
+                     HTML.tbody [] trows;
+                   ];
+                 ]))
+        user_extras
+    in
+    let parent_options =
+      match human_names with
+      | [] -> [ HTML.option [HTML.value ""] "%s" "(no humans)" ]
+      | names ->
+          List.map
+            (fun n -> HTML.option [HTML.value "%s" n] "%s" n)
+            names
     in
     let body =
       chrome ~session ~title:"Users" [
         HTML.div [HTML.class_ "card"] [
           HTML.h2 [] [txt "Users"];
+          HTML.p [HTML.class_ "muted"] [
+            txt
+              "Agents, API tokens, and allow_agent_promote. Raw tokens are \
+               shown once after issue/rotate.";
+          ];
           HTML.table [] [
             HTML.thead [] [
               HTML.tr [] [
                 HTML.th [] [txt "username"];
+                HTML.th [] [txt "type"];
                 HTML.th [] [txt "admin"];
+                HTML.th [] [txt "agent promote"];
                 HTML.th [] [txt "id"];
                 HTML.th [] [txt "actions"];
               ];
@@ -923,6 +1093,7 @@ let admin_users_page (session : Session.t) (reqd : Httpun.Reqd.t)
             HTML.tbody [] rows;
           ];
         ];
+        HTML.div [] token_sections;
         HTML.div [HTML.class_ "card"] [
           HTML.h2 [] [txt "Create user"];
           HTML.form [HTML.method_ `POST; HTML.action "/admin/users"] [
@@ -944,6 +1115,23 @@ let admin_users_page (session : Session.t) (reqd : Httpun.Reqd.t)
               ];
             ];
             HTML.button [HTML.type_ "submit"] [txt "Create"];
+          ];
+        ];
+        HTML.div [HTML.class_ "card"] [
+          HTML.h2 [] [txt "Create agent"];
+          HTML.p [HTML.class_ "muted"] [
+            txt "Creates <parent>/agent (idempotent). No password — use API tokens.";
+          ];
+          HTML.form [HTML.method_ `POST; HTML.action "/admin/users"] [
+            HTML.input
+              [ HTML.type_ "hidden"; HTML.name "action";
+                HTML.value "create_agent" ];
+            HTML.p [] [
+              HTML.label [] [txt "parent human "];
+              HTML.select [HTML.name "parent_username"; HTML.required]
+                parent_options;
+            ];
+            HTML.button [HTML.type_ "submit"] [txt "Create agent"];
           ];
         ];
         HTML.p [] [
@@ -970,74 +1158,150 @@ let post_admin_users (session : Session.t) (reqd : Httpun.Reqd.t)
       Option.value (form_field body "action") ~default:"create"
       |> String.trim
     in
-    if action = "revoke_sessions" then
-      let user_id =
-        Option.value (form_field body "user_id") ~default:"" |> String.trim
-      in
-      if user_id = "" then begin
-        html_response reqd ~session ~status:`Bad_request
-          (chrome ~session ~title:"Revoke sessions" [
-             HTML.p [HTML.class_ "err"] [txt "user_id required"];
-             HTML.p [] [HTML.a [HTML.href "/admin/users"] [txt "Back"]];
-           ]);
-        Lwt.return_unit
-      end else
-        let store = Session.store session in
-        let* n = Auth_store.revoke_all_sessions store ~user_id in
-        let* () =
-          Auth_store.log_auth store ~user_id ~kind:"admin_revoke_sessions"
-            ~success:true ()
+    let store = Session.store session in
+    let field name =
+      Option.value (form_field body name) ~default:"" |> String.trim
+    in
+    match action with
+    | "revoke_sessions" ->
+        let user_id = field "user_id" in
+        if user_id = "" then
+          admin_err ~session ~reqd ~title:"Revoke sessions" "user_id required"
+        else
+          let* n = Auth_store.revoke_all_sessions store ~user_id in
+          let* () =
+            Auth_store.log_auth store ~user_id ~kind:"admin_revoke_sessions"
+              ~success:true ()
+          in
+          ignore n;
+          redirect_response reqd "/admin/users";
+          Lwt.return_unit
+    | "create_agent" ->
+        let parent = field "parent_username" in
+        if parent = "" then
+          admin_err ~session ~reqd ~title:"Create agent" "parent_username required"
+        else
+          let* r = Auth_store.create_agent store ~parent_username:parent in
+          (match r with
+           | Error e -> admin_err ~session ~reqd ~title:"Create agent" e
+           | Ok _u ->
+               redirect_response reqd "/admin/users";
+               Lwt.return_unit)
+    | "issue_token" ->
+        let user_id = field "user_id" in
+        let label =
+          match field "label" with "" -> None | s -> Some s
         in
-        ignore n;
-        redirect_response reqd "/admin/users";
-        Lwt.return_unit
-    else
-      let username =
-        Option.value (form_field body "username") ~default:"" |> String.trim
-      in
-      let password = Option.value (form_field body "password") ~default:"" in
-      let is_admin =
-        match form_field body "is_admin" with
-        | Some ("1" | "on" | "true") -> true
-        | _ -> false
-      in
-      if username = "" || password = "" then begin
-        html_response reqd ~session ~status:`Bad_request
-          (chrome ~session ~title:"Create user" [
-             HTML.p [HTML.class_ "err"] [txt "username and password required"];
-             HTML.p [] [HTML.a [HTML.href "/admin/users"] [txt "Back"]];
-           ]);
-        Lwt.return_unit
-      end else
-        let store = Session.store session in
-        let* created = Auth_store.create_user store ~username ~is_admin in
-        match created with
-        | Error e ->
-            html_response reqd ~session ~status:`Bad_request
-              (chrome ~session ~title:"Create user" [
-                 HTML.p [HTML.class_ "err"] [txt "%s" e];
-                 HTML.p [] [HTML.a [HTML.href "/admin/users"] [txt "Back"]];
-               ]);
-            Lwt.return_unit
-        | Ok user ->
-            let* pw =
-              Auth_store.set_password store ~user_id:user.Auth_store.id
-                ~password
-            in
-            (match pw with
-             | Error e ->
-                 html_response reqd ~session ~status:`Internal_server_error
-                   (chrome ~session ~title:"Create user" [
-                      HTML.p [HTML.class_ "err"] [txt "password: %s" e];
-                    ]);
-                 Lwt.return_unit
-             | Ok () ->
-                 let* () =
-                   Auth_store.log_auth store ~user_id:user.Auth_store.id
-                     ~kind:"admin_create_user" ~success:true ()
-                 in
-                 redirect_response reqd "/admin/users";
-                 Lwt.return_unit)
+        if user_id = "" then
+          admin_err ~session ~reqd ~title:"Issue token" "user_id required"
+        else
+          let* uopt = Auth_store.get_user_by_id store user_id in
+          (match uopt with
+           | None ->
+               admin_err ~session ~reqd ~title:"Issue token" "no such user"
+           | Some u ->
+               let* r =
+                 Auth_store.issue_token store ~user_id ~label:label ()
+               in
+               (match r with
+                | Error e -> admin_err ~session ~reqd ~title:"Issue token" e
+                | Ok raw ->
+                    admin_token_once_page ~session ~reqd
+                      ~username:u.username ~raw;
+                    Lwt.return_unit))
+    | "revoke_token" ->
+        let credential_id = field "credential_id" in
+        if credential_id = "" then
+          admin_err ~session ~reqd ~title:"Revoke token"
+            "credential_id required"
+        else
+          let* r = Auth_store.revoke_token store ~credential_id in
+          (match r with
+           | Error e -> admin_err ~session ~reqd ~title:"Revoke token" e
+           | Ok () ->
+               redirect_response reqd "/admin/users";
+               Lwt.return_unit)
+    | "rotate_token" ->
+        let credential_id = field "credential_id" in
+        let user_id = field "user_id" in
+        let label =
+          match field "label" with "" -> None | s -> Some s
+        in
+        if credential_id = "" || user_id = "" then
+          admin_err ~session ~reqd ~title:"Rotate token"
+            "credential_id and user_id required"
+        else
+          let* uopt = Auth_store.get_user_by_id store user_id in
+          (match uopt with
+           | None ->
+               admin_err ~session ~reqd ~title:"Rotate token" "no such user"
+           | Some u ->
+               let* r =
+                 match label with
+                 | Some s ->
+                     Auth_store.rotate_token store ~credential_id ~user_id
+                       ~label:s ()
+                 | None ->
+                     Auth_store.rotate_token store ~credential_id ~user_id ()
+               in
+               (match r with
+                | Error e -> admin_err ~session ~reqd ~title:"Rotate token" e
+                | Ok raw ->
+                    admin_token_once_page ~session ~reqd
+                      ~username:u.username ~raw;
+                    Lwt.return_unit))
+    | "set_allow_agent_promote" ->
+        let user_id = field "user_id" in
+        let value =
+          match field "value" with
+          | "1" | "on" | "true" | "yes" -> true
+          | _ -> false
+        in
+        if user_id = "" then
+          admin_err ~session ~reqd ~title:"Agent promote" "user_id required"
+        else
+          let* r =
+            Auth_store.set_allow_agent_promote store ~user_id ~value
+          in
+          (match r with
+           | Error e -> admin_err ~session ~reqd ~title:"Agent promote" e
+           | Ok () ->
+               redirect_response reqd "/admin/users";
+               Lwt.return_unit)
+    | "create" | _ ->
+        let username = field "username" in
+        let password = Option.value (form_field body "password") ~default:"" in
+        let is_admin =
+          match form_field body "is_admin" with
+          | Some ("1" | "on" | "true") -> true
+          | _ -> false
+        in
+        if username = "" || password = "" then
+          admin_err ~session ~reqd ~title:"Create user"
+            "username and password required"
+        else
+          let* created = Auth_store.create_user store ~username ~is_admin in
+          (match created with
+           | Error e -> admin_err ~session ~reqd ~title:"Create user" e
+           | Ok user ->
+               let* pw =
+                 Auth_store.set_password store ~user_id:user.Auth_store.id
+                   ~password
+               in
+               (match pw with
+                | Error e ->
+                    html_response reqd ~session ~status:`Internal_server_error
+                      (chrome ~session ~title:"Create user" [
+                         HTML.p [HTML.class_ "err"] [txt "password: %s" e];
+                       ]);
+                    Lwt.return_unit
+                | Ok () ->
+                    let* () =
+                      Auth_store.log_auth store ~user_id:user.Auth_store.id
+                        ~kind:"admin_create_user" ~success:true ()
+                    in
+                    redirect_response reqd "/admin/users";
+                    Lwt.return_unit))
 
 let respond_handler_value
     ~(session : Session.t)
