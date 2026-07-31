@@ -95,7 +95,7 @@
   )
   (subsection merge
    (doc "Merging a branch into its parent")
-   (status partial)
+   (status implemented)
    (details
     (doc (|
          (merge 'alice/experiment 'alice/main)
@@ -384,7 +384,7 @@
   )
   (subsection promote
    (doc "Graduate garden/workshop code to system/main; optional vault export")
-   (status partial)
+   (status implemented)
    (implements image/lib/session.ml image/lib/store.ml image/lib/http_branches.ml cli/bin/pp_sync.ml)
    (details
     (doc (|
