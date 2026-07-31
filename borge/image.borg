@@ -756,16 +756,18 @@
   )
   (subsection tree-browser
    (doc "Lazy zoomable tree UI: folders ARE non-leaf nodes; htmx depth-capped expansion; library-first (no kernel prims)")
-   (status planned)
+   (status partial)
+   (implements libs/tree/lib.pp)
    (verify
     (build "dune build image")
     (smoke "GET /tree renders root to depth cap; deeper nodes as collapsed stubs")
-    (smoke "GET /partials/tree?slug=…&node-id=…&depth=2 fragment no chrome; expands stub in place")
+    (smoke "GET /partials/tree?slug=…&root=…&depth=2 fragment no chrome; expands stub in place")
     (smoke "folders-only view omits leaf bodies; nodes with children still expandable")
     (smoke "zoom: GET /tree?root=<node-id> re-renders with that node as root; breadcrumb back")
     (smoke "expand returns children + one-level grandchild stubs (no N-requests-for-N-nodes)")
     (smoke "no-JS: stub is an <a href> to the same partial URL; full GET still correct")
-    (smoke "notes is first root: /tree?slug=<doc> walks the notes outline model"))
+    (smoke "notes is first root: /tree?slug=<doc> walks the notes outline model")
+    (smoke "kernel children-of/subtree + lens prims deferred — BORGE-1785516998 / 1785516993"))
    (details
     (doc (|
          THESIS: the one tree (one-tree.tree-model) is not just a
