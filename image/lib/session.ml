@@ -1364,9 +1364,46 @@ let unoverride (t : t) (name : string) : (bool, string) result =
   let () = refresh_ui_shell t in
   (Ok deleted)
 
-(** Promote selected names from source ref onto system/main (admin policy). *)
+(** Soft habitat-workflow lint lines for packages touched by [names].
+    Best-effort: missing libs/spec → empty string. Never blocks promote.
+    Uses empty branch arg so lint does not checkout away from the session. *)
+let promote_soft_warnings (t : t) ~(names : string list) : string =
+  let pkgs =
+    names
+    |> List.filter_map (fun n ->
+           match String.index_opt n '/' with
+           | None -> None
+           | Some i when i > 0 -> Some (String.sub n 0 i)
+           | Some _ -> None)
+    |> List.sort_uniq String.compare
+  in
+  if pkgs = [] then ""
+  else begin
+    (* Load lint deps if present; ignore failures (soft). *)
+    List.iter
+      (fun lib -> ignore (load_library t lib))
+      [ "list"; "outline"; "notes"; "spec" ];
+    let lines =
+      List.filter_map
+        (fun pkg ->
+          let expr =
+            Printf.sprintf "(spec/lint-summary %S %S)" pkg ""
+          in
+          try
+            match eval_one t expr with
+            | Pricklypear_lisp.Ast.VStr s when String.trim s <> "" ->
+                Some (String.trim s)
+            | _ -> None
+          with _ -> None)
+        pkgs
+    in
+    String.concat " · " lines
+  end
+
+(** Promote selected names from source ref onto system/main (admin policy).
+    Returns (count, soft_warnings). Soft warnings never block. *)
 let promote_to_main (t : t) ~(source_ref : string) ~(names : string list)
-  : (int, string) result =
+  : (int * string, string) result =
   if names = [] then (Error "no names selected")
   else
     let owner, name = split_branch_ref source_ref in
@@ -1382,6 +1419,7 @@ let promote_to_main (t : t) ~(source_ref : string) ~(names : string list)
            && t.manifest.username <> "system" then
           (Error "promote to system/main requires admin")
         else
+          let soft = promote_soft_warnings t ~names in
           let n =
             Store.promote_functions t.store
               ~source_id ~target_id:Store.system_main_id ~names
@@ -1392,7 +1430,7 @@ let promote_to_main (t : t) ~(source_ref : string) ~(names : string list)
               rehydrate t
             else ()
           in
-          (Ok n)
+          (Ok (n, soft))
 
 (** Full fork: parent_ref -> owner/child_name (uses Store.fork_branch copy). *)
 let fork_ref (t : t) ~(parent_ref : string) ~(child_ref : string)
