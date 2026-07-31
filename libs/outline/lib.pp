@@ -1,4 +1,4 @@
-;; package outline -- exported from live branch system/main
+;; package outline -- exported from live branch admin/personal
 ;; Sync: scripts/pp_sync.py pull|push
 
 (define outline/action-btn
@@ -36,7 +36,7 @@
           (html/tag
             "summary"
             (html/attr "class" "ol-actions-sum")
-            (html/text "\194\183\194\183\194\183"))
+            (html/text "194183194183194183"))
           (html/div
             (html/attr "class" "ol-actions-panel")
             (html/join
@@ -323,7 +323,6 @@
       (html/attr "id" "outline")
       (outline/html-node slug root show-archived #t))))
 
-;; Lite show path: no per-node action panels (budget). Toolbar still edits.
 (define outline/html-lite
   (lambda
     (slug root show-archived)
@@ -507,7 +506,10 @@
           (cons (car (cdr pair)) (cons (car pair) (cdr kids))))))))
 
 (define outline/render-body
-  (lambda (body) (roam/render-body body)))
+  (lambda (body)
+    (let
+      ((br (bible/render-body body)))
+      (if (null? br) (roam/render-body body) br))))
 
 (define outline/set-body
   (lambda

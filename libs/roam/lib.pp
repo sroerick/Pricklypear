@@ -1,4 +1,4 @@
-;; package roam -- exported from live branch system/main
+;; package roam -- exported from live branch admin/personal
 ;; Sync: scripts/pp_sync.py pull|push
 
 (define roam/at-open?
@@ -12,19 +12,11 @@
         (string-eq (substring s (+ i 1) 1) "[")
         #f))))
 
-(define roam/note-uuid
-  (lambda
-    (slug)
-    (let
-      ((row (notes/doc/row (as-str slug))))
-      (if (null? row) "" (as-str (car row))))))
-
 (define roam/backlinks
   (lambda
     (slug)
     (let
-      ((target (as-str slug))
-        (tu (roam/note-uuid slug)))
+      ((target (as-str slug)) (tu (roam/note-uuid slug)))
       (list/map
         (lambda
           (row)
@@ -45,8 +37,7 @@
           (string-eq tu "")
           (find-rows (quote note-link) "to_slug" target 200)
           (let
-            ((by-uuid
-                (find-rows (quote note-link) "to_uuid" tu 200)))
+            ((by-uuid (find-rows (quote note-link) "to_uuid" tu 200)))
             (if
               (null? by-uuid)
               (find-rows (quote note-link) "to_slug" target 200)
@@ -77,7 +68,7 @@
                         (html/text (car (cdr (cdr b)))))
                       (html/span
                         (html/attr "class" "muted")
-                        (html/text (string-append " \194\183 " (car (cdr b)))))))))
+                        (html/text (string-append " 194183 " (car (cdr b)))))))))
               bls)))))))
 
 (define roam/collect-from-tree
@@ -135,7 +126,11 @@
     (from-slug triples seen)
     (let
       ((from-uuid (roam/note-uuid from-slug)))
-      (roam/insert-collected-acc from-slug from-uuid triples seen))))
+      (roam/insert-collected-acc
+        from-slug
+        from-uuid
+        triples
+        seen))))
 
 (define roam/insert-collected-acc
   (lambda
@@ -211,6 +206,13 @@
         (< (string-length s) 7)
         #f
         (string-eq (substring s 0 6) "media:")))))
+
+(define roam/note-uuid
+  (lambda
+    (slug)
+    (let
+      ((row (notes/doc/row (as-str slug))))
+      (if (null? row) "" (as-str (car row))))))
 
 (define roam/parse-links
   (lambda (body) (extract-links (as-str body))))
@@ -298,14 +300,10 @@
   (lambda
     (slug lab)
     (let
-      ((s (as-str slug))
-        (row (notes/doc/row slug)))
+      ((s (as-str slug)) (row (notes/doc/row slug)))
       (let
         ((href-slug
-            (if
-              (null? row)
-              s
-              (as-str (dict-get (cdr row) "slug"))))
+            (if (null? row) s (as-str (dict-get (cdr row) "slug"))))
           (title
             (if
               (null? row)

@@ -1,4 +1,4 @@
-;; package notes/capture -- exported from live branch system/main
+;; package notes/capture -- exported from live branch admin/personal
 ;; Sync: scripts/pp_sync.py pull|push
 
 (define notes/capture
@@ -91,7 +91,7 @@
                 (html/attr "id" "capture-body")
                 (html/attr "rows" "3")
                 (html/attr "class" "capture-body")
-                (html/attr "placeholder" "Quick capture\226\128\166")
+                (html/attr "placeholder" "Quick capture226128166")
                 (html/attr "required" "required")))
             "")
           (html/div
@@ -167,7 +167,7 @@
                       (list
                         (html/attr "rows" "3")
                         (html/attr "class" "capture-body")
-                        (html/attr "placeholder" "Quick capture\226\128\166")
+                        (html/attr "placeholder" "Quick capture226128166")
                         (html/attr "required" "required")))
                     "")
                   (html/div

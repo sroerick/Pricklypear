@@ -1,4 +1,4 @@
-;; package notes/refile -- exported from live branch system/main
+;; package notes/refile -- exported from live branch admin/personal
 ;; Sync: scripts/pp_sync.py pull|push
 
 (define notes/refile

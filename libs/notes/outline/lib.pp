@@ -1,4 +1,4 @@
-;; package notes/outline -- exported from live branch system/main
+;; package notes/outline -- exported from live branch admin/personal
 ;; Sync: scripts/pp_sync.py pull|push
 
 (define notes/outline/all-todos

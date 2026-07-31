@@ -1,347 +1,5 @@
-;; package notes -- exported from live branch system/main
+;; package notes -- exported from live branch admin/personal
 ;; Sync: scripts/pp_sync.py pull|push
-;;
-;; notes.tree-cutover / index-read-path: hierarchical storage under
-;; data.note.u.<user>.… Tree is the only notes store for reads (I4).
-;; Legacy data_rows type=note kept as inert archive; only
-;; notes/migrate/legacy-* may read (rows 'note).
-
-(define notes/tree/enabled?
-  (lambda () #t))
-
-(define notes/tree/root
-  (lambda () (tree/garden-root)))
-
-(define notes/tree/parse
-  (lambda (s)
-    (if (null? s) () (json-parse (as-str s)))))
-
-(define notes/tree/body
-  (lambda (node)
-    (if (null? node) () (dict-get node "body"))))
-
-(define notes/tree/ensure-folder
-  (lambda
-    (path title)
-    (let
-      ((cur (tree/get path)))
-      (if
-        (null? cur)
-        (tree/upsert
-          path
-          "folder"
-          "note"
-          (dict-set*
-            "{}"
-            (list
-              "uuid"
-              (random-uuid)
-              "title"
-              (as-str title))))
-        path))))
-
-(define notes/tree/ensure-chain
-  (lambda
-    (base segs)
-    (if
-      (null? segs)
-      base
-      (let
-        ((next
-            (string-append base "." (tree/path-label (car segs)))))
-        (seq
-          (notes/tree/ensure-folder next (car segs))
-          (notes/tree/ensure-chain next (cdr segs)))))))
-
-(define notes/tree/split-folder
-  (lambda
-    (folder)
-    (list/filter
-      (lambda (s) (not (string-eq (as-str s) "")))
-      (string-split (as-str folder) "/"))))
-
-(define notes/tree/note-path
-  (lambda
-    (folder slug)
-    (let
-      ((base
-          (notes/tree/ensure-chain
-            (notes/tree/root)
-            (notes/tree/split-folder folder))))
-      (string-append base "." (tree/path-label slug)))))
-
-(define notes/tree/join-slash
-  (lambda
-    (xs)
-    (if
-      (null? xs)
-      ""
-      (if
-        (null? (cdr xs))
-        (as-str (car xs))
-        (string-append
-          (as-str (car xs))
-          "/"
-          (notes/tree/join-slash (cdr xs)))))))
-
-(define notes/tree/butlast
-  (lambda
-    (xs)
-    (if
-      (null? xs)
-      (list)
-      (if (null? (cdr xs)) (list) (cons (car xs) (notes/tree/butlast (cdr xs)))))))
-
-(define notes/tree/folder-of-path
-  (lambda
-    (path)
-    (let
-      ((root (notes/tree/root))
-        (p (as-str path)))
-      (if
-        (string-starts-with? p (string-append root "."))
-        (let
-          ((rest
-              (substring
-                p
-                (+ (string-length root) 1)
-                (- (string-length p) (+ (string-length root) 1)))))
-          (let
-            ((parts (string-split rest ".")))
-            (notes/tree/join-slash (notes/tree/butlast parts))))
-        ""))))
-
-(define notes/tree/heading-kids
-  (lambda
-    (parent-path)
-    (list/foldl
-      (lambda
-        (acc nj)
-        (let
-          ((n (notes/tree/parse nj)))
-          (if
-            (null? n)
-            acc
-            (if
-              (string-eq (as-str (dict-get n "kind")) "heading")
-              (let
-                ((b (notes/tree/body n)))
-                (let
-                  ((p (as-str (dict-get n "path"))))
-                  (append
-                    acc
-                    (list
-                      (outline/node*
-                        (as-str (dict-get b "id"))
-                        (as-str (dict-get b "title"))
-                        (as-str (dict-get b "body"))
-                        (as-str (dict-get b "todo"))
-                        (notes/tree/heading-kids p))))))
-              acc))))
-      (list)
-      (tree/list parent-path 1))))
-
-(define notes/tree/load-outline
-  (lambda
-    (note-path title)
-    (outline/node*
-      "root"
-      (as-str title)
-      ""
-      ""
-      (notes/tree/heading-kids note-path))))
-
-(define notes/tree/clear-headings
-  (lambda
-    (note-path)
-    (list/foldl
-      (lambda
-        (acc nj)
-        (let
-          ((n (notes/tree/parse nj)))
-          (if
-            (null? n)
-            acc
-            (if
-              (string-eq (as-str (dict-get n "kind")) "heading")
-              (seq
-                (tree/delete (as-str (dict-get n "path")) "recursive")
-                acc)
-              acc))))
-      0
-      (tree/list note-path 1))))
-
-(define notes/tree/write-heading
-  (lambda
-    (parent-path node)
-    (let
-      ((nid (tree/path-label (outline/id node)))
-        (path (string-append parent-path ".h." (tree/path-label (outline/id node)))))
-      (seq
-        (tree/upsert
-          path
-          "heading"
-          "note"
-          (dict-set*
-            "{}"
-            (list
-              "id"
-              (as-str (outline/id node))
-              "title"
-              (as-str (outline/title node))
-              "body"
-              (as-str (outline/body node))
-              "todo"
-              (as-str (outline/todo node)))))
-        (list/foldl
-          (lambda
-            (acc kid)
-            (seq (notes/tree/write-heading path kid) acc))
-          0
-          (outline/kids node))
-        path))))
-
-(define notes/tree/save-outline
-  (lambda
-    (note-path outline)
-    (seq
-      (notes/tree/clear-headings note-path)
-      (list/foldl
-        (lambda
-          (acc kid)
-          (seq (notes/tree/write-heading note-path kid) acc))
-        0
-        (outline/kids outline))
-      note-path)))
-
-(define notes/tree/node->row
-  (lambda
-    (nj load-outline?)
-    (let
-      ((n (notes/tree/parse nj)))
-      (if
-        (null? n)
-        ()
-        (if
-          (not (string-eq (as-str (dict-get n "kind")) "note"))
-          ()
-          (let
-            ((b (notes/tree/body n))
-              (path (as-str (dict-get n "path"))))
-            (let
-              ((u (dict-get b "uuid"))
-                (title (as-str (dict-get b "title"))))
-              (let
-                ((uuid
-                    (if
-                      (null? u)
-                      (as-str (dict-get n "id"))
-                      (as-str u))))
-                (let
-                  ((fields
-                      (list
-                        "slug"
-                        (as-str (dict-get b "slug"))
-                        "title"
-                        title
-                        "tags"
-                        (as-str (dict-get b "tags"))
-                        "kind"
-                        (as-str (dict-get b "kind"))
-                        "day"
-                        (as-str (dict-get b "day"))
-                        "folder"
-                        (notes/tree/folder-of-path path)
-                        "_path"
-                        path)))
-                  (cons
-                    uuid
-                    (dict-set*
-                      "{}"
-                      (if
-                        load-outline?
-                        (append
-                          fields
-                          (list
-                            "outline"
-                            (outline/encode
-                              (notes/tree/load-outline path title))))
-                        (append
-                          fields
-                          (list "outline" "[]"))))))))))))))
-
-(define notes/tree/find-slug
-  (lambda
-    (slug)
-    (let
-      ((hits (tree/find-by "note" "slug" (as-str slug) 5)))
-      (if
-        (null? hits)
-        ()
-        (notes/tree/node->row (car hits) #t)))))
-
-(define notes/tree/list-notes
-  (lambda () (tree/note-index (notes/tree/root) 2000)))
-
-;; ---- M0: migrate legacy data_rows type=note → tree ----
-
-(define notes/migrate/legacy-one
-  (lambda
-    (row)
-    (if
-      (null? row)
-      "skip-empty"
-      (let
-        ((id (as-str (car row)))
-          (f (cdr row)))
-        (let
-          ((slug (as-str (dict-get f "slug")))
-            (title (as-str (dict-get f "title")))
-            (tags (as-str (dict-get f "tags")))
-            (kind (as-str (dict-get f "kind")))
-            (day (as-str (dict-get f "day")))
-            (folder (as-str (dict-get f "folder")))
-            (outline (outline/decode (dict-get f "outline"))))
-          (let
-            ((existing (tree/get-uuid id))
-              (by-slug (notes/tree/find-slug slug)))
-            (if
-              (not (null? existing))
-              (string-append "exists-uuid:" slug)
-              (if
-                (not (null? by-slug))
-                (string-append "exists-slug:" slug)
-                (let
-                  ((path (notes/tree/note-path folder slug))
-                    (body
-                      (dict-set*
-                        "{}"
-                        (list
-                          "uuid"
-                          id
-                          "slug"
-                          slug
-                          "title"
-                          title
-                          "tags"
-                          tags
-                          "kind"
-                          (if (string-eq kind "") "note" kind)
-                          "day"
-                          day))))
-                  (seq
-                    (notes/tree/ensure-folder (notes/tree/root) (whoami))
-                    (tree/upsert path "note" "note" body)
-                    (notes/tree/save-outline path outline)
-                    (roam/reindex slug outline)
-                    (string-append "migrated:" slug)))))))))))
-
-(define notes/migrate/legacy-all
-  (lambda
-    ()
-    (list/map
-      notes/migrate/legacy-one
-      (rows (quote note) 2000))))
 
 (define notes/all-todos
   (lambda
@@ -481,7 +139,7 @@
                 (html/attr "id" "capture-body")
                 (html/attr "rows" "3")
                 (html/attr "class" "capture-body")
-                (html/attr "placeholder" "Quick capture\226\128\166")
+                (html/attr "placeholder" "Quick capture226128166")
                 (html/attr "required" "required")))
             "")
           (html/div
@@ -534,7 +192,7 @@
                       (list
                         (html/attr "rows" "3")
                         (html/attr "class" "capture-body")
-                        (html/attr "placeholder" "Quick capture\226\128\166")
+                        (html/attr "placeholder" "Quick capture226128166")
                         (html/attr "required" "required")))
                     "")
                   (html/div
@@ -584,7 +242,7 @@
             (if
               (<= (string-length b) 48)
               b
-              (string-append (substring b 0 45) "\226\128\166"))))))))
+              (string-append (substring b 0 45) "226128166"))))))))
 
 (define notes/capture/add
   (lambda
@@ -650,7 +308,7 @@
                 (html/attr "id" "capture-body")
                 (html/attr "rows" "3")
                 (html/attr "class" "capture-body")
-                (html/attr "placeholder" "Quick capture\226\128\166")
+                (html/attr "placeholder" "Quick capture226128166")
                 (html/attr "required" "required")))
             "")
           (html/div
@@ -726,7 +384,7 @@
                       (list
                         (html/attr "rows" "3")
                         (html/attr "class" "capture-body")
-                        (html/attr "placeholder" "Quick capture\226\128\166")
+                        (html/attr "placeholder" "Quick capture226128166")
                         (html/attr "required" "required")))
                     "")
                   (html/div
@@ -1088,7 +746,7 @@
 (define notes/doc/list
   (lambda
     ()
-    ;; index-read-path I4: tree only — no data_rows fallback
+    ;; index-read-path I4 / F1: tree only — no data_rows fallback
     (if (notes/tree/enabled?) (notes/tree/list-notes) (list))))
 
 (define notes/doc/list-folder
@@ -1135,8 +793,18 @@
 (define notes/doc/row
   (lambda
     (slug)
-    ;; index-read-path I4: tree only — no find-rows fallback
-    (if (notes/tree/enabled?) (notes/tree/find-slug slug) ())))
+    (let
+      ((tr
+        (if
+          (notes/tree/enabled?)
+          (notes/tree/find-slug slug)
+          ())))
+      (if
+        (null? tr)
+        (let
+          ((rs (find-rows (quote note) "slug" (as-str slug) 1)))
+          (if (null? rs) () (car rs)))
+        tr))))
 
 (define notes/doc/row-folder
   (lambda
@@ -1183,8 +851,7 @@
           (notes/tree/enabled?)
           (let
             ((old (notes/doc/row-path row))
-              (newp
-                (notes/tree/note-path folder (as-str slug))))
+              (newp (notes/tree/note-path folder (as-str slug))))
             (if
               (string-eq old "")
               (notes/doc/upsert-in
@@ -1195,10 +862,7 @@
                 (dict-get (cdr row) "kind")
                 (dict-get (cdr row) "day")
                 folder)
-              (if
-                (string-eq old newp)
-                old
-                (tree/move old newp))))
+              (if (string-eq old newp) old (tree/move old newp))))
           (update-field
             (quote note)
             (car row)
@@ -1232,7 +896,13 @@
 
 (define notes/doc/upsert-in
   (lambda
-    (slug title outline tags kind day folder)
+    (slug
+      title
+      outline
+      tags
+      kind
+      day
+      folder)
     (if
       (notes/tree/enabled?)
       (let
@@ -1271,9 +941,7 @@
                   (not (null? prev))
                   (not (string-eq oldp ""))
                   (not
-                    (string-eq
-                      (as-str folder)
-                      (notes/doc/row-folder prev))))
+                    (string-eq (as-str folder) (notes/doc/row-folder prev))))
                 (notes/doc/set-folder slug folder)
                 0)
               (roam/reindex (as-str slug) outline)
@@ -1469,8 +1137,323 @@
                           (html/attr "title" "delete note")))
                       "del")))))))))))
 
+(define notes/legacy/tree-render
+  (lambda
+    ()
+    (html/p*
+      (html/attr "class" "muted")
+      "notes/tree/render retired \226\128\148 use notes/ui/folders-html (flat index).")))
+
+(define notes/legacy/tree-render-folder
+  (lambda
+    (path names depth)
+    (html/p*
+      (html/attr "class" "muted")
+      (string-append
+        "notes/tree/render-folder retired ("
+        (as-str path)
+        ")"))))
+
+(define notes/light/add-prefixes
+  (lambda
+    (parts prefix acc)
+    (if
+      (null? parts)
+      acc
+      (let*
+        ((seg (as-str (car parts)))
+          (full
+            (if
+              (string-eq prefix "")
+              seg
+              (string-append prefix "/" seg))))
+        (notes/light/add-prefixes
+          (cdr parts)
+          full
+          (notes/light/cons-unique full acc))))))
+
+(define notes/light/all-folder-paths
+  (lambda
+    (all-notes)
+    (notes/light/dedupe
+      (notes/tree/sort-by-name
+        (list/foldl
+          (lambda
+            (acc note)
+            (let
+              ((f (as-str (notes/light/nth note 1))))
+              (if
+                (string-eq f "")
+                acc
+                (notes/light/add-prefixes (string-split f "/") "" acc))))
+          (list)
+          all-notes)))))
+
+(define notes/light/children-of
+  (lambda
+    (parent paths)
+    (list/filter
+      (lambda
+        (p)
+        (string-eq (notes/light/parent-of p) parent))
+      paths)))
+
+(define notes/light/cons-unique
+  (lambda
+    (x xs)
+    (if (notes/light/contains? x xs) xs (cons x xs))))
+
+(define notes/light/contains?
+  (lambda
+    (x xs)
+    (if
+      (null? xs)
+      #f
+      (if
+        (string-eq x (as-str (car xs)))
+        #t
+        (notes/light/contains? x (cdr xs))))))
+
+(define notes/light/dedupe
+  (lambda
+    (xs)
+    (if
+      (null? xs)
+      (list)
+      (notes/light/cons-unique
+        (car xs)
+        (notes/light/dedupe (cdr xs))))))
+
+(define notes/light/folder-section
+  (lambda
+    (folder)
+    (let*
+      ((all-notes (notes/list-light))
+        (items (notes/light/notes-in folder all-notes))
+        (label
+          (if (string-eq folder "") "(uncategorized)" folder))
+        (href (string-append "/notes?folder=" folder)))
+      (html/div
+        (html/attr "class" "notes-folder card")
+        (html/join
+          (list
+            (html/h3 (html/a href (html/text label)))
+            (if
+              (null? items)
+              (html/p*
+                (html/attr "class" "muted")
+                "No notes in this folder.")
+              (notes/light/render-notes items))))))))
+
+(define notes/light/last
+  (lambda
+    (xs)
+    (if
+      (null? (cdr xs))
+      (car xs)
+      (notes/light/last (cdr xs)))))
+
+(define notes/light/last-segment
+  (lambda
+    (path)
+    (if
+      (string-eq path "")
+      ""
+      (notes/light/last (string-split path "/")))))
+
+(define notes/light/note-li
+  (lambda
+    (note)
+    (let*
+      ((title (as-str (notes/light/nth note 2)))
+        (slug (as-str (notes/light/nth note 3))))
+      (html/li
+        (html/attr "class" "note-item")
+        (html/a
+          (string-append "/notes?slug=" slug)
+          (html/text title))))))
+
+(define notes/light/notes-in
+  (lambda
+    (folder all-notes)
+    (list/filter
+      (lambda
+        (n)
+        (string-eq (as-str (notes/light/nth n 1)) folder))
+      all-notes)))
+
+(define notes/light/nth
+  (lambda
+    (xs i)
+    (if
+      (<= i 0)
+      (car xs)
+      (notes/light/nth (cdr xs) (- i 1)))))
+
+(define notes/light/page
+  (lambda
+    ()
+    (let
+      ((slug (request-param "slug")))
+      (if
+        (if (null? slug) #t (string-eq (as-str slug) ""))
+        (let
+          ((folder (request-param "folder")))
+          (html/page
+            (list
+              (notes/tree/style)
+              (html/h1 "Notes")
+              (html/h2 "Folders")
+              (if
+                (if
+                  (null? folder)
+                  #f
+                  (not (string-eq (as-str folder) "")))
+                (notes/light/folder-section (as-str folder))
+                (notes/light/render)))))
+        (html/page (list (notes/ui/show (as-str slug))))))))
+
+(define notes/light/parent-of
+  (lambda
+    (path)
+    (if
+      (string-eq path "")
+      ""
+      (let
+        ((parts (string-split path "/")))
+        (if
+          (<= (length parts) 1)
+          ""
+          (notes/tree/join-slash (notes/tree/butlast parts)))))))
+
+(define notes/light/render
+  (lambda
+    ()
+    (let*
+      ((all-notes (notes/list-light))
+        (paths (notes/light/all-folder-paths all-notes))
+        (roots
+          (notes/tree/sort-by-name
+            (notes/light/children-of "" paths)))
+        (uncat (notes/light/notes-in "" all-notes)))
+      (html/div
+        (html/attr "class" "notes-tree")
+        (html/join
+          (list
+            (if
+              (null? uncat)
+              ""
+              (html/tag
+                "details"
+                (html/attrs
+                  (list
+                    (html/attr "class" "tree-folder tree-uncategorized")
+                    (html/attr "open" "open")))
+                (html/join
+                  (list
+                    (html/tag
+                      "summary"
+                      (html/attr "class" "tree-folder-header")
+                      (html/join
+                        (list
+                          (html/span
+                            (html/attr "class" "tree-folder-icon")
+                            "&#x1F4C2; ")
+                          (html/text "(uncategorized)")
+                          (html/span
+                            (html/attr "class" "muted")
+                            (html/text
+                              (string-append " (" (as-str (length uncat)) ")"))))))
+                    (notes/light/render-notes uncat)))))
+            (html/join
+              (list/map
+                (lambda
+                  (root)
+                  (notes/light/render-folder root paths all-notes))
+                roots))))))))
+
+(define notes/light/render-folder
+  (lambda
+    (path paths all-notes)
+    (let*
+      ((label (notes/light/last-segment path))
+        (children (notes/light/children-of path paths))
+        (items (notes/light/notes-in path all-notes))
+        (item-count (length items)))
+      (html/tag
+        "details"
+        (html/attrs
+          (list
+            (html/attr "class" "tree-folder")
+            (html/attr "open" "open")))
+        (html/join
+          (list
+            (html/tag
+              "summary"
+              (html/attr "class" "tree-folder-header")
+              (html/join
+                (list
+                  (html/span
+                    (html/attr "class" "tree-folder-icon")
+                    "&#x1F4C1; ")
+                  (html/a
+                    (string-append "/notes?folder=" path)
+                    (html/text label))
+                  (html/span
+                    (html/attr "class" "muted")
+                    (html/text (string-append " (" (as-str item-count) ")"))))))
+            (notes/light/render-notes items)
+            (if
+              (null? children)
+              ""
+              (html/join
+                (list/map
+                  (lambda
+                    (child)
+                    (notes/light/render-folder child paths all-notes))
+                  (notes/tree/sort-by-name children))))))))))
+
+(define notes/light/render-notes
+  (lambda
+    (note-list)
+    (if
+      (null? note-list)
+      ""
+      (html/ul
+        (html/attr "class" "tree-items")
+        (html/join
+          (list/map
+            (lambda (n) (notes/light/note-li n))
+            note-list))))))
+
 (define notes/list
   (lambda () (notes/doc/list)))
+
+
+
+
+(define notes/list-light
+  (lambda
+    ()
+    (map
+      (lambda
+        (r)
+        (let
+          ((d (cdr r)))
+          (list
+            (car r)
+            (as-str (dict-get d "folder"))
+            (as-str (dict-get d "title"))
+            (as-str (dict-get d "slug")))))
+      (notes/doc/index-list))))
+
+(define notes/list-take
+  (lambda
+    (xs n)
+    (if
+      (or (null? xs) (<= n 0))
+      (list)
+      (cons (car xs) (notes/list-take (cdr xs) (- n 1))))))
 
 (define notes/make-fields
   (lambda
@@ -1491,6 +1474,113 @@
         "day"
         (as-str day)))))
 
+(define notes/migrate/legacy-all
+  (lambda
+    ()
+    (list/map
+      notes/migrate/legacy-one
+      (rows (quote note) 2000))))
+
+;; F3: force-write heading children from legacy outline blob for every row.
+(define notes/migrate/legacy-force-one
+  (lambda
+    (row)
+    (if
+      (null? row)
+      "skip-empty"
+      (let
+        ((id (as-str (car row))) (f (cdr row)))
+        (let
+          ((slug (as-str (dict-get f "slug")))
+            (title (as-str (dict-get f "title")))
+            (outline (outline/decode (dict-get f "outline"))))
+          (let
+            ((existing (tree/get-uuid id)))
+            (if
+              (null? existing)
+              (notes/migrate/legacy-one row)
+              (let
+                ((path (as-str (dict-get existing "path"))))
+                (seq
+                  (notes/tree/save-outline path outline)
+                  (roam/reindex slug outline)
+                  (string-append "reoutlined:" slug))))))))))
+
+(define notes/migrate/legacy-force-all
+  (lambda
+    ()
+    (list/map
+      notes/migrate/legacy-force-one
+      (rows (quote note) 2000))))
+
+;; F4: delete legacy data_rows type=note after tree uuid verified.
+(define notes/migrate/legacy-delete-all
+  (lambda
+    ()
+    (list/map
+      (lambda
+        (row)
+        (let
+          ((id (as-str (car row)))
+            (slug (as-str (dict-get (cdr row) "slug"))))
+          (if
+            (null? (tree/get-uuid id))
+            (string-append "kept-missing-tree:" slug)
+            (seq
+              (delete (quote note) id)
+              (string-append "deleted:" slug)))))
+      (rows (quote note) 2000))))
+
+(define notes/migrate/legacy-one
+  (lambda
+    (row)
+    (if
+      (null? row)
+      "skip-empty"
+      (let
+        ((id (as-str (car row))) (f (cdr row)))
+        (let
+          ((slug (as-str (dict-get f "slug")))
+            (title (as-str (dict-get f "title")))
+            (tags (as-str (dict-get f "tags")))
+            (kind (as-str (dict-get f "kind")))
+            (day (as-str (dict-get f "day")))
+            (folder (as-str (dict-get f "folder")))
+            (outline (outline/decode (dict-get f "outline"))))
+          (let
+            ((existing (tree/get-uuid id))
+              (by-slug (notes/tree/find-slug slug)))
+            (if
+              (not (null? existing))
+              (string-append "exists-uuid:" slug)
+              (if
+                (not (null? by-slug))
+                (string-append "exists-slug:" slug)
+                (let
+                  ((path (notes/tree/note-path folder slug))
+                    (body
+                      (dict-set*
+                        "{}"
+                        (list
+                          "uuid"
+                          id
+                          "slug"
+                          slug
+                          "title"
+                          title
+                          "tags"
+                          tags
+                          "kind"
+                          (if (string-eq kind "") "note" kind)
+                          "day"
+                          day))))
+                  (seq
+                    (notes/tree/ensure-folder (notes/tree/root) (whoami))
+                    (tree/upsert path "note" "note" body)
+                    (notes/tree/save-outline path outline)
+                    (roam/reindex slug outline)
+                    (string-append "migrated:" slug)))))))))))
+
 (define notes/missing-html
   (lambda
     (slug)
@@ -1501,6 +1591,16 @@
           (html/attr "class" "err")
           (string-append "No note " (as-str slug)))
         (html/p* "" (html/a "/notes" "All notes"))))))
+
+(define notes/move-folder
+  (lambda (slug folder)
+    (let*
+      ((r (notes/doc/row (as-str slug)))
+        (f (if (null? r) "{}" (cdr r)))
+        (bv (dict-get f "body"))
+        (f2 (if (null? bv) (dict-set f "body" "") f))
+        (fields (dict-set f2 "folder" (as-str folder))))
+      (if (null? r) () (update (quote note) (car r) fields)))))
 
 (define notes/node-op
   (lambda
@@ -2352,8 +2452,9 @@
 (define notes/row
   (lambda
     (slug)
-    ;; Prefer façade; legacy name kept for older callers
-    (notes/doc/row slug)))
+    (let
+      ((rs (find-rows (quote note) "slug" (as-str slug) 1)))
+      (if (null? rs) () (car rs)))))
 
 (define notes/search
   (lambda
@@ -2843,6 +2944,22 @@
       (list)
       names)))
 
+(define notes/tree/body
+  (lambda
+    (node)
+    (if (null? node) () (dict-get node "body"))))
+
+(define notes/tree/butlast
+  (lambda
+    (xs)
+    (if
+      (null? xs)
+      (list)
+      (if
+        (null? (cdr xs))
+        (list)
+        (cons (car xs) (notes/tree/butlast (cdr xs)))))))
+
 (define notes/tree/children-of
   (lambda
     (parent names)
@@ -2856,6 +2973,26 @@
             ((p (notes/tree/parent-of name)))
             (string-eq p parent))))
       names)))
+
+(define notes/tree/clear-headings
+  (lambda
+    (note-path)
+    (list/foldl
+      (lambda
+        (acc nj)
+        (let
+          ((n (notes/tree/parse nj)))
+          (if
+            (null? n)
+            acc
+            (if
+              (string-eq (as-str (dict-get n "kind")) "heading")
+              (seq
+                (tree/delete (as-str (dict-get n "path")) "recursive")
+                acc)
+              acc))))
+      0
+      (tree/list note-path 1))))
 
 (define notes/tree/details-css
   (lambda
@@ -2885,6 +3022,48 @@
           ".notes-tree > details.tree-folder"
           (list "margin" ".25rem 0"))))))
 
+(define notes/tree/enabled?
+  (lambda () #t))
+
+(define notes/tree/ensure-chain
+  (lambda
+    (base segs)
+    (if
+      (null? segs)
+      base
+      (let
+        ((next
+          (string-append base "." (tree/path-label (car segs)))))
+        (seq
+          (notes/tree/ensure-folder next (car segs))
+          (notes/tree/ensure-chain next (cdr segs)))))))
+
+(define notes/tree/ensure-folder
+  (lambda
+    (path title)
+    (let
+      ((cur (tree/get path)))
+      (if
+        (null? cur)
+        (tree/upsert
+          path
+          "folder"
+          "note"
+          (dict-set*
+            "{}"
+            (list "uuid" (random-uuid) "title" (as-str title))))
+        path))))
+
+(define notes/tree/find-slug
+  (lambda
+    (slug)
+    (let
+      ((hits (tree/find-by "note" "slug" (as-str slug) 5)))
+      (if
+        (null? hits)
+        ()
+        (notes/tree/node->row (car hits) #t)))))
+
 (define notes/tree/folder-label
   (lambda
     (path)
@@ -2898,6 +3077,141 @@
           (+ pos 1)
           (- (string-length path) (+ pos 1)))))))
 
+(define notes/tree/folder-of-path
+  (lambda
+    (path)
+    (let
+      ((root (notes/tree/root)) (p (as-str path)))
+      (if
+        (string-starts-with? p (string-append root "."))
+        (let
+          ((rest
+            (substring
+              p
+              (+ (string-length root) 1)
+              (- (string-length p) (+ (string-length root) 1)))))
+          (let
+            ((parts (string-split rest ".")))
+            (notes/tree/join-slash (notes/tree/butlast parts))))
+        ""))))
+
+(define notes/tree/heading-kids
+  (lambda
+    (parent-path)
+    (list/foldl
+      (lambda
+        (acc nj)
+        (let
+          ((n (notes/tree/parse nj)))
+          (if
+            (null? n)
+            acc
+            (if
+              (string-eq (as-str (dict-get n "kind")) "heading")
+              (let
+                ((b (notes/tree/body n)))
+                (let
+                  ((p (as-str (dict-get n "path"))))
+                  (append
+                    acc
+                    (list
+                      (outline/node*
+                        (as-str (dict-get b "id"))
+                        (as-str (dict-get b "title"))
+                        (as-str (dict-get b "body"))
+                        (as-str (dict-get b "todo"))
+                        (notes/tree/heading-kids p))))))
+              acc))))
+      (list)
+      (tree/list parent-path 1))))
+
+(define notes/tree/join-slash
+  (lambda
+    (xs)
+    (if
+      (null? xs)
+      ""
+      (if
+        (null? (cdr xs))
+        (as-str (car xs))
+        (string-append
+          (as-str (car xs))
+          "/"
+          (notes/tree/join-slash (cdr xs)))))))
+
+(define notes/tree/list-notes
+  (lambda () (tree/note-index (notes/tree/root) 2000)))
+
+(define notes/tree/load-outline
+  (lambda
+    (note-path title)
+    (outline/node*
+      "root"
+      (as-str title)
+      ""
+      ""
+      (notes/tree/heading-kids note-path))))
+
+(define notes/tree/node->row
+  (lambda
+    (nj load-outline?)
+    (let
+      ((n (notes/tree/parse nj)))
+      (if
+        (null? n)
+        ()
+        (if
+          (not (string-eq (as-str (dict-get n "kind")) "note"))
+          ()
+          (let
+            ((b (notes/tree/body n))
+              (path (as-str (dict-get n "path"))))
+            (let
+              ((u (dict-get b "uuid"))
+                (title (as-str (dict-get b "title"))))
+              (let
+                ((uuid
+                  (if (null? u) (as-str (dict-get n "id")) (as-str u))))
+                (let
+                  ((fields
+                    (list
+                      "slug"
+                      (as-str (dict-get b "slug"))
+                      "title"
+                      title
+                      "tags"
+                      (as-str (dict-get b "tags"))
+                      "kind"
+                      (as-str (dict-get b "kind"))
+                      "day"
+                      (as-str (dict-get b "day"))
+                      "folder"
+                      (notes/tree/folder-of-path path)
+                      "_path"
+                      path)))
+                  (cons
+                    uuid
+                    (dict-set*
+                      "{}"
+                      (if
+                        load-outline?
+                        (append
+                          fields
+                          (list
+                            "outline"
+                            (outline/encode (notes/tree/load-outline path title))))
+                        (append fields (list "outline" "[]"))))))))))))))
+
+(define notes/tree/note-path
+  (lambda
+    (folder slug)
+    (let
+      ((base
+        (notes/tree/ensure-chain
+          (notes/tree/root)
+          (notes/tree/split-folder folder))))
+      (string-append base "." (tree/path-label slug)))))
+
 (define notes/tree/parent-of
   (lambda
     (path)
@@ -2905,28 +3219,118 @@
       ((pos (string-find-pos path "/" 0 1)))
       (if (< pos 0) "" (substring path 0 pos)))))
 
-;; index-read-path I2: nested Lisp folder walk retired (budget-unsafe at
-;; garden scale). Kept under notes/legacy/* for archaeology only — not routed.
-(define notes/legacy/tree-render
+(define notes/tree/parse
+  (lambda (s) (if (null? s) () (json-parse (as-str s)))))
+
+(define notes/tree/render
   (lambda
     ()
-    (html/p*
-      (html/attr "class" "muted")
-      "notes/tree/render retired — use notes/ui/folders-html (flat index).")))
+    (let*
+      ((names (notes/doc/folder-names))
+        (all-names (append names (notes/tree/all-paths names)))
+        (roots
+          (notes/tree/sort-by-name
+            (notes/tree/children-of "" all-names)))
+        (uncat (notes/doc/list-folder "")))
+      (html/div
+        (html/attr "class" "notes-tree")
+        (html/join
+          (list
+            (if
+              (null? uncat)
+              ""
+              (html/tag
+                "details"
+                (html/attrs
+                  (list
+                    (html/attr "class" "tree-folder tree-uncategorized")
+                    (html/attr "open" "open")))
+                (html/join
+                  (list
+                    (html/tag
+                      "summary"
+                      (html/attr "class" "tree-folder-header")
+                      (html/join
+                        (list
+                          (html/span
+                            (html/attr "class" "tree-folder-icon")
+                            "&#x1F4C2; ")
+                          (html/text "(uncategorized)")
+                          (html/span
+                            (html/attr "class" "muted")
+                            (html/text
+                              (string-append " (" (as-str (length uncat)) ")"))))))
+                    (html/ul
+                      (html/attr "class" "tree-items")
+                      (notes/ui/folder-list ""))))))
+            (html/join
+              (list/map
+                (lambda
+                  (root)
+                  (notes/tree/render-folder root all-names 0))
+                roots))))))))
 
-(define notes/legacy/tree-render-folder
+(define notes/tree/render-folder
   (lambda
     (path names depth)
-    (html/p*
-      (html/attr "class" "muted")
-      (string-append
-        "notes/tree/render-folder retired ("
-        (as-str path)
-        ")"))))
+    (let*
+      ((label (notes/tree/folder-label path))
+        (children (notes/tree/children-of path names))
+        (items (notes/doc/list-folder path))
+        (item-count (length items)))
+      (html/tag
+        "details"
+        (html/attrs
+          (list
+            (html/attr "class" "tree-folder")
+            (html/attr "open" "open")))
+        (html/join
+          (list
+            (html/tag
+              "summary"
+              (html/attr "class" "tree-folder-header")
+              (html/join
+                (list
+                  (html/span
+                    (html/attr "class" "tree-folder-icon")
+                    "&#x1F4C1; ")
+                  (html/a
+                    (string-append "/notes?folder=" path)
+                    (html/text label))
+                  (html/span
+                    (html/attr "class" "muted")
+                    (html/text (string-append " (" (as-str item-count) ")"))))))
+            (if
+              (null? items)
+              ""
+              (html/ul
+                (html/attr "class" "tree-items")
+                (notes/ui/folder-list path)))
+            (if
+              (null? children)
+              ""
+              (html/join
+                (list/map
+                  (lambda
+                    (child)
+                    (notes/tree/render-folder child names (+ depth 1)))
+                  (notes/tree/sort-by-name children))))))))))
 
-;; Tombstones so accidental callers fail loudly instead of walking garden.
-(define notes/tree/render notes/legacy/tree-render)
-(define notes/tree/render-folder notes/legacy/tree-render-folder)
+(define notes/tree/root
+  (lambda () (tree/garden-root)))
+
+(define notes/tree/save-outline
+  (lambda
+    (note-path outline)
+    (seq
+      (notes/tree/clear-headings note-path)
+      (list/foldl
+        (lambda
+          (acc kid)
+          (seq (notes/tree/write-heading note-path kid) acc))
+        0
+        (outline/kids outline))
+      note-path)))
 
 (define notes/tree/sort-by-name
   (lambda
@@ -2943,6 +3347,13 @@
           (notes/tree/sort-by-name
             (list/filter (lambda (x) (not (string<? x pivot))) rest)))))))
 
+(define notes/tree/split-folder
+  (lambda
+    (folder)
+    (list/filter
+      (lambda (s) (not (string-eq (as-str s) "")))
+      (string-split (as-str folder) "/"))))
+
 (define notes/tree/style
   (lambda
     ()
@@ -2953,6 +3364,40 @@
         (css/render notes/tree-css)
         (css/render notes/tree-css-patch)
         (css/render (notes/tree/details-css))))))
+
+(define notes/tree/write-heading
+  (lambda
+    (parent-path node)
+    (let
+      ((nid (tree/path-label (outline/id node)))
+        (path
+          (string-append
+            parent-path
+            ".h."
+            (tree/path-label (outline/id node)))))
+      (seq
+        (tree/upsert
+          path
+          "heading"
+          "note"
+          (dict-set*
+            "{}"
+            (list
+              "id"
+              (as-str (outline/id node))
+              "title"
+              (as-str (outline/title node))
+              "body"
+              (as-str (outline/body node))
+              "todo"
+              (as-str (outline/todo node)))))
+        (list/foldl
+          (lambda
+            (acc kid)
+            (seq (notes/tree/write-heading path kid) acc))
+          0
+          (outline/kids node))
+        path))))
 
 (define notes/ui/create-form
   (lambda
@@ -3143,43 +3588,6 @@
             (html/h3 (html/a href (html/text label)))
             (html/ul "" (notes/ui/folder-list folder))))))))
 
-(define notes/ui/folders-html
-  (lambda
-    ()
-    (let
-      ((filter (request-param "folder")))
-      (if
-        (if
-          (null? filter)
-          #f
-          (not (string-eq (as-str filter) "")))
-        (notes/ui/folder-section (as-str filter))
-        ;; Flat index via tree/note-index (budget-safe). Nested
-        ;; notes/tree/render retired (index-read-path I2).
-        (let
-          ((rows (notes/doc/index-list))
-            (cap 80))
-          (if
-            (null? rows)
-            (html/p* (html/attr "class" "muted") "No notes yet.")
-            (html/join
-              (list
-                (html/p*
-                  (html/attr "class" "muted")
-                  (string-append
-                    "Showing first "
-                    (as-str cap)
-                    " of "
-                    (as-str (count rows))
-                    " notes (use ?folder= to filter)."))
-                (html/ul
-                  (html/attr "class" "card notes-flat-index")
-                  (list/foldl
-                    (lambda
-                      (acc row)
-                      (string-append acc (notes/ui/item-li-lite row)))
-                    ""
-                    (notes/list-take rows cap)))))))))))
 
 (define notes/ui/handle-post
   (lambda
@@ -3215,58 +3623,6 @@
           (notes/refile/extract-handle))
         (else (redirect "/notes"))))))
 
-(define notes/ui/index
-  (lambda
-    ()
-    (html/join
-      (list
-        (notes/tree/style)
-        (html/h1 "Notes")
-        (html/p*
-          (html/attr "class" "muted")
-          "Outline-first notes. Grouped by folder (optional path like wiki/entities).")
-        (html/p*
-          (html/attr "class" "muted")
-          (html/join
-            (list
-              (html/a "/notes?slug=inbox" "Open inbox")
-              " \194\183 "
-              (html/a "/notes" "All folders")
-              " \194\183 system notes (inbox) are hidden from the index.")))
-        (notes/ui/create-form)
-        (html/h2 "Folders")
-        (notes/ui/folders-html)))))
-
-(define notes/list-take
-  (lambda
-    (xs n)
-    (if
-      (or (null? xs) (<= n 0))
-      (list)
-      (cons (car xs) (notes/list-take (cdr xs) (- n 1))))))
-
-(define notes/ui/item-li-lite
-  (lambda
-    (row)
-    (let
-      ((f (cdr row)))
-      (let
-        ((slug (as-str (dict-get f "slug")))
-          (title (as-str (dict-get f "title")))
-          (folder (notes/doc/row-folder row)))
-        (html/li
-          (html/attr "class" "note-item")
-          (html/join
-            (list
-              (html/a
-                (string-append "/notes?slug=" slug)
-                (html/text title))
-              (if
-                (string-eq folder "")
-                ""
-                (html/span
-                  (html/attr "class" "muted")
-                  (html/text (string-append " · " folder)))))))))))
 
 (define notes/ui/item-li
   (lambda
@@ -3289,7 +3645,7 @@
                 ""
                 (html/span
                   (html/attr "class" "muted")
-                  (html/text (string-append " · " folder))))
+                  (html/text (string-append " \194\183 " folder))))
               (html/form
                 "POST"
                 "/notes"
@@ -3308,6 +3664,29 @@
                           (html/attr "class" "secondary")
                           (html/attr "title" "delete note")))
                       "del")))))))))))
+
+(define notes/ui/item-li-lite
+  (lambda
+    (row)
+    (let
+      ((f (cdr row)))
+      (let
+        ((slug (as-str (dict-get f "slug")))
+          (title (as-str (dict-get f "title")))
+          (folder (notes/doc/row-folder row)))
+        (html/li
+          (html/attr "class" "note-item")
+          (html/join
+            (list
+              (html/a
+                (string-append "/notes?slug=" slug)
+                (html/text title))
+              (if
+                (string-eq folder "")
+                ""
+                (html/span
+                  (html/attr "class" "muted")
+                  (html/text (string-append " \194\183 " folder)))))))))))
 
 (define notes/ui/missing
   (lambda
@@ -3618,11 +3997,173 @@
           (create (quote note) fields)
           (update (quote note) (car row) fields))))))
 
-;; index-read-path I3: agent/UI share the same tree-backed index rows
-(define notes/list-light
-  (lambda () (notes/doc/index-list))
-  "Alias of notes/doc/index-list (tree index; no legacy rows).")
+(define notes/ui/path-label
+  (lambda
+    (path)
+    (let
+      ((parts (string-split (as-str path) ".")))
+      (if
+        (null? parts)
+        ""
+        (string-replace (notes/light/last parts) "_" "-")))))
 
-;; index-read-path I1: /notes always hits notes/page → flat folders-html
+(define notes/ui/node-path
+  (lambda (n) (as-str (dict-get n "path"))))
+
+(define notes/ui/node-kind
+  (lambda (n) (as-str (dict-get n "kind"))))
+
+(define notes/ui/node-title
+  (lambda
+    (n)
+    (let
+      ((b (dict-get n "body")))
+      (let
+        ((t (dict-get b "title"))
+          (s (dict-get b "slug")))
+        (if
+          (if (null? t) #t (string-eq (as-str t) ""))
+          (if
+            (if (null? s) #t (string-eq (as-str s) ""))
+            (notes/ui/path-label (notes/ui/node-path n))
+            (as-str s))
+          (as-str t))))))
+
+(define notes/ui/is-garden-folder?
+  (lambda
+    (n root)
+    (if
+      (not (string-eq (notes/ui/node-kind n) "folder"))
+      #f
+      (string-eq
+        (notes/ui/node-path n)
+        (string-append (as-str root) ".garden")))))
+
+(define notes/ui/note-li-from-node
+  (lambda
+    (n)
+    (let
+      ((slug (as-str (dict-get (dict-get n "body") "slug")))
+        (title (notes/ui/node-title n)))
+      (let
+        ((s
+          (if (string-eq slug "") (notes/ui/path-label (notes/ui/node-path n)) slug)))
+        (html/li
+          (html/attr "class" "tree-item")
+          (html/a
+            (string-append "/notes?slug=" s)
+            (html/text title)))))))
+
+(define notes/ui/folder-details
+  (lambda
+    (n)
+    (let
+      ((path (notes/ui/node-path n))
+        (label (notes/ui/node-title n)))
+      (html/tag
+        "details"
+        (html/attrs
+          (list
+            (html/attr "class" "tree-folder")
+            (html/attr "hx-get"
+              (string-append
+                "/partials/notes-tree?path="
+                path))
+            (html/attr "hx-trigger" "toggle once")
+            (html/attr "hx-target" "find .tree-children")
+            (html/attr "hx-swap" "innerHTML")))
+        (html/join
+          (list
+            (html/tag
+              "summary"
+              (html/attr "class" "tree-folder-header")
+              (html/join
+                (list
+                  (html/span
+                    (html/attr "class" "tree-folder-icon")
+                    "&#x1F4C1; ")
+                  (html/text label))))
+            (html/div
+              (html/attr "class" "tree-children")
+              (html/span
+                (html/attr "class" "muted")
+                "open to load…"))))))))
+
+(define notes/ui/render-child
+  (lambda
+    (n root)
+    (let
+      ((k (notes/ui/node-kind n)))
+      (if
+        (string-eq k "heading")
+        ""
+        (if
+          (notes/ui/is-garden-folder? n root)
+          (notes/ui/tree-children-html (notes/ui/node-path n) root)
+          (if
+            (string-eq k "folder")
+            (notes/ui/folder-details n)
+            (if
+              (string-eq k "note")
+              (notes/ui/note-li-from-node n)
+              "")))))))
+
+(define notes/ui/tree-children-html
+  (lambda
+    (path root)
+    (let
+      ((kids (tree/list (as-str path) 1)))
+      (if
+        (null? kids)
+        (html/p* (html/attr "class" "muted") "(empty)")
+        (html/join
+          (list/map
+            (lambda (n) (notes/ui/render-child n root))
+            kids))))))
+
+(define notes/ui/tree-partial
+  (lambda
+    ()
+    (let
+      ((path (as-str (request-param "path")))
+        (root (notes/tree/root)))
+      (if
+        (string-eq path "")
+        (render-html (html/p* (html/attr "class" "muted") "missing path"))
+        (render-html
+          (html/div
+            (html/attr "class" "tree-children-inner")
+            (notes/ui/tree-children-html path root)))))))
+
+(define notes/ui/folders-html
+  (lambda
+    ()
+    (let
+      ((root (notes/tree/root)))
+      (html/div
+        (html/attr "class" "notes-tree")
+        (notes/ui/tree-children-html root root)))))
+
+(define notes/ui/index
+  (lambda
+    ()
+    (html/join
+      (list
+        (notes/tree/style)
+        (html/h1 "Notes")
+        (html/p*
+          (html/attr "class" "muted")
+          "Outline-first notes. Folders load on open (htmx).")
+        (html/p*
+          (html/attr "class" "muted")
+          (html/join
+            (list
+              (html/a "/notes?slug=inbox" "Open inbox")
+              " · "
+              (html/a "/notes" "All folders"))))
+        (notes/ui/create-form)
+        (html/h2 "Folders")
+        (notes/ui/folders-html)))))
+
+(route "/partials/notes-tree" "notes/ui/tree-partial")
 (route "/notes" "notes/page")
-
