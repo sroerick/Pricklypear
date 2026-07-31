@@ -460,6 +460,34 @@ let promote_functions (t : t) ~(source_id : string) ~(target_id : string)
                     (if rows = [] then acc else acc + 1))
               0 names
           in
+          (* branching.promote ROUTES TRAVEL WITH THEIR HANDLER:
+             upsert source view_bindings whose handler is a promoted name;
+             preserve visibility. Non-promoted handlers' routes stay put. *)
+          let () =
+            List.iter
+              (fun name ->
+                let sql =
+                  "INSERT INTO view_bindings " ^
+                  "  (branch_id, route, handler, visibility) " ^
+                  "SELECT $1, route, handler, " ^
+                  "       COALESCE(visibility, 'private') " ^
+                  "FROM view_bindings " ^
+                  "WHERE branch_id = $2 AND handler = $3 " ^
+                  "ON CONFLICT (branch_id, route) DO UPDATE " ^
+                  "SET handler = EXCLUDED.handler, " ^
+                  "    visibility = EXCLUDED.visibility"
+                in
+                let _ =
+                  exec conn
+                    ~params:
+                      [ Pgx.Value.of_string target_id
+                      ; Pgx.Value.of_string source_id
+                      ; Pgx.Value.of_string name ]
+                    sql
+                in
+                ())
+              names
+          in
           let () = Tree_store.recompute_head_hash conn ~branch_id:target_id in
           n
     with exn ->
@@ -1107,15 +1135,49 @@ let fork_branch (t : t) ~(parent_id : string) ~(owner : string)
 
    Wrapped in a SERIALIZABLE transaction via [with_transaction] since
    it16 (previously best-effort atomic — carried-forward since it9). *)
+type merge_result = {
+  count : int;
+  conflicts : string list;
+}
+
+(** Format merge result for the (merge ...) prim / UI. *)
+let format_merge_result (r : merge_result) : string =
+  match r.conflicts with
+  | [] -> Printf.sprintf "merged %d rows" r.count
+  | cs ->
+      Printf.sprintf "merged %d rows (%d conflicts: %s)"
+        r.count (List.length cs) (String.concat ", " cs)
+
 let merge_branch (t : t) ~(source_id : string) ~(target_id : string)
-  : int option =
+  : merge_result option =
   (try
       with_transaction t (fun conn ->
         match conn with
         | None -> None  (* no DB; can't merge *)
         | Some conn ->
-            (* Upsert all function_defs from source into target. Returns
-               the count of merged rows via Pg's INSERT RETURNING. *)
+            (* CONFLICT REPORT (branching.merge): names both sides own where
+               target.updated_at > source.updated_at. Report-only; LWW still. *)
+            let conflict_sql =
+              "SELECT s.name FROM function_defs s " ^
+              "JOIN function_defs t ON t.name = s.name AND t.branch_id = $1 " ^
+              "WHERE s.branch_id = $2 AND t.updated_at > s.updated_at " ^
+              "ORDER BY s.name"
+            in
+            let conflict_rows =
+              exec conn
+                ~params:
+                  [ Pgx.Value.of_string target_id
+                  ; Pgx.Value.of_string source_id ]
+                conflict_sql
+            in
+            let conflicts =
+              List.filter_map
+                (function
+                  | [ c ] -> Pgx.Value.to_string c
+                  | _ -> None)
+                conflict_rows
+            in
+            (* SCOPE: function_defs only — never type_defs / view_bindings. *)
             let sql =
               "INSERT INTO function_defs " ^
               "  (branch_id, name, body, author, doc, package, updated_at) " ^
@@ -1133,7 +1195,7 @@ let merge_branch (t : t) ~(source_id : string) ~(target_id : string)
                 sql
             in
             let () = Tree_store.recompute_head_hash conn ~branch_id:target_id in
-            (Some (List.length rows)))
+            (Some { count = List.length rows; conflicts }))
     with exn ->
       Printf.eprintf "[store] merge_branch error: %s\n"
         (Printexc.to_string exn);

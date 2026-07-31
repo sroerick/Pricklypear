@@ -246,12 +246,12 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
             in
             (match src_id, tgt_id with
              | Some s, Some tg ->
-                 let n = Store.merge_branch t.store
+                 let r = Store.merge_branch t.store
                             ~source_id:s ~target_id:tg in
-                 (match n with
-                  | Some count ->
+                 (match r with
+                  | Some res ->
                       (Pricklypear_lisp.Ast.VStr
-                                    (Printf.sprintf "merged %d rows" count))
+                                    (Store.format_merge_result res))
                   | None ->
                       (Pricklypear_lisp.Ast.VStr "merge failed"))
              | _ ->
