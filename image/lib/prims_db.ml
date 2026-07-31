@@ -731,6 +731,61 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
        | Error e -> (Pricklypear_lisp.Ast.VStr ("promote: " ^ e))
        | Ok n -> (Pricklypear_lisp.Ast.VStr (string_of_int n))));
 
+  (* (promote-to-main source-ref name...) | (promote-to-main source-ref (list name...))
+     Admin-only selective upsert onto system/main. branching.promote / land. *)
+  Primitives.register tbl "promote-to-main"
+    (fun args ->
+      let names_of_val = function
+        | Pricklypear_lisp.Ast.VStr s -> [ s ]
+        | Pricklypear_lisp.Ast.VList xs ->
+            List.filter_map
+              (function
+                | Pricklypear_lisp.Ast.VStr s -> Some s
+                | Pricklypear_lisp.Ast.VSymbol s -> Some s
+                | _ -> None)
+              xs
+        | Pricklypear_lisp.Ast.VSymbol s -> [ s ]
+        | _ -> []
+      in
+      match args with
+      | [] ->
+          (Pricklypear_lisp.Ast.VStr
+             "promote-to-main: need source-ref and name(s)")
+      | Pricklypear_lisp.Ast.VStr source_ref :: rest ->
+          let names = List.concat_map names_of_val rest in
+          if names = [] then
+            (Pricklypear_lisp.Ast.VStr "promote-to-main: no names selected")
+          else if
+            (not t.is_admin)
+            && t.manifest.username <> "admin"
+            && t.manifest.username <> "system"
+          then
+            (Pricklypear_lisp.Ast.VStr
+               "promote-to-main: requires admin")
+          else begin
+            let owner, name =
+              match String.split_on_char '/' source_ref with
+              | [ o; n ] when o <> "" && n <> "" -> (o, n)
+              | _ -> ("", source_ref)
+            in
+            match Store.lookup_branch_id_by_name t.store ~owner ~name with
+            | None ->
+                (Pricklypear_lisp.Ast.VStr
+                   ("promote-to-main: no such source branch: " ^ source_ref))
+            | Some source_id ->
+                let n =
+                  Store.promote_functions t.store ~source_id
+                    ~target_id:Store.system_main_id ~names
+                in
+                (if Store.current_branch_id t.store = Store.system_main_id then
+                   rehydrate_fn t);
+                (Pricklypear_lisp.Ast.VStr
+                   (Printf.sprintf "promoted %d → system/main" n))
+          end
+      | _ ->
+          (Pricklypear_lisp.Ast.VStr
+             "promote-to-main: need source-ref string first"));
+
   (* (current-branch) -> VStr *)
   Primitives.register_sync tbl "current-branch"
     (fun _ ->
