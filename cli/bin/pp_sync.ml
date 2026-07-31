@@ -6,6 +6,7 @@
       pp-sync pull-all
       pp-sync reseed <pkg>          admin: upsert libs → system/main
       pp-sync snapshot [--branch R] [--out DIR]
+      pp-sync land <pkg> [name ...] [--from owner/branch]
 *)
 
 open Cmdliner
@@ -215,7 +216,8 @@ let cmd_status ~url ~user ~password ~timeout ~verbose package =
           if only_live <> [] then
             Printf.printf "  only-live: %s\n" (String.concat ", " only_live);
           if verbose && both <> [] then
-            Printf.printf "  both: %s\n" (String.concat ", " both))
+            Printf.printf "  both: %s\n" (String.concat ", " both);
+          if only_local <> [] || only_live <> [] then rc := 1)
     pkgs;
   !rc
 
@@ -370,6 +372,225 @@ let cmd_snapshot ~url ~user ~password ~timeout ~branch ~out_dir =
     rc
   end
 
+
+let git_run ~cwd args : (int * string) =
+  let prev = Sys.getcwd () in
+  let restore () = try Sys.chdir prev with _ -> () in
+  try
+    Sys.chdir cwd;
+    let stdout_path = Filename.temp_file "pp_sync_git" ".out" in
+    let q a =
+      if
+        String.exists
+          (function ' ' | '"' | '\'' | '\\' -> true | _ -> false)
+          a
+      then Filename.quote a
+      else a
+    in
+    let cmdline =
+      String.concat " " (List.map q ("git" :: args))
+      ^ " >"
+      ^ Filename.quote stdout_path
+      ^ " 2>&1"
+    in
+    let code = Sys.command cmdline in
+    let out =
+      if Sys.file_exists stdout_path then read_file stdout_path else ""
+    in
+    (try Sys.remove stdout_path with _ -> ());
+    restore ();
+    (code, String.trim out)
+  with exn ->
+    restore ();
+    (127, Printexc.to_string exn)
+
+let checkout_ref ~url ~user ~password ~timeout ref_ =
+  match
+    live ~url ~user ~password ~timeout (Printf.sprintf "(checkout %S)" ref_)
+    |> live_value
+  with
+  | Error e -> Error e
+  | Ok msg ->
+      if String.trim msg = "checked out" then Ok () else Error msg
+
+let current_branch ~url ~user ~password ~timeout =
+  match live ~url ~user ~password ~timeout "(current-branch)" |> live_value with
+  | Ok s -> String.trim s
+  | Error _ -> ""
+
+let starts_with prefix s =
+  let n = String.length prefix in
+  String.length s >= n && String.sub s 0 n = prefix
+
+(** pp-sync land <pkg> [name...] [--from owner/branch]
+    1 resolve names on source
+    2 promote-to-main
+    3 export-package from system/main → libs/<pkg>/lib.pp
+    4 git add + commit
+    5 report SHA
+    Never pushes; never unoverrides. Fail-fast per step. *)
+let cmd_land ~url ~user ~password ~timeout ~from_ref ~package ~names =
+  if package = "" then begin
+    prerr_endline "land: need package name";
+    2
+  end else
+    let prev = current_branch ~url ~user ~password ~timeout in
+    let source =
+      if from_ref <> "" then from_ref
+      else if prev <> "" then prev
+      else "admin/personal"
+    in
+    let restore () =
+      if prev <> "" then
+        ignore (checkout_ref ~url ~user ~password ~timeout prev)
+    in
+    Printf.printf "land: pkg=%s from=%s\n%!" package source;
+    match checkout_ref ~url ~user ~password ~timeout source with
+    | Error e ->
+        prerr_endline ("land step1 checkout source: " ^ e);
+        1
+    | Ok () ->
+        let name_list_res =
+          if names <> [] then Ok names
+          else
+            match
+              live ~url ~user ~password ~timeout
+                (Printf.sprintf "(package-bindings %S)" package)
+              |> live_value
+            with
+            | Error e -> Error ("land step1 package-bindings: " ^ e)
+            | Ok s ->
+                let ns = unwrap_list_of_strings s in
+                if ns = [] then
+                  Error
+                    (Printf.sprintf
+                       "land step1: no bindings for package %S on %s" package
+                       source)
+                else Ok ns
+        in
+        match name_list_res with
+        | Error e ->
+            prerr_endline e;
+            restore ();
+            1
+        | Ok name_list ->
+            Printf.printf "land: promoting %d name(s): %s\n%!"
+              (List.length name_list) (String.concat ", " name_list);
+            let names_lit =
+              name_list
+              |> List.map (fun n -> Printf.sprintf "%S" n)
+              |> String.concat " "
+            in
+            let promote_expr =
+              Printf.sprintf "(promote-to-main %S %s)" source names_lit
+            in
+            match live ~url ~user ~password ~timeout promote_expr |> live_value with
+            | Error e ->
+                prerr_endline ("land step2 promote failed: " ^ e);
+                restore ();
+                1
+            | Ok msg ->
+                let msg = String.trim msg in
+                if
+                  starts_with "promote-to-main:" msg
+                  || starts_with "promote:" msg
+                  || not (starts_with "promoted " msg)
+                then begin
+                  prerr_endline ("land step2 promote denied/failed: " ^ msg);
+                  restore ();
+                  1
+                end else begin
+                  Printf.printf "land step2: %s\n%!" msg;
+                  match
+                    checkout_ref ~url ~user ~password ~timeout "system/main"
+                  with
+                  | Error e ->
+                      prerr_endline ("land step3 checkout system/main: " ^ e);
+                      restore ();
+                      1
+                  | Ok () ->
+                      match
+                        live ~url ~user ~password ~timeout
+                          (Printf.sprintf "(export-package %S)" package)
+                        |> live_value
+                      with
+                      | Error e ->
+                          prerr_endline ("land step3 export: " ^ e);
+                          restore ();
+                          1
+                      | Ok text ->
+                          let path = pkg_path package in
+                          write_file path text;
+                          Printf.printf "land step3: wrote %s (%d bytes)\n%!"
+                            path (String.length text);
+                          let root = repo_root () in
+                          let rel = "libs/" ^ package ^ "/lib.pp" in
+                          let names_msg =
+                            if List.length name_list <= 6 then
+                              String.concat " " name_list
+                            else
+                              Printf.sprintf "%d names" (List.length name_list)
+                          in
+                          let commit_msg =
+                            Printf.sprintf "vault(%s): land %s" package
+                              names_msg
+                          in
+                          let add_code, add_out =
+                            git_run ~cwd:root [ "add"; "--"; rel ]
+                          in
+                          if add_code <> 0 then begin
+                            prerr_endline
+                              ("land step4 git add: " ^ add_out);
+                            prerr_endline
+                              "land: main promoted; vault written but not \
+                               committed";
+                            restore ();
+                            1
+                          end else
+                            let diff_code, _ =
+                              git_run ~cwd:root
+                                [ "diff"; "--cached"; "--quiet" ]
+                            in
+                            if diff_code = 0 then begin
+                              let _, sha =
+                                git_run ~cwd:root
+                                  [ "rev-parse"; "--short"; "HEAD" ]
+                              in
+                              Printf.printf
+                                "land OK: promoted [%s] → system/main; vault \
+                                 %s; HEAD %s (no new commit)\n%!"
+                                (String.concat ", " name_list)
+                                rel
+                                (if sha = "" then "?" else sha);
+                              restore ();
+                              0
+                            end else
+                              let c_code, c_out =
+                                git_run ~cwd:root
+                                  [ "commit"; "-m"; commit_msg ]
+                              in
+                              if c_code <> 0 then begin
+                                prerr_endline
+                                  ("land step4 git commit: " ^ c_out);
+                                prerr_endline
+                                  "land: promote+vault done; commit failed";
+                                restore ();
+                                1
+                              end else
+                                let _, sha =
+                                  git_run ~cwd:root
+                                    [ "rev-parse"; "--short"; "HEAD" ]
+                                in
+                                Printf.printf
+                                  "land OK: promoted [%s] → system/main; \
+                                   vault %s; commit %s\n%!"
+                                  (String.concat ", " name_list)
+                                  rel
+                                  (if sha = "" then "?" else sha);
+                                restore ();
+                                0
+                end
+
 let env_url =
   Pp_client.getenv_default "PP_URL" "http://127.0.0.1:18080"
 
@@ -380,8 +601,8 @@ let env_timeout =
   | Some s -> (try float_of_string s with _ -> 180.)
   | None -> 180.
 
-let main command package verbose url user password password_file timeout branch
-    out_dir =
+let main command package names verbose url user password password_file timeout
+    branch out_dir from_ref =
   let password =
     Pp_client.resolve_password ~password ~password_file
   in
@@ -398,13 +619,15 @@ let main command package verbose url user password password_file timeout branch
     | "reseed" -> cmd_reseed ~url ~user ~password ~timeout package
     | "snapshot" ->
         cmd_snapshot ~url ~user ~password ~timeout ~branch ~out_dir
+    | "land" ->
+        cmd_land ~url ~user ~password ~timeout ~from_ref ~package ~names
     | _ ->
         prerr_endline
-          "unknown command (status|pull|push|pull-all|reseed|snapshot)";
+          "unknown command            (status|pull|push|pull-all|reseed|snapshot|land)";
         2
 
 let command =
-  let doc = "status | pull | push | pull-all | reseed | snapshot" in
+  let doc = "status | pull | push | pull-all | reseed | snapshot | land" in
   Arg.(
     required
     & pos 0 (some string) None
@@ -442,14 +665,22 @@ let out_dir =
   in
   Arg.(value & opt string "" & info [ "out"; "o" ] ~docv:"DIR" ~doc)
 
+let names =
+  let doc = "Function names for land (default: all package-bindings on source)." in
+  Arg.(value & pos_right 1 string [] & info [] ~docv:"NAME" ~doc)
+
+let from_ref =
+  let doc = "Source branch for land (default: current session branch)." in
+  Arg.(value & opt string "" & info [ "from" ] ~docv:"OWNER/BRANCH" ~doc)
+
 let term =
   Term.(
-    const main $ command $ package $ verbose $ url $ user $ password
-    $ password_file $ timeout $ branch $ out_dir)
+    const main $ command $ package $ names $ verbose $ url $ user $ password
+    $ password_file $ timeout $ branch $ out_dir $ from_ref)
 
 let cmd =
   let doc =
-    "Sync / snapshot / reseed Pricklypear packages (live image ↔ repo vault)."
+    "Sync / snapshot / reseed / land Pricklypear packages (live image ↔ repo vault)."
   in
   Cmd.v (Cmd.info "pp-sync" ~doc) term
 
