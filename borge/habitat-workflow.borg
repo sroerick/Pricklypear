@@ -1,0 +1,312 @@
+(project pricklypear-habitat-workflow
+ (doc "Pricklypear book chapter: habitat-workflow")
+ (status planned)
+ (convention ocaml-dune)
+ (section habitat-workflow
+  (doc "Spec-in-the-image: the borge discipline (spec -> build -> compare) as a habitat-native workflow, with promote as the goalpost-immobility gate")
+  (status planned)
+
+  (verify
+   (smoke "notes docs spec/<pkg> exist for at least one package and pass habitat lint queries")
+   (smoke "redefining a flow-listed public binding without a spec/decisions mention shows up in the drift report"))
+
+  (details
+   (doc (|
+        THE PROBLEM THIS CHAPTER EXISTS TO SOLVE
+
+        Package development on the habitat is agent-driven and
+        session-based (phone REPL, pp_eval, browser). Without an
+        artifact that outlives the turn, agents exhibit three
+        failure modes:
+
+        1. Multiple happy paths through one workflow — nothing
+           records which path was chosen, so each session
+           re-derives "how this works" from the code, and code
+           under-specifies that.
+        2. Redundant problems — no registry of known problems,
+           so the same issue is "discovered" twice and fixed two
+           incompatible ways.
+        3. Flip-flop rewrites — solving A with B's approach,
+           breaking B, reimplementing A. Nothing records that the
+           current shape was a DECISION WITH A REASON, so
+           broken-looking code reads as "never wanted" instead of
+           "wanted, currently broken."
+
+        File-borge suppresses these by forcing intent to exist as
+        an artifact (the .borg book) that outlives the turn, and
+        by gating edits so the agent cannot move the target while
+        shooting at it. This chapter ports the DISCIPLINE, not the
+        file mechanics.
+
+        THE CENTRAL MOVE: GATE THE PROMOTE, NOT THE REPL
+
+        File-borge gates keystrokes (plan/make file locks) because
+        a working tree has no cheaper boundary. The habitat has a
+        much better boundary already: the branch lens. So
+        habitat-workflow gates the PROMOTE. Pre-commit hooks vs CI.
+
+        - The REPL stays playful and chaotic. Agents may thrash
+          freely on user/personal and user/dev branches.
+        - Nothing reaches system/main unless the comparison loop
+          passes (spec-checks).
+        - Promote (branching.promote) becomes pp's commit, and it
+          grows a checklist. Review becomes looking at a page, not
+          running a toolchain.
+
+        THE LITERATE INVERSION
+
+        In file-borge the book and the code live in different
+        formats in different files, so a whole tool (balance /
+        drift / report) exists to correlate them. On the habitat,
+        spec docs, function docs, and code are ALL sexps in the
+        same store under the same branching. So the book stops
+        being a source artifact and becomes a VIEW: a spec doc's
+        outline owns the narrative order; the referenced bindings
+        fill in underneath via their function-doc and source.
+        Drift stops being a report you run and becomes RENDERING:
+        a chapter whose referenced binding was renamed shows a
+        hole where the paragraph used to be. There is nothing to
+        sync because the book route is a query.
+
+        RELATIONSHIP TO THE FILE BOOK
+
+        The OCaml kernel (image/, lisp/, migrations/) remains
+        governed by THIS multi-file .borg book; git stays its
+        source of truth. Habitat-workflow governs Nopales package
+        code (libs/*, and their live counterparts on branches).
+        Habitat spec docs are NOTES DOCS, so they branch like
+        everything else: humans edit them on system/main; agents
+        on branches propose changes via spec-issues and pending
+        edits that the human accepts at promote time. The
+        authorship-integrity rule file-borge enforces by lint
+        ("agents never touch human comments") is here STRUCTURAL:
+        spec docs live on main, agent sessions cannot write main,
+        so the violation is impossible rather than detectable.
+        pp-sync snapshot remains the durability/vault path for
+        spec docs exactly as for package code.
+   |))
+  )
+
+  (subsection spec-docs
+   (doc "One notes doc per package (slug spec/<pkg>): flows, canonical paths, decisions, status — the intent artifact that outlives the turn")
+   (status planned)
+   (verify
+    (smoke "(notes/doc/get \"spec/todo\") returns a doc with flows/decisions sections")
+    (smoke "a spec doc's flow entries name existing function bindings (resolvable via function-doc)"))
+   (details
+    (doc (|
+         Every package that receives agent-driven development gets
+         ONE notes doc with slug spec/<pkg>. It is short and
+         structured, not prose-heavy:
+
+         FLOWS
+           The user-visible workflows, numbered. Each flow names
+           the ONE canonical path through the bindings, e.g.
+           "add -> todo/create -> todo/render-row". New code paths
+           must attach to a flow or create one — this is what
+           kills multiple-happy-paths.
+
+         DECISIONS
+           An append-mostly log of non-obvious choices WITH
+           REASONS ("render is a pure function of the row so htmx
+           swaps stay dumb"). This is the flip-flop killer: the
+           next session can distinguish "wanted, currently broken"
+           from "never wanted."
+
+         STATUS
+           One line per flow: works / half-built / broken.
+
+         Spec docs live on system/main (shared intent). Branch
+         lenses mean an agent CAN fork a spec doc onto its branch
+         to draft a proposal, but promote of spec docs is a
+         human-visible, human-approved step (see spec-checks).
+         Function-level docs (define docstrings,
+         lisp-interpreter.define-docstring) are the per-binding
+         layer; the spec doc is the per-package narrative layer.
+         A function-doc entry SHOULD reference its flow number(s).
+   |))
+  
+   )
+  )
+  (subsection session-ritual
+   (doc "The agent-facing protocol: branch-scoped work, obituary rule, file-don't-fix, handoff — recorded in the live agents note")
+   (status planned)
+   (verify
+    (smoke "(notes/doc/get \"agents\") contains the session-ritual rules (obituary, file-don't-fix, handoff)")
+    (smoke "log/issues and log/sessions notes docs exist and accrete entries"))
+   (details
+    (doc (|
+         The durable agent guide is the notes doc with slug
+         agents (advertised in /agent.txt); habitat-workflow
+         adds these rules to it. All are notes-doc mechanics,
+         zero kernel work:
+
+         1. WORK ON YOUR BRANCH. Agent sessions define/route on
+            <user>/personal or a session dev branch, never
+            directly on system/main. End of session: diff the
+            lens (which bindings did I touch?), self-review
+            against the declared flows, promote or revert.
+
+         2. NO SILENT REVERSALS (the obituary rule). An agent
+            may not replace or delete an existing implementation
+            without first writing its obituary in the spec doc's
+            decisions section: what it was, why it existed, what
+            changed in the world that invalidates it. Writing the
+            obituary forces the agent to notice it is flip-
+            flopping; half the time it will realize the old
+            approach was right and something ELSE is broken.
+
+         3. FILE, DON'T FIX. Out-of-scope discoveries go to the
+            log/issues doc, one line each, instead of expanding
+            session scope. This is borge issue new for the
+            habitat — and since notes docs are data, it needs no
+            gitignored directory.
+
+         4. HANDOFF NOTE. Session ends with ~3 lines appended to
+            log/sessions: what changed, what is half-done, what
+            was deliberately NOT done. Flip-flop mostly happens
+            ACROSS sessions, when the next session cannot tell
+            half-built from broken.
+
+         Enforcement is by instruction (agents note) first;
+         mechanical checks (spec-checks) make violations visible
+         rather than relying on agent virtue.
+   |))
+  
+   )
+  )
+  (subsection spec-checks
+   (doc "Promote-time comparison: spec->code resolution, code->spec acknowledgment, doc coverage — promote grows a checklist")
+   (status planned)
+   (verify
+    (smoke "promote preview lists flow bindings that fail to resolve on the source branch")
+    (smoke "promote preview lists public bindings redefined on the source branch with no spec/decisions mention")
+    (smoke "promote preview lists public bindings with empty function-doc"))
+   (details
+    (doc (|
+         Promote (branching.promote) is the commit of the
+         habitat; this subsection hangs the comparison loop on
+         it. Before upserting, promote (or its preview UI) runs
+         three checks against the source branch and the package
+         spec doc, and reports — starting as soft warnings,
+         graduating to bounces for admin-into-main promotes:
+
+         1. SPEC->CODE: every flow in spec/<pkg> names its
+            canonical bindings; they MUST all resolve on the
+            source branch. This is borge drift, but exact —
+            sexp references, not grep.
+
+         2. CODE->SPEC: every PUBLIC binding redefined on the
+            source branch is mentioned somewhere in the spec
+            doc or its decisions section. Redefining
+            todo/render without a spec acknowledgment bounces.
+            This is the anti-flip-flop tripwire: the mechanical
+            form of the obituary rule.
+
+         3. DOC COVERAGE: promote refuses undocumented PUBLIC
+            bindings (empty function-doc). define stays loose —
+            docs are not an ABI change, they are a shipping
+            requirement. Undocumented is fine on your branch,
+            unshippable on main. Docs get written at the moment
+            of "this is real now," which is also the moment the
+            agent can best explain what it built and why.
+
+         "Public" = bindings referenced by routes or by other
+         packages (the surface a consumer can name); internal
+         helpers are exempt. SPEC DOC CHANGES travel through
+         promote too, and are shown to the human explicitly
+         ("this promotion also modifies spec/todo — accept?").
+         Friction, not locks: one tap to approve; the agent can
+         never silently ratchet the goalposts.
+
+         DEPENDENCY NOTE: checks 2–3 want define's persist path
+         to be synchronous enough that the check sees the write
+         (the fire-and-forget persist race must be fixed first;
+         .borge-bugs). A phase check that races the write is
+         theater.
+   |))
+  
+   )
+  )
+  (subsection book-view
+   (doc "The literate inversion: spec doc outlines own narrative order; bindings inline underneath — drift becomes rendering")
+   (status planned)
+   (verify
+    (smoke "GET /book/todo renders the spec doc outline with referenced bindings' doc + source inlined")
+    (smoke "a spec doc referencing a renamed binding renders a visible hole instead of stale prose"))
+   (details
+    (doc (|
+         A route /book/<pkg> (private) renders the spec doc as a
+         chapter: walk the outline; at each flow or binding
+         reference, inline the binding's function-doc and source
+         (both are sexps in the same store). The book is a query,
+         so it is ALWAYS current — the thing Knuth wanted and
+         files could never quite give.
+
+         DRIFT AS RENDERING: a reference that no longer resolves
+         renders as a visible hole in the page (styled, obvious),
+         not as a line in a report. The book physically shows its
+         own staleness.
+
+         This complements, not replaces, the file book: the OCaml
+         kernel's chapters remain .borg files. /book serves the
+         Nopales package layer. Whether the two ever merge into
+         one rendered volume is an open question, explicitly not
+         decided here.
+   |))
+  
+   )
+  )
+  (subsection spec-health
+   (doc "Habitat health page: packages x (flows verified, doc coverage, drift holes) — borge report as a browser page")
+   (status planned)
+   (verify
+    (smoke "GET /spec lists every package with a spec doc, its flow resolution status, and doc coverage"))
+   (details
+    (doc (|
+         /spec is the habitat's standing health page (private,
+         admin): one row per package that has a spec doc —
+         flows resolving / broken, doc coverage count, count of
+         drift holes in /book rendering, last promote. This is
+         borge report for the image, sized for a phone screen:
+         review becomes LOOKING AT A PAGE.
+
+         Discovery contract: describe / apropos-docs surface doc
+         coverage alongside results ("todo: 14 bindings, 3
+         undocumented"), so the gap follows the agent around
+         instead of waiting for a report run.
+   |))
+  
+   )
+  )
+  (subsection non-goals
+   (doc "What habitat-workflow is NOT")
+   (status planned)
+   (details
+    (doc (|
+         - NOT a port of borge-the-tool into Nopales. No balance,
+           no parse, no lint pipeline; the store is the parser.
+         - NOT kernel governance. OCaml/migrations stay under
+           the file book and git, full stop.
+         - NOT REPL gating. No plan/make modes on eval, no
+           dynamic-extent phase locks on define. Play is
+           unrestricted on branches; the gate is promote.
+         - NOT a rewrite of branching.promote's data model.
+           This chapter adds checks around the existing
+           selective-upsert mechanism.
+         - NOT mandatory for every package. One-off garden
+           scripts and personal-branch experiments never need a
+           spec doc. Spec docs are for packages with multiple
+           agent sessions of history — exactly where the three
+           failure modes bite.
+         - NOT provenance/audit of AI-authored code — that is
+           ai-authoring.provenance. This chapter consumes
+           author info but defines no new attribution model.
+   |))
+  
+ 
+
+   )
+  )
+ )
+)

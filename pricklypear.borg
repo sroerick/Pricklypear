@@ -333,4 +333,11 @@
   (doc "Book chapter — full text inlined from borge/ai-authoring.borg")
   (inline borge/ai-authoring.borg)
  )
+ (section habitat-workflow
+  (doc "Book chapter — spec-in-the-image: the borge discipline as
+        a habitat-native workflow; promote is the goalpost-
+        immobility gate. Full text inlined from
+        borge/habitat-workflow.borg.")
+  (inline borge/habitat-workflow.borg)
+ )
 )
