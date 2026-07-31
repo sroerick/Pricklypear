@@ -47,3 +47,8 @@
  (name io_eio_test)
  (modules io_eio_test)
  (libraries pricklypear-image eio_main))
+
+(test
+ (name history_test)
+ (modules history_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx))

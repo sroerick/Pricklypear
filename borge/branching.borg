@@ -451,7 +451,7 @@
   )
   (subsection code-history
    (doc "Append-only before-image history for code rows, captured by Postgres triggers")
-   (status planned)
+   (status implemented)
    (implements migrations/012_code_history.sql image/lib/store.ml image/lib/session.ml)
    (details
     (doc (|

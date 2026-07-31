@@ -1374,3 +1374,199 @@ let function_package_map (t : t) : (string, string) Hashtbl.t =
       Printf.eprintf "[store] function_package_map error: %s\n"
             (Printexc.to_string exn);
           (Hashtbl.create 1))
+
+(* ---- code-history (branching.code-history) ---- *)
+
+type code_history_entry = {
+  rel : string;
+  op : string;
+  author : string option;
+  doc : string option;
+  package : string option;
+  changed_at : string;
+  body : string option; (* jsonb text *)
+}
+
+let code_history_entry_to_yojson (e : code_history_entry) : Yojson.Safe.t =
+  let opt_str = function None -> `Null | Some s -> `String s in
+  let body_json =
+    match e.body with
+    | None -> `Null
+    | Some s ->
+        (try Yojson.Safe.from_string s with _ -> `String s)
+  in
+  `Assoc
+    [ ("rel", `String e.rel)
+    ; ("op", `String e.op)
+    ; ("author", opt_str e.author)
+    ; ("doc", opt_str e.doc)
+    ; ("package", opt_str e.package)
+    ; ("changed_at", `String e.changed_at)
+    ; ("body", body_json)
+    ]
+
+(** Newest-first history rows for [name] on [branch_id].
+    Searches function_defs / type_defs / view_bindings history under the
+    same logical name (fn/type name or route path). *)
+let list_code_history (t : t) ~(branch_id : string) ~(name : string)
+  : code_history_entry list =
+  match t.conn with
+  | None -> []
+  | Some conn ->
+      (try
+         let sql =
+           "SELECT rel, op, author, doc, package, changed_at::text, " ^
+           "       body::text " ^
+           "FROM code_history " ^
+           "WHERE branch_id = $1 AND name = $2 " ^
+           "ORDER BY changed_at DESC, id DESC"
+         in
+         let rows =
+           exec conn
+             ~params:
+               [ Pgx.Value.of_string branch_id; Pgx.Value.of_string name ]
+             sql
+         in
+         List.filter_map
+           (fun row ->
+             match row with
+             | [ rel_c; op_c; author_c; doc_c; pkg_c; at_c; body_c ] ->
+                 (match
+                    ( Pgx.Value.to_string rel_c
+                    , Pgx.Value.to_string op_c
+                    , Pgx.Value.to_string at_c )
+                  with
+                  | Some rel, Some op, Some changed_at ->
+                      Some
+                        { rel
+                        ; op
+                        ; author = Pgx.Value.to_string author_c
+                        ; doc = Pgx.Value.to_string doc_c
+                        ; package = Pgx.Value.to_string pkg_c
+                        ; changed_at
+                        ; body = Pgx.Value.to_string body_c
+                        }
+                  | _ -> None)
+             | _ -> None)
+           rows
+       with exn ->
+         Printf.eprintf "[store] list_code_history: %s\n"
+           (Printexc.to_string exn);
+         [])
+
+let list_code_history_json (t : t) ~(branch_id : string) ~(name : string)
+  : string =
+  let entries = list_code_history t ~branch_id ~name in
+  Yojson.Safe.to_string
+    (`List (List.map code_history_entry_to_yojson entries))
+
+(** Live body text for a name on a branch: function body preferred, else
+    type fields, else view_bindings handler JSON. *)
+let live_code_body_text (t : t) ~(branch_id : string) ~(name : string)
+  : string option =
+  match t.conn with
+  | None -> None
+  | Some conn ->
+      (try
+         let try_fn () =
+           let sql =
+             "SELECT body::text FROM function_defs " ^
+             "WHERE branch_id = $1 AND name = $2"
+           in
+           match
+             exec conn
+               ~params:
+                 [ Pgx.Value.of_string branch_id; Pgx.Value.of_string name ]
+               sql
+           with
+           | [ [ c ] ] -> Pgx.Value.to_string c
+           | _ -> None
+         in
+         let try_ty () =
+           let sql =
+             "SELECT fields::text FROM type_defs " ^
+             "WHERE branch_id = $1 AND name = $2"
+           in
+           match
+             exec conn
+               ~params:
+                 [ Pgx.Value.of_string branch_id; Pgx.Value.of_string name ]
+               sql
+           with
+           | [ [ c ] ] -> Pgx.Value.to_string c
+           | _ -> None
+         in
+         let try_rt () =
+           let sql =
+             "SELECT jsonb_build_object('handler', handler, " ^
+             "  'visibility', COALESCE(visibility, 'private'))::text " ^
+             "FROM view_bindings WHERE branch_id = $1 AND route = $2"
+           in
+           match
+             exec conn
+               ~params:
+                 [ Pgx.Value.of_string branch_id; Pgx.Value.of_string name ]
+               sql
+           with
+           | [ [ c ] ] -> Pgx.Value.to_string c
+           | _ -> None
+         in
+         (match try_fn () with
+          | Some s -> Some s
+          | None ->
+              (match try_ty () with
+               | Some s -> Some s
+               | None -> try_rt ()))
+       with exn ->
+         Printf.eprintf "[store] live_code_body_text: %s\n"
+           (Printexc.to_string exn);
+         None)
+
+(** Minimal line-oriented text diff: lines only in [a], only in [b], or
+    shared. Not a full LCS unified diff — good enough for prim smoke. *)
+let simple_text_diff ~(a : string) ~(b : string) : string =
+  let lines s =
+    if s = "" then []
+    else String.split_on_char '\n' s
+  in
+  let la = lines a in
+  let lb = lines b in
+  let module S = Set.Make (String) in
+  let sa = List.fold_left (fun acc x -> S.add x acc) S.empty la in
+  let sb = List.fold_left (fun acc x -> S.add x acc) S.empty lb in
+  let buf = Buffer.create 256 in
+  Buffer.add_string buf "--- history\n+++ current\n";
+  List.iter
+    (fun line ->
+      if not (S.mem line sb) then begin
+        Buffer.add_char buf '-';
+        Buffer.add_string buf line;
+        Buffer.add_char buf '\n'
+      end)
+    la;
+  List.iter
+    (fun line ->
+      if not (S.mem line sa) then begin
+        Buffer.add_char buf '+';
+        Buffer.add_string buf line;
+        Buffer.add_char buf '\n'
+      end)
+    lb;
+  Buffer.contents buf
+
+(** Current live body vs the nth-newest history body (1-based). *)
+let code_diff (t : t) ~(branch_id : string) ~(name : string) ~(n : int)
+  : (string, string) result =
+  if n < 1 then Error "code-diff: n must be >= 1"
+  else
+    let hist = list_code_history t ~branch_id ~name in
+    match List.nth_opt hist (n - 1) with
+    | None -> Error (Printf.sprintf "code-diff: no history entry #%d" n)
+    | Some entry ->
+        let old_body = Option.value entry.body ~default:"" in
+        let live =
+          Option.value
+            (live_code_body_text t ~branch_id ~name)
+            ~default:""
+        in
+        Ok (simple_text_diff ~a:old_body ~b:live)
