@@ -71,6 +71,24 @@ let kernel_special_names =
     "cond"; "and"; "or";
     "apply"; "list/map"; "list/filter"; "list/foldl"; "list/foldr" ]
 
+(** Refuse define/defmacro of kernel special forms and of names currently
+    bound to [VPrim] (registered kernel prims). Closes BORGE-1785213238:
+    a user/AI (define is-admin? …) / (define create …) must not shadow the
+    prim the image and effect gates rely on. Special forms are always
+    reserved; prims are reserved once bound as [VPrim] in [env] (image
+    binds the full catalog at boot / rehydrate before load_defs). *)
+let assert_bindable_name (env : env) (name : string) : unit =
+  if List.mem name kernel_special_names then
+    raise
+      (Interp_error
+         (User_error ("cannot redefine kernel special form: " ^ name)));
+  match Env.lookup env name with
+  | Some (VPrim _) ->
+      raise
+        (Interp_error
+           (User_error ("cannot redefine kernel primitive: " ^ name)))
+  | _ -> ()
+
 (** Desugar multiple body exprs to a single expr (begin/seq chain). *)
 let body_of_exprs = function
   | [] -> Lit VNil
@@ -366,6 +384,7 @@ let rec eval_step
   | Define (name, val_expr) ->
       (match parse_top_define (Define (name, val_expr)) with
        | Some { name = n; body; doc = _ } ->
+           assert_bindable_name env n;
            let v =
              match body with
              | Lambda (params, b) -> VLambda (params, b, env)
@@ -374,6 +393,7 @@ let rec eval_step
            Env.define env n v;
            Done v
        | None ->
+           assert_bindable_name env name;
            let v = eval ~budget ~prims env val_expr in
            Env.define env name v;
            Done v)
@@ -443,6 +463,57 @@ and expand_and_eval_macro
   in
   Cont (call_env, expansion_e)
 
+(** Fully macroexpand [e] in [env], returning an expr tree.
+    Used by the public-route gate and AI install effect checks so
+    [Effect.infer] sees EXPANDED bodies (lisp-interpreter.effects §4;
+    BORGE-1785212882). Keeps [Effect.infer] pure — expansion runs here
+    with the eval rim (macro bodies are expected to be pure templates).
+
+    Does not expand under [Quote]. Recurses into lambda/let/if/seq/app
+    subforms. When the head of an app is a [VMacro], expands once and
+    loops (same as the [macroexpand] special form). *)
+and macroexpand_expr
+    ?(budget = make_budget ())
+    ?(prims : prim_table = make_prim_table ())
+    (env : env)
+    (e : expr) : expr =
+  tick budget;
+  let go e' = macroexpand_expr ~budget ~prims env e' in
+  match e with
+  | Quote _ as q -> q
+  | Lit _ | Var _ as atom -> atom
+  | Lambda (ps, body) -> Lambda (ps, go body)
+  | If (a, b, c) -> If (go a, go b, go c)
+  | Seq (a, b) -> Seq (go a, go b)
+  | Let (n, v, body) -> Let (n, go v, go body)
+  | Letrec (binds, body) ->
+      Letrec (List.map (fun (n, be) -> (n, go be)) binds, go body)
+  | Define (n, body) -> Define (n, go body)
+  | Prim (name, args) -> Prim (name, List.map go args)
+  | App (Var name, args) ->
+      (match Env.lookup env name with
+       | Some (VMacro (params, body, clo_env)) ->
+           let expected = List.length params
+           and got = List.length args in
+           if expected <> got then
+             raise (Interp_error (Arity_mismatch ("macro", expected, got)));
+           let arg_vals = List.map reify_expr args in
+           let menv = Env.child clo_env in
+           List.iter2 (fun p a -> Env.define menv p a) params arg_vals;
+           let expansion_v = eval ~budget ~prims menv body in
+           let expansion_e =
+             try value_to_expr expansion_v
+             with Interp_error _ as ex -> raise ex
+                | _ ->
+                    raise
+                      (Interp_error
+                         (User_error
+                            "macro expansion is not a valid expr tree"))
+           in
+           go expansion_e
+       | _ -> App (Var name, List.map go args))
+  | App (h, args) -> App (go h, List.map go args)
+
 and eval_special_form
   ~(budget : budget)
   ~(prims : prim_table)
@@ -506,6 +577,7 @@ and eval_special_form
          the whole (define …) app. *)
       (match parse_top_define (App (Var "define", List.tl full_args)) with
        | Some { name = n; body; doc = _ } ->
+           assert_bindable_name env n;
            let v =
              match body with
              | Lambda (params, b) -> VLambda (params, b, env)
@@ -706,10 +778,7 @@ and eval_special_form
   | "unquote", _ | "unquote-splicing", _ ->
       raise (Interp_error (User_error "unquote outside quasiquote"))
   | "defmacro", [ _; Var name; params_expr; body ] ->
-      if List.mem name kernel_special_names then
-        raise
-          (Interp_error
-             (User_error ("cannot defmacro kernel special form: " ^ name)));
+      assert_bindable_name env name;
       let params =
         match params_expr with
         | Lit VNil -> []

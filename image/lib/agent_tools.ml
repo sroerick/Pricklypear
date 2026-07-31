@@ -104,10 +104,19 @@ let known_fn_from_store (t : t)
   let bindings = List.map (fun (n, e, _) -> (n, e)) rows in
   Lwt.return (Pricklypear_lisp.Effect.known_fn_of_bindings bindings)
 
-let check_ai_body_effects ?(known_fn = fun _ -> None) (body_src : string)
-  : (unit, string) result =
+let check_ai_body_effects ?(known_fn = fun _ -> None)
+    ?env (body_src : string) : (unit, string) result =
   try
     let expr = Pricklypear_lisp.Reader.read_one body_src in
+    (* Expand macros before infer when an env is available (BORGE-1785212882).
+       Without env, fall back to unexpanded — install paths that have a
+       session should pass ~env. *)
+    let expr =
+      match env with
+      | Some e ->
+          (try Pricklypear_lisp.Eval.macroexpand_expr e expr with _ -> expr)
+      | None -> expr
+    in
     let fx = Pricklypear_lisp.Effect.infer ~known_fn expr in
     if Pricklypear_lisp.Effect.policy_allows ~allow:(ai_allow_set ()) fx then
       Ok ()
@@ -134,7 +143,7 @@ let install_ai_function (t : t) ~(name : string) ~(body_src : string)
            (Printf.sprintf "ai body invalid: %s\n---\n%s" e preview))
   | Ok body_src ->
       let* known_fn = known_fn_from_store t in
-      (match check_ai_body_effects ~known_fn body_src with
+      (match check_ai_body_effects ~known_fn ~env:t.env body_src with
        | Error pe ->
            Lwt.return
              (Pricklypear_lisp.Ast.VStr
@@ -1425,7 +1434,7 @@ let llm_rewrite (t : t) ~(mode : string) ~(name : string) ~(concept : string)
   | Error e -> Lwt.return (Pricklypear_lisp.Ast.VStr ("ai error: " ^ e))
   | Ok body_src ->
       let* known_fn = known_fn_from_store t in
-      (match check_ai_body_effects ~known_fn body_src with
+      (match check_ai_body_effects ~known_fn ~env:t.env body_src with
        | Error pe ->
            Lwt.return
              (Pricklypear_lisp.Ast.VStr
@@ -1460,7 +1469,7 @@ let llm_seed (t : t) ~(requirement : string) ?(max_steps = 5) ()
   | Error e -> Lwt.return (Pricklypear_lisp.Ast.VStr ("seed error: " ^ e))
   | Ok body_src ->
       let* known_fn = known_fn_from_store t in
-      (match check_ai_body_effects ~known_fn body_src with
+      (match check_ai_body_effects ~known_fn ~env:t.env body_src with
        | Error pe ->
            Lwt.return
              (Pricklypear_lisp.Ast.VStr ("seed rejected: " ^ pe ^ "\n" ^ body_src))

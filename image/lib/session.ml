@@ -29,9 +29,20 @@ let eval_expr_rim (t : t) (expr : Pricklypear_lisp.Ast.expr)
 
 let load_defs (t : t) : unit Lwt.t =
   let* defs = Store.list_function_names_for_load t.store in
+  (* Kernel prim names already bound as VPrim on rehydrate. Never let a
+     stale function_defs row re-poison them (BORGE-1785213238). *)
+  let is_kernel_prim name =
+    List.exists (fun (n, _) -> n = name) t.kernel_catalog
+  in
   let* _ =
     Lwt_list.iter_s
       (fun (name, body, _author) ->
+        if is_kernel_prim name then begin
+          Printf.eprintf
+            "[session] load def %s skipped: kernel prim name (shadow blocked)\n%!"
+            name;
+          Lwt.return_unit
+        end else
         (* Always (re)define — parents first, children last → override. *)
         Lwt.catch
           (fun () ->
@@ -897,15 +908,9 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
     | Some c -> (Request_context.manifest c).username
     | None -> t.manifest.username
   in
-  register_crud "deftype"
-    (fun args ->
-      let uname =
-        match Lwt.get Request_context.current with
-        | Some c -> (Request_context.manifest c).username
-        | None -> t.manifest.username
-      in
-      if uname = "anonymous" then deny_anon "deftype"
-      else Crud.deftype t.store ~args ~author:uname);
+  (* deftype registration is deferred until require_admin is in scope
+     (BORGE-1785213343: schema-authority — admin only). Placeholder:
+     see register after require_admin below. *)
 
   (* (get 'type id) -> VStr fields-json | VNil *)
   register_crud "get"
@@ -1330,7 +1335,9 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
             (Pricklypear_lisp.Ast.VStr (op ^ ": denied: admin only"))
   in
 
-  (* (is-admin?) -> VBool. True iff the calling identity has users.is_admin. *)
+  (* (is-admin?) -> VBool. True iff the calling identity has users.is_admin.
+     Option 3 (BORGE-1785213238): reads Auth_store directly — never Env.lookup
+     of the name, so a user-defined shadow cannot grant admin. *)
   Primitives.register tbl "is-admin?"
     (fun _args ->
       let uname = caller_username () in
@@ -1341,6 +1348,17 @@ let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
         match u with
         | Some u -> Lwt.return (Pricklypear_lisp.Ast.VBool u.Auth_store.is_admin)
         | None -> Lwt.return (Pricklypear_lisp.Ast.VBool false));
+
+  (* (deftype 'name 'field1 ...) — admin only (BORGE-1785213343).
+     Schema authority lives with main/admin; garden authors must not
+     overwrite type_defs. Anonymous still raises (deny_anon). *)
+  register_crud "deftype"
+    (fun args ->
+      let uname = caller_username () in
+      if uname = "anonymous" then deny_anon "deftype"
+      else
+        require_admin "deftype" (fun () ->
+            Crud.deftype t.store ~args ~author:uname));
 
   (* (create-user username password [is-admin]) -> VStr new-user-id | error VStr.
      Admin only. Mirrors POST /admin/users action=create (create + set password
