@@ -201,12 +201,32 @@
           #f
           (not (string-eq (as-str filter) "")))
         (notes/ui/folder-section (as-str filter))
+        ;; Flat index via tree/note-index (budget-safe). Nested
+        ;; notes/tree/render retired (index-read-path I2).
         (let
-          ((names (notes/doc/folder-names)))
+          ((rows (notes/doc/index-list))
+            (cap 80))
           (if
-            (null? names)
+            (null? rows)
             (html/p* (html/attr "class" "muted") "No notes yet.")
-            (notes/tree/render)))))))
+            (html/join
+              (list
+                (html/p*
+                  (html/attr "class" "muted")
+                  (string-append
+                    "Showing first "
+                    (as-str cap)
+                    " of "
+                    (as-str (count rows))
+                    " notes (use ?folder= to filter)."))
+                (html/ul
+                  (html/attr "class" "card notes-flat-index")
+                  (list/foldl
+                    (lambda
+                      (acc row)
+                      (string-append acc (notes/ui/item-li-lite row)))
+                    ""
+                    (notes/list-take rows cap)))))))))))
 
 (define notes/ui/handle-post
   (lambda

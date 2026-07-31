@@ -1,8 +1,10 @@
 ;; package notes -- exported from live branch system/main
 ;; Sync: scripts/pp_sync.py pull|push
 ;;
-;; notes.tree-cutover: hierarchical storage under data.note.u.<user>.…
-;; Dual-read: tree first, legacy data_rows type=note fallback until M0 done.
+;; notes.tree-cutover / index-read-path: hierarchical storage under
+;; data.note.u.<user>.… Tree is the only notes store for reads (I4).
+;; Legacy data_rows type=note kept as inert archive; only
+;; notes/migrate/legacy-* may read (rows 'note).
 
 (define notes/tree/enabled?
   (lambda () #t))
@@ -1086,13 +1088,8 @@
 (define notes/doc/list
   (lambda
     ()
-    (let
-      ((tree-rows
-          (if (notes/tree/enabled?) (notes/tree/list-notes) (list))))
-      (if
-        (null? tree-rows)
-        (rows (quote note) 500)
-        tree-rows))))
+    ;; index-read-path I4: tree only — no data_rows fallback
+    (if (notes/tree/enabled?) (notes/tree/list-notes) (list))))
 
 (define notes/doc/list-folder
   (lambda
@@ -1138,15 +1135,8 @@
 (define notes/doc/row
   (lambda
     (slug)
-    (let
-      ((tr
-          (if (notes/tree/enabled?) (notes/tree/find-slug slug) ())))
-      (if
-        (null? tr)
-        (let
-          ((rs (find-rows (quote note) "slug" (as-str slug) 1)))
-          (if (null? rs) () (car rs)))
-        tr))))
+    ;; index-read-path I4: tree only — no find-rows fallback
+    (if (notes/tree/enabled?) (notes/tree/find-slug slug) ())))
 
 (define notes/doc/row-folder
   (lambda
@@ -2362,9 +2352,8 @@
 (define notes/row
   (lambda
     (slug)
-    (let
-      ((rs (find-rows (quote note) "slug" (as-str slug) 1)))
-      (if (null? rs) () (car rs)))))
+    ;; Prefer façade; legacy name kept for older callers
+    (notes/doc/row slug)))
 
 (define notes/search
   (lambda
@@ -2916,99 +2905,28 @@
       ((pos (string-find-pos path "/" 0 1)))
       (if (< pos 0) "" (substring path 0 pos)))))
 
-(define notes/tree/render
+;; index-read-path I2: nested Lisp folder walk retired (budget-unsafe at
+;; garden scale). Kept under notes/legacy/* for archaeology only — not routed.
+(define notes/legacy/tree-render
   (lambda
     ()
-    (let*
-      ((names (notes/doc/folder-names))
-        (all-names (append names (notes/tree/all-paths names)))
-        (roots
-          (notes/tree/sort-by-name
-            (notes/tree/children-of "" all-names)))
-        (uncat (notes/doc/list-folder "")))
-      (html/div
-        (html/attr "class" "notes-tree")
-        (html/join
-          (list
-            (if
-              (null? uncat)
-              ""
-              (html/tag
-                "details"
-                (html/attrs
-                  (list
-                    (html/attr "class" "tree-folder tree-uncategorized")
-                    (html/attr "open" "open")))
-                (html/join
-                  (list
-                    (html/tag
-                      "summary"
-                      (html/attr "class" "tree-folder-header")
-                      (html/join
-                        (list
-                          (html/span
-                            (html/attr "class" "tree-folder-icon")
-                            "&#x1F4C2; ")
-                          (html/text "(uncategorized)")
-                          (html/span
-                            (html/attr "class" "muted")
-                            (html/text
-                              (string-append " (" (as-str (length uncat)) ")"))))))
-                    (html/ul
-                      (html/attr "class" "tree-items")
-                      (notes/ui/folder-list ""))))))
-            (html/join
-              (list/map
-                (lambda
-                  (root)
-                  (notes/tree/render-folder root all-names 0))
-                roots))))))))
+    (html/p*
+      (html/attr "class" "muted")
+      "notes/tree/render retired — use notes/ui/folders-html (flat index).")))
 
-(define notes/tree/render-folder
+(define notes/legacy/tree-render-folder
   (lambda
     (path names depth)
-    (let*
-      ((label (notes/tree/folder-label path))
-        (children (notes/tree/children-of path names))
-        (items (notes/doc/list-folder path))
-        (item-count (length items)))
-      (html/tag
-        "details"
-        (html/attrs
-          (list
-            (html/attr "class" "tree-folder")
-            (html/attr "open" "open")))
-        (html/join
-          (list
-            (html/tag
-              "summary"
-              (html/attr "class" "tree-folder-header")
-              (html/join
-                (list
-                  (html/span
-                    (html/attr "class" "tree-folder-icon")
-                    "&#x1F4C1; ")
-                  (html/a
-                    (string-append "/notes?folder=" path)
-                    (html/text label))
-                  (html/span
-                    (html/attr "class" "muted")
-                    (html/text (string-append " (" (as-str item-count) ")"))))))
-            (if
-              (null? items)
-              ""
-              (html/ul
-                (html/attr "class" "tree-items")
-                (notes/ui/folder-list path)))
-            (if
-              (null? children)
-              ""
-              (html/join
-                (list/map
-                  (lambda
-                    (child)
-                    (notes/tree/render-folder child names (+ depth 1)))
-                  (notes/tree/sort-by-name children))))))))))
+    (html/p*
+      (html/attr "class" "muted")
+      (string-append
+        "notes/tree/render-folder retired ("
+        (as-str path)
+        ")"))))
+
+;; Tombstones so accidental callers fail loudly instead of walking garden.
+(define notes/tree/render notes/legacy/tree-render)
+(define notes/tree/render-folder notes/legacy/tree-render-folder)
 
 (define notes/tree/sort-by-name
   (lambda
@@ -3236,8 +3154,8 @@
           #f
           (not (string-eq (as-str filter) "")))
         (notes/ui/folder-section (as-str filter))
-        ;; Flat index via tree/note-index (budget-safe). Nested folder
-        ;; tree render remains available as notes/tree/render for later.
+        ;; Flat index via tree/note-index (budget-safe). Nested
+        ;; notes/tree/render retired (index-read-path I2).
         (let
           ((rows (notes/doc/index-list))
             (cap 80))
@@ -3699,4 +3617,12 @@
           (null? row)
           (create (quote note) fields)
           (update (quote note) (car row) fields))))))
+
+;; index-read-path I3: agent/UI share the same tree-backed index rows
+(define notes/list-light
+  (lambda () (notes/doc/index-list))
+  "Alias of notes/doc/index-list (tree index; no legacy rows).")
+
+;; index-read-path I1: /notes always hits notes/page → flat folders-html
+(route "/notes" "notes/page")
 
