@@ -289,3 +289,137 @@
         (list "unacknowledged" unack)
         (list "unacknowledged-count" (count unack)))))
   "Aggregate lint report for pkg on branch (soft warnings shape for promote).")
+
+;; ---- /spec health page (habitat-workflow.spec-health) ----
+
+(define spec/starts-with?
+  (lambda (s p)
+    (let ((ss (as-str s)) (pp (as-str p))
+          (n (string-length (as-str p))))
+      (and (>= (string-length ss) n)
+           (string-eq (substring ss 0 n) pp))))
+  "Prefix test.")
+
+(define spec/packages-with-docs
+  (lambda ()
+    (list/map
+      (lambda (row)
+        ;; notes/list row: (id . fields-json-str)
+        (let ((slug (as-str (dict-get (cdr row) "slug"))))
+          (substring slug 5 (- (string-length slug) 5))))
+      (list/filter
+        (lambda (row)
+          (spec/starts-with?
+            (as-str (dict-get (cdr row) "slug"))
+            "spec/"))
+        (notes/list))))
+  "Package names that have a notes doc slug spec/<pkg>.")
+
+(define spec/assoc-get
+  (lambda (report key)
+    (let ((hit
+            (list/filter
+              (lambda (pair) (string-eq (as-str (car pair)) (as-str key)))
+              report)))
+      (if (null? hit) () (car (cdr (car hit))))))
+  "Lookup key in (spec/lint) alist report.")
+
+(define spec/row-summary
+  (lambda (pkg branch)
+    (let ((r (spec/lint pkg branch)))
+      (list
+        (as-str pkg)
+        (spec/assoc-get r "flow-missing-count")
+        (spec/assoc-get r "doc-coverage-count")
+        (spec/assoc-get r "unacknowledged-count"))))
+  "(pkg flow-missing doc-empty unack) for one package.")
+
+(define spec/td
+  (lambda (s)
+    (html/tag "td" "" (html-escape (as-str s))))
+  "Table cell.")
+
+(define spec/th
+  (lambda (s)
+    (html/tag "th" "" (html-escape (as-str s))))
+  "Header cell.")
+
+(define spec/tr
+  (lambda (cells)
+    (html/tag "tr" "" (html/join cells)))
+  "Table row from cell html list.")
+
+(define spec/status-emoji
+  (lambda (miss undoc unack)
+    (if (and (= miss 0) (= undoc 0) (= unack 0))
+        "ok"
+        (if (> miss 0) "flows!" "warn")))
+  "Coarse phone-readable status label.")
+
+(define spec/health-row-html
+  (lambda (sum)
+    (let ((pkg (car sum))
+          (miss (car (cdr sum)))
+          (undoc (car (cdr (cdr sum))))
+          (unack (car (cdr (cdr (cdr sum))))))
+      (spec/tr
+        (list
+          (spec/td pkg)
+          (spec/td (spec/status-emoji miss undoc unack))
+          (spec/td miss)
+          (spec/td undoc)
+          (spec/td unack)
+          (html/tag
+            "td" ""
+            (html/a
+              (string-append "/notes?slug=spec/" (as-str pkg))
+              (string-append "spec/" (as-str pkg))))))))
+  "One health table row.")
+
+(define spec/health-table
+  (lambda (branch)
+    (let ((pkgs (spec/packages-with-docs))
+          (br (as-str branch)))
+      (if (null? pkgs)
+          (html/p* (html/attr "class" "muted")
+                   "No spec/<pkg> notes docs yet. Seed with B1 ritual.")
+          (html/tag
+            "table"
+            (html/attr "class" "spec-health")
+            (html/join
+              (cons
+                (spec/tr
+                  (list
+                    (spec/th "pkg")
+                    (spec/th "status")
+                    (spec/th "flow holes")
+                    (spec/th "undoc")
+                    (spec/th "unack")
+                    (spec/th "spec")))
+                (list/map
+                  (lambda (p)
+                    (spec/health-row-html (spec/row-summary p br)))
+                  pkgs)))))))
+  "Full health table HTML for packages with spec docs.")
+
+(define spec/page
+  (lambda ()
+    (let ((br (current-branch)))
+      (html/page
+        (list
+          (html/h1 "/spec health")
+          (html/p*
+            (html/attr "class" "muted")
+            (string-append
+              "Package intent lint (soft). Branch: "
+              (as-str br)
+              ". flow holes = unresolved FLOWS bindings; undoc = public "
+              "bindings missing function-doc; unack = public names not "
+              "mentioned in spec doc (or redefined vs main when branch set)."))
+          (spec/health-table "")
+          (html/p*
+            (html/attr "class" "muted")
+            "API: (spec/lint \"todo\" \"\") · (spec/flows-resolve \"todo\")")))))
+  "Private GET /spec handler — phone-readable package health.")
+
+(route "/spec" "spec/page")
