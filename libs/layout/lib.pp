@@ -1,6 +1,25 @@
 ;; package layout -- exported from live branch system/main
 ;; Sync: scripts/pp_sync.py pull|push
 
+(package layout
+  (export
+    layout/card
+    layout/cards
+    layout/cta
+    layout/hero
+    layout/logo
+    layout/page
+    layout/page-with-css
+    layout/section
+    layout/style
+    layout/theme
+    layout/theme-vars
+    layout/neocities-banner
+    layout/neocities-foot
+    layout/neocities-style
+    layout/neocities-theme
+    layout/neocities-top))
+
 (define layout/card
   (lambda
     (title body)

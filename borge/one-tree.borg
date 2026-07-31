@@ -127,10 +127,15 @@
          existing row maps to exactly ONE typed node. Paths are
          DERIVED from row identity (no behavior change):
 
-           PATH GRAMMAR (branch-aware code/types/routes):
+           PATH GRAMMAR (branch-aware code/types/routes/packages):
              fn     b.<branch_id>.fn.<name>
              type   b.<branch_id>.type.<name>
              route  b.<branch_id>.route.<route>
+             pkg    b.<branch_id>.pkg.<name>
+           (* agent note (|pkg added 2026-08-02 for lisp-interpreter.package-surface
+              Phase 1 — package registry rows (enabled bit + export list)
+              are branch-lensed like fn/type/route so per-user enable/disable
+              inherits parent->child via the same override walk.|) *)
            DATA (shared, branch-free — branching.data kept):
              datum  data.<type_name>.<id>
            NOTES HIERARCHY (exception; notes.storage — NOT kind=datum):

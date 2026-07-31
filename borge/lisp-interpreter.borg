@@ -1830,7 +1830,106 @@
 
   (subsection package-surface
    (doc "Blessed package exports and stability rules for system/main")
-   (status planned)
+   (status implemented)
+   (implements
+    migrations/011_package_registry.sql
+    image/lib/store.ml
+    image/lib/tree_store.ml
+    image/lib/session.ml
+    image/lib/session_types.ml
+    image/lib/agent_tools.ml
+    libs/std/lib.pp
+    libs/ui/lib.pp
+    libs/layout/lib.pp
+    libs/todo/lib.pp)
+   (* agent note (|agent plan 2026-08-02 — Phase 1 design settled with roerick.
+      Resolves most of BORGE-1785211142 item a; multi-file libs issue item b
+      stays deferred. Design calls settled in chat:
+
+      SETTLED DESIGN CALLS
+      1. Export names are FULL names like todo/add, not bare auto-prefixed.
+      2. Registry storage = new branch-lensed tree family
+         b.branch.pkg.name one-tree.tree-model PATH GRAMMAR updated
+         with a package_registry scaffolding table mirroring it, exactly
+         the function_defs pattern table = runtime truth until
+         PP_TREE_READS/WRITES cutover; forward-only mirror triggers.
+         Inherits parent-to-child like function_defs — per-user
+         enable/disable falls out of the branch model for free.
+      3. std stays ALWAYS enabled — hard-protected; not a registry row.
+         package-exports std keeps serving kernel_std_exports until
+         the std-library freeze lands; do not widen that list in passing.
+      4. Routes / deftype / macros are OUT of the export list for v1
+         functions only.
+      5. Personal branches may still shadow exported names; documented,
+         not prevented.
+
+      DISABLE SEMANTICS = HIDE, NOT DELETE. package-disable writes
+      enabled=false on the current branch and re-runs rehydrate; rows
+      stay in Postgres, they just do not load into the session env.
+      Boot seed is automatically safe: seed is additive fills MISSING
+      names and disabled rows still exist, so seeding a disabled
+      package is a no-op. Re-enable flips the bit back; no re-seed.
+
+      MVP PRIM SURFACE
+        packages                    -- registry rows: name, enabled,
+                                    -- exports, source header-or-heuristic
+        package-enable workout      -- enabled=true on current branch,
+                                    -- rehydrate
+        package-disable workout     -- enabled=false, rehydrate.
+                                    -- std rejected with a clear error.
+        package-exports pkg         -- resolution order: declared header
+                                    -- set, then kernel_std_exports for
+                                    -- std and kernel, else shallow heuristic
+
+      IMPLEMENTATION PLAN touchpoints verified 2026-08-02
+      1. migrations/011_package_registry.sql — package_registry
+         fields branch_id, name, enabled bool default true, exports jsonb,
+         author, updated_at; PK branch_id+name; plus forward-only
+         mirror trigger copying 009_tree.sql tree_mirror_function_defs
+         pattern pp.tree_mirror guard, CONSTRAINT TRIGGER DEFERRABLE.
+         Forward-only is correct: 009 has NO reverse trigger; runtime
+         truth stays in the table. Also ALTER TABLE function_defs
+         ADD COLUMN package text NULL provenance stamp.
+      2. tree_store.ml — pkg_path constructor b.uuid.pkg.name
+         via uuid_label + enc_label, mirrors tree_uuid_label in SQL.
+      3. loader.ml / session.ml — recognize a leading package NAME
+         export ... header form in load-string; do NOT eval it as a
+         define. Upsert the registry row enabled preserved on re-load;
+         exports replaced. While loading that file, stamp
+         persist_function calls with package=NAME session-local
+         current-package string option threaded through eval_one /
+         eval_form persist_define; cleared at end of load.
+      4. session.ml rehydrate/load_defs — after loading the registry
+         for the branch chain same recursive-CTE override walk as
+         list_function_names_for_load, first-hit-wins depth ASC,
+         skip defines whose package is disabled on this branch.
+         Untagged defines package IS NULL always load. Routes whose
+         handler belongs to a disabled package are filtered in
+         load_defs route pass too handler package via
+         function_defs.package.
+      5. agent_tools.ml / session.ml prims — packages, package-enable,
+         package-disable new; package-exports resolution order
+         change; describe prefers declared exports when present.
+      6. Seed headers: libs/std/lib.pp exports = kernel_std_exports
+         list exactly, libs/ui/lib.pp, libs/layout/lib.pp; todo as
+         the app example.
+      7. export-package round-trips the package header form into
+         vault text; pp-sync snapshot includes it.
+
+      EXPLICIT NON-GOALS FOR PHASE 1 unchanged from details above:
+      sealing, import forms, multi-file libs, requires graph, promote
+      filter, call-site lint. Those are Phase 2/3.
+
+      VERIFY maps to the smoke lines on this subsection
+      - package-disable todo then todo/list -> unbound error;
+        rows still in function_defs; package-enable todo restores.
+      - Disabled on admin/personal does not affect system/main.
+      - package-exports todo returns the declared header set, not
+        the shallow heuristic, after seeding the header.
+      - Boot with a package disabled on system/main: seed does NOT
+        re-enable it.
+      - borge drift clean; dune build and dune runtest.
+   |) *)
    (verify
     (smoke "export-package or package-bindings lists public names for std/ui")
     (smoke "docs or /bindings marks public vs internal"))

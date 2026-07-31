@@ -52,6 +52,9 @@ let test_paths () =
   check string "route path"
     ("b." ^ T.uuid_label b ^ ".route." ^ T.enc_label "/notes/:id")
     (T.route_path ~branch_id:b ~route:"/notes/:id");
+  check string "pkg path"
+    ("b." ^ T.uuid_label b ^ ".pkg." ^ T.enc_label "todo")
+    (T.pkg_path ~branch_id:b ~name:"todo");
   check string "datum path"
     ("data." ^ T.enc_label "todo" ^ "." ^ T.uuid_label b)
     (T.datum_path ~type_name:"todo" ~id:b);
