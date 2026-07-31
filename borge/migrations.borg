@@ -50,6 +50,11 @@
            009_tree.sql — one-tree substrate (tree_nodes,
              tree_branches, bidirectional deferred mirrors,
              tree_* read views, tree_verify). Spec: one-tree.
+           012_code_history.sql — code_history table +
+             BEFORE UPDATE/DELETE triggers on function_defs,
+             type_defs, view_bindings. Append-only before-image
+             history for every code-row write.
+             Spec: branching.code-history.
 
          A migration in flight blocks serving until it
          completes (or fails). This guarantees the image

@@ -114,17 +114,39 @@
          rows, per-function conflict resolution) is not yet
          implemented.
 
-         type_defs merge: not yet implemented. A branch cannot
-         propose a schema change through merge today; schema
-         changes land via migrations applied on boot
+         CONFLICT REPORT (v1: report-only, never blocks):
+         before the upsert, merge computes names where BOTH
+         source owns a row AND target owns a row whose
+         updated_at is newer than source's (target moved
+         independently since the lens diverged). Result
+         string carries them:
+           "merged N rows (M conflicts: a, b, c)"
+         Resolution stays last-write-wins (source body lands);
+         the report tells the human what was clobbered, and
+         code-history makes the clobbered target body
+         recoverable. Blocking/require-resolution merge is a
+         later PR/review-flow concern, not v1.
+
+         SCOPE: merge copies function_defs only. It MUST NOT
+         copy type_defs (schema authority is main; see
+         schema-authority) and MUST NOT copy view_bindings
+         blindly (route hijack risk). Routes travel with
+         named functions through promote instead
+         (see promote).
+
+         type_defs merge: not implemented by design in v1.
+         A branch cannot propose a schema change through merge;
+         schema changes land via migrations applied on boot
          (see migrations.additive-only) and are visible to all
          branches on next lookup.
    |))
    )
    (verify
-    (test "image/test/primitives_test.ml — 48 alcotest cases")
+    (test "image/test/primitives_test.ml — fork/merge/promote alcotest cases")
     (build "dune build @all")
-    (smoke "merge upserts changed rows; merges into system/* require admin"))
+    (smoke "merge upserts changed rows; merges into system/* require admin")
+    (smoke "merge result string lists conflict names when target moved newer")
+    (smoke "merge copies no type_defs and no view_bindings rows"))
   )
   (subsection promote
    (doc "Agent promotes from its workshop into the parent human's personal")
@@ -378,6 +400,16 @@
             Also: (merge src dst) for coarser branch merges;
             promote remains the selective UI/prim path.
 
+            ROUTES TRAVEL WITH THEIR HANDLER:
+            promote MUST also upsert any view_bindings row on
+            the source whose handler names a promoted function
+            (preserving visibility). A promoted handler without
+            its route leaves main serving the old binding —
+            the split-brain footgun this rule exists to kill.
+            Routes whose handler is NOT in the promote set do
+            not travel. promote does not touch type_defs
+            (schema-authority).
+
          B. VAULT EXPORT (optional durability in git)
             export-package / pp-sync pull writes libs/<pkg>/lib.pp
             (or snapshot tree — see lisp-snapshot). Operator
@@ -413,7 +445,151 @@
     (build "dune build image")
     (smoke "POST /branches/promote copies selected names to system/main")
     (smoke "promoted main body survives restart under additive seed")
-    (smoke "non-admin promote to system/main denied"))
+    (smoke "non-admin promote to system/main denied")
+    (smoke "promote of a handler fn also copies its view_bindings row")
+    (smoke "view_bindings whose handler is not promoted stay put"))
+  )
+  (subsection code-history
+   (doc "Append-only before-image history for code rows, captured by Postgres triggers")
+   (status planned)
+   (implements migrations/012_code_history.sql image/lib/store.ml image/lib/session.ml)
+   (details
+    (doc (|
+         PROBLEM:
+         Every write to function_defs / type_defs /
+         view_bindings is a destructive INSERT ... ON CONFLICT
+         DO UPDATE. Redefine a function and its old body is
+         unrecoverable unless someone happened to pp-sync
+         snapshot first. Merge and promote clobber the same
+         way. There is no history anywhere in the system.
+
+         DESIGN: HISTORY TABLES + TRIGGERS (capture below
+         every write path)
+
+           code_history(
+             id         bigint GENERATED ALWAYS AS IDENTITY,
+             rel        text,          -- 'function_defs' | 'type_defs' | 'view_bindings'
+             branch_id  uuid,
+             name       text,          -- fn/type name or route path
+             body       jsonb,         -- superseded before-image (fn/type body)
+             author     text,
+             doc        text,
+             package    text,
+             op         text,          -- 'UPDATE' | 'DELETE'
+             changed_at timestamptz DEFAULT now()
+           )
+           index on (rel, branch_id, name, changed_at DESC)
+
+         One BEFORE UPDATE OR DELETE FOR EACH ROW trigger per
+         live table inserts OLD into code_history. Triggers,
+         not OCaml call-site instrumentation, because every
+         write path converges on these tables: define, merge,
+         promote, reseed, boot seed, and even raw psql. A
+         trigger cannot be bypassed by a new call site.
+
+         TRANSACTIONALITY: the trigger runs in the same
+         transaction as the write. A rolled-back merge leaves
+         no history rows; a committed merge leaves one per
+         clobbered row. History is therefore exact, never
+         optimistic.
+
+         SEMANTICS:
+         - INSERT fires nothing: first definition has no
+           before-image. Version N of a name = live row plus
+           N-1 code_history entries walking changed_at DESC.
+         - ON CONFLICT DO UPDATE fires the UPDATE trigger for
+           conflicted rows only — merge/promote history is
+           exactly the clobbered set, for free.
+         - INSERT ... ON CONFLICT DO NOTHING (additive seed)
+           writes nothing and records nothing.
+         - op='DELETE' rows are how unoverride/branch-drop
+           remain recoverable.
+
+         NOPALES PRIMS (read-only):
+           (code-history "name")            -- current branch
+           (code-history "name" "owner/branch")
+             → JSON list, newest first:
+               {rel, op, author, doc, changed_at, body}
+           (code-diff "name" n)             -- current row vs
+             nth-newest history body (unified-ish text diff)
+         Restore is NOT a prim in v1: read the old body and
+         define it back (that define itself lands in history,
+         so restore-by-redefine is lossless).
+
+         SCOPE / NON-GOALS (v1):
+         - CODE ROWS ONLY. data_rows history is a separate
+           later decision (storage commitment; shared table).
+         - No retention pruning; review table size later.
+         - No history UI in v1 beyond the prims; the
+           branch-browser Changes view may surface it later.
+         - tree_nodes mirrors are derived state; history
+           lives on the authoritative tables only.
+    |))
+   )
+   (verify
+    (test "image/test/history_test.ml")
+    (build "dune build @all")
+    (smoke "redefine a fn on personal; (code-history name) returns the old body")
+    (smoke "merge that clobbers target rows records one history row per clobber")
+    (smoke "additive boot seed records no history rows")
+    (smoke "rolled-back transaction leaves no history rows"))
+  )
+  (subsection land
+   (doc "pp-sync land: promote + vault snapshot + git commit as one operator step")
+   (status planned)
+   (implements cli/bin/pp_sync.ml scripts/pp-sync.sh)
+   (details
+    (doc (|
+         PROBLEM:
+         The blessed loop (work on personal/dev → promote →
+         snapshot → git commit) has manual steps 3–4. Skip
+         them and live main drifts from libs/ silently;
+         pp-sync status can see the drift but nothing runs it.
+
+         LAND — the one-command ship path:
+           pp-sync land <pkg> [name ...] [--from owner/branch]
+         performs, in order, from the operator's laptop:
+           1. CHECKOUT-INDEPENDENT READ: export the named
+              functions (or the whole package when no names
+              given) from the source branch (default: the
+              session's current branch).
+           2. PROMOTE: call the promote prim for those names
+              (admin gate unchanged; routes travel per
+              promote).
+           3. SNAPSHOT: re-export the same names from
+              system/main and write libs/<pkg>/lib.pp.
+           4. COMMIT: git add libs/<pkg>/lib.pp && git commit
+              with message "vault(<pkg>): land <names>".
+              The image never git-pushes and never holds repo
+              credentials; land runs where the repo lives.
+           5. REPORT: print promoted names, conflicts the
+              promote overwrote (visible via code-history),
+              and the commit SHA.
+
+         Failure stops the pipeline at the failed step and
+         reports state (nothing after a failed promote is
+         snapshotted; a failed commit leaves main promoted
+         and the vault dirty, printed clearly).
+
+         DRIFT VISIBILITY:
+           pp-sync status gains an exit code: 0 clean,
+           1 drift. The repo monitor command (README) runs
+           pp-sync status so drift shows up on the dashboard
+           instead of being discovered by accident.
+
+         NON-GOALS:
+           - land does not merge branches (promote only)
+           - land does not push to remotes
+           - land does not unoverride the source branch
+             (stays an explicit, separate act)
+           - no daemon; land is operator/agent-invoked
+    |))
+   )
+   (verify
+    (build "dune build cli")
+    (smoke "pp-sync land notes ui/nav promotes, snapshots libs/notes/lib.pp, commits")
+    (smoke "failed promote (non-admin) leaves vault untouched and reports")
+    (smoke "pp-sync status exits 1 when libs/ differs from live main"))
   )
   (subsection lisp-snapshot
    (doc "Clone habitat Nopales state into the git repo as vault/backup")

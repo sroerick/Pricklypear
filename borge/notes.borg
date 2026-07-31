@@ -217,6 +217,11 @@
            Existing data_rows type=note rows migrate once (M0) into
            tree nodes; after cutover notes/* does not write them.
            folder string field and JSON outline field are retired.
+           M0 must EXPLODE each outline blob into real heading child
+           nodes under the note path (no inline outline blob), and
+           normalize path labels to the kebab slug. After every uuid
+           verifies in the tree, the legacy data_rows type=note rows
+           are DELETED (no permanent inert archive).
 
          HISTORY: v1 overwrite on save (updated_at). No Doltgres.
     |))
@@ -818,10 +823,21 @@
              (budget is a safety net; the nested Lisp walk is the
              bug, per budget-scale)
            - Changing the slug-page outline editor or structure ops
-           - Merging/renaming garden folders (kebab vs underscore is
-             cosmetic; path-based folders tolerate both)
-           - Deleting the legacy data_rows rows themselves (kept
-             inert for audit; drop is a later migration decision)
+           - Merging/renaming garden folders for display (kebab vs
+             underscore is cosmetic; path-based folders tolerate both).
+             Folder GROUPING is path-derived (not the legacy folder
+             string), and the garden/ import prefix strips to top
+             level in the index per garden-import DISPLAY.
+
+         CUTOVER COMPLETION (the finish line this subsection gates):
+           The legacy nested index (notes/light/*) must actually be
+           deleted from the image (I1) so /notes serves the flat
+           budget-safe index over tree/note-index, and that index
+           groups by PATH-derived folders with the garden/ prefix
+           stripped to top level. Until then the UI shows only the
+           legacy-folder rows and hides garden/tree-only notes.
+           Legacy data_rows type=note rows are DELETED after M0
+           re-migration verifies every uuid (no permanent archive).
     |))
    )
   )
@@ -918,6 +934,13 @@
            Keeps import namespace clear of native PP wiki paths;
            refile later is tree/move.
 
+         DISPLAY:
+           The garden/ prefix is an import namespace, not a user-
+           facing folder. The /notes index STRIPS a leading garden/
+           so imported contents appear at top level as siblings of
+           native folders (roam, reading, history as top-level
+           folders; no garden bucket in the UI).
+
          FILE MAP:
            directory          -> folder nodes (title = dir name)
            file.md            -> note leaf
@@ -994,6 +1017,21 @@
            Nested notes/tree/render retired (legacy tombstones).
            Remaining for full "implemented": M1 garden-import apply,
            R0 completeness if any bible/roam gaps, D0 docs polish.
+
+         FINISH-CUTOVER (the close-out slices):
+           F1  Delete the legacy nested index (notes/light/*) from
+               the image so /notes serves ONLY the flat budget-safe
+               index over tree/note-index (I1 completion).
+           F2  Index groups by PATH-derived folders; a leading
+               garden/ strips to top level (garden-import DISPLAY).
+           F3  M0 completion: explode every migrated note's inline
+               outline blob into real heading child nodes (the Roman
+               notes currently render as one blob with a single
+               heading); normalize path labels to kebab slug.
+           F4  Delete the legacy data_rows type=note rows after F3
+               verifies every uuid in the tree (no archive).
+           F5  Vault drift: pp-sync the live notes bindings back to
+               libs/ so git matches the image before further edits.
 
          TREE-BROWSER BACKEND SWAPS (content tree contract):
            image.tree-browser v1 walks the CONTENT tree — the notes
