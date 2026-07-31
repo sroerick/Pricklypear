@@ -324,6 +324,40 @@
       (if (null? hit) () (car (cdr (car hit))))))
   "Lookup key in (spec/lint) alist report.")
 
+(define spec/lint-summary
+  (lambda (pkg branch)
+    (if (null? (spec/doc pkg))
+        (string-append (as-str pkg) ": (no spec doc)")
+        (let ((r (spec/lint pkg branch)))
+          (string-append
+            (as-str pkg) ": flow-holes="
+            (as-str (spec/assoc-get r "flow-missing-count"))
+            " undoc="
+            (as-str (spec/assoc-get r "doc-coverage-count"))
+            " unack="
+            (as-str (spec/assoc-get r "unacknowledged-count"))))))
+  "One-line soft warning string for promote checklist / UI.")
+
+(define spec/promote-checklist
+  (lambda (branch names)
+    ;; Soft warnings for packages touched by the promote name set.
+    (let ((pkgs
+            (spec/unique
+              (list/map
+                (lambda (n)
+                  (let ((s (as-str n)))
+                    (if (string-contains? s "/")
+                        (car (string-split s "/"))
+                        "")))
+                names))))
+      (list/map
+        (lambda (p)
+          (if (string-eq (as-str p) "")
+              "(root): skipped"
+              (spec/lint-summary p branch)))
+        (list/filter (lambda (p) (not (string-eq (as-str p) ""))) pkgs))))
+  "List of soft-warning lines for promote of names on branch.")
+
 (define spec/row-summary
   (lambda (pkg branch)
     (let ((r (spec/lint pkg branch)))

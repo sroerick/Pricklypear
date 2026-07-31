@@ -476,6 +476,17 @@ let branch_detail_page (session : Session.t) (reqd : Httpun.Reqd.t)
                [ HTML.h2 [] [txt "Promote to system/main"]
                ; HTML.p [HTML.class_ "muted"]
                    [txt "Select pins to merge into live defaults. Also pp_sync pull + git push for durable libs/*.pp."]
+               ; (let soft =
+                    Session.promote_soft_warnings session
+                      ~names:(List.map (fun (n, _, _) -> n) ov)
+                  in
+                  if soft = "" then
+                    HTML.p [HTML.class_ "muted"]
+                      [txt "%s"
+                         "Soft lint: load-library spec, then open /spec"]
+                  else
+                    HTML.p [HTML.class_ "spec-soft"]
+                      [txt "Soft lint (non-blocking): %s" soft])
                ; (if promote_checks = [] then
                     HTML.p [HTML.class_ "muted"] [txt "(nothing to promote)"]
                   else
@@ -687,7 +698,13 @@ let branches_promote (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
   let r = Session.promote_to_main session ~source_ref:ref_ ~names in
   match r with
   | Error e -> branch_detail_page session reqd ~ref_ ~err:e ()
-  | Ok n ->
-      branch_detail_page session reqd ~ref_
-        ~msg:(Printf.sprintf "promoted %d function(s) → system/main" n) ()
+  | Ok (n, soft) ->
+      let msg =
+        if soft = "" then
+          Printf.sprintf "promoted %d function(s) → system/main" n
+        else
+          Printf.sprintf
+            "promoted %d function(s) → system/main · soft: %s" n soft
+      in
+      branch_detail_page session reqd ~ref_ ~msg ()
 
