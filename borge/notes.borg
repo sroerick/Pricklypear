@@ -231,12 +231,19 @@
     (smoke "(roam/backlinks slug) lists inbound links after resolve")
     (smoke "render turns [[other]] into anchor using current slug/title")
     (smoke "move/rename note does not require reindex; links still resolve")
+    (smoke "refile/extract of a node does not require roam/reindex (uuid stable)")
     (smoke "[[media:uuid|alt]] renders img; not indexed as note-link")
     (smoke "(bible Gen 2 3) renders /dabar href; (bible …) not a note-link")
     (smoke "Obsidian [[bible:Genesis2:3|…]] import normalizes to bible sexp")
     (smoke "(extract-links body) matches roam/parse-links edge cases")
     (test "image primitives_test extract-links cases"))
-   (implements libs/roam/lib.pp libs/notes/lib.pp libs/bible/lib.pp libs/dabar/lib.pp image/lib/prims_pure.ml)
+   (implements
+    libs/roam/lib.pp
+    libs/notes/lib.pp
+    libs/notes/refile/lib.pp
+    libs/bible/lib.pp
+    libs/dabar/lib.pp
+    image/lib/prims_pure.ml)
    (details
     (doc (|
          =========================================================
@@ -252,6 +259,8 @@
            kind       — "wikilink" | future
          Optional cached from_slug/to_slug for debug only — never
          authoritative. Index by (from_uuid, to_uuid).
+         Live package: libs/roam (parse-links, reindex, backlinks,
+         render-body, backlinks-html).
 
          AUTHORING SYNTAX (bodies, still human-friendly):
            [[slug]]              — wiki by slug at write time
@@ -264,16 +273,38 @@
          No #node-id deep links v1.
 
          SAVE-TIME RESOLUTION:
-           [[slug]] -> lookup note uuid (tree/find-by); store edge
-           uuid→uuid. Missing target: still emit dangling edge with
-           to_uuid empty + unresolved slug cookie OR skip edge and
-           render stub — prefer stub-link without edge until target
-           exists (simpler). Bible sexps are NOT note-link rows.
+           [[slug]] -> lookup note uuid (tree/find-by / notes/doc);
+           store edge uuid→uuid. Missing target: stub-link without
+           edge until target exists (prefer). Bible sexps are NOT
+           note-link rows.
 
          REINDEX:
            (roam/reindex note-uuid outline-tree) replaces edges for
-           from_uuid. Called on content-touching saves only.
-           Move/rename/refile does NOT reindex (uuid stable).
+           from_uuid. Called on content-touching saves only
+           (set-body, upsert with body change, op=eval target=body).
+           Move/rename/refile/extract does NOT reindex — note and
+           heading uuids/ids stay stable; edges remain valid. Cached
+           from_slug/to_slug may go stale; resolve via uuid at read.
+
+         =========================================================
+         REFILE / EXTRACT vs LINKS (align tree-browser + op-protocol)
+         =========================================================
+         Refile and extract are STRUCTURAL moves of outline subtrees
+         across note documents — they are NOT link-graph operations.
+         Today: libs/notes/refile (ad-hoc dual upsert). Target:
+           structural-editing.op-protocol owns the wire
+             POST {op, target, args} → fragment + OOB selection
+           named ops e.g. refile / extract-note with args
+             (dst-slug) or (new-slug?) — server applies pure tree
+             surgery then whole-doc write via notes/doc/*.
+         image.tree-browser deliberately defers refile/move UI
+         until those ops exist on the shared protocol (no parallel
+         /tree/refile routes). notes.outline-actions already lists
+         this gap. When protocol lands:
+           - notes/refile and notes/refile/extract become thin
+             adapters or disappear into op dispatch
+           - roam edges need no rewrite (uuid stable)
+           - tree-browser may offer move only via the same ops
 
          RENDER:
            Wiki: resolve to_uuid → current slug/title/path; anchor
@@ -298,13 +329,14 @@
 
          QUERY:
            (roam/backlinks slug-or-uuid) -> inbound with current
-           titles/slugs for display. Partial: notes-backlinks.
+           titles/slugs for display. UI partial: notes-backlinks.
 
          NOT v1:
            - graph view renderer
            - unlinked-mentions auto-discovery
            - block-ref transclusion
            - path-qualified wiki links for duplicate slugs
+           - tree-browser-initiated refile (waits on op-protocol)
     |))
    )
   )
@@ -708,8 +740,12 @@
 
   (subsection index-read-path
    (doc "Notes index reads resolve to the tree store exactly once; legacy data_rows fallback retired; interim read-layers removed")
-   (status planned)
-   (implements libs/notes/lib.pp image/lib/tree_store.ml image/lib/crud.ml image/lib/http.ml)
+   (status implemented)
+   (implements
+    libs/notes/lib.pp
+    libs/notes/doc/lib.pp
+    libs/notes/ui/lib.pp
+    image/lib/tree_store.ml)
    (verify
     (smoke "GET /notes lists garden folders incl. tree-only notes")
     (smoke "GET /notes?folder=garden/bible/scripture_concepts lists its notes")
