@@ -409,56 +409,86 @@
   (subsection outline-actions
    (doc "Per-node outline action menu; the eval op turns nodes into a live Nopales surface")
    (status partial)
-   (implements libs/notes/lib.pp image/lib/http.ml)
+   (implements
+    libs/notes/outline/lib.pp
+    libs/notes/refile/lib.pp
+    libs/outline/lib.pp
+    libs/structed/lib.pp
+    libs/notes/lib.pp
+    image/lib/http.ml)
    (verify
-    (smoke "structure ops include the existing set plus op=eval")
+    (smoke "structure ops: add-child/sibling delete move promote/demote archive cycle-todo set-title/body")
+    (smoke "slurp-forward / barf-forward via structed/* on outline accessors")
     (smoke "op=eval target=child splices returned string as a new child node")
     (smoke "op=eval target=sibling splices; target=body replaces this node body")
     (smoke "eval expr binds self/doc/slug to current context")
     (smoke "eval reindexes roam links when a body changes")
+    (smoke "refile: node moves to another note root kids")
     (smoke "extract: node becomes its own note; removed from source")
+    (smoke "POST /partials/notes-node-op returns outline partial + selection")
     (smoke "scripts/verify_budget_stress.py many-node actions suite"))
    (details
     (doc (|
-         Every outline node carries the existing action menu
-         (promote/demote/move-up/move-down/archive/cycle-todo) plus
-         refile (move node to another existing note) and extract
-         (notes/refile/extract: node title/body/kids become a new
-         note root; node removed from source; redirect to new slug).
+         SHIPPED SURFACE (libs/notes/outline + outline + structed):
+           notes/outline/apply-op dispatches structure ops on the
+           outline tree value. Ops present today:
+             add-child add-sibling delete move-up move-down
+             promote demote set-title set-body set-todo
+             cycle-todo archive unarchive
+             slurp-forward barf-forward  (via structed/* +
+               outline/kids outline/set-kids — op-protocol preview)
+           Selection companion: notes/outline/apply-op-sel →
+           (list tree' sel) for OOB restore.
 
-         op = eval  (POST /partials/notes-op with op=eval)
-           params: slug, id, expr, target in {child, sibling, body}
+         WIRE (reconcile — code wins over older spec path):
+           POST /partials/notes-node-op
+             params: slug, op, node-id [, title|body|todo|expr|target]
+           NOT /partials/notes-op (stale name). Fragment path → no
+           chrome (wants_fragment). Client hx-target #outline
+           hx-swap outerHTML; selection via hidden OOB when present.
 
-         expr is evaluated in the session env with these bound:
-           self  — this node value (kind title body state kids)
-           doc   — the enclosing note row
-           slug  — this note's slug
+         op = eval
+           Form: notes/outline/eval-form → same partial endpoint.
+           notes/outline/eval-result loads
+             (lambda (self doc slug) <expr>)
+           and applies it. target in {child, sibling, body} via
+           notes/outline/eval-target (default child).
+           result handling by target:
+             body     as-str → outline/set-body on node
+             child    string → new node title; valid outline node
+                      sexp → splice subtree under id
+             sibling  same as child, insert after id
 
-         result handling by target:
-           target=body     result (any value) coerced to a string
-                            via as-str and written into this node body.
-           target=child    result forms a new node under this node:
-                            string -> node (title=result, body="")
-                            list (sexp node shape
-                              (kind title body state kids)) -> spliced
-                            as a subtree.
-           target=sibling  same as child, but as a sibling after id.
+         REFILE / EXTRACT (libs/notes/refile — NOT yet op-protocol):
+           notes/refile src-slug nid dst-slug — detach node from
+           src outline, add-child under dst root, dual upsert.
+           notes/refile/extract — detach → new note slug from title,
+           remove from source. These are whole-doc outline writes
+           via notes/doc or legacy notes/upsert. When
+           structural-editing.op-protocol lands for cross-doc moves,
+           refile/extract MUST become named tree-ops on that
+           protocol (same POST shape, server-authoritative tree),
+           not parallel ad-hoc routes. image.tree-browser defers
+           refile/move UI until then.
 
-         Persistence goes through the existing outline/update
-         primitives (no new storage) + roam/reindex when a body
-         changes. Response: the updated outline partial (same as
-         every other structure op).
+         PERSISTENCE:
+           Structure ops upsert through notes/doc/* (tree store).
+           Body-touching ops should roam/reindex (verify smoke).
 
          WHY:
-           The notes view becomes a live Nopales surface. wiki-llm-loop
-           (below) is the first major consumer: the LLM builds a
-           node subtree and a single eval op splices it in.
+           Notes view = live Nopales surface. wiki-llm-loop is the
+           first major consumer of op=eval splices.
 
          SECURITY:
-           eval runs Nopales in the session env — full prim set incl
-           DB. Treat like REPL access. No sandbox v1; the existing
-           auth gate (route visibility) is the only boundary. v2 may
-           prompt-confirm before destructive prims.
+           eval runs full session prim set incl DB — treat as REPL.
+           Auth gate only boundary v1; v2 may confirm destructive
+           prims.
+
+         GAPS (keep status partial until closed):
+           - full structed op set (wrap/splice/raise/…) not all
+             wired into apply-op / keymap
+           - refile/extract not on op-protocol wire yet
+           - budget stress suite must stay green on garden-scale
     |))
    )
   )
@@ -887,7 +917,8 @@
 
   (subsection tree-cutover
    (doc "Phased delivery: kernel tree prims → façade → UUID links → M0 PP migrate → M1 vault")
-   (status planned)
+   (status partial)
+   (implements libs/notes/lib.pp libs/notes/doc/lib.pp image/lib/tree_store.ml libs/tree/lib.pp)
    (verify
     (smoke "K0: tree/get list upsert delete move on folder/note/heading")
     (smoke "K1: tree/get-uuid + slug uniqueness reject")
@@ -895,6 +926,9 @@
     (smoke "N1: folders via path; no folder string field on write")
     (smoke "R0: uuid note-link + bible sexp render")
     (smoke "M0: existing PP notes migrated; spot-check agents + inbox")
+    (smoke "I4: notes/doc/list|row tree-only; no (rows 'note) outside migrate")
+    (smoke "GET /notes flat index lists garden/tree-only notes")
+    (smoke "tree-browser (tree/render-doc slug root depth fo) walks notes outline")
     (smoke "M1: vault dry-run + apply on personal garden"))
    (details
     (doc (|
@@ -905,22 +939,41 @@
            N1  folders via path; retire folder field writes
            R0  UUID links + bible sexp render via bible/dabar
            M0  migrate data_rows note → tree (same uuids)
-           M1  Obsidian md import (garden-import)
+           I*  index-read-path (I1–I4): one UI/agent read path through
+               notes/doc/* → tree; flat /notes; light/* deleted
+           M1  Obsidian md import (garden-import) — still open
            D0  docs: one-tree flag defaults truth; design note appendix
 
          DEPENDENCY:
            Does NOT wait on global PP_TREE_READS=1 for all CRUD.
            Notes use tree_* prims directly. Flat types keep CRUD.
 
-         STATUS NOTE:
-           K0/K1/N0/N1/M0 are realized in code (tree prims, façade on
-           tree, folders via path, notes/migrate/legacy-* moved all
-           legacy note rows into tree nodes — every legacy uuid is
-           present under data.note.u.<user>). What remains is the
-           index-read-path work: routing /notes to the budget-safe
-           flat index and retiring the legacy data_rows read fallback
-           in notes/doc/* (slice I4). Until I4 lands, tree-cutover
-           stays planned rather than implemented.
+         STATUS NOTE (post index-read-path I1–I4):
+           K0/K1/N0/N1/M0 + I1–I4 are realized. notes/doc/list and
+           notes/doc/row are tree-only (no data_rows fallback).
+           Legacy type=note rows remain as inert archive; only
+           notes/migrate/legacy-* may (rows 'note). /notes routes to
+           notes/page → notes/ui/folders-html (flat, budget-safe via
+           tree/note-index). notes/list-light aliases index-list.
+           Nested notes/tree/render retired (legacy tombstones).
+           Remaining for full "implemented": M1 garden-import apply,
+           R0 completeness if any bible/roam gaps, D0 docs polish.
+
+         TREE-BROWSER BACKEND SWAPS (content tree contract):
+           image.tree-browser v1 walks the CONTENT tree — the notes
+           outline model (outline/id title kids) rooted at a note
+           slug — NOT tree_nodes paths. Contract that must stay
+           stable when storage backends move:
+             (tree/render-doc slug root-id depth folders-only?)
+               -> html string
+             node accessors used by the walker:
+               outline/id, outline/title, outline/kids, outline/find
+               + notes/doc/get → outline (today notes/doc/outline)
+           Swapping outline JSON-in-note for heading nodes under
+           data.note.… MUST keep those accessors (or a thin adapter
+           with the same names). tree/render itself does not call
+           tree/get or rows. Store-tree roots (v2) are a different
+           root kind and need lens-aware prims (filed separately).
 
          RISK:
            Never write hierarchical notes as kind=datum.
