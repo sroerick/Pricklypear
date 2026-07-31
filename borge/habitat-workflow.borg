@@ -177,7 +177,7 @@
   )
   (subsection spec-checks
    (doc "Promote-time comparison: spec->code resolution, code->spec acknowledgment, doc coverage — promote grows a checklist")
-   (status planned)
+   (status partial)
    (verify
     (smoke "promote preview lists flow bindings that fail to resolve on the source branch")
     (smoke "promote preview lists public bindings redefined on the source branch with no spec/decisions mention")
