@@ -89,7 +89,7 @@
 
   (subsection spec-docs
    (doc "One notes doc per package (slug spec/<pkg>): flows, canonical paths, decisions, status — the intent artifact that outlives the turn")
-   (status planned)
+   (status partial)
    (verify
     (smoke "(notes/doc/get \"spec/todo\") returns a doc with flows/decisions sections")
     (smoke "a spec doc's flow entries name existing function bindings (resolvable via function-doc)"))
@@ -130,7 +130,7 @@
   )
   (subsection session-ritual
    (doc "The agent-facing protocol: branch-scoped work, obituary rule, file-don't-fix, handoff — recorded in the live agents note")
-   (status planned)
+   (status implemented)
    (verify
     (smoke "(notes/doc/get \"agents\") contains the session-ritual rules (obituary, file-don't-fix, handoff)")
     (smoke "log/issues and log/sessions notes docs exist and accrete entries"))
