@@ -1,7 +1,6 @@
 (** Pricklypear Image — HTTP shared infrastructure.
     Responses, chrome, forms, auth gate helpers, login/admin.
     Page handlers live in [Http_pages]; dispatch in [Http]. *)
-open Lwt.Syntax
 open Pure_html
 
 let default_port = 8080
@@ -47,43 +46,32 @@ let max_inflight =
   | Some s -> (match int_of_string_opt s with Some n when n > 0 -> n | _ -> 256)
   | None -> 256
 
-(* A minimal counting gate (Lwt 6.x dropped Lwt_semaphore). Bounds
-   concurrent in-flight HTTP connections; overflow waits for a slot
-   rather than consuming unbounded memory/fds. *)
+(* Counting gate for concurrent in-flight page work (Eio floor).
+   Overflow waits for a slot rather than consuming unbounded memory/fds. *)
 type inflight_gate = {
   mutable count : int;
   limit : int;
-  mutex : Lwt_mutex.t;
-  cond : unit Lwt_condition.t;
+  mutex : Eio.Mutex.t;
+  cond : Eio.Condition.t;
 }
 
 let inflight_sem =
   { count = 0; limit = max_inflight;
-    mutex = Lwt_mutex.create (); cond = Lwt_condition.create () }
+    mutex = Eio.Mutex.create (); cond = Eio.Condition.create () }
 
-let inflight_acquire () : unit Lwt.t =
-  let rec loop () =
-    let* got = Lwt_mutex.with_lock inflight_sem.mutex (fun () ->
-      if inflight_sem.count >= inflight_sem.limit then begin
-        (* Lwt_condition.wait releases the mutex while waiting and
-           reacquires before returning; called while holding the
-           mutex per the CV protocol. *)
-        let* () = Lwt_condition.wait inflight_sem.cond in
-        Lwt.return false
-      end else begin
-        inflight_sem.count <- inflight_sem.count + 1;
-        Lwt.return true
-      end)
-    in
-    if got then Lwt.return_unit else loop ()
-  in
-  loop ()
+let inflight_acquire () : unit =
+  Eio.Mutex.lock inflight_sem.mutex;
+  while inflight_sem.count >= inflight_sem.limit do
+    Eio.Condition.await inflight_sem.cond inflight_sem.mutex
+  done;
+  inflight_sem.count <- inflight_sem.count + 1;
+  Eio.Mutex.unlock inflight_sem.mutex
 
-let inflight_release () : unit Lwt.t =
-  Lwt_mutex.with_lock inflight_sem.mutex (fun () ->
-    inflight_sem.count <- inflight_sem.count - 1;
-    Lwt_condition.signal inflight_sem.cond ();
-    Lwt.return_unit)
+let inflight_release () : unit =
+  Eio.Mutex.lock inflight_sem.mutex;
+  inflight_sem.count <- inflight_sem.count - 1;
+  Eio.Condition.broadcast inflight_sem.cond;
+  Eio.Mutex.unlock inflight_sem.mutex
 
 let emergency_css : string =
   (* Labeled recovery only — NOT the product design system.
@@ -213,22 +201,21 @@ let value_to_html_string (v : Pricklypear_lisp.Ast.value) : string =
        | Pricklypear_lisp.Ast.VStr s -> s
        | _ -> Pricklypear_lisp.Reader.pp_value v)
 
-let try_ui_fn (session : Session.t) (name : string) : string option Lwt.t =
-  Lwt.catch
-    (fun () ->
-      let* r = Session.call_handler session name in
+let try_ui_fn (session : Session.t) (name : string) : string option =
+  (try
+      let r = Session.call_handler session name in
       match r with
-      | Session.Handler_ok v -> Lwt.return (Some (value_to_html_string v))
+      | Session.Handler_ok v -> (Some (value_to_html_string v))
       | Session.Handler_unbound ->
           Printf.eprintf "[http] try_ui_fn %s: unbound\n%!" name;
-          Lwt.return None
+          None
       | Session.Handler_error msg ->
           Printf.eprintf "[http] try_ui_fn %s: %s\n%!" name msg;
-          Lwt.return None)
-    (fun exn ->
+          None
+    with exn ->
       Printf.eprintf "[http] try_ui_fn %s failed: %s\n%!"
         name (Printexc.to_string exn);
-      Lwt.return None)
+      None)
 
 (** Fragment / partial: no document chrome (htmx swap target). *)
 let is_partials_path (path : string) : bool =
@@ -316,7 +303,7 @@ let garden_url ~(username : string) ~(path : string) : string =
 
 (** Serialize request identity attach — cotenant multi-user shares one
     Session.t; concurrent Alice/Bob would otherwise race branch/env. *)
-let request_mutex = Lwt_mutex.create ()
+let request_mutex = Eio.Mutex.create ()
 
 let auth_disabled () : bool =
   match Sys.getenv_opt "PP_AUTH_DISABLED" with
@@ -510,23 +497,23 @@ let unauthorized_api (reqd : Httpun.Reqd.t) : unit =
     Returns None if unauthenticated. *)
 let resolve_identity (session : Session.t)
     ~(headers : (string * string) list)
-  : Auth_store.user option Lwt.t =
+  : Auth_store.user option =
   let store = Session.store session in
   match cookie_value headers cookie_name with
   | Some token when token <> "" ->
-      let* row = Auth_store.lookup_session store ~raw_token:token in
+      let row = Auth_store.lookup_session store ~raw_token:token in
       (match row with
        | Some s ->
            (* Fetch the full user (user_type, parent_user_id) — the session
               row only carries id/username/is_admin. *)
-           let* user_opt = Auth_store.get_user_by_id store s.user_id in
+           let user_opt = Auth_store.get_user_by_id store s.user_id in
            (match user_opt with
-            | Some u -> Lwt.return_some u
-            | None -> Lwt.return_none)
+            | Some u -> Some u
+            | None -> None)
        | None ->
            (* Fall through to Basic if cookie stale. *)
            (match parse_basic_auth headers with
-            | None -> Lwt.return_none
+            | None -> None
             | Some (u, p) ->
                 Auth_store.verify_password store ~username:u ~password:p ()))
   | _ ->
@@ -536,13 +523,13 @@ let resolve_identity (session : Session.t)
            Auth_store.verify_token store ~raw_token:token ()
        | _ ->
            (match parse_basic_auth headers with
-            | None -> Lwt.return_none
+            | None -> None
             | Some (u, p) ->
                 Auth_store.verify_password store ~username:u ~password:p ()))
 
 let attach_from_user (session : Session.t) (user : Auth_store.user)
     ?(auth_token : string option = None)
-    ?(checkout_personal_now = false) () : unit Lwt.t =
+    ?(checkout_personal_now = false) () : unit =
   Session.attach_identity session
     ~user_id:user.Auth_store.id
     ~username:user.Auth_store.username
@@ -593,23 +580,23 @@ let chrome ?nav_html ~(session : Session.t)
   ]
 
 let chrome_lwt ~(session : Session.t) ~(title : string)
-    (content : Pure_html.node list) : Pure_html.node Lwt.t =
-  let* nav_html = try_ui_fn session "ui/nav" in
-  Lwt.return (chrome ?nav_html ~session ~title content)
+    (content : Pure_html.node list) : Pure_html.node =
+  let nav_html = try_ui_fn session "ui/nav" in
+  (chrome ?nav_html ~session ~title content)
 
-let read_body (reqd : Httpun.Reqd.t) : string Lwt.t =
+let read_body (reqd : Httpun.Reqd.t) : string =
   let body = Httpun.Reqd.request_body reqd in
-  let promise, wakeup = Lwt.task () in
+  let promise, resolver = Eio.Promise.create () in
   let buf = Buffer.create 1024 in
   let rec sched () =
     Httpun.Body.Reader.schedule_read body
-      ~on_eof:(fun () -> Lwt.wakeup_later wakeup (Buffer.contents buf))
+      ~on_eof:(fun () -> Eio.Promise.resolve resolver (Buffer.contents buf))
       ~on_read:(fun bs ~off ~len ->
         Buffer.add_string buf (Bigstringaf.substring bs ~off ~len);
         sched ())
   in
   sched ();
-  promise
+  Eio.Promise.await promise
 
 let url_decode (s : string) : string =
   let buf = Buffer.create (String.length s) in
@@ -806,8 +793,8 @@ let login_form_page ?(error = "") ?(next = "") (reqd : Httpun.Reqd.t) : unit =
   in
   html_response reqd body
 
-let post_login (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
-  let* body = read_body reqd in
+let post_login (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
+  let body = read_body reqd in
   let username =
     Option.value (form_field body "username") ~default:"" |> String.trim
   in
@@ -817,28 +804,28 @@ let post_login (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
   if username = "" || password = "" then begin
     login_form_page ~error:"Invalid username or password"
       ?next:(match next_ok with Some n -> Some n | None -> None) reqd;
-    Lwt.return_unit
+    ()
   end else
     let store = Session.store session in
-    let* user_opt =
+    let user_opt =
       Auth_store.verify_password store ~username ~password ()
     in
     match user_opt with
     | None ->
         login_form_page ~error:"Invalid username or password"
           ?next:(match next_ok with Some n -> Some n | None -> None) reqd;
-        Lwt.return_unit
+        ()
     | Some user ->
-        let* minted =
+        let minted =
           Auth_store.mint_session store ~user_id:user.Auth_store.id ()
         in
         (match minted with
          | Error e ->
              login_form_page ~error:("Login failed: " ^ e)
                ?next:(match next_ok with Some n -> Some n | None -> None) reqd;
-             Lwt.return_unit
+             ()
          | Ok token ->
-             let* () =
+             let () =
                attach_from_user session user ~auth_token:(Some token)
                  ~checkout_personal_now:true ()
              in
@@ -858,21 +845,21 @@ let post_login (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
              in
              redirect_with_cookie reqd ~location
                ~set_cookie:(set_cookie_header ~token);
-             Lwt.return_unit)
+             ())
 
-let post_logout (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
+let post_logout (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
   let headers = header_list (Httpun.Reqd.request reqd) in
   let token = cookie_value headers cookie_name in
   let store = Session.store session in
-  let* () =
+  let () =
     match token with
     | Some t when t <> "" -> Auth_store.revoke_session store ~raw_token:t ()
-    | _ -> Lwt.return_unit
+    | _ -> ()
   in
   Session.clear_auth_token session;
   redirect_with_cookie reqd ~location:"/login"
     ~set_cookie:(clear_cookie_header ());
-  Lwt.return_unit
+  ()
 
 (** One-shot display of a freshly issued API token (never stored in URL). *)
 let admin_token_once_page ~(session : Session.t) ~(reqd : Httpun.Reqd.t)
@@ -899,31 +886,31 @@ let admin_err ~(session : Session.t) ~(reqd : Httpun.Reqd.t) ~title msg =
        HTML.p [HTML.class_ "err"] [txt "%s" msg];
        HTML.p [] [HTML.a [HTML.href "/admin/users"] [txt "Back"]];
      ]);
-  Lwt.return_unit
+  ()
 
 let admin_users_page (session : Session.t) (reqd : Httpun.Reqd.t)
-  : unit Lwt.t =
+  : unit =
   if not (Session.is_admin session) then begin
     html_response reqd ~session ~status:`Forbidden
       (chrome ~session ~title:"Forbidden" [
          HTML.p [HTML.class_ "err"] [txt "admin only"];
        ]);
-    Lwt.return_unit
+    ()
   end else
     let store = Session.store session in
-    let* users = Auth_store.list_users store in
+    let users = Auth_store.list_users store in
     (* Per-user promote flag + API tokens (admin agent/token surface —
        BORGE-1785120601). *)
-    let* user_extras =
-      Lwt_list.map_s
+    let user_extras =
+      List.map
         (fun (u : Auth_store.user) ->
-          let* promote =
+          let promote =
             if u.Auth_store.user_type = "human" then
               Auth_store.get_allow_agent_promote store ~user_id:u.id
-            else Lwt.return false
+            else false
           in
-          let* tokens = Auth_store.list_tokens store ~user_id:u.id in
-          Lwt.return (u, promote, tokens))
+          let tokens = Auth_store.list_tokens store ~user_id:u.id in
+          (u, promote, tokens))
         users
     in
     let human_names =
@@ -1142,18 +1129,18 @@ let admin_users_page (session : Session.t) (reqd : Httpun.Reqd.t)
       ]
     in
     html_response reqd ~session body;
-    Lwt.return_unit
+    ()
 
 let post_admin_users (session : Session.t) (reqd : Httpun.Reqd.t)
-  : unit Lwt.t =
+  : unit =
   if not (Session.is_admin session) then begin
     html_response reqd ~session ~status:`Forbidden
       (chrome ~session ~title:"Forbidden" [
          HTML.p [HTML.class_ "err"] [txt "admin only"];
        ]);
-    Lwt.return_unit
+    ()
   end else
-    let* body = read_body reqd in
+    let body = read_body reqd in
     let action =
       Option.value (form_field body "action") ~default:"create"
       |> String.trim
@@ -1168,25 +1155,25 @@ let post_admin_users (session : Session.t) (reqd : Httpun.Reqd.t)
         if user_id = "" then
           admin_err ~session ~reqd ~title:"Revoke sessions" "user_id required"
         else
-          let* n = Auth_store.revoke_all_sessions store ~user_id in
-          let* () =
+          let n = Auth_store.revoke_all_sessions store ~user_id in
+          let () =
             Auth_store.log_auth store ~user_id ~kind:"admin_revoke_sessions"
               ~success:true ()
           in
           ignore n;
           redirect_response reqd "/admin/users";
-          Lwt.return_unit
+          ()
     | "create_agent" ->
         let parent = field "parent_username" in
         if parent = "" then
           admin_err ~session ~reqd ~title:"Create agent" "parent_username required"
         else
-          let* r = Auth_store.create_agent store ~parent_username:parent in
+          let r = Auth_store.create_agent store ~parent_username:parent in
           (match r with
            | Error e -> admin_err ~session ~reqd ~title:"Create agent" e
            | Ok _u ->
                redirect_response reqd "/admin/users";
-               Lwt.return_unit)
+               ())
     | "issue_token" ->
         let user_id = field "user_id" in
         let label =
@@ -1195,12 +1182,12 @@ let post_admin_users (session : Session.t) (reqd : Httpun.Reqd.t)
         if user_id = "" then
           admin_err ~session ~reqd ~title:"Issue token" "user_id required"
         else
-          let* uopt = Auth_store.get_user_by_id store user_id in
+          let uopt = Auth_store.get_user_by_id store user_id in
           (match uopt with
            | None ->
                admin_err ~session ~reqd ~title:"Issue token" "no such user"
            | Some u ->
-               let* r =
+               let r =
                  Auth_store.issue_token store ~user_id ~label:label ()
                in
                (match r with
@@ -1208,19 +1195,19 @@ let post_admin_users (session : Session.t) (reqd : Httpun.Reqd.t)
                 | Ok raw ->
                     admin_token_once_page ~session ~reqd
                       ~username:u.username ~raw;
-                    Lwt.return_unit))
+                    ()))
     | "revoke_token" ->
         let credential_id = field "credential_id" in
         if credential_id = "" then
           admin_err ~session ~reqd ~title:"Revoke token"
             "credential_id required"
         else
-          let* r = Auth_store.revoke_token store ~credential_id in
+          let r = Auth_store.revoke_token store ~credential_id in
           (match r with
            | Error e -> admin_err ~session ~reqd ~title:"Revoke token" e
            | Ok () ->
                redirect_response reqd "/admin/users";
-               Lwt.return_unit)
+               ())
     | "rotate_token" ->
         let credential_id = field "credential_id" in
         let user_id = field "user_id" in
@@ -1231,12 +1218,12 @@ let post_admin_users (session : Session.t) (reqd : Httpun.Reqd.t)
           admin_err ~session ~reqd ~title:"Rotate token"
             "credential_id and user_id required"
         else
-          let* uopt = Auth_store.get_user_by_id store user_id in
+          let uopt = Auth_store.get_user_by_id store user_id in
           (match uopt with
            | None ->
                admin_err ~session ~reqd ~title:"Rotate token" "no such user"
            | Some u ->
-               let* r =
+               let r =
                  match label with
                  | Some s ->
                      Auth_store.rotate_token store ~credential_id ~user_id
@@ -1249,7 +1236,7 @@ let post_admin_users (session : Session.t) (reqd : Httpun.Reqd.t)
                 | Ok raw ->
                     admin_token_once_page ~session ~reqd
                       ~username:u.username ~raw;
-                    Lwt.return_unit))
+                    ()))
     | "set_allow_agent_promote" ->
         let user_id = field "user_id" in
         let value =
@@ -1260,14 +1247,14 @@ let post_admin_users (session : Session.t) (reqd : Httpun.Reqd.t)
         if user_id = "" then
           admin_err ~session ~reqd ~title:"Agent promote" "user_id required"
         else
-          let* r =
+          let r =
             Auth_store.set_allow_agent_promote store ~user_id ~value
           in
           (match r with
            | Error e -> admin_err ~session ~reqd ~title:"Agent promote" e
            | Ok () ->
                redirect_response reqd "/admin/users";
-               Lwt.return_unit)
+               ())
     | "create" | _ ->
         let username = field "username" in
         let password = Option.value (form_field body "password") ~default:"" in
@@ -1280,11 +1267,11 @@ let post_admin_users (session : Session.t) (reqd : Httpun.Reqd.t)
           admin_err ~session ~reqd ~title:"Create user"
             "username and password required"
         else
-          let* created = Auth_store.create_user store ~username ~is_admin in
+          let created = Auth_store.create_user store ~username ~is_admin in
           (match created with
            | Error e -> admin_err ~session ~reqd ~title:"Create user" e
            | Ok user ->
-               let* pw =
+               let pw =
                  Auth_store.set_password store ~user_id:user.Auth_store.id
                    ~password
                in
@@ -1294,14 +1281,14 @@ let post_admin_users (session : Session.t) (reqd : Httpun.Reqd.t)
                       (chrome ~session ~title:"Create user" [
                          HTML.p [HTML.class_ "err"] [txt "password: %s" e];
                        ]);
-                    Lwt.return_unit
+                    ()
                 | Ok () ->
-                    let* () =
+                    let () =
                       Auth_store.log_auth store ~user_id:user.Auth_store.id
                         ~kind:"admin_create_user" ~success:true ()
                     in
                     redirect_response reqd "/admin/users";
-                    Lwt.return_unit))
+                    ()))
 
 let respond_handler_value
     ~(session : Session.t)
@@ -1313,7 +1300,7 @@ let respond_handler_value
      so chrome renders this request's identity, not whatever a concurrent
      attach flipped. *)
   let manifest =
-    match Lwt.get Request_context.current with
+    match Request_context.get () with
     | Some ctx -> Request_context.manifest ctx
     | None -> Session.manifest session
   in
@@ -1351,13 +1338,13 @@ let respond_handler_value
 
 (** /settings/keys — per-user LLM provider key (auth.user-llm-keys). *)
 let settings_keys_page (session : Session.t) (reqd : Httpun.Reqd.t)
-  : unit Lwt.t =
+  : unit =
   let username = Session.username session in
   if username = "anonymous" then begin
     redirect_response reqd "/login";
-    Lwt.return_unit
+    ()
   end else
-    let* user_opt =
+    let user_opt =
       Auth_store.get_user_by_username (Session.store session) username
     in
     match user_opt with
@@ -1366,9 +1353,9 @@ let settings_keys_page (session : Session.t) (reqd : Httpun.Reqd.t)
           (chrome ~session ~title:"Keys" [
              HTML.p [HTML.class_ "err"] [txt "not signed in"];
            ]);
-        Lwt.return_unit
+        ()
     | Some user ->
-        let* meta =
+        let meta =
           Auth_store.get_llm_key_meta (Session.store session)
             ~user_id:user.Auth_store.id
         in
@@ -1420,34 +1407,34 @@ let settings_keys_page (session : Session.t) (reqd : Httpun.Reqd.t)
           ]
         in
         html_response reqd ~session body;
-        Lwt.return_unit
+        ()
 
 let post_settings_keys (session : Session.t) (reqd : Httpun.Reqd.t)
-  : unit Lwt.t =
+  : unit =
   let username = Session.username session in
   if username = "anonymous" then begin
     redirect_response reqd "/login";
-    Lwt.return_unit
+    ()
   end else
-    let* user_opt =
+    let user_opt =
       Auth_store.get_user_by_username (Session.store session) username
     in
     match user_opt with
     | None ->
         redirect_response reqd "/login";
-        Lwt.return_unit
+        ()
     | Some user ->
-        let* body = read_body reqd in
+        let body = read_body reqd in
         let action =
           Option.value (form_field body "action") ~default:"set" |> String.trim
         in
         if action = "clear" then
-          let* _r =
+          let _r =
             Auth_store.clear_llm_key (Session.store session)
               ~user_id:user.Auth_store.id
           in
           redirect_response reqd "/settings/keys";
-          Lwt.return_unit
+          ()
         else
           let api_key =
             Option.value (form_field body "api_key") ~default:"" |> String.trim
@@ -1462,7 +1449,7 @@ let post_settings_keys (session : Session.t) (reqd : Httpun.Reqd.t)
             | Some s when String.trim s <> "" -> Some (String.trim s)
             | _ -> None
           in
-          let* r =
+          let r =
             Auth_store.set_llm_key (Session.store session)
               ~user_id:user.Auth_store.id ~api_key ~base ~model ()
           in
@@ -1473,27 +1460,27 @@ let post_settings_keys (session : Session.t) (reqd : Httpun.Reqd.t)
                     HTML.p [HTML.class_ "err"] [txt "%s" e];
                     HTML.p [] [HTML.a [HTML.href "/settings/keys"] [txt "Back"]];
                   ]);
-               Lwt.return_unit
+               ()
            | Ok _ ->
                redirect_response reqd "/settings/keys";
-               Lwt.return_unit)
+               ())
 
 let settings_ssh_page (session : Session.t) (reqd : Httpun.Reqd.t)
-  : unit Lwt.t =
+  : unit =
   let username = Session.username session in
   if username = "anonymous" then begin
     redirect_response reqd "/login";
-    Lwt.return_unit
+    ()
   end else
-    let* user_opt =
+    let user_opt =
       Auth_store.get_user_by_username (Session.store session) username
     in
     match user_opt with
     | None ->
         redirect_response reqd "/login";
-        Lwt.return_unit
+        ()
     | Some user ->
-        let* keys =
+        let keys =
           Auth_store.list_ssh_keys (Session.store session)
             ~user_id:user.Auth_store.id
         in
@@ -1561,24 +1548,24 @@ let settings_ssh_page (session : Session.t) (reqd : Httpun.Reqd.t)
           ]
         in
         html_response reqd ~session body;
-        Lwt.return_unit
+        ()
 
 let post_settings_ssh (session : Session.t) (reqd : Httpun.Reqd.t)
-  : unit Lwt.t =
+  : unit =
   let username = Session.username session in
   if username = "anonymous" then begin
     redirect_response reqd "/login";
-    Lwt.return_unit
+    ()
   end else
-    let* user_opt =
+    let user_opt =
       Auth_store.get_user_by_username (Session.store session) username
     in
     match user_opt with
     | None ->
         redirect_response reqd "/login";
-        Lwt.return_unit
+        ()
     | Some user ->
-        let* body = read_body reqd in
+        let body = read_body reqd in
         let action =
           Option.value (form_field body "action") ~default:"add" |> String.trim
         in
@@ -1586,12 +1573,12 @@ let post_settings_ssh (session : Session.t) (reqd : Httpun.Reqd.t)
           let id =
             Option.value (form_field body "id") ~default:"" |> String.trim
           in
-          let* _r =
+          let _r =
             Auth_store.revoke_ssh_key (Session.store session)
               ~user_id:user.Auth_store.id ~id_or_fingerprint:id
           in
           redirect_response reqd "/settings/ssh";
-          Lwt.return_unit
+          ()
         else
           let openssh =
             Option.value (form_field body "openssh") ~default:"" |> String.trim
@@ -1601,7 +1588,7 @@ let post_settings_ssh (session : Session.t) (reqd : Httpun.Reqd.t)
             | Some s when String.trim s <> "" -> Some (String.trim s)
             | _ -> None
           in
-          let* r =
+          let r =
             Auth_store.add_ssh_key (Session.store session)
               ~user_id:user.Auth_store.id ~openssh ~label ()
           in
@@ -1612,8 +1599,8 @@ let post_settings_ssh (session : Session.t) (reqd : Httpun.Reqd.t)
                     HTML.p [HTML.class_ "err"] [txt "%s" e];
                     HTML.p [] [HTML.a [HTML.href "/settings/ssh"] [txt "Back"]];
                   ]);
-               Lwt.return_unit
+               ()
            | Ok _ ->
                redirect_response reqd "/settings/ssh";
-               Lwt.return_unit)
+               ())
 

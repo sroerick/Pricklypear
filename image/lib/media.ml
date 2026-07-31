@@ -3,7 +3,6 @@
     Table: media_blobs (migration 007). Shared across branches like
     data_rows; ownership is [author]. Bytes live in bytea; meta path
     never returns the payload over Lisp eval. *)
-open Lwt.Syntax
 
 type meta = {
   id : string;
@@ -159,20 +158,19 @@ let put
     ?(filename : string option = None)
     ?(meta_json : string = "{}")
     ?(max_bytes : int = max_http_bytes)
-    () : (put_result, string) result Lwt.t =
+    () : (put_result, string) result =
   let ct = normalize_content_type content_type in
   if not (content_type_allowed ct) then
-    Lwt.return (Error ("disallowed content_type: " ^ ct))
+    (Error ("disallowed content_type: " ^ ct))
   else
     let byte_size = String.length data in
-    if byte_size <= 0 then Lwt.return (Error "empty body")
+    if byte_size <= 0 then (Error "empty body")
     else if byte_size > max_bytes then
-      Lwt.return
-        (Error
+      (Error
            (Printf.sprintf "payload too large (%d > %d)" byte_size max_bytes))
     else
       match Io_lwt.Db.current_conn store with
-      | None -> Lwt.return (Error "no db connection")
+      | None -> (Error "no db connection")
       | Some conn ->
           let fname = sanitize_filename filename in
           let digest = sha256_hex data in
@@ -191,9 +189,8 @@ let put
              VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb) \
              RETURNING id::text"
           in
-          Lwt.catch
-            (fun () ->
-              let* rows =
+          (try
+      let rows =
                 Io_lwt.Db.execute conn
                   ~params:
                     [ Pgx.Value.of_string author
@@ -218,23 +215,21 @@ let put
                          | Some f when f <> "" -> Some f
                          | _ -> None
                        in
-                       Lwt.return
-                         (Ok
+                       (Ok
                             { id
                             ; content_type = ct
                             ; filename
                             ; byte_size
                             ; sha256 = digest
                             })
-                   | None -> Lwt.return (Error "insert returned no id"))
-              | [] -> Lwt.return (Error "insert returned no row"))
-            (fun exn ->
-              Lwt.return
-                (Error ("store failed: " ^ Printexc.to_string exn)))
+                   | None -> (Error "insert returned no id"))
+              | [] -> (Error "insert returned no row")
+    with exn ->
+      (Error ("store failed: " ^ Printexc.to_string exn)))
 
-let get_meta (store : Store.t) ~(id : string) : meta option Lwt.t =
+let get_meta (store : Store.t) ~(id : string) : meta option =
   match Io_lwt.Db.current_conn store with
-  | None -> Lwt.return None
+  | None -> None
   | Some conn ->
       let sql =
         "SELECT id::text, author, content_type, \
@@ -242,22 +237,22 @@ let get_meta (store : Store.t) ~(id : string) : meta option Lwt.t =
          created_at::text \
          FROM media_blobs WHERE id = $1::uuid"
       in
-      Lwt.catch
-        (fun () ->
-          let* rows =
+      (try
+      let rows =
             Io_lwt.Db.execute conn
               ~params:[ Pgx.Value.of_string id ]
               sql
           in
           match rows with
-          | row :: _ -> Lwt.return (row_to_meta row)
-          | [] -> Lwt.return None)
-        (fun _ -> Lwt.return None)
+          | row :: _ -> (row_to_meta row)
+          | [] -> None
+    with _ ->
+      None)
 
 let get_bytes (store : Store.t) ~(id : string)
-  : (meta * string) option Lwt.t =
+  : (meta * string) option =
   match Io_lwt.Db.current_conn store with
-  | None -> Lwt.return None
+  | None -> None
   | Some conn ->
       let sql =
         "SELECT id::text, author, content_type, \
@@ -265,9 +260,8 @@ let get_bytes (store : Store.t) ~(id : string)
          created_at::text, data \
          FROM media_blobs WHERE id = $1::uuid"
       in
-      Lwt.catch
-        (fun () ->
-          let* rows =
+      (try
+      let rows =
             Io_lwt.Db.execute conn
               ~params:[ Pgx.Value.of_string id ]
               sql
@@ -277,23 +271,24 @@ let get_bytes (store : Store.t) ~(id : string)
               (match row_to_meta row, List.nth_opt row 8 with
                | Some m, Some data_cell ->
                    (match Pgx.Value.to_binary data_cell with
-                    | Some bytes -> Lwt.return (Some (m, bytes))
+                    | Some bytes -> (Some (m, bytes))
                     | None ->
                         (* Text-mode fallback if driver surfaces bytea as hex/escape. *)
                         (match Pgx.Value.to_string data_cell with
-                         | Some s -> Lwt.return (Some (m, s))
-                         | None -> Lwt.return None))
-               | _ -> Lwt.return None)
-          | [] -> Lwt.return None)
-        (fun _ -> Lwt.return None)
+                         | Some s -> (Some (m, s))
+                         | None -> None))
+               | _ -> None)
+          | [] -> None
+    with _ ->
+      None)
 
 let list
     (store : Store.t)
     ?(author : string option = None)
     ?(limit : int = 50)
-    () : meta list Lwt.t =
+    () : meta list =
   match Io_lwt.Db.current_conn store with
-  | None -> Lwt.return []
+  | None -> []
   | Some conn ->
       let limit = max 1 (min 200 limit) in
       let sql, params =
@@ -313,37 +308,35 @@ let list
                ORDER BY created_at DESC LIMIT $1"
             , [ Pgx.Value.of_int limit ] )
       in
-      Lwt.catch
-        (fun () ->
-          let* rows = Io_lwt.Db.execute conn ~params sql in
-          Lwt.return (List.filter_map row_to_meta rows))
-        (fun _ -> Lwt.return [])
+      (try
+      let rows = Io_lwt.Db.execute conn ~params sql in
+          (List.filter_map row_to_meta rows)
+    with _ ->
+      [])
 
 let delete
     (store : Store.t)
     ~(id : string)
     ~(actor : string)
     ~(is_admin : bool)
-  : ([ `Ok of string | `Not_found | `Forbidden ], string) result Lwt.t =
-  let* meta = get_meta store ~id in
+  : ([ `Ok of string | `Not_found | `Forbidden ], string) result =
+  let meta = get_meta store ~id in
   match meta with
-  | None -> Lwt.return (Ok `Not_found)
+  | None -> (Ok `Not_found)
   | Some m ->
       if (not is_admin) && m.author <> actor then
-        Lwt.return (Ok `Forbidden)
+        (Ok `Forbidden)
       else
         match Io_lwt.Db.current_conn store with
-        | None -> Lwt.return (Error "no db connection")
+        | None -> (Error "no db connection")
         | Some conn ->
             let sql = "DELETE FROM media_blobs WHERE id = $1::uuid" in
-            Lwt.catch
-              (fun () ->
-                let* _ =
+            (try
+      let _ =
                   Io_lwt.Db.execute conn
                     ~params:[ Pgx.Value.of_string id ]
                     sql
                 in
-                Lwt.return (Ok (`Ok id)))
-              (fun exn ->
-                Lwt.return
-                  (Error ("delete failed: " ^ Printexc.to_string exn)))
+                (Ok (`Ok id))
+    with exn ->
+      (Error ("delete failed: " ^ Printexc.to_string exn)))

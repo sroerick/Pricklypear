@@ -7,7 +7,6 @@
     POST   /media/upload       multipart browser form
     GET    /media/<uuid>       raw bytes
 *)
-open Lwt.Syntax
 open Pure_html
 open Http_core
 
@@ -15,16 +14,16 @@ let max_media_body_bytes = Media.max_http_bytes
 
 (** Read body with a hard byte ceiling; Error `Too_large if exceeded. *)
 let read_body_limited (reqd : Httpun.Reqd.t) ~(max_bytes : int)
-  : (string, [ `Too_large ]) result Lwt.t =
+  : (string, [ `Too_large ]) result =
   let body = Httpun.Reqd.request_body reqd in
-  let promise, wakeup = Lwt.task () in
+  let promise, resolver = Eio.Promise.create () in
   let buf = Buffer.create (min 4096 max_bytes) in
   let oversized = ref false in
   let rec sched () =
     Httpun.Body.Reader.schedule_read body
       ~on_eof:(fun () ->
-        if !oversized then Lwt.wakeup_later wakeup (Error `Too_large)
-        else Lwt.wakeup_later wakeup (Ok (Buffer.contents buf)))
+        if !oversized then Eio.Promise.resolve resolver (Error `Too_large)
+        else Eio.Promise.resolve resolver (Ok (Buffer.contents buf)))
       ~on_read:(fun bs ~off ~len ->
         if !oversized then sched ()
         else if Buffer.length buf + len > max_bytes then begin
@@ -37,7 +36,7 @@ let read_body_limited (reqd : Httpun.Reqd.t) ~(max_bytes : int)
         end)
   in
   sched ();
-  promise
+  Eio.Promise.await promise
 
 let header_ci (headers : (string * string) list) (name : string)
   : string option =
@@ -383,7 +382,7 @@ let store_upload
     ~(data : string)
     ~(filename : string option)
     ~(meta_json : string)
-  : (Media.put_result, string) result Lwt.t =
+  : (Media.put_result, string) result =
   Media.put (Session.store session) ~author ~content_type ~data ~filename
     ~meta_json ~max_bytes:max_media_body_bytes ()
 
@@ -401,19 +400,19 @@ let put_error_status (msg : string) : Httpun.Status.t =
   then `Bad_request
   else `Internal_server_error
 
-let api_media_post (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
+let api_media_post (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
   match require_authed_user session with
   | Error () ->
       unauthorized_api reqd;
-      Lwt.return_unit
+      ()
   | Ok (author, _) ->
-      let* body_res =
+      let body_res =
         read_body_limited reqd ~max_bytes:max_media_body_bytes
       in
       (match body_res with
        | Error `Too_large ->
            too_large reqd;
-           Lwt.return_unit
+           ()
        | Ok body ->
            let req = Httpun.Reqd.request reqd in
            let headers = header_list req in
@@ -426,9 +425,9 @@ let api_media_post (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
             with
             | Error msg ->
                 bad_request reqd msg;
-                Lwt.return_unit
+                ()
             | Ok (content_type, data, filename, meta_json) ->
-                let* res =
+                let res =
                   store_upload session ~author ~content_type ~data
                     ~filename ~meta_json
                 in
@@ -436,19 +435,19 @@ let api_media_post (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
                  | Ok r ->
                      json_response reqd ~status:`Created
                        (Media.put_result_to_yojson r);
-                     Lwt.return_unit
+                     ()
                  | Error msg ->
                      json_response reqd ~status:(put_error_status msg)
                        (`Assoc
                           [ ("ok", `Bool false); ("error", `String msg) ]);
-                     Lwt.return_unit)))
+                     ())))
 
 let api_media_list (session : Session.t) (reqd : Httpun.Reqd.t)
-    ~(target : string) : unit Lwt.t =
+    ~(target : string) : unit =
   match require_authed_user session with
   | Error () ->
       unauthorized_api reqd;
-      Lwt.return_unit
+      ()
   | Ok (author, is_admin) ->
       let limit =
         match query_param target "limit" with
@@ -460,7 +459,7 @@ let api_media_list (session : Session.t) (reqd : Httpun.Reqd.t)
         | Some ("1" | "true" | "yes") when is_admin -> true
         | _ -> false
       in
-      let* rows =
+      let rows =
         Media.list (Session.store session)
           ~author:(if scope_all then None else Some author)
           ~limit ()
@@ -468,47 +467,47 @@ let api_media_list (session : Session.t) (reqd : Httpun.Reqd.t)
       let items = List.map Media.meta_to_yojson rows in
       json_response reqd
         (`Assoc [ ("ok", `Bool true); ("items", `List items) ]);
-      Lwt.return_unit
+      ()
 
 let api_media_delete (session : Session.t) (reqd : Httpun.Reqd.t)
-    ~(id : string) : unit Lwt.t =
+    ~(id : string) : unit =
   match require_authed_user session with
   | Error () ->
       unauthorized_api reqd;
-      Lwt.return_unit
+      ()
   | Ok (actor, is_admin) ->
-      let* res =
+      let res =
         Media.delete (Session.store session) ~id ~actor ~is_admin
       in
       (match res with
        | Ok (`Ok id') ->
            json_response reqd
              (`Assoc [ ("ok", `Bool true); ("id", `String id') ]);
-           Lwt.return_unit
+           ()
        | Ok `Not_found ->
            not_found_json reqd "media not found";
-           Lwt.return_unit
+           ()
        | Ok `Forbidden ->
            forbidden reqd "not author or admin";
-           Lwt.return_unit
+           ()
        | Error msg ->
            json_response reqd ~status:`Internal_server_error
              (`Assoc [ ("ok", `Bool false); ("error", `String msg) ]);
-           Lwt.return_unit)
+           ())
 
 let media_get (session : Session.t) (reqd : Httpun.Reqd.t) ~(id : string)
-  : unit Lwt.t =
+  : unit =
   match require_authed_user session with
   | Error () ->
       unauthorized_api reqd;
-      Lwt.return_unit
+      ()
   | Ok _ ->
-      let* got = Media.get_bytes (Session.store session) ~id in
+      let got = Media.get_bytes (Session.store session) ~id in
       (match got with
        | None ->
            text_response reqd ~status:`Not_found ~content_type:"text/plain"
              "not found";
-           Lwt.return_unit
+           ()
        | Some (m, bytes) ->
            let disposition =
              match m.filename with
@@ -529,7 +528,7 @@ let media_get (session : Session.t) (reqd : Httpun.Reqd.t) ~(id : string)
            in
            let resp = Httpun.Response.create ~headers `OK in
            safe_respond_with_string reqd resp bytes;
-           Lwt.return_unit)
+           ())
 
 (* ---- Browser UI: GET /media + POST /media/upload ---- *)
 
@@ -576,15 +575,15 @@ let media_row_card (m : Media.meta) : Pure_html.node =
   ]
 
 let media_page (session : Session.t) (reqd : Httpun.Reqd.t)
-    ~(target : string) : unit Lwt.t =
+    ~(target : string) : unit =
   match require_authed_user session with
   | Error () ->
       require_login_redirect reqd ~path:"/media" ~target;
-      Lwt.return_unit
+      ()
   | Ok (author, is_admin) ->
       let msg = Option.value (query_param target "msg") ~default:"" in
       let err = Option.value (query_param target "err") ~default:"" in
-      let* rows =
+      let rows =
         Media.list (Session.store session) ~author:(Some author) ~limit:100
           ()
       in
@@ -660,23 +659,23 @@ let media_page (session : Session.t) (reqd : Httpun.Reqd.t)
         )
       in
       html_response reqd ~session body;
-      Lwt.return_unit
+      ()
 
 let media_upload_post (session : Session.t) (reqd : Httpun.Reqd.t)
-  : unit Lwt.t =
+  : unit =
   match require_authed_user session with
   | Error () ->
       require_login_redirect reqd ~path:"/media" ~target:"/media";
-      Lwt.return_unit
+      ()
   | Ok (author, _) ->
-      let* body_res =
+      let body_res =
         read_body_limited reqd ~max_bytes:max_media_body_bytes
       in
       (match body_res with
        | Error `Too_large ->
            redirect_response reqd
              ("/media?err=" ^ url_encode "file too large (max 5 MiB)");
-           Lwt.return_unit
+           ()
        | Ok body ->
            let req = Httpun.Reqd.request reqd in
            let headers = header_list req in
@@ -689,9 +688,9 @@ let media_upload_post (session : Session.t) (reqd : Httpun.Reqd.t)
             | Error msg ->
                 redirect_response reqd
                   ("/media?err=" ^ url_encode msg);
-                Lwt.return_unit
+                ()
             | Ok (content_type, data, filename, meta_json) ->
-                let* res =
+                let res =
                   store_upload session ~author ~content_type ~data
                     ~filename ~meta_json
                 in
@@ -703,41 +702,41 @@ let media_upload_post (session : Session.t) (reqd : Httpun.Reqd.t)
                      in
                      redirect_response reqd
                        ("/media?msg=" ^ url_encode msg);
-                     Lwt.return_unit
+                     ()
                  | Error msg ->
                      redirect_response reqd
                        ("/media?err=" ^ url_encode msg);
-                     Lwt.return_unit)))
+                     ())))
 
 let media_delete_post (session : Session.t) (reqd : Httpun.Reqd.t)
-    ~(id : string) : unit Lwt.t =
+    ~(id : string) : unit =
   match require_authed_user session with
   | Error () ->
       require_login_redirect reqd ~path:"/media" ~target:"/media";
-      Lwt.return_unit
+      ()
   | Ok (actor, is_admin) ->
       (* Drain body if any (form POST). *)
-      let* _ = read_body_limited reqd ~max_bytes:(64 * 1024) in
-      let* res =
+      let _ = read_body_limited reqd ~max_bytes:(64 * 1024) in
+      let res =
         Media.delete (Session.store session) ~id ~actor ~is_admin
       in
       (match res with
        | Ok (`Ok _) ->
            redirect_response reqd
              ("/media?msg=" ^ url_encode ("deleted " ^ id));
-           Lwt.return_unit
+           ()
        | Ok `Not_found ->
            redirect_response reqd
              ("/media?err=" ^ url_encode "not found");
-           Lwt.return_unit
+           ()
        | Ok `Forbidden ->
            redirect_response reqd
              ("/media?err=" ^ url_encode "not author or admin");
-           Lwt.return_unit
+           ()
        | Error msg ->
            redirect_response reqd
              ("/media?err=" ^ url_encode msg);
-           Lwt.return_unit)
+           ())
 
 (* Exposed for unit tests *)
 let multipart_boundary_for_test = multipart_boundary

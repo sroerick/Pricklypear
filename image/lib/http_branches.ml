@@ -1,5 +1,4 @@
 (** Branch browser UI: list, fork, checkout, promote. *)
-open Lwt.Syntax
 open Pure_html
 open Http_core
 
@@ -57,25 +56,24 @@ let checkout_form ~(ref_ : string) ~(current : bool) : Pure_html.node =
       ]
 
 let list_branches_page (session : Session.t) (reqd : Httpun.Reqd.t)
-    ?(msg = "") ?(err = "") () : unit Lwt.t =
+    ?(msg = "") ?(err = "") () : unit =
   let store = Session.store session in
   let current = Session.branch_name session in
-  let* branches = Store.list_branches store in
+  let branches = Store.list_branches store in
   let idmap = id_to_ref_map branches in
-  let* rows =
-    Lwt_list.map_s
+  let rows =
+    List.map
       (fun (b : Pricklypear_common.Branch.t) ->
         let ref_ = branch_ref_of b in
         let is_cur = ref_ = current || (current = "main" && ref_ = "system/main") in
-        let* n_fn = Store.count_functions_on_branch store ~branch_id:b.id in
-        let* n_rt = Store.count_routes_on_branch store ~branch_id:b.id in
-        let* ov =
+        let n_fn = Store.count_functions_on_branch store ~branch_id:b.id in
+        let n_rt = Store.count_routes_on_branch store ~branch_id:b.id in
+        let ov =
           Store.list_overrides store ~branch_id:b.id ~parent_id:b.parent_id
         in
         let n_ov = List.length ov in
         let star = if is_cur then "★" else "" in
-        Lwt.return
-          (HTML.tr
+        (HTML.tr
              (if is_cur then [HTML.class_ "br-current"] else [])
              [ HTML.td [] [txt "%s" star]
              ; HTML.td []
@@ -161,10 +159,10 @@ let list_branches_page (session : Session.t) (reqd : Httpun.Reqd.t)
        ])
   in
   html_response reqd ~session body;
-  Lwt.return_unit
+  ()
 
 let branch_detail_page (session : Session.t) (reqd : Httpun.Reqd.t)
-    ~(ref_ : string) ?(msg = "") ?(err = "") () : unit Lwt.t =
+    ~(ref_ : string) ?(msg = "") ?(err = "") () : unit =
   let store = Session.store session in
   let current = Session.branch_name session in
   let owner, name =
@@ -173,12 +171,12 @@ let branch_detail_page (session : Session.t) (reqd : Httpun.Reqd.t)
     | [n] -> "system", n
     | _ -> "system", ref_
   in
-  let* found = Store.lookup_branch_id_by_name store ~owner ~name in
+  let found = Store.lookup_branch_id_by_name store ~owner ~name in
   match found with
   | None ->
       list_branches_page session reqd ~err:("no such branch: " ^ ref_) ()
   | Some bid ->
-      let* branches = Store.list_branches store in
+      let branches = Store.list_branches store in
       let idmap = id_to_ref_map branches in
       let b_opt =
         List.find_opt
@@ -197,11 +195,11 @@ let branch_detail_page (session : Session.t) (reqd : Httpun.Reqd.t)
         ref_ = current
         || (owner ^ "/" ^ name) = current
       in
-      let* n_fn = Store.count_functions_on_branch store ~branch_id:bid in
-      let* n_rt = Store.count_routes_on_branch store ~branch_id:bid in
-      let* ov = Store.list_overrides store ~branch_id:bid ~parent_id in
-      let* own = Store.list_own_functions store ~branch_id:bid in
-      let* routes = Store.list_own_routes store ~branch_id:bid in
+      let n_fn = Store.count_functions_on_branch store ~branch_id:bid in
+      let n_rt = Store.count_routes_on_branch store ~branch_id:bid in
+      let ov = Store.list_overrides store ~branch_id:bid ~parent_id in
+      let own = Store.list_own_functions store ~branch_id:bid in
+      let routes = Store.list_own_routes store ~branch_id:bid in
       let n_ov = List.length ov in
       let override_rows =
         List.map
@@ -297,15 +295,14 @@ let branch_detail_page (session : Session.t) (reqd : Httpun.Reqd.t)
       (* optional diff *)
       let target = reqd |> Httpun.Reqd.request |> fun r -> r.Httpun.Request.target in
       let diff_name = query_param target "diff" in
-      let* diff_block =
+      let diff_block =
         match diff_name, parent_id with
-        | None, _ | Some "", _ -> Lwt.return []
+        | None, _ | Some "", _ -> []
         | Some dname, None ->
-            let* child =
+            let child =
               Store.lookup_function_on_branch store ~branch_id:bid ~name:dname
             in
-            Lwt.return
-              [ HTML.div [HTML.class_ "card"]
+            [ HTML.div [HTML.class_ "card"]
                   [ HTML.h2 [] [txt "Diff: %s (no parent)" dname]
                   ; (match child with
                      | None -> HTML.p [] [txt "(missing)"]
@@ -315,18 +312,17 @@ let branch_detail_page (session : Session.t) (reqd : Httpun.Reqd.t)
                   ]
               ]
         | Some dname, Some pid ->
-            let* child =
+            let child =
               Store.lookup_function_on_branch store ~branch_id:bid ~name:dname
             in
-            let* parent =
+            let parent =
               Store.lookup_function_on_branch store ~branch_id:pid ~name:dname
             in
             let show = function
               | None -> "(absent)"
               | Some (e, _, _, _) -> Pricklypear_lisp.Reader.pp_expr e
             in
-            Lwt.return
-              [ HTML.div [HTML.class_ "card"]
+            [ HTML.div [HTML.class_ "card"]
                   [ HTML.h2 [] [txt "Diff: %s" dname]
                   ; HTML.div [HTML.class_ "br-diff"]
                       [ HTML.div []
@@ -503,9 +499,9 @@ let branch_detail_page (session : Session.t) (reqd : Httpun.Reqd.t)
            @ diff_block)
       in
       html_response reqd ~session body;
-      Lwt.return_unit
+      ()
 
-let branches_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
+let branches_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
   let target = (Httpun.Reqd.request reqd).target in
   match query_param target "ref" with
   | Some ref_ when String.trim ref_ <> "" ->
@@ -513,7 +509,7 @@ let branches_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
   | _ -> list_branches_page session reqd ()
 
 (** GET /changes[?ref=owner/name] — branch change set (branching.change-set). *)
-let changes_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
+let changes_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
   let target = (Httpun.Reqd.request reqd).target in
   let ref_ =
     match query_param target "ref" with
@@ -526,18 +522,18 @@ let changes_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
     | _ -> (Session.username session, ref_)
   in
   let store = Session.store session in
-  let* bid_opt = Store.lookup_branch_id_by_name store ~owner ~name in
+  let bid_opt = Store.lookup_branch_id_by_name store ~owner ~name in
   match bid_opt with
   | None ->
       html_response reqd ~session ~status:`Not_found
         (chrome ~session ~title:"Changes"
            [ HTML.p [HTML.class_ "err"] [txt "unknown branch %s" ref_] ]);
-      Lwt.return_unit
+      ()
   | Some bid ->
-      let* parent_id = Store.branch_parent_id store ~branch_id:bid in
-      let* own = Store.list_own_functions store ~branch_id:bid in
-      let* routes = Store.list_own_routes store ~branch_id:bid in
-      let* ov = Store.list_overrides store ~branch_id:bid ~parent_id in
+      let parent_id = Store.branch_parent_id store ~branch_id:bid in
+      let own = Store.list_own_functions store ~branch_id:bid in
+      let routes = Store.list_own_routes store ~branch_id:bid in
+      let ov = Store.list_overrides store ~branch_id:bid ~parent_id in
       let sorted =
         List.sort (fun (_, _, a) (_, _, b) -> String.compare b a) own
       in
@@ -626,22 +622,22 @@ let changes_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
           ]
       in
       html_response reqd ~session body;
-      Lwt.return_unit
+      ()
 
-let branches_checkout (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
-  let* body = read_body reqd in
+let branches_checkout (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
+  let body = read_body reqd in
   let ref_ = Option.value (form_field body "ref") ~default:"" |> String.trim in
   if ref_ = "" then list_branches_page session reqd ~err:"ref required" ()
   else
-    let* r = Session.checkout_ref session ref_ in
+    let r = Session.checkout_ref session ref_ in
     match r with
     | Error e -> list_branches_page session reqd ~err:e ()
     | Ok () ->
         redirect_response reqd ("/branches?ref=" ^ ref_);
-        Lwt.return_unit
+        ()
 
-let branches_fork (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
-  let* body = read_body reqd in
+let branches_fork (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
+  let body = read_body reqd in
   let from_ = Option.value (form_field body "from") ~default:"system/main" in
   let name = Option.value (form_field body "name") ~default:"" |> String.trim in
   if name = "" then list_branches_page session reqd ~err:"name required" ()
@@ -650,7 +646,7 @@ let branches_fork (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
     let child_ref =
       if String.contains name '/' then name else owner ^ "/" ^ name
     in
-    let* r = Session.fork_ref session ~parent_ref:from_ ~child_ref in
+    let r = Session.fork_ref session ~parent_ref:from_ ~child_ref in
     match r with
     | Error e -> list_branches_page session reqd ~err:e ()
     | Ok _ ->
@@ -658,17 +654,17 @@ let branches_fork (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
           ~msg:("forked " ^ child_ref ^ " from " ^ from_) ()
 
 let branches_unoverride (session : Session.t) (reqd : Httpun.Reqd.t)
-  : unit Lwt.t =
-  let* body = read_body reqd in
+  : unit =
+  let body = read_body reqd in
   let ref_ = Option.value (form_field body "ref") ~default:"" |> String.trim in
   let name = Option.value (form_field body "name") ~default:"" |> String.trim in
   (* Checkout target branch first if needed so delete hits the right id. *)
-  let* _ =
+  let _ =
     if ref_ <> "" && Session.branch_name session <> ref_ then
       Session.checkout_ref session ref_
-    else Lwt.return (Ok ())
+    else (Ok ())
   in
-  let* r = Session.unoverride session name in
+  let r = Session.unoverride session name in
   match r with
   | Error e ->
       branch_detail_page session reqd ~ref_ ~err:e ()
@@ -679,8 +675,8 @@ let branches_unoverride (session : Session.t) (reqd : Httpun.Reqd.t)
       branch_detail_page session reqd ~ref_
         ~err:("no pin named " ^ name ^ " on this branch") ()
 
-let branches_promote (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
-  let* body = read_body reqd in
+let branches_promote (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
+  let body = read_body reqd in
   let ref_ = Option.value (form_field body "ref") ~default:"" |> String.trim in
   let form = parse_form_body body in
   let names =
@@ -688,7 +684,7 @@ let branches_promote (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
       (fun (k, v) -> if k = "name" && String.trim v <> "" then Some v else None)
       form
   in
-  let* r = Session.promote_to_main session ~source_ref:ref_ ~names in
+  let r = Session.promote_to_main session ~source_ref:ref_ ~names in
   match r with
   | Error e -> branch_detail_page session reqd ~ref_ ~err:e ()
   | Ok n ->

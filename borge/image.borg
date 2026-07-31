@@ -745,6 +745,137 @@
          DATA BROWSER: full CRUD over data_rows is specified in
          image.data-browser (OCaml system pages, not a Nopales package).
          /types remains the type_defs index and links into /data/<type>.
+
+         TREE BROWSER: lazy zoomable tree UI over the one tree is
+         specified in image.tree-browser (a Nopales package, not OCaml
+         system pages). system-browser stays the code hub (/bindings);
+         tree-browser is the universal *content* face (notes outline,
+         data rows, eventually pkg/type subtrees).
+    |))
+   )
+  )
+  (subsection tree-browser
+   (doc "Lazy zoomable tree UI: folders ARE non-leaf nodes; htmx depth-capped expansion; library-first (no kernel prims)")
+   (status planned)
+   (verify
+    (build "dune build image")
+    (smoke "GET /tree renders root to depth cap; deeper nodes as collapsed stubs")
+    (smoke "GET /partials/tree?slug=…&node-id=…&depth=2 fragment no chrome; expands stub in place")
+    (smoke "folders-only view omits leaf bodies; nodes with children still expandable")
+    (smoke "zoom: GET /tree?root=<node-id> re-renders with that node as root; breadcrumb back")
+    (smoke "expand returns children + one-level grandchild stubs (no N-requests-for-N-nodes)")
+    (smoke "no-JS: stub is an <a href> to the same partial URL; full GET still correct")
+    (smoke "notes is first root: /tree?slug=<doc> walks the notes outline model"))
+   (details
+    (doc (|
+         THESIS: the one tree (one-tree.tree-model) is not just a
+         storage trick — it is a browseable place. Since outline
+         storage already makes a folder and a title THE SAME THING
+         (a non-leaf node), the UI needs NO folder type: \"folder\"
+         is a VIEW decision (has-children? + collapsed), not a
+         storage one. One renderer walks docs, subtrees, and data.
+
+         PRIOR ART: Workflowy/Logseq zoom, Finder/Explorer lazy
+         expansion, Smalltalk hierarchy browser (categories and
+         classes are nodes at different depths). libs/outline/lib.pp
+         ALREADY runs the swap idiom (hx-post /partials/notes-node-op,
+         hx-target #outline, hx-swap outerHTML) — this section
+         generalizes that pattern into a reusable component.
+
+         ==========================================================
+         TWO TREES — DO NOT CONFLATE
+         ==========================================================
+           1. STORE tree (tree_nodes): /sys/pkg/…, /data/<type>/<id>,
+              branch lenses. Kernel addressing; recursive-CTE
+              override walks. NOT the v1 UI surface.
+           2. CONTENT tree (user-facing outline hierarchy): notes
+              outline nodes, docs → nodes → subnodes.
+           The v1 browser walks (2). Store-tree roots come LATER
+           (needs branch-lens-aware read prims; see DEFERRED).
+
+         ==========================================================
+         RENDER CONTRACT (pure Nopales, libs/tree)
+         ==========================================================
+           (tree/render root-id depth folders-only?) -> html string
+           - Recursive walk, depth-capped. Depth x fanout bounds
+             steps, so it fits the 100k sync budget (see
+             multi-user.budgets) — self-limiting by construction.
+           - Node row: twisty + title + child-count badge.
+           - Beyond cap: collapsed STUB, not a leaf.
+           - folders-only?: render only has-children? nodes as
+             rows; leaves appear only as counts.
+
+         STUB EXPANSION (htmx, the ONLY async here):
+           <li class=\"tb-stub\"
+               hx-get=\"/partials/tree?root=<id>&depth=2\"
+               hx-trigger=\"click\" hx-swap=\"outerHTML\">…</li>
+           Server returns the expanded SUBTREE FRAGMENT; the stub
+           replaces itself. htmx supplies the client-side async
+           illusion; each server request stays a small synchronous
+           eval. No guest-visible fibers (see
+           lisp-interpreter.language-roadmap: host owns concurrency).
+
+           ANTI-PATTERN (do not build): one request per node.
+           Each expansion MUST return children + ONE-LEVEL
+           grandchild stubs, so expansion is instant and request
+           count stays O(user clicks), not O(tree size).
+
+           PROGRESSIVE ENHANCEMENT: the stub's hx-get URL is also a
+           plain <a href>; without JS it full-page GETs the same
+           fragment URL (wants_fragment distinguishes). Same
+           discipline as notes.hypermedia-ui.
+
+         ZOOM (= \"load this title in the full window\"):
+           GET /tree?root=<node-id> — re-render with the focus node
+           as root. Zoom is ONE parameter, no new mechanism: same
+           renderer, different root. Breadcrumb of ancestors for
+           zoom-out. Zoom is what turns \"folder\" and \"title\"
+           into the same thing from the user's side too.
+
+         OOB PATCHING (when zoom/expand affects two panes):
+           hx-swap-oob updates tree panel + content pane in one
+           response. Defer multi-pane until notes dogfood shows the
+           need; v1 single-pane is fine.
+
+         ==========================================================
+         WHAT IS NOT HERE (kernel stays still)
+         ==========================================================
+           - NO new interpreter prims for v1. html/tag, request-param,
+             recursion, and the notes outline model suffice.
+           - NO change to eval budget tiers: depth-cap keeps every
+             request small; that IS the budget story.
+           - Kernel help only WHEN trees get big: children-of /
+             subtree prims over tree_nodes using the materialized
+             path index (one-tree.tree-model PINNED: indexed lookup,
+             not tree walk). Optimization, not v1.
+
+         ROOTS ROADMAP (one component, many roots):
+           v1   notes outline (slug root) — dogfood, ships first
+           v1.1 data rows: /tree?root=data:todo (typed-node leaves
+                link into /data/<type>/<id>)
+           v2   store tree: /tree?root=/sys/pkg/notes — needs
+                lens-aware read prims; this is when tree-browser
+                becomes the Smalltalk-style INSPECTOR face for the
+                whole habitat (code ASTs, types, routes as subtrees)
+
+         RELATION TO OTHER SECTIONS:
+           - image.system-browser: /bindings stays the code hub;
+             tree-browser is content-first. Shared
+             callers/callees spine untouched.
+           - notes.hypermedia-ui: notes keeps its dedicated outline
+             page; tree-browser is the GENERAL component it can
+             later delegate to. No notes rewrite in v1.
+           - structural-editing.op-protocol: when tree ops
+             (refile/move) land in the browser, they MUST go through
+             the shared tree-op protocol, not ad-hoc routes.
+
+         SUCCESS CRITERIA:
+           - A user can browse a deep notes outline without a full
+             page load per level.
+           - \"Folder\" required no schema/type — only a view bit.
+           - Zero kernel changes for the v1 notes root.
+           - Every tree interaction fits the 100k sync budget; no
+             background tier needed for browsing.
     |))
    )
   )

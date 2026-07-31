@@ -2,7 +2,6 @@
     Connection/tx substrate is [Store_db], included below.
     H3: SQL via [exec] on dual conn (lwt|eio from PP_IO). *)
 include Store_db
-open Lwt.Syntax
 
 (* ---- one-tree P3/P4: read-from-tree flag (spec one-tree.migration-plan) ----
    Default ON: branch-aware reads source from the tree-backed views
@@ -31,13 +30,12 @@ let pkg_rel () = if tree_reads () then "tree_package_registry" else "package_reg
    Returns (body, author, doc option). Errors/misses are logged and
    return None so the REPL keeps working with no DB. *)
 let lookup_function (t : t) (name : string)
-  : (Pricklypear_lisp.Ast.expr * string * string option) option Lwt.t =
+  : (Pricklypear_lisp.Ast.expr * string * string option) option =
   match t.conn with
-  | None -> Lwt.return_none
+  | None -> None
   | Some conn ->
-      Lwt.catch
-        (fun () ->
-          (* Recursive CTE: start at the session's branch and walk parents.
+      (try
+      (* Recursive CTE: start at the session's branch and walk parents.
              Return the FIRST row matching [name] when ordered by depth
              ascending (closest ancestor wins). *)
           let sql =
@@ -50,13 +48,13 @@ let lookup_function (t : t) (name : string)
             "JOIN chain ON fd.branch_id = chain.id " ^
             "WHERE fd.name = $2 " ^
             "ORDER BY chain.depth ASC LIMIT 1" in
-          let* rows =
+          let rows =
             exec conn
               ~params:[ Pgx.Value.of_string t.branch_id;
                         Pgx.Value.of_string name ]
               sql in
           (match rows with
-           | [] -> Lwt.return_none
+           | [] -> None
            | row :: _ ->
                (* body jsonb, author text, doc text nullable. *)
                (match row with
@@ -68,22 +66,21 @@ let lookup_function (t : t) (name : string)
                         (match Yojson.Safe.from_string body_str with
                          | j ->
                              (match Pricklypear_lisp.Ast.expr_of_json j with
-                              | Ok e -> Lwt.return (Some (e, author, doc))
+                              | Ok e -> (Some (e, author, doc))
                               | Error msg ->
                                   Printf.eprintf
                                     "[store] lookup_function: parse %s\n" msg;
-                                  Lwt.return_none)
+                                  None)
                          | exception Yojson.Json_error msg ->
                              Printf.eprintf
                                "[store] lookup_function: json %s\n" msg;
-                             Lwt.return_none)
-                     | _ -> Lwt.return_none)
-                | _ -> Lwt.return_none))
-        )
-        (fun exn ->
-          Printf.eprintf "[store] lookup_function error: %s\n"
+                             None)
+                     | _ -> None)
+                | _ -> None))
+    with exn ->
+      Printf.eprintf "[store] lookup_function error: %s\n"
             (Printexc.to_string exn);
-          Lwt.return_none)
+          None)
 
 (* List all function names visible to this branch (via the same
    recursive-CTE override walk). Used at session-make time to load
@@ -93,13 +90,12 @@ let lookup_function (t : t) (name : string)
     [depth] is 0 for rows owned by the current branch, >0 if inherited.
     Callers that only need name/body/author can ignore depth. *)
 let list_function_names_meta (t : t)
-  : (string * Pricklypear_lisp.Ast.expr * string * int) list Lwt.t =
+  : (string * Pricklypear_lisp.Ast.expr * string * int) list =
   match t.conn with
-  | None -> Lwt.return []
+  | None -> []
   | Some conn ->
-      Lwt.catch
-        (fun () ->
-          let sql =
+      (try
+      let sql =
             "WITH RECURSIVE chain AS ( " ^
             "  SELECT id, parent_id, 0 AS depth FROM branches WHERE id = $1 " ^
             "  UNION ALL " ^
@@ -109,7 +105,7 @@ let list_function_names_meta (t : t)
             "FROM " ^ fn_rel () ^ " fd " ^
             "JOIN chain ON fd.branch_id = chain.id " ^
             "ORDER BY chain.depth ASC, fd.name ASC" in
-          let* rows =
+          let rows =
             exec conn
               ~params:[ Pgx.Value.of_string t.branch_id ]
               sql in
@@ -141,30 +137,29 @@ let list_function_names_meta (t : t)
                 | _ -> None)
               rows
           in
-          Lwt.return acc)
-        (fun exn ->
-          Printf.eprintf "[store] list_function_names error: %s\n"
+          acc
+    with exn ->
+      Printf.eprintf "[store] list_function_names error: %s\n"
             (Printexc.to_string exn);
-          Lwt.return [])
+          [])
 
 (** Effective defs only (deduped). Same as [list_function_names_meta] without depth. *)
 let list_function_names (t : t)
-  : (string * Pricklypear_lisp.Ast.expr * string) list Lwt.t =
-  let* rows = list_function_names_meta t in
-  Lwt.return (List.map (fun (n, e, a, _) -> (n, e, a)) rows)
+  : (string * Pricklypear_lisp.Ast.expr * string) list =
+  let rows = list_function_names_meta t in
+  (List.map (fun (n, e, a, _) -> (n, e, a)) rows)
 
 (** Full branch-chain defs for env rehydrate: parents first (depth DESC),
     then children. Includes ALL rows (not deduped) so Session.load_defs can
     redefine — last write wins (child override). 4th = package provenance
     (None = untagged / always load). See session.load_defs note. *)
 let list_function_names_for_load (t : t)
-  : (string * Pricklypear_lisp.Ast.expr * string * string option) list Lwt.t =
+  : (string * Pricklypear_lisp.Ast.expr * string * string option) list =
   match t.conn with
-  | None -> Lwt.return []
+  | None -> []
   | Some conn ->
-      Lwt.catch
-        (fun () ->
-          let sql =
+      (try
+      let sql =
             "WITH RECURSIVE chain AS ( " ^
             "  SELECT id, parent_id, 0 AS depth FROM branches WHERE id = $1 " ^
             "  UNION ALL " ^
@@ -174,7 +169,7 @@ let list_function_names_for_load (t : t)
             "FROM " ^ fn_rel () ^ " fd " ^
             "JOIN chain ON fd.branch_id = chain.id " ^
             "ORDER BY chain.depth DESC, fd.name ASC" in
-          let* rows =
+          let rows =
             exec conn
               ~params:[ Pgx.Value.of_string t.branch_id ]
               sql in
@@ -198,95 +193,91 @@ let list_function_names_for_load (t : t)
                 | _ -> None)
               rows
           in
-          Lwt.return acc)
-        (fun exn ->
-          Printf.eprintf "[store] list_function_names_for_load error: %s\n"
+          acc
+    with exn ->
+      Printf.eprintf "[store] list_function_names_for_load error: %s\n"
             (Printexc.to_string exn);
-          Lwt.return [])
+          [])
 
 (* ---- own-branch stats / overrides (no recursive CTE) ---- *)
 
-let count_functions_on_branch (t : t) ~(branch_id : string) : int Lwt.t =
+let count_functions_on_branch (t : t) ~(branch_id : string) : int =
   match t.conn with
-  | None -> Lwt.return 0
+  | None -> 0
   | Some conn ->
-      Lwt.catch
-        (fun () ->
-          let sql =
+      (try
+      let sql =
             "SELECT COUNT(*)::text FROM function_defs WHERE branch_id = $1" in
-          let* rows =
+          let rows =
             exec conn ~params:[ Pgx.Value.of_string branch_id ] sql
           in
           (match rows with
            | [ [ c ] ] ->
                (match Pgx.Value.to_string c with
-                | Some s -> Lwt.return (int_of_string_opt s |> Option.value ~default:0)
-                | None -> Lwt.return 0)
-           | _ -> Lwt.return 0))
-        (fun exn ->
-          Printf.eprintf "[store] count_functions_on_branch: %s\n"
+                | Some s -> (int_of_string_opt s |> Option.value ~default:0)
+                | None -> 0)
+           | _ -> 0)
+    with exn ->
+      Printf.eprintf "[store] count_functions_on_branch: %s\n"
             (Printexc.to_string exn);
-          Lwt.return 0)
+          0)
 
-let count_routes_on_branch (t : t) ~(branch_id : string) : int Lwt.t =
+let count_routes_on_branch (t : t) ~(branch_id : string) : int =
   match t.conn with
-  | None -> Lwt.return 0
+  | None -> 0
   | Some conn ->
-      Lwt.catch
-        (fun () ->
-          let sql =
+      (try
+      let sql =
             "SELECT COUNT(*)::text FROM view_bindings WHERE branch_id = $1" in
-          let* rows =
+          let rows =
             exec conn ~params:[ Pgx.Value.of_string branch_id ] sql
           in
           (match rows with
            | [ [ c ] ] ->
                (match Pgx.Value.to_string c with
-                | Some s -> Lwt.return (int_of_string_opt s |> Option.value ~default:0)
-                | None -> Lwt.return 0)
-           | _ -> Lwt.return 0))
-        (fun exn ->
-          Printf.eprintf "[store] count_routes_on_branch: %s\n"
+                | Some s -> (int_of_string_opt s |> Option.value ~default:0)
+                | None -> 0)
+           | _ -> 0)
+    with exn ->
+      Printf.eprintf "[store] count_routes_on_branch: %s\n"
             (Printexc.to_string exn);
-          Lwt.return 0)
+          0)
 
 (** Parent branch id for [branch_id], if any. *)
-let branch_parent_id (t : t) ~(branch_id : string) : string option Lwt.t =
+let branch_parent_id (t : t) ~(branch_id : string) : string option =
   match t.conn with
-  | None -> Lwt.return None
+  | None -> None
   | Some conn ->
-      Lwt.catch
-        (fun () ->
-          let sql =
+      (try
+      let sql =
             "SELECT COALESCE(parent_id::text, '') FROM branches WHERE id = $1"
           in
-          let* rows =
+          let rows =
             exec conn ~params:[ Pgx.Value.of_string branch_id ] sql
           in
           match rows with
           | [ [ pid ] ] ->
               (match Pgx.Value.to_string pid with
-               | Some "" | None -> Lwt.return None
-               | Some s -> Lwt.return (Some s))
-          | _ -> Lwt.return None)
-        (fun _ -> Lwt.return None)
+               | Some "" | None -> None
+               | Some s -> (Some s))
+          | _ -> None
+    with _ ->
+      None)
 
 (** Own rows only: (name, author, updated_at). *)
 let list_own_functions (t : t) ~(branch_id : string)
-  : (string * string * string) list Lwt.t =
+  : (string * string * string) list =
   match t.conn with
-  | None -> Lwt.return []
+  | None -> []
   | Some conn ->
-      Lwt.catch
-        (fun () ->
-          let sql =
+      (try
+      let sql =
             "SELECT name, author, updated_at::text FROM function_defs " ^
             "WHERE branch_id = $1 ORDER BY name" in
-          let* rows =
+          let rows =
             exec conn ~params:[ Pgx.Value.of_string branch_id ] sql
           in
-          Lwt.return
-            (List.filter_map
+          (List.filter_map
                (fun row ->
                  match row with
                  | [ n; a; u ] ->
@@ -297,27 +288,25 @@ let list_own_functions (t : t) ~(branch_id : string)
                           Some (name, author, updated)
                       | _ -> None)
                  | _ -> None)
-               rows))
-        (fun exn ->
-          Printf.eprintf "[store] list_own_functions: %s\n"
+               rows)
+    with exn ->
+      Printf.eprintf "[store] list_own_functions: %s\n"
             (Printexc.to_string exn);
-          Lwt.return [])
+          [])
 
 let list_own_routes (t : t) ~(branch_id : string)
-  : (string * string) list Lwt.t =
+  : (string * string) list =
   match t.conn with
-  | None -> Lwt.return []
+  | None -> []
   | Some conn ->
-      Lwt.catch
-        (fun () ->
-          let sql =
+      (try
+      let sql =
             "SELECT route, handler FROM view_bindings WHERE branch_id = $1 " ^
             "ORDER BY route" in
-          let* rows =
+          let rows =
             exec conn ~params:[ Pgx.Value.of_string branch_id ] sql
           in
-          Lwt.return
-            (List.filter_map
+          (List.filter_map
                (fun row ->
                  match row with
                  | [ r; h ] ->
@@ -325,38 +314,36 @@ let list_own_routes (t : t) ~(branch_id : string)
                       | Some route, Some handler -> Some (route, handler)
                       | _ -> None)
                  | _ -> None)
-               rows))
-        (fun exn ->
-          Printf.eprintf "[store] list_own_routes: %s\n"
+               rows)
+    with exn ->
+      Printf.eprintf "[store] list_own_routes: %s\n"
             (Printexc.to_string exn);
-          Lwt.return [])
+          [])
 
 (** Child own names left-joined to parent: name, child_updated, parent_updated opt. *)
 let list_overrides (t : t) ~(branch_id : string) ~(parent_id : string option)
-  : (string * string * string option) list Lwt.t =
+  : (string * string * string option) list =
   match t.conn, parent_id with
-  | None, _ -> Lwt.return []
+  | None, _ -> []
   | Some _, None ->
       (* Root branch: every own def is "new". *)
-      let* own = list_own_functions t ~branch_id in
-      Lwt.return (List.map (fun (n, _, u) -> (n, u, None)) own)
+      let own = list_own_functions t ~branch_id in
+      (List.map (fun (n, _, u) -> (n, u, None)) own)
   | Some conn, Some pid ->
-      Lwt.catch
-        (fun () ->
-          let sql =
+      (try
+      let sql =
             "SELECT c.name, c.updated_at::text, p.updated_at::text " ^
             "FROM function_defs c " ^
             "LEFT JOIN function_defs p " ^
             "  ON p.branch_id = $2 AND p.name = c.name " ^
             "WHERE c.branch_id = $1 ORDER BY c.name" in
-          let* rows =
+          let rows =
             exec conn
               ~params:[ Pgx.Value.of_string branch_id;
                         Pgx.Value.of_string pid ]
               sql
           in
-          Lwt.return
-            (List.filter_map
+          (List.filter_map
                (fun row ->
                  match row with
                  | [ n; cu; pu ] ->
@@ -370,23 +357,22 @@ let list_overrides (t : t) ~(branch_id : string) ~(parent_id : string option)
                           Some (name, child_u, parent_u)
                       | _ -> None)
                  | _ -> None)
-               rows))
-        (fun exn ->
-          Printf.eprintf "[store] list_overrides: %s\n"
+               rows)
+    with exn ->
+      Printf.eprintf "[store] list_overrides: %s\n"
             (Printexc.to_string exn);
-          Lwt.return [])
+          [])
 
 let lookup_function_on_branch (t : t) ~(branch_id : string) ~(name : string)
-  : (Pricklypear_lisp.Ast.expr * string * string * string option) option Lwt.t =
+  : (Pricklypear_lisp.Ast.expr * string * string * string option) option =
   match t.conn with
-  | None -> Lwt.return_none
+  | None -> None
   | Some conn ->
-      Lwt.catch
-        (fun () ->
-          let sql =
+      (try
+      let sql =
             "SELECT body::text, author, updated_at::text, doc FROM function_defs " ^
             "WHERE branch_id = $1 AND name = $2" in
-          let* rows =
+          let rows =
             exec conn
               ~params:[ Pgx.Value.of_string branch_id;
                         Pgx.Value.of_string name ]
@@ -402,59 +388,57 @@ let lookup_function_on_branch (t : t) ~(branch_id : string) ~(name : string)
                     (try
                        match Pricklypear_lisp.Ast.expr_of_json
                                (Yojson.Safe.from_string body_str) with
-                       | Ok e -> Lwt.return (Some (e, author, updated, doc))
-                       | Error _ -> Lwt.return_none
-                     with _ -> Lwt.return_none)
-                | _ -> Lwt.return_none)
-           | _ -> Lwt.return_none))
-        (fun exn ->
-          Printf.eprintf "[store] lookup_function_on_branch: %s\n"
+                       | Ok e -> (Some (e, author, updated, doc))
+                       | Error _ -> None
+                     with _ -> None)
+                | _ -> None)
+           | _ -> None)
+    with exn ->
+      Printf.eprintf "[store] lookup_function_on_branch: %s\n"
             (Printexc.to_string exn);
-          Lwt.return_none)
+          None)
 
 let delete_function_on_branch (t : t) ~(branch_id : string) ~(name : string)
-  : bool Lwt.t =
+  : bool =
   match t.conn with
-  | None -> Lwt.return false
+  | None -> false
   | Some conn ->
-      Lwt.catch
-        (fun () ->
-          if Tree_store.tree_writes () then
+      (try
+      if Tree_store.tree_writes () then
             Tree_store.delete_fn conn ~branch_id ~name
           else begin
           let sql =
             "DELETE FROM function_defs WHERE branch_id = $1 AND name = $2 " ^
             "RETURNING name" in
-          let* rows =
+          let rows =
             exec conn
               ~params:[ Pgx.Value.of_string branch_id;
                         Pgx.Value.of_string name ]
               sql
           in
-          Lwt.return (rows <> [])
-          end)
-        (fun exn ->
-          Printf.eprintf "[store] delete_function_on_branch: %s\n"
+          (rows <> [])
+          end
+    with exn ->
+      Printf.eprintf "[store] delete_function_on_branch: %s\n"
             (Printexc.to_string exn);
-          Lwt.return false)
+          false)
 
 (** Copy selected function names from source branch to target (upsert). *)
 let promote_functions (t : t) ~(source_id : string) ~(target_id : string)
-    ~(names : string list) : int Lwt.t =
+    ~(names : string list) : int =
   match t.conn with
-  | None -> Lwt.return 0
-  | Some _ when names = [] -> Lwt.return 0
+  | None -> 0
+  | Some _ when names = [] -> 0
   | Some conn ->
-      Lwt.catch
-        (fun () ->
-          let* n =
-            Lwt_list.fold_left_s
+      (try
+      let n =
+            List.fold_left
               (fun acc name ->
-                let* src =
+                let src =
                   lookup_function_on_branch t ~branch_id:source_id ~name
                 in
                 match src with
-                | None -> Lwt.return acc
+                | None -> acc
                 | Some _ ->
                     let sql =
                       "INSERT INTO function_defs " ^
@@ -466,22 +450,22 @@ let promote_functions (t : t) ~(source_id : string) ~(target_id : string)
                       "SET body = EXCLUDED.body, author = EXCLUDED.author, " ^
                       "    doc = EXCLUDED.doc, package = EXCLUDED.package, " ^
                       "    updated_at = now() RETURNING name" in
-                    let* rows =
+                    let rows =
                       exec conn
                         ~params:[ Pgx.Value.of_string target_id;
                                   Pgx.Value.of_string source_id;
                                   Pgx.Value.of_string name ]
                         sql
                     in
-                    Lwt.return (if rows = [] then acc else acc + 1))
+                    (if rows = [] then acc else acc + 1))
               0 names
           in
-          let* () = Tree_store.recompute_head_hash conn ~branch_id:target_id in
-          Lwt.return n)
-        (fun exn ->
-          Printf.eprintf "[store] promote_functions: %s\n"
+          let () = Tree_store.recompute_head_hash conn ~branch_id:target_id in
+          n
+    with exn ->
+      Printf.eprintf "[store] promote_functions: %s\n"
             (Printexc.to_string exn);
-          Lwt.return 0)
+          0)
 
 (* Persist a function def. INSERT ... ON CONFLICT (branch_id, name)
    DO UPDATE so redefining a name in the same branch upserts. The body
@@ -492,35 +476,34 @@ let persist_function (t : t) (name : string)
     ?(doc : string option = None)
     ?(package : string option = None)
     (author : string)
-  : unit Lwt.t =
+  : unit =
   match t.conn with
-  | None -> Lwt.return_unit  (* no DB; env binding still happened in-memory *)
+  | None -> ()  (* no DB; env binding still happened in-memory *)
   | Some conn ->
-      Lwt.catch
-        (fun () ->
-          let body_json =
+      (try
+      let body_json =
             Yojson.Safe.to_string
               (Pricklypear_lisp.Ast.expr_to_json body) in
           if Tree_store.tree_writes () then begin
             (* one-tree P4: write the tree; reverse trigger mirrors to table *)
-            let* () =
+            let () =
               Tree_store.upsert_fn conn ~branch_id:t.branch_id ~name
                 ~body_json ~author ~doc
             in
             (* package provenance is scaffolding-only for Phase 1 *)
             (match package with
-             | None -> Lwt.return_unit
+             | None -> ()
              | Some pkg ->
                  let sql =
                    "UPDATE function_defs SET package = $3 " ^
                    "WHERE branch_id = $1 AND name = $2" in
-                 let* _ =
+                 let _ =
                    exec conn
                      ~params:[ Pgx.Value.of_string t.branch_id;
                                Pgx.Value.of_string name;
                                Pgx.Value.of_string pkg ]
                      sql in
-                 Lwt.return_unit)
+                 ())
           end else begin
           let sql =
             "INSERT INTO function_defs " ^
@@ -540,7 +523,7 @@ let persist_function (t : t) (name : string)
             | Some s -> Pgx.Value.of_string s
             | None -> Pgx.Value.null
           in
-          let* _ =
+          let _ =
             exec conn
               ~params:[ Pgx.Value.of_string t.branch_id;
                         Pgx.Value.of_string name;
@@ -549,12 +532,12 @@ let persist_function (t : t) (name : string)
                         doc_param;
                         pkg_param ]
               sql in
-          Lwt.return_unit
-          end)
-        (fun exn ->
-          Printf.eprintf "[store] persist_function error: %s\n"
+          ()
+          end
+    with exn ->
+      Printf.eprintf "[store] persist_function error: %s\n"
             (Printexc.to_string exn);
-          Lwt.return_unit)
+          ())
 
 (** branching.seed-policy: insert only if (branch_id, name) absent.
     Existing main (or any branch) rows are left untouched. Used by boot
@@ -564,40 +547,39 @@ let persist_function_if_absent (t : t) (name : string)
     ?(doc : string option = None)
     ?(package : string option = None)
     (author : string)
-  : unit Lwt.t =
+  : unit =
   match t.conn with
-  | None -> Lwt.return_unit
+  | None -> ()
   | Some conn ->
-      Lwt.catch
-        (fun () ->
-          let body_json =
+      (try
+      let body_json =
             Yojson.Safe.to_string
               (Pricklypear_lisp.Ast.expr_to_json body) in
           if Tree_store.tree_writes () then begin
-            let* exists =
+            let exists =
               Tree_store.get_by_path conn
                 ~path:(Tree_store.fn_path ~branch_id:t.branch_id ~name) in
             let stamp_pkg_if_null () =
               match package with
-              | None -> Lwt.return_unit
+              | None -> ()
               | Some pkg ->
                   let sql =
                     "UPDATE function_defs SET package = $3 " ^
                     "WHERE branch_id = $1 AND name = $2 AND package IS NULL" in
-                  let* _ =
+                  let _ =
                     exec conn
                       ~params:[ Pgx.Value.of_string t.branch_id;
                                 Pgx.Value.of_string name;
                                 Pgx.Value.of_string pkg ]
                       sql in
-                  Lwt.return_unit
+                  ()
             in
             (match exists with
              | Some _ ->
                  (* seed-policy: never overwrite body; still fill provenance *)
                  stamp_pkg_if_null ()
              | None ->
-                 let* () =
+                 let () =
                    Tree_store.upsert_fn conn ~branch_id:t.branch_id ~name
                      ~body_json ~author ~doc
                  in
@@ -618,7 +600,7 @@ let persist_function_if_absent (t : t) (name : string)
             | Some s -> Pgx.Value.of_string s
             | None -> Pgx.Value.null
           in
-          let* _ =
+          let _ =
             exec conn
               ~params:[ Pgx.Value.of_string t.branch_id;
                         Pgx.Value.of_string name;
@@ -630,45 +612,43 @@ let persist_function_if_absent (t : t) (name : string)
           (* Seed-policy never overwrites body, but still fill package
              provenance when the existing row is untagged. *)
           (match package with
-           | None -> Lwt.return_unit
+           | None -> ()
            | Some pkg ->
                let sql =
                  "UPDATE function_defs SET package = $3 " ^
                  "WHERE branch_id = $1 AND name = $2 AND package IS NULL" in
-               let* _ =
+               let _ =
                  exec conn
                    ~params:[ Pgx.Value.of_string t.branch_id;
                              Pgx.Value.of_string name;
                              Pgx.Value.of_string pkg ]
                    sql in
-               Lwt.return_unit)
-          end)
-        (fun exn ->
-          Printf.eprintf "[store] persist_function_if_absent error: %s\n"
+               ())
+          end
+    with exn ->
+      Printf.eprintf "[store] persist_function_if_absent error: %s\n"
             (Printexc.to_string exn);
-          Lwt.return_unit)
+          ())
 
 (** Visible docstring for [name], or None. *)
-let lookup_function_doc (t : t) (name : string) : string option Lwt.t =
-  let* found = lookup_function t name in
+let lookup_function_doc (t : t) (name : string) : string option =
+  let found = lookup_function t name in
   match found with
-  | Some (_, _, Some d) when String.trim d <> "" -> Lwt.return_some d
-  | _ -> Lwt.return_none
+  | Some (_, _, Some d) when String.trim d <> "" -> Some d
+  | _ -> None
 
-let list_branches (t : t) : Pricklypear_common.Branch.t list Lwt.t =
+let list_branches (t : t) : Pricklypear_common.Branch.t list =
   match t.conn with
-  | None -> Lwt.return []
+  | None -> []
   | Some conn ->
-      Lwt.catch
-        (fun () ->
-          let sql =
+      (try
+      let sql =
             "SELECT id::text, COALESCE(parent_id::text, ''), " ^
             "       owner, name, created_at::text, " ^
             "       COALESCE(last_synced::text, '') " ^
             "FROM branches ORDER BY owner, name" in
-          let* rows = exec conn sql in
-          Lwt.return
-            (List.filter_map
+          let rows = exec conn sql in
+          (List.filter_map
                (fun row ->
                  match row with
                  | [ id_c; pid_c; owner_c; name_c; created_c; synced_c ] ->
@@ -698,24 +678,23 @@ let list_branches (t : t) : Pricklypear_common.Branch.t list Lwt.t =
                              | None -> base)
                       | _ -> None)
                  | _ -> None)
-               rows))
-        (fun exn ->
-          Printf.eprintf "[store] list_branches error: %s\n"
+               rows)
+    with exn ->
+      Printf.eprintf "[store] list_branches error: %s\n"
             (Printexc.to_string exn);
-          Lwt.return [])
+          [])
 
 (* Look up a branch id by (owner, name). Used by (fork ...) to find
    the parent's UUID from its Lisp-level reference. Returns None if
    the branch isn't in the DB (or no DB). *)
 let lookup_branch_id_by_name (t : t) ~(owner : string) ~(name : string)
-  : string option Lwt.t =
+  : string option =
   match t.conn with
-  | None -> Lwt.return_none
+  | None -> None
   | Some conn ->
-      Lwt.catch
-        (fun () ->
-          let sql = "SELECT id::text FROM branches WHERE owner = $1 AND name = $2" in
-          let* rows =
+      (try
+      let sql = "SELECT id::text FROM branches WHERE owner = $1 AND name = $2" in
+          let rows =
             exec conn
               ~params:[ Pgx.Value.of_string owner;
                         Pgx.Value.of_string name ]
@@ -723,12 +702,12 @@ let lookup_branch_id_by_name (t : t) ~(owner : string) ~(name : string)
           in
           (match rows with
            | [ [ id_cell ] ] ->
-               Lwt.return (Pgx.Value.to_string id_cell)
-           | _ -> Lwt.return_none))
-        (fun exn ->
-          Printf.eprintf "[store] lookup_branch_id error: %s\n"
+               (Pgx.Value.to_string id_cell)
+           | _ -> None)
+    with exn ->
+      Printf.eprintf "[store] lookup_branch_id error: %s\n"
             (Printexc.to_string exn);
-          Lwt.return_none)
+          None)
 
 (* Switch the store's branch_id: subsequent lookups/persists/registers
    will target the new branch. Per spec [image.repl-experience]:
@@ -737,9 +716,9 @@ let lookup_branch_id_by_name (t : t) ~(owner : string) ~(name : string)
 
    Re-loading the env is the caller's responsibility (session.eval_one
    does it after we return successfully). *)
-let checkout_branch (t : t) ~(new_branch_id : string) : unit Lwt.t =
+let checkout_branch (t : t) ~(new_branch_id : string) : unit =
   t.branch_id <- new_branch_id;
-  Lwt.return_unit
+  ()
 
 (* Get the branch_id the store is currently bound to. *)
 let current_branch_id (t : t) : string = t.branch_id
@@ -750,32 +729,31 @@ let system_main_id = "00000000-0000-0000-0000-000000000001"
 (** Temporarily rebind [t.branch_id] for the duration of [f], then restore.
     Used so seed_stdlib can write package defaults to system/main without
     polluting the user's personal branch. *)
-let with_branch (t : t) ~(branch_id : string) (f : unit -> 'a Lwt.t) : 'a Lwt.t =
+let with_branch (t : t) ~(branch_id : string) (f : unit -> 'a) : 'a =
   let old = t.branch_id in
   t.branch_id <- branch_id;
-  Lwt.finalize f (fun () -> t.branch_id <- old; Lwt.return_unit)
+  Fun.protect ~finally:(fun () -> t.branch_id <- old) f
 
 (** Ensure a branch row exists; create an EMPTY child (parent pointer only)
     if missing. Does NOT copy function_defs/types/routes — inheritance via
     the recursive CTE makes parent defs visible, and personal overrides are
     just rows on the child. This is the right shape for user/personal. *)
 let ensure_branch (t : t) ~(parent_id : string) ~(owner : string)
-    ~(name : string) : string option Lwt.t =
-  let* existing = lookup_branch_id_by_name t ~owner ~name in
+    ~(name : string) : string option =
+  let existing = lookup_branch_id_by_name t ~owner ~name in
   match existing with
-  | Some id -> Lwt.return (Some id)
+  | Some id -> (Some id)
   | None ->
       (match t.conn with
-       | None -> Lwt.return_none
+       | None -> None
        | Some conn ->
-           Lwt.catch
-             (fun () ->
-               let sql =
+           (try
+      let sql =
                  "INSERT INTO branches (id, parent_id, owner, name) " ^
                  "VALUES (gen_random_uuid(), $1, $2, $3) " ^
                  "ON CONFLICT (owner, name) DO UPDATE SET name = EXCLUDED.name " ^
                  "RETURNING id::text" in
-               let* rows =
+               let rows =
                  exec conn
                    ~params:[ Pgx.Value.of_string parent_id;
                              Pgx.Value.of_string owner;
@@ -783,12 +761,12 @@ let ensure_branch (t : t) ~(parent_id : string) ~(owner : string)
                    sql
                in
                (match rows with
-                | [ [ id_cell ] ] -> Lwt.return (Pgx.Value.to_string id_cell)
+                | [ [ id_cell ] ] -> (Pgx.Value.to_string id_cell)
                 | _ ->
                     (* Race: another image created it; re-lookup. *)
-                    lookup_branch_id_by_name t ~owner ~name))
-             (fun exn ->
-               Printf.eprintf "[store] ensure_branch error: %s\n"
+                    lookup_branch_id_by_name t ~owner ~name)
+    with exn ->
+      Printf.eprintf "[store] ensure_branch error: %s\n"
                  (Printexc.to_string exn);
                lookup_branch_id_by_name t ~owner ~name))
 
@@ -811,13 +789,12 @@ let normalize_visibility (v : string) : string =
       (handler-only re-register does not clobber public). *)
 let register_route (t : t) ~(route : string) ~(handler : string)
     ?visibility ()
-  : unit Lwt.t =
+  : unit =
   match t.conn with
-  | None -> Lwt.return_unit
+  | None -> ()
   | Some conn ->
-      Lwt.catch
-        (fun () ->
-          if Tree_store.tree_writes () then begin
+      (try
+      if Tree_store.tree_writes () then begin
             let vis =
               match visibility with
               | Some v -> normalize_visibility v
@@ -850,34 +827,33 @@ let register_route (t : t) ~(route : string) ~(handler : string)
                   ; Pgx.Value.of_string route
                   ; Pgx.Value.of_string handler ] )
           in
-          let* _ = exec conn ~params sql in
-          Lwt.return_unit
-          end)
-        (fun exn ->
-          Printf.eprintf "[store] register_route error: %s\n"
+          let _ = exec conn ~params sql in
+          ()
+          end
+    with exn ->
+      Printf.eprintf "[store] register_route error: %s\n"
             (Printexc.to_string exn);
-          Lwt.return_unit)
+          ())
 
 (** branching.seed-policy: insert route only if absent on this branch. *)
 let register_route_if_absent (t : t) ~(route : string) ~(handler : string)
     ?visibility ()
-  : unit Lwt.t =
+  : unit =
   match t.conn with
-  | None -> Lwt.return_unit
+  | None -> ()
   | Some conn ->
-      Lwt.catch
-        (fun () ->
-          let vis =
+      (try
+      let vis =
             match visibility with
             | Some v -> normalize_visibility v
             | None -> "private"
           in
           if Tree_store.tree_writes () then begin
-            let* exists =
+            let exists =
               Tree_store.get_by_path conn
                 ~path:(Tree_store.route_path ~branch_id:t.branch_id ~route) in
             (match exists with
-             | Some _ -> Lwt.return_unit
+             | Some _ -> ()
              | None ->
                  Tree_store.upsert_route conn ~branch_id:t.branch_id ~route
                    ~handler ~visibility:vis)
@@ -888,7 +864,7 @@ let register_route_if_absent (t : t) ~(route : string) ~(handler : string)
             "VALUES ($1, $2, $3, $4) " ^
             "ON CONFLICT (branch_id, route) DO NOTHING"
           in
-          let* _ =
+          let _ =
             exec conn
               ~params:
                 [ Pgx.Value.of_string t.branch_id
@@ -897,24 +873,23 @@ let register_route_if_absent (t : t) ~(route : string) ~(handler : string)
                 ; Pgx.Value.of_string vis ]
               sql
           in
-          Lwt.return_unit
-          end)
-        (fun exn ->
-          Printf.eprintf "[store] register_route_if_absent error: %s\n"
+          ()
+          end
+    with exn ->
+      Printf.eprintf "[store] register_route_if_absent error: %s\n"
             (Printexc.to_string exn);
-          Lwt.return_unit)
+          ())
 
 (* List all route bindings visible to this branch (recursive-CTE walk,
    same as list_function_names — annotations from ancestors are visible
    via inheritance, child's definition OVERRIDES parent's). Returns
    (route, handler, visibility) ordered with closest ancestor first. *)
-let list_routes (t : t) : (string * string * string) list Lwt.t =
+let list_routes (t : t) : (string * string * string) list =
   match t.conn with
-  | None -> Lwt.return []
+  | None -> []
   | Some conn ->
-      Lwt.catch
-        (fun () ->
-          let sql =
+      (try
+      let sql =
             "WITH RECURSIVE chain AS ( " ^
             "  SELECT id, parent_id, 0 AS depth FROM branches WHERE id = $1 " ^
             "  UNION ALL " ^
@@ -925,13 +900,12 @@ let list_routes (t : t) : (string * string * string) list Lwt.t =
             "FROM " ^ rt_rel () ^ " vb " ^
             "JOIN chain ON vb.branch_id = chain.id " ^
             "ORDER BY chain.depth ASC" in
-          let* rows =
+          let rows =
             exec conn
               ~params:[ Pgx.Value.of_string t.branch_id ]
               sql
           in
-          Lwt.return
-            (List.filter_map
+          (List.filter_map
                (fun row ->
                  match row with
                  | [ route_c; handler_c; vis_c ] ->
@@ -952,11 +926,11 @@ let list_routes (t : t) : (string * string * string) list Lwt.t =
                       | Some r, Some h -> Some (r, h, "private")
                       | _ -> None)
                  | _ -> None)
-               rows))
-        (fun exn ->
-          Printf.eprintf "[store] list_routes error: %s\n"
+               rows)
+    with exn ->
+      Printf.eprintf "[store] list_routes error: %s\n"
             (Printexc.to_string exn);
-          Lwt.return [])
+          [])
 
 (* ---- type_defs ----
 
@@ -978,13 +952,12 @@ let list_routes (t : t) : (string * string * string) list Lwt.t =
    definition wins on name conflict. *)
 
 let persist_type (t : t) ~(name : string) ~(fields : string list)
-    ~(author : string) : unit Lwt.t =
+    ~(author : string) : unit =
   match t.conn with
-  | None -> Lwt.return_unit
+  | None -> ()
   | Some conn ->
-      Lwt.catch
-        (fun () ->
-          let fields_json =
+      (try
+      let fields_json =
             Yojson.Safe.to_string
               (`List (List.map (fun s -> `String s) fields)) in
           if Tree_store.tree_writes () then begin
@@ -997,7 +970,7 @@ let persist_type (t : t) ~(name : string) ~(fields : string list)
             "ON CONFLICT (branch_id, name) DO UPDATE " ^
             "SET fields = EXCLUDED.fields, author = EXCLUDED.author, " ^
             "    updated_at = now()" in
-          let* _ =
+          let _ =
             exec conn
               ~params:[ Pgx.Value.of_string t.branch_id;
                         Pgx.Value.of_string name;
@@ -1005,23 +978,22 @@ let persist_type (t : t) ~(name : string) ~(fields : string list)
                         Pgx.Value.of_string author ]
               sql
           in
-          Lwt.return_unit
-          end)
-        (fun exn ->
-          Printf.eprintf "[store] persist_type error: %s\n"
+          ()
+          end
+    with exn ->
+      Printf.eprintf "[store] persist_type error: %s\n"
             (Printexc.to_string exn);
-          Lwt.return_unit)
+          ())
 
 (* List all type declarations visible to this branch via the recursive
    CTE override walk. Returns (name, fields) pairs with closest
    ancestor first; caller-side Hashtbl first-occurrence dedup wins. *)
-let list_types (t : t) : (string * string list) list Lwt.t =
+let list_types (t : t) : (string * string list) list =
   match t.conn with
-  | None -> Lwt.return []
+  | None -> []
   | Some conn ->
-      Lwt.catch
-        (fun () ->
-          let sql =
+      (try
+      let sql =
             "WITH RECURSIVE chain AS ( " ^
             "  SELECT id, parent_id, 0 AS depth FROM branches WHERE id = $1 " ^
             "  UNION ALL " ^
@@ -1030,13 +1002,12 @@ let list_types (t : t) : (string * string list) list Lwt.t =
             ") SELECT td.name, td.fields::text FROM " ^ ty_rel () ^ " td " ^
             "JOIN chain ON td.branch_id = chain.id " ^
             "ORDER BY chain.depth ASC" in
-          let* rows =
+          let rows =
             exec conn
               ~params:[ Pgx.Value.of_string t.branch_id ]
               sql
           in
-          Lwt.return
-            (List.filter_map
+          (List.filter_map
                (fun row ->
                  match row with
                  | [ name_cell; fields_cell ] ->
@@ -1058,22 +1029,22 @@ let list_types (t : t) : (string * string list) list Lwt.t =
                            with _ -> None)
                       | _ -> None)
                  | _ -> None)
-               rows))
-        (fun exn ->
-          Printf.eprintf "[store] list_types error: %s\n"
+               rows)
+    with exn ->
+      Printf.eprintf "[store] list_types error: %s\n"
             (Printexc.to_string exn);
-          Lwt.return [])
+          [])
 
 (** Field names for a type visible on the current branch (CTE walk).
     None if the type is not declared. *)
-let lookup_type_fields (t : t) ~(name : string) : string list option Lwt.t =
-  let* types = list_types t in
+let lookup_type_fields (t : t) ~(name : string) : string list option =
+  let types = list_types t in
   match List.find_opt (fun (n, _) -> n = name) types with
-  | Some (_, fields) -> Lwt.return_some fields
-  | None -> Lwt.return_none
+  | Some (_, fields) -> Some fields
+  | None -> None
 
 let fork_branch (t : t) ~(parent_id : string) ~(owner : string)
-    ~(child_name : string) : string option Lwt.t =
+    ~(child_name : string) : string option =
   (* one-tree P5: EMPTY LENS fork.
      Create a branch row with parent_id only — NO copy of function_defs /
      type_defs / view_bindings. Inheritance is the recursive-CTE / path-
@@ -1083,17 +1054,16 @@ let fork_branch (t : t) ~(parent_id : string) ~(owner : string)
      tree_branches lens registry is maintained by the branches→tree
      deferred trigger (009). head_hash is recomputed (empty → null/empty).
      Single SERIALIZABLE tx; rollback-safe. *)
-  Lwt.catch
-    (fun () ->
+  (try
       with_transaction t (fun conn ->
         match conn with
-        | None -> Lwt.return_none
+        | None -> None
         | Some conn ->
             let insert_branch_sql =
               "INSERT INTO branches (id, parent_id, owner, name) " ^
               "VALUES (gen_random_uuid(), $1, $2, $3) " ^
               "RETURNING id::text" in
-            let* rows =
+            let rows =
               exec conn
                 ~params:[ Pgx.Value.of_string parent_id;
                           Pgx.Value.of_string owner;
@@ -1105,17 +1075,17 @@ let fork_branch (t : t) ~(parent_id : string) ~(owner : string)
                  (match Pgx.Value.to_string id_cell with
                   | Some new_branch_id ->
                       (* Refresh head_hash on the new empty lens (0 own nodes). *)
-                      let* () =
+                      let () =
                         Tree_store.recompute_head_hash conn
                           ~branch_id:new_branch_id
                       in
-                      Lwt.return (Some new_branch_id)
-                  | None -> Lwt.return_none)
-             | _ -> Lwt.return_none)))
-    (fun exn ->
+                      (Some new_branch_id)
+                  | None -> None)
+             | _ -> None))
+    with exn ->
       Printf.eprintf "[store] fork_branch error: %s\n"
         (Printexc.to_string exn);
-      Lwt.return_none)
+      None)
 
 (* Merge a source branch's function_defs into a target branch.
 
@@ -1138,12 +1108,11 @@ let fork_branch (t : t) ~(parent_id : string) ~(owner : string)
    Wrapped in a SERIALIZABLE transaction via [with_transaction] since
    it16 (previously best-effort atomic — carried-forward since it9). *)
 let merge_branch (t : t) ~(source_id : string) ~(target_id : string)
-  : int option Lwt.t =
-  Lwt.catch
-    (fun () ->
+  : int option =
+  (try
       with_transaction t (fun conn ->
         match conn with
-        | None -> Lwt.return_none  (* no DB; can't merge *)
+        | None -> None  (* no DB; can't merge *)
         | Some conn ->
             (* Upsert all function_defs from source into target. Returns
                the count of merged rows via Pg's INSERT RETURNING. *)
@@ -1157,18 +1126,18 @@ let merge_branch (t : t) ~(source_id : string) ~(target_id : string)
               "      doc = EXCLUDED.doc, package = EXCLUDED.package, " ^
               "      updated_at = EXCLUDED.updated_at " ^
               "RETURNING name" in
-            let* rows =
+            let rows =
               exec conn
                 ~params:[ Pgx.Value.of_string target_id;
                           Pgx.Value.of_string source_id ]
                 sql
             in
-            let* () = Tree_store.recompute_head_hash conn ~branch_id:target_id in
-            Lwt.return (Some (List.length rows))))
-    (fun exn ->
+            let () = Tree_store.recompute_head_hash conn ~branch_id:target_id in
+            (Some (List.length rows)))
+    with exn ->
       Printf.eprintf "[store] merge_branch error: %s\n"
         (Printexc.to_string exn);
-      Lwt.return_none)
+      None)
 
 (* ---- package-surface: package_registry (branch-lensed) ---- *)
 
@@ -1192,13 +1161,12 @@ let string_list_to_json (xs : string list) : string =
     (`List (List.map (fun s -> `String s) xs))
 
 (** Effective package registry rows for the current branch (closest wins). *)
-let list_packages (t : t) : package_row list Lwt.t =
+let list_packages (t : t) : package_row list =
   match t.conn with
-  | None -> Lwt.return []
+  | None -> []
   | Some conn ->
-      Lwt.catch
-        (fun () ->
-          let sql =
+      (try
+      let sql =
             "WITH RECURSIVE chain AS ( " ^
             "  SELECT id, parent_id, 0 AS depth FROM branches WHERE id = $1 " ^
             "  UNION ALL " ^
@@ -1209,7 +1177,7 @@ let list_packages (t : t) : package_row list Lwt.t =
             "FROM " ^ pkg_rel () ^ " pr " ^
             "JOIN chain ON pr.branch_id = chain.id " ^
             "ORDER BY chain.depth ASC, pr.name ASC" in
-          let* rows =
+          let rows =
             exec conn ~params:[ Pgx.Value.of_string t.branch_id ] sql
           in
           let seen = Hashtbl.create 32 in
@@ -1239,23 +1207,22 @@ let list_packages (t : t) : package_row list Lwt.t =
                 | _ -> None)
               rows
           in
-          Lwt.return acc)
-        (fun exn ->
-          Printf.eprintf "[store] list_packages error: %s\n"
+          acc
+    with exn ->
+      Printf.eprintf "[store] list_packages error: %s\n"
             (Printexc.to_string exn);
-          Lwt.return [])
+          [])
 
 (** Set of package names disabled on the current branch (effective). *)
-let disabled_package_names (t : t) : string list Lwt.t =
-  let* rows = list_packages t in
-  Lwt.return
-    (List.filter_map
+let disabled_package_names (t : t) : string list =
+  let rows = list_packages t in
+  (List.filter_map
        (fun (r : package_row) -> if r.enabled then None else Some r.name)
        rows)
 
-let lookup_package (t : t) (name : string) : package_row option Lwt.t =
-  let* rows = list_packages t in
-  Lwt.return (List.find_opt (fun (r : package_row) -> r.name = name) rows)
+let lookup_package (t : t) (name : string) : package_row option =
+  let rows = list_packages t in
+  (List.find_opt (fun (r : package_row) -> r.name = name) rows)
 
 (** Upsert registry row. [enabled_preserve]: if true and a row already exists
     on this branch, keep its enabled bit (header reload must not re-enable).
@@ -1263,13 +1230,12 @@ let lookup_package (t : t) (name : string) : package_row option Lwt.t =
 let upsert_package_registry (t : t) ~(name : string)
     ~(exports : string list) ~(author : string)
     ?(enabled : bool = true) ?(enabled_preserve : bool = true)
-    () : unit Lwt.t =
+    () : unit =
   match t.conn with
-  | None -> Lwt.return_unit
+  | None -> ()
   | Some conn ->
-      Lwt.catch
-        (fun () ->
-          let exp_json = string_list_to_json exports in
+      (try
+      let exp_json = string_list_to_json exports in
           let sql =
             if enabled_preserve then
               "INSERT INTO package_registry " ^
@@ -1286,7 +1252,7 @@ let upsert_package_registry (t : t) ~(name : string)
               "SET enabled = EXCLUDED.enabled, exports = EXCLUDED.exports, " ^
               "    author = EXCLUDED.author, updated_at = now()"
           in
-          let* _ =
+          let _ =
             exec conn
               ~params:[ Pgx.Value.of_string t.branch_id;
                         Pgx.Value.of_string name;
@@ -1295,23 +1261,22 @@ let upsert_package_registry (t : t) ~(name : string)
                         Pgx.Value.of_string author ]
               sql
           in
-          Lwt.return_unit)
-        (fun exn ->
-          Printf.eprintf "[store] upsert_package_registry error: %s\n"
+          ()
+    with exn ->
+      Printf.eprintf "[store] upsert_package_registry error: %s\n"
             (Printexc.to_string exn);
-          Lwt.return_unit)
+          ())
 
 (** Write enabled bit on the *current* branch (creates a shadowing row if
     the package only exists on an ancestor). Copies exports from effective
     row when inserting a new shadow. *)
 let set_package_enabled (t : t) ~(name : string) ~(enabled : bool)
-    ~(author : string) : unit Lwt.t =
+    ~(author : string) : unit =
   match t.conn with
-  | None -> Lwt.return_unit
+  | None -> ()
   | Some conn ->
-      Lwt.catch
-        (fun () ->
-          let* existing = lookup_package t name in
+      (try
+      let existing = lookup_package t name in
           let exports =
             match existing with
             | Some r -> r.exports
@@ -1326,7 +1291,7 @@ let set_package_enabled (t : t) ~(name : string) ~(enabled : bool)
             "SET enabled = EXCLUDED.enabled, author = EXCLUDED.author, " ^
             "    updated_at = now()"
           in
-          let* _ =
+          let _ =
             exec conn
               ~params:[ Pgx.Value.of_string t.branch_id;
                         Pgx.Value.of_string name;
@@ -1335,24 +1300,23 @@ let set_package_enabled (t : t) ~(name : string) ~(enabled : bool)
                         Pgx.Value.of_string author ]
               sql
           in
-          Lwt.return_unit)
-        (fun exn ->
-          Printf.eprintf "[store] set_package_enabled error: %s\n"
+          ()
+    with exn ->
+      Printf.eprintf "[store] set_package_enabled error: %s\n"
             (Printexc.to_string exn);
-          Lwt.return_unit)
+          ())
 
 (** Stamp untagged function_defs on the current branch with [package].
     Matches export list names and [package]/ prefix. Used when a
     (package …) header is seen so provenance lands even if later defines
     in the same load abort (e.g. std kernel special-form fallbacks). *)
 let stamp_package_bindings (t : t) ~(package : string)
-    ~(exports : string list) : unit Lwt.t =
+    ~(exports : string list) : unit =
   match t.conn with
-  | None -> Lwt.return_unit
+  | None -> ()
   | Some conn ->
-      Lwt.catch
-        (fun () ->
-          let exp_json = string_list_to_json exports in
+      (try
+      let exp_json = string_list_to_json exports in
           let sql =
             "UPDATE function_defs SET package = $2 " ^
             "WHERE branch_id = $1 AND package IS NULL AND ( " ^
@@ -1360,27 +1324,26 @@ let stamp_package_bindings (t : t) ~(package : string)
             "  OR name LIKE $2 || '/%' " ^
             "  OR name = ANY (SELECT jsonb_array_elements_text($3::jsonb)) " ^
             ")" in
-          let* _ =
+          let _ =
             exec conn
               ~params:[ Pgx.Value.of_string t.branch_id;
                         Pgx.Value.of_string package;
                         Pgx.Value.of_string exp_json ]
               sql
           in
-          Lwt.return_unit)
-        (fun exn ->
-          Printf.eprintf "[store] stamp_package_bindings error: %s\n"
+          ()
+    with exn ->
+      Printf.eprintf "[store] stamp_package_bindings error: %s\n"
             (Printexc.to_string exn);
-          Lwt.return_unit)
+          ())
 
 (** Map name -> package provenance for effective function_defs (closest wins). *)
-let function_package_map (t : t) : (string, string) Hashtbl.t Lwt.t =
+let function_package_map (t : t) : (string, string) Hashtbl.t =
   match t.conn with
-  | None -> Lwt.return (Hashtbl.create 1)
+  | None -> (Hashtbl.create 1)
   | Some conn ->
-      Lwt.catch
-        (fun () ->
-          let sql =
+      (try
+      let sql =
             "WITH RECURSIVE chain AS ( " ^
             "  SELECT id, parent_id, 0 AS depth FROM branches WHERE id = $1 " ^
             "  UNION ALL " ^
@@ -1391,7 +1354,7 @@ let function_package_map (t : t) : (string, string) Hashtbl.t Lwt.t =
             "JOIN chain ON fd.branch_id = chain.id " ^
             "WHERE fd.package IS NOT NULL " ^
             "ORDER BY chain.depth ASC, fd.name ASC" in
-          let* rows =
+          let rows =
             exec conn ~params:[ Pgx.Value.of_string t.branch_id ] sql
           in
           let tbl = Hashtbl.create 128 in
@@ -1406,8 +1369,8 @@ let function_package_map (t : t) : (string, string) Hashtbl.t Lwt.t =
                    | _ -> ())
               | _ -> ())
             rows;
-          Lwt.return tbl)
-        (fun exn ->
-          Printf.eprintf "[store] function_package_map error: %s\n"
+          tbl
+    with exn ->
+      Printf.eprintf "[store] function_package_map error: %s\n"
             (Printexc.to_string exn);
-          Lwt.return (Hashtbl.create 1))
+          (Hashtbl.create 1))

@@ -1,10 +1,9 @@
 (** Pricklypear Image — /types + /data CRUD browser pages. *)
-open Lwt.Syntax
 open Pure_html
 open Http_core
 
-let list_types_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
-  let* types = Store.list_types (Session.store session) in
+let list_types_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
+  let types = Store.list_types (Session.store session) in
   let rows =
     List.map
       (fun (name, fields) ->
@@ -44,7 +43,7 @@ let list_types_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
     ]
   in
   html_response reqd ~session body;
-  Lwt.return_unit
+  ()
 
 (* ---- data browser (image.data-browser) ---- *)
 
@@ -135,10 +134,10 @@ let shared_data_banner () =
     HTML.a [HTML.href "/data"] [txt "All data"];
   ]
 
-let data_index_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
+let data_index_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
   let store = Session.store session in
-  let* types = Store.list_types store in
-  let* orphan_names = Crud.list_data_type_names store in
+  let types = Store.list_types store in
+  let orphan_names = Crud.list_data_type_names store in
   let declared = List.map fst types in
   let declared_set =
     List.fold_left (fun acc n -> n :: acc) [] declared
@@ -146,12 +145,11 @@ let data_index_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
   let orphans =
     List.filter (fun n -> not (List.mem n declared_set)) orphan_names
   in
-  let* rows =
-    Lwt_list.map_s
+  let rows =
+    List.map
       (fun (name, fields) ->
-        let* n = Crud.count_by_type store ~type_name:name in
-        Lwt.return
-          (HTML.tr [] [
+        let n = Crud.count_by_type store ~type_name:name in
+        (HTML.tr [] [
              HTML.td [] [
                HTML.a [HTML.href "/data/%s" name] [txt "%s" name];
              ];
@@ -165,12 +163,11 @@ let data_index_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
            ]))
       types
   in
-  let* orphan_rows =
-    Lwt_list.map_s
+  let orphan_rows =
+    List.map
       (fun name ->
-        let* n = Crud.count_by_type store ~type_name:name in
-        Lwt.return
-          (HTML.tr [] [
+        let n = Crud.count_by_type store ~type_name:name in
+        (HTML.tr [] [
              HTML.td [] [
                HTML.a [HTML.href "/data/%s" name] [txt "%s" name];
              ];
@@ -210,17 +207,17 @@ let data_index_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
     ]
   in
   html_response reqd ~session body;
-  Lwt.return_unit
+  ()
 
 let data_list_page (session : Session.t) (type_name : string)
-    (reqd : Httpun.Reqd.t) : unit Lwt.t =
+    (reqd : Httpun.Reqd.t) : unit =
   if not (data_type_name_ok type_name) then begin
     html_response reqd ~session ~status:`Bad_request
       (chrome ~session ~title:"Bad type" [
          HTML.p [HTML.class_ "err"] [txt "invalid type name"];
          HTML.p [] [HTML.a [HTML.href "/data"] [txt "Back to /data"]];
        ]);
-    Lwt.return_unit
+    ()
   end else
     let store = Session.store session in
     let target = (Httpun.Reqd.request reqd).Httpun.Request.target in
@@ -235,14 +232,14 @@ let data_list_page (session : Session.t) (type_name : string)
       | Some s -> (try max 0 (int_of_string s) with _ -> 0)
       | None -> 0
     in
-    let* types = Store.list_types store in
+    let types = Store.list_types store in
     let declared =
       match List.assoc_opt type_name types with
       | Some fs -> fs
       | None -> []
     in
-    let* total = Crud.count_by_type store ~type_name in
-    let* rows = Crud.list_page store ~type_name ~limit ~offset () in
+    let total = Crud.count_by_type store ~type_name in
+    let rows = Crud.list_page store ~type_name ~limit ~offset () in
     let col_fields =
       if declared = [] then
         (* infer columns from first row keys *)
@@ -331,7 +328,7 @@ let data_list_page (session : Session.t) (type_name : string)
       ]
     in
     html_response reqd ~session body;
-    Lwt.return_unit
+    ()
 
 let field_inputs ~(declared : string list)
     ~(values : (string * string) list) : Pure_html.node list =
@@ -354,15 +351,15 @@ let field_inputs ~(declared : string list)
       declared
 
 let data_new_page (session : Session.t) (type_name : string)
-    (reqd : Httpun.Reqd.t) : unit Lwt.t =
+    (reqd : Httpun.Reqd.t) : unit =
   if not (data_type_name_ok type_name) then begin
     html_response reqd ~session ~status:`Bad_request
       (chrome ~session ~title:"Bad type" [
          HTML.p [HTML.class_ "err"] [txt "invalid type name"];
        ]);
-    Lwt.return_unit
+    ()
   end else
-    let* types = Store.list_types (Session.store session) in
+    let types = Store.list_types (Session.store session) in
     let declared =
       match List.assoc_opt type_name types with Some fs -> fs | None -> []
     in
@@ -389,21 +386,21 @@ let data_new_page (session : Session.t) (type_name : string)
       ]
     in
     html_response reqd ~session body;
-    Lwt.return_unit
+    ()
 
 let data_create (session : Session.t) (type_name : string)
-    (reqd : Httpun.Reqd.t) : unit Lwt.t =
+    (reqd : Httpun.Reqd.t) : unit =
   if not (data_type_name_ok type_name) then begin
     html_response reqd ~session ~status:`Bad_request
       (chrome ~session ~title:"Bad type" [
          HTML.p [HTML.class_ "err"] [txt "invalid type name"];
        ]);
-    Lwt.return_unit
+    ()
   end else
     let store = Session.store session in
-    let* body = read_body reqd in
+    let body = read_body reqd in
     let form = parse_form_body body in
-    let* types = Store.list_types store in
+    let types = Store.list_types store in
     let declared =
       match List.assoc_opt type_name types with Some fs -> fs | None -> []
     in
@@ -419,10 +416,10 @@ let data_create (session : Session.t) (type_name : string)
                HTML.a [HTML.href "/data/%s/new" type_name] [txt "Back"];
              ];
            ]);
-        Lwt.return_unit
+        ()
     | Ok fields_json ->
         let author = Session.username session in
-        let* v =
+        let v =
           Crud.create store ~type_name ~fields_json ~author
         in
         (match v with
@@ -430,7 +427,7 @@ let data_create (session : Session.t) (type_name : string)
            when String.length id = 36 && not (String.contains id ' ') ->
              redirect_response reqd
                (Printf.sprintf "/data/%s/%s" type_name id);
-             Lwt.return_unit
+             ()
          | Pricklypear_lisp.Ast.VStr msg ->
              html_response reqd ~session ~status:`Internal_server_error
                (chrome ~session ~title:"Create failed" [
@@ -439,25 +436,25 @@ let data_create (session : Session.t) (type_name : string)
                     HTML.a [HTML.href "/data/%s/new" type_name] [txt "Back"];
                   ];
                 ]);
-             Lwt.return_unit
+             ()
          | _ ->
              html_response reqd ~session ~status:`Internal_server_error
                (chrome ~session ~title:"Create failed" [
                   HTML.p [HTML.class_ "err"] [txt "create failed"];
                 ]);
-             Lwt.return_unit)
+             ())
 
 let data_detail_page (session : Session.t) (type_name : string)
-    (id : string) (reqd : Httpun.Reqd.t) : unit Lwt.t =
+    (id : string) (reqd : Httpun.Reqd.t) : unit =
   if not (data_type_name_ok type_name) then begin
     html_response reqd ~session ~status:`Bad_request
       (chrome ~session ~title:"Bad type" [
          HTML.p [HTML.class_ "err"] [txt "invalid type name"];
        ]);
-    Lwt.return_unit
+    ()
   end else
     let store = Session.store session in
-    let* row_opt = Crud.get_row store ~type_name ~id in
+    let row_opt = Crud.get_row store ~type_name ~id in
     match row_opt with
     | None ->
         html_response reqd ~session ~status:`Not_found
@@ -467,9 +464,9 @@ let data_detail_page (session : Session.t) (type_name : string)
                HTML.a [HTML.href "/data/%s" type_name] [txt "Back to list"];
              ];
            ]);
-        Lwt.return_unit
+        ()
     | Some row ->
-        let* types = Store.list_types store in
+        let types = Store.list_types store in
         let declared =
           match List.assoc_opt type_name types with
           | Some fs -> fs
@@ -552,30 +549,30 @@ let data_detail_page (session : Session.t) (type_name : string)
             ]
         in
         html_response reqd ~session body;
-        Lwt.return_unit
+        ()
 
 let data_update (session : Session.t) (type_name : string) (id : string)
-    (reqd : Httpun.Reqd.t) : unit Lwt.t =
+    (reqd : Httpun.Reqd.t) : unit =
   if not (data_type_name_ok type_name) then begin
     html_response reqd ~session ~status:`Bad_request
       (chrome ~session ~title:"Bad type" [
          HTML.p [HTML.class_ "err"] [txt "invalid type name"];
        ]);
-    Lwt.return_unit
+    ()
   end else
     let store = Session.store session in
-    let* body = read_body reqd in
+    let body = read_body reqd in
     let form = parse_form_body body in
-    let* row_opt = Crud.get_row store ~type_name ~id in
+    let row_opt = Crud.get_row store ~type_name ~id in
     match row_opt with
     | None ->
         html_response reqd ~session ~status:`Not_found
           (chrome ~session ~title:"Row not found" [
              HTML.p [HTML.class_ "err"] [txt "row not found"];
            ]);
-        Lwt.return_unit
+        ()
     | Some row ->
-        let* types = Store.list_types store in
+        let types = Store.list_types store in
         let declared =
           match List.assoc_opt type_name types with
           | Some fs -> fs
@@ -603,36 +600,36 @@ let data_update (session : Session.t) (type_name : string) (id : string)
                       [txt "Back"];
                   ];
                 ]);
-             Lwt.return_unit
+             ()
          | Ok fields_json ->
-             let* v = Crud.update store ~type_name ~id ~fields_json in
+             let v = Crud.update store ~type_name ~id ~fields_json in
              (match v with
               | Pricklypear_lisp.Ast.VStr _ ->
                   redirect_response reqd
                     (Printf.sprintf "/data/%s/%s" type_name id);
-                  Lwt.return_unit
+                  ()
               | _ ->
                   html_response reqd ~session ~status:`Not_found
                     (chrome ~session ~title:"Update failed" [
                        HTML.p [HTML.class_ "err"] [txt "row not found"];
                      ]);
-                  Lwt.return_unit))
+                  ()))
 
 let data_delete (session : Session.t) (type_name : string) (id : string)
-    (reqd : Httpun.Reqd.t) : unit Lwt.t =
+    (reqd : Httpun.Reqd.t) : unit =
   if not (data_type_name_ok type_name) then begin
     html_response reqd ~session ~status:`Bad_request
       (chrome ~session ~title:"Bad type" [
          HTML.p [HTML.class_ "err"] [txt "invalid type name"];
        ]);
-    Lwt.return_unit
+    ()
   end else
     let store = Session.store session in
-    let* v = Crud.delete store ~type_name ~id in
+    let v = Crud.delete store ~type_name ~id in
     match v with
     | Pricklypear_lisp.Ast.VStr _ ->
         redirect_response reqd (Printf.sprintf "/data/%s" type_name);
-        Lwt.return_unit
+        ()
     | _ ->
         html_response reqd ~session ~status:`Not_found
           (chrome ~session ~title:"Delete failed" [
@@ -641,5 +638,5 @@ let data_delete (session : Session.t) (type_name : string) (id : string)
                HTML.a [HTML.href "/data/%s" type_name] [txt "Back to list"];
              ];
            ]);
-        Lwt.return_unit
+        ()
 

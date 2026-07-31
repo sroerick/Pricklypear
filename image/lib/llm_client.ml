@@ -8,7 +8,6 @@
     Spec [ai-authoring.tools]: propose functions on the current branch
     with agent provenance. This module only does HTTP; session/http
     layers own store writes. *)
-open Lwt.Syntax
 
 let env_or name dft =
   match Sys.getenv_opt name with
@@ -28,10 +27,10 @@ type creds = {
 
 let current_creds : creds option ref = ref None
 
-let with_creds (c : creds) (f : unit -> 'a Lwt.t) : 'a Lwt.t =
+let with_creds (c : creds) (f : unit -> 'a) : 'a =
   let prev = !current_creds in
   current_creds := Some c;
-  Lwt.finalize f (fun () -> current_creds := prev; Lwt.return_unit)
+  Fun.protect ~finally:(fun () -> current_creds := prev) f
 
 let active_api_key () =
   match !current_creds with
@@ -103,11 +102,10 @@ let extract_content (body : string) : call_result =
     Error ("LLM parse error: " ^ Printexc.to_string e ^ " body=" ^ trunc)
 
 let call ?(temperature = 0.2) ?(max_tokens = 4096)
-    ~(system : string) ~(user : string) () : call_result Lwt.t =
+    ~(system : string) ~(user : string) () : call_result =
   let key = active_api_key () in
   if key = "" then
-    Lwt.return
-      (Error
+    (Error
          "no LLM key configured (add one in /settings/keys or set LLM_API_KEY)")
   else
     let body_json =
@@ -139,23 +137,22 @@ let call ?(temperature = 0.2) ?(max_tokens = 4096)
         (shell_quote tmp)
     in
     Printf.eprintf "[llm] POST %s model=%s\n" url (active_model ());
-    Lwt.catch
-      (fun () ->
-        let* stdout =
-          Lwt_process.pread ~timeout:200. (Lwt_process.shell cmd)
+    (try
+      let stdout =
+          Lwt_eio.run_lwt (fun () -> Lwt_process.pread ~timeout:200. (Lwt_process.shell cmd))
         in
         (try Sys.remove tmp with _ -> ());
         if String.trim stdout = "" then
-          Lwt.return (Error "LLM: empty curl response")
+          (Error "LLM: empty curl response")
         else if String.length stdout > 12
                 && (String.sub stdout 0 6 = "curl: "
                     || String.sub stdout 0 5 = "curl ") then
-          Lwt.return (Error ("curl: " ^ String.trim stdout))
+          (Error ("curl: " ^ String.trim stdout))
         else
-          Lwt.return (extract_content stdout))
-      (fun exn ->
-        (try Sys.remove tmp with _ -> ());
-        Lwt.return (Error ("LLM transport: " ^ Printexc.to_string exn)))
+          (extract_content stdout)
+    with exn ->
+      (try Sys.remove tmp with _ -> ());
+        (Error ("LLM transport: " ^ Printexc.to_string exn)))
 
 (** Strip optional markdown fences from model output. *)
 let strip_fences (s : string) : string =
@@ -248,19 +245,19 @@ let agent_chat
     ?(on_event : agent_event -> unit = fun _ -> ())
     ~(seed : string)
     ~(prompt : string)
-    () : call_result Lwt.t =
+    () : call_result =
   let key = active_api_key () in
   if key = "" then begin
     let msg =
       "no LLM key configured (add one in /settings/keys or set LLM_API_KEY)"
     in
     on_event (Fail msg);
-    Lwt.return (Error msg)
+    (Error msg)
   end else if not stream then begin
-    let* res = call ~temperature ~max_tokens ~system:seed ~user:prompt () in
+    let res = call ~temperature ~max_tokens ~system:seed ~user:prompt () in
     (match res with
-     | Ok text -> on_event (Token text); on_event Done; Lwt.return (Ok text)
-     | Error e -> on_event (Fail e); Lwt.return (Error e))
+     | Ok text -> on_event (Token text); on_event Done; (Ok text)
+     | Error e -> on_event (Fail e); (Error e))
   end else
     let body_json =
       `Assoc
@@ -292,23 +289,24 @@ let agent_chat
     in
     Printf.eprintf "[llm] STREAM %s model=%s\n" url (active_model ());
     let buf = Buffer.create 4096 in
-    Lwt.catch
-      (fun () ->
-        let proc = Lwt_process.open_process_in (Lwt_process.shell cmd) in
+    (try
+      let proc = Lwt_process.open_process_in (Lwt_process.shell cmd) in
         let rec loop () =
-          let* line_opt = Lwt_io.read_line_opt proc#stdout in
+          let line_opt =
+            Lwt_eio.run_lwt (fun () -> Lwt_io.read_line_opt proc#stdout)
+          in
           match line_opt with
           | None ->
-              let* st = proc#close in
+              let st = Lwt_eio.run_lwt (fun () -> proc#close) in
               (try Sys.remove tmp with _ -> ());
               ignore st;
               let text = Buffer.contents buf in
               if String.trim text = "" then begin
                 on_event (Fail "LLM stream: empty content");
-                Lwt.return (Error "LLM stream: empty content")
+                (Error "LLM stream: empty content")
               end else begin
                 on_event Done;
-                Lwt.return (Ok text)
+                (Ok text)
               end
           | Some line ->
               let line = String.trim line in
@@ -330,17 +328,17 @@ let agent_chat
                           || String.sub line 0 5 = "curl:") then begin
                 (try Sys.remove tmp with _ -> ());
                 on_event (Fail line);
-                let* _ = proc#close in
-                Lwt.return (Error line)
+                let _ = proc#close in
+                (Error line)
               end else
                 loop ()
         in
-        loop ())
-      (fun exn ->
-        (try Sys.remove tmp with _ -> ());
+        loop ()
+    with exn ->
+      (try Sys.remove tmp with _ -> ());
         let e = "LLM stream transport: " ^ Printexc.to_string exn in
         on_event (Fail e);
-        Lwt.return (Error e))
+        (Error e))
 
 
 (** ---- Multi-turn chat + OpenAI tools (agent loop) ---- *)
@@ -589,11 +587,10 @@ let chat_turn
     ?(max_tokens = 4096)
     ?(tools : tool_def list = [])
     ~(messages : chat_message list)
-    () : turn_result Lwt.t =
+    () : turn_result =
   let key = active_api_key () in
   if key = "" then
-    Lwt.return
-      (Turn_error
+    (Turn_error
          "no LLM key configured (add one in /settings/keys or set LLM_API_KEY)")
   else
     let msgs = `List (List.map message_to_json messages) in
@@ -628,22 +625,21 @@ let chat_turn
     in
     Printf.eprintf "[llm] TURN %s model=%s tools=%d msgs=%d\n%!"
       url (active_model ()) (List.length tools) (List.length messages);
-    Lwt.catch
-      (fun () ->
-        let* stdout =
-          Lwt_process.pread ~timeout:200. (Lwt_process.shell cmd)
+    (try
+      let stdout =
+          Lwt_eio.run_lwt (fun () -> Lwt_process.pread ~timeout:200. (Lwt_process.shell cmd))
         in
         (try Sys.remove tmp with _ -> ());
         if String.trim stdout = "" then
-          Lwt.return (Turn_error "LLM: empty curl response")
+          (Turn_error "LLM: empty curl response")
         else if String.length stdout > 6
                 && String.sub stdout 0 5 = "curl " then
-          Lwt.return (Turn_error ("curl: " ^ String.trim stdout))
+          (Turn_error ("curl: " ^ String.trim stdout))
         else
-          Lwt.return (parse_turn_response stdout))
-      (fun exn ->
-        (try Sys.remove tmp with _ -> ());
-        Lwt.return (Turn_error ("LLM transport: " ^ Printexc.to_string exn)))
+          (parse_turn_response stdout)
+    with exn ->
+      (try Sys.remove tmp with _ -> ());
+        (Turn_error ("LLM transport: " ^ Printexc.to_string exn)))
 
 (** Ask the model to write one Lisp function body (s-expr).
     Returns source text for (define name <body>). *)
@@ -651,7 +647,7 @@ let propose_function_source
     ~(name : string)
     ~(spec : string)
     ?(context = "")
-    () : call_result Lwt.t =
+    () : call_result =
   let system =
     "You are a Pricklypear Lisp author. Respond ONLY with a single Lisp \
      s-expression that is the BODY of a function (typically a lambda). \
@@ -668,12 +664,12 @@ let propose_function_source
       name spec
       (if context = "" then "" else "Context:\n" ^ context ^ "\n")
   in
-  let* res = call ~system ~user () in
+  let res = call ~system ~user () in
   match res with
-  | Error e -> Lwt.return (Error e)
+  | Error e -> (Error e)
   | Ok text ->
       let cleaned = strip_fences text in
-      Lwt.return (Ok cleaned)
+      (Ok cleaned)
 
 (** Surgical AST author: rewrite ONE component (coding tool). *)
 let rewrite_component_source
@@ -681,7 +677,7 @@ let rewrite_component_source
     ~(name : string)
     ~(concept : string)
     ~(current_pretty : string)
-    () : call_result Lwt.t =
+    () : call_result =
   let system =
     "You are editing a Pricklypear Lisp AST as a coding tool. " ^
     "Return ONLY one replacement s-expression (typically a lambda). " ^
@@ -711,13 +707,13 @@ let rewrite_component_source
          satisfies the concept. Return one s-expression only."
         name concept current_pretty
   in
-  let* res = call ~system ~user () in
+  let res = call ~system ~user () in
   match res with
-  | Error e -> Lwt.return (Error e)
-  | Ok text -> Lwt.return (Ok (strip_fences text))
+  | Error e -> (Error e)
+  | Ok text -> (Ok (strip_fences text))
 
 (** Seed: smallest clean core for growth. *)
-let seed_core_source ~(requirement : string) () : call_result Lwt.t =
+let seed_core_source ~(requirement : string) () : call_result =
   let system =
     "You write the SMALLEST and CLEANEST Pricklypear Lisp nucleus function. " ^
     "Return ONLY one lambda s-expression. No markdown, no define wrapper. " ^
@@ -728,17 +724,17 @@ let seed_core_source ~(requirement : string) () : call_result Lwt.t =
       "Requirement:\n%s\nWrite the smallest pure-ish lambda that captures the essential core."
       requirement
   in
-  let* res = call ~system ~user () in
+  let res = call ~system ~user () in
   match res with
-  | Error e -> Lwt.return (Error e)
-  | Ok text -> Lwt.return (Ok (strip_fences text))
+  | Error e -> (Error e)
+  | Ok text -> (Ok (strip_fences text))
 
 (** Judge growth: returns Ok "done" or Ok "next: <responsibility>" *)
 let growth_judge
     ~(requirement : string)
     ~(current_pretty : string)
     ~(step : int)
-    () : call_result Lwt.t =
+    () : call_result =
   let system =
     "You judge whether a growing Lisp function set satisfies a requirement. " ^
     "Respond with EXACTLY one line: either DONE or NEXT: <single short responsibility>. " ^
@@ -749,7 +745,7 @@ let growth_judge
       "Requirement:\n%s\nStep: %d\nCurrent tip function:\n%s\nJudge."
       requirement step current_pretty
   in
-  let* res = call ~system ~user ~temperature:0.1 () in
+  let res = call ~system ~user ~temperature:0.1 () in
   match res with
-  | Error e -> Lwt.return (Error e)
-  | Ok text -> Lwt.return (Ok (String.trim (strip_fences text)))
+  | Error e -> (Error e)
+  | Ok text -> (Ok (String.trim (strip_fences text)))

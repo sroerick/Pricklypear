@@ -1,7 +1,6 @@
 (** Static App-Var call graph for inspector / impact / DNU.
     Spec: image.inspector phases I1+; shared by system-browser + dnu-stubs. *)
 
-open Lwt.Syntax
 
 module Ast = Pricklypear_lisp.Ast
 
@@ -177,8 +176,8 @@ let holes (snap : snapshot) (name : string) : string list =
         apps
 
 (** Load defs + routes from session store and build snapshot. *)
-let snapshot_of_session (session : Session_types.t) : snapshot Lwt.t =
-  let* defs = Store.list_function_names session.store in
+let snapshot_of_session (session : Session_types.t) : snapshot =
+  let defs = Store.list_function_names session.store in
   let bodies = List.map (fun (n, e, _) -> (n, e)) defs in
   let routes =
     Hashtbl.fold
@@ -186,7 +185,7 @@ let snapshot_of_session (session : Session_types.t) : snapshot Lwt.t =
       session.routes []
   in
   let prim_names = List.map fst session.kernel_catalog in
-  Lwt.return (build_snapshot ~defs:bodies ~routes ~prim_names)
+  (build_snapshot ~defs:bodies ~routes ~prim_names)
 
 let take n xs =
   let rec go i = function
@@ -198,11 +197,11 @@ let take n xs =
 
 (** After successful function_def write: impact queue + change transcript. *)
 let record_define_side_effects (t : Session_types.t) ~(name : string)
-    : unit Lwt.t =
+    : unit =
   if t.suppress_refresh_on_define || t.manifest.username = "anonymous" then
-    Lwt.return_unit
+    ()
   else
-    let* snap = snapshot_of_session t in
+    let snap = snapshot_of_session t in
     let deps = dependents snap ~name ~depth:8 in
     let routes = used_by_routes snap name in
     let now = Unix.gettimeofday () in
@@ -212,7 +211,7 @@ let record_define_side_effects (t : Session_types.t) ~(name : string)
       { op = "define"; name; at = now; branch; author }
     in
     t.change_transcript <- take 64 (ch :: t.change_transcript);
-    if deps = [] && routes = [] then Lwt.return_unit
+    if deps = [] && routes = [] then ()
     else begin
       let ev : Session_types.impact_event =
         { name; at = now; branch; author; dependents = deps;
@@ -224,7 +223,7 @@ let record_define_side_effects (t : Session_types.t) ~(name : string)
           t.impact_queue
       in
       t.impact_queue <- take 32 (ev :: rest);
-      Lwt.return_unit
+      ()
     end
 
 let impact_summary_text (t : Session_types.t) (name : string) : string =
@@ -246,26 +245,26 @@ let impact_summary_text (t : Session_types.t) (name : string) : string =
       Printf.sprintf "impact: dependents=%s; smoke routes: %s" deps rts
 
 let page_function_graph (session : Session_types.t) ~(handler : string)
-    : (string * string) list Lwt.t =
-  let* snap = snapshot_of_session session in
+    : (string * string) list =
+  let snap = snapshot_of_session session in
   let max_depth = 8 in
   let rec walk depth seen name role acc =
-    if depth > max_depth || List.mem name seen then Lwt.return acc
+    if depth > max_depth || List.mem name seen then acc
     else
       match Hashtbl.find_opt snap.bodies name with
-      | None -> Lwt.return ((name, role ^ " (missing)") :: acc)
+      | None -> ((name, role ^ " (missing)") :: acc)
       | Some _ ->
           let acc = (name, role) :: acc in
           let seen = name :: seen in
           let cs = direct_callees snap name in
           let rec fold_c cs acc =
             match cs with
-            | [] -> Lwt.return acc
+            | [] -> acc
             | c :: rest ->
-                let* acc = walk (depth + 1) seen c "callee" acc in
+                let acc = walk (depth + 1) seen c "callee" acc in
                 fold_c rest acc
           in
           fold_c cs acc
   in
-  let* rows = walk 0 [] handler "handler" [] in
-  Lwt.return (List.rev rows)
+  let rows = walk 0 [] handler "handler" [] in
+  (List.rev rows)

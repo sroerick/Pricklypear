@@ -1,5 +1,4 @@
 (** Pricklypear Image — HTTP system & product page handlers. *)
-open Lwt.Syntax
 open Pure_html
 open Http_core
 open Http_data
@@ -7,8 +6,8 @@ open Http_branches
 open Http_agent
 
 let show_binding_page (session : Session.t) (name : string)
-    (reqd : Httpun.Reqd.t) : unit Lwt.t =
-  let* found = Store.lookup_function (Session.store session) name in
+    (reqd : Httpun.Reqd.t) : unit =
+  let found = Store.lookup_function (Session.store session) name in
   let body =
     match found with
     | None ->
@@ -29,7 +28,7 @@ let show_binding_page (session : Session.t) (name : string)
         ]
   in
   html_response reqd ~session body;
-  Lwt.return_unit
+  ()
 
 open Http_data
 
@@ -181,9 +180,9 @@ let emergency_home_content (session : Session.t) : Pure_html.node list =
     ]
   ]
 
-let home_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
+let home_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
   (* Nav comes from Session.ui_nav_html (refreshed in request launch). *)
-  let* home_html = try_ui_fn session "ui/home" in
+  let home_html = try_ui_fn session "ui/home" in
   let content =
     match home_html with
     | Some html when String.trim html <> "" ->
@@ -192,7 +191,7 @@ let home_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
   in
   let body = chrome ~session ~title:"" content in
   html_response reqd ~session body;
-  Lwt.return_unit
+  ()
 
 let repl_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
   let js =
@@ -257,7 +256,7 @@ let contains_ci (hay : string) (needle : string) : bool =
     list only needs the direct handler mapping; deep graphs stay on
     /page/<route> inspect. *)
 let used_by_pages_map (session : Session.t)
-    : (string, string list) Hashtbl.t Lwt.t =
+    : (string, string list) Hashtbl.t =
   let routes = Session.list_pages session in
   let tbl : (string, string list) Hashtbl.t = Hashtbl.create 32 in
   List.iter
@@ -266,22 +265,22 @@ let used_by_pages_map (session : Session.t)
       if List.mem route prev then ()
       else Hashtbl.replace tbl handler (route :: prev))
     routes;
-  Lwt.return tbl
+  tbl
 
 let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
-    : unit Lwt.t =
+    : unit =
   let target = (Httpun.Reqd.request reqd).Httpun.Request.target in
   let q = Option.value (query_param target "q") ~default:"" |> String.trim in
   let pkg_q = query_param target "pkg" in
   let fn_q = query_param target "fn" in
-  let* defs_meta =
+  let defs_meta =
     Store.list_function_names_meta (Session.store session)
   in
   (* Effective view only: one row per name (closest branch wins). *)
   let defs =
     List.map (fun (n, e, a, d) -> (n, e, a, d)) defs_meta
   in
-  let* used_by = used_by_pages_map session in
+  let used_by = used_by_pages_map session in
   let kernel = Session.kernel_catalog session in
   let matches_ws (name, _body, author, _depth) =
     q = ""
@@ -403,7 +402,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
             ]
       in
       html_response reqd ~session body;
-      Lwt.return_unit
+      ()
   | Some "kernel", Some fname ->
       let summary =
         match List.assoc_opt fname kernel with
@@ -435,20 +434,19 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
         ]
       in
       html_response reqd ~session body;
-      Lwt.return_unit
+      ()
   | Some pkg, Some local ->
       let full =
         if String.contains local '/' then local
         else if pkg = "" || pkg = "(root)" || pkg = "root" then local
         else Packages.join_name ~package:pkg ~local
       in
-      let* found = Store.lookup_function (Session.store session) full in
+      let found = Store.lookup_function (Session.store session) full in
       let crumb_pkg = if pkg = "(root)" then "" else pkg in
-      let* body =
+      let body =
         match found with
         | None ->
-            Lwt.return
-              (chrome ~session ~title:full [
+            (chrome ~session ~title:full [
                 HTML.p [] [
                   HTML.a [HTML.href "/bindings"] [txt "Functions"];
                   txt " › ";
@@ -464,7 +462,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
             let badge = badge_of expr in
             let pp = Pricklypear_lisp.Reader.pp_expr expr in
             let depth = depth_of full in
-            let* snap = Call_graph.snapshot_of_session session in
+            let snap = Call_graph.snapshot_of_session session in
             let callees = Call_graph.callees snap ~name:full ~depth:1 in
             let callers = Call_graph.callers snap full in
             let routes_ub = Call_graph.used_by_routes snap full in
@@ -639,8 +637,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
                 HTML.pre [HTML.class_ "bb-source"] [txt "%s" pp];
               ]
             in
-            Lwt.return
-              (chrome ~session ~title:full
+            (chrome ~session ~title:full
                  [ HTML.div [HTML.class_ "bb-browser"]
                      [ HTML.div [HTML.class_ "bb-three"]
                          [ pkg_col; fns_in_pkg; meta_col ]
@@ -648,7 +645,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
                      ] ])
       in
       html_response reqd ~session body;
-      Lwt.return_unit
+      ()
   | Some "special-forms", None ->
       let rows =
         let all = Pricklypear_lisp.Special_forms.summaries in
@@ -686,7 +683,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
         ]
       in
       html_response reqd ~session body;
-      Lwt.return_unit
+      ()
   | Some "kernel", None ->
       let rows =
         if q = "" then kernel
@@ -723,7 +720,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
         ]
       in
       html_response reqd ~session body;
-      Lwt.return_unit
+      ()
   | Some pkg, None ->
       let pkg_key = if pkg = "(root)" || pkg = "root" then "" else pkg in
       let rows =
@@ -779,7 +776,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
         ]
       in
       html_response reqd ~session body;
-      Lwt.return_unit
+      ()
   | None, _ ->
       let ws_pkgs =
         List.map
@@ -871,7 +868,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
           ]
       in
       html_response reqd ~session body;
-      Lwt.return_unit
+      ()
 
 let editor_form_partial ~(name : string) ~(body_src : string) ?(msg = "") ()
     : Pure_html.node =
@@ -986,8 +983,8 @@ let missing_editor_card (session : Session.t) (name : string) : Pure_html.node =
   HTML.div [HTML.id "editor-root"] [route_block; create_form]
 
 let editor_page (session : Session.t) (name : string) ?(msg = "")
-    ?(body_src = "") (reqd : Httpun.Reqd.t) : unit Lwt.t =
-  let* found = Store.lookup_function (Session.store session) name in
+    ?(body_src = "") (reqd : Httpun.Reqd.t) : unit =
+  let found = Store.lookup_function (Session.store session) name in
   let body =
     match found, body_src with
     | _, src when src <> "" ->
@@ -1002,10 +999,10 @@ let editor_page (session : Session.t) (name : string) ?(msg = "")
           [ missing_editor_card session name ]
   in
   html_response reqd ~session body;
-  Lwt.return_unit
+  ()
 
-let api_edit_create (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
-  let* body = read_body reqd in
+let api_edit_create (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
+  let body = read_body reqd in
   let name =
     match form_field body "name" with
     | Some n when String.trim n <> "" -> String.trim n
@@ -1014,7 +1011,7 @@ let api_edit_create (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
   if name = "" then begin
     html_response reqd ~session ~status:`Bad_request
       (HTML.div [HTML.class_ "err"] [txt "name required"]);
-    Lwt.return_unit
+    ()
   end else
     let rebind =
       match form_field body "rebind_route" with
@@ -1022,7 +1019,7 @@ let api_edit_create (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
       | _ -> false
     in
     let body_src = stub_body name in
-    let* res =
+    let res =
       Session.define_binding session ~name ~body_src
         ~author:(Session.username session)
     in
@@ -1031,12 +1028,12 @@ let api_edit_create (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
         html_response reqd ~session ~status:`Bad_request
           (HTML.div [HTML.id "editor-root"; HTML.class_ "err"]
              [txt "create failed: %s" e]);
-        Lwt.return_unit
+        ()
     | Ok _ ->
-        let* () =
+        let () =
           if rebind then
             Session.set_route session ~route:("/" ^ name) ~handler:name ()
-          else Lwt.return_unit
+          else ()
         in
         let msg =
           if rebind then
@@ -1053,10 +1050,10 @@ let api_edit_create (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
         in
         let resp = Httpun.Response.create ~headers `OK in
         safe_respond_with_string reqd resp s;
-        Lwt.return_unit
+        ()
 
 let page_inspector (session : Session.t) (path_seg : string)
-    (reqd : Httpun.Reqd.t) : unit Lwt.t =
+    (reqd : Httpun.Reqd.t) : unit =
   let route =
     if path_seg = "" then "/"
     else if path_seg.[0] = '/' then path_seg
@@ -1069,10 +1066,10 @@ let page_inspector (session : Session.t) (path_seg : string)
            HTML.p [HTML.class_ "err"] [txt "no page registered for %s" route];
            HTML.p [] [HTML.a [HTML.href "/pages"] [txt "all pages"]];
          ]);
-      Lwt.return_unit
+      ()
   | Some handler ->
-      let* graph = page_function_graph session ~handler in
-      let* found = Store.lookup_function (Session.store session) handler in
+      let graph = page_function_graph session ~handler in
+      let found = Store.lookup_function (Session.store session) handler in
       let body_block =
         match found with
         | None ->
@@ -1139,12 +1136,12 @@ let page_inspector (session : Session.t) (path_seg : string)
         ]
       in
       html_response reqd ~session body;
-      Lwt.return_unit
+      ()
 
 let inspect_binding_page (session : Session.t) (name : string)
-    (reqd : Httpun.Reqd.t) : unit Lwt.t =
-  let* found = Store.lookup_function (Session.store session) name in
-  let* defs = Store.list_function_names (Session.store session) in
+    (reqd : Httpun.Reqd.t) : unit =
+  let found = Store.lookup_function (Session.store session) name in
+  let defs = Store.list_function_names (Session.store session) in
   let known_fn =
     Pricklypear_lisp.Effect.known_fn_of_bindings
       (List.map (fun (n, e, _) -> (n, e)) defs)
@@ -1194,18 +1191,18 @@ let inspect_binding_page (session : Session.t) (name : string)
            @ txn_nodes)
   in
   html_response reqd ~session body;
-  Lwt.return_unit
+  ()
 
 let inspect_row_page (session : Session.t) (type_name : string) (id : string)
-    (reqd : Httpun.Reqd.t) : unit Lwt.t =
+    (reqd : Httpun.Reqd.t) : unit =
   (* Canonical row URL is /data/<type>/<id> (image.data-browser). *)
   ignore session;
   redirect_response reqd
     (Printf.sprintf "/data/%s/%s" type_name id);
-  Lwt.return_unit
+  ()
 
-let api_eval (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
-  let* body = read_body reqd in
+let api_eval (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
+  let body = read_body reqd in
   let expr_opt =
     try
       match Yojson.Safe.from_string body with
@@ -1223,17 +1220,16 @@ let api_eval (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
   | None ->
       json_response reqd ~status:`Bad_request
         (`Assoc [("ok", `Bool false); ("error", `String "expr required")]);
-      Lwt.return_unit
+      ()
   | Some expr ->
-      Lwt.catch
-        (fun () ->
-          let* v = Session.eval_one session expr in
+      (try
+      let v = Session.eval_one session expr in
           let rendered = Pricklypear_lisp.Reader.pp_value v in
           json_response reqd
             (`Assoc [("ok", `Bool true); ("value", `String rendered)]);
-          Lwt.return_unit)
-        (fun exn ->
-          (* Use the full printer — partial match left Arity_mismatch /
+          ()
+    with exn ->
+      (* Use the full printer — partial match left Arity_mismatch /
              Type_mismatch / etc. as opaque "Interp_error(_)" to agents. *)
           let msg = Agent_tools.pp_interp_exn exn in
           let fields =
@@ -1267,24 +1263,24 @@ let api_eval (session : Session.t) (reqd : Httpun.Reqd.t) : unit Lwt.t =
                 [ ("ok", `Bool false); ("error", `String msg) ]
           in
           json_response reqd (`Assoc fields);
-          Lwt.return_unit)
+          ())
 
 let save_edit (session : Session.t) (path_name : string)
-    (reqd : Httpun.Reqd.t) : unit Lwt.t =
-  let* body = read_body reqd in
+    (reqd : Httpun.Reqd.t) : unit =
+  let body = read_body reqd in
   let name =
     match form_field body "name" with
     | Some n when String.trim n <> "" -> String.trim n
     | _ -> path_name
   in
   let body_src = Option.value (form_field body "body") ~default:"" in
-  let* res =
+  let res =
     Session.define_binding session ~name ~body_src
       ~author:(Session.username session)
   in
   match res with
   | Ok v ->
-      let* () = Call_graph.record_define_side_effects session ~name in
+      let () = Call_graph.record_define_side_effects session ~name in
       let impact = Call_graph.impact_summary_text session name in
       let msg =
         Printf.sprintf "saved %s => %s\n%s" name

@@ -20,13 +20,12 @@ let make_test_env () =
     prim_table;
   (env, prim_table)
 
-(* Helper: eval a Lisp form string against the test env under the Lwt rim. *)
+(* Helper: eval a Lisp form string against the test env under the effect rim. *)
 let eval s =
-  let (env, prims) = make_test_env () in
-  Lwt_main.run
-    (Pricklypear_image_lib.Control_rim.run_lwt ~prims (fun () ->
-        Pricklypear_lisp.Eval.eval_string_direct
-          ~prims:Pricklypear_lisp.Eval.empty_prims env s))
+  let env, prims = make_test_env () in
+  Pricklypear_image_lib.Control_rim.run ~prims (fun () ->
+      Pricklypear_lisp.Eval.eval_string_direct
+        ~prims:Pricklypear_lisp.Eval.empty_prims env s)
 
 (* Helper: eval to a string-pretty form. *)
 let eval_str s =

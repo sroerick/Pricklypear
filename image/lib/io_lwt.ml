@@ -1,8 +1,7 @@
-(** Lwt-facing Db port (H2.2 / H3 dual-run).
+(** Db port name kept for call-site stability (H2.2).
 
-    Delegates to [Store_db], which holds either a pgx_lwt or Io_eio
-    connection depending on [PP_IO]. Domain code keeps calling
-    [Io_lwt.Db.*]; backend selection is inside [Store_db]. *)
+    Direct-style: delegates to [Store_db]. Process runs under Eio_main;
+    Lwt backend (if PP_IO=lwt) blocks via Lwt_eio inside Store_db. *)
 
 module Db = struct
   type conn = Store_db.conn

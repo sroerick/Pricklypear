@@ -154,7 +154,10 @@
          ONE-TREE NOTES (replaces flat data_rows note blob)
          =========================================================
          Flat CRUD (get/create/update/rows on type note) remains for
-         other product types. Notes leave that path.
+         other product types. Notes leave that path. See also the
+         index-read-path subsection for how every read (index +
+         detail) resolves to the one tree store and how the legacy
+         rows fallback is retired.
 
          PATH GRAMMAR (hierarchical; not data.<type>.<uuid>):
            data.note.u.<user>.…                 — user garden root
@@ -673,6 +676,90 @@
    )
   )
 
+  (subsection index-read-path
+   (doc "Notes index reads resolve to the tree store exactly once; legacy data_rows fallback retired; interim read-layers removed")
+   (status planned)
+   (implements libs/notes/lib.pp image/lib/tree_store.ml image/lib/crud.ml image/lib/http.ml)
+   (verify
+    (smoke "GET /notes lists garden folders incl. tree-only notes")
+    (smoke "GET /notes?folder=garden/bible/scripture_concepts lists its notes")
+    (smoke "(notes/list-light) equals notes/doc/index-list (both tree)")
+    (smoke "(notes/doc/get slug) and /notes?slug=… agree for tree-only slug")
+    (smoke "no binding under notes/light/* remains on the image")
+    (smoke "no call site of (rows 'note) outside notes/migrate/legacy-*"))
+   (details
+    (doc (|
+         PROBLEM (drift this closes):
+           The index accumulated overlapping read layers while the
+           one-tree cutover was landing:
+             notes/doc/*       — dual-read façade (tree first, legacy
+                                 data_rows fallback)
+             notes/ui/* flat   — budget-safe flat index over
+                                 notes/doc/index-list (tree via OCaml
+                                 tree/note-index)
+             notes/tree/render — original nested folder tree; walks
+                                 folders with Lisp list ops; exceeds
+                                 the eval budget at garden scale
+             notes/light/*     — live-only nested index reading legacy
+                                 data_rows ONLY; became the routed
+                                 /notes handler, so tree-only (garden)
+                                 notes vanished from the UI while
+                                 agents (façade) still saw them
+           One /notes route pointed at whichever layer happened to be
+           loaded last. Result: index and detail disagreed; garden
+           invisible in UI; budget-safe code unreachable.
+
+         TARGET — ONE READ PATH:
+           Every notes read (index and detail) resolves through
+           notes/doc/* to the ONE tree store exactly once:
+             index  /notes           → notes/page →
+                                       notes/ui/folders-html (flat,
+                                       budget-safe via OCaml
+                                       tree/note-index)
+             detail /notes?slug=…    → notes/ui/show → notes/doc/get
+             agent  notes/doc/get|list|search — unchanged (façade)
+           notes/list-light is re-pointed at notes/doc/index-list so
+           agent and UI see the same rows.
+
+         SLICES:
+           I1  Route /notes to notes/page (git-managed, flat index).
+               Delete the live-only notes/light/* bindings; nothing
+               in libs/ references them.
+           I2  Retire notes/tree/render + render-folder (budget-
+               unsafe at garden scale). Keep only as an explicitly
+               renamed non-routed legacy binding, or delete.
+           I3  notes/list-light → notes/doc/index-list (same rows,
+               same order); drop its private legacy-rows read.
+           I4  Retire the legacy data_rows fallback in notes/doc/*
+               (list / row / find-slug). Tree is the only store.
+               Precondition: M0 (migrate legacy → tree) verified for
+               every legacy uuid; legacy rows kept as an inert
+               archive, not read. Audit gate: no call site of
+               (rows 'note) / (find-rows 'note) outside
+               notes/migrate/legacy-*.
+
+         AUDIT (I4 gate):
+           Full-tree scan of libs/ + image/ confirms every note read
+           outside the façade's own fallback already goes through
+           notes/doc/* — no package (todo/roam/wiki/flashcards/bible/
+           dabar/ai/calendar/capture/ui) reads rows 'note directly.
+           Only notes/migrate/legacy-* touches legacy, by design.
+           I4 is therefore a façade-internal deletion, not a
+           cross-package change.
+
+         NON-GOALS:
+           - Re-raising the eval budget to save notes/tree/render
+             (budget is a safety net; the nested Lisp walk is the
+             bug, per budget-scale)
+           - Changing the slug-page outline editor or structure ops
+           - Merging/renaming garden folders (kebab vs underscore is
+             cosmetic; path-based folders tolerate both)
+           - Deleting the legacy data_rows rows themselves (kept
+             inert for audit; drop is a later migration decision)
+    |))
+   )
+  )
+
   (subsection agent-access
    (doc "Agents use notes via eval — no separate notes HTTP API")
    (status implemented)
@@ -824,6 +911,16 @@
          DEPENDENCY:
            Does NOT wait on global PP_TREE_READS=1 for all CRUD.
            Notes use tree_* prims directly. Flat types keep CRUD.
+
+         STATUS NOTE:
+           K0/K1/N0/N1/M0 are realized in code (tree prims, façade on
+           tree, folders via path, notes/migrate/legacy-* moved all
+           legacy note rows into tree nodes — every legacy uuid is
+           present under data.note.u.<user>). What remains is the
+           index-read-path work: routing /notes to the budget-safe
+           flat index and retiring the legacy data_rows read fallback
+           in notes/doc/* (slice I4). Until I4 lands, tree-cutover
+           stays planned rather than implemented.
 
          RISK:
            Never write hierarchical notes as kind=datum.

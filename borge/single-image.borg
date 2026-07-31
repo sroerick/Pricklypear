@@ -18,9 +18,9 @@
     (doc (|
       Pricklypear is ONE OCaml unix binary — the image — that:
 
-        1. Serves htmx HTTP directly on a port (httpaf-lwt-unix
+        1. Serves htmx HTTP directly on a port (Httpun_eio
            + pure-html). This is the only user-facing surface.
-        2. Talks to Postgres directly (pgx_lwt + Io_unix shim).
+        2. Talks to Postgres via pure pgx over Eio.Net (Io_eio).
            Postgres is the durable object store; the image is
            ephemeral and rebuildable from the store plus the
            package seed (libs/*.pp -> system/main).
@@ -61,11 +61,11 @@
         |              defaults)
         |
         +-- pricklypear image (ONE unix binary)
-        |   +-- httpaf-lwt-unix on PP_HTTP_PORT (htmx UI,
+        |   +-- Httpun_eio on PP_HTTP_PORT (htmx UI,
         |   |   /api/eval, /repl, user routes)
         |   +-- optional line-protocol REPL on
-        |   |   PP_REPL_PORT (operator only)
-        |   +-- pgx_lwt to Postgres (function_defs,
+        |   |   PP_REPL_PORT (operator only; Lwt_eio bridge)
+        |   +-- Io_eio.Pg to Postgres (function_defs,
         |       data_rows, branches, auth tables)
         |
         +-- nginx (edge)
@@ -95,6 +95,122 @@
       Multi-user (many humans, sessions, personal garden
       branches) is a product layer above this process model;
       see auth.multi-user-product for the user stories.
+    |)))
+  )
+
+  (subsection runtime
+   (doc "Runtime effects: direct-style core, algebraic-effect rim, Eio floor")
+   (status implemented)
+   (implements
+     lisp/lib/control.ml
+     image/lib/control_rim.ml
+     image/lib/primitives.ml
+     image/lib/store_db.ml
+     image/lib/io.mli
+     image/lib/io_lwt.ml
+     image/lib/io_eio.ml
+     image/lib/crud.ml
+     image/lib/tree_store.ml
+     image/lib/session.ml
+     image/lib/http.ml
+     image/lib/boot.ml)
+   (verify
+     (build "dune build && dune runtest")
+     (test "image/test/io_eio_test.ml")
+     (smoke "image serves /health and a CRUD roundtrip under PP_IO=eio")
+     (smoke "(with-transaction (lambda () (create ...))) commits; select-for-update inside body sees the lock, on the default backend"))
+   (details
+    (doc (|
+      Three layers — never collapse them (the two \"effects\"):
+
+        A. GUEST CAPABILITIES — what a Nopales expression may
+           touch (pure / read-db / write-db / branch / publish
+           / ai / html / txn). Static AST inference in
+           lisp/lib/effect.ml; drives badges and gates.
+           Spec: lisp-interpreter.effects. NOT this section.
+        B. HOST CONTROL EFFECTS — how eval does I/O without
+           monads. OCaml 5 Effect.perform of one effect:
+             Prim_call : string * value list -> value Effect.t
+           declared in lisp/lib/control.ml. Guest Nopales can
+           never perform it; eval's prim dispatch is the only
+           performer.
+        C. I/O RUNTIME — who schedules sockets/DB/fibers.
+           Lwt today; Eio is the floor we are moving to.
+           The power company; chosen last, replaceable first.
+
+      This subsection is the book authority for layers B and C.
+      The phase plan and runbook live in
+      docs/runtime-effects-transition.md (H0 audit -> H1
+      direct-style core -> H2 Io port -> H3 backend swap);
+      that doc is the runbook, this is the law.
+
+      LAYER B — HOST CONTROL EFFECTS (H1, SHIPPED):
+
+        - lisp/ is direct-style: Eval.eval returns value, no
+          monadic types, no Lwt dependency.
+        - Eval's prim dispatch performs Prim_call(name, args);
+          prim bodies do NOT recurse into eval (guest lambdas
+          needing DB access go through with-transaction's
+          dynamic scope instead).
+        - Pure tests install Control.run_sync with a sync prim
+          table: service-free, no rim.
+        - The image runs every eval under Control_rim.run
+          (Effect.Deep.match_with): Prim_call looks up the
+          registered prim fn, runs it, continues (or
+          discontinues on raise). Pure lisp/ tests stay green
+          with no services.
+
+      LAYER C — IO PORT + EIO FLOOR (SHIPPED):
+
+        - Process entry is always Eio_main + Httpun_eio accept
+          loop. Domain SQL goes through Io.DB (io.mli) →
+          store_db.ml → Io_eio.Pg (pure pgx over Eio.Net).
+          scripts/check_io_rim.sh enforces the rim.
+        - Store/crud/auth/session/agent_tools are direct-style:
+          plain 'a returns, prim_fn = value list -> value,
+          register_sync everywhere. DB calls block the calling
+          fiber; a reentrant per-connection mutex serializes
+          whole transactions across concurrent fibers.
+        - HTTP page work is Fiber.fork'd off the connection
+          read fiber so body reads (schedule_read) cannot
+          deadlock against Promise.await.
+        - Prim registration peeled into prims_request /
+          prims_net / prims_media / prims_graph / prims_db;
+          session.ml keeps t, rehydrate, checkout, eval,
+          seed_stdlib, and register_session_control_prims.
+        - Residual Lwt is rim-only: optional TCP REPL and
+          curl-backed llm/http-get/sleep via Lwt_eio bridges.
+          A later pass can replace those without touching
+          domain code.
+
+      DYNAMIC TRANSACTION SCOPE (preserved):
+
+        - Store_db.with_dynamic_transaction binds current_tx
+          around a thunk; crud execute paths prefer current_tx
+          over the pool conn, so all prims in a
+          (with-transaction (lambda () ...)) body share one
+          SERIALIZABLE tx and select-for-update locks persist
+          across prims in the body. Nested with-transaction
+          fails (no silent flattening). Binding is per-fiber
+          under the conn mutex, never ambient-global.
+
+      RIM LINT:
+
+        - scripts/check_io_rim.sh stays green: only store_db /
+          io_eio (and legacy io_lwt name) call pgx execute.
+
+      HARD INVARIANTS (every horizon, restated):
+
+        1. Composition: (define u (get ...)) then (str u)
+           yields a plain value, never a promise.
+        2. (with-transaction ...) dynamic scope as above.
+        3. Budget/cancel: one bad eval cannot wedge the image
+           (budget ticks at each eval step AND at each rim
+           prim dispatch).
+        4. Pure lisp/ tests stay service-free; image smokes
+           stay green on the default backend.
+        5. Capability inference (layer A) unchanged; guest
+           Nopales never gains Effect.perform.
     |)))
   )
 
