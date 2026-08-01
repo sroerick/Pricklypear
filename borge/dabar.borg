@@ -57,7 +57,7 @@
            libs/dabar/lib.pp     — study (to add)
            scripts/seed_bible_bsb.py
            scripts/seed_strongs.py      (from dabar strongs.csv)
-           scripts/seed_interlinear.py  (from dabar extract)
+           scripts/seed_interlinear.py  (from dabar bsb_tokens.csv)
 
          BOOT:
            seed_stdlib loads: std, weather, ui, layout, welcome, ai, outline, notes, signup, todo, contacts, plan, chat, bookmarks, calendar, flashcards, bible, dabar.
@@ -143,26 +143,52 @@
   )
   (subsection interlinear
    (doc "Word-level interlinear fragments + toggles")
-   (status planned)
+   (status implemented)
+   (implements libs/dabar/lib.pp scripts/seed_interlinear.py scripts/seed_interlinear_dogfood.py)
    (verify
     (smoke "seed loads tokens for at least John 1 or full corpus")
-    (smoke "(bible/interlinear \"John\" 1 1) or dabar/inter returns HTML fragment")
+    (smoke "(dabar/inter \"John\" 1 1) returns HTML fragment")
     (smoke "UI toggle plain vs interlinear on verse/chapter panel"))
    (details
     (doc (|
          SOURCE: dabar inter_verse (bsb_sort, base_text, variant_text,
          translit, parsing, parsing_str, heb_str, grk_str, verse_id,
          heading, crossref, bsb_version).
+         Local file: wyo.tech/dabar build/dabar-bundle/tables/
+         bsb_tokens.csv (754647 token rows; reproduced by dabar-build
+         pipeline from src/tool/sql/bsb/bsb_tables.xlsx sheet
+         biblosinterlinear96 via extract_bsb_tables_raw.py +
+         build_dabar_bundle.py).
 
          STORAGE v1: per-verse JSON on a type bible-interlinear
            ref, tokens (JSON array of word objects), heading?, crossref?
          keyed by same BSB:Abbrev:C:V ref as bible-verse.
-         Avoid millions of token rows unless needed.
+         ~31k per-verse rows total. Avoid millions of token rows.
 
-         UI: htmx toggle on /bible or /dabar/verse; Strong's hrefs
-         to /strongs?n=.
+         RENDER DECISION (v1): pre-rendered HTML in the seeder.
+         Token JSON stored in fields.tokens for future Nopales-side
+         rendering; dabar/inter renders fields.html. Rendering
+         token JSON in Nopales needs a JSON-array prim — deferred.
+         Per-token fields kept: base_text, translit, parsing,
+         heb_str/grk_str (per verse language), bsb_sort (order).
+         Dropped for v1: variant_text, parsing_str, verse_id,
+         bsb_version, footnotes/par/quote marks.
+         Ref mapping: USFM book_identifier (gen/jhn/...) -> PP
+         bible-book abbrev via the BOOKS table in
+         scripts/seed_bible_bsb.py. verse_id \"John 3:16\" strings
+         are NOT used for keying.
+
+         UI: htmx toggle on /bible chapter view and /dabar verse
+         study; Strong's hrefs to /strongs?n=.
 
          Full corpus seed may be large — allow --book John for dogfood.
+         Dogfood stub (seed_interlinear_dogfood.py, John 3:16 only)
+         is superseded by the real seeder.
+
+         (* agent note (|2026-08 recon: spec smokes said
+         bible/interlinear or dabar/inter — actual code is
+         dabar/inter-html; canonicalizing on dabar/inter as the
+         alias + dabar/inter-html for the fragment renderer.|) *)
     |))
    )
   )
@@ -236,7 +262,9 @@
          ACCEPTANCE v1 "dabar on PP":
          - bible reader green on boot
          - load-library dabar adds study without breaking /bible
-         - Strong's lookup + one interlinear dogfood path
+         - Strong's lookup + real interlinear corpus seed
+           (--book John dogfood, then full corpus)
+         - plain/interlinear htmx toggle on reader + study views
          - no semantic search
          - no notes/bookmarks here
     |))
