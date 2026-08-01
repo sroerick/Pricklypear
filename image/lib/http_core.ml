@@ -107,6 +107,13 @@ let emergency_css : string =
    border-left:3px solid transparent}\n\
    .bb-item.is-active a{font-weight:700;background:#ece9e0;border-left:3px solid #000}\n\
    .bb-source{max-height:55vh;overflow:auto;padding:.6rem;border:1px solid #000}\n\
+   .bb-tabs{display:flex;gap:.35rem;flex-wrap:wrap;margin:.4rem 0 .6rem;align-items:center}\n\
+   .bb-tab{display:inline-block;padding:.28rem .65rem;border:1px solid #000;\n\
+   text-decoration:none;color:inherit;background:#f7f5ef;border-radius:2px}\n\
+   .bb-tab:hover{background:#ece9e0}\n\
+   .bb-tab.is-active{background:#1a1a1a;color:#f7f5ef;font-weight:700}\n\
+   .bb-edit-form textarea{width:100%;min-height:14rem;font-family:ui-monospace,monospace}\n\
+   .bb-code .bb-edit-form .card{border:none;padding:0;box-shadow:none}\n\
    .ast-walk .ast-self-ref{background:#fff3bf;border-bottom:2px solid #e67700}\n\
    .ast-walk .ast-tail{box-shadow:inset 3px 0 0 #2b8a3e}\n\
    .ast-walk .ast-non-tail{box-shadow:inset 3px 0 0 #c92a2a}\n\

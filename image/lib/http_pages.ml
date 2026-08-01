@@ -357,6 +357,69 @@ let used_by_pages_map (session : Session.t)
     routes;
   tbl
 
+let editor_form_partial ~(name : string) ~(body_src : string) ?(msg = "")
+    ?(return_to = "") () : Pure_html.node =
+  let flash =
+    if msg = "" then HTML.div [] []
+    else
+      HTML.p
+        [ HTML.class_
+            (if String.length msg >= 5 && String.sub msg 0 5 = "error" then "err"
+             else "ok") ]
+        [ txt "%s" msg ]
+  in
+  let view_href =
+    if return_to <> "" then
+      (* Stay in bindings browser; drop tab=edit → definition. *)
+      (try
+         let base =
+           match String.split_on_char '&' return_to with
+           | [] -> return_to
+           | parts ->
+               parts
+               |> List.filter (fun p ->
+                      not (String.starts_with ~prefix:"tab=" p)
+                      && not (String.starts_with ~prefix:"msg=" p))
+               |> String.concat "&"
+         in
+         base
+       with _ -> return_to)
+    else "/binding/" ^ Packages.name_encode name
+  in
+  HTML.div [HTML.id "editor-root"] [
+    flash;
+    HTML.div [HTML.class_ "card bb-edit-form"] [
+      HTML.form
+        [ HTML.method_ `POST
+        ; HTML.action "%s" ("/edit/" ^ Packages.name_encode name)
+        ; HTML.enctype `urlencoded ]
+        [ (if return_to = "" then HTML.div [] []
+           else
+             HTML.input
+               [ HTML.type_ "hidden"
+               ; HTML.name "return_to"
+               ; HTML.value "%s" return_to ]);
+          HTML.p [] [
+            HTML.label [HTML.for_ "name"] [txt "name "];
+            HTML.input
+              [ HTML.type_ "text"
+              ; HTML.name "name"
+              ; HTML.id "name"
+              ; HTML.value "%s" name ];
+          ]
+        ; HTML.p [] [HTML.label [HTML.for_ "body"] [txt "body (s-expression)"]]
+        ; (HTML.textarea [HTML.name "body"; HTML.id "body"] "%s" body_src)
+        ; HTML.p [] [
+            HTML.button [HTML.type_ "submit"] [txt "Save (define + persist)"];
+            txt " ";
+            HTML.a
+              [ HTML.href "%s" view_href; HTML.class_ "btn secondary" ]
+              [ txt "View" ];
+          ];
+        ];
+    ];
+  ]
+
 let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
     : unit =
   let target = (Httpun.Reqd.request reqd).Httpun.Request.target in
@@ -439,9 +502,28 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
   let pkg_href pkg =
     "/bindings?pkg=" ^ Packages.name_encode pkg
   in
-  let fn_href pkg fn =
-    "/bindings?pkg=" ^ Packages.name_encode pkg ^ "&fn="
-    ^ Packages.name_encode fn
+  let fn_href ?tab pkg fn =
+    let base =
+      "/bindings?pkg=" ^ Packages.name_encode pkg ^ "&fn="
+      ^ Packages.name_encode fn
+    in
+    match tab with
+    | None | Some "" | Some "view" -> base
+    | Some t -> base ^ "&tab=" ^ t
+  in
+  let tab_q =
+    match query_param target "tab" with
+    | Some t -> String.lowercase_ascii (String.trim t)
+    | None -> "view"
+  in
+  let tab_q =
+    match tab_q with
+    | "edit" | "inspect" | "observe" | "observability" ->
+        if tab_q = "observability" then "observe" else tab_q
+    | _ -> "view"
+  in
+  let flash_msg =
+    Option.value (query_param target "msg") ~default:"" |> String.trim
   in
   match pkg_q, fn_q with
   | Some "special-forms", Some fname ->
@@ -712,31 +794,226 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
                @ txn_hint_nodes expr)
             in
             let mutual = Call_graph.mutual_of snap full in
+            let tab_link id label =
+              let active = tab_q = id in
+              HTML.a
+                [
+                  HTML.href "%s" (fn_href ~tab:id pkg local);
+                  HTML.class_ "%s"
+                    (if active then "bb-tab is-active" else "bb-tab");
+                ]
+                [ txt "%s" label ]
+            in
+            let tabs =
+              HTML.div []
+                [
+                  (* Inline critical tab chrome so stale ui/css seeds still look right. *)
+                  HTML.style [] "%s"
+                    ".bb-tabs{display:flex;gap:.35rem;flex-wrap:wrap;margin:.4rem 0 .6rem}
+.bb-tab{display:inline-block;padding:.28rem .65rem;border:1px solid #000;text-decoration:none;color:inherit;background:#f7f5ef}
+.bb-tab.is-active{background:#1a1a1a;color:#f7f5ef;font-weight:700}
+.bb-tab:hover{background:#ece9e0}";
+                  HTML.nav [ HTML.class_ "bb-tabs" ]
+                    [
+                      tab_link "view" "Definition";
+                      tab_link "edit" "Edit";
+                      tab_link "inspect" "Inspect";
+                      tab_link "observe" "Observability";
+                    ];
+                ]
+            in
+            let flash_node =
+              if flash_msg = "" then HTML.div [] []
+              else
+                HTML.p
+                  [
+                    HTML.class_
+                      (if String.length flash_msg >= 5
+                          && String.sub flash_msg 0 5 = "error"
+                       then "err"
+                       else "ok");
+                  ]
+                  [ txt "%s" flash_msg ]
+            in
+            let view_pane =
+              Ast_html.pp_expr_html ~fn_name:full ~mutual expr
+            in
+            let edit_return = fn_href ~tab:"edit" pkg local in
+            let edit_pane =
+              let src = Pricklypear_lisp.Reader.pp_expr expr in
+              editor_form_partial ~name:full ~body_src:src ~msg:flash_msg
+                ~return_to:edit_return ()
+            in
+            let inspect_pane =
+              let j =
+                try
+                  Yojson.Safe.pretty_to_string
+                    (Pricklypear_lisp.Ast.expr_to_json expr)
+                with _ -> "(json unavailable)"
+              in
+              HTML.div [ HTML.class_ "bb-inspect" ]
+                [
+                  HTML.p []
+                    (Ast_html.recursion_badges ~fn_name:full expr
+                     @ [
+                         txt " ";
+                         HTML.span [ HTML.class_ "badge complexity" ]
+                           [ txt "%s" cx_badge ];
+                       ]);
+                  HTML.h3 [] [ txt "pretty" ];
+                  Ast_html.pp_expr_html ~fn_name:full ~mutual expr;
+                  HTML.h3 [] [ txt "AST JSON" ];
+                  HTML.pre [ HTML.class_ "bb-source" ] [ txt "%s" j ];
+                ]
+            in
+            let observe_pane =
+              let db_prims = Db_cost.db_prims_of_expr expr in
+              let db_nodes =
+                if db_prims = [] then [ txt "" ]
+                else
+                  List.concat_map
+                    (fun p ->
+                      [
+                        HTML.span [ HTML.class_ "badge db-cost" ]
+                          [
+                            txt "%s: %s" p
+                              (Db_cost.badge (Db_cost.static_cost p));
+                          ];
+                        txt " ";
+                      ])
+                    db_prims
+              in
+              let stats_node =
+                match
+                  Crud.find_row (Session.store session)
+                    ~type_name:"function_stat" ~field:"fn" ~value:full
+                with
+                | Pricklypear_lisp.Ast.VStr fields_json ->
+                    (try
+                       let j = Yojson.Safe.from_string fields_json in
+                       let open Yojson.Safe.Util in
+                       let steps =
+                         member "steps" j |> to_int_option
+                         |> Option.value ~default:0
+                       in
+                       let prims =
+                         member "prim_calls" j |> to_int_option
+                         |> Option.value ~default:0
+                       in
+                       let dbh =
+                         member "db_hits" j |> to_int_option
+                         |> Option.value ~default:0
+                       in
+                       HTML.p [ HTML.class_ "meta last-run" ]
+                         [
+                           txt
+                             "last run: %d steps, %d prim calls, %d DB hits"
+                             steps prims dbh;
+                         ]
+                     with _ -> HTML.p [ HTML.class_ "muted" ] [ txt "" ])
+                | _ ->
+                    HTML.p [ HTML.class_ "muted" ]
+                      [ txt "(no measured run yet)" ]
+              in
+              let explain_text =
+                match
+                  Analyze.explain_function (Session.store session)
+                    ~fn_name:full
+                with
+                | Ok t -> t
+                | Error _ -> ""
+              in
+              HTML.div [ HTML.class_ "bb-observe" ]
+                [
+                  HTML.p []
+                    (Ast_html.recursion_badges ~fn_name:full expr
+                     @ [
+                         txt " ";
+                         HTML.span [ HTML.class_ "badge complexity" ]
+                           [ txt "%s" cx_badge ];
+                         txt " ";
+                       ]
+                     @ db_nodes);
+                  stats_node;
+                  Ast_html.pp_expr_html ~fn_name:full ~mutual expr;
+                  HTML.p []
+                    [
+                      HTML.button
+                        [
+                          HTML.type_ "button";
+                          HTML.class_ "btn";
+                          Hx.post "%s"
+                            ("/api/analyze/" ^ Packages.name_encode full);
+                          Hx.target "#analyze-result";
+                          Hx.swap "innerHTML";
+                        ]
+                        [ txt "Analyze" ];
+                      txt " ";
+                      HTML.button
+                        [
+                          HTML.type_ "button";
+                          HTML.class_ "btn secondary";
+                          Hx.post "%s"
+                            ("/api/analyze/"
+                             ^ Packages.name_encode full
+                             ^ "?llm=1");
+                          Hx.target "#analyze-result";
+                          Hx.swap "innerHTML";
+                        ]
+                        [ txt "Analyze (LLM)" ];
+                      txt " ";
+                      HTML.button
+                        [
+                          HTML.type_ "button";
+                          HTML.class_ "btn secondary";
+                          Hx.post "%s"
+                            ("/api/explain/" ^ Packages.name_encode full);
+                          Hx.target "#explain-result";
+                          Hx.swap "innerHTML";
+                        ]
+                        [ txt "Explain" ];
+                    ];
+                  HTML.div [ HTML.id "analyze-result" ] [ txt "" ];
+                  HTML.details [ HTML.class_ "explain-panel" ]
+                    [
+                      HTML.summary [] [ txt "Inside-out breakdown" ];
+                      HTML.div [ HTML.id "explain-result" ]
+                        [
+                          HTML.pre
+                            [ HTML.class_ "bb-source explain-layer" ]
+                            [ txt "%s" explain_text ];
+                        ];
+                    ];
+                ]
+            in
+            let pane_body =
+              match tab_q with
+              | "edit" -> edit_pane
+              | "inspect" -> inspect_pane
+              | "observe" -> observe_pane
+              | _ -> view_pane
+            in
             let code_pane =
-              HTML.div [HTML.class_ "card bb-code"] [
-                HTML.div [HTML.class_ "bb-code-head"] [
-                  HTML.h2 [] [txt "definition · %s" full];
-                  HTML.p [HTML.class_ "bb-code-actions"] [
-                    HTML.span [HTML.class_ "badge complexity"] [txt "%s" cx_badge];
-                    txt " ";
-                    HTML.a
-                      [ HTML.href "%s" (Packages.edit_href full)
-                      ; HTML.class_ "btn" ]
-                      [txt "Edit"];
-                    txt " ";
-                    HTML.a
-                      [ HTML.href "%s" (Packages.inspect_href full)
-                      ; HTML.class_ "btn secondary" ]
-                      [txt "Inspect AST"];
-                    txt " ";
-                    HTML.a
-                      [ HTML.href "%s" ("/binding/" ^ Packages.name_encode full)
-                      ; HTML.class_ "btn secondary" ]
-                      [txt "Observability"];
-                  ];
-                ];
-                Ast_html.pp_expr_html ~fn_name:full ~mutual expr;
-              ]
+              HTML.div [ HTML.class_ "card bb-code" ]
+                [
+                  HTML.div [ HTML.class_ "bb-code-head" ]
+                    [
+                      HTML.h2 [] [ txt "%s · %s" full
+                        (match tab_q with
+                         | "edit" -> "edit"
+                         | "inspect" -> "inspect"
+                         | "observe" -> "observability"
+                         | _ -> "definition") ];
+                      HTML.p [ HTML.class_ "bb-code-actions" ]
+                        [
+                          HTML.span [ HTML.class_ "badge complexity" ]
+                            [ txt "%s" cx_badge ];
+                        ];
+                    ];
+                  tabs;
+                  (if tab_q = "edit" then HTML.div [] [] else flash_node);
+                  pane_body;
+                ]
             in
             (chrome ~session ~title:full
                  [ HTML.div [HTML.class_ "bb-browser"]
@@ -970,46 +1247,6 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
       in
       html_response reqd ~session body;
       ()
-
-let editor_form_partial ~(name : string) ~(body_src : string) ?(msg = "") ()
-    : Pure_html.node =
-  let flash =
-    if msg = "" then HTML.div [] []
-    else
-      HTML.p
-        [ HTML.class_
-            (if String.length msg >= 5 && String.sub msg 0 5 = "error" then "err"
-             else "ok") ]
-        [ txt "%s" msg ]
-  in
-  HTML.div [HTML.id "editor-root"] [
-    flash;
-    HTML.div [HTML.class_ "card"] [
-      HTML.form
-        [ HTML.method_ `POST
-        ; HTML.action "%s" ("/edit/" ^ name)
-        ; HTML.enctype `urlencoded ]
-        [ HTML.p [] [
-            HTML.label [HTML.for_ "name"] [txt "name "];
-            HTML.input
-              [ HTML.type_ "text"
-              ; HTML.name "name"
-              ; HTML.id "name"
-              ; HTML.value "%s" name ];
-          ]
-        ; HTML.p [] [HTML.label [HTML.for_ "body"] [txt "body (s-expression)"]]
-        ; (HTML.textarea [HTML.name "body"; HTML.id "body"] "%s" body_src)
-        ; HTML.p [] [
-            HTML.button [HTML.type_ "submit"] [txt "Save (define + persist)"];
-            txt " ";
-            HTML.a
-              [ HTML.href "%s" ("/binding/" ^ name)
-              ; HTML.class_ "btn secondary" ]
-              [ txt "View" ];
-          ];
-        ];
-    ];
-  ]
 
 let route_for_edit_name (session : Session.t) (name : string)
     : (string * string) option =
@@ -1386,6 +1623,11 @@ let save_edit (session : Session.t) (path_name : string)
     | _ -> path_name
   in
   let body_src = Option.value (form_field body "body") ~default:"" in
+  let return_to =
+    match form_field body "return_to" with
+    | Some s when String.trim s <> "" -> String.trim s
+    | _ -> ""
+  in
   let res =
     Session.define_binding session ~name ~body_src
       ~author:(Session.username session)
@@ -1398,7 +1640,16 @@ let save_edit (session : Session.t) (path_name : string)
         Printf.sprintf "saved %s => %s\n%s" name
           (Pricklypear_lisp.Reader.pp_value v) impact
       in
-      editor_page session name ~msg ~body_src reqd
+      if return_to <> "" then begin
+        let sep = if String.contains return_to '?' then "&" else "?" in
+        redirect_response reqd
+          (return_to ^ sep ^ "msg=" ^ url_encode msg)
+      end else editor_page session name ~msg ~body_src reqd
   | Error e ->
-      editor_page session name ~msg:("error: " ^ e) ~body_src reqd
+      let msg = "error: " ^ e in
+      if return_to <> "" then begin
+        let sep = if String.contains return_to '?' then "&" else "?" in
+        redirect_response reqd
+          (return_to ^ sep ^ "msg=" ^ url_encode msg)
+      end else editor_page session name ~msg ~body_src reqd
 
