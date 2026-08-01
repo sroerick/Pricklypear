@@ -15,8 +15,22 @@ module Effect = Stdlib.Effect
 type _ Effect.t +=
   | Prim_call : string * value list -> value Effect.t
 
+(** Optional direct prim table for nested eval under an active rim.
+    When set, [perform_prim] calls the table instead of [Effect.perform],
+    avoiding Unhandled nested Prim_call (handler context) and
+    Continuation_already_resumed from nested match_with. *)
+let direct_prims : (string, value list -> value) Hashtbl.t option ref =
+  ref None
+
 let perform_prim (name : string) (args : value list) : value =
-  Effect.perform (Prim_call (name, args))
+  match !direct_prims with
+  | Some tbl ->
+      (match Hashtbl.find_opt tbl name with
+       | Some fn -> fn args
+       | None ->
+           raise
+             (Interp_error (Prim_error (name, "unregistered primitive"))))
+  | None -> Effect.perform (Prim_call (name, args))
 
 type control_mode = Lwt_mode | Eff_mode
 

@@ -656,9 +656,17 @@ let prim_json_part args =
         (Interp_error
            (User_error "json-part needs (json-part json [:id i])"))
 
-(* (multipart [:target t] [:swap s] part…) *)
+(* (multipart [:target t] [:swap s] part…)
+   Also accepts a single list of parts: (multipart :target "#x" parts-list) *)
 let prim_multipart args =
   let kws, pos = split_kwargs args in
+  let pos =
+    match pos with
+    | [ VList items ] when items <> [] && List.for_all (fun v -> part_of_value v <> None) items
+      -> items
+    | [ VList items ] when items <> [] -> items
+    | _ -> pos
+  in
   let parts =
     List.map
       (fun v ->

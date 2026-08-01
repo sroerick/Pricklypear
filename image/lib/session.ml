@@ -145,6 +145,8 @@ let rehydrate (t : t) : unit =
     t.kernel_catalog;
   Pricklypear_lisp.Env.define t.env "load-string"
     (Pricklypear_lisp.Ast.VPrim "load-string");
+  Pricklypear_lisp.Env.define t.env "eval-string"
+    (Pricklypear_lisp.Ast.VPrim "eval-string");
   Pricklypear_lisp.Env.define t.env "load-library"
     (Pricklypear_lisp.Ast.VPrim "load-library");
   load_defs t
@@ -1197,6 +1199,22 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
                (Pricklypear_lisp.Ast.VStr ("load-string: " ^ e)))
       | _ ->
           (Pricklypear_lisp.Ast.VStr "load-string: need 1 string"));
+  (* (eval-string src) — evaluate one expression in the current env.
+     Must NOT call eval_one/eval_under_rim: this prim already runs under the
+     outer Control_rim (route handler /api/eval); nested match_with resumes
+     the Prim_call continuation twice → Continuation_already_resumed. *)
+  Primitives.register prim_table "eval-string"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr src ]
+      | [ Pricklypear_lisp.Ast.VSymbol src ] ->
+          Pricklypear_lisp.Eval.eval_string_direct
+            ~prims:Pricklypear_lisp.Eval.empty_prims !t.env src
+      | _ ->
+          raise
+            (Pricklypear_lisp.Ast.Interp_error
+               (Pricklypear_lisp.Ast.User_error
+                  "eval-string: need 1 string")));
   Primitives.register prim_table "load-library"
     (fun args ->
       match args with
@@ -1237,6 +1255,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
   (!t).kernel_catalog <- kernel_catalog;
   (* Bind load prims into env (registered after the bulk VPrim bind). *)
   Pricklypear_lisp.Env.define env "load-string" (Pricklypear_lisp.Ast.VPrim "load-string");
+  Pricklypear_lisp.Env.define env "eval-string" (Pricklypear_lisp.Ast.VPrim "eval-string");
   Pricklypear_lisp.Env.define env "load-library" (Pricklypear_lisp.Ast.VPrim "load-library");
   Pricklypear_lisp.Env.define env "reseed-package" (Pricklypear_lisp.Ast.VPrim "reseed-package");
   let session : t = !t in
