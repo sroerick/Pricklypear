@@ -292,6 +292,12 @@
   (doc "Book chapter — full text inlined from borge/image.borg")
   (inline borge/image.borg)
  )
+ (section multipart
+  (doc "Book chapter — multipart/mixed streaming responses (one
+        response, many targeted htmx swaps) + the advanced REPL built
+        on it. Full text inlined from borge/multipart.borg.")
+  (inline borge/multipart.borg)
+ )
  (section product-experience
   (doc "Book chapter — full text inlined from borge/product-experience.borg")
   (inline borge/product-experience.borg)
