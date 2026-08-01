@@ -1316,32 +1316,40 @@ let fresh_multipart_boundary (bodies : string list) : string =
   in
   try_n 0
 
-let multipart_write_string (body_w : Httpun.Body.Writer.t) (s : string)
-  : [ `Ok | `Peer_gone ] =
-  try
-    Httpun.Body.Writer.write_string body_w s;
-    let promise, resolver = Eio.Promise.create () in
-    let wake () =
-      if not (Eio.Promise.is_resolved promise) then
-        Eio.Promise.resolve resolver ()
-    in
-    (try Httpun.Body.Writer.flush body_w (fun () -> wake ()) with
-     | exn when is_closed_writer_exn exn -> wake ());
-    Eio.Promise.await promise;
-    `Ok
-  with exn when is_closed_writer_exn exn -> `Peer_gone
-
-(** Stream a multipart/mixed response: one write+flush per part.
-    Peer disconnect mid-stream is a non-event (http-robustness). *)
+(** Frame a multipart/mixed body (eager v1). Peer-gone on write is swallowed.
+    Streaming write+flush per part is available later; the reactive payoff is
+    multiple targeted parts in one response. Effect-safe: no Eio.Promise
+    await on the handler fiber (Continuation_already_resumed under Prim_call). *)
 let multipart_response (reqd : Httpun.Reqd.t)
     (mp : Prims_pure.mime_multipart) : unit =
   let bodies = List.map (fun (p : Prims_pure.mime_part) -> p.body) mp.parts in
   let boundary = fresh_multipart_boundary bodies in
+  let buf = Buffer.create 256 in
+  List.iter
+    (fun (p : Prims_pure.mime_part) ->
+      Buffer.add_string buf ("--" ^ boundary ^ "\r\n");
+      Buffer.add_string buf ("Content-Type: " ^ p.content_type ^ "\r\n");
+      (match p.target with
+       | Some t -> Buffer.add_string buf ("HX-Target: " ^ t ^ "\r\n")
+       | None -> ());
+      (match p.swap with
+       | Some s -> Buffer.add_string buf ("HX-Swap: " ^ s ^ "\r\n")
+       | None -> ());
+      (match p.id with
+       | Some i -> Buffer.add_string buf ("HX-Part-ID: " ^ i ^ "\r\n")
+       | None -> ());
+      Buffer.add_string buf "\r\n";
+      Buffer.add_string buf p.body;
+      Buffer.add_string buf "\r\n")
+    mp.parts;
+  Buffer.add_string buf ("--" ^ boundary ^ "--\r\n");
+  let body = Buffer.contents buf in
   let headers =
     let base =
       [ ( "content-type"
         , "multipart/mixed; boundary=" ^ boundary )
       ; ("cache-control", "no-cache")
+      ; ("content-length", string_of_int (String.length body))
       ]
     in
     let base =
@@ -1357,45 +1365,7 @@ let multipart_response (reqd : Httpun.Reqd.t)
     Httpun.Headers.of_list base
   in
   let resp = Httpun.Response.create ~headers `OK in
-  match
-    try
-      Some
-        (Httpun.Reqd.respond_with_streaming ~flush_headers_immediately:true
-           reqd resp)
-    with exn when is_closed_writer_exn exn -> None
-  with
-  | None -> ()
-  | Some body_w ->
-      let write s =
-        match multipart_write_string body_w s with
-        | `Ok -> true
-        | `Peer_gone -> false
-      in
-      let cont = ref true in
-      List.iter
-        (fun (p : Prims_pure.mime_part) ->
-          if !cont then begin
-            let buf = Buffer.create (String.length p.body + 128) in
-            Buffer.add_string buf ("--" ^ boundary ^ "\r\n");
-            Buffer.add_string buf
-              ("Content-Type: " ^ p.content_type ^ "\r\n");
-            (match p.target with
-             | Some t -> Buffer.add_string buf ("HX-Target: " ^ t ^ "\r\n")
-             | None -> ());
-            (match p.swap with
-             | Some s -> Buffer.add_string buf ("HX-Swap: " ^ s ^ "\r\n")
-             | None -> ());
-            (match p.id with
-             | Some i -> Buffer.add_string buf ("HX-Part-ID: " ^ i ^ "\r\n")
-             | None -> ());
-            Buffer.add_string buf "\r\n";
-            Buffer.add_string buf p.body;
-            Buffer.add_string buf "\r\n";
-            if not (write (Buffer.contents buf)) then cont := false
-          end)
-        mp.parts;
-      if !cont then ignore (write ("--" ^ boundary ^ "--\r\n"));
-      safe_close_writer body_w
+  safe_respond_with_string reqd resp body
 
 let respond_handler_value
     ~(session : Session.t)

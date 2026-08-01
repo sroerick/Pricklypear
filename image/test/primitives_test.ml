@@ -605,6 +605,14 @@ let multipart_tests = [
     | None -> Alcotest.fail "not part");
   ("keyword :target self-evaluates in image", `Quick, fun () ->
     Alcotest.(check string) "kw" ":target" (eval_str ":target"));
+  ("multipart accepts list of parts", `Quick, fun () ->
+    let v =
+      eval
+        "(multipart :target \"#t\" (list (part \"a\") (part \"b\")))"
+    in
+    match Pricklypear_image_lib.Primitives.is_multipart v with
+    | Some mp -> Alcotest.(check int) "2" 2 (List.length mp.parts)
+    | None -> Alcotest.fail "not multipart");
 ]
 
 let () =
