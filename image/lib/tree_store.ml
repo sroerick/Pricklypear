@@ -847,18 +847,28 @@ let list_note_index (conn : Store_db.conn) ~(prefix : string) ?(limit : int = 20
 let list_folder_index (conn : Store_db.conn) ~(prefix : string) () : string list =
   if not (valid_path prefix) then []
   else
+    (* Mirror list_note_index.folder_of: strip "prefix.", drop last label,
+       rejoin remaining labels with '/'. Pure SQL so notes/doc/folder-names
+       does not materialize thousands of rows in Nopales. *)
     let root = prefix ^ "." in
+    let from_pos = string_of_int (String.length root + 1) in
     let sql =
       "SELECT DISTINCT "
-      ^ "array_to_string("
-      ^ "  (string_to_array(" ^ "substring(path::text from "
-      ^ string_of_int (String.length root + 1)
-      ^ "), '\\.')) [1:array_length(string_to_array("
-      ^ "substring(path::text from "
-      ^ string_of_int (String.length root + 1)
-      ^ "), '\\.'), 1) - 1]"
-      ^ ", '/') "
-      ^ "FROM tree_nodes WHERE path <@ $1::ltree AND kind = 'note' "
+      ^ "CASE "
+      ^ "  WHEN position('.' in substring(path::text from " ^ from_pos ^ ")) = 0 "
+      ^ "    THEN '' "
+      ^ "  ELSE "
+      ^ "    replace( "
+      ^ "      left( "
+      ^ "        substring(path::text from " ^ from_pos ^ "), "
+      ^ "        length(substring(path::text from " ^ from_pos ^ ")) "
+      ^ "          - position('.' in reverse(substring(path::text from " ^ from_pos ^ "))) "
+      ^ "      ), "
+      ^ "      '.', '/' "
+      ^ "    ) "
+      ^ "END AS folder "
+      ^ "FROM tree_nodes "
+      ^ "WHERE path <@ $1::ltree AND kind = 'note' "
       ^ "ORDER BY 1"
     in
     let rows =
@@ -1052,7 +1062,7 @@ let list_by_kind (conn : Store_db.conn) ~(prefix : string) ~(kind : string)
       label [h] (note outline roots at prefix.h.<nid>, path grammar in
       one-tree.tree-model). No intermediate node is required at
       prefix.h. *)
-let list_children (conn : Store_db.conn) ~(prefix : string) ?(limit : int = 500)
+let list_children (conn : Store_db.conn) ~(prefix : string) ?(limit : int = 50000)
     () : node list =
   if not (valid_path prefix) then []
   else

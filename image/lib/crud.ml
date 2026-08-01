@@ -600,7 +600,7 @@ let tree_get (store : Store.t) ~(path : string) : value =
        | Some node -> (VStr (Tree_store.node_to_json node)))
 
 let tree_list (store : Store.t) ~(prefix : string) ?(depth : int option)
-    ?(limit : int = 1000) () : value =
+    ?(limit : int = 50000) () : value =
   match Io_lwt.Db.current_conn store with
   | None -> (VList [])
   | Some conn ->
