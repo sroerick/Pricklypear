@@ -845,6 +845,36 @@ let tco_tests =
       Alcotest.(check string) "even" "#t" (Reader.pp_value got));
   ]
 
+(** Minimal pure stand-ins for image symbol/string prims so dialect tests
+    stay service-free while covering the symbols contract. *)
+let register_symbol_prims (prims : Eval.prim_table) : unit =
+  Eval.register_prim prims "symbol?" (function
+    | [Ast.VSymbol _] -> Ast.VBool true
+    | [_] -> Ast.VBool false
+    | _ -> raise (Ast.Interp_error (Ast.User_error "symbol?")));
+  Eval.register_prim prims "string?" (function
+    | [Ast.VStr _] -> Ast.VBool true
+    | [_] -> Ast.VBool false
+    | _ -> raise (Ast.Interp_error (Ast.User_error "string?")));
+  Eval.register_prim prims "symbol=?" (function
+    | [Ast.VSymbol a; Ast.VSymbol b] -> Ast.VBool (String.equal a b)
+    | [_; _] -> Ast.VBool false
+    | _ -> raise (Ast.Interp_error (Ast.User_error "symbol=?")));
+  Eval.register_prim prims "symbol->string" (function
+    | [Ast.VSymbol s] -> Ast.VStr s
+    | _ -> raise (Ast.Interp_error (Ast.User_error "symbol->string")));
+  Eval.register_prim prims "string->symbol" (function
+    | [Ast.VStr s] -> Ast.VSymbol s
+    | _ -> raise (Ast.Interp_error (Ast.User_error "string->symbol")));
+  Eval.register_prim prims "type-of" (function
+    | [Ast.VSymbol _] -> Ast.VStr "symbol"
+    | [Ast.VStr _] -> Ast.VStr "str"
+    | [Ast.VInt _] -> Ast.VStr "int"
+    | [Ast.VBool _] -> Ast.VStr "bool"
+    | [Ast.VNil] -> Ast.VStr "nil"
+    | [Ast.VList _] -> Ast.VStr "list"
+    | _ -> Ast.VStr "other")
+
 let dialect_tests = [
   ("symbols: quote distinct from string", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
@@ -855,6 +885,53 @@ let dialect_tests = [
      | Ast.VSymbol "hello", Ast.VStr "hello" -> ()
      | _ -> Alcotest.failf "got %s and %s"
               (Reader.pp_value a) (Reader.pp_value b)));
+  ("symbols: quote list heads are symbols", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let v = Eval.eval_string ~prims env "'(lambda (x) x)" in
+    (match v with
+     | Ast.VList (Ast.VSymbol "lambda" :: _) -> ()
+     | other -> Alcotest.failf "head: %s" (Reader.pp_value other)));
+  ("symbols: value_to_expr preserves Var vs Lit VStr", `Quick, fun () ->
+    let e = Reader.read_one "(lambda (x) \"hi\")" in
+    let v = Eval.quote_to_value e in
+    (match v with
+     | Ast.VList [Ast.VSymbol "lambda"; Ast.VList [Ast.VSymbol "x"]; Ast.VStr "hi"] -> ()
+     | other -> Alcotest.failf "quote_to_value: %s" (Reader.pp_value other));
+    let e' = Eval.value_to_expr v in
+    (match e' with
+     | Ast.Lambda (["x"], Ast.Lit (Ast.VStr "hi")) -> ()
+     | other -> Alcotest.failf "value_to_expr: %s" (Reader.pp_expr other)));
+  ("symbols: gensym returns VSymbol", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let a = Eval.eval_string ~prims env "(gensym)" in
+    let b = Eval.eval_string ~prims env "(gensym)" in
+    (match a, b with
+     | Ast.VSymbol sa, Ast.VSymbol sb when sa <> sb -> ()
+     | _ -> Alcotest.failf "gensym: %s %s"
+              (Reader.pp_value a) (Reader.pp_value b)));
+  ("symbols: prims symbol? string? symbol=? conversions type-of", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    register_symbol_prims prims;
+    let env = Env.create () in
+    List.iter (fun n -> Env.define env n (Ast.VPrim n))
+      ["symbol?"; "string?"; "symbol=?"; "symbol->string"; "string->symbol"; "type-of"];
+    let check expr expect =
+      let got = Eval.eval_string ~prims env expr in
+      Alcotest.(check string) expr expect (Reader.pp_value got)
+    in
+    check "(symbol? 'lambda)" "#t";
+    check "(symbol? \"lambda\")" "#f";
+    check "(string? \"lambda\")" "#t";
+    check "(string? 'lambda)" "#f";
+    check "(symbol=? 'a 'a)" "#t";
+    check "(symbol=? 'a 'b)" "#f";
+    check "(symbol=? 'a \"a\")" "#f";
+    check "(symbol->string 'hello)" "\"hello\"";
+    check "(string->symbol \"hello\")" "hello";
+    check "(type-of 'x)" "\"symbol\"";
+    check "(type-of \"x\")" "\"str\"");
   ("define sugar", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
     Eval.register_prim prims "+" (function
