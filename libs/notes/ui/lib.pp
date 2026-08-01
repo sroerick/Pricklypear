@@ -1,32 +1,45 @@
 ;; package notes/ui -- exported from live branch admin/personal
 ;; Sync: scripts/pp_sync.py pull|push
 
+;; Collapsed by default — open the summary to create (keeps the index clean).
+;; Collapsed by default — open summary to create (keeps the index clean).
 (define notes/ui/create-form
   (lambda
     ()
-    (html/form
-      "POST"
-      "/notes"
-      (html/attr "class" "card")
+    (html/tag
+      "details"
+      (html/attr "class" "notes-create card")
       (html/join
         (list
-          (html/hidden "action" "create")
-          (html/label "" "Title ")
-          (html/text-input
-            "title"
-            (html/attr "placeholder" "New note"))
-          " "
-          (html/label "" "Slug ")
-          (html/text-input
-            "slug"
-            (html/attr "placeholder" "my-note"))
-          " "
-          (html/label "" "Folder ")
-          (html/text-input
-            "folder"
-            (html/attr "placeholder" "wiki/entities"))
-          " "
-          (html/button (html/attr "type" "submit") "Create"))))))
+          (html/tag
+            "summary"
+            (html/attr "class" "notes-create-sum")
+            "New note")
+          (html/form
+            "POST"
+            "/notes"
+            (html/attr "class" "notes-create-body")
+            (html/join
+              (list
+                (html/hidden "action" "create")
+                (html/label "" "Title ")
+                (html/text-input
+                  "title"
+                  (html/attr "placeholder" "New note"))
+                " "
+                (html/label "" "Slug ")
+                (html/text-input
+                  "slug"
+                  (html/attr "placeholder" "my-note"))
+                " "
+                (html/label "" "Folder ")
+                (html/text-input
+                  "folder"
+                  (html/attr "placeholder" "wiki/entities"))
+                " "
+                (html/button
+                  (html/attr "type" "submit")
+                  "Create")))))))))
 
 (define notes/ui/do-create
   (lambda
