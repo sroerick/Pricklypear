@@ -68,7 +68,7 @@
                         (html/text (car (cdr (cdr b)))))
                       (html/span
                         (html/attr "class" "muted")
-                        (html/text (string-append " 194183 " (car (cdr b)))))))))
+                        (html/text (string-append " · " (car (cdr b)))))))))
               bls)))))))
 
 (define roam/collect-from-tree

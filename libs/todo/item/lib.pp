@@ -220,7 +220,7 @@
                           (html/attr "type" "submit")
                           (html/attr "class" (string-append "todo-box st-" state))
                           (html/attr "title" "cycle state")))
-                      (if (string-eq state "") "\194\183" state)))))
+                      (if (string-eq state "") "·" state)))))
               (html/a
                 (string-append "/todos?id=" id "&view=" view)
                 (html/span
@@ -312,7 +312,7 @@
                           (html/attr "type" "submit")
                           (html/attr "class" (string-append "todo-box st-" state))
                           (html/attr "title" "cycle note TODO")))
-                      (if (string-eq state "") "\194\183" state)))))
+                      (if (string-eq state "") "·" state)))))
               (html/span
                 (html/attr "class" "todo-title")
                 (html/text title))

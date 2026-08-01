@@ -928,6 +928,29 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
       | _ ->
           (Pricklypear_lisp.Ast.VStr "function-source: need name-str"));
 
+  (* (find-code needle [limit]) -> VList of name strings.
+     Postgres ILIKE over effective function_defs.body::text (branch chain). *)
+  Primitives.register tbl "find-code"
+    (fun args ->
+      let names_of needle limit =
+        let ns =
+          Store.search_function_bodies t.store ~needle ~limit
+        in
+        Pricklypear_lisp.Ast.VList
+          (List.map (fun n -> Pricklypear_lisp.Ast.VStr n) ns)
+      in
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr needle ] -> names_of needle 200
+      | [ Pricklypear_lisp.Ast.VStr needle; Pricklypear_lisp.Ast.VInt n ] ->
+          names_of needle (Int64.to_int n)
+      | [ Pricklypear_lisp.Ast.VStr needle; Pricklypear_lisp.Ast.VStr n_s ] ->
+          (match int_of_string_opt n_s with
+           | Some n -> names_of needle n
+           | None ->
+               (Pricklypear_lisp.Ast.VStr "find-code: limit must be int"))
+      | _ ->
+          (Pricklypear_lisp.Ast.VStr "find-code: need needle-str [, limit]"));
+
   (* (function-doc name) -> VStr docstring | VNil
      Store metadata first; special-form / prim blurbs as fallback. *)
   Primitives.register tbl "function-doc"

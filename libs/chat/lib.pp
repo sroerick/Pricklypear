@@ -210,7 +210,7 @@
                 (html/join
                   (list
                     (html/a "/chat" "Lobby")
-                    (html/span "" " \194\183 ")
+                    (html/span "" " · ")
                     (html/a "/chat/dm" "All DMs"))))
               (chat/dm-main-html peer))))))))
 
@@ -333,7 +333,7 @@
                   (html/attr "required" "required")
                   (html/attr
                     "placeholder"
-                    "Hello from the lobby\226\128\166")
+                    "Hello from the lobby…")
                   (html/attr "maxlength" "4000")))
               "")
             (html/button (html/attr "type" "submit") "Send")))))))
@@ -427,7 +427,7 @@
               (html/join
                 (list
                   (html/strong (chat/msg-from f))
-                  (html/span (html/attr "class" "muted") " \194\183 "))))
+                  (html/span (html/attr "class" "muted") " · "))))
             (html/p (html/text (chat/msg-body f)))))))))
 
 (define chat/msg-room

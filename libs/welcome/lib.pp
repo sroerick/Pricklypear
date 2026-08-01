@@ -50,7 +50,7 @@
           (html/join
             (list
               (html/a "/roadmap" (html/text "roadmap"))
-              (html/text " \194\183 ")
+              (html/text " · ")
               (html/a "/welcome" (html/text "welcome")))))))))
 
 (define welcome/book
@@ -60,7 +60,7 @@
       (list
         (layout/hero
           "The Pricklypear book"
-          "A paginated, linearly ordered rendering of the spec and code \226\128\148 literate programming without a WEB weave."
+          "A paginated, linearly ordered rendering of the spec and code — literate programming without a WEB weave."
           (html/join
             (list
               (layout/cta "/book.pdf" "Download PDF")
@@ -76,10 +76,10 @@
               (html/p
                 "It is not a tangle/weave of prose-into-code. The .borg files remain the source of truth; the PDF is a read-only projection so you can leave the screen.")
               (html/p
-                "If the PDF is missing on this host, the deploy step that runs scripts/public_artifacts.sh has not installed it yet \226\128\148 the code browser and tarball still cover the tree."))))
+                "If the PDF is missing on this host, the deploy step that runs scripts/public_artifacts.sh has not installed it yet — the code browser and tarball still cover the tree."))))
         (html/div
           (html/attr "class" "layout-foot")
-          (html/a "/welcome" (html/text "\226\134\144 welcome")))))))
+          (html/a "/welcome" (html/text "← welcome")))))))
 
 (define welcome/guestbook
   (lambda
@@ -99,7 +99,7 @@
             (with-public-write
               (lambda () (welcome/guestbook-record name site message)))
             (welcome/guestbook-form
-              "Thanks for signing! \240\159\140\181"
+              "Thanks for signing! 🌵"
               ""))))
       (welcome/guestbook-form "" ""))))
 
@@ -136,7 +136,7 @@
       (list
         (layout/hero
           "Guestbook"
-          "Sign my guestbook!! Leave a note. Tell me what you think. \240\159\140\181"
+          "Sign my guestbook!! Leave a note. Tell me what you think. 🌵"
           (html/join
             (list
               (layout/cta "/welcome" "Welcome")
@@ -320,7 +320,7 @@
                     (html/a
                       "/.well-known/agent.json"
                       (html/code "/.well-known/agent.json"))
-                    " \194\183 Prose: "
+                    " · Prose: "
                     (html/a "/agent.txt" (html/code "/agent.txt"))
                     ". No secrets in either document.")))
               (html/div
@@ -335,7 +335,7 @@
           (html/join
             (list
               (html/p
-                "Browse the source or download the book without an account. To run code in the image, log in \226\128\148 workspace home, Functions, Pages, Data, and the REPL stay private.")
+                "Browse the source or download the book without an account. To run code in the image, log in — workspace home, Functions, Pages, Data, and the REPL stay private.")
               (html/div
                 ""
                 (html/join
@@ -352,17 +352,17 @@
           (html/join
             (list
               (html/text
-                "Pricklypear \194\183 hosted release \194\183 ")
+                "Pricklypear · hosted release · ")
               (html/a "/background" (html/text "background"))
-              (html/text " \194\183 ")
+              (html/text " · ")
               (html/a "/roadmap" (html/text "roadmap"))
-              (html/text " \194\183 ")
+              (html/text " · ")
               (html/a "/signup" (html/text "signup"))
-              (html/text " \194\183 ")
+              (html/text " · ")
               (html/a "/guestbook" (html/text "guestbook"))
-              (html/text " \194\183 ")
+              (html/text " · ")
               (html/a "/agent.txt" (html/text "agent instructions"))
-              (html/text " \194\183 ")
+              (html/text " · ")
               (html/a "/about" (html/text "concepts (after login)")))))))))
 
 (define welcome/roadmap
@@ -418,6 +418,6 @@
           (html/join
             (list
               (html/a "/background" (html/text "background"))
-              (html/text " \194\183 ")
+              (html/text " · ")
               (html/a "/welcome" (html/text "welcome")))))))))
 

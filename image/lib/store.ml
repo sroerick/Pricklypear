@@ -149,6 +149,54 @@ let list_function_names (t : t)
   let rows = list_function_names_meta t in
   (List.map (fun (n, e, a, _) -> (n, e, a)) rows)
 
+(** Substring search over effective function bodies (JSONB ::text) on the
+    current branch inheritance chain. Closest definition wins (depth ASC
+    dedup). [needle] is matched with SQL ILIKE '%needle%' (no user-supplied
+    wildcards expanded beyond that). Returns names only, ordered by name. *)
+let search_function_bodies (t : t) ~(needle : string) ~(limit : int)
+  : string list =
+  let needle = String.trim needle in
+  let limit = if limit <= 0 then 200 else min limit 2000 in
+  if needle = "" then []
+  else
+    match t.conn with
+    | None -> []
+    | Some conn ->
+        (try
+           let sql =
+             "WITH RECURSIVE chain AS ( " ^
+             "  SELECT id, parent_id, 0 AS depth FROM branches WHERE id = $1 " ^
+             "  UNION ALL " ^
+             "  SELECT b.id, b.parent_id, c.depth + 1 " ^
+             "  FROM branches b JOIN chain c ON b.id = c.parent_id " ^
+             "), ranked AS ( " ^
+             "  SELECT fd.name, chain.depth, " ^
+             "         row_number() OVER (PARTITION BY fd.name ORDER BY chain.depth ASC) AS rn " ^
+             "  FROM " ^ fn_rel () ^ " fd " ^
+             "  JOIN chain ON fd.branch_id = chain.id " ^
+             "  WHERE fd.body::text ILIKE '%' || $2 || '%' " ^
+             ") SELECT name FROM ranked WHERE rn = 1 ORDER BY name ASC LIMIT $3"
+           in
+           let rows =
+             exec conn
+               ~params:
+                 [ Pgx.Value.of_string t.branch_id
+                 ; Pgx.Value.of_string needle
+                 ; Pgx.Value.of_string (string_of_int limit)
+                 ]
+               sql
+           in
+           List.filter_map
+             (fun row ->
+               match row with
+               | [ name_c ] -> Pgx.Value.to_string name_c
+               | _ -> None)
+             rows
+         with exn ->
+           Printf.eprintf "[store] search_function_bodies error: %s\n"
+             (Printexc.to_string exn);
+           [])
+
 (** Full branch-chain defs for env rehydrate: parents first (depth DESC),
     then children. Includes ALL rows (not deduped) so Session.load_defs can
     redefine — last write wins (child override). 4th = package provenance

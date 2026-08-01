@@ -16,7 +16,7 @@
               (html/code (as-str fn))
               (html/span
                 (html/attr "class" "muted")
-                (string-append " \226\128\148 " (as-str doc))))))))))
+                (string-append " — " (as-str doc))))))))))
 
 (define ref/packages
   (lambda
@@ -65,7 +65,7 @@
                       (html/attrs
                         (list
                           (html/attr "value" needle)
-                          (html/attr "placeholder" "apropos\226\128\166"))))
+                          (html/attr "placeholder" "apropos…"))))
                     (html/button (html/attr "type" "submit") "Search"))))
               (html/ul "" (html/join (list/map ref/fn-li fns))))))))))
 

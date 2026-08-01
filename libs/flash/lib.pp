@@ -171,7 +171,7 @@
           (list
             (html/p*
               ""
-              (html/a "/flashcards" "\226\134\144 All decks"))
+              (html/a "/flashcards" "← All decks"))
             (html/h1 (flash/esc (flash/deck-title fields)))
             (html/p*
               (html/attr "class" "meta")
@@ -648,7 +648,7 @@
       ((due (flash/due deck-id 1)))
       (html/join
         (list
-          (html/p* "" (html/a "/flashcards" "\226\134\144 Decks"))
+          (html/p* "" (html/a "/flashcards" "← Decks"))
           (html/h1 "Study")
           (if
             (null? due)
@@ -790,7 +790,7 @@
               (layout/cta "/flashcards/study" "Study now")
               (html/p*
                 (html/attr "class" "muted")
-                "Nothing due \226\128\148 you're all caught up!"))
+                "Nothing due — you're all caught up!"))
             (html/p* (list) (html/a "/flashcards" "Manage decks"))))))))
 
 (define flash/zz-main-sentinel

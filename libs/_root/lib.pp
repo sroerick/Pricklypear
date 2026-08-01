@@ -144,25 +144,25 @@
       (outline/node*
         "s-good"
         "What's Already Good"
-        "Patterns that are working well \226\128\148 don't change these."
+        "Patterns that are working well — don't change these."
         ""
         (list
           (outline/node*
             "s-good-layers"
             "Layered Architecture"
-            "The dependency graph is already bottom-up: html/css \226\134\146 layout \226\134\146 menu/ui \226\134\146 app packages. This is Graham's 'series of layers, each acting as a language for the one above.' The rss build (xml \226\134\146 http \226\134\146 feed) is the textbook example."
+            "The dependency graph is already bottom-up: html/css → layout → menu/ui → app packages. This is Graham's 'series of layers, each acting as a language for the one above.' The rss build (xml → http → feed) is the textbook example."
             ""
             (list))
           (outline/node*
             "s-good-outline"
             "Pure Data + Accessors (outline package)"
-            "Nodes are plain lists (id title body todo kids); everything accessed via outline/id, outline/title, outline/kids \226\128\148 never by position. Operations are pure functions returning new trees. Best-structured package in the system."
+            "Nodes are plain lists (id title body todo kids); everything accessed via outline/id, outline/title, outline/kids — never by position. Operations are pure functions returning new trees. Best-structured package in the system."
             ""
             (list))
           (outline/node*
             "s-good-crud"
             "Data-First CRUD"
-            "dict-set* + create/update/find-rows \226\128\148 data as JSON dicts in Postgres, no ORM. Very Lispy."
+            "dict-set* + create/update/find-rows — data as JSON dicts in Postgres, no ORM. Very Lispy."
             ""
             (list))
           (outline/node*
@@ -222,7 +222,7 @@
           (outline/node*
             "s-good-layers"
             "Layered Architecture"
-            "The dependency graph is already bottom-up: html/css \226\134\146 layout \226\134\146 menu/ui \226\134\146 app packages. This is Graham's series of layers, each acting as a language for the one above. The rss build (xml \226\134\146 http \226\134\146 feed) is the textbook example."
+            "The dependency graph is already bottom-up: html/css → layout → menu/ui → app packages. This is Graham's series of layers, each acting as a language for the one above. The rss build (xml → http → feed) is the textbook example."
             ""
             (list))
           (outline/node*
@@ -264,31 +264,31 @@
               (outline/node*
                 "s-rec-1a"
                 "Current: hand-rolled in every package"
-                "(define feed/page (lambda () (if (string-eq (request-method) \"POST\") (feed/handle-post) (feed/get-page)))) \226\128\148 repeated in notes, workout, weight, capture, plan, flash."
+                "(define feed/page (lambda () (if (string-eq (request-method) \"POST\") (feed/handle-post) (feed/get-page)))) — repeated in notes, workout, weight, capture, plan, flash."
                 ""
                 (list))
               (outline/node*
                 "s-rec-1b"
                 "Recommended: data-driven route table"
-                "(route \"/feed\" :get feed/get-page :post feed/handle-post :htmx feed/partial) \226\128\148 the dispatcher handles method routing, HTMX branching, and redirect-after-POST. Pages become declarations, not functions."
+                "(route \"/feed\" :get feed/get-page :post feed/handle-post :htmx feed/partial) — the dispatcher handles method routing, HTMX branching, and redirect-after-POST. Pages become declarations, not functions."
                 ""
                 (list))))
           (outline/node*
             "s-rec-2"
             "2. Action Dispatch Table [HIGH]"
-            "POST handlers use deeply nested if/if/if chains. todo/handle-post is 8 levels deep. notes/ui/handle-post uses cond (better but linear). Actions should be a flat table of name \226\134\146 handler-function pairs. Shorter, extensible, inspectable."
+            "POST handlers use deeply nested if/if/if chains. todo/handle-post is 8 levels deep. notes/ui/handle-post uses cond (better but linear). Actions should be a flat table of name → handler-function pairs. Shorter, extensible, inspectable."
             ""
             (list
               (outline/node*
                 "s-rec-2a"
                 "Current: nested ifs"
-                "(if (string-eq action \"cycle\") ... (if (string-eq action \"delete\") ... (if (string-eq action \"archive\") ...))) \226\128\148 8 levels in todo."
+                "(if (string-eq action \"cycle\") ... (if (string-eq action \"delete\") ... (if (string-eq action \"archive\") ...))) — 8 levels in todo."
                 ""
                 (list))
               (outline/node*
                 "s-rec-2b"
                 "Recommended: flat table + generic dispatcher"
-                "(define todo/actions (list (list \"cycle\" todo/cycle) (list \"delete\" todo/delete) ...)) then (dispatch todo/actions action). Actions are data \226\128\148 you can enumerate them, build a help page, add new ones by adding entries."
+                "(define todo/actions (list (list \"cycle\" todo/cycle) (list \"delete\" todo/delete) ...)) then (dispatch todo/actions action). Actions are data — you can enumerate them, build a help page, add new ones by adding entries."
                 ""
                 (list))))
           (outline/node*
@@ -312,7 +312,7 @@
           (outline/node*
             "s-rec-4"
             "4. Form Builder DSL [MEDIUM]"
-            "Every form is hand-built with html/form + html/text-input + html/label + html/hidden + html/button. feed/subscribe-form, weight/form, notes/ui/create-form, notes/capture-form, workout/start-bar (40 lines!), flash/rating-form \226\128\148 all repeat the same boilerplate. Graham: this is a language waiting to be written. Recommended: declare forms as data, (form/make \"/feed\" (list (form/hidden \"action\" \"subscribe\") (form/text \"url\") (form/submit \"Add\")))."
+            "Every form is hand-built with html/form + html/text-input + html/label + html/hidden + html/button. feed/subscribe-form, weight/form, notes/ui/create-form, notes/capture-form, workout/start-bar (40 lines!), flash/rating-form — all repeat the same boilerplate. Graham: this is a language waiting to be written. Recommended: declare forms as data, (form/make \"/feed\" (list (form/hidden \"action\" \"subscribe\") (form/text \"url\") (form/submit \"Add\")))."
             ""
             (list))
           (outline/node*
@@ -336,7 +336,7 @@
       (outline/node*
         "s-graham"
         "The Graham Principle"
-        "Each recommendation is a case of write the language, not the program. The if/request-method check should be written once in a dispatcher, not forty times. The nested-if action dispatch should be a data-driven table. Hand-built forms should be a DSL. Viaweb's editor was 20-25% macros because Graham kept finding these patterns and encoding them into the language itself. The layers (html \226\134\146 layout \226\134\146 app) are already there; what's missing is pushing more of the boilerplate down into the language layer."
+        "Each recommendation is a case of write the language, not the program. The if/request-method check should be written once in a dispatcher, not forty times. The nested-if action dispatch should be a data-driven table. Hand-built forms should be a DSL. Viaweb's editor was 20-25% macros because Graham kept finding these patterns and encoding them into the language itself. The layers (html → layout → app) are already there; what's missing is pushing more of the boilerplate down into the language layer."
         ""
         (list
           (outline/node*
@@ -436,7 +436,7 @@
               (outline/node*
                 "s-rec-1b"
                 "Recommended: data-driven route table"
-                "(route \"/feed\" :get feed/get-page :post feed/handle-post) \226\128\148 dispatcher handles routing."
+                "(route \"/feed\" :get feed/get-page :post feed/handle-post) — dispatcher handles routing."
                 ""
                 (list))))
           (outline/node*
@@ -462,7 +462,7 @@
   (outline/node*
     "e1"
     "Capability effects"
-    "Prickly Pear uses an algebraic-effects-style capability system to constrain what an eval call can do. Each eval request carries an effects-allow list. Known capabilities: Pure, ReadDb (get, find-row/rows, rows, find-text, find-random), WriteDb (create, update, update-field, delete), Publish (define, route, public-route), Html (ui functions). Dashboard agents get ReadDb+Html but NOT WriteDb or Publish \226\128\148 the compile-time governance model for agent-native BI."
+    "Prickly Pear uses an algebraic-effects-style capability system to constrain what an eval call can do. Each eval request carries an effects-allow list. Known capabilities: Pure, ReadDb (get, find-row/rows, rows, find-text, find-random), WriteDb (create, update, update-field, delete), Publish (define, route, public-route), Html (ui functions). Dashboard agents get ReadDb+Html but NOT WriteDb or Publish — the compile-time governance model for agent-native BI."
     ""
     (list)))
 
@@ -470,7 +470,7 @@
   (outline/node*
     "e2"
     "Budget: 100K step limit"
-    "Every eval call runs with a budget of 100000 steps (default_limit, eval.ml line 8435). Each eval step (variable lookup, App, Prim dispatch, car, cdr, let binding, macro expansion) calls tick() which raises Budget_exceeded at limit+1. OCaml built-ins do NOT tick the budget \226\128\148 only the call site counts as 1 step. Each call gets its own budget. Budget exceeded aborts only that call; the session continues. Budget is a safety net, not a performance governor \226\128\148 fix via OCaml migration, not raising the limit."
+    "Every eval call runs with a budget of 100000 steps (default_limit, eval.ml line 8435). Each eval step (variable lookup, App, Prim dispatch, car, cdr, let binding, macro expansion) calls tick() which raises Budget_exceeded at limit+1. OCaml built-ins do NOT tick the budget — only the call site counts as 1 step. Each call gets its own budget. Budget exceeded aborts only that call; the session continues. Budget is a safety net, not a performance governor — fix via OCaml migration, not raising the limit."
     ""
     (list)))
 
@@ -478,7 +478,7 @@
   (outline/node*
     "e3"
     "Cooperative stepped evaluation"
-    "The eval loop is stepped: each Prim invocation yields back to the images event loop. This prevents any single eval from wedging the image. Combined with per-call budgeting, it gives cooperative multitasking without preemption. No server-side cron exists \226\128\148 everything is request-driven with lazy timestamp checks for scheduled work."
+    "The eval loop is stepped: each Prim invocation yields back to the images event loop. This prevents any single eval from wedging the image. Combined with per-call budgeting, it gives cooperative multitasking without preemption. No server-side cron exists — everything is request-driven with lazy timestamp checks for scheduled work."
     ""
     (list)))
 
@@ -486,7 +486,7 @@
   (outline/node*
     "e4"
     "select-for-update and mutex poisoning"
-    "select-for-update does SELECT FOR UPDATE row lock. Meaningful only inside with-transaction. Calling outside a transaction can poison Eio mutexes (observed 2026-07-22: Eio mutex Poisoned cascaded into 401 auth failures for 20 min). Action: make it fail cleanly outside transactions. with-transaction form: (with-transaction (lambda () body)). Internal name __with_transaction__ \226\128\148 OCaml built-in. Nested transactions raise clean errors."
+    "select-for-update does SELECT FOR UPDATE row lock. Meaningful only inside with-transaction. Calling outside a transaction can poison Eio mutexes (observed 2026-07-22: Eio mutex Poisoned cascaded into 401 auth failures for 20 min). Action: make it fail cleanly outside transactions. with-transaction form: (with-transaction (lambda () body)). Internal name __with_transaction__ — OCaml built-in. Nested transactions raise clean errors."
     ""
     (list)))
 
@@ -494,7 +494,7 @@
   (outline/node*
     "e5"
     "Lisp vs OCaml boundary"
-    "All roam/, notes/, wiki/, outline/*, calendar/*, flash/* are Lisp (verified: function-source returns non-empty). Even list/map, list/filter, list/foldl are Lisp \226\128\148 every iteration burns budget. OCaml built-ins: data layer, agent/LLM, branching, routes, core primitives (car, cdr, +, string-eq, etc.), media, ssh. The separation: OCaml = data access + core language + IO. Lisp = application logic. Budget pain is entirely in the Lisp layer."
+    "All roam/, notes/, wiki/, outline/*, calendar/*, flash/* are Lisp (verified: function-source returns non-empty). Even list/map, list/filter, list/foldl are Lisp — every iteration burns budget. OCaml built-ins: data layer, agent/LLM, branching, routes, core primitives (car, cdr, +, string-eq, etc.), media, ssh. The separation: OCaml = data access + core language + IO. Lisp = application logic. Budget pain is entirely in the Lisp layer."
     ""
     (list)))
 
@@ -502,7 +502,7 @@
   (outline/node*
     "e6"
     "Migration priorities"
-    "P0: list/map, list/filter, list/foldl \226\128\148 single highest-leverage OCaml-ification. Every large-list operation across all namespaces gets cheaper. P1: roam/reindex \226\128\148 the number one budget killer for note writes. P2: outline/kids, outline/decode, outline/encode, outline/find \226\128\148 cascade impacts all three namespaces. P3: roam/parse-links, roam/backlinks. After P0-P2, 100K budget feels generous while still catching infinite loops."
+    "P0: list/map, list/filter, list/foldl — single highest-leverage OCaml-ification. Every large-list operation across all namespaces gets cheaper. P1: roam/reindex — the number one budget killer for note writes. P2: outline/kids, outline/decode, outline/encode, outline/find — cascade impacts all three namespaces. P3: roam/parse-links, roam/backlinks. After P0-P2, 100K budget feels generous while still catching infinite loops."
     ""
     (list)))
 
@@ -1445,7 +1445,7 @@
 (define test-unicode
   (outline/node*
     "root"
-    "Test \226\128\148 em-dash \226\134\146 arrow \194\171guillemet\194\187"
+    "Test — em-dash → arrow «guillemet»"
     ""
     ""
     (list)))

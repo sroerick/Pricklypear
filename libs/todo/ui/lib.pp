@@ -8,7 +8,7 @@
       (string-eq view "from-notes")
       (html/p*
         (html/attr "class" "muted")
-        "Mark nodes TODO in notes \226\128\148 they appear here. Toggle writes back.")
+        "Mark nodes TODO in notes — they appear here. Toggle writes back.")
       (if
         (string-eq view "archived")
         (html/p*
@@ -65,7 +65,7 @@
               (html/p* (html/attr "class" "err") "Item not found.")
               (html/a
                 (string-append "/todos?view=" view)
-                "\226\134\144 back"))))
+                "← back"))))
         (let
           ((title (todo/item/title fields)))
           (let
@@ -84,7 +84,7 @@
                           (html/attr "class" "muted")
                           (html/a
                             (string-append "/todos?view=" view)
-                            "\226\134\144 back to list"))
+                            "← back to list"))
                         (html/h2 (html/text title))
                         (html/form
                           "POST"

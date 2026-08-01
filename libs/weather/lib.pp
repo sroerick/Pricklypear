@@ -3,7 +3,7 @@
 ;;
 ;; Keep JS string bodies ASCII-safe (use JS \\u00B0 etc). Nopales used to
 ;; print non-ASCII via OCaml String.escaped (\\194\\176); the reader treated
-;; those as literal digits, so 71 deg F became 71194176F in the browser.
+;; those as literal digits, so 71 deg F became 71°F in the browser.
 
 (define weather/default-label
   "Cody, WY")

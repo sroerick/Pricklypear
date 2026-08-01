@@ -118,7 +118,7 @@
                             "")
                           (if
                             (workout/ksk-program? prog)
-                            (html/text " 194183 ")
+                            (html/text " · ")
                             "")
                           (html/a sess-href "Open session"))))))))))))))
 
@@ -226,7 +226,7 @@
                 (html/div
                   ""
                   (html/strong
-                    (string-append ex " 226128148 " r " reps" load)))
+                    (string-append ex " — " r " reps" load)))
                 (if
                   (blank? n)
                   ""
@@ -489,7 +489,7 @@
           (html/p*
             (html/attr "class" "muted")
             (html/text
-              "Training journal 226128148 free log + King-Sized Killer (snatch)."))
+              "Training journal — free log + King-Sized Killer (snatch)."))
           (workout/home-main))))))
 
 (define workout/insert-session-desc
@@ -646,12 +646,12 @@
           (if (blank? week) "" (string-append " W" week))
           " D"
           day
-          " 194183 "
+          " · "
           pat
-          " 194183 "
+          " · "
           load
           (if (blank? unit) "" (string-append " " unit))
-          " 194183 "
+          " · "
           cap
           "m")))))
 
@@ -905,12 +905,12 @@
               (as-str week)
               " D"
               (as-str day)
-              " 194183 "
+              " · "
               pat
-              " 194183 "
+              " · "
               (as-str load)
               (as-str unit)
-              " 194183 "
+              " · "
               (as-str (workout/ksk-time-cap "ksk1"))
               "m"))
           (nxt (workout/ksk1-next phase week day)))
@@ -1167,7 +1167,7 @@
                 (html/button (html/attr "type" "submit") "Save workout"))))
           (html/p*
             ""
-            (html/a "/workout" "226134144 All workouts")))))))
+            (html/a "/workout" "← All workouts")))))))
 
 (define workout/log-page
   (lambda
@@ -1580,7 +1580,7 @@
           (html/join
             (list
               (html/p "Session not found.")
-              (html/p* "" (html/a "/workout" "226134144 Back")))))
+              (html/p* "" (html/a "/workout" "← Back")))))
         (let
           ((doc (workout/parse-session-doc id))
             (st (workout/session-state f))
@@ -1639,11 +1639,11 @@
                           (if
                             (string-eq kind "ladder")
                             (string-append
-                              " 194183 rung #"
+                              " · rung #"
                               (as-str (+ (workout/as-int ri) 1))
-                              " 194183 ladder "
+                              " · ladder "
                               lad)
-                            (string-append " 194183 sets done " sd)))))
+                            (string-append " · sets done " sd)))))
                     (html/p*
                       (html/attr "class" "ksk-target")
                       (html/text
@@ -1654,7 +1654,7 @@
                         (string-append
                           "pattern "
                           pat
-                          " 194183 per-rung both hands")))
+                          " · per-rung both hands")))
                     (if
                       (string-eq st "in_progress")
                       (html/join
@@ -1695,11 +1695,11 @@
                       (html/attr "class" "ksk-totals")
                       (html/text
                         (string-append
-                          "Totals 226128148 L: "
+                          "Totals — L: "
                           rl
-                          " 194183 R: "
+                          " · R: "
                           rr
-                          " 194183 all: "
+                          " · all: "
                           (as-str (+ (workout/as-int rl) (workout/as-int rr))))))
                     (html/p*
                       ""
@@ -1708,7 +1708,7 @@
                           (html/a
                             (string-append "/workout/session?id=" id)
                             "Session detail")
-                          (html/text " 194183 ")
+                          (html/text " · ")
                           (html/a "/workout" "All workouts"))))))))))))))
 
 (define workout/run-page
@@ -1727,7 +1727,7 @@
                 (list
                   (html/h1 "Run")
                   (html/p "Missing session id.")
-                  (html/p* "" (html/a "/workout" "226134144 Back"))))
+                  (html/p* "" (html/a "/workout" "← Back"))))
               (workout/run-main id))))))))
 
 (define workout/run-style
@@ -1794,7 +1794,7 @@
                 ""
                 (html/a
                   (string-append "/workout/run?id=" (as-str id))
-                  "226134146 Open run UI"))
+                  "→ Open run UI"))
               "")
             (if
               (string-eq (as-str state) "in_progress")
@@ -1838,7 +1838,7 @@
                     "Delete session"))))
             (html/p*
               ""
-              (html/a "/workout" "226134144 All workouts"))))))))
+              (html/a "/workout" "← All workouts"))))))))
 
 (define workout/session-complete
   (lambda
@@ -2126,7 +2126,7 @@
                 (list
                   (html/h1 "Session")
                   (html/p "Missing id.")
-                  (html/p* "" (html/a "/workout" "226134144 Back"))))
+                  (html/p* "" (html/a "/workout" "← Back"))))
               (workout/session-main id))))))))
 
 (define workout/session-program
@@ -2151,8 +2151,8 @@
         (inten (workout/session-intensity f)))
       (if
         (blank? inten)
-        (string-append date " 194183 " prog)
-        (string-append date " 194183 " prog " / " inten)))))
+        (string-append date " · " prog)
+        (string-append date " · " prog " / " inten)))))
 
 (define workout/session-total-reps
   (lambda
@@ -2249,7 +2249,7 @@
                       (html/attr "inputmode" "numeric"))))
                 (html/label
                   (html/attr "for" "ksk-day")
-                  "Day 12261281473")
+                  "Day 1–3")
                 (html/text-input
                   "day"
                   (html/attrs
@@ -2274,7 +2274,7 @@
                       (html/attr "value" "kg"))))
                 (html/label
                   (html/attr "for" "ksk-rm")
-                  "RM total (3.0 226128148 L+R max test)")
+                  "RM total (3.0 — L+R max test)")
                 (html/text-input
                   "rm_total"
                   (html/attrs
