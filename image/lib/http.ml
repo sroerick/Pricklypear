@@ -644,6 +644,30 @@ let request_handler ~(sw : Eio.Switch.t) (session : Session.t)
   | `POST, "/api/ai/propose" -> launch (fun () -> ai_propose session reqd)
   | `GET, "/agent" -> launch (fun () -> agent_page session reqd)
   | `POST, "/api/edit/create" -> launch (fun () -> api_edit_create session reqd)
+  | `POST, path when String.length path >= 13
+                  && String.sub path 0 13 = "/api/analyze/" ->
+      let name =
+        let rest = String.sub path 13 (String.length path - 13) in
+        let rest =
+          match String.index_opt rest '?' with
+          | None -> rest
+          | Some i -> String.sub rest 0 i
+        in
+        Packages.name_decode rest
+      in
+      launch (fun () -> Http_analyze.post_analyze session name reqd)
+  | `POST, path when String.length path >= 13
+                  && String.sub path 0 13 = "/api/explain/" ->
+      let name =
+        let rest = String.sub path 13 (String.length path - 13) in
+        let rest =
+          match String.index_opt rest '?' with
+          | None -> rest
+          | Some i -> String.sub rest 0 i
+        in
+        Packages.name_decode rest
+      in
+      launch (fun () -> Http_analyze.post_explain session name reqd)
   | `GET, path when String.length path >= 6
                  && String.sub path 0 6 = "/page/" ->
       let seg = String.sub path 6 (String.length path - 6) in

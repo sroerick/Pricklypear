@@ -107,6 +107,16 @@ let emergency_css : string =
    border-left:3px solid transparent}\n\
    .bb-item.is-active a{font-weight:700;background:#ece9e0;border-left:3px solid #000}\n\
    .bb-source{max-height:55vh;overflow:auto;padding:.6rem;border:1px solid #000}\n\
+   .ast-walk .ast-self-ref{background:#fff3bf;border-bottom:2px solid #e67700}\n\
+   .ast-walk .ast-tail{box-shadow:inset 3px 0 0 #2b8a3e}\n\
+   .ast-walk .ast-non-tail{box-shadow:inset 3px 0 0 #c92a2a}\n\
+   .ast-walk .ast-mutual{background:#e7f5ff;border-bottom:2px dashed #1971c2}\n\
+   .badge.complexity{background:#e7f5ff;border:1px solid #1971c2;padding:.1rem .35rem}\n\
+   .badge.db-cost{background:#f3f0ff;border:1px solid #5f3dc4;padding:.1rem .35rem}\n\
+   .badge.ast-tail{background:#d3f9d8;border:1px solid #2b8a3e;padding:.1rem .35rem}\n\
+   .badge.ast-non-tail{background:#ffe3e3;border:1px solid #c92a2a;padding:.1rem .35rem}\n\
+   .explain-layer,.explain-panel{margin-top:.5rem}\n\
+   .analyze-result{margin-top:.5rem}\n\
    @media (min-width:900px){\n\
    .bb-three{display:grid;grid-template-columns:12rem 14rem 1fr;gap:.75rem;\n\
    align-items:stretch;min-height:16rem}\n\

@@ -14,11 +14,23 @@ open Ast
 type budget = {
   mutable steps : int;
   limit : int;
+  mutable current_fn : string option;
+  mutable prim_calls : int;
+  mutable db_hits : int;
+  fn_step_counts : (string, int) Hashtbl.t;
 }
 
 let default_limit = 100_000
 
-let make_budget ?(limit = default_limit) () : budget = { steps = 0; limit }
+let make_budget ?(limit = default_limit) () : budget =
+  {
+    steps = 0;
+    limit;
+    current_fn = None;
+    prim_calls = 0;
+    db_hits = 0;
+    fn_step_counts = Hashtbl.create 16;
+  }
 
 (** Dynamic binding for the budget of the eval currently on the stack.
     Lets OCaml prims like [budget-remaining] and nested apply helpers
@@ -26,13 +38,27 @@ let make_budget ?(limit = default_limit) () : budget = { steps = 0; limit }
     the prim ABI. *)
 let current_budget : budget option ref = ref None
 
+(** Last top-level budget from [eval_string_direct] / rim entry — for
+    image-layer function_stat persistence. *)
+let last_budget : budget option ref = ref None
+
 let budget_remaining_steps () : int =
   match !current_budget with
   | None -> 0
   | Some b -> max 0 (b.limit - b.steps)
 
+let note_db_hit () : unit =
+  match !current_budget with
+  | Some b -> b.db_hits <- b.db_hits + 1
+  | None -> ()
+
 let tick (b : budget) : unit =
   b.steps <- b.steps + 1;
+  (match b.current_fn with
+   | Some fn ->
+       let n = try Hashtbl.find b.fn_step_counts fn with Not_found -> 0 in
+       Hashtbl.replace b.fn_step_counts fn (n + 1)
+   | None -> ());
   if b.steps > b.limit then raise (Interp_error Budget_exceeded)
 
 (** A primitive for pure tests / name registration: sync function.
@@ -404,6 +430,7 @@ let rec eval_step
   | Prim (name, args) ->
       let arg_vals = List.map (eval ~budget ~prims env) args in
       let _ = prims in
+      budget.prim_calls <- budget.prim_calls + 1;
       Done (Control.perform_prim name arg_vals)
   | App (head, args) ->
       (match head with
@@ -417,11 +444,21 @@ let rec eval_step
             | _ ->
                 let f = eval ~budget ~prims env head in
                 let arg_vals = List.map (eval ~budget ~prims env) args in
-                apply_step ~budget ~prims f arg_vals)
+                let step = apply_step ~budget ~prims f arg_vals in
+                (match f, step with
+                 | VLambda _, Cont _ -> budget.current_fn <- Some name
+                 | VPrim _, Done _ ->
+                     budget.prim_calls <- budget.prim_calls + 1
+                 | _ -> ());
+                step)
        | _ ->
            let f = eval ~budget ~prims env head in
            let arg_vals = List.map (eval ~budget ~prims env) args in
-           apply_step ~budget ~prims f arg_vals)
+           let step = apply_step ~budget ~prims f arg_vals in
+           (match f with
+            | VPrim _ -> budget.prim_calls <- budget.prim_calls + 1
+            | _ -> ());
+           step)
 
 (** Force evaluation to a value (trampoline driver). *)
 and eval
@@ -430,9 +467,12 @@ and eval
   (env : env)
   (e : expr)
   : value =
+  let prev_fn = budget.current_fn in
   let rec loop env e =
     match eval_step ~budget ~prims env e with
-    | Done v -> v
+    | Done v ->
+        budget.current_fn <- prev_fn;
+        v
     | Cont (env', e') -> loop env' e'
   in
   loop env e
@@ -1025,6 +1065,7 @@ and apply_step
               "macro must be applied by name (not as first-class apply)"))
   | VPrim name ->
       let _ = prims in
+      (* prim_calls counted at App/Prim call sites *)
       Done (Control.perform_prim name args)
   | other -> raise (Interp_error (Not_a_function other))
 
@@ -1040,6 +1081,7 @@ and apply
 
 let eval_string_direct ~(prims : prim_table) (env : env) (s : string) : value =
   let budget = make_budget () in
+  last_budget := Some budget;
   let e = Reader.read_one s in
   eval ~budget ~prims env e
 

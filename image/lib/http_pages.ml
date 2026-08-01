@@ -16,10 +16,100 @@ let show_binding_page (session : Session.t) (name : string)
           HTML.p [] [HTML.a [HTML.href "%s" ("/edit/" ^ name)] [txt "create it"]];
         ]
     | Some (expr, author, _doc) ->
-        let pp = Pricklypear_lisp.Reader.pp_expr expr in
+        let snap = Call_graph.snapshot_of_session session in
+        let mutual = Call_graph.mutual_of snap name in
+        let cx =
+          Pricklypear_lisp.Complexity.badge
+            (Pricklypear_lisp.Complexity.classify ~fn_name:name expr)
+        in
+        let db_prims = Db_cost.db_prims_of_expr expr in
+        let db_nodes =
+          if db_prims = [] then [ txt "" ]
+          else
+            List.concat_map
+              (fun p ->
+                [
+                  HTML.span [ HTML.class_ "badge db-cost" ]
+                    [ txt "%s: %s" p (Db_cost.badge (Db_cost.static_cost p)) ];
+                  txt " ";
+                ])
+              db_prims
+        in
+        let stats_node =
+          match
+            Crud.find_row (Session.store session) ~type_name:"function_stat"
+              ~field:"fn" ~value:name
+          with
+          | Pricklypear_lisp.Ast.VStr fields_json ->
+              (try
+                 let j = Yojson.Safe.from_string fields_json in
+                 let open Yojson.Safe.Util in
+                 let steps = member "steps" j |> to_int_option |> Option.value ~default:0 in
+                 let prims = member "prim_calls" j |> to_int_option |> Option.value ~default:0 in
+                 let dbh = member "db_hits" j |> to_int_option |> Option.value ~default:0 in
+                 HTML.p [ HTML.class_ "meta last-run" ]
+                   [ txt "last run: %d steps, %d prim calls, %d DB hits" steps prims dbh ]
+               with _ -> HTML.p [ HTML.class_ "muted" ] [ txt "" ])
+          | _ -> HTML.p [ HTML.class_ "muted" ] [ txt "(no measured run yet)" ]
+        in
+        let explain_text =
+          match Analyze.explain_function (Session.store session) ~fn_name:name with
+          | Ok t -> t
+          | Error _ -> ""
+        in
         chrome ~session ~title:name [
           HTML.p [] [txt "author: %s" author];
-          HTML.pre [] [txt "%s" pp];
+          HTML.p []
+            (Ast_html.recursion_badges ~fn_name:name expr
+             @ [
+                 txt " ";
+                 HTML.span [ HTML.class_ "badge complexity" ] [ txt "%s" cx ];
+                 txt " ";
+               ]
+             @ db_nodes);
+          stats_node;
+          Ast_html.pp_expr_html ~fn_name:name ~mutual expr;
+          HTML.p [] [
+            HTML.button
+              [
+                HTML.type_ "button";
+                HTML.class_ "btn";
+                Hx.post "%s" ("/api/analyze/" ^ Packages.name_encode name);
+                Hx.target "#analyze-result";
+                Hx.swap "innerHTML";
+              ]
+              [ txt "Analyze" ];
+            txt " ";
+            HTML.button
+              [
+                HTML.type_ "button";
+                HTML.class_ "btn secondary";
+                Hx.post "%s" ("/api/analyze/" ^ Packages.name_encode name ^ "?llm=1");
+                Hx.target "#analyze-result";
+                Hx.swap "innerHTML";
+              ]
+              [ txt "Analyze (LLM)" ];
+            txt " ";
+            HTML.button
+              [
+                HTML.type_ "button";
+                HTML.class_ "btn secondary";
+                Hx.post "%s" ("/api/explain/" ^ Packages.name_encode name);
+                Hx.target "#explain-result";
+                Hx.swap "innerHTML";
+              ]
+              [ txt "Explain" ];
+          ];
+          HTML.div [ HTML.id "analyze-result" ] [ txt "" ];
+          HTML.details [ HTML.class_ "explain-panel" ]
+            [
+              HTML.summary [] [ txt "Inside-out breakdown" ];
+              HTML.div [ HTML.id "explain-result" ]
+                [
+                  HTML.pre [ HTML.class_ "bb-source explain-layer" ]
+                    [ txt "%s" explain_text ];
+                ];
+            ];
           HTML.p [] [
             HTML.a [HTML.href "%s" (Packages.edit_href name)] [txt "edit"];
             txt " · ";
@@ -460,7 +550,10 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
               ])
         | Some (expr, author, _doc) ->
             let badge = badge_of expr in
-            let pp = Pricklypear_lisp.Reader.pp_expr expr in
+            let cx_badge =
+              Pricklypear_lisp.Complexity.badge
+                (Pricklypear_lisp.Complexity.classify ~fn_name:full expr)
+            in
             let depth = depth_of full in
             let snap = Call_graph.snapshot_of_session session in
             let callees = Call_graph.callees snap ~name:full ~depth:1 in
@@ -618,11 +711,14 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
                ]
                @ txn_hint_nodes expr)
             in
+            let mutual = Call_graph.mutual_of snap full in
             let code_pane =
               HTML.div [HTML.class_ "card bb-code"] [
                 HTML.div [HTML.class_ "bb-code-head"] [
                   HTML.h2 [] [txt "definition · %s" full];
                   HTML.p [HTML.class_ "bb-code-actions"] [
+                    HTML.span [HTML.class_ "badge complexity"] [txt "%s" cx_badge];
+                    txt " ";
                     HTML.a
                       [ HTML.href "%s" (Packages.edit_href full)
                       ; HTML.class_ "btn" ]
@@ -632,9 +728,14 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
                       [ HTML.href "%s" (Packages.inspect_href full)
                       ; HTML.class_ "btn secondary" ]
                       [txt "Inspect AST"];
+                    txt " ";
+                    HTML.a
+                      [ HTML.href "%s" ("/binding/" ^ Packages.name_encode full)
+                      ; HTML.class_ "btn secondary" ]
+                      [txt "Observability"];
                   ];
                 ];
-                HTML.pre [HTML.class_ "bb-source"] [txt "%s" pp];
+                Ast_html.pp_expr_html ~fn_name:full ~mutual expr;
               ]
             in
             (chrome ~session ~title:full
@@ -1153,7 +1254,6 @@ let inspect_binding_page (session : Session.t) (name : string)
           HTML.p [HTML.class_ "err"] [txt "not found"];
         ]
     | Some (expr, author, _doc) ->
-        let pp = Pricklypear_lisp.Reader.pp_expr expr in
         let j =
           try Yojson.Safe.pretty_to_string
                 (Pricklypear_lisp.Ast.expr_to_json expr)
@@ -1163,6 +1263,12 @@ let inspect_binding_page (session : Session.t) (name : string)
           Pricklypear_lisp.Effect.EffSet.badge
             (Pricklypear_lisp.Effect.infer ~known_fn expr)
         in
+        let cx =
+          Pricklypear_lisp.Complexity.badge
+            (Pricklypear_lisp.Complexity.classify ~fn_name:name expr)
+        in
+        let snap = Call_graph.snapshot_of_session session in
+        let mutual = Call_graph.mutual_of snap name in
         let txn_nodes =
           match Pricklypear_lisp.Effect.txn_lint ~known_fn expr with
           | [] -> []
@@ -1179,12 +1285,18 @@ let inspect_binding_page (session : Session.t) (name : string)
                HTML.p [] [txt "author: %s" author];
                HTML.p [] [txt "branch: %s" (Session.branch_name session)];
                HTML.p [] [txt "effects: %s" badge];
+               HTML.p []
+                 (Ast_html.recursion_badges ~fn_name:name expr
+                  @ [ txt " "; HTML.span [HTML.class_ "badge complexity"] [txt "%s" cx] ]);
                HTML.h2 [] [txt "pretty"];
-               HTML.pre [] [txt "%s" pp];
+               Ast_html.pp_expr_html ~fn_name:name ~mutual expr;
                HTML.h2 [] [txt "AST JSON"];
                HTML.pre [] [txt "%s" j];
                HTML.p [] [
                  HTML.a [HTML.href "%s" (Packages.edit_href name)] [txt "edit"];
+                 txt " · ";
+                 HTML.a [HTML.href "%s" ("/binding/" ^ Packages.name_encode name)]
+                   [txt "observability"];
                ];
              ];
            ]
