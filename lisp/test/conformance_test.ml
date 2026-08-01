@@ -128,6 +128,10 @@ let special_form_cases =
   ; case "cond else" "(cond (#f 1) (else 2))" "2"
   ; case "match list head"
       "(match '(lambda (x) y) ((lambda params body) params) (_ 0))" "(x)"
+  ; case "match fallthrough underscore"
+      "(match 42 ((list x) 1) (_ 7))" "7"
+  ; case "match binds var"
+      "(match 5 (x (+ x 1)))" "6"
   ; case "guard recovers" "(guard (lambda (e) 99) (error \"boom\"))" "99"
   ; case_setup "define sugar"
       [ "(define (add1 x) (+ x 1))" ]
