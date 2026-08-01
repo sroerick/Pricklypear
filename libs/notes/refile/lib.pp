@@ -166,20 +166,29 @@
     (let
       ((src (as-str (request-param "src_slug")))
         (nid (as-str (request-param "node_id")))
-        (dst (as-str (request-param "dst_slug"))))
+        (dst (as-str (request-param "dst_slug")))
+        (dst-nid
+          (if
+            (null? (request-param "dst_node_id"))
+            ""
+            (as-str (request-param "dst_node_id")))))
       (seq
-        (notes/refile/move src nid dst)
+        (notes/refile/move src nid dst dst-nid)
         (redirect (string-append "/notes?slug=" src))))))
 
 (define notes/refile/move
   (lambda
-    (src-slug nid dst-slug)
+    (src-slug nid dst-slug dst-nid)
     (let
       ((src (notes/doc/get src-slug))
         (dst (notes/doc/get dst-slug))
         (sid (as-str src-slug))
         (did (as-str dst-slug))
-        (id (as-str nid)))
+        (id (as-str nid))
+        (parent
+          (let
+            ((p (as-str dst-nid)))
+            (if (string-eq p "") "root" p))))
       (if
         (if (null? src) #t (null? dst))
         #f
@@ -206,7 +215,7 @@
                           (notes/doc/upsert
                             did
                             (notes/doc/title dst)
-                            (outline/add-child-by-id dst-tree "root" node)
+                            (outline/add-child-by-id dst-tree parent node)
                             (notes/doc/tags dst)
                             (notes/doc/kind dst)
                             (notes/doc/day dst))

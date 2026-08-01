@@ -841,6 +841,160 @@ let list_note_index (conn : Store_db.conn) ~(prefix : string) ?(limit : int = 20
            | _ -> None)
          rows)
 
+(** Substring search over note + heading bodies under [prefix].
+    Returns lightweight hit dicts as JSON strings for Nopales dict-get:
+      slug, title, node_id, header_path, matched, rank, kind, tags
+    Doc-level hits have empty node_id; heading hits include breadcrumb. *)
+let search_text (conn : Store_db.conn) ~(prefix : string) ~(needle : string)
+    ?(limit : int = 20) () : string list =
+  if not (valid_path prefix) then []
+  else
+    let needle = String.trim needle in
+    if needle = "" then []
+    else
+      let pat = "%" ^ needle ^ "%" in
+      let needle_l = String.lowercase_ascii needle in
+      let note_sql =
+        "SELECT "
+        ^ "coalesce(payload #>> '{body,slug}', ''), "
+        ^ "coalesce(payload #>> '{body,title}', ''), "
+        ^ "coalesce(payload #>> '{body,tags}', ''), "
+        ^ "coalesce(payload #>> '{body,kind}', 'note') "
+        ^ "FROM tree_nodes WHERE path <@ $1::ltree AND kind = 'note' "
+        ^ "AND (payload #>> '{body,title}' ILIKE $2 "
+        ^ "  OR payload #>> '{body,tags}' ILIKE $2 "
+        ^ "  OR payload #>> '{body,slug}' ILIKE $2) "
+        ^ "ORDER BY 2 ASC LIMIT $3"
+      in
+      let heading_sql =
+        "SELECT "
+        ^ "coalesce(n.payload #>> '{body,slug}', ''), "
+        ^ "coalesce(n.payload #>> '{body,title}', ''), "
+        ^ "coalesce(n.payload #>> '{body,tags}', ''), "
+        ^ "coalesce(n.payload #>> '{body,kind}', 'note'), "
+        ^ "coalesce(h.payload #>> '{body,id}', ''), "
+        ^ "coalesce(h.payload #>> '{body,title}', ''), "
+        ^ "coalesce(h.payload #>> '{body,body}', ''), "
+        ^ "(SELECT string_agg(coalesce(a.payload #>> '{body,title}', ''), ' › ' "
+        ^ "ORDER BY nlevel(a.path)) "
+        ^ "FROM tree_nodes a "
+        ^ "WHERE a.kind = 'heading' AND a.path <@ n.path AND h.path <@ a.path) AS header_path "
+        ^ "FROM tree_nodes h "
+        ^ "JOIN LATERAL ( "
+        ^ "  SELECT path, payload FROM tree_nodes nn "
+        ^ "  WHERE nn.kind = 'note' AND h.path <@ nn.path AND nn.path <@ $1::ltree "
+        ^ "  ORDER BY nlevel(nn.path) DESC LIMIT 1 "
+        ^ ") n ON true "
+        ^ "WHERE h.kind = 'heading' AND h.path <@ $1::ltree "
+        ^ "AND (h.payload #>> '{body,title}' ILIKE $2 "
+        ^ "  OR h.payload #>> '{body,body}' ILIKE $2) "
+        ^ "ORDER BY 6 ASC LIMIT $3"
+      in
+      let params =
+        [ Pgx.Value.of_string prefix
+        ; Pgx.Value.of_string pat
+        ; Pgx.Value.of_int limit
+        ]
+      in
+      let note_rows = Io_lwt.Db.execute conn ~params note_sql in
+      let heading_rows = Io_lwt.Db.execute conn ~params heading_sql in
+      let hit ~slug ~title ~tags ~kind ~node_id ~header_path ~matched ~rank =
+        Yojson.Safe.to_string
+          (`Assoc
+             [ ("slug", `String slug)
+             ; ("title", `String title)
+             ; ("tags", `String tags)
+             ; ("kind", `String kind)
+             ; ("node_id", `String node_id)
+             ; ("header_path", `String header_path)
+             ; ("matched", `String matched)
+             ; ("rank", `Int rank)
+             ])
+      in
+      let contains_ci hay =
+        string_contains (String.lowercase_ascii hay) needle_l
+      in
+      let parse_note = function
+        | [ slug_c; title_c; tags_c; kind_c ] ->
+            (match
+               Pgx.Value.to_string slug_c,
+               Pgx.Value.to_string title_c,
+               Pgx.Value.to_string tags_c,
+               Pgx.Value.to_string kind_c
+             with
+             | Some slug, Some title, Some tags, Some kind ->
+                 let matched, rank =
+                   if String.lowercase_ascii slug = needle_l then ("slug", 0)
+                   else if contains_ci title then ("title", 1)
+                   else if contains_ci tags then ("tags", 3)
+                   else if contains_ci slug then ("slug", 1)
+                   else ("title", 4)
+                 in
+                 Some (rank, slug, "", hit ~slug ~title ~tags ~kind ~node_id:""
+                         ~header_path:"" ~matched ~rank)
+             | _ -> None)
+        | _ -> None
+      in
+      let parse_heading = function
+        | [ slug_c; title_c; tags_c; kind_c; nid_c; htitle_c; hbody_c; path_c ]
+          ->
+            (match
+               Pgx.Value.to_string slug_c,
+               Pgx.Value.to_string title_c,
+               Pgx.Value.to_string tags_c,
+               Pgx.Value.to_string kind_c,
+               Pgx.Value.to_string nid_c,
+               Pgx.Value.to_string htitle_c,
+               Pgx.Value.to_string hbody_c,
+               Pgx.Value.to_string path_c
+             with
+             | Some slug, Some title, Some tags, Some kind, Some nid,
+               Some htitle, Some hbody, Some header_path ->
+                 let matched, rank =
+                   if contains_ci htitle then ("header", 2)
+                   else if contains_ci hbody then ("body", 4)
+                   else ("header", 4)
+                 in
+                 Some
+                   ( rank
+                   , slug
+                   , nid
+                   , hit ~slug ~title ~tags ~kind ~node_id:nid ~header_path
+                       ~matched ~rank )
+             | _ -> None)
+        | _ -> None
+      in
+      let notes = List.filter_map parse_note note_rows in
+      let heads = List.filter_map parse_heading heading_rows in
+      let merged =
+        List.sort
+          (fun (r1, s1, n1, _) (r2, s2, n2, _) ->
+            let c = compare r1 r2 in
+            if c <> 0 then c
+            else
+              let c2 = String.compare s1 s2 in
+              if c2 <> 0 then c2 else String.compare n1 n2)
+          (notes @ heads)
+      in
+      (* Dedupe (slug, node_id); keep best rank. *)
+      let seen = Hashtbl.create 32 in
+      let acc = ref [] in
+      List.iter
+        (fun (_r, slug, nid, json) ->
+          let key = slug ^ "\x00" ^ nid in
+          if not (Hashtbl.mem seen key) then begin
+            Hashtbl.add seen key ();
+            acc := json :: !acc
+          end)
+        merged;
+      let out = List.rev !acc in
+      if List.length out <= limit then out else
+        let rec take n xs =
+          if n <= 0 then []
+          else match xs with [] -> [] | x :: rest -> x :: take (n - 1) rest
+        in
+        take limit out
+
 (** List nodes of a given kind under path prefix (e.g. all notes in a garden). *)
 let list_by_kind (conn : Store_db.conn) ~(prefix : string) ~(kind : string)
     ?(limit : int = 2000) () : node list =

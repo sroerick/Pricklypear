@@ -410,6 +410,32 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
           (Pricklypear_lisp.Ast.VStr
                "tree/note-index: [] | prefix [, limit]"));
 
+  (* (tree/search-text needle [limit]) or (tree/search-text prefix needle [limit])
+     -> list of hit JSON (slug/title/node_id/header_path/matched/rank).
+     Default prefix = current garden root. ILIKE over note title/tags/slug and
+     heading title/body — notes.search-modal (BORGE-1785605474). *)
+  register_crud "tree/search-text"
+    (fun args ->
+      let run ~prefix ~needle ~limit =
+        Crud.tree_search_text t.store ~prefix ~needle ~limit ()
+      in
+      let garden () = Tree_store.garden_root ~user:(actor ()) in
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr needle ] ->
+          run ~prefix:(garden ()) ~needle ~limit:20
+      | [ Pricklypear_lisp.Ast.VStr needle; Pricklypear_lisp.Ast.VInt n ] ->
+          run ~prefix:(garden ()) ~needle ~limit:(Int64.to_int n)
+      | [ Pricklypear_lisp.Ast.VStr prefix; Pricklypear_lisp.Ast.VStr needle ] ->
+          run ~prefix ~needle ~limit:20
+      | [ Pricklypear_lisp.Ast.VStr prefix
+        ; Pricklypear_lisp.Ast.VStr needle
+        ; Pricklypear_lisp.Ast.VInt n
+        ] ->
+          run ~prefix ~needle ~limit:(Int64.to_int n)
+      | _ ->
+          (Pricklypear_lisp.Ast.VStr
+               "tree/search-text: needle [, limit] | prefix needle [, limit]"));
+
   (* Pure path helpers (no DB). *)
   register_crud "tree/path-label"
     (fun args ->

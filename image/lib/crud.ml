@@ -681,6 +681,17 @@ let tree_note_index (store : Store.t) ~(prefix : string) ?(limit : int = 2000)
               (fun (id, fields) -> VPair (VStr id, VStr fields))
               rows))
 
+(** Substring search over tree notes+headings. Returns list of hit JSON. *)
+let tree_search_text (store : Store.t) ~(prefix : string) ~(needle : string)
+    ?(limit : int = 20) () : value =
+  match Io_lwt.Db.current_conn store with
+  | None -> (VList [])
+  | Some conn ->
+      let hits =
+        Tree_store.search_text conn ~prefix ~needle ~limit ()
+      in
+      (VList (List.map (fun j -> VStr j) hits))
+
 let tree_path_label (s : string) : value = VStr (Tree_store.path_label s)
 
 let tree_garden_root ~(user : string) : value =
