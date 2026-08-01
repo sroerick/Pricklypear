@@ -47,7 +47,7 @@
         4. Personal garden isolation (not system/main content)
         5. Daily notes + capture / inbox
         6. Migrate existing PP notes; import Obsidian vault md
-        7. Tags / search polish
+        7. Tags / search polish — RESOLVED by subsection search-modal
         8. Graph visualization (optional, late)
 
         =========================================================
@@ -1075,6 +1075,114 @@
     (smoke "cycle note TODO write-back")
     (smoke "create list and add item"))
 
+  )
+
+  (subsection search-modal
+   (doc "Typeahead find modal: one server search feeds open-note and refile; flat grouped results down to header level")
+   (status planned)
+   (implements libs/notes/lib.pp)
+   (verify
+    (smoke "GET /partials/notes-search?q=… returns grouped result HTML (docs + header rows with › breadcrumbs)")
+    (smoke "results arrive without enumerating the garden in Nopales (filter happens in Postgres)")
+    (smoke "modal opens via keyboard shortcut; arrows navigate; Enter opens chosen row")
+    (smoke "empty query and no-match queries render stable non-error markup")
+    (smoke "refile entry point uses the same typeahead; choosing a row refiles the selected node")
+    (smoke "node-targeted rows refile under that heading; doc rows refile at root"))
+   (details
+    (doc (|
+         PRODUCT:
+           One find-box is the "open note" interface AND the
+           "refile destination" interface. Cmd/Ctrl-K opens a modal
+           with a single input; typing shows results immediately.
+           This subsection resolves priority-7 "search polish".
+
+         INTERACTION MODEL (locked: flat, grouped):
+           Every keystroke re-queries the server; the result list is
+           ONE flat stream grouped under doc headings, header-level
+           matches indented beneath their doc with a breadcrumb path:
+             JOURNAL
+               2026 › July 12 session
+             TODO
+               Projects › pricklypear
+           Arrow keys move, Enter activates. NOT a two-tier
+           drill-down (→/← to enter docs): slower when you already
+           know the header word, and refile wants doc+node targets
+           in one list anyway.
+
+         RESULT ROW:
+           (doc-slug doc-title node-id|() header-path matched-field)
+           node-id () = doc-level hit (title/tags match).
+           header-path = "Gran › Parent › Header" for tree cutover
+           storage; pre-cutover (fields.outline JSON blob) only
+           doc-level rows are emitted — header granularity ARRIVES
+           WITH the tree cutover, it is not retrofitted onto the
+           blob. matched-field lets the UI badge title vs body vs
+           header hits.
+
+         SEARCH STRATEGY (v1):
+           Postgres substring via the EXISTING find-text prim
+           (fields->>f ILIKE '%needle%', crud.ml) over title, tags,
+           and the outline payload — once per field, merged +
+           deduped by slug in Nopales, capped (≤20 rows). No new
+           OCaml prim for v1: three find-text calls are constant
+           work regardless of garden size; garden-wide Nopales
+           enumeration is FORBIDDEN on this path (BORGE-1785603757:
+           ~3k notes × eager enumeration blew the 100k step budget).
+           Ranking v1: exact-slug first, title hits, then header,
+           then body/outline. Fuzzy/typo tolerance (pg_trgm) and
+           ranked FTS (tsvector, cf. dabar.search-fts) are later
+           upgrades that swap the query behind the SAME partial —
+           the modal does not change. Track under .borge-bugs when
+           demanded by use; not spec'd here.
+
+         NON-GOALS (v1):
+           - No load-the-whole-tree-into-JS client search
+           - No tsvector/trgm migration (see above)
+           - No cross-type global search (notes only; a global
+             launcher is a product-experience question, later)
+           - No search inside archived/hidden docs unless the
+             current notes/doc/list filter already shows them
+
+         UI / HTMX SHAPE:
+           Follows the details-popover precedent of
+           notes/ui/refile-modal (BORGE-1785603757) — no JS
+           framework, no new asset pipeline. Modal is a <details>
+           (or <dialog> if focus trapping proves needed) opened by
+           clicking "find" or Cmd/Ctrl-K (tiny script, same style
+           as the existing outline keyboard-nav script). Input has
+             hx-get="/partials/notes-search"
+             hx-trigger="input changed delay:200ms"
+             hx-target on the results container.
+           Arrow/Enter handling extends that script; htmx
+           `htmx:afterSwap` re-focuses the first result.
+
+         ROUTES (all private, current branch):
+           GET /partials/notes-search?q=…         → grouped result HTML
+           GET /partials/notes-search?q=…&mode=refile
+             → same list, rows refile the selected outline node
+               (POST action=refile with dst_slug + optional
+                dst_node_id) instead of navigating.
+           Open-note activation navigates to /notes?slug=…
+           (&node=… for header rows when the tree cutover lands).
+
+         REFILE CONVERGENCE:
+           notes/ui/refile-modal's raw dst_slug text input gains a
+           mode=refile typeahead against the same partial (exact
+           slug entry keeps working — no regression for agents /
+           keyboard-only users who know the slug). Refile to a
+           header target parents the subtree under that node;
+           refile to a doc row parents at root (current behavior).
+           The existing POST /notes action=refile handler accepts
+           an optional dst_node_id.
+
+         BUDGET INVARIANT:
+           /notes?slug=… page render must stay O(1) in garden size:
+           the modal ships collapsed markup only; all searching is
+           on-demand partials. Any future caching (e.g. a per-branch
+           doc-index value) is optional and must be invalidated
+           conservatively; premature caching is a non-goal.
+    |))
+   )
   )
 
  )
