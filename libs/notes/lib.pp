@@ -4602,7 +4602,7 @@
   (lambda
     (path root)
     (let
-      ((kids (tree/list (as-str path) 1)))
+      ((kids (tree/list (as-str path) 1 50000)))
       (if
         (null? kids)
         (html/p* (html/attr "class" "muted") "(empty)")
