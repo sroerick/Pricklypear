@@ -337,6 +337,8 @@ let prim_summary (name : string) : string =
   | "install-function" -> "install AI body string as named function"
   | "function-source" -> "pretty-print stored function body"
   | "function-doc" -> "docstring for a binding (function_defs.doc)"
+  | "analyze" -> "LLM/heuristic complexity analysis of a function (cached)"
+  | "explain" -> "inside-out structural breakdown of a function"
   | "function-ast" -> "raw stored function body as quoted data (no eval)"
   | "package-exports" -> "shallow public names for a package (std freeze or pkg/local)"
   | "package-bindings" -> "all binding names with package prefix (any depth)"

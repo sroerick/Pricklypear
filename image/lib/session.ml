@@ -14,14 +14,51 @@ include Session_types
 let eval_under_rim (t : t) (thunk : unit -> 'a) : 'a =
   Control_rim.run ~prims:t.prims thunk
 
+let persist_last_budget_stats (t : t) ~(label : string) : unit =
+  match !Pricklypear_lisp.Eval.last_budget with
+  | None -> ()
+  | Some b when label = "" -> ()
+  | Some b ->
+      (try
+         let fields =
+           Yojson.Safe.to_string
+             (`Assoc
+                [
+                  ("fn", `String label);
+                  ("steps", `Int b.steps);
+                  ("prim_calls", `Int b.prim_calls);
+                  ("db_hits", `Int b.db_hits);
+                  ("when", `String (string_of_float (Unix.gettimeofday ())));
+                ])
+         in
+         ignore
+           (Crud.create t.store ~type_name:"function_stat" ~fields_json:fields
+              ~author:t.manifest.username)
+       with _ -> ())
+
 let eval_string_rim (t : t) (input : string) : Pricklypear_lisp.Ast.value =
-  eval_under_rim t (fun () ->
-      Pricklypear_lisp.Eval.eval_string_direct
-        ~prims:Pricklypear_lisp.Eval.empty_prims t.env input)
+  let v =
+    eval_under_rim t (fun () ->
+        Pricklypear_lisp.Eval.eval_string_direct
+          ~prims:Pricklypear_lisp.Eval.empty_prims t.env input)
+  in
+  (* Best-effort label: top-level (name) call *)
+  let label =
+    let s = String.trim input in
+    if String.length s >= 3 && s.[0] = '(' && s.[String.length s - 1] = ')' then
+      let inner = String.sub s 1 (String.length s - 2) |> String.trim in
+      match String.split_on_char ' ' inner with
+      | name :: _ when name <> "" && name.[0] <> '(' -> name
+      | _ -> ""
+    else ""
+  in
+  if label <> "" then persist_last_budget_stats t ~label;
+  v
 
 let eval_expr_rim (t : t) (expr : Pricklypear_lisp.Ast.expr)
   : Pricklypear_lisp.Ast.value =
   let budget = Pricklypear_lisp.Eval.make_budget () in
+  Pricklypear_lisp.Eval.last_budget := Some budget;
   eval_under_rim t (fun () ->
       Pricklypear_lisp.Eval.eval
         ~budget ~prims:Pricklypear_lisp.Eval.empty_prims t.env expr)
@@ -1177,6 +1214,40 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
   register_request_prims !t prim_table;
   (* Call graph + impact + change-set + DNU (image.inspector combo pack). *)
   register_graph_prims !t prim_table;
+  (* Function observability: (analyze 'fn) / (explain 'fn). *)
+  let name_arg args =
+    match args with
+    | [ Pricklypear_lisp.Ast.VStr n ] -> Some n
+    | [ Pricklypear_lisp.Ast.VSymbol n ] -> Some n
+    | _ -> None
+  in
+  Primitives.register prim_table "analyze" (fun args ->
+      match name_arg args with
+      | None -> Pricklypear_lisp.Ast.VStr "analyze: need function name"
+      | Some name ->
+          let author = (!t).manifest.username in
+          let user_id =
+            let uid = (!t).manifest.user_id in
+            if uid = "" || uid = "anonymous" || uid = "public" then None
+            else Some uid
+          in
+          (match
+             Analyze.analyze_function (!t).store ~author ~user_id ~fn_name:name
+               ~force_llm:true
+           with
+           | Ok j -> Analyze.result_to_vstr (Ok j)
+           | Error _llm_err ->
+               (* Fall back to free heuristic when no key / LLM failure. *)
+               Analyze.result_to_vstr
+                 (Analyze.analyze_function (!t).store ~author ~user_id
+                    ~fn_name:name ~force_llm:false)));
+  Primitives.register prim_table "explain" (fun args ->
+      match name_arg args with
+      | None -> Pricklypear_lisp.Ast.VStr "explain: need function name"
+      | Some name ->
+          (match Analyze.explain_function (!t).store ~fn_name:name with
+           | Ok s -> Pricklypear_lisp.Ast.VStr s
+           | Error e -> Pricklypear_lisp.Ast.VStr e));
   (* Register CRUD primitives (get/create/update/delete/list) over
      the shared data_rows table. Same pattern as control prims:
      they capture (!t) and return their real DB result via Lwt. *)

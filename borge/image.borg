@@ -1653,7 +1653,7 @@
   (subsection inspector
    (doc "Inspect values, rows, ASTs, and page→function graphs live")
    (status partial)
-   (implements image/lib/http_pages.ml image/lib/session.ml image/lib/agent_tools.ml)
+   (implements image/lib/http_pages.ml image/lib/session.ml image/lib/agent_tools.ml image/lib/ast_html.ml image/lib/http_analyze.ml image/lib/call_graph.ml)
    (verify
     (build "dune build image")
     (smoke "GET /inspect/binding/<name> shows author + AST")
@@ -1661,13 +1661,17 @@
     (smoke "page inspector lists callees of handler when body calls other fns")
     (smoke "(callees \"ui/nav\") returns list; (callers \"ui/menu\") non-empty when nav calls menu")
     (smoke "after redefine of a callee, impact-queue lists dependents + routes")
-    (smoke "agent install_function result text names impact routes to smoke"))
+    (smoke "agent install_function result text names impact routes to smoke")
+    (smoke "binding pages show recursion/tail classes and observability badges when function-observability ships"))
    (details
     (doc (|
          ==========================================================
          SHIPPED (v1 inspector)
          ==========================================================
          - binding AST pretty+JSON; data row JSON pretty
+         - Function observability (lisp-interpreter.function-observability):
+           recursion/tail HTML classes, step/DB stats, big-O badge,
+           on-demand (analyze 'fn) / POST /api/analyze/:name, peel.
          - GET /page/<path>: routing panel + STATIC callee graph
            (App heads that are Vars → visible function_defs;
             depth cap 8; cycles skipped)

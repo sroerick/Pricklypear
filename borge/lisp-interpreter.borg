@@ -1670,5 +1670,180 @@
     |))
    )
   )
+
+  (subsection function-observability
+   (doc "Inspect functions: recursion/tail highlight, step counts, DB cost, big-O heuristic, on-demand LLM analysis, inside-out peel")
+   (status implemented)
+   (implements
+    lisp/lib/recursion.ml
+    lisp/lib/complexity.ml
+    lisp/lib/explain.ml
+    lisp/lib/eval.ml
+    lisp/test/recursion_test.ml
+    lisp/test/complexity_test.ml
+    lisp/test/explain_test.ml
+    image/lib/ast_html.ml
+    image/lib/db_cost.ml
+    image/lib/analyze.ml
+    image/lib/http_analyze.ml
+    image/lib/call_graph.ml
+    image/lib/http_pages.ml
+    image/lib/prims_db.ml
+    image/lib/session.ml
+    image/lib/llm_client.ml)
+   (verify
+    (build "dune build lisp image")
+    (test "dune runtest — recursion / complexity / explain / eval step attribution")
+    (smoke "GET /binding/<recursive-fn> marks self-ref and tail vs non-tail sites")
+    (smoke "GET /binding/<fn> shows last-run steps / prim_calls / db_hits when stats exist")
+    (smoke "GET /binding/<fn> shows free big-O badge or honest ?")
+    (smoke "POST /api/analyze/<fn> returns LLM estimate fragment; cache by AST sha1")
+    (smoke "(analyze 'fn) and (explain 'fn) prims return structured results"))
+   (details
+    (doc (|
+         ==========================================================
+         THESIS
+         ==========================================================
+           The OS already stores every function as an AST and runs
+           it through a stepped evaluator. Function observability
+           makes that inspectable on /binding and /bindings without
+           inventing a separate profiler product.
+
+           Split by cost:
+             FREE / pure sexp    — recursion, tail position, big-O
+                                  heuristic, inside-out peel structure
+             CHEAP / eval hook  — step counts, prim calls, DB hits,
+                                  live DB timing into function_stat
+             ON DEMAND / LLM    — (analyze 'fn) complexity + optional
+                                  per-layer prose glosses
+
+         ==========================================================
+         ARCHITECTURE
+         ==========================================================
+           lisp/ stays pure (yojson only). Static analysis modules
+           live there and are alcotest-tested with no services:
+             recursion.ml   — self-refs + tail context
+             complexity.ml  — heuristic big-O classifier
+             explain.ml     — mechanical innermost→out peel
+
+           image/ owns HTML, store, LLM:
+             ast_html.ml     — Pure_html AST renderer with classes
+             db_cost.ml      — static DB-prim cost tiers + optional EXPLAIN
+             analyze.ml      — (analyze 'fn) + cache write
+             http_analyze.ml — POST /api/analyze/:name htmx fragment
+
+           Instrumentation seam is the existing eval budget record
+           and current_budget dynamic binding (eval.ml). Extend budget
+           with current_fn, prim_calls, db_hits, fn_step_counts; expose
+           last_budget after top-level eval_string for session persist.
+
+           Analysis results dogfood data_rows:
+             function_stat       — last/recent measured runs
+             function_analysis   — LLM complexity cache keyed by
+                                   sha1(pp_expr body); edit invalidates
+
+         ==========================================================
+         PHASE 1 — RECURSION + TAIL HIGHLIGHT
+         ==========================================================
+           Recursion.analyze_self ~fn_name expr:
+             is_recursive, tail_recursive, self_ref_sites,
+             mutual_refs (names only; cycles from call_graph).
+           Tail context MUST mirror the trampoline (eval TCO):
+             If then/else Tail; test Non_tail
+             Seq last Tail; earlier Non_tail
+             Let/Letrec body Tail; bindings Non_tail
+             App in Tail context is the tail call; args Non_tail
+             Lambda body is a new frame (Non_tail of the caller)
+           call_graph.mutual_cycles on a snapshot for SCCs.
+           ast_html.pp_expr_html emits spans:
+             ast-self-ref, ast-tail, ast-non-tail, ast-mutual
+           Wire show_binding_page, list_bindings code pane,
+           inspect_binding_page. CSS in chrome style block.
+
+         ==========================================================
+         PHASE 2 — STEP COUNTER + ATTRIBUTION
+         ==========================================================
+           Every eval_step tick attributes to budget.current_fn.
+           apply of named VLambda sets current_fn; non-tail eval
+           restores previous; trampoline tail keeps new name.
+           Prim path increments prim_calls; CRUD wrappers in
+           prims_db increment db_hits (and later timing).
+           After route/api eval, session may upsert function_stat
+           rows (fn, steps, prim_calls, db_hits, when).
+           /binding shows "last run: N steps, M prims, K DB hits".
+
+         ==========================================================
+         PHASE 3 — DB COST
+         ==========================================================
+           Closed set of DB prims → static tier badges:
+             get/find-row Index_seek; create/update/delete Constant;
+             rows Seq_scan; find-rows/find-text Linear.
+           Optional lazy EXPLAIN on demand (not every page load).
+           Live tier: wrap store calls with wall timing into
+           function_stat.db_time_ms when clock precision allows.
+
+         ==========================================================
+         PHASE 4 — HEURISTIC BIG-O
+         ==========================================================
+           Complexity.classify : expr -> O_constant | O_log_n |
+             O_linear | O_n_log_n | O_quadratic | O_exponential |
+             Unknown
+           Patterns (honest Unknown default):
+             cdr-self-recursion / list/map|filter|foldl → O(n)
+             two recursive halves → O(n log n)
+             fib-style multi self-call (- n 1)/(- n 2) → O(2^n)
+             rows inside map / nested maps → O(n²)
+             no recursion/loops/DB list forms → O(1)
+           Free badge on /binding next to effects. Optional later:
+           empirical curve-fit via (bench 'fn sizes) + step counts.
+
+         ==========================================================
+         PHASE 5 — LLM ANALYZE ON DEMAND
+         ==========================================================
+           (analyze 'fn) prim + POST /api/analyze/:name (private).
+           Reuse llm_client; prefer per-user key (auth.user-llm-keys)
+           then env LLM_API_KEY. Structured JSON:
+             {complexity, confidence, rationale, notes}
+           Cache data_rows function_analysis by sha1(pp_expr).
+           htmx button on /binding swaps #analyze-result.
+           Always label "LLM estimate (model, when)". Cross-check
+           against function_stat steps when present. No auto-call
+           on page load.
+
+         ==========================================================
+         PHASE 6 — INSIDE-OUT EXPLAINER
+         ==========================================================
+           Explain.peel : expr -> layer list (innermost first by
+           max depth; siblings left-to-right). Annotate with prim
+           name/effects, self-ref, tail, complexity when known.
+           (explain 'fn) returns layers as readable structure.
+           UI: collapsible explain-layer blocks on /binding.
+           Optional LLM prose gloss per layer, cache by sexp hash;
+           opt-in only (cost scales with depth).
+
+         ==========================================================
+         SHIP ORDER
+         ==========================================================
+           1, 2, 4 independent (can parallelize).
+           3 after 2. 5 after 2 (+ benefits from 4).
+           6 after 1+4; LLM gloss optional after 5.
+
+         ==========================================================
+         NON-GOALS
+         ==========================================================
+           - Claiming undecidable static big-O as ground truth
+           - EXPLAIN ANALYZE on every DB prim call
+           - Auto LLM spend on every /binding view
+           - Full coverage-guided test selection (see image.inspector
+             impact queue; related but separate)
+           - Custom VM / full CPS just for profiling
+
+         SUCCESS: a human or agent opening /binding/foo sees structure
+         (recursion/tail), free cost guess (big-O + DB tier), measured
+         last run when available, and can click for LLM analysis or
+         peel without leaving the browser.
+    |))
+   )
+  )
  )
 )

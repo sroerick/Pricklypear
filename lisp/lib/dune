@@ -1,5 +1,6 @@
 (library
  (name pricklypear_lisp)
  (public_name pricklypear-lisp)
- (modules ast reader env eval effect control special_forms route_gate)
+ (modules ast reader env eval effect control special_forms route_gate
+          recursion complexity explain)
  (libraries yojson))

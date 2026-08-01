@@ -8,6 +8,7 @@
           session
           crud media packages loader repl_endpoint
           ops_log ops_stats ops_incidents
+          ast_html db_cost analyze http_analyze
           http_core http_code http_data http_branches http_agent http_pages http_ops
           http_media
           agent_discovery http

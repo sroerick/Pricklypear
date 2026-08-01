@@ -93,6 +93,56 @@ let direct_callees (snap : snapshot) (name : string) : string list =
 let direct_callers (snap : snapshot) (name : string) : string list =
   try Hashtbl.find snap.callers_of name with Not_found -> []
 
+(** Strongly connected components of size > 1 (mutual recursion groups),
+    plus trivial self-loops already covered by recursion.analyze_self. *)
+let mutual_cycles (snap : snapshot) : string list list =
+  let index = ref 0 in
+  let stack : string list ref = ref [] in
+  let on_stack = Hashtbl.create 32 in
+  let indices = Hashtbl.create 32 in
+  let lowlink = Hashtbl.create 32 in
+  let comps : string list list ref = ref [] in
+  let rec strongconnect v =
+    Hashtbl.replace indices v !index;
+    Hashtbl.replace lowlink v !index;
+    incr index;
+    stack := v :: !stack;
+    Hashtbl.replace on_stack v true;
+    List.iter
+      (fun w ->
+        if not (Hashtbl.mem indices w) then begin
+          strongconnect w;
+          Hashtbl.replace lowlink v
+            (min (Hashtbl.find lowlink v) (Hashtbl.find lowlink w))
+        end else if Hashtbl.mem on_stack w && Hashtbl.find on_stack w then
+          Hashtbl.replace lowlink v
+            (min (Hashtbl.find lowlink v) (Hashtbl.find indices w)))
+      (direct_callees snap v);
+    if Hashtbl.find lowlink v = Hashtbl.find indices v then begin
+      let rec pop acc =
+        match !stack with
+        | [] -> acc
+        | x :: xs ->
+            stack := xs;
+            Hashtbl.replace on_stack x false;
+            if x = v then x :: acc else pop (x :: acc)
+      in
+      let comp = pop [] in
+      if List.length comp > 1 then comps := comp :: !comps
+    end
+  in
+  Hashtbl.iter
+    (fun name _ -> if not (Hashtbl.mem indices name) then strongconnect name)
+    snap.bodies;
+  !comps
+
+let mutual_of (snap : snapshot) (name : string) : string list =
+  match
+    List.find_opt (fun comp -> List.mem name comp) (mutual_cycles snap)
+  with
+  | None -> []
+  | Some comp -> List.filter (( <> ) name) comp
+
 (** Forward BFS over stored-function edges. [include_root] keeps [name]. *)
 let walk_forward (snap : snapshot) ~(name : string) ~(depth : int)
     ~(include_root : bool) : string list =
