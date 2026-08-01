@@ -353,9 +353,13 @@ let rec eval_step
   tick budget;
   match e with
   | Var name ->
-      (match Env.lookup env name with
-       | Some v -> Done v
-       | None -> raise (Interp_error (Unbound_var name)))
+      (* Keyword atoms (:target, :swap, …) are self-evaluating symbols so
+         prim kwargs like (part html :target "#x") need no quote. *)
+      if String.length name > 0 && name.[0] = ':' then Done (VSymbol name)
+      else
+        (match Env.lookup env name with
+         | Some v -> Done v
+         | None -> raise (Interp_error (Unbound_var name)))
   | Lit v -> Done v
   | Quote e' -> Done (quote_to_value e')
   | If (test, then_e, else_e) ->

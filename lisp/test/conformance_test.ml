@@ -95,7 +95,8 @@ let case_setup name setups src expect =
       Alcotest.(check string) name expect got )
 
 let reader_cases =
-  [ case "int literal" "42" "42"
+  [ case "keyword self-evaluates" ":target" ":target"
+  ; case "int literal" "42" "42"
   ; case "string literal" "\"hi\"" "\"hi\""
   ; case "bool true" "#t" "#t"
   ; case "bool false" "#f" "#f"

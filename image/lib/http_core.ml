@@ -1290,6 +1290,113 @@ let post_admin_users (session : Session.t) (reqd : Httpun.Reqd.t)
                     redirect_response reqd "/admin/users";
                     ()))
 
+(** Generate a MIME boundary that does not appear in any part body. *)
+let fresh_multipart_boundary (bodies : string list) : string =
+  let rec try_n n =
+    if n > 8 then
+      raise
+        (Pricklypear_lisp.Ast.Interp_error
+           (Pricklypear_lisp.Ast.User_error
+              "multipart: could not choose a unique boundary"))
+    else
+      let b =
+        Printf.sprintf "pp%x%x" (Random.bits ()) (Random.bits ())
+      in
+      if List.exists (fun body ->
+           let rec find i =
+             let bl = String.length b and n = String.length body in
+             if i + bl > n then false
+             else if String.sub body i bl = b then true
+             else find (i + 1)
+           in
+           find 0)
+         bodies
+      then try_n (n + 1)
+      else b
+  in
+  try_n 0
+
+let multipart_write_string (body_w : Httpun.Body.Writer.t) (s : string)
+  : [ `Ok | `Peer_gone ] =
+  try
+    Httpun.Body.Writer.write_string body_w s;
+    let promise, resolver = Eio.Promise.create () in
+    let wake () =
+      if not (Eio.Promise.is_resolved promise) then
+        Eio.Promise.resolve resolver ()
+    in
+    (try Httpun.Body.Writer.flush body_w (fun () -> wake ()) with
+     | exn when is_closed_writer_exn exn -> wake ());
+    Eio.Promise.await promise;
+    `Ok
+  with exn when is_closed_writer_exn exn -> `Peer_gone
+
+(** Stream a multipart/mixed response: one write+flush per part.
+    Peer disconnect mid-stream is a non-event (http-robustness). *)
+let multipart_response (reqd : Httpun.Reqd.t)
+    (mp : Prims_pure.mime_multipart) : unit =
+  let bodies = List.map (fun (p : Prims_pure.mime_part) -> p.body) mp.parts in
+  let boundary = fresh_multipart_boundary bodies in
+  let headers =
+    let base =
+      [ ( "content-type"
+        , "multipart/mixed; boundary=" ^ boundary )
+      ; ("cache-control", "no-cache")
+      ]
+    in
+    let base =
+      match mp.envelope_target with
+      | Some t -> ("hx-target", t) :: base
+      | None -> base
+    in
+    let base =
+      match mp.envelope_swap with
+      | Some s -> ("hx-swap", s) :: base
+      | None -> base
+    in
+    Httpun.Headers.of_list base
+  in
+  let resp = Httpun.Response.create ~headers `OK in
+  match
+    try
+      Some
+        (Httpun.Reqd.respond_with_streaming ~flush_headers_immediately:true
+           reqd resp)
+    with exn when is_closed_writer_exn exn -> None
+  with
+  | None -> ()
+  | Some body_w ->
+      let write s =
+        match multipart_write_string body_w s with
+        | `Ok -> true
+        | `Peer_gone -> false
+      in
+      let cont = ref true in
+      List.iter
+        (fun (p : Prims_pure.mime_part) ->
+          if !cont then begin
+            let buf = Buffer.create (String.length p.body + 128) in
+            Buffer.add_string buf ("--" ^ boundary ^ "\r\n");
+            Buffer.add_string buf
+              ("Content-Type: " ^ p.content_type ^ "\r\n");
+            (match p.target with
+             | Some t -> Buffer.add_string buf ("HX-Target: " ^ t ^ "\r\n")
+             | None -> ());
+            (match p.swap with
+             | Some s -> Buffer.add_string buf ("HX-Swap: " ^ s ^ "\r\n")
+             | None -> ());
+            (match p.id with
+             | Some i -> Buffer.add_string buf ("HX-Part-ID: " ^ i ^ "\r\n")
+             | None -> ());
+            Buffer.add_string buf "\r\n";
+            Buffer.add_string buf p.body;
+            Buffer.add_string buf "\r\n";
+            if not (write (Buffer.contents buf)) then cont := false
+          end)
+        mp.parts;
+      if !cont then ignore (write ("--" ^ boundary ^ "--\r\n"));
+      safe_close_writer body_w
+
 let respond_handler_value
     ~(session : Session.t)
     ~(reqd : Httpun.Reqd.t)
@@ -1307,34 +1414,39 @@ let respond_handler_value
   match Primitives.is_redirect value with
   | Some loc -> redirect_response reqd loc
   | None ->
-      if fragment then
-        let html =
-          match Primitives.is_raw_html value with
-          | Some raw -> raw
-          | None ->
-              (match value with
-               | Pricklypear_lisp.Ast.VStr s -> s
-               | _ -> Pricklypear_lisp.Reader.pp_value value)
-        in
-        fragment_response reqd html
-      else
-        let body =
-          match Primitives.is_raw_html value with
-          | Some raw_html ->
-              chrome ~manifest ~session ~title:path [ txt ~raw:true "%s" raw_html ]
-          | None ->
-              (match value with
-               | Pricklypear_lisp.Ast.VStr s ->
-                   chrome ~manifest ~session ~title:path [ HTML.p [] [txt "%s" s] ]
-               | _ ->
-                   let rendered =
-                     Pricklypear_lisp.Reader.pp_value value
-                   in
-                   chrome ~manifest ~session ~title:path [
-                     HTML.pre [] [txt "%s" rendered];
-                   ])
-        in
-        html_response reqd ~session body
+      (match Primitives.is_multipart value with
+       | Some mp -> multipart_response reqd mp
+       | None ->
+           if fragment then
+             let html =
+               match Primitives.is_raw_html value with
+               | Some raw -> raw
+               | None ->
+                   (match value with
+                    | Pricklypear_lisp.Ast.VStr s -> s
+                    | _ -> Pricklypear_lisp.Reader.pp_value value)
+             in
+             fragment_response reqd html
+           else
+             let body =
+               match Primitives.is_raw_html value with
+               | Some raw_html ->
+                   chrome ~manifest ~session ~title:path
+                     [ txt ~raw:true "%s" raw_html ]
+               | None ->
+                   (match value with
+                    | Pricklypear_lisp.Ast.VStr s ->
+                        chrome ~manifest ~session ~title:path
+                          [ HTML.p [] [txt "%s" s] ]
+                    | _ ->
+                        let rendered =
+                          Pricklypear_lisp.Reader.pp_value value
+                        in
+                        chrome ~manifest ~session ~title:path [
+                          HTML.pre [] [txt "%s" rendered];
+                        ])
+             in
+             html_response reqd ~session body)
 
 (** /settings/keys — per-user LLM provider key (auth.user-llm-keys). *)
 let settings_keys_page (session : Session.t) (reqd : Httpun.Reqd.t)

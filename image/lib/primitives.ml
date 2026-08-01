@@ -75,6 +75,8 @@ open Prims_pure
 
 (* Re-export pure helpers used by Session / Http. *)
 let is_raw_html = Prims_pure.is_raw_html
+let is_multipart = Prims_pure.is_multipart
+let is_part = Prims_pure.is_part
 let is_redirect = Prims_pure.is_redirect
 let redirect_value = Prims_pure.redirect_value
 let prim_dict_set = Prims_pure.prim_dict_set
@@ -157,6 +159,9 @@ let make_with_defaults () : t =
   register_sync t "fsrs-schedule" prim_fsrs_schedule;
   register_sync t "dict-keys" prim_dict_keys;
   register_sync t "render-html" prim_render_html;
+  register_sync t "part" Prims_pure.prim_part;
+  register_sync t "json-part" Prims_pure.prim_json_part;
+  register_sync t "multipart" Prims_pure.prim_multipart;
   register_sync t "extract-links" prim_extract_links;
   register_sync t "render-links" prim_render_links;
   register_sync t "budget-remaining" prim_budget_remaining;
@@ -257,6 +262,9 @@ let prim_summary (name : string) : string =
   | "dict-set" -> "JSON object field set"
   | "dict-keys" -> "JSON object keys"
   | "render-html" -> "mark string as raw HTML"
+  | "part" -> "build one multipart/mixed part (html)"
+  | "json-part" -> "build one multipart/mixed JSON part"
+  | "multipart" -> "bundle parts into a multipart/mixed response"
   | "hx-get" | "hx-post" -> "htmx attribute helper"
   | "whoami" | "current-author" -> "session identity"
   | "list-bindings" -> "names in env"
@@ -285,6 +293,7 @@ let prim_summary (name : string) : string =
   | "find-row" -> "first row by fields->>key"
   | "find-rows" -> "rows filtered by fields"
   | "find-text" -> "substring search on a field"
+  | "find-code" -> "substring search over function body AST (branch-visible)"
   | "find-random" -> "one random data row of a type"
   | "select-for-update" -> "lock row in transaction (requires with-transaction)"
   | "node-path" -> "pure path constructor data.<type>.<id>"
