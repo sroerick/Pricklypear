@@ -3150,7 +3150,17 @@
           (list "flex" "1 1 auto"))
         (css/rule
           ".ol-find-bar .ol-find-body"
-          (list "left" "0" "right" "auto"))))))
+          (list "left" "0" "right" "auto"))
+        (css/raw "/* create form collapsed behind summary */")
+        (css/rule
+          "details.notes-create > summary.notes-create-sum"
+          (list "cursor" "pointer" "font-weight" "600" "list-style" "none"))
+        (css/rule
+          "details.notes-create > summary.notes-create-sum::-webkit-details-marker"
+          (list "display" "none"))
+        (css/rule
+          "details.notes-create > .notes-create-body"
+          (list "margin-top" ".5rem"))))))
 
 (define notes/tree/enabled?
   (lambda () #t))
@@ -3529,32 +3539,44 @@
           (outline/kids node))
         path))))
 
+;; Collapsed by default — open summary to create (keeps the index clean).
 (define notes/ui/create-form
   (lambda
     ()
-    (html/form
-      "POST"
-      "/notes"
-      (html/attr "class" "card")
+    (html/tag
+      "details"
+      (html/attr "class" "notes-create card")
       (html/join
         (list
-          (html/hidden "action" "create")
-          (html/label "" "Title ")
-          (html/text-input
-            "title"
-            (html/attr "placeholder" "New note"))
-          " "
-          (html/label "" "Slug ")
-          (html/text-input
-            "slug"
-            (html/attr "placeholder" "my-note"))
-          " "
-          (html/label "" "Folder ")
-          (html/text-input
-            "folder"
-            (html/attr "placeholder" "wiki/entities"))
-          " "
-          (html/button (html/attr "type" "submit") "Create"))))))
+          (html/tag
+            "summary"
+            (html/attr "class" "notes-create-sum")
+            "New note")
+          (html/form
+            "POST"
+            "/notes"
+            (html/attr "class" "notes-create-body")
+            (html/join
+              (list
+                (html/hidden "action" "create")
+                (html/label "" "Title ")
+                (html/text-input
+                  "title"
+                  (html/attr "placeholder" "New note"))
+                " "
+                (html/label "" "Slug ")
+                (html/text-input
+                  "slug"
+                  (html/attr "placeholder" "my-note"))
+                " "
+                (html/label "" "Folder ")
+                (html/text-input
+                  "folder"
+                  (html/attr "placeholder" "wiki/entities"))
+                " "
+                (html/button
+                  (html/attr "type" "submit")
+                  "Create")))))))))
 
 (define notes/ui/do-create
   (lambda
