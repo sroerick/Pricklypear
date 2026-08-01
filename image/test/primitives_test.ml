@@ -562,6 +562,51 @@ let io_prim_tests = [
     ());
 ]
 
+let multipart_tests = [
+  ("part builds tagged list", `Quick, fun () ->
+    let v =
+      try eval "(part \"<b>hi</b>\" :target \"#t\" :swap \"beforeend\" :id \"1\")"
+      with Pricklypear_lisp.Ast.Interp_error e ->
+        Alcotest.failf "interp: %s" (Pricklypear_lisp.Ast.pp_interp_error e)
+         | exn -> Alcotest.failf "exn: %s" (Printexc.to_string exn)
+    in
+    match Pricklypear_image_lib.Primitives.is_part v with
+    | Some p ->
+        Alcotest.(check string) "body" "<b>hi</b>" p.body;
+        Alcotest.(check (option string)) "target" (Some "#t") p.target;
+        Alcotest.(check (option string)) "swap" (Some "beforeend") p.swap;
+        Alcotest.(check (option string)) "id" (Some "1") p.id
+    | None -> Alcotest.failf "not a part: %s" (Pricklypear_lisp.Reader.pp_value v));
+  ("multipart bundles parts", `Quick, fun () ->
+    let v =
+      eval
+        "(multipart :target \"#feed\" :swap \"beforeend\"
+            (part \"<b>one</b>\") (part \"<i>two</i>\" :id \"2\"))"
+    in
+    match Pricklypear_image_lib.Primitives.is_multipart v with
+    | Some mp ->
+        Alcotest.(check (option string)) "env target" (Some "#feed")
+          mp.envelope_target;
+        Alcotest.(check int) "n parts" 2 (List.length mp.parts);
+        (match mp.parts with
+         | [a; b] ->
+             Alcotest.(check string) "a" "<b>one</b>" a.body;
+             Alcotest.(check string) "b" "<i>two</i>" b.body;
+             Alcotest.(check (option string)) "b id" (Some "2") b.id
+         | _ -> Alcotest.fail "part count")
+    | None -> Alcotest.failf "not multipart: %s" (Pricklypear_lisp.Reader.pp_value v));
+  ("json-part content-type", `Quick, fun () ->
+    let v = eval "(json-part \"{\\\"ok\\\":true}\" :id \"j\")" in
+    match Pricklypear_image_lib.Primitives.is_part v with
+    | Some p ->
+        Alcotest.(check bool) "json ct" true
+          (String.starts_with ~prefix:"application/json" p.content_type);
+        Alcotest.(check (option string)) "id" (Some "j") p.id
+    | None -> Alcotest.fail "not part");
+  ("keyword :target self-evaluates in image", `Quick, fun () ->
+    Alcotest.(check string) "kw" ":target" (eval_str ":target"));
+]
+
 let () =
   Alcotest.run "pricklypear-image-primitives" [
     "arithmetic", arithmetic_tests;
@@ -578,4 +623,5 @@ let () =
     "apply", apply_tests;
     "std-freeze", std_freeze_tests;
     "io-prims", io_prim_tests;
+    "multipart", multipart_tests;
   ]
