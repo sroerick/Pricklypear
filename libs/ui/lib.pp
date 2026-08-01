@@ -1186,6 +1186,60 @@
           (list "margin" "0" "font-size" "1.1rem"))
         (css/rule ".bb-code-actions" (list "margin" "0"))
         (css/rule
+          ".bb-tabs"
+          (list
+            "display"
+            "flex"
+            "gap"
+            ".35rem"
+            "flex-wrap"
+            "wrap"
+            "margin"
+            ".4rem 0 .6rem"
+            "align-items"
+            "center"))
+        (css/rule
+          ".bb-tab"
+          (list
+            "display"
+            "inline-block"
+            "padding"
+            ".28rem .65rem"
+            "border"
+            "1px solid #000"
+            "text-decoration"
+            "none"
+            "color"
+            "inherit"
+            "background"
+            theme/panel
+            "border-radius"
+            "2px"))
+        (css/rule
+          ".bb-tab:hover"
+          (list "background" theme/row-alt))
+        (css/rule
+          ".bb-tab.is-active"
+          (list
+            "background"
+            theme/ink
+            "color"
+            theme/panel
+            "font-weight"
+            "700"))
+        (css/rule
+          ".bb-edit-form textarea"
+          (list
+            "width"
+            "100%"
+            "min-height"
+            "14rem"
+            "font-family"
+            "ui-monospace, monospace"))
+        (css/rule
+          ".bb-code .bb-edit-form .card"
+          (list "border" "none" "padding" "0" "box-shadow" "none"))
+        (css/rule
           ".bb-source"
           (list
             "margin"
