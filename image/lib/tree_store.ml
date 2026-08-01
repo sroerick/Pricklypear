@@ -841,6 +841,31 @@ let list_note_index (conn : Store_db.conn) ~(prefix : string) ?(limit : int = 20
            | _ -> None)
          rows)
 
+(** Distinct folder paths under [prefix], computed in SQL.
+    Derives folder from path structure: strip prefix, drop last segment,
+    rejoin remaining with '/'. Returns sorted list of folder strings. *)
+let list_folder_index (conn : Store_db.conn) ~(prefix : string) () : string list =
+  if not (valid_path prefix) then []
+  else
+    let root = prefix ^ "." in
+    let sql =
+      "SELECT DISTINCT "
+      ^ "array_to_string("
+      ^ "  (string_to_array(" ^ "substring(path::text from "
+      ^ string_of_int (String.length root + 1)
+      ^ "), '\\.')) [1:array_length(string_to_array("
+      ^ "substring(path::text from "
+      ^ string_of_int (String.length root + 1)
+      ^ "), '\\.'), 1) - 1]"
+      ^ ", '/') "
+      ^ "FROM tree_nodes WHERE path <@ $1::ltree AND kind = 'note' "
+      ^ "ORDER BY 1"
+    in
+    let rows =
+      Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string prefix ] sql
+    in
+    List.filter_map (function [ c ] -> Pgx.Value.to_string c | _ -> None) rows
+
 (** Substring search over note + heading bodies under [prefix].
     Returns lightweight hit dicts as JSON strings for Nopales dict-get:
       slug, title, node_id, header_path, matched, rank, kind, tags

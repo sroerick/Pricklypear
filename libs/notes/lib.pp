@@ -668,17 +668,7 @@
 (define notes/doc/folder-names
   (lambda
     ()
-    (list/foldl
-      (lambda
-        (acc row)
-        (let
-          ((f (notes/doc/row-folder row)))
-          (if
-            (notes/doc/folder-seen? acc f)
-            acc
-            (append acc (list f)))))
-      (list)
-      (notes/doc/index-list))))
+    (tree/folder-index (notes/tree/root))))
 
 (define notes/doc/folder-seen?
   (lambda
@@ -3280,7 +3270,7 @@
           (notes/tree/join-slash (cdr xs)))))))
 
 (define notes/tree/list-notes
-  (lambda () (tree/note-index (notes/tree/root) 2000)))
+  (lambda () (tree/note-index (notes/tree/root) 50000)))
 
 (define notes/tree/load-outline
   (lambda

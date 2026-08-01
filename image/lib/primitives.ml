@@ -308,6 +308,7 @@ let prim_summary (name : string) : string =
   | "tree/find-by" -> "find nodes by kind + body field"
   | "tree/path-label" -> "sanitize string to ltree-safe label"
   | "tree/garden-root" -> "data.note.u.<user> path prefix"
+  | "tree/folder-index" -> "distinct folder paths under prefix (SQL dedup)"
   | "extract-links" -> "parse [[wiki]] / [[slug|label]] from body → list of pairs"
   | "render-links" -> "body with [[wiki]]/[[media:]] → HTML (budget-safe)"
   | "budget-remaining" -> "steps left in current eval budget"
