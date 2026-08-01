@@ -410,6 +410,18 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
           (Pricklypear_lisp.Ast.VStr
                "tree/note-index: [] | prefix [, limit]"));
 
+  register_crud "tree/folder-index"
+    (fun args ->
+      match args with
+      | [] ->
+          Crud.tree_folder_index t.store
+            ~prefix:(Tree_store.garden_root ~user:(actor ())) ()
+      | [ Pricklypear_lisp.Ast.VStr prefix ] ->
+          Crud.tree_folder_index t.store ~prefix ()
+      | _ ->
+          (Pricklypear_lisp.Ast.VStr
+               "tree/folder-index: [] | prefix"));
+
   (* (tree/search-text needle [limit]) or (tree/search-text prefix needle [limit])
      -> list of hit JSON (slug/title/node_id/header_path/matched/rank).
      Default prefix = current garden root. ILIKE over note title/tags/slug and
