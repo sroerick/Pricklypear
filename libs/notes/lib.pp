@@ -3020,7 +3020,33 @@
             ".15rem 0"))
         (css/rule
           ".notes-tree > details.tree-folder"
-          (list "margin" ".25rem 0"))))))
+          (list "margin" ".25rem 0"))
+        (css/raw "/* refile modal (slug picker — no O(n) options) */")
+        (css/rule
+          "details.ol-refile-modal"
+          (list "display" "inline-block" "position" "relative"))
+        (css/rule
+          "details.ol-refile-modal > summary.ol-btn"
+          (list "cursor" "pointer" "list-style" "none"))
+        (css/rule
+          "details.ol-refile-modal > summary.ol-btn::-webkit-details-marker"
+          (list "display" "none"))
+        (css/rule
+          "details.ol-refile-modal[open] > .ol-refile-body"
+          (list
+            "position" "absolute"
+            "z-index" "20"
+            "background" "var(--card,#fff)"
+            "border" "1px solid var(--muted,#888)"
+            "padding" ".5rem"
+            "min-width" "16rem"
+            "box-shadow" "0 2px 8px rgba(0,0,0,.12)"))
+        (css/rule
+          ".ol-refile-body .ol-refile-sel"
+          (list "width" "12rem" "max-width" "100%"))
+        (css/rule
+          ".ol-refile-body .ol-refile-label"
+          (list "font-size" ".85rem" "margin-right" ".25rem"))))))
 
 (define notes/tree/enabled?
   (lambda () #t))
@@ -3889,6 +3915,65 @@
           (html/attr "data-ol-op" op)))
       label)))
 
+;; Refile as a lightweight modal. The old toolbar built an <option>
+;; per note via notes/refile/options -> notes/doc/list (O(all-notes),
+;; ~400k eval steps) and blew the 100k budget on large gardens
+;; (BORGE-1785603757). Destination is typed as a slug — exact
+;; tree/find-by lookup is cheap (~2k steps); no enumeration.
+(define notes/ui/refile-modal
+  (lambda
+    (slug)
+    (html/tag
+      "details"
+      (html/attr "class" "ol-refile-modal")
+      (html/join
+        (list
+          (html/tag
+            "summary"
+            (html/attrs
+              (list
+                (html/attr "class" "ol-btn")
+                (html/attr "title" "refile selected node to another note")))
+            "refile")
+          (html/tag
+            "div"
+            (html/attr "class" "ol-refile-body")
+            (html/form
+              "POST"
+              "/notes"
+              (html/attr "class" "ol-refile")
+              (html/join
+                (list
+                  (html/hidden "action" "refile")
+                  (html/hidden "src_slug" (as-str slug))
+                  (html/void
+                    "input"
+                    (html/attrs
+                      (list
+                        (html/attr "type" "hidden")
+                        (html/attr "name" "node_id")
+                        (html/attr "id" "ol-refile-nid")
+                        (html/attr "value" "root"))))
+                  (html/label
+                    (html/attr "class" "ol-refile-label")
+                    "to slug ")
+                  (html/text-input
+                    "dst_slug"
+                    (html/attrs
+                      (list
+                        (html/attr "class" "ol-refile-sel")
+                        (html/attr "placeholder" "destination-slug")
+                        (html/attr "required" "required")
+                        (html/attr "autocomplete" "off"))))
+                  " "
+                  (html/button
+                    (html/attrs
+                      (list
+                        (html/attr "type" "submit")
+                        (html/attr "class" "ol-btn")
+                        (html/attr "title" "refile selected node")))
+                    "go"))))))))))
+
 (define notes/ui/toolbar
   (lambda
     (slug show-archived)
@@ -3917,33 +4002,7 @@
           (notes/ui/tb-btn "move-up" "up")
           (notes/ui/tb-btn "move-down" "dn")
           (notes/ui/tb-btn "delete" "del")
-          (html/form
-            "POST"
-            "/notes"
-            (html/attr "class" "ol-refile")
-            (html/join
-              (list
-                (html/hidden "action" "refile")
-                (html/hidden "src_slug" (as-str slug))
-                (html/void
-                  "input"
-                  (html/attrs
-                    (list
-                      (html/attr "type" "hidden")
-                      (html/attr "name" "node_id")
-                      (html/attr "id" "ol-refile-nid")
-                      (html/attr "value" "root"))))
-                (html/select
-                  "dst_slug"
-                  (html/attr "class" "ol-refile-sel")
-                  (notes/refile/options slug))
-                (html/button
-                  (html/attrs
-                    (list
-                      (html/attr "type" "submit")
-                      (html/attr "class" "ol-btn")
-                      (html/attr "title" "refile selected node")))
-                  "refile"))))
+          (notes/ui/refile-modal slug)
           (html/form
             "POST"
             "/notes"
