@@ -105,8 +105,9 @@
             (html/join
               (list
                 (html/a "/dabar?book=John&chapter=3" "Bible")
-                " \194\183 "
+                " · "
                 (html/a
                   "/dabar?book=John&chapter=3&verse=16"
                   "Dabar study")))))))))
 
+(route "/strongs" "strongs/page")

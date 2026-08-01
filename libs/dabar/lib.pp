@@ -1,5 +1,11 @@
 ;; package dabar -- exported from live branch system/main
 ;; Sync: scripts/pp_sync.py pull|push
+;;
+;; Study layer on top of bible/*: Strong's-linked interlinear + /dabar chrome.
+;; Interlinear rows: type bible-interlinear (seed: scripts/seed_interlinear.py).
+;; Toggle: request param inter=1 shows token HTML; default plain (inter=0).
+;; Chapter-reader decision (v1): chapter view stays bible-owned; each study
+;; path is /dabar?book=&chapter=&verse=&inter=1 (no inline chapter tokens).
 
 (define dabar/inter-html
   (lambda
@@ -13,7 +19,7 @@
           (string-append
             "No interlinear for "
             (bible/ref book chapter verse)
-            " \226\128\148 plain: "
+            " — plain: "
             (as-str (bible/verse book chapter verse))))
         (let
           ((pre (dict-get row "html")))
@@ -24,6 +30,12 @@
               "interlinear row has no html field")
             pre))))))
 
+;; Canonical alias — spec smoke (dabar/inter "John" 1 1).
+(define dabar/inter
+  (lambda
+    (book chapter verse)
+    (dabar/inter-html book chapter verse)))
+
 (define dabar/inter-row
   (lambda
     (book chapter verse)
@@ -31,6 +43,48 @@
       (quote bible-interlinear)
       "ref"
       (bible/ref book chapter verse))))
+
+;; Truthy when inter=1 (default off / plain).
+(define dabar/inter-on?
+  (lambda
+    ()
+    (let
+      ((p (request-param "inter")))
+      (if
+        (null? p)
+        #f
+        (string-eq (as-str p) "1")))))
+
+(define dabar/study-href
+  (lambda
+    (book chapter verse inter-on)
+    (string-append
+      "/dabar?book="
+      (bible/abbrev-of book)
+      "&chapter="
+      (as-str chapter)
+      "&verse="
+      (as-str verse)
+      "&inter="
+      (if inter-on "1" "0"))))
+
+(define dabar/toggle-link
+  (lambda
+    (book chapter verse inter-on)
+    (let
+      ((next (not inter-on))
+        (label (if inter-on "plain" "interlinear")))
+      (html/tag
+        "a"
+        (html/attrs
+          (list
+            (html/attr "href" (dabar/study-href book chapter verse next))
+            (html/attr "hx-get" (dabar/study-href book chapter verse next))
+            (html/attr "hx-target" "#dabar-panel")
+            (html/attr "hx-swap" "innerHTML")
+            (html/attr "hx-push-url" "true")
+            (html/attr "class" "dabar-inter-toggle")))
+        label))))
 
 (define dabar/page
   (lambda
@@ -40,7 +94,8 @@
       (let
         ((book (request-param "book"))
           (chapter (request-param "chapter"))
-          (verse (request-param "verse")))
+          (verse (request-param "verse"))
+          (inter (request-param "inter")))
         (redirect
           (string-append
             "/dabar?book="
@@ -53,7 +108,14 @@
               (if
                 (string-eq (as-str verse) "")
                 ""
-                (string-append "&verse=" (as-str verse)))))))
+                (string-append "&verse=" (as-str verse))))
+            (if
+              (null? inter)
+              ""
+              (if
+                (string-eq (as-str inter) "")
+                ""
+                (string-append "&inter=" (as-str inter)))))))
       (if
         (hx-request?)
         (dabar/panel-for-request)
@@ -120,7 +182,8 @@
     (book chapter verse)
     (let
       ((ab (bible/abbrev-of book))
-        (ch (bible/safe-chapter book chapter)))
+        (ch (bible/safe-chapter book chapter))
+        (inter-on (dabar/inter-on?)))
       (html/join
         (list
           (html/h1
@@ -141,8 +204,21 @@
             (html/attr "class" "card dabar-inter")
             (html/join
               (list
-                (html/h2 "Interlinear")
-                (dabar/inter-html book ch verse))))
+                (html/h2
+                  (html/join
+                    (list
+                      "Interlinear · "
+                      (dabar/toggle-link book ch verse inter-on))))
+                (if
+                  inter-on
+                  (dabar/inter-html book ch verse)
+                  (html/p*
+                    (html/attr "class" "muted")
+                    (html/join
+                      (list
+                        "Plain view. "
+                        (dabar/toggle-link book ch verse #f)
+                        " for original-language tokens + Strong's.")))))))
           (html/p*
             (html/attr "class" "muted")
             (html/join
@@ -154,7 +230,7 @@
                     "&chapter="
                     (as-str ch))
                   "open in reader")
-                " \194\183 "
+                " · "
                 (html/a "/strongs" "Strong's")))))))))
 
 (define dabar/verse-study-from-params
@@ -191,3 +267,4 @@
               (bible/go-form book chapter verse)
               (dabar/verse-study book chapter verse))))))))
 
+(route "/dabar" "dabar/page")
