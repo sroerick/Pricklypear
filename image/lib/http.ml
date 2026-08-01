@@ -334,7 +334,31 @@ let request_handler ~(sw : Eio.Switch.t) (session : Session.t)
         Http_code.serve_public_body reqd ~title:"Guestbook"
           "<p><a href=\"/welcome\">welcome</a> · guestbook page not seeded yet.</p>")
   | `GET, "/book" ->
+      (* Prefer Nopales (spec/book-page) when seeded; else static fallback. *)
       launch_user_route_or (fun () -> Http_code.fallback_book reqd)
+  | `GET, path
+    when String.length path > 6 && String.sub path 0 6 = "/book/" ->
+      (* habitat-workflow.book-view: /book/<pkg> → (spec/book-page).
+         request-path carries the full path so Nopales can extract pkg. *)
+      launch (fun () ->
+          let request : Session.request =
+            { method_ = `GET
+            ; path
+            ; params = parse_query target
+            ; body = ""
+            ; headers = header_list req
+            }
+          in
+          match Session.call_handler session ~request "spec/book-page" with
+          | Session.Handler_ok value ->
+              respond_handler_value ~session ~reqd ~path ~fragment:false value
+          | Session.Handler_unbound ->
+              text_response reqd ~status:`Not_found ~content_type:"text/plain"
+                "spec/book-page unbound — (load-library \"spec\")"
+          | Session.Handler_error msg ->
+              text_response reqd ~status:`Internal_server_error
+                ~content_type:"text/plain" msg);
+      ()
   | `GET, "/book.pdf" ->
       launch (fun () ->
         Http_code.handle_public_artifact reqd ~name:"book.pdf";
