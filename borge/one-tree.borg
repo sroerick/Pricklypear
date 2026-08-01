@@ -315,6 +315,28 @@
          tree walk is never the query path for product or admin
          surfaces.
 
+         CHILDREN-BY-LEVEL, NOT ANTI-JOIN: "direct children of
+         P" is expressed as a LEVEL predicate —
+           path <@ P AND nlevel(path) = nlevel(P) + 1
+         — never as a correlated anti-join (NOT EXISTS over an
+         intermediate node). nlevel equality is a constant-bound
+         predicate the ltree GiST path index can drive, so the
+         children lookup stays an index scan regardless of how
+         many nodes share the prefix; the anti-join form cannot
+         use the index for its inner <@ and so degrades to
+         O(subtree^2) as a subtree grows. Every read endpoint
+         that lists one level of the tree (tree/list depth 1,
+         folder expansion, the /notes index) goes through this
+         level form. (* agent note (|Design invariant recorded
+         2026-08-02 from live measurement at ~3000 notes under
+         data.note.u.admin: the NOT EXISTS anti-join in
+         Tree_store.list_children took ~4000ms to return 11 root
+         children (blocking /notes at ~8.6s and surfacing as
+         budget_exceeded on dabar) while the level predicate and
+         tree/list-kind took single-digit ms; the 100k-step eval
+         budget is left unchanged — it is a tripwire that exposed
+         this DB-plan bug, not the bottleneck.|) *)
+
          OUT OF SCOPE (v1): exposing raw SQL to Nopales
          product code. The projection layer serves the image
          and admin tooling; the Nopales surface stays prims.
