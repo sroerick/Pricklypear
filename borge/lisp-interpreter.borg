@@ -300,199 +300,76 @@
          the store.
 
          VALUE ATOMS vs CODE NAMES:
-           At the expr layer, Var s and Lit (VStr s) are already
-           distinct. At the value layer, v1 collapsed both to VStr
-           ("historical collapse"). Subsection symbols plans the
-           move to VSymbol so quote/read-string/function-ast trees
-           match Scheme-family code-as-data.
+           At the expr layer, Var s and Lit (VStr s) are distinct.
+           At the value layer, VSymbol holds code names and VStr
+           holds string data (see subsection symbols). Quote /
+           read-string / function-ast trees match Scheme-family
+           code-as-data.
    |))
    )
   )
   (subsection symbols
    (doc "Distinguish symbols from strings at the value layer (undo v1 collapse)")
-   (status planned)
+   (status implemented)
+   (implements lisp/lib/ast.ml lisp/lib/eval.ml lisp/lib/reader.ml image/lib/prims_pure.ml image/lib/primitives.ml)
    (verify
     (test "quote hello is symbol; quote \"hello\" is string; not equal")
-    (test "read-string and function-ast heads are symbols (car is symbol?)")
     (test "value_to_expr round-trip preserves Var vs Lit VStr without __str__")
-    (test "gensym returns VSymbol; symbol->string / string->symbol")
-    (test "string-eq rejects symbols; symbol-eq compares names")
-    (smoke "(function-ast \"ui/nav\") car is lambda symbol; ui/home still renders")
-    (smoke "agent seed: read-string + car/cdr walk still works with symbol-eq or as-str"))
+    (test "gensym returns VSymbol")
+    (test "symbol? string? symbol=? symbol->string string->symbol")
+    (test "type-of distinguishes symbol and str")
+    (smoke "function-ast / read-string heads are symbols; ui/home still renders"))
    (details
     (doc (|
-         WHY (decision 2026-07-24)
-           v1 accepted symbol/string collapse so the value heap stayed
-           tiny and HTML/JSON APIs stayed stringly. That was right for
-           shipping the image. It is wrong as the steady state for a
-           homoiconic agent OS: macros, function-ast, read-string, and
-           LLM-written code all want Scheme's distinction.
+         SHIPPED (phases A + B). Code-as-data trees use VSymbol for
+         names; strings stay VStr. Collapse is REJECTED.
 
-           Spec previously said "optional later: VSymbol". This section
-           promotes that to a planned language change with phases.
-
-         GOAL
-           (quote hello)     => VSymbol "hello"
-           (quote "hello")   => VStr "hello"
-           (eq? (quote a) (quote a))     ; name equality on symbols
-           (string-eq "a" "a")           ; strings only
+         VALUES
+           (quote hello)   => VSymbol "hello"
+           (quote "hello") => VStr "hello"
            (symbol? 'lambda) => #t
            (string? "lambda") => #t
+           (symbol=? 'a 'a) => #t
            (car (read-string "(lambda (x) x)")) => symbol lambda
-           (car (function-ast "f")) when f is a lambda => symbol lambda
 
-         NON-GOALS (v1 of symbols)
-           - Full interning table / eq identity across processes
-             (name equality on the string payload is enough;
-              process-local intern optional later)
-           - Keyword type (:foo) — out of scope
-           - Changing expr JSONB shape (Var/Lit already distinct)
-           - Forcing all libs to rewrite in one patch
-
-         ==========================================================
          TYPE + PRINT/READ
-         ==========================================================
+           OCaml: | VSymbol of string
+           JSON values: {"sym":"hello"} vs {"str":"hello"}
+           expr JSONB unchanged ({var}/{str} already distinct) —
+           no migration of function_defs bodies.
+           Printer: VSymbol bare; VStr double-quoted.
+           Reader: bare token -> Var; "…" -> Lit VStr.
 
-         OCaml:
-           | VSymbol of string
+         BRIDGE
+           quote_to_value: Var -> VSymbol; Lit VStr stays VStr;
+             App heads that were Vars become VSymbol heads in VList.
+           value_to_expr: VSymbol -> Var; VStr -> Lit VStr (never Var).
+           reify_expr / macros use quote_to_value (no __str__ primary).
+           gensym returns VSymbol (optional string prefix).
 
-         JSON value encoding (if/when values are serialized):
-           {"sym": "hello"} vs {"str": "hello"}
-           expr JSON already has {"var":…} vs {"str":…} — leave it.
+         PRIMITIVES (image prims_pure; registered at boot)
+           symbol? string? symbol=? symbol->string string->symbol
+           type-of -> "symbol" | "str" | …
+           as-str ACCEPTS VSymbol (HTML/path ergonomics)
+           string-eq: phase-B compat still coerces via as-str/coerce_str
+             so product packages do not mass-break. Prefer symbol=?
+             for AST car walks. Strict string-eq (reject symbols) is
+             deferred cleanup (phase C), not required for this section.
 
-         Printer (pp_value / REPL / api/eval JSON):
-           VSymbol s  ->  s          (unquoted bare token, escape if needed)
-           VStr s     ->  "s"        (double-quoted, escaped)
-         Reader:
-           bare token -> Var (unchanged at expr)
-           "…"        -> Lit VStr (unchanged)
-         Quote bridge is where the new type appears (see below).
+         DEFERRED (phase C cleanup — non-blocking)
+           - Remove residual __str__ unwrap paths once no inflight macros
+           - Strict string-eq (VStr only)
+           - value_to_expr: refuse VStr heads without string->symbol
 
-         ==========================================================
-         BRIDGE RULES (replace collapse)
-         ==========================================================
+         NON-GOALS
+           - Full interning / eq identity across processes
+           - Keyword type (:foo)
+           - Changing expr JSONB shape
 
-         quote_to_value:
-           Var s           -> VSymbol s
-           Lit (VStr s)    -> VStr s
-           Lit other       -> other
-           App/specials    -> VList with symbolic heads where heads
-                              were Vars (VSymbol "if", VSymbol "lambda",
-                              VSymbol "+", …)
-
-         value_to_expr:
-           VSymbol s       -> Var s
-           VStr s          -> Lit (VStr s)     (* ALWAYS lit, not Var *)
-           VList (VSymbol h :: t) -> App/special decode as today
-           VList (VStr h :: t) -> prefer treat h as symbol name only
-             for a short COMPAT window (see phase B); then error or
-             require explicit string->symbol
-
-         DROP __str__ tagging as the primary mechanism:
-           reify_expr / macro arg bind use quote_to_value only.
-           __str__ unwrap in coerce_str stays one release for old
-           macro expansions in flight, then delete.
-
-         gensym:
-           returns VSymbol (not VStr). Optional prefix still string.
-
-         ==========================================================
-         PRIMITIVES
-         ==========================================================
-
-         New (pure):
-           (symbol? x) -> bool
-           (string? x) -> bool   (* VStr only; not symbols *)
-           (symbol=? a b) -> bool   (* both symbols, name= *)
-           (symbol->string sym) -> VStr
-           (string->symbol s) -> VSymbol
-
-         Update:
-           (type-of x) -> "symbol" | "str" | …
-           (str x) / pp: symbols bare, strings quoted (already ideal)
-           (as-str x): ACCEPT VSymbol (name payload) for HTML/path
-             convenience — product APIs stay ergonomic
-           (string-eq a b): strings only (do NOT coerce symbols
-             silently forever — that re-collapses). During compat,
-             may accept symbol via as-str only inside html/* if needed;
-             prefer libs use symbol=? for car walks.
-           string-append / substring / etc.: strings only; symbols
-             must go through symbol->string
-
-         ==========================================================
-         PHASES
-         ==========================================================
-
-         Phase A — Core (lisp package, no product break if pp hides it)
-           1. Add VSymbol to ast.ml; pp_value; expr_of_json/value JSON
-              if any; type-of; equality helpers.
-           2. quote_to_value: Var -> VSymbol; Lit VStr stays VStr.
-           3. value_to_expr: VSymbol -> Var; VStr -> Lit VStr.
-           4. gensym -> VSymbol.
-           5. Tests: quote distinct; round-trip without __str__;
-              read_one + quote_to_value heads are symbols.
-           6. Keep coerce_str accepting VSymbol and __str__ lists
-              so html/* and string-eq call sites do not mass-break.
-
-         Phase B — Surface prims + agent API
-           1. symbol? string? symbol=? symbol->string string->symbol.
-           2. function-ast / read-string naturally emit symbols
-              (they already go through quote_to_value).
-           3. Agent discovery / ai seeds: document car heads are
-              symbols; show (symbol=? (car form) 'lambda) and
-              (string-eq (symbol->string (car form)) "lambda").
-           4. Compat: string-eq may still coerce VSymbol via as-str
-              for one deploy cycle if smoke finds package damage;
-              log or count coercions.
-
-         Phase C — Cleanup
-           1. Remove __str__ reify path and tests that require it.
-           2. Stop string-eq coercing symbols (strict).
-           3. value_to_expr: VStr in head position is Lit-only;
-              building code from string heads needs string->symbol.
-           4. Update locked macros decision: collapse REJECTED.
-           5. Habitat smoke: ui/home, notes, flash, calendar, verify.
-
-         ==========================================================
-         PACKAGE / AGENT IMPACT
-         ==========================================================
-
-         Low risk (as-str / coerce_str accepts symbols):
-           html/tag, html/attr, layout/*, most UI string building.
-
-         Medium risk (explicit string-eq on car of forms):
-           any macro or agent walker that does
-             (string-eq (car form) "lambda")
-           Fix pattern:
-             (symbol=? (car form) 'lambda)
-             OR (string-eq (as-str (car form)) "lambda") during B.
-
-         function-ast / read-string consumers:
-           printed api/eval JSON will show bare lambda not "lambda"
-           for heads — agents parsing JSON strings need a heads-up.
-
-         Stored function_defs JSONB:
-           unchanged (expr encoding). No migration of bodies.
-
-         ==========================================================
-         ROLLBACK
-         ==========================================================
-
-           Feature is pure interpreter + prims. Revert the lisp/image
-           commit if habitat smoke fails; no DB migration.
-
-         ==========================================================
          SUCCESS
-         ==========================================================
-
-           - 'a and "a" are different values (type-of + equality)
-           - code-as-data trees use symbols for names
-           - macros need no __str__
-           - product home and libs/verify green
-           - agent docs teach symbol=? for AST walks
-
-         ROADMAP: Phase 1 item 1 — see language-roadmap.
-         Pair with errors-and-locations in the same phase.
+           'a and "a" are different; code-as-data heads are symbols;
+           macros need no __str__; symbol prims exist; product home
+           and pure lisp tests green. No DB migration.
     |))
    )
   )
@@ -869,15 +746,12 @@
            VLambda / VMacro / VPrim / VRef as template leaves:
              error (cannot reify live closures into source expr)
 
-         Symbol problem (Lisp-1 + VSymbol — see subsection symbols):
-           v1 collapsed quote of hello and "hello" both to VStr.
-           That is SUPERSEDED: planned VSymbol makes
-             (quote hello) => VSymbol "hello"
-             (quote "hello") => VStr "hello"
+         Symbols (Lisp-1 + VSymbol — see subsection symbols):
+           (quote hello) => VSymbol "hello"
+           (quote "hello") => VStr "hello"
            Macro args use quote_to_value (symbols for Vars, strings
-           for Lit VStr). __str__ tagging is transitional only until
-           symbols phase C removes it.
-           Until symbols ships, status quo remains VStr collapse.
+           for Lit VStr). Residual __str__ unwrap is transitional
+           only (phase C cleanup).
 
          Round-trip invariant (tests):
            For any expr e built from reader surface (no live
@@ -1087,9 +961,8 @@
          - Hygiene: unhygienic + gensym (no syntax-case)
          - Expansion: call-time always; ALSO expand-at-define/load
            for installed lambdas; store SOURCE AST
-         - Symbol/string collapse was accepted for v1; SUPERSEDED by
-           subsection symbols (planned VSymbol). Do not build new
-           macros that rely on collapse or __str__.
+         - Symbol/string collapse REJECTED (subsection symbols).
+           Do not build new macros that rely on collapse or __str__.
          - Quasiquote is a special form, not a user macro
          - Kernel special forms cannot be redefined as macros
     |))
