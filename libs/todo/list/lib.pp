@@ -156,7 +156,7 @@
                           (html/attr "type" "submit")
                           (html/attr "class" "secondary")
                           (html/attr "title" "delete list")))
-                      "\195\151")))))))))))
+                      "×")))))))))))
 
 (define todo/list/options
   (lambda

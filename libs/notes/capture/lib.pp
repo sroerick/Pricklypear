@@ -91,7 +91,7 @@
                 (html/attr "id" "capture-body")
                 (html/attr "rows" "3")
                 (html/attr "class" "capture-body")
-                (html/attr "placeholder" "Quick capture226128166")
+                (html/attr "placeholder" "Quick capture…")
                 (html/attr "required" "required")))
             "")
           (html/div
@@ -167,7 +167,7 @@
                       (list
                         (html/attr "rows" "3")
                         (html/attr "class" "capture-body")
-                        (html/attr "placeholder" "Quick capture226128166")
+                        (html/attr "placeholder" "Quick capture…")
                         (html/attr "required" "required")))
                     "")
                   (html/div

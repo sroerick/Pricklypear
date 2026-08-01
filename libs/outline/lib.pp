@@ -36,7 +36,7 @@
           (html/tag
             "summary"
             (html/attr "class" "ol-actions-sum")
-            (html/text "194183194183194183"))
+            (html/text "···"))
           (html/div
             (html/attr "class" "ol-actions-panel")
             (html/join
@@ -331,67 +331,67 @@
       (outline/html-node slug root show-archived #f))))
 
 (define outline/html-node
-  (lambda
-    (slug n show-archived with-actions)
-    (let
-      ((nid (outline/id n))
-        (todo (outline/todo n))
-        (body (outline/body n))
-        (kids (outline/kids n)))
-      (html/tag
-        "details"
-        (html/attrs
-          (list
-            (html/attr
-              "class"
-              (if
-                (string-eq (as-str todo) "")
-                "ol-node"
-                (string-append "ol-node is-todo st-" (as-str todo))))
-            (html/attr "open" "open")
-            (html/attr "data-id" nid)))
-        (html/join
-          (list
-            (html/tag
-              "summary"
-              (html/attr "class" "ol-sum")
-              (html/join
-                (list
-                  (html/span (html/attr "class" "ol-fold") "")
-                  (outline/todo-badge todo)
-                  (html/span
-                    (html/attrs
-                      (list
-                        (html/attr "class" "ol-title")
-                        (html/attr "contenteditable" "true")
-                        (html/attr "data-id" nid)
-                        (html/attr "data-field" "title")))
-                    (html/text (outline/title n))))))
-            (if
-              with-actions
-              (outline/actions slug nid todo show-archived)
-              "")
-            (if
-              (string-eq body "")
-              ""
-              (html/div
-                (html/attrs
+  (lambda (slug n show-archived with-actions)
+    (let ((nid (outline/id n))
+          (todo (outline/todo n))
+          (body (outline/body n))
+          (kids (outline/kids n)))
+      (let ((is-ref (bible/ref-body? body)))
+        (html/tag
+          "details"
+          (html/attrs
+            (list
+              (html/attr
+                "class"
+                (if (string-eq (as-str todo) "")
+                    "ol-node"
+                    (string-append "ol-node is-todo st-" (as-str todo))))
+              (html/attr "open" "open")
+              (html/attr "data-id" nid)))
+          (html/join
+            (list
+              (html/tag
+                "summary"
+                (html/attr "class" "ol-sum")
+                (html/join
                   (list
-                    (html/attr "class" "ol-body")
-                    (html/attr "contenteditable" "true")
-                    (html/attr "data-id" nid)
-                    (html/attr "data-field" "body")))
-                (outline/render-body body)))
-            (html/div
-              (html/attr "class" "ol-kids")
-              (list/foldl
-                (lambda
-                  (acc k)
-                  (string-append
-                    acc
-                    (outline/html-node slug k show-archived with-actions)))
-                ""
-                kids))))))))
+                    (html/span (html/attr "class" "ol-fold") "")
+                    (outline/todo-badge todo)
+                    (html/span
+                      (html/attrs
+                        (list
+                          (html/attr "class" "ol-title")
+                          (html/attr "contenteditable" "true")
+                          (html/attr "data-id" nid)
+                          (html/attr "data-field" "title")))
+                      (html/text (outline/title n))))))
+              (if with-actions
+                  (outline/actions slug nid todo show-archived)
+                  "")
+              (if (string-eq body "")
+                  ""
+                  (html/div
+                    (html/attrs
+                      (if is-ref
+                          (list
+                            (html/attr "class" "ol-body ol-body-ref")
+                            (html/attr "data-id" nid)
+                            (html/attr "data-bible-ref" "1"))
+                          (list
+                            (html/attr "class" "ol-body")
+                            (html/attr "contenteditable" "true")
+                            (html/attr "data-id" nid)
+                            (html/attr "data-field" "body"))))
+                    (outline/render-body body)))
+              (html/div
+                (html/attr "class" "ol-kids")
+                (list/foldl
+                  (lambda (acc k)
+                    (string-append
+                      acc
+                      (outline/html-node slug k show-archived with-actions)))
+                  ""
+                  kids)))))))))
 
 (define outline/id
   (lambda (n) (car n)))

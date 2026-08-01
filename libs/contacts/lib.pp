@@ -97,7 +97,7 @@
                   (html/attrs
                     (list
                       (html/attr "id" "c-phone")
-                      (html/attr "placeholder" "+1 \226\128\166")
+                      (html/attr "placeholder" "+1 …")
                       (html/attr "autocomplete" "tel"))))
                 (html/label (html/attr "for" "c-notes") "Notes")
                 (html/textarea

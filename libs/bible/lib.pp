@@ -240,9 +240,9 @@
                       (html/attr "class" "muted")
                       (html/join
                         (list
-                          "Berean Standard Bible \194\183 "
+                          "Berean Standard Bible · "
                           (bible/ref b c (if (null? v) 1 v))
-                          " \194\183 "
+                          " · "
                           (html/a "/strongs" "Strong's"))))))))
             (let
               ((row (bible/parse-ref ref)))
@@ -268,7 +268,7 @@
                         (string-append
                           "ref "
                           (as-str ref)
-                          " \194\183 Berean Standard Bible"))))))))
+                          " · Berean Standard Bible"))))))))
           (html/join
             (list
               (bible/go-form "John" "3" ())
@@ -293,7 +293,7 @@
                     (html/p*
                       (html/attr "class" "muted")
                       (string-append
-                        "random \194\183 "
+                        "random · "
                         (as-str (dict-get f "ref"))))))))))))))
 
 (define bible/go-form
@@ -425,18 +425,18 @@
               (null? prev)
               (html/span
                 (html/attr "class" "muted")
-                "\226\134\144 prev")
-              (html/a (bible/href-chapter prev) "\226\134\144 prev"))
-            " \194\183 "
+                "← prev")
+              (html/a (bible/href-chapter prev) "← prev"))
+            " · "
             (html/a "/dabar?random=1" "random")
-            " \194\183 "
+            " · "
             (if
               (null? next)
               (html/span
                 (html/attr "class" "muted")
-                "next \226\134\146")
-              (html/a (bible/href-chapter next) "next \226\134\146"))
-            " \194\183 "
+                "next →")
+              (html/a (bible/href-chapter next) "next →"))
+            " · "
             (html/a
               (string-append
                 "/dabar?book="
@@ -643,7 +643,7 @@
     (string-append
       (html/option
         ""
-        "\226\128\148"
+        "—"
         (if
           (null? selected)
           #t
@@ -669,4 +669,196 @@
       (quote bible-verse)
       "ref"
       (bible/ref book chapter verse))))
+
+
+;; --- outline body (bible-ref ...) rendering ---
+
+(define bible/nth
+  (lambda (lst n)
+    (if (= n 0) (car lst) (bible/nth (cdr lst) (- n 1))))
+)
+
+(define bible/ref-body?
+  (lambda (body)
+    (let
+      ((s (as-str body)))
+      (string-starts-with? s "(bible-ref")))
+)
+
+(define bible/ref-parse
+  (lambda (body)
+    (let
+      ((form (read-string (as-str body))))
+      (if
+        (pair? form)
+        (if
+          (string-eq (symbol->string (car form)) "bible-ref")
+          form
+          ())
+        ())))
+)
+
+(define bible/render-body
+  (lambda (body)
+    (if
+      (bible/ref-body? body)
+      (let
+        ((form (bible/ref-parse body)))
+        (if
+          (null? form)
+          (roam/render-body body)
+          (let
+            ((book (bible/nth form 1))
+              (chapter (bible/nth form 2))
+              (vstart (bible/nth form 3))
+              (vend (bible/nth form 4))
+              (mode (bible/nth form 5)))
+            (bible/render-ref book chapter vstart vend mode))))
+      ()))
+)
+
+(define bible/render-ref
+  (lambda (book chapter vstart vend mode)
+    (if
+      (string-eq (as-str mode) "link")
+      (bible/verse-link-html book chapter vstart vend)
+      (bible/verse-inline-html book chapter vstart vend)))
+)
+
+(define bible/cite-label
+  (lambda (book chapter vstart vend)
+    (if
+      (= vstart vend)
+      (string-append
+        (as-str book)
+        " "
+        (as-str chapter)
+        ":"
+        (as-str vstart))
+      (string-append
+        (as-str book)
+        " "
+        (as-str chapter)
+        ":"
+        (as-str vstart)
+        "-"
+        (as-str vend))))
+)
+
+(define bible/verse-body
+  (lambda (book chapter vstart vend mode)
+    (string-append
+      "(bible-ref \""
+      (as-str book)
+      "\" "
+      (as-str chapter)
+      " "
+      (as-str vstart)
+      " "
+      (as-str vend)
+      " \""
+      (as-str mode)
+      "\")"))
+)
+
+(define bible/verse-inline-html
+  (lambda (book chapter vstart vend)
+    (if
+      (= vstart vend)
+      (bible/verse-inline-one book chapter vstart)
+      (bible/verse-inline-range book chapter vstart vend)))
+)
+
+(define bible/verse-inline-one
+  (lambda (book chapter verse)
+    (let
+      ((row (bible/verse-row book chapter verse))
+        (ab (bible/abbrev-of book))
+        (ch (bible/safe-chapter book chapter))
+        (label (bible/cite-label book chapter verse verse)))
+      (if
+        (null? row)
+        (html/p*
+          (html/attr "class" "err")
+          (string-append "Verse not found: " label))
+        (html/tag
+          "blockquote"
+          (html/attr "class" "bible-verse")
+          (html/join
+            (list
+              (html/tag "sup" "" (as-str verse))
+              " "
+              (html/text (dict-get row "text"))
+              " "
+              (html/p*
+                (html/attr "class" "bible-cite")
+                (html/a (bible/link-href ab ch verse) label))))))))
+)
+
+(define bible/verse-inline-range
+  (lambda (book chapter vstart vend)
+    (let
+      ((rows (bible/verses-in-range book chapter vstart vend))
+        (ab (bible/abbrev-of book))
+        (ch (bible/safe-chapter book chapter))
+        (label (bible/cite-label book chapter vstart vend)))
+      (if
+        (null? rows)
+        (html/p*
+          (html/attr "class" "err")
+          (string-append "No verses found: " label))
+        (html/tag
+          "blockquote"
+          (html/attr "class" "bible-verse")
+          (html/join
+            (list
+              (list/foldl
+                (lambda
+                  (acc row)
+                  (let
+                    ((fields (cdr row)))
+                    (string-append
+                      acc
+                      (html/tag "sup" "" (as-str (dict-get fields "verse")))
+                      " "
+                      (html/text (dict-get fields "text"))
+                      " ")))
+                ""
+                rows)
+              (html/p*
+                (html/attr "class" "bible-cite")
+                (html/a (bible/link-href ab ch vstart) label))))))))
+)
+
+(define bible/verse-link-html
+  (lambda (book chapter vstart vend)
+    (let
+      ((ab (bible/abbrev-of book))
+        (ch (bible/safe-chapter book chapter))
+        (label (bible/cite-label book chapter vstart vend)))
+      (html/a (bible/link-href ab ch vstart) label)))
+)
+
+(define bible/verses-in-range
+  (lambda (book chapter vstart vend)
+    (let
+      ((rows (bible/chapter book chapter)))
+      (list/filter
+        (lambda
+          (row)
+          (let
+            ((v (parse-int (dict-get (cdr row) "verse"))))
+            (and (>= v vstart) (<= v vend))))
+        rows)))
+)
+
+(define bible/insert-verse
+  (lambda (book chapter vstart vend mode)
+    (outline/node*
+      (gensym "n")
+      (bible/cite-label book chapter vstart vend)
+      (bible/verse-body book chapter vstart vend mode)
+      ""
+      (list)))
+)
 

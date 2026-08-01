@@ -362,8 +362,8 @@
               (list
                 (html/a
                   (string-append "/calendar?ym=" (calendar/ym day))
-                  "\226\134\144 month")
-                " \194\183 "
+                  "← month")
+                " · "
                 (html/a
                   (string-append "/notes?slug=daily-" day)
                   "daily note"))))
@@ -678,7 +678,7 @@
           (calendar/month-grid ym)
           (html/p*
             (html/attr "class" "muted")
-            "Dots: events \194\183 todos due \194\183 daily note. Click a day for agenda."))))))
+            "Dots: events · todos due · daily note. Click a day for agenda."))))))
 
 (define calendar/month-nav
   (lambda
@@ -693,11 +693,11 @@
             (list
               (html/a
                 (string-append "/calendar?ym=" prev)
-                "\226\151\128")
+                "◀")
               (html/strong ym)
               (html/a
                 (string-append "/calendar?ym=" next)
-                "\226\150\182")
+                "▶")
               (html/a "/calendar" "Today"))))))))
 
 (define calendar/pad-start
@@ -746,7 +746,7 @@
           (html/h1 "Calendar")
           (html/p*
             (html/attr "class" "muted")
-            "Month grid \194\183 day agenda \194\183 events + due todos + daily notes")
+            "Month grid · day agenda · events + due todos + daily notes")
           (calendar/main-html))))))
 
 (define calendar/recurring-events

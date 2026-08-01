@@ -249,7 +249,7 @@
                 ""
                 (html/span
                   (html/attr "class" "muted")
-                  (html/text (string-append " \194\183 " folder))))
+                  (html/text (string-append " · " folder))))
               (html/form
                 "POST"
                 "/notes"
@@ -290,7 +290,7 @@
                 ""
                 (html/span
                   (html/attr "class" "muted")
-                  (html/text (string-append " \194\183 " folder)))))))))))
+                  (html/text (string-append " · " folder)))))))))))
 
 (define notes/ui/missing
   (lambda

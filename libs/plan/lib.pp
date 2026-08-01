@@ -81,7 +81,7 @@
           (html/h2 "Your plan")
           (html/p*
             (html/attr "class" "muted")
-            "Like a Unix .plan file \226\128\148 short note other users on this box can read.")
+            "Like a Unix .plan file — short note other users on this box can read.")
           (html/form
             "POST"
             "/plan"
@@ -103,7 +103,7 @@
                       (html/attr "rows" "4")
                       (html/attr
                         "placeholder"
-                        "shipping macros, out Thursday, \226\128\166")))
+                        "shipping macros, out Thursday, …")))
                   (as-str body))
                 (html/button (html/attr "type" "submit") "Save plan")))))))))
 

@@ -81,15 +81,15 @@
               (list
                 (html/text "API: ")
                 (html/code "(bi/metrics-snapshot)")
-                (html/text " \194\183 ")
+                (html/text " · ")
                 (html/code "(bi/dashboard/source)")
-                (html/text " \194\183 ")
+                (html/text " · ")
                 (html/a "/bi" (html/text "refresh"))))))))))
 
 (define bi/dashboard/preview-note
   (lambda
     ()
-    "Branch preview: (fork \"bi-preview\") (checkout \"\226\128\166/bi-preview\") then edit bi/dashboard-html; merge when ready. Metrics functions stay on main and are read-only to layout agents."))
+    "Branch preview: (fork \"bi-preview\") (checkout \"…/bi-preview\") then edit bi/dashboard-html; merge when ready. Metrics functions stay on main and are read-only to layout agents."))
 
 (define bi/dashboard/publish
   (lambda

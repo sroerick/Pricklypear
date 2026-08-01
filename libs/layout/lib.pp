@@ -115,7 +115,7 @@
             (html/attr "class" "nc-blink")
             (html/text "welcome to my homepage!!"))
           (html/text
-            " \226\128\148 last updated 2026 \226\128\148 "))))))
+            " — last updated 2026 — "))))))
 
 (define layout/neocities-foot
   (lambda
@@ -209,7 +209,7 @@
           (html/div
             (html/attr "class" "nc-colophon")
             (html/text
-              "this site is hand-coded in a lisp machine and rendered by a cactus \240\159\140\181 powered by postgres, htmx, and questionable life choices. no javascript was harmed. best viewed at 800x600.")))))))
+              "this site is hand-coded in a lisp machine and rendered by a cactus 🌵 powered by postgres, htmx, and questionable life choices. no javascript was harmed. best viewed at 800x600.")))))))
 
 (define layout/neocities-marquee-msg
   (lambda
@@ -218,7 +218,7 @@
       "span"
       (html/attr "class" "nc-marquee-msg")
       (html/text
-        "\240\159\154\167 UNDER CONSTRUCTION \240\159\154\167 welcome to pricklypear \240\159\140\181 a lisp machine that lives in postgres \194\183 sign the guestbook \194\183 best viewed in netscape 4.0 at 800x600 \194\183 built in public \194\183 "))))
+        "🚧 UNDER CONSTRUCTION 🚧 welcome to pricklypear 🌵 a lisp machine that lives in postgres · sign the guestbook · best viewed in netscape 4.0 at 800x600 · built in public · "))))
 
 (define layout/neocities-style
   (lambda
