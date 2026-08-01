@@ -826,18 +826,20 @@
         ((p (dict-get (cdr row) "_path")))
         (if (null? p) "" (as-str p))))))
 
+;; Postgres-backed garden search (notes.search-modal / BORGE-1785605474).
+;; Returns list of hit dicts: slug title node_id header_path matched rank kind tags.
+;; Filter happens in tree_nodes via tree/search-text — never enumerate the garden.
 (define notes/doc/search
   (lambda
     (q)
     (let
-      ((needle (as-str q)))
-      (list/filter
-        (lambda
-          (row)
-          (string-contains?
-            (as-str (dict-get (cdr row) "title"))
-            needle))
-        (notes/doc/list)))))
+      ((needle (string-trim (as-str q))))
+      (if
+        (string-eq needle "")
+        (list)
+        (list/map
+          (lambda (j) (if (null? j) "{}" (as-str j)))
+          (tree/search-text needle 20))))))
 
 (define notes/doc/set-folder
   (lambda
@@ -2307,20 +2309,29 @@
     (let
       ((src (as-str (request-param "src_slug")))
         (nid (as-str (request-param "node_id")))
-        (dst (as-str (request-param "dst_slug"))))
+        (dst (as-str (request-param "dst_slug")))
+        (dst-nid
+          (if
+            (null? (request-param "dst_node_id"))
+            ""
+            (as-str (request-param "dst_node_id")))))
       (seq
-        (notes/refile/move src nid dst)
+        (notes/refile/move src nid dst dst-nid)
         (redirect (string-append "/notes?slug=" src))))))
 
 (define notes/refile/move
   (lambda
-    (src-slug nid dst-slug)
+    (src-slug nid dst-slug dst-nid)
     (let
       ((src (notes/doc/get src-slug))
         (dst (notes/doc/get dst-slug))
         (sid (as-str src-slug))
         (did (as-str dst-slug))
-        (id (as-str nid)))
+        (id (as-str nid))
+        (parent
+          (let
+            ((p (as-str dst-nid)))
+            (if (string-eq p "") "root" p))))
       (if
         (if (null? src) #t (null? dst))
         #f
@@ -2347,7 +2358,7 @@
                           (notes/doc/upsert
                             did
                             (notes/doc/title dst)
-                            (outline/add-child-by-id dst-tree "root" node)
+                            (outline/add-child-by-id dst-tree parent node)
                             (notes/doc/tags dst)
                             (notes/doc/kind dst)
                             (notes/doc/day dst))
@@ -2459,7 +2470,7 @@
 (define notes/search
   (lambda
     (q)
-    (find-text (quote note) "title" (as-str q) 40)))
+    (notes/doc/search q)))
 
 (define notes/show-archived?
   (lambda
@@ -3046,7 +3057,100 @@
           (list "width" "12rem" "max-width" "100%"))
         (css/rule
           ".ol-refile-body .ol-refile-label"
-          (list "font-size" ".85rem" "margin-right" ".25rem"))))))
+          (list "font-size" ".85rem" "margin-right" ".25rem"))
+        (css/raw "/* find / search modal */")
+        (css/rule
+          "details.ol-find-modal"
+          (list "display" "inline-block" "position" "relative"))
+        (css/rule
+          "details.ol-find-modal > summary.ol-btn"
+          (list "cursor" "pointer" "list-style" "none"))
+        (css/rule
+          "details.ol-find-modal > summary.ol-btn::-webkit-details-marker"
+          (list "display" "none"))
+        (css/rule
+          "details.ol-find-modal[open] > .ol-find-body,
+           details.ol-refile-modal[open] > .ol-refile-body.ol-find-wide"
+          (list
+            "position" "absolute"
+            "z-index" "30"
+            "right" "0"
+            "background" "var(--card,#fff)"
+            "border" "1px solid var(--muted,#888)"
+            "padding" ".5rem"
+            "min-width" "22rem"
+            "max-width" "min(36rem, 92vw)"
+            "box-shadow" "0 4px 16px rgba(0,0,0,.14)"))
+        (css/rule
+          ".ol-find-input"
+          (list
+            "width" "100%"
+            "box-sizing" "border-box"
+            "padding" ".35rem .5rem"
+            "margin" "0 0 .35rem 0"))
+        (css/rule
+          ".ol-find-results"
+          (list
+            "max-height" "18rem"
+            "overflow" "auto"
+            "margin" "0"
+            "padding" "0"
+            "list-style" "none"))
+        (css/rule
+          ".ol-find-group"
+          (list
+            "font-size" ".75rem"
+            "font-weight" "600"
+            "text-transform" "uppercase"
+            "letter-spacing" ".04em"
+            "color" "var(--muted,#666)"
+            "padding" ".4rem .35rem .15rem"))
+        (css/rule
+          "a.ol-find-hit, button.ol-find-hit"
+          (list
+            "display" "block"
+            "width" "100%"
+            "text-align" "left"
+            "border" "0"
+            "background" "transparent"
+            "padding" ".35rem .5rem .35rem 1rem"
+            "cursor" "pointer"
+            "color" "inherit"
+            "text-decoration" "none"
+            "font" "inherit"
+            "box-sizing" "border-box"))
+        (css/rule
+          "a.ol-find-hit:hover, button.ol-find-hit:hover,
+           a.ol-find-hit.is-active, button.ol-find-hit.is-active"
+          (list "background" "var(--accent-bg,#eef3ff)"))
+        (css/rule
+          ".ol-find-hit-path"
+          (list "font-size" ".85rem"))
+        (css/rule
+          ".ol-find-hit-meta"
+          (list
+            "font-size" ".75rem"
+            "color" "var(--muted,#666)"
+            "margin-left" ".35rem"))
+        (css/rule
+          ".ol-find-empty"
+          (list
+            "padding" ".5rem"
+            "color" "var(--muted,#666)"
+            "font-size" ".9rem"))
+        (css/rule
+          ".ol-find-bar"
+          (list
+            "display" "flex"
+            "gap" ".5rem"
+            "align-items" "center"
+            "margin" "0 0 .75rem 0"))
+        (css/rule
+          ".ol-find-bar details.ol-find-modal"
+          (list "flex" "1 1 auto"))
+        (css/rule
+          ".ol-find-bar .ol-find-body"
+          (list "left" "0" "right" "auto"))))))
 
 (define notes/tree/enabled?
   (lambda () #t))
@@ -3807,7 +3911,9 @@
         "else if(k==='ArrowLeft')op='barf-forward';"
         "if(op){e.preventDefault();postOp(op);}"
         "},true);"
-        "setSel('root');document.body.addEventListener('htmx:afterSwap',function(){setSel(selId());});})();"))))
+        "var nodeQ=(function(){try{var m=location.search.match(/[?&]node=([^&]+)/);return m?decodeURIComponent(m[1].replace(/\+/g,' ')):null;}catch(e){return null;}})();"
+        "if(nodeQ&&findNode(nodeQ))setSel(nodeQ);else setSel('root');"
+        "document.body.addEventListener('htmx:afterSwap',function(){setSel(selId());});})();"))))
 
 (define notes/ui/recent-list
   (lambda
@@ -3841,6 +3947,7 @@
     (slug title outline tags show-archived folder)
     (html/join
       (list
+        (notes/tree/style)
         (html/p*
           (html/attr "class" "muted")
           (html/join
@@ -3900,7 +4007,8 @@
                 (html/attr "class" "muted")
                 "Raw JSON (debug)")
               (notes/ui/edit-form slug outline))))
-        (notes/ui/outline-script slug show-archived)))))
+        (notes/ui/outline-script slug show-archived)
+        (notes/ui/find-script)))))
 
 (define notes/ui/tb-btn
   (lambda
@@ -3915,11 +4023,288 @@
           (html/attr "data-ol-op" op)))
       label)))
 
-;; Refile as a lightweight modal. The old toolbar built an <option>
-;; per note via notes/refile/options -> notes/doc/list (O(all-notes),
-;; ~400k eval steps) and blew the 100k budget on large gardens
-;; (BORGE-1785603757). Destination is typed as a slug — exact
-;; tree/find-by lookup is cheap (~2k steps); no enumeration.
+;; Group hits by slug (first-seen order) for flat grouped rendering.
+(define notes/ui/search-slug-seen?
+  (lambda
+    (xs s)
+    (if
+      (null? xs)
+      #f
+      (if
+        (string-eq (as-str (car xs)) s)
+        #t
+        (notes/ui/search-slug-seen? (cdr xs) s)))))
+
+(define notes/ui/search-slugs
+  (lambda
+    (hits)
+    (list/foldl
+      (lambda
+        (acc h)
+        (let
+          ((s (as-str (dict-get h "slug"))))
+          (if
+            (notes/ui/search-slug-seen? acc s)
+            acc
+            (append acc (list s)))))
+      (list)
+      hits)))
+
+(define notes/ui/search-hits-for
+  (lambda
+    (hits slug)
+    (list/filter
+      (lambda
+        (h)
+        (string-eq (as-str (dict-get h "slug")) (as-str slug)))
+      hits)))
+
+(define notes/ui/search-group
+  (lambda
+    (hits)
+    (list/map
+      (lambda (s) (notes/ui/search-hits-for hits s))
+      (notes/ui/search-slugs hits))))
+
+(define notes/ui/search-hit-href
+  (lambda
+    (hit)
+    (let
+      ((slug (as-str (dict-get hit "slug")))
+        (nid (as-str (dict-get hit "node_id"))))
+      (if
+        (string-eq nid "")
+        (string-append "/notes?slug=" slug)
+        (string-append "/notes?slug=" slug "&node=" nid)))))
+
+(define notes/ui/search-hit-label
+  (lambda
+    (hit)
+    (let
+      ((path (as-str (dict-get hit "header_path")))
+        (matched (as-str (dict-get hit "matched")))
+        (title (as-str (dict-get hit "title")))
+        (nid (as-str (dict-get hit "node_id"))))
+      (if
+        (string-eq nid "")
+        (html/join
+          (list
+            (html/span
+              (html/attr "class" "ol-find-hit-path")
+              (html/text
+                (if (string-eq title "") (as-str (dict-get hit "slug")) title)))
+            (html/span
+              (html/attr "class" "ol-find-hit-meta")
+              (html/text matched))))
+        (html/join
+          (list
+            (html/span
+              (html/attr "class" "ol-find-hit-path")
+              (html/text
+                (if (string-eq path "") title path)))
+            (html/span
+              (html/attr "class" "ol-find-hit-meta")
+              (html/text matched))))))))
+
+(define notes/ui/search-hit-open
+  (lambda
+    (hit)
+    (html/tag
+      "a"
+      (html/attrs
+        (list
+          (html/attr "href" (notes/ui/search-hit-href hit))
+          (html/attr "class" "ol-find-hit")
+          (html/attr "data-ol-find-hit" "1")
+          (html/attr "data-slug" (as-str (dict-get hit "slug")))
+          (html/attr "data-node" (as-str (dict-get hit "node_id")))))
+      (notes/ui/search-hit-label hit))))
+
+(define notes/ui/search-hit-refile
+  (lambda
+    (hit src-slug)
+    (html/form
+      "POST"
+      "/notes"
+      (html/attr "class" "ol-find-refile-form")
+      (html/join
+        (list
+          (html/hidden "action" "refile")
+          (html/hidden "src_slug" (as-str src-slug))
+          (html/void
+            "input"
+            (html/attrs
+              (list
+                (html/attr "type" "hidden")
+                (html/attr "name" "node_id")
+                (html/attr "class" "ol-refile-nid-mirror")
+                (html/attr "value" "root"))))
+          (html/hidden "dst_slug" (as-str (dict-get hit "slug")))
+          (html/hidden "dst_node_id" (as-str (dict-get hit "node_id")))
+          (html/button
+            (html/attrs
+              (list
+                (html/attr "type" "submit")
+                (html/attr "class" "ol-find-hit")
+                (html/attr "data-ol-find-hit" "1")
+                (html/attr "data-slug" (as-str (dict-get hit "slug")))
+                (html/attr "data-node" (as-str (dict-get hit "node_id")))
+                (html/attr "title" "refile selected node here")))
+            (notes/ui/search-hit-label hit)))))))
+
+(define notes/ui/search-group-html
+  (lambda
+    (group mode src-slug)
+    (if
+      (null? group)
+      ""
+      (let
+        ((title (as-str (dict-get (car group) "title")))
+          (slug (as-str (dict-get (car group) "slug"))))
+        (html/join
+          (list
+            (html/div
+              (html/attr "class" "ol-find-group")
+              (html/text
+                (if (string-eq title "") slug title)))
+            (html/join
+              (list/map
+                (lambda
+                  (hit)
+                  (if
+                    (string-eq mode "refile")
+                    (notes/ui/search-hit-refile hit src-slug)
+                    (notes/ui/search-hit-open hit)))
+                group))))))))
+
+(define notes/ui/search-results-html
+  (lambda
+    (q mode src-slug)
+    (let
+      ((needle (string-trim (as-str q))))
+      (if
+        (string-eq needle "")
+        (html/div
+          (html/attr "class" "ol-find-results")
+          (html/div
+            (html/attr "class" "ol-find-empty")
+            (if
+              (string-eq mode "refile")
+              "Type a destination note or header…"
+              "Type to find a note or header…")))
+        (let
+          ((hits (notes/doc/search needle)))
+          (if
+            (null? hits)
+            (html/div
+              (html/attr "class" "ol-find-results")
+              (html/div
+                (html/attr "class" "ol-find-empty")
+                "No matches."))
+            (html/div
+              (html/attr "class" "ol-find-results")
+              (html/join
+                (list/map
+                  (lambda
+                    (g)
+                    (notes/ui/search-group-html g mode src-slug))
+                  (notes/ui/search-group hits))))))))))
+
+(define notes/ui/search-partial
+  (lambda
+    ()
+    (let
+      ((q
+          (if (null? (request-param "q")) "" (as-str (request-param "q"))))
+        (mode
+          (if (null? (request-param "mode")) "open" (as-str (request-param "mode"))))
+        (src
+          (if
+            (null? (request-param "src"))
+            ""
+            (as-str (request-param "src")))))
+      (render-html (notes/ui/search-results-html q mode src)))))
+
+(define notes/ui/find-script
+  (lambda
+    ()
+    (html/tag
+      "script"
+      ""
+      (string-append
+        "(function(){"
+        "function hits(root){return root?Array.prototype.slice.call(root.querySelectorAll('[data-ol-find-hit]')):[];}"
+        "function setActive(root,i){var hs=hits(root);if(!hs.length)return;hs.forEach(function(h){h.classList.remove('is-active');});"
+        "var n=((i%hs.length)+hs.length)%hs.length;hs[n].classList.add('is-active');hs[n].scrollIntoView({block:'nearest'});root.dataset.olFindIdx=String(n);}"
+        "function openFind(sel){var d=document.querySelector(sel||'details.ol-find-modal');if(!d)return;d.open=true;"
+        "var inp=d.querySelector('.ol-find-input');if(inp){inp.focus();inp.select();}}"
+        "document.addEventListener('keydown',function(e){"
+        "var t=e.target;var typing=t&&(t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.isContentEditable);"
+        "if((e.metaKey||e.ctrlKey)&&!e.shiftKey&&(e.key==='k'||e.key==='K')){e.preventDefault();openFind('details.ol-find-modal');return;}"
+        "if(e.key==='Escape'){document.querySelectorAll('details.ol-find-modal[open],details.ol-refile-modal[open]').forEach(function(d){d.open=false;});return;}"
+        "var body=t&&t.closest&&t.closest('.ol-find-body,.ol-refile-body');if(!body)return;"
+        "var box=body.querySelector('.ol-find-results')||body;"
+        "if(e.key==='ArrowDown'){e.preventDefault();setActive(box,(parseInt(box.dataset.olFindIdx||'-1',10)+1));return;}"
+        "if(e.key==='ArrowUp'){e.preventDefault();setActive(box,(parseInt(box.dataset.olFindIdx||'0',10)-1));return;}"
+        "if(e.key==='Enter'&&!e.shiftKey){var hs=hits(box);var i=parseInt(box.dataset.olFindIdx||'-1',10);"
+        "if(i>=0&&hs[i]){e.preventDefault();if(hs[i].tagName==='BUTTON'){hs[i].click();}else if(hs[i].tagName==='A'){window.location=hs[i].href;}else{var b=hs[i].querySelector('button,[type=submit]');if(b)b.click();else hs[i].click();}}}"
+        "});"
+        "document.body.addEventListener('htmx:afterSwap',function(ev){var t=ev.target;if(!t||!t.classList)return;"
+        "if(t.classList.contains('ol-find-results')||t.querySelector&&t.querySelector('.ol-find-results')){var box=t.classList.contains('ol-find-results')?t:t.querySelector('.ol-find-results');if(box)setActive(box,0);}}});"
+        "document.addEventListener('toggle',function(e){var d=e.target;if(!d||!d.classList)return;"
+        "if((d.classList.contains('ol-find-modal')||d.classList.contains('ol-refile-modal'))&&d.open){var inp=d.querySelector('.ol-find-input');if(inp)setTimeout(function(){inp.focus();},0);}}"
+        ",true);"
+        "document.addEventListener('pointerdown',function(e){var rf=e.target.closest&&e.target.closest('.ol-find-refile-form');"
+        "if(!rf)return;var src=document.getElementById('ol-refile-nid');var m=rf.querySelector('.ol-refile-nid-mirror');"
+        "if(src&&m)m.value=src.value;},true);"
+        "})();"))))
+
+;; Open-note typeahead (Cmd/Ctrl-K). Collapsed markup only — O(1) page cost.
+(define notes/ui/find-modal
+  (lambda
+    ()
+    (html/tag
+      "details"
+      (html/attrs
+        (list
+          (html/attr "class" "ol-find-modal")
+          (html/attr "id" "ol-find-modal")))
+      (html/join
+        (list
+          (html/tag
+            "summary"
+            (html/attrs
+              (list
+                (html/attr "class" "ol-btn")
+                (html/attr "title" "Find note (Ctrl/Cmd-K)")))
+            "find")
+          (html/tag
+            "div"
+            (html/attr "class" "ol-find-body")
+            (html/join
+              (list
+                (html/void
+                  "input"
+                  (html/attrs
+                    (list
+                      (html/attr "type" "search")
+                      (html/attr "class" "ol-find-input")
+                      (html/attr "name" "q")
+                      (html/attr "placeholder" "Find note or header…")
+                      (html/attr "autocomplete" "off")
+                      (html/attr "hx-get" "/partials/notes-search")
+                      (html/attr "hx-trigger" "input changed delay:200ms, search")
+                      (html/attr "hx-target" "next .ol-find-results")
+                      (html/attr "hx-swap" "outerHTML")
+                      (html/attr "hx-include" "this"))))
+                (html/div
+                  (html/attr "class" "ol-find-results")
+                  (html/div
+                    (html/attr "class" "ol-find-empty")
+                    "Type to find a note or header…"))))))))))
+
+;; Refile typeahead — same partial as find, mode=refile. Exact slug still works.
+;; BORGE-1785603757: never enumerate the garden on page render.
 (define notes/ui/refile-modal
   (lambda
     (slug)
@@ -3937,42 +4322,75 @@
             "refile")
           (html/tag
             "div"
-            (html/attr "class" "ol-refile-body")
-            (html/form
-              "POST"
-              "/notes"
-              (html/attr "class" "ol-refile")
-              (html/join
-                (list
-                  (html/hidden "action" "refile")
-                  (html/hidden "src_slug" (as-str slug))
-                  (html/void
-                    "input"
-                    (html/attrs
-                      (list
-                        (html/attr "type" "hidden")
-                        (html/attr "name" "node_id")
-                        (html/attr "id" "ol-refile-nid")
-                        (html/attr "value" "root"))))
-                  (html/label
-                    (html/attr "class" "ol-refile-label")
-                    "to slug ")
-                  (html/text-input
-                    "dst_slug"
-                    (html/attrs
-                      (list
-                        (html/attr "class" "ol-refile-sel")
-                        (html/attr "placeholder" "destination-slug")
-                        (html/attr "required" "required")
-                        (html/attr "autocomplete" "off"))))
-                  " "
-                  (html/button
-                    (html/attrs
-                      (list
-                        (html/attr "type" "submit")
-                        (html/attr "class" "ol-btn")
-                        (html/attr "title" "refile selected node")))
-                    "go"))))))))))
+            (html/attrs
+              (list
+                (html/attr "class" "ol-refile-body ol-find-wide")))
+            (html/join
+              (list
+                (html/void
+                  "input"
+                  (html/attrs
+                    (list
+                      (html/attr "type" "hidden")
+                      (html/attr "id" "ol-refile-nid")
+                      (html/attr "value" "root"))))
+                (html/void
+                  "input"
+                  (html/attrs
+                    (list
+                      (html/attr "type" "search")
+                      (html/attr "class" "ol-find-input")
+                      (html/attr "name" "q")
+                      (html/attr "placeholder" "destination note or header…")
+                      (html/attr "autocomplete" "off")
+                      (html/attr
+                        "hx-get"
+                        (string-append
+                          "/partials/notes-search?mode=refile&src="
+                          (as-str slug)))
+                      (html/attr "hx-trigger" "input changed delay:200ms, search")
+                      (html/attr "hx-target" "next .ol-find-results")
+                      (html/attr "hx-swap" "outerHTML")
+                      (html/attr "hx-include" "this"))))
+                (html/div
+                  (html/attr "class" "ol-find-results")
+                  (html/div
+                    (html/attr "class" "ol-find-empty")
+                    "Type a destination note or header…"))
+                (html/form
+                  "POST"
+                  "/notes"
+                  (html/attr "class" "ol-refile")
+                  (html/join
+                    (list
+                      (html/hidden "action" "refile")
+                      (html/hidden "src_slug" (as-str slug))
+                      (html/void
+                        "input"
+                        (html/attrs
+                          (list
+                            (html/attr "type" "hidden")
+                            (html/attr "name" "node_id")
+                            (html/attr "class" "ol-refile-nid-mirror")
+                            (html/attr "value" "root"))))
+                      (html/label
+                        (html/attr "class" "ol-refile-label")
+                        "or slug ")
+                      (html/text-input
+                        "dst_slug"
+                        (html/attrs
+                          (list
+                            (html/attr "class" "ol-refile-sel")
+                            (html/attr "placeholder" "destination-slug")
+                            (html/attr "autocomplete" "off"))))
+                      " "
+                      (html/button
+                        (html/attrs
+                          (list
+                            (html/attr "type" "submit")
+                            (html/attr "class" "ol-btn")
+                            (html/attr "title" "refile selected node")))
+                        "go"))))))))))))
 
 (define notes/ui/toolbar
   (lambda
@@ -4002,6 +4420,7 @@
           (notes/ui/tb-btn "move-up" "up")
           (notes/ui/tb-btn "move-down" "dn")
           (notes/ui/tb-btn "delete" "del")
+          (notes/ui/find-modal)
           (notes/ui/refile-modal slug)
           (html/form
             "POST"
@@ -4209,6 +4628,14 @@
     (html/join
       (list
         (notes/tree/style)
+        (html/div
+          (html/attr "class" "ol-find-bar")
+          (html/join
+            (list
+              (notes/ui/find-modal)
+              (html/span
+                (html/attr "class" "muted")
+                "Ctrl/Cmd-K"))))
         (html/h1 "Notes")
         (html/p*
           (html/attr "class" "muted")
@@ -4222,7 +4649,10 @@
               (html/a "/notes" "All folders"))))
         (notes/ui/create-form)
         (html/h2 "Folders")
-        (notes/ui/folders-html)))))
+        (notes/ui/folders-html)
+        (notes/ui/find-script)))))
 
 (route "/partials/notes-tree" "notes/ui/tree-partial")
+(route "/partials/notes-search" "notes/ui/search-partial")
+(route "/partials/notes-node-op" "notes/outline/node-op")
 (route "/notes" "notes/page")

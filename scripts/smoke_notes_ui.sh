@@ -102,6 +102,32 @@ after=$(jval "(str (count (outline/kids (notes/doc/outline (notes/doc/get \"$SLU
 [ "${after:-0}" -lt "${before:-0}" ] || fail "delete did not shrink kids $before->$after"
 ok "delete $before->$after"
 
+echo "== N9 notes-search partial (search-modal) =="
+code=$(curl -sS -b "$COOKIE" -o "$OUT/search-empty.html" -w '%{http_code}' \
+  "$PP_URL/partials/notes-search?q=")
+[ "$code" = "200" ] || fail "search empty HTTP $code"
+grep -q 'ol-find-results' "$OUT/search-empty.html" || fail "search empty missing results container"
+ok "search empty 200"
+
+# Ensure fixture title is findable via Postgres tree search (not garden enum).
+j "(notes/doc/upsert \"$SLUG\" \"UI Fixture\" (outline/node \"root\" \"UI Fixture\") \"\" \"note\" \"\")" >/dev/null
+code=$(curl -sS -b "$COOKIE" -o "$OUT/search-hit.html" -w '%{http_code}' \
+  "$PP_URL/partials/notes-search?q=Fixture")
+[ "$code" = "200" ] || fail "search hit HTTP $code"
+grep -q "slug=$SLUG" "$OUT/search-hit.html" || fail "search hit missing slug link"
+grep -q 'ol-find-hit' "$OUT/search-hit.html" || fail "search hit missing hit row"
+ok "search hit Fixture"
+
+code=$(curl -sS -b "$COOKIE" -o "$OUT/search-none.html" -w '%{http_code}' \
+  "$PP_URL/partials/notes-search?q=zzznomatch999")
+[ "$code" = "200" ] || fail "search none HTTP $code"
+grep -q 'No matches' "$OUT/search-none.html" || fail "search none missing empty state"
+ok "search none"
+
+grep -q 'ol-find-modal' "$OUT/show.html" || fail "show page missing find modal"
+grep -q 'partials/notes-search' "$OUT/show.html" || fail "show page missing search hx-get"
+ok "show page find chrome"
+
 echo "== screenshots (optional) =="
 if [ -x "$CHROME" ]; then
   # cookie for chromium: convert netscape jar is hard; use --dump-dom after

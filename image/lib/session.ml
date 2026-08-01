@@ -900,10 +900,13 @@ and seed_one (t : t) (name : string) : unit =
     outline before notes, …). Any other [libs/<name>/lib.pp] is appended
     alphabetically so adding a package no longer requires an OCaml edit. *)
 and seed_package_priority : string list =
-  [ "std"; "weather"; "ui"; "layout"; "welcome"; "ai"; "outline"
-  ; "structed"; "notes"; "signup"; "todo"; "contacts"; "plan"; "chat"
-  ; "bookmarks"; "calendar"; "workout"; "flashcards"; "bible"; "dabar"
-  ; "bi"; "ref"; "verify" ]
+  (* css before notes: notes/tree-css evaluates (css/sheet …) at define
+     time; if css is unbound the notes load aborts mid-file and routes
+     like /partials/notes-search never seed (notes.search-modal). *)
+  [ "std"; "weather"; "ui"; "layout"; "welcome"; "ai"; "css"; "html"
+  ; "list"; "outline"; "structed"; "notes"; "signup"; "todo"; "contacts"
+  ; "plan"; "chat"; "bookmarks"; "calendar"; "workout"; "flashcards"
+  ; "bible"; "dabar"; "bi"; "ref"; "verify" ]
 
 and discover_seed_packages () : string list =
   let preferred = seed_package_priority in

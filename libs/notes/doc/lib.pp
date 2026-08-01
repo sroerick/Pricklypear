@@ -245,18 +245,19 @@
         ((p (dict-get (cdr row) "_path")))
         (if (null? p) "" (as-str p))))))
 
+;; Postgres-backed garden search (notes.search-modal / BORGE-1785605474).
+;; Returns list of hit JSON strings — never enumerates the garden in Nopales.
 (define notes/doc/search
   (lambda
     (q)
     (let
-      ((needle (as-str q)))
-      (list/filter
-        (lambda
-          (row)
-          (string-contains?
-            (as-str (dict-get (cdr row) "title"))
-            needle))
-        (notes/doc/list)))))
+      ((needle (string-trim (as-str q))))
+      (if
+        (string-eq needle "")
+        (list)
+        (list/map
+          (lambda (j) (if (null? j) "{}" (as-str j)))
+          (tree/search-text needle 20))))))
 
 (define notes/doc/set-folder
   (lambda
