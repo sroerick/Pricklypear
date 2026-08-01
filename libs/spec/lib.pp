@@ -457,3 +457,145 @@
   "Private GET /spec handler — phone-readable package health.")
 
 (route "/spec" "spec/page")
+
+;; ---- /book/<pkg> (habitat-workflow.book-view) ----
+;; Kernel routes GET /book/<pkg> → (spec/book-page); pkg from request-path.
+
+(define spec/path-pkg
+  (lambda (path)
+    (let ((p (as-str path))
+          (prefix "/book/"))
+      (if (spec/starts-with? p prefix)
+          (substring p 6 (- (string-length p) 6))
+          "")))
+  "Extract package name from /book/<pkg> path.")
+
+(define spec/hole-html
+  (lambda (name)
+    (html/tag
+      "div"
+      (html/attrs
+        (list
+          (html/attr "class" "spec-hole")
+          (html/attr "style"
+            "border:2px dashed #c44;padding:.5rem;margin:.4rem 0;background:#2a1515;color:#f88;")))
+      (string-append
+        "∅ unresolved binding: "
+        (html-escape (as-str name))
+        " — drift-as-rendering")))
+  "Visible styled hole for missing binding refs.")
+
+(define spec/binding-inline-html
+  (lambda (name)
+    (let ((n (as-str name))
+          (src (function-source (as-str name)))
+          (doc (function-doc (as-str name))))
+      (if (null? src)
+          (spec/hole-html n)
+          (html/tag
+            "div"
+            (html/attr "class" "spec-binding")
+            (html/join
+              (list
+                (html/tag "h3" ""
+                  (html/a
+                    (string-append "/binding/" n)
+                    (html-escape n)))
+                (if (null? doc)
+                    (html/p* (html/attr "class" "muted") "(no function-doc)")
+                    (html/p (html-escape (as-str doc))))
+                (html/pre (html-escape (as-str src)))))))))
+  "Inline one binding's doc + source, or a hole.")
+
+(define spec/node-bindings-html
+  (lambda (n)
+    ;; Body only — titles like "spec/todo" would false-positive as bindings.
+    (let ((toks (spec/unique (spec/tokens-from-text (outline/body n)))))
+      (if (null? toks)
+          ""
+          (html/join (list/map spec/binding-inline-html toks)))))
+  "Render binding inlines for tokens found in a node body.")
+
+(define spec/outline-chapter-html
+  (lambda (n depth)
+    (let ((title (html-escape (as-str (outline/title n))))
+          (body (html-escape (as-str (outline/body n))))
+          (tag
+            (if (= depth 0) "h1"
+                (if (= depth 1) "h2"
+                    (if (= depth 2) "h3" "h4"))))
+          (kids (outline/kids n))
+          (bind-html (spec/node-bindings-html n)))
+      (html/tag
+        "section"
+        (html/attr "class" "spec-chapter-node")
+        (html/join
+          (list
+            (html/tag tag "" title)
+            (if (string-eq body "")
+                ""
+                (html/p body))
+            bind-html
+            (html/join
+              (list/map
+                (lambda (k) (spec/outline-chapter-html k (+ depth 1)))
+                kids)))))))
+  "Walk outline; inline binding refs under each node.")
+
+(define spec/book-index
+  (lambda ()
+    (html/page
+      (list
+        (html/h1 "Package book")
+        (html/p* (html/attr "class" "muted")
+                 "Spec docs as chapters. Drift shows as holes.")
+        (html/ul
+          ""
+          (html/join
+            (list/map
+              (lambda (p)
+                (html/li
+                  ""
+                  (html/a
+                    (string-append "/book/" (as-str p))
+                    (as-str p))))
+              (spec/packages-with-docs))))
+        (html/p*
+          (html/attr "class" "muted")
+          (html/a "/spec" "← /spec health")))))
+  "GET /book index of packages with spec docs.")
+
+(define spec/book-page
+  (lambda ()
+    (let ((path (request-path))
+          (pkg (spec/path-pkg (request-path))))
+      (if (string-eq (as-str pkg) "")
+          (spec/book-index)
+          (let ((d (spec/doc pkg)))
+            (if (null? d)
+                (html/page
+                  (list
+                    (html/h1 (string-append "/book/" (as-str pkg)))
+                    (html/p* (html/attr "class" "muted")
+                             "No spec doc — create notes slug spec/<pkg>.")
+                    (html/tag "p" "" (html/a "/book" "← book index"))
+                    (html/tag "p" "" (html/a "/spec" "/spec health"))))
+                (let ((ol (car (cdr (cdr (cdr d)))))
+                      (title (as-str (car (cdr (cdr d))))))
+                  (html/page
+                    (list
+                      (html/p*
+                        (html/attr "class" "muted")
+                        (html/join
+                          (list
+                            (html/a "/book" "book")
+                            " · "
+                            (html/a "/spec" "spec health")
+                            " · "
+                            (html/a
+                              (string-append "/notes?slug=spec/" (as-str pkg))
+                              (string-append "spec/" (as-str pkg))))))
+                      (spec/outline-chapter-html ol 0)))))))))
+  "Private GET /book/<pkg> — chapter with inlined binding doc+source.")
+
+(route "/book" "spec/book-page")
