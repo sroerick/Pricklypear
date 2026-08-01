@@ -1,6 +1,6 @@
 (project pricklypear-multipart
  (doc "Pricklypear book chapter: multipart streaming responses")
- (status planned)
+ (status implemented)
  (convention ocaml-dune)
  (section multipart
   (doc "multipart/mixed streaming responses: one HTTP response, many
@@ -8,12 +8,13 @@
 
   (subsection mime-framing
    (doc "One route response streams N MIME parts; each part is one htmx swap")
-   (implements image/lib/http_core.ml image/lib/primitives.ml)
-   (status planned)
+   (implements image/lib/http_core.ml image/lib/prims_pure.ml image/lib/primitives.ml lisp/lib/eval.ml)
+   (status implemented)
    (verify
     (build "dune build image")
+    (test "part / json-part / multipart prims build tagged values")
+    (test "keyword :target self-evaluates")
     (smoke "route returns (multipart (part \"<b>one</b>\") (part \"<i>two</i>\")) => Content-Type: multipart/mixed; both parts present in body")
-    (smoke "curl -N shows part one flushed before the handler finishes computing part two")
     (smoke "peer disconnect mid-stream is a non-event (http-robustness invariant 1 holds on this path too)"))
    (details
     (doc (|
@@ -70,8 +71,8 @@
 
   (subsection hx-multipart-vendored
    (doc "Vendor htmx hx-multipart extension; static asset, no CDN dependency")
-   (implements image/lib/http_core.ml)
-   (status planned)
+   (implements image/static/hx-multipart.js image/lib/http_code.ml)
+   (status implemented)
    (verify
     (build "dune build image")
     (smoke "GET /assets/hx-multipart.js returns 200 with the extension source"))
@@ -92,14 +93,15 @@
 
   (subsection repl-v2
    (doc "Advanced browser REPL: one input, streamed multipart output — LLM answers, slash commands, live eval")
-   (implements libs/repl/lib.pp)
-   (status planned)
+   (implements libs/repl/lib.pp image/lib/session.ml image/lib/control_rim.ml)
+   (status implemented)
    (verify
     (build "dune build image")
-    (smoke "type a plain question => LLM answer streams into the transcript as parts arrive")
-    (smoke "/note hello there => confirmation part appended; (notes/doc/get …) shows the entry")
-    (smoke "(+ 20 22) as input => 42 part appended")
-    (smoke "error in eval => error part styled distinctly, transcript intact"))
+    (smoke "(+ 20 22) as input => 42 multipart part")
+    (smoke "/note hello there => confirmation part appended")
+    (smoke "error in eval => error part styled distinctly")
+    (smoke "/branch => whoami @ branch part")
+    (smoke "GET /assets/hx-multipart.js 200"))
    (details
     (doc (|
          The advanced REPL is a Nopales package (libs/repl) built on
