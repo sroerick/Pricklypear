@@ -230,7 +230,7 @@
   )
   (subsection book-view
    (doc "The literate inversion: spec doc outlines own narrative order; bindings inline underneath — drift becomes rendering")
-   (status planned)
+   (status implemented)
    (verify
     (smoke "GET /book/todo renders the spec doc outline with referenced bindings' doc + source inlined")
     (smoke "a spec doc referencing a renamed binding renders a visible hole instead of stale prose"))
