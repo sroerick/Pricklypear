@@ -4601,15 +4601,12 @@
 (define notes/ui/tree-children-html
   (lambda
     (path root)
-    (let
-      ((kids (tree/list (as-str path) 1 50000)))
-      (if
-        (null? kids)
-        (html/p* (html/attr "class" "muted") "(empty)")
-        (html/join
-          (list/map
-            (lambda (n) (notes/ui/render-child n root))
-            kids))))))
+    ;; OCaml-side render: large folders (3k+ notes) blow the Nopales
+    ;; eval budget if we map/join HTML here. tree/children-html also
+    ;; expands notes that own subfolders (e.g. garden.bible → characters).
+    ;; Returns plain HTML string (not render-html marked) so callers can
+    ;; nest it or mark once.
+    (tree/children-html (as-str path))))
 
 (define notes/ui/tree-partial
   (lambda

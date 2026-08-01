@@ -422,6 +422,23 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
           (Pricklypear_lisp.Ast.VStr
                "tree/folder-index: [] | prefix"));
 
+  (* (tree/children-html [prefix]) -> HTML string of notes-tree children.
+     OCaml-side so large folders (3k+) do not blow the eval budget.
+     Caller wraps with (render-html …) for raw emission. *)
+  register_crud "tree/children-html"
+    (fun args ->
+      let garden = Tree_store.garden_root ~user:(actor ()) in
+      let prefix =
+        match args with
+        | [] -> garden
+        | [ Pricklypear_lisp.Ast.VStr p ] -> p
+        | _ -> ""
+      in
+      if prefix = "" then
+        (Pricklypear_lisp.Ast.VStr "tree/children-html: [] | prefix")
+      else
+        Crud.tree_children_html t.store ~prefix ~garden_root:garden ());
+
   (* (tree/search-text needle [limit]) or (tree/search-text prefix needle [limit])
      -> list of hit JSON (slug/title/node_id/header_path/matched/rank).
      Default prefix = current garden root. ILIKE over note title/tags/slug and

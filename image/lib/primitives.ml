@@ -309,6 +309,7 @@ let prim_summary (name : string) : string =
   | "tree/path-label" -> "sanitize string to ltree-safe label"
   | "tree/garden-root" -> "data.note.u.<user> path prefix"
   | "tree/folder-index" -> "distinct folder paths under prefix (SQL dedup)"
+  | "tree/children-html" -> "budget-safe HTML for notes-tree children under path"
   | "extract-links" -> "parse [[wiki]] / [[slug|label]] from body → list of pairs"
   | "render-links" -> "body with [[wiki]]/[[media:]] → HTML (budget-safe)"
   | "budget-remaining" -> "steps left in current eval budget"
