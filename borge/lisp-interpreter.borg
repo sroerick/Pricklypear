@@ -499,95 +499,81 @@
 
   (subsection errors-and-locations
    (doc "Structured interpreter errors with source locations; catch surface for packages")
-   (status planned)
+   (status implemented)
+   (implements lisp/lib/ast.ml lisp/lib/eval.ml lisp/lib/reader.ml image/lib/http_pages.ml image/lib/agent_tools.ml)
    (verify
     (test "parse error includes line:col")
     (test "unbound var error includes name and optional span")
     (test "guard/with-handlers catches User_error and continues")
-    (smoke "/api/eval error JSON includes loc fields when available"))
+    (test "guard does not catch Budget_exceeded")
+    (smoke "/api/eval error JSON includes kind and loc fields when available"))
    (details
     (doc (|
-         ROADMAP: Phase 1 (locations) + Phase 2 (catch surface).
+         SHIPPED SURFACE (v1)
 
-         ==========================================================
-         PROBLEM
-         ==========================================================
-           Today many failures are bare strings / Interp_error without
-           a stable shape. Agents and humans cannot reliably:
-             - jump to the offending form
-             - catch and recover in Nopales
-             - distinguish unbound vs type vs prim vs budget
+         Host signal remains OCaml Interp_error. Every common failure
+         has a stable kind via interp_error_kind (snake_case):
+           unbound_var | not_a_function | arity_mismatch |
+           wrong_arg_count | type_mismatch | budget_exceeded |
+           prim_error | parse_error | user_error
 
-         ==========================================================
-         PHASE 1 — ERROR VALUES + LOCATIONS
-         ==========================================================
+         type interp_error =
+           | Unbound_var of string
+           | Not_a_function of value
+           | Arity_mismatch of string * int * int
+           | Wrong_arg_count of string * int * int
+           | Type_mismatch of string * value
+           | Budget_exceeded
+           | Prim_error of string * string
+           | Parse_error of string * int * int  (* msg, line, col *)
+           | User_error of string
 
-         A) Keep OCaml Interp_error as the host signal, but ensure
-            every raise site can carry optional location:
-              type loc = { source: string option; line: int; col: int }
-                (* source = function name, "repl", "load-string", path *)
+         Locations:
+           - Reader_error / Parse_error carry line:col (reader state).
+           - Unbound_var carries the name; optional span on every expr
+             is deferred (not required for v1 catch/API).
+           - interp_error_loc returns Some (line,col) for Parse_error
+             and None otherwise.
 
-         B) Reader already has line/col — propagate into Parse_error
-            and into expr spans IF cheap (optional span on expr is
-            a larger change; minimum is error-time loc from reader
-            state + current define name from session).
+         /api/eval error JSON (additive fields; .error always present):
+           { ok: false, error: "…", kind: "unbound_var",
+             name: "foo",            ; when Unbound_var
+             line: 12, col: 4 }      ; when loc known
+         Old clients that only read .error keep working.
 
-         C) /api/eval error JSON (and REPL print):
-              { ok: false, error: "unbound: foo",
-                kind: "unbound_var", name: "foo",
-                line: 12, col: 4, source: "ui/home" }
-            Fields optional when unknown; never break old clients
-            that only read .error string.
+         CATCH SURFACE — special form guard (not with-handlers):
+           (guard handler-lambda body…)
+           Handler is a 0- or 1-arg lambda. On Interp_error (except
+           Budget_exceeded, which always re-raises), the 1-arg form
+           receives a tagged list:
+             (error <message-str> <kind-symbol>)
+           Nested guard is OK. Handler return value becomes the
+           result of the guard form.
 
-         D) Budget_exceeded, arity, type mismatch get stable kind
-            tags (snake_case strings).
+         (error msg) | (error kind msg):
+           raises User_error. Kind+msg concatenates as "kind: msg"
+           in the message string; structured kind on the OCaml side
+           remains user_error (v1).
 
-         ==========================================================
-         PHASE 2 — CATCH IN LISP
-         ==========================================================
-
-         Special form (pick one name; prefer guard):
-
-           (guard
-             (lambda (err)  ; err is a dict-like or tagged list
-               …handler value or re-raise…)
-             body…)
-
-         Or Scheme-ish:
-           (with-handlers ((pred handler) …) body…)
-
-         v1 contract:
-           - Catches User_error and Prim_error wrapped as data
-           - Does NOT catch Budget_exceeded by default (or only
-             if pred says so) — budgets stay a hard leash
-           - Handler runs in the same env; must return a value
-           - Nested guard OK
-
-         (error msg) or (error kind msg) prim/special:
-           raises User_error with optional kind for handlers.
-
-         ==========================================================
          RELATED — image.dnu-stubs (product holes, not catch)
-         ==========================================================
-         doesNotUnderstand-style stub+callers UX lives in
-         image.dnu-stubs. It reuses unbound_var kind/name fields
-         from Phase 1 JSON but does not replace guard/catch.
-         Coordinate: stable unbound_var shape first; stubs second.
+           doesNotUnderstand-style stub+callers UX reuses unbound_var
+           kind/name fields from this JSON but does not replace guard.
 
-         ==========================================================
+         DEFERRED (not blocking implemented)
+           - Full loc = {source; line; col} on every raise site
+           - Optional span field on expr AST
+           - Stack traces as first-class lists
+           - CL-style restarts / with-handlers multi-pred dispatch
+
          NON-GOALS
-         ==========================================================
-           - Full CL condition system / restarts
-           - Stack traces as first-class list (nice-to-have later)
-           - Catching OCaml segfaults / host bugs
+           - Catching host bugs / OCaml exceptions unrelated to eval
+           - Full CL condition system
 
-         ==========================================================
          SUCCESS
-         ==========================================================
-           Phase 1: every common eval failure has kind + message;
-           locations present for read/load-string paths.
-           Phase 2: a lib can guard a fallible get/parse and
-           render a friendly HTML error without killing the page.
+           Common eval failures expose kind + message; parse/read
+           paths carry line:col; packages can guard fallible work
+           and render a friendly value without killing the page;
+           budgets remain an uncatchable hard leash by default.
     |))
    )
   )

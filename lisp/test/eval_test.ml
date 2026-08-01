@@ -947,6 +947,83 @@ let dialect_tests = [
         "(guard (lambda (e) 99) (error \"boom\"))"
     in
     Alcotest.(check string) "99" "99" (Reader.pp_value got));
+  ("guard handler receives error tagged list", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let got =
+      Eval.eval_string ~prims env
+        "(guard (lambda (e) e) (error \"boom\"))"
+    in
+    match got with
+    | Ast.VList [Ast.VSymbol "error"; Ast.VStr msg; Ast.VSymbol "user_error"] ->
+        Alcotest.(check string) "msg" "boom" msg
+    | other -> Alcotest.failf "guard err shape: %s" (Reader.pp_value other));
+  ("guard does not catch Budget_exceeded", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    ignore
+      (Eval.eval_string ~prims env
+         "(define loop (lambda () (loop)))");
+    let raised =
+      try
+        let budget = Eval.make_budget ~limit:50 () in
+        ignore
+          (Control.run_sync ~prims (fun () ->
+              Eval.eval ~budget ~prims:Eval.empty_prims env
+                (Reader.read_one
+                   "(guard (lambda (e) 0) (loop))")));
+        false
+      with
+      | Ast.Interp_error Ast.Budget_exceeded -> true
+      | _ -> false
+    in
+    Alcotest.(check bool) "budget escapes guard" true raised);
+  ("parse error includes line:col", `Quick, fun () ->
+    (match
+       try
+         ignore (Reader.read_one "(foo");
+         None
+       with
+       | Reader.Reader_error (msg, line, col) -> Some (msg, line, col)
+       | Ast.Interp_error (Ast.Parse_error (msg, line, col)) ->
+           Some (msg, line, col)
+       | _ -> None
+     with
+     | Some (_msg, line, col) ->
+         Alcotest.(check bool) "line positive" true (line >= 1);
+         Alcotest.(check bool) "col positive" true (col >= 1);
+         (match Ast.interp_error_loc (Ast.Parse_error ("x", line, col)) with
+          | Some (l, c) ->
+              Alcotest.(check int) "loc line" line l;
+              Alcotest.(check int) "loc col" col c
+          | None -> Alcotest.fail "interp_error_loc missing")
+     | None -> Alcotest.fail "expected parse error with loc"));
+  ("unbound var kind and name", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    (match
+       try
+         ignore (Eval.eval_string ~prims env "missing-name");
+         None
+       with Ast.Interp_error e -> Some e
+     with
+     | Some (Ast.Unbound_var name as e) ->
+         Alcotest.(check string) "name" "missing-name" name;
+         Alcotest.(check string) "kind" "unbound_var" (Ast.interp_error_kind e)
+     | Some e ->
+         Alcotest.failf "wrong error: %s" (Ast.pp_interp_error e)
+     | None -> Alcotest.fail "expected Unbound_var"));
+  ("error kinds are stable snake_case tags", `Quick, fun () ->
+    Alcotest.(check string) "budget" "budget_exceeded"
+      (Ast.interp_error_kind Ast.Budget_exceeded);
+    Alcotest.(check string) "user" "user_error"
+      (Ast.interp_error_kind (Ast.User_error "x"));
+    Alcotest.(check string) "arity" "arity_mismatch"
+      (Ast.interp_error_kind (Ast.Arity_mismatch ("f", 1, 2)));
+    Alcotest.(check string) "parse" "parse_error"
+      (Ast.interp_error_kind (Ast.Parse_error ("bad", 1, 2)));
+    Alcotest.(check string) "prim" "prim_error"
+      (Ast.interp_error_kind (Ast.Prim_error ("p", "m"))));
 ]
 
 (* --- public-route gate (Route_gate) ---
