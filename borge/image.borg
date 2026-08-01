@@ -227,7 +227,7 @@
 
   (subsection http-robustness
    (doc "HTTP server robustness under load, peer disconnect, and DB liveness")
-   (implements image/lib/http.ml image/lib/http_core.ml image/lib/http_agent.ml image/lib/http_data.ml image/lib/http_branches.ml image/lib/session.ml image/lib/session_types.ml image/lib/io_eio.ml image/lib/store_db.ml scripts/rc.d/pricklypear scripts/openbsd/pricklypear-watchdog.ksh scripts/openbsd/pricklypear-promote.ksh)
+   (implements image/lib/http.ml image/lib/http_core.ml image/lib/http_agent.ml image/lib/http_data.ml image/lib/http_branches.ml image/lib/session.ml image/lib/session_types.ml image/lib/io_eio.ml image/lib/store_db.ml image/lib/request_context.ml scripts/rc.d/pricklypear scripts/openbsd/pricklypear-watchdog.ksh scripts/openbsd/pricklypear-promote.ksh)
    (status partial)
    (verify
     (build "dune build image")
@@ -369,8 +369,8 @@
              no longer flip an in-flight personal-branch page.
 
   (subsection per-request-context
-   (doc "Request_context.t + prim ABI change to eliminate cotenant race")
-   (status planned)
+   (doc "Request_context.t + dynamic binding to eliminate cotenant race")
+   (status partial)
    (implements
      image/lib/request_context.ml
      image/lib/http.ml
@@ -383,15 +383,24 @@
      (test "image/test/http_robust_env_test.ml extended for manifest isolation"))
    (details
     (doc (|
-         Required code:
-         - Request_context.t record (manifest, env, routes, store, request)
-         - Prim ABI: prim_fn = Request_context.t -> value list -> value Lwt.t
-         - After attach in http.ml: build context, release mutex, pass to page_fn
-         - All prim registrations updated to take context first arg
-         - whoami/current-branch/author checks read context.manifest
-         - Route dispatch and env lookup use context.routes / context.env
-         - Session.t still used for attach gate + rehydrate/checkout_to
-         - Phase 1: only manifest isolated; env/routes in later phases
+         Shipped mechanism (direct-style, post-H1):
+         - Request_context.t record (manifest snapshot, env, routes, store, request)
+           in image/lib/request_context.ml.
+         - Request_context.current is a dynamically-bound per-request
+           snapshot; prims read the snapshot, not the live shared
+           Session.t ref. with-public-write re-binds an elevated
+           context for the body so static gate and runtime guard agree.
+         - Route dispatch reads context.routes; page work after the
+           attach gate runs against the snapshot, so a concurrent
+           anonymous attach cannot swap the manifest mid-render.
+         - Session.t still used for attach gate + rehydrate/checkout_to.
+         - The earlier plan to change the prim ABI to
+           Request_context.t -> value list -> value Lwt.t is retired:
+           H1 made the prim ABI direct-style (prim_fn = value list ->
+           value, Control.perform_prim) and the context travels by
+           dynamic binding instead of an explicit first argument.
+         - Remaining: full env/routes snapshot isolation depth and the
+           audit that every prim reads the snapshot (phase 2).
     |))
    )
 
@@ -522,7 +531,7 @@
   )
   (subsection primitives-layer
    (doc "image/lib/primitives.ml: the impure fns registered at boot")
-   (implements image/lib/primitives.ml image/lib/crud.ml image/lib/session.ml image/lib/prims_pure.ml)
+   (implements image/lib/primitives.ml image/lib/crud.ml image/lib/session.ml image/lib/prims_pure.ml image/lib/prims_db.ml image/lib/prims_net.ml image/lib/prims_media.ml image/lib/prims_graph.ml image/lib/prims_request.ml image/lib/call_graph.ml)
    (status implemented)
    (verify
     (build "dune build image && cd lisp && dune build && dune runtest")

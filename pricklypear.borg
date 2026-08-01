@@ -121,8 +121,9 @@
 
    Three pillars (as the system runs today):
 
-   1. One OCaml unix image binary. HTTP (httpaf-lwt-unix + pure-html
-      / htmx), optional line-protocol REPL, in-process auth, and Nopales
+   1. One OCaml unix image binary. HTTP (Httpun_eio default,
+      httpun-lwt-unix under PP_IO=lwt; pure-html / htmx),
+      optional line-protocol REPL, in-process auth, and Nopales
       eval live in a single process. Supervisor fleets, authd sidecars,
       and Mirage/Solo5 unikernel topology are retired for v1 (see
       single-image.borg; Solo5 remains an optional later hardening

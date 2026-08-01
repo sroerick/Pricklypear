@@ -1,11 +1,11 @@
 (project pricklypear-flashcards
  (doc "Pricklypear book chapter: flashcards — decks + spaced-repetition cards as Nopales + data_rows")
- (status planned)
+ (status implemented)
  (convention ocaml-dune)
  (section flashcards
   
   (doc "Decks, cards, study queue, FSRS-4.5 review, hypermedia UI, agent API")
-  (status planned)
+  (status implemented)
   (verify
    (build "dune build image")
    (smoke "(load-library \"flashcards\") installs flash/… and routes")
@@ -241,7 +241,7 @@
   )
   (subsection model
    (doc "flash-deck + flash-card data_rows; FSRS scheduling fields on card")
-   (status planned)
+   (status implemented)
    (implements libs/flashcards/lib.pp)
    (verify
     (smoke "(deftype …) via load; (flash/add) creates flash-card row")
@@ -250,7 +250,7 @@
   )
   (subsection srs
    (doc "Nopales scheduler flash/apply-rating; ratings again|hard|good|easy")
-   (status planned)
+   (status implemented)
    (implements libs/flashcards/lib.pp)
    (verify
     (smoke "new card good → due tomorrow or +1 day")
@@ -259,7 +259,7 @@
   )
   (subsection ui
    (doc "Routes /flashcards, deck, study; form POST ratings")
-   (status planned)
+   (status implemented)
    (implements libs/flashcards/lib.pp)
    (verify
     (smoke "GET /flashcards 200 after load-library")
@@ -267,7 +267,7 @@
   )
   (subsection agent-access
    (doc "pp_eval flash/… as the API")
-   (status planned)
+   (status implemented)
    (verify
     (smoke "pp_eval flash/decks and flash/due"))
 

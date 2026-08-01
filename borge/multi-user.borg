@@ -340,7 +340,7 @@
   )
   (subsection user-plan
    (doc "Unix-style .plan: short per-user status of what they intend to work on")
-   (status planned)
+   (status partial)
    (implements libs/plan/lib.pp)
    (verify
     (build "dune build image")

@@ -148,7 +148,7 @@
     (smoke "merge result string lists conflict names when target moved newer")
     (smoke "merge copies no type_defs and no view_bindings rows"))
   )
-  (subsection promote
+  (subsection agent-promote
    (doc "Agent promotes from its workshop into the parent human's personal")
    (status planned)
    (details
@@ -242,7 +242,7 @@
   (subsection package-updates
    (doc "Authority model: live Postgres Nopales, git kernel + vault, additive seed")
    (status partial)
-   (implements image/lib/session.ml image/lib/store.ml image/lib/loader.ml cli/bin/pp_sync.ml)
+   (implements image/lib/session.ml image/lib/store.ml image/lib/loader.ml cli/bin/pp_sync.ml common/lib/branch.ml common/lib/manifest.ml common/lib/protocol.ml)
    (details
     (doc (|
          ==========================================================
@@ -320,7 +320,7 @@
   )
   (subsection seed-policy
    (doc "Additive boot seed into system/main; explicit reseed may clobber")
-   (status planned)
+   (status implemented)
    (implements image/lib/session.ml image/lib/store.ml image/lib/loader.ml image/lib/primitives.ml)
    (details
     (doc (|
@@ -537,7 +537,7 @@
   (subsection land
    (doc "pp-sync land: promote + vault snapshot + git commit as one operator step")
    (status implemented)
-   (implements cli/bin/pp_sync.ml scripts/pp-sync.sh)
+   (implements cli/bin/pp_sync.ml scripts/pp-sync.sh cli/lib/pp_client.ml)
    (details
     (doc (|
          PROBLEM:
@@ -593,7 +593,7 @@
   )
   (subsection lisp-snapshot
    (doc "Clone habitat Nopales state into the git repo as vault/backup")
-   (status planned)
+   (status implemented)
    (implements image/lib/session.ml image/lib/primitives.ml cli/bin/pp_sync.ml)
    (details
     (doc (|
@@ -738,11 +738,11 @@
   )
   (subsection change-set
    (doc "Branch change set / transcript: what changed on this branch")
-   (status planned)
+   (status implemented)
    (implements image/lib/store.ml image/lib/http_branches.ml image/lib/session.ml)
    (verify
     (build "dune build image")
-    (smoke "GET /branches?ref=u/personal&view=changes lists own fns by updated_at")
+    (smoke "GET /changes?ref=u/personal lists own fns by updated_at")
     (smoke "(branch-changes) returns own function names + updated_at on current branch")
     (smoke "after define on personal, name appears at top of changes")
     (smoke "change row links to /edit and /bindings detail + parent diff when override"))

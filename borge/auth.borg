@@ -64,7 +64,7 @@
   )
   (subsection verification
    (doc "verify(cred) / lookup / mint / verify_token — the four pure functions")
-   (implements image/lib/auth_store.ml image/lib/auth_password.ml)
+   (implements image/lib/auth_store.ml image/lib/auth_password.ml common/lib/auth_types.ml)
    (status partial)
    (details
     (doc (|
@@ -80,29 +80,27 @@
          2. Auth: SELECT secret_data FROM credentials
             WHERE kind='password' AND user_id=
             (SELECT id FROM users WHERE username=$1).
-            argon2-verify against the presented
-            password. Return user_id or denied.
+            Verify against the stored password hash
+            (interim sha256$salt$digest; argon2id is
+            the declared target — see the chapter-level
+            security notes). Return user_id or denied.
          3. Auth logs to auth_log.
 
          TOKEN MINTING (after web login):
-         1. Auth: generate random token bytes (32B),
-            HMAC-sign with the session signing key
-            from the credentials row (stored alongside
-            the password hash), opaque_id = random,
-            signed = HMAC(opaque_id).
+         1. Auth: generate random token bytes (32B).
          2. Auth: INSERT INTO auth_sessions
-            (id=opaque_id, user_id, token_hash=signed,
+            (user_id, token_hash=sha256(token),
              expires_at=...).
-         3. Auth: return token = base64(opaque_id ||
-            signed). Client stores as cookie.
+         3. Auth: return the raw token. Client stores
+            it as the pp_session cookie (HttpOnly).
 
          TOKEN VERIFICATION (on web requests):
          1. Client sends token cookie. The image calls
-            auth.verify_token(token).
-         2. Auth: split token, recompute HMAC,
-            compare; if match, lookup auth_sessions row,
-            check not revoked and not expired. Return
-            user_id or denied.
+            Auth_store.verify_token(token).
+         2. Auth: sha256 the raw token, look up the
+            auth_sessions row by token_hash; check not
+            revoked and not expired. Return user_id or
+            denied.
          3. Auth logs to auth_log.
 
          API TOKEN VERIFICATION (for agents / pp_eval Bearer):
@@ -489,7 +487,7 @@
   )
   (subsection user-llm-keys
    (doc "Per-user LLM provider keys; session AI uses user key with env fallback")
-   (status planned)
+   (status implemented)
    (implements image/lib/auth_store.ml image/lib/llm_client.ml image/lib/session.ml image/lib/http_pages.ml)
    (verify
     (build "dune build image")
@@ -614,7 +612,7 @@
   )
   (subsection user-ssh-repl
    (doc "Per-user SSH public keys open an identity-bound Nopales REPL")
-   (status planned)
+   (status partial)
    (implements image/lib/auth_store.ml image/lib/repl_endpoint.ml)
    (verify
     (build "dune build image")
