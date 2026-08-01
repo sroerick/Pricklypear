@@ -862,9 +862,17 @@ let list_by_kind (conn : Store_db.conn) ~(prefix : string) ~(kind : string)
     in
     (List.filter_map node_of_row rows)
 
-(** Covering children under [prefix]: nodes under the prefix with no other
-    tree_nodes between them and the prefix. Handles both one-label children
-    (folder/note) and note outline roots at prefix.h.<nid> (two labels). *)
+(** Direct children under [prefix], index-friendly (one-tree.projections
+    CHILDREN-BY-LEVEL). Expressed as an nlevel predicate the ltree GiST
+    path index can drive — never a correlated NOT EXISTS anti-join over
+    the whole subtree (that form is O(subtree^2) and blocked /notes at
+    ~3000 notes).
+
+    - one-label children: nlevel = nlevel(prefix) + 1 (folders, notes)
+    - outline covering: nlevel = nlevel(prefix) + 2 under the literal
+      label [h] (note outline roots at prefix.h.<nid>, path grammar in
+      one-tree.tree-model). No intermediate node is required at
+      prefix.h. *)
 let list_children (conn : Store_db.conn) ~(prefix : string) ?(limit : int = 500)
     () : node list =
   if not (valid_path prefix) then []
@@ -872,10 +880,12 @@ let list_children (conn : Store_db.conn) ~(prefix : string) ?(limit : int = 500)
     let sql =
       "SELECT " ^ select_cols ^ " FROM tree_nodes n "
       ^ "WHERE n.path <@ $1::ltree AND n.path <> $1::ltree "
-      ^ "AND NOT EXISTS ( "
-      ^ "  SELECT 1 FROM tree_nodes mid "
-      ^ "  WHERE mid.path <@ $1::ltree AND mid.path <> $1::ltree "
-      ^ "    AND n.path <@ mid.path AND n.path <> mid.path "
+      ^ "AND ( "
+      ^ "  nlevel(n.path) = nlevel($1::ltree) + 1 "
+      ^ "  OR ( "
+      ^ "    nlevel(n.path) = nlevel($1::ltree) + 2 "
+      ^ "    AND subpath(n.path, nlevel($1::ltree), 1)::text = 'h' "
+      ^ "  ) "
       ^ ") "
       ^ "ORDER BY n.path::text ASC LIMIT $2"
     in
