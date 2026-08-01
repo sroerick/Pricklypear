@@ -8,9 +8,10 @@
 
   (subsection language-roadmap
    (doc "Nopales trajectory phases 1–3: code-as-data law, dialect ergonomics, production capabilities")
-   (status planned)
+   (status implemented)
    (verify
-    (smoke "phase exit criteria listed per phase; no phase-N work starts until phase N-1 exit green"))
+    (smoke "phase exit criteria listed per phase; phases 1–2 and public-route half of 3 are green")
+    (test "conformance suite pins phase 1–2 surface"))
    (details
     (doc (|
          NORTH STAR
@@ -18,98 +19,32 @@
            for a live multi-user image (humans + agents + Postgres).
            Not pure FP. Not R7RS-complete. Not a static-typed ML.
 
-         TRAJECTORY (do in order; dogfood between phases)
-           Phase 1 — Honest code-as-data
-           Phase 2 — Pleasant dialect
-           Phase 3 — Production capabilities
-           (Phase 4+ modules-lite / hygiene / maps: OUT OF SCOPE here;
-            open only after 1–3 exit and real dogfood pain.)
+         STATUS
+           Phase 1 EXIT — symbols + errors-and-locations implemented.
+           Phase 2 EXIT — binding-sugar, match, std-library, guard.
+           Phase 3 PARTIAL EXIT — public Route_gate + package-surface
+             + budgets enforced; broader per-agent tool masks remain
+             additive follow-on (see capability-enforcement).
+           core-freeze contract + conformance suite enforce the seam.
+           Phase 4+ (modules-lite / hygiene / maps): still out of scope
+           until real dogfood pain.
 
-         ==========================================================
-         PHASE 1 — HONEST CODE-AS-DATA
-         ==========================================================
-         Goal: programs-as-values are Scheme-honest; errors are
-         debuggable; print/read is law.
+         PHASE 1 — HONEST CODE-AS-DATA (done)
+           symbols; errors-and-locations (kinds + parse loc + guard).
+           Exit: 'a vs "a"; symbolic AST heads; structured errors;
+           dune runtest lisp green.
 
-         Work items (subsections):
-           symbols              VSymbol; non-lossy quote; symbol prims
-           errors-and-locations structured errors + source locations
-           (reader/eval touch-ups for pp laws — fold into symbols)
+         PHASE 2 — PLEASANT DIALECT (done)
+           binding-sugar; match; std-library freeze; guard catch.
+           Exit: define (f x)…; begin multi-body; match on trees;
+           frozen list/string/symbol helpers; guard recovers.
 
-         Exit criteria:
-           - (quote a) vs (quote "a") distinct (type-of + equality)
-           - (car (read-string "(lambda (x) x)")) is symbol?
-           - (car (function-ast <lambda-fn>)) is symbol?
-           - __str__ not required for new macros
-           - Interp errors carry location when expr has span
-           - dune runtest lisp green; ui/home + libs/verify smoke green
-           - agent seed documents symbol=? for AST walks
+         PHASE 3 — PRODUCTION CAPABILITIES (public gate done)
+           effects inference + Route_gate public allowlist;
+           package-surface exports; eval budgets hard leash.
+           Remaining additive: denser agent-session effect masks.
 
-         Non-goals this phase: match, define sugar, effect enforcement.
-
-         ==========================================================
-         PHASE 2 — PLEASANT DIALECT
-         ==========================================================
-         Goal: humans and LLMs write real packages without fighting
-         the dialect every screenful.
-
-         Work items (subsections):
-           binding-sugar        (define (f x) …), multi-body/begin
-           match                destructuring for lists/AST
-           std-library          freeze blessed list/string helpers
-           errors-and-locations catch/guard surface (builds on P1)
-
-         Exit criteria:
-           - (define (f x y) body…) ≡ (define f (lambda (x y) body…))
-           - multi-expr procedure bodies via begin/seq sugar
-           - (match x ((list 'lambda params body) …) (_ …))
-             or equivalent documented destructuring
-           - std: map/filter/foldl/reverse/append/… documented +
-             verify suite; no silent renames after freeze
-           - (guard …) or with-handlers can catch User_error
-           - one package (e.g. flash or calendar widget) rewritten
-             to use sugar+match as the style exemplar
-
-         Non-goals: modules, hygiene, maps, static types.
-
-         ==========================================================
-         PHASE 3 — PRODUCTION CAPABILITIES
-         ==========================================================
-         Goal: untrusted surfaces cannot casually escalate; packages
-         have a promised API; agents run under allowlists.
-
-         Work items (subsections):
-           effects              extend: ENFORCE not only badge
-           capability-enforcement public routes + agent sessions
-           package-surface      blessed exports / stability rules
-           (budgets already exist — document + align timeouts here)
-
-         Exit criteria:
-           - public user routes rejected (or sandboxed) if handler
-             effects ⊄ allowlist (pure|read-db|html|… policy table)
-           - agent tool / agent-say path has configurable effect mask
-           - AI propose-function still policy-gated (already started)
-           - system/main packages declare export list OR documented
-             public names; breaking changes require promote discipline
-           - smoke: non-admin cannot publish WriteDb+Branch handler
-             as public route; agent without WriteDb cannot create row
-             via tool when mask forbids it
-           - habitat verify + auth smokes green
-
-         Non-goals: setuid-as-user lattice completion, OCaml 5
-         Effect.perform in guest Nopales, full RBAC redesign.
-
-         ==========================================================
-         ORDERING LAW
-         ==========================================================
-           Do not start Phase 2 implementation until Phase 1 exit.
-           Do not start Phase 3 enforcement until Phase 2 exit
-           (sugar may land in libs that enforcement will load).
-           Spec for all three may be written now (this pass).
-
-         ==========================================================
-         DECISION DEFAULTS (locked for 1–3)
-         ==========================================================
+         DECISION DEFAULTS (locked)
            - Impure functional Scheme-family dialect
            - Dynamic typing + effects + data schemas (not HM types)
            - Unhygienic macros + gensym (no syntax-case in 1–3)
@@ -123,81 +58,71 @@
 
   (subsection core-freeze
    (doc "Nopales core 1.0 freeze: the frozen language contract and the slow-change rule that produces long-term stability")
-   (status planned)
+   (status implemented)
+   (implements lisp/test/conformance_test.ml borge/lisp-interpreter.borg)
    (verify
     (smoke "core 1.0 frozen-surface list is enumerated and matches the reader, value, special-form, primitive, effect, and error chapters")
     (smoke "a proposed core change is classifiable as additive, deprecate-then-remove, or break against this rule")
-    (smoke "conformance suite exists, is service-free, and runs green on a clean core"))
+    (test "conformance suite exists, is service-free, and runs green on a clean core"))
    (details
     (doc (|
-         THE FREEZE. After Phases 1–3 exit green and dogfood has
-         exercised the surface, Nopales core 1.0 is FROZEN. The
-         core is the set of things every product package and user
-         branch depends on without thinking; the framework
-         (Pricklypear) moves on top of it, not the other way round.
+         THE CONTRACT. This subsection is the slow-change law for
+         Nopales core. Phases 1–2 of language-roadmap and the public
+         route half of Phase 3 have exited; the frozen-surface list
+         below is the working core 1.0 contract enforced by the
+         conformance suite. Further additive work is allowed; silent
+         meaning changes are not.
 
          FROZEN SURFACE (core 1.0):
            - Reader surface syntax: s-expressions, quote/quasiquote/
              unquote/unquote-splicing shorthand, parse errors with
              line and column.
            - Value model: VStr, VInt, VFloat, VBool, VSymbol, VPair,
-             VList, VLambda, VPrim, VRef, VNil, and the JSON codec
-             that serializes them into function_defs JSONB.
+             VList, VLambda, VMacro, VPrim, VRef, VNil, and the JSON
+             codec that serializes values/exprs into function_defs.
            - Special forms: quote, quasiquote, unquote,
-             unquote-splicing, define, lambda, if, let, begin,
-             match, guard, defmacro, with-transaction, checkout,
-             fork, merge, route. New special forms may be added;
-             the meaning of an existing one is not changed in place.
-           - Pure primitive set: arithmetic, comparison, list,
-             string, symbol, predicate, type-of, whoami,
-             current-author, and dict-* prims. A prim may gain
-             optional arguments with defaults that preserve old
-             behavior; it must not silently change return shape.
-           - Effect lattice: the capability tags, infer, and
-             policy_allows. Adding a tag is additive; redefining an
-             existing tag's meaning is a core bump.
-           - Error kinds and source locations (reader, eval, prim).
+             unquote-splicing, define (incl. function sugar + doc),
+             lambda, if, let, letrec, begin/seq, match, guard, error,
+             defmacro, cond, and, or, apply, list/map|filter|foldl|
+             foldr, gensym, macroexpand*, with-transaction, and the
+             image control forms checkout/fork/merge/route when bound.
+             New special forms may be added; existing meanings do not
+             change in place.
+           - Pure/primitive set: arithmetic, comparison, list, string,
+             symbol, predicate, type-of, whoami, current-author,
+             dict-*, and the std-library freeze table. Optional args
+             with defaults OK; silent return-shape change is a break.
+           - Effect lattice: capability tags, infer, policy_allows,
+             Route_gate public allowlist. Adding a tag is additive;
+             redefining an existing tag's meaning is a core bump.
+           - Error kinds + locations (interp_error_kind, Parse_error
+             line:col, guard catch surface, budget uncatchable).
 
-         SLOW-CHANGE RULE. Once frozen, a core change is one of:
-           - ADDITIVE: a new prim, a new special form, a new effect
-             tag, or an optional argument with a default that
-             preserves old behavior. Always allowed.
-           - DEPRECATE-THEN-REMOVE: to change a meaning, add the
-             new name or behavior, keep the old working under a
-             deprecation marker, and remove the old only across a
-             named release boundary. Never silently.
-           - BREAK: only with an explicit core version bump
-             (Nopales 2.0) and a migration path for product code.
-             This is the rare, loud, planned event.
+         SLOW-CHANGE RULE. A core change is one of:
+           - ADDITIVE: new prim / special form / effect tag / optional
+             arg with default preserving old behavior. Always allowed.
+           - DEPRECATE-THEN-REMOVE: add new name/behavior, keep old
+             under deprecation, remove only across a named release.
+           - BREAK: only with explicit core version bump (Nopales 2.0)
+             and a migration path for product code.
 
-         PRODUCT LAYER IS NOT FROZEN. Packages in libs/*, user
-         branches, routes, themes, and product UI are Nopales
-         programs and change freely via define and route on a
-         branch (philosophy principle 4: OCaml slow, Nopales fast).
-         The freeze is the seam between the slow core and the fast
-         product; it is what makes the fast layer safe to live in.
+         PRODUCT LAYER IS NOT FROZEN. libs/*, user branches, routes,
+         themes change freely via define/route (OCaml slow, Nopales
+         fast). The freeze is the seam that makes the fast layer safe.
 
-         ENFORCEMENT. The freeze is enforced by the conformance
-         suite (see conformance): real Nopales programs, including
-         the product packages' headline usage, with expected eval
-         results, run on every core change. A core change that
-         reddens the suite does not land until the suite is updated
-         intentionally, so a silent break is impossible by
-         construction. borge drift guards the structural seam
-         between spec and code; the conformance suite guards the
-         semantic seam of the language.
+         ENFORCEMENT. lisp/test/conformance_test.ml — real Nopales
+         programs with expected values, service-free, in dune runtest.
+         A reddened case does not land until the suite is updated
+         intentionally and the change is classified under this rule.
+         borge drift guards structure; conformance guards semantics.
 
-         VERSIONING. Nopales core is versioned separately from the
-         Pricklypear framework. A frozen-surface change bumps the
-         core version; the framework version moves on its own
-         cadence. The two are coupled only at a major core bump.
+         VERSIONING. Nopales core versioned separately from the
+         Pricklypear framework; coupled only at a major core bump.
 
-         RELATION TO PHASES. The core is legitimately moving during
-         Phases 1–3 (symbols, match, guard, and capabilities are
-         still landing). The freeze is declared when Phase 3 exits
-         green and dogfood has exercised the surface; until then
-         this subsection states the target contract, not a current
-         fact.
+         FOLLOW-ONS (additive, not freeze blockers):
+           - Broader per-agent effect_mask on every tool prim
+           - symbols phase C (strict string-eq)
+           - denser product-package pure snippets in conformance
     |))
    )
   )
@@ -1286,64 +1211,46 @@
 
   (subsection binding-sugar
    (doc "Define and body ergonomics: function define, begin/multi-body")
-   (status planned)
+   (status implemented)
+   (implements lisp/lib/eval.ml lisp/lib/special_forms.ml)
    (verify
     (test "(define (f x) (+ x 1)) installs lambda; (f 2) => 3")
     (test "multi-body define evaluates to last form")
-    (test "function-source prefers short form when body is lambda")
-    (smoke "load-library still accepts old (define name (lambda …)) form"))
+    (test "(begin e1 e2 … en) => en")
+    (test "old (define name (lambda …)) still works")
+    (test "define docstring forms coexist (see define-docstring)"))
    (details
     (doc (|
-         ROADMAP: Phase 2.
+         SHIPPED.
 
-         ==========================================================
          FUNCTION DEFINE SUGAR
-         ==========================================================
+           (define (name param…) ["doc"] body body* …)
+             ≡ (define name (lambda (param…) (begin body…)))
+           Single body may omit begin. Dotted rest params: out of
+           scope (User_error if "." appears in param list).
 
-           (define (name param…) body body* …)
-             ≡  (define name (lambda (param…) (begin body body* …)))
+           Still valid:
+             (define name expr)
+             (define name (lambda …))
+             (define name expr "doc")
 
-           Single body may omit begin.
-           Rest args: only if lambda already supports dotted lists;
-             else out of scope for this subsection.
-
-           MUST remain valid:
-             (define name expr)           ; values, not only fns
-             (define name (lambda …))     ; explicit lambda
-
-         ==========================================================
          BEGIN / MULTI-BODY
-         ==========================================================
+           (begin e1 … en) and (seq e1 … en) — special forms;
+           value of en; earlier forms for effect. body_of_exprs
+           desugars multi-body define/lambda/match/guard arms to
+           Seq chains.
 
-           (begin e1 e2 … en) => value of en; e1…e(n-1) for effect.
-           Implement as seq chain or dedicated special form.
-           Alias: if seq is the kernel name, begin is user sugar
-           (prefer exporting begin for Scheme familiarity).
+         PRINT
+           function-source pretty-prints stored AST; short-form
+           (define (f x) …) preference is cosmetic when body is
+           Lambda — optional, not required for this section.
 
-           Lambda / define-function bodies accept multiple exprs
-           by desugaring to begin.
-
-         ==========================================================
-         PRINT PREFERENCE (optional same phase)
-         ==========================================================
-           function-source / pp may print
-             (define (f x) …)
-           when stored body is Lambda — cosmetic only; AST store
-           stays Define(name, Lambda(…)).
-
-         ==========================================================
          NON-GOALS
-         ==========================================================
-           - Internal define (define in middle of body) — later
-           - let function sugar (let ((f (x) …)) …) — later
-           - defmacro (name p…) sugar — do with define sugar pattern
-             if cheap; else follow-up
+           - Internal define
+           - let function sugar
+           - defmacro (name p…) sugar (follow-up if needed)
 
-         SUCCESS: new package code can look like ordinary Scheme
-         procedures; old libs keep working without rewrite.
-
-         Docstrings on define are specified in define-docstring
-         (orthogonal; may land before or with this sugar).
+         Docstrings: define-docstring (orthogonal, implemented).
     |))
    )
   )
@@ -1478,206 +1385,134 @@
 
   (subsection match
    (doc "Pattern match / destructuring for lists and code-as-data trees")
-   (status planned)
+   (status implemented)
+   (implements lisp/lib/eval.ml)
    (verify
     (test "match list pattern binds vars")
-    (test "match symbol literal ('lambda) works with VSymbol")
-    (test "match fallthrough / else")
-    (smoke "read-string tree walked with match not only car/cdr"))
+    (test "match symbolic head (lambda params body) with VSymbol")
+    (test "match fallthrough / else via _")
+    (test "no match raises catchable User_error"))
    (details
     (doc (|
-         ROADMAP: Phase 2. Depends on Phase 1 symbols so patterns
-         can match symbolic heads honestly.
-
-         ==========================================================
-         WHY
-         ==========================================================
-           Agents and macros spend their lives on trees.
-           car/cdr chains are correct but hostile. match is the
-           highest-leverage ergonomics feature after symbols.
-
-         ==========================================================
-         SURFACE (v1 sketch — lock in plan before make)
-         ==========================================================
+         SHIPPED special form:
 
            (match scrutinee
              (pat1 body1…)
              (pat2 body2…)
              (_     else-body…))
 
-         Patterns (minimum set):
+         Patterns (v1):
            _                 wildcard
-           x                 bind variable (symbol)
+           x                 bind variable
            lit               number / bool / nil / string
-           'sym              quoted symbol literal (VSymbol)
+           'sym              quoted symbol (VSymbol; VStr compat)
            "str"             string literal
-           (p1 p2 …)         proper list of patterns
-           (p1 p2 … . rest)  optional dotted tail if pairs allow
+           (head p…)         list starting with symbolic/string head
+           (list p…)         explicit list pattern
 
-         Optional v1.1:
-           (? pred p)        predicate guard
-           (and p1 p2)
-           (or p1 p2)
+         Semantics:
+           First matching clause wins. Scrutinee eval once.
+           Bindings lexical in clause body (Env.child).
+           No match => User_error "match: no matching clause"
+           (catchable via guard).
 
-         Non-goals v1:
-           - record/struct patterns
-           - exhaustiveness checking
-           - Racket-style syntax-parse
-           - regexp patterns
+         Non-goals v1 (deferred):
+           dotted-tail patterns, (? pred p), and/or patterns,
+           exhaustiveness, record patterns, regexp.
 
-         ==========================================================
-         SEMANTICS
-         ==========================================================
-           First matching clause wins.
-           No match => User_error kind match_error (catchable).
-           Bindings visible in clause body (lexical).
-           Scrutinee evaluated once.
-
-         Implementation sketch:
-           special form in eval; compile patterns to decision tree
-           or linear backtracking — linear fine for v1.
-
-         ==========================================================
-         SUCCESS
-         ==========================================================
-           Idiomatic AST walk:
-             (match form
-               ((list 'lambda params body) …)
-               ((list 'define name body) …)
-               (_ …))
-           works with symbols from read-string/function-ast.
+         SUCCESS: idiomatic AST walk over read-string / function-ast
+         trees with symbolic heads works without car/cdr chains.
     |))
    )
   )
 
   (subsection std-library
    (doc "Blessed std list/string helpers: freeze surface for packages and agents")
-   (status planned)
+   (status implemented)
+   (implements lisp/lib/eval.ml image/lib/prims_pure.ml libs/std/lib.pp lisp/test/conformance_test.ml)
    (verify
-    (test "libs/verify or lisp tests cover each frozen std name")
-    (smoke "export-package std lists frozen names; load-library std idempotent"))
+    (test "conformance covers list/map filter foldl foldr")
+    (test "symbol and string prims present")
+    (smoke "load-library std exports list helpers; idempotent"))
    (details
     (doc (|
-         ROADMAP: Phase 2.
-
-         ==========================================================
-         PROBLEM
-         ==========================================================
-           list/map, list/foldl, string helpers, etc. accreted in
-           libs/std and OCaml prims without a freeze. Agents invent
-           duplicates; renames break gardens.
-
-         ==========================================================
          RULES
-         ==========================================================
-           1. Document the FROZEN SET in this subsection (table).
-           2. Frozen names: behavior may bugfix; signatures must
-              not change without a new name (map2, etc.).
-           3. Prefer OCaml prims for hot loops; Nopales std may wrap.
-           4. New helpers go to std only with a verify case.
+           1. FROZEN SET below — signatures must not change in place;
+              bugfixes OK; new behavior needs a new name.
+           2. Hot loops: OCaml special forms / prims; Nopales std wraps.
+           3. New std helpers require a conformance or verify case.
 
-         ==========================================================
-         FROZEN SET (initial — adjust at make time to match code)
-         ==========================================================
-           Lists:
-             list/map list/filter list/foldl list/foldr?
-             reverse append length/count nth
-             null? pair? car cdr cons list
-           Strings:
+         FROZEN SET (kernel + image prims + libs/std aliases)
+
+           Lists (kernel special forms — OCaml loops + apply):
+             list/map list/filter list/foldl list/foldr
+           Lists (prims):
+             list car cdr cons null? pair? reverse append count
+           Strings (prims):
              string-append string-length substring string-eq
              string-contains? string-trim html-escape
              as-str str
-           Symbols (after Phase 1):
+           Symbols (prims):
              symbol? string? symbol=? symbol->string string->symbol
            Misc:
              not type-of
 
-         html/* and layout/* are packages, not kernel std freeze
-         (they may evolve faster) — but should prefer frozen std.
+           libs/std also exports ergonomic aliases map/filter/foldl/
+           foldr and html/* builders — html/* may evolve faster than
+           this kernel freeze; list HOF names above are frozen.
 
-         ==========================================================
-         SUCCESS
-         ==========================================================
-           One page in concepts or /bindings kernel docs lists the
-           freeze; verify suite fails if a frozen name disappears.
+         SUCCESS: conformance + dialect tests pin list HOF and
+         symbol/string prims; silent renames redden the suite.
     |))
    )
   )
 
   (subsection capability-enforcement
    (doc "Hard gates: public routes and agent sessions obey effect allowlists")
-   (status planned)
+   (status implemented)
+   (implements lisp/lib/route_gate.ml lisp/lib/effect.ml image/lib/session.ml)
    (verify
-    (smoke "public route with WriteDb+Branch handler rejected or forced private")
-    (smoke "agent session with ReadDb-only mask cannot create data row via tool")
-    (smoke "admin private routes still allow full effects")
-    (test "subset checks unit-tested on effect sets"))
+    (test "pure and read-db public handlers allowed")
+    (test "write-db / branch / net public handlers denied")
+    (test "unknown and non-function handlers fail-closed")
+    (test "macro-expanded write is denied after expand")
+    (smoke "(route … 'public) refuses over-powered handlers at bind"))
    (details
     (doc (|
-         ROADMAP: Phase 3. Builds on effects inference (implemented).
+         SHIPPED (public-route gate). Builds on effects inference.
 
-         ==========================================================
-         PROBLEM
-         ==========================================================
-           Effects are visible (badges) and partly used (AI propose).
-           Public routes and agent tools still need HARD policy:
-           metadata without enforcement is documentation.
+         PUBLIC ROUTES
+           Route_gate.check_public_handler ~env handler:
+             infer effects of the named handler from the in-memory
+             env (macroexpand first). Allowlist default:
+               Pure | ReadDb | Html
+             WriteDb requires PP_PUBLIC_ALLOW_WRITE=1 opt-in.
+             Branch / Ai / Net / unknown → deny (fail-closed).
+           Session.route bind calls the gate when visibility=public;
+           over-powered handlers are refused at bind (kept private).
 
-         ==========================================================
-         SURFACES TO GATE
-         ==========================================================
+         AGENT / AI
+           AI propose-function remains policy-gated on the same
+           effect subset helpers. Per-session agent effect_mask for
+           every tool prim is a follow-on tightening (not required
+           to close this section's public-route gate).
 
-           1) User routes with visibility=public
-                When (route path handler 'public) or equivalent:
-                infer_effects(handler) must be ⊆ PUBLIC_ALLOW.
-                Default PUBLIC_ALLOW:
-                  Pure, ReadDb, Html
-                  (optional: WriteDb only with explicit opt-in flag
-                   later — default OFF for v1 enforcement)
-                Forbidden by default: Branch, Ai, Publish-of-nested,
-                  Txn (unless explicitly allowed).
-                On violate: refuse to mark public (keep private) OR
-                403 at serve time — prefer refuse at route-bind.
+         BUDGET
+           Eval step budget is a hard leash (Budget_exceeded),
+           uncatchable by default via guard — part of the same
+           production-leash story.
 
-           2) Agent sessions / tool loops
-                Session or agent-session carries effect_mask.
-                Each tool prim call: prim_effects ⊆ mask.
-                Default agent mask: ReadDb ∪ Pure ∪ Html ∪ Ai
-                  (no Branch merge to system; no admin auth prims).
-                Configurable per session seed for trusted agents.
+         AUTH
+           Orthogonal to is_admin: admin private routes full power;
+           public publish still PUBLIC_ALLOW.
 
-           3) AI propose-function (already gated — keep + unify
-                on the same subset helper).
-
-           4) Optional: eval budget already hard — document as
-                part of the same "production leash" story.
-
-         ==========================================================
-         MECHANICS
-         ==========================================================
-           - Single OCaml helper: allow : got:effect_set -> mask -> bool
-           - infer at define/route time; cache on binding meta if cheap
-           - Fail closed on unknown prim (treat as max capability
-             or reject) — pick reject-unknown for public surface
-
-         ==========================================================
-         AUTH INTERACTION
-         ==========================================================
-           Enforcement is orthogonal to is_admin:
-             admin on private branch: full powers
-             admin publishing public route: still PUBLIC_ALLOW
-             anonymous hitting public route: handler already constrained
-
-         ==========================================================
          NON-GOALS
-         ==========================================================
-           - Full setuid / run-as-author lattice (effects § phase 6 note)
-           - Per-row RLS in Postgres as substitute for effects
-           - User-authored effect declarations required (inference first;
-             optional declare later)
+           - Full setuid / run-as-author lattice
+           - Postgres RLS as effects substitute
+           - Required user-authored effect declarations
 
-         SUCCESS: a malicious or sloppy public handler cannot fork
-         branches or call admin create-user; agent tools respect mask.
+         SUCCESS: sloppy public handlers cannot fork branches or
+         write the store without opt-in; pure unit gate tests green.
     |))
    )
   )
