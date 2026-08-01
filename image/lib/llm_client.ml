@@ -67,6 +67,23 @@ let shell_quote (s : string) : string =
   Buffer.add_char buf '\'';
   Buffer.contents buf
 
+let string_field (msg : Yojson.Safe.t) (key : string) : string =
+  match msg with
+  | _ ->
+      (match Yojson.Safe.Util.(msg |> member key |> to_string_option) with
+       | Some s -> s
+       | None -> "")
+
+(** True when [s] looks like a complete JSON value (object/array/string). *)
+let looks_complete_json (s : string) : bool =
+  let s = String.trim s in
+  if s = "" then false
+  else
+    try
+      let _ = Yojson.Safe.from_string s in
+      true
+    with _ -> false
+
 let extract_content (body : string) : call_result =
   try
     let json = Yojson.Safe.from_string body in
@@ -81,16 +98,26 @@ let extract_content (body : string) : call_result =
           | Some f -> f
           | None -> "?"
         in
+        let content_field = string_field msg "content" in
+        let reasoning =
+          let r1 = string_field msg "reasoning_content" in
+          if r1 <> "" then r1 else string_field msg "reasoning"
+        in
+        (* GLM-class models often fill message.reasoning with the essay and
+           leave content null, or start content JSON then hit max_tokens while
+           reasoning already holds a complete fenced object. Prefer a field
+           that actually parses as JSON when the other is empty/truncated. *)
         let content =
-          match msg |> member "content" |> to_string_option with
-          | Some c when c <> "" -> c
-          | _ ->
-              (match msg |> member "reasoning_content" |> to_string_option with
-               | Some r when r <> "" -> r
-               | _ ->
-                   match msg |> member "reasoning" |> to_string_option with
-                   | Some r when r <> "" -> r
-                   | _ -> "")
+          match content_field, reasoning with
+          | c, _ when c <> "" && looks_complete_json c -> c
+          | _, r when r <> "" && looks_complete_json r -> r
+          | c, r when c <> "" && r <> "" ->
+              (* truncated content + reasoning: give parse_llm_json both *)
+              c ^ "
+" ^ r
+          | c, _ when c <> "" -> c
+          | _, r when r <> "" -> r
+          | _ -> ""
         in
         if content = "" then
           Error (Printf.sprintf "LLM: empty content (finish=%s)" finish)
@@ -102,23 +129,37 @@ let extract_content (body : string) : call_result =
     Error ("LLM parse error: " ^ Printexc.to_string e ^ " body=" ^ trunc)
 
 let call ?(temperature = 0.2) ?(max_tokens = 4096)
-    ~(system : string) ~(user : string) () : call_result =
+    ?(json_object = false) ~(system : string) ~(user : string) () : call_result =
   let key = active_api_key () in
   if key = "" then
     (Error
          "no LLM key configured (add one in /settings/keys or set LLM_API_KEY)")
   else
     let body_json =
-      `Assoc
-        [ ("model", `String (active_model ()))
-        ; ("messages",
-           `List
-             [ `Assoc [("role", `String "system"); ("content", `String system)]
-             ; `Assoc [("role", `String "user"); ("content", `String user)]
-             ])
-        ; ("temperature", `Float temperature)
-        ; ("max_tokens", `Int max_tokens)
+      let base =
+        [
+          ("model", `String (active_model ()));
+          ( "messages",
+            `List
+              [
+                `Assoc
+                  [ ("role", `String "system"); ("content", `String system) ];
+                `Assoc
+                  [ ("role", `String "user"); ("content", `String user) ];
+              ] );
+          ("temperature", `Float temperature);
+          ("max_tokens", `Int max_tokens);
         ]
+      in
+      (* GLM-class models often put essays in message.reasoning with
+         content=null unless json_object mode forces a content JSON body. *)
+      let base =
+        if json_object then
+          base
+          @ [ ("response_format", `Assoc [ ("type", `String "json_object") ]) ]
+        else base
+      in
+      `Assoc base
     in
     let body_str = Yojson.Safe.to_string body_json in
     let url = active_api_base () ^ "/chat/completions" in

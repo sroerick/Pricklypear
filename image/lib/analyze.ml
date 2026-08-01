@@ -34,34 +34,52 @@ let strip_code_fence (s : string) : string =
     else rest
   else s
 
-(** Extract the first balanced `{...}` object from prose (models often
-    narrate then emit JSON, or wrap it in markdown). *)
+(** Extract a balanced `{...}` object from prose. Prefers the last complete
+    object that looks like our schema (has "complexity"), since models often
+    emit a truncated content object first and a full one later in reasoning. *)
 let extract_json_object (s : string) : string option =
   let s = strip_code_fence s in
-  match String.index_opt s '{' with
-  | None -> None
-  | Some start ->
-      let len = String.length s in
-      let rec scan i depth in_str escape =
-        if i >= len then None
+  let len = String.length s in
+  let extract_at start =
+    let rec scan i depth in_str escape =
+      if i >= len then None
+      else
+        let c = s.[i] in
+        if escape then scan (i + 1) depth in_str false
+        else if in_str then
+          if c = '\\' then scan (i + 1) depth true true
+          else if c = '"' then scan (i + 1) depth false false
+          else scan (i + 1) depth true false
         else
-          let c = s.[i] in
-          if escape then scan (i + 1) depth in_str false
-          else if in_str then
-            if c = '\\' then scan (i + 1) depth true true
-            else if c = '"' then scan (i + 1) depth false false
-            else scan (i + 1) depth true false
-          else
-            match c with
-            | '"' -> scan (i + 1) depth true false
-            | '{' -> scan (i + 1) (depth + 1) false false
-            | '}' ->
-                if depth <= 1 then
-                  Some (String.sub s start (i - start + 1))
-                else scan (i + 1) (depth - 1) false false
-            | _ -> scan (i + 1) depth false false
-      in
-      scan (start + 1) 1 false false
+          match c with
+          | '"' -> scan (i + 1) depth true false
+          | '{' -> scan (i + 1) (depth + 1) false false
+          | '}' ->
+              if depth <= 1 then Some (String.sub s start (i - start + 1))
+              else scan (i + 1) (depth - 1) false false
+          | _ -> scan (i + 1) depth false false
+    in
+    scan (start + 1) 1 false false
+  in
+  let rec collect i acc =
+    if i >= len then List.rev acc
+    else if s.[i] = '{' then
+      match extract_at i with
+      | Some blob -> collect (i + 1) (blob :: acc)
+      | None -> collect (i + 1) acc
+    else collect (i + 1) acc
+  in
+  let blobs = collect 0 [] in
+  let has_complexity b =
+    try
+      match Yojson.Safe.from_string b with
+      | `Assoc fields -> List.mem_assoc "complexity" fields
+      | _ -> false
+    with _ -> false
+  in
+  match List.rev (List.filter has_complexity blobs) with
+  | b :: _ -> Some b (* last schema-shaped object *)
+  | [] -> (match List.rev blobs with b :: _ -> Some b | [] -> None)
 
 let parse_llm_json (raw : string) : (Yojson.Safe.t, string) result =
   let try_parse s =
@@ -161,8 +179,14 @@ let resolve_llm_creds (store : Store.t) ~(user_id : string option) :
             model = Llm_client.model ();
           }
 
+let is_placeholder (s : string) : bool =
+  let t = String.trim s in
+  t = "" || t = "..." || t = "O(...)" || t = "TODO"
+  || (String.length t > 0 && String.length t <= 3
+      && String.for_all (fun c -> c = '.') t)
+
 let normalize_result ~(model : string) ~(source : string) (j : Yojson.Safe.t)
-    : Yojson.Safe.t =
+    : (Yojson.Safe.t, string) result =
   let open Yojson.Safe.Util in
   let str_field key =
     match member key j with
@@ -189,15 +213,35 @@ let normalize_result ~(model : string) ~(source : string) (j : Yojson.Safe.t)
          | s -> s)
     | s -> s
   in
+  if is_placeholder complexity || is_placeholder rationale then
+    Error
+      ("analyze: LLM returned placeholder fields (complexity="
+       ^ complexity ^ ")")
+  else
+    Ok
+      (`Assoc
+         [
+           ("complexity", `String complexity);
+           ("confidence", `String confidence);
+           ("rationale", `String rationale);
+           ("notes", `String (str_field "notes"));
+           ("source", `String source);
+           ("model", `String model);
+           ("label", `String "LLM estimate");
+         ])
+
+let heuristic_fallback ~(model : string) ~(fallback : Yojson.Safe.t)
+    ~(note : string) : Yojson.Safe.t =
+  let open Yojson.Safe.Util in
   `Assoc
     [
-      ("complexity", `String complexity);
-      ("confidence", `String confidence);
-      ("rationale", `String rationale);
-      ("notes", `String (str_field "notes"));
-      ("source", `String source);
+      ("complexity", member "complexity" fallback);
+      ("confidence", `String "low");
+      ("rationale", member "rationale" fallback);
+      ("notes", `String note);
+      ("source", `String "heuristic+llm-fallback");
       ("model", `String model);
-      ("label", `String "LLM estimate");
+      ("label", `String "heuristic (LLM fallback)");
     ]
 
 let llm_analyze ~(fn_name : string) (e : Ast.expr) ~(creds : Llm_client.creds)
@@ -205,52 +249,48 @@ let llm_analyze ~(fn_name : string) (e : Ast.expr) ~(creds : Llm_client.creds)
   let pp = Reader.pp_expr e in
   let system =
     "You estimate asymptotic time complexity for Scheme-family Lisp. \
-     Output a single JSON object and nothing else — no markdown, no \
-     headings, no analysis steps. Schema: \
-     {\"complexity\":\"O(1)|O(n)|O(n log n)|O(n^2)|O(2^n)|unknown\",\
-     \"confidence\":\"low|medium|high\",\"rationale\":\"one short sentence\",\
-     \"notes\":\"optional\"}. \
-     Prefer honest uncertainty over false precision."
+     Respond with a JSON object only. Required string fields: \
+     complexity (e.g. O(1), O(n), O(n log n), O(n^2), O(2^n), unknown), \
+     confidence (low|medium|high), rationale (one concrete sentence about \
+     THIS function), notes (optional). Never use ellipsis placeholders."
   in
   let user =
     Printf.sprintf
-      "Return JSON only for this function.\nname: %s\nsource:\n%s\n"
+      "Analyze this function and fill real values (not ...).\nname: %s\nsource:\n%s\n"
       fn_name pp
   in
   match
     Llm_client.with_creds creds (fun () ->
-        Llm_client.call ~temperature:0.0 ~max_tokens:400
+        (* GLM spends many tokens on message.reasoning; keep headroom so
+           message.content JSON is not truncated mid-object. *)
+        Llm_client.call ~temperature:0.0 ~max_tokens:2048 ~json_object:true
           ~system ~user ())
   with
   | Error e -> Error e
   | Ok raw ->
       (match parse_llm_json raw with
        | Ok j ->
-           Ok
-             (normalize_result ~model:creds.Llm_client.model ~source:"llm" j)
+           (match
+              normalize_result ~model:creds.Llm_client.model ~source:"llm" j
+            with
+            | Ok out -> Ok out
+            | Error err ->
+                Ok
+                  (heuristic_fallback ~model:creds.Llm_client.model ~fallback
+                     ~note:(err ^ "; raw snippet: "
+                            ^
+                            let s = String.trim raw in
+                            if String.length s > 180 then String.sub s 0 180 ^ "…"
+                            else s)))
        | Error _parse_err ->
-           (* Model returned prose — still show heuristic + short note. *)
-           let open Yojson.Safe.Util in
            let snippet =
              let s = String.trim raw in
              if String.length s > 240 then String.sub s 0 240 ^ "…" else s
            in
-           let cx = member "complexity" fallback in
-           let rationale = member "rationale" fallback in
            Ok
-             (`Assoc
-                [
-                  ("complexity", cx);
-                  ("confidence", `String "low");
-                  ("rationale", rationale);
-                  ( "notes",
-                    `String
-                      ("LLM did not return JSON; showing heuristic. Snippet: "
-                       ^ snippet) );
-                  ("source", `String "heuristic+llm-fallback");
-                  ("model", `String creds.Llm_client.model);
-                  ("label", `String "heuristic (LLM prose)");
-                ]))
+             (heuristic_fallback ~model:creds.Llm_client.model ~fallback
+                ~note:("LLM did not return usable JSON; showing heuristic. "
+                       ^ snippet)))
 
 let analyze_function (store : Store.t) ~(author : string)
     ~(user_id : string option) ~(fn_name : string) ~(force_llm : bool)
