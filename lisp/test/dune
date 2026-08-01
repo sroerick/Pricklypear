@@ -7,3 +7,8 @@
  (name effect_test)
  (modules effect_test)
  (libraries pricklypear-lisp alcotest))
+
+(test
+ (name conformance_test)
+ (modules conformance_test)
+ (libraries pricklypear-lisp alcotest))
