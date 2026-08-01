@@ -1110,8 +1110,9 @@
    )
   )
   (subsection primitives
-   (doc "Primitives are the boundary between the pure interpreter and the outside world; pure prims are wrapped via register_sync (results in Lwt.return); DB-touching prims are normal prim_fns returning value Lwt.t. The impure functions the interpreter calls into")
+   (doc "Primitives are the boundary between the pure interpreter and the outside world. Post-H1 the core is direct-style: prim_fn = value list -> value (lisp/lib/control.ml), and DB-touching prims are invoked via Control.perform_prim with the rim handler owning I/O — no Lwt.t in the prim ABI. The impure functions the interpreter calls into")
    (status implemented)
+   (implements lisp/lib/primitives.ml lisp/lib/eval.ml lisp/lib/prims_core.ml lisp/lib/route_gate.ml)
    (details
     (doc (|
          Primitives live in image/lib/primitives.ml. They

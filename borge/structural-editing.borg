@@ -1,10 +1,10 @@
 (project pricklypear-structural-editing
  (doc "Pricklypear book chapter: structural editing — paredit-shaped tree surgery as one shared protocol over outlines and code ASTs")
- (status planned)
+ (status partial)
  (convention ocaml-dune)
  (section structural-editing
   (doc "Structural editing: named tree ops over one shared protocol — outlines and code ASTs are edited as trees, never as paren text")
-  (status planned)
+  (status partial)
   (details
    (doc (|
         =========================================================
@@ -58,7 +58,7 @@
    |)))
   (subsection structed-algebra
    (doc "Pure higher-order tree-surgery library (structed) usable from REPL, routes, and agents")
-   (status planned)
+   (status implemented)
    (implements libs/structed/lib.pp)
    (details
     (doc (|
@@ -119,7 +119,7 @@
     (smoke "ops against root/unknown/empty targets return input unchanged")))
   (subsection op-protocol
    (doc "One POST contract: (op, target, args) -> re-render + out-of-band selection")
-   (status planned)
+   (status implemented)
    (implements libs/notes/lib.pp libs/outline/lib.pp)
    (details
     (doc (|
@@ -174,7 +174,7 @@
     (smoke "unknown op name re-renders unchanged tree with 200")))
   (subsection keymap
    (doc "Chord-first keyboard map; modal structure/text interaction is the documented target")
-   (status planned)
+   (status partial)
    (implements libs/notes/lib.pp)
    (details
     (doc (|
