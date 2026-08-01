@@ -204,47 +204,41 @@
 
   (subsection conformance
    (doc "Conformance suite: real Nopales programs with expected eval results, run on every core change as the semantic gate of the freeze")
-   (status planned)
+   (status implemented)
+   (implements lisp/test/conformance_test.ml lisp/test/dune)
    (verify
-    (smoke "suite loads and evaluates each program against its expected value with no services")
-    (smoke "a deliberate core change that alters a program's result is caught as a failure")
-    (smoke "the suite runs in the default dune test target"))
+    (test "suite loads and evaluates each program against its expected value with no services")
+    (test "a deliberate core change that alters a program's result is caught as a failure")
+    (build "dune runtest lisp includes conformance"))
    (details
     (doc (|
          WHAT IT IS. A set of real Nopales programs, each paired
          with the value it must evaluate to, run by the pure
-         interpreter with no services. It is the test tier that sits
-         between the OCaml-level interpreter tests and the HTTP
-         smoke tests: the OCaml tests cover the interpreter's
-         internals; the smokes cover the image's routes; the
-         conformance suite covers the LANGUAGE — that the product's
-         Nopales code still evaluates to what it did.
+         interpreter with no services. Tier between OCaml unit
+         tests and HTTP smokes: the LANGUAGE gate of core-freeze.
 
-         CONTENTS. The suite includes the headline usage of every
-         product package (todo, notes, outline, calendar, bible,
-         weather, ui) plus focused cases for each frozen surface
-         element: reader forms, each value type, each special form,
-         each pure primitive, the effect lattice, and error
-         shapes. New product code worth keeping gets a case; a case
-         that has to change is a signal, not a nuisance.
+         LOCATION. lisp/test/conformance_test.ml — alcotest cases
+         of the form (name, program, expected-pp-value) plus a few
+         multi-form setup programs. Runs under dune runtest lisp.
 
-         RUN MODEL. Service-free: the pure interpreter (lisp/)
-         loads and evaluates each program; no Postgres, no HTTP,
-         no image. It runs in the default dune test target so a
-         core change reddens it before it reaches a smoke. A
-         counterexample becomes a named regression case.
+         CONTENTS (v1 frozen-surface cases):
+           - reader: quote, quasiquote/unquote, lists, strings, bools
+           - values: VInt VStr VSymbol VBool VNil VList distinctness
+           - special forms: define sugar, lambda, let, if, begin,
+             match, guard, cond, and/or, defmacro/gensym
+           - pure list HOF: list/map list/filter list/foldl list/foldr
+           - errors: unbound kind; guard recovers; budget uncatchable
+           - symbols: 'a vs "a"; car of quoted lambda is symbol
+         Product-package headline cases that need DB/HTTP stay in
+         the smoke tier (libs/verify). Pure kernels of those
+         packages may be added here as pure snippets over time.
 
-         THE GATE. A core change that reddens the conformance suite
-         does not land until the suite is updated intentionally and
-         the change is reclassified against core-freeze (additive,
-         deprecate-then-remove, or break). This is what makes the
-         freeze real: the product's own code is the oracle, so a
-         silent break in the language is impossible by construction.
+         RUN MODEL. Service-free pure interpreter only. A reddened
+         case blocks core change land until the suite is updated
+         intentionally and reclassified (additive / deprecate /
+         break per core-freeze).
 
-         SCOPE. The suite asserts eval results for pure programs.
-         DB-touching prims and route handlers stay in the smoke
-         tier; the conformance suite covers the language core they
-         are built on.
+         SCOPE. Pure eval results only. DB prims and routes → smoke.
     |))
    )
   )
