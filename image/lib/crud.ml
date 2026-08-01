@@ -611,6 +611,16 @@ let tree_list (store : Store.t) ~(prefix : string) ?(depth : int option)
       in
       (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes))
 
+let tree_children_html (store : Store.t) ~(prefix : string) ~(garden_root : string)
+    () : value =
+  match Io_lwt.Db.current_conn store with
+  | None -> (VStr "<p class=\"muted\">(empty)</p>")
+  | Some conn ->
+      let html =
+        Tree_store.render_children_html conn ~prefix ~garden_root ()
+      in
+      (VStr html)
+
 let tree_upsert (store : Store.t) ~(path : string) ~(kind : string)
     ~(type_name : string) ~(body_json : string) ~(author : string) : value =
   match Io_lwt.Db.current_conn store with
