@@ -1295,8 +1295,13 @@
   )
   (subsection themes
    (doc "Installable, switchable named themes: a theme is a libs/<name> package of theme/* tokens; switch = reseed into your garden; registry is a Nopales list, no kernel tables")
-   (status planned)
-   (implements libs/theme/lib.pp)
+   (status implemented)
+   (implements libs/theme/lib.pp
+    libs/theme-paper/lib.pp
+    libs/theme-midnight/lib.pp
+    libs/theme-classic/lib.pp
+    image/lib/session.ml
+   )
    (verify
     (build "dune build image")
     (smoke "(theme/available) lists the default token package with display name + description")

@@ -411,34 +411,41 @@
 ;; chrome toggle JS). Nested groups get name="pp-sub-<label>" per
 ;; fly-out column, so opening one submenu closes its siblings.
 (define menu/render-d
-  (lambda (item d)
-    (let ((kind (car item))
-          (label (car (cdr item)))
-          (rest (car (cdr (cdr item)))))
-      (if (string-eq kind "link")
-          (html/a rest (html/text label))
-          (if (string-eq kind "group")
-              (html/tag "details"
-                (html/attrs
-                  (list
-                    (html/attr "class" "menu-drop")
-                    (html/attr "name"
-                      (if (= d 0)
-                          "pp-nav"
-                          (string-append "pp-sub-" (as-str label))))))
-                (html/join
-                  (list
-                    (html/tag "summary" (html/attr "class" "menu-drop-btn")
-                      (html/text label))
-                    (html/div (html/attr "class" "menu-drop-panel")
-                      (html/join
-                        (list/map
-                          (lambda (k) (menu/render-d k (+ d 1)))
-                          rest)))))))
-              (if (string-eq kind "raw")
-                  label
-                  "")))))
-  "Render one menu item at depth d (link, group, or raw) to HTML string.")
+  (lambda
+    (item d)
+    (let
+      ((kind (car item))
+        (label (car (cdr item)))
+        (rest (car (cdr (cdr item)))))
+      (if
+        (string-eq kind "link")
+        (html/a rest (html/text label))
+        (if
+          (string-eq kind "group")
+          (html/tag
+            "details"
+            (html/attrs
+              (list
+                (html/attr "class" "menu-drop")
+                (html/attr
+                  "name"
+                  (if
+                    (= d 0)
+                    "pp-nav"
+                    (string-append "pp-sub-" (as-str label))))))
+            (html/join
+              (list
+                (html/tag
+                  "summary"
+                  (html/attr "class" "menu-drop-btn")
+                  (html/text label))
+                (html/div
+                  (html/attr "class" "menu-drop-panel")
+                  (html/join
+                    (list/map
+                      (lambda (k) (menu/render-d k (+ d 1)))
+                      rest))))))
+          (if (string-eq kind "raw") label ""))))))
 
 (define menu/render
   (lambda (item) (menu/render-d item 0))

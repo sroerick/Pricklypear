@@ -102,6 +102,7 @@
           (menu/link "analytics" "/analytics")
           (menu/link "llm keys" "/settings/keys")
           (menu/link "ssh keys" "/settings/ssh")
+          (menu/link "themes" "/settings/theme")
           (menu/link "about" "/about")
           (menu/link "repl" "/repl"))))))
 
