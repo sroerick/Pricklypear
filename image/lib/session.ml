@@ -186,6 +186,10 @@ let rehydrate (t : t) : unit =
     (Pricklypear_lisp.Ast.VPrim "eval-string");
   Pricklypear_lisp.Env.define t.env "load-library"
     (Pricklypear_lisp.Ast.VPrim "load-library");
+  (* lisp-interpreter.math: pi is a bound value, not a zero-arg prim.
+     Rebind on every rehydrate so /api/eval sessions see it. *)
+  Pricklypear_lisp.Env.define t.env "pi"
+    (Pricklypear_lisp.Ast.VFloat Float.pi);
   load_defs t
 
 (** Force the next refresh_ui_shell to re-eval ui/nav + ui/css instead of
