@@ -148,7 +148,8 @@
          multi-form setup programs. Runs under dune runtest lisp.
 
          CONTENTS (v1 frozen-surface cases):
-           - reader: quote, quasiquote/unquote, lists, strings, bools
+           - reader: quote, quasiquote/unquote, lists, strings, bools,
+             string escapes (named, \\ddd byte, \\uXXXX unicode scalar)
            - values: VInt VStr VSymbol VBool VNil VList distinctness
            - special forms: define sugar, lambda, let, if, begin,
              match, guard, cond, and/or, defmacro/gensym
@@ -378,6 +379,15 @@
   (subsection reader
    (doc "The reader turns source text into AST; the AST is the source of truth (homoiconic, persisted as JSONB); read/print roundtrip fidelity is what makes stored code trustworthy.")
    (status implemented)
+   (implements lisp/lib/reader.ml lisp/test/conformance_test.ml)
+   (verify
+    (build "dune build lisp")
+    (test "named + \\ddd + \\uXXXX escapes decode; \\uXXXX UTF-8-encodes to 1–4 bytes")
+    (test "\"\\u203e\" reads to the single-char overline ‾, not literal u203e")
+    (test "lone surrogate \\uD800..\\uDFFF raises Reader_error")
+    (test "read/print roundtrip of a string holding ‾ preserves it (escape_string emits \\ddd bytes)")
+    (test "forgiving fallback: unknown \\x still yields literal x")
+    (test "conformance pins \\uXXXX decode so silent removal reddens the suite"))
 
    (details
     (doc (|
@@ -416,6 +426,41 @@
          unquote at top-level is a reader-or-eval error.
 
          Comments: ; to end of line.
+
+         STRING ESCAPES. Inside a "..." literal the reader
+         recognizes, in order of precedence:
+           \n \t \r \\ \" \'        named single-char escapes
+           \ddd                     exactly-three-digit DECIMAL byte
+                                    (OCaml String.escaped form; the
+                                    vault/export path for non-ASCII
+                                    and control bytes; n must be ≤255)
+           \uXXXX                   exactly-four-hex-digit UNICODE
+                                    scalar (see below)
+           \x  (any other char)     forgiving: literal x, the
+                                    backslash is dropped — editor
+                                    over-escapes and paste noise do
+                                    not hard-fail
+
+         \uXXXX UNICODE ESCAPE (additive; closes the "u203e" gap).
+           Four hex digits (0-9 a-f A-F), case-insensitive. The
+           scalar is UTF-8 ENCODED into the byte buffer (1–4 bytes),
+           because values/AST serialize to JSONB and CSS/HTML output
+           expects UTF-8 text, not a raw low byte.
+             - BMP scalar U+0000..U+FFFF except the surrogate range
+               D800..DFFF: encode directly.
+             - Surrogate escape \uD800..\uDFFF: NOT a valid scalar
+               alone → Reader_error "bad unicode escape \uXXXX".
+               v1 does not combine surrogate pairs; write the actual
+               non-BMP char or use two-step decimal bytes if ever
+               needed. This is a deliberate smallness call, not an
+               oversight.
+           Before this existed, "\u203e" fell through to the
+           forgiving rule and became the literal 4 chars "u203e" —
+           this was the visible menu-caret bug (libs/ui) and the
+           degree-sign bug (libs/weather). Classified ADDITIVE under
+           core-freeze: it only gives meaning to a backslash sequence
+           that previously produced garbage; no existing valid program
+           changes meaning (a prior "\u203e" was already broken).
 
          Docstrings (see define-docstring): optional metadata on
          a top-level binding. Surface forms the reader already
@@ -1425,6 +1470,106 @@
 
          SUCCESS: idiomatic AST walk over read-string / function-ast
          trees with symbolic heads works without car/cdr chains.
+    |))
+   )
+  )
+
+  (subsection math
+   (doc "Numeric tower beyond the four operations: expt/sqrt/trig/log, numeric predicates, integer division aliases, seeded RNG")
+   (status planned)
+   (implements image/lib/prims_pure.ml image/lib/primitives.ml lisp/lib/effect.ml lisp/test/conformance_test.ml)
+   (verify
+    (build "dune build lisp image")
+    (test "expt/sqrt/log/exp/sin/cos/tan round-trip on known values (float results)")
+    (test "(expt 2 10) => 1024 int-in int-out; (expt 2.0 0.5) => 1.414… float")
+    (test "number?/integer?/zero?/even?/odd? classify VInt/VFloat/VStr/VNil correctly")
+    (test "quotient/remainder match div/mod on ints incl. negative dividends")
+    (test "(random n) => 0 ≤ r < n; (random) => float in [0,1); seeded random deterministic per sequence")
+    (test "div-by-zero and domain errors (sqrt of negative, log of ≤0) raise catchable User_error")
+    (test "conformance_test.ml pins at least one case per new prim"))
+   (details
+    (doc (|
+         GAP. Core 1.0 froze the four operations (+ - * div / mod),
+         abs/min/max, floor/round, and parse-int/parse-float — but
+         nothing else. Anything numeric beyond grade-school
+         arithmetic currently has to shell out to float-of-string
+         hacks or OCaml. This subsection is the book authority for
+         closing that gap. Classified ADDITIVE under core-freeze.
+
+         NEW PRIMS (all pure, all in image/lib/prims_pure.ml,
+         registered in primitives.ml, added to the Pure list in
+         lisp/lib/effect.ml; note the Pure list today omits "/"
+         even though div is listed — fix that omission in the same
+         pass so alias pairs (div /) and (quotient remainder)
+         stay classified identically)
+
+         Powers / roots / transcendental (float semantics;
+         int-int expt with non-negative exponent returns VInt):
+           (expt base n)   int-in/int-out when both int and n ≥ 0
+                           (Int64 overflow wraps like Int64.mul;
+                           documented, no bignum in v1); else float
+           (sqrt x)        float; User_error on x < 0
+           (exp x) (log x) float; log: User_error on x ≤ 0
+           (log x b)       optional base arg → (logb x) = log x / log b
+           (sin x) (cos x) (tan x)     float, radians
+           (asin x) (acos x) (atan x)  float; asin/acos User_error
+                                       outside [-1,1]
+           (atan y x)      two-arg form → atan2 when given 2 args
+           pi              bound as a VALUE (VFloat Float.pi) in the
+                           initial env, not a zero-arg prim — agents
+                           write pi, not (pi)
+
+         Predicates (return VBool; missing core gap):
+           (number? v)   VInt | VFloat
+           (integer? v)  VInt only; VFloat with integral value
+                         returns #f (v1 rule: tag-based, not
+                         value-based — keeps it cheap and honest)
+           (zero? n) (positive? n) (negative? n)
+           (even? n) (odd? n)   integers only; User_error on float
+                                with non-integral value
+
+         Integer division aliases (Scheme names, delegate to the
+         existing div/mod int paths — no new semantics):
+           (quotient a b)   ≡ int div; User_error on float args or 0
+           (remainder a b)  ≡ Int64.rem; User_error on float args or 0
+
+         Randomness:
+           (random n)      VInt in [0,n) for VInt n > 0;
+                           VFloat in [0.,1.) for zero args
+           (random-seed s) reseeds the image PRNG (Random.init with
+                           VInt-derived seed); returns VNil
+           Effect class: Pure — Nopales-visible nondeterminism,
+           but touches no capability rim; same class as now/now-ms.
+           One PRNG state per image process is fine for v1
+           (documented; per-session streams are a non-goal).
+
+         EFFECT CLASSIFICATION
+           All new prims are Pure. Quotient/remainder/classification
+           aliases must classify identically to the prim they wrap
+           (div / mod) — alias drift in the Pure list is a drift
+           failure mode; the conformance suite should catch a
+           prim that infers non-Pure.
+
+         ERROR RULES (uniform)
+           - Wrong arity / non-numeric arg → User_error naming prim
+           - Domain errors (sqrt/log/asin/acos, div-by-zero) →
+             catchable User_error, never VNil, never NaN leak:
+             prims CHECK before calling the OCaml float op
+           - integer? on VFloat 3.0 → #f (tag rule above)
+
+         NON-GOALS (v1)
+           - Rationals / exact arithmetic tower
+           - Bignums (Int64 wraps; documented)
+           - Complex numbers
+           - (gcd a b) (lcm a b) — useful but trivially writable
+             in Nopales once quotient/remainder exist; candidates
+             for libs/std, not kernel prims
+           - Per-session RNG streams
+
+         SUCCESS: agents and product libs can do real math
+         (interest, FSRS scheduling, geometry, statistics)
+         without leaving the language; conformance suite pins
+         every new name so silent removal reddens the build.
     |))
    )
   )
