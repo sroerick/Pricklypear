@@ -341,6 +341,10 @@
   (doc "Book chapter — full text inlined from borge/ai-authoring.borg")
   (inline borge/ai-authoring.borg)
  )
+ (section film-analysis
+  (doc "Book chapter — film analysis as habitat data: shot/scene structure with frame-exact timecodes, chiastic (ring) derivation + linting, cuts as branches. Full text inlined from borge/film-analysis.borg.")
+  (inline borge/film-analysis.borg)
+ )
  (section habitat-workflow
   (doc "Book chapter — spec-in-the-image: the borge discipline as
         a habitat-native workflow; promote is the goalpost-
