@@ -63,4 +63,7 @@ let current_key : t Eio.Fiber.key = Eio.Fiber.create_key ()
 let get () : t option = Eio.Fiber.get current_key
 
 let with_current (ctx : t) (f : unit -> 'a) : 'a =
-  Eio.Fiber.with_binding current_key ctx f
+  (* Also bind Store_db.pp_user so SET LOCAL pp.user sees this request's
+     identity inside with_transaction (user-scoped data / RLS floor). *)
+  Eio.Fiber.with_binding current_key ctx (fun () ->
+      Store_db.with_pp_user ctx.manifest.username f)

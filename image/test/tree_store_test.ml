@@ -55,9 +55,12 @@ let test_paths () =
   check string "pkg path"
     ("b." ^ T.uuid_label b ^ ".pkg." ^ T.enc_label "todo")
     (T.pkg_path ~branch_id:b ~name:"todo");
-  check string "datum path"
-    ("data." ^ T.enc_label "todo" ^ "." ^ T.uuid_label b)
-    (T.datum_path ~type_name:"todo" ~id:b);
+  check string "datum path user"
+    ("data.u." ^ T.enc_label "alice" ^ "." ^ T.enc_label "todo" ^ "." ^ T.uuid_label b)
+    (T.datum_path ~user:"alice" ~type_name:"todo" ~id:b ());
+  check string "datum path seed"
+    ("data.shared." ^ T.enc_label "bible-verse" ^ "." ^ T.uuid_label b)
+    (T.datum_path ~user:"alice" ~type_name:"bible-verse" ~id:b ());
   (* paths contain no raw dots/slashes beyond the ltree separators *)
   let p = T.fn_path ~branch_id:b ~name:"notes/doc/get" in
   check bool "fn path has exactly 3 separators" true

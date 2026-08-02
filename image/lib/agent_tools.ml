@@ -1504,13 +1504,12 @@ let llm_seed (t : t) ~(requirement : string) ?(max_steps = 5) ()
                 grow 1)))
 
 (* Register the 5 CRUD primitives (get/create/update/delete/list) over
-   the shared `data_rows` table. These are NORMAL prims on the Lwt-typed
-   ABI (post-iteration-12): prim_fn = value list -> value. They
-   return their real DB result through the promise chain — e.g.
-   (get 'user 42) returns the user's JSON fields as a VStr in `(str (get
-   'user 42))`; `(mapcar (lambda (id) (get 'user id)) ids)` works.
+   `data_rows`. These are NORMAL prims: prim_fn = value list -> value.
+   They return their real DB result — e.g. (get 'user 42) returns the
+   row's JSON fields as a VStr; `(mapcar (lambda (id) (get 'user id)) ids)`
+   works.
 
-   Per spec [storage.types] / migration 003: data_rows is shared across
-   branches (no branch_id column), so these prims don't walk the
-   recursive CTE — they hit the table directly. Author is the session's
-   current username (recorded on every create). *)
+   Per [one-tree.branching-interaction] /data DECISION: rows are
+   USER-SCOPED. Creates land under the session user (author column +
+   data.u.<user>.* tree path). Reads see only the caller's own rows
+   plus shared seed types (bible-*, strongs-entry). Not branch-versioned. *)

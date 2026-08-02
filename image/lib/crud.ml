@@ -1,17 +1,20 @@
 (** Pricklypear Image — CRUD primitives over the `data_rows` table.
 
-    get/create/update/delete/rows are normal prims on the Lwt-typed
-    evaluator ABI (`value list -> value`) and return real DB
+    get/create/update/delete/rows are normal prims returning real DB
     results. They compose:
       (define u (get 'user 42))
       (str u)
 
-    Per spec [storage.types] / migration 003:
+    Per spec [storage.types] / migration 003 + [one-tree.branching-interaction]
+    /data DECISION (user-owned data):
       - `data_rows(id uuid PK, type_name text, fields jsonb, author text, ...)`
-      - Data rows are SHARED across branches (no branch_id column);
-        fork/merge copies code, not data.
+      - Data rows are NOT branch-versioned (no branch_id); fork/merge
+        copies code, not data.
+      - Visibility is USER-SCOPED: a session sees rows it authored plus
+        the shared seed corpus (bible-*, strongs-entry). Prim SQL
+        enforces this; RLS on tree_nodes is the floor (migration 013).
       - `fields` is JSON; Lisp sees it as a string, with dict-* prims
-        for field access (no separate dict value type yet).
+        for field access.
       - No ORM; parameterized SQL via pgx. Multi-step atomicity uses
         Store.with_dynamic_transaction / (with-transaction …).
 
@@ -19,11 +22,29 @@
     Misses return VNil so Lisp can branch on `(if (get 'user id) ...)`. *)
 open Pricklypear_lisp.Ast
 
-(* one-tree P3: when PP_TREE_READS=1, data reads source from the
-   tree-backed tree_data_rows view; writes still go to data_rows (the
-   009 shadow trigger mirrors them into the tree in the same tx). See
-   Store.tree_reads. Result shape is unchanged -> prim ABI preserved. *)
+(* Reads go through data_rows with an explicit author/seed confinement
+   predicate (primary control). tree_data_rows remains available when
+   PP_TREE_READS=1; the view also confines when pp.user is set. Writes
+   always hit data_rows (forward mirror keeps the tree in lockstep). *)
 let data_rel () = if Store.tree_reads () then "tree_data_rows" else "data_rows"
+
+(** Session username for confinement. Prefer Request_context snapshot
+    (cotenant-safe); fall back to anonymous when unbound (scripts). *)
+let session_user () : string =
+  match Request_context.get () with
+  | Some c -> (Request_context.manifest c).username
+  | None -> "anonymous"
+
+(** SQL fragment: row is visible to $N (author match OR seed type).
+    Seed list MUST match Tree_store.seed_types / tree_is_seed_type. *)
+let visible_sql ~(user_param : int) : string =
+  Printf.sprintf
+    "(author = $%d OR type_name IN ('bible-verse','bible-book','bible-interlinear','strongs-entry'))"
+    user_param
+
+(** SQL fragment: row is writable by $N (own rows only — not seed). *)
+let owned_sql ~(user_param : int) : string =
+  Printf.sprintf "(author = $%d)" user_param
 
 (** If [type_name] is declared on the store's branch, validate [fields_json]
     against its field list. Undeclared types are free-form (no schema).
@@ -50,7 +71,7 @@ let value_of_id cell : value =
     INSERTs a row into type_defs with branch_id = session's branch and
     fields = JSON array ["field1","field2",...] (the field names in
     declared order). Per spec [storage.types]: type declarations are
-    metadata; the actual data lives in the shared data_rows table
+    metadata; the actual data lives in data_rows (user-scoped + shared seed)
     (migration 003) keyed by (type_name, id). Type declarations may
     eventually drive field-level validation; for now they're documentation.
 
@@ -79,13 +100,16 @@ let get (store : Store.t) ~(type_name : string) ~(id : string) : value =
   match Io_lwt.Db.current_conn store with
   | None -> VNil
   | Some conn ->
+      let user = session_user () in
       let sql =
         "SELECT fields::text FROM " ^ data_rel () ^ " " ^
-        "WHERE type_name = $1 AND id = $2::uuid" in
+        "WHERE type_name = $1 AND id = $2::uuid AND " ^
+        visible_sql ~user_param:3 in
       let rows =
         Io_lwt.Db.execute conn
           ~params:[ Pgx.Value.of_string type_name;
-                    Pgx.Value.of_string id ]
+                    Pgx.Value.of_string id;
+                    Pgx.Value.of_string user ]
           sql
       in
       (match rows with
@@ -122,14 +146,17 @@ let select_for_update
     match Io_lwt.Db.current_conn store with
     | None -> VNil
     | Some conn ->
+        let user = session_user () in
         let sql =
           "SELECT fields::text FROM " ^ data_rel () ^ " " ^
-          "WHERE type_name = $1 AND id = $2::uuid " ^
+          "WHERE type_name = $1 AND id = $2::uuid AND " ^
+          visible_sql ~user_param:3 ^ " " ^
           "FOR UPDATE" in
         let rows =
           Io_lwt.Db.execute conn
             ~params:[ Pgx.Value.of_string type_name;
-                      Pgx.Value.of_string id ]
+                      Pgx.Value.of_string id;
+                      Pgx.Value.of_string user ]
             sql
         in
         (match rows with
@@ -203,15 +230,18 @@ let update
     let id' = Tree_store.update_datum conn ~type_name ~id ~fields_json in
     (match id' with Some s -> VStr s | None -> VNil)
   end else begin
+      let user = session_user () in
       let sql =
         "UPDATE data_rows SET fields = $3::jsonb, updated_at = now() " ^
-        "WHERE type_name = $1 AND id = $2::uuid " ^
+        "WHERE type_name = $1 AND id = $2::uuid AND " ^
+        owned_sql ~user_param:4 ^ " " ^
         "RETURNING id::text" in
       let rows =
         Io_lwt.Db.execute conn
           ~params:[ Pgx.Value.of_string type_name;
                     Pgx.Value.of_string id;
-                    Pgx.Value.of_string fields_json ]
+                    Pgx.Value.of_string fields_json;
+                    Pgx.Value.of_string user ]
           sql
       in
       (match rows with
@@ -277,14 +307,17 @@ let delete (store : Store.t) ~(type_name : string) ~(id : string) : value =
     let id' = Tree_store.delete_datum conn ~type_name ~id in
     (match id' with Some s -> VStr s | None -> VNil)
   end else begin
+      let user = session_user () in
       let sql =
         "DELETE FROM data_rows " ^
-        "WHERE type_name = $1 AND id = $2::uuid " ^
+        "WHERE type_name = $1 AND id = $2::uuid AND " ^
+        owned_sql ~user_param:3 ^ " " ^
         "RETURNING id::text" in
       let rows =
         Io_lwt.Db.execute conn
           ~params:[ Pgx.Value.of_string type_name;
-                    Pgx.Value.of_string id ]
+                    Pgx.Value.of_string id;
+                    Pgx.Value.of_string user ]
           sql
       in
       (match rows with
@@ -305,13 +338,16 @@ let list
   match Io_lwt.Db.current_conn store with
   | None -> (VList [])
   | Some conn ->
+      let user = session_user () in
       let sql =
         "SELECT id::text, fields::text FROM " ^ data_rel () ^ " " ^
-        "WHERE type_name = $1 ORDER BY created_at ASC LIMIT $2" in
+        "WHERE type_name = $1 AND " ^ visible_sql ~user_param:3 ^ " " ^
+        "ORDER BY created_at ASC LIMIT $2" in
       let rows =
         Io_lwt.Db.execute conn
           ~params:[ Pgx.Value.of_string type_name;
-                    Pgx.Value.of_int limit ]
+                    Pgx.Value.of_int limit;
+                    Pgx.Value.of_string user ]
           sql
       in
       let lisp_rows =
@@ -333,16 +369,19 @@ let find_row
   match Io_lwt.Db.current_conn store with
   | None -> VNil
   | Some conn ->
+      let user = session_user () in
       let sql =
         "SELECT fields::text FROM " ^ data_rel () ^ " " ^
-        "WHERE type_name = $1 AND fields->>$2 = $3 " ^
+        "WHERE type_name = $1 AND fields->>$2 = $3 AND " ^
+        visible_sql ~user_param:4 ^ " " ^
         "ORDER BY created_at ASC LIMIT 1"
       in
       let rows =
         Io_lwt.Db.execute conn
           ~params:[ Pgx.Value.of_string type_name
                   ; Pgx.Value.of_string field
-                  ; Pgx.Value.of_string value ]
+                  ; Pgx.Value.of_string value
+                  ; Pgx.Value.of_string user ]
           sql
       in
       (match rows with
@@ -365,6 +404,7 @@ let find_rows
   | Some conn ->
       if filters = [] then list store ~type_name ~limit ()
       else
+        let user = session_user () in
         let buf = Buffer.create 128 in
         Buffer.add_string buf
           ("SELECT id::text, fields::text FROM " ^ data_rel () ^ " WHERE type_name = $1");
@@ -378,6 +418,10 @@ let find_rows
                                ; Pgx.Value.of_string value ];
             i := !i + 2)
           filters;
+        Buffer.add_string buf
+          (Printf.sprintf " AND %s" (visible_sql ~user_param:!i));
+        params := !params @ [ Pgx.Value.of_string user ];
+        i := !i + 1;
         Buffer.add_string buf
           (Printf.sprintf
              " ORDER BY COALESCE((fields->>'verse')::int, 0) ASC, created_at ASC LIMIT $%d"
@@ -401,13 +445,16 @@ let find_random (store : Store.t) ~(type_name : string) : value =
   match Io_lwt.Db.current_conn store with
   | None -> VNil
   | Some conn ->
+      let user = session_user () in
       let sql =
         "SELECT id::text, fields::text FROM " ^ data_rel () ^ " " ^
-        "WHERE type_name = $1 ORDER BY random() LIMIT 1"
+        "WHERE type_name = $1 AND " ^ visible_sql ~user_param:2 ^ " " ^
+        "ORDER BY random() LIMIT 1"
       in
       let rows =
         Io_lwt.Db.execute conn
-          ~params:[ Pgx.Value.of_string type_name ]
+          ~params:[ Pgx.Value.of_string type_name;
+                    Pgx.Value.of_string user ]
           sql
       in
       (match rows with
@@ -427,9 +474,11 @@ let find_text
   match Io_lwt.Db.current_conn store with
   | None -> (VList [])
   | Some conn ->
+      let user = session_user () in
       let sql =
         "SELECT id::text, fields::text FROM " ^ data_rel () ^ " " ^
-        "WHERE type_name = $1 AND fields->>$2 ILIKE $3 " ^
+        "WHERE type_name = $1 AND fields->>$2 ILIKE $3 AND " ^
+        visible_sql ~user_param:5 ^ " " ^
         "ORDER BY created_at ASC LIMIT $4"
       in
       let pat = "%" ^ needle ^ "%" in
@@ -438,7 +487,8 @@ let find_text
           ~params:[ Pgx.Value.of_string type_name
                   ; Pgx.Value.of_string field
                   ; Pgx.Value.of_string pat
-                  ; Pgx.Value.of_int limit ]
+                  ; Pgx.Value.of_int limit
+                  ; Pgx.Value.of_string user ]
           sql
       in
       let lisp_rows =
@@ -466,12 +516,15 @@ let count_by_type (store : Store.t) ~(type_name : string) : int =
   match Io_lwt.Db.current_conn store with
   | None -> 0
   | Some conn ->
+      let user = session_user () in
       let sql =
-        "SELECT COUNT(*)::int FROM " ^ data_rel () ^ " WHERE type_name = $1"
+        "SELECT COUNT(*)::int FROM " ^ data_rel () ^
+        " WHERE type_name = $1 AND " ^ visible_sql ~user_param:2
       in
       let rows =
         Io_lwt.Db.execute conn
-          ~params:[ Pgx.Value.of_string type_name ]
+          ~params:[ Pgx.Value.of_string type_name;
+                    Pgx.Value.of_string user ]
           sql
       in
       (match rows with
@@ -485,10 +538,17 @@ let list_data_type_names (store : Store.t) : string list =
   match Io_lwt.Db.current_conn store with
   | None -> []
   | Some conn ->
+      let user = session_user () in
       let sql =
-        "SELECT DISTINCT type_name FROM " ^ data_rel () ^ " ORDER BY type_name ASC"
+        "SELECT DISTINCT type_name FROM " ^ data_rel () ^
+        " WHERE " ^ visible_sql ~user_param:1 ^
+        " ORDER BY type_name ASC"
       in
-      let rows = Io_lwt.Db.execute conn sql in
+      let rows =
+        Io_lwt.Db.execute conn
+          ~params:[ Pgx.Value.of_string user ]
+          sql
+      in
       (List.filter_map
            (fun row ->
              match row with
@@ -505,17 +565,20 @@ let list_page
   | Some conn ->
       let lim = max 1 (min limit 200) in
       let off = max 0 offset in
+      let user = session_user () in
       let sql =
         "SELECT id::text, fields::text, author, " ^
         "created_at::text, updated_at::text " ^
-        "FROM " ^ data_rel () ^ " WHERE type_name = $1 " ^
+        "FROM " ^ data_rel () ^ " WHERE type_name = $1 AND " ^
+        visible_sql ~user_param:4 ^ " " ^
         "ORDER BY created_at ASC LIMIT $2 OFFSET $3"
       in
       let rows =
         Io_lwt.Db.execute conn
           ~params:[ Pgx.Value.of_string type_name
                   ; Pgx.Value.of_int lim
-                  ; Pgx.Value.of_int off ]
+                  ; Pgx.Value.of_int off
+                  ; Pgx.Value.of_string user ]
           sql
       in
       (List.filter_map
@@ -542,15 +605,18 @@ let get_row
   match Io_lwt.Db.current_conn store with
   | None -> None
   | Some conn ->
+      let user = session_user () in
       let sql =
         "SELECT id::text, fields::text, author, " ^
         "created_at::text, updated_at::text " ^
-        "FROM " ^ data_rel () ^ " WHERE type_name = $1 AND id = $2::uuid"
+        "FROM " ^ data_rel () ^ " WHERE type_name = $1 AND id = $2::uuid AND " ^
+        visible_sql ~user_param:3
       in
       let rows =
         Io_lwt.Db.execute conn
           ~params:[ Pgx.Value.of_string type_name
-                  ; Pgx.Value.of_string id ]
+                  ; Pgx.Value.of_string id
+                  ; Pgx.Value.of_string user ]
           sql
       in
       (match rows with
@@ -570,7 +636,8 @@ let get_row
 
 (** (node-path 'type id) -> VStr path. Pure path constructor. *)
 let node_path ~(type_name : string) ~(id : string) : value =
-  VStr (Tree_store.datum_path ~type_name ~id)
+  let user = session_user () in
+  VStr (Tree_store.datum_path ~user ~type_name ~id ())
 
 (** (backlinks id-or-path [limit]) -> VList of VStr paths. *)
 let backlinks (store : Store.t) ~(needle : string) ?(limit : int = 200) ()
