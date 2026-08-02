@@ -95,7 +95,7 @@ let pkg_path ~branch_id ~name =
 
 (** Seed corpus types — visible to every session under data.shared.*
     (must match tree_is_seed_type in migrations/013_data_user_scoping.sql). *)
-let seed_types = [ "bible-verse"; "bible-book"; "bible-interlinear"; "strongs-entry" ]
+let seed_types = [ "bible-verse"; "bible-book"; "bible-interlinear"; "strongs-entry"; "guestbook_entry" ]
 
 let is_seed_type (type_name : string) : bool =
   List.mem type_name seed_types

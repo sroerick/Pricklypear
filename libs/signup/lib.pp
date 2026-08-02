@@ -158,3 +158,5 @@
           (html/attr "class" "layout-foot")
           (html/a "/welcome" (html/text "welcome")))))))
 
+;; Public signup form (hard-public path in http.ml).
+(public-route "/signup" "signup/page")
