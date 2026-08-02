@@ -302,6 +302,29 @@
         (css/rule
           ".menu-drop>summary::after"
           (list "content" "\" v\"" "font-size" ".7em"))
+        ;; Pure-CSS click-outside close: when open, summary::before is a
+        ;; full-viewport transparent hit target UNDER the panel. A click
+        ;; outside hits that pseudo and toggles the details closed — no JS.
+        ;; Panel z-index must stay above the backdrop; summary above too so
+        ;; the label remains clickable to dismiss.
+        (css/rule
+          ".menu-drop[open]>summary"
+          (list "position" "relative" "z-index" "81"))
+        (css/rule
+          ".menu-drop[open]>summary::before"
+          (list
+            "content"
+            "\"\""
+            "position"
+            "fixed"
+            "inset"
+            "0"
+            "z-index"
+            "80"
+            "cursor"
+            "default"
+            "background"
+            "transparent"))
         (css/rule
           ".menu-drop-panel"
           (list
@@ -316,7 +339,7 @@
             "top"
             "100%"
             "z-index"
-            "50"
+            "82"
             "min-width"
             "10rem"
             "max-width"
