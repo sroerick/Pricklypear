@@ -1307,6 +1307,8 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
     (fun name _ ->
       Pricklypear_lisp.Env.define env name (Pricklypear_lisp.Ast.VPrim name))
     prim_table;
+  (* lisp-interpreter.math: pi is a bound value, not a zero-arg prim. *)
+  Pricklypear_lisp.Env.define env "pi" (Pricklypear_lisp.Ast.VFloat Float.pi);
   Primitives.register prim_table "load-string"
     (fun args ->
       match args with

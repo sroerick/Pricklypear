@@ -18,6 +18,7 @@ let make_test_env () =
     (fun name _ ->
       Pricklypear_lisp.Env.define env name (VPrim name))
     prim_table;
+  Pricklypear_lisp.Env.define env "pi" (VFloat Float.pi);
   (env, prim_table)
 
 (* Helper: eval a Lisp form string against the test env under the effect rim. *)
@@ -67,6 +68,158 @@ let arithmetic_tests = [
     Alcotest.(check string) "not true" "#f" (eval_str "(not #t)"));
   ("not nil -> true", `Quick, fun () ->
     Alcotest.(check string) "not nil" "#t" (eval_str "(not ())"));
+]
+
+(* --- lisp-interpreter.math --- *)
+let math_tests = [
+  ("expt int-in int-out", `Quick, fun () ->
+    Alcotest.(check string) "2^10" "1024" (eval_str "(expt 2 10)"));
+  ("expt 0 exp", `Quick, fun () ->
+    Alcotest.(check string) "n^0" "1" (eval_str "(expt 9 0)"));
+  ("expt float path", `Quick, fun () ->
+    let v = eval "(expt 2.0 0.5)" in
+    match v with
+    | VFloat f ->
+        Alcotest.(check bool) "~sqrt2" true
+          (abs_float (f -. sqrt 2.) < 1e-9)
+    | _ -> Alcotest.fail "expected float");
+  ("sqrt 9", `Quick, fun () ->
+    Alcotest.(check string) "sqrt" "3.0" (eval_str "(sqrt 9)"));
+  ("sqrt negative errors", `Quick, fun () ->
+    match try ignore (eval "(sqrt -1)"); None with
+          | Interp_error (User_error m) -> Some m
+          | _ -> Some "other"
+    with
+    | Some m -> Alcotest.(check bool) "msg" true (String.length m > 0)
+    | None -> Alcotest.fail "expected error");
+  ("exp 0", `Quick, fun () ->
+    Alcotest.(check string) "e0" "1.0" (eval_str "(exp 0)"));
+  ("log e ~ 1", `Quick, fun () ->
+    let v = eval "(log (exp 1))" in
+    match v with
+    | VFloat f -> Alcotest.(check bool) "~1" true (abs_float (f -. 1.) < 1e-9)
+    | _ -> Alcotest.fail "float");
+  ("log base 10 of 1000", `Quick, fun () ->
+    let v = eval "(log 1000 10)" in
+    match v with
+    | VFloat f -> Alcotest.(check bool) "~3" true (abs_float (f -. 3.) < 1e-9)
+    | _ -> Alcotest.fail "float");
+  ("log non-positive errors", `Quick, fun () ->
+    match try ignore (eval "(log 0)"); None with
+          | Interp_error (User_error _) -> Some ()
+          | _ -> None
+    with
+    | Some () -> ()
+    | None -> Alcotest.fail "expected error");
+  ("sin 0", `Quick, fun () ->
+    Alcotest.(check string) "sin0" "0.0" (eval_str "(sin 0)"));
+  ("cos 0", `Quick, fun () ->
+    Alcotest.(check string) "cos0" "1.0" (eval_str "(cos 0)"));
+  ("tan 0", `Quick, fun () ->
+    Alcotest.(check string) "tan0" "0.0" (eval_str "(tan 0)"));
+  ("asin 0", `Quick, fun () ->
+    Alcotest.(check string) "asin0" "0.0" (eval_str "(asin 0)"));
+  ("acos 1", `Quick, fun () ->
+    Alcotest.(check string) "acos1" "0.0" (eval_str "(acos 1)"));
+  ("atan 0", `Quick, fun () ->
+    Alcotest.(check string) "atan0" "0.0" (eval_str "(atan 0)"));
+  ("atan2 quadrant", `Quick, fun () ->
+    let v = eval "(atan 1.0 1.0)" in
+    match v with
+    | VFloat f ->
+        Alcotest.(check bool) "pi/4" true
+          (abs_float (f -. (Float.pi /. 4.)) < 1e-9)
+    | _ -> Alcotest.fail "float");
+  ("asin domain error", `Quick, fun () ->
+    match try ignore (eval "(asin 2)"); None with
+          | Interp_error (User_error _) -> Some ()
+          | _ -> None
+    with
+    | Some () -> ()
+    | None -> Alcotest.fail "expected error");
+  ("pi bound value", `Quick, fun () ->
+    let v = eval "pi" in
+    match v with
+    | VFloat f ->
+        Alcotest.(check bool) "pi" true (abs_float (f -. Float.pi) < 1e-15)
+    | _ -> Alcotest.fail "pi not float");
+  ("number? int", `Quick, fun () ->
+    Alcotest.(check string) "n?" "#t" (eval_str "(number? 3)"));
+  ("number? float", `Quick, fun () ->
+    Alcotest.(check string) "n?f" "#t" (eval_str "(number? 3.0)"));
+  ("number? str", `Quick, fun () ->
+    Alcotest.(check string) "n?s" "#f" (eval_str "(number? \"3\")"));
+  ("integer? int", `Quick, fun () ->
+    Alcotest.(check string) "i?" "#t" (eval_str "(integer? 3)"));
+  ("integer? float tag-based", `Quick, fun () ->
+    Alcotest.(check string) "i?f" "#f" (eval_str "(integer? 3.0)"));
+  ("zero?", `Quick, fun () ->
+    Alcotest.(check string) "z" "#t" (eval_str "(zero? 0)"));
+  ("positive?", `Quick, fun () ->
+    Alcotest.(check string) "p" "#t" (eval_str "(positive? 1)"));
+  ("negative?", `Quick, fun () ->
+    Alcotest.(check string) "neg" "#t" (eval_str "(negative? -1)"));
+  ("even?", `Quick, fun () ->
+    Alcotest.(check string) "even" "#t" (eval_str "(even? 4)"));
+  ("odd?", `Quick, fun () ->
+    Alcotest.(check string) "odd" "#t" (eval_str "(odd? 3)"));
+  ("even? non-integral float errors", `Quick, fun () ->
+    match try ignore (eval "(even? 1.5)"); None with
+          | Interp_error (User_error _) -> Some ()
+          | _ -> None
+    with
+    | Some () -> ()
+    | None -> Alcotest.fail "expected error");
+  ("quotient", `Quick, fun () ->
+    Alcotest.(check string) "q" "3" (eval_str "(quotient 10 3)"));
+  ("remainder", `Quick, fun () ->
+    Alcotest.(check string) "r" "1" (eval_str "(remainder 10 3)"));
+  ("quotient negative dividend", `Quick, fun () ->
+    (* Int64.div truncates toward zero *)
+    Alcotest.(check string) "qneg" "-3" (eval_str "(quotient -10 3)"));
+  ("remainder negative dividend", `Quick, fun () ->
+    Alcotest.(check string) "rneg" "-1" (eval_str "(remainder -10 3)"));
+  ("quotient by zero errors", `Quick, fun () ->
+    match try ignore (eval "(quotient 1 0)"); None with
+          | Interp_error (User_error _) -> Some ()
+          | _ -> None
+    with
+    | Some () -> ()
+    | None -> Alcotest.fail "expected error");
+  ("quotient rejects float", `Quick, fun () ->
+    match try ignore (eval "(quotient 1.0 2.0)"); None with
+          | Interp_error (User_error _) -> Some ()
+          | _ -> None
+    with
+    | Some () -> ()
+    | None -> Alcotest.fail "expected error");
+  ("div by zero errors", `Quick, fun () ->
+    match try ignore (eval "(div 1 0)"); None with
+          | Interp_error (User_error _) -> Some ()
+          | _ -> None
+    with
+    | Some () -> ()
+    | None -> Alcotest.fail "expected error");
+  ("random n in range", `Quick, fun () ->
+    ignore (eval "(random-seed 42)");
+    let v = eval "(random 10)" in
+    match v with
+    | VInt n ->
+        Alcotest.(check bool) "range" true (n >= 0L && n < 10L)
+    | _ -> Alcotest.fail "expected int");
+  ("random zero-arg float", `Quick, fun () ->
+    ignore (eval "(random-seed 1)");
+    let v = eval "(random)" in
+    match v with
+    | VFloat f ->
+        Alcotest.(check bool) "[0,1)" true (f >= 0. && f < 1.)
+    | _ -> Alcotest.fail "expected float");
+  ("random-seed deterministic", `Quick, fun () ->
+    ignore (eval "(random-seed 99)");
+    let a = eval_str "(random 1000)" in
+    ignore (eval "(random-seed 99)");
+    let b = eval_str "(random 1000)" in
+    Alcotest.(check string) "same" a b);
 ]
 
 (* --- list/pair operations --- *)
@@ -618,6 +771,7 @@ let multipart_tests = [
 let () =
   Alcotest.run "pricklypear-image-primitives" [
     "arithmetic", arithmetic_tests;
+    "math", math_tests;
     "list", list_tests;
     "string", string_tests;
     "probe", probe_tests;

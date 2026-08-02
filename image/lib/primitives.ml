@@ -90,9 +90,31 @@ let make_with_defaults () : t =
   register_sync t "div" prim_div;
   register_sync t "/" prim_div; (* Scheme-style alias of div *)
   register_sync t "mod" prim_mod;
+  register_sync t "quotient" prim_quotient;
+  register_sync t "remainder" prim_remainder;
   register_sync t "abs" prim_abs;
   register_sync t "min" prim_min;
   register_sync t "max" prim_max;
+  (* lisp-interpreter.math — transcendental + predicates + RNG *)
+  register_sync t "expt" prim_expt;
+  register_sync t "sqrt" prim_sqrt;
+  register_sync t "exp" prim_exp;
+  register_sync t "log" prim_log;
+  register_sync t "sin" prim_sin;
+  register_sync t "cos" prim_cos;
+  register_sync t "tan" prim_tan;
+  register_sync t "asin" prim_asin;
+  register_sync t "acos" prim_acos;
+  register_sync t "atan" prim_atan;
+  register_sync t "number?" prim_number_p;
+  register_sync t "integer?" prim_integer_p;
+  register_sync t "zero?" prim_zero_p;
+  register_sync t "positive?" prim_positive_p;
+  register_sync t "negative?" prim_negative_p;
+  register_sync t "even?" prim_even_p;
+  register_sync t "odd?" prim_odd_p;
+  register_sync t "random" prim_random;
+  register_sync t "random-seed" prim_random_seed;
   register_sync t "=" prim_num_eq;
   register_sync t "<" prim_lt;
   register_sync t ">" prim_gt;
@@ -216,6 +238,20 @@ let prim_summary (name : string) : string =
   | "parse-int" -> "string or int to int"
   | "parse-float" -> "string or number to float"
   | "floor" | "round" -> "float to int"
+  | "expt" -> "power: int^nonneg-int stays int; else float"
+  | "sqrt" -> "square root (error on negative)"
+  | "exp" -> "e^x"
+  | "log" -> "natural log, or log base b with 2 args"
+  | "sin" | "cos" | "tan" -> "trig in radians"
+  | "asin" | "acos" | "atan" -> "inverse trig; atan 2-arg is atan2"
+  | "number?" -> "true for int or float"
+  | "integer?" -> "true for VInt only (tag-based)"
+  | "zero?" | "positive?" | "negative?" -> "numeric sign predicates"
+  | "even?" | "odd?" -> "parity; integers (or integral floats)"
+  | "quotient" -> "integer division (Scheme name for div int path)"
+  | "remainder" -> "integer remainder (Scheme name for mod int path)"
+  | "random" -> "(random) float [0,1); (random n) int [0,n)"
+  | "random-seed" -> "reseed process PRNG from int"
   | "date-weekday" -> "weekday 0=Sun for y m d"
   | "date-format" -> "format y m d as YYYY-MM-DD"
   | "date-add-days" -> "add n days to YYYY-MM-DD (or today)"

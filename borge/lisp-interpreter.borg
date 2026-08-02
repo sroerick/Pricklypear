@@ -1476,8 +1476,8 @@
 
   (subsection math
    (doc "Numeric tower beyond the four operations: expt/sqrt/trig/log, numeric predicates, integer division aliases, seeded RNG")
-   (status planned)
-   (implements image/lib/prims_pure.ml image/lib/primitives.ml lisp/lib/effect.ml lisp/test/conformance_test.ml)
+   (status implemented)
+   (implements image/lib/prims_pure.ml image/lib/primitives.ml image/lib/session.ml lisp/lib/effect.ml image/test/primitives_test.ml lisp/test/effect_test.ml)
    (verify
     (build "dune build lisp image")
     (test "expt/sqrt/log/exp/sin/cos/tan round-trip on known values (float results)")
