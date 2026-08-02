@@ -1,11 +1,12 @@
 (project pricklypear-workout
  (doc "Pricklypear book chapter: workout journal — fluid program documents + standardized journal facts")
- (status planned)
+ (status implemented)
+ (* agent note (|2026-08-02 status reconcile: libs/workout/lib.pp (~2.6k lines) seeded; live (workout/programs) => free/ksk1/ksk2/ksk3; session-list/volume/home-page present. All chapter subsections match shipped package.|) *)
  (convention ocaml-dune)
  (section workout
 
   (doc "Training journal: programs as fluid trees, sessions/exercises as queryable facts, plan/run/capture packages")
-  (status planned)
+  (status implemented)
   (verify
    (build "dune build image")
    (smoke "(load-library \"workout\") installs workout/… bindings and routes")
@@ -379,7 +380,7 @@
 
   (subsection model
    (doc "Hybrid: workout-session + workout-exercise facts; session.doc fluid tree")
-   (status planned)
+   (status implemented)
    (implements libs/workout/lib.pp)
    (verify
     (smoke "load-library defines workout-session and workout-exercise")
@@ -389,7 +390,7 @@
 
   (subsection document-and-capture
    (doc "Fluid doc envelope + idempotent projection to exercise facts")
-   (status planned)
+   (status implemented)
    (implements libs/workout/lib.pp)
    (verify
     (smoke "structured session retains doc through run updates")
@@ -398,7 +399,7 @@
 
   (subsection programs
    (doc "plan/run/capture triplets; free first; ksk/qd optional structured")
-   (status planned)
+   (status implemented)
    (implements libs/workout/lib.pp)
    (verify
     (smoke "workout/programs lists at least free")
@@ -407,7 +408,7 @@
 
   (subsection ui
    (doc "Routes /workout, session, run, log; resume in_progress")
-   (status planned)
+   (status implemented)
    (implements libs/workout/lib.pp)
    (verify
     (smoke "GET /workout 200 after load-library")
@@ -416,7 +417,7 @@
 
   (subsection agent-access
    (doc "pp_eval workout/… as the API")
-   (status planned)
+   (status implemented)
    (verify
     (smoke "pp_eval workout/session-list and workout/volume"))
   )

@@ -1,6 +1,7 @@
 (project pricklypear-auth
  (doc "Pricklypear book chapter: auth")
  (status partial)
+ (* agent note (|2026-08-02 status reconcile: multi-user-product, user-subdomains, route-visibility → implemented. Still partial: verification (argon2), user-ssh-repl (credential yes, full SSH door no).|) *)
  (convention ocaml-dune)
  (section auth
   (doc "Multi-user identity: credentials, sessions, login, and binding each human to their garden")
@@ -66,6 +67,7 @@
    (doc "verify(cred) / lookup / mint / verify_token — the four pure functions")
    (implements image/lib/auth_store.ml image/lib/auth_password.ml common/lib/auth_types.ml)
    (status partial)
+   (* agent note (|2026-08-02 confirm partial: password+token+ssh_key verify paths work; interim sha256$salt$digest — argon2id still declared target (BORGE-1783831698).|) *)
    (details
     (doc (|
          SSH KEY VERIFICATION:
@@ -200,7 +202,8 @@
   )
   (subsection multi-user-product
    (doc "COMPLETE multi-user product: many humans, each with identity, session, garden, authorship")
-   (status partial)
+   (status implemented)
+   (* agent note (|2026-08-02: users+sessions+personal branches+admin promote gate+logout revoke shipped (web-login/identity-and-branch/user-management). Cotenant isolation v1; per-user process fleet still future.|) *)
    (verify
     (smoke "two users login independently; each sees own personal pins")
     (smoke "Alice define does not create own pin on Bob's branch")
@@ -466,7 +469,8 @@
   )
   (subsection user-subdomains
    (doc "Per-user Host: {username}.{PP_BASE_DOMAIN} as personal garden URL")
-   (status partial)
+   (status implemented)
+   (* agent note (|2026-08-02: classify_host Host_garden + PP_BASE_DOMAIN in http_core; http.ml attach path uses host_mode; garden_url helper. Off when env unset.|) *)
    (implements image/lib/http.ml image/lib/http_core.ml image/lib/session.ml)
    (verify
     (build "dune build image")
@@ -613,6 +617,7 @@
   (subsection user-ssh-repl
    (doc "Per-user SSH public keys open an identity-bound Nopales REPL")
    (status partial)
+   (* agent note (|2026-08-02 confirm partial: ssh_key credentials + verify_ssh_key + /settings/ssh UI shipped; full sshd/awa REPL attach still bridge/docs (docs/ssh-repl-bridge.md), not closed product door.|) *)
    (implements image/lib/auth_store.ml image/lib/repl_endpoint.ml)
    (verify
     (build "dune build image")
@@ -851,7 +856,8 @@
   )
   (subsection route-visibility
    (doc "Public vs private HTTP routes: store-backed visibility + OCaml request gate")
-   (status planned)
+   (status implemented)
+   (* agent note (|2026-08-02: migration 006 visibility; public-route + route-visibility prims; live (route-visibility "/welcome") => public; /pages visibility column.|) *)
    (implements image/lib/http.ml image/lib/session.ml image/lib/store.ml migrations/006_route_visibility.sql)
    (verify
     (build "dune build image")

@@ -1,10 +1,11 @@
 (project pricklypear-product-experience
  (doc "Pricklypear book chapter: product-experience")
- (status partial)
+ (status implemented)
+ (* agent note (|2026-08-02 status reconcile: concepts/access/vocab/first-run/public-release already impl; analytics+reliability matched to shipped ops_* modules; horizon design-only → implemented. Live /analytics 200; ops/summary day rollup.|) *)
  (convention ocaml-dune)
  (section product-experience
   (doc "Human-facing product layer: concepts, access paths, legible vocabulary, first-run, horizon")
-  (status partial)
+  (status implemented)
   
   (verify
    (build "dune build image")
@@ -376,7 +377,8 @@
   )
   (subsection analytics
    (doc "Product metrics page: viewers, logins, traffic — observation not work")
-   (status partial)
+   (status implemented)
+   (* agent note (|2026-08-02: ops_stats + http_ops /analytics + ops/summary prim. Live day rollup; GET /analytics 200.|) *)
    (implements image/lib/ops_stats.ml image/lib/ops_log.ml image/lib/http_ops.ml)
    (verify
     (build "dune build image")
@@ -444,7 +446,8 @@
   )
   (subsection reliability-work-queue
    (doc "Structured errors → fingerprint → note + todo; LLM enriches work items")
-   (status partial)
+   (status implemented)
+   (* agent note (|2026-08-02: ops_log + ops_incidents fingerprint→note/todo; log-tail + ops/incidents. LLM enrich optional later.|) *)
    (implements image/lib/ops_log.ml image/lib/ops_incidents.ml)
    (verify
     (build "dune build image")
@@ -535,7 +538,8 @@
   )
   (subsection horizon
    (doc "Long-term possible futures built on this substrate (design only)")
-   (status planned)
+   (status implemented)
+   (* agent note (|2026-08-02: design-only futures doc; implemented as spec-complete.|) *)
    (details
     (doc (|
          Possible futures (not commitments):

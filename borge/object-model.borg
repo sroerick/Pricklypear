@@ -1,6 +1,7 @@
 (project pricklypear-object-model
  (doc "Pricklypear book chapter: object-model")
  (status partial)
+ (* agent note (|2026-08-02 status reconcile: CRUD+deftype+dict+render-html shipped (crud.ml/prims); type-system still partial for full :ref lattice. Parents stay partial.|) *)
  (convention ocaml-dune)
  (section object-model
   
@@ -69,6 +70,7 @@
    (doc "Field types and reference semantics")
    (status partial)
    (* agent note (|one-tree P6: boundary validation + type-fields/node-path/backlinks prims land the declared-field half; :ref as path + full field-type lattice still open.|) *)
+   (* agent note (|2026-08-02 confirm still partial: deftype+type-fields+Tree_store.validate_fields exist; typed :ref/:array lattice and setuid-style ref deref incomplete.|) *)
    (details
     (doc (|
          Field types (initial cut, grow as needed):

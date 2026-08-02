@@ -1,6 +1,7 @@
 (project pricklypear-migrations
  (doc "Pricklypear book chapter: migrations")
  (status partial)
+ (* agent note (|2026-08-02 status reconcile: applied-by-image+additive-only match ops; branching-interaction stays partial (type_defs merge/schema_vers messaging).|) *)
  (convention ocaml-dune)
  (section migrations
 
@@ -11,7 +12,8 @@
    (smoke "image boots against a fresh database; schema_migrations records 001..007; re-boot is a no-op"))
   (subsection applied-by-image
    (doc "The image owns schema state before it serves")
-   (status partial)
+   (status implemented)
+   (* agent note (|2026-08-02: migrations/001–012 + schema_migrations; apply via scripts/dev.sh and deploy hooks before serve (AGENTS.md). Idempotent SQL files.|) *)
    (details
     (doc (|
          The IMAGE runs migrations. On boot it applies any
@@ -113,6 +115,7 @@
   (subsection branching-interaction
    (doc "How migrations interact with branches")
    (status partial)
+   (* agent note (|2026-08-02 confirm: shared tables + additive-only policy live; type_defs proposal→main migration path and schema_vers messaging still incomplete.|) *)
    (details
     (doc (|
          Migrations only apply to the SHARED data tables,

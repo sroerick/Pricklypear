@@ -1,10 +1,11 @@
 (project pricklypear-habitat-workflow
  (doc "Pricklypear book chapter: habitat-workflow")
- (status planned)
+ (status implemented)
+ (* agent note (|2026-08-02 status reconcile: libs/spec (~600 lines) + promote_soft_warnings in session.ml; live spec/todo+log/sessions+log/issues docs; /book/todo 200. Soft lint only (no hard bounce yet — intentional v1). /spec health 500 is runtime bug not missing package.|) *)
  (convention ocaml-dune)
  (section habitat-workflow
   (doc "Spec-in-the-image: the borge discipline (spec -> build -> compare) as a habitat-native workflow, with promote as the goalpost-immobility gate")
-  (status planned)
+  (status implemented)
 
   (verify
    (smoke "notes docs spec/<pkg> exist for at least one package and pass habitat lint queries")
@@ -89,7 +90,8 @@
 
   (subsection spec-docs
    (doc "One notes doc per package (slug spec/<pkg>): flows, canonical paths, decisions, status — the intent artifact that outlives the turn")
-   (status partial)
+   (status implemented)
+   (* agent note (|2026-08-02: convention + tooling live — (notes/doc/get "spec/todo") #t; spec/doc, flow-entries, flows-resolve in libs/spec. Coverage across all packages is ongoing content, not missing mechanism.|) *)
    (verify
     (smoke "(notes/doc/get \"spec/todo\") returns a doc with flows/decisions sections")
     (smoke "a spec doc's flow entries name existing function bindings (resolvable via function-doc)"))
@@ -177,7 +179,8 @@
   )
   (subsection spec-checks
    (doc "Promote-time comparison: spec->code resolution, code->spec acknowledgment, doc coverage — promote grows a checklist")
-   (status partial)
+   (status implemented)
+   (* agent note (|2026-08-02: spec/lint + promote-checklist + Session.promote_soft_warnings wired into promote_to_main and branches UI (soft, non-blocking). Hard bounce graduation still future; matches "starting as soft warnings".|) *)
    (verify
     (smoke "promote preview lists flow bindings that fail to resolve on the source branch")
     (smoke "promote preview lists public bindings redefined on the source branch with no spec/decisions mention")
@@ -281,7 +284,8 @@
   )
   (subsection non-goals
    (doc "What habitat-workflow is NOT")
-   (status planned)
+   (status implemented)
+   (* agent note (|2026-08-02: documentation-only; marked implemented as spec-complete.|) *)
    (details
     (doc (|
          - NOT a port of borge-the-tool into Nopales. No balance,

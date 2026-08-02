@@ -1,6 +1,7 @@
 (project pricklypear-one-tree
  (doc "Pricklypear book chapter: one-tree — ONE BIG TREE as the storage substrate, typed nodes for data modelling")
  (status partial)
+ (* agent note (|2026-08-02 status reconcile: tree-model/typed-nodes/projections/non-goals implemented; branching-interaction+migration-plan still partial (shared /data A, full tree-diff merge, phase-3 retire tables).|) *)
  (convention ocaml-dune)
  (section one-tree
 
@@ -349,6 +350,7 @@
   (subsection branching-interaction
    (doc "Branches as tree lenses; the /data question; merge as tree-diff")
    (status partial)
+   (* agent note (|2026-08-02 confirm: tree_branches + path lenses + shared data_rows (placement A). Three-way tree-diff merge / promote-as-pointer-move still incomplete vs scaffolding promote.|) *)
    (implements image/lib/store.ml image/lib/tree_store.ml)
    (details
     (doc (|
@@ -402,6 +404,7 @@
   (subsection migration-plan
    (doc "Phased cutover: shadow tree → flip reads → projections derive → retire tables")
    (status partial)
+   (* agent note (|2026-08-02 confirm: 009_tree + mirrors + tree_store + verify_one_tree.sh (P0–P2 territory). Phase 3 retire scaffolding tables not done; PP_TREE_* knobs remain.|) *)
    (implements migrations/009_tree.sql image/lib/store.ml image/lib/crud.ml)
    (details
     (doc (|

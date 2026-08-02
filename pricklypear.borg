@@ -1,6 +1,7 @@
 (project pricklypear
  (doc "A multi-user Lisp operating system in the Smalltalk tradition: OCaml image binary, Postgres object store, htmx UI. Many humans, each with session + personal garden. One binary serves all sessions (single-image.borg); the multi-user product is auth.multi-user-product; isolation is multi-user.cotenant-isolation — session + branch scoped, one process.")
  (status partial)
+ (* agent note (|2026-08-02 full-book status reconcile: root stays partial while open chapter work remains (notes partials, dabar search-fts, image repl-exp/per-req, auth argon2/ssh-repl, branching schema/ast-nodes, multi-user permissions, object-model type-system, one-tree migration, migrations branching-interaction, structural-editing ast-view, formal-verification planned). borge report after pass ~149 implemented / 4 planned / ~96%. See docs/plans/borge-status-reconcile-checklist.md.|) *)
  (verify
   (build "dune build @all — exit 0 (lisp + common + image)")
   (test "dune runtest — alcotest across lisp/common/image (some prim edge cases may fail; track separately)")

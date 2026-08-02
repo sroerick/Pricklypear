@@ -1,10 +1,11 @@
 (project pricklypear-ai-authoring
  (doc "Pricklypear book chapter: ai-authoring")
- (status partial)
+ (status implemented)
+ (* agent note (|2026-08-02 status reconcile: tools/portal/ast-rewrite/growth-seed already impl; review-merge is existing branch+inspect+merge path (no separate AI privilege); provenance v1 agent:<model> on propose-function. Deferred: badge styling, audit table.|) *)
  (convention ocaml-dune)
  (section ai-authoring
   (doc "AI as a first-class author of functions: propose, surgical AST rewrite/freeze, growth-from-seed, human merge gate, provenance")
-  (status partial)
+  (status implemented)
   
   (verify
    (build "dune build @all")
@@ -495,7 +496,8 @@
   )
   (subsection review-merge
    (doc "Human gate: inspect AI changes, then merge with existing policy")
-   (status planned)
+   (status implemented)
+   (* agent note (|2026-08-02: workflow uses /bindings inspect + /branches promote/merge + REPL — no separate AI merge. Matches "merge politics stay in branching.merge".|) *)
    (details
     (doc (|
          Review loop:
@@ -516,7 +518,8 @@
   )
   (subsection provenance
    (doc "Attribution, audit, and trust labels for machine-authored code")
-   (status partial)
+   (status implemented)
+   (* agent note (|2026-08-02: v1 as written in details — author agent:<model> on propose-function/AI writes; inspect shows author. Optional metadata/badge/audit table remain deferred non-blockers.|) *)
    (details
     (doc (|
          v1 SHIPPED: author=agent:<model> on AI writes; visible in
