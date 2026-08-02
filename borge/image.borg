@@ -1,6 +1,7 @@
 (project pricklypear-image
  (doc "Pricklypear book chapter: image")
  (status partial)
+ (* agent note (|2026-08-02 status reconcile: flipped htmx/http-robustness/system-browser/tree-browser/function-editor/inspector/dnu-stubs → implemented. Still partial: repl-experience (linenoise), per-request-context (store phase).|) *)
  (convention ocaml-dune)
  (section image
   (doc "The per-user unikernel: Nopales interpreter, REPL endpoint, htmx interface")
@@ -88,6 +89,7 @@
    (doc "What the user sees: prompt, multi-line, line editing, meta-commands")
    (implements image/lib/lineedit.ml)
    (status partial)
+   (* agent note (|2026-08-02 confirm partial: lineedit.ml is minimal read_line stub; linenoise history/cursor still TODO. browser-repl covers interactive UX.|) *)
    (verify
     (build "dune build image")
     (smoke "define + apply works end to end through the REPL"))
@@ -158,8 +160,9 @@
   )
   (subsection htmx-interface
    (doc "User routes accept GET and POST; request context available via dynamic-binding prims. bible/* and other handler-only fns now guarded (require_request raises Interp_error User_error on direct /api/eval; api_eval catches as clean JSON error — fixes inbox c5-1054).")
-   (implements image/lib/http.ml auth/lib/http.ml image/lib/session.ml image/lib/primitives.ml)
-   (status partial)
+   (implements image/lib/http.ml image/lib/session.ml image/lib/primitives.ml image/lib/prims_request.ml)
+   (status implemented)
+   (* agent note (|2026-08-02: request-method/param/params + redirect prims; user routes GET/POST via http.ml; auth/lib/http.ml path retired (in-process).|) *)
    (verify
     (build "dune build image")
     (smoke "POST user route hits same path handler; (request-method) => POST")
@@ -228,7 +231,8 @@
   (subsection http-robustness
    (doc "HTTP server robustness under load, peer disconnect, and DB liveness")
    (implements image/lib/http.ml image/lib/http_core.ml image/lib/http_agent.ml image/lib/http_data.ml image/lib/http_branches.ml image/lib/session.ml image/lib/session_types.ml image/lib/io_eio.ml image/lib/store_db.ml image/lib/request_context.ml scripts/rc.d/pricklypear scripts/openbsd/pricklypear-watchdog.ksh scripts/openbsd/pricklypear-promote.ksh)
-   (status partial)
+   (status implemented)
+   (* agent note (|2026-08-02: closed-writer swallow, request_mutex narrowed to gate, page-work queue, Store.health_check on /health, http_robust tests present.|) *)
    (verify
     (build "dune build image")
     (smoke "abort N concurrent requests mid-response; image stays up, /health 200 throughout")
@@ -371,6 +375,7 @@
   (subsection per-request-context
    (doc "Request_context.t + dynamic binding to eliminate cotenant race")
    (status partial)
+   (* agent note (|2026-08-02 confirm partial: Request_context.t snapshots manifest+env+copied routes; prims use dynamic binding. Remaining: store on context (phase 3) + full prim audit.|) *)
    (implements
      image/lib/request_context.ml
      image/lib/http.ml
@@ -578,7 +583,8 @@
   )
   (subsection system-browser
    (doc "The live environment UI: browse branches, functions, types as a place you live")
-   (status partial)
+   (status implemented)
+   (* agent note (|2026-08-02: /bindings /pages /types live; ui/nav shell; live GET /bindings?pkg=todo + /pages 200.|) *)
    (verify
     (build "dune build image")
     (smoke "GET / shows user+branch chrome and links to about/functions/repl")
@@ -765,7 +771,8 @@
   )
   (subsection tree-browser
    (doc "Lazy zoomable tree UI: folders ARE non-leaf nodes; htmx depth-capped expansion; library-first (no kernel prims)")
-   (status partial)
+   (status implemented)
+   (* agent note (|2026-08-02: libs/tree tree/page+partial+render-doc; live GET /tree 200.|) *)
    (implements libs/tree/lib.pp)
    (verify
     (build "dune build image")
@@ -1591,7 +1598,8 @@
   )
   (subsection function-editor
    (doc "Load, edit, and save a binding's AST from the UI")
-   (status partial)
+   (status implemented)
+   (* agent note (|2026-08-02: textarea editor + missing_editor_card + /api/edit/create; live GET /edit/no-such-fn-xyz shows does not exist + Create.|) *)
    (verify
     (build "dune build image")
     (smoke "POST /edit/editor-greet save -> callable via /api/eval")
@@ -1652,7 +1660,8 @@
   )
   (subsection inspector
    (doc "Inspect values, rows, ASTs, and page→function graphs live")
-   (status partial)
+   (status implemented)
+   (* agent note (|2026-08-02: /inspect/binding, callees/callers/holes/impact-queue prims; live (callees "ui/nav") → ui/menu menu/bar; inspect page 200.|) *)
    (implements image/lib/http_pages.ml image/lib/session.ml image/lib/agent_tools.ml image/lib/ast_html.ml image/lib/http_analyze.ml image/lib/call_graph.ml)
    (verify
     (build "dune build image")
@@ -1858,7 +1867,8 @@
   )
   (subsection dnu-stubs
    (doc "doesNotUnderstand-style holes: unbound names → stub + callers for agents")
-   (status planned)
+   (status implemented)
+   (* agent note (|2026-08-02: holes + stub-function prims; binding page holes panel; unbound handler Create stub; session registers graph/DNU prims.|) *)
    (implements image/lib/http_pages.ml image/lib/session.ml image/lib/http.ml)
    (verify
     (build "dune build image")

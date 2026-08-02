@@ -1,6 +1,7 @@
 (project pricklypear-formal-verification
  (doc "Book chapter: formal verification of the OCaml outer shell.")
  (status planned)
+ (* agent note (|2026-08-02 status reconcile: correctly still planned — design in docs/formal-verification-plan.md; no QCheck/proof islands shipped as product gate yet.|) *)
  (convention ocaml-dune)
  (section formal-verification
    (doc "Machine-checked stability for the pure OCaml core; the Nopales garden may stay janky.

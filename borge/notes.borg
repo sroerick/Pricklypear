@@ -1,6 +1,7 @@
 (project pricklypear-notes
  (doc "Pricklypear book chapter: notes — outline-first personal knowledge (org-roam / org-mode / Obsidian-shaped) as Nopales on the one-tree substrate")
- (status planned)
+ (status partial)
+ (* agent note (|2026-08-02 status reconcile: core notes surface is live (doc/get, /notes, search, wiki, roam). Remaining partial: outline-actions (op-protocol refile + full structed set), garden-import (pass-2 uuid edges), tree-cutover finish slices.|) *)
  (convention ocaml-dune)
  (section notes
   (doc "Outline-first notes OS: tree documents, wiki links, dailies, capture, hypermedia structure edit, garden import")
@@ -138,7 +139,8 @@
 
   (subsection storage
    (doc "Notes as one-tree nodes: folders, note leaves, heading children; notes/* façade")
-   (status partial)
+   (status implemented)
+   (* agent note (|2026-08-02: notes/doc/* façade on tree (libs/notes/doc + lib.pp); live (notes/doc/get "agents") returns uuid/slug/title/outline; tree/garden-root path grammar in tree_store.ml.|) *)
    (implements libs/notes/lib.pp image/lib/tree_store.ml image/lib/crud.ml)
    (verify
     (smoke "notes/upsert then notes/get by slug returns outline")
@@ -230,7 +232,8 @@
 
   (subsection links-and-roam
    (doc "Wiki links [[slug]] as UUID edges; bible sexps → dabar; media embeds")
-   (status partial)
+   (status implemented)
+   (* agent note (|2026-08-02: libs/roam (parse-links via extract-links prim, reindex note-link from_uuid/to_uuid, backlinks, render-body/media); live roam/backlinks on agents. Refile still ad-hoc package not op-protocol — tracked under outline-actions.|) *)
    (verify
     (smoke "body with [[other]] creates note-link UUID edge on save")
     (smoke "(roam/backlinks slug) lists inbound links after resolve")
@@ -446,6 +449,7 @@
   (subsection outline-actions
    (doc "Per-node outline action menu; the eval op turns nodes into a live Nopales surface")
    (status partial)
+   (* agent note (|2026-08-02 confirm still partial: notes/outline/apply-op + eval + POST /partials/notes-node-op shipped; notes/refile* exist but not on structural-editing.op-protocol; full structed wrap/splice/raise not all on outline menu.|) *)
    (implements
     libs/notes/outline/lib.pp
     libs/notes/refile/lib.pp
@@ -532,8 +536,9 @@
 
   (subsection wiki-llm-loop
    (doc "LLM-maintained wiki over the notes corpus — ingest, query, lint as Nopales ops")
-   (status planned)
-   (implements libs/notes/lib.pp)
+   (status implemented)
+   (* agent note (|2026-08-02: libs/wiki/lib.pp — wiki/ingest-from-source, wiki/query, wiki/lint, wiki/events, wiki/schema, wiki-event rows; live wiki/schema ok.|) *)
+   (implements libs/wiki/lib.pp libs/notes/lib.pp)
    (verify
     (smoke "(wiki/ingest-from-source TEXT) creates/updates a source note + entity/concept notes + note-link rows")
     (smoke "(wiki/query QUESTION) synthesizes with [[slug]] citations; may file-back a kind=query note")
@@ -871,7 +876,8 @@
 
   (subsection personal-garden
    (doc "Garden notes are personal content — not system/main; path+author isolation")
-   (status planned)
+   (status implemented)
+   (* agent note (|2026-08-02: tree_store garden root data.note.u.<user>; notes/garden-root → tree/garden-root; notes/* list scoped via tree index not system/main seed.|) *)
    (verify
     (smoke "notes created while on <user>/personal land under data.note.u.<user>")
     (smoke "notes/* list default scope is current user garden only")
@@ -911,7 +917,8 @@
 
   (subsection garden-import
    (doc "One-shot Obsidian/markdown vault import into the personal garden tree")
-   (status planned)
+   (status partial)
+   (* agent note (|2026-08-02: scripts/import_obsidian_notes.py dry-run+apply, bible:[[…]]→sexp, garden/ folder prefix, collision slugify. Still missing pass-2 uuid note-link reindex after upsert (verify smoke).|) *)
    (verify
     (smoke "dry-run on vault root reports md/folder/link counts; zero writes")
     (smoke "apply imports md under data.note.u.<user>.garden.…")
@@ -977,6 +984,7 @@
   (subsection tree-cutover
    (doc "Phased delivery: kernel tree prims → façade → UUID links → M0 PP migrate → M1 vault")
    (status partial)
+   (* agent note (|2026-08-02 confirm: K0–N1/M0/I* largely done (index-read-path implemented). Open: M1 pass-2 links, F finish-cutover slices (legacy light/* residue, heading explode polish, legacy row delete).|) *)
    (implements libs/notes/lib.pp libs/notes/doc/lib.pp image/lib/tree_store.ml libs/tree/lib.pp)
    (verify
     (smoke "K0: tree/get list upsert delete move on folder/note/heading")
@@ -1079,7 +1087,8 @@
 
   (subsection search-modal
    (doc "Typeahead find modal: one server search feeds open-note and refile; flat grouped results down to header level")
-   (status planned)
+   (status implemented)
+   (* agent note (|2026-08-02: notes/search + notes/ui/search-partial; route /partials/notes-search; live GET ?q=agents → 200 grouped hits.|) *)
    (implements libs/notes/lib.pp)
    (verify
     (smoke "GET /partials/notes-search?q=… returns grouped result HTML (docs + header rows with › breadcrumbs)")

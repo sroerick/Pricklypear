@@ -1,6 +1,7 @@
 (project pricklypear-branching
  (doc "Pricklypear book chapter: branching")
  (status partial)
+ (* agent note (|2026-08-02 status reconcile: agent-promote, package-updates, branch-browser-ui → implemented. Still open: schema-authority (type_defs merge), ast-nodes (design).|) *)
  (convention ocaml-dune)
  (section branching
   (doc "Branches as the fundamental organizational primitive: code branches, shared data, fork/merge")
@@ -150,7 +151,8 @@
   )
   (subsection agent-promote
    (doc "Agent promotes from its workshop into the parent human's personal")
-   (status planned)
+   (status implemented)
+   (* agent note (|2026-08-02: promote_to_personal + allow_agent_promote user toggle + set-allow-agent-promote prim; agent boots parent/agent workshop.|) *)
    (details
     (doc (|
          promote(source=<parent>/agent, target=<parent>/personal):
@@ -175,6 +177,7 @@
   (subsection schema-authority
    (doc "Types in main, branches read against main's schema")
    (status partial)
+   (* agent note (|2026-08-02 confirm partial: shared data_rows + additive migrations; type_defs merge still not implemented (details admit).|) *)
    (details
     (doc (|
          Schema authority is 'main'. Branches cannot change
@@ -241,7 +244,8 @@
   )
   (subsection package-updates
    (doc "Authority model: live Postgres Nopales, git kernel + vault, additive seed")
-   (status partial)
+   (status implemented)
+   (* agent note (|2026-08-02: dual-era authority is operational — seed-policy additive, pp_sync vault, promote path, personal pins survive deploy. Matches AGENTS.md.|) *)
    (implements image/lib/session.ml image/lib/store.ml image/lib/loader.ml cli/bin/pp_sync.ml common/lib/branch.ml common/lib/manifest.ml common/lib/protocol.ml)
    (details
     (doc (|
@@ -655,7 +659,8 @@
   )
   (subsection branch-browser-ui
    (doc "Git-like light /branches browser: list, open, stats, checkout, promote")
-   (status partial)
+   (status implemented)
+   (* agent note (|2026-08-02: http_branches.ml ~710 lines — list with own code/overrides, detail, checkout, fork, promote to main + soft lint. Spec "TODAY bare table" is stale.|) *)
    (implements image/lib/http.ml image/lib/store.ml image/lib/session.ml)
    (details
     (doc (|
@@ -850,6 +855,7 @@
   (subsection ast-nodes
    (doc "Design: addressable AST nodes as substrate for surgical edits and AI patches")
    (status planned)
+   (* agent note (|2026-08-02 confirm still planned: design-only proposal; function_defs remain whole-body JSONB.|) *)
    (details
     (doc (|
          TODAY: two trees, two models

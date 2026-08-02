@@ -1,6 +1,7 @@
 (project pricklypear-storage
  (doc "Pricklypear book chapter: storage")
- (status partial)
+ (status implemented)
+ (* agent note (|2026-08-02 status reconcile: all section children implemented/verified (schema, no-inheritance, transactions, with-transaction, media); lift project.|) *)
  (convention ocaml-dune)
  (section storage
   (doc "Postgres schema: branches, function_defs, type_defs, data_rows. SERIALIZABLE defaults. NO inheritance.")

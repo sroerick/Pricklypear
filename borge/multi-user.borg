@@ -10,6 +10,7 @@
         per-user LLM keys, SSH→REPL (auth.user-subdomains /
         user-llm-keys / user-ssh-repl).")
  (status partial)
+ (* agent note (|2026-08-02 status reconcile: namespaces/budgets/chat/user-plan → implemented; permissions stays partial (setuid author). isolation deprecated; cotenant-isolation already implemented.|) *)
  (convention ocaml-dune)
  (section multi-user
   (doc "Cotenant isolation (one process, session + branch scoped), namespaces via branch ownership, budgets, author-runs-as-author")
@@ -80,7 +81,8 @@
   )
   (subsection namespaces
    (doc "Branch ownership namespaces; packages are a separate in-branch axis")
-   (status partial)
+   (status implemented)
+   (* agent note (|2026-08-02: branch ownership model live (system/main + user/*); package / prefix separate. Cross-branch qualified calls still deferred as documented.|) *)
    (details
     (doc (|
          TWO AXES (do not conflate):
@@ -119,7 +121,8 @@
   )
   (subsection budgets
    (doc "Per-call step budgets to bound runaway user code")
-   (status partial)
+   (status implemented)
+   (* agent note (|2026-08-02: Eval.make_budget + last_budget; session eval wraps budget; conformance tests. Memory budget deferred.|) *)
    (verify
     (build "dune build @all")
     (smoke "a Nopales call that exceeds its step budget aborts cleanly; the session survives"))
@@ -154,6 +157,7 @@
   (subsection permissions
    (doc "Author-runs-as-author: functions execute with their author's data perms")
    (status partial)
+   (* agent note (|2026-08-02 confirm partial: current-author still aliases whoami; full setuid author-on-execute not shipped.|) *)
    (details
     (doc (|
          A function executes with ITS AUTHOR's data
@@ -198,7 +202,8 @@
   )
   (subsection chat
    (doc "Multi-user chat: site lobby + DMs so humans on the box can talk")
-   (status planned)
+   (status implemented)
+   (* agent note (|2026-08-02: libs/chat ~552 lines lobby+DM; live GET /chat 200.|) *)
    (implements libs/chat/lib.pp image/lib/http.ml)
    (verify
     (build "dune build image")
@@ -340,7 +345,8 @@
   )
   (subsection user-plan
    (doc "Unix-style .plan: short per-user status of what they intend to work on")
-   (status partial)
+   (status implemented)
+   (* agent note (|2026-08-02: libs/plan user-plan + plan/set!/of; live GET /plan 200.|) *)
    (implements libs/plan/lib.pp)
    (verify
     (build "dune build image")

@@ -1,6 +1,7 @@
 (project pricklypear-structural-editing
  (doc "Pricklypear book chapter: structural editing — paredit-shaped tree surgery as one shared protocol over outlines and code ASTs")
  (status partial)
+ (* agent note (|2026-08-02 status reconcile: structed-algebra+op-protocol+keymap+non-goals implemented; only ast-structure-view remains planned — keeps project/section partial.|) *)
  (convention ocaml-dune)
  (section structural-editing
   (doc "Structural editing: named tree ops over one shared protocol — outlines and code ASTs are edited as trees, never as paren text")
@@ -174,7 +175,8 @@
     (smoke "unknown op name re-renders unchanged tree with 200")))
   (subsection keymap
    (doc "Chord-first keyboard map; modal structure/text interaction is the documented target")
-   (status partial)
+   (status implemented)
+   (* agent note (|2026-08-02: v1 Alt chords shipped in notes outline script (libs/notes/lib.pp): Alt+Up/Down move, Alt+Shift+Left/Right promote/demote, Alt+Left/Right barf/slurp, Alt+Enter sibling; preventDefault. Modal map still documented target not v1.|) *)
    (implements libs/notes/lib.pp)
    (details
     (doc (|
@@ -226,6 +228,7 @@
   (subsection ast-structure-view
    (doc "Function editor gains a Text | Structure toggle over the same function_defs row")
    (status planned)
+   (* agent note (|2026-08-02 confirm still planned: no Text|Structure toggle on /edit/<name>; function editor remains textarea. structed algebra + outline op-protocol ready as substrate.|) *)
    (implements image/lib/http_pages.ml image/lib/session.ml)
    (details
     (doc (|
@@ -320,7 +323,8 @@
     (smoke "slurp via POST re-renders; saved body reflects the change on reload")))
   (subsection non-goals
    (doc "What this chapter deliberately does not build")
-   (status planned)
+   (status implemented)
+   (* agent note (|2026-08-02: documentation-only; implemented as spec-complete.|) *)
    (details
     (doc (|
          - NO paredit-over-text: no paren surgery inside a textarea

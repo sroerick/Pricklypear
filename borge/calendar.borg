@@ -1,11 +1,12 @@
 (project pricklypear-calendar
  (doc "Pricklypear book chapter: calendar")
- (status partial)
+ (status implemented)
+ (* agent note (|2026-08-02 status reconcile: sole child model already implemented; libs/calendar/lib.pp ~802 lines; live calendar/today + 27 events; GET /calendar 200.|) *)
  (convention ocaml-dune)
  (section calendar
   
   (doc "Month/day calendar: events + due todos + daily notes")
-  (status partial)
+  (status implemented)
   (subsection model
    (doc "Naive local dates; shared data_rows; Nopales package")
    (status implemented)

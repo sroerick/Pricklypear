@@ -1,6 +1,7 @@
 (project pricklypear-dabar
  (doc "Pricklypear book chapter: dabar — BSB study library (reader + Strong's + interlinear)")
- (status planned)
+ (status partial)
+ (* agent note (|2026-08-02 status reconcile: packaging/reader/nav/strongs/interlinear/note-bible-links/work-packages/non-goals shipped; only search-fts remains partial (find-text ILIKE, not tsvector FTS). Live /dabar+/strongs 200; bible/verse John 3 16 ok.|) *)
  (convention ocaml-dune)
  (section dabar
   (doc "Bible study layer on the live image: plugin libs, seeds, routes")
@@ -194,7 +195,8 @@
   )
   (subsection note-bible-links
    (doc "Sexp bible refs in note bodies render to dabar routes")
-   (status planned)
+   (status implemented)
+   (* agent note (|2026-08-02: bible/link-href+link-html → /dabar?book=&chapter=&verse=; live (bible/link-html "Gen" 1 1 "") anchors Gen 1:1. bible/render-body handles (bible-ref …) outline form; garden-import normalizes [[bible:…]].|) *)
    (implements libs/bible/lib.pp libs/dabar/lib.pp libs/roam/lib.pp)
    (verify
     (smoke "(bible/link-html \"Gen\" 1 1) anchors to /dabar?book=Gen&chapter=1&verse=1")
@@ -236,6 +238,7 @@
   (subsection search-fts
    (doc "Postgres full-text search over verse text (not semantic)")
    (status partial)
+   (* agent note (|2026-08-02 confirm partial: bible/search = find-text ILIKE on bible-verse text (live "love" → 40 hits + UI form). True tsvector/rank FTS + index still optional WP.|) *)
    (verify
     (smoke "bible/search love returns ranked hits"))
    (details
@@ -250,7 +253,8 @@
   )
   (subsection work-packages
    (doc "Core dabar features")
-   (status planned)
+   (status implemented)
+   (* agent note (|2026-08-02: v1 acceptance met — bible+dabar libs, Strong's, interlinear toggle, /dabar+/strongs live. Meta checklist subsection, not a separate code deliverable.|) *)
    (details
     (doc (|
          Provides Strong's lexicon lookup and word-level interlinear study tools
@@ -272,7 +276,8 @@
   )
   (subsection non-goals
    (doc "Explicit exclusions")
-   (status planned)
+   (status implemented)
+   (* agent note (|2026-08-02: documentation-only exclusions; marked implemented as spec-complete.|) *)
    (details
     (doc (|
          - Semantic search / pgvector / llama embedder
