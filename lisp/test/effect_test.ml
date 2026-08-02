@@ -83,6 +83,21 @@ let checks = [
   ("div/abs pure", `Quick, fun () ->
     let fx = infer "(div (abs x) 2)" in
     Alcotest.(check bool) "pure" true (Effect.EffSet.is_pure fx));
+  ("/ alias pure (no drift vs div)", `Quick, fun () ->
+    let fx = infer "(/ 10 4)" in
+    Alcotest.(check bool) "pure" true (Effect.EffSet.is_pure fx));
+  ("quotient/remainder pure", `Quick, fun () ->
+    let fx = infer "(remainder (quotient x y) z)" in
+    Alcotest.(check bool) "pure" true (Effect.EffSet.is_pure fx));
+  ("math tower pure", `Quick, fun () ->
+    let fx = infer "(sqrt (expt (sin x) 2))" in
+    Alcotest.(check bool) "pure" true (Effect.EffSet.is_pure fx));
+  ("number? pure", `Quick, fun () ->
+    let fx = Effect.effects_for_prim "number?" in
+    Alcotest.(check bool) "pure" true (Effect.EffSet.is_pure fx));
+  ("random pure", `Quick, fun () ->
+    let fx = Effect.effects_for_prim "random" in
+    Alcotest.(check bool) "pure" true (Effect.EffSet.is_pure fx));
   ("public-route is publish", `Quick, fun () ->
     let fx = Effect.effects_for_prim "public-route" in
     Alcotest.(check bool) "pub" true (Effect.EffSet.mem Effect.Publish fx));

@@ -284,6 +284,199 @@ let prim_mod args =
       else VFloat (mod_float (float_of_num (num_of_value a)) bf)
   | _ -> raise (Interp_error (User_error "mod needs two numeric args"))
 
+(* Scheme aliases of the int paths of div/mod — reject floats. *)
+let prim_quotient args =
+  match args with
+  | [ VInt a; VInt b ] when b <> 0L -> VInt (Int64.div a b)
+  | [ VInt _; VInt 0L ] ->
+      raise (Interp_error (User_error "quotient by zero"))
+  | [ VInt _; _ ] | [ _; VInt _ ] | [ _; _ ] ->
+      raise (Interp_error (User_error "quotient needs two int args"))
+  | _ -> raise (Interp_error (User_error "quotient needs two int args"))
+
+let prim_remainder args =
+  match args with
+  | [ VInt a; VInt b ] when b <> 0L -> VInt (Int64.rem a b)
+  | [ VInt _; VInt 0L ] ->
+      raise (Interp_error (User_error "remainder by zero"))
+  | [ _; _ ] ->
+      raise (Interp_error (User_error "remainder needs two int args"))
+  | _ -> raise (Interp_error (User_error "remainder needs two int args"))
+
+(* ---- math tower (lisp-interpreter.math) ---- *)
+
+let int_pow (base : int64) (exp : int64) : int64 =
+  (* Non-negative exponent only; Int64 overflow wraps like Int64.mul.
+     Exponentiation by squaring — O(log e), not O(e). *)
+  let rec loop acc b e =
+    if e = 0L then acc
+    else if Int64.logand e 1L = 1L then
+      loop (Int64.mul acc b) (Int64.mul b b) (Int64.shift_right_logical e 1)
+    else
+      loop acc (Int64.mul b b) (Int64.shift_right_logical e 1)
+  in
+  if exp < 0L then
+    raise (Interp_error (User_error "expt int path needs non-negative exponent"))
+  else loop 1L base exp
+
+let prim_expt args =
+  match args with
+  | [ a; b ] ->
+      (match num_of_value a, num_of_value b with
+       | NInt base, NInt e when e >= 0L -> VInt (int_pow base e)
+       | ba, bb ->
+           VFloat (Float.pow (float_of_num ba) (float_of_num bb)))
+  | _ -> raise (Interp_error (User_error "expt needs two numeric args"))
+
+let prim_sqrt args =
+  match args with
+  | [ a ] ->
+      let x = float_of_num (num_of_value a) in
+      if x < 0. then
+        raise (Interp_error (User_error "sqrt of negative"))
+      else VFloat (sqrt x)
+  | _ -> raise (Interp_error (User_error "sqrt needs one numeric arg"))
+
+let prim_exp args =
+  match args with
+  | [ a ] -> VFloat (exp (float_of_num (num_of_value a)))
+  | _ -> raise (Interp_error (User_error "exp needs one numeric arg"))
+
+let prim_log args =
+  match args with
+  | [ a ] ->
+      let x = float_of_num (num_of_value a) in
+      if x <= 0. then
+        raise (Interp_error (User_error "log of non-positive"))
+      else VFloat (log x)
+  | [ a; b ] ->
+      let x = float_of_num (num_of_value a) in
+      let base = float_of_num (num_of_value b) in
+      if x <= 0. then
+        raise (Interp_error (User_error "log of non-positive"))
+      else if base <= 0. || base = 1. then
+        raise (Interp_error (User_error "log: invalid base"))
+      else VFloat (log x /. log base)
+  | _ -> raise (Interp_error (User_error "log needs one or two numeric args"))
+
+let prim_sin args =
+  match args with
+  | [ a ] -> VFloat (sin (float_of_num (num_of_value a)))
+  | _ -> raise (Interp_error (User_error "sin needs one numeric arg"))
+
+let prim_cos args =
+  match args with
+  | [ a ] -> VFloat (cos (float_of_num (num_of_value a)))
+  | _ -> raise (Interp_error (User_error "cos needs one numeric arg"))
+
+let prim_tan args =
+  match args with
+  | [ a ] -> VFloat (tan (float_of_num (num_of_value a)))
+  | _ -> raise (Interp_error (User_error "tan needs one numeric arg"))
+
+let prim_asin args =
+  match args with
+  | [ a ] ->
+      let x = float_of_num (num_of_value a) in
+      if x < -1. || x > 1. then
+        raise (Interp_error (User_error "asin domain [-1,1]"))
+      else VFloat (asin x)
+  | _ -> raise (Interp_error (User_error "asin needs one numeric arg"))
+
+let prim_acos args =
+  match args with
+  | [ a ] ->
+      let x = float_of_num (num_of_value a) in
+      if x < -1. || x > 1. then
+        raise (Interp_error (User_error "acos domain [-1,1]"))
+      else VFloat (acos x)
+  | _ -> raise (Interp_error (User_error "acos needs one numeric arg"))
+
+let prim_atan args =
+  match args with
+  | [ a ] -> VFloat (atan (float_of_num (num_of_value a)))
+  | [ a; b ] ->
+      (* Two-arg form → atan2(y, x) with y first (Scheme order). *)
+      let y = float_of_num (num_of_value a) in
+      let x = float_of_num (num_of_value b) in
+      VFloat (atan2 y x)
+  | _ -> raise (Interp_error (User_error "atan needs one or two numeric args"))
+
+let prim_number_p args =
+  match args with
+  | [ VInt _ ] | [ VFloat _ ] -> VBool true
+  | [ _ ] -> VBool false
+  | _ -> raise (Interp_error (User_error "number? needs one arg"))
+
+let prim_integer_p args =
+  match args with
+  | [ VInt _ ] -> VBool true
+  | [ _ ] -> VBool false
+  | _ -> raise (Interp_error (User_error "integer? needs one arg"))
+
+let prim_zero_p args =
+  match args with
+  | [ a ] -> VBool (num_compare (num_of_value a) (NInt 0L) = 0)
+  | _ -> raise (Interp_error (User_error "zero? needs one numeric arg"))
+
+let prim_positive_p args =
+  match args with
+  | [ a ] -> VBool (num_compare (num_of_value a) (NInt 0L) > 0)
+  | _ -> raise (Interp_error (User_error "positive? needs one numeric arg"))
+
+let prim_negative_p args =
+  match args with
+  | [ a ] -> VBool (num_compare (num_of_value a) (NInt 0L) < 0)
+  | _ -> raise (Interp_error (User_error "negative? needs one numeric arg"))
+
+let as_integral_int64 = function
+  | VInt n -> n
+  | VFloat f ->
+      if Float.is_integer f then Int64.of_float f
+      else raise (Interp_error (User_error "even?/odd? needs an integer"))
+  | _ -> raise (Interp_error (User_error "even?/odd? needs an integer"))
+
+let prim_even_p args =
+  match args with
+  | [ a ] ->
+      let n = as_integral_int64 a in
+      VBool (Int64.logand n 1L = 0L)
+  | _ -> raise (Interp_error (User_error "even? needs one arg"))
+
+let prim_odd_p args =
+  match args with
+  | [ a ] ->
+      let n = as_integral_int64 a in
+      VBool (Int64.logand n 1L <> 0L)
+  | _ -> raise (Interp_error (User_error "odd? needs one arg"))
+
+(** (random) -> float [0,1); (random n) -> int [0,n) for VInt n > 0. *)
+let prim_random args =
+  match args with
+  | [] -> VFloat (Random.float 1.0)
+  | [ VInt n ] when n > 0L ->
+      (* Random.int takes int; clamp to positive native int range. *)
+      let n_int =
+        if n > Int64.of_int max_int then max_int else Int64.to_int n
+      in
+      VInt (Int64.of_int (Random.int n_int))
+  | [ VInt _ ] ->
+      raise (Interp_error (User_error "random: n must be positive int"))
+  | _ -> raise (Interp_error (User_error "random needs 0 args or one positive int"))
+
+(** (random-seed s) reseeds process PRNG; returns nil. *)
+let prim_random_seed args =
+  match args with
+  | [ VInt s ] ->
+      let seed =
+        if s > Int64.of_int max_int then max_int
+        else if s < Int64.of_int min_int then min_int
+        else Int64.to_int s
+      in
+      Random.init seed;
+      VNil
+  | _ -> raise (Interp_error (User_error "random-seed needs one int"))
+
 let prim_abs args =
   match args with
   | [ VInt a ] -> VInt (Int64.abs a)
@@ -1927,7 +2120,8 @@ let prim_xml_parse args =
      HTTP/2 200\r\n  (or "HTTP/1.1 200 OK")
      content-type: text/html\r\n
    Returns a JSON object string with lowercased keys. *)
-(** (random-uuid) -> VStr canonical uuid. Uses stdlib Random (seeded at process start). *)
+(** (random-uuid) -> VStr canonical uuid. Uses stdlib Random (seeded at process start).
+    Distinct from (random)/(random-seed) — those are the numeric PRNG surface. *)
 let prim_random_uuid (_args : value list) : value =
   let b = Bytes.create 16 in
   for i = 0 to 15 do Bytes.set b i (Char.chr (Random.int 256)) done;

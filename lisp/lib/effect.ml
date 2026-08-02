@@ -110,7 +110,13 @@ type effect_set = EffSet.t
     exactly one capability bucket (or the special-case arms in
     [effects_for_prim]). Guest-visible only — not host control effects. *)
 let pure_prims = [
-  "+"; "-"; "*"; "div"; "mod"; "abs"; "min"; "max";
+  "+"; "-"; "*"; "div"; "/"; "mod"; "quotient"; "remainder";
+  "abs"; "min"; "max";
+  "expt"; "sqrt"; "exp"; "log";
+  "sin"; "cos"; "tan"; "asin"; "acos"; "atan";
+  "number?"; "integer?"; "zero?"; "positive?"; "negative?";
+  "even?"; "odd?";
+  "random"; "random-seed";
   "="; "<"; ">"; "<="; ">="; "not";
   "list"; "car"; "cdr"; "cons"; "null?"; "pair?"; "count";
   "append"; "reverse"; "nth";
