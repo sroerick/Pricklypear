@@ -4,7 +4,8 @@
 (define menu/bar
   (lambda
     (items)
-    (html/join (list/map menu/render items))))
+    (html/join
+      (list/map (lambda (i) (menu/render-d i 0)) items))))
 
 (define menu/group
   (lambda (label kids) (list "group" (as-str label) kids)))
@@ -17,9 +18,14 @@
 (define menu/raw
   (lambda (html-str) (list "raw" (as-str html-str) "")))
 
-(define menu/render
+;; depth-aware renderer: d=0 top-level nav, d>0 nested fly-out.
+;; Top-level groups share name="pp-nav" so the browser's native
+;; <details name> accordion auto-closes siblings (replaces the old
+;; chrome toggle JS). Nested groups get name="pp-sub-<label>" per
+;; fly-out column, so opening one submenu closes its siblings.
+(define menu/render-d
   (lambda
-    (item)
+    (item d)
     (let
       ((kind (car item))
         (label (car (cdr item)))
@@ -31,7 +37,15 @@
           (string-eq kind "group")
           (html/tag
             "details"
-            (html/attr "class" "menu-drop")
+            (html/attrs
+              (list
+                (html/attr "class" "menu-drop")
+                (html/attr
+                  "name"
+                  (if
+                    (= d 0)
+                    "pp-nav"
+                    (string-append "pp-sub-" (as-str label))))))
             (html/join
               (list
                 (html/tag
@@ -40,6 +54,12 @@
                   (html/text label))
                 (html/div
                   (html/attr "class" "menu-drop-panel")
-                  (html/join (list/map menu/render rest))))))
+                  (html/join
+                    (list/map
+                      (lambda (k) (menu/render-d k (+ d 1)))
+                      rest))))))
           (if (string-eq kind "raw") label ""))))))
+
+(define menu/render
+  (lambda (item) (menu/render-d item 0)))
 

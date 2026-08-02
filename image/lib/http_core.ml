@@ -155,21 +155,15 @@ let html_response (reqd : Httpun.Reqd.t) ?(status = `OK)
 
       (* htmx for create-in-place editor empty state *)
       HTML.script [HTML.src "https://unpkg.com/htmx.org@1.9.12"] "";
-      (* Close nav dropdowns on outside click / when another opens *)
+      (* Nav menus are pure HTML/CSS: exclusive open comes from the
+         native <details name=...> accordion attribute (menu/render),
+         so no menu JS here. Remaining script: outline summaries only
+         toggle collapse via the .ol-fold handle. *)
       HTML.script [] "%s"
         ("document.addEventListener('click',function(e){" ^
-         (* Outline: only .ol-fold on the summary toggles collapse. *)
          "var sum=e.target&&e.target.closest?e.target.closest('summary.ol-sum'):null;" ^
          "if(sum&&!(e.target.closest&&e.target.closest('.ol-fold'))){e.preventDefault();}" ^
-         "document.querySelectorAll('details.menu-drop[open],details.ol-actions[open]').forEach(function(d){" ^
-         "if(!d.contains(e.target))d.removeAttribute('open');});});" ^
-         "document.addEventListener('toggle',function(e){" ^
-         "var d=e.target;if(!d||!d.classList)return;" ^
-         "var cls=d.classList.contains('menu-drop')?'menu-drop':" ^
-         "(d.classList.contains('ol-actions')?'ol-actions':null);" ^
-         "if(!cls||!d.open)return;" ^
-         "document.querySelectorAll('details.'+cls+'[open]').forEach(function(o){" ^
-         "if(o!==d)o.removeAttribute('open');});},true);");
+         "});");
     ];
     HTML.body [] [body];
   ] in
