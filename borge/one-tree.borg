@@ -88,9 +88,9 @@
            │   └── route/<route>            route → handler bindings
            ├── user/<username>/...          same shape per user
            └── data
-               └── <type>/<id>              typed data nodes
-                                             (shared — see
-                                             branching-interaction)
+               ├── u.<user>.<type>/<id>     per-user data nodes
+               └── shared.<type>/<id>       shared/seed content
+                                             (see branching-interaction)
 
          BRANCHES ARE LENSES, NOT COPIES. A branch is a
          name → subtree-root pointer into the one tree
@@ -137,15 +137,30 @@
               Phase 1 — package registry rows (enabled bit + export list)
               are branch-lensed like fn/type/route so per-user enable/disable
               inherits parent->child via the same override walk.|) *)
-           DATA (shared, branch-free — branching.data kept):
-             datum  data.<type_name>.<id>
-           NOTES HIERARCHY (exception; notes.storage — NOT kind=datum):
+           DATA (USER-OWNED — see branching-interaction /data
+           DECISION, revised 2026-08-02): data is owned by USERS,
+           not branches. A datum's owner is the session user at
+           create time:
+             datum    data.u.<user>.<type_name>.<id>
+             shared   data.shared.<type_name>.<id>
+           No branch id in the path, no lens walk, no inheritance —
+           a session sees exactly its own data.u.<user>.* plus
+           data.shared.*. Branches stay purely a CODE concept
+           (branching.borg's "branches are for code, not data"
+           stands). Fork/merge/promote never touch datum nodes, so
+           there are no data carve-outs in those semantics.
+           (Legacy pre-revision paths were data.<type_name>.<id>,
+           one shared pile — see the migration note in
+           branching-interaction.)
+           NOTES HIERARCHY (notes.storage — NOT kind=datum):
              folder   data.note.u.<user>.<folder-segs…>
              note     data.note.u.<user>.….<slug>
              heading  data.note.u.<user>.….<slug>.h.<nid>
              Reverse-mirror ignores non-datum kinds; hierarchical
-             notes must never be written as kind=datum. Flat CRUD
-             types (todo, bible-verse, …) stay data.<type>.<id>.
+             notes must never be written as kind=datum. The notes
+             garden keyed data by USER (u.<user>) from the start —
+             user-owned datum placement generalizes that exact key
+             to every flat CRUD type (todo, flash-card, …).
            META (system, branch-free):
              user/cred/session/media  meta.<kind>.<id>
 
@@ -193,8 +208,14 @@
                head_hash text)                 -- subtree root hash
            branches table stays in v1 (branch_id uuid + parent
            chain); tree_branches adds lens pointer + head hash.
-           /data and /meta are NOT under any b.<id> — shared
-           subtrees every lens can see.
+           /meta and /data are NOT under any b.<id> — they sit
+           outside the branch lenses entirely. /meta is system
+           bookkeeping. /data is partitioned BY USER, not by branch:
+           data.u.<user>.* is that user's rows, data.shared.* is
+           shared/seed content. A session sees exactly its own
+           u.<user> subtree plus shared — visibility is a path-prefix
+           confinement, not a lens walk, and there is no inheritance.
+           See branching-interaction for the full rule.
 
            LENS = branch_id + its parent chain. A read resolves
            a logical name by walking the chain's path prefixes.
@@ -350,7 +371,7 @@
   (subsection branching-interaction
    (doc "Branches as tree lenses; the /data question; merge as tree-diff")
    (status partial)
-   (* agent note (|2026-08-02 confirm: tree_branches + path lenses + shared data_rows (placement A). Three-way tree-diff merge / promote-as-pointer-move still incomplete vs scaffolding promote.|) *)
+   (* agent note (|2026-08-02 /data DECISION revised to USER-OWNED data (resolves BORGE-1785693032): datum under data.u.<user>.* + data.shared.*, RLS floor keyed on user. An earlier branch-keyed draft (b.<branch>.data.*) was rejected as a leaky abstraction — encoded user ownership in a branch path, then needed fork/merge carve-outs. Three-way tree-diff merge / promote-as-pointer-move still incomplete vs scaffolding promote. Code still on the old shared pile — spec leads code here.|) *)
    (implements image/lib/store.ml image/lib/tree_store.ml)
    (details
     (doc (|
@@ -368,43 +389,138 @@
          branching.change-set and review-merge: a change set IS
          a tree diff.
 
-         THE /data DECISION (the one real semantic change).
-         Today: data_rows has NO branch_id — shared data
-         (branching.data). One-tree offers two placements:
+         THE /data DECISION (REVISED 2026-08-02 — resolves
+         BORGE-1785693032). The original question was:
+         data_rows has NO branch_id — shared data
+         (branching.data). One-tree offered two placements:
            A. SHARED SUBTREE — /data/<type>/<id> lives outside
               any branch, lenses reference it. Closest to
               today's semantics; data never versioned.
            B. VERSIONED DATA — /data lives inside each lens,
               fork versions data too.
-         DEFAULT: A (shared /data subtree), preserving
-         branching.data exactly. B is deferred and NOT v1 —
-         branching.borg's "data is never versioned by branch
-         and never wiped by deploy" rule is load-bearing
-         product behavior.
+
+         REVISION: the A-vs-B framing conflated two axes.
+         The axis the rule was WRITTEN for is BRANCH
+         VERSIONING (a fork must not copy or wipe the DB).
+         The axis that was MISSING is USER ISOLATION (whose
+         rows a session can see). Placement A chose global
+         sharing to answer the versioning question, and in
+         doing so silently made every user's rows readable
+         and writable by every other user (BORGE-1785693032).
+
+         The revision closes the isolation gap on the USER
+         axis, directly, without borrowing branch semantics:
+           USER-OWNED DATA — a datum is owned by the USER
+           whose session created it, keyed by that user:
+             per-user  data.u.<user>.<type_name>.<id>
+             shared    data.shared.<type_name>.<id>
+           A session sees exactly its own data.u.<user>.*
+           subtree plus data.shared.*. There is NO branch id
+           in the path, NO lens walk, and NO inheritance —
+           visibility is a plain path-prefix confinement on
+           the owning user. (An earlier draft of this revision
+           keyed data by BRANCH — b.<branch_id>.data.* — and
+           let lenses inherit a parent's data. That was a bad
+           abstraction: it encoded a USER-ownership fact in a
+           BRANCH path, then needed carve-outs because fork/
+           merge/promote must not copy, diff, or move data.
+           User-keyed paths state the rule once, honestly.)
+
+         WHY NOT BRANCH-KEYED: branches are a CODE concept
+           (branching.borg: "branches are for code, not
+           data"). Scoping data by branch would import fork/
+           merge semantics that data explicitly does not have,
+           and then require spec text explaining why those
+           semantics don't apply. The notes garden — the one
+           per-user data shape already in the tree — keys by
+           USER (data.note.u.<user>.…), not branch. User-keyed
+           data generalizes the pattern the codebase already
+           chose.
+
+         WHAT THIS PRESERVES (the load-bearing rules):
+           - FORK NEVER TOUCHES DATA. There is nothing to
+             carve out: datum paths contain no branch id, so
+             fork/merge/promote (operations over b.<id>
+             code lenses) structurally cannot copy, diff, or
+             move a datum. branching.borg's "data is never
+             versioned by branch and never wiped by deploy"
+             stands, now by construction rather than exception.
+           - data.shared is the home of seed/shared content.
+           - The Nopales prim ABI is unchanged: (create …),
+             (rows 't), (get 't id) keep signatures; the prim
+             layer supplies the session's USER from
+             Request_context and confines the query to
+             data.u.<user> + data.shared.
+
+         WHAT THIS FIXES (the multi-user story):
+           - (rows 'note) in alice's session returns alice's
+             notes plus shared — NEVER bob's.
+           - The /data browser shows the session's own +
+             shared rows, not the global table.
+           - Cross-user reads require an explicit copy/move
+             into data.shared or a deliberate grants
+             mechanism — the right kind of friction.
+           - NO inheritance of main data: a fresh user sees
+             only data.shared (which an app seeds explicitly
+             if it wants starter content). Apps own their
+             seeding; the platform does not silently clone
+             main's data into a user's view.
+
+         RELATION TO NOTES: the notes garden
+         (data.note.u.<user>.…) already keys data by USER.
+         User-owned datum placement GENERALIZES that exact
+         key to flat CRUD types; the notes hierarchy keeps
+         its own path grammar (kind=folder/note/heading, not
+         kind=datum) and is unaffected.
+
+         ENFORCEMENT FLOOR (RLS): because Nopales is
+         user-programmable, prim code is the primary access
+         control but not the only one — a missed WHERE clause
+         is a cross-user read. Postgres row-level security on
+         tree_nodes is the backstop, and it is SIMPLE because
+         the key is the user: one policy restricts kind='datum'
+         rows to paths under data.u.<current_user> or
+         data.shared, keyed off SET LOCAL pp.user established
+         per-transaction by Store.with_transaction. No
+         branch-ownership lookup, no inheritance to express.
+         RLS gives deny-by-default at the single point all
+         reads funnel through; the prim layer's path-prefix
+         confinement is the same rule stated in app code.
+
+         DEFERRED (still NOT v1): per-branch data VERSIONING
+         (placement B — a fork snapshotting its own divergent
+         copy of data) remains out of scope. Data is not
+         versioned at all: it is owned by users and shared
+         only via data.shared.
 
          TYPE_DECLS: today per-branch rows, table shape shared
          (branching.schema-authority). Under one-tree, schema
          nodes at /sys/type/ follow CODE branching rules
-         (branchable, promoted), while /data instances stay
-         shared. Branch code reading shared data against a
+         (branchable, promoted), while /data instances are
+         user-owned. Branch code reading user data against a
          newer/older type decl follows the existing
          additive-only tolerance rule.
 
          COTENANT ISOLATION: lenses enforce
-         multi-user.cotenant-isolation — a session's lens
-         confines reads/writes to its visible subtree plus
-         shared /data, same guarantee as today's
-         session+branch scoping, expressed as path confinement.
+         multi-user.cotenant-isolation — a session is
+         confined to its own data.u.<user> subtree plus
+         data.shared for DATA, and to its branch lens for
+         CODE. This upgrades the guarantee from
+         session+branch scoping of CODE to session+USER
+         scoping of CODE AND DATA, expressed as path
+         confinement and floored by the RLS policy above.
    |))
    )
    (verify
     (build "dune build @all")
     (smoke "fork = new lens; override on lens A invisible to lens B; promote moves main pointer")
-    (smoke "shared /data: a todo created on alice/personal is visible from bob/dev (today's rule)")))
+    (smoke "user-owned /data: a note created in alice's session is NOT visible in bob's session; both see data.shared")
+    (smoke "no inheritance: a fresh user's (rows 'note) returns only data.shared content, nothing cloned from another user")
+    (smoke "RLS floor: SET LOCAL pp.user=bob; direct SQL SELECT of data.u.alice.* returns zero rows")))
   (subsection migration-plan
    (doc "Phased cutover: shadow tree → flip reads → projections derive → retire tables")
    (status partial)
-   (* agent note (|2026-08-02 confirm: 009_tree + mirrors + tree_store + verify_one_tree.sh (P0–P2 territory). Phase 3 retire scaffolding tables not done; PP_TREE_* knobs remain.|) *)
+   (* agent note (|2026-08-02 confirm: 009_tree + mirrors + tree_store + verify_one_tree.sh (P0–P2 territory). Phase 3 retire scaffolding tables not done; PP_TREE_* knobs remain. Added Phase 2b (data user-scoping backfill keyed off author + RLS on user) per the /data revision.|) *)
    (implements migrations/009_tree.sql image/lib/store.ml image/lib/crud.ml)
    (details
     (doc (|
@@ -436,6 +552,31 @@
            /types, admin. Retire the scaffolding tables (via
            additive-only migration leaving them inert, per
            house rule — never DROP).
+
+         PHASE 2b — DATA USER-SCOPING (the /data revision;
+         resolves BORGE-1785693032). Independent of the
+         read-flip, one additive migration:
+           - New datum path roots data.u.<user>.<type>.<id>
+             (per-user) and data.shared.<type>.<id> (seed).
+           - Backfill: every existing data.<type>.<id> node
+             moves to data.u.<author>.<type>.<id>, keyed off
+             the row's author column (today's pile is
+             effectively admin-authored, so most land under
+             data.u.admin; content meant as seed moves to
+             data.shared explicitly).
+           - tree_data_rows view rewritten as a user-confined
+             projection: rows where path is under
+             data.u.<current_user> or data.shared — no lens
+             walk, no UNION over a parent chain.
+           - CRUD prims pass the session USER from
+             Request_context into the datum path (create) and
+             the confinement (rows/get/update/delete/find-text).
+           - RLS policy + SET LOCAL pp.user land in
+             Store.with_transaction; cross-user access test
+             added to verify_one_tree.sh.
+           The old flat data_rows relation survives one cycle
+           as a compat projection, then goes inert per the
+           additive-only rule.
 
          MIGRATIONS AS TREE TRANSFORMS. Schema change stops
          being DDL and becomes Nopales-level migration
@@ -472,9 +613,15 @@
     (doc (|
          - NOT a new database. Postgres stays the physical
            substrate; the tree is Postgres-resident JSONB.
-         - NOT versioned user data in v1. /data stays shared
-           (branching.data preserved); per-branch data
-           versioning is explicitly deferred.
+         - NOT versioned user data in v1. Data is USER-OWNED
+           (data.u.<user>.*) or SHARED (data.shared.*), keyed
+           by user, never by branch. There is no branch
+           versioning of data at all — fork/merge/promote are
+           code-only operations over b.<id> lenses and
+           structurally cannot touch a datum path. Per-branch
+           data VERSIONING (placement B) is explicitly
+           deferred — and would now require a wholly different
+           path scheme.
          - NOT a type system for Nopales. Typing lives at the
            tree/storage boundary; the language stays dynamic
            (roerick: product surface tolerates jank; the OCaml
