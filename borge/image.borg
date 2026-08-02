@@ -755,7 +755,8 @@
          - Branch switcher in chrome (detail checkout exists)
          - Import/require, private symbols, rename-with-rewrite
          - Authoring new prims from the UI
-         - Dedicated /theme form UI (Functions edit is enough v1)
+         - Dedicated /theme form UI (Functions edit is enough v1;
+           full picker in image.themes)
 
          DATA BROWSER: full CRUD over data_rows is specified in
          image.data-browser (OCaml system pages, not a Nopales package).
@@ -1289,6 +1290,148 @@
 
          STATUS: planned until make lands and silent full OCaml
          product CSS twin is gone.
+    |))
+   )
+  )
+  (subsection themes
+   (doc "Installable, switchable named themes: a theme is a libs/<name> package of theme/* tokens; switch = reseed into your garden; registry is a Nopales list, no kernel tables")
+   (status planned)
+   (implements libs/theme/lib.pp)
+   (verify
+    (build "dune build image")
+    (smoke "(theme/available) lists the default token package with display name + description")
+    (smoke "(theme/current) reports the active theme on the current branch; fresh garden reports the default")
+    (smoke "(theme/set \"<name>\") switches the garden: next full-page <style> shows the new theme's distinctive token values")
+    (smoke "switch replaces ALL pinned theme/* tokens on the current branch (no stale-token bleed from the previous theme)")
+    (smoke "switch leaves a personal ui/theme sheet override intact; tokens flow through it")
+    (smoke "other users' themes unchanged by my switch; checkout main shows system defaults")
+    (smoke "(theme/set \"<unregistered>\") is a labeled error; active theme unchanged")
+    (smoke "GET /settings/theme lists available themes, marks current, applies switch without manual source editing"))
+   (details
+    (doc (|
+         WHY:
+         product-theme made presentation Nopales data (css/* +
+         ui/theme + theme/* tokens) and branch pins already make
+         token override possible — but only by hand-editing twelve
+         theme/* defines through Functions. Nobody will do that.
+         The missing product surface is: named themes you can
+         install and switch between as one act, per user, without
+         touching source.
+
+         =========================================================
+         MODEL — a theme is a PACKAGE, not a row or a table
+         =========================================================
+         A theme is a Nopales package libs/<theme>/lib.pp whose
+         entire job is defining theme/* token bindings (the
+         existing libs/theme token set: theme/bg theme/ink
+         theme/panel theme/chrome theme/link theme/visited
+         theme/muted theme/err theme/ok theme/border
+         theme/row-alt theme/shadow). A theme package MAY also
+         carry a full ui/theme sheet override, but v1 themes are
+         token-only: the shared ui/theme sheet reads tokens, so
+         swapping tokens re-skins the whole product.
+
+         Nothing new in the kernel. Install = the package exists
+         in the vault (or was defined live). Switch = the theme's
+         token defines land on YOUR branch as pins (standard
+         branching.package-updates semantics: garden pins shadow
+         system/main; checkout main restores system defaults).
+         Per-user themes fall out of per-user branches — no
+         per-user preference table, no cookie, no data_rows
+         setting (all REJECTED: preference state must live in
+         the same branch/version/promote substrate as every other
+         user choice).
+
+         =========================================================
+         REGISTRY — Nopales data, not a kernel catalog
+         =========================================================
+         The registry is itself a binding in the theme package:
+
+           theme/available
+             (lambda ()) -> list of alist-ish dicts, one per
+             installed theme: name, display, description,
+             (optional) author. Source of truth for the picker.
+             Default seed ships the system token package as the
+             one entry.
+
+           theme/current
+             (lambda ()) -> name string. v1 derivation: the
+             garden's own binding theme/name if a switch pinned
+             it, else the system default name. (Honest label,
+             not a guess from token values.)
+
+           theme/set NAME
+             -> switches the CURRENT branch to theme NAME:
+             looks NAME up in theme/available, evaluates the
+             named theme package's token defines as pins on the
+             current branch (same code path as reseed-package,
+             narrowed to theme/* + theme/name), then triggers
+             the existing ui/css shell refresh so the next
+             full-page response carries the new sheet.
+             Unknown name -> labeled error, no partial switch.
+             Switch is ALL-OR-NOTHING across the token set: a
+             theme that defines only some tokens inherits the
+             ACTIVE theme's remainder at switch time (pins are
+             written for every token), never whatever random
+             pin was already on the branch — no stale-token
+             bleed between switches.
+
+         Installing a new theme = adding libs/<name>/lib.pp to
+         the vault plus one entry in theme/available (promote to
+         system/main to share; keep on personal to hoard).
+         pp-sync snapshot/pull treats themes like any package.
+         Agents: pp_eval (theme/set \"phosphor\") — no new REST.
+
+         =========================================================
+         PICKER — /settings/theme (Nopales route, libs/ui)
+         =========================================================
+         A small settings page (private route, same discipline
+         as other product routes): lists theme/available entries
+         as cards (display name, description, swatch row rendered
+         inline from each entry's token values), marks
+         theme/current, and POSTs a switch via htmx to a partial
+         that calls (theme/set name) and returns the updated
+         card list; the next FULL page load shows the new theme
+         (fragment responses never re-inject the stylesheet —
+         existing product-theme rule). No-JS fallback: plain
+         form POST + redirect to /settings/theme.
+
+         INTERACTION WITH PERSONAL ui/theme PINS:
+           A garden that pinned its own ui/theme sheet keeps it —
+           theme/set only touches theme/* + theme/name. Tokens
+           flow through whatever sheet is visible. A theme that
+           ships a sheet override installs it as a pin too, and
+           switching AWAY removes that pin (restores inherited
+           ui/theme). Sheet-carrying themes are flagged in their
+           registry entry so the picker can say so.
+
+         REJECTED:
+         - data_rows theme/preference entities as authority
+           (shadow state outside branch semantics — the exact
+           thing product-theme rejected for CSS itself)
+         - Static /assets/<theme>.css files (rejected in
+           product-theme already; stays rejected)
+         - Kernel theme catalog table / migration (catalog is
+           Nopales data on branches, versioned like code)
+         - Live preview without switch (v1: swatch row only;
+           real preview is switch-then-look, checkout restores)
+         - Theme inheritance/chaining beyond token fallback
+         - Per-page or per-app themes (one active theme per
+           branch, period)
+
+         RELATION TO product-theme:
+           This section changes NOTHING about css/*, ui/theme,
+           ui/css, session caching, or emergency CSS. It adds the
+           registry + switch + picker on top. The deferred
+           "Dedicated /theme form UI" line in the htmx-interface
+           overview resolves to THIS section's picker.
+
+         MAKE ORDER:
+         1. theme/name + theme/available + theme/current +
+            theme/set in libs/theme (switch via narrowed
+            reseed path; all-or-nothing token pins)
+         2. /settings/theme + /partials/theme-switch in libs/ui
+         3. Smokes per verify stanzas
     |))
    )
   )
