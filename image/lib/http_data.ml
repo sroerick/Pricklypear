@@ -128,10 +128,11 @@ let build_fields_json
 
 let shared_data_banner () =
   HTML.p [HTML.class_ "meta"] [
-    txt "Data rows are shared across branches (not versioned by branch). ";
+    txt "You see your own rows plus shared seed data (bible, strongs). ";
+    txt "Data is not versioned by branch. ";
     HTML.a [HTML.href "/types"] [txt "Type defs"];
     txt " · ";
-    HTML.a [HTML.href "/data"] [txt "All data"];
+    HTML.a [HTML.href "/data"] [txt "Your data"];
   ]
 
 let data_index_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =

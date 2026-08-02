@@ -81,7 +81,7 @@ echo "$r" | grep -q '"ok":true' || fail "create full: $r"
 id=$(echo "$r" | sed -n 's/.*\([0-9a-f]\{8\}-[0-9a-f]\{4\}-[0-9a-f]\{4\}-[0-9a-f]\{4\}-[0-9a-f]\{12\}\).*/\1/p' | head -1)
 [ -n "$id" ] || fail "no uuid from create: $r"
 r=$(eval_json "{\"expr\":\"(node-path (quote __otv) \\\"$id\\\")\"}")
-echo "$r" | grep -q 'data\.' || fail "node-path: $r"
+echo "$r" | grep -qE 'data\.(u\.|shared\.)' || fail "node-path (want data.u.* or data.shared.*): $r"
 r=$(eval_json "{\"expr\":\"(get (quote __otv) \\\"$id\\\")\"}")
 echo "$r" | grep -q '"ok":true' || fail "get: $r"
 r=$(eval_json "{\"expr\":\"(delete (quote __otv) \\\"$id\\\")\"}")
@@ -97,6 +97,88 @@ psql -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U "$PP_DB_USER" -d "$PP_DB_NAME" -t -
   -c "SELECT bool_and(in_sync) FROM tree_verify();" | grep -qxE 't(rue)?' \
   || fail "post-cleanup tree_verify"
 ok "post-cleanup tree_verify"
+
+
+# 5. cross-user isolation (one-tree /data DECISION / BORGE-1785693032)
+r=$(eval_json '{"expr":"(deftype (quote __otv_iso) (quote a))"}')
+echo "$r" | grep -q 'defined type' || fail "iso deftype: $r"
+r=$(eval_json '{"expr":"(create (quote __otv_iso) \"{\\\"a\\\":\\\"secret-alice\\\"}\")"}')
+echo "$r" | grep -q '"ok":true' || fail "iso create: $r"
+iso_id=$(echo "$r" | sed -n 's/.*\([0-9a-f]\{8\}-[0-9a-f]\{4\}-[0-9a-f]\{4\}-[0-9a-f]\{4\}-[0-9a-f]\{12\}\).*/\1/p' | head -1)
+[ -n "$iso_id" ] || fail "iso no uuid: $r"
+
+r=$(eval_json '{"expr":"(rows (quote __otv_iso))"}')
+echo "$r" | grep -q 'secret-alice' || fail "admin should see own row: $r"
+ok "admin sees own __otv_iso row"
+
+# Prim path as a second user.
+eval_json '{"expr":"(create-user \"bob\" \"bobpass\")"}' >/dev/null 2>&1 || true
+
+bob_eval() {
+  curl -s -u "bob:bobpass" \
+    -X POST "$BASE/api/eval" \
+    -H 'Content-Type: application/json' \
+    --data-binary "$1"
+}
+
+bob_r=$(bob_eval '{"expr":"(whoami)"}' 2>/dev/null || true)
+if echo "$bob_r" | grep -q '"ok":true' && echo "$bob_r" | grep -q bob; then
+  bob_rows=$(bob_eval '{"expr":"(rows (quote __otv_iso))"}')
+  echo "$bob_rows" | grep -q 'secret-alice' && fail "bob prim leaked admin row: $bob_rows"
+  ok "prim confinement: bob (rows '__otv_iso) does not see admin secret"
+else
+  echo "WARN: bob basic-auth not available ($bob_r); skipping prim cross-user (RLS floor still checked)"
+fi
+
+# RLS floor: superusers bypass RLS even with FORCE. Test as a non-bypass role.
+psql -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U "$PP_DB_USER" -d "$PP_DB_NAME" -v ON_ERROR_STOP=1 <<'SQL' >/dev/null
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'pp_rls_probe') THEN
+    CREATE ROLE pp_rls_probe LOGIN PASSWORD 'probe';
+  END IF;
+END $$;
+GRANT USAGE ON SCHEMA public TO pp_rls_probe;
+GRANT SELECT ON tree_nodes, tree_data_rows TO pp_rls_probe;
+-- table owner / superuser still bypass; probe must NOT be superuser
+SQL
+
+# set_config(..., true) is LOCAL and only sticks inside a real transaction.
+# Emit ONLY digit lines so BEGIN/bob/ROLLBACK noise cannot poison the count.
+bob_tree=$(PGPASSWORD=probe psql -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U pp_rls_probe -d "$PP_DB_NAME" -v ON_ERROR_STOP=1 -t -A <<SQL | grep -E '^[0-9]+$' | tail -1
+BEGIN;
+SELECT set_config('pp.user', 'bob', true);
+SELECT count(*)::text FROM tree_nodes
+ WHERE kind='datum' AND type_name='__otv_iso'
+   AND tree_datum_id(path) = '$iso_id'::uuid;
+ROLLBACK;
+SQL
+)
+bob_tree=$(printf '%s' "$bob_tree" | tr -d '[:space:]')
+
+bob_view=$(PGPASSWORD=probe psql -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U pp_rls_probe -d "$PP_DB_NAME" -v ON_ERROR_STOP=1 -t -A <<SQL | grep -E '^[0-9]+$' | tail -1
+BEGIN;
+SELECT set_config('pp.user', 'bob', true);
+SELECT count(*)::text FROM tree_data_rows
+ WHERE type_name='__otv_iso' AND id = '$iso_id'::uuid;
+ROLLBACK;
+SQL
+)
+bob_view=$(printf '%s' "$bob_view" | tr -d '[:space:]')
+
+[ "$bob_tree" = "0" ] || fail "RLS leaked admin datum to bob (tree_nodes count=$bob_tree)"
+[ "$bob_view" = "0" ] || fail "view leaked admin datum to bob (count=$bob_view)"
+ok "RLS+view: non-superuser bob cannot see admin __otv_iso row"
+
+psql -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U "$PP_DB_USER" -d "$PP_DB_NAME" -t -A \
+  -c "SELECT path::text FROM tree_nodes WHERE kind='datum' AND tree_datum_id(path)='$iso_id'::uuid LIMIT 1;" \
+  >/tmp/pp-tree-iso-path.out
+grep -qE '^data\.u\.' /tmp/pp-tree-iso-path.out || fail "datum path not user-scoped: $(cat /tmp/pp-tree-iso-path.out)"
+ok "datum path is data.u.* for non-seed type"
+
+psql -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U "$PP_DB_USER" -d "$PP_DB_NAME" -q \
+  -c "DELETE FROM type_defs WHERE name IN ('__otv','__otv_iso'); DELETE FROM data_rows WHERE type_name IN ('__otv','__otv_iso'); DELETE FROM tree_nodes WHERE kind='datum' AND type_name IN ('__otv','__otv_iso');" \
+  >/dev/null 2>&1 || true
 
 echo "=== ALL CHECKS PASSED ==="
 exit 0

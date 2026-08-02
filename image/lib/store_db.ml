@@ -71,6 +71,41 @@ let exec ((pg, mu) : conn) ?params sql : Pgx.row list =
       | None -> Io_eio.Pg.execute pg sql
       | Some params -> Io_eio.Pg.execute ~params pg sql)
 
+(** Fiber-local session username for SET LOCAL pp.user (RLS floor).
+    Bound by Request_context.with_current so store_db need not depend on
+    the later request_context module (dune module order). *)
+let pp_user_key : string Eio.Fiber.key = Eio.Fiber.create_key ()
+
+let pp_user_safe (s : string) : string =
+  let s = String.lowercase_ascii (String.trim s) in
+  let ok =
+    s <> ""
+    && String.for_all
+         (function
+           | 'a' .. 'z' | '0' .. '9' | '-' | '_' -> true
+           | _ -> false)
+         s
+  in
+  if ok then s else "anonymous"
+
+let with_pp_user (username : string) (f : unit -> 'a) : 'a =
+  Eio.Fiber.with_binding pp_user_key (pp_user_safe username) f
+
+let current_pp_user () : string =
+  match Eio.Fiber.get pp_user_key with
+  | Some u -> u
+  | None -> "anonymous"
+
+(** SET LOCAL pp.user inside the open transaction so RLS / tree_data_rows
+    can confine. LOCAL scopes to the tx; safe even on a shared connection. *)
+let set_local_pp_user (pg : Io_eio.Pg.t) : unit =
+  let u = current_pp_user () in
+  let _ =
+    Io_eio.Pg.execute ~params:[ Pgx.Value.of_string u ]
+      pg "SELECT set_config('pp.user', $1, true)"
+  in
+  ()
+
 let with_transaction ?(isolation = Pgx.Isolation.Serializable) (t : t)
     (f : conn option -> 'a) : 'a =
   match t.conn with
@@ -78,6 +113,7 @@ let with_transaction ?(isolation = Pgx.Isolation.Serializable) (t : t)
   | Some (pg, mu) ->
       with_eio_conn_lock mu (fun () ->
           Io_eio.Pg.with_transaction ~isolation pg (fun tx ->
+              set_local_pp_user tx;
               f (Some (tx, mu))))
 
 let with_dynamic_transaction ?(isolation = Pgx.Isolation.Serializable)
@@ -94,6 +130,7 @@ let with_dynamic_transaction ?(isolation = Pgx.Isolation.Serializable)
           else
             Io_eio.Pg.with_transaction ~isolation pg (fun tx_conn ->
                 t.current_tx <- Some (tx_conn, mu);
+                set_local_pp_user tx_conn;
                 Fun.protect
                   ~finally:(fun () -> t.current_tx <- None)
                   f))

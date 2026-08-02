@@ -139,7 +139,7 @@ let about_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
           HTML.li [] [txt "Store — Postgres holds functions, types, routes, data rows, auth, branches."];
           HTML.li [] [txt "Function / binding — a named live value, usually a lambda. Top-level (define ...) persists it."];
           HTML.li [] [txt "Branch — versioned code world (system/main, alice/experiment). Code branches; data is shared."];
-          HTML.li [] [txt "Type + row — (deftype ...) then (create/get/update/rows ...) over shared data_rows."];
+          HTML.li [] [txt "Type + row — (deftype ...) then (create/get/update/rows ...); rows are per-user plus shared seed."];
           HTML.li [] [txt "Route / page — (route \"/path\" \"handler\") makes a URL call a function."];
           HTML.li [] [txt "AI propose — model writes a function on the current branch as agent:<model>; you keep or discard."];
         ];
