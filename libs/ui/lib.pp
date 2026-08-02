@@ -62,21 +62,35 @@
       (menu/group
         "apps"
         (list
-          (menu/link "notes" "/notes")
-          (menu/link "inbox" "/notes?slug=inbox")
-          (menu/link "contacts" "/contacts")
-          (menu/link "plan" "/plan")
-          (menu/link "plans" "/plans")
-          (menu/link "chat" "/chat")
-          (menu/link "bookmarks" "/bookmarks")
-          (menu/link "dabar" "/dabar")
-          (menu/link "todos" "/todos")
-          (menu/link "calendar" "/calendar")
-          (menu/link "flashcards" "/flashcards")
-          (menu/link "weather" "/weather")
-          (menu/link "strongs" "/strongs")
-          (menu/link "agent" "/agent")
-          (menu/link "calories" "/cal")))
+          (menu/group
+            "writing"
+            (list
+              (menu/link "notes" "/notes")
+              (menu/link "inbox" "/notes?slug=inbox")
+              (menu/link "plans" "/plans")
+              (menu/link "bookmarks" "/bookmarks")))
+          (menu/group
+            "study"
+            (list
+              (menu/link "dabar" "/dabar")
+              (menu/link "strongs" "/strongs")
+              (menu/link "flashcards" "/flashcards")))
+          (menu/group
+            "tasks"
+            (list
+              (menu/link "todos" "/todos")
+              (menu/link "calendar" "/calendar")))
+          (menu/group
+            "connect"
+            (list
+              (menu/link "contacts" "/contacts")
+              (menu/link "chat" "/chat")))
+          (menu/group
+            "tools"
+            (list
+              (menu/link "weather" "/weather")
+              (menu/link "agent" "/agent")
+              (menu/link "calories" "/cal")))))
       (menu/group
         "system"
         (list
@@ -2077,5 +2091,63 @@
           (list "color" theme/ok "font-weight" "700"))
         (css/rule
           ".capture-nav-form .err"
-          (list "color" theme/err "font-weight" "700"))))))
+          (list "color" theme/err "font-weight" "700"))
+        ;; --- nested submenu (fly-out) support ---
+        ;; a menu/group inside another menu/group renders as a nested
+        ;; <details.menu-drop> inside a .menu-drop-panel. Make those
+        ;; nested panels open to the SIDE (fly-out) instead of straight
+        ;; down, and style their summary as a full-width row.
+        (css/rule
+          ".menu-drop-panel .menu-drop"
+          (list "margin" "0"))
+        (css/rule
+          ".menu-drop-panel > .menu-drop-btn"
+          (list
+            "display"
+            "block"
+            "width"
+            "100%"
+            "text-align"
+            "left"
+            "box-sizing"
+            "border-box"))
+        (css/rule
+          ".menu-drop-panel .menu-drop > summary::after"
+          (list "content" "\" \u203e\""))
+        (css/rule
+          ".menu-drop-panel .menu-drop-panel"
+          (list
+            "left"
+            "100%"
+            "top"
+            "0"
+            "right"
+            "auto"
+            "margin-top"
+            "0"))
+        ;; if the parent dropdown is the last item, open leftwards so
+        ;; the fly-out doesn't spill off the right edge.
+        (css/rule
+          ".menu-drop-panel .menu-drop:last-child > .menu-drop-panel"
+          (list "left" "auto" "right" "100%"))
+        ;; on narrow screens, collapse fly-outs to stacked (open-down)
+        (css/media
+          "max-width:40rem"
+          (list
+            (css/rule
+              ".menu-drop-panel .menu-drop-panel"
+              (list
+                "left"
+                "0"
+                "right"
+                "0"
+                "top"
+                "100%"
+                "position"
+                "static"
+                "margin-top"
+                "0"))
+            (css/rule
+              ".menu-drop-panel .menu-drop > summary::after"
+              (list "content" "\" v\"")))))))
 
