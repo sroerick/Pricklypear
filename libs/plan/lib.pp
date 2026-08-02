@@ -105,7 +105,7 @@
                         "placeholder"
                         "shipping macros, out Thursday, ...")))
                   (as-str body))
-                (html/button (html/attr "type" "submit") "Save plan"))))))))))
+                (html/button (html/attr "type" "submit") "Save plan")))))))))
 
 (define plan/main-html
   (lambda

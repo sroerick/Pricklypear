@@ -188,6 +188,17 @@ let rehydrate (t : t) : unit =
     (Pricklypear_lisp.Ast.VPrim "load-library");
   load_defs t
 
+(** Force the next refresh_ui_shell to re-eval ui/nav + ui/css instead of
+    serving the 60s TTL cache. Used after define of shell/theme names,
+    load-library, and branch checkout (image.themes + product-theme). *)
+let bust_ui_shell_cache (t : t) : unit =
+  t.ui_nav_html <- None;
+  t.ui_css <- None;
+  t.ui_nav_refreshed_at <- 0.0;
+  t.ui_nav_retry_at <- 0.0;
+  t.ui_css_refreshed_at <- 0.0;
+  t.ui_css_retry_at <- 0.0
+
 (** Switch store + manifest to [branch_id], then rehydrate env. *)
 let checkout_to (t : t) ~(branch_id : string) ~(branch_ref : string)
   : unit =
@@ -199,12 +210,7 @@ let checkout_to (t : t) ~(branch_id : string) ~(branch_ref : string)
   (* Drop shell caches — ui/nav and ui/css are branch-visible. Next
      refresh_ui_shell (request launch / load) repopulates from new env.
      Reset the invariant-3 retry/refresh timestamps too. *)
-  t.ui_nav_html <- None;
-  t.ui_css <- None;
-  t.ui_nav_refreshed_at <- 0.0;
-  t.ui_nav_retry_at <- 0.0;
-  t.ui_css_refreshed_at <- 0.0;
-  t.ui_css_retry_at <- 0.0;
+  bust_ui_shell_cache t;
   rehydrate t
 
 let split_branch_ref (s : string) : string * string =
@@ -655,8 +661,10 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value =
            && (name = "ui/nav" || name = "ui/home" || name = "ui/css"
                || name = "ui/theme"
                || String.starts_with ~prefix:"theme/" name)
-        then refresh_ui_shell t
-        else ()
+        then begin
+          bust_ui_shell_cache t;
+          refresh_ui_shell t
+        end else ()
       in
       let () = record_define_side_effects t ~name in
       v
@@ -769,8 +777,10 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
          && (name = "ui/nav" || name = "ui/home" || name = "ui/css"
              || name = "ui/theme"
              || String.starts_with ~prefix:"theme/" name)
-      then refresh_ui_shell t
-      else ()
+      then begin
+        bust_ui_shell_cache t;
+        refresh_ui_shell t
+      end else ()
     in
     let () = record_define_side_effects t ~name in
     v
@@ -797,13 +807,43 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
 
 and load_string (t : t) (src : string) : (string, string) result =
   let prev = t.current_package in
+  let prev_suppress = t.suppress_refresh_on_define in
   t.current_package <- None;
-  (Fun.protect ~finally:(fun () -> t.current_package <- prev) (fun () -> Loader.load_string ~eval_form:(eval_form t) src))
+  t.suppress_refresh_on_define <- true;
+  Fun.protect
+    ~finally:(fun () ->
+      t.current_package <- prev;
+      t.suppress_refresh_on_define <- prev_suppress)
+    (fun () ->
+      let r = Loader.load_string ~eval_form:(eval_form t) src in
+      (* Boot seed holds suppress_refresh across many loads and does one
+         explicit refresh at the end — don't thrash ui/css mid-seed. *)
+      let () =
+        if not prev_suppress then begin
+          bust_ui_shell_cache t;
+          refresh_ui_shell t
+        end
+      in
+      r)
 
 and load_library (t : t) (name : string) : (string, string) result =
   let prev = t.current_package in
+  let prev_suppress = t.suppress_refresh_on_define in
   t.current_package <- None;
-  (Fun.protect ~finally:(fun () -> t.current_package <- prev) (fun () -> Loader.load_library ~eval_form:(eval_form t) name))
+  t.suppress_refresh_on_define <- true;
+  Fun.protect
+    ~finally:(fun () ->
+      t.current_package <- prev;
+      t.suppress_refresh_on_define <- prev_suppress)
+    (fun () ->
+      let r = Loader.load_library ~eval_form:(eval_form t) name in
+      let () =
+        if not prev_suppress then begin
+          bust_ui_shell_cache t;
+          refresh_ui_shell t
+        end
+      in
+      r)
 
 (** branching.seed-policy: admin-only upsert of libs/<pkg>/lib.pp onto
     system/main (full clobber for names in that file). Does not touch
@@ -940,7 +980,8 @@ and seed_package_priority : string list =
   (* css before notes: notes/tree-css evaluates (css/sheet …) at define
      time; if css is unbound the notes load aborts mid-file and routes
      like /partials/notes-search never seed (notes.search-modal). *)
-  [ "std"; "weather"; "ui"; "layout"; "welcome"; "ai"; "css"; "html"
+  (* theme before ui: default theme/* tokens exist before ui/css first runs. *)
+  [ "std"; "theme"; "weather"; "ui"; "layout"; "welcome"; "ai"; "css"; "html"
   ; "list"; "outline"; "structed"; "notes"; "signup"; "todo"; "contacts"
   ; "plan"; "chat"; "bookmarks"; "calendar"; "workout"; "flashcards"
   ; "bible"; "dabar"; "bi"; "ref"; "verify" ]
@@ -956,6 +997,10 @@ and discover_seed_packages () : string list =
              name <> ""
              && name.[0] <> '_'
              && name.[0] <> '.'
+             (* Alternate skins (theme-paper, …) load on demand via
+                theme/set → load-library; seeding them would only
+                thrash in-memory theme/* before rehydrate. *)
+             && not (String.starts_with ~prefix:"theme-" name)
              &&
              let pp =
                Filename.concat root (Filename.concat name "lib.pp")
@@ -1293,8 +1338,8 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
     (fun args ->
       match args with
       | [ Pricklypear_lisp.Ast.VStr name ] ->
+          (* load_library busts shell cache + refresh_ui_shell once. *)
           let r = load_library !t name in
-          let () = refresh_ui_shell !t in
           (match r with
            | Ok msg -> (Pricklypear_lisp.Ast.VStr msg)
            | Error e ->
