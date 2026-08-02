@@ -320,6 +320,8 @@
             "10rem"
             "max-width"
             "min(16rem,calc(100vw - 1rem))"
+            "width"
+            "max-content"
             "margin-top"
             "2px"
             "padding"
@@ -2096,10 +2098,30 @@
         ;; a menu/group inside another menu/group renders as a nested
         ;; <details.menu-drop> inside a .menu-drop-panel. Make those
         ;; nested panels open to the SIDE (fly-out) instead of straight
-        ;; down, and style their summary as a full-width row.
+        ;; down, and stretch the nested group so its summary fills the
+        ;; row like the sibling <a> links (fixes shrink-to-label).
         (css/rule
           ".menu-drop-panel .menu-drop"
-          (list "margin" "0"))
+          (list
+            "margin"
+            "0"
+            "display"
+            "block"
+            "width"
+            "100%"
+            "box-sizing"
+            "border-box"))
+        (css/rule
+          ".menu-drop-panel .menu-drop > summary"
+          (list
+            "display"
+            "block"
+            "width"
+            "100%"
+            "text-align"
+            "left"
+            "box-sizing"
+            "border-box"))
         (css/rule
           ".menu-drop-panel > .menu-drop-btn"
           (list
@@ -2149,5 +2171,5 @@
                 "0"))
             (css/rule
               ".menu-drop-panel .menu-drop > summary::after"
-              (list "content" "\" v\"")))))))
+              (list "content" "\" v\""))))))))
 

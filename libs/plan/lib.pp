@@ -84,10 +84,10 @@
             "Like a Unix .plan file — short note other users on this box can read.")
           (html/form
             "POST"
-            "/plan"
+            "/plans"
             (html/attrs
               (list
-                (html/attr "hx-post" "/plan")
+                (html/attr "hx-post" "/plans")
                 (html/attr "hx-target" "#plan-main")
                 (html/attr "hx-swap" "innerHTML")))
             (html/join
@@ -103,9 +103,9 @@
                       (html/attr "rows" "4")
                       (html/attr
                         "placeholder"
-                        "shipping macros, out Thursday, …")))
+                        "shipping macros, out Thursday, ...")))
                   (as-str body))
-                (html/button (html/attr "type" "submit") "Save plan")))))))))
+                (html/button (html/attr "type" "submit") "Save plan"))))))))))
 
 (define plan/main-html
   (lambda
@@ -142,26 +142,6 @@
         ""
         (plan/fields-body (plan/row-fields row))))))
 
-(define plan/page
-  (lambda
-    ()
-    (if
-      (string-eq (request-method) "POST")
-      (seq
-        (plan/set! (request-param "body"))
-        (if
-          (hx-request?)
-          (render-html (plan/main-html))
-          (redirect "/plan")))
-      (html/page
-        (list
-          (html/h1 "Plan")
-          (html/p*
-            (html/attr "class" "muted")
-            (string-append "Signed in as " (as-str (whoami))))
-          (plan/main-html)
-          (html/p* "" (html/a "/plans" "Everyone's plans")))))))
-
 (define plan/plans-page
   (lambda
     ()
@@ -171,7 +151,6 @@
         (html/p*
           (html/attr "class" "muted")
           "Who is working on what (Unix .plan directory).")
-        (html/p* "" (html/a "/plan" "Edit my plan"))
         (plan/directory-html)))))
 
 (define plan/profile-page
@@ -201,8 +180,7 @@
                 (html/div
                   (html/attr "class" "card")
                   (html/p (html/text body))))
-              (html/p* "" (html/a "/plans" "All plans"))
-              (html/p* "" (html/a "/plan" "My plan")))))))))
+              (html/p* "" (html/a "/plans" "View their plan")))))))))
 
 (define plan/row-fields
   (lambda (row) (cdr row)))

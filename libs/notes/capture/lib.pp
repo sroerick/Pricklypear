@@ -130,7 +130,10 @@
     ()
     (html/tag
       "details"
-      (html/attr "class" "menu-drop capture-drop")
+      (html/attrs
+        (list
+          (html/attr "class" "menu-drop capture-drop")
+          (html/attr "name" "pp-nav")))
       (html/join
         (list
           (html/tag
