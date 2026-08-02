@@ -60,6 +60,48 @@ let reader_tests = [
     | Lit (Ast.VStr s) ->
         Alcotest.(check string) "named" "a\nb\tc\"d" s
     | other -> Alcotest.failf "expected string lit, got %s" (Reader.pp_expr other));
+  ("reader: \\uXXXX unicode escape", `Quick, fun () ->
+    (* The menu-caret bug: "\u203e" must become the overline ‾ (U+203E,
+       UTF-8 E2 80 BE), not the literal 4 chars "u203e". *)
+    (match Reader.read_one "\"a\\u203eb\"" with
+     | Lit (Ast.VStr s) ->
+         Alcotest.(check string) "u203e overline" "a\xE2\x80\xBEb" s
+     | other -> Alcotest.failf "expected string lit, got %s" (Reader.pp_expr other));
+    (* degree sign U+00B0 → C2 B0 (the weather \u00B0 case) *)
+    (match Reader.read_one "\"71\\u00B0F\"" with
+     | Lit (Ast.VStr s) ->
+         Alcotest.(check string) "u00B0 degree" "71\xC2\xB0F" s
+     | other -> Alcotest.failf "expected string lit, got %s" (Reader.pp_expr other));
+    (* case-insensitive hex *)
+    (match Reader.read_one "\"\\u00b0\"" with
+     | Lit (Ast.VStr s) -> Alcotest.(check string) "lower hex" "\xC2\xB0" s
+     | other -> Alcotest.failf "expected string lit, got %s" (Reader.pp_expr other));
+    (* BMP 3-byte scalar U+203E already covered; check a 1-byte ASCII *)
+    (match Reader.read_one "\"\\u0041\"" with
+     | Lit (Ast.VStr s) -> Alcotest.(check string) "u0041 = A" "A" s
+     | other -> Alcotest.failf "expected string lit, got %s" (Reader.pp_expr other)));
+  ("reader: \\uXXXX lone surrogate rejected", `Quick, fun () ->
+    let raised = ref false in
+    (try ignore (Reader.read_one "\"\\uD800\"")
+     with Reader.Reader_error _ -> raised := true);
+    Alcotest.(check bool) "lone surrogate D800 raises" true !raised);
+  ("reader: \\uXXXX needs 4 hex digits", `Quick, fun () ->
+    let raised = ref false in
+    (try ignore (Reader.read_one "\"\\u203\""   (* only 3 hex digits *))
+     with Reader.Reader_error _ -> raised := true);
+    Alcotest.(check bool) "short \\u raises" true !raised);
+  ("reader: \\uXXXX round-trips through pp_value", `Quick, fun () ->
+    (* escape_string keeps the UTF-8 bytes, so reading back the printed
+       form preserves the overline — no \\u needed on the print side. *)
+    let s = "x\xE2\x80\xBEy" in
+    match Reader.read_one (Reader.pp_value (Ast.VStr s)) with
+    | Lit (Ast.VStr s') -> Alcotest.(check string) "roundtrip" s s'
+    | other -> Alcotest.failf "expected string lit, got %s" (Reader.pp_expr other));
+  ("reader: forgiving fallback still drops backslash for non-u", `Quick, fun () ->
+    (* Unrelated unknown escape still hits the forgiving rule. *)
+    match Reader.read_one "\"a\\qb\"" with
+    | Lit (Ast.VStr s) -> Alcotest.(check string) "forgiving \\q -> q" "aqb" s
+    | other -> Alcotest.failf "expected string lit, got %s" (Reader.pp_expr other));
 ]
 
 let reader_list_tests = [

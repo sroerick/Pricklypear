@@ -8,6 +8,10 @@
     Per spec [lisp-interpreter.reader]:
       - Standard s-expressions: (foo bar baz), 'symbol, "string", 123,
         #t, #f, ()
+      - String escapes: named (n/t/r/backslash/quote/apostrophe),
+        three-digit decimal byte (\\ddd), unicode scalar (\\uXXXX,
+        UTF-8 encoded; lone surrogates rejected); other backslash-X
+        is forgiving (literal X)
       - Comments: ; to end of line
       - Docstrings: a leading string in a body position (deferred; reader
         just produces the AST, docstring extraction is eval-time)
@@ -75,10 +79,38 @@ let is_digit c = c >= '0' && c <= '9'
 
 let digit_val c = Char.code c - Char.code '0'
 
+let is_hex c =
+  (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+
+let hex_val c =
+  if c >= '0' && c <= '9' then Char.code c - Char.code '0'
+  else if c >= 'a' && c <= 'f' then 10 + Char.code c - Char.code 'a'
+  else 10 + Char.code c - Char.code 'A'
+
+(** UTF-8 encode a Unicode scalar value into buf (1–4 bytes).
+    Caller must have rejected lone surrogates (D800..DFFF). *)
+let utf8_add_scalar (buf : Buffer.t) (n : int) : unit =
+  if n < 0x80 then Buffer.add_char buf (Char.chr n)
+  else if n < 0x800 then begin
+    Buffer.add_char buf (Char.chr (0xC0 lor (n lsr 6)));
+    Buffer.add_char buf (Char.chr (0x80 lor (n land 0x3F)))
+  end else if n < 0x10000 then begin
+    Buffer.add_char buf (Char.chr (0xE0 lor (n lsr 12)));
+    Buffer.add_char buf (Char.chr (0x80 lor ((n lsr 6) land 0x3F)));
+    Buffer.add_char buf (Char.chr (0x80 lor (n land 0x3F)))
+  end else begin
+    Buffer.add_char buf (Char.chr (0xF0 lor (n lsr 18)));
+    Buffer.add_char buf (Char.chr (0x80 lor ((n lsr 12) land 0x3F)));
+    Buffer.add_char buf (Char.chr (0x80 lor ((n lsr 6) land 0x3F)));
+    Buffer.add_char buf (Char.chr (0x80 lor (n land 0x3F)))
+  end
+
 (** Escape a string for Nopales source. Keep UTF-8 bytes as-is so
     round-trip through the reader preserves non-ASCII text. Only quote,
     backslash, and a few controls get named escapes; other controls use
-    exactly-three-digit decimal [\\ddd] (OCaml-compatible). *)
+    exactly-three-digit decimal [\\ddd] (OCaml-compatible).
+    \\uXXXX is a READ-side escape only — the printer never emits it;
+    UTF-8 bytes go out raw and the reader accepts them on the way back. *)
 let escape_string (s : string) : string =
   let buf = Buffer.create (String.length s + 8) in
   String.iter
@@ -123,6 +155,33 @@ let read_string (st : state) : string =
          | Some '\\' -> ignore (advance st); Buffer.add_char buf '\\'
          | Some '"' -> ignore (advance st); Buffer.add_char buf '"'
          | Some '\'' -> ignore (advance st); Buffer.add_char buf '\''
+         | Some 'u' ->
+             (* \uXXXX unicode scalar (exactly 4 hex digits, UTF-8
+                encoded). Lone surrogates are rejected: v1 does not
+                combine surrogate pairs. *)
+             ignore (advance st);  (* consume the 'u' *)
+             let hex4 () =
+               match peek st with
+               | Some c when is_hex c -> ignore (advance st); hex_val c
+               | _ ->
+                   raise
+                     (Reader_error
+                        ("bad unicode escape \\u (need 4 hex digits)",
+                         st.line, st.col))
+             in
+             (* Bind left-to-right: OCaml evaluates + operands right-to-left,
+                which would reverse nibble significance (203e → e302). *)
+             let h1 = hex4 () in
+             let h2 = hex4 () in
+             let h3 = hex4 () in
+             let h4 = hex4 () in
+             let n = (h1 * 4096) + (h2 * 256) + (h3 * 16) + h4 in
+             if n >= 0xD800 && n <= 0xDFFF then
+               raise
+                 (Reader_error
+                    (Printf.sprintf "bad unicode escape \\u%04X (lone surrogate)" n,
+                     st.line, st.col))
+             else utf8_add_scalar buf n
          | Some d1 when is_digit d1 ->
              ignore (advance st);
              (match peek st with

@@ -104,6 +104,11 @@ let reader_cases =
   ; case "quote symbol" "'hello" "hello"
   ; case "quote string stays string" "'\"hello\"" "\"hello\""
   ; case "quote list" "'(a b c)" "(a b c)"
+  (* \\uXXXX unicode escape (additive): overline U+203E must decode to
+     the UTF-8 scalar, not the literal 4 chars "u203e". Expected is the
+     printed form (escape_string keeps UTF-8 bytes as-is). *)
+  ; case "unicode \\uXXXX overline" "\"\\u203e\"" "\"\xE2\x80\xBE\""
+  ; case "unicode \\uXXXX degree" "\"71\\u00B0F\"" "\"71\xC2\xB0F\""
   ]
 
 let value_cases =
@@ -162,6 +167,10 @@ let arithmetic_cases =
   [ case "add" "(+ 20 22)" "42"
   ; case "nested arith" "(* (+ 1 2) (- 10 4))" "18"
   ]
+
+(* Math tower lives in image prims (prims_pure.ml). Conformance here is the
+   pure-lisp gate; image/test/primitives_test.ml pins every math name.
+   Keep a few kernel-reachable arithmetic cases only. *)
 
 let error_cases =
   [ ( "unbound has kind unbound_var",
