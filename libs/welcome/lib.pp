@@ -1,4 +1,8 @@
 ;; package welcome -- exported from live branch system/main
+
+(define welcome/blank?
+  (lambda (s) (string-eq (string-trim (as-str s)) "")))
+
 ;; Sync: scripts/pp_sync.py pull|push
 
 (define welcome/background
@@ -92,8 +96,8 @@
           (message (request-param "message")))
         (if
           (or
-            (blank? (string-trim (as-str name)))
-            (blank? (string-trim (as-str message))))
+            (welcome/blank? (string-trim (as-str name)))
+            (welcome/blank? (string-trim (as-str message))))
           (welcome/guestbook-form "" "Need a name and a message.")
           (seq
             (with-public-write
@@ -143,11 +147,11 @@
               (layout/cta "/code" "Source")
               (layout/cta "/login" "Log in"))))
         (if
-          (blank? err)
+          (welcome/blank? err)
           ""
           (html/p* (html/attr "class" "err") (html/text err)))
         (if
-          (blank? msg)
+          (welcome/blank? msg)
           ""
           (html/p* (html/attr "class" "ok") (html/text msg)))
         (layout/section
@@ -219,7 +223,7 @@
                 (html/attr "class" "gb-name")
                 (html/text name))
               (if
-                (blank? site)
+                (welcome/blank? site)
                 ""
                 (html/join
                   (list
@@ -421,3 +425,9 @@
               (html/text " · ")
               (html/a "/welcome" (html/text "welcome")))))))))
 
+;; Public release-face routes (hard-public in image/lib/http.ml).
+;; Must be public-route so anonymous GET/POST resolve the handlers.
+(public-route "/welcome" "welcome/page")
+(public-route "/background" "welcome/background")
+(public-route "/roadmap" "welcome/roadmap")
+(public-route "/guestbook" "welcome/guestbook")

@@ -39,7 +39,7 @@ let session_user () : string =
     Seed list MUST match Tree_store.seed_types / tree_is_seed_type. *)
 let visible_sql ~(user_param : int) : string =
   Printf.sprintf
-    "(author = $%d OR type_name IN ('bible-verse','bible-book','bible-interlinear','strongs-entry'))"
+    "(author = $%d OR type_name IN ('bible-verse','bible-book','bible-interlinear','strongs-entry','guestbook_entry'))"
     user_param
 
 (** SQL fragment: row is writable by $N (own rows only — not seed). *)
