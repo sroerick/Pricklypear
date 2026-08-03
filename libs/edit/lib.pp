@@ -1247,7 +1247,7 @@
                     (html/attr "loading" "lazy")
                     (html/attr
                       "style"
-                      "width:72px;height:48px;object-fit:cover;border:1px solid #000;vertical-align:middle;"))))))))))
+                      "width:72px;height:48px;object-fit:cover;border:1px solid #000;vertical-align:middle;")))))))))
   "Thumb linked to full media when media_id or /media path set.")
 
 (define edit/assets-table
