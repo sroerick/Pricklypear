@@ -1222,6 +1222,34 @@
           (html/button (html/attr "type" "submit") "Create project")))))
   "Create project form.")
 
+(define edit/asset-thumb
+  (lambda (row)
+    (let ((mid (edit/f row "media_id"))
+          (path (edit/f row "primary_path"))
+          (slug (edit/f row "slug")))
+      (let ((src
+              (if (not (edit/blank? mid))
+                  (string-append "/media/" mid)
+                  (if (and (not (edit/blank? path))
+                           (string-eq (substring path 0 1) "/"))
+                      path
+                      ""))))
+        (if (edit/blank? src)
+            (html/span (html/attr "class" "muted") "—")
+            (html/a src
+              (html/void
+                "img"
+                (html/attrs
+                  (list
+                    (html/attr "src" src)
+                    (html/attr "alt" slug)
+                    (html/attr "class" "edit-asset-thumb")
+                    (html/attr "loading" "lazy")
+                    (html/attr
+                      "style"
+                      "width:72px;height:48px;object-fit:cover;border:1px solid #000;vertical-align:middle;"))))))))))
+  "Thumb linked to full media when media_id or /media path set.")
+
 (define edit/assets-table
   (lambda (project)
     (let ((xs (edit/assets-for project "")))
@@ -1234,6 +1262,7 @@
                   (edit/tr
                     (html/join
                       (list
+                        (edit/th "")
                         (edit/th "slug")
                         (edit/th "kind")
                         (edit/th "project")
@@ -1241,13 +1270,14 @@
                 (edit/tbody
                   (html/join
                     (list/map edit/asset-row xs)))))))))
-  "Assets table.")
+  "Assets table with optional media thumbs.")
 
 (define edit/asset-row
   (lambda (row)
     (edit/tr
       (html/join
         (list
+          (edit/td (edit/asset-thumb row))
           (edit/td (html/code (edit/f row "slug")))
           (edit/td (html/text (edit/f row "kind")))
           (edit/td
@@ -1261,7 +1291,7 @@
                 (if (< (string-length a) 80)
                     a
                     (string-append (substring a 0 80) "…")))))))))
-  "One asset row.")
+  "One asset row with thumb.")
 
 (define edit/project-page-html
   (lambda (slug)
