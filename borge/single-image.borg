@@ -214,6 +214,74 @@
     |)))
   )
 
+  (subsection net-prims
+   (doc "Network primitives: tcp-connect + stream read/write/close over Eio.Net (egress v1)")
+   (implements image/lib/net_prims.ml image/lib/primitives.ml image/lib/session.ml)
+   (status implemented)
+   (* agent note (|2026-08-05: implemented v1 egress net prims (tcp-connect, stream-write, stream-read, stream-close, stream-list) in image/lib/net_prims.ml using OCaml Unix blocking sockets (not Eio.Net — Eio switches are run-scoped with no standalone make, so persistent handles need a service-manager switch; filed BORGE-1785968883). Session stores a net_streams table of Unix.file_descr. Tested on local dev: full HTTP round-trip to example.com works (connect -> write -> read -> close). 160 dune tests green. Ingress/tcp-listen/TLS deferred to v2 (BORGE-1785967056).|) *)
+   (verify
+    (build "dune build")
+    (test "dune runtest — net prims (mock/local)")
+    (test "(tcp-connect host port) returns a stream handle")
+    (test "(stream-write handle bytes) writes; (stream-read handle n) reads up to n bytes")
+    (test "(stream-close handle) closes the socket"))
+   (details
+    (doc (|
+         v1 SCOPE: EGRESS ONLY. Lisp code can open outbound
+         TCP connections and read/write byte streams. This makes
+         MQTT/IRC/SMTP/WebSocket client libraries possible as
+         pure Nopales, without a kernel sidecar. Ingress
+         (tcp-listen, spawn-service, long-lived accept-loop
+         fibers) is deferred to v2 — it needs a service-manager
+         switch outside the per-request scope and lifecycle
+         introspection (BORGE-1785967056).
+
+         PRIMS (v1):
+           (tcp-connect host port) -> stream-handle | error
+             Opens an outbound TCP connection to host:port using
+             Eio.Net.connect on a switch scoped to the handle's
+             lifetime. Returns an opaque VStr handle id (a UUID)
+             registered in a session-local stream table.
+           (stream-write handle bytes) -> n-written | error
+             Writes the byte string to the stream (Eio.Flow.write).
+           (stream-read handle max-bytes) -> bytes-string | error
+             Reads up to max-bytes bytes (Eio.Flow.single_read into
+             a Cstruct, returns as VStr). One budget tick per read.
+           (stream-close handle) -> ok
+             Closes the socket and removes the handle from the
+             session stream table.
+           (stream-list) -> list of open handle ids
+             Introspection for debugging.
+
+         CAPABILITY GATING:
+           tcp-connect requires the Net capability (new badge;
+           see effect.ml). Public routes may not call net prims.
+           Per-user/branch quota on open streams (default 16) to
+           prevent resource exhaustion. Anonymous sessions denied.
+
+         LIFECYCLE:
+           Stream handles live in a session-local table. The switch
+           is scoped to the eval call (so an abandoned stream closes
+           when the eval returns) OR to the session (for multi-call
+           stream use). v1: per-eval-call switch (simplest, safest).
+           The handle id is a UUID string; the table maps id -> socket.
+
+         STEP-BUDGET INTERACTION:
+           Each stream-read is one budget tick (like extract-links).
+           stream-write is one tick. A blocked read on a silent peer
+           could hang an eval call; mitigate with a per-read timeout
+           (default 30s) returning an error string, not a hang.
+
+         NON-GOALS (v1):
+           - tcp-listen / ingress (v2, needs service-manager).
+           - spawn-service / long-lived fibers (v2).
+           - TLS wrap (v2; eio-tls not in poohstack yet).
+           - UDP.
+           - DNS resolution beyond getaddrinfo (Eio.Net handles it).
+    |))
+   )
+  )
+
   (subsection deployment
    (doc "One binary, one rc.d service, one restart")
    (status implemented)

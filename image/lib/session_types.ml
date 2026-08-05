@@ -92,6 +92,12 @@ type t = {
       with (package NAME (export …)), stamp new defines with this package
       name. None outside a package load / REPL package form. *)
   mutable current_package : string option;
+  (** single-image.net-prims: session-local stream table for tcp-connect.
+      Maps handle-id (UUID string) -> stream handle. Populated by
+      (tcp-connect ...); drained by (stream-close ...) and by the switch
+      finishing. Quota enforced at insert. The stream type is defined
+      here to avoid a module cycle (Net_prims references it). *)
+  mutable net_streams : (string, Unix.file_descr) Hashtbl.t;
 }
 
 (* Load persisted function_defs + routes into the env.

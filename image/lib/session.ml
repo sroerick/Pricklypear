@@ -624,7 +624,8 @@ let register_media_prims (t : t) (tbl : Primitives.t) : unit =
 let do_http_get = Prims_net.do_http_get
 
 let register_net_prims (t : t) (tbl : Primitives.t) : unit =
-  Prims_net.register t tbl
+  Prims_net.register t tbl;
+  Net_prims.register t tbl
 let promote_to_personal = Prims_db.promote_to_personal
 let register_crud_prims (t : t) (tbl : Primitives.t) : unit =
   Prims_db.register ~rehydrate_fn:rehydrate t tbl
@@ -1268,6 +1269,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
       impact_queue = [];
       change_transcript = [];
       current_package = None;
+      net_streams = Hashtbl.create 16;
     }
   in
   (* Register session-aware primitives (whoami, current-author,
@@ -1326,6 +1328,9 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
      the shared data_rows table. Same pattern as control prims:
      they capture (!t) and return their real DB result via Lwt. *)
   register_crud_prims !t prim_table;
+  (* Network primitives (tcp-connect, stream-read/write/close) —
+     single-image.net-prims. *)
+  register_net_prims !t prim_table;
   (* AI + list-branches / current-branch registered inside
      register_crud_prims above (they capture t). *)
   (* Make primitives reachable by name in the env, so `(+)` etc.
