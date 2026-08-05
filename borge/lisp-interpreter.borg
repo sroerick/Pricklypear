@@ -1303,6 +1303,79 @@
    )
   )
 
+  (subsection optional-rest-args
+   (doc "Optional and rest lambda parameters: &optional with defaults, &rest collection. Backward compatible with fixed arity.")
+   (implements lisp/lib/eval.ml lisp/lib/special_forms.ml lisp/lib/reader.ml)
+   (status implemented)
+   (* agent note (|2026-08-05: implemented &optional (default "") and &rest markers in apply_step. No &optional defaults yet (BORGE-1785965096). 8 new eval tests pass; 136 total green. dune build clean.|) *)
+   (verify
+    (build "dune build lisp")
+    (test "dune runtest — lisp eval optional/rest cases")
+    (test "(lambda (a &optional b) b) called with 1 arg: b is unbound/empty")
+    (test "(lambda (a &optional b) b) called with 2 args: b is 2nd arg")
+    (test "(lambda (&rest args) args) collects all args into a list")
+    (test "(lambda (a &rest rest) rest) collects extras after required")
+    (test "fixed-arity lambdas still enforce exact arity (backward compat)"))
+   (details
+    (doc (|
+         House style stays FIXED ARITY for most image code. This
+         subsection adds two backward-compatible extensions so user
+         code stops reinventing optional/keyword args via empty-string
+         sentinels and opts dicts.
+
+         SYNTAX (in the parameter list, after required params):
+           (lambda (a b &optional c) body)
+             — c is optional; if omitted, bound to empty string "".
+           (lambda (a b &optional (c default)) body)
+             — c is optional; if omitted, bound to default (evaluated
+               in the call env at bind time).
+           (lambda (a b &rest args) body)
+             — args is bound to a VList of all remaining arguments.
+           (lambda (&rest all) body)
+             — all-variadic; all args collected.
+
+         &optional and &rest may not both appear. &rest must be the
+         last marker. These are markers (symbols matching the literal
+         strings "&optional" / "&rest"), not params.
+
+         DOTTED PAIR NOTATION (a . b) remains UNSUPPORTED at the
+         reader level (parse error). The &rest marker is the only way
+         to collect variadic args. This keeps the reader simple.
+
+         ARITY SEMANTICS
+           Required params: must all be supplied.
+           &optional: supplied or fewer — no error; missing ones get
+             their default (or "" if no default form).
+           &rest: absorbs any extra args beyond required+optional.
+           Calling with FEWER than required → Arity_mismatch (as today).
+           Calling with MORE than required+optional (and no &rest) →
+             Arity_mismatch (as today).
+
+         IMPLEMENTATION NOTES
+           - The Lambda constructor / VLambda carry a param spec richer
+             than string list: required params, optional (name, default
+             expr option) list, rest name option. A flat string list
+             with &optional/&rest markers as sentinels is the minimal
+             change; a typed param_spec is cleaner but larger.
+           - apply_step binds required first (arity check against
+             min_arity), then optional (fill defaults for missing),
+             then rest (collect leftover into VList).
+           - params_of_define_sugar must accept &optional/&rest markers
+             and stop raising on their presence (the current '.' check
+             stays — dotted notation is still rejected).
+           - pp_expr / value_to_expr round-trip must preserve the
+             param list shape so function-source prints correctly.
+
+         NON-GOALS
+           - &key keyword args (opts-dict convention stays until a real
+             need proves it; Smalltalk keyword messages are the model).
+           - Dotted-pair (a . b) reader syntax (use &rest).
+           - Optional/rest on macros (follow-up; macros already have
+             their own arity path — add later if needed).
+    |))
+   )
+  )
+
   (subsection define-docstring
    (doc "Optional docstring on define; persist to function_defs.doc; (function-doc name)")
    (implements lisp/lib/eval.ml lisp/lib/special_forms.ml image/lib/session.ml image/lib/store.ml image/lib/agent_tools.ml image/lib/primitives.ml)

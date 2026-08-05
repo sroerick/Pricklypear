@@ -384,6 +384,70 @@ let eval_tests = [
       with Ast.Interp_error _ -> true
     in
     Alcotest.(check bool) "arity mismatch raises" true raised);
+  ("eval: optional param omitted", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let got = (Eval.eval_string ~prims env
+      "((lambda (a &optional b) b) 1)") in
+    Alcotest.(check string) "empty for omitted optional" "\"\""
+      (Reader.pp_value got));
+  ("eval: optional param supplied", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let got = (Eval.eval_string ~prims env
+      "((lambda (a &optional b) b) 1 2)") in
+    Alcotest.(check string) "2nd arg" "2" (Reader.pp_value got));
+  ("eval: rest param collects extras", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let got = (Eval.eval_string ~prims env
+      "((lambda (a &rest rest) rest) 1 2 3)") in
+    Alcotest.(check string) "rest list" "(2 3)" (Reader.pp_value got));
+  ("eval: rest param all variadic", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let got = (Eval.eval_string ~prims env
+      "((lambda (&rest all) all) 1 2 3)") in
+    Alcotest.(check string) "all args" "(1 2 3)" (Reader.pp_value got));
+  ("eval: optional + rest together", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let got = (Eval.eval_string ~prims env
+      "((lambda (a &optional b &rest rest) rest) 1 2 3 4)") in
+    Alcotest.(check string) "rest after optional" "(3 4)"
+      (Reader.pp_value got));
+  ("eval: fixed arity still enforced", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let raised =
+      try
+      let _ = (Eval.eval_string ~prims env "((lambda (a b) a) 1)") in
+      false
+      with Ast.Interp_error _ -> true
+    in
+    Alcotest.(check bool) "fixed arity mismatch raises" true raised);
+  ("eval: optional arity too many raises", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let raised =
+      try
+      let _ = (Eval.eval_string ~prims env
+        "((lambda (a &optional b) a) 1 2 3)") in
+      false
+      with Ast.Interp_error _ -> true
+    in
+    Alcotest.(check bool) "too many args raises" true raised);
+  ("eval: required arity too few raises", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let raised =
+      try
+      let _ = (Eval.eval_string ~prims env
+        "((lambda (a b &optional c) a) 1)") in
+      false
+      with Ast.Interp_error _ -> true
+    in
+    Alcotest.(check bool) "too few required raises" true raised);
 ]
 
 let pretty_print_tests = [

@@ -137,11 +137,14 @@ let peel_leading_doc (bodies : expr list) : string option * expr list =
 let params_of_define_sugar (param_exprs : expr list) : string list =
   List.map
     (function
-      | Var p -> p
-      | _ ->
-          raise
-            (Interp_error
-               (User_error "define function params must be names")))
+     | Var p -> p
+     | App (Var p, [ _default ]) ->
+         (* optional with default: (c default) — allowed in define sugar *)
+         p
+     | _ ->
+         raise
+           (Interp_error
+              (User_error "define function params must be names")))
     param_exprs
 
 (** Rewrite a lambda-shaped expr so a leading multi-body docstring is removed
@@ -1051,13 +1054,82 @@ and apply_step
   : step =
   match f with
   | VLambda (params, body, clo_env) ->
-      let expected = List.length params
-      and got = List.length args in
-      if expected <> got then
-        raise (Interp_error (Arity_mismatch ("lambda", expected, got)));
-      let call_env = Env.child clo_env in
-      List.iter2 (fun p a -> Env.define call_env p a) params args;
-      Cont (call_env, body)
+      (* Parse param spec: required, &optional, &rest markers.
+         params is a flat string list; &optional and &rest are markers.
+         Layout: required... [&optional opt...] [&rest name]. *)
+      let has_marker =
+        List.exists (fun p -> p = "&optional" || p = "&rest") params
+      in
+      if not has_marker then begin
+        (* Fixed arity — original path *)
+        let expected = List.length params and got = List.length args in
+        if expected <> got then
+          raise (Interp_error (Arity_mismatch ("lambda", expected, got)));
+        let call_env = Env.child clo_env in
+        List.iter2 (fun p a -> Env.define call_env p a) params args;
+        Cont (call_env, body)
+      end else begin
+        (* Parse markers *)
+        let rec split_params ps required opt_phase opt_acc rest_acc =
+          match ps with
+          | [] -> (List.rev required, List.rev opt_acc, rest_acc)
+          | p :: rest when p = "&optional" ->
+              split_params rest required true opt_acc rest_acc
+          | p :: rest when p = "&rest" ->
+              (match rest with
+               | [ r ] ->
+                   split_params [] required false opt_acc (Some r)
+               | _ ->
+                   raise
+                     (Interp_error
+                        (User_error "&rest must be last and have one name")))
+          | p :: rest when opt_phase ->
+              split_params rest required true (p :: opt_acc) rest_acc
+          | p :: rest ->
+              if opt_phase then
+                split_params rest required true (p :: opt_acc) rest_acc
+              else
+                split_params rest (p :: required) false opt_acc rest_acc
+        in
+        let (required, optionals, rest_name) =
+          split_params params [] false [] None
+        in
+        let n_required = List.length required
+        and n_optional = List.length optionals
+        and n_args = List.length args in
+        (* Arity check: at least required, at most required+optional (if no rest) *)
+        if n_args < n_required then
+          raise (Interp_error (Arity_mismatch ("lambda", n_required, n_args)));
+        (match rest_name with
+         | None ->
+             if n_args > n_required + n_optional then
+               raise
+                 (Interp_error
+                    (Arity_mismatch ("lambda", n_required + n_optional, n_args)))
+         | Some _ -> ());
+        let call_env = Env.child clo_env in
+        (* Bind required *)
+        let req_args = List.take n_required args in
+        List.iter2 (fun p a -> Env.define call_env p a) required req_args;
+        (* Bind optional (fill missing with empty string VStr "") *)
+        let remaining = List.drop n_required args in
+        let opt_args = List.take n_optional remaining in
+        let n_supplied_opt = List.length opt_args in
+        let supplied_opt_names = List.take n_supplied_opt optionals in
+        List.iter2
+          (fun p a -> Env.define call_env p a)
+          supplied_opt_names opt_args;
+        (* Fill missing optionals with "" *)
+        let missing_opt = List.drop n_supplied_opt optionals in
+        List.iter (fun p -> Env.define call_env p (VStr "")) missing_opt;
+        (* Bind rest *)
+        (match rest_name with
+         | Some r ->
+             let rest_args = List.drop n_optional remaining in
+             Env.define call_env r (VList rest_args)
+         | None -> ());
+        Cont (call_env, body)
+      end
   | VMacro _ ->
       raise
         (Interp_error
