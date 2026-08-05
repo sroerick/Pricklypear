@@ -4,6 +4,7 @@
 (define calendar/add-month
   (lambda
     (ym delta)
+    "Add delta months to a YYYY-MM string, wrapping year boundaries."
     (let
       ((y (parse-int (substring (as-str ym) 0 4))))
       (let
@@ -27,6 +28,7 @@
 (define calendar/agenda
   (lambda
     ()
+    "Build a 7-day agenda list with events and due todos per day."
     (let
       ((today (date-today)))
       (let
@@ -68,6 +70,7 @@
 (define calendar/agenda-widget
   (lambda
     ()
+    "Render the 7-day agenda as an HTML card widget."
     (let
       ((month-names
         (list
@@ -143,7 +146,10 @@
                 rows))))))))
 
 (define calendar/all-events
-  (lambda () (rows (quote calendar-event) 500)))
+  (lambda
+    ()
+    "Return up to 500 calendar-event rows from the store."
+    (rows (quote calendar-event) 500)))
 
 (define calendar/build-cells
   (lambda
@@ -155,6 +161,7 @@
       ym
       d
       acc)
+    "Recursively build calendar day cells from day 1 to days-in-month."
     (if
       (> d dim)
       acc
@@ -171,6 +178,7 @@
 (define calendar/cell-marks
   (lambda
     (day)
+    "Render event/todo/daily-note indicator dots for a given day."
     (let
       ((ne (calendar/count-events-on day)))
       (let
@@ -203,6 +211,7 @@
 (define calendar/count-events-on
   (lambda
     (day)
+    "Count events on a specific YYYY-MM-DD day."
     (list/foldl
       (lambda (acc _) (+ acc 1))
       0
@@ -211,6 +220,7 @@
 (define calendar/count-todos-on
   (lambda
     (day)
+    "Count todos due on a specific YYYY-MM-DD day."
     (list/foldl
       (lambda (acc _) (+ acc 1))
       0
@@ -219,6 +229,7 @@
 (define calendar/create
   (lambda
     (title day start notes)
+    "Create a new calendar-event with title, day, start time, and notes."
     (let
       ((st (if (null? start) "" (as-str start))))
       (let
@@ -250,6 +261,7 @@
 (define calendar/cron-field-matches?
   (lambda
     (field val)
+    "Test if a cron field value matches a given integer."
     (if
       (string-eq field "*")
       #t
@@ -273,6 +285,7 @@
 (define calendar/cron-matches?
   (lambda
     (date-str cron-expr)
+    "Test if a cron expression matches a YYYY-MM-DD date string."
     (let*
       ((parts (string-split cron-expr " "))
         (min-field (car parts))
@@ -306,6 +319,7 @@
 (define calendar/cron-to-event
   (lambda
     (rec)
+    "Convert a recurring cron rule to a calendar-event JSON row."
     (let
       ((cron (car rec))
         (title (car (cdr rec)))
@@ -324,6 +338,7 @@
 (define calendar/day-cell
   (lambda
     (y m d today ym)
+    "Render a single calendar day cell as HTML with link and marks."
     (if
       (= d 0)
       (html/div (html/attr "class" "cal-cell cal-empty") "")
@@ -346,11 +361,15 @@
                 (calendar/cell-marks day)))))))))
 
 (define calendar/day-eq?
-  (lambda (a b) (string-eq (as-str a) (as-str b))))
+  (lambda
+    (a b)
+    "Check if two day strings are equal (as strings)."
+    (string-eq (as-str a) (as-str b))))
 
 (define calendar/day-html
   (lambda
     (day)
+    "Render the full day view: events, due todos, and add-event form."
     (html/div
       (html/attr "class" "cal-day-panel")
       (html/join
@@ -434,11 +453,13 @@
 (define calendar/day-prefix?
   (lambda
     (day ym)
+    "Check if a day string starts with a given YYYY-MM prefix."
     (string-eq (substring (as-str day) 0 7) (as-str ym))))
 
 (define calendar/days-in-month
   (lambda
     (y m)
+    "Return number of days in month m of year y, handling leap years."
     (if
       (= m 2)
       (if (calendar/leap? y) 29 28)
@@ -448,14 +469,21 @@
         (if (= m 6) 30 (if (= m 9) 30 (if (= m 11) 30 31)))))))
 
 (define calendar/delete
-  (lambda (id) (delete (quote calendar-event) id)))
+  (lambda
+    (id)
+    "Delete a calendar-event by id."
+    (delete (quote calendar-event) id)))
 
 (define calendar/dom
-  (lambda (day) (parse-int (substring (as-str day) 8 2))))
+  (lambda
+    (day)
+    "Extract day-of-month integer from a YYYY-MM-DD string."
+    (parse-int (substring (as-str day) 8 2))))
 
 (define calendar/event-all-day?
   (lambda
     (f)
+    "Check if an event fields dict is marked all-day."
     (let
       ((a (dict-get f "all_day")))
       (if
@@ -464,11 +492,15 @@
         (string-eq (as-str a) "true")))))
 
 (define calendar/event-day
-  (lambda (f) (as-str (dict-get f "day"))))
+  (lambda
+    (f)
+    "Extract the day field from an event fields dict."
+    (as-str (dict-get f "day"))))
 
 (define calendar/event-li
   (lambda
     (row)
+    "Render a calendar event as an HTML list item with delete button."
     (let
       ((id (car row)))
       (let
@@ -511,6 +543,7 @@
 (define calendar/event-start
   (lambda
     (f)
+    "Extract start_time from event fields dict, empty if missing."
     (let
       ((s (dict-get f "start_time")))
       (if (null? s) "" (as-str s)))))
@@ -518,6 +551,7 @@
 (define calendar/event-time-string
   (lambda
     (f)
+    "Format event time range from start_time and end_time fields."
     (let
       ((s (as-str (dict-get f "start_time")))
         (e (as-str (dict-get f "end_time"))))
@@ -530,11 +564,15 @@
           (if (string-eq e "") s (string-append s " - " e)))))))
 
 (define calendar/event-title
-  (lambda (f) (as-str (dict-get f "title"))))
+  (lambda
+    (f)
+    "Extract the title from an event fields dict."
+    (as-str (dict-get f "title"))))
 
 (define calendar/events-for-day
   (lambda
     (d)
+    "Get events for a day including cron-based recurring events."
     (let
       ((regular (calendar/events-on-day d))
         (recurring (calendar/recurring-events)))
@@ -550,6 +588,7 @@
 (define calendar/events-in-month
   (lambda
     (ym)
+    "Filter all events to those in a given YYYY-MM month."
     (list/filter
       (lambda
         (row)
@@ -559,6 +598,7 @@
 (define calendar/events-on-day
   (lambda
     (day)
+    "Filter all events to those on a specific YYYY-MM-DD day."
     (list/filter
       (lambda
         (row)
@@ -566,11 +606,15 @@
       (calendar/all-events))))
 
 (define calendar/foo
-  (lambda () (date-today)))
+  (lambda
+    ()
+    "Returns todays date. Debug/test stub."
+    (date-today)))
 
 (define calendar/handle-post
   (lambda
     ()
+    "Handle POST requests for create and delete calendar actions."
     (let
       ((action (as-str (request-param "action"))))
       (cond
@@ -587,6 +631,7 @@
 (define calendar/has-daily?
   (lambda
     (day)
+    "Check if a daily note exists for a given YYYY-MM-DD day."
     (let
       ((slug (string-append "daily-" (as-str day))))
       (if (null? (notes/doc/get slug)) #f #t))))
@@ -594,6 +639,7 @@
 (define calendar/leap?
   (lambda
     (y)
+    "Check if year y is a leap year."
     (if
       (= (mod y 400) 0)
       #t
@@ -602,6 +648,7 @@
 (define calendar/main-html
   (lambda
     ()
+    "Render the main calendar panel (month grid or day view)."
     (let
       ((day (request-param "day")) (ym (request-param "ym")))
       (html/div
@@ -616,11 +663,15 @@
           (calendar/day-html (as-str day)))))))
 
 (define calendar/month
-  (lambda (day) (parse-int (substring (as-str day) 5 2))))
+  (lambda
+    (day)
+    "Extract month integer from a YYYY-MM-DD string."
+    (parse-int (substring (as-str day) 5 2))))
 
 (define calendar/month-grid
   (lambda
     (ym)
+    "Render the month grid HTML with day-of-week headers and cells."
     (let
       ((y (parse-int (substring (as-str ym) 0 4))))
       (let
@@ -670,6 +721,7 @@
 (define calendar/month-html
   (lambda
     (ym)
+    "Render the full month view with navigation, grid, and legend."
     (html/div
       (html/attr "class" "cal-month")
       (html/join
@@ -683,6 +735,7 @@
 (define calendar/month-nav
   (lambda
     (ym)
+    "Render previous/next/today navigation links for a YYYY-MM month."
     (let
       ((prev (calendar/add-month ym -1)))
       (let
@@ -703,6 +756,7 @@
 (define calendar/pad-start
   (lambda
     (n acc)
+    "Recursively prepend n empty cells to pad the grid start."
     (if
       (<= n 0)
       acc
@@ -715,11 +769,13 @@
 (define calendar/pad2
   (lambda
     (n)
+    "Zero-pad a number to 2 digits (e.g. 3 -> 03)."
     (if (< n 10) (string-append "0" (as-str n)) (as-str n))))
 
 (define calendar/page
   (lambda
     ()
+    "Route handler for /calendar: POST actions or GET page render."
     (if
       (string-eq (request-method) "POST")
       (seq
@@ -752,16 +808,21 @@
 (define calendar/recurring-events
   (lambda
     ()
+    "Return hardcoded list of recurring cron-based events."
     (list
       (list "30 7 * * 1-4" "Taylor Dental" "07:30-17:00")
       (list "0 17 * * 2-4" "Cassie's" "17:00-23:00"))))
 
 (define calendar/today
-  (lambda () (date-today)))
+  (lambda
+    ()
+    "Returns todays date as YYYY-MM-DD via date-today."
+    (date-today)))
 
 (define calendar/todo-due-li
   (lambda
     (row)
+    "Render a due todo as an HTML list item linking to /todos."
     (let
       ((id (car row)))
       (let
@@ -780,6 +841,7 @@
 (define calendar/todos-due-on
   (lambda
     (day)
+    "Filter all todo items to those due on a specific YYYY-MM-DD day."
     (list/filter
       (lambda
         (row)
@@ -789,14 +851,26 @@
       (todo/item/all))))
 
 (define calendar/weekday
-  (lambda (y m d) (date-weekday y m d)))
+  (lambda
+    (y m d)
+    "Return day-of-week (0=Sun..6=Sat) for year y, month m, day d."
+    (date-weekday y m d)))
 
 (define calendar/year
-  (lambda (day) (parse-int (substring (as-str day) 0 4))))
+  (lambda
+    (day)
+    "Extract year integer from a YYYY-MM-DD string."
+    (parse-int (substring (as-str day) 0 4))))
 
 (define calendar/ym
-  (lambda (day) (substring (as-str day) 0 7)))
+  (lambda
+    (day)
+    "Extract YYYY-MM prefix from a YYYY-MM-DD string."
+    (substring (as-str day) 0 7)))
 
 (define calendar/ymd
-  (lambda (y m d) (date-format y m d)))
+  (lambda
+    (y m d)
+    "Format year y, month m, day d as a YYYY-MM-DD string."
+    (date-format y m d)))
 

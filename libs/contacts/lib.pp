@@ -4,6 +4,7 @@
 (define contacts/add-name
   (lambda
     (name)
+    "Create a contact with just the name provided"
     (create
       (quote contact)
       (dict-set*
@@ -19,27 +20,41 @@
           "")))))
 
 (define contacts/all
-  (lambda () (rows (quote contact) 100)))
+  (lambda
+    ()
+    "Return up to 100 contact rows"
+    (rows (quote contact) 100)))
 
 (define contacts/blank?
-  (lambda (s) (if (null? s) #t (string-eq (as-str s) ""))))
+  (lambda
+    (s)
+    "Check if string is null or empty"
+    (if (null? s) #t (string-eq (as-str s) ""))))
 
 (define contacts/create
   (lambda
     (name email phone notes)
+    "Create a new contact with name, email, phone, notes"
     (create
       (quote contact)
       (contacts/fields name email phone notes))))
 
 (define contacts/delete
-  (lambda (id) (delete (quote contact) (as-str id))))
+  (lambda
+    (id)
+    "Delete a single contact by id"
+    (delete (quote contact) (as-str id))))
 
 (define contacts/email
-  (lambda (fields) (as-str (dict-get fields "email"))))
+  (lambda
+    (fields)
+    "Extract email from contact fields object"
+    (as-str (dict-get fields "email"))))
 
 (define contacts/fields
   (lambda
     (name email phone notes)
+    "Build contact fields dict from name, email, phone, notes"
     (dict-set*
       "{}"
       (list
@@ -55,6 +70,7 @@
 (define contacts/form-html
   (lambda
     ()
+    "Render the HTML contact form"
     (html/div
       (html/attr "class" "card")
       (html/join
@@ -113,6 +129,7 @@
 (define contacts/get
   (lambda
     (id)
+    "Get a specific contact by id (returns id and fields)"
     (let
       ((row (get (quote contact) (as-str id))))
       (if (null? row) () (cons (as-str id) row)))))
@@ -120,6 +137,7 @@
 (define contacts/handle-post
   (lambda
     ()
+    "Haitch-post handler for create/delete contacts"
     (let
       ((action (as-str (request-param "action"))))
       (cond
@@ -140,6 +158,7 @@
 (define contacts/index-html
   (lambda
     ()
+    "Render the contacts page with form and list"
     (html/page
       (list
         (html/h1 "Contacts")
@@ -152,6 +171,7 @@
 (define contacts/item-li
   (lambda
     (row)
+    "Render a single contact as HTML list item"
     (let
       ((id (contacts/row-id row))
         (fields (contacts/row-fields row)))
@@ -194,6 +214,7 @@
 (define contacts/list-html
   (lambda
     ()
+    "Render the list of contacts using the item-li view"
     (html/div
       (html/attr "id" "contacts-list")
       (list-or-empty
@@ -204,6 +225,7 @@
 (define contacts/main-html
   (lambda
     ()
+    "Render main contacts display with form and list"
     (html/div
       (html/attr "id" "contacts-main")
       (html/join
@@ -213,14 +235,21 @@
           (contacts/list-html))))))
 
 (define contacts/name
-  (lambda (fields) (as-str (dict-get fields "name"))))
+  (lambda
+    (fields)
+    "name field accessor for contact data"
+    (as-str (dict-get fields "name"))))
 
 (define contacts/notes
-  (lambda (fields) (as-str (dict-get fields "notes"))))
+  (lambda
+    (fields)
+    "notes field accessor for contact data"
+    (as-str (dict-get fields "notes"))))
 
 (define contacts/page
   (lambda
     ()
+    "contacts route handler (GET/POST)"
     (if
       (string-eq (request-method) "POST")
       (seq
@@ -238,17 +267,27 @@
           (contacts/main-html))))))
 
 (define contacts/phone
-  (lambda (fields) (as-str (dict-get fields "phone"))))
+  (lambda
+    (fields)
+    "phone field accessor for contact data"
+    (as-str (dict-get fields "phone"))))
 
 (define contacts/row-fields
-  (lambda (row) (cdr row)))
+  (lambda
+    (row)
+    "Get fields from a contact row"
+    (cdr row)))
 
 (define contacts/row-id
-  (lambda (row) (as-str (car row))))
+  (lambda
+    (row)
+    "Get id from a contact row"
+    (as-str (car row))))
 
 (define contacts/update
   (lambda
     (id name email phone notes)
+    "update a contact with new name, email, phone, notes"
     (update
       (quote contact)
       (as-str id)

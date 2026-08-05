@@ -2,17 +2,27 @@
 ;; Sync: scripts/pp_sync.py pull|push
 
 (define plan
-  (lambda (body) (plan/set! body)))
+  (lambda
+    (body)
+    "Set user plan"
+    (plan/set! body)))
 
 (define plan/all-rows
-  (lambda () (rows (quote user-plan) 200)))
+  (lambda
+    ()
+    "Retrieve up to 200 plan rows"
+    (rows (quote user-plan) 200)))
 
 (define plan/clear!
-  (lambda () (plan/set! "")))
+  (lambda
+    ()
+    "Clear user plan"
+    (plan/set! "")))
 
 (define plan/directory-html
   (lambda
     ()
+    "Render plans directory HTML"
     (let
       ((xs (plan-list)))
       (if
@@ -25,6 +35,7 @@
 (define plan/directory-li
   (lambda
     (pair)
+    "Render plan entry HTML list item"
     (let
       ((user (as-str (car pair))) (body (as-str (cdr pair))))
       (html/li
@@ -39,21 +50,29 @@
             (html/p (html/text body))))))))
 
 (define plan/fields-body
-  (lambda (fields) (as-str (dict-get fields "body"))))
+  (lambda
+    (fields)
+    "Extract plan body from fields"
+    (as-str (dict-get fields "body"))))
 
 (define plan/fields-updated
   (lambda
     (fields)
+    "Extract updated timestamp or empty string"
     (let
       ((u (dict-get fields "updated_at")))
       (if (null? u) "" (as-str u)))))
 
 (define plan/fields-username
-  (lambda (fields) (as-str (dict-get fields "username"))))
+  (lambda
+    (fields)
+    "Extract plan username from fields"
+    (as-str (dict-get fields "username"))))
 
 (define plan/find-row
   (lambda
     (username)
+    "Find plan row by username"
     (let
       ((want (as-str username)))
       (list/foldl
@@ -74,6 +93,7 @@
 (define plan/form-html
   (lambda
     (body)
+    "Render plan entry HTML form"
     (html/div
       (html/attr "class" "card")
       (html/join
@@ -110,6 +130,7 @@
 (define plan/main-html
   (lambda
     ()
+    "Render main plan page"
     (let
       ((body (plan/mine)))
       (html/div
@@ -118,11 +139,15 @@
           (list (plan/mine-display body) (plan/form-html body)))))))
 
 (define plan/mine
-  (lambda () (plan/of (whoami))))
+  (lambda
+    ()
+    "Get my own plan"
+    (plan/of (whoami))))
 
 (define plan/mine-display
   (lambda
     (body)
+    "Render my plan display card"
     (html/div
       (html/attr "class" "card")
       (if
@@ -135,6 +160,7 @@
 (define plan/of
   (lambda
     (username)
+    "Get another user's plan"
     (let
       ((row (plan/find-row username)))
       (if
@@ -145,6 +171,7 @@
 (define plan/plans-page
   (lambda
     ()
+    "Render everyone's plans directory"
     (html/page
       (list
         (html/h1 "Plans")
@@ -156,6 +183,7 @@
 (define plan/profile-page
   (lambda
     ()
+    "Render another user's profile page"
     (let
       ((user (as-str (request-param "user"))))
       (if
@@ -183,14 +211,21 @@
               (html/p* "" (html/a "/plans" "View their plan")))))))))
 
 (define plan/row-fields
-  (lambda (row) (cdr row)))
+  (lambda
+    (row)
+    "Extract fields from plan row"
+    (cdr row)))
 
 (define plan/row-id
-  (lambda (row) (as-str (car row))))
+  (lambda
+    (row)
+    "Extract plan row ID"
+    (as-str (car row))))
 
 (define plan/set!
   (lambda
     (body)
+    "Create or update my plan"
     (let
       ((user (as-str (whoami)))
         (text (as-str body))

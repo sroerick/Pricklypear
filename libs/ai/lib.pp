@@ -55,6 +55,7 @@
         (str pkgs)
         "\n"
         "explore: (describe \"pkg\") (package-bindings \"pkg\") (apropos-docs \"pat\") (function-doc \"name\")\n"
+        "reference: (notes/doc/get \"platform-ref\") for the Lisp API quick-ref\n"
         "bootstrap: GET /agent.txt and /.well-known/agent.json then POST /api/eval\n"
         (if
           (string-eq agents-body "")
