@@ -242,6 +242,68 @@
     |))
    )
   )
+
+  (subsection unbind
+   (doc "Remove a branch-local binding; reveal shadowed system/main, never delete through")
+   (implements image/lib/store.ml image/lib/primitives.ml image/lib/session.ml)
+   (status implemented)
+   (* agent note (|2026-08-05: implemented (unbind name) in Store.delete_function + session.ml prim. Tested on local dev: unbind branch-local override reveals system/main binding; unbind missing returns "nothing to unbind"; unbind on system/main errors. 160 dune tests green.|) *)
+   (verify
+    (build "dune build")
+    (test "dune runtest — unbind cases")
+    (test "(unbind name) on a branch-local define removes the branch row; system/main binding revealed")
+    (test "(unbind name) on system/main errors (cannot unbind on main)")
+    (test "(unbind name) with no branch-local row errors (nothing to unbind)")
+    (test "unbind never deletes another branch or system/main rows"))
+   (details
+    (doc (|
+         PROBLEM: transient defines accumulate as permanent litter —
+         agent probes, test fns, spike code. Every (define) on a
+         personal branch is a permanent row. There is no way to
+         remove a branch-local binding without deleting the whole
+         branch.
+
+         PRIM: (unbind name)
+           Deletes ONLY the current branch's function_defs row for
+           name. After unbind, name resolves via inheritance to
+           whatever system/main (or a parent branch) provides —
+           revealing the shadowed binding, if any.
+
+         SEMANTICS:
+           - On <user>/personal or <user>/dev: deletes the
+             (branch_id, name) row from function_defs. The env
+             rehydrates so the name now resolves to the inherited
+             (system/main) binding, or becomes unbound if main
+             has no such name.
+           - On system/main: ERROR. Unbind never deletes a
+             system/main row. (system/main is the inheritance
+             root; removing from it would affect every user.)
+           - If no branch-local row exists for name: ERROR
+             (nothing to unbind). This prevents accidental no-ops
+             and makes the caller explicit.
+           - Never deletes rows from other branches.
+           - Routes (view_bindings) are out of scope for v1;
+             unbind is function_defs only.
+
+         INTERACTION WITH PACKAGE PINS:
+           load-library upserts/pins package bindings onto the
+           current branch. (unbind name) on a pinned binding is
+           an unpin — it removes the branch-local override,
+           revealing the system/main package binding. A future
+           (unbind-package pkg) could drop a whole pin; out of
+           scope for v1.
+
+         AUTH: admin or the branch owner (consistent with checkout
+         / promote gating). Anonymous sessions cannot unbind.
+
+         NON-GOALS:
+           - Unbinding routes (view_bindings) — follow-up.
+           - (unbind-package pkg) bulk unpin — follow-up.
+           - Unbind on system/main (always errors).
+    |))
+   )
+  )
+
   (subsection package-updates
    (doc "Authority model: live Postgres Nopales, git kernel + vault, additive seed")
    (status implemented)

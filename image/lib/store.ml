@@ -802,6 +802,38 @@ let current_branch_id (t : t) : string = t.branch_id
 (** Canonical system/main UUID — seeded by migrations/001_branches.sql. *)
 let system_main_id = "00000000-0000-0000-0000-000000000001"
 
+(** Delete the (branch_id, name) row from function_defs. Used by
+    (unbind name): removes the CURRENT branch's override so the name
+    resolves via inheritance to the shadowed parent binding. Refuses
+    to delete on system/main (the inheritance root). Returns true if
+    a row was deleted, false if no branch-local row existed. *)
+let delete_function (t : t) (name : string) : bool =
+  if t.branch_id = system_main_id then
+    raise (Failure "unbind: cannot unbind on system/main")
+  else
+    match t.conn with
+    | None -> false
+    | Some conn ->
+        (try
+          let sql =
+            "DELETE FROM function_defs WHERE branch_id = $1 AND name = $2 " ^
+            "RETURNING name"
+          in
+          let rows =
+            exec conn
+              ~params:[ Pgx.Value.of_string t.branch_id;
+                        Pgx.Value.of_string name ]
+              sql
+          in
+          (* Tree_store mirror: delete the fn node if tree writes are on *)
+          (if Tree_store.tree_writes () then
+             ignore (Tree_store.delete_fn conn ~branch_id:t.branch_id ~name));
+          rows <> []
+        with exn ->
+          Printf.eprintf "[store] delete_function error: %s\n"
+            (Printexc.to_string exn);
+          false)
+
 (** Temporarily rebind [t.branch_id] for the duration of [f], then restore.
     Used so seed_stdlib can write package defaults to system/main without
     polluting the user's personal branch. *)
