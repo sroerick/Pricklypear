@@ -2,7 +2,10 @@
 ;; Sync: scripts/pp_sync.py pull|push
 
 (define chat/all-messages
-  (lambda () (rows (quote chat-message) 200)))
+  (lambda
+    ()
+    "Return up to 200 chat-message rows."
+    (rows (quote chat-message) 200)))
 
 (define chat/alphabet
   " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~")
@@ -10,6 +13,7 @@
 (define chat/can-access?
   (lambda
     (room-id)
+    "Check if current user can access a chat room."
     (let
       ((rid (as-str room-id)) (me (as-str (whoami))))
       (if
@@ -30,6 +34,7 @@
 (define chat/char-rank
   (lambda
     (c)
+    "Get the rank (index) of a character in the alphabet."
     (chat/char-rank-loop
       c
       chat/alphabet
@@ -39,6 +44,7 @@
 (define chat/char-rank-loop
   (lambda
     (c alphabet i n)
+    "Tail-recursive helper for char-rank."
     (if
       (>= i n)
       999
@@ -50,6 +56,7 @@
 (define chat/dm
   (lambda
     (peer)
+    "Get or create a DM room id for a peer."
     (let
       ((them (as-str peer)) (me (as-str (whoami))))
       (if
@@ -87,6 +94,7 @@
 (define chat/dm-list-li
   (lambda
     (row)
+    "Render a DM thread as an HTML list item."
     (let
       ((f (chat/row-fields row)) (me (as-str (whoami))))
       (let
@@ -105,6 +113,7 @@
 (define chat/dm-list-page
   (lambda
     ()
+    "Render the DM list page with start-DM form."
     (html/page
       (list
         (html/h1 "Direct messages")
@@ -136,6 +145,7 @@
 (define chat/dm-main-html
   (lambda
     (peer)
+    "Render the DM main area with message form and history."
     (html/div
       (html/attr "id" "dm-main")
       (html/join
@@ -174,6 +184,7 @@
 (define chat/dm-messages-html
   (lambda
     (peer)
+    "Render DM message history for a peer."
     (let
       ((rid (chat/dm peer))
         (xs (chat/history (chat/dm peer))))
@@ -189,6 +200,7 @@
 (define chat/dm-page
   (lambda
     ()
+    "DM route handler: list, open, or post to a DM thread."
     (let
       ((peer (as-str (request-param "peer"))))
       (if
@@ -217,6 +229,7 @@
 (define chat/dm-peer-from-title
   (lambda
     (title me)
+    "Extract peer username from a DM room title."
     (let
       ((t (as-str title)) (prefix "DM "))
       (if
@@ -238,6 +251,7 @@
 (define chat/dm-room-id
   (lambda
     (peer)
+    "Compute the canonical DM room id for two users."
     (let
       ((me (as-str (whoami))) (them (as-str peer)))
       (if
@@ -248,6 +262,7 @@
 (define chat/dms
   (lambda
     ()
+    "List all DM rooms the current user is a member of."
     (let
       ((me (as-str (whoami))))
       (list/filter
@@ -264,6 +279,7 @@
 (define chat/ensure-lobby
   (lambda
     ()
+    "Create the lobby chat-room if it does not exist."
     (let
       ((found (chat/find-room chat/lobby-id)))
       (if
@@ -290,6 +306,7 @@
 (define chat/find-room
   (lambda
     (room-id)
+    "Find a chat-room row by room-id (scan up to 50)."
     (let
       ((want (as-str room-id)))
       (list/foldl
@@ -308,6 +325,7 @@
 (define chat/form-html
   (lambda
     ()
+    "Render the lobby message form with htmx submit."
     (html/div
       (html/attr "class" "card")
       (html/form
@@ -341,6 +359,7 @@
 (define chat/history
   (lambda
     (room-id)
+    "Get messages for a room the user can access."
     (let
       ((want (as-str room-id)))
       (if
@@ -355,6 +374,7 @@
 (define chat/lobby
   (lambda
     ()
+    "Ensure the lobby exists and return its message history."
     (seq (chat/ensure-lobby) (chat/history chat/lobby-id))))
 
 (define chat/lobby-id
@@ -363,6 +383,7 @@
 (define chat/main-html
   (lambda
     ()
+    "Render the chat main area: form plus lobby messages."
     (html/div
       (html/attr "id" "chat-main")
       (html/join
@@ -374,11 +395,13 @@
 (define chat/member?
   (lambda
     (members-json user)
+    "Check if a user is in a members JSON array string."
     (string-contains? (as-str members-json) (as-str user))))
 
 (define chat/members-json
   (lambda
     (a b)
+    "Build a 2-member JSON array string for a DM room."
     (string-append
       "[\""
       (as-str a)
@@ -389,6 +412,7 @@
 (define chat/messages-html
   (lambda
     ()
+    "Render lobby messages with auto-refresh htmx polling."
     (let
       ((xs (chat/lobby)))
       (html/div
@@ -408,14 +432,21 @@
             (html/join (list/map chat/msg-li xs))))))))
 
 (define chat/msg-body
-  (lambda (fields) (as-str (dict-get fields "body"))))
+  (lambda
+    (fields)
+    "Extract body field from a message fields dict."
+    (as-str (dict-get fields "body"))))
 
 (define chat/msg-from
-  (lambda (fields) (as-str (dict-get fields "from"))))
+  (lambda
+    (fields)
+    "Extract from field from a message fields dict."
+    (as-str (dict-get fields "from"))))
 
 (define chat/msg-li
   (lambda
     (row)
+    "Render a chat message as an HTML list item."
     (let
       ((f (chat/row-fields row)))
       (html/li
@@ -431,11 +462,15 @@
             (html/p (html/text (chat/msg-body f)))))))))
 
 (define chat/msg-room
-  (lambda (fields) (as-str (dict-get fields "room_id"))))
+  (lambda
+    (fields)
+    "Extract room_id field from a message fields dict."
+    (as-str (dict-get fields "room_id"))))
 
 (define chat/page
   (lambda
     ()
+    "Chat lobby route handler: GET renders page, POST sends message."
     (if
       (string-eq (request-method) "POST")
       (seq
@@ -458,6 +493,7 @@
 (define chat/partial
   (lambda
     ()
+    "Render lobby messages as an htmx partial for polling."
     (render-html
       (let
         ((xs (chat/lobby)))
@@ -471,20 +507,33 @@
             (html/join (list/map chat/msg-li xs))))))))
 
 (define chat/room-id-of
-  (lambda (fields) (as-str (dict-get fields "room_id"))))
+  (lambda
+    (fields)
+    "Extract room_id field from a chat-room fields dict."
+    (as-str (dict-get fields "room_id"))))
 
 (define chat/row-fields
-  (lambda (row) (cdr row)))
+  (lambda
+    (row)
+    "Get fields dict from a chat row."
+    (cdr row)))
 
 (define chat/row-id
-  (lambda (row) (as-str (car row))))
+  (lambda
+    (row)
+    "Get the id from a chat row."
+    (as-str (car row))))
 
 (define chat/say
-  (lambda (body) (chat/say-in chat/lobby-id body)))
+  (lambda
+    (body)
+    "Say a message in the lobby."
+    (chat/say-in chat/lobby-id body)))
 
 (define chat/say-dm
   (lambda
     (peer body)
+    "Say a direct message to a peer user."
     (let
       ((rid (chat/dm peer)))
       (if
@@ -495,6 +544,7 @@
 (define chat/say-in
   (lambda
     (room-id body)
+    "Say a message in a specific chat room (with access check)."
     (let
       ((text (as-str body))
         (user (as-str (whoami)))
@@ -531,6 +581,7 @@
 (define chat/str-le?
   (lambda
     (a b)
+    "Lexicographic string less-than-or-equal via char ranks."
     (if
       (string-eq a b)
       #t
@@ -548,5 +599,8 @@
               (<= (chat/char-rank ca) (chat/char-rank cb)))))))))
 
 (define chat/users
-  (lambda () (list-usernames)))
+  (lambda
+    ()
+    "List all usernames on the image."
+    (list-usernames)))
 

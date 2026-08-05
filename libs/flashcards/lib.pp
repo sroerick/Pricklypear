@@ -15,11 +15,17 @@
 
 ;; --- helpers ---
 
-(define flash/blank? blank?
-  "True if value is blank after as-str trim.")
+(define flash/blank?
+  (lambda
+    (s)
+    "True if value is blank after as-str trim."
+    (if (null? s) #t (string-eq (as-str s) ""))))
 
-(define flash/today (lambda () (date-today))
-  "Today date string YYYY-MM-DD.")
+(define flash/today
+  (lambda
+    ()
+    "Today date string YYYY-MM-DD."
+    (date-today)))
 
 (define flash/as-int
   (lambda (v)

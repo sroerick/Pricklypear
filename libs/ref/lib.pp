@@ -43,31 +43,64 @@
         ((needle (if (null? q) "" (as-str q))))
         (let
           ((fns (if (string-eq needle "") all (apropos needle))))
-          (html/page
-            (list
-              (html/h1 "Function Reference")
-              (html/p*
-                (html/attr "class" "muted")
-                (string-append
-                  (as-str (count fns))
-                  " of "
-                  (as-str (count all))
-                  " functions. Search with ?q= or (apropos \"term\"). "
-                  "Docstrings via (function-doc name)."))
-              (html/form
-                "GET"
-                "/ref"
-                ""
-                (html/join
-                  (list
-                    (html/text-input
-                      "q"
-                      (html/attrs
-                        (list
-                          (html/attr "value" needle)
-                          (html/attr "placeholder" "apropos…"))))
-                    (html/button (html/attr "type" "submit") "Search"))))
-              (html/ul "" (html/join (list/map ref/fn-li fns))))))))))
+          (if
+            (string-eq needle "")
+            (html/page
+              (list
+                (html/h1 "Function Reference")
+                (html/p*
+                  (html/attr "class" "muted")
+                  (string-append
+                    (as-str (count fns))
+                    " of "
+                    (as-str (count all))
+                    " functions. Search with ?q= or (apropos \"term\"). "))
+                (html/form
+                  "GET"
+                  "/ref"
+                  ""
+                  (html/join
+                    (list
+                      (html/text-input
+                        "q"
+                        (html/attrs
+                          (list
+                            (html/attr "placeholder" "apropos…"))))
+                      (html/button (html/attr "type" "submit") "Search"))))
+                (html/div
+                  (html/attr "class" "ref-packages")
+                  (html/join
+                    (list/map
+                      ref/render-pkg
+                      (list/filter
+                        (lambda (p) (not (string-eq (as-str p) "")))
+                        (ref/packages)))))))
+            (html/page
+              (list
+                (html/h1 "Function Reference")
+                (html/p*
+                  (html/attr "class" "muted")
+                  (string-append
+                    (as-str (count fns))
+                    " of "
+                    (as-str (count all))
+                    " functions matching \""
+                    needle
+                    "\". "))
+                (html/form
+                  "GET"
+                  "/ref"
+                  ""
+                  (html/join
+                    (list
+                      (html/text-input
+                        "q"
+                        (html/attrs
+                          (list
+                            (html/attr "value" needle)
+                            (html/attr "placeholder" "apropos…"))))
+                      (html/button (html/attr "type" "submit") "Search"))))
+                (html/ul "" (html/join (list/map ref/fn-li fns)))))))))))
 
 (define ref/render-pkg
   (lambda
