@@ -440,6 +440,31 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
         | _ ->
             (Pricklypear_lisp.Ast.VStr "checkout: bad args"));
 
+  (* (unbind name) -> VStr "unbound" | "nothing to unbind" | error.
+     Deletes ONLY the current branch's function_defs row for name;
+     the name then resolves via inheritance to the shadowed parent
+     binding (or becomes unbound). Refuses on system/main and on
+     anonymous sessions. See branching.unbind spec. *)
+  Primitives.register tbl "unbind"
+    (fun args ->
+      if t.manifest.username = "anonymous" then
+        (Pricklypear_lisp.Ast.VStr "unbind: denied for anonymous")
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr name ] ->
+            (try
+              let deleted = Store.delete_function t.store name in
+              if deleted then begin
+                (* Rehydrate so the env sees the revealed parent binding *)
+                rehydrate t;
+                (Pricklypear_lisp.Ast.VStr "unbound")
+              end else
+                (Pricklypear_lisp.Ast.VStr "nothing to unbind")
+            with Failure msg ->
+              (Pricklypear_lisp.Ast.VStr msg))
+        | _ ->
+            (Pricklypear_lisp.Ast.VStr "unbind: need a name"));
+
   (* (bench expr-string [n]) -> VFloat average microseconds per iteration.
      Parses once, warms up once, runs n times (default 1000) under a max
      budget so the bench loop itself never hits Budget_exceeded. Uses the
