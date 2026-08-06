@@ -381,7 +381,7 @@
   (subsection model
    (doc "Hybrid: workout-session + workout-exercise facts; session.doc fluid tree")
    (status implemented)
-   (implements libs/workout/lib.pp)
+   (implements libs/workout/lib.pp libs/workout/log/lib.pp)
    (verify
     (smoke "load-library defines workout-session and workout-exercise")
     (smoke "session-create stores program intensity state date doc")
