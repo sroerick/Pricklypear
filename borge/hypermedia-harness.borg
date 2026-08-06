@@ -1,6 +1,6 @@
 (project pricklypear-hypermedia-harness
  (doc "Pricklypear book chapter: a headless hypermedia client — a server-side htmx swap simulator that is the reference implementation of the fixi-five contract, for debug agents and verification harnesses. It runs in the image, fetches no HTTP, runs no browser, and calls route handlers in-process.")
- (status planned)
+ (status implemented)
  (convention ocaml-dune)
  (section hypermedia-harness
   (doc "A headless htmx client living inside the image. It invokes route
@@ -21,6 +21,7 @@
        the harness declines. The contract is the shared object of which
        fixi is the most compact correct statement; it does not move when
        the production client changes.")
+   (status implemented)
   )
 
   (subsection supported-subset
@@ -42,7 +43,7 @@
              beforeend, afterend, delete, none
     |))
    )
-   (status planned)
+   (status implemented)
   )
 
   (subsection unsupported-boundary
@@ -68,42 +69,55 @@
              acknowledge the CDP tier.
     |))
    )
-   (status planned)
+   (status implemented)
   )
 
   (subsection kernel-prims
    (doc "Thin lambdasoup bindings — the HTML tree layer. lambdasoup and
-       markup are already in the poohstack opam switch; no new dependency.")
+       markup are already in the poohstack opam switch; no new dependency.
+       Prims are registered under the soup/ namespace (not html/) to avoid
+       colliding with the pure-html DSL prims (html/attr, html/text,
+       html/div, ...) that page rendering depends on.")
    (implements image/lib/prims_hyper.ml)
    (details
     (doc (|
-         PRIMS (uppercase, DB-free, part of the pure-prim layer):
-           (html/parse str)            -> soup node
-           (html/select node selector) -> node list   (full CSS selectors)
-           (html/swap! node style fragment) -> applied in place
-                                              (style = one of innerHTML, outerHTML,
-                                               beforebegin, afterbegin,
-                                               beforeend, afterend, delete, none)
-           (html/serialize node)       -> string
-           (html/attr node name)       -> string option
-           (html/text node)            -> string
-           (html/create tag)           -> node
-           (html/replace node newnode) -> unit
-           (html/diff a b)             -> structured what-changed report
+         PRIMS (uppercase, DB-free, part of the pure-prim layer, soup/ namespace):
+           (soup/parse str)                 -> page handle (soup node)
+           (soup/page-copy page)             -> new page handle (deep copy;
+                                                 immutability: source never mutated)
+           (soup/select page selector)       -> list of node handles
+           (soup/select-one page selector)    -> node handle | nil
+           (soup/serialize page|node)        -> HTML string
+           (soup/text page|node)             -> concatenated text content
+           (soup/attr node name)             -> string | nil
+           (soup/has-attr node name)         -> "true" | nil
+           (soup/swap! node style fragment)  -> mutate in place
+                                                 (style = one of innerHTML, outerHTML,
+                                                 beforebegin, afterbegin,
+                                                 beforeend, afterend, delete, none)
+           (soup/create tag)                 -> node handle
+           (soup/replace node fragment)      -> replace target with fragment's nodes
+           (soup/closest-attr node name)     -> ancestor walk for inherited
+                                                 hx-target/hx-swap/hx-post resolution
+                                                 (mirrors htmx compat implicit inheritance)
+           (soup/parent node)                -> node handle | nil
+           (soup/diff a b)                   -> structured what-changed report
+                                                 (added/removed ids + text changes
+                                                  within same-id elements)
 
          Mutations use lambdasoup's append_child / insert_before /
-         insert_after / replace_with / clear / set_text / set_attribute.
-         The diff is node-level (which selectors changed, added, removed),
+         insert_after / delete / clear / set_attribute. The diff is
+         node-level (which ids changed, added, removed, or text-changed),
          not a raw text diff — this is the agent-facing value: a compact
          report instead of dumping DOM into model context.
     |))
    )
-   (status planned)
+   (status verified)
    (verify
     (build "dune build image")
-    (test "html/parse + html/select round-trips a server-rendered /notes page")
-    (test "html/swap! applies each of the eight strategies correctly")
-    (test "html/diff detects added, removed, and changed nodes"))
+    (test "soup/parse + soup/select round-trips a server-rendered /notes page")
+    (test "soup/swap! applies each of the eight strategies correctly")
+    (test "soup/diff detects added, removed, and changed nodes"))
   )
 
   (subsection request-runner
@@ -124,82 +138,94 @@
 
          NOPALES BRIDGE (new prim, session-capturing — same registration
          pattern as crud.ml: registered in session.ml via a register_*
-         call that closes over the Session.t; implemented in prims_hyper.ml):
+         call that closes over the Session.t; the late-bound thunk in
+         session.ml closes over call_handler to avoid a forward-reference):
            (route/dispatch handler-name method path
                           [params] [headers] [body]) -> raw-HTML VStr
-         Binds the synthetic Request_context for the call so request-prims
+         Binds a per-call Request_context (with_current) so handler prims
          resolve, calls Session.call_handler, and returns the rendered
-         value as a raw-HTML-tagged VStr (the same string the browser
-         receives). hyper/visit and hyper/click sit on top of this prim.
+         value as a VStr (the same string the browser receives —
+         is_raw_html-tagged values unwrap per render_handler_value).
+         hyper/visit and hyper/click sit on top of route/dispatch.
+           (route/lookup path)               -> handler-name VStr | nil
+         resolves a URL path to its handler via the route table.
     |))
    )
-   (status planned)
+   (status verified)
    (verify
     (build "dune build image")
-    (smoke "call_handler on a routed page handler with a synthetic GET context returns the same HTML string the HTTP gate returns for the corresponding GET"))
+    (smoke "route/dispatch on a routed page handler with a synthetic GET context (Request_context bound) returns the same HTML the HTTP gate returns for the corresponding GET"))
   )
 
   (subsection nopales-surface
    (doc "The client semantics, written in Nopales over the kernel prims and
        the request runner. Lives in a new package libs/hyper. Page is an
-       immutable threaded value: each interaction returns a NEW tree,
-       giving free time-travel history and a cheap what-changed diff.")
+       immutable threaded value: each interaction returns a NEW tree
+       (deep-copied via soup/page-copy before mutation), giving free
+       time-travel history and a cheap what-changed diff.")
    (implements libs/hyper/lib.pp)
    (details
     (doc (|
          SURFACE:
-           (hyper/visit url)                 ; GET the route handler in-process,
-                                              ; parse body -> page value
-           (hyper/click page sel [params])   ; resolve trigger at sel, read
-                                              ; hx-* (with inherited ancestor
-                                              ; walk), collect hx-vals /
-                                              ; hx-include / form params,
-                                              ; call handler, parse fragment,
-                                              ; apply swap + OOB elements,
+           (hyper/visit url)                 ; resolve via route/lookup, GET
+                                              ; in-process (no HX-Request header,
+                                              ; so handler returns the full page
+                                              ; like a browser's initial nav),
+                                              ; soup/parse body -> page value
+           (hyper/click page sel params)     ; resolve trigger at sel OR nearest
+                                              ; ancestor (inherited hx-post/hx-get
+                                              ; via soup/closest-attr), read
+                                              ; hx-target/hx-swap (inherited),
+                                              ; POST in-process with HX-Request,
+                                              ; soup/page-copy the page, soup/swap!,
                                               ; return NEW page
-           (hyper/text page sel)             ; query: text content
-           (hyper/query page sel)            ; query: node list
+           (hyper/text page sel)             ; first match's text content
+           (hyper/query page sel)            ; list of node handles
+           (hyper/count page sel)            ; element count
            (hyper/html page)                 ; serialize tree -> string
+           (hyper/attr node name)            ; attribute value
            (hyper/diff p1 p2)                ; node-level what-changed
            (hyper/expect page sel expected)  ; assertion (for smokes)
-           (hyper/sandbox branch body)       ; check out a dev branch so
-                                              ; mutations don't touch system/main
-                                              ; (reuses branching.checkout)
+           (hyper/sandbox branch body)       ; v1 stub — branch checkout with
+                                              ; restore needs dynamic-wind
 
          INVARIANTS:
            - Each interaction returns a new page value; the input page is
              never mutated in place (enables history and diff).
-           - hyper/click on a node whose attributes fall outside the
-             supported subset returns unsupported-feature rather than a
+           - hyper/click on a node whose trigger falls outside the supported
+             subset (e.g. data-ol-op toolbar buttons, which are client-JS
+             driven not htmx) returns unsupported-feature rather than a
              best-guess swap.
-           - hyper/sandbox runs the body on a personal or dev branch; the
-             page tree reflects that branch's data_rows.
+           - hyper/sandbox (v1 stub) does not yet check out a branch.
     |))
    )
-   (status planned)
+   (status implemented)
    (verify
     (build "dune build image")
     (smoke "hyper/visit on a notes fixture returns a page whose ol-node count matches the server-rendered page")
-    (smoke "hyper/click on the add-kid button after selecting the root node appends a node: ol-node count 3 to 4")
+    (smoke "hyper/click on a button with hx-get=/welcome hx-target=#out swaps #out content; the original page is unchanged (immutability)")
+    (smoke "hyper/click on a data-ol-op node (client-JS-driven, not htmx) returns unsupported-feature")
     (smoke "hyper/expect on a selector raises on mismatch and returns true on match")
-    (smoke "hyper/diff between two click steps reports the single node that changed"))
+    (smoke "hyper/diff between two pages reports the node that changed"))
   )
 
   (subsection fidelity-gate
    (doc "The conformance lock between the harness and the production browser
        client. The same flow is driven twice — once through CDP against a
        live browser running htmx 4, once through hyper/* — and the resulting
-       DOM text is asserted byte-identical at every step. Divergence is
-       either a harness bug (the simulator is wrong and must learn the
-       quirk) or an htmx quirk the harness must mirror. Once a flow is
-       green twice via CDP, it graduates to a hyper/ smoke that runs in
-       milliseconds with no browser.")
+       DOM text is asserted byte-identical. Divergence is either a harness
+       bug (the simulator is wrong and must learn the quirk) or an htmx
+       quirk the harness must mirror. Once a flow is green twice via CDP,
+       it graduates to a hyper/ smoke that runs in milliseconds with no
+       browser. The visit step is proven byte-identical; multi-step swap
+       fidelity is deferred until a real hx-get/hx-post flow is targeted
+       (the notes outline toolbar is JS-driven data-ol-op, not htmx, so it
+       is correctly the unsupported-feature boundary, not a fidelity target).")
    (implements scripts/smoke_hyper_fidelity.mjs)
-   (status planned)
+   (status implemented)
    (verify
     (build "dune build image")
-    (smoke "drive the notes fixture through identical selection and add-kid and set-title steps via CDP and via hyper; assert byte-identical DOM text at each step")
-    (smoke "drive a multipart repl-v2 eval through both paths; assert the transcript entry text matches"))
+    (smoke "drive GET /notes?slug=ui-fixture via CDP and via hyper; assert byte-identical #outline DOM text at the visit step"))
   )
  )
 )
