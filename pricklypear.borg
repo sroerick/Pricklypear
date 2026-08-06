@@ -12,6 +12,21 @@
  (no-inline
  )
 
+ (* agent note (|2026-08 drift declaration pass (BORGE-1786035030): docs/ orphans excused with reasons. These are scratch plans, contracts, and generated artifacts — not spec'd features. Declare in a chapter only if a feature grows around one.|) *)
+ (untracked "docs/agent-ui-harness.md" "agent UI testing research wiki")
+ (untracked "docs/eio-floor-checklist.md" "Eio rim transition checklist")
+ (untracked "docs/formal-verification-plan.md" "formal verification roadmap plan")
+ (untracked "docs/function-observability-plan.md" "function observability implementation plan")
+ (untracked "docs/notes-ui-contract.md" "notes UI agent contract")
+ (untracked "docs/notes-ui-inventory.md" "notes UI element inventory")
+ (untracked "docs/one-tree.md" "one-tree storage overview")
+ (untracked "docs/p3-debt-handoff.md" "phase-3 debt handoff notes")
+ (untracked "docs/plans/borge-status-reconcile-checklist.md" "status reconcile checklist scratch")
+ (untracked "docs/plans/interlinear-wp.md" "interlinear work-in-progress plan")
+ (untracked "docs/pricklypear-book.pdf" "generated book PDF artifact")
+ (untracked "docs/runtime-effects-transition.md" "runtime effects transition notes")
+ (untracked "docs/ssh-repl-bridge.md" "SSH REPL bridge design notes")
+
  (* roerick (|
 
         An introduction: A little about me:
