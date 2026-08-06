@@ -287,9 +287,9 @@ let register_pure_prims (tbl : Primitives.t) : unit =
 
   Primitives.register tbl "soup/diff"
     (fun args ->
-       (* v0: structural equality + coarse report. Walks both pages'
-          element descendants by id attribute, reports first
-          changed / added / removed. *)
+       (* Walk both pages' element descendants by id attribute. Report
+          added ids, removed ids, and text changes within same-id
+          elements (the v0 text-change detection). *)
        match args with
        | [a; b] ->
          (match page_of a, page_of b with
@@ -305,14 +305,34 @@ let register_pure_prims (tbl : Primitives.t) : unit =
               let ia, ib = idset ea, idset eb in
               let added = List.filter (fun x -> not (List.mem x ia)) ib in
               let removed = List.filter (fun x -> not (List.mem x ib)) ia in
+              (* Text changes: for ids present in both, compare text content. *)
+              let text_of_id lst id =
+                List.find_map
+                  (fun e ->
+                    if S.attribute "id" e = Some id
+                    then Some (String.concat "" (S.texts e))
+                    else None)
+                  lst
+              in
+              let common = List.filter (fun x -> List.mem x ib) ia in
+              let text_changed =
+                List.filter_map
+                  (fun id ->
+                    match text_of_id ea id, text_of_id eb id with
+                    | Some ta, Some tb when ta <> tb ->
+                      Some (Printf.sprintf "#%s: \"%s\" -> \"%s\"" id ta tb)
+                    | _ -> None)
+                  common
+              in
               let parts =
                 (if added = [] then []
                  else [Printf.sprintf "added: %s" (String.concat "," added)])
                 @ (if removed = [] then []
                    else [Printf.sprintf "removed: %s" (String.concat "," removed)])
+                @ text_changed
               in
               VStr
-                (if parts = [] then "changed (no id diff)"
+                (if parts = [] then "changed (structural)"
                  else String.concat "; " parts)
           | _ -> err "html/diff needs two pages")
        | _ -> err "html/diff needs two pages")
