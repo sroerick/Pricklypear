@@ -1922,6 +1922,7 @@
                           (list
                             (html/attr "type" "hidden")
                             (html/attr "id" "ol-selected-id")
+                            (html/attr "name" "node-id")
                             (html/attr "hx-swap-oob" "true")
                             (html/attr "value" sel)))))))))))))))
 
@@ -3852,54 +3853,36 @@
         (as-str slug)
         "';var showArch="
         (if show-archived "true" "false")
-        ";function selId(){var el=document.getElementById('ol-selected-id');return el?el.value:'root';}"
+        ";var userSel='root',selAtReq='root';"
+        "function selId(){var el=document.getElementById('ol-selected-id');return el?el.value:'root';}"
         "function findNode(id){var all=document.querySelectorAll('.ol-node');for(var i=0;i<all.length;i++){if(all[i].getAttribute('data-id')===id)return all[i];}return null;}"
         "function ownTitle(node){if(!node||!node.children)return null;for(var i=0;i<node.children.length;i++){var ch=node.children[i];if(ch.classList&&ch.classList.contains('ol-sum')){return ch.querySelector('.ol-title');}}return null;}"
-        "var __selPin=null,__selPinT=null;"
         "function setSel(id){"
         "if(!id)return;"
-        "if(__selPin&&id==='root'&&__selPin!=='root')return;"
-        "var node=findNode(id);if(!node)return;"
+        "var node=findNode(id);"
         "var hid=document.getElementById('ol-selected-id');if(hid)hid.value=id;"
+        "if(node){"
         "var lab=document.getElementById('ol-selected-label');"
-        "if(lab){var t=ownTitle(node);if(!t)t=node.querySelector('.ol-title');"
-        "lab.textContent=(t&&t.innerText)?t.innerText.trim():id;lab.title=id;}"
+        "if(lab){var t=ownTitle(node);if(!t)t=node.querySelector('.ol-title');lab.textContent=(t&&t.innerText)?t.innerText.trim():id;lab.title=id;}"
         "var rf=document.getElementById('ol-refile-nid');if(rf)rf.value=id;"
         "var ex=document.getElementById('ol-extract-nid');if(ex)ex.value=id;"
         "document.querySelectorAll('.ol-node.is-selected').forEach(function(n){n.classList.remove('is-selected');});"
-        "node.classList.add('is-selected');"
-        "if(id!=='root'){__selPin=id;if(__selPinT)clearTimeout(__selPinT);__selPinT=setTimeout(function(){__selPin=null;},400);}"
-        "else{__selPin='root';}"
+        "node.classList.add('is-selected');}"
+        "userSel=id;"
         "}"
-        "function postOp(op){var id=selId();"
-        "if(op==='delete'){if(id==='root'){alert('Cannot delete the root node.');return;}if(!confirm('Delete this node?'))return;}"
-        "if(op==='archive'&&id==='root'){alert('Cannot archive the root node.');return;}"
-        "var q='slug='+encodeURIComponent(slug)+'&op='+encodeURIComponent(op)+'&node-id='+encodeURIComponent(id);"
-        "if(showArch)q+='&show=archived';"
-        "var keep=id;__selPin=keep;"
-        "fetch('/partials/notes-node-op?'+q,{method:'POST',credentials:'same-origin'}).then(function(r){return r.text();}).then(function(html){"
-        "var doc=new DOMParser().parseFromString(html,'text/html');"
-        "var oobSel=doc.querySelector('#ol-selected-id[hx-swap-oob]');"
-        "var olHTML=doc.querySelector('#outline');"
-        "if(olHTML){var t=document.getElementById('outline');if(t)t.outerHTML=olHTML.outerHTML;}"
-        "var selIdVal=oobSel?oobSel.getAttribute('value'):null;"
-        "if(selIdVal){var hid=document.getElementById('ol-selected-id');if(hid)hid.value=selIdVal;}"
-        "var target=selIdVal||keep;"
-        "if(findNode(target))setSel(target);else if(findNode(keep))setSel(keep);else{__selPin=null;setSel('root');}"
-        "if(window.htmx){try{htmx.process(document.getElementById('outline'));}catch(e){}}"
-        "}).catch(function(e){console.error('notes postOp',e);});}"
+        "function fireOp(op){var f=document.getElementById('ol-op');if(f)f.value=op;var form=document.getElementById('ol-op-form');if(!form)return;selAtReq=userSel;if(window.htmx&&htmx.trigger){htmx.trigger(form,'submit');}else if(form.requestSubmit){form.requestSubmit();}}"
         "function pickNode(e){"
-        "if(e.target.closest&&e.target.closest('[data-ol-op]'))return null;"
         "if(e.target.closest&&e.target.closest('.ol-actions'))return null;"
         "if(e.target.closest&&e.target.closest('.ol-fold'))return null;"
+        "if(e.target.closest&&e.target.closest('#ol-op-form'))return null;"
         "var node=e.target.closest&&e.target.closest('.ol-node');"
         "return(node&&node.dataset&&node.dataset.id)?node:null;}"
         "document.addEventListener('pointerdown',function(e){"
         "if(e.button!==0&&e.button!==undefined)return;"
         "var node=pickNode(e);if(node)setSel(node.dataset.id);},true);"
         "document.addEventListener('click',function(e){"
-        "var btn=e.target.closest&&e.target.closest('[data-ol-op]');"
-        "if(btn){e.preventDefault();postOp(btn.getAttribute('data-ol-op'));return;}"
+        "var b=e.target.closest&&e.target.closest('#ol-op-form [data-op]');"
+        "if(b){var f=document.getElementById('ol-op');if(f)f.value=b.getAttribute('data-op');}"
         "var node=pickNode(e);if(node)setSel(node.dataset.id);},true);"
         "document.addEventListener('focusin',function(e){"
         "var t=e.target;if(!t||!t.getAttribute)return;"
@@ -3921,11 +3904,19 @@
         "else if(k==='Enter')op='add-sibling';"
         "else if(k==='ArrowRight')op='slurp-forward';"
         "else if(k==='ArrowLeft')op='barf-forward';"
-        "if(op){e.preventDefault();postOp(op);}"
+        "if(op){e.preventDefault();fireOp(op);}"
         "},true);"
+        "document.body.addEventListener('htmx:before:request',function(e){"
+        "var elt=e.detail&&e.detail.elt;if(elt&&elt.closest&&(elt.closest('#ol-op-form')||elt.closest('.ol-actions')))selAtReq=userSel;"
+        "});"
+        "document.body.addEventListener('htmx:afterSwap',function(e){"
+        "var elt=e.detail&&e.detail.elt;"
+        "var opReq=elt&&elt.closest&&(elt.closest('#ol-op-form')||elt.closest('.ol-actions'));"
+        "if(opReq&&userSel!==selAtReq){setSel(userSel);}else{setSel(selId());}"
+        "});"
         "var nodeQ=(function(){try{var m=location.search.match(/[?&]node=([^&]+)/);return m?decodeURIComponent(m[1].replace(/\\+/g,' ')):null;}catch(e){return null;}})();"
         "if(nodeQ&&findNode(nodeQ))setSel(nodeQ);else setSel('root');"
-        "document.body.addEventListener('htmx:afterSwap',function(){setSel(selId());});})();"))))
+        "})();"))))
 
 (define notes/ui/recent-list
   (lambda
@@ -4029,10 +4020,11 @@
       "button"
       (html/attrs
         (list
-          (html/attr "type" "button")
+          (html/attr "type" "submit")
           (html/attr "class" "ol-btn")
           (html/attr "title" op)
-          (html/attr "data-ol-op" op)))
+          (html/attr "data-op" op)
+          (html/attr "form" "ol-op-form")))
       label)))
 
 ;; Group hits by slug (first-seen order) for flat grouped rendering.
@@ -4421,17 +4413,58 @@
               (list
                 (html/attr "type" "hidden")
                 (html/attr "id" "ol-selected-id")
+                (html/attr "name" "node-id")
                 (html/attr "value" "root"))))
-          (notes/ui/tb-btn "cycle-todo" "todo")
-          (notes/ui/tb-btn "archive" "arch")
-          (notes/ui/tb-btn "unarchive" "unarch")
-          (notes/ui/tb-btn "add-child" "+kid")
-          (notes/ui/tb-btn "add-sibling" "+sib")
-          (notes/ui/tb-btn "promote" "<<")
-          (notes/ui/tb-btn "demote" ">>")
-          (notes/ui/tb-btn "move-up" "up")
-          (notes/ui/tb-btn "move-down" "dn")
-          (notes/ui/tb-btn "delete" "del")
+          (html/form
+            "POST"
+            "/partials/notes-node-op"
+            (html/attrs
+              (list
+                (html/attr "id" "ol-op-form")
+                (html/attr "class" "ol-op-form")
+                (html/attr "hx-post" "/partials/notes-node-op")
+                (html/attr "hx-target" "#outline")
+                (html/attr "hx-swap" "outerHTML")))
+            (html/join
+              (list
+                (html/hidden "slug" (as-str slug))
+                (if
+                  show-archived
+                  (html/void
+                    "input"
+                    (html/attrs
+                      (list
+                        (html/attr "type" "hidden")
+                        (html/attr "name" "show")
+                        (html/attr "value" "archived"))))
+                "")
+                (html/void
+                  "input"
+                  (html/attrs
+                    (list
+                      (html/attr "type" "hidden")
+                      (html/attr "name" "op")
+                      (html/attr "id" "ol-op"))))
+                (notes/ui/tb-btn "cycle-todo" "todo")
+                (notes/ui/tb-btn "archive" "arch")
+                (notes/ui/tb-btn "unarchive" "unarch")
+                (notes/ui/tb-btn "add-child" "+kid")
+                (notes/ui/tb-btn "add-sibling" "+sib")
+                (notes/ui/tb-btn "promote" "<<")
+                (notes/ui/tb-btn "demote" ">>")
+                (notes/ui/tb-btn "move-up" "up")
+                (notes/ui/tb-btn "move-down" "dn")
+                (html/tag
+                  "button"
+                  (html/attrs
+                    (list
+                      (html/attr "type" "submit")
+                      (html/attr "class" "ol-btn ol-del")
+                      (html/attr "title" "delete")
+                      (html/attr "data-op" "delete")
+                      (html/attr "form" "ol-op-form")
+                      (html/attr "hx-confirm" "Delete this node?")))
+                  "del"))))
           (notes/ui/find-modal)
           (notes/ui/refile-modal slug)
           (html/form
