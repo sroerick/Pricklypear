@@ -299,6 +299,13 @@
         on it. Full text inlined from borge/multipart.borg.")
   (inline borge/multipart.borg)
  )
+ (section hypermedia-harness
+  (doc "Book chapter — a headless hypermedia client: a server-side htmx
+        swap simulator that is the reference implementation of the fixi-five
+        contract, for debug agents and verification harnesses. Full text
+        inlined from borge/hypermedia-harness.borg.")
+  (inline borge/hypermedia-harness.borg)
+ )
  (section product-experience
   (doc "Book chapter — full text inlined from borge/product-experience.borg")
   (inline borge/product-experience.borg)
