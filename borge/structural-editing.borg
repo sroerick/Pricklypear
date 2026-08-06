@@ -60,7 +60,7 @@
   (subsection structed-algebra
    (doc "Pure higher-order tree-surgery library (structed) usable from REPL, routes, and agents")
    (status implemented)
-   (implements libs/structed/lib.pp)
+   (implements libs/structed/lib.pp libs/structed/list/lib.pp)
    (details
     (doc (|
          PACKAGE: structed/ (Nopales — pure, no DB, no I/O).

@@ -141,7 +141,7 @@
    (doc "Notes as one-tree nodes: folders, note leaves, heading children; notes/* façade")
    (status implemented)
    (* agent note (|2026-08-02: notes/doc/* façade on tree (libs/notes/doc + lib.pp); live (notes/doc/get "agents") returns uuid/slug/title/outline; tree/garden-root path grammar in tree_store.ml.|) *)
-   (implements libs/notes/lib.pp image/lib/tree_store.ml image/lib/crud.ml)
+   (implements libs/notes/lib.pp libs/notes/capture/lib.pp libs/notes/migrate/lib.pp libs/notes/tree/lib.pp image/lib/tree_store.ml image/lib/crud.ml)
    (verify
     (smoke "notes/upsert then notes/get by slug returns outline")
     (smoke "second upsert same slug updates in place (idempotent)")

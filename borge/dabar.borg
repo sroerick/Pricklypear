@@ -119,6 +119,7 @@
   (subsection strongs
    (doc "Strong's lexicon seed, lookup, pages")
    (status implemented)
+   (implements libs/strongs/lib.pp)
    (verify
     (build "python3 scripts/seed_strongs.py --help exits 0")
     (smoke "after seed: (strongs/get \"H430\") or G26 returns lemma/description")
