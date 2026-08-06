@@ -115,18 +115,21 @@
 
 (define hyper/click*
   (lambda (page elt params)
-    (let ((hxpost (soup/attr elt "hx-post"))
-          (hxget (soup/attr elt "hx-get")))
+    ;; Read hx-post/hx-get from elt OR nearest ancestor (inherited trigger —
+    ;; mirrors htmx compat implicit inheritance).
+    (let* ((hxpost (soup/closest-attr elt "hx-post"))
+           (hxget (soup/closest-attr elt "hx-get")))
       (cond
         ((not (null? hxpost)) (hyper/do-swap page elt "POST" hxpost params))
         ((not (null? hxget)) (hyper/do-swap page elt "GET" hxget params))
-        (#t (error "unsupported-feature: no hx-get/hx-post on element (inherited triggers need soup/ancestor prim)"))))))
+        (#t (error "unsupported-feature: no hx-get/hx-post on element or ancestor"))))))
 
 ;; Read target + swap, POST, deep-copy page, apply swap, return new page.
+;; target/swap are read via closest-attr (inherited from ancestors).
 (define hyper/do-swap
   (lambda (page elt verb url params)
-    (let* ((target-raw (soup/attr elt "hx-target"))
-           (swap-raw (soup/attr elt "hx-swap"))
+    (let* ((target-raw (soup/closest-attr elt "hx-target"))
+           (swap-raw (soup/closest-attr elt "hx-swap"))
            (swap (if (null? swap-raw) "innerHTML" swap-raw))
            (parsed (hyper/parse-url url))
            (path (car parsed))
@@ -135,14 +138,15 @@
            (handler (route/lookup path)))
       (if (null? handler)
           (error (string-append "unsupported-feature: no route for " path))
-          (let* ((fragment-html (route/dispatch handler verb path
-                                  (cons (cons "hx-request" "true") all-params)))
-                 (new-page (soup/page-copy page))
-                 (target (if (null? target-raw) elt
-                             (let ((ts (soup/select new-page target-raw)))
-                               (if (null? ts) elt (car ts))))))
-            (soup/swap! target swap fragment-html)
-            new-page)))))
+          (begin
+            (let* ((fragment-html (route/dispatch handler verb path
+                                    (cons (cons "hx-request" "true") all-params)))
+                   (new-page (soup/page-copy page))
+                   (target (if (null? target-raw) elt
+                               (let ((ts (soup/select new-page target-raw)))
+                                 (if (null? ts) elt (car ts))))))
+              (begin (soup/swap! target swap fragment-html)
+                     new-page)))))))
 
 (define hyper/append-alist
   (lambda (a b)
