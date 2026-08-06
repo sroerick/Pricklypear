@@ -4434,6 +4434,7 @@
                 (html/attr "hx-post" "/partials/notes-node-op")
                 (html/attr "hx-target" "#outline")
                 (html/attr "hx-swap" "outerHTML")
+                (html/attr "hx-include" "#ol-selected-id")
                 (html/attr "hx-optimistic" "#ol-op-opt")))
             (html/join
               (list
