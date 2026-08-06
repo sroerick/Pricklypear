@@ -4415,6 +4415,15 @@
                 (html/attr "id" "ol-selected-id")
                 (html/attr "name" "node-id")
                 (html/attr "value" "root"))))
+          (html/tag
+            "template"
+            (html/attr "id" "ol-op-opt")
+            (html/span
+              (html/attrs
+                (list
+                  (html/attr "class" "ol-opt-msg")
+                  (html/attr "style" "opacity:0.6;font-style:italic")))
+              (html/text "updating…")))
           (html/form
             "POST"
             "/partials/notes-node-op"
@@ -4424,7 +4433,8 @@
                 (html/attr "class" "ol-op-form")
                 (html/attr "hx-post" "/partials/notes-node-op")
                 (html/attr "hx-target" "#outline")
-                (html/attr "hx-swap" "outerHTML")))
+                (html/attr "hx-swap" "outerHTML")
+                (html/attr "hx-optimistic" "#ol-op-opt")))
             (html/join
               (list
                 (html/hidden "slug" (as-str slug))

@@ -159,6 +159,12 @@ let html_response (reqd : Httpun.Reqd.t) ?(status = `OK)
          markup keeps htmx 1.9 semantics during incremental migration. *)
       HTML.script [HTML.src "/assets/htmx.min.js"] "";
       HTML.script [HTML.src "/assets/htmx-2-compat.min.js"] "";
+      (* hx-optimistic: official htmx 4 extension (vendored, no CDN). Loaded
+         globally so it registers before any hx-optimistic attribute is
+         processed. Display-placeholder optimism only — see
+         borge/structural-editing.borg RESPONSIVENESS WITHOUT PREDICTION.
+         Inert on pages that don't use the attribute. *)
+      HTML.script [HTML.src "/assets/hx-optimistic.js"] "";
       (* Nav menus are pure HTML/CSS: exclusive open comes from the
          native <details name=...> accordion attribute (menu/render),
          so no menu JS here. Remaining script: outline summaries only
