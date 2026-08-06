@@ -938,7 +938,7 @@
   (subsection primitives
    (doc "Primitives are the boundary between the pure interpreter and the outside world. Post-H1 the core is direct-style: prim_fn = value list -> value (lisp/lib/control.ml), and DB-touching prims are invoked via Control.perform_prim with the rim handler owning I/O — no Lwt.t in the prim ABI. The impure functions the interpreter calls into")
    (status implemented)
-   (implements lisp/lib/primitives.ml lisp/lib/eval.ml lisp/lib/prims_core.ml lisp/lib/route_gate.ml)
+   (implements image/lib/primitives.ml lisp/lib/eval.ml lisp/lib/route_gate.ml)
    (details
     (doc (|
          Primitives live in image/lib/primitives.ml. They
@@ -1901,8 +1901,6 @@
     lisp/lib/explain.ml
     lisp/lib/eval.ml
     lisp/test/recursion_test.ml
-    lisp/test/complexity_test.ml
-    lisp/test/explain_test.ml
     image/lib/ast_html.ml
     image/lib/db_cost.ml
     image/lib/analyze.ml
