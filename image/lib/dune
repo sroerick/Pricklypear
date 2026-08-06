@@ -5,7 +5,7 @@
           prims_pure primitives request_context control_rim io io_lwt io_eio
           session_types call_graph agent_tools
           prims_request prims_net prims_media prims_graph prims_db
-          net_prims
+          net_prims prims_hyper
           session
           crud media packages loader repl_endpoint
           ops_log ops_stats ops_incidents
@@ -38,6 +38,7 @@
    pure-html
    digestif
    markup
+   lambdasoup
    mirage-crypto
    mirage-crypto-rng
    mirage-crypto-rng.unix
