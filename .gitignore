@@ -65,3 +65,6 @@ docs/openbsd-prod-branch-deploy.md
 
 # borge session lock (ephemeral)
 .borge.lock/
+node_modules/
+package.json
+package-lock.json
