@@ -152,10 +152,16 @@
          construction. Upgrading identity (paths -> ids) must not
          change the protocol or the client.
 
-         RESPONSIVENESS WITHOUT PREDICTION. No optimistic DOM. The
-         client shell may ignore structure keys while one op POST
-         is in flight (single-flight), and restores selection +
-         focus from the OOB payload on completion.
+         RESPONSIVENESS WITHOUT PREDICTION. No client-predicted DOM
+         state. The sanctioned exception is the htmx-org hx-optimistic
+         extension: on request it inserts a template-based placeholder
+         into the target; on response (or error) the placeholder is
+         removed and the server's content is swapped in WHOLESALE —
+         never merged with the prediction, never patching client state.
+         This is display-layer only and must not predict structural
+         outcome. The client shell may ignore structure keys while
+         one op POST is in flight (single-flight), and restores
+         selection + focus from the OOB payload on completion.
 
          FLUSH RULE. Any structure POST first flushes the focused
          leaf's pending edit (set-title / set-body / set-atom) —
@@ -334,7 +340,10 @@
            rendering is build stage 1 (degenerate pretty-printer),
            not the accepted end state — the end state is inline
            flow with width/convention breaks (ast-structure-view).
-         - NO optimistic structural DOM mutation (op-protocol).
+         - NO client-predicted structural DOM mutation (op-protocol).
+           Display-placeholder optimism via the sanctioned hx-optimistic
+           extension is the only optimistic mechanism allowed, and only
+           for non-structural previews the response replaces wholesale.
          - NO storage codec migration: outlines stay JSON strings
            in data_rows; code ASTs stay JSONB in function_defs. A
            canonical sexp writer prim (write-string) for
