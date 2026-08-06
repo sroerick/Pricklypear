@@ -247,6 +247,52 @@ stable?:   add/adjust scripts/smoke_* or docs/*-ui-contract.md row
 - Natural-language-only E2E in CI with no graduation path
 - Inventing REST for capabilities already on `/api/eval`
 
+## htmx version & feature budget (2026-08-06)
+
+Upgraded from htmx 1.9.12 (unpkg CDN) to **htmx 4.0.0-beta6** (vendored at
+`image/static/htmx.min.js`, no CDN dependency — matches `borge/multipart.borg`
+stance). The htmx-2-compat extension (`htmx-2-compat.min.js`) restores
+implicit attribute inheritance, 1.9/2.x error no-swap defaults, and old
+camelCase event names so existing markup keeps working during incremental
+migration. The custom `hx-multipart` extension was ported to the htmx 4
+event-based API (`registerExtension` + `htmx_after_request`/`htmx_before_swap`
+hooks; no longer touches `evt.detail.xhr`).
+
+Feature inventory (271 `hx-*` attributes across `libs/` + `image/`):
+
+| Category | Share | Attrs |
+|----------|-------|-------|
+| fixi-five core (get/post/target/swap/trigger) | 76% | 205 |
+| `hx-on:` event scripting | 15 / 9 files | maps to moxi.js (fixi sister) |
+| `hx-confirm` | 10 | fixi `cfg.confirm` (built in) |
+| `hx-multipart` / `hx-part-id` | 8 | custom ext (ported to v4 API) |
+| `hx-swap-oob` | 4 | recoverable as `fx:after` pattern |
+| `hx-push-url` | 4 | history (no fixi equivalent — gap) |
+| `hx-ext`, `hx-indicator`, `hx-select`, `hx-include` | ≤2 each | thin tail |
+
+**Not used:** `hx-sync`, `hx-boost`, `hx-ws`, `hx-sse`, `hx-validate` —
+the htmx-only divergence zones that would have forced keeping the
+monolithic client. Their absence is why a fixi-shaped simulator is faithful.
+
+**Simulator invariant (for the planned headless-hypermedia client):** write
+the simulator against the fixi-five intersection — the semantic core shared
+by both htmx and fixi (same fetch+swap loop, same five attributes).
+`simulator-spec ⊆ production-client behavior`, always. The simulator
+implements the five swap attrs + ancestor lookup for inherited
+`hx-target`/`hx-swap`/`hx-confirm` (needed under compat). It returns
+`unsupported-feature` for htmx-only features so those flows graduate to
+the CDP tier instead of being silently under-modeled. This lets the
+production client shrink toward the fixi family later without touching
+the simulator — the testable contract doesn't move.
+
+**Incremental migration cleanup (tracked, not blocking):**
+- `hx-on::after-request` → should become `hx-on::after:request` (compat
+  fires old names; rename when done with compat)
+- `hx-ext="hx-multipart"` → inert in htmx 4 (extensions activate by
+  inclusion); harmless, remove when convenient
+- `htmx.config.prefix` defaults to `data-hx-` — both `hx-*` and
+  `data-hx-*` work; no action needed
+
 ---
 
 ## Intent / acceptance criteria template
@@ -325,3 +371,4 @@ Links rot; the **patterns** on this page are the durable part.
 | Date | Note |
 |------|------|
 | 2026-07-19 | Initial research wiki from external survey + local AGENTS/smoke practice |
+| 2026-08-06 | htmx 1.9.12 → 4.0.0-beta6 (vendored, no CDN); compat ext + hx-multipart ported to v4 API; feature inventory table + fixi-five budget policy added |

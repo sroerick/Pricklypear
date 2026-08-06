@@ -1,15 +1,19 @@
 /**
- * hx-multipart — minimal htmx extension for multipart/mixed responses.
+ * hx-multipart — htmx 4 extension for multipart/mixed responses.
  *
- * Vendored for Pricklypear (no CDN). When an element has hx-ext="hx-multipart"
- * (or an ancestor does), responses with Content-Type: multipart/mixed are
- * parsed into parts; each part is swapped using its HX-Target / HX-Swap /
- * HX-Select headers (falling back to the request's hx-target / hx-swap and
- * envelope response headers). HX-Part-ID is recorded for reconnect cursors.
+ * Vendored for Pricklypear (no CDN). Ported from the htmx 1.9 XHR-era
+ * extension to the htmx 4 event-based API (registerExtension + hooks).
  *
- * Compatible with the server surface in borge/multipart.borg (mime-framing).
+ * When a response arrives with Content-Type: multipart/mixed, its parts are
+ * parsed and each part is swapped using its own HX-Target / HX-Swap /
+ * HX-Select headers (falling back to envelope response headers, then the
+ * requesting element's hx-target / hx-swap / hx-select attributes).
+ * HX-Part-ID is recorded on the request source element for reconnect cursors.
+ * The raw multipart envelope itself is never swapped into the target.
+ *
+ * Wire protocol surface (unchanged): borge/multipart.borg (mime-framing).
  */
-(function () {
+(() => {
   "use strict";
 
   function headerMap(rawHeaders) {
@@ -57,15 +61,64 @@
     return parts;
   }
 
-  function swapPart(htmx, elt, part, defaults) {
+  function reprocess(node) {
+    // Re-wire hx-* attributes on freshly swapped-in content, if the public
+    // process API is available (htmx 4 keeps it). Best effort only.
+    if (window.htmx && typeof htmx.process === "function") {
+      try { htmx.process(node); } catch (_e) {}
+    }
+  }
+
+  function swapContent(target, content, style) {
+    var s = String(style || "innerHTML").toLowerCase();
+    switch (s) {
+      case "innerhtml":
+        target.innerHTML = content;
+        reprocess(target);
+        break;
+      case "outerhtml": {
+        var tpl = document.createElement("template");
+        tpl.innerHTML = content.trim();
+        var nodes = Array.prototype.slice.call(tpl.content.childNodes);
+        if (!nodes.length) break;
+        var parent = target.parentNode;
+        target.replaceWith.apply(target, nodes);
+        if (parent) reprocess(parent);
+        break;
+      }
+      case "beforebegin":
+        target.insertAdjacentHTML("beforebegin", content);
+        if (target.parentNode) reprocess(target.parentNode);
+        break;
+      case "afterend":
+        target.insertAdjacentHTML("afterend", content);
+        if (target.parentNode) reprocess(target.parentNode);
+        break;
+      case "afterbegin":
+      case "beforeend":
+        target.insertAdjacentHTML(s, content);
+        reprocess(target);
+        break;
+      case "delete":
+        target.remove();
+        break;
+      default: // "none" and unknown styles: leave the part unswapped
+        break;
+    }
+  }
+
+  function swapPart(elt, part, defaults) {
     var h = part.headers || {};
-    var targetSel =
-      h["hx-target"] || defaults.target || htmx.config.defaultTarget;
+    var targetSel = h["hx-target"] || defaults.target;
     var swap =
-      h["hx-swap"] || defaults.swap || htmx.config.defaultSwapStyle || "innerHTML";
+      h["hx-swap"] ||
+      defaults.swap ||
+      (window.htmx && (htmx.config.defaultSwap || htmx.config.defaultSwapStyle)) ||
+      "innerHTML";
     var select = h["hx-select"] || defaults.select;
-    var target = targetSel ? htmx.find(targetSel) : elt;
+    var target = targetSel ? document.querySelector(targetSel) : null;
     if (!target) target = elt;
+    if (!target) return;
     var content = part.body;
     if (select) {
       var tmp = document.createElement("div");
@@ -73,41 +126,49 @@
       var selected = tmp.querySelector(select);
       content = selected ? selected.outerHTML : content;
     }
-    htmx.swap(target, content, { swapStyle: swap });
+    swapContent(target, content, swap);
     if (h["hx-part-id"] && elt && elt.setAttribute) {
       elt.setAttribute("data-hx-last-part-id", h["hx-part-id"]);
     }
   }
 
-  htmx.defineExtension("hx-multipart", {
-    onEvent: function (name, evt) {
-      if (name !== "htmx:beforeOnLoad" && name !== "htmx:beforeSwap") return true;
-      var xhr = evt.detail && (evt.detail.xhr || evt.detail.requestConfig && evt.detail.requestConfig.xhr);
-      if (!xhr) return true;
-      var ct = xhr.getResponseHeader("Content-Type") || "";
-      if (ct.toLowerCase().indexOf("multipart/mixed") < 0) return true;
-
-      var elt = evt.detail.elt;
-      var defaults = {
-        target:
-          xhr.getResponseHeader("HX-Target") ||
-          (elt && elt.getAttribute && elt.getAttribute("hx-target")),
-        swap:
-          xhr.getResponseHeader("HX-Swap") ||
-          (elt && elt.getAttribute && elt.getAttribute("hx-swap")),
-        select:
-          xhr.getResponseHeader("HX-Select") ||
-          (elt && elt.getAttribute && elt.getAttribute("hx-select")),
+  htmx.registerExtension("hx-multipart", {
+    // After the fetch completes: if the response is multipart/mixed, parse
+    // it and stash the parts + defaults on the request context.
+    htmx_after_request: function (elt, detail) {
+      var ctx = detail && detail.ctx;
+      if (!ctx || !ctx.response) return;
+      var headers = ctx.response.headers;
+      var ct =
+        (headers && typeof headers.get === "function" && headers.get("content-type")) || "";
+      if (ct.toLowerCase().indexOf("multipart/mixed") < 0) return;
+      var hget = function (name) {
+        return headers && typeof headers.get === "function" ? headers.get(name) : null;
       };
-      var parts = parseMultipart(xhr.responseText, ct);
-      for (var i = 0; i < parts.length; i++) {
-        swapPart(htmx, elt, parts[i], defaults);
+      var defaults = {
+        target: hget("hx-target") || (elt.getAttribute && elt.getAttribute("hx-target")),
+        swap: hget("hx-swap") || (elt.getAttribute && elt.getAttribute("hx-swap")),
+        select: hget("hx-select") || (elt.getAttribute && elt.getAttribute("hx-select")),
+      };
+      ctx._hxMultipart = {
+        elt: ctx.sourceElement || elt,
+        defaults: defaults,
+        parts: parseMultipart(ctx.text || "", ct),
+      };
+    },
+
+    // Before the default swap: if this request produced multipart parts,
+    // swap each part ourselves and cancel the default (the raw envelope
+    // must not land in the target).
+    htmx_before_swap: function (elt, detail) {
+      var ctx = detail && detail.ctx;
+      if (!ctx || !ctx._hxMultipart) return;
+      var job = ctx._hxMultipart;
+      for (var i = 0; i < job.parts.length; i++) {
+        swapPart(job.elt, job.parts[i], job.defaults);
       }
-      if (evt.detail) {
-        evt.detail.shouldSwap = false;
-        evt.detail.isError = false;
-      }
-      if (typeof evt.preventDefault === "function") evt.preventDefault();
+      delete ctx._hxMultipart;
+      detail.cancelled = true;
       return false;
     },
   });

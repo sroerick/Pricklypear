@@ -153,8 +153,12 @@ let html_response (reqd : Httpun.Reqd.t) ?(status = `OK)
                  HTML.content "width=device-width, initial-scale=1"];
       HTML.style [] "%s" css;
 
-      (* htmx for create-in-place editor empty state *)
-      HTML.script [HTML.src "https://unpkg.com/htmx.org@1.9.12"] "";
+      (* htmx 4 (vendored, no CDN — see borge/multipart.borg stance) +
+         htmx-2-compat: restores implicit attribute inheritance, 1.9/2.x
+         error no-swap defaults, and old camelCase event names so existing
+         markup keeps htmx 1.9 semantics during incremental migration. *)
+      HTML.script [HTML.src "/assets/htmx.min.js"] "";
+      HTML.script [HTML.src "/assets/htmx-2-compat.min.js"] "";
       (* Nav menus are pure HTML/CSS: exclusive open comes from the
          native <details name=...> accordion attribute (menu/render),
          so no menu JS here. Remaining script: outline summaries only
