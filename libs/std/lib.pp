@@ -61,31 +61,9 @@
 
 ;; --- list/ ---
 ;; list/map, list/filter, list/foldl are KERNEL SPECIAL FORMS (eval.ml):
-;; OCaml loops + apply, not recursive Lisp. These defines are fallbacks
-;; only if the special forms are unavailable (should not happen in image).
-
-(define list/map
-  (lambda (f xs)
-    (if (null? xs)
-        (list)
-        (cons (f (car xs)) (list/map f (cdr xs)))))
-  "Map f over xs (Lisp fallback; image prefers special form).")
-
-(define list/filter
-  (lambda (p xs)
-    (if (null? xs)
-        (list)
-        (if (p (car xs))
-            (cons (car xs) (list/filter p (cdr xs)))
-            (list/filter p (cdr xs)))))
-  "Keep elements of xs where p is truthy (Lisp fallback).")
-
-(define list/foldl
-  (lambda (f acc xs)
-    (if (null? xs)
-        acc
-        (list/foldl f (f acc (car xs)) (cdr xs))))
-  "Left fold f over xs starting from acc (Lisp fallback).")
+;; OCaml loops + apply, provided by the image; defining them here trips
+;; assert_bindable_name (BORGE-1785213238) and aborts std seeding.
+;; Do NOT re-add fallback defines — the kernel always provides them.
 
 ;; (list/range n) → (0 1 ... n-1) for synthetic tests / generators.
 (define list/range

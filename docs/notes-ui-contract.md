@@ -1,7 +1,22 @@
 # Notes UI contract
 
 Acceptance scenarios for the outline notes editor. Agents implement until
-`scripts/smoke_notes_model.py` and `scripts/smoke_notes_ui.sh` pass.
+`scripts/smoke_notes_model.py`, `scripts/smoke_notes_ui.sh`, and
+`scripts/pp_outline.py check` pass. `pp_outline.py scripts-check` guards that
+every `<script>` the editor emits still parses (`node --check`) - the selection
+toolbar goes inert the moment one dies at parse time.
+
+## Tiered loop
+
+| Tier | Tool | Question answered |
+|------|------|-------------------|
+| 0 model | `pp_outline.py fixture/op/tree` | does the op transform the tree correctly? (no HTTP) |
+| 1 fragment | `pp_outline.py check` | partial HTML round-trips and every emitted script parses? |
+| 2 browser | `smoke_notes_selection_cdp.mjs`, plus `smoke_notes_*.py/sh` | do delegated click/focus handlers seat #ol-selected-id on the clicked node so toolbar acts on it, not root? |
+
+Default to tier 0/1 (sub-second, no browser). Escalate to tier 2 only for the
+genuinely client-only path - delegated handlers and toolbar dispatch. Never
+drive clicks from pixels.
 
 ## Fixture
 
@@ -42,6 +57,12 @@ Filled by `scripts/inventory_notes_ui.py` (and human notes). See
 2. One control / scenario per Ralph iteration when repairing.
 3. Prefer git `libs/notes` + `libs/outline`; reseed or load-library on main.
 4. Screenshots only for layout; clicks/ops for correctness.
+5. **Scripts must parse.** The editor's interactive toolbar dead-snaps the
+   instant any emitted `<script>` throws at parse time (handlers never
+   attach, `#ol-selected-id` stays `"root"`, every `data-ol-op` button is
+   inert). After editing any `*-script` define, run `pp_outline.py
+   scripts-check`; if it reports BAD, the page is broken even if the model
+   smoke passes.
 
 General agent FE verify research (a11y snapshots, tiered checks, htmx
 gotchas): [`agent-ui-harness.md`](agent-ui-harness.md).
