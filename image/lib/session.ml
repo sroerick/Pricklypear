@@ -623,7 +623,16 @@ let register_media_prims (t : t) (tbl : Primitives.t) : unit =
   Prims_media.register t tbl
 let do_http_get = Prims_net.do_http_get
 
+(* Late-bound thunk for route/dispatch prim. call_handler is defined later
+   in this module (after `make`); this ref lets the prim registered inside
+   make reference it without a forward-let. Bound right after call_handler. *)
+let route_dispatch_fn :
+  (t -> string -> Session_types.request -> Pricklypear_lisp.Ast.value) ref =
+  ref (fun _t _handler _req ->
+         Pricklypear_lisp.Ast.VStr "route/dispatch: not initialized")
+
 let register_net_prims (t : t) (tbl : Primitives.t) : unit =
+
   Prims_net.register t tbl;
   Net_prims.register t tbl
 let promote_to_personal = Prims_db.promote_to_personal
@@ -1331,6 +1340,62 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
   (* Network primitives (tcp-connect, stream-read/write/close) —
      single-image.net-prims. *)
   register_net_prims !t prim_table;
+  (* Hypermedia harness: html/* lambdasoup prims + route/dispatch
+     (headless htmx swap simulator; spec borge/hypermedia-harness.borg).
+     route/dispatch is registered inline here (not in Prims_hyper) so it
+     can close over Session.t without a dependency cycle — mirrors
+     register_crud_prims above. *)
+  Prims_hyper.register_pure_prims prim_table;
+  Primitives.register prim_table "route/dispatch"
+    (fun args ->
+       match args with
+       | Pricklypear_lisp.Ast.VStr handler_name
+         :: Pricklypear_lisp.Ast.VStr meth
+         :: Pricklypear_lisp.Ast.VStr path :: rest ->
+         let params =
+           match rest with
+           | p :: _ -> Prims_hyper.assoc_of p
+           | _ -> []
+         in
+         let headers =
+           match rest with
+           | _ :: h :: _ ->
+             List.map
+               (fun (k, v) -> (String.lowercase_ascii k, v))
+               (Prims_hyper.assoc_of h)
+           | _ -> []
+         in
+         let body =
+           match rest with
+           | _ :: _ :: Pricklypear_lisp.Ast.VStr b :: _ -> b
+           | _ -> ""
+         in
+         let method_ : Session_types.http_method =
+           match String.lowercase_ascii meth with
+           | "post" -> `POST
+           | _ -> `GET
+         in
+         let req : Session_types.request = {
+           method_;
+           path;
+           params;
+           body;
+           headers;  (* caller controls HX-Request etc. *)
+         } in
+         (* Invoke call_handler via the late-bound thunk so we don't
+            forward-reference it (defined later in this module). *)
+         !route_dispatch_fn !t handler_name req
+       | _ -> Pricklypear_lisp.Ast.VStr "route/dispatch needs handler method path");
+  (* route/lookup: resolve a URL path to its handler name via the route
+     table. Returns VNil if no route matches. Used by libs/hyper/visit. *)
+  Primitives.register prim_table "route/lookup"
+    (fun args ->
+       match args with
+       | [Pricklypear_lisp.Ast.VStr path] ->
+         (match Hashtbl.find_opt (!t).routes path with
+          | Some (handler, _) -> Pricklypear_lisp.Ast.VStr handler
+          | None -> Pricklypear_lisp.Ast.VNil)
+       | _ -> Pricklypear_lisp.Ast.VStr "route/lookup needs one path");
   (* AI + list-branches / current-branch registered inside
      register_crud_prims above (they capture t). *)
   (* Make primitives reachable by name in the env, so `(+)` etc.
@@ -1734,3 +1799,28 @@ let call_handler (t : t) ?request (handler_name : string)
            Fun.protect
              ~finally:(fun () -> t.current_request <- None)
              run)
+
+(* Late-bind the route/dispatch thunk now that call_handler exists. *)
+let () =
+  route_dispatch_fn :=
+    (fun t handler req ->
+      (* Bind a per-call Request_context snapshot so handler prims
+         (whoami, current-branch, ui/css, author-scoped reads) see the
+         session's manifest/env/routes — mirrors http.ml's snapshot_ctx.
+         Without this, notes/page renders with anonymous author and
+         the fixture's ol-nodes don't appear. *)
+      let ctx =
+        Request_context.make
+          ~manifest:t.manifest
+          ~env:t.env
+          ~routes:(Request_context.copy_routes t.routes)
+      in
+      Request_context.with_current ctx (fun () ->
+        match call_handler t ~request:req handler with
+        | Handler_ok v ->
+          Pricklypear_lisp.Ast.VStr (Prims_hyper.render_handler_value v)
+        | Handler_unbound ->
+          Pricklypear_lisp.Ast.VStr
+            (Printf.sprintf "route/dispatch: unbound handler %s" handler)
+        | Handler_error msg ->
+          Pricklypear_lisp.Ast.VStr (Printf.sprintf "route/dispatch: %s" msg)))
