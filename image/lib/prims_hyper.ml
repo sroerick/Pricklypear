@@ -249,6 +249,42 @@ let register_pure_prims (tbl : Primitives.t) : unit =
             VNil)
        | _ -> err "html/replace needs node + fragment");
 
+  Primitives.register tbl "soup/closest-attr"
+    (fun args ->
+       (* (soup/closest-attr node name) -> walk from node up through ancestors,
+          return the value of `name` from the nearest element that HAS it.
+          Mirrors htmx inherited-target resolution (compat implicit
+          inheritance). Returns VNil if none found. *)
+       match args with
+       | [node_v; VStr name] ->
+         (match node_of node_v with
+          | None -> err "soup/closest-attr: not a node"
+          | Some e ->
+            (* check the element itself, then ancestors *)
+            let rec find n =
+              if Soup.has_attribute name n then Soup.attribute name n
+              else
+                match Soup.parent n with
+                | None -> None
+                | Some p -> find p
+            in
+            (match find e with
+             | Some v -> VStr v
+             | None -> VNil))
+       | _ -> err "soup/closest-attr needs node + name");
+
+  Primitives.register tbl "soup/parent"
+    (fun args ->
+       match args with
+       | [node_v] ->
+         (match node_of node_v with
+          | None -> err "soup/parent: not a node"
+          | Some e ->
+            match Soup.parent e with
+            | None -> VNil
+            | Some p -> VStr (store_node p "?"))
+       | _ -> err "soup/parent needs one node");
+
   Primitives.register tbl "soup/diff"
     (fun args ->
        (* v0: structural equality + coarse report. Walks both pages'
