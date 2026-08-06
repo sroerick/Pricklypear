@@ -385,13 +385,11 @@
                     (outline/render-body body)))
               (html/div
                 (html/attr "class" "ol-kids")
-                (list/foldl
-                  (lambda (acc k)
-                    (string-append
-                      acc
-                      (outline/html-node slug k show-archived with-actions)))
-                  ""
-                  kids)))))))))
+                (html/join
+                  (list/map
+                    (lambda (k)
+                      (outline/html-node slug k show-archived with-actions))
+                    kids))))))))))
 
 (define outline/id
   (lambda (n) (car n)))
