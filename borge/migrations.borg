@@ -7,6 +7,15 @@
 
   (doc "Schema evolution: image-applied, additive-only, schema authority in main")
   (status partial)
+  (implements
+   migrations/001_branches.sql
+   migrations/002_auth.sql
+   migrations/003_data.sql
+   migrations/004_bible_ref_index.sql
+   migrations/008_agent_users.sql
+   migrations/010_notes_tree.sql
+   migrations/013_data_user_scoping.sql
+   migrations/014_guestbook_shared.sql)
   (verify
    (build "dune build image")
    (smoke "image boots against a fresh database; schema_migrations records 001..007; re-boot is a no-op"))
