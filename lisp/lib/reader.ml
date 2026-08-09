@@ -67,10 +67,17 @@ let skip_ws_and_comments (st : state) : unit =
     | Some ' ' | Some '\t' | Some '\n' | Some '\r' ->
         ignore (advance st); loop ()
     | Some ';' ->
-        (* line comment *)
-        (match peek st with
-         | Some '\n' | None -> ()
-         | _ -> ignore (advance st); loop ())
+        (* line comment: skip to end of line or EOF, then keep looping
+           so the trailing newline (and any further ws/comments) is
+           consumed. The old code re-peeked the same ';' without
+           advancing, so it only consumed the ';' itself and left the
+           rest of the line to be read as a symbol — e.g. a
+           `;; package ...` header lexed as the symbol `package`. *)
+        (let rec skip_to_eol () =
+           match peek st with
+           | Some '\n' | None -> ()
+           | _ -> ignore (advance st); skip_to_eol ()
+         in skip_to_eol (); loop ())
     | _ -> ()
   in
   loop ()

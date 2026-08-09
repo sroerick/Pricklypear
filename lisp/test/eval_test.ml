@@ -102,6 +102,29 @@ let reader_tests = [
     match Reader.read_one "\"a\\qb\"" with
     | Lit (Ast.VStr s) -> Alcotest.(check string) "forgiving \\q -> q" "aqb" s
     | other -> Alcotest.failf "expected string lit, got %s" (Reader.pp_expr other));
+  (* Line comments: `;` must skip to end of line, not just consume the
+     `;` itself. Regression for the bug where `;; package structed ...`
+     headers lexed as the symbol `package` (every consumer worked around
+     it by pre-stripping comments in image/lib/loader.ml). *)
+  ("reader: trailing line comment is skipped", `Quick, fun () ->
+    match Reader.read_one "42 ; this is a comment" with
+    | Lit (Ast.VInt n) -> Alcotest.(check int64) "42" 42L n
+    | other -> Alcotest.failf "expected 42, got %s" (Reader.pp_expr other));
+  ("reader: leading line comment then form", `Quick, fun () ->
+    match Reader.read_one ";; package structed\n(define x 99)" with
+    | App (Var "define", _) -> ()
+    | other -> Alcotest.failf "expected define, got %s" (Reader.pp_expr other));
+  ("reader: double-semicolon header comment", `Quick, fun () ->
+    (* The exact shape of a libs/*.pp header — the original bug left
+       `package` as a bare symbol after consuming only the two `;;`. *)
+    match Reader.read_all ";; package structed/list -- exported from system/main\n\n(define x 99)" with
+    | [ App (Var "define", _) ] -> ()
+    | other -> Alcotest.failf "expected single define form, got %d forms"
+                 (List.length other));
+  ("reader: comment-only input reads as no forms", `Quick, fun () ->
+    match Reader.read_all ";; just a comment\n; another\n" with
+    | [] -> ()
+    | other -> Alcotest.failf "expected 0 forms, got %d" (List.length other));
 ]
 
 let reader_list_tests = [
