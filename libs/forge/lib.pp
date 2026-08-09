@@ -680,3 +680,269 @@
             (forge/mechanical-flags graph path))
           (forge/scan-flags-nodes graph (cdr nodes)))))))
   "Scan all nodes, raise their mechanical flags.")
+
+;; ============================================================
+;; THE LOOP (the interpreter that replaces plan/make/review)
+;; ============================================================
+;; forge/step is the whole state machine. It is deliberately boring:
+;;   1. open judgment flags → do nothing; BLOCKED on the human
+;;   2. current level has unapproved nodes → run flags, present, stop
+;;   3. frontier non-empty → pick one, draft it (LLM), write, flag
+;;   4. else → propose descent (stub children), stop (human gate)
+
+;; ---- depth helpers ----
+
+(define forge/levels
+  (lambda (graph)
+    (forge/levels-scan (forge/nodes-of-graph graph) (list)))
+  "Distinct depths present in the graph, ascending.")
+
+(define forge/levels-scan
+  (lambda (nodes acc)
+    (if (null? nodes)
+        (forge/sort-numbers acc)
+        (let ((d (forge/node-depth (forge/field-str (cdr (car nodes)) "path"))))
+          (forge/levels-scan (cdr nodes)
+            (if (forge/member? d acc) acc (cons d acc))))))
+  "Collect distinct depths.")
+
+(define forge/sort-numbers
+  (lambda (xs)
+    (if (null? xs) (list)
+    (forge/insert-sorted (car xs) (forge/sort-numbers (cdr xs)))))
+  "Insertion sort for small lists of numbers.")
+
+(define forge/insert-sorted
+  (lambda (x xs)
+    (if (null? xs) (list x)
+    (if (<= x (car xs))
+        (cons x xs)
+        (cons (car xs) (forge/insert-sorted x (cdr xs))))))
+  "Insert x into sorted xs.")
+
+(define forge/nodes-at-depth
+  (lambda (graph d)
+    (list/filter
+      (lambda (pair)
+        (string-eq (as-str (forge/node-depth (forge/field-str (cdr pair) "path")))
+                   (as-str d)))
+      (forge/nodes-of-graph graph)))
+  "All node pairs at a given depth.")
+
+(define forge/status>=?
+  (lambda (status target)
+    (forge/status-rank status >= (forge/status-rank target 0)))
+  "Status ordering: planned < drafted < verified < approved < implemented.")
+
+(define forge/status-rank
+  (lambda (status fallback)
+    (cond
+      ((string-eq status "planned") 0)
+      ((string-eq status "drafted") 1)
+      ((string-eq status "verified") 2)
+      ((string-eq status "approved") 3)
+      ((string-eq status "implemented") 4)
+      (#t fallback)))
+  "Numeric rank of a status string.")
+
+;; ---- the draft prompt (context assembly) ----
+
+(define forge/draft-prompt
+  (lambda (graph path)
+    (let ((node (forge/node-by-path graph path)))
+      (if (null? node) ""
+      (let ((f (cdr node)))
+        (let ((title (forge/field-str f "title"))
+              (kind (forge/field-str f "kind"))
+              (constraints (json-parse (forge/field-str f "constraints"))))
+          (string-append
+            "You are drafting a Nopales (Lisp-1) function for a Pricklypear spec graph.\n"
+            "Node: " path "\n"
+            "Kind: " kind "\n"
+            "Purpose: " title "\n"
+            "Respond with ONLY a single Lisp s-expression: a (lambda ...) body.\n"
+            "No markdown, no commentary.\n"
+            "Available prims: + - * = < > list car cdr cons null? string-append str\n"
+            "  get create update delete rows dict-get dict-set render-html\n"
+            (forge/constraints-text constraints)))))))
+  "Assemble the draft prompt from a node's context + accumulated constraints.")
+
+(define forge/constraints-text
+  (lambda (cs)
+    (if (null? cs) ""
+    (string-append "\nConstraints from prior rerolls:\n"
+      (forge/str-join "\n" cs) "\n")))
+  "Render constraints as prompt text.")
+
+;; ---- draft a node (call the LLM) ----
+
+(define forge/draft-node
+  (lambda (graph path)
+    (let ((prompt (forge/draft-prompt graph path)))
+      (let ((sid (agent-session-new "You are a Pricklypear Lisp author. Respond ONLY with a single (lambda ...) s-expression. No markdown, no prose.")))
+        (let ((resp (agent-say sid prompt)))
+          (forge/commit-draft graph path (forge/trim-fences resp))))))
+  "Call the LLM drafter for a node; write the parsed body + run flags.")
+
+(define forge/trim-fences
+  (lambda (s)
+    (let ((t (string-trim s)))
+      (if (string-starts-with? t "```")
+          (forge/strip-code-fence t)
+          t)))
+  "Strip markdown code fences if the LLM wrapped its response.")
+
+(define forge/strip-code-fence
+  (lambda (s)
+    (let ((after (forge/skip-line s)))
+      (let ((before (forge/strip-trailing-fence after)))
+        (string-trim before))))
+  "Remove leading ```lisp line and trailing ``` fence.")
+
+(define forge/skip-line
+  (lambda (s)
+    (forge/skip-to-newline s 0))
+  "Return the substring after the first newline.")
+
+(define forge/skip-to-newline
+  (lambda (s i)
+    (if (>= i (string-length s)) s
+    (if (string-eq (substring s i 1) "\n")
+        (substring s (+ i 1) (- (string-length s) (+ i 1)))
+        (forge/skip-to-newline s (+ i 1)))))
+  "Find first newline, return rest.")
+
+(define forge/strip-trailing-fence
+  (lambda (s)
+    (let ((idx (string-contains? s "```")))
+      (if idx
+          (string-trim (substring s 0 idx))
+          s)))
+  "Remove a trailing ``` fence if present.")
+
+;; ---- commit a draft: write body, infer effects, set status, flag ----
+
+(define forge/commit-draft
+  (lambda (graph path body-src)
+    (seq
+      (forge/set-body-verify graph path body-src "")
+      (forge/set-status graph path "drafted")
+      (forge/set-inferred-effects graph path body-src)
+      (forge/raise-flags graph path
+        (forge/mechanical-flags graph path))
+      path))
+  "Write the drafted body, mark drafted, set inferred effects, raise flags.")
+
+(define forge/set-inferred-effects
+  (lambda (graph path body-src)
+    (let ((pair (forge/node-by-path graph path)))
+      (if (null? pair) ""
+      (let ((f (cdr pair)))
+        (let ((badge (forge-effects body-src)))
+          (update 'forge-node (car pair)
+            (dict-set f "effects" badge)))))))
+  "Set the node's effects field to the inferred badge.")
+
+;; ---- stub children: unresolved refs become planned nodes ----
+
+(define forge/stub-children
+  (lambda (graph path)
+    (let ((node (forge/node-by-path graph path)))
+      (if (null? node) (list)
+      (let ((f (cdr node)))
+        (let ((body (forge/field-str f "body")))
+          (if (string-eq body "") (list)
+          (let ((unres (forge/unresolved graph path body)))
+            (forge/stub-list graph path unres))))))))
+  "Create a planned child node for each unresolved reference in the body.")
+
+(define forge/stub-list
+  (lambda (graph parent-path names)
+    (if (null? names) (list)
+    (let ((name (car names)))
+      (let ((child-path (string-append parent-path "/" name)))
+        (seq
+          (forge/add-node graph child-path "function" name parent-path)
+          (forge/stub-list graph parent-path (cdr names)))))))
+  "Stub each unresolved name as a child node.")
+
+;; ---- the step state machine ----
+
+(define forge/step
+  (lambda (graph-name)
+    (let ((graph (forge/graph-by-name graph-name)))
+      (if (null? graph) "graph not found"
+      (let ((judgment (forge/open-judgment-flags graph-name)))
+        (cond
+          ((not (null? judgment)) "blocked: open judgment flags — see /forge")
+          ((forge/has-unapproved-level? graph-name) "pending: level needs approval — see /forge")
+          ((forge/frontier-non-empty? graph-name) (forge/draft-frontier graph-name))
+          (#t (forge/propose-descent graph-name)))))))
+  "One step of the loop. Returns a status string or the drafted path.")
+
+(define forge/open-judgment-flags
+  (lambda (graph-name)
+    (list/filter
+      (lambda (pair)
+        (string-eq (forge/field-str (cdr pair) "check") "judgment"))
+      (forge/open-flags graph-name)))
+  "Open flags with check=judgment (the human escape hatch).")
+
+(define forge/has-unapproved-level?
+  (lambda (graph-name)
+    (forge/has-unapproved-scan graph-name (forge/nodes-of-graph-by-name graph-name)))
+  "True when any node at the current working depth is below approved.")
+
+(define forge/nodes-of-graph-by-name
+  (lambda (graph-name)
+    (list/filter
+      (lambda (pair)
+        (string-eq (forge/field-str (cdr pair) "graph") graph-name))
+      (rows 'forge-node 500)))
+  "All node pairs for a graph name (rows scan).")
+
+(define forge/has-unapproved-scan
+  (lambda (graph-name nodes)
+    (if (null? nodes) #f
+    (let ((f (cdr (car nodes))))
+      (let ((status (forge/field-str f "status"))
+            (body (forge/field-str f "body")))
+        (cond
+          ((string-eq status "planned")
+           (if (string-eq body "") #f (forge/has-unapproved-scan graph-name (cdr nodes))))
+          ((string-eq status "drafted") #t)
+          ((string-eq status "verified") #t)
+          (#t (forge/has-unapproved-scan graph-name (cdr nodes))))))))
+  "A drafted/verified node is unapproved; a planned empty node is not yet
+   in the approval surface. implemented/approved are done.")
+
+(define forge/frontier-non-empty?
+  (lambda (graph-name)
+    (not (null? (forge/frontier graph-name))))
+  "True when the computed frontier has ready nodes.")
+
+(define forge/draft-frontier
+  (lambda (graph-name)
+    (let ((f (forge/frontier graph-name)))
+      (if (null? f) "frontier empty"
+      (forge/draft-node graph-name (car f)))))
+  "Draft the first ready node on the frontier.")
+
+(define forge/propose-descent
+  (lambda (graph-name)
+    (forge/descent-scan graph-name (forge/nodes-of-graph-by-name graph-name)))
+  "Stub children for every approved node with a body; propose the next level.")
+
+(define forge/descent-scan
+  (lambda (graph-name nodes)
+    (if (null? nodes) "done: no further descent"
+    (let ((f (cdr (car nodes))))
+      (let ((status (forge/field-str f "status"))
+            (path (forge/field-str f "path")))
+        (cond
+          ((string-eq status "approved")
+           (seq
+             (forge/stub-children graph-name path)
+             (forge/descent-scan graph-name (cdr nodes))))
+          (#t (forge/descent-scan graph-name (cdr nodes))))))))
+  "For each approved node, stub its unresolved refs as children (descent).")
