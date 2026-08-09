@@ -1138,10 +1138,28 @@ and seed_stdlib (t : t) : unit =
   Store.with_branch t.store ~branch_id:Store.system_main_id (fun () ->
     t.suppress_refresh_on_define <- true;
     t.seed_additive <- true;
+    (* image.boot-seed-batch: preload existing fn/route names on
+       system/main once, so persist_function_if_absent /
+       register_route_if_absent skip the per-name get_by_path SELECT
+       (~1800 defines + routes). On a warm DB this collapses the seed
+       to two queries + zero writes. *)
+    Store.begin_seed_names t.store;
+    let started = Unix.gettimeofday () in
     let finally () =
+      let preloaded =
+        match t.store.seed_names with
+        | Some h -> Some (Hashtbl.length h)
+        | None -> None in
+      Store.end_seed_names t.store;
       t.suppress_refresh_on_define <- false;
       t.seed_additive <- false;
-      ()
+      let elapsed_ms =
+        int_of_float ((Unix.gettimeofday () -. started) *. 1000.0) in
+      Printf.eprintf "[session] boot seed: %d packages, %d ms%s\n%!"
+        (List.length (discover_seed_packages ())) elapsed_ms
+        (match preloaded with
+         | Some n -> Printf.sprintf " (%d names preloaded)" n
+         | None -> "")
     in
     Fun.protect ~finally (fun () ->
         let pkgs = discover_seed_packages () in

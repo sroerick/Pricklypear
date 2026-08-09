@@ -53,10 +53,16 @@ type t = {
   mutable conn : conn option;
   mutable branch_id : string;
   mutable current_tx : conn option;
+  (* image.boot-seed-batch: when seed_additive boot seed is running, this
+     holds the set of function/route names already present on the seed
+     branch (system/main), so persist_function_if_absent /
+     register_route_if_absent skip the per-name get_by_path SELECT. None
+     outside the boot seed pass. See borge/image.borg boot-seed-batch. *)
+  mutable seed_names : (string, unit) Hashtbl.t option;
 }
 
 let make ~cfg ~branch_id () : t =
-  { cfg; conn = None; branch_id; current_tx = None }
+  { cfg; conn = None; branch_id; current_tx = None; seed_names = None }
 
 let conn_of (t : t) : conn option = t.conn
 

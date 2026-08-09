@@ -34,6 +34,84 @@
          does NOT survive reboot unless the user persisted
          via (store) or similar.
    |))
+
+    (subsection boot-seed-batch
+     (doc "Boot seed batch-loads existing names once; additive persist skips per-name SELECT")
+     (status planned)
+     (verify
+      (build "dune build image")
+      (smoke "warm boot: image.log shows one [session] boot seed: N packages, M defs in <ms>ms line and ZERO get_by_path-per-define round trips; first POST /api/eval after boot < 2s")
+      (smoke "cold boot (fresh DB): every seeded name is present in (list-bindings); package provenance stamped"))
+     (details
+      (doc (|
+           Boot seed is ADDITIVE (branching.seed-policy option A):
+           existing system/main rows are never clobbered. The
+           expensive part of seed_stdlib is NOT rehydrate (it
+           suppresses refresh and rehydrates once via
+           checkout_personal at boot end) — it is that
+           persist_function_if_absent / register_route_if_absent
+           each performed a Tree_store.get_by_path SELECT per
+           name. With ~1800 defines + ~34 routes that was
+           ~1800 PG round trips on EVERY boot, warm or cold.
+
+           BATCHED SEED: seed_stdlib preloads the set of existing
+           function names AND route paths on system/main ONCE
+           (two queries) into a per-store seed-membership cache.
+           persist_function_if_absent and register_route_if_absent
+           consult that cache instead of issuing get_by_path per
+           call:
+             - name in cache  -> skip entirely (no SELECT, no
+               UPDATE, no upsert). Additive seed never touches
+               existing rows.
+             - name absent    -> upsert into the store AND insert
+               into the cache, so later duplicate defines in the
+               same seed pass are skipped too.
+           The cache is populated only for the seed_additive boot
+           pass on system/main; interactive load_library and
+           reseed-package keep their existing per-call semantics.
+
+           INVARIANT: additive seed never overwrites an existing
+           body. Skipping the existing-name path therefore
+           preserves seed-policy exactly.
+
+           INVARIANT: boot logs one summary line
+             [session] boot seed: <n> packages, <m> defs in <ms>ms
+           so first-eval latency regressions are visible in
+           /tmp/pp-dev/image.log.
+      |)))
+    )
+
+    (subsection boot-request-cost
+     (doc "/api/* never triggers the UI shell; identity attach never rehydrates an unchanged branch")
+     (status planned)
+     (verify
+      (build "dune build image")
+      (smoke "POST /api/eval with a cold ui-shell cache does NOT evaluate ui/nav or ui/css; GET / does")
+      (smoke "two identical Basic-auth POST /api/eval calls in a row trigger zero rehydrate"))
+     (details
+      (doc (|
+           Two per-request costs are removed or confirmed cheap
+           for the agent path.
+
+           refresh_ui_shell INVARIANT: the UI shell (ui/nav,
+           ui/css) exists for HTML chrome. The request gate calls
+           refresh_ui_shell ONLY for paths that render chrome.
+           /api/* handlers NEVER trigger a ui/nav or ui/css eval,
+           even when the shell cache is cold. (The 60s TTL cache
+           already amortizes HTML-page requests; this removes the
+           cold-first-eval cost from the agent path entirely.)
+
+           attach_identity INVARIANT (already holds, documented):
+           if the resolved identity's username equals the
+           session's current manifest username, attach is a
+           manifest-field update only — it MUST NOT call
+           ensure_personal_branch / checkout_personal /
+           rehydrate. Rehydrate happens only when the branch
+           actually changes (prev <> username or explicit
+           checkout). Repeated Basic-auth requests from the same
+           user therefore never rehydrate.
+      |)))
+    )
    )
   )
   (subsection ssh-interface

@@ -160,8 +160,16 @@ let request_handler ~(sw : Eio.Switch.t) (session : Session.t)
                   ~username:(if is_authed then Some uname else None)
                   ~headers ~sockaddr;
                 (* Refresh ui/nav cache every request so Lisp chrome is shared
-                   by home, system pages, and user routes — not only /. *)
-                let () = Session.refresh_ui_shell session in
+                   by home, system pages, and user routes — not only /.
+                   image.boot-request-cost: /api/* never renders chrome, so
+                   skip the ui/nav + ui/css eval there entirely (agents
+                   hitting POST /api/eval never need the shell). *)
+                let () =
+                  if String.length path >= 4
+                     && String.sub path 0 4 = "/api"
+                  then ()
+                  else Session.refresh_ui_shell session
+                in
                 (* GATE COMPLETE — request_mutex released above. page_fn runs
                    lock-free (invariant 4b). *)
                 page_fn ()
