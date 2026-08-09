@@ -26,7 +26,7 @@ open Pricklypear_lisp.Ast
    predicate (primary control). tree_data_rows remains available when
    PP_TREE_READS=1; the view also confines when pp.user is set. Writes
    always hit data_rows (forward mirror keeps the tree in lockstep). *)
-let data_rel () = if Store.tree_reads () then "tree_data_rows" else "data_rows"
+let data_rel () = "tree_data_rows"
 
 (** Session username for confinement. Prefer Request_context snapshot
     (cotenant-safe); fall back to anonymous when unbound (scripts). *)
@@ -41,10 +41,6 @@ let visible_sql ~(user_param : int) : string =
   Printf.sprintf
     "(author = $%d OR type_name IN ('bible-verse','bible-book','bible-interlinear','strongs-entry','guestbook_entry'))"
     user_param
-
-(** SQL fragment: row is writable by $N (own rows only — not seed). *)
-let owned_sql ~(user_param : int) : string =
-  Printf.sprintf "(author = $%d)" user_param
 
 (** If [type_name] is declared on the store's branch, validate [fields_json]
     against its field list. Undeclared types are free-form (no schema).
@@ -189,28 +185,9 @@ let create
   match Io_lwt.Db.current_conn store with
   | None -> (VStr "create failed: no DB")
   | Some conn ->
-  if Tree_store.tree_writes () then begin
-    (* one-tree P4: write the tree; reverse trigger mirrors to data_rows *)
+    (* tree is truth; reverse trigger mirrors to data_rows *)
     let id = Tree_store.insert_datum conn ~type_name ~fields_json ~author in
     (match id with Some s -> VStr s | None -> VStr "create failed")
-  end else begin
-      let sql =
-        "INSERT INTO data_rows (type_name, fields, author) " ^
-        "VALUES ($1, $2::jsonb, $3) RETURNING id::text" in
-      let rows =
-        Io_lwt.Db.execute conn
-          ~params:[ Pgx.Value.of_string type_name;
-                    Pgx.Value.of_string fields_json;
-                    Pgx.Value.of_string author ]
-          sql
-      in
-      (match rows with
-       | [] -> (VStr "create failed")
-       | row :: _ ->
-           (match row with
-            | [ id_cell ] -> (value_of_id id_cell)
-            | _ -> (VStr "create failed")))
-  end
 
 (** (update 'type id "{fields-json}") -> VStr id | VNil.
     UPDATE fields for ONE row by (type_name, id). Returns the id
@@ -226,31 +203,8 @@ let update
   match Io_lwt.Db.current_conn store with
   | None -> VNil
   | Some conn ->
-  if Tree_store.tree_writes () then begin
     let id' = Tree_store.update_datum conn ~type_name ~id ~fields_json in
     (match id' with Some s -> VStr s | None -> VNil)
-  end else begin
-      let user = session_user () in
-      let sql =
-        "UPDATE data_rows SET fields = $3::jsonb, updated_at = now() " ^
-        "WHERE type_name = $1 AND id = $2::uuid AND " ^
-        owned_sql ~user_param:4 ^ " " ^
-        "RETURNING id::text" in
-      let rows =
-        Io_lwt.Db.execute conn
-          ~params:[ Pgx.Value.of_string type_name;
-                    Pgx.Value.of_string id;
-                    Pgx.Value.of_string fields_json;
-                    Pgx.Value.of_string user ]
-          sql
-      in
-      (match rows with
-       | [] -> VNil
-       | row :: _ ->
-           (match row with
-            | [ id_cell ] -> (value_of_id id_cell)
-            | _ -> VNil))
-  end
 
 (** (update-field 'type id "field" "value") -> VStr id | VNil.
     Ergonomic shorthand for the v1 dict-set + update round-trip:
@@ -303,30 +257,8 @@ let delete (store : Store.t) ~(type_name : string) ~(id : string) : value =
   match Io_lwt.Db.current_conn store with
   | None -> VNil
   | Some conn ->
-  if Tree_store.tree_writes () then begin
     let id' = Tree_store.delete_datum conn ~type_name ~id in
     (match id' with Some s -> VStr s | None -> VNil)
-  end else begin
-      let user = session_user () in
-      let sql =
-        "DELETE FROM data_rows " ^
-        "WHERE type_name = $1 AND id = $2::uuid AND " ^
-        owned_sql ~user_param:3 ^ " " ^
-        "RETURNING id::text" in
-      let rows =
-        Io_lwt.Db.execute conn
-          ~params:[ Pgx.Value.of_string type_name;
-                    Pgx.Value.of_string id;
-                    Pgx.Value.of_string user ]
-          sql
-      in
-      (match rows with
-       | [] -> VNil
-       | row :: _ ->
-           (match row with
-            | [ id_cell ] -> (value_of_id id_cell)
-            | _ -> VNil))
-  end
 
 (** (list 'type [limit]) -> VList of (VStr id, VStr fields) pairs.
     With no limit, defaults to 100 (avoid OOM on a huge table).
