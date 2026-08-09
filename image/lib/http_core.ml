@@ -165,6 +165,14 @@ let html_response (reqd : Httpun.Reqd.t) ?(status = `OK)
          borge/structural-editing.borg RESPONSIVENESS WITHOUT PREDICTION.
          Inert on pages that don't use the attribute. *)
       HTML.script [HTML.src "/assets/hx-optimistic.js"] "";
+      (* idiomorph: standalone morph library (diff-based DOM
+         reconciliation) so optimistic local renders converge to server
+         truth without clobbering focus/selection. Called directly as
+         Idiomorph.morph(target, source) from the outline client script —
+         NOT registered as an htmx extension (htmx 4 renamed
+         defineExtension -> registerExtension; idiomorph-ext still uses
+         the old API). Spec: borge/structural-editing.borg client-eval. *)
+      HTML.script [HTML.src "/assets/idiomorph.min.js"] "";
       (* Nav menus are pure HTML/CSS: exclusive open comes from the
          native <details name=...> accordion attribute (menu/render),
          so no menu JS here. Remaining script: outline summaries only

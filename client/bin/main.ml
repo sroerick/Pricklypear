@@ -139,6 +139,12 @@ let boot () =
   Hashtbl.iter
     (fun name _ -> Env.define e name (Ast.VPrim name))
     t;
+  (* Route prim dispatch through the direct table, bypassing the
+     Effect.Deep handler. Under js_of_ocaml's CPS backend the
+     one-shot deep-match continuations resume twice on nested prim
+     calls (Continuation_already_resumed); direct_prims avoids
+     performing Prim_call effects entirely. Spec: structural-editing.client-eval. *)
+  Pricklypear_lisp.Control.direct_prims := Some t;
   prims := Some t;
   env := Some e
 
@@ -180,6 +186,41 @@ let eval (src : Js_of_ocaml.Js.js_string Js_of_ocaml.Js.t) : Js_of_ocaml.Js.js_s
       Js_of_ocaml.Js.string (Printf.sprintf "ERROR: %s (%d:%d)" m l c)
   | e -> Js_of_ocaml.Js.string ("ERROR: " ^ Printexc.to_string e)
 
+(* set_tree(json): parse the outline tree JSON into a Nopales value and
+   bind it as `pp-tree` in the env. json-parse of a JSON array yields a
+   VList, matching the server's tree shape. Spec: structural-editing.
+   client-eval OPTIMISTIC EXECUTION MODEL step 1. *)
+let set_tree (json : Js_of_ocaml.Js.js_string Js_of_ocaml.Js.t) : unit =
+  let s = Js_of_ocaml.Js.to_string json in
+  let t = get_prims () in
+  let e = get_env () in
+  let v = Eval.eval_string ~prims:t e ("(json-parse " ^ Printf.sprintf "%S" s ^ ")") in
+  Env.define e "pp-tree" v
+
+(* apply_op(op, nid, slug): run the optimistic preview in the browser —
+   dispatch the pure op over pp-tree (same outline/structed fns the
+   server runs) and render via outline/html-lite. Returns the preview
+   HTML, or "" if the op is not previewable (set-*, eval, no-op). *)
+let apply_op
+    (op : Js_of_ocaml.Js.js_string Js_of_ocaml.Js.t)
+    (nid : Js_of_ocaml.Js.js_string Js_of_ocaml.Js.t)
+    (slug : Js_of_ocaml.Js.js_string Js_of_ocaml.Js.t)
+  : Js_of_ocaml.Js.js_string Js_of_ocaml.Js.t =
+  let op_s = Js_of_ocaml.Js.to_string op in
+  let nid_s = Js_of_ocaml.Js.to_string nid in
+  let slug_s = Js_of_ocaml.Js.to_string slug in
+  let t = get_prims () in
+  let e = get_env () in
+  let expr =
+    Printf.sprintf "(pp/preview %S pp-tree %S %S)" slug_s op_s nid_s
+  in
+  try
+    let v = Eval.eval_string ~prims:t e expr in
+    (match v with
+     | Ast.VStr s -> Js_of_ocaml.Js.string s
+     | _ -> Js_of_ocaml.Js.string "")
+  with _ -> Js_of_ocaml.Js.string ""
+
 let () =
   let open Js_of_ocaml.Js in
   let obj =
@@ -187,6 +228,8 @@ let () =
       [| "boot", Unsafe.inject (wrap_callback boot)
        ; "load_source", Unsafe.inject (wrap_callback load_source)
        ; "eval", Unsafe.inject (wrap_callback eval)
+       ; "set_tree", Unsafe.inject (wrap_callback set_tree)
+       ; "apply_op", Unsafe.inject (wrap_callback apply_op)
       |]
   in
   export "pp" obj

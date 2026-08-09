@@ -318,7 +318,7 @@
 
 (define notes/ui/outline-script
   (lambda
-    (slug show-archived)
+    (slug show-archived tree)
     (html/tag
       "script"
       ""
@@ -327,7 +327,19 @@
         (as-str slug)
         "';var showArch="
         (if show-archived "true" "false")
-        ";function selId(){var el=document.getElementById('ol-selected-id');return el?el.value:'root';}"
+        ";var ppTree="
+        (json-emit tree)
+        ";window.__ppTree=ppTree;"
+        "var __ppReady=false,__ppBooting=false,__opSeq=0;"
+        "var st=document.createElement('style');st.textContent='.pp-in-transit{opacity:.5;filter:grayscale(1);}';document.head.appendChild(st);"
+        "function ppBoot(){if(__ppReady||__ppBooting)return;__ppBooting=true;"
+        "var s=document.createElement('script');s.src='/assets/interp.js';"
+        "s.onload=function(){var pp=window.pp;pp.boot();"
+        "var pkgs=['html','structed','structed/list','outline','bible'];var done=0;"
+        "pkgs.forEach(function(p){fetch('/code/raw/libs/'+p+'/lib.pp',{credentials:'same-origin'}).then(function(r){return r.text();}).then(function(src){pp.load_source(src);done++;if(done===pkgs.length){fetch('/code/raw/client/ops.pp',{credentials:'same-origin'}).then(function(r){return r.text();}).then(function(os){pp.load_source(os);pp.set_tree(JSON.stringify(ppTree));__ppReady=true;__ppBooting=false;});}});});};"
+        "document.head.appendChild(s);}"
+        "ppBoot();"
+        "function selId(){var el=document.getElementById('ol-selected-id');return el?el.value:'root';}"
         "function findNode(id){var all=document.querySelectorAll('.ol-node');for(var i=0;i<all.length;i++){if(all[i].getAttribute('data-id')===id)return all[i];}return null;}"
         "function ownTitle(node){if(!node||!node.children)return null;for(var i=0;i<node.children.length;i++){var ch=node.children[i];if(ch.classList&&ch.classList.contains('ol-sum')){return ch.querySelector('.ol-title');}}return null;}"
         "var __selPin=null,__selPinT=null;"
@@ -349,20 +361,28 @@
         "function postOp(op){var id=selId();"
         "if(op==='delete'){if(id==='root'){alert('Cannot delete the root node.');return;}if(!confirm('Delete this node?'))return;}"
         "if(op==='archive'&&id==='root'){alert('Cannot archive the root node.');return;}"
-        "var q='slug='+encodeURIComponent(slug)+'&op='+encodeURIComponent(op)+'&node-id='+encodeURIComponent(id);"
+        "if(!__ppReady)ppBoot();"
+        "var seq=++__opSeq;var keep=id;__selPin=keep;"
+        "var snap=document.getElementById('outline')?document.getElementById('outline').outerHTML:null;"
+        "if(__ppReady){try{var prev=window.pp.apply_op(op,id,slug);"
+        "if(prev&&prev.length){var t=document.getElementById('outline');if(t){var tmp=document.createElement('div');tmp.innerHTML=prev;var neo=tmp.firstChild;if(neo){neo.classList.add('pp-in-transit');t.replaceWith(neo);}}}"
+        "}catch(e){console.warn('pp optimistic failed',e);}}"
+        "var q='slug='+encodeURIComponent(slug)+'&op='+encodeURIComponent(op)+'&node-id='+encodeURIComponent(id)+'&op-seq='+seq;"
         "if(showArch)q+='&show=archived';"
-        "var keep=id;__selPin=keep;"
         "fetch('/partials/notes-node-op?'+q,{method:'POST',credentials:'same-origin'}).then(function(r){return r.text();}).then(function(html){"
-        "var doc=new DOMParser().parseFromString(html,'text/html');"
+        "if(seq<__opSeq)return;" "var doc=new DOMParser().parseFromString(html,'text/html');"
         "var oobSel=doc.querySelector('#ol-selected-id[hx-swap-oob]');"
         "var olHTML=doc.querySelector('#outline');"
-        "if(olHTML){var t=document.getElementById('outline');if(t)t.outerHTML=olHTML.outerHTML;}"
+        "var cur=document.getElementById('outline');"
+        "if(olHTML&&cur){if(window.Idiomorph){Idiomorph.morph(cur,olHTML);}else{cur.outerHTML=olHTML.outerHTML;}}"
         "var selIdVal=oobSel?oobSel.getAttribute('value'):null;"
         "if(selIdVal){var hid=document.getElementById('ol-selected-id');if(hid)hid.value=selIdVal;}"
         "var target=selIdVal||keep;"
         "if(findNode(target))setSel(target);else if(findNode(keep))setSel(keep);else{__selPin=null;setSel('root');}"
         "if(window.htmx){try{htmx.process(document.getElementById('outline'));}catch(e){}}"
-        "}).catch(function(e){console.error('notes postOp',e);});}"
+        "}).catch(function(e){"
+        "if(snap){var tmp=document.createElement('div');tmp.innerHTML=snap;var c=document.getElementById('outline');if(c)c.replaceWith(tmp.firstChild);}"
+        "console.error('notes postOp',e);});}"
         "function pickNode(e){"
         "if(e.target.closest&&e.target.closest('[data-ol-op]'))return null;"
         "if(e.target.closest&&e.target.closest('.ol-actions'))return null;"
@@ -399,7 +419,6 @@
         "if(op){e.preventDefault();postOp(op);}"
         "},true);"
         "setSel('root');document.body.addEventListener('htmx:afterSwap',function(){setSel(selId());});})();"))))
-
 (define notes/ui/recent-list
   (lambda
     ()
@@ -491,7 +510,7 @@
                 (html/attr "class" "muted")
                 "Raw JSON (debug)")
               (notes/ui/edit-form slug outline))))
-        (notes/ui/outline-script slug show-archived)))))
+        (notes/ui/outline-script slug show-archived outline)))))
 
 (define notes/ui/tb-btn
   (lambda
