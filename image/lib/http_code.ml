@@ -35,6 +35,14 @@ let static_root () : string =
       else if Sys.file_exists "image/static" then "image/static"
       else "image/static"
 
+(* Directory holding built browser assets (interp.js from client/ via
+   js_of_ocaml). Falls back to the dune build tree under the source root.
+   Spec: borge/structural-editing.borg client-eval. *)
+let client_dir () : string =
+  match Sys.getenv_opt "PP_CLIENT_DIR" with
+  | Some d when String.trim d <> "" -> d
+  | _ -> Filename.concat (source_root ()) "_build/default/client/bin"
+
 let skip_dirs : string list =
   [ "_build"
   ; ".git"
@@ -293,16 +301,22 @@ let serve_file_path (reqd : Httpun.Reqd.t) ~(path : string) : unit =
 
 let handle_asset (reqd : Httpun.Reqd.t) ~(rel : string) : unit =
   let rel = pct_decode rel in
-  match resolve_under ~root:(static_root ()) rel with
+  (* Search the committed static dir first, then the built client-asset dir
+     (interp.js from client/ via js_of_ocaml). Spec: structural-editing.client-eval. *)
+  let try_root root =
+    match resolve_under ~root rel with
+    | Some path when Sys.file_exists path && not (Sys.is_directory path) ->
+        Some path
+    | _ -> None
+  in
+  match try_root (static_root ()) with
+  | Some path -> serve_file_path reqd ~path
   | None ->
-      serve_bytes reqd ~status:`Forbidden ~content_type:"text/plain; charset=utf-8"
-        "forbidden"
-  | Some path ->
-      if Sys.file_exists path && not (Sys.is_directory path) then
-        serve_file_path reqd ~path
-      else
-        serve_bytes reqd ~status:`Not_found ~content_type:"text/plain; charset=utf-8"
-          "not found"
+      (match try_root (client_dir ()) with
+       | Some path -> serve_file_path reqd ~path
+       | None ->
+           serve_bytes reqd ~status:`Not_found ~content_type:"text/plain; charset=utf-8"
+             "not found")
 
 let handle_public_artifact (reqd : Httpun.Reqd.t) ~(name : string) : unit =
   let root = public_dir () in
