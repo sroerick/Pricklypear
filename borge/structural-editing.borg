@@ -32,9 +32,14 @@
           RULE 2 — The server is authoritative for structure.
             The browser sends (op, target, args); the image applies
             a PURE function to the tree and returns a re-render
-            plus the new selection. The client never mutates
-            structure in the DOM — no optimistic/predictive
-            structural updates.
+            plus the new selection. The client MAY apply that same
+            pure op locally for immediate feedback via the browser
+            evaluator (client-eval) — the result is COMPUTED by the
+            same source the server runs, not predicted from a
+            divergent client codebase — and reconciles to server
+            truth by morph on response. What is forbidden is
+            structural prediction from a SECOND, hand-maintained
+            client implementation of the op algebra (the lie).
 
           RULE 3 — Selection is part of the op algebra.
             Every op returns (tree', selection'): where the cursor
@@ -55,6 +60,7 @@
         op-protocol          — the POST contract + selection OOB
         keymap               — chords now, modal target
         ast-structure-view   — /edit Text|Structure toggle
+        client-eval          — browser evaluator: same code, optimistic execution
         non-goals            — what this chapter refuses to build
    |)))
   (subsection structed-algebra
@@ -152,16 +158,21 @@
          construction. Upgrading identity (paths -> ids) must not
          change the protocol or the client.
 
-         RESPONSIVENESS WITHOUT PREDICTION. No client-predicted DOM
-         state. The sanctioned exception is the htmx-org hx-optimistic
-         extension: on request it inserts a template-based placeholder
-         into the target; on response (or error) the placeholder is
-         removed and the server's content is swapped in WHOLESALE —
-         never merged with the prediction, never patching client state.
-         This is display-layer only and must not predict structural
-         outcome. The client shell may ignore structure keys while
-         one op POST is in flight (single-flight), and restores
-         selection + focus from the OOB payload on completion.
+         RESPONSIVENESS VIA SAME-CODE EXECUTION. The client runs the
+         same pure op locally through the browser evaluator
+         (client-eval) for immediate feedback, then the server
+         confirms authoritatively and the response is MORPHED in —
+         never merged field-by-field with the prediction, never
+         patching client state. Because the local result is computed
+         by identical source, the divergence window is server-only
+         effects (validation, concurrency), not code drift; an op-seq
+         guards staleness so an out-of-order response cannot clobber
+         a newer local state. The htmx-org hx-optimistic extension
+         (template placeholder, swapped wholesale on response) remains
+         available for non-structural previews but is not the
+         structural mechanism. The client shell may ignore structure
+         keys while one op POST is in flight (single-flight), and
+         restores selection + focus from the OOB payload on completion.
 
          FLUSH RULE. Any structure POST first flushes the focused
          leaf's pending edit (set-title / set-body / set-atom) —
@@ -327,6 +338,96 @@
     (smoke "set-atom with unparseable text keeps old value and re-renders")
     (smoke "set-atom on a string leaf accepts raw text containing spaces and parens")
     (smoke "slurp via POST re-renders; saved body reflects the change on reload")))
+  (subsection client-eval
+   (doc "Browser build of the Nopales evaluator runs the same pure op algebra the server runs, so an optimistic edit is a real local computation — not a predicted guess — reconciled to server truth by morph")
+   (status planned)
+   (implements lisp/lib image/lib/prims_pure.ml libs/structed/lib.pp libs/outline/lib.pp libs/html/lib.pp)
+   (details
+    (doc (|
+         SAME EVALUATOR, SECOND TARGET. The pure interpreter core
+         (lisp/lib: reader + ast + eval + env, no I/O) is compiled
+         to JavaScript via js_of_ocaml. OCaml 5 effects require the
+         CPS backend: every JS build passes --effects=cps, or it
+         fatally aborts. The same .pp package source the server
+         serves is evaluated verbatim in the browser — structed,
+         outline, html ride along as data, never reimplemented.
+
+         SAME SOURCE AT RUNTIME, not at build. The browser fetches
+         the current branch's package source on page load (the
+         image is the API) and evaluates it, so a user who
+         redefines structed/barf-forward on their personal branch
+         has their browser run their version. Build-embedded
+         source is a boot fallback only — it would drift the
+         moment a promote lands without a redeploy, breaking the
+         branching chapter's live-source invariant.
+
+         PURE PRIM TABLE ONLY. The browser prim table registers
+         the pure prims and EXCLUDES every DB / IO / net prim.
+         The pure/DB split already exists in code (prims_pure.ml
+         vs prims_db.ml); this subsection makes it structural —
+         prims_pure is factored into a library both image/ and
+         client/ depend on, so the two runtimes cannot drift on
+         what "pure" means. Each registered prim name is bound as
+         VPrim in the browser env, mirroring session.ml's
+         auto-bind loop, so (list ...), structed/*, outline/*
+         resolve. The capability boundary IS the prim table: a
+         structed op cannot touch Postgres because those prims are
+         simply unbound.
+
+         OPTIMISTIC EXECUTION MODEL. On a structure op:
+           1. client applies the same pure op fn to its local tree
+           2. renders via the same render lib (libs/html / outline)
+           3. morphs the result into the DOM with a pp-in-transit
+              class on the affected subtree (grey = unconfirmed,
+              the chat-app sending/sent indicator — never a claim
+              of truth)
+           4. fires the real POST carrying an op-seq
+           5. server: stale seq -> 409, client morphs server truth
+              back; else persist + return server-rendered fragment
+           6. client morphs the fragment in; class clears. If the
+              two renders agree (same code, deterministic) the
+              morph is a no-op except grey -> normal.
+           error -> toast + morph to server truth.
+
+         OP-SEQ. A monotonic sequence per editing session travels
+         with each op; the server rejects out-of-order ops so a
+         late response cannot clobber a newer local state.
+         Single-user edits serialize naturally. Multi-user
+         concurrency is unchanged from op-protocol: the document
+         is the conflict domain, last-write-wins on whole-doc
+         save.
+
+         WHY THIS IS NOT THE LIE. The objection to optimistic
+         updates (optimistic updates are a rendering trick
+         pretending to be application truth) lands when the
+         optimistic result is a GUESS from a second codebase.
+         Here the local result is produced by the SAME evaluator
+         running the SAME source; the only divergence sources
+         left are server-only effects (validation, uniqueness,
+         concurrent writers) — exactly what the op-seq + morph +
+         toast path exists to surface. There is no second
+         implementation to drift.
+
+         CONFORMANCE IS THE GATE. The lisp conformance suite
+         (lisp/test/conformance_test.ml) runs against the JS
+         target, so client/server agreement is a tested invariant,
+         not a hope. The client-eval subsection is not accepted
+         until that gate is green.
+
+         NOT A REPLACEMENT FOR THE PROTOCOL. The op-protocol POST
+         contract, OOB selection, flush rule, and single-flight
+         shell are unchanged. client-eval only changes what the
+         client does BETWEEN keypress and response: compute
+         locally with the same code, instead of showing a static
+         placeholder.
+    |)))
+   (verify
+    (build "dune build client/ yields interp.js; js_of_ocaml invoked with --effects=cps")
+    (test "browser evaluator passes lisp/test/conformance_test.ml against the JS target")
+    (smoke "page load fetches current-branch structed/outline/html source and evaluates it without error")
+    (smoke "op click: local apply renders grey; server confirm morphs and clears grey; matching renders make the morph a no-op")
+    (smoke "stale op-seq: server 409, client morphs server truth back")
+    (smoke "op error: toast shown and DOM morphed to server truth")))
   (subsection non-goals
    (doc "What this chapter deliberately does not build")
    (status implemented)
@@ -340,10 +441,14 @@
            rendering is build stage 1 (degenerate pretty-printer),
            not the accepted end state — the end state is inline
            flow with width/convention breaks (ast-structure-view).
-         - NO client-predicted structural DOM mutation (op-protocol).
-           Display-placeholder optimism via the sanctioned hx-optimistic
-           extension is the only optimistic mechanism allowed, and only
-           for non-structural previews the response replaces wholesale.
+         - NO structural prediction from a DIVERGENT client codebase
+           (op-protocol). Same-evaluator local execution (client-eval)
+           is sanctioned because the result is computed by identical
+           source, not guessed; what remains forbidden is a second,
+           hand-maintained client implementation of the op algebra.
+           Display-placeholder optimism via the hx-optimistic extension
+           stays allowed for non-structural previews the response
+           replaces wholesale.
          - NO storage codec migration: outlines stay JSON strings
            in data_rows; code ASTs stay JSONB in function_defs. A
            canonical sexp writer prim (write-string) for
