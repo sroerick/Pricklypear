@@ -230,6 +230,34 @@
 (define notes/outline/new-node
   (lambda () (outline/node (gensym "n") "New node")))
 
+;; op-seq helpers: the stored seq is the last op the server accepted.
+;; A request with op-seq <= stored seq is stale (an older optimistic
+;; apply arriving after a newer one already landed) and is rejected 409.
+;; Spec: structural-editing.client-eval OP-SEQ. Stored in a small
+;; note-op-seq data_rows table keyed by slug (no notes schema migration).
+(define notes/outline/op-seq-get
+  (lambda
+    (slug)
+    (let
+      ((rs (find-rows (quote note-op-seq) "slug" (as-str slug) 1)))
+      (if (null? rs) 0 (parse-int (as-str (dict-get (cdr (car rs)) "seq")))))))
+
+(define notes/outline/op-seq-bump
+  (lambda
+    (slug seq)
+    (let
+      ((rs (find-rows (quote note-op-seq) "slug" (as-str slug) 1)))
+      (if
+        (null? rs)
+        (create
+          (quote note-op-seq)
+          (dict-set (dict-set "{}" "slug" (as-str slug)) "seq" (as-str seq)))
+        (let ((row (car rs)))
+          (update
+            (quote note-op-seq)
+            (car row)
+            (dict-set (cdr row) "seq" (as-str seq))))))))
+
 (define notes/outline/node-op
   (lambda
     ()
@@ -251,32 +279,59 @@
               (kind (notes/doc/kind prev))
               (day (notes/doc/day prev)))
             (let
-              ((res
-                (if
-                  (string-eq op "eval")
-                  (notes/outline/node-op-eval tree nid slug)
-                  (notes/outline/apply-op-sel slug tree op nid))))
-              (let
-                ((new-tree (car res)) (sel (as-str (car (cdr res)))))
-                (seq
-                  (notes/doc/upsert
-                    slug
-                    title
-                    new-tree
-                    tags
-                    kind
-                    day)
-                  (render-html
-                    (string-append
-                      (outline/html slug new-tree show-archived)
-                      (html/void
-                        "input"
-                        (html/attrs
-                          (list
-                            (html/attr "type" "hidden")
-                            (html/attr "id" "ol-selected-id")
-                            (html/attr "hx-swap-oob" "true")
-                            (html/attr "value" sel)))))))))))))))
+              ((op-seq-raw (request-param "op-seq")))
+              (if
+                (and (not (null? op-seq-raw)) (not (string-eq (as-str op-seq-raw) "")))
+                (let
+                  ((req-seq (parse-int (as-str op-seq-raw)))
+                    (stored-seq (notes/outline/op-seq-get slug)))
+                  (if
+                    (<= req-seq stored-seq)
+                    (status-response 409 "stale op-seq")
+                    (seq
+                      (notes/outline/op-seq-bump slug req-seq)
+                      (let
+                        ((res
+                          (if
+                            (string-eq op "eval")
+                            (notes/outline/node-op-eval tree nid slug)
+                            (notes/outline/apply-op-sel slug tree op nid))))
+                        (let
+                          ((new-tree (car res)) (sel (as-str (car (cdr res)))))
+                          (seq
+                            (notes/doc/upsert slug title new-tree tags kind day)
+                            (render-html
+                              (string-append
+                                (outline/html slug new-tree show-archived)
+                                (html/void
+                                  "input"
+                                  (html/attrs
+                                    (list
+                                      (html/attr "type" "hidden")
+                                      (html/attr "id" "ol-selected-id")
+                                      (html/attr "hx-swap-oob" "true")
+                                      (html/attr "value" sel))))))))))))
+                (let
+                  ((res
+                    (if
+                      (string-eq op "eval")
+                      (notes/outline/node-op-eval tree nid slug)
+                      (notes/outline/apply-op-sel slug tree op nid))))
+                  (let
+                    ((new-tree (car res)) (sel (as-str (car (cdr res)))))
+                    (seq
+                      (notes/doc/upsert slug title new-tree tags kind day)
+                      (render-html
+                        (string-append
+                          (outline/html slug new-tree show-archived)
+                          (html/void
+                            "input"
+                            (html/attrs
+                              (list
+                                (html/attr "type" "hidden")
+                                (html/attr "id" "ol-selected-id")
+                                (html/attr "hx-swap-oob" "true")
+                                (html/attr "value" sel)))))))))))))))))
 
 (define notes/outline/node-op-eval
   (lambda

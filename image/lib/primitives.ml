@@ -79,6 +79,8 @@ let is_multipart = Prims_pure.is_multipart
 let is_part = Prims_pure.is_part
 let is_redirect = Prims_pure.is_redirect
 let redirect_value = Prims_pure.redirect_value
+let is_status = Prims_pure.is_status
+let status_response = Prims_pure.status_response
 let prim_dict_set = Prims_pure.prim_dict_set
 
 (* Register the minimal set. Returns the populated table. *)
@@ -181,6 +183,7 @@ let make_with_defaults () : t =
   register_sync t "fsrs-schedule" prim_fsrs_schedule;
   register_sync t "dict-keys" prim_dict_keys;
   register_sync t "render-html" prim_render_html;
+  register_sync t "status-response" prim_status_response;
   register_sync t "part" Prims_pure.prim_part;
   register_sync t "json-part" Prims_pure.prim_json_part;
   register_sync t "multipart" Prims_pure.prim_multipart;
@@ -377,6 +380,7 @@ let prim_summary (name : string) : string =
   | "explain" -> "inside-out structural breakdown of a function"
   | "function-ast" -> "raw stored function body as quoted data (no eval)"
   | "forge-effects" -> "capability badge (pure/db-read/db-write/…) for a parsed source expr or named binding"
+  | "llm-chat" -> "raw one-shot LLM completion (system, user) -> content string; not the agentic loop"
   | "package-exports" -> "shallow public names for a package (std freeze or pkg/local)"
   | "package-bindings" -> "all binding names with package prefix (any depth)"
   | "list-packages" -> "top-level package prefixes from function_defs"

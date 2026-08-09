@@ -1416,6 +1416,40 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
                  (Printf.sprintf "configured=true last4=%s%s%s"
                     m.last4 base model)));
 
+  (* (llm-chat system user [temperature] [max-tokens]) -> VStr content.
+     Raw one-shot chat completion — NOT the agentic install loop. Returns
+     the model's content string. Used by libs/forge drafters and any
+     caller that wants a plain completion. See llm_client.call. *)
+  Primitives.register tbl "llm-chat"
+    (fun args ->
+      let temperature, max_tokens, system, user =
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr system;
+            Pricklypear_lisp.Ast.VStr user ] ->
+            (0.2, 2048, system, user)
+        | [ Pricklypear_lisp.Ast.VStr system;
+            Pricklypear_lisp.Ast.VStr user;
+            Pricklypear_lisp.Ast.VFloat t ] ->
+            (t, 2048, system, user)
+        | [ Pricklypear_lisp.Ast.VStr system;
+            Pricklypear_lisp.Ast.VStr user;
+            Pricklypear_lisp.Ast.VInt n ] ->
+            (0.2, Int64.to_int n, system, user)
+        | [ Pricklypear_lisp.Ast.VStr system;
+            Pricklypear_lisp.Ast.VStr user;
+            Pricklypear_lisp.Ast.VFloat t;
+            Pricklypear_lisp.Ast.VInt n ] ->
+            (t, Int64.to_int n, system, user)
+        | _ ->
+            (0.2, 2048, "", "need system-str, user-str")
+      in
+      let r =
+        Llm_client.call ~temperature ~max_tokens ~system ~user ()
+      in
+      (match r with
+       | Ok s -> (Pricklypear_lisp.Ast.VStr s)
+       | Error e -> (Pricklypear_lisp.Ast.VStr ("llm-chat: " ^ e))));
+
   (* Coding tools: freeze AST rewrites into store *)
   Primitives.register tbl "llm-inner"
     (fun args ->

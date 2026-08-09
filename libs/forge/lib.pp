@@ -347,6 +347,11 @@
 
 ;; ---- special forms (excluded from free-var collection) ----
 
+(define forge/constant?
+  (lambda (name)
+    (forge/member? name (list "nil" "#t" "#f" "true" "false" "else")))
+  "True for literal constants that are not free variables.")
+
 (define forge/special-form?
   (lambda (name)
     (forge/member? name (list
@@ -401,10 +406,13 @@
     (cond
       ((null? expr) (list))
       ((not (pair? expr))
-       (let ((name (as-str expr)))
-         (if (forge/member? name bound)
-             (list)
-             (list name))))
+       (if (string-eq (type-of expr) "symbol")
+           (let ((name (as-str expr)))
+             (if (or (forge/member? name bound)
+                     (forge/constant? name))
+                 (list)
+                 (list name)))
+           (list)))
       ((string-eq (as-str (car expr)) "quote") (list))
       ((string-eq (as-str (car expr)) "lambda")
        (forge/free-vars (caddr expr)
@@ -460,11 +468,13 @@
 
 (define forge/unresolved
   (lambda (graph path body-src)
-    (let ((fvs (forge/free-vars (read-string body-src) (list))))
+    (let ((fvs (forge/free-vars (forge/first-form body-src) (list))))
       (forge/difference fvs
         (forge/append (list) (forge/image-bound-names fvs)))))
   "Free vars of body that resolve to nothing: not a prim, not a
-   binding, not a special form. These are the stub-children candidates.")
+   binding, not a special form. These are the stub-children candidates.
+   Uses first-form to extract the lambda robustly (the drafter may
+   append prose; read-string would error on trailing input).")
 
 (define forge/image-bound-names
   (lambda (names)
@@ -489,17 +499,23 @@
           (let ((f (cdr pair)))
             (let ((status (forge/field-str f "status"))
                   (path (forge/field-str f "path"))
+                  (kind (forge/field-str f "kind"))
                   (body (forge/field-str f "body")))
               (let ((ready
                       (if (string-eq status "planned")
-                          (if (string-eq body "")
-                              #t
-                              (forge/ready? graph path body))
+                          (if (string-eq kind "requirement")
+                              #f
+                              (if (string-eq body "")
+                                  #t
+                                  (forge/ready? graph path body)))
                           #f)))
                 (forge/frontier-scan graph (cdr nodes)
                   (if ready (cons path acc) acc))))))))
   "Scan nodes; a planned node with empty body is trivially ready
-   (no deps), otherwise check unresolved against the image.")
+   (no deps), otherwise check unresolved against the image.
+   Requirements are never drafted (human-authored) so they are
+   excluded from the frontier; the human approves them at the
+   level gate, then propose-descent stubs their children.")
 
 (define forge/ready?
   (lambda (graph path body)
@@ -779,46 +795,66 @@
 (define forge/draft-node
   (lambda (graph path)
     (let ((prompt (forge/draft-prompt graph path)))
-      (let ((sid (agent-session-new "You are a Pricklypear Lisp author. Respond ONLY with a single (lambda ...) s-expression. No markdown, no prose.")))
-        (let ((resp (agent-say sid prompt)))
-          (forge/commit-draft graph path (forge/trim-fences resp))))))
-  "Call the LLM drafter for a node; write the parsed body + run flags.")
+      (let ((resp (llm-chat "You are a Pricklypear Lisp author. Respond ONLY with a single (lambda ...) s-expression. No markdown, no prose, no commentary." prompt)))
+        (if (forge/llm-error? resp)
+            (seq
+              (forge/flag path "judgment"
+                (string-append "drafter failed: " resp))
+              (forge/commit-draft graph path ""))
+            (forge/commit-draft graph path (forge/first-form resp))))))
+  "Call the LLM drafter for a node; write the parsed body + run flags.
+   On LLM error, raise a judgment flag and leave the body empty (no
+   error string written as body).")
 
-(define forge/trim-fences
+(define forge/llm-error?
   (lambda (s)
-    (let ((t (string-trim s)))
-      (if (string-starts-with? t "```")
-          (forge/strip-code-fence t)
-          t)))
-  "Strip markdown code fences if the LLM wrapped its response.")
+    (string-starts-with? s "llm-chat:"))
+  "True when the LLM call returned an error string rather than content.")
 
-(define forge/strip-code-fence
+(define forge/first-form
   (lambda (s)
-    (let ((after (forge/skip-line s)))
-      (let ((before (forge/strip-trailing-fence after)))
-        (string-trim before))))
-  "Remove leading ```lisp line and trailing ``` fence.")
+    (forge/first-form-at s 0))
+  "Extract the first balanced s-expression from the LLM response,
+   ignoring trailing prose/reasoning. Scans for the first '(',
+   tracks paren depth respecting \" strings, returns the substring
+   up to the matching close. Robust to dots and other prose tokens.")
 
-(define forge/skip-line
-  (lambda (s)
-    (forge/skip-to-newline s 0))
-  "Return the substring after the first newline.")
-
-(define forge/skip-to-newline
+(define forge/first-form-at
   (lambda (s i)
-    (if (>= i (string-length s)) s
-    (if (string-eq (substring s i 1) "\n")
-        (substring s (+ i 1) (- (string-length s) (+ i 1)))
-        (forge/skip-to-newline s (+ i 1)))))
-  "Find first newline, return rest.")
+    (let ((n (string-length s)))
+      (if (>= i n)
+          ""
+          (if (string-eq (substring s i 1) "(")
+              (let ((end (forge/balanced-end s i 0 #f)))
+                (if (<= end i)
+                    ""
+                    (substring s i (- end i))))
+              (forge/first-form-at s (+ i 1))))))
+  "Find the first '(' then return substring from there to its match.")
 
-(define forge/strip-trailing-fence
-  (lambda (s)
-    (let ((idx (string-contains? s "```")))
-      (if idx
-          (string-trim (substring s 0 idx))
-          s)))
-  "Remove a trailing ``` fence if present.")
+(define forge/balanced-end
+  (lambda (s i depth in-str)
+    (let ((n (string-length s)))
+      (if (>= i n)
+          i
+          (let ((c (substring s i 1)))
+            (cond
+              ((string-eq c "\"")
+               (if in-str
+                   (forge/balanced-end s (+ i 1) depth #f)
+                   (forge/balanced-end s (+ i 1) depth #t)))
+              (in-str
+               (forge/balanced-end s (+ i 1) depth #t))
+              ((string-eq c "(")
+               (forge/balanced-end s (+ i 1) (+ depth 1) #f))
+              ((string-eq c ")")
+               (if (<= depth 1)
+                   (+ i 1)
+                   (forge/balanced-end s (+ i 1) (- depth 1) #f)))
+              (#t
+               (forge/balanced-end s (+ i 1) depth #f)))))))
+  "Return the index just past the close paren matching the open
+   paren at the starting depth.")
 
 ;; ---- commit a draft: write body, infer effects, set status, flag ----
 
