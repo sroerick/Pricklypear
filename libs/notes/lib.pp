@@ -3485,16 +3485,16 @@
       (lambda (s) (not (string-eq (as-str s) "")))
       (string-split (as-str folder) "/"))))
 
+(define notes/tree/style-css
+  (string-append
+    (css/render notes/tree-css)
+    (css/render notes/tree-css-patch)
+    (css/render (notes/tree/details-css))))
+
 (define notes/tree/style
   (lambda
     ()
-    (html/tag
-      "style"
-      ""
-      (string-append
-        (css/render notes/tree-css)
-        (css/render notes/tree-css-patch)
-        (css/render (notes/tree/details-css))))))
+    (html/tag "style" "" notes/tree/style-css)))
 
 (define notes/tree/write-heading
   (lambda
