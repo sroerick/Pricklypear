@@ -290,3 +290,219 @@
             (dict-set (dict-set row "resolved" "true")
                       "resolution" resolution)))))
   "Close a flag with a resolution note.")
+
+;; ============================================================
+;; THE FRONTIER (planning is a computation, not a judgment)
+;; ============================================================
+;; free-vars walks a parsed body and collects symbols not bound
+;; by any enclosing lambda/let. unresolved filters those against
+;; image bindings (function-doc oracle) + sibling node names.
+;; frontier = planned nodes whose unresolved set is empty.
+
+;; ---- set helpers on lists of strings ----
+
+(define forge/union
+  (lambda (a b)
+    (forge/union-into a b (list)))
+  "Set union of two lists of strings (dedup, order-preserving).")
+
+(define forge/union-into
+  (lambda (a b acc)
+    (if (null? a)
+        (forge/finish-union b acc)
+        (if (forge/member? (car a) acc)
+            (forge/union-into (cdr a) b acc)
+            (forge/union-into (cdr a) b (cons (car a) acc)))))
+  "Fold a into acc, then fold b.")
+
+(define forge/finish-union
+  (lambda (b acc)
+    (if (null? b)
+        (forge/reverse acc)
+        (if (forge/member? (car b) acc)
+            (forge/finish-union (cdr b) acc)
+            (forge/finish-union (cdr b) (cons (car b) acc)))))
+  "Fold remaining b, then reverse.")
+
+(define forge/reverse
+  (lambda (xs)
+    (forge/reverse-into xs (list)))
+  "Reverse a list.")
+
+(define forge/reverse-into
+  (lambda (xs acc)
+    (if (null? xs)
+        acc
+        (forge/reverse-into (cdr xs) (cons (car xs) acc))))
+  "Tail-recursive reverse.")
+
+(define forge/difference
+  (lambda (xs exclude)
+    (if (null? xs)
+        (list)
+        (if (forge/member? (car xs) exclude)
+            (forge/difference (cdr xs) exclude)
+            (cons (car xs) (forge/difference (cdr xs) exclude)))))
+  "xs with any element in exclude removed.")
+
+;; ---- special forms (excluded from free-var collection) ----
+
+(define forge/special-form?
+  (lambda (name)
+    (forge/member? name (list
+      "lambda" "let" "letrec" "if" "define" "quote" "seq" "begin"
+      "match" "guard" "error" "else" "=>" "cond")))
+  "Is name a Nopales special form / keyword?")
+
+;; ---- image binding oracle ----
+
+(define forge/image-bound?
+  (lambda (name)
+    (if (forge/special-form? name)
+        #t
+        (not (null? (function-doc name)))))
+  "True when name resolves to a kernel prim, special form, or
+   user binding. function-doc covers prims + user defs; special
+   forms return () from function-doc so they are handled here.")
+
+;; ---- bound name collection from lambda params / let bindings ----
+
+(define forge/lambda-params
+  (lambda (params)
+    (if (null? params)
+        (list)
+        (cons (as-str (car params)) (forge/lambda-params (cdr params)))))
+  "List of param name strings from a lambda formals list.")
+
+(define forge/let-names
+  (lambda (bindings)
+    (if (null? bindings)
+        (list)
+        (let ((b (car bindings)))
+          (let ((name (car b)))
+            (cons (as-str name) (forge/let-names (cdr bindings)))))))
+  "List of bound name strings from a let bindings list.")
+
+;; ---- free-vars over a list of expressions ----
+
+(define forge/free-vars-list
+  (lambda (exprs bound)
+    (if (null? exprs)
+        (list)
+        (forge/union
+          (forge/free-vars (car exprs) bound)
+          (forge/free-vars-list (cdr exprs) bound))))
+  "Union of free-vars over each expr in a list.")
+
+;; ---- free-vars over one expression ----
+
+(define forge/free-vars
+  (lambda (expr bound)
+    (cond
+      ((null? expr) (list))
+      ((not (pair? expr))
+       (let ((name (as-str expr)))
+         (if (forge/member? name bound)
+             (list)
+             (list name))))
+      ((string-eq (as-str (car expr)) "quote") (list))
+      ((string-eq (as-str (car expr)) "lambda")
+       (forge/free-vars (caddr expr)
+         (forge/append bound (forge/lambda-params (cadr expr)))))
+      ((string-eq (as-str (car expr)) "let")
+       (forge/free-vars (caddr expr)
+         (forge/append bound (forge/let-names (cadr expr)))))
+      ((string-eq (as-str (car expr)) "define") (list))
+      ((string-eq (as-str (car expr)) "if")
+       (forge/union
+         (forge/free-vars (cadr expr) bound)
+         (forge/union
+           (forge/free-vars (caddr expr) bound)
+           (forge/free-vars (car (cdr (cdr (cdr expr)))) bound))))
+      (#t
+       (forge/free-vars-list expr bound))))
+  "Free variables of a parsed expression: symbols not bound by an
+   enclosing lambda/let and not a special form. quote is a literal;
+   define is top-level (handled by the caller).")
+
+;; ---- unresolved: free-vars that reference nothing real ----
+
+(define forge/sibling-names
+  (lambda (graph path)
+    (let ((siblings (forge/children-of graph (forge/parent-of path))))
+      (forge/node-titles->names graph siblings)))
+  "Names offered by sibling nodes (their label, derived from path).")
+
+(define forge/parent-of
+  (lambda (path)
+    (forge/parent-of-acc path ""))
+  "Parent path: drop the last /segment.")
+
+(define forge/parent-of-acc
+  (lambda (path acc)
+    (if (string-eq path "")
+        acc
+        (forge/parent-of-acc (forge/tail-str path)
+          (if (string-eq (forge/head-char path) "/") path acc))))
+  "Scan to last '/', return everything before it (or \"\" for root).")
+
+(define forge/node-titles->names
+  (lambda (graph paths)
+    (if (null? paths)
+        (list)
+        (let ((p (car paths)))
+          (let ((node (forge/node-by-path graph p)))
+            (if (null? node)
+                (forge/node-titles->names graph (cdr paths))
+                (cons (forge/field-str (cdr node) "title")
+                      (forge/node-titles->names graph (cdr paths))))))))
+  "Titles of the nodes at the given paths.")
+
+(define forge/unresolved
+  (lambda (graph path body-src)
+    (let ((fvs (forge/free-vars (read-string body-src) (list))))
+      (forge/difference fvs
+        (forge/append (list) (forge/image-bound-names fvs)))))
+  "Free vars of body that resolve to nothing: not a prim, not a
+   binding, not a special form. These are the stub-children candidates.")
+
+(define forge/image-bound-names
+  (lambda (names)
+    (if (null? names)
+        (list)
+        (if (forge/image-bound? (car names))
+            (cons (car names) (forge/image-bound-names (cdr names)))
+            (forge/image-bound-names (cdr names)))))
+  "Subset of names that ARE bound in the image (prims + defs + specials).")
+
+(define forge/frontier
+  (lambda (graph)
+    (forge/frontier-scan graph (forge/nodes-of-graph graph) (list)))
+  "Planned nodes whose unresolved set is empty — leaves whose
+   dependencies all exist. Bottom-up build order.")
+
+(define forge/frontier-scan
+  (lambda (graph nodes acc)
+    (if (null? nodes)
+        (forge/reverse acc)
+        (let ((pair (car nodes)))
+          (let ((f (cdr pair)))
+            (let ((status (forge/field-str f "status"))
+                  (path (forge/field-str f "path"))
+                  (body (forge/field-str f "body")))
+              (let ((ready
+                      (if (string-eq status "planned")
+                          (if (string-eq body "")
+                              #t
+                              (forge/ready? graph path body))
+                          #f)))
+                (forge/frontier-scan graph (cdr nodes)
+                  (if ready (cons path acc) acc))))))))
+  "Scan nodes; a planned node with empty body is trivially ready
+   (no deps), otherwise check unresolved against the image.")
+
+(define forge/ready?
+  (lambda (graph path body)
+    (let ((unres (forge/unresolved graph path body)))
+      (null? unres)))
+  "True when a drafted body has no unresolved references.")
