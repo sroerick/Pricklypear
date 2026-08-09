@@ -3,9 +3,11 @@
 Pricklypear is a multi-user Lisp OS — the language is **Nopales** (a
 Scheme-family Lisp-1): one unix image process, Postgres as the object
 store, htmx as the interface layer. **The authoritative design is the multi-file borge book:** root [`pricklypear.borg`](pricklypear.borg) inlines chapter files (`borge/philosophy.borg`, `borge/single-image.borg`, `borge/lisp-interpreter.borg`, `borge/ai-authoring.borg`, …). Read them in root inline order (literate book order). If code and spec
-disagree, code is wrong. Use borge to plan/make/review changes — don't
-edit the spec freely during a `make` phase, file a `borge issue new`
-instead.
+disagree, code is wrong. Use borge to plan/make/review changes. File a
+`borge issue new` ONLY when (a) you're mid-`make` and discover the spec
+must change (spec is locked then), or (b) you find a genuine problem
+outside the scope of your current instructions. In `plan` phase or spec
+discussions, edit the spec directly or just talk — do NOT file issues.
 
 ## Status (2026-07-12 reconcile)
 
@@ -243,8 +245,10 @@ auth is **in-process** in the image.
   `data_rows` table keyed by (type_name, id). `(render-html "<b>...")`
   tags the returned VStr so http.ml renders it RAW (unescaped) in
   the route handler output; plain VStrs render as bare text in `<p>`.
-- Any spec change during `make`: `borge issue new "..."`, don't edit
-  `.borg` directly. The next `plan` pass resolves issues.
+- A spec change discovered during `make`: `borge issue new "..."`, don't
+  edit `.borg` directly. The next `plan` pass resolves issues. Do NOT
+  file issues during `plan` or open discussion — plan mode exists to
+  change the spec directly; discussion mode exists to talk.
 - After every code change touching a `.borg`-declared module: `borge
   drift` to verify spec/code alignment.
 
@@ -274,7 +278,9 @@ auth is **in-process** in the image.
   `split_sql_statements` (handles dollar-quoted `$$...$$` blocks,
   single-quoted strings, `--` line comments, multi-statement splits —
   the pgx prepared-statement protocol can't do multi-statement natively).
-- The `.borg` file is the source of truth. During a `make` phase, file a
-  `borge issue new "..."` for any spec gap surfaced — the next `plan`
-  pass resolves issues. Use borge to plan/make/review changes — never
-  edit `.borg` directly in make/task mode.
+- The `.borg` file is the source of truth. Never edit `.borg` directly
+  in make/task mode — a spec gap surfaced there becomes a `borge issue
+  new "..."`, resolved by the next `plan` pass. Issues are the make-mode
+  escape hatch, not a note-taking habit: status flips, drift
+  observations, and verification results belong in commit messages and
+  reports, not in the issue tracker.
