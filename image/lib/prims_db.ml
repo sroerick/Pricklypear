@@ -1021,6 +1021,38 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
       | _ ->
           (Pricklypear_lisp.Ast.VStr "function-ast: need name-str"));
 
+  (* (forge-effects "src-or-name") -> VStr badge string.
+     Exposes lisp/lib/effect.ml infer over a parsed source expression
+     (or a named binding's body). The SAME analysis install-function
+     gates on; this prim merely exposes it for the forge mechanical
+     flaggers (capability escalation check). Read-only, pure-ish.
+     Spec: borge/forge.borg mechanical-flags. *)
+  Primitives.register tbl "forge-effects"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr s ] ->
+          (try
+             let forms = Pricklypear_lisp.Reader.read_all s in
+             (match forms with
+              | [] -> (Pricklypear_lisp.Ast.VStr "pure")
+              | expr :: _ ->
+                  let defs = Store.list_function_names t.store in
+                  let known_fn =
+                    Pricklypear_lisp.Effect.known_fn_of_bindings
+                      (List.map (fun (n, e, _) -> (n, e)) defs)
+                  in
+                  let badge =
+                    Pricklypear_lisp.Effect.EffSet.badge
+                      (Pricklypear_lisp.Effect.infer ~known_fn expr)
+                  in
+                  (Pricklypear_lisp.Ast.VStr badge))
+           with exn ->
+             (Pricklypear_lisp.Ast.VStr
+                ("forge-effects: parse/infer failed: "
+                 ^ Printexc.to_string exn)))
+      | _ ->
+          (Pricklypear_lisp.Ast.VStr "forge-effects: need src-or-name-str"));
+
   (* (package-exports pkg) -> VList of public names (package-surface).
      Resolution: declared registry exports -> kernel_std_exports for
      std/kernel -> shallow heuristic. *)

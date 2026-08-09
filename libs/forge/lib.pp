@@ -506,3 +506,177 @@
     (let ((unres (forge/unresolved graph path body)))
       (null? unres)))
   "True when a drafted body has no unresolved references.")
+
+;; ============================================================
+;; MECHANICAL FLAGS (checks that run before the human wakes)
+;; ============================================================
+;; Each flagger is a small function over the graph. They run after
+;; every draft and after every level-descent proposal. The approval
+;; surface shows FLAGS, not nodes.
+
+;; ---- capability escalation: child effects exceed parent declared ----
+
+(define forge/flag-capability
+  (lambda (graph path)
+    (let ((node (forge/node-by-path graph path)))
+      (if (null? node) (list)
+      (let ((f (cdr node)))
+        (let ((parent-path (forge/field-str f "parent")))
+          (if (string-eq parent-path "") (list)
+          (let ((parent (forge/node-by-path graph parent-path)))
+            (if (null? parent) (list)
+            (let ((body (forge/field-str f "body"))
+                  (declared (forge/field-str (cdr parent) "effects")))
+              (if (string-eq body "") (list)
+              (let ((actual (forge-effects body)))
+                (if (forge/effect-escalates? declared actual)
+                    (list (forge/make-flag-spec path "capability"
+                            (string-append "declared " declared
+                              " but body is " actual)))
+                    (list)))))))))))))
+  "Raise a capability flag when a child's inferred effect exceeds the
+   parent's declared badge.")
+
+(define forge/effect-escalates?
+  (lambda (declared actual)
+    (not (forge/effect-subset? declared actual)))
+  "True when actual is NOT a subset of declared — i.e. the child does
+   more than the parent promised.")
+
+(define forge/effect-subset?
+  (lambda (declared actual)
+    (cond
+      ((string-eq actual "pure") #t)
+      ((string-eq declared "pure") #f)
+      ((string-eq declared actual) #t)
+      ((string-eq declared "db-read")
+       (string-eq actual "db-write"))
+      (#t #f)))
+  "Coarse effect lattice: pure < db-read < db-write < branch/publish/ai/net.
+   A read-only parent allows a read child; a pure parent forbids any effect.")
+
+;; ---- missing victory condition: empty verify source ----
+
+(define forge/flag-victory
+  (lambda (graph path)
+    (let ((node (forge/node-by-path graph path)))
+      (if (null? node) (list)
+      (let ((f (cdr node)))
+        (let ((verify (forge/field-str f "verify"))
+              (kind (forge/field-str f "kind")))
+          (if (string-eq kind "requirement")
+              (list)
+              (if (string-eq verify "")
+                  (list (forge/make-flag-spec path "victory"
+                          "node has no verify stanza — unapprovable"))
+                  (list))))))))
+  "Flag nodes (non-requirement) with no verify source.")
+
+;; ---- dangling refs: free-vars referencing nothing ----
+
+(define forge/flag-dangling
+  (lambda (graph path)
+    (let ((node (forge/node-by-path graph path)))
+      (if (null? node) (list)
+      (let ((f (cdr node)))
+        (let ((body (forge/field-str f "body")))
+          (if (string-eq body "") (list)
+          (let ((unres (forge/unresolved graph path body)))
+            (if (null? unres) (list)
+            (list (forge/make-flag-spec path "dangling"
+                    (string-append "unresolved references: "
+                      (forge/str-join ", " unres))))))))))))
+  "Flag drafted bodies with references that resolve to nothing.")
+
+;; ---- orphan: node traces to no requirement ancestor ----
+
+(define forge/flag-orphan
+  (lambda (graph path)
+    (if (forge/has-requirement-ancestor? graph path)
+        (list)
+        (list (forge/make-flag-spec path "orphan"
+                "traces to no requirement ancestor"))))
+  "Flag nodes with no requirement node in their ancestor chain.")
+
+(define forge/has-requirement-ancestor?
+  (lambda (graph path)
+    (let ((node (forge/node-by-path graph path)))
+      (if (null? node) #t
+      (let ((f (cdr node)))
+        (let ((kind (forge/field-str f "kind"))
+              (parent (forge/field-str f "parent")))
+          (cond
+            ((string-eq kind "requirement") #t)
+            ((string-eq parent "") #f)
+            (#t (forge/has-requirement-ancestor? graph parent))))))))
+  "Walk parent chain; true when a requirement kind node is found.")
+
+;; ---- size heuristic: body too big to review in one glance ----
+
+(define forge/flag-size
+  (lambda (graph path)
+    (let ((node (forge/node-by-path graph path)))
+      (if (null? node) (list)
+      (let ((f (cdr node)))
+        (let ((body (forge/field-str f "body")))
+          (if (forge/too-big? body 200)
+              (list (forge/make-flag-spec path "size"
+                      "body exceeds review-in-one-glance threshold"))
+              (list)))))))
+  "Flag bodies longer than the threshold (default ~200 chars).")
+
+(define forge/too-big?
+  (lambda (s limit)
+    (> (forge/strlen s) limit))
+  "True when string length exceeds limit.")
+
+(define forge/strlen
+  (lambda (s)
+    (string-length s))
+  "String length (wrapper for readability).")
+
+;; ---- run all mechanical flaggers on a node ----
+
+(define forge/mechanical-flags
+  (lambda (graph path)
+    (forge/append
+      (forge/append
+        (forge/append
+          (forge/flag-capability graph path)
+          (forge/flag-victory graph path))
+        (forge/append
+          (forge/flag-dangling graph path)
+          (forge/flag-orphan graph path)))
+      (forge/flag-size graph path)))
+  "All mechanical flags for one node. Returns a list of flag-spec pairs:
+   (check . detail). The caller raises them as forge-flag rows.")
+
+(define forge/make-flag-spec
+  (lambda (path check detail)
+    (cons check detail))
+  "A flag spec is (check . detail); raised as a row by forge/raise-flags.")
+
+(define forge/raise-flags
+  (lambda (graph path specs)
+    (if (null? specs) (list)
+    (let ((spec (car specs)))
+      (seq
+        (forge/flag path (car spec) (cdr spec))
+        (forge/raise-flags graph path (cdr specs))))))
+  "Raise each flag-spec as a forge-flag row on the node.")
+
+(define forge/scan-mechanical-flags
+  (lambda (graph)
+    (forge/scan-flags-nodes graph (forge/nodes-of-graph graph)))
+  "Run mechanical flaggers over every node in the graph and raise flags.")
+
+(define forge/scan-flags-nodes
+  (lambda (graph nodes)
+    (if (null? nodes) (list)
+    (let ((pair (car nodes)))
+      (let ((path (forge/field-str (cdr pair) "path")))
+        (seq
+          (forge/raise-flags graph path
+            (forge/mechanical-flags graph path))
+          (forge/scan-flags-nodes graph (cdr nodes)))))))
+  "Scan all nodes, raise their mechanical flags.")
