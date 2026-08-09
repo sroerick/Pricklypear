@@ -11,7 +11,7 @@
 (test
  (name conformance_test)
  (modules conformance_test)
- (libraries pricklypear-lisp alcotest))
+ (libraries pricklypear-lisp pricklypear-conformance alcotest))
 
 (test
  (name recursion_test)

@@ -1,0 +1,2 @@
+;; client/ — browser build of the Nopales evaluator (js_of_ocaml).
+;; Spec: borge/structural-editing.borg client-eval.

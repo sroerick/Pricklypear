@@ -1,0 +1,20 @@
+;; Conformance gate against the JS target.
+;; Compiles conformance_main.bc with --effects=cps and runs it in node.
+;; Spec: borge/structural-editing.borg client-eval (CONFORMANCE IS THE GATE).
+(executable
+ (name main)
+ (modes byte)
+ (modules main)
+ (libraries pricklypear-lisp pricklypear-conformance))
+
+(rule
+ (target main.js)
+ (deps main.bc)
+ (action
+  (run js_of_ocaml --effects=cps %{dep:main.bc} -o %{target})))
+
+(rule
+ (alias runtest)
+ (deps main.js)
+ (action
+  (run node %{dep:main.js})))

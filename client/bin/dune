@@ -1,0 +1,15 @@
+;; Browser evaluator runtime → interp.js.
+;; Spec: borge/structural-editing.borg client-eval.
+;; OCaml 5 effects require the CPS backend; the default jsoo backend
+;; fatally aborts, so --effects=cps is mandatory on every build.
+(executable
+ (name main)
+ (modes byte)
+ (modules main)
+ (libraries pricklypear-lisp pricklypear-pure-prims js_of_ocaml))
+
+(rule
+ (target interp.js)
+ (deps main.bc)
+ (action
+  (run js_of_ocaml --effects=cps %{dep:main.bc} -o %{target})))
