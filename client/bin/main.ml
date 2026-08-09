@@ -117,6 +117,7 @@ let boot () =
   register "round" Prims_pure.prim_round;
   register "fsrs-schedule" Prims_pure.prim_fsrs_schedule;
   register "render-html" Prims_pure.prim_render_html;
+  register "status-response" Prims_pure.prim_status_response;
   register "part" Prims_pure.prim_part;
   register "json-part" Prims_pure.prim_json_part;
   register "multipart" Prims_pure.prim_multipart;

@@ -1413,6 +1413,24 @@ let respond_handler_value
   match Primitives.is_redirect value with
   | Some loc -> redirect_response reqd loc
   | None ->
+      (match Primitives.is_status value with
+       | Some (code, body) ->
+           (* Handler signalled a non-200 status (e.g. op-seq 409).
+              Respond with the status + body as a fragment/HTML. *)
+           let status =
+             match code with
+             | 409 -> `Conflict
+             | 400 -> `Bad_request
+             | 403 -> `Forbidden
+             | 404 -> `Not_found
+             | 500 -> `Internal_server_error
+             | _ -> `Bad_request
+           in
+           if fragment then fragment_response reqd ~status body
+           else
+             html_response reqd ~session ~status
+               (txt ~raw:true "%s" body)
+       | None ->
       (match Primitives.is_multipart value with
        | Some mp -> multipart_response reqd mp
        | None ->
@@ -1445,7 +1463,7 @@ let respond_handler_value
                           HTML.pre [] [txt "%s" rendered];
                         ])
              in
-             html_response reqd ~session body)
+             html_response reqd ~session body))
 
 (** /settings/keys — per-user LLM provider key (auth.user-llm-keys). *)
 let settings_keys_page (session : Session.t) (reqd : Httpun.Reqd.t)

@@ -679,6 +679,7 @@ let prim_dict_keys args =
    The tag is a private prefix sentinel; http.ml checks for it. *)
 let html_sentinel = "__html__:"
 let redirect_sentinel = "__redirect__:"
+let status_sentinel = "__status__:"
 
 let prim_render_html args =
   match args with
@@ -705,6 +706,42 @@ let is_redirect (v : value) : string option =
                  = redirect_sentinel ->
       Some (String.sub s (String.length redirect_sentinel)
               (String.length s - String.length redirect_sentinel))
+  | _ -> None
+
+(* A handler can signal a non-200 response by returning a status-tagged
+   value: __status__:<code>\n<body>. The OCaml layer splits on the first
+   newline and responds with that status + body. Used by op-seq rejection
+   (409) and other handler-level error responses. Spec: structural-editing.
+   client-eval OP-SEQ. *)
+let status_response ~(code : int) ~(body : string) : value =
+  VStr (status_sentinel ^ string_of_int code ^ "\n" ^ body)
+
+(* (status-response code body) -> VStr tagged for non-200 response.
+   Nopales-facing prim wrapper around status_response. *)
+let prim_status_response args =
+  match args with
+  | [ VInt code; VStr body ] ->
+      status_response ~code:(Int64.to_int code) ~body
+  | [ VInt code; body ] ->
+      status_response ~code:(Int64.to_int code)
+        ~body:(coerce_str ~ctx:"status-response" body)
+  | _ -> raise (Interp_error (User_error "status-response needs code + body"))
+
+let is_status (v : value) : (int * string) option =
+  match v with
+  | VStr s when String.length s >= String.length status_sentinel
+              && String.sub s 0 (String.length status_sentinel)
+                 = status_sentinel ->
+      let rest =
+        String.sub s (String.length status_sentinel)
+          (String.length s - String.length status_sentinel)
+      in
+      (try
+         let nl = String.index rest '\n' in
+         let code = int_of_string (String.sub rest 0 nl) in
+         let body = String.sub rest (nl + 1) (String.length rest - nl - 1) in
+         Some (code, body)
+       with _ -> None)
   | _ -> None
 
 (* ------------------------------------------------------------------
