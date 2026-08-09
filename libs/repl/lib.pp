@@ -224,7 +224,7 @@
                (repl/bubble "user"
                  (string-append "<div class=\"repl-user\">"
                                 (html-escape input)
-                                "</div>")))))
+                                "</div>"))))))
   "User input echo bubble; empty for blank input (help path).")
 
 (define repl/send
