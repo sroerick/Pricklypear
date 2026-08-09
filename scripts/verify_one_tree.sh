@@ -51,6 +51,31 @@ grep -qE 'datum=t(rue)?' /tmp/pp-tree-verify.out || fail "datum not in_sync"
 tail -1 /tmp/pp-tree-verify.out | grep -qxE 't(rue)?' || fail "bool_and in_sync"
 ok "tree_verify all kinds in_sync"
 
+# 2b. Phase 2 soak: field-level parity data_rows vs tree_data_rows.
+# tree_verify() checks COUNTS only; this diffs every (type_name,id,fields,author)
+# so a divergent row is caught before the read flip relies on the tree view.
+# Runs as the superuser (pp.user unset) so tree_data_rows returns ALL datums,
+# matching the unconfined data_rows table.
+psql -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U "$PP_DB_USER" -d "$PP_DB_NAME" -v ON_ERROR_STOP=1 -t -A <<'SQL' >/tmp/pp-tree-parity.out
+WITH dr AS (
+  SELECT type_name, id::text AS id, fields::text AS fields, author FROM data_rows
+), tr AS (
+  SELECT type_name, id::text AS id, fields::text AS fields, author FROM tree_data_rows
+), diffs AS (
+  (SELECT type_name,id,fields,author FROM dr EXCEPT ALL SELECT type_name,id,fields,author FROM tr)
+  UNION ALL
+  (SELECT type_name,id,fields,author FROM tr EXCEPT ALL SELECT type_name,id,fields,author FROM dr)
+)
+SELECT (SELECT count(*) FROM dr), (SELECT count(*) FROM tr), (SELECT count(*) FROM diffs);
+SQL
+parity=$(tr -d '[:space:]' < /tmp/pp-tree-parity.out)
+dr_n=$(printf '%s' "$parity" | cut -d'|' -f1)
+tr_n=$(printf '%s' "$parity" | cut -d'|' -f2)
+diff_n=$(printf '%s' "$parity" | cut -d'|' -f3)
+[ "$dr_n" = "$tr_n" ] || fail "parity count mismatch: data_rows=$dr_n tree_data_rows=$tr_n"
+[ "$diff_n" = "0" ] || fail "parity field diff: $diff_n rows differ (see /tmp/pp-tree-parity.out)"
+ok "field-level parity: $dr_n rows, 0 diffs (data_rows == tree_data_rows)"
+
 # 3. HTTP health
 code=$(curl -s -o /dev/null -w '%{http_code}' "$BASE/health")
 [ "$code" = "200" ] || fail "/health got $code"
