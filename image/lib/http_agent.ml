@@ -37,6 +37,43 @@ let sse_write (body : Httpun.Body.Writer.t) (event_json : string)
 let close_writer_quiet (body : Httpun.Body.Writer.t) : unit =
   safe_close_writer body
 
+(* Multipart/mixed streaming write — one part frame + flush. Mirrors
+   sse_write but emits a multipart part with per-part HX-Target/HX-Swap
+   so hx-multipart can route each token into the live bubble. Returns
+   `Peer_gone on closed writer so the drain loop stops cleanly. *)
+let mp_write_part (body : Httpun.Body.Writer.t) ~boundary
+    ?(target : string option) ?(swap : string option) (html : string)
+  : [ `Ok | `Peer_gone ] =
+  let buf = Buffer.create 128 in
+  Buffer.add_string buf ("--" ^ boundary ^ "\r\n");
+  Buffer.add_string buf "Content-Type: text/html; charset=utf-8\r\n";
+  (match target with Some t -> Buffer.add_string buf ("HX-Target: " ^ t ^ "\r\n") | None -> ());
+  (match swap with Some s -> Buffer.add_string buf ("HX-Swap: " ^ s ^ "\r\n") | None -> ());
+  Buffer.add_string buf "\r\n";
+  Buffer.add_string buf html;
+  Buffer.add_string buf "\r\n";
+  let chunk = Buffer.contents buf in
+  try
+    Httpun.Body.Writer.write_string body chunk;
+    let promise, resolver = Eio.Promise.create () in
+    let wake () =
+      if not (Eio.Promise.is_resolved promise) then Eio.Promise.resolve resolver ()
+    in
+    (try Httpun.Body.Writer.flush body (fun () -> wake ()) with
+     | exn when is_closed_writer_exn exn -> wake ());
+    Eio.Promise.await promise;
+    `Ok
+  with exn when is_closed_writer_exn exn ->
+    ignore (Ops_log.info ~component:"mp" "peer gone (closed writer)");
+    `Peer_gone
+
+(* Close the multipart body with the terminating boundary. *)
+let mp_close (body : Httpun.Body.Writer.t) ~boundary : unit =
+  let chunk = "--" ^ boundary ^ "--\r\n" in
+  (try Httpun.Body.Writer.write_string body chunk
+   with exn when is_closed_writer_exn exn -> ());
+  close_writer_quiet body
+
 let default_http_agent_seed =
   (* Short fallback when no session seed; tools sessions should prefer
      Session.default_agent_seed (dogfood + register_route rules). *)
@@ -339,8 +376,157 @@ let api_agent_task (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
       (`Assoc [ ("ok", `Bool true); ("text", `String text) ]);
     ()
 
+let repl_llm (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
+  (* Streaming LLM answer for repl-v2: multipart/mixed token stream.
+     Mirrors api_agent's streaming branch but emits hx-multipart parts
+     instead of SSE events. Eval/slash stay on the Nopales /repl-v2/send
+     route; this handles plain-text (LLM) input only. *)
+  let body = read_body reqd in
+  let prompt =
+    try
+      match Yojson.Safe.from_string body with
+      | `Assoc items ->
+          (match List.assoc_opt "q" items with
+           | Some (`String s) -> s
+           | _ ->
+               (match List.assoc_opt "prompt" items with
+                | Some (`String s) -> s
+                | _ -> ""))
+      | _ -> ""
+    with _ ->
+      Option.value (form_field body "q")
+        ~default:(Option.value (form_field body "prompt") ~default:"")
+  in
+  if String.trim prompt = "" then begin
+    json_response reqd
+      (`Assoc [ ("ok", `Bool false); ("error", `String "need prompt") ]);
+    ()
+  end else begin
+    let title_opt =
+      let p = agent_user_visible_text prompt in
+      if String.trim p = "" then None
+      else Some (if String.length p > 80 then String.sub p 0 80 ^ "…" else p)
+    in
+    let sid_v =
+      Session.agent_session_new session ~seed:default_http_agent_seed
+        ~tools:true ?title:title_opt ()
+    in
+    match sid_v with
+    | Pricklypear_lisp.Ast.VStr e
+      when String.starts_with ~prefix:"agent-session-new error" e ->
+        json_response reqd
+          (`Assoc [ ("ok", `Bool false); ("error", `String e) ]);
+        ()
+    | Pricklypear_lisp.Ast.VStr sid ->
+      (* Streaming multipart/mixed response: one part per token, routed
+         into the live bubble by hx-multipart. *)
+      let boundary =
+        Printf.sprintf "pp%x%x" (Random.bits ()) (Random.bits ())
+      in
+      let rid = "llm-" ^ sid in
+      let headers =
+        Httpun.Headers.of_list
+          [ ("content-type", "multipart/mixed; boundary=" ^ boundary)
+          ; ("cache-control", "no-cache")
+          ; ("x-accel-buffering", "no")
+          ; ("hx-target", "#repl-transcript")
+          ; ("hx-swap", "beforeend")
+          ]
+      in
+      let resp = Httpun.Response.create ~headers `OK in
+      let body_w =
+        try
+          Httpun.Reqd.respond_with_streaming
+            ~flush_headers_immediately:true reqd resp
+        with exn when is_closed_writer_exn exn ->
+          ignore (Ops_log.info ~component:"mp"
+                    "peer gone before stream start");
+          raise exn
+      in
+      let queue : (string option * string) Queue.t = Queue.create () in
+      let mutex = Eio.Mutex.create () in
+      let cond = Eio.Condition.create () in
+      let finished = ref false in
+      let push t html =
+        Eio.Mutex.lock mutex;
+        Queue.add (t, html) queue;
+        Eio.Condition.broadcast cond;
+        Eio.Mutex.unlock mutex
+      in
+      let esc = Http_code.html_escape in
+      (* Part 1: user echo bubble. *)
+      push (Some "#repl-transcript")
+        (Printf.sprintf
+           "<div class=\"repl-line repl-user\"><span class=\"repl-kind\">user</span> <div class=\"repl-user\">%s</div></div>"
+           (esc prompt));
+      (* Part 2: llm bubble opener with empty inner div for tokens. *)
+      push (Some "#repl-transcript")
+        (Printf.sprintf
+           "<div class=\"repl-line repl-llm\"><span class=\"repl-kind\">llm</span><div class=\"repl-llm\" id=\"%s\"></div></div>"
+           rid);
+      let on_event = function
+        | Llm_client.Token tok ->
+            push (Some ("#" ^ rid))
+              (Printf.sprintf "<span>%s</span>" (esc tok))
+        | Llm_client.Done ->
+            finished := true;
+            Eio.Mutex.lock mutex;
+            Eio.Condition.broadcast cond;
+            Eio.Mutex.unlock mutex
+        | Llm_client.Fail e ->
+            push (Some ("#" ^ rid))
+              (Printf.sprintf "<span class=\"repl-error\">%s</span>"
+                 (esc ("error: " ^ e)));
+            finished := true;
+            Eio.Mutex.lock mutex;
+            Eio.Condition.broadcast cond;
+            Eio.Mutex.unlock mutex
+      in
+      Eio.Switch.run @@ fun sw ->
+      Eio.Fiber.fork ~sw (fun () ->
+          let v =
+            Session.agent_say session ~session_id:sid ~prompt ~max_steps:16
+              ~on_event ()
+          in
+          if not !finished then begin
+            (match v with
+             | Pricklypear_lisp.Ast.VStr s when String.trim s <> "" ->
+                 push (Some ("#" ^ rid))
+                   (Printf.sprintf "<span>%s</span>" (esc s))
+             | _ -> ());
+            finished := true;
+            Eio.Mutex.lock mutex;
+            Eio.Condition.broadcast cond;
+            Eio.Mutex.unlock mutex
+          end);
+      let rec drain () =
+        Eio.Mutex.lock mutex;
+        if not (Queue.is_empty queue) then begin
+          let (t, html) = Queue.take queue in
+          Eio.Mutex.unlock mutex;
+          (match mp_write_part body_w ~boundary ?target:t html with
+           | `Peer_gone ->
+               finished := true;
+               close_writer_quiet body_w
+           | `Ok -> drain ())
+        end else if !finished then begin
+          Eio.Mutex.unlock mutex;
+          mp_close body_w ~boundary
+        end else begin
+          Eio.Condition.await cond mutex;
+          Eio.Mutex.unlock mutex;
+          drain ()
+        end
+      in
+      drain ()
+    | other ->
+        let e = Pricklypear_lisp.Reader.pp_value other in
+        json_response reqd
+          (`Assoc [ ("ok", `Bool false); ("error", `String e) ]);
+        ()
+  end
+
 let agent_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
-  (* Durable chats: list + open with ?session=id (agent-portal UI). *)
   let target = (Httpun.Reqd.request reqd).Httpun.Request.target in
   let open_sid =
     match query_param target "session" with

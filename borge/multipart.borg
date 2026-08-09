@@ -147,5 +147,94 @@
    |))
    )
   )
+
+  (subsection live-streaming
+   (doc "Token-level streaming: LLM deltas and long-running evals appear incrementally in the transcript, not as one final part")
+   (implements image/lib/http_core.ml image/lib/prims_pure.ml libs/repl/lib.pp libs/ai/lib.pp)
+   (status planned)
+   (verify
+    (build "dune build image")
+    (smoke "LLM question in repl-v2: first token appears in <1s, subsequent tokens append live, final part completes the bubble")
+    (smoke "eval that yields multiple values streams each as it completes, not batched at end")
+    (smoke "error mid-stream yields error part and closes response cleanly")
+    (smoke "peer disconnect mid-stream is a non-event (http-robustness invariant 1)"))
+   (details
+    (doc (|
+         Current repl-v2 is EAGER: the handler computes all parts,
+         then multipart frames them. For LLM answers this means the
+         user waits for the full completion before seeing anything.
+         The fix is live streaming: the handler yields parts as they
+         are ready, and the kernel flushes each part over the wire
+         immediately.
+
+         KERNEL CHANGE: respond_handler_value gains a streaming
+         branch. Instead of evaluating to a list of parts then
+         framing, the handler runs with an emit callback:
+           (multipart-stream (lambda (emit) (emit part1) (emit part2) …))
+         Each emit writes one MIME part and flushes. The existing
+         Httpun.Body.Writer write_string + flush per part becomes the
+         streaming path.
+
+         NOPALES SURFACE:
+           (multipart-stream (lambda (emit) …))
+         emit is a function of one argument (a part value). The lambda
+         body runs to completion; each emit call pushes a part to the
+         client. Errors inside the lambda emit an error part and close
+         the stream cleanly.
+
+         AI INTEGRATION: libs/ai/ai/ask gains a streaming variant
+         (ai/ask-stream on-event) where on-event receives deltas.
+         repl-v2's LLM branch uses it: each delta emits a part
+         targeted at the transcript, building up the answer token by
+         token. The final delta emits a completion part that styles
+         the bubble as done.
+
+         SCOPE: only LLM streaming in repl-v2 v1. Eval streaming
+         (multiple values over time) is a follow-up. The prim name
+         collision bug (BORGE-1786262466: agent-session-new vs
+         Agent_tools.agent-session-new) must be fixed first — the
+         LLM path is broken without it.
+   |))
+   )
+  )
+
+  (subsection repl-v2-ux
+   (doc "REPL transcript polish: echo user input, clear form on send, distinct styling per message kind")
+   (implements libs/repl/lib.pp)
+   (status planned)
+   (verify
+    (build "dune build image")
+    (smoke "user input appears in transcript before response")
+    (smoke "form input clears on successful send")
+    (smoke "form input clears on error send (no stuck text)")
+    (smoke "error parts styled distinctly from value/llm parts"))
+   (details
+    (doc (|
+         Current repl-v2 UX gaps:
+
+         1. USER ECHO: repl/send only returns response parts. The
+            user's input never appears in the transcript. Fix: repl/send
+            prepends a user bubble part (the raw input, styled) before
+            the response parts.
+
+         2. FORM CLEAR: hx-on::after-request="this.reset()" should
+            clear the input but may not fire on error responses or
+            may race with the swap. Fix: use hx-on::before-request
+            to clear immediately on submit, or clear via a part that
+            targets the form. The transcript gets the echo; the form
+            clears.
+
+         3. STYLING: error parts already have .repl-error class but
+            the LLM failed case shows as generic error. Ensure error
+            styling is visually distinct (red border, background) and
+            the error message is human-readable (not a raw exception
+            string).
+
+         These are small fixes in libs/repl/lib.pp. The user echo is
+         the most important — without it the transcript reads as
+         one-sided and the user loses track of what they asked.
+   |))
+   )
+  )
  )
 )

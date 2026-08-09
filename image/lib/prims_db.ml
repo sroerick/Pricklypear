@@ -858,8 +858,8 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
       in
       Pricklypear_lisp.Ast.VStr branch);
 
-  (* Durable Agent_tools.agent sessions (ai-authoring.Agent_tools.agent-portal). *)
-  Primitives.register tbl "Agent_tools.agent-session-new"
+  (* Durable agent sessions (ai-authoring.agent-portal). *)
+  Primitives.register tbl "agent-session-new"
     (fun args ->
       match args with
       | [ Pricklypear_lisp.Ast.VStr seed ] ->
@@ -868,9 +868,9 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
           Agent_tools.agent_session_new t ~seed ~tools ()
       | _ ->
           (Pricklypear_lisp.Ast.VStr
-               "Agent_tools.agent-session-new: need seed-str [, tools-bool]"));
+               "agent-session-new: need seed-str [, tools-bool]"));
 
-  Primitives.register tbl "Agent_tools.agent-say"
+  Primitives.register tbl "agent-say"
     (fun args ->
       match args with
       | [ Pricklypear_lisp.Ast.VStr sid; Pricklypear_lisp.Ast.VStr prompt ] ->
@@ -880,34 +880,34 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
           Agent_tools.agent_say t ~session_id:sid ~prompt ~max_steps:(Int64.to_int n) ()
       | _ ->
           (Pricklypear_lisp.Ast.VStr
-               "Agent_tools.agent-say: need session-id, prompt [, max-steps]"));
+               "agent-say: need session-id, prompt [, max-steps]"));
 
-  Primitives.register tbl "Agent_tools.agent-history"
+  Primitives.register tbl "agent-history"
     (fun args ->
       match args with
       | [ Pricklypear_lisp.Ast.VStr sid ] -> Agent_tools.agent_history t ~session_id:sid
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "Agent_tools.agent-history: need session-id"));
+          (Pricklypear_lisp.Ast.VStr "agent-history: need session-id"));
 
-  Primitives.register tbl "Agent_tools.agent-sessions"
+  Primitives.register tbl "agent-sessions"
     (fun args ->
       match args with
       | [] -> Agent_tools.agent_sessions t ()
       | [ Pricklypear_lisp.Ast.VInt n ] ->
           Agent_tools.agent_sessions t ~limit:(Int64.to_int n) ()
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "Agent_tools.agent-sessions: optional limit int"));
+          (Pricklypear_lisp.Ast.VStr "agent-sessions: optional limit int"));
 
-  Primitives.register tbl "Agent_tools.agent-session-delete"
+  Primitives.register tbl "agent-session-delete"
     (fun args ->
       match args with
       | [ Pricklypear_lisp.Ast.VStr sid ] ->
           Agent_tools.agent_session_delete t ~session_id:sid
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "Agent_tools.agent-session-delete: need session-id"));
+          (Pricklypear_lisp.Ast.VStr "agent-session-delete: need session-id"));
 
-  (* Temporary aliases: new session + one say. Prefer Agent_tools.agent-session-new/say. *)
-  Primitives.register tbl "Agent_tools.agent"
+  (* Temporary aliases: new session + one say. Prefer agent-session-new/say. *)
+  Primitives.register tbl "agent"
     (fun args ->
       match args with
       | [ Pricklypear_lisp.Ast.VStr seed;
@@ -915,9 +915,9 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
           Agent_tools.agent t ~seed ~prompt ()
       | _ ->
           (Pricklypear_lisp.Ast.VStr
-               "Agent_tools.agent: need 2 strings (seed, prompt)"));
+               "agent: need 2 strings (seed, prompt)"));
 
-  Primitives.register tbl "Agent_tools.agent-task"
+  Primitives.register tbl "agent-task"
     (fun args ->
       match args with
       | [ Pricklypear_lisp.Ast.VStr prompt ] ->
@@ -926,7 +926,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
           Agent_tools.agent_task t ~max_steps:(Int64.to_int n) ~prompt ()
       | _ ->
           (Pricklypear_lisp.Ast.VStr
-               "Agent_tools.agent-task: need prompt-str [, max-steps int]"));
+               "agent-task: need prompt-str [, max-steps int]"));
 
   (* (propose-function 'name "spec text") -> VStr name | error string.
      Calls OpenAI-compat LLM, defines the function on the CURRENT branch
@@ -1207,7 +1207,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
           (Pricklypear_lisp.Ast.VStr "apropos-docs: need pattern-str"));
 
   (* (Agent_tools.describe name-or-pkg) -> VStr selective reveal text *)
-  Primitives.register tbl "Agent_tools.describe"
+  Primitives.register tbl "describe"
     (fun args ->
       match args with
       | [ Pricklypear_lisp.Ast.VStr needle ] ->
