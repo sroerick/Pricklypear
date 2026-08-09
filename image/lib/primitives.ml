@@ -376,6 +376,7 @@ let prim_summary (name : string) : string =
   | "analyze" -> "LLM/heuristic complexity analysis of a function (cached)"
   | "explain" -> "inside-out structural breakdown of a function"
   | "function-ast" -> "raw stored function body as quoted data (no eval)"
+  | "forge-effects" -> "capability badge (pure/db-read/db-write/…) for a parsed source expr or named binding"
   | "package-exports" -> "shallow public names for a package (std freeze or pkg/local)"
   | "package-bindings" -> "all binding names with package prefix (any depth)"
   | "list-packages" -> "top-level package prefixes from function_defs"
