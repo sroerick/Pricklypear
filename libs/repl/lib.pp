@@ -216,11 +216,26 @@
         (else (repl/llm-answer input)))))
   "Dispatch one input line → list of parts.")
 
+(define repl/user-echo
+  (lambda (input)
+    (if (string-eq input "")
+        '()
+        (list (repl/part-html
+               (repl/bubble "user"
+                 (string-append "<div class=\"repl-user\">"
+                                (html-escape input)
+                                "</div>")))))
+  "User input echo bubble; empty for blank input (help path).")
+
 (define repl/send
   (lambda ()
-    (let ((parts (repl/answer (as-str (request-param "q")))))
-      (multipart :target "#repl-transcript" :swap "beforeend" parts)))
-  "POST handler — multipart transcript parts.")
+    (let ((raw (as-str (request-param "q"))))
+      (let ((input (string-trim raw)))
+        (let ((echo (repl/user-echo input))
+              (resp (repl/answer input)))
+          (multipart :target "#repl-transcript" :swap "beforeend"
+            (append echo resp))))))
+  "POST handler — user echo + multipart transcript parts.")
 
 (define repl/page
   (lambda ()
@@ -237,6 +252,7 @@
         " hx-ext=\"hx-multipart\""
         " hx-target=\"#repl-transcript\""
         " hx-swap=\"beforeend\""
+        " hx-on::htmx:config-request=\"let q=(event.detail.parameters.q||'');if(q[0]!='/'&&q[0]!='('){event.detail.path='/repl-v2/llm';}\""
         " hx-on::after-request=\"this.reset()\">"
         "<label class=\"sr-only\" for=\"repl-q\">Input</label>"
         "<input id=\"repl-q\" name=\"q\" type=\"text\" "
@@ -251,7 +267,7 @@
         "border:1px solid #ccc;padding:.5rem;margin:.5rem 0;background:#fafafa}"
         ".repl-line{margin:.35rem 0;padding:.35rem .5rem;border-left:3px solid #888}"
         ".repl-value{border-color:#2a7}.repl-error{border-color:#a22;background:#fff5f5}"
-        ".repl-llm{border-color:#26a}.repl-note{border-color:#a62}"
+        ".repl-llm{border-color:#26a}.repl-note{border-color:#a62}.repl-user{border-color:#555;background:#f0f0f0;font-style:italic}"
         ".repl-kind{font-size:.75rem;text-transform:uppercase;color:#666;margin-right:.35rem}"
         ".repl-form{display:flex;gap:.5rem}.repl-form input{flex:1}"
         ".sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}"
