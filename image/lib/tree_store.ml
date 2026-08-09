@@ -182,19 +182,6 @@ let node_of_row (row : Pgx.row) : node option =
        | _ -> None)
   | _ -> None
 
-(* ---- one-tree P4: write-to-tree flag ----
-   Default ON: the image writes tree_nodes as TRUTH; the SQL reverse-mirror
-   trigger (009 tree_from_nodes) keeps the legacy tables in lockstep for
-   residual readers / fork-copy paths. Set PP_TREE_WRITES=0 to write tables
-   (forward trigger still mirrors to tree). Independent of PP_TREE_READS. *)
-let tree_writes () : bool =
-  (* Default OFF until tree upsert path is proven on all write sites.
-     Tables + forward deferred mirror still keep tree_nodes in lockstep.
-     Set PP_TREE_WRITES=1 to exercise direct tree writes. *)
-  match Sys.getenv_opt "PP_TREE_WRITES" with
-  | Some "1" | Some "true" | Some "yes" | Some "on" -> true
-  | _ -> false
-
 (* ---- write helpers (upsert/delete tree_nodes; the reverse trigger mirrors
    to the legacy tables in the same tx) ---- *)
 
