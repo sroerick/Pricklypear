@@ -2,7 +2,8 @@
  (name pricklypear_image_lib)
  (public_name pricklypear-image)
  (modules store_db store tree_store
-          prims_pure primitives request_context control_rim io io_lwt io_eio
+          primitives request_context control_rim io io_lwt io_eio
+          prims_time prims_crypto
           session_types call_graph agent_tools
           prims_request prims_net prims_media prims_graph prims_db
           net_prims prims_hyper
@@ -19,6 +20,7 @@
  (libraries
    pricklypear-lisp
    pricklypear-common
+   pricklypear-pure-prims
    pgx_lwt
    pgx
    httpun-lwt-unix

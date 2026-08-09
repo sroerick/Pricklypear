@@ -1,0 +1,10 @@
+;; Pure Nopales primitives, shared between the image (unix) and the
+;; browser client (js_of_ocaml). NO Unix, NO DB, NO net — only the
+;; pure-OCaml deps (lisp interpreter + yojson + digestif + markup).
+;; Spec: borge/structural-editing.borg client-eval.
+(library
+ (name pricklypear_pure_prims)
+ (public_name pricklypear-pure-prims)
+ (wrapped false)
+ (modules prims_pure)
+ (libraries pricklypear-lisp yojson markup))
