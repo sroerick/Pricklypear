@@ -79,6 +79,7 @@
  (untracked "libs/list/lib.pp" "Nopales stdlib: list helpers, no dedicated chapter")
  (untracked "libs/menu/lib.pp" "Nopales stdlib: menu helpers, no dedicated chapter")
  (untracked "libs/ops/lib.pp" "Nopales stdlib: ops helpers, no dedicated chapter")
+ (untracked "libs/rb/lib.pp" "root-beer recipe DSL / business model, no chapter yet")
  (untracked "libs/ref/lib.pp" "Nopales stdlib: ref helpers, no dedicated chapter")
  (untracked "libs/signup/lib.pp" "signup package; covered partly by multi-user, no dedicated chapter")
  (untracked "libs/spec/lib.pp" "Nopales stdlib: spec helpers, no dedicated chapter")
