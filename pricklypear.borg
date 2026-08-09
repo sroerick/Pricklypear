@@ -435,6 +435,14 @@
   (doc "Book chapter — programmatic video editing: studio library (characters/assets), Nopales-authored EDLs, Blender VSE as headless backend, render caching, gen-API bridge. Full text inlined from borge/film-edit.borg.")
   (inline borge/film-edit.borg)
  )
+ (section jobs
+  (doc "Book chapter — durable background jobs, step checkpoints, and cron: jobs as typed data nodes, a host-owned runner fiber, DBOS-style step checkpoints via with-transaction, guests see rows not fibers. Full text inlined from borge/jobs.borg.")
+  (inline borge/jobs.borg)
+ )
+ (section forge
+  (doc "Book chapter — executable spec graphs: borge's discipline as habitat data. LLM drafters fill leaves bottom-up along a computed frontier; mechanical checkers flag anomalies; the human gates each level. Full text inlined from borge/forge.borg.")
+  (inline borge/forge.borg)
+ )
  (section habitat-workflow
   (doc "Book chapter — spec-in-the-image: the borge discipline as
         a habitat-native workflow; promote is the goalpost-
