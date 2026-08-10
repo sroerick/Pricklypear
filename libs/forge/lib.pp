@@ -1163,3 +1163,24 @@
              (forge/descent-scan graph-name (cdr nodes))))
           (#t (forge/descent-scan graph-name (cdr nodes))))))))
   "For each approved node, stub its unresolved refs as children (descent).")
+
+;; ---- forge/run: the loop as a job (borge/jobs.borg) ----
+
+(define forge/run
+  (lambda (graph-name)
+    (submit-job "forge/step-job" (string-append "{\"graph\":\"" graph-name "\"}")))
+  "Submit forge/step as a background job. The runner evals (forge/step-job {\"graph\":...})
+   on your branch; the loop persists across HTTP requests and survives the
+   laptop disconnecting. Poll (job-status id) to watch progress. The step-job
+   function below is the job's entry point — it calls forge/step once per run.
+   Re-submit (forge/run graph) after each gate (approval) to continue the descent.")
+
+(define forge/step-job
+  (lambda (args)
+    (let ((graph-name (dict-get args "graph")))
+      (if (null? graph-name)
+          "no graph in args"
+          (forge/step graph-name))))
+  "Job entry point for forge/run. Calls forge/step once. The runner records
+   the step result; the caller re-submits after approving the level. This is
+   the loop-persists-across-requests shape from borge/forge.borg forge/run.")

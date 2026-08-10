@@ -1021,6 +1021,107 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
       | _ ->
           (Pricklypear_lisp.Ast.VStr "function-ast: need name-str"));
 
+  (* ===== Jobs prims (borge/jobs.borg) ===== *)
+  (* Guest surface: submit-job, job-status, jobs, cancel-job.
+     step/schedule/unschedule deferred (separate subsections).
+     The runner fiber (boot.ml) claims and evals; prims just read/submit. *)
+
+  let job_caller () =
+    match Request_context.get () with
+    | Some c -> (Request_context.manifest c).username
+    | None -> t.manifest.username
+  in
+  let job_is_admin () =
+    let uname = job_caller () in
+    if uname = "anonymous" then false
+    else
+      match Auth_store.get_user_by_username t.store uname with
+      | Some u -> u.Auth_store.is_admin
+      | None -> false
+  in
+
+  Primitives.register tbl "submit-job"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr fn;
+          args_val ] ->
+        let args_json =
+          match args_val with
+          | Pricklypear_lisp.Ast.VStr s -> s
+          | _ -> Pricklypear_lisp.Reader.pp_value args_val
+        in
+        let caller = job_caller () in
+        if caller = "anonymous" then
+          (Pricklypear_lisp.Ast.VStr "submit-job: denied for anonymous")
+        else
+          let branch =
+            match Request_context.get () with
+            | Some c -> (Request_context.manifest c).branch_name
+            | None -> t.manifest.branch_name
+          in
+          let now_ms =
+            Int64.of_float (Unix.gettimeofday () *. 1000.0)
+          in
+          let id =
+            Jobs.submit ~store:t.store ~fn ~args_json ~branch
+              ~submitted_by:caller ~run_at_ms:now_ms ()
+          in
+          (Pricklypear_lisp.Ast.VStr id)
+      | _ ->
+        (Pricklypear_lisp.Ast.VStr "submit-job: need fn-str, args"));
+
+  Primitives.register tbl "submit-job-at"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr fn;
+          args_val;
+          Pricklypear_lisp.Ast.VInt run_at_ms ] ->
+        let args_json =
+          match args_val with
+          | Pricklypear_lisp.Ast.VStr s -> s
+          | _ -> Pricklypear_lisp.Reader.pp_value args_val
+        in
+        let caller = job_caller () in
+        if caller = "anonymous" then
+          (Pricklypear_lisp.Ast.VStr "submit-job-at: denied for anonymous")
+        else
+          let branch =
+            match Request_context.get () with
+            | Some c -> (Request_context.manifest c).branch_name
+            | None -> t.manifest.branch_name
+          in
+          let id =
+            Jobs.submit ~store:t.store ~fn ~args_json ~branch
+              ~submitted_by:caller ~run_at_ms ()
+          in
+          (Pricklypear_lisp.Ast.VStr id)
+      | _ ->
+        (Pricklypear_lisp.Ast.VStr "submit-job-at: need fn-str, args, run-at-ms"));
+
+  Primitives.register tbl "job-status"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr id ] ->
+        Jobs.get ~store:t.store ~id
+          ~caller:(job_caller ()) ~is_admin:(job_is_admin ())
+      | _ -> (Pricklypear_lisp.Ast.VNil));
+
+  Primitives.register tbl "jobs"
+    (fun _ ->
+      Jobs.list ~store:t.store
+        ~caller:(job_caller ()) ~is_admin:(job_is_admin ()) ~limit:50 ());
+
+  Primitives.register tbl "cancel-job"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr id ] ->
+        Jobs.cancel ~store:t.store ~id
+          ~caller:(job_caller ()) ~is_admin:(job_is_admin ())
+      | _ ->
+        (Pricklypear_lisp.Ast.VStr "cancel-job: need job-id-str"));
+
+  (* ===== Forge prims ===== *)
+
   (* (forge-effects "src-or-name") -> VStr badge string.
      Exposes lisp/lib/effect.ml infer over a parsed source expression
      (or a named binding's body). The SAME analysis install-function

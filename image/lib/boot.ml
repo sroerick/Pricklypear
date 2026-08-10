@@ -50,6 +50,86 @@ let prepare () : Session.t * int * int =
 
 (** Eio path: prepare + fork REPL fiber + Httpun_eio accept loop.
     Call under Eio_main + Io_eio.with_ctx + Lwt_eio.with_event_loop. *)
+(** Jobs runner loop — lives here (not in Jobs.ml) to avoid a dependency
+    cycle: Jobs (DB ops) must not depend on Session, which depends on
+    Prims_db, which depends on Jobs. boot.ml can depend on both. *)
+let jobs_runner_loop ~(session : Session.t) : unit =
+  let eval_job ~job : (string * bool) =
+    let t = session in
+    let owner, name =
+      match String.index_opt job.Jobs.branch '/' with
+      | Some i ->
+          (String.sub job.Jobs.branch 0 i,
+           String.sub job.Jobs.branch (i + 1)
+             (String.length job.Jobs.branch - i - 1))
+      | None -> ("system", "main")
+    in
+    (try
+      let branch_id =
+        match Store.lookup_branch_id_by_name t.store ~owner ~name with
+        | Some id -> id
+        | None -> Store.system_main_id
+      in
+      Store.checkout_branch t.store ~new_branch_id:branch_id;
+      t.manifest <-
+        { t.manifest with
+          Pricklypear_common.Manifest.branch_id = branch_id;
+          branch_name = job.Jobs.branch;
+          username = job.Jobs.submitted_by };
+      Session.rehydrate t;
+      let call_src =
+        Printf.sprintf "(%s %s)" job.Jobs.fn (Printf.sprintf "%S" job.Jobs.args)
+      in
+      (* Wrap eval in a Request_context so crud's user-scoping (visible_sql
+         / pp.user RLS floor) sees the job's submitted_by, not 'anonymous'.
+         Without this, forge/graph-by-name (a rows scan over forge-graph
+         data_rows) returns nothing because the runner looks anonymous. *)
+      let ctx =
+        Request_context.make
+          ~manifest:t.manifest ~env:t.env ~routes:t.routes
+      in
+      let v = Request_context.with_current ctx (fun () ->
+        Session.eval_string_rim t call_src) in
+      let result_json =
+        match v with
+        | Pricklypear_lisp.Ast.VStr s -> s
+        | Pricklypear_lisp.Ast.VNil -> "null"
+        | Pricklypear_lisp.Ast.VInt n -> Int64.to_string n
+        | Pricklypear_lisp.Ast.VBool b -> if b then "true" else "false"
+        | _ -> Printf.sprintf "\"%s\"" (Pricklypear_lisp.Reader.pp_value v)
+      in
+      (result_json, true)
+    with exn ->
+      (Printexc.to_string exn, false))
+  in
+  let rec loop () =
+    (try Jobs.reap_dead ~store:session.store with _ -> ());
+    let claimed = (try Jobs.claim_due ~store:session.store with _ -> None) in
+    (match claimed with
+     | Some job ->
+       (try
+          let result, ok = eval_job ~job in
+          if ok then
+            Jobs.record_done ~store:session.store ~id:job.Jobs.id
+              ~result_json:result
+          else
+            Jobs.record_failed ~store:session.store ~id:job.Jobs.id
+              ~error:result ~max_attempts:job.Jobs.max_attempts
+        with exn ->
+          (try
+             Jobs.record_failed ~store:session.store ~id:job.Jobs.id
+               ~error:(Printexc.to_string exn)
+               ~max_attempts:job.Jobs.max_attempts
+           with _ -> ()));
+       loop ()
+     | None ->
+       Lwt_eio.run_lwt (fun () -> Lwt_unix.sleep 1.0);
+       loop ())
+  in
+  Printf.eprintf "[jobs] runner fiber started (runner_id=%s)\n%!" Jobs.runner_id;
+  loop ()
+
+
 let start_eio ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t) : unit =
   let session, http_port, repl_port = prepare () in
   (* REPL still uses Lwt_unix sockets under Lwt_eio. *)
@@ -60,6 +140,31 @@ let start_eio ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t) : unit =
       with exn ->
         Printf.eprintf "[boot] REPL fiber exited: %s\n%!"
           (Printexc.to_string exn));
+
+  (** Fork the jobs runner fiber — a background loop that claims due
+      jobs and evals them. It gets its own store+session so it doesn't
+      race HTTP on the shared session's branch. Spec: borge/jobs.borg. *)
+  Eio.Fiber.fork ~sw (fun () ->
+      try
+        let cfg = Store.config_from_env () in
+        let runner_store = Store.make ~cfg ~branch_id:Store.system_main_id () in
+        Store.connect runner_store;
+        let manifest =
+          Pricklypear_common.Manifest.make
+            ~user_id:"jobs-runner"
+            ~username:"admin"
+            ~branch_id:Store.system_main_id
+            ~branch_name:"system/main"
+            ~boot_mode:Pricklypear_common.Manifest.Boot_always_on
+            ~image_version:session.manifest.image_version
+            ()
+        in
+        let runner_session = Session.make ~manifest ~store:runner_store () in
+        jobs_runner_loop ~session:runner_session
+      with exn ->
+        Printf.eprintf "[boot] jobs runner fiber exited: %s\n%!"
+          (Printexc.to_string exn));
+
   Printf.eprintf "[boot] serving http://0.0.0.0:%d/  (htmx, httpun-eio)\n%!"
     http_port;
   Http.serve_eio ~session ~env ~sw ~port:http_port ()
