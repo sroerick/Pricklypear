@@ -121,6 +121,26 @@
       (rows 'forge-node 500)))
   "Find a node (id . fields) pair by graph+path; () when absent.")
 
+(define forge/node-by-path-in
+  (lambda (nodes path)
+    (forge/find-row
+      (lambda (pair) (string-eq (forge/field-str (cdr pair) "path") path))
+      nodes))
+  "Find a node in a PRE-FETCHED nodes list (the graph's own nodes, not
+   all 500 rows). O(nodes-in-graph) vs O(500) for node-by-path. Use this
+   in any loop that touches many nodes (flaggers, frontier, scans) to
+   avoid re-scanning the whole forge-node table per lookup.")
+
+(define forge/node-in-graph?
+  (lambda (graph node-path)
+    (let ((g (string-append graph "/")))
+      (or (string-eq node-path graph)
+          (string-starts-with? node-path g))))
+  "True when node-path belongs to graph — by path PREFIX, no row scan.
+   Paths are graph/scoped/... so node-path starts with graph/ (or equals
+   graph for the root). Replaces path-in-graph? (which called node-by-path
+   per flag, O(flags×nodes)).")
+
 (define forge/node-exists?
   (lambda (graph path)
     (not (null? (forge/node-by-path graph path))))
@@ -272,14 +292,16 @@
         (let ((f (cdr pair)))
           (if (string-eq (forge/field-str f "resolved") "true")
               #f
-              (forge/path-in-graph? graph (forge/field-str f "node_path")))))
+              (forge/node-in-graph? graph (forge/field-str f "node_path")))))
       (rows 'forge-flag 500)))
-  "Unresolved flags whose node_path belongs to the graph.")
+  "Unresolved flags whose node_path belongs to the graph. Uses the path
+   prefix check (node-in-graph?) — O(flags) with cheap string ops, no
+   per-flag node row scan.")
 
 (define forge/path-in-graph?
   (lambda (graph node-path)
-    (not (null? (forge/node-by-path graph node-path))))
-  "True when node_path is a node of the graph.")
+    (forge/node-in-graph? graph node-path))
+  "Legacy alias for node-in-graph? (prefix check, no row scan).")
 
 (define forge/resolve-flag
   (lambda (flag-id resolution)
@@ -533,13 +555,13 @@
 ;; ---- capability escalation: child effects exceed parent declared ----
 
 (define forge/flag-capability
-  (lambda (graph path)
-    (let ((node (forge/node-by-path graph path)))
+  (lambda (nodes path)
+    (let ((node (forge/node-by-path-in nodes path)))
       (if (null? node) (list)
       (let ((f (cdr node)))
         (let ((parent-path (forge/field-str f "parent")))
           (if (string-eq parent-path "") (list)
-          (let ((parent (forge/node-by-path graph parent-path)))
+          (let ((parent (forge/node-by-path-in nodes parent-path)))
             (if (null? parent) (list)
             (let ((body (forge/field-str f "body"))
                   (declared (forge/field-str (cdr parent) "effects")))
@@ -551,7 +573,7 @@
                               " but body is " actual)))
                     (list)))))))))))))
   "Raise a capability flag when a child's inferred effect exceeds the
-   parent's declared badge.")
+   parent's declared badge. Takes the pre-fetched nodes list.")
 
 (define forge/effect-escalates?
   (lambda (declared actual)
@@ -574,8 +596,8 @@
 ;; ---- missing victory condition: empty verify source ----
 
 (define forge/flag-victory
-  (lambda (graph path)
-    (let ((node (forge/node-by-path graph path)))
+  (lambda (nodes path)
+    (let ((node (forge/node-by-path-in nodes path)))
       (if (null? node) (list)
       (let ((f (cdr node)))
         (let ((verify (forge/field-str f "verify"))
@@ -591,13 +613,13 @@
 ;; ---- dangling refs: free-vars referencing nothing ----
 
 (define forge/flag-dangling
-  (lambda (graph path)
-    (let ((node (forge/node-by-path graph path)))
+  (lambda (nodes path)
+    (let ((node (forge/node-by-path-in nodes path)))
       (if (null? node) (list)
       (let ((f (cdr node)))
         (let ((body (forge/field-str f "body")))
           (if (string-eq body "") (list)
-          (let ((unres (forge/unresolved graph path body)))
+          (let ((unres (forge/unresolved "" path body)))
             (if (null? unres) (list)
             (list (forge/make-flag-spec path "dangling"
                     (string-append "unresolved references: "
@@ -607,16 +629,16 @@
 ;; ---- orphan: node traces to no requirement ancestor ----
 
 (define forge/flag-orphan
-  (lambda (graph path)
-    (if (forge/has-requirement-ancestor? graph path)
+  (lambda (nodes path)
+    (if (forge/has-requirement-ancestor? nodes path)
         (list)
         (list (forge/make-flag-spec path "orphan"
                 "traces to no requirement ancestor"))))
   "Flag nodes with no requirement node in their ancestor chain.")
 
 (define forge/has-requirement-ancestor?
-  (lambda (graph path)
-    (let ((node (forge/node-by-path graph path)))
+  (lambda (nodes path)
+    (let ((node (forge/node-by-path-in nodes path)))
       (if (null? node) #t
       (let ((f (cdr node)))
         (let ((kind (forge/field-str f "kind"))
@@ -624,14 +646,14 @@
           (cond
             ((string-eq kind "requirement") #t)
             ((string-eq parent "") #f)
-            (#t (forge/has-requirement-ancestor? graph parent))))))))
+            (#t (forge/has-requirement-ancestor? nodes parent))))))))
   "Walk parent chain; true when a requirement kind node is found.")
 
 ;; ---- size heuristic: body too big to review in one glance ----
 
 (define forge/flag-size
-  (lambda (graph path)
-    (let ((node (forge/node-by-path graph path)))
+  (lambda (nodes path)
+    (let ((node (forge/node-by-path-in nodes path)))
       (if (null? node) (list)
       (let ((f (cdr node)))
         (let ((body (forge/field-str f "body")))
@@ -654,18 +676,19 @@
 ;; ---- run all mechanical flaggers on a node ----
 
 (define forge/mechanical-flags
-  (lambda (graph path)
+  (lambda (nodes path)
     (forge/append
       (forge/append
         (forge/append
-          (forge/flag-capability graph path)
-          (forge/flag-victory graph path))
+          (forge/flag-capability nodes path)
+          (forge/flag-victory nodes path))
         (forge/append
-          (forge/flag-dangling graph path)
-          (forge/flag-orphan graph path)))
-      (forge/flag-size graph path)))
+          (forge/flag-dangling nodes path)
+          (forge/flag-orphan nodes path)))
+      (forge/flag-size nodes path)))
   "All mechanical flags for one node. Returns a list of flag-spec pairs:
-   (check . detail). The caller raises them as forge-flag rows.")
+   (check . detail). Takes the pre-fetched nodes list so the flaggers
+   search the graph's own nodes, not all 500 rows.")
 
 (define forge/make-flag-spec
   (lambda (path check detail)
@@ -693,7 +716,7 @@
       (let ((path (forge/field-str (cdr pair) "path")))
         (seq
           (forge/raise-flags graph path
-            (forge/mechanical-flags graph path))
+            (forge/mechanical-flags nodes path))
           (forge/scan-flags-nodes graph (cdr nodes)))))))
   "Scan all nodes, raise their mechanical flags.")
 
@@ -872,6 +895,101 @@
     (string-starts-with? s "llm-chat:"))
   "Legacy: true when a raw llm-chat call returned an error string. Kept for frontier/review paths that still use llm-chat directly.")
 
+;; ---- tri-state review: a SECOND LLM session judges the draft ----
+;; Separation of powers: the drafter writes code; the reviewer (a different
+;; system prompt, not the drafter's session) returns approve | deny | flag.
+;; Runs only when mechanical flags are clean (mechanical checks gate first).
+
+(define forge/reviewer-seed
+  (string-append
+    "You are a Nopales code reviewer for a Pricklypear spec graph. "
+    "A drafter (a different LLM session) produced a function body. "
+    "Judge it for correctness and style.\n"
+    "\n"
+    "Respond with EXACTLY one line, starting with one of:\n"
+    "  APPROVE — the body is correct and clean\n"
+    "  DENY: <reason> — the body is wrong (bad syntax, wrong prim args, logic error); the drafter will redraft with this reason as a constraint\n"
+    "  FLAG: <reason> — you are unsure or it needs a human judgment\n"
+    "\n"
+    "Check for: balanced parens, valid Nopales prims (create takes dict-set* JSON not assoc lists; let takes one body form; no named-let), correct field access (dict-get on cdr of row), and that the body matches the node purpose. Do not nitpick style; only flag real defects.")
+  "Seed for the reviewer LLM. Separation of powers: never the drafter's session.")
+
+(define forge/review-node
+  (lambda (graph path)
+    (let* ((node (forge/node-by-path graph path)))
+      (if (null? node) "review: node not found"
+      (let* ((f (cdr node))
+             (body (forge/field-str f "body"))
+             (title (forge/field-str f "title")))
+        (if (string-eq body "") "review: empty body"
+        (let* ((all-flags (forge/flags-for path))
+               (mflags (list/filter (lambda (p) (not (string-eq (forge/field-str (cdr p) "resolved") "true"))) all-flags)))
+          (if (not (null? mflags)) "review: skipped (mechanical flags open)"
+          (let* ((prompt (forge/review-prompt path body title))
+                 (verdict (llm-chat forge/reviewer-seed prompt)))
+            (if (forge/llm-error? verdict)
+                (seq
+                  (forge/flag path "judgment"
+                    (string-append "reviewer call failed: " verdict))
+                  "review: reviewer call failed")
+                (forge/apply-review verdict graph path))))))))))
+  "Tri-state review of a drafted node. Skips if mechanical flags are open
+   (mechanical checks gate first). Calls the reviewer LLM (a separate
+   session via llm-chat — no tools, pure judgment). Returns a status string.")
+
+(define forge/review-prompt
+  (lambda (path body title)
+    (string-append
+      "Review this Nopales function draft.\n\n"
+      "Node: " path "\n"
+      "Purpose: " title "\n"
+      "Body:\n" body "\n\n"
+      "Respond with one line: APPROVE, DENY: <reason>, or FLAG: <reason>."))
+  "Assemble the review prompt from the node's body + purpose.")
+
+(define forge/apply-review
+  (lambda (verdict graph path)
+    (let* ((first-line (car (string-split verdict "\n")))
+           (head (forge/trim first-line)))
+      (cond
+        ((string-starts-with? head "APPROVE") "review: approved")
+        ((string-starts-with? head "DENY")
+         (let ((reason (forge/review-reason head)))
+           (seq
+             (forge/add-constraint graph path (string-append "reviewer denied: " reason))
+             (forge/flag path "judgment"
+               (string-append "reviewer denied: " reason))
+             "review: denied (constraint + judgment flag added)")))
+        ((string-starts-with? head "FLAG")
+         (let ((reason (forge/review-reason head)))
+           (seq
+             (forge/flag path "judgment"
+               (string-append "reviewer flagged: " reason))
+             "review: flagged (judgment flag added)")))
+        (#t
+         (seq
+           (forge/flag path "judgment"
+             (string-append "reviewer verdict unparseable: " head))
+           "review: unparseable verdict")))))
+  "Apply the reviewer's verdict. Takes the FIRST line of the verdict, trims it,
+   and checks prefixes (APPROVE/DENY/FLAG). APPROVE: no-op (stays drafted,
+   human gates the level). DENY: append reason as a constraint + judgment flag.
+   FLAG: judgment flag. Unknown: judgment flag. Robust to trailing commentary.")
+
+(define forge/review-reason
+  (lambda (head)
+    (let ((parts (string-split head ":")))
+      (if (null? (cdr parts))
+          "no reason given"
+          (forge/trim (forge/str-join ":" (cdr parts))))))
+  "Extract the reason from a DENY:/FLAG: verdict line — the text after the
+   first colon, trimmed. Joins on ':' in case the reason itself has colons.")
+
+(define forge/trim
+  (lambda (s)
+    (string-trim s))
+  "Trim whitespace (wrapper over string-trim).")
+
 (define forge/first-form
   (lambda (s)
     (forge/first-form-at s 0))
@@ -925,10 +1043,15 @@
       (forge/set-body-verify graph path body-src "")
       (forge/set-status graph path "drafted")
       (forge/set-inferred-effects graph path body-src)
-      (forge/raise-flags graph path
-        (forge/mechanical-flags graph path))
-      path))
-  "Write the drafted body, mark drafted, set inferred effects, raise flags.")
+      (let ((nodes (forge/nodes-of-graph graph)))
+        (seq
+          (forge/raise-flags graph path
+            (forge/mechanical-flags nodes path))
+          path))))
+  "Write the drafted body, mark drafted, set inferred effects, raise flags.
+   Fetches the graph's nodes AFTER the body/effects writes so the flaggers
+   see the fresh body (not a stale empty one). The five mechanical flaggers
+   search the graph's own nodes (not all 500 rows) — O(nodes-in-graph).")
 
 (define forge/set-inferred-effects
   (lambda (graph path body-src)
@@ -992,11 +1115,8 @@
 
 (define forge/nodes-of-graph-by-name
   (lambda (graph-name)
-    (list/filter
-      (lambda (pair)
-        (string-eq (forge/field-str (cdr pair) "graph") graph-name))
-      (rows 'forge-node 500)))
-  "All node pairs for a graph name (rows scan).")
+    (forge/nodes-of-graph graph-name))
+  "Alias for nodes-of-graph (kept for step/descent callers).")
 
 (define forge/has-unapproved-scan
   (lambda (graph-name nodes)
@@ -1019,8 +1139,11 @@
   (lambda (graph-name)
     (let ((f (forge/frontier graph-name)))
       (if (null? f) "frontier empty"
-      (forge/draft-node graph-name (car f)))))
-  "Draft the first ready node on the frontier.")
+      (let ((path (car f)))
+        (seq
+          (forge/draft-node graph-name path)
+          (forge/review-node graph-name path))))))
+  "Draft the first ready node on the frontier, then run tri-state review.")
 
 (define forge/propose-descent
   (lambda (graph-name)
