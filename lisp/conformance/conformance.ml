@@ -117,6 +117,10 @@ let cases = [
   mk "special-forms" "if false" "(if #f 1 2)" "2";
   mk "special-forms" "begin last" "(begin 1 2 3)" "3";
   mk "special-forms" "let" "(let ((x 10)) (+ x 1))" "11";
+  mk "special-forms" "let* sequential" "(let* ((x 1) (y (+ x 1))) y)" "2";
+  mk "special-forms" "let* empty" "(let* () 42)" "42";
+  mk "special-forms" "let parallel no leak"
+    "(let ((a 1) (b 2)) (+ a b))" "3";
   mk "special-forms" "lambda app" "((lambda (x) (+ x 1)) 41)" "42";
   mk "special-forms" "and short-circuit true" "(and #t #t 7)" "7";
   mk "special-forms" "and short-circuit false" "(and #t #f 7)" "#f";

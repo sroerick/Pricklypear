@@ -1258,7 +1258,7 @@
   )
 
   (subsection binding-sugar
-   (doc "Define and body ergonomics: function define, begin/multi-body")
+   (doc "Define and body ergonomics: function define, begin/multi-body, let*")
    (status implemented)
    (implements lisp/lib/eval.ml lisp/lib/special_forms.ml)
    (verify
@@ -1266,7 +1266,10 @@
     (test "multi-body define evaluates to last form")
     (test "(begin e1 e2 … en) => en")
     (test "old (define name (lambda …)) still works")
-    (test "define docstring forms coexist (see define-docstring)"))
+    (test "define docstring forms coexist (see define-docstring)")
+    (test "(let* ((x 1) (y (+ x 1))) y) => 2 — later binding sees earlier")
+    (test "(let* () body) == body — empty bindings")
+    (test "(let ((a 1) (b 2)) …) stays parallel (a cannot see b)"))
    (details
     (doc (|
          SHIPPED.
@@ -1287,6 +1290,21 @@
            value of en; earlier forms for effect. body_of_exprs
            desugars multi-body define/lambda/match/guard arms to
            Seq chains.
+
+         LET (parallel) vs LET* (sequential)
+           (let ((a va) (b vb)…) body) — each val evaluated in the
+           OUTER env, then all bound at once in a fresh child.
+           Binding b cannot see binding a. (Surface multi-binding
+           let is a special form; the AST Let node carries a single
+           binding and is the parallel case.)
+
+           (let* ((a va) (b vb)…) body) — SEQUENTIAL: each binding's
+           val is evaluated in the child env accumulated so far, so
+           later bindings see earlier ones. Desugars conceptually to
+           nested single-binding lets. (let* () body) == body.
+           let* is a special form (same syntax shape as let); it is
+           NOT a new AST node — handled in eval_special_form by
+           folding bindings into one child env left-to-right.
 
          PRINT
            function-source pretty-prints stored AST; short-form

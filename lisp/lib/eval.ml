@@ -78,7 +78,7 @@ let lookup_prim (tbl : prim_table) (name : string) : prim_fn option =
     these names is dispatched as the special form, not as a function call. *)
 let is_special_form (name : string) : bool =
   match name with
-  | "lambda" | "let" | "letrec" | "if" | "define" | "quote" | "seq"
+  | "lambda" | "let" | "let*" | "letrec" | "if" | "define" | "quote" | "seq"
   | "begin" | "match" | "guard" | "error"
   | "prim" | "with-transaction"
   | "quasiquote" | "unquote" | "unquote-splicing" | "defmacro"
@@ -90,7 +90,7 @@ let is_special_form (name : string) : bool =
   | _ -> false
 
 let kernel_special_names =
-  [ "lambda"; "let"; "letrec"; "if"; "define"; "quote"; "seq"; "begin";
+  [ "lambda"; "let"; "let*"; "letrec"; "if"; "define"; "quote"; "seq"; "begin";
     "match"; "guard"; "error"; "prim";
     "with-transaction"; "quasiquote"; "unquote"; "unquote-splicing";
     "defmacro"; "macroexpand-1"; "macroexpand"; "gensym";
@@ -613,6 +613,29 @@ and eval_special_form
                 Cont (env', body)
             | _ -> raise (Interp_error (User_error "bad let bindings")))
        | _ -> raise (Interp_error (User_error "let needs bindings + body")))
+  | "let*", _ ->
+      (* Sequential let: each binding's val is evaluated in the child env
+         accumulated so far, so later bindings see earlier ones. Conceptually
+         desugars to nested single-binding lets; implemented as a left-to-right
+         fold over one child env. *)
+      (match full_args with
+       | [ _; bindings_expr; body ] ->
+           (match bindings_expr with
+            | Lit VNil -> Cont (env, body)
+            | App (App (Var _, _) as first_binding, rest_bindings) ->
+                let all_bindings = first_binding :: rest_bindings in
+                let env' = Env.child env in
+                List.iter
+                  (fun bp ->
+                    match bp with
+                    | App (Var n, [ val_expr ]) ->
+                        let v = eval ~budget ~prims env' val_expr in
+                        Env.define env' n v
+                    | _ -> raise (Interp_error (User_error "bad let* binding")))
+                  all_bindings;
+                Cont (env', body)
+            | _ -> raise (Interp_error (User_error "bad let* bindings")))
+       | _ -> raise (Interp_error (User_error "let* needs bindings + body")))
   | "if", [ _; test; then_e; else_e ] ->
       let v = eval ~budget ~prims env test in
       (match v with
