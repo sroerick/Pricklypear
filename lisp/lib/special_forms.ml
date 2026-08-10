@@ -46,14 +46,6 @@ let catalog : entry list =
       examples = "(let ((y 5)) y)  →  5";
     };
     {
-      name = "let*";
-      summary =
-        "Sequential let: each binding's val is evaluated in the child env \
-         accumulated so far, so later bindings see earlier ones.";
-      arity = "(let* ((name val) …) body)";
-      examples = "(let* ((x 1) (y (+ x 1))) y)  →  2";
-    };
-    {
       name = "letrec";
       summary =
         "Mutual recursive bindings (AST form). App-form letrec from \
