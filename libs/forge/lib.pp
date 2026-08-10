@@ -823,18 +823,39 @@
     "1. Use eval_expr to TEST your draft. Call it like: "
     "((lambda (a b) (+ a b)) 1 2) — it returns the value or an error.\n"
     "2. If eval_expr errors, READ the error, FIX the lambda, and re-eval. "
-    "Iterate until it evaluates cleanly with realistic sample args.\n"
+    "Iterate until it produces the CORRECT RESULT with realistic args — "
+    "not just no-error. Check that the returned value is what the function "
+    "should actually return for those inputs.\n"
     "3. Do NOT use install_function, register_route, or smoke_route — "
     "forge manages the body in a graph node, NOT on the branch. "
     "install_function is forbidden; only eval_expr is allowed for testing.\n"
     "4. Your FINAL message must contain EXACTLY TWO s-expression forms,\n"
     "   each on its own line, nothing else:\n"
     "   Line 1: the (lambda ...) body you verified — copy it verbatim.\n"
-    "   Line 2: a VERIFY expression that uses `fn` (which will be bound\n"
-    "   to your lambda) and returns #t if the function is correct.\n"
-    "   Example verify: (string? (fn \"sample\" \"arg\"))\n"
-    "   The verify is your test — it must call fn with realistic args\n"
-    "   and check the result. Count parens carefully on both lines.\n"
+    "   Line 2: a VERIFY expression that ASSERTS THE OUTCOME — not just\n"
+    "   the return type. Use `fn` (bound to your lambda) and assert what\n"
+    "   the function should actually produce or change.\n"
+    "\n"
+    "   GOOD verifies (assert the outcome):\n"
+    "     (= (fn 5) 10)                           ; doubling: 5 -> 10\n"
+    "     (string-eq (dict-get (fn 'user id) \"name\") \"Alice\")  ; field value\n"
+    "     (let* ((id (fn \"x\" \"y\"))\n"
+    "            (row (get 'type id)))\n"
+    "       (string-eq (dict-get (cdr row) \"title\") \"y\"))      ; row was created with right data\n"
+    "     (let* ((id (fn \"x\"))\n"
+    "            (_ (fn-remove id)))\n"
+    "       (null? (get 'type id)))                ; row is gone after remove\n"
+    "   BAD verifies (too weak — just check types, not correctness):\n"
+    "     (string? (fn \"x\" \"y\"))            ; only checks return is a string\n"
+    "     (not (null? (fn)))                       ; only checks non-empty\n"
+    "\n"
+    "   For DB-reading functions, assert the actual field values returned.\n"
+    "   For DB-writing functions, read back the created row and assert its fields.\n"
+    "   For DB-deleting functions, assert the row is gone after the delete.\n"
+    "   If the verify needs a row to exist first, create it inside the verify\n"
+    "   with (create ...) before calling fn. Keep verifies SHORT — one assertion.\n"
+    "   The verify MUST return #t only when the function is correct.\n"
+    "   Count parens carefully on both lines.\n"
     "\n"
     "NOPALES SYNTAX REMINDERS:\n"
     "  - let takes exactly ONE body form; use (seq a b) for multi-step.\n"
@@ -861,25 +882,30 @@
 
 (define forge/draft-node
   (lambda (graph path)
-    (let* ((prompt (forge/draft-prompt graph path))
-           (sid (agent-session-new forge/drafter-seed #t))
-           (resp (agent-say sid prompt 12))
-           (body (forge/first-form resp))
-           (verify (forge/second-form resp)))
-      (seq
-        (agent-session-delete sid)
-        (if (forge/drafter-failed? resp)
-            (seq
-              (forge/flag path "judgment"
-                (string-append "drafter failed: " resp))
-              (forge/commit-draft graph path ""))
-            (if (forge/parse-ok? body)
-                (forge/commit-draft graph path body verify)
+    (let* ((prompt (forge/draft-prompt graph path)))
+      (guard (lambda (e)
+               (seq
+                 (forge/flag path "judgment"
+                   (string-append "drafter crashed: " (str e)))
+                 (forge/commit-draft graph path "")))
+        (let* ((sid (agent-session-new forge/drafter-seed #t))
+               (resp (agent-say sid prompt 16))
+               (body (forge/first-form resp))
+               (verify (forge/second-form resp)))
+          (seq
+            (agent-session-delete sid)
+            (if (forge/drafter-failed? resp)
                 (seq
                   (forge/flag path "judgment"
-                    "drafter body unparseable (missing parens or syntax error)")
-                  (forge/commit-draft graph path "")))))))
-  "Agentic draft: spin up a drafter agent session (eval_expr enabled), let it test-and-iterate up to 12 steps, harvest the body (first form) + verify (second form), parse-check the body, then commit-draft. The agent loop runs in OCaml (per-tool budget). On failure or unparseable harvest, raise a judgment flag and leave the body empty.")
+                    (string-append "drafter failed: " resp))
+                  (forge/commit-draft graph path ""))
+                (if (forge/parse-ok? body)
+                    (forge/commit-draft graph path body verify)
+                    (seq
+                      (forge/flag path "judgment"
+                        "drafter body unparseable (missing parens or syntax error)")
+                      (forge/commit-draft graph path "")))))))))
+  "Agentic draft: spin up a drafter agent session (eval_expr enabled), let it test-and-iterate up to 12 steps, harvest the body (first form) + verify (second form), parse-check the body, then commit-draft. Guard-wrapped: any crash (agent loop, eval, effects) becomes a judgment flag + empty body, not an uncaught exception.")
 
 (define forge/parse-ok?
   (lambda (s)
