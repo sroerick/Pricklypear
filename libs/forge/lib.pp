@@ -941,16 +941,13 @@
   (lambda (graph-name nodes)
     (if (null? nodes) #f
     (let ((f (cdr (car nodes))))
-      (let ((status (forge/field-str f "status"))
-            (body (forge/field-str f "body")))
+      (let ((status (forge/field-str f "status")))
         (cond
-          ((string-eq status "planned")
-           (if (string-eq body "") #f (forge/has-unapproved-scan graph-name (cdr nodes))))
           ((string-eq status "drafted") #t)
           ((string-eq status "verified") #t)
           (#t (forge/has-unapproved-scan graph-name (cdr nodes))))))))
-  "A drafted/verified node is unapproved; a planned empty node is not yet
-   in the approval surface. implemented/approved are done.")
+  "A drafted/verified node is unapproved (past planned, not yet approved).
+   Planned/approved/implemented nodes are not unapproved — keep scanning.")
 
 (define forge/frontier-non-empty?
   (lambda (graph-name)
