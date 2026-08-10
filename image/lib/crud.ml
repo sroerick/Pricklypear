@@ -622,9 +622,25 @@ let tree_children_html (store : Store.t) ~(prefix : string) ~(garden_root : stri
 
 let tree_upsert (store : Store.t) ~(path : string) ~(kind : string)
     ~(type_name : string) ~(body_json : string) ~(author : string) : value =
-  match Io_lwt.Db.current_conn store with
-  | None -> (VStr "tree/upsert: no DB")
-  | Some conn ->
+  if kind = "datum" then
+    (* Datum node: run the same typed-boundary validation as create/update,
+       then write via Tree_store.upsert_datum (path-explicit; generates an
+       id when the path's id label is a placeholder). one-tree.tree-datum-prims. *)
+    let reject = check_type_fields store ~type_name ~fields_json:body_json in
+    (match reject with
+     | Some msg -> (VStr msg)
+     | None ->
+     match Io_lwt.Db.current_conn store with
+     | None -> (VStr "tree/upsert: no DB")
+     | Some conn ->
+       let r =
+         Tree_store.upsert_datum conn ~path ~type_name ~body_json ~author
+       in
+       (match r with Ok p -> (VStr p) | Error e -> (VStr e)))
+  else
+    match Io_lwt.Db.current_conn store with
+    | None -> (VStr "tree/upsert: no DB")
+    | Some conn ->
       let r =
         Tree_store.upsert_hier conn ~path ~kind ~type_name ~body_json ~author
       in

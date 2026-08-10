@@ -319,6 +319,79 @@ let delete_datum (conn : Store_db.conn) ~(type_name : string) ~(id : string) : s
    | [ [ id_c ] ] -> Pgx.Value.to_string id_c
    | _ -> None)
 
+(** Upsert a datum node at [path] (kind="datum"). When the path's id
+    label is a placeholder (empty, "_", or "new"), generate a fresh uuid
+    via gen_random_uuid() and build the path with tree_datum_path the
+    way insert_datum does — so a caller can create a new datum node by
+    path without pre-allocating an id. Otherwise the caller-supplied
+    full path is used (data.u.<user>.<type>.<id> or data.shared.<type>.<id>).
+    Typed-boundary validation runs in the caller (crud.ml check_type_fields);
+    this function is the SQL write. ON CONFLICT (path) DO UPDATE the
+    body/hash/author so the same prim upserts and updates. The reverse
+    mirror (tree_from_nodes) syncs data_rows. Returns Ok path | Error msg. *)
+let upsert_datum (conn : Store_db.conn) ~(path : string) ~(type_name : string)
+    ~(body_json : string) ~(author : string) : (string, string) result =
+  let last_label =
+    let parts = String.split_on_char '.' path in
+    match List.rev parts with [] -> "" | l :: _ -> l
+  in
+  let is_placeholder =
+    last_label = "" || last_label = "_" || last_label = "new"
+  in
+  let hash = hash_body body_json in
+  let run_sql ~params sql =
+    try
+      let rows = Io_lwt.Db.execute conn ~params sql in
+      (match rows with
+       | [ [ p ] ] ->
+           (match Pgx.Value.to_string p with
+            | Some s -> Ok s
+            | None -> Error "upsert_datum: no path returned")
+       | _ -> Error "upsert_datum: failed")
+    with exn -> Error ("upsert_datum: " ^ Printexc.to_string exn)
+  in
+  if is_placeholder then
+    (* Generate uuid + path via tree_datum_path(type_name, id, author).
+       The generated path is always ltree-safe; no valid_path check on
+       the caller's placeholder path. *)
+    if type_name = "" then Error "upsert_datum: empty type_name"
+    else
+      let sql =
+        "WITH nid AS (SELECT gen_random_uuid() AS id) " ^
+        "INSERT INTO tree_nodes (path, kind, type_name, payload, hash, author, updated_at) " ^
+        "SELECT tree_datum_path($1::text, nid.id, $3::text), 'datum', $1::text, " ^
+        "  jsonb_build_object('v',1,'kind','datum', " ^
+        "    'path', tree_datum_path($1::text, nid.id, $3::text)::text, " ^
+        "    'type',$1::text,'body',$2::jsonb,'author',$3::text,'doc',NULL,'hash',$4::text), " ^
+        "  $4::text, $3::text, now() " ^
+        "FROM nid ON CONFLICT (path) DO UPDATE SET " ^
+        "  payload = EXCLUDED.payload, hash = EXCLUDED.hash, " ^
+        "  author = EXCLUDED.author, updated_at = now() " ^
+        "RETURNING path::text"
+      in
+      run_sql ~params:
+        [ Pgx.Value.of_string type_name; Pgx.Value.of_string body_json;
+          Pgx.Value.of_string author; Pgx.Value.of_string hash ]
+        sql
+  else if type_name = "" then Error "upsert_datum: empty type_name"
+  else
+    let sql =
+      "INSERT INTO tree_nodes (path, kind, type_name, payload, hash, author, updated_at) " ^
+      "VALUES ($1::ltree, 'datum', $2::text, " ^
+      "  jsonb_build_object('v',1,'kind','datum','path',$1::text,'type',$2::text, " ^
+      "    'body',$3::jsonb,'author',$4::text,'doc',NULL,'hash',$5::text), " ^
+      "  $5::text, $4::text, now()) " ^
+      "ON CONFLICT (path) DO UPDATE SET " ^
+      "  payload = EXCLUDED.payload, hash = EXCLUDED.hash, " ^
+      "  author = EXCLUDED.author, updated_at = now() " ^
+      "RETURNING path::text"
+    in
+    run_sql ~params:
+      [ Pgx.Value.of_string path; Pgx.Value.of_string type_name;
+        Pgx.Value.of_string body_json; Pgx.Value.of_string author;
+        Pgx.Value.of_string hash ]
+      sql
+
 (** Validate [fields_json] against a declared type's field names.
     Rules (one-tree.typed-nodes / object-model.type-system v1):
       - fields_json must be a JSON object

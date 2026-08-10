@@ -367,6 +367,7 @@
     (smoke "parse: 500+ wiki links in one body completes; count matches")
     (smoke "reindex/upsert: 10 nodes x ~8k body with links indexes all links")
     (smoke "render: outline/html on large tree/body returns HTML, no budget error")
+    (smoke "lazy: a many-node note opens with eager-depth nodes only; expanding a collapsed node fetches its subtree partial; no budget error")
     (smoke "many-node ops: N structure ops each in own eval (HTTP-shaped)")
     (smoke "(budget-remaining) positive mid-call; floor asserted after stress cases"))
    (details
@@ -723,6 +724,8 @@
            GET  /partials/notes-list
            GET  /partials/notes-outline?slug=
            GET  /partials/notes-backlinks?slug=
+           GET  /partials/notes-node?slug=&id=  ; lazy subtree
+                returns one node's <details> subtree HTML
            POST /partials/notes-op       ; structure edit
                 params: slug, op, id, … 
 
@@ -735,6 +738,28 @@
          RENDER:
            Prefer <details class="ol-node"> fold (no heavy JS tree).
            Ops as small buttons on each row (htmx).
+
+         LEAN NODE RENDERER (outline/html-node):
+           Each node is emitted with the fewest html/* calls feasible —
+           constant attribute fragments are precomputed at library
+           load and assembled with direct string-append, not via the
+           fine-grained html/attr / html/attrs / html/span DSL on the
+           hot recursive path. The DSL stays available for page chrome
+           and one-off fragments; the recursive outline renderer is the
+           budget-critical path and must not compose dozens of function
+           applications per node.
+
+         LAZY SUBTREE LOADING:
+           Eager rendering is capped at a shallow depth (root + its
+           direct children). Deeper nodes render as a collapsed
+           <details> whose body is fetched on first expand via
+           hx-get=/partials/notes-node?slug=&id=, swapped in place.
+           This bounds per-render html-skeleton cost by the eager
+           depth, not by total node count, so a large note never
+           Budget_exceeded on ordinary open. The partial returns the
+           same html-node markup the eager path would have produced
+           for that subtree, so eager and lazy nodes are visually
+           identical. Structure ops still re-render and swap #outline.
 
          MENU:
            Add (menu/link "notes" "/notes") under apps in default
@@ -1084,7 +1109,137 @@
     (smoke "create list and add item"))
 
   )
+  (subsection kanban
+   (doc "Board view over todos: one todo-list as a board with its own columns (per-list state set), cards draggable via tree actions")
+   (status planned)
+   (implements libs/kanban/lib.pp libs/todo/lib.pp)
+   (details
+    (doc (|
+         A kanban is a VIEW over the existing todo model, not a
+         new data type. A board IS one todo-list; its columns ARE
+         that list's OWN state set (a `columns` field on the
+         todo-list datum); its cards ARE that list's todo-items.
+         No kanban-card type, no kanban-board type. This is the
+         first product consumer of the tree prim family as a
+         DATA API (one-tree.tree-datum-prims): every mutation is
+         a tree action over a datum node (the list for column
+         config, the cards for moves), not a create/update call.
 
+         PER-LIST COLUMNS, NOT A GLOBAL STATE LIST. The todo
+         package ships a default state list (todo/state/list: "",
+         TODO, DONE, WAITING, CANCELLED). A list that does not
+         set its own `columns` falls back to that default — so
+         existing /todos and existing lists are unchanged. A
+         list that sets `columns` overrides the default for
+         itself: the board renders exactly those columns, in
+         that order, and a card's `state` is one of them. This
+         makes the todo state model per-list configurable instead
+         of a single fixed global — the same mechanism answers
+         "set your own columns" and "set your own todo state":
+         edit the list's `columns` field. (The default list stays
+         as the fallback and the seed for new lists; it is not
+         deleted.)
+
+         BOARD = ONE TODO-LIST. The /kanban route takes a list_id
+         (defaults to the Inbox). A list-picker switches boards.
+         Adding a card adds a todo-item to the list (create, the
+         id-generating convenience); the board re-reads.
+
+         CARDS = todo-items of the list, grouped by state. Read
+         via tree/list over data.u.<user>.todo-item.* plus a
+         list_id filter, OR via the todo package's existing
+         todo/items-for-list helper composed with tree/list.
+         Each card shows title + due; click opens the existing
+         todo detail. Cards whose `state` is not in the board's
+         current columns render in a trailing "other" bucket so a
+         removed/renamed column never silently hides cards.
+
+         MUTATIONS ARE TREE ACTIONS (the point of this
+         subsection + the prerequisite one-tree fix). The list
+         datum and each card datum are tree_nodes; every mutation
+         is tree/get + dict-set* + tree/upsert at the same path:
+           - MOVE CARD BETWEEN COLUMNS (drop on a state column):
+             tree/get the card's datum node, dict-get its body,
+             dict-set* the `state` field to the target column
+             name and `position` to the drop index, tree/upsert
+             the new body at the SAME path. Goes through the
+             reverse mirror so (get 'todo-item id) and
+             (rows 'todo-item) see the new state, exactly as if
+             update had written it.
+           - REORDER WITHIN A COLUMN (drop between two cards):
+             same tree/get + dict-set* `position` per moved
+             card; wrap the N affected cards in with-transaction
+             so the reorder is atomic and no two cards share a
+             position mid-drop.
+           - ADD / REMOVE A COLUMN: tree/get the LIST datum,
+             dict-set* its `columns` field to the new array,
+             tree/upsert the list at the same path. Removing a
+             column does NOT delete its cards (they land in the
+             "other" bucket until re-assigned).
+           - RENAME A COLUMN: tree/get the list, dict-set* the
+             new name into `columns`, AND cascade — in one
+             with-transaction, tree/upsert every card of that
+             list whose `state` is the old name with the new
+             name. Rename is all-or-nothing across list + cards.
+           - No re-parenting / tree/move in v1: a card's list is
+             a field (list_id), not a path segment, so moving a
+             card to another board is a field update, not a path
+             change. tree/move is available per one-tree.tree-
+             datum-prims but unused here.
+
+         UI / HTMX SHAPE:
+           - GET /kanban?list=<id> renders html/page with a flex
+             row of columns. Each column is a <section> with an
+             hx-post drop target; each card is a draggable
+             article with a tiny dragstart/drop JS shim that
+             encodes the dragged card id + drop position into
+             hidden form fields, then submits the column's
+             hx-post. Same POST-to-one-route + hx-request?
+             partial-vs-redirect pattern as /todos.
+           - A column header has inline add/rename/remove
+             controls (small forms, same hx-post pattern); the
+             board footer has an "add column" form.
+           - POST /kanban dispatches on action: move (card to
+             column + position), add-column, rename-column,
+             remove-column. Each performs the tree action(s)
+             above and returns the refreshed board partial via
+             render-html when hx-request?, else redirects.
+           - No JS framework, no new asset pipeline — the shim is
+             a small <script> in the page, same style as the
+             outline keyboard-nav script (must pass scripts-
+             check per notes-ui-contract).
+           - Accessibility: each card reachable by keyboard; move
+             via a per-card up/down/left/right control as a
+             no-DnD fallback (the DnD shim is progressive
+             enhancement, not the only path).
+
+         RELATION TO /todos: the /todos page keeps its list/detail
+         smart-view UX; /kanban is a sibling route over the same
+         rows. Both read/write the same todo-item datum nodes; no
+         duplication, no sync. Cycling state from /todos updates
+         the kanban and vice versa because they share the store.
+         A list with custom columns shows those same states as
+         the /todos state cycle options for that list (the state
+         machine reads the list's `columns` when present, else
+         the global default).
+
+         NON-GOALS (v1):
+           - No WIP limits, no swimlanes, no per-user assignment
+             columns, no card cover images.
+           - No multi-list board (board = exactly one list).
+           - No tree/move re-parenting of cards across types.
+           - No per-USER state set (columns live on the LIST, not
+             the user; a user's different lists may differ).
+   |))
+   )
+   (verify
+    (build "dune build @all")
+    (smoke "GET /kanban?list=<inbox> renders the inbox's items grouped into columns by the list's columns (or the default state list when the list has none), empty columns included")
+    (smoke "a list with its own columns field renders exactly those columns; /todos for that list cycles only those states")
+    (smoke "drag a card to another column (POST action=move) → the todo-item's state field changes via tree/upsert; /todos and /kanban both reflect it")
+    (smoke "add / remove / rename a column → the list's columns field updates via tree/upsert; rename cascades to cards in one with-transaction")
+    (smoke "reorder within a column → positions renumber atomically (with-transaction); no two cards share a position")
+    (smoke "keyboard no-DnD fallback moves a card left/right between columns")))
   (subsection search-modal
    (doc "Typeahead find modal: one server search feeds open-note and refile; flat grouped results down to header level")
    (status implemented)
