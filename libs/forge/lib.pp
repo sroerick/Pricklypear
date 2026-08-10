@@ -799,8 +799,7 @@
             "Node: " path "\n"
             "Kind: " kind "\n"
             "Purpose: " title "\n"
-            "Respond with ONLY a single Lisp s-expression: a (lambda ...) body.\n"
-            "No markdown, no commentary.\n"
+            "Output TWO s-expressions on separate lines: (1) the (lambda ...) body, (2) a verify expression using `fn` that returns #t if correct.\n"
             "Available prims: + - * = < > list car cdr cons null? string-append str\n"
             "  get create update delete rows dict-get dict-set render-html\n"
             (forge/constraints-text constraints)))))))
@@ -828,10 +827,14 @@
     "3. Do NOT use install_function, register_route, or smoke_route — "
     "forge manages the body in a graph node, NOT on the branch. "
     "install_function is forbidden; only eval_expr is allowed for testing.\n"
-    "4. Your FINAL message must be the EXACT lambda you verified with "
-    "eval_expr — copy it verbatim, do NOT retype or modify. Count "
-    "parentheses carefully: every ( must have a matching ). No prose, "
-    "no markdown, no commentary.\n"
+    "4. Your FINAL message must contain EXACTLY TWO s-expression forms,\n"
+    "   each on its own line, nothing else:\n"
+    "   Line 1: the (lambda ...) body you verified — copy it verbatim.\n"
+    "   Line 2: a VERIFY expression that uses `fn` (which will be bound\n"
+    "   to your lambda) and returns #t if the function is correct.\n"
+    "   Example verify: (string? (fn \"sample\" \"arg\"))\n"
+    "   The verify is your test — it must call fn with realistic args\n"
+    "   and check the result. Count parens carefully on both lines.\n"
     "\n"
     "NOPALES SYNTAX REMINDERS:\n"
     "  - let takes exactly ONE body form; use (seq a b) for multi-step.\n"
@@ -854,14 +857,15 @@
     "dict-set* render-html get create update delete rows as-str string-eq "
     "string-length string-starts-with? request-param request-method "
     "list/map list/filter list/foldl with-transaction")
-  "Seed for the forge drafter agent session. Tells the LLM to use eval_expr to test-and-iterate, forbids install/route tools, and pins Nopales syntax gotchas. The drafter returns ONLY a lambda.")
+  "Seed for the forge drafter agent session. Tells the LLM to use eval_expr to test-and-iterate, forbids install/route tools, and pins Nopales syntax gotchas. The drafter returns TWO forms: the (lambda ...) body, then a verify expression that uses `fn` as the bound name.")
 
 (define forge/draft-node
   (lambda (graph path)
     (let* ((prompt (forge/draft-prompt graph path))
            (sid (agent-session-new forge/drafter-seed #t))
            (resp (agent-say sid prompt 12))
-           (body (forge/first-form resp)))
+           (body (forge/first-form resp))
+           (verify (forge/second-form resp)))
       (seq
         (agent-session-delete sid)
         (if (forge/drafter-failed? resp)
@@ -870,12 +874,12 @@
                 (string-append "drafter failed: " resp))
               (forge/commit-draft graph path ""))
             (if (forge/parse-ok? body)
-                (forge/commit-draft graph path body)
+                (forge/commit-draft graph path body verify)
                 (seq
                   (forge/flag path "judgment"
                     "drafter body unparseable (missing parens or syntax error)")
                   (forge/commit-draft graph path "")))))))
-  "Agentic draft: spin up a drafter agent session (eval_expr enabled), let it test-and-iterate up to 12 steps, harvest the final text as the body, parse-check it, then commit-draft. The agent loop runs in OCaml (per-tool budget), so the Nopales step budget is not burned by LLM turns. On session error, max-steps exhaustion, or unparseable harvest, raise a judgment flag and leave the body empty.")
+  "Agentic draft: spin up a drafter agent session (eval_expr enabled), let it test-and-iterate up to 12 steps, harvest the body (first form) + verify (second form), parse-check the body, then commit-draft. The agent loop runs in OCaml (per-tool budget). On failure or unparseable harvest, raise a judgment flag and leave the body empty.")
 
 (define forge/parse-ok?
   (lambda (s)
@@ -990,6 +994,86 @@
     (string-trim s))
   "Trim whitespace (wrapper over string-trim).")
 
+;; ---- verify: run the drafter's test, resolve the victory flag ----
+;; The verify is a Nopales expression that uses `fn` (bound to the body).
+;; verify-node evals (let ((fn body)) verify) — if truthy, the victory
+;; flag resolves and the node advances to verified. This is the TDD loop:
+;; the drafter writes a test alongside the code; the loop runs it.
+
+(define forge/verify-node
+  (lambda (graph path)
+    (let ((node (forge/node-by-path graph path)))
+      (if (null? node) "verify: node not found"
+      (let ((f (cdr node)))
+        (let ((body (forge/field-str f "body"))
+              (verify (forge/field-str f "verify")))
+          (if (string-eq body "") "verify: empty body"
+          (if (string-eq verify "") "verify: empty verify (victory flag stays open)"
+          (if (not (forge/parse-ok? verify))
+              (seq
+                (forge/flag path "judgment"
+                  "verify expression unparseable")
+                "verify: unparseable")
+          (let ((test-src
+                  (string-append "(let ((fn " body ")) " verify ")")))
+            (let ((result (forge/eval-or-error test-src)))
+              (if (forge/eval-failed? result)
+                  (seq
+                    (forge/flag path "judgment"
+                      (string-append "verify failed: " result))
+                    "verify: failed (judgment flag)")
+                  (if (forge/truthy? result)
+                      (seq
+                        (forge/resolve-victory-flag graph path)
+                        (forge/set-status graph path "verified")
+                        "verify: passed (victory flag resolved, status verified)")
+                      (seq
+                        (forge/flag path "judgment"
+                          "verify returned falsey — function fails its own test")
+                        "verify: returned falsey (judgment flag)")))))))))))))
+  "Run the node's verify expression. Evals (let ((fn body)) verify). If it
+   returns truthy, resolve the victory flag and set status verified. If it
+   errors or returns falsey, raise a judgment flag. This is the TDD gate:
+   the drafter's test must pass before review fires.")
+
+(define forge/eval-or-error
+  (lambda (src)
+    (guard (lambda (e) (string-append "error: " (as-str e)))
+      (str (eval-string src))))
+  "Eval a string; return the str'd result on success or 'error: ...' on exception.")
+
+(define forge/eval-failed?
+  (lambda (s)
+    (string-starts-with? s "error:"))
+  "True when eval-or-error caught an exception.")
+
+(define forge/truthy?
+  (lambda (s)
+    (not (or (string-eq s "#f") (string-eq s "()") (string-eq s ""))))
+  "True when the eval result string is truthy (not #f, not (), not empty).")
+
+(define forge/resolve-victory-flag
+  (lambda (graph path)
+    (let ((flags (forge/flags-for path)))
+      (forge/resolve-victory-scan path flags)))
+  "Resolve all open victory flags on a node (the verify passed).")
+
+(define forge/resolve-victory-scan
+  (lambda (path flags)
+    (if (null? flags)
+        ""
+        (let ((pair (car flags)))
+          (let ((fid (car pair))
+                (check (forge/field-str (cdr pair) "check"))
+                (resolved (forge/field-str (cdr pair) "resolved")))
+            (seq
+              (if (and (string-eq check "victory")
+                       (not (string-eq resolved "true")))
+                  (forge/resolve-flag fid "verify passed")
+                  "")
+              (forge/resolve-victory-scan path (cdr flags)))))))
+  "Scan flags, resolve each open victory flag.")
+
 (define forge/first-form
   (lambda (s)
     (forge/first-form-at s 0))
@@ -997,6 +1081,27 @@
    ignoring trailing prose/reasoning. Scans for the first '(',
    tracks paren depth respecting \" strings, returns the substring
    up to the matching close. Robust to dots and other prose tokens.")
+
+(define forge/second-form
+  (lambda (s)
+    (let ((first-end (forge/first-form-end s 0)))
+      (if (<= first-end 0)
+          ""
+          (forge/first-form-at s first-end))))
+  "Extract the SECOND balanced s-expression (the verify expression).
+   Finds the end of the first form, then scans from there for the next '('.
+   Returns \"\" if there is no second form.")
+
+(define forge/first-form-end
+  (lambda (s i)
+    (let ((n (string-length s)))
+      (if (>= i n)
+          0
+          (if (string-eq (substring s i 1) "(")
+              (let ((end (forge/balanced-end s i 0 #f)))
+                (if (<= end i) 0 end))
+              (forge/first-form-end s (+ i 1))))))
+  "Return the index just past the end of the first balanced form, or 0.")
 
 (define forge/first-form-at
   (lambda (s i)
@@ -1038,9 +1143,9 @@
 ;; ---- commit a draft: write body, infer effects, set status, flag ----
 
 (define forge/commit-draft
-  (lambda (graph path body-src)
+  (lambda (graph path body-src verify-src)
     (seq
-      (forge/set-body-verify graph path body-src "")
+      (forge/set-body-verify graph path body-src verify-src)
       (forge/set-status graph path "drafted")
       (forge/set-inferred-effects graph path body-src)
       (let ((nodes (forge/nodes-of-graph graph)))
@@ -1142,8 +1247,9 @@
       (let ((path (car f)))
         (seq
           (forge/draft-node graph-name path)
+          (forge/verify-node graph-name path)
           (forge/review-node graph-name path))))))
-  "Draft the first ready node on the frontier, then run tri-state review.")
+  "Draft the first ready node, run its verify (TDD gate), then tri-state review. The verify must pass before review fires — mechanical flags (including victory) gate first.")
 
 (define forge/propose-descent
   (lambda (graph-name)
