@@ -790,26 +790,87 @@
       (forge/str-join "\n" cs) "\n")))
   "Render constraints as prompt text.")
 
-;; ---- draft a node (call the LLM) ----
+;; ---- draft a node (agentic: eval-and-iterate, then harvest last form) ----
+
+(define forge/drafter-seed
+  (string-append
+    "You are a Nopales (Lisp-1) drafter for a Pricklypear spec graph. "
+    "Your job: produce ONE working (lambda ...) body for a single node.\n"
+    "\n"
+    "PROCESS (mandatory):\n"
+    "1. Use eval_expr to TEST your draft. Call it like: "
+    "((lambda (a b) (+ a b)) 1 2) — it returns the value or an error.\n"
+    "2. If eval_expr errors, READ the error, FIX the lambda, and re-eval. "
+    "Iterate until it evaluates cleanly with realistic sample args.\n"
+    "3. Do NOT use install_function, register_route, or smoke_route — "
+    "forge manages the body in a graph node, NOT on the branch. "
+    "install_function is forbidden; only eval_expr is allowed for testing.\n"
+    "4. Your FINAL message must be the EXACT lambda you verified with "
+    "eval_expr — copy it verbatim, do NOT retype or modify. Count "
+    "parentheses carefully: every ( must have a matching ). No prose, "
+    "no markdown, no commentary.\n"
+    "\n"
+    "NOPALES SYNTAX REMINDERS:\n"
+    "  - let takes exactly ONE body form; use (seq a b) for multi-step.\n"
+    "  - let* is sequential binding: (let* ((a 1) (b (+ a 1))) b) => 2.\n"
+    "  - There is NO named-let (no (let loop ...)); use list/foldl or recursion.\n"
+    "  - dict-get returns JSON values as strings; compare with string-eq.\n"
+    "  - substring takes (start, length), not (start, end).\n"
+    "  - create: (create 'type-name (dict-set* \"{}\" (list \"field1\" val1 \"field2\" val2))) "
+    "-> returns an id string. Fields MUST be a JSON dict string built via "
+    "dict-set*, NOT an assoc list.\n"
+    "  - rows: (rows 'type-name 200) -> list of (id . json-string) pairs; "
+    "(cdr row) is the JSON field string; use (dict-get (cdr row) \"field\").\n"
+    "  - CRITICAL: prims return error STRINGS (e.g. \"create: bad args\") "
+    "instead of throwing. After eval_expr, CHECK the returned value: if it "
+    "contains \": bad args\" or \"error\" or starts with the prim name + \":\", "
+    "it FAILED — fix and re-test. A returned string is not always success.\n"
+    "\n"
+    "AVAILABLE PRIMS: + - * = < > list car cdr cons null? count "
+    "string-append str type-of whoami list-bindings dict-get dict-set "
+    "dict-set* render-html get create update delete rows as-str string-eq "
+    "string-length string-starts-with? request-param request-method "
+    "list/map list/filter list/foldl with-transaction")
+  "Seed for the forge drafter agent session. Tells the LLM to use eval_expr to test-and-iterate, forbids install/route tools, and pins Nopales syntax gotchas. The drafter returns ONLY a lambda.")
 
 (define forge/draft-node
   (lambda (graph path)
-    (let ((prompt (forge/draft-prompt graph path)))
-      (let ((resp (llm-chat "You are a Pricklypear Lisp author. Respond ONLY with a single (lambda ...) s-expression. No markdown, no prose, no commentary." prompt)))
-        (if (forge/llm-error? resp)
+    (let* ((prompt (forge/draft-prompt graph path))
+           (sid (agent-session-new forge/drafter-seed #t))
+           (resp (agent-say sid prompt 12))
+           (body (forge/first-form resp)))
+      (seq
+        (agent-session-delete sid)
+        (if (forge/drafter-failed? resp)
             (seq
               (forge/flag path "judgment"
                 (string-append "drafter failed: " resp))
               (forge/commit-draft graph path ""))
-            (forge/commit-draft graph path (forge/first-form resp))))))
-  "Call the LLM drafter for a node; write the parsed body + run flags.
-   On LLM error, raise a judgment flag and leave the body empty (no
-   error string written as body).")
+            (if (forge/parse-ok? body)
+                (forge/commit-draft graph path body)
+                (seq
+                  (forge/flag path "judgment"
+                    "drafter body unparseable (missing parens or syntax error)")
+                  (forge/commit-draft graph path "")))))))
+  "Agentic draft: spin up a drafter agent session (eval_expr enabled), let it test-and-iterate up to 12 steps, harvest the final text as the body, parse-check it, then commit-draft. The agent loop runs in OCaml (per-tool budget), so the Nopales step budget is not burned by LLM turns. On session error, max-steps exhaustion, or unparseable harvest, raise a judgment flag and leave the body empty.")
+
+(define forge/parse-ok?
+  (lambda (s)
+    (if (string-eq s "")
+        #f
+        (guard (lambda (e) #f) (seq (read-string s) #t))))
+  "True when s parses as valid Lisp. read-string raises on parse error; guard catches it and returns #f. Empty string is #f.")
+
+(define forge/drafter-failed?
+  (lambda (s)
+    (or (string-starts-with? s "agent error:")
+        (string-starts-with? s "agent: max steps exceeded")))
+  "True when the agent session errored or exhausted its steps without a clean final turn. (agent-say returns these prefixes on failure.)")
 
 (define forge/llm-error?
   (lambda (s)
     (string-starts-with? s "llm-chat:"))
-  "True when the LLM call returned an error string rather than content.")
+  "Legacy: true when a raw llm-chat call returned an error string. Kept for frontier/review paths that still use llm-chat directly.")
 
 (define forge/first-form
   (lambda (s)
