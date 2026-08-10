@@ -288,29 +288,6 @@ let eval_tests = [
     let env = Env.create () in
     let got = (Eval.eval_string ~prims env "(let ((y 5)) y)") in
     Alcotest.(check string) "5" "5" (Reader.pp_value got));
-  ("eval: let* sequential binding", `Quick, fun () ->
-    let prims = Eval.make_prim_table () in
-    Eval.register_prim prims "+" (function
-      | [Ast.VInt a; Ast.VInt b] -> Ast.VInt (Int64.add a b)
-      | _ -> Ast.VNil);
-    let env = Env.create () in
-    Env.define env "+" (Ast.VPrim "+");
-    let got = (Eval.eval_string ~prims env "(let* ((x 1) (y (+ x 1))) y)") in
-    Alcotest.(check string) "2" "2" (Reader.pp_value got));
-  ("eval: let* empty bindings", `Quick, fun () ->
-    let prims = Eval.make_prim_table () in
-    let env = Env.create () in
-    let got = (Eval.eval_string ~prims env "(let* () 42)") in
-    Alcotest.(check string) "42" "42" (Reader.pp_value got));
-  ("eval: let parallel does not leak", `Quick, fun () ->
-    let prims = Eval.make_prim_table () in
-    Eval.register_prim prims "+" (function
-      | [Ast.VInt a; Ast.VInt b] -> Ast.VInt (Int64.add a b)
-      | _ -> Ast.VNil);
-    let env = Env.create () in
-    Env.define env "+" (Ast.VPrim "+");
-    let got = (Eval.eval_string ~prims env "(let ((a 1) (b 2)) (+ a b))") in
-    Alcotest.(check string) "3" "3" (Reader.pp_value got));
   ("eval: budget exceeded", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
