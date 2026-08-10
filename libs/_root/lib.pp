@@ -1362,9 +1362,6 @@
       (outline/node* "b" "B" "" "" (list))
       (outline/node* "c" "C" "" "" (list)))))
 
-(define td
-  (flash/deck-create "ZZ-test-again-order" "throwaway"))
-
 (define test-backtick
   (outline/node*
     "root"
