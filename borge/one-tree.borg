@@ -302,6 +302,114 @@
     (build "dune build @all")
     (smoke "create a flash-card node missing a required field → clean rejection naming the field")
     (smoke ":ref deref resolves via path; backlink query lists nodes referencing a given node")))
+  (subsection tree-datum-prims
+   (doc "Tree prims are a complete data API: tree/upsert, tree/move, tree/delete operate on datum nodes, not only hierarchical kinds")
+   (status planned)
+   (implements image/lib/tree_store.ml image/lib/crud.ml image/lib/prims_db.ml)
+   (details
+    (doc (|
+         DATUM NODES ARE FIRST-CLASS TREE NODES (tree-model,
+         typed-nodes). The tree prim family must therefore operate
+         on them directly — not only on hierarchical kinds
+         (folder|note|heading). Today tree/upsert rejects any
+         kind outside the hierarchical set, so datum writes can
+         only reach the tree through the create/update CRUD
+         prims (which generate the path and id internally via
+         tree_datum_path). That makes the tree prims an
+         INCOMPLETE data API: a product cannot move, reorder,
+         or re-parent a datum node with a tree action. This
+         subsection closes that gap. Kanban (notes.borg) is the
+         first product consumer; it moves cards between
+         columns by tree/upsert of the card's datum node with a
+         new status field, and reorders within a column by
+         tree/upsert with a new position.
+
+         tree/UPSERT with kind="datum":
+           - Accepts a caller-supplied datum path of the form
+             data.u.<user>.<type_name>.<id> or
+             data.shared.<type_name>.<id>. <id> is a uuid.
+           - When the path's id label is a placeholder (empty or
+             a sentinel), generate a fresh uuid and build the
+             path the way insert_datum does, so a caller can
+             create a new datum node by path without
+             pre-allocating an id.
+           - Runs the SAME typed-boundary validation as the
+             create/update CRUD prims (check_type_fields over
+             body_json against the declared type_name): a
+             missing required field is a clean rejection naming
+             the field. Undeclared types accept free-form JSON.
+           - Writes the tree_node with kind=datum, type_name
+             set, the standard envelope payload, and a body
+             hash; ON CONFLICT (path) DO UPDATE the body (and
+             hash, author, updated_at) so the same prim
+             upserts and updates.
+           - The reverse mirror (migration 009 forward trigger)
+             keeps the data_rows projection in lockstep, so
+             (get 't id), (rows 't), and the /data browser see
+             the node identically to one written via create.
+
+         tree/MOVE on a datum path re-homes the datum: rewrites
+         the path and payload.path of the node (and, for a
+         recursive move, its subtree), and the reverse mirror
+         syncs the projection. This is the re-parent / re-board
+         operation. Moving a datum to a path under a different
+         <type_name> is a type change and MUST re-run
+         typed-boundary validation against the new type.
+
+         tree/DELETE on a datum path removes the node (and
+         optionally its subtree when recursive); the reverse
+         mirror removes the projection row. Already
+         kind-agnostic in code — locked here as a datum-capable
+         prim, not a hierarchical-only one.
+
+         tree/GET, tree/LIST, tree/FIND-BY, tree/LIST-KIND are
+         kind-agnostic readers and already return datum nodes;
+         this subsection locks that as the contract (a datum
+         node is readable by path, by prefix, by body field,
+         and by kind just like any other node).
+
+         RELATION TO THE CRUD PRIMS: create/update/delete
+         remain valid — they are the id-generating,
+         session-user-path-injecting convenience surface for
+         the common "insert a new row of type T" case.
+         tree/upsert is the PATH-EXPLICIT variant for when the
+         caller owns the path: moves, reorders, re-parents,
+         and products that model their data as a shaped tree
+         rather than a flat table. The two surfaces write the
+         same tree_nodes rows through the same mirror; they
+         are interchangeable views of one store.
+
+         COMPOSITION SURFACE (no new prims needed for the
+         common data operations):
+           - FIELD UPDATE on a datum (change one field, e.g. a
+             card's status or position): tree/get the node,
+             dict-get its body, dict-set* the changed field(s),
+             tree/upsert the new body at the same path. This is
+             the same read-modify-write the todo package already
+             uses against create/update.
+           - ATOMIC MULTI-NODE OP (e.g. reordering N cards in
+             a column after a drag): wrap the field updates in
+             with-transaction so the reorder is all-or-nothing.
+           - RE-PARENT / MOVE TO NEW BOARD: tree/move to change
+             the path, or tree/upsert with a changed parent-id
+             field when the product models parenthood as a
+             field rather than a path (the flat todo model does
+             the latter — list_id is a field, not a path
+             segment).
+         The path helpers node-path, type-fields, and
+         backlinks are the datum path-construction and
+         reference-query surface; they are already
+         kind-agnostic and need no change.
+   |))
+   )
+   (verify
+    (build "dune build @all")
+    (smoke "tree/upsert a datum node of a declared type with all required fields → node appears at the given path; (get 't id) returns the same fields")
+    (smoke "tree/upsert a datum node missing a required field → clean rejection naming the field, identical to create")
+    (smoke "tree/upsert an existing datum path with a changed field → body updates in place; (rows 't) reflects the new value")
+    (smoke "tree/move a datum node to a new path → (get 't id) at the new path returns it; old path is gone; projection in sync")
+    (smoke "tree/delete a datum path → node and projection row both removed")
+    (smoke "tree/get, tree/list, tree/find-by, tree/list-kind all return datum nodes, not only hierarchical kinds")))
   (subsection projections
    (doc "SQL over the tree: relational rows are derived, not truth")
    (status implemented)
