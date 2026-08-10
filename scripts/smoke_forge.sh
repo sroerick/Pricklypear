@@ -53,9 +53,9 @@ step "3. frontier (requirements excluded, both functions ready)"
 r=$(ev "(length (forge/frontier \"$G\"))")
 check_contains "$r" '"value":"2"' "frontier has 2 ready nodes (not the requirement)"
 
-step "4. step — LLM drafts the first frontier node"
-r=$(ev "(forge/step \"$G\")")
-check_contains "$r" '"ok":true' "step succeeded"
+step "4. draft — LLM drafts the first frontier node (body + verify)"
+r=$(ev "(forge/draft-node \"$G\" \"$G/add\")")
+check_contains "$r" '"ok":true' "draft-node succeeded"
 
 step "5. body was drafted (non-empty)"
 r=$(ev "(forge/field-str (cdr (forge/node-by-path \"$G\" \"$G/add\")) \"body\")")
@@ -69,25 +69,26 @@ step "7. status = drafted"
 r=$(ev "(forge/field-str (cdr (forge/node-by-path \"$G\" \"$G/add\")) \"status\")")
 check_contains "$r" "drafted" "status advanced planned → drafted"
 
-step "8. mechanical flags raised"
-r=$(ev "(length (forge/open-flags \"$G\"))")
-# capability + victory + size = 3 (LLM body calls create → db-write; no verify stanza; body >200 chars)
-check_contains "$r" '"value":"3"' "3 open flags (capability + victory + size)"
+step "8. verify was drafted (TDD)"
+r=$(ev "(forge/field-str (cdr (forge/node-by-path \"$G\" \"$G/add\")) \"verify\")")
+check_contains "$r" "fn" "verify expression uses fn (the bound body)"
 
-step "9. flag details"
+step "9. mechanical flags raised (capability + size; no victory — verify present)"
+r=$(ev "(length (forge/open-flags \"$G\"))")
+check_contains "$r" '"value":"2"' "2 open flags (capability + size — victory suppressed by verify)"
+
+step "10. flag details"
 r=$(ev "(forge/open-flags \"$G\")")
 check_contains "$r" "capability" "capability flag present"
-check_contains "$r" "victory" "victory flag present"
 
-step "10. level gate blocks (unapproved drafted node)"
+step "11. level gate blocks (unapproved drafted node)"
 r=$(ev "(forge/step \"$G\")")
 check_contains "$r" "pending" "step blocked on level approval"
 
-step "11. approve + descent"
+step "12. approve + descent"
 ev "(forge/set-status \"$G\" \"$G/add\" \"approved\")" >/dev/null
-# second function still planned-empty → frontier ready, step drafts it
-r=$(ev "(forge/step \"$G\")")
-check_contains "$r" '"ok":true' "step drafts the next frontier node after approval"
+r=$(ev "(forge/draft-node \"$G\" \"$G/list\")")
+check_contains "$r" '"ok":true' "drafts the next frontier node after approval"
 
 step "result"
 if [ "$fails" -eq 0 ]; then
