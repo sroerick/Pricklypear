@@ -71,8 +71,8 @@ check_contains "$r" "drafted" "status advanced planned → drafted"
 
 step "8. mechanical flags raised"
 r=$(ev "(length (forge/open-flags \"$G\"))")
-# capability + victory = 2 (LLM body calls create → db-write; no verify stanza)
-check_contains "$r" '"value":"2"' "2 open flags (capability + victory)"
+# capability + victory + size = 3 (LLM body calls create → db-write; no verify stanza; body >200 chars)
+check_contains "$r" '"value":"3"' "3 open flags (capability + victory + size)"
 
 step "9. flag details"
 r=$(ev "(forge/open-flags \"$G\")")
