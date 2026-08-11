@@ -83,7 +83,10 @@ let deftype (store : Store.t) ~(args : value list)
       args
   in
   (match field_strs with
-   | [] -> (VStr "deftype: need at least a type name")
+   | [] ->
+       raise (Pricklypear_lisp.Ast.Interp_error
+                (Pricklypear_lisp.Ast.Prim_error
+                   ("deftype", "need at least a type name", "bad-args")))
    | name :: fields ->
        let _ = Store.persist_type store ~name ~fields ~author in
        (VStr (Printf.sprintf "defined type %s" name)))
@@ -183,11 +186,19 @@ let create
   | Some msg -> (VStr msg)
   | None ->
   match Io_lwt.Db.current_conn store with
-  | None -> (VStr "create failed: no DB")
+  | None ->
+      raise (Pricklypear_lisp.Ast.Interp_error
+               (Pricklypear_lisp.Ast.Prim_error
+                  ("create", "failed: no DB", "failed")))
   | Some conn ->
     (* tree is truth; reverse trigger mirrors to data_rows *)
     let id = Tree_store.insert_datum conn ~type_name ~fields_json ~author in
-    (match id with Some s -> VStr s | None -> VStr "create failed")
+    (match id with
+     | Some s -> VStr s
+     | None ->
+         raise (Pricklypear_lisp.Ast.Interp_error
+                  (Pricklypear_lisp.Ast.Prim_error
+                     ("create", "failed", "failed"))))
 
 (** (update 'type id "{fields-json}") -> VStr id | VNil.
     UPDATE fields for ONE row by (type_name, id). Returns the id
