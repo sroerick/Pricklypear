@@ -90,6 +90,33 @@ ev "(forge/set-status \"$G\" \"$G/add\" \"approved\")" >/dev/null
 r=$(ev "(forge/draft-node \"$G\" \"$G/list\")")
 check_contains "$r" '"ok":true' "drafts the next frontier node after approval"
 
+step "13. import-function bootstraps existing code"
+ev '(load-library "todo")' >/dev/null
+r=$(ev "(forge/import-function \"$G\" \"$G/imported\" \"todo/item/add\" \"$G\")")
+check_contains "$r" '"ok":true' "import-function succeeds"
+r=$(ev "(forge/field-str (cdr (forge/node-by-path \"$G\" \"$G/imported\")) \"status\")")
+check_contains "$r" 'implemented' "imported node status=implemented"
+r=$(ev "(forge/field-str (cdr (forge/node-by-path \"$G\" \"$G/imported\")) \"target\")")
+check_contains "$r" 'todo/item/add' "imported node target set"
+
+step "14. draft-prompt branches on target"
+ev "(forge/add-node \"$G\" \"$G/mod\" \"function\" \"modify\" \"$G\")" >/dev/null
+ev "(forge/set-target \"$G\" \"$G/mod\" \"todo/item/add\")" >/dev/null
+r=$(ev "(forge/draft-prompt \"$G\" \"$G/mod\")")
+check_contains "$r" 'MODIFYING' "modify-existing prompt includes MODIFYING marker"
+check_contains "$r" 'CURRENT IMPLEMENTATION' "modify-existing prompt includes current source"
+r=$(ev "(forge/draft-prompt \"$G\" \"$G/list\")")
+check_contains "$r" 'drafting' "greenfield prompt uses drafting (not MODIFYING)"
+
+step "15. /forge route renders"
+r=$(curl -sS -u "$PP_USER:$PP_PASS" "$PP_URL/forge")
+check_contains "$r" '<h1>Forge</h1>' "/forge list page renders"
+
+step "16. /forge?graph= renders nodes"
+r=$(curl -sS -u "$PP_USER:$PP_PASS" "$PP_URL/forge?graph=$G")
+check_contains "$r" "Forge: $G" "/forge graph page renders"
+check_contains "$r" 'approve' "/forge shows approve button"
+
 step "result"
 if [ "$fails" -eq 0 ]; then
   echo "PASS: forge loop end-to-end (0 failures)"

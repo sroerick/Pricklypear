@@ -97,6 +97,15 @@
           children     json     list of child paths (denormalized index)
           branch       string   code lens this node was drafted on
           author       string   whoami at last mutation
+          target       string   existing binding this node modifies (""
+                              for greenfield; when set, the drafter is
+                              given the binding's current source as
+                              context and verify may run a regression)
+          test-fn      string   existing test binding to run as a
+                              regression after install ("" disables;
+                              when set with target, verify-node
+                              installs the drafted body as the target
+                              binding, calls test-fn, restores)
 
         forge-flag fields:
           node_path, check (enum: capability|victory|dangling|cycle|
@@ -301,8 +310,8 @@
   )
 
   (subsection graph-model
-   (doc "forge-node / forge-flag / forge-graph typed nodes: data.shared placement, denormalized children index, status enum, constraints accumulation")
-   (status planned)
+   (doc "forge-node / forge-flag / forge-graph typed nodes: data.shared placement, denormalized children index, status enum, constraints accumulation; target + test-fn fields anchor modify-existing nodes")
+   (status implemented)
    (verify
     (build "dune build @all")
     (test "image/test: forge node create/update; children index stays consistent with parent links across edits")
@@ -310,7 +319,7 @@
 
   (subsection frontier
    (doc "free-vars over parsed bodies; unresolved filter; frontier query; stub-children on unknown refs; cycle detection flags loops")
-   (status planned)
+   (status implemented)
    (verify
     (build "dune build @all")
     (test "image/test: free-vars of (lambda (x) (+ x y)) is {y}; frontier excludes nodes with unresolved deps")
@@ -319,7 +328,7 @@
 
   (subsection mechanical-flags
    (doc "capability escalation via forge-effects prim, missing victory, dangling refs, cycles, orphans, size heuristic — each a small fn over the graph; judgment is the human escape hatch")
-   (status planned)
+   (status implemented)
    (verify
     (build "dune build @all")
     (test "image/test: forge-effects prim returns badge for a named binding (pure for +, write-db for create)")
@@ -327,14 +336,51 @@
     (smoke "node with empty verify source is victory-flagged before appearing on the approval page")))
 
   (subsection loop-and-gates
-   (doc "forge/step state machine (blocked→flagged→draft→descend); forge/run as a job; tri-state LLM review with separate reviewer session; reroll-with-note constraint accumulation; level-gate semantics")
-   (status planned)
+   (doc "forge/step state machine (blocked→flagged→draft→descend); forge/run as a job; tri-state LLM review with separate reviewer session; reroll-with-note constraint accumulation; level-gate semantics; verify-node evaluates the victory expression on the current branch session")
+   (status implemented)
+   (details
+    (doc (|
+         VERIFY EXECUTION SEMANTICS
+         verify-node evaluates (let ((fn body)) verify) via eval-string
+         on the current branch session. The drafter seed already
+         instructs verifies to create and clean their own test data, so
+         a verify may touch the DB on the current branch; this is
+         accepted for v1.
+
+         REGRESSION MODE (modify-existing nodes): when a node has both
+         target and test-fn set, verify-node runs a regression after
+         the primary verify passes. It saves the target binding's
+         current source (function-source), installs the drafted body
+         as the target binding (eval-string define), calls test-fn,
+         and restores the original source. Because Nopales closures
+         capture the session env by reference, the test function's
+         calls to the target name exercise the NEW body. If test-fn
+         returns truthy the regression passes; otherwise a judgment
+         flag is raised. Restoration is best-effort: if the target
+         had no source (a prim), verify-node skips regression and
+         falls back to the primary verify only, with a judgment flag
+         noting the skip.
+
+         Scratch-branch checkout (evaluating verify on an isolated dev
+         branch) is a FUTURE hardening, not v1. The current design
+         trusts the drafter seed's create-and-clean discipline and the
+         separation-of-powers review to catch misbehaving verifies.
+    |)))
    (verify
     (build "dune build @all")
     (test "image/test: step with open judgment flags is a no-op returning the flag list")
     (test "image/test: reroll appends the note to constraints; next draft prompt contains it")
     (smoke "full descent on a toy graph: root → level 1 approved → stubs → leaf drafted → verified, all via forge/run job")
     (smoke "loop refuses to draft depth N+1 while any depth-N node is unapproved")))
+
+  (subsection existing-app-bridge
+   (doc "Bootstrapping and modifying existing code: forge/import-function reads a binding's source (function-source) and creates a node status=implemented body=source verify=(begin #t); the target field names an existing binding a node modifies, and forge/draft-prompt branches to include the current source as context; test-fn enables regression verify per loop-and-gates")
+   (status planned)
+   (verify
+    (build "dune build @all")
+    (test "image/test: forge/import-function on a live binding creates a node status=implemented with the binding's source as body")
+    (test "image/test: a node with target set produces a draft prompt that includes the target's current source")
+    (smoke "import a small package's functions into a graph; frontier sees them as implemented; a modify-existing draft references the current body")))
 
   (subsection human-surface
    (doc "/forge list + /forge/<name> anomaly-first approval page (approve/reroll-with-note/veto per node, approve-all-clean); judgment flags also land in log/issues; NO graph-viz, NO autonomous promote")
