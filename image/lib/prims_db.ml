@@ -102,7 +102,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
       | [ Pricklypear_lisp.Ast.VStr type_name;
           Pricklypear_lisp.Ast.VStr id ] ->
           Crud.get t.store ~type_name ~id
-      | _ -> (Pricklypear_lisp.Ast.VStr "get: bad args (need type, id)"));
+      | _ -> (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("get", "bad args (need type, id)", "bad-args")))));
 
   (* (create 'type "{fields-json}") -> VStr new-id | VStr "create failed" *)
   register_crud "create"
@@ -123,7 +123,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
               ~type_name ~fields_json
               ~author:uname
         | _ ->
-            (Pricklypear_lisp.Ast.VStr "create: bad args (need type, fields)"));
+            (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("create", "bad args (need type, fields)", "bad-args")))));
 
   (* (update 'type id "{fields-json}") -> VStr id | VNil *)
   register_crud "update"
@@ -169,7 +169,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
             Pricklypear_lisp.Ast.VStr id ] ->
             Crud.delete t.store ~type_name ~id
         | _ ->
-            (Pricklypear_lisp.Ast.VStr "delete: bad args (need type, id)"));
+            (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("delete", "bad args (need type, id)", "bad-args")))));
 
   (* (select-for-update 'type id) -> VStr fields-json | VNil.
      Acquires an explicit SELECT ... FOR UPDATE row lock on the
@@ -183,7 +183,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
       | [ Pricklypear_lisp.Ast.VStr type_name;
           Pricklypear_lisp.Ast.VStr id ] ->
           Crud.select_for_update t.store ~type_name ~id
-      | _ -> (Pricklypear_lisp.Ast.VStr "select-for-update: bad args (need type, id)"));
+      | _ -> (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("select-for-update", "bad args (need type, id)", "bad-args")))));
 
   (* (rows 'type [limit]) -> VList of (id . fields) pairs.
      With no limit, defaults to 100. NOTE: prim name is `rows`, NOT
@@ -198,7 +198,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
       | [ Pricklypear_lisp.Ast.VStr type_name;
           Pricklypear_lisp.Ast.VInt n ] ->
           Crud.list t.store ~type_name ~limit:(Int64.to_int n) ()
-      | _ -> (Pricklypear_lisp.Ast.VStr "rows: bad args (need type[, limit])"));
+      | _ -> (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("rows", "bad args (need type[, limit])", "bad-args")))));
 
   (* (find-row 'type "field" "value") -> fields JSON | () *)
   register_crud "find-row"
@@ -226,7 +226,10 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
       match args with
       | Pricklypear_lisp.Ast.VStr type_name :: rest ->
           (match parse_filters [] rest with
-           | Error e -> (Pricklypear_lisp.Ast.VStr e)
+           | Error e ->
+               raise (Pricklypear_lisp.Ast.Interp_error
+                        (Pricklypear_lisp.Ast.Prim_error
+                           ("find-rows", e, "bad-args")))
            | Ok (filters, limit) ->
                Crud.find_rows t.store ~type_name ~filters ~limit ())
       | _ ->
@@ -258,7 +261,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
       | [ Pricklypear_lisp.Ast.VStr type_name ] ->
           Crud.find_random t.store ~type_name
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "find-random: need type"));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("find-random", "need type", "bad-args")))));
 
   (* one-tree P6: typed nodes + path addressing + backlinks *)
   register_crud "node-path"
@@ -268,7 +271,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
           Pricklypear_lisp.Ast.VStr id ] ->
           (Crud.node_path ~type_name ~id)
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "node-path: need type, id"));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("node-path", "need type, id", "bad-args")))));
 
   register_crud "type-fields"
     (fun args ->
@@ -276,7 +279,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
       | [ Pricklypear_lisp.Ast.VStr type_name ] ->
           Crud.type_fields t.store ~type_name
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "type-fields: need type"));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("type-fields", "need type", "bad-args")))));
 
   register_crud "backlinks"
     (fun args ->
@@ -287,7 +290,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
           Pricklypear_lisp.Ast.VInt n ] ->
           Crud.backlinks t.store ~needle ~limit:(Int64.to_int n) ()
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "backlinks: need id-or-path [, limit]"));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("backlinks", "need id-or-path [, limit]", "bad-args")))));
 
   (* Hierarchical tree prims (notes.tree-cutover K0). Direct tree_nodes
      access for folder/note/heading — not kind=datum CRUD. *)
@@ -296,7 +299,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
       match args with
       | [ Pricklypear_lisp.Ast.VStr path ] -> Crud.tree_get t.store ~path
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "tree/get: need path"));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/get", "need path", "bad-args")))));
 
   register_crud "tree/list"
     (fun args ->
@@ -360,7 +363,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
           ] ->
             Crud.tree_move t.store ~old_path ~new_path
         | _ ->
-            (Pricklypear_lisp.Ast.VStr "tree/move: need old-path new-path"));
+            (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/move", "need old-path new-path", "bad-args")))));
 
   register_crud "tree/get-uuid"
     (fun args ->
@@ -368,7 +371,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
       | [ Pricklypear_lisp.Ast.VStr uuid ] ->
           Crud.tree_get_uuid t.store ~uuid
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "tree/get-uuid: need uuid"));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/get-uuid", "need uuid", "bad-args")))));
 
   register_crud "tree/find-by"
     (fun args ->
@@ -479,7 +482,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
       | [ Pricklypear_lisp.Ast.VStr s ] ->
           (Crud.tree_path_label s)
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "tree/path-label: need string"));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/path-label", "need string", "bad-args")))));
 
   register_crud "tree/garden-root"
     (fun args ->
@@ -515,7 +518,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
   Primitives.register tbl "list-usernames"
     (fun _args ->
       if t.manifest.username = "anonymous" then
-        (Pricklypear_lisp.Ast.VStr "list-usernames: denied for anonymous")
+        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("list-usernames", "denied for anonymous", "denied"))))
       else
         let users = Auth_store.list_users t.store in
         let names =
@@ -642,7 +645,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
              | Ok u ->
                  (Pricklypear_lisp.Ast.VStr u.Auth_store.id))
         | _ ->
-            (Pricklypear_lisp.Ast.VStr "create-Agent_tools.agent: need parent-username")));
+            (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("prim", "create-Agent_tools.agent: need parent-username", "bad-args"))))));
 
   (* (issue-token [label]) -> VStr raw-token (returned ONCE). Caller's own user. *)
   (* (issue-token user-id [label]) -> VStr raw token. Admin only when user-id given. *)
@@ -680,7 +683,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
              (match r with
               | Error e -> (Pricklypear_lisp.Ast.VStr ("issue-token: " ^ e))
               | Ok raw -> (Pricklypear_lisp.Ast.VStr raw)))
-       | _ -> (Pricklypear_lisp.Ast.VStr "issue-token: need [label] (own) or user-id label (admin)")));
+       | _ -> (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("issue-token", "need [label] (own) or user-id label (admin)", "bad-args"))))));
 
   (* (list-tokens [user-id]) -> VList of (id label last4 created last_used). *)
   Primitives.register tbl "list-tokens"
@@ -699,7 +702,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
         | _ -> caller_id
       in
       if not is_admin && target_uid <> caller_id then
-        (Pricklypear_lisp.Ast.VStr "list-tokens: denied: admin only")
+        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("list-tokens", "denied: admin only", "denied"))))
       else if target_uid = "" then
         (Pricklypear_lisp.Ast.VStr "list-tokens: no such user")
       else
@@ -726,7 +729,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
           (match r with
            | Error e -> (Pricklypear_lisp.Ast.VStr ("revoke-token: " ^ e))
            | Ok () -> (Pricklypear_lisp.Ast.VStr "ok"))
-      | _ -> (Pricklypear_lisp.Ast.VStr "revoke-token: need credential-id"));
+      | _ -> (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("revoke-token", "need credential-id", "bad-args")))));
 
   (* (rotate-token credential-id [label]) -> VStr new-raw-token. Admin: rotates any;
      non-admin rotates own (credential must belong to caller). Returns new raw token ONCE. *)
@@ -742,13 +745,13 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
            let metas = Auth_store.list_tokens t.store ~user_id:caller_id in
            let owns = List.exists (fun (m : Auth_store.token_meta) -> m.id = cid) metas in
            if not is_admin && not owns then
-             (Pricklypear_lisp.Ast.VStr "rotate-token: denied: not your token")
+             (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("rotate-token", "denied: not your token", "denied"))))
            else
              let r = Auth_store.rotate_token t.store ~credential_id:cid ~user_id:caller_id () in
              (match r with
               | Error e -> (Pricklypear_lisp.Ast.VStr ("rotate-token: " ^ e))
               | Ok raw -> (Pricklypear_lisp.Ast.VStr raw))
-       | _ -> (Pricklypear_lisp.Ast.VStr "rotate-token: need credential-id")));
+       | _ -> (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("rotate-token", "need credential-id", "bad-args"))))));
 
   (* (set-allow-Agent_tools.agent-promote bool) -> VStr ok|error. Sets the CALLER's own toggle. *)
   Primitives.register tbl "set-allow-Agent_tools.agent-promote"
@@ -764,7 +767,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
       in
       let caller = caller_username () in
       if caller = "anonymous" then
-        (Pricklypear_lisp.Ast.VStr "set-allow-Agent_tools.agent-promote: denied for anonymous")
+        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("prim", "set-allow-Agent_tools.agent-promote: denied for anonymous", "denied"))))
       else
         (match args with
          | [ flag ] ->
@@ -777,7 +780,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
                   (match r with
                    | Error e -> (Pricklypear_lisp.Ast.VStr ("set-allow-Agent_tools.agent-promote: " ^ e))
                    | Ok () -> (Pricklypear_lisp.Ast.VStr "ok")))
-         | _ -> (Pricklypear_lisp.Ast.VStr "set-allow-Agent_tools.agent-promote: need bool")));
+         | _ -> (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("prim", "set-allow-Agent_tools.agent-promote: need bool", "bad-args"))))));
 
   (* (promote [name...]) -> VStr count|error. Agent: promote own defs (or named)
      into parent's personal. Human: denied (use promote-to-main admin path). *)
@@ -887,7 +890,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
       match args with
       | [ Pricklypear_lisp.Ast.VStr sid ] -> Agent_tools.agent_history t ~session_id:sid
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "agent-history: need session-id"));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("agent-history", "need session-id", "bad-args")))));
 
   Primitives.register tbl "agent-sessions"
     (fun args ->
@@ -904,7 +907,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
       | [ Pricklypear_lisp.Ast.VStr sid ] ->
           Agent_tools.agent_session_delete t ~session_id:sid
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "agent-session-delete: need session-id"));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("agent-session-delete", "need session-id", "bad-args")))));
 
   (* Temporary aliases: new session + one say. Prefer agent-session-new/say. *)
   Primitives.register tbl "agent"
@@ -962,7 +965,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
            | Some s -> (Pricklypear_lisp.Ast.VStr s)
            | None -> Pricklypear_lisp.Ast.VNil)
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "function-source: need name-str"));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("function-source", "need name-str", "bad-args")))));
 
   (* (find-code needle [limit]) -> VList of name strings.
      Postgres ILIKE over effective function_defs.body::text (branch chain). *)
@@ -985,7 +988,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
            | None ->
                (Pricklypear_lisp.Ast.VStr "find-code: limit must be int"))
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "find-code: need needle-str [, limit]"));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("find-code", "need needle-str [, limit]", "bad-args")))));
 
   (* (function-doc name) -> VStr docstring | VNil
      Store metadata first; special-form / prim blurbs as fallback. *)
@@ -1006,7 +1009,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
                       Pricklypear_lisp.Ast.VNil
                     else (Pricklypear_lisp.Ast.VStr blurb)))
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "function-doc: need name-str"));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("function-doc", "need name-str", "bad-args")))));
 
   (* (function-ast name) -> quoted body value tree | VNil.
      Does not eval the body; reifies the stored AST via quote_to_value. *)
@@ -1019,7 +1022,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
            | Some v -> v
            | None -> Pricklypear_lisp.Ast.VNil)
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "function-ast: need name-str"));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("function-ast", "need name-str", "bad-args")))));
 
   (* ===== Jobs prims (borge/jobs.borg) ===== *)
   (* Guest surface: submit-job, job-status, jobs, cancel-job.
@@ -1052,7 +1055,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
         in
         let caller = job_caller () in
         if caller = "anonymous" then
-          (Pricklypear_lisp.Ast.VStr "submit-job: denied for anonymous")
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("submit-job", "denied for anonymous", "denied"))))
         else
           let branch =
             match Request_context.get () with
@@ -1068,7 +1071,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
           in
           (Pricklypear_lisp.Ast.VStr id)
       | _ ->
-        (Pricklypear_lisp.Ast.VStr "submit-job: need fn-str, args"));
+        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("submit-job", "need fn-str, args", "bad-args")))));
 
   Primitives.register tbl "submit-job-at"
     (fun args ->
@@ -1083,7 +1086,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
         in
         let caller = job_caller () in
         if caller = "anonymous" then
-          (Pricklypear_lisp.Ast.VStr "submit-job-at: denied for anonymous")
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("submit-job-at", "denied for anonymous", "denied"))))
         else
           let branch =
             match Request_context.get () with
@@ -1096,7 +1099,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
           in
           (Pricklypear_lisp.Ast.VStr id)
       | _ ->
-        (Pricklypear_lisp.Ast.VStr "submit-job-at: need fn-str, args, run-at-ms"));
+        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("submit-job-at", "need fn-str, args, run-at-ms", "bad-args")))));
 
   Primitives.register tbl "job-status"
     (fun args ->
@@ -1118,7 +1121,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
         Jobs.cancel ~store:t.store ~id
           ~caller:(job_caller ()) ~is_admin:(job_is_admin ())
       | _ ->
-        (Pricklypear_lisp.Ast.VStr "cancel-job: need job-id-str"));
+        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("cancel-job", "need job-id-str", "bad-args")))));
 
   (* ===== Forge prims ===== *)
 
@@ -1152,7 +1155,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
                 ("forge-effects: parse/infer failed: "
                  ^ Printexc.to_string exn)))
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "forge-effects: need src-or-name-str"));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("forge-effects", "need src-or-name-str", "bad-args")))));
 
   (* (package-exports pkg) -> VList of public names (package-surface).
      Resolution: declared registry exports -> kernel_std_exports for
@@ -1194,7 +1197,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
                      (List.map (fun n -> Pricklypear_lisp.Ast.VStr n) names))
           end
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "package-exports: need package-str"));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("package-exports", "need package-str", "bad-args")))));
 
   (* (package-bindings pkg) -> VList of name strings (prefix pkg/ any depth) *)
   Primitives.register tbl "package-bindings"
@@ -1205,7 +1208,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
           (Pricklypear_lisp.Ast.VList
                (List.map (fun n -> Pricklypear_lisp.Ast.VStr n) names))
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "package-bindings: need package-str"));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("package-bindings", "need package-str", "bad-args")))));
 
   (* (list-packages) -> VList of top-level package prefix strings *)
   Primitives.register tbl "list-packages"
@@ -1293,7 +1296,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
             (Pricklypear_lisp.Ast.VStr ("enabled " ^ name))
           end
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "package-enable: need package-str"));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("package-enable", "need package-str", "bad-args")))));
 
   (* (package-disable name) — hide package bindings on current branch *)
   Primitives.register tbl "package-disable"
@@ -1318,7 +1321,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
             (Pricklypear_lisp.Ast.VStr ("disabled " ^ name))
           end
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "package-disable: need package-str"));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("package-disable", "need package-str", "bad-args")))));
 
   (* (apropos-docs pat) -> VList of (name . doc) pairs *)
   Primitives.register tbl "apropos-docs"
@@ -1337,7 +1340,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
           in
           (Pricklypear_lisp.Ast.VList rows)
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "apropos-docs: need pattern-str"));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("apropos-docs", "need pattern-str", "bad-args")))));
 
   (* (Agent_tools.describe name-or-pkg) -> VStr selective reveal text *)
   Primitives.register tbl "describe"
@@ -1347,7 +1350,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
           let s = Agent_tools.describe t needle in
           (Pricklypear_lisp.Ast.VStr s)
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "Agent_tools.describe: need name-or-package-str"));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("prim", "Agent_tools.describe: need name-or-package-str", "bad-args")))));
 
   (* (export-package pkg) -> VStr lib.pp text *)
   Primitives.register tbl "export-package"
@@ -1357,13 +1360,13 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
           let text = Agent_tools.export_package t pkg in
           (Pricklypear_lisp.Ast.VStr text)
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "export-package: need package-str"));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("export-package", "need package-str", "bad-args")))));
 
   (* SSH keys (auth.user-ssh-repl phase 1) *)
   Primitives.register tbl "add-ssh-key"
     (fun args ->
       if t.manifest.username = "anonymous" then
-        (Pricklypear_lisp.Ast.VStr "add-ssh-key: denied for anonymous")
+        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("add-ssh-key", "denied for anonymous", "denied"))))
       else
         match args with
         | [ Pricklypear_lisp.Ast.VStr openssh ] ->
@@ -1387,12 +1390,12 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
              | Error e ->
                  (Pricklypear_lisp.Ast.VStr ("add-ssh-key: " ^ e)))
         | _ ->
-            (Pricklypear_lisp.Ast.VStr "add-ssh-key: need openssh-str [, label]"));
+            (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("add-ssh-key", "need openssh-str [, label]", "bad-args")))));
 
   Primitives.register tbl "list-ssh-keys"
     (fun _args ->
       if t.manifest.username = "anonymous" then
-        (Pricklypear_lisp.Ast.VStr "list-ssh-keys: denied for anonymous")
+        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("list-ssh-keys", "denied for anonymous", "denied"))))
       else
         let keys =
           Auth_store.list_ssh_keys t.store ~user_id:t.manifest.user_id
@@ -1408,7 +1411,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
   Primitives.register tbl "revoke-ssh-key"
     (fun args ->
       if t.manifest.username = "anonymous" then
-        (Pricklypear_lisp.Ast.VStr "revoke-ssh-key: denied for anonymous")
+        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("revoke-ssh-key", "denied for anonymous", "denied"))))
       else
         match args with
         | [ Pricklypear_lisp.Ast.VStr id_or_fp ] ->
@@ -1421,7 +1424,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
              | Error e ->
                  (Pricklypear_lisp.Ast.VStr ("revoke-ssh-key: " ^ e)))
         | _ ->
-            (Pricklypear_lisp.Ast.VStr "revoke-ssh-key: need fingerprint-or-id"));
+            (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("revoke-ssh-key", "need fingerprint-or-id", "bad-args")))));
 
   (* Smoke/admin: resolve openssh pubkey -> username | () *)
   Primitives.register tbl "verify-ssh-key"
@@ -1434,13 +1437,13 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
                (Pricklypear_lisp.Ast.VStr user.Auth_store.username)
            | None -> Pricklypear_lisp.Ast.VNil)
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "verify-ssh-key: need openssh-pubkey-str"));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("verify-ssh-key", "need openssh-pubkey-str", "bad-args")))));
 
   (* Per-user LLM keys (auth.user-llm-keys) *)
   Primitives.register tbl "set-llm-key"
     (fun args ->
       if t.manifest.username = "anonymous" then
-        (Pricklypear_lisp.Ast.VStr "set-llm-key: denied for anonymous")
+        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("set-llm-key", "denied for anonymous", "denied"))))
       else
         match args with
         | [ Pricklypear_lisp.Ast.VStr key ] ->
@@ -1481,7 +1484,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
   Primitives.register tbl "clear-llm-key"
     (fun _args ->
       if t.manifest.username = "anonymous" then
-        (Pricklypear_lisp.Ast.VStr "clear-llm-key: denied for anonymous")
+        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("clear-llm-key", "denied for anonymous", "denied"))))
       else
         let r =
           Auth_store.clear_llm_key t.store ~user_id:t.manifest.user_id
@@ -1494,7 +1497,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
   Primitives.register tbl "llm-key-status"
     (fun _args ->
       if t.manifest.username = "anonymous" then
-        (Pricklypear_lisp.Ast.VStr "llm-key-status: denied for anonymous")
+        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("llm-key-status", "denied for anonymous", "denied"))))
       else
         let meta =
           Auth_store.get_llm_key_meta t.store ~user_id:t.manifest.user_id
@@ -1559,7 +1562,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
           Pricklypear_lisp.Ast.VStr concept ] ->
           Agent_tools.llm_inner t ~name ~concept
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "llm-inner: need name-str, concept-str"));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("llm-inner", "need name-str, concept-str", "bad-args")))));
 
   Primitives.register tbl "llm-outer"
     (fun args ->
@@ -1568,7 +1571,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
           Pricklypear_lisp.Ast.VStr concept ] ->
           Agent_tools.llm_outer t ~name ~concept
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "llm-outer: need name-str, concept-str"));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("llm-outer", "need name-str, concept-str", "bad-args")))));
 
   Primitives.register tbl "llm-rewrite"
     (fun args ->
@@ -1687,4 +1690,4 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
                 | Ok s -> (Pricklypear_lisp.Ast.VStr s)
                 | Error e -> (Pricklypear_lisp.Ast.VStr e)))
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "code-diff: need name n"));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("code-diff", "need name n", "bad-args")))));
