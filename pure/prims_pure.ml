@@ -1087,6 +1087,21 @@ let prim_hx_post args =
   | [ VStr url ] -> VStr ("hx-post:" ^ url)
   | _ -> raise (Interp_error (User_error ("hx-post needs a string url", "bad-args")))
 
+(* (err/shape msg kind) -> VList (error msg kind).
+   Constructs the guard-handler payload shape as data so Lisp code can
+   build/inspect error envelopes without raising. Mirrors the VList the
+   guard special form delivers to its handler lambda. See design note
+   error-shape-design §3,§x-2a. *)
+let prim_err_shape args =
+  match args with
+  | [ VStr msg; VStr kind ] ->
+      VList [ VSymbol "error"; VStr msg; VSymbol kind ]
+  | [ msg; kind ] ->
+      (* coerce: symbols accepted as kind/msg for ergonomics *)
+      let s = function VStr s -> s | VSymbol s -> s | v -> Pricklypear_lisp.Reader.pp_value v in
+      VList [ VSymbol "error"; VStr (s msg); VSymbol (s kind) ]
+  | _ -> raise (Interp_error (User_error ("err/shape needs msg and kind", "bad-args")))
+
 (* (count list) -> int. Demonstrates a prim that walks the evaluator's
    own value type. *)
 let prim_count args =

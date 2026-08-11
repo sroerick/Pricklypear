@@ -158,6 +158,7 @@ let make_with_defaults () : t =
   (* list-branches is registered as a session DB prim in session.ml *)
   register_sync t "hx-get" prim_hx_get;
   register_sync t "hx-post" prim_hx_post;
+  register_sync t "err/shape" prim_err_shape;
   register_sync t "count" prim_count;
   register_sync t "length" prim_length;
   register_sync t "equal?" prim_equal_p;
@@ -228,6 +229,7 @@ let prim_summary (name : string) : string =
   | "count" -> "length of list"
   | "length" -> "length of list (accepts proper lists and cons chains)"
   | "equal?" -> "structural deep equality"
+  | "err/shape" -> "build the (error msg kind) envelope as data"
   | "cadr" -> "second element (car of cdr)"
   | "caar" -> "car of car"
   | "caddr" -> "third element (car of cdr of cdr)"
