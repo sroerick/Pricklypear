@@ -108,6 +108,53 @@ ensure_env_key PP_PUBLIC_DIR "${current_link}/public"
 chown root:"${config_group}" "${config_file}"
 chmod 640 "${config_file}"
 
+# ---------------------------------------------------------------------------
+# Apply pending DB migrations BEFORE swapping the release / restarting.
+# Migrations ship in the archive (migrations/*.sql) and are idempotent
+# (IF NOT EXISTS + CREATE OR REPLACE + a schema_migrations guard row). We
+# skip any version already recorded in schema_migrations so expensive
+# backfill DO blocks (e.g. 013's 92k-row datum-path rewrite) do not re-run
+# on every promote. Runs while the OLD image is still live: additive
+# migrations are safe under concurrent trigger fire. A non-additive
+# migration (ALTER on a trigger-bearing table after bulk writes) must
+# drop/recreate the trigger within the file itself.
+# On failure we die before touching the symlink or the running image, so
+# the old release keeps serving.
+# ---------------------------------------------------------------------------
+apply_migrations() {
+  mig_dir="${target_dir}/migrations"
+  [ -d "${mig_dir}" ] || { log "no migrations/ in release; skipping"; return 0; }
+  [ -f "${config_file}" ] || die "missing ${config_file} for DB credentials"
+  set -a; . "${config_file}"; set +a
+  : "${PP_DB_HOST:?PP_DB_HOST unset in ${config_file}}"
+  : "${PP_DB_PORT:?PP_DB_PORT unset in ${config_file}}"
+  : "${PP_DB_NAME:?PP_DB_NAME unset in ${config_file}}"
+  : "${PP_DB_USER:?PP_DB_USER unset in ${config_file}}"
+  : "${PP_DB_PASS:?PP_DB_PASS unset in ${config_file}}"
+  ppsql() { PGPASSWORD="${PP_DB_PASS}" psql -h "${PP_DB_HOST}" -p "${PP_DB_PORT}" \
+              -U "${PP_DB_USER}" -d "${PP_DB_NAME}" "$@"; }
+  # schema_migrations may not exist yet on a fresh DB -> empty means "run all".
+  applied="$(ppsql -At -c \
+    "SELECT coalesce(string_agg(version::text,','),'') FROM schema_migrations" \
+    2>/dev/null)" || applied=""
+  n=0
+  for f in $(ls "${mig_dir}"/*.sql 2>/dev/null | sort); do
+    base="$(basename "$f" .sql)"
+    ver=$(( 10#${base%%_*} ))   # 013 -> 13 (strip leading zeros, no octal)
+    case ",${applied}," in *",${ver},"*) continue ;; esac
+    log "applying migration ${ver} (${base})"
+    if ! ppsql -v ON_ERROR_STOP=1 -f "$f"; then
+      log "migration ${ver} FAILED; old release still live (current -> $(readlink "${current_link}" 2>/dev/null || echo '?'))"
+      return 1
+    fi
+    n=$((n + 1))
+  done
+  log "migrations: ${n} applied, rest already-applied"
+  return 0
+}
+
+apply_migrations || die "database migrations failed; old release still serving"
+
 if [ -L "${current_link}" ]; then
   previous_target="$(readlink "${current_link}")"
   [ -n "${previous_target}" ] && ln -sfn "${previous_target}" "${previous_link}"
