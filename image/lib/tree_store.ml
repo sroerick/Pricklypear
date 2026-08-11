@@ -132,6 +132,8 @@ type node = {
   author : string;
   doc : string option;       (* fn only *)
   hash : string;
+  created_at : string;       (* row column; source of truth (not in payload) *)
+  updated_at : string;       (* row column; advanced on every upsert *)
 }
 
 let envelope ~kind ~path ~type_ ~body ~author ~doc : Yojson.Safe.t =
@@ -147,16 +149,21 @@ let envelope ~kind ~path ~type_ ~body ~author ~doc : Yojson.Safe.t =
   ]
 
 let node_of_row (row : Pgx.row) : node option =
-  (* Expected column order: id, path, kind, type_name, payload, hash, author *)
+  (* Expected column order: id, path, kind, type_name, payload, hash,
+     author, created_at, updated_at *)
   match row with
-  | [ id_c; path_c; kind_c; type_c; payload_c; hash_c; author_c ] ->
+  | [ id_c; path_c; kind_c; type_c; payload_c; hash_c; author_c;
+      created_c; updated_c ] ->
       (match Pgx.Value.to_string id_c,
              Pgx.Value.to_string path_c,
              Pgx.Value.to_string kind_c,
              Pgx.Value.to_string payload_c,
              Pgx.Value.to_string hash_c,
-             Pgx.Value.to_string author_c with
-       | Some id, Some path, Some kind, Some payload_s, Some hash, Some author ->
+             Pgx.Value.to_string author_c,
+             Pgx.Value.to_string created_c,
+             Pgx.Value.to_string updated_c with
+       | Some id, Some path, Some kind, Some payload_s, Some hash, Some author,
+         Some created_at, Some updated_at ->
            (try
               let payload = Yojson.Safe.from_string payload_s in
               let body =
@@ -177,7 +184,8 @@ let node_of_row (row : Pgx.row) : node option =
               in
               Some { id; path; kind;
                      type_name = Pgx.Value.to_string type_c;
-                     body; author; doc; hash }
+                     body; author; doc; hash;
+                     created_at; updated_at }
             with Yojson.Json_error _ -> None)
        | _ -> None)
   | _ -> None
@@ -456,7 +464,9 @@ let recompute_head_hash (conn : Store_db.conn) ~(branch_id : string) : unit =
 
 (* ---- DB helpers (read/verify; mirror writes happen in SQL triggers) ---- *)
 
-let select_cols = "id::text, path::text, kind, type_name, payload::text, hash, author"
+let select_cols =
+  "id::text, path::text, kind, type_name, payload::text, hash, author, "
+  ^ "created_at::text, updated_at::text"
 
 (** Fetch one node by exact path. *)
 let get_by_path (conn : Store_db.conn) ~(path : string) : node option =
@@ -599,6 +609,8 @@ let node_to_json (n : node) : string =
        ; ("body", body)
        ; ("author", `String n.author)
        ; ("hash", `String n.hash)
+       ; ("created_at", `String n.created_at)
+       ; ("updated_at", `String n.updated_at)
        ])
 
 let parse_body_json (fields_json : string) : (Yojson.Safe.t, string) result =
