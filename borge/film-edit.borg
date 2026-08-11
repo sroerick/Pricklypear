@@ -383,6 +383,13 @@
         =========================================================
         THE ASYNC LOOP (job-shaped, not call-shaped)
         =========================================================
+        SUBSTRATE: the jobs chapter (borge/jobs.borg) specifies
+        the durable job/step/schedule machinery this vocabulary
+        runs on — gen-submit is (submit-job …), gen-status is
+        (job-status …) over the job row; render/mix JOBS claim
+        through the same runner. The memoization-by-hash cache
+        below is film-edit's own and orthogonal to job durability.
+
         Gen and render take minutes. The vocabulary is job-first:
 
           (edit/asset-upsert …)               ; library write
