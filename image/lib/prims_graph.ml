@@ -232,7 +232,7 @@ let register (t : t) (tbl : Primitives.t) : unit =
       | [ n ] ->
           (match str_name n with
            | None ->
-               (Pricklypear_lisp.Ast.VStr "stub-function: need name")
+               (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("stub-function", "need name", "bad-args"))))
            | Some name ->
                let existing = Store.lookup_function t.store name in
                (match existing with
@@ -257,5 +257,5 @@ let register (t : t) (tbl : Primitives.t) : unit =
                               ("stubbed " ^ name ^ "; "
                                ^ impact_summary_text t name)))))
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "stub-function: need 1 name"))
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("stub-function", "need 1 name", "bad-args")))))
 

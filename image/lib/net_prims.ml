@@ -32,23 +32,26 @@ let random_uuid () =
 
 let deny_anon t label =
   if t.manifest.username = "anonymous" then
-    Some (VStr (label ^ ": denied for anonymous"))
-  else None
+    raise (Pricklypear_lisp.Ast.Interp_error
+             (Pricklypear_lisp.Ast.Prim_error
+                (label, "denied for anonymous", "denied")))
+  else ()
 
 let register (t : Session_types.t) (tbl : Primitives.t) : unit =
   (* (tcp-connect host port) -> handle-id VStr | error VStr *)
   Primitives.register tbl "tcp-connect"
     (fun args ->
-      match deny_anon t "tcp-connect" with
-      | Some v -> v
-      | None ->
+      deny_anon t "tcp-connect";
         (match args with
          | [ VStr host; VStr port_s ] ->
              (try
                 if Hashtbl.length t.net_streams >= max_open_streams then
-                  (VStr (Printf.sprintf
-                      "tcp-connect: quota exceeded (max %d open streams)"
-                      max_open_streams))
+                  raise (Pricklypear_lisp.Ast.Interp_error
+                           (Pricklypear_lisp.Ast.Prim_error
+                              ( "tcp-connect"
+                              , Printf.sprintf "quota exceeded (max %d open streams)"
+                                  max_open_streams
+                              , "denied" )))
                 else begin
                   let port =
                     try int_of_string port_s
@@ -72,18 +75,16 @@ let register (t : Session_types.t) (tbl : Primitives.t) : unit =
               with exn ->
                 (VStr (Printf.sprintf "tcp-connect: %s"
                           (Printexc.to_string exn))))
-         | _ -> (VStr "tcp-connect: need host port")));
+         | _ -> (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tcp-connect", "need host port", "bad-args"))))));
 
   (* (stream-write handle bytes) -> n-written VInt | error VStr *)
   Primitives.register tbl "stream-write"
     (fun args ->
-      match deny_anon t "stream-write" with
-      | Some v -> v
-      | None ->
+      deny_anon t "stream-write";
         (match args with
          | [ VStr handle; VStr data ] ->
              (match Hashtbl.find_opt t.net_streams handle with
-              | None -> (VStr "stream-write: no such handle")
+              | None -> raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("stream-write", "no such handle", "not-found")))
               | Some sock ->
                   (try
                      let n = Unix.write sock (Bytes.of_string data) 0
@@ -92,18 +93,16 @@ let register (t : Session_types.t) (tbl : Primitives.t) : unit =
                    with exn ->
                      (VStr (Printf.sprintf "stream-write: %s"
                               (Printexc.to_string exn)))))
-         | _ -> (VStr "stream-write: need handle bytes")));
+         | _ -> (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("stream-write", "need handle bytes", "bad-args"))))));
 
   (* (stream-read handle max-bytes) -> bytes VStr | error VStr *)
   Primitives.register tbl "stream-read"
     (fun args ->
-      match deny_anon t "stream-read" with
-      | Some v -> v
-      | None ->
+      deny_anon t "stream-read";
         (match args with
          | [ VStr handle; VStr max_s ] ->
              (match Hashtbl.find_opt t.net_streams handle with
-              | None -> (VStr "stream-read: no such handle")
+              | None -> raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("stream-read", "no such handle", "not-found")))
               | Some sock ->
                   let max_bytes =
                     try int_of_string max_s with _ -> 4096
@@ -116,30 +115,26 @@ let register (t : Session_types.t) (tbl : Primitives.t) : unit =
                    with exn ->
                      (VStr (Printf.sprintf "stream-read: %s"
                               (Printexc.to_string exn)))))
-         | _ -> (VStr "stream-read: need handle max-bytes")));
+         | _ -> (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("stream-read", "need handle max-bytes", "bad-args"))))));
 
   (* (stream-close handle) -> ok VStr *)
   Primitives.register tbl "stream-close"
     (fun args ->
-      match deny_anon t "stream-close" with
-      | Some v -> v
-      | None ->
+      deny_anon t "stream-close";
         (match args with
          | [ VStr handle ] ->
              (match Hashtbl.find_opt t.net_streams handle with
-              | None -> (VStr "stream-close: no such handle")
+              | None -> raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("stream-close", "no such handle", "not-found")))
               | Some sock ->
                   (try Unix.close sock with _ -> ());
                   Hashtbl.remove t.net_streams handle;
                   (VStr "closed"))
-         | _ -> (VStr "stream-close: need handle")));
+         | _ -> (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("stream-close", "need handle", "bad-args"))))));
 
   (* (stream-list) -> VList of open handle ids *)
   Primitives.register tbl "stream-list"
     (fun _args ->
-      match deny_anon t "stream-list" with
-      | Some v -> v
-      | None ->
+      deny_anon t "stream-list";
         let ids =
           Hashtbl.fold (fun k _ acc -> (VStr k) :: acc) t.net_streams []
         in

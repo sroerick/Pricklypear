@@ -130,7 +130,7 @@ let register (t : t) (tbl : Primitives.t) : unit =
         | _ -> -1.0
       in
       if secs < 0.0 then
-        (Pricklypear_lisp.Ast.VStr "sleep: need non-negative seconds")
+        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("sleep", "need non-negative seconds", "bad-args"))))
       else
         let secs = min secs 60.0 in
         let () = Lwt_eio.run_lwt (fun () -> Lwt_unix.sleep secs) in
@@ -176,5 +176,5 @@ let register (t : t) (tbl : Primitives.t) : unit =
             in
             do_http_get t url hdrs
         | _ ->
-            (Pricklypear_lisp.Ast.VStr "http-get: need url [headers-json]"))
+            (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("http-get", "need url [headers-json]", "bad-args")))))
 

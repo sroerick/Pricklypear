@@ -27,7 +27,7 @@ let register (t : t) (tbl : Primitives.t) : unit =
            | Some meta ->
                (Pricklypear_lisp.Ast.VStr (Media.meta_to_json_string meta)))
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "media-meta: need id"));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("media-meta", "need id", "bad-args")))));
   (* (media-list [limit]) -> VList of meta json strings *)
   Primitives.register tbl "media-list"
     (fun args ->
@@ -71,7 +71,7 @@ let register (t : t) (tbl : Primitives.t) : unit =
              | Error e ->
                  (Pricklypear_lisp.Ast.VStr ("media-delete: " ^ e)))
         | _ ->
-            (Pricklypear_lisp.Ast.VStr "media-delete: need id"));
+            (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("media-delete", "need id", "bad-args")))));
   (* (media-put content-type data-b64 [filename]) -> VStr id | error
      Tiny payloads only (icons/fixtures). Real pushes: POST /api/media. *)
   Primitives.register tbl "media-put"
@@ -95,7 +95,7 @@ let register (t : t) (tbl : Primitives.t) : unit =
         | Ok (ct, b64, filename) ->
             (match Media.b64_decode_opt (String.trim b64) with
              | None ->
-                 (Pricklypear_lisp.Ast.VStr "media-put: invalid data-b64")
+                 (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("media-put", "invalid data-b64", "bad-args"))))
              | Some data ->
                  let res =
                    Media.put t.store ~author:uname ~content_type:ct ~data
@@ -112,5 +112,5 @@ let register (t : t) (tbl : Primitives.t) : unit =
       | [ Pricklypear_lisp.Ast.VStr id ] ->
           (Pricklypear_lisp.Ast.VStr (Media.url_of_id id))
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "media-url: need id"))
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("media-url", "need id", "bad-args")))))
 
