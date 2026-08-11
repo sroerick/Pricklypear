@@ -1,7 +1,7 @@
 (** Prim registration extracted from session.ml (Eio-floor Phase 4). *)
 open Session_types
 
-let do_http_get (t : t) (url : string)
+let do_http_get (url : string)
     (req_hdrs : (string * string) list)
     : Pricklypear_lisp.Ast.value =
   let open Pricklypear_lisp.Ast in
@@ -77,7 +77,10 @@ let do_http_get (t : t) (url : string)
         last_status lines
       in
       let headers_json = Prims_pure.http_parse_headers hdr_blob in
-      let err =
+      (* D1: network-transient detection. curl writes errors to stderr
+         (curl: (NN) ...) or returns non-zero. A status of 0 means no
+         HTTP response was received → transient network failure. *)
+      let curl_err =
         if stderr = "" then ""
         else if String.length stderr > 5
                 && (String.sub stderr 0 5 = "curl "
@@ -85,28 +88,60 @@ let do_http_get (t : t) (url : string)
           String.trim stderr
         else ""
       in
-      let result_json =
-        let open Yojson.Safe in
-        `Assoc
-          [ ("status", `Int status)
-          ; ("headers",
-             (try from_string headers_json with _ -> `Null))
-          ; ("body", `String body)
-          ; ("error", `String err) ]
-      in
       cleanup ();
-      (VStr (Yojson.Safe.to_string result_json))
+      if status = 0 && curl_err <> "" then
+        (* Network transient: DNS, connection refused, timeout, etc.
+           RAISE so guard handlers see a real error (design note §4b). *)
+        raise
+          (Interp_error
+             (Prim_error
+                ( "http-get"
+                , "transient: " ^ curl_err
+                , "transient" )))
+      else if status = 0 then
+        (* No status AND no curl error — still a transient (no response). *)
+        raise
+          (Interp_error
+             (Prim_error
+                ( "http-get"
+                , "transient: no HTTP response"
+                , "transient" )))
+      else
+        (* Semantic HTTP response (2xx/3xx/4xx/5xx). Return a payload
+           dict with ok/err/kind so callers can branch without string
+           parsing. 4xx/5xx are NOT raised — they're real responses the
+           caller may want to inspect (design note §4b). *)
+        let ok = status < 400 in
+        let err = if ok then "" else Printf.sprintf "HTTP %d" status in
+        let kind =
+          if ok then "ok"
+          else if status >= 500 then "http-server-error"
+          else "http-client-error"
+        in
+        let result_json =
+          let open Yojson.Safe in
+          `Assoc
+            [ ("ok", `Bool ok)
+            ; ("status", `Int status)
+            ; ("headers",
+               (try from_string headers_json with _ -> `Null))
+            ; ("body", `String body)
+            ; ("err", `String err)
+            ; ("kind", `String kind) ]
+        in
+        (VStr (Yojson.Safe.to_string result_json))
     with exn ->
       cleanup ();
-      let result_json =
-        let open Yojson.Safe in
-        `Assoc
-          [ ("status", `Int 0)
-          ; ("headers", `Null)
-          ; ("body", `String "")
-          ; ("error", `String ("http-get: " ^ Printexc.to_string exn)) ]
-      in
-      (VStr (Yojson.Safe.to_string result_json)))
+      (* Re-raise Interp_error (transient) unchanged; wrap unknown exns. *)
+      match exn with
+      | Interp_error _ as e -> raise e
+      | _ ->
+          raise
+            (Interp_error
+               (Prim_error
+                  ( "http-get"
+                  , "transient: " ^ Printexc.to_string exn
+                  , "transient" ))))
 
 let register (t : t) (tbl : Primitives.t) : unit =
   let deny_anon name =
@@ -152,12 +187,13 @@ let register (t : t) (tbl : Primitives.t) : unit =
       in
       if uname = "anonymous" then deny_anon "http-get"
       else if not (is_admin_or_agent ()) then
-        (Pricklypear_lisp.Ast.VStr
-             "http-get: denied (admin/agent/human only)")
+        (raise (Pricklypear_lisp.Ast.Interp_error
+                  (Pricklypear_lisp.Ast.Prim_error
+                     ("http-get", "denied (admin/agent/human only)", "denied"))))
       else
         match args with
         | [ Pricklypear_lisp.Ast.VStr url ] ->
-            do_http_get t url []
+            do_http_get url []
         | [ Pricklypear_lisp.Ast.VStr url; Pricklypear_lisp.Ast.VStr hdrs_json ] ->
             let hdrs =
               (try
@@ -174,7 +210,7 @@ let register (t : t) (tbl : Primitives.t) : unit =
                   | _ -> [])
                with _ -> [])
             in
-            do_http_get t url hdrs
+            do_http_get url hdrs
         | _ ->
             (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("http-get", "need url [headers-json]", "bad-args")))))
 

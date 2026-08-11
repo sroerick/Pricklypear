@@ -8,6 +8,11 @@
  (modules agent_tools_test)
  (libraries pricklypear-image pricklypear-lisp alcotest lwt lwt.unix))
 
+(test
+ (name http_get_test)
+ (modules http_get_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest lwt lwt.unix unix))
+
 
 (test
  (name prims_hyper_test)
