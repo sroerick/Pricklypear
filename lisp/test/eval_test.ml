@@ -512,7 +512,7 @@ let macro_tests = [
     let prims = Eval.make_prim_table () in
     Eval.register_prim prims "+" (function
       | [Ast.VInt a; Ast.VInt b] -> (Ast.VInt (Int64.add a b))
-      | _ -> raise (Ast.Interp_error (Ast.User_error "+")));
+      | _ -> raise (Ast.Interp_error (Ast.User_error ("+", "bad-args"))));
     let env = Env.create () in
     Env.define env "+" (Ast.VPrim "+");
     let got = (Eval.eval_string ~prims env "`(a ,(+ 1 2) c)") in
@@ -580,7 +580,7 @@ let macro_tests = [
           ((Eval.eval_string ~prims env
                 "(defmacro bad (a . b) a)"));
         `Ok
-      with Ast.Interp_error (Ast.User_error m) -> `Err m
+      with Ast.Interp_error (Ast.User_error (m, _)) -> `Err m
          | Ast.Interp_error e -> `Err (Ast.pp_interp_error e)
          | Reader.Reader_error (m, _, _) -> `Err m
     with
@@ -980,21 +980,21 @@ let register_symbol_prims (prims : Eval.prim_table) : unit =
   Eval.register_prim prims "symbol?" (function
     | [Ast.VSymbol _] -> Ast.VBool true
     | [_] -> Ast.VBool false
-    | _ -> raise (Ast.Interp_error (Ast.User_error "symbol?")));
+    | _ -> raise (Ast.Interp_error (Ast.User_error ("symbol?", "bad-args"))));
   Eval.register_prim prims "string?" (function
     | [Ast.VStr _] -> Ast.VBool true
     | [_] -> Ast.VBool false
-    | _ -> raise (Ast.Interp_error (Ast.User_error "string?")));
+    | _ -> raise (Ast.Interp_error (Ast.User_error ("string?", "bad-args"))));
   Eval.register_prim prims "symbol=?" (function
     | [Ast.VSymbol a; Ast.VSymbol b] -> Ast.VBool (String.equal a b)
     | [_; _] -> Ast.VBool false
-    | _ -> raise (Ast.Interp_error (Ast.User_error "symbol=?")));
+    | _ -> raise (Ast.Interp_error (Ast.User_error ("symbol=?", "bad-args"))));
   Eval.register_prim prims "symbol->string" (function
     | [Ast.VSymbol s] -> Ast.VStr s
-    | _ -> raise (Ast.Interp_error (Ast.User_error "symbol->string")));
+    | _ -> raise (Ast.Interp_error (Ast.User_error ("symbol->string", "bad-args"))));
   Eval.register_prim prims "string->symbol" (function
     | [Ast.VStr s] -> Ast.VSymbol s
-    | _ -> raise (Ast.Interp_error (Ast.User_error "string->symbol")));
+    | _ -> raise (Ast.Interp_error (Ast.User_error ("string->symbol", "bad-args"))));
   Eval.register_prim prims "type-of" (function
     | [Ast.VSymbol _] -> Ast.VStr "symbol"
     | [Ast.VStr _] -> Ast.VStr "str"
@@ -1065,7 +1065,7 @@ let dialect_tests = [
     let prims = Eval.make_prim_table () in
     Eval.register_prim prims "+" (function
       | [Ast.VInt a; Ast.VInt b] -> Ast.VInt (Int64.add a b)
-      | _ -> raise (Ast.Interp_error (Ast.User_error "+")));
+      | _ -> raise (Ast.Interp_error (Ast.User_error ("+", "bad-args"))));
     let env = Env.create () in
     Env.define env "+" (Ast.VPrim "+");
     ignore (Eval.eval_string ~prims env "(define (add1 x) (+ x 1))");
@@ -1085,7 +1085,7 @@ let dialect_tests = [
     let prims = Eval.make_prim_table () in
     Eval.register_prim prims "+" (function
       | [Ast.VInt a; Ast.VInt b] -> Ast.VInt (Int64.add a b)
-      | _ -> raise (Ast.Interp_error (Ast.User_error "+")));
+      | _ -> raise (Ast.Interp_error (Ast.User_error ("+", "bad-args"))));
     let env = Env.create () in
     Env.define env "+" (Ast.VPrim "+");
     ignore (Eval.eval_string ~prims env
@@ -1103,7 +1103,7 @@ let dialect_tests = [
     let prims = Eval.make_prim_table () in
     Eval.register_prim prims "+" (function
       | [Ast.VInt a; Ast.VInt b] -> Ast.VInt (Int64.add a b)
-      | _ -> raise (Ast.Interp_error (Ast.User_error "+")));
+      | _ -> raise (Ast.Interp_error (Ast.User_error ("+", "bad-args"))));
     let env = Env.create () in
     Env.define env "+" (Ast.VPrim "+");
     ignore (Eval.eval_string ~prims env
@@ -1219,17 +1219,27 @@ let dialect_tests = [
      | Some e ->
          Alcotest.failf "wrong error: %s" (Ast.pp_interp_error e)
      | None -> Alcotest.fail "expected Unbound_var"));
-  ("error kinds are stable snake_case tags", `Quick, fun () ->
+  ("error kinds come from the stored kind slot", `Quick, fun () ->
     Alcotest.(check string) "budget" "budget_exceeded"
       (Ast.interp_error_kind Ast.Budget_exceeded);
-    Alcotest.(check string) "user" "user_error"
-      (Ast.interp_error_kind (Ast.User_error "x"));
-    Alcotest.(check string) "arity" "arity_mismatch"
+    Alcotest.(check string) "user-stored-kind" "bad-args"
+      (Ast.interp_error_kind (Ast.User_error ("x", "bad-args")));
+    Alcotest.(check string) "user-custom-kind" "denied"
+      (Ast.interp_error_kind (Ast.User_error ("no", "denied")));
+    (* A2: Arity_mismatch and Wrong_arg_count collapse to bad-arity *)
+    Alcotest.(check string) "arity" "bad-arity"
       (Ast.interp_error_kind (Ast.Arity_mismatch ("f", 1, 2)));
+    Alcotest.(check string) "wrong-arg-count" "bad-arity"
+      (Ast.interp_error_kind (Ast.Wrong_arg_count ("f", 1, 2)));
     Alcotest.(check string) "parse" "parse_error"
       (Ast.interp_error_kind (Ast.Parse_error ("bad", 1, 2)));
-    Alcotest.(check string) "prim" "prim_error"
-      (Ast.interp_error_kind (Ast.Prim_error ("p", "m"))));
+    Alcotest.(check string) "prim-stored-kind" "not-found"
+      (Ast.interp_error_kind (Ast.Prim_error ("get", "missing", "not-found")));
+    (* pp_interp_error still works with the new arity *)
+    Alcotest.(check string) "pp-prim" "prim get: missing"
+      (Ast.pp_interp_error (Ast.Prim_error ("get", "missing", "not-found")));
+    Alcotest.(check string) "pp-user" "boom"
+      (Ast.pp_interp_error (Ast.User_error ("boom", "bad-args"))));
 ]
 
 (* --- public-route gate (Route_gate) ---
@@ -1328,7 +1338,7 @@ let shadow_tests = [
        try
          ignore (Eval.eval_string ~prims env "(define create (lambda () 1))");
          None
-       with Ast.Interp_error (Ast.User_error m) -> Some m
+       with Ast.Interp_error (Ast.User_error (m, _)) -> Some m
           | exn -> Alcotest.failf "unexpected: %s" (Printexc.to_string exn)
      with
      | Some m ->
@@ -1342,7 +1352,7 @@ let shadow_tests = [
        try
          ignore (Eval.eval_string ~prims env "(define if (lambda () 1))");
          None
-       with Ast.Interp_error (Ast.User_error m) -> Some m
+       with Ast.Interp_error (Ast.User_error (m, _)) -> Some m
           | exn -> Alcotest.failf "unexpected: %s" (Printexc.to_string exn)
      with
      | Some m ->

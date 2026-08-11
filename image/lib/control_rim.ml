@@ -35,7 +35,7 @@ let run
                           Effect.Deep.discontinue k
                             (Ast.Interp_error
                                (Ast.Prim_error
-                                  (name, "unregistered primitive")))
+                                  (name, "unregistered primitive", "prim_error")))
                       | Some fn ->
                           (try Effect.Deep.continue k (fn args) with
                            | exn -> Effect.Deep.discontinue k exn))

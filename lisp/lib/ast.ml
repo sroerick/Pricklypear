@@ -64,9 +64,9 @@ type interp_error =
   | Wrong_arg_count of string * int * int
   | Type_mismatch of string * value  (* (expected, got) *)
   | Budget_exceeded
-  | Prim_error of string * string    (* (prim_name, message) *)
+  | Prim_error of string * string * string  (* (prim_name, message, kind) *)
   | Parse_error of string * int * int (* (message, line, col) *)
-  | User_error of string
+  | User_error of string * string         (* (message, kind) *)
 
 exception Interp_error of interp_error
 
@@ -95,13 +95,13 @@ let interp_error_kind (e : interp_error) : string =
   match e with
   | Unbound_var _ -> "unbound_var"
   | Not_a_function _ -> "not_a_function"
-  | Arity_mismatch _ -> "arity_mismatch"
-  | Wrong_arg_count _ -> "wrong_arg_count"
+  | Arity_mismatch _ -> "bad-arity"
+  | Wrong_arg_count _ -> "bad-arity"
   | Type_mismatch _ -> "type_mismatch"
   | Budget_exceeded -> "budget_exceeded"
-  | Prim_error _ -> "prim_error"
+  | Prim_error (_, _, k) -> k
   | Parse_error _ -> "parse_error"
-  | User_error _ -> "user_error"
+  | User_error (_, k) -> k
 
 let interp_error_loc (e : interp_error) : (int * int) option =
   match e with
@@ -119,9 +119,9 @@ let pp_interp_error (e : interp_error) : string =
   | Type_mismatch (exp, v) ->
       "type mismatch: expected " ^ exp ^ ", got " ^ pp_value_short v
   | Budget_exceeded -> "budget exceeded"
-  | Prim_error (p, m) -> "prim " ^ p ^ ": " ^ m
+  | Prim_error (p, m, _) -> "prim " ^ p ^ ": " ^ m
   | Parse_error (m, l, c) -> Printf.sprintf "parse error: %s (%d:%d)" m l c
-  | User_error m -> m
+  | User_error (m, _) -> m
 
 (** Helper constructors for building AST in tests *)
 let var s = Var s

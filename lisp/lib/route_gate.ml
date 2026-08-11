@@ -66,7 +66,7 @@ let check_public_handler ~(env : Env.env) (handler : string)
               "public route denied: handler %S macroexpand failed: %s"
               handler
               (match e with
-               | User_error m -> m
+               | User_error (m, _) -> m
                | Arity_mismatch (n, exp, got) ->
                    Printf.sprintf "%s arity %d vs %d" n exp got
                | _ -> "interp error")))

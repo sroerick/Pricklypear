@@ -16,7 +16,7 @@ let require_request (t : t) : request =
   | None ->
       raise
         (Pricklypear_lisp.Ast.Interp_error
-           (Pricklypear_lisp.Ast.User_error "no active request"))
+           (Pricklypear_lisp.Ast.User_error ("no active request", "bad-args")))
 
 let str_name = function
   | Pricklypear_lisp.Ast.VStr s | Pricklypear_lisp.Ast.VSymbol s -> Some s

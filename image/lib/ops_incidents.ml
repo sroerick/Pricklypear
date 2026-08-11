@@ -213,7 +213,7 @@ let is_expected_runtime_error (exn : exn) : bool =
   | Interp_error e ->
       (match e with
        | Budget_exceeded -> true
-       | User_error _ -> true
+       | User_error (_, _) -> true
        | Arity_mismatch _ -> true
        | Wrong_arg_count _ -> true
        | Type_mismatch _ -> true

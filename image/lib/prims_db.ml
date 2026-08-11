@@ -82,7 +82,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
     raise
       (Pricklypear_lisp.Ast.Interp_error
          (Pricklypear_lisp.Ast.User_error
-            (name ^ ": denied for anonymous")))
+            (name ^ ": denied for anonymous", "bad-args")))
   in
   (* Per-request identity snapshot (avoids the cotenant race where the
      live t.manifest is mid-swap). Falls back to t.manifest outside HTTP. *)

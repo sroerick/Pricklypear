@@ -1326,7 +1326,7 @@ let fresh_multipart_boundary (bodies : string list) : string =
       raise
         (Pricklypear_lisp.Ast.Interp_error
            (Pricklypear_lisp.Ast.User_error
-              "multipart: could not choose a unique boundary"))
+              ("multipart: could not choose a unique boundary", "bad-args")))
     else
       let b =
         Printf.sprintf "pp%x%x" (Random.bits ()) (Random.bits ())

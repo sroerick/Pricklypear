@@ -9,7 +9,7 @@ let register (t : t) (tbl : Primitives.t) : unit =
     raise
       (Pricklypear_lisp.Ast.Interp_error
          (Pricklypear_lisp.Ast.User_error
-            (name ^ ": denied for anonymous")))
+            (name ^ ": denied for anonymous", "bad-args")))
   in
   let actor () =
     match Request_context.get () with

@@ -478,7 +478,7 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
         raise
           (Pricklypear_lisp.Ast.Interp_error
              (Pricklypear_lisp.Ast.User_error
-                ("bench: parse failed: " ^ Printexc.to_string exn)))
+                ("bench: parse failed: " ^ Printexc.to_string exn, "bad-args")))
     in
     let run_once () =
       let budget =
@@ -1452,7 +1452,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
           raise
             (Pricklypear_lisp.Ast.Interp_error
                (Pricklypear_lisp.Ast.User_error
-                  "eval-string: need 1 string")));
+                  ("eval-string: need 1 string", "bad-args"))));
   Primitives.register prim_table "load-library"
     (fun args ->
       match args with

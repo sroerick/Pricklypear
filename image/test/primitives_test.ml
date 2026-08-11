@@ -87,7 +87,7 @@ let math_tests = [
     Alcotest.(check string) "sqrt" "3.0" (eval_str "(sqrt 9)"));
   ("sqrt negative errors", `Quick, fun () ->
     match try ignore (eval "(sqrt -1)"); None with
-          | Interp_error (User_error m) -> Some m
+          | Interp_error (User_error (m, _)) -> Some m
           | _ -> Some "other"
     with
     | Some m -> Alcotest.(check bool) "msg" true (String.length m > 0)
@@ -106,7 +106,7 @@ let math_tests = [
     | _ -> Alcotest.fail "float");
   ("log non-positive errors", `Quick, fun () ->
     match try ignore (eval "(log 0)"); None with
-          | Interp_error (User_error _) -> Some ()
+          | Interp_error (User_error (_, _)) -> Some ()
           | _ -> None
     with
     | Some () -> ()
@@ -132,7 +132,7 @@ let math_tests = [
     | _ -> Alcotest.fail "float");
   ("asin domain error", `Quick, fun () ->
     match try ignore (eval "(asin 2)"); None with
-          | Interp_error (User_error _) -> Some ()
+          | Interp_error (User_error (_, _)) -> Some ()
           | _ -> None
     with
     | Some () -> ()
@@ -165,7 +165,7 @@ let math_tests = [
     Alcotest.(check string) "odd" "#t" (eval_str "(odd? 3)"));
   ("even? non-integral float errors", `Quick, fun () ->
     match try ignore (eval "(even? 1.5)"); None with
-          | Interp_error (User_error _) -> Some ()
+          | Interp_error (User_error (_, _)) -> Some ()
           | _ -> None
     with
     | Some () -> ()
@@ -181,21 +181,21 @@ let math_tests = [
     Alcotest.(check string) "rneg" "-1" (eval_str "(remainder -10 3)"));
   ("quotient by zero errors", `Quick, fun () ->
     match try ignore (eval "(quotient 1 0)"); None with
-          | Interp_error (User_error _) -> Some ()
+          | Interp_error (User_error (_, _)) -> Some ()
           | _ -> None
     with
     | Some () -> ()
     | None -> Alcotest.fail "expected error");
   ("quotient rejects float", `Quick, fun () ->
     match try ignore (eval "(quotient 1.0 2.0)"); None with
-          | Interp_error (User_error _) -> Some ()
+          | Interp_error (User_error (_, _)) -> Some ()
           | _ -> None
     with
     | Some () -> ()
     | None -> Alcotest.fail "expected error");
   ("div by zero errors", `Quick, fun () ->
     match try ignore (eval "(div 1 0)"); None with
-          | Interp_error (User_error _) -> Some ()
+          | Interp_error (User_error (_, _)) -> Some ()
           | _ -> None
     with
     | Some () -> ()

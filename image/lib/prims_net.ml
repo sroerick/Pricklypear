@@ -113,7 +113,7 @@ let register (t : t) (tbl : Primitives.t) : unit =
     raise
       (Pricklypear_lisp.Ast.Interp_error
          (Pricklypear_lisp.Ast.User_error
-            (name ^ ": denied for anonymous")))
+            (name ^ ": denied for anonymous", "bad-args")))
   in
   (* (sleep seconds) -> VNil after delay. Host-owned concurrency surface
      (BORGE-1785211069). Caps at 60s per call so a runaway form cannot

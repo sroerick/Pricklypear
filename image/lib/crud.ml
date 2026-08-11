@@ -136,8 +136,8 @@ let select_for_update
     raise
       (Interp_error
          (User_error
-            "select-for-update requires (with-transaction ...); \
-             refusing FOR UPDATE outside a transaction"))
+            ("select-for-update requires (with-transaction ...); \
+             refusing FOR UPDATE outside a transaction", "bad-args")))
   else
     match Io_lwt.Db.current_conn store with
     | None -> VNil

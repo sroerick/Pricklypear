@@ -79,7 +79,7 @@ let load_string
                 match exn with
                 | Interp_error err ->
                     (match err with
-                     | User_error m -> m
+                     | User_error (m, _) -> m
                      | Parse_error (m, l, c) ->
                          Printf.sprintf "parse: %s (%d:%d)" m l c
                      | Unbound_var s -> "unbound: " ^ s

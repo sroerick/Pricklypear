@@ -22,4 +22,4 @@ let prim_sha1 args =
         | _ -> "<nonstr>"
       in
       VStr (Digestif.SHA1.to_hex (Digestif.SHA1.digest_string s))
-  | _ -> raise (Interp_error (User_error "sha1 needs 1 string"))
+  | _ -> raise (Interp_error (User_error ("sha1 needs 1 string", "bad-args")))
