@@ -15,7 +15,7 @@ let num_of_value = function
                         | VStr _ -> "string"
                         | VBool _ -> "bool"
                         | VNil -> "nil"
-                        | _ -> "other"))))
+                        | _ -> "other"), "bad-args")))
 
 let float_of_num = function
   | NInt n -> Int64.to_float n
@@ -43,7 +43,7 @@ let num_mul a b =
 let num_div a b =
   let bf = float_of_num b in
   if bf = 0. then
-    raise (Interp_error (User_error "div by zero"))
+    raise (Interp_error (User_error ("div by zero", "bad-args")))
   else
     match a, b with
     | NInt x, NInt y -> NInt (Int64.div x y)
@@ -71,7 +71,7 @@ let prim_sub args =
   match args with
   | [ a ] -> value_of_num (num_neg (num_of_value a))
   | [ a; b ] -> value_of_num (num_sub (num_of_value a) (num_of_value b))
-  | _ -> raise (Interp_error (User_error "- needs one or two numeric args"))
+  | _ -> raise (Interp_error (User_error ("- needs one or two numeric args", "bad-args")))
 
 (* "*". Zero-or-more numeric args. Variadic; empty product is 1 (multiplicative identity). *)
 let prim_mul (args : value list) : value =
@@ -85,27 +85,27 @@ let prim_mul (args : value list) : value =
 let prim_num_eq args =
   match args with
   | [ a; b ] -> VBool (num_compare (num_of_value a) (num_of_value b) = 0)
-  | _ -> raise (Interp_error (User_error "= needs two numeric args"))
+  | _ -> raise (Interp_error (User_error ("= needs two numeric args", "bad-args")))
 
 let prim_lt args =
   match args with
   | [ a; b ] -> VBool (num_compare (num_of_value a) (num_of_value b) < 0)
-  | _ -> raise (Interp_error (User_error "< needs two numeric args"))
+  | _ -> raise (Interp_error (User_error ("< needs two numeric args", "bad-args")))
 
 let prim_gt args =
   match args with
   | [ a; b ] -> VBool (num_compare (num_of_value a) (num_of_value b) > 0)
-  | _ -> raise (Interp_error (User_error "> needs two numeric args"))
+  | _ -> raise (Interp_error (User_error ("> needs two numeric args", "bad-args")))
 
 let prim_le args =
   match args with
   | [ a; b ] -> VBool (num_compare (num_of_value a) (num_of_value b) <= 0)
-  | _ -> raise (Interp_error (User_error "<= needs two numeric args"))
+  | _ -> raise (Interp_error (User_error ("<= needs two numeric args", "bad-args")))
 
 let prim_ge args =
   match args with
   | [ a; b ] -> VBool (num_compare (num_of_value a) (num_of_value b) >= 0)
-  | _ -> raise (Interp_error (User_error ">= needs two numeric args"))
+  | _ -> raise (Interp_error (User_error (">= needs two numeric args", "bad-args")))
 
 (* "not" boolean negation *)
 let prim_not args =
@@ -113,7 +113,7 @@ let prim_not args =
   | [ VBool b ] -> VBool (not b)
   | [ VNil ] -> VBool true
   | [ _ ] -> VBool false   (* any non-nil non-false is truthy *)
-  | _ -> raise (Interp_error (User_error "not needs one arg"))
+  | _ -> raise (Interp_error (User_error ("not needs one arg", "bad-args")))
 
 (* (list a b c ...) -> VList. Variadic. *)
 let prim_list args = VList args
@@ -124,7 +124,7 @@ let prim_car args =
   | [ VList (h :: _) ] -> h
   | [ VList [] ] -> VNil
   | [ VPair (a, _) ] -> a
-  | _ -> raise (Interp_error (User_error "car needs a list or pair"))
+  | _ -> raise (Interp_error (User_error ("car needs a list or pair", "bad-args")))
 
 (* (cdr xs): tail of a VList or VPair. *)
 let prim_cdr args =
@@ -132,13 +132,13 @@ let prim_cdr args =
   | [ VList (_ :: rest) ] -> VList rest
   | [ VList [] ] -> VNil
   | [ VPair (_, b) ] -> b
-  | _ -> raise (Interp_error (User_error "cdr needs a list or pair"))
+  | _ -> raise (Interp_error (User_error ("cdr needs a list or pair", "bad-args")))
 
 (* (cons a b) -> VPair. Classic Lisp cons cell. *)
 let prim_cons args =
   match args with
   | [ a; b ] -> VPair (a, b)
-  | _ -> raise (Interp_error (User_error "cons needs two args"))
+  | _ -> raise (Interp_error (User_error ("cons needs two args", "bad-args")))
 
 (* (null? x) -> VBool. True if VNil. *)
 let prim_null_p args =
@@ -146,7 +146,7 @@ let prim_null_p args =
   | [ VNil ] -> VBool true
   | [ VList [] ] -> VBool true
   | [ _ ] -> VBool false
-  | _ -> raise (Interp_error (User_error "null? needs one arg"))
+  | _ -> raise (Interp_error (User_error ("null? needs one arg", "bad-args")))
 
 (* (pair? x) -> VBool. True if VPair or non-empty VList. *)
 let prim_pair_p args =
@@ -175,7 +175,7 @@ let rec coerce_str ?(ctx = "string") (v : value) : string =
       raise
         (Interp_error
            (User_error (ctx ^ " needs a string (got " ^
-                        Pricklypear_lisp.Reader.pp_value v ^ ")")))
+                        Pricklypear_lisp.Reader.pp_value v ^ ")", "bad-args")))
 
 (* (string-append s1 s2 ...) -> VStr. Variadic over VStr / __str__ tags. *)
 let prim_string_append args =
@@ -202,46 +202,46 @@ let prim_type_of args =
   | [ VMacro _ ] -> VStr "macro"
   | [ VPrim name ] -> VStr ("prim:" ^ name)
   | [ VRef (t, _) ] -> VStr ("ref:" ^ t)
-  | _ -> raise (Interp_error (User_error "type-of needs one arg"))
+  | _ -> raise (Interp_error (User_error ("type-of needs one arg", "bad-args")))
 
 let prim_symbol_p = function
   | [ VSymbol _ ] -> VBool true
   | [ _ ] -> VBool false
-  | _ -> raise (Interp_error (User_error "symbol? needs one arg"))
+  | _ -> raise (Interp_error (User_error ("symbol? needs one arg", "bad-args")))
 
 let prim_string_p = function
   | [ VStr _ ] -> VBool true
   | [ VList [ VStr "__str__"; VStr _ ] ]
   | [ VList [ VSymbol "__str__"; VStr _ ] ] -> VBool true
   | [ _ ] -> VBool false
-  | _ -> raise (Interp_error (User_error "string? needs one arg"))
+  | _ -> raise (Interp_error (User_error ("string? needs one arg", "bad-args")))
 
 let prim_symbol_eq = function
   | [ VSymbol a; VSymbol b ] -> VBool (String.equal a b)
   | [ _; _ ] -> VBool false
-  | _ -> raise (Interp_error (User_error "symbol=? needs two args"))
+  | _ -> raise (Interp_error (User_error ("symbol=? needs two args", "bad-args")))
 
 let prim_symbol_to_string = function
   | [ VSymbol s ] -> VStr s
   | [ VStr s ] -> VStr s (* soft: already a string *)
-  | _ -> raise (Interp_error (User_error "symbol->string needs a symbol"))
+  | _ -> raise (Interp_error (User_error ("symbol->string needs a symbol", "bad-args")))
 
 let prim_string_to_symbol = function
   | [ VStr s ] -> VSymbol s
   | [ VSymbol s ] -> VSymbol s
-  | _ -> raise (Interp_error (User_error "string->symbol needs a string"))
+  | _ -> raise (Interp_error (User_error ("string->symbol needs a string", "bad-args")))
 
 (* (str x) -> VStr. Coerces any value to its pretty-printed form. *)
 let prim_str args =
   match args with
   | [ v ] -> VStr (Pricklypear_lisp.Reader.pp_value v)
-  | _ -> raise (Interp_error (User_error "str needs one arg"))
+  | _ -> raise (Interp_error (User_error ("str needs one arg", "bad-args")))
 
 (* (as-str x) -> VStr without Lisp quotes (for path/ref building). *)
 let prim_as_str args =
   match args with
   | [ v ] -> VStr (coerce_str ~ctx:"as-str" v)
-  | _ -> raise (Interp_error (User_error "as-str needs one arg"))
+  | _ -> raise (Interp_error (User_error ("as-str needs one arg", "bad-args")))
 
 (* (parse-float s|n) -> VFloat *)
 let prim_parse_float args =
@@ -251,57 +251,57 @@ let prim_parse_float args =
   | [ VStr s ] ->
       (try VFloat (float_of_string (String.trim s))
        with _ -> VFloat 0.)
-  | _ -> raise (Interp_error (User_error "parse-float needs string or number"))
+  | _ -> raise (Interp_error (User_error ("parse-float needs string or number", "bad-args")))
 
 (* (floor x) -> VInt *)
 let prim_floor args =
   match args with
   | [ VInt n ] -> VInt n
   | [ VFloat f ] -> VInt (Int64.of_float (floor f))
-  | _ -> raise (Interp_error (User_error "floor needs one numeric arg"))
+  | _ -> raise (Interp_error (User_error ("floor needs one numeric arg", "bad-args")))
 
 (* (round x) -> VInt *)
 let prim_round args =
   match args with
   | [ VInt n ] -> VInt n
   | [ VFloat f ] -> VInt (Int64.of_float (Float.round f))
-  | _ -> raise (Interp_error (User_error "round needs one numeric arg"))
+  | _ -> raise (Interp_error (User_error ("round needs one numeric arg", "bad-args")))
 
 (* (div a b) — integer div when both int; else float. *)
 let prim_div args =
   match args with
   | [ a; b ] -> value_of_num (num_div (num_of_value a) (num_of_value b))
-  | _ -> raise (Interp_error (User_error "div needs two numeric args"))
+  | _ -> raise (Interp_error (User_error ("div needs two numeric args", "bad-args")))
 
 let prim_mod args =
   match args with
   | [ VInt a; VInt b ] when b <> 0L -> VInt (Int64.rem a b)
   | [ VInt _; VInt 0L ] ->
-      raise (Interp_error (User_error "mod by zero"))
+      raise (Interp_error (User_error ("mod by zero", "bad-args")))
   | [ a; b ] ->
       let bf = float_of_num (num_of_value b) in
-      if bf = 0. then raise (Interp_error (User_error "mod by zero"))
+      if bf = 0. then raise (Interp_error (User_error ("mod by zero", "bad-args")))
       else VFloat (mod_float (float_of_num (num_of_value a)) bf)
-  | _ -> raise (Interp_error (User_error "mod needs two numeric args"))
+  | _ -> raise (Interp_error (User_error ("mod needs two numeric args", "bad-args")))
 
 (* Scheme aliases of the int paths of div/mod — reject floats. *)
 let prim_quotient args =
   match args with
   | [ VInt a; VInt b ] when b <> 0L -> VInt (Int64.div a b)
   | [ VInt _; VInt 0L ] ->
-      raise (Interp_error (User_error "quotient by zero"))
+      raise (Interp_error (User_error ("quotient by zero", "bad-args")))
   | [ VInt _; _ ] | [ _; VInt _ ] | [ _; _ ] ->
-      raise (Interp_error (User_error "quotient needs two int args"))
-  | _ -> raise (Interp_error (User_error "quotient needs two int args"))
+      raise (Interp_error (User_error ("quotient needs two int args", "bad-args")))
+  | _ -> raise (Interp_error (User_error ("quotient needs two int args", "bad-args")))
 
 let prim_remainder args =
   match args with
   | [ VInt a; VInt b ] when b <> 0L -> VInt (Int64.rem a b)
   | [ VInt _; VInt 0L ] ->
-      raise (Interp_error (User_error "remainder by zero"))
+      raise (Interp_error (User_error ("remainder by zero", "bad-args")))
   | [ _; _ ] ->
-      raise (Interp_error (User_error "remainder needs two int args"))
-  | _ -> raise (Interp_error (User_error "remainder needs two int args"))
+      raise (Interp_error (User_error ("remainder needs two int args", "bad-args")))
+  | _ -> raise (Interp_error (User_error ("remainder needs two int args", "bad-args")))
 
 (* ---- math tower (lisp-interpreter.math) ---- *)
 
@@ -316,7 +316,7 @@ let int_pow (base : int64) (exp : int64) : int64 =
       loop acc (Int64.mul b b) (Int64.shift_right_logical e 1)
   in
   if exp < 0L then
-    raise (Interp_error (User_error "expt int path needs non-negative exponent"))
+    raise (Interp_error (User_error ("expt int path needs non-negative exponent", "bad-args")))
   else loop 1L base exp
 
 let prim_expt args =
@@ -326,71 +326,71 @@ let prim_expt args =
        | NInt base, NInt e when e >= 0L -> VInt (int_pow base e)
        | ba, bb ->
            VFloat (Float.pow (float_of_num ba) (float_of_num bb)))
-  | _ -> raise (Interp_error (User_error "expt needs two numeric args"))
+  | _ -> raise (Interp_error (User_error ("expt needs two numeric args", "bad-args")))
 
 let prim_sqrt args =
   match args with
   | [ a ] ->
       let x = float_of_num (num_of_value a) in
       if x < 0. then
-        raise (Interp_error (User_error "sqrt of negative"))
+        raise (Interp_error (User_error ("sqrt of negative", "bad-args")))
       else VFloat (sqrt x)
-  | _ -> raise (Interp_error (User_error "sqrt needs one numeric arg"))
+  | _ -> raise (Interp_error (User_error ("sqrt needs one numeric arg", "bad-args")))
 
 let prim_exp args =
   match args with
   | [ a ] -> VFloat (exp (float_of_num (num_of_value a)))
-  | _ -> raise (Interp_error (User_error "exp needs one numeric arg"))
+  | _ -> raise (Interp_error (User_error ("exp needs one numeric arg", "bad-args")))
 
 let prim_log args =
   match args with
   | [ a ] ->
       let x = float_of_num (num_of_value a) in
       if x <= 0. then
-        raise (Interp_error (User_error "log of non-positive"))
+        raise (Interp_error (User_error ("log of non-positive", "bad-args")))
       else VFloat (log x)
   | [ a; b ] ->
       let x = float_of_num (num_of_value a) in
       let base = float_of_num (num_of_value b) in
       if x <= 0. then
-        raise (Interp_error (User_error "log of non-positive"))
+        raise (Interp_error (User_error ("log of non-positive", "bad-args")))
       else if base <= 0. || base = 1. then
-        raise (Interp_error (User_error "log: invalid base"))
+        raise (Interp_error (User_error ("log: invalid base", "bad-args")))
       else VFloat (log x /. log base)
-  | _ -> raise (Interp_error (User_error "log needs one or two numeric args"))
+  | _ -> raise (Interp_error (User_error ("log needs one or two numeric args", "bad-args")))
 
 let prim_sin args =
   match args with
   | [ a ] -> VFloat (sin (float_of_num (num_of_value a)))
-  | _ -> raise (Interp_error (User_error "sin needs one numeric arg"))
+  | _ -> raise (Interp_error (User_error ("sin needs one numeric arg", "bad-args")))
 
 let prim_cos args =
   match args with
   | [ a ] -> VFloat (cos (float_of_num (num_of_value a)))
-  | _ -> raise (Interp_error (User_error "cos needs one numeric arg"))
+  | _ -> raise (Interp_error (User_error ("cos needs one numeric arg", "bad-args")))
 
 let prim_tan args =
   match args with
   | [ a ] -> VFloat (tan (float_of_num (num_of_value a)))
-  | _ -> raise (Interp_error (User_error "tan needs one numeric arg"))
+  | _ -> raise (Interp_error (User_error ("tan needs one numeric arg", "bad-args")))
 
 let prim_asin args =
   match args with
   | [ a ] ->
       let x = float_of_num (num_of_value a) in
       if x < -1. || x > 1. then
-        raise (Interp_error (User_error "asin domain [-1,1]"))
+        raise (Interp_error (User_error ("asin domain [-1,1]", "bad-args")))
       else VFloat (asin x)
-  | _ -> raise (Interp_error (User_error "asin needs one numeric arg"))
+  | _ -> raise (Interp_error (User_error ("asin needs one numeric arg", "bad-args")))
 
 let prim_acos args =
   match args with
   | [ a ] ->
       let x = float_of_num (num_of_value a) in
       if x < -1. || x > 1. then
-        raise (Interp_error (User_error "acos domain [-1,1]"))
+        raise (Interp_error (User_error ("acos domain [-1,1]", "bad-args")))
       else VFloat (acos x)
-  | _ -> raise (Interp_error (User_error "acos needs one numeric arg"))
+  | _ -> raise (Interp_error (User_error ("acos needs one numeric arg", "bad-args")))
 
 let prim_atan args =
   match args with
@@ -400,55 +400,55 @@ let prim_atan args =
       let y = float_of_num (num_of_value a) in
       let x = float_of_num (num_of_value b) in
       VFloat (atan2 y x)
-  | _ -> raise (Interp_error (User_error "atan needs one or two numeric args"))
+  | _ -> raise (Interp_error (User_error ("atan needs one or two numeric args", "bad-args")))
 
 let prim_number_p args =
   match args with
   | [ VInt _ ] | [ VFloat _ ] -> VBool true
   | [ _ ] -> VBool false
-  | _ -> raise (Interp_error (User_error "number? needs one arg"))
+  | _ -> raise (Interp_error (User_error ("number? needs one arg", "bad-args")))
 
 let prim_integer_p args =
   match args with
   | [ VInt _ ] -> VBool true
   | [ _ ] -> VBool false
-  | _ -> raise (Interp_error (User_error "integer? needs one arg"))
+  | _ -> raise (Interp_error (User_error ("integer? needs one arg", "bad-args")))
 
 let prim_zero_p args =
   match args with
   | [ a ] -> VBool (num_compare (num_of_value a) (NInt 0L) = 0)
-  | _ -> raise (Interp_error (User_error "zero? needs one numeric arg"))
+  | _ -> raise (Interp_error (User_error ("zero? needs one numeric arg", "bad-args")))
 
 let prim_positive_p args =
   match args with
   | [ a ] -> VBool (num_compare (num_of_value a) (NInt 0L) > 0)
-  | _ -> raise (Interp_error (User_error "positive? needs one numeric arg"))
+  | _ -> raise (Interp_error (User_error ("positive? needs one numeric arg", "bad-args")))
 
 let prim_negative_p args =
   match args with
   | [ a ] -> VBool (num_compare (num_of_value a) (NInt 0L) < 0)
-  | _ -> raise (Interp_error (User_error "negative? needs one numeric arg"))
+  | _ -> raise (Interp_error (User_error ("negative? needs one numeric arg", "bad-args")))
 
 let as_integral_int64 = function
   | VInt n -> n
   | VFloat f ->
       if Float.is_integer f then Int64.of_float f
-      else raise (Interp_error (User_error "even?/odd? needs an integer"))
-  | _ -> raise (Interp_error (User_error "even?/odd? needs an integer"))
+      else raise (Interp_error (User_error ("even?/odd? needs an integer", "bad-args")))
+  | _ -> raise (Interp_error (User_error ("even?/odd? needs an integer", "bad-args")))
 
 let prim_even_p args =
   match args with
   | [ a ] ->
       let n = as_integral_int64 a in
       VBool (Int64.logand n 1L = 0L)
-  | _ -> raise (Interp_error (User_error "even? needs one arg"))
+  | _ -> raise (Interp_error (User_error ("even? needs one arg", "bad-args")))
 
 let prim_odd_p args =
   match args with
   | [ a ] ->
       let n = as_integral_int64 a in
       VBool (Int64.logand n 1L <> 0L)
-  | _ -> raise (Interp_error (User_error "odd? needs one arg"))
+  | _ -> raise (Interp_error (User_error ("odd? needs one arg", "bad-args")))
 
 (** (random) -> float [0,1); (random n) -> int [0,n) for VInt n > 0. *)
 let prim_random args =
@@ -461,8 +461,8 @@ let prim_random args =
       in
       VInt (Int64.of_int (Random.int n_int))
   | [ VInt _ ] ->
-      raise (Interp_error (User_error "random: n must be positive int"))
-  | _ -> raise (Interp_error (User_error "random needs 0 args or one positive int"))
+      raise (Interp_error (User_error ("random: n must be positive int", "bad-args")))
+  | _ -> raise (Interp_error (User_error ("random needs 0 args or one positive int", "bad-args")))
 
 (** (random-seed s) reseeds process PRNG; returns nil. *)
 let prim_random_seed args =
@@ -475,17 +475,17 @@ let prim_random_seed args =
       in
       Random.init seed;
       VNil
-  | _ -> raise (Interp_error (User_error "random-seed needs one int"))
+  | _ -> raise (Interp_error (User_error ("random-seed needs one int", "bad-args")))
 
 let prim_abs args =
   match args with
   | [ VInt a ] -> VInt (Int64.abs a)
   | [ VFloat f ] -> VFloat (abs_float f)
-  | _ -> raise (Interp_error (User_error "abs needs one numeric arg"))
+  | _ -> raise (Interp_error (User_error ("abs needs one numeric arg", "bad-args")))
 
 let prim_min args =
   match args with
-  | [] -> raise (Interp_error (User_error "min needs at least one numeric arg"))
+  | [] -> raise (Interp_error (User_error ("min needs at least one numeric arg", "bad-args")))
   | h :: rest ->
       value_of_num
         (List.fold_left
@@ -496,7 +496,7 @@ let prim_min args =
 
 let prim_max args =
   match args with
-  | [] -> raise (Interp_error (User_error "max needs at least one numeric arg"))
+  | [] -> raise (Interp_error (User_error ("max needs at least one numeric arg", "bad-args")))
   | h :: rest ->
       value_of_num
         (List.fold_left
@@ -510,7 +510,7 @@ let prim_string_length args =
   | [ v ] ->
       let s = coerce_str ~ctx:"string-length" v in
       VInt (Int64.of_int (String.length s))
-  | _ -> raise (Interp_error (User_error "string-length needs one VStr"))
+  | _ -> raise (Interp_error (User_error ("string-length needs one VStr", "bad-args")))
 
 let prim_substring args =
   match args with
@@ -520,7 +520,7 @@ let prim_substring args =
       let n = Int64.to_int len in
       let sl = String.length s in
       if st < 0 || n < 0 || st > sl then
-        raise (Interp_error (User_error "substring out of range"))
+        raise (Interp_error (User_error ("substring out of range", "bad-args")))
       else
         let n = min n (sl - st) in
         VStr (String.sub s st n)
@@ -529,12 +529,12 @@ let prim_substring args =
       let st = Int64.to_int start in
       let sl = String.length s in
       if st < 0 || st > sl then
-        raise (Interp_error (User_error "substring out of range"))
+        raise (Interp_error (User_error ("substring out of range", "bad-args")))
       else VStr (String.sub s st (sl - st))
   | _ ->
       raise
         (Interp_error
-           (User_error "substring needs string start [len]"))
+           (User_error ("substring needs string start [len]", "bad-args")))
 
 let prim_string_contains args =
   match args with
@@ -550,7 +550,7 @@ let prim_string_contains args =
       VBool (loop 0)
   | _ ->
       raise
-        (Interp_error (User_error "string-contains? needs two VStr args"))
+        (Interp_error (User_error ("string-contains? needs two VStr args", "bad-args")))
 
 let list_of_value = function
   | VList xs -> xs
@@ -564,7 +564,7 @@ let list_of_value = function
         | other -> List.rev (other :: acc)
       in
       unwind (VPair (a, b)) []
-  | _ -> raise (Interp_error (User_error "expected a list"))
+  | _ -> raise (Interp_error (User_error ("expected a list", "bad-args")))
 
 let prim_append args =
   match args with
@@ -575,13 +575,13 @@ let prim_append args =
            (function
              | VList l -> l
              | VNil -> []
-             | _ -> raise (Interp_error (User_error "append needs lists")))
+             | _ -> raise (Interp_error (User_error ("append needs lists", "bad-args"))))
            xs)
 
 let prim_reverse args =
   match args with
   | [ xs ] -> VList (List.rev (list_of_value xs))
-  | _ -> raise (Interp_error (User_error "reverse needs one list"))
+  | _ -> raise (Interp_error (User_error ("reverse needs one list", "bad-args")))
 
 let prim_nth args =
   match args with
@@ -590,7 +590,7 @@ let prim_nth args =
       let lst = list_of_value xs in
       if n < 0 || n >= List.length lst then VNil
       else List.nth lst n
-  | _ -> raise (Interp_error (User_error "nth needs list and VInt"))
+  | _ -> raise (Interp_error (User_error ("nth needs list and VInt", "bad-args")))
 
 (* ---- dict primitives over VStr JSON -----------------------------
 
@@ -629,7 +629,7 @@ let prim_dict_get args =
               | None -> VNil)
          | _ -> VNil)
       with _ -> VNil)
-  | _ -> raise (Interp_error (User_error "dict-get needs 2 strings"))
+  | _ -> raise (Interp_error (User_error ("dict-get needs 2 strings", "bad-args")))
 
 (* (dict-set json-str key value) -> VStr new-json.
    Builds a JSON object with [key] = [value] (a string; numbers
@@ -657,7 +657,7 @@ let prim_dict_set args =
         (List.filter (fun (k, _) -> k <> key) base)
       in
       VStr (Yojson.Safe.to_string (`Assoc updated))
-  | _ -> raise (Interp_error (User_error "dict-set needs 3 strings"))
+  | _ -> raise (Interp_error (User_error ("dict-set needs 3 strings", "bad-args")))
 
 (* (dict-keys json-str) -> VList of VStr keys.
    Returns the keys of the JSON object at [json-str] (insertion order
@@ -671,7 +671,7 @@ let prim_dict_keys args =
              VList (List.map (fun (k, _) -> VStr k) kvs)
          | _ -> VList [])
       with _ -> VList [])
-  | _ -> raise (Interp_error (User_error "dict-keys needs 1 string"))
+  | _ -> raise (Interp_error (User_error ("dict-keys needs 1 string", "bad-args")))
 
 (* (render-html html-str) -> VStr tagged-for-raw-rendering.
    Marks the returned VStr as raw HTML so http.ml renders it
@@ -684,7 +684,7 @@ let status_sentinel = "__status__:"
 let prim_render_html args =
   match args with
   | [ VStr s ] -> VStr (html_sentinel ^ s)
-  | _ -> raise (Interp_error (User_error "render-html needs 1 string"))
+  | _ -> raise (Interp_error (User_error ("render-html needs 1 string", "bad-args")))
 
 (* Expose the sentinel so http.ml can import it (single source of
    truth for the marker). *)
@@ -725,7 +725,7 @@ let prim_status_response args =
   | [ VInt code; body ] ->
       status_response ~code:(Int64.to_int code)
         ~body:(coerce_str ~ctx:"status-response" body)
-  | _ -> raise (Interp_error (User_error "status-response needs code + body"))
+  | _ -> raise (Interp_error (User_error ("status-response needs code + body", "bad-args")))
 
 let is_status (v : value) : (int * string) option =
   match v with
@@ -868,7 +868,7 @@ let prim_part args =
       raise
         (Interp_error
            (User_error
-              "part needs (part html [:target t] [:swap s] [:id i])"))
+              ("part needs (part html [:target t] [:swap s] [:id i])", "bad-args")))
 
 (* (json-part json-string [:id i]) *)
 let prim_json_part args =
@@ -884,7 +884,7 @@ let prim_json_part args =
   | _ ->
       raise
         (Interp_error
-           (User_error "json-part needs (json-part json [:id i])"))
+           (User_error ("json-part needs (json-part json [:id i])", "bad-args")))
 
 (* (multipart [:target t] [:swap s] part…)
    Also accepts a single list of parts: (multipart :target "#x" parts-list) *)
@@ -925,7 +925,7 @@ let prim_string_eq args =
         (String.equal
            (coerce_str ~ctx:"string-eq" a)
            (coerce_str ~ctx:"string-eq" b))
-  | _ -> raise (Interp_error (User_error "string-eq needs 2 strings"))
+  | _ -> raise (Interp_error (User_error ("string-eq needs 2 strings", "bad-args")))
 
 (* (string<? a b), (string<=? a b), (string>? a b), (string>=? a b) -> VBool.
    Byte-wise lexicographic comparison (NOT numeric). Correct ordering for
@@ -942,7 +942,7 @@ let prim_string_cmp name op args =
   | _ ->
       raise
         (Interp_error
-           (User_error (Printf.sprintf "%s needs 2 strings" name)))
+           (User_error (Printf.sprintf "%s needs 2 strings" name, "bad-args")))
 
 let prim_string_lt args = prim_string_cmp "string<?" ( < ) args
 let prim_string_le args = prim_string_cmp "string<=?" ( <= ) args
@@ -953,7 +953,7 @@ let prim_string_ge args = prim_string_cmp "string>=?" ( >= ) args
 let prim_string_trim args =
   match args with
   | [ v ] -> VStr (String.trim (coerce_str ~ctx:"string-trim" v))
-  | _ -> raise (Interp_error (User_error "string-trim needs 1 string"))
+  | _ -> raise (Interp_error (User_error ("string-trim needs 1 string", "bad-args")))
 
 (* JSON <-> Lisp values for outline trees and generic data.
    Objects become VStr of JSON object (use dict-get); arrays -> VList. *)
@@ -996,13 +996,13 @@ let prim_json_parse args =
   match args with
   | [ VStr s ] ->
       (try json_to_value (Yojson.Safe.from_string s)
-       with _ -> raise (Interp_error (User_error "json-parse: invalid JSON")))
-  | _ -> raise (Interp_error (User_error "json-parse needs 1 string"))
+       with _ -> raise (Interp_error (User_error ("json-parse: invalid JSON", "bad-args"))))
+  | _ -> raise (Interp_error (User_error ("json-parse needs 1 string", "bad-args")))
 
 let prim_json_emit args =
   match args with
   | [ v ] -> VStr (Yojson.Safe.to_string (value_to_json v))
-  | _ -> raise (Interp_error (User_error "json-emit needs 1 value"))
+  | _ -> raise (Interp_error (User_error ("json-emit needs 1 value", "bad-args")))
 
 (* (read-string s) -> quoted value tree. Same reader as load-string / the
    REPL, then quote_to_value — NO eval. Pair with (function-ast name):
@@ -1019,13 +1019,13 @@ let prim_read_string args =
            raise
              (Interp_error
                 (User_error
-                   (Printf.sprintf "read-string: %s (%d:%d)" msg line col)))
+                   (Printf.sprintf "read-string: %s (%d:%d)" msg line col, "bad-args")))
        | exn ->
            raise
              (Interp_error
                 (User_error
-                   ("read-string: " ^ Printexc.to_string exn))))
-  | _ -> raise (Interp_error (User_error "read-string needs 1 string"))
+                   ("read-string: " ^ Printexc.to_string exn, "bad-args"))))
+  | _ -> raise (Interp_error (User_error ("read-string needs 1 string", "bad-args")))
 
 let prim_read_all_string args =
   match args with
@@ -1038,13 +1038,13 @@ let prim_read_all_string args =
            raise
              (Interp_error
                 (User_error
-                   (Printf.sprintf "read-all-string: %s (%d:%d)" msg line col)))
+                   (Printf.sprintf "read-all-string: %s (%d:%d)" msg line col, "bad-args")))
        | exn ->
            raise
              (Interp_error
                 (User_error
-                   ("read-all-string: " ^ Printexc.to_string exn))))
-  | _ -> raise (Interp_error (User_error "read-all-string needs 1 string"))
+                   ("read-all-string: " ^ Printexc.to_string exn, "bad-args"))))
+  | _ -> raise (Interp_error (User_error ("read-all-string needs 1 string", "bad-args")))
 
 (* (html-escape s) -> VStr. Escape amp lt gt quote apos for HTML text/attrs. *)
 let rec prim_html_escape args =
@@ -1073,19 +1073,19 @@ let rec prim_html_escape args =
         | _ -> Pricklypear_lisp.Reader.pp_value v
       in
       prim_html_escape [ VStr s ]
-  | _ -> raise (Interp_error (User_error "html-escape needs 1 value"))
+  | _ -> raise (Interp_error (User_error ("html-escape needs 1 value", "bad-args")))
 
 (* (hx-get url) -> VStr tagged attribute helper (lightweight; authors may
    also embed Hx attrs inside render-html). *)
 let prim_hx_get args =
   match args with
   | [ VStr url ] -> VStr ("hx-get:" ^ url)
-  | _ -> raise (Interp_error (User_error "hx-get needs a string url"))
+  | _ -> raise (Interp_error (User_error ("hx-get needs a string url", "bad-args")))
 
 let prim_hx_post args =
   match args with
   | [ VStr url ] -> VStr ("hx-post:" ^ url)
-  | _ -> raise (Interp_error (User_error "hx-post needs a string url"))
+  | _ -> raise (Interp_error (User_error ("hx-post needs a string url", "bad-args")))
 
 (* (count list) -> int. Demonstrates a prim that walks the evaluator's
    own value type. *)
@@ -1093,14 +1093,14 @@ let prim_count args =
   match args with
   | [ VList items ] -> VInt (Int64.of_int (List.length items))
   | [ VNil ] -> VInt 0L
-  | _ -> raise (Interp_error (User_error "count needs a list"))
+  | _ -> raise (Interp_error (User_error ("count needs a list", "bad-args")))
 
 (* (length xs) -> VInt. Like count but accepts VList, VNil, and proper
    VPair chains (the conventional Lisp `length`). Frozen std name. *)
 let prim_length args =
   match args with
   | [ xs ] -> VInt (Int64.of_int (List.length (list_of_value xs)))
-  | _ -> raise (Interp_error (User_error "length needs one list"))
+  | _ -> raise (Interp_error (User_error ("length needs one list", "bad-args")))
 
 (* Structural deep equality (equal?): recurses VList/VPair/VStr/VInt/
    VFloat/VBool/VSymbol/VNil. VList and VPair chains are compared
@@ -1131,7 +1131,7 @@ let rec value_equal (a : value) (b : value) : bool =
 let prim_equal_p args =
   match args with
   | [ a; b ] -> VBool (value_equal a b)
-  | _ -> raise (Interp_error (User_error "equal? needs two args"))
+  | _ -> raise (Interp_error (User_error ("equal? needs two args", "bad-args")))
 
 (* c*r compositions: reuse car/cdr so error messages + VPair/VList
    handling stay consistent. cadr/caddr/caar/cddr are bread-and-butter
@@ -1139,22 +1139,22 @@ let prim_equal_p args =
 let prim_cadr args =
   match args with
   | [ v ] -> prim_car [ prim_cdr [ v ] ]
-  | _ -> raise (Interp_error (User_error "cadr needs one arg"))
+  | _ -> raise (Interp_error (User_error ("cadr needs one arg", "bad-args")))
 
 let prim_caar args =
   match args with
   | [ v ] -> prim_car [ prim_car [ v ] ]
-  | _ -> raise (Interp_error (User_error "caar needs one arg"))
+  | _ -> raise (Interp_error (User_error ("caar needs one arg", "bad-args")))
 
 let prim_caddr args =
   match args with
   | [ v ] -> prim_car [ prim_cdr [ prim_cdr [ v ] ] ]
-  | _ -> raise (Interp_error (User_error "caddr needs one arg"))
+  | _ -> raise (Interp_error (User_error ("caddr needs one arg", "bad-args")))
 
 let prim_cddr args =
   match args with
   | [ v ] -> prim_cdr [ prim_cdr [ v ] ]
-  | _ -> raise (Interp_error (User_error "cddr needs one arg"))
+  | _ -> raise (Interp_error (User_error ("cddr needs one arg", "bad-args")))
 
 (* (assoc key alist) -> the first entry (pair or list) whose car is
    equal? to key, or VNil if absent. Entries may be (k . v) pairs or
@@ -1177,7 +1177,7 @@ let prim_assoc args =
       | _ -> VNil
       in
       search alist
-  | _ -> raise (Interp_error (User_error "assoc needs key and alist"))
+  | _ -> raise (Interp_error (User_error ("assoc needs key and alist", "bad-args")))
 
 (* (member x list) -> the sublist starting at the first element
    equal? to x (truthy), or #f if absent. *)
@@ -1193,7 +1193,7 @@ let prim_member args =
       | _ -> VBool false
       in
       search lst
-  | _ -> raise (Interp_error (User_error "member needs x and list"))
+  | _ -> raise (Interp_error (User_error ("member needs x and list", "bad-args")))
 (* (parse-int s|n) -> VInt. Soft-fail to 0 on bad string. *)
 let prim_parse_int (args : value list) : value =
   match args with
@@ -1201,7 +1201,7 @@ let prim_parse_int (args : value list) : value =
   | [ VStr s ] ->
       (try VInt (Int64.of_int (int_of_string (String.trim s)))
        with _ -> VInt 0L)
-  | _ -> raise (Interp_error (User_error "parse-int needs string or int"))
+  | _ -> raise (Interp_error (User_error ("parse-int needs string or int", "bad-args")))
 
 (** FSRS-4.5 schedule step (open-spaced-repetition defaults).
 
@@ -1291,7 +1291,7 @@ let prim_fsrs_schedule (args : value list) : value =
            raise
              (Interp_error
                 (User_error
-                   "fsrs-schedule: rating must be 1..4 or again|hard|good|easy"))
+                   ("fsrs-schedule: rating must be 1..4 or again|hard|good|easy", "bad-args")))
        | Some grade ->
            let s0 = float_arg s_v in
            let d0 = float_arg d_v in
@@ -1323,7 +1323,7 @@ let prim_fsrs_schedule (args : value list) : value =
       raise
         (Interp_error
            (User_error
-              "fsrs-schedule needs stability difficulty elapsed rating"))
+              ("fsrs-schedule needs stability difficulty elapsed rating", "bad-args")))
 
 (* ---- extract-links: OCaml wiki-link scanner (budget P1) ----
 
@@ -1392,12 +1392,12 @@ let prim_extract_links args =
         | _ ->
             raise
               (Interp_error
-                 (User_error "extract-links needs a string body"))
+                 (User_error ("extract-links needs a string body", "bad-args")))
       in
       of_body body
   | _ ->
       raise
-        (Interp_error (User_error "extract-links needs one string arg"))
+        (Interp_error (User_error ("extract-links needs one string arg", "bad-args")))
 
 (* (budget-remaining) -> VInt steps left in current eval call. *)
 let prim_budget_remaining _args =
@@ -1652,12 +1652,12 @@ let prim_render_links args =
         | _ ->
             raise
               (Interp_error
-                 (User_error "render-links needs a string body"))
+                 (User_error ("render-links needs a string body", "bad-args")))
       in
       of_body body
   | _ ->
       raise
-        (Interp_error (User_error "render-links needs one string arg"))
+        (Interp_error (User_error ("render-links needs one string arg", "bad-args")))
 
 (* ---- string helpers (P2 from kernel-io-primitives note) ---- *)
 
@@ -1681,17 +1681,17 @@ let prim_string_replace args =
           end
         in
         VStr (loop 0)
-  | _ -> raise (Interp_error (User_error "string-replace needs (s pat repl)"))
+  | _ -> raise (Interp_error (User_error ("string-replace needs (s pat repl)", "bad-args")))
 
 let prim_string_downcase args =
   match args with
   | [ v ] -> VStr (String.lowercase_ascii (coerce_str ~ctx:"string-downcase" v))
-  | _ -> raise (Interp_error (User_error "string-downcase needs 1 string"))
+  | _ -> raise (Interp_error (User_error ("string-downcase needs 1 string", "bad-args")))
 
 let prim_string_upcase args =
   match args with
   | [ v ] -> VStr (String.uppercase_ascii (coerce_str ~ctx:"string-upcase" v))
-  | _ -> raise (Interp_error (User_error "string-upcase needs 1 string"))
+  | _ -> raise (Interp_error (User_error ("string-upcase needs 1 string", "bad-args")))
 
 let prim_string_starts_with_p args =
   match args with
@@ -1700,7 +1700,7 @@ let prim_string_starts_with_p args =
       VBool (String.starts_with
                ~prefix:(coerce_str ~ctx:"string-starts-with?" b)
                (coerce_str ~ctx:"string-starts-with?" a))
-  | _ -> raise (Interp_error (User_error "string-starts-with? needs 2 strings"))
+  | _ -> raise (Interp_error (User_error ("string-starts-with? needs 2 strings", "bad-args")))
 
 let prim_string_ends_with_p args =
   match args with
@@ -1709,7 +1709,7 @@ let prim_string_ends_with_p args =
       VBool (String.ends_with
                ~suffix:(coerce_str ~ctx:"string-ends-with?" b)
                (coerce_str ~ctx:"string-ends-with?" a))
-  | _ -> raise (Interp_error (User_error "string-ends-with? needs 2 strings"))
+  | _ -> raise (Interp_error (User_error ("string-ends-with? needs 2 strings", "bad-args")))
 
 (* ---- url-encode / url-decode (percent-encoding) ---- *)
 
@@ -1729,7 +1729,7 @@ let prim_url_encode args =
   in
   match args with
   | [ v ] -> VStr (encode (coerce_str ~ctx:"url-encode" v))
-  | _ -> raise (Interp_error (User_error "url-encode needs 1 string"))
+  | _ -> raise (Interp_error (User_error ("url-encode needs 1 string", "bad-args")))
 
 let prim_url_decode args =
   let decode s =
@@ -1751,7 +1751,7 @@ let prim_url_decode args =
   in
   match args with
   | [ v ] -> VStr (decode (coerce_str ~ctx:"url-decode" v))
-  | _ -> raise (Interp_error (User_error "url-decode needs 1 string"))
+  | _ -> raise (Interp_error (User_error ("url-decode needs 1 string", "bad-args")))
 
 (* ---- html-decode (entity decode) ----
 
@@ -1831,7 +1831,7 @@ let prim_html_decode args =
   in
   match args with
   | [ v ] -> VStr (decode (coerce_str ~ctx:"html-decode" v))
-  | _ -> raise (Interp_error (User_error "html-decode needs 1 string"))
+  | _ -> raise (Interp_error (User_error ("html-decode needs 1 string", "bad-args")))
 
 (* ---- parse-date -> UTC epoch int (VInt) ----
 
@@ -1952,7 +1952,7 @@ let prim_parse_date args =
       (match parse (coerce_str ~ctx:"parse-date" v) with
        | Some e -> VInt e
        | None -> VInt 0L)
-  | _ -> raise (Interp_error (User_error "parse-date needs 1 string"))
+  | _ -> raise (Interp_error (User_error ("parse-date needs 1 string", "bad-args")))
 
 (* ---- xml-parse (markup) ----
 
@@ -2000,7 +2000,7 @@ let prim_xml_parse args =
   in
   match args with
   | [ v ] -> parse (coerce_str ~ctx:"xml-parse" v)
-  | _ -> raise (Interp_error (User_error "xml-parse needs 1 string"))
+  | _ -> raise (Interp_error (User_error ("xml-parse needs 1 string", "bad-args")))
 
 (* ---- http response header parsing (helper for http-get prim) ----
 

@@ -10,7 +10,7 @@ let require_request (t : t) : request =
   | None ->
       raise
         (Pricklypear_lisp.Ast.Interp_error
-           (Pricklypear_lisp.Ast.User_error "no active request"))
+           (Pricklypear_lisp.Ast.User_error ("no active request", "bad-args")))
 
 let str_name = function
   | Pricklypear_lisp.Ast.VStr s | Pricklypear_lisp.Ast.VSymbol s -> Some s
@@ -73,7 +73,7 @@ let register (t : t) (tbl : Primitives.t) : unit =
       | _ ->
           raise
             (Pricklypear_lisp.Ast.Interp_error
-               (Pricklypear_lisp.Ast.User_error "request-param needs 1 string")));
+               (Pricklypear_lisp.Ast.User_error ("request-param needs 1 string", "bad-args"))));
   Primitives.register_sync tbl "request-header" (fun args ->
       match args with
       | [ Pricklypear_lisp.Ast.VStr key ] ->
@@ -85,7 +85,7 @@ let register (t : t) (tbl : Primitives.t) : unit =
       | _ ->
           raise
             (Pricklypear_lisp.Ast.Interp_error
-               (Pricklypear_lisp.Ast.User_error "request-header needs 1 string")));
+               (Pricklypear_lisp.Ast.User_error ("request-header needs 1 string", "bad-args"))));
   Primitives.register_sync tbl "hx-request?" (fun _args ->
       let r = require_request t in
       match List.assoc_opt "hx-request" r.headers with
@@ -105,15 +105,15 @@ let register (t : t) (tbl : Primitives.t) : unit =
             raise
               (Pricklypear_lisp.Ast.Interp_error
                  (Pricklypear_lisp.Ast.User_error
-                    "redirect path must be absolute on host (start with /)"))
+                    ("redirect path must be absolute on host (start with /)", "bad-args")))
           else if String.contains path ':' then
             raise
               (Pricklypear_lisp.Ast.Interp_error
                  (Pricklypear_lisp.Ast.User_error
-                    "redirect rejects off-site URLs"))
+                    ("redirect rejects off-site URLs", "bad-args")))
           else Primitives.redirect_value path
       | _ ->
           raise
             (Pricklypear_lisp.Ast.Interp_error
-               (Pricklypear_lisp.Ast.User_error "redirect needs 1 string path")))
+               (Pricklypear_lisp.Ast.User_error ("redirect needs 1 string path", "bad-args"))))
 

@@ -43,7 +43,7 @@ let prim_date_weekday (args : value list) : value =
       let _, tm' = Unix.mktime tm in
       VInt (Int64.of_int tm'.Unix.tm_wday)
   | _ ->
-      raise (Interp_error (User_error "date-weekday needs year month day ints"))
+      raise (Interp_error (User_error ("date-weekday needs year month day ints", "bad-args")))
 
 (* (date-format y m d) -> VStr "YYYY-MM-DD". *)
 let prim_date_format (args : value list) : value =
@@ -52,7 +52,7 @@ let prim_date_format (args : value list) : value =
       VStr
         (Printf.sprintf "%04d-%02d-%02d"
            (Int64.to_int y) (Int64.to_int m) (Int64.to_int d))
-  | _ -> raise (Interp_error (User_error "date-format needs year month day"))
+  | _ -> raise (Interp_error (User_error ("date-format needs year month day", "bad-args")))
 
 (** (date-add-days "YYYY-MM-DD" n) | (date-add-days n) with today.
     Local calendar day arithmetic via Unix.mktime (flashcards SRS). *)
@@ -93,7 +93,7 @@ let prim_date_add_days (args : value list) : value =
       (match parse_ymd day with
        | Some (y, m, d) -> add_from_ymd y m d (Int64.to_int n)
        | None ->
-           raise (Interp_error (User_error "date-add-days: bad date string")))
+           raise (Interp_error (User_error ("date-add-days: bad date string", "bad-args"))))
   | [ VInt n ] ->
       let tm = Unix.localtime (Unix.time ()) in
       add_from_ymd
@@ -103,11 +103,11 @@ let prim_date_add_days (args : value list) : value =
       (match parse_ymd day, int_of_string_opt (String.trim n) with
        | Some (y, m, d), Some n -> add_from_ymd y m d n
        | _ ->
-           raise (Interp_error (User_error "date-add-days: bad args")))
+           raise (Interp_error (User_error ("date-add-days: bad args", "bad-args"))))
   | _ ->
       raise
         (Interp_error
-           (User_error "date-add-days needs (day n) or (n) for today+n"))
+           (User_error ("date-add-days needs (day n) or (n) for today+n", "bad-args")))
 
 (** (date-diff-days a b) -> VInt days (b - a), local calendar.
     Args are YYYY-MM-DD strings. *)
@@ -142,8 +142,8 @@ let prim_date_diff_days (args : value list) : value =
            in
            VInt (Int64.of_int n)
        | _ ->
-           raise (Interp_error (User_error "date-diff-days: bad date")))
+           raise (Interp_error (User_error ("date-diff-days: bad date", "bad-args"))))
   | _ ->
       raise
         (Interp_error
-           (User_error "date-diff-days needs two YYYY-MM-DD strings"))
+           (User_error ("date-diff-days needs two YYYY-MM-DD strings", "bad-args")))

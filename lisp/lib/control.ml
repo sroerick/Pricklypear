@@ -29,7 +29,7 @@ let perform_prim (name : string) (args : value list) : value =
        | Some fn -> fn args
        | None ->
            raise
-             (Interp_error (Prim_error (name, "unregistered primitive"))))
+             (Interp_error (Prim_error (name, "unregistered primitive", "prim_error"))))
   | None -> Effect.perform (Prim_call (name, args))
 
 type control_mode = Lwt_mode | Eff_mode
@@ -65,7 +65,7 @@ let run_sync ~(prims : sync_prim_table) (thunk : unit -> 'a) : 'a =
                   | None ->
                       discontinue k
                         (Interp_error
-                           (Prim_error (name, "unregistered primitive")))
+                           (Prim_error (name, "unregistered primitive", "prim_error")))
                   | Some fn ->
                       try continue k (fn args)
                       with exn -> discontinue k exn)

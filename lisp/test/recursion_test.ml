@@ -62,7 +62,7 @@ let test_step_attribution () =
   let bin name f =
     Eval.register_prim prims name (function
       | [ VInt a; VInt b ] -> VInt (f a b)
-      | _ -> raise (Interp_error (User_error (name ^ " bad args"))))
+      | _ -> raise (Interp_error (User_error (name ^ " bad args", "bad-args"))))
   in
   bin "+" Int64.add;
   bin "-" Int64.sub;

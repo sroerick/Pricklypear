@@ -23,7 +23,7 @@ let setup_arith () =
   let binop name op =
     Eval.register_prim prims name (function
       | [ Ast.VInt a; Ast.VInt b ] -> Ast.VInt (op a b)
-      | _ -> raise (Ast.Interp_error (Ast.User_error name)))
+      | _ -> raise (Ast.Interp_error (Ast.User_error (name, "bad-args"))))
   in
   binop "+" Int64.add;
   binop "-" Int64.sub;
@@ -31,44 +31,44 @@ let setup_arith () =
   Eval.register_prim prims "=" (function
     | [ Ast.VInt a; Ast.VInt b ] -> Ast.VBool (Int64.equal a b)
     | [ a; b ] -> Ast.VBool (a = b)
-    | _ -> raise (Ast.Interp_error (Ast.User_error "=")));
+    | _ -> raise (Ast.Interp_error (Ast.User_error ("=", "bad-args"))));
   Eval.register_prim prims "<" (function
     | [ Ast.VInt a; Ast.VInt b ] -> Ast.VBool (a < b)
-    | _ -> raise (Ast.Interp_error (Ast.User_error "<")));
+    | _ -> raise (Ast.Interp_error (Ast.User_error ("<", "bad-args"))));
   Eval.register_prim prims "not" (function
     | [ Ast.VBool b ] -> Ast.VBool (not b)
     | [ Ast.VNil ] -> Ast.VBool true
     | [ _ ] -> Ast.VBool false
-    | _ -> raise (Ast.Interp_error (Ast.User_error "not")));
+    | _ -> raise (Ast.Interp_error (Ast.User_error ("not", "bad-args"))));
   Eval.register_prim prims "list" (fun xs -> Ast.VList xs);
   Eval.register_prim prims "car" (function
     | [ Ast.VList (h :: _) ] -> h
     | [ Ast.VPair (a, _) ] -> a
-    | _ -> raise (Ast.Interp_error (Ast.User_error "car")));
+    | _ -> raise (Ast.Interp_error (Ast.User_error ("car", "bad-args"))));
   Eval.register_prim prims "cdr" (function
     | [ Ast.VList (_ :: t) ] -> Ast.VList t
     | [ Ast.VPair (_, b) ] -> b
-    | _ -> raise (Ast.Interp_error (Ast.User_error "cdr")));
+    | _ -> raise (Ast.Interp_error (Ast.User_error ("cdr", "bad-args"))));
   Eval.register_prim prims "cons" (function
     | [ h; Ast.VList t ] -> Ast.VList (h :: t)
     | [ h; t ] -> Ast.VPair (h, t)
-    | _ -> raise (Ast.Interp_error (Ast.User_error "cons")));
+    | _ -> raise (Ast.Interp_error (Ast.User_error ("cons", "bad-args"))));
   Eval.register_prim prims "null?" (function
     | [ Ast.VNil ] | [ Ast.VList [] ] -> Ast.VBool true
     | [ _ ] -> Ast.VBool false
-    | _ -> raise (Ast.Interp_error (Ast.User_error "null?")));
+    | _ -> raise (Ast.Interp_error (Ast.User_error ("null?", "bad-args"))));
   Eval.register_prim prims "symbol?" (function
     | [ Ast.VSymbol _ ] -> Ast.VBool true
     | [ _ ] -> Ast.VBool false
-    | _ -> raise (Ast.Interp_error (Ast.User_error "symbol?")));
+    | _ -> raise (Ast.Interp_error (Ast.User_error ("symbol?", "bad-args"))));
   Eval.register_prim prims "string?" (function
     | [ Ast.VStr _ ] -> Ast.VBool true
     | [ _ ] -> Ast.VBool false
-    | _ -> raise (Ast.Interp_error (Ast.User_error "string?")));
+    | _ -> raise (Ast.Interp_error (Ast.User_error ("string?", "bad-args"))));
   Eval.register_prim prims "symbol=?" (function
     | [ Ast.VSymbol a; Ast.VSymbol b ] -> Ast.VBool (String.equal a b)
     | [ _; _ ] -> Ast.VBool false
-    | _ -> raise (Ast.Interp_error (Ast.User_error "symbol=?")));
+    | _ -> raise (Ast.Interp_error (Ast.User_error ("symbol=?", "bad-args"))));
   Eval.register_prim prims "type-of" (function
     | [ Ast.VSymbol _ ] -> Ast.VStr "symbol"
     | [ Ast.VStr _ ] -> Ast.VStr "str"

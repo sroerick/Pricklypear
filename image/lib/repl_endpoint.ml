@@ -19,10 +19,10 @@ let pp_error (e : Pricklypear_lisp.Ast.interp_error) : string =
       Printf.sprintf "wrong arg count in %s: expected %d, got %d" n e_doc g
   | Type_mismatch (s, _) -> Printf.sprintf "type mismatch: %s" s
   | Budget_exceeded -> "budget exceeded"
-  | Prim_error (n, m) -> Printf.sprintf "primitive %s: %s" n m
+  | Prim_error (n, m, _) -> Printf.sprintf "primitive %s: %s" n m
   | Parse_error (msg, l, c) ->
       Printf.sprintf "parse error: %s (line %d, col %d)" msg l c
-  | User_error m -> Printf.sprintf "user error: %s" m
+  | User_error (m, _) -> Printf.sprintf "user error: %s" m
 
 let prompt (s : Session.t) : string =
   Printf.sprintf "%s> " (Session.branch_name s)

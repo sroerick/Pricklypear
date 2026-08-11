@@ -15,7 +15,7 @@ let expected = [
   ("user error is expected", `Quick, fun () ->
     Alcotest.(check bool) "user_error" true
       (Pricklypear_image_lib.Ops_incidents.is_expected_runtime_error
-         (Interp_error (User_error "car needs a list or pair"))));
+         (Interp_error (User_error ("car needs a list or pair", "bad-args")))));
   ("arity mismatch is expected", `Quick, fun () ->
     Alcotest.(check bool) "arity" true
       (Pricklypear_image_lib.Ops_incidents.is_expected_runtime_error
@@ -42,7 +42,7 @@ let still_file = [
   ("prim error is filed", `Quick, fun () ->
     Alcotest.(check bool) "prim_error" false
       (Pricklypear_image_lib.Ops_incidents.is_expected_runtime_error
-         (Interp_error (Prim_error ("get", "boom")))));
+         (Interp_error (Prim_error ("get", "boom", "prim_error")))));
   ("parse error is filed (route shouldn't parse-fail at runtime)", `Quick, fun () ->
     Alcotest.(check bool) "parse" false
       (Pricklypear_image_lib.Ops_incidents.is_expected_runtime_error

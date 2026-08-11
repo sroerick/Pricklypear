@@ -107,12 +107,12 @@ let assert_bindable_name (env : env) (name : string) : unit =
   if List.mem name kernel_special_names then
     raise
       (Interp_error
-         (User_error ("cannot redefine kernel special form: " ^ name)));
+         (User_error ("cannot redefine kernel special form: " ^ name, "bad-args")));
   match Env.lookup env name with
   | Some (VPrim _) ->
       raise
         (Interp_error
-           (User_error ("cannot redefine kernel primitive: " ^ name)))
+           (User_error ("cannot redefine kernel primitive: " ^ name, "bad-args")))
   | _ -> ()
 
 (** Desugar multiple body exprs to a single expr (begin/seq chain). *)
@@ -144,7 +144,7 @@ let params_of_define_sugar (param_exprs : expr list) : string list =
      | _ ->
          raise
            (Interp_error
-              (User_error "define function params must be names")))
+              (User_error ("define function params must be names", "bad-args"))))
     param_exprs
 
 (** Rewrite a lambda-shaped expr so a leading multi-body docstring is removed
@@ -184,14 +184,14 @@ let parse_top_define (e : expr) : define_shape option =
       raise
         (Interp_error
            (User_error
-              "define docstring must be a string literal \"…\""))
+              ("define docstring must be a string literal \"…\"", "bad-args")))
   | App (Var "define", App (Var name, param_exprs) :: bodies) ->
       let doc, bodies' = peel_leading_doc bodies in
       let params = params_of_define_sugar param_exprs in
       if List.mem "." params then
         raise
           (Interp_error
-             (User_error "dotted rest params not supported in define sugar"));
+             (User_error ("dotted rest params not supported in define sugar", "bad-args")));
       let body = body_of_exprs bodies' in
       Some { name; body = Lambda (params, body); doc }
   | Define (name, body_expr) ->
@@ -290,7 +290,7 @@ let reify_expr (e : expr) : value = quote_to_value e
 let name_of_atom ?(ctx = "value_to_expr") = function
   | VSymbol s | VStr s -> s
   | _ ->
-      raise (Interp_error (User_error (ctx ^ ": expected symbol or string name")))
+      raise (Interp_error (User_error (ctx ^ ": expected symbol or string name", "bad-args")))
 
 let head_name = function
   | VSymbol s | VStr s -> Some s
@@ -345,7 +345,7 @@ let rec value_to_expr (v : value) : expr =
   | VLambda _ | VPrim _ | VRef _ | VMacro _ ->
       raise
         (Interp_error
-           (User_error "value_to_expr: cannot reify live closure/prim/ref/macro"))
+           (User_error ("value_to_expr: cannot reify live closure/prim/ref/macro", "bad-args")))
 
 let gensym_counter = ref 0
 
@@ -363,7 +363,7 @@ let rec value_to_list (v : value) : value list =
       raise
         (Interp_error
            (User_error
-              ("list op needs a list, got " ^ pp_value_short other)))
+              ("list op needs a list, got " ^ pp_value_short other, "bad-args")))
 
 (** Trampoline step: [Done] finishes; [Cont] continues without OCaml stack. *)
 type step =
@@ -506,7 +506,7 @@ and expand_and_eval_macro
        | _ ->
            raise
              (Interp_error
-                (User_error "macro expansion is not a valid expr tree"))
+                (User_error ("macro expansion is not a valid expr tree", "bad-args")))
   in
   Cont (call_env, expansion_e)
 
@@ -555,7 +555,7 @@ and macroexpand_expr
                     raise
                       (Interp_error
                          (User_error
-                            "macro expansion is not a valid expr tree"))
+                            ("macro expansion is not a valid expr tree", "bad-args")))
            in
            go expansion_e
        | _ -> App (Var name, List.map go args))
@@ -583,16 +583,16 @@ and eval_special_form
                    | Var s -> s
                    | _ ->
                        raise
-                         (Interp_error (User_error "lambda param not a symbol")))
+                         (Interp_error (User_error ("lambda param not a symbol", "bad-args"))))
                  rest
-        | _ -> raise (Interp_error (User_error "malformed lambda params"))
+        | _ -> raise (Interp_error (User_error ("malformed lambda params", "bad-args")))
       in
       if List.mem "." params then
         raise
           (Interp_error
              (User_error
-                "dotted rest params not supported (reader treats \".\" as a \
-                 symbol); use fixed-arity params"));
+                ("dotted rest params not supported (reader treats \".\" as a \
+                 symbol); use fixed-arity params", "bad-args")));
       Done (VLambda (params, body, env))
   | "let", _ ->
       (match full_args with
@@ -608,11 +608,11 @@ and eval_special_form
                     | App (Var n, [ val_expr ]) ->
                         let v = eval ~budget ~prims env val_expr in
                         Env.define env' n v
-                    | _ -> raise (Interp_error (User_error "bad let binding")))
+                    | _ -> raise (Interp_error (User_error ("bad let binding", "bad-args"))))
                   all_bindings;
                 Cont (env', body)
-            | _ -> raise (Interp_error (User_error "bad let bindings")))
-       | _ -> raise (Interp_error (User_error "let needs bindings + body")))
+            | _ -> raise (Interp_error (User_error ("bad let bindings", "bad-args"))))
+       | _ -> raise (Interp_error (User_error ("let needs bindings + body", "bad-args"))))
   | "if", [ _; test; then_e; else_e ] ->
       let v = eval ~budget ~prims env test in
       (match v with
@@ -636,8 +636,8 @@ and eval_special_form
            raise
              (Interp_error
                 (User_error
-                   "define needs (define name expr [\"doc\"]) or \
-                    (define (name args…) [\"doc\"] body…)")))
+                   ("define needs (define name expr [\"doc\"]) or \
+                    (define (name args…) [\"doc\"] body…)", "bad-args"))))
   | "quote", [ _; e' ] -> Done (quote_to_value e')
   | "begin", _head :: bodies | "seq", _head :: bodies ->
       (match bodies with
@@ -647,13 +647,13 @@ and eval_special_form
            ignore (eval ~budget ~prims env first);
            eval_special_form ~budget ~prims env "seq" (Var "seq" :: rest))
   | "error", _head :: args ->
-      let msg =
+      let kind, msg =
         match args with
-        | [ Lit (VStr m) ] | [ Lit (VSymbol m) ] | [ Var m ] -> m
+        | [ Lit (VStr m) ] | [ Lit (VSymbol m) ] | [ Var m ] -> ("user_error", m)
         | [ e ] ->
             (match eval ~budget ~prims env e with
-             | VStr m | VSymbol m -> m
-             | other -> pp_value_short other)
+             | VStr m | VSymbol m -> ("user_error", m)
+             | other -> ("user_error", pp_value_short other))
         | [ ke; me ] ->
             let k =
               match eval ~budget ~prims env ke with
@@ -665,28 +665,17 @@ and eval_special_form
               | VStr s | VSymbol s -> s
               | other -> pp_value_short other
             in
-            k ^ ": " ^ m
-        | _ -> "error"
+            (k, m)
+        | _ -> ("user_error", "error")
       in
-      raise (Interp_error (User_error msg))
+      raise (Interp_error (User_error (msg, kind)))
   | "guard", _head :: handler_expr :: bodies when bodies <> [] ->
       let body = body_of_exprs bodies in
       (try Done (eval ~budget ~prims env body)
        with
        | Interp_error Budget_exceeded as ex -> raise ex
        | Interp_error e ->
-           let kind =
-             match e with
-             | Unbound_var _ -> "unbound_var"
-             | Not_a_function _ -> "not_a_function"
-             | Arity_mismatch _ -> "arity_mismatch"
-             | Wrong_arg_count _ -> "wrong_arg_count"
-             | Type_mismatch _ -> "type_mismatch"
-             | Budget_exceeded -> "budget_exceeded"
-             | Prim_error _ -> "prim_error"
-             | Parse_error _ -> "parse_error"
-             | User_error _ -> "user_error"
-           in
+           let kind = interp_error_kind e in
            let err_v =
              VList
                [ VSymbol "error"
@@ -706,21 +695,21 @@ and eval_special_form
                  | _ ->
                      raise
                        (Interp_error
-                          (User_error "guard handler must be 0- or 1-arg lambda")))
+                          (User_error ("guard handler must be 0- or 1-arg lambda", "bad-args"))))
             | _ ->
                 raise
                   (Interp_error
-                     (User_error "guard handler must be a lambda"))))
+                     (User_error ("guard handler must be a lambda", "bad-args")))))
   | "guard", _ ->
       raise
         (Interp_error
-           (User_error "guard needs (guard handler-lambda body…)"))
+           (User_error ("guard needs (guard handler-lambda body…)", "bad-args")))
   | "match", _head :: scrut_expr :: clauses ->
       let scrut = eval ~budget ~prims env scrut_expr in
       let rec try_clauses = function
         | [] ->
             raise
-              (Interp_error (User_error "match: no matching clause"))
+              (Interp_error (User_error ("match: no matching clause", "bad-args")))
         | clause :: rest ->
             let pat, bodies =
               match clause with
@@ -728,7 +717,7 @@ and eval_special_form
               | _ ->
                   raise
                     (Interp_error
-                       (User_error "match clause must be (pat body…)"))
+                       (User_error ("match clause must be (pat body…)", "bad-args")))
             in
             (match match_pat pat scrut with
              | None -> try_clauses rest
@@ -743,7 +732,7 @@ and eval_special_form
        | [ _; Var prim_name; body ] ->
            let arg_vals = [ eval ~budget ~prims env body ] in
            Done (Control.perform_prim prim_name arg_vals)
-       | _ -> raise (Interp_error (User_error "prim needs name + arg")))
+       | _ -> raise (Interp_error (User_error ("prim needs name + arg", "bad-args"))))
   | "with-transaction", _ ->
       let body_expr_opt =
         match full_args with
@@ -755,7 +744,7 @@ and eval_special_form
        | None ->
            raise
              (Interp_error
-                (User_error "with-transaction needs a lambda body"))
+                (User_error ("with-transaction needs a lambda body", "bad-args")))
        | Some body_expr ->
            let lambda_v = eval ~budget ~prims env body_expr in
            (match lambda_v with
@@ -765,7 +754,7 @@ and eval_special_form
             | _ ->
                 raise
                   (Interp_error
-                     (User_error "with-transaction body must be a lambda"))))
+                     (User_error ("with-transaction body must be a lambda", "bad-args")))))
   | "gensym", [ _ ] -> Done (VSymbol (gensym ()))
   | "gensym", [ _; Lit (VStr prefix) ] | "gensym", [ _; Var prefix ]
   | "gensym", [ _; Lit (VSymbol prefix) ] ->
@@ -806,7 +795,7 @@ and eval_special_form
               | _ ->
                   raise
                     (Interp_error
-                       (User_error "cond clause must be (test body)"))
+                       (User_error ("cond clause must be (test body)", "bad-args")))
             in
             let always =
               match test_e with
@@ -823,7 +812,7 @@ and eval_special_form
   | "quasiquote", [ _; template ] ->
       Done (eval_quasiquote ~budget ~prims env ~depth:1 template)
   | "unquote", _ | "unquote-splicing", _ ->
-      raise (Interp_error (User_error "unquote outside quasiquote"))
+      raise (Interp_error (User_error ("unquote outside quasiquote", "bad-args")))
   | "defmacro", [ _; Var name; params_expr; body ] ->
       assert_bindable_name env name;
       let params =
@@ -837,16 +826,16 @@ and eval_special_form
                    | _ ->
                        raise
                          (Interp_error
-                            (User_error "defmacro param not a symbol")))
+                            (User_error ("defmacro param not a symbol", "bad-args"))))
                  rest
-        | _ -> raise (Interp_error (User_error "malformed defmacro params"))
+        | _ -> raise (Interp_error (User_error ("malformed defmacro params", "bad-args")))
       in
       if List.mem "." params then
         raise
           (Interp_error
              (User_error
-                "dotted rest params not supported (reader treats \".\" as a \
-                 symbol); use fixed-arity params, e.g. (name val body)"));
+                ("dotted rest params not supported (reader treats \".\" as a \
+                 symbol); use fixed-arity params, e.g. (name val body)", "bad-args")));
       let m = VMacro (params, body, env) in
       Env.define env name m;
       Done m
@@ -918,7 +907,7 @@ and eval_special_form
                     match bp with
                     | App (Var n, _) -> Env.define env' n VNil
                     | _ ->
-                        raise (Interp_error (User_error "bad letrec binding")))
+                        raise (Interp_error (User_error ("bad letrec binding", "bad-args"))))
                   all_bindings;
                 List.iter
                   (fun bp ->
@@ -927,11 +916,11 @@ and eval_special_form
                         let v = eval ~budget ~prims env' val_expr in
                         Env.define env' n v
                     | _ ->
-                        raise (Interp_error (User_error "bad letrec binding")))
+                        raise (Interp_error (User_error ("bad letrec binding", "bad-args"))))
                   all_bindings;
                 Cont (env', body)
-            | _ -> raise (Interp_error (User_error "bad letrec bindings")))
-       | _ -> raise (Interp_error (User_error "letrec needs bindings + body")))
+            | _ -> raise (Interp_error (User_error ("bad letrec bindings", "bad-args"))))
+       | _ -> raise (Interp_error (User_error ("letrec needs bindings + body", "bad-args"))))
   (* apply: (apply f args-list) applies f to the list of args.
      First-class function application — reuses the same apply helper
      that list/map etc. use, so closures and VPrims both work. *)
@@ -939,7 +928,7 @@ and eval_special_form
       let f = eval ~budget ~prims env f_expr in
       let args = value_to_list (eval ~budget ~prims env args_expr) in
       Done (apply ~budget ~prims f args)
-  | "apply", _ -> raise (Interp_error (User_error "apply needs (f args)"))
+  | "apply", _ -> raise (Interp_error (User_error ("apply needs (f args)", "bad-args")))
   (* list/map, list/filter, list/foldl — OCaml loops + apply.
      One special-form tick total instead of O(n) recursive Lisp frames.
      Closure bodies still tick normally via apply. *)
@@ -976,16 +965,16 @@ and eval_special_form
            (fun acc x -> apply ~budget ~prims f [ x; acc ])
            init (List.rev xs))
   | "list/map", _ ->
-      raise (Interp_error (User_error "list/map needs (f xs)"))
+      raise (Interp_error (User_error ("list/map needs (f xs)", "bad-args")))
   | "list/filter", _ ->
-      raise (Interp_error (User_error "list/filter needs (p xs)"))
+      raise (Interp_error (User_error ("list/filter needs (p xs)", "bad-args")))
   | "list/foldl", _ ->
-      raise (Interp_error (User_error "list/foldl needs (f init xs)"))
+      raise (Interp_error (User_error ("list/foldl needs (f init xs)", "bad-args")))
   | "list/foldr", _ ->
-      raise (Interp_error (User_error "list/foldr needs (f init xs)"))
+      raise (Interp_error (User_error ("list/foldr needs (f init xs)", "bad-args")))
   | other, _ ->
       raise
-        (Interp_error (User_error ("malformed special form: " ^ other)))
+        (Interp_error (User_error ("malformed special form: " ^ other, "bad-args")))
 
 and eval_quasiquote
   ~(budget : budget)
@@ -1003,7 +992,7 @@ and eval_quasiquote
       VList [ VSymbol "unquote"; inner ]
   | App (Var "unquote-splicing", _) when depth = 1 ->
       raise
-        (Interp_error (User_error "unquote-splicing not in list context"))
+        (Interp_error (User_error ("unquote-splicing not in list context", "bad-args")))
   | App (Var "quasiquote", [ e ]) ->
       let inner =
         eval_quasiquote ~budget ~prims env ~depth:(depth + 1) e
@@ -1015,7 +1004,7 @@ and eval_quasiquote
         | Var "unquote-splicing" when depth = 1 ->
             raise
               (Interp_error
-                 (User_error "unquote-splicing as list head not supported"))
+                 (User_error ("unquote-splicing as list head not supported", "bad-args")))
         | _ ->
             let hv = eval_quasiquote ~budget ~prims env ~depth h in
             [ hv ]
@@ -1032,7 +1021,7 @@ and eval_quasiquote
                  | _ ->
                      raise
                        (Interp_error
-                          (User_error "unquote-splicing needs a list")))
+                          (User_error ("unquote-splicing needs a list", "bad-args"))))
             | _ ->
                 let v = eval_quasiquote ~budget ~prims env ~depth a in
                 [ v ])
@@ -1082,7 +1071,7 @@ and apply_step
                | _ ->
                    raise
                      (Interp_error
-                        (User_error "&rest must be last and have one name")))
+                        (User_error ("&rest must be last and have one name", "bad-args"))))
           | p :: rest when opt_phase ->
               split_params rest required true (p :: opt_acc) rest_acc
           | p :: rest ->
@@ -1134,7 +1123,7 @@ and apply_step
       raise
         (Interp_error
            (User_error
-              "macro must be applied by name (not as first-class apply)"))
+              ("macro must be applied by name (not as first-class apply)", "bad-args")))
   | VPrim name ->
       let _ = prims in
       (* prim_calls counted at App/Prim call sites *)

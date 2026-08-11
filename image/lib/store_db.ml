@@ -132,7 +132,7 @@ let with_dynamic_transaction ?(isolation = Pgx.Isolation.Serializable)
             raise
               (Pricklypear_lisp.Ast.Interp_error
                  (Pricklypear_lisp.Ast.User_error
-                    "with-transaction: nested transactions not supported"))
+                    ("with-transaction: nested transactions not supported", "bad-args")))
           else
             Io_eio.Pg.with_transaction ~isolation pg (fun tx_conn ->
                 t.current_tx <- Some (tx_conn, mu);
