@@ -108,21 +108,36 @@ let check_ai_body_effects ?(known_fn = fun _ -> None)
     let expr = Pricklypear_lisp.Reader.read_one body_src in
     (* Expand macros before infer when an env is available (BORGE-1785212882).
        Without env, fall back to unexpanded — install paths that have a
-       session should pass ~env. *)
-    let expr =
+       session should pass ~env.
+       If expansion FAILS we must NOT fall back to the unexpanded tree:
+       a macro could hide a write-db effect behind an expansion that the
+       gate would then miss. Surface the error so the install is denied. *)
+    let expanded =
       match env with
+      | None -> Ok expr
       | Some e ->
-          (try Pricklypear_lisp.Eval.macroexpand_expr e expr with _ -> expr)
-      | None -> expr
+          (try Ok (Pricklypear_lisp.Eval.macroexpand_expr e expr)
+           with
+           | Pricklypear_lisp.Ast.Interp_error err ->
+               Error
+                 (Printf.sprintf "macroexpand failed: %s"
+                    (Pricklypear_lisp.Ast.pp_interp_error err))
+           | exn ->
+               Error
+                 (Printf.sprintf "macroexpand failed: %s"
+                    (Printexc.to_string exn)))
     in
-    let fx = Pricklypear_lisp.Effect.infer ~known_fn expr in
-    if Pricklypear_lisp.Effect.policy_allows ~allow:(ai_allow_set ()) fx then
-      Ok ()
-    else
-      Error
-        (Printf.sprintf
-           "effect policy denied (%s); allow pure|read-db|write-db|html by default; use register_route tool for routes (not (route ...) in body); set PP_AI_ALLOW_WRITE=1 for branch/publish elevate"
-           (Pricklypear_lisp.Effect.EffSet.pp fx))
+    match expanded with
+    | Error msg -> Error msg
+    | Ok expr ->
+        let fx = Pricklypear_lisp.Effect.infer ~known_fn expr in
+        if Pricklypear_lisp.Effect.policy_allows ~allow:(ai_allow_set ()) fx then
+          Ok ()
+        else
+          Error
+            (Printf.sprintf
+               "effect policy denied (%s); allow pure|read-db|write-db|html by default; use register_route tool for routes (not (route ...) in body); set PP_AI_ALLOW_WRITE=1 for branch/publish elevate"
+               (Pricklypear_lisp.Effect.EffSet.pp fx))
   with _ -> Ok ()  (* parse errors handled by define_binding *)
 
 (* [agent] temporary alias defined after agent_session_new / agent_say. *)
