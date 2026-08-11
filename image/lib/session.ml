@@ -228,7 +228,7 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
   Primitives.register tbl "fork"
     (fun args ->
       if t.manifest.username = "anonymous" then
-        (Pricklypear_lisp.Ast.VStr "fork: denied for anonymous")
+        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("fork", "denied for anonymous", "denied"))))
       else if t.agent_branch_lock then
         (Pricklypear_lisp.Ast.VStr
              "fork blocked: agent is locked to the current branch")
@@ -255,18 +255,18 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
                 | Some id ->
                     (Pricklypear_lisp.Ast.VStr id)
                 | None ->
-                    (Pricklypear_lisp.Ast.VStr "fork failed")))
+                    (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("prim", "fork failed", "failed"))))))
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "fork: bad args (need 2 strings)"));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("fork", "bad args (need 2 strings)", "bad-args")))));
 
-  (* (merge 'source 'target) -> VStr "merged N rows" | VStr "denied".
+  (* (merge 'source 'target) -> VStr "merged N rows" | raise (denied).
      POLICY (per spec [branching.merge]): merging into `system/*`
      requires the session username to be "admin"; merges into the
      caller's own `owner/*` branches are free. *)
   Primitives.register tbl "merge"
     (fun args ->
       if t.manifest.username = "anonymous" then
-        (Pricklypear_lisp.Ast.VStr "merge: denied for anonymous")
+        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("merge", "denied for anonymous", "denied"))))
       else if t.agent_branch_lock then
         (Pricklypear_lisp.Ast.VStr
              "merge blocked: agent is locked to the current branch")
@@ -302,12 +302,12 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
                       (Pricklypear_lisp.Ast.VStr
                                     (Store.format_merge_result res))
                   | None ->
-                      (Pricklypear_lisp.Ast.VStr "merge failed"))
+                      (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("prim", "merge failed", "failed")))))
              | _ ->
                  (Pricklypear_lisp.Ast.VStr
                                "source or target branch not found"))
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "merge: bad args (need 2 strings)"));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("merge", "bad args (need 2 strings)", "bad-args")))));
 
   (* (route "/path" handler [visibility]) -> VStr "/path".
      Optional third arg 'public | "public" | 'private | "private".
@@ -362,7 +362,7 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
   Primitives.register tbl "route"
     (fun args ->
       if t.manifest.username = "anonymous" then
-        (Pricklypear_lisp.Ast.VStr "route: denied for anonymous")
+        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("route", "denied for anonymous", "denied"))))
       else
         match args with
         | [ Pricklypear_lisp.Ast.VStr route_path;
@@ -387,13 +387,13 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
                  register_route_checked ~route_path ~handler ~visibility:vis
                    ~pass_vis_to_store:true)
         | _ ->
-            (Pricklypear_lisp.Ast.VStr "route: bad args"));
+            (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("route", "bad args", "bad-args")))));
 
   (* (public-route path handler) sugar *)
   Primitives.register tbl "public-route"
     (fun args ->
       if t.manifest.username = "anonymous" then
-        (Pricklypear_lisp.Ast.VStr "public-route: denied for anonymous")
+        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("public-route", "denied for anonymous", "denied"))))
       else
         match args with
         | [ Pricklypear_lisp.Ast.VStr route_path;
@@ -401,7 +401,7 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
             register_route_checked ~route_path ~handler ~visibility:"public"
               ~pass_vis_to_store:true
         | _ ->
-            (Pricklypear_lisp.Ast.VStr "public-route: bad args"));
+            (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("public-route", "bad args", "bad-args")))));
 
   (* (route-visibility path) -> "public" | "private" | () *)
   Primitives.register tbl "route-visibility"
@@ -421,7 +421,7 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
   Primitives.register tbl "checkout"
     (fun args ->
       if t.manifest.username = "anonymous" then
-        (Pricklypear_lisp.Ast.VStr "checkout: denied for anonymous")
+        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("checkout", "denied for anonymous", "denied"))))
       else if t.agent_branch_lock then
         (Pricklypear_lisp.Ast.VStr
              "checkout blocked: agent is locked to the current branch")
@@ -433,12 +433,12 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
               Store.lookup_branch_id_by_name t.store ~owner ~name
             in
             (match found with
-             | None -> (Pricklypear_lisp.Ast.VStr "no such branch")
+             | None -> raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("checkout", "no such branch", "not-found")))
              | Some new_id ->
                  let () = checkout_to t ~branch_id:new_id ~branch_ref in
                  (Pricklypear_lisp.Ast.VStr "checked out"))
         | _ ->
-            (Pricklypear_lisp.Ast.VStr "checkout: bad args"));
+            (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("checkout", "bad args", "bad-args")))));
 
   (* (unbind name) -> VStr "unbound" | "nothing to unbind" | error.
      Deletes ONLY the current branch's function_defs row for name;
@@ -448,7 +448,7 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
   Primitives.register tbl "unbind"
     (fun args ->
       if t.manifest.username = "anonymous" then
-        (Pricklypear_lisp.Ast.VStr "unbind: denied for anonymous")
+        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("unbind", "denied for anonymous", "denied"))))
       else
         match args with
         | [ Pricklypear_lisp.Ast.VStr name ] ->
@@ -463,7 +463,7 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
             with Failure msg ->
               (Pricklypear_lisp.Ast.VStr msg))
         | _ ->
-            (Pricklypear_lisp.Ast.VStr "unbind: need a name"));
+            (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("unbind", "need a name", "bad-args")))));
 
   (* (bench expr-string [n]) -> VFloat average microseconds per iteration.
      Parses once, warms up once, runs n times (default 1000) under a max
@@ -755,7 +755,7 @@ and handle_package_form (t : t) (args : Pricklypear_lisp.Ast.expr list)
   | name_e :: rest ->
       (match name_of name_e with
        | None ->
-           (Pricklypear_lisp.Ast.VStr "package: need name symbol/string")
+           (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("package", "need name symbol/string", "bad-args"))))
        | Some name ->
            let name = String.trim name in
            if name = "" then
@@ -785,7 +785,7 @@ and handle_package_form (t : t) (args : Pricklypear_lisp.Ast.expr list)
                      (List.length exports)))
            end)
   | [] ->
-      (Pricklypear_lisp.Ast.VStr "package: need name")
+      (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("package", "need name", "bad-args"))))
 
 and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
     : Pricklypear_lisp.Ast.value =
@@ -1326,7 +1326,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
   in
   Primitives.register prim_table "analyze" (fun args ->
       match name_arg args with
-      | None -> Pricklypear_lisp.Ast.VStr "analyze: need function name"
+      | None -> raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("analyze", "need function name", "bad-args")))
       | Some name ->
           let author = (!t).manifest.username in
           let user_id =
@@ -1346,7 +1346,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
                     ~fn_name:name ~force_llm:false)));
   Primitives.register prim_table "explain" (fun args ->
       match name_arg args with
-      | None -> Pricklypear_lisp.Ast.VStr "explain: need function name"
+      | None -> raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("explain", "need function name", "bad-args")))
       | Some name ->
           (match Analyze.explain_function (!t).store ~fn_name:name with
            | Ok s -> Pricklypear_lisp.Ast.VStr s
@@ -1403,7 +1403,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
          (* Invoke call_handler via the late-bound thunk so we don't
             forward-reference it (defined later in this module). *)
          !route_dispatch_fn !t handler_name req
-       | _ -> Pricklypear_lisp.Ast.VStr "route/dispatch needs handler method path");
+       | _ -> raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("prim", "route/dispatch needs handler method path", "bad-args"))));
   (* route/lookup: resolve a URL path to its handler name via the route
      table. Returns VNil if no route matches. Used by libs/hyper/visit. *)
   Primitives.register prim_table "route/lookup"
@@ -1413,7 +1413,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
          (match Hashtbl.find_opt (!t).routes path with
           | Some (handler, _) -> Pricklypear_lisp.Ast.VStr handler
           | None -> Pricklypear_lisp.Ast.VNil)
-       | _ -> Pricklypear_lisp.Ast.VStr "route/lookup needs one path");
+       | _ -> raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("prim", "route/lookup needs one path", "bad-args"))));
   (* AI + list-branches / current-branch registered inside
      register_crud_prims above (they capture t). *)
   (* Make primitives reachable by name in the env, so `(+)` etc.
@@ -1436,7 +1436,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
            | Error e ->
                (Pricklypear_lisp.Ast.VStr ("load-string: " ^ e)))
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "load-string: need 1 string"));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("load-string", "need 1 string", "bad-args")))));
   (* (eval-string src) — evaluate one expression in the current env.
      Must NOT call eval_one/eval_under_rim: this prim already runs under the
      outer Control_rim (route handler /api/eval); nested match_with resumes
@@ -1464,7 +1464,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
            | Error e ->
                (Pricklypear_lisp.Ast.VStr ("load-library: " ^ e)))
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "load-library: need 1 string"));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("load-library", "need 1 string", "bad-args")))));
   (* (reseed-package pkg) — admin-only upsert libs/<pkg> onto system/main. *)
   Primitives.register prim_table "reseed-package"
     (fun args ->
@@ -1476,7 +1476,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
            | Error e ->
                (Pricklypear_lisp.Ast.VStr ("reseed-package: " ^ e)))
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "reseed-package: need package-str"));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("reseed-package", "need package-str", "bad-args")))));
   let final_prims = prim_table in
   let kernel_catalog = Primitives.catalog prim_table in
   (* Mutate the prims field in place (rather than building a fresh

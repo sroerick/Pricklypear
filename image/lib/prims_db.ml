@@ -661,27 +661,42 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
            (* issue for the caller themselves, no label *)
            let u = Auth_store.get_user_by_username t.store caller in
            (match u with
-            | None -> (Pricklypear_lisp.Ast.VStr "issue-token: no such user")
+            | None ->
+                raise (Pricklypear_lisp.Ast.Interp_error
+                         (Pricklypear_lisp.Ast.Prim_error
+                            ("issue-token", "no such user", "not-found")))
             | Some user ->
                 let r = Auth_store.issue_token t.store ~user_id:user.id () in
                 (match r with
-                 | Error e -> (Pricklypear_lisp.Ast.VStr ("issue-token: " ^ e))
+                 | Error e ->
+                     raise (Pricklypear_lisp.Ast.Interp_error
+                              (Pricklypear_lisp.Ast.Prim_error
+                                 ("issue-token", e, "failed")))
                  | Ok raw -> (Pricklypear_lisp.Ast.VStr raw)))
        | [ label ] ->
            (* issue for the caller themselves, with label *)
            let u = Auth_store.get_user_by_username t.store caller in
            (match u with
-            | None -> (Pricklypear_lisp.Ast.VStr "issue-token: no such user")
+            | None ->
+                raise (Pricklypear_lisp.Ast.Interp_error
+                         (Pricklypear_lisp.Ast.Prim_error
+                            ("issue-token", "no such user", "not-found")))
             | Some user ->
                 let r = Auth_store.issue_token t.store ~user_id:user.id ~label:(parse_label label) () in
                 (match r with
-                 | Error e -> (Pricklypear_lisp.Ast.VStr ("issue-token: " ^ e))
+                 | Error e ->
+                     raise (Pricklypear_lisp.Ast.Interp_error
+                              (Pricklypear_lisp.Ast.Prim_error
+                                 ("issue-token", e, "failed")))
                  | Ok raw -> (Pricklypear_lisp.Ast.VStr raw)))
        | [ Pricklypear_lisp.Ast.VStr uid; label ] ->
            require_admin "issue-token" (fun () ->
              let r = Auth_store.issue_token t.store ~user_id:uid ~label:(parse_label label) () in
              (match r with
-              | Error e -> (Pricklypear_lisp.Ast.VStr ("issue-token: " ^ e))
+              | Error e ->
+                  raise (Pricklypear_lisp.Ast.Interp_error
+                           (Pricklypear_lisp.Ast.Prim_error
+                              ("issue-token", e, "failed")))
               | Ok raw -> (Pricklypear_lisp.Ast.VStr raw)))
        | _ -> (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("issue-token", "need [label] (own) or user-id label (admin)", "bad-args"))))));
 
@@ -704,7 +719,9 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
       if not is_admin && target_uid <> caller_id then
         (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("list-tokens", "denied: admin only", "denied"))))
       else if target_uid = "" then
-        (Pricklypear_lisp.Ast.VStr "list-tokens: no such user")
+        (raise (Pricklypear_lisp.Ast.Interp_error
+                 (Pricklypear_lisp.Ast.Prim_error
+                    ("list-tokens", "no such user", "not-found"))))
       else
         let metas = Auth_store.list_tokens t.store ~user_id:target_uid in
         let rows =
@@ -727,7 +744,10 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
       | [ Pricklypear_lisp.Ast.VStr cid ] when cid <> "" ->
           let r = Auth_store.revoke_token t.store ~credential_id:cid in
           (match r with
-           | Error e -> (Pricklypear_lisp.Ast.VStr ("revoke-token: " ^ e))
+           | Error e ->
+               raise (Pricklypear_lisp.Ast.Interp_error
+                        (Pricklypear_lisp.Ast.Prim_error
+                           ("revoke-token", e, "failed")))
            | Ok () -> (Pricklypear_lisp.Ast.VStr "ok"))
       | _ -> (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("revoke-token", "need credential-id", "bad-args")))));
 
@@ -749,7 +769,10 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
            else
              let r = Auth_store.rotate_token t.store ~credential_id:cid ~user_id:caller_id () in
              (match r with
-              | Error e -> (Pricklypear_lisp.Ast.VStr ("rotate-token: " ^ e))
+              | Error e ->
+                  raise (Pricklypear_lisp.Ast.Interp_error
+                           (Pricklypear_lisp.Ast.Prim_error
+                              ("rotate-token", e, "failed")))
               | Ok raw -> (Pricklypear_lisp.Ast.VStr raw))
        | _ -> (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("rotate-token", "need credential-id", "bad-args"))))));
 
@@ -773,12 +796,18 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
          | [ flag ] ->
              let u = Auth_store.get_user_by_username t.store caller in
              (match u with
-              | None -> (Pricklypear_lisp.Ast.VStr "set-allow-Agent_tools.agent-promote: no such user")
+              | None ->
+                  raise (Pricklypear_lisp.Ast.Interp_error
+                           (Pricklypear_lisp.Ast.Prim_error
+                              ("prim", "set-allow-Agent_tools.agent-promote: no such user", "not-found")))
               | Some user ->
                   let v = parse_bool flag in
                   let r = Auth_store.set_allow_agent_promote t.store ~user_id:user.id ~value:v in
                   (match r with
-                   | Error e -> (Pricklypear_lisp.Ast.VStr ("set-allow-Agent_tools.agent-promote: " ^ e))
+                   | Error e ->
+                       raise (Pricklypear_lisp.Ast.Interp_error
+                                (Pricklypear_lisp.Ast.Prim_error
+                                   ("prim", "set-allow-Agent_tools.agent-promote: " ^ e, "failed")))
                    | Ok () -> (Pricklypear_lisp.Ast.VStr "ok")))
          | _ -> (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("prim", "set-allow-Agent_tools.agent-promote: need bool", "bad-args"))))));
 
@@ -1151,9 +1180,11 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
                   in
                   (Pricklypear_lisp.Ast.VStr badge))
            with exn ->
-             (Pricklypear_lisp.Ast.VStr
-                ("forge-effects: parse/infer failed: "
-                 ^ Printexc.to_string exn)))
+             raise (Pricklypear_lisp.Ast.Interp_error
+                      (Pricklypear_lisp.Ast.Prim_error
+                         ("forge-effects",
+                          "parse/infer failed: " ^ Printexc.to_string exn,
+                          "failed"))))
       | _ ->
           (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("forge-effects", "need src-or-name-str", "bad-args")))));
 

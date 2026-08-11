@@ -1475,7 +1475,9 @@ let llm_seed (t : t) ~(requirement : string) ?(max_steps = 5) ()
            let def = define_binding t ~name:tip ~body_src ~author in
            (match def with
             | Error e ->
-                (Pricklypear_lisp.Ast.VStr ("seed freeze failed: " ^ e))
+                raise (Pricklypear_lisp.Ast.Interp_error
+                         (Pricklypear_lisp.Ast.Prim_error
+                            ("seed", "freeze failed: " ^ e, "failed")))
             | Ok _ ->
                 let log = Buffer.create 256 in
                 Buffer.add_string log (Printf.sprintf "step0 seed %s\n%s\n" tip body_src);
