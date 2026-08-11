@@ -768,6 +768,38 @@ let multipart_tests = [
     | None -> Alcotest.fail "not multipart");
 ]
 
+let err_shape_tests = [
+  ("err/shape builds (error msg kind) envelope", `Quick, fun () ->
+    let v = eval "(err/shape \"boom\" \"bad-args\")" in
+    match v with
+    | VList [ VSymbol "error"; VStr msg; VSymbol kind ] ->
+        Alcotest.(check string) "msg" "boom" msg;
+        Alcotest.(check string) "kind" "bad-args" kind
+    | other ->
+        Alcotest.failf "expected (error boom bad-args), got %s"
+          (Pricklypear_lisp.Reader.pp_value other));
+  ("err/shape accepts symbols", `Quick, fun () ->
+    let v = eval "(err/shape 'boom 'denied)" in
+    match v with
+    | VList [ VSymbol "error"; VStr msg; VSymbol kind ] ->
+        Alcotest.(check string) "msg" "boom" msg;
+        Alcotest.(check string) "kind" "denied" kind
+    | other ->
+        Alcotest.failf "expected (error boom denied), got %s"
+          (Pricklypear_lisp.Reader.pp_value other));
+  ("err/shape bad arity raises", `Quick, fun () ->
+    (* single-arg call should raise User_error with bad-args kind *)
+    try
+      let _ = eval "(err/shape \"boom\")" in
+      Alcotest.fail "expected err/shape to raise on bad arity"
+    with
+    | Pricklypear_lisp.Ast.Interp_error
+        (Pricklypear_lisp.Ast.User_error (_, k)) ->
+        Alcotest.(check string) "kind" "bad-args" k
+    | exn ->
+        Alcotest.failf "expected User_error, got %s" (Printexc.to_string exn));
+]
+
 let () =
   Alcotest.run "pricklypear-image-primitives" [
     "arithmetic", arithmetic_tests;
@@ -786,4 +818,5 @@ let () =
     "std-freeze", std_freeze_tests;
     "io-prims", io_prim_tests;
     "multipart", multipart_tests;
+    "err-shape", err_shape_tests;
   ]
