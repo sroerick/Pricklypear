@@ -181,12 +181,24 @@
                      {handler,visibility} / datum fields),
                author: text,
                doc: text|null (fn only),
-               hash: hex (sha256 over canonical body),
-               created_at, updated_at }
+               hash: hex (sha256 over canonical body) }
            Hash covers ONLY canonical body (not path/author) so
            content-corruption is detectable independent of
            placement. Per-subtree root hashes compose from leaf
            hashes (content-addressing later).
+
+           TIMESTAMPS: created_at and updated_at are ROW COLUMNS
+           on tree_nodes (see physical layout), NOT duplicated
+           into the payload jsonb. They are the source of truth
+           for when a node was inserted and last rewritten; the
+           upsert ON CONFLICT path advances updated_at = now()
+           and leaves created_at untouched. The tree-prim JSON
+           SURFACE (node_to_json — what tree/get, tree/list,
+           tree/get-uuid, tree/find-by, tree/list-kind return)
+           MUST include created_at and updated_at alongside the
+           envelope fields, read from the row columns. A node
+           returned by any tree prim without these two keys is a
+           defect.
 
            PHYSICAL LAYOUT (migration 009_tree.sql; additive):
              tree_nodes(
@@ -409,7 +421,8 @@
     (smoke "tree/upsert an existing datum path with a changed field → body updates in place; (rows 't) reflects the new value")
     (smoke "tree/move a datum node to a new path → (get 't id) at the new path returns it; old path is gone; projection in sync")
     (smoke "tree/delete a datum path → node and projection row both removed")
-    (smoke "tree/get, tree/list, tree/find-by, tree/list-kind all return datum nodes, not only hierarchical kinds")))
+    (smoke "tree/get, tree/list, tree/find-by, tree/list-kind all return datum nodes, not only hierarchical kinds")
+    (smoke "tree/get of any node returns JSON with created_at and updated_at keys; created_at is stable across an upsert rewrite, updated_at advances")))
   (subsection projections
    (doc "SQL over the tree: relational rows are derived, not truth")
    (status implemented)
