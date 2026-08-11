@@ -1,47 +1,6 @@
 ;; package (root) -- exported from live branch system/main
 ;; Sync: scripts/pp_sync.py pull|push
 
-(define __d
-  (notes/doc/get "agents"))
-
-(define __day
-  (car (cdr (cdr (cdr (cdr (cdr (cdr __d))))))))
-
-(define __inbox
-  (get
-    (quote note)
-    "053c8ece-a61d-4a82-bb9c-ee99a8abe0b5"))
-
-(define __kind
-  (car (cdr (cdr (cdr (cdr (cdr __d)))))))
-
-(define __media-body
-  (string-append
-    "Do NOT push multi-KiB binaries through POST /api/eval (64 KiB body cap). "
-    "Use dedicated media endpoints (HTTP Basic or session). "
-    "Write: POST /api/media (max 5 MiB). Allowed: image/png jpeg gif webp svg+xml application/pdf. "
-    "Modes: (1) raw body with Content-Type set to the media type and optional X-Filename header. "
-    "(2) JSON with content_type and data_b64 and optional filename. "
-    "(3) multipart form field name=file. "
-    "Success 201 returns ok id url content_type byte_size sha256. "
-    "Read GET /media/UUID. List GET /api/media. Delete DELETE /api/media/UUID (author or admin). "
-    "Browser GET /media and POST /media/upload. "
-    "Client helper: python3 scripts/pp_media.py put ./shot.png using PP_URL PP_USER PP_PASS. "
-    "curl raw: curl -u USER:PASS -X POST ORIGIN/api/media -H Content-Type:image/png -H X-Filename:shot.png --data-binary @shot.png. "
-    "curl multipart: curl -u USER:PASS -F file=@shot.png ORIGIN/api/media. "
-    "Lisp meta only: (media-meta id) (media-list) (media-url id) (media-delete id). "
-    "(media-put ct b64 filename) only for tiny fixtures under 256 KiB. "
-    "Reference /media/id URLs from notes or HTML (auth required to fetch)."))
-
-(define __ol
-  (notes/doc/outline __d))
-
-(define __ol2
-  (outline/update
-    __ol
-    "n-media"
-    (lambda (n) (outline/set-body n __media-body))))
-
 (define __t
   (outline/node*
     "root"
@@ -56,22 +15,6 @@
         ""
         (list (outline/node* "g" "G" "" "" (list))))
       (outline/node* "c2" "C2" "" "" (list)))))
-
-(define __tags
-  (car (cdr (cdr (cdr (cdr __d))))))
-
-(define __title
-  (car (cdr (cdr __d))))
-
-(define _sid
-  (workout/session-create-complete
-    "free"
-    ""
-    (date-today)
-    "smoke test"))
-
-(define _tid
-  (todo/create-list "TempDeleteMe2"))
 
 (define add1
   (lambda (x) (+ x 1)))
@@ -88,9 +31,6 @@
 
 (define blank?
   (lambda (s) (if (null? s) #t (string-eq (as-str s) ""))))
-
-(define body
-  (dict-get r "body"))
 
 (define deftwo
   (__macro__
@@ -744,9 +684,6 @@
 (define mywhen-test-1
   (lambda (t b) (if t b ())))
 
-(define names
-  (list-bindings))
-
 (define pg-outline
   (outline/node*
     "root"
@@ -1280,9 +1217,6 @@
 (define probe
   (__macro__ (x) (as-str x)))
 
-(define r
-  (http-get "https://example.com"))
-
 (define raw
   (__macro__ (x) (list (quote quote) x)))
 
@@ -1446,17 +1380,6 @@
     ""
     ""
     (list)))
-
-(define test-with-upsert
-  (seq
-    (notes/doc/upsert
-      "test-design"
-      "Test Design"
-      test-outline-full
-      "test"
-      "note"
-      "")
-    "done"))
 
 (define tree
   (outline/node*
