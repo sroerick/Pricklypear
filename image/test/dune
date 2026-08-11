@@ -4,6 +4,12 @@
  (libraries pricklypear-image pricklypear-lisp alcotest lwt lwt.unix))
 
 (test
+ (name agent_tools_test)
+ (modules agent_tools_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest lwt lwt.unix))
+
+
+(test
  (name prims_hyper_test)
  (modules prims_hyper_test)
  (libraries pricklypear-image pricklypear-lisp alcotest))
