@@ -81,6 +81,12 @@ let allowed_ext (name : string) : bool =
 
 let max_file_bytes = 2 * 1024 * 1024
 
+(** Release artifacts (src.tgz ~2.25 MiB, book.pdf ~1.1 MiB) exceed the
+    /code browser's 2 MiB cap. Give the public-artifact path its own
+    larger bound so [/src.tgz] and [/book.pdf] actually serve instead
+    of 404ing with "file too large". Still bounded to prevent abuse. *)
+let max_public_artifact_bytes = 64 * 1024 * 1024
+
 let html_escape (s : string) : string =
   let buf = Buffer.create (String.length s) in
   String.iter
@@ -167,11 +173,11 @@ let resolve_under ~(root : string) (rel : string) : string option =
        | Some "" -> Some root_real
        | Some rel -> Some (Filename.concat root_real rel))
 
-let read_file_limited (path : string) : (string, string) result =
+let read_file_within ~(max : int) (path : string) : (string, string) result =
   try
     let st = Unix.stat path in
     if st.Unix.st_kind <> Unix.S_REG then Error "not a file"
-    else if st.Unix.st_size > max_file_bytes then Error "file too large"
+    else if st.Unix.st_size > max then Error "file too large"
     else
       let ic = open_in_bin path in
       let len = in_channel_length ic in
@@ -179,6 +185,9 @@ let read_file_limited (path : string) : (string, string) result =
       close_in ic;
       Ok s
   with exn -> Error (Printexc.to_string exn)
+
+let read_file_limited (path : string) : (string, string) result =
+  read_file_within ~max:max_file_bytes path
 
 let mime_for_name (name : string) : string =
   let lower = String.lowercase_ascii name in
@@ -290,8 +299,8 @@ let serve_bytes (reqd : Httpun.Reqd.t) ?(status = `OK) ~content_type
   let resp = Httpun.Response.create ~headers status in
   Http_core.safe_respond_with_string reqd resp body
 
-let serve_file_path (reqd : Httpun.Reqd.t) ~(path : string) : unit =
-  match read_file_limited path with
+let serve_file_path ?(max = max_file_bytes) (reqd : Httpun.Reqd.t) ~(path : string) : unit =
+  match read_file_within ~max path with
   | Error msg ->
       serve_bytes reqd ~status:`Not_found ~content_type:"text/plain; charset=utf-8"
         ("not found: " ^ msg)
@@ -329,7 +338,7 @@ let handle_public_artifact (reqd : Httpun.Reqd.t) ~(name : string) : unit =
             and set <code>PP_PUBLIC_DIR</code>.</p><p><a href=\"/welcome\">welcome</a></p>")
   | Some path ->
       if Sys.file_exists path && not (Sys.is_directory path) then
-        serve_file_path reqd ~path
+        serve_file_path reqd ~max:max_public_artifact_bytes ~path
       else
         serve_bytes reqd ~status:`Not_found ~content_type:"text/html; charset=utf-8"
           ("<!doctype html><title>missing</title><p>No <code>"
