@@ -793,17 +793,35 @@
       (let ((f (cdr node)))
         (let ((title (forge/field-str f "title"))
               (kind (forge/field-str f "kind"))
+              (target (forge/field-str f "target"))
+              (test-fn (forge/field-str f "test-fn"))
               (constraints (json-parse (forge/field-str f "constraints"))))
-          (string-append
-            "You are drafting a Nopales (Lisp-1) function for a Pricklypear spec graph.\n"
-            "Node: " path "\n"
-            "Kind: " kind "\n"
-            "Purpose: " title "\n"
-            "Output TWO s-expressions on separate lines: (1) the (lambda ...) body, (2) a verify expression using `fn` that returns #t if correct.\n"
-            "Available prims: + - * = < > list car cdr cons null? string-append str\n"
-            "  get create update delete rows dict-get dict-set render-html\n"
-            (forge/constraints-text constraints)))))))
-  "Assemble the draft prompt from a node's context + accumulated constraints.")
+          (if (string-eq target "")
+            (string-append
+              "You are drafting a Nopales (Lisp-1) function for a Pricklypear spec graph.\n"
+              "Node: " path "\n"
+              "Kind: " kind "\n"
+              "Purpose: " title "\n"
+              "Output TWO s-expressions on separate lines: (1) the (lambda ...) body, (2) a verify expression using `fn` that returns #t if correct.\n"
+              "Available prims: + - * = < > list car cdr cons null? string-append str\n"
+              "  get create update delete rows dict-get dict-set render-html\n"
+              (forge/constraints-text constraints))
+            (string-append
+              "You are MODIFYING an existing Nopales (Lisp-1) function on a Pricklypear spec graph.\n"
+              "Node: " path "\n"
+              "Kind: " kind "\n"
+              "Purpose: " title "\n"
+              "Target binding: " target "\n"
+              "CURRENT IMPLEMENTATION (you are changing this — produce the FULL new body, not a diff):\n"
+              (forge/safe-source target) "\n\n"
+              "Output TWO s-expressions on separate lines: (1) the FULL new (lambda ...) body, (2) a verify expression using `fn` that returns #t if correct.\n"
+              (forge/test-fn-prompt test-fn)
+              "Available prims: + - * = < > list car cdr cons null? string-append str\n"
+              "  get create update delete rows dict-get dict-set render-html\n"
+              (forge/constraints-text constraints))))))))
+  "Assemble the draft prompt from a node's context + accumulated constraints.
+   Greenfield when target is empty; modify-existing (includes the target's
+   current source) when target is set.")
 
 (define forge/constraints-text
   (lambda (cs)
@@ -1049,10 +1067,16 @@
                       (string-append "verify failed: " result))
                     "verify: failed (judgment flag)")
                   (if (forge/truthy? result)
-                      (seq
-                        (forge/resolve-victory-flag graph path)
-                        (forge/set-status graph path "verified")
-                        "verify: passed (victory flag resolved, status verified)")
+                      (let ((reg (forge/run-regression graph path body f)))
+                        (if (or (string-eq reg "")
+                                (string-starts-with? reg "verify: passed; regression test passed"))
+                            (seq
+                              (forge/resolve-victory-flag graph path)
+                              (forge/set-status graph path "verified")
+                              (if (string-eq reg "")
+                                  "verify: passed (victory flag resolved, status verified)"
+                                  reg))
+                            reg))
                       (seq
                         (forge/flag path "judgment"
                           "verify returned falsey — function fails its own test")
@@ -1316,3 +1340,281 @@
   "Job entry point for forge/run. Calls forge/step once. The runner records
    the step result; the caller re-submits after approving the level. This is
    the loop-persists-across-requests shape from borge/forge.borg forge/run.")
+
+;; ============================================================
+;; EXISTING-APP BRIDGE (existing-app-bridge subsection)
+;; import-function bootstraps a graph from live bindings; the target
+;; field anchors modify-existing nodes; test-fn enables regression.
+;; ============================================================
+
+(define forge/safe-source
+  (lambda (name)
+    (guard (lambda (e) "")
+      (let ((s (function-source name)))
+        (if (null? s) "" (as-str s)))))
+  "Read a binding's stored source via function-source; \"\" on any error
+   or absent binding (e.g. a prim with no stored source).")
+
+(define forge/set-target
+  (lambda (graph path target)
+    (let ((pair (forge/node-by-path graph path)))
+      (if (null? pair) ""
+        (update 'forge-node (car pair)
+          (dict-set (cdr pair) "target" target)))))
+  "Set the target field — names an existing binding this node modifies.
+   Empty string = greenfield (create-new).")
+
+(define forge/set-test-fn
+  (lambda (graph path test-fn)
+    (let ((pair (forge/node-by-path graph path)))
+      (if (null? pair) ""
+        (update 'forge-node (car pair)
+          (dict-set (cdr pair) "test-fn" test-fn)))))
+  "Set the test-fn field — existing test binding to run as a regression
+   after the drafted body is installed as the target.")
+
+(define forge/test-fn-prompt
+  (lambda (test-fn)
+    (if (string-eq test-fn "") ""
+      (string-append
+        "A regression test function exists: " test-fn "\n"
+        "After install, forge will call (" test-fn ") with your new body\n"
+        "bound to the target name. Write your verify to test `fn` directly;\n"
+        "the regression is automatic. Your verify should still assert the\n"
+        "new behavior.\n")))
+  "Prompt fragment telling the drafter a regression test will run.")
+
+(define forge/import-function
+  (lambda (graph path binding-name parent)
+    (let ((src (forge/safe-source binding-name)))
+      (if (string-eq src "")
+        (seq
+          (forge/flag path "judgment"
+            (string-append "import-function: no source for " binding-name))
+          "")
+        (seq
+          (forge/add-node graph path "function" binding-name parent)
+          (forge/set-body-verify graph path src "(begin #t)")
+          (forge/set-status graph path "implemented")
+          (forge/set-target graph path binding-name)
+          (forge/set-inferred-effects graph path src)
+          (forge/node-id graph path)))))
+  "Import an existing binding into the graph as a status=implemented node.
+   Reads source via function-source, sets body=source, verify=(begin #t)
+   (pre-existing code is trusted), target=binding-name, effects=inferred.
+   Bootstraps a graph from an existing package without hand-authoring nodes.")
+
+;; ---- regression verify: install new body, run test-fn, restore ----
+
+(define forge/run-regression
+  (lambda (graph path body-src f)
+    (let ((target (forge/field-str f "target")))
+      (if (string-eq target "")
+          ""
+          (forge/run-regression-2 graph path body-src f target (forge/field-str f "test-fn")))))
+  "Run regression for a modify-existing node. Dispatches to part 2 with
+   target + test-fn extracted. Returns \"\" when no regression configured.")
+
+(define forge/run-regression-2
+  (lambda (graph path body-src f target test-fn)
+    (if (string-eq test-fn "")
+        ""
+        (let ((old (forge/safe-source target)))
+          (if (string-eq old "")
+              (seq
+                (forge/flag path "judgment"
+                  (string-append "regression skipped: no source for target " target))
+                "verify: passed; regression skipped (target has no source — flagged)")
+              (forge/run-regression-3 graph path body-src target test-fn old)))))
+  "Part 2: check old source exists, dispatch to install+test+restore.")
+
+(define forge/run-regression-3
+  (lambda (graph path body-src target test-fn old)
+    (let ((install-ok (forge/eval-or-error
+                        (string-append "(define " target " " body-src ")"))))
+      (if (forge/eval-failed? install-ok)
+          (seq
+            (forge/flag path "judgment"
+              (string-append "regression install failed: " install-ok))
+            "verify: passed; regression install failed (judgment flag)")
+          (forge/run-regression-4 graph path target test-fn old))))
+  "Part 3: install the drafted body, dispatch to test+restore.")
+
+(define forge/run-regression-4
+  (lambda (graph path target test-fn old)
+    (let ((test-result (forge/eval-or-error
+                         (string-append "(" test-fn ")"))))
+      (seq
+        (forge/eval-or-error (string-append "(define " target " " old ")"))
+        (if (forge/eval-failed? test-result)
+            (seq
+              (forge/flag path "judgment"
+                (string-append "regression test errored: " test-result))
+              "verify: passed; regression test errored (judgment flag)")
+            (if (forge/truthy? test-result)
+                "verify: passed; regression test passed (target restored)"
+                (seq
+                  (forge/flag path "judgment"
+                    "regression test returned falsey — existing tests break")
+                  "verify: passed; regression FAILED (judgment flag)"))))))
+  "Part 4: run the test, restore original source, report result.")
+
+;; ============================================================
+;; HUMAN SURFACE — /forge flag queue (human-surface subsection)
+;; Anomaly-first: clean nodes render one-line; flagged nodes show detail.
+;; htmx actions: approve (POST /forge/approve), reroll-with-note (POST /forge/reroll).
+;; ============================================================
+
+(define forge/page
+  (lambda ()
+    (let ((name (request-param "graph")))
+      (if (or (null? name) (string-eq (as-str name) ""))
+          (forge/page-graphs)
+          (forge/page-graph (as-str name)))))
+  "GET /forge — list graphs, or one graph when ?graph=<name> is set.")
+
+(define forge/page-graphs
+  (lambda ()
+    (let ((gs (rows 'forge-graph 100)))
+      (render-html
+        (string-append
+          "<h1>Forge</h1>"
+          "<p>Executable spec graphs. The flag queue is the human surface — "
+          "review anomalies, not a wall of nodes.</p>"
+          (forge/graph-list-html gs)))))
+  "List all forge graphs with status.")
+
+(define forge/all-open-flags
+  (lambda ()
+    (list/filter
+      (lambda (pair)
+        (not (string-eq (forge/field-str (cdr pair) "resolved") "true")))
+      (rows 'forge-flag 500)))
+  "All unresolved forge-flag rows — one DB scan, reused per node.")
+
+(define forge/graph-list-html
+  (lambda (gs)
+    (if (null? gs)
+      "<p><em>No graphs yet. Create one with (forge/new-graph \"name\" \"title\" 4).</em></p>"
+      (string-append
+        "<table><tr><th>graph</th><th>status</th></tr>"
+        (forge/graph-row-html gs)
+        "</table>")))
+  "Render the graph list table body (or empty-state message).")
+
+(define forge/graph-row-html
+  (lambda (gs)
+    (if (null? gs) ""
+      (let ((f (cdr (car gs))))
+        (let ((name (forge/field-str f "name"))
+              (status (forge/field-str f "status")))
+          (string-append
+            "<tr><td><a href=\"/forge?graph=" name "\">" name "</a></td>"
+            "<td>" status "</td></tr>"
+            (forge/graph-row-html (cdr gs)))))))
+  "One table row per graph.")
+
+(define forge/page-graph
+  (lambda (name)
+    (let ((graph (forge/graph-by-name name)))
+      (if (null? graph)
+        (render-html
+          (string-append "<h1>Forge</h1><p>Graph not found: " name "</p>"
+            "<p><a href=\"/forge\">← all graphs</a></p>"))
+        (let ((nodes (forge/nodes-of-graph name))
+              (all-flags (forge/all-open-flags)))
+          (render-html
+            (string-append
+              "<h1>Forge: " name "</h1>"
+              "<p><a href=\"/forge\">← all graphs</a></p>"
+              (forge/node-list-html name nodes all-flags)))))))
+  "GET /forge?graph=<name> — anomaly-first view of a graph's nodes.")
+
+(define forge/node-list-html
+  (lambda (graph nodes all-flags)
+    (if (null? nodes) "<p><em>No nodes.</em></p>"
+      (string-append
+        (forge/node-row-html graph (car nodes) all-flags)
+        (forge/node-list-html graph (cdr nodes) all-flags))))
+  "Render all node rows for a graph.")
+
+(define forge/node-row-html
+  (lambda (graph pair all-flags)
+    (let ((path (forge/field-str (cdr pair) "path"))
+          (title (forge/field-str (cdr pair) "title"))
+          (status (forge/field-str (cdr pair) "status"))
+          (effects (forge/field-str (cdr pair) "effects")))
+      (let ((flags (forge/open-flags-for-node-in path all-flags)))
+        (string-append
+          "<div id=\"node-" path "\" style=\"border:1px solid #ccc;padding:8px;margin:4px\">"
+          "<b>" path "</b> — " title "<br>"
+          "status: " status " | effects: " effects
+          (forge/flag-detail-html flags)
+          (forge/node-actions-html graph path status)
+          "</div>"))))
+  "One node card: path, title, status, effects, flags, actions.")
+
+(define forge/open-flags-for-node-in
+  (lambda (path flags)
+    (list/filter
+      (lambda (pair)
+        (and (string-eq (forge/field-str (cdr pair) "node_path") path)
+             (not (string-eq (forge/field-str (cdr pair) "resolved") "true"))))
+      flags))
+  "Unresolved flags for a node path, filtered from a pre-fetched list (no DB).")
+
+(define forge/flag-detail-html
+  (lambda (flags)
+    (if (null? flags) ""
+      (string-append "<ul>" (forge/flag-item-html flags) "</ul>")))
+  "Render flag list as a <ul>, or empty when clean.")
+
+(define forge/flag-item-html
+  (lambda (flags)
+    (if (null? flags) ""
+      (let ((f (cdr (car flags))))
+        (string-append
+          "<li><b>" (forge/field-str f "check") "</b>: "
+          (forge/field-str f "detail") "</li>"
+          (forge/flag-item-html (cdr flags))))))
+  "One <li> per flag.")
+
+(define forge/node-actions-html
+  (lambda (graph path status)
+    (if (or (string-eq status "approved") (string-eq status "implemented"))
+      " <em>approved</em>"
+      (string-append
+        " <button hx-post=\"/forge/approve\" "
+        "hx-vals='{\"graph\":\"" graph "\",\"path\":\"" path "\"}' "
+        "hx-target=\"closest div\" hx-swap=\"outerHTML\">approve</button> "
+        "<form hx-post=\"/forge/reroll\" hx-target=\"closest div\" "
+        "hx-swap=\"outerHTML\" style=\"display:inline\">"
+        "<input type=\"hidden\" name=\"graph\" value=\"" graph "\">"
+        "<input type=\"hidden\" name=\"path\" value=\"" path "\">"
+        "<input type=\"text\" name=\"note\" placeholder=\"reroll note\">"
+        "<button>reroll</button></form>")))
+  "Action buttons for a node: approve + reroll-with-note. Approved/implemented
+   nodes show only an 'approved' marker.")
+
+(define forge/approve-action
+  (lambda ()
+    (let ((graph (as-str (request-param "graph")))
+          (path (as-str (request-param "path"))))
+      (seq
+        (forge/set-status graph path "approved")
+        (render-html (forge/node-row-html graph (forge/node-by-path graph path) (forge/all-open-flags))))))
+  "POST /forge/approve — set node status approved, return updated node row.")
+
+(define forge/reroll-action
+  (lambda ()
+    (let ((graph (as-str (request-param "graph")))
+          (path (as-str (request-param "path")))
+          (note (as-str (request-param "note"))))
+      (seq
+        (forge/add-constraint graph path note)
+        (render-html (forge/node-row-html graph (forge/node-by-path graph path) (forge/all-open-flags))))))
+  "POST /forge/reroll — append the note as a constraint, return updated node row.")
+
+(route "/forge" "forge/page")
+(route "/forge/approve" "forge/approve-action")
+(route "/forge/reroll" "forge/reroll-action")
