@@ -40,6 +40,11 @@ let prepare () : Session.t * int * int =
   let store = Store.make ~cfg ~branch_id:manifest.branch_id () in
   Store.connect store;
   ignore (Auth_store.bootstrap_admin_if_empty store);
+  (* Surface any drift between the OCaml seed-type mirror and the SQL
+     authority (tree_seed_types) — non-fatal warning. See i-seed-list-3copies. *)
+  (match Store.current_conn store with
+   | Some conn -> Tree_store.verify_seed_types conn
+   | None -> ());
   let session = Session.make ~manifest ~store () in
   let http_port = int_of_string (env_or "PP_HTTP_PORT" "8080") in
   let repl_port = int_of_string (env_or "PP_REPL_PORT" "7878") in
