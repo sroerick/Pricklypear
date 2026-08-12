@@ -389,6 +389,26 @@ let dict_tests = [
      | _ ->
          Alcotest.failf "expected list of 2 keys, got %s"
            (Pricklypear_lisp.Reader.pp_value v)));
+  ("api_eval native-JSON: CRUD VStr stays clean (no triple-escape)", `Quick, fun () ->
+    (* api_eval now serializes eval results with Prims_pure.value_to_json.
+       A CRUD read returns fields as a VStr of JSON text; value_to_json must
+       re-parse it into a real JSON object (quotes NOT triple-escaped),
+       matching the i-fields-as-string fix. See image/lib/http_pages.ml api_eval. *)
+    let fields = "{\"name\":\"alice\",\"age\":30}" in
+    let j = Prims_pure.value_to_json (VStr fields) in
+    (match j with
+     | `Assoc kvs ->
+         Alcotest.(check (option string)) "name" (Some "alice")
+           (match List.assoc_opt "name" kvs with
+            | Some (`String s) -> Some s
+            | _ -> None);
+         Alcotest.(check int) "age" 30
+           (match List.assoc_opt "age" kvs with
+            | Some (`Int n) -> n
+            | _ -> -1)
+     | other ->
+         Alcotest.failf "expected JSON object, got %s"
+           (Yojson.Safe.to_string other)));
 ]
 
 (* --- render-html primitive (tagged VStr) --- *)

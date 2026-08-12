@@ -1573,9 +1573,15 @@ let api_eval (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
   | Some expr ->
       (try
       let v = Session.eval_one session expr in
-          let rendered = Pricklypear_lisp.Reader.pp_value v in
+          (* Serialize the Lisp value as NATIVE JSON (not a pp_value
+             string). CRUD read prims return fields as a VStr of JSON
+             text; pp_value would backslash-escape those quotes and
+             json_response would re-encode again => triple-escaped
+             output. value_to_json re-parses JSON-lookalike VStrs into
+             real JSON objects/arrays so field data round-trips as
+             clean, valid JSON (i-fields-as-string-2026-08-12). *)
           json_response reqd
-            (`Assoc [("ok", `Bool true); ("value", `String rendered)]);
+            (`Assoc [("ok", `Bool true); ("value", Prims_pure.value_to_json v)]);
           ()
     with exn ->
       (* Use the full printer — partial match left Arity_mismatch /
