@@ -36,11 +36,11 @@ let session_user () : string =
   | None -> "anonymous"
 
 (** SQL fragment: row is visible to $N (author match OR seed type).
-    Seed list MUST match Tree_store.seed_types / tree_is_seed_type. *)
+    Seed membership derives from the authoritative SQL predicate
+    tree_is_seed_type (migrations/016_seed_single_source.sql) rather than a
+    duplicated IN-list, so CRUD reads never drift from the RLS floor. *)
 let visible_sql ~(user_param : int) : string =
-  Printf.sprintf
-    "(author = $%d OR type_name IN ('bible-verse','bible-book','bible-interlinear','strongs-entry','guestbook_entry'))"
-    user_param
+  Printf.sprintf "(author = $%d OR tree_is_seed_type(type_name))" user_param
 
 (** If [type_name] is declared on the store's branch, validate [fields_json]
     against its field list. Undeclared types are free-form (no schema).

@@ -93,12 +93,45 @@ let route_path ~branch_id ~route =
 let pkg_path ~branch_id ~name =
   Printf.sprintf "b.%s.pkg.%s" (uuid_label branch_id) (enc_label name)
 
-(** Seed corpus types — visible to every session under data.shared.*
-    (must match tree_is_seed_type in migrations/013_data_user_scoping.sql). *)
+(** Seed corpus types — visible to every session under data.shared.*.
+    The SERVER-side authority is the tree_is_seed_type / tree_seed_types
+    SQL in migrations/016_seed_single_source.sql (the single place the
+    list is defined on the DB). This OCaml array is the pure mirror needed
+    by the DB-free `node-path` prim; verify_seed_types checks it against
+    the SQL authority at boot so drift is caught automatically. *)
 let seed_types = [ "bible-verse"; "bible-book"; "bible-interlinear"; "strongs-entry"; "guestbook_entry" ]
 
 let is_seed_type (type_name : string) : bool =
   List.mem type_name seed_types
+
+(** Read the authoritative seed list from SQL (tree_seed_types). *)
+let db_seed_types (conn : Store_db.conn) : string list =
+  try
+    let rows =
+      Store_db.exec conn "SELECT t FROM unnest(tree_seed_types()) AS u(t)"
+    in
+    List.filter_map
+      (function [ c ] -> Pgx.Value.to_string c | _ -> None)
+      rows
+  with exn ->
+    Printf.eprintf "[store] tree_seed_types() query failed: %s\n%!"
+      (Printexc.to_string exn);
+    []
+
+(** Verify the OCaml mirror matches the SQL authority. Non-fatal: logs a
+    warning so an out-of-date Tree_store.seed_types is surfaced without
+    taking the image down. Call once at boot (Store.connect succeeded). *)
+let verify_seed_types (conn : Store_db.conn) : unit =
+  let sorted = List.sort String.compare in
+  let db = sorted (db_seed_types conn) in
+  let oml = sorted seed_types in
+  if db <> oml then
+    Printf.eprintf
+      "[store] WARNING: OCaml seed_types [%s] != DB tree_seed_types [%s];\n\
+       %s    update image/lib/tree_store.ml seed_types to match migrations/016.\n%!"
+      (String.concat "," oml)
+      (String.concat "," db)
+      (if db = [] then "      (DB returned nothing — migrations not applied?)\n    " else "")
 
 (** Datum path. Prefer [~user] for per-user rows; seed types always land
     under data.shared regardless of user. Without ~user, non-seed types
