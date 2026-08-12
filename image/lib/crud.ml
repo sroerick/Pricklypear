@@ -229,40 +229,74 @@ let update
     this prim). Lwt-typed; returns VStr id on success, VNil if no row
     matched or no DB. Value is JSON-coerced (numeric strings emit as JSON
     numbers; non-parseable values emit as JSON strings — same rules as
-    dict-set). NO transactional scope beyond the implicit per-statement
-    pgx tx — see ``select-for-update`` caveat for why that matters for
-    concurrent writers; the row is fetched and updated in two separate
-    pgx statements. *)
+    dict-set).
+
+    Runs in ONE transaction: the row is read with SELECT ... FOR UPDATE,
+    the field merged in OCaml, and the UPDATE issued in the same tx. The
+    FOR UPDATE lock serializes concurrent update-field calls on the same
+    row, so two writers updating different fields both land (no
+    lost-update race). The tx conn (with pp.user LOCAL set) is used
+    throughout, so the RLS floor stays active. *)
 let update_field
     (store : Store.t) ~(type_name : string) ~(id : string)
     ~(field : string) ~(value : string)
     : value =
-  let current = get store ~type_name ~id in
-  (match current with
-   | VNil -> VNil  (* no such row *)
-   | _ ->
-       let json_str =
-         match current with VStr s -> s | _ -> "{}"
-       in
-       (* Compose with the SAME logic as Primitives.prim_dict_set so
-          numeric-auto-detect and JSON passthrough behave identically. *)
-       let base =
-         try
-           (match Yojson.Safe.from_string json_str with
-            | `Assoc kvs -> kvs
-            | _ -> [])
-         with _ -> []
-       in
-       let v_json =
-         try Yojson.Safe.from_string value
-         with _ -> `String value
-       in
-       let updated =
-         (field, v_json) ::
-         (List.filter (fun (k, _) -> k <> field) base)
-       in
-       let updated_json = Yojson.Safe.to_string (`Assoc updated) in
-       update store ~type_name ~id ~fields_json:updated_json)
+  (* Preserve type-field validation (update_field used to route through
+     update -> check_type_fields). Build a throwaway single-field JSON to
+     reuse the same rejection path. *)
+  let sample_json = Printf.sprintf "{\"%s\":\"%s\"}" field value in
+  let reject = check_type_fields store ~type_name ~fields_json:sample_json in
+  match reject with
+  | Some msg -> VStr msg
+  | None ->
+  Io_lwt.Db.with_transaction store (function
+    | None -> VNil
+    | Some conn ->
+        let user = session_user () in
+        let sql =
+          "SELECT fields::text FROM " ^ data_rel () ^ " " ^
+          "WHERE type_name = $1 AND id = $2::uuid AND " ^
+          visible_sql ~user_param:3 ^ " FOR UPDATE" in
+        let rows =
+          Io_lwt.Db.execute conn
+            ~params:[ Pgx.Value.of_string type_name;
+                      Pgx.Value.of_string id;
+                      Pgx.Value.of_string user ]
+            sql
+        in
+        (match rows with
+         | [] -> VNil  (* no such row / not visible *)
+         | row :: _ ->
+             let json_str =
+               match row with
+               | [ fields_cell ] ->
+                   (match Pgx.Value.to_string fields_cell with
+                    | Some s -> s
+                    | None -> "{}")
+               | _ -> "{}"
+             in
+             (* Compose with the SAME logic as Primitives.prim_dict_set so
+                numeric-auto-detect and JSON passthrough behave identically. *)
+             let base =
+               try
+                 (match Yojson.Safe.from_string json_str with
+                  | `Assoc kvs -> kvs
+                  | _ -> [])
+               with _ -> []
+             in
+             let v_json =
+               try Yojson.Safe.from_string value
+               with _ -> `String value
+             in
+             let updated =
+               (field, v_json) ::
+               (List.filter (fun (k, _) -> k <> field) base)
+             in
+             let updated_json = Yojson.Safe.to_string (`Assoc updated) in
+             let id' =
+               Tree_store.update_datum conn ~type_name ~id ~fields_json:updated_json
+             in
+             (match id' with Some s -> VStr s | None -> VNil)))
 
 (** (delete 'type id) -> VStr id | VNil.
     DELETEs one row by (type_name, id). Returns the id on success
