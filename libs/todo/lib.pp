@@ -255,8 +255,7 @@
     (type limit)
     (map
       todo/db/node-row
-      (todo/db/sort-by-created
-        (tree/list-kind (todo/db/prefix type) "datum" limit)))))
+      (tree/list-kind (todo/db/prefix type) "datum" limit))))
 
 (define todo/db/sort-by-created
   (lambda
