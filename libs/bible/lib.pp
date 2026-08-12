@@ -80,7 +80,8 @@
       (bible/abbrev-of book)
       "chapter"
       (as-str chapter)
-      200)))
+      200
+      "COALESCE((fields->>'verse')::int, 0) ASC, created_at ASC")))
 
 (define bible/chapter-count
   (lambda
