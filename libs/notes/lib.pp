@@ -3273,13 +3273,26 @@
 (define notes/tree/list-notes
   (lambda () (tree/note-index (notes/tree/root) 50000)))
 
+;; Read the root outline body persisted by write-root-body (i-rootbody-1).
+(define notes/tree/root-body
+  (lambda
+    (note-path)
+    (let
+      ((cur (tree/get note-path)))
+      (if
+        (null? cur)
+        ""
+        (let
+          ((b (dict-get (notes/tree/body (notes/tree/parse cur)) "body")))
+          (if (null? b) "" (as-str b)))))))
+
 (define notes/tree/load-outline
   (lambda
     (note-path title)
     (outline/node*
       "root"
       (as-str title)
-      ""
+      (notes/tree/root-body note-path)
       ""
       (notes/tree/heading-kids note-path))))
 
@@ -3455,6 +3468,7 @@
     (note-path outline)
     (seq
       (notes/tree/clear-headings note-path)
+      (notes/tree/write-root-body note-path (outline/body outline))
       (list/foldl
         (lambda
           (acc kid)
@@ -3462,6 +3476,29 @@
         0
         (outline/kids outline))
       note-path)))
+
+;; Persist the top-level (root) outline node's body onto the note node itself.
+;; i-rootbody-1: save-outline previously only wrote child headings, so any
+;; body kept on the root node was dropped on upsert. Store it as a "body" key
+;; on the note's content and read it back in load-outline/root-body.
+(define notes/tree/write-root-body
+  (lambda
+    (note-path body)
+    (let
+      ((cur (tree/get note-path)))
+      (if
+        (null? cur)
+        note-path
+        (let
+          ((n (notes/tree/parse cur))
+            (b (notes/tree/body n)))
+          (seq
+            (tree/upsert
+              note-path
+              "note"
+              "note"
+              (dict-set b "body" (as-str body)))
+            note-path))))))
 
 (define notes/tree/sort-by-name
   (lambda
