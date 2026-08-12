@@ -39,7 +39,7 @@
           (string-eq (as-str list-id) "")
           (todo/ensure-inbox)
           (as-str list-id))))
-      (create
+      (todo/db/create
         (quote todo-item)
         (dict-set*
           "{}"
@@ -108,7 +108,7 @@
                     (html/button (html/attr "type" "submit") "Add")))))))))))
 
 (define todo/all-items
-  (lambda () (rows (quote todo-item) 200)))
+  (lambda () (todo/db/rows (quote todo-item) 200)))
 
 (define todo/archive
   (lambda (id) (todo/set-state id "ARCHIVED")))
@@ -146,7 +146,7 @@
 (define todo/create-list
   (lambda
     (title)
-    (create
+    (todo/db/create
       (quote todo-list)
       (dict-set*
         "{}"
@@ -162,7 +162,7 @@
   (lambda
     (id)
     (let
-      ((row (get (quote todo-item) id)))
+      ((row (todo/db/get (quote todo-item) id)))
       (if
         (null? row)
         ()
@@ -291,7 +291,7 @@
         (todo/db/update type id (dict-set fields field value))))))
 
 (define todo/delete
-  (lambda (id) (delete (quote todo-item) id)))
+  (lambda (id) (todo/db/delete (quote todo-item) id)))
 
 (define todo/delete-list
   (lambda
@@ -311,7 +311,7 @@
               "default"
               (seq
                 (todo/delete-list-items (todo/all-items) lid)
-                (seq (delete (quote todo-list) lid) "ok")))))))))
+                (seq (todo/db/delete (quote todo-list) lid) "ok")))))))))
 
 (define todo/delete-list-items
   (lambda
@@ -428,7 +428,7 @@
       ((found (todo/find-default-list)))
       (if
         (null? found)
-        (create
+        (todo/db/create
           (quote todo-list)
           (dict-set*
             "{}"
@@ -461,10 +461,10 @@
   (lambda () (todo/find-default-in (todo/lists))))
 
 (define todo/get-item
-  (lambda (id) (get (quote todo-item) id)))
+  (lambda (id) (todo/db/get (quote todo-item) id)))
 
 (define todo/get-list
-  (lambda (id) (get (quote todo-list) id)))
+  (lambda (id) (todo/db/get (quote todo-list) id)))
 
 (define todo/handle-post
   (lambda
@@ -1386,7 +1386,7 @@
   (lambda (fields) (as-str (dict-get fields "title"))))
 
 (define todo/lists
-  (lambda () (rows (quote todo-list) 50)))
+  (lambda () (todo/db/rows (quote todo-list) 50)))
 
 (define todo/main-html
   (lambda
@@ -1685,7 +1685,7 @@
               (string-eq (as-str list-id) "")
               (todo/ensure-inbox)
               (as-str list-id))))
-          (update
+          (todo/db/update
             (quote todo-item)
             id
             (dict-set*
@@ -1705,7 +1705,7 @@
 (define todo/set-state
   (lambda
     (id state)
-    (update-field
+    (todo/db/update-field
       (quote todo-item)
       id
       "state"
@@ -1815,11 +1815,11 @@
   (lambda
     (id)
     (let
-      ((row (get (quote todo-item) id)))
+      ((row (todo/db/get (quote todo-item) id)))
       (if
         (null? row)
         ()
-        (update-field
+        (todo/db/update-field
           (quote todo-item)
           id
           "done"
