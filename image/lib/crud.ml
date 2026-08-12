@@ -1,15 +1,17 @@
-(** Pricklypear Image — CRUD primitives over the `data_rows` table.
+(** Pricklypear Image — CRUD primitives over the one-tree datum namespace.
 
     get/create/update/delete/rows are normal prims returning real DB
     results. They compose:
       (define u (get 'user 42))
       (str u)
 
-    Per spec [storage.types] / migration 003 + [one-tree.branching-interaction]
-    /data DECISION (user-owned data):
-      - `data_rows(id uuid PK, type_name text, fields jsonb, author text, ...)`
-      - Data rows are NOT branch-versioned (no branch_id); fork/merge
-        copies code, not data.
+    Per spec [one-tree.branching-interaction] /data DECISION (user-owned
+    data) + [one-tree.migration-plan] (user-scoping):
+      - Datum nodes live in tree_nodes; reads project through the
+        tree_data_rows view. The scaffolding data_rows table is the
+        reverse-mirror kept warm for residual readers / fork-copy.
+      - Data is NOT branch-versioned (no branch_id); fork/merge copies
+        code, not data.
       - Visibility is USER-SCOPED: a session sees rows it authored plus
         the shared seed corpus (bible-*, strongs-entry). Prim SQL
         enforces this; RLS on tree_nodes is the floor (migration 013).
@@ -18,14 +20,19 @@
       - No ORM; parameterized SQL via pgx. Multi-step atomicity uses
         Store.with_dynamic_transaction / (with-transaction …).
 
-    Uses [Io_lwt.Db.current_conn] so in-tx calls see the bound connection.
-    Misses return VNil so Lisp can branch on `(if (get 'user id) ...)`. *)
+    Uses [Io_lwt.Db.current_conn] so in-tx calls see the bound connection
+    (read prims run inside with_transaction so set_local_pp_user keeps the
+    RLS floor active; see i-rls-nontx).  Misses return VNil so Lisp can
+    branch on `(if (get 'user id) ...)`. *)
 open Pricklypear_lisp.Ast
 
-(* Reads go through data_rows with an explicit author/seed confinement
-   predicate (primary control). tree_data_rows remains available when
-   PP_TREE_READS=1; the view also confines when pp.user is set. Writes
-   always hit data_rows (forward mirror keeps the tree in lockstep). *)
+(* Reads project through tree_data_rows (the tree_nodes datum view),
+   UNCONDITIONALLY, with an explicit author/seed confinement predicate
+   (primary control) plus the RLS floor on tree_nodes (migration 013).
+   tree_data_rows is not behind the legacy PP_TREE_READS flag — the tree
+   view is the read source of truth. Writes go through Tree_store into
+   tree_nodes directly; the reverse trigger mirrors tree_nodes back into
+   the data_rows scaffolding table (residual readers / fork-copy). *)
 let data_rel () = "tree_data_rows"
 
 (** Session username for confinement. Prefer Request_context snapshot
@@ -67,8 +74,9 @@ let value_of_id cell : value =
     INSERTs a row into type_defs with branch_id = session's branch and
     fields = JSON array ["field1","field2",...] (the field names in
     declared order). Per spec [storage.types]: type declarations are
-    metadata; the actual data lives in data_rows (user-scoped + shared seed)
-    (migration 003) keyed by (type_name, id). Type declarations may
+    metadata; the actual data lives in datum nodes (tree_nodes, projected
+    via tree_data_rows), user-scoped + shared seed (migration 013)
+    keyed by (type_name, id). Type declarations may
     eventually drive field-level validation; for now they're documentation.
 
     The first arg is the type name, then zero or more field names —
