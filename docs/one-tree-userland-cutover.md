@@ -88,13 +88,26 @@ cd /tmp/pp-audit && grep -rEno '\((get|create|update|update-field|delete|rows|fi
 
 ## Tasks
 
-- [ ] **1. todo** — 24 real sites (`todo/lib.pp` 16, `todo/list` 4,
-  `todo/item` 4). Types: `todo-item`, `todo-list`. Patterns: `(rows 't
-  N)` list pages ×6, `(get 't id)` ×8, `(delete …)` ×5, finds via
-  `find-rows`-adjacent helpers inside lib. List-page callers expect
-  `(id . fields-json)` pairs — either `(tree/note-index …)`-style
-  adaption or reshape consumers to node JSON. **Blocks kanban.**
-  Smoke: `/todos` list, add item, toggle done, delete item, lists page.
+- [x] **1. todo** — DONE 2026-08-12. Actual count was **40 real sites**
+  (the doc's "24" undercounted: it missed multi-line `create`/`update`/
+  `update-field` calls). All migrated to the `todo/tree/*` wrappers
+  already on `system/main` (`tree/get`/`rows`/`create`/`save`/`del`/
+  `set-field` + `node-path`). `todo/tree/del` and `todo/tree/save`
+  redefined to return the row **id** (preserving old prim return shapes:
+  old `delete`/`update`/`update-field` returned id; `tree/delete` returns
+  `1`, `tree/upsert` returns a path). Typed-boundary fix: added
+  `"done" "false"` to the 3 `create-item` field lists (`todo-item` is a
+  declared 7-field type: list_id title notes state due position done).
+  `dict-set*` already emits native JSON types (`false`/`0`), so no data
+  format change. Promoted to `system/main`; repo `libs/todo/` vaulted.
+  Smoke green: list/get/create/cycle/toggle/save/delete + list CRUD +
+  ensure-inbox. Data parity: tree == projection (8 items / 95 lists).
+  **Pre-existing stray `todo/db/*` adapters** (11 defs, tree-native, from
+  a killed prior iteration's partial work — already committed in the
+  2026-08-12 repo HEAD and present on live `system/main`) remain on main;
+  they are unused (call sites now use `todo/tree/*`) and tree-native so
+  they don't trip the old-family grep, but should be removed in a
+  follow-up (filed to habitat `log/issues`). **Blocks kanban.**
 
 - [ ] **2. notes doc CRUD** — 8 live sites excluding `notes/migrate`
   (which is intentional archaeology tooling — **leave it alone**).

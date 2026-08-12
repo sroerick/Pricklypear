@@ -2,16 +2,16 @@
 ;; Sync: scripts/pp_sync.py pull|push
 
 (define todo/list
-  (lambda () (rows (quote todo-item) 50)))
+  (lambda () (todo/tree/rows "todo-item" 50)))
 
 (define todo/list/all
-  (lambda () (rows (quote todo-list) 50)))
+  (lambda () (todo/tree/rows "todo-list" 50)))
 
 (define todo/list/create
   (lambda
     (title)
-    (create
-      (quote todo-list)
+    (todo/tree/create
+      "todo-list"
       (dict-set*
         "{}"
         (list
@@ -47,7 +47,7 @@
               "default"
               (seq
                 (todo/list/delete-items (todo/item/all) lid)
-                (seq (delete (quote todo-list) lid) "ok")))))))))
+                (seq (todo/tree/del "todo-list" lid) "ok")))))))))
 
 (define todo/list/delete-items
   (lambda
@@ -71,8 +71,8 @@
       ((found (todo/list/find-default)))
       (if
         (null? found)
-        (create
-          (quote todo-list)
+        (todo/tree/create
+          "todo-list"
           (dict-set*
             "{}"
             (list
@@ -104,7 +104,7 @@
             (todo/list/find-default-in (cdr xs))))))))
 
 (define todo/list/get
-  (lambda (id) (get (quote todo-list) id)))
+  (lambda (id) (todo/tree/get "todo-list" id)))
 
 (define todo/list/nav-li
   (lambda

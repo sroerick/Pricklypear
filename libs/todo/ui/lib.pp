@@ -63,9 +63,7 @@
           (html/join
             (list
               (html/p* (html/attr "class" "err") "Item not found.")
-              (html/a
-                (string-append "/todos?view=" view)
-                "← back"))))
+              (html/a (string-append "/todos?view=" view) "← back"))))
         (let
           ((title (todo/item/title fields)))
           (let

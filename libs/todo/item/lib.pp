@@ -19,8 +19,8 @@
           (string-eq (as-str list-id) "")
           (todo/list/ensure-inbox)
           (as-str list-id))))
-      (create
-        (quote todo-item)
+      (todo/tree/create
+        "todo-item"
         (dict-set*
           "{}"
           (list
@@ -35,10 +35,12 @@
             "due"
             ""
             "position"
-            "0"))))))
+            "0"
+            "done"
+            "false"))))))
 
 (define todo/item/all
-  (lambda () (rows (quote todo-item) 200)))
+  (lambda () (todo/tree/rows "todo-item" 200)))
 
 (define todo/item/archive
   (lambda (id) (todo/item/set-state id "ARCHIVED")))
@@ -74,7 +76,7 @@
   (lambda
     (id)
     (let
-      ((row (get (quote todo-item) id)))
+      ((row (todo/tree/get "todo-item" id)))
       (if
         (null? row)
         ()
@@ -86,7 +88,7 @@
             (todo/item/set-state id (todo/state/next cur))))))))
 
 (define todo/item/delete
-  (lambda (id) (delete (quote todo-item) id)))
+  (lambda (id) (todo/tree/del "todo-item" id)))
 
 (define todo/item/due
   (lambda
@@ -113,7 +115,7 @@
         (todo/item/all)))))
 
 (define todo/item/get
-  (lambda (id) (get (quote todo-item) id)))
+  (lambda (id) (todo/tree/get "todo-item" id)))
 
 (define todo/item/html
   (lambda
@@ -343,8 +345,8 @@
               (string-eq (as-str list-id) "")
               (todo/list/ensure-inbox)
               (as-str list-id))))
-          (update
-            (quote todo-item)
+          (todo/tree/save
+            "todo-item"
             id
             (dict-set*
               fields
@@ -363,8 +365,8 @@
 (define todo/item/set-state
   (lambda
     (id state)
-    (update-field
-      (quote todo-item)
+    (todo/tree/set-field
+      "todo-item"
       id
       "state"
       (as-str state))))
