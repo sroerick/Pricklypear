@@ -96,30 +96,33 @@ let deftype (store : Store.t) ~(args : value list)
     Returns the row's `fields` JSON as a VStr so Lisp can pass it
     onward; or VNil if not found. *)
 let get (store : Store.t) ~(type_name : string) ~(id : string) : value =
-  match Io_lwt.Db.current_conn store with
-  | None -> VNil
-  | Some conn ->
-      let user = session_user () in
-      let sql =
-        "SELECT fields::text FROM " ^ data_rel () ^ " " ^
-        "WHERE type_name = $1 AND id = $2::uuid AND " ^
-        visible_sql ~user_param:3 in
-      let rows =
-        Io_lwt.Db.execute conn
-          ~params:[ Pgx.Value.of_string type_name;
-                    Pgx.Value.of_string id;
-                    Pgx.Value.of_string user ]
-          sql
-      in
-      (match rows with
-       | [] -> VNil
-       | row :: _ ->
-           (match row with
-            | [ fields_cell ] ->
-                (match Pgx.Value.to_string fields_cell with
-                 | Some s -> (VStr s)
-                 | None -> VNil)
-            | _ -> VNil))
+  (* Route through with_transaction so set_local_pp_user runs and the RLS
+     floor (tree_data_rows / tree_nodes policy, migration 013) is active.
+     The callback conn is the tx conn (set pp.user is LOCAL to it). *)
+  Io_lwt.Db.with_transaction store (function
+    | None -> VNil
+    | Some conn ->
+        let user = session_user () in
+        let sql =
+          "SELECT fields::text FROM " ^ data_rel () ^ " " ^
+          "WHERE type_name = $1 AND id = $2::uuid AND " ^
+          visible_sql ~user_param:3 in
+        let rows =
+          Io_lwt.Db.execute conn
+            ~params:[ Pgx.Value.of_string type_name;
+                      Pgx.Value.of_string id;
+                      Pgx.Value.of_string user ]
+            sql
+        in
+        (match rows with
+         | [] -> VNil
+         | row :: _ ->
+             (match row with
+              | [ fields_cell ] ->
+                  (match Pgx.Value.to_string fields_cell with
+                   | Some s -> (VStr s)
+                   | None -> VNil)
+              | _ -> VNil)))
 
 (** (select-for-update 'type id) -> VStr fields-json | VNil.
     Reads ONE row by (type_name, id) AND locks it with SELECT ... FOR
@@ -278,99 +281,21 @@ let delete (store : Store.t) ~(type_name : string) ~(id : string) : value =
 let list
     (store : Store.t) ~(type_name : string) ?(limit : int = 100) ()
     : value =
-  match Io_lwt.Db.current_conn store with
-  | None -> (VList [])
-  | Some conn ->
-      let user = session_user () in
-      let sql =
-        "SELECT id::text, fields::text FROM " ^ data_rel () ^ " " ^
-        "WHERE type_name = $1 AND " ^ visible_sql ~user_param:3 ^ " " ^
-        "ORDER BY created_at ASC LIMIT $2" in
-      let rows =
-        Io_lwt.Db.execute conn
-          ~params:[ Pgx.Value.of_string type_name;
-                    Pgx.Value.of_int limit;
-                    Pgx.Value.of_string user ]
-          sql
-      in
-      let lisp_rows =
-        List.map
-          (fun row ->
-            match row with
-            | [ id_cell; fields_cell ] ->
-                VPair (value_of_id id_cell, value_of_id fields_cell)
-            | _ -> VNil)
-          rows
-      in
-      (VList lisp_rows)
-
-(** (find-row 'type "field" "value") -> VStr fields-json | VNil.
-    First row where fields->>field = value (text equality). *)
-let find_row
-    (store : Store.t) ~(type_name : string) ~(field : string) ~(value : string)
-    : value =
-  match Io_lwt.Db.current_conn store with
-  | None -> VNil
-  | Some conn ->
-      let user = session_user () in
-      let sql =
-        "SELECT fields::text FROM " ^ data_rel () ^ " " ^
-        "WHERE type_name = $1 AND fields->>$2 = $3 AND " ^
-        visible_sql ~user_param:4 ^ " " ^
-        "ORDER BY created_at ASC LIMIT 1"
-      in
-      let rows =
-        Io_lwt.Db.execute conn
-          ~params:[ Pgx.Value.of_string type_name
-                  ; Pgx.Value.of_string field
-                  ; Pgx.Value.of_string value
-                  ; Pgx.Value.of_string user ]
-          sql
-      in
-      (match rows with
-       | [] -> VNil
-       | row :: _ ->
-           (match row with
-            | [ fields_cell ] -> (value_of_id fields_cell)
-            | _ -> VNil))
-
-(** (find-rows 'type "f1" "v1" "f2" "v2" ... [limit])
-    -> VList of (id . fields) pairs.
-    All field filters AND together (fields->>k = v text). Optional
-    trailing VInt limit (default 500). Orders by created_at ASC. *)
-let find_rows
-    (store : Store.t) ~(type_name : string)
-    ~(filters : (string * string) list) ?(limit : int = 500) ()
-    : value =
-  match Io_lwt.Db.current_conn store with
-  | None -> (VList [])
-  | Some conn ->
-      if filters = [] then list store ~type_name ~limit ()
-      else
+  Io_lwt.Db.with_transaction store (function
+    | None -> (VList [])
+    | Some conn ->
         let user = session_user () in
-        let buf = Buffer.create 128 in
-        Buffer.add_string buf
-          ("SELECT id::text, fields::text FROM " ^ data_rel () ^ " WHERE type_name = $1");
-        let params = ref [ Pgx.Value.of_string type_name ] in
-        let i = ref 2 in
-        List.iter
-          (fun (field, value) ->
-            Buffer.add_string buf
-              (Printf.sprintf " AND fields->>$%d = $%d" !i (!i + 1));
-            params := !params @ [ Pgx.Value.of_string field
-                               ; Pgx.Value.of_string value ];
-            i := !i + 2)
-          filters;
-        Buffer.add_string buf
-          (Printf.sprintf " AND %s" (visible_sql ~user_param:!i));
-        params := !params @ [ Pgx.Value.of_string user ];
-        i := !i + 1;
-        Buffer.add_string buf
-          (Printf.sprintf
-             " ORDER BY COALESCE((fields->>'verse')::int, 0) ASC, created_at ASC LIMIT $%d"
-             !i);
-        params := !params @ [ Pgx.Value.of_int limit ];
-        let rows = Io_lwt.Db.execute conn ~params:!params (Buffer.contents buf) in
+        let sql =
+          "SELECT id::text, fields::text FROM " ^ data_rel () ^ " " ^
+          "WHERE type_name = $1 AND " ^ visible_sql ~user_param:3 ^ " " ^
+          "ORDER BY created_at ASC LIMIT $2" in
+        let rows =
+          Io_lwt.Db.execute conn
+            ~params:[ Pgx.Value.of_string type_name;
+                      Pgx.Value.of_int limit;
+                      Pgx.Value.of_string user ]
+            sql
+        in
         let lisp_rows =
           List.map
             (fun row ->
@@ -380,33 +305,111 @@ let find_rows
               | _ -> VNil)
             rows
         in
-        (VList lisp_rows)
+        (VList lisp_rows))
+
+(** (find-row 'type "field" "value") -> VStr fields-json | VNil.
+    First row where fields->>field = value (text equality). *)
+let find_row
+    (store : Store.t) ~(type_name : string) ~(field : string) ~(value : string)
+    : value =
+  Io_lwt.Db.with_transaction store (function
+    | None -> VNil
+    | Some conn ->
+        let user = session_user () in
+        let sql =
+          "SELECT fields::text FROM " ^ data_rel () ^ " " ^
+          "WHERE type_name = $1 AND fields->>$2 = $3 AND " ^
+          visible_sql ~user_param:4 ^ " " ^
+          "ORDER BY created_at ASC LIMIT 1"
+        in
+        let rows =
+          Io_lwt.Db.execute conn
+            ~params:[ Pgx.Value.of_string type_name
+                    ; Pgx.Value.of_string field
+                    ; Pgx.Value.of_string value
+                    ; Pgx.Value.of_string user ]
+            sql
+        in
+        (match rows with
+         | [] -> VNil
+         | row :: _ ->
+             (match row with
+              | [ fields_cell ] -> (value_of_id fields_cell)
+              | _ -> VNil)))
+
+(** (find-rows 'type "f1" "v1" "f2" "v2" ... [limit])
+    -> VList of (id . fields) pairs.
+    All field filters AND together (fields->>k = v text). Optional
+    trailing VInt limit (default 500). Orders by created_at ASC. *)
+let find_rows
+    (store : Store.t) ~(type_name : string)
+    ~(filters : (string * string) list) ?(limit : int = 500) ()
+    : value =
+  Io_lwt.Db.with_transaction store (function
+    | None -> (VList [])
+    | Some conn ->
+        if filters = [] then list store ~type_name ~limit ()
+        else
+          let user = session_user () in
+          let buf = Buffer.create 128 in
+          Buffer.add_string buf
+            ("SELECT id::text, fields::text FROM " ^ data_rel () ^ " WHERE type_name = $1");
+          let params = ref [ Pgx.Value.of_string type_name ] in
+          let i = ref 2 in
+          List.iter
+            (fun (field, value) ->
+              Buffer.add_string buf
+                (Printf.sprintf " AND fields->>$%d = $%d" !i (!i + 1));
+              params := !params @ [ Pgx.Value.of_string field
+                                 ; Pgx.Value.of_string value ];
+              i := !i + 2)
+            filters;
+          Buffer.add_string buf
+            (Printf.sprintf " AND %s" (visible_sql ~user_param:!i));
+          params := !params @ [ Pgx.Value.of_string user ];
+          i := !i + 1;
+          Buffer.add_string buf
+            (Printf.sprintf
+               " ORDER BY COALESCE((fields->>'verse')::int, 0) ASC, created_at ASC LIMIT $%d"
+               !i);
+          params := !params @ [ Pgx.Value.of_int limit ];
+          let rows = Io_lwt.Db.execute conn ~params:!params (Buffer.contents buf) in
+          let lisp_rows =
+            List.map
+              (fun row ->
+                match row with
+                | [ id_cell; fields_cell ] ->
+                    VPair (value_of_id id_cell, value_of_id fields_cell)
+                | _ -> VNil)
+              rows
+          in
+          (VList lisp_rows))
 
 (** (find-random 'type) -> (id . fields) pair | VNil.
     One random row of the given type (for bible/random etc.). *)
 let find_random (store : Store.t) ~(type_name : string) : value =
-  match Io_lwt.Db.current_conn store with
-  | None -> VNil
-  | Some conn ->
-      let user = session_user () in
-      let sql =
-        "SELECT id::text, fields::text FROM " ^ data_rel () ^ " " ^
-        "WHERE type_name = $1 AND " ^ visible_sql ~user_param:2 ^ " " ^
-        "ORDER BY random() LIMIT 1"
-      in
-      let rows =
-        Io_lwt.Db.execute conn
-          ~params:[ Pgx.Value.of_string type_name;
-                    Pgx.Value.of_string user ]
-          sql
-      in
-      (match rows with
-       | [] -> VNil
-       | row :: _ ->
-           (match row with
-            | [ id_cell; fields_cell ] ->
-                (VPair (value_of_id id_cell, value_of_id fields_cell))
-            | _ -> VNil))
+  Io_lwt.Db.with_transaction store (function
+    | None -> VNil
+    | Some conn ->
+        let user = session_user () in
+        let sql =
+          "SELECT id::text, fields::text FROM " ^ data_rel () ^ " " ^
+          "WHERE type_name = $1 AND " ^ visible_sql ~user_param:2 ^ " " ^
+          "ORDER BY random() LIMIT 1"
+        in
+        let rows =
+          Io_lwt.Db.execute conn
+            ~params:[ Pgx.Value.of_string type_name;
+                      Pgx.Value.of_string user ]
+            sql
+        in
+        (match rows with
+         | [] -> VNil
+         | row :: _ ->
+             (match row with
+              | [ id_cell; fields_cell ] ->
+                  (VPair (value_of_id id_cell, value_of_id fields_cell))
+              | _ -> VNil)))
 
 (** (find-text 'type "field" "needle" [limit]) -> VList of (id . fields).
     Case-insensitive substring match on fields->>field. *)
@@ -414,36 +417,36 @@ let find_text
     (store : Store.t) ~(type_name : string) ~(field : string)
     ~(needle : string) ?(limit : int = 50) ()
     : value =
-  match Io_lwt.Db.current_conn store with
-  | None -> (VList [])
-  | Some conn ->
-      let user = session_user () in
-      let sql =
-        "SELECT id::text, fields::text FROM " ^ data_rel () ^ " " ^
-        "WHERE type_name = $1 AND fields->>$2 ILIKE $3 AND " ^
-        visible_sql ~user_param:5 ^ " " ^
-        "ORDER BY created_at ASC LIMIT $4"
-      in
-      let pat = "%" ^ needle ^ "%" in
-      let rows =
-        Io_lwt.Db.execute conn
-          ~params:[ Pgx.Value.of_string type_name
-                  ; Pgx.Value.of_string field
-                  ; Pgx.Value.of_string pat
-                  ; Pgx.Value.of_int limit
-                  ; Pgx.Value.of_string user ]
-          sql
-      in
-      let lisp_rows =
-        List.map
-          (fun row ->
-            match row with
-            | [ id_cell; fields_cell ] ->
-                VPair (value_of_id id_cell, value_of_id fields_cell)
-            | _ -> VNil)
-          rows
-      in
-      (VList lisp_rows)
+  Io_lwt.Db.with_transaction store (function
+    | None -> (VList [])
+    | Some conn ->
+        let user = session_user () in
+        let sql =
+          "SELECT id::text, fields::text FROM " ^ data_rel () ^ " " ^
+          "WHERE type_name = $1 AND fields->>$2 ILIKE $3 AND " ^
+          visible_sql ~user_param:5 ^ " " ^
+          "ORDER BY created_at ASC LIMIT $4"
+        in
+        let pat = "%" ^ needle ^ "%" in
+        let rows =
+          Io_lwt.Db.execute conn
+            ~params:[ Pgx.Value.of_string type_name
+                    ; Pgx.Value.of_string field
+                    ; Pgx.Value.of_string pat
+                    ; Pgx.Value.of_int limit
+                    ; Pgx.Value.of_string user ]
+            sql
+        in
+        let lisp_rows =
+          List.map
+            (fun row ->
+              match row with
+              | [ id_cell; fields_cell ] ->
+                  VPair (value_of_id id_cell, value_of_id fields_cell)
+              | _ -> VNil)
+            rows
+        in
+        (VList lisp_rows))
 
 (* ---- OCaml UI helpers (image.data-browser) — not Lisp prims ---- *)
 
