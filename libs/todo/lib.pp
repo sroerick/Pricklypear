@@ -1,4 +1,4 @@
-;; package todo -- exported from live branch admin/personal
+;; package todo -- exported from live branch system/main
 ;; Sync: scripts/pp_sync.py pull|push
 
 (package todo
@@ -172,6 +172,123 @@
             (todo/archived? cur)
             cur
             (todo/set-state id (todo/next-state cur))))))))
+
+(define todo/db/create
+  (lambda
+    (type fields)
+    (let
+      ((r
+        (tree/upsert
+          (node-path type "new")
+          "datum"
+          (as-str type)
+          fields)))
+      (if
+        (string-starts-with? r "data.")
+        (todo/db/path-id r)
+        r))))
+
+(define todo/db/delete
+  (lambda
+    (type id)
+    (let
+      ((p (node-path type (as-str id))))
+      (if
+        (null? (tree/get p))
+        ()
+        (seq (tree/delete p) (as-str id))))))
+
+(define todo/db/get
+  (lambda
+    (type id)
+    (let
+      ((n (tree/get (node-path type (as-str id)))))
+      (if (null? n) () (dict-get n "body")))))
+
+(define todo/db/insert-by-created
+  (lambda
+    (n sorted)
+    (if
+      (null? sorted)
+      (list n)
+      (if
+        (string<?
+          (as-str (dict-get n "created_at"))
+          (as-str (dict-get (car sorted) "created_at")))
+        (cons n sorted)
+        (cons
+          (car sorted)
+          (todo/db/insert-by-created n (cdr sorted)))))))
+
+(define todo/db/node-row
+  (lambda
+    (node)
+    (cons
+      (todo/db/path-id (dict-get node "path"))
+      (dict-get node "body"))))
+
+(define todo/db/path-id
+  (lambda
+    (path)
+    (let
+      ((h (substring path (- (string-length path) 32) 32)))
+      (string-append
+        (substring h 0 8)
+        "-"
+        (substring h 8 4)
+        "-"
+        (substring h 12 4)
+        "-"
+        (substring h 16 4)
+        "-"
+        (substring h 20 12)))))
+
+(define todo/db/prefix
+  (lambda
+    (type)
+    (let
+      ((p (node-path type "")))
+      (substring p 0 (- (string-length p) 1)))))
+
+(define todo/db/rows
+  (lambda
+    (type limit)
+    (map
+      todo/db/node-row
+      (todo/db/sort-by-created
+        (tree/list-kind (todo/db/prefix type) "datum" limit)))))
+
+(define todo/db/sort-by-created
+  (lambda
+    (ns)
+    (if
+      (null? ns)
+      (list)
+      (todo/db/insert-by-created
+        (car ns)
+        (todo/db/sort-by-created (cdr ns))))))
+
+(define todo/db/update
+  (lambda
+    (type id fields)
+    (let
+      ((p (node-path type (as-str id))))
+      (if
+        (null? (tree/get p))
+        ()
+        (let
+          ((r (tree/upsert p "datum" (as-str type) fields)))
+          (if (string-starts-with? r "data.") (as-str id) r))))))
+
+(define todo/db/update-field
+  (lambda
+    (type id field value)
+    (let
+      ((fields (todo/db/get type (as-str id))))
+      (if
+        (null? fields)
+        ()
+        (todo/db/update type id (dict-set fields field value))))))
 
 (define todo/delete
   (lambda (id) (delete (quote todo-item) id)))
@@ -511,7 +628,7 @@
           (string-eq (as-str list-id) "")
           (todo/list/ensure-inbox)
           (as-str list-id))))
-      (create
+      (todo/db/create
         (quote todo-item)
         (dict-set*
           "{}"
@@ -530,7 +647,7 @@
             "0"))))))
 
 (define todo/item/all
-  (lambda () (rows (quote todo-item) 200)))
+  (lambda () (todo/db/rows (quote todo-item) 200)))
 
 (define todo/item/archive
   (lambda (id) (todo/item/set-state id "ARCHIVED")))
@@ -566,7 +683,7 @@
   (lambda
     (id)
     (let
-      ((row (get (quote todo-item) id)))
+      ((row (todo/db/get (quote todo-item) id)))
       (if
         (null? row)
         ()
@@ -578,7 +695,7 @@
             (todo/item/set-state id (todo/state/next cur))))))))
 
 (define todo/item/delete
-  (lambda (id) (delete (quote todo-item) id)))
+  (lambda (id) (todo/db/delete (quote todo-item) id)))
 
 (define todo/item/due
   (lambda
@@ -605,7 +722,7 @@
         (todo/item/all)))))
 
 (define todo/item/get
-  (lambda (id) (get (quote todo-item) id)))
+  (lambda (id) (todo/db/get (quote todo-item) id)))
 
 (define todo/item/html
   (lambda
@@ -835,7 +952,7 @@
               (string-eq (as-str list-id) "")
               (todo/list/ensure-inbox)
               (as-str list-id))))
-          (update
+          (todo/db/update
             (quote todo-item)
             id
             (dict-set*
@@ -855,7 +972,7 @@
 (define todo/item/set-state
   (lambda
     (id state)
-    (update-field
+    (todo/db/update-field
       (quote todo-item)
       id
       "state"
@@ -956,7 +1073,7 @@
   1)
 
 (define todo/list
-  (lambda () (rows (quote todo-item) 50)))
+  (lambda () (todo/db/rows (quote todo-item) 50)))
 
 (define todo/list-default?
   (lambda
@@ -1093,12 +1210,12 @@
   (lambda (fields) (as-str (dict-get fields "title"))))
 
 (define todo/list/all
-  (lambda () (rows (quote todo-list) 50)))
+  (lambda () (todo/db/rows (quote todo-list) 50)))
 
 (define todo/list/create
   (lambda
     (title)
-    (create
+    (todo/db/create
       (quote todo-list)
       (dict-set*
         "{}"
@@ -1135,7 +1252,7 @@
               "default"
               (seq
                 (todo/list/delete-items (todo/item/all) lid)
-                (seq (delete (quote todo-list) lid) "ok")))))))))
+                (seq (todo/db/delete (quote todo-list) lid) "ok")))))))))
 
 (define todo/list/delete-items
   (lambda
@@ -1159,7 +1276,7 @@
       ((found (todo/list/find-default)))
       (if
         (null? found)
-        (create
+        (todo/db/create
           (quote todo-list)
           (dict-set*
             "{}"
@@ -1192,7 +1309,7 @@
             (todo/list/find-default-in (cdr xs))))))))
 
 (define todo/list/get
-  (lambda (id) (get (quote todo-list) id)))
+  (lambda (id) (todo/db/get (quote todo-list) id)))
 
 (define todo/list/nav-li
   (lambda
@@ -1707,6 +1824,113 @@
           id
           "done"
           (if (todo/done? row) "false" "true"))))))
+
+(define todo/tree/create
+  (lambda
+    (t fields)
+    (let
+      ((r (tree/upsert (node-path t "new") "datum" t fields)))
+      (if
+        (todo/tree/path-ok? r)
+        (todo/tree/redash (todo/tree/tail r))
+        r))))
+
+(define todo/tree/del
+  (lambda (t id) (tree/delete (node-path t (as-str id)))))
+
+(define todo/tree/get
+  (lambda
+    (t id)
+    (let
+      ((n (tree/get (node-path t (as-str id)))))
+      (if (null? n) (list) (dict-get n "body")))))
+
+(define todo/tree/insert-by-created
+  (lambda
+    (nj sorted)
+    (if
+      (null? sorted)
+      (list nj)
+      (if
+        (string<?
+          (as-str (dict-get nj "created_at"))
+          (as-str (dict-get (car sorted) "created_at")))
+        (cons nj sorted)
+        (cons
+          (car sorted)
+          (todo/tree/insert-by-created nj (cdr sorted)))))))
+
+(define todo/tree/node->pair
+  (lambda
+    (nj)
+    (cons
+      (todo/tree/redash (todo/tree/tail (dict-get nj "path")))
+      (dict-get nj "body"))))
+
+(define todo/tree/path-ok?
+  (lambda
+    (r)
+    (if
+      (null? r)
+      #f
+      (string-eq (substring (as-str r) 0 5) "data."))))
+
+(define todo/tree/prefix
+  (lambda
+    (t)
+    (let
+      ((p (node-path t "")))
+      (substring p 0 (- (string-length p) 1)))))
+
+(define todo/tree/redash
+  (lambda
+    (h)
+    (string-append
+      (substring h 0 8)
+      "-"
+      (substring h 8 4)
+      "-"
+      (substring h 12 4)
+      "-"
+      (substring h 16 4)
+      "-"
+      (substring h 20 12))))
+
+(define todo/tree/rows
+  (lambda
+    (t n)
+    (list/map
+      todo/tree/node->pair
+      (tree/list (todo/tree/prefix t) 1 n))))
+
+(define todo/tree/save
+  (lambda
+    (t id fields)
+    (tree/upsert (node-path t (as-str id)) "datum" t fields)))
+
+(define todo/tree/set-field
+  (lambda
+    (t id f v)
+    (let
+      ((cur (todo/tree/get t id)))
+      (if
+        (null? cur)
+        (list)
+        (todo/tree/save
+          t
+          id
+          (dict-set* cur (list f (as-str v))))))))
+
+(define todo/tree/sort-by-created
+  (lambda
+    (nodes)
+    (list/foldl
+      (lambda (acc n) (todo/tree/insert-by-created n acc))
+      (list)
+      nodes)))
+
+(define todo/tree/tail
+  (lambda (p) (substring p (- (string-length p) 32) 32)))
 
 (define todo/ui/add-form
   (lambda
