@@ -212,13 +212,17 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
           (Pricklypear_lisp.Ast.VStr
                "find-row: need type, field, value"));
 
-  (* (find-rows 'type "f" "v" … [limit]) -> list of (id . fields) *)
+  (* (find-rows 'type "f" "v" … [limit] [sort]) -> list of (id . fields) *)
   register_crud "find-rows"
     (fun args ->
       let rec parse_filters acc = function
-        | [] -> Ok (List.rev acc, 500)
+        | [] -> Ok (List.rev acc, 500, None)
         | [ Pricklypear_lisp.Ast.VInt n ] ->
-            Ok (List.rev acc, Int64.to_int n)
+            Ok (List.rev acc, Int64.to_int n, None)
+        | [ Pricklypear_lisp.Ast.VStr s ] ->
+            Ok (List.rev acc, 500, Some s)
+        | [ Pricklypear_lisp.Ast.VInt n; Pricklypear_lisp.Ast.VStr s ] ->
+            Ok (List.rev acc, Int64.to_int n, Some s)
         | Pricklypear_lisp.Ast.VStr f :: Pricklypear_lisp.Ast.VStr v :: rest ->
             parse_filters ((f, v) :: acc) rest
         | _ -> Error "find-rows: bad filter args"
@@ -230,8 +234,8 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
                raise (Pricklypear_lisp.Ast.Interp_error
                         (Pricklypear_lisp.Ast.Prim_error
                            ("find-rows", e, "bad-args")))
-           | Ok (filters, limit) ->
-               Crud.find_rows t.store ~type_name ~filters ~limit ())
+           | Ok (filters, limit, sort) ->
+               Crud.find_rows t.store ~type_name ~filters ~limit ~sort ())
       | _ ->
           (Pricklypear_lisp.Ast.VStr
                "find-rows: need type and field/value pairs"));

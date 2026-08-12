@@ -371,13 +371,17 @@ let find_row
               | [ fields_cell ] -> (value_of_id fields_cell)
               | _ -> VNil)))
 
-(** (find-rows 'type "f1" "v1" "f2" "v2" ... [limit])
+(** (find-rows 'type "f1" "v1" "f2" "v2" ... [limit] [sort])
     -> VList of (id . fields) pairs.
     All field filters AND together (fields->>k = v text). Optional
-    trailing VInt limit (default 500). Orders by created_at ASC. *)
+    trailing VInt limit (default 500) and an optional trailing VStr sort
+    (a raw SQL ORDER BY clause, appended verbatim). Default ORDER BY:
+    created_at ASC. Callers needing domain-specific ordering (e.g. bible
+    verses by verse number) must pass the sort explicitly. *)
 let find_rows
     (store : Store.t) ~(type_name : string)
-    ~(filters : (string * string) list) ?(limit : int = 500) ()
+    ~(filters : (string * string) list) ?(limit : int = 500)
+    ?(sort : string option = None) ()
     : value =
   Io_lwt.Db.with_transaction store (function
     | None -> (VList [])
@@ -402,10 +406,12 @@ let find_rows
             (Printf.sprintf " AND %s" (visible_sql ~user_param:!i));
           params := !params @ [ Pgx.Value.of_string user ];
           i := !i + 1;
-          Buffer.add_string buf
-            (Printf.sprintf
-               " ORDER BY COALESCE((fields->>'verse')::int, 0) ASC, created_at ASC LIMIT $%d"
-               !i);
+          let order_by =
+            match sort with
+            | Some s -> " ORDER BY " ^ s ^ " LIMIT "
+            | None -> " ORDER BY created_at ASC LIMIT "
+          in
+          Buffer.add_string buf (Printf.sprintf "%s$%d" order_by !i);
           params := !params @ [ Pgx.Value.of_int limit ];
           let rows = Io_lwt.Db.execute conn ~params:!params (Buffer.contents buf) in
           let lisp_rows =
