@@ -19,6 +19,7 @@ type eff =
   | Txn
   | Net
 
+(** Canonical string name for an [eff]. Inverse of [eff_of_string]. *)
 let eff_to_string = function
   | Pure -> "pure"
   | ReadDb -> "read-db"
@@ -30,6 +31,7 @@ let eff_to_string = function
   | Txn -> "txn"
   | Net -> "net"
 
+(** Parse a string into an [eff]; [None] if the name is unknown. Inverse of [eff_to_string]. *)
 let eff_of_string = function
   | "pure" -> Some Pure
   | "read-db" -> Some ReadDb
@@ -42,6 +44,7 @@ let eff_of_string = function
   | "net" -> Some Net
   | _ -> None
 
+(** Total order on effects (0..8) used to sort sets: higher rank = stronger capability. *)
 let eff_rank = function
   | Pure -> 0
   | Html -> 1
@@ -56,8 +59,10 @@ let eff_rank = function
 module EffSet = struct
   type t = eff list  (* unique, sorted by rank then name *)
 
+  (** The empty effect set (no capabilities). *)
   let empty : t = []
 
+  (** Sort and dedupe an effect list: drop [Pure], order by rank then name. *)
   let normalize (xs : eff list) : t =
     let xs = List.filter (function Pure -> false | _ -> true) xs in
     let xs =
@@ -69,29 +74,38 @@ module EffSet = struct
     in
     xs
 
+  (** Effect set containing exactly [e] (normalized). *)
   let singleton e = normalize [ e ]
 
+  (** Set union, dropping [Pure] and deduping by rank. *)
   let union a b = normalize (a @ b)
 
+  (** Fold [union] over a list of effect sets. *)
   let unions sets = List.fold_left union empty sets
 
+  (** Membership test (linear scan over the normalized list). *)
   let mem e set = List.mem e set
 
+  (** [true] when the set holds no effects. *)
   let is_empty = function [] -> true | _ -> false
 
+  (** [true] when the set is empty (no capabilities required). *)
   let is_pure = is_empty
 
+  (** [true] when every effect of [a] is also in [b]. *)
   let subset (a : t) (b : t) : bool =
     List.for_all (fun e -> mem e b) a
 
+  (** The normalized effect list backing this set. *)
   let to_list s = s
 
+  (** Human-readable rendering: ["pure"] or effects joined by ["+"]. *)
   let pp (s : t) : string =
     if is_pure s then "pure"
     else String.concat "+" (List.map eff_to_string s)
 
+  (** Short UI badge string; collapses to a coarse capability label when one effect dominates. *)
   let badge (s : t) : string =
-    (* short UI badge *)
     if is_pure s then "pure"
     else if mem Ai s then "ai"
     else if mem Publish s then "page"
@@ -182,6 +196,8 @@ let ai_write_prims = [
 (* Portal that only talks to the model (Ai only) — legacy one-shot. *)
 let ai_prims = "agent" :: ai_write_prims
 
+(** Capability set required by a primitive name: the union of its bucket's
+    effects, or the empty set for unrecognized/unknown names. *)
 let effects_for_prim (name : string) : effect_set =
   if List.mem name pure_prims then EffSet.empty
   else if List.mem name read_db_prims then EffSet.singleton ReadDb
@@ -203,6 +219,7 @@ let effects_for_prim (name : string) : effect_set =
 type prim_effect_lookup = string -> effect_set
 type known_fn_lookup = string -> effect_set option
 
+(** Default [effect_set] resolution for prim names — [effects_for_prim]. *)
 let default_prim_lookup = effects_for_prim
 
 (** Build a [known_fn] lookup from visible bindings [(name, body)].
@@ -295,6 +312,7 @@ and infer
 let ai_default_allow : effect_set =
   EffSet.normalize [ ReadDb; WriteDb; Html ]
 
+(** [true] when env var [name] is set to a truthy value (1/true/yes/on). *)
 let env_truthy (name : string) : bool =
   match Sys.getenv_opt name with
   | Some ("1" | "true" | "TRUE" | "yes" | "on") -> true
@@ -312,11 +330,12 @@ let public_route_allow () : effect_set =
   in
   EffSet.normalize base
 
+(** String form of the current public-route allowlist. *)
 let public_route_allow_pp () : string = EffSet.pp (public_route_allow ())
 
+(** Capability policy check: [true] when [got] is a subset of [allow], or when
+    [got] is pure (no capabilities required). *)
 let policy_allows ~(allow : effect_set) (got : effect_set) : bool =
-  (* Pure always allowed; every effect in got must be in allow,
-     except Pure which is absent from sets. WriteDb not allowed unless in allow. *)
   EffSet.subset got allow
   || (EffSet.is_pure got)
 
@@ -340,6 +359,7 @@ let count_write_sites (e : expr) : int =
   in
   go e
 
+(** [true] if [e] contains a [select-for-update] call anywhere; used by txn linting. *)
 let has_select_for_update (e : expr) : bool =
   let rec go = function
     | Prim ("select-for-update", _) -> true
@@ -354,6 +374,8 @@ let has_select_for_update (e : expr) : bool =
   in
   go e
 
+(** Advisory transactional-hygiene hints for [e] (soft, non-blocking).
+    Flags multi-write bodies and [select-for-update] outside a [with-transaction]. *)
 let txn_lint ?(known_fn : known_fn_lookup = fun _ -> None) (e : expr)
   : string list =
   let fx = infer ~known_fn e in

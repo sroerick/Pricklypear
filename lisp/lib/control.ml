@@ -22,6 +22,9 @@ type _ Effect.t +=
 let direct_prims : (string, value list -> value) Hashtbl.t option ref =
   ref None
 
+(** Dispatch a prim call: honors [direct_prims] when set, else escalates to
+    [Effect.perform] so the active rim handler (or test handler) services it.
+    Raises [Interp_error] if a direct table is set but lacks [name]. *)
 let perform_prim (name : string) (args : value list) : value =
   match !direct_prims with
   | Some tbl ->
@@ -34,6 +37,8 @@ let perform_prim (name : string) (args : value list) : value =
 
 type control_mode = Lwt_mode | Eff_mode
 
+(** Parse a control-mode string into a [control_mode]; unknown strings
+    default to [Eff_mode]. *)
 let control_mode_of_string = function
   | "lwt" | "promise" -> Lwt_mode
   | "eff" | "effect" | "effects" | _ -> Eff_mode
@@ -50,6 +55,8 @@ let control_mode_from_env () : control_mode =
 type sync_prim_fn = value list -> value
 type sync_prim_table = (string, sync_prim_fn) Hashtbl.t
 
+(** Run [thunk] under a sync effect handler that services [Prim_call] via
+    [prims]; unregistered names abort the continuation with [Interp_error]. *)
 let run_sync ~(prims : sync_prim_table) (thunk : unit -> 'a) : 'a =
   let open Effect.Deep in
   match_with thunk ()

@@ -5,6 +5,8 @@
 open Ast
 open Recursion
 
+(** Asymptotic complexity class of a Nopales AST. [Unknown] when
+    no recognized shape matches. *)
 type complexity =
   | O_constant
   | O_log_n
@@ -14,6 +16,7 @@ type complexity =
   | O_exponential
   | Unknown
 
+(** Human-readable badge for a complexity class (e.g. ["O(n²)"]). *)
 let badge = function
   | O_constant -> "O(1)"
   | O_log_n -> "O(log n)"
@@ -23,6 +26,7 @@ let badge = function
   | O_exponential -> "O(2ⁿ)"
   | Unknown -> "?"
 
+(** The more expensive of two complexity classes (by rank). *)
 let max_cx a b =
   let rank = function
     | O_constant -> 0
@@ -35,15 +39,18 @@ let max_cx a b =
   in
   if rank a >= rank b then a else b
 
+(** Is [n] the name of a list-iteration primitive ([map], [foldl], …)? *)
 let is_list_iter_prim = function
   | "list/map" | "list/filter" | "list/foldl" | "map" | "filter" | "foldl"
   | "for-each" -> true
   | _ -> false
 
+(** Is [n] the name of a DB-scan primitive ([rows], [find-rows], …)? *)
 let is_db_scan_prim = function
   | "rows" | "find-rows" | "find-text" -> true
   | _ -> false
 
+(** Does [e] reach any DB-scan primitive (or call a function that does)? *)
 let rec mentions_db_scan (e : expr) : bool =
   match e with
   | Prim (n, args) -> is_db_scan_prim n || List.exists mentions_db_scan args
@@ -57,6 +64,7 @@ let rec mentions_db_scan (e : expr) : bool =
   | Lambda (_, body) | Define (_, body) -> mentions_db_scan body
   | Var _ | Lit _ | Quote _ -> false
 
+(** Does [e] contain any list-iteration primitive? *)
 let rec has_list_iter (e : expr) : bool =
   match e with
   | Prim (n, args) -> is_list_iter_prim n || List.exists has_list_iter args
@@ -90,6 +98,7 @@ let rec has_nested_iter (e : expr) : bool =
   | Lambda (_, body) | Define (_, body) -> has_nested_iter body
   | Var _ | Lit _ | Quote _ -> false
 
+(** Does [e] look like a shrinking argument ([cdr] or decrement by 1)? *)
 let looks_like_cdr_arg (e : expr) : bool =
   match e with
   | App (Var "cdr", [ _ ]) | Prim ("cdr", [ _ ]) -> true
@@ -97,6 +106,7 @@ let looks_like_cdr_arg (e : expr) : bool =
     -> true
   | _ -> false
 
+(** Does [e] look like a halving argument (divide by 2)? *)
 let looks_like_halve (e : expr) : bool =
   match e with
   | App (Var op, [ _; Lit (VInt 2L) ]) when op = "/" || op = "div" || op = "halve"
@@ -105,10 +115,12 @@ let looks_like_halve (e : expr) : bool =
   | App (Var "cdr", _) -> false
   | _ -> false
 
+(** Number of self-recursive call sites of [fn_name] within [e]. *)
 let count_self_calls ~(fn_name : string) (e : expr) : int =
   let info = analyze_self ~fn_name e in
   List.length info.self_sites
 
+(** Does [fn_name] recurse on arguments that shrink linearly (cdr / -1)? *)
 let self_args_look_linear ~(fn_name : string) (e : expr) : bool =
   let rec find acc = function
     | App (Var n, args) when n = fn_name ->
@@ -125,6 +137,7 @@ let self_args_look_linear ~(fn_name : string) (e : expr) : bool =
   in
   find false e
 
+(** Does [fn_name] recurse on arguments that shrink by halving (/ 2)? *)
 let self_args_look_divide ~(fn_name : string) (e : expr) : bool =
   let rec find acc = function
     | App (Var n, args) when n = fn_name ->
@@ -141,6 +154,8 @@ let self_args_look_divide ~(fn_name : string) (e : expr) : bool =
   in
   find false e
 
+(** Classify the big-O complexity of the function [fn_name] with body [e].
+    Pure pattern matching over recursion shape, list iters and DB scans.*)
 let classify ~(fn_name : string) (e : expr) : complexity =
   let body = unwrap_fn_body e in
   let n_self = count_self_calls ~fn_name body in
@@ -155,6 +170,8 @@ let classify ~(fn_name : string) (e : expr) : complexity =
   else if n_self > 0 then O_linear (* recursive but shape unclear — mild guess *)
   else Unknown
 
+(** Classify [e] but also fold in the complexity of known callees
+    (looked up in [known_fn]), taking the max of all reachable calls. *)
 let classify_with_known
     ~(known_fn : (string, expr) Hashtbl.t)
     ~(fn_name : string)

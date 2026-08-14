@@ -6,12 +6,17 @@ open Ast
 
 type tail_ctx = Tail | Non_tail
 
+(** A single self-or-other call site within a function body. [path] is
+    the AST child-index path from the root body to the call; [tail]
+    records whether the call is in tail position; [callee] is the
+    callee name (equal to the enclosing fn for self-calls). *)
 type site = {
   path : int list;
   tail : bool;
   callee : string;
 }
 
+(** Summary of a function's recursion structure. *)
 type recursion_info = {
   is_recursive : bool;
   tail_recursive : bool;
@@ -21,6 +26,9 @@ type recursion_info = {
   callees : string list;
 }
 
+(** Strip a single [define]/[lambda] wrapper (AST or surface App form)
+    to expose the function body for analysis. Non-wrapper exprs pass
+    through unchanged. *)
 let rec unwrap_fn_body (e : expr) : expr =
   match e with
   | Define (_, body) -> unwrap_fn_body body
@@ -32,6 +40,10 @@ let rec unwrap_fn_body (e : expr) : expr =
   | App (Var "lambda", _params :: body :: _) -> body
   | other -> other
 
+(** Walk [e] and return every direct self-call site of [fn_name], tagged
+    with its AST [path] and whether it sits in tail position ([ctx] is
+    [Tail] only at tail-eligible spots, mirroring the eval trampoline
+    TCO; argument/condition positions are [Non_tail]). *)
 let rec collect_sites ~(fn_name : string) ~(ctx : tail_ctx) ~(path : int list)
     (e : expr) : site list =
   match e with
@@ -138,6 +150,9 @@ let rec collect_sites ~(fn_name : string) ~(ctx : tail_ctx) ~(path : int list)
   | Define (_, body) ->
       collect_sites ~fn_name ~ctx:Non_tail ~path:(0 :: path) body
 
+(** Collect the names of all variables called as functions within [e]
+    (deduped, in first-encounter order). Used to detect mutual calls to
+    sibling functions. *)
 let collect_callees (e : expr) : string list =
   let rec go acc = function
     | Var _ | Lit _ | Quote _ -> acc
@@ -166,6 +181,11 @@ let collect_callees (e : expr) : string list =
        []
   |> List.rev
 
+(** Analyze the recursion structure of function [fn_name]'s body [e]:
+    whether it is recursive, whether all self-calls are tail (and thus
+    eligible for the evaluator's TCO), the self-call [site]s, and the
+    names of other functions it calls directly (for mutual-recursion
+    annotation). *)
 let analyze_self ~(fn_name : string) (e : expr) : recursion_info =
   let body = unwrap_fn_body e in
   let self_sites = collect_sites ~fn_name ~ctx:Tail ~path:[] body in
@@ -184,11 +204,17 @@ let site_index (info : recursion_info) : (int list, site) Hashtbl.t =
   List.iter (fun s -> Hashtbl.replace h s.path s) info.self_sites;
   h
 
+(** [is_self_path info path] is [true] if [path] is a self-call site in
+    [info]. *)
 let is_self_path (info : recursion_info) (path : int list) : bool =
   List.exists (fun s -> s.path = path) info.self_sites
 
+(** [is_tail_self_path info path] is [true] if [path] is a self-call site
+    in tail position. *)
 let is_tail_self_path (info : recursion_info) (path : int list) : bool =
   List.exists (fun s -> s.path = path && s.tail) info.self_sites
 
+(** [is_nontail_self_path info path] is [true] if [path] is a self-call
+    site in non-tail position. *)
 let is_nontail_self_path (info : recursion_info) (path : int list) : bool =
   List.exists (fun s -> s.path = path && not s.tail) info.self_sites

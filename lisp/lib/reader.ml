@@ -22,21 +22,34 @@
     The reader tracks line/col for error messages. *)
 open Ast
 
-type reader_error = string * int * int  (* (message, line, col) *)
+(** A parse error: (message, line, col). *)
+type reader_error = string * int * int
 exception Reader_error of reader_error
 
+(** True for whitespace (space, tab, newline, carriage return). *)
 let is_space c = c = ' ' || c = '\t' || c = '\n' || c = '\r'
+
+(** True for ASCII digit characters. *)
 let is_digit c = c >= '0' && c <= '9'
+
+(** True for characters that may begin a symbol: anything that is not a
+    delimiter (paren, quote, double-quote, semicolon) and not whitespace. *)
 let is_symbol_start c =
   (c <> '(' && c <> ')' && c <> '\'' && c <> '"'
   && c <> ';' && not (is_space c))
+
+(** True for characters that may continue a symbol (start chars, digits, '#'). *)
 let is_symbol_cont c = is_symbol_start c || is_digit c || c = '#'
 
-(* # is allowed as a token start for #t/#f (and later #\char etc). *)
+(** True at a token start. '#' may begin a token for #t/#f (and later
+    #\char etc). *)
 let is_token_start c = c = '#' || is_symbol_start c
 
+(** True for characters that may continue a token. *)
 let is_token_cont c = is_symbol_cont c
 
+(** Reader cursor state: the remaining input, current position, and the
+    line/col of the current position (for error messages). *)
 type state = {
   mutable input : string;
   mutable pos : int;
@@ -44,13 +57,18 @@ type state = {
   mutable col : int;
 }
 
+(** [make_state s] builds an initial cursor over [s] at position (1,1). *)
 let make_state (s : string) : state =
   { input = s; pos = 0; line = 1; col = 1 }
 
+(** [peek st] returns the next character without consuming it, or [None]
+    at end of input. *)
 let peek (st : state) : char option =
   if st.pos >= String.length st.input then None
   else Some st.input.[st.pos]
 
+(** [advance st] consumes and returns the next character (or [None] at
+    end of input), tracking line/col across newlines. *)
 let advance (st : state) : char option =
   match peek st with
   | None -> None
@@ -60,6 +78,8 @@ let advance (st : state) : char option =
       else st.col <- st.col + 1;
       Some c
 
+(** [skip_ws_and_comments st] skips whitespace and ';' line comments,
+    leaving the cursor at the next significant character (or EOF). *)
 let skip_ws_and_comments (st : state) : unit =
   let rec loop () =
     match peek st with
@@ -82,13 +102,17 @@ let skip_ws_and_comments (st : state) : unit =
   in
   loop ()
 
+(** True for ASCII digit characters. *)
 let is_digit c = c >= '0' && c <= '9'
 
+(** Numeric value of an ASCII digit. *)
 let digit_val c = Char.code c - Char.code '0'
 
+(** True for hexadecimal digit characters. *)
 let is_hex c =
   (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
 
+(** Numeric value of a hexadecimal digit character. *)
 let hex_val c =
   if c >= '0' && c <= '9' then Char.code c - Char.code '0'
   else if c >= 'a' && c <= 'f' then 10 + Char.code c - Char.code 'a'
@@ -134,6 +158,12 @@ let escape_string (s : string) : string =
     s;
   Buffer.contents buf
 
+(** [read_string st] reads a string literal. Assumes the current char is
+    the opening quote (which is consumed). Handles named escapes
+    (n/t/r/backslash/quote/apostrophe), three-digit decimal bytes
+    [\\ddd], and unicode [\\uXXXX] (lone surrogates rejected); any other
+    backslash-X is treated as literal X. Raises [Reader_error] on
+    unterminated strings or bad escapes. *)
 let read_string (st : state) : string =
   (* assumes current char is the opening quote *)
   ignore (advance st);  (* consume the opening quote *)
@@ -228,6 +258,11 @@ let read_string (st : state) : string =
   in
   loop ()
 
+(** [read_atom st] reads a non-list, non-quote atom starting at the cursor
+    (the caller has ensured the char is a token start). Returns [Var] for
+    bare symbols (resolved by eval), [Lit] for numbers, booleans, and
+    (already-read) strings. Rejects a lone '.' (dotted-pair notation) with
+    a clear error. *)
 let read_atom (st : state) : expr =
   (* reads a non-list, non-quote atom. Returns an [expr]: [Var] for bare
      symbols (which eval will look up), [Lit] for numbers, booleans,
@@ -271,6 +306,9 @@ let read_atom (st : state) : expr =
       (try Lit (VInt (Int64.of_string s))
        with _ -> Var s)
 
+(** [read_list st] reads a parenthesized list. Assumes the current char is
+    '('. Returns the element list (empty for '()'); the caller turns it
+    into an [expr]. Raises [Reader_error] on an unterminated list. *)
 let rec read_list (st : state) : expr list =
   (* current char is '('; consume it *)
   ignore (advance st);
@@ -288,6 +326,12 @@ let rec read_list (st : state) : expr list =
   in
   loop []
 
+(** [read_expr st] reads one expression (the full reader core). Lists
+    become [App] nodes with the first element as operator (or [Lit VNil]
+    for () — special forms are dispatched at eval), quote/backtick/comma
+    become the corresponding quote sugar, strings become [Lit (VStr …)],
+    and other tokens become atoms via [read_atom]. Raises [Reader_error]
+    on unexpected end of input or characters. *)
 and read_expr (st : state) : expr =
   skip_ws_and_comments st;
   match peek st with
@@ -460,6 +504,8 @@ let rec pp_expr_flat (e : expr) : string =
   | Quote e -> "'" ^ pp_expr_flat e
   | Define (n, e) -> "(define " ^ n ^ " " ^ pp_expr_flat e ^ ")"
 
+(** [pp_indent depth] returns a string of [depth * 2] spaces, used as the
+    indentation for each nesting level in [pp_expr_at]. *)
 let pp_indent (depth : int) : string = String.make (depth * 2) ' '
 
 (** Prefer one line when short and shallow; otherwise break. *)
@@ -561,4 +607,5 @@ let rec pp_expr_at (depth : int) (e : expr) : string =
           "(define " ^ n ^ "\n"
           ^ ind1 ^ pp_expr_at (depth + 1) body ^ ")"
 
+(** [pp_expr e] pretty-prints [e] with indentation, starting at depth 0. *)
 let pp_expr (e : expr) : string = pp_expr_at 0 e
