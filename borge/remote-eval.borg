@@ -1,0 +1,319 @@
+(project pricklypear-remote-eval
+ (doc "Pricklypear book chapter: remote-eval — Nopales interprets in a client process while the corpus and data plane stay authoritative in Postgres. The seam already exists (agent.borg exercises it locally); this chapter specifies relaxing it across HTTP.")
+ (status planned)
+ (* agent note (|2026-08-14 chapter created from the remote-eval design discussion. Thesis: the interpreter is a pure portable library (~few kloc OCaml, no service deps); the corpus (function_defs, type_defs, data_rows) is branchy rows in Postgres. They are separated along exactly the right line — the cheap-to-copy thing travels, the expensive-to-replicate thing stays home. Remote-eval is NOT a new product: it is a mode of the same Prim_call seam the agent host already uses, with the rim handler replaced by an HTTP proxy. agent/ is the local-only instance today; pp-client --image=URL is the relaxed instance. Statuses are honest: the substrate is implemented (the seam, run_with_rim, read_eval_all_direct, the api-eval JSON boundary from i-fields-as-string 2026-08-12), everything else is planned.|) *)
+ (* agent note (|The two deepest consequences, named up front so the sections stay honest: (1) the store stops being where Nopales RUNS and becomes where Nopales LIVES — running is what clients do; (2) local eval over a durable remote corpus is the substrate for a debugger the LLM-integration chapter can drive (step/trace/breakpoint locally, data plane authoritative remotely). Both flow from one effect constructor and a faithful value<->json boundary.|) *)
+ (convention ocaml-dune)
+ (section remote-eval
+  (doc "A client process that embeds pricklypear-lisp, materializes function definitions from a remote branch lazily, and services Prim_call effects by proxying to the image over HTTP. The image keeps the corpus, the data plane (DB prims), and authority; the client keeps the interpreter and the interactive surface (REPL, stepping debugger, agent loop). Single-user per client; the image stays multi-user.")
+
+  (subsection positioning
+   (doc "What remote-eval is and is not, relative to the image and to agent/")
+   (status implemented)
+   (details
+    (doc (|
+         IS:
+           - A mode of the Prim_call seam, not a new product. The
+             interpreter (lisp/lib) is already a pure library; the
+             rim (Control.run_with_rim) is already an interchangeable
+             Effect.Deep handler. agent/ is one rim (local host
+             prims); pp-client is another rim (HTTP proxy). The
+             interpreter never knows the difference.
+           - A relaxation of one assumption: env materialization is
+             eager+local in the image, lazy+remote in the client. Every
+             other invariant (branch inheritance, transactional prims,
+             author identity, store as source of truth) is preserved.
+           - The substrate for the LLM-integration debugger story:
+             stepping/trace/breakpoint are purely a client concern
+             because the data plane still crosses the wire exactly as
+             a fast eval would.
+
+         IS NOT:
+           - A Nopales fork. Same interpreter, same reader, same
+             special forms. A language change for remote-eval is a
+             lisp-interpreter.borg change, full stop.
+           - A second store. The client holds a cache of definitions,
+             never the source of truth. Quit the client, lose nothing
+             but transient REPL state.
+           - Multi-user on the client side. One client = one user's
+             interactive session. The image remains the multi-user
+             habitat (multi-user.borg). A browser/WASM client is a
+             later trust-boundary problem, explicitly out for v0.
+    |))))
+
+  (subsection substrate
+   (doc "The seam remote-eval relaxes, and the boundary that makes it honest")
+   (status partial)
+   (implements lisp/lib/control.ml lisp/lib/eval.ml image/lib/http_pages.ml)
+   (verify
+    (test "Control.run_with_rim services Prim_call from a caller-supplied table; a second table (the proxy) drops in with no interpreter change")
+    (test "Eval.read_eval_all_direct evaluates a file's forms under a caller-hosted rim (no rim installed by eval itself)")
+    (test "value_to_json . value_of_json is identity over the value subset that crosses the wire (VStr/VInt/VFloat/VBool/VNil/VList/VSymbol; VLambda/VPrim serialize to a sentinel and DO NOT round-trip — see hard-constraints)")
+    (test "an Interp_error / Prim_error serializes to the error-kind JSON shape already used by /api/eval, so the proxy rim raises the same exception the local rim would"))
+   (details
+    (doc (|
+         THE SEAM. One effect constructor:
+           | Prim_call : string * value list -> value Effect.t
+         in lisp/lib/control.ml. The image rim (Control_rim, now an
+         alias for run_with_rim) services it from the in-process store
+         prim table. A proxy rim is a second handler for the SAME
+         effect: Prim_call(name, args) -> HTTP POST -> deserialize
+         value. The interpreter is identical; only the handler swaps.
+
+         THE BOUNDARY. Every value that crosses the wire must
+         serialize losslessly. The api-eval endpoint already emits
+         native JSON (i-fields-as-string 2026-08-12) instead of
+         triple-escaped pp strings; remote-eval reuses that shape.
+         The acceptance gate for v0 is a SHARED, TESTED value<->json
+         codec lifted out of http_pages.ml into a pure module both
+         server and client link — NOT two hand-maintained encoders.
+
+         DEFS AS DATA. An env is function_defs rows with branch
+         inheritance via the CTE. pp_sync pull already ships source
+         out; boot.ml/loader.ml turn source+defs into an env. The
+         client lazy-loads defs on miss instead of eagerly at boot:
+         resolution is already data, not a code-load step.
+    |))))
+
+  (subsection server-endpoint
+   (doc "POST /api/prim: one new endpoint next to api_eval on the image")
+   (status planned)
+   (implements image/lib/http_pages.ml image/lib/store_db.ml)
+   (verify
+    (test "/api/prim {name,args} returns the same value (and same error kind) as evaluating the prim in-process under the caller's identity")
+    (test "a server-only prim (route/fork/merge/auth-admin) is refused with a structured error citing locality, not silently executed")
+    (test "refuse-or-forward classification is derived from prim-registry metadata, not a hand-maintained list")
+    (smoke "a remote client drives a full (get 'todo id) -> (update ...) round trip over /api/prim under basic auth"))
+   (details
+    (doc (|
+         SHAPE. POST /api/prim with JSON {name: str, args: [json…]}
+         next to api_eval in http_pages.ml — ~40 lines, reusing the
+         shared value_to_json/error-kind codec. Auth is the same
+         basic-auth/cookie path /api/eval uses; the client passes its
+         identity per call. No new privilege — a prim call is
+         equivalent privilege to an eval that performs the prim.
+
+         GRANULARITY. A prim endpoint is per-DB-hit granularity, NOT
+         per-expression. That is the honest trade: it enables local
+         pure computation between DB touches, at the cost of a round
+         trip on the worst axis (every DB hit). Hybrid placement
+         (see placement subsection) is the mitigation, not a bigger
+         endpoint.
+
+         REFUSE-OR-FORWARD. Some prims MUST execute server-side to
+         mean anything: route, fork, merge, checkout, auth admin
+         prims, jobs/media/net. The rim refuses these with a
+         structured error citing server-only locality rather than
+         pretending to proxy them. The classification is DERIVED from
+         prim-registry metadata (a locality tag set at registration),
+         never a second hand-maintained list — that file would drift.
+
+         NO TRANSACTION OVER WIRE. (with-transaction …) cannot span
+         HTTP calls; the server keeps the transaction body, the client
+         gets the result. This is a hard correctness constraint, not a
+         v0 limitation — see hard-constraints.
+    |))))
+
+  (subsection client
+   (doc "pp-client binary: pricklypear_lisp + a proxy prim rim + lazy env")
+   (status planned)
+   (implements client/lib/proxy_rim.ml client/bin/main.ml)
+   (verify
+    (test "pp-client boots, connects to an image URL, and evaluates (+ 1 2) with zero prim calls (pure compute stays local)")
+    (test "a prim call in client eval proxies to /api/prim and the result binds locally for subsequent pure use")
+    (test "a function-def referenced but not yet loaded is fetched on first call (lazy env miss) and cached")
+    (test "quit the client; re-launch against the same branch; (define …) made last session is present (server is source of truth)"))
+   (details
+    (doc (|
+         PACKAGE. A new client/ package: pp-client binary =
+         pricklypear_lisp + a proxy rim that forwards Prim_call to
+         the server. No Postgres link, no Lwt, no store_db — it is a
+         sibling of cli/ and agent/, not a child of image/.
+
+         PROXY RIM DISCIPLINE. The proxy rim is a PURE proxy with zero
+         logic. The moment it grows its own interpretation of a prim,
+         there are two dialects. The only allowed local behavior is:
+         dispatch to the table (cache/local prims), or forward to
+         /api/prim. Nothing in between.
+
+         LAZY ENV. Function resolution is data (CTE over
+         function_defs). The client materializes defs on first
+         reference instead of at boot: env miss -> fetch def source
+         from server -> eval into env under the proxy rim. The env is
+         a cache; invalidation is the caching subsection's job.
+
+         IDENTITY. whoami/current-author/auth attach to the live
+         session server-side. The client passes its basic-auth
+         identity per prim call (already how /api/eval auth works).
+         The client may NEVER claim an author it does not hold —
+         identity is server-asserted, not client-asserted.
+    |))))
+
+  (subsection caching
+   (doc "Definition cache invalidation via branch generation; the one cheap round trip")
+   (status planned)
+   (implements client/lib/def_cache.ml migrations/)
+   (verify
+    (test "a write in the client's branch ancestry bumps a generation counter; the client's next cache-check round trip observes the bump and reloads affected defs")
+    (test "a checkout to a different branch invalidates the whole local def cache (branch is the namespace)")
+    (test "with no writes, the cache-check round trip is a single cheap HEAD-ish returning unchanged-generation, not an N-way hash diff"))
+   (details
+    (doc (|
+         KEY. The cache is keyed by (branch, generation). Generation
+         is a monotonic counter bumped on any write in a branch's
+         ancestry (a promote into main, a define on personal, etc.).
+         The inheritance CTE is decorated with it. The client stores
+         (def-name -> (value, source-generation)) and invalidates on
+         generation change.
+
+         WHY NOT CONTENT-HASHING. Pricklypear names are mutable per
+         branch; defs can be redefined. Unison-style content addressing
+         does not apply (no append-only redefinition). Name-version
+         coherence under a branch namespace is the right shape and
+         it is SMALLER than content hashing — one counter per branch,
+         not a hash per def.
+
+         THE ONE ROUND TRIP. Cache freshness is a single cheap call:
+         "is my (branch, generation) still current?" Not an N-way
+         diff. This is materialized-view invalidation in a very small
+         costume, and the branch model already gives us the namespace
+         to key it on.
+
+         READ-HEAVY CONFIG. Function defs + read-heavy config rows are
+         the cache's first citizens. Hot (data_rows) reads stay remote
+         (placement subsection).
+    |))))
+
+  (subsection placement
+   (doc "Hybrid placement: prim-dense / transactional exprs go to /api/eval, pure compute stays local")
+   (status planned)
+   (implements client/lib/placer.ml)
+   (verify
+    (test "an expression containing (with-transaction …) is detected as non-proxyable and POSTed to /api/eval wholesale")
+    (test "an expression with zero prim calls evaluates locally with no round trip")
+    (test "a prim-dense expression above a call-count threshold is routed to /api/eval rather than issuing N prim round trips")
+    (test "placement decision is logged/visible so the user can see WHY an expr went remote (no silent boundary)"))
+   (details
+    (doc (|
+         THE LATENCY INVERSION. Nopales product code is prim-heavy:
+         (get 'user id), (rows …), (create …). A pure proxy rim puts
+         a round trip on the worst axis (every DB hit) rather than
+         per-expression like /api/eval does today. v0 (pure proxy)
+         LOSES to pp_eval on prim-dense code. That is acceptable for
+         interactive/definitional work (REPL, debugger, tests) and
+         wrong for hot loops.
+
+         THE HEURISTIC. Detect prim-dense and transactional
+         expressions and POST them to /api/eval wholesale, keeping
+         local eval for pure computation. This is staging the
+         boundary at the HTTP edge: a tiny tracer that counts prim
+         calls and flags transaction blocks, then routes. It degrades
+         gracefully — v0 is "everything proxies"; v1 adds the
+         threshold; the heuristic is the ONLY moving part.
+
+         TRANSACTION BOUNDARIES ARE HARD. (with-transaction (lambda
+         () body)) MUST run server-side: the transaction holds
+         (select-for-update …) locks across prims in the body, and
+         locks cannot span HTTP calls. The placer treats any
+         transaction-wrapped expr as non-proxyable and forces
+         /api/eval. This is correctness, not optimization.
+    |))))
+
+  (subsection stepping
+   (doc "Local single-step / trace / breakpoint over a proxy rim: the LLM-debugger substrate")
+   (status planned)
+   (implements lisp/lib/explain.ml client/lib/proxy_rim.ml)
+   (verify
+    (test "a breakpoint set on a def pauses local eval mid-expression; the data plane (prim calls) still crosses the wire and returns")
+    (test "the server is unaware a breakpoint fired (stepping is purely a client concern)")
+    (test "a trace of an expression shows local pure steps interleaved with remote prim round trips, distinguished")
+    (smoke "an agent loop drives a stepping eval against a remote branch: set bp, step, inspect frame, continue"))
+   (details
+    (doc (|
+         THE PAYOFF. Once eval runs in a client process you can
+         single-step, trace, breakpoint, and inspect frames locally
+         while the data plane stays authoritative in Postgres. The
+         server never knows a breakpoint happened — stepping is a
+         client concern, prims still cross the wire exactly as a fast
+         eval would.
+
+         DEBUGGER AS PRODUCT. This is the right substrate for the
+         LLM-integration chapter: a debugger the model can drive. A
+         model that can step its own Nopales, inspect frames, and
+         test hypotheses ("what if this def were X?") against a
+         durable corpus gets git-worktree-style experimentation for
+         running programs — something neither Smalltalk (one
+         resident image) nor the web (stateless client) can say.
+
+         REPLAY. Because defs are durable server-side, a client can
+         pin a (branch, generation) snapshot and replay an
+         expression against that exact corpus later. Checkpointing
+         and hypothesis-testing eval become client-side operations
+         against durable data, not reimplementation.
+
+         explain.ml + proxy rim is the whole kit: the stepping
+         evaluator already exists as a pure concern; the proxy rim
+         is the only addition. The story writes itself from there.
+    |))))
+
+  (subsection hard-constraints
+   (doc "Constraints that are correctness, not v0 limitations — do not relax them")
+   (status implemented)
+   (details
+    (doc (|
+         TRANSACTIONS DON'T SPAN PRIM CALLS. (with-transaction …)
+         holds (select-for-update …) locks across prims in its body.
+         Locks cannot survive an HTTP round trip. Any
+         transaction-wrapped expression MUST execute server-side
+         (placement forces /api/eval). Relaxing this corrupts the
+         store.
+
+         CLOSURES DON'T CROSS THE WIRE. VLambda/VPrim serialize to a
+         sentinel and do not round-trip. A server function invoked
+         remotely returns a sentinel, not a callable. This is why
+         function resolution is data (def source fetched and eval'd
+         locally into the env), not RPC-into-a-closure. The proxy
+         rim never tries to call a remote closure.
+
+         VERSION SKEW IS THE TAX. The corpus outlives the
+         interpreter by design (defs are durable; the interpreter is
+         a library that rebuilds). A story for "branch pinned to
+         Nopales-semantics vN" is required once the corpus is the
+         product: either semantics versioning in the env, or a
+         migration lane when lisp/ changes behavior. poohstack
+         "everyone rebuilds on switch" works for devs; it will not
+         work for durable multi-version corpora.
+
+         IDENTITY IS SERVER-ASSERTED. The client passes basic-auth;
+         it may not claim an author. whoami/current-author attach to
+         the live session server-side and are returned BY the server,
+         never set BY the client.
+    |))))
+
+  (subsection v0-non-goals
+   (doc "Explicit exclusions for the first remote-eval version")
+   (status implemented)
+   (details
+    (doc (|
+         OUT for v0, deferred:
+           - Browser/WASM client. Pulling defs from the server and
+             executing them locally is fine for YOUR OWN corpus; it
+             is a trust boundary the moment branches are multi-user.
+             Later, with a capability model, not now.
+           - Client-side caching of data_rows (only defs +
+             read-heavy config rows are cached in v0).
+           - Server-side caching of client state. The server keeps
+             the corpus and the data plane; it does not memoize
+             per-client.
+           - A second transport. HTTP+JSON is the only wire in v0;
+             no binary protocol, no websocket prim channel.
+
+         HARD OUT (forever, or a different project):
+           - A second store on the client. The client is a cache and
+             an interpreter, never a source of truth.
+           - Multi-user on the client. One client = one user.
+           - Language changes made in client/ instead of through
+             lisp-interpreter.borg. The client is a host, not a fork.
+    |))))
+ )
+)

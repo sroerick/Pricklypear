@@ -1150,6 +1150,22 @@ let eval_string_direct ~(prims : prim_table) (env : env) (s : string) : value =
 let eval_string ~(prims : prim_table) (env : env) (s : string) : value =
   Control.run_sync ~prims (fun () -> eval_string_direct ~prims env s)
 
+(** Evaluate all toplevel forms in [s], sequentially, under the given
+    prim table but WITHOUT installing any rim — the caller hosts the
+    [Prim_call] effect (hosts: image Control_rim in session, agent
+    Control.run_with_rim). Returns the last form's value. Used by host
+    plugin/file loaders that want file-per-file or form-per-form eval
+    without string re-rendering. (Added for borge/agent.borg
+    nopales-embed.) *)
+let read_eval_all_direct ~(prims : prim_table) (env : env) (s : string)
+    : value =
+  let forms = Reader.read_all s in
+  let budget = make_budget () in
+  last_budget := Some budget;
+  List.fold_left
+    (fun _acc form -> eval ~budget ~prims env form)
+    VNil forms
+
 let empty_prims : prim_table = make_prim_table ()
 
 (** Aliases kept for call-site stability during H1 cleanup. *)

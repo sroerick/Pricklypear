@@ -1,0 +1,18 @@
+(library
+ (name pricklypear_agent_lib)
+ (public_name pricklypear-agent.lib)
+ (wrapped false)
+ (modules runtime plugins provider tools loop)
+ (libraries
+  pricklypear-lisp
+  pricklypear-pure-prims
+  yojson
+  eio
+  eio_main
+  httpun
+  httpun-eio
+  gluten-eio
+  tls-eio
+  ca-certs-nss
+  domain-name
+  unix))

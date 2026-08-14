@@ -1,0 +1,228 @@
+(project pricklypear-agent
+ (doc "Pricklypear book chapter: agent — a Nopales-native local coding agent, pi-inspired, sharing pricklypear-lisp with the image")
+ (status planned)
+ (* agent note (|2026-08-03 chapter created for the pi-clone spike. Positioning: sibling consumer of pricklypear-lisp (like cli/), NOT part of the image product. No Postgres, no branches, no auth. If it graduates into the product later that is a plan-phase spec edit.|) *)
+ (* agent note (|2026-08-14 v0.0 spike landed: rim moved to Control.run_with_rim (image Control_rim is now a thin alias), Eval.read_eval_all_direct added, agent/ package with stdin REPL + mock provider + read/bash builtins + on/register-tool/register-command + tool_call-block path. Provider is OpenAI-compatible chat completions only (synthetic.new + any gateway, Anthropic via its compat endpoint) — no native Anthropic path; image llm_client.ml is the curl cautionary tale we avoid. agent/ tests 4/4, full workspace green. Known gaps: SSE streaming (provider collects full body; API is on_delta-shaped), plugin tool param schemas on the wire (permissive object schema synthesized), http_ui.ml not yet started.|) *)
+ (convention ocaml-dune)
+ (section agent
+  (doc "A local single-user coding agent binary: minimal agent loop, Nopales plugins, code browser. Launched in a directory: `cd project && agent`. pi (pi.dev) is the reference point; the differentiator is that plugins are Nopales loaded into a live env shared with the session REPL, so the user redefines plugin functions while the agent runs. Stack shares with the image where trivially possible: pricklypear-lisp (eval), Eio rim style (synchronous prim ABI, fiber-blocking I/O), pure-html for the web surface.")
+
+  (subsection positioning
+   (doc "What the agent is and is not, relative to the pricklypear image")
+   (status implemented)
+   (details
+    (doc (|
+         IS:
+           - A single native OCaml binary, installable/runnable from a
+             laptop checkout: `agent` in any directory opens a session
+             on that directory.
+           - Single-user, localhost. No auth, no Postgres, no
+             branches, no object store.
+           - A second home for Nopales: plugin files under
+             ~/.config/agent/plugins/*.pp (global) and
+             .agent/plugins/*.pp (project) are evaluated into one env
+             shared with the interactive session REPL. Live
+             redefinition of plugin functions takes effect on the
+             agent's next turn.
+
+         IS NOT:
+           - Part of the image. The image remains the multi-user
+             habitat product (single-image.borg). The agent never
+             links store_db, migrations, auth_*, or the branch model.
+           - A Nopales fork. Language semantics come from
+             pricklypear-lisp unchanged; the agent adds HOST PRIMS and
+             an optional host library layer in .pp, and nothing else.
+             If the agent needs a language change, that change lands
+             via lisp-interpreter.borg like any other.
+           - pi's TUI. The primary surface is HTML (pure-html +
+             htmx/SSE); a minimal line REPL mode exists for scripts
+             and embedding, not as the primary interaction.
+    |))))
+
+  (subsection nopales-embed
+   (doc "Embedding pricklypear-lisp as the host of the plugin environment")
+   (status partial)
+   (implements lisp/lib/control.ml lisp/lib/eval.ml agent/lib/runtime.ml)
+   (verify
+    (test "a .pp plugin file defining an event handler is loaded at startup and its handler fires on the agent loop's tool_call event")
+    (test "redefining the same handler by evaluating a new definition in the session REPL changes subsequent tool_call behavior without restart")
+    (test "an unregistered prim call from a plugin produces a structured Interp_error, not an Unhandled effect escape")
+    (test "two evals never interleave on shared Eval global state (serialize via mutex); a nested plugin-triggered eval during an active turn completes correctly"))
+   (details
+    (doc (|
+         SEAM. pricklypear-lisp is already the embeddable artifact:
+         Eval.eval_string_direct ~prims env s plus a pure prim table
+         and Control.Prim_call effects. The agent provides a rim in
+         the style of image Control_rim: an Effect.Deep handler over
+         Prim_call dispatching to the host table, with
+         Control.direct_prims set during prim bodies so nested eval
+         dispatches directly.
+
+         MOVE DOWN. The rim handler (currently image-only) moves into
+         lisp/lib/control.ml as Control.run_with_rim so both hosts
+         share it. Mechanical move, no behavior change; the image
+         keeps a thin alias until call sites are updated.
+
+         CONCURRENCY MODEL. All Nopales evaluation is serialized
+         through one Eio mutex. Eval's global refs (current_budget,
+         last_budget) stay global in v0; per-eval threading is a
+         follow-on only if real pain appears. Nested eval triggered by
+         a plugin callback from inside a tool handler re-enters
+         through direct_prims under the same budget, as the image
+         rim already does.
+
+         PRIM ABI. Prims are synchronous (value list -> value). Host
+         prims block the calling fiber (Eio), never Lwt: the agent
+         has no PP_IO switch and no lwt rollback path. plugin-authored
+         Nopales code therefore looks fully synchronous even when a
+         prim performs network I/O.
+
+         HOST PRIM NAMESPACE. Agent prims are prefixed by family:
+           ui/notify ui/confirm ui/select        (browser surfaces)
+           session/append session/name
+           on register-tool register-command     (plugin API)
+           http/get http/post                    (Eio; JSON in/out)
+         Pure language prims are untouched. The image's DB/auth/route
+         prims do not exist here.
+    |))))
+
+  (subsection agent-loop
+   (doc "The minimal agent turn loop and tool registry")
+   (status partial)
+   (implements agent/lib/loop.ml agent/lib/provider.ml agent/lib/tools.ml)
+   (verify
+    (test "a mock provider emitting one tool call round-trips: tool executes, result message is appended, loop makes exactly one follow-up model call")
+    (test "budget: the loop stops after a configurable max turns and reports rather than spinning")
+    (test "tool_call plugin hook can block a call; the model sees the block reason as the tool result")
+    (smoke "openai-compat provider streams a real reply end-to-end when AGENT_API_KEY is set"))
+   (details
+    (doc (|
+         SHAPE. One assistant turn = one streaming provider call. If
+         the reply contains tool calls, execute them (serialized eval
+         mutex held only during each tool's Nopales work), append
+         results, call again. Max-turns guard, abort signal, and
+         usage accounting per turn.
+
+         PROVIDERS v0. OpenAI-compatible chat completions HTTP (covers
+         synthetic.new and every gateway we use, Anthropic included
+         via its compat endpoint) over Httpun_eio... hand-rolled 1.1
+         POST because gluten refuses non-socket TLS flows. No curl
+         subprocesses (image llm_client.ml is the cautionary tale),
+         no native Anthropic messages path. SSE parsing in-process
+         once streaming lands.
+
+         TOOL REGISTRY v0. read, bash, edit — matching the pi
+         baseline shapes so prompts and habits transfer. bash runs
+         via Eio.Process with timeout and output truncation.
+
+         TOOL SCHEMAS. Tool parameter schemas are data (yojson)
+         constructed by the registry, serializable for both provider
+         wire formats. register-tool accepts a Nopales alist schema
+         and a Nopales closure body; the closure runs under the rim
+         inside the loop.
+
+         PROVIDER ABSTRACTION. A variant type provider_reply with
+         text/tool-call/delta constructors; each provider module maps
+         wire events to it. Adding a provider = one module, no loop
+         changes.
+    |))))
+
+  (subsection plugin-model
+   (doc "Nopales plugin API: events, custom tools, commands, session REPL")
+   (status partial)
+   (implements agent/lib/plugins.ml agent/test/agent_test.ml agent/bin/main.ml)
+   (verify
+    (test "loading order: global plugins then project plugins; a project plugin can redefine a global binding")
+    (test "on/2 registers a handler; handlers for one event run in registration order; tool_call block short-circuits remaining handlers")
+    (test "register-tool closures appear in the provider tool list on the turn after registration")
+    (test "register-command commands are intercepted before the input reaches the model"))
+   (details
+    (doc (|
+         FILES. ~/.config/agent/plugins/*.pp then .agent/plugins/*.pp
+         (cwd), each evaluated in filename order into the shared env.
+         A plugin file is ordinary Nopales; no module ceremony.
+
+         EVENTS v0 (subset of pi's surface, deliberately small):
+           tool_call   (may block: return (dict "block" #t "reason" s))
+           tool_result (may replace content)
+           input       (may transform text or handle outright)
+           before_turn (may inject a context message)
+         Event payloads are JSON strings manipulated with the frozen
+         dict-* prims — no new value types.
+
+         CUSTOM TOOLS. (register-tool name params-alist closure).
+         Params alist maps param name -> "string"|"int"|"bool" with
+         optional "description" entries; registry builds JSON schema.
+         Closure receives one JSON string argument.
+
+         COMMANDS. (register-command name doc closure). `/name args`
+         in the input line is dispatched to the closure before model
+         submission.
+
+         REPL UNITY. The session REPL (stdin mode and browser /repl
+         pane) is the same env. `(define ...)` at the prompt
+         redefines handler functions live; there is no reload
+         command because there is nothing to reload.
+
+         SAFETY. Plugin code runs with the user's full permissions
+         (same trust posture as pi). Project plugins load only after
+         an interactive trust confirmation; the decision is cached
+         per directory hash under ~/.config/agent/trust.json.
+    |))))
+
+  (subsection surfaces
+   (doc "Interaction surfaces: HTML primary, line REPL secondary")
+   (status planned)
+   (implements agent/lib/http_ui.ml)
+   (verify
+    (smoke "agent boots, binds 127.0.0.1, serves the chat page, and streams one assistant reply over SSE")
+    (smoke "line REPL mode (-p / no-tty) completes one full turn from piped stdin")
+    (smoke "code browser renders the file tree and one file's contents read-only"))
+   (details
+    (doc (|
+         HTML PRIMARY. Local HTTP server (Httpun_eio) on
+         127.0.0.1:random-port; prints the URL (and --open to launch
+         a browser). pure-html for all pages. Chat via SSE stream +
+         POST. Code browser: read-only file tree + file view in v0
+         (CodeMirror vendored later; honest textarea/pre first).
+
+         LINE REPL. stdin/stdout mode for scripts, embedding, and
+         tty diehards. Same env, same prims, no htmx. Multi-line
+         input handling copied from lisp/bin/repl.ml.
+
+         GUI. Explicitly out. Nothing in the feature list needs
+         native widgets, and a second UI ecosystem doubles the
+         maintenance surface.
+
+         UI PRIMS. ui/confirm, ui/select, ui/notify resolve against
+         the active surface: modal/banner component in the browser,
+         y/n prompt on stdin in REPL mode. A blocking ui/confirm in
+         an event handler suspends only the agent fiber; the HTTP
+         fiber keeps streaming because prims block fibers, not
+         threads (Eio), and eval serialization is per-eval, not
+         per-process-park.
+    |))))
+
+  (subsection v0-non-goals
+   (doc "Explicit exclusions for the first working version")
+   (status implemented)
+   (details
+    (doc (|
+         OUT for v0, even though pi has them:
+           - Session trees / fork / resume (sessions are one JSONL
+             file per directory under .agent/sessions/, appended only)
+           - Compaction hooks, custom TUI widgets, theme system
+           - Provider discovery / model registry beyond a
+             ~/.config/agent/config.toml table
+           - Sandboxing of any kind (bash is bash)
+           - Sharing sessions across machines
+
+         HARD OUT (forever, or a different project):
+           - Postgres or any server-side store
+           - Multi-user, auth, branches, promote
+           - Lwt
+           - Language changes made in agent/ instead of through
+             lisp-interpreter.borg
+    |))))
+ )
+)

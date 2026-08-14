@@ -10,37 +10,11 @@
     do not re-enter for nested performs from within the handler body. *)
 
 open Pricklypear_lisp
-module Effect = Stdlib.Effect
+open Ast
 
-let run
-    ~(prims : (string, Ast.value list -> Ast.value) Hashtbl.t)
+let run ~(prims : (string, Ast.value list -> Ast.value) Hashtbl.t)
     (thunk : unit -> 'a) : 'a =
-  let open Effect.Deep in
-  let prev = !Control.direct_prims in
-  Control.direct_prims := Some prims;
-  Fun.protect
-    ~finally:(fun () -> Control.direct_prims := prev)
-    (fun () ->
-      match_with thunk ()
-        { retc = (fun v -> v)
-        ; exnc = (fun e -> raise e)
-        ; effc =
-            (fun (type a) (eff : a Effect.t) ->
-              match eff with
-              | Control.Prim_call (name, args) ->
-                  Some
-                    (fun (k : (a, _) continuation) ->
-                      match Hashtbl.find_opt prims name with
-                      | None ->
-                          Effect.Deep.discontinue k
-                            (Ast.Interp_error
-                               (Ast.Prim_error
-                                  (name, "unregistered primitive", "prim_error")))
-                      | Some fn ->
-                          (try Effect.Deep.continue k (fn args) with
-                           | exn -> Effect.Deep.discontinue k exn))
-              | _ -> None)
-        })
+  Control.run_with_rim ~prims thunk
 
 (** Alias kept for call sites that still say run_lwt. *)
 let run_lwt = run

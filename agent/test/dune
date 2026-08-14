@@ -1,0 +1,4 @@
+(test
+ (name agent_test)
+ (modules agent_test)
+ (libraries pricklypear-agent.lib pricklypear-lisp alcotest eio eio_main yojson str unix))
