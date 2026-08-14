@@ -1,0 +1,4 @@
+(test
+ (name remote_test)
+ (modules remote_test)
+ (libraries pricklypear-remote.lib pricklypear-lisp alcotest unix))

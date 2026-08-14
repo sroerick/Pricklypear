@@ -1,0 +1,2 @@
+;; remote/ — pp-remote: a Nopales client process (borge/remote-eval.borg).
+;; Top-level dune stanza. See lib/dune, bin/dune, test/dune.
