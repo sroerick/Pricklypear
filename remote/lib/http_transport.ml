@@ -78,17 +78,17 @@ let read_body br ~headers =
        | Some n -> Eio.Buf_read.take (int_of_string n) br
        | None -> Eio.Buf_read.take_all br)
 
-(** One POST to /api/prim with {name, args:[json…]}. Returns the parsed
-    JSON response (or an Error message). *)
-let post_prim
+(** Generic one-POST: POST [path] with [payload] (a JSON value, encoded
+    as the request body) and return (parsed-response-JSON | Error msg).
+    The same HTTP/1.1-over-Eio/TLS plumbing as [post_prim], shared by
+    /api/prim (per prim call) and /api/eval (whole expression). *)
+let post_json
     ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t) ~(cfg : cfg)
-    ~(name : string) ~(args_json : Yojson.Safe.t)
+    ~(path : string) ~(payload : Yojson.Safe.t)
     : (Yojson.Safe.t, string) Result.t =
   let open Eio in
   let host, port, tls = parse_base cfg.base_url in
-  let body =
-    Yojson.Safe.to_string (`Assoc [ ("name", `String name); ("args", args_json) ])
-  in
+  let body = Yojson.Safe.to_string payload in
   let net = (Stdenv.net env :> [ `Generic ] Net.ty Std.r) in
   let addr =
     Net.getaddrinfo_stream ~service:(string_of_int port) net host |> List.hd
@@ -114,7 +114,7 @@ let post_prim
               ("connection", "close")
             ; basic_auth_header ~user:cfg.user ~password:cfg.password ]))
     in
-    Printf.sprintf "POST /api/prim HTTP/1.1\r\n%s\r\n\r\n%s" hdrs body
+    Printf.sprintf "POST %s HTTP/1.1\r\n%s\r\n\r\n%s" path hdrs body
   in
   Flow.copy_string request_text flow;
   let br = Buf_read.of_flow ~initial_size:4096 ~max_size:(20 * 1024 * 1024) flow in
@@ -143,6 +143,23 @@ let post_prim
     (try Ok (Yojson.Safe.from_string body)
      with Yojson.Json_error e -> Error ("bad json: " ^ e))
   else Error (Printf.sprintf "HTTP %d: %s" code body)
+
+(** One POST to /api/prim with {name, args:[json…]}. Returns the parsed
+    JSON response (or an Error message). *)
+let post_prim
+    ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t) ~(cfg : cfg)
+    ~(name : string) ~(args_json : Yojson.Safe.t)
+    : (Yojson.Safe.t, string) Result.t =
+  post_json ~env ~sw ~cfg ~path:"/api/prim"
+    ~payload:(`Assoc [ ("name", `String name); ("args", args_json) ]) 
+
+(** One POST to /api/eval with {expr}. Returns the parsed JSON response
+    (or an Error message). *)
+let post_eval
+    ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t) ~(cfg : cfg)
+    ~(expr : string) : (Yojson.Safe.t, string) Result.t =
+  post_json ~env ~sw ~cfg ~path:"/api/eval"
+    ~payload:(`Assoc [ ("expr", `String expr) ])
 
 (** Build a [Proxy_rim.transport] from an Eio env + [cfg]. The
     transport is the function the proxy rim calls per Prim_call: it
@@ -178,3 +195,42 @@ let transport
                  (try Error (Prims_pure.error_of_json j) with _ ->
                   Error (Ast.Interp_error (Ast.Prim_error (name, msg, kind)) : exn))
              | _ -> Error (Ast.Interp_error (Ast.Prim_error (name, msg, kind)) : exn))
+
+(** Build the whole-expression remote eval hook ([Remote.set_remote_eval])
+    from an Eio env + [cfg]. POSTs the whole source to /api/eval (the
+    image's own eval path, so server-side /api/eval is authoritative
+    for placement-Remote expressions) and returns the value, raising the
+    SAME exception an in-process eval would (via the shared codec). This
+    is the Remote half of hybrid placement: Local runs under the proxy
+    rim, Remote (prim-dense / transactional) POSTs here wholesale. *)
+let eval_transport
+    ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t) ~(cfg : cfg)
+    : string -> Ast.value =
+  fun (expr : string) ->
+    match post_eval ~env ~sw ~cfg ~expr with
+    | Error msg ->
+        raise (Ast.Interp_error (Ast.Prim_error ("api/eval", msg, "transport")))
+    | Ok j ->
+        let open Yojson.Safe.Util in
+        (match j |> member "ok" with
+         | `Bool true ->
+             (try Prims_pure.json_to_value (j |> member "value")
+              with _ ->
+                raise (Ast.Interp_error (Ast.Prim_error ("api/eval", "bad value json", "prim_error"))))
+         | _ ->
+             let kind =
+               j |> member "kind" |> to_string_option
+               |> Option.value ~default:"error"
+             in
+             let msg =
+               j |> member "error" |> to_string_option
+               |> Option.value ~default:"eval failed"
+             in
+             (match j |> member "kind" with
+              | `String k when k = "interp_error" || k = "parse_error" ->
+                  (try raise (Prims_pure.error_of_json j)
+                   with
+                   | Ast.Interp_error _ as e -> raise e
+                   | Reader.Reader_error _ as e -> raise e
+                   | _ -> raise (Ast.Interp_error (Ast.Prim_error ("api/eval", msg, kind))))
+              | _ -> raise (Ast.Interp_error (Ast.Prim_error ("api/eval", msg, kind)))))
