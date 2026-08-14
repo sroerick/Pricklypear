@@ -757,6 +757,37 @@ let checkout_branch (t : t) ~(new_branch_id : string) : unit =
 (* Get the branch_id the store is currently bound to. *)
 let current_branch_id (t : t) : string = t.branch_id
 
+(** Current generation counter for [branch_id] (migration 017). The SQL
+    helper [current_branch_generation] walks the branch's ancestry chain
+    and returns the max generation across it, so a write to an ancestor
+    (e.g. main) is automatically visible to every descendant. The remote
+    client stores defs under a [(branch, generation)] key and does a
+    single cheap round trip against this to decide whether its local
+    def cache is stale. Returns None when the DB is unreachable / the
+    helper is missing (pre-017), letting callers treat an unknown
+    generation as "reload". *)
+let current_generation (t : t) ~(branch_id : string) : int64 option =
+  match t.conn with
+  | None -> None
+  | Some conn ->
+      (try
+         let sql =
+           "SELECT COALESCE(current_branch_generation($1::uuid), 0)::bigint"
+         in
+         let rows =
+           exec conn
+             ~params:[ Pgx.Value.of_string branch_id ]
+             sql
+         in
+         match rows with
+         | [ [ cell ] ] ->
+             Option.bind (Pgx.Value.to_int64 cell) (fun g -> Some g)
+         | _ -> None
+       with exn ->
+         Printf.eprintf "[store] current_generation error: %s\n"
+           (Printexc.to_string exn);
+         None)
+
 (** Canonical system/main UUID — seeded by migrations/001_branches.sql. *)
 let system_main_id = "00000000-0000-0000-0000-000000000001"
 
