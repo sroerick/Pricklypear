@@ -1,0 +1,6 @@
+(executable
+ (name main)
+ (public_name agent)
+ (package pricklypear-agent)
+ (modules main)
+ (libraries pricklypear-agent.lib pricklypear-lisp eio eio_main unix))

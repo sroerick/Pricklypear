@@ -71,3 +71,41 @@ let run_sync ~(prims : sync_prim_table) (thunk : unit -> 'a) : 'a =
                       with exn -> discontinue k exn)
           | _ -> None)
     }
+
+(** Host rim: service [Prim_call] with a sync prim table, setting
+    [direct_prims] for nested eval (borge/agent.borg nopales-embed).
+
+    Moved down from image/lib/control_rim.ml so both hosts (image and
+    the agent binary) share one rim. Behavior identical: handler
+    dispatches to the table; while a prim body runs, [direct_prims] is
+    set so nested eval (eval-string, plugin callbacks, loaders)
+    dispatches prims by direct lookup instead of re-entering the
+    handler (effect handlers do not catch performs from within the
+    handler body). *)
+let run_with_rim ~(prims : sync_prim_table) (thunk : unit -> 'a) : 'a =
+  let open Effect.Deep in
+  let prev = !direct_prims in
+  direct_prims := Some prims;
+  Fun.protect
+    ~finally:(fun () -> direct_prims := prev)
+    (fun () ->
+      match_with thunk ()
+        { retc = (fun v -> v)
+        ; exnc = (fun e -> raise e)
+        ; effc =
+            (fun (type a) (eff : a Effect.t) ->
+              match eff with
+              | Prim_call (name, args) ->
+                  Some
+                    (fun (k : (a, _) continuation) ->
+                      match Hashtbl.find_opt prims name with
+                      | None ->
+                          discontinue k
+                            (Interp_error
+                               (Prim_error
+                                  (name, "unregistered primitive", "prim_error")))
+                      | Some fn ->
+                          (try continue k (fn args) with
+                           | exn -> discontinue k exn))
+              | _ -> None)
+        })

@@ -356,6 +356,15 @@
   (doc "Book chapter — full text inlined from borge/lisp-interpreter.borg")
   (inline borge/lisp-interpreter.borg)
  )
+
+ (section agent
+  (doc "Book chapter — local Nopales-native coding agent (pi-inspired sibling, not the image); full text inlined from borge/agent.borg")
+  (inline borge/agent.borg)
+ )
+ (section remote-eval
+  (doc "Book chapter — Nopales interprets in a client process while the corpus + data plane stay authoritative in Postgres (the Prim_call seam agent.borg uses, relaxed across HTTP); full text inlined from borge/remote-eval.borg")
+  (inline borge/remote-eval.borg)
+ )
  (section storage
   (doc "Book chapter — full text inlined from borge/storage.borg")
   (inline borge/storage.borg)
