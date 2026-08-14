@@ -17,6 +17,7 @@ type budget = {
   mutable current_fn : string option;
   mutable prim_calls : int;
   mutable db_hits : int;
+  mutable db_ms : float;
   fn_step_counts : (string, int) Hashtbl.t;
 }
 
@@ -29,6 +30,7 @@ let make_budget ?(limit = default_limit) () : budget =
     current_fn = None;
     prim_calls = 0;
     db_hits = 0;
+    db_ms = 0.;
     fn_step_counts = Hashtbl.create 16;
   }
 
@@ -50,6 +52,11 @@ let budget_remaining_steps () : int =
 let note_db_hit () : unit =
   match !current_budget with
   | Some b -> b.db_hits <- b.db_hits + 1
+  | None -> ()
+
+let note_db_ms (ms : float) : unit =
+  match !current_budget with
+  | Some b -> b.db_ms <- b.db_ms +. ms
   | None -> ()
 
 let tick (b : budget) : unit =

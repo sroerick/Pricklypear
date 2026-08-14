@@ -1,6 +1,7 @@
 (project pricklypear-hypermedia-harness
  (doc "Pricklypear book chapter: a headless hypermedia client — a server-side htmx swap simulator that is the reference implementation of the fixi-five contract, for debug agents and verification harnesses. It runs in the image, fetches no HTTP, runs no browser, and calls route handlers in-process.")
  (status implemented)
+ (* agent note (|2026-08-14 RECONCILE, with agent.borg: the harness is now a SHARED, host-portable layer. soup/* stays DB-free and is lifted into the shared pure-prims layer so the image (Postgres corpus) and the agent (local-first lens corpus) register the same tree prims. The ONE host seam is route/dispatch + route/lookup (request-runner): Nopales signatures identical, host-local backing (Session.t Postgres routes vs Runtime.t lens routes; fat Request_context vs thin agent request context). libs/hyper runs unchanged on both. Streaming swaps (hx-multipart multipart/mixed, HX-Target/HX-Swap per part) move INTO the contract as data — soup/apply-parts! applies an ordered part list; hyper/stream wraps it immutably; transport/timing stays CDP-tier (unsupported-boundary). This is the refactor that lifts the agent's chat/agent UI from SSE+vanilla-JS to Nopales-authored htmx fragments.|) *)
  (convention ocaml-dune)
  (section hypermedia-harness
   (doc "A headless htmx client living inside the image. It invokes route
@@ -41,6 +42,14 @@
            - hx-vals: JSON values only
            - Swap strategies: innerHTML, outerHTML, beforebegin, afterbegin,
              beforeend, afterend, delete, none
+           - hx-multipart streaming swap class: a multi-part streamed
+             response (multipart/mixed, one fragment per part, each with
+             per-part HX-Target/HX-Swap headers — see kernel-prims
+             apply-parts!) is modeled by applying the captured part list
+             in order onto the page (soup/apply-parts!), not by racing
+             bytes over a socket. The stream is reduced to data before
+             the harness consumes it, so the swap semantics are the same
+             fixi-five swap machinery applied N times, deterministically.
     |))
    )
    (status implemented)
@@ -61,12 +70,17 @@
            - hx-vals with js: prefix — cannot eval JS
            - Triggers with debounce / throttle / delay modifiers
            - hx-sync — request queueing and coordination
-           - hx-boost, hx-ws, hx-sse — not used in PP's markup; deliberately
-             out of scope. Their absence from the codebase is why the
-             fixi-five subset is a faithful contract for PP, and the trigger
-             to revisit this boundary is concrete: the day any of these
-             appears in libs/, the subset must either grow or that flow must
-             acknowledge the CDP tier.
+           - hx-boost, hx-ws — not used in PP's markup; out of scope.
+           - hx-sse transport/timing — the streaming SWAP class is now
+             MODELED (supported-subset hx-multipart: an ordered part list
+             applied via soup/apply-parts!). What stays NOT MODELED is the
+             transport/timing axis — racing bytes, reconnect, server push
+             cadence — which is not a swap semantic and graduates to CDP.
+             The absence of hx-boost/hx-ws from PP's markup is why the
+             fixi-five subset is a faithful contract for PP, and the
+             trigger to revisit this boundary is concrete: the day either
+             appears in libs/, the subset must either grow or that flow
+             must acknowledge the CDP tier.
     |))
    )
    (status implemented)
@@ -104,12 +118,34 @@
            (soup/diff a b)                   -> structured what-changed report
                                                  (added/removed ids + text changes
                                                   within same-id elements)
+           (soup/apply-parts! page parts)   -> mutate in place; parts is a
+                                                 VList of part alists, each
+                                                 (("html" . frag) ("target" . sel)
+                                                  ("swap" . strat)); each part is
+                                                 located (soup/select target) then
+                                                 swapped (soup/swap! strat frag)
+                                                 in ORDER. target/swap absent ->
+                                                 caller's element + "innerHTML",
+                                                 matching hyper/do-swap defaults.
+                                                 Matches the multipart/mixed wire
+                                                 shape http_agent.mp_write_part
+                                                 emits (per-part HX-Target/HX-Swap);
+                                                 see supported-subset hx-multipart.
 
          Mutations use lambdasoup's append_child / insert_before /
          insert_after / delete / clear / set_attribute. The diff is
          node-level (which ids changed, added, removed, or text-changed),
          not a raw text diff — this is the agent-facing value: a compact
          report instead of dumping DOM into model context.
+
+         SHARED KERNEL. The soup/ tree layer is DB-free. It is lifted out
+         of image/lib/prims_hyper.ml into the shared pure-prims layer
+         (pure/, alongside prims_pure.ml) so BOTH hosts register the same
+         prims: the image (Postgres corpus) and the agent (local-first
+         lens corpus). Only route/dispatch + route/lookup + the
+         request-runner remain host-specific (they touch the host's store /
+         routes / request context — see request-runner). lambdasoup +
+         markup become deps of the agent package, joined on the same seam.
     |))
    )
    (status verified)
@@ -117,14 +153,21 @@
     (build "dune build image")
     (test "soup/parse + soup/select round-trips a server-rendered /notes page")
     (test "soup/swap! applies each of the eight strategies correctly")
-    (test "soup/diff detects added, removed, and changed nodes"))
+    (test "soup/diff detects added, removed, and changed nodes")
+    (test "soup/apply-parts! applies an ordered part list into the page: each part's fragment lands at its target with its swap strategy, in sequence"))
   )
 
   (subsection request-runner
    (doc "In-process dispatch reuses existing machinery — no new transport.
        The harness binds a synthetic request and invokes a routed handler
-       the same way the HTTP gate does, without an Httpun socket.")
-   (implements image/lib/http.ml image/lib/session.ml image/lib/request_context.ml image/lib/prims_hyper.ml)
+       the same way the HTTP gate does, without an Httpun socket. This is
+       THE HOST SEAM: the only prims that differ between hosts. The image
+       backs them with its Postgres corpus (Session.t routes + store +
+       Request_context manifest); the agent backs them with its local-first
+       lens corpus (Runtime route table + a thinner request context). The
+       Nopales signatures are identical, so libs/hyper runs unchanged on
+       both hosts.")
+   (implements image/lib/http.ml image/lib/session.ml image/lib/request_context.ml image/lib/prims_hyper.ml agent/lib/runtime.ml)
    (details
     (doc (|
          Request_context.make ~manifest ~env ~routes constructs the
@@ -149,12 +192,26 @@
          hyper/visit and hyper/click sit on top of route/dispatch.
            (route/lookup path)               -> handler-name VStr | nil
          resolves a URL path to its handler via the route table.
+
+         AGENT HOST BACKING (see agent.borg agent-route-table). The agent
+         implements the SAME prim signatures against its runtime: routes
+         live on a Runtime-scoped route table (Runtime.t.routes), populated
+         by the agent's (route path handler) prim reading its lens-resident
+         defs; dispatch invokes the Nopales handler through
+         Runtime.apply_value under the eval rim; the request context is
+         THINNER (no Postgres manifest / branches / auth — only the
+         request-shaped prims resolve: query-param, request-method,
+         hx-request?). Request prims that need a DB/branch (e.g.
+         current-author-as-DB-row) are unbound in the agent; the agent's
+         request context provides only the request-shape values. This is
+         the intended portability seam: same prims, host-local backing.
     |))
    )
    (status verified)
    (verify
     (build "dune build image")
-    (smoke "route/dispatch on a routed page handler with a synthetic GET context (Request_context bound) returns the same HTML the HTTP gate returns for the corresponding GET"))
+    (smoke "route/dispatch on a routed page handler with a synthetic GET context (Request_context bound) returns the same HTML the HTTP gate returns for the corresponding GET")
+    (smoke "agent: route/dispatch on an agent-registered handler runs the Nopales fn through the runtime and returns its rendered fragment (no Postgres)"))
   )
 
   (subsection nopales-surface
@@ -186,6 +243,18 @@
            (hyper/attr node name)            ; attribute value
            (hyper/diff p1 p2)                ; node-level what-changed
            (hyper/expect page sel expected)  ; assertion (for smokes)
+           (hyper/stream page parts)          ; apply an ordered multipart
+                                              ; part list onto a page via
+                                              ; soup/page-copy + soup/apply-parts!,
+                                              ; return NEW page (immutable:
+                                              ; input page unchanged). parts
+                                              ; come from the host stream as
+                                              ; DATA (agent: loop.ml collects
+                                              ; the emitted HX-Target/HX-Swap
+                                              ; parts; image: http_agent
+                                              ; mp_write_part). Lets hyper/**
+                                              ; assert a consumed chat/agent
+                                              ; turn deterministically.
            (hyper/sandbox branch body)       ; v1 stub — branch checkout with
                                               ; restore needs dynamic-wind
 

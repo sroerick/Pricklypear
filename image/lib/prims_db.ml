@@ -67,9 +67,9 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
         Pricklypear_lisp.Eval.note_db_hit ();
         let t0 = Unix.gettimeofday () in
         let result = fn (coerce_sym_args args) in
-        let _elapsed_ms = (Unix.gettimeofday () -. t0) *. 1000. in
-        (* elapsed available for future function_stat.db_time_ms aggregation *)
-        ignore _elapsed_ms;
+        let elapsed_ms = (Unix.gettimeofday () -. t0) *. 1000. in
+        (* accumulate DB wall time into the eval budget for page-timing *)
+        Pricklypear_lisp.Eval.note_db_ms elapsed_ms;
         result)
   in
   (* (deftype 'name 'field1 'field2 ...) -> VStr "defined type <name>".

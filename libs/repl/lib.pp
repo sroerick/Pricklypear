@@ -250,6 +250,7 @@
         "<form class=\"repl-form\""
         " hx-post=\"/repl-v2/send\""
         " hx-ext=\"hx-multipart\""
+        " hx-config='{\"timeout\":0}'"
         " hx-target=\"#repl-transcript\""
         " hx-swap=\"beforeend\""
         " hx-on::htmx:config-request=\"let q=(event.detail.parameters.q||'');if(q[0]!='/'&&q[0]!='('){event.detail.path='/repl-v2/llm';}\""

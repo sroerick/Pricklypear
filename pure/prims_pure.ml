@@ -1731,6 +1731,40 @@ let prim_string_ends_with_p args =
                (coerce_str ~ctx:"string-ends-with?" a))
   | _ -> raise (Interp_error (User_error ("string-ends-with? needs 2 strings", "bad-args")))
 
+(* (string-split s delim) -> VList of VStr.
+   Matches the libs/std Nopales string-split semantics so libs/hyper runs
+   unchanged on hosts that don't load libs/std (the agent): empty/no-match
+   -> single-element list of the whole string; otherwise splits on each
+   non-overlapping occurrence of delim, preserving empty trailing
+   segments. The image gets string-split from libs/std (its `(define …)`
+   shadows this prim in env); the agent registers this prim directly. *)
+let prim_string_split args =
+  match args with
+  | [ s_v; d_v ] ->
+      let s = coerce_str ~ctx:"string-split" s_v in
+      let d = coerce_str ~ctx:"string-split" d_v in
+      let slen = String.length s in
+      let dlen = String.length d in
+      if slen = 0 || dlen = 0 then VList [ VStr s ]
+      else begin
+        (* search for delim like string-contains? (byte compare) *)
+        let find_from i =
+          let rec go j =
+            if j + dlen > slen then None
+            else if String.sub s j dlen = d then Some j
+            else go (j + 1)
+          in
+          go i
+        in
+        let rec loop acc i =
+          match find_from i with
+          | None -> List.rev (VStr (String.sub s i (slen - i)) :: acc)
+          | Some p -> loop (VStr (String.sub s i (p - i)) :: acc) (p + dlen)
+        in
+        VList (loop [] 0)
+      end
+  | _ -> raise (Interp_error (User_error ("string-split needs (s delim)", "bad-args")))
+
 (* ---- url-encode / url-decode (percent-encoding) ---- *)
 
 let prim_url_encode args =

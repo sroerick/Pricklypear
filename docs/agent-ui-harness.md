@@ -254,9 +254,25 @@ Upgraded from htmx 1.9.12 (unpkg CDN) to **htmx 4.0.0-beta6** (vendored at
 stance). The htmx-2-compat extension (`htmx-2-compat.min.js`) restores
 implicit attribute inheritance, 1.9/2.x error no-swap defaults, and old
 camelCase event names so existing markup keeps working during incremental
-migration. The custom `hx-multipart` extension was ported to the htmx 4
-event-based API (`registerExtension` + `htmx_after_request`/`htmx_before_swap`
-hooks; no longer touches `evt.detail.xhr`).
+migration. **2026-08-14 correction on hx-multipart:** the initial in-repo port to the htmx 4
+API (parse in `htmx_after_request`, swap in `htmx_before_swap`) was structurally
+broken for streams: htmx 4 buffers `response.text()` fully before
+`htmx:after:request`, so parts could only ever render all-at-once at stream end,
+and htmx 4's `defaultTimeout` (60 s) aborted slow streams outright. Compounded
+by a server bug: streamed responses went out **close-delimited on keep-alive
+connections** (no `content-length`, no `transfer-encoding`), so `fetch()` never
+saw end-of-body at all. Fixed by (a) vendoring the *upstream* htmx-4
+`hx-multipart` artifact (`bigskysoftware/htmx@four` src/ext/hx-multipart.js,
+pinned `f1500b3`) which patches `Response.text()` in `htmx:before:response` and
+iterates `response.parts()` over the live ReadableStream, swapping per part;
+(b) `transfer-encoding: chunked` on all streaming response sites
+(`agent/lib/http_ui.ml`, `image/lib/http_agent.ml` SSE + multipart branches);
+(c) `hx-config='{"timeout":0}'` on streaming forms (agent chat, repl-v2) so a
+whole agent turn isn't bounded by `defaultTimeout`. Regression nets:
+`scripts/smoke_agent_surface.sh` (wire framing + termination),
+`scripts/smoke_agent_cdp.mjs` (real headless chromium: parts land in DOM and
+the htmx request completes). Server contract for any future streaming route:
+chunked-framed or connection-closing — never unframed on keep-alive.
 
 Feature inventory (271 `hx-*` attributes across `libs/` + `image/`):
 
@@ -372,3 +388,4 @@ Links rot; the **patterns** on this page are the durable part.
 |------|------|
 | 2026-07-19 | Initial research wiki from external survey + local AGENTS/smoke practice |
 | 2026-08-06 | htmx 1.9.12 → 4.0.0-beta6 (vendored, no CDN); compat ext + hx-multipart ported to v4 API; feature inventory table + fixi-five budget policy added |
+| 2026-08-14 | hx-multipart hand-port replaced by the upstream four-branch artifact (vendored, pinned f1500b3); streamed responses now chunked-framed server-side (was close-delimited on keep-alive = never terminating); hx-config timeout escape on streaming forms; agent surface + CDP smokes graduated |

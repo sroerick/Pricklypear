@@ -243,6 +243,11 @@ let api_agent (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
               ; ("cache-control", "no-cache")
               ; ("connection", "keep-alive")
               ; ("x-accel-buffering", "no")
+              (* Chunked framing is MANDATORY for a streamed response:
+                 without an explicit framing header httpun emits the body
+                 close-delimited, and on a keep-alive HTTP/1.1 connection
+                 the client can never detect end-of-body. *)
+              ; ("transfer-encoding", "chunked")
               ]
           in
           let resp = Httpun.Response.create ~headers `OK in
@@ -429,6 +434,10 @@ let repl_llm (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
           [ ("content-type", "multipart/mixed; boundary=" ^ boundary)
           ; ("cache-control", "no-cache")
           ; ("x-accel-buffering", "no")
+          (* Chunked framing is MANDATORY for a streamed response (see
+             api_agent SSE branch): close-delimited bodies on keep-alive
+             connections never terminate on the wire. *)
+          ; ("transfer-encoding", "chunked")
           ; ("hx-target", "#repl-transcript")
           ; ("hx-swap", "beforeend")
           ]

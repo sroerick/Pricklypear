@@ -2,7 +2,7 @@
  (name pricklypear_agent_lib)
  (public_name pricklypear-agent.lib)
  (wrapped false)
- (modules runtime plugins provider tools loop)
+ (modules runtime plugins provider tools loop http_ui assets surface libs_source)
  (libraries
   pricklypear-lisp
   pricklypear-common
@@ -16,4 +16,45 @@
   tls-eio
   ca-certs-nss
   domain-name
+  markup
+  lambdasoup
   unix))
+
+(rule
+ (targets assets.ml)
+ (deps ../../image/static/htmx.min.js
+        ../../image/static/hx-multipart.js
+        ../../image/static/htmx-2-compat.min.js)
+ (action
+  (with-stdout-to assets.ml
+   (progn
+    (echo "(* Auto-generated: vendored htmx assets baked into the agent binary. *)")
+    (echo "(* Do not edit by hand. *)")
+    (echo "let htmx_min = {asset|")
+    (cat ../../image/static/htmx.min.js)
+    (echo "|asset}")
+    (echo "let hx_multipart = {asset|")
+    (cat ../../image/static/hx-multipart.js)
+    (echo "|asset}")
+    (echo "let htmx_2_compat = {asset|")
+    (cat ../../image/static/htmx-2-compat.min.js)
+    (echo "|asset}")))))
+
+;; Embed the Nopales packages the agent surface depends on (libs/html,
+;; libs/hyper) as OCaml quoted strings so the agent binary is
+;; self-contained regardless of cwd. Sources: libs/html/lib.pp,
+;; libs/hyper/lib.pp.
+(rule
+ (targets libs_source.ml)
+ (deps ../../libs/html/lib.pp ../../libs/hyper/lib.pp)
+ (action
+  (with-stdout-to libs_source.ml
+   (progn
+    (echo "(* Auto-generated: embedded Nopales package sources. *)")
+    (echo "(* Do not edit by hand. *)")
+    (echo "let html_lib = {pp|")
+    (cat ../../libs/html/lib.pp)
+    (echo "|pp}")
+    (echo "let hyper_lib = {pp|")
+    (cat ../../libs/hyper/lib.pp)
+    (echo "|pp}")))))
