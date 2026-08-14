@@ -318,7 +318,13 @@
 
          HARD OUT (forever, or a different project):
            - A second store on the client. The client is a cache and
-             an interpreter, never a source of truth.
+             an interpreter, never a source of truth. (Revisited by
+             local-first.borg: a LENS is not a second store — it is a
+             governed branch with merge semantics. The hard-out
+             stands for an UNCOORDINATED client copy; local-first is
+             the project that reframes it. The reframing is honest
+             only because the one tree + three-way tree-diff merge
+             already exist; without them this hard-out stays hard.)
            - Multi-user on the client. One client = one user.
            - Language changes made in remote/ instead of through
              lisp-interpreter.borg. The client is a host, not a fork.
