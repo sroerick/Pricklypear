@@ -54,7 +54,7 @@ let () =
     }
   in
   let transport = Http_transport.transport ~env ~sw ~cfg in
-  let t = Remote.make ~transport in
+  let t = Remote.make ~transport () in
   let eval_print src =
     try
       let v = Remote.eval t src in
