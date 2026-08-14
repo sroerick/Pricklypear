@@ -17,3 +17,8 @@
  (name recursion_test)
  (modules recursion_test)
  (libraries pricklypear-lisp alcotest))
+
+(test
+ (name codec_test)
+ (modules codec_test)
+ (libraries pricklypear-lisp pricklypear-pure-prims alcotest yojson))
