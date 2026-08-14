@@ -732,8 +732,14 @@
    (status implemented)
    (details
     (doc (|
-         - NOT a new database. Postgres stays the physical
-           substrate; the tree is Postgres-resident JSONB.
+         - NOT a new database. Postgres is A physical substrate
+           (the server's); the tree is Postgres-resident JSONB
+           server-side. A local lens may use another substrate
+           (filesystem) per local-first.borg — the prim ABI is
+           substrate-agnostic, and a lens is a materialized subtree,
+           not a second store. The tree's truth is logical (paths +
+           envelopes + hashes), not physical; Postgres is how the
+           server holds it, not what it IS.
          - NOT versioned user data in v1. Data is USER-OWNED
            (data.u.<user>.*) or SHARED (data.shared.*), keyed
            by user, never by branch. There is no branch

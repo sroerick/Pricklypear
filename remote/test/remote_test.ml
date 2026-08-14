@@ -127,6 +127,49 @@ let test_no_local_store_write () =
         (not (List.mem f local_names)))
     forbidden
 
+(** Hybrid placement integration: with a whole-expression remote_eval
+    hook attached, a (with-transaction …) expression is NOT run locally
+    through the proxy rim — it is POSTed to the remote_eval hook
+    wholesale (hard correctness: locks can't span HTTP). No local store
+    write, no per-prim proxying of the transaction body. *)
+let test_transaction_routed_remote () =
+  let transport, calls, _ = mock_transport () in
+  let remote_calls = ref [] in
+  let t =
+    Remote.make ~transport
+      ~remote_eval:(fun src ->
+        remote_calls := src :: !remote_calls;
+        VStr "committed")
+      ()
+  in
+  let v =
+    Remote.eval t
+      "(with-transaction (lambda () (create 'note 'n1)))"
+  in
+  Alcotest.(check pp_value_testable) "hook returned value" (VStr "committed") v;
+  Alcotest.(check int) "remote_eval called exactly once" 1 (List.length !remote_calls);
+  (match !remote_calls with
+   | [ src ] ->
+       Alcotest.(check bool) "WHOLE source sent to /api/eval" true
+         (String.length src > 0)
+   | _ -> Alcotest.fail "expected exactly one remote eval");
+  (* the transaction body was NOT proxied prim-by-prim: no /api/prim calls *)
+  Alcotest.(check int) "zero per-prim transport calls" 0 (List.length !calls)
+
+(** A Remote placement with NO remote_eval hook raises instead of
+    silently running locally — never pretend a transaction is local. *)
+let test_transaction_without_hook_raises () =
+  let transport, _calls, _ = mock_transport () in
+  let t = Remote.make ~transport () in
+  (try
+     ignore (Remote.eval t "(with-transaction (lambda () (+ 1 2)))");
+     Alcotest.fail "expected failwith (no remote-eval transport)"
+   with
+  | Failure msg ->
+      Alcotest.(check bool) "raises a clear message" true
+        (String.length msg > 0)
+  | other -> Alcotest.fail ("wrong exn: " ^ Printexc.to_string other))
+
 let () =
   Alcotest.run "remote"
     [
@@ -137,5 +180,7 @@ let () =
           Alcotest.test_case "lazy def miss fetches + evals" `Quick test_lazy_def_miss;
           Alcotest.test_case "genuinely unbound fails cleanly" `Quick test_genuinely_unbound;
           Alcotest.test_case "no local store-write prims" `Quick test_no_local_store_write;
+          Alcotest.test_case "transaction routed to remote_eval wholesale" `Quick test_transaction_routed_remote;
+          Alcotest.test_case "transaction without hook raises" `Quick test_transaction_without_hook_raises;
         ] );
     ]
