@@ -36,6 +36,14 @@ type cfg = {
   system : string;
 }
 
+(* The OpenAI wire codec (types, tool_def_to_json, tool-call parsing,
+   XML-in-content fallback, GLM reasoning_content handling) is shared
+   with the image agent via common/lib/llm_codec.ml. This module owns
+   only the Eio transport + the host-specific [message]/[reply]
+   shapes (the standalone agent round-trips raw message JSON in
+   history, so [reply.raw] is the assistant message object). *)
+module Llm_codec = Pricklypear_common.Llm_codec
+
 (* HTTP/1.1 POST written directly on an Eio flow (plain or TLS).
    Httpun_eio.Client's gluten runtime insists on a socket-typed flow,
    which TLS flows can't satisfy; a 1.1 request/response with
@@ -177,32 +185,61 @@ module Openai = struct
     let open Yojson.Safe.Util in
     let choice = j |> member "choices" |> index 0 in
     let msg = choice |> member "message" in
-    let text =
-      match msg |> member "content" with
-      | `String s -> s
-      | `Null -> ""
-      | other -> Yojson.Safe.to_string other
+    let stop_reason =
+      choice |> member "finish_reason" |> to_string_option
+      |> Option.value ~default:"stop"
+    in
+    (* Tool calls: shared parser handles the API [tool_calls] field AND
+       the XML-in-content fallback (GLM-class models that dump tool
+       calls as XML tags inside [content] instead of using the API
+       field). The image agent has bled for this; the standalone agent
+       inherits it. *)
+    let api_tcs = Llm_codec.parse_tool_calls_from_msg msg in
+    let tcs, content_for_xml =
+      match api_tcs with
+      | _ :: _ -> (api_tcs, None)
+      | [] ->
+          let content_opt =
+            match msg |> member "content" |> to_string_option with
+            | Some c when String.trim c <> "" -> Some c
+            | _ -> None
+          in
+          (match content_opt with
+           | Some c ->
+               let xml_tcs = Llm_codec.parse_xml_tool_calls c in
+               (xml_tcs, if xml_tcs = [] then None else Some "")
+           | None -> ([], None))
     in
     let calls =
-      match msg |> member "tool_calls" with
-      | `List tcs ->
-          List.map
-            (fun tc ->
-              let fn = tc |> member "function" in
-              {
-                id = tc |> member "id" |> to_string;
-                name = fn |> member "name" |> to_string;
-                input =
-                  (match fn |> member "arguments" with
-                   | `String s -> (
-                       try Yojson.Safe.from_string s with _ -> `Assoc [])
-                   | other -> other);
-              })
-            tcs
-      | _ -> []
+      List.map
+        (fun (tc : Llm_codec.tool_call) ->
+          let input =
+            match Yojson.Safe.from_string tc.arguments with
+            | json -> json
+            | exception _ -> `Assoc []
+          in
+          { id = tc.id; name = tc.name; input })
+        tcs
     in
-    { text; calls; stop_reason = choice |> member "finish_reason" |> to_string_option |> Option.value ~default:"stop"
-    ; raw = msg }
+    let text =
+      (* Prefer explicit content; GLM-class models sometimes fill
+         reasoning_content and leave content null — fall back to it so a
+         pure-text reply is not lost. *)
+      let c =
+        match content_for_xml with
+        | Some s -> s
+        | None -> (
+            match msg |> member "content" |> to_string_option with
+            | Some s -> s
+            | None -> "")
+      in
+      if c <> "" then c
+      else
+        (match msg |> member "reasoning_content" |> to_string_option with
+         | Some s -> s
+         | None -> "")
+    in
+    { text; calls; stop_reason; raw = msg }
 
   let complete ~(env : Eio_unix.Stdenv.base) ~sw ~(cfg : cfg)
       ~(messages : message list) ~(tools : tool_def list)

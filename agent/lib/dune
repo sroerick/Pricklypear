@@ -5,6 +5,7 @@
  (modules runtime plugins provider tools loop)
  (libraries
   pricklypear-lisp
+  pricklypear-common
   pricklypear-pure-prims
   yojson
   eio

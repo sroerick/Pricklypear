@@ -91,10 +91,123 @@ let protocol_tests = [
       (Protocol.H_unhealthy = Protocol.health_status_of_string "unhealthy"));
 ]
 
+let llm_codec_tests = [
+  ("llm-codec: tool_def_to_json shape", `Quick, fun () ->
+    let j = Llm_codec.tool_def_to_json
+      { name = "read"; description = "read a file";
+        parameters = `Assoc [ ("type", `String "object") ] }
+    in
+    let open Yojson.Safe.Util in
+    Alcotest.(check string) "type" "function" (j |> member "type" |> to_string);
+    Alcotest.(check string) "name" "read"
+      (j |> member "function" |> member "name" |> to_string));
+  ("llm-codec: parse_tool_calls_from_msg API field", `Quick, fun () ->
+    let msg = Yojson.Safe.from_string
+      {|{"tool_calls":[{"id":"call_1","function":{"name":"bash","arguments":"{\"command\":\"echo hi\"}"}}]}|}
+    in
+    let tcs = Llm_codec.parse_tool_calls_from_msg msg in
+    Alcotest.(check int) "one call" 1 (List.length tcs);
+    (match tcs with
+     | [tc] ->
+        Alcotest.(check string) "id" "call_1" tc.Llm_codec.id;
+        Alcotest.(check string) "name" "bash" tc.Llm_codec.name;
+        Alcotest.(check string) "args" "{\"command\":\"echo hi\"}" tc.Llm_codec.arguments
+     | _ -> Alcotest.fail "expected one tool call"));
+  ("llm-codec: parse_tool_calls_from_msg empty", `Quick, fun () ->
+    let msg = `Assoc [ ("content", `String "hello") ] in
+    Alcotest.(check int) "none" 0
+      (List.length (Llm_codec.parse_tool_calls_from_msg msg)));
+  ("llm-codec: parse_xml_tool_calls fallback", `Quick, fun () ->
+    (* Build the XML-ish tool-call block by concatenation so this
+       source contains no literal tool-call tag boundaries. *)
+    let block =
+      ("<" ^ "tool_call>") ^ " install_function "
+      ^ ("<" ^ "arg_key>name" ^ "</" ^ "arg_key>")
+      ^ ("<" ^ "arg_value>foo" ^ "</" ^ "arg_value>")
+      ^ ("<" ^ "arg_key>body" ^ "</" ^ "arg_key>")
+      ^ ("<" ^ "arg_value>(lambda () 1)" ^ "</" ^ "arg_value>")
+      ^ ("</" ^ "tool_call>")
+    in
+    let tcs = Llm_codec.parse_xml_tool_calls block in
+    Alcotest.(check int) "one xml call" 1 (List.length tcs);
+    (match tcs with
+     | [tc] ->
+        Alcotest.(check string) "name" "install_function" tc.Llm_codec.name;
+        (match Yojson.Safe.from_string tc.Llm_codec.arguments with
+         | `Assoc kvs ->
+            (match List.assoc_opt "name" kvs, List.assoc_opt "body" kvs with
+             | Some (`String n), Some (`String b) ->
+                Alcotest.(check string) "arg name" "foo" n;
+                Alcotest.(check string) "arg body" "(lambda () 1)" b
+             | _ -> Alcotest.fail "missing args")
+         | _ -> Alcotest.fail "arguments not an object")
+     | _ -> Alcotest.fail "expected one xml tool call"));
+  ("llm-codec: parse_turn_response Final", `Quick, fun () ->
+    let body =
+      {|{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"hello there"}}]}|}
+    in
+    (match Llm_codec.parse_turn_response body with
+     | Llm_codec.Final { content; _ } ->
+        Alcotest.(check string) "content" "hello there" content
+     | other -> Alcotest.fail ("expected Final, got other")));
+  ("llm-codec: parse_turn_response Need_tools via API field", `Quick, fun () ->
+    let body =
+      {|{"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":null,"tool_calls":[{"id":"t9","function":{"name":"read","arguments":"{\"path\":\"a.txt\"}"}}]}}]}|}
+    in
+    (match Llm_codec.parse_turn_response body with
+     | Llm_codec.Need_tools { tool_calls; _ } ->
+        Alcotest.(check int) "one tool" 1 (List.length tool_calls);
+        (match tool_calls with
+         | [tc] -> Alcotest.(check string) "name" "read" tc.Llm_codec.name
+         | _ -> Alcotest.fail "expected one")
+     | other -> Alcotest.fail "expected Need_tools, got other"));
+  ("llm-codec: parse_turn_response Need_tools via XML fallback", `Quick, fun () ->
+    let xml_block =
+      ("<" ^ "tool_call>") ^ " bash "
+      ^ ("<" ^ "arg_key>command" ^ "</" ^ "arg_key>")
+      ^ ("<" ^ "arg_value>echo x" ^ "</" ^ "arg_value>")
+      ^ ("</" ^ "tool_call>")
+    in
+    let body =
+      Printf.sprintf
+        {|{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":%s}}]}|}
+        (Yojson.Safe.to_string (`String xml_block))
+    in
+    (match Llm_codec.parse_turn_response body with
+     | Llm_codec.Need_tools { tool_calls; _ } ->
+        Alcotest.(check int) "one xml tool" 1 (List.length tool_calls);
+        (match tool_calls with
+         | [tc] -> Alcotest.(check string) "name" "bash" tc.Llm_codec.name
+         | _ -> Alcotest.fail "expected one")
+     | other -> Alcotest.fail "expected Need_tools via XML"));
+  ("llm-codec: parse_turn_response reasoning_content fallback", `Quick, fun () ->
+    let body =
+      {|{"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":null,"reasoning_content":"the real answer"}}]}|}
+    in
+    (match Llm_codec.parse_turn_response body with
+     | Llm_codec.Final { content; _ } ->
+        Alcotest.(check string) "content" "the real answer" content
+     | other -> Alcotest.fail "expected Final from reasoning_content"));
+  ("llm-codec: extract_stream_delta", `Quick, fun () ->
+    let chunk = {|{"choices":[{"delta":{"content":"tok"}}]}|} in
+    Alcotest.(check string) "delta" "tok"
+      (Option.value (Llm_codec.extract_stream_delta chunk) ~default:"");
+    Alcotest.(check bool) "done is none" true
+      (Option.is_none (Llm_codec.extract_stream_delta "[DONE]")));
+  ("llm-codec: extract_content picks complete-json content", `Quick, fun () ->
+    let body =
+      {|{"choices":[{"finish_reason":"stop","message":{"content":"{\"x\":1}","reasoning_content":"essay"}}]}|}
+    in
+    (match Llm_codec.extract_content body with
+     | Ok c -> Alcotest.(check string) "complete json wins" "{\"x\":1}" c
+     | Error e -> Alcotest.fail e));
+]
+
 let () =
   Alcotest.run "pricklypear-common" [
     "branch", branch_tests;
     "manifest", manifest_tests;
     "auth-types", auth_types_tests;
     "protocol", protocol_tests;
+    "llm-codec", llm_codec_tests;
   ]
