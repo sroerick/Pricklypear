@@ -9,6 +9,8 @@
     with agent provenance. This module only does HTTP; session/http
     layers own store writes. *)
 
+module Llm_codec = Pricklypear_common.Llm_codec
+
 let env_or name dft =
   match Sys.getenv_opt name with
   | Some s when s <> "" -> s
@@ -67,66 +69,9 @@ let shell_quote (s : string) : string =
   Buffer.add_char buf '\'';
   Buffer.contents buf
 
-let string_field (msg : Yojson.Safe.t) (key : string) : string =
-  match msg with
-  | _ ->
-      (match Yojson.Safe.Util.(msg |> member key |> to_string_option) with
-       | Some s -> s
-       | None -> "")
-
-(** True when [s] looks like a complete JSON value (object/array/string). *)
-let looks_complete_json (s : string) : bool =
-  let s = String.trim s in
-  if s = "" then false
-  else
-    try
-      let _ = Yojson.Safe.from_string s in
-      true
-    with _ -> false
-
-let extract_content (body : string) : call_result =
-  try
-    let json = Yojson.Safe.from_string body in
-    let open Yojson.Safe.Util in
-    let choices = json |> member "choices" |> to_list in
-    match choices with
-    | [] -> Error "LLM: empty choices"
-    | choice :: _ ->
-        let msg = choice |> member "message" in
-        let finish =
-          match choice |> member "finish_reason" |> to_string_option with
-          | Some f -> f
-          | None -> "?"
-        in
-        let content_field = string_field msg "content" in
-        let reasoning =
-          let r1 = string_field msg "reasoning_content" in
-          if r1 <> "" then r1 else string_field msg "reasoning"
-        in
-        (* GLM-class models often fill message.reasoning with the essay and
-           leave content null, or start content JSON then hit max_tokens while
-           reasoning already holds a complete fenced object. Prefer a field
-           that actually parses as JSON when the other is empty/truncated. *)
-        let content =
-          match content_field, reasoning with
-          | c, _ when c <> "" && looks_complete_json c -> c
-          | _, r when r <> "" && looks_complete_json r -> r
-          | c, r when c <> "" && r <> "" ->
-              (* truncated content + reasoning: give parse_llm_json both *)
-              c ^ "
-" ^ r
-          | c, _ when c <> "" -> c
-          | _, r when r <> "" -> r
-          | _ -> ""
-        in
-        if content = "" then
-          Error (Printf.sprintf "LLM: empty content (finish=%s)" finish)
-        else Ok content
-  with e ->
-    let trunc =
-      if String.length body > 300 then String.sub body 0 300 ^ "..." else body
-    in
-    Error ("LLM parse error: " ^ Printexc.to_string e ^ " body=" ^ trunc)
+(* string_field / looks_complete_json / extract_content moved to
+   common/lib/llm_codec.ml — shared with the standalone agent. *)
+let extract_content = Llm_codec.extract_content
 
 let call ?(temperature = 0.2) ?(max_tokens = 4096)
     ?(json_object = false) ~(system : string) ~(user : string) () : call_result =
@@ -260,21 +205,8 @@ let extract_lisp_sexpr (s : string) : (string, string) result =
              Error "extracted s-expression too short"
            else Ok sexpr)
 
-(** Extract delta content from one streaming SSE JSON payload. *)
-let extract_stream_delta (data : string) : string option =
-  if data = "[DONE]" then None
-  else
-    try
-      let json = Yojson.Safe.from_string data in
-      let open Yojson.Safe.Util in
-      match json |> member "choices" |> to_list with
-      | [] -> None
-      | choice :: _ ->
-          let delta = choice |> member "delta" in
-          (match delta |> member "content" |> to_string_option with
-           | Some s when s <> "" -> Some s
-           | _ -> None)
-    with _ -> None
+(* extract_stream_delta moved to common/lib/llm_codec.ml. *)
+let extract_stream_delta = Llm_codec.extract_stream_delta
 
 (** Unified agent chat: system=seed, user=prompt.
     When [stream] is true, uses OpenAI stream:true and fires [on_event]
@@ -384,24 +316,23 @@ let agent_chat
 
 (** ---- Multi-turn chat + OpenAI tools (agent loop) ---- *)
 
-type role = System | User | Assistant | Tool
+(* [tool_call] and [tool_def] live in common/lib/llm_codec.ml now
+   (shared with the standalone agent). Aliased here so existing
+   [Llm_client.tool_call] / [Llm_client.tool_def] call sites in
+   ai_store.ml and agent_tools.ml keep working; the record shapes are
+   identical. *)
+type tool_call = Llm_codec.tool_call
+type tool_def = Llm_codec.tool_def
+let tool_def_to_json = Llm_codec.tool_def_to_json
+let parse_tool_calls_from_msg = Llm_codec.parse_tool_calls_from_msg
+let parse_xml_tool_calls = Llm_codec.parse_xml_tool_calls
 
-type tool_call = {
-  id : string;
-  name : string;
-  arguments : string;  (* JSON object string *)
-}
+type role = System | User | Assistant | Tool
 
 type chat_message =
   | Msg of { role : role; content : string }
   | Assistant_tools of { content : string option; tool_calls : tool_call list }
   | Tool_result of { tool_call_id : string; content : string }
-
-type tool_def = {
-  name : string;
-  description : string;
-  parameters : Yojson.Safe.t;  (* JSON Schema object *)
-}
 
 type turn_result =
   | Final of string
@@ -453,176 +384,20 @@ let message_to_json = function
         ; ("content", `String content)
         ]
 
-let tool_def_to_json (t : tool_def) : Yojson.Safe.t =
-  `Assoc
-    [ ("type", `String "function")
-    ; ("function",
-       `Assoc
-         [ ("name", `String t.name)
-         ; ("description", `String t.description)
-         ; ("parameters", t.parameters)
-         ])
-    ]
-
-(** Recover when models dump tools as XML in content instead of API tool_calls.
-    Format seen in the wild (GLM etc.):
-      <tool_call>install_function
-      <arg_key>name</arg_key><arg_value>foo</arg_value>
-      <arg_key>body</arg_key><arg_value>(lambda () 1)</arg_value>
-      </tool_call> *)
-let find_substring ~(hay : string) ~(needle : string) ~(from : int) : int option =
-  let nlen = String.length needle in
-  let hlen = String.length hay in
-  let rec go i =
-    if i + nlen > hlen then None
-    else if String.sub hay i nlen = needle then Some i
-    else go (i + 1)
-  in
-  go from
-
-let parse_xml_tool_calls (text : string) : tool_call list =
-  let open_tag = "<tool_call>" in
-  let close_tag = "</tool_call>" in
-  let rec find_blocks acc from =
-    match find_substring ~hay:text ~needle:open_tag ~from with
-    | None -> List.rev acc
-    | Some start ->
-        let body_start = start + String.length open_tag in
-        (match find_substring ~hay:text ~needle:close_tag ~from:body_start with
-         | None -> List.rev acc
-         | Some stop ->
-             let block = String.sub text body_start (stop - body_start) in
-             find_blocks (block :: acc) (stop + String.length close_tag))
-  in
-  let parse_args block =
-    let rec collect acc from =
-      match find_substring ~hay:block ~needle:"<arg_key>" ~from with
-      | None -> List.rev acc
-      | Some k0 ->
-          let k1 = k0 + String.length "<arg_key>" in
-          (match find_substring ~hay:block ~needle:"</arg_key>" ~from:k1 with
-           | None -> List.rev acc
-           | Some k2 ->
-               let key = String.trim (String.sub block k1 (k2 - k1)) in
-               let after_key = k2 + String.length "</arg_key>" in
-               (match
-                  find_substring ~hay:block ~needle:"<arg_value>" ~from:after_key
-                with
-                | None -> List.rev acc
-                | Some v0 ->
-                    let v1 = v0 + String.length "<arg_value>" in
-                    (match
-                       find_substring ~hay:block ~needle:"</arg_value>" ~from:v1
-                     with
-                     | None -> List.rev acc
-                     | Some v2 ->
-                         let value = String.sub block v1 (v2 - v1) in
-                         collect ((key, value) :: acc)
-                           (v2 + String.length "</arg_value>"))))
-    in
-    collect [] 0
-  in
-  let parse_one idx block =
-    let block = String.trim block in
-    let name =
-      match find_substring ~hay:block ~needle:"<arg_key>" ~from:0 with
-      | Some i -> String.trim (String.sub block 0 i)
-      | None ->
-          (match String.split_on_char '\n' block with
-           | n :: _ -> String.trim n
-           | [] -> "")
-    in
-    let name =
-      match String.split_on_char ' ' (String.trim name) with
-      | x :: _ -> String.trim x
-      | [] -> String.trim name
-    in
-    if name = "" then None
-    else
-      let args = parse_args block in
-      let arguments =
-        Yojson.Safe.to_string
-          (`Assoc (List.map (fun (k, v) -> (k, `String v)) args))
-      in
-      Some
-        { id = Printf.sprintf "xml-tool-%d" (idx + 1)
-        ; name
-        ; arguments
-        }
-  in
-  find_blocks [] 0
-  |> List.mapi parse_one
-  |> List.filter_map (fun x -> x)
-
-let parse_tool_calls (msg : Yojson.Safe.t) : tool_call list =
-  let open Yojson.Safe.Util in
-  match msg |> member "tool_calls" with
-  | `Null -> []
-  | `List xs ->
-      List.filter_map
-        (fun tc ->
-          try
-            let id = tc |> member "id" |> to_string in
-            let fn = tc |> member "function" in
-            let name = fn |> member "name" |> to_string in
-            let arguments =
-              match fn |> member "arguments" with
-              | `String s -> s
-              | other -> Yojson.Safe.to_string other
-            in
-            Some { id; name; arguments }
-          with _ -> None)
-        xs
-  | _ -> []
-
+(* [tool_def_to_json] / [parse_xml_tool_calls] / [parse_tool_calls] /
+   the XML fallback + reasoning_content handling all moved to
+   common/lib/llm_codec.ml. This adapter projects the codec's
+   [turn_result] (which carries [raw]) onto the image's [turn_result]
+   (typed history: we keep only [content] / [tool_calls], drop [raw]). *)
 let parse_turn_response (body : string) : turn_result =
-  try
-    let json = Yojson.Safe.from_string body in
-    let open Yojson.Safe.Util in
-    match json |> member "choices" |> to_list with
-    | [] -> Turn_error "LLM: empty choices"
-    | choice :: _ ->
-        let msg = choice |> member "message" in
-        let finish =
-          match choice |> member "finish_reason" |> to_string_option with
-          | Some f -> f
-          | None -> ""
-        in
-        let content_opt =
-          match msg |> member "content" |> to_string_option with
-          | Some c when String.trim c <> "" -> Some c
-          | _ -> None
-        in
-        let tcs = parse_tool_calls msg in
-        if tcs <> [] then
-          Need_tools { content = content_opt; tool_calls = tcs }
-        else
-          (* Fallback: XML tool_call blocks in content (common model failure). *)
-          let xml_tcs =
-            match content_opt with
-            | Some c -> parse_xml_tool_calls c
-            | None -> []
-          in
-          if xml_tcs <> [] then
-            Need_tools { content = None; tool_calls = xml_tcs }
-          else if finish = "tool_calls" then
-            Turn_error "LLM: finish_reason=tool_calls but no tool_calls payload"
-          else
-            (match content_opt with
-             | Some c -> Final c
-             | None ->
-                 (match msg |> member "reasoning_content" |> to_string_option with
-                  | Some r when String.trim r <> "" -> Final r
-                  | _ ->
-                      Turn_error
-                        (Printf.sprintf "LLM: empty content (finish=%s)" finish)))
-  with e ->
-    let trunc =
-      if String.length body > 300 then String.sub body 0 300 ^ "..." else body
-    in
-    Turn_error ("LLM parse error: " ^ Printexc.to_string e ^ " body=" ^ trunc)
+  match Llm_codec.parse_turn_response body with
+  | Llm_codec.Final { content; _ } -> Final content
+  | Llm_codec.Need_tools { content; tool_calls; _ } ->
+      Need_tools { content; tool_calls }
+  | Llm_codec.Turn_error e -> Turn_error e
 
 (** One non-streaming chat completions call over a full message list. *)
+
 let chat_turn
     ?(temperature = 0.2)
     ?(max_tokens = 4096)
