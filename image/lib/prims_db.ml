@@ -558,7 +558,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
   (* (is-admin?) -> VBool. True iff the calling identity has users.is_admin.
      Option 3 (BORGE-1785213238): reads Auth_store directly — never Env.lookup
      of the name, so a user-defined shadow cannot grant admin. *)
-  Primitives.register tbl "is-admin?"
+  Primitives.register_server_only tbl "is-admin?"
     (fun _args ->
       let uname = caller_username () in
       if uname = "anonymous" then
@@ -583,7 +583,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
   (* (create-user username password [is-admin]) -> VStr new-user-id | error VStr.
      Admin only. Mirrors POST /admin/users action=create (create + set password
      + auth_log admin_create_user). Optional third arg: bool / truthy str/int. *)
-  Primitives.register tbl "create-user"
+  Primitives.register_server_only tbl "create-user"
     (fun args ->
       require_admin "create-user" (fun () ->
         let parse_is_admin = function

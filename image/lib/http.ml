@@ -621,6 +621,7 @@ let request_handler ~(sw : Eio.Switch.t) (session : Session.t)
          repl_page session reqd;
          ())
   | `POST, "/api/eval" -> launch (fun () -> api_eval session reqd)
+  | `POST, "/api/prim" -> launch (fun () -> api_prim session reqd)
   | `POST, "/api/media" -> launch (fun () -> api_media_post session reqd)
   | `GET, "/api/media" ->
       launch (fun () -> api_media_list session reqd ~target)

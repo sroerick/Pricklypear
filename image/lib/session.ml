@@ -225,7 +225,7 @@ let split_branch_ref (s : string) : string * string =
 
 let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
   (* (fork 'parent 'child) -> VStr new-branch-id | VStr "no such parent" *)
-  Primitives.register tbl "fork"
+  Primitives.register_server_only tbl "fork"
     (fun args ->
       if t.manifest.username = "anonymous" then
         (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("fork", "denied for anonymous", "denied"))))
@@ -263,7 +263,7 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
      POLICY (per spec [branching.merge]): merging into `system/*`
      requires the session username to be "admin"; merges into the
      caller's own `owner/*` branches are free. *)
-  Primitives.register tbl "merge"
+  Primitives.register_server_only tbl "merge"
     (fun args ->
       if t.manifest.username = "anonymous" then
         (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("merge", "denied for anonymous", "denied"))))
@@ -359,7 +359,7 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
         in
         (Pricklypear_lisp.Ast.VStr route_path)
   in
-  Primitives.register tbl "route"
+  Primitives.register_server_only tbl "route"
     (fun args ->
       if t.manifest.username = "anonymous" then
         (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("route", "denied for anonymous", "denied"))))
@@ -418,7 +418,7 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
      Mutates t.store.branch_id + t.manifest, then re-hydrates the env
      from the new branch's function_defs (sync — so the next form sees
      the right bindings). Blocked while agent_branch_lock is set. *)
-  Primitives.register tbl "checkout"
+  Primitives.register_server_only tbl "checkout"
     (fun args ->
       if t.manifest.username = "anonymous" then
         (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("checkout", "denied for anonymous", "denied"))))

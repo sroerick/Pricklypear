@@ -1590,6 +1590,71 @@ let api_eval (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
           json_response reqd (Prims_pure.error_to_json exn);
           ())
 
+(* POST /api/prim (borge/remote-eval.borg server-endpoint).
+
+   One prim call per request, dispatched through the session prim table
+   (the SAME table /api/eval dispatches through — the one
+   [register_session_prims] + control/CRUD registrations build) so
+   identity/author/branch are exactly as an in-process eval. Body:
+   {name: str, args: [json…]}. Args deserialize via the shared codec
+   (Prims_pure.json_to_value), the result serializes via
+   Prims_pure.value_to_json, and failures use the shared
+   Prims_pure.error_to_json — so a remote client observes identical
+   values and exceptions to an in-process eval.
+
+   GRANULARITY: per-DB-hit, not per-expression (see placement in the
+   spec for the mitigation). Same auth path as /api/eval (basic-auth /
+   cookie session). No new privilege — a prim call is equivalent
+   privilege to an eval that performs the prim.
+
+   REFUSE-OR-FORWARD: prims that MUST execute server-side to mean
+   anything (route/fork/merge/checkout/auth-admin) are refused with a
+   structured {ok:false, kind:"server_only", name, reason} error citing
+   locality rather than pretending to proxy them. Classification is
+   DERIVED from prim-registry metadata (Primitives.is_server_only — set
+   where the prim was registered), never a hand-maintained list. *) 
+let api_prim (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
+  let body = read_body reqd in
+  let name, args =
+    try
+      match Yojson.Safe.from_string body with
+      | `Assoc items ->
+          let n =
+            match List.assoc_opt "name" items with
+            | Some (`String s) -> s
+            | _ -> ""
+          in
+          let a =
+            match List.assoc_opt "args" items with
+            | Some (`List xs) -> List.map Prims_pure.json_to_value xs
+            | _ -> []
+          in
+          (n, a)
+      | _ -> ("", [])
+    with _ -> ("", [])
+  in
+  if name = "" then
+    json_response reqd ~status:`Bad_request
+      (`Assoc [("ok", `Bool false); ("error", `String "name required")])
+  else
+    match Primitives.dispatch session.prims name args with
+    | Primitives.Prim_refused_server_only (nm, reason) ->
+        (* Refuse: server-only prim must run on the server's authority
+           (branch state, locks, auth), not through a remote proxy. *) 
+        json_response reqd
+          (`Assoc
+             [ ("ok", `Bool false)
+             ; ("kind", `String "server_only")
+             ; ("name", `String nm)
+             ; ("reason", `String reason) ])
+    | Primitives.Prim_ok v ->
+        json_response reqd
+          (`Assoc
+             [("ok", `Bool true); ("value", Prims_pure.value_to_json v)])
+    | Primitives.Prim_error exn ->
+        json_response reqd (Prims_pure.error_to_json exn);
+    ()
+
 let save_edit (session : Session.t) (path_name : string)
     (reqd : Httpun.Reqd.t) : unit =
   let body = read_body reqd in
