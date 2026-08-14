@@ -50,6 +50,8 @@ and value =
   | VRef of type_name * id
   | VList of value list             (* sugar for nested pairs; reader interns *)
 
+(** Lexical environment: a local binding table plus an optional parent
+    closure chain; lookup walks toward the root. *)
 and env = {
   bindings : (string, value) Hashtbl.t;
   parent : env option;
@@ -91,6 +93,7 @@ let rec pp_value_short (v : value) : string =
   | VPrim n -> "<prim " ^ n ^ ">"
   | VRef (t, _) -> "<ref " ^ t ^ ">"
 
+(** Machine-readable kind tag for an [interp_error] (used by CLI/UI code). *)
 let interp_error_kind (e : interp_error) : string =
   match e with
   | Unbound_var _ -> "unbound_var"
@@ -103,11 +106,13 @@ let interp_error_kind (e : interp_error) : string =
   | Parse_error _ -> "parse_error"
   | User_error (_, k) -> k
 
+(** Source location (line, col) carried by an error, if any ([Parse_error]). *)
 let interp_error_loc (e : interp_error) : (int * int) option =
   match e with
   | Parse_error (_, line, col) -> Some (line, col)
   | _ -> None
 
+(** Human-readable rendering of an [interp_error] for logs/REPL output. *)
 let pp_interp_error (e : interp_error) : string =
   match e with
   | Unbound_var s -> "unbound: " ^ s

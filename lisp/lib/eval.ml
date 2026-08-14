@@ -21,8 +21,11 @@ type budget = {
   fn_step_counts : (string, int) Hashtbl.t;
 }
 
+(** Default per-call step limit for [make_budget] (100k steps). *)
 let default_limit = 100_000
 
+(** Allocate a fresh [budget] with the given [limit] (default
+    [default_limit]); counters start at zero. *)
 let make_budget ?(limit = default_limit) () : budget =
   {
     steps = 0;
@@ -44,21 +47,26 @@ let current_budget : budget option ref = ref None
     image-layer function_stat persistence. *)
 let last_budget : budget option ref = ref None
 
+(** Remaining steps on the current budget (0 if none active). *)
 let budget_remaining_steps () : int =
   match !current_budget with
   | None -> 0
   | Some b -> max 0 (b.limit - b.steps)
 
+(** Record one DB hit on the current budget, if any. *)
 let note_db_hit () : unit =
   match !current_budget with
   | Some b -> b.db_hits <- b.db_hits + 1
   | None -> ()
 
+(** Add [ms] to the current budget's accumulated DB time, if any. *)
 let note_db_ms (ms : float) : unit =
   match !current_budget with
   | Some b -> b.db_ms <- b.db_ms +. ms
   | None -> ()
 
+(** Advance [b]'s step count (tracking per-function counts) and raise
+    [Interp_error Budget_exceeded] once the limit is crossed. *)
 let tick (b : budget) : unit =
   b.steps <- b.steps + 1;
   (match b.current_fn with
@@ -73,11 +81,18 @@ let tick (b : budget) : unit =
     Eval always [perform]s; [run_sync] invokes these sync fns. *)
 type prim_fn = value list -> value
 
+(** Name -> [prim_fn] table for pure/sync prims. Image I/O prims are
+    served by the rim handler, not stored here. *)
 type prim_table = (string, prim_fn) Hashtbl.t
 
+(** Create an empty [prim_table]. *)
 let make_prim_table () : prim_table = Hashtbl.create 32
+
+(** Register [fn] in [tbl] under [name] (replaces any existing binding). *)
 let register_prim (tbl : prim_table) (name : string) (fn : prim_fn) : unit =
   Hashtbl.replace tbl name fn
+
+(** Look up [name] in [tbl], returning the registered prim if present. *)
 let lookup_prim (tbl : prim_table) (name : string) : prim_fn option =
   Hashtbl.find_opt tbl name
 
@@ -96,6 +111,9 @@ let is_special_form (name : string) : bool =
   | "apply" | "list/map" | "list/filter" | "list/foldl" | "list/foldr" -> true
   | _ -> false
 
+(** The full set of reserved kernel special-form names (see
+    [is_special_form]). Used by [assert_bindable_name] to refuse
+    redefinition. *)
 let kernel_special_names =
   [ "lambda"; "let"; "letrec"; "if"; "define"; "quote"; "seq"; "begin";
     "match"; "guard"; "error"; "prim";
@@ -141,6 +159,8 @@ let peel_leading_doc (bodies : expr list) : string option * expr list =
   | Lit (VStr doc) :: (_ :: _ as rest) -> (Some doc, rest)
   | _ -> (None, bodies)
 
+(** Extract parameter names from [define] sugar param exprs; an
+    [App (Var c, [_])] is accepted as an optional-with-default [c]. *)
 let params_of_define_sugar (param_exprs : expr list) : string list =
   List.map
     (function
@@ -177,6 +197,9 @@ type define_shape = {
   doc : string option;
 }
 
+(** Parse a top-level [(define name body) / (define (name params…) …)]
+    (or a pre-constructed [Define] node) into a [define_shape], stripping
+    any leading lambda docstring. Raises on malformed forms. *)
 let parse_top_define (e : expr) : define_shape option =
   match e with
   | App (Var "define", [ Var name; body_expr ]) ->
@@ -237,6 +260,8 @@ let rec match_pat (pat : expr) (v : value) : (string * value) list option =
   | App (Var head, []), VStr s when s = head -> Some []
   | _ -> None
 
+(** Match a list pattern against a value list (helper for [match_pat]).
+    Returns combined bindings or [None] on mismatch. *)
 and match_list_pats (pats : expr list) (vs : value list)
   : (string * value) list option =
   match pats, vs with
@@ -250,14 +275,15 @@ and match_list_pats (pats : expr list) (vs : value list)
             | None -> None
             | Some b2 -> Some (b1 @ b2)))
 
+(** Lisp truthiness: [false] and [nil] are falsy, everything else truthy. *)
 let truthy (v : value) : bool =
   match v with
   | VBool false | VNil -> false
   | _ -> true
 
-(* Quote any expr into a first-class value (full s-expr quote).
-   Compounds become nested VLists so quoted data is usable in Lisp.
-   Vars become VSymbol; string lits stay VStr (no collapse). *)
+(** Quote any expr into a first-class value (full s-expr quote).
+    Compounds become nested VLists so quoted data is usable in Lisp.
+    Vars become VSymbol; string lits stay VStr (no collapse). *)
 let rec quote_to_value (e : expr) : value =
   let sym s = VSymbol s in
   match e with
@@ -299,6 +325,7 @@ let name_of_atom ?(ctx = "value_to_expr") = function
   | _ ->
       raise (Interp_error (User_error (ctx ^ ": expected symbol or string name", "bad-args")))
 
+(** Head name of a value if it is a symbol or string atom. *)
 let head_name = function
   | VSymbol s | VStr s -> Some s
   | _ -> None
@@ -354,8 +381,10 @@ let rec value_to_expr (v : value) : expr =
         (Interp_error
            (User_error ("value_to_expr: cannot reify live closure/prim/ref/macro", "bad-args")))
 
+(** Global counter backing [gensym]. *)
 let gensym_counter = ref 0
 
+(** Generate a unique symbol name [prefix$N] using a global counter. *)
 let gensym ?(prefix = "g") () : string =
   incr gensym_counter;
   prefix ^ "$" ^ string_of_int !gensym_counter
@@ -487,6 +516,10 @@ and eval
   in
   loop env e
 
+(** Expand and evaluate a macro application by name. Args are bound as
+    quoted values (VStr/VSymbol, not evaluated); the expansion is
+    [value_to_expr]-reified and re-evaluated in [call_env] via [Cont].
+    Enforces macro arity. *)
 and expand_and_eval_macro
   ~(budget : budget)
   ~(prims : prim_table)
@@ -568,6 +601,11 @@ and macroexpand_expr
        | _ -> App (Var name, List.map go args))
   | App (h, args) -> App (go h, List.map go args)
 
+(** Dispatch a special form by [name] (an [App] whose head is a [Var]
+    recognized by [is_special_form]). [full_args] is head :: rest where
+    head is the [Var name]. Handles lambda/let/define/cond/match/guard/
+    quasiquote/defmacro, the list higher-order operators, and more;
+    returns a [step]. *)
 and eval_special_form
   ~(budget : budget)
   ~(prims : prim_table)
@@ -983,6 +1021,9 @@ and eval_special_form
       raise
         (Interp_error (User_error ("malformed special form: " ^ other, "bad-args")))
 
+(** Evaluate a quasiquote [template] at nesting [depth]. Unquote at
+    depth 1 evaluates the inner expr; deeper unquotes are preserved as
+    nested lists; unquote-splicing splices list elements. *)
 and eval_quasiquote
   ~(budget : budget)
   ~(prims : prim_table)
@@ -1042,6 +1083,9 @@ and eval_quasiquote
       VList [ VSymbol "quote"; v ]
   | other -> reify_expr other
 
+(** Apply [f] to [args], returning a [step] without forcing. Closures
+    (with &optional/&rest support) bind params and return [Cont]; VPrims
+    perform the effect; a [VMacro] applied first-class is an error. *)
 and apply_step
   ~(budget : budget)
   ~(prims : prim_table)
@@ -1137,6 +1181,8 @@ and apply_step
       Done (Control.perform_prim name args)
   | other -> raise (Interp_error (Not_a_function other))
 
+(** Apply [f] to [args], forcing the result to a [value] via [eval] when
+    the closure returns [Cont]. *)
 and apply
   ~(budget : budget)
   ~(prims : prim_table)
@@ -1147,6 +1193,9 @@ and apply
   | Done v -> v
   | Cont (env, body) -> eval ~budget ~prims env body
 
+(** Eval one toplevel form read from [s] directly, without any rim —
+    the caller owns the [Prim_call] effect. Records the fresh budget in
+    [last_budget] for image persistence. *)
 let eval_string_direct ~(prims : prim_table) (env : env) (s : string) : value =
   let budget = make_budget () in
   last_budget := Some budget;
@@ -1173,6 +1222,7 @@ let read_eval_all_direct ~(prims : prim_table) (env : env) (s : string)
     (fun _acc form -> eval ~budget ~prims env form)
     VNil forms
 
+(** An empty [prim_table] convenience value. *)
 let empty_prims : prim_table = make_prim_table ()
 
 (** Aliases kept for call-site stability during H1 cleanup. *)

@@ -11,6 +11,9 @@ type entry = {
   examples : string;
 }
 
+(** Static catalog of special-form entries, one per special form {{name}},
+    documenting its summary, arity, and an example. Serves as reference
+    text for the Functions UI; keep in sync with the evaluator. *)
 let catalog : entry list =
   [
     {
@@ -134,8 +137,10 @@ let catalog : entry list =
     };
   ]
 
+(** The [name] of every entry in [catalog], in catalog order. *)
 let names : string list = List.map (fun e -> e.name) catalog
 
+(** Look up a special-form entry by [name]; [None] if not in [catalog]. *)
 let find (name : string) : entry option =
   List.find_opt (fun e -> e.name = name) catalog
 

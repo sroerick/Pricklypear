@@ -4,6 +4,8 @@
 open Ast
 open Recursion
 
+(** One peel layer: depth, a human kind label, an annotation string,
+    the subexpression, and its path relative to the root. *)
 type layer = {
   depth : int;
   kind : string;
@@ -12,6 +14,7 @@ type layer = {
   path : int list;
 }
 
+(** Short label for an expression shape (e.g. ["var"], ["call:map"]). *)
 let kind_of = function
   | Var _ -> "var"
   | Lit _ -> "lit"
@@ -26,6 +29,8 @@ let kind_of = function
   | Quote _ -> "quote"
   | Define _ -> "define"
 
+(** Build a human annotation for [e] describing recursion kind (tail /
+    non-tail), primitives, calls and literals, per [lisp-interpreter.eval].*)
 let annotate ~(fn_name : string) ~(info : recursion_info) (e : expr)
     ~(path : int list) : string =
   let bits = ref [] in
@@ -97,6 +102,8 @@ let collect_nodes (e : expr) : (int * int list * expr) list =
          let c = compare d2 d1 in
          if c <> 0 then c else compare p1 p2)
 
+(** Peel [e] (assumed to be [fn_name]'s body) into an innermost-first
+    list of layers, each annotated with recursion info. *)
 let peel ~(fn_name : string) (e : expr) : layer list =
   let body = unwrap_fn_body e in
   let info = analyze_self ~fn_name body in
@@ -110,6 +117,7 @@ let peel ~(fn_name : string) (e : expr) : layer list =
            path;
          })
 
+(** Render peel [layers] as human-readable lines (depth/kind/annotation). *)
 let layers_to_strings (layers : layer list) : string list =
   List.map
     (fun (l : layer) ->
