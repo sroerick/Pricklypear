@@ -1,7 +1,8 @@
 (project pricklypear-remote-eval
  (doc "Pricklypear book chapter: remote-eval — Nopales interprets in a client process while the corpus and data plane stay authoritative in Postgres. The seam already exists (agent.borg exercises it locally); this chapter specifies relaxing it across HTTP.")
  (status planned)
- (* agent note (|2026-08-14 chapter created from the remote-eval design discussion. Thesis: the interpreter is a pure portable library (~few kloc OCaml, no service deps); the corpus (function_defs, type_defs, data_rows) is branchy rows in Postgres. They are separated along exactly the right line — the cheap-to-copy thing travels, the expensive-to-replicate thing stays home. Remote-eval is NOT a new product: it is a mode of the same Prim_call seam the agent host already uses, with the rim handler replaced by an HTTP proxy. agent/ is the local-only instance today; pp-client --image=URL is the relaxed instance. Statuses are honest: the substrate is implemented (the seam, run_with_rim, read_eval_all_direct, the api-eval JSON boundary from i-fields-as-string 2026-08-12), everything else is planned.|) *)
+ (* agent note (|2026-08-14 chapter created from the remote-eval design discussion. Thesis: the interpreter is a pure portable library (~few kloc OCaml, no service deps); the corpus (function_defs, type_defs, data_rows) is branchy rows in Postgres. They are separated along exactly the right line — the cheap-to-copy thing travels, the expensive-to-replicate thing stays home. Remote-eval is NOT a new product: it is a mode of the same Prim_call seam the agent host already uses, with the rim handler replaced by an HTTP proxy. agent/ is the local-only instance today; pp-remote --image=URL is the relaxed instance. Statuses are honest: the substrate is implemented (the seam, run_with_rim, read_eval_all_direct, the api-eval JSON boundary from i-fields-as-string 2026-08-12), everything else is planned.|) *)
+ (* agent note (|2026-08-14 RECONCILE: a shared codec already exists — pure/prims_pure.ml (pricklypear-pure-prims, wrapped false as Prims_pure) defines value_to_json AND json_to_value (the inverse), explicitly shared between the image and a browser client per its dune comment. So the substrate codec is DONE; the remaining codec work is the ERROR codec (Interp_error/Prim_error/Reader_error -> JSON with kind/name/line/col, currently inline in image/lib/http_pages.ml api_eval) factored into pure/ + its inverse, plus a round-trip property test. ALSO RECONCILE: borge/structural-editing.borg client-eval already plans a browser client/ package (interp.js, js_of_ocaml --effects=cps, pure-prims-only, optimistic structural ops reconciled via op-protocol). client-eval and remote-eval share the seam (same pure interpreter, prims_pure factored out) but DIFFER: client-eval leaves DB prims UNBOUND in the browser and reconciles via op-protocol; remote-eval PROXIES DB prims over HTTP. Complementary, not duplicate. To avoid the client/ package-name collision (client/ is a tracked browser package), remote-eval's native host is the remote/ package (binary pp-remote), NOT client/.|) *)
  (* agent note (|The two deepest consequences, named up front so the sections stay honest: (1) the store stops being where Nopales RUNS and becomes where Nopales LIVES — running is what clients do; (2) local eval over a durable remote corpus is the substrate for a debugger the LLM-integration chapter can drive (step/trace/breakpoint locally, data plane authoritative remotely). Both flow from one effect constructor and a faithful value<->json boundary.|) *)
  (convention ocaml-dune)
  (section remote-eval
@@ -17,7 +18,7 @@
              interpreter (lisp/lib) is already a pure library; the
              rim (Control.run_with_rim) is already an interchangeable
              Effect.Deep handler. agent/ is one rim (local host
-             prims); pp-client is another rim (HTTP proxy). The
+             prims); pp-remote is another rim (HTTP proxy). The
              interpreter never knows the difference.
            - A relaxation of one assumption: env materialization is
              eager+local in the image, lazy+remote in the client. Every
@@ -48,8 +49,8 @@
    (verify
     (test "Control.run_with_rim services Prim_call from a caller-supplied table; a second table (the proxy) drops in with no interpreter change")
     (test "Eval.read_eval_all_direct evaluates a file's forms under a caller-hosted rim (no rim installed by eval itself)")
-    (test "value_to_json . value_of_json is identity over the value subset that crosses the wire (VStr/VInt/VFloat/VBool/VNil/VList/VSymbol; VLambda/VPrim serialize to a sentinel and DO NOT round-trip — see hard-constraints)")
-    (test "an Interp_error / Prim_error serializes to the error-kind JSON shape already used by /api/eval, so the proxy rim raises the same exception the local rim would"))
+    (test "value_to_json . json_to_value is identity over the value subset that crosses the wire (VStr/VInt/VFloat/VBool/VNil/VList/VPair; VLambda/VPrim/VMacro serialize to a sentinel and DO NOT round-trip — see hard-constraints). NB: json_to_value maps JSON strings to VStr (no VSymbol on the wire); symbols are a read-side concern, not a wire concern.")
+    (test "an Interp_error / Prim_error / Reader_error serializes via the shared error codec to the error-kind JSON shape already used by /api/eval, and the inverse re-raises the same exception the local rim would"))
    (details
     (doc (|
          THE SEAM. One effect constructor:
@@ -61,12 +62,18 @@
          value. The interpreter is identical; only the handler swaps.
 
          THE BOUNDARY. Every value that crosses the wire must
-         serialize losslessly. The api-eval endpoint already emits
-         native JSON (i-fields-as-string 2026-08-12) instead of
-         triple-escaped pp strings; remote-eval reuses that shape.
-         The acceptance gate for v0 is a SHARED, TESTED value<->json
-         codec lifted out of http_pages.ml into a pure module both
-         server and client link — NOT two hand-maintained encoders.
+         serialize losslessly. The shared codec ALREADY EXISTS in
+         pure/prims_pure.ml: Prims_pure.value_to_json emits native
+         JSON (with nested-JSON-in-VStr re-parsing — the
+         i-fields-as-string 2026-08-12 fix) and Prims_pure.json_to_value
+         is the inverse. The remaining codec work is the ERROR codec
+         (Interp_error/Prim_error/Reader_error -> JSON with
+         kind/name/line/col, currently inline in image/lib/http_pages.ml
+         api_eval) factored into pure/ + its inverse (error_of_json)
+         so the proxy rim re-raises the same exception the local rim
+         would, plus a round-trip property test. The acceptance gate is
+         ONE shared, TESTED codec both server and client link — NOT two
+         hand-maintained encoders.
 
          DEFS AS DATA. An env is function_defs rows with branch
          inheritance via the CTE. pp_sync pull already ships source
@@ -115,20 +122,21 @@
     |))))
 
   (subsection client
-   (doc "pp-client binary: pricklypear_lisp + a proxy prim rim + lazy env")
+   (doc "remote/ package: pp-remote binary = pricklypear_lisp + a proxy prim rim + lazy env. NB: this is NOT the browser client/ package (structural-editing.borg client-eval, js_of_ocaml interp.js); remote-eval proxies DB prims over HTTP where client-eval leaves them unbound.")
    (status planned)
-   (implements client/lib/proxy_rim.ml client/bin/main.ml)
+   (implements remote/lib/proxy_rim.ml remote/bin/main.ml)
    (verify
-    (test "pp-client boots, connects to an image URL, and evaluates (+ 1 2) with zero prim calls (pure compute stays local)")
+    (test "pp-remote boots, connects to an image URL, and evaluates (+ 1 2) with zero prim calls (pure compute stays local)")
     (test "a prim call in client eval proxies to /api/prim and the result binds locally for subsequent pure use")
     (test "a function-def referenced but not yet loaded is fetched on first call (lazy env miss) and cached")
     (test "quit the client; re-launch against the same branch; (define …) made last session is present (server is source of truth)"))
    (details
     (doc (|
-         PACKAGE. A new client/ package: pp-client binary =
-         pricklypear_lisp + a proxy rim that forwards Prim_call to
-         the server. No Postgres link, no Lwt, no store_db — it is a
-         sibling of cli/ and agent/, not a child of image/.
+         PACKAGE. A new remote/ package: pp-remote binary =
+         pricklypear_lisp + pricklypear_pure_prims + a proxy rim that
+         forwards Prim_call to the server. Sibling of cli/, agent/,
+         and the browser client/, not a child of image/. No Postgres
+         link, no Lwt, no store_db.
 
          PROXY RIM DISCIPLINE. The proxy rim is a PURE proxy with zero
          logic. The moment it grows its own interpretation of a prim,
@@ -152,7 +160,7 @@
   (subsection caching
    (doc "Definition cache invalidation via branch generation; the one cheap round trip")
    (status planned)
-   (implements client/lib/def_cache.ml migrations/)
+   (implements remote/lib/def_cache.ml migrations/)
    (verify
     (test "a write in the client's branch ancestry bumps a generation counter; the client's next cache-check round trip observes the bump and reloads affected defs")
     (test "a checkout to a different branch invalidates the whole local def cache (branch is the namespace)")
@@ -187,7 +195,7 @@
   (subsection placement
    (doc "Hybrid placement: prim-dense / transactional exprs go to /api/eval, pure compute stays local")
    (status planned)
-   (implements client/lib/placer.ml)
+   (implements remote/lib/placer.ml)
    (verify
     (test "an expression containing (with-transaction …) is detected as non-proxyable and POSTed to /api/eval wholesale")
     (test "an expression with zero prim calls evaluates locally with no round trip")
@@ -222,7 +230,7 @@
   (subsection stepping
    (doc "Local single-step / trace / breakpoint over a proxy rim: the LLM-debugger substrate")
    (status planned)
-   (implements lisp/lib/explain.ml client/lib/proxy_rim.ml)
+   (implements lisp/lib/explain.ml remote/lib/proxy_rim.ml)
    (verify
     (test "a breakpoint set on a def pauses local eval mid-expression; the data plane (prim calls) still crosses the wire and returns")
     (test "the server is unaware a breakpoint fired (stepping is purely a client concern)")
@@ -312,7 +320,7 @@
            - A second store on the client. The client is a cache and
              an interpreter, never a source of truth.
            - Multi-user on the client. One client = one user.
-           - Language changes made in client/ instead of through
+           - Language changes made in remote/ instead of through
              lisp-interpreter.borg. The client is a host, not a fork.
     |))))
  )
