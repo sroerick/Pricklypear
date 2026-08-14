@@ -188,8 +188,9 @@ let html_response (reqd : Httpun.Reqd.t) ?(status = `OK)
   let s = Pure_html.to_string html_doc in
   let headers =
     Httpun.Headers.of_list
-      [("content-type", "text/html; charset=utf-8");
-       ("content-length", string_of_int (String.length s))]
+      ([("content-type", "text/html; charset=utf-8");
+        ("content-length", string_of_int (String.length s))]
+       @ Timing.timing_header ())
   in
   let resp = Httpun.Response.create ~headers status in
   safe_respond_with_string reqd resp s
@@ -197,8 +198,9 @@ let html_response (reqd : Httpun.Reqd.t) ?(status = `OK)
 let text_response (reqd : Httpun.Reqd.t) ?(status = `OK) ~content_type (s : string) : unit =
   let headers =
     Httpun.Headers.of_list
-      [("content-type", content_type);
-       ("content-length", string_of_int (String.length s))]
+      ([("content-type", content_type);
+        ("content-length", string_of_int (String.length s))]
+       @ Timing.timing_header ())
   in
   let resp = Httpun.Response.create ~headers status in
   safe_respond_with_string reqd resp s
@@ -732,9 +734,9 @@ let max_user_body_bytes = 64 * 1024
 let redirect_response (reqd : Httpun.Reqd.t) (location : string) : unit =
   let headers =
     Httpun.Headers.of_list
-      [ ("location", location)
-      ; ("content-length", "0")
-      ]
+      ([ ("location", location)
+       ; ("content-length", "0")
+       ] @ Timing.timing_header ())
   in
   let resp = Httpun.Response.create ~headers `See_other in
   safe_respond_with_string reqd resp ""

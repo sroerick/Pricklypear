@@ -157,6 +157,48 @@ let diff_tests = [
     Alcotest.(check bool) "reports change" true (String.length r > 0));
 ]
 
+(* --- apply-parts! (multipart ordered part list) --- *)
+let apply_parts_tests = [
+  ("apply-parts! lands each frag at its target in order", `Quick, fun () ->
+    Alcotest.(check string) "both targets swapped"
+      "\"<div id=\\\"a\\\"><b>new-a</b></div><div id=\\\"b\\\"><i>new-b</i></div>\""
+      (eval_str "(begin \
+        \n (define p (soup/parse \"<div id=a>old-a</div><div id=b>old-b</div>\")) \
+        \n (define parts (list \
+        \n   (list (cons \"html\" \"<b>new-a</b>\") (cons \"target\" \"#a\") (cons \"swap\" \"innerHTML\")) \
+        \n   (list (cons \"html\" \"<i>new-b</i>\") (cons \"target\" \"#b\") (cons \"swap\" \"innerHTML\")))) \
+        \n (soup/apply-parts! p parts) \
+        \n (soup/serialize p))"));
+  ("apply-parts! defaults to innerHTML when swap absent", `Quick, fun () ->
+    Alcotest.(check string) "default innerHTML"
+      "\"<div id=\\\"a\\\">new-a</div>\""
+      (eval_str "(begin \
+        \n (define p (soup/parse \"<div id=a>old-a</div>\")) \
+        \n (define parts (list (list (cons \"html\" \"new-a\") (cons \"target\" \"#a\")))) \
+        \n (soup/apply-parts! p parts) \
+        \n (soup/serialize p))"));
+  ("apply-parts! respects beforeend strategy in sequence", `Quick, fun () ->
+    Alcotest.(check string) "appended in order"
+      "\"<ul id=\\\"l\\\"><li>1</li><li>2</li></ul>\""
+      (eval_str "(begin \
+        \n (define p (soup/parse \"<ul id=l></ul>\")) \
+        \n (define parts (list \
+        \n   (list (cons \"html\" \"<li>1</li>\") (cons \"target\" \"#l\") (cons \"swap\" \"beforeend\")) \
+        \n   (list (cons \"html\" \"<li>2</li>\") (cons \"target\" \"#l\") (cons \"swap\" \"beforeend\")))) \
+        \n (soup/apply-parts! p parts) \
+        \n (soup/serialize p))"));
+  ("apply-parts! skips a part whose target is absent", `Quick, fun () ->
+    Alcotest.(check string) "missing target skipped"
+      "\"<div id=\\\"a\\\">new-a</div>\""
+      (eval_str "(begin \
+        \n (define p (soup/parse \"<div id=a>old-a</div>\")) \
+        \n (define parts (list \
+        \n   (list (cons \"html\" \"new-a\") (cons \"target\" \"#a\")) \
+        \n   (list (cons \"html\" \"ghost\") (cons \"target\" \"#nope\")))) \
+        \n (soup/apply-parts! p parts) \
+        \n (soup/serialize p))"));
+]
+
 let () =
   Alcotest.run "prims_hyper" [
     ("parse + serialize", parse_tests);
@@ -166,4 +208,5 @@ let () =
     ("immutability", immutability_tests);
     ("closest-attr", closest_attr_tests);
     ("diff", diff_tests);
+    ("apply-parts!", apply_parts_tests);
   ]

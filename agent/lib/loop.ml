@@ -7,8 +7,12 @@ let max_turns_default = 8
 
 type turn_event =
   | Assistant_text of string
+  | Reasoning_text of string  (* provider chain-of-thought chunk: rendered
+                                 into the turn's "thinking + tools" zone,
+                                 kept OUT of history *)
   | Tool_begin of string * string
   | Tool_end of string * string
+  | Turn_error of string
 
 (** Tool defs visible to the provider: builtin schemas plus
     plugin-registered tools with synthesized permissive schemas
@@ -126,7 +130,7 @@ let run ~(env : Eio_unix.Stdenv.base) ~sw ~(rt : Runtime.t)
     ?(max_turns = max_turns_default)
     ~(on_event : turn_event -> unit) (history : Provider.message list ref)
     (prompt : string) : (unit, string) Result.t =
-  history := !history @ [ { Provider.role = "user"; content = `String prompt; tool_call_id = None } ];
+  history := !history @ [ { Provider.role = "user"; content = `String prompt; tool_call_id = None; tool_calls = None } ];
   (* input + before_turn events *)
   ignore (Runtime.fire rt "input" [ Ast.VStr prompt ]);
   let rec go turn =
@@ -135,12 +139,31 @@ let run ~(env : Eio_unix.Stdenv.base) ~sw ~(rt : Runtime.t)
       match
         complete ~env ~sw ~cfg ~messages:!history ~tools:(tool_defs rt)
           ~on_delta:(function
+            | Provider.Reasoning s -> on_event (Reasoning_text s)
             | Provider.Text s -> on_event (Assistant_text s)
             | Provider.Done -> ())
       with
       | Error e -> Error e
       | Ok reply ->
-          history := !history @ [ { role = "assistant"; content = reply.raw; tool_call_id = None } ];
+          (* Replay the assistant turn in OPENAI MESSAGE SHAPE: content is the
+             raw message's content field (never the whole message object —
+             nesting it here produced provider 400s on turn 2), tool_calls
+             replayed verbatim so following tool-role messages pair up. *)
+          let raw_fields =
+            match reply.raw with `Assoc fields -> fields | _ -> []
+          in
+          let content =
+            match List.assoc_opt "content" raw_fields with
+            | Some ((`String _ | `List _) as c) -> c
+            | Some `Null when reply.text = "" -> `Null
+            | Some `Null -> `String reply.text
+            | None -> `String reply.text
+            | Some _ -> `String reply.text
+          in
+          let tool_calls = List.assoc_opt "tool_calls" raw_fields in
+          history :=
+            !history
+            @ [ { role = "assistant"; content; tool_call_id = None; tool_calls } ];
           (match reply.calls with
            | [] -> Ok ()
            | calls ->
@@ -159,6 +182,7 @@ let run ~(env : Eio_unix.Stdenv.base) ~sw ~(rt : Runtime.t)
                            role = "tool";
                            content = `String out;
                            tool_call_id = Some c.id;
+                           tool_calls = None;
                          };
                        ])
                  calls;

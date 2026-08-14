@@ -152,6 +152,23 @@
   (lambda (a b)
     (if (null? b) a (cons (car b) (hyper/append-alist a (cdr b))))))
 
+;; ---------- stream (multipart replay) ----------
+;; (hyper/stream page parts) -> NEW page value
+;; Apply an ordered multipart part list onto a page via soup/page-copy +
+;; soup/apply-parts!, returning a NEW page (immutability preserved: the
+;; input page is never mutated). parts come from the host stream as DATA
+;; (agent: loop.ml collects the emitted HX-Target/HX-Swap parts;
+;; image: http_agent mp_write_part). Lets hyper/** assert a consumed
+;; chat/agent turn deterministically. Each part is an alist
+;; (("html" . frag) ("target" . sel) ("swap" . strat)); target/swap
+;; absent -> caller element + "innerHTML" (soup/apply-parts! defaults).
+(define hyper/stream
+  (lambda (page parts)
+    (let ((copy (soup/page-copy page)))
+      (begin (soup/apply-parts! copy parts)
+             copy)))
+  "Apply an ordered part list onto a fresh copy of page; return NEW page.")
+
 ;; ---------- sandbox ----------
 ;; (hyper/sandbox branch body) — v1 stub. Full impl needs a branch checkout
 ;; with restore (dynamic-wind). Returns unsupported-feature for now.

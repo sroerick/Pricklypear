@@ -9,6 +9,20 @@ open Ast
 
 type registry_entry = { doc : string; run : Ast.value }
 
+(** Thin request context bound during route/dispatch (agent-route-table,
+    hypermedia-harness.request-runner AGENT HOST BACKING). Carries ONLY
+    request-shape values: method, path, params, headers, body. DB/branch/
+    auth request prims (current-author-as-DB-row etc.) are intentionally
+    UNBOUND in the agent — the agent's request context provides only the
+    request-shape values. *)
+type request_shape = {
+  method_ : string;
+  path : string;
+  params : (string * string) list;
+  headers : (string * string) list;  (* lowercased keys *)
+  body : string;
+}
+
 type t = {
   env : Ast.env;
   prims : Eval.prim_table;
@@ -17,6 +31,20 @@ type t = {
   tools : (string, registry_entry) Hashtbl.t;
   mutable tool_order : string list;
   commands : (string, registry_entry) Hashtbl.t;
+  (* Agent route table: path -> handler-name (THE HOST SEAM,
+     agent-route-table). Local-lens backing for the image's Postgres
+     routes — identical Nopales signatures so libs/hyper runs unchanged. *)
+  routes : (string, string) Hashtbl.t;
+  (* Per-call request snapshot bound while a route/dispatch handler runs,
+     so query-param / request-method / hx-request? resolve. None outside
+     a dispatch. *)
+  current_request : request_shape option ref;
+  (* Captured multipart parts of the last consumed chat/agent turn, as a
+     VList of part alists (("html" . frag) ("target" . sel) ("swap" .
+     strat)) — the data shape [soup/apply-parts!] consumes. Set by the
+     HTTP surface's multipart stream emitter so a consumed turn replays
+     deterministically through [hyper/stream] (surfaces smoke). *)
+  mutable last_turn_parts : Ast.value;
 }
 
 (* Current working directory as seen by path prims. Immutable per
@@ -115,26 +143,57 @@ let eval_string ~(rt : t) (src : string) : Ast.value =
       Control.run_with_rim ~prims:rt.prims (fun () ->
           Eval.eval_string_direct ~prims:rt.prims rt.env src))
 
-(** Apply a Nopales function value to host-side value args directly:
-    bind resolvable symbols for the fn and each arg in the shared env,
-    then eval a plain application form through the rim. Args NEVER go
-    through the reader, so lambda values and arbitrary JSON strings are
-    safe. *)
+(** Evaluate all top-level forms in [src] into the shared env, under
+    the eval lock + rim. Used to boot-load Nopales packages (libs/std,
+    libs/html, libs/hyper) as SOURCE — the same env as plugins/REPL, so
+    the surface is redefinable live (borge/agent.borg surfaces). *)
+let load_source ~(rt : t) (src : string) : unit =
+  with_eval_lock rt (fun () ->
+      Control.run_with_rim ~prims:rt.prims (fun () ->
+          ignore (Eval.read_eval_all_direct ~prims:rt.prims rt.env src)))
+
+(** Load a .pp file from [path] into the shared env. *)
+let load_file ~(rt : t) (path : string) : (unit, string) result =
+  try
+    let ic = open_in_bin path in
+    let n = in_channel_length ic in
+    let s = really_input_string ic n in
+    close_in ic;
+    load_source ~rt s;
+    Ok ()
+  with exn -> Error (Printexc.to_string exn)
+
+(** [apply_value_raw] — apply a Nopales function value to host-side
+    value args directly, assuming the caller ALREADY holds the eval lock
+    AND has a rim active (direct_prims set). Used by prims that run
+    inside an eval (route/dispatch invokes a handler from within the
+    rim): re-locking the non-reentrant Eio.Mutex would deadlock, and the
+    outer rim already services the handler's prim calls via
+    [direct_prims]. Args NEVER go through the reader, so lambda values
+    and arbitrary JSON strings are safe. *)
+let apply_value_raw (t : t) (fn : Ast.value) (args : Ast.value list)
+    : Ast.value =
+  let fn_sym = "__host_apply_fn__" in
+  Env.define t.env fn_sym fn;
+  let arg_syms =
+    List.mapi (fun i _ -> Printf.sprintf "__host_apply_arg_%d__" i) args
+  in
+  List.iter2 (Env.define t.env) arg_syms args;
+  let src =
+    "(" ^ fn_sym
+    ^ List.fold_left (fun acc a -> acc ^ " " ^ a) "" arg_syms
+    ^ ")"
+  in
+  Eval.eval_string_direct ~prims:t.prims t.env src
+
+(** Apply a Nopales function value to host-side value args. Acquires
+    the eval lock and establishes the rim — for callers OUTSIDE an
+    active eval (loop tool bodies, event handlers). Prims running
+    inside an eval use [apply_value_raw] instead (no re-lock). *)
 let apply_value (t : t) (fn : Ast.value) (args : Ast.value list) : Ast.value =
   with_eval_lock t (fun () ->
-      let fn_sym = "__host_apply_fn__" in
-      Env.define t.env fn_sym fn;
-      let arg_syms =
-        List.mapi (fun i _ -> Printf.sprintf "__host_apply_arg_%d__" i) args
-      in
-      List.iter2 (Env.define t.env) arg_syms args;
-      let src =
-        "(" ^ fn_sym
-        ^ List.fold_left (fun acc a -> acc ^ " " ^ a) "" arg_syms
-        ^ ")"
-      in
       Control.run_with_rim ~prims:t.prims (fun () ->
-          Eval.eval_string_direct ~prims:t.prims t.env src))
+          apply_value_raw t fn args))
 
 (* ---- Host prims ---- *)
 
@@ -194,7 +253,16 @@ let register_fs_prims (t : t) : unit =
         with Sys_error e -> emit_error "fs/ls" e)
     | _ -> emit_error "fs/ls" "usage: (fs/ls path)"
   in
-  add_prim t "fs/ls" ls
+  add_prim t "fs/ls" ls;
+  (* (fs/dir? path) -> VBool. True if path resolves to a directory. *)
+  let is_dir args =
+    match args with
+    | [ path ] ->
+        let p = resolve_path (str_arg "fs/dir?" path) in
+        VBool (try Sys.is_directory p with Sys_error _ -> false)
+    | _ -> emit_error "fs/dir?" "usage: (fs/dir? path)"
+  in
+  add_prim t "fs/dir?" is_dir
 
 let register_shell_prims (t : t) : unit =
   (* (shell/run cmd) -> {"exit": n, "out": "...", "truncated": bool}.
@@ -311,6 +379,181 @@ let register_ui_prims (t : t) : unit =
   in
   add_prim t "ui/confirm" confirm
 
+(* ---- Route table + request-context prims (agent-route-table,
+   THE HOST SEAM; hypermedia-harness.request-runner AGENT HOST BACKING).
+
+   Identical Nopales signatures to the image's route / route/lookup /
+   route/dispatch, host-local backing (Runtime route table + a thin
+   request context vs the image's Postgres routes + fat
+   Request_context). libs/hyper runs unchanged on both. *)
+
+(** Look up the active request shape, or error if none is bound (i.e. a
+    request prim called outside a route/dispatch). Mirrors the image's
+    prims_request require_request, but the agent's context is thinner. *)
+let require_request (t : t) : request_shape =
+  match !(t.current_request) with
+  | Some r -> r
+  | None ->
+      emit_error "request" "no active request (call inside route/dispatch)"
+
+(** [dispatch_route_raw] — the shared route/dispatch body. Assumes the
+    caller holds the eval lock AND has a rim active (the route/dispatch
+    prim runs inside an eval; the HTTP gate uses the locking
+    [dispatch_route] wrapper). Returns the rendered raw-HTML VStr the
+    browser would receive. *)
+let dispatch_route_raw (t : t) ~handler ~method_ ~path ~params
+    ~headers ~body : Ast.value =
+  let req : request_shape =
+    { method_ = String.uppercase_ascii method_; path; params; headers; body }
+  in
+  match Env.lookup t.env handler with
+  | None -> VStr (Printf.sprintf "route/dispatch: unbound handler %s" handler)
+  | Some fn ->
+      t.current_request := Some req;
+      Fun.protect
+        ~finally:(fun () -> t.current_request := None)
+        (fun () ->
+          try
+            let v = apply_value_raw t fn [] in
+            VStr (Prims_soup.render_handler_value v)
+          with Ast.Interp_error ie ->
+            VStr
+              (Printf.sprintf "route/dispatch: %s"
+                 (Ast.pp_interp_error ie)))
+
+(** [dispatch_route] — locking wrapper for OCaml callers OUTSIDE an
+    active eval (the HTTP gate dispatches GET routes through the route
+    table). Acquires the eval lock + establishes the rim. *)
+let dispatch_route ~(rt : t) ~handler ~method_ ~path ~params ~headers
+    ~body : Ast.value =
+  with_eval_lock rt (fun () ->
+      Control.run_with_rim ~prims:rt.prims (fun () ->
+          dispatch_route_raw rt ~handler ~method_ ~path ~params ~headers ~body))
+
+(** Resolve a URL path to its handler name via the agent route table. *)
+let lookup_route ~(rt : t) (path : string) : string option =
+  Hashtbl.find_opt rt.routes path
+
+(** Call a Nopales template (zero-or-more-arg fn) by name and return the
+    rendered raw-HTML string (raw-HTML-tagged VStrs unwrap). For OCaml
+    callers outside an eval (the HTTP surface renders fragment templates).
+    Returns [None] if the template is unbound or errors. *)
+let call_template ~(rt : t) (name : string) (args : Ast.value list)
+    : string option =
+  match Env.lookup rt.env name with
+  | None -> None
+  | Some fn ->
+      (try
+         let v = apply_value rt fn args in
+         Some (Prims_soup.render_handler_value v)
+       with Ast.Interp_error _ -> None)
+
+let register_route_prims (t : t) : unit =
+  (* (route path handler) — bind a path to a Nopales render handler name
+     on the agent route table. The agent's local-lens backing for the
+     image's (route ...) over Postgres. *)
+  let route args =
+    match args with
+    | [ path; handler ] ->
+        let path = str_arg "route" path in
+        let handler = str_arg "route" handler in
+        Hashtbl.replace t.routes path handler;
+        VBool true
+    | _ -> emit_error "route" "usage: (route path handler)"
+  in
+  add_prim t "route" route;
+  (* (route/lookup path) -> handler-name VStr | VNil. Resolve a URL path
+     to its handler via the route table — exactly hyper/visit's
+     resolver. *)
+  let route_lookup args =
+    match args with
+    | [ path ] ->
+        let path = str_arg "route/lookup" path in
+        (match Hashtbl.find_opt t.routes path with
+         | Some h -> VStr h
+         | None -> VNil)
+    | _ -> emit_error "route/lookup" "usage: (route/lookup path)"
+  in
+  add_prim t "route/lookup" route_lookup;
+  (* (route/dispatch handler method path [params] [headers] [body])
+     -> rendered raw-HTML VStr. Invoke the handler fn (looked up in env)
+     through the rim (caller already holds the eval lock) with a THIN
+     REQUEST CONTEXT bound (query-param / request-method / hx-request?
+     resolve; DB/branch/auth request prims stay unbound), and return the
+     rendered value the browser would receive. Reuses assoc_of +
+     render_handler_value from the shared soup kernel. *)
+  let route_dispatch args =
+    match args with
+    | VStr handler :: VStr meth :: VStr path :: rest ->
+        let params =
+          match rest with p :: _ -> Prims_soup.assoc_of p | _ -> []
+        in
+        let headers =
+          match rest with
+          | _ :: h :: _ ->
+              List.map
+                (fun (k, v) -> (String.lowercase_ascii k, v))
+                (Prims_soup.assoc_of h)
+          | _ -> []
+        in
+        let body =
+          match rest with
+          | _ :: _ :: VStr b :: _ -> b
+          | _ -> ""
+        in
+        dispatch_route_raw t ~handler ~method_:meth ~path ~params ~headers ~body
+    | _ -> emit_error "route/dispatch"
+              "usage: (route/dispatch handler method path [params] [headers] [body])"
+  in
+  add_prim t "route/dispatch" route_dispatch;
+  (* ---- request-shape prims (the thin context) ----
+     query-param / request-method / hx-request? — they back
+     route/dispatch's thin context and libs/hyper's hyper/do-swap
+     HX-Request header path. DB/branch/auth request prims are NOT
+     registered here (the agent's request context carries only
+     request-shape values); calling them yields unbound-prim. *)
+  let query_param args =
+    match args with
+    | [ key ] ->
+        let r = require_request t in
+        let key = str_arg "query-param" key in
+        (match List.assoc_opt key r.params with
+         | Some v -> VStr v
+         | None -> VNil)
+    | _ -> emit_error "query-param" "usage: (query-param key)"
+  in
+  add_prim t "query-param" query_param;
+  let request_method _args =
+    let r = require_request t in
+    VStr r.method_
+  in
+  add_prim t "request-method" request_method;
+  let hx_request_p _args =
+    let r = require_request t in
+    (* hyper/do-swap passes hx-request in the PARAMS alist; the HTTP
+       gate passes it in HEADERS. Check both so libs/hyper works the same
+       way it does on the image. *)
+    let from_headers =
+      match List.assoc_opt "hx-request" r.headers with
+      | Some v when v <> "" && v <> "false" -> true
+      | _ -> false
+    in
+    let from_params =
+      match List.assoc_opt "hx-request" r.params with
+      | Some v when v <> "" && v <> "false" -> true
+      | _ -> false
+    in
+    VBool (from_headers || from_params)
+  in
+  add_prim t "hx-request?" hx_request_p;
+  (* (session/last-turn-parts) -> VList of part alists captured from the
+     last consumed chat/agent turn (the data shape soup/apply-parts! /
+     hyper/stream consume). Lets a consumed turn replay deterministically
+     through hyper/stream (surfaces smoke). Returns VNil if no turn ran. *)
+  let last_turn_parts _args = t.last_turn_parts
+  in
+  add_prim t "session/last-turn-parts" last_turn_parts
+
 (** Install the pricklypear-pure-prims surface (dict/json/string/
     list/math — the frozen core set per lisp-interpreter.core-freeze)
     into our table. The image's registry (image/lib/primitives.ml)
@@ -340,6 +583,10 @@ let register_pure_prims (t : t) : unit =
   r "car" prim_car;
   r "cdr" prim_cdr;
   r "cons" prim_cons;
+  r "cadr" prim_cadr;
+  r "caar" prim_caar;
+  r "caddr" prim_caddr;
+  r "cddr" prim_cddr;
   r "null?" prim_null_p;
   r "pair?" prim_pair_p;
   r "append" prim_append;
@@ -373,7 +620,43 @@ let register_pure_prims (t : t) : unit =
   r "dict-set" prim_dict_set;
   r "dict-keys" prim_dict_keys;
   r "equal?" prim_equal_p;
-  r "random-uuid" prim_random_uuid
+  r "random-uuid" prim_random_uuid;
+  r "render-html" prim_render_html;
+  r "html-escape" prim_html_escape;
+  r "string-split" prim_string_split
+
+(** Register the SHARED soup/ tree prims (Phase 0: lifted into
+    pure/prims_soup.ml so both hosts register the same tree prims).
+    [Prims_soup.register_pure_prims] fills the prim table; we then
+    bind each as a VPrim in env so Nopales resolves them by name
+    (matching [add_prim]'s env-bind half, which the pure helper does
+    not do). *)
+let register_soup_prims (t : t) : unit =
+  Prims_soup.register_pure_prims t.prims;
+  Hashtbl.iter
+    (fun name _ ->
+      match name with
+      | n when String.length n >= 5 && String.sub n 0 5 = "soup/" ->
+          Env.define t.env name (Ast.VPrim name)
+      | _ -> ())
+    t.prims
+
+(** Minimal agent stdlib — the host library layer (borge/agent.borg
+    nopales-embed: "the agent adds HOST PRIMS and an optional host library
+    layer in .pp"). Provides the [let*] sequential-binding macro that
+    libs/hyper uses, without loading the heavy libs/std (which depends on
+    image-only prims: css/*, menu/*, list-bindings, redirect, ...).
+    The image gets [let*] from libs/std; the agent gets it here. Same
+    expansion as the libs/std macro (written with car/cdr so it depends on
+    no c*r beyond the registered set). *)
+let boot_stdlib = {|
+(defmacro let* (bindings body)
+  (if (null? bindings)
+      (list (quote let) (list) body)
+      (list (quote let)
+            (list (list (car (car bindings)) (car (cdr (car bindings)))))
+            (list (quote let*) (cdr bindings) body))))
+|}
 
 let make () : t =
   let t =
@@ -385,13 +668,21 @@ let make () : t =
       tools = Hashtbl.create 16;
       tool_order = [];
       commands = Hashtbl.create 8;
+      routes = Hashtbl.create 16;
+      current_request = ref None;
+      last_turn_parts = Ast.VNil;
     }
   in
   register_pure_prims t;
+  register_soup_prims t;
   register_fs_prims t;
   register_shell_prims t;
   register_event_prims t;
   register_ui_prims t;
+  register_route_prims t;
+  (* Host library layer: the minimal stdlib (let* macro) so libs/hyper
+     and the Nopales surface run unchanged. *)
+  load_source ~rt:t boot_stdlib;
   t
 
 (** Fire an event: run handlers in registration order. Returns the

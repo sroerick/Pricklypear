@@ -2,7 +2,8 @@
  (doc "Pricklypear book chapter: agent — a Nopales-native local coding agent, pi-inspired, sharing pricklypear-lisp with the image")
  (status planned)
  (* agent note (|2026-08-03 chapter created for the pi-clone spike. Positioning: sibling consumer of pricklypear-lisp (like cli/), NOT part of the image product. No Postgres, no branches, no auth. If it graduates into the product later that is a plan-phase spec edit.|) *)
- (* agent note (|2026-08-14 v0.0 spike landed: rim moved to Control.run_with_rim (image Control_rim is now a thin alias), Eval.read_eval_all_direct added, agent/ package with stdin REPL + mock provider + read/bash builtins + on/register-tool/register-command + tool_call-block path. Provider is OpenAI-compatible chat completions only (synthetic.new + any gateway, Anthropic via its compat endpoint) — no native Anthropic path; image llm_client.ml is the curl cautionary tale we avoid. agent/ tests 4/4, full workspace green. Known gaps: SSE streaming (provider collects full body; API is on_delta-shaped), plugin tool param schemas on the wire (permissive object schema synthesized), http_ui.ml not yet started.|) *)
+ (* agent note (|2026-08-14 v0.0 spike landed: rim moved to Control.run_with_rim (image Control_rim is now a thin alias), Eval.read_eval_all_direct added, agent/ package with stdin REPL + mock provider + read/bash builtins + on/register-tool/register-command + tool_call-block path. Provider is OpenAI-compatible chat completions only (synthetic.new + any gateway, Anthropic via its compat endpoint) — no native Anthropic path; image llm_client.ml is the curl cautionary tale we avoid. agent/ tests 5/5 (incl. provider SSE reconstruction), full workspace green. Known gaps: SSE streaming now lands text deltas live (Openai.complete streams requests with stream:true; text deltas dispatch via on_delta as they decode) but tool-call stream fragments are RECONSTRUCTED into a full assistant message (not streamed live as tool-call deltas) — that reconstruction runs through the shared parse_reply so XML/GLM fallback and history shape are preserved; http_ui.ml landed: HTML primary surface (chat page + inline SSE client), code browser (read-only file tree + file view), --serve/--open wired in main.ml. Chat streams via true incremental SSE (producer-fiber + drain queue, mirroring image http_agent.ml mp/sse pattern). Gluten_eio deadlock avoided by forking handler work off the connection fiber. Code browser has canonical-path traversal guard. All surfaces smokes pass (chat page, SSE deltas, tree list, file render, traversal 403, piped-turn regression).|) *)
+ (* agent note (|2026-08-14 SURFACE REFACTOR DESIGN (decided, plan-mode): the agent UI moves off SSE+vanilla-JS to Nopales-authored htmx fragments + multipart streaming, so the surface is a loadable Nopales layer both the agent AND the image share. Decision thread: (1) soup/* tree prims are DB-free — lift them from image/lib/prims_hyper.ml into the shared pure-prims layer (pure/) so both hosts register the same tree prims; (2) route/lookup + route/dispatch are THE HOST SEAM (hypermedia-harness.request-runner) — identical Nopales signatures, host-local backing (image Session.t Postgres routes vs agent Runtime.t lens routes); (3) LLM use is always-API (no local inference), so the main habitat stays the corpus source of truth; the agent evaluates against a LOCAL-FIRST LENS (local-first.borg), not a hermetic embedded corpus — edits sync up per local-first.lens-model. This revises the 2026-08-03 positioning which said 'no Postgres, no branches, no object store' and made the corpus embeddable. Streaming stays OCAML (provider SSE -> deltas -> per-part (html,target,swap) assembly -> multipart frame + flush), with Nopales owning the fragment templates; soup/apply-parts! models a consumed turn as data for libs/hyper. Phasing (read-only lens vs write-capable lens in the first cut) was left OPEN in discussion — record it in local-first.phasing when decided.|) *)
  (convention ocaml-dune)
  (section agent
   (doc "A local single-user coding agent binary: minimal agent loop, Nopales plugins, code browser. Launched in a directory: `cd project && agent`. pi (pi.dev) is the reference point; the differentiator is that plugins are Nopales loaded into a live env shared with the session REPL, so the user redefines plugin functions while the agent runs. Stack shares with the image where trivially possible: pricklypear-lisp (eval), Eio rim style (synchronous prim ABI, fiber-blocking I/O), pure-html for the web surface.")
@@ -16,8 +17,15 @@
            - A single native OCaml binary, installable/runnable from a
              laptop checkout: `agent` in any directory opens a session
              on that directory.
-           - Single-user, localhost. No auth, no Postgres, no
-             branches, no object store.
+           - Single-user, localhost. One operator, one working copy.
+           - A LOCAL-FIRST HOST grounded in the habitat. The Nopales
+             corpus (function defs, packages, route table) is a
+             local-first LENS of the one tree (local-first.borg):
+             authoritative on the main habitat, materialized locally
+             per local-first.lens-model, edits syncing up per
+             local-first.sync. This REVISES the 2026-08-03 spike
+             position, which scoped the agent to 'no Postgres, no
+             branches, no object store' and embedded the corpus.
            - A second home for Nopales: plugin files under
              ~/.config/agent/plugins/*.pp (global) and
              .agent/plugins/*.pp (project) are evaluated into one env
@@ -27,16 +35,24 @@
 
          IS NOT:
            - Part of the image. The image remains the multi-user
-             habitat product (single-image.borg). The agent never
-             links store_db, migrations, auth_*, or the branch model.
+             habitat product (single-image.borg) and the corpus
+             authority; the agent is a sibling CLIENT host, not a
+             second source of truth.
+           - An independent corpus. The 2026-08-03 'no Postgres/
+             branches/store' boundary is revised: the agent's store
+             is a governed LENS, not a private embedded corpus
+             (local-first.borg positioning wrote the 2026-08-03
+             hard-out against an UNCOORDINATED copy; a lens is a
+             governed branch with merge semantics).
            - A Nopales fork. Language semantics come from
              pricklypear-lisp unchanged; the agent adds HOST PRIMS and
              an optional host library layer in .pp, and nothing else.
              If the agent needs a language change, that change lands
              via lisp-interpreter.borg like any other.
            - pi's TUI. The primary surface is HTML (pure-html +
-             htmx/SSE); a minimal line REPL mode exists for scripts
-             and embedding, not as the primary interaction.
+             htmx, multipart for streams); a minimal line REPL mode
+             exists for scripts and embedding, not as the primary
+             interaction.
     |))))
 
   (subsection nopales-embed
@@ -77,13 +93,29 @@
          Nopales code therefore looks fully synchronous even when a
          prim performs network I/O.
 
+         SHARED soup/ KERNEL. The soup/ tree prims (hypermedia-
+         harness.kernel-prims: soup/parse, select, swap!, apply-parts!,
+         diff, closest-attr, …) are DB-free and registered here from
+         the SAME shared pure-prims layer the image uses (lifted from
+         image/lib/prims_hyper.ml into pure/). html/ (the pure-html DSL
+         for composing fragments) is a NOPALES package (libs/html),
+         not an OCaml prim layer — the agent loads it as source
+         against these prims, like libs/hyper. lambdasoup + markup
+         become agent deps, joined on the same seam.
+
          HOST PRIM NAMESPACE. Agent prims are prefixed by family:
            ui/notify ui/confirm ui/select        (browser surfaces)
            session/append session/name
            on register-tool register-command     (plugin API)
            http/get http/post                    (Eio; JSON in/out)
-         Pure language prims are untouched. The image's DB/auth/route
-         prims do not exist here.
+           route route/lookup route/dispatch     (agent-route-table;
+                                                  THE HOST SEAM shared
+                                                  with hypermedia-harness)
+           soup/*                                (shared tree prims,
+                                                  hypermedia-harness)
+         Pure language prims are untouched. The image's DB/auth/
+         session prims do not exist here; route prims are the
+         agent's LOCAL-LENS backing, not Postgres.
     |))))
 
   (subsection agent-loop
@@ -170,21 +202,75 @@
          per directory hash under ~/.config/agent/trust.json.
     |))))
 
-  (subsection surfaces
-   (doc "Interaction surfaces: HTML primary, line REPL secondary")
+  (subsection agent-route-table
+   (doc "The Nopales route table: route, route/lookup, route/dispatch — THE HOST SEAM between the agent and the image (hypermedia-harness.request-runner). Identical Nopales signatures, host-local backing. Routes bind a path to a Nopales render handler the same way the image's (route ...) does.")
    (status planned)
-   (implements agent/lib/http_ui.ml)
+   (implements agent/lib/runtime.ml)
    (verify
-    (smoke "agent boots, binds 127.0.0.1, serves the chat page, and streams one assistant reply over SSE")
-    (smoke "line REPL mode (-p / no-tty) completes one full turn from piped stdin")
-    (smoke "code browser renders the file tree and one file's contents read-only"))
+    (test "a (route \"/chat\" \"chat/render\") registered by a plugin makes /chat resolvable via route/lookup and renderable via route/dispatch")
+    (test "route/dispatch invokes the Nopales handler through Runtime.apply_value under the eval rim and returns the rendered raw-HTML VStr the browser would receive")
+    (test "route/dispatch binds a thin request context so query-param / request-method / hx-request? resolve inside the handler")
+    (test "a handler calling a Postgres-only request prim (e.g. current-author as a DB row) errors with unbound-prim in the agent — the agent's request context carries only request-shape values"))
    (details
     (doc (|
-         HTML PRIMARY. Local HTTP server (Httpun_eio) on
-         127.0.0.1:random-port; prints the URL (and --open to launch
-         a browser). pure-html for all pages. Chat via SSE stream +
-         POST. Code browser: read-only file tree + file view in v0
-         (CodeMirror vendored later; honest textarea/pre first).
+         SHAPE. Runtime.t gains a route table (path -> handler-name).
+         Nopales registers routes with the same (route path handler)
+         shape the image uses; route/lookup resolves a path to its
+         handler; route/dispatch invokes the handler in-process
+         through Runtime.apply_value (under the eval rim + mutex) with
+         a THIN REQUEST CONTEXT bound (query-param, request-method,
+         hx-request? resolve; DB/branch/auth request prims are
+         unbound) and returns the rendered raw-HTML VStr.
+
+         SAME SEMANTICS, LOCAL BACKING. The image backs these prims
+         with Session.t routes over Postgres + a fat Request_context
+         with manifest/store/branches. The agent backs them with the
+         Runtime route table + a thinner request context — the SAME
+         Nopales signatures, so libs/hyper and the surface handlers
+         run unchanged on both hosts (hypermedia-harness.request-
+         runner). The route table is where the corpus's routes are
+         materialized; as a local-first host the corpus (incl. defs)
+         comes from the lens, matching the positioning subsection.
+
+         ROUTE INSTANCES. Surface pages (/ /chat /and the code
+         browser) register as route-table routes in Nopales; the
+         multipart STREAM emission for a chat/agent turn stays OCaml
+         (surfaces subsection) — a route's handler initiates a host
+         stream rather than returning a single fragment for streaming
+         routes.
+    |))))
+
+  (subsection surfaces
+   (doc "Interaction surfaces: HTML primary, line REPL secondary. The chat/agent surface is NOPALES-AUTHORED htmx fragments + multipart streaming; the stream is emitted by OCaml, the fragments by Nopales.")
+   (status planned)
+   (implements agent/lib/http_ui.ml agent/lib/runtime.ml)
+   (verify
+    (smoke "agent boots, binds 127.0.0.1, serves the chat page, and streams one assistant reply as multipart/mixed htmx fragments routed into the live bubble")
+    (smoke "line REPL mode (-p / no-tty) completes one full turn from piped stdin")
+    (smoke "code browser renders the file tree and one file's contents read-only, via a Nopales route-table handler")
+    (smoke "the chat page and its fragment templates are defined in Nopales on the route table, redefinable from the session REPL without restart")
+    (smoke "a consumed chat turn replays deterministically through libs/hyper (hyper/stream over the captured part list) in the agent host"))
+   (details
+    (doc (|
+         HTML PRIMARY, NOPALES SURFACE. Local HTTP server (Httpun_eio)
+         on 127.0.0.1:random-port; prints the URL (and --open to
+         launch a browser). Chat and the code browser are htmx
+         fragment routes on the agent route table (agent-route-
+         table), rendered by Nopales via libs/html — NOT compiled
+         OCaml pages and NOT vanilla-JS SSE. The surface is
+         redefinable live (same env as plugins/REPL).
+
+         STREAMING IS OCAML. A chat/agent turn's stream is a compiled
+         host concern: provider SSE -> delta assembly -> per-part
+         (html, HX-Target, HX-Swap) assembly (delegating only the
+         fragment TEMPLATE to a Nopales render fn) -> multipart/mixed
+         frame + flush over the producer-fiber/drain-queue plumbing
+         already proven in the image (http_agent.mp_write_part)
+         and the v0.0 agent. Nopales owns the page skeleton and
+         fragment templates; OCaml owns the effects-coloured stream.
+         The parts are ALSO collected as data so libs/hyper can
+         replay a consumed turn deterministically (soup/apply-parts!,
+         hyper/stream).
 
          LINE REPL. stdin/stdout mode for scripts, embedding, and
          tty diehards. Same env, same prims, no htmx. Multi-line

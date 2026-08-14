@@ -220,9 +220,19 @@ let parse_turn_response_json (json : Yojson.Safe.t) : turn_result =
             (match content_opt with
              | Some c -> Final { content = c; raw = msg }
              | None ->
-                 (match msg |> member "reasoning_content" |> to_string_option with
-                  | Some r when String.trim r <> "" -> Final { content = r; raw = msg }
-                  | _ ->
+                 let reasoning_alias =
+                   match msg |> member "reasoning_content" |> to_string_option with
+                   | Some r when String.trim r <> "" -> Some r
+                   | _ ->
+                       (* Synthetic streams/thinking messages carry plain
+                          "reasoning" (agent provider.ml has the wire probe). *)
+                       (match msg |> member "reasoning" |> to_string_option with
+                        | Some r when String.trim r <> "" -> Some r
+                        | _ -> None)
+                 in
+                 (match reasoning_alias with
+                  | Some r -> Final { content = r; raw = msg }
+                  | None ->
                       Turn_error
                         (Printf.sprintf "LLM: empty content (finish=%s)" finish)))
   with e ->

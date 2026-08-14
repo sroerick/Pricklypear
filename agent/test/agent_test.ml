@@ -172,6 +172,408 @@ let test_loop_tool_block ~env ~sw ~rt () =
   | Error e -> Alcotest.fail e
   | Ok () -> ()
 
+(** agent-loop regression (turn-2 provider 400): the assistant entry
+    replayed in history must carry provider-shaped CONTENT (a string /
+    part array), never the whole raw assistant message object nested under
+    "content", and must replay tool_calls so the following tool-role entry
+    pairs up. Catches the loop.ml history-append nesting bug that the real
+    gateway rejected on the second message. *)
+let test_loop_turn2_history_shape ~env ~sw ~rt () =
+  let calls = ref 0 in
+  let captured = ref [] in
+  let complete ~env:_ ~sw:_ ~cfg:_ ~messages ~tools:_ ~on_delta:_ =
+    incr calls;
+    if !calls = 1 then
+      (* first reply: assistant WITH a tool call, provider-shaped raw *)
+      Ok
+        {
+          Provider.text = "using tool";
+          calls =
+            [
+              {
+                id = "t1";
+                name = "bash";
+                input = `Assoc [ ("command", `String "echo hi") ];
+              };
+            ];
+          stop_reason = "tool_use";
+          raw =
+            `Assoc
+              [ ("role", `String "assistant");
+                ("content", `String "using tool");
+                ( "tool_calls",
+                  `List
+                    [
+                      `Assoc
+                        [ ("id", `String "t1");
+                          ("type", `String "function");
+                          ( "function",
+                            `Assoc
+                              [ ("name", `String "bash");
+                                ( "arguments",
+                                  `String "{\"command\":\"echo hi\"}" ) ] );
+                          ];
+                    ] ) ];
+        }
+    else if !calls = 2 then
+      Ok
+        {
+          Provider.text = "done";
+          calls = [];
+          stop_reason = "stop";
+          raw = `Assoc [ ("role", `String "assistant"); ("content", `String "done") ];
+        }
+    else (
+      captured := messages;
+      Ok
+        {
+          Provider.text = "ok2";
+          calls = [];
+          stop_reason = "stop";
+          raw = `Assoc [ ("role", `String "assistant"); ("content", `String "ok2") ];
+        })
+  in
+  let cfg : Provider.cfg =
+    { base_url = "http://127.0.0.1:1"; api_key = ""; model = "mock"; system = "" }
+  in
+  let history = ref [] in
+  (match
+     Loop.run ~env ~sw ~rt ~cfg ~complete ~on_event:(fun _ -> ()) history
+       "first"
+   with Error e -> Alcotest.fail e | Ok () -> ());
+  (match
+     Loop.run ~env ~sw ~rt ~cfg ~complete ~on_event:(fun _ -> ()) history
+       "second"
+   with Error e -> Alcotest.fail e | Ok () -> ());
+  let msgs = !captured in
+  (* system is prepended at REQUEST build time, so msgs here are:
+     [user first; assistant+tool_calls; tool; assistant done; user second] *)
+  Alcotest.(check int) "turn-2 replays 5 messages" 5 (List.length msgs);
+  let a1 = List.nth msgs 1 in
+  Alcotest.(check string) "assistant role" "assistant" a1.Provider.role;
+  (match a1.Provider.content with
+   | `String s -> Alcotest.(check string) "content is a string" "using tool" s
+   | other ->
+       Alcotest.fail
+         ("assistant content must be a string, got: "
+         ^ Yojson.Safe.to_string other));
+  (match a1.Provider.tool_calls with
+   | Some (`List (_ :: _)) -> ()
+   | other ->
+       Alcotest.fail
+         ("assistant entry must replay tool_calls, got: "
+         ^ Yojson.Safe.to_string (Option.value ~default:`Null other)));
+  let a2 = List.nth msgs 3 in
+  (match a2.Provider.content with
+   | `String s -> Alcotest.(check string) "final content string" "done" s
+   | other ->
+       Alcotest.fail
+         ("final assistant content must be a string, got: "
+         ^ Yojson.Safe.to_string other));
+  (match a2.Provider.tool_calls with
+   | None -> ()
+   | Some tc ->
+       Alcotest.fail
+         ("plain assistant entry must not carry tool_calls: "
+         ^ Yojson.Safe.to_string tc));
+  (* Wire shape: the actual request body validates against the gateway's
+     expectation (content string, tool_calls array on the assistant msg). *)
+  let body =
+    Provider.Openai.request_body ~cfg ~messages:msgs ~tools:[] ~stream:false
+  in
+  let open Yojson.Safe.Util in
+  let wire = Yojson.Safe.from_string body in
+  let m1 = wire |> member "messages" |> index 2 in
+  Alcotest.(check bool) "wire messages[2] role assistant" true
+    (m1 |> member "role" |> to_string = "assistant");
+  Alcotest.(check bool) "wire messages[2] content string" true
+    (m1 |> member "content" |> to_string_option = Some "using tool");
+  Alcotest.(check bool) "wire messages[2] has tool_calls" true
+    (match m1 |> member "tool_calls" with `List (_ :: _) -> true | _ -> false)
+
+(** provider-stream: SSE [data:] payloads reconstruct a [reply]; text
+    deltas fire per chunk; tool-call argument fragments concatenate. *)
+let test_sse_stream_reconstruction () =
+  let deltas = ref [] in
+  (* Each element is the [data:] payload for one SSE chunk. Two text
+     deltas, a tool-call split across two fragments (id+name first,
+     arguments the second time), a [DONE] marker. *)
+  let reasons = ref [] in
+  let lines =
+    [
+      {|{"choices":[{"delta":{"reasoning_content":"thinking "},"finish_reason":null}]}|};
+      (* Synthetic's gateway streams thinking as plain "reasoning"
+         (GLM-4.7-Flash wire probe 2026-08): alias must land in the same
+         reasoning buffer / Reasoning deltas. *)
+      {|{"choices":[{"delta":{"reasoning":"rea"},"finish_reason":null}]}|};
+      {|{"choices":[{"delta":{"content":"hello "},"finish_reason":null}]}|};
+      {|{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"t1","function":{"name":"bash","arguments":"{\"command\":\"ech"}}]}}]}|};
+      {|{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"o hello\"}"}}]}}]}|};
+      {|{"choices":[{"delta":{"content":" world"},"finish_reason":null}]}|};
+      {|{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}|};
+      "[DONE]";
+    ]
+  in
+  let r =
+    Provider.Openai.parse_stream_lines lines ~on_delta:(fun d ->
+        match d with
+        | Provider.Reasoning s -> reasons := !reasons @ [ s ]
+        | Provider.Text s -> deltas := !deltas @ [ s ]
+        | Provider.Done -> ())
+  in
+  Alcotest.(check (list string)) "reasoning delta streamed separately"
+    [ "thinking "; "rea" ] !reasons;
+  Alcotest.(check bool) "synthetic raw keeps reasoning_content" true
+    (match r.Provider.raw with
+     | `Assoc f ->
+         (match List.assoc_opt "reasoning_content" f with
+          | Some (`String "thinking rea") -> true
+          | _ -> false)
+     | _ -> false);
+  Alcotest.(check string) "concatenated text" "hello  world" r.text;
+  Alcotest.(check int) "two text deltas fired" 2 (List.length !deltas);
+  Alcotest.(check (list string)) "delta order" [ "hello "; " world" ] !deltas;
+  Alcotest.(check string) "stop reason" "tool_calls" r.stop_reason;
+  Alcotest.(check int) "one reconstructed tool call" 1 (List.length r.calls);
+  (match r.calls with
+   | [ tc ] ->
+       Alcotest.(check string) "tool id" "t1" tc.id;
+       Alcotest.(check string) "tool name" "bash" tc.name
+   | _ -> ());
+  let input =
+    match r.calls with
+    | [ tc ] -> tc.input
+    | _ -> `Null
+  in
+  Alcotest.(check string) "tool input json" {|{"command":"echo hello"}|}
+    (Yojson.Safe.to_string input)
+
+(** agent-route-table: (route ...) makes a path resolvable via
+    route/lookup and renderable via route/dispatch; dispatch runs the
+    Nopales handler through Runtime.apply_value under the eval rim and
+    returns the rendered raw-HTML VStr. *)
+let test_route_table_register_and_render ~rt () =
+  ignore (Runtime.eval_string ~rt
+    {|(route "/chat" "chat/render")|});
+  ignore (Runtime.eval_string ~rt
+    {|(define (chat/render) (render-html "<h1>hi</h1>"))|});
+  Alcotest.check pp_value_testable "lookup resolves"
+    (Ast.VStr "chat/render")
+    (Runtime.eval_string ~rt {|(route/lookup "/chat")|});
+  Alcotest.check pp_value_testable "dispatch renders raw-HTML VStr"
+    (Ast.VStr "<h1>hi</h1>")
+    (Runtime.eval_string ~rt
+       {|(route/dispatch "chat/render" "GET" "/chat")|})
+
+(** route/dispatch binds a thin request context so query-param /
+    request-method / hx-request? resolve inside the handler. *)
+let test_route_table_thin_context ~rt () =
+  ignore (Runtime.eval_string ~rt
+    {|(define (qtest)
+       (string-append (request-method) "|"
+         (query-param "x") "|"
+         (if (hx-request?) "hx" "nohx")))|});
+  ignore (Runtime.eval_string ~rt {|(route "/q" "qtest")|});
+  Alcotest.check pp_value_testable "thin context resolves"
+    (Ast.VStr "POST|42|hx")
+    (Runtime.eval_string ~rt
+       {|(route/dispatch "qtest" "POST" "/q"
+           (list (cons "x" "42") (cons "hx-request" "true")))|})
+
+(** a handler calling a Postgres-only request prim (current-author as
+    a DB row) errors with unbound in the agent — the agent's request
+    context carries only request-shape values. *)
+let test_route_table_pg_prim_unbound ~rt () =
+  ignore (Runtime.eval_string ~rt
+    {|(define (authtest) (current-author))|});
+  ignore (Runtime.eval_string ~rt {|(route "/a" "authtest")|});
+  (match Runtime.eval_string ~rt
+           {|(route/dispatch "authtest" "GET" "/a")|}
+   with
+   | Ast.VStr s ->
+       Alcotest.(check bool) "unbound reported" true
+         (try ignore (Str.search_forward (Str.regexp_string "unbound") s 0); true
+          with Not_found -> false)
+   | other -> Alcotest.fail ("expected VStr, got " ^ Reader.pp_value other))
+
+(** libs/hyper runs unchanged on the agent: boot-load libs/std +
+    libs/html + libs/hyper as source, register a route-table handler, and
+    exercise hyper/visit + hyper/click (immutability) + hyper/stream
+    (multipart replay). The portability proof: same lib.pp, agent host. *)
+let test_libs_hyper_on_agent ~rt () =
+  (* dune runs the test with cwd = agent/test/, so walk up to find the
+     repo root (where libs/hyper/lib.pp lives). *)
+  let rec find_libs_dir dir =
+    let cand = Filename.concat dir "libs/hyper/lib.pp" in
+    if Sys.file_exists cand then dir
+    else
+      let parent = Filename.dirname dir in
+      if parent = dir then "libs"
+      else find_libs_dir parent
+  in
+  let libs_dir =
+    let root = find_libs_dir (Sys.getcwd ()) in
+    Filename.concat root "libs"
+  in
+  let load name =
+    let p = Filename.concat (Filename.concat libs_dir name) "lib.pp" in
+    match Runtime.load_file ~rt p with
+    | Ok () -> ()
+    | Error e -> Alcotest.fail (name ^ ": " ^ e)
+  in
+  List.iter load ["html"; "hyper"];
+  (* Register route-table handlers (Nopales). *)
+  ignore (Runtime.eval_string ~rt
+    {|(define (home)
+       (render-html "<div><button id=b hx-get=/click hx-target=#out>go</button><div id=out>old</div></div>"))|});
+  ignore (Runtime.eval_string ~rt {|(route "/" "home")|});
+  ignore (Runtime.eval_string ~rt {|(define (clicker) (render-html "<b>new</b>"))|});
+  ignore (Runtime.eval_string ~rt {|(route "/click" "clicker")|});
+  (* hyper/visit resolves the route in-process and parses the page. *)
+  Alcotest.check pp_value_testable "visit #out text"
+    (Ast.VStr "old")
+    (Runtime.eval_string ~rt {|(hyper/text (hyper/visit "/") "#out")|});
+  (* hyper/click swaps #out; original page is unchanged (immutability). *)
+  ignore (Runtime.eval_string ~rt {|(define pg (hyper/visit "/"))|});
+  Alcotest.check pp_value_testable "click swaps #out"
+    (Ast.VStr "new")
+    (Runtime.eval_string ~rt {|(hyper/text (hyper/click pg "#b" (list)) "#out")|});
+  Alcotest.check pp_value_testable "source page unchanged"
+    (Ast.VStr "old")
+    (Runtime.eval_string ~rt {|(hyper/text pg "#out")|});
+  (* hyper/stream replays an ordered part list onto a fresh copy. *)
+  Alcotest.check pp_value_testable "stream replay #out"
+    (Ast.VStr "new")
+    (Runtime.eval_string ~rt
+       {|(hyper/text
+          (hyper/stream pg
+            (list (list (cons "html" "<b>new</b>")
+                        (cons "target" "#out")
+                        (cons "swap" "innerHTML"))))
+          "#out")|});
+  Alcotest.check pp_value_testable "stream keeps source"
+    (Ast.VStr "old")
+    (Runtime.eval_string ~rt {|(hyper/text pg "#out")|})
+
+(** surfaces: the chat + code pages are Nopales route-table handlers
+    (rendered via libs/html), redefinable live; a consumed turn's captured
+    parts replay through hyper/stream. Loads the embedded surface the
+    same way the binary boots. *)
+let test_surfaces_nopales_routes ~rt () =
+  (* Boot-load the surface (libs/html + libs/hyper + chat/code handlers). *)
+  Surface.load ~rt;
+  (* GET / renders the chat page skeleton with the htmx form + assets. *)
+  (match Runtime.dispatch_route ~rt ~handler:"chat/page" ~method_:"GET"
+           ~path:"/" ~params:[] ~headers:[] ~body:""
+   with
+   | Ast.VStr html ->
+       Alcotest.(check bool) "chat page has hx-post /chat" true
+         (String.length html > 0
+          && (try ignore (Str.search_forward (Str.regexp_string "hx-post=\"/chat\"") html 0); true
+              with Not_found -> false));
+       Alcotest.(check bool) "chat page loads hx-multipart asset" true
+         ((try ignore (Str.search_forward (Str.regexp_string "/assets/hx-multipart.js") html 0); true
+           with Not_found -> false))
+   | other -> Alcotest.fail ("chat/page: " ^ Reader.pp_value other));
+  (* GET /code renders the code browser page (root listing). *)
+  (match Runtime.dispatch_route ~rt ~handler:"code/page" ~method_:"GET"
+           ~path:"/code" ~params:[] ~headers:[] ~body:""
+   with
+   | Ast.VStr html ->
+       Alcotest.(check bool) "code page renders" true (String.length html > 0)
+   | other -> Alcotest.fail ("code/page: " ^ Reader.pp_value other));
+  (* Redefining chat/page live changes the next render (redefinable
+     without restart). *)
+  ignore (Runtime.eval_string ~rt
+    {|(define (chat/page) (render-html "<h1>redefined</h1>"))|});
+  (match Runtime.dispatch_route ~rt ~handler:"chat/page" ~method_:"GET"
+           ~path:"/" ~params:[] ~headers:[] ~body:"" with
+   | Ast.VStr s ->
+       Alcotest.(check bool) "live redef took effect" true
+         ((try ignore (Str.search_forward (Str.regexp_string "redefined") s 0); true
+           with Not_found -> false))
+   | other -> Alcotest.fail ("redef: " ^ Reader.pp_value other))
+
+(** A consumed turn's captured parts replay through hyper/stream: simulate
+    the multipart emitter's captured part list, then hyper/stream over a
+    page that has #log. *)
+let test_turn_replay_hyper_stream ~rt () =
+  Surface.load ~rt;
+  (* Build a page with #log (what the chat page skeleton renders). *)
+  ignore (Runtime.eval_string ~rt
+    {|(define pg (soup/parse "<div id=log><div>ready</div></div>"))|});
+  (* Synthesize the part list the /chat emitter would capture: a user
+     bubble into #log (beforeend) + an llm bubble into #log (beforeend) +
+     a token span into the llm bubble (beforeend). *)
+  ignore (Runtime.eval_string ~rt
+    {|(define parts (list
+        (list (cons "html" "<div class=bubble>you: hi</div>") (cons "target" "#log") (cons "swap" "beforeend"))
+        (list (cons "html" "<div class=bubble id=llm-1></div>") (cons "target" "#log") (cons "swap" "beforeend"))
+        (list (cons "html" "<span>hello</span>") (cons "target" "#llm-1") (cons "swap" "beforeend"))))|});
+  Alcotest.check pp_value_testable "replay swaps #log"
+    (Ast.VStr "<div id=\"log\"><div>ready</div><div class=\"bubble\">you: hi</div><div class=\"bubble\" id=\"llm-1\"><span>hello</span></div></div>")
+    (Runtime.eval_string ~rt {|(soup/serialize (soup/select-one (hyper/stream pg parts) "#log"))|});
+  Alcotest.check pp_value_testable "replay token lands in bubble"
+    (Ast.VStr "<div class=\"bubble\" id=\"llm-1\"><span>hello</span></div>")
+    (Runtime.eval_string ~rt {|(soup/serialize (soup/select-one (hyper/stream pg parts) "#llm-1"))|});
+  (* Source page unchanged (immutability). *)
+  Alcotest.check pp_value_testable "source page unchanged"
+    (Ast.VStr "<div id=\"log\"><div>ready</div></div>")
+    (Runtime.eval_string ~rt {|(soup/serialize (soup/select-one pg "#log"))|})
+
+(** Nested-block replay: the /chat emitter wraps each contiguous reasoning
+    run and each tool call in its OWN <details>/<summary> inside the turn's
+    "thinking + tools" zone (#<rid>-think). Build the capture-ordered part
+    list with the REAL templates (same calls the drain loop makes), replay
+    through hyper/stream, and assert the nested DOM. *)
+let test_turn_replay_nested_blocks ~rt () =
+  Surface.load ~rt;
+  (* Build the part list OCaml-side via Runtime.call_template — the same
+     producer path the drain loop uses (template output unwrapped from
+     its raw-html sentinel), bound into the env for hyper/stream. *)
+  let tpl name args =
+    match Runtime.call_template ~rt name (List.map (fun s -> Ast.VStr s) args) with
+    | Some html -> html
+    | None -> Alcotest.fail ("template missing: " ^ name)
+  in
+  let part html target swap : Ast.value =
+    Ast.VList
+      [ Ast.VPair (Ast.VStr "html", Ast.VStr html)
+      ; Ast.VPair (Ast.VStr "target", Ast.VStr target)
+      ; Ast.VPair (Ast.VStr "swap", Ast.VStr swap)
+      ]
+  in
+  let parts =
+    Ast.VList
+      [ part (tpl "chat/turn-open" [ "t1" ]) "#log" "beforeend"
+      ; part (tpl "chat/think-open" [ "t1-tk-1" ]) "#t1-think" "beforeend"
+      ; part (tpl "chat/think-token" [ "rea" ]) "#t1-tk-1" "beforeend"
+      ; part (tpl "chat/tool-open" [ "t1-tool-1"; "bash" ]) "#t1-think" "beforeend"
+      ; part (tpl "chat/tool-line" [ "in"; "ls -la" ]) "#t1-tool-1" "beforeend"
+      ; part (tpl "chat/tool-line" [ "out"; "file.ml" ]) "#t1-tool-1" "beforeend"
+      ; part (tpl "chat/tool-done" [ "bash" ]) "#t1-tool-1-sum" "innerHTML"
+      ; part (tpl "chat/think-open" [ "t1-tk-2" ]) "#t1-think" "beforeend"
+      ; part (tpl "chat/think-token" [ "more" ]) "#t1-tk-2" "beforeend"
+      ; part (tpl "chat/token" [ "answer" ]) "#t1" "beforeend"
+      ]
+  in
+  ignore (Runtime.eval_string ~rt
+    {|(define npg (soup/parse "<div id=log></div>"))|});
+  Env.define rt.Runtime.env "nparts" parts;
+  Alcotest.check pp_value_testable "nested blocks replay into zone"
+    (Ast.VStr
+       ("<div id=\"t1-think\">"
+        ^ "<details class=\"tk\"><summary>thinking</summary><div id=\"t1-tk-1\"><span class=\"reason\">rea</span></div></details>"
+        ^ "<details class=\"tool\"><summary id=\"t1-tool-1-sum\">tool: bash ✓</summary><div id=\"t1-tool-1\"><div class=\"trace\">in ls -la</div><div class=\"trace\">out file.ml</div></div></details>"
+        ^ "<details class=\"tk\"><summary>thinking</summary><div id=\"t1-tk-2\"><span class=\"reason\">more</span></div></details>"
+        ^ "</div>"))
+    (Runtime.eval_string ~rt
+       {|(soup/serialize (soup/select-one (hyper/stream npg nparts) "#t1-think"))|});
+  Alcotest.check pp_value_testable "reply bubble got tokens"
+    (Ast.VStr "<div class=\"bubble llm\" id=\"t1\"><span>answer</span></div>")
+    (Runtime.eval_string ~rt
+       {|(soup/serialize (soup/select-one (hyper/stream npg nparts) "#t1"))|})
+
 let () =
   Eio_main.run @@ fun env ->
   let rt = Runtime.make () in
@@ -190,5 +592,30 @@ let () =
             (test_loop_tool_round_trip ~env ~sw ~rt);
           Alcotest.test_case "tool-block" `Quick
             (test_loop_tool_block ~env ~sw ~rt);
+          Alcotest.test_case "turn2-history-shape" `Quick
+            (test_loop_turn2_history_shape ~env ~sw ~rt);
         ] );
+      ( "provider-stream",
+        [
+          Alcotest.test_case "sse-text-and-tool-deltas" `Quick
+            test_sse_stream_reconstruction;
+        ] );
+      ( "agent-route-table",
+        [ Alcotest.test_case "register-and-render" `Quick
+            (test_route_table_register_and_render ~rt)
+        ; Alcotest.test_case "thin-context" `Quick
+            (test_route_table_thin_context ~rt)
+        ; Alcotest.test_case "pg-prim-unbound" `Quick
+            (test_route_table_pg_prim_unbound ~rt)
+        ] );
+      ( "libs-hyper-on-agent",
+        [ Alcotest.test_case "visit-click-stream" `Quick
+            (test_libs_hyper_on_agent ~rt) ] );
+      ( "surfaces",
+        [ Alcotest.test_case "nopales-routes" `Quick
+            (test_surfaces_nopales_routes ~rt)
+        ; Alcotest.test_case "turn-replay-hyper-stream" `Quick
+            (test_turn_replay_hyper_stream ~rt)
+        ; Alcotest.test_case "turn-replay-nested-blocks" `Quick
+            (test_turn_replay_nested_blocks ~rt) ] );
     ]

@@ -641,3 +641,60 @@ let data_delete (session : Session.t) (type_name : string) (id : string)
            ]);
         ()
 
+
+(* ---- page timing (image.page-timing) ---- *)
+
+let timing_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
+  let aggs = Timing.aggregates () in
+  let db_share (a : Timing.agg) : string =
+    if a.avg_ms > 0.0001 then
+      Printf.sprintf "%.0f%%" (100. *. a.db_ms /. a.avg_ms)
+    else "—"
+  in
+  let rows =
+    List.map
+      (fun (a : Timing.agg) ->
+        HTML.tr [] [
+          HTML.td [] [txt "%s" a.route];
+          HTML.td [] [txt "%d" a.count];
+          HTML.td [] [txt "%.1f" a.last_ms];
+          HTML.td [] [txt "%.1f" a.avg_ms];
+          HTML.td [] [txt "%.1f" a.max_ms];
+          HTML.td [] [txt "%.1f" a.db_ms];
+          HTML.td [] [txt "%.1f" a.db_hits];
+          HTML.td [] [txt "%s" (db_share a)];
+        ])
+      aggs
+  in
+  let body =
+    chrome ~session ~title:"Page timing" [
+      HTML.p [HTML.class_ "meta"] [
+        txt "Server-side render cost per user route (last %d total samples; %d per route)."
+          Timing.max_total_samples Timing.max_samples_per_route;
+        txt "  Sorted slowest-first by max. DB share = avg DB wall time / avg total.";
+      ];
+      (match aggs with
+       | [] ->
+           HTML.p [HTML.class_ "err"] [
+             txt "No route timings measured yet. Visit some pages first, then reload.";
+           ]
+       | _ ->
+           HTML.table [] [
+             HTML.thead [] [
+               HTML.tr [] [
+                 HTML.th [] [txt "route"];
+                 HTML.th [] [txt "samples"];
+                 HTML.th [] [txt "last ms"];
+                 HTML.th [] [txt "avg ms"];
+                 HTML.th [] [txt "max ms"];
+                 HTML.th [] [txt "db ms"];
+                 HTML.th [] [txt "db hits"];
+                 HTML.th [] [txt "db share"];
+               ]
+             ];
+             HTML.tbody [] rows;
+           ]);
+    ]
+  in
+  html_response reqd ~session body;
+  ()

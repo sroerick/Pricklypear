@@ -2,7 +2,7 @@
 
     System pages + browser product surfaces:
       /  /health  /branches  /bindings  /types  /data …
-      /repl  /api/eval  /edit  /inspect  /agent
+      /timing  /repl  /api/eval  /edit  /inspect  /agent
       public agent bootstrap: /.well-known/agent.json  /agent.txt
       user routes via (route ...)
 *)
@@ -255,8 +255,9 @@ let request_handler ~(sw : Eio.Switch.t) (session : Session.t)
             let request : Session.request =
               { method_; path; params; body = body_str; headers }
             in
-            let result =
-              Session.call_handler session ~request handler_name
+            let result, _total_ms =
+              Timing.measure ~route:handler_name
+                (fun () -> Session.call_handler session ~request handler_name)
             in
             (match result with
              | Session.Handler_ok value ->
@@ -578,6 +579,7 @@ let request_handler ~(sw : Eio.Switch.t) (session : Session.t)
   | `POST, "/branches/promote" -> launch (fun () -> branches_promote session reqd)
   | `GET, "/bindings" -> launch (fun () -> list_bindings_page session reqd)
   | `GET, "/types" -> launch (fun () -> list_types_page session reqd)
+  | `GET, "/timing" -> launch (fun () -> timing_page session reqd)
   | `GET, "/data" | `GET, "/data/" ->
       launch (fun () -> data_index_page session reqd)
   | `GET, path when String.length path >= 6
@@ -784,8 +786,9 @@ let request_handler ~(sw : Eio.Switch.t) (session : Session.t)
                let request : Session.request =
                  { method_; path; params; body = body_str; headers }
                in
-               let result =
-                 Session.call_handler session ~request handler_name
+               let result, _total_ms =
+                 Timing.measure ~route:handler_name
+                   (fun () -> Session.call_handler session ~request handler_name)
                in
                (match result with
                 | Session.Handler_ok value ->

@@ -1160,6 +1160,104 @@
     |))
    )
   )
+  (subsection page-timing
+   (doc "Per-route page render timing")
+   (status planned)
+   (implements image/lib/http.ml image/lib/http_core.ml image/lib/http_data.ml image/lib/timing.ml image/lib/prims_db.ml lisp/lib/eval.ml)
+   (verify
+    (build "dune build image")
+    (smoke "GET /timing lists each user route with count + avg db_ms/total_ms (empty/zero-safe when no samples)")
+    (smoke "GET /<route> twice then GET /timing shows count=2 for that route")
+    (smoke "each handled route response carries X-Timing-Ms header")
+    (smoke "GET /timing sorts slowest-first by max_ms; shows db_vs_total split")
+    (smoke "/timing 404-safe / zero-safe with no routes ever handled"))
+   (details
+    (doc (|
+         WHY:
+         Product pages are Nopales route handlers, and there is no
+         first-class answer to "how long does each page take to
+         load?". Hand-wrapping every handler with (now-ms) deltas is
+         repetitive and easy to forget. A single choke point already
+         exists — every handled user route flows through
+         Session.call_handler — so we can measure universally with
+         no per-package work.
+
+         WHAT WE MEASURE (server-side render time, not client
+         perceived):
+         - total_ms: wall time of the handler call (handler body
+           only, not HTTP write-back)
+         - db_ms: accumulated time inside DB-touching CRUD prims
+           during that handler
+         - db_hits: count of DB-touching prim calls during that
+           handler
+         - at: wall clock (epoch ms) the sample was taken
+         - route: the handler name/path
+         This is the cost to PRODUCE the page in the image. It is
+         NOT full end-to-end (network/TLS/browser paint). End-to-end
+         measurement is explicitly out of scope here (needs client
+         Navigation-Timing POST; deferred).
+
+         MEASUREMENT
+         1. Budget accumulation (lisp/lib/eval.ml): budget currently
+            tracks prim_calls + db_hits but not DB wall time. Add a
+            mutable db_ms : float to the budget struct (init 0.0).
+            prims_db.ml register_crud already computes elapsed_ms per
+            prim; change `ignore _elapsed_ms` to accumulate it into
+            the budget via a helper (mirroring note_db_hit, e.g.
+            note_db_ms on current_budget). This is the "future
+            function_stat.db_time_ms aggregation" the existing
+            comment already earmarks.
+         2. Choke-point capture (image/lib/http.ml): every call to
+            Session.call_handler (both dispatch sites: the
+            launch_user_route_or path and the /data-adjacent user
+            route path) is wrapped so BEFORE the call we read the
+            current eval budget's db_ms/db_hits, and AFTER we read
+            now-ms and the ending budget. One clean helper
+            Timing.measure f that runs the handler, then records a
+            sample { route; total_ms; db_ms; db_hits; at }. A handler
+            that fails still records its sample (the work happened);
+            the failure path is unchanged otherwise.
+         3. Sample store (image/lib: new timing.ml, mirroring the
+            data-browser pattern): a small in-process sample ring per
+            handler name. Keep a bounded window (e.g. last 1000
+            samples overall, or last 100 per route) to avoid
+            unbounded growth. Optionally mirror into data_rows as
+            type `page_timing` for cross-restart persistence +
+            Nopales querying — a nice-to-have, no migration required;
+            in-process ring satisfies /timing + header with none.
+            Persistence deferred unless we want history across
+            restarts.
+
+         SURFACE
+         1. /timing system page (OCaml dispatch entry mirroring
+            /branches, /data): table per route name — samples |
+            last_ms | avg_ms | max_ms | db_ms | db_hits | db_share
+            (% of avg total). Sorted by max_ms descending (slowest
+            first). Empty/zero-safe when there are no samples.
+         2. X-Timing-Ms response header: attach total_ms to every
+            handled-route response (in respond_handler_value / the
+            response path) so a browser or curl can see the number
+            per request without opening /timing.
+
+         SCOPE / NON-GOALS
+         - Server-side render time ONLY. No client Navigation-Timing
+           end-to-end measurement (deferred, not this one).
+         - No new schema in v1 (in-process ring); data_rows
+           `page_timing` persistence is optional/deferred.
+         - kernel paths (/data /admin /api/eval …) are NOT measured:
+           only user route handlers (the product pages people ask
+           "how long does this page take" about).
+         - /timing is a private system page (auth-required, like
+           /branches), not a public route.
+
+         ACCEPTANCE NARRATIVE
+         Human: open a few pages, then GET /timing → see each page
+         with count + slowest-first order + DB share; curl -i a page
+         → see X-Timing-Ms on the response. No per-package code
+         needed to be measured.
+    |))
+   )
+  )
   (subsection product-theme
    (doc "Product presentation as Nopales data: css/* sheet compiler, ui/theme + ui/css, emergency CSS only in OCaml")
    (status implemented)
