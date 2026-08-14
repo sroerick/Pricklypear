@@ -24,8 +24,70 @@ let register (t : t) (name : string) (fn : prim_fn) : unit =
 let register_sync (t : t) (name : string) (fn : prim_fn_sync) : unit =
   Hashtbl.replace t name (fun args -> (fn args))
 
+(* --- Server-only locality metadata (borge/remote-eval.borg
+   server-endpoint). ---
+
+   Some prims MUST execute server-side to mean anything: route, fork,
+   merge, checkout, create-user, is-admin? (auth admin). The
+   remote client's /api/prim endpoint refuses these with a structured
+   `server_only` error instead of pretending to proxy them.
+
+   The classification is DERIVED from this registry metadata, never a
+   hand-maintained list in the endpoint: a prim is server-only iff it
+   was registered via [register_server_only]/[register_server_only_sync]
+   below. The set is registry-wide (server-only locality is a property
+   of the prim NAME, identical for every session's table) and lives in
+   this registry module so the endpoint reads the same metadata the
+   registration sites wrote. *) 
+let server_only : (string, unit) Hashtbl.t = Hashtbl.create 8
+
+(** Register [name] AND mark it server-only (refused by a remote
+    client's /api/prim). Metadata lives in this registry; the endpoint
+    reads it via [is_server_only]. *) 
+let register_server_only (t : t) (name : string) (fn : prim_fn) : unit =
+  Hashtbl.replace server_only name ();
+  register t name fn
+
+let register_server_only_sync
+    (t : t) (name : string) (fn : prim_fn_sync) : unit =
+  Hashtbl.replace server_only name ();
+  register_sync t name fn
+
+(** Refuse-or-forward classification, derived from registry metadata.
+    A prim is server-only iff it was registered via
+    [register_server_only*]. *) 
+let is_server_only (_t : t) (name : string) : bool =
+  Hashtbl.mem server_only name
+
 let lookup (t : t) (name : string) : prim_fn option =
   Hashtbl.find_opt t name
+
+(* --- Refuse-or-forward dispatch for /api/prim (borge/remote-eval.borg
+   server-endpoint). ---
+
+   One prim call, dispatched exactly the way the image rim services a
+   [Prim_call] during eval (same table lookup, same [fn args]), but
+   with the server-only refusal in front of it. Classification is
+   DERIVED from registry metadata ([is_server_only]), never a hand
+   list. Factored here (rather than inline in http_pages.ml) so the
+   endpoint is thin and the refusal/execution logic is unit-testable
+   without spinning up an HTTP server. *) 
+type prim_result =
+  | Prim_ok of value
+  | Prim_refused_server_only of string * string (* name * reason *)
+  | Prim_error of exn
+
+let dispatch (t : t) (name : string) (args : value list) : prim_result =
+  if is_server_only t name then
+    Prim_refused_server_only (name, "prim must execute server-side")
+  else
+    match lookup t name with
+    | Some fn ->
+        (try Prim_ok (fn args) with exn -> Prim_error exn)
+    | None ->
+        Prim_error
+          (Interp_error
+             (Prim_error (name, "unregistered primitive", "prim_error")))
 
 (* Numeric helpers: VInt | VFloat with promotion (int+float → float). *)
 (* --- Session-aware primitives ---
