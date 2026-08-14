@@ -1,0 +1,23 @@
+;; remote/ — pp-remote: a Nopales client process that embeds the pure
+;; lisp interpreter, lazily materializes function definitions from a
+;; remote branch, and proxies Prim_call effects to the image over HTTP
+;; (borge/remote-eval.borg). Sibling of image/, not part of it — no
+;; Postgres, no Lwt, no store_db.
+(library
+ (name pricklypear_remote_lib)
+ (public_name pricklypear-remote.lib)
+ (wrapped false)
+ (modules proxy_rim remote http_transport)
+ (libraries
+  pricklypear-lisp
+  pricklypear-pure-prims
+  yojson
+  base64
+  eio
+  eio_main
+  httpun
+  httpun-eio
+  tls-eio
+  ca-certs-nss
+  domain-name
+  unix))

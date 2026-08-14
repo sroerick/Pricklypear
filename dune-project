@@ -29,3 +29,7 @@
 (package
  (name pricklypear-agent)
  (description "Local Nopales-native coding agent (pi-inspired): minimal agent loop, Nopales plugins, HTML code browser. Sibling of the image, not part of it — see borge/agent.borg"))
+
+(package
+ (name pricklypear-remote)
+ (description "pp-remote: a Nopales client process that embeds the pure lisp interpreter, lazily materializes function definitions from a remote branch, and proxies Prim_call effects to the image over HTTP — see borge/remote-eval.borg. Sibling of image/, not part of it"))
