@@ -40,3 +40,31 @@
 
 (define theme/shadow
   "#c9c0ae")
+
+;; --- semantic style tokens (light paper values) ---------------------
+(define theme/sel-bg "#fff8dc")
+(define theme/sel-accent "#000080")
+(define theme/pending-bg "#fff8dc")
+(define theme/pending-ink "#664400")
+(define theme/pending-border "#886600")
+(define theme/done-bg "#cfc")
+(define theme/done-ink "#226622")
+(define theme/done-muted "#666666")
+(define theme/waiting-bg "#e0e8ff")
+(define theme/archived-bg "#eeeeee")
+(define theme/archived-ink "#555555")
+(define theme/archived-border "#666666")
+(define theme/cancelled-bg "#dddddd")
+(define theme/today-bg "#ffffe0")
+(define theme/banner-bg "#fff3cd")
+(define theme/banner-border "#8b0000")
+(define theme/banner-ink "#1a1a1a")
+(define theme/badge-bg "#ffe8a3")
+(define theme/badge-border "#8b6914")
+
+;; --- per-theme structural sheet hook (no-op) ---------------
+;; Ensure switching away from theme-as400 clears its CRT chrome.
+(define theme/extra
+  (lambda
+    ()
+    (css/sheet (list))))

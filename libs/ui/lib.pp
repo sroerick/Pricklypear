@@ -20,10 +20,13 @@
       (css/render
         (css/sheet
           (list
+            (css/use (theme/vars))
             (css/use (ui/theme))
             (css/use (ui/theme-nav))
             (css/use notes/tree-css)
-            (css/use notes/tree-css-patch)))))))
+            (css/use notes/tree-css-patch)
+            ;; per-theme structural chrome (no-op except theme-as400)
+            (css/use (theme/extra))))))))
 
 (define ui/home
   (lambda
@@ -50,8 +53,8 @@
           ".capture-card .capture-row{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center;margin-top:.5rem}"
           ".capture-card .capture-row button{width:auto;min-width:6rem}"
           ".capture-card #capture-status{margin-top:.35rem;font-size:.9rem}"
-          ".capture-card #capture-status.ok,.capture-card .ok{color:#226622;font-weight:700}"
-          ".capture-card #capture-status.err,.capture-card .err{color:#800000;font-weight:700}")))))
+          ".capture-card #capture-status.ok,.capture-card .ok{color:var(--ok);font-weight:700}"
+          ".capture-card #capture-status.err,.capture-card .err{color:var(--err);font-weight:700}")))))
 
 (define ui/menu
   (lambda
@@ -140,8 +143,8 @@
           ".capture-nav-form .capture-row button{width:auto;min-width:4.5rem;margin:0}"
           ".capture-nav-form .capture-row a{display:inline-block;padding:.35rem .45rem}"
           ".capture-nav-form #capture-status{font-size:.85rem;min-height:1.1em}"
-          ".capture-nav-form .ok{color:#226622;font-weight:700}"
-          ".capture-nav-form .err{color:#800000;font-weight:700}")))))
+          ".capture-nav-form .ok{color:var(--ok);font-weight:700}"
+          ".capture-nav-form .err{color:var(--err);font-weight:700}")))))
 
 (define ui/theme
   (lambda
@@ -162,23 +165,23 @@
             "margin"
             "0"
             "background"
-            theme/bg
+            "var(--bg)"
             "color"
-            theme/ink
+            "var(--ink)"
             "font-family"
             "Geneva,\"Lucida Grande\",\"DejaVu Sans\",Verdana,sans-serif"
             "line-height"
             "1.4"))
         (css/rule
           "a"
-          (list "color" theme/link "text-decoration" "underline"))
-        (css/rule "a:visited" (list "color" theme/visited))
-        (css/rule "a:hover" (list "color" theme/ink))
+          (list "color" "var(--link)" "text-decoration" "underline"))
+        (css/rule "a:visited" (list "color" "var(--visited)"))
+        (css/rule "a:hover" (list "color" "var(--ink)"))
         (css/rule
           "header"
           (list
             "background"
-            theme/panel
+            "var(--panel)"
             "border-bottom"
             "2px solid #000"
             "padding"
@@ -193,7 +196,7 @@
             "letter-spacing"
             ".02em"
             "color"
-            theme/ink
+            "var(--ink)"
             "margin-right"
             ".75rem"))
         (css/rule
@@ -206,7 +209,7 @@
             "font-size"
             ".8rem"
             "color"
-            theme/muted
+            "var(--muted)"
             "margin"
             ".25rem 0 .5rem"))
         (css/rule
@@ -235,9 +238,9 @@
             "border"
             "1px solid #000"
             "background"
-            theme/chrome
+            "var(--chrome)"
             "color"
-            theme/ink
+            "var(--ink)"
             "text-decoration"
             "none"
             "font-size"
@@ -248,10 +251,10 @@
             "none"
             "box-sizing"
             "border-box"))
-        (css/rule "nav a:visited" (list "color" theme/ink))
+        (css/rule "nav a:visited" (list "color" "var(--ink)"))
         (css/rule
           "nav a:hover,nav a:focus,.menu-drop-btn:hover"
-          (list "background" theme/panel))
+          (list "background" "var(--panel)"))
         (css/rule
           "nav.emergency-nav"
           (list "width" "100%" "margin-top" ".35rem"))
@@ -265,25 +268,25 @@
             "padding"
             ".4rem .55rem"
             "border"
-            "2px solid #8b0000"
+            "2px solid var(--banner-border)"
             "background"
-            "#fff3cd"
+            "var(--banner-bg)"
             "color"
-            "#1a1a1a"
+            "var(--banner-ink)"
             "font-size"
             ".85rem"
             "font-family"
             "Courier,monospace"))
         (css/rule
           ".emergency-banner a"
-          (list "color" theme/link))
+          (list "color" "var(--link)"))
         (css/rule
           ".emergency-home"
           (list
             "border"
-            "2px solid #8b0000"
+            "2px solid var(--banner-border)"
             "background"
-            "#fff3cd"))
+            "var(--banner-bg)"))
         (css/rule
           ".menu-drop"
           (list
@@ -353,7 +356,7 @@
             "box-sizing"
             "border-box"
             "background"
-            theme/panel
+            "var(--panel)"
             "border"
             "2px solid #000"
             "box-shadow"
@@ -442,7 +445,7 @@
           ".card"
           (list
             "background"
-            theme/panel
+            "var(--panel)"
             "border"
             "2px solid #000"
             "padding"
@@ -457,7 +460,7 @@
             "width"
             "100%"
             "background"
-            theme/panel
+            "var(--panel)"
             "border"
             "1px solid #000"
             "font-size"
@@ -479,14 +482,14 @@
           "th"
           (list
             "background"
-            theme/chrome
+            "var(--chrome)"
             "font-weight"
             "700"
             "border-color"
-            theme/ink))
+            "var(--ink)"))
         (css/rule
           "tr:nth-child(even) td"
-          (list "background" theme/row-alt))
+          (list "background" "var(--row-alt)"))
         (css/rule
           "pre,textarea,input[type=text],input[type=search],input:not([type])"
           (list
@@ -495,9 +498,9 @@
             "font-size"
             "1rem"
             "background"
-            theme/panel
+            "var(--panel)"
             "color"
-            theme/ink
+            "var(--ink)"
             "border"
             "1px solid #000"
             "border-radius"
@@ -538,9 +541,9 @@
             "cursor"
             "pointer"
             "background"
-            theme/chrome
+            "var(--chrome)"
             "color"
-            theme/ink
+            "var(--ink)"
             "border"
             "2px outset #fff"
             "border-radius"
@@ -554,7 +557,7 @@
           (list "border-style" "inset"))
         (css/rule
           "button.secondary,.btn.secondary"
-          (list "background" theme/bg))
+          (list "background" "var(--bg)"))
         (css/rule
           "a.btn"
           (list
@@ -563,22 +566,22 @@
             "text-decoration"
             "none"
             "color"
-            theme/ink
+            "var(--ink)"
             "line-height"
             "1.2"
             "vertical-align"
             "middle"))
-        (css/rule "a.btn:visited" (list "color" theme/ink))
+        (css/rule "a.btn:visited" (list "color" "var(--ink)"))
         (css/rule "label" (list "font-weight" "700"))
         (css/rule
           ".meta,.muted"
-          (list "color" theme/muted "font-size" ".9rem"))
+          (list "color" "var(--muted)" "font-size" ".9rem"))
         (css/rule
           ".err"
-          (list "color" theme/err "font-weight" "700"))
+          (list "color" "var(--err)" "font-weight" "700"))
         (css/rule
           ".ok"
-          (list "color" theme/ok "font-weight" "700"))
+          (list "color" "var(--ok)" "font-weight" "700"))
         (css/rule
           "#out"
           (list
@@ -587,7 +590,7 @@
             "min-height"
             "4rem"
             "background"
-            theme/panel
+            "var(--panel)"
             "border"
             "1px solid #000"
             "padding"
@@ -639,11 +642,11 @@
           ".ol-node.is-selected > .ol-sum"
           (list
             "background"
-            "#fff8dc"
+            "var(--sel-bg)"
             "outline"
             "2px solid #000"
             "box-shadow"
-            "inset 3px 0 0 #000080"))
+            "inset 3px 0 0 var(--sel-accent)"))
         (css/rule
           ".ol-fold"
           (list
@@ -672,12 +675,12 @@
             "margin"
             "0 .05rem 0 -.1rem"
             "color"
-            theme/muted))
+            "var(--muted)"))
         (css/rule
           ".ol-fold:hover"
           (list
             "background"
-            theme/panel
+            "var(--panel)"
             "border"
             "1px solid #808080"
             "padding"
@@ -714,50 +717,50 @@
             "letter-spacing"
             ".02em"
             "color"
-            theme/muted
+            "var(--muted)"
             "vertical-align"
             "middle"))
         (css/rule
           ".ol-todo.st-TODO"
           (list
             "border-color"
-            "#886600"
+            "var(--pending-border)"
             "color"
-            "#664400"
+            "var(--pending-ink)"
             "background"
-            "#fff8dc"))
+            "var(--pending-bg)"))
         (css/rule
           ".ol-todo.st-DONE"
           (list
             "border-color"
-            "#226622"
+            "var(--done-ink)"
             "color"
-            "#226622"
+            "var(--done-ink)"
             "background"
-            "#e8f5e8"))
+            "var(--done-bg)"))
         (css/rule
           ".ol-todo.st-ARCHIVED"
           (list
             "border-color"
-            "#666"
+            "var(--archived-border)"
             "color"
-            "#555"
+            "var(--archived-ink)"
             "background"
-            "#eee"))
+            "var(--archived-bg)"))
         (css/rule
           ".ol-node.st-DONE > .ol-sum .ol-title"
           (list
             "text-decoration"
             "line-through"
             "color"
-            "#555"
+            "var(--done-muted)"
             "font-weight"
             "500"))
         (css/rule
           ".ol-node.st-ARCHIVED > .ol-sum .ol-title"
           (list
             "color"
-            "#777"
+            "var(--archived-ink)"
             "font-style"
             "italic"
             "font-weight"
@@ -792,7 +795,7 @@
           ".ol-title:focus"
           (list
             "background"
-            theme/panel
+            "var(--panel)"
             "border"
             "1px solid #000"))
         (css/rule
@@ -816,7 +819,7 @@
           ".ol-body:focus"
           (list
             "background"
-            theme/panel
+            "var(--panel)"
             "border"
             "1px solid #000"))
         (css/rule
@@ -835,7 +838,7 @@
             "border"
             "1px solid #000"
             "background"
-            theme/panel))
+            "var(--panel)"))
         (css/rule
           ".note-media-cap"
           (list "margin" "0 0 .5rem" "font-size" ".85rem"))
@@ -858,7 +861,7 @@
             "padding"
             ".35rem .5rem"
             "background"
-            theme/panel
+            "var(--panel)"
             "border"
             "2px solid #000"
             "position"
@@ -875,7 +878,7 @@
             "font-size"
             ".8rem"
             "color"
-            theme/muted
+            "var(--muted)"
             "margin-right"
             ".2rem"
             "min-width"
@@ -950,11 +953,11 @@
             "border"
             "1px solid #666"
             "background"
-            theme/chrome
+            "var(--chrome)"
             "font-weight"
             "700"
             "color"
-            theme/ink
+            "var(--ink)"
             "text-align"
             "center"
             "line-height"
@@ -964,7 +967,7 @@
           (list "display" "none"))
         (css/rule
           "details.ol-actions > summary.ol-actions-sum:hover, details.ol-actions[open] > summary.ol-actions-sum"
-          (list "background" theme/panel "border-color" theme/ink))
+          (list "background" "var(--panel)" "border-color" "var(--ink)"))
         (css/rule
           ".ol-actions-panel"
           (list
@@ -989,7 +992,7 @@
             "padding"
             ".2rem"
             "background"
-            theme/panel
+            "var(--panel)"
             "border"
             "1px solid #000"
             "z-index"
@@ -1024,15 +1027,15 @@
             "border"
             "1px solid #000"
             "background"
-            theme/bg
+            "var(--bg)"
             "cursor"
             "pointer"
             "line-height"
             "1.2"))
         (css/rule
           ".ol-btn:hover"
-          (list "background" theme/panel))
-        (css/rule ".ol-del" (list "color" theme/err))
+          (list "background" "var(--panel)"))
+        (css/rule ".ol-del" (list "color" "var(--err)"))
         (css/rule
           "form.ol-refile"
           (list
@@ -1089,7 +1092,7 @@
         (css/rule
           ".br-table th,.br-table td"
           (list "padding" ".35rem .4rem" "vertical-align" "top"))
-        (css/rule "tr.br-current" (list "background" "#fff8dc"))
+        (css/rule "tr.br-current" (list "background" "var(--sel-bg)"))
         (css/rule
           ".br-stats"
           (list
@@ -1142,9 +1145,9 @@
           ".badge.impact"
           (list
             "background"
-            "#ffe8a3"
+            "var(--badge-bg)"
             "border"
-            "1px solid #8b6914"
+            "1px solid var(--badge-border)"
             "padding"
             ".15rem .4rem"
             "font-size"
@@ -1182,7 +1185,7 @@
             "text-decoration"
             "none"
             "color"
-            theme/link
+            "var(--link)"
             "border-left"
             "3px solid transparent"))
         (css/rule
@@ -1191,14 +1194,14 @@
             "font-weight"
             "700"
             "background"
-            theme/row-alt
+            "var(--row-alt)"
             "border-left"
             "3px solid #000"
             "color"
-            theme/ink))
+            "var(--ink)"))
         (css/rule
           ".bb-item a:hover"
-          (list "background" theme/chrome "color" theme/ink))
+          (list "background" "var(--chrome)" "color" "var(--ink)"))
         (css/rule
           ".bb-crumb"
           (list "margin" "0 0 .5rem" "font-size" ".9rem"))
@@ -1252,19 +1255,19 @@
             "color"
             "inherit"
             "background"
-            theme/panel
+            "var(--panel)"
             "border-radius"
             "2px"))
         (css/rule
           ".bb-tab:hover"
-          (list "background" theme/row-alt))
+          (list "background" "var(--row-alt)"))
         (css/rule
           ".bb-tab.is-active"
           (list
             "background"
-            theme/ink
+            "var(--ink)"
             "color"
-            theme/panel
+            "var(--panel)"
             "font-weight"
             "700"))
         (css/rule
@@ -1289,7 +1292,7 @@
             "overflow"
             "auto"
             "background"
-            theme/panel
+            "var(--panel)"
             "border"
             "1px solid #000"
             "padding"
@@ -1372,45 +1375,45 @@
             ".25rem"))
         (css/rule
           ".todo-box.st-TODO"
-          (list "background" "#fff8dc"))
+          (list "background" "var(--pending-bg)"))
         (css/rule
           ".todo-box.st-DONE"
           (list
             "background"
-            "#cfc"
+            "var(--done-bg)"
             "text-decoration"
             "line-through"))
         (css/rule
           ".todo-box.st-WAITING"
-          (list "background" "#e0e8ff"))
+          (list "background" "var(--waiting-bg)"))
         (css/rule
           ".todo-box.st-CANCELLED"
-          (list "background" "#ddd" "color" "#666"))
+          (list "background" "var(--cancelled-bg)" "color" "var(--archived-ink)"))
         (css/rule
           ".todo-box.st-ARCHIVED"
           (list
             "background"
-            "#eee"
+            "var(--archived-bg)"
             "color"
-            "#555"
+            "var(--archived-ink)"
             "border-style"
             "dashed"))
         (css/rule
           "li.todo-item.is-archived .todo-title"
-          (list "color" "#888" "font-style" "italic"))
+          (list "color" "var(--archived-ink)" "font-style" "italic"))
         (css/rule
           ".todo-from-note .todo-src"
           (list "font-size" ".8rem" "margin-left" ".35rem"))
         (css/rule ".ol-todo-btn" (list "cursor" "pointer"))
         (css/rule
           ".ol-todo-btn.st-TODO"
-          (list "background" "#fff8dc"))
+          (list "background" "var(--pending-bg)"))
         (css/rule
           ".ol-todo-btn.st-DONE"
-          (list "background" "#cfc"))
+          (list "background" "var(--done-bg)"))
         (css/rule
           ".ol-todo-btn.st-WAITING"
-          (list "background" "#e0e8ff"))
+          (list "background" "var(--waiting-bg)"))
         (css/rule
           ".cal-nav"
           (list
@@ -1437,7 +1440,7 @@
             "gap"
             "2px"
             "background"
-            theme/shadow
+            "var(--shadow)"
             "border"
             "2px solid #000"
             "max-width"
@@ -1446,7 +1449,7 @@
           ".cal-dow"
           (list
             "background"
-            theme/chrome
+            "var(--chrome)"
             "text-align"
             "center"
             "font-weight"
@@ -1459,7 +1462,7 @@
           ".cal-cell"
           (list
             "background"
-            theme/panel
+            "var(--panel)"
             "min-height"
             "3.5rem"
             "padding"
@@ -1467,18 +1470,18 @@
             "display"
             "block"
             "color"
-            theme/ink
+            "var(--ink)"
             "text-decoration"
             "none"))
         (css/rule
           "a .cal-cell:hover"
-          (list "background" "#fff8dc"))
+          (list "background" "var(--sel-bg)"))
         (css/rule
           ".cal-empty"
-          (list "background" theme/bg "min-height" "3.5rem"))
+          (list "background" "var(--bg)" "min-height" "3.5rem"))
         (css/rule
           ".cal-today"
-          (list "outline" "2px solid #000" "background" "#ffffe0"))
+          (list "outline" "2px solid #000" "background" "var(--today-bg)"))
         (css/rule
           ".cal-dom"
           (list "font-weight" "700" "font-size" ".85rem"))
@@ -1503,12 +1506,12 @@
             "border"
             "1px solid #000"
             "background"
-            theme/chrome
+            "var(--chrome)"
             "line-height"
             "1.2"))
-        (css/rule ".cal-dot-ev" (list "background" "#cfc"))
-        (css/rule ".cal-dot-todo" (list "background" "#fff8dc"))
-        (css/rule ".cal-dot-note" (list "background" "#e0e8ff"))
+        (css/rule ".cal-dot-ev" (list "background" "var(--done-bg)"))
+        (css/rule ".cal-dot-todo" (list "background" "var(--pending-bg)"))
+        (css/rule ".cal-dot-note" (list "background" "var(--waiting-bg)"))
         (css/rule
           ".cal-list"
           (list
@@ -1539,7 +1542,7 @@
             "min-width"
             "3.5rem"
             "color"
-            theme/muted))
+            "var(--muted)"))
         (css/rule
           ".cal-day-panel label"
           (list "display" "block" "margin-top" ".4rem"))
@@ -1565,7 +1568,7 @@
             "1"))
         (css/rule
           ".weather-card .wx-meta"
-          (list "font-size" ".9rem" "color" theme/muted))
+          (list "font-size" ".9rem" "color" "var(--muted)"))
         (css/rule
           ".weather-card .wx-loc"
           (list "font-weight" "700" "margin" ".25rem 0"))
@@ -1588,7 +1591,7 @@
           (list "width" "auto" "min-width" "4.5rem"))
         (css/rule
           ".weather-card .wx-err"
-          (list "color" theme/err "font-weight" "700"))
+          (list "color" "var(--err)" "font-weight" "700"))
         (css/rule
           ".capture-panel"
           (list
@@ -1648,10 +1651,10 @@
           (list "font-size" ".85rem" "min-height" "1.1em"))
         (css/rule
           ".capture-nav-form .ok"
-          (list "color" "#226622" "font-weight" "700"))
+          (list "color" "var(--ok)" "font-weight" "700"))
         (css/rule
           ".capture-nav-form .err"
-          (list "color" theme/err "font-weight" "700"))
+          (list "color" "var(--err)" "font-weight" "700"))
         (css/rule
           ".capture-card label"
           (list
@@ -1768,7 +1771,7 @@
             "break-word"))
         (css/rule
           "li.todo-item.is-done .todo-title"
-          (list "text-decoration" "line-through" "color" "#666"))
+          (list "text-decoration" "line-through" "color" "var(--done-muted)"))
         (css/rule
           "li.todo-item .todo-del button, li.todo-item .todo-archive button"
           (list
@@ -1887,7 +1890,7 @@
             "margin-right"
             ".2em"
             "color"
-            theme/muted
+            "var(--muted)"
             "vertical-align"
             "super"))
         (css/rule
@@ -1980,7 +1983,7 @@
                 "margin"
                 "0 0 .25rem"
                 "background"
-                theme/panel
+                "var(--panel)"
                 "text-align"
                 "left"))))))))
 
@@ -2114,10 +2117,10 @@
           (list "font-size" ".85rem" "min-height" "1.1em"))
         (css/rule
           ".capture-nav-form .ok"
-          (list "color" theme/ok "font-weight" "700"))
+          (list "color" "var(--ok)" "font-weight" "700"))
         (css/rule
           ".capture-nav-form .err"
-          (list "color" theme/err "font-weight" "700"))
+          (list "color" "var(--err)" "font-weight" "700"))
         ;; --- nested submenu (fly-out) support ---
         ;; a menu/group inside another menu/group renders as a nested
         ;; <details.menu-drop> inside a .menu-drop-panel. Make those
