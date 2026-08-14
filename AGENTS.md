@@ -219,6 +219,8 @@ auth is **in-process** in the image.
   visible function_defs on the current branch), `/binding/<name>`
   (pretty-print one function_def's AST), `/types` (list visible
   type_defs on the current branch — fields shown comma-separated),
+  `/timing` (per-route server-side page render cost: total/db ms,
+  db hits, slowest-first; borge/image.borg page-timing),
   `/data` (generic data_rows browser: list types + counts, browse
   `/data/<type>`, create/edit/delete rows at `/data/<type>/…`).
   `/inspect/row/<type>/<id>` redirects to `/data/<type>/<id>`.
