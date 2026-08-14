@@ -52,13 +52,63 @@
         8. Graph visualization (optional, late)
 
         =========================================================
-        PACKAGES
+        PACKAGES — dependency layering (HARD RULE)
         =========================================================
-        outline/   — pure tree ADT + structure ops (no DB)
-        structed/  — generic structural-edit algebra
-        notes/     — persistence façade, routes, dailies, capture
-        roam/      — link parse/reindex/render (UUID-backed)
-        bible/ + dabar/ — reader + study; bible sexp render target
+        The packages form a STRICT LAYERING. A lower layer may not
+        import a higher one. Drift here is a bug, not a style choice.
+
+          outline/   — pure tree ADT + structure ops. NO storage,
+                       NO notes/, NO roam/. Leaf. Reusable by todo/,
+                       plan/, kanban/, tests.
+          structed/  — generic structural-edit algebra. Leaf.
+          bible/ +
+          dabar/    — reader + study; bible sexp render target.
+                       May be read by outline render dispatch via a
+                       hook passed in, never by import.
+          roam/      — link parse / reindex / render. LEAF over
+                       outline + prims only. Does NOT call notes/doc/*
+                       or notes/*; callers pass titles/slugs in.
+          notes/     — persistence façade + routes + capture +
+                       dailies + structure-op dispatch + UI. The ONLY
+                       package that touches the note store (tree_* /
+                       data_rows migrate). Calls outline/, structed/,
+                       roam/, bible/ downward. Owns roam/reindex on
+                       content writes (notes → roam, one-way).
+
+        ALLOWED EDGES:  outline ← structed ← notes → {roam, bible}
+                        roam ← outline (read-only ADT)
+        FORBIDDEN:     outline → notes, outline → roam,
+                       roam → notes (cycle), notes → notes (two
+                       façades — see storage FAÇADE rule).
+
+        =========================================================
+        WHERE IT GOES (routing table — one home per concern)
+        =========================================================
+          node ADT (id/title/body/todo/kids), encode/decode,
+          find/update/insert/delete/promote/demote/move,
+          archive/cycle-todo, valid?, todos scrape ........ outline/
+          generic tree surgery (slurp/barf/wrap/splice/raise) structed/
+          note read/write/list/search/folder, daily, capture,
+          set-folder, op dispatch (apply-op, node-op, eval),
+          routes + partials + page HTML, backlinks panel host .. notes/
+          [[slug]] parse, note-link reindex, backlinks query,
+          wiki/media render, render-body ........................ roam/
+          (bible …) sexp → /dabar href, abbrev parse .......... bible/+dabar/
+          legacy data_rows note → tree migration (one-shot) .... notes/migrate/
+
+        =========================================================
+        PACKAGE FILE LAYOUT (one source of truth)
+        =========================================================
+          Each package is ONE file: libs/<pkg>/lib.pp.
+          The image seeds libs/<pkg>/lib.pp only (session.ml
+          discover_seed_packages scans top-level dirs). Subdirectory
+          lib.pp files under libs/notes/{outline,capture,doc,refile,
+          tree,ui,migrate}/ are NOT loaded; they are stale pp_sync
+          snapshots and MUST NOT be maintained as a second source.
+          pp_sync pull <pkg> regenerates the single libs/<pkg>/lib.pp
+          from the live branch; that file is canonical in git.
+          Do not re-split notes/ into subdirs without first teaching
+          the loader to stitch them — until then, one file.
 
         =========================================================
         OUT OF SCOPE (v1)
@@ -130,9 +180,21 @@
            node (notes.storage). encode/decode helpers still exist
            for import, tests, and whole-subtree replace serialization.
 
-         PURE PACKAGE:
-           libs/outline/lib.pp must not touch storage so it can
-           be unit-tested / reused by other apps (e.g. project plans).
+         PURE PACKAGE (enforced by PACKAGES layering):
+           libs/outline/lib.pp must not touch storage and must not
+           import notes/ or roam/. It is a leaf reusable by other
+           apps (todo/, plan/, kanban/, tests). Two current leaks to
+           close:
+             - outline/render-body dispatches roam/render-body +
+               bible/render-body. Move that dispatch UP to the notes/
+               UI renderer (the call site outline/html-node is already
+               UI-flavored). outline/ stays pure; the renderer in
+               notes/ picks roam vs bible by inspecting the body.
+             - outline/extra-actions calls notes/refile/extract-form.
+               Move the refile-action injection up to the notes/ caller
+               that assembles the node action menu; outline/ emits a
+               neutral action slot or takes the extra-actions as an
+               argument.
     |))
    )
   )
@@ -194,9 +256,22 @@
            in one transaction; fine-grained op→tree/move is a
            tighten pass, not a blocker.
 
-         FAÇADE (preserve call shapes where possible):
-           notes/doc/get|upsert|list|set-folder|… keep agent/UI ABI.
-           Internals call tree prims, not (create 'note …).
+         FAÇADE — ONE, not two (HARD RULE):
+           notes/doc/* is the SOLE note persistence façade. Every
+           read/write/list/search/folder op goes through it; internals
+           call tree prims, not (create 'note …). Agent and UI ABI
+           is notes/doc/get|upsert|list|set-folder|….
+           The legacy flat notes/* façade over data_rows (notes/get,
+           notes/upsert, notes/row, notes/make-fields, notes/apply-op,
+           notes/capture, notes/refile 3-arg, notes/get-outline,
+           notes/get-title, notes/do-save, notes/ensure-inbox,
+           notes/daily, notes/cycle-node-todo, notes/node-op) is
+           RETIRED. It is not reachable from any route and must be
+           deleted from libs/notes/lib.pp; nothing may call it. New
+           work adds to notes/doc/* (or notes/<feature>/* under the
+           notes/ package), never revives notes/<flat> names.
+           notes/doc/* accessors (notes/doc/title, /outline, /tags,
+           /kind, /day, /folder) replace the legacy notes/get-* ones.
 
          KERNEL PRIMS (tree_store + thin register; additive):
            (tree/get path)
@@ -269,6 +344,23 @@
          authoritative. Index by (from_uuid, to_uuid).
          Live package: libs/roam (parse-links, reindex, backlinks,
          render-body, backlinks-html).
+
+         ROAM IS A LEAF (enforced by PACKAGES layering):
+           roam/ imports outline/ (read-only ADT) and prims only. It
+           MUST NOT call notes/doc/* or notes/*. The two current
+           roam→notes calls are removed by pushing the lookup up to
+           the notes/ caller:
+             - roam/backlinks needs source titles for display → the
+               notes/ui backlinks panel resolves titles/slugs from the
+               rows roam returns (uuid + from_id + label), or roam
+               returns uuid/id/label only and notes/ui decorates.
+             - roam/render-link resolves the target note row → pass
+               the resolved (slug,title) IN from notes/ui; roam renders
+               the anchor from args, or notes/ui renders and roam just
+               supplies the parse.
+           roam/reindex is called BY notes/doc on content writes
+           (notes → roam, the one allowed direction); roam never
+           calls back up into notes/doc to resolve a uuid.
 
          AUTHORING SYNTAX (bodies, still human-friendly):
            [[slug]]              — wiki by slug at write time
@@ -868,6 +960,19 @@
            legacy-folder rows and hides garden/tree-only notes.
            Legacy data_rows type=note rows are DELETED after M0
            re-migration verifies every uuid (no permanent archive).
+
+         F6  DEAD SUBPACKAGE DIRS (libs/notes/<sub>/lib.pp):
+           The subdirectory files libs/notes/{outline,capture,doc,
+           refile,tree,ui,migrate}/lib.pp are NOT loaded by the image
+           (loader scans top-level libs/<pkg>/lib.pp only) and have
+           drifted from the canonical libs/notes/lib.pp (e.g. stale
+           notes/outline/apply-op missing op-seq 409; notes/capture/
+           title truncation differs). They are a readability hazard —
+           a maintainer opens the subpackage file thinking it is
+           authoritative. DELETE the subdirectory lib.pp files; the
+           single libs/notes/lib.pp is canonical (see PACKAGES file
+           layout). Backups/ may retain old copies. This slice is
+           pure deletion; no route or binding changes.
     |))
    )
   )
