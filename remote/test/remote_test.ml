@@ -41,7 +41,7 @@ let mock_transport
     rim services + from the local pure table). *)
 let test_pure_local () =
   let transport, calls, _ = mock_transport () in
-  let t = Remote.make ~transport in
+  let t = Remote.make ~transport () in
   let v = Remote.eval t "(+ 1 2)" in
   Alcotest.(check int) "pure result" 3
     (match v with VInt n -> Int64.to_int n | _ -> -1);
@@ -57,7 +57,7 @@ let test_prim_proxies () =
     (fun args ->
       (* (get 'user 42) -> a JSON string row, as the image prim does *)
       Ok (VStr {|{"id":42,"name":"ada"}|}));
-  let t = Remote.make ~transport in
+  let t = Remote.make ~transport () in
   let v = Remote.eval t "(dict-get (get 'user 42) \"name\")" in
   Alcotest.(check pp_value_testable)
     "proxied prim result usable locally" (VStr "ada") v;
@@ -76,7 +76,7 @@ let test_lazy_def_miss () =
       match args with
       | [ VStr n ] when n = "inc" -> Ok (VStr "(define (inc x) (+ x 1))")
       | _ -> Ok VNil);
-  let t = Remote.make ~transport in
+  let t = Remote.make ~transport () in
   let v = Remote.eval t "(inc 41)" in
   Alcotest.(check int) "lazy-loaded inc 41 = 42" 42
     (match v with VInt n -> Int64.to_int n | _ -> -1);
@@ -97,7 +97,7 @@ let test_lazy_def_miss () =
 let test_genuinely_unbound () =
   let transport, _calls, table = mock_transport () in
   Hashtbl.replace table "function-source" (fun _ -> Ok (VStr ""));
-  let t = Remote.make ~transport in
+  let t = Remote.make ~transport () in
   (try
      ignore (Remote.eval t "(nope-such-fn 1)");
      Alcotest.fail "expected Unbound_var"
@@ -113,7 +113,7 @@ let test_genuinely_unbound () =
     only ever be proxied. *)
 let test_no_local_store_write () =
   let transport, _calls, _ = mock_transport () in
-  let t = Remote.make ~transport in
+  let t = Remote.make ~transport () in
   let forbidden =
     [ "create"; "update"; "delete"; "route"; "fork"; "merge"; "checkout"; "create-user" ]
   in

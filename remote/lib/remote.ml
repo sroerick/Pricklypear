@@ -30,7 +30,15 @@ type t = {
   (* functions already materialized locally, to bound how often we
      ask the server on a miss (and to break infinite retry). *)
   mutable loaded : (string, unit) Hashtbl.t;
-  mutable prim_names : string list; (* for diagnostics, not used for lookup *)
+  (* PURE prim names bound locally (via [add_prim]): the placer treats
+     these as NOT crossing the wire, so they do not count toward the
+     prim-density heuristic. Pure compute stays local regardless. *)
+  mutable pure_prims : string list;
+  (* Whole-expression remote eval (POST /api/eval) for Remote
+     placements. Some = hybrid placement is active; None = no remote
+     eval path, so a Remote placement raises rather than silently
+     running locally (which would break transaction correctness). *)
+  remote_eval : (string -> value) option;
 }
 
 let value_to_json = Prims_pure.value_to_json
@@ -41,7 +49,16 @@ let json_to_value = Prims_pure.json_to_value
     session binds its catalog). *)
 let add_prim (t : t) (name : string) (fn : value list -> value) : unit =
   Eval.register_prim t.local_prims name fn;
-  Env.define t.env name (VPrim name)
+  Env.define t.env name (VPrim name);
+  (* track the pure/local prim for the placer (it stays local, so it
+     must NOT count toward the prim-density threshold) *)
+  t.pure_prims <- name :: t.pure_prims
+
+(** The [Placer.cfg] for this client: the local pure prims are the
+    names the placer must NOT count as proxy-round-trips. The rest —
+    proxyable prims and user-function references — walk as prim calls. *) 
+let placer_cfg (t : t) : Placer.cfg =
+  Placer.default_cfg ~local_prims:(List.rev t.pure_prims)
 
 (** Bind a prim as VPrim in the env WITHOUT a local handler. Calling it
     performs [Control.Prim_call], which the proxy rim forwards to
@@ -153,10 +170,10 @@ let load_def (t : t) (name : string) (src : string) : unit =
       ignore (Eval.read_eval_all_direct ~prims:t.local_prims t.env src));
   Hashtbl.replace t.loaded name ()
 
-(** Lazy env miss inlined into [eval]: on [Unbound_var name], fetch
-    the def source and materialize it, then retry the expression. Bounds
-    retries per name so a genuinely unbound name fails cleanly. *)
-let eval (t : t) (src : string) : value =
+(** Lazy env miss inlined into [eval_local]: on [Unbound_var name],
+    fetch the def source and materialize it, then retry the expression.
+    Bounds retries per name so a genuinely unbound name fails cleanly. *)
+let eval_local (t : t) (src : string) : value =
   let seen = Hashtbl.create 4 in
   let rec go () =
     try
@@ -177,17 +194,45 @@ let eval (t : t) (src : string) : value =
   in
   go ()
 
+(** Hybrid placement entry point (borge/remote-eval.borg placement).
+    Decide once per expression whether it runs LOCAL under the proxy rim
+    or is POSTed REMOTE to /api/eval wholesale. The decision is logged
+    so the boundary is visible — no silent routing.
+
+    - Local (pure, or <= threshold individually-proxied prims): eval
+      under the proxy rim with lazy def materialization ([eval_local]).
+    - Remote (transaction-wrapped or prim-dense): hand the WHOLE source
+      to the [remote_eval] hook (a POST /api/eval). If no hook is
+      configured we RAISE rather than silently run locally — a
+      (with-transaction …) CANNOT run locally without corrupting the
+      store (locks don't span HTTP), so pretending to is never safe. *)
+let eval (t : t) (src : string) : value =
+  match Placer.place ~cfg:(placer_cfg t) src with
+  | Placer.Local -> eval_local t src
+  | Placer.Remote (target, _reason) -> (
+      match t.remote_eval with
+      | Some f -> f src
+      | None ->
+          failwith
+            (Printf.sprintf
+               "pp-remote: expression must run remotely (%s) but no remote-eval \
+                transport is configured — not running it locally"
+               target))
+
 (** Create a client bound to a [transport] against one image. No
     network is touched here (boot is lazy), so construction is cheap
-    and pure. *)
-let make ~(transport : transport) : t =
+    and pure. Pass [~remote_eval] (a whole-expression POST /api/eval) to
+    enable hybrid placement; without it a Remote placement (e.g. a
+    (with-transaction …)) raises rather than silently running locally. *)
+let make ~(transport : transport) ?(remote_eval : (string -> value) option) () : t =
   let t =
     {
       env = Env.create ();
       local_prims = Eval.make_prim_table ();
       transport;
       loaded = Hashtbl.create 16;
-      prim_names = [];
+      pure_prims = [];
+      remote_eval;
     }
   in
   register_pure_prims t;

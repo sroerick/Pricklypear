@@ -7,7 +7,7 @@
  (name pricklypear_remote_lib)
  (public_name pricklypear-remote.lib)
  (wrapped false)
- (modules proxy_rim remote http_transport)
+ (modules proxy_rim remote http_transport placer)
  (libraries
   pricklypear-lisp
   pricklypear-pure-prims
