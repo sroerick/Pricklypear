@@ -18,7 +18,9 @@
     theme/find
     theme/page
     theme/set
-    theme/swatch-html))
+    theme/swatch-html
+    theme/vars
+    theme/extra))
 
 ;; --- default tokens (phosphor) — active on system/main after seed ---
 
@@ -61,6 +63,134 @@
 (define theme/visited
   "#2a9a2a")
 
+;; --- semantic style tokens (phosphor defaults) ----------------------
+;; Phase 3: the structural sheet (ui/theme) used to bake ~77 hardcoded
+;; hex literals (selection highlight, todo done/waiting/archived states,
+;; emergency banner, calendar-today, impact badge, …) into the string, so
+;; they never responded to the active theme. Those literals now resolve
+;; through var(--*) emitted here, so every theme overrides them with its
+;; own light/dark values. Truly structural colors (#000 borders, #808080
+;; shadows) stay as-is in ui/theme (not tokens).
+;;
+;; A given theme package only needs to redefine the tokens it wants to
+;; differ from the phosphor defaults; all are optional per theme.
+
+(define theme/sel-bg
+  "#1a3a1a")
+
+(define theme/sel-accent
+  "#2a9a2a")
+
+(define theme/pending-bg
+  "#1f3a1f")
+
+(define theme/pending-ink
+  "#88cc44")
+
+(define theme/pending-border
+  "#886600")
+
+(define theme/done-bg
+  "#0f2a10")
+
+(define theme/done-ink
+  "#55cc55")
+
+(define theme/done-muted
+  "#4a6a4a")
+
+(define theme/waiting-bg
+  "#1a2a3a")
+
+(define theme/archived-bg
+  "#1a1a1a")
+
+(define theme/archived-ink
+  "#777777")
+
+(define theme/archived-border
+  "#555555")
+
+(define theme/cancelled-bg
+  "#222222")
+
+(define theme/today-bg
+  "#333a1a")
+
+(define theme/banner-bg
+  "#3a2a00")
+
+(define theme/banner-border
+  "#886600")
+
+(define theme/banner-ink
+  "#ffdd88")
+
+(define theme/badge-bg
+  "#3a2f00")
+
+(define theme/badge-border
+  "#8b6914")
+
+;; --- CSS custom-property emitter ------------------------------------
+;; Emit a single :root rule mapping the theme/* tokens onto CSS custom
+;; properties. The structural sheet (ui/theme) reads var(--*) so it is
+;; static and theme-independent; switching themes only swaps this :root
+;; block (resolved by the browser cascade, no re-generation).
+
+(define theme/vars
+  (lambda
+    ()
+    (css/sheet
+      (list
+        (css/rule
+          ":root"
+          (list
+            "--bg" theme/bg
+            "--ink" theme/ink
+            "--panel" theme/panel
+            "--chrome" theme/chrome
+            "--link" theme/link
+            "--visited" theme/visited
+            "--muted" theme/muted
+            "--err" theme/err
+            "--ok" theme/ok
+            "--border" theme/border
+            "--row-alt" theme/row-alt
+            "--shadow" theme/shadow
+            "--sel-bg" theme/sel-bg
+            "--sel-accent" theme/sel-accent
+            "--pending-bg" theme/pending-bg
+            "--pending-ink" theme/pending-ink
+            "--pending-border" theme/pending-border
+            "--done-bg" theme/done-bg
+            "--done-ink" theme/done-ink
+            "--done-muted" theme/done-muted
+            "--waiting-bg" theme/waiting-bg
+            "--archived-bg" theme/archived-bg
+            "--archived-ink" theme/archived-ink
+            "--archived-border" theme/archived-border
+            "--cancelled-bg" theme/cancelled-bg
+            "--today-bg" theme/today-bg
+            "--banner-bg" theme/banner-bg
+            "--banner-border" theme/banner-border
+            "--banner-ink" theme/banner-ink
+            "--badge-bg" theme/badge-bg
+            "--badge-border" theme/badge-border))))))
+
+;; --- per-theme structural sheet hook (default: no-op) --------------
+;; A theme package MAY define theme/extra — a css/sheet of *structural*
+;; (non-color) chrome layered on top of ui/theme (e.g. AS/400's monospace
+;; body, uppercase headings, chunky borders). ui/css includes
+;; (css/use (theme/extra)) LAST so an active theme can retint/reshape
+;; without clobbering the shared structural sheet. The base theme package
+;; ships a no-op so most themes add nothing.
+
+(define theme/extra
+  (lambda
+    ()
+    (css/sheet (list))))
+
 ;; --- registry -------------------------------------------------------
 ;; Each entry: (name display description package)
 ;; package = libs/<package>/lib.pp loaded by theme/set.
@@ -86,7 +216,12 @@
       "classic"
       "Classic Mac"
       "Platinum gray System 7 vibes. The old product default."
-      "theme-classic")))
+      "theme-classic")
+    (list
+      "as400"
+      "AS/400"
+      "CRT green on near-black — the original notes-tree terminal skin, now its own theme."
+      "theme-as400")))
 
 (define theme/entry-name
   (lambda (e) (as-str (car e))))
@@ -221,7 +356,10 @@
         (if
           (string-eq name "classic")
           (theme/swatch-html "#d4d0c8" "#000000" "#ece9d8" "#c0c0c0" "#0000ee")
-          (theme/swatch-html "#111111" "#33cc33" "#1a1a1a" "#1a2a1a" "#33ff33"))))))
+          (if
+            (string-eq name "as400")
+            (theme/swatch-html "#111111" "#33cc33" "#1a1a1a" "#1a2a1a" "#33ff33")
+            (theme/swatch-html "#111111" "#33cc33" "#1a1a1a" "#1a2a1a" "#33ff33")))))))
 
 (define theme/card-html
   (lambda
