@@ -3489,7 +3489,10 @@
       (if
         (null? cur)
         note-path
-        (let
+        ;; let* (not parallel let): b's binding references n bound in the
+        ;; same group — parallel `let` evaluates bindings in the outer
+        ;; env and threw `unbound: n` (broke notes/doc/upsert write path).
+        (let*
           ((n (notes/tree/parse cur))
             (b (notes/tree/body n)))
           (seq

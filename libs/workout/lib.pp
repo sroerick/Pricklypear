@@ -1913,7 +1913,11 @@
 (define workout/session-create-with-doc
   (lambda
     (program intensity doc)
-    (let
+    ;; let* (not parallel let): d's value references siblings prog/inten
+    ;; bound in the same group — parallel `let` evaluates bindings in the
+    ;; outer env, so prog/inten were unbound when doc was blank
+    ;; (threw `unbound: prog`).
+    (let*
       ((prog
           (if (blank? (as-str program)) "free" (as-str program)))
         (inten (if (null? intensity) "" (as-str intensity)))

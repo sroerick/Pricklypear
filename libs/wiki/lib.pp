@@ -20,7 +20,10 @@
         (title (as-str (dict-get ent "title")))
         (body (as-str (dict-get ent "body")))
         (kind (as-str (dict-get ent "kind"))))
-      (let
+      ;; let* (not parallel let): t's value references sibling s bound
+      ;; in the same group — parallel `let` evaluates bindings in the outer
+      ;; env, so s was unbound when title was empty (threw `unbound: s`).
+      (let*
         ((s (if (string-eq slug "") (wiki/slugify title) slug))
           (t (if (string-eq title "") s title))
           (b
