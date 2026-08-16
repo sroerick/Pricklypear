@@ -71,7 +71,15 @@ docs (seeded: `spec/todo`). Spec chapter: `borge/habitat-workflow.borg`.
    directly on `system/main`. Promote is the gate.
 2. **Obituary rule** — no silent reversals; before replacing an
    implementation, write what/why in `spec/<pkg>` DECISIONS.
-3. **File, don't fix** — out-of-scope items → `log/issues` (one line).
+3. **File, don't fix** — out-of-scope items → the `log/issues` register
+   (notes doc slug `log/issues`, kind `issue`). Three ways in: browser
+   `/issues` (dedicated face: Kind BUG/DESIGN/SMELL/CLEANUP + title +
+   body, per-row resolve/reopen/delete), shell
+   `scripts/file-issue.sh "BUG: title" "body"`, or REPL
+   `(notes/issues/add KIND TITLE BODY)` (+ `notes/issues/resolve` |
+   `reopen` | `delete`). Sparse one-liners still fine. This is the
+   **habitat product track**; `borge issue new` is the separate
+   git/spec track for make-mode spec drift — don't conflate them.
 4. **Handoff** — end of session ~3 lines → `log/sessions`.
 
 From this machine (after bootstrap + secrets):
@@ -227,6 +235,8 @@ auth is **in-process** in the image.
   User routes via `(route "/x" "fn")` (private by default) or
   `(route "/x" "fn" 'public)` / `(public-route …)` for anonymous GET.
   Kernel paths (`/data`, `/admin`, `/api/eval`, …) stay hard-private.
+  Package-provided routes live in `libs/*` — e.g. the `notes` library
+  serves `/issues` (the `log/issues` register face; see § File, don't fix).
   Anonymous identity uses `system/main` (package public routes inherit).
 - Nopales primitives: pure (`+ - * = < > <= >= not list car cdr cons
   null? pair? count string-append str type-of whoami current-author
