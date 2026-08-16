@@ -23,8 +23,10 @@
             (css/use (theme/vars))
             (css/use (ui/theme))
             (css/use (ui/theme-nav))
-            (css/use notes/tree-css)
-            (css/use notes/tree-css-patch)
+            ;; REMOVED (css-ghost-as400): notes/tree-css + notes/tree-css-patch
+            ;; were the old AS/400 CRT skin hardcoded over EVERY theme. That
+            ;; skin now lives, opt-in and var()-based, in libs/theme-as400's
+            ;; theme/extra below (selected via /settings/theme → as400).
             ;; per-theme structural chrome (no-op except theme-as400)
             (css/use (theme/extra))))))))
 

@@ -210,7 +210,7 @@
     (list
       "midnight"
       "Midnight"
-      "Soft blue-gray dark theme — no phosphor green."
+      "WHITEOUT PROBE: every token = magenta. Anything NOT magenta is a hardcoded-color leak."
       "theme-midnight")
     (list
       "classic"
@@ -352,7 +352,7 @@
       (theme/swatch-html "#f4f0e6" "#1c1916" "#ebe4d4" "#ddd4c0" "#0b57a8")
       (if
         (string-eq name "midnight")
-        (theme/swatch-html "#0f1419" "#d8dee9" "#1a2332" "#15202b" "#7aa2f7")
+        (theme/swatch-html "magenta" "magenta" "magenta" "magenta" "magenta")
         (if
           (string-eq name "classic")
           (theme/swatch-html "#d4d0c8" "#000000" "#ece9d8" "#c0c0c0" "#0000ee")
