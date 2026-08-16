@@ -67,4 +67,5 @@
 (define theme/extra
   (lambda
     ()
+    "Per-theme structural sheet hook (no-op): clear prior CRT chrome."
     (css/sheet (list))))
