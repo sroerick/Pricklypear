@@ -1140,6 +1140,44 @@ type merge_result = {
   conflicts : string list;
 }
 
+(* ---- branch diff (branching.diff) ---- *)
+
+type diff_kind = DiffFn | DiffType | DiffRoute
+
+type diff_status = DiffAdded | DiffRemoved | DiffModified
+
+(** One divergent row across two branches' effective views. [from_body]/
+    [to_body] are [Reader.pp_expr] strings (for types: the fields JSON
+    text; for routes: the handler). [from_expr]/[to_expr] carry the parsed
+    AST for Modified fn rows so the /diff renderer can run Ast_diff.diff
+    without re-parsing. [from_updated]/[to_updated] are ISO timestamps
+    (None when the side is absent).
+
+    Scope = merge scope: function_defs + type_defs + view_bindings;
+    NEVER data_rows (shared, branch-free). *) 
+type branch_diff_row = {
+  diff_name : string;
+  diff_kind : diff_kind;
+  diff_status : diff_status;
+  from_body : string option;
+  to_body : string option;
+  from_updated : string option;
+  to_updated : string option;
+  from_expr : Pricklypear_lisp.Ast.expr option;
+  to_expr : Pricklypear_lisp.Ast.expr option;
+}
+
+(** Parse a serialized-AST jsonb string into [Ast.expr]. None on any
+    parse failure (Malformed rows are skipped for AST purposes but still
+    reported as modified with their raw [Reader.pp_expr] bodies). *)
+let parse_expr_opt (body_str : string) : Pricklypear_lisp.Ast.expr option =
+  match Yojson.Safe.from_string body_str with
+  | j -> (
+      match Pricklypear_lisp.Ast.expr_of_json j with
+      | Ok e -> Some e
+      | Error _ -> None)
+  | exception Yojson.Json_error _ -> None
+
 (** Format merge result for the (merge ...) prim / UI. *)
 let format_merge_result (r : merge_result) : string =
   match r.conflicts with
@@ -1200,6 +1238,136 @@ let merge_branch (t : t) ~(source_id : string) ~(target_id : string)
       Printf.eprintf "[store] merge_branch error: %s\n"
         (Printexc.to_string exn);
       None)
+
+(** Branch diff (branching.diff). Compares the EFFECTIVE views of two
+    branches (closest-ancestor-wins walk per branch, deduped) across
+    function_defs + type_defs + view_bindings, and classifies each
+    divergent name as added / removed / modified.
+
+    Read-only (NO writes) — matches the read-path style of
+    [list_function_names_meta] (plain [exec], no transaction). Scope
+    mirrors [merge_branch]: never data_rows. *) 
+let diff_branches (t : t) ~(from_id : string) ~(to_id : string)
+  : branch_diff_row list =
+  match t.conn with
+  | None -> []
+  | Some conn ->
+      (try
+          (* chain_from / chain_to: parent walks for each branch.  Each
+             side's *effective* rows are deduped (row_number depth-ASC,
+             keep first = closest wins), then FULL OUTER JOINed on the
+             key so added/removed/modified fall out naturally.  The body
+             payload differs per table (fn=body, type=fields, route=
+             handler) so the query is parameterized per kind. *)
+          let read_kind (kind : diff_kind) : branch_diff_row list =
+            let rel, key_sql, body_expr, is_route =
+              match kind with
+              | DiffFn ->
+                  (fn_rel (), "name", "body", false)
+              | DiffType ->
+                  (ty_rel (), "name", "fields", false)
+              | DiffRoute ->
+                  (rt_rel (), "route", "handler", true)
+            in
+            let sql =
+              String.concat ""
+                [ "WITH RECURSIVE chain_from AS ( "
+                ; "  SELECT id, parent_id, 0 AS depth FROM branches WHERE id = $1 "
+                ; "  UNION ALL "
+                ; "  SELECT b.id, b.parent_id, c.depth + 1 "
+                ; "  FROM branches b JOIN chain_from c ON b.id = c.parent_id "
+                ; "), chain_to AS ( "
+                ; "  SELECT id, parent_id, 0 AS depth FROM branches WHERE id = $2 "
+                ; "  UNION ALL "
+                ; "  SELECT b.id, b.parent_id, c.depth + 1 "
+                ; "  FROM branches b JOIN chain_to c ON b.id = c.parent_id "
+                ; "), fromd AS ( "
+                ; "  SELECT " ^ key_sql ^ " AS key, " ^ body_expr ^ " AS body, "
+                  ^ "updated_at::text AS up, "
+                ; "         row_number() OVER (PARTITION BY " ^ key_sql
+                  ^ " ORDER BY chain_from.depth ASC) AS rn "
+                ; "  FROM " ^ rel ^ " fd JOIN chain_from ON fd.branch_id = chain_from.id "
+                ; "), tod AS ( "
+                ; "  SELECT " ^ key_sql ^ " AS key, " ^ body_expr ^ " AS body, "
+                  ^ "updated_at::text AS up, "
+                ; "         row_number() OVER (PARTITION BY " ^ key_sql
+                  ^ " ORDER BY chain_to.depth ASC) AS rn "
+                ; "  FROM " ^ rel ^ " fd JOIN chain_to ON fd.branch_id = chain_to.id "
+                ; ") SELECT f.key, f.body, f.up::text, t.key, t.body, t.up::text "
+                ; "FROM (SELECT * FROM fromd WHERE rn = 1) f "
+                ; "FULL OUTER JOIN (SELECT * FROM tod WHERE rn = 1) t ON t.key = f.key "
+                ; "WHERE f.key IS NULL OR t.key IS NULL "
+                ; "      OR f.body IS DISTINCT FROM t.body "
+                ; "ORDER BY COALESCE(f.key, t.key)" ]
+            in
+            let rows =
+              exec conn
+                ~params:
+                  [ Pgx.Value.of_string from_id
+                  ; Pgx.Value.of_string to_id ]
+                sql
+            in
+            List.filter_map
+              (fun row ->
+                match row with
+                | [ fk_c; fb_c; fu_c; tk_c; tb_c; tu_c ] ->
+                    let from_key = Pgx.Value.to_string fk_c in
+                    let to_key = Pgx.Value.to_string tk_c in
+                    let name =
+                      match from_key, to_key with
+                      | Some k, _ | _, Some k -> k
+                      | None, None -> ""
+                    in
+                    let has_from = from_key <> None in
+                    let has_to = to_key <> None in
+                    if name = "" then None
+                    else
+                      let status =
+                        if has_from && not has_to then DiffRemoved
+                        else if has_to && not has_from then DiffAdded
+                        else DiffModified
+                      in
+                      let from_body = if has_from then Pgx.Value.to_string fb_c else None in
+                      let to_body = if has_to then Pgx.Value.to_string tb_c else None in
+                      let from_updated = if has_from then Pgx.Value.to_string fu_c else None in
+                      let to_updated = if has_to then Pgx.Value.to_string tu_c else None in
+                      (* Marshal body strings into presentable text + parsed
+                         AST (functions/types only; routes have no body AST). *)
+                      let pp (b : string option) : string option =
+                        Option.map (fun bs ->
+                            if is_route then bs
+                            else if kind = DiffType then bs
+                            else
+                              match parse_expr_opt bs with
+                              | Some e -> Pricklypear_lisp.Reader.pp_expr e
+                              | None -> bs) b
+                      in
+                      let ex (b : string option) : Pricklypear_lisp.Ast.expr option =
+                        if is_route || kind <> DiffFn then None
+                        else Option.bind b parse_expr_opt
+                      in
+                      Some {
+                        diff_name = name;
+                        diff_kind = kind;
+                        diff_status = status;
+                        from_body = pp from_body;
+                        to_body = pp to_body;
+                        from_updated;
+                        to_updated;
+                        from_expr = ex from_body;
+                        to_expr = ex to_body;
+                      }
+                | _ -> None)
+              rows
+          in
+          List.concat
+            [ read_kind DiffFn
+            ; read_kind DiffType
+            ; read_kind DiffRoute ]
+    with exn ->
+      Printf.eprintf "[store] diff_branches error: %s\n"
+        (Printexc.to_string exn);
+      [])
 
 (* ---- package-surface: package_registry (branch-lensed) ---- *)
 

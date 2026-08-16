@@ -1726,3 +1726,64 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
                 | Error e -> (Pricklypear_lisp.Ast.VStr e)))
       | _ ->
           (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("code-diff", "need name n", "bad-args")))));
+
+  (* (diff source target) -> VList of VStr change summaries.
+     Spec: branching.diff.  Args: two branch specs (owner/name strings, same
+     parsing as checkout/merge/promote).  Returns one summary string per
+     divergent row across function_defs + type_defs + view_bindings:
+       "<kind>\t<status>\t<name>\t<from-updated>\t<to-updated>"
+     Summary level ONLY — the structured AST delta is consumed in-process by
+     the /diff page renderer, not surfaced here (a programmatic (diff-ast …)
+     prim is explicit v2). *)
+  Primitives.register tbl "diff"
+    (fun args ->
+      let resolve ref_ =
+        let owner, name =
+          match String.split_on_char '/' ref_ with
+          | [ o; n ] when o <> "" && n <> "" -> (o, n)
+          | _ -> ("", ref_)
+        in
+        Store.lookup_branch_id_by_name t.store ~owner ~name
+      in
+      let to_ref = function
+        | Pricklypear_lisp.Ast.VStr s -> Some s
+        | Pricklypear_lisp.Ast.VSymbol s -> Some s
+        | _ -> None
+      in
+      match args with
+      | [ a; b ] ->
+          (match to_ref a, to_ref b with
+           | Some from_ref, Some to_ref ->
+               (match resolve from_ref, resolve to_ref with
+                | Some from_id, Some to_id ->
+                    let rows = Store.diff_branches t.store ~from_id ~to_id in
+                    let kind_s = function
+                      | Store.DiffFn -> "fn"
+                      | Store.DiffType -> "type"
+                      | Store.DiffRoute -> "route"
+                    in
+                    let status_s = function
+                      | Store.DiffAdded -> "added"
+                      | Store.DiffRemoved -> "removed"
+                      | Store.DiffModified -> "modified"
+                    in
+                    let line (r : Store.branch_diff_row) =
+                      let fu = Option.value ~default:"-" r.Store.from_updated in
+                      let tu = Option.value ~default:"-" r.Store.to_updated in
+                      Printf.sprintf "%s\t%s\t%s\t%s\t%s"
+                        (kind_s r.Store.diff_kind) (status_s r.Store.diff_status)
+                        r.Store.diff_name fu tu
+                    in
+                    (Pricklypear_lisp.Ast.VList
+                       (List.map (fun r -> Pricklypear_lisp.Ast.VStr (line r)) rows))
+                | _ ->
+                    (Pricklypear_lisp.Ast.VStr
+                       (Printf.sprintf "diff: no such branch pair (%s, %s)"
+                          from_ref to_ref)))
+           | _ ->
+               (raise
+                  (Pricklypear_lisp.Ast.Interp_error
+                     (Pricklypear_lisp.Ast.Prim_error
+                        ("diff", "need source target", "bad-args")))))
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("diff", "need source target", "bad-args")))));

@@ -83,3 +83,8 @@
  (name branch_generation_test)
  (modules branch_generation_test)
  (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))
+
+(test
+ (name diff_branches_test)
+ (modules diff_branches_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))

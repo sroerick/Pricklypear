@@ -708,3 +708,212 @@ let branches_promote (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
       in
       branch_detail_page session reqd ~ref_ ~msg ()
 
+
+(* ---- Branch diff page (branching.diff / lisp-interpreter.ast-diff) ---- *)
+
+module Ast = Pricklypear_lisp.Ast
+module Reader = Pricklypear_lisp.Reader
+module AD = Pricklypear_lisp.Ast_diff
+
+let is_absent (e : Ast.expr) : bool =
+  match e with Ast.Lit Ast.VNil -> true | _ -> false
+
+(** Structured AST delta renderer. Renders the [AD.delta] tree: unchanged
+    ([Same]) subtrees collapse to a dim marker; a [Node] shows its ctor and
+    only the children that differ; a [Replaced] shows the from/to values
+    with the absent sentinel side signifying pure add/remove. *)
+let rec render_delta (d : AD.delta) : Pure_html.node =
+  match d with
+  | AD.Same -> HTML.span [HTML.class_ "diff-same"] [txt "···"]
+  | AD.Replaced { from = rf; to_ = rt } ->
+      let del =
+        if is_absent rf then []
+        else
+          [ HTML.span [ HTML.class_ "diff-del" ]
+              [ txt "- "; txt "%s" (Reader.pp_expr rf) ] ]
+      in
+      let add =
+        if is_absent rt then []
+        else
+          [ HTML.span [ HTML.class_ "diff-add" ]
+              [ txt "+ "; txt "%s" (Reader.pp_expr rt) ] ]
+      in
+      HTML.div [HTML.class_ "diff-replaced"]
+        (del @ (if del <> [] && add <> [] then [txt " "] else []) @ add)
+  | AD.Node { ctor; children } ->
+      let child_nodes =
+        List.filter_map
+          (fun (label, d') ->
+            match d' with
+            | AD.Same -> None
+            | _ ->
+                Some
+                  (HTML.div [HTML.class_ "diff-child"]
+                     [ HTML.span [HTML.class_ "diff-label"]
+                         [ txt "%s" label; txt ":" ]
+                     ; render_delta d' ]))
+          children
+      in
+      HTML.div [HTML.class_ "diff-node"]
+        (HTML.span [HTML.class_ "diff-ctor"] [txt "(%s)" ctor]
+         :: (if child_nodes = [] then
+               [ HTML.span [HTML.class_ "diff-same"] [txt " (identical)"] ]
+             else child_nodes))
+
+let diff_kind_s : Store.diff_kind -> string = function
+  | Store.DiffFn -> "fn"
+  | Store.DiffType -> "type"
+  | Store.DiffRoute -> "route"
+
+let diff_status_s : Store.diff_status -> string = function
+  | Store.DiffAdded -> "added"
+  | Store.DiffRemoved -> "removed"
+  | Store.DiffModified -> "modified"
+
+let diff_status_cls : Store.diff_status -> string = function
+  | Store.DiffAdded -> "ok"
+  | Store.DiffRemoved -> "err"
+  | Store.DiffModified -> "warn"
+
+(** Expandable body cell for a diff row. Modified fn rows render the
+    structured AST delta (overlay of [AD.diff] on the parsed bodies) plus
+    both full bodies; modified type/route and added/removed rows render the
+    plain body/handler text. *)
+let diff_detail (r : Store.branch_diff_row) : Pure_html.node =
+  let pre s = HTML.pre [] [txt "%s" s] in
+  match r.Store.diff_status with
+  | Store.DiffModified when r.Store.diff_kind = Store.DiffFn ->
+      (match r.Store.from_expr, r.Store.to_expr with
+       | Some fe, Some te ->
+           HTML.details [HTML.class_ "explain-panel"]
+             [ HTML.summary [] [txt "AST delta"]
+             ; HTML.div [HTML.class_ "card"]
+                 [ render_delta (AD.diff fe te)
+                 ; HTML.hr []
+                 ; HTML.div [HTML.class_ "diff-bodies"]
+                     [ HTML.div []
+                         [ HTML.span [HTML.class_ "muted"]
+                             [txt "from: "]
+                         ; pre (Option.value ~default:"" r.Store.from_body)
+                         ]
+                     ; HTML.div []
+                         [ HTML.span [HTML.class_ "muted"]
+                             [txt "to:   "]
+                         ; pre (Option.value ~default:"" r.Store.to_body)
+                         ]
+                     ]
+                 ] ]
+       | _ -> txt " ")
+  | Store.DiffModified ->
+      HTML.details [HTML.class_ "explain-panel"]
+        [ HTML.summary [] [txt "body"]
+        ; pre
+            (Printf.sprintf "from: %s\nto:   %s"
+               (Option.value ~default:"" r.Store.from_body)
+               (Option.value ~default:"" r.Store.to_body)) ]
+  | Store.DiffAdded ->
+      HTML.details [HTML.class_ "explain-panel"]
+        [ HTML.summary [] [txt "body"]
+        ; pre (Option.value ~default:"" r.Store.to_body) ]
+  | Store.DiffRemoved ->
+      HTML.details [HTML.class_ "explain-panel"]
+        [ HTML.summary [] [txt "body"]
+        ; pre (Option.value ~default:"" r.Store.from_body) ]
+
+(** GET /diff?from=owner/name&to=owner/name — private branch diff page. *)
+let diff_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
+  let target = (Httpun.Reqd.request reqd).target in
+  let resolve ref_ =
+    let owner, name =
+      match String.split_on_char '/' ref_ with
+      | [ o; n ] when o <> "" && n <> "" -> (o, n)
+      | _ -> ("", ref_)
+    in
+    Store.lookup_branch_id_by_name (Session.store session) ~owner ~name
+  in
+  let from_ref =
+    Option.value (query_param target "from") ~default:"" |> String.trim
+  in
+  let to_ref =
+    Option.value (query_param target "to") ~default:"" |> String.trim
+  in
+  match resolve from_ref, resolve to_ref with
+  | Some fid, Some tid ->
+      let store = Session.store session in
+      let rows = Store.diff_branches store ~from_id:fid ~to_id:tid in
+      let row_tr (r : Store.branch_diff_row) : Pure_html.node list =
+        let upd =
+          HTML.span [HTML.class_ "muted"]
+            [ txt "%s"
+                (Printf.sprintf "%s  →  %s"
+                   (Option.value ~default:"-" r.Store.from_updated)
+                   (Option.value ~default:"-" r.Store.to_updated))
+            ]
+        in
+        [ HTML.tr []
+            [ HTML.td [] [txt "%s" r.Store.diff_name]
+            ; HTML.td [HTML.class_ "muted"]
+                [txt "%s" (diff_kind_s r.Store.diff_kind)]
+            ; HTML.td []
+                [ HTML.span [HTML.class_ "%s" (diff_status_cls r.Store.diff_status)]
+                    [txt "%s" (diff_status_s r.Store.diff_status)] ]
+            ; HTML.td [] [upd]
+            ]
+        ; HTML.tr []
+            [ HTML.td [HTML.colspan 4; HTML.class_ "diff-detail"]
+                [diff_detail r] ]
+        ]
+      in
+      let head =
+        HTML.thead []
+          [ HTML.tr []
+              [ HTML.th [] [txt "name"]
+              ; HTML.th [] [txt "kind"]
+              ; HTML.th [] [txt "status"]
+              ; HTML.th [] [txt "from → to updated"]
+              ] ]
+      in
+      let body =
+        chrome ~session ~title:("Diff · " ^ from_ref ^ " → " ^ to_ref)
+          [ HTML.style [] "%s"
+              {|
+.diff-detail pre{white-space:pre-wrap;}
+.diff-node{font-family:"Courier New",Courier,monospace;font-size:.9rem;padding-left:.4rem;border-left:2px solid #666;margin:.15rem 0;}
+.diff-ctor{font-weight:700;color:var(--link);}
+.diff-child{margin:.1rem 0 .1rem 1rem;}
+.diff-label{color:var(--muted);margin-right:.3rem;}
+.diff-replaced{display:inline-block;}
+.diff-del{color:var(--err);}
+.diff-add{color:var(--ok);}
+.diff-same{color:var(--muted);opacity:.6;}
+.diff-bodies{display:grid;grid-template-columns:1fr 1fr;gap:.5rem;}
+@media(max-width:700px){.diff-bodies{grid-template-columns:1fr;}}
+|}
+          ; HTML.p []
+              [ HTML.a [HTML.href "/branches"] [txt "Branches"]
+              ; txt " · diff "
+              ; HTML.code [] [txt "%s" from_ref]
+              ; txt " → "
+              ; HTML.code [] [txt "%s" to_ref]
+              ]
+          ; HTML.div [HTML.class_ "card"]
+              [ HTML.h2 [] [txt "%d divergent rows" (List.length rows)]
+              ; (if rows = [] then
+                   HTML.p [HTML.class_ "ok"] [txt "no differences"]
+                 else
+                   HTML.table [HTML.class_ "br-table"]
+                     [ head
+                     ; HTML.tbody []
+                         (List.concat (List.map row_tr rows))
+                     ])
+              ]
+          ]
+      in
+      html_response reqd ~session body;
+      ()
+  | _ ->
+      html_response reqd ~session ~status:`Not_found
+        (chrome ~session ~title:"Diff"
+           [ HTML.p [HTML.class_ "err"]
+               [txt "unknown branch pair (%s, %s)" from_ref to_ref] ]);
+      ()

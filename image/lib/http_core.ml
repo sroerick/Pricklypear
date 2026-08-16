@@ -375,6 +375,7 @@ let is_system_hard_private (path : string) : bool =
     ; "/media"
     ; "/bindings"
     ; "/binding"
+    ; "/diff"
     ; "/edit"
     ; "/repl"
     ; "/branches"

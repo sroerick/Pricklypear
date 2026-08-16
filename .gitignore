@@ -42,6 +42,7 @@ id_rsa.pub
 *.log
 *.pid
 .pi-subagents/
+.pi/
 __pycache__/
 *.pyc
 lisp/bin/read_test.ml
