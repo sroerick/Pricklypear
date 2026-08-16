@@ -6,6 +6,7 @@
 (define notes/ui/create-form
   (lambda
     ()
+    "Collapsible HTML form to create a new note."
     (html/tag
       "details"
       (html/attr "class" "notes-create card")
@@ -44,6 +45,7 @@
 (define notes/ui/do-create
   (lambda
     (title slug folder)
+    "Create a note and redirect to it; derived slug when slug is blank."
     (let
       ((s
           (if
@@ -71,6 +73,7 @@
 (define notes/ui/do-delete
   (lambda
     ()
+    "Delete the requested slug and redirect to the note index."
     (let
       ((slug (as-str (request-param "slug"))))
       (seq (notes/doc/delete slug) (redirect "/notes")))))
@@ -78,6 +81,7 @@
 (define notes/ui/do-save
   (lambda
     (slug raw)
+    "Save a note from raw outline JSON, or show an error page."
     (let
       ((slug-s (as-str slug))
         (prev (notes/doc/get (as-str slug))))
@@ -131,6 +135,7 @@
 (define notes/ui/edit-form
   (lambda
     (slug outline)
+    "HTML form to save the raw outline JSON for a note."
     (html/form
       "POST"
       "/notes"
@@ -153,6 +158,7 @@
 (define notes/ui/folder-form
   (lambda
     (slug folder)
+    "HTML form to move a note into a folder."
     (html/form
       "POST"
       "/notes"
@@ -175,6 +181,7 @@
 (define notes/ui/folder-list
   (lambda
     (folder)
+    "HTML list of note items in a folder."
     (list/foldl
       (lambda
         (acc row)
@@ -185,6 +192,7 @@
 (define notes/ui/folder-section
   (lambda
     (folder)
+    "HTML section (header plus list) for a folder."
     (let
       ((label
           (if
@@ -209,6 +217,7 @@
 (define notes/ui/handle-post
   (lambda
     ()
+    "Route a notes POST to the matching action handler."
     (let
       ((action (as-str (request-param "action"))))
       (cond
@@ -244,6 +253,7 @@
 (define notes/ui/item-li
   (lambda
     (row)
+    "HTML list item for a note row (with delete form)."
     (let
       ((f (cdr row)) (id (car row)))
       (let
@@ -285,6 +295,7 @@
 (define notes/ui/item-li-lite
   (lambda
     (row)
+    "HTML list item for a note row (no delete form)."
     (let
       ((f (cdr row)))
       (let
@@ -308,6 +319,7 @@
 (define notes/ui/missing
   (lambda
     (slug)
+    "HTML page fragment for a missing note."
     (html/join
       (list
         (html/h1 "Missing")
@@ -319,6 +331,7 @@
 (define notes/ui/outline-script
   (lambda
     (slug show-archived tree)
+    "Embedded interp.js bootstrap and editing script for a note."
     (html/tag
       "script"
       ""
@@ -422,6 +435,7 @@
 (define notes/ui/recent-list
   (lambda
     ()
+    "HTML list of recently indexed notes."
     (list/foldl
       (lambda
         (acc row)
@@ -432,6 +446,7 @@
 (define notes/ui/show
   (lambda
     (slug)
+    "Render a note page, or the missing fragment when absent."
     (let
       ((n (notes/doc/get slug))
         (show-archived (notes/doc/show-archived?)))
@@ -449,6 +464,7 @@
 (define notes/ui/show-body
   (lambda
     (slug title outline tags show-archived folder)
+    "HTML body of a note page: breadcrumbs, toolbar, and outline."
     (html/join
       (list
         (html/p*
@@ -515,6 +531,7 @@
 (define notes/ui/tb-btn
   (lambda
     (op label)
+    "Toolbar button carrying a data-ol-op operation."
     (html/tag
       "button"
       (html/attrs
@@ -528,6 +545,7 @@
 (define notes/ui/toolbar
   (lambda
     (slug show-archived)
+    "HTML outline editing toolbar for a note."
     (html/div
       (html/attr "class" "ol-toolbar")
       (html/join
@@ -617,6 +635,7 @@
 (define notes/ui/path-label
   (lambda
     (path)
+    "Human label for a tree path (last segment, underscores as dashes)."
     (let
       ((parts (string-split (as-str path) ".")))
       (if
@@ -625,14 +644,15 @@
         (string-replace (notes/light/last parts) "_" "-")))))
 
 (define notes/ui/node-path
-  (lambda (n) (as-str (dict-get n "path"))))
+  (lambda (n) "Path string of a tree node." (as-str (dict-get n "path"))))
 
 (define notes/ui/node-kind
-  (lambda (n) (as-str (dict-get n "kind"))))
+  (lambda (n) "Kind string of a tree node." (as-str (dict-get n "kind"))))
 
 (define notes/ui/node-title
   (lambda
     (n)
+    "Display title of a node (body title/slug or path label)."
     (let
       ((b (dict-get n "body")))
       (let
@@ -649,6 +669,7 @@
 (define notes/ui/is-garden-folder?
   (lambda
     (n root)
+    "True when node is the .garden folder under root."
     (if
       (not (string-eq (notes/ui/node-kind n) "folder"))
       #f
@@ -659,6 +680,7 @@
 (define notes/ui/note-li-from-node
   (lambda
     (n)
+    "HTML list item linking a tree node to its note."
     (let
       ((slug (as-str (dict-get (dict-get n "body") "slug")))
         (title (notes/ui/node-title n)))
@@ -674,6 +696,7 @@
 (define notes/ui/folder-details
   (lambda
     (n)
+    "HTML collapsible folder node that lazily loads children."
     (let
       ((path (notes/ui/node-path n))
         (label (notes/ui/node-title n)))
@@ -709,6 +732,7 @@
 (define notes/ui/render-child
   (lambda
     (n root)
+    "Render one tree child node, dispatching on its kind."
     (let
       ((k (notes/ui/node-kind n)))
       (if
@@ -728,6 +752,7 @@
 (define notes/ui/tree-children-html
   (lambda
     (path root)
+    "HTML for the children of a tree path."
     (let
       ((kids (tree/list (as-str path) 1)))
       (if
@@ -741,6 +766,7 @@
 (define notes/ui/tree-partial
   (lambda
     ()
+    "htmx partial rendering the children of the requested path."
     (let
       ((path (as-str (request-param "path")))
         (root (notes/tree/root)))
@@ -755,6 +781,7 @@
 (define notes/ui/folders-html
   (lambda
     ()
+    "HTML notes tree rooted at the garden root."
     (let
       ((root (notes/tree/root)))
       (html/div
@@ -764,6 +791,7 @@
 (define notes/ui/index
   (lambda
     ()
+    "HTML notes index page: create form plus folder tree."
     (html/join
       (list
         (notes/tree/style)

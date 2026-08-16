@@ -4,6 +4,7 @@
 (define roam/at-open?
   (lambda
     (s i)
+    "True when s has a [[ at index i."
     (if
       (>= i (- (string-length s) 3))
       #f
@@ -15,6 +16,7 @@
 (define roam/backlinks
   (lambda
     (slug)
+    "Rows linking to slug (by slug or uuid), newest first."
     (let
       ((target (as-str slug)) (tu (roam/note-uuid slug)))
       (list/map
@@ -46,6 +48,7 @@
 (define roam/backlinks-html
   (lambda
     (slug)
+    "HTML list of backlinks for slug."
     (let
       ((bls (roam/backlinks slug)))
       (if
@@ -72,11 +75,12 @@
               bls)))))))
 
 (define roam/collect-from-tree
-  (lambda (tree) (roam/collect-node tree (list))))
+  (lambda (tree) "All wikilink triples across an outline tree." (roam/collect-node tree (list))))
 
 (define roam/collect-node
   (lambda
     (n acc)
+    "Accumulate wikilink triples (id target label) from node n and kids."
     (let
       ((id (as-str (outline/id n)))
         (links (roam/parse-links (outline/body n))))
@@ -96,6 +100,7 @@
 (define roam/delete-from-slug
   (lambda
     (slug)
+    "Delete all note-link rows whose from_slug is slug."
     (list/foldl
       (lambda
         (_ row)
@@ -110,6 +115,7 @@
 (define roam/find-close
   (lambda
     (s i)
+    "Index of the ]] closing the wikilink starting at i, or ()."
     (if
       (>= i (- (string-length s) 1))
       ()
@@ -124,6 +130,7 @@
 (define roam/insert-collected
   (lambda
     (from-slug triples seen)
+    "Insert wikilink rows for triples from from-slug, returning seen keys."
     (let
       ((from-uuid (roam/note-uuid from-slug)))
       (roam/insert-collected-acc
@@ -135,6 +142,7 @@
 (define roam/insert-collected-acc
   (lambda
     (from-slug from-uuid triples seen)
+    "Accumulator for insert-collected, skipping media and duplicates."
     (if
       (null? triples)
       seen
@@ -193,6 +201,7 @@
 (define roam/media-id
   (lambda
     (slug)
+    "Strip the media: prefix from a media slug."
     (let
       ((s (as-str slug)))
       (substring s 6 (- (string-length s) 6)))))
@@ -200,6 +209,7 @@
 (define roam/media-slug?
   (lambda
     (slug)
+    "True when slug carries the media: prefix."
     (let
       ((s (as-str slug)))
       (if
@@ -210,16 +220,18 @@
 (define roam/note-uuid
   (lambda
     (slug)
+    "Row id (uuid) of a note slug, or \"\" when absent."
     (let
       ((row (notes/doc/row (as-str slug))))
       (if (null? row) "" (as-str (car row))))))
 
 (define roam/parse-links
-  (lambda (body) (extract-links (as-str body))))
+  (lambda (body) "Extract wikilink pairs from body text." (extract-links (as-str body))))
 
 (define roam/parse-links-acc
   (lambda
     (s i acc)
+    "Accumulator for parse-links scanning s from index i."
     (if
       (>= i (- (string-length s) 3))
       (reverse acc)
@@ -246,6 +258,7 @@
 (define roam/reindex
   (lambda
     (slug outline-tree)
+    "Rebuild all wikilink rows for slug from its outline tree."
     (seq
       (roam/delete-from-slug slug)
       (roam/insert-collected
@@ -257,6 +270,7 @@
 (define roam/render-acc
   (lambda
     (s i acc)
+    "Render wikilinks in s to HTML, appending to acc."
     (if
       (>= i (string-length s))
       acc
@@ -294,11 +308,12 @@
           (string-append acc (html-escape (substring s i 1))))))))
 
 (define roam/render-body
-  (lambda (body) (render-links (as-str body))))
+  (lambda (body) "Render wikilinks in body to HTML." (render-links (as-str body))))
 
 (define roam/render-link
   (lambda
     (slug lab)
+    "HTML anchor for a wikilink to slug with label lab."
     (let
       ((s (as-str slug)) (row (notes/doc/row slug)))
       (let
@@ -321,6 +336,7 @@
 (define roam/render-media
   (lambda
     (id alt)
+    "HTML image (with caption) for a media id."
     (let
       ((mid (as-str id)) (lab (as-str alt)))
       (let
@@ -336,6 +352,7 @@
 (define roam/render-wiki-or-media
   (lambda
     (slug lab)
+    "Render a wikilink as media or a note link."
     (if
       (roam/media-slug? slug)
       (roam/render-media (roam/media-id slug) lab)
@@ -344,6 +361,7 @@
 (define roam/seen?
   (lambda
     (seen key)
+    "True when key is already in the seen list."
     (if
       (null? seen)
       #f
@@ -355,6 +373,7 @@
 (define roam/split-label
   (lambda
     (inner)
+    "Split [[inner]] into (slug label) on the first |."
     (let
       ((s (string-trim (as-str inner))))
       (roam/split-label-at s 0))))
@@ -362,6 +381,7 @@
 (define roam/split-label-at
   (lambda
     (s i)
+    "Accumulator for split-label scanning s from index i."
     (if
       (>= i (string-length s))
       (list s s)
