@@ -558,6 +558,7 @@
     (smoke "eval expr binds self/doc/slug to current context")
     (smoke "eval reindexes roam links when a body changes")
     (smoke "refile: node moves to another note root kids")
+    (smoke "refile destination is a lazy typeahead modal — the note page never enumerates the garden (BORGE-1785603757)")
     (smoke "extract: node becomes its own note; removed from source")
     (smoke "POST /partials/notes-node-op returns outline partial + selection")
     (smoke "scripts/verify_budget_stress.py many-node actions suite"))
@@ -604,6 +605,20 @@
            protocol (same POST shape, server-authoritative tree),
            not parallel ad-hoc routes. image.tree-browser defers
            refile/move UI until then.
+
+         REFILE DESTINATION UI (lazy modal, BORGE-1785603757):
+           No note page renders an eager <select> of all notes — that
+           O(n) notes/refile/options over (notes/doc/list) blew the
+           100k step budget at garden scale. Refile target picking is
+           a lazy htmx modal: the toolbar 'refile' <details> and GET
+           /partials/notes-refile?src=SLUG both render
+           notes/ui/refile-modal-body — a typeahead over
+           /partials/notes-search?mode=refile (filtered in Postgres,
+           no garden enumeration) plus a raw slug input for agents /
+           keyboard-only users. The legacy eager builders
+           (notes/refile-form, notes/refile/form and the O(n)
+           notes/refile-options / notes/refile/options) are REMOVED.
+           notes/refile/move performs the detach+attach write.
 
          PERSISTENCE:
            Structure ops upsert through notes/doc/* (tree store).
@@ -802,7 +817,8 @@
     (smoke "GET /notes?slug=… full page with chrome + outline")
     (smoke "GET /partials/notes-outline?slug=… fragment no chrome")
     (smoke "structure op POST returns updated outline partial")
-    (smoke "ui/menu can link Notes without breaking other apps"))
+    (smoke "ui/menu can link Notes without breaking other apps")
+    (smoke "note page does not enumerate all notes (refile target is a lazy typeahead, not an eager <select>)"))
 
    (details
     (doc (|
