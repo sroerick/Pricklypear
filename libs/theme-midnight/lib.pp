@@ -73,4 +73,5 @@
 (define theme/extra
   (lambda
     ()
+    "Install this theme's CSS sheet (empty for midnight)."
     (css/sheet (list))))
