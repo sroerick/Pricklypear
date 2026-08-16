@@ -149,6 +149,176 @@
     (smoke "merge result string lists conflict names when target moved newer")
     (smoke "merge copies no type_defs and no view_bindings rows"))
   )
+  (subsection diff
+   (doc "Structural divergence between two branches (AST-aware, not textual)")
+   (status planned)
+   (implements image/lib/store.ml image/lib/prims_db.ml image/lib/http_branches.ml lisp/lib/ast_diff.ml lisp/test/ast_diff_test.ml)
+   (* agent note (|2026-08-14 planned: gap surfaced testing personal-vs-main divergence. merge_branch is naive full-copy with explicit TODOs (diff-based merge, conflict detection); diff is the primitive those TODOs consume. AST-awareness chosen because function_defs.body is ONE expr node (not a statement list), JSONB-tagged structurally — see lisp-interpreter.ast-diff.|) *)
+   (verify
+    (build "dune build @all")
+    (test "lisp/test/ast_diff_test.ml — same/modified over all 11 real expr constructors (Var Lit App Let Letrec If Lambda Prim Seq Quote Define)")
+    (test "App.args and Letrec.bindings use list-LCS keyed on analyze.ast_hash so insertion mid-sequence does not mark every following element changed")
+    (test "top-level ast_hash equality short-circuits the walk for unchanged rows")
+    (smoke "(diff 'system/main 'admin/personal) lists added/removed/modified names without scraping /bindings HTML")
+    (smoke "/diff?from=system/main&to=admin/personal renders Modified rows with per-ctor AST deltas; Added/Removed show pp_expr of the lone body"))
+   (details
+    (doc (|
+         PROBLEM: testing divergence between a personal
+         branch and main is currently manual —
+         (list-bindings) under each (checkout ...) and
+         eyeballing. merge_branch (see merge) copies ALL
+         function_defs source->target with three open
+         TODOs: diff-based merge (only changed rows),
+         conflict detection (parent moved same name
+         since fork), and per-function resolution. diff
+         is the primitive those TODOs consume, and the
+         thing a human/agent reads before promoting.
+
+         (diff 'system/main 'admin/personal)
+           -> VList of change-dicts, one per divergent
+              name (no row for unchanged — the common
+              case):
+              {name kind status from-updated to-updated}
+              kind   :: fn | type | route
+              status :: added | removed | modified
+
+         LAYERING (two stages, at the seam the codebase
+         already has):
+           1. ROW CLASSIFICATION (SQL, one round trip):
+              both effective views via the SAME recursive
+              CTE that list_function_names_meta /
+              list_packages / search_function_bodies use
+              (closest-ancestor-wins). FULL OUTER JOIN on
+              name, classify each as
+                added    = in to,   not in from
+                removed  = in from, not in to
+                modified = both, AND from.body IS DISTINCT
+                                       FROM to.body
+              Scope mirrors merge_branch: function_defs +
+              type_defs + view_bindings (NOT data_rows —
+              shared, branch-free per branching.data).
+              Conflicts fall out for free: this is the
+              inverted conflict_sql already in merge_branch.
+           2. AST DELTA (OCaml, Modified rows ONLY):
+              parse both bodies via expr_of_json, walk with
+              lisp/lib/ast_diff.ml (see lisp-interpreter.
+              ast-diff). Never runs on Added/Removed
+              (nothing to compare — show pp_expr of the
+              lone body) or on Same (short-circuited).
+
+         AST-AWARENESS IS A PROPERTY, NOT A NICETY.
+         function_defs.body is ONE expr node (Lambda body,
+         not a statement list), JSONB-tagged structurally
+         ({"if":...}, {"lambda":...}, {"app":...}). A
+         textual diff over the JSONB ::text would be
+         unreadable; a line diff over pp_expr output
+         would jitter on whitespace and miss structural
+         moves. The diff is structural over the expr type:
+
+           ctor differs (Var -> Lambda)            = Replaced
+           same ctor, fixed-arity children          = Node,
+             recurse positionally (If test/then/else;    each
+             Seq a/b; Lambda params/body; Let name/      child
+             val/body; Define name/val; Quote body;       its
+             Var s; Lit v)                                own
+                                                        delta
+           same ctor, list children                = Node
+             with a list-LCS step over the children      plus a
+             before recursing into matched pairs:        moved/
+             - App.args (head + args list)              added
+             - Letrec.bindings (keyed on binding name)  list
+                                                        handled
+           leaf value differs (Var s, Lit v)        = Replaced
+
+         The 11 real expr constructors (ast.ml): Var,
+         Lit, App, Let, Letrec, If, Lambda, Prim, Seq,
+         Quote, Define. The Quasiquote / Unquote /
+         UnquoteSplicing mentioned in lisp-interpreter.
+         ast are reader-level sugar that desugars before
+         persistence (see macros) — they do not appear
+         in function_defs.body and need no diff case.
+
+         FAST PATH: analyze.ast_hash (sha1_hex of
+         Reader.pp_expr) is already the content identity.
+         Compare from/to hashes first; if equal, skip the
+         walk entirely (returns Same). The 90% case
+         (unchanged defs between branches) costs one hash
+         compare per row, not a tree walk.
+
+         SCOPE & TYPE/ROUTE HANDLING:
+           - function_defs: full AST diff as above.
+           - type_defs: diff the `fields` jsonb array
+             with the same list-LCS (field declarations
+             are positional lists, not expr trees; no
+             ast_diff involvement).
+           - view_bindings: tabular (route, handler)
+             pair sets — divergent pairs are
+             added/removed rows, no body to diff. Stays
+             in SQL.
+           Schema changes land via migrations (see
+           schema-authority), never via diff/merge.
+
+         NON-GOALS (v1, honest):
+           - No rename detection. A bound-var rename
+             x->y surfaces as a Replaced at the binding
+             site (Lambda.params / Let name / Letrec
+             binding name) AND a Replaced at every
+             reference site (Var x -> Var y). git doesn't
+             do this for free either; real rename
+             detection needs the 3-way base (fork point),
+             which is the natural v2 once code_history
+             before-images + branches.last_synced are
+             wired as the base.
+           - No alpha-equivalence. Bound names are NOT
+             normalized before comparing — a genuine
+             rename is meant to be visible, not hidden.
+           - Param order matters. (lambda (a b) ...) vs
+             (lambda (b a) ...) is a positional child
+             delta, NOT "renamed params".
+
+         DEGRADED RENDER PATH: if the /diff page does
+         not want to render the structured delta tree,
+         fall back to a unified line diff over
+         Reader.pp_expr from / Reader.pp_expr to. This is
+         the existing simple_text_diff shape (see
+         code-diff) applied to two live bodies instead
+         of a history entry. Always available; never the
+         primary surface.
+
+         WIRE-IN:
+           - Store.diff_branches ~from_id ~to_id
+             (image/lib/store.ml, beside merge_branch):
+             the SQL stage + Modified-row (from_expr,
+             to_expr) pairs ready for the image layer.
+           - (diff source target) prim (image/lib/
+             prims_db.ml, beside code-diff): returns the
+             VList of change-dicts (summary level). The
+             structured AST delta is consumed in-process
+             by the /diff page renderer (Ast_html +
+             Ast_diff), NOT exposed as a separate prim
+             in v1. A programmatic (diff-ast name from
+             to) prim is a v2 addition if agents need
+             the delta tree as Nopales values.
+           - /diff?from=&to= private page (image/lib/
+             http_branches.ml, sibling to /bindings):
+             three-column row table; Modified rows
+             expand to the AST delta overlaying
+             Ast_html.pp_expr_html. Future "promote
+             selected" off diff rows IS the merge TODO
+             (diff-based merge) in disguise.
+
+         DOWNSTREAM CONSUMERS (the point of building it):
+           - merge TODO "diff-based merge (only changed
+             rows)": merge calls diff, upserts only rows
+             whose status != same.
+           - merge TODO "conflict detection": diff's
+             Modified classification + 3-way base
+             (code_history before-image at
+             last_synced) yields genuine conflict
+             detection. v2.
+    |))
+   )
+  )
   (subsection agent-promote
    (doc "Agent promotes from its workshop into the parent human's personal")
    (status implemented)

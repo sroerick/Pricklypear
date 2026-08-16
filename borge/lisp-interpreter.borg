@@ -229,6 +229,47 @@
    |))
    )
   )
+  (subsection ast-diff
+   (doc "Pure structural diff over expr trees (consumer: branching.diff). Not the surface prim — the pure walker.")
+   (status planned)
+   (implements lisp/lib/ast_diff.ml lisp/test/ast_diff_test.ml)
+   (* agent note (|2026-08-14 planned: pure module, no I/O, tests with no services (dune runtest lisp). Depends on the frozen expr type (core-freeze) and analyze.ast_hash for the equality fast-path. Semantics authority: branching.diff — this subsection is the module home, not the semantics.|) *)
+   (verify
+    (build "dune build lisp")
+    (test "lisp/test/ast_diff_test.ml — same/modified/replaced over all 11 expr constructors")
+    (test "expr_to_json round-trip preserved: diff never mutates, only reads"))
+   (details
+    (doc (|
+         Pure walker over the expr type (see ast). No I/O,
+         no Postgres — tests with dune runtest lisp alone,
+         like reader / eval / env.
+
+         type delta =
+           | Same
+           | Replaced of { from: expr; to_: expr }
+           | Node   of { ctor: string;
+                       children: (string * delta) list }
+
+         val diff : Ast.expr -> Ast.expr -> delta
+
+         Per-ctor recursion (fixed-arity positional for
+         If/Seq/Lambda/Let/Define/Quote; list-LCS for
+         App.args and Letrec.bindings) and non-goals
+         (rename detection, alpha-equivalence, param
+         order) are spec'd in branching.diff — this
+         subsection is the module home, not the
+         semantics authority.
+
+         STAKEHOLDER on core-freeze: ast_diff is a
+         structural consumer of every expr constructor.
+         Adding a constructor to expr requires a diff
+         case here (exhaustive match) — borge drift will
+         reddens a missed case, but the freeze contract
+         (see core-freeze) naming a reason the expr type
+         is slow-change now includes this module.
+    |))
+   )
+  )
   (subsection symbols
    (doc "Distinguish symbols from strings at the value layer (undo v1 collapse)")
    (status implemented)

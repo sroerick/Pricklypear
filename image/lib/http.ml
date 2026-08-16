@@ -578,6 +578,7 @@ let request_handler ~(sw : Eio.Switch.t) (session : Session.t)
   | `POST, "/branches/unoverride" -> launch (fun () -> branches_unoverride session reqd)
   | `POST, "/branches/promote" -> launch (fun () -> branches_promote session reqd)
   | `GET, "/bindings" -> launch (fun () -> list_bindings_page session reqd)
+  | `GET, "/diff" -> launch (fun () -> diff_page session reqd)
   | `GET, "/types" -> launch (fun () -> list_types_page session reqd)
   | `GET, "/timing" -> launch (fun () -> timing_page session reqd)
   | `GET, "/data" | `GET, "/data/" ->

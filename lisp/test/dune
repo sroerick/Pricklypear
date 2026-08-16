@@ -22,3 +22,8 @@
  (name codec_test)
  (modules codec_test)
  (libraries pricklypear-lisp pricklypear-pure-prims alcotest yojson))
+
+(test
+ (name ast_diff_test)
+ (modules ast_diff_test)
+ (libraries pricklypear-lisp alcotest yojson digestif))

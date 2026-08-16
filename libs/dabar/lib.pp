@@ -22,27 +22,33 @@
             " — plain: "
             (as-str (bible/verse book chapter verse))))
         (let
-          ((pre (dict-get row "html")))
+          ((pre (dict-get (cdr row) "html")))
           (if
             (null? pre)
             (html/p*
               (html/attr "class" "muted")
               "interlinear row has no html field")
-            pre))))))
+            pre)))))
+  "Return the interlinear HTML for one verse, or a 'No interlinear for <ref>' fallback.")
 
 ;; Canonical alias — spec smoke (dabar/inter "John" 1 1).
 (define dabar/inter
   (lambda
     (book chapter verse)
-    (dabar/inter-html book chapter verse)))
+    (dabar/inter-html book chapter verse))  "Canonical alias for interlinear HTML; e.g. (dabar/inter book chapter verse).")
 
 (define dabar/inter-row
   (lambda
     (book chapter verse)
-    (find-row
-      (quote bible-interlinear)
-      "ref"
-      (bible/ref book chapter verse))))
+    (let
+      ((rows
+        (find-rows
+          (quote bible-interlinear)
+          "ref"
+          (bible/ref book chapter verse)
+          1)))
+      (if (null? rows) () (car rows))))
+  "Fetch one bible-interlinear row as (id . fields) pair, or () if missing. Matches find-rows shape.")
 
 ;; Truthy when inter=1 (default off / plain).
 (define dabar/inter-on?
@@ -53,7 +59,7 @@
       (if
         (null? p)
         #f
-        (string-eq (as-str p) "1")))))
+        (string-eq (as-str p) "1"))))  "Truthy when the inter=1 request param is set (plain view is the default).")
 
 (define dabar/study-href
   (lambda
@@ -66,7 +72,7 @@
       "&verse="
       (as-str verse)
       "&inter="
-      (if inter-on "1" "0"))))
+      (if inter-on "1" "0")))  "/dabar URL for a verse study, including an intercross-toggling inter= param.")
 
 (define dabar/toggle-link
   (lambda
@@ -84,7 +90,7 @@
             (html/attr "hx-swap" "innerHTML")
             (html/attr "hx-push-url" "true")
             (html/attr "class" "dabar-inter-toggle")))
-        label))))
+        label)))  "Interlinear<->plain toggle link targeting #dabar-panel.")
 
 (define dabar/page
   (lambda
@@ -123,7 +129,7 @@
           (list
             (html/div
               (html/attr "id" "dabar-panel")
-              (dabar/panel-for-request))))))))
+              (dabar/panel-for-request)))))))  "/dabar route handler: redirects POSTs, else renders the panel (htmx request or full page).")
 
 (define dabar/panel
   (lambda
@@ -150,7 +156,7 @@
             (dabar/verse-study
               (dict-get row "abbrev")
               (dict-get row "chapter")
-              (dict-get row "verse"))))))))
+              (dict-get row "verse")))))))  "Resolve request params (book/chapter/verse or ref=) into a verse-study panel.")
 
 (define dabar/panel-for-request
   (lambda
@@ -175,7 +181,7 @@
               (request-param "book")
               (request-param "chapter")
               verse)
-            (bible/chapter-reader)))))))
+            (bible/chapter-reader))))))  "Dispatch a request by ref=, verse=, or fall back to the chapter reader.")
 
 (define dabar/verse-study
   (lambda
@@ -231,7 +237,7 @@
                     (as-str ch))
                   "open in reader")
                 " · "
-                (html/a "/strongs" "Strong's")))))))))
+                (html/a "/strongs" "Strong's"))))))))  "Full verse-study panel: heading, BSB card, interlinear card, and reader/Strong's links.")
 
 (define dabar/verse-study-from-params
   (lambda
@@ -243,7 +249,7 @@
       (dabar/verse-study
         b
         (bible/safe-chapter b c)
-        (bible/parse-int v)))))
+        (bible/parse-int v))))  "Render verse-study from request book/chapter/verse params, applying defaults.")
 
 (define dabar/verse-study-from-ref
   (lambda
@@ -265,6 +271,6 @@
           (html/join
             (list
               (bible/go-form book chapter verse)
-              (dabar/verse-study book chapter verse))))))))
+              (dabar/verse-study book chapter verse)))))))  "Render verse-study from a plain ref string, or an unknown-ref error with a go-form.")
 
 (route "/dabar" "dabar/page")
