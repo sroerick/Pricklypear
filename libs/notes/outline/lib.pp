@@ -312,7 +312,7 @@
                             (notes/doc/upsert slug title new-tree tags kind day)
                             (render-html
                               (string-append
-                                (outline/html slug new-tree show-archived)
+                                (outline/html-lite slug new-tree show-archived)
                                 (html/void
                                   "input"
                                   (html/attrs
@@ -333,7 +333,7 @@
                       (notes/doc/upsert slug title new-tree tags kind day)
                       (render-html
                         (string-append
-                          (outline/html slug new-tree show-archived)
+                          (outline/html-lite slug new-tree show-archived)
                           (html/void
                             "input"
                             (html/attrs
@@ -381,7 +381,7 @@
         (render-html
           (html/p* (html/attr "class" "err") "missing"))
         (render-html
-          (outline/html
+          (outline/html-lite
             (as-str (request-param "slug"))
             (notes/doc/outline n)
             show-archived))))))

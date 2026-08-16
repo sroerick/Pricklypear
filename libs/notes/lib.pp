@@ -1911,7 +1911,7 @@
                   tags
                   kind
                   day)
-                (render-html (outline/html slug new-tree))))))))))
+                (render-html (outline/html-lite slug new-tree #f))))))))))
 
 (define notes/open-todos
   (lambda
@@ -1932,9 +1932,10 @@
         (render-html
           (html/p* (html/attr "class" "err") "missing"))
         (render-html
-          (outline/html
+          (outline/html-lite
             (as-str (request-param "slug"))
-            (notes/get-outline n)))))))
+            (notes/get-outline n)
+            #f))))))
 
 (define notes/outline/all-todos
   (lambda
@@ -2203,7 +2204,7 @@
                     day)
                   (render-html
                     (string-append
-                      (outline/html slug new-tree show-archived)
+                      (outline/html-lite slug new-tree show-archived)
                       (html/void
                         "input"
                         (html/attrs
@@ -2249,7 +2250,7 @@
         (render-html
           (html/p* (html/attr "class" "err") "missing"))
         (render-html
-          (outline/html
+          (outline/html-lite
             (as-str (request-param "slug"))
             (notes/doc/outline n)
             show-archived))))))
