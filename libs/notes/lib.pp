@@ -2418,55 +2418,14 @@
                         (notes/get-day src))
                       #t)))))))))))
 
-(define notes/refile-form
-  (lambda
-    (src-slug nid)
-    (if
-      (string-eq (as-str nid) "root")
-      ""
-      (html/form
-        "POST"
-        "/notes"
-        (html/attr "class" "ol-refile")
-        (html/join
-          (list
-            (html/hidden "action" "refile")
-            (html/hidden "src_slug" (as-str src-slug))
-            (html/hidden "node_id" (as-str nid))
-            (html/select
-              "dst_slug"
-              (html/attr "class" "ol-refile-sel")
-              (notes/refile-options src-slug))
-            (html/button
-              (html/attrs
-                (list
-                  (html/attr "type" "submit")
-                  (html/attr "class" "ol-btn")
-                  (html/attr "title" "move node to another note")))
-              "refile")))))))
-
-(define notes/refile-options
-  (lambda
-    (src-slug)
-    (list/foldl
-      (lambda
-        (acc row)
-        (let
-          ((f (cdr row)))
-          (let
-            ((slug (as-str (dict-get f "slug")))
-              (title (as-str (dict-get f "title"))))
-            (if
-              (string-eq slug (as-str src-slug))
-              acc
-              (string-append
-                acc
-                (html/option
-                  slug
-                  (if (string-eq title "") slug title)
-                  #f))))))
-      ""
-      (notes/list))))
+;; NOTES REFILE UI (BORGE-1785603757): the eager O(n) target <select>
+;; (notes/refile-form / notes/refile-options over (notes/list)) was the
+;; budget blowout on large gardens and is REMOVED. Refile is a lazy
+;; htmx modal: notes/ui/refile-modal (toolbar) + notes/ui/refile-partial
+;; (GET /partials/notes-refile) both render notes/ui/refile-modal-body — a
+;; typeahead destination picker over /partials/notes-search?mode=refile
+;; (Postgres-filtered) plus a raw slug input. notes/refile/move does the
+;; actual detach+attach write; no enumeration.
 
 (define notes/refile/extract
   (lambda
@@ -2556,33 +2515,6 @@
           (redirect (string-append "/notes?slug=" src))
           (redirect (string-append "/notes?slug=" new)))))))
 
-(define notes/refile/form
-  (lambda
-    (src-slug nid)
-    (if
-      (string-eq (as-str nid) "root")
-      ""
-      (html/form
-        "POST"
-        "/notes"
-        (html/attr "class" "ol-refile")
-        (html/join
-          (list
-            (html/hidden "action" "refile")
-            (html/hidden "src_slug" (as-str src-slug))
-            (html/hidden "node_id" (as-str nid))
-            (html/select
-              "dst_slug"
-              (html/attr "class" "ol-refile-sel")
-              (notes/refile/options src-slug))
-            (html/button
-              (html/attrs
-                (list
-                  (html/attr "type" "submit")
-                  (html/attr "class" "ol-btn")
-                  (html/attr "title" "move node to another note")))
-              "refile")))))))
-
 (define notes/refile/handle
   (lambda
     ()
@@ -2650,29 +2582,6 @@
                             (notes/doc/kind src)
                             (notes/doc/day src))
                           #t)))))))))))))
-
-(define notes/refile/options
-  (lambda
-    (src-slug)
-    (list/foldl
-      (lambda
-        (acc row)
-        (let
-          ((f (cdr row)))
-          (let
-            ((slug (as-str (dict-get f "slug")))
-              (title (as-str (dict-get f "title"))))
-            (if
-              (string-eq slug (as-str src-slug))
-              acc
-              (string-append
-                acc
-                (html/option
-                  slug
-                  (if (string-eq title "") slug title)
-                  #f))))))
-      ""
-      (notes/doc/list))))
 
 (define notes/refile/slug-char-ok?
   (lambda
@@ -4696,91 +4605,56 @@
                   "title"
                   "refile selected node to another note")))
             "refile")
-          (html/tag
-            "div"
-            (html/attrs
-              (list (html/attr "class" "ol-refile-body ol-find-wide")))
-            (html/join
-              (list
-                (html/void
-                  "input"
-                  (html/attrs
-                    (list
-                      (html/attr "type" "hidden")
-                      (html/attr "id" "ol-refile-nid")
-                      (html/attr "value" "root"))))
-                (html/void
-                  "input"
-                  (html/attrs
-                    (list
-                      (html/attr "type" "search")
-                      (html/attr "class" "ol-find-input")
-                      (html/attr "name" "q")
-                      (html/attr
-                        "placeholder"
-                        "destination note or header…")
-                      (html/attr "autocomplete" "off")
-                      (html/attr
-                        "hx-get"
-                        (string-append
-                          "/partials/notes-search?mode=refile&src="
-                          (as-str slug)))
-                      (html/attr
-                        "hx-trigger"
-                        "input changed delay:200ms, search")
-                      (html/attr "hx-target" "next .ol-find-results")
-                      (html/attr "hx-swap" "outerHTML")
-                      (html/attr "hx-include" "this"))))
-                (html/div
-                  (html/attr "class" "ol-find-results")
-                  (html/div
-                    (html/attr "class" "ol-find-empty")
-                    "Type a destination note or header…"))
-                (html/form
-                  "POST"
-                  "/notes"
-                  (html/attr "class" "ol-refile")
-                  (html/join
-                    (list
-                      (html/hidden "action" "refile")
-                      (html/hidden "src_slug" (as-str slug))
-                      (html/void
-                        "input"
-                        (html/attrs
-                          (list
-                            (html/attr "type" "hidden")
-                            (html/attr "name" "node_id")
-                            (html/attr "class" "ol-refile-nid-mirror")
-                            (html/attr "value" "root"))))
-                      (html/label
-                        (html/attr "class" "ol-refile-label")
-                        "or slug ")
-                      (html/text-input
-                        "dst_slug"
-                        (html/attrs
-                          (list
-                            (html/attr "class" "ol-refile-sel")
-                            (html/attr "placeholder" "destination-slug")
-                            (html/attr "autocomplete" "off"))))
-                      " "
-                      (html/button
-                        (html/attrs
-                          (list
-                            (html/attr "type" "submit")
-                            (html/attr "class" "ol-btn")
-                            (html/attr "title" "refile selected node")))
-                        "go"))))))))))))
+          (notes/ui/refile-modal-body slug))))))
 
-(define notes/ui/refile-partial
+(define notes/ui/refile-modal-body
   (lambda
-    ()
-    (let
-      ((slug (as-str (request-param "src"))))
-      (if
-        (string-eq slug "")
-        (render-html
-          (html/p* (html/attr "class" "muted") "missing src"))
-        (render-html
+    (slug)
+    ;; Lazy refile target picker (BORGE-1785603757): NO eager O(n)
+    ;; notes/refile/options <select>. Destination is a typeahead search
+    ;; partial (/partials/notes-search?mode=refile) filtered in Postgres
+    ;; plus a raw slug text input for agents/keyboard users. Renders no
+    ;; per-option HTML at page-open, so a large garden never enumerates.
+    (html/tag
+      "div"
+      (html/attrs
+        (list (html/attr "class" "ol-refile-body ol-find-wide")))
+      (html/join
+        (list
+          (html/void
+            "input"
+            (html/attrs
+              (list
+                (html/attr "type" "hidden")
+                (html/attr "id" "ol-refile-nid")
+                (html/attr "value" "root"))))
+          (html/void
+            "input"
+            (html/attrs
+              (list
+                (html/attr "type" "search")
+                (html/attr "class" "ol-find-input")
+                (html/attr "name" "q")
+                (html/attr
+                  "placeholder"
+                  "destination note or header…")
+                (html/attr "autocomplete" "off")
+                (html/attr
+                  "hx-get"
+                  (string-append
+                    "/partials/notes-search?mode=refile&src="
+                    (as-str slug)))
+                (html/attr
+                  "hx-trigger"
+                  "input changed delay:200ms, search")
+                (html/attr "hx-target" "next .ol-find-results")
+                (html/attr "hx-swap" "outerHTML")
+                (html/attr "hx-include" "this"))))
+          (html/div
+            (html/attr "class" "ol-find-results")
+            (html/div
+              (html/attr "class" "ol-find-empty")
+              "Type a destination note or header…"))
           (html/form
             "POST"
             "/notes"
@@ -4788,26 +4662,66 @@
             (html/join
               (list
                 (html/hidden "action" "refile")
-                (html/hidden "src_slug" slug)
+                (html/hidden "src_slug" (as-str slug))
                 (html/void
                   "input"
                   (html/attrs
                     (list
                       (html/attr "type" "hidden")
                       (html/attr "name" "node_id")
-                      (html/attr "id" "ol-refile-nid")
+                      (html/attr "class" "ol-refile-nid-mirror")
                       (html/attr "value" "root"))))
-                (html/select
+                (html/label
+                  (html/attr "class" "ol-refile-label")
+                  "or slug ")
+                (html/text-input
                   "dst_slug"
-                  (html/attr "class" "ol-refile-sel")
-                  (notes/refile/options slug))
+                  (html/attrs
+                    (list
+                      (html/attr "class" "ol-refile-sel")
+                      (html/attr "placeholder" "destination-slug")
+                      (html/attr "autocomplete" "off"))))
+                " "
                 (html/button
                   (html/attrs
                     (list
                       (html/attr "type" "submit")
                       (html/attr "class" "ol-btn")
                       (html/attr "title" "refile selected node")))
-                  "refile")))))))))
+                  "go")))))))))
+
+(define notes/ui/refile-partial
+  (lambda
+    ()
+    ;; GET /partials/notes-refile?src=SLUG — lazy modal body (BORGE-1785603757).
+    ;; Renders the same budget-safe typeahead refile picker as the toolbar
+    ;; modal; no eager notes/refile/options enumeration. Opened <details> so
+    ;; htmx toggling / direct fetch both present a ready-to-use picker.
+    (let
+      ((slug (as-str (request-param "src"))))
+      (if
+        (string-eq slug "")
+        (render-html
+          (html/p* (html/attr "class" "muted") "missing src"))
+        (render-html
+          (html/tag
+            "details"
+            (html/attrs
+              (list
+                (html/attr "class" "ol-refile-modal")
+                (html/attr "open" "")))
+            (html/join
+              (list
+                (html/tag
+                  "summary"
+                  (html/attrs
+                    (list
+                      (html/attr "class" "ol-btn")
+                      (html/attr
+                        "title"
+                        "refile selected node to another note")))
+                  "refile")
+                (notes/ui/refile-modal-body slug)))))))))
 
 (define notes/ui/render-child
   (lambda
