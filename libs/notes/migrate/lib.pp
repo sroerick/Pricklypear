@@ -4,6 +4,7 @@
 (define notes/migrate/legacy-all
   (lambda
     ()
+    "Migrate every legacy note row that is not yet present."
     (list/map
       notes/migrate/legacy-one
       (rows (quote note) 2000))))
@@ -11,6 +12,7 @@
 (define notes/migrate/legacy-force-one
   (lambda
     (row)
+    "Reseed one legacy note row, reoutlining even when already migrated."
     (if
       (null? row)
       "skip-empty"
@@ -35,6 +37,7 @@
 (define notes/migrate/legacy-force-all
   (lambda
     ()
+    "Force-reoutline every existing legacy note row."
     (list/map
       notes/migrate/legacy-force-one
       (rows (quote note) 2000))))
@@ -42,6 +45,7 @@
 (define notes/migrate/legacy-delete-all
   (lambda
     ()
+    "Delete all legacy note rows that have a corresponding tree node."
     (list/map
       (lambda
         (row)
@@ -59,6 +63,7 @@
 (define notes/migrate/legacy-one
   (lambda
     (row)
+    "Migrate a single legacy note row into the tree, or returns a status tag."
     (if
       (null? row)
       "skip-empty"
