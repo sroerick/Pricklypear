@@ -4,26 +4,33 @@
 (define theme/name
   "midnight")
 
+;; WHITEPURPOSE: theme-midnight is THE WHITEOUT/PROBE THEME — every
+;; core token is magenta so ANY element still painted by a hardcoded
+;; hex (not var(--*)) glows magenta and exposes the leak. Real users
+;; pick midnight only to audit CSS theming coverage. It is registered
+;; as package "theme" in theme/catalog's midnight entry (fixed:
+;; was "theme", so "midnight" switched back to phosphor tokens).
+
 (define theme/bg
-  "#0f1419")
+  "magenta")
 
 (define theme/ink
-  "#d8dee9")
+  "magenta")
 
 (define theme/panel
-  "#1a2332")
+  "magenta")
 
 (define theme/chrome
-  "#15202b")
+  "magenta")
 
 (define theme/link
-  "#7aa2f7")
+  "magenta")
 
 (define theme/visited
-  "#b48ead")
+  "magenta")
 
 (define theme/muted
-  "#8b95a8")
+  "magenta")
 
 (define theme/err
   "#bf616a")
@@ -38,28 +45,28 @@
   "#141b26")
 
 (define theme/shadow
-  "#0a0e13")
+  "magenta")
 
 ;; --- semantic style tokens (dark blue-gray values) ------------------
-(define theme/sel-bg "#1a2a44")
-(define theme/sel-accent "#7aa2f7")
-(define theme/pending-bg "#2a3044")
-(define theme/pending-ink "#d8dee9")
-(define theme/pending-border "#8b6914")
-(define theme/done-bg "#14301c")
-(define theme/done-ink "#a3be8c")
-(define theme/done-muted "#4a5a4a")
-(define theme/waiting-bg "#1a2a3a")
-(define theme/archived-bg "#141b26")
-(define theme/archived-ink "#8b95a8")
-(define theme/archived-border "#3b4558")
-(define theme/cancelled-bg "#1f2730")
-(define theme/today-bg "#2a3520")
-(define theme/banner-bg "#3a2a00")
-(define theme/banner-border "#886600")
-(define theme/banner-ink "#ffdd88")
-(define theme/badge-bg "#3a2f00")
-(define theme/badge-border "#8b6914")
+(define theme/sel-bg "magenta")
+(define theme/sel-accent "magenta")
+(define theme/pending-bg "magenta")
+(define theme/pending-ink "magenta")
+(define theme/pending-border "magenta")
+(define theme/done-bg "magenta")
+(define theme/done-ink "magenta")
+(define theme/done-muted "magenta")
+(define theme/waiting-bg "magenta")
+(define theme/archived-bg "magenta")
+(define theme/archived-ink "magenta")
+(define theme/archived-border "magenta")
+(define theme/cancelled-bg "magenta")
+(define theme/today-bg "magenta")
+(define theme/banner-bg "magenta")
+(define theme/banner-border "magenta")
+(define theme/banner-ink "magenta")
+(define theme/badge-bg "magenta")
+(define theme/badge-border "magenta")
 
 ;; --- per-theme structural sheet hook (no-op) ---------------
 ;; Ensure switching away from theme-as400 clears its CRT chrome.
