@@ -141,6 +141,7 @@
 (define theme/vars
   (lambda
     ()
+    "Emit the :root CSS rule mapping theme/* tokens to custom properties."
     (css/sheet
       (list
         (css/rule
@@ -189,6 +190,7 @@
 (define theme/extra
   (lambda
     ()
+    "Extra structural CSS for this theme (none by default)."
     (css/sheet (list))))
 
 ;; --- registry -------------------------------------------------------
@@ -224,20 +226,21 @@
       "theme-as400")))
 
 (define theme/entry-name
-  (lambda (e) (as-str (car e))))
+  (lambda (e) "Catalog entry's name key." (as-str (car e))))
 
 (define theme/entry-display
-  (lambda (e) (as-str (car (cdr e)))))
+  (lambda (e) "Catalog entry's human display name." (as-str (car (cdr e)))))
 
 (define theme/entry-desc
-  (lambda (e) (as-str (car (cdr (cdr e))))))
+  (lambda (e) "Catalog entry's description." (as-str (car (cdr (cdr e))))))
 
 (define theme/entry-package
-  (lambda (e) (as-str (car (cdr (cdr (cdr e)))))))
+  (lambda (e) "Catalog entry's package name." (as-str (car (cdr (cdr (cdr e)))))))
 
 (define theme/available
   (lambda
     ()
+    "List of theme descriptors (name display description package)."
     (list/map
       (lambda
         (e)
@@ -251,6 +254,7 @@
 (define theme/find
   (lambda
     (name)
+    "Find the catalog entry for a theme name; () when unknown."
     (let
       ((want (as-str name)))
       (list/foldl
@@ -266,6 +270,7 @@
 (define theme/current
   (lambda
     ()
+    "Name of the active theme (phosphor when unset)."
     (guard
       (lambda (_) "phosphor")
       (as-str theme/name))))
@@ -273,6 +278,7 @@
 (define theme/set
   (lambda
     (name)
+    "Load the package for name and return the theme name."
     (let
       ((e (theme/find name)))
       (if
@@ -292,6 +298,7 @@
 (define theme/swatch-html
   (lambda
     (bg ink panel chrome link)
+    "HTML color-swatch strips for the picker."
     (html/tag
       "div"
       (html/attr "class" "theme-swatch")
@@ -346,6 +353,7 @@
 (define theme/preview-swatch
   (lambda
     (name)
+    "Color swatch preview for a theme without loading its package."
     ;; Hardcoded previews so the picker doesn't have to load each package.
     (if
       (string-eq name "paper")
@@ -364,6 +372,7 @@
 (define theme/card-html
   (lambda
     (e)
+    "HTML card for one theme entry, active-current highlighted."
     (let
       ((name (theme/entry-name e))
         (display (theme/entry-display e))
@@ -414,6 +423,7 @@
 (define theme/cards-html
   (lambda
     ()
+    "HTML grid of theme cards."
     (html/div
       (html/attr "id" "theme-cards")
       (html/join (list/map theme/card-html theme/catalog)))))
@@ -421,6 +431,7 @@
 (define theme/page
   (lambda
     ()
+    "Theme settings page route handler (GET render / POST set)."
     (if
       (string-eq (request-method) "POST")
       (let
