@@ -614,7 +614,7 @@
   )
   (subsection primitives-layer
    (doc "image/lib/primitives.ml: the impure fns registered at boot")
-   (implements image/lib/primitives.ml image/lib/crud.ml image/lib/session.ml image/lib/prims_pure.ml image/lib/prims_db.ml image/lib/prims_net.ml image/lib/prims_media.ml image/lib/prims_graph.ml image/lib/prims_request.ml image/lib/call_graph.ml)
+   (implements image/lib/primitives.ml image/lib/crud.ml image/lib/session.ml pure/prims_pure.ml image/lib/prims_time.ml image/lib/prims_crypto.ml image/lib/prims_db.ml image/lib/prims_net.ml image/lib/prims_media.ml image/lib/prims_graph.ml image/lib/prims_request.ml image/lib/call_graph.ml)
    (status implemented)
    (verify
     (build "dune build image && cd lisp && dune build && dune runtest")
@@ -1618,7 +1618,7 @@
   )
   (subsection packages
    (doc "In-branch prefix packages for organizing functions (not branch ownership)")
-   (implements image/lib/packages.ml image/lib/loader.ml image/lib/prims_pure.ml image/lib/primitives.ml)
+   (implements image/lib/packages.ml image/lib/loader.ml pure/prims_pure.ml image/lib/primitives.ml)
    (status verified)
    (verify
     (build "dune build lisp image")

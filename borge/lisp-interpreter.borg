@@ -131,7 +131,7 @@
   (subsection conformance
    (doc "Conformance suite: real Nopales programs with expected eval results, run on every core change as the semantic gate of the freeze")
    (status implemented)
-   (implements lisp/test/conformance_test.ml lisp/test/dune)
+   (implements lisp/test/conformance_test.ml lisp/test/dune lisp/conformance/conformance.ml)
    (verify
     (test "suite loads and evaluates each program against its expected value with no services")
     (test "a deliberate core change that alters a program's result is caught as a failure")
@@ -273,7 +273,7 @@
   (subsection symbols
    (doc "Distinguish symbols from strings at the value layer (undo v1 collapse)")
    (status implemented)
-   (implements lisp/lib/ast.ml lisp/lib/eval.ml lisp/lib/reader.ml image/lib/prims_pure.ml image/lib/primitives.ml)
+   (implements lisp/lib/ast.ml lisp/lib/eval.ml lisp/lib/reader.ml pure/prims_pure.ml image/lib/primitives.ml)
    (verify
     (test "quote hello is symbol; quote \"hello\" is string; not equal")
     (test "value_to_expr round-trip preserves Var vs Lit VStr without __str__")
@@ -1028,7 +1028,7 @@
   )
   (subsection effects
    (doc "Capability effects for Nopales programs: classify pure vs DB vs AI vs publish; infer; gate; display. Separate from OCaml 5 host effects and from Lwt async plumbing.")
-   (implements lisp/lib/effect.ml lisp/lib/eval.ml image/lib/prims_pure.ml)
+   (implements lisp/lib/effect.ml lisp/lib/eval.ml pure/prims_pure.ml)
    (status implemented)
    (verify
     (build "dune build lisp image")
@@ -1591,7 +1591,7 @@
   (subsection math
    (doc "Numeric tower beyond the four operations: expt/sqrt/trig/log, numeric predicates, integer division aliases, seeded RNG")
    (status implemented)
-   (implements image/lib/prims_pure.ml image/lib/primitives.ml image/lib/session.ml lisp/lib/effect.ml image/test/primitives_test.ml lisp/test/effect_test.ml)
+   (implements pure/prims_pure.ml image/lib/primitives.ml image/lib/session.ml lisp/lib/effect.ml image/test/primitives_test.ml lisp/test/effect_test.ml)
    (verify
     (build "dune build lisp image")
     (test "expt/sqrt/log/exp/sin/cos/tan round-trip on known values (float results)")
@@ -1610,9 +1610,9 @@
          hacks or OCaml. This subsection is the book authority for
          closing that gap. Classified ADDITIVE under core-freeze.
 
-         NEW PRIMS (all pure, all in image/lib/prims_pure.ml,
-         registered in primitives.ml, added to the Pure list in
-         lisp/lib/effect.ml; note the Pure list today omits "/"
+         NEW PRIMS (all pure, all in pure/prims_pure.ml (the shared
+         pure library), registered in primitives.ml, added to the
+         Pure list in lisp/lib/effect.ml; note the Pure list today omits "/"
          even though div is listed — fix that omission in the same
          pass so alias pairs (div /) and (quotient remainder)
          stay classified identically)
@@ -1691,7 +1691,7 @@
   (subsection std-library
    (doc "Blessed std list/string helpers: freeze surface for packages and agents")
    (status implemented)
-   (implements lisp/lib/eval.ml image/lib/prims_pure.ml libs/std/lib.pp lisp/test/conformance_test.ml)
+   (implements lisp/lib/eval.ml pure/prims_pure.ml libs/std/lib.pp lisp/test/conformance_test.ml)
    (verify
     (test "conformance covers list/map filter foldl foldr")
     (test "symbol and string prims present")

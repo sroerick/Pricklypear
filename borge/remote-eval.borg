@@ -124,7 +124,7 @@
   (subsection client
    (doc "remote/ package: pp-remote binary = pricklypear_lisp + a proxy prim rim + lazy env. NB: this is NOT the browser client/ package (structural-editing.borg client-eval, js_of_ocaml interp.js); remote-eval proxies DB prims over HTTP where client-eval leaves them unbound.")
    (status planned)
-   (implements remote/lib/proxy_rim.ml remote/bin/main.ml)
+   (implements remote/lib/proxy_rim.ml remote/lib/remote.ml remote/lib/http_transport.ml remote/bin/main.ml)
    (verify
     (test "pp-remote boots, connects to an image URL, and evaluates (+ 1 2) with zero prim calls (pure compute stays local)")
     (test "a prim call in client eval proxies to /api/prim and the result binds locally for subsequent pure use")

@@ -121,7 +121,7 @@
   (subsection agent-loop
    (doc "The minimal agent turn loop and tool registry")
    (status partial)
-   (implements agent/lib/loop.ml agent/lib/provider.ml agent/lib/tools.ml)
+   (implements agent/lib/loop.ml agent/lib/provider.ml agent/lib/tools.ml common/lib/llm_codec.ml)
    (verify
     (test "a mock provider emitting one tool call round-trips: tool executes, result message is appended, loop makes exactly one follow-up model call")
     (test "budget: the loop stops after a configurable max turns and reports rather than spinning")
@@ -243,7 +243,7 @@
   (subsection surfaces
    (doc "Interaction surfaces: HTML primary, line REPL secondary. The chat/agent surface is NOPALES-AUTHORED htmx fragments + multipart streaming; the stream is emitted by OCaml, the fragments by Nopales.")
    (status planned)
-   (implements agent/lib/http_ui.ml agent/lib/runtime.ml)
+   (implements agent/lib/http_ui.ml agent/lib/runtime.ml agent/lib/assets.ml agent/lib/surface.ml agent/lib/libs_source.ml)
    (verify
     (smoke "agent boots, binds 127.0.0.1, serves the chat page, and streams one assistant reply as multipart/mixed htmx fragments routed into the live bubble")
     (smoke "line REPL mode (-p / no-tty) completes one full turn from piped stdin")

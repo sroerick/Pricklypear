@@ -8,7 +8,7 @@
 
   (subsection mime-framing
    (doc "One route response streams N MIME parts; each part is one htmx swap")
-   (implements image/lib/http_core.ml image/lib/prims_pure.ml image/lib/primitives.ml lisp/lib/eval.ml)
+   (implements image/lib/http_core.ml pure/prims_pure.ml image/lib/primitives.ml lisp/lib/eval.ml)
    (status implemented)
    (verify
     (build "dune build image")
@@ -150,7 +150,7 @@
 
   (subsection live-streaming
    (doc "Token-level streaming: LLM deltas and long-running evals appear incrementally in the transcript, not as one final part")
-   (implements image/lib/http_core.ml image/lib/prims_pure.ml libs/repl/lib.pp libs/ai/lib.pp)
+   (implements image/lib/http_core.ml pure/prims_pure.ml libs/repl/lib.pp libs/ai/lib.pp)
    (status planned)
    (verify
     (build "dune build image")
@@ -160,6 +160,24 @@
     (smoke "peer disconnect mid-stream is a non-event (http-robustness invariant 1)"))
    (details
     (doc (|
+         RECONCILE (BORGE-1786263466): LLM live-streaming is SHIPPED
+         via a DEDICATED OCaml route — /repl-v2/llm (repl_llm in
+         image/lib/http_agent.ml) — which reuses the proven /api/agent
+         SSE queue/drain pattern, NOT the general Nopales
+         (multipart-stream (lambda (emit) ...)) mechanism spec'd
+         below. Rationale (recorded choice): the /api/agent SSE
+         queue/drain is battle-tested and lower risk; calling Nopales
+         emit callbacks from OCaml on_event fibers needs
+         effects/run_lwt coordination that cannot be runtime-verified
+         without a live LLM in one session. Eval/slash stay on the
+         Nopales /repl-v2/send route (eager); LLM input is routed
+         client-side to /repl-v2/llm via an htmx configRequest hook.
+         The GENERAL (multipart-stream ...) mechanism below remains
+         FUTURE WORK — this stanza stays planned but must describe
+         reality until then.
+
+         (The shipped shape below is the still-planned general
+         mechanism, superseded for LLM streaming by /repl-v2/llm.)
          Current repl-v2 is EAGER: the handler computes all parts,
          then multipart frames them. For LLM answers this means the
          user waits for the full completion before seeing anything.
