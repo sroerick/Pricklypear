@@ -1404,21 +1404,32 @@
            blob. matched-field lets the UI badge title vs body vs
            header hits.
 
-         SEARCH STRATEGY (v1):
-           Postgres substring via the EXISTING find-text prim
-           (fields->>f ILIKE '%needle%', crud.ml) over title, tags,
-           and the outline payload — once per field, merged +
-           deduped by slug in Nopales, capped (≤20 rows). No new
-           OCaml prim for v1: three find-text calls are constant
-           work regardless of garden size; garden-wide Nopales
-           enumeration is FORBIDDEN on this path (BORGE-1785603757:
-           ~3k notes × eager enumeration blew the 100k step budget).
-           Ranking v1: exact-slug first, title hits, then header,
-           then body/outline. Fuzzy/typo tolerance (pg_trgm) and
+         SEARCH STRATEGY (v1 — tree-backed):
+           Notes are tree-backed (notes/tree/enabled? #t), so the
+           search runs over tree_nodes, NOT data_rows. It uses the
+           tree/search-text prim (BORGE-1785605474): one Postgres
+           ILIKE query over tree_nodes scoped to the garden root
+           (path <@ $prefix::ltree) for note rows (title/tags/slug)
+           plus a second query for heading rows (title/body with a
+           ›-joined header_path breadcrumb), merged + deduped by
+           slug in OCaml, capped (≤20 rows). Empty/no-match queries
+           return (); garden-wide Nopales enumeration is FORBIDDEN
+           on this path (BORGE-1785603757: ~3k notes × eager
+           enumeration blew the 100k step budget) — filtering
+           happens in Postgres. Prim signature:
+             (tree/search-text needle [limit])         — garden root
+             (tree/search-text prefix needle [limit])  — explicit path
+           Note: data_rows find-text (fields->>f ILIKE, crud.ml) is
+           NOT used — it would miss the tree garden. Doc-level rows
+           carry empty node_id; header rows include header_path +
+           node_id (refile to a header parents under that node).
+           Ranking v1 in OCaml: exact-slug first, title hits, then
+           header, then body. Fuzzy/typo tolerance (pg_trgm) and
            ranked FTS (tsvector, cf. dabar.search-fts) are later
            upgrades that swap the query behind the SAME partial —
-           the modal does not change. Track under .borge-bugs when
-           demanded by use; not spec'd here.
+           the modal does not change (the prim signature is the
+           seam). Track under .borge-bugs when demanded by use; not
+           spec'd here.
 
          NON-GOALS (v1):
            - No load-the-whole-tree-into-JS client search
