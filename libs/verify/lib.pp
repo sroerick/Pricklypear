@@ -4,22 +4,25 @@
 (define verify/check
   (lambda
     (name pred)
+    "Return a PASS or FAIL result for pred named name."
     (if pred (verify/pass name) (verify/fail name))))
 
 (define verify/count-fails
   (lambda
     (rs)
+    "Count the FAIL results in rs."
     (list/foldl
       (lambda (n r) (if (verify/failed? r) (+ n 1) n))
       0
       rs)))
 
 (define verify/fail
-  (lambda (name) (list "FAIL" name)))
+  (lambda (name) "Return a FAIL result for name." (list "FAIL" name)))
 
 (define verify/fail-names
   (lambda
     (rs)
+    "Collect the names of the FAIL results in rs."
     (list/foldl
       (lambda
         (acc r)
@@ -28,14 +31,15 @@
       rs)))
 
 (define verify/failed?
-  (lambda (r) (string-eq (as-str (car r)) "FAIL")))
+  (lambda (r) "Whether a result is a FAIL." (string-eq (as-str (car r)) "FAIL")))
 
 (define verify/pass
-  (lambda (name) (list "PASS" name)))
+  (lambda (name) "Return a PASS result for name." (list "PASS" name)))
 
 (define verify/run-suite
   (lambda
     (name)
+    "Run the named verify suite, or a FAIL for unknown suites."
     (cond
       ((string-eq name "extract-links")
         (verify/suite-extract-links))
@@ -64,6 +68,7 @@
 (define verify/suite-budget-parse
   (lambda
     ()
+    "Check roam link parsing scales on 500 links and stays under budget."
     (let
       ((body
         (list/foldl
@@ -82,6 +87,7 @@
 (define verify/suite-extra-actions-contract
   (lambda
     ()
+    "Check outline/extra-actions stays extract-only."
     (list
       (verify/check
         "extra-actions is extract-only"
@@ -95,6 +101,7 @@
 (define verify/suite-extract-links
   (lambda
     ()
+    "Check link extraction and rendering behavior."
     (list
       (verify/check
         "extract-links three"
@@ -125,6 +132,7 @@
 (define verify/suite-list-hof
   (lambda
     ()
+    "Check list higher-order functions behave correctly."
     (list
       (verify/check
         "list/map"
@@ -154,6 +162,7 @@
 (define verify/suite-outline-render
   (lambda
     ()
+    "Check outline HTML rendering of many nodes and budget floor."
     (let
       ((kids
         (list/map
@@ -189,6 +198,7 @@
 (define verify/suite-upsert-reindex
   (lambda
     ()
+    "Check doc upsert reindexes links and stays under budget."
     (let
       ((slug "verify-lib-upsert-tmp")
         (pad
@@ -249,6 +259,7 @@
 (define verify/suite-function-doc
   (lambda
     ()
+    "Check docstrings exist for core library functions."
     (seq
       (load-library "calendar")
       (load-library "contacts")
@@ -310,6 +321,7 @@
 (define verify/summary-of
   (lambda
     (rs)
+    "Summarize a result list as an all-passed or FAILED string."
     (let
       ((nfails (verify/count-fails rs)))
       (if

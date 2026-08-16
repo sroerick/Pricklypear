@@ -17,20 +17,21 @@
       (outline/node* "c2" "C2" "" "" (list)))))
 
 (define add1
-  (lambda (x) (+ x 1)))
+  (lambda (x) "Add 1 to x." (+ x 1)))
 
 (define add1-phase
-  (lambda (x) (+ x 1)))
+  (lambda (x) "Add 1 to x." (+ x 1)))
 
 (define apropos
   (lambda
     (pat)
+    "Return bindings whose name contains pat."
     (list/filter
       (lambda (n) (string-contains? (as-str n) (as-str pat)))
       (list-bindings))))
 
 (define blank?
-  (lambda (s) (if (null? s) #t (string-eq (as-str s) ""))))
+  (lambda (s) "Whether the string s is empty." (if (null? s) #t (string-eq (as-str s) ""))))
 
 (define deftwo
   (__macro__
@@ -133,6 +134,7 @@
 (define dict-set*
   (lambda
     (json kvs)
+    "Set multiple key/value pairs on a JSON dict string."
     (if
       (null? kvs)
       json
@@ -449,6 +451,7 @@
 (define expand-let*
   (lambda
     (bindings body)
+    "Expand a let* into nested lets."
     (list/foldl
       (lambda
         (inner binding)
@@ -459,11 +462,13 @@
 (define explode
   (lambda
     (src)
+    "Explode source text into formatted s-expression lines."
     (explode-format (explode-ast (read-string src) 0))))
 
 (define explode-args
   (lambda
     (args depth)
+    "Explode an argument list into lines at the given depth."
     (if
       (null? args)
       (list)
@@ -484,6 +489,7 @@
 (define explode-ast
   (lambda
     (ast depth)
+    "Explode an AST node into indented (depth mark text) lines."
     (if
       (null? ast)
       (list (list depth "(" "()") (list depth ")" ""))
@@ -498,6 +504,7 @@
 (define explode-format
   (lambda
     (pairs)
+    "Format exploded (depth mark text) lines as pipe-delimited text."
     (if
       (null? pairs)
       ""
@@ -513,16 +520,16 @@
           (explode-format (cdr pairs)))))))
 
 (define factorial
-  (lambda (n) (if (<= n 1) 1 (* n (factorial (- n 1))))))
+  (lambda (n) "Return n! recursively." (if (<= n 1) 1 (* n (factorial (- n 1))))))
 
 (define filter
-  (lambda (p xs) (list/filter p xs)))
+  (lambda (p xs) "Keep the elements of xs satisfying pred p." (list/filter p xs)))
 
 (define foldl
-  (lambda (f init xs) (list/foldl f init xs)))
+  (lambda (f init xs) "Left fold of f over xs with initial init." (list/foldl f init xs)))
 
 (define foldr
-  (lambda (f init xs) (list/foldr f init xs)))
+  (lambda (f init xs) "Right fold of f over xs with initial init." (list/foldr f init xs)))
 
 (define foo
   (__macro__ (x) x))
@@ -533,17 +540,20 @@
 (define hi-page
   (lambda
     ()
+    "Render a demo hello-world page."
     (render-html
       "<h1>Hello</h1><p>Your first Pricklypear page. Edit me at /edit/hi-page.</p>")))
 
 (define implode
   (lambda
     (text)
+    "Reassemble exploded pipe-delimited text into s-expressions."
     (implode-simple (string-split text "\n") "")))
 
 (define implode-close-all
   (lambda
     (fn-stack)
+    "Close every open paren count in the stack."
     (if
       (null? fn-stack)
       ""
@@ -552,6 +562,7 @@
 (define implode-close-to
   (lambda
     (fn-stack depth)
+    "Close parens down to the given depth, returning text and remaining stack."
     (if
       (null? fn-stack)
       (list "" fn-stack)
@@ -565,6 +576,7 @@
 (define implode-parse-line
   (lambda
     (line)
+    "Parse one exploded line into (depth marker token)."
     (let
       ((parts (string-split line "|")))
       (if
@@ -583,6 +595,7 @@
 (define implode-simple
   (lambda
     (lines result)
+    "Reassemble exploded lines into s-expression source text."
     (if
       (null? lines)
       result
@@ -611,7 +624,7 @@
                   (implode-simple rest (string-append result " " token)))))))))))
 
 (define inc-smoke
-  (lambda (x) (+ x 1)))
+  (lambda (x) "Increment x; smoke test." (+ x 1)))
 
 (define let*
   (__macro__
@@ -679,10 +692,10 @@
   nth)
 
 (define map
-  (lambda (f xs) (list/map f xs)))
+  (lambda (f xs) "Map f over xs." (list/map f xs)))
 
 (define mywhen-test-1
-  (lambda (t b) (if t b ())))
+  (lambda (t b) "If t then b else ()." (if t b ())))
 
 (define pg-outline
   (outline/node*
@@ -1179,14 +1192,15 @@
             (list)))))))
 
 (define plan
-  (lambda (body) (plan/set! body)))
+  (lambda (body) "Set the current user's plan." (plan/set! body)))
 
 (define plan-clear
-  (lambda () (plan/clear!)))
+  (lambda () "Clear the current user's plan." (plan/clear!)))
 
 (define plan-list
   (lambda
     ()
+    "Return non-empty (username . body) plan pairs."
     (list/filter
       (lambda (pair) (not (blank? (cdr pair))))
       (list/map
@@ -1198,7 +1212,7 @@
         (plan/all-rows)))))
 
 (define plan-of
-  (lambda (user) (plan/of user)))
+  (lambda (user) "Get another user's plan." (plan/of user)))
 
 (define pp-test-let*
   (__macro__
@@ -1212,7 +1226,7 @@
           (pp-test-let* (unquote (cdr bindings)) (unquote body)))))))
 
 (define prefix-of
-  (lambda (name) (car (string-split (as-str name) "/"))))
+  (lambda (name) "Return the part of name before the first slash." (car (string-split (as-str name) "/"))))
 
 (define probe
   (__macro__ (x) (as-str x)))
@@ -1237,6 +1251,7 @@
 (define show
   (lambda
     (tree)
+    "Summarize a tree as node ids and child ids."
     (list/map
       (lambda
         (n)
@@ -1251,6 +1266,7 @@
 (define string-find-pos
   (lambda
     (s delim start dlen)
+    "Find delim in s at or after start, or -1 when absent."
     (if
       (>= start (- (string-length s) (- dlen 1)))
       -1
@@ -1262,6 +1278,7 @@
 (define string-split
   (lambda
     (s delim)
+    "Split s on delim into a list of substrings."
     (let
       ((dlen (string-length delim)) (slen (string-length s)))
       (if
