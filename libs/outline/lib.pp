@@ -4,6 +4,7 @@
 (define outline/action-btn
   (lambda
     (slug nid op label class show-archived)
+    "Render a node-operation button with an htmx post."
     (html/tag
       "button"
       (html/attrs
@@ -28,6 +29,7 @@
 (define outline/actions
   (lambda
     (slug nid todo show-archived)
+    "Render the per-node actions dropdown menu."
     (html/tag
       "details"
       (html/attr "class" "ol-actions")
@@ -130,28 +132,31 @@
 (define outline/add-child
   (lambda
     (n child)
+    "Prepend child to node n's kids list."
     (outline/set-kids n (cons child (outline/kids n)))))
 
 (define outline/add-child-by-id
   (lambda
     (tree id child)
+    "Add child to the node with id, returning a new tree."
     (outline/update
       tree
       id
       (lambda (n) (outline/add-child n child)))))
 
 (define outline/archive
-  (lambda (n) (outline/set-todo n "ARCHIVED")))
+  (lambda (n) "Mark a node as ARCHIVED." (outline/set-todo n "ARCHIVED")))
 
 (define outline/archived?
-  (lambda (s) (string-eq (as-str s) "ARCHIVED")))
+  (lambda (s) "True when the todo string is ARCHIVED." (string-eq (as-str s) "ARCHIVED")))
 
 (define outline/body
-  (lambda (n) (car (cdr (cdr n)))))
+  (lambda (n) "Return the body string of a node." (car (cdr (cdr n)))))
 
 (define outline/cycle-todo
   (lambda
     (n)
+    "Advance a node's todo state, leaving archived untouched."
     (if
       (outline/archived? (outline/todo n))
       n
@@ -162,6 +167,7 @@
 (define outline/decode
   (lambda
     (s)
+    "Parse a JSON outline string into a tree, defaulting on error."
     (if
       (null? s)
       (outline/node "root" "Untitled")
@@ -178,6 +184,7 @@
 (define outline/delete
   (lambda
     (tree id)
+    "Return a copy of tree with the node id removed."
     (if
       (string-eq (outline/id tree) id)
       tree
@@ -188,6 +195,7 @@
 (define outline/delete-from-kids
   (lambda
     (kids id)
+    "Remove the node id from a kids list, recursing into children."
     (if
       (null? kids)
       (list)
@@ -201,6 +209,7 @@
 (define outline/demote
   (lambda
     (tree id)
+    "Return a copy of tree with node id demoted one level."
     (let
       ((tid (as-str id)))
       (if
@@ -213,6 +222,7 @@
 (define outline/demote-kids
   (lambda
     (kids id)
+    "Demote node id within a kids list, shifting it under its sibling."
     (if
       (null? kids)
       (list)
@@ -237,6 +247,7 @@
 (define outline/detach
   (lambda
     (tree id)
+    "Return the detached node and the tree without it; () when top-level."
     (let
       ((tid (as-str id)))
       (if
@@ -254,6 +265,7 @@
 (define outline/detach-direct
   (lambda
     (n id)
+    "Detach a direct child id from node n; () when absent."
     (let
       ((pair (outline/take-from-list (outline/kids n) id)))
       (if
@@ -264,6 +276,7 @@
 (define outline/detach-in-kids
   (lambda
     (kids id)
+    "Detach node id from a kids list, recursing into children."
     (if
       (null? kids)
       ()
@@ -283,14 +296,15 @@
             (list (car sub) (cons (car (cdr sub)) (cdr kids)))))))))
 
 (define outline/encode
-  (lambda (root) (json-emit root)))
+  (lambda (root) "Serialise a tree to a JSON string." (json-emit root)))
 
 (define outline/extra-actions
-  (lambda (slug nid) (notes/refile/extract-form slug nid)))
+  (lambda (slug nid) "Render the extra refile actions for a node." (notes/refile/extract-form slug nid)))
 
 (define outline/find
   (lambda
     (tree id)
+    "Find the node with id in tree; () when absent."
     (if
       (string-eq (outline/id tree) id)
       tree
@@ -299,6 +313,7 @@
 (define outline/find-in-kids
   (lambda
     (kids id)
+    "Find node id within a kids list; () when absent."
     (if
       (null? kids)
       ()
@@ -312,6 +327,7 @@
 (define outline/fresh-id
   (lambda
     ()
+    "Generate a cheap unique node id from the empty list length."
     (string-append
       "n"
       (as-str (string-length (as-str (list)))))))
@@ -319,6 +335,7 @@
 (define outline/html
   (lambda
     (slug root show-archived)
+    "Render the full outline HTML with per-node actions."
     (html/div
       (html/attr "id" "outline")
       (outline/html-node slug root show-archived #t))))
@@ -326,12 +343,14 @@
 (define outline/html-lite
   (lambda
     (slug root show-archived)
+    "Render the outline HTML without per-node actions."
     (html/div
       (html/attr "id" "outline")
       (outline/html-node slug root show-archived #f))))
 
 (define outline/html-node
   (lambda (slug n show-archived with-actions)
+    "Render one node and its children recursively."
     (let ((nid (outline/id n))
           (todo (outline/todo n))
           (body (outline/body n))
@@ -392,11 +411,12 @@
                     kids))))))))))
 
 (define outline/id
-  (lambda (n) (car n)))
+  (lambda (n) "Return the id of a node." (car n)))
 
 (define outline/insert-sib-list
   (lambda
     (kids id new-node)
+    "Insert new-node after the sibling with id in a kids list."
     (if
       (null? kids)
       (list)
@@ -410,11 +430,13 @@
 (define outline/insert-sibling
   (lambda
     (tree id new-node)
+    "Return a copy of tree with new-node inserted after node id."
     (outline/insert-sibling-kids tree id new-node)))
 
 (define outline/insert-sibling-kids
   (lambda
     (tree id new-node)
+    "Append new-node after node id, or append when tree itself matches."
     (if
       (string-eq (outline/id tree) id)
       (outline/set-kids
@@ -428,14 +450,15 @@
           new-node)))))
 
 (define outline/kids
-  (lambda (n) (car (cdr (cdr (cdr (cdr n)))))))
+  (lambda (n) "Return the kids list of a node." (car (cdr (cdr (cdr (cdr n)))))))
 
 (define outline/move-down
-  (lambda (tree id) (outline/move-down-kids tree id)))
+  (lambda (tree id) "Move node id down one position in its sibling list." (outline/move-down-kids tree id)))
 
 (define outline/move-down-kids
   (lambda
     (tree id)
+    "Move a child down among its siblings in the tree."
     (if
       (string-eq (outline/id tree) (as-str id))
       tree
@@ -444,11 +467,12 @@
         (outline/swap-next (outline/kids tree) (as-str id))))))
 
 (define outline/move-up
-  (lambda (tree id) (outline/move-up-kids tree id)))
+  (lambda (tree id) "Move node id up one position in its sibling list." (outline/move-up-kids tree id)))
 
 (define outline/move-up-kids
   (lambda
     (tree id)
+    "Move a child up among its siblings in the tree."
     (if
       (string-eq (outline/id tree) (as-str id))
       tree
@@ -459,11 +483,13 @@
 (define outline/node
   (lambda
     (id title)
+    "Build an empty outline node with the given id and title."
     (list (as-str id) (as-str title) "" "" (list))))
 
 (define outline/node*
   (lambda
     (id title body todo kids)
+    "Build a full outline node with all fields."
     (list
       (as-str id)
       (as-str title)
@@ -474,6 +500,7 @@
 (define outline/promote
   (lambda
     (tree id)
+    "Return a copy of tree with node id promoted one level."
     (let
       ((tid (as-str id)))
       (if
@@ -486,6 +513,7 @@
 (define outline/promote-kids
   (lambda
     (kids id)
+    "Pull node id up past its siblings across a kids list."
     (outline/promote-lift
       (list/map (lambda (k) (outline/promote k id)) kids)
       id)))
@@ -493,6 +521,7 @@
 (define outline/promote-lift
   (lambda
     (kids id)
+    "Lift the node id out of each sibling's kids, placing it earlier."
     (if
       (null? kids)
       (list)
@@ -505,6 +534,7 @@
 
 (define outline/render-body
   (lambda (body)
+    "Render a node body block, preferring bible then roam renderers."
     (let
       ((br (bible/render-body body)))
       (if (null? br) (roam/render-body body) br))))
@@ -512,6 +542,7 @@
 (define outline/set-body
   (lambda
     (n body)
+    "Return a copy of node n with a new body."
     (outline/node*
       (outline/id n)
       (outline/title n)
@@ -522,6 +553,7 @@
 (define outline/set-kids
   (lambda
     (n kids)
+    "Return a copy of node n with a new kids list."
     (outline/node*
       (outline/id n)
       (outline/title n)
@@ -532,6 +564,7 @@
 (define outline/set-title
   (lambda
     (n title)
+    "Return a copy of node n with a new title."
     (outline/node*
       (outline/id n)
       title
@@ -542,6 +575,7 @@
 (define outline/set-todo
   (lambda
     (n todo)
+    "Return a copy of node n with a new todo state."
     (outline/node*
       (outline/id n)
       (outline/title n)
@@ -552,6 +586,7 @@
 (define outline/swap-next
   (lambda
     (kids id)
+    "Swap node id downward with its next sibling in a kids list."
     (if
       (null? kids)
       (list)
@@ -570,6 +605,7 @@
 (define outline/swap-prev
   (lambda
     (kids id)
+    "Swap node id upward with its previous sibling in a kids list."
     (if
       (null? kids)
       (list)
@@ -588,6 +624,7 @@
 (define outline/take-from-list
   (lambda
     (kids id)
+    "Split off node id from a kids list, returning (node rest)."
     (if
       (null? kids)
       ()
@@ -602,14 +639,15 @@
             (list (car rest) (cons (car kids) (car (cdr rest))))))))))
 
 (define outline/title
-  (lambda (n) (car (cdr n))))
+  (lambda (n) "Return the title of a node." (car (cdr n))))
 
 (define outline/todo
-  (lambda (n) (car (cdr (cdr (cdr n))))))
+  (lambda (n) "Return the todo state of a node." (car (cdr (cdr (cdr n))))))
 
 (define outline/todo-badge
   (lambda
     (todo)
+    "Render the todo state badge for a node, or empty when none."
     (let
       ((t (as-str todo)))
       (if
@@ -622,11 +660,13 @@
 (define outline/todo-next
   (lambda
     (cur)
+    "Return the next todo state after cur in the state list."
     (outline/todo-next-in outline/todo-states (as-str cur))))
 
 (define outline/todo-next-in
   (lambda
     (xs cur)
+    "Find the state following cur in the given state list."
     (if
       (null? xs)
       "TODO"
@@ -641,6 +681,7 @@
 (define outline/todo-open?
   (lambda
     (s)
+    "True when a todo state is an active (not closed) state."
     (let
       ((t (as-str s)))
       (if
@@ -658,11 +699,12 @@
   (list "" "TODO" "DONE"))
 
 (define outline/todos
-  (lambda (tree) (outline/todos-acc tree (list))))
+  (lambda (tree) "Collect all non-empty todo entries in a tree." (outline/todos-acc tree (list))))
 
 (define outline/todos-acc
   (lambda
     (n acc)
+    "Accumulate todo entries while walking the tree."
     (let
       ((todo (as-str (outline/todo n))))
       (let
@@ -677,11 +719,12 @@
           (outline/kids n))))))
 
 (define outline/unarchive
-  (lambda (n) (outline/set-todo n "TODO")))
+  (lambda (n) "Un-archive a node, resetting its todo to TODO." (outline/set-todo n "TODO")))
 
 (define outline/update
   (lambda
     (tree id f)
+    "Return a copy of tree with f applied to the node id."
     (if
       (string-eq (outline/id tree) id)
       (f tree)
@@ -692,6 +735,7 @@
 (define outline/update-kids
   (lambda
     (kids id f)
+    "Apply f to node id throughout a kids list."
     (if
       (null? kids)
       (list)
@@ -702,5 +746,6 @@
 (define outline/valid?
   (lambda
     (n)
+    "True when n is a proper 5-field outline node."
     (if (null? n) () (if (pair? n) (= (count n) 5) ()))))
 

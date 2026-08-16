@@ -4,6 +4,7 @@
 (define notes/capture
   (lambda
     (title body)
+    "Capture title/body as a node in the Inbox tree."
     (let
       ((prev (notes/ensure-inbox)))
       (let
@@ -30,6 +31,7 @@
 (define notes/capture/add
   (lambda
     (title body)
+    "Add a captured node to the Inbox document tree."
     (let
       ((prev (notes/doc/ensure-inbox)))
       (let
@@ -56,6 +58,7 @@
 (define notes/capture/form
   (lambda
     ()
+    "Render the capture form for posting new nodes."
     (html/form
       "POST"
       "/notes"
@@ -105,6 +108,7 @@
 (define notes/capture/handle
   (lambda
     ()
+    "Handle a capture POST, saving output or showing status."
     (let
       ((title (request-param "title"))
         (body (request-param "body")))
@@ -128,6 +132,7 @@
 (define notes/capture/nav
   (lambda
     ()
+    "Render the drop-down capture form used in site navigation."
     (html/tag
       "details"
       (html/attrs
@@ -184,6 +189,7 @@
 (define notes/capture/node-id
   (lambda
     (tree)
+    "Build a unique-ish node id from tree size and encoded length."
     (string-append
       "c"
       (as-str (count (outline/kids tree)))
@@ -193,6 +199,7 @@
 (define notes/capture/page
   (lambda
     ()
+    "Serve the capture page, handling POSTs."
     (if
       (string-eq (request-method) "POST")
       (notes/capture/handle)
@@ -202,11 +209,13 @@
 (define notes/capture/status
   (lambda
     (ok msg)
+    "Render the ok/err capture status line."
     (html/p* (html/attr "class" (if ok "ok" "err")) msg)))
 
 (define notes/capture/title
   (lambda
     (title body)
+    "Derive a node title from title, else the body, truncated."
     (let
       ((t (string-trim (as-str title))))
       (if

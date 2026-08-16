@@ -19,6 +19,7 @@
 (define tree/as-int
   (lambda
     (x dft)
+    "Parse x as an int, clamping negatives to 0; dft when blank/invalid."
     (if
       (tree/blank? x)
       dft
@@ -29,6 +30,7 @@
 (define tree/badge
   (lambda
     (n)
+    "Render a child-count badge span for a node, or empty when leaf."
     (let
       ((c (tree/child-count n)))
       (if
@@ -39,11 +41,12 @@
           (html/text (string-append " (" (as-str c) ")")))))))
 
 (define tree/blank?
-  (lambda (x) (or (null? x) (string-eq (as-str x) ""))))
+  (lambda (x) "True when x is null or an empty string." (or (null? x) (string-eq (as-str x) ""))))
 
 (define tree/breadcrumb
   (lambda
     (tree focus-id slug folders-only?)
+    "Render a navigable breadcrumb to a focus node."
     (let
       ((path (tree/find-path tree (as-str focus-id))))
       (if
@@ -56,6 +59,7 @@
 (define tree/breadcrumb-parts
   (lambda
     (path slug folders-only? first?)
+    "Recursively render breadcrumb links over a node path."
     (if
       (null? path)
       ""
@@ -77,14 +81,15 @@
           (tree/breadcrumb-parts rest slug folders-only? #f))))))
 
 (define tree/child-count
-  (lambda (n) (if (null? n) 0 (count (outline/kids n)))))
+  (lambda (n) "Return the number of child nodes of n." (if (null? n) 0 (count (outline/kids n)))))
 
 (define tree/default-depth
-  (lambda () (tree/as-int (request-param "depth") 2)))
+  (lambda () "Return the requested tree depth param, defaulting to 2." (tree/as-int (request-param "depth") 2)))
 
 (define tree/default-slug
   (lambda
     ()
+    "Return the requested slug param, defaulting to scripture_concepts."
     (let
       ((s (request-param "slug")))
       (if (tree/blank? s) "scripture_concepts" (as-str s)))))
@@ -92,11 +97,13 @@
 (define tree/find-path
   (lambda
     (tree target)
+    "Return the list of nodes from root to the target node."
     (tree/find-path-acc tree (as-str target) (list))))
 
 (define tree/find-path-acc
   (lambda
     (node target acc)
+    "Accumulator helper that walks a node looking for target id."
     (if
       (null? node)
       ()
@@ -110,6 +117,7 @@
 (define tree/find-path-in-kids
   (lambda
     (kids target acc)
+    "Search a kids list for target, returning its path or ()."
     (if
       (null? kids)
       ()
@@ -123,16 +131,19 @@
 (define tree/folders-only-param
   (lambda
     ()
+    "Return whether the folders-only query param is set."
     (tree/truthy? (request-param "folders-only"))))
 
 (define tree/has-children?
   (lambda
     (n)
+    "True when node n has at least one child."
     (if (null? n) #f (not (null? (outline/kids n))))))
 
 (define tree/leaf-row
   (lambda
     (slug n folders-only?)
+    "Render a leaf node row, or empty when folders-only."
     (if
       folders-only?
       ""
@@ -149,6 +160,7 @@
 (define tree/load-doc
   (lambda
     (slug)
+    "Load a document's outline by slug, or () when missing."
     (let
       ((doc (notes/doc/get (as-str slug))))
       (if (null? doc) () (notes/doc/outline doc)))))
@@ -156,6 +168,7 @@
 (define tree/open-row
   (lambda
     (slug n depth folders-only?)
+    "Render an expanded tree node with a child list."
     (html/tag
       "li"
       (html/attrs
@@ -181,11 +194,12 @@
               slug)))))))
 
 (define tree/page
-  (lambda () (html/page (list (tree/page-body)))))
+  (lambda () "Render the full tree browser page." (html/page (list (tree/page-body)))))
 
 (define tree/page-body
   (lambda
     ()
+    "Render the tree page body from current request params."
     (let
       ((slug (tree/default-slug))
         (rid (tree/root-param))
@@ -204,16 +218,18 @@
 (define tree/page-url
   (lambda
     (slug root depth folders-only?)
+    "Build a /tree URL for the given navigation args."
     (string-append
       "/tree?"
       (tree/qs slug root depth folders-only?))))
 
 (define tree/partial
-  (lambda () (html/page (list (tree/partial-body)))))
+  (lambda () "Render the lazy-load tree partial page." (html/page (list (tree/partial-body)))))
 
 (define tree/partial-body
   (lambda
     ()
+    "Render a single focus node for lazy partial load."
     (let
       ((slug (tree/default-slug))
         (rid (tree/root-param))
@@ -235,6 +251,7 @@
 (define tree/partial-url
   (lambda
     (slug root depth folders-only?)
+    "Build a /partials/tree URL for the given navigation args."
     (string-append
       "/partials/tree?"
       (tree/qs slug root depth folders-only?))))
@@ -242,6 +259,7 @@
 (define tree/qs
   (lambda
     (slug root depth folders-only?)
+    "Build the tree query string from navigation args."
     (string-append
       "slug="
       (as-str slug)
@@ -254,6 +272,7 @@
 (define tree/render
   (lambda
     (root-id depth folders-only?)
+    "Render the scripture_concepts document tree directly."
     (tree/render-doc
       "scripture_concepts"
       root-id
@@ -263,6 +282,7 @@
 (define tree/render-doc
   (lambda
     (slug root-id depth folders-only?)
+    "Render a whole document tree for slug, focused on root-id."
     (let
       ((rid (if (tree/blank? root-id) "root" (as-str root-id)))
         (d (if (null? depth) 2 (if (< depth 0) 0 depth)))
@@ -296,6 +316,7 @@
 (define tree/render-kids
   (lambda
     (kids depth folders-only? slug)
+    "Concatenate rendered rows for every node in kids."
     (if
       (null? kids)
       ""
@@ -306,6 +327,7 @@
 (define tree/render-node
   (lambda
     (n depth folders-only? slug)
+    "Render one node: leaf, open, or stub depending on depth."
     (if
       (null? n)
       ""
@@ -320,6 +342,7 @@
 (define tree/root-param
   (lambda
     ()
+    "Return the root/node-id param, defaulting to root."
     (let
       ((r (request-param "root")))
       (if
@@ -332,6 +355,7 @@
 (define tree/stub
   (lambda
     (slug n depth folders-only?)
+    "Render a collapsed stub that lazy-loads its children."
     (let
       ((url
         (tree/partial-url
@@ -366,6 +390,7 @@
 (define tree/style
   (lambda
     ()
+    "Return the CSS style tag for the tree browser."
     (html/tag
       "style"
       ""
@@ -390,6 +415,7 @@
 (define tree/title-link
   (lambda
     (slug n folders-only?)
+    "Render a link to a node's page using its title."
     (html/tag
       "a"
       (html/attrs
@@ -403,6 +429,7 @@
 (define tree/toolbar
   (lambda
     (slug root depth folders-only?)
+    "Render the tree navigation toolbar."
     (let
       ((flip (not folders-only?)))
       (html/div
@@ -432,6 +459,7 @@
 (define tree/truthy?
   (lambda
     (x)
+    "True when x is a truthy value: 1, true, yes, or on."
     (if
       (tree/blank? x)
       #f

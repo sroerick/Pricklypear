@@ -67,4 +67,5 @@
 (define theme/extra
   (lambda
     ()
+    "No-op structural theme hook; returns an empty css sheet."
     (css/sheet (list))))

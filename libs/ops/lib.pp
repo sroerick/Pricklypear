@@ -17,6 +17,7 @@
 
 (define ops/code/scan-pkg
   (lambda (pkg needle)
+    "Filter package-bindings of pkg whose source contains needle."
     (list/filter
       (lambda (name)
         (let ((src (function-source name)))
@@ -26,6 +27,7 @@
 
 (define ops/code/scan-pkgs
   (lambda (pkgs needle limit)
+    "Scan pkgs for needle source matches, stopping at limit."
     (let ((lim (parse-int (as-str limit))))
       (list/foldl
         (lambda (acc pkg)
@@ -36,13 +38,15 @@
 
 (define ops/code/search-limit
   (lambda (needle limit)
+    "Search default packages for needle, capped at limit hits."
     (ops/code/scan-pkgs ops/code/default-pkgs needle limit)))
 
 (define ops/code/search
-  (lambda (needle) (ops/code/search-limit needle 500)))
+  (lambda (needle) "Search default packages for needle, up to 500 hits." (ops/code/search-limit needle 500)))
 
 (define ops/code/apply-pairs
   (lambda (src pairs)
+    "Replace every mangled needle in src with its pair; returns new src."
     (if (null? pairs) src
         (let ((pair (car pairs)))
           (ops/code/apply-pairs
@@ -95,6 +99,7 @@
 
 (define ops/code/uniq
   (lambda (xs)
+    "Remove duplicate elements from xs, keeping first occurrence order."
     (list/foldl
       (lambda (acc x)
         (if (null? (member x acc)) (cons x acc) acc))
@@ -103,6 +108,7 @@
 
 (define ops/code/define-src
   (lambda (name body-src)
+    "Re-define a function from a body source string via load-string."
     (load-string
       (string-append
         "(define "
@@ -113,6 +119,7 @@
 
 (define ops/code/mangled-hits
   (lambda ()
+    "Collect unique function names whose source contains a mangled code point."
     (ops/code/uniq
       (list/foldl
         (lambda (acc needle)
@@ -122,6 +129,7 @@
 
 (define ops/code/fix-name
   (lambda (name)
+    "Repair one function's mangled sequences; skips pair/needle tables."
     (if
       (or
         (string-eq (as-str name) "ops/code/mangled-pairs")
@@ -140,16 +148,18 @@
 
 (define ops/code/fix-mangled
   (lambda ()
+    "Return rows for every function name that still needs a repair."
     (list/filter
       (lambda (row)
         (not (string-eq (as-str (car (cdr row))) "clean")))
       (list/map ops/code/fix-name (ops/code/mangled-hits)))))
 
 (define ops/code/fix-names
-  (lambda (names) (list/map ops/code/fix-name names)))
+  (lambda (names) "Repair each of the given function names." (list/map ops/code/fix-name names)))
 
 (define ops/code/fix-pkg
   (lambda (pkg)
+    "Repair all mangled functions in one package; returns dirty rows."
     (list/filter
       (lambda (row)
         (not (string-eq (as-str (car (cdr row))) "clean")))
