@@ -92,7 +92,7 @@
        Prims are registered under the soup/ namespace (not html/) to avoid
        colliding with the pure-html DSL prims (html/attr, html/text,
        html/div, ...) that page rendering depends on.")
-   (implements image/lib/prims_hyper.ml)
+   (implements image/lib/prims_hyper.ml pure/prims_soup.ml)
    (details
     (doc (|
          PRIMS (uppercase, DB-free, part of the pure-prim layer, soup/ namespace):

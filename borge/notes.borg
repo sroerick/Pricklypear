@@ -326,7 +326,7 @@
     libs/notes/refile/lib.pp
     libs/bible/lib.pp
     libs/dabar/lib.pp
-    image/lib/prims_pure.ml)
+    pure/prims_pure.ml)
    (details
     (doc (|
          =========================================================
@@ -446,7 +446,7 @@
    (status implemented)
    (implements
     lisp/lib/eval.ml
-    image/lib/prims_pure.ml
+    pure/prims_pure.ml
     libs/notes/lib.pp
     libs/outline/lib.pp
     libs/std/lib.pp
