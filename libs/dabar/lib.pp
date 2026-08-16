@@ -10,6 +10,7 @@
 (define dabar/inter-html
   (lambda
     (book chapter verse)
+    "Render interlinear token HTML for a verse, or a muted no-interlinear notice."
     (let
       ((row (dabar/inter-row book chapter verse)))
       (if
@@ -34,11 +35,13 @@
 (define dabar/inter
   (lambda
     (book chapter verse)
+    "Canonical alias: render interlinear HTML for a verse."
     (dabar/inter-html book chapter verse)))
 
 (define dabar/inter-row
   (lambda
     (book chapter verse)
+    "Fetch the interlinear row for a verse ref; () when absent."
     (find-row
       (quote bible-interlinear)
       "ref"
@@ -48,6 +51,7 @@
 (define dabar/inter-on?
   (lambda
     ()
+    "True when the request asks for interlinear view (inter=1)."
     (let
       ((p (request-param "inter")))
       (if
@@ -58,6 +62,7 @@
 (define dabar/study-href
   (lambda
     (book chapter verse inter-on)
+    "Build a /dabar study URL for a verse with the given inter flag."
     (string-append
       "/dabar?book="
       (bible/abbrev-of book)
@@ -71,6 +76,7 @@
 (define dabar/toggle-link
   (lambda
     (book chapter verse inter-on)
+    "Render the plain/interlinear toggle link for a verse."
     (let
       ((next (not inter-on))
         (label (if inter-on "plain" "interlinear")))
@@ -89,6 +95,7 @@
 (define dabar/page
   (lambda
     ()
+    "Route handler for /dabar: redirect POSTs, render panel otherwise."
     (if
       (string-eq (request-method) "POST")
       (let
@@ -128,6 +135,7 @@
 (define dabar/panel
   (lambda
     ()
+    "Render the dabar study panel for the requested book/chapter/verse or ref."
     (let
       ((book (request-param "book"))
         (chapter (request-param "chapter"))
@@ -155,6 +163,7 @@
 (define dabar/panel-for-request
   (lambda
     ()
+    "Render the panel from request params, falling back to the chapter reader."
     (let
       ((ref (request-param "ref"))
         (verse (request-param "verse")))
@@ -180,6 +189,7 @@
 (define dabar/verse-study
   (lambda
     (book chapter verse)
+    "Render the full verse study view (BSB text plus interlinear toggle)."
     (let
       ((ab (bible/abbrev-of book))
         (ch (bible/safe-chapter book chapter))
@@ -236,6 +246,7 @@
 (define dabar/verse-study-from-params
   (lambda
     (book chapter verse)
+    "Render a verse study from raw book/chapter/verse params."
     (let
       ((b (if (null? book) "John" (as-str book)))
         (c (if (null? chapter) "3" (as-str chapter)))
@@ -248,6 +259,7 @@
 (define dabar/verse-study-from-ref
   (lambda
     (ref)
+    "Render a verse study from a parsed bible ref, or an error form."
     (let
       ((row (bible/parse-ref ref)))
       (if

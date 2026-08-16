@@ -4,6 +4,7 @@
 (define bible/abbrev-of
   (lambda
     (book)
+    "Return the abbrev for a book name (or the raw book if unknown)."
     (let
       ((row (bible/book-row book)))
       (if (null? row) (as-str book) (dict-get row "abbrev")))))
@@ -11,6 +12,7 @@
 (define bible/book-by-ordinal
   (lambda
     (ord)
+    "Return the book row fields for an ordinal, or () when absent."
     (list/foldl
       (lambda
         (acc row)
@@ -26,6 +28,7 @@
 (define bible/book-options
   (lambda
     (current)
+    "Render an HTML <option> for every book, selecting current."
     (list/foldl
       (lambda
         (acc row)
@@ -49,6 +52,7 @@
 (define bible/book-ordinal
   (lambda
     (book)
+    "Return the ordinal of book, or 0 when unknown."
     (let
       ((row (bible/book-row book)))
       (if
@@ -59,6 +63,7 @@
 (define bible/book-row
   (lambda
     (book)
+    "Fetch a bible-book row by abbrev or name; () when absent."
     (let
       ((b (as-str book)))
       (let
@@ -69,11 +74,12 @@
           by-ab)))))
 
 (define bible/books
-  (lambda () (rows (quote bible-book) 100)))
+  (lambda () "List up to 100 bible-book rows." (rows (quote bible-book) 100)))
 
 (define bible/chapter
   (lambda
     (book chapter)
+    "List verses of a chapter in verse order."
     (find-rows
       (quote bible-verse)
       "abbrev"
@@ -86,6 +92,7 @@
 (define bible/chapter-count
   (lambda
     (abbrev)
+    "Return the number of chapters for an abbrev (default 1)."
     (list/foldl
       (lambda
         (acc pair)
@@ -168,11 +175,13 @@
 (define bible/chapter-html
   (lambda
     (book chapter focus-verse)
+    "Render a chapter panel (alias for chapter-panel)."
     (bible/chapter-panel book chapter focus-verse)))
 
 (define bible/chapter-panel
   (lambda
     (book chapter focus-verse)
+    "Render a chapter with nav links and optional focus verse note."
     (let
       ((rows (bible/chapter book chapter))
         (ab (bible/abbrev-of book))
@@ -211,6 +220,7 @@
 (define bible/chapter-reader
   (lambda
     ()
+    "Render the chapter reader from request params (ref, q, random, or book/chapter/verse)."
     (let
       ((ref (request-param "ref"))
         (q (request-param "q"))
@@ -300,6 +310,7 @@
 (define bible/go-form
   (lambda
     (b c verse)
+    "Render the book/chapter/verse navigation form."
     (let
       ((ab (bible/abbrev-of b))
         (ch (bible/safe-chapter b c))
@@ -346,6 +357,7 @@
 (define bible/href-chapter
   (lambda
     (pair)
+    "Build a /dabar href for a (book chapter) pair; # when null."
     (if
       (null? pair)
       "#"
@@ -359,6 +371,7 @@
 (define bible/link-href
   (lambda
     (book chapter verse)
+    "Build a /dabar href for a verse (or chapter when verse blank)."
     (let
       ((ab (bible/abbrev-of book))
         (ch (bible/safe-chapter book chapter))
@@ -377,6 +390,7 @@
 (define bible/link-html
   (lambda
     (book chapter verse label)
+    "Render an HTML link to a verse, defaulting the label to the citation."
     (let
       ((ab (bible/abbrev-of book))
         (ch (bible/safe-chapter book chapter))
@@ -401,6 +415,7 @@
 (define bible/int-in-range-from?
   (lambda
     (s lo hi i)
+    "Recursive: true when s equals an integer in [lo, hi]."
     (if
       (> i hi)
       #f
@@ -410,11 +425,12 @@
         (bible/int-in-range-from? s lo hi (+ i 1))))))
 
 (define bible/int-in-range?
-  (lambda (s lo hi) (bible/int-in-range-from? s lo hi lo)))
+  (lambda (s lo hi) "True when s is an integer string in [lo, hi]." (bible/int-in-range-from? s lo hi lo)))
 
 (define bible/nav-links
   (lambda
     (book chapter)
+    "Render prev/random/next/study navigation for a chapter."
     (let
       ((prev (bible/prev-ref book chapter))
         (next (bible/next-ref book chapter)))
@@ -450,6 +466,7 @@
 (define bible/next-ref
   (lambda
     (book chapter)
+    "Return the (book chapter) after the given ref, or () at the end."
     (let
       ((ab (bible/abbrev-of book))
         (c (bible/parse-int (bible/safe-chapter book chapter)))
@@ -468,11 +485,13 @@
 (define bible/option-range
   (lambda
     (n selected)
+    "Render chapter <option> elements 1..n selecting selected."
     (bible/option-range-from 1 n selected)))
 
 (define bible/option-range-from
   (lambda
     (i n selected)
+    "Recursive: render <option> elements i..n selecting selected."
     (if
       (> i n)
       ""
@@ -484,11 +503,12 @@
         (bible/option-range-from (+ i 1) n selected)))))
 
 (define bible/parse-int
-  (lambda (s) (bible/parse-int-from s 1 200)))
+  (lambda (s) "Parse s as an integer in [1,200], else 0." (bible/parse-int-from s 1 200)))
 
 (define bible/parse-int-from
   (lambda
     (s i max)
+    "Recursive: find the integer i in [1,max] equal to s, else 0."
     (if
       (> i max)
       0
@@ -500,11 +520,13 @@
 (define bible/parse-ref
   (lambda
     (ref)
+    "Fetch a bible-verse row by its ref string; () when absent."
     (find-row (quote bible-verse) "ref" (as-str ref))))
 
 (define bible/prev-ref
   (lambda
     (book chapter)
+    "Return the (book chapter) before the given ref, or () at the start."
     (let
       ((ab (bible/abbrev-of book))
         (c (bible/parse-int (bible/safe-chapter book chapter)))
@@ -525,11 +547,12 @@
           ())))))
 
 (define bible/random-row
-  (lambda () (find-random (quote bible-verse))))
+  (lambda () "Fetch a random bible-verse row." (find-random (quote bible-verse))))
 
 (define bible/ref
   (lambda
     (book chapter verse)
+    "Build a BSB:abbrev:chapter:verse ref string."
     (string-append
       "BSB:"
       (bible/abbrev-of book)
@@ -541,6 +564,7 @@
 (define bible/safe-chapter
   (lambda
     (book chapter)
+    "Clamp chapter to the valid range for book; falls back to chapter 1 when out of range."
     (let
       ((max (bible/chapter-count (bible/abbrev-of book)))
         (c (if (null? chapter) "1" (as-str chapter))))
@@ -549,11 +573,13 @@
 (define bible/search
   (lambda
     (q)
+    "Full-text search of verse text; returns up to 40 rows."
     (find-text (quote bible-verse) "text" (as-str q) 40)))
 
 (define bible/search-form
   (lambda
     (q)
+    "Render the verse search form."
     (html/form
       "GET"
       "/dabar"
@@ -583,6 +609,7 @@
 (define bible/search-panel
   (lambda
     (q)
+    "Render search results for q as an HTML list."
     (let
       ((hits (bible/search q)))
       (html/join
@@ -617,6 +644,7 @@
 (define bible/verse
   (lambda
     (book chapter verse)
+    "Return the text of a verse, or () when absent."
     (let
       ((row (bible/verse-row book chapter verse)))
       (if (null? row) () (dict-get row "text")))))
@@ -624,6 +652,7 @@
 (define bible/verse-li
   (lambda
     (row)
+    "Render a chapter verse row as an HTML <li> with superscript number."
     (let
       ((fields (cdr row)))
       (let
@@ -641,6 +670,7 @@
 (define bible/verse-options
   (lambda
     (book chapter selected)
+    "Render verse <option> elements for a chapter plus a placeholder."
     (string-append
       (html/option
         ""
@@ -666,6 +696,7 @@
 (define bible/verse-row
   (lambda
     (book chapter verse)
+    "Fetch a bible-verse row by its BSB ref; () when absent."
     (find-row
       (quote bible-verse)
       "ref"
@@ -676,11 +707,13 @@
 
 (define bible/nth
   (lambda (lst n)
+    "The nth element of list lst, 0-based."
     (if (= n 0) (car lst) (bible/nth (cdr lst) (- n 1))))
 )
 
 (define bible/ref-body?
   (lambda (body)
+    "True when body is a (bible-ref ...) sexp string."
     (let
       ((s (as-str body)))
       (string-starts-with? s "(bible-ref")))
@@ -688,6 +721,7 @@
 
 (define bible/ref-parse
   (lambda (body)
+    "Parse body as a (bible-ref ...) form; () when not one."
     (let
       ((form (read-string (as-str body))))
       (if
@@ -701,6 +735,7 @@
 
 (define bible/render-body
   (lambda (body)
+    "Render a body string, turning (bible-ref ...) into verse HTML."
     (if
       (bible/ref-body? body)
       (let
@@ -720,6 +755,7 @@
 
 (define bible/render-ref
   (lambda (book chapter vstart vend mode)
+    "Render a verse ref as a link or inline block per mode."
     (if
       (string-eq (as-str mode) "link")
       (bible/verse-link-html book chapter vstart vend)
@@ -728,6 +764,7 @@
 
 (define bible/cite-label
   (lambda (book chapter vstart vend)
+    "Build a book chapter:vstart-vend citation label."
     (if
       (= vstart vend)
       (string-append
@@ -748,6 +785,7 @@
 
 (define bible/verse-body
   (lambda (book chapter vstart vend mode)
+    "Build the (bible-ref ...) sexp string for a verse range."
     (string-append
       "(bible-ref \""
       (as-str book)
@@ -764,6 +802,7 @@
 
 (define bible/verse-inline-html
   (lambda (book chapter vstart vend)
+    "Render a verse ref inline (single or range) as HTML."
     (if
       (= vstart vend)
       (bible/verse-inline-one book chapter vstart)
@@ -772,6 +811,7 @@
 
 (define bible/verse-inline-one
   (lambda (book chapter verse)
+    "Render a single verse as an inline HTML blockquote."
     (let
       ((row (bible/verse-row book chapter verse))
         (ab (bible/abbrev-of book))
@@ -798,6 +838,7 @@
 
 (define bible/verse-inline-range
   (lambda (book chapter vstart vend)
+    "Render a range of verses as an inline HTML blockquote."
     (let
       ((rows (bible/verses-in-range book chapter vstart vend))
         (ab (bible/abbrev-of book))
@@ -833,6 +874,7 @@
 
 (define bible/verse-link-html
   (lambda (book chapter vstart vend)
+    "Render a verse ref as an HTML link to /dabar."
     (let
       ((ab (bible/abbrev-of book))
         (ch (bible/safe-chapter book chapter))
@@ -842,6 +884,7 @@
 
 (define bible/verses-in-range
   (lambda (book chapter vstart vend)
+    "List the verses of a chapter whose numbers fall in [vstart, vend]."
     (let
       ((rows (bible/chapter book chapter)))
       (list/filter
@@ -855,6 +898,7 @@
 
 (define bible/insert-verse
   (lambda (book chapter vstart vend mode)
+    "Build an outline node inserting a rendered verse ref."
     (outline/node*
       (gensym "n")
       (bible/cite-label book chapter vstart vend)

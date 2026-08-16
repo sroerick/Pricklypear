@@ -2,11 +2,12 @@
 ;; Sync: scripts/pp_sync.py pull|push
 
 (define signup/blank?
-  (lambda (s) (blank? (string-trim (as-str s)))))
+  (lambda (s) "True if trimmed s is blank." (blank? (string-trim (as-str s)))))
 
 (define signup/fields
   (lambda
     (email note source ua)
+    "Build the signup fields JSON string."
     (dict-set*
       "{}"
       (list
@@ -22,6 +23,7 @@
 (define signup/form
   (lambda
     (msg err)
+    "Render the email signup form page with optional msg and err notices."
     (layout/page
       (list
         (layout/hero
@@ -81,6 +83,7 @@
 (define signup/looks-like-email?
   (lambda
     (email)
+    "True if email looks like a plausible address (has @ and length > 3)."
     (let
       ((e (string-trim (as-str email))))
       (if
@@ -94,6 +97,7 @@
 (define signup/notify-inbox
   (lambda
     (email note)
+    "Capture a signup notification note when notes/capture add is available."
     (let
       ((title
           (string-append "Signup: " (string-trim (as-str email))))
@@ -115,6 +119,7 @@
 (define signup/page
   (lambda
     ()
+    "Route handler for /signup: record POSTs and render the page otherwise."
     (if
       (string-eq (request-method) "POST")
       (let
@@ -132,6 +137,7 @@
 (define signup/record
   (lambda
     (email note)
+    "Create a signup row, notify the inbox, and return email."
     (let
       ((fields (signup/fields email note "web" "")))
       (seq
@@ -141,6 +147,7 @@
 (define signup/thanks
   (lambda
     (email)
+    "Render the post-signup thank-you page for email."
     (layout/page
       (list
         (layout/hero
