@@ -1,9 +1,5 @@
-;; package theme — default tokens + install/switch API (image.themes)
+;; package theme -- exported from live branch admin/personal
 ;; Sync: scripts/pp_sync.py pull|push
-;;
-;; A theme package defines theme/* tokens (+ theme/name). Switching
-;; is (theme/set "paper") → (load-library "theme-paper") which pins
-;; those defines onto the current branch and refreshes ui/css.
 
 (package theme
   (export
@@ -20,220 +16,17 @@
     theme/set
     theme/swatch-html
     theme/vars
-    theme/extra))
-
-;; --- default tokens (phosphor) — active on system/main after seed ---
-
-(define theme/name
-  "phosphor")
-
-(define theme/bg
-  "#111111")
-
-(define theme/border
-  "#33cc33")
-
-(define theme/chrome
-  "#1a2a1a")
-
-(define theme/err
-  "#ff4444")
-
-(define theme/ink
-  "#33cc33")
-
-(define theme/link
-  "#33ff33")
-
-(define theme/muted
-  "#aaaaaa")
-
-(define theme/ok
-  "#33ff33")
-
-(define theme/panel
-  "#1a1a1a")
-
-(define theme/row-alt
-  "#151515")
-
-(define theme/shadow
-  "#222222")
-
-(define theme/visited
-  "#2a9a2a")
-
-;; --- semantic style tokens (phosphor defaults) ----------------------
-;; Phase 3: the structural sheet (ui/theme) used to bake ~77 hardcoded
-;; hex literals (selection highlight, todo done/waiting/archived states,
-;; emergency banner, calendar-today, impact badge, …) into the string, so
-;; they never responded to the active theme. Those literals now resolve
-;; through var(--*) emitted here, so every theme overrides them with its
-;; own light/dark values. Truly structural colors (#000 borders, #808080
-;; shadows) stay as-is in ui/theme (not tokens).
-;;
-;; A given theme package only needs to redefine the tokens it wants to
-;; differ from the phosphor defaults; all are optional per theme.
-
-(define theme/sel-bg
-  "#1a3a1a")
-
-(define theme/sel-accent
-  "#2a9a2a")
-
-(define theme/pending-bg
-  "#1f3a1f")
-
-(define theme/pending-ink
-  "#88cc44")
-
-(define theme/pending-border
-  "#886600")
-
-(define theme/done-bg
-  "#0f2a10")
-
-(define theme/done-ink
-  "#55cc55")
-
-(define theme/done-muted
-  "#4a6a4a")
-
-(define theme/waiting-bg
-  "#1a2a3a")
+    theme/extra
+))
 
 (define theme/archived-bg
-  "#1a1a1a")
-
-(define theme/archived-ink
-  "#777777")
+  "#eeeeee")
 
 (define theme/archived-border
+  "#666666")
+
+(define theme/archived-ink
   "#555555")
-
-(define theme/cancelled-bg
-  "#222222")
-
-(define theme/today-bg
-  "#333a1a")
-
-(define theme/banner-bg
-  "#3a2a00")
-
-(define theme/banner-border
-  "#886600")
-
-(define theme/banner-ink
-  "#ffdd88")
-
-(define theme/badge-bg
-  "#3a2f00")
-
-(define theme/badge-border
-  "#8b6914")
-
-;; --- CSS custom-property emitter ------------------------------------
-;; Emit a single :root rule mapping the theme/* tokens onto CSS custom
-;; properties. The structural sheet (ui/theme) reads var(--*) so it is
-;; static and theme-independent; switching themes only swaps this :root
-;; block (resolved by the browser cascade, no re-generation).
-
-(define theme/vars
-  (lambda
-    ()
-    (css/sheet
-      (list
-        (css/rule
-          ":root"
-          (list
-            "--bg" theme/bg
-            "--ink" theme/ink
-            "--panel" theme/panel
-            "--chrome" theme/chrome
-            "--link" theme/link
-            "--visited" theme/visited
-            "--muted" theme/muted
-            "--err" theme/err
-            "--ok" theme/ok
-            "--border" theme/border
-            "--row-alt" theme/row-alt
-            "--shadow" theme/shadow
-            "--sel-bg" theme/sel-bg
-            "--sel-accent" theme/sel-accent
-            "--pending-bg" theme/pending-bg
-            "--pending-ink" theme/pending-ink
-            "--pending-border" theme/pending-border
-            "--done-bg" theme/done-bg
-            "--done-ink" theme/done-ink
-            "--done-muted" theme/done-muted
-            "--waiting-bg" theme/waiting-bg
-            "--archived-bg" theme/archived-bg
-            "--archived-ink" theme/archived-ink
-            "--archived-border" theme/archived-border
-            "--cancelled-bg" theme/cancelled-bg
-            "--today-bg" theme/today-bg
-            "--banner-bg" theme/banner-bg
-            "--banner-border" theme/banner-border
-            "--banner-ink" theme/banner-ink
-            "--badge-bg" theme/badge-bg
-            "--badge-border" theme/badge-border))))))
-
-;; --- per-theme structural sheet hook (default: no-op) --------------
-;; A theme package MAY define theme/extra — a css/sheet of *structural*
-;; (non-color) chrome layered on top of ui/theme (e.g. AS/400's monospace
-;; body, uppercase headings, chunky borders). ui/css includes
-;; (css/use (theme/extra)) LAST so an active theme can retint/reshape
-;; without clobbering the shared structural sheet. The base theme package
-;; ships a no-op so most themes add nothing.
-
-(define theme/extra
-  (lambda
-    ()
-    (css/sheet (list))))
-
-;; --- registry -------------------------------------------------------
-;; Each entry: (name display description package)
-;; package = libs/<package>/lib.pp loaded by theme/set.
-
-(define theme/catalog
-  (list
-    (list
-      "phosphor"
-      "Phosphor"
-      "CRT green on near-black. The classic habitat look."
-      "theme")
-    (list
-      "paper"
-      "Paper"
-      "Warm cream paper, dark ink, soft brown chrome. Easy on the eyes."
-      "theme-paper")
-    (list
-      "midnight"
-      "Midnight"
-      "WHITEOUT PROBE: every token = magenta. Anything NOT magenta is a hardcoded-color leak."
-      "theme-midnight")
-    (list
-      "classic"
-      "Classic Mac"
-      "Platinum gray System 7 vibes. The old product default."
-      "theme-classic")
-    (list
-      "as400"
-      "AS/400"
-      "CRT green on near-black — the original notes-tree terminal skin, now its own theme."
-      "theme-as400")))
-
-(define theme/entry-name
-  (lambda (e) (as-str (car e))))
-
-(define theme/entry-display
-  (lambda (e) (as-str (car (cdr e)))))
-
-(define theme/entry-desc
-  (lambda (e) (as-str (car (cdr (cdr e))))))
-
-(define theme/entry-package
-  (lambda (e) (as-str (car (cdr (cdr (cdr e)))))))
 
 (define theme/available
   (lambda
@@ -248,118 +41,29 @@
           (list "package" (theme/entry-package e))))
       theme/catalog)))
 
-(define theme/find
-  (lambda
-    (name)
-    (let
-      ((want (as-str name)))
-      (list/foldl
-        (lambda
-          (acc e)
-          (if
-            (null? acc)
-            (if (string-eq (theme/entry-name e) want) e acc)
-            acc))
-        ()
-        theme/catalog))))
+(define theme/badge-bg
+  "#ffe8a3")
 
-(define theme/current
-  (lambda
-    ()
-    (guard
-      (lambda (_) "phosphor")
-      (as-str theme/name))))
+(define theme/badge-border
+  "#8b6914")
 
-(define theme/set
-  (lambda
-    (name)
-    (let
-      ((e (theme/find name)))
-      (if
-        (null? e)
-        (error
-          (string-append "theme/set: unknown theme: " (as-str name)))
-        (let
-          ((pkg (theme/entry-package e))
-            (want (theme/entry-name e)))
-          (seq
-            (load-library pkg)
-            ;; load-library refreshes ui/css; return the name for callers.
-            want))))))
+(define theme/banner-bg
+  "#fff3cd")
 
-;; --- picker UI ------------------------------------------------------
+(define theme/banner-border
+  "#8b0000")
 
-(define theme/swatch-html
-  (lambda
-    (bg ink panel chrome link)
-    (html/tag
-      "div"
-      (html/attr "class" "theme-swatch")
-      (html/join
-        (list
-          (html/tag
-            "span"
-            (html/attrs
-              (list
-                (html/attr "class" "theme-swatch-chip")
-                (html/attr
-                  "style"
-                  (string-append "background:" bg))))
-            "")
-          (html/tag
-            "span"
-            (html/attrs
-              (list
-                (html/attr "class" "theme-swatch-chip")
-                (html/attr
-                  "style"
-                  (string-append "background:" ink))))
-            "")
-          (html/tag
-            "span"
-            (html/attrs
-              (list
-                (html/attr "class" "theme-swatch-chip")
-                (html/attr
-                  "style"
-                  (string-append "background:" panel))))
-            "")
-          (html/tag
-            "span"
-            (html/attrs
-              (list
-                (html/attr "class" "theme-swatch-chip")
-                (html/attr
-                  "style"
-                  (string-append "background:" chrome))))
-            "")
-          (html/tag
-            "span"
-            (html/attrs
-              (list
-                (html/attr "class" "theme-swatch-chip")
-                (html/attr
-                  "style"
-                  (string-append "background:" link))))
-            ""))))))
+(define theme/banner-ink
+  "#1a1a1a")
 
-(define theme/preview-swatch
-  (lambda
-    (name)
-    ;; Hardcoded previews so the picker doesn't have to load each package.
-    (if
-      (string-eq name "paper")
-      (theme/swatch-html "#f4f0e6" "#1c1916" "#ebe4d4" "#ddd4c0" "#0b57a8")
-      (if
-        (string-eq name "midnight")
-        (theme/swatch-html "magenta" "magenta" "magenta" "magenta" "magenta")
-        (if
-          (string-eq name "classic")
-          (theme/swatch-html "#d4d0c8" "#000000" "#ece9d8" "#c0c0c0" "#0000ee")
-          (if
-            (string-eq name "as400")
-            (theme/swatch-html "#111111" "#33cc33" "#1a1a1a" "#1a2a1a" "#33ff33")
-            (theme/swatch-html "#111111" "#33cc33" "#1a1a1a" "#1a2a1a" "#33ff33")))))))
+(define theme/bg
+  "#f4f0e6")
+
+(define theme/border
+  "#c4b8a0")
+
+(define theme/cancelled-bg
+  "#dddddd")
 
 (define theme/card-html
   (lambda
@@ -376,20 +80,19 @@
             (list
               (html/attr
                 "class"
-                (if is-cur "card theme-card theme-card-current" "card theme-card"))
+                (if
+                  is-cur
+                  "card theme-card theme-card-current"
+                  "card theme-card"))
               (html/attr "data-theme" name)))
           (html/join
             (list
               (html/h3 display)
               (theme/preview-swatch name)
-              (html/p*
-                (html/attr "class" "muted")
-                (html/text desc))
+              (html/p* (html/attr "class" "muted") (html/text desc))
               (if
                 is-cur
-                (html/p*
-                  (html/attr "class" "ok")
-                  "Current theme")
+                (html/p* (html/attr "class" "ok") "Current theme")
                 (html/form
                   "POST"
                   "/settings/theme"
@@ -417,6 +120,99 @@
     (html/div
       (html/attr "id" "theme-cards")
       (html/join (list/map theme/card-html theme/catalog)))))
+
+(define theme/catalog
+  (list
+    (list
+      "phosphor"
+      "Phosphor"
+      "CRT green on near-black. The classic habitat look."
+      "theme")
+    (list
+      "paper"
+      "Paper"
+      "Warm cream paper, dark ink, soft brown chrome. Easy on the eyes."
+      "theme-paper")
+    (list
+      "midnight"
+      "Midnight"
+      "Soft blue-gray dark theme — no phosphor green."
+      "theme-midnight")
+    (list
+      "classic"
+      "Classic Mac"
+      "Platinum gray System 7 vibes. The old product default."
+      "theme-classic")
+    (list
+      "as400"
+      "AS/400"
+      "CRT green on near-black — the original notes-tree terminal skin, now its own theme."
+      "theme-as400")))
+
+(define theme/chrome
+  "#ddd4c0")
+
+(define theme/current
+  (lambda
+    ()
+    (guard (lambda (_) "phosphor") (as-str theme/name))))
+
+(define theme/done-bg
+  "#cfc")
+
+(define theme/done-ink
+  "#226622")
+
+(define theme/done-muted
+  "#666666")
+
+(define theme/entry-desc
+  (lambda (e) (as-str (car (cdr (cdr e))))))
+
+(define theme/entry-display
+  (lambda (e) (as-str (car (cdr e)))))
+
+(define theme/entry-name
+  (lambda (e) (as-str (car e))))
+
+(define theme/entry-package
+  (lambda (e) (as-str (car (cdr (cdr (cdr e)))))))
+
+(define theme/err
+  "#a32020")
+
+(define theme/extra
+  (lambda () (css/sheet (list))))
+
+(define theme/find
+  (lambda
+    (name)
+    (let
+      ((want (as-str name)))
+      (list/foldl
+        (lambda
+          (acc e)
+          (if
+            (null? acc)
+            (if (string-eq (theme/entry-name e) want) e acc)
+            acc))
+        ()
+        theme/catalog))))
+
+(define theme/ink
+  "#1c1916")
+
+(define theme/link
+  "#0b57a8")
+
+(define theme/muted
+  "#6b6458")
+
+(define theme/name
+  "paper")
+
+(define theme/ok
+  "#1f6b3a")
 
 (define theme/page
   (lambda
@@ -451,4 +247,208 @@
                 ".theme-swatch{display:flex;gap:.35rem;margin:.4rem 0}"
                 ".theme-swatch-chip{display:inline-block;width:1.5rem;height:1.5rem;border:1px solid rgba(0,0,0,.25);border-radius:3px}"))))))))
 
-(route "/settings/theme" "theme/page")
+(define theme/panel
+  "#ebe4d4")
+
+(define theme/pending-bg
+  "#fff8dc")
+
+(define theme/pending-border
+  "#886600")
+
+(define theme/pending-ink
+  "#664400")
+
+(define theme/preview-swatch
+  (lambda
+    (name)
+    (if
+      (string-eq name "paper")
+      (theme/swatch-html
+        "#f4f0e6"
+        "#1c1916"
+        "#ebe4d4"
+        "#ddd4c0"
+        "#0b57a8")
+      (if
+        (string-eq name "midnight")
+        (theme/swatch-html
+          "#0f1419"
+          "#d8dee9"
+          "#1a2332"
+          "#15202b"
+          "#7aa2f7")
+        (if
+          (string-eq name "classic")
+          (theme/swatch-html
+            "#d4d0c8"
+            "#000000"
+            "#ece9d8"
+            "#c0c0c0"
+            "#0000ee")
+          (if
+            (string-eq name "as400")
+            (theme/swatch-html
+              "#111111"
+              "#33cc33"
+              "#1a1a1a"
+              "#1a2a1a"
+              "#33ff33")
+            (theme/swatch-html
+              "#111111"
+              "#33cc33"
+              "#1a1a1a"
+              "#1a2a1a"
+              "#33ff33")))))))
+
+(define theme/row-alt
+  "#efe9db")
+
+(define theme/sel-accent
+  "#000080")
+
+(define theme/sel-bg
+  "#fff8dc")
+
+(define theme/set
+  (lambda
+    (name)
+    (let
+      ((e (theme/find name)))
+      (if
+        (null? e)
+        (error
+          (string-append
+            "theme/set: unknown theme: "
+            (as-str name)))
+        (let
+          ((pkg (theme/entry-package e))
+            (want (theme/entry-name e)))
+          (seq (load-library pkg) want))))))
+
+(define theme/shadow
+  "#c9c0ae")
+
+(define theme/swatch-html
+  (lambda
+    (bg ink panel chrome link)
+    (html/tag
+      "div"
+      (html/attr "class" "theme-swatch")
+      (html/join
+        (list
+          (html/tag
+            "span"
+            (html/attrs
+              (list
+                (html/attr "class" "theme-swatch-chip")
+                (html/attr "style" (string-append "background:" bg))))
+            "")
+          (html/tag
+            "span"
+            (html/attrs
+              (list
+                (html/attr "class" "theme-swatch-chip")
+                (html/attr "style" (string-append "background:" ink))))
+            "")
+          (html/tag
+            "span"
+            (html/attrs
+              (list
+                (html/attr "class" "theme-swatch-chip")
+                (html/attr "style" (string-append "background:" panel))))
+            "")
+          (html/tag
+            "span"
+            (html/attrs
+              (list
+                (html/attr "class" "theme-swatch-chip")
+                (html/attr "style" (string-append "background:" chrome))))
+            "")
+          (html/tag
+            "span"
+            (html/attrs
+              (list
+                (html/attr "class" "theme-swatch-chip")
+                (html/attr "style" (string-append "background:" link))))
+            ""))))))
+
+(define theme/today-bg
+  "#ffffe0")
+
+(define theme/vars
+  (lambda
+    ()
+    (css/sheet
+      (list
+        (css/rule
+          ":root"
+          (list
+            "--bg"
+            theme/bg
+            "--ink"
+            theme/ink
+            "--panel"
+            theme/panel
+            "--chrome"
+            theme/chrome
+            "--link"
+            theme/link
+            "--visited"
+            theme/visited
+            "--muted"
+            theme/muted
+            "--err"
+            theme/err
+            "--ok"
+            theme/ok
+            "--border"
+            theme/border
+            "--row-alt"
+            theme/row-alt
+            "--shadow"
+            theme/shadow
+            "--sel-bg"
+            theme/sel-bg
+            "--sel-accent"
+            theme/sel-accent
+            "--pending-bg"
+            theme/pending-bg
+            "--pending-ink"
+            theme/pending-ink
+            "--pending-border"
+            theme/pending-border
+            "--done-bg"
+            theme/done-bg
+            "--done-ink"
+            theme/done-ink
+            "--done-muted"
+            theme/done-muted
+            "--waiting-bg"
+            theme/waiting-bg
+            "--archived-bg"
+            theme/archived-bg
+            "--archived-ink"
+            theme/archived-ink
+            "--archived-border"
+            theme/archived-border
+            "--cancelled-bg"
+            theme/cancelled-bg
+            "--today-bg"
+            theme/today-bg
+            "--banner-bg"
+            theme/banner-bg
+            "--banner-border"
+            theme/banner-border
+            "--banner-ink"
+            theme/banner-ink
+            "--badge-bg"
+            theme/badge-bg
+            "--badge-border"
+            theme/badge-border))))))
+
+(define theme/visited
+  "#5b3d8a")
+
+(define theme/waiting-bg
+  "#e0e8ff")

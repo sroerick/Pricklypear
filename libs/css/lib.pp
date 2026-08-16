@@ -1,11 +1,5 @@
-;; package css -- exported from live branch system/main
+;; package css -- exported from live branch admin/personal
 ;; Sync: scripts/pp_sync.py pull|push
-;; NOTE: css/render must invoke lambda sheets (theme/extra is a lambda;
-;; (css/render (sheet)) self-called forever until css-render-lambda-sheet).
-;; ui/css order: theme/vars → ui/theme → ui/theme-nav → theme/extra.
-;; notes/tree-css + notes/tree-css-patch were REMOVED from ui/css
-;; (css-ghost-as400): they hardcoded the AS/400 palette over every theme.
-;; That palette lives, opt-in and var()-based, in libs/theme-as400.
 
 (define css/media
   (lambda
@@ -26,8 +20,7 @@
     (sheet)
     (if
       (string-eq (type-of sheet) "lambda")
-      (css/render (sheet))  ; was (css/render (sheet)) = infinite self-call
-                              ; lambda-sheet (theme/extra) MUST be invoked here
+      (css/render (sheet))
       (if
         (null? sheet)
         ""
@@ -110,4 +103,3 @@
 
 (define css/use
   (lambda (sheet) (list "use" sheet)))
-

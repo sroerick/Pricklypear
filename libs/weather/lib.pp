@@ -127,13 +127,13 @@
         (list
           ".weather-card .wx-row{display:flex;align-items:baseline;gap:.75rem;flex-wrap:wrap}"
           ".weather-card .wx-temp{font-size:2rem;font-weight:700;line-height:1}"
-          ".weather-card .wx-meta{font-size:.9rem;color:#333}"
+          ".weather-card .wx-meta{font-size:.9rem;color:var(--muted,#333)}"
           ".weather-card .wx-loc{font-weight:700;margin:.25rem 0}"
           ".weather-card .wx-form{display:flex;gap:.35rem;flex-wrap:wrap;margin-top:.5rem}"
           ".weather-card .wx-form input[type=text]{flex:1 1 8rem;min-width:0}"
           ".weather-card .wx-form button{width:auto;min-width:4.5rem}"
-          ".weather-card .wx-err{color:#800000;font-weight:700}"
-          ".weather-card .wx-updated{font-size:.8rem;color:#555;margin-top:.35rem}")))))
+          ".weather-card .wx-err{color:var(--err,#800000);font-weight:700}"
+          ".weather-card .wx-updated{font-size:.8rem;color:var(--muted,#555);margin-top:.35rem}")))))
 
 (define weather/widget
   (lambda
