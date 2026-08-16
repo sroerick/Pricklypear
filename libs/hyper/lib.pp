@@ -26,7 +26,8 @@
                (eqparts (string-split kv "=")))
           (cons (if (null? (cdr eqparts)) (cons kv "")
                     (cons (car eqparts) (car (cdr eqparts))))
-                (hyper/parse-pairs (cdr pairs)))))))
+                (hyper/parse-pairs (cdr pairs))))))
+  "Parse a list of kv strings into an alist.")
 
 ;; ---------- visit ----------
 ;; (hyper/visit url) -> page handle
@@ -122,7 +123,8 @@
       (cond
         ((not (null? hxpost)) (hyper/do-swap page elt "POST" hxpost params))
         ((not (null? hxget)) (hyper/do-swap page elt "GET" hxget params))
-        (#t (error "unsupported-feature: no hx-get/hx-post on element or ancestor"))))))
+        (#t (error "unsupported-feature: no hx-get/hx-post on element or ancestor")))))
+  "Read trigger from element/ancestor; POST or GET then swap.")
 
 ;; Read target + swap, POST, deep-copy page, apply swap, return new page.
 ;; target/swap are read via closest-attr (inherited from ancestors).
@@ -146,11 +148,13 @@
                                (let ((ts (soup/select new-page target-raw)))
                                  (if (null? ts) elt (car ts))))))
               (begin (soup/swap! target swap fragment-html)
-                     new-page)))))))
+                     new-page))))))
+  "Read target+swap, dispatch, deep-copy, apply swap; return new page.")
 
 (define hyper/append-alist
   (lambda (a b)
-    (if (null? b) a (cons (car b) (hyper/append-alist a (cdr b))))))
+    (if (null? b) a (cons (car b) (hyper/append-alist a (cdr b)))))
+  "Append b onto the end of alist a.")
 
 ;; ---------- stream (multipart replay) ----------
 ;; (hyper/stream page parts) -> NEW page value

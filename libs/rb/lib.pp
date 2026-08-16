@@ -11,33 +11,41 @@
 
 ;; assoc returns (key . value) or () if missing; rb/get unwraps it.
 (define (rb/get key alist)
+  "Look up key in an alist; return its value or ()."
   (let ((pair (assoc key alist)))
     (if (null? pair) () (cdr pair))))
 
 (define (rb/has? key alist)
+  "True when key is present in the alist."
   (not (null? (assoc key alist))))
 
 (define (rb/set key val alist)
+  "Prepend (key . val) onto alist."
   (cons (cons key val) alist))
 
 (define (rb/append a b)
+  "Concatenate two lists."
   (if (null? a) b (cons (car a) (rb/append (cdr a) b))))
 
 (define (rb/map fn xs)
+  "Map fn over a cons-built list."
   (if (null? xs) (list)
     (cons (fn (car xs)) (rb/map fn (cdr xs)))))
 
 (define (rb/filter pred xs)
+  "Keep elements of xs satisfying pred."
   (if (null? xs) (list)
     (if (pred (car xs))
         (cons (car xs) (rb/filter pred (cdr xs)))
       (rb/filter pred (cdr xs)))))
 
 (define (rb/sum fn xs)
+  "Sum fn applied to each element, as a float."
   (if (null? xs) 0.0 (+ (fn (car xs)) (rb/sum fn (cdr xs)))))
 
 ;; count that works on cons-built lists (not just VLists)
 (define (rb/count xs)
+  "Number of elements (works on cons-built lists)."
   (if (null? xs) 0 (+ 1 (rb/count (cdr xs)))))
 
 ;; ============================================================
@@ -65,27 +73,31 @@
     (cons "hr"    (cons "time" 60.0))
     (cons "day"   (cons "time" 1440.0))))
 
-(define (rb/unit-dim u)   (car (rb/get u rb/unit-table)))
-(define (rb/unit-factor u) (cdr (rb/get u rb/unit-table)))
+(define (rb/unit-dim u)   "Dimension of a unit string (volume/mass/count/time)." (car (rb/get u rb/unit-table)))
+(define (rb/unit-factor u) "Factor of a unit relative to its base unit." (cdr (rb/get u rb/unit-table)))
 
 ;; quantity: (value . "unit")
-(define (qty val unit) (cons val unit))
-(define (qty-val q) (car q))
-(define (qty-unit q) (cdr q))
+(define (qty val unit) "Build a quantity (value . unit)." (cons val unit))
+(define (qty-val q) "Value part of a quantity." (car q))
+(define (qty-unit q) "Unit string of a quantity." (cdr q))
 
 (define (rb/to-base q)
+  "Convert a quantity to its base unit."
   (* (qty-val q) (rb/unit-factor (qty-unit q))))
 
 (define (rb/compatible? q1 q2)
+  "True when two quantities share a dimension."
   (string-eq (rb/unit-dim (qty-unit q1)) (rb/unit-dim (qty-unit q2))))
 
 (define (rb/convert q target-unit)
+  "Convert a quantity to a target unit within its dimension."
   (if (not (string-eq (rb/unit-dim (qty-unit q)) (rb/unit-dim target-unit)))
       q
     (let ((base (rb/to-base q)))
       (qty (/ base (rb/unit-factor target-unit)) target-unit))))
 
 (define (rb/qty-str q)
+  "Render a quantity as \"value unit\"."
   (string-append (as-str (qty-val q)) " " (qty-unit q)))
 
 ;; ============================================================
@@ -95,15 +107,19 @@
 ;; ============================================================
 
 (define (ingredient name qbatch oqty price opts)
+  "Build an ingredient cost entry."
   (rb/make-cost name qbatch oqty price "ingredient" opts))
 
 (define (utility name qbatch oqty price opts)
+  "Build a utility cost entry."
   (rb/make-cost name qbatch oqty price "utility" opts))
 
 (define (pkg-cost name qbatch oqty price opts)
+  "Build a packaging cost entry."
   (rb/make-cost name qbatch oqty price "packaging" opts))
 
 (define (rb/make-cost name qbatch oqty price category opts)
+  "Assemble a cost alist from name/quantities/price/category/opts."
   (cons (cons "type" "cost")
   (cons (cons "name" name)
   (cons (cons "qty_per_batch" qbatch)
@@ -112,21 +128,22 @@
   (cons (cons "category" category) opts)))))))
 
 ;; opt constructors — each returns (key . value) for the opts alist
-(define (source s) (cons "source" s))
-(define (url s) (cons "url" s))
-(define (note s) (cons "note" s))
-(define (on-hand q) (cons "on_hand" q))
+(define (source s) "Opt: source key/value." (cons "source" s))
+(define (url s) "Opt: url key/value." (cons "url" s))
+(define (note s) "Opt: note key/value." (cons "note" s))
+(define (on-hand q) "Opt: on-hand quantity key/value." (cons "on_hand" q))
 
 ;; ============================================================
 ;; STEPS
 ;; ============================================================
 
 (define (step name duration opts)
+  "Build a process step entry."
   (cons (cons "type" "step")
   (cons (cons "name" name)
   (cons (cons "duration" duration) opts))))
 
-(define (use name) (cons "use" name))
+(define (use name) "Opt: use-this key/value." (cons "use" name))
 
 ;; ============================================================
 ;; PACKAGES
@@ -134,6 +151,7 @@
 ;; ============================================================
 
 (define (package product-name units-per-batch liters-per-unit selling-price pkgs)
+  "Build a package/product alist with packaging costs."
   (list
     (cons "type" "package")
     (cons "product_name" product-name)
@@ -147,6 +165,7 @@
 ;; ============================================================
 
 (define (fixed-cost name monthly)
+  "Build a fixed-cost entry."
   (list
     (cons "type" "fixed")
     (cons "name" name)
@@ -154,15 +173,17 @@
 
 ;; equipment: capital purchase with priority tier
 (define (equipment name price priority opts)
+  "Build an equipment/capital entry with priority."
   (cons (cons "type" "equipment")
   (cons (cons "name" name)
   (cons (cons "price" price)
   (cons (cons "priority" priority) opts)))))
 
-(define (impact s) (cons "impact" s))
-(define (unlocks s) (cons "unlocks" s))
+(define (impact s) "Opt: impact key/value." (cons "impact" s))
+(define (unlocks s) "Opt: unlocks key/value." (cons "unlocks" s))
 
 (define (plan batches-per-month starter)
+  "Build a plan alist (batches and starter recipe)."
   (list
     (cons "batches_per_month" batches-per-month)
     (cons "starter_recipe" starter)))
@@ -173,6 +194,7 @@
 
 ;; A shared block is a named list of costs, reusable across recipes.
 (define (shared name costs)
+  "Build a reusable named block of costs."
   (list
     (cons "type" "shared")
     (cons "name" name)
@@ -181,6 +203,7 @@
 ;; uses: recipe-level import of a shared block. Returns a marker that
 ;; rb/collect-recipe splices — the block's costs get appended to the recipe.
 (define (uses block)
+  "Marker importing a shared block's costs into a recipe."
   (list
     (cons "type" "uses")
     (cons "block" block)))
@@ -191,6 +214,7 @@
 
 ;; A mix-part is (package-name . count)
 (define (mixed name parts)
+  "Build a mixed-run part (package-name . count) list."
   (list
     (cons "type" "mixed")
     (cons "name" name)
@@ -201,11 +225,13 @@
 ;; ============================================================
 
 (define (recipe name batch-liters items)
+  "Collect items into a recipe alist with name and batch liters."
   (rb/collect-recipe
     (list (cons "name" name) (cons "batch_liters" batch-liters))
     items))
 
 (define (rb/collect-recipe base items)
+  "Partition recipe items into costs/steps/packages/mixed/uses."
   (if (null? items)
       base
     (let ((item (car items)))
@@ -242,29 +268,36 @@
 
 ;; unit_cost = order_price / to_base(order_qty)
 (define (rb/unit-cost c)
+  "Cost per base unit of a cost entry."
   (let ((oqty-base (rb/to-base (rb/get "order_qty" c))))
     (/ (rb/get "order_price" c) oqty-base)))
 
 ;; line_cost = to_base(qty_per_batch) * unit_cost
 (define (rb/line-cost c)
+  "Total line cost for a cost entry's batch quantity."
   (* (rb/to-base (rb/get "qty_per_batch" c)) (rb/unit-cost c)))
 
 ;; total variable cost = sum of line costs
 (define (rb/variable-cost-total costs)
+  "Sum of line costs across cost entries."
   (rb/sum rb/line-cost costs))
 
 ;; fixed cost total = sum of monthly_cost
 (define (rb/fixed-cost-total costs)
+  "Sum of monthly fixed costs."
   (rb/sum (lambda (c) (rb/get "monthly_cost" c)) costs))
 
 ;; filter costs by category
 (define (rb/costs-by-category cat costs)
+  "Filter cost entries to one category."
   (rb/filter (lambda (c) (string-eq (rb/get "category" c) cat)) costs))
 
 (define (rb/ingredient-costs costs)
+  "Ingredient-cost entries only."
   (rb/costs-by-category "ingredient" costs))
 
 (define (rb/packaging-costs costs)
+  "Packaging-cost entries only."
   (rb/costs-by-category "packaging" costs))
 
 ;; ============================================================
@@ -272,6 +305,7 @@
 ;; ============================================================
 
 (define (rb/business recipe-data pkg fixed-costs)
+  "Assemble a business alist from recipe, package, and fixed costs."
   (list
     (cons "product_name" (rb/get "product_name" pkg))
     (cons "units_per_batch" (rb/get "units_per_batch" pkg))
@@ -288,10 +322,12 @@
 ;; ============================================================
 
 (define (rb/variable-cost-per-unit biz)
+  "Variable cost per produced unit."
   (let ((units (rb/get "units_per_batch" biz)))
     (/ (rb/variable-cost-total (rb/get "variable_costs" biz)) units)))
 
 (define (rb/contribution-margin-per-unit biz)
+  "Selling price minus variable cost per unit."
   (- (rb/get "selling_price" biz) (rb/variable-cost-per-unit biz)))
 
 ;; ============================================================
@@ -299,6 +335,7 @@
 ;; ============================================================
 
 (define (rb/monthly-report biz pln)
+  "Monthly revenue/cost/profit figures plus breakeven."
   (let ((units-per-batch (rb/get "units_per_batch" biz)))
     (let ((batches-per-month (rb/get "batches_per_month" pln)))
       (let ((units-per-month (* units-per-batch batches-per-month)))
@@ -333,6 +370,7 @@
 ;; scale_recipe: if any ingredient/utility has on_hand, find the limiting
 ;; ingredient (smallest on_hand/qty_per_batch ratio) and scale down.
 (define (rb/scale-recipe recipe-data)
+  "Scale a recipe down to the limiting on-hand ingredient."
   (let ((costs (rb/get "costs" recipe-data)))
     (let ((constrained (rb/filter
                           (lambda (c)
@@ -358,12 +396,14 @@
                          (qty-unit (rb/get "batch_liters" recipe-data)))))))))))
 
 (define (rb/min-list xs)
+  "Smallest element of a non-empty numeric list."
   (if (null? (cdr xs))
       (car xs)
     (let ((rest (rb/min-list (cdr xs))))
       (if (< (car xs) rest) (car xs) rest))))
 
 (define (rb/find-limiting costs scale)
+  "Name of the on-hand cost matching the given scale factor."
   (if (null? costs) ()
     (let ((c (car costs)))
       (if (rb/has? "on_hand" c)
@@ -379,6 +419,7 @@
 ;; ============================================================
 
 (define (rb/money n)
+  "Format a number as dollars-and-cents text."
   (let ((cents (round (* n 100.0))))
     (let ((whole (/ (floor cents) 100))
           (frac (mod (floor cents) 100)))
@@ -396,9 +437,11 @@
 
 ;; A batch log: records an actual brew
 (define (brew date recipe-name yield-liters packaged-list ferment-days carbonation rating notes)
+  "Build a batch log entry for an actual brew."
   (rb/make-brew date recipe-name yield-liters packaged-list ferment-days carbonation rating notes))
 
 (define (rb/make-brew date recipe-name yield-liters packaged-list ferment-days carbonation rating notes)
+  "Assemble a batch alist from brew parameters."
   (cons (cons "type" "batch")
   (cons (cons "date" date)
   (cons (cons "recipe" recipe-name)
@@ -410,10 +453,11 @@
   (cons (cons "notes" notes) (list)))))))))))
 
 ;; packaged: (cons pkg-name count) — e.g. (cons "500mL PET" 12)
-(define (packaged pkg-name count) (cons pkg-name count))
+(define (packaged pkg-name count) "A packaged-units entry (name . count)." (cons pkg-name count))
 
 ;; A purchase log: records an actual ingredient/equipment buy
 (define (bought name qty price date opts)
+  "Build a purchase log entry."
   (cons (cons "type" "purchase")
   (cons (cons "name" name)
   (cons (cons "qty" qty)
@@ -425,11 +469,13 @@
 ;; ============================================================
 
 (define (rb/init-storage!)
+  "Ensure the recipe type exists."
   (if (null? (type-fields (quote recipe)))
       (deftype (quote recipe) (quote name) (quote batch_liters) (quote source) (quote created_day))
     ()))
 
 (define (rb/save-recipe! recipe-data source-text)
+  "Persist a recipe alist to the tree with its source text."
   (seq
     (rb/init-storage!)
     (create (quote recipe)
@@ -443,17 +489,21 @@
         "created_day" (date-today)))))
 
 (define (rb/recipe-rows)
+  "All persisted recipe rows."
   (rows (quote recipe)))
 
 (define (rb/fetch-recipe id)
+  "Fetch a single recipe row by id."
   (get (quote recipe) id))
 
 (define (rb/seed-all!)
+  "Seed every bundled recipe, skipping ones already present."
   (seq
     (rb/init-storage!)
     (rb/seed-recipes rb/all-recipes)))
 
 (define (rb/seed-recipes recipes)
+  "Seed a list of (name . recipe-alist) pairs that are not yet stored."
   (if (null? recipes)
       (list)
     (seq
@@ -465,9 +515,11 @@
       (rb/seed-recipes (cdr recipes)))))
 
 (define (rb/find-recipe-row name)
+  "Locate a stored recipe row by name; () when absent."
   (rb/find-in-rows name (rows (quote recipe))))
 
 (define (rb/find-in-rows name rws)
+  "Find a row whose name field equals name."
   (if (null? rws)
       ()
     (if (string-eq (dict-get (cdr (car rws)) "name") name)
@@ -980,11 +1032,13 @@
 
 ;; lookup recipe by name
 (define (rb/find-recipe name)
+  "Look up a recipe alist by name."
   (rb/get name rb/all-recipes))
 
 ;; calc one recipe with first package option + fixed costs
 ;; returns (name . report) or (name . error-string)
 (define (rb/calc-one name)
+  "One recipe's monthly report (or an error string)."
   (let ((r (rb/find-recipe name)))
     (if (null? r)
         (cons name "not found")
@@ -996,6 +1050,7 @@
 
 ;; calc all recipes -> list of (name . report)
 (define (rb/calc-all)
+  "Monthly report for every recipe."
   (rb/map (lambda (pair) (rb/calc-one (car pair))) rb/all-recipes))
 ;; libs/rb/ui.pp — rb route handlers (htmx, server-rendered)
 ;; Depends on: libs/rb/lib.pp, libs/rb/recipes.pp, html package
@@ -1004,27 +1059,30 @@
 ;; HTML HELPERS
 ;; ============================================================
 
-(define (rb/h1 s) (html/h1 s))
-(define (rb/h2 s) (html/h2 s))
-(define (rb/h3 s) (html/h3 s))
-(define (rb/p s) (html/tag "p" "" s))
-(define (rb/td s) (html/tag "td" "" s))
-(define (rb/th s) (html/tag "th" "" s))
+(define (rb/h1 s) "Render an h1." (html/h1 s))
+(define (rb/h2 s) "Render an h2." (html/h2 s))
+(define (rb/h3 s) "Render an h3." (html/h3 s))
+(define (rb/p s) "Render a paragraph." (html/tag "p" "" s))
+(define (rb/td s) "Render a table cell." (html/tag "td" "" s))
+(define (rb/th s) "Render a table header cell." (html/tag "th" "" s))
 
-(define (rb/tr cells) (html/tag "tr" "" (html/join cells)))
-(define (rb/table rows) (html/tag "table" (html/attr "class" "rb-table") (html/join rows)))
+(define (rb/tr cells) "Render a table row from a list of cells." (html/tag "tr" "" (html/join cells)))
+(define (rb/table rows) "Render a styled table." (html/tag "table" (html/attr "class" "rb-table") (html/join rows)))
 
-(define (rb/li s) (html/tag "li" "" s))
-(define (rb/ul items) (html/tag "ul" "" (html/join items)))
+(define (rb/li s) "Render a list item." (html/tag "li" "" s))
+(define (rb/ul items) "Render a list from items." (html/tag "ul" "" (html/join items)))
 
 (define (rb/card title body)
+  "Render a titled card around a body."
   (html/div (html/attr "class" "card")
     (html/join (list (html/h3 title) body))))
 
 (define (rb/link href text)
+  "Render an anchor with href."
   (html/tag "a" (html/attr "href" href) text))
 
 (define (rb/money-cell n)
+  "Render a money value as a table cell."
   (rb/td (rb/money n)))
 
 ;; ============================================================
@@ -1032,6 +1090,7 @@
 ;; ============================================================
 
 (define (rb/page-recipes)
+  "Recipes index page route handler."
   (seq
     (load-library "rb")
     (html/page
@@ -1041,6 +1100,7 @@
           (rb/map rb/recipe-row rb/all-recipes))))))
 
 (define (rb/recipe-row pair)
+  "HTML table row for one recipe with key figures."
   (let ((name (car pair))
         (r (cdr pair)))
     (let ((report (cdr (rb/calc-one name))))
@@ -1057,6 +1117,7 @@
 ;; ============================================================
 
 (define (rb/page-recipe-detail)
+  "Recipe detail page route handler."
   (seq
     (load-library "rb")
     (let ((name (request-param "name")))
@@ -1071,6 +1132,7 @@
                 (rb/recipe-detail-body r)))))))))
 
 (define (rb/recipe-detail-body r)
+  "Body of the recipe detail page (ingredients/steps/packages/report)."
   (html/join
     (list
       (rb/h2 "Ingredients")
@@ -1083,12 +1145,14 @@
       (rb/report-table r))))
 
 (define (rb/ingredient-rows r)
+  "Header plus one row per ingredient cost."
   (let ((costs (rb/get "costs" r)))
     (cons
       (rb/tr (list (rb/th "Name") (rb/th "Per batch") (rb/th "Order") (rb/th "Price") (rb/th "Line cost") (rb/th "Category")))
       (rb/map rb/ingredient-row costs))))
 
 (define (rb/ingredient-row c)
+  "HTML row for a single cost entry."
   (rb/tr (list
     (rb/td (rb/get "name" c))
     (rb/td (rb/qty-str (rb/get "qty_per_batch" c)))
@@ -1098,9 +1162,11 @@
     (rb/td (rb/get "category" c)))))
 
 (define (rb/step-list r)
+  "Unordered list of a recipe's steps."
   (rb/ul (rb/map rb/step-item (rb/get "steps" r))))
 
 (define (rb/step-item s)
+  "List item for a single step with duration and note."
   (let ((name (rb/get "name" s))
         (dur (rb/get "duration" s))
         (note (rb/get "note" s)))
@@ -1110,12 +1176,14 @@
         (if (null? note) "" (string-append " - " (as-str note)))))))
 
 (define (rb/package-rows r)
+  "Header plus one row per package option."
   (let ((pkgs (rb/get "packages" r)))
     (cons
       (rb/tr (list (rb/th "Package") (rb/th "Units/batch") (rb/th "L/unit") (rb/th "Price") (rb/th "Margin/unit")))
       (rb/map (lambda (pk) (rb/package-row r pk)) pkgs))))
 
 (define (rb/package-row r pk)
+  "HTML row for one package option and its margins."
   (let ((biz (rb/business r pk rb/fixed-costs)))
     (rb/tr (list
       (rb/td (rb/get "product_name" pk))
@@ -1125,6 +1193,7 @@
       (rb/money-cell (rb/contribution-margin-per-unit biz))))))
 
 (define (rb/report-table r)
+  "Monthly report as a metric/value table."
   (let ((pkgs (rb/get "packages" r)))
     (if (null? pkgs)
         (rb/p "No packages configured")
@@ -1147,6 +1216,7 @@
 ;; ============================================================
 
 (define (rb/page-shopping)
+  "Shopping-list page route handler."
   (seq
     (load-library "rb")
     (let ((name (request-param "name")))
@@ -1161,6 +1231,7 @@
                 (rb/shopping-body r)))))))))
 
 (define (rb/shopping-body r)
+  "Shopping list table for one recipe."
   (let ((costs (rb/get "costs" r)))
     (rb/table
       (cons
@@ -1168,6 +1239,7 @@
         (rb/map rb/shopping-row costs)))))
 
 (define (rb/shopping-row c)
+  "HTML row for one shopping-list line."
   (let ((src (rb/get "source" c)))
     (rb/tr (list
       (rb/td (rb/get "name" c))
@@ -1180,6 +1252,7 @@
 ;; ============================================================
 
 (define (rb/page-capital)
+  "Capital plan page route handler."
   (seq
     (load-library "rb")
     (html/page
@@ -1191,12 +1264,14 @@
         (rb/fixed-cost-table)))))
 
 (define (rb/equipment-table)
+  "Equipment table with impact/unlocks columns."
   (rb/table
     (cons
       (rb/tr (list (rb/th "Priority") (rb/th "Item") (rb/th "Price") (rb/th "Impact") (rb/th "Unlocks")))
       (rb/map rb/equipment-row rb/equipment-list))))
 
 (define (rb/equipment-row e)
+  "HTML row for one equipment entry."
   (rb/tr (list
     (rb/td (as-str (rb/get "priority" e)))
     (rb/td (rb/get "name" e))
@@ -1205,12 +1280,14 @@
     (rb/td (let ((u (rb/get "unlocks" e))) (if (null? u) "" (as-str u)))))))
 
 (define (rb/fixed-cost-table)
+  "Fixed-cost summary table."
   (rb/table
     (cons
       (rb/tr (list (rb/th "Name") (rb/th "Monthly cost")))
       (rb/map rb/fixed-cost-row rb/fixed-costs))))
 
 (define (rb/fixed-cost-row f)
+  "HTML row for one fixed-cost entry."
   (rb/tr (list
     (rb/td (rb/get "name" f))
     (rb/money-cell (rb/get "monthly_cost" f)))))
@@ -1220,6 +1297,7 @@
 ;; ============================================================
 
 (define (rb/page-label)
+  "Label page route handler (renders a print label)."
   (seq
     (load-library "rb")
     (let ((name (request-param "name")))
@@ -1231,6 +1309,7 @@
             (render-html (rb/label-html r))))))))
 
 (define (rb/label-html r)
+  "Inline HTML for a printable product label."
   (let ((name (rb/get "name" r)))
     (string-append
       "<div style=\"width:4in;height:3in;border:2px solid #8B4513;border-radius:8px;padding:12px;font-family:serif;background:linear-gradient(135deg,#f5e6d3,#f0d5b8);display:flex;flex-direction:column;justify-content:space-between\">"
@@ -1253,6 +1332,7 @@
 ;; ============================================================
 
 (define (rb/page-batches)
+  "Batch log page route handler."
   (seq
     (load-library "rb")
     (html/page
@@ -1261,12 +1341,14 @@
         (rb/batch-table)))))
 
 (define (rb/batch-table)
+  "Batch log table."
   (rb/table
     (cons
       (rb/tr (list (rb/th "Date") (rb/th "Recipe") (rb/th "Yield") (rb/th "Packaged") (rb/th "Rating")))
       (rb/map rb/batch-row rb/batches))))
 
 (define (rb/batch-row b)
+  "HTML row for one batch log entry."
   (rb/tr (list
     (rb/td (rb/get "date" b))
     (rb/td (rb/get "recipe" b))
@@ -1279,6 +1361,7 @@
 ;; ============================================================
 
 (define (rb/page-purchases)
+  "Purchase log page route handler."
   (seq
     (load-library "rb")
     (html/page
@@ -1287,12 +1370,14 @@
         (rb/purchase-table)))))
 
 (define (rb/purchase-table)
+  "Purchase log table."
   (rb/table
     (cons
       (rb/tr (list (rb/th "Date") (rb/th "Item") (rb/th "Qty") (rb/th "Price") (rb/th "Source")))
       (rb/map rb/purchase-row rb/purchases))))
 
 (define (rb/purchase-row p)
+  "HTML row for one purchase entry."
   (let ((src (rb/get "source" p)))
     (rb/tr (list
       (rb/td (rb/get "date" p))
@@ -1306,12 +1391,14 @@
 ;; ============================================================
 
 (define (order customer date line-items opts)
+  "Build an order alist."
   (cons (cons "type" "order")
   (cons (cons "customer" customer)
   (cons (cons "date" date)
   (cons (cons "line_items" line-items) opts)))))
 
 (define (line-item recipe-name qty price)
+  "Build an order line item alist."
   (list
     (cons "recipe" recipe-name)
     (cons "qty" qty)
@@ -1322,11 +1409,13 @@
 
 ;; order persistence
 (define (rb/init-order-storage!)
+  "Ensure the order type exists."
   (if (null? (type-fields (quote order)))
       (deftype (quote order) (quote customer) (quote date) (quote line_items) (quote total) (quote created_day))
     ()))
 
 (define (rb/save-order! ord)
+  "Persist an order alist to the tree."
   (seq
     (rb/init-order-storage!)
     (create (quote order)
@@ -1342,10 +1431,12 @@
         "created_day" (date-today)))))
 
 (define (rb/order-total ord)
+  "Total revenue of an order's line items."
   (rb/sum (lambda (li) (* (rb/get "qty" li) (rb/get "price" li)))
           (rb/get "line_items" ord)))
 
 (define (rb/order-rows)
+  "All persisted order rows."
   (rows (quote order)))
 
 ;; ============================================================
@@ -1355,6 +1446,7 @@
 ;; Compare planned profit (from calc) vs actual revenue (from orders).
 ;; Returns ((planned_revenue . X) (actual_revenue . Y) (variance . Z))
 (define (rb/planned-vs-actual)
+  "Planned vs actual revenue with variance."
   (let ((planned (rb/sum (lambda (p) (rb/get "revenue_per_month" (cdr p))) (rb/calc-all))))
     (let ((actual (rb/actual-revenue)))
       (list
@@ -1363,6 +1455,7 @@
         (cons "variance" (- actual planned))))))
 
 (define (rb/actual-revenue)
+  "Sum of totals across all order rows."
   (rb/sum (lambda (row) (parse-float (dict-get (cdr row) "total"))) (rb/order-rows)))
 
 ;; ============================================================
@@ -1370,6 +1463,7 @@
 ;; ============================================================
 
 (define (rb/page-orders)
+  "Orders page route handler (table + planned vs actual)."
   (seq
     (load-library "rb")
     (html/page
@@ -1380,6 +1474,7 @@
         (rb/pva-table)))))
 
 (define (rb/order-table)
+  "Orders table, or a note when none exist."
   (let ((rws (rb/order-rows)))
     (if (null? rws)
         (rb/p "No orders yet. Sell some soda!")
@@ -1389,6 +1484,7 @@
           (rb/map rb/order-data-row rws))))))
 
 (define (rb/order-data-row row)
+  "HTML row for one persisted order."
   (let ((f (cdr row)))
     (rb/tr (list
       (rb/td (dict-get f "date"))
@@ -1396,6 +1492,7 @@
       (rb/money-cell (parse-float (dict-get f "total")))))))
 
 (define (rb/pva-table)
+  "Planned-vs-actual metric table."
   (let ((pva (rb/planned-vs-actual)))
     (rb/table
       (list
@@ -1409,6 +1506,7 @@
 ;; ============================================================
 
 (define (rb/page-report)
+  "Business report page route handler."
   (seq
     (load-library "rb")
     (html/page
@@ -1420,12 +1518,14 @@
         (rb/plan-table)))))
 
 (define (rb/report-summary-table)
+  "Monthly profit-by-recipe summary table."
   (rb/table
     (cons
       (rb/tr (list (rb/th "Recipe") (rb/th "Revenue/mo") (rb/th "Cost/mo") (rb/th "Profit/mo") (rb/th "Margin/unit")))
       (rb/map rb/report-summary-row (rb/calc-all)))))
 
 (define (rb/report-summary-row pair)
+  "HTML row for one recipe's report summary."
   (let ((name (car pair)) (report (cdr pair)))
     (rb/tr (list
       (rb/td (rb/link (string-append "/recipe?name=" (html-escape name)) name))
@@ -1435,6 +1535,7 @@
       (rb/money-cell (rb/get "contribution_margin_per_unit" report))))))
 
 (define (rb/plan-table)
+  "Plan configuration summary table."
   (rb/table
     (list
       (rb/tr (list (rb/th "Metric") (rb/th "Value")))
