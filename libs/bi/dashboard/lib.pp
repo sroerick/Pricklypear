@@ -4,6 +4,7 @@
 (define bi/dashboard
   (lambda
     ()
+    "Seed sample data then render the dashboard page."
     (seq (bi/seed-sample-data) (bi/dashboard-html))))
 
 (define bi/dashboard/preview-note
@@ -14,6 +15,7 @@
 (define bi/dashboard/publish
   (lambda
     (source-body prompt)
+    "Install bi/dashboard-html from source and record the revision."
     (seq
       (install-function
         "bi/dashboard-html"
@@ -38,6 +40,7 @@
 (define bi/dashboard/read
   (lambda
     ()
+    "Return the dashboard metrics, source, and route as a dict."
     (dict-set*
       "{}"
       (list
@@ -49,5 +52,5 @@
         "/bi"))))
 
 (define bi/dashboard/source
-  (lambda () (function-source "bi/dashboard-html")))
+  (lambda () "Source text of bi/dashboard-html." (function-source "bi/dashboard-html")))
 
