@@ -4,6 +4,7 @@
 (define structed/barf-backward
   (lambda
     (get-kids set-kids tree id)
+    "Move a target's first child up to become its preceding sibling; returns (tree id)."
     (let
       ((target (structed/find get-kids tree id)))
       (if
@@ -48,6 +49,7 @@
 (define structed/barf-forward
   (lambda
     (get-kids set-kids tree id)
+    "Move a target's last child down to become its next sibling; returns (tree id)."
     (let
       ((target (structed/find get-kids tree id)))
       (if
@@ -96,11 +98,13 @@
 (define structed/count
   (lambda
     (xs)
+    "Length of the list xs."
     (if (null? xs) 0 (+ 1 (structed/count (cdr xs))))))
 
 (define structed/find
   (lambda
     (get-kids tree id)
+    "Node in tree whose id matches, or ()."
     (if
       (string-eq (structed/id tree) id)
       tree
@@ -109,6 +113,7 @@
 (define structed/find-in-kids
   (lambda
     (get-kids kids id)
+    "Depth-first search for id across the sibling list kids."
     (if
       (null? kids)
       ()
@@ -122,6 +127,7 @@
 (define structed/find-parent
   (lambda
     (get-kids tree id)
+    "Parent node of the node with id, or ()."
     (if
       (string-eq (structed/id tree) id)
       ()
@@ -134,6 +140,7 @@
 (define structed/find-parent-in-kids
   (lambda
     (get-kids parent kids id)
+    "Search kids for id, returning the enclosing parent node."
     (if
       (null? kids)
       ()
@@ -154,11 +161,12 @@
                 id))))))))
 
 (define structed/id
-  (lambda (n) (as-str (car n))))
+  (lambda (n) "Node id as a string." (as-str (car n))))
 
 (define structed/join
   (lambda
     (get-kids set-kids tree id)
+    "Merge a target with its next sibling (children merged, next removed); returns (tree id)."
     (let
       ((parent (structed/find-parent get-kids tree id)))
       (if
@@ -197,6 +205,7 @@
 (define structed/list/drop
   (lambda
     (xs n)
+    "Element list with the first n removed."
     (if
       (or (null? xs) (<= n 0))
       xs
@@ -205,11 +214,13 @@
 (define structed/list/index-of
   (lambda
     (xs x eq?)
+    "First index of x in xs per eq?, or -1."
     (structed/list/index-of-acc xs x eq? 0)))
 
 (define structed/list/index-of-acc
   (lambda
     (xs x eq? i)
+    "Accumulating index search helper."
     (if
       (null? xs)
       -1
@@ -221,6 +232,7 @@
 (define structed/list/insert-at
   (lambda
     (xs i v)
+    "Insert v into xs at index i (clamped to head)."
     (if
       (or (null? xs) (<= i 0))
       (cons v xs)
@@ -231,6 +243,7 @@
 (define structed/list/insert-list-at
   (lambda
     (xs i ys)
+    "Insert every element of ys into xs starting at index i."
     (if
       (null? ys)
       xs
@@ -242,6 +255,7 @@
 (define structed/list/nth
   (lambda
     (xs i)
+    "Element at index i of xs, or ()."
     (if
       (null? xs)
       ()
@@ -253,6 +267,7 @@
 (define structed/list/remove-at
   (lambda
     (xs i)
+    "xs with the element at index i removed."
     (if
       (null? xs)
       (list)
@@ -266,6 +281,7 @@
 (define structed/list/replace-at
   (lambda
     (xs i v)
+    "xs with index i replaced by v."
     (if
       (null? xs)
       (list)
@@ -279,6 +295,7 @@
 (define structed/list/split-at
   (lambda
     (xs i)
+    "Split xs at index i into (before after)."
     (list
       (structed/list/take xs i)
       (structed/list/drop xs i))))
@@ -286,6 +303,7 @@
 (define structed/list/take
   (lambda
     (xs n)
+    "First n elements of xs."
     (if
       (or (null? xs) (<= n 0))
       (list)
@@ -294,6 +312,7 @@
 (define structed/raise
   (lambda
     (get-kids set-kids tree id)
+    "Lift a target up to replace its grandparent; returns (tree id)."
     (let
       ((parent (structed/find-parent get-kids tree id)))
       (if
@@ -339,6 +358,7 @@
 (define structed/reattach
   (lambda
     (get-kids set-kids tree id new-sibs-fn)
+    "Replace the target's sibling slot with new-sibs-fn applied to its parent; returns (tree id)."
     (let
       ((parent (structed/find-parent get-kids tree id)))
       (if
@@ -365,6 +385,7 @@
 (define structed/replace
   (lambda
     (get-kids set-kids tree id node)
+    "Substitute node for the node currently at id."
     (structed/update
       get-kids
       set-kids
@@ -375,6 +396,7 @@
 (define structed/roundtrip-slurp-barf
   (lambda
     (get-kids set-kids tree id)
+    "Check that slurp-forward then barf-forward restores the tree (or () on mismatch)."
     (let
       ((r1 (structed/slurp-forward get-kids set-kids tree id)))
       (let
@@ -388,6 +410,7 @@
 (define structed/roundtrip-wrap-splice
   (lambda
     (get-kids set-kids make-wrap-node tree id)
+    "Check that wrap then splice restores the tree (or () on mismatch)."
     (let
       ((r1
         (structed/wrap
@@ -408,6 +431,7 @@
 (define structed/sibling-index
   (lambda
     (get-kids tree id)
+    "0-based index of a target within its parent's kids."
     (let
       ((sibs (structed/siblings get-kids tree id)))
       (let
@@ -423,6 +447,7 @@
 (define structed/siblings
   (lambda
     (get-kids tree id)
+    "Sibling list of the node with id, or () for the root."
     (let
       ((parent (structed/find-parent get-kids tree id)))
       (if parent (get-kids parent) (list)))))
@@ -430,6 +455,7 @@
 (define structed/slurp-backward
   (lambda
     (get-kids set-kids tree id)
+    "Absorb a target's previous sibling into it; returns (tree id)."
     (let
       ((parent (structed/find-parent get-kids tree id)))
       (if
@@ -469,6 +495,7 @@
 (define structed/slurp-forward
   (lambda
     (get-kids set-kids tree id)
+    "Absorb a target's next sibling into it; returns (tree id)."
     (let
       ((parent (structed/find-parent get-kids tree id)))
       (if
@@ -510,6 +537,7 @@
 (define structed/splice
   (lambda
     (get-kids set-kids tree id)
+    "Lift a target's children up into its slot (removing it); returns (tree sel)."
     (let
       ((target (structed/find get-kids tree id)))
       (if
@@ -544,6 +572,7 @@
 (define structed/split
   (lambda
     (get-kids set-kids make-node tree id pos)
+    "Split a target's children at pos into two sibling nodes; returns (tree first-id)."
     (let
       ((target (structed/find get-kids tree id)))
       (if
@@ -590,6 +619,7 @@
 (define structed/transpose
   (lambda
     (get-kids set-kids tree id)
+    "Swap a target with its next sibling (or previous at the end); returns (tree id)."
     (let
       ((parent (structed/find-parent get-kids tree id)))
       (if
@@ -629,6 +659,7 @@
 (define structed/update
   (lambda
     (get-kids set-kids tree id f)
+    "Apply f to the node at id, rebuilding the tree along the way."
     (if
       (string-eq (structed/id tree) id)
       (f tree)
@@ -644,6 +675,7 @@
 (define structed/update-kids
   (lambda
     (get-kids set-kids kids id f)
+    "Apply update across a sibling list, mapping each child."
     (if
       (null? kids)
       (list)
@@ -654,6 +686,7 @@
 (define structed/wrap
   (lambda
     (get-kids set-kids make-wrap-node tree id head)
+    "Wrap a target in a new node (from make-wrap-node); returns (tree wrap-id)."
     (let
       ((target (structed/find get-kids tree id)))
       (if
