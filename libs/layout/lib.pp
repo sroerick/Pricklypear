@@ -23,6 +23,7 @@
 (define layout/card
   (lambda
     (title body)
+    "Render a titled HTML card wrapping body."
     (html/div
       (html/attr "class" "layout-card")
       (html/join
@@ -36,6 +37,7 @@
 (define layout/cards
   (lambda
     (card-htmls)
+    "Render a grid of card HTML snippets."
     (html/div
       (html/attr "class" "layout-cards")
       (html/join card-htmls))))
@@ -43,6 +45,7 @@
 (define layout/cta
   (lambda
     (href label)
+    "Render a call-to-action link to href with label."
     (html/tag
       "a"
       (html/attrs
@@ -54,6 +57,7 @@
 (define layout/hero
   (lambda
     (title tagline actions-html)
+    "Render a hero section with logo, title, tagline, and actions."
     (html/div
       (html/attr "class" "layout-hero")
       (html/join
@@ -74,6 +78,7 @@
 (define layout/logo
   (lambda
     ()
+    "Render the Pricklypear logo image."
     (html/void
       "img"
       (html/attrs
@@ -87,6 +92,7 @@
 (define layout/nc-badge
   (lambda
     (href bg fg label)
+    "Render a badge link with background color and label."
     (html/tag
       "a"
       (html/attrs
@@ -101,6 +107,7 @@
 (define layout/neocities-banner
   (lambda
     ()
+    "Render the under-construction banner strip."
     (html/div
       (html/attr "class" "nc-banner")
       (html/join
@@ -120,6 +127,7 @@
 (define layout/neocities-foot
   (lambda
     ()
+    "Render the neocities footer with webring, badges, counter, and colophon."
     (html/div
       (html/attr "class" "nc-foot")
       (html/join
@@ -214,6 +222,7 @@
 (define layout/neocities-marquee-msg
   (lambda
     ()
+    "Render the scrolling marquee welcome message."
     (html/tag
       "span"
       (html/attr "class" "nc-marquee-msg")
@@ -223,11 +232,13 @@
 (define layout/neocities-style
   (lambda
     ()
+    "Render the neocities theme as a <style> element."
     (html/tag "style" "" (layout/neocities-theme))))
 
 (define layout/neocities-theme
   (lambda
     ()
+    "Return the neocities CSS stylesheet for the retro cactus look."
     (html/join
       (list
         "body{background-color:#2a6a6a;background-image:repeating-linear-gradient(45deg,rgba(255,255,255,.05) 0 2px,transparent 2px 14px),repeating-linear-gradient(-45deg,rgba(0,0,0,.06) 0 2px,transparent 2px 14px)}"
@@ -270,6 +281,7 @@
 (define layout/neocities-top
   (lambda
     ()
+    "Render the top marquee bar."
     (html/div
       (html/attr "class" "nc-marquee-bar")
       (html/div
@@ -282,6 +294,7 @@
 (define layout/page
   (lambda
     (parts)
+    "Render a full neocities page from a list of HTML parts."
     (render-html
       (html/join
         (list
@@ -297,6 +310,7 @@
 (define layout/page-with-css
   (lambda
     (parts)
+    "Render a page from parts with only the base stylesheet."
     (render-html
       (html/join
         (list
@@ -308,6 +322,7 @@
 (define layout/section
   (lambda
     (title body)
+    "Render a titled section wrapping body."
     (html/div
       (html/attr "class" "layout-section")
       (html/join
@@ -323,11 +338,13 @@
 (define layout/style
   (lambda
     ()
+    "Render the base layout theme as a <style> element."
     (html/tag "style" "" (css/render (layout/theme)))))
 
 (define layout/theme
   (lambda
     ()
+    "Return the base layout CSS stylesheet."
     (css/sheet
       (list
         (css/rule
@@ -509,6 +526,7 @@
 (define layout/theme-vars
   (lambda
     ()
+    "Return the CSS custom-property (theme variable) stylesheet."
     (css/sheet
       (list
         (css/rule

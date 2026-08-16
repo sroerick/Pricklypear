@@ -4,6 +4,7 @@
 (define notes/doc/daily
   (lambda
     (day)
+    "Fetch the daily note for day; create it if absent, returning its row."
     (let
       ((slug (string-append "daily-" (as-str day))))
       (if
@@ -21,11 +22,12 @@
         (notes/doc/get slug)))))
 
 (define notes/doc/day
-  (lambda (n) (car (cdr (cdr (cdr (cdr (cdr (cdr n)))))))))
+  (lambda (n) "The day field of a doc row n." (car (cdr (cdr (cdr (cdr (cdr (cdr n)))))))))
 
 (define notes/doc/delete
   (lambda
     (slug)
+    "Delete the note with slug (roam links and tree path), returning slug."
     (let
       ((row (notes/doc/row (as-str slug))))
       (if
@@ -42,11 +44,12 @@
           slug)))))
 
 (define notes/doc/empty-outline
-  (lambda (title) (outline/node "root" title)))
+  (lambda (title) "Build a root outline node with title." (outline/node "root" title)))
 
 (define notes/doc/ensure-inbox
   (lambda
     ()
+    "Ensure the inbox note exists, creating it if absent and returning it."
     (if
       (null? (notes/doc/get "inbox"))
       (seq
@@ -63,6 +66,7 @@
 (define notes/doc/folder
   (lambda
     (n)
+    "The folder field of a doc row n; empty when absent."
     (if
       (null? n)
       ""
@@ -74,6 +78,7 @@
 (define notes/doc/display-folder
   (lambda
     (folder)
+    "Display folder for the index: strip a garden/ prefix and kebab labels."
     (let
       ((f (as-str folder)))
       (let
@@ -87,6 +92,7 @@
 (define notes/doc/folder-names
   (lambda
     ()
+    "Distinct folder names across all visible notes in index order."
     (list/foldl
       (lambda
         (acc row)
@@ -102,6 +108,7 @@
 (define notes/doc/folder-seen?
   (lambda
     (xs f)
+    "True if f is already in the string list xs."
     (if
       (null? xs)
       #f
@@ -113,6 +120,7 @@
 (define notes/doc/get
   (lambda
     (slug)
+    "Fetch a doc row for slug as (id slug title outline tags kind day folder); () when absent."
     (let
       ((row (notes/doc/row slug)))
       (if
@@ -135,6 +143,7 @@
 (define notes/doc/hidden?
   (lambda
     (row)
+    "True if row should be hidden (inbox/hidden kind or hidden tag)."
     (let
       ((f (cdr row)))
       (let
@@ -155,22 +164,25 @@
 (define notes/doc/index-list
   (lambda
     ()
+    "All non-hidden notes."
     (list/filter
       (lambda (row) (not (notes/doc/hidden? row)))
       (notes/doc/list))))
 
 (define notes/doc/kind
-  (lambda (n) (car (cdr (cdr (cdr (cdr (cdr n))))))))
+  (lambda (n) "The kind field of a doc row n." (car (cdr (cdr (cdr (cdr (cdr n))))))))
 
 (define notes/doc/list
   (lambda
     ()
     ;; index-read-path I4 / F1: tree only — no data_rows fallback
+    "List all notes from the tree when enabled, else ()."
     (if (notes/tree/enabled?) (notes/tree/list-notes) (list))))
 
 (define notes/doc/list-folder
   (lambda
     (folder)
+    "All visible notes in the given folder."
     (let
       ((want (as-str folder)))
       (list/filter
@@ -188,6 +200,7 @@
       kind
       day
       folder)
+    "Build the fields JSON string for a note row."
     (dict-set*
       "{}"
       (list
@@ -207,11 +220,12 @@
         (as-str folder)))))
 
 (define notes/doc/outline
-  (lambda (n) (car (cdr (cdr (cdr n))))))
+  (lambda (n) "The decoded outline of a doc row n." (car (cdr (cdr (cdr n))))))
 
 (define notes/doc/row
   (lambda
     (slug)
+    "Fetch the raw note row for slug from tree or data_rows; () when absent."
     (let
       ((tr
         (if
@@ -228,6 +242,7 @@
 (define notes/doc/row-folder
   (lambda
     (row)
+    "The folder field of a raw row; empty when absent."
     (if
       (null? row)
       ""
@@ -238,6 +253,7 @@
 (define notes/doc/row-path
   (lambda
     (row)
+    "The tree path of a raw row; empty when absent."
     (if
       (null? row)
       ""
@@ -250,6 +266,7 @@
 (define notes/doc/search
   (lambda
     (q)
+    "Full-text search over notes; returns a list of hit JSON strings."
     (let
       ((needle (string-trim (as-str q))))
       (if
@@ -262,6 +279,7 @@
 (define notes/doc/set-folder
   (lambda
     (slug folder)
+    "Move the note with slug into folder (tree move or data_rows update)."
     (let
       ((row (notes/doc/row (as-str slug))))
       (if
@@ -292,17 +310,19 @@
 (define notes/doc/show-archived?
   (lambda
     ()
+    "True when the request asks to show archived notes."
     (string-eq (as-str (request-param "show")) "archived")))
 
 (define notes/doc/tags
-  (lambda (n) (car (cdr (cdr (cdr (cdr n)))))))
+  (lambda (n) "The tags field of a doc row n." (car (cdr (cdr (cdr (cdr n)))))))
 
 (define notes/doc/title
-  (lambda (n) (car (cdr (cdr n)))))
+  (lambda (n) "The title field of a doc row n." (car (cdr (cdr n)))))
 
 (define notes/doc/upsert
   (lambda
     (slug title outline tags kind day)
+    "Create or update the note with slug, preserving its folder, returning slug."
     (let
       ((row (notes/doc/row slug)))
       (notes/doc/upsert-in
@@ -323,6 +343,7 @@
       kind
       day
       folder)
+    "Write the note with slug into the given folder, returning slug."
     (if
       (notes/tree/enabled?)
       (let

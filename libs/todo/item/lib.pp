@@ -4,6 +4,7 @@
 (define todo/item/active
   (lambda
     (items)
+    "Items that are not archived."
     (list/filter
       (lambda
         (row)
@@ -13,6 +14,7 @@
 (define todo/item/add
   (lambda
     (list-id title)
+    "Create a new TODO item in list-id (or inbox) with title; returns the new id."
     (let
       ((lid
         (if
@@ -40,14 +42,15 @@
             "false"))))))
 
 (define todo/item/all
-  (lambda () (todo/tree/rows "todo-item" 200)))
+  (lambda () "List up to 200 todo item rows." (todo/tree/rows "todo-item" 200)))
 
 (define todo/item/archive
-  (lambda (id) (todo/item/set-state id "ARCHIVED")))
+  (lambda (id) "Set item id to ARCHIVED." (todo/item/set-state id "ARCHIVED")))
 
 (define todo/item/archived
   (lambda
     ()
+    "All archived items."
     (list/filter
       (lambda
         (row)
@@ -57,11 +60,13 @@
 (define todo/item/count-all
   (lambda
     (items)
+    "Total number of items."
     (list/foldl (lambda (acc _) (+ acc 1)) 0 items)))
 
 (define todo/item/count-open
   (lambda
     (items)
+    "Number of items in an open state."
     (list/foldl
       (lambda
         (acc row)
@@ -75,6 +80,7 @@
 (define todo/item/cycle
   (lambda
     (id)
+    "Advance item id to its next state; () when missing."
     (let
       ((row (todo/tree/get "todo-item" id)))
       (if
@@ -88,11 +94,12 @@
             (todo/item/set-state id (todo/state/next cur))))))))
 
 (define todo/item/delete
-  (lambda (id) (todo/tree/del "todo-item" id)))
+  (lambda (id) "Delete item id." (todo/tree/del "todo-item" id)))
 
 (define todo/item/due
   (lambda
     (fields)
+    "The due field of item fields; empty when absent."
     (let
       ((d (dict-get fields "due")))
       (if (null? d) "" (as-str d)))))
@@ -100,6 +107,7 @@
 (define todo/item/for-list
   (lambda
     (list-id)
+    "All items belonging to list-id (inbox treated as empty list_id)."
     (let
       ((lid (as-str list-id))
         (inbox-id (todo/list/ensure-inbox)))
@@ -115,11 +123,12 @@
         (todo/item/all)))))
 
 (define todo/item/get
-  (lambda (id) (todo/tree/get "todo-item" id)))
+  (lambda (id) "Fetch the item row with id." (todo/tree/get "todo-item" id)))
 
 (define todo/item/html
   (lambda
     (view)
+    "Render TODO items as HTML for the given view (from-notes/archived/everything or a list id)."
     (if
       (string-eq view "from-notes")
       (html/ul
@@ -177,6 +186,7 @@
 (define todo/item/list-id
   (lambda
     (fields)
+    "The list_id field of item fields; empty when absent."
     (let
       ((lid (dict-get fields "list_id")))
       (if (null? lid) "" (as-str lid)))))
@@ -184,6 +194,7 @@
 (define todo/item/list-li
   (lambda
     (row view)
+    "Render a single todo item row as an HTML <li>."
     (let
       ((id (car row)) (fields (cdr row)))
       (let
@@ -277,6 +288,7 @@
 (define todo/item/note-li
   (lambda
     (t view)
+    "Render a TODO sourced from a note as an HTML <li>."
     (let
       ((slug (car t))
         (nid (car (cdr t)))
@@ -327,6 +339,7 @@
 (define todo/item/notes
   (lambda
     (fields)
+    "The notes field of item fields; empty when absent."
     (let
       ((n (dict-get fields "notes")))
       (if (null? n) "" (as-str n)))))
@@ -334,6 +347,7 @@
 (define todo/item/save
   (lambda
     (id title notes due state list-id)
+    "Update item id's fields; () when missing."
     (let
       ((fields (todo/item/get id)))
       (if
@@ -365,6 +379,7 @@
 (define todo/item/set-state
   (lambda
     (id state)
+    "Set item id's state field to state."
     (todo/tree/set-field
       "todo-item"
       id
@@ -374,6 +389,7 @@
 (define todo/item/state
   (lambda
     (fields)
+    "The state field of item fields; falls back to the legacy done flag (TODO/DONE)."
     (let
       ((s (dict-get fields "state")))
       (if
@@ -387,5 +403,5 @@
         (as-str s)))))
 
 (define todo/item/title
-  (lambda (fields) (as-str (dict-get fields "title"))))
+  (lambda (fields) "The title field of item fields." (as-str (dict-get fields "title"))))
 

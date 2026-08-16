@@ -1,13 +1,14 @@
 ;; package welcome -- exported from live branch system/main
 
 (define welcome/blank?
-  (lambda (s) (string-eq (string-trim (as-str s)) "")))
+  (lambda (s) "True if trimmed s is empty." (string-eq (string-trim (as-str s)) "")))
 
 ;; Sync: scripts/pp_sync.py pull|push
 
 (define welcome/background
   (lambda
     ()
+    "Render the /background about page."
     (layout/page
       (list
         (layout/hero
@@ -60,6 +61,7 @@
 (define welcome/book
   (lambda
     ()
+    "Render the /book explainer page for the literate code PDF."
     (layout/page
       (list
         (layout/hero
@@ -88,6 +90,7 @@
 (define welcome/guestbook
   (lambda
     ()
+    "Route handler for /guestbook: record POSTs or show the form."
     (if
       (string-eq (request-method) "POST")
       (let
@@ -110,6 +113,7 @@
 (define welcome/guestbook-entries
   (lambda
     ()
+    "Render the list of guestbook entries as an HTML list."
     (let
       ((rs (rows (quote guestbook_entry) 200)))
       (if
@@ -123,6 +127,7 @@
 (define welcome/guestbook-fields
   (lambda
     (name site message)
+    "Build the guestbook_entry fields JSON string from trimmed inputs."
     (dict-set*
       "{}"
       (list
@@ -136,6 +141,7 @@
 (define welcome/guestbook-form
   (lambda
     (msg err)
+    "Render the guestbook form page with msg/err notices and entries."
     (layout/page
       (list
         (layout/hero
@@ -201,6 +207,7 @@
 (define welcome/guestbook-record
   (lambda
     (name site message)
+    "Create a new guestbook_entry row from name, site, and message."
     (create
       (quote guestbook_entry)
       (welcome/guestbook-fields name site message))))
@@ -208,6 +215,7 @@
 (define welcome/guestbook-row-html
   (lambda
     (row)
+    "Render a single guestbook entry row as an HTML <li>."
     (let
       ((f (cdr row)))
       (let
@@ -243,6 +251,7 @@
 (define welcome/page
   (lambda
     ()
+    "Render the /welcome landing page."
     (layout/page
       (list
         (layout/hero
@@ -372,6 +381,7 @@
 (define welcome/roadmap
   (lambda
     ()
+    "Render the /roadmap page."
     (layout/page
       (list
         (layout/hero
