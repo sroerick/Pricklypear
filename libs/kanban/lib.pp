@@ -70,6 +70,7 @@
 
 (define kanban/renumber
   (lambda (cards state)
+    "Renumber cards in the given state from 0, tree/upserting each."
     (kanban/renumber-at cards state 0)))
 
 (define kanban/remove-id
@@ -86,6 +87,7 @@
 
 (define kanban/insert-at-at
   (lambda (cards row index i acc)
+    "Internal accumulating insert of row at index into cards."
     (if (null? cards)
       (append (reverse acc) (list row))
       (if (>= i index)
@@ -173,6 +175,7 @@
 
 (define kanban/remove-named
   (lambda (cols name)
+    "Drop the column named name from cols."
     (list/filter (lambda (c) (not (string-eq (as-str c) name))) cols)))
 
 (define kanban/rename-column
@@ -189,6 +192,7 @@
 
 (define kanban/replace-named
   (lambda (cols old-name new-name)
+    "Rename old-name to new-name throughout cols."
     (list/map
       (lambda (c) (if (string-eq (as-str c) old-name) new-name (as-str c)))
       cols)))
@@ -204,6 +208,7 @@
 
 (define kanban/rename-state-at
   (lambda (cards new-name)
+    "tree/upsert each card with its state set to new-name."
     (if (null? cards)
       ()
       (let ((row (car cards)))
@@ -261,6 +266,7 @@
 
 (define kanban/move-btn
   (lambda (id list-id action label)
+    "Small POST form button for one move action on a card."
     (html/form "POST" "/kanban"
       (html/attrs
         (list
@@ -311,6 +317,7 @@
 
 (define kanban/cards-html
   (lambda (list-id cards columns)
+    "Concatenated card HTML for the card list."
     (if (null? cards)
       ""
       (string-append
@@ -319,6 +326,7 @@
 
 (define kanban/col-remove-btn
   (lambda (list-id state)
+    "Confirming button to remove a column from the list."
     (html/form "POST" "/kanban"
       (html/attrs
         (list
@@ -336,6 +344,7 @@
 
 (define kanban/add-card-form
   (lambda (list-id state)
+    "Per-column form to add a card with a title."
     (html/form "POST" "/kanban"
       (html/attrs
         (list
@@ -376,6 +385,7 @@
 
 (define kanban/in-columns?
   (lambda (columns state)
+    "True if state is one of the column names."
     (if (null? columns)
       #f
       (if (string-eq (as-str (car columns)) state)
@@ -384,6 +394,7 @@
 
 (define kanban/add-column-form
   (lambda (list-id)
+    "Form to add a new column to the list."
     (html/form "POST" "/kanban"
       (html/attrs
         (list
@@ -415,6 +426,7 @@
 
 (define kanban/list-options
   (lambda (lists current-id)
+    "Concatenated <option> HTML for each todo-list, marking current-id selected."
     (if (null? lists)
       ""
       (let ((id (as-str (car (car lists))))
@@ -455,6 +467,7 @@ function kbDrop(ev){
 
 (define kanban/columns-html
   (lambda (list-id cols)
+    "Concatenated column HTML for the column list."
     (if (null? cols)
       ""
       (string-append
@@ -504,6 +517,7 @@ function kbDrop(ev){
 
 (define kanban/parse-index-safe
   (lambda (s acc)
+    "Accumulating decimal parse of an index string."
     (if (string-eq s "")
       acc
       (kanban/parse-index-safe
@@ -512,6 +526,7 @@ function kbDrop(ev){
 
 (define kanban/digit
   (lambda (c)
+    "Integer value of a single digit char, or 0."
     (if (string-eq c "0") 0
       (if (string-eq c "1") 1
         (if (string-eq c "2") 2
@@ -525,6 +540,7 @@ function kbDrop(ev){
 
 (define kanban/out-of-bounds?
   (lambda (j len)
+    "True if index j is outside [0, len)."
     (if (< j 0) #t (>= j len))))
 
 (define kanban/shift
@@ -559,6 +575,7 @@ function kbDrop(ev){
 
 (define kanban/index-of-cols
   (lambda (cols state i)
+    "0-based index of state within cols, or -1."
     (if (null? cols)
       -1
       (if (string-eq (as-str (car cols)) state)

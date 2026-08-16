@@ -4,6 +4,7 @@
 (define ref/fn-li
   (lambda
     (fn)
+    "One reference list item: function name plus its docstring when present."
     (let
       ((doc (function-doc (as-str fn))))
       (if
@@ -21,6 +22,7 @@
 (define ref/packages
   (lambda
     ()
+    "Distinct package prefixes over all visible bindings."
     (list/foldl
       (lambda
         (acc name)
@@ -37,6 +39,7 @@
 (define ref/page
   (lambda
     ()
+    "Function Reference page: search box, package groups, or matching rows."
     (let
       ((q (request-param "q")) (all (list-bindings)))
       (let
@@ -105,6 +108,7 @@
 (define ref/render-pkg
   (lambda
     (pkg)
+    "Card listing the functions whose prefix equals pkg."
     (let
       ((fns
         (list/filter

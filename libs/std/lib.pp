@@ -391,6 +391,7 @@
 (define menu/render-d
   (lambda
     (item d)
+    "Depth-aware menu renderer: link/group/raw item to HTML; open groups get accordion names by depth."
     (let
       ((kind (car item))
         (label (car (cdr item)))

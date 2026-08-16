@@ -4,6 +4,7 @@
 (define todo/ui/add-form
   (lambda
     (view list-id)
+    "New-item form for a live view; explanatory note for from-notes/archived views."
     (if
       (string-eq view "from-notes")
       (html/p*
@@ -54,6 +55,7 @@
 (define todo/ui/detail
   (lambda
     (id view)
+    "Detail card: edit form for one todo item's fields."
     (let
       ((fields (todo/item/get id)))
       (if
@@ -140,6 +142,7 @@
 (define todo/ui/handle-post
   (lambda
     ()
+    "Dispatch a POST /todos action to the matching todo/item or notes op."
     (let
       ((action (as-str (request-param "action"))))
       (cond
@@ -177,6 +180,7 @@
 (define todo/ui/main
   (lambda
     (view)
+    "Main todo view: detail when a GET id is given, else nav + list body."
     (let
       ((id-param (request-param "id"))
         (is-get (string-eq (request-method) "GET")))
@@ -232,6 +236,7 @@
 (define todo/ui/nav
   (lambda
     (view)
+    "Sidebar nav: built-in views, todo lists, and a new-list form."
     (let
       ((lists (todo/list/all))
         (inbox (todo/list/ensure-inbox))
@@ -280,6 +285,7 @@
 (define todo/ui/nav-link
   (lambda
     (view key label extra)
+    "Nav list item linking to a view, active when it matches the current view."
     (html/li
       (html/attr
         "class"
@@ -296,6 +302,7 @@
 (define todo/ui/ratio
   (lambda
     (items)
+    "Done/total ratio string for the given items."
     (let
       ((n (todo/item/count-all items))
         (open (todo/item/count-open items)))
@@ -304,6 +311,7 @@
 (define todo/ui/view
   (lambda
     ()
+    "Current view name from the request, defaulting to everything."
     (let
       ((v (request-param "view")))
       (if (null? v) "everything" (as-str v)))))

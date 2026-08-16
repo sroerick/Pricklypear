@@ -4,6 +4,7 @@
 (define notes/outline/all-todos
   (lambda
     ()
+    "All (slug title todo done?) todo triples across notes docs."
     (list/foldl
       (lambda
         (acc row)
@@ -26,6 +27,7 @@
 (define notes/outline/apply-op
   (lambda
     (slug tree op nid)
+    "Apply an outline edit op (add/delete/move/promote/set/archive/slurp) to tree."
     (cond
       ((string-eq op "add-child")
         (outline/add-child-by-id
@@ -118,6 +120,7 @@
 (define notes/outline/apply-op-sel
   (lambda
     (slug tree op nid)
+    "Apply op and return (new-tree selected-nid) with the post-op selection."
     (let
       ((new-tree (notes/outline/apply-op slug tree op nid)))
       (let
@@ -127,6 +130,7 @@
 (define notes/outline/cycle-todo
   (lambda
     (slug nid)
+    "Cycle the todo state of node nid and persist the updated doc."
     (let
       ((prev (notes/doc/get slug)))
       (if
@@ -155,6 +159,7 @@
 (define notes/outline/eval-form
   (lambda
     (slug nid)
+    "POST form for evaling a Lisp expr and splicing the result onto node nid."
     (html/form
       "POST"
       "/partials/notes-node-op"
@@ -197,6 +202,7 @@
 (define notes/outline/eval-result
   (lambda
     (slug nid expr)
+    "Eval expr as a lambda over (self doc slug) and return its spliced value."
     (let
       ((prev (notes/doc/get slug)))
       (if
@@ -220,6 +226,7 @@
 (define notes/outline/eval-target
   (lambda
     ()
+    "Eval splice target from the request (child, sibling, or body); defaults to child."
     (let
       ((tg (request-param "target")))
       (if
@@ -228,7 +235,7 @@
         (as-str tg)))))
 
 (define notes/outline/new-node
-  (lambda () (outline/node (gensym "n") "New node")))
+  (lambda () "Fresh outline node with a gensym id titled \"New node\"." (outline/node (gensym "n") "New node")))
 
 ;; op-seq helpers: the stored seq is the last op the server accepted.
 ;; A request with op-seq <= stored seq is stale (an older optimistic
@@ -238,6 +245,7 @@
 (define notes/outline/op-seq-get
   (lambda
     (slug)
+    "Stored last-accepted op sequence for slug, or 0."
     (let
       ((rs (find-rows (quote note-op-seq) "slug" (as-str slug) 1)))
       (if (null? rs) 0 (parse-int (as-str (dict-get (cdr (car rs)) "seq")))))))
@@ -245,6 +253,7 @@
 (define notes/outline/op-seq-bump
   (lambda
     (slug seq)
+    "Persist seq as the accepted op sequence for slug."
     (let
       ((rs (find-rows (quote note-op-seq) "slug" (as-str slug) 1)))
       (if
@@ -261,6 +270,7 @@
 (define notes/outline/node-op
   (lambda
     ()
+    "POST handler for a single outline node op: applies it, persists, re-renders the outline."
     (let
       ((slug (as-str (request-param "slug")))
         (op (as-str (request-param "op")))
@@ -336,6 +346,7 @@
 (define notes/outline/node-op-eval
   (lambda
     (tree nid slug)
+    "Eval splice handler: apply the eval result to tree at nid, return (tree nid)."
     (let
       ((et
         (notes/outline/splice-eval
@@ -351,6 +362,7 @@
 (define notes/outline/open-todos
   (lambda
     ()
+    "Todos that are not yet done."
     (list/filter
       (lambda
         (t)
@@ -360,6 +372,7 @@
 (define notes/outline/partial
   (lambda
     ()
+    "Rendered outline fragment for the requested slug (htmx swap target)."
     (let
       ((n (notes/doc/get (request-param "slug")))
         (show-archived (notes/doc/show-archived?)))
@@ -376,6 +389,7 @@
 (define notes/outline/sel-after-add-child
   (lambda
     (new-tree nid)
+    "Selected id after adding a child to nid: its first child, else nid."
     (let
       ((node (structed/find outline/kids new-tree nid)))
       (if
@@ -391,6 +405,7 @@
 (define notes/outline/sel-after-add-sibling
   (lambda
     (new-tree nid)
+    "Selected id after adding a sibling: the next sibling, else nid."
     (let
       ((parent
         (structed/find-parent outline/kids new-tree nid)))
@@ -409,6 +424,7 @@
 (define notes/outline/sel-after-delete
   (lambda
     (tree nid)
+    "Selected id after deleting nid: next/allowed prior sibling or the parent."
     (let
       ((parent (structed/find-parent outline/kids tree nid)))
       (if
@@ -422,6 +438,7 @@
 (define notes/outline/sel-after-delete-in
   (lambda
     (parent sibs i)
+    "Selected id among sibs after removing index i: next sibling, prior, or parent."
     (let
       ((after (structed/list/drop sibs (+ i 1))))
       (if
@@ -435,6 +452,7 @@
 (define notes/outline/sel-for
   (lambda
     (op nid new-tree old-tree)
+    "Post-op selected id for delete/add ops, else unchanged nid."
     (cond
       ((string-eq op "delete")
         (if
@@ -450,6 +468,7 @@
 (define notes/outline/splice-eval
   (lambda
     (tree nid target result)
+    "Splice an eval result into tree at nid as body, sibling, or child."
     (let
       ((t (as-str target)))
       (if
