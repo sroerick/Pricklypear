@@ -4,6 +4,7 @@
 (define weight/all
   (lambda
     ()
+    "Return all weight-log rows sorted by date."
     (list/foldl
       weight/insert-sorted
       ()
@@ -12,6 +13,7 @@
 (define weight/chart-svg
   (lambda
     (rows)
+    "Render an SVG line chart of the given weight rows."
     (let
       ((n (weight/len rows)))
       (if
@@ -46,6 +48,7 @@
 (define weight/coords
   (lambda
     (rows i n wmin wmax)
+    "Map weight rows to (x y) chart coordinates."
     (if
       (null? rows)
       (list)
@@ -56,11 +59,12 @@
           (weight/coords (cdr rows) (+ i 1) n wmin wmax))))))
 
 (define weight/delete
-  (lambda (id) (delete (quote weight-log) id)))
+  (lambda (id) "Delete a weight-log row by id." (delete (quote weight-log) id)))
 
 (define weight/dots
   (lambda
     (coords)
+    "Emit SVG circle dots for each chart coordinate."
     (list/foldl
       (lambda
         (acc p)
@@ -77,6 +81,7 @@
 (define weight/field
   (lambda
     (fields key)
+    "dict-get over a fields JSON string; empty string when absent."
     (let
       ((v (dict-get fields key)))
       (if (null? v) "" (as-str v)))))
@@ -84,6 +89,7 @@
 (define weight/fields
   (lambda
     (ts weight)
+    "Build a weight-log fields JSON string."
     (dict-set*
       "{}"
       (list
@@ -97,6 +103,7 @@
 (define weight/fmt
   (lambda
     (w)
+    "Format a weight value as a trimmed number."
     (let
       ((s (as-str w)))
       (if (blank? s) s (as-str (parse-float s))))))
@@ -104,6 +111,7 @@
 (define weight/form
   (lambda
     ()
+    "Render the log-weight HTML form."
     (html/div
       (html/attr "class" "card")
       (html/join
@@ -129,6 +137,7 @@
 (define weight/insert-sorted
   (lambda
     (sorted row)
+    "Insert a row into a date-sorted list."
     (if
       (null? sorted)
       (list row)
@@ -145,21 +154,25 @@
 (define weight/last
   (lambda
     (xs)
+    "Return the last element of a non-empty list."
     (if (null? (cdr xs)) (car xs) (weight/last (cdr xs)))))
 
 (define weight/len
   (lambda
     (xs)
+    "Return the number of elements in xs."
     (list/foldl (lambda (acc x) (+ acc 1)) 0 xs)))
 
 (define weight/log
   (lambda
     (date weight)
+    "Create a weight-log row from a date and weight value."
     (create (quote weight-log) (weight/fields date weight))))
 
 (define weight/max-w
   (lambda
     (rows)
+    "Return the maximum weight value across rows; 0.0 when empty."
     (if
       (null? rows)
       0.0
@@ -173,6 +186,7 @@
 (define weight/min-w
   (lambda
     (rows)
+    "Return the minimum weight value across rows; 0.0 when empty."
     (if
       (null? rows)
       0.0
@@ -186,6 +200,7 @@
 (define weight/page
   (lambda
     ()
+    "Handle POST logging; otherwise render the full weight page."
     (if
       (string-eq (request-method) "POST")
       (let
@@ -210,6 +225,7 @@
 (define weight/pts-str
   (lambda
     (coords)
+    "Render coordinates as an SVG polyline points string."
     (list/foldl
       (lambda
         (acc p)
@@ -225,6 +241,7 @@
 (define weight/summary
   (lambda
     (rows)
+    "Render a one-line summary of weight entries and latest value."
     (let
       ((n (weight/len rows)))
       (if
@@ -244,24 +261,26 @@
                 " lbs"))))))))
 
 (define weight/test-fn
-  (lambda (x) (+ x 1)))
+  (lambda (x) "Increment x by one (test helper)." (+ x 1)))
 
 (define weight/ts-of
-  (lambda (row) (weight/field (cdr row) "ts")))
+  (lambda (row) "Return the timestamp field of a weight row." (weight/field (cdr row) "ts")))
 
 (define weight/wt-num
   (lambda
     (row)
+    "Return a weight row's numeric weight, 0.0 when blank."
     (let
       ((s (weight/wt-of row)))
       (if (blank? s) 0.0 (parse-float s)))))
 
 (define weight/wt-of
-  (lambda (row) (weight/field (cdr row) "weight")))
+  (lambda (row) "Return the weight field of a weight row." (weight/field (cdr row) "weight")))
 
 (define weight/x-of
   (lambda
     (i n)
+    "Map a zero-based index to an SVG x position across n points."
     (if
       (<= n 1)
       (+ 60.0 (/ 680.0 2.0))
@@ -270,5 +289,6 @@
 (define weight/y-of
   (lambda
     (w wmin wmax)
+    "Map a weight value to an SVG y position within min/max range."
     (+ 20.0 (* (- 1.0 (/ (- w wmin) (- wmax wmin))) 300.0))))
 
