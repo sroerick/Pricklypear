@@ -69,3 +69,6 @@ docs/openbsd-prod-branch-deploy.md
 node_modules/
 package.json
 package-lock.json
+
+# pi agent local run state
+.pi/
