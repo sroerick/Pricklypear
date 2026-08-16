@@ -260,6 +260,24 @@ let string_tests = [
   ("string-append", `Quick, fun () ->
     Alcotest.(check string) "concat" "\"foobarbaz\""
       (eval_str "(string-append \"foo\" \"bar\" \"baz\")"));
+  ("string-join", `Quick, fun () ->
+    Alcotest.(check string) "basic" "\"foobarbaz\""
+      (eval_str "(string-join (list \"foo\" \"bar\" \"baz\"))"));
+  ("string-join sep", `Quick, fun () ->
+    Alcotest.(check string) "csv" "\"a,b,c\""
+      (eval_str "(string-join (list \"a\" \"b\" \"c\") \",\")"));
+  ("string-join empty list", `Quick, fun () ->
+    Alcotest.(check string) "empty" "\"\""
+      (eval_str "(string-join ())"));
+  ("string-join single", `Quick, fun () ->
+    Alcotest.(check string) "one" "\"foo\""
+      (eval_str "(string-join (list \"foo\"))"));
+  ("string-join coerces ints", `Quick, fun () ->
+    Alcotest.(check string) "coerce" "\"1,2,3\""
+      (eval_str "(string-join (list 1 2 3) \",\")"));
+  ("string-join cons list", `Quick, fun () ->
+    Alcotest.(check string) "pair" "\"ab\""
+      (eval_str "(string-join (cons \"a\" \"b\"))"));
   ("str of int", `Quick, fun () ->
     Alcotest.(check string) "str int" "\"42\""
       (eval_str "(str 42)"));

@@ -1711,7 +1711,7 @@
            Lists (prims):
              list car cdr cons null? pair? reverse append count
            Strings (prims):
-             string-append string-length substring string-eq
+             string-append string-join string-length substring string-eq
              string-contains? string-trim html-escape
              as-str str
            Symbols (prims):
