@@ -1200,6 +1200,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
     ; "null?"; "pair?"; "car"; "cdr"; "cons"; "list"; "count"
     ; "string-append"; "string-length"; "substring"; "string-eq"
     ; "string-contains?"; "string-trim"; "html-escape"; "as-str"; "str"
+    ; "string-join"
     ; "string<?"; "string<=?"; "string>?"; "string>=?"
     ; "symbol?"; "string?"; "symbol=?"; "symbol->string"; "string->symbol"
     ; "not"; "type-of"; "read-string"; "read-all-string"; "function-ast"

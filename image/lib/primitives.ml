@@ -192,6 +192,7 @@ let make_with_defaults () : t =
   register_sync t "null?" prim_null_p;
   register_sync t "pair?" prim_pair_p;
   register_sync t "string-append" prim_string_append;
+  register_sync t "string-join" prim_string_join;
   register_sync t "string-length" prim_string_length;
   register_sync t "substring" prim_substring;
   register_sync t "string-contains?" prim_string_contains;
@@ -326,6 +327,7 @@ let prim_summary (name : string) : string =
   | "fsrs-schedule" -> "FSRS-4.5: (S D elapsed rating) -> (S' D' interval)"
 
   | "string-append" -> "concat strings"
+  | "string-join" -> "join a list of strings in O(n), optional sep"
   | "string-length" -> "length of string"
   | "substring" -> "substring start [len]"
   | "string-contains?" -> "haystack contains needle?"

@@ -134,7 +134,7 @@ let pure_prims = [
   "="; "<"; ">"; "<="; ">="; "not";
   "list"; "car"; "cdr"; "cons"; "null?"; "pair?"; "count";
   "append"; "reverse"; "nth";
-  "string-append"; "str"; "type-of"; "as-str";
+  "string-append"; "string-join"; "str"; "type-of"; "as-str";
   "symbol?"; "string?"; "symbol=?"; "symbol->string"; "string->symbol";
   "string-eq"; "string-trim"; "string-length"; "substring"; "string-contains?";
   "string<?"; "string<=?"; "string>?"; "string>=?";

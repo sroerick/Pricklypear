@@ -185,6 +185,43 @@ let prim_string_append args =
     args;
   VStr (Buffer.contents buf)
 
+(* (string-join strs [sep]) -> VStr. Concatenate a list of strings in a single
+   O(n) pass (Buffer add), optionally separated by sep (default ""). Unlike a
+   fold over string-append (O(n²) accumulator-copy), this is linear. List items
+   are coerced like string-append (string/__str__/symbol/int/float/bool/nil). *)
+let prim_string_join args =
+  let unwrap = function
+    | VList xs -> xs
+    | VNil -> []
+    | VPair (a, b) ->
+        let rec unwind p acc =
+          match p with
+          | VPair (x, y) -> unwind y (x :: acc)
+          | VNil | VList [] -> List.rev acc
+          | VList xs -> List.rev_append acc xs
+          | other -> List.rev (other :: acc)
+        in
+        unwind (VPair (a, b)) []
+    | other ->
+        raise (Interp_error (User_error ("string-join needs a list of strings (got " ^
+                                          Pricklypear_lisp.Reader.pp_value other ^ ")", "bad-args")))
+  in
+  let join items sep =
+    let buf = Buffer.create 32 in
+    (match items with
+     | [] -> ()
+     | x :: rest ->
+         Buffer.add_string buf (coerce_str ~ctx:"string-join" x);
+         List.iter
+           (fun v -> Buffer.add_string buf sep; Buffer.add_string buf (coerce_str ~ctx:"string-join" v))
+           rest);
+    VStr (Buffer.contents buf)
+  in
+  match args with
+  | [ lst ] -> join (unwrap lst) ""
+  | [ lst; sep_v ] -> join (unwrap lst) (coerce_str ~ctx:"string-join" sep_v)
+  | _ -> raise (Interp_error (User_error ("string-join needs a list [sep]", "bad-args")))
+
 (* (type-of x) -> VStr. Returns a type tag for runtime reflection. *)
 let prim_type_of args =
   match args with
