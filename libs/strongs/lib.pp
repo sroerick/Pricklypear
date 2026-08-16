@@ -4,6 +4,7 @@
 (define strongs/description
   (lambda
     (number)
+    "The description of a Strong's entry, or () when absent."
     (let
       ((row (strongs/get number)))
       (if (null? row) () (dict-get row "description")))))
@@ -11,6 +12,7 @@
 (define strongs/entry-html
   (lambda
     (row)
+    "Render a Strong's entry row as HTML, or a not-found message."
     (if
       (null? row)
       (html/p* (html/attr "class" "err") "not found")
@@ -32,6 +34,7 @@
 (define strongs/get
   (lambda
     (number)
+    "Fetch a Strong's entry row by number, or () when absent."
     (find-row
       (quote strongs-entry)
       "number"
@@ -40,6 +43,7 @@
 (define strongs/lemma
   (lambda
     (number)
+    "The lemma of a Strong's entry, or () when absent."
     (let
       ((row (strongs/get number)))
       (if (null? row) () (dict-get row "lemma")))))
@@ -47,6 +51,7 @@
 (define strongs/lookup-form
   (lambda
     (n)
+    "An htmx lookup form for a Strong's number."
     (html/form
       "GET"
       "/strongs"
@@ -76,6 +81,7 @@
 (define strongs/page
   (lambda
     ()
+    "Serve the Strong's page, htmx fragment or full page."
     (if
       (hx-request?)
       (strongs/panel)
@@ -88,6 +94,7 @@
 (define strongs/panel
   (lambda
     ()
+    "Render the Strong's lookup panel for the request number."
     (let
       ((n (request-param "n")))
       (html/join

@@ -2,14 +2,15 @@
 ;; Sync: scripts/pp_sync.py pull|push
 
 (define todo/list
-  (lambda () (todo/tree/rows "todo-item" 50)))
+  (lambda () "Return up to 50 todo list rows." (todo/tree/rows "todo-item" 50)))
 
 (define todo/list/all
-  (lambda () (todo/tree/rows "todo-list" 50)))
+  (lambda () "Return up to 50 todo-list rows." (todo/tree/rows "todo-list" 50)))
 
 (define todo/list/create
   (lambda
     (title)
+    "Create a new todo list with the given title."
     (todo/tree/create
       "todo-list"
       (dict-set*
@@ -25,6 +26,7 @@
 (define todo/list/default?
   (lambda
     (fields)
+    "Whether a list's fields mark it as the default (Inbox) list."
     (let
       ((d (dict-get fields "is_default")))
       (if (null? d) #f (string-eq d "true")))))
@@ -32,6 +34,7 @@
 (define todo/list/delete
   (lambda
     (list-id)
+    "Delete a todo list and its items; blocks default list."
     (let
       ((lid (as-str list-id)))
       (if
@@ -52,6 +55,7 @@
 (define todo/list/delete-items
   (lambda
     (items lid)
+    "Delete all todo items belonging to list lid."
     (if
       (null? items)
       ()
@@ -67,6 +71,7 @@
 (define todo/list/ensure-inbox
   (lambda
     ()
+    "Return the default list, creating an Inbox if none exists."
     (let
       ((found (todo/list/find-default)))
       (if
@@ -85,11 +90,12 @@
         (car found)))))
 
 (define todo/list/find-default
-  (lambda () (todo/list/find-default-in (todo/list/all))))
+  (lambda () "Return the first default or Inbox list, or ()." (todo/list/find-default-in (todo/list/all))))
 
 (define todo/list/find-default-in
   (lambda
     (xs)
+    "Find the default or Inbox list within a list of rows."
     (if
       (null? xs)
       ()
@@ -104,11 +110,12 @@
             (todo/list/find-default-in (cdr xs))))))))
 
 (define todo/list/get
-  (lambda (id) (todo/tree/get "todo-list" id)))
+  (lambda (id) "Fetch a todo list row by id." (todo/tree/get "todo-list" id)))
 
 (define todo/list/nav-li
   (lambda
     (view row)
+    "Render a navigation list item with item ratio and delete form."
     (let
       ((id (car row))
         (f (cdr row))
@@ -161,6 +168,7 @@
 (define todo/list/options
   (lambda
     (selected)
+    "Render option tags for all lists, marking selected."
     (list/foldl
       (lambda
         (acc row)
@@ -178,5 +186,5 @@
       (todo/list/all))))
 
 (define todo/list/title
-  (lambda (fields) (as-str (dict-get fields "title"))))
+  (lambda (fields) "The title of a list from its fields." (as-str (dict-get fields "title"))))
 

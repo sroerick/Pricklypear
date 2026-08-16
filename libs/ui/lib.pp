@@ -16,6 +16,7 @@
 (define ui/css
   (lambda
     ()
+    "Render the combined UI stylesheet."
     (string-append
       "/* ui/css */\n"
       (css/render
@@ -31,11 +32,13 @@
 (define ui/home
   (lambda
     ()
+    "Render the home page with weather and astro widgets."
     (html/page (list (weather/widget) (astro/widget)))))
 
 (define ui/home-style
   (lambda
     ()
+    "Render the home page style block."
     (html/tag
       "style"
       ""
@@ -59,6 +62,7 @@
 (define ui/menu
   (lambda
     ()
+    "Build the site navigation menu structure."
     (list
       (menu/link "home" "/")
       (menu/raw (notes/capture/nav))
@@ -112,6 +116,7 @@
 (define ui/nav
   (lambda
     ()
+    "Render the site navigation bar."
     (render-html
       (menu/bar
         (if
@@ -122,6 +127,7 @@
 (define ui/nav-style
   (lambda
     ()
+    "Render the site navigation bar style block."
     (html/tag
       "style"
       ""
@@ -149,6 +155,7 @@
 (define ui/theme
   (lambda
     ()
+    "Render the base theme stylesheet rules."
     (css/sheet
       (list
         (css/rule "*" (list "box-sizing" "border-box"))
@@ -2023,6 +2030,7 @@
 (define ui/theme-nav
   (lambda
     ()
+    "Render the theme navigation stylesheet rules."
     (css/sheet
       (list
         (css/rule
