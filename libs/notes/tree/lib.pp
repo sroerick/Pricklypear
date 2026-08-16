@@ -4,6 +4,7 @@
 (define notes/tree/all-paths
   (lambda
     (names)
+    "Parent folder paths of names that are not already folders themselves."
     (list/foldl
       (lambda
         (acc name)
@@ -28,11 +29,13 @@
 (define notes/tree/body
   (lambda
     (node)
+    "Content dict of a parsed tree node, or ()."
     (if (null? node) () (dict-get node "body"))))
 
 (define notes/tree/butlast
   (lambda
     (xs)
+    "All but the last element of a list."
     (if
       (null? xs)
       (list)
@@ -44,6 +47,7 @@
 (define notes/tree/children-of
   (lambda
     (parent names)
+    "Direct child names of parent within names."
     (list/filter
       (lambda
         (name)
@@ -58,6 +62,7 @@
 (define notes/tree/clear-headings
   (lambda
     (note-path)
+    "Delete all heading records under note-path; returns 0."
     (list/foldl
       (lambda
         (acc nj)
@@ -78,6 +83,7 @@
 (define notes/tree/details-css
   (lambda
     ()
+    "CSS sheet for the <details>/summary folder tree."
     (css/sheet
       (list
         (css/raw "/* details/summary tree nesting */")
@@ -104,11 +110,12 @@
           (list "margin" ".25rem 0"))))))
 
 (define notes/tree/enabled?
-  (lambda () #t))
+  (lambda () "Tree storage is enabled." #t))
 
 (define notes/tree/ensure-chain
   (lambda
     (base segs)
+    "Create any missing folders along segs from base; return the final path."
     (if
       (null? segs)
       base
@@ -122,6 +129,7 @@
 (define notes/tree/ensure-folder
   (lambda
     (path title)
+    "Upsert a folder node at path titled title; return path."
     (let
       ((cur (tree/get path)))
       (if
@@ -138,6 +146,7 @@
 (define notes/tree/find-slug
   (lambda
     (slug)
+    "Look up a note row by slug in the tree, or ()."
     (let
       ((hits (tree/find-by "note" "slug" (as-str slug) 5)))
       (if
@@ -148,6 +157,7 @@
 (define notes/tree/folder-label
   (lambda
     (path)
+    "Last path segment after the final / (or whole path)."
     (let
       ((pos (string-find-pos path "/" 0 1)))
       (if
@@ -161,6 +171,7 @@
 (define notes/tree/folder-of-path
   (lambda
     (path)
+    "Slash-joined folder path of a note path, or empty when at the root."
     (let
       ((root (notes/tree/root)) (p (as-str path)))
       (if
@@ -179,6 +190,7 @@
 (define notes/tree/heading-kids
   (lambda
     (parent-path)
+    "Outline child nodes built from heading records under parent-path."
     (list/foldl
       (lambda
         (acc nj)
@@ -209,6 +221,7 @@
 (define notes/tree/join-slash
   (lambda
     (xs)
+    "Join string list with / separators."
     (if
       (null? xs)
       ""
@@ -221,12 +234,13 @@
           (notes/tree/join-slash (cdr xs)))))))
 
 (define notes/tree/list-notes
-  (lambda () (tree/note-index (notes/tree/root) 2000)))
+  (lambda () "All note rows under the tree root (index view)." (tree/note-index (notes/tree/root) 2000)))
 
 ;; Read the root outline body persisted by write-root-body (i-rootbody-1).
 (define notes/tree/root-body
   (lambda
     (note-path)
+    "Persisted root outline body text for note-path, or empty string."
     (let
       ((cur (tree/get note-path)))
       (if
@@ -239,6 +253,7 @@
 (define notes/tree/load-outline
   (lambda
     (note-path title)
+    "Reconstruct an outline node tree for note-path from its headings."
     (outline/node*
       "root"
       (as-str title)
@@ -249,6 +264,7 @@
 (define notes/tree/node->row
   (lambda
     (nj load-outline?)
+    "Map a note JSON node to a key/value row (id cons + dict), with outline when load-outline?."
     (let
       ((n (notes/tree/parse nj)))
       (if
@@ -299,6 +315,7 @@
 (define notes/tree/note-path
   (lambda
     (folder slug)
+    "Tree path label for a note in folder (creating missing folders)."
     (let
       ((base
         (notes/tree/ensure-chain
@@ -309,16 +326,18 @@
 (define notes/tree/parent-of
   (lambda
     (path)
+    "Immediate parent path of a slash path, or empty at root."
     (let
       ((pos (string-find-pos path "/" 0 1)))
       (if (< pos 0) "" (substring path 0 pos)))))
 
 (define notes/tree/parse
-  (lambda (s) (if (null? s) () (json-parse (as-str s)))))
+  (lambda (s) "JSON-parse a tree node string; () when empty." (if (null? s) () (json-parse (as-str s)))))
 
 (define notes/tree/render
   (lambda
     ()
+    "HTML folder-tree widget for the notes sidebar (categorized + uncategorized)."
     (let*
       ((names (notes/doc/folder-names))
         (all-names (append names (notes/tree/all-paths names)))
@@ -367,6 +386,7 @@
 (define notes/tree/render-folder
   (lambda
     (path names depth)
+    "HTML for one tree folder: header link, items, and nested folders."
     (let*
       ((label (notes/tree/folder-label path))
         (children (notes/tree/children-of path names))
@@ -411,11 +431,12 @@
                   (notes/tree/sort-by-name children))))))))))
 
 (define notes/tree/root
-  (lambda () (tree/garden-root)))
+  (lambda () "Tree root path for the garden." (tree/garden-root)))
 
 (define notes/tree/save-outline
   (lambda
     (note-path outline)
+    "Persist an outline to the tree: clear headings, write root body, write child headings."
     (seq
       (notes/tree/clear-headings note-path)
       (notes/tree/write-root-body note-path (outline/body outline))
@@ -434,6 +455,7 @@
 (define notes/tree/write-root-body
   (lambda
     (note-path body)
+    "Store body on the note node itself so it survives upsert."
     (let
       ((cur (tree/get note-path)))
       (if
@@ -453,6 +475,7 @@
 (define notes/tree/sort-by-name
   (lambda
     (names)
+    "Quicksort a name list ascending by string order."
     (if
       (null? names)
       (list)
@@ -468,6 +491,7 @@
 (define notes/tree/split-folder
   (lambda
     (folder)
+    "Fold a slash folder path into non-empty segments."
     (list/filter
       (lambda (s) (not (string-eq (as-str s) "")))
       (string-split (as-str folder) "/"))))
@@ -475,6 +499,7 @@
 (define notes/tree/style
   (lambda
     ()
+    "<style> block combining the tree CSS sheets."
     (html/tag
       "style"
       ""
@@ -486,6 +511,7 @@
 (define notes/tree/write-heading
   (lambda
     (parent-path node)
+    "Write one outline heading (and its children) under parent-path; return its path."
     (let
       ((nid (tree/path-label (outline/id node)))
         (path
