@@ -4,6 +4,7 @@
 (define structed/list/drop
   (lambda
     (xs n)
+    "Return xs minus its first n elements."
     (if
       (or (null? xs) (<= n 0))
       xs
@@ -12,11 +13,13 @@
 (define structed/list/index-of
   (lambda
     (xs x eq?)
+    "Index of first element equal to x, or -1."
     (structed/list/index-of-acc xs x eq? 0)))
 
 (define structed/list/index-of-acc
   (lambda
     (xs x eq? i)
+    "Accumulator for index-of starting the scan at i."
     (if
       (null? xs)
       -1
@@ -28,6 +31,7 @@
 (define structed/list/insert-at
   (lambda
     (xs i v)
+    "Insert v into xs at index i (clamped to front)."
     (if
       (or (null? xs) (<= i 0))
       (cons v xs)
@@ -38,6 +42,7 @@
 (define structed/list/insert-list-at
   (lambda
     (xs i ys)
+    "Insert every element of ys into xs starting at index i."
     (if
       (null? ys)
       xs
@@ -49,6 +54,7 @@
 (define structed/list/nth
   (lambda
     (xs i)
+    "Element at index i of xs, or () when out of range."
     (if
       (null? xs)
       ()
@@ -60,6 +66,7 @@
 (define structed/list/remove-at
   (lambda
     (xs i)
+    "xs with the element at index i removed."
     (if
       (null? xs)
       (list)
@@ -73,6 +80,7 @@
 (define structed/list/replace-at
   (lambda
     (xs i v)
+    "xs with the element at index i replaced by v."
     (if
       (null? xs)
       (list)
@@ -86,6 +94,7 @@
 (define structed/list/split-at
   (lambda
     (xs i)
+    "Split xs into (taken dropped) at index i."
     (list
       (structed/list/take xs i)
       (structed/list/drop xs i))))
@@ -93,6 +102,7 @@
 (define structed/list/take
   (lambda
     (xs n)
+    "First n elements of xs."
     (if
       (or (null? xs) (<= n 0))
       (list)

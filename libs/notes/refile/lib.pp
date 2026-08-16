@@ -4,6 +4,7 @@
 (define notes/refile
   (lambda
     (src-slug nid dst-slug)
+    "Move node nid from src-slug to the root of dst-slug; #t on success."
     (let
       ((src (notes/get src-slug))
         (dst (notes/get dst-slug))
@@ -48,6 +49,7 @@
 (define notes/refile/extract
   (lambda
     (src-slug nid)
+    "Detach node nid as its own note and return its slug."
     (let
       ((src (notes/doc/get src-slug)) (id (as-str nid)))
       (if
@@ -100,6 +102,7 @@
 (define notes/refile/extract-form
   (lambda
     (src-slug nid)
+    "HTML extract button for node nid, or empty for the root."
     (if
       (string-eq (as-str nid) "root")
       ""
@@ -123,6 +126,7 @@
 (define notes/refile/extract-handle
   (lambda
     ()
+    "Handle the extract POST and redirect to the new or source note."
     (let
       ((src (as-str (request-param "src_slug")))
         (nid (as-str (request-param "node_id"))))
@@ -136,6 +140,7 @@
 (define notes/refile/form
   (lambda
     (src-slug nid)
+    "HTML refile form for node nid, or empty for the root."
     (if
       (string-eq (as-str nid) "root")
       ""
@@ -163,6 +168,7 @@
 (define notes/refile/handle
   (lambda
     ()
+    "Handle the refile POST by moving the node then redirecting."
     (let
       ((src (as-str (request-param "src_slug")))
         (nid (as-str (request-param "node_id")))
@@ -179,6 +185,7 @@
 (define notes/refile/move
   (lambda
     (src-slug nid dst-slug dst-nid)
+    "Move node nid to parent dst-nid within dst-slug; #t on success."
     (let
       ((src (notes/doc/get src-slug))
         (dst (notes/doc/get dst-slug))
@@ -231,6 +238,7 @@
 (define notes/refile/options
   (lambda
     (src-slug)
+    "HTML option list of all notes, excluding src-slug."
     (list/foldl
       (lambda
         (acc row)
@@ -254,6 +262,7 @@
 (define notes/refile/slug-char-ok?
   (lambda
     (c)
+    "True when c is an ASCII letter or digit."
     (string-contains?
       "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
       (as-str c))))
@@ -261,6 +270,7 @@
 (define notes/refile/slugify
   (lambda
     (title)
+    "Turn a title into a slug, -joined and truncated to 48 chars."
     (let
       ((raw
         (notes/refile/slugify-acc
@@ -287,6 +297,7 @@
 (define notes/refile/slugify-acc
   (lambda
     (s i acc last-hyphen?)
+    "Accumulator for slugify, inserting - and coalescing separators."
     (if
       (>= i (string-length s))
       acc
@@ -311,6 +322,7 @@
 (define notes/refile/unique-slug
   (lambda
     (base)
+    "Return base if unused, else append a gensym suffix."
     (if
       (null? (notes/doc/row (as-str base)))
       (as-str base)

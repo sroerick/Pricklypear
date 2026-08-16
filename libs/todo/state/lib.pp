@@ -2,7 +2,7 @@
 ;; Sync: scripts/pp_sync.py pull|push
 
 (define todo/state/archived?
-  (lambda (s) (string-eq (as-str s) "ARCHIVED")))
+  (lambda (s) "True when state s is the ARCHIVED value." (string-eq (as-str s) "ARCHIVED")))
 
 (define todo/state/list
   (list "" "TODO" "DONE" "WAITING" "CANCELLED"))
@@ -10,11 +10,13 @@
 (define todo/state/next
   (lambda
     (cur)
+    "Next state after cur in the canonical state list."
     (outline/todo-next-in todo/state/list (as-str cur))))
 
 (define todo/state/open?
   (lambda
     (s)
+    "True for any state other than empty/TODO/DONE/CANCELLED/ARCHIVED."
     (let
       ((t (as-str s)))
       (if
@@ -31,6 +33,7 @@
 (define todo/state/options
   (lambda
     (selected)
+    "HTML options for the canonical state list with selected marked."
     (list/foldl
       (lambda
         (acc st)
@@ -45,6 +48,7 @@
 (define todo/state/options-all
   (lambda
     (selected)
+    "HTML options over the state list plus ARCHIVED."
     (todo/state/options-from
       selected
       (append todo/state/list (list "ARCHIVED")))))
@@ -52,6 +56,7 @@
 (define todo/state/options-from
   (lambda
     (selected states)
+    "HTML options over the given states with selected marked."
     (list/foldl
       (lambda
         (acc st)
