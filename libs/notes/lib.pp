@@ -636,6 +636,19 @@
               (delete (quote note) (car row))))
           slug)))))
 
+(define notes/doc/display-folder
+  (lambda
+    (folder)
+    (let
+      ((f (as-str folder)))
+      (let
+        ((stripped
+          (if
+            (string-starts-with? f "garden/")
+            (string-replace f "garden/" "")
+            (if (string-eq f "garden") "" f))))
+        (string-replace stripped "_" "-")))))
+
 (define notes/doc/empty-outline
   (lambda (title) (outline/node "root" title)))
 
@@ -666,9 +679,7 @@
         (if (null? f) "" (as-str f))))))
 
 (define notes/doc/folder-names
-  (lambda
-    ()
-    (tree/folder-index (notes/tree/root))))
+  (lambda () (tree/folder-index (notes/tree/root))))
 
 (define notes/doc/folder-seen?
   (lambda
@@ -739,8 +750,10 @@
 (define notes/doc/list
   (lambda
     ()
-    ;; index-read-path I4 / F1: tree only — no data_rows fallback
-    (if (notes/tree/enabled?) (notes/tree/list-notes) (list))))
+    (if
+      (notes/tree/enabled?)
+      (notes/tree/list-notes)
+      (list))))
 
 (define notes/doc/list-folder
   (lambda
@@ -819,9 +832,6 @@
         ((p (dict-get (cdr row) "_path")))
         (if (null? p) "" (as-str p))))))
 
-;; Postgres-backed garden search (notes.search-modal / BORGE-1785605474).
-;; Returns list of hit dicts: slug title node_id header_path matched rank kind tags.
-;; Filter happens in tree_nodes via tree/search-text — never enumerate the garden.
 (define notes/doc/search
   (lambda
     (q)
@@ -1101,6 +1111,279 @@
       (lambda (row) (not (notes/hidden-from-index? row)))
       (notes/list))))
 
+(define notes/issues/add
+  (lambda
+    (kind title body)
+    (let
+      ((n (notes/issues/ensure)))
+      (let
+        ((tree (notes/doc/outline n))
+          (full-title
+            (string-append
+              (as-str kind)
+              ": "
+              (notes/issues/title-or-kind kind title))))
+        (let
+          ((child
+            (outline/set-body
+              (outline/node (notes/issues/node-id tree) full-title)
+              (as-str body))))
+          (let
+            ((new-tree (outline/add-child-by-id tree "root" child)))
+            (notes/issues/upsert new-tree)))))))
+
+(define notes/issues/body
+  (lambda
+    ()
+    (html/join
+      (list
+        (html/h1 "Issues")
+        (html/p*
+          (html/attr "class" "muted")
+          (html/join
+            (list
+              (html/a "/notes" "Notes")
+              " · "
+              (html/a "/notes?slug=log/issues" "Raw note"))))
+        (notes/issues/form)
+        (notes/issues/list-html)))))
+
+(define notes/issues/delete
+  (lambda
+    (id)
+    (let
+      ((n (notes/doc/get "log/issues")))
+      (if
+        (null? n)
+        #f
+        (let
+          ((tree (notes/doc/outline n)))
+          (let
+            ((new-tree (outline/delete tree (as-str id))))
+            (seq (notes/issues/upsert new-tree) #t)))))))
+
+(define notes/issues/ensure
+  (lambda
+    ()
+    (let
+      ((n (notes/doc/get "log/issues")))
+      (if
+        (null? n)
+        (seq
+          (notes/doc/upsert
+            "log/issues"
+            "log/issues"
+            (notes/empty-outline "log/issues")
+            "log"
+            "issue"
+            "")
+          (notes/doc/get "log/issues"))
+        n))))
+
+(define notes/issues/form
+  (lambda
+    ()
+    (html/form
+      "POST"
+      "/issues"
+      (html/attr "class" "card")
+      (html/join
+        (list
+          (html/h2 "File an issue")
+          (html/hidden "action" "issue-add")
+          (html/label "" "Kind ")
+          (html/select
+            "kind"
+            ""
+            (html/join
+              (list
+                (html/option "BUG" "BUG" #t)
+                (html/option "DESIGN" "DESIGN" #f)
+                (html/option "SMELL" "SMELL" #f)
+                (html/option "CLEANUP" "CLEANUP" #f))))
+          " "
+          (html/label "" "Title ")
+          (html/text-input
+            "title"
+            (html/attr "placeholder" "One-line title"))
+          " "
+          (html/textarea
+            "body"
+            (html/attrs
+              (list
+                (html/attr "rows" "3")
+                (html/attr "placeholder" "Details")))
+            "")
+          " "
+          (html/button
+            (html/attr "type" "submit")
+            (html/text "File issue")))))))
+
+(define notes/issues/handle-post
+  (lambda
+    ()
+    (let
+      ((action (as-str (request-param "action"))))
+      (cond
+        ((string-eq action "issue-add")
+          (seq
+            (notes/issues/add
+              (request-param "kind")
+              (request-param "title")
+              (request-param "body"))
+            (redirect "/issues")))
+        ((string-eq action "issue-resolve")
+          (seq
+            (notes/issues/resolve (request-param "id"))
+            (redirect "/issues")))
+        ((string-eq action "issue-reopen")
+          (seq
+            (notes/issues/reopen (request-param "id"))
+            (redirect "/issues")))
+        ((string-eq action "issue-delete")
+          (seq
+            (notes/issues/delete (request-param "id"))
+            (redirect "/issues")))
+        (else (redirect "/issues"))))))
+
+(define notes/issues/list-html
+  (lambda
+    ()
+    (let
+      ((n (notes/doc/get "log/issues")))
+      (if
+        (null? n)
+        (html/p* (html/attr "class" "muted") "No issues yet.")
+        (let
+          ((tree (notes/doc/outline n)))
+          (html/join
+            (list
+              (html/h2 "Register")
+              (html/ul
+                (html/attr "class" "card")
+                (notes/issues/nodes-html (outline/kids tree))))))))))
+
+(define notes/issues/node-html
+  (lambda
+    (node)
+    (let
+      ((id (outline/id node))
+        (title (outline/title node))
+        (body (outline/body node))
+        (done (string-eq (outline/todo node) "DONE")))
+      (html/li
+        (html/attr "class" "issue-item")
+        (html/join
+          (list
+            (html/div
+              (html/attr
+                "class"
+                (if done "issue-head done" "issue-head"))
+              (html/join
+                (list (html/code id) " " (html/strong title))))
+            (if
+              (string-eq (as-str body) "")
+              ""
+              (html/p* (html/attr "class" "issue-body") (as-str body)))
+            (html/div
+              (html/attr "class" "issue-actions")
+              (html/join
+                (list
+                  (html/form
+                    "POST"
+                    "/issues"
+                    ""
+                    (html/join
+                      (list
+                        (html/hidden
+                          "action"
+                          (if done "issue-reopen" "issue-resolve"))
+                        (html/hidden "id" id)
+                        (html/button
+                          (html/attr "type" "submit")
+                          (html/text (if done "Reopen" "Resolve"))))))
+                  " "
+                  (html/form
+                    "POST"
+                    "/issues"
+                    ""
+                    (html/join
+                      (list
+                        (html/hidden "action" "issue-delete")
+                        (html/hidden "id" id)
+                        (html/button
+                          (html/attrs
+                            (list
+                              (html/attr "type" "submit")
+                              (html/attr "class" "secondary")))
+                          (html/text "Del"))))))))))))))
+
+(define notes/issues/node-id
+  (lambda (tree) (string-append "i-" (as-str (now)))))
+
+(define notes/issues/nodes-html
+  (lambda
+    (nodes)
+    (if
+      (null? nodes)
+      ""
+      (html/join
+        (list
+          (notes/issues/node-html (car nodes))
+          (notes/issues/nodes-html (cdr nodes)))))))
+
+(define notes/issues/page
+  (lambda
+    ()
+    (if
+      (string-eq (request-method) "POST")
+      (notes/issues/handle-post)
+      (html/page (list (notes/issues/body))))))
+
+(define notes/issues/reopen
+  (lambda (id) (notes/issues/set-todo id "")))
+
+(define notes/issues/resolve
+  (lambda (id) (notes/issues/set-todo id "DONE")))
+
+(define notes/issues/set-todo
+  (lambda
+    (id todo)
+    (let
+      ((n (notes/doc/get "log/issues")))
+      (if
+        (null? n)
+        #f
+        (let
+          ((tree (notes/doc/outline n)))
+          (let
+            ((new-tree
+              (outline/update
+                tree
+                (as-str id)
+                (lambda (node) (outline/set-todo node todo)))))
+            (seq (notes/issues/upsert new-tree) #t)))))))
+
+(define notes/issues/title-or-kind
+  (lambda
+    (kind title)
+    (let
+      ((t (string-trim (as-str title))))
+      (if (string-eq t "") (as-str kind) t))))
+
+(define notes/issues/upsert
+  (lambda
+    (tree)
+    (let
+      ((n (notes/doc/get "log/issues")))
+      (notes/doc/upsert
+        "log/issues"
+        "log/issues"
+        tree
+        (if (null? n) "log" (notes/doc/tags n))
+        "issue"
+        (if (null? n) "" (notes/doc/day n))))))
+
 (define notes/item-li
   (lambda
     (row)
@@ -1140,7 +1423,7 @@
     ()
     (html/p*
       (html/attr "class" "muted")
-      "notes/tree/render retired \226\128\148 use notes/ui/folders-html (flat index).")))
+      "notes/tree/render retired — use notes/ui/folders-html (flat index).")))
 
 (define notes/legacy/tree-render-folder
   (lambda
@@ -1427,9 +1710,6 @@
 (define notes/list
   (lambda () (notes/doc/list)))
 
-
-
-
 (define notes/list-light
   (lambda
     ()
@@ -1444,6 +1724,9 @@
             (as-str (dict-get d "title"))
             (as-str (dict-get d "slug")))))
       (notes/doc/index-list))))
+
+(define notes/list-light-cap
+  (lambda () (notes/list-take (notes/list-light) 40)))
 
 (define notes/list-take
   (lambda
@@ -1479,7 +1762,30 @@
       notes/migrate/legacy-one
       (rows (quote note) 2000))))
 
-;; F3: force-write heading children from legacy outline blob for every row.
+(define notes/migrate/legacy-delete-all
+  (lambda
+    ()
+    (list/map
+      (lambda
+        (row)
+        (let
+          ((id (as-str (car row)))
+            (slug (as-str (dict-get (cdr row) "slug"))))
+          (if
+            (null? (tree/get-uuid id))
+            (string-append "kept-missing-tree:" slug)
+            (seq
+              (delete (quote note) id)
+              (string-append "deleted:" slug)))))
+      (rows (quote note) 2000))))
+
+(define notes/migrate/legacy-force-all
+  (lambda
+    ()
+    (list/map
+      notes/migrate/legacy-force-one
+      (rows (quote note) 2000))))
+
 (define notes/migrate/legacy-force-one
   (lambda
     (row)
@@ -1503,31 +1809,6 @@
                   (notes/tree/save-outline path outline)
                   (roam/reindex slug outline)
                   (string-append "reoutlined:" slug))))))))))
-
-(define notes/migrate/legacy-force-all
-  (lambda
-    ()
-    (list/map
-      notes/migrate/legacy-force-one
-      (rows (quote note) 2000))))
-
-;; F4: delete legacy data_rows type=note after tree uuid verified.
-(define notes/migrate/legacy-delete-all
-  (lambda
-    ()
-    (list/map
-      (lambda
-        (row)
-        (let
-          ((id (as-str (car row)))
-            (slug (as-str (dict-get (cdr row) "slug"))))
-          (if
-            (null? (tree/get-uuid id))
-            (string-append "kept-missing-tree:" slug)
-            (seq
-              (delete (quote note) id)
-              (string-append "deleted:" slug)))))
-      (rows (quote note) 2000))))
 
 (define notes/migrate/legacy-one
   (lambda
@@ -1591,7 +1872,8 @@
         (html/p* "" (html/a "/notes" "All notes"))))))
 
 (define notes/move-folder
-  (lambda (slug folder)
+  (lambda
+    (slug folder)
     (let*
       ((r (notes/doc/row (as-str slug)))
         (f (if (null? r) "{}" (cdr r)))
@@ -2465,9 +2747,7 @@
       (if (null? rs) () (car rs)))))
 
 (define notes/search
-  (lambda
-    (q)
-    (notes/doc/search q)))
+  (lambda (q) (notes/doc/search q)))
 
 (define notes/show-archived?
   (lambda
@@ -2549,6 +2829,384 @@
           (notes/get-title n)
           (notes/get-outline n)
           (notes/get-tags n))))))
+
+(define notes/tree-css
+  (css/sheet
+    (list
+      (css/raw
+        "/* AS/400 terminal-inspired theme overrides v3 */")
+      (css/rule
+        "body"
+        (list
+          "font-family"
+          "\"Courier New\",\"Lucida Console\",Monaco,\"DejaVu Sans Mono\",monospace"
+          "font-weight"
+          "400"
+          "-webkit-font-smoothing"
+          "antialiased"))
+      (css/rule
+        "header"
+        (list
+          "border-bottom"
+          "2px solid #33cc33"
+          "padding"
+          ".5rem .75rem"))
+      (css/rule
+        "header .brand"
+        (list
+          "color"
+          "#33ff33"
+          "text-transform"
+          "uppercase"
+          "letter-spacing"
+          ".12em"
+          "font-weight"
+          "700"))
+      (css/rule "header .meta" (list "color" "#888888"))
+      (css/rule
+        "nav"
+        (list
+          "gap"
+          "0"
+          "border"
+          "2px solid #33cc33"
+          "padding"
+          ".25rem"))
+      (css/rule
+        "nav a,.menu-drop-btn"
+        (list
+          "border"
+          "1px solid #33cc33"
+          "background"
+          "#1a2a1a"
+          "color"
+          "#33cc33"
+          "font-family"
+          "\"Courier New\",\"Lucida Console\",Monaco,monospace"
+          "font-size"
+          ".85rem"
+          "font-weight"
+          "700"
+          "text-transform"
+          "uppercase"
+          "letter-spacing"
+          ".06em"
+          "padding"
+          ".4rem .6rem"
+          "margin"
+          "0"
+          "border-radius"
+          "0"))
+      (css/rule
+        "nav a:hover,nav a:focus,.menu-drop-btn:hover"
+        (list "background" "#33cc33" "color" "#111111"))
+      (css/rule "main" (list "max-width" "56rem"))
+      (css/rule
+        "h1"
+        (list
+          "color"
+          "#33ff33"
+          "text-transform"
+          "uppercase"
+          "letter-spacing"
+          ".1em"
+          "border-bottom"
+          "2px solid #33cc33"
+          "font-size"
+          "1.15rem"
+          "font-weight"
+          "700"))
+      (css/rule
+        "h2"
+        (list
+          "color"
+          "#33cc33"
+          "text-transform"
+          "uppercase"
+          "letter-spacing"
+          ".05em"
+          "font-size"
+          "1rem"
+          "font-weight"
+          "700"))
+      (css/rule
+        "h3"
+        (list
+          "color"
+          "#33cc33"
+          "font-size"
+          ".95rem"
+          "font-weight"
+          "700"))
+      (css/rule
+        ".card"
+        (list
+          "border"
+          "2px solid #33cc33"
+          "background"
+          "#1a1a1a"))
+      (css/rule
+        "table"
+        (list "border" "2px solid #33cc33" "font-size" ".85rem"))
+      (css/rule
+        "th"
+        (list
+          "background"
+          "#1a2a1a"
+          "color"
+          "#33ff33"
+          "text-transform"
+          "uppercase"
+          "letter-spacing"
+          ".05em"
+          "border-color"
+          "#33cc33"
+          "font-weight"
+          "700"))
+      (css/rule "td" (list "border-color" "#222222"))
+      (css/rule
+        "tr:nth-child(even) td"
+        (list "background" "#151515"))
+      (css/rule
+        "button,.btn,input[type=submit]"
+        (list
+          "background"
+          "#1a2a1a"
+          "color"
+          "#33cc33"
+          "border"
+          "2px solid #33cc33"
+          "font-family"
+          "\"Courier New\",\"Lucida Console\",Monaco,monospace"
+          "font-size"
+          ".85rem"
+          "font-weight"
+          "700"
+          "text-transform"
+          "uppercase"
+          "letter-spacing"
+          ".05em"
+          "border-radius"
+          "0"
+          "padding"
+          ".45rem .85rem"))
+      (css/rule
+        "button:hover,.btn:hover"
+        (list "background" "#33cc33" "color" "#111111"))
+      (css/rule
+        "button:active,.btn:active"
+        (list "border-style" "solid"))
+      (css/rule
+        "button.secondary,.btn.secondary"
+        (list "background" "#1a1a1a"))
+      (css/rule
+        "pre,textarea,input[type=text],input[type=search],input:not([type])"
+        (list
+          "background"
+          "#0d0d0d"
+          "color"
+          "#33cc33"
+          "border"
+          "1px solid #33cc33"
+          "font-family"
+          "\"Courier New\",\"Lucida Console\",Monaco,monospace"
+          "font-weight"
+          "400"))
+      (css/rule
+        "pre:focus,textarea:focus,input[type=text]:focus,input[type=search]:focus,input:not([type]):focus"
+        (list "border-color" "#33ff33" "outline" "none"))
+      (css/rule "a" (list "color" "#33ff33"))
+      (css/rule "a:visited" (list "color" "#2a9a2a"))
+      (css/rule "a:hover" (list "color" "#66ff66"))
+      (css/rule ".meta,.muted" (list "color" "#888888"))
+      (css/rule ".err" (list "color" "#ff4444"))
+      (css/rule ".ok" (list "color" "#33ff33"))
+      (css/rule
+        ".notes-tree"
+        (list
+          "list-style"
+          "none"
+          "padding"
+          "0"
+          "margin"
+          "0"))
+      (css/rule
+        ".notes-tree ul.tree-root"
+        (list
+          "list-style"
+          "none"
+          "padding"
+          "0"
+          "margin"
+          "0"))
+      (css/rule
+        ".notes-tree .tree-folder"
+        (list
+          "margin"
+          ".25rem 0"
+          "padding-left"
+          ".5rem"
+          "border-left"
+          "2px solid #33cc33"))
+      (css/rule
+        ".notes-tree .tree-folder-header"
+        (list
+          "display"
+          "flex"
+          "align-items"
+          "center"
+          "gap"
+          ".35rem"
+          "padding"
+          ".15rem 0"
+          "font-weight"
+          "700"))
+      (css/rule
+        ".notes-tree .tree-folder-header a"
+        (list "text-decoration" "none" "color" "#33ff33"))
+      (css/rule
+        ".notes-tree .tree-folder-header a:hover"
+        (list "text-decoration" "underline" "color" "#66ff66"))
+      (css/rule
+        ".notes-tree .tree-folder-icon"
+        (list "font-size" ".9em"))
+      (css/rule
+        ".notes-tree ul.tree-children"
+        (list
+          "list-style"
+          "none"
+          "padding"
+          "0 0 0 1rem"
+          "margin"
+          ".15rem 0"))
+      (css/rule
+        ".notes-tree li.note-item"
+        (list "border-bottom" "none" "padding" ".15rem 0"))
+      (css/rule
+        ".notes-tree li.note-item > a"
+        (list "flex" "1 1 auto" "color" "#33cc33"))
+      (css/rule
+        ".notes-tree li.note-item > a:hover"
+        (list "color" "#66ff66"))
+      (css/rule
+        ".notes-tree .tree-uncategorized"
+        (list
+          "margin-top"
+          "1rem"
+          "padding-top"
+          ".5rem"
+          "border-top"
+          "1px solid #33cc33"))
+      (css/rule
+        ".notes-tree .tree-uncategorized h3"
+        (list
+          "font-size"
+          ".95rem"
+          "color"
+          "#888888"
+          "margin"
+          ".5rem 0 .25rem"
+          "text-transform"
+          "uppercase"
+          "letter-spacing"
+          ".05em"))
+      (css/rule
+        ".notes-tree li.note-item form.note-del button"
+        (list
+          "border"
+          "1px solid #33cc33"
+          "background"
+          "#1a1a1a"
+          "color"
+          "#888888"
+          "padding"
+          ".2rem .4rem"
+          "font-size"
+          ".8rem"
+          "min-height"
+          "auto"
+          "width"
+          "auto"))
+      (css/rule
+        ".notes-tree li.note-item form.note-del button:hover"
+        (list "background" "#33cc33" "color" "#111111"))
+      (css/rule
+        "li.note-item"
+        (list
+          "border-bottom"
+          "1px solid #222222"
+          "padding"
+          ".35rem 0"))
+      (css/rule "li.note-item > a" (list "color" "#33cc33"))
+      (css/rule
+        "li.note-item > a:hover"
+        (list "color" "#66ff66"))
+      (css/rule
+        "li.note-item .muted"
+        (list "color" "#888888"))
+      (css/rule
+        "li.note-item .note-del button"
+        (list
+          "border"
+          "1px solid #33cc33"
+          "background"
+          "#1a1a1a"
+          "color"
+          "#888888"
+          "padding"
+          ".2rem .4rem"
+          "font-size"
+          ".8rem"
+          "min-height"
+          "auto"
+          "width"
+          "auto"))
+      (css/rule
+        "li.note-item .note-del button:hover"
+        (list "background" "#33cc33" "color" "#111111")))))
+
+(define notes/tree-css-patch
+  (css/sheet
+    (list
+      (css/raw
+        "/* v4 patch: fix capture btn wrap + brighten muted greys */")
+      (css/rule
+        ".menu-drop-btn"
+        (list
+          "white-space"
+          "nowrap"
+          "display"
+          "inline-flex"
+          "align-items"
+          "center"
+          "justify-content"
+          "center"
+          "gap"
+          ".25rem"))
+      (css/rule
+        ".menu-drop>summary::after"
+        (list "display" "inline-block"))
+      (css/rule "header .meta" (list "color" "#aaaaaa"))
+      (css/rule ".meta,.muted" (list "color" "#aaaaaa"))
+      (css/rule ".notes-tree .muted" (list "color" "#aaaaaa"))
+      (css/rule
+        "li.note-item .muted"
+        (list "color" "#aaaaaa"))
+      (css/rule
+        ".notes-tree .tree-uncategorized h3"
+        (list "color" "#aaaaaa"))
+      (css/rule
+        "li.note-item .note-del button, .notes-tree li.note-item form.note-del button"
+        (list
+          "color"
+          "#33cc33"
+          "border"
+          "1px solid #33cc33"
+          "background"
+          "#1a1a1a"))
+      (css/rule
+        "li.note-item .note-del button:hover, .notes-tree li.note-item form.note-del button:hover"
+        (list "background" "#33cc33" "color" "#111111")))))
 
 (define notes/tree/all-paths
   (lambda
@@ -2651,7 +3309,8 @@
         (css/rule
           ".notes-tree > details.tree-folder"
           (list "margin" ".25rem 0"))
-        (css/raw "/* refile modal (slug picker — no O(n) options) */")
+        (css/raw
+          "/* refile modal (slug picker — no O(n) options) */")
         (css/rule
           "details.ol-refile-modal"
           (list "display" "inline-block" "position" "relative"))
@@ -2664,13 +3323,20 @@
         (css/rule
           "details.ol-refile-modal[open] > .ol-refile-body"
           (list
-            "position" "absolute"
-            "z-index" "20"
-            "background" "var(--card,#fff)"
-            "border" "1px solid var(--muted,#888)"
-            "padding" ".5rem"
-            "min-width" "16rem"
-            "box-shadow" "0 2px 8px rgba(0,0,0,.12)"))
+            "position"
+            "absolute"
+            "z-index"
+            "20"
+            "background"
+            "var(--card,#fff)"
+            "border"
+            "1px solid var(--muted,#888)"
+            "padding"
+            ".5rem"
+            "min-width"
+            "16rem"
+            "box-shadow"
+            "0 2px 8px rgba(0,0,0,.12)"))
         (css/rule
           ".ol-refile-body .ol-refile-sel"
           (list "width" "12rem" "max-width" "100%"))
@@ -2688,59 +3354,92 @@
           "details.ol-find-modal > summary.ol-btn::-webkit-details-marker"
           (list "display" "none"))
         (css/rule
-          "details.ol-find-modal[open] > .ol-find-body,
-           details.ol-refile-modal[open] > .ol-refile-body.ol-find-wide"
+          "details.ol-find-modal[open] > .ol-find-body,\n           details.ol-refile-modal[open] > .ol-refile-body.ol-find-wide"
           (list
-            "position" "absolute"
-            "z-index" "30"
-            "right" "0"
-            "background" "var(--card,#fff)"
-            "border" "1px solid var(--muted,#888)"
-            "padding" ".5rem"
-            "min-width" "22rem"
-            "max-width" "min(36rem, 92vw)"
-            "box-shadow" "0 4px 16px rgba(0,0,0,.14)"))
+            "position"
+            "absolute"
+            "z-index"
+            "30"
+            "right"
+            "0"
+            "background"
+            "var(--card,#fff)"
+            "border"
+            "1px solid var(--muted,#888)"
+            "padding"
+            ".5rem"
+            "min-width"
+            "22rem"
+            "max-width"
+            "min(36rem, 92vw)"
+            "box-shadow"
+            "0 4px 16px rgba(0,0,0,.14)"))
         (css/rule
           ".ol-find-input"
           (list
-            "width" "100%"
-            "box-sizing" "border-box"
-            "padding" ".35rem .5rem"
-            "margin" "0 0 .35rem 0"))
+            "width"
+            "100%"
+            "box-sizing"
+            "border-box"
+            "padding"
+            ".35rem .5rem"
+            "margin"
+            "0 0 .35rem 0"))
         (css/rule
           ".ol-find-results"
           (list
-            "max-height" "18rem"
-            "overflow" "auto"
-            "margin" "0"
-            "padding" "0"
-            "list-style" "none"))
+            "max-height"
+            "18rem"
+            "overflow"
+            "auto"
+            "margin"
+            "0"
+            "padding"
+            "0"
+            "list-style"
+            "none"))
         (css/rule
           ".ol-find-group"
           (list
-            "font-size" ".75rem"
-            "font-weight" "600"
-            "text-transform" "uppercase"
-            "letter-spacing" ".04em"
-            "color" "var(--muted,#666)"
-            "padding" ".4rem .35rem .15rem"))
+            "font-size"
+            ".75rem"
+            "font-weight"
+            "600"
+            "text-transform"
+            "uppercase"
+            "letter-spacing"
+            ".04em"
+            "color"
+            "var(--muted,#666)"
+            "padding"
+            ".4rem .35rem .15rem"))
         (css/rule
           "a.ol-find-hit, button.ol-find-hit"
           (list
-            "display" "block"
-            "width" "100%"
-            "text-align" "left"
-            "border" "0"
-            "background" "transparent"
-            "padding" ".35rem .5rem .35rem 1rem"
-            "cursor" "pointer"
-            "color" "inherit"
-            "text-decoration" "none"
-            "font" "inherit"
-            "box-sizing" "border-box"))
+            "display"
+            "block"
+            "width"
+            "100%"
+            "text-align"
+            "left"
+            "border"
+            "0"
+            "background"
+            "transparent"
+            "padding"
+            ".35rem .5rem .35rem 1rem"
+            "cursor"
+            "pointer"
+            "color"
+            "inherit"
+            "text-decoration"
+            "none"
+            "font"
+            "inherit"
+            "box-sizing"
+            "border-box"))
         (css/rule
-          "a.ol-find-hit:hover, button.ol-find-hit:hover,
-           a.ol-find-hit.is-active, button.ol-find-hit.is-active"
+          "a.ol-find-hit:hover, button.ol-find-hit:hover,\n           a.ol-find-hit.is-active, button.ol-find-hit.is-active"
           (list "background" "var(--accent-bg,#eef3ff)"))
         (css/rule
           ".ol-find-hit-path"
@@ -2748,22 +3447,32 @@
         (css/rule
           ".ol-find-hit-meta"
           (list
-            "font-size" ".75rem"
-            "color" "var(--muted,#666)"
-            "margin-left" ".35rem"))
+            "font-size"
+            ".75rem"
+            "color"
+            "var(--muted,#666)"
+            "margin-left"
+            ".35rem"))
         (css/rule
           ".ol-find-empty"
           (list
-            "padding" ".5rem"
-            "color" "var(--muted,#666)"
-            "font-size" ".9rem"))
+            "padding"
+            ".5rem"
+            "color"
+            "var(--muted,#666)"
+            "font-size"
+            ".9rem"))
         (css/rule
           ".ol-find-bar"
           (list
-            "display" "flex"
-            "gap" ".5rem"
-            "align-items" "center"
-            "margin" "0 0 .75rem 0"))
+            "display"
+            "flex"
+            "gap"
+            ".5rem"
+            "align-items"
+            "center"
+            "margin"
+            "0 0 .75rem 0"))
         (css/rule
           ".ol-find-bar details.ol-find-modal"
           (list "flex" "1 1 auto"))
@@ -2773,7 +3482,13 @@
         (css/raw "/* create form collapsed behind summary */")
         (css/rule
           "details.notes-create > summary.notes-create-sum"
-          (list "cursor" "pointer" "font-weight" "600" "list-style" "none"))
+          (list
+            "cursor"
+            "pointer"
+            "font-weight"
+            "600"
+            "list-style"
+            "none"))
         (css/rule
           "details.notes-create > summary.notes-create-sum::-webkit-details-marker"
           (list "display" "none"))
@@ -2900,19 +3615,6 @@
 
 (define notes/tree/list-notes
   (lambda () (tree/note-index (notes/tree/root) 50000)))
-
-;; Read the root outline body persisted by write-root-body (i-rootbody-1).
-(define notes/tree/root-body
-  (lambda
-    (note-path)
-    (let
-      ((cur (tree/get note-path)))
-      (if
-        (null? cur)
-        ""
-        (let
-          ((b (dict-get (notes/tree/body (notes/tree/parse cur)) "body")))
-          (if (null? b) "" (as-str b)))))))
 
 (define notes/tree/load-outline
   (lambda
@@ -3091,12 +3793,29 @@
 (define notes/tree/root
   (lambda () (tree/garden-root)))
 
+(define notes/tree/root-body
+  (lambda
+    (note-path)
+    (let
+      ((cur (tree/get note-path)))
+      (if
+        (null? cur)
+        ""
+        (let
+          ((b
+            (dict-get
+              (notes/tree/body (notes/tree/parse cur))
+              "body")))
+          (if (null? b) "" (as-str b)))))))
+
 (define notes/tree/save-outline
   (lambda
     (note-path outline)
     (seq
       (notes/tree/clear-headings note-path)
-      (notes/tree/write-root-body note-path (outline/body outline))
+      (notes/tree/write-root-body
+        note-path
+        (outline/body outline))
       (list/foldl
         (lambda
           (acc kid)
@@ -3104,32 +3823,6 @@
         0
         (outline/kids outline))
       note-path)))
-
-;; Persist the top-level (root) outline node's body onto the note node itself.
-;; i-rootbody-1: save-outline previously only wrote child headings, so any
-;; body kept on the root node was dropped on upsert. Store it as a "body" key
-;; on the note's content and read it back in load-outline/root-body.
-(define notes/tree/write-root-body
-  (lambda
-    (note-path body)
-    (let
-      ((cur (tree/get note-path)))
-      (if
-        (null? cur)
-        note-path
-        ;; let* (not parallel let): b's binding references n bound in the
-        ;; same group — parallel `let` evaluates bindings in the outer
-        ;; env and threw `unbound: n` (broke notes/doc/upsert write path).
-        (let*
-          ((n (notes/tree/parse cur))
-            (b (notes/tree/body n)))
-          (seq
-            (tree/upsert
-              note-path
-              "note"
-              "note"
-              (dict-set b "body" (as-str body)))
-            note-path))))))
 
 (define notes/tree/sort-by-name
   (lambda
@@ -3153,18 +3846,14 @@
       (lambda (s) (not (string-eq (as-str s) "")))
       (string-split (as-str folder) "/"))))
 
-;; NOTE (css-ghost-as400): notes/tree-css and notes/tree-css-patch were the
-;; old AS/400 CRT skin hardcoded (hex literals) over EVERY theme. They are
-;; DELETED. The skin is opt-in + var()-based in libs/theme-as400 (theme/extra,
-;; spliced LAST by ui/css, only when theme/as400 is selected). This file now
-;; only emits the notes-tree's own structural details sheet.
-(define notes/tree/style-css
-  (css/render (notes/tree/details-css)))
-
 (define notes/tree/style
-  (lambda
-    ()
-    (html/tag "style" "" notes/tree/style-css)))
+  (lambda () (html/tag "style" "" notes/tree/style-css)))
+
+(define notes/tree/style-css
+  (string-append
+    (css/render notes/tree-css)
+    (css/render notes/tree-css-patch)
+    (css/render (notes/tree/details-css))))
 
 (define notes/tree/write-heading
   (lambda
@@ -3200,7 +3889,24 @@
           (outline/kids node))
         path))))
 
-;; Collapsed by default — open summary to create (keeps the index clean).
+(define notes/tree/write-root-body
+  (lambda
+    (note-path body)
+    (let
+      ((cur (tree/get note-path)))
+      (if
+        (null? cur)
+        note-path
+        (let*
+          ((n (notes/tree/parse cur)) (b (notes/tree/body n)))
+          (seq
+            (tree/upsert
+              note-path
+              "note"
+              "note"
+              (dict-set b "body" (as-str body)))
+            note-path))))))
+
 (define notes/ui/create-form
   (lambda
     ()
@@ -3235,9 +3941,7 @@
                   "folder"
                   (html/attr "placeholder" "wiki/entities"))
                 " "
-                (html/button
-                  (html/attr "type" "submit")
-                  "Create")))))))))
+                (html/button (html/attr "type" "submit") "Create")))))))))
 
 (define notes/ui/do-create
   (lambda
@@ -3348,6 +4052,195 @@
             ""
             (html/button (html/attr "type" "submit") "Save outline")))))))
 
+(define notes/ui/find-modal
+  (lambda
+    ()
+    (html/tag
+      "details"
+      (html/attrs
+        (list
+          (html/attr "class" "ol-find-modal")
+          (html/attr "id" "ol-find-modal")))
+      (html/join
+        (list
+          (html/tag
+            "summary"
+            (html/attrs
+              (list
+                (html/attr "class" "ol-btn")
+                (html/attr "title" "Find note (Ctrl/Cmd-K)")))
+            "find")
+          (html/tag
+            "div"
+            (html/attr "class" "ol-find-body")
+            (html/join
+              (list
+                (html/void
+                  "input"
+                  (html/attrs
+                    (list
+                      (html/attr "type" "search")
+                      (html/attr "class" "ol-find-input")
+                      (html/attr "name" "q")
+                      (html/attr "placeholder" "Find note or header…")
+                      (html/attr "autocomplete" "off")
+                      (html/attr "hx-get" "/partials/notes-search")
+                      (html/attr
+                        "hx-trigger"
+                        "input changed delay:200ms, search")
+                      (html/attr "hx-target" "next .ol-find-results")
+                      (html/attr "hx-swap" "outerHTML")
+                      (html/attr "hx-include" "this"))))
+                (html/div
+                  (html/attr "class" "ol-find-results")
+                  (html/div
+                    (html/attr "class" "ol-find-empty")
+                    "Type to find a note or header…"))))))))))
+
+(define notes/ui/find-script
+  (lambda
+    ()
+    (html/tag
+      "script"
+      ""
+      (string-append
+        "(function(){"
+        "function hits(root){return root?Array.prototype.slice.call(root.querySelectorAll('[data-ol-find-hit]')):[];}"
+        "function setActive(root,i){var hs=hits(root);if(!hs.length)return;hs.forEach(function(h){h.classList.remove('is-active');});"
+        "var n=((i%hs.length)+hs.length)%hs.length;hs[n].classList.add('is-active');hs[n].scrollIntoView({block:'nearest'});root.dataset.olFindIdx=String(n);}"
+        "function openFind(sel){var d=document.querySelector(sel||'details.ol-find-modal');if(!d)return;d.open=true;"
+        "var inp=d.querySelector('.ol-find-input');if(inp){inp.focus();inp.select();}}"
+        "document.addEventListener('keydown',function(e){"
+        "var t=e.target;var typing=t&&(t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.isContentEditable);"
+        "if((e.metaKey||e.ctrlKey)&&!e.shiftKey&&(e.key==='k'||e.key==='K')){e.preventDefault();openFind('details.ol-find-modal');return;}"
+        "if(e.key==='Escape'){document.querySelectorAll('details.ol-find-modal[open],details.ol-refile-modal[open]').forEach(function(d){d.open=false;});return;}"
+        "var body=t&&t.closest&&t.closest('.ol-find-body,.ol-refile-body');if(!body)return;"
+        "var box=body.querySelector('.ol-find-results')||body;"
+        "if(e.key==='ArrowDown'){e.preventDefault();setActive(box,(parseInt(box.dataset.olFindIdx||'-1',10)+1));return;}"
+        "if(e.key==='ArrowUp'){e.preventDefault();setActive(box,(parseInt(box.dataset.olFindIdx||'0',10)-1));return;}"
+        "if(e.key==='Enter'&&!e.shiftKey){var hs=hits(box);var i=parseInt(box.dataset.olFindIdx||'-1',10);"
+        "if(i>=0&&hs[i]){e.preventDefault();if(hs[i].tagName==='BUTTON'){hs[i].click();}else if(hs[i].tagName==='A'){window.location=hs[i].href;}else{var b=hs[i].querySelector('button,[type=submit]');if(b)b.click();else hs[i].click();}}}"
+        "});"
+        "document.body.addEventListener('htmx:afterSwap',function(ev){var t=ev.target;if(!t||!t.classList)return;"
+        "if(t.classList.contains('ol-find-results')||t.querySelector&&t.querySelector('.ol-find-results')){var box=t.classList.contains('ol-find-results')?t:t.querySelector('.ol-find-results');if(box)setActive(box,0);}});"
+        "document.addEventListener('toggle',function(e){var d=e.target;if(!d||!d.classList)return;"
+        "if((d.classList.contains('ol-find-modal')||d.classList.contains('ol-refile-modal'))&&d.open){var inp=d.querySelector('.ol-find-input');if(inp)setTimeout(function(){inp.focus();},0);}}"
+        ",true);"
+        "document.addEventListener('pointerdown',function(e){var rf=e.target.closest&&e.target.closest('.ol-find-refile-form');"
+        "if(!rf)return;var src=document.getElementById('ol-refile-nid');var m=rf.querySelector('.ol-refile-nid-mirror');"
+        "if(src&&m)m.value=src.value;},true);"
+        "})();"))))
+
+(define notes/ui/folder-block
+  (lambda
+    (folder notes)
+    (let
+      ((items (notes/light/notes-in folder notes))
+        (label
+          (if (string-eq folder "") "(uncategorized)" folder)))
+      (if
+        (null? items)
+        ""
+        (html/tag
+          "details"
+          (html/attrs
+            (list
+              (html/attr
+                "class"
+                (if
+                  (string-eq folder "")
+                  "tree-folder tree-uncategorized"
+                  "tree-folder"))
+              (html/attr "open" "open")))
+          (html/join
+            (list
+              (html/tag
+                "summary"
+                (html/attr "class" "tree-folder-header")
+                (html/join
+                  (list
+                    (html/span
+                      (html/attr "class" "tree-folder-icon")
+                      (if (string-eq folder "") "&#x1F4C2; " "&#x1F4C1; "))
+                    (html/a
+                      (string-append "/notes?folder=" folder)
+                      (html/text label))
+                    (html/span
+                      (html/attr "class" "muted")
+                      (html/text
+                        (string-append " (" (as-str (length items)) ")"))))))
+              (notes/light/render-notes items))))))))
+
+(define notes/ui/folder-block-grouped
+  (lambda
+    (pair)
+    (let
+      ((folder (as-str (car pair))) (items (car (cdr pair))))
+      (let
+        ((label
+            (if (string-eq folder "") "(uncategorized)" folder))
+          (n (length items)))
+        (html/tag
+          "details"
+          (html/attrs
+            (list
+              (html/attr
+                "class"
+                (if
+                  (string-eq folder "")
+                  "tree-folder tree-uncategorized"
+                  "tree-folder"))
+              (html/attr "open" "open")))
+          (html/join
+            (list
+              (html/tag
+                "summary"
+                (html/attr "class" "tree-folder-header")
+                (html/join
+                  (list
+                    (html/span
+                      (html/attr "class" "tree-folder-icon")
+                      (if (string-eq folder "") "&#x1F4C2; " "&#x1F4C1; "))
+                    (html/text label)
+                    (html/span
+                      (html/attr "class" "muted")
+                      (html/text (string-append " (" (as-str n) ")"))))))
+              (notes/light/render-notes items))))))))
+
+(define notes/ui/folder-details
+  (lambda
+    (n)
+    (let
+      ((path (notes/ui/node-path n))
+        (label (notes/ui/node-title n)))
+      (html/tag
+        "details"
+        (html/attrs
+          (list
+            (html/attr "class" "tree-folder")
+            (html/attr
+              "hx-get"
+              (string-append "/partials/notes-tree?path=" path))
+            (html/attr "hx-trigger" "toggle once")
+            (html/attr "hx-target" "find .tree-children")
+            (html/attr "hx-swap" "innerHTML")))
+        (html/join
+          (list
+            (html/tag
+              "summary"
+              (html/attr "class" "tree-folder-header")
+              (html/join
+                (list
+                  (html/span
+                    (html/attr "class" "tree-folder-icon")
+                    "&#x1F4C1; ")
+                  (html/text label))))
+            (html/div
+              (html/attr "class" "tree-children")
+              (html/span
+                (html/attr "class" "muted")
+                "open to load…"))))))))
+
 (define notes/ui/folder-form
   (lambda
     (slug folder)
@@ -3369,6 +4262,12 @@
                 (html/attr "style" "width:12rem"))))
           " "
           (html/button (html/attr "type" "submit") "move"))))))
+
+(define notes/ui/folder-group-keys
+  (lambda
+    (notes)
+    (notes/light/dedupe
+      (map (lambda (n) (as-str (notes/light/nth n 1))) notes))))
 
 (define notes/ui/folder-list
   (lambda
@@ -3401,196 +4300,45 @@
             (html/h3 (html/a href (html/text label)))
             (html/ul "" (notes/ui/folder-list folder))))))))
 
-
-(define notes/issues/ensure
-  (lambda ()
-    (let ((n (notes/doc/get "log/issues")))
-      (if (null? n)
-        (seq
-          (notes/doc/upsert "log/issues" "log/issues"
-            (notes/empty-outline "log/issues") "log" "issue" "")
-          (notes/doc/get "log/issues"))
-        n))))
-
-(define notes/issues/upsert
-  (lambda (tree)
-    (let ((n (notes/doc/get "log/issues")))
-      (notes/doc/upsert "log/issues" "log/issues" tree
-        (if (null? n) "log" (notes/doc/tags n))
-        "issue"
-        (if (null? n) "" (notes/doc/day n))))))
-
-(define notes/issues/node-id
-  (lambda (tree) (string-append "i-" (as-str (now)))))
-
-(define notes/issues/title-or-kind
-  (lambda (kind title)
-    (let ((t (string-trim (as-str title))))
-      (if (string-eq t "") (as-str kind) t))))
-
-(define notes/issues/add
-  (lambda (kind title body)
-    (let ((n (notes/issues/ensure)))
-      (let ((tree (notes/doc/outline n))
-            (full-title (string-append
-                          (as-str kind) ": "
-                          (notes/issues/title-or-kind kind title))))
-        (let ((child (outline/set-body
-                       (outline/node (notes/issues/node-id tree) full-title)
-                       (as-str body))))
-          (let ((new-tree (outline/add-child-by-id tree "root" child)))
-            (notes/issues/upsert new-tree)))))))
-
-(define notes/issues/set-todo
-  (lambda (id todo)
-    (let ((n (notes/doc/get "log/issues")))
-      (if (null? n)
-        #f
-        (let ((tree (notes/doc/outline n)))
-          (let ((new-tree
-                  (outline/update tree (as-str id)
-                    (lambda (node) (outline/set-todo node todo)))))
-            (seq (notes/issues/upsert new-tree) #t)))))))
-
-(define notes/issues/resolve (lambda (id) (notes/issues/set-todo id "DONE")))
-(define notes/issues/reopen (lambda (id) (notes/issues/set-todo id "")))
-
-(define notes/issues/delete
-  (lambda (id)
-    (let ((n (notes/doc/get "log/issues")))
-      (if (null? n)
-        #f
-        (let ((tree (notes/doc/outline n)))
-          (let ((new-tree (outline/delete tree (as-str id))))
-            (seq (notes/issues/upsert new-tree) #t)))))))
-
-(define notes/issues/nodes-html
-  (lambda (nodes)
-    (if (null? nodes)
-      ""
-      (html/join (list (notes/issues/node-html (car nodes))
-                       (notes/issues/nodes-html (cdr nodes)))))))
-
-(define notes/issues/node-html
-  (lambda (node)
-    (let ((id (outline/id node))
-          (title (outline/title node))
-          (body (outline/body node))
-          (done (string-eq (outline/todo node) "DONE")))
-      (html/li
-        (html/attr "class" "issue-item")
-        (html/join
-          (list
-            (html/div
-              (html/attr "class" (if done "issue-head done" "issue-head"))
-              (html/join (list (html/code id) " " (html/strong title))))
-            (if (string-eq (as-str body) "")
-              ""
-              (html/p* (html/attr "class" "issue-body") (as-str body)))
-            (html/div
-              (html/attr "class" "issue-actions")
-              (html/join
-                (list
-                  (html/form "POST" "/issues" ""
-                    (html/join (list
-                      (html/hidden "action" (if done "issue-reopen" "issue-resolve"))
-                      (html/hidden "id" id)
-                      (html/button
-                        (html/attr "type" "submit")
-                        (html/text (if done "Reopen" "Resolve"))))))
-                  " "
-                  (html/form "POST" "/issues" ""
-                    (html/join (list
-                      (html/hidden "action" "issue-delete")
-                      (html/hidden "id" id)
-                      (html/button
-                        (html/attrs (list (html/attr "type" "submit")
-                                          (html/attr "class" "secondary")))
-                        (html/text "Del"))))))))))))))
-
-(define notes/issues/form
-  (lambda ()
-    (html/form "POST" "/issues" (html/attr "class" "card")
-      (html/join
-        (list
-          (html/h2 "File an issue")
-          (html/hidden "action" "issue-add")
-          (html/label "" "Kind ")
-          (html/select "kind" ""
-            (html/join (list
-              (html/option "BUG" "BUG" #t)
-              (html/option "DESIGN" "DESIGN" #f)
-              (html/option "SMELL" "SMELL" #f)
-              (html/option "CLEANUP" "CLEANUP" #f))))
-          " "
-          (html/label "" "Title ")
-          (html/text-input "title" (html/attr "placeholder" "One-line title"))
-          " "
-          (html/textarea "body" (html/attrs (list
-                                             (html/attr "rows" "3")
-                                             (html/attr "placeholder" "Details"))) "")
-          " "
-          (html/button (html/attr "type" "submit") (html/text "File issue")))))))
-
-(define notes/issues/list-html
-  (lambda ()
-    (let ((n (notes/doc/get "log/issues")))
-      (if (null? n)
-        (html/p* (html/attr "class" "muted") "No issues yet.")
-        (let ((tree (notes/doc/outline n)))
-          (html/join
-            (list
-              (html/h2 "Register")
-              (html/ul (html/attr "class" "card")
-                (notes/issues/nodes-html (outline/kids tree))))))))))
-
-(define notes/issues/body
-  (lambda ()
-    (html/join
-      (list
-        (html/h1 "Issues")
-        (html/p*
-          (html/attr "class" "muted")
-          (html/join
-            (list
-              (html/a "/notes" "Notes")
-              " · "
-              (html/a "/notes?slug=log/issues" "Raw note"))))
-        (notes/issues/form)
-        (notes/issues/list-html)))))
-
-(define notes/issues/page
-  (lambda ()
-    (if
-      (string-eq (request-method) "POST")
-      (notes/issues/handle-post)
-      (html/page (list (notes/issues/body))))))
-
-(define notes/issues/handle-post
-  (lambda ()
+(define notes/ui/folders-html
+  (lambda
+    ()
     (let
-      ((action (as-str (request-param "action"))))
-      (cond
-        ((string-eq action "issue-add")
-          (seq
-            (notes/issues/add
-              (request-param "kind")
-              (request-param "title")
-              (request-param "body"))
-            (redirect "/issues")))
-        ((string-eq action "issue-resolve")
-          (seq
-            (notes/issues/resolve (request-param "id"))
-            (redirect "/issues")))
-        ((string-eq action "issue-reopen")
-          (seq
-            (notes/issues/reopen (request-param "id"))
-            (redirect "/issues")))
-        ((string-eq action "issue-delete")
-          (seq
-            (notes/issues/delete (request-param "id"))
-            (redirect "/issues")))
-        (else (redirect "/issues"))))))
+      ((root (notes/tree/root)))
+      (html/div
+        (html/attr "class" "notes-tree")
+        (notes/ui/tree-children-html root root)))))
+
+(define notes/ui/group-add
+  (lambda
+    (acc k slug title)
+    (if
+      (null? acc)
+      (list (list k (list (list slug title))))
+      (if
+        (string-eq (as-str (car (car acc))) k)
+        (cons
+          (list k (cons (list slug title) (car (cdr (car acc)))))
+          (cdr acc))
+        (cons
+          (car acc)
+          (notes/ui/group-add (cdr acc) k slug title))))))
+
+(define notes/ui/group-notes
+  (lambda
+    ()
+    (list/foldl
+      (lambda
+        (acc r)
+        (let
+          ((d (cdr r)))
+          (notes/ui/group-add
+            acc
+            (notes/ui/top-folder (dict-get d "folder"))
+            (as-str (dict-get d "slug"))
+            (as-str (dict-get d "title")))))
+      (list)
+      (notes/doc/index-list))))
 
 (define notes/ui/handle-post
   (lambda
@@ -3626,6 +4374,70 @@
           (notes/refile/extract-handle))
         (else (redirect "/notes"))))))
 
+(define notes/ui/index
+  (lambda
+    ()
+    (html/join
+      (list
+        (notes/tree/style)
+        (html/div
+          (html/attr "class" "ol-find-bar")
+          (html/join
+            (list
+              (notes/ui/find-modal)
+              (html/span (html/attr "class" "muted") "Ctrl/Cmd-K"))))
+        (html/h1 "Notes")
+        (html/p*
+          (html/attr "class" "muted")
+          "Outline-first notes. Folders load on open (htmx).")
+        (html/p*
+          (html/attr "class" "muted")
+          (html/join
+            (list
+              (html/a "/notes?slug=inbox" "Open inbox")
+              " · "
+              (html/a "/issues" "Issues")
+              " · "
+              (html/a "/notes" "All folders"))))
+        (notes/ui/create-form)
+        (html/h2 "Folders")
+        (notes/ui/folders-html)
+        (notes/ui/find-script)))))
+
+(define notes/ui/index-group
+  (lambda
+    (notes)
+    (list/foldl
+      (lambda
+        (acc n)
+        (let
+          ((k (as-str (notes/light/nth n 1))))
+          (notes/ui/index-group-add acc k n)))
+      (list)
+      notes)))
+
+(define notes/ui/index-group-add
+  (lambda
+    (acc k n)
+    (if
+      (null? acc)
+      (list (list k (list n)))
+      (if
+        (string-eq (as-str (car (car acc))) k)
+        (cons (list k (cons n (car (cdr (car acc))))) (cdr acc))
+        (cons
+          (car acc)
+          (notes/ui/index-group-add (cdr acc) k n))))))
+
+(define notes/ui/is-garden-folder?
+  (lambda
+    (n root)
+    (if
+      (not (string-eq (notes/ui/node-kind n) "folder"))
+      #f
+      (string-eq
+        (notes/ui/node-path n)
+        (string-append (as-str root) ".garden")))))
 
 (define notes/ui/item-li
   (lambda
@@ -3648,7 +4460,7 @@
                 ""
                 (html/span
                   (html/attr "class" "muted")
-                  (html/text (string-append " \194\183 " folder))))
+                  (html/text (string-append " · " folder))))
               (html/form
                 "POST"
                 "/notes"
@@ -3689,7 +4501,7 @@
                 ""
                 (html/span
                   (html/attr "class" "muted")
-                  (html/text (string-append " \194\183 " folder)))))))))))
+                  (html/text (string-append " · " folder)))))))))))
 
 (define notes/ui/missing
   (lambda
@@ -3701,6 +4513,45 @@
           (html/attr "class" "err")
           (string-append "No note " (as-str slug)))
         (html/p* "" (html/a "/notes" "All notes"))))))
+
+(define notes/ui/node-kind
+  (lambda (n) (as-str (dict-get n "kind"))))
+
+(define notes/ui/node-path
+  (lambda (n) (as-str (dict-get n "path"))))
+
+(define notes/ui/node-title
+  (lambda
+    (n)
+    (let
+      ((b (dict-get n "body")))
+      (let
+        ((t (dict-get b "title")) (s (dict-get b "slug")))
+        (if
+          (if (null? t) #t (string-eq (as-str t) ""))
+          (if
+            (if (null? s) #t (string-eq (as-str s) ""))
+            (notes/ui/path-label (notes/ui/node-path n))
+            (as-str s))
+          (as-str t))))))
+
+(define notes/ui/note-li-from-node
+  (lambda
+    (n)
+    (let
+      ((slug (as-str (dict-get (dict-get n "body") "slug")))
+        (title (notes/ui/node-title n)))
+      (let
+        ((s
+          (if
+            (string-eq slug "")
+            (notes/ui/path-label (notes/ui/node-path n))
+            slug)))
+        (html/li
+          (html/attr "class" "tree-item")
+          (html/a
+            (string-append "/notes?slug=" s)
+            (html/text title)))))))
 
 (define notes/ui/outline-script
   (lambda
@@ -3756,7 +4607,8 @@
         "var q='slug='+encodeURIComponent(slug)+'&op='+encodeURIComponent(op)+'&node-id='+encodeURIComponent(id)+'&op-seq='+seq;"
         "if(showArch)q+='&show=archived';"
         "fetch('/partials/notes-node-op?'+q,{method:'POST',credentials:'same-origin'}).then(function(r){return r.text();}).then(function(html){"
-        "if(seq<__opSeq)return;" "var doc=new DOMParser().parseFromString(html,'text/html');"
+        "if(seq<__opSeq)return;"
+        "var doc=new DOMParser().parseFromString(html,'text/html');"
         "var oobSel=doc.querySelector('#ol-selected-id[hx-swap-oob]');"
         "var olHTML=doc.querySelector('#outline');"
         "var cur=document.getElementById('outline');"
@@ -3805,6 +4657,17 @@
         "if(op){e.preventDefault();postOp(op);}"
         "},true);"
         "setSel('root');document.body.addEventListener('htmx:afterSwap',function(){setSel(selId());});})();"))))
+
+(define notes/ui/path-label
+  (lambda
+    (path)
+    (let
+      ((parts (string-split (as-str path) ".")))
+      (if
+        (null? parts)
+        ""
+        (string-replace (notes/light/last parts) "_" "-")))))
+
 (define notes/ui/recent-list
   (lambda
     ()
@@ -3814,6 +4677,371 @@
         (string-append acc (notes/ui/item-li row)))
       ""
       (notes/doc/index-list))))
+
+(define notes/ui/refile-modal
+  (lambda
+    (slug)
+    (html/tag
+      "details"
+      (html/attr "class" "ol-refile-modal")
+      (html/join
+        (list
+          (html/tag
+            "summary"
+            (html/attrs
+              (list
+                (html/attr "class" "ol-btn")
+                (html/attr
+                  "title"
+                  "refile selected node to another note")))
+            "refile")
+          (html/tag
+            "div"
+            (html/attrs
+              (list (html/attr "class" "ol-refile-body ol-find-wide")))
+            (html/join
+              (list
+                (html/void
+                  "input"
+                  (html/attrs
+                    (list
+                      (html/attr "type" "hidden")
+                      (html/attr "id" "ol-refile-nid")
+                      (html/attr "value" "root"))))
+                (html/void
+                  "input"
+                  (html/attrs
+                    (list
+                      (html/attr "type" "search")
+                      (html/attr "class" "ol-find-input")
+                      (html/attr "name" "q")
+                      (html/attr
+                        "placeholder"
+                        "destination note or header…")
+                      (html/attr "autocomplete" "off")
+                      (html/attr
+                        "hx-get"
+                        (string-append
+                          "/partials/notes-search?mode=refile&src="
+                          (as-str slug)))
+                      (html/attr
+                        "hx-trigger"
+                        "input changed delay:200ms, search")
+                      (html/attr "hx-target" "next .ol-find-results")
+                      (html/attr "hx-swap" "outerHTML")
+                      (html/attr "hx-include" "this"))))
+                (html/div
+                  (html/attr "class" "ol-find-results")
+                  (html/div
+                    (html/attr "class" "ol-find-empty")
+                    "Type a destination note or header…"))
+                (html/form
+                  "POST"
+                  "/notes"
+                  (html/attr "class" "ol-refile")
+                  (html/join
+                    (list
+                      (html/hidden "action" "refile")
+                      (html/hidden "src_slug" (as-str slug))
+                      (html/void
+                        "input"
+                        (html/attrs
+                          (list
+                            (html/attr "type" "hidden")
+                            (html/attr "name" "node_id")
+                            (html/attr "class" "ol-refile-nid-mirror")
+                            (html/attr "value" "root"))))
+                      (html/label
+                        (html/attr "class" "ol-refile-label")
+                        "or slug ")
+                      (html/text-input
+                        "dst_slug"
+                        (html/attrs
+                          (list
+                            (html/attr "class" "ol-refile-sel")
+                            (html/attr "placeholder" "destination-slug")
+                            (html/attr "autocomplete" "off"))))
+                      " "
+                      (html/button
+                        (html/attrs
+                          (list
+                            (html/attr "type" "submit")
+                            (html/attr "class" "ol-btn")
+                            (html/attr "title" "refile selected node")))
+                        "go"))))))))))))
+
+(define notes/ui/refile-partial
+  (lambda
+    ()
+    (let
+      ((slug (as-str (request-param "src"))))
+      (if
+        (string-eq slug "")
+        (render-html
+          (html/p* (html/attr "class" "muted") "missing src"))
+        (render-html
+          (html/form
+            "POST"
+            "/notes"
+            (html/attr "class" "ol-refile")
+            (html/join
+              (list
+                (html/hidden "action" "refile")
+                (html/hidden "src_slug" slug)
+                (html/void
+                  "input"
+                  (html/attrs
+                    (list
+                      (html/attr "type" "hidden")
+                      (html/attr "name" "node_id")
+                      (html/attr "id" "ol-refile-nid")
+                      (html/attr "value" "root"))))
+                (html/select
+                  "dst_slug"
+                  (html/attr "class" "ol-refile-sel")
+                  (notes/refile/options slug))
+                (html/button
+                  (html/attrs
+                    (list
+                      (html/attr "type" "submit")
+                      (html/attr "class" "ol-btn")
+                      (html/attr "title" "refile selected node")))
+                  "refile")))))))))
+
+(define notes/ui/render-child
+  (lambda
+    (n root)
+    (let
+      ((k (notes/ui/node-kind n)))
+      (if
+        (string-eq k "heading")
+        ""
+        (if
+          (notes/ui/is-garden-folder? n root)
+          (notes/ui/tree-children-html
+            (notes/ui/node-path n)
+            root)
+          (if
+            (string-eq k "folder")
+            (notes/ui/folder-details n)
+            (if
+              (string-eq k "note")
+              (notes/ui/note-li-from-node n)
+              "")))))))
+
+(define notes/ui/search-group
+  (lambda
+    (hits)
+    (list/map
+      (lambda (s) (notes/ui/search-hits-for hits s))
+      (notes/ui/search-slugs hits))))
+
+(define notes/ui/search-group-html
+  (lambda
+    (group mode src-slug)
+    (if
+      (null? group)
+      ""
+      (let
+        ((title (as-str (dict-get (car group) "title")))
+          (slug (as-str (dict-get (car group) "slug"))))
+        (html/join
+          (list
+            (html/div
+              (html/attr "class" "ol-find-group")
+              (html/text (if (string-eq title "") slug title)))
+            (html/join
+              (list/map
+                (lambda
+                  (hit)
+                  (if
+                    (string-eq mode "refile")
+                    (notes/ui/search-hit-refile hit src-slug)
+                    (notes/ui/search-hit-open hit)))
+                group))))))))
+
+(define notes/ui/search-hit-href
+  (lambda
+    (hit)
+    (let
+      ((slug (as-str (dict-get hit "slug")))
+        (nid (as-str (dict-get hit "node_id"))))
+      (if
+        (string-eq nid "")
+        (string-append "/notes?slug=" slug)
+        (string-append "/notes?slug=" slug "&node=" nid)))))
+
+(define notes/ui/search-hit-label
+  (lambda
+    (hit)
+    (let
+      ((path (as-str (dict-get hit "header_path")))
+        (matched (as-str (dict-get hit "matched")))
+        (title (as-str (dict-get hit "title")))
+        (nid (as-str (dict-get hit "node_id"))))
+      (if
+        (string-eq nid "")
+        (html/join
+          (list
+            (html/span
+              (html/attr "class" "ol-find-hit-path")
+              (html/text
+                (if
+                  (string-eq title "")
+                  (as-str (dict-get hit "slug"))
+                  title)))
+            (html/span
+              (html/attr "class" "ol-find-hit-meta")
+              (html/text matched))))
+        (html/join
+          (list
+            (html/span
+              (html/attr "class" "ol-find-hit-path")
+              (html/text (if (string-eq path "") title path)))
+            (html/span
+              (html/attr "class" "ol-find-hit-meta")
+              (html/text matched))))))))
+
+(define notes/ui/search-hit-open
+  (lambda
+    (hit)
+    (html/tag
+      "a"
+      (html/attrs
+        (list
+          (html/attr "href" (notes/ui/search-hit-href hit))
+          (html/attr "class" "ol-find-hit")
+          (html/attr "data-ol-find-hit" "1")
+          (html/attr "data-slug" (as-str (dict-get hit "slug")))
+          (html/attr
+            "data-node"
+            (as-str (dict-get hit "node_id")))))
+      (notes/ui/search-hit-label hit))))
+
+(define notes/ui/search-hit-refile
+  (lambda
+    (hit src-slug)
+    (html/form
+      "POST"
+      "/notes"
+      (html/attr "class" "ol-find-refile-form")
+      (html/join
+        (list
+          (html/hidden "action" "refile")
+          (html/hidden "src_slug" (as-str src-slug))
+          (html/void
+            "input"
+            (html/attrs
+              (list
+                (html/attr "type" "hidden")
+                (html/attr "name" "node_id")
+                (html/attr "class" "ol-refile-nid-mirror")
+                (html/attr "value" "root"))))
+          (html/hidden "dst_slug" (as-str (dict-get hit "slug")))
+          (html/hidden
+            "dst_node_id"
+            (as-str (dict-get hit "node_id")))
+          (html/button
+            (html/attrs
+              (list
+                (html/attr "type" "submit")
+                (html/attr "class" "ol-find-hit")
+                (html/attr "data-ol-find-hit" "1")
+                (html/attr "data-slug" (as-str (dict-get hit "slug")))
+                (html/attr
+                  "data-node"
+                  (as-str (dict-get hit "node_id")))
+                (html/attr "title" "refile selected node here")))
+            (notes/ui/search-hit-label hit)))))))
+
+(define notes/ui/search-hits-for
+  (lambda
+    (hits slug)
+    (list/filter
+      (lambda
+        (h)
+        (string-eq (as-str (dict-get h "slug")) (as-str slug)))
+      hits)))
+
+(define notes/ui/search-partial
+  (lambda
+    ()
+    (let
+      ((q
+          (if
+            (null? (request-param "q"))
+            ""
+            (as-str (request-param "q"))))
+        (mode
+          (if
+            (null? (request-param "mode"))
+            "open"
+            (as-str (request-param "mode"))))
+        (src
+          (if
+            (null? (request-param "src"))
+            ""
+            (as-str (request-param "src")))))
+      (render-html (notes/ui/search-results-html q mode src)))))
+
+(define notes/ui/search-results-html
+  (lambda
+    (q mode src-slug)
+    (let
+      ((needle (string-trim (as-str q))))
+      (if
+        (string-eq needle "")
+        (html/div
+          (html/attr "class" "ol-find-results")
+          (html/div
+            (html/attr "class" "ol-find-empty")
+            (if
+              (string-eq mode "refile")
+              "Type a destination note or header…"
+              "Type to find a note or header…")))
+        (let
+          ((hits (notes/doc/search needle)))
+          (if
+            (null? hits)
+            (html/div
+              (html/attr "class" "ol-find-results")
+              (html/div
+                (html/attr "class" "ol-find-empty")
+                "No matches."))
+            (html/div
+              (html/attr "class" "ol-find-results")
+              (html/join
+                (list/map
+                  (lambda
+                    (g)
+                    (notes/ui/search-group-html g mode src-slug))
+                  (notes/ui/search-group hits))))))))))
+
+(define notes/ui/search-slug-seen?
+  (lambda
+    (xs s)
+    (if
+      (null? xs)
+      #f
+      (if
+        (string-eq (as-str (car xs)) s)
+        #t
+        (notes/ui/search-slug-seen? (cdr xs) s)))))
+
+(define notes/ui/search-slugs
+  (lambda
+    (hits)
+    (list/foldl
+      (lambda
+        (acc h)
+        (let
+          ((s (as-str (dict-get h "slug"))))
+          (if
+            (notes/ui/search-slug-seen? acc s)
+            acc
+            (append acc (list s)))))
+      (list)
+      hits)))
 
 (define notes/ui/show
   (lambda
@@ -3914,375 +5142,6 @@
           (html/attr "form" "ol-op-form")))
       label)))
 
-;; Group hits by slug (first-seen order) for flat grouped rendering.
-(define notes/ui/search-slug-seen?
-  (lambda
-    (xs s)
-    (if
-      (null? xs)
-      #f
-      (if
-        (string-eq (as-str (car xs)) s)
-        #t
-        (notes/ui/search-slug-seen? (cdr xs) s)))))
-
-(define notes/ui/search-slugs
-  (lambda
-    (hits)
-    (list/foldl
-      (lambda
-        (acc h)
-        (let
-          ((s (as-str (dict-get h "slug"))))
-          (if
-            (notes/ui/search-slug-seen? acc s)
-            acc
-            (append acc (list s)))))
-      (list)
-      hits)))
-
-(define notes/ui/search-hits-for
-  (lambda
-    (hits slug)
-    (list/filter
-      (lambda
-        (h)
-        (string-eq (as-str (dict-get h "slug")) (as-str slug)))
-      hits)))
-
-(define notes/ui/search-group
-  (lambda
-    (hits)
-    (list/map
-      (lambda (s) (notes/ui/search-hits-for hits s))
-      (notes/ui/search-slugs hits))))
-
-(define notes/ui/search-hit-href
-  (lambda
-    (hit)
-    (let
-      ((slug (as-str (dict-get hit "slug")))
-        (nid (as-str (dict-get hit "node_id"))))
-      (if
-        (string-eq nid "")
-        (string-append "/notes?slug=" slug)
-        (string-append "/notes?slug=" slug "&node=" nid)))))
-
-(define notes/ui/search-hit-label
-  (lambda
-    (hit)
-    (let
-      ((path (as-str (dict-get hit "header_path")))
-        (matched (as-str (dict-get hit "matched")))
-        (title (as-str (dict-get hit "title")))
-        (nid (as-str (dict-get hit "node_id"))))
-      (if
-        (string-eq nid "")
-        (html/join
-          (list
-            (html/span
-              (html/attr "class" "ol-find-hit-path")
-              (html/text
-                (if (string-eq title "") (as-str (dict-get hit "slug")) title)))
-            (html/span
-              (html/attr "class" "ol-find-hit-meta")
-              (html/text matched))))
-        (html/join
-          (list
-            (html/span
-              (html/attr "class" "ol-find-hit-path")
-              (html/text
-                (if (string-eq path "") title path)))
-            (html/span
-              (html/attr "class" "ol-find-hit-meta")
-              (html/text matched))))))))
-
-(define notes/ui/search-hit-open
-  (lambda
-    (hit)
-    (html/tag
-      "a"
-      (html/attrs
-        (list
-          (html/attr "href" (notes/ui/search-hit-href hit))
-          (html/attr "class" "ol-find-hit")
-          (html/attr "data-ol-find-hit" "1")
-          (html/attr "data-slug" (as-str (dict-get hit "slug")))
-          (html/attr "data-node" (as-str (dict-get hit "node_id")))))
-      (notes/ui/search-hit-label hit))))
-
-(define notes/ui/search-hit-refile
-  (lambda
-    (hit src-slug)
-    (html/form
-      "POST"
-      "/notes"
-      (html/attr "class" "ol-find-refile-form")
-      (html/join
-        (list
-          (html/hidden "action" "refile")
-          (html/hidden "src_slug" (as-str src-slug))
-          (html/void
-            "input"
-            (html/attrs
-              (list
-                (html/attr "type" "hidden")
-                (html/attr "name" "node_id")
-                (html/attr "class" "ol-refile-nid-mirror")
-                (html/attr "value" "root"))))
-          (html/hidden "dst_slug" (as-str (dict-get hit "slug")))
-          (html/hidden "dst_node_id" (as-str (dict-get hit "node_id")))
-          (html/button
-            (html/attrs
-              (list
-                (html/attr "type" "submit")
-                (html/attr "class" "ol-find-hit")
-                (html/attr "data-ol-find-hit" "1")
-                (html/attr "data-slug" (as-str (dict-get hit "slug")))
-                (html/attr "data-node" (as-str (dict-get hit "node_id")))
-                (html/attr "title" "refile selected node here")))
-            (notes/ui/search-hit-label hit)))))))
-
-(define notes/ui/search-group-html
-  (lambda
-    (group mode src-slug)
-    (if
-      (null? group)
-      ""
-      (let
-        ((title (as-str (dict-get (car group) "title")))
-          (slug (as-str (dict-get (car group) "slug"))))
-        (html/join
-          (list
-            (html/div
-              (html/attr "class" "ol-find-group")
-              (html/text
-                (if (string-eq title "") slug title)))
-            (html/join
-              (list/map
-                (lambda
-                  (hit)
-                  (if
-                    (string-eq mode "refile")
-                    (notes/ui/search-hit-refile hit src-slug)
-                    (notes/ui/search-hit-open hit)))
-                group))))))))
-
-(define notes/ui/search-results-html
-  (lambda
-    (q mode src-slug)
-    (let
-      ((needle (string-trim (as-str q))))
-      (if
-        (string-eq needle "")
-        (html/div
-          (html/attr "class" "ol-find-results")
-          (html/div
-            (html/attr "class" "ol-find-empty")
-            (if
-              (string-eq mode "refile")
-              "Type a destination note or header…"
-              "Type to find a note or header…")))
-        (let
-          ((hits (notes/doc/search needle)))
-          (if
-            (null? hits)
-            (html/div
-              (html/attr "class" "ol-find-results")
-              (html/div
-                (html/attr "class" "ol-find-empty")
-                "No matches."))
-            (html/div
-              (html/attr "class" "ol-find-results")
-              (html/join
-                (list/map
-                  (lambda
-                    (g)
-                    (notes/ui/search-group-html g mode src-slug))
-                  (notes/ui/search-group hits))))))))))
-
-(define notes/ui/search-partial
-  (lambda
-    ()
-    (let
-      ((q
-          (if (null? (request-param "q")) "" (as-str (request-param "q"))))
-        (mode
-          (if (null? (request-param "mode")) "open" (as-str (request-param "mode"))))
-        (src
-          (if
-            (null? (request-param "src"))
-            ""
-            (as-str (request-param "src")))))
-      (render-html (notes/ui/search-results-html q mode src)))))
-
-(define notes/ui/find-script
-  (lambda
-    ()
-    (html/tag
-      "script"
-      ""
-      (string-append
-        "(function(){"
-        "function hits(root){return root?Array.prototype.slice.call(root.querySelectorAll('[data-ol-find-hit]')):[];}"
-        "function setActive(root,i){var hs=hits(root);if(!hs.length)return;hs.forEach(function(h){h.classList.remove('is-active');});"
-        "var n=((i%hs.length)+hs.length)%hs.length;hs[n].classList.add('is-active');hs[n].scrollIntoView({block:'nearest'});root.dataset.olFindIdx=String(n);}"
-        "function openFind(sel){var d=document.querySelector(sel||'details.ol-find-modal');if(!d)return;d.open=true;"
-        "var inp=d.querySelector('.ol-find-input');if(inp){inp.focus();inp.select();}}"
-        "document.addEventListener('keydown',function(e){"
-        "var t=e.target;var typing=t&&(t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.isContentEditable);"
-        "if((e.metaKey||e.ctrlKey)&&!e.shiftKey&&(e.key==='k'||e.key==='K')){e.preventDefault();openFind('details.ol-find-modal');return;}"
-        "if(e.key==='Escape'){document.querySelectorAll('details.ol-find-modal[open],details.ol-refile-modal[open]').forEach(function(d){d.open=false;});return;}"
-        "var body=t&&t.closest&&t.closest('.ol-find-body,.ol-refile-body');if(!body)return;"
-        "var box=body.querySelector('.ol-find-results')||body;"
-        "if(e.key==='ArrowDown'){e.preventDefault();setActive(box,(parseInt(box.dataset.olFindIdx||'-1',10)+1));return;}"
-        "if(e.key==='ArrowUp'){e.preventDefault();setActive(box,(parseInt(box.dataset.olFindIdx||'0',10)-1));return;}"
-        "if(e.key==='Enter'&&!e.shiftKey){var hs=hits(box);var i=parseInt(box.dataset.olFindIdx||'-1',10);"
-        "if(i>=0&&hs[i]){e.preventDefault();if(hs[i].tagName==='BUTTON'){hs[i].click();}else if(hs[i].tagName==='A'){window.location=hs[i].href;}else{var b=hs[i].querySelector('button,[type=submit]');if(b)b.click();else hs[i].click();}}}"
-        "});"
-        "document.body.addEventListener('htmx:afterSwap',function(ev){var t=ev.target;if(!t||!t.classList)return;"
-        "if(t.classList.contains('ol-find-results')||t.querySelector&&t.querySelector('.ol-find-results')){var box=t.classList.contains('ol-find-results')?t:t.querySelector('.ol-find-results');if(box)setActive(box,0);}});"
-        "document.addEventListener('toggle',function(e){var d=e.target;if(!d||!d.classList)return;"
-        "if((d.classList.contains('ol-find-modal')||d.classList.contains('ol-refile-modal'))&&d.open){var inp=d.querySelector('.ol-find-input');if(inp)setTimeout(function(){inp.focus();},0);}}"
-        ",true);"
-        "document.addEventListener('pointerdown',function(e){var rf=e.target.closest&&e.target.closest('.ol-find-refile-form');"
-        "if(!rf)return;var src=document.getElementById('ol-refile-nid');var m=rf.querySelector('.ol-refile-nid-mirror');"
-        "if(src&&m)m.value=src.value;},true);"
-        "})();"))))
-
-;; Open-note typeahead (Cmd/Ctrl-K). Collapsed markup only — O(1) page cost.
-(define notes/ui/find-modal
-  (lambda
-    ()
-    (html/tag
-      "details"
-      (html/attrs
-        (list
-          (html/attr "class" "ol-find-modal")
-          (html/attr "id" "ol-find-modal")))
-      (html/join
-        (list
-          (html/tag
-            "summary"
-            (html/attrs
-              (list
-                (html/attr "class" "ol-btn")
-                (html/attr "title" "Find note (Ctrl/Cmd-K)")))
-            "find")
-          (html/tag
-            "div"
-            (html/attr "class" "ol-find-body")
-            (html/join
-              (list
-                (html/void
-                  "input"
-                  (html/attrs
-                    (list
-                      (html/attr "type" "search")
-                      (html/attr "class" "ol-find-input")
-                      (html/attr "name" "q")
-                      (html/attr "placeholder" "Find note or header…")
-                      (html/attr "autocomplete" "off")
-                      (html/attr "hx-get" "/partials/notes-search")
-                      (html/attr "hx-trigger" "input changed delay:200ms, search")
-                      (html/attr "hx-target" "next .ol-find-results")
-                      (html/attr "hx-swap" "outerHTML")
-                      (html/attr "hx-include" "this"))))
-                (html/div
-                  (html/attr "class" "ol-find-results")
-                  (html/div
-                    (html/attr "class" "ol-find-empty")
-                    "Type to find a note or header…"))))))))))
-
-;; Refile typeahead — same partial as find, mode=refile. Exact slug still works.
-;; BORGE-1785603757: never enumerate the garden on page render.
-(define notes/ui/refile-modal
-  (lambda
-    (slug)
-    (html/tag
-      "details"
-      (html/attr "class" "ol-refile-modal")
-      (html/join
-        (list
-          (html/tag
-            "summary"
-            (html/attrs
-              (list
-                (html/attr "class" "ol-btn")
-                (html/attr "title" "refile selected node to another note")))
-            "refile")
-          (html/tag
-            "div"
-            (html/attrs
-              (list
-                (html/attr "class" "ol-refile-body ol-find-wide")))
-            (html/join
-              (list
-                (html/void
-                  "input"
-                  (html/attrs
-                    (list
-                      (html/attr "type" "hidden")
-                      (html/attr "id" "ol-refile-nid")
-                      (html/attr "value" "root"))))
-                (html/void
-                  "input"
-                  (html/attrs
-                    (list
-                      (html/attr "type" "search")
-                      (html/attr "class" "ol-find-input")
-                      (html/attr "name" "q")
-                      (html/attr "placeholder" "destination note or header…")
-                      (html/attr "autocomplete" "off")
-                      (html/attr
-                        "hx-get"
-                        (string-append
-                          "/partials/notes-search?mode=refile&src="
-                          (as-str slug)))
-                      (html/attr "hx-trigger" "input changed delay:200ms, search")
-                      (html/attr "hx-target" "next .ol-find-results")
-                      (html/attr "hx-swap" "outerHTML")
-                      (html/attr "hx-include" "this"))))
-                (html/div
-                  (html/attr "class" "ol-find-results")
-                  (html/div
-                    (html/attr "class" "ol-find-empty")
-                    "Type a destination note or header…"))
-                (html/form
-                  "POST"
-                  "/notes"
-                  (html/attr "class" "ol-refile")
-                  (html/join
-                    (list
-                      (html/hidden "action" "refile")
-                      (html/hidden "src_slug" (as-str slug))
-                      (html/void
-                        "input"
-                        (html/attrs
-                          (list
-                            (html/attr "type" "hidden")
-                            (html/attr "name" "node_id")
-                            (html/attr "class" "ol-refile-nid-mirror")
-                            (html/attr "value" "root"))))
-                      (html/label
-                        (html/attr "class" "ol-refile-label")
-                        "or slug ")
-                      (html/text-input
-                        "dst_slug"
-                        (html/attrs
-                          (list
-                            (html/attr "class" "ol-refile-sel")
-                            (html/attr "placeholder" "destination-slug")
-                            (html/attr "autocomplete" "off"))))
-                      " "
-                      (html/button
-                        (html/attrs
-                          (list
-                            (html/attr "type" "submit")
-                            (html/attr "class" "ol-btn")
-                            (html/attr "title" "refile selected node")))
-                        "go"))))))))))))
-
 (define notes/ui/toolbar
   (lambda
     (slug show-archived)
@@ -4335,7 +5194,7 @@
                         (html/attr "type" "hidden")
                         (html/attr "name" "show")
                         (html/attr "value" "archived"))))
-                "")
+                  "")
                 (html/void
                   "input"
                   (html/attrs
@@ -4399,6 +5258,39 @@
               (string-append "/notes?slug=" slug "&show=archived")
               "Show archived")))))))
 
+(define notes/ui/top-folder
+  (lambda
+    (folder)
+    (let
+      ((f (as-str folder)))
+      (let
+        ((s
+          (if
+            (string-starts-with? f "garden/")
+            (string-replace f "garden/" "")
+            (if (string-eq f "garden") "" f))))
+        (let
+          ((k (string-replace s "_" "-")))
+          (if (string-eq k "") "" (car (string-split k "/"))))))))
+
+(define notes/ui/tree-children-html
+  (lambda (path root) (tree/children-html (as-str path))))
+
+(define notes/ui/tree-partial
+  (lambda
+    ()
+    (let
+      ((path (as-str (request-param "path")))
+        (root (notes/tree/root)))
+      (if
+        (string-eq path "")
+        (render-html
+          (html/p* (html/attr "class" "muted") "missing path"))
+        (render-html
+          (html/div
+            (html/attr "class" "tree-children-inner")
+            (notes/ui/tree-children-html path root)))))))
+
 (define notes/upsert
   (lambda
     (slug title outline tags kind day)
@@ -4417,185 +5309,3 @@
           (null? row)
           (create (quote note) fields)
           (update (quote note) (car row) fields))))))
-
-(define notes/ui/path-label
-  (lambda
-    (path)
-    (let
-      ((parts (string-split (as-str path) ".")))
-      (if
-        (null? parts)
-        ""
-        (string-replace (notes/light/last parts) "_" "-")))))
-
-(define notes/ui/node-path
-  (lambda (n) (as-str (dict-get n "path"))))
-
-(define notes/ui/node-kind
-  (lambda (n) (as-str (dict-get n "kind"))))
-
-(define notes/ui/node-title
-  (lambda
-    (n)
-    (let
-      ((b (dict-get n "body")))
-      (let
-        ((t (dict-get b "title"))
-          (s (dict-get b "slug")))
-        (if
-          (if (null? t) #t (string-eq (as-str t) ""))
-          (if
-            (if (null? s) #t (string-eq (as-str s) ""))
-            (notes/ui/path-label (notes/ui/node-path n))
-            (as-str s))
-          (as-str t))))))
-
-(define notes/ui/is-garden-folder?
-  (lambda
-    (n root)
-    (if
-      (not (string-eq (notes/ui/node-kind n) "folder"))
-      #f
-      (string-eq
-        (notes/ui/node-path n)
-        (string-append (as-str root) ".garden")))))
-
-(define notes/ui/note-li-from-node
-  (lambda
-    (n)
-    (let
-      ((slug (as-str (dict-get (dict-get n "body") "slug")))
-        (title (notes/ui/node-title n)))
-      (let
-        ((s
-          (if (string-eq slug "") (notes/ui/path-label (notes/ui/node-path n)) slug)))
-        (html/li
-          (html/attr "class" "tree-item")
-          (html/a
-            (string-append "/notes?slug=" s)
-            (html/text title)))))))
-
-(define notes/ui/folder-details
-  (lambda
-    (n)
-    (let
-      ((path (notes/ui/node-path n))
-        (label (notes/ui/node-title n)))
-      (html/tag
-        "details"
-        (html/attrs
-          (list
-            (html/attr "class" "tree-folder")
-            (html/attr "hx-get"
-              (string-append
-                "/partials/notes-tree?path="
-                path))
-            (html/attr "hx-trigger" "toggle once")
-            (html/attr "hx-target" "find .tree-children")
-            (html/attr "hx-swap" "innerHTML")))
-        (html/join
-          (list
-            (html/tag
-              "summary"
-              (html/attr "class" "tree-folder-header")
-              (html/join
-                (list
-                  (html/span
-                    (html/attr "class" "tree-folder-icon")
-                    "&#x1F4C1; ")
-                  (html/text label))))
-            (html/div
-              (html/attr "class" "tree-children")
-              (html/span
-                (html/attr "class" "muted")
-                "open to load…"))))))))
-
-(define notes/ui/render-child
-  (lambda
-    (n root)
-    (let
-      ((k (notes/ui/node-kind n)))
-      (if
-        (string-eq k "heading")
-        ""
-        (if
-          (notes/ui/is-garden-folder? n root)
-          (notes/ui/tree-children-html (notes/ui/node-path n) root)
-          (if
-            (string-eq k "folder")
-            (notes/ui/folder-details n)
-            (if
-              (string-eq k "note")
-              (notes/ui/note-li-from-node n)
-              "")))))))
-
-(define notes/ui/tree-children-html
-  (lambda
-    (path root)
-    ;; OCaml-side render: large folders (3k+ notes) blow the Nopales
-    ;; eval budget if we map/join HTML here. tree/children-html also
-    ;; expands notes that own subfolders (e.g. garden.bible → characters).
-    ;; Returns plain HTML string (not render-html marked) so callers can
-    ;; nest it or mark once.
-    (tree/children-html (as-str path))))
-
-(define notes/ui/tree-partial
-  (lambda
-    ()
-    (let
-      ((path (as-str (request-param "path")))
-        (root (notes/tree/root)))
-      (if
-        (string-eq path "")
-        (render-html (html/p* (html/attr "class" "muted") "missing path"))
-        (render-html
-          (html/div
-            (html/attr "class" "tree-children-inner")
-            (notes/ui/tree-children-html path root)))))))
-
-(define notes/ui/folders-html
-  (lambda
-    ()
-    (let
-      ((root (notes/tree/root)))
-      (html/div
-        (html/attr "class" "notes-tree")
-        (notes/ui/tree-children-html root root)))))
-
-(define notes/ui/index
-  (lambda
-    ()
-    (html/join
-      (list
-        (notes/tree/style)
-        (html/div
-          (html/attr "class" "ol-find-bar")
-          (html/join
-            (list
-              (notes/ui/find-modal)
-              (html/span
-                (html/attr "class" "muted")
-                "Ctrl/Cmd-K"))))
-        (html/h1 "Notes")
-        (html/p*
-          (html/attr "class" "muted")
-          "Outline-first notes. Folders load on open (htmx).")
-        (html/p*
-          (html/attr "class" "muted")
-          (html/join
-            (list
-              (html/a "/notes?slug=inbox" "Open inbox")
-              " · "
-              (html/a "/issues" "Issues")
-              " · "
-              (html/a "/notes" "All folders"))))
-        (notes/ui/create-form)
-        (html/h2 "Folders")
-        (notes/ui/folders-html)
-        (notes/ui/find-script)))))
-
-(route "/partials/notes-tree" "notes/ui/tree-partial")
-(route "/partials/notes-search" "notes/ui/search-partial")
-(route "/partials/notes-node-op" "notes/outline/node-op")
-(route "/notes" "notes/page")
-(route "/issues" "notes/issues/page")

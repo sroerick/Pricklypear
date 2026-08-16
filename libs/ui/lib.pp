@@ -1,4 +1,4 @@
-;; package ui -- exported from live branch system/main
+;; package ui -- exported from live branch admin/personal
 ;; Sync: scripts/pp_sync.py pull|push
 
 (package ui
@@ -10,7 +10,8 @@
     ui/nav
     ui/nav-style
     ui/theme
-    ui/theme-nav))
+    ui/theme-nav
+))
 
 (define ui/css
   (lambda
@@ -23,11 +24,8 @@
             (css/use (theme/vars))
             (css/use (ui/theme))
             (css/use (ui/theme-nav))
-            ;; REMOVED (css-ghost-as400): notes/tree-css + notes/tree-css-patch
-            ;; were the old AS/400 CRT skin hardcoded over EVERY theme. That
-            ;; skin now lives, opt-in and var()-based, in libs/theme-as400's
-            ;; theme/extra below (selected via /settings/theme → as400).
-            ;; per-theme structural chrome (no-op except theme-as400)
+            (css/use notes/tree-css)
+            (css/use notes/tree-css-patch)
             (css/use (theme/extra))))))))
 
 (define ui/home
@@ -176,7 +174,11 @@
             "1.4"))
         (css/rule
           "a"
-          (list "color" "var(--link)" "text-decoration" "underline"))
+          (list
+            "color"
+            "var(--link)"
+            "text-decoration"
+            "underline"))
         (css/rule "a:visited" (list "color" "var(--visited)"))
         (css/rule "a:hover" (list "color" "var(--ink)"))
         (css/rule
@@ -307,11 +309,6 @@
         (css/rule
           ".menu-drop>summary::after"
           (list "content" "\" v\"" "font-size" ".7em"))
-        ;; Pure-CSS click-outside close: when open, summary::before is a
-        ;; full-viewport transparent hit target UNDER the panel. A click
-        ;; outside hits that pseudo and toggles the details closed — no JS.
-        ;; Panel z-index must stay above the backdrop; summary above too so
-        ;; the label remains clickable to dismiss.
         (css/rule
           ".menu-drop[open]>summary"
           (list "position" "relative" "z-index" "81"))
@@ -969,7 +966,11 @@
           (list "display" "none"))
         (css/rule
           "details.ol-actions > summary.ol-actions-sum:hover, details.ol-actions[open] > summary.ol-actions-sum"
-          (list "background" "var(--panel)" "border-color" "var(--ink)"))
+          (list
+            "background"
+            "var(--panel)"
+            "border-color"
+            "var(--ink)"))
         (css/rule
           ".ol-actions-panel"
           (list
@@ -1094,7 +1095,9 @@
         (css/rule
           ".br-table th,.br-table td"
           (list "padding" ".35rem .4rem" "vertical-align" "top"))
-        (css/rule "tr.br-current" (list "background" "var(--sel-bg)"))
+        (css/rule
+          "tr.br-current"
+          (list "background" "var(--sel-bg)"))
         (css/rule
           ".br-stats"
           (list
@@ -1283,7 +1286,13 @@
             "ui-monospace, monospace"))
         (css/rule
           ".bb-code .bb-edit-form .card"
-          (list "border" "none" "padding" "0" "box-shadow" "none"))
+          (list
+            "border"
+            "none"
+            "padding"
+            "0"
+            "box-shadow"
+            "none"))
         (css/rule
           ".bb-source"
           (list
@@ -1390,7 +1399,11 @@
           (list "background" "var(--waiting-bg)"))
         (css/rule
           ".todo-box.st-CANCELLED"
-          (list "background" "var(--cancelled-bg)" "color" "var(--archived-ink)"))
+          (list
+            "background"
+            "var(--cancelled-bg)"
+            "color"
+            "var(--archived-ink)"))
         (css/rule
           ".todo-box.st-ARCHIVED"
           (list
@@ -1402,7 +1415,11 @@
             "dashed"))
         (css/rule
           "li.todo-item.is-archived .todo-title"
-          (list "color" "var(--archived-ink)" "font-style" "italic"))
+          (list
+            "color"
+            "var(--archived-ink)"
+            "font-style"
+            "italic"))
         (css/rule
           ".todo-from-note .todo-src"
           (list "font-size" ".8rem" "margin-left" ".35rem"))
@@ -1483,7 +1500,11 @@
           (list "background" "var(--bg)" "min-height" "3.5rem"))
         (css/rule
           ".cal-today"
-          (list "outline" "2px solid #000" "background" "var(--today-bg)"))
+          (list
+            "outline"
+            "2px solid #000"
+            "background"
+            "var(--today-bg)"))
         (css/rule
           ".cal-dom"
           (list "font-weight" "700" "font-size" ".85rem"))
@@ -1511,9 +1532,15 @@
             "var(--chrome)"
             "line-height"
             "1.2"))
-        (css/rule ".cal-dot-ev" (list "background" "var(--done-bg)"))
-        (css/rule ".cal-dot-todo" (list "background" "var(--pending-bg)"))
-        (css/rule ".cal-dot-note" (list "background" "var(--waiting-bg)"))
+        (css/rule
+          ".cal-dot-ev"
+          (list "background" "var(--done-bg)"))
+        (css/rule
+          ".cal-dot-todo"
+          (list "background" "var(--pending-bg)"))
+        (css/rule
+          ".cal-dot-note"
+          (list "background" "var(--waiting-bg)"))
         (css/rule
           ".cal-list"
           (list
@@ -1773,7 +1800,11 @@
             "break-word"))
         (css/rule
           "li.todo-item.is-done .todo-title"
-          (list "text-decoration" "line-through" "color" "var(--done-muted)"))
+          (list
+            "text-decoration"
+            "line-through"
+            "color"
+            "var(--done-muted)"))
         (css/rule
           "li.todo-item .todo-del button, li.todo-item .todo-archive button"
           (list
@@ -2123,12 +2154,6 @@
         (css/rule
           ".capture-nav-form .err"
           (list "color" "var(--err)" "font-weight" "700"))
-        ;; --- nested submenu (fly-out) support ---
-        ;; a menu/group inside another menu/group renders as a nested
-        ;; <details.menu-drop> inside a .menu-drop-panel. Make those
-        ;; nested panels open to the SIDE (fly-out) instead of straight
-        ;; down, and stretch the nested group so its summary fills the
-        ;; row like the sibling <a> links (fixes shrink-to-label).
         (css/rule
           ".menu-drop-panel .menu-drop"
           (list
@@ -2164,7 +2189,7 @@
             "border-box"))
         (css/rule
           ".menu-drop-panel .menu-drop > summary::after"
-          (list "content" "\" \u203e\""))
+          (list "content" "\" ‾\""))
         (css/rule
           ".menu-drop-panel .menu-drop-panel"
           (list
@@ -2176,12 +2201,9 @@
             "auto"
             "margin-top"
             "0"))
-        ;; if the parent dropdown is the last item, open leftwards so
-        ;; the fly-out doesn't spill off the right edge.
         (css/rule
           ".menu-drop-panel .menu-drop:last-child > .menu-drop-panel"
           (list "left" "auto" "right" "100%"))
-        ;; on narrow screens, collapse fly-outs to stacked (open-down)
         (css/media
           "max-width:40rem"
           (list
@@ -2201,4 +2223,3 @@
             (css/rule
               ".menu-drop-panel .menu-drop > summary::after"
               (list "content" "\" v\""))))))))
-
