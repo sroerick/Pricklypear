@@ -4,6 +4,7 @@
 (define astro/date-parts
   (lambda
     (d)
+    "Split ISO date into (year month day)."
     (let
       ((ps (string-split d "-")))
       (list
@@ -14,6 +15,7 @@
 (define astro/date-seq
   (lambda
     (start n)
+    "List of n consecutive dates starting at start."
     (if
       (<= n 0)
       (list)
@@ -24,6 +26,7 @@
 (define astro/days-since-epoch
   (lambda
     (d)
+    "Decimal days since the new-moon epoch."
     (-
       (date-diff-days astro/new-moon-epoch d)
       astro/epoch-frac)))
@@ -43,6 +46,7 @@
 (define astro/forecast-row-html
   (lambda
     (d)
+    "HTML table row for one date's sun/moon forecast."
     (let
       ((parts (astro/date-parts d)))
       (let
@@ -71,6 +75,7 @@
 (define astro/forecast-rows-html
   (lambda
     (dates)
+    "HTML rows for each date in the list."
     (if
       (null? dates)
       ""
@@ -82,6 +87,7 @@
 (define astro/forecast-table-html
   (lambda
     ()
+    "Full 7-day forecast table HTML."
     (let
       ((dates (astro/date-seq (date-today) 7)))
       (html/tag
@@ -108,6 +114,7 @@
 (define astro/help
   (lambda
     ()
+    "Help text describing the astro package API."
     (string-append
       "astro - sunrise/sunset + moon phase. "
       "Sun times are fetched client-side (Open-Meteo); moon is computed on the image. "
@@ -119,6 +126,7 @@
 (define astro/historical-panel-html
   (lambda
     ()
+    "HTML panel for looking up a past date."
     (html/div
       (html/attr "class" "astro-historical")
       (html/join
@@ -150,6 +158,7 @@
 (define astro/historical-script
   (lambda
     ()
+    "Client JS for the historical lookup panel."
     (html/tag
       "script"
       ""
@@ -203,15 +212,16 @@
 (define astro/illum-fraction
   (lambda
     (d)
+    "Illuminated fraction in 0..1 from phase fraction."
     (let
       ((theta (* astro/pi (astro/phase-fraction d))))
       (let ((s (astro/sin-0-pi theta))) (* s s)))))
 
 (define astro/illum-percent
-  (lambda (d) (round (* 100 (astro/illum-fraction d)))))
+  (lambda (d) "Percent illumination, rounded." (round (* 100 (astro/illum-fraction d)))))
 
 (define astro/month-name
-  (lambda (m) (list-ref astro/month-names (- m 1))))
+  (lambda (m) "Month name by 1-based index." (list-ref astro/month-names (- m 1))))
 
 (define astro/month-names
   (list
@@ -231,6 +241,7 @@
 (define astro/moon
   (lambda
     (d)
+    "One-line description of the moon phase for d."
     (string-append
       (astro/phase-glyph d)
       " "
@@ -244,6 +255,7 @@
 (define astro/moon-card-html
   (lambda
     (d)
+    "HTML card showing the moon phase for d."
     (html/div
       (html/attr "class" "astro-moon-big")
       (html/join
@@ -269,6 +281,7 @@
 (define astro/moon-for
   (lambda
     ()
+    "Moon card for the request date param (today when absent)."
     (let
       ((raw (request-param "date")))
       (let
@@ -285,6 +298,7 @@
 (define astro/page
   (lambda
     ()
+    "Full Sun & Moon page HTML."
     (html/page
       (list
         (html/h1 "Sun & Moon")
@@ -298,6 +312,7 @@
 (define astro/phase-age
   (lambda
     (d)
+    "Days since the last new moon."
     (let
       ((a (mod (astro/days-since-epoch d) astro/synodic-month)))
       (if (< a 0) (+ a astro/synodic-month) a))))
@@ -305,6 +320,7 @@
 (define astro/phase-fraction
   (lambda
     (d)
+    "Fractional position in the current lunation, 0..1."
     (let
       ((p
         (mod
@@ -315,6 +331,7 @@
 (define astro/phase-glyph
   (lambda
     (d)
+    "Unicode glyph for the moon phase of d."
     (list-ref astro/phase-glyphs (astro/phase-index d))))
 
 (define astro/phase-glyphs
@@ -331,6 +348,7 @@
 (define astro/phase-index
   (lambda
     (d)
+    "Bucket index 0..7 for the moon phase of d."
     (mod
       (floor (* (+ (astro/phase-fraction d) 0.0625) 8))
       8)))
@@ -338,6 +356,7 @@
 (define astro/phase-name
   (lambda
     (d)
+    "Human-readable name of the moon phase of d."
     (list-ref astro/phase-names (astro/phase-index d))))
 
 (define astro/phase-names
@@ -352,7 +371,7 @@
     "Waning Crescent"))
 
 (define astro/phase-waxing?
-  (lambda (d) (< (astro/phase-fraction d) 0.5)))
+  (lambda (d) "True when the moon is waxing." (< (astro/phase-fraction d) 0.5)))
 
 (define astro/pi
   3.14159265359)
@@ -361,21 +380,24 @@
   9.86960440109)
 
 (define astro/probe
-  (lambda () 7))
+  (lambda () "Probe helper returning 7." 7))
 
 (define astro/rp-null
   (lambda
     ()
+    "Test helper: \"null\" for missing request param."
     (if (null? (request-param "nope")) "null" "notnull")))
 
 (define astro/rp-test
   (lambda
     ()
+    "Test helper echoing the request date param."
     (string-append "got=" (as-str (request-param "date")))))
 
 (define astro/script
   (lambda
     (lat lon label)
+    "Client JS driving the live widget (geocode + Open-Meteo fetch)."
     (html/tag
       "script"
       ""
@@ -440,6 +462,7 @@
 (define astro/sin-0-pi
   (lambda
     (theta)
+    "Parabolic approximation of sin over 0..pi."
     (let
       ((u (- astro/pi theta)))
       (let
@@ -454,6 +477,7 @@
 (define astro/style
   (lambda
     ()
+    "Inline CSS for the astro widget."
     (html/tag
       "style"
       ""
@@ -489,22 +513,24 @@
   29.530588853)
 
 (define astro/td
-  (lambda (content) (html/tag "td" "" content)))
+  (lambda (content) "A table data cell." (html/tag "td" "" content)))
 
 (define astro/td-id
   (lambda
     (id content)
+    "A table data cell with an id attribute."
     (html/tag
       "td"
       (html/attrs (list (html/attr "id" id)))
       content)))
 
 (define astro/th
-  (lambda (content) (html/tag "th" "" content)))
+  (lambda (content) "A table header cell." (html/tag "th" "" content)))
 
 (define astro/today-card-html
   (lambda
     ()
+    "HTML card with today's moon + sun times."
     (let
       ((d (date-today)))
       (html/div
@@ -536,7 +562,7 @@
                         (html/span (html/attr "id" "today-dl") "-")))))))))))))
 
 (define astro/weekday-name
-  (lambda (i) (list-ref astro/weekday-names i)))
+  (lambda (i) "Full weekday name by index." (list-ref astro/weekday-names i)))
 
 (define astro/weekday-names
   (list
@@ -549,7 +575,7 @@
     "Saturday"))
 
 (define astro/weekday-short
-  (lambda (i) (list-ref astro/weekday-short-names i)))
+  (lambda (i) "Abbreviated weekday name by index." (list-ref astro/weekday-short-names i)))
 
 (define astro/weekday-short-names
   (list
@@ -564,6 +590,7 @@
 (define astro/widget
   (lambda
     ()
+    "Full embeddable sun & moon widget HTML."
     (html/div
       (html/attrs
         (list
