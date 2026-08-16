@@ -406,6 +406,8 @@ let prim_summary (name : string) : string =
   | "type-fields" -> "declared fields for a type"
   | "tree/get" -> "get hierarchical tree node by path → JSON"
   | "tree/list" -> "list subtree (depth 1 = children) under path"
+  | "tree/children-of" -> "DIRECT child nodes of path via materialized path index"
+  | "tree/subtree" -> "capped subtree payload under path via materialized path index"
   | "tree/upsert" -> "upsert folder|note|heading at path"
   | "tree/delete" -> "delete path [, recursive]"
   | "tree/move" -> "move subtree old-path → new-path"

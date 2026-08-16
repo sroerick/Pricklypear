@@ -322,6 +322,34 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
           (Pricklypear_lisp.Ast.VStr
                "tree/list: need prefix [, depth [, limit]]"));
 
+  (* (tree/children-of path [limit]) -> VList of direct-child node JSON.
+     one-tree.tree-read-prims: level-predicate children read over
+     tree_nodes (never an anti-join; outline covering at +2 under label h).
+     Anonymous reads allowed (resolved against system/main, prefix-confined). *)
+  register_crud "tree/children-of"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr path ] ->
+          Crud.tree_children_of t.store ~path ()
+      | [ Pricklypear_lisp.Ast.VStr path; Pricklypear_lisp.Ast.VInt lim ] ->
+          Crud.tree_children_of t.store ~path ~limit:(Int64.to_int lim) ()
+      | _ ->
+          (Pricklypear_lisp.Ast.VStr
+               "tree/children-of: need path [, limit]"));
+
+  (* (tree/subtree path [limit]) -> VList of all-descendant node JSON under
+     path, capped at limit. one-tree.tree-read-prims. Anonymous allowed. *)
+  register_crud "tree/subtree"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr path ] ->
+          Crud.tree_subtree t.store ~path ()
+      | [ Pricklypear_lisp.Ast.VStr path; Pricklypear_lisp.Ast.VInt lim ] ->
+          Crud.tree_subtree t.store ~path ~limit:(Int64.to_int lim) ()
+      | _ ->
+          (Pricklypear_lisp.Ast.VStr
+               "tree/subtree: need path [, limit]"));
+
   register_crud "tree/upsert"
     (fun args ->
       let uname = actor () in

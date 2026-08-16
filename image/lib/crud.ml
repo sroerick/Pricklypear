@@ -672,6 +672,29 @@ let tree_list (store : Store.t) ~(prefix : string) ?(depth : int option)
       in
       (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes))
 
+(* (tree/children-of path [limit]) -> VList of direct-child node JSON.
+   Level-predicate read (nlevel(path)+1, + outline covering at +2 under
+   literal label h), never an anti-join — one-tree.projections
+   CHILDREN-BY-LEVEL. Same surface as tree/list depth 1; explicit name. *)
+let tree_children_of (store : Store.t) ~(path : string)
+    ?(limit : int = 50000) () : value =
+  match Io_lwt.Db.current_conn store with
+  | None -> (VList [])
+  | Some conn ->
+      let nodes = Tree_store.list_children conn ~prefix:path ~limit () in
+      (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes))
+
+(* (tree/subtree path [limit]) -> VList of all-descendant node JSON under
+   path, capped at limit. Backed by list_subtree; same surface as
+   (tree/list path) with no depth. Explicit bounded-snapshot name. *)
+let tree_subtree (store : Store.t) ~(path : string)
+    ?(limit : int = 50000) () : value =
+  match Io_lwt.Db.current_conn store with
+  | None -> (VList [])
+  | Some conn ->
+      let nodes = Tree_store.list_subtree conn ~prefix:path ~limit () in
+      (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes))
+
 let tree_children_html (store : Store.t) ~(prefix : string) ~(garden_root : string)
     () : value =
   match Io_lwt.Db.current_conn store with

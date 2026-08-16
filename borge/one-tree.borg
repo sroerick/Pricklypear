@@ -200,6 +200,33 @@
            returned by any tree prim without these two keys is a
            defect.
 
+           INDEXED READ PRIMS (tree-model PINNED, BORGE-1785516998):
+           two dedicated read prims drive the path index so
+           subtree access is a ltree GiST index scan, never a
+           full tree walk, regardless of how large a subtree
+           grows (projections.budget-scale: an O(subtree) walk
+           does not scale as a subtree grows):
+             (tree/children-of path [limit]) -> DIRECT CHILD nodes
+                 of path via the materialized path index (the
+                 same nlevel(path)=nlevel(prefix)+1 selection
+                 list_children uses, which also pulls folder/note
+                 grandchildren under the hierarchy at depth+2).
+                 Budget-safe; returns node JSON list.
+             (tree/subtree path [limit]) -> CAPPED subtree payload of nodes
+                 under path via the path index (all descendants), ordered by
+                 path (depth-first). [limit] caps the result (default matches
+                 the existing list_subtree cap); pass an explicit [limit] for
+                 a tighter bound. Returns node JSON list.
+           Both are READ-ONLY, kind-agnostic (they return datum
+           and hierarchical nodes alike), and share the SAME node
+           JSON surface (node_to_json) as tree/get + tree/list, so
+           created_at/updated_at are present by construction.
+           tree/list with depth=1 remains equivalent to
+           tree/children-of, and tree/list without depth to
+           tree/subtree without limit; these dedicated prims exist
+           to make the indexed-read intent explicit and to give
+           subtree a caller-supplied cap.
+
            PHYSICAL LAYOUT (migration 009_tree.sql; additive):
              tree_nodes(
                id uuid PK DEFAULT gen_random_uuid(),
@@ -423,6 +450,52 @@
     (smoke "tree/delete a datum path → node and projection row both removed")
     (smoke "tree/get, tree/list, tree/find-by, tree/list-kind all return datum nodes, not only hierarchical kinds")
     (smoke "tree/get of any node returns JSON with created_at and updated_at keys; created_at is stable across an upsert rewrite, updated_at advances")))
+  (subsection tree-read-prims
+   (doc "Explicit read prims over the one tree: tree/children-of for one level, tree/subtree for a capped all-descendants payload")  
+   (status implemented)
+   (implements image/lib/tree_store.ml image/lib/crud.ml image/lib/prims_db.ml)
+   (details
+    (doc (|
+         Convenience read prims that give the materialized-path
+         index a first-class name, instead of folding directory
+         reads into tree/list's depth argument. Both are
+         kind-agnostic readers over tree_nodes and share the
+         tree-get/list JSON surface (node_to_json, including the
+         created_at/updated_at row columns). Both are
+         index-driven — never a full tree walk (see the
+         CHILDREN-BY-LEVEL invariant in projections).
+
+         (tree/children-of path [limit]) -> VList of node JSON
+           Direct children of [path], expressed as a LEVEL
+           predicate (nlevel = nlevel(path)+1, with the outline
+           covering at +2 under the literal label h so note
+           outline roots are included), never a correlated
+           NOT EXISTS anti-join. Backed by
+           Tree_store.list_children. Semantically identical to
+           (tree/list path 1); the explicit name documents the
+           caller's intent and decouples it from the depth-arg
+           convention. Default limit 50000.
+
+         (tree/subtree path [limit]) -> VList of node JSON
+           All descendants under [path] (path <@ prefix), capped
+           at [limit] rows (default 50000) so a huge subtree
+           degrades to a bounded payload rather than a full
+           walk. Backed by Tree_store.list_subtree. Semantically
+           identical to (tree/list path) with the depth argument
+           absent; the explicit name signals the caller wants a
+           bounded snapshot, not a level read.
+
+         Anonymous (unauthenticated) reads resolve against
+         system/main and are permitted for both prims; the
+         nodes returned are confined to what the requesting
+         identity's path prefix grants (data.u.<user> / shared).
+   |))
+   )
+   (verify
+    (build "dune build @all")
+    (smoke "(tree/children-of P) returns exactly the direct children of P (level predicate), including outline roots under P.h")
+    (smoke "(tree/subtree P) returns all descendants under P, bounded by the limit arg")
+    (smoke "both prims return node JSON including created_at and updated_at keys")))
   (subsection projections
    (doc "SQL over the tree: relational rows are derived, not truth")
    (status implemented)
