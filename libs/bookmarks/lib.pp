@@ -2,14 +2,15 @@
 ;; Sync: scripts/pp_sync.py pull|push
 
 (define bookmarks/all
-  (lambda () (rows (quote bookmark) 100)))
+  (lambda () "Return up to 100 bookmark rows." (rows (quote bookmark) 100)))
 
 (define bookmarks/blank?
-  (lambda (s) (if (null? s) #t (string-eq (as-str s) ""))))
+  (lambda (s) "True when s is null or an empty string." (if (null? s) #t (string-eq (as-str s) ""))))
 
 (define bookmarks/bookmarklet-js
   (lambda
     ()
+    "Build the javascript: bookmarklet that clips the current tab."
     (let
       ((origin (bookmarks/public-origin)))
       (string-append
@@ -25,6 +26,7 @@
 (define bookmarks/clip-page
   (lambda
     ()
+    "Handle the /bookmarks/clip URL, saving a bookmark from query params."
     (let
       ((url (as-str (request-param "url")))
         (title (request-param "title")))
@@ -72,6 +74,7 @@
 (define bookmarks/clip-title
   (lambda
     (title url)
+    "Return title, or the url when title is blank."
     (let
       ((t (string-trim (as-str title))))
       (if (blank? t) (as-str url) t))))
@@ -79,14 +82,16 @@
 (define bookmarks/create
   (lambda
     (title url)
+    "Create a bookmark row with the given title and url."
     (create (quote bookmark) (bookmarks/fields title url))))
 
 (define bookmarks/delete
-  (lambda (id) (delete (quote bookmark) (as-str id))))
+  (lambda (id) "Delete a bookmark row by id." (delete (quote bookmark) (as-str id))))
 
 (define bookmarks/fields
   (lambda
     (title url)
+    "Build a bookmark fields JSON string from title and url."
     (dict-set*
       "{}"
       (list "title" (as-str title) "url" (as-str url)))))
@@ -94,11 +99,13 @@
 (define bookmarks/find-by-url
   (lambda
     (url)
+    "Find the first bookmark row whose url matches; () when none."
     (bookmarks/find-by-url-in (bookmarks/all) (as-str url))))
 
 (define bookmarks/find-by-url-in
   (lambda
     (rows-list url)
+    "Search a bookmark row list for the given url."
     (if
       (null? rows-list)
       ()
@@ -114,6 +121,7 @@
 (define bookmarks/form-html
   (lambda
     ()
+    "Render the add-bookmark HTML form."
     (html/div
       (html/attr "class" "card")
       (html/join
@@ -154,6 +162,7 @@
 (define bookmarks/handle-post
   (lambda
     ()
+    "Dispatch a POST action: create or delete a bookmark."
     (let
       ((action (as-str (request-param "action"))))
       (cond
@@ -171,6 +180,7 @@
 (define bookmarks/install-html
   (lambda
     ()
+    "Render the browser bookmarklet install card."
     (html/div
       (html/attr "class" "card")
       (html/join
@@ -198,6 +208,7 @@
 (define bookmarks/item-li
   (lambda
     (row)
+    "Render one bookmark row as a list item with a delete button."
     (let
       ((id (as-str (car row))) (fields (cdr row)))
       (let
@@ -227,6 +238,7 @@
 (define bookmarks/list-html
   (lambda
     ()
+    "Render the full bookmarks list, or an empty-state message."
     (html/div
       (html/attr "id" "bookmarks-list")
       (let
@@ -241,6 +253,7 @@
 (define bookmarks/main-html
   (lambda
     ()
+    "Render the install card, add form, and bookmarks list."
     (html/div
       (html/attr "id" "bookmarks-main")
       (html/join
@@ -253,6 +266,7 @@
 (define bookmarks/page
   (lambda
     ()
+    "Handle POST actions; otherwise render the full bookmarks page."
     (if
       (string-eq (request-method) "POST")
       (seq
@@ -273,6 +287,7 @@
 (define bookmarks/public-origin
   (lambda
     ()
+    "Return the public origin (scheme://host) for generated links."
     (let
       ((host (as-str (request-header "host")))
         (xfwd (as-str (request-header "x-forwarded-proto"))))
@@ -289,6 +304,7 @@
 (define bookmarks/starts-with?
   (lambda
     (s prefix)
+    "True when string s starts with prefix."
     (let
       ((ss (as-str s)) (p (as-str prefix)))
       (let
@@ -300,6 +316,7 @@
 (define bookmarks/url-ok?
   (lambda
     (url)
+    "True when url starts with http:// or https://."
     (let
       ((u (as-str url)))
       (or
