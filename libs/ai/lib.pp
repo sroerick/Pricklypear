@@ -4,6 +4,7 @@
 (define ai/agents-note-body
   (lambda
     ()
+    "Body of the live agents notes doc, or empty string when notes is unloaded."
     (if
       (not (ai/bound? "notes/doc/get"))
       ""
@@ -14,6 +15,7 @@
 (define ai/ask
   (lambda
     (q)
+    "New copilot session seeded with the image context; returns the model reply."
     (let
       ((sid (agent-session-new ai/copilot-seed)))
       (agent-say
@@ -26,6 +28,7 @@
 (define ai/bound?
   (lambda
     (name)
+    "True if a binding named name is visible on the current branch."
     (not
       (null?
         (list/filter
@@ -35,6 +38,7 @@
 (define ai/context
   (lambda
     ()
+    "Multi-line image context string (user, branch, bindings, agents note) for the model."
     (let
       ((agents-body (ai/agents-note-body))
         (pkgs (list-packages))
@@ -72,6 +76,7 @@
 (define ai/do
   (lambda
     (task)
+    "New task-seeded agent session with the image context; returns the result."
     (let
       ((sid (agent-session-new ai/task-seed)))
       (agent-say
@@ -81,6 +86,7 @@
 (define ai/draft-fn
   (lambda
     (name spec)
+    "Author session that drafts a function body from name and spec; returns the draft."
     (let
       ((sid (agent-session-new ai/author-seed #f)))
       (agent-say
@@ -92,11 +98,13 @@
           spec)))))
 
 (define ai/install
-  (lambda (name body) (install-function name body)))
+  (lambda (name body) (install-function name body))
+  "Install a lambda body as a function named name.")
 
 (define ai/say
   (lambda
     (sid q)
+    "Send q to an existing session sid with the image context; returns the reply."
     (agent-say
       sid
       (string-append (ai/context) "\n\nUser question:\n" q))))
@@ -105,5 +113,6 @@
   "You are the agent for a running Pricklypear multi-user Lisp OS image (software, not a cactus).\nTools: image_context, list_bindings, list_routes, inspect_function, install_function.\nInstall only lambda bodies. Prefer package/name. Finish with a short text summary and no tool calls.")
 
 (define ai/write
-  (lambda (name spec) (propose-function name spec)))
+  (lambda (name spec) (propose-function name spec))
+  "Propose (draft) a function from name and spec without installing.")
 
