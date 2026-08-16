@@ -14,6 +14,7 @@
       notes
       rungs-l-str
       rungs-r-str)
+    "Log a completed workout session, writing snatch exercise rows."
     (let*
       ((tl (workout/as-int total-l))
         (tr (workout/as-int total-r))
@@ -124,6 +125,7 @@
       unit
       rungs
       notes)
+    "Log a ksk1 ladder workout with equal totals for both hands."
     (let
       ((doc (workout/ksk1-plan phase day load unit))
         (total (workout/sum rungs))
@@ -154,6 +156,7 @@
       rungs-l
       rungs-r
       notes)
+    "Log a ksk1 workout with separate left and right rung totals."
     (let
       ((doc (workout/ksk1-plan phase day load unit))
         (tl (workout/sum rungs-l))
@@ -185,6 +188,7 @@
       unit
       sets
       notes)
+    "Log a ksk2 workout from its set list."
     (let
       ((doc (workout/ksk2-plan phase day load unit))
         (total (workout/sum sets))
@@ -215,6 +219,7 @@
       rm-total
       sets
       notes)
+    "Log a ksk3 workout from its week/day and set list."
     (let
       ((doc (workout/ksk3-plan week day load unit rm-total))
         (total (workout/sum sets))
