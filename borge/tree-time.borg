@@ -448,7 +448,7 @@
      (smoke "migration 022_tree_retention.sql applies clean + idempotent on a dev PG with 018-021 already applied (image-applied, version 22 in schema_migrations): creates tree_retention_policy (path_class CHECK code|data, type_name NULL= whole class, keep_windows >= 1, UNIQUE(path_class,type_name)) and tree_versions_retain(path_class, keep_windows) — an idempotent, conservative rollup+drop worker that computes a whole-class floor = GREATEST(head_gen - keep_windows*1000, 1000), CHECKPOINTs the newest in-retained-past state of every fully-retired path (whole history < floor) to a row at gen=floor, then DROP PARTITIONs every lazy gen-window entirely below the floor (never the base gen_0 window).")
      (smoke "(retention-policies) -> VList of policy JSON — empty on a policy-free habitat (keep-everything default). (retention-policy-set path_class keep_windows) / (retention-policy-set path_class type_name keep_windows) upsert a whole-class (type_name NULL) or per-type row; (retention-delete-policy path_class [type_name]) removes it. Admin-only (require_admin); anonymous raises.")
      (smoke "(retention-run [path_class]) drives the worker per path class that has an explicit whole-class policy (type_name IS NULL): runs tree_versions_retain, returns VList of (path_class, dropped_windows, checkpointed_paths). Path class with NO whole-class policy is a keep-everything no-op (never ad-hoc deletion). Verified live on the dev habitat: (retention-policy-set \"code\" 3) then (retention-run \"code\") dropped 16 gen-windows and checkpointed 4473 code paths; policies deleted after to restore keep-everything.")
-     (smoke "The retention worker runs ON THE JOBS RUNNER (migration 015) — boot.ml jobs_runner_loop gates a periodic retention_sweep by wall-clock (default 3600s, PP_RETENTION_SECS override) which calls Store.retention_run for every path class and logs per-class dropped/checkpointed counts. On a policy-free habitat the sweep is a cheap no-op SELECT. This is the coexistence-plan PHASE 4 gate that flips the chapter to implemented."))
+     (smoke "The retention worker runs ON THE JOBS RUNNER (migration 015) — boot.ml jobs_runner_loop gates a periodic retention_sweep by wall-clock (default 3600s, PP_RETENTION_SECS override) which calls Store.retention_run for every path class and logs per-class dropped/checkpointed counts. On a policy-free habitat the sweep is a cheap no-op SELECT. This is the coexistence-plan PHASE 4 gate that flipped the gc subsection to implemented (the chapter itself stays planned until the Phase-2 scaffolding read-switch + equivalence verifier tail in the projections subsection lands - see coexistence-plan STATUS 5.4 reconcile)."))
     (details
      (doc (|
           NO NEW SUBSYSTEM. Dolt ships dolt_gc because it owns its
@@ -499,8 +499,11 @@
           future finer-grained work but the shared gen-window floor
           stays whole-class (tree_versions is a global table). The
           coexistence-plan PHASE 4 condition — "the retention
-          worker runs on the jobs runner" — is met, flipping this
-          chapter to implemented.
+          worker runs on the jobs runner" — is met, flipping the gc
+          subsection to implemented. (The chapter as a whole stays
+          planned: the Phase-2 flag-guarded scaffolding read-switch + equivalence
+          verifier + 012 archival/drop tail, owned by the projections
+          subsection, remains open — see the coexistence-plan STATUS 5.4 reconcile.)
      |))))
 
    (subsection coexistence-plan
