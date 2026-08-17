@@ -227,6 +227,30 @@
            to make the indexed-read intent explicit and to give
            subtree a caller-supplied cap.
 
+           LENS-AWARE READ PRIMS (tree-read-prims, BORGE-1785516993):
+           the plain prims above address nodes by their FULL materialized
+           path. The store-tree ROOTS the tree-browser v2 needs
+           (/sys/... + branch lenses) require resolving logical names
+           through the branch OVERRIDE CHAIN — a session on
+           <user>/personal must see the EFFECTIVE definition for
+           tree_nodes, same closest-ancestor-wins rule function_defs
+           use. These take a RELATIVE logical suffix ("fn.<name>",
+           "type.<name>", "route.<route>", "pkg.<name>") and resolve it
+           across the session's lens chain (self -> parent -> ... ->
+           system/main):
+             (tree/lens-get suffix) -> the closest node across the chain
+                 (node JSON) or empty when none has it.
+             (tree/lens-children suffix [limit]) -> DIRECT children of
+                 the effective node's subtree under the branch that owns
+                 it.
+             (tree/lens-subtree suffix [limit]) -> capped descendants of
+                 the effective node's subtree.
+           The suffix NAME segment is label-encoded (fn_path/type_path/
+           route_path/pkg_path semantics); the branch id is implicit from
+           the session chain. Same node_to_json surface (created_at/
+           updated_at present). Anonymous sessions resolve their
+           effective chain via the anon/default lens.
+
            PHYSICAL LAYOUT (migration 009_tree.sql; additive):
              tree_nodes(
                id uuid PK DEFAULT gen_random_uuid(),
@@ -485,6 +509,20 @@
            absent; the explicit name signals the caller wants a
            bounded snapshot, not a level read.
 
+         LENS-AWARE READ PRIMS (BORGE-1785516993): tree/lens-get,
+         tree/lens-children, tree/lens-subtree resolve a RELATIVE
+         logical suffix ("fn.<name>", "type.<name>", "route.<route>",
+         "pkg.<name>") across the session's branch lens chain —
+         self -> parent -> ... -> system/main, closest-ancestor-wins,
+         the same override rule function_defs use. This is what the
+         tree-browser v2 store-tree roots (/sys, branch lenses) need:
+         a session on <user>/personal sees the EFFECTIVE override for
+         tree_nodes, not just its own branch. The suffix name segment
+         is label-encoded (fn_path/type_path/route_path/pkg_path
+         semantics); the branch id is implicit from the chain. Backed
+         by Tree_store.lens_get_in_chain / lens_children_in_chain /
+         lens_subtree_in_chain over Store.branch_chain.
+
          Anonymous (unauthenticated) reads resolve against
          system/main and are permitted for both prims; the
          nodes returned are confined to what the requesting
@@ -495,7 +533,9 @@
     (build "dune build @all")
     (smoke "(tree/children-of P) returns exactly the direct children of P (level predicate), including outline roots under P.h")
     (smoke "(tree/subtree P) returns all descendants under P, bounded by the limit arg")
-    (smoke "both prims return node JSON including created_at and updated_at keys")))
+    (smoke "both prims return node JSON including created_at and updated_at keys")
+    (smoke "tree/lens-get resolves a suffix across the branch chain with closest-wins (child override shadows parent; main effective on child)")
+    (smoke "tree/lens-children/subtree read under the effective branch owning the resolved node")))
   (subsection projections
    (doc "SQL over the tree: relational rows are derived, not truth")
    (status implemented)

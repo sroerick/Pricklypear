@@ -554,6 +554,40 @@ let rec resolve_in_chain (conn : Store_db.conn) ~(mk_path : string -> string)
        | Some _ -> n
        | None -> resolve_in_chain conn ~mk_path rest)
 
+(** Lens prefixing for a RELATIVE logical path. The store-tree path grammar
+    uses b.<branch_id>.<rest> for branch-lensed code nodes (fn/type/route/
+    pkg). A lens-aware read takes a logical suffix of the form
+    <kind>.<name> (e.g. "fn.notes/doc/get", "route./issues", "pkg.todo")
+    and materializes the full path under a given branch id by ENCODING the
+    name segment with the label codec (same as fn_path/type_path/route_path/
+    pkg_path) — the kind label itself is already ltree-safe. Returns None
+    for an empty/malformed suffix (no kind). *)
+let lens_suffix_path ~(branch_id : string) (suffix : string) : string option =
+  if suffix = "" then None
+  else
+    let kind, nl =
+      match String.index_opt suffix '.' with
+      | Some i when i > 0 ->
+          (String.sub suffix 0 i, String.sub suffix (i + 1) (String.length suffix - i - 1))
+      | _ -> (suffix, "")
+    in
+    if nl = "" then None
+    else Some ("b." ^ uuid_label branch_id ^ "." ^ kind ^ "." ^ enc_label nl)
+
+(** Lens-aware read of one node by a RELATIVE logical path, resolved across
+    [chain] (self-first / closest-wins — the override rule). Tries the
+    suffix under each branch id in order; first hit wins. Backed by
+    get_by_path so created_at/updated_at are present via node_to_json.
+    Returns the closest node or None if no branch in the chain has it. *)
+let lens_get_in_chain (conn : Store_db.conn) ~(suffix : string)
+    (chain : string list) : node option =
+  let mk_path branch_id =
+    match lens_suffix_path ~branch_id suffix with
+    | Some p -> p
+    | None -> "" (* empty suffix can never match a real ltree node *)
+  in
+  resolve_in_chain conn ~mk_path chain
+
 (** Consistency check against the SQL tree_verify() function.
     Returns (kind, table_count, tree_count, in_sync) rows. *)
 let verify (conn : Store_db.conn) : (string * int * int * bool) list =
@@ -1190,6 +1224,38 @@ let list_children (conn : Store_db.conn) ~(prefix : string) ?(limit : int = 5000
         sql
     in
     (List.filter_map node_of_row rows)
+
+(** Lens-aware children-of: DIRECT-child nodes of the RELATIVE logical path,
+    resolved against [chain] (self-first / closest-wins). Uses the effective
+    branch where the logical path first resolves, then list_children on that
+    materialized path — so direct children are read under the branch that
+    actually owns/overtides the node. Returns [] when the path resolves
+    nowhere. Shared with lens_get_in_chain so the override rule is single. *)
+let lens_children_in_chain (conn : Store_db.conn) ~(suffix : string)
+    ?(limit : int = 50000) (chain : string list) : node list =
+  let mk_path branch_id =
+    match lens_suffix_path ~branch_id suffix with
+    | Some p -> p
+    | None -> ""
+  in
+  match resolve_in_chain conn ~mk_path chain with
+  | None -> []
+  | Some n -> list_children conn ~prefix:n.path ~limit ()
+
+(** Lens-aware subtree: all descendants of the RELATIVE logical path,
+    resolved against [chain] (closest-wins), read under the effective
+    branch, capped at limit. Backed by list_subtree. Returns [] when the
+    path resolves nowhere. *)
+let lens_subtree_in_chain (conn : Store_db.conn) ~(suffix : string)
+    ?(limit : int = 50000) (chain : string list) : node list =
+  let mk_path branch_id =
+    match lens_suffix_path ~branch_id suffix with
+    | Some p -> p
+    | None -> ""
+  in
+  match resolve_in_chain conn ~mk_path chain with
+  | None -> []
+  | Some n -> list_subtree conn ~prefix:n.path ~limit ()
 
 let html_escape_text (s : string) : string =
   let buf = Buffer.create (String.length s + 8) in

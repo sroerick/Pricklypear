@@ -88,3 +88,8 @@
  (name diff_branches_test)
  (modules diff_branches_test)
  (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))
+
+(test
+ (name tree_lens_test)
+ (modules tree_lens_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))

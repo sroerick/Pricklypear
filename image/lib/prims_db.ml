@@ -350,6 +350,49 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
           (Pricklypear_lisp.Ast.VStr
                "tree/subtree: need path [, limit]"));
 
+  (* Lens-aware read prims (one-tree.tree-read-prims, BORGE-1785516993).
+     Resolve a RELATIVE logical path (fn/type/route/pkg suffixes such as
+     "fn.notes/doc/get", "pkg.todo", "route./issues") against the SESSION's
+     branch lens chain — self -> parent -> ... -> system/main, closest-wins,
+     exactly like function_defs. Lets a session on <user>/personal see the
+     EFFECTIVE override chain for tree_nodes (the store-tree kind the
+     tree-browser v2 /sys + branch-lens roots need). Anonymous reads
+     allowed (resolves against system/main via the anon lens). *)
+  register_crud "tree/lens-get"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr suffix ] ->
+          Crud.tree_lens_get t.store ~suffix
+      | _ ->
+          (Pricklypear_lisp.Ast.VStr
+               "tree/lens-get: need relative-suffix (e.g. \"fn.notes/doc/get\")"));
+
+  register_crud "tree/lens-children"
+    (fun args ->
+      let uname = actor () in
+      ignore uname;
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr suffix ] ->
+          Crud.tree_lens_children t.store ~suffix ()
+      | [ Pricklypear_lisp.Ast.VStr suffix
+        ; Pricklypear_lisp.Ast.VInt lim ] ->
+          Crud.tree_lens_children t.store ~suffix ~limit:(Int64.to_int lim) ()
+      | _ ->
+          (Pricklypear_lisp.Ast.VStr
+               "tree/lens-children: need relative-suffix [, limit]"));
+
+  register_crud "tree/lens-subtree"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr suffix ] ->
+          Crud.tree_lens_subtree t.store ~suffix ()
+      | [ Pricklypear_lisp.Ast.VStr suffix
+        ; Pricklypear_lisp.Ast.VInt lim ] ->
+          Crud.tree_lens_subtree t.store ~suffix ~limit:(Int64.to_int lim) ()
+      | _ ->
+          (Pricklypear_lisp.Ast.VStr
+               "tree/lens-subtree: need relative-suffix [, limit]"));
+
   register_crud "tree/upsert"
     (fun args ->
       let uname = actor () in
