@@ -355,8 +355,26 @@
 
   (subsection sync
    (doc "Sync = three-way tree-diff (branching.borg / one-tree.branching-interaction), keyed on subtree node hashes. The exchange is the git protocol in miniature.")
-   (status planned)
-   (implements image/lib/tree_store.ml image/lib/sync.ml branching.borg)
+   (status implemented)
+   (implements image/lib/tree_store.ml image/lib/sync.ml image/test/sync_test.ml branching.borg)
+   (verify
+    (doc (|
+         Sync = the server-side merge authority over tree_nodes, keyed on
+         the same subtree node content hash the client lens substrate
+         computes offline (one-tree.tree-model) — ONE hash scheme, both
+         sides. image/test/sync_test.ml covers the pure core: manifest
+         classification (same / client-only / server-only / diverge = the
+         exchange's conflict DETECTION at node granularity) and the
+         three-way merge planner (base = last-synced, ours = server,
+         theirs = client) with every outcome (unchanged, theirs_add,
+         ours_add, theirs_mod, ours_mod, identical, conflict, theirs_del,
+         ours_del) + the actionable subset + JSON rendering. The
+         sync/plan prim surfaces server_manifest / classify / plan_of
+         (with an optional last-synced base manifest — the tree-time gen
+         coordinate as merge base). The DB-backed harness
+         (server_manifest / apply_client_node / commit) is exercised per
+         the coexistence / deployment passes.
+    |)))
    (details
     (doc (|
          ONE ALGORITHM, ALREADY SPECIFIED. Sync is the three-way

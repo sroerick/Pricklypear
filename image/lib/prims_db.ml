@@ -435,6 +435,66 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
           (Pricklypear_lisp.Ast.VStr
                "replication/unit: no arguments"));
 
+  (* local-first sync (borge/local-first.borg sync, campaign 8.3). The
+     server-side merge authority. sync/plan takes a CLIENT (path, hash)
+     manifest — the exact shape Lens_store.node_manifest produces — plus
+     an optional three-way merge base (the (path, hash) manifest the
+     lens last synced at), and returns the reconciliation: what the
+     server would pull (ServerOnly), push (ClientOnly), or merge
+     (Diverge / conflict). Pure classification over the server's own
+     subtree hash manifest; read-only, safe for any identity (scoped to
+     its own lens replication unit).
+
+       (sync/plan '[("data.u....".x "<hash>") ...])
+       (sync/plan client-manifest base-manifest)
+
+     Returns a JSON object {same, client_only, server_only, diverge,
+     client_only_paths, server_only_paths, diverge_paths} — or, with a
+     base, a three-way plan {rows:[{path, outcome, detail}]}. *)
+  let parse_manifest (v : Pricklypear_lisp.Ast.value) : Sync.manifest option =
+    let parse_pair = function
+      | Pricklypear_lisp.Ast.VList [ Pricklypear_lisp.Ast.VStr p;
+                                     Pricklypear_lisp.Ast.VStr h ] -> Some (p, h)
+      | _ -> None
+    in
+    match v with
+    | Pricklypear_lisp.Ast.VList pairs ->
+        let m = List.filter_map parse_pair pairs in
+        if List.length m = List.length pairs then Some m else None
+    | _ -> None
+  in
+  let sync_user_prefix () =
+    let uname = actor () in
+    "data.u." ^ Tree_store.enc_label uname
+  in
+  register_crud "sync/plan"
+    (fun args ->
+      match args with
+      | [ cm; b ] ->
+          (* three-way: client manifest + base (last-synced) manifest *)
+          (match parse_manifest cm, parse_manifest b with
+           | Some c, Some base ->
+               let prefix = sync_user_prefix () in
+               (match Sync.server_manifest t.store ~prefix with
+                | None -> (Pricklypear_lisp.Ast.VStr "sync/plan: no DB")
+                | Some server ->
+                    let plans = Sync.plan_of base server c in
+                    (Pricklypear_lisp.Ast.VStr (Sync.json_of_plan plans)))
+           | _ -> (Pricklypear_lisp.Ast.VStr "sync/plan: manifests must be [[path, hash], …]"))
+      | [ cm ] ->
+          (* two-way classify: client manifest vs server, no base *)
+          (match parse_manifest cm with
+           | Some c ->
+               let prefix = sync_user_prefix () in
+               (match Sync.server_manifest t.store ~prefix with
+                | None -> (Pricklypear_lisp.Ast.VStr "sync/plan: no DB")
+                | Some server ->
+                    let r = Sync.classify server c in
+                    (Pricklypear_lisp.Ast.VStr (Sync.json_of_report r)))
+           | None -> (Pricklypear_lisp.Ast.VStr "sync/plan: manifest must be [[path, hash], …]"))
+      | _ -> (Pricklypear_lisp.Ast.VStr "sync/plan: need client-manifest [, base-manifest]"));
+
+
   register_crud "tree/upsert"
     (fun args ->
       let uname = actor () in
