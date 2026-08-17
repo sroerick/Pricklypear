@@ -136,6 +136,109 @@ let test_subtree_list () =
     (* the note path is NOT under the todo prefix *)
     Alcotest.(check bool) "note not under todo" false (List.mem "data.u.abc.note.c" todos))
 
+(* --- code-lens + ancestry materialization (local-substrate 8.2) --- *)
+
+let test_code_kind_path () =
+  Alcotest.(check (option string)) "fn path"
+    (Some "b.admin.fn.todo-get")
+    (code_kind_path ~branch:"admin" "fn" ~name:"todo-get");
+  Alcotest.(check (option string)) "route path"
+    (Some "b.admin.route./issues")
+    (code_kind_path ~branch:"admin" "route" ~name:"/issues");
+  Alcotest.(check (option string)) "non-code kind rejected" None
+    (code_kind_path ~branch:"admin" "datum" ~name:"x")
+
+let test_materialize_code_and_resolve () =
+  with_tmpdir (fun root ->
+    let lens = lens_of ~root in
+    (* lens owns an override; main is ancestry -- different source *)
+    let lens_file =
+      materialize_code_node ~lens ~branch:"lens-laptop" ~kind:"fn"
+        ~name:"todo-get" ~src:"(define (todo-get id) 'lens)" ~doc:"lens own"
+        ~author:"admin"
+      |> function Some f -> f | None -> Alcotest.fail "materialize_code None"
+    in
+    Alcotest.(check bool) "code file exists" true (Sys.file_exists lens_file);
+    ignore
+      (materialize_code_node ~lens ~branch:"main" ~kind:"fn"
+         ~name:"todo-get" ~src:"(define (todo-get id) 'main)" ~doc:"main"
+         ~author:"admin");
+    (* record ancestry self-first: lens then main *)
+    record_ancestry ~lens [ "lens-laptop"; "main" ];
+    Alcotest.(check (list string)) "ancestry round trip"
+      [ "lens-laptop"; "main" ] (ancestry ~lens);
+    (* closest-wins: the lens's own override resolves first *)
+    (match resolve_def ~lens ~kind:"fn" ~name:"todo-get" with
+     | Some env ->
+         Alcotest.(check (option string)) "closest = lens's src"
+           (Some "(define (todo-get id) 'lens)")
+           (code_src_of_envelope env)
+     | None -> Alcotest.fail "resolve_def None for own override");
+    (* a def only on ancestry resolves through inheritance *)
+    ignore
+      (materialize_code_node ~lens ~branch:"main" ~kind:"fn"
+         ~name:"shared-only" ~src:"(define (shared-only) 42)" ~doc:"main only"
+         ~author:"admin");
+    (match resolve_def ~lens ~kind:"fn" ~name:"shared-only" with
+     | Some env ->
+         Alcotest.(check (option string)) "inherited from main"
+           (Some "(define (shared-only) 42)")
+           (code_src_of_envelope env)
+     | None -> Alcotest.fail "resolve_def None for ancestry def");
+    (* a def on NO branch does not resolve *)
+    Alcotest.(check bool) "unknown def is None" true
+      (resolve_def ~lens ~kind:"fn" ~name:"nope" = None))
+
+let test_node_manifest () =
+  with_tmpdir (fun root ->
+    let lens = lens_of ~root in
+    (* one datum + one code node *)
+    ignore
+      (materialize ~lens
+         (Yojson.Safe.to_string
+            (`Assoc [ ("v", `Int 1); ("kind", `String "datum");
+                      ("path", `String "data.u.admin.todo.a");
+                      ("type", `String "todo"); ("body", `Assoc []);
+                      ("author", `String "admin"); ("hash", `String "h1");
+                      ("created_at", `String "t"); ("updated_at", `String "t") ])));
+    ignore
+      (materialize_code_node ~lens ~branch:"lens-laptop" ~kind:"fn"
+         ~name:"f" ~src:"(define (f) 1)" ~doc:"" ~author:"admin");
+    let manifest = node_manifest ~lens in
+    Alcotest.(check int) "two node entries" 2 (List.length manifest);
+    Alcotest.(check bool) "datum path present" true
+      (List.mem_assoc "data.u.admin.todo.a" manifest);
+    Alcotest.(check bool) "code path present" true
+      (List.mem_assoc "b.lens-laptop.fn.f" manifest);
+    (* the ancestry metadata file is NOT in the manifest *)
+    Alcotest.(check bool) "no ancestry in manifest" false
+      (List.exists (fun (p, _) -> String.length p > 0 && p.[0] = '_') manifest))
+
+let test_lens_fetch_first () =
+  (* the offline-first fetch order: lens substrate before the wire. We assert
+     that Remote.fetch_def consults the lens [lens_lookup] first by giving it
+     a transport that would FAIL, so only a substrate hit can satisfy it. *)
+  with_tmpdir (fun root ->
+    let lens = lens_of ~root in
+    ignore
+      (materialize_code_node ~lens ~branch:"lens-laptop" ~kind:"fn"
+         ~name:"off" ~src:"(define (off) 7)" ~doc:"" ~author:"admin");
+    record_ancestry ~lens [ "lens-laptop" ];
+    let lookup name =
+      match resolve_def ~lens ~kind:"fn" ~name with
+      | Some env -> code_src_of_envelope env
+      | None -> None
+    in
+    let fail_transport (_ : string) (_ : Pricklypear_lisp.Ast.value list) :
+        (Pricklypear_lisp.Ast.value, exn) result =
+      Error (Failure "wire must not be touched")
+    in
+    let client = Remote.make ~transport:fail_transport ~lens_lookup:lookup () in
+    (* offline-first: resolves from the substrate without touching the wire *)
+    match Remote.fetch_def client "off" with
+    | Some src -> Alcotest.(check string) "lens-first src" "(define (off) 7)" src
+    | None -> Alcotest.fail "fetch_def None despite substrate hit")
+
 let () =
   Random.self_init ();
   Alcotest.run "lens_store"
@@ -145,5 +248,9 @@ let () =
        , [ Alcotest.test_case "path_to_file" `Quick test_path_to_file
          ; Alcotest.test_case "materialize_and_get" `Quick test_materialize_and_get
          ; Alcotest.test_case "put_body_hash" `Quick test_put_body_hash
-         ; Alcotest.test_case "subtree_list" `Quick test_subtree_list ])
+         ; Alcotest.test_case "subtree_list" `Quick test_subtree_list
+         ; Alcotest.test_case "code_kind_path" `Quick test_code_kind_path
+         ; Alcotest.test_case "materialize_code_and_resolve" `Quick test_materialize_code_and_resolve
+         ; Alcotest.test_case "node_manifest" `Quick test_node_manifest
+         ; Alcotest.test_case "lens_fetch_first" `Quick test_lens_fetch_first ])
     ]

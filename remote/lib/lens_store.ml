@@ -274,3 +274,188 @@ let node_hash ~(lens : lens) (path : string) : string option =
            (match List.assoc_opt "hash" kv with
             | Some (`String h) -> Some h | _ -> None)
        | _ -> None)
+
+(* ====================================================================
+   CODE-LENS + ANCESTRY MATERIALIZATION (local-substrate, 8.2)
+
+   The replication-unit manifest (replication-units subsection) names the
+   forked code lens b.<lens>.{fn,type,route,pkg}.* PLUS the branch
+   ancestry the lens resolves through (defs resolve through inheritance
+   per one-tree tree-model read-time resolution). These helpers complete
+   the substrate's coverage of that manifest: the client can materialize
+   the forked code lens + record the ancestry chain it resolves through,
+   then resolve ANY definition (offline) by walking the chain
+   self-first with the same closest-ancestor-wins rule a server-side
+   eval of the lens would use (store.branch_chain self-first).
+
+   One file per code node at its b.<branch>.<kind>.<name> tree path,
+   exactly like a datum node — the filesystem stays the only index, and
+   sync (3-way tree-diff) keys on the same envelope [hash].
+   ==================================================================== *)
+
+(** The code-node kinds the replication unit manifests (fn/type/route/pkg).
+    Any other kind is not a code-lens subtree member. *)
+let code_kind_path ~branch (kind : string) ~(name : string) : string option =
+  match kind with
+  | "fn" | "type" | "route" | "pkg" ->
+      Some (Printf.sprintf "b.%s.%s.%s" branch kind name)
+  | _ -> None
+
+(** Materialize one code-node envelope at its b.<branch>.<kind>.<name> tree
+    path. [src] is the evaluable definition source (a toplevel (define …)
+    form — the same string a server-side eval would build); [doc] the
+    docstring. The envelope follows the one-tree tree-model shape; [hash]
+    is the content hash over the canonical body.
+
+    Returns the written file path, or None when [kind] is not a code kind. *)
+let materialize_code_node ~(lens : lens) ~branch ~kind ~(name : string)
+    ~(src : string) ~(doc : string) ~(author : string)
+    : string option =
+  match code_kind_path ~branch kind ~name with
+  | None -> None
+  | Some path ->
+      let body =
+        `Assoc [ ("src", `String src); ("doc", `String doc) ]
+      in
+      let hash = content_hash (Yojson.Safe.to_string body) in
+      let env =
+        Yojson.Safe.to_string
+          (`Assoc
+             [ ("v", `Int 1)
+             ; ("kind", `String kind)
+             ; ("path", `String path)
+             ; ("type", `String "code")
+             ; ("body", body)
+             ; ("author", `String author)
+             ; ("doc", `String doc)
+             ; ("hash", `String hash)
+             ; ("created_at", `String (string_of_float (Unix.gettimeofday ())))
+             ; ("updated_at", `String (string_of_float (Unix.gettimeofday ())))
+             ])
+      in
+      let file = path_to_file ~root:lens.root path in
+      atomic_write file env;
+      Some file
+
+(** Extract the evaluable definition [src] from a code-node envelope which
+    carries {body:{src,…}} (the [materialize_code_node] shape). Returns
+    None when the envelope is absent or not a code node with a src body. *)
+let code_src_of_envelope (envelope_json : string) : string option =
+  match Yojson.Safe.from_string envelope_json with
+  | `Assoc kv -> (
+      match List.assoc_opt "body" kv with
+      | Some (`Assoc bkv) -> (
+          match List.assoc_opt "src" bkv with
+          | Some (`String src) -> Some src | _ -> None)
+      | _ -> None)
+  | _ -> None
+
+(** The branch ancestry chain metadata file under the lens root. The chain
+    is ordered SELF-FIRST (closest-wins): [lens, parent, …, system/main],
+    the same ordering store.branch_chain / function_defs override use. *)
+let ancestry_file (root : string) : string =
+  Filename.concat root "__ancestry.json"
+
+(** Record the ancestry chain a lens resolves defs through. Self-first
+    (closest-wins), oldest ancestor last. Atomic (rename(2)), like every
+    other substrate write. *)
+let record_ancestry ~(lens : lens) (chain : string list) : unit =
+  let json =
+    Yojson.Safe.to_string
+      (`Assoc
+         [ ("chain", `List (List.map (fun b -> `String b) chain))
+         ; ("recorded_at", `String (string_of_float (Unix.gettimeofday ())))
+         ])
+  in
+  atomic_write (ancestry_file lens.root) json
+
+(** Read back the recorded ancestry chain (self-first). Empty when none. *)
+let ancestry ~(lens : lens) : string list =
+  let f = ancestry_file lens.root in
+  if not (Sys.file_exists f) then []
+  else
+    (try
+       match Yojson.Safe.from_string (read_file f) with
+       | `Assoc kv -> (
+           match List.assoc_opt "chain" kv with
+           | Some (`List l) ->
+               List.filter_map (function `String b -> Some b | _ -> None) l
+           | _ -> [])
+       | _ -> []
+     with _ -> [])
+
+(** resolve_def: find the def (kind, name) in the substrate by walking the
+    ancestry chain SELF-FIRST (closest-ancestor-wins — the same override
+    rule a server-side eval of the lens would use), returning the envelope
+    JSON of the closest b.<branch>.<kind>.<name> that exists in the
+    substrate, or None. Pure / offline: reads the filesystem only; it is
+    the read-time inheritance resolution of one-tree tree-model, without a
+    server round trip. ([chain] defaults to the lens's recorded ancestry.) *)
+(** resolve_def over an EXPLICIT chain (self-first). The caller controls
+    the chain (e.g. a freshly forked lens whose ancestry it just recorded,
+    to avoid re-touching the metadata file). *)
+let resolve_def_chain ~(lens : lens) (chain : string list) ~kind
+    ~(name : string) : string option =
+  List.find_map
+    (fun branch ->
+      match code_kind_path ~branch kind ~name with
+      | None -> None
+      | Some path -> get ~lens path)
+    chain
+
+(** resolve_def: find the def (kind, name) in the substrate by walking the
+    lens's RECORDED ancestry chain SELF-FIRST (closest-ancestor-wins — the
+    same override rule a server-side eval of the lens would use), returning
+    the envelope JSON of the closest b.<branch>.<kind>.<name> that exists in
+    the substrate, or None. Pure / offline: reads the filesystem only; it is
+    the read-time inheritance resolution of one-tree tree-model, without a
+    server round trip. *)
+let resolve_def ~(lens : lens) ~kind ~(name : string) : string option =
+  resolve_def_chain ~lens (ancestry ~lens) ~kind ~name
+
+(** The subtree paths the replication unit names, materialized under a
+    lens root, in a form the server manifest can diff against: every code
+    node present in the substrate (its b.<branch>.<kind>.<name> tree
+    paths) plus every datum node, each with its envelope hash. This is the
+    (path, hash) manifest a sync round negotiates on (see the sync
+    stanza). Returns [(path, hash)] pairs for every .json node envelope
+    under the lens root (excluding the ancestry metadata file). *)
+let node_manifest ~(lens : lens) : (string * string) list =
+  let prefix = "" in
+  let prefix_file = path_to_file ~root:lens.root prefix in
+  let prefix_dir = Filename.dirname prefix_file in
+  let rec walk dir acc =
+    if not (Sys.file_exists dir) then acc
+    else begin
+      try
+        Sys.readdir dir
+        |> Array.fold_left (fun acc name ->
+             let full = Filename.concat dir name in
+             if Sys.is_directory full then walk full acc
+             else if Filename.check_suffix name ".json" then full :: acc
+             else acc)
+             acc
+      with _ -> acc
+    end
+  in
+  (* hash of an arbitrary node-envelope FILE (extract path + hash) *)
+  let path_hash_of_file f : (string * string) option =
+    match node_path_of_json (read_file f) with
+    | None -> None
+    | Some p ->
+        let h =
+          match Yojson.Safe.from_string (read_file f) with
+          | `Assoc kv -> (
+              match List.assoc_opt "hash" kv with
+              | Some (`String h) -> h | _ -> "")
+          | _ -> ""
+        in
+        Some (p, h)
+  in
+  let files =
+    walk prefix_dir []
+    |> List.filter (fun f ->
+         let b = Filename.basename f in
+         b <> "__root.json" && b <> "__ancestry.json")
+  in
+  List.filter_map path_hash_of_file files

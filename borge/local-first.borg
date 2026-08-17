@@ -243,8 +243,8 @@
 
   (subsection local-substrate
    (doc "The filesystem as lens root. No second query engine; the server is the index.")
-   (status planned)
-   (implements remote/lib/lens_store.ml)
+   (status implemented)
+   (implements remote/lib/lens_store.ml remote/lib/remote.ml)
    (details
     (doc (|
          THE FILESYSTEM, NOT SQLITE. A local lens is a directory tree
@@ -307,7 +307,51 @@
          indexing, the answer is a content-addressed store or a
          remote call to the server's index, not a second relational
          engine on the client.
-    |))))
+    |)))
+   (details
+    (doc (|
+         8.2 MAKE (campaign 8, 2026-12). The substrate interface
+         (path-addressed get/put/subtree-list + envelope + hash) was
+         already in lens_store.ml (8.1) ; this make COMPLETED the
+         replication-unit coverage the local-substrate stanza names:
+
+           - CODE-LENS MATERIALIZATION. [materialize_code_node] writes a
+             code-node envelope at its b.<branch>.<kind>.<name> tree path
+             (kind in {fn,type,route,pkg}) carrying the evaluable def
+             source (the (define …) form) + doc, same one-tree envelope
+             shape + content hash as datum nodes — so sync's three-way
+             tree-diff keys on the same [hash] for code.
+
+           - ANCESTRY MATERIALIZATION (read-time inheritance).
+             [record_ancestry] / [ancestry] store the self-first
+             (closest-wins) branch chain (lens, parent, …, system/main)
+             as <root>/__ancestry.json — the SAME override order
+             store.branch_chain / function_defs use. [resolve_def]
+             walks it, returning the closest b.<branch>.<kind>.<name>
+             envelope (None on miss) — offline read-time inheritance
+             per one-tree tree-model, no server round trip.
+
+           - CLIENT WIRING (evaluates against the local substrate).
+             remote/lib/remote.ml takes an optional [~lens_lookup]
+             (substrate def source); when set, [fetch_def] resolves
+             FROM THE SUBSTRATE FIRST and only proxies
+             [function-source] on a miss — the offline-first def path
+             of the lens-model materialization.
+
+           - (PATH, HASH) MANIFEST. [node_manifest] walks the lens root
+             and returns every node's (tree path, envelope hash) — the
+             exact manifest the sync stanza's exchange negotiates on.
+
+         NOT in this make (kept open, owned by the sync stanza): the
+         bidirectional manifest exchange + three-way merge against the
+         server (image/lib/sync.ml, the actual-8.3 make). Local-first is
+         not shipped end-to-end until 8.3 lands; this closes the
+         substrate's own coverage so 8.3 diffs against a complete
+         manifest source.
+    |)))
+   (verify
+    (build "dune build @all")
+    (smoke "remote/test/lens_store_test.ml: the local-substrate group (path_to_file, materialize_and_get, put_body_hash, subtree_list, code_kind_path, materialize_code_and_resolve, node_manifest, lens_fetch_first) — 10/10 green: code-lens nodes materialize at b.<branch>.<kind>.<name> with an evaluable src; ancestry records + round-trips self-first chain; resolve_def is closest-wins (a lens override beats its ancestry copy) and inherits a def present only on ancestry; the (path, hash) manifest lists every node (code AND datum) and excludes the __ancestry metadata; Remote.fetch_def consults the substrate FIRST (a transport that raises is never touched on a substrate hit)")))
 
   (subsection sync
    (doc "Sync = three-way tree-diff (branching.borg / one-tree.branching-interaction), keyed on subtree node hashes. The exchange is the git protocol in miniature.")
