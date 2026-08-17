@@ -495,6 +495,28 @@
          most txns are within a single editing session) is surfaced
          as a conflict on all its constituent nodes rather than
          silently partial-merged.
+
+         STATUS (8.4 reconcile): CONFLICT DETECTION IS SHIPPED.
+         Campaign 8.3 (sync subsection, implemented) delivers the
+         node-granular divergence detection this subsection's thesis
+         names: image/lib/sync.ml manifests path,hash deltas,
+         classifies them, and three-way-merges (base = last-synced
+         generation, ours = server, theirs = client) to a plan whose
+         conflict outcome is surfaced REPORT-ONLY — the obituary rule
+         applied to sync losses, exactly the "v0 surfaces; it does not
+         silently resolve" stance. What is NOT yet shipped is the
+         RESOLUTION half: the LWW-per-node v0 policy is named here but
+         not applied anywhere — sync/plan emits a plan with conflict
+         outcomes and stops; there is no sync/commit prim applying a
+         plan's Theirs_* ops, and no automatic LWW arbitration of a
+         same-node divergent pair at sync (the transport-side follow-up
+         recorded in the 8.3 notes). OFFLINE IDENTITY, SEMANTICS
+         VERSION SKEW, and TRANSACTIONS UNDER SYNC also remain unbuilt
+         (no durable device-signing credential, no branch generation
+         semantics snapshot pin carried by a lens, no sync-time rebase
+         gate or post-merge re-eval). Subsection stays planned; the
+         open work is resolution + identity + skew + txns-under-sync,
+         not detection.
     |))))
 
   (subsection phasing
@@ -527,6 +549,32 @@
          being shipped first. But phase 1 is the honest first cut
          because it defers the one piece of real research (conflict
          resolution policy) while delivering the working-copy feel.
+
+         STATUS (8.4 reconcile): PHASE 1 READ-ONLY OFFLINE LANDED IN
+         SUBSTRATE. The branch generation snapshot coordinate is the
+         migration-017 / gen-now clock (remote-eval.caching — one
+         counter, three consumers); the filesystem lens substrate
+         (remote/lib/lens_store.ml, 8.2) materializes a lens root
+         path-addressed get/put/subtree-list + envelope + hash as
+         rename(2) atomicity; materialize_code_node + ancestry
+         resolution let a client eval defs from the substrate offline
+         (offline-first: fetch_def resolves from the substrate BEFORE
+         proxying). What is NOT shipped is a user-facing read-only
+         offline FLOW (a CLI/app that pins a snapshot, materializes,
+         evaluates read-only, and re-syncs by discard-and-re-pull on
+         reconnect) — the primitives exist, the flow does not, so
+         Phase 1 as a shippable milestone is still open. PHASE 2
+         WRITE-CAPABLE AUTOMATIC MERGE LANDED IN AUTHORITY, OPEN IN
+         TRANSPORT+RESOLUTION. The server-side three-way merge
+         authority (8.3 sync) + lens/fork + replication/unit (8.1) +
+         the substrate give the merge MACHINERY, but automatic merge
+         end-to-end needs (a) the sync/commit prim applying a plan's
+         Theirs_* ops from client bodies + the HTTP rendezvous
+         shipping manifests/bodies (recorded as the 8.3
+         transport-side follow-up, not yet built) and (b) the-glochids
+         v0 LWW policy actually applied (not shipped). Subsection
+         stays planned; the open work is the Phase-2 tail (transport +
+         resolution) plus the Phase-1 end-user flow.
     |))))
 
   (subsection non-goals
