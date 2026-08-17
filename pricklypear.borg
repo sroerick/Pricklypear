@@ -348,6 +348,10 @@
   (doc "Book chapter — ONE BIG TREE storage substrate + typed nodes; full text inlined from borge/one-tree.borg")
   (inline borge/one-tree.borg)
  )
+ (section tree-time
+  (doc "Book chapter — the generation axis on the one tree: versioned leaves keyed (branch, path, gen); history/undo/as-of reads become storage semantics. Full text inlined from borge/tree-time.borg")
+  (inline borge/tree-time.borg)
+ )
  (section branching
   (doc "Book chapter — full text inlined from borge/branching.borg")
   (inline borge/branching.borg)

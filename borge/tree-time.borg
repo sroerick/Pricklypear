@@ -1,0 +1,527 @@
+(project pricklypear-tree-time
+ (doc "Pricklypear book chapter: tree-time — the generation axis on the one tree. Versioned leaves keyed (branch, path, gen); history, undo, and as-of reads become storage semantics instead of per-purpose scaffolding tables. Subsumes 012 code-history, gives local-first sync its merge clock, and closes the beads-audit-gap 'data state history: NO / time travel: NO' rows. Apps stay two-dimensional: every read defaults to a slice at head.")
+ (status planned)
+ (* agent note (|2026-09 design discussion, three sessions of prose: (1) app-level undo in notes — notes has one write funnel (notes/doc/upsert) over pure outline transforms, making it the ideal first consumer; per-note before-images. (2) history-as-tree-of-nodes under an h.* prefix — workable without kernel change but pure copying. (3) the answer that stuck: make generation a first-class storage key on the tree itself. Geometry: three overlaid trees — path-space within a branch, branch-as-parent-pointer tree across the world, gen chains within each branch. A branch is a named fork in path-space; a gen-fork (undo + write again) is an anonymous fork in time-space. The gen tree branches exactly when undo is followed by a new write — redo and lost-timeline retention fall out of keeping both children. Prior art cross-read: beads-audit-gap note (Yegge's Beads = Dolt versioning + events + interactions + prose intent). Our answer is more elegant because the habitat collapses the stack: Dolt reimplemented a storage engine and a database; we have Postgres; Beads bolted audit on a CLI; our evaluator sits inside the store. Dolt's advantages are operationalizing (shipped GC, sync wire protocol, scale-tested diff) — each already has a named home here (jobs runner + gen-range partitions, local-first.sync manifest exchange, tree-diff merge). Downstream blast radius audit: libs/* prim surface unchanged (new optional arg only); scaffolding tables stay head-shaped mirrors; 012 code_history is RETIRED (subsumed); 017 branch_generations is promoted from cache-invalidation signal to head coordinate; mirror triggers gain one head-gen filter; the real kernel work is tree_store.ml (insert-only + head bump) + crud.ml/prims_db.ml (gen filter, optional :gen arg) + one view rewrite. Named trees-hash-consing, trees-share-nodes-not-blobs as future notes on this chapter, per one-tree.bl-blast-radius precedent. 5.0 plan pass (campaign-v1): geometry + versioned-leaves + projections + reads-as-of-gen all designed above; migration-018 subsection pins the 018_tree_versions.sql schema contract (5.1 make is deterministic); chapter wired into the book root; all stanzas stay planned (implementation flips land with 5.1/5.2/5.3).|) *)
+ (convention ocaml-dune)
+ (section tree-time
+
+  (doc "Generation as a storage key on the one tree: (branch, path, gen) -> node")
+  (status planned)
+  (details
+
+   (subsection geometry
+    (doc "Three overlaid trees; apps see a 2D slice")
+    (status planned)
+    (details
+     (doc (|
+          THREE OVERLAID TREES. The habitat's storage geometry is
+          three parent-pointer structures, and every value
+          resolution is a walk up one of them:
+
+            1. PATH-SPACE. Within a branch the tree is rooted:
+               b.<branch>.* for code lenses, data.u.<user>.* /
+               data.shared.* for data (one-tree.tree-model).
+
+            2. BRANCH LINEAGE. Branches form a tree via parent
+               pointers (system/main -> admin/personal -> admin/dev),
+               with merges as occasional DAG stitches
+               (branching.borg). Lookup walks up the branch chain
+               until it finds the newest write of a path.
+
+            3. GENERATION. THIS CHAPTER ADDS THE THIRD. Within one
+               branch, writes form a gen chain: gen 1 -> gen 2 ->
+               gen 3 ... The chain is linear UNTIL undo-and-rewrite
+               walks the head pointer back and writes again, at
+               which point the gen tree grows a sibling. Redo and
+               alternate timelines are properties of this tree, not
+               of any undo manager.
+
+          A BRANCH IS A USER-NAMED FORK IN PATH-SPACE; A GEN-FORK IS
+          AN ANONYMOUS FORK IN TIME-SPACE. Same mechanism at two
+          granularities: branches are expensive, meaningful,
+          user-named (fork for an experiment); gens are free,
+          continuous, system-named (every write). This self-
+          similarity is why ONE three-way tree-diff algorithm
+          serves branch merge, gen-axis diff (undo inspection), and
+          local-first sync (local-first.sync's manifest exchange is
+          the same diff with a second site).
+
+          APPS SEE A 2D SLICE. Every read in the system defaults to
+          (current branch or ancestor, path, head gen). No package
+          code (libs/*) changes: prim signatures stay
+          (get 'note id); the gen axis is opt-in via new optional
+          args and new prims. "Present day" is a read policy, not a
+          storage property.
+
+          DATA PATHS ARE BRANCH-DEGENERATE. data.u.<user>.* is
+          branch-free per the one-tree /data DECISION, so for data
+          the branch coordinate collapses and gen is the only real
+          second axis. If placement-B (per-branch versioned data)
+          ever reopens per its recorded trigger, data becomes
+          genuinely 3D and this same storage serves it — no second
+          versioning scheme needed.
+     |))))
+
+   (subsection versioned-leaves
+    (doc "The storage change: tree leaves keyed (branch, path, gen); writes are append")
+    (status planned)
+    (implements image/lib/tree_store.ml migrations/018_tree_versions.sql)
+    (details
+     (doc (|
+          NEW TABLE tree_versions, keyed (branch_id, path, gen):
+
+            gen is the tree-scoped (branch-scoped for b.* paths;
+            tree-scoped for branch-free data.* paths) monotonic
+            counter ALREADY COUNTED by branch_generations (migration
+            017) and the tree_generations variant proposed with it.
+            017 was built as a cache-invalidation signal for
+            remote-eval.caching; this chapter promotes the counter
+            to the storage key — same counter, second use, exactly
+            as local-first.sync's last-synced merge base is the
+            same counter's third use.
+
+          WRITES ARE APPEND. update and delete never rewrite a row:
+            - update writes (branch, path, gen+1, new body).
+            - delete writes (branch, path, gen+1, TOMBSTONE) — a
+              tombstone row is the marker, never a DELETE. This is
+              what makes undo-of-delete and audit-by-state-diff
+              free.
+            - create is identical (the first version row).
+          Structural sharing falls out of append-only without
+          content addressing: a write touches exactly the changed
+          paths; every other path's newest row is untouched. The
+          tree's nodes are our chunk granularity — habitat data is
+          grain-sized (notes outlines, todos, defs are KB-scale),
+          so per-node sharing is near-optimal where Dolt needs
+          chunk-level sharing inside large tables. (Hedge recorded:
+          a 50MB table-shaped datum updated one field at a time
+          pays O(node) per write; the culture says data is grain-
+          sized, and content addressing — one-tree.tree-model
+          "content-addressing later" — is the physical dedup answer
+          if that changes. Hash-chained gens (tamper evidence) are
+          NOT required: the image writer is trusted; this chapter
+          does not build a Merkle-DAG, it uses hash comparison for
+          diff, not integrity.)
+
+          READ PATHS. Leaves may carry precomputed subtree hashes
+          (one-tree.tree-model: hash over canonical body, root
+          hashes compose) so tree-diff across gens is hash-first:
+          equal hash = prune, differ = walk. This is the existing
+          subtree-hash plan with a second consumer (the first was
+          branching merge; the third is local-first sync).
+
+          MIRROR PRESERVATION — the bl-blast-radius contract
+          applies in full: a scaffolding-table writer and a tree
+          writer see IDENTICAL history, INCLUDING writes made
+          through the other path and from AFTER v1 shipped, or the
+          swap corrupts merge bases. The triggers must keep the
+          tables and the versioned tree in lockstep both ways, as
+          migration 009 established and this chapter extends into
+          the time dimension: table UPDATE/DELETE both write a new
+          version row AND keep the head-shaped mirror current.
+     |))))
+
+   (subsection migration-018
+    (doc "The 018_tree_versions.sql schema contract (design, plan pass)")
+    (status planned)
+    (implements migrations/018_tree_versions.sql)
+    (details
+     (doc (|
+          THIS IS THE PLAN-PASS SCHEMA CONTRACT for
+          migrations/018_tree_versions.sql — the file does not
+          exist yet; 5.0 designs it here so 5.1 (make
+          versioned-leaves) is deterministic, mirroring how 4.0
+          pinned 015_jobs.sql in borge/jobs.borg.
+
+          TABLE tree_versions — append-only history, one row per
+          (branch_id, path, gen) write:
+
+            branch_id  uuid        NULL for branch-free data.* paths
+                                   (otherwise the owning branch);
+            path       ltree NOT NULL   (same encoding as tree_nodes:
+                                   b.<hex(branch_id)>.fn.<label> /
+                                   data.<type_name>.<id>);
+            gen        bigint NOT NULL  (the gen counter — see below
+                                   for the per-path-class source);
+            kind       text NOT NULL    (fn | type | route | datum);
+            type_name  text             (datum only);
+            body       jsonb NOT NULL   (the node envelope {v,kind,path,
+                                   type,body,author,doc,hash};
+                                   TOMBSTONE is a reserved body marker
+                                   for delete — see below);
+            hash       text NOT NULL    (sha256 over canonical body;
+                                   precomputed subtree-hash consumer);
+            author     text NOT NULL;
+            created_at timestamptz NOT NULL DEFAULT now()   (write
+                                   time; immutable per version row).
+            PK (branch_id, path, gen)   — unique per write. branch_id
+              NULL allowed only on data.* paths; enforce with a
+              CHECK that branch_id IS NOT NULL when path <@ 'b.*'.
+
+          COVERING INDEX for head/projection reads:
+              (branch_id, path, gen DESC)
+            A b-tree range scan returns the newest gen per path in
+            one pass (projections subsection). No join needed at
+            habitat scale.
+
+          GEN COUNTER SOURCE, per path class (reads-as-of-gen):
+            - code paths (b.<branch>.*): branch_generations
+              (migration 017) with its per-branch bump discipline
+              IS the head counter; each new version row takes
+              branch_generations.generation+1 and the counter
+              bumps. The 017 triggers already fire on the
+              scaffolding writes bound to these paths.
+            - data.* paths: branch-free, so a TREE-WIDE
+              tree_generations (bigint) row is the head; every
+              data write takes gen+1 (the 017 root-row bump
+              discipline generalized to one row). Deliberately NOT
+              per-path — under (branch_id, path, gen) the per-path
+              order is implicit; the global counter keeps undo /
+              diff ordering tree-wide and matches the
+              local-first.sync merge clock.
+
+          TOMBSTONE: delete writes (branch_id, path, gen+1, body =
+          {v:1,kind,path,type,body:null,author,doc:null,hash:<hash of
+          tombstone marker>}) — a row, never a DELETE. A path is
+          ALIVE at gen when its newest row at or below head is NOT a
+          tombstone. A tombstone row IS the head-shaped mirror's
+          delete signal (mirror rows DROP; the history row remains).
+
+          SUBTREE HASH: hash is over the canonical body (as today);
+          the chapter's content-addressing note stays deferred — this
+          column is the diff-first-prune comparison key, not a Merkle
+          chain.
+
+          PARTITIONING for gc (gc subsection): tree_versions is
+          declared RANGE PARTITIONED BY list(gen/1000) with lazy
+          partition creation; DROP PARTITION is the retention path.
+          The 018 migration creates the table + base partition only;
+          gen-window partitions are created by the retention worker.
+
+          ALL ADDITIVE per migrations.borg additive-only + image-
+          applied-by-image discipline; 018 applies idempotently and
+          registers in schema_migrations. Nothing reads this table
+          until Phase 2 of coexistence-plan flips the PP_* flag; the
+          scaffolding mirrors + tree_nodes remain the source of truth
+          through Phase 1 dual-write shadow.
+     |))))
+
+   (subsection projections
+    (doc "Head-shaped scaffolding stays bit-identical: views gain one predicate; mirrors gain one filter")
+    (status planned)
+    (implements image/lib/prims_db.ml image/lib/crud.ml migrations/009_tree.sql)
+    (details
+     (doc (|
+          THE VIEWS ARE THE API. Reader concentration from the
+          projection era is what this change rides down:
+
+            - tree_data_rows and friends gain one predicate:
+              greatest (branch, path) row with gen <= head, and
+              no tombstone as newest. A b-tree range scan
+              ((branch_id, path, gen DESC) covering index) —
+              one index range scan per read, no join, well inside
+              the image.borg per-page DB-cost ceilings at habitat
+              scale.
+
+            - The scaffolding tables (function_defs, type_defs,
+              view_bindings, data_rows) STAY HEAD-SHAPED. Gen
+              history lives inside the versioned tree only; the
+              mirrors reflect head, as they do today. Every
+              residual reader, fork-copy path, admin page, and
+              /data browser sees a bit-identical HEAD. Zero package
+              code changes.
+
+            - WRITE-then-READ within one request must read its own
+              write — crud.ml's in-transaction reads already run on
+              the bound connection (Io_lwt.Db.current_conn); the
+              head pointer for any in-flight read is the
+              transaction's gen, so this property is inherited from
+              the existing transaction discipline, not re-derived.
+
+            - The mirror triggers (009 both directions, 020 AST
+              projection) gain ONE further condition: head-shaped
+              targets refresh only when the versioned write is the
+              new head. Append-side, each write is by construction
+              the new head of its (branch, path), so the filter is
+              trivial; the condition matters for future restore/
+              head-move operations.
+
+          WHAT LEAVES: the 012 code_history triggers and table.
+          Their job (before-images of code rows at writer-txn
+          fidelity) is subsumed: a history read = read the version
+          row at gen-1. code-history and code-diff prims KEEP THEIR
+          SIGNATURES and re-implement over tree_versions (see
+          reads-as-of-gen). The 012 table itself: read-only
+          archival during phase 2; dropped in a later migration
+          once equivalence is verified (one verifier script:
+          sample N names, compare 012 rows' bodies to tree_versions
+          bodies at matching changed_at).
+     |))))
+
+   (subsection reads-as-of-gen
+    (doc "The new prim surface: optional gen coordinate + four new prims")
+    (status planned)
+    (implements image/lib/prims_db.ml image/lib/primitives.ml)
+    (details
+     (doc (|
+          EXISTING PRIMS GAIN A FALLBACK COORDINATE, NOT A REQUIRED
+          ONE. get / rows / tree_get take an optional trailing
+          :gen N argument; omitted means head. No existing call
+          site in libs/* or the kernel changes meaning.
+
+          NEW PRIMS (small surface, all ordinary prim_fns):
+
+            (gen-now)                       -> current tree gen
+            (gen-read path gen)             -> node body at gen,
+                                               crossing the same
+                                               branch lens rules as
+                                               head reads
+            (gen-diff path gen-a gen-b)     -> node-granular diff:
+                                               hashes first, walk
+                                               on mismatch (same
+                                               algorithm branching
+                                               merge + local-first
+                                               sync use)
+            (undo path) / (undo path n)     -> restore the value at
+                                               head-n as a NEW
+                                               write at head+1.
+                                               Restore-by-write,
+                                               not head-pointer
+                                               manipulation: the
+                                               restore itself is
+                                               versioned, so undo is
+                                               lossless by the same
+                                               argument as
+                                               restore-by-redefine
+                                               in code-history
+                                               (branching.borg).
+                                               Redo = (undo path)
+                                               again on the
+                                               restored state via
+                                               the gen chain; no
+                                               separate redo stack.
+
+          WHERE THE HEAD POINTER IS, per path class:
+            - b.<branch>.* code paths: per-branch — the
+              branch_generations counter IS the head. Undo on code
+              paths is branch-local: read (branch, path, gen-1),
+              write to (branch, path, gen+1) on that branch.
+            - data.* paths: branch-free, so the head pointer is
+              a tree-wide data generation (the 017 migration's
+              root-row bump discipline generalizes to one
+              tree_generations row). Undo on data paths is
+              per-path: it moves no global pointer, only appends a
+              restored value for that one path. NOTHING about
+              multi-user safety changes: Andrea's undo of her
+              note is an append to (data.u.andrea.note.<id>, gen+1);
+              Beth's head is untouched because the head is a
+              counter, not per-path state.
+
+          EVAL-SCOPE UNDO IS NOT A PRIM. "Undo my session's last N
+          writes" is the habitat-events stream (event journal of
+          eval forms) correlated with paths, then a sequence of
+          per-path undos — rerun bookkeeping, not storage. This
+          chapter deliberately does NOT build cross-path
+          transaction-undo; habitat-events + per-path (undo path)
+          compose it when both exist.
+
+          COST ACCOUNTING (agent guidance): the first
+          gen-as-of read pays one index range scan; the
+          authoritative cost playbook applies — gen-diff of large
+          subtrees belongs in the read tool you call, not pasted
+          wholesale into eval context.
+     |))))
+
+   (subsection consumers
+    (doc "What this subsumes or feeds, in dependency order")
+    (status planned)
+    (details
+     (doc (|
+          SUBSUMES: branching.code-history (012). The separate
+          before-image trigger table exists because the tree did
+          not keep history. Now it does. code-history / code-diff /
+          code-restore become reads of the tree; restore gains a
+          real prim (code-restore = gen-read + define, exactly the
+          lossless-redefine pattern the 012 design documented by
+          hand).
+
+          FIRST APP CONSUMER: NOTES UNDO. The motivating case
+          (design discussion 2026-09). Notes has ONE write funnel —
+          every mutation ends at notes/doc/upsert over pure outline
+          transforms — so app-level undo needs NO per-app storage:
+            - notes/doc/upsert-in records nothing; the substrate
+              keeps the before-image.
+            - (undo (node-path 'note id)) in place of any history
+              journal; the notes package keeps at most a UI-facing
+              "undo the last change to THIS note" button wired to
+              one per-path call.
+            - Leaf-vs-whole is free: undo of one outline NODE and
+              undo of the note SUBTREE are the same prim at two
+              path granularities, because the outline is a subtree
+              of tree leaves.
+          The earlier candidate designs (JSON blob notes_history
+          table; h.* prefix spine of copied subtrees) are SUPERSEDED
+          and recorded here only so a future reader does not re-
+          derive them — both were copy-based schemes working around
+          a substrate that discarded before-images.
+
+          FEEDS: local-first.sync (planned). Sync's merge base was
+          already defined as (branch, generation) snapshot pins;
+          with gen as a storage key, "common ancestor at pin" is a
+          READ, not a snapshot artifact. The 017 counter's three
+          uses — cache invalidation, merge base, and now storage
+          key — are one counter. local-first's data-sync section
+          gains one companion line: sync reconcile reads the data
+          gen chain; it does not version data per-branch (that
+          non-goal stands).
+
+          FEEDS: habitat-events (planned note
+          garden/design?slug=habitat-events-borg). Orthogonal by
+          design: events answer OPERATIONS questions (who evaluated
+          what form, when); tree-time answers STATE questions (what
+          did the world look like). The two join on path+gen: an
+          event row may reference the gen it wrote, making the
+          audit trail (scoreboard: agent audit PARTIAL -> agent-
+          readable by construction) navigable from event to state.
+          "Stream not tree" stays right for events; this chapter is
+          the tree half of the full Beads-equivalent picture:
+          events for op-log, tree-time for versioned state, forge
+          for intent — one merge algorithm across all three.
+
+          SCOREBOARD EFFECT (beads-audit-gap): data state history
+          moves NO -> YES-STRUCTURAL; time travel moves NO -> YES
+          (the degenerate gen read).
+     |))))
+
+   (subsection gc
+    (doc "Retention: gen-range partitions, jobs-runner rollup, policy as habitat data")
+    (status planned)
+    (implements image/lib/jobs.ml)
+    (details
+     (doc (|
+          NO NEW SUBSYSTEM. Dolt ships dolt_gc because it owns its
+          chunk store; here Postgres owns vacuum. GC is three
+          existing pieces composed:
+
+            - PARTITIONING: tree_versions is partitioned by gen
+              range windows (e.g. 1000-gen ranges, created lazily).
+              Physical removal is DROP PARTITION — instant, no
+              vacuum scan. PG-native; the chunk-GC problem Dolt
+              engineered against does not exist for a partitioned
+              table.
+
+            - RETENTION POLICY IS HABITAT DATA. Policy rows declare
+              per-path-class retention (code paths: keep all
+              history, it's small and it IS the audit trail; data
+              paths: per-type policy, default keep-everything-until-
+              a-policy-exists). habitat-events' "retention is
+              habitat data (policy rows + rollup job on the
+              existing jobs runner), never ad-hoc deletion under
+              disk pressure" applies verbatim; the jobs runner
+              (migration 015) executes.
+
+            - ROLLUP, NOT SILENT LOSS. Before a window is dropped,
+              surviving state collapses to a CHECKPOINT row at the
+              window's boundary gen: the newest version of each
+              path in the window is rewritten at the boundary, so
+              reads as of ancient gens still resolve (to the
+              checkpointed state) and head reads never notice.
+              "Nobody gets everything forever — the audit claim
+              survives at coarser grain."
+
+          ORDERING: GC lands AFTER reads-as-of-gen and the
+          consumers bed in. The first long pole is growth FROM
+          code paths, which are tiny; habitat scale makes early
+          compaction premature. The retention job is a TODO until
+          a path class outgrows its welcome — measured via
+          /timing-style storage accounting, not vibes.
+     |))))
+
+   (subsection coexistence-plan
+    (doc "Phased, additive-only, flag-guarded; nothing existing is rewritten in place")
+    (status planned)
+    (details
+     (doc (|
+          PHASE 0 (this chapter): spec. No code.
+
+          PHASE 1 — DUAL-WRITE SHADOW. New tree_versions table;
+          write path appends version rows IN ADDITION to today's
+          tree_nodes writes; a verify script compares versioned
+          reads at head against today's reads across a sample
+          corpus (the tree_verify precedent: sampling with
+          env-controlled verbosity, never full-scan). Nothing
+          reads the new table yet. This phase proves INSERT-only
+          wire cost on a live habitat without consequence.
+
+          PHASE 2 — READ SWITCH, FLAG-GUARDED. Reads gain the gen
+          filter behind an env flag (the PP_TREE_* precedent:
+          default off, exercise on dev, then flip). Head reads
+          through the versioned table must return BIT-IDENTICAL
+          results to the scaffolding mirrors — the projections
+          subsection's equivalence verifier is the gate.
+          code_history triggers keep firing until equivalence
+          holds continuously on the live habitat for a soak
+          window.
+
+          PHASE 3 — CONSUMERS LIGHT UP. code-history / code-diff
+          re-implemented over tree_versions (signatures unchanged);
+          undo + gen-read + gen-diff prims land; notes undo UI
+          ships as the proving app; 012 table to read-only
+          archival, then drop.
+
+          PHASE 4 — GC + CHAPTER COMPLETE. Partitioning + retention
+          worker per gc subsection. This chapter's status moves to
+          implemented when the retention worker runs on the jobs
+          runner.
+
+          ALL MIGRATIONS ADDITIVE per conventions (new table, new
+          views, new columns — never rewrite payloads; 017's WHERE
+          NOT EXISTS idempotence style). Downstream blast radius,
+          audited in design: libs/* zero changes; scaffolding
+          readers zero changes; habitat-events unaffected (append-
+          only stream either way); local-first gains a read
+          enhancement (merge base as read), no redesign.
+     |))))
+
+   (subsection non-goals
+    (doc "What tree-time is NOT")
+    (status planned)
+    (details
+     (doc (|
+          - NOT branching data. The one-tree /data DECISION
+            (single-head, user-owned, SPATIAL not TEMPORAL) stands
+            at the CONCEPT level; this chapter adds TEMPORAL
+            STORAGE-KEYS invisible to users — one head per path,
+            many retained gens below it. The DECISION's reopen
+            trigger (a user forking their own data to experiment
+            and merge back) is a distinct feature; this chapter is
+            compatible with it but does NOT build or reopen it.
+
+          - NOT a Merkle-DAG / tamper-evident ledger. Hash-chained
+            gens exist only if a future untrusted-writer scenario
+            demands them (local-first's untrusted-client punt).
+            Hashes here serve diff, not integrity.
+
+          - NOT the habitat-events stream, and NOT replaced by it.
+            Operations-audit and state-history answer different
+            questions; one emissions table and one versioned tree.
+
+          - NOT eval-scope or cross-path transaction undo as a
+            storage primitive. (undo path) is per-path; session
+            scope composes from habitat-events correlation later.
+
+          - NOT a rewrite of libs/*, scaffolding tables, or the
+            prim ABI. Optional args only; head-shape preserved;
+            existing call sites mean exactly what they meant.
+
+          - NOT content addressing. Physical dedup of identical
+            bodies is deferred to one-tree.tree-model's existing
+            "content-addressing later" note; append-only gives the
+            structural sharing this design needs without it.
+
+          - NOT rename-tracking. Path is part of the key; a rename
+            is delete+create in history space. Same posture as git
+            (detection over tracking); the blast-radius walking
+            problem for historical names is accepted.
+     |))))
+  )))
