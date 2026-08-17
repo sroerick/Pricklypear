@@ -182,6 +182,7 @@ let write_db_prims = [
   "with-step"; "__step__";  (* checkpoint write; composes with Txn for exactly-once *)
   "schedule"; "unschedule";  (* borge/jobs.borg schedules WriteDb *)
   "undo";  (* borge/tree-time.borg reads-as-of-gen restore-by-write WriteDb *)
+  "code-restore";  (* borge/tree-time.borg consumers code-restore WriteDb *)
 ]
 
 let read_db_prims = [

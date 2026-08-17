@@ -664,10 +664,75 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
                     (Pricklypear_lisp.Ast.Prim_error
                        ("undo", "need path [, n]", "bad-args")))));
 
-  (* storage.media Lisp surface — meta/list/delete + tiny put.
-     Bulk Agent_tools.agent pushes use POST /api/media (5 MiB), not eval. *)
-  Prims_media.register t tbl;
-  Prims_net.register t tbl;
+  (* (code-restore name [n] [owner/branch]) -> restore a code node (fn/type/
+     route) at head-n as a NEW write at head+1 (restore-by-write). The
+     code-path analogue of (undo) (which is datum-path only): gen-read + write
+     the same value back via the code write surface (upsert_fn / upsert_type /
+     upsert_route), so the reverse mirror re-populates function_defs /
+     type_defs / view_bindings and the restore itself is versioned + redoable
+     (the restored value becomes the new head). n default 1 = the state just
+     before the latest change. Clean error strings (never a crash). WriteDb
+     cap. Consumers: tree-time.consumers — code-restore = gen-read + define. *)
+  register_crud "code-restore"
+    (fun args ->
+      let resolve_branch_id ref_opt =
+        match ref_opt with
+        | None -> Store.current_branch_id t.store
+        | Some branch_ref ->
+            let owner, name =
+              match String.split_on_char '/' branch_ref with
+              | [ o; n ] when o <> "" && n <> "" -> (o, n)
+              | _ -> ("", branch_ref)
+            in
+            (match Store.lookup_branch_id_by_name t.store ~owner ~name with
+             | Some id -> id
+             | None -> "")
+      in
+      let err = "code-restore: need name [n] [owner/branch]" in
+      let bad_branch ref_opt bid =
+        match ref_opt with
+        | None -> (Pricklypear_lisp.Ast.VStr err)
+        | Some branch_ref ->
+            (Pricklypear_lisp.Ast.VStr
+               (Printf.sprintf "code-restore: no such branch: %s" branch_ref))
+      in
+      let default_author = t.manifest.username in
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr name ] ->
+          let bid = resolve_branch_id None in
+          if bid = "" then bad_branch None bid
+          else
+            (Pricklypear_lisp.Ast.VStr
+               (Store.code_restore t.store ~branch_id:bid ~name
+                  ~author:default_author ()))
+      | [ Pricklypear_lisp.Ast.VStr name; Pricklypear_lisp.Ast.VInt n64 ] ->
+          let bid = resolve_branch_id None in
+          if bid = "" then bad_branch None bid
+          else
+            (Pricklypear_lisp.Ast.VStr
+               (Store.code_restore t.store ~branch_id:bid ~name
+                  ~author:default_author ~n:(Int64.to_int n64) ()))
+      | [ Pricklypear_lisp.Ast.VStr name; Pricklypear_lisp.Ast.VStr branch_ref
+        ] ->
+          let bid = resolve_branch_id (Some branch_ref) in
+          if bid = "" then bad_branch (Some branch_ref) bid
+          else
+            (Pricklypear_lisp.Ast.VStr
+               (Store.code_restore t.store ~branch_id:bid ~name
+                  ~author:default_author ()))
+      | [ Pricklypear_lisp.Ast.VStr name; Pricklypear_lisp.Ast.VInt n64
+        ; Pricklypear_lisp.Ast.VStr branch_ref
+        ] ->
+          let bid = resolve_branch_id (Some branch_ref) in
+          if bid = "" then bad_branch (Some branch_ref) bid
+          else
+            (Pricklypear_lisp.Ast.VStr
+               (Store.code_restore t.store ~branch_id:bid ~name
+                  ~author:default_author ~n:(Int64.to_int n64) ()))
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error
+                    (Pricklypear_lisp.Ast.Prim_error
+                       ("code-restore", err, "bad-args")))));
 
   (* (list-usernames) -> VList of VStr; any authenticated user.
      Usernames are public identifiers on the box (multi-user.chat DMs). *)
