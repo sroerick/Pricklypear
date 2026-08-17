@@ -40,6 +40,14 @@ type t = {
      eval path, so a Remote placement raises rather than silently
      running locally (which would break transaction correctness). *)
   remote_eval : (string -> value) option;
+  (* OPTIONAL local lens substrate (borge/local-first.borg local-
+     substrate): a materialized lens root + ancestry chain, used as the
+     OFFLINE-FIRST def source. When set, [fetch_def] consults it before
+     proxying [function-source], so defs in the replication unit resolve
+     locally (the client evaluates against the local substrate; the
+     server is only the merge/index authority). None = no lens wired,
+     defs always proxy. *)
+  lens_lookup : (string -> string option) option;
 }
 
 let value_to_json = Prims_pure.value_to_json
@@ -161,11 +169,17 @@ let register_proxy_prims (t : t) : unit =
     image/lib/prims_db.ml). Returns Some source when the server has a
     def for [name], None when it does not. *)
 let fetch_def (t : t) (name : string) : string option =
-  match t.transport "function-source" [ VStr name ] with
-  | Ok (VStr src) when String.trim src <> "" -> Some src
-  | Ok (VStr _) -> None
-  | Ok _ -> None
-  | Error _ -> None
+  (match t.lens_lookup with
+   | None -> None
+   | Some lookup -> lookup name)
+  |> (function
+      | Some src -> Some src
+      | None -> (
+          match t.transport "function-source" [ VStr name ] with
+          | Ok (VStr src) when String.trim src <> "" -> Some src
+          | Ok (VStr _) -> None
+          | Ok _ -> None
+          | Error _ -> None))
 
 (** Materialize a def into the client env: parse + eval the fetched
     source (a toplevel (define …)) under the proxy rim in [env]. The
@@ -259,7 +273,8 @@ let eval (t : t) (src : string) : value =
     and pure. Pass [~remote_eval] (a whole-expression POST /api/eval) to
     enable hybrid placement; without it a Remote placement (e.g. a
     (with-transaction …)) raises rather than silently running locally. *)
-let make ~(transport : transport) ?(remote_eval : (string -> value) option) () : t =
+let make ~(transport : transport) ?(remote_eval : (string -> value) option)
+    ?(lens_lookup : (string -> string option) option) () : t =
   let t =
     {
       env = Env.create ();
@@ -268,6 +283,7 @@ let make ~(transport : transport) ?(remote_eval : (string -> value) option) () :
       def_cache = Def_cache.create ~transport ();
       pure_prims = [];
       remote_eval;
+      lens_lookup;
     }
   in
   register_pure_prims t;
