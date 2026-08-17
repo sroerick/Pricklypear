@@ -227,20 +227,39 @@ let put
     with exn ->
       (Error ("store failed: " ^ Printexc.to_string exn)))
 
-let get_meta (store : Store.t) ~(id : string) : meta option =
+(** Visibility confinement (BORGE-1785695911): a blob readable by [actor]
+    iff [actor] authored it or [is_admin]. [None] performs no confinement
+    (kernel callers that resolved identity upstream). Applied at the SQL
+    layer so list/get/delete agree on one predicate. *)
+let visible_sql ~(is_admin : bool) ~(actor_param : int) : string =
+  if is_admin then "TRUE"
+  else Printf.sprintf "author = $%d" actor_param
+
+let get_meta (store : Store.t) ~(id : string)
+  ?(visible_to : (string * bool) option) () : meta option =
   match Io_lwt.Db.current_conn store with
   | None -> None
   | Some conn ->
-      let sql =
-        "SELECT id::text, author, content_type, \
-         NULLIF(filename, ''), byte_size::text, sha256, meta::text, \
-         created_at::text \
-         FROM media_blobs WHERE id = $1::uuid"
+      let sql, params =
+        match visible_to with
+        | Some (actor, is_admin) ->
+            ( "SELECT id::text, author, content_type, \
+               NULLIF(filename, ''), byte_size::text, sha256, meta::text, \
+               created_at::text \
+               FROM media_blobs WHERE id = $1::uuid AND "
+              ^ visible_sql ~is_admin ~actor_param:2
+            , [ Pgx.Value.of_string id; Pgx.Value.of_string actor ] )
+        | None ->
+            ( "SELECT id::text, author, content_type, \
+               NULLIF(filename, ''), byte_size::text, sha256, meta::text, \
+               created_at::text \
+               FROM media_blobs WHERE id = $1::uuid"
+            , [ Pgx.Value.of_string id ] )
       in
       (try
       let rows =
             Io_lwt.Db.execute conn
-              ~params:[ Pgx.Value.of_string id ]
+              ~params
               sql
           in
           match rows with
@@ -250,20 +269,30 @@ let get_meta (store : Store.t) ~(id : string) : meta option =
       None)
 
 let get_bytes (store : Store.t) ~(id : string)
-  : (meta * string) option =
+  ?(visible_to : (string * bool) option) () : (meta * string) option =
   match Io_lwt.Db.current_conn store with
   | None -> None
   | Some conn ->
-      let sql =
-        "SELECT id::text, author, content_type, \
-         NULLIF(filename, ''), byte_size::text, sha256, meta::text, \
-         created_at::text, data \
-         FROM media_blobs WHERE id = $1::uuid"
+      let sql, params =
+        match visible_to with
+        | Some (actor, is_admin) ->
+            ( "SELECT id::text, author, content_type, \
+               NULLIF(filename, ''), byte_size::text, sha256, meta::text, \
+               created_at::text, data \
+               FROM media_blobs WHERE id = $1::uuid AND "
+              ^ visible_sql ~is_admin ~actor_param:2
+            , [ Pgx.Value.of_string id; Pgx.Value.of_string actor ] )
+        | None ->
+            ( "SELECT id::text, author, content_type, \
+               NULLIF(filename, ''), byte_size::text, sha256, meta::text, \
+               created_at::text, data \
+               FROM media_blobs WHERE id = $1::uuid"
+            , [ Pgx.Value.of_string id ] )
       in
       (try
       let rows =
             Io_lwt.Db.execute conn
-              ~params:[ Pgx.Value.of_string id ]
+              ~params
               sql
           in
           match rows with
@@ -320,7 +349,7 @@ let delete
     ~(actor : string)
     ~(is_admin : bool)
   : ([ `Ok of string | `Not_found | `Forbidden ], string) result =
-  let meta = get_meta store ~id in
+  let meta = get_meta store ~id () in
   match meta with
   | None -> (Ok `Not_found)
   | Some m ->

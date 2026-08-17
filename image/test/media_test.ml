@@ -49,6 +49,15 @@ let test_limits () =
   check int "eval 256KiB" (256 * 1024)
     Pricklypear_image_lib.Media.max_eval_put_bytes
 
+(** BORGE-1785695911: visibility confinement SQL — non-admin actor is
+    confined to own blobs; admin (or kernel caller, visible_to=None) sees
+    all. The SQL fragment is the single predicate list/get/delete share. *)
+let test_visible_sql () =
+  check string "non-admin confines" "author = $2"
+    (Pricklypear_image_lib.Media.visible_sql ~is_admin:false ~actor_param:2);
+  check string "admin unconstrained" "TRUE"
+    (Pricklypear_image_lib.Media.visible_sql ~is_admin:true ~actor_param:2)
+
 let test_multipart_boundary () =
   let open Pricklypear_image_lib.Http_media in
   check (option string) "quoted"
@@ -98,6 +107,8 @@ let () =
         ] )
     ; ( "limits"
       , [ test_case "byte caps" `Quick test_limits ] )
+    ; ( "visibility"
+      , [ test_case "sql confinement" `Quick test_visible_sql ] )
     ; ( "multipart"
       , [ test_case "boundary" `Quick test_multipart_boundary
         ; test_case "parse file part" `Quick test_multipart_parse
