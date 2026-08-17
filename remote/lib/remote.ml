@@ -27,9 +27,10 @@ type t = {
   env : Ast.env;
   local_prims : Eval.prim_table;
   transport : transport;
-  (* functions already materialized locally, to bound how often we
-     ask the server on a miss (and to break infinite retry). *)
-  mutable loaded : (string, unit) Hashtbl.t;
+  (* definitions materialized locally, keyed (branch, generation): the
+     def cache (caching subsection). Bounds server fetches on a miss and
+     invalidates on generation change / branch switch. *)
+  def_cache : Def_cache.t;
   (* PURE prim names bound locally (via [add_prim]): the placer treats
      these as NOT crossing the wire, so they do not count toward the
      prim-density heuristic. Pure compute stays local regardless. *)
@@ -148,7 +149,12 @@ let register_proxy_prims (t : t) : unit =
   List.iter (bind_proxy_prim t)
     [ "get"; "create"; "update"; "delete"; "rows"
     ; "function-source"; "function-doc"; "apropos"; "apropos-docs"
-    ; "list-bindings"; "whoami"; "current-author"; "render-html" ]
+    ; "list-bindings"; "whoami"; "current-author"; "render-html"
+      (* def-cache invalidation coordinates (caching subsection):
+         current-branch (branch namespace) + gen-now (migration-017
+         branch_generations = the tree-time gen coordinate — one
+         counter, one namespace). Both are proxyable read prims. *)
+    ; "current-branch"; "gen-now" ]
 
 (** Fetch the stored source for [name] by proxying the [function-source]
     read prim (registered on the image as a plain, proxyable prim — see
@@ -165,15 +171,31 @@ let fetch_def (t : t) (name : string) : string option =
     source (a toplevel (define …)) under the proxy rim in [env]. The
     def body may reference prims — those proxy/run locally on call,
     not at define time. *)
-let load_def (t : t) (name : string) (src : string) : unit =
-  Proxy_rim.run ~local_prims:t.local_prims ~transport:t.transport (fun () ->
-      ignore (Eval.read_eval_all_direct ~prims:t.local_prims t.env src));
-  Hashtbl.replace t.loaded name ()
+let load_def (t : t) (name : string) (src : string) : value =
+  let v =
+    Proxy_rim.run ~local_prims:t.local_prims ~transport:t.transport (fun () ->
+        Eval.read_eval_all_direct ~prims:t.local_prims t.env src)
+  in
+  Def_cache.store t.def_cache name v;
+  v
 
 (** Lazy env miss inlined into [eval_local]: on [Unbound_var name],
     fetch the def source and materialize it, then retry the expression.
     Bounds retries per name so a genuinely unbound name fails cleanly. *)
 let eval_local (t : t) (src : string) : value =
+  (* ONE CHEAP CACHE-CHECK PER EVAL (caching subsection). Once the cache
+     is live (a def has been materialized), confirm the (branch,
+     generation) coordinate is still current — a single HEAD-ish round
+     trip (current-branch + gen-now), never an N-way hash diff. If a
+     generation bump or branch switch makes any loaded def stale, evict
+     its ENV binding so the next reference re-fetches it (the writer is
+     the source of truth; the client cache never is). A def-free /
+     pure-compute session is skipped entirely (nothing cached, zero
+     round trips). *)
+  (if Def_cache.is_active t.def_cache then (
+     let stale = Def_cache.check t.def_cache in
+     List.iter (fun n -> Hashtbl.remove t.env.bindings n) stale)
+   else ());
   let seen = Hashtbl.create 4 in
   let rec go () =
     try
@@ -184,13 +206,26 @@ let eval_local (t : t) (src : string) : value =
         if Hashtbl.mem seen name then raise (Interp_error (Unbound_var name))
         else (
           Hashtbl.replace seen name ();
-          if Hashtbl.mem t.loaded name then raise (Interp_error (Unbound_var name))
-          else
-            match fetch_def t name with
-            | Some def_src ->
-                load_def t name def_src;
-                go ()
-            | None -> raise (Interp_error (Unbound_var name)))
+          (* one cheap cache-check round trip before re-fetching: a
+             branch switch invalidates the whole cache and a generation
+             bump drops stale defs, so a def that changed on the server
+             is re-fetched on next use. *)
+          let stale = Def_cache.check t.def_cache in
+          List.iter (fun n -> Hashtbl.remove t.env.bindings n) stale;
+          (match Def_cache.lookup t.def_cache name with
+           | Some _ ->
+               (* still materialized at the current generation: retry the
+                  expression (the env already binds the name; if it does not
+                  the [seen] guard below re-raises rather than looping). *)
+               go ()
+           | None -> (
+               match fetch_def t name with
+               | Some def_src ->
+                   ignore (load_def t name def_src);
+                   go ()
+               | None ->
+                   Def_cache.remove t.def_cache name;
+                   raise (Interp_error (Unbound_var name)))))
   in
   go ()
 
@@ -230,7 +265,7 @@ let make ~(transport : transport) ?(remote_eval : (string -> value) option) () :
       env = Env.create ();
       local_prims = Eval.make_prim_table ();
       transport;
-      loaded = Hashtbl.create 16;
+      def_cache = Def_cache.create ~transport ();
       pure_prims = [];
       remote_eval;
     }

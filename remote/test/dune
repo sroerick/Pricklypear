@@ -4,6 +4,11 @@
  (libraries pricklypear-remote.lib pricklypear-lisp alcotest unix))
 
 (test
+ (name def_cache_test)
+ (modules def_cache_test)
+ (libraries pricklypear-remote.lib pricklypear-lisp alcotest unix))
+
+(test
  (name placer_test)
  (modules placer_test)
  (libraries pricklypear-remote.lib pricklypear-lisp alcotest str unix))
