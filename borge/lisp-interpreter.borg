@@ -231,9 +231,9 @@
   )
   (subsection ast-diff
    (doc "Pure structural diff over expr trees (consumer: branching.diff). Not the surface prim — the pure walker.")
-   (status planned)
+   (status implemented)
    (implements lisp/lib/ast_diff.ml lisp/test/ast_diff_test.ml)
-   (* agent note (|2026-08-14 planned: pure module, no I/O, tests with no services (dune runtest lisp). Depends on the frozen expr type (core-freeze) and analyze.ast_hash for the equality fast-path. Semantics authority: branching.diff — this subsection is the module home, not the semantics.|) *)
+   (* agent note (|2026-08-16 ralph loop 19: implemented + verified (lisp/lib/ast_diff.ml, 27/27 ast_diff tests green, full runtest exit 0). Pure module, no I/O, tests with no services (dune runtest lisp). Depends on the frozen expr type (core-freeze) and analyze.ast_hash for the equality fast-path. Semantics authority: branching.diff — this subsection is the module home, not the semantics.|) *)
    (verify
     (build "dune build lisp")
     (test "lisp/test/ast_diff_test.ml — same/modified/replaced over all 11 expr constructors")

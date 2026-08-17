@@ -151,9 +151,9 @@
   )
   (subsection diff
    (doc "Structural divergence between two branches (AST-aware, not textual)")
-   (status planned)
+   (status implemented)
    (implements image/lib/store.ml image/lib/prims_db.ml image/lib/http_branches.ml lisp/lib/ast_diff.ml lisp/test/ast_diff_test.ml)
-   (* agent note (|2026-08-14 planned: gap surfaced testing personal-vs-main divergence. merge_branch is naive full-copy with explicit TODOs (diff-based merge, conflict detection); diff is the primitive those TODOs consume. AST-awareness chosen because function_defs.body is ONE expr node (not a statement list), JSONB-tagged structurally — see lisp-interpreter.ast-diff.|) *)
+   (* agent note (|2026-08-16 ralph loop 19: implemented + verified. Store.diff_branches (store.ml), (diff from to) prim (prims_db.ml), GET /diff?from=&to= private page (http_branches.ml, http.ml route) wired; ast_diff 27/27 green, full dune build @all + runtest exit 0. 2026-08-14: gap surfaced testing personal-vs-main divergence. merge_branch is naive full-copy with explicit TODOs (diff-based merge, conflict detection); diff is the primitive those TODOs consume. AST-awareness chosen because function_defs.body is ONE expr node (not a statement list), JSONB-tagged structurally - see lisp-interpreter.ast-diff.|) *)
    (verify
     (build "dune build @all")
     (test "lisp/test/ast_diff_test.ml — same/modified over all 11 real expr constructors (Var Lit App Let Letrec If Lambda Prim Seq Quote Define)")
@@ -1087,7 +1087,7 @@
   (subsection ast-nodes
    (doc "Design: addressable AST nodes as substrate for surgical edits and AI patches")
    (status planned)
-   (* agent note (|2026-08-02 confirm still planned: design-only proposal; function_defs remain whole-body JSONB.|) *)
+   (* agent note (|2026-08-16 design pass (ralph loop 19): nodal addressing + three-way merge are now fixed; materialized nodes table deferred. Re-filed issue BORGE-1786925842. 2026-08-02: design-only proposal; function_defs remain whole-body JSONB.|) *)
    (details
     (doc (|
          TODAY: two trees, two models
@@ -1097,23 +1097,105 @@
            in-memory eval walk, no node ids, edit =
            replace whole body
 
-         PROPOSAL (design only):
-         Give AST nodes identity so AI/human tools can
-         patch subexpressions without rewriting whole
-         functions, while keeping branches as the
-         versioning model over named subtrees.
+         DESIGN (2026-08-16, ralph loop 19, BORGE-1786925842):
+         Give AST nodes ADDRESSABILITY so tools can patch
+         subexpressions and a genuine THREE-WAY MERGE can be
+         computed, reusing the diff spine already shipped
+         (branching.diff / lisp-interpreter.ast-diff). Kept
+         cheap: identity is a PATH computed on the fly, NOT a
+         materialized table. A materialized nodes table stays
+         OPTIONAL and DEFERRED (see non-goals).
 
-         Sketch (non-normative until a later plan pass):
+         ========= 1. NODE ADDRESSING (no table) =========
+         A node inside a whole-expr body is addressed by a
+         PATH from the root, in the same vocabulary the
+         ast_diff walk already labels its children with:
+           positional: if.test if.then if.else
+                       lambda.params lambda.body
+                       let.name let.val let.body
+                       define.name define.val
+                       seq.a seq.b quote.body
+           list:       app.fn app.arg[i] prim.arg[i]
+                       letrec.binding[NAME] lambda.param[i]
+         Example path: lambda.body.app.arg[1].app.fn.var
+         Identity = (row key: branch_id, name) + path.
+         Pure helpers in lisp/lib make nodes addressable with
+         NO schema change (function bodies stay whole-expr
+         JSONB):
+           select_path  : expr -> path -> expr option
+           replace_path : path -> expr -> expr -> expr
+
+         ========= 2. PATCH REPRESENTATION =========
+         A two-way diff (base -> target) flattens to a set of
+         atomic path-keyed edits, exactly what Ast_diff.delta
+         already produces labelled by the child paths above:
+           Replace(path, from, to)   node at path replaced
+           Insert(path, idx, expr)   list-child insert
+           Delete(path, idx)         list-child remove
+         The Replaced <from=absent> sentinel in ast_diff
+         already encodes Insert/Delete at list positions. A
+         patch is therefore diff(base,target) PLUS the path
+         vocabulary - no new algorithm, only the missing
+         path->node selector from part 1.
+
+         ========= 3. THREE-WAY MERGE (base, ours, theirs)
+                  the algorithm tree-time (campaign 5) and
+                  local-first sync (campaign 8) both reuse
+            =========
+           ours   = diff(base, ours)
+           theirs = diff(base, theirs)
+         Group edits by node path. Disjoint paths compose
+         with no cross-order. A same path edited by BOTH:
+           - identical target  -> keep once (both agreed)
+           - different target  -> CONFLICT: report path + ours
+             value + theirs value; v1 resolution = keep-ours
+             + report (consistent with branching.merge's
+             report-only-conflict philosophy); v2 may offer
+             3-way resolution.
+         Apply the merged edits to base -> merged body, then
+         re-validate (ast_hash equality / eval smoke). A
+         merge always has a base: the fork point, branches.
+         last_synced, or a code_history before-image.
+
+         ========= 4. MATERIALIZED NODES TABLE (optional, deferred)
+            =========
+         For SURGICAL in-place patching of one huge function
+         (AI rewrites a subexpression without rewriting the
+         whole JSONB), a materialized
            nodes(id, branch_id, kind, payload, parent_id,
                  position, ...)
-         function_defs may become a view/root pointer
-         over a node tree, or remain a cache of the
-         root expression.
+         table pays off - derived/mirrored from the expr on
+         write (like the tree_nodes mirrors), keyed by
+         (branch_id, name, path). DEFERRED: the non-goal
+         below (whole-function propose/edit ships first) says
+         it is not needed yet, and it adds schema + mirror +
+         writer complexity.
 
-         Non-goals for first product cut:
+         ========= 5. LAYERING =========
+         P1 (this substrate): pure path addressing +
+             replace_path + merge3 in lisp/lib, testable with
+             dune runtest lisp (no Postgres).
+         P2: wire into Store.merge_branch - replace the naive
+             full-copy with diff-based merge + a conflict
+             report using merge3 (this is branching.merge's
+             open TODO).
+         P3 (deferred): materialized nodes table for surgical
+             in-place patching.
+
+         IMPLEMENTED so far: the diff spine this design
+         consumes (branching.diff + lisp-interpreter.ast-diff)
+         is shipped (module ast_diff, /diff page, (diff from
+         to) prim). This subsection fixes the AST-node
+         addressing + merge3 design those consumers build on;
+         the P1 merge3 module and P2 merge wire-in are the
+         remaining make work (see BORGE-1786925842).
+
+         Non-goals for first product cut (unchanged):
          - Do not block function-editor or ai-authoring
            tools on this redesign
          - Whole-function propose/edit ships first
+         - No alpha-equivalence / rename detection in the
+           merge (inherits the diff spine non-goals)
     |))
    )
   )
