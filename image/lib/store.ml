@@ -303,6 +303,22 @@ let branch_parent_id (t : t) ~(branch_id : string) : string option =
     with _ ->
       None)
 
+(** Branch LENS CHAIN for [branch_id]: self-first (closest-wins) walk up
+    the parent chain to system/main (inclusive), oldest ancestor last.
+    Used by the lens-aware tree read prims (one-tree.tree-read-prims) so a
+    session on <user>/personal sees the effective override chain for
+    tree_nodes under b.<id>.* — same closest-ancestor-wins rule function_
+    defs use. A branch with no reachable parent just resolves to itself. *)
+let branch_chain (t : t) ~(branch_id : string) : string list =
+  let rec walk acc id =
+    match branch_parent_id t ~branch_id:id with
+    | Some parent when parent <> id ->
+        walk (id :: acc) parent
+    | _ -> (id :: acc)
+  in
+  (* walk builds oldest-first; reverse to self-first *)
+  List.rev (walk [] branch_id)
+
 (** Own rows only: (name, author, updated_at). *)
 let list_own_functions (t : t) ~(branch_id : string)
   : (string * string * string) list =

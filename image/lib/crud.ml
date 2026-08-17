@@ -695,6 +695,47 @@ let tree_subtree (store : Store.t) ~(path : string)
       let nodes = Tree_store.list_subtree conn ~prefix:path ~limit () in
       (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes))
 
+(* ---- lens-aware read prims (one-tree.tree-read-prims, BORGE-1785516993) ----
+   Resolve a RELATIVE logical path (e.g. "fn.notes/doc/get",
+   "pkg.todo", "route./issues") against the session's branch lens chain
+   (self -> parent -> ... -> system/main, closest-wins), the same rule
+   function_defs use. A session on <user>/personal sees the EFFECTIVE
+   override chain for tree_nodes, not just its own branch. *)
+
+let lens_chain (store : Store.t) : string list =
+  Store.branch_chain store ~branch_id:(Store.current_branch_id store)
+
+let tree_lens_get (store : Store.t) ~(suffix : string) : value =
+  match Io_lwt.Db.current_conn store with
+  | None -> VNil
+  | Some conn ->
+      let n = Tree_store.lens_get_in_chain conn ~suffix (lens_chain store) in
+      (match n with
+       | None -> VNil
+       | Some node -> (VStr (Tree_store.node_to_json node)))
+
+let tree_lens_children (store : Store.t) ~(suffix : string)
+    ?(limit : int = 50000) () : value =
+  match Io_lwt.Db.current_conn store with
+  | None -> (VList [])
+  | Some conn ->
+      let nodes =
+        Tree_store.lens_children_in_chain conn ~suffix ~limit
+          (lens_chain store)
+      in
+      (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes))
+
+let tree_lens_subtree (store : Store.t) ~(suffix : string)
+    ?(limit : int = 50000) () : value =
+  match Io_lwt.Db.current_conn store with
+  | None -> (VList [])
+  | Some conn ->
+      let nodes =
+        Tree_store.lens_subtree_in_chain conn ~suffix ~limit
+          (lens_chain store)
+      in
+      (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes))
+
 let tree_children_html (store : Store.t) ~(prefix : string) ~(garden_root : string)
     () : value =
   match Io_lwt.Db.current_conn store with
