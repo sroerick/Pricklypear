@@ -98,3 +98,8 @@
  (name tree_datum_test)
  (modules tree_datum_test)
  (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))
+
+(test
+ (name jobs_test)
+ (modules jobs_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))

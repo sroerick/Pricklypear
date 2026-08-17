@@ -15,7 +15,8 @@
    migrations/008_agent_users.sql
    migrations/010_notes_tree.sql
    migrations/013_data_user_scoping.sql
-   migrations/014_guestbook_shared.sql)
+   migrations/014_guestbook_shared.sql
+   migrations/015_jobs.sql)
   (verify
    (build "dune build image")
    (smoke "image boots against a fresh database; schema_migrations records 001..007; re-boot is a no-op"))
@@ -66,6 +67,12 @@
              type_defs, view_bindings. Append-only before-image
              history for every code-row write.
              Spec: branching.code-history.
+           015_jobs.sql — durable background jobs (jobs,
+             job_steps, schedules) as a DEDICATED table (not
+             data_rows/tree nodes): the runner's SKIP LOCKED
+             claim protocol needs real typed status/run_at
+             columns + partial jobs_claim_idx; kernel rows
+             belong to the migration tier. Spec: jobs.
 
          A migration in flight blocks serving until it
          completes (or fails). This guarantees the image
