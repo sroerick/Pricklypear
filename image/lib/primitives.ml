@@ -413,6 +413,7 @@ let prim_summary (name : string) : string =
   | "tree/lens-subtree" -> "capped subtree of relative path under the effective branch lens"
   | "lens/fork" -> "create a lens branch as a named child of the checked-out branch (local-first lens-model; <owner>/lens-<device>[-<date>])"
   | "replication/unit" -> "materialize the authorized-read subtree (replication unit): data.u.<user>.* + data.shared.* + code lens + branch ancestry → JSON manifest"
+  | "sync/plan" -> "server-side sync reconcile: send a client (path,hash) manifest [+ base manifest] → JSON reconciliation report / three-way merge plan (local-first sync)"
   | "tree/upsert" -> "upsert folder|note|heading at path"
   | "tree/delete" -> "delete path [, recursive]"
   | "tree/move" -> "move subtree old-path → new-path"

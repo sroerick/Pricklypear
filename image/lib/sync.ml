@@ -1,0 +1,412 @@
+(** image/lib/sync.ml — borge/local-first.borg sync (campaign 8.3).
+
+    The SERVER-SIDE sync merge authority. Sync = three-way tree-diff
+    (branching.borg / one-tree.branching-interaction), keyed on subtree
+    node hashes (the git protocol in miniature):
+
+       1. Client sends its (path, hash) manifest for the lens subtree.
+       2. Server compares against its own subtree hashes; reports which
+          paths differ or are missing on each side.
+       3. Each side sends the node BODIES the other is missing or has
+          stale.
+       4. Server applies the three-way merge (common ancestor = the
+          last-synced generation) and returns the merged subtree state.
+
+    The envelope hash is the negotiation; the file is the transfer. On
+    the tree_nodes side the hash is [Tree_store.hash_body] (sha256 over
+    the canonical body), the SAME content hash the client's lens
+    substrate computes offline ([Lens_store.content_hash]) — one hash
+    scheme, both sides, so a Same/Diverge classification is meaningful
+    across the wire.
+
+    This module owns the pure reconciliation + three-way merge planner
+    (the heart of the exchange — classification of a manifest union and
+    the conflict-free / LWW-v0 plan), plus the server-side harness:
+    reading its own subtree manifest from tree_nodes and applying a
+    validated reconcile plan back to the store.
+
+    The client-facing transport/exchange (an HTTP rendezvous that ships
+    the manifest + bodies) is owned by the client lens / sync client;
+    this module is the server half: given a client's (path, hash)
+    manifest for the current lens, it decides what the server must send
+    (ServerOnly = pull), what the client must send (ClientOnly = push),
+    and where the three-way merge (base = last-synced) conflicts.
+*)
+
+(* ==================================================================
+   HASH MANIFESTS
+   ================================================================== *)
+
+(** A (path, hash) manifest: path -> content hash. This is the exact
+    shape [Lens_store.node_manifest] produces on the client and
+    [server_manifest] below reads from tree_nodes. The hash is the
+    node-envelope content hash (sha256 over the canonical body). *)
+type manifest = (string * string) list
+
+(** Association-list lookup. *)
+let assoc_find (m : manifest) (path : string) : string option =
+  List.assoc_opt path m
+
+(** Convert a manifest to a sorted association list (path, hash), deduped
+    (later wins, matching assoc semantics). *)
+let normalize (m : manifest) : manifest =
+  let tbl = Hashtbl.create (List.length m) in
+  List.iter (fun (p, h) -> Hashtbl.replace tbl p h) m;
+  Hashtbl.fold (fun p h acc -> (p, h) :: acc) tbl []
+  |> List.sort (fun (a, _) (b, _) -> String.compare a b)
+
+let to_assoc (m : manifest) : (string * string) list = normalize m
+
+let of_assoc (a : (string * string) list) : manifest = a
+
+(* ==================================================================
+   CLASSIFICATION (pure)
+   ================================================================== *)
+
+(** Per-path delta between a server manifest and a client manifest.
+    - [Same]        — both sides hold the node with the same hash.
+    - [ClientOnly]  — only the client holds the node (server missing it);
+                      the client must PUSH the body to the server.
+    - [ServerOnly]  — only the server holds the node (client missing it);
+                      the server must PULL (send the body to the client).
+    - [Diverge]     — both sides hold the node but with DIFFERENT hashes.
+                      Requires the three-way merge (last-synced base) to
+                      decide push/pull/conflict; the raw two-way view can
+                      only report it.
+*)
+type delta = Same | ClientOnly | ServerOnly | Diverge
+
+let classify_delta (server : manifest) (client : manifest) (path : string)
+    : delta =
+  match assoc_find server path, assoc_find client path with
+  | Some sh, Some ch when sh = ch -> Same
+  | Some _, Some _ -> Diverge
+  | Some _, None -> ServerOnly
+  | None, Some _ -> ClientOnly
+  | None, None -> Same  (* absent on both: nothing to do *)
+
+(** Reconcile a client manifest against the server manifest. Returns the
+    (path, hash) lists per delta class. Pure. *)
+type classify_report = {
+  same_len : int;
+  client_only : manifest;   (* client -> server pushes *)
+  server_only : manifest;   (* server -> client pulls *)
+  diverge : manifest;       (* both changed; needs three-way *)
+}
+
+let classify (server : manifest) (client : manifest) : classify_report =
+  let all =
+    List.fold_left
+      (fun acc (p, _) -> if List.mem_assoc p acc then acc else (p, 0) :: acc)
+      [] (to_assoc server @ to_assoc client)
+  in
+  List.fold_left
+    (fun r (p, _) ->
+      match classify_delta server client p with
+      | Same -> { r with same_len = r.same_len + 1 }
+      | ClientOnly ->
+          { r with client_only = (p, Option.get (assoc_find client p)) :: r.client_only }
+      | ServerOnly ->
+          { r with server_only = (p, Option.get (assoc_find server p)) :: r.server_only }
+      | Diverge ->
+          { r with diverge = (p, Option.get (assoc_find client p)) :: r.diverge })
+    { same_len = 0; client_only = []; server_only = []; diverge = [] }
+    all
+
+(* ==================================================================
+   THREE-WAY MERGE PLANNER (pure)
+   ================================================================== *)
+
+(** Three-way merge over (base = last-synced, ours = server, theirs =
+    client), per the campaign-3 diff philosophy (branching.ast-nodes):
+    disjoint changes compose; a same-path change kept identical by both
+    sides folds to one; a same-path DIFFERENT change is a CONFLICT —
+    report-only (LWW v0 keeps ours=server and surfaces the conflict; the
+    obituary rule applies to sync losses too, so the conflict is never
+    silently dropped).
+
+    Per-path outcome:
+      unchanged  — base = ours = theirs (or absent on all): nothing.
+      theirs_add — added on client only since the base (base absent, ours
+                   absent, theirs present): apply the client node.
+      ours_add   — added on server only since the base (base absent,
+                   theirs absent, ours present): keep, nothing to send.
+      theirs_mod — ours stayed at base, theirs changed (base = ours ≠
+                   theirs): apply the client body (a clean client edit).
+      ours_mod   — theirs stayed at base, ours changed (base = theirs ≠
+                   ours): keep server, nothing to send.
+      identical  — both moved to the same new hash: keep either.
+      conflict   — base present, both changed and to different hashes:
+                   report; LWW v0 keeps ours (server) and surfaces.
+      theirs_del — deleted on client only (base present, ours present,
+                   theirs absent): delete the server node (a client
+                   deletion applied).
+      ours_del   — deleted on server only: nothing to send (server node
+                   gone; client still holds a stale copy → client pulls
+                   the deletion = the server-only tombstone/pull).
+*)
+type outcome =
+  | Unchanged
+  | Theirs_add                 (* client push (server applies) *)
+  | Ours_keep                  (* server keeps; no transfer *)
+  | Theirs_mod                 (* client push (server applies) *)
+  | Identical
+  | Conflict of string * string * string * string
+                               (* path, base_hash, ours_hash, theirs_hash *)
+  | Theirs_del                 (* client deletion applied server-side *)
+  | Ours_del
+
+type plan = {
+  path : string;
+  outcome : outcome;
+}
+
+let plan_of (base : manifest) (ours : manifest) (theirs : manifest)
+    : plan list =
+  let bh = assoc_find base in
+  let oh = assoc_find ours in
+  let th = assoc_find theirs in
+  let all =
+    List.fold_left
+      (fun acc (p, _) ->
+        if List.mem_assoc p acc then acc else (p, ()) :: acc)
+      []
+      (to_assoc base @ to_assoc ours @ to_assoc theirs)
+  in
+  List.map
+    (fun (p, ()) ->
+      let b, o, t = bh p, oh p, th p in
+      let outcome =
+        match b, o, t with
+        (* all agree / all absent *)
+        | bo, oo, to_ when bo = oo && oo = to_ -> Unchanged
+        (* client added a node both the base and the server lack *)
+        | None, None, Some _ -> Theirs_add
+        (* server added a node; client never had it (pull provides it) *)
+        | None, Some _, None -> Ours_keep
+        (* client edited a node the server never moved from base *)
+        | Some x, Some oo, Some t_ when oo = x && t_ <> x -> Theirs_mod
+        (* server edited a node the client never moved from base *)
+        | Some x, Some oo, Some t_ when t_ = x && oo <> x -> Ours_keep
+        (* both moved to the SAME new hash: one change, not two *)
+        | Some _, Some oo, Some t_ when oo = t_ -> Identical
+        (* base present, both moved and to different hashes: conflict *)
+        | Some x, Some oo, Some t_ -> Conflict (p, x, oo, t_)
+        (* client deleted a node the server still holds *)
+        | Some _, Some _, None -> Theirs_del
+        (* server deleted a node the client still holds (client pulls) *)
+        | Some _, None, Some _ -> Ours_del
+        (* contradictory (some/None combos not covered): keep ours *)
+        | _ -> Unchanged
+      in
+      { path = p; outcome })
+    all
+
+(** The non-trivial (transfer-or-conflict) subset of a three-way plan:
+    the rows a sync round must act on. *)
+let actionable (plans : plan list) : plan list =
+  List.filter
+    (fun { outcome; _ } ->
+      match outcome with
+      | Unchanged | Ours_keep | Identical -> false
+      | Theirs_add | Theirs_mod | Conflict _ | Theirs_del | Ours_del -> true)
+    plans
+
+(* ==================================================================
+   SERVER-SIDE HARNESS (DB-backed)
+   ================================================================== *)
+
+(** Read the server's (path, hash) manifest for the subtree under
+    [prefix] (one-tree path-prefix RLS confinement = the replication
+    boundary; the caller passes the replication-unit prefix). None when
+    there is no live connection. *)
+let server_manifest (store : Store.t) ~(prefix : string) : manifest option =
+  match Store.conn_of store with
+  | None -> None
+  | Some conn ->
+      let rows =
+        Io_lwt.Db.execute conn
+          ~params:
+            [ Pgx.Value.of_string prefix ]
+          "SELECT path::text, hash FROM tree_nodes \
+           WHERE path <@ $1::ltree ORDER BY path::text ASC"
+      in
+      Some
+        (List.filter_map
+           (function
+             | [ p; h ] -> (
+                 match Pgx.Value.to_string p, Pgx.Value.to_string h with
+                 | Some pp, Some hh -> Some (pp, hh)
+                 | _ -> None)
+             | _ -> None)
+           rows)
+
+(** Apply a client push body for [path] to the store. The client sends
+    its node envelope {path, kind, type, body, author, …}; the server
+    re-writes it through the typed-boundary-validated tree write surface
+    so a datum lands exactly as (tree/upsert) would (cross-checks the
+    declared type fields). Kind-aware:
+
+      - fn / type / route / pkg code nodes resolve the branch-lensed path
+        under the current lens branch and write via the code write
+        surface (upsert_fn / upsert_type / route via upsert_hier).
+      - datum nodes write via [Tree_store.upsert_datum] (path-explicit,
+        typed-boundary validation preserved).
+
+    Returns [Ok ()] or [Error message]. *)
+let apply_client_node (store : Store.t) ~(env : Yojson.Safe.t) : (unit, string) result =
+  let path, kind, type_name, body, author =
+    match env with
+    | `Assoc kv ->
+        let str k = List.assoc_opt k kv |> function Some (`String s) -> Some s | _ -> None in
+        let get_body =
+          List.assoc_opt "body" kv |> function Some b -> Some b | _ -> None
+        in
+        ( str "path"
+        , str "kind"
+        , str "type"
+        , get_body
+        , (match str "author" with Some a -> a | None -> "sync") )
+    | _ -> (None, None, None, None, "sync")
+  in
+  match path, kind with
+  | Some p, Some "datum" ->
+      (match type_name, body with
+       | Some ty, Some b ->
+           (* typed-boundary validation: validate the client body against
+              the type the SERVER declares for it (the server is the
+              merge/index authority, not the client) so a body missing a
+              required field is rejected the same way a local create
+              would be — the client is a peer, not a bypass. *)
+           (let declared = Store.lookup_type_fields store ~name:ty in
+            match
+              match declared with
+              | None -> None
+              | Some fields ->
+                  (match
+                     Tree_store.validate_fields ~declared:fields
+                       (Yojson.Safe.to_string b)
+                   with
+                  | Ok () -> None
+                  | Error msg -> Some msg)
+            with
+           | Some msg -> Error msg
+           | None ->
+               (match Store.conn_of store with
+                | None -> Error "sync: no DB"
+                | Some conn ->
+                    ignore
+                      (Tree_store.upsert_datum conn ~path:p ~type_name:ty
+                         ~body_json:(Yojson.Safe.to_string b) ~author);
+                    Ok ()))
+       | _ -> Error "sync: datum node missing type/body")
+  | Some p, Some ("fn" | "type" | "route" | "pkg" as k) ->
+      (* code-lens nodes carry {body:{src,…}}; the server re-writes the
+         source through the code write surface so the reverse mirror
+         repopulates the scaffolding tables. For v0 the code sync path is
+         the branch-pointer move (promote/merge) owned by merge_branch;
+         a direct code-node write here is the fallback for a code lens the
+         server chose to reconcile in place. *)
+      (match Store.conn_of store with
+       | None -> Error "sync: no DB"
+       | Some conn ->
+           let body_json = match body with Some b -> Yojson.Safe.to_string b | None -> "{}" in
+           (match k with
+            | "fn" ->
+                let name =
+                  try List.nth (String.split_on_char '.' p) 3 with _ -> p
+                in
+                Tree_store.upsert_fn conn ~branch_id:(Store.current_branch_id store)
+                  ~name ~body_json ~author ~doc:(Some ("code:" ^ name));
+                Ok ()
+            | _ -> Error "sync: code kind not yet reconciled in place"))
+  | Some p, Some k ->
+      (* hierarchical / other kinds: write via the generic path-explicit
+         upsert_hier so headings/folders/notes replicate too. *)
+      (match Store.conn_of store with
+       | None -> Error "sync: no DB"
+       | Some conn ->
+           let body_json = match body with Some b -> Yojson.Safe.to_string b | None -> "{}" in
+           ignore (Tree_store.upsert_hier conn ~path:p ~kind:k
+                     ~type_name:(match type_name with Some t -> t | None -> k)
+                     ~body_json ~author);
+           Ok ())
+  | _ -> Error "sync: node envelope missing path/kind"
+
+(** Apply a whole reconcile/merge plan to the server: for every actionable
+    row the plan directs the server to take (Theirs_add / Theirs_mod /
+    Theirs_del and conflict LWW-keep-thiers-side is applied), look up the
+    client node envelope. Since this server harness applies the PLAN (not
+    the bodies it must first receive), the client bodies are passed as an
+    assoc path -> envelope JSON. Returns a report of what was applied vs
+    surfaced as conflicts. *)
+type commit_report = {
+  applied : int;
+  conflicts : (string * string * string) list; (* path, ours_hash, theirs_hash *)
+}
+
+let commit (store : Store.t)
+    ~(client_bodies : (string * Yojson.Safe.t) list)
+    (plans : plan list) : commit_report =
+  List.fold_left
+    (fun r { path; outcome } ->
+      match outcome with
+      | Theirs_add | Theirs_mod ->
+          (match List.assoc_opt path client_bodies with
+           | Some env ->
+               (match apply_client_node store ~env with
+                | Ok () -> { r with applied = r.applied + 1 }
+                | Error _ -> r)
+           | None -> r)
+      | Theirs_del ->
+          (match Store.conn_of store with
+           | Some conn ->
+               let n = Tree_store.delete_path conn ~path ~recursive:false in
+               if n > 0 then { r with applied = r.applied + 1 } else r
+           | None -> r)
+      | Conflict (p, _b, o, t) ->
+          (* LWW v0: keep ours (server) and SURFACE the conflict — no
+             silent loss (the obituary rule applies). *)
+          { r with conflicts = (p, o, t) :: r.conflicts }
+      | Unchanged | Ours_keep | Identical | Ours_del -> r)
+    { applied = 0; conflicts = [] }
+    plans
+
+(* ---- report rendering (for the sync/plan prim + UI) ---- *)
+
+let json_of_report (r : classify_report) : string =
+  Yojson.Safe.to_string
+    (`Assoc
+       [ ("same", `Int r.same_len)
+       ; ("client_only", `Int (List.length r.client_only))
+       ; ("server_only", `Int (List.length r.server_only))
+       ; ("diverge", `Int (List.length r.diverge))
+       ; ("client_only_paths", `List (List.map (fun (p, _) -> `String p) (normalize r.client_only)))
+       ; ("server_only_paths", `List (List.map (fun (p, _) -> `String p) (normalize r.server_only)))
+       ; ("diverge_paths", `List (List.map (fun (p, _) -> `String p) (normalize r.diverge)))
+       ])
+
+let json_of_plan (plans : plan list) : string =
+  Yojson.Safe.to_string
+    (`Assoc
+       [ ( "rows"
+         , `List
+             (List.map
+                (fun { path; outcome } ->
+                  let tag, detail =
+                    match outcome with
+                    | Unchanged -> ("unchanged", `Null)
+                    | Theirs_add -> ("theirs_add", `String path)
+                    | Ours_keep -> ("ours_keep", `String path)
+                    | Theirs_mod -> ("theirs_mod", `String path)
+                    | Identical -> ("identical", `Null)
+                    | Conflict (_, b, o, t) ->
+                        ("conflict",
+                         `Assoc [ ("base", `String b); ("ours", `String o); ("theirs", `String t) ])
+                    | Theirs_del -> ("theirs_del", `String path)
+                    | Ours_del -> ("ours_del", `String path)
+                  in
+                  `Assoc [ ("path", `String path); ("outcome", `String tag); ("detail", detail) ])
+                plans)
+         ) ])
+
