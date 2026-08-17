@@ -40,6 +40,7 @@
    yojson
    pure-html
    digestif
+   argon2
    markup
    lambdasoup
    mirage-crypto

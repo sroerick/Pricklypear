@@ -353,6 +353,18 @@ let verify_password (store : Store.t) ~(username : string)
           log_auth store ~user_id:user.id ~kind:"password" ~success:true
             ?source_ip ()
         in
+        (* Transparent argon2id upgrade (BORGE-1785545259): a successful
+           legacy-scheme verify rewrites the stored hash to argon2id, so
+           principals migrate without a flag day. *)
+        if Auth_password.needs_upgrade stored then
+          (match set_password store ~user_id:user.id ~password with
+           | Ok () ->
+               Printf.eprintf
+                 "[auth] %s password upgraded interim -> argon2id\n%!"
+                 user.username
+           | Error e ->
+               Printf.eprintf "[auth] %s argon2id upgrade failed: %s\n%!"
+                 user.username e);
         (* Touch last_used_at *)
         (match pg_conn store with
          | None -> Some user
