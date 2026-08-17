@@ -782,8 +782,72 @@ let tree_delete (store : Store.t) ~(path : string) ~(recursive : bool)
       let n = Tree_store.delete_path conn ~path ~recursive in
       (VInt (Int64.of_int n))
 
+(* ---- datum type-change validation for tree/move (one-tree.tree-datum-prims) ----
+   Moving a datum node to a path under a DIFFERENT <type_name> is a type
+   change and must re-run typed-boundary validation against the new type
+   (exactly the same rule create/update enforce). When both paths are datum
+   paths and the type segment differs, read the node's body at [old_path]
+   and validate the declared fields of the NEW type; a missing required
+   field is a clean rejection naming the field, identical in spirit to
+   create/update. Same-type moves, hierarchical moves, and any path that is
+   not a datum path skip validation (no type semantics to check). *)
+
+(** The type_name encoded in a datum path, decoded. Datum path grammar:
+    data.u.<user>.<type>.<id> | data.shared.<type>.<id>; the type segment
+    is base64-label-encoded (Tree_store.enc_label). None when [path] is not
+    a datum path. *)
+let datum_path_type (path : string) : string option =
+  let parts = String.split_on_char '.' path in
+  let type_label =
+    match parts with
+    | "data" :: "u" :: _user :: ty :: _id :: _ -> Some ty
+    | "data" :: "shared" :: ty :: _id :: _ -> Some ty
+    | _ -> None
+  in
+  match type_label with
+  | None -> None
+  | Some ty -> Tree_store.dec_label ty
+
+(** If [old_path] -> [new_path] is a datum move that changes type, validate
+    the moved node's body against the NEW type's declared fields. Returns
+    Some rejection-message (naming the missing fields) when it fails; None
+    when there is nothing to check (not a datum move, same type, undeclared
+    new type, node missing, or free-form body). *)
+let datum_move_type_reject (store : Store.t) ~(old_path : string)
+    ~(new_path : string) : string option =
+  match datum_path_type old_path, datum_path_type new_path with
+  | Some old_ty, Some new_ty when old_ty <> new_ty ->
+      (match Io_lwt.Db.current_conn store with
+       | None -> None
+       | Some conn ->
+           (match Tree_store.get_by_path conn ~path:old_path with
+            | None -> None
+            | Some node ->
+                let body_json =
+                  match node.body with
+                  | `Assoc _ -> Yojson.Safe.to_string node.body
+                  | _ -> "{}"
+                in
+                let declared =
+                  match Store.lookup_type_fields store ~name:new_ty with
+                  | Some f -> f
+                  | None -> []
+                in
+                (match
+                   Tree_store.validate_fields ~declared body_json
+                 with
+                 | Ok () -> None
+                 | Error msg ->
+                     Some
+                       (Printf.sprintf "type change %s -> %s: %s" old_ty
+                          new_ty msg))))
+  | _ -> None
+
 let tree_move (store : Store.t) ~(old_path : string) ~(new_path : string)
     : value =
+  match datum_move_type_reject store ~old_path ~new_path with
+  | Some msg -> (VStr ("tree/move: " ^ msg))
+  | None ->
   match Io_lwt.Db.current_conn store with
   | None -> (VStr "tree/move: no DB")
   | Some conn ->
