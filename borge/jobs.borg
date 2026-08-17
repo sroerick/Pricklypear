@@ -137,15 +137,18 @@
           (job-status id)                  → the job row (confined)
           (cancel-job id)                  → pending ⇒ failed/cancelled
           (jobs)                           → caller's jobs, recent first
-          (step "name" (lambda () body))   → checkpoint boundary;
+          (with-step "name" (lambda () body))  → checkpoint boundary;
                                              inside a job: memoized by
                                              (job-id, name); outside a
                                              job: plain function call
+          (NOTE: named with-step, not step — libs/rb already defines a
+          `step` recipe-DSL function; reserving the flat name `step` for a
+          kernel special form would clobber that library)
           (schedule "name" "cron-or-ms" "fn" args)   → upsert
           (unschedule "name")              → disable
           (schedules)                      → list
 
-        Capability effects: submit/cancel/step are WriteDb;
+        Capability effects: submit/cancel/with-step are WriteDb;
         status/jobs/schedules are ReadDb; schedule/unschedule are
         WriteDb. Job FUNCTIONS carry whatever effects their bodies
         carry — inference + badges work unchanged because a job
@@ -195,7 +198,7 @@
         STEP CHECKPOINTS (the DBOS idea, Nopales-shaped)
         =========================================================
         A job that dies at minute 9 of 10 should not re-spend
-        minutes 1–8. (step "name" thunk) is the boundary:
+        minutes 1–8. (with-step "name" thunk) is the boundary:
 
           - First execution of (job-id, "name"): run the thunk,
             write the checkpoint row, return the value.
@@ -210,12 +213,12 @@
         writes and the checkpoint both land or neither does — the
         step provably never double-executes. The guest never sees
         a transaction handle; exactly-once is the default shape of
-        (with-transaction (lambda () (step …))), not a discipline.
+        (with-transaction (lambda () (with-step …))), not a discipline.
 
         Resume is by CHECKPOINT LOOKUP, not code replay: there is
         no determinism constraint on the job body. The one rule:
         a step name is a stable string within one job definition —
-        (step "name" …) enforces this syntactically. Job code is
+        (with-step "name" …) enforces this syntactically. Job code is
         pinned at submit time (branch + fn name), so a redefine on
         main mid-job does not change what a running retry resolves.
 
@@ -294,7 +297,7 @@
     (smoke "restart image mid-job → stale running row recovered per attempts rule")))
 
   (subsection step-checkpoints
-   (doc "(step \"name\" thunk) memoized by (job-id, name); with-transaction composition gives exactly-once for DB-writing steps; plain call outside jobs")
+   (doc "(with-step \"name\" thunk) memoized by (job-id, name); with-transaction composition gives exactly-once for DB-writing steps; plain call outside jobs")
    (status implemented)
    (verify
     (build "dune build @all")
