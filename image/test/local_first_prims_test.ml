@@ -98,6 +98,22 @@ let test_lens_fork () =
 (* ---- replication-units: the manifest materializes the owned unit ---- *)
 let test_replication_unit () =
   with_store (fun store ->
+      (* Insert rows for the session user (tests run as "anonymous", the
+         Request_context default) so the manifest user_count must reflect
+         them. This locks the label-ENCODED replication prefix: the raw
+         username prefix (data.u.<user>) would match nothing and under-count
+         to 0, so a real user_count >= 2 proves the encoded prefix is used. *) 
+      (match S.conn_of store with
+       | None -> ()
+       | Some conn ->
+           List.iteri
+             (fun i _ ->
+               ignore
+                 (Pricklypear_image_lib.Tree_store.insert_datum conn
+                    ~type_name:(Printf.sprintf "lf_%d" i)
+                    ~fields_json:(Printf.sprintf "{\"n\":%d}" i)
+                    ~author:"anonymous"))
+             [ 1; 2 ]);
       match Pricklypear_image_lib.Crud.replication_unit store () with
       | Pricklypear_lisp.Ast.VStr json ->
           (match Yojson.Safe.from_string json with
@@ -130,6 +146,11 @@ let test_replication_unit () =
                     Alcotest.(check bool) "user data prefix present"
                       true
                       (String.starts_with ~prefix:"data.u." (df "user"));
+                    (match List.assoc_opt "user_count" dk with
+                     | Some (`Int n) ->
+                         Alcotest.(check bool) "user_count reflects session rows"
+                           true (n >= 2)
+                     | _ -> Alcotest.fail "user_count missing");
                     Alcotest.(check string) "shared seed prefix"
                       "data.shared" (df "shared");
                     Alcotest.(check bool) "shared_count is an int"
