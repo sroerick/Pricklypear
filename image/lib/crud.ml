@@ -747,6 +747,100 @@ let tree_lens_subtree (store : Store.t) ~(suffix : string)
       in
       (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes))
 
+(* ---- local-first prims (borge/local-first.borg lens-model +
+   replication-units, campaign 8.1). A lens is a NAMED CHILD BRANCH of the
+   checked-out branch (fork-on-clone, one-tree P5 EMPTY-LENS fork —
+   copy-on-fork, parent pointer only); the server branch stays the parent.
+   These prims make the two pinned contracts concrete: lens/fork names +
+   creates the fork per the <owner>/lens-<device>[-<date>] contract, and
+   replication/unit materializes the exact authorized-read subtree the
+   identity would replicate (data.u.<user>.* + data.shared.* + the forked
+   code lens + the branch ancestry it resolves through). *)
+
+(* Current branch (owner, name) resolved from the branches registry. *)
+let current_branch_ref (store : Store.t) : (string * string) option =
+  let bid = Store.current_branch_id store in
+  List.find_opt
+    (fun (b : Pricklypear_common.Branch.t) -> b.id = bid)
+    (Store.list_branches store)
+  |> Option.map (fun (b : Pricklypear_common.Branch.t) -> (b.owner, b.name))
+
+(* (lens/fork device-name) -> VStr "ok owner/lens-<device>[-<date>] (id)".
+   lens-model: create a lens as a NAMED CHILD of the checked-out branch, per
+   the pinned contract. parent_id = the current branch (server stays the
+   parent); owner = the parent owner; child_name = lens-<device>[-<date>].
+   Single-writer-per-lens is preserved by construction (server never writes
+   into a lens except via sync/merge). *)
+let lens_fork (store : Store.t) ~(device : string) ~(date : string option) () : value =
+  match current_branch_ref store with
+  | None -> VStr "lens/fork: no current branch"
+  | Some (owner, _name) ->
+      let suffix =
+        match date with
+        | Some d -> device ^ "-" ^ d
+        | None -> device
+      in
+      let child_name = "lens-" ^ suffix in
+      let parent_id = Store.current_branch_id store in
+      (match Store.fork_branch store ~parent_id ~owner ~child_name with
+       | Some id -> VStr (Printf.sprintf "ok %s/%s (%s)" owner child_name id)
+       | None -> VStr "lens/fork: fork failed")
+
+(* (replication/unit) -> VStr json-manifest. replication-units: materialize
+   the exact authorized-read subtree the current identity would replicate —
+   data.u.<user>.* + data.shared.* (the data, READ-mostly seed for shared), + the
+   forked code lens + the branch ancestry it resolves through. Path-prefix RLS
+   confinement (one-tree RLS floor) is the replication boundary; this prim
+   never enumerates anything outside the identity-readable set. Ancestry uses
+   Store.branch_chain (self-first, closest-wins). *)
+let replication_unit (store : Store.t) () : value =
+  let user = session_user () in
+  (* data.u.<user>.* paths store the user label-ENCODED (tree_store datum_path),
+     so the replication prefix and the count must use the encoded form — a raw
+     username prefix would match nothing and under-count the unit. *) 
+  let user_enc = Tree_store.enc_label user in
+  let user_prefix = "data.u." ^ user_enc in
+  let bid = Store.current_branch_id store in
+  let chain = Store.branch_chain store ~branch_id:bid in
+  let count prefix =
+    match Io_lwt.Db.current_conn store with
+    | None -> 0
+    | Some conn ->
+        List.length (Tree_store.list_subtree conn ~prefix ~limit:100000 ())
+  in
+  let owner, bname =
+    match current_branch_ref store with
+    | Some (o, n) -> (o, n)
+    | None -> ("", "")
+  in
+  let branch_ref =
+    if owner = "" then bid else owner ^ "/" ^ bname
+  in
+  let manifest =
+    `Assoc
+      [ ("owner", `String user)
+      ; ("branch", `String branch_ref)
+      ; ("branch_id", `String bid)
+      ; ( "lens"
+        , `String (owner ^ "/lens-<device>[-<date>] (forked as empty child)")
+        )
+      ; ("ancestry", `List (List.map (fun id -> `String id) chain))
+      ; ( "data"
+        , `Assoc
+            [ ("user", `String user_prefix)
+            ; ("user_count", `Int (count user_prefix))
+            ; ("shared", `String "data.shared")
+            ; ("shared_count", `Int (count "data.shared"))
+            ]
+        )
+      ; ( "scope"
+        , `String
+            "data.u.<user>.* + data.shared.* + b.<lens>.* + branch ancestry; path-prefix RLS confinement = replication boundary"
+        )
+      ]
+  in
+  VStr (Yojson.Safe.to_string manifest)
+
 (* ---- reads-as-of-gen prim surface (tree-time.reads-as-of-gen) ----
    The versioned read foundation (versioned_head / versioned_history / the
    `version` row type / gen-now) landed in the 5.1 close-out. These crud
