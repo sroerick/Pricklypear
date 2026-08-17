@@ -510,35 +510,64 @@
      (doc (|
           PHASE 0 (this chapter): spec. No code.
 
-          PHASE 1 — DUAL-WRITE SHADOW. New tree_versions table;
-          write path appends version rows IN ADDITION to today's
-          tree_nodes writes; a verify script compares versioned
-          reads at head against today's reads across a sample
-          corpus (the tree_verify precedent: sampling with
-          env-controlled verbosity, never full-scan). Nothing
-          reads the new table yet. This phase proves INSERT-only
-          wire cost on a live habitat without consequence.
+          PHASE 1 — DUAL-WRITE SHADOW. DONE (campaign 5.1, loops
+          27/28): the migration-018 schema + the 019 additive
+          dual-write shadow trigger landed. Every tree_nodes write
+          (insert/update/delete->TOMBSTONE) appends a version row in
+          ADDITION to today's writes, allocating its head gen
+          atomically per path class (branch_generations for code
+          b.* paths, the tree_generations singleton for data.*
+          paths); 020 refines the append so a no-op mirror echo
+          (unchanged content) returns BEFORE allocating a gen — one
+          logical write is never double-counted. Nothing reads the
+          new table for a live read yet. Verify:
+          scripts/verify_tree_version_shadow.sh (Phase 1 gate: every
+          shadowed live row's newest version matches head) upgraded
+          in 5.2 to the Phase-2 equivalence gate.
 
-          PHASE 2 — READ SWITCH, FLAG-GUARDED. Reads gain the gen
-          filter behind an env flag (the PP_TREE_* precedent:
-          default off, exercise on dev, then flip). Head reads
-          through the versioned table must return BIT-IDENTICAL
-          results to the scaffolding mirrors — the projections
-          subsection's equivalence verifier is the gate.
-          code_history triggers keep firing until equivalence
-          holds continuously on the live habitat for a soak
-          window.
+          PHASE 2 — READ SWITCH, FLAG-GUARDED. MOSTLY DONE. The gen
+          coordinate landed as an UNGUARDED additive surface, not a
+          flag-guarded mirror re-route: store versioned_head /
+          versioned_history + (gen-now), then
+          (tree/get path :gen N) / (gen-read path gen) / (gen-diff
+          path ga gb) / (undo path [n]) (5.2, c9c49dc). The
+          PP_* flag-guarded SCAFFOLDING read switch is the tail that
+          remains STILL PLANNED, owned by the projections subsection:
+          the tree_data_rows / scaffolding-mirror head-predicate
+          view rewrite behind the PP_ flag + the 012 equivalence
+          verifier (sample N names, bodies equal) + 012 archival/
+          drop. code_history triggers keep firing until equivalence
+          holds continuously for a soak window.
 
-          PHASE 3 — CONSUMERS LIGHT UP. code-history / code-diff
-          re-implemented over tree_versions (signatures unchanged);
-          undo + gen-read + gen-diff prims land; notes undo UI
-          ships as the proving app; 012 table to read-only
-          archival, then drop.
+          PHASE 3 — CONSUMERS LIGHT UP. DONE except the 012
+          archival/drop (see PHASE 2 tail). code-history / code-diff
+          re-implemented over tree_versions (signatures unchanged;
+          012 before-image table retained as pre-shadow fallback,
+          5.2, 72d5380); (gen-read)/(gen-diff)/(undo) land; the
+          code-restore prim (code-path analogue of undo, 5.3 loop
+          36); notes undo is a real app consumer (toolbar Undo
+          button, one per-path (undo path) call + kind-aware
+          upsert_hier restore — 5.3 loop 37, 89b0555). The 012
+          table stays read-only archival until the equivalence
+          verifier in PHASE 2 clears.
 
-          PHASE 4 — GC + CHAPTER COMPLETE. Partitioning + retention
-          worker per gc subsection. This chapter's status moves to
-          implemented when the retention worker runs on the jobs
-          runner.
+          PHASE 4 — GC + CHAPTER COMPLETE. DONE (5.3 loop 37,
+          89b0555): partitioning + retention worker per the gc
+          subsection — migration 022 (tree_retention_policy +
+          tree_versions_retain), the four admin-gated retention
+          prims, and the boot.ml jobs-runner retention_sweep gated
+          by wall-clock. The PHASE 4 GATE — "the retention worker
+          runs on the jobs runner" — is met and flipped the gc
+          subsection to implemented.
+
+          STATUS (5.4 reconcile): Phases 1, 4 fully done; Phase 3
+          done except the 012 archival/drop; Phase 2 done except the
+          flag-guarded scaffolding read-switch + equivalence
+          verifier. The remaining open work is the Phase-2 tail,
+          which is owned by the projections subsection (still
+          planned) — this subsection stays planned until that tail
+          lands, mirroring how projections/consumers stayed planned
+          with their open items recorded.
 
           ALL MIGRATIONS ADDITIVE per conventions (new table, new
           views, new columns — never rewrite payloads; 017's WHERE
