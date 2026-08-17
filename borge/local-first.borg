@@ -55,8 +55,8 @@
 
   (subsection lens-model
    (doc "A local lens is a branch checked out to a client root. Fork = a pad detaching; sync = grafting back. Single-writer is preserved per-lens.")
-   (status planned)
-   (implements image/lib/store.ml image/lib/tree_store.ml branching.borg)
+   (status implemented)
+   (implements image/lib/store.ml image/lib/tree_store.ml image/lib/crud.ml image/lib/prims_db.ml remote/lib/lens_store.ml)
    (details
     (doc (|
          A CLONE IS A FORK. Checking out a local lens forks the
@@ -151,11 +151,15 @@
              (data is branch-free; there is no pointer to move). Both
              are subtree hash-diff + reconcile; neither a new prim.
     |))))
+   (verify
+    (build "dune build @all")
+    (smoke "lens/fork + remote/lib/lens_store.ml fork_lens_name name a lens branch <owner>/lens-<device>[-<date>] as a NAMED CHILD of the checked-out branch (empty-lens fork: parent pointer only, zero own rows, resolves through ancestry)")
+    (smoke "the fork is single-writer; the server branch stays the parent (verified: lens-branch parent_id = checked-out branch)"))
 
   (subsection replication-units
    (doc "What travels to a client: the user's data subtree + the checked-out code lens. The isolation boundary IS the replication boundary.")
-   (status planned)
-   (implements one-tree.borg multi-user.borg)
+   (status implemented)
+   (implements image/lib/crud.ml image/lib/prims_db.ml remote/lib/lens_store.ml)
    (details
     (doc (|
          THE /data REVISION EARNS ITS SECOND SALARY. The 2026-08-02
@@ -232,6 +236,10 @@
          base). A sync round negotiates (path, hash) manifests and
          offers (branch, generation) as the common ancestor.
     |))))
+   (verify
+    (build "dune build @all")
+    (smoke "replication/unit + remote/lib/lens_store.ml in_replication_unit materialize EXACTLY data.u.<user>.* + data.shared.* + b.<lens>.* + branch ancestry (path-prefix RLS confinement is the replication boundary; another user's data.u.<other>.* never replicates)")
+    (smoke "image/test/local_first_prims_test.ml: lens/fork creates the empty-lens named child; replication/unit returns a well-formed manifest"))
 
   (subsection local-substrate
    (doc "The filesystem as lens root. No second query engine; the server is the index.")

@@ -400,6 +400,41 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
           (Pricklypear_lisp.Ast.VStr
                "tree/lens-subtree: need relative-suffix [, limit]"));
 
+  (* local-first (borge/local-first.borg lens-model + replication-units,
+     campaign 8.1). lens/fork names + creates a lens branch as a NAMED CHILD
+     of the checked-out branch per the pinned <owner>/lens-<device>[-<date>]
+     contract (single-writer-per-lens, server stays parent). Non-anonymous
+     only (an anonymous identity owns no lens).
+     (lens/fork device-name [, date]) -> VStr "ok owner/lens-<device>[-<date>] (id)" *)
+  register_crud "lens/fork"
+    (fun args ->
+      let uname = actor () in
+      if uname = "anonymous" then deny_anon "lens/fork"
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr device ] ->
+            Crud.lens_fork t.store ~device ~date:None ()
+        | [ Pricklypear_lisp.Ast.VStr device;
+            Pricklypear_lisp.Ast.VStr date ] ->
+            Crud.lens_fork t.store ~device ~date:(Some date) ()
+        | _ ->
+            (Pricklypear_lisp.Ast.VStr
+                 "lens/fork: need device-name [, date]"));
+
+  (* local-first replication-units (borge/local-first.borg). replication/unit
+     materializes the exact authorized-read subtree the current identity
+     would replicate: data.u.<user>.* + data.shared.* + the forked code lens
+     + the branch ancestry it resolves through. Read-only; safe for any
+     identity (resolves against its own lens — anon sees data.u.anonymous +
+     shared seed). Returns a JSON manifest with per-prefix node counts. *)
+  register_crud "replication/unit"
+    (fun args ->
+      match args with
+      | [] -> Crud.replication_unit t.store ()
+      | _ ->
+          (Pricklypear_lisp.Ast.VStr
+               "replication/unit: no arguments"));
+
   register_crud "tree/upsert"
     (fun args ->
       let uname = actor () in

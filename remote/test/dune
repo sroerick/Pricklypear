@@ -12,3 +12,8 @@
  (name placer_test)
  (modules placer_test)
  (libraries pricklypear-remote.lib pricklypear-lisp alcotest str unix))
+
+(test
+ (name lens_store_test)
+ (modules lens_store_test)
+ (libraries pricklypear-remote.lib pricklypear-lisp alcotest unix))

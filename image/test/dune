@@ -95,6 +95,11 @@
  (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))
 
 (test
+ (name local_first_prims_test)
+ (modules local_first_prims_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))
+
+(test
  (name tree_datum_test)
  (modules tree_datum_test)
  (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))
