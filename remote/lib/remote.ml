@@ -273,3 +273,23 @@ let make ~(transport : transport) ?(remote_eval : (string -> value) option) () :
   register_pure_prims t;
   register_proxy_prims t;
   t
+
+(** ---- Stepping / trace debugger over one remote client ----
+
+    (borge/remote-eval.borg stepping: set bp, step, inspect frame,
+    continue.) The driver runs [Explain.trace] over THIS client's env +
+    local pure prim table + transport, so local pure compute stays local
+    and every other prim round trip crosses the same [transport] the
+    fast eval would — the server is unaware a breakpoint fired; the
+    data plane is untouched. *)
+
+(** One-pass stepped run of [src] over this client. Returns the trace
+    (local steps interleaved with remote round trips) plus a drivable
+    stepper to set breakpoints / step / continue over it. *)
+let stepper_of (t : t) (src : string) :
+    Explain.trace_result * Explain.stepper =
+  let tr =
+    Explain.trace ~local_prims:t.local_prims ~transport:t.transport
+      ~init_env:t.env ~src
+  in
+  (tr, Explain.stepper_of_trace tr)

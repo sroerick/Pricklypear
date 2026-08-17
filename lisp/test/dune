@@ -27,3 +27,8 @@
  (name ast_diff_test)
  (modules ast_diff_test)
  (libraries pricklypear-lisp alcotest yojson digestif))
+
+(test
+ (name stepping_test)
+ (modules stepping_test)
+ (libraries pricklypear-lisp alcotest))
