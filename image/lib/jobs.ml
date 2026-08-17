@@ -54,6 +54,16 @@ let select_cols =
   "id, fn, args::text, branch, submitted_by, status, run_at, attempts, \
    max_attempts, result::text, error, runner_id"
 
+(* Build the call source the runner evals: (fn <args>).
+   [args] is the jsonb column rendered ::text — i.e. the JSON literal for the
+   single argument (a number, a quoted string, an object, ...). It is spliced
+   DIRECTLY (never %S-quoted) so a numeric arg stays a number in the call:
+   (submit-job "f" 1) must eval (f 1), not (f "1"). %S-quoting the already-
+   JSON text turned every non-string arg into a string literal and broke
+   numerics/json — see the runner agent-note in borge/jobs.borg (4.1). *)
+let eval_src ~(fn : string) ~(args : string) : string =
+  Printf.sprintf "(%s %s)" fn args
+
 let row_to_job row : job option =
   try
     let id = cell_string row 0

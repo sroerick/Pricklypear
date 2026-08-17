@@ -276,19 +276,20 @@
 
   (subsection node-shapes
    (doc "job / job-step / schedule rows in a dedicated migration table (015_jobs.sql): field contracts, runner-owned status transitions, SKIP LOCKED claim index; v1 is a dedicated table, not data.shared tree nodes (see details RECONCILE note)")
-   (status planned)
+   (status implemented)
    (verify
     (build "dune build @all")
-    (test "image/test: job node create/claim/status transitions incl. runner-owned field confinement")
-    (smoke "pp_eval '(submit-job …)' → row visible at /data/job with submitted_by + branch pinned")))
+    (test "image/test: jobs_test.ml node-shapes — job node create/claim/status transitions (submit→pending→claim running→record done/failed→dead) incl. runner-owned field confinement (submitted_by + branch pinned at submit; (jobs)/(job-status)/(cancel-job) confine to caller unless admin; cancel only pending and only yours)")
+    (smoke "pp_eval '(submit-job …)' → (job-status id) shows submitted_by + branch pinned, then the runner fiber drives it pending→running→done with result (jobs are inspected via the job prims, NOT /data — v1 reconcile: no /data/job surface)")))
 
   (subsection runner
    (doc "boot-time Eio runner fiber: SKIP LOCKED claim, synthetic request context, budget, attempts/backoff, dead-runner recovery at boot")
-   (status planned)
+   (status implemented)
+   (* note (|2026-12 ralph loop 19 (campaign 4.0 plan verify) found the runner ARGS bug: eval_job wrapped job.args with Printf.sprintf "%S" (boot.ml), so a jsonb NUMBER arg was evaled as a STRING literal -(submit-job "f" 1) stores args=1 but the runner evaled (f "1") -> Interp_error -> retries -> dead. Numeric/bool/object args all failed; only JSON-string args round-tripped. 4.1 FIXED it (Jobs.eval_src): job.args is the jsonb column rendered ::text = one JSON literal, spliced DIRECTLY as the call (never %S-quoted), so numeric/object/bool args eval as their real type, and the runner surfaces the REAL error text (pp_interp_error) instead of opaque Interp_error(_). ARG-ENCODING CONTRACT on submit: the submit-job VStr branch stores the raw string as jsonb (unquoted), so a string arg must already be valid JSON -(submit-job "f" "\"hello\"") for the string hello; align submit+runner on one encoding (prim surface + Jobs.eval_src + boot runner are consistent; see image/test/jobs_test.ml args-bug suite).|) *)
    (verify
     (build "dune build @all")
-    (test "image/test: claim skips locked rows; backoff schedule; dead-runner reaper fails stale running rows")
-    (smoke "submit a job that sleeps, watch status pending→running→done with result on /data/job")
+    (test "image/test: jobs_test.ml runner — claim skips locked rows (second-connection FOR UPDATE); exponential backoff requeues into the future / exhausted→dead; dead-runner reaper fails stale running rows (retry or dead) while leaving our own runner_id untouched")
+    (smoke "submit a job that sleeps, watch status pending→running→done with result via (job-status)")
     (smoke "submit a job whose fn raises → attempts increments, retry, eventual dead")
     (smoke "restart image mid-job → stale running row recovered per attempts rule")))
 

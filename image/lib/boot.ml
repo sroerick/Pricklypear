@@ -82,9 +82,7 @@ let jobs_runner_loop ~(session : Session.t) : unit =
           branch_name = job.Jobs.branch;
           username = job.Jobs.submitted_by };
       Session.rehydrate t;
-      let call_src =
-        Printf.sprintf "(%s %s)" job.Jobs.fn (Printf.sprintf "%S" job.Jobs.args)
-      in
+      let call_src = Jobs.eval_src ~fn:job.Jobs.fn ~args:job.Jobs.args in
       (* Wrap eval in a Request_context so crud's user-scoping (visible_sql
          / pp.user RLS floor) sees the job's submitted_by, not 'anonymous'.
          Without this, forge/graph-by-name (a rows scan over forge-graph
@@ -105,7 +103,16 @@ let jobs_runner_loop ~(session : Session.t) : unit =
       in
       (result_json, true)
     with exn ->
-      (Printexc.to_string exn, false))
+      (* Surface the REAL error text (unbound var / arity / prim message)
+         instead of the opaque `Interp_error(_)` Printexc prints — see the
+         runner agent-note in borge/jobs.borg (campaign 4.1). *)
+      let msg =
+        match exn with
+        | Pricklypear_lisp.Ast.Interp_error e ->
+            Pricklypear_lisp.Ast.pp_interp_error e
+        | _ -> Printexc.to_string exn
+      in
+      (msg, false))
   in
   let rec loop () =
     (try Jobs.reap_dead ~store:session.store with _ -> ());
