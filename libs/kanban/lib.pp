@@ -19,17 +19,8 @@
   (lambda (list-id)
     "Return the list's columns as a Lisp list of state strings.
      Falls back to todo/state/list when the list has no columns field
-     or the field is empty."
-    (let ((lf (get (quote todo-list) list-id)))
-      (if (null? lf)
-        (kanban/columns-default)
-        (let ((cols (dict-get lf "columns")))
-          (if (null? cols)
-            (kanban/columns-default)
-            (let ((cs (as-str cols)))
-              (if (string-eq cs "")
-                (kanban/columns-default)
-                (json-parse cs)))))))))
+     or the field is empty. Single source of truth: todo/state/columns-for-list."
+    (todo/state/columns-for-list list-id)))
 
 (define kanban/columns-set
   (lambda (list-id cols)
