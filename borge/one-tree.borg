@@ -367,7 +367,7 @@
     (smoke ":ref deref resolves via path; backlink query lists nodes referencing a given node")))
   (subsection tree-datum-prims
    (doc "Tree prims are a complete data API: tree/upsert, tree/move, tree/delete operate on datum nodes, not only hierarchical kinds")
-   (status planned)
+   (status implemented)
    (implements image/lib/tree_store.ml image/lib/crud.ml image/lib/prims_db.ml)
    (details
     (doc (|
