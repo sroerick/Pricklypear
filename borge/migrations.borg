@@ -81,6 +81,18 @@
              (campaign 5.0 plan pass); the file lands with 5.1
              (make versioned-leaves) and is not yet tracked.
              Spec: tree-time.
+           019_tree_version_shadow.sql — tree-time Phase 1
+             dual-write shadow: AFTER trigger on tree_nodes
+             appends a tree_versions row per write (allocating
+             the head gen per path class) + tombstone on delete.
+             Additive; Spec: tree-time.versioned-leaves.
+           020_tree_version_echo_guard.sql — tree-time mirror-
+             echo guard: tree_version_append() REFINED to make a
+             no-op mirror bounce (same content body/author/kind/
+             type) return before allocating a gen or inserting a
+             version row, so one logical write is never double-
+             counted. Additive CREATE OR REPLACE; Spec:
+             tree-time.versioned-leaves.
 
          A migration in flight blocks serving until it
          completes (or fails). This guarantees the image

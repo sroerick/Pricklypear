@@ -418,6 +418,7 @@ let prim_summary (name : string) : string =
   | "tree/find-by" -> "find nodes by kind + body field"
   | "tree/path-label" -> "sanitize string to ltree-safe label"
   | "tree/garden-root" -> "data.note.u.<user> path prefix"
+  | "gen-now" -> "current branch generation (int) — reads-as-of-gen clock coordinate"
   | "tree/folder-index" -> "distinct folder paths under prefix (SQL dedup)"
   | "tree/children-html" -> "budget-safe HTML for notes-tree children under path"
   | "extract-links" -> "parse [[wiki]] / [[slug|label]] from body → list of pairs"

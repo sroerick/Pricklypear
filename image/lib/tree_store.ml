@@ -513,6 +513,88 @@ let get_by_path (conn : Store_db.conn) ~(path : string) : node option =
        | row :: _ -> (node_of_row row)
        | [] -> None)
 
+(** A versioned-leaf row (tree-time: one version row per (path, gen) write).
+    Field names are v_-prefixed to avoid clashing with the `node` record. *)
+type version = {
+  v_gen : int64 option;
+  v_path : string;
+  v_kind : string;
+  v_type_name : string option;
+  v_body : Yojson.Safe.t;
+  v_hash : string option;
+  v_author : string option;
+  v_created_at : string option;
+  v_tombstone : bool;
+}
+
+let version_of_row (row : Pgx.row) : version option =
+  match row with
+  | [ gen_c; path_c; kind_c; type_c; body_c; hash_c; author_c;
+      created_c; tomb_c ] ->
+      let body =
+        match Pgx.Value.to_string body_c with
+        | Some s -> (try Some (Yojson.Safe.from_string s) with _ -> None)
+        | None -> None
+      in
+      let tomb =
+        match Pgx.Value.to_string tomb_c with
+        | Some t -> t = "true"
+        | None -> false
+      in
+      (match body with
+       | None -> None
+       | Some body ->
+           Some
+             { v_gen = (match Pgx.Value.to_int64 gen_c with Some g -> Some g | None -> None);
+               v_path = (match Pgx.Value.to_string path_c with Some p -> p | None -> "");
+               v_kind = (match Pgx.Value.to_string kind_c with Some k -> k | None -> "");
+               v_type_name = Pgx.Value.to_string type_c;
+               v_body = body;
+               v_hash = Pgx.Value.to_string hash_c;
+               v_author = Pgx.Value.to_string author_c;
+               v_created_at = Pgx.Value.to_string created_c;
+               v_tombstone = tomb })
+  | _ -> None
+
+(** Newest versioned row at head (or as-of [at_gen]) for [path], matching
+    migration 018's tree_versions_head semantics. None = path never versioned.
+    [path] encodes the branch for code paths (b + branch + suffix) and is
+    globally unique, so a path-only lookup serves both code and data classes
+    without a branch_id argument. This is the versioned read surface 5.1's
+    shadow test compares against the live tree_nodes head, and 5.2
+    reads-as-of-gen drives the gen filter through. *)
+let versioned_head (conn : Store_db.conn) ~(path : string)
+    ?(at_gen : int64 option) () : version option =
+  let sql =
+    "SELECT v.gen, v.path::text, v.kind, v.type_name, v.body::text, v.hash, " ^
+    "v.author, v.created_at::text, v.body->>'_tombstone'::text " ^
+    "FROM tree_versions v WHERE v.path = $1::ltree " ^
+    "AND ($2::bigint IS NULL OR v.gen <= $2::bigint) " ^
+    "ORDER BY v.gen DESC LIMIT 1"
+  in
+  let rows =
+    Io_lwt.Db.execute conn
+      ~params:[ Pgx.Value.of_string path
+               ; (match at_gen with Some g -> Pgx.Value.of_int64 g | None -> Pgx.Value.null) ]
+      sql
+  in
+  (match rows with
+   | row :: _ -> (version_of_row row)
+   | [] -> None)
+
+(** All version rows for [path], oldest gen first (append chain). *)
+let versioned_history (conn : Store_db.conn) ~(path : string) () : version list =
+  let sql =
+    "SELECT v.gen, v.path::text, v.kind, v.type_name, v.body::text, v.hash, " ^
+    "v.author, v.created_at::text, v.body->>'_tombstone'::text " ^
+    "FROM tree_versions v WHERE v.path = $1::ltree ORDER BY v.gen ASC"
+  in
+  let rows =
+    Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string path ] sql
+  in
+  (List.filter_map version_of_row rows)
+
+
 (** Subtree listing: all nodes under a path prefix (ltree descendant). *)
 let list_subtree (conn : Store_db.conn) ~(prefix : string)
     ?(limit : int = 1000) () : node list =

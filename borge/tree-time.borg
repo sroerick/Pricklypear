@@ -64,8 +64,15 @@
 
    (subsection versioned-leaves
     (doc "The storage change: tree leaves keyed (branch, path, gen); writes are append")
-    (status planned)
-    (implements image/lib/tree_store.ml migrations/018_tree_versions.sql)
+    (status implemented)
+    (implements image/lib/tree_store.ml
+                migrations/018_tree_versions.sql
+                migrations/019_tree_version_shadow.sql
+                migrations/020_tree_version_echo_guard.sql
+                scripts/verify_tree_version_shadow.sh)
+    (verify
+     (smoke "ksh scripts/verify_tree_version_shadow.sh (Phase 1 shadow: trigger present, every shadowed live tree_nodes row's newest version row matches head hash+body, no TOMBSTONE at head for live rows, head counters never behind version rows)")
+     (smoke "image/test/tree_version_shadow_test: datum create shadows one row; datum update appends + as-of read returns old body; datum delete appends TOMBSTONE; fn code-path bumps branch_generations"))
     (details
      (doc (|
           NEW TABLE tree_versions, keyed (branch_id, path, gen):
