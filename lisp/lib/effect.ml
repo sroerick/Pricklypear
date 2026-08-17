@@ -181,6 +181,7 @@ let write_db_prims = [
   "submit-job"; "submit-job-at"; "cancel-job";  (* borge/jobs.borg WriteDb *)
   "with-step"; "__step__";  (* checkpoint write; composes with Txn for exactly-once *)
   "schedule"; "unschedule";  (* borge/jobs.borg schedules WriteDb *)
+  "undo";  (* borge/tree-time.borg reads-as-of-gen restore-by-write WriteDb *)
 ]
 
 let read_db_prims = [
@@ -197,6 +198,7 @@ let read_db_prims = [
   "agent-history"; "agent-sessions";
   "job-status"; "jobs"; "schedules";  (* borge/jobs.borg ReadDb *)
   "gen-now";  (* borge/tree-time.borg reads-as-of-gen ReadDb *)
+  "gen-read"; "gen-diff";  (* borge/tree-time.borg reads-as-of-gen ReadDb *)
 ]
 
 let branch_prims = [ "fork"; "merge"; "checkout" ]

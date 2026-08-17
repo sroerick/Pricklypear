@@ -670,6 +670,31 @@ let lens_get_in_chain (conn : Store_db.conn) ~(suffix : string)
   in
   resolve_in_chain conn ~mk_path chain
 
+(** Reads-as-of-gen across the branch lens chain: like lens_get_in_chain, but
+    returns the VERSIONED leaf (node body at head or as-of [at_gen]) for the
+    EFFECTIVE path — the closest-ancestor-wins branch that carries the
+    suffix. Spec tree-time.reads-as-of-gen: a gen-as-of read "crosses the
+    same branch lens rules as head reads". None = no branch in the chain
+    carries the suffix at all; the returned version may still be a TOMBSTONE
+    (existed-then-deleted), which the caller distinguishes via v_tombstone. *)
+let rec lens_versioned_in_chain (conn : Store_db.conn)
+    ~(at_gen : int64 option) ~(mk_path : string -> string)
+    (chain : string list) : version option =
+  let read_opt path =
+    match at_gen with
+    | Some g -> versioned_head conn ~path ~at_gen:g ()
+    | None -> versioned_head conn ~path ()
+  in
+  match chain with
+  | [] -> None
+  | branch_id :: rest ->
+      let p = mk_path branch_id in
+      if p = "" then lens_versioned_in_chain conn ~at_gen ~mk_path rest
+      else
+        (match read_opt p with
+         | Some v -> Some v
+         | None -> lens_versioned_in_chain conn ~at_gen ~mk_path rest)
+
 (** Consistency check against the SQL tree_verify() function.
     Returns (kind, table_count, tree_count, in_sync) rows. *)
 let verify (conn : Store_db.conn) : (string * int * int * bool) list =
@@ -761,6 +786,80 @@ let node_to_json (n : node) : string =
        ; ("created_at", `String n.created_at)
        ; ("updated_at", `String n.updated_at)
        ])
+
+(** Render a [version] row as the JSON the reads-as-of-gen prims return.
+    Mirrors node_to_json's field vocabulary (id/path/kind/type/body/author/
+    hash/created_at) so a gen-as-of read has the SAME surface as a head
+    tree/get, plus the [gen] coordinate the read resolved at and a
+    [tombstone] flag. id/path/kind/type/author/hash are pulled from the
+    version envelope body when present (it is the 019 trigger's
+    {v,kind,path,type,body,author,doc,hash} node envelope); created_at.
+    None values become JSON null. A tombstone row is still returned (its
+    body is the reserved marker) so callers can distinguish
+    "never existed" (None, prim returns nil) from "existed but deleted by
+    gen G" (present row, tombstone=true). *)
+let version_to_json (v : version) : string =
+  let assoc = match v.v_body with `Assoc a -> a | _ -> [] in
+  let get k (d : Yojson.Safe.t) =
+    match List.assoc_opt k assoc with Some x -> x | None -> d
+  in
+  let os k d =
+    match List.assoc_opt k assoc with
+    | Some (`String s) -> `String s | Some x -> x | None -> d
+  in
+  let gen =
+    match v.v_gen with Some g -> `String (Int64.to_string g) | None -> `Null
+  in
+  Yojson.Safe.to_string
+    (`Assoc
+       [ ("id", os "id" gen)
+       ; ("path", os "path" (`String v.v_path))
+       ; ("kind", os "kind" (`String v.v_kind))
+       ; ("type", os "type" (`Null))
+       ; ("body", get "body" (`Null))
+       ; ("author", os "author" (`Null))
+       ; ("hash", os "hash" (`Null))
+       ; ("created_at",
+          match v.v_created_at with Some c -> `String c | None -> `Null)
+       ; ("gen", gen)
+       ; ("tombstone", `Bool v.v_tombstone)
+       ])
+
+(** Convert a versioned-leaf row into a [node] so the gen-as-of surface can
+    reuse tree/get's node JSON shape when the caller passes an explicit :gen.
+    The envelope body carries {v,kind,path,type,body,author,doc,hash}; rows
+    that predate the version-era or are TOMBSTONEs have no live body and map
+    to None (so the read surfaces as „missing at that gen“ the same way a
+    head get of an absent path does). *) 
+let version_of_leaf (v : version) : node option =
+  let assoc = match v.v_body with `Assoc a -> a | _ -> [] in
+  let os k d =
+    match List.assoc_opt k assoc with
+    | Some (`String s) -> s | Some _ -> d | None -> d
+  in
+  let body =
+    match List.assoc_opt "body" assoc with
+    | Some (`Assoc _ as b) -> b
+    | Some b -> b
+    | None -> `Assoc []
+  in
+  if v.v_tombstone then None
+  else if body = `Assoc [] then None
+  else
+    Some
+      { id = os "id" v.v_path
+      ; path = os "path" v.v_path
+      ; kind = os "kind" v.v_kind
+      ; type_name = v.v_type_name
+      ; body
+      ; author = os "author" ""
+      ; doc = None
+      ; hash = os "hash" (match v.v_hash with Some h -> h | None -> "")
+      ; created_at =
+          (match v.v_created_at with Some c -> c | None -> os "created_at" "")
+      ; updated_at =
+          (match v.v_created_at with Some c -> c | None -> os "created_at" "")
+      }
 
 let parse_body_json (fields_json : string) : (Yojson.Safe.t, string) result =
   try Ok (Yojson.Safe.from_string fields_json)
