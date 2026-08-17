@@ -170,6 +170,39 @@ let test_transaction_without_hook_raises () =
         (String.length msg > 0)
   | other -> Alcotest.fail ("wrong exn: " ^ Printexc.to_string other))
 
+(** Stepping over a remote client (borge/remote-eval.borg stepping smoke:
+    an agent loop drives a stepping eval against a remote branch — set
+    bp, step, inspect frame, continue). Runs [Remote.stepper_of]
+    (Explain.trace over the client's env + local pure prims + transport);
+    a breakpoint on [get] fires; stepping never re-crosses the wire, so
+    the server saw exactly the calls a fast eval would (stepping is a
+    purely client concern). *)
+let test_stepping_via_client () =
+  let transport, calls, table = mock_transport () in
+  Hashtbl.replace table "get" (fun _ -> Ok (VStr "ok"));
+  let t = Remote.make ~transport () in
+  let tr, s = Remote.stepper_of t "(+ 1 (get 'user 42))" in
+  (* the trace recorded the get round trip (data plane crossed the wire
+     and returned) *)
+  Alcotest.(check bool) "trace has a get round trip" true
+    (List.exists
+       (function
+         | Explain.Remote_ok (n, _) | Explain.Remote_err (n, _) -> n = "get"
+         | Explain.Local _ -> false)
+       tr.events);
+  (* the fast eval crosses the wire exactly once for (get 'user 42): the
+     server is unaware a breakpoint fired — one call, never re-crossed *)
+  Alcotest.(check int) "one wire crossing" 1 (List.length !calls);
+  (* drive: set a breakpoint on get, continue, continue to end, inspect
+     the frame stack — set bp / step / inspect frame / continue *)
+  Explain.add_breakpoint s (Explain.break_on_remote "get");
+  let fired = Explain.continue s in
+  Alcotest.(check bool) "breakpoint on get fires" true fired;
+  let fired2 = Explain.continue s in
+  Alcotest.(check bool) "continue past the end does not re-trigger" false fired2;
+  let fr = Explain.frames "(+ 1 (get 'user 42))" in
+  Alcotest.(check bool) "frames inspectable (source-level AST)" true (fr <> [])
+
 let () =
   Alcotest.run "remote"
     [
@@ -182,5 +215,6 @@ let () =
           Alcotest.test_case "no local store-write prims" `Quick test_no_local_store_write;
           Alcotest.test_case "transaction routed to remote_eval wholesale" `Quick test_transaction_routed_remote;
           Alcotest.test_case "transaction without hook raises" `Quick test_transaction_without_hook_raises;
+          Alcotest.test_case "stepping over a remote client" `Quick test_stepping_via_client;
         ] );
     ]

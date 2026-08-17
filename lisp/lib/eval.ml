@@ -53,6 +53,17 @@ let budget_remaining_steps () : int =
   | None -> 0
   | Some b -> max 0 (b.limit - b.steps)
 
+(** Absolute step count on the current budget (0 if none active). Used by
+    the remote-eval stepping trace (borge/remote-eval.borg stepping) to
+    attribute the span of local pure steps between two wire crossings: the
+    trace samples [current_steps] right before a prim forwards over the
+    wire, so the difference counts the local steps since the last sample.
+    Additive; harmless when no stepping controller is active. *)
+let current_steps () : int =
+  match !current_budget with
+  | None -> 0
+  | Some b -> b.steps
+
 (** Record one DB hit on the current budget, if any. *)
 let note_db_hit () : unit =
   match !current_budget with
