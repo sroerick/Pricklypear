@@ -583,6 +583,24 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
       in
       (Pricklypear_lisp.Ast.VList names));
 
+  (* (gen-now) -> current tree gen (int). Spec: tree-time.reads-as-of-gen.
+     Returns the current branch's generation (migration 017 ancestry-walked
+     counter) = the code-path head gen coordinate for this session's branch
+     (what a :gen read-as-of coordinate on code paths compares against). A
+     write anywhere in the branch's ancestry bumps it, so a descendant sees
+     its own writes via inheritance, consistent with how a session resolves
+     code-path tree nodes. Unknown/unreachable -> 0 (caller treats as
+     "at head / reload"). Pure read, no gen allocation. *)
+  Primitives.register tbl "gen-now"
+    (fun _args ->
+      let bid = Store.current_branch_id t.store in
+      let g =
+        match Store.current_generation t.store ~branch_id:bid with
+        | Some n -> n
+        | None -> 0L
+      in
+      (Pricklypear_lisp.Ast.VInt g));
+
   (* storage.media Lisp surface — meta/list/delete + tiny put.
      Bulk Agent_tools.agent pushes use POST /api/media (5 MiB), not eval. *)
   Prims_media.register t tbl;

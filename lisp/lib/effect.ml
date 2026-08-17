@@ -196,6 +196,7 @@ let read_db_prims = [
   "log-tail"; "ops/summary"; "ops/incidents";
   "agent-history"; "agent-sessions";
   "job-status"; "jobs"; "schedules";  (* borge/jobs.borg ReadDb *)
+  "gen-now";  (* borge/tree-time.borg reads-as-of-gen ReadDb *)
 ]
 
 let branch_prims = [ "fork"; "merge"; "checkout" ]
