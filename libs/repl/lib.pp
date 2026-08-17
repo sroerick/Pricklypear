@@ -254,6 +254,7 @@
         " hx-target=\"#repl-transcript\""
         " hx-swap=\"beforeend\""
         " hx-on::htmx:config-request=\"let q=(event.detail.parameters.q||'');if(q[0]!='/'&&q[0]!='('){event.detail.path='/repl-v2/llm';}\""
+        " hx-on::before-request=\"this.reset()\""
         " hx-on::after-request=\"this.reset()\">"
         "<label class=\"sr-only\" for=\"repl-q\">Input</label>"
         "<input id=\"repl-q\" name=\"q\" type=\"text\" "

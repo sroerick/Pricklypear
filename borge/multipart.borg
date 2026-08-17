@@ -218,8 +218,8 @@
 
   (subsection repl-v2-ux
    (doc "REPL transcript polish: echo user input, clear form on send, distinct styling per message kind")
-   (implements libs/repl/lib.pp)
-   (status planned)
+   (implements libs/repl/lib.pp image/lib/http_agent.ml)
+   (status implemented)
    (verify
     (build "dune build image")
     (smoke "user input appears in transcript before response")
@@ -228,29 +228,36 @@
     (smoke "error parts styled distinctly from value/llm parts"))
    (details
     (doc (|
-         Current repl-v2 UX gaps:
+         All three UX gaps closed across BOTH input paths — the
+         Nopales /repl-v2/send route (slash commands + eval) and the
+         OCaml /repl-v2/llm route (plain-text LLM input, routed
+         client-side by an htmx configRequest hook).
 
-         1. USER ECHO: repl/send only returns response parts. The
-            user's input never appears in the transcript. Fix: repl/send
-            prepends a user bubble part (the raw input, styled) before
-            the response parts.
+         1. USER ECHO: repl/send (libs/repl/lib.pp) prepends
+            repl/user-echo — one user bubble part (raw input, .repl-user
+            class, italic) before the response parts. The OCaml
+            /repl-v2/llm route (image/lib/http_agent.ml repl_llm)
+            emits the same user-echo bubble as its Part 1, so the
+            transcript reads two-sided on both paths.
 
-         2. FORM CLEAR: hx-on::after-request="this.reset()" should
-            clear the input but may not fire on error responses or
-            may race with the swap. Fix: use hx-on::before-request
-            to clear immediately on submit, or clear via a part that
-            targets the form. The transcript gets the echo; the form
-            clears.
+         2. FORM CLEAR: the repl-form clears on hx-on::before-request
+            (immediate, on submit) AND hx-on::after-request
+            (fallback reset) so no input is ever left stuck — the
+            before-request hook avoids the after-request race with the
+            swap and also clears the box while a long LLM stream is
+            still running.
 
-         3. STYLING: error parts already have .repl-error class but
-            the LLM failed case shows as generic error. Ensure error
-            styling is visually distinct (red border, background) and
-            the error message is human-readable (not a raw exception
-            string).
+         3. STYLING: each message kind gets its own border/paint via
+            the repl-line base + per-kind classes
+            (.repl-value/.repl-error/.repl-llm/.repl-note/.repl-user);
+            the LLM failure case emits a .repl-error span with a
+            human-readable message ("error: …") instead of a raw
+            exception string, and error parts carry a red border +
+            pink background distinct from value/llm parts.
 
-         These are small fixes in libs/repl/lib.pp. The user echo is
-         the most important — without it the transcript reads as
-         one-sided and the user loses track of what they asked.
+         (The user-echo work is what makes the transcript readable —
+         without it the transcript reads one-sided and the user loses
+         track of what they asked.)
    |))
    )
   )
