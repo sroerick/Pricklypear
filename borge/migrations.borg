@@ -93,6 +93,16 @@
              version row, so one logical write is never double-
              counted. Additive CREATE OR REPLACE; Spec:
              tree-time.versioned-leaves.
+           021_tree_versions_reconcile.sql — tree-time head
+             reconciliation tool: tree_versions_reconcile_heads()
+             heals the one non-head-equivalent class (a shadowed
+             LIVE row whose newest version is a TOMBSTONE —
+             delete-then-recreate whose re-create did not re-
+             shadow) by appending the live content as a fresh
+             head, and repairs the branch/data head counters to
+             the max live gen. Additive CREATE OR REPLACE;
+             runner: scripts/reconcile_tree_version_head.sh.
+             Spec: tree-time.versioned-leaves.
 
          A migration in flight blocks serving until it
          completes (or fails). This guarantees the image

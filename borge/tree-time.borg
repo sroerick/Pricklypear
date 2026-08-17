@@ -69,9 +69,11 @@
                 migrations/018_tree_versions.sql
                 migrations/019_tree_version_shadow.sql
                 migrations/020_tree_version_echo_guard.sql
-                scripts/verify_tree_version_shadow.sh)
+                migrations/021_tree_versions_reconcile.sql
+                scripts/verify_tree_version_shadow.sh
+                scripts/reconcile_tree_version_head.sh)
     (verify
-     (smoke "ksh scripts/verify_tree_version_shadow.sh (Phase 1 shadow: trigger present, every shadowed live tree_nodes row's newest version row matches head hash+body, no TOMBSTONE at head for live rows, head counters never behind version rows)")
+     (smoke "ksh scripts/verify_tree_version_shadow.sh (Phase 1 shadow gate: trigger present; every shadowed live tree_nodes row's newest version is CONTENT-identical to head (envelope hash subfield excluded — deferred BORGE-1786931598); no TOMBSTONE at head for a live row; head counters never behind live version rows). Canonic tooling: ksh scripts/reconcile_tree_version_head.sh repairs the one non-head-equivalent class (tombstone-head-but-live rows are re-versioned from the live authority) and the counter heads, then re-runs the gate to confirm PASS")
      (smoke "image/test/tree_version_shadow_test: datum create shadows one row; datum update appends + as-of read returns old body; datum delete appends TOMBSTONE; fn code-path bumps branch_generations"))
     (details
      (doc (|
@@ -217,6 +219,9 @@
     (doc "Head-shaped scaffolding stays bit-identical: views gain one predicate; mirrors gain one filter")
     (status planned)
     (implements image/lib/prims_db.ml image/lib/crud.ml migrations/009_tree.sql)
+    (verify
+     (smoke "image/test/code_history_tree_test: code-history/code-diff read from tree_versions (below-head before-images, newest-first; rel function_defs / op UPDATE / author; code-diff vs nth-newest; in-range/out-of-range)")
+     (smoke "external history_test (012 regression): redefine records old body, merge-clobber records history, additive insert has NO history, rollback leaves none, code-diff smoke — all green under the tree-backed source"))
     (details
      (doc (|
           THE VIEWS ARE THE API. Reader concentration from the
@@ -263,6 +268,26 @@
           once equivalence is verified (one verifier script:
           sample N names, compare 012 rows' bodies to tree_versions
           bodies at matching changed_at).
+
+          PHASE-3 MAKE (landed, 5.2): the code-history / code-diff
+          reimplementation over tree_versions is DONE —
+          Store.list_code_history routes to tree_versions via the
+          versioned read surface (versioned_history below-head), with
+          the 012 table as the fallback for pre-shadow (pre-019)
+          names so no historical depth is lost during the coexistence
+          window. The below-head filter preserves the 012 before-image
+          semantic exactly: an insert-only fn has no history until it
+          is rewritten or deleted, and the newest entry is the state
+          just before the latest change ("read the version row at
+          gen-1"). re-implements the two prims with signatures
+          unchanged; rel is derived from the code-path kind
+          (fn→function_defs / type→type_defs / route→view_bindings),
+          op=DELETE on below-head TOMBSTONE rows else UPDATE. Verified
+          by image/test/code_history_tree_test + the existing
+          history_test stays green (additive-insert-no-history
+          included). STILL PLANNED (Phase 2): the tree_data_rows
+          head-predicate view rewrite behind the PP_ flag + the
+          equivalence verifier + 012 archival/drop.
      |))))
 
    (subsection reads-as-of-gen
