@@ -379,7 +379,9 @@
     (verify
      (smoke "(code-restore name [n] [owner/branch]) re-writes a code node (fn/type/route) at head-n as a NEW write at head+1 through the code write surface (upsert_fn / upsert_type / upsert_route): reverse mirror re-populates function_defs / type_defs / view_bindings, the restore is itself versioned + redoable (restores the value BEFORE the latest change; n is row-count steps back, not gen arithmetic)")
      (smoke "(code-restore name [n] [owner/branch]) errors cleanly — no such code path / no version history / tombstone at n steps back (use tree/delete) / no body / unsupported rel / out-of-range n — never a crash; n<1 and n>=history-length rejected")
-     (smoke "image/test/code_restore_test: fn n=1 rewinds body to body-2, n=2 to body-1; type n=1 rewinds fields; route n=1 rewinds handler + visibility; insert-only has no state; unknown name errors cleanly"))
+     (smoke "image/test/code_restore_test: fn n=1 rewinds body to body-2, n=2 to body-1; type n=1 rewinds fields; route n=1 rewinds handler + visibility; insert-only has no state; unknown name errors cleanly")
+     (smoke "NOTES UNDO — the FIRST APP CONSUMER is real (tree-time.consumers details): notes has ONE write funnel (notes/doc/upsert), so undo needs NO per-app journal — the substrate keeps the before-image. The note page toolbar gains an Undo button (action=undo in libs/notes/lib.pp) that does ONE per-path (undo path) call and redirects back; an error-string return (no history / no value) leaves the note unchanged. Undo is KIND-AWARE: a note is a hierarchical node (kind=note via upsert_hier), and restore-by-write routes back through upsert_hier preserving the original kind + payload envelope — a naive upsert_datum restore would silently rewrite the payload marker to datum (the kind-column/payload mismatch this consumer exposed). image/test/reads_as_of_gen_test: 'undo kind-aware (note payload not datumed)' writes two note versions through upsert_hier, (tree/undo path) restores title v1, and asserts node kind stays note AND payload->>'kind' stays note (not datum).")
+     (smoke "image/test/reads_as_of_gen_test: 'undo kind-aware' — after (tree/undo path) on a two-version note, live tree_get returns title v1, the JSON node kind is still note, and the live tree_nodes payload marker kind is still note (not datum)."))
     (details
      (doc (|
           SUBSUMES: branching.code-history (012). The separate
@@ -440,8 +442,13 @@
 
    (subsection gc
     (doc "Retention: gen-range partitions, jobs-runner rollup, policy as habitat data")
-    (status planned)
-    (implements image/lib/jobs.ml)
+    (status implemented)
+    (implements image/lib/jobs.ml image/lib/boot.ml image/lib/store.ml image/lib/crud.ml image/lib/prims_db.ml migrations/022_tree_retention.sql)
+    (verify
+     (smoke "migration 022_tree_retention.sql applies clean + idempotent on a dev PG with 018-021 already applied (image-applied, version 22 in schema_migrations): creates tree_retention_policy (path_class CHECK code|data, type_name NULL= whole class, keep_windows >= 1, UNIQUE(path_class,type_name)) and tree_versions_retain(path_class, keep_windows) — an idempotent, conservative rollup+drop worker that computes a whole-class floor = GREATEST(head_gen - keep_windows*1000, 1000), CHECKPOINTs the newest in-retained-past state of every fully-retired path (whole history < floor) to a row at gen=floor, then DROP PARTITIONs every lazy gen-window entirely below the floor (never the base gen_0 window).")
+     (smoke "(retention-policies) -> VList of policy JSON — empty on a policy-free habitat (keep-everything default). (retention-policy-set path_class keep_windows) / (retention-policy-set path_class type_name keep_windows) upsert a whole-class (type_name NULL) or per-type row; (retention-delete-policy path_class [type_name]) removes it. Admin-only (require_admin); anonymous raises.")
+     (smoke "(retention-run [path_class]) drives the worker per path class that has an explicit whole-class policy (type_name IS NULL): runs tree_versions_retain, returns VList of (path_class, dropped_windows, checkpointed_paths). Path class with NO whole-class policy is a keep-everything no-op (never ad-hoc deletion). Verified live on the dev habitat: (retention-policy-set \"code\" 3) then (retention-run \"code\") dropped 16 gen-windows and checkpointed 4473 code paths; policies deleted after to restore keep-everything.")
+     (smoke "The retention worker runs ON THE JOBS RUNNER (migration 015) — boot.ml jobs_runner_loop gates a periodic retention_sweep by wall-clock (default 3600s, PP_RETENTION_SECS override) which calls Store.retention_run for every path class and logs per-class dropped/checkpointed counts. On a policy-free habitat the sweep is a cheap no-op SELECT. This is the coexistence-plan PHASE 4 gate that flips the chapter to implemented."))
     (details
      (doc (|
           NO NEW SUBSYSTEM. Dolt ships dolt_gc because it owns its
@@ -480,6 +487,20 @@
           compaction premature. The retention job is a TODO until
           a path class outgrows its welcome — measured via
           /timing-style storage accounting, not vibes.
+
+          SHIPPED 2026-12 (campaign 5.3): the retention worker is
+          REAL and runs on the jobs runner — migration 022
+          (tree_retention_policy + tree_versions_retain), the four
+          admin-gated retention prims (retention-policy-set /
+          retention-delete-policy / retention-policies /
+          retention-run), and the boot.ml jobs-runner sweep gated
+          by wall-clock + the keep-everything default. Whole-class
+          policies are the v1 gate; per-type rows are recorded for
+          future finer-grained work but the shared gen-window floor
+          stays whole-class (tree_versions is a global table). The
+          coexistence-plan PHASE 4 condition — "the retention
+          worker runs on the jobs runner" — is met, flipping this
+          chapter to implemented.
      |))))
 
    (subsection coexistence-plan
