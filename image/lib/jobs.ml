@@ -6,8 +6,10 @@
     session's branch. Guests see rows via prims; the host owns concurrency.
 
     v1: job table + runner + core prims (submit-job, job-status, jobs,
-    cancel-job). Step-checkpoints and schedules tables exist (migration
-    015) but their prims are deferred. *)
+    cancel-job). Campaign 4.2 adds step-checkpoints (the (step "name"
+    thunk) special form -> __step__ prim) and schedules (schedule/
+    unschedule/schedules prims + the runner's due-schedule fire path).
+    Tables exist in migration 015. *)
 
 open Pricklypear_lisp.Ast
 
@@ -337,6 +339,391 @@ let reap_dead ~(store : Store.t) : unit =
        WHERE status = 'running' AND runner_id <> $1"
     in
     ignore (Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string runner_id ] sql)
+
+(* The runner loop (eval_job + runner_loop) lives in boot.ml to avoid a
+   dependency cycle: Jobs (DB ops) must not depend on Session, which
+   depends on Prims_db, which depends on Jobs. boot.ml can depend on
+   both Jobs and Session. *)
+
+(* ================================================================== *)
+(* STEP CHECKPOINTS — (with-step "name" thunk) memoized by (job-id, name). *)
+(* ======================================================================== *)
+
+(* Fiber-local id of the job currently being evaluated by the runner. The
+   runner (boot.ml) binds it around eval; the __step__ prim reads it to
+   scope checkpoints per (job-id, name). Outside a job fiber it is None, so
+   (with-step "name" thunk) falls back to a plain thunk call. Mirrors the
+   pp_user_key pattern in store_db.ml. *)
+let current_job_id : string Eio.Fiber.key = Eio.Fiber.create_key ()
+
+let with_current_job_id (job_id : string) (f : unit -> 'a) : 'a =
+  Eio.Fiber.with_binding current_job_id job_id f
+
+let current_job_id_opt () : string option = Eio.Fiber.get current_job_id
+
+(** Look up an existing checkpoint value for (job_id, name). Returns the
+    stored JSONB value as a string (the JSON literal), or None. *)
+let checkpoint_lookup ~(store : Store.t) ~(job_id : string) ~(name : string)
+    : string option =
+  match pg_conn store with
+  | None -> None
+  | Some conn ->
+    let rows =
+      Io_lwt.Db.execute conn
+        ~params:
+          [ Pgx.Value.of_string job_id; Pgx.Value.of_string name ]
+        "SELECT value::text FROM job_steps WHERE job_id = $1::uuid \
+         AND step_name = $2"
+    in
+    (match rows with
+     | row :: _ -> cell_string row 0
+     | [] -> None)
+
+(** Write a checkpoint row for (job_id, name) storing [value] (a JSON
+    literal string). Upsert: a re-run overwrites. Rides the current
+    connection (so inside a with-transaction it lands in the SAME tx as
+    the thunk's writes — the exactly-once composition). *)
+let checkpoint_write ~(store : Store.t) ~(job_id : string) ~(name : string)
+    ~(value : string) : unit =
+  match pg_conn store with
+  | None -> ()
+  | Some conn ->
+    ignore
+      (Io_lwt.Db.execute conn
+         ~params:
+           [ Pgx.Value.of_string job_id; Pgx.Value.of_string name;
+             Pgx.Value.of_string value ]
+         "INSERT INTO job_steps (job_id, step_name, value) \
+          VALUES ($1::uuid, $2, $3::jsonb) \
+          ON CONFLICT (job_id, step_name) DO UPDATE SET value = EXCLUDED.value")
+
+(* ================================================================== *)
+(* SCHEDULES — cron / every-ms rows + next-fire math.                  *)
+(* ================================================================== *)
+
+(* 5-field cron: minute hour day-of-month month day-of-week. A field is
+   either "*", "*/step", or a comma list of values ("a,b,c"). We support
+   the common subset: *, */N, and single integers / comma lists. v1 does not
+   implement ranges ("1-5") or names (jan, mon). *)
+
+type cron_field =
+  | Any                    (* * *)
+  | Step of int * int      (* */N -> min 0, step N *)
+  | List of int list       (* explicit values *)
+
+let parse_cron_field (raw : string) (low : int) (high : int) : cron_field =
+  let raw = String.trim raw in
+  if raw = "*" then Any
+  else if String.length raw >= 3 && String.sub raw 0 2 = "*/" then
+    let n =
+      try int_of_string (String.sub raw 2 (String.length raw - 2)) with _ -> 0
+    in
+    if n <= 0 then Any else Step (low, n)
+  else
+    let parts = String.split_on_char ',' raw in
+    let vals =
+      List.filter_map
+        (fun p ->
+          let p = String.trim p in
+          if p = "" then None
+          else
+            (try
+               let v = int_of_string p in
+               if v >= low && v <= high then Some v else None
+             with _ -> None))
+        parts
+    in
+    if vals = [] then Any else List vals
+
+let cron_field_matches (f : cron_field) (v : int) : bool =
+  match f with
+  | Any -> true
+  | Step (minv, n) -> v >= minv && (v - minv) mod n = 0
+  | List vs -> List.mem v vs
+
+(** Split a 5-field cron string and parse each field with its bounds
+    (minute hour day-of-month month day-of-week). Malformed width → None. *)
+let parse_cron_seq (raw : string) (bounds : (int * int) list)
+    : (cron_field list) option =
+  let fields = String.split_on_char ' ' raw in
+  if List.length fields <> 5 then None
+  else
+    (try
+       let parsed =
+         List.map2
+           (fun f (low, high) -> parse_cron_field f low high)
+           fields bounds
+       in
+       Some parsed
+     with _ -> None)
+
+(** Parse a full 5-field cron string into a tuple of fields
+    (minute hour day-of-month month day-of-week). Bounds follow POSIX cron:
+    minute 0-59, hour 0-23, day-of-month 1-31, month 1-12, day-of-week 0-6
+    (Sunday=0). Malformed input (wrong width, out-of-range-only fields)
+    yields None; the caller treats None as "no match / default to +1min". *)
+let parse_cron (raw : string)
+    : (cron_field * cron_field * cron_field * cron_field * cron_field) option =
+  match parse_cron_seq raw [(0, 59); (0, 23); (1, 31); (1, 12); (0, 6)] with
+  | Some [ m; h; dom; mon; dow ] -> Some (m, h, dom, mon, dow)
+  | _ -> None
+
+(* Standard cron: if BOTH dom and dow are restricted (non-Any), a match on
+   either is sufficient; if only one is restricted, it must match. *)
+let is_restricted (f : cron_field) : bool =
+  match f with Any -> false | _ -> true
+
+(** Does the given UTC calendar time match the parsed cron? [t] is epoch
+    seconds. *)
+let cron_matches (cron : string) (t : float) : bool =
+  match parse_cron cron with
+  | None -> false
+  | Some (m, h, dom, mon, dow) ->
+      let tm = Unix.gmtime t in
+      let min = tm.Unix.tm_min
+      and hour = tm.Unix.tm_hour
+      and mday = tm.Unix.tm_mday
+      and month = tm.Unix.tm_mon + 1
+      and wday = tm.Unix.tm_wday in
+      let m_ok = cron_field_matches m min
+      and h_ok = cron_field_matches h hour
+      and mon_ok = cron_field_matches mon month
+      and dom_ok = cron_field_matches dom mday
+      and dow_ok = cron_field_matches dow wday in
+      (* If both dom and dow are restricted, either counting is enough. *)
+      let dom_dow_ok =
+        if is_restricted dom && is_restricted dow then dom_ok || dow_ok
+        else dom_ok && dow_ok
+      in
+      m_ok && h_ok && mon_ok && dom_dow_ok
+
+(** Next fire time (epoch ms) strictly after [from_ms] matching the cron,
+    searching minute-by-minute with a ~2-year horizon (avoids infinite
+    loops). Returns None if the cron doesn't match within the horizon (e.g.
+    an impossible Feb-30). *)
+let next_cron_ms (cron : string) (from_ms : int64) : int64 option =
+  try
+    match parse_cron cron with
+    | None -> None
+    | Some _ ->
+        let now_ms = Int64.of_float (Unix.gettimeofday () *. 1000.0) in
+        (* Start from the next whole minute strictly after from (UTC). *)
+        let start_min =
+          Int64.add (Int64.div from_ms 60_000L) 1L
+        in
+        let rec search (min64 : int64) : int64 option =
+          if min64 > Int64.add (Int64.div now_ms 60_000L)
+                   (Int64.of_int (365 * 2 * 24 * 60))
+          then None
+          else
+            let t = Int64.to_float (Int64.mul min64 60_000L) /. 1000.0 in
+            if cron_matches cron t then Some (Int64.mul min64 60_000L)
+            else search (Int64.add min64 1L)
+        in
+        search start_min
+  with _ -> None
+
+(** Next fire for an every-ms interval: from + every_ms. *)
+let next_every_ms (every_ms : int64) (from_ms : int64) : int64 =
+  Int64.add from_ms every_ms
+
+(** Is [spec] an every-ms integer (as opposed to a 5-field cron)? *)
+let is_every_ms (spec : string) : bool =
+  match int_of_string_opt (String.trim spec) with Some _ -> true | None -> false
+
+let spec_is_cron (spec : string) : bool = not (is_every_ms spec)
+
+(* --- schedule DB ops --- *)
+
+type schedule = {
+  s_name : string;
+  s_fn : string;
+  s_args : string;
+  s_branch : string;
+  s_submitted_by : string;
+  s_cron : string option;
+  s_every_ms : int64 option;
+  s_next_run : int64;
+  s_enabled : bool;
+}
+
+let schedule_to_value (s : schedule) : value =
+  let fields =
+    Printf.sprintf
+      "{\"name\":\"%s\",\"fn\":\"%s\",\"args\":%s,\"branch\":\"%s\",\
+       \"submitted_by\":\"%s\",\"cron\":%s,\"every_ms\":%s,\
+       \"next_run\":%s,\"enabled\":%s}"
+      s.s_name s.s_fn s.s_args s.s_branch s.s_submitted_by
+      (match s.s_cron with Some c -> Printf.sprintf "\"%s\"" c | None -> "null")
+      (match s.s_every_ms with Some e -> Int64.to_string e | None -> "null")
+      (Int64.to_string s.s_next_run)
+      (if s.s_enabled then "true" else "false")
+  in
+  VStr fields
+
+let row_to_schedule (row : Pgx.row) : schedule option =
+  try
+    let name = cell_string row 0
+    and fn = cell_string row 1
+    and args = cell_string row 2
+    and branch = cell_string row 3
+    and submitted_by = cell_string row 4
+    and cron = cell_string row 5
+    and every_ms = cell_int64 row 6
+    and next_run = cell_int64 row 7
+    and enabled = cell_string row 8
+    in
+    match name, fn, branch, submitted_by, next_run with
+    | Some name, Some fn, Some branch, Some submitted_by, Some next_run ->
+        Some {
+          s_name = name; s_fn = fn;
+          s_args = (match args with Some a -> a | None -> "{}");
+          s_branch = branch; s_submitted_by = submitted_by;
+          s_cron = cron;
+          s_every_ms =
+            (match cron, every_ms with
+             | Some _c, _ -> None
+             | None, Some e -> Some e
+             | None, None -> None);
+          s_next_run = next_run;
+          s_enabled = (match enabled with Some "t" | Some "true" -> true | _ -> false);
+        }
+    | _ -> None
+  with _ -> None
+
+(** Upsert a schedule row. [spec] is a 5-field cron string or an every-ms
+    integer. Computes the first next_run from now. *)
+let schedule_upsert ~(store : Store.t) ~(name : string) ~(spec : string)
+    ~(fn : string) ~(args_json : string) ~(branch : string)
+    ~(submitted_by : string) () : value =
+  match pg_conn store with
+  | None -> VStr "schedule: no db connection"
+  | Some conn ->
+    let now_ms = Int64.of_float (Unix.gettimeofday () *. 1000.0) in
+    let cron = if spec_is_cron spec then Some spec else None in
+    let every_ms =
+      match int_of_string_opt (String.trim spec) with
+      | Some ms -> Some (Int64.of_int ms)
+      | None -> None
+    in
+    if cron = None && every_ms = None then
+      VStr "schedule: spec must be a 5-field cron or an every-ms integer"
+    else
+      let next_run =
+        match cron with
+        | Some c ->
+            (match next_cron_ms c now_ms with
+             | Some n -> n
+             | None -> Int64.add now_ms 60_000L)
+        | None -> next_every_ms (Option.get every_ms) now_ms
+      in
+      (try
+        let sql =
+          "INSERT INTO schedules (name, fn, args, branch, submitted_by, \
+           cron, every_ms, next_run, enabled) \
+           VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8, true) \
+           ON CONFLICT (name) DO UPDATE SET fn = EXCLUDED.fn, \
+             args = EXCLUDED.args, branch = EXCLUDED.branch, \
+             submitted_by = EXCLUDED.submitted_by, cron = EXCLUDED.cron, \
+             every_ms = EXCLUDED.every_ms, next_run = EXCLUDED.next_run, \
+             enabled = true \
+           RETURNING name::text"
+        in
+        let rows =
+          Io_lwt.Db.execute conn
+            ~params:
+              [ Pgx.Value.of_string name; Pgx.Value.of_string fn;
+                Pgx.Value.of_string args_json; Pgx.Value.of_string branch;
+                Pgx.Value.of_string submitted_by;
+                (match cron with Some c -> Pgx.Value.of_string c | None -> Pgx.Value.null);
+                (match every_ms with Some e -> Pgx.Value.of_int64 e | None -> Pgx.Value.null);
+                Pgx.Value.of_int64 next_run ]
+            sql
+        in
+        (match rows with
+         | row :: _ ->
+             (match cell_string row 0 with Some n -> VStr n | None -> VStr name)
+         | [] -> VStr name)
+      with exn -> VStr ("schedule: " ^ Printexc.to_string exn))
+
+(** Disable a schedule. *)
+let unschedule ~(store : Store.t) ~(name : string) () : value =
+  match pg_conn store with
+  | None -> VStr "unschedule: no db connection"
+  | Some conn ->
+    (try
+      let rows =
+        Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string name ]
+          "UPDATE schedules SET enabled = false WHERE name = $1 RETURNING name::text"
+      in
+      (match rows with
+       | row :: _ ->
+           (match cell_string row 0 with Some n -> VStr n | None -> VStr "")
+       | [] -> VStr "unschedule: no such schedule")
+    with exn -> VStr ("unschedule: " ^ Printexc.to_string exn))
+
+(** List schedules (ordered by name). *)
+let list_schedules ~(store : Store.t) () : value =
+  match pg_conn store with
+  | None -> VList []
+  | Some conn ->
+    (try
+      let rows =
+        Io_lwt.Db.execute conn
+          "SELECT name, fn, args::text, branch, submitted_by, cron, every_ms, \
+           next_run, enabled FROM schedules ORDER BY name"
+      in
+      let vals =
+        List.filter_map
+          (fun r -> match row_to_schedule r with Some s -> Some (schedule_to_value s) | None -> None)
+          rows
+      in
+      VList vals
+    with _ -> VList [])
+
+(** Claim a single DUE enabled schedule (oldest next_run first), returning
+    it (and leaving the row unlocked for the caller to advance). Used by the
+    runner's schedule fire path — SKIP LOCKED so concurrent boot/recovery
+    can't double-fire. *)
+let claim_due_schedule ~(store : Store.t) : schedule option =
+  match pg_conn store with
+  | None -> None
+  | Some _ ->
+    let now_ms = Int64.of_float (Unix.gettimeofday () *. 1000.0) in
+    Store.with_dynamic_transaction store (fun () ->
+      match pg_conn store with
+      | None -> None
+      | Some conn ->
+        let sql =
+          "SELECT name, fn, args::text, branch, submitted_by, cron, every_ms, \
+           next_run, enabled FROM schedules \
+           WHERE enabled AND next_run <= $1 \
+           ORDER BY next_run, name FOR UPDATE SKIP LOCKED LIMIT 1"
+        in
+        let rows =
+          Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_int64 now_ms ] sql
+        in
+        (match rows with row :: _ -> row_to_schedule row | [] -> None))
+
+(** Advance a schedule's next_run after it fired (cron or every-ms). *)
+let advance_schedule ~(store : Store.t) ~(name : string) ~(fired_at : int64)
+    ~(cron : string option) ~(every_ms : int64 option) : unit =
+  match pg_conn store with
+  | None -> ()
+  | Some conn ->
+    let now_ms = Int64.of_float (Unix.gettimeofday () *. 1000.0) in
+    let next =
+      match cron, every_ms with
+      | Some c, _ ->
+          (match next_cron_ms c now_ms with
+           | Some n -> n
+           | None -> Int64.add now_ms 60_000L)
+      | None, Some e -> next_every_ms e now_ms
+      | None, None -> Int64.add now_ms 60_000L
+    in
+    ignore
+      (Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string name; Pgx.Value.of_int64 next ]
+         "UPDATE schedules SET next_run = $2 WHERE name = $1")
 
 (* The runner loop (eval_job + runner_loop) lives in boot.ml to avoid a
    dependency cycle: Jobs (DB ops) must not depend on Session, which

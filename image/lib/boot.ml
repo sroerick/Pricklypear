@@ -91,17 +91,24 @@ let jobs_runner_loop ~(session : Session.t) : unit =
         Request_context.make
           ~manifest:t.manifest ~env:t.env ~routes:t.routes
       in
-      let v = Request_context.with_current ctx (fun () ->
-        Session.eval_string_rim t call_src) in
-      let result_json =
-        match v with
-        | Pricklypear_lisp.Ast.VStr s -> s
-        | Pricklypear_lisp.Ast.VNil -> "null"
-        | Pricklypear_lisp.Ast.VInt n -> Int64.to_string n
-        | Pricklypear_lisp.Ast.VBool b -> if b then "true" else "false"
-        | _ -> Printf.sprintf "\"%s\"" (Pricklypear_lisp.Reader.pp_value v)
-      in
-      (result_json, true)
+      (* Bind the current job id on this fiber so the (with-step "name"
+         thunk) special form (__step__ prim) scopes its checkpoints to this
+         job (borge/jobs.borg step-checkpoints). Outside this binding there
+         is no job context and with-step is a plain thunk call. *)
+      Jobs.with_current_job_id job.Jobs.id (fun () ->
+        let v =
+          Request_context.with_current ctx (fun () ->
+            Session.eval_string_rim t call_src)
+        in
+        let result_json =
+          match v with
+          | Pricklypear_lisp.Ast.VStr s -> s
+          | Pricklypear_lisp.Ast.VNil -> "null"
+          | Pricklypear_lisp.Ast.VInt n -> Int64.to_string n
+          | Pricklypear_lisp.Ast.VBool b -> if b then "true" else "false"
+          | _ -> Printf.sprintf "\"%s\"" (Pricklypear_lisp.Reader.pp_value v)
+        in
+        (result_json, true))
     with exn ->
       (* Surface the REAL error text (unbound var / arity / prim message)
          instead of the opaque `Interp_error(_)` Printexc prints — see the
@@ -116,6 +123,31 @@ let jobs_runner_loop ~(session : Session.t) : unit =
   in
   let rec loop () =
     (try Jobs.reap_dead ~store:session.store with _ -> ());
+    (* Fire due schedules: submit a job per due schedule, then advance its
+       next_run. Downtime collapses to one catch-up run (cron searches
+       strictly after now; every-ms just adds the interval). Spec:
+       borge/jobs.borg schedules. *)
+    (let rec fire_schedules () =
+       match Jobs.claim_due_schedule ~store:session.store with
+       | None -> ()
+       | Some sch ->
+           let fired_at =
+             Int64.of_float (Unix.gettimeofday () *. 1000.0)
+           in
+           (try
+              ignore
+                (Jobs.submit ~store:session.store
+                   ~fn:sch.Jobs.s_fn ~args_json:sch.Jobs.s_args
+                   ~branch:sch.Jobs.s_branch
+                   ~submitted_by:sch.Jobs.s_submitted_by
+                   ~run_at_ms:fired_at ());
+              Jobs.advance_schedule ~store:session.store
+                ~name:sch.Jobs.s_name ~fired_at
+                ~cron:sch.Jobs.s_cron ~every_ms:sch.Jobs.s_every_ms
+            with _ -> ());
+           fire_schedules ()
+     in
+     try fire_schedules () with _ -> ());
     let claimed = (try Jobs.claim_due ~store:session.store with _ -> None) in
     (match claimed with
      | Some job ->
