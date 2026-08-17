@@ -1232,7 +1232,16 @@
   )
   (subsection kanban
    (doc "Board view over todos: one todo-list as a board with its own columns (per-list state set), cards draggable via tree actions")
-   (status planned)
+   (status implemented)
+   (details
+    (doc (|2026-12 campaign 9.0: flipped to implemented. BORGE-1786336755
+        closed - the per-list state-cycle threading is live: todo/item/cycle
+        + todo/cycle read the item's list's OWN columns (single source of
+        truth todo/state/columns-for-list, which falls back to
+        todo/state/list) and the detail <select> uses list-aware
+        todo/state/options-for-list, so a custom-columns list cycles exactly
+        its columns in /todos, the todo detail, and /kanban alike. There are
+        no duplicates - /todos detail and /kanban read the same function.|)))
    (implements libs/kanban/lib.pp libs/todo/lib.pp)
    (details
     (doc (|

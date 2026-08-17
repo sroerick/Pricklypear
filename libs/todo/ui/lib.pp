@@ -108,7 +108,7 @@
                               (html/select
                                 "state"
                                 (html/attr "id" "state")
-                                (todo/state/options-all state))
+                                (todo/state/options-for-list state lid))
                               (html/label (html/attr "for" "due") "Due (YYYY-MM-DD)")
                               (html/text-input
                                 "due"

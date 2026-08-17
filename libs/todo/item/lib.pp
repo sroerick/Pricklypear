@@ -80,18 +80,21 @@
 (define todo/item/cycle
   (lambda
     (id)
-    "Advance item id to its next state; () when missing."
+    "Advance item id to its next state; () when missing. Cycles within the
+     item's OWN list's state set (custom columns when present, else the
+     global default) so /todos and /kanban stay consistent — BORGE-1786336755."
     (let
       ((row (todo/tree/get "todo-item" id)))
       (if
         (null? row)
         ()
         (let
-          ((cur (todo/item/state row)))
+          ((cur (todo/item/state row))
+            (list-id (todo/item/list-id row)))
           (if
             (todo/state/archived? cur)
             cur
-            (todo/item/set-state id (todo/state/next cur))))))))
+            (todo/item/set-state id (todo/state/next-for-list cur list-id))))))))
 
 (define todo/item/delete
   (lambda (id) "Delete item id." (todo/tree/del "todo-item" id)))
