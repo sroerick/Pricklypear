@@ -67,7 +67,7 @@
    (doc "verify(cred) / lookup / mint / verify_token — the four pure functions")
    (implements image/lib/auth_store.ml image/lib/auth_password.ml common/lib/auth_types.ml)
    (status partial)
-   (* agent note (|2026-08-02 confirm partial: password+token+ssh_key verify paths work; interim sha256$salt$digest — argon2id still declared target (BORGE-1783831698).|) *)
+   (* agent note (|2026-12: password champion is now argon2id with a transparent upgrade on successful legacy verify (auth_store.verify_password -> set_password). Legacy sha256$salt$digest rows still verify and are rewritten in place on first post-cutover login — no flag day, no dual-entry. BORGE-1785545259 closed (supersedes lost-id 1783831698 refs). Token/ssh_key paths unchanged.|) *)
    (details
     (doc (|
          SSH KEY VERIFICATION:
@@ -82,10 +82,12 @@
          2. Auth: SELECT secret_data FROM credentials
             WHERE kind='password' AND user_id=
             (SELECT id FROM users WHERE username=$1).
-            Verify against the stored password hash
-            (interim sha256$salt$digest; argon2id is
-            the declared target — see the chapter-level
-            security notes). Return user_id or denied.
+            Verify against the stored password hash.
+            Champion is argon2id PHC-encoded; legacy
+            sha256$salt$digest rows STILL verify and a
+            successful legacy verify triggers a
+            transparent in-place rewrite to argon2id
+            (no flag day). Return user_id or denied.
          3. Auth logs to auth_log.
 
          TOKEN MINTING (after web login):
@@ -393,9 +395,11 @@
            store.branch_id → <username>/personal (default)
            author for define = username | agent:<model>
 
-         Password hashing: argon2id (complete system). Interim
-         hash only acceptable until argon2 is available; must be
-         upgraded in place.
+         Password hashing: argon2id (implemented 2026-12:
+         auth_password.ml champion matches Argon2 ID at
+         t_cost=2, m_cost=65536, parallelism=1); interim
+         sha256$salt$digest rows verify transparently and are
+         rewritten to argon2id on successful login in-place.
 
          Session token: opaque random id; store only HMAC/hash in
          DB; cookie carries raw id. Revocable. Expiry required.

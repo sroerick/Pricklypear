@@ -15,13 +15,13 @@ discussions, edit the spec directly or just talk — do NOT file issues.
 literate book (chapter `.borg` files + root). `borge report` after the
 status-reconcile pass is roughly **55 implemented / 10 planned /
 9 deprecated (~74%)** — planned items are real gaps (roam, promote UX,
-type-system, review-merge, argon2, full FTS), not stale foundation work.
+type-system, review-merge, full FTS), not stale foundation work.
 Packages on poohstack; build/tests on lisp + common + image. Product
 libs (notes/todo/outline/ui/bible/dabar/ai/…) seed to `system/main`.
 Supervisor/authd multi-process topology is retired (see
 `borge/single-image.borg`). Open borge issues that still matter live in
 `.borge-bugs/` (quote compounds, AST nodes design, schema-authority,
-argon2, optional SSH). Monitor command: bottom of `README.md`.
+optional SSH). Monitor command: bottom of `README.md`.
 
 ## Live image eval (laptop / pi agent)
 
@@ -159,8 +159,11 @@ Postgres still holds bytes, but the **logical store is ONE TREE**
   `docs/eio-floor-checklist.md` / `docs/runtime-effects-transition.md`.
 - Single unix binary (`image/`) — not a Solo5 unikernel in v1. Solo5 remains
   an optional later hardening axis (`spikes/mirage_solo5/`), not the product path.
-- Auth is in-process (`image/lib/auth_*.ml`). Password hashes are interim
-  `sha256$salt$digest` until argon2 (BORGE-1783831698).
+- Auth is in-process (`image/lib/auth_*.ml`). Password hashes are argon2id as of
+  2026-12 (`$argon2id$` PHC); legacy
+  `sha256$salt$digest` rows verify transparently and are
+  rewritten on successful login (was BORGE-1783831698 /
+  1785545259, closed).
 - `pure-html` for type-safe HTML + `HTML.Hx.*` htmx attributes. Use
   `txt ~raw:true "%s" s` to bypass escaping for raw-HTML injection from
   Nopales route handlers.
@@ -203,8 +206,9 @@ auth is **in-process** in the image.
 - Agents/`pp_eval`: HTTP Basic (username/password against credentials table)
   or session cookie. nginx htpasswd is emergency edge only, not the user DB.
 - Escape hatch: `PP_AUTH_DISABLED=1` skips HTTP auth gate (dev only).
-- Password hash interim: `sha256$salt_hex$digest_hex` (argon2 deferred —
-  BORGE-1783831698). Verify: `ksh scripts/verify_auth.sh`.
+- Password hash: argon2id PHC champion + transparent legacy
+  `sha256$salt_hex$digest_hex` verify-and-rewrite (BORGE-1785545259,
+  closed; supersedes stale 1783831698). Verify: `ksh scripts/verify_auth.sh`.
 
 ## Workflow
 
