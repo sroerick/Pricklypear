@@ -1651,10 +1651,11 @@ let code_history_entry_to_yojson (e : code_history_entry) : Yojson.Safe.t =
     ; ("body", body_json)
     ]
 
-(** Newest-first history rows for [name] on [branch_id].
-    Searches function_defs / type_defs / view_bindings history under the
-    same logical name (fn/type name or route path). *)
-let list_code_history (t : t) ~(branch_id : string) ~(name : string)
+(** 012-table before-image history for [name] on [branch_id]. Kept as the
+    pre-shadow fallback source (tree-time.projections Phase 3): the versioned
+    tree only captures writes after migration 019, so pre-019 historical
+    depth still lives here until the coexistence window closes. *)
+let list_code_history_012 (t : t) ~(branch_id : string) ~(name : string)
   : code_history_entry list =
   match t.conn with
   | None -> []
@@ -1696,9 +1697,134 @@ let list_code_history (t : t) ~(branch_id : string) ~(name : string)
              | _ -> None)
            rows
        with exn ->
-         Printf.eprintf "[store] list_code_history: %s\n"
+         Printf.eprintf "[store] list_code_history_012: %s\n"
            (Printexc.to_string exn);
          [])
+
+(* ---- code-history over tree_versions (tree-time.projections, Phase 3) ----
+   Re-implements branching.code-history / code-diff over the versioned tree
+   (tree_versions) instead of the 012 before-image table, KEEPING SIGNATURES
+   UNCHANGED.
+
+   SEMANTIC NOTE (recorded in tree-time.coexistence-plan Phase 3): 012 stored
+   the OLD before-image per UPDATE/DELETE (never on the first INSERT);
+   tree_versions stores the post-write head payload at each gen. A tree-backed
+   history read therefore reports ONLY the rows STRICTLY BELOW HEAD — the
+   previous states, newest-first — which the projections doc phrases as "read
+   the version row at gen-1". The current head row (the live state) is never
+   history, so an insert-only fn has no history until it is rewritten or
+   deleted, exactly like the 012 table. Delete-then-recreate leaves a
+   middle TOMBSTONE row (op=DELETE) below head, which is preserved.
+
+   FALLBACK: when the code path has NO version rows yet (a pre-019 write —
+   the 019 shadow only captures writes after installation), fall back to the
+   012 table so no pre-shadow historical depth is lost during the coexistence
+   window. Post-shadow history is complete in tree_versions. *)
+
+(* The inner definition payload of a code version row. The tree payload for a
+   fn/type/route node carries the code under a 'body' key (fn: {body, params};
+   type: the fields list; route: the handler JSON) — the same shape 012 stored
+   in function_defs.body / type_defs.fields / view_bindings handler. *)
+let code_body_of_version (v : Tree_store.version) : string option =
+  match v.Tree_store.v_body with
+  | `Assoc kv -> (
+      match List.assoc_opt "body" kv with
+      | Some b -> Some (Yojson.Safe.to_string b)
+      | None -> None )
+  | _ -> None
+
+let code_doc_of_version (v : Tree_store.version) : string option =
+  match v.Tree_store.v_body with
+  | `Assoc kv -> (
+      match List.assoc_opt "doc" kv with
+      | Some (`String s) -> Some s
+      | _ -> None )
+  | _ -> None
+
+(* Resolve a logical code [name] on [branch_id] to its tree path + rel.
+   Tries fn, then type, then route (same priority live_code_body_text uses).
+   A candidate path "exists" if it has a version chain (covers the live AND
+   the tombstoned/deleted case) OR a live tree node (the pre-019 case that
+   falls back to the 012 table). *)
+let code_path_for_name (t : t) ~(branch_id : string) ~(name : string)
+  : (string * string) option =
+  match t.conn with
+  | None -> None
+  | Some conn ->
+      let candidates =
+        [ (Tree_store.fn_path ~branch_id ~name, "function_defs")
+        ; (Tree_store.type_path ~branch_id ~name, "type_defs")
+        ; (Tree_store.route_path ~branch_id ~route:name, "view_bindings")
+        ]
+      in
+      List.find_map
+        (fun (p, rel) ->
+          let has_ver =
+            Tree_store.versioned_history conn ~path:p () <> []
+          in
+          let live = Tree_store.get_by_path conn ~path:p <> None in
+          if has_ver || live then Some (p, rel) else None)
+        candidates
+
+(* Tree-backed code history for [name] on [branch_id], newest-first.
+   Only rows STRICTLY BELOW HEAD are history — the 012 table captured
+   before-images on UPDATE/DELETE only (never on the first INSERT), and the
+   projections doc defines a history read as "the version row at gen-1".
+   So the current head row (the live state) is EXCLUDED; the newest history
+   entry is the state just before the latest change. Empty when the name has
+   no code path OR only a first-insert head row (no superseded state yet) —
+   caller falls back to the 012 table so pre-shadow depth is never lost. *)
+let list_code_history_tree (t : t) ~(branch_id : string) ~(name : string)
+  : code_history_entry list =
+  match code_path_for_name t ~branch_id ~name with
+  | None -> []
+  | Some (path, rel) -> (
+      match t.conn with
+      | None -> []
+      | Some conn ->
+          let vers = Tree_store.versioned_history conn ~path () in
+          (* newest gen = the head (excluded); anything below it is history *)
+          let head_gen =
+            List.fold_left
+              (fun acc v ->
+                match v.Tree_store.v_gen with
+                | Some g -> Int64.max acc g
+                | None -> acc)
+              0L vers
+          in
+          let below_head =
+            List.filter
+              (fun v ->
+                match v.Tree_store.v_gen with
+                | Some g -> Int64.compare g head_gen < 0
+                | None -> true)
+              vers
+          in
+          List.rev_map
+            (fun v ->
+              { rel
+              ; op =
+                  (if v.Tree_store.v_tombstone then "DELETE" else "UPDATE")
+              ; author = v.Tree_store.v_author
+              ; doc = code_doc_of_version v
+              ; package = None
+              ; changed_at =
+                  (match v.Tree_store.v_created_at with
+                   | Some c -> c
+                   | None -> "")
+              ; body =
+                  (if v.Tree_store.v_tombstone then None
+                   else code_body_of_version v)
+              })
+            below_head)
+
+(** Newest-first history rows for [name] on [branch_id]. Tree-backed (Phase 3)
+    with an 012 fallback for pre-shadow names. *)
+let list_code_history (t : t) ~(branch_id : string) ~(name : string)
+  : code_history_entry list =
+  let tree_hist = list_code_history_tree t ~branch_id ~name in
+  if tree_hist <> [] then tree_hist
+  else list_code_history_012 t ~branch_id ~name
 
 let list_code_history_json (t : t) ~(branch_id : string) ~(name : string)
   : string =
