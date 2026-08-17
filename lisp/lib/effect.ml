@@ -178,6 +178,24 @@ let write_db_prims = [
   "add-ssh-key"; "revoke-ssh-key";
   "set-llm-key"; "clear-llm-key";
   "with-public-write";  (* elevates anon → may write data_rows *)
+  "submit-job"; "submit-job-at"; "cancel-job";  (* borge/jobs.borg WriteDb *)
+  "with-step"; "__step__";  (* checkpoint write; composes with Txn for exactly-once *)
+  "schedule"; "unschedule";  (* borge/jobs.borg schedules WriteDb *)
+]
+
+let read_db_prims = [
+  "get"; "rows"; "select-for-update";
+  "find-row"; "find-rows"; "find-text"; "find-random";
+  "list-branches"; "current-branch"; "list-bindings";
+  "whoami"; "current-author";
+  "function-source"; "function-doc"; "function-ast"; "package-bindings"; "package-exports";
+  "export-package";
+  "route-visibility";
+  "list-usernames"; "list-ssh-keys";
+  "llm-key-status";
+  "log-tail"; "ops/summary"; "ops/incidents";
+  "agent-history"; "agent-sessions";
+  "job-status"; "jobs"; "schedules";  (* borge/jobs.borg ReadDb *)
 ]
 
 let branch_prims = [ "fork"; "merge"; "checkout" ]
@@ -196,8 +214,6 @@ let ai_write_prims = [
 (* Portal that only talks to the model (Ai only) — legacy one-shot. *)
 let ai_prims = "agent" :: ai_write_prims
 
-(** Capability set required by a primitive name: the union of its bucket's
-    effects, or the empty set for unrecognized/unknown names. *)
 let effects_for_prim (name : string) : effect_set =
   if List.mem name pure_prims then EffSet.empty
   else if List.mem name read_db_prims then EffSet.singleton ReadDb

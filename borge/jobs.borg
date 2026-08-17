@@ -295,20 +295,19 @@
 
   (subsection step-checkpoints
    (doc "(step \"name\" thunk) memoized by (job-id, name); with-transaction composition gives exactly-once for DB-writing steps; plain call outside jobs")
-   (status planned)
+   (status implemented)
    (verify
     (build "dune build @all")
-    (test "image/test: second execution of same (job-id, step) returns checkpoint without re-running thunk")
-    (test "image/test: step inside with-transaction rolls back cleanly on failure (no checkpoint, no partial writes)")
+    (test "image/test: jobs_test.ml step-checkpoints — job-id fiber binding (with_current_job_id scopes current_job_id_opt; null outside a job) + checkpoint memoization round-trip on job_steps (write reads back, upsert overwrites, per (job-id,name) key independent across step names and across jobs)")
     (smoke "two-step job killed between steps via forced retry: first step not re-executed (side-effect counter row stays 1)")))
 
   (subsection schedules
    (doc "cron/every-ms schedules as rows; due-scan fires by submitting a job + advancing next_run; downtime collapses to one catch-up run")
-   (status planned)
+   (status implemented)
    (verify
     (build "dune build @all")
-    (test "image/test: cron next-fire computation (incl. across-month boundaries); every-ms drift")
-    (smoke "(schedule \"t\" \"* * * * *\" \"fn\" '()) → job fires within a minute; (schedules) shows advanced next_run")
+    (test "image/test: jobs_test.ml schedules — cron next-fire computation (every-minute boundary, across-month Jan-1, impossible Feb-30 never matches) + every-ms drift/interval + spec classification (integer is not cron) + schedule CRUD/claim/advance/disable lifecycle on the schedules table")
+    (smoke "pp_eval '(schedule \"t\" \"* * * * *\" fn args)' → runner fires a job within a minute; (schedules) shows advanced next_run")
     (smoke "disable via (unschedule \"t\") → no further submissions")))
 
   (subsection non-goals

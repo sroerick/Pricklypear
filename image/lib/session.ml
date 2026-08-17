@@ -548,6 +548,61 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
           (Pricklypear_lisp.Ast.VStr
                         "__with_transaction__: bad args (need a lambda)"));
 
+  (* Private prim used by the with-step special form in eval.ml. NOT
+     USER-VISIBLE: routed to under name __step__ by eval.ml, never
+     `(with-step "name" (lambda ...))` from a plain prim call.
+
+     (__step__ "name" <lambda>) is a checkpoint boundary (borge/jobs.borg
+     step-checkpoints):
+       - Outside a job (Jobs.current_job_id_opt () = None, e.g. an HTTP
+         request or REPL) it is a PLAIN thunk call — no checkpoint.
+       - Inside a job (the runner binds the job id around eval), the
+         thunk's result is memoized under (job_id, name): first execution
+         runs the thunk and writes a job_steps row; re-execution (a retry)
+         returns the stored value WITHOUT re-running the thunk.
+
+     Exactly-once with (with-transaction (step …)): the checkpoint INSERT
+     rides Store.current_conn — when the caller is inside
+     with_transaction, the insert lands in the SAME transaction as the
+     thunk's writes, so it commits or rolls back atomically with them (a
+     failed/later-raised step leaves no checkpoint; a retry re-runs). If
+     the THUNK ITSELF raises, no checkpoint is written (the exception
+     propagates, rolling back the surrounding transaction if any). *)
+  Primitives.register tbl "__step__"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr name;
+          Pricklypear_lisp.Ast.VLambda (_params, _body, _clo) as lam ] ->
+          (match Jobs.current_job_id_opt () with
+           | None ->
+               (* Outside a job: a plain thunk call with no checkpoint. *)
+               apply_lambda_auto lam
+           | Some job_id ->
+               (match
+                  Jobs.checkpoint_lookup ~store:t.store ~job_id ~name
+                with
+                | Some value_json ->
+                    (* Memoized: return the stored value without re-running. *)
+                    (try
+                       Prims_pure.json_to_value
+                         (Yojson.Safe.from_string value_json)
+                     with _ ->
+                       Pricklypear_lisp.Ast.VStr value_json)
+                | None ->
+                    (* First execution in this job: run the thunk, then write
+                       the checkpoint. If the thunk raises, the exception
+                       propagates (no checkpoint, surrounding tx rolls back). *)
+                    let result = apply_lambda_auto lam in
+                    let value_json =
+                      Yojson.Safe.to_string (Prims_pure.value_to_json result)
+                    in
+                    Jobs.checkpoint_write ~store:t.store ~job_id ~name
+                      ~value:value_json;
+                    result))
+      | _ ->
+          (Pricklypear_lisp.Ast.VStr
+                        "__step__: bad args (need name-str, lambda)"));
+
   (* (with-public-write (lambda () body...)) — run body with write privilege
      so public route handlers can create data_rows / notes captures.
      Elevates anonymous only (logged-in sessions already write). Restores

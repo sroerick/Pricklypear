@@ -102,7 +102,7 @@ let is_special_form (name : string) : bool =
   match name with
   | "lambda" | "let" | "letrec" | "if" | "define" | "quote" | "seq"
   | "begin" | "match" | "guard" | "error"
-  | "prim" | "with-transaction"
+  | "prim" | "with-transaction" | "with-step"
   | "quasiquote" | "unquote" | "unquote-splicing" | "defmacro"
   | "macroexpand-1" | "macroexpand" | "gensym"
   | "cond" | "and" | "or"
@@ -117,7 +117,7 @@ let is_special_form (name : string) : bool =
 let kernel_special_names =
   [ "lambda"; "let"; "letrec"; "if"; "define"; "quote"; "seq"; "begin";
     "match"; "guard"; "error"; "prim";
-    "with-transaction"; "quasiquote"; "unquote"; "unquote-splicing";
+    "with-transaction"; "with-step"; "quasiquote"; "unquote"; "unquote-splicing";
     "defmacro"; "macroexpand-1"; "macroexpand"; "gensym";
     "cond"; "and"; "or";
     "apply"; "list/map"; "list/filter"; "list/foldl"; "list/foldr" ]
@@ -800,6 +800,36 @@ and eval_special_form
                 raise
                   (Interp_error
                      (User_error ("with-transaction body must be a lambda", "bad-args")))))
+  | "with-step", _ ->
+      (* (with-step "name" (lambda () body)) — a checkpoint boundary. In a
+         job, the __step__ prim in session.ml memoizes the thunk's result
+         under (job-id, name); outside a job it is a plain thunk call.
+         Adjacent to with-transaction for the exactly-once
+         (with-transaction (lambda () (with-step …))) composition. Named
+         with-step (NOT step) to avoid colliding with the pre-existing
+         libs/rb `step` recipe-DSL function. See borge/jobs.borg
+         step-checkpoints. *)
+      (match full_args with
+       | [ _; name_expr; body_expr ] ->
+           let name_v = eval ~budget ~prims env name_expr in
+           (match name_v with
+            | VStr name ->
+                let lambda_v = eval ~budget ~prims env body_expr in
+                (match lambda_v with
+                 | VLambda _ ->
+                     Done (Control.perform_prim "__step__" [ VStr name; lambda_v ])
+                 | _ ->
+                     raise
+                       (Interp_error
+                          (User_error ("with-step body must be a lambda", "bad-args"))))
+            | _ ->
+                raise
+                  (Interp_error
+                     (User_error ("with-step needs a string name", "bad-args"))))
+       | _ ->
+           raise
+             (Interp_error
+                (User_error ("with-step needs (with-step \"name\" (lambda () body))", "bad-args"))))
   | "gensym", [ _ ] -> Done (VSymbol (gensym ()))
   | "gensym", [ _; Lit (VStr prefix) ] | "gensym", [ _; Var prefix ]
   | "gensym", [ _; Lit (VSymbol prefix) ] ->

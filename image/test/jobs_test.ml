@@ -261,11 +261,19 @@ let test_claim_skips_locked () =
          locked-by-B, so A skips it and takes job2). *)
       make_due store_a ~id:job1;
       make_due store_a ~id:job2;
-      (* second, independent connection/transaction locks job1's row *)
+      (* second, independent connection/transaction locks job1's row.
+         Use READ COMMITTED for the lock-holding side so store A's
+         SERIALIZABLE claim UPDATE (SKIP LOCKED) neither deadlocks nor
+         trips SSI 40001 the moment B's row lock is held — B holds a
+         plain row lock, not a snapshot conflict, so A cleanly skips
+         the locked job1 and takes job2. (SERIALIZABLE would abort A's
+         write with 'could not serialize access due to concurrent
+         update' — the documented flakiness; READ COMMITTED removes it.) *)
       let cfg = S.config_from_env () in
       let store_b = S.make ~cfg ~branch_id:main_id () in
       S.connect store_b;
-      S.with_transaction store_b (fun conn_b ->
+      S.with_transaction ~isolation:Pgx.Isolation.Read_committed
+        store_b (fun conn_b ->
           match conn_b with
           | None -> Alcotest.fail "no conn on store_b"
           | Some c ->
@@ -408,6 +416,169 @@ let test_reap_dead () =
 (* otherwise fail with a numeric-op error and retry to dead.             *)
 (* ------------------------------------------------------------------ *)
 
+(* ------------------------------------------------------------------ *)
+(* step-checkpoints: current-job binding + checkpoint memoization      *)
+(* (campaign 4.2 — the (with-step "name" thunk) special form memoizes *)
+(* (job-id, name); the DB mechanics live in Jobs (checkpoint_lookup /   *)
+(* checkpoint_write), which the __step__ prim in session.ml drives.     *)
+(* ------------------------------------------------------------------ *)
+
+let test_current_job_id_binding () =
+  (* current_job_id_opt reads the Eio fiber key, so it must run on a fiber
+     (Eio_main). Outside any job binding there is no job context. *)
+  Eio_main.run @@ fun _env ->
+    (* Outside any job binding: no job context. *)
+    Alcotest.(check bool) "no job context by default" true
+      (J.current_job_id_opt () = None);
+    (* Inside with_current_job_id: Some id. *)
+    J.with_current_job_id "job-abc" (fun () ->
+        Alcotest.(check bool) "job id visible inside binding" true
+          (J.current_job_id_opt () = Some "job-abc"));
+    (* Cleared after the binding scope exits. *)
+    Alcotest.(check bool) "job id cleared after binding" true
+      (J.current_job_id_opt () = None)
+
+let test_checkpoint_memoization () =
+  with_store (fun store ->
+      clear_jobs store;
+      (* a real job row to satisfy the job_steps FK (ON DELETE CASCADE) *)
+      let jid = submit_future store ~fn:"jfn" ~args_json:"{}"
+          ~branch:"system/main" ~submitted_by:"alice"
+      in
+      (* no checkpoint yet for this (job, step) pair *)
+      Alcotest.(check bool) "no checkpoint initially" true
+        (J.checkpoint_lookup ~store ~job_id:jid ~name:"load" = None);
+      (* write + read round-trips *)
+      J.checkpoint_write ~store ~job_id:jid ~name:"load" ~value:"42";
+      (match J.checkpoint_lookup ~store ~job_id:jid ~name:"load" with
+       | Some v -> Alcotest.(check string) "checkpoint value" "42" v
+       | None -> Alcotest.fail "checkpoint not found after write");
+      (* a different step name is independent (per (job-id, name) key) *)
+      Alcotest.(check bool) "different step independent" true
+        (J.checkpoint_lookup ~store ~job_id:jid ~name:"other" = None);
+      (* same (job,step) with a different job is independent too *)
+      let jid2 = submit_future store ~fn:"jfn" ~args_json:"{}"
+          ~branch:"system/main" ~submitted_by:"alice"
+      in
+      Alcotest.(check bool) "different job independent" true
+        (J.checkpoint_lookup ~store ~job_id:jid2 ~name:"load" = None);
+      delete_job store ~id:jid2;
+      (* overwrite updates in place (a re-run of a step that already has
+         a checkpoint on retry REPLACES it — but the step prim skips the
+         re-run entirely when a checkpoint exists, so this is only reachable
+         via an explicit re-write; assert the upsert semantics) *)
+      J.checkpoint_write ~store ~job_id:jid ~name:"load" ~value:"99";
+      (match J.checkpoint_lookup ~store ~job_id:jid ~name:"load" with
+       | Some v -> Alcotest.(check string) "checkpoint overwritten" "99" v
+       | None -> Alcotest.fail "overwritten checkpoint missing");
+      delete_job store ~id:jid)
+
+(* ------------------------------------------------------------------ *)
+(* schedules: cron next-fire computation (incl. across-month) +        *)
+(* every-ms drift (campaign 4.2)                                       *)
+(* ------------------------------------------------------------------ *)
+
+let test_next_minute () =
+  let now = now_ms () in
+  (* "* * * * *" fires every whole minute; next fire is the next minute *)
+  (match J.next_cron_ms "* * * * *" now with
+   | None -> Alcotest.fail "next_cron_ms (* * * * *) returned None"
+   | Some n ->
+       Alcotest.(check bool) "next fire on a minute boundary" true
+         (Int64.rem n 60_000L = 0L);
+       Alcotest.(check bool) "next fire strictly after now" true
+         (Int64.compare n now > 0);
+       Alcotest.(check bool) "next fire within two minutes" true
+         (Int64.compare n (Int64.add now (Int64.mul 2L 60_000L)) < 0))
+
+let test_every_ms_drift () =
+  Alcotest.(check string) "every-ms adds the interval"
+    "110" (Int64.to_string (J.next_every_ms 10L 100L));
+  Alcotest.(check bool) "integer spec is not cron" false
+    (J.spec_is_cron "60000");
+  Alcotest.(check bool) "cron spec is cron" true
+    (J.spec_is_cron "* * * * *")
+
+let test_cron_across_month () =
+  let now = now_ms () in
+  (* "0 0 1 1 *" = every Jan 1 00:00 UTC; the returned fire must be a
+     Jan-1 midnight strictly after now (may be this Jan or next). *)
+  (match J.next_cron_ms "0 0 1 1 *" now with
+   | None -> Alcotest.fail "next_cron_ms (Jan 1) returned None"
+   | Some n ->
+       let tm = Unix.gmtime (Int64.to_float n /. 1000.0) in
+       Alcotest.(check int) "minute 0" 0 tm.Unix.tm_min;
+       Alcotest.(check int) "hour 0" 0 tm.Unix.tm_hour;
+       Alcotest.(check int) "day 1" 1 tm.Unix.tm_mday;
+       Alcotest.(check int) "month January" 0 tm.Unix.tm_mon;
+       Alcotest.(check bool) "after now" true (Int64.compare n now > 0));
+  (* a day-of-month restricted cron must not fire on non-matching days *)
+  Alcotest.(check bool) "Feb 30 (impossible) never matches" true
+    (J.next_cron_ms "0 0 30 2 *" now = None)
+
+(* ------------------------------------------------------------------ *)
+(* schedules: DB CRUD + due-claim + disable (campaign 4.2)             *)
+(* ------------------------------------------------------------------ *)
+
+let test_schedule_crud () =
+  with_store (fun store ->
+      match S.conn_of store with
+      | None -> ()
+      | Some conn ->
+          ignore (S.exec conn "DELETE FROM schedules");
+          (* upsert an every-ms schedule; returns the name; enabled *)
+          (match J.schedule_upsert ~store ~name:"pp-test-every"
+                   ~spec:"60000" ~fn:"jfn" ~args_json:"{}"
+                   ~branch:"system/main" ~submitted_by:"alice" () with
+           | Pricklypear_lisp.Ast.VStr n ->
+               Alcotest.(check string) "upsert returns name" "pp-test-every" n
+           | _ -> Alcotest.fail "schedule upsert did not return name");
+          (* list shows it *)
+          (match J.list_schedules ~store () with
+           | Pricklypear_lisp.Ast.VList l ->
+               Alcotest.(check bool) "list has the schedule" true
+                 (List.exists
+                    (function
+                      | Pricklypear_lisp.Ast.VStr s ->
+                          contains_sub s "pp-test-every"
+                      | _ -> false)
+                    l)
+           | _ -> Alcotest.fail "list_schedules returned non-list");
+          (* drive it due and claim (future-run_at-style: the initial
+             next_run is now+60000 so the live runner skips it; we set it
+             to the past just before OUR claim to win deterministically) *)
+          ignore (S.exec conn
+                    "UPDATE schedules SET next_run = 0 \
+                     WHERE name = 'pp-test-every'");
+          (match J.claim_due_schedule ~store with
+           | Some sch ->
+               Alcotest.(check string) "claimed schedule name"
+                 "pp-test-every" sch.J.s_name;
+               Alcotest.(check bool) "every_ms captured" true
+                 (sch.J.s_every_ms = Some 60_000L);
+               J.advance_schedule ~store ~name:sch.J.s_name
+                 ~fired_at:(now_ms ())
+                 ~cron:sch.J.s_cron ~every_ms:sch.J.s_every_ms
+           | None -> Alcotest.fail "claim_due_schedule returned None");
+          (* after advance, next_run is in the future -> no longer due *)
+          (match J.claim_due_schedule ~store with
+           | Some _ -> Alcotest.fail "schedule still due after advance"
+           | None -> ());
+          (* unschedule disables; a disabled schedule is never due *)
+          (match J.unschedule ~store ~name:"pp-test-every" () with
+           | Pricklypear_lisp.Ast.VStr n ->
+               Alcotest.(check string) "unschedule returns name"
+                 "pp-test-every" n
+           | _ -> Alcotest.fail "unschedule did not return name");
+          ignore (S.exec conn
+                    "UPDATE schedules SET next_run = 0 \
+                     WHERE name = 'pp-test-every'");
+          (match J.claim_due_schedule ~store with
+           | Some _ -> Alcotest.fail "disabled schedule claimed"
+           | None -> ());
+          let _ = conn in
+          ignore (S.exec conn "DELETE FROM schedules"))
+
 let test_eval_src_args () =
   (* numeric arg: stored jsonb '1' -> (f 1) — the 4.1 args-bug regression *)
   Alcotest.(check string) "numeric arg splices bare"
@@ -425,6 +596,7 @@ let test_eval_src_args () =
   Alcotest.(check string) "empty object -> no-arg call"
     "(jfn {})" (J.eval_src ~fn:"jfn" ~args:"{}")
 
+
 let () =
   Random.self_init ();
   Alcotest.run "jobs"
@@ -441,4 +613,18 @@ let () =
     ; ( "args-bug"
       , [ Alcotest.test_case "eval_src splices jsonb args as literal" `Quick
             test_eval_src_args ] )
+    ; ( "step-checkpoints"
+      , [ Alcotest.test_case "job-id fiber binding" `Quick
+            test_current_job_id_binding
+        ; Alcotest.test_case "checkpoint memoization (job,step)" `Quick
+            test_checkpoint_memoization ] )
+    ; ( "schedules"
+      , [ Alcotest.test_case "cron next-fire every minute" `Quick
+            test_next_minute
+        ; Alcotest.test_case "every-ms drift + spec classification" `Quick
+            test_every_ms_drift
+        ; Alcotest.test_case "cron across-month boundary" `Quick
+            test_cron_across_month
+        ; Alcotest.test_case "schedule CRUD + claim/advance/disable" `Quick
+            test_schedule_crud ] )
     ]
