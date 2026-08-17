@@ -103,6 +103,20 @@
              the max live gen. Additive CREATE OR REPLACE;
              runner: scripts/reconcile_tree_version_head.sh.
              Spec: tree-time.versioned-leaves.
+           022_tree_retention.sql — tree-time.gc retention
+             worker: tree_retention_policy (policy AS HABITAT
+             DATA, path_class code|data, type_name NULL = whole
+             class, UNIQUE(path_class,type_name)) + tree_
+             versions_retain(path_class, keep_windows): computes
+             the whole-class floor from the live head gen,
+             CHECKPOINTs the newest in-retained-past state of
+             every fully-retired path to a row at the floor
+             boundary, then DROP PARTITIONs every lazy gen-window
+             entirely below the floor — never the base gen_0
+             window. Additive + idempotent + image-applied; the
+             worker runs on the jobs runner (boot.ml,
+             migration-015) gated by wall-clock.
+             Spec: tree-time.gc.
 
          A migration in flight blocks serving until it
          completes (or fails). This guarantees the image

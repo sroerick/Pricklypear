@@ -3887,6 +3887,26 @@
       ((slug (as-str (request-param "slug"))))
       (seq (notes/doc/delete slug) (redirect "/notes")))))
 
+;; tree-time.consumers (notes undo, the first app consumer): restore the
+;; note's root node body (title/tags/kind/day/folder) to its previous
+;; version via ONE per-path (undo path) call — the substrate keeps the
+;; before-image, no per-app history journal (tree-time.consumers).
+;; path = notes/tree/note-path folder slug; undo is safe + non-random: an
+;; error-string return (no history / no value at gen) leaves the note
+;; unchanged and we just redirect back.
+(define notes/ui/do-undo
+  (lambda
+    ()
+    (let
+      ((slug (as-str (request-param "slug")))
+        (n (notes/doc/get (as-str (request-param "slug")))))
+      (let
+        ((folder (notes/doc/folder n))
+          (path (notes/tree/note-path folder slug)))
+        (seq
+          (undo path)
+          (redirect (string-append "/notes?slug=" slug)))))))
+
 (define notes/ui/do-save
   (lambda
     (slug raw)
@@ -4277,6 +4297,7 @@
           (notes/ui/do-save
             (request-param "slug")
             (request-param "outline")))
+        ((string-eq action "undo") (notes/ui/do-undo))
         ((string-eq action "capture") (notes/capture/handle))
         ((string-eq action "delete") (notes/ui/do-delete))
         ((string-eq action "refile") (notes/refile/handle))
@@ -5019,7 +5040,25 @@
                           (html/attr "type" "submit")
                           (html/attr "class" "secondary")
                           (html/attr "title" "delete note")))
-                      "Delete note")))))))
+                      "Delete note"))))
+            (html/form
+              "POST"
+              "/notes"
+              (html/attrs
+                (list
+                  (html/attr "class" "note-undo")
+                  (html/attr "title" "undo the last change to this note")))
+              (html/join
+                (list
+                  (html/hidden "action" "undo")
+                  (html/hidden "slug" (as-str slug))
+                  (html/button
+                    (html/attrs
+                      (list
+                        (html/attr "type" "submit")
+                        (html/attr "class" "secondary")
+                        (html/attr "title" "undo last note change")))
+                    "Undo")))))))
         (html/p*
           (html/attr "class" "muted")
           (string-append "tags: " (as-str tags)))

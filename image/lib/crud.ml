@@ -904,12 +904,35 @@ let tree_undo (store : Store.t) ~(path : string) ?(n : int64 = 1L) () : value =
                     "undo: code-path restore-by-write deferred (code-restore \
                      consumer); use gen-read to inspect, then define")
                else
-                 (match
-                    Tree_store.upsert_datum conn ~path ~type_name ~body_json
-                      ~author
-                  with
-                  | Ok p -> (VStr p)
-                  | Error e -> (VStr e)))
+                 (* tree-time.consumers: kind-aware restore. Datum rows
+                    (kind=datum) re-write via upsert_datum; hierarchical
+                    nodes (note/folder/heading) must go back through
+                    upsert_hier so the payload envelope keeps its note kind
+                    (an upsert_datum restore silently rewrites the payload
+                    marker to "datum" — the kind-column/payload mismatch
+                    the notes-undo consumer exposes). The version row
+                    captures the ORIGINAL kind, so the restore defeats to it;
+                    unknown/empty kind falls back to datum behaviour. *)
+                 let hier_kind =
+                   match v.Tree_store.v_kind with
+                   | k when k <> "" && Tree_store.is_hier_kind k -> Some k
+                   | _ -> None
+                 in
+                 (match hier_kind with
+                  | Some k ->
+                      (match
+                         Tree_store.upsert_hier conn ~path ~kind:k ~type_name
+                           ~body_json ~author
+                       with
+                       | Ok p -> (VStr p)
+                       | Error e -> (VStr e))
+                  | None ->
+                      (match
+                         Tree_store.upsert_datum conn ~path ~type_name
+                           ~body_json ~author
+                       with
+                       | Ok p -> (VStr p)
+                       | Error e -> (VStr e))))
 
 let tree_children_html (store : Store.t) ~(prefix : string) ~(garden_root : string)
     () : value =
@@ -1093,3 +1116,51 @@ let tree_path_label (s : string) : value = VStr (Tree_store.path_label s)
 
 let tree_garden_root ~(user : string) : value =
   VStr (Tree_store.garden_root ~user)
+
+(* ---- tree-time.gc (5.3): retention worker surface ------------------------
+   retention-policy-set / retention-policies / retention-delete-policy manage
+   policy AS HABITAT DATA (tree_retention_policy, migration 022); retention-run
+   drives the worker (rollup + DROP PARTITION) for each path class that has an
+   explicit whole-class policy. Retention is a TODO until a class outgrows its
+   welcome — the default (no whole-class policy) is keep-everything, never
+   ad-hoc deletion. *) 
+
+let retention_set_policy (store : Store.t) ~(path_class : string)
+    ~(type_name : string option) ~(keep_windows : int64) () : value =
+  VStr (Store.retention_set_policy store ~path_class ~type_name ~keep_windows)
+
+let retention_delete_policy (store : Store.t) ~(path_class : string)
+    ~(type_name : string option) () : value =
+  VStr
+    (Store.retention_delete_policy store ~path_class ~type_name)
+
+let retention_policies (store : Store.t) () : value =
+  let ps = Store.retention_list_policies store in
+  let js =
+    List.map
+      (fun (pc, tn, kw, ca) ->
+        Yojson.Safe.to_string
+          (`Assoc
+            [ ("path_class", `String pc);
+              ("type_name",
+                match tn with None -> `Null | Some s -> `String s);
+              ("keep_windows", `Intlit (Int64.to_string kw));
+              ("created_at", `String ca) ]))
+      ps
+  in
+  VList (List.map (fun j -> VStr j) js)
+
+let retention_run (store : Store.t) ~(path_class : string option) () : value =
+  let rs = Store.retention_run store ~path_class () in
+  let js =
+    List.map
+      (fun (pc, d, c) ->
+        Yojson.Safe.to_string
+          (`Assoc
+            [ ("path_class", `String pc);
+              ("dropped_windows", `Intlit (Int64.to_string d));
+              ("checkpointed_paths", `Intlit (Int64.to_string c)) ]))
+      rs
+  in
+  VList (List.map (fun j -> VStr j) js)
+

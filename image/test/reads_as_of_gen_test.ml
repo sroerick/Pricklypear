@@ -303,7 +303,81 @@ let test_undo () =
        | Some conn -> ignore (T.delete_datum conn ~type_name ~id:(path_id path))
        | None -> ()))
 
+(* tree-time.consumers (notes-undo): undo must be KIND-AWARE. A note is a
+   hierarchical node (kind=note written through upsert_hier); a naive
+   restore-by-write through upsert_datum rewrites the payload envelope marker
+   to "datum" (kind column stays note, payload->>'kind' flips to datum) —
+   the corruption the notes-undo consumer exposes. Restore must go back
+   through upsert_hier preserving the original kind. *)
+
+(** Read the live tree_nodes payload envelope marker for a path. *)
+let live_payload_kind (conn : _) (path : string) : string option =
+  try
+    let rows =
+      Pricklypear_image_lib.Io_lwt.Db.execute conn
+        ~params:[ Pgx.Value.of_string path ]
+        "SELECT payload->>'kind' FROM tree_nodes WHERE path = $1::ltree"
+    in
+    (match rows with
+     | [ [ c ] ] -> Pgx.Value.to_string c
+     | _ -> None)
+  with _ -> None
+
+let test_undo_note_kind () =
+  with_store (fun store ->
+      let slug = uniq "note" in
+      let path = Printf.sprintf "data.note.u.tester.%s" slug in
+      (* two note versions through the hier write surface *)
+      (match S.conn_of store with
+       | Some conn ->
+           ignore
+             (T.upsert_hier conn ~path ~kind:"note" ~type_name:"note"
+                ~body_json:
+                  (Printf.sprintf
+                     "{\"uuid\":\"%s\",\"slug\":\"%s\",\"title\":\"v1\",\"tags\":\"\",\"kind\":\"note\",\"day\":\"\"}"
+                     slug slug)
+                ~author:"tester");
+           ignore
+             (T.upsert_hier conn ~path ~kind:"note" ~type_name:"note"
+                ~body_json:
+                  (Printf.sprintf
+                     "{\"uuid\":\"%s\",\"slug\":\"%s\",\"title\":\"v2\",\"tags\":\"\",\"kind\":\"note\",\"day\":\"\"}"
+                     slug slug)
+                ~author:"tester")
+       | None -> ());
+      (match C.tree_undo store ~path () with
+       | VStr _ -> ()
+       | _ -> Alcotest.fail "note undo returned non-string");
+      (* restored title, node kind, AND payload marker kind all intact *)
+      (match C.tree_get store ~path () with
+       | VStr s ->
+           Printf.eprintf "[DBG] noteundo get: %s\n%!" s;
+           (match Yojson.Safe.from_string s with
+            | `Assoc kv ->
+                Alcotest.(check (option string)) "undo restores note title v1"
+                  (Some "v1") (body_title kv);
+                let node_kind =
+                  match List.assoc_opt "kind" kv with
+                  | Some (`String k) -> Some k
+                  | _ -> None
+                in
+                Alcotest.(check (option string)) "node kind stays note"
+                  (Some "note") node_kind
+            | _ -> Alcotest.fail "note live head not object")
+       | _ -> Alcotest.fail "note live head missing");
+      (match S.conn_of store with
+       | Some conn ->
+           Alcotest.(check (option string))
+             "payload marker kind stays note (not datum)"
+             (Some "note") (live_payload_kind conn path)
+       | None -> ());
+      (* cleanup: delete the whole note subtree *)
+      (match S.conn_of store with
+       | Some conn -> ignore (T.delete_path conn ~path ~recursive:true)
+       | None -> ()))
+
 let () =
+  Random.self_init ();
   Alcotest.run "reads_as_of_gen"
     [
       ( "reads-as-of-gen",
@@ -314,5 +388,7 @@ let () =
             `Quick test_gen_read;
           Alcotest.test_case "gen-diff node-granular" `Quick test_gen_diff;
           Alcotest.test_case "undo restore-by-write" `Quick test_undo;
+          Alcotest.test_case "undo kind-aware (note payload not datumed)"
+            `Quick test_undo_note_kind;
         ] );
     ]

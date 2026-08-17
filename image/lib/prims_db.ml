@@ -786,6 +786,84 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
         | Some u -> (Pricklypear_lisp.Ast.VBool u.Auth_store.is_admin)
         | None -> (Pricklypear_lisp.Ast.VBool false));
 
+  (* ---- tree-time.gc (5.3): retention worker prims (admin-gated) ----------
+     Policy as HABITAT DATA: retention-policy-set / retention-delete-policy /
+     retention-policies manage tree_retention_policy (migration 022);
+     retention-run drives the worker (rollup + DROP PARTITION) per path class.
+     Administrative surface — it controls whole-habitat storage/retention. *)
+  let retention_admin op k =
+    if t.manifest.username = "anonymous" then
+      (Pricklypear_lisp.Ast.VStr (op ^ ": denied for anonymous"))
+    else
+      require_admin op (fun () -> k ())
+  in
+  (* (retention-policy-set path_class keep_windows) — whole-class policy.
+     (retention-policy-set path_class type_name keep_windows) — per-type
+     (recorded for future finer-grained work; the shared gen-window floor is
+     still whole-class). *) 
+  Primitives.register_server_only tbl "retention-policy-set"
+    (fun args ->
+      retention_admin "retention-policy-set" (fun () ->
+          match args with
+          | [ Pricklypear_lisp.Ast.VStr pc; Pricklypear_lisp.Ast.VInt kw ] ->
+              Crud.retention_set_policy t.store ~path_class:pc
+                ~type_name:None ~keep_windows:kw ()
+          | [ Pricklypear_lisp.Ast.VStr pc; Pricklypear_lisp.Ast.VStr tn
+            ; Pricklypear_lisp.Ast.VInt kw
+            ] ->
+              Crud.retention_set_policy t.store ~path_class:pc
+                ~type_name:(Some tn) ~keep_windows:kw ()
+          | _ ->
+              (raise
+                 (Pricklypear_lisp.Ast.Interp_error
+                    (Pricklypear_lisp.Ast.Prim_error
+                       ("retention-policy-set",
+                        "need path_class keep_windows [type_name]",
+                        "bad-args"))))));
+  (* (retention-delete-policy path_class [type_name]) *) 
+  Primitives.register_server_only tbl "retention-delete-policy"
+    (fun args ->
+      retention_admin "retention-delete-policy" (fun () ->
+          match args with
+          | [ Pricklypear_lisp.Ast.VStr pc ] ->
+              Crud.retention_delete_policy t.store ~path_class:pc
+                ~type_name:None ()
+          | [ Pricklypear_lisp.Ast.VStr pc; Pricklypear_lisp.Ast.VStr tn ] ->
+              Crud.retention_delete_policy t.store ~path_class:pc
+                ~type_name:(Some tn) ()
+          | _ ->
+              (raise
+                 (Pricklypear_lisp.Ast.Interp_error
+                    (Pricklypear_lisp.Ast.Prim_error
+                       ("retention-delete-policy", "need path_class [type_name]",
+                        "bad-args"))))));
+  (* (retention-policies) -> VList of policy JSON *) 
+  Primitives.register_server_only tbl "retention-policies"
+    (fun args ->
+      retention_admin "retention-policies" (fun () ->
+          match args with
+          | [] -> Crud.retention_policies t.store ()
+          | _ ->
+              (raise
+                 (Pricklypear_lisp.Ast.Interp_error
+                    (Pricklypear_lisp.Ast.Prim_error
+                       ("retention-policies", "need no args", "bad-args"))))));
+  (* (retention-run [path_class]) -> VList of (path_class, dropped, ckptd) JSON.
+     Runs only for path classes with an explicit whole-class policy; otherwise
+     a keep-everything no-op. *) 
+  Primitives.register_server_only tbl "retention-run"
+    (fun args ->
+      retention_admin "retention-run" (fun () ->
+          match args with
+          | [] -> Crud.retention_run t.store ~path_class:None ()
+          | [ Pricklypear_lisp.Ast.VStr pc ] ->
+              Crud.retention_run t.store ~path_class:(Some pc) ()
+          | _ ->
+              (raise
+                 (Pricklypear_lisp.Ast.Interp_error
+                    (Pricklypear_lisp.Ast.Prim_error
+                       ("retention-run", "need [path_class]", "bad-args"))))));
+
   (* (deftype 'name 'field1 ...) — admin only (BORGE-1785213343).
      Schema authority lives with main/admin; garden authors must not
      overwrite type_defs. Anonymous still raises (deny_anon). *)

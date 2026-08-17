@@ -121,8 +121,41 @@ let jobs_runner_loop ~(session : Session.t) : unit =
       in
       (msg, false))
   in
+  (* tree-time.gc (5.3): periodic retention sweep ON THE JOBS RUNNER. The
+     retention worker (policy-as-habitat-data + rollup + DROP PARTITION)
+     runs here, gated by wall-clock time so it does not fire every 1s tick.
+     Conservative by design: Store.retention_run is a no-op unless a
+     whole-class policy row exists (tree_retention_policy), so on a
+     policy-free habitat this is a cheap SELECT. Spec: borge/tree-time.borg
+     gc + coexistence-plan PHASE 4 ("the retention worker runs on the jobs
+     runner"). Interval overridable via PP_RETENTION_SECS for dev/testing. *)
+  let retention_interval_s =
+    let v = Sys.getenv_opt "PP_RETENTION_SECS" in
+    match v with
+    | Some s -> int_of_string_opt s |> Option.value ~default:3600
+    | None -> 3600
+  in
+  let last_retention = ref 0.0 in
+  let retention_sweep () =
+    let now = Unix.gettimeofday () in
+    if now -. !last_retention >= float_of_int retention_interval_s then (
+      last_retention := now;
+      try
+        let rs = Store.retention_run session.store ~path_class:None () in
+        List.iter
+          (fun (pc, d, c) ->
+            if d > 0L || c > 0L then
+              Printf.eprintf
+                "[jobs] retention %s: dropped %Ld window(s), checkpointed %Ld path(s)\n%!"
+                pc d c)
+          rs
+      with exn ->
+        Printf.eprintf "[jobs] retention sweep failed: %s\n%!"
+          (Printexc.to_string exn))
+  in
   let rec loop () =
     (try Jobs.reap_dead ~store:session.store with _ -> ());
+    retention_sweep ();
     (* Fire due schedules: submit a job per due schedule, then advance its
        next_run. Downtime collapses to one catch-up run (cron searches
        strictly after now; every-ms just adds the interval). Spec:
