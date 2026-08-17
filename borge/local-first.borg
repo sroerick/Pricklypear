@@ -1,7 +1,9 @@
 (project pricklypear-local-first
  (doc "Pricklypear book chapter: local-first — a local lens is a branch of the one tree whose root lives on the client. The pad detaches, roots independently, and grafts back. This revisits remote-eval's 'no second store on the client' hard-out: the hard-out was written against an uncoordinated client copy; a lens is a governed copy whose merge semantics already exist (three-way tree-diff, branching.borg / one-tree.branching-interaction). Same Prim_call seam, same tree, different lens policy.")
  (status planned)
- (* agent note (|2026-08-14 chapter created from the local-first design discussion. Thesis: one-tree + user-owned data + three-way tree-diff merge are, almost without addition, the local-first primitives. The 2026-08-02 /data revision (data.u.<user>.*) was made for multi-user isolation and turns out to also fix the replication unit — the isolation boundary and the replication boundary are the same shape. remote-eval is the online-remote mode (local compute, remote data plane); local-first is the offline-capable mode (local lens, sync on reconnect). One seam, two policies. The cactus metaphor (pads = lenses, grafting = merge, glochids = sync conflicts) is evocative and correct but is NOT load-bearing in this spec text — it lives in prose, not the source of truth.|) *)
+ (* agent note (|2026-08-14 chapter created from the local-first design discussion. Thesis: one-tree + user-owned data + three-way tree-diff merge are, almost without addition, the local-first primitives. The 2026-08-02 /data revision (data.u.<user>.*) was made for multi-user isolation and turns out to also fix the replication unit — the isolation boundary and the replication boundary are the same shape. remote-eval is the online-remote mode (local compute, remote data plane); local-first is the offline-capable mode (local lens, sync on reconnect). One seam, two policies. The cactus metaphor (pads = lenses, grafting = merge, glochids = sync conflicts) is evocative and correct but is NOT load-bearing in this spec text — it lives in prose, not the source of truth.
+
+ 2026-12 campaign 8.0 plan pass: lens-model + replication-units pinned for the 8.1 make (details CONTRACT blocks below). A lens = a CHILD BRANCH of the checked-out branch via (fork) / Store.fork_branch (P5 empty-lens fork); the server branch stays the parent; single-writer-per-lens pins to the branch model; code sync = branch-pointer move (promote/merge), data sync = in-place reconcile. Replication unit = data.u.user, data.shared, b.lens plus branch ancestry; path-prefix RLS confinement is the replication boundary. Sync-negotiation handle = the branch,generation coordinate — the same migration-017 branch_generations / gen-now clock remote-eval.caching already keys on (one counter, three consumers). Status stays planned; the 8.1 make flips.|) *)
  (convention ocaml-dune)
  (section local-first
   (doc "A client process that holds a durable local lens of the one tree, evaluates Nopales against it offline, and reconciles with the server on reconnect. The server keeps the corpus, the data plane authority, and the merge index; the client keeps a working copy and the interactive surface. Single-user per client; the server stays multi-user.")
@@ -120,6 +122,34 @@
          One algorithm, two policies for where the merged result
          lands. Both are subtree hash-diff + reconcile; neither
          invents a new primitive.
+
+         PLAN PASS (campaign 8.0, 2026-12) — lens fork CONTRACT pinned
+         for the 8.1 make. A lens being "a branch checked out to a
+         client root" is made concrete as a CHILD BRANCH of the
+         checked-out branch:
+           - FORK SURFACE. A clone forks the user's current branch
+             into a client-owned lens via the EXISTING (fork ...)
+             primitive / Store.fork_branch (branching.personal-
+             workspace, one-tree P5 EMPTY-LENS fork — copy-on-fork,
+             parent pointer only). The lens is an empty child of the
+             checked-out branch; the server branch stays the parent.
+             Naming: <owner>/lens-<device>[-<date>] (e.g.
+             admin/personal -> admin/lens-laptop-2026-08-14).
+           - MATERIALIZE. The client materializes the lens to its
+             local substrate (local-substrate) and evaluates against
+             it: local DB prims resolve against the lens files; the
+             server is only the merge/index authority.
+           - SINGLE-WRITER PER LENS, PINS TO THE BRANCH MODEL. The
+             server NEVER writes into a client lens except via sync/
+             merge. Local writes are commits on the lens; atomicity is
+             the substrate's (rename(2)). The branch is what makes the
+             merges safe — no new concurrency model.
+           - LANDING POLICY (pinned). CODE sync merges lens ->
+             server branch by moving the branch pointer (the existing
+             promote / merge primitive). DATA sync reconciles the
+             user's data subtree IN PLACE against the server's copy
+             (data is branch-free; there is no pointer to move). Both
+             are subtree hash-diff + reconcile; neither a new prim.
     |))))
 
   (subsection replication-units
@@ -174,6 +204,33 @@
          untrusted corpus code in a browser; local-first executes
          the user's OWN corpus on the user's OWN device, which is the
          trust relationship the online image already assumes.
+
+         PLAN PASS (campaign 8.0, 2026-12) — REPLICATION SUBTREE PINNED
+         for the 8.1 make. The replication unit is exactly the
+         authorized-read subtree:
+           data.u.<user>.*                        the user's own data (full)
+           data.shared.*                          read-mostly seed
+           b.<lens>.{fn,type,route,pkg}.*         forked code lens (pinned at fork)
+           PLUS the branch ancestry the lens resolves through (the
+           system/main + parent overrides a server-side eval of the
+           lens would build — materialized locally per inheritance
+           read-time resolution).
+         NOTHING outside it. Path-prefix confinement (one-tree RLS
+         floor) is the replication boundary; the client cannot ask
+         for, and the server cannot send, a subtree the identity
+         cannot read in a normal session. Replication is authorized
+         reads, BATCHED.
+
+         SYNC-NEGOTIATION HANDLE (the coordinate the manifest exchange
+         keys on). The client records the (branch, generation) it last
+         synced at; that snapshot is the merge base. This is NOT a new
+         counter — it is the SAME migration-017 branch_generations
+         coordinate tree-time promoted to the head/gen clock
+         (gen-now / Store.current_generation) and remote-eval.caching
+         keys its def cache on. One counter, three consumers
+         (def-cache freshness, reads-as-of-gen, last-synced merge
+         base). A sync round negotiates (path, hash) manifests and
+         offers (branch, generation) as the common ancestor.
     |))))
 
   (subsection local-substrate
