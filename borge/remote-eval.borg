@@ -3,6 +3,7 @@
  (status planned)
  (* agent note (|2026-08-14 chapter created from the remote-eval design discussion. Thesis: the interpreter is a pure portable library (~few kloc OCaml, no service deps); the corpus (function_defs, type_defs, data_rows) is branchy rows in Postgres. They are separated along exactly the right line — the cheap-to-copy thing travels, the expensive-to-replicate thing stays home. Remote-eval is NOT a new product: it is a mode of the same Prim_call seam the agent host already uses, with the rim handler replaced by an HTTP proxy. agent/ is the local-only instance today; pp-remote --image=URL is the relaxed instance. Statuses are honest: the substrate is implemented (the seam, run_with_rim, read_eval_all_direct, the api-eval JSON boundary from i-fields-as-string 2026-08-12), everything else is planned.|) *)
  (* agent note (|2026-08-14 RECONCILE: a shared codec already exists — pure/prims_pure.ml (pricklypear-pure-prims, wrapped false as Prims_pure) defines value_to_json AND json_to_value (the inverse), explicitly shared between the image and a browser client per its dune comment. So the substrate codec is DONE; the remaining codec work is the ERROR codec (Interp_error/Prim_error/Reader_error -> JSON with kind/name/line/col, currently inline in image/lib/http_pages.ml api_eval) factored into pure/ + its inverse, plus a round-trip property test. ALSO RECONCILE: borge/structural-editing.borg client-eval already plans a browser client/ package (interp.js, js_of_ocaml --effects=cps, pure-prims-only, optimistic structural ops reconciled via op-protocol). client-eval and remote-eval share the seam (same pure interpreter, prims_pure factored out) but DIFFER: client-eval leaves DB prims UNBOUND in the browser and reconciles via op-protocol; remote-eval PROXIES DB prims over HTTP. Complementary, not duplicate. To avoid the client/ package-name collision (client/ is a tracked browser package), remote-eval's native host is the remote/ package (binary pp-remote), NOT client/.|) *)
+ (* agent note (|2026-12 CAMPAIGN 7.0 PLAN PASS (server-endpoint + caching spec) — reconcile + spec the tree-time dependency. Revealed the remote-eval implementation is ALREADY COMPLETE and ON MASTER (built since the 2026-08 design, merged as a chain: 1a ee309e3 shared error codec factored into pure/prims_pure.ml; 1b ff3b0a5 migration 017 branch_generations counter + Store.current_generation; 2a 540e1a2 POST /api/prim endpoint with server-only refuse-or-forward; 2b 8e75797 remote/ package + proxy rim (pp-remote); 3 623ddd9 hybrid placer + e01a3cc shared http_transport + de61e34 pp-remote hook + f1dae70 transaction-routing tests). VERIFIED green this pass: dune build @all clean; remote/test/placer_test 5/5; remote/test/remote_test 7/7; image/test/api_prim_test (server-endpoint refuse-or-forward dispatch: proxyable prim ok, server-only refused-not-executed with structured server_only kind, classification derived from register_server_only metadata, never a hand list); image/test/branch_generation_test (write-in-ancestry bumps / distinct (branch,generation) key / no-write unchanged / type+route+shared-data bumps). So server-endpoint (7.1) and placement + proxy-rim client (7.3) substrate are DONE; the CLIENT-SIDE DEF CACHE — remote/lib/def_cache.ml, keyed (branch, generation) — is NOT yet built (that is the open 7.2 make slice). THE TREE-TIME DEPENDENCY (the point of this plan pass, per campaign 7.0): the caching subsection's generation key is NOT a remote-eval invention — it IS migration 017 branch_generations, which tree-time (campaign 5, landed 2026-12) PROMOTED from a cache-invalidation signal to the head/gen coordinate (the reads-as-of-gen clock; (gen-now) prim + Store.current_generation). So the def cache must key on the SAME coordinate tree-time reads as-of and the (gen-now) clock reads — one counter, one namespace. Enumeration: server-endpoint (planned; make 7.1 flips), client (planned; make 7.2 — proxy rim done, def_cache open), caching (planned; make 7.2 — 017 counters done, def_cache open), placement (planned; make 7.3 — done), stepping (planned; make 7.3 — explain.ml stepping evaluator + proxy-rim integration NOT built). This is a spec-reality reconcile + dependency-pin pass; NO status flips here (7.1/7.2/7.3 make own the flips).|) *)
  (* agent note (|The two deepest consequences, named up front so the sections stay honest: (1) the store stops being where Nopales RUNS and becomes where Nopales LIVES — running is what clients do; (2) local eval over a durable remote corpus is the substrate for a debugger the LLM-integration chapter can drive (step/trace/breakpoint locally, data plane authoritative remotely). Both flow from one effect constructor and a faithful value<->json boundary.|) *)
  (convention ocaml-dune)
  (section remote-eval
@@ -119,6 +120,26 @@
          HTTP calls; the server keeps the transaction body, the client
          gets the result. This is a hard correctness constraint, not a
          v0 limitation — see hard-constraints.
+
+         IMPLEMENTED (campaign 7.1 substrate, 2026-08, merged; plan-pass
+         reconciled 2026-12). The endpoint + refusal machinery ships in
+         image/lib/primitives.ml + http_pages.ml:
+           - [Primitives.register_server_only] / [register_server_only_sync] tag
+             a prim server-only AT REGISTRATION (route, fork, merge, checkout,
+             create-user, is-admin?, …); [Primitives.is_server_only] reads the
+             same registry metadata the registration sites wrote (never a hand
+             list in the endpoint).
+           - [Primitives.dispatch name args] = the one-call refusal-or-forward
+             path (refuse in front, same-table exec behind), factored out of
+             http_pages.ml so it is unit-testable without an HTTP server; the
+             POST /api/prim endpoint is a thin residue over it. Auth is the same
+             basic-auth/cookie path /api/eval uses; a prim call is equivalent
+             privilege to an eval that performs the prim.
+           - Tests: image/test/api_prim_test.ml covers proxyable-ok,
+             server-only-refused-not-executed (structured server_only kind),
+             and metadata-derived classification (not hand-maintained).
+           GRANULARITY (per-DB-hit), REFUSE-OR-FORWARD (metadata-derived),
+           and NO-TRANSACTION-OVER-WIRE all stand exactly as specified.
     |))))
 
   (subsection client
@@ -190,6 +211,37 @@
          READ-HEAVY CONFIG. Function defs + read-heavy config rows are
          the cache's first citizens. Hot (data_rows) reads stay remote
          (placement subsection).
+
+         THE GEN COORDINATE IS TREE-TIME'S (DEPENDENCY PIN — campaign 7.0
+         plan pass). The cache does NOT invent its own version key. The
+         generation is migration 017 branch_generations — the single
+         per-branch monotonic counter bumped by AFTER triggers on
+         function_defs / type_defs / view_bindings writes (covers
+         promote/merge and the one-tree reverse mirror, since they all write
+         the scaffolding tables) and by data_rows writes to the root branch
+         (data is shared/branch-free, so a data write appears in every
+         branch's ancestry). It is surfaced as
+         current_branch_generation(branch_id) (walks the ancestry chain so an
+         ancestor write appears to every descendant via the inheritance CTE),
+         Store.current_generation, and the tree-time (gen-now) prim. Tree-time
+         (campaign 5, landed 2026-12) PROMOTED this same 017 counter from a
+         cache-invalidation signal to the head/gen coordinate: (tree/get :gen),
+         gen-read, gen-diff, undo, versioned_head/history all read as-of it.
+         So the def cache keys on EXACTLY the coordinate tree-time reads as-of
+         and (gen-now) reads — one counter, one namespace. A remote client's
+         'is my (branch, generation) still current?' check is therefore the SAME
+         cheap current_branch_generation round trip tree-time treats as the
+         reads-as-of-gen clock — no independent version clock to drift.
+
+         IMPLEMENTED SUBSTRATE + OPEN CLIENT MODULE. The server-side half is
+         DONE (migration 017 + Store.current_generation + image/test/
+         branch_generation_test.ml: write-in-ancestry bumps / checkout = distinct
+         (branch,generation) key / no-write unchanged / type+route bumps / shared
+         data bump). The client-side half — remote/lib/def_cache.ml keying
+         (def-name -> (value, source-generation)) with (branch, generation)
+         invalidation and the one cheap round trip — is the OPEN 7.2 make slice
+         (cf. the client subsection, whose [implements remote/lib/def_cache.ml]
+         line is the make target).
     |))))
 
   (subsection placement
