@@ -73,6 +73,14 @@
              claim protocol needs real typed status/run_at
              columns + partial jobs_claim_idx; kernel rows
              belong to the migration tier. Spec: jobs.
+           018_tree_versions.sql — ADDITIVE versioned-leaf table
+             for tree-time (branch_id, path, gen) append-only
+             history + covering index + tree_generations row,
+             gen-range partitioned for retention GC, tombstone
+             representation. DESIGNED in tree-time.migration-018
+             (campaign 5.0 plan pass); the file lands with 5.1
+             (make versioned-leaves) and is not yet tracked.
+             Spec: tree-time.
 
          A migration in flight blocks serving until it
          completes (or fails). This guarantees the image
