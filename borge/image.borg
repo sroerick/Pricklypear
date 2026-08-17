@@ -37,7 +37,7 @@
 
     (subsection boot-seed-batch
      (doc "Boot seed batch-loads existing names once; additive persist skips per-name SELECT")
-     (status planned)
+     (status implemented)
      (verify
       (build "dune build image")
       (smoke "warm boot: image.log shows one [session] boot seed: N packages, M defs in <ms>ms line and ZERO get_by_path-per-define round trips; first POST /api/eval after boot < 2s")
@@ -83,7 +83,7 @@
 
     (subsection boot-request-cost
      (doc "/api/* never triggers the UI shell; identity attach never rehydrates an unchanged branch")
-     (status planned)
+     (status implemented)
      (verify
       (build "dune build image")
       (smoke "POST /api/eval with a cold ui-shell cache does NOT evaluate ui/nav or ui/css; GET / does")
@@ -1162,7 +1162,7 @@
   )
   (subsection page-timing
    (doc "Per-route page render timing")
-   (status planned)
+   (status implemented)
    (implements image/lib/http.ml image/lib/http_core.ml image/lib/http_data.ml image/lib/timing.ml image/lib/prims_db.ml lisp/lib/eval.ml)
    (verify
     (build "dune build image")
