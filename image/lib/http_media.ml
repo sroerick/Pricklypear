@@ -501,8 +501,13 @@ let media_get (session : Session.t) (reqd : Httpun.Reqd.t) ~(id : string)
   | Error () ->
       unauthorized_api reqd;
       ()
-  | Ok _ ->
-      let got = Media.get_bytes (Session.store session) ~id in
+  | Ok (actor, is_admin) ->
+      (* BORGE-1785695911: GET by uuid is visibility-confined — other users'
+         blobs are "not found", same as data_rows post Phase 2b. *)
+      let got =
+        Media.get_bytes (Session.store session) ~id
+          ~visible_to:(actor, is_admin) ()
+      in
       (match got with
        | None ->
            text_response reqd ~status:`Not_found ~content_type:"text/plain"

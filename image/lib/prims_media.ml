@@ -21,7 +21,13 @@ let register (t : t) (tbl : Primitives.t) : unit =
     (fun args ->
       match args with
       | [ Pricklypear_lisp.Ast.VStr id ] ->
-          let m = Media.get_meta t.store ~id in
+          let uname = actor () in
+          if uname = "anonymous" then deny_anon "media-meta"
+          else
+          let m =
+            Media.get_meta t.store ~id
+              ~visible_to:(uname, t.is_admin) ()
+          in
           (match m with
            | None -> Pricklypear_lisp.Ast.VNil
            | Some meta ->
