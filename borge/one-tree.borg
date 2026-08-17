@@ -471,6 +471,7 @@
     (smoke "tree/upsert a datum node missing a required field → clean rejection naming the field, identical to create")
     (smoke "tree/upsert an existing datum path with a changed field → body updates in place; (rows 't) reflects the new value")
     (smoke "tree/move a datum node to a new path → (get 't id) at the new path returns it; old path is gone; projection in sync")
+    (smoke "tree/move a datum to a path under a DIFFERENT type_name → re-runs typed-boundary validation against the new type; a missing required field rejects cleanly naming the field, the node stays put")
     (smoke "tree/delete a datum path → node and projection row both removed")
     (smoke "tree/get, tree/list, tree/find-by, tree/list-kind all return datum nodes, not only hierarchical kinds")
     (smoke "tree/get of any node returns JSON with created_at and updated_at keys; created_at is stable across an upsert rewrite, updated_at advances")))
