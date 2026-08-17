@@ -422,6 +422,7 @@ let prim_summary (name : string) : string =
   | "gen-read" -> "node body at gen (absolute path or lens suffix), crossed over branch lens rules → version JSON"
   | "gen-diff" -> "node-granular diff between gen-a and gen-b (hashes first, walk on mismatch)"
   | "undo" -> "restore value at head-n as a NEW write at head+1 (restore-by-write, datum paths)"
+  | "code-restore" -> "restore a code node (fn/type/route) at head-n as a NEW write at head+1 (restore-by-write, gen-read + define)"
   | "tree/folder-index" -> "distinct folder paths under prefix (SQL dedup)"
   | "tree/children-html" -> "budget-safe HTML for notes-tree children under path"
   | "extract-links" -> "parse [[wiki]] / [[slug|label]] from body → list of pairs"

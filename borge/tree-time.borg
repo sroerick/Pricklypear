@@ -375,6 +375,11 @@
    (subsection consumers
     (doc "What this subsumes or feeds, in dependency order")
     (status planned)
+    (implements image/lib/store.ml image/lib/prims_db.ml)
+    (verify
+     (smoke "(code-restore name [n] [owner/branch]) re-writes a code node (fn/type/route) at head-n as a NEW write at head+1 through the code write surface (upsert_fn / upsert_type / upsert_route): reverse mirror re-populates function_defs / type_defs / view_bindings, the restore is itself versioned + redoable (restores the value BEFORE the latest change; n is row-count steps back, not gen arithmetic)")
+     (smoke "(code-restore name [n] [owner/branch]) errors cleanly — no such code path / no version history / tombstone at n steps back (use tree/delete) / no body / unsupported rel / out-of-range n — never a crash; n<1 and n>=history-length rejected")
+     (smoke "image/test/code_restore_test: fn n=1 rewinds body to body-2, n=2 to body-1; type n=1 rewinds fields; route n=1 rewinds handler + visibility; insert-only has no state; unknown name errors cleanly"))
     (details
      (doc (|
           SUBSUMES: branching.code-history (012). The separate
