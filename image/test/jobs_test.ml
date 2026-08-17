@@ -111,14 +111,50 @@ let clear_jobs (store : S.t) : unit =
       ignore (S.exec conn "DELETE FROM jobs")
 
 (* ------------------------------------------------------------------ *)
+(* LIVE-RUNNER DETERMINISM (campaign 4.1 follow-up)                    *)
+(*                                                                     *)
+(* boot.ml's runner fiber polls the shared jobs table every ~1s and     *)
+(* claims ANY *due* (run_at <= now) pending job. The DB-backed tests    *)
+(* share that table with the live image, so a test that submits a due   *)
+(* job and then claims it itself can lose the race to the runner        *)
+(* (either the test's claim comes up empty, or the runner takes the     *)
+(* formerly-locked row the test expected to get). To make the tests     *)
+(* deterministic WITHOUT stopping the image: submit with a FUTURE       *)
+(* run_at (the runner's due-scan skips it), then drive run_at to 0 *     *)
+(* just before the test's own claim. The window between make_due and     *)
+(* claim_due is microseconds — far smaller than the runner's poll       *)
+(* interval — so the test claims deterministically and the runner never  *)
+(* competes for the same row.                                           *)
+(* ------------------------------------------------------------------ *)
+
+let future = 86_400_000L  (* one day in ms — runner due-scan (run_at<=now) skips *)
+
+(** Submit a job the live runner will NOT claim (future run_at). *)
+let submit_future (store : S.t) ~(fn : string) ~(args_json : string)
+    ~(branch : string) ~(submitted_by : string) : string =
+  J.submit ~store ~fn ~args_json ~branch
+    ~submitted_by ~run_at_ms:(Int64.add (now_ms ()) future) ()
+
+(** Drive a job's run_at to 0 so it is definitely due (run_at <= now); the
+    runner's next due-scan is up to ~1s away, so the subsequent test-side
+    claim_due (microseconds later) wins the row deterministically. *)
+let make_due (store : S.t) ~(id : string) : unit =
+  match S.conn_of store with
+  | Some conn ->
+      ignore
+        (S.exec conn ~params:[ Pgx.Value.of_string id ]
+           "UPDATE jobs SET run_at = 0 WHERE id = $1::uuid")
+  | None -> ()
+
+(* ------------------------------------------------------------------ *)
 (* node-shapes: job node create / claim / status transitions          *)
 (* ------------------------------------------------------------------ *)
 
 let test_job_lifecycle () =
   with_store (fun store ->
       clear_jobs store;
-      let id = J.submit ~store ~fn:"jfn" ~args_json:"{}"
-          ~branch:"system/main" ~submitted_by:"alice" ~run_at_ms:(now_ms ()) ()
+      let id = submit_future store ~fn:"jfn" ~args_json:"{}"
+          ~branch:"system/main" ~submitted_by:"alice"
       in
       (* submit: id returned, not an error string *)
       Alcotest.(check bool) "submit returns a uuid" true
@@ -140,6 +176,7 @@ let test_job_lifecycle () =
              (contains_sub s "system/main")
        | _ -> Alcotest.fail "get (admin) returned non-string");
       (* claim: pending -> running, runner_id set, attempts+1 *)
+      make_due store ~id;
       (match J.claim_due ~store with
        | None -> Alcotest.fail "claim of a due job returned None"
        | Some j ->
@@ -162,9 +199,8 @@ let test_job_lifecycle () =
 let test_visibility_confinement () =
   with_store (fun store ->
       clear_jobs store;
-      let id = J.submit ~store ~fn:"jfn2" ~args_json:"{}"
+      let id = submit_future store ~fn:"jfn2" ~args_json:"{}"
           ~branch:"admin/personal" ~submitted_by:"alice"
-          ~run_at_ms:0L ()
       in
       (* non-owner, non-admin cannot see it via get *)
       (match J.get ~store ~id ~caller:"mallory" ~is_admin:false with
@@ -211,11 +247,20 @@ let test_visibility_confinement () =
 let test_claim_skips_locked () =
   with_store (fun store_a ->
       clear_jobs store_a;
-      let job1 = J.submit ~store:store_a ~fn:"jfn" ~args_json:"{}"
-          ~branch:"system/main" ~submitted_by:"alice" ~run_at_ms:(now_ms ()) ()
-      and job2 = J.submit ~store:store_a ~fn:"jfn" ~args_json:"{}"
-          ~branch:"system/main" ~submitted_by:"alice" ~run_at_ms:(now_ms ()) ()
+      let job1 = submit_future store_a ~fn:"jfn" ~args_json:"{}"
+          ~branch:"system/main" ~submitted_by:"alice"
+      and job2 = submit_future store_a ~fn:"jfn" ~args_json:"{}"
+          ~branch:"system/main" ~submitted_by:"alice"
       in
+      (* Make BOTH jobs due BEFORE taking the row lock on job1. Driving
+         run_at to 0 after connection B has FOR UPDATE-locked job1 would
+         deadlock: store_a's own UPDATE on the locked job1 row would block
+         until B commits, but B's transaction cannot commit while this
+         function is blocked inside it. Making both due up front leaves
+         the claim to exercise only the SKIP LOCKED path (job1 stays
+         locked-by-B, so A skips it and takes job2). *)
+      make_due store_a ~id:job1;
+      make_due store_a ~id:job2;
       (* second, independent connection/transaction locks job1's row *)
       let cfg = S.config_from_env () in
       let store_b = S.make ~cfg ~branch_id:main_id () in
@@ -250,10 +295,11 @@ let test_backoff_schedule () =
   with_store (fun store ->
       clear_jobs store;
       let before = now_ms () in
-      let id = J.submit ~store ~fn:"jfn" ~args_json:"{}"
-          ~branch:"system/main" ~submitted_by:"alice" ~run_at_ms:(now_ms ()) ()
+      let id = submit_future store ~fn:"jfn" ~args_json:"{}"
+          ~branch:"system/main" ~submitted_by:"alice"
       in
       (* claim (attempts 0->1) then fail with max_attempts=3 *)
+      make_due store ~id;
       (match J.claim_due ~store with
        | None -> Alcotest.fail "no job to claim"
        | Some j ->
@@ -268,6 +314,7 @@ let test_backoff_schedule () =
              (Int64.compare run_at before > 0)
        | None -> Alcotest.fail "job missing after backoff");
       (* second claim (attempts 2) + fail -> still pending, later retry *)
+      make_due store ~id;
       (match J.claim_due ~store with
        | None -> Alcotest.fail "no job to claim (2nd)"
        | Some j -> J.record_failed ~store ~id ~error:"boom2"
@@ -278,6 +325,7 @@ let test_backoff_schedule () =
            Alcotest.(check string) "retry still pending" "pending" status
        | None -> Alcotest.fail "job missing after 2nd backoff");
       (* third claim (attempts 3 = max) + fail -> dead *)
+      make_due store ~id;
       (match J.claim_due ~store with
        | None -> Alcotest.fail "no job to claim (3rd)"
        | Some j -> J.record_failed ~store ~id ~error:"boom3"
@@ -297,8 +345,8 @@ let test_reap_dead () =
       clear_jobs store;
       (* a job claimed (running) by a DIFFERENT runner id than ours, with
          attempts just under max -> reaper requeues it pending *)
-      let id_a = J.submit ~store ~fn:"jfn" ~args_json:"{}"
-          ~branch:"system/main" ~submitted_by:"alice" ~run_at_ms:(now_ms ()) ()
+      let id_a = submit_future store ~fn:"jfn" ~args_json:"{}"
+          ~branch:"system/main" ~submitted_by:"alice"
       in
       ignore
         (S.exec (Option.get (S.conn_of store))
@@ -309,8 +357,8 @@ let test_reap_dead () =
            "UPDATE jobs SET status='running', runner_id=$2, attempts=2 \
             WHERE id=$1::uuid");
       (* a job claimed by another runner at max_attempts -> reaper dead *)
-      let id_b = J.submit ~store ~fn:"jfn" ~args_json:"{}"
-          ~branch:"system/main" ~submitted_by:"alice" ~run_at_ms:(now_ms ()) ()
+      let id_b = submit_future store ~fn:"jfn" ~args_json:"{}"
+          ~branch:"system/main" ~submitted_by:"alice"
       in
       ignore
         (S.exec (Option.get (S.conn_of store))
@@ -337,9 +385,10 @@ let test_reap_dead () =
       delete_job store ~id:id_a;
       delete_job store ~id:id_b;
       (* the reaper must NOT touch rows running under OUR runner_id *)
-      let mine = J.submit ~store ~fn:"jfn" ~args_json:"{}"
-          ~branch:"system/main" ~submitted_by:"alice" ~run_at_ms:(now_ms ()) ()
+      let mine = submit_future store ~fn:"jfn" ~args_json:"{}"
+          ~branch:"system/main" ~submitted_by:"alice"
       in
+      make_due store ~id:mine;
       (match J.claim_due ~store with
        | None -> Alcotest.fail "no job to claim for reap-mine check"
        | Some j ->
