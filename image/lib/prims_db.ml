@@ -301,9 +301,16 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
   register_crud "tree/get"
     (fun args ->
       match args with
-      | [ Pricklypear_lisp.Ast.VStr path ] -> Crud.tree_get t.store ~path
+      | [ Pricklypear_lisp.Ast.VStr path ] ->
+          Crud.tree_get t.store ~path ()
+      | [ Pricklypear_lisp.Ast.VStr path
+        ; Pricklypear_lisp.Ast.VInt g
+        ] ->
+          (* reads-as-of-gen: optional :gen N -> versioned read at that gen
+             (tree-time.reads-as-of-gen). Omitted means head. *)
+          Crud.tree_get t.store ~path ~at_gen:g ()
       | _ ->
-          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/get", "need path", "bad-args")))));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/get", "need path [, :gen]/", "bad-args")))));
 
   register_crud "tree/list"
     (fun args ->
@@ -600,6 +607,62 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
         | None -> 0L
       in
       (Pricklypear_lisp.Ast.VInt g));
+
+  (* (gen-read path gen) -> node body at gen, crossed over the same branch
+     lens rules head reads use (tree-time.reads-as-of-gen). path may be an
+     absolute b.*/data.* path or a RELATIVE logical suffix (kind.name)
+     resolved closest-wins through the branch lens chain. gen is the as-of
+     coordinate; 0/omitted means head. Returns version JSON (the version_to_json
+     surface: id/path/kind/type/body/author/hash/created_at/gen/tombstone) or
+     nil when the path is unversioned at that gen. ReadDb cap. *)
+  register_crud "gen-read"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr path
+        ; Pricklypear_lisp.Ast.VInt g
+        ] ->
+          Crud.tree_gen_read t.store ~path ~gen:g
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error
+                    (Pricklypear_lisp.Ast.Prim_error
+                       ("gen-read", "need path gen", "bad-args")))));
+
+  (* (gen-diff path gen-a gen-b) -> node-granular diff: reads both leaves
+     via the versioned store (hashes first, walk on mismatch) and returns
+     "same" when hash-equal, else a JSON {path,a,b,same,delta}. ReadDb. *)
+  register_crud "gen-diff"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr path
+        ; Pricklypear_lisp.Ast.VInt ga
+        ; Pricklypear_lisp.Ast.VInt gb
+        ] ->
+          Crud.tree_gen_diff t.store ~path ~gen_a:ga ~gen_b:gb
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error
+                    (Pricklypear_lisp.Ast.Prim_error
+                       ("gen-diff",
+                        "need path gen-a gen-b", "bad-args")))));
+
+  (* (undo path [n]) -> restore value at head-n as a NEW write at head+1
+     (restore-by-write, so the undo itself is versioned and redoable).
+     Supports datum paths (data-prefixed; the documents' first consumer is notes
+     undo). Code paths (b-prefixed) report the code-restore consumer deferral.
+     WriteDb cap (it appends a version row). Returns the written path or an
+     error string. *)
+  register_crud "undo"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr path ] ->
+          Crud.tree_undo t.store ~path ()
+      | [ Pricklypear_lisp.Ast.VStr path
+        ; Pricklypear_lisp.Ast.VInt n
+        ] ->
+          Crud.tree_undo t.store ~path ~n ()
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error
+                    (Pricklypear_lisp.Ast.Prim_error
+                       ("undo", "need path [, n]", "bad-args")))));
 
   (* storage.media Lisp surface — meta/list/delete + tiny put.
      Bulk Agent_tools.agent pushes use POST /api/media (5 MiB), not eval. *)

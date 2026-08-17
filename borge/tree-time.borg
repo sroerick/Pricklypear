@@ -267,8 +267,16 @@
 
    (subsection reads-as-of-gen
     (doc "The new prim surface: optional gen coordinate + four new prims")
-    (status planned)
-    (implements image/lib/prims_db.ml image/lib/primitives.ml)
+    (status implemented)
+    (implements image/lib/prims_db.ml image/lib/primitives.ml
+                image/lib/crud.ml image/lib/tree_store.ml)
+    (verify
+     (smoke "gen-now returns the current branch generation (migration 017 ancestry-walked counter)")
+     (smoke "(gen-read path gen) returns the node body at gen as version JSON — absolute data./b. paths AND relative logical suffixes crossed through the branch lens chain (closest-wins); nil when unversioned")
+     (smoke "(gen-diff path ga gb) returns 'same' when both leaves hash-identical, else a {path,a,b,same,delta} node-granular diff (shallow body key walk on mismatch)")
+     (smoke "(undo path [n]) restores the value at head-n as a NEW write at head+1 (restore-by-write: the restore itself is versioned + redoable) for the datum path class")
+     (smoke "(tree/get path :gen N) resolves the node at that gen (versioned read); omitted = live head")
+     (smoke "image/test/reads_as_of_gen_test: tree/get :gen reads-as-of; gen-read absolute path at head + as-of; gen-diff node-granular + self-diff 'same'; undo restore-by-write + redo + n-step deep"))
     (details
      (doc (|
           EXISTING PRIMS GAIN A FALLBACK COORDINATE, NOT A REQUIRED

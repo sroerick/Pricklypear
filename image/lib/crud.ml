@@ -651,11 +651,22 @@ let type_fields (store : Store.t) ~(type_name : string) : value =
 
 (* ---- hierarchical tree prims (notes.tree-cutover K0) ---- *)
 
-let tree_get (store : Store.t) ~(path : string) : value =
+let tree_get (store : Store.t) ~(path : string) ?(at_gen : int64 option) () : value =
   match Io_lwt.Db.current_conn store with
   | None -> VNil
   | Some conn ->
-      let n = Tree_store.get_by_path conn ~path in
+      let n =
+        match at_gen with
+        | None -> Tree_store.get_by_path conn ~path
+        | Some g ->
+            (* reads-as-of-gen: optional :gen N resolves to the VERSIONED leaf
+               at that gen (tree-time.reads-as-of-gen — gets a fallback
+               coordinate, never a required one). See tree_gen_read for the
+               body-only surface; here we keep tree/get's node JSON shape. *)
+            (match Tree_store.versioned_head conn ~path ~at_gen:g () with
+             | None -> None
+             | Some v -> Tree_store.version_of_leaf v)
+      in
       (match n with
        | None -> VNil
        | Some node -> (VStr (Tree_store.node_to_json node)))
@@ -735,6 +746,170 @@ let tree_lens_subtree (store : Store.t) ~(suffix : string)
           (lens_chain store)
       in
       (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes))
+
+(* ---- reads-as-of-gen prim surface (tree-time.reads-as-of-gen) ----
+   The versioned read foundation (versioned_head / versioned_history / the
+   `version` row type / gen-now) landed in the 5.1 close-out. These crud
+   functions expose the user-facing gen coordinate: gen-read (node body as
+   of a gen, crossing the branch lens rules head reads cross), gen-diff
+   (node-granular diff between two gens — hashes first, walk on mismatch,
+   the same algorithm family the three-way merge + local-first sync use),
+   and undo (restore-by-write: read at head-n, write a NEW versioned row at
+   head+1, so the restore itself is versioned and redoable). *)
+
+(* Is [path] an absolute tree path (a b-prefixed code node or a data-prefixed
+   datum node), or a RELATIVE logical suffix (kind.name) that must be resolved
+   across the branch lens chain? *)
+let absolute_tree_path (path : string) : bool =
+  String.starts_with ~prefix:"b." path || String.starts_with ~prefix:"data." path
+
+let tree_gen_read (store : Store.t) ~(path : string) ~(gen : int64) : value =
+  match Io_lwt.Db.current_conn store with
+  | None -> VNil
+  | Some conn ->
+      let v =
+        if absolute_tree_path path then
+          if gen <= 0L then
+            (* head *)
+            Tree_store.versioned_head conn ~path ()
+          else
+            Tree_store.versioned_head conn ~path ~at_gen:gen ()
+        else
+          (* relative logical suffix -> resolve effective path across the
+             branch lens chain (closest-wins), then read as-of-gen. *)
+          let at_gen_opt = if gen <= 0L then None else Some gen in
+          let mk_path bid =
+            match Tree_store.lens_suffix_path ~branch_id:bid path with
+            | Some p -> p
+            | None -> ""
+          in
+          Tree_store.lens_versioned_in_chain conn ~at_gen:at_gen_opt ~mk_path
+            (lens_chain store)
+      in
+      (match v with
+       | None -> VNil
+       | Some v -> (VStr (Tree_store.version_to_json v)))
+
+let body_of_version (v : Tree_store.version) : (string * Yojson.Safe.t) list =
+  match v.Tree_store.v_body with
+  | `Assoc kv ->
+      (match List.assoc_opt "body" kv with
+       | Some (`Assoc b) -> b
+       | _ -> [])
+  | _ -> []
+
+(* (gen-diff path gen-a gen-b) -> node-granular diff. Hashes first in the
+   store (versioned_head is one index range scan per gen); when both leaves
+   hash-identical -> "same". Otherwise walk a shallow key-level difference of
+   the two bodies and return a JSON object {path, a, b, same, delta}. *)
+let tree_gen_diff (store : Store.t) ~(path : string)
+    ~(gen_a : int64) ~(gen_b : int64) : value =
+  match Io_lwt.Db.current_conn store with
+  | None -> VNil
+  | Some conn ->
+      let a = Tree_store.versioned_head conn ~path ~at_gen:gen_a () in
+      let b = Tree_store.versioned_head conn ~path ~at_gen:gen_b () in
+      (match a, b with
+       | Some va, Some vb when va.Tree_store.v_hash = vb.Tree_store.v_hash ->
+           (VStr "same")
+       | Some va, Some vb ->
+           let ba = body_of_version va in
+           let bb = body_of_version vb in
+           let keys =
+             List.sort_uniq String.compare (List.map fst ba @ List.map fst bb)
+           in
+           let delta_pairs =
+             List.filter_map
+               (fun k ->
+                 let xa = List.assoc_opt k ba in
+                 let xb = List.assoc_opt k bb in
+                 if xa = xb then None
+                 else
+                   Some
+                     (k,
+                      `Assoc
+                        [ ("a",
+                           (match xa with Some x -> x | None -> `Null))
+                        ; ("b",
+                           (match xb with Some x -> x | None -> `Null))
+                        ]))
+               keys
+           in
+           let g_of v =
+             match v.Tree_store.v_gen with
+             | Some g -> `String (Int64.to_string g)
+             | None -> `Null
+           in
+           (VStr
+              (Yojson.Safe.to_string
+                 (`Assoc
+                    [ ("path", `String path)
+                    ; ("a", g_of va)
+                    ; ("b", g_of vb)
+                    ; ("same", `Bool false)
+                    ; ("delta", `Assoc delta_pairs)
+                    ])))
+       | _ -> VNil)
+
+(* (undo path [n]) -> restore the value at head-n as a NEW write at head+1.
+   Restore-by-write (not head-pointer manipulation): the restore is itself a
+   versioned append, so undo is lossless and redoable ((undo path) again on
+   the restored state climbs back down the gen chain). Supports the datum
+   path class (the first documented consumer is notes undo over datum
+   nodes). For code paths restore-by-write is deferred to the code-restore
+   consumer (consumers subsection) — this prim reports that cleanly. Returns
+   the written path or an error string. *)
+let tree_undo (store : Store.t) ~(path : string) ?(n : int64 = 1L) () : value =
+  match Io_lwt.Db.current_conn store with
+  | None -> (VStr "undo: no DB")
+  | Some conn ->
+      if not (absolute_tree_path path) then
+        (VStr "undo: path must be an absolute b.* or data.* path")
+      else
+        let hist = Tree_store.versioned_history conn ~path () in
+        if hist = [] then (VStr "undo: no history for path")
+        else
+          let newest_gen =
+            List.fold_left
+              (fun acc v ->
+                match v.Tree_store.v_gen with
+                | Some g -> Int64.max acc g
+                | None -> acc)
+              0L hist
+          in
+          let target = Int64.sub newest_gen n in
+          (match
+             Tree_store.versioned_head conn ~path ~at_gen:target ()
+           with
+           | None ->
+               (VStr
+                  (Printf.sprintf "undo: no value at gen %Ld" target))
+           | Some v ->
+               let body_json =
+                 match body_of_version v with
+                 | [] -> "{}"
+                 | kv -> Yojson.Safe.to_string (`Assoc kv)
+               in
+               let type_name =
+                 match v.Tree_store.v_type_name with
+                 | Some t -> t
+                 | None -> "" (* datum rows carry type_name in the version row *)
+               in
+               let author = v.Tree_store.v_author in
+               let author =
+                 match author with Some a -> a | None -> session_user ()
+               in
+               if String.starts_with ~prefix:"b." path then
+                 (VStr
+                    "undo: code-path restore-by-write deferred (code-restore \
+                     consumer); use gen-read to inspect, then define")
+               else
+                 (match
+                    Tree_store.upsert_datum conn ~path ~type_name ~body_json
+                      ~author
+                  with
+                  | Ok p -> (VStr p)
+                  | Error e -> (VStr e)))
 
 let tree_children_html (store : Store.t) ~(prefix : string) ~(garden_root : string)
     () : value =
