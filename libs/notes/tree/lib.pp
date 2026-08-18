@@ -1,10 +1,9 @@
-;; package notes/tree -- exported from live branch admin/personal
+;; package notes/tree -- exported from live branch system/main
 ;; Sync: scripts/pp_sync.py pull|push
 
 (define notes/tree/all-paths
   (lambda
     (names)
-    "Parent folder paths of names that are not already folders themselves."
     (list/foldl
       (lambda
         (acc name)
@@ -29,13 +28,11 @@
 (define notes/tree/body
   (lambda
     (node)
-    "Content dict of a parsed tree node, or ()."
     (if (null? node) () (dict-get node "body"))))
 
 (define notes/tree/butlast
   (lambda
     (xs)
-    "All but the last element of a list."
     (if
       (null? xs)
       (list)
@@ -47,7 +44,6 @@
 (define notes/tree/children-of
   (lambda
     (parent names)
-    "Direct child names of parent within names."
     (list/filter
       (lambda
         (name)
@@ -62,7 +58,6 @@
 (define notes/tree/clear-headings
   (lambda
     (note-path)
-    "Delete all heading records under note-path; returns 0."
     (list/foldl
       (lambda
         (acc nj)
@@ -83,7 +78,6 @@
 (define notes/tree/details-css
   (lambda
     ()
-    "CSS sheet for the <details>/summary folder tree."
     (css/sheet
       (list
         (css/raw "/* details/summary tree nesting */")
@@ -107,15 +101,200 @@
             ".15rem 0"))
         (css/rule
           ".notes-tree > details.tree-folder"
-          (list "margin" ".25rem 0"))))))
+          (list "margin" ".25rem 0"))
+        (css/raw
+          "/* refile modal (slug picker — no O(n) options) */")
+        (css/rule
+          "details.ol-refile-modal"
+          (list "display" "inline-block" "position" "relative"))
+        (css/rule
+          "details.ol-refile-modal > summary.ol-btn"
+          (list "cursor" "pointer" "list-style" "none"))
+        (css/rule
+          "details.ol-refile-modal > summary.ol-btn::-webkit-details-marker"
+          (list "display" "none"))
+        (css/rule
+          "details.ol-refile-modal[open] > .ol-refile-body"
+          (list
+            "position"
+            "absolute"
+            "z-index"
+            "20"
+            "background"
+            "var(--card,#fff)"
+            "border"
+            "1px solid var(--muted,#888)"
+            "padding"
+            ".5rem"
+            "min-width"
+            "16rem"
+            "box-shadow"
+            "0 2px 8px rgba(0,0,0,.12)"))
+        (css/rule
+          ".ol-refile-body .ol-refile-sel"
+          (list "width" "12rem" "max-width" "100%"))
+        (css/rule
+          ".ol-refile-body .ol-refile-label"
+          (list "font-size" ".85rem" "margin-right" ".25rem"))
+        (css/raw "/* find / search modal */")
+        (css/rule
+          "details.ol-find-modal"
+          (list "display" "inline-block" "position" "relative"))
+        (css/rule
+          "details.ol-find-modal > summary.ol-btn"
+          (list "cursor" "pointer" "list-style" "none"))
+        (css/rule
+          "details.ol-find-modal > summary.ol-btn::-webkit-details-marker"
+          (list "display" "none"))
+        (css/rule
+          "details.ol-find-modal[open] > .ol-find-body,\n           details.ol-refile-modal[open] > .ol-refile-body.ol-find-wide"
+          (list
+            "position"
+            "absolute"
+            "z-index"
+            "30"
+            "right"
+            "0"
+            "background"
+            "var(--card,#fff)"
+            "border"
+            "1px solid var(--muted,#888)"
+            "padding"
+            ".5rem"
+            "min-width"
+            "22rem"
+            "max-width"
+            "min(36rem, 92vw)"
+            "box-shadow"
+            "0 4px 16px rgba(0,0,0,.14)"))
+        (css/rule
+          ".ol-find-input"
+          (list
+            "width"
+            "100%"
+            "box-sizing"
+            "border-box"
+            "padding"
+            ".35rem .5rem"
+            "margin"
+            "0 0 .35rem 0"))
+        (css/rule
+          ".ol-find-results"
+          (list
+            "max-height"
+            "18rem"
+            "overflow"
+            "auto"
+            "margin"
+            "0"
+            "padding"
+            "0"
+            "list-style"
+            "none"))
+        (css/rule
+          ".ol-find-group"
+          (list
+            "font-size"
+            ".75rem"
+            "font-weight"
+            "600"
+            "text-transform"
+            "uppercase"
+            "letter-spacing"
+            ".04em"
+            "color"
+            "var(--muted,#666)"
+            "padding"
+            ".4rem .35rem .15rem"))
+        (css/rule
+          "a.ol-find-hit, button.ol-find-hit"
+          (list
+            "display"
+            "block"
+            "width"
+            "100%"
+            "text-align"
+            "left"
+            "border"
+            "0"
+            "background"
+            "transparent"
+            "padding"
+            ".35rem .5rem .35rem 1rem"
+            "cursor"
+            "pointer"
+            "color"
+            "inherit"
+            "text-decoration"
+            "none"
+            "font"
+            "inherit"
+            "box-sizing"
+            "border-box"))
+        (css/rule
+          "a.ol-find-hit:hover, button.ol-find-hit:hover,\n           a.ol-find-hit.is-active, button.ol-find-hit.is-active"
+          (list "background" "var(--accent-bg,#eef3ff)"))
+        (css/rule
+          ".ol-find-hit-path"
+          (list "font-size" ".85rem"))
+        (css/rule
+          ".ol-find-hit-meta"
+          (list
+            "font-size"
+            ".75rem"
+            "color"
+            "var(--muted,#666)"
+            "margin-left"
+            ".35rem"))
+        (css/rule
+          ".ol-find-empty"
+          (list
+            "padding"
+            ".5rem"
+            "color"
+            "var(--muted,#666)"
+            "font-size"
+            ".9rem"))
+        (css/rule
+          ".ol-find-bar"
+          (list
+            "display"
+            "flex"
+            "gap"
+            ".5rem"
+            "align-items"
+            "center"
+            "margin"
+            "0 0 .75rem 0"))
+        (css/rule
+          ".ol-find-bar details.ol-find-modal"
+          (list "flex" "1 1 auto"))
+        (css/rule
+          ".ol-find-bar .ol-find-body"
+          (list "left" "0" "right" "auto"))
+        (css/raw "/* create form collapsed behind summary */")
+        (css/rule
+          "details.notes-create > summary.notes-create-sum"
+          (list
+            "cursor"
+            "pointer"
+            "font-weight"
+            "600"
+            "list-style"
+            "none"))
+        (css/rule
+          "details.notes-create > summary.notes-create-sum::-webkit-details-marker"
+          (list "display" "none"))
+        (css/rule
+          "details.notes-create > .notes-create-body"
+          (list "margin-top" ".5rem"))))))
 
 (define notes/tree/enabled?
-  (lambda () "Tree storage is enabled." #t))
+  (lambda () #t))
 
 (define notes/tree/ensure-chain
   (lambda
     (base segs)
-    "Create any missing folders along segs from base; return the final path."
     (if
       (null? segs)
       base
@@ -129,7 +308,6 @@
 (define notes/tree/ensure-folder
   (lambda
     (path title)
-    "Upsert a folder node at path titled title; return path."
     (let
       ((cur (tree/get path)))
       (if
@@ -146,7 +324,6 @@
 (define notes/tree/find-slug
   (lambda
     (slug)
-    "Look up a note row by slug in the tree, or ()."
     (let
       ((hits (tree/find-by "note" "slug" (as-str slug) 5)))
       (if
@@ -157,7 +334,6 @@
 (define notes/tree/folder-label
   (lambda
     (path)
-    "Last path segment after the final / (or whole path)."
     (let
       ((pos (string-find-pos path "/" 0 1)))
       (if
@@ -171,7 +347,6 @@
 (define notes/tree/folder-of-path
   (lambda
     (path)
-    "Slash-joined folder path of a note path, or empty when at the root."
     (let
       ((root (notes/tree/root)) (p (as-str path)))
       (if
@@ -190,7 +365,6 @@
 (define notes/tree/heading-kids
   (lambda
     (parent-path)
-    "Outline child nodes built from heading records under parent-path."
     (list/foldl
       (lambda
         (acc nj)
@@ -221,7 +395,6 @@
 (define notes/tree/join-slash
   (lambda
     (xs)
-    "Join string list with / separators."
     (if
       (null? xs)
       ""
@@ -234,26 +407,11 @@
           (notes/tree/join-slash (cdr xs)))))))
 
 (define notes/tree/list-notes
-  (lambda () "All note rows under the tree root (index view)." (tree/note-index (notes/tree/root) 2000)))
-
-;; Read the root outline body persisted by write-root-body (i-rootbody-1).
-(define notes/tree/root-body
-  (lambda
-    (note-path)
-    "Persisted root outline body text for note-path, or empty string."
-    (let
-      ((cur (tree/get note-path)))
-      (if
-        (null? cur)
-        ""
-        (let
-          ((b (dict-get (notes/tree/body (notes/tree/parse cur)) "body")))
-          (if (null? b) "" (as-str b)))))))
+  (lambda () (tree/note-index (notes/tree/root) 50000)))
 
 (define notes/tree/load-outline
   (lambda
     (note-path title)
-    "Reconstruct an outline node tree for note-path from its headings."
     (outline/node*
       "root"
       (as-str title)
@@ -264,7 +422,6 @@
 (define notes/tree/node->row
   (lambda
     (nj load-outline?)
-    "Map a note JSON node to a key/value row (id cons + dict), with outline when load-outline?."
     (let
       ((n (notes/tree/parse nj)))
       (if
@@ -315,7 +472,6 @@
 (define notes/tree/note-path
   (lambda
     (folder slug)
-    "Tree path label for a note in folder (creating missing folders)."
     (let
       ((base
         (notes/tree/ensure-chain
@@ -326,18 +482,16 @@
 (define notes/tree/parent-of
   (lambda
     (path)
-    "Immediate parent path of a slash path, or empty at root."
     (let
       ((pos (string-find-pos path "/" 0 1)))
       (if (< pos 0) "" (substring path 0 pos)))))
 
 (define notes/tree/parse
-  (lambda (s) "JSON-parse a tree node string; () when empty." (if (null? s) () (json-parse (as-str s)))))
+  (lambda (s) (if (null? s) () (json-parse (as-str s)))))
 
 (define notes/tree/render
   (lambda
     ()
-    "HTML folder-tree widget for the notes sidebar (categorized + uncategorized)."
     (let*
       ((names (notes/doc/folder-names))
         (all-names (append names (notes/tree/all-paths names)))
@@ -386,7 +540,6 @@
 (define notes/tree/render-folder
   (lambda
     (path names depth)
-    "HTML for one tree folder: header link, items, and nested folders."
     (let*
       ((label (notes/tree/folder-label path))
         (children (notes/tree/children-of path names))
@@ -431,15 +584,31 @@
                   (notes/tree/sort-by-name children))))))))))
 
 (define notes/tree/root
-  (lambda () "Tree root path for the garden." (tree/garden-root)))
+  (lambda () (tree/garden-root)))
+
+(define notes/tree/root-body
+  (lambda
+    (note-path)
+    (let
+      ((cur (tree/get note-path)))
+      (if
+        (null? cur)
+        ""
+        (let
+          ((b
+            (dict-get
+              (notes/tree/body (notes/tree/parse cur))
+              "body")))
+          (if (null? b) "" (as-str b)))))))
 
 (define notes/tree/save-outline
   (lambda
     (note-path outline)
-    "Persist an outline to the tree: clear headings, write root body, write child headings."
     (seq
       (notes/tree/clear-headings note-path)
-      (notes/tree/write-root-body note-path (outline/body outline))
+      (notes/tree/write-root-body
+        note-path
+        (outline/body outline))
       (list/foldl
         (lambda
           (acc kid)
@@ -448,37 +617,9 @@
         (outline/kids outline))
       note-path)))
 
-;; Persist the top-level (root) outline node's body onto the note node itself.
-;; i-rootbody-1: save-outline previously only wrote child headings, so any
-;; body kept on the root node was dropped on upsert. Store it as a "body" key
-;; on the note's content and read it back in load-outline/root-body.
-(define notes/tree/write-root-body
-  (lambda
-    (note-path body)
-    "Store body on the note node itself so it survives upsert."
-    (let
-      ((cur (tree/get note-path)))
-      (if
-        (null? cur)
-        note-path
-        ;; let* (not parallel let): b's binding references n bound in the
-        ;; same group — parallel `let` evaluates bindings in the outer
-        ;; env and threw `unbound: n` (broke notes/doc/upsert write path).
-        (let*
-          ((n (notes/tree/parse cur))
-            (b (notes/tree/body n)))
-          (seq
-            (tree/upsert
-              note-path
-              "note"
-              "note"
-              (dict-set b "body" (as-str body)))
-            note-path))))))
-
 (define notes/tree/sort-by-name
   (lambda
     (names)
-    "Quicksort a name list ascending by string order."
     (if
       (null? names)
       (list)
@@ -494,27 +635,22 @@
 (define notes/tree/split-folder
   (lambda
     (folder)
-    "Fold a slash folder path into non-empty segments."
     (list/filter
       (lambda (s) (not (string-eq (as-str s) "")))
       (string-split (as-str folder) "/"))))
 
 (define notes/tree/style
-  (lambda
-    ()
-    "<style> block combining the tree CSS sheets."
-    (html/tag
-      "style"
-      ""
-      (string-append
-        (css/render notes/tree-css)
-        (css/render notes/tree-css-patch)
-        (css/render (notes/tree/details-css))))))
+  (lambda () (html/tag "style" "" notes/tree/style-css)))
+
+(define notes/tree/style-css
+  (string-append
+    (css/render notes/tree-css)
+    (css/render notes/tree-css-patch)
+    (css/render (notes/tree/details-css))))
 
 (define notes/tree/write-heading
   (lambda
     (parent-path node)
-    "Write one outline heading (and its children) under parent-path; return its path."
     (let
       ((nid (tree/path-label (outline/id node)))
         (path
@@ -546,3 +682,20 @@
           (outline/kids node))
         path))))
 
+(define notes/tree/write-root-body
+  (lambda
+    (note-path body)
+    (let
+      ((cur (tree/get note-path)))
+      (if
+        (null? cur)
+        note-path
+        (let*
+          ((n (notes/tree/parse cur)) (b (notes/tree/body n)))
+          (seq
+            (tree/upsert
+              note-path
+              "note"
+              "note"
+              (dict-set b "body" (as-str body)))
+            note-path))))))
