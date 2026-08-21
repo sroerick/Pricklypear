@@ -2105,5 +2105,80 @@
     |))
    )
   )
+
+  (subsection lazy-env-thunks
+   (doc "VThunk: memoized lazy bindings; env LOAD stores recipes, first reference cooks them; explicit (delay)/(force) surface")
+   (status implemented)
+   (implements
+    lisp/lib/ast.ml
+    lisp/lib/env.ml
+    lisp/lib/eval.ml
+    lisp/test/lazy_thunk_test.ml)
+   (verify
+    (build "dune build lisp")
+    (test "dune runtest lisp: thunk forces once, memoizes value AND failure, cyclic force raises, delay/force round-trip")
+    (smoke "(force (delay (+ 1 2))) = 3; forcing twice runs body once"))
+   (details
+    (doc (|
+         MOTIVATION (measured on prod 2026-08-21)
+           Session.load_defs re-EVALUATED every function_defs body on
+           every rehydrate: ~4013 defs on admin/personal took 60-120s
+           under the global request mutex whenever HTTP identity flipped
+           (one shared session, anonymous public traffic interleaving
+           with authed agent traffic). But ~98% of defs are lambdas
+           nobody touches between rebuilds: pure define is ~1us; the
+           cost was STRICTNESS AT THE WRONG BOUNDARY, not interpreter
+           speed and not per-def Postgres round trips (the load query
+           is one recursive CTE). Habitat note spec/lazy-thunks
+           (2026-08-20) already argued the general shape: the value is
+           in MEMOIZATION at an EXPLICIT boundary, not pervasive
+           call-by-need.
+
+         KERNEL
+           New value constructor in lisp/lib/ast.ml:
+
+             VThunk of thunk_cell ref
+             thunk_cell = Unforced of thunk_payload
+                        | Forcing
+                        | Forced of value
+                        | Failed of exn
+             thunk_payload = { body : expr;
+                               def_env : env;
+                               force : env -> expr -> value }
+
+           The payload CARRIES ITS OWN EVALUATOR so the pure kernel
+           stays I/O-free while the image can force under its prim
+           rim (DB prims inside a forced body work) and under the
+           current eval budget. Forcing MEMOIZES on all outcomes:
+           Forced replays the value; Failed replays the exception
+           (a def that errors at first touch does not re-tax every
+           later touch); Forcing detects self-reference cycles and
+           raises Interp_error instead of diverging.
+
+         SINGLE OBSERVATION POINT
+           Env.lookup is the one auto-force site. A VThunk never
+           escapes into user values through a Var reference; the
+           language stays strict everywhere else. Direct OCaml
+           lookups (route handler resolution, ui shell) get the same
+           semantics for free. Existing code never sees VThunk except
+           via fold/list-bindings (renders <thunk>).
+
+         USER SURFACE
+           (delay EXPR)  -> VThunk; EXPR not evaluated
+           (force X)     -> forces X if a thunk, else returns X
+           (define ...) stays EAGER: laziness is a property of env
+           loading and explicit delay, never of define. Side-effect
+           order of ordinary code is unchanged.
+
+         NON-GOALS
+           - call-by-need language semantics (rejected in
+             spec/lazy-thunks: side-effect order + budget attribution)
+           - transparent forcing at truthiness/printing observation
+             points (only Var forces; decide more after dogfooding)
+           - cross-session or persistent thunk cache (Design B of the
+             note — tree pending-state — remains a separate item)
+    |))
+   )
+  )
  )
 )

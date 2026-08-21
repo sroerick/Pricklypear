@@ -16,8 +16,9 @@ open Http_pages
 open Http_ops
 open Http_media
 
-let request_handler ~(sw : Eio.Switch.t) (session : Session.t)
-    (sockaddr : Unix.sockaddr) (reqd : Httpun.Reqd.t) : unit =
+let request_handler ~(sw : Eio.Switch.t) ~(registry : Session_registry.t)
+    (session : Session.t) (sockaddr : Unix.sockaddr)
+    (reqd : Httpun.Reqd.t) : unit =
   let req = Httpun.Reqd.request reqd in
   let target = req.Httpun.Request.target in
   let path =
@@ -38,7 +39,9 @@ let request_handler ~(sw : Eio.Switch.t) (session : Session.t)
      like /health that bypass launch are NEVER blocked by page traffic —
      liveness must stay servable under load. Released in finalize so a slot
      is freed whether page_fn succeeded, failed, or the peer went away. *)
-  let launch (page_fn : unit -> unit) : unit =
+  (* page_fn receives the SELECTED session (image.per-identity-sessions):
+     the identity's own Session.t, never the shared boot session. *)
+  let launch (page_fn : Session.t -> unit) : unit =
     Eio.Fiber.fork ~sw (fun () ->
     let () = inflight_acquire () in
     Fun.protect ~finally:(fun () -> inflight_release ()) (fun () ->
@@ -58,39 +61,41 @@ let request_handler ~(sw : Eio.Switch.t) (session : Session.t)
                  snapshot (env/routes/manifest) instead of live Session.t,
                  immune to a concurrent attach_anonymous + checkout_to
                  rehydrating the shared session mid-page. *)
-              let snapshot_ctx () =
+              let snapshot_ctx (session : Session.t) =
                 Request_context.make
                   ~manifest:(Session.manifest session)
                   ~env:(Session.env session)
                   ~routes:(Request_context.copy_routes (Session.routes session))
               in
+              (* SELECT the identity's session, then attach on IT.
+                 image.per-identity-sessions: attach selects, never
+                 mutates another identity's session; anonymous traffic
+                 runs on the parked anonymous session. *)
+              let attach_and_select () =
+                let user_opt = resolve_identity session ~headers in
+                let session = Session_registry.select registry ~user:user_opt in
+                let () =
+                  match user_opt with
+                  | Some user ->
+                      let tok = cookie_value headers cookie_name in
+                      attach_from_user session user ~auth_token:tok
+                        ~checkout_personal_now:false ()
+                  | None -> Session.attach_anonymous session
+                in
+                Session.ensure_fresh session;
+                (session, user_opt)
+              in
               let proceed_ctx =
                 Eio.Mutex.use_ro request_mutex (fun () ->
                   if auth_disabled () then begin
                     (* Dev escape: still try attach so whoami is real if cookie. *)
-                    let user_opt = resolve_identity session ~headers in
-                    let () =
-                      match user_opt with
-                      | Some user ->
-                          let tok = cookie_value headers cookie_name in
-                          attach_from_user session user ~auth_token:tok
-                            ~checkout_personal_now:false ()
-                      | None -> Session.attach_anonymous session
-                    in
-                    (Some (snapshot_ctx ()))
+                    let session, _ = attach_and_select () in
+                    (Some (session, snapshot_ctx session))
                   end else begin
                     (* Attach identity BEFORE classify: route table is
                        branch-scoped (inheritance CTE). Anonymous uses
                        system/main so package public routes resolve. *)
-                    let user_opt = resolve_identity session ~headers in
-                    let () =
-                      match user_opt with
-                      | Some user ->
-                          let tok = cookie_value headers cookie_name in
-                          attach_from_user session user ~auth_token:tok
-                            ~checkout_personal_now:false ()
-                      | None -> Session.attach_anonymous session
-                    in
+                    let session, user_opt = attach_and_select () in
                     let classif = classify_path session path in
                     let needs_auth =
                       match classif with
@@ -99,8 +104,8 @@ let request_handler ~(sw : Eio.Switch.t) (session : Session.t)
                       | `User (_, vis) -> vis <> "public"
                     in
                     match user_opt, needs_auth with
-                    | Some _, _ -> (Some (snapshot_ctx ()))
-                    | None, false -> (Some (snapshot_ctx ()))
+                    | Some _, _ -> (Some (session, snapshot_ctx session))
+                    | None, false -> (Some (session, snapshot_ctx session))
                     | None, true ->
                         let apiish =
                           String.length path >= 4
@@ -113,7 +118,7 @@ let request_handler ~(sw : Eio.Switch.t) (session : Session.t)
               in
               (match proceed_ctx with
                | None -> ()
-               | Some req_ctx ->
+               | Some (session, req_ctx) ->
               Request_context.with_current req_ctx @@ fun () ->
               (* Per-request context bound; page work below reads it for
                  env/routes/manifest (call_handler, lookup_route, chrome). *)
@@ -171,8 +176,8 @@ let request_handler ~(sw : Eio.Switch.t) (session : Session.t)
                   else Session.refresh_ui_shell session
                 in
                 (* GATE COMPLETE — request_mutex released above. page_fn runs
-                   lock-free (invariant 4b). *)
-                page_fn ()
+                   lock-free (invariant 4b) on the SELECTED session. *)
+                page_fn session
                 end
               )
     with exn ->
@@ -207,7 +212,7 @@ let request_handler ~(sw : Eio.Switch.t) (session : Session.t)
        Pre-gate the routes table could be whatever a previous request left
        behind (e.g. anonymous attach -> system/main), causing a personal-branch
        route 404 before THIS request's attach even runs. *)
-    launch (fun () ->
+    launch (fun session ->
       let route_opt =
         match Request_context.get () with
         | Some ctx -> Request_context.lookup_route ctx path
@@ -310,20 +315,20 @@ let request_handler ~(sw : Eio.Switch.t) (session : Session.t)
   in
   match meth, path with
   | `GET, "/login" ->
-      launch (fun () ->
+      launch (fun session ->
         let () = () in
          login_form_page reqd;
          ())
-  | `POST, "/login" -> launch (fun () -> post_login session reqd)
-  | `POST, "/logout" -> launch (fun () -> post_logout session reqd)
-  | `GET, "/admin/users" -> launch (fun () -> admin_users_page session reqd)
-  | `POST, "/admin/users" -> launch (fun () -> post_admin_users session reqd)
-  | `GET, "/settings/keys" -> launch (fun () -> settings_keys_page session reqd)
-  | `POST, "/settings/keys" -> launch (fun () -> post_settings_keys session reqd)
-  | `GET, "/settings/ssh" -> launch (fun () -> settings_ssh_page session reqd)
-  | `POST, "/settings/ssh" -> launch (fun () -> post_settings_ssh session reqd)
-  | `GET, "/analytics" -> launch (fun () -> analytics_page session reqd)
-  | `GET, "/" -> launch (fun () -> home_page session reqd)
+  | `POST, "/login" -> launch (fun session -> post_login session reqd)
+  | `POST, "/logout" -> launch (fun session -> post_logout session reqd)
+  | `GET, "/admin/users" -> launch (fun session -> admin_users_page session reqd)
+  | `POST, "/admin/users" -> launch (fun session -> post_admin_users session reqd)
+  | `GET, "/settings/keys" -> launch (fun session -> settings_keys_page session reqd)
+  | `POST, "/settings/keys" -> launch (fun session -> post_settings_keys session reqd)
+  | `GET, "/settings/ssh" -> launch (fun session -> settings_ssh_page session reqd)
+  | `POST, "/settings/ssh" -> launch (fun session -> post_settings_ssh session reqd)
+  | `GET, "/analytics" -> launch (fun session -> analytics_page session reqd)
+  | `GET, "/" -> launch (fun session -> home_page session reqd)
   | `GET, "/welcome" ->
       launch_user_route_or (fun () -> Http_code.fallback_welcome reqd)
   | `GET, "/background" ->
@@ -349,7 +354,7 @@ let request_handler ~(sw : Eio.Switch.t) (session : Session.t)
     when String.length path > 6 && String.sub path 0 6 = "/book/" ->
       (* habitat-workflow.book-view: /book/<pkg> → (spec/book-page).
          request-path carries the full path so Nopales can extract pkg. *)
-      launch (fun () ->
+      launch (fun session ->
           let request : Session.request =
             { method_ = `GET
             ; path
@@ -369,21 +374,21 @@ let request_handler ~(sw : Eio.Switch.t) (session : Session.t)
                 ~content_type:"text/plain" msg);
       ()
   | `GET, "/book.pdf" ->
-      launch (fun () ->
+      launch (fun session ->
         Http_code.handle_public_artifact reqd ~name:"book.pdf";
         ())
   | `GET, "/src.tgz" ->
-      launch (fun () ->
+      launch (fun session ->
         Http_code.handle_public_artifact reqd ~name:"src.tgz";
         ())
   | `GET, "/code" ->
-      launch (fun () ->
+      launch (fun session ->
         Http_code.handle_code_page reqd ~target;
         ())
   | `GET, path when String.length path >= 10
                  && String.sub path 0 10 = "/code/raw/" ->
       let rel = String.sub path 10 (String.length path - 10) in
-      launch (fun () ->
+      launch (fun session ->
         Http_code.handle_raw reqd ~rel;
         ())
   | `GET, path when String.length path >= 11
@@ -392,27 +397,27 @@ let request_handler ~(sw : Eio.Switch.t) (session : Session.t)
       let rel =
         "codemirror/" ^ String.sub path 11 (String.length path - 11)
       in
-      launch (fun () ->
+      launch (fun session ->
         Http_code.handle_asset reqd ~rel;
         ())
   | `GET, path when String.length path >= 8
                  && String.sub path 0 8 = "/assets/" ->
       let rel = String.sub path 8 (String.length path - 8) in
-      launch (fun () ->
+      launch (fun session ->
         Http_code.handle_asset reqd ~rel;
         ())
   | `GET, "/about" ->
-      launch (fun () ->
+      launch (fun session ->
         let () = () in
          about_page session reqd;
          ())
   | `GET, "/pages" ->
-      launch (fun () ->
+      launch (fun session ->
         let () = () in
          pages_list_page session reqd;
          ())
   | `POST, "/api/recipe/hello" ->
-      launch (fun () ->
+      launch (fun session ->
         let res = Session.recipe_hello session in
          match res with
          | Ok msg ->
@@ -444,7 +449,7 @@ let request_handler ~(sw : Eio.Switch.t) (session : Session.t)
              html_response reqd ~session ~status:`Internal_server_error body;
              ())
   | `POST, "/api/recipe/todo" ->
-      launch (fun () ->
+      launch (fun session ->
         let res = Session.recipe_todo session in
          match res with
          | Ok msg ->
@@ -474,7 +479,7 @@ let request_handler ~(sw : Eio.Switch.t) (session : Session.t)
              html_response reqd ~session ~status:`Internal_server_error body;
              ())
   | `POST, "/api/recipe/notes" ->
-      launch (fun () ->
+      launch (fun session ->
         let res = Session.recipe_notes session in
          match res with
          | Ok msg ->
@@ -507,7 +512,7 @@ let request_handler ~(sw : Eio.Switch.t) (session : Session.t)
              html_response reqd ~session ~status:`Internal_server_error body;
              ())
   | `POST, "/api/recipe/dabar" ->
-      launch (fun () ->
+      launch (fun session ->
         let res = Session.recipe_dabar session in
          match res with
          | Ok msg ->
@@ -571,32 +576,32 @@ let request_handler ~(sw : Eio.Switch.t) (session : Session.t)
       Agent_discovery.serve_agent_json reqd ~headers
   | `GET, "/agent.txt" ->
       Agent_discovery.serve_agent_txt reqd ~headers
-  | `GET, "/branches" -> launch (fun () -> branches_page session reqd)
-  | `GET, "/changes" -> launch (fun () -> changes_page session reqd)
-  | `POST, "/branches/checkout" -> launch (fun () -> branches_checkout session reqd)
-  | `POST, "/branches/fork" -> launch (fun () -> branches_fork session reqd)
-  | `POST, "/branches/unoverride" -> launch (fun () -> branches_unoverride session reqd)
-  | `POST, "/branches/promote" -> launch (fun () -> branches_promote session reqd)
-  | `GET, "/bindings" -> launch (fun () -> list_bindings_page session reqd)
-  | `GET, "/diff" -> launch (fun () -> diff_page session reqd)
-  | `GET, "/types" -> launch (fun () -> list_types_page session reqd)
-  | `GET, "/timing" -> launch (fun () -> timing_page session reqd)
+  | `GET, "/branches" -> launch (fun session -> branches_page session reqd)
+  | `GET, "/changes" -> launch (fun session -> changes_page session reqd)
+  | `POST, "/branches/checkout" -> launch (fun session -> branches_checkout session reqd)
+  | `POST, "/branches/fork" -> launch (fun session -> branches_fork session reqd)
+  | `POST, "/branches/unoverride" -> launch (fun session -> branches_unoverride session reqd)
+  | `POST, "/branches/promote" -> launch (fun session -> branches_promote session reqd)
+  | `GET, "/bindings" -> launch (fun session -> list_bindings_page session reqd)
+  | `GET, "/diff" -> launch (fun session -> diff_page session reqd)
+  | `GET, "/types" -> launch (fun session -> list_types_page session reqd)
+  | `GET, "/timing" -> launch (fun session -> timing_page session reqd)
   | `GET, "/data" | `GET, "/data/" ->
-      launch (fun () -> data_index_page session reqd)
+      launch (fun session -> data_index_page session reqd)
   | `GET, path when String.length path >= 6
                  && String.sub path 0 6 = "/data/" ->
       let rest = String.sub path 6 (String.length path - 6) in
       let segs = String.split_on_char '/' rest |> List.filter ((<>) "") in
       (match segs with
        | [ty; "new"] ->
-           launch (fun () -> data_new_page session ty reqd)
+           launch (fun session -> data_new_page session ty reqd)
        | [ty; id; "delete"] ->
            (* GET delete not supported — point at detail *)
-           launch (fun () -> data_detail_page session ty id reqd)
+           launch (fun session -> data_detail_page session ty id reqd)
        | [ty; id] ->
-           launch (fun () -> data_detail_page session ty id reqd)
+           launch (fun session -> data_detail_page session ty id reqd)
        | [ty] ->
-           launch (fun () -> data_list_page session ty reqd)
+           launch (fun session -> data_list_page session ty reqd)
        | _ ->
            html_response reqd ~session ~status:`Bad_request
              (chrome ~session ~title:"Bad data path" [
@@ -608,34 +613,34 @@ let request_handler ~(sw : Eio.Switch.t) (session : Session.t)
       let segs = String.split_on_char '/' rest |> List.filter ((<>) "") in
       (match segs with
        | [ty; id; "delete"] ->
-           launch (fun () -> data_delete session ty id reqd)
+           launch (fun session -> data_delete session ty id reqd)
        | [ty; id] ->
-           launch (fun () -> data_update session ty id reqd)
+           launch (fun session -> data_update session ty id reqd)
        | [ty] ->
-           launch (fun () -> data_create session ty reqd)
+           launch (fun session -> data_create session ty reqd)
        | _ ->
            html_response reqd ~session ~status:`Bad_request
              (chrome ~session ~title:"Bad data path" [
                 HTML.p [] [txt "POST /data/<type> | /data/<type>/<id> | …/delete"];
               ]))
   | `GET, "/repl" ->
-      launch (fun () ->
+      launch (fun session ->
         let () = () in
          repl_page session reqd;
          ())
-  | `POST, "/api/eval" -> launch (fun () -> api_eval session reqd)
-  | `POST, "/api/prim" -> launch (fun () -> api_prim session reqd)
-  | `POST, "/api/media" -> launch (fun () -> api_media_post session reqd)
+  | `POST, "/api/eval" -> launch (fun session -> api_eval session reqd)
+  | `POST, "/api/prim" -> launch (fun session -> api_prim session reqd)
+  | `POST, "/api/media" -> launch (fun session -> api_media_post session reqd)
   | `GET, "/api/media" ->
-      launch (fun () -> api_media_list session reqd ~target)
+      launch (fun session -> api_media_list session reqd ~target)
   | `DELETE, path when String.length path > 11
                     && String.sub path 0 11 = "/api/media/" ->
       let id = String.sub path 11 (String.length path - 11) in
-      launch (fun () -> api_media_delete session reqd ~id)
+      launch (fun session -> api_media_delete session reqd ~id)
   | `GET, "/media" | `GET, "/media/" ->
-      launch (fun () -> media_page session reqd ~target)
+      launch (fun session -> media_page session reqd ~target)
   | `POST, "/media/upload" ->
-      launch (fun () -> media_upload_post session reqd)
+      launch (fun session -> media_upload_post session reqd)
   | `POST, path when String.length path > 7
                   && String.sub path 0 7 = "/media/"
                   && String.ends_with ~suffix:"/delete" path ->
@@ -646,17 +651,17 @@ let request_handler ~(sw : Eio.Switch.t) (session : Session.t)
           String.sub rest 0 (String.length rest - 7)
         else rest
       in
-      launch (fun () -> media_delete_post session reqd ~id)
+      launch (fun session -> media_delete_post session reqd ~id)
   | `GET, path when String.length path > 7
                  && String.sub path 0 7 = "/media/" ->
       let id = String.sub path 7 (String.length path - 7) in
-      launch (fun () -> media_get session reqd ~id)
-  | `POST, "/api/agent" -> launch (fun () -> api_agent session reqd)
-  | `POST, "/api/agent-task" -> launch (fun () -> api_agent_task session reqd)
-  | `POST, "/repl-v2/llm" -> launch (fun () -> repl_llm session reqd)
-  | `POST, "/api/ai/propose" -> launch (fun () -> ai_propose session reqd)
-  | `GET, "/agent" -> launch (fun () -> agent_page session reqd)
-  | `POST, "/api/edit/create" -> launch (fun () -> api_edit_create session reqd)
+      launch (fun session -> media_get session reqd ~id)
+  | `POST, "/api/agent" -> launch (fun session -> api_agent session reqd)
+  | `POST, "/api/agent-task" -> launch (fun session -> api_agent_task session reqd)
+  | `POST, "/repl-v2/llm" -> launch (fun session -> repl_llm session reqd)
+  | `POST, "/api/ai/propose" -> launch (fun session -> ai_propose session reqd)
+  | `GET, "/agent" -> launch (fun session -> agent_page session reqd)
+  | `POST, "/api/edit/create" -> launch (fun session -> api_edit_create session reqd)
   | `POST, path when String.length path >= 13
                   && String.sub path 0 13 = "/api/analyze/" ->
       let name =
@@ -668,7 +673,7 @@ let request_handler ~(sw : Eio.Switch.t) (session : Session.t)
         in
         Packages.name_decode rest
       in
-      launch (fun () -> Http_analyze.post_analyze session name reqd)
+      launch (fun session -> Http_analyze.post_analyze session name reqd)
   | `POST, path when String.length path >= 13
                   && String.sub path 0 13 = "/api/explain/" ->
       let name =
@@ -680,24 +685,24 @@ let request_handler ~(sw : Eio.Switch.t) (session : Session.t)
         in
         Packages.name_decode rest
       in
-      launch (fun () -> Http_analyze.post_explain session name reqd)
+      launch (fun session -> Http_analyze.post_explain session name reqd)
   | `GET, path when String.length path >= 6
                  && String.sub path 0 6 = "/page/" ->
       let seg = String.sub path 6 (String.length path - 6) in
-      launch (fun () -> page_inspector session seg reqd)
+      launch (fun session -> page_inspector session seg reqd)
   | `GET, "/page" | `GET, "/page/" ->
-      launch (fun () -> page_inspector session "" reqd)
+      launch (fun session -> page_inspector session "" reqd)
   | `GET, path when String.length path >= 17
                  && String.sub path 0 17 = "/inspect/binding/" ->
       let name =
         Packages.name_decode (String.sub path 17 (String.length path - 17))
       in
-      launch (fun () -> inspect_binding_page session name reqd)
+      launch (fun session -> inspect_binding_page session name reqd)
   | `GET, path when String.length path >= 13
                  && String.sub path 0 13 = "/inspect/row/" ->
       let rest = String.sub path 13 (String.length path - 13) in
       (match String.split_on_char '/' rest with
-       | [ty; id] -> launch (fun () -> inspect_row_page session ty id reqd)
+       | [ty; id] -> launch (fun session -> inspect_row_page session ty id reqd)
        | _ ->
            html_response reqd ~session ~status:`Bad_request
              (chrome ~session ~title:"Bad inspect path" [
@@ -708,7 +713,7 @@ let request_handler ~(sw : Eio.Switch.t) (session : Session.t)
       let name =
         Packages.name_decode (String.sub path 9 (String.length path - 9))
       in
-      launch (fun () -> show_binding_page session name reqd)
+      launch (fun session -> show_binding_page session name reqd)
   | `GET, "/edit" | `GET, "/edit/" ->
       (* package + local query form from Functions browser *)
       let pkg = Option.value (query_param target "package") ~default:"" in
@@ -720,25 +725,25 @@ let request_handler ~(sw : Eio.Switch.t) (session : Session.t)
              HTML.p [] [txt "Provide package and/or name (see Functions)."];
              HTML.p [] [HTML.a [HTML.href "/bindings"] [txt "Functions"]];
            ])
-      else launch (fun () -> editor_page session name reqd)
+      else launch (fun session -> editor_page session name reqd)
   | `GET, path when String.length path >= 6
                  && String.sub path 0 6 = "/edit/" ->
       let name =
         Packages.name_decode (String.sub path 6 (String.length path - 6))
       in
-      launch (fun () -> editor_page session name reqd)
+      launch (fun session -> editor_page session name reqd)
   | `POST, path when String.length path >= 6
                   && String.sub path 0 6 = "/edit/" ->
       let name =
         Packages.name_decode (String.sub path 6 (String.length path - 6))
       in
-      launch (fun () -> save_edit session name reqd)
+      launch (fun session -> save_edit session name reqd)
   | ((`GET | `POST) as umeth), _ ->
       (* User routes: GET + POST (it33). Same path → same handler;
          request-* prims expose method/params for branching. Route is
          resolved INSIDE launch (after the gate binds the per-request
          context) so a concurrent attach cannot flip the table under us. *)
-      launch (fun () ->
+      launch (fun session ->
       let route_opt =
         match Request_context.get () with
         | Some ctx -> Request_context.lookup_route ctx path
@@ -933,13 +938,14 @@ let unix_sockaddr_of_eio (sa : Eio.Net.Sockaddr.stream) : Unix.sockaddr =
     ambient Io_eio.with_ctx. Blocks the fiber forever. *)
 let serve_eio
     ~(session : Session.t)
+    ~(registry : Session_registry.t)
     ~(env : Eio_unix.Stdenv.base)
     ~(sw : Eio.Switch.t)
     ?(port = default_port)
     () : unit =
   let request_handler (sa : Eio.Net.Sockaddr.stream)
       (g : Httpun.Reqd.t Gluten.reqd) : unit =
-    request_handler ~sw session (unix_sockaddr_of_eio sa) g.Gluten.reqd
+    request_handler ~sw ~registry session (unix_sockaddr_of_eio sa) g.Gluten.reqd
   in
   let error_handler (sa : Eio.Net.Sockaddr.stream) =
     error_handler (unix_sockaddr_of_eio sa)

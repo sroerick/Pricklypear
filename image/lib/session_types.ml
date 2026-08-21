@@ -40,6 +40,10 @@ type t = {
      record intact for any closure that still holds it, so concurrent
      rehydrate cannot break a running page. *)
   mutable env : Pricklypear_lisp.Ast.env;
+  (** image.per-identity-sessions: Store.visible_stamp captured at the
+      last load_defs for the current branch. [ensure_fresh] compares
+      the live stamp at attach time and rehydrates only on mismatch. *)
+  mutable load_stamp : string;
   (** Lwt prim table for [Control_rim.run_lwt] (H1.7). Interpreter is
       direct-style; I/O prims are serviced only at this rim. *)
   mutable prims : Primitives.t;
@@ -56,15 +60,17 @@ type t = {
   mutable ui_nav_html : string option;
   (** Cached CSS from (ui/css) when defined; None = emergency_css in http. *)
   mutable ui_css : string option;
+  (** image.product-theme: shell cache invalidation is DEPENDENCY-TRACKED.
+      Each successful shell eval records the exact binding names it read
+      (via Env.lookup_hook); a define busts the cache iff the defined name
+      is in this set. No TTL, no name-prefix heuristic. Empty set + cached
+      value = never busted by define. Reset on checkout (per-branch). *)
+  mutable ui_shell_reads : string list;
   (** image.http-robustness invariant 3: refresh_ui_shell runs on every
-      request. Without caching it re-evals ui/nav + ui/css per request
-      (wasteful) and, when they fail, warns per request (log spam). These
-      fields cache success (refreshed_at, TTL 60s) and suppress re-attempt
-      + warn for 60s after a failure (retry_at). Reset to 0.0 on checkout. *)
-  mutable ui_nav_refreshed_at : float;
-  mutable ui_nav_retry_at : float;
-  mutable ui_css_refreshed_at : float;
-  mutable ui_css_retry_at : float;
+      request. When a shell eval FAILS, do not re-attempt + re-warn per
+      request: suppress retry for retry_at seconds (single warn per
+      window). Reset to 0.0 on checkout and on successful refresh. *)
+  mutable ui_shell_retry_at : float;
   (** When true, the eval_one define-interceptor suppresses its
       refresh_ui_shell call. Used during seed_stdlib so that defining
       ui/nav mid-seed (before notes/capture/nav is bound) does not

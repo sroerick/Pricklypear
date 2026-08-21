@@ -119,7 +119,9 @@ let is_special_form (name : string) : bool =
   | "cond" | "and" | "or"
   (* Higher-order list ops: OCaml loops + apply, not recursive Lisp.
      Avoids ~O(n) eval-frame overhead per element (budget P0). *)
-  | "apply" | "list/map" | "list/filter" | "list/foldl" | "list/foldr" -> true
+  | "apply" | "list/map" | "list/filter" | "list/foldl" | "list/foldr"
+  (* lazy-env-thunks: explicit delay/force (Var lookup auto-forces) *)
+  | "delay" | "force" -> true
   | _ -> false
 
 (** The full set of reserved kernel special-form names (see
@@ -131,7 +133,8 @@ let kernel_special_names =
     "with-transaction"; "with-step"; "quasiquote"; "unquote"; "unquote-splicing";
     "defmacro"; "macroexpand-1"; "macroexpand"; "gensym";
     "cond"; "and"; "or";
-    "apply"; "list/map"; "list/filter"; "list/foldl"; "list/foldr" ]
+    "apply"; "list/map"; "list/filter"; "list/foldl"; "list/foldr";
+    "delay"; "force" ]
 
 (** Refuse define/defmacro of kernel special forms and of names currently
     bound to [VPrim] (registered kernel prims). Closes BORGE-1785213238:
@@ -387,10 +390,10 @@ let rec value_to_expr (v : value) : expr =
        | _ -> App (value_to_expr h, List.map value_to_expr t))
   | VPair (a, b) ->
       App (Var "cons", [ value_to_expr a; value_to_expr b ])
-  | VLambda _ | VPrim _ | VRef _ | VMacro _ ->
+  | VLambda _ | VPrim _ | VRef _ | VMacro _ | VThunk _ ->
       raise
         (Interp_error
-           (User_error ("value_to_expr: cannot reify live closure/prim/ref/macro", "bad-args")))
+           (User_error ("value_to_expr: cannot reify live closure/prim/ref/macro/thunk", "bad-args")))
 
 (** Global counter backing [gensym]. *)
 let gensym_counter = ref 0
@@ -674,6 +677,29 @@ and eval_special_form
       (match v with
        | VBool false | VNil -> Cont (env, else_e)
        | _ -> Cont (env, then_e))
+  | "delay", [ _; body ] ->
+      (* lisp-interpreter.lazy-env-thunks: capture the recipe, cook on
+         first force. The payload evaluator charges the ACTIVE budget
+         at force time (the request that forces pays) when one exists,
+         else a fresh one, and reuses this eval's prim table. *)
+      let force env' expr' =
+        let b =
+          match !current_budget with Some b -> b | None -> make_budget ()
+        in
+        eval ~budget:b ~prims env' expr'
+      in
+      Done
+        (VThunk
+           (ref
+              (Unforced
+                 { thunk_body = body; thunk_env = env; thunk_force = force })))
+  | "delay", _ ->
+      raise (Interp_error (User_error ("delay needs exactly one body", "bad-args")))
+  | "force", [ _; x ] ->
+      let v = eval ~budget ~prims env x in
+      Done (Env.force_value v)
+  | "force", _ ->
+      raise (Interp_error (User_error ("force needs exactly one arg", "bad-args")))
   | "define", _ ->
       (* Rebuild App without the head name already consumed: full_args is
          head :: rest where head is Var "define". parse_top_define wants

@@ -49,6 +49,26 @@ and value =
   | VPrim of string                 (* primitive name; resolved at apply *)
   | VRef of type_name * id
   | VList of value list             (* sugar for nested pairs; reader interns *)
+  | VThunk of thunk_cell ref        (* memoized recipe; forced at Env.lookup *)
+
+(** A not-yet-evaluated binding body (lisp-interpreter.lazy-env-thunks).
+    The payload carries its OWN evaluator so the pure kernel never
+    decides HOW a body runs: pure hosts force under [Eval]'s table,
+    the image forces under its prim rim. Memoization covers failure
+    too — a body that raises once replays the exception, it does not
+    re-run (and re-pay) on every touch. [Forcing] marks an in-flight
+    force so self-referential cycles raise instead of diverging. *)
+and thunk_cell =
+  | Unforced of thunk_payload
+  | Forcing
+  | Forced of value
+  | Failed of exn
+
+and thunk_payload = {
+  thunk_body : expr;
+  thunk_env : env;
+  thunk_force : env -> expr -> value;
+}
 
 (** Lexical environment: a local binding table plus an optional parent
     closure chain; lookup walks toward the root. *)
@@ -92,6 +112,7 @@ let rec pp_value_short (v : value) : string =
   | VMacro _ -> "<macro>"
   | VPrim n -> "<prim " ^ n ^ ">"
   | VRef (t, _) -> "<ref " ^ t ^ ">"
+  | VThunk _ -> "<thunk>"
 
 (** Machine-readable kind tag for an [interp_error] (used by CLI/UI code). *)
 let interp_error_kind (e : interp_error) : string =
@@ -179,6 +200,7 @@ and value_to_json (v : value) : Yojson.Safe.t =
   | VPair (a, b) -> `Assoc [ ("pair", `List [ value_to_json a; value_to_json b ]) ]
   | VLambda _ -> `Assoc [ ("lambda", `String "#<lambda>") ]  (* closures aren't serializable *)
   | VMacro _ -> `Assoc [ ("macro", `String "#<macro>") ]
+  | VThunk _ -> `Assoc [ ("thunk", `String "#<thunk>") ]
   | VPrim name -> `Assoc [ ("prim", `String name) ]
   | VRef (t, i) -> `Assoc [ ("ref", `List [ `String t; `String i ]) ]
   | VList vs -> `Assoc [ ("list", `List (List.map value_to_json vs)) ]

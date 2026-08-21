@@ -13,6 +13,31 @@ let ty_rel () = "tree_type_defs"
 let rt_rel () = "tree_view_bindings"
 let pkg_rel () = "tree_package_registry"
 
+(** Cheap visibility signature for staleness checks
+    (image.per-identity-sessions): count + max(updated_at) of
+    function/type/route defs over the current branch chain, one round
+    trip. A parked session compares this against the value from its
+    last load; mismatch => rehydrate. *)
+let visible_stamp (t : t) : string =
+  match t.conn with
+  | None -> ""
+  | Some conn ->
+      (try
+         let agg rel =
+           "(SELECT count(*)::text || '|' || COALESCE(max(updated_at)::text, '-') "
+           ^ "FROM " ^ rel ^ " d JOIN chain ON d.branch_id = chain.id)" in
+         let sql =
+           "WITH RECURSIVE chain AS ( "
+           ^ "  SELECT id, parent_id FROM branches WHERE id = $1 "
+           ^ "  UNION ALL "
+           ^ "  SELECT b.id, b.parent_id FROM branches b JOIN chain c ON b.id = c.parent_id "
+           ^ ") SELECT " ^ agg (fn_rel ()) ^ " || '/' || " ^ agg (ty_rel ())
+           ^ " || '/' || " ^ agg (rt_rel ()) in
+         match exec conn ~params:[ Pgx.Value.of_string t.branch_id ] sql with
+         | [ [ c ] ] -> (match Pgx.Value.to_string c with Some s -> s | None -> "")
+         | _ -> ""
+       with _ -> "")
+
 (* Branch-aware lookup. Walks the branch parent chain via a recursive
    CTE so that a definition in [main] is visible from a child branch,
    and a definition in the child OVERRIDES the same name in main

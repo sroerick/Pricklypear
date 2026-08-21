@@ -114,6 +114,131 @@
     )
    )
   )
+  (subsection lazy-env-load
+   (doc "load_defs binds VThunk recipes instead of evaluating bodies; rehydrate is one CTE + decode, never a body eval")
+   (status implemented)
+   (implements
+    image/lib/session.ml)
+   (verify
+    (build "dune build image")
+    (smoke "rehydrate of the full branch chain completes in ms; zero [session] load def lines logged")
+    (smoke "a def whose body executes only runs (and logs failure) on FIRST reference, not at checkout/attach"))
+   (details
+    (doc (|
+         The image half of lisp-interpreter.lazy-env-thunks.
+
+         load_defs walks the recursive-CTE def list (parents first,
+         child overrides) and binds each name to a VThunk payload
+         whose force evaluator is the SESSION's rim eval
+         (Control_rim.run around Eval.eval with the current budget
+         when one is active, fresh budget otherwise). Macro bodies
+         keep the old eager path (VMacro construction is pure, no
+         eval). Defs whose stored body is an APPLICATION form — data
+         captured as code (rb/* recipes, outline experiments, seeds) —
+         no longer execute at boot/checkout/attach; they cook once on
+         first reference, under the forcing request's budget, and
+         memoize (value OR failure).
+
+         SEMANTIC CHANGE (deliberate): nothing at image scope may
+         rely on load-time side effects of stored def bodies. A def
+         is a recipe, not an init hook. If boot order matters for a
+         real side effect, it belongs in boot code, not in
+         function_defs. Alphabetical-load-order breakage of the old
+         scheme (rb/* evaluated before recipe was defined → 28 defs
+         failing on EVERY rebuild, re-running partial side effects
+         each flip) disappears: forcing resolves through the fully
+         linked env.
+    |))
+   )
+  )
+  (subsection per-identity-sessions
+   (doc "One Session.t per attached identity (env+routes+store handle); attach selects, never mutates; anonymous gets its own parked session")
+   (status implemented)
+   (implements
+    image/lib/session_registry.ml
+    image/lib/session.ml
+    image/lib/http.ml
+    image/lib/http_core.ml
+    image/lib/boot.ml)
+   (verify
+    (build "dune build image")
+    (smoke "alternating anonymous GET /welcome and Basic-auth POST /api/eval: neither pays a rehydrate when nothing changed")
+    (smoke "a define by admin is visible to the anonymous session within one staleness check")
+    (smoke "concurrent requests for two users run page work in parallel (no head-of-line blocking)"))
+   (details
+    (doc (|
+         PROBLEM (measured on prod 2026-08-21)
+           One shared Session.t + per-request attach meant every
+           alternating-user request flipped the session's branch and
+           paid a FULL rehydrate under the global request_mutex
+           (60-120s on admin/personal with ~4000 defs × strict eval).
+           boot-request-cost's invariant ('rehydrate only when the
+           branch actually changes') was vacuous: with one session,
+           every OTHER user's request IS a branch change. The
+           cotenant race that Request_context snapshots band-aid
+           exists only because the session is shared.
+
+         MODEL
+           Session_registry owns a Hashtbl identity -> Session.t:
+             - one long-lived anonymous session, parked on
+               system/main, serves all unauthenticated traffic
+               (public face: /welcome, /agent.txt, public routes)
+             - one session per authenticated username, built lazily
+               on first attach, parked on that identity's branch
+             - each session has its OWN Store.t (own pgx connection):
+               checkout mutates only its own store, and the global
+               pgx sequencer serialization between users disappears
+             - attach = resolve identity -> select (or create) ->
+               cheap staleness check -> serve. Attach NEVER checks
+               out another identity's branch.
+
+         STALENESS
+           A parked session must notice writes on its visible chain
+           (another user's promote, an agent's define). At attach,
+           one cheap query per session — count(*)+max(updated_at)
+           over function_defs / view_bindings / type_defs on the
+           session's branch chain — compared against the values at
+           last load; mismatch triggers rehydrate (cheap under
+           lazy-env-load). Attach cost when idle: one indexed
+           round trip, ~ms.
+
+         CONSEQUENCES
+           - Invariant 4's cotenant race is deleted at the root:
+             Request_context remains as the per-request snapshot
+             discipline, but no concurrent attach can mutate the
+             session a page is reading, because page work runs on
+             the identity's own session.
+           - request_mutex narrows to registry table access; page
+             work across identities parallelizes (subject to PG).
+           - Sessions are never expired in v1 (user count is small;
+             revisit with an LRU if a public signup flow appears).
+           - Boot session remains for boot/seed/jobs-runner use.
+    |))
+   )
+  )
+  (subsection function-stat-ring
+   (doc "function_stat writes go through an in-process ring flushed by a background fiber; no per-eval DB write")
+   (status implemented)
+   (implements
+    image/lib/function_stats.ml
+    image/lib/session.ml
+    image/lib/boot.ml)
+   (verify
+    (build "dune build image")
+    (smoke "burst of labeled evals produces zero synchronous data_rows writes; flush fiber lands them <= 30s later"))
+   (details
+    (doc (|
+         Every labeled /api/eval called Crud.create for a
+         function_stat row — a synchronous SERIALIZABLE insert +
+         fsync on the request path, and 54k unbounded rows on prod
+         after a few weeks. Same medicine as
+         http-robustness's ops-incidents rule: request path pushes
+         to an in-process ring (capacity 512, drop-oldest), a
+         background fiber flushes at most once every 30s. Loss on
+         crash is acceptable: these are perf stats, not ledger.
+    |))
+   )
+  )
   (subsection ssh-interface
    (doc "Deprecated: SSH access removed in single-image pivot")
    (status deprecated)
@@ -396,6 +521,24 @@
          log-hygiene + cost fix surfaced by the same incident.
 
          =========================================================
+         INVARIANT 3.5 — INCIDENT AUTO-FILING IS ASYNC, NOT IN THE
+         REQUEST FIBER (2026-08 incident-write amplification)
+         =========================================================
+         A repeating route failure (e.g. ui/home unbound on a
+         branch) used to call Ops_incidents.emit_and_maybe_file on
+         EVERY page hit: a synchronous Crud.create (+ tree-mirror
+         trigger writes + a TODO row) inside the request fiber,
+         multiple serialized PG round-trips per request — observed
+         as GET / taking 10-40s with DB writes mid-request.
+
+         Rule: Ops_incidents buffers events in an in-process ring
+         (dedup by fingerprint, count++ coalescing as today); a
+         background fiber flushes the ring at most once every N
+         seconds. Request-path cost of auto-filing is a ring push
+         ONLY — zero DB ops. One repeating bug = one incident row +
+         one TODO total, not one per page view.
+
+         =========================================================
          INVARIANT 4 — CONCURRENCY: IDENTITY ATTACH IS SERIALIZED,
          PAGE WORK IS NOT (immutable-env + narrowed mutex)
          =========================================================
@@ -449,6 +592,15 @@
              to all page work. Prims and dispatch read the context
              instead of live Session.t fields. Anonymous attach can
              no longer flip an in-flight personal-branch page.
+
+             SUPERSEDED ROOT CAUSE (image.per-identity-sessions):
+             the cotenant race existed because ONE Session.t was
+             shared across identities. With per-identity sessions,
+             attach no longer mutates a session another request is
+             reading; Request_context stays as the snapshot
+             discipline, but 4a's fresh-env-swap requirement ceases
+             to be load-bearing for cross-user safety (still useful
+             for same-session rehydrate during long page work).
 
   (subsection per-request-context
    (doc "Request_context.t + dynamic binding to eliminate cotenant race")
@@ -1302,6 +1454,14 @@
          - Silent full OCaml design-system twin beside Nopales theme
          - Per-request uncached re-eval of ui/css without shell
            refresh discipline (mirror ui/nav caching lessons)
+         - TIME-BASED STALENESS: a TTL on the shell cache serves
+           wrong CSS for up to a minute for no correctness reason
+           (supersedes the earlier 60s TTL; invalidation is now
+           dependency-tracked, below)
+         - GENERAL USER-FUNCTION MEMOIZATION: Nopales functions may
+           read DB or request state mid-eval, so same-args-does-not-
+           imply-same-output; no purity story in the type system yet.
+           Caching applies to the zero-arg shell bindings ONLY.
 
          =========================================================
          css/*  (libs/std/lib.pp — seed with std, before ui)
@@ -1398,14 +1558,25 @@
              plus eval (ui/css) → string | raw-html-as-text →
              cache; on miss/throw → ui_css <- None
 
-           Invalidate / refresh when:
-             define/load of ui/css, ui/theme, ui/nav, ui/home
-             (and ideally theme/* token defines — at minimum any
-             define that refresh_ui_shell already re-runs after
-             shell names; token-only defines may require explicit
-             ui/css refresh or re-eval on next request launch)
-             checkout / branch switch (no stale other-branch CSS)
-             load-library that may redefine shell
+           Invalidate / refresh — DEPENDENCY-TRACKED, not guessed:
+             At each shell render, the kernel records the set of
+             bindings (ui/css) / (ui/nav) actually resolve during
+             eval (env read-set, e.g. theme/vars, ui/theme,
+             ui/theme-nav, notes/tree-css, theme/bg, ...).
+             A define busts the cache IFF the defined name is in
+             that recorded set — theme/extra busts (it's read),
+             todo/foo doesn't (it isn't). No TTL, no name-prefix
+             heuristic: the cache is fresh forever until a real
+             dependency changes.
+             checkout / branch switch still busts unconditionally
+             (no stale other-branch CSS; read-sets are per-branch).
+             load-library still refreshes at end (eval_form path)
+             since bulk redefines legitimately change the read-set.
+             Shell evals cause ZERO DB WRITES: budget-stats
+             persistence (function_stat) MUST skip shell labels
+             (ui/css ui/nav ui/home ui/theme) — the shell refresh
+             runs in the request gate and must not turn into a
+             serialized Crud.create under the pgx sequencer.
 
            html_response gains ~css parameter (or reads session):
              HTML.style [] "%s" css

@@ -242,9 +242,20 @@ let start_eio ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t) : unit =
         Printf.eprintf "[boot] jobs runner fiber exited: %s\n%!"
           (Printexc.to_string exn));
 
+  (* image.function-stat-ring: flush labeled-eval stats <= every 30s
+     instead of a synchronous insert per /api/eval. *)
+  Eio.Fiber.fork ~sw (fun () ->
+      try Function_stats.flush_loop ~store:session.store
+      with exn ->
+        Printf.eprintf "[boot] function_stats flush fiber exited: %s\n%!"
+          (Printexc.to_string exn));
+  (* image.per-identity-sessions: HTTP requests run on per-identity
+     sessions (own env, own pgx connection); the boot session keeps the
+     REPL endpoint + auth lookups. *)
+  let registry = Session_registry.create ~boot:session in
   Printf.eprintf "[boot] serving http://0.0.0.0:%d/  (htmx, httpun-eio)\n%!"
     http_port;
-  Http.serve_eio ~session ~env ~sw ~port:http_port ()
+  Http.serve_eio ~session ~registry ~env ~sw ~port:http_port ()
 
 (** Legacy name — same as start_eio without env (not used by main). *)
 let start () : unit =

@@ -470,6 +470,7 @@ let rec pp_value (v : value) : string =
   | VLambda _ -> "#<lambda>"
   | VMacro _ -> "#<macro>"
   | VPrim name -> "#<prim:" ^ name ^ ">"
+  | VThunk _ -> "#<thunk>"
   | VRef (t, i) -> "#<ref:" ^ t ^ ":" ^ String.sub i 0 (min 8 (String.length i)) ^ ">"
   | VList vs -> "(" ^ String.concat " " (List.map pp_value vs) ^ ")"
 

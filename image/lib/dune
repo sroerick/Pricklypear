@@ -8,6 +8,8 @@
           prims_request prims_net prims_media prims_graph prims_db
           net_prims prims_hyper
           session
+          session_registry
+          function_stats
           crud media packages loader repl_endpoint
           ops_log ops_stats ops_incidents
           timing
