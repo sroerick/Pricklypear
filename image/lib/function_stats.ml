@@ -49,10 +49,13 @@ let flush ~(store : Store.t) : unit =
                (Printexc.to_string exn)))
         xs
 
-(** Background flush loop; fork once at boot. *)
-let flush_loop ~(store : Store.t) : unit =
+(** Background flush loop; fork once at boot. Uses the Eio clock —
+    NOT Lwt_eio.run_lwt: concurrent run_lwt across fibers (this loop vs
+    the jobs runner) is unsafe and took the whole switch down on prod
+    (watchdog restart loop, 2026-08-21). *)
+let flush_loop ~(clock : _ Eio.Time.clock) ~(store : Store.t) : unit =
   let rec loop () =
-    Lwt_eio.run_lwt (fun () -> Lwt_unix.sleep flush_secs);
+    Eio.Time.sleep clock flush_secs;
     (try flush ~store
      with exn ->
        Printf.eprintf "[function_stats] flush failed: %s\n%!"
