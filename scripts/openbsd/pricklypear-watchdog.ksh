@@ -32,6 +32,20 @@ trap 'rmdir "${lockdir}" 2>/dev/null || true' EXIT
 # Ensure runtime dir exists so a wiped /var/run still works after reboot.
 install -d -o _pricklypear -g _pricklypear -m 0750 "${runtime_dir}" 2>/dev/null || true
 
+# Boot grace (2026-08-21 dups fix): seed boot takes 10-30s. If a youngest
+# image process is fresh (< 90s), it is still booting — hands off. Without
+# this, the minute cron RESTARTS the service mid-seed, and the resulting
+# orphan (holding :18080, off-pidfile) + dead EADDRINUSE children turned
+# into a per-minute restart loop. Look at the YOUNGEST image: overlapping
+# starts only ever make an additional fresh one.
+youngest="$(ps -axo pid=,etime=,comm= 2>/dev/null \
+  | awk '$3 == "image" {print $2}' \
+  | awk -F: 'NF==2 {s=$1*60+$2} NF==3 {s=$1*3600+$2*60+$3} NF==4 {s=$1*86400+$2*3600+$3*60+$4} {print s}' \
+  | sort -n | head -1)"
+if [ -n "${youngest}" ] && [ "${youngest}" -lt 90 ]; then
+  exit 0
+fi
+
 if rcctl check "${service}" >/dev/null 2>&1; then
   exit 0
 fi
@@ -44,8 +58,9 @@ log "${service} down or unhealthy; attempting restart"
 rcctl stop "${service}" >/dev/null 2>&1 || true
 sleep 1
 if rcctl start "${service}" >/dev/null 2>&1; then
-  # Give boot a moment (stdlib seed + PG) before recheck.
-  sleep 3
+  # Give boot a real moment (stdlib seed + PG measured 10-30s on prod)
+  # before recheck; <3s misread as failure.
+  sleep 20
   if rcctl check "${service}" >/dev/null 2>&1; then
     log "${service} started OK"
     exit 0
