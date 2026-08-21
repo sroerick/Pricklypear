@@ -245,7 +245,9 @@ let start_eio ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t) : unit =
   (* image.function-stat-ring: flush labeled-eval stats <= every 30s
      instead of a synchronous insert per /api/eval. *)
   Eio.Fiber.fork ~sw (fun () ->
-      try Function_stats.flush_loop ~store:session.store
+      try
+        Function_stats.flush_loop ~clock:(Eio.Stdenv.clock env)
+          ~store:session.store
       with exn ->
         Printf.eprintf "[boot] function_stats flush fiber exited: %s\n%!"
           (Printexc.to_string exn));
