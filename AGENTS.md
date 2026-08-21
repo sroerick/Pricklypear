@@ -23,6 +23,22 @@ Supervisor/authd multi-process topology is retired (see
 `.borge-bugs/` (quote compounds, AST nodes design, schema-authority,
 optional SSH). Monitor command: bottom of `README.md`.
 
+### 2026-08-21 session model (perf)
+
+Shared-session flip stall is fixed on prod (commits bf2e808, 74699ba):
+per-identity `Session_registry` (one `Session.t` per identity, own pgx
+conn; anonymous parked on `system/main`), env loading is VThunk-lazy
+(`load_defs` binds recipes; bodies force once on first touch,
+memoized incl. failures — defs are recipes, never load-time hooks),
+staleness stamp at attach, `function_stat` ring-flushed (30s). Specs:
+`borge/image.borg` lazy-env-load / per-identity-sessions /
+function-stat-ring; `borge/lisp-interpreter.borg` lazy-env-thunks
+(user surface: `(delay)` / `(force)`). Runtime now needs the OpenBSD
+`argon2` package (first argon2id deploy). Known remaining floors,
+filed in `/issues`: `notes/doc/get` ~80s on big docs; argon2id verify
+per Basic-auth request (~0.5-1s/request). Live details: notes doc
+`agents` → "Sessions & lazy env (2026-08-21)".
+
 ## Live image eval (laptop / pi agent)
 
 **Entry point for agents:** the public bootstrap docs on the running host — not this file as the full playbook.
