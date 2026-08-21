@@ -31,11 +31,14 @@ rc_pre() {
 }
 
 rc_check() {
-	[ -f "${pidfile}" ] || return 1
-	pid="$(cat "${pidfile}" 2>/dev/null)" || return 1
-	kill -0 "${pid}" 2>/dev/null || return 1
-	# Health probe: require ok:true (not mere substring "ok" — ok:false
-	# must fail so a live-but-DB-dead image is restarted).
+	# Health probe is the ONLY liveness signal (require ok:true, not mere
+	# "ok" — ok:false must fail so a live-but-DB-dead image is restarted).
+	# Deliberately NOT pidfile+kill -0 first: after any overlapping
+	# start/stop (promote window, watchdog, manual), an orphan may hold
+	# :18080 and serve healthily while the pidfile points at a dead
+	# EADDRINUSE child — pidfile checks turned that into a restart loop
+	# on 2026-08-21. A healthy listener IS a healthy service; rc_stop's
+	# belt already culls strays during intentional restarts.
 	port="${PP_HTTP_PORT:-18080}"
 	body="$(ftp -o - "http://127.0.0.1:${port}/health" 2>/dev/null)" || return 1
 	print -r -- "${body}" | grep -q '"ok"[[:space:]]*:[[:space:]]*true' || return 1
