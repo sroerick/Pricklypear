@@ -31,9 +31,9 @@ let persist_last_budget_stats (t : t) ~(label : string) : unit =
                   ("when", `String (string_of_float (Unix.gettimeofday ())));
                 ])
          in
-         ignore
-           (Crud.create t.store ~type_name:"function_stat" ~fields_json:fields
-              ~author:t.manifest.username)
+         (* image.function-stat-ring: push, no synchronous DB write. *)
+         Function_stats.push ~fn:label ~fields_json:fields
+           ~author:t.manifest.username
        with _ -> ())
 
 let eval_string_rim (t : t) (input : string) : Pricklypear_lisp.Ast.value =
@@ -52,7 +52,13 @@ let eval_string_rim (t : t) (input : string) : Pricklypear_lisp.Ast.value =
       | _ -> ""
     else ""
   in
-  if label <> "" then persist_last_budget_stats t ~label;
+  (* image.product-theme: shell evals cause ZERO DB WRITES. The shell
+     refresh runs in the request gate; persisting budget stats for it
+     would turn every shell re-render into a serialized Crud.create
+     under the pgx sequencer. Skip stats for shell labels. *)
+  if label <> "" && label <> "ui/css" && label <> "ui/nav"
+     && label <> "ui/home" && label <> "ui/theme"
+  then persist_last_budget_stats t ~label;
   v
 
 let eval_expr_rim (t : t) (expr : Pricklypear_lisp.Ast.expr)
@@ -98,12 +104,12 @@ let load_defs (t : t) : unit =
             name;
           ()
         end else
-        (* Always (re)define — parents first, children last → override. *)
-        (try
-      (* Eval the stored AST directly — NEVER pp_expr round-trip.
-                Complex bodies (ui/home, notes) break under print/parse.
-                Macro bodies are stored as (__macro__ params body). *)
-             (match body with
+        (* Always (re)bind — parents first, children last → override.
+           image.lazy-env-load: non-macro bodies bind as VTHUNKS — the
+           body is NOT evaluated at load. First lookup forces (once,
+           memoized, failure too) under the session rim + active budget.
+           Macros keep the eager path: VMacro construction is pure. *)
+        (match body with
               | Pricklypear_lisp.Ast.App
                   (Pricklypear_lisp.Ast.Var "__macro__",
                    [ params_expr; body_expr ]) ->
@@ -123,15 +129,17 @@ let load_defs (t : t) : unit =
                     (Pricklypear_lisp.Ast.VMacro (params, body_expr, t.env));
                   ()
               | _ ->
-                  let _ =
-                    eval_expr_rim t
-                      (Pricklypear_lisp.Ast.Define (name, body))
+                  let force env' expr' =
+                    eval_under_rim t (fun () ->
+                        let b =
+                          match !Pricklypear_lisp.Eval.current_budget with
+                          | Some b -> b
+                          | None -> Pricklypear_lisp.Eval.make_budget ()
+                        in
+                        Pricklypear_lisp.Eval.eval ~budget:b
+                          ~prims:Pricklypear_lisp.Eval.empty_prims env' expr')
                   in
-                  ())
-    with exn ->
-      Printf.eprintf "[session] load def %s failed: %s\n%!"
-               name (Printexc.to_string exn);
-             ()))
+                  Pricklypear_lisp.Env.define_thunk t.env name ~force body))
       defs
   in
   (* Also load view_bindings into the in-memory routes table. The
@@ -154,7 +162,10 @@ let load_defs (t : t) : unit =
   ()
 
 let load_defs_async (t : t) : unit =
-  load_defs t
+  load_defs t;
+  (* image.per-identity-sessions: stamp AFTER a successful load so the
+     attach-time staleness check has a baseline. *)
+  t.load_stamp <- Store.visible_stamp t.store
 
 (** Clear env + routes and reload from the store for the current branch.
     Re-binds kernel prims from [t.kernel_catalog] first so checkout does
@@ -190,18 +201,41 @@ let rehydrate (t : t) : unit =
      Rebind on every rehydrate so /api/eval sessions see it. *)
   Pricklypear_lisp.Env.define t.env "pi"
     (Pricklypear_lisp.Ast.VFloat Float.pi);
-  load_defs t
+  load_defs t;
+  t.load_stamp <- Store.visible_stamp t.store
 
-(** Force the next refresh_ui_shell to re-eval ui/nav + ui/css instead of
-    serving the 60s TTL cache. Used after define of shell/theme names,
-    load-library, and branch checkout (image.themes + product-theme). *)
+(** Rehydrate iff the visible def chain changed since the last load.
+    Called by the session registry at attach time; with image.lazy-env-load
+    the rehydrate itself is a CTE + thunk binds (no body evals), so the
+    whole check stays in the low-ms range. *)
+let ensure_fresh (t : t) : unit =
+  match Store.visible_stamp t.store with
+  | "" -> ()  (* no DB: stay on whatever is in memory *)
+  | stamp when stamp = t.load_stamp -> ()
+  | _ -> rehydrate t
+
+(** Force the next refresh_ui_shell to re-eval ui/nav + ui/css.
+    image.product-theme: invalidation is DEPENDENCY-TRACKED — a define
+    busts iff the defined name was in the last shell eval's recorded
+    read-set (see refresh_ui_shell); no TTL remains. Checkout still
+    busts unconditionally (read-sets are per-branch), as do
+    load-library / reseed (bulk redefines). *)
 let bust_ui_shell_cache (t : t) : unit =
   t.ui_nav_html <- None;
   t.ui_css <- None;
-  t.ui_nav_refreshed_at <- 0.0;
-  t.ui_nav_retry_at <- 0.0;
-  t.ui_css_refreshed_at <- 0.0;
-  t.ui_css_retry_at <- 0.0
+  t.ui_shell_reads <- [];
+  t.ui_shell_retry_at <- 0.0
+
+(** image.product-theme: true when [name] was read by the last shell
+    eval. Conservative when no read-set exists yet (never refreshed):
+    fall back to the old shell-prefix set so first-refresh still
+    triggers on shell-name defines. *)
+let touches_shell (t : t) (name : string) : bool =
+  match t.ui_shell_reads with
+  | [] -> name = "ui/nav" || name = "ui/home" || name = "ui/css"
+          || name = "ui/theme"
+          || String.starts_with ~prefix:"theme/" name
+  | reads -> List.exists (String.equal name) reads
 
 (** Switch store + manifest to [branch_id], then rehydrate env. *)
 let checkout_to (t : t) ~(branch_id : string) ~(branch_ref : string)
@@ -751,13 +785,13 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value =
         else ()
       in
       let () =
-        if not t.suppress_refresh_on_define
-           && (name = "ui/nav" || name = "ui/home" || name = "ui/css"
-               || name = "ui/theme"
-               || String.starts_with ~prefix:"theme/" name)
+        if not t.suppress_refresh_on_define && touches_shell t name
         then begin
-          bust_ui_shell_cache t;
-          refresh_ui_shell t
+          (* Bust only: the next request-gate refresh re-evals. Eager
+             refresh here would multiply work per-define during bulk
+             loads; invariant-3 retry suppression keeps a broken define
+             from blocking the defining request itself. *)
+          bust_ui_shell_cache t
         end else ()
       in
       let () = record_define_side_effects t ~name in
@@ -867,13 +901,9 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
       else ()
     in
     let () =
-      if not t.suppress_refresh_on_define
-         && (name = "ui/nav" || name = "ui/home" || name = "ui/css"
-             || name = "ui/theme"
-             || String.starts_with ~prefix:"theme/" name)
+      if not t.suppress_refresh_on_define && touches_shell t name
       then begin
-        bust_ui_shell_cache t;
-        refresh_ui_shell t
+        bust_ui_shell_cache t
       end else ()
     in
     let () = record_define_side_effects t ~name in
@@ -971,12 +1001,20 @@ and reseed_package (t : t) (pkg : string) : (string, string) result =
 and refresh_ui_shell (t : t) : unit =
   (* Product shell: nav HTML + theme CSS (image.product-theme).
      image.http-robustness invariant 3: this runs on every request, so
-     it must NOT re-eval + re-warn per request. Cache success for 60s
-     (ui_nav_refreshed_at / ui_css_refreshed_at) and, on failure, suppress
-     re-attempt + warn for 60s (ui_nav_retry_at / ui_css_retry_at). Both
-     are reset on checkout (branch switch). Emergency chrome fallback
-     is unchanged: when ui_nav_html is None, http serves emergency nav. *)
-  let shell_ttl = 60.0 in
+     a FAILED shell eval must not re-attempt + re-warn per request
+     (ui_shell_retry_at suppresses for shell_retry_secs after a throw;
+     reset on checkout / success). Emergency chrome fallback is
+     unchanged: when ui_nav_html is None, http serves emergency nav.
+
+     image.product-theme: invalidation is DEPENDENCY-TRACKED, not
+     TTL-based. A successful shell eval records the binding names it
+     read (ui_shell_reads, via Env.lookup_hook, armed only around these
+     two evals). A define of a name in that set busts the cache (see
+     touches_shell); anything else leaves it. The cache is therefore
+     fresh until a real dependency changes — no 60s window serving
+     stale CSS, no prefix-guess busting on unrelated defines. Checkout
+     and load-library still bust unconditionally. *)
+  let shell_retry_secs = 60.0 in
   let now = Unix.gettimeofday () in
   let pp_exn exn =
     match exn with
@@ -984,80 +1022,64 @@ and refresh_ui_shell (t : t) : unit =
         Pricklypear_lisp.Ast.pp_interp_error e
     | _ -> Printexc.to_string exn
   in
+  (* Refresh one shell binding: eval [eval_str], record its read-set,
+     cache the rendered string via [set_cached], handle failure with
+     retry suppression. *)
+  let refresh name eval_str set_cached =
+    Pricklypear_lisp.Env.lookup_hook :=
+      Some (fun n ->
+        if not (List.exists (String.equal n) t.ui_shell_reads) then
+          t.ui_shell_reads <- n :: t.ui_shell_reads);
+    Fun.protect
+      ~finally:(fun () -> Pricklypear_lisp.Env.lookup_hook := None)
+      (fun () ->
+        (try
+           let v = eval_one t eval_str in
+           (match Primitives.is_raw_html v with
+            | Some s -> set_cached (Some s)
+            | None ->
+                (match v with
+                 | Pricklypear_lisp.Ast.VStr s -> set_cached (Some s)
+                 | _ ->
+                     set_cached
+                       (Some (Pricklypear_lisp.Reader.pp_value v))));
+           t.ui_shell_retry_at <- 0.0;
+           ()
+         with exn ->
+           (* Warn once per retry window, then go quiet. Print the
+              full message so the failure is diagnosable. *)
+           ignore
+             (Ops_log.warn ~component:"session"
+                ~context:[("fn", name)]
+                ("refresh_ui_shell failed (retry in "
+                 ^ string_of_float shell_retry_secs ^ "s): "
+                 ^ pp_exn exn));
+           set_cached None;
+           t.ui_shell_retry_at <- now +. shell_retry_secs;
+           ()))
+  in
   let () =
     match Pricklypear_lisp.Env.lookup t.env "ui/nav" with
-    | None ->
-        t.ui_nav_html <- None;
-        ()
+    | None -> t.ui_nav_html <- None
     | Some _ ->
-        if t.ui_nav_html <> None
-           && now -. t.ui_nav_refreshed_at < shell_ttl then
-          (* Cache fresh: serve cached nav, skip re-eval. *)
+        if t.ui_nav_html <> None then
+          (* Cache present: serve it (bust clears it first). *)
           ()
-        else if t.ui_nav_html = None && now < t.ui_nav_retry_at then
-          (* Recently failed on this branch: skip re-eval + skip warn. *)
+        else if now < t.ui_shell_retry_at then
+          (* Recently failed: skip re-eval + skip warn. *)
           ()
         else
-          (try
-      let v = eval_one t "(ui/nav)" in
-              (match Primitives.is_raw_html v with
-               | Some s -> t.ui_nav_html <- Some s
-               | None ->
-                   (match v with
-                    | Pricklypear_lisp.Ast.VStr s -> t.ui_nav_html <- Some s
-                    | _ ->
-                        t.ui_nav_html <-
-                          Some (Pricklypear_lisp.Reader.pp_value v)));
-              t.ui_nav_refreshed_at <- now;
-              t.ui_nav_retry_at <- 0.0;
-              ()
-    with exn ->
-      (* Warn once per retry window, then go quiet. Print the
-                 full message so the failure is diagnosable. *)
-              ignore
-                (Ops_log.warn ~component:"session"
-                   ~context:[("fn", "ui/nav")]
-                   ("refresh_ui_shell failed (retry in "
-                    ^ string_of_float shell_ttl ^ "s): "
-                    ^ pp_exn exn));
-              t.ui_nav_html <- None;
-              t.ui_nav_retry_at <- now +. shell_ttl;
-              ())
+          refresh "ui/nav" "(ui/nav)" (fun v -> t.ui_nav_html <- v)
   in
   match Pricklypear_lisp.Env.lookup t.env "ui/css" with
-  | None ->
-      t.ui_css <- None;
-      ()
+  | None -> t.ui_css <- None
   | Some _ ->
-      if t.ui_css <> None
-         && now -. t.ui_css_refreshed_at < shell_ttl then
+      if t.ui_css <> None then
         ()
-      else if t.ui_css = None && now < t.ui_css_retry_at then
+      else if now < t.ui_shell_retry_at then
         ()
       else
-        (try
-      let v = eval_one t "(ui/css)" in
-            (match Primitives.is_raw_html v with
-             | Some s -> t.ui_css <- Some s
-             | None ->
-                 (match v with
-                  | Pricklypear_lisp.Ast.VStr s -> t.ui_css <- Some s
-                  | _ ->
-                      t.ui_css <-
-                        Some (Pricklypear_lisp.Reader.pp_value v)));
-            t.ui_css_refreshed_at <- now;
-            t.ui_css_retry_at <- 0.0;
-            ()
-    with exn ->
-      ignore
-              (Ops_log.warn ~component:"session"
-               ~context:[("fn", "ui/css")]
-               ("refresh_ui_shell css failed (retry in "
-                ^ string_of_float shell_ttl ^ "s): "
-                ^ pp_exn exn));
-            t.ui_css <- None;
-            t.ui_css_retry_at <- now +. shell_ttl;
-            ())
+        refresh "ui/css" "(ui/css)" (fun v -> t.ui_css <- v)
 
 and seed_one (t : t) (name : string) : unit =
   let r = load_library t name in
@@ -1332,16 +1354,15 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
       manifest;
       store;
       env;
+      load_stamp = "";
       prims = prim_table;  (* temporary; replaced below *)
       routes;
       started_at = Unix.gettimeofday ();
       kernel_catalog = [];  (* filled after all prims register *)
       ui_nav_html = None;
       ui_css = None;
-      ui_nav_refreshed_at = 0.0;
-      ui_nav_retry_at = 0.0;
-      ui_css_refreshed_at = 0.0;
-      ui_css_retry_at = 0.0;
+      ui_shell_reads = [];
+      ui_shell_retry_at = 0.0;
       suppress_refresh_on_define = false;
       seed_additive = false;
       current_request = None;

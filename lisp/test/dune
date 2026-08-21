@@ -24,6 +24,11 @@
  (libraries pricklypear-lisp pricklypear-pure-prims alcotest yojson))
 
 (test
+ (name lazy_thunk_test)
+ (modules lazy_thunk_test)
+ (libraries pricklypear-lisp alcotest))
+
+(test
  (name ast_diff_test)
  (modules ast_diff_test)
  (libraries pricklypear-lisp alcotest yojson digestif))

@@ -64,6 +64,10 @@ type t = {
 let make ~cfg ~branch_id () : t =
   { cfg; conn = None; branch_id; current_tx = None; seed_names = None }
 
+(** Expose the config so the session registry can open per-session
+    connections with the same parameters (image.per-identity-sessions). *)
+let config (t : t) : config = t.cfg
+
 let conn_of (t : t) : conn option = t.conn
 
 let current_conn (t : t) : conn option =
