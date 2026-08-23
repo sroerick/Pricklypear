@@ -1378,8 +1378,13 @@ let abandon_data_lens (store : Store.t) ~(lens : string) () : value =
    three-way merge are the v1 ambition (one-tree.borg branching-interaction).
 
    For each lens node (data.l.<lens>.<user>.<type>.<id>), upsert the body
-   into the live path (data.u.<user>.<type>.<id>). Returns a JSON report:
-   {lens, merged, skipped}. *)
+   into the live path (data.u.<user>.<type>.<id>), then CONSUME the lens:
+   drop the data.l.<lens>.<user> subtree so the lens is gone after a
+   successful merge (v0 lifecycle: fork -> diverge -> merge | abandon).
+   The drop is explicit here, not left to the reverse mirror trigger:
+   migration 023's tree_mirror_data_rows purge now skips data.l.* (so a
+   lens survives ordinary live writes as a restore point), so merge owns
+   the consume. Returns a JSON report {lens, merged, skipped, dropped}. *)
 let merge_data_lens (store : Store.t) ~(lens : string) () : value =
   let user = session_user () in
   let user_enc = Tree_store.enc_label user in
@@ -1428,11 +1433,17 @@ let merge_data_lens (store : Store.t) ~(lens : string) () : value =
             | Ok _ -> incr merged
             | Error _ -> incr skipped))
          lens_nodes;
+       (* Consume the lens: drop the now-integrated data.l.<lens>.<user>
+          subtree. *)
+       let dropped =
+         Tree_store.delete_path conn ~path:lens_prefix ~recursive:true
+       in
        let report =
          `Assoc
            [ ("lens", `String lens)
            ; ("merged", `Int !merged)
            ; ("skipped", `Int !skipped)
+           ; ("dropped", `Int dropped)
            ]
        in
        VStr (Yojson.Safe.to_string report))

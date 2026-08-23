@@ -53,17 +53,17 @@ BEGIN
 END $$;
 
 -- ---------------------------------------------------------------------------
--- tree_data_rows view: allow data.l.<lens>.<user>.* visibility.
--- A datum is visible when:
+-- tree_data_rows view: LIVE datum projection (data.u + data.shared only).
+-- Default CRUD reads (get/rows/list/find-row) project through this view, so
+-- it surfaces LIVE data only. Data lens copies (data.l.<lens>.<user>.*) are
+-- excluded: a lens shadows the same (type,id) as its live source, and showing
+-- both would duplicate ids and make (get 'type id) ambiguous. Lens copies are
+-- accessed by the lens prims (fork-data/merge-data/abandon-data/list-data-lenses)
+-- which read tree_nodes directly, and by the RLS floor (datum_user_isolation
+-- still permits data.l.<lens>.<user>.* for the owner). A datum is visible when:
 --   - pp.user is unset (admin/scripts), OR
 --   - path is under data.u.<user> (own live data), OR
---   - path is under data.shared (seed), OR
---   - path is under data.l.<lens>.<user> for ANY lens (own data lens forks).
---     subquery: path <@ 'data.l' AND the 4th label (position 3) = enc(user).
---     Path layout: data.l.<lens>.<user>.<type>.<id>
---     Positions:   0    1    2      3      4      5
---     So the user is at subltree(path, 3, 4), NOT subltree(path, 2, 3)
---     which is the lens name.
+--   - path is under data.shared (seed).
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE VIEW tree_data_rows AS
 SELECT tree_datum_id(path) AS id,
@@ -73,14 +73,11 @@ SELECT tree_datum_id(path) AS id,
        created_at, updated_at
 FROM tree_nodes
 WHERE kind = 'datum'
+  AND NOT (path <@ 'data.l'::ltree)
   AND (
     COALESCE(current_setting('pp.user', true), '') = ''
     OR path <@ ('data.u.' || tree_enc_label(current_setting('pp.user', true)))::ltree
     OR path <@ 'data.shared'::ltree
-    OR (
-      path <@ 'data.l'::ltree
-      AND subltree(path, 3, 4) = tree_enc_label(current_setting('pp.user', true))::ltree
-    )
   );
 
 -- ---------------------------------------------------------------------------
@@ -141,10 +138,14 @@ BEGIN
   env := jsonb_build_object(
     'v', 1, 'kind', 'datum', 'path', p::text, 'type', NEW.type_name,
     'body', body, 'author', NEW.author, 'doc', NULL, 'hash', h);
-  DELETE FROM tree_nodes
-   WHERE kind = 'datum'
-     AND tree_datum_id(path) = NEW.id
-     AND path <> p;
+    -- Purge stale same-id datum nodes diverged from the live path p, but NEVER
+    -- data.l.* lens copies: a live write must not delete the user's forked
+    -- snapshot (merge/abandon own the lens lifecycle).
+    DELETE FROM tree_nodes
+     WHERE kind = 'datum'
+       AND tree_datum_id(path) = NEW.id
+       AND path <> p
+       AND NOT (path <@ 'data.l'::ltree);
   INSERT INTO tree_nodes (path, kind, type_name, payload, hash, author, updated_at)
   VALUES (p, 'datum', NEW.type_name, env, h, NEW.author, now())
   ON CONFLICT (path) DO UPDATE
