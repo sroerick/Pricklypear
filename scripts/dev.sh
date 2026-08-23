@@ -64,10 +64,10 @@ apply_migrations() {
     echo "[dev] creating database $PP_DB_NAME"
     createdb -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U "$PP_DB_USER" "$PP_DB_NAME"
   fi
-  echo "[dev] applying migrations 001..022"
-  for m in 001_branches 002_auth 003_data 004_bible_ref_index 005_ai_sessions 006_route_visibility 007_media 008_agent_users 009_tree 010_notes_tree 011_package_registry 012_code_history 013_data_user_scoping 014_guestbook_shared 015_jobs 016_seed_single_source 017_branch_generation 018_tree_versions 019_tree_version_shadow 020_tree_version_echo_guard 021_tree_versions_reconcile 022_tree_retention; do
+  echo "[dev] applying migrations"
+  for m in "$PP_ROOT/migrations"/[0-9][0-9][0-9]_*.sql; do
     psql -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U "$PP_DB_USER" -d "$PP_DB_NAME" \
-      -f "$PP_ROOT/migrations/${m}.sql" -q
+      -f "$m" -q
   done
   # Seed system/main branch if not present (001 should do this; idempotent)
   psql -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U "$PP_DB_USER" -d "$PP_DB_NAME" -q <<EOF

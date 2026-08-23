@@ -198,7 +198,14 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
       | [ Pricklypear_lisp.Ast.VStr type_name;
           Pricklypear_lisp.Ast.VInt n ] ->
           Crud.list t.store ~type_name ~limit:(Int64.to_int n) ()
-      | _ -> (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("rows", "bad args (need type[, limit])", "bad-args")))));
+      | [ Pricklypear_lisp.Ast.VStr type_name;
+          Pricklypear_lisp.Ast.VStr sort ] ->
+          Crud.list t.store ~type_name ~sort:(Some sort) ()
+      | [ Pricklypear_lisp.Ast.VStr type_name;
+          Pricklypear_lisp.Ast.VInt n;
+          Pricklypear_lisp.Ast.VStr sort ] ->
+          Crud.list t.store ~type_name ~limit:(Int64.to_int n) ~sort:(Some sort) ()
+      | _ -> (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("rows", "bad args (need type[, limit][, sort])", "bad-args")))));
 
   (* (find-row 'type "field" "value") -> fields JSON | () *)
   register_crud "find-row"
@@ -495,6 +502,54 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
       | _ -> (Pricklypear_lisp.Ast.VStr "sync/plan: need client-manifest [, base-manifest]"));
 
 
+
+  (* data lens operations (one-tree.borg branching-interaction, 2026-08-23
+     make: versioned user-keyed data). fork-data creates a deliberate
+     fork of the user's live data into data.l.<lens>.<user>; merge-data
+     merges a lens back (LWW v0); abandon-data drops a lens;
+     list-data-lenses enumerates the user's lenses. *)
+  register_crud "fork-data"
+    (fun args ->
+      let uname = actor () in
+      if uname = "anonymous" then deny_anon "fork-data"
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr lens ] ->
+            Crud.fork_data t.store ~lens ()
+        | [ Pricklypear_lisp.Ast.VStr lens;
+            Pricklypear_lisp.Ast.VStr ty ] ->
+            Crud.fork_data t.store ~lens ~type_name:(Some ty) ()
+        | _ ->
+            (Pricklypear_lisp.Ast.VStr
+                 "fork-data: need lens-name [, type-name]"));
+
+  register_crud "merge-data"
+    (fun args ->
+      let uname = actor () in
+      if uname = "anonymous" then deny_anon "merge-data"
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr lens ] ->
+            Crud.merge_data_lens t.store ~lens ()
+        | _ ->
+            (Pricklypear_lisp.Ast.VStr "merge-data: need lens-name"));
+
+  register_crud "abandon-data"
+    (fun args ->
+      let uname = actor () in
+      if uname = "anonymous" then deny_anon "abandon-data"
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr lens ] ->
+            Crud.abandon_data_lens t.store ~lens ()
+        | _ ->
+            (Pricklypear_lisp.Ast.VStr "abandon-data: need lens-name"));
+
+  register_crud "list-data-lenses"
+    (fun _args ->
+      let uname = actor () in
+      if uname = "anonymous" then deny_anon "list-data-lenses"
+      else Crud.list_data_lenses t.store ());
   register_crud "tree/upsert"
     (fun args ->
       let uname = actor () in
