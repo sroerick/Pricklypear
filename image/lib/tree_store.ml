@@ -337,7 +337,14 @@ let insert_datum (conn : Store_db.conn) ~(type_name : string) ~(fields_json : st
 
 let update_datum (conn : Store_db.conn) ~(type_name : string) ~(id : string)
     ~(fields_json : string) : string option =
-  (* Match by datum id (last path label) so old and new path shapes both work. *)
+  (* Match by datum id (last path label) so old and new path shapes both work,
+       but constrain to LIVE datum paths (exclude the data.l namespace). A data lens fork
+     shadows the same (type,id) under data.l.<lens>.<user>; without this guard
+     the UPDATE hits both live and lens nodes, RETURNING yields 2 rows, the
+     single-row match returns None (prim reports failure), and the forward
+     mirror trigger (tree_mirror_data_rows) purges the lens copy. With the
+     guard the lens keeps its snapshot body and survives until merge/abandon.
+     Take the first RETURNING row as a safety net against stale live paths. *)
   let hash = hash_body fields_json in
   let sql =
     "UPDATE tree_nodes SET " ^
@@ -345,6 +352,7 @@ let update_datum (conn : Store_db.conn) ~(type_name : string) ~(id : string)
     "  hash = $3::text, updated_at = now() " ^
     "WHERE kind='datum' AND tree_datum_id(path) = $1::uuid " ^
     "  AND (type_name = $4 OR type_name IS NULL) " ^
+    "  AND NOT (path <@ 'data.l'::ltree) " ^
     "RETURNING tree_datum_id(path)::text" in
   let rows =
     Io_lwt.Db.execute conn
@@ -353,13 +361,16 @@ let update_datum (conn : Store_db.conn) ~(type_name : string) ~(id : string)
       sql
   in
   (match rows with
-   | [ [ id_c ] ] -> Pgx.Value.to_string id_c
+   | [ id_c ] :: _ -> Pgx.Value.to_string id_c
    | _ -> None)
 
 let delete_datum (conn : Store_db.conn) ~(type_name : string) ~(id : string) : string option =
+  (* Constrain to LIVE datum paths (exclude the data.l namespace) for the same reason as
+     update_datum: don't delete a lens copy that shadows the live row. *)
   let sql =
     "DELETE FROM tree_nodes WHERE kind='datum' AND tree_datum_id(path) = $1::uuid " ^
     "  AND (type_name = $2 OR type_name IS NULL) " ^
+    "  AND NOT (path <@ 'data.l'::ltree) " ^
     "RETURNING tree_datum_id(path)::text" in
   let rows =
     Io_lwt.Db.execute conn
@@ -367,7 +378,7 @@ let delete_datum (conn : Store_db.conn) ~(type_name : string) ~(id : string) : s
       sql
   in
   (match rows with
-   | [ [ id_c ] ] -> Pgx.Value.to_string id_c
+   | [ id_c ] :: _ -> Pgx.Value.to_string id_c
    | _ -> None)
 
 (** Upsert a datum node at [path] (kind="datum"). When the path's id
