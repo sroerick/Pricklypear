@@ -268,29 +268,52 @@
               (layout/cta "/guestbook" "Sign guestbook")
               (layout/cta "/login" "Log in"))))
         (layout/section
-          "No, seriously, what is this?"
+          "What is Pricklypear?"
           (html/join
             (list
               (html/p
-                "Honestly, I don't know. It's kind of like a Smalltalk. You, or your agent, can write functions. They get saved in the database and reloaded. Those functions can render web pages, so it's kind of a web framework.")
+                "Pricklypear is a multi-user Lisp operating system. One unix process is the whole OS surface — HTTP, REPL, eval, auth. Postgres is the filesystem: every function, type, route, and data row lives there as rows. The image is ephemeral and rebuilds from the store.")
               (html/p
-                "I gotta tell ya. Using it is beautiful. You don't need an API at all. Even your local agent can just use the REPL. I plugged in an LLM to it and it just... worked? It understood the harness and successfully started writing functions.")
+                "You don't deploy Nopales code. You save a row. Change a function and every route that calls it picks it up immediately — no compile step, no restart."))))
+        (layout/section
+          "What is Nopales?"
+          (html/join
+            (list
               (html/p
-                "Look, I don't even care if anybody uses this at all. I just want people to know about this design pattern. For small and medium business this is insanely powerful."))))
+                "Nopales is the language — a small Scheme-family Lisp-1. It's homoiconic: the AST is the source, and function definitions persist in Postgres as JSONB. Editing the AST is editing the code.")
+              (html/p
+                "It has closures, lambda, let, quasiquote macros, pattern matching, and a frozen core. Dynamic typing, impure functional, effects-inferred. Two kinds of function: data builders you call from the REPL, and HTTP handlers you bind to a URL.")
+              (html/p*
+                ""
+                (html/join
+                  (list
+                    "A handler is just "
+                    (html/code "(route \"/hello\" \"hi-page\")")
+                    " — where "
+                    (html/code "hi-page")
+                    " is a function you defined. The browser hits /hello; the REPL calls hi-page. Same function."))))))
         (layout/cards
           (list
             (layout/card
-              "Fully Interpreted Lisp in Postgres"
-              "The AST is stored in Postgres. You can browse all the functions in the system. It's like the PHP interface of WordPress, except not terrifying.")
+              "Interpreted runtime"
+              "The running process is the API. POST one Lisp expression to /api/eval and get a value back. Pure prims (+, car, string-append) run in the interpreter; DB prims (get, create, rows, route, fork, merge) read and write real Postgres rows. No build, no deploy, no second language.")
             (layout/card
-              "htmx forward"
-              "A lot of functions render htmx partials. This makes things pretty modular and composable. We have sexp wrappers for HTML and CSS.")
+              "HTML & CSS primitives"
+              "Sexp wrappers for the whole tree — html/div, html/a, html/p, html/attr — so you build pages in Lisp, not string templates. A tiny CSS DSL (css/rule, css/sheet, css/media) emits a real stylesheet. This page is styled that way.")
             (layout/card
-              "The Great American Codebase"
-              "I designed the codebase to be read like a book. I like to print codebases out to read them. There's a lot of AI slop in here, but I mark where I've inserted my own comments. My LaTeX pipeline is kind of weird rn so please consider this PDF incomplete and aspirational.")
+              "htmx, server-evaluated"
+              "Route handlers return htmx fragments. A server-side swap simulator (the hypermedia harness) models the fixi-five — hx-get, hx-post, hx-target, hx-swap, hx-trigger — so a headless agent can verify a flow without a browser. No client JS required.")
             (layout/card
-              "I live here now"
-              "It's multiuser, and it's fun. I have bible study, todo, zettelkasten, flashcards, calendar. Writing apps is insanely easy. You aren't stuck with weird elisp or everything is a buffer rules.")))
+              "Local-first evaluation"
+              "The same interpreter runs three ways: in the image against Postgres, over HTTP via /api/eval (local compute, remote data), and against a local lens offline that grafts back on reconnect. One language, one seam, three modes.")))
+        (layout/section
+          "How the language and the framework interact"
+          (html/join
+            (list
+              (html/p
+                "A Nopales function is both a callable and, once bound with (route \"/path\" \"fn\"), a web page. There's no controller layer, no templating engine, no API to build — the function is the endpoint. The same function you call from the REPL serves the browser.")
+              (html/p
+                "Two tiers of change: OCaml (primitives, HTTP, store, auth) moves slowly via rebuild/deploy; Nopales (your functions, routes, theme, the product UI) moves fast via row updates. Branches, not namespaces — system/main is the baseline, and each user gets username/personal as an inheriting garden. Fork is cheap; promote is the careful gate."))))
         (layout/section
           "5-minute tour"
           (html/join
