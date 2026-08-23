@@ -3,4 +3,4 @@
  (public_name pp-remote)
  (package pricklypear-remote)
  (modules main)
- (libraries pricklypear-remote.lib pricklypear-lisp eio eio_main unix))
+  (libraries pricklypear-remote.lib pricklypear-lisp eio eio_main mirage-crypto-rng.unix unix))
