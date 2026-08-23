@@ -598,6 +598,7 @@
            stays user-keyed, not lens-keyed — the one-tree non-goal
            stands. Local-first syncs the user's data subtree; it does
            not version data per-branch.
+          (* agent note (|2026-08-23 PLAN-PHASE: this non-goal is under rework. See one-tree.borg branching-interaction (2026-08-23 versioned user-keyed data proposal). The proposal keeps data.u.<user>.* single-head and branch-free (this property is preserved), but adds an opt-in data.l.<lens>.<user>.* versioned namespace — a deliberate data fork that diverges and merges back via the same three-way tree-diff. The local-first lens already materializes and syncs the user's data subtree; the proposal makes that fork first-class instead of denied. The sync landing policy gains a third case (data-lens merge -> trunk) alongside code-merge (pointer move) and live-data-sync (in-place reconcile). If accepted, this non-goal bullet and the phasing stance flip in the make pass.|) *)
          - NOT a second transport. HTTP+JSON is the only wire in v0
            (inherited from remote-eval). The filesystem is the local
            substrate, not a wire.
