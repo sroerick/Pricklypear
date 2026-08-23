@@ -43,6 +43,10 @@ let () =
       ]
   in
   Arg.parse speclist anon "pp-remote [--image URL] [--user U --pass P] [-e EXPR]";
+  (* TLS (tls-eio) needs a seeded RNG before any HTTPS proxy call;
+     mock transports in the tests never hit TLS, so this slipped.
+     Mirage_crypto_rng_unix.use_default wires /dev/urandom + reseeding. *)
+  Mirage_crypto_rng_unix.use_default ();
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let cfg : Http_transport.cfg =
