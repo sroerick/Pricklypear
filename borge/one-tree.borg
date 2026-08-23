@@ -605,7 +605,7 @@
     (smoke "rebuild projection from tree; diff against pre-rebuild state: identical")))
   (subsection branching-interaction
    (doc "Branches as tree lenses; the /data question; merge as tree-diff")
-   (status partial)
+    (status implemented)
    (* agent note (|2026-08-02 /data DECISION revised to USER-OWNED data (resolves BORGE-1785693032): datum under data.u.<user>.* + data.shared.*, RLS floor keyed on user. An earlier branch-keyed draft (b.<branch>.data.*) was rejected as a leaky abstraction — encoded user ownership in a branch path, then needed fork/merge carve-outs. Three-way tree-diff merge / promote-as-pointer-move still incomplete vs scaffolding promote. Code still on the old shared pile — spec leads code here.|) *)
    (* agent note (|2026-08-14 DATA-BRANCHING BOUNDARY (design discussion, with local-first): single-head, user-keyed data STANDS — but it is a current-shape decision, not a hard no forever. Split MECHANISM from CONCEPT: (1) MECHANISM is SHARED — the 3-way tree-diff merge (subtree/node hashes) is one generic tool for both code lenses AND local-first data sync; do not build two merge algorithms. (2) CONCEPT is NOT branchable — data has no user-facing branch concept (no checkout, no 'dev copy of your todos', no lens-walking data). A device lens snapshot (admin/laptop) is SYN/MERGE-BASE METADATA — a replication convenience — not a sibling world; data is SPATIAL (which copy of one datum), not TEMPORAL (which version of the world). Local-first sync gets its merge base from (branch, generation) snapshot pins + node hashes, NOT from making data semantically branchable. REOPEN TRIGGER (falsifies the boundary): a real feature where a USER forks their OWN data to experiment and later merges it back (e.g. clone my notes, rewrite offline over a week, reintegrate). If that use case becomes real, user-keyed flat data creaks and this boundary gets a plan-phase re-look — with the branch-keyed rejection above as the explicit prior to beat. Near-term evidence single-head is right: local-first's first payloads (transcript appends, memory LWW) are deliberately single-head.|) *)
     (* agent note (|2026-08-23 PLAN-PHASE PROPOSAL (versioned user-keyed data): reopen the data-branching boundary recorded above. The 2026-08-14 boundary split mechanism (shared 3-way tree-diff) from concept (data not branchable) and named a reopen trigger: a user forking their own data to experiment and reintegrate. The local-first lens model IS that use case — a lens materializes a user's data subtree, edits offline, syncs back via three-way merge — and the boundary's defense ("data is spatial, not temporal") is contradicted by local-first's own sync design ("the git protocol in miniature": base/ours/theirs is a versioning act over a store claimed unversioned). The defense does not hold under the machinery built on it.
@@ -623,8 +623,9 @@
 
          NOTES RECONCILIATION. The notes garden (data.note.u.<user>.…) is the legacy shape (type-before-user, predates the 2026-08-02 generalization; confirmed live on prod 2026-08-23: (tree/garden-root) -> data.note.u.admin). It migrates to data.u.<user>.note.… as part of the make — type segment standardized, heading substructure (.<slug>.h.<nid>) preserved as the type's internal hierarchy. One migration to the final shape, not two. See notes.borg personal-garden.
 
-         MAKE-PASS SCOPE (what flips when accepted): the DEFERRED stanza below (726-730: "data is not versioned at all"); the non-goal at local-first.borg ("NOT re-opening branch-versioning of data"); tree-time.borg's branch-free assumption for data.* paths (data.l.* lens paths carry a generation coordinate like code branches; data.u.* and data.shared.* stay tree-wide); the notes path-grammar migration. The sync landing policy (local-first.borg) gains a third case: data-lens merge (lens -> trunk) alongside code-merge (pointer move) and live-data-sync (in-place reconcile). Conflict-resolution policy is open either way; this proposal gives it a primitive to act on (the deliberate fork) instead of only accidental cross-device divergence.|) *)
-   (implements image/lib/store.ml image/lib/tree_store.ml)
+           MAKE-PASS SCOPE (what flips when accepted): the DEFERRED stanza below (726-730: "data is not versioned at all"); the non-goal at local-first.borg ("NOT re-opening branch-versioning of data"); tree-time.borg's branch-free assumption for data.* paths (data.l.* lens paths carry a generation coordinate like code branches; data.u.* and data.shared.* stay tree-wide); the notes path-grammar migration. The sync landing policy (local-first.borg) gains a third case: data-lens merge (lens -> trunk) alongside code-merge (pointer move) and live-data-sync (in-place reconcile). Conflict-resolution policy is open either way; this proposal gives it a primitive to act on (the deliberate fork) instead of only accidental cross-device divergence.|) *)
+    (* agent note (|2026-08-23 MAKE: v0 implemented — migration 023 (data.l namespace + RLS + trigger guard), tree_store datum_path ~lens, crud fork_data/merge_data_lens/abandon_data_lens/list_data_lenses, prims fork-data/merge-data/abandon-data/list-data-lenses. The DEFERRED stanza below is flipped. v0 merge is LWW (last-write-wins per node); three-way tree-diff merge is v1. Notes path migration (data.note.u.<user> -> data.u.<user>.note) is a separate make task.|) *)
+    (implements image/lib/store.ml image/lib/tree_store.ml image/lib/crud.ml image/lib/prims_db.ml migrations/023_data_lens.sql)
    (details
     (doc (|
          BRANCH = POINTER INTO THE ONE TREE. Fork records a
@@ -739,11 +740,17 @@
          reads funnel through; the prim layer's path-prefix
          confinement is the same rule stated in app code.
 
-         DEFERRED (still NOT v1): per-branch data VERSIONING
-         (placement B — a fork snapshotting its own divergent
-         copy of data) remains out of scope. Data is not
-         versioned at all: it is owned by users and shared
-         only via data.shared.
+
+          IMPLEMENTED (v0, 2026-08-23 make): opt-in data lens versioning
+          via data.l.<lens>.<user>.<type>.<id>. A deliberate fork
+          (fork-data) copies the user's live data.u.* subtree into
+          data.l.<lens>.<user>.*; merge-data applies LWW (last-write-
+          wins per node) back to live and consumes the lens (the mirror
+          trigger enforces one-path-per-id); abandon-data drops the
+          lens without merging. The default data.u.<user>.* stays
+          single-head and branch-free. v1 ambition: three-way tree-diff
+          merge (base/ours/theirs) instead of LWW, and conflict
+          surfacing. See the 2026-08-23 PLAN-PHASE proposal above.
 
          TYPE_DECLS: today per-branch rows, table shape shared
          (branching.schema-authority). Under one-tree, schema

@@ -1048,7 +1048,7 @@
              4. never promote note rows via package seed/reseed
          That meets "none of these notes live in main" as product
          content without breaking shared bible/todo data.
-          (* agent note (|2026-08-23 PLAN-PHASE: the "data branch" deferral recorded here is under rework. See one-tree.borg branching-interaction (2026-08-23 versioned user-keyed data proposal). The proposal adds an opt-in data.l.<lens>.<user>.* versioned namespace (deliberate data fork + merge) while keeping data.u.<user>.* single-head. Notes' legacy path grammar (data.note.u.<user>.…, type-before-user, confirmed live on prod 2026-08-23) migrates to data.u.<user>.note.… as part of that make — one migration to the final shape. The garden isolation rules (author = session user, user-scoped list/get, never seed) are unchanged; only the path prefix standardizes.|) *)
+            (* agent note (|2026-08-23 MAKE: data lens namespace (data.l.<lens>.<user>.<type>.<id>) is implemented v0 — see one-tree.borg branching-interaction. The garden isolation rules (author = session user, user-scoped list/get, never seed) are unchanged. Notes' legacy path grammar (data.note.u.<user>.…, type-before-user, confirmed live on prod 2026-08-23) migrates to data.u.<user>.note.… as a separate make task — one migration to the final shape.|) *)
 
          MULTI-USER:
            Alice does not list Bob's data.note.u.bob subtree via the

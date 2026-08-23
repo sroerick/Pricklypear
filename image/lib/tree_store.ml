@@ -135,8 +135,14 @@ let verify_seed_types (conn : Store_db.conn) : unit =
 
 (** Datum path. Prefer [~user] for per-user rows; seed types always land
     under data.shared regardless of user. Without ~user, non-seed types
-    use data.u.unknown — writers must pass ~user. *)
-let datum_path ?user ~type_name ~id () =
+    use data.u.unknown — writers must pass ~user.
+
+    [~lens] opts into the versioned data lens namespace: the path becomes
+    data.l.<lens>.<user>.<type>.<id> instead of data.u.<user>.<type>.<id>.
+    A data lens is a deliberate fork of the user's live data that can
+    diverge and merge back (one-tree.borg branching-interaction, 2026-08-23
+    make). Seed types are never lensed — data.shared is branch-free. *)
+let datum_path ?user ?(lens : string option = None) ~type_name ~id () =
   let id_lab = uuid_label id in
   let ty_lab = enc_label type_name in
   if is_seed_type type_name then
@@ -147,7 +153,11 @@ let datum_path ?user ~type_name ~id () =
       | Some s when s <> "" -> s
       | _ -> "unknown"
     in
-    Printf.sprintf "data.u.%s.%s.%s" (enc_label u) ty_lab id_lab
+    match lens with
+    | Some l when l <> "" ->
+        Printf.sprintf "data.l.%s.%s.%s.%s" (enc_label l) (enc_label u) ty_lab id_lab
+    | _ ->
+        Printf.sprintf "data.u.%s.%s.%s" (enc_label u) ty_lab id_lab
 
 (* ---- content hashing ---- *)
 
@@ -309,9 +319,9 @@ let insert_datum (conn : Store_db.conn) ~(type_name : string) ~(fields_json : st
   let sql =
     "WITH nid AS (SELECT gen_random_uuid() AS id) " ^
     "INSERT INTO tree_nodes (path, kind, type_name, payload, hash, author, updated_at) " ^
-    "SELECT tree_datum_path($1::text, nid.id, $3::text), 'datum', $1::text, " ^
+"SELECT tree_datum_path($1::text, nid.id, $3::text, ''), 'datum', $1::text, " ^
     "  jsonb_build_object('v',1,'kind','datum', " ^
-    "    'path', tree_datum_path($1::text, nid.id, $3::text)::text, " ^
+"    'path', tree_datum_path($1::text, nid.id, $3::text, '')::text, " ^
     "    'type',$1::text,'body',$2::jsonb,'author',$3::text,'doc',NULL,'hash',$4::text), " ^
     "  $4::text, $3::text, now() " ^
     "FROM nid RETURNING tree_datum_id(path)::text" in
@@ -400,9 +410,9 @@ let upsert_datum (conn : Store_db.conn) ~(path : string) ~(type_name : string)
       let sql =
         "WITH nid AS (SELECT gen_random_uuid() AS id) " ^
         "INSERT INTO tree_nodes (path, kind, type_name, payload, hash, author, updated_at) " ^
-        "SELECT tree_datum_path($1::text, nid.id, $3::text), 'datum', $1::text, " ^
+"SELECT tree_datum_path($1::text, nid.id, $3::text, ''), 'datum', $1::text, " ^
         "  jsonb_build_object('v',1,'kind','datum', " ^
-        "    'path', tree_datum_path($1::text, nid.id, $3::text)::text, " ^
+"    'path', tree_datum_path($1::text, nid.id, $3::text, '')::text, " ^
         "    'type',$1::text,'body',$2::jsonb,'author',$3::text,'doc',NULL,'hash',$4::text), " ^
         "  $4::text, $3::text, now() " ^
         "FROM nid ON CONFLICT (path) DO UPDATE SET " ^

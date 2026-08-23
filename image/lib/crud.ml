@@ -316,21 +316,29 @@ let delete (store : Store.t) ~(type_name : string) ~(id : string) : value =
     let id' = Tree_store.delete_datum conn ~type_name ~id in
     (match id' with Some s -> VStr s | None -> VNil)
 
-(** (list 'type [limit]) -> VList of (VStr id, VStr fields) pairs.
-    With no limit, defaults to 100 (avoid OOM on a huge table).
-    Each row is a 2-element VList `[id fields]` so callers can
-    `(mapcar (lambda (row) (car row)) rows)` to get ids, etc. *)
+(** (list 'type [limit] [sort]) -> VList of (VStr id, VStr fields) pairs.
+    With no limit, defaults to 100 (avoid OOM on a huge table). Optional
+    sort is a raw SQL ORDER BY clause (appended verbatim); default
+    ORDER BY is created_at ASC. Each row is a 2-element VList
+    `[id fields]` so callers can `(mapcar (lambda (row) (car row)) rows)`
+    to get ids, etc. *)
 let list
-    (store : Store.t) ~(type_name : string) ?(limit : int = 100) ()
+    (store : Store.t) ~(type_name : string) ?(limit : int = 100)
+    ?(sort : string option = None) ()
     : value =
   Io_lwt.Db.with_transaction store (function
     | None -> (VList [])
     | Some conn ->
         let user = session_user () in
+        let order_by =
+          match sort with
+          | Some s -> " ORDER BY " ^ s
+          | None -> " ORDER BY created_at ASC"
+        in
         let sql =
           "SELECT id::text, fields::text FROM " ^ data_rel () ^ " " ^
-          "WHERE type_name = $1 AND " ^ visible_sql ~user_param:3 ^ " " ^
-          "ORDER BY created_at ASC LIMIT $2" in
+          "WHERE type_name = $1 AND " ^ visible_sql ~user_param:3 ^
+          order_by ^ " LIMIT $2" in
         let rows =
           Io_lwt.Db.execute conn
             ~params:[ Pgx.Value.of_string type_name;
@@ -1085,20 +1093,31 @@ let tree_delete (store : Store.t) ~(path : string) ~(recursive : bool)
    not a datum path skip validation (no type semantics to check). *)
 
 (** The type_name encoded in a datum path, decoded. Datum path grammar:
-    data.u.<user>.<type>.<id> | data.shared.<type>.<id>; the type segment
-    is base64-label-encoded (Tree_store.enc_label). None when [path] is not
-    a datum path. *)
+      data.u.<user>.<type>.<id>
+    | data.shared.<type>.<id>
+    | data.l.<lens>.<user>.<type>.<id>     (versioned data lens, 2026-08-23)
+    The type segment is base64-label-encoded (Tree_store.enc_label).
+    None when [path] is not a datum path. *)
 let datum_path_type (path : string) : string option =
   let parts = String.split_on_char '.' path in
   let type_label =
     match parts with
     | "data" :: "u" :: _user :: ty :: _id :: _ -> Some ty
     | "data" :: "shared" :: ty :: _id :: _ -> Some ty
+    | "data" :: "l" :: _lens :: _user :: ty :: _id :: _ -> Some ty
     | _ -> None
   in
   match type_label with
   | None -> None
   | Some ty -> Tree_store.dec_label ty
+
+(** The lens name encoded in a data.l path datum path, decoded.
+    None for non-lens paths (data.u / data.shared). *)
+let datum_path_lens (path : string) : string option =
+  let parts = String.split_on_char '.' path in
+  match parts with
+  | "data" :: "l" :: lens :: _user :: _ty :: _id :: _ -> Tree_store.dec_label lens
+  | _ -> None
 
 (** If [old_path] -> [new_path] is a datum move that changes type, validate
     the moved node's body against the NEW type's declared fields. Returns
@@ -1258,3 +1277,192 @@ let retention_run (store : Store.t) ~(path_class : string option) () : value =
   in
   VList (List.map (fun j -> VStr j) js)
 
+
+(* ---- data lens operations (one-tree.borg branching-interaction,
+   2026-08-23 make: versioned user-keyed data). A data lens is a
+   deliberate fork of the user's live data.u.<user> subtree into
+   data.l.<lens>.<user>. The lens can diverge (edits land in the lens,
+   not live data), merge back (lens -> trunk, LWW per node v0), or be
+   abandoned (drop the lens subtree). The default data.u stays
+   single-head and branch-free; data.l is the explicit opt-in version
+   axis. *)
+
+(* (fork-data lens-name [type-name]) -> VStr.
+   Copy the user's live datum nodes (data.u.<user>) into a fresh data
+   lens (data.l.<lens>.<user>). When ~type_name is set, only that type
+   is forked; otherwise all the user's non-seed types. Each source node's
+   path is rewritten: data.u.<user>.<type>.<id> ->
+   data.l.<lens>.<user>.<type>.<id>. The node payload (body, hash, author)
+   is copied; the path field in the payload is updated. Returns
+   "ok <lens> (<n> nodes)" or an error. *)
+let fork_data (store : Store.t) ~(lens : string)
+    ?(type_name : string option = None) () : value =
+  let user = session_user () in
+  let user_enc = Tree_store.enc_label user in
+  let lens_enc = Tree_store.enc_label lens in
+  let live_prefix = Printf.sprintf "data.u.%s" user_enc in
+  let lens_prefix =
+    Printf.sprintf "data.l.%s.%s" lens_enc user_enc
+  in
+  (match Io_lwt.Db.current_conn store with
+   | None -> VStr "fork-data: no database connection"
+   | Some conn ->
+       (* Check the lens doesn't already exist (avoid silent double-fork). *)
+       let existing =
+         Tree_store.list_subtree conn ~prefix:lens_prefix ~limit:1 ()
+       in
+       if existing <> [] then
+         VStr (Printf.sprintf "fork-data: lens %s already exists" lens)
+       else
+         (* Copy datum nodes from live -> lens by repathing.
+            The SQL constructs the new path by replacing the data.u.<user>
+            prefix with data.l.<lens>.<user>, preserving the type + id
+            segments. Payload path is updated to match. *)
+         let type_clause =
+           match type_name with
+           | None -> ""
+           | Some tn ->
+               Printf.sprintf " AND type_name = $3::text"
+         in
+         let params =
+           match type_name with
+           | None ->
+               [ Pgx.Value.of_string live_prefix
+               ; Pgx.Value.of_string lens_prefix ]
+           | Some tn ->
+               [ Pgx.Value.of_string live_prefix
+               ; Pgx.Value.of_string lens_prefix
+               ; Pgx.Value.of_string tn ]
+         in
+          let sql =
+            "INSERT INTO tree_nodes (path, kind, type_name, payload, hash, author, updated_at) "
+            ^ "SELECT "
+            ^ "  ($2::text || subltree(path, 3, nlevel(path)))::ltree, "
+            ^ "  'datum', type_name, "
+            ^ "  jsonb_set(payload, '{path}', "
+            ^ "    to_jsonb(($2::text || subltree(path, 3, nlevel(path)))::text)), "
+            ^ "  hash, author, now() "
+            ^ "FROM tree_nodes "
+              ^ "WHERE kind = 'datum' AND path <@ $1::ltree"
+              ^ type_clause
+              ^ " ON CONFLICT (path) DO NOTHING RETURNING path::text"
+          in
+         let rows =
+           Io_lwt.Db.execute conn ~params sql
+         in
+         let n = List.length rows in
+         VStr (Printf.sprintf "ok %s (%d nodes forked)" lens n))
+
+(* (abandon-data lens-name) -> VStr.
+   Drop the data lens subtree entirely. The user's live data.u is
+   untouched. Returns "ok <lens> (<n> nodes dropped)". *)
+let abandon_data_lens (store : Store.t) ~(lens : string) () : value =
+  let user = session_user () in
+  let user_enc = Tree_store.enc_label user in
+  let lens_enc = Tree_store.enc_label lens in
+  let lens_prefix =
+    Printf.sprintf "data.l.%s.%s" lens_enc user_enc
+  in
+  (match Io_lwt.Db.current_conn store with
+   | None -> VStr "abandon-data: no database connection"
+   | Some conn ->
+       let n = Tree_store.delete_path conn ~path:lens_prefix ~recursive:true in
+       VStr (Printf.sprintf "ok %s (%d nodes abandoned)" lens n))
+
+(* (merge-data lens-name) -> VStr.
+   Merge a data lens back into the user's live data.u.<user>. v0 policy:
+   LWW per node -- the lens version overwrites the live version for every
+   node in the lens. This is the simple, honest v0: no three-way diff,
+   no conflict surfacing (the user deliberately forked, edited, and chose
+   to merge; the lens is the intended new state). Conflict surfacing and
+   three-way merge are the v1 ambition (one-tree.borg branching-interaction).
+
+   For each lens node (data.l.<lens>.<user>.<type>.<id>), upsert the body
+   into the live path (data.u.<user>.<type>.<id>). Returns a JSON report:
+   {lens, merged, skipped}. *)
+let merge_data_lens (store : Store.t) ~(lens : string) () : value =
+  let user = session_user () in
+  let user_enc = Tree_store.enc_label user in
+  let lens_enc = Tree_store.enc_label lens in
+  let lens_prefix =
+    Printf.sprintf "data.l.%s.%s" lens_enc user_enc
+  in
+  (match Io_lwt.Db.current_conn store with
+   | None -> VStr "merge-data: no database connection"
+   | Some conn ->
+       (* For each lens datum, upsert into the corresponding live path.
+          The live path is constructed by replacing the data.l.<lens> prefix
+          with data.u — i.e. dropping the lens segment. *)
+       let lens_nodes =
+         Tree_store.list_subtree conn ~prefix:lens_prefix ~limit:100000 ()
+       in
+       let merged = ref 0 in
+       let skipped = ref 0 in
+       List.iter
+         (fun (n : Tree_store.node) ->
+           (* Reconstruct the live path: data.l.<lens>.<user>.<type>.<id>
+              -> data.u.<user>.<type>.<id>. Drop the first two segments
+              (data.l) and the lens segment, prepend data.u.<user>. *)
+           let live_path =
+             let parts = String.split_on_char '.' n.path in
+             match parts with
+             | "data" :: "l" :: _lens :: rest ->
+                 "data.u." ^ String.concat "." rest
+             | _ -> n.path
+           in
+           let body_json =
+             match n.body with
+             | `Assoc _ -> Yojson.Safe.to_string n.body
+             | _ -> "{}"
+           in
+           let result =
+             Tree_store.upsert_datum conn
+               ~path:live_path
+               ~type_name:
+                 (match n.type_name with
+                  | Some tn -> tn
+                  | None -> "")
+               ~body_json ~author:user
+           in
+           (match result with
+            | Ok _ -> incr merged
+            | Error _ -> incr skipped))
+         lens_nodes;
+       let report =
+         `Assoc
+           [ ("lens", `String lens)
+           ; ("merged", `Int !merged)
+           ; ("skipped", `Int !skipped)
+           ]
+       in
+       VStr (Yojson.Safe.to_string report))
+
+(* (list-data-lenses) -> VList of VStr lens names.
+   Enumerate the user's data lenses by scanning for distinct data.l.<lens>.<user>
+   prefixes in tree_nodes. *)
+let list_data_lenses (store : Store.t) () : value =
+  let user = session_user () in
+  let user_enc = Tree_store.enc_label user in
+  (match Io_lwt.Db.current_conn store with
+   | None -> VList []
+   | Some conn ->
+        let sql =
+          "SELECT DISTINCT tree_dec_label(subltree(path, 2, 3)::text) "
+          ^ "FROM tree_nodes "
+          ^ "WHERE kind = 'datum' AND path <@ 'data.l'::ltree "
+          ^ "AND subltree(path, 3, 4) = '" ^ user_enc ^ "'::ltree "
+          ^ "ORDER BY 1"
+        in
+       let rows = Io_lwt.Db.execute conn ~params:[] sql in
+       let lenses =
+         List.filter_map
+           (fun row ->
+             match row with
+             | [ v ] ->
+                 (match Pgx.Value.to_string v with
+                  | Some s -> Some (VStr s)
+                  | None -> None)
+             | _ -> None)
+           rows
+       in
+       VList lenses)
