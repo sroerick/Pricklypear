@@ -75,13 +75,18 @@ let is_active (t : t) : bool = t.initialized
     failing resolves conservatively to ("" , 0) — a caller treating an
     unknown coordinate as "recheck later / at head" stays safe. *)
 let read_key (t : t) : (string * int64) option =
+  (* The transport may RAISE on connection failure (the Eio HTTP
+     transport raises [Eio.Io], it does not return [Error]); catch
+     both so an offline client conservatively treats the coordinate as
+     unknown rather than crashing — the [check] docstring's "transport
+     failure conservatively returns []" contract, made honest. *)
   let branch =
-    match t.transport "current-branch" [] with
+    match (try t.transport "current-branch" [] with _ -> Error (Failure "offline")) with
     | Ok (VStr b) -> b
     | _ -> ""
   in
   let gen =
-    match t.transport "gen-now" [] with
+    match (try t.transport "gen-now" [] with _ -> Error (Failure "offline")) with
     | Ok (VInt g) -> g
     | _ -> 0L
   in
