@@ -109,6 +109,11 @@ python3 scripts/auth_product_smoke.py   # auth HTTP only; prefer not to grow new
 
 ## Agent eval (against a live image)
 
+Local eval means the `pp-eval` client runs on your laptop and talks to
+`PP_URL` (prod by default, from `~/.config/pricklypear/env`). It does **not**
+mean local Postgres — `scripts/dev.sh` (local PG + image) is the kernel-lab
+for OCaml work, not the default eval path.
+
 OCaml CLI (no Python). Build once: `dune build cli/bin/pp_eval.exe`.
 
 ```bash

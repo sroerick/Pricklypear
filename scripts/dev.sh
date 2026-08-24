@@ -4,6 +4,9 @@
 # Brings up: temp Postgres (if not already running) + the image binary.
 # One process. No supervisor, no authd (retired by the single-image pivot).
 #
+# Note: agent eval (pp-eval) targets PP_URL and normally bypasses this
+# stack — this is the kernel-lab for OCaml work, not the default eval path.
+#
 # Usage:
 #   scripts/dev.sh start    # boot PG + image
 #   scripts/dev.sh stop     # kill the image (leaves PG running)
