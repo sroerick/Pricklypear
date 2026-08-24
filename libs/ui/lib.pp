@@ -10,6 +10,11 @@
     ui/nav
     ui/nav-style
     ui/theme
+    ui/theme-button
+    ui/theme-form
+    ui/theme-header
+    ui/theme-mobile
+    ui/theme-table
     ui/theme-nav
 ))
 
@@ -24,6 +29,11 @@
           (list
             (css/use (theme/vars))
             (css/use (ui/theme))
+            (css/use (ui/theme-header))
+            (css/use (ui/theme-table))
+            (css/use (ui/theme-form))
+            (css/use (ui/theme-button))
+            (css/use (ui/theme-mobile))
             (css/use (ui/theme-nav))
             (css/use notes/tree-css)
             (css/use (theme/extra))))))))
@@ -187,41 +197,6 @@
             "underline"))
         (css/rule "a:visited" (list "color" "var(--visited)"))
         (css/rule "a:hover" (list "color" "var(--ink)"))
-        (css/rule
-          "header"
-          (list
-            "background"
-            "var(--panel)"
-            "border-bottom"
-            "2px solid #000"
-            "padding"
-            ".5rem .75rem"))
-        (css/rule
-          "header .brand"
-          (list
-            "font-weight"
-            "700"
-            "font-size"
-            "1.1rem"
-            "letter-spacing"
-            ".02em"
-            "color"
-            "var(--ink)"
-            "margin-right"
-            ".75rem"))
-        (css/rule
-          "header .meta"
-          (list
-            "display"
-            "block"
-            "font-family"
-            "var(--font-mono)"
-            "font-size"
-            ".8rem"
-            "color"
-            "var(--muted)"
-            "margin"
-            ".25rem 0 .5rem"))
         (css/rule
           "nav"
           (list
@@ -457,126 +432,6 @@
             ".75rem"
             "margin"
             "0 0 .75rem"))
-        (css/rule
-          "table"
-          (list
-            "border-collapse"
-            "collapse"
-            "width"
-            "100%"
-            "background"
-            "var(--panel)"
-            "border"
-            "1px solid #000"
-            "font-size"
-            ".9rem"))
-        (css/rule
-          "th,td"
-          (list
-            "border"
-            "1px solid #808080"
-            "padding"
-            ".45rem .5rem"
-            "text-align"
-            "left"
-            "vertical-align"
-            "top"
-            "word-break"
-            "break-word"))
-        (css/rule
-          "th"
-          (list
-            "background"
-            "var(--chrome)"
-            "font-weight"
-            "700"
-            "border-color"
-            "var(--ink)"))
-        (css/rule
-          "tr:nth-child(even) td"
-          (list "background" "var(--row-alt)"))
-        (css/rule
-          "pre,textarea,input[type=text],input[type=search],input:not([type])"
-          (list
-            "font-family"
-            "var(--font-mono)"
-            "font-size"
-            "1rem"
-            "background"
-            "var(--panel)"
-            "color"
-            "var(--ink)"
-            "border"
-            "1px solid #000"
-            "border-radius"
-            "0"
-            "padding"
-            ".5rem"
-            "width"
-            "100%"
-            "max-width"
-            "100%"))
-        (css/rule
-          "pre"
-          (list
-            "white-space"
-            "pre-wrap"
-            "overflow-x"
-            "auto"
-            "line-height"
-            "1.35"))
-        (css/rule
-          "textarea"
-          (list
-            "min-height"
-            "16rem"
-            "line-height"
-            "1.35"
-            "white-space"
-            "pre"
-            "tab-size"
-            "2"))
-        (css/rule
-          "button,.btn,input[type=submit]"
-          (list
-            "font"
-            "inherit"
-            "font-size"
-            "1rem"
-            "cursor"
-            "pointer"
-            "background"
-            "var(--chrome)"
-            "color"
-            "var(--ink)"
-            "border"
-            "2px outset #fff"
-            "border-radius"
-            "0"
-            "padding"
-            ".5rem .85rem"
-            "min-height"
-            "2.75rem"))
-        (css/rule
-          "button:active,.btn:active"
-          (list "border-style" "inset"))
-        (css/rule
-          "button.secondary,.btn.secondary"
-          (list "background" "var(--bg)"))
-        (css/rule
-          "a.btn"
-          (list
-            "display"
-            "inline-block"
-            "text-decoration"
-            "none"
-            "color"
-            "var(--ink)"
-            "line-height"
-            "1.2"
-            "vertical-align"
-            "middle"))
-        (css/rule "a.btn:visited" (list "color" "var(--ink)"))
         (css/rule "label" (list "font-weight" "700"))
         (css/rule
           ".meta,.muted"
@@ -1950,6 +1805,197 @@
             "100%"
             "margin-right"
             ".35rem"))
+))))
+
+(define ui/theme-header
+  (lambda
+    ()
+    "Render the theme-header base stylesheet rules."
+    (css/sheet
+      (list
+        (css/rule
+          "header"
+          (list
+            "background"
+            "var(--panel)"
+            "border-bottom"
+            "2px solid #000"
+            "padding"
+            ".5rem .75rem"))
+        (css/rule
+          "header .brand"
+          (list
+            "font-weight"
+            "700"
+            "font-size"
+            "1.1rem"
+            "letter-spacing"
+            ".02em"
+            "color"
+            "var(--ink)"
+            "margin-right"
+            ".75rem"))
+        (css/rule
+          "header .meta"
+          (list
+            "display"
+            "block"
+            "font-family"
+            "var(--font-mono)"
+            "font-size"
+            ".8rem"
+            "color"
+            "var(--muted)"
+            "margin"
+            ".25rem 0 .5rem"))))))
+
+(define ui/theme-table
+  (lambda
+    ()
+    "Render the theme-table base stylesheet rules."
+    (css/sheet
+      (list
+        (css/rule
+          "table"
+          (list
+            "border-collapse"
+            "collapse"
+            "width"
+            "100%"
+            "background"
+            "var(--panel)"
+            "border"
+            "1px solid #000"
+            "font-size"
+            ".9rem"))
+        (css/rule
+          "th,td"
+          (list
+            "border"
+            "1px solid #808080"
+            "padding"
+            ".45rem .5rem"
+            "text-align"
+            "left"
+            "vertical-align"
+            "top"
+            "word-break"
+            "break-word"))
+        (css/rule
+          "th"
+          (list
+            "background"
+            "var(--chrome)"
+            "font-weight"
+            "700"
+            "border-color"
+            "var(--ink)"))
+        (css/rule
+          "tr:nth-child(even) td"
+          (list "background" "var(--row-alt)"))))))
+
+(define ui/theme-form
+  (lambda
+    ()
+    "Render the theme-form base stylesheet rules."
+    (css/sheet
+      (list
+        (css/rule
+          "pre,textarea,input[type=text],input[type=search],input:not([type])"
+          (list
+            "font-family"
+            "var(--font-mono)"
+            "font-size"
+            "1rem"
+            "background"
+            "var(--panel)"
+            "color"
+            "var(--ink)"
+            "border"
+            "1px solid #000"
+            "border-radius"
+            "0"
+            "padding"
+            ".5rem"
+            "width"
+            "100%"
+            "max-width"
+            "100%"))
+        (css/rule
+          "pre"
+          (list
+            "white-space"
+            "pre-wrap"
+            "overflow-x"
+            "auto"
+            "line-height"
+            "1.35"))
+        (css/rule
+          "textarea"
+          (list
+            "min-height"
+            "16rem"
+            "line-height"
+            "1.35"
+            "white-space"
+            "pre"
+            "tab-size"
+            "2"))))))
+
+(define ui/theme-button
+  (lambda
+    ()
+    "Render the theme-button base stylesheet rules."
+    (css/sheet
+      (list
+        (css/rule
+          "button,.btn,input[type=submit]"
+          (list
+            "font"
+            "inherit"
+            "font-size"
+            "1rem"
+            "cursor"
+            "pointer"
+            "background"
+            "var(--chrome)"
+            "color"
+            "var(--ink)"
+            "border"
+            "2px outset #fff"
+            "border-radius"
+            "0"
+            "padding"
+            ".5rem .85rem"
+            "min-height"
+            "2.75rem"))
+        (css/rule
+          "button:active,.btn:active"
+          (list "border-style" "inset"))
+        (css/rule
+          "button.secondary,.btn.secondary"
+          (list "background" "var(--bg)"))
+        (css/rule
+          "a.btn"
+          (list
+            "display"
+            "inline-block"
+            "text-decoration"
+            "none"
+            "color"
+            "var(--ink)"
+            "line-height"
+            "1.2"
+            "vertical-align"
+            "middle"))
+        (css/rule "a.btn:visited" (list "color" "var(--ink)"))))))
+
+(define ui/theme-mobile
+  (lambda
+    ()
+    "Render the theme-mobile mobile override stylesheet rules."
+    (css/sheet
+      (list
         (css/media
           "max-width:40rem"
           (list
