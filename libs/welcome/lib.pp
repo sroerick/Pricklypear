@@ -280,14 +280,14 @@
           (html/join
             (list
               (html/p
-                "Nopales is the language — a small Scheme-family Lisp-1. It's homoiconic: the AST is the source, and function definitions persist in Postgres as JSONB. Editing the AST is editing the code.")
+                "Nopales is the language. It's a small Scheme-family Lisp-1. It's homoiconic: the AST is the source, and function definitions persist in Postgres as JSONB. Editing the AST is editing the code.")
               (html/p
-                "Here's a function. It's a handler — the browser hits /hello and this runs.")
+                "Here's a handler function. The browser hits /hello and this runs.")
               (html/pre
                 (html/text
                   "(define hi-page\n  (lambda () (render-html \"<h1>Hello</h1>\")))"))
               (html/p
-                "That's it. No deploy, no restart. Now here's the row Postgres stores — the body column is the AST itself, serialized as JSONB:")
+                "You don't need to restart to see this page. There's no translation layer. Postgres just stores the direct AST of your sexp, serialized as JSONB:")
               (html/tag
                 "table"
                 (html/attr "class" "ast-table")
@@ -343,31 +343,23 @@
                     (html/code "(route \"/hello\" \"hi-page\")")
                     " — where "
                     (html/code "hi-page")
-                    " is a function you defined. The browser hits /hello; the REPL calls hi-page. Same function."))))))
+                    " is a function you defined. The browser hits /hello; the REPL calls hi-page."))))))
         (layout/cards
           (list
             (layout/card
               "Interpreted runtime"
-              "The running process is the API. POST one Lisp expression to /api/eval and get a value back. Pure prims (+, car, string-append) run in the interpreter; DB prims (get, create, rows, route, fork, merge) read and write real Postgres rows. No build, no deploy, no second language.")
+              "Agent skills and MCP are 2024 era coding dude. Here in Pricklypear we directly access the REPL. POST one Lisp expression to /api/eval and get a value back. Pure prims (+, car, string-append) run in the interpreter; DB prims (get, create, rows, route, fork, merge) read and write real Postgres rows. No build, no deploy, no second language. You can also mirror the whole language and run the interpreter locally.")
             (layout/card
               "HTML & CSS primitives"
-              "Sexp wrappers for the whole tree — html/div, html/a, html/p, html/attr — so you build pages in Lisp, not string templates. A tiny CSS DSL (css/rule, css/sheet, css/media) emits a real stylesheet. This page is styled that way.")
+              "Sexp wrappers for the whole tree. html/div, html/a, html/p, html/attr. You build pages in Lisp, not string templates. A tiny CSS DSL (css/rule, css/sheet, css/media) emits a real stylesheet. This page is styled that way.")
             (layout/card
               "htmx, server-evaluated"
-              "Route handlers return htmx fragments. A server-side swap simulator (the hypermedia harness) models the fixi-five — hx-get, hx-post, hx-target, hx-swap, hx-trigger — so a headless agent can verify a flow without a browser. No client JS required.")
+              "Route handlers return htmx fragments. A server-side swap simulator (the hypermedia harness) lets agents can verify a flow without a browser. You don't have to do a goofy Chrome / screenshot workflow.")
             (layout/card
               "Local-first evaluation"
               "The same interpreter runs three ways: in the image against Postgres, over HTTP via /api/eval (local compute, remote data), and against a local lens offline that grafts back on reconnect. One language, one seam, three modes.")))
         (layout/section
-          "How the language and the framework interact"
-          (html/join
-            (list
-              (html/p
-                "A Nopales function is both a callable and, once bound with (route \"/path\" \"fn\"), a web page. There's no controller layer, no templating engine, no API to build — the function is the endpoint. The same function you call from the REPL serves the browser.")
-              (html/p
-                "Two tiers of change: OCaml (primitives, HTTP, store, auth) moves slowly via rebuild/deploy; Nopales (your functions, routes, theme, the product UI) moves fast via row updates. Branches, not namespaces — system/main is the baseline, and each user gets username/personal as an inheriting garden. Fork is cheap; promote is the careful gate."))))
-        (layout/section
-          "5-minute tour"
+          "3 hour tour"
           (html/join
             (list
               (html/p
