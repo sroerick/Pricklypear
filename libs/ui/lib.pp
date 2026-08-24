@@ -39,6 +39,11 @@
             (css/use (calendar/css))
             (css/use (weather/css))
             (css/use (layout/card-css))
+            (css/use (bible/css))
+            (css/use (ui/theme-menu))
+            (css/use (ui/theme-branches))
+            (css/use (ui/theme-code-browser))
+            (css/use (ui/theme-capture))
             (css/use (ui/theme-mobile))
             (css/use (ui/theme-nav))
             (css/use notes/tree-css)
@@ -214,41 +219,6 @@
             ".35rem .5rem"
             "align-items"
             "center"))
-        (css/rule "nav > a,.menu-drop" (list "flex" "0 0 auto"))
-        (css/rule
-          "nav a,.menu-drop-btn"
-          (list
-            "display"
-            "inline-block"
-            "padding"
-            ".45rem .55rem"
-            "min-height"
-            "2.5rem"
-            "line-height"
-            "1.5"
-            "border"
-            "1px solid #000"
-            "background"
-            "var(--chrome)"
-            "color"
-            "var(--ink)"
-            "text-decoration"
-            "none"
-            "font-size"
-            ".9rem"
-            "cursor"
-            "pointer"
-            "list-style"
-            "none"
-            "box-sizing"
-            "border-box"))
-        (css/rule "nav a:visited" (list "color" "var(--ink)"))
-        (css/rule
-          "nav a:hover,nav a:focus,.menu-drop-btn:hover"
-          (list "background" "var(--panel)"))
-        (css/rule
-          "nav.emergency-nav"
-          (list "width" "100%" "margin-top" ".35rem"))
         (css/rule
           ".emergency-banner"
           (list
@@ -278,123 +248,6 @@
             "2px solid var(--banner-border)"
             "background"
             "var(--banner-bg)"))
-        (css/rule
-          ".menu-drop"
-          (list
-            "position"
-            "relative"
-            "display"
-            "inline-block"
-            "margin"
-            "0"))
-        (css/rule
-          ".menu-drop>summary"
-          (list "list-style" "none"))
-        (css/rule
-          ".menu-drop>summary::-webkit-details-marker"
-          (list "display" "none"))
-        (css/rule
-          ".menu-drop>summary::after"
-          (list "content" "\" v\"" "font-size" ".7em"))
-        (css/rule
-          ".menu-drop[open]>summary"
-          (list "position" "relative" "z-index" "81"))
-        (css/rule
-          ".menu-drop[open]>summary::before"
-          (list
-            "content"
-            "\"\""
-            "position"
-            "fixed"
-            "inset"
-            "0"
-            "z-index"
-            "80"
-            "cursor"
-            "default"
-            "background"
-            "transparent"))
-        (css/rule
-          ".menu-drop-panel"
-          (list
-            "display"
-            "none"
-            "position"
-            "absolute"
-            "left"
-            "0"
-            "right"
-            "auto"
-            "top"
-            "100%"
-            "z-index"
-            "82"
-            "min-width"
-            "10rem"
-            "max-width"
-            "min(16rem,calc(100vw - 1rem))"
-            "width"
-            "max-content"
-            "margin-top"
-            "2px"
-            "padding"
-            ".25rem"
-            "box-sizing"
-            "border-box"
-            "background"
-            "var(--panel)"
-            "border"
-            "2px solid #000"
-            "box-shadow"
-            "2px 2px 0 #808080"))
-        (css/rule
-          ".menu-drop[open]>.menu-drop-panel"
-          (list "display" "block"))
-        (css/rule
-          ".menu-drop-panel a"
-          (list
-            "display"
-            "block"
-            "width"
-            "100%"
-            "margin"
-            "0 0 .2rem"
-            "white-space"
-            "nowrap"
-            "box-sizing"
-            "border-box"))
-        (css/rule
-          ".menu-drop-panel a:last-child"
-          (list "margin-bottom" "0"))
-        (css/media
-          "max-width:40rem"
-          (list
-            (css/rule "header,nav" (list "overflow" "visible"))
-            (css/rule
-              ".menu-drop-panel"
-              (list
-                "left"
-                "auto"
-                "right"
-                "0"
-                "max-width"
-                "calc(100vw - .75rem)"))
-            (css/rule ".capture-drop" (list "position" "static"))
-            (css/rule
-              ".capture-drop > .menu-drop-panel.capture-panel"
-              (list
-                "left"
-                ".5rem"
-                "right"
-                ".5rem"
-                "width"
-                "auto"
-                "min-width"
-                "0"
-                "max-width"
-                "none"
-                "box-sizing"
-                "border-box"))))
         (css/rule
           "main"
           (list
@@ -463,70 +316,6 @@
             ".5rem 0"))
         (css/rule "ul.actions li" (list "margin" ".4rem 0"))
         (css/rule
-          "#ol-selected-label"
-          (list
-            "font-size"
-            ".85rem"
-            "max-width"
-            "12rem"
-            "overflow"
-            "hidden"
-            "text-overflow"
-            "ellipsis"
-            "white-space"
-            "nowrap"
-            "margin-right"
-            ".35rem"))
-        (css/rule ".br-table-wrap" (list "overflow-x" "auto"))
-        (css/rule
-          ".br-table"
-          (list "width" "100%" "font-size" ".9rem"))
-        (css/rule
-          ".br-table th,.br-table td"
-          (list "padding" ".35rem .4rem" "vertical-align" "top"))
-        (css/rule
-          "tr.br-current"
-          (list "background" "var(--sel-bg)"))
-        (css/rule
-          ".br-stats"
-          (list
-            "display"
-            "flex"
-            "flex-wrap"
-            "wrap"
-            "gap"
-            ".5rem"
-            "margin"
-            ".5rem 0"))
-        (css/rule
-          ".br-stat"
-          (list "padding" ".4rem .6rem" "margin" "0"))
-        (css/rule
-          ".br-diff"
-          (list
-            "display"
-            "grid"
-            "grid-template-columns"
-            "1fr 1fr"
-            "gap"
-            ".5rem"))
-        (css/media
-          "max-width:700px"
-          (list
-            (css/rule
-              ".br-diff"
-              (list "grid-template-columns" "1fr"))))
-        (css/rule "form.inline-form" (list "display" "inline"))
-        (css/rule
-          "form.inline-form button"
-          (list "margin-left" ".2rem"))
-        (css/media
-          "max-width:700px"
-          (list
-            (css/rule
-              ".todo-layout"
-              (list "grid-template-columns" "1fr"))))
-        (css/rule
           ".badge.impact"
           (list
             "background"
@@ -537,340 +326,6 @@
             ".15rem .4rem"
             "font-size"
             ".85rem"))
-        (css/rule
-          ".bb-browser"
-          (list
-            "display"
-            "flex"
-            "flex-direction"
-            "column"
-            "gap"
-            ".75rem"))
-        (css/rule ".bb-three" (list "display" "block"))
-        (css/rule ".bb-three .bb-col" (list "margin" ".5rem 0"))
-        (css/rule
-          ".bb-list"
-          (list
-            "list-style"
-            "none"
-            "padding"
-            "0"
-            "margin"
-            ".25rem 0"))
-        (css/rule
-          ".bb-item"
-          (list "margin" "0" "line-height" "1.35"))
-        (css/rule
-          ".bb-item a"
-          (list
-            "display"
-            "block"
-            "padding"
-            ".2rem .35rem"
-            "text-decoration"
-            "none"
-            "color"
-            "var(--link)"
-            "border-left"
-            "3px solid transparent"))
-        (css/rule
-          ".bb-item.is-active a"
-          (list
-            "font-weight"
-            "700"
-            "background"
-            "var(--row-alt)"
-            "border-left"
-            "3px solid #000"
-            "color"
-            "var(--ink)"))
-        (css/rule
-          ".bb-item a:hover"
-          (list "background" "var(--chrome)" "color" "var(--ink)"))
-        (css/rule
-          ".bb-crumb"
-          (list "margin" "0 0 .5rem" "font-size" ".9rem"))
-        (css/rule
-          ".bb-meta h3"
-          (list "margin" ".75rem 0 .35rem" "font-size" "1rem"))
-        (css/rule ".bb-code" (list "margin" "0"))
-        (css/rule
-          ".bb-code-head"
-          (list
-            "display"
-            "flex"
-            "flex-wrap"
-            "wrap"
-            "align-items"
-            "baseline"
-            "justify-content"
-            "space-between"
-            "gap"
-            ".5rem"
-            "margin-bottom"
-            ".5rem"))
-        (css/rule
-          ".bb-code-head h2"
-          (list "margin" "0" "font-size" "1.1rem"))
-        (css/rule ".bb-code-actions" (list "margin" "0"))
-        (css/rule
-          ".bb-tabs"
-          (list
-            "display"
-            "flex"
-            "gap"
-            ".35rem"
-            "flex-wrap"
-            "wrap"
-            "margin"
-            ".4rem 0 .6rem"
-            "align-items"
-            "center"))
-        (css/rule
-          ".bb-tab"
-          (list
-            "display"
-            "inline-block"
-            "padding"
-            ".28rem .65rem"
-            "border"
-            "1px solid #000"
-            "text-decoration"
-            "none"
-            "color"
-            "inherit"
-            "background"
-            "var(--panel)"
-            "border-radius"
-            "2px"))
-        (css/rule
-          ".bb-tab:hover"
-          (list "background" "var(--row-alt)"))
-        (css/rule
-          ".bb-tab.is-active"
-          (list
-            "background"
-            "var(--ink)"
-            "color"
-            "var(--panel)"
-            "font-weight"
-            "700"))
-        (css/rule
-          ".bb-edit-form textarea"
-          (list
-            "width"
-            "100%"
-            "min-height"
-            "14rem"
-            "font-family"
-            "ui-monospace, monospace"))
-        (css/rule
-          ".bb-code .bb-edit-form .card"
-          (list
-            "border"
-            "none"
-            "padding"
-            "0"
-            "box-shadow"
-            "none"))
-        (css/rule
-          ".bb-source"
-          (list
-            "margin"
-            "0"
-            "max-height"
-            "55vh"
-            "overflow"
-            "auto"
-            "background"
-            "var(--panel)"
-            "border"
-            "1px solid #000"
-            "padding"
-            ".6rem"
-            "font-size"
-            ".9rem"))
-        (css/media
-          "min-width:900px"
-          (list
-            (css/rule
-              ".bb-three"
-              (list
-                "display"
-                "grid"
-                "grid-template-columns"
-                "12rem 14rem 1fr"
-                "gap"
-                ".75rem"
-                "align-items"
-                "stretch"
-                "min-height"
-                "16rem"))
-            (css/rule
-              ".bb-three .bb-col"
-              (list
-                "max-height"
-                "42vh"
-                "overflow"
-                "auto"
-                "margin"
-                "0"
-                "display"
-                "flex"
-                "flex-direction"
-                "column"))
-            (css/rule
-              ".bb-three .bb-col .bb-list"
-              (list "flex" "1 1 auto" "overflow" "auto"))
-            (css/rule
-              ".bb-code .bb-source"
-              (list "max-height" "50vh"))))
-        (css/rule
-          ".capture-panel"
-          (list
-            "min-width"
-            "min(16rem, calc(100vw - 1rem))"
-            "max-width"
-            "min(22rem, calc(100vw - 1rem))"
-            "padding"
-            ".4rem"
-            "box-sizing"
-            "border-box"))
-        (css/rule
-          ".capture-nav-form"
-          (list
-            "display"
-            "flex"
-            "flex-direction"
-            "column"
-            "gap"
-            ".35rem"
-            "margin"
-            "0"))
-        (css/rule
-          ".capture-nav-form input[type=text],.capture-nav-form textarea"
-          (list
-            "width"
-            "100%"
-            "box-sizing"
-            "border-box"
-            "font-size"
-            ".9rem"))
-        (css/rule
-          ".capture-nav-form .capture-body"
-          (list "min-height" "4rem"))
-        (css/rule
-          ".capture-nav-form .capture-row"
-          (list
-            "display"
-            "flex"
-            "flex-wrap"
-            "wrap"
-            "gap"
-            ".35rem"
-            "align-items"
-            "center"))
-        (css/rule
-          ".capture-nav-form .capture-row button"
-          (list
-            "width"
-            "auto"
-            "min-width"
-            "4.5rem"
-            "margin"
-            "0"))
-        (css/rule
-          ".capture-nav-form #capture-status"
-          (list "font-size" ".85rem" "min-height" "1.1em"))
-        (css/rule
-          ".capture-nav-form .ok"
-          (list "color" "var(--ok)" "font-weight" "700"))
-        (css/rule
-          ".capture-nav-form .err"
-          (list "color" "var(--err)" "font-weight" "700"))
-        (css/rule
-          ".capture-card label"
-          (list
-            "display"
-            "block"
-            "margin"
-            ".35rem 0 .15rem"
-            "font-weight"
-            "700"))
-        (css/rule
-          ".capture-card .capture-body"
-          (list
-            "width"
-            "100%"
-            "box-sizing"
-            "border-box"
-            "min-height"
-            "4.5rem"))
-        (css/rule
-          ".capture-card .capture-row"
-          (list
-            "display"
-            "flex"
-            "flex-wrap"
-            "wrap"
-            "gap"
-            ".5rem"
-            "align-items"
-            "center"
-            "margin-top"
-            ".5rem"))
-        (css/rule
-          ".capture-card .capture-row button"
-          (list "width" "auto" "min-width" "6rem"))
-(css/rule
-          "ol.bible-chapter"
-          (list
-            "list-style"
-            "none"
-            "padding-left"
-            "0"
-            "margin"
-            ".25rem 0 1rem"))
-(css/rule
-          "ol.bible-chapter>li"
-          (list
-            "margin"
-            ".35rem 0"
-            "line-height"
-            "1.45"
-            "padding-left"
-            "0"))
-(css/rule
-          "ol.bible-chapter>li>sup"
-          (list
-            "font-size"
-            ".75em"
-            "font-weight"
-            "700"
-            "margin-right"
-            ".2em"
-            "color"
-            "var(--muted)"
-            "vertical-align"
-            "super"))
-(css/rule
-          ".bible-go label,.bible-search label"
-          (list
-            "display"
-            "inline-block"
-            "margin"
-            ".2rem .45rem .2rem 0"))
-(css/rule
-          ".bible-go select,.bible-search input[type=text]"
-          (list
-            "width"
-            "auto"
-            "min-width"
-            "6rem"
-            "max-width"
-            "100%"
-            "margin-right"
-            ".35rem"))
 
 ))))
 
@@ -1138,6 +593,517 @@
                 "var(--panel)"
                 "text-align"
                 "left"))))))))
+
+(define ui/theme-menu
+  (lambda
+    ()
+    "Render the theme-menu stylesheet rules."
+    (css/sheet
+      (list
+        (css/rule "nav > a,.menu-drop" (list "flex" "0 0 auto"))
+        (css/rule
+          "nav a,.menu-drop-btn"
+          (list
+            "display"
+            "inline-block"
+            "padding"
+            ".45rem .55rem"
+            "min-height"
+            "2.5rem"
+            "line-height"
+            "1.5"
+            "border"
+            "1px solid #000"
+            "background"
+            "var(--chrome)"
+            "color"
+            "var(--ink)"
+            "text-decoration"
+            "none"
+            "font-size"
+            ".9rem"
+            "cursor"
+            "pointer"
+            "list-style"
+            "none"
+            "box-sizing"
+            "border-box"))
+        (css/rule "nav a:visited" (list "color" "var(--ink)"))
+        (css/rule
+          "nav a:hover,nav a:focus,.menu-drop-btn:hover"
+          (list "background" "var(--panel)"))
+        (css/rule
+          "nav.emergency-nav"
+          (list "width" "100%" "margin-top" ".35rem"))
+        (css/rule
+          ".menu-drop"
+          (list
+            "position"
+            "relative"
+            "display"
+            "inline-block"
+            "margin"
+            "0"))
+        (css/rule
+          ".menu-drop>summary"
+          (list "list-style" "none"))
+        (css/rule
+          ".menu-drop>summary::-webkit-details-marker"
+          (list "display" "none"))
+        (css/rule
+          ".menu-drop>summary::after"
+          (list "content" "\" v\"" "font-size" ".7em"))
+        (css/rule
+          ".menu-drop[open]>summary"
+          (list "position" "relative" "z-index" "81"))
+        (css/rule
+          ".menu-drop[open]>summary::before"
+          (list
+            "content"
+            "\"\""
+            "position"
+            "fixed"
+            "inset"
+            "0"
+            "z-index"
+            "80"
+            "cursor"
+            "default"
+            "background"
+            "transparent"))
+        (css/rule
+          ".menu-drop-panel"
+          (list
+            "display"
+            "none"
+            "position"
+            "absolute"
+            "left"
+            "0"
+            "right"
+            "auto"
+            "top"
+            "100%"
+            "z-index"
+            "82"
+            "min-width"
+            "10rem"
+            "max-width"
+            "min(16rem,calc(100vw - 1rem))"
+            "width"
+            "max-content"
+            "margin-top"
+            "2px"
+            "padding"
+            ".25rem"
+            "box-sizing"
+            "border-box"
+            "background"
+            "var(--panel)"
+            "border"
+            "2px solid #000"
+            "box-shadow"
+            "2px 2px 0 #808080"))
+        (css/rule
+          ".menu-drop[open]>.menu-drop-panel"
+          (list "display" "block"))
+        (css/rule
+          ".menu-drop-panel a"
+          (list
+            "display"
+            "block"
+            "width"
+            "100%"
+            "margin"
+            "0 0 .2rem"
+            "white-space"
+            "nowrap"
+            "box-sizing"
+            "border-box"))
+        (css/rule
+          ".menu-drop-panel a:last-child"
+          (list "margin-bottom" "0"))
+        (css/media
+          "max-width:40rem"
+          (list
+            (css/rule "header,nav" (list "overflow" "visible"))
+            (css/rule
+              ".menu-drop-panel"
+              (list
+                "left"
+                "auto"
+                "right"
+                "0"
+                "max-width"
+                "calc(100vw - .75rem)"))
+            (css/rule ".capture-drop" (list "position" "static"))
+            (css/rule
+              ".capture-drop > .menu-drop-panel.capture-panel"
+              (list
+                "left"
+                ".5rem"
+                "right"
+                ".5rem"
+                "width"
+                "auto"
+                "min-width"
+                "0"
+                "max-width"
+                "none"
+                "box-sizing"
+                "border-box"))))
+      ))))
+
+(define ui/theme-branches
+  (lambda
+    ()
+    "Render the theme-branches stylesheet rules."
+    (css/sheet
+      (list
+        (css/rule ".br-table-wrap" (list "overflow-x" "auto"))
+        (css/rule
+          ".br-table"
+          (list "width" "100%" "font-size" ".9rem"))
+        (css/rule
+          ".br-table th,.br-table td"
+          (list "padding" ".35rem .4rem" "vertical-align" "top"))
+        (css/rule
+          "tr.br-current"
+          (list "background" "var(--sel-bg)"))
+        (css/rule
+          ".br-stats"
+          (list
+            "display"
+            "flex"
+            "flex-wrap"
+            "wrap"
+            "gap"
+            ".5rem"
+            "margin"
+            ".5rem 0"))
+        (css/rule
+          ".br-stat"
+          (list "padding" ".4rem .6rem" "margin" "0"))
+        (css/rule
+          ".br-diff"
+          (list
+            "display"
+            "grid"
+            "grid-template-columns"
+            "1fr 1fr"
+            "gap"
+            ".5rem"))
+        (css/rule "form.inline-form" (list "display" "inline"))
+        (css/rule
+          "form.inline-form button"
+          (list "margin-left" ".2rem"))
+        (css/media
+          "max-width:700px"
+          (list
+            (css/rule
+              ".br-diff"
+              (list "grid-template-columns" "1fr"))))
+      ))))
+
+(define ui/theme-code-browser
+  (lambda
+    ()
+    "Render the theme-code-browser stylesheet rules."
+    (css/sheet
+      (list
+        (css/rule
+          ".bb-browser"
+          (list
+            "display"
+            "flex"
+            "flex-direction"
+            "column"
+            "gap"
+            ".75rem"))
+        (css/rule ".bb-three" (list "display" "block"))
+        (css/rule ".bb-three .bb-col" (list "margin" ".5rem 0"))
+        (css/rule
+          ".bb-list"
+          (list
+            "list-style"
+            "none"
+            "padding"
+            "0"
+            "margin"
+            ".25rem 0"))
+        (css/rule
+          ".bb-item"
+          (list "margin" "0" "line-height" "1.35"))
+        (css/rule
+          ".bb-item a"
+          (list
+            "display"
+            "block"
+            "padding"
+            ".2rem .35rem"
+            "text-decoration"
+            "none"
+            "color"
+            "var(--link)"
+            "border-left"
+            "3px solid transparent"))
+        (css/rule
+          ".bb-item.is-active a"
+          (list
+            "font-weight"
+            "700"
+            "background"
+            "var(--row-alt)"
+            "border-left"
+            "3px solid #000"
+            "color"
+            "var(--ink)"))
+        (css/rule
+          ".bb-item a:hover"
+          (list "background" "var(--chrome)" "color" "var(--ink)"))
+        (css/rule
+          ".bb-crumb"
+          (list "margin" "0 0 .5rem" "font-size" ".9rem"))
+        (css/rule
+          ".bb-meta h3"
+          (list "margin" ".75rem 0 .35rem" "font-size" "1rem"))
+        (css/rule ".bb-code" (list "margin" "0"))
+        (css/rule
+          ".bb-code-head"
+          (list
+            "display"
+            "flex"
+            "flex-wrap"
+            "wrap"
+            "align-items"
+            "baseline"
+            "justify-content"
+            "space-between"
+            "gap"
+            ".5rem"
+            "margin-bottom"
+            ".5rem"))
+        (css/rule
+          ".bb-code-head h2"
+          (list "margin" "0" "font-size" "1.1rem"))
+        (css/rule ".bb-code-actions" (list "margin" "0"))
+        (css/rule
+          ".bb-tabs"
+          (list
+            "display"
+            "flex"
+            "gap"
+            ".35rem"
+            "flex-wrap"
+            "wrap"
+            "margin"
+            ".4rem 0 .6rem"
+            "align-items"
+            "center"))
+        (css/rule
+          ".bb-tab"
+          (list
+            "display"
+            "inline-block"
+            "padding"
+            ".28rem .65rem"
+            "border"
+            "1px solid #000"
+            "text-decoration"
+            "none"
+            "color"
+            "inherit"
+            "background"
+            "var(--panel)"
+            "border-radius"
+            "2px"))
+        (css/rule
+          ".bb-tab:hover"
+          (list "background" "var(--row-alt)"))
+        (css/rule
+          ".bb-tab.is-active"
+          (list
+            "background"
+            "var(--ink)"
+            "color"
+            "var(--panel)"
+            "font-weight"
+            "700"))
+        (css/rule
+          ".bb-edit-form textarea"
+          (list
+            "width"
+            "100%"
+            "min-height"
+            "14rem"
+            "font-family"
+            "ui-monospace, monospace"))
+        (css/rule
+          ".bb-code .bb-edit-form .card"
+          (list
+            "border"
+            "none"
+            "padding"
+            "0"
+            "box-shadow"
+            "none"))
+        (css/rule
+          ".bb-source"
+          (list
+            "margin"
+            "0"
+            "max-height"
+            "55vh"
+            "overflow"
+            "auto"
+            "background"
+            "var(--panel)"
+            "border"
+            "1px solid #000"
+            "padding"
+            ".6rem"
+            "font-size"
+            ".9rem"))
+        (css/media
+          "min-width:900px"
+          (list
+            (css/rule
+              ".bb-three"
+              (list
+                "display"
+                "grid"
+                "grid-template-columns"
+                "12rem 14rem 1fr"
+                "gap"
+                ".75rem"
+                "align-items"
+                "stretch"
+                "min-height"
+                "16rem"))
+            (css/rule
+              ".bb-three .bb-col"
+              (list
+                "max-height"
+                "42vh"
+                "overflow"
+                "auto"
+                "margin"
+                "0"
+                "display"
+                "flex"
+                "flex-direction"
+                "column"))
+            (css/rule
+              ".bb-three .bb-col .bb-list"
+              (list "flex" "1 1 auto" "overflow" "auto"))
+            (css/rule
+              ".bb-code .bb-source"
+              (list "max-height" "50vh"))))
+      ))))
+
+(define ui/theme-capture
+  (lambda
+    ()
+    "Render the theme-capture stylesheet rules."
+    (css/sheet
+      (list
+        (css/rule
+          ".capture-panel"
+          (list
+            "min-width"
+            "min(16rem, calc(100vw - 1rem))"
+            "max-width"
+            "min(22rem, calc(100vw - 1rem))"
+            "padding"
+            ".4rem"
+            "box-sizing"
+            "border-box"))
+        (css/rule
+          ".capture-nav-form"
+          (list
+            "display"
+            "flex"
+            "flex-direction"
+            "column"
+            "gap"
+            ".35rem"
+            "margin"
+            "0"))
+        (css/rule
+          ".capture-nav-form input[type=text],.capture-nav-form textarea"
+          (list
+            "width"
+            "100%"
+            "box-sizing"
+            "border-box"
+            "font-size"
+            ".9rem"))
+        (css/rule
+          ".capture-nav-form .capture-body"
+          (list "min-height" "4rem"))
+        (css/rule
+          ".capture-nav-form .capture-row"
+          (list
+            "display"
+            "flex"
+            "flex-wrap"
+            "wrap"
+            "gap"
+            ".35rem"
+            "align-items"
+            "center"))
+        (css/rule
+          ".capture-nav-form .capture-row button"
+          (list
+            "width"
+            "auto"
+            "min-width"
+            "4.5rem"
+            "margin"
+            "0"))
+        (css/rule
+          ".capture-nav-form #capture-status"
+          (list "font-size" ".85rem" "min-height" "1.1em"))
+        (css/rule
+          ".capture-nav-form .ok"
+          (list "color" "var(--ok)" "font-weight" "700"))
+        (css/rule
+          ".capture-nav-form .err"
+          (list "color" "var(--err)" "font-weight" "700"))
+        (css/rule
+          ".capture-card label"
+          (list
+            "display"
+            "block"
+            "margin"
+            ".35rem 0 .15rem"
+            "font-weight"
+            "700"))
+        (css/rule
+          ".capture-card .capture-body"
+          (list
+            "width"
+            "100%"
+            "box-sizing"
+            "border-box"
+            "min-height"
+            "4.5rem"))
+        (css/rule
+          ".capture-card .capture-row"
+          (list
+            "display"
+            "flex"
+            "flex-wrap"
+            "wrap"
+            "gap"
+            ".5rem"
+            "align-items"
+            "center"
+            "margin-top"
+            ".5rem"))
+        (css/rule
+          ".capture-card .capture-row button"
+          (list "width" "auto" "min-width" "6rem"))))))
 
 (define ui/theme-nav
   (lambda

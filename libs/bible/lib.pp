@@ -807,7 +807,6 @@
                 (html/attr "class" "bible-cite")
                 (html/a (bible/link-href ab ch verse) label))))))))
   "Render one verse as a blockquote with cite link, or 'Verse not found: <label>' if missing.")
-)
 
 (define bible/verse-inline-range
   (lambda (book chapter vstart vend)
@@ -876,3 +875,115 @@
       (list)))
   "Emit a (bible-ref ...) outline node for a verse range with the given render mode.")
 
+
+(define bible/css
+  (lambda
+    ()
+    "Render the bible component stylesheet (extracted from ui/theme)."
+    (css/sheet
+      (list
+        (css/rule
+          "ol.bible-chapter"
+          (list
+            "list-style"
+            "none"
+            "padding-left"
+            "0"
+            "margin"
+            ".25rem 0 1rem"))
+        (css/rule
+          "ol.bible-chapter>li"
+          (list
+            "margin"
+            ".35rem 0"
+            "line-height"
+            "1.45"
+            "padding-left"
+            "0"))
+        (css/rule
+          "ol.bible-chapter>li>sup"
+          (list
+            "font-size"
+            ".75em"
+            "font-weight"
+            "700"
+            "margin-right"
+            ".2em"
+            "color"
+            "var(--muted)"
+            "vertical-align"
+            "super"))
+        (css/rule
+          ".bible-go label,.bible-search label"
+          (list
+            "display"
+            "inline-block"
+            "margin"
+            ".2rem .45rem .2rem 0"))
+        (css/rule
+          ".bible-go select,.bible-search input[type=text]"
+          (list
+            "width"
+            "auto"
+            "min-width"
+            "6rem"
+            "max-width"
+            "100%"
+            "margin-right"
+            ".35rem"))))))
+
+(define bible/css
+  (lambda
+    ()
+    "Render the bible component stylesheet (extracted from ui/theme)."
+    (css/sheet
+      (list
+        (css/rule
+          "ol.bible-chapter"
+          (list
+            "list-style"
+            "none"
+            "padding-left"
+            "0"
+            "margin"
+            ".25rem 0 1rem"))
+        (css/rule
+          "ol.bible-chapter>li"
+          (list
+            "margin"
+            ".35rem 0"
+            "line-height"
+            "1.45"
+            "padding-left"
+            "0"))
+        (css/rule
+          "ol.bible-chapter>li>sup"
+          (list
+            "font-size"
+            ".75em"
+            "font-weight"
+            "700"
+            "margin-right"
+            ".2em"
+            "color"
+            "var(--muted)"
+            "vertical-align"
+            "super"))
+        (css/rule
+          ".bible-go label,.bible-search label"
+          (list
+            "display"
+            "inline-block"
+            "margin"
+            ".2rem .45rem .2rem 0"))
+        (css/rule
+          ".bible-go select,.bible-search input[type=text]"
+          (list
+            "width"
+            "auto"
+            "min-width"
+            "6rem"
+            "max-width"
+            "100%"
+            "margin-right"
+            ".35rem"))))))
