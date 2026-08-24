@@ -180,3 +180,56 @@
             weather/default-lat
             weather/default-lon
             weather/default-label))))))
+
+(define weather/css
+  (lambda
+    ()
+    "Render the weather component stylesheet (extracted from ui/theme)."
+    (css/sheet
+      (list
+        (css/rule
+          ".weather-card .wx-row"
+          (list
+            "display"
+            "flex"
+            "align-items"
+            "baseline"
+            "gap"
+            ".75rem"
+            "flex-wrap"
+            "wrap"))
+        (css/rule
+          ".weather-card .wx-temp"
+          (list
+            "font-size"
+            "2rem"
+            "font-weight"
+            "700"
+            "line-height"
+            "1"))
+        (css/rule
+          ".weather-card .wx-meta"
+          (list "font-size" ".9rem" "color" "var(--muted)"))
+        (css/rule
+          ".weather-card .wx-loc"
+          (list "font-weight" "700" "margin" ".25rem 0"))
+        (css/rule
+          ".weather-card .wx-form"
+          (list
+            "display"
+            "flex"
+            "gap"
+            ".35rem"
+            "flex-wrap"
+            "wrap"
+            "margin-top"
+            ".5rem"))
+        (css/rule
+          ".weather-card .wx-form input[type=text]"
+          (list "flex" "1 1 8rem" "min-width" "0"))
+        (css/rule
+          ".weather-card .wx-form button"
+          (list "width" "auto" "min-width" "4.5rem"))
+        (css/rule
+          ".weather-card .wx-err"
+          (list "color" "var(--err)" "font-weight" "700"))))))
