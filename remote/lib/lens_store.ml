@@ -56,6 +56,12 @@ let read_file (file : string) : string =
   close_in ic;
   Bytes.unsafe_to_string buf
 
+(** UUID -> ltree-safe label (strip dashes). Mirrors
+    image/lib/tree_store.ml [uuid_label] so a client can build a datum
+    node path [data.u.<user>.<type>.<id>] from a raw UUID. *)
+let uuid_label (u : string) : string =
+  String.concat "" (String.split_on_char '-' u)
+
 let enc_label (s : string) : string =
   (* Filesystem- and ltree-safe label encoding, mirrored from
      image/lib/tree_store.ml so a client can reproduce the replication
@@ -114,6 +120,10 @@ let path_segments (path : string) : string list =
       b.<lens_prefix>.* (the forked code lens)
     NOTHING outside it — another user's data.u.<other>.* never replicates,
     by the same path-prefix confinement that governs reads. *)
+let datum_path ~(user : string) ~type_name ~id () : string =
+  Printf.sprintf "data.u.%s.%s.%s" (enc_label user) (enc_label type_name)
+    (uuid_label id)
+
 let in_replication_unit ?(lens_prefix : string = "") ~user (path : string)
     : bool =
   match path_segments path with
@@ -350,6 +360,19 @@ let code_src_of_envelope (envelope_json : string) : string option =
       | _ -> None)
   | _ -> None
 
+(** Extract the [body] of a DATUM node envelope as a JSON string — the
+    shape [(get 'type id)] returns (the row's fields). Returns None when
+    the envelope is absent or has no body. This is the lens-local
+    equivalent of the server's [Crud.get]: the datum node's [body] IS the
+    row's fields JSON. *)
+let datum_body_of_envelope (envelope_json : string) : string option =
+  match Yojson.Safe.from_string envelope_json with
+  | `Assoc kv ->
+      (match List.assoc_opt "body" kv with
+       | Some body -> Some (Yojson.Safe.to_string body)
+       | None -> None)
+  | _ -> None
+
 (** The branch ancestry chain metadata file under the lens root. The chain
     is ordered SELF-FIRST (closest-wins): [lens, parent, …, system/main],
     the same ordering store.branch_chain / function_defs override use. *)
@@ -456,6 +479,55 @@ let node_manifest ~(lens : lens) : (string * string) list =
     walk prefix_dir []
     |> List.filter (fun f ->
          let b = Filename.basename f in
-         b <> "__root.json" && b <> "__ancestry.json")
+         b <> "__root.json" && b <> "__ancestry.json" && b <> "__snapshot.json")
   in
   List.filter_map path_hash_of_file files
+
+(* ====================================================================
+   SNAPSHOT COORDINATE (sync's common ancestor)
+
+   The (branch, generation) the lens was last synced at — the merge
+   base a sync round's three-way diff keys on (local-first.borg sync:
+   "last-synced as the common ancestor"). Stamped at pull time; read back
+   to offer as the base manifest coordinate. One file under the lens
+   root; atomic (rename(2)) like every substrate write. *)
+
+let snapshot_file (root : string) : string =
+  Filename.concat root "__snapshot.json"
+
+(** Record the (branch, generation) snapshot the lens was materialized
+    at. [generation] is the migration-017 / gen-now coordinate; [branch]
+    is the checked-out branch name. Both come from the server at pull
+    time (proxied read prims), so a later sync can offer this snapshot
+    as the three-way merge base. *)
+let record_snapshot ~(lens : lens) ~branch ~(generation : int64) : unit =
+  let json =
+    Yojson.Safe.to_string
+      (`Assoc
+         [ ("branch", `String branch)
+         ; ("generation", `String (Int64.to_string generation))
+         ; ("pulled_at", `String (string_of_float (Unix.gettimeofday ())))
+         ])
+  in
+  atomic_write (snapshot_file lens.root) json
+
+(** Read back the recorded (branch, generation) snapshot, or None. *)
+let snapshot ~(lens : lens) : (string * int64) option =
+  let f = snapshot_file lens.root in
+  if not (Sys.file_exists f) then None
+  else
+    (try
+       match Yojson.Safe.from_string (read_file f) with
+       | `Assoc kv ->
+           (match List.assoc_opt "branch" kv, List.assoc_opt "generation" kv with
+            | Some (`String b), Some g ->
+                let gen =
+                  match g with
+                  | `String s -> (try Int64.of_string s with _ -> 0L)
+                  | `Int i -> Int64.of_int i
+                  | _ -> 0L
+                in
+                Some (b, gen)
+            | _ -> None)
+       | _ -> None
+     with _ -> None)

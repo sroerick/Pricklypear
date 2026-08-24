@@ -7,7 +7,7 @@
  (name pricklypear_remote_lib)
  (public_name pricklypear-remote.lib)
  (wrapped false)
- (modules proxy_rim remote http_transport placer def_cache lens_store)
+ (modules proxy_rim remote http_transport placer def_cache lens_store free_vars)
  (libraries
   pricklypear-lisp
   pricklypear-pure-prims

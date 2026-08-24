@@ -157,7 +157,20 @@ let register_proxy_prims (t : t) : unit =
   List.iter (bind_proxy_prim t)
     [ "get"; "create"; "update"; "delete"; "rows"
     ; "function-source"; "function-doc"; "apropos"; "apropos-docs"
+    ; "find-code"
     ; "list-bindings"; "whoami"; "current-author"; "render-html"
+    ; "node-path"; "backlinks"; "type-fields"; "list-kind"
+      (* tree/* prims — the hierarchical store surface (one-tree). These
+         are read-mostly (tree/get, tree/list, tree/subtree, …) plus the
+         write trio tree/upsert | tree/delete | tree/move. Proxied so a
+         lens client can eval defs that call them; the server stays the
+         data-plane authority. *)
+    ; "tree/get"; "tree/list"; "tree/children-of"; "tree/subtree"
+    ; "tree/lens-get"; "tree/lens-children"; "tree/lens-subtree"
+    ; "tree/upsert"; "tree/delete"; "tree/move"
+    ; "tree/get-uuid"; "tree/find-by"; "tree/path-label"; "tree/garden-root"
+    ; "tree/folder-index"; "tree/children-html"
+    ; "package-exports"; "package-bindings"
       (* def-cache invalidation coordinates (caching subsection):
          current-branch (branch namespace) + gen-now (migration-017
          branch_generations = the tree-time gen coordinate — one
@@ -175,7 +188,11 @@ let fetch_def (t : t) (name : string) : string option =
   |> (function
       | Some src -> Some src
       | None -> (
-          match t.transport "function-source" [ VStr name ] with
+          (* Proxy [function-source]; catch transport exceptions (the Eio
+             HTTP transport RAISES [Eio.Io] on a refused connection, it
+             does not return [Error]) so an offline client with a lens
+             misses cleanly → [Unbound_var] instead of a process crash. *)
+          match (try t.transport "function-source" [ VStr name ] with _ -> Error (Failure "offline")) with
           | Ok (VStr src) when String.trim src <> "" -> Some src
           | Ok (VStr _) -> None
           | Ok _ -> None
@@ -184,12 +201,21 @@ let fetch_def (t : t) (name : string) : string option =
 (** Materialize a def into the client env: parse + eval the fetched
     source (a toplevel (define …)) under the proxy rim in [env]. The
     def body may reference prims — those proxy/run locally on call,
-    not at define time. *)
+    not at define time.
+
+    [function-source] returns the stored body as a bare (lambda …),
+    not a (define name …) form, so eval produces the value but does
+    NOT bind the name. Bind it explicitly when the src did not already
+    do so (a (define …) binds during eval; a bare lambda does not) —
+    this is what makes a fetched def resolvable on the retry. *)
 let load_def (t : t) (name : string) (src : string) : value =
   let v =
     Proxy_rim.run ~local_prims:t.local_prims ~transport:t.transport (fun () ->
         Eval.read_eval_all_direct ~prims:t.local_prims t.env src)
   in
+  (match Env.lookup t.env name with
+   | None -> Env.define t.env name v
+   | Some _ -> ());
   Def_cache.store t.def_cache name v;
   v
 
@@ -289,6 +315,65 @@ let make ~(transport : transport) ?(remote_eval : (string -> value) option)
   register_pure_prims t;
   register_proxy_prims t;
   t
+
+(** [register_lens_reads t ~lens] overrides the [get] and [tree/get]
+    proxy prims with LOCAL handlers that read from the lens substrate
+    FIRST, proxying to the image on miss. This is the Phase-1
+    local-first data path: working-set reads [(get 'type id)] and
+    [(tree/get path)] resolve from the filesystem JSON the lens
+    materialized, so they stay local offline. Indexed reads [(rows …)],
+    [(tree/find-by …)] keep proxying (the server is the index —
+    local-first.borg local-substrate).
+
+    A transport FAILURE (the Eio HTTP transport raises [Eio.Io] on a
+    refused connection) is caught and degrades to [VNil] ("not found")
+    rather than crashing — offline grace. The lens is a WORKING COPY; a
+    miss + offline is "not in the working set," not an error. *)
+let register_lens_reads (t : t) ~(lens : Lens_store.lens) : unit =
+  (* Mirror the server's [coerce_sym_args]: quoted symbols ('type) arrive
+     as VSymbol; the server's CRUD handlers coerce to VStr, so the lens
+     handlers must too or the [VStr] arg match would miss. *)
+  let coerce = function Ast.VSymbol s -> Ast.VStr s | v -> v in
+  let proxy_or lens_hit args =
+    match lens_hit () with
+    | Some v -> v
+    | None ->
+        (* miss: proxy. Catch transport exceptions (offline) → VNil. *)
+        (match (try t.transport "get" args with _ -> Error (Failure "offline")) with
+         | Ok v -> v
+         | Error _ -> Ast.VNil)
+  in
+  (* (get 'type id) -> VStr fields-json | VNil. Reads the datum node
+     envelope at [data.u.<user>.<type>.<id>] from the lens, extracts the
+     body (the row's fields), returns it as VStr — matching [Crud.get]. *)
+  add_prim t "get"
+    (fun args ->
+      match List.map coerce args with
+      | [ Ast.VStr type_name; Ast.VStr id ] ->
+          let path = Lens_store.datum_path ~user:lens.owner ~type_name ~id () in
+          proxy_or
+            (fun () ->
+              match Lens_store.get ~lens path with
+              | Some env ->
+                  (match Lens_store.datum_body_of_envelope env with
+                   | Some s -> Some (Ast.VStr s)
+                   | None -> None)
+              | None -> None)
+            args
+      | _ -> Ast.VNil)
+  (* (tree/get path) -> VStr node-envelope-json | VNil. Returns the full
+     envelope verbatim (matches [Crud.tree_get]). *)
+  ; add_prim t "tree/get"
+    (fun args ->
+      match List.map coerce args with
+      | [ Ast.VStr path ] ->
+          proxy_or
+            (fun () ->
+              match Lens_store.get ~lens path with
+              | Some env -> Some (Ast.VStr env)
+              | None -> None)
+            args
+      | _ -> Ast.VNil)
 
 (** ---- Stepping / trace debugger over one remote client ----
 

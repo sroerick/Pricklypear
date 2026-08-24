@@ -58,11 +58,33 @@ let run ~(local_prims : Eval.prim_table) ~(transport : transport)
                 (fun (k : (a, _) continuation) ->
                   match Hashtbl.find_opt local_prims name with
                   | Some fn ->
-                      (try continue k (fn args) with
-                       | exn -> discontinue k exn)
+                      (* Eval the prim body, then resume [k] once with the
+                         result. A prim-body exception propagates to [exnc]
+                         (k is never resumed); a CONTINUATION exception (after
+                         [continue k v] resumes) also propagates to [exnc].
+                         Wrapping [continue k (fn args)] in a try would catch a
+                         continuation-raised exn and [discontinue] an
+                         already-resumed [k] (Continuation_already_resumed). *)
+                      continue k (fn args)
                   | None ->
-                      (match transport name args with
+                      (* The transport may RAISE (Eio HTTP raises
+                         [Eio.Io] on a refused connection, it does not
+                         return [Error]); catch both so a transport
+                         failure becomes a catchable Lisp [Prim_error]
+                         instead of crashing the client. This is the
+                         offline-degradation seam: an indexed prim ([rows],
+                         [tree/find-by], …) that the lens does not
+                         service locally raises a Lisp error the REPL
+                         prints, not a process-killing [Eio.Io]. *)
+                      (match (try transport name args with exn -> Error exn) with
                        | Ok v -> continue k v
-                       | Error exn -> discontinue k exn))
+                       | Error exn ->
+                           let msg =
+                             Printf.sprintf "%s: transport failure (%s)"
+                               name (Printexc.to_string exn)
+                           in
+                           discontinue k
+                             (Ast.Interp_error
+                                (Ast.Prim_error (name, msg, "transport")))))
           | _ -> None)
     }

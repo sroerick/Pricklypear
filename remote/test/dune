@@ -17,3 +17,8 @@
  (name lens_store_test)
  (modules lens_store_test)
  (libraries pricklypear-remote.lib pricklypear-lisp alcotest unix))
+
+(test
+ (name free_vars_test)
+ (modules free_vars_test)
+ (libraries pricklypear-remote.lib pricklypear-lisp alcotest unix))
