@@ -2551,4 +2551,11 @@
             "font-size"
             ".8rem"
             "line-height"
-            "1.2"))))))
+            "1.2"))
+        (css/media
+          "max-width:700px"
+          (list
+            (css/rule
+              ".todo-layout"
+              (list "grid-template-columns" "1fr"))))
+      ))))

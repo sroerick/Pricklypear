@@ -756,6 +756,21 @@
     "Render the outline component stylesheet (extracted from ui/theme)."
     (css/sheet
       (list
+        (css/rule
+          "#ol-selected-label"
+          (list
+            "font-size"
+            ".85rem"
+            "max-width"
+            "12rem"
+            "overflow"
+            "hidden"
+            "text-overflow"
+            "ellipsis"
+            "white-space"
+            "nowrap"
+            "margin-right"
+            ".35rem"))
         (css/rule ".ol-root" (list "margin" ".5rem 0"))
         (css/rule
           ".ol-node"
