@@ -2332,3 +2332,223 @@
       ((v (request-param "view")))
       (if (null? v) "everything" (as-str v)))))
 
+
+(define todo/css
+  (lambda
+    ()
+    "Render the todo component stylesheet (extracted from ui/theme)."
+    (css/sheet
+      (list
+        (css/rule
+          ".todo-layout"
+          (list
+            "display"
+            "grid"
+            "grid-template-columns"
+            "12rem 1fr"
+            "gap"
+            ".75rem"))
+        (css/rule
+          ".todo-nav"
+          (list
+            "list-style"
+            "none"
+            "padding"
+            "0"
+            "margin"
+            "0"))
+        (css/rule ".todo-nav-item" (list "margin" ".25rem 0"))
+        (css/rule
+          ".todo-nav-item.is-active a"
+          (list
+            "font-weight"
+            "700"
+            "border-left"
+            "3px solid #000"
+            "padding-left"
+            ".35rem"))
+        (css/rule
+          ".todo-new-list"
+          (list
+            "display"
+            "flex"
+            "flex-direction"
+            "column"
+            "gap"
+            ".25rem"
+            "margin-top"
+            ".5rem"))
+        (css/rule
+          ".todo-new-list-input"
+          (list
+            "font-size"
+            ".85rem"
+            "min-height"
+            "2rem"
+            "padding"
+            ".25rem"))
+        (css/rule
+          ".todo-box.st-TODO"
+          (list "background" "var(--pending-bg)"))
+        (css/rule
+          ".todo-box.st-DONE"
+          (list
+            "background"
+            "var(--done-bg)"
+            "text-decoration"
+            "line-through"))
+        (css/rule
+          ".todo-box.st-WAITING"
+          (list "background" "var(--waiting-bg)"))
+        (css/rule
+          ".todo-box.st-CANCELLED"
+          (list
+            "background"
+            "var(--cancelled-bg)"
+            "color"
+            "var(--archived-ink)"))
+        (css/rule
+          ".todo-box.st-ARCHIVED"
+          (list
+            "background"
+            "var(--archived-bg)"
+            "color"
+            "var(--archived-ink)"
+            "border-style"
+            "dashed"))
+        (css/rule
+          "li.todo-item.is-archived .todo-title"
+          (list
+            "color"
+            "var(--archived-ink)"
+            "font-style"
+            "italic"))
+        (css/rule
+          ".todo-from-note .todo-src"
+          (list "font-size" ".8rem" "margin-left" ".35rem"))
+        (css/rule
+          ".todo-add-label"
+          (list
+            "display"
+            "block"
+            "font-weight"
+            "bold"
+            "margin"
+            "0 0 .35rem"))
+        (css/rule
+          ".todo-add-row"
+          (list
+            "display"
+            "flex"
+            "gap"
+            ".5rem"
+            "align-items"
+            "stretch"
+            "flex-wrap"
+            "wrap"))
+        (css/rule
+          ".todo-add-row input[type=text]"
+          (list "flex" "1 1 12rem" "min-width" "0"))
+        (css/rule
+          ".todo-add-row button"
+          (list
+            "flex"
+            "0 0 auto"
+            "width"
+            "auto"
+            "min-width"
+            "5rem"))
+        (css/rule
+          "ul.todo-list"
+          (list
+            "list-style"
+            "none"
+            "padding"
+            ".25rem .5rem"
+            "margin"
+            "0 0 .75rem"))
+        (css/rule
+          "li.todo-item"
+          (list
+            "display"
+            "flex"
+            "align-items"
+            "center"
+            "gap"
+            ".5rem"
+            "padding"
+            ".45rem 0"
+            "border-bottom"
+            "1px solid #c0c0c0"))
+        (css/rule
+          "li.todo-item:last-child"
+          (list "border-bottom" "none"))
+        (css/rule
+          "li.todo-item form"
+          (list "margin" "0" "display" "inline"))
+        (css/rule
+          "li.todo-item .todo-box"
+          (list
+            "font-family"
+            "ui-monospace,Menlo,monospace"
+            "min-width"
+            "2.6rem"
+            "padding"
+            ".25rem .35rem"
+            "width"
+            "auto"))
+        (css/rule
+          "li.todo-item .todo-title"
+          (list
+            "flex"
+            "1 1 auto"
+            "min-width"
+            "0"
+            "word-break"
+            "break-word"))
+        (css/rule
+          "li.todo-item.is-done .todo-title"
+          (list
+            "text-decoration"
+            "line-through"
+            "color"
+            "var(--done-muted)"))
+        (css/rule
+          "li.todo-item .todo-del button, li.todo-item .todo-archive button"
+          (list
+            "width"
+            "auto"
+            "padding"
+            ".25rem .45rem"
+            "font-size"
+            ".85rem"))
+        (css/rule
+          "li.todo-nav-list"
+          (list
+            "display"
+            "flex"
+            "align-items"
+            "center"
+            "gap"
+            ".25rem"
+            "flex-wrap"
+            "wrap"))
+        (css/rule
+          "li.todo-nav-list > a"
+          (list "flex" "1 1 auto" "min-width" "0"))
+        (css/rule
+          "li.todo-nav-list form.todo-list-del"
+          (list "margin" "0" "display" "inline"))
+        (css/rule
+          "li.todo-nav-list .todo-list-del button"
+          (list
+            "width"
+            "auto"
+            "min-width"
+            "1.6rem"
+            "padding"
+            ".1rem .3rem"
+            "font-size"
+            ".8rem"
+            "line-height"
+            "1.2"))))))

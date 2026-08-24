@@ -4988,3 +4988,81 @@
           (null? row)
           (create (quote note) fields)
           (update (quote note) (car row) fields))))))
+
+(define notes/css
+  (lambda
+    ()
+    "Render the notes component stylesheet (extracted from ui/theme)."
+    (css/sheet
+      (list
+        (css/rule
+          "img.note-media"
+          (list
+            "display"
+            "block"
+            "max-width"
+            "100%"
+            "max-height"
+            "28rem"
+            "height"
+            "auto"
+            "margin"
+            ".5rem 0"
+            "border"
+            "1px solid #000"
+            "background"
+            "var(--panel)"))
+        (css/rule
+          ".note-media-cap"
+          (list "margin" "0 0 .5rem" "font-size" ".85rem"))
+        (css/rule
+          "li.note-item"
+          (list
+            "display"
+            "flex"
+            "align-items"
+            "center"
+            "gap"
+            ".5rem"
+            "padding"
+            ".35rem 0"
+            "border-bottom"
+            "1px solid #c0c0c0"))
+        (css/rule "li.note-item > a" (list "flex" "1 1 auto"))
+        (css/rule
+          "li.note-item form.note-del"
+          (list "margin" "0"))
+        (css/rule
+          "li.note-item .note-del button"
+          (list
+            "width"
+            "auto"
+            "padding"
+            ".25rem .45rem"
+            "font-size"
+            ".85rem"))
+        (css/rule
+          ".note-title-row"
+          (list
+            "display"
+            "flex"
+            "flex-wrap"
+            "wrap"
+            "align-items"
+            "center"
+            "gap"
+            ".75rem"))
+        (css/rule
+          ".note-title-row h1"
+          (list
+            "flex"
+            "1 1 auto"
+            "margin"
+            "0"
+            "border-bottom"
+            "none"
+            "padding"
+            "0"))
+        (css/rule
+          ".note-title-row .note-del-page button"
+          (list "width" "auto"))))))

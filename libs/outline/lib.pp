@@ -749,3 +749,467 @@
     "True when n is a proper 5-field outline node."
     (if (null? n) () (if (pair? n) (= (count n) 5) ()))))
 
+
+(define outline/css
+  (lambda
+    ()
+    "Render the outline component stylesheet (extracted from ui/theme)."
+    (css/sheet
+      (list
+        (css/rule ".ol-root" (list "margin" ".5rem 0"))
+        (css/rule
+          ".ol-node"
+          (list
+            "position"
+            "relative"
+            "margin"
+            ".25rem 0 .25rem .35rem"
+            "border-left"
+            "2px solid #808080"
+            "padding-left"
+            ".35rem"))
+        (css/rule
+          ".ol-sum"
+          (list
+            "cursor"
+            "pointer"
+            "font-weight"
+            "700"
+            "display"
+            "flex"
+            "align-items"
+            "center"
+            "gap"
+            ".35rem"
+            "flex-wrap"
+            "nowrap"
+            "min-width"
+            "0"
+            "padding-right"
+            "2.5rem"))
+        (css/rule
+          ".ol-node.is-selected > .ol-sum"
+          (list
+            "background"
+            "var(--sel-bg)"
+            "outline"
+            "2px solid #000"
+            "box-shadow"
+            "inset 3px 0 0 var(--sel-accent)"))
+        (css/rule
+          ".ol-fold"
+          (list
+            "font-size"
+            ".75em"
+            "flex"
+            "0 0 auto"
+            "display"
+            "inline-flex"
+            "align-items"
+            "center"
+            "justify-content"
+            "center"
+            "user-select"
+            "none"
+            "cursor"
+            "pointer"
+            "line-height"
+            "1"
+            "min-width"
+            "1.6rem"
+            "min-height"
+            "1.6rem"
+            "padding"
+            ".2rem"
+            "margin"
+            "0 .05rem 0 -.1rem"
+            "color"
+            "var(--muted)"))
+        (css/rule
+          ".ol-fold:hover"
+          (list
+            "background"
+            "var(--panel)"
+            "border"
+            "1px solid #808080"
+            "padding"
+            "calc(.2rem - 1px)"))
+        (css/rule
+          "details.ol-node > .ol-sum .ol-fold::before"
+          (list "content" "\"v\""))
+        (css/rule
+          "details.ol-node:not([open]) > .ol-sum .ol-fold::before"
+          (list "content" "\">\""))
+        (css/rule
+          ".ol-todo"
+          (list
+            "display"
+            "inline-block"
+            "flex"
+            "0 0 auto"
+            "width"
+            "auto"
+            "margin"
+            "0 .15rem 0 0"
+            "padding"
+            ".05rem .3rem"
+            "border"
+            "1px solid #666"
+            "background"
+            "transparent"
+            "font-size"
+            ".7rem"
+            "font-weight"
+            "700"
+            "line-height"
+            "1.3"
+            "letter-spacing"
+            ".02em"
+            "color"
+            "var(--muted)"
+            "vertical-align"
+            "middle"))
+        (css/rule
+          ".ol-todo.st-TODO"
+          (list
+            "border-color"
+            "var(--pending-border)"
+            "color"
+            "var(--pending-ink)"
+            "background"
+            "var(--pending-bg)"))
+        (css/rule
+          ".ol-todo.st-DONE"
+          (list
+            "border-color"
+            "var(--done-ink)"
+            "color"
+            "var(--done-ink)"
+            "background"
+            "var(--done-bg)"))
+        (css/rule
+          ".ol-todo.st-ARCHIVED"
+          (list
+            "border-color"
+            "var(--archived-border)"
+            "color"
+            "var(--archived-ink)"
+            "background"
+            "var(--archived-bg)"))
+        (css/rule
+          ".ol-node.st-DONE > .ol-sum .ol-title"
+          (list
+            "text-decoration"
+            "line-through"
+            "color"
+            "var(--done-muted)"
+            "font-weight"
+            "500"))
+        (css/rule
+          ".ol-node.st-ARCHIVED > .ol-sum .ol-title"
+          (list
+            "color"
+            "var(--archived-ink)"
+            "font-style"
+            "italic"
+            "font-weight"
+            "500"))
+        (css/rule
+          ".ol-node.st-ARCHIVED"
+          (list "opacity" "0.72"))
+        (css/rule
+          ".ol-title"
+          (list
+            "outline"
+            "none"
+            "padding"
+            ".15rem .25rem"
+            "border-radius"
+            "0"
+            "flex"
+            "1 1 auto"
+            "min-width"
+            "0"
+            "word-break"
+            "break-word"
+            "white-space"
+            "normal"
+            "line-height"
+            "1.35"
+            "cursor"
+            "text"
+            "font-weight"
+            "700"))
+        (css/rule
+          ".ol-title:focus"
+          (list
+            "background"
+            "var(--panel)"
+            "border"
+            "1px solid #000"))
+        (css/rule
+          ".ol-body"
+          (list
+            "margin"
+            ".25rem 0 .35rem"
+            "white-space"
+            "pre-wrap"
+            "font-size"
+            ".95rem"
+            "outline"
+            "none"
+            "padding"
+            ".25rem"
+            "min-width"
+            "0"
+            "word-break"
+            "break-word"))
+        (css/rule
+          ".ol-body:focus"
+          (list
+            "background"
+            "var(--panel)"
+            "border"
+            "1px solid #000"))
+        (css/rule
+          ".ol-kids"
+          (list "margin-left" ".15rem" "min-width" "0"))
+        (css/rule
+          ".ol-toolbar"
+          (list
+            "display"
+            "flex"
+            "flex-wrap"
+            "wrap"
+            "align-items"
+            "center"
+            "gap"
+            ".3rem"
+            "margin"
+            "0 0 .65rem"
+            "padding"
+            ".35rem .5rem"
+            "background"
+            "var(--panel)"
+            "border"
+            "2px solid #000"
+            "position"
+            "sticky"
+            "top"
+            "0"
+            "z-index"
+            "40"
+            "box-shadow"
+            "0 2px 0 #808080"))
+        (css/rule
+          ".ol-toolbar-label"
+          (list
+            "font-size"
+            ".8rem"
+            "color"
+            "var(--muted)"
+            "margin-right"
+            ".2rem"
+            "min-width"
+            "auto"
+            "font-weight"
+            "700"))
+        (css/rule
+          ".ol-toolbar .ol-btn"
+          (list "min-height" "2rem" "padding" ".2rem .45rem"))
+        (css/rule
+          ".ol-toolbar form.ol-refile"
+          (list
+            "margin"
+            "0"
+            "display"
+            "inline-flex"
+            "width"
+            "auto"))
+        (css/rule
+          "details.ol-actions"
+          (list
+            "display"
+            "none"
+            "position"
+            "absolute"
+            "top"
+            "0"
+            "right"
+            "0"
+            "z-index"
+            "5"
+            "margin"
+            "0"))
+        (css/rule
+          "details.ol-actions > summary.ol-actions-sum"
+          (list
+            "display"
+            "inline-flex"
+            "align-items"
+            "center"
+            "justify-content"
+            "center"
+            "list-style"
+            "none"
+            "cursor"
+            "pointer"
+            "user-select"
+            "none"
+            "width"
+            "auto"
+            "min-width"
+            "2.25rem"
+            "min-height"
+            "2.25rem"
+            "padding"
+            ".2rem .35rem"
+            "border"
+            "1px solid #666"
+            "background"
+            "var(--chrome)"
+            "font-weight"
+            "700"
+            "color"
+            "var(--ink)"
+            "text-align"
+            "center"
+            "line-height"
+            "1.2"))
+        (css/rule
+          "details.ol-actions > summary.ol-actions-sum::-webkit-details-marker"
+          (list "display" "none"))
+        (css/rule
+          "details.ol-actions > summary.ol-actions-sum:hover, details.ol-actions[open] > summary.ol-actions-sum"
+          (list
+            "background"
+            "var(--panel)"
+            "border-color"
+            "var(--ink)"))
+        (css/rule
+          ".ol-actions-panel"
+          (list
+            "display"
+            "none"
+            "position"
+            "absolute"
+            "right"
+            "0"
+            "top"
+            "100%"
+            "margin-top"
+            "2px"
+            "flex-direction"
+            "column"
+            "flex-wrap"
+            "nowrap"
+            "align-items"
+            "stretch"
+            "min-width"
+            "7rem"
+            "padding"
+            ".2rem"
+            "background"
+            "var(--panel)"
+            "border"
+            "1px solid #000"
+            "z-index"
+            "20"))
+        (css/rule
+          "details.ol-actions[open] > .ol-actions-panel"
+          (list "display" "flex"))
+        (css/rule
+          "details.ol-actions[open] > .ol-actions-panel .ol-btn"
+          (list
+            "width"
+            "100%"
+            "text-align"
+            "left"
+            "min-height"
+            "2rem"))
+        (css/rule
+          ".ol-btn"
+          (list
+            "font-size"
+            ".75rem"
+            "padding"
+            ".2rem .4rem"
+            "min-height"
+            "1.8rem"
+            "width"
+            "auto"
+            "flex"
+            "0 0 auto"
+            "margin"
+            "0"
+            "border"
+            "1px solid #000"
+            "background"
+            "var(--bg)"
+            "cursor"
+            "pointer"
+            "line-height"
+            "1.2"))
+        (css/rule
+          ".ol-btn:hover"
+          (list "background" "var(--panel)"))
+        (css/rule ".ol-del" (list "color" "var(--err)"))
+        (css/rule
+          "form.ol-refile"
+          (list
+            "display"
+            "flex"
+            "flex-wrap"
+            "wrap"
+            "gap"
+            ".25rem"
+            "align-items"
+            "center"
+            "margin"
+            ".25rem 0 0"
+            "width"
+            "auto"
+            "max-width"
+            "100%"))
+        (css/rule
+          "form.ol-refile .ol-refile-sel"
+          (list
+            "flex"
+            "1 1 8rem"
+            "min-width"
+            "6rem"
+            "max-width"
+            "14rem"
+            "font-size"
+            ".75rem"
+            "padding"
+            ".2rem"))
+        (css/rule
+          "form.ol-refile button"
+          (list
+            "width"
+            "auto"
+            "min-width"
+            "0"
+            "font-size"
+            ".75rem"
+            "padding"
+            ".2rem .4rem"
+            "margin"
+            "0"))
+        (css/rule
+          ".ol-debug"
+          (list "margin" ".75rem 0" "opacity" ".6"))
+        (css/rule
+          ".ol-debug > summary"
+          (list "cursor" "pointer" "font-size" ".85rem"))
+        (css/rule ".ol-todo-btn" (list "cursor" "pointer"))
+        (css/rule
+          ".ol-todo-btn.st-TODO"
+          (list "background" "var(--pending-bg)"))
+        (css/rule
+          ".ol-todo-btn.st-DONE"
+          (list "background" "var(--done-bg)"))
+        (css/rule
+          ".ol-todo-btn.st-WAITING"
+          (list "background" "var(--waiting-bg)"))))))

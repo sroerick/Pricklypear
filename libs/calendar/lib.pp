@@ -874,3 +874,152 @@
     "Format year y, month m, day d as a YYYY-MM-DD string."
     (date-format y m d)))
 
+
+(define calendar/css
+  (lambda
+    ()
+    "Render the calendar component stylesheet (extracted from ui/theme)."
+    (css/sheet
+      (list
+        (css/rule
+          ".cal-nav"
+          (list
+            "display"
+            "flex"
+            "align-items"
+            "center"
+            "gap"
+            ".75rem"
+            "margin"
+            ".5rem 0"
+            "flex-wrap"
+            "wrap"))
+        (css/rule
+          ".cal-nav a"
+          (list "text-decoration" "none" "font-weight" "700"))
+        (css/rule
+          ".cal-grid"
+          (list
+            "display"
+            "grid"
+            "grid-template-columns"
+            "repeat(7,1fr)"
+            "gap"
+            "2px"
+            "background"
+            "var(--shadow)"
+            "border"
+            "2px solid #000"
+            "max-width"
+            "42rem"))
+        (css/rule
+          ".cal-dow"
+          (list
+            "background"
+            "var(--chrome)"
+            "text-align"
+            "center"
+            "font-weight"
+            "700"
+            "padding"
+            ".25rem"
+            "font-size"
+            ".8rem"))
+        (css/rule
+          ".cal-cell"
+          (list
+            "background"
+            "var(--panel)"
+            "min-height"
+            "3.5rem"
+            "padding"
+            ".2rem"
+            "display"
+            "block"
+            "color"
+            "var(--ink)"
+            "text-decoration"
+            "none"))
+        (css/rule
+          ".cal-empty"
+          (list "background" "var(--bg)" "min-height" "3.5rem"))
+        (css/rule
+          ".cal-today"
+          (list
+            "outline"
+            "2px solid #000"
+            "background"
+            "var(--today-bg)"))
+        (css/rule
+          ".cal-dom"
+          (list "font-weight" "700" "font-size" ".85rem"))
+        (css/rule
+          ".cal-marks"
+          (list
+            "display"
+            "flex"
+            "flex-wrap"
+            "wrap"
+            "gap"
+            "2px"
+            "margin-top"
+            ".15rem"))
+        (css/rule
+          ".cal-dot"
+          (list
+            "font-size"
+            ".65rem"
+            "padding"
+            "0 .2rem"
+            "border"
+            "1px solid #000"
+            "background"
+            "var(--chrome)"
+            "line-height"
+            "1.2"))
+        (css/rule
+          ".cal-dot-ev"
+          (list "background" "var(--done-bg)"))
+        (css/rule
+          ".cal-dot-todo"
+          (list "background" "var(--pending-bg)"))
+        (css/rule
+          ".cal-dot-note"
+          (list "background" "var(--waiting-bg)"))
+        (css/rule
+          ".cal-list"
+          (list
+            "list-style"
+            "none"
+            "padding"
+            ".25rem"
+            "margin"
+            "0"))
+        (css/rule
+          ".cal-event,.cal-todo"
+          (list
+            "display"
+            "flex"
+            "gap"
+            ".5rem"
+            "align-items"
+            "center"
+            "padding"
+            ".35rem 0"
+            "border-bottom"
+            "1px solid #ccc"))
+        (css/rule
+          ".cal-time"
+          (list
+            "font-size"
+            ".8rem"
+            "min-width"
+            "3.5rem"
+            "color"
+            "var(--muted)"))
+        (css/rule
+          ".cal-day-panel label"
+          (list "display" "block" "margin-top" ".4rem"))
+        (css/rule
+          "a .cal-cell:hover"
+          (list "background" "var(--sel-bg)"))))))

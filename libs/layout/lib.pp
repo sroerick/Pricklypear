@@ -547,3 +547,21 @@
             "--cactus-shadow"
             "4px 4px 0 #1a1a1a"))))))
 
+
+(define layout/card-css
+  (lambda
+    ()
+    "Render the layout component stylesheet (extracted from ui/theme)."
+    (css/sheet
+      (list
+        (css/rule
+          ".card"
+          (list
+            "background"
+            "var(--panel)"
+            "border"
+            "2px solid #000"
+            "padding"
+            ".75rem"
+            "margin"
+            "0 0 .75rem"))))))
