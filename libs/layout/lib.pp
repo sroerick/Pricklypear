@@ -490,6 +490,69 @@
           ".layout-section-body"
           (list "line-height" "1.55" "max-width" "40rem"))
         (css/rule
+          ".ast-table"
+          (list
+            "border-collapse"
+            "collapse"
+            "margin"
+            "1rem 0"
+            "max-width"
+            "40rem"
+            "width"
+            "100%"))
+        (css/rule
+          ".ast-table th"
+          (list
+            "text-align"
+            "left"
+            "border"
+            "1px solid #808080"
+            "padding"
+            ".3rem .5rem"
+            "background"
+            "#f0ece6"
+            "font-family"
+            "monospace"
+            "font-size"
+            ".8rem"))
+        (css/rule
+          ".ast-table td"
+          (list
+            "border"
+            "1px solid #808080"
+            "padding"
+            ".3rem .5rem"
+            "vertical-align"
+            "top"
+            "font-family"
+            "monospace"
+            "font-size"
+            ".8rem"))
+        (css/rule
+          ".ast-table pre"
+          (list
+            "margin"
+            "0"
+            "white-space"
+            "pre-wrap"
+            "word-break"
+            "break-word"))
+        (css/rule
+          "pre"
+          (list
+            "background"
+            "#f6f3ee"
+            "border"
+            "1px solid #c9c2b6"
+            "padding"
+            ".6rem"
+            "overflow-x"
+            "auto"
+            "font-size"
+            ".82rem"
+            "line-height"
+            "1.4"))
+        (css/rule
           ".layout-page"
           (list
             "max-width"

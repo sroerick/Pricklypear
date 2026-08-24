@@ -282,6 +282,58 @@
               (html/p
                 "Nopales is the language — a small Scheme-family Lisp-1. It's homoiconic: the AST is the source, and function definitions persist in Postgres as JSONB. Editing the AST is editing the code.")
               (html/p
+                "Here's a function. It's a handler — the browser hits /hello and this runs.")
+              (html/pre
+                (html/text
+                  "(define hi-page\n  (lambda () (render-html \"<h1>Hello</h1>\")))"))
+              (html/p
+                "That's it. No deploy, no restart. Now here's the row Postgres stores — the body column is the AST itself, serialized as JSONB:")
+              (html/tag
+                "table"
+                (html/attr "class" "ast-table")
+                (html/join
+                  (list
+                    (html/tag
+                      "tr"
+                      ""
+                      (html/join
+                        (list
+                          (html/tag "th" "" (html/text "column"))
+                          (html/tag "th" "" (html/text "value")))))
+                    (html/tag
+                      "tr"
+                      ""
+                      (html/join
+                        (list
+                          (html/tag "td" "" (html/text "name"))
+                          (html/tag "td" "" (html/code "hi-page")))))
+                    (html/tag
+                      "tr"
+                      ""
+                      (html/join
+                        (list
+                          (html/tag "td" "" (html/text "body"))
+                          (html/tag
+                            "td"
+                            ""
+                            (html/pre
+                              (html/text
+                                "{\"lambda\":[[],\n  {\"app\":[{\"var\":\"render-html\"},\n            {\"lit\":{\"str\":\"<h1>Hello</h1>\"}}]}]}"))))))
+                    (html/tag
+                      "tr"
+                      ""
+                      (html/join
+                        (list
+                          (html/tag "td" "" (html/text "doc"))
+                          (html/tag "td" "" (html/text "Render the hello page.")))))
+                    (html/tag
+                      "tr"
+                      ""
+                      (html/join
+                        (list
+                          (html/tag "td" "" (html/text "author"))
+                          (html/tag "td" "" (html/text "admin"))))))))
+              (html/p
                 "It has closures, lambda, let, quasiquote macros, pattern matching, and a frozen core. Dynamic typing, impure functional, effects-inferred. Two kinds of function: data builders you call from the REPL, and HTTP handlers you bind to a URL.")
               (html/p*
                 ""
@@ -367,7 +419,19 @@
                     " "
                     (layout/cta "/.well-known/agent.json" "agent.json")))))))
         (layout/section
-          "Get in"
+          "Harness, agent, habitat"
+          (html/join
+            (list
+              (html/p
+                "Has anybody noticed there's a third thing missing? I call it The Third Substrate if I'm trying to be fancy. Your harness writes code. Your agent manages tasks and processes. But there's nowhere to deploy your code. Now your poor OpenClaw is a TypeScript DevOps engineer")
+              (html/p
+                "Pricklypear is the third thing. It's an living app and a memory. If you want you can write all your agent memory to it.")
+              (html/p
+                "The agent calls it a habitat. I kind of think that name sucks, but oh well. Maybe its natural habitat is living inside its own Lisp. I think Cloudflare is trying to solve this problem with some insane, poorly designed abstraction. (like everything they touch)")
+              (html/p
+                "I kind of think a habitat has to be a Lisp. I think you could build it in CL or Clojure. But there are big advantages to having an interpreted Lisp. I'd actually like to see a CL or Clojure habitat. My agents say you could build one in less than 10000 LoC. That's about a quarter of the size of Pricklypear. But then I built an interpreter, too."))))
+        (layout/section
+          "Get in, Loser. We're a cactus now."
           (html/join
             (list
               (html/p
