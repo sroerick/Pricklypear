@@ -115,7 +115,7 @@ curl -sS "$PP_URL/agent.txt" | head
 
 - Client: OCaml **`pp-eval`** → `POST /api/eval` (HTTP basic auth). Wrapper: `scripts/pp-eval.sh`
 - Secrets: `~/.config/pricklypear/env` (local only, mode 600 — never commit)
-- Pi skill: `pricklypear-eval` (`~/.pi/agent/skills/pricklypear-eval/SKILL.md`)
+- `pp-eval` runs on the laptop and talks to `PP_URL` (prod by default); local `scripts/dev.sh` PG is kernel-lab only, not the eval path
 - Prefer eval over inventing REST for todos/bible/ui/etc.
 - Do **not** dump `(list-bindings)` into model context; use describe / apropos-docs.
 - **Do** edit the live `agents` note when agent guidance should stick.
