@@ -2744,211 +2744,13 @@
   (css/sheet
     (list
       (css/raw
-        "/* AS/400 terminal-inspired theme overrides v3 */")
-      (css/rule
-        "body"
-        (list
-          "font-family"
-          "\"Courier New\",\"Lucida Console\",Monaco,\"DejaVu Sans Mono\",monospace"
-          "font-weight"
-          "400"
-          "-webkit-font-smoothing"
-          "antialiased"))
-      (css/rule
-        "header"
-        (list
-          "border-bottom"
-          "2px solid #33cc33"
-          "padding"
-          ".5rem .75rem"))
-      (css/rule
-        "header .brand"
-        (list
-          "color"
-          "#33ff33"
-          "text-transform"
-          "uppercase"
-          "letter-spacing"
-          ".12em"
-          "font-weight"
-          "700"))
-      (css/rule "header .meta" (list "color" "#888888"))
-      (css/rule
-        "nav"
-        (list
-          "gap"
-          "0"
-          "border"
-          "2px solid #33cc33"
-          "padding"
-          ".25rem"))
-      (css/rule
-        "nav a,.menu-drop-btn"
-        (list
-          "border"
-          "1px solid #33cc33"
-          "background"
-          "#1a2a1a"
-          "color"
-          "#33cc33"
-          "font-family"
-          "\"Courier New\",\"Lucida Console\",Monaco,monospace"
-          "font-size"
-          ".85rem"
-          "font-weight"
-          "700"
-          "text-transform"
-          "uppercase"
-          "letter-spacing"
-          ".06em"
-          "padding"
-          ".4rem .6rem"
-          "margin"
-          "0"
-          "border-radius"
-          "0"))
-      (css/rule
-        "nav a:hover,nav a:focus,.menu-drop-btn:hover"
-        (list "background" "#33cc33" "color" "#111111"))
-      (css/rule "main" (list "max-width" "56rem"))
-      (css/rule
-        "h1"
-        (list
-          "color"
-          "#33ff33"
-          "text-transform"
-          "uppercase"
-          "letter-spacing"
-          ".1em"
-          "border-bottom"
-          "2px solid #33cc33"
-          "font-size"
-          "1.15rem"
-          "font-weight"
-          "700"))
-      (css/rule
-        "h2"
-        (list
-          "color"
-          "#33cc33"
-          "text-transform"
-          "uppercase"
-          "letter-spacing"
-          ".05em"
-          "font-size"
-          "1rem"
-          "font-weight"
-          "700"))
-      (css/rule
-        "h3"
-        (list
-          "color"
-          "#33cc33"
-          "font-size"
-          ".95rem"
-          "font-weight"
-          "700"))
-      (css/rule
-        ".card"
-        (list
-          "border"
-          "2px solid #33cc33"
-          "background"
-          "#1a1a1a"))
-      (css/rule
-        "table"
-        (list "border" "2px solid #33cc33" "font-size" ".85rem"))
-      (css/rule
-        "th"
-        (list
-          "background"
-          "#1a2a1a"
-          "color"
-          "#33ff33"
-          "text-transform"
-          "uppercase"
-          "letter-spacing"
-          ".05em"
-          "border-color"
-          "#33cc33"
-          "font-weight"
-          "700"))
-      (css/rule "td" (list "border-color" "#222222"))
-      (css/rule
-        "tr:nth-child(even) td"
-        (list "background" "#151515"))
-      (css/rule
-        "button,.btn,input[type=submit]"
-        (list
-          "background"
-          "#1a2a1a"
-          "color"
-          "#33cc33"
-          "border"
-          "2px solid #33cc33"
-          "font-family"
-          "\"Courier New\",\"Lucida Console\",Monaco,monospace"
-          "font-size"
-          ".85rem"
-          "font-weight"
-          "700"
-          "text-transform"
-          "uppercase"
-          "letter-spacing"
-          ".05em"
-          "border-radius"
-          "0"
-          "padding"
-          ".45rem .85rem"))
-      (css/rule
-        "button:hover,.btn:hover"
-        (list "background" "#33cc33" "color" "#111111"))
-      (css/rule
-        "button:active,.btn:active"
-        (list "border-style" "solid"))
-      (css/rule
-        "button.secondary,.btn.secondary"
-        (list "background" "#1a1a1a"))
-      (css/rule
-        "pre,textarea,input[type=text],input[type=search],input:not([type])"
-        (list
-          "background"
-          "#0d0d0d"
-          "color"
-          "#33cc33"
-          "border"
-          "1px solid #33cc33"
-          "font-family"
-          "\"Courier New\",\"Lucida Console\",Monaco,monospace"
-          "font-weight"
-          "400"))
-      (css/rule
-        "pre:focus,textarea:focus,input[type=text]:focus,input[type=search]:focus,input:not([type]):focus"
-        (list "border-color" "#33ff33" "outline" "none"))
-      (css/rule "a" (list "color" "#33ff33"))
-      (css/rule "a:visited" (list "color" "#2a9a2a"))
-      (css/rule "a:hover" (list "color" "#66ff66"))
-      (css/rule ".meta,.muted" (list "color" "#888888"))
-      (css/rule ".err" (list "color" "#ff4444"))
-      (css/rule ".ok" (list "color" "#33ff33"))
+        "/* notes-tree layout (component-scoped; colors via var(--*)) */")
       (css/rule
         ".notes-tree"
-        (list
-          "list-style"
-          "none"
-          "padding"
-          "0"
-          "margin"
-          "0"))
+        (list "list-style" "none" "padding" "0" "margin" "0"))
       (css/rule
         ".notes-tree ul.tree-root"
-        (list
-          "list-style"
-          "none"
-          "padding"
-          "0"
-          "margin"
-          "0"))
+        (list "list-style" "none" "padding" "0" "margin" "0"))
       (css/rule
         ".notes-tree .tree-folder"
         (list
@@ -2957,7 +2759,7 @@
           "padding-left"
           ".5rem"
           "border-left"
-          "2px solid #33cc33"))
+          "2px solid var(--border)"))
       (css/rule
         ".notes-tree .tree-folder-header"
         (list
@@ -2973,31 +2775,25 @@
           "700"))
       (css/rule
         ".notes-tree .tree-folder-header a"
-        (list "text-decoration" "none" "color" "#33ff33"))
+        (list "text-decoration" "none" "color" "var(--link)"))
       (css/rule
         ".notes-tree .tree-folder-header a:hover"
-        (list "text-decoration" "underline" "color" "#66ff66"))
+        (list "text-decoration" "underline" "color" "var(--ink)"))
       (css/rule
         ".notes-tree .tree-folder-icon"
         (list "font-size" ".9em"))
       (css/rule
         ".notes-tree ul.tree-children"
-        (list
-          "list-style"
-          "none"
-          "padding"
-          "0 0 0 1rem"
-          "margin"
-          ".15rem 0"))
+        (list "list-style" "none" "padding" "0 0 0 1rem" "margin" ".15rem 0"))
       (css/rule
         ".notes-tree li.note-item"
         (list "border-bottom" "none" "padding" ".15rem 0"))
       (css/rule
         ".notes-tree li.note-item > a"
-        (list "flex" "1 1 auto" "color" "#33cc33"))
+        (list "flex" "1 1 auto" "color" "var(--link)"))
       (css/rule
         ".notes-tree li.note-item > a:hover"
-        (list "color" "#66ff66"))
+        (list "color" "var(--ink)"))
       (css/rule
         ".notes-tree .tree-uncategorized"
         (list
@@ -3006,14 +2802,14 @@
           "padding-top"
           ".5rem"
           "border-top"
-          "1px solid #33cc33"))
+          "1px solid var(--border)"))
       (css/rule
         ".notes-tree .tree-uncategorized h3"
         (list
           "font-size"
           ".95rem"
           "color"
-          "#888888"
+          "var(--muted)"
           "margin"
           ".5rem 0 .25rem"
           "text-transform"
@@ -3024,11 +2820,11 @@
         ".notes-tree li.note-item form.note-del button"
         (list
           "border"
-          "1px solid #33cc33"
+          "1px solid var(--border)"
           "background"
-          "#1a1a1a"
+          "var(--panel)"
           "color"
-          "#888888"
+          "var(--muted)"
           "padding"
           ".2rem .4rem"
           "font-size"
@@ -3039,84 +2835,13 @@
           "auto"))
       (css/rule
         ".notes-tree li.note-item form.note-del button:hover"
-        (list "background" "#33cc33" "color" "#111111"))
-      (css/rule
-        "li.note-item"
-        (list
-          "border-bottom"
-          "1px solid #222222"
-          "padding"
-          ".35rem 0"))
-      (css/rule "li.note-item > a" (list "color" "#33cc33"))
-      (css/rule
-        "li.note-item > a:hover"
-        (list "color" "#66ff66"))
-      (css/rule
-        "li.note-item .muted"
-        (list "color" "#888888"))
-      (css/rule
-        "li.note-item .note-del button"
-        (list
-          "border"
-          "1px solid #33cc33"
-          "background"
-          "#1a1a1a"
-          "color"
-          "#888888"
-          "padding"
-          ".2rem .4rem"
-          "font-size"
-          ".8rem"
-          "min-height"
-          "auto"
-          "width"
-          "auto"))
-      (css/rule
-        "li.note-item .note-del button:hover"
-        (list "background" "#33cc33" "color" "#111111")))))
+        (list "background" "var(--ink)" "color" "var(--bg)")))))
 
 (define notes/tree-css-patch
   (css/sheet
     (list
       (css/raw
-        "/* v4 patch: fix capture btn wrap + brighten muted greys */")
-      (css/rule
-        ".menu-drop-btn"
-        (list
-          "white-space"
-          "nowrap"
-          "display"
-          "inline-flex"
-          "align-items"
-          "center"
-          "justify-content"
-          "center"
-          "gap"
-          ".25rem"))
-      (css/rule
-        ".menu-drop>summary::after"
-        (list "display" "inline-block"))
-      (css/rule "header .meta" (list "color" "#aaaaaa"))
-      (css/rule ".meta,.muted" (list "color" "#aaaaaa"))
-      (css/rule ".notes-tree .muted" (list "color" "#aaaaaa"))
-      (css/rule
-        "li.note-item .muted"
-        (list "color" "#aaaaaa"))
-      (css/rule
-        ".notes-tree .tree-uncategorized h3"
-        (list "color" "#aaaaaa"))
-      (css/rule
-        "li.note-item .note-del button, .notes-tree li.note-item form.note-del button"
-        (list
-          "color"
-          "#33cc33"
-          "border"
-          "1px solid #33cc33"
-          "background"
-          "#1a1a1a"))
-      (css/rule
-        "li.note-item .note-del button:hover, .notes-tree li.note-item form.note-del button:hover"
-        (list "background" "#33cc33" "color" "#111111")))))
+        "/* notes/tree-css-patch: retired (was v4 global clobber; now empty) */"))))
 
 (define notes/tree/all-paths
   (lambda

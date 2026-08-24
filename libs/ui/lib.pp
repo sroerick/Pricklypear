@@ -26,7 +26,6 @@
             (css/use (ui/theme))
             (css/use (ui/theme-nav))
             (css/use notes/tree-css)
-            (css/use notes/tree-css-patch)
             (css/use (theme/extra))))))))
 
 (define ui/home
@@ -176,7 +175,7 @@
             "color"
             "var(--ink)"
             "font-family"
-            "Geneva,\"Lucida Grande\",\"DejaVu Sans\",Verdana,sans-serif"
+            "var(--font-sans)"
             "line-height"
             "1.4"))
         (css/rule
@@ -216,7 +215,7 @@
             "display"
             "block"
             "font-family"
-            "\"Courier New\",Courier,monospace"
+            "var(--font-mono)"
             "font-size"
             ".8rem"
             "color"
@@ -287,7 +286,7 @@
             "font-size"
             ".85rem"
             "font-family"
-            "Courier,monospace"))
+            "var(--font-mono)"))
         (css/rule
           ".emergency-banner a"
           (list "color" "var(--link)"))
@@ -500,7 +499,7 @@
           "pre,textarea,input[type=text],input[type=search],input:not([type])"
           (list
             "font-family"
-            "\"Courier New\",Courier,monospace"
+            "var(--font-mono)"
             "font-size"
             "1rem"
             "background"
@@ -602,7 +601,7 @@
             "padding"
             ".5rem"
             "font-family"
-            "\"Courier New\",Courier,monospace"))
+            "var(--font-mono)"))
         (css/rule
           "ul.actions"
           (list
@@ -2047,6 +2046,19 @@
             "width"
             "100%"))
         (css/rule "nav>a, .menu-drop" (list "flex" "0 0 auto"))
+        (css/rule
+          ".menu-drop-btn"
+          (list
+            "white-space"
+            "nowrap"
+            "display"
+            "inline-flex"
+            "align-items"
+            "center"
+            "justify-content"
+            "center"
+            "gap"
+            ".25rem"))
         (css/media
           "max-width:40rem"
           (list

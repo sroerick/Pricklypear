@@ -62,10 +62,16 @@
 (define theme/badge-bg "#ffe8a3")
 (define theme/badge-border "#8b6914")
 
-;; --- per-theme structural sheet hook (no-op) ---------------
-;; Ensure switching away from theme-as400 clears its CRT chrome.
+;; --- font stacks (paper: sans body, mono code) -------------------
+(define theme/font-sans
+  "Geneva,\"Lucida Grande\",\"DejaVu Sans\",Verdana,sans-serif")
+(define theme/font-mono
+  "\"Courier New\",\"Lucida Console\",Monaco,\"DejaVu Sans Mono\",monospace")
+
+;; --- per-theme structural sheet hook (no-op) ----------------------
+;; Themes are token-only (colors + fonts); no structural sheets.
 (define theme/extra
   (lambda
     ()
-    "No-op structural theme hook; returns an empty css sheet."
+    "No-op: themes are token-only."
     (css/sheet (list))))
