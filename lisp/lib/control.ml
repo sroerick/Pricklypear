@@ -74,8 +74,11 @@ let run_sync ~(prims : sync_prim_table) (thunk : unit -> 'a) : 'a =
                         (Interp_error
                            (Prim_error (name, "unregistered primitive", "prim_error")))
                   | Some fn ->
-                      try continue k (fn args)
-                      with exn -> discontinue k exn)
+                      (* Eval prim body then resume [k] once; a prim-body or
+                         continuation exception propagates to [exnc]. Wrapping
+                         [continue k (fn args)] in a try would [discontinue]
+                         an already-resumed [k]. *)
+                      continue k (fn args))
           | _ -> None)
     }
 
@@ -112,7 +115,10 @@ let run_with_rim ~(prims : sync_prim_table) (thunk : unit -> 'a) : 'a =
                                (Prim_error
                                   (name, "unregistered primitive", "prim_error")))
                       | Some fn ->
-                          (try continue k (fn args) with
-                           | exn -> discontinue k exn))
+                          (* Same prim-body/continuation split as
+                             [run_sync]: [direct_prims] usually means
+                             [Prim_call] never reaches here, but be
+                             correct if it does. *)
+                          continue k (fn args))
               | _ -> None)
         })
