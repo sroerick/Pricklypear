@@ -124,11 +124,6 @@
 (define theme/catalog
   (list
     (list
-      "phosphor"
-      "Phosphor"
-      "CRT green on near-black. The classic habitat look."
-      "theme")
-    (list
       "paper"
       "Paper"
       "Warm cream paper, dark ink, soft brown chrome. Easy on the eyes."
@@ -146,7 +141,7 @@
     (list
       "as400"
       "AS/400"
-      "CRT green on near-black — the original notes-tree terminal skin, now its own theme."
+      "CRT green on near-black — the original notes-tree terminal skin."
       "theme-as400")))
 
 (define theme/chrome
@@ -155,7 +150,7 @@
 (define theme/current
   (lambda
     ()
-    (guard (lambda (_) "phosphor") (as-str theme/name))))
+    (guard (lambda (_) "paper") (as-str theme/name))))
 
 (define theme/done-bg
   "#cfc")
@@ -183,6 +178,12 @@
 
 (define theme/extra
   (lambda () (css/sheet (list))))
+
+(define theme/font-mono
+  "\"Courier New\",\"Lucida Console\",Monaco,\"DejaVu Sans Mono\",monospace")
+
+(define theme/font-sans
+  "Geneva,\"Lucida Grande\",\"DejaVu Sans\",Verdana,sans-serif")
 
 (define theme/find
   (lambda
@@ -388,6 +389,10 @@
             theme/bg
             "--ink"
             theme/ink
+            "--font-sans"
+            theme/font-sans
+            "--font-mono"
+            theme/font-mono
             "--panel"
             theme/panel
             "--chrome"

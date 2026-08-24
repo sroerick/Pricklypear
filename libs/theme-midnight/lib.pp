@@ -7,9 +7,7 @@
 ;; WHITEPURPOSE: theme-midnight is THE WHITEOUT/PROBE THEME — every
 ;; core token is magenta so ANY element still painted by a hardcoded
 ;; hex (not var(--*)) glows magenta and exposes the leak. Real users
-;; pick midnight only to audit CSS theming coverage. It is registered
-;; as package "theme" in theme/catalog's midnight entry (fixed:
-;; was "theme", so "midnight" switched back to phosphor tokens).
+;; pick midnight only to audit CSS theming coverage.
 
 (define theme/bg
   "magenta")
@@ -68,10 +66,18 @@
 (define theme/badge-bg "magenta")
 (define theme/badge-border "magenta")
 
-;; --- per-theme structural sheet hook (no-op) ---------------
-;; Ensure switching away from theme-as400 clears its CRT chrome.
+;; --- font stacks (midnight: sans body, mono code) ----------------
+;; Colors are magenta on purpose (whiteout probe — see above). Fonts
+;; are real stacks so layout still reads while you hunt for leaks.
+(define theme/font-sans
+  "Geneva,\"Lucida Grande\",\"DejaVu Sans\",Verdana,sans-serif")
+(define theme/font-mono
+  "\"Courier New\",\"Lucida Console\",Monaco,\"DejaVu Sans Mono\",monospace")
+
+;; --- per-theme structural sheet hook (no-op) ----------------------
+;; Themes are token-only (colors + fonts); no structural sheets.
 (define theme/extra
   (lambda
     ()
-    "Install this theme's CSS sheet (empty for midnight)."
+    "No-op: themes are token-only."
     (css/sheet (list))))
