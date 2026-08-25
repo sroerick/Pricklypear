@@ -22,3 +22,8 @@
  (name free_vars_test)
  (modules free_vars_test)
  (libraries pricklypear-remote.lib pricklypear-lisp alcotest unix))
+
+(test
+ (name loop_test)
+ (modules loop_test)
+ (libraries pricklypear-remote.lib pricklypear-lisp alcotest eio eio_main yojson str unix))

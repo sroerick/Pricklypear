@@ -7,8 +7,9 @@
  (name pricklypear_remote_lib)
  (public_name pricklypear-remote.lib)
  (wrapped false)
- (modules proxy_rim remote http_transport placer def_cache lens_store free_vars)
+ (modules proxy_rim remote http_transport placer def_cache lens_store free_vars http_ui surface assets libs_source)
  (libraries
+  pricklypear-llm
   pricklypear-lisp
   pricklypear-pure-prims
   yojson
@@ -18,7 +19,50 @@
   eio_main
   httpun
   httpun-eio
+  gluten-eio
   tls-eio
   ca-certs-nss
   domain-name
   unix))
+
+;; Vendored htmx assets baked into the pp-remote binary, served at
+;; /assets/*.js by [Http_ui.serve_asset]. Same sources as the image +
+;; agent (image/static/*).
+(rule
+ (targets assets.ml)
+ (deps ../../image/static/htmx.min.js
+        ../../image/static/hx-multipart.js
+        ../../image/static/htmx-2-compat.min.js)
+ (action
+  (with-stdout-to assets.ml
+   (progn
+    (echo "(* Auto-generated: vendored htmx assets baked into the pp-remote binary. *)")
+    (echo "(* Do not edit by hand. *)")
+    (echo "let htmx_min = {asset|")
+    (cat ../../image/static/htmx.min.js)
+    (echo "|asset}")
+    (echo "let hx_multipart = {asset|")
+    (cat ../../image/static/hx-multipart.js)
+    (echo "|asset}")
+    (echo "let htmx_2_compat = {asset|")
+    (cat ../../image/static/htmx-2-compat.min.js)
+    (echo "|asset}")))))
+
+;; Embed the Nopales packages the pp-remote surface depends on
+;; (libs/html, libs/hyper) as OCaml quoted strings so the pp-remote
+;; binary is self-contained regardless of cwd. Sources: libs/html/lib.pp,
+;; libs/hyper/lib.pp. Mirrors agent/lib/dune.
+(rule
+ (targets libs_source.ml)
+ (deps ../../libs/html/lib.pp ../../libs/hyper/lib.pp)
+ (action
+  (with-stdout-to libs_source.ml
+   (progn
+    (echo "(* Auto-generated: embedded Nopales package sources. *)")
+    (echo "(* Do not edit by hand. *)")
+    (echo "let html_lib = {pp|")
+    (cat ../../libs/html/lib.pp)
+    (echo "|pp}")
+    (echo "let hyper_lib = {pp|")
+    (cat ../../libs/hyper/lib.pp)
+    (echo "|pp}")))))

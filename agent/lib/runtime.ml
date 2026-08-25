@@ -7,7 +7,10 @@
 open Pricklypear_lisp
 open Ast
 
-type registry_entry = { doc : string; run : Ast.value }
+(** Tool/command registry entry — alias of the shared loop's record
+    (llm/lib/loop.ml owns the definition now that agent + pp-remote
+    share the loop). *)
+type registry_entry = Loop.registry_entry
 
 (** Thin request context bound during route/dispatch (agent-route-table,
     hypermedia-harness.request-runner AGENT HOST BACKING). Carries ONLY
@@ -68,21 +71,10 @@ let value_to_json (v : Ast.value) : Yojson.Safe.t =
 
 (** Parse a plugin-produced value back to host JSON. VStr is treated
     as raw JSON first (dict prims produce JSON strings), else a plain
-    string. The reverse of value_to_json for event payloads. *)
-let rec json_of_value (v : Ast.value) : Yojson.Safe.t =
-  match v with
-  | Ast.VStr s -> (
-      try Yojson.Safe.from_string s
-      with Yojson.Json_error _ -> `String s)
-  | VInt i -> `Intlit (Int64.to_string i)
-  | VFloat f -> `Float f
-  | VBool b -> `Bool b
-  | VNil -> `Null
-  | VSymbol s -> `String s
-  | VList vs -> `List (List.map json_of_value vs)
-  | VLambda _ -> `String "<lambda>"
-  | VPrim n -> `String ("<prim " ^ n ^ ">")
-  | other -> `String (Reader.pp_value other)
+    string. The reverse of value_to_json for event payloads. Moved to
+    the shared loop (llm/lib/loop.ml owns it now that agent + pp-remote
+    share the loop); re-exported for host callers. *)
+let json_of_value = Loop.json_of_value
 
 let rec value_of_json (j : Yojson.Safe.t) : Ast.value =
   match j with
@@ -758,3 +750,22 @@ let is_builtin (t : t) (name : string) : bool =
   match Hashtbl.find_opt t.tools name with
   | Some { run = VPrim p; _ } -> String.length p > 10 && String.sub p 0 11 = "__builtin__"
   | _ -> false
+
+(** Host adapter for the shared agent turn loop (llm/lib/loop.ml): the
+    small [Loop.host] seam — live tool order, registry lookup, event
+    fire, tool-body eval, and serialized prim dispatch through the eval
+    lock + the agent's local host rim. This is the ONLY coupling the
+    loop has to this host; pp-remote supplies the same record over the
+    proxy rim (borge/remote-eval.borg agent-loop). *)
+let loop_host (t : t) : Loop.host =
+  {
+    Loop.tool_order = (fun () -> t.tool_order);
+    tool_entry = (fun name -> Hashtbl.find_opt t.tools name);
+    fire = fire t;
+    eval_tool_body = eval_tool_body t;
+    call_prim =
+      (fun name args ->
+         with_eval_lock t (fun () ->
+             Control.run_with_rim ~prims:t.prims (fun () ->
+                 (Hashtbl.find t.prims name) args)));
+  }

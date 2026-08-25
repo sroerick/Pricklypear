@@ -1,16 +1,20 @@
 (** Builtin tools (borge/agent.borg agent-loop): read, bash.
     Shapes follow pi's baseline so prompts/habits transfer. Builtin
     bodies are OCaml; plugin hooks (tool_call / tool_result events)
-    still fire around them, so plugins can block or rewrite. *)
+    still fire around them, so plugins can block or rewrite.
+
+    HOST-AGNOSTIC: tool bodies take an explicit [resolve_path] (each
+    host's path sandbox) and registration goes through an explicit
+    [register] callback — no Runtime.t / Remote.t coupling, so the
+    agent and pp-remote install the same builtin set. *)
 
 open Yojson.Safe.Util
 
 let max_read_bytes = 100_000 (* chars; no offset/limit in v0.0 *)
 
-let tool_read ~(rt : Runtime.t) (args : Yojson.Safe.t) : string =
-  ignore rt;
+let tool_read ~(resolve_path : string -> string) (args : Yojson.Safe.t) : string =
   let path = args |> member "path" |> to_string in
-  let resolved = Runtime.resolve_path path in
+  let resolved = resolve_path path in
   match
     (try
        let ic = open_in_bin resolved in
@@ -25,8 +29,7 @@ let tool_read ~(rt : Runtime.t) (args : Yojson.Safe.t) : string =
       Yojson.Safe.to_string
         (`Assoc [ ("path", `String resolved); ("content", `String s) ])
 
-let tool_bash ~(rt : Runtime.t) (args : Yojson.Safe.t) : string =
-  ignore rt;
+let tool_bash (args : Yojson.Safe.t) : string =
   let cmd = args |> member "command" |> to_string in
   let ic = Unix.open_process_in (cmd ^ " 2>&1") in
   let buf = Buffer.create 4096 in
@@ -81,9 +84,14 @@ let bash_schema : Yojson.Safe.t =
       ("required", `List [ `String "command" ]);
     ]
 
-let install ~(rt : Runtime.t) : unit =
-  Runtime.register_builtin_tool rt "read" ~run:(tool_read ~rt);
-  Runtime.register_builtin_tool rt "bash" ~run:(tool_bash ~rt)
+let install ~(resolve_path : string -> string)
+    ~(register : string -> (Yojson.Safe.t -> string) -> unit) : unit =
+  (* [register] is the host's builtin-tool registration (agent:
+     Runtime.register_builtin_tool; pp-remote: Remote.register_builtin_
+     tool) — same registry shape on both, so plugin hooks see builtins
+     identically. *)
+  register "read" (tool_read ~resolve_path);
+  register "bash" tool_bash
 
 let schema_of (_name : string) : Yojson.Safe.t option =
   match _name with

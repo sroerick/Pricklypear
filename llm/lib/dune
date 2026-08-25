@@ -1,0 +1,15 @@
+(library
+ (name pricklypear_llm)
+ (public_name pricklypear-llm)
+ (wrapped false)
+ (modules provider loop tools)
+ (libraries
+  pricklypear-lisp
+  pricklypear-common
+  yojson
+  eio
+  eio.unix
+  tls-eio
+  ca-certs-nss
+  domain-name
+  unix))

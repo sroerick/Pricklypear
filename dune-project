@@ -11,6 +11,10 @@
  (description "Shared OCaml types for Pricklypear (manifest, branch, protocol, auth_types)"))
 
 (package
+ (name pricklypear-llm)
+ (description "Host-agnostic LLM agent loop for Pricklypear: OpenAI-compatible provider transport + turn loop + builtin read/bash tool bodies. Linked by the agent (agent/) and pp-remote (remote/) hosts — see borge/agent.borg agent-loop + borge/remote-eval.borg agent-loop"))
+
+(package
  (name pricklypear-image)
  (description "Pricklypear image: a single OCaml unix binary — Lisp interpreter, REPL, htmx, Postgres"))
 
