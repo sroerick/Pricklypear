@@ -501,6 +501,96 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
            | None -> (Pricklypear_lisp.Ast.VStr "sync/plan: manifest must be [[path, hash], …]"))
       | _ -> (Pricklypear_lisp.Ast.VStr "sync/plan: need client-manifest [, base-manifest]"));
 
+  (* sync/push — apply a client two-way push for the caller's data
+     subtree (borge/local-first.borg sync, v1 two-way / data-only).
+     Takes the client (path, hash) manifest (same shape as sync/plan)
+     plus a list of (path, envelope-json) pairs for the bodies the
+     client holds. The server classifies its own data.u.<user>.*
+     manifest against the client's, then for each ClientOnly path
+     (server missing it) applies the client body through the typed-
+     boundary-validated datum write surface (Sync.apply_client_node).
+     Diverge paths are REPORTED, not auto-merged (the-glochids
+     conflict resolution is planned; v1 surfaces them honestly
+     rather than silently clobbering). ServerOnly paths are returned
+     so the client can pull them. Returns a JSON object:
+       {applied, client_only, server_only, diverge,
+        server_only_paths, diverge_paths, generation}
+     where generation is the new (branch, generation) coordinate to
+     pin as the next merge base. Code-lens sync (the b.<lens> code
+     paths) is NOT in scope here - it is the branch-pointer move
+     (promote/merge), a separate path; callers filter the manifest to
+     data paths first.
+       (sync/push client-manifest client-bodies)
+     client-manifest: [[path, hash], ...]  (same as sync/plan)
+     client-bodies:    [[path, envelope-json-str], ...] *)
+  register_crud "sync/push"
+    (fun args ->
+      match args with
+      | [ cm; bodies ] ->
+          (match parse_manifest cm, bodies with
+           | Some c, Pricklypear_lisp.Ast.VList body_pairs ->
+               let prefix = sync_user_prefix () in
+               (match Sync.server_manifest t.store ~prefix with
+                | None ->
+                    (Pricklypear_lisp.Ast.VStr "sync/push: no DB")
+                | Some server ->
+                    let r = Sync.classify server c in
+                    let cb =
+                      List.filter_map
+                        (function
+                         | Pricklypear_lisp.Ast.VList
+                             [ Pricklypear_lisp.Ast.VStr p;
+                               Pricklypear_lisp.Ast.VStr env ] ->
+                             (try Some (p, Yojson.Safe.from_string env)
+                              with _ -> None)
+                         | _ -> None)
+                        body_pairs
+                    in
+                    let applied =
+                      List.fold_left
+                        (fun n (p, _) ->
+                          match List.assoc_opt p cb with
+                          | Some env ->
+                              (match Sync.apply_client_node t.store ~env with
+                               | Ok () -> n + 1
+                               | Error _ -> n)
+                          | None -> n)
+                        0 r.client_only
+                    in
+                    let bid = Store.current_branch_id t.store in
+                    let gen =
+                      match Store.current_generation t.store ~branch_id:bid with
+                      | Some n -> n
+                      | None -> 0L
+                    in
+                    let json =
+                      Yojson.Safe.to_string
+                        (`Assoc
+                           [ ("applied", `Int applied)
+                           ; ("client_only",
+                              `Int (List.length r.client_only))
+                           ; ("server_only",
+                              `Int (List.length r.server_only))
+                           ; ("diverge", `Int (List.length r.diverge))
+                           ; ("server_only_paths",
+                              `List (List.map
+                                       (fun (p, _) -> `String p)
+                                       (Sync.normalize r.server_only)))
+                           ; ("diverge_paths",
+                              `List (List.map
+                                       (fun (p, _) -> `String p)
+                                       (Sync.normalize r.diverge)))
+                           ; ("generation",
+                              `String (Int64.to_string gen))
+                           ])
+                    in
+                    (Pricklypear_lisp.Ast.VStr json))
+           | _ ->
+               (Pricklypear_lisp.Ast.VStr
+                  "sync/push: args must be (client-manifest client-bodies)"))
+      | _ ->
+          (Pricklypear_lisp.Ast.VStr
+             "sync/push: need (client-manifest client-bodies)"));
 
 
   (* data lens operations (one-tree.borg branching-interaction, 2026-08-23

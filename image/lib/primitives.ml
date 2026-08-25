@@ -414,6 +414,7 @@ let prim_summary (name : string) : string =
   | "lens/fork" -> "create a lens branch as a named child of the checked-out branch (local-first lens-model; <owner>/lens-<device>[-<date>])"
   | "replication/unit" -> "materialize the authorized-read subtree (replication unit): data.u.<user>.* + data.shared.* + code lens + branch ancestry → JSON manifest"
   | "sync/plan" -> "server-side sync reconcile: send a client (path,hash) manifest [+ base manifest] → JSON reconciliation report / three-way merge plan (local-first sync)"
+  | "sync/push" -> "apply a client two-way push (manifest + bodies) for the caller's data.u.<user>.* subtree; returns {applied, server_only_paths, diverge_paths, generation} (local-first sync v1; diverge reported, not auto-merged)"
   | "tree/upsert" -> "upsert folder|note|heading at path"
   | "tree/delete" -> "delete path [, recursive]"
   | "tree/move" -> "move subtree old-path → new-path"

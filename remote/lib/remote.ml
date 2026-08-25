@@ -175,7 +175,11 @@ let register_proxy_prims (t : t) : unit =
          current-branch (branch namespace) + gen-now (migration-017
          branch_generations = the tree-time gen coordinate — one
          counter, one namespace). Both are proxyable read prims. *)
-    ; "current-branch"; "gen-now" ]
+    ; "current-branch"; "gen-now"
+      (* local-first sync prims (borge/local-first.borg sync). sync/plan
+         classifies; sync/push applies a two-way data push. Proxied so
+         a lens client can drive a sync round. *)
+    ; "sync/plan"; "sync/push" ]
 
 (** Fetch the stored source for [name] by proxying the [function-source]
     read prim (registered on the image as a plain, proxyable prim — see

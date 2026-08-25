@@ -52,6 +52,7 @@ let () =
   let lens_pull = ref [] in
   let lens_pull_tree = ref [] in
   let lens_pull_data = ref [] in
+  let sync_flag = ref false in
   let anon _ = () in
   let speclist =
     Arg.align
@@ -68,11 +69,12 @@ let () =
         ("--lens-pull", Arg.String (fun s -> lens_pull := s :: !lens_pull), "NAME fetch def from image into lens (repeatable)");
         ("--lens-pull-tree", Arg.String (fun s -> lens_pull_tree := s :: !lens_pull_tree), "NAME fetch def + transitive deps into lens (repeatable)");
         ("--lens-pull-data", Arg.String (fun s -> lens_pull_data := s :: !lens_pull_data), "PREFIX fetch data subtree into lens: 'user' | 'shared' | path (repeatable)");
+        ("--sync", Arg.Unit (fun () -> sync_flag := true), "push local lens data up to the image (two-way, data-only v1) then pull server-only paths; records the new (branch, generation) snapshot");
       ]
   in
   Arg.parse speclist anon
     "pp-remote [--image URL] [--user U --pass P] [-e EXPR]\n\
-     \                  [--lens DIR] [--lens-pull NAME] ...";
+     \                  [--lens DIR] [--lens-pull NAME] ... [--sync]";
   (* TLS (tls-eio) needs a seeded RNG before any HTTPS proxy call;
      mock transports in the tests never hit TLS, so this slipped.
      Mirage_crypto_rng_unix.use_default wires /dev/urandom + reseeding. *)
@@ -266,6 +268,102 @@ let () =
   (match lens_opt with
    | None -> ()
    | Some lens -> Remote.register_lens_reads t ~lens);
+
+  (* ---- --sync: push local lens data up to the image (borge/local-first.borg
+     sync, v1 two-way / data-only). Build the data manifest + bodies from
+     the lens substrate, call sync/push, pull any server-only paths, and
+     pin the new (branch, generation) snapshot as the next merge base. *)
+  (if !sync_flag then begin
+    match lens_opt with
+    | None ->
+        prerr_endline "--sync requires --lens DIR"; exit 2
+    | Some lens ->
+        let user_prefix = "data.u." ^ Lens_store.enc_label lens.owner in
+        let plen = String.length user_prefix in
+        let is_data p =
+          String.length p >= plen && String.sub p 0 plen = user_prefix
+        in
+        let full = Lens_store.node_manifest ~lens in
+        let data_manifest = List.filter (fun (p, _) -> is_data p) full in
+        let manifest_v =
+          Ast.VList
+            (List.map
+               (fun (p, h) -> Ast.VList [ Ast.VStr p; Ast.VStr h ])
+               data_manifest)
+        in
+        let bodies_v =
+          Ast.VList
+            (List.filter_map
+               (fun (p, _) ->
+                 match Lens_store.get ~lens p with
+                 | Some env -> Some (Ast.VList [ Ast.VStr p; Ast.VStr env ])
+                 | None -> None)
+               data_manifest)
+        in
+        Printf.eprintf "[sync] pushing %d data node(s) to %s\n%!"
+          (List.length data_manifest) cfg.base_url;
+        (match transport "sync/push" [ manifest_v; bodies_v ] with
+         | Ok (Ast.VStr json) ->
+             (match Yojson.Safe.from_string json with
+              | `Assoc kv ->
+                  let int k =
+                    match List.assoc_opt k kv with
+                    | Some (`Int n) -> n | _ -> 0
+                  in
+                  let str k =
+                    match List.assoc_opt k kv with
+                    | Some (`String s) -> s | _ -> ""
+                  in
+                  let strs k =
+                    match List.assoc_opt k kv with
+                    | Some (`List xs) ->
+                        List.filter_map
+                          (function `String s -> Some s | _ -> None) xs
+                    | _ -> []
+                  in
+                  let applied = int "applied" in
+                  let server_only = strs "server_only_paths" in
+                  let diverge = strs "diverge_paths" in
+                  let gen_str = str "generation" in
+                  let gen =
+                    try Int64.of_string gen_str with _ -> 0L
+                  in
+                  Printf.eprintf
+                    "[sync] applied=%d  server_only=%d  diverge=%d  gen=%s\n%!"
+                    applied (List.length server_only) (List.length diverge)
+                    gen_str;
+                  List.iter
+                    (fun p -> prerr_endline ("[sync] DIVERGE: " ^ p))
+                    diverge;
+                  (* pull server-only paths so the lens catches up to the
+                     server's side of the world in the same round *)
+                  List.iter
+                    (fun p ->
+                      match transport "tree/get" [ Ast.VStr p ] with
+                      | Ok (Ast.VStr env) ->
+                          ignore (Lens_store.materialize ~lens env);
+                          Printf.eprintf "[sync] pulled %s\n%!" p
+                      | Ok _ -> ()
+                      | Error e ->
+                          Printf.eprintf "[sync] pull %s: %s\n%!"
+                            p (Printexc.to_string e))
+                    server_only;
+                  (* pin the new (branch, generation) snapshot as the next
+                     merge base — the coordinate a later sync keys on. *)
+                  let branch =
+                    match (try transport "current-branch" [] with _ -> Error (Failure "offline")) with
+                    | Ok (Ast.VStr b) -> b | _ -> ""
+                  in
+                  Lens_store.record_snapshot ~lens ~branch ~generation:gen;
+                  Printf.eprintf "[sync] done; snapshot pinned (branch=%s, gen=%s)\n%!"
+                    branch gen_str
+              | _ -> prerr_endline "[sync] bad response shape")
+         | Ok _ -> prerr_endline "[sync] unexpected return value"
+         | Error e ->
+             Printf.eprintf "[sync] failed: %s\n%!" (Printexc.to_string e);
+             exit 1)
+  end);
+
   let eval_print src =
     try
       let v = Remote.eval t src in
