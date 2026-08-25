@@ -17,7 +17,14 @@
       --pass PASS    basic-auth pass (default: PP_PASS / admin)
       -e EXPR        eval one expr and exit (repeatable)
       -p EXPR        alias of -e (pipe mode)
-*)
+      --model NAME   provider model (default: AGENT_MODEL / GLM-4.7-Flash)
+      --base-url URL provider base URL (default: AGENT_BASE_URL / synthetic.new)
+      --mock-script FILE  canned provider replies (test/demo of /chat)
+
+    The LLM provider runs LOCALLY (borge/remote-eval.borg agent-loop):
+    the API key is a value read from AGENT_API_KEY (same env the agent
+    reads); only the data plane (DB prims inside tool bodies) crosses
+    to the image. *)
 
 open Pricklypear_lisp
 
@@ -25,6 +32,142 @@ let getenv name ~default =
   match Sys.getenv_opt name with
   | Some s when s <> "" -> s
   | Some _ | None -> default
+
+(* Auto-load ./.env if present (KEY=VALUE or `export KEY=VALUE` lines),
+   same as the agent binary — AGENT_API_KEY etc. land without sourcing.
+   Failures are silent (file optional). *)
+let load_dotenv () : unit =
+  let path = ".env" in
+  match open_in path with
+  | exception _ -> ()
+  | ic ->
+    (try
+       while true do
+         let line = String.trim (input_line ic) in
+         if line = "" || line.[0] = '#' then ()
+         else begin
+           let line =
+             if String.length line > 7 && String.sub line 0 7 = "export "
+             then String.trim (String.sub line 7 (String.length line - 7))
+             else line
+           in
+           match String.index_opt line '=' with
+           | Some i ->
+               let k = String.trim (String.sub line 0 i) in
+               let v_raw = String.trim (String.sub line (i + 1) (String.length line - i - 1)) in
+               let v =
+                 let n = String.length v_raw in
+                 if n >= 2
+                    && (v_raw.[0] = '"' && v_raw.[n - 1] = '"'
+                        || v_raw.[0] = '\'' && v_raw.[n - 1] = '\'')
+                 then String.sub v_raw 1 (n - 2)
+                 else v_raw
+               in
+               Unix.putenv k v
+           | None -> ()
+         end
+       done
+     with End_of_file -> ());
+    close_in ic
+
+(* Mock provider: reads a JSON script of turns (same shape as the
+   agent's --mock-script), consumed in order. Mirrors the real
+   provider's streaming contract (fires the reply's text as an
+   on_delta) so the loop path is identical, canned or live. *)
+let parse_mock_script script_path : Provider.reply list =
+  let open Yojson.Safe.Util in
+  let j = Yojson.Safe.from_file script_path in
+  j |> to_list
+  |> List.map (fun t ->
+         let text = t |> member "text" |> to_string_option |> Option.value ~default:"" in
+         let calls =
+           match t |> member "calls" with
+           | `List cs ->
+               List.map
+                 (fun c ->
+                   {
+                     Provider.id = c |> member "id" |> to_string;
+                     name = c |> member "name" |> to_string;
+                     input = c |> member "input";
+                   })
+                 cs
+           | _ -> []
+         in
+         {
+           Provider.text;
+           calls;
+           stop_reason = "stop";
+           raw = `Assoc [ ("role", `String "assistant"); ("content", `String text) ];
+         })
+
+let mock_complete ~(env : Eio_unix.Stdenv.base) ~sw ~cfg ~messages ~tools
+    ~on_delta script_cell
+    : (Provider.reply, string) Result.t =
+  ignore env;
+  ignore sw;
+  ignore cfg;
+  ignore tools;
+  match !script_cell with
+  | [] ->
+      on_delta (Provider.Text "");
+      on_delta Provider.Done;
+      Ok { Provider.text = ""; calls = []; stop_reason = "end_turn"; raw = `Null }
+  | r :: rest ->
+      script_cell := rest;
+      ignore messages;
+      if r.Provider.text <> "" then on_delta (Provider.Text r.Provider.text);
+      on_delta Provider.Done;
+      Ok r
+
+(* One-shot harness identity for the system prompt (pp-remote variant
+   of the agent's harness_context): told up front so the model does not
+   probe the OS or leak secrets discovering them. *)
+let run_captured (cmd : string) : string =
+  try
+    let ic = Unix.open_process_in cmd in
+    let out = String.trim (In_channel.input_all ic) in
+    match Unix.close_process_in ic with
+    | Unix.WEXITED 0 -> out
+    | _ -> ""
+  with _ -> ""
+
+let harness_context ~(model : string) ~(base_url : string) ~(image : string)
+    ~(user : string) : string =
+  let host = try Unix.gethostname () with _ -> "?" in
+  let uname = run_captured "uname -srm" in
+  let cwd = Sys.getcwd () in
+  let tm = Unix.localtime (Unix.gettimeofday ()) in
+  let date =
+    Printf.sprintf "%04d-%02d-%02d %02d:%02d"
+      (tm.Unix.tm_year + 1900) (tm.Unix.tm_mon + 1) tm.Unix.tm_mday
+      tm.Unix.tm_hour tm.Unix.tm_min
+  in
+  Printf.sprintf
+    "You are the pp-remote chat agent: the LLM turn runs LOCALLY on this \n\
+     machine while Nopales evaluation runs against a remote Pricklypear \n\
+     image over a proxy rim. The human operator talks to you through the \n\
+     browser chat surface this process serves. You run as ONE unix process \n\
+     directly on the operator's machine -- no container, no sandbox; your \n\
+     commands affect the operator's real system.\n\
+     \n\
+     Harness facts (told to you here; do NOT probe the OS to discover them):\n\
+     - host: %s (%s)\n\
+     - cwd: %s -- the operator's working directory; treat as project root\n\
+     - date: %s (operator local)\n\
+     - model: %s via %s\n\
+     - image: %s (basic-auth user %s) -- Nopales DB prims (get/create/\n\
+       rows/tree/*...) proxy there per call; whoami/current-author are\n\
+       server-asserted\n\
+     - tools: read, bash, plus Nopales plugin tools registered with\n\
+       (register-tool ...) -- a plugin tool's prim calls cross the proxy rim\n\
+     \n\
+     Conduct:\n\
+     - Prefer the read and bash tools. Be terse.\n\
+     - For questions about the project, read AGENTS.md/docs in cwd -- do not \n\
+       probe the OS for facts listed above.\n\
+     - Never print secret VALUES (env vars ending in _API_KEY, _TOKEN, \n\
+       _SECRET); reference them by name. Avoid full `env` dumps."
+    host (if uname = "" then "?" else uname) cwd date model base_url image user
 
 (** ---- local-first lens (borge/local-first.borg Phase 1) ----
 
@@ -53,6 +196,11 @@ let () =
   let lens_pull_tree = ref [] in
   let lens_pull_data = ref [] in
   let sync_flag = ref false in
+  let serve_flag = ref false in
+  let open_browser = ref false in
+  let model = ref None in
+  let base_url = ref None in
+  let mock_script = ref None in
   let anon _ = () in
   let speclist =
     Arg.align
@@ -70,15 +218,25 @@ let () =
         ("--lens-pull-tree", Arg.String (fun s -> lens_pull_tree := s :: !lens_pull_tree), "NAME fetch def + transitive deps into lens (repeatable)");
         ("--lens-pull-data", Arg.String (fun s -> lens_pull_data := s :: !lens_pull_data), "PREFIX fetch data subtree into lens: 'user' | 'shared' | path (repeatable)");
         ("--sync", Arg.Unit (fun () -> sync_flag := true), "push local lens data up to the image (two-way, data-only v1) then pull server-only paths; records the new (branch, generation) snapshot");
+        ("--serve", Arg.Set serve_flag, "serve the Nopales-authored HTML surface (chat + eval box + /code lens browser) on 127.0.0.1:random-port until Ctrl-C");
+        ("--open", Arg.Set open_browser, "with --serve: best-effort browser launch");
+        ("--model", Arg.String (fun s -> model := Some s), "NAME provider model (AGENT_MODEL)");
+        ("--base-url", Arg.String (fun s -> base_url := Some s), "URL provider base URL (AGENT_BASE_URL)");
+        ("--mock-script", Arg.String (fun s -> mock_script := Some s), "FILE canned provider replies (test/demo of /chat)");
       ]
   in
   Arg.parse speclist anon
     "pp-remote [--image URL] [--user U --pass P] [-e EXPR]\n\
-     \                  [--lens DIR] [--lens-pull NAME] ... [--sync]";
+     \                  [--lens DIR] [--lens-pull NAME] ... [--sync] [--serve [--open]]\n\
+     \                  [--model NAME] [--base-url URL] [--mock-script FILE]";
+  load_dotenv ();
   (* TLS (tls-eio) needs a seeded RNG before any HTTPS proxy call;
      mock transports in the tests never hit TLS, so this slipped.
      Mirage_crypto_rng_unix.use_default wires /dev/urandom + reseeding. *)
   Mirage_crypto_rng_unix.use_default ();
+  (* Random.bits drives multipart boundaries (agent) + future stream ids;
+     without self_init every process run repeats the same sequence. *)
+  Random.self_init ();
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let cfg : Http_transport.cfg =
@@ -264,10 +422,72 @@ let () =
   in
   let t = Remote.make ~transport ~remote_eval ?lens_lookup () in
   (* Override [get] / [tree/get] with lens-local handlers so working-set
-     reads resolve from the substrate (offline-first data path). *)
+     reads resolve from the substrate (offline-first data path), and pin
+     the lens record so lens/list + lens/read surface prims browse it. *)
   (match lens_opt with
    | None -> ()
-   | Some lens -> Remote.register_lens_reads t ~lens);
+   | Some lens ->
+       Remote.register_lens_reads t ~lens;
+       Remote.set_lens t lens);
+
+  (* Boot-load the Nopales surface (libs/html + libs/hyper + the
+     eval/code route-table handlers) so the HTML surface is
+     Nopales-authored and redefinable live (borge/remote-eval.borg
+     surfaces). The route + soup + pure prims are registered in
+     [Remote.make]; [Surface.load] runs the embedded source under the
+     proxy rim. *)
+  Surface.load ~rt:t;
+
+  (* Install the builtin agent tools (read/bash — llm/lib/tools.ml) into
+     the client's tool registry so the chat loop has them. Path
+     resolution is the client's sandbox (same refuse-".." posture as the
+     agent). *)
+  Tools.install ~resolve_path:Remote.resolve_path
+    ~register:(fun name run -> Remote.register_builtin_tool t name ~run);
+
+  (* ---- --serve: serve the Nopales-authored HTML surface (chat + eval
+     box + /code lens browser) on 127.0.0.1:random until Ctrl-C. The
+     chat turn runs the SHARED agent loop (llm/) over this client: the
+     provider call is local (API key from AGENT_API_KEY / --mock-script),
+     tool bodies eval under the proxy rim so DB prims cross to the
+     image. Mutually exclusive with --sync / REPL / -e. *)
+  (if !serve_flag then begin
+    let model_name =
+      Option.value !model ~default:(getenv "AGENT_MODEL" ~default:"hf:zai-org/GLM-4.7-Flash")
+    in
+    let provider_base =
+      Option.value !base_url
+        ~default:(getenv "AGENT_BASE_URL" ~default:"https://api.synthetic.new/openai/v1")
+    in
+    let pcfg : Provider.cfg =
+      {
+        base_url = provider_base;
+        api_key = getenv "AGENT_API_KEY" ~default:"";
+        model = model_name;
+        system =
+          getenv "AGENT_SYSTEM"
+            ~default:(harness_context ~model:model_name ~base_url:provider_base
+                        ~image:cfg.base_url ~user:cfg.user);
+      }
+    in
+    (if pcfg.Provider.api_key = "" && !mock_script = None then
+       Printf.eprintf
+         "[chat] AGENT_API_KEY not set — /chat will fail provider calls; set \n\
+          AGENT_API_KEY (or AGENT_BASE_URL/AGENT_MODEL) or pass --mock-script\n%!");
+    let script_cell =
+      ref (Option.map parse_mock_script !mock_script |> Option.value ~default:[])
+    in
+    let complete =
+      match !mock_script with
+      | Some _ ->
+          (fun ~env ~sw ~cfg ~messages ~tools ~on_delta ->
+             mock_complete ~env ~sw ~cfg ~messages ~tools ~on_delta script_cell)
+      | None -> Provider.Openai.complete
+    in
+    Http_ui.serve ~env ~sw ~rt:t ~cfg:pcfg ~complete
+      ~open_browser:!open_browser print_endline;
+    exit 0
+  end);
 
   (* ---- --sync: push local lens data up to the image (borge/local-first.borg
      sync, v1 two-way / data-only). Build the data manifest + bodies from

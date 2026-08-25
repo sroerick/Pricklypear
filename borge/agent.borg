@@ -123,7 +123,7 @@
   (subsection agent-loop
    (doc "The minimal agent turn loop and tool registry")
    (status partial)
-   (implements agent/lib/loop.ml agent/lib/provider.ml agent/lib/tools.ml common/lib/llm_codec.ml)
+   (implements llm/lib/loop.ml llm/lib/provider.ml llm/lib/tools.ml common/lib/llm_codec.ml)
    (verify
     (test "a mock provider emitting one tool call round-trips: tool executes, result message is appended, loop makes exactly one follow-up model call")
     (test "budget: the loop stops after a configurable max turns and reports rather than spinning")
@@ -131,6 +131,14 @@
     (smoke "openai-compat provider streams a real reply end-to-end when AGENT_API_KEY is set"))
    (details
     (doc (|
+         HOST SEAM. loop/provider/tools live in the shared llm/ package
+         (pricklypear-llm) factored over a small [Loop.host] record
+         (tool_order, tool_entry, fire, eval_tool_body, call_prim);
+         agent/lib/runtime.ml supplies Runtime.loop_host. The same
+         library is linked by pp-remote, which supplies Remote.loop_host
+         over the proxy rim — ONE loop, two hosts (remote-eval.borg
+         agent-loop owns the client half).
+
          SHAPE. One assistant turn = one streaming provider call. If
          the reply contains tool calls, execute them (serialized eval
          mutex held only during each tool's Nopales work), append

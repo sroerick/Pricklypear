@@ -1,0 +1,587 @@
+(** pp-remote HTML surface server (borge/remote-eval.borg surfaces +
+    agent-loop).
+
+    A local HTTP server (Httpun_eio) bound to 127.0.0.1 on a random
+    port. The pages are NOPALES-AUTHORED htmx fragments on the client
+    route table (rendered by Nopales via [libs/html]), dispatched
+    in-process through [Remote.dispatch_route]. The eval POST handler
+    is OCaml (it calls [Remote.eval] and renders the result via the
+    Nopales [eval/result] template).
+
+    The CHAT TURN is the shared agent loop running on THIS host
+    (borge/remote-eval.borg agent-loop): provider call local (the API
+    key is a value from the environment), tool bodies eval under the
+    proxy rim (DB prims cross to /api/prim), streaming as
+    multipart/mixed htmx fragments — the same emitter + Nopales
+    fragment templates the agent serves (chat/user-bubble,
+    chat/turn-open, chat/think-open, chat/think-token, chat/tool-open,
+    chat/tool-line, chat/tool-done, chat/token, chat/error).
+
+    Bootstrap/asset plumbing stays OCaml (per the surfaces scope): the
+    vendored htmx assets are baked into the binary ([Assets]) and
+    served at /assets/*.js. Sibling of agent/lib/http_ui.ml: the HTTP
+    plumbing + GET dispatch + asset serving mirror it; the chat stream
+    drives Remote.t instead of Runtime.t. *)
+
+open Pricklypear_lisp
+
+(* ---- HTML escaping (status/error pages only; surfaces are Nopales) ---- *)
+
+let esc (s : string) : string =
+  let buf = Buffer.create (String.length s + 16) in
+  String.iter
+    (fun c ->
+      match c with
+      | '<' -> Buffer.add_string buf "&lt;"
+      | '>' -> Buffer.add_string buf "&gt;"
+      | '&' -> Buffer.add_string buf "&amp;"
+      | '"' -> Buffer.add_string buf "&quot;"
+      | c -> Buffer.add_char buf c)
+    s;
+  Buffer.contents buf
+
+let status_page (title : string) (body : string) : string =
+  Printf.sprintf
+    {|<!doctype html><html><head><meta charset="utf-8"><title>%s</title>
+<style>body{background:#0f1117;color:#d8dee9;font-family:ui-monospace,monospace;padding:1.5rem}a{color:#7aa2f7}</style>
+</head><body>%s</body></html>|}
+    (esc title) body
+
+(* ---- HTTP plumbing ---- *)
+
+let read_body (reqd : Httpun.Reqd.t) : string =
+  let body = Httpun.Reqd.request_body reqd in
+  let promise, resolver = Eio.Promise.create () in
+  let buf = Buffer.create 1024 in
+  let rec sched () =
+    Httpun.Body.Reader.schedule_read body
+      ~on_eof:(fun () -> Eio.Promise.resolve resolver (Buffer.contents buf))
+      ~on_read:(fun bs ~off ~len ->
+        Buffer.add_string buf (Bigstringaf.substring bs ~off ~len);
+        sched ())
+  in
+  sched ();
+  Eio.Promise.await promise
+
+let respond_text (reqd : Httpun.Reqd.t) ~(status : Httpun.Status.t)
+    ~(content_type : string) ~(body : string) : unit =
+  let headers =
+    Httpun.Headers.of_list
+      [
+        ("content-type", content_type);
+        ("content-length", string_of_int (String.length body));
+      ]
+  in
+  let _body_w =
+    Httpun.Reqd.respond_with_string reqd
+      (Httpun.Response.create ~headers status)
+      body
+  in
+  ()
+
+let respond_html (reqd : Httpun.Reqd.t) ~(status : Httpun.Status.t)
+    ~(body : string) : unit =
+  respond_text reqd ~status ~content_type:"text/html; charset=utf-8" ~body
+
+(* ---- query-string + form parsing (route params + eval field) ---- *)
+
+let url_decode (s : string) : string =
+  let buf = Buffer.create (String.length s) in
+  let len = String.length s in
+  let rec go i =
+    if i >= len then Buffer.contents buf
+    else if i + 2 < len && s.[i] = '%' then (
+      (try
+         Buffer.add_char buf
+           (Char.chr (int_of_string ("0x" ^ String.sub s (i + 1) 2)))
+       with _ -> ());
+      go (i + 3))
+    else (
+      Buffer.add_char buf (if s.[i] = '+' then ' ' else s.[i]);
+      go (i + 1))
+  in
+  go 0
+
+let parse_query (q : string) : (string * string) list =
+  if q = "" then []
+  else
+    List.filter_map
+      (fun kv ->
+        match String.index_opt kv '=' with
+        | Some i ->
+            let k = String.sub kv 0 i in
+            let v = String.sub kv (i + 1) (String.length kv - i - 1) in
+            Some (url_decode k, url_decode v)
+        | None -> Some (url_decode kv, ""))
+      (String.split_on_char '&' q)
+
+(* url-decode a form field value (htmx posts application/x-www-form-urlencoded). *)
+let form_field (body : string) (name : string) : string =
+  let prefix = name ^ "=" in
+  let rec find i =
+    if i >= String.length body then None
+    else if i = 0 || body.[i - 1] = '&' then
+      if String.length body - i >= String.length prefix
+         && String.sub body i (String.length prefix) = prefix
+      then
+        let rest_start = i + String.length prefix in
+        let rest_end =
+          match String.index_from_opt body rest_start '&' with
+          | Some j -> j | None -> String.length body
+        in
+        Some (String.sub body rest_start (rest_end - rest_start))
+      else find (i + 1)
+    else find (i + 1)
+  in
+  match find 0 with None -> "" | Some v -> url_decode v
+
+(* ---- GET route dispatch through the client route table ---- *)
+
+let dispatch_get (rt : Remote.t) (reqd : Httpun.Reqd.t) (target : string)
+    : unit =
+  let path, query =
+    match String.index_opt target '?' with
+    | Some i ->
+        ( String.sub target 0 i,
+          String.sub target (i + 1) (String.length target - i - 1) )
+    | None -> (target, "")
+  in
+  let params = parse_query query in
+  match Remote.lookup_route ~rt path with
+  | None ->
+      respond_html reqd ~status:`Not_found
+        ~body:(status_page "404" (Printf.sprintf "<p>no route %s</p>" (esc path)))
+  | Some handler ->
+      (try
+         let v =
+           Remote.dispatch_route ~rt ~handler ~method_:"GET" ~path ~params
+             ~headers:[] ~body:""
+         in
+         let html =
+           match v with Ast.VStr s -> s | other -> Pricklypear_lisp.Reader.pp_value other
+         in
+         respond_html reqd ~status:`OK ~body:html
+       with exn ->
+         respond_html reqd ~status:`Internal_server_error
+           ~body:(status_page "error"
+                    (Printf.sprintf "<p>dispatch error: %s</p>"
+                       (esc (Printexc.to_string exn)))))
+
+(* ---- static assets (vendored, baked into the binary) ---- *)
+
+let serve_asset (reqd : Httpun.Reqd.t) (name : string) : unit =
+  let body, ct =
+    match name with
+    | "htmx.min.js" -> (Assets.htmx_min, "application/javascript; charset=utf-8")
+    | "htmx-2-compat.min.js" -> (Assets.htmx_2_compat, "application/javascript; charset=utf-8")
+    | "hx-multipart.js" -> (Assets.hx_multipart, "application/javascript; charset=utf-8")
+    | _ -> ("", "application/octet-stream")
+  in
+  if body = "" then
+    respond_html reqd ~status:`Not_found
+      ~body:(status_page "404" (Printf.sprintf "<p>no asset %s</p>" (esc name)))
+  else respond_text reqd ~status:`OK ~content_type:ct ~body
+
+(* ---- POST /eval: OCaml handler -> Remote.eval -> Nopales template ---- *)
+
+let handle_eval (rt : Remote.t) (reqd : Httpun.Reqd.t) : unit =
+  let body_raw = read_body reqd in
+  let expr = form_field body_raw "expr" in
+  let result =
+    if String.trim expr = "" then "(no input)"
+    else
+      try
+        let v = Remote.eval rt expr in
+        Pricklypear_lisp.Reader.pp_value v
+      with
+      | Ast.Interp_error ie -> Ast.pp_interp_error ie
+      | Reader.Reader_error (msg, ln, col) ->
+          Printf.sprintf "read error %d:%d %s" ln col msg
+      | exn -> Printf.sprintf "error: %s" (Printexc.to_string exn)
+  in
+  (* Render the result fragment via the Nopales template so it is
+     redefinable live; fall back to a plain <pre> if the template is
+     unbound or errors. *)
+  let html =
+    match Remote.call_template ~rt "eval/result" [ Ast.VStr expr; Ast.VStr result ] with
+    | Some h -> h
+    | None ->
+        Printf.sprintf "<div class=\"expr\">$ %s</div><pre>%s</pre>"
+          (esc expr) (esc result)
+  in
+  respond_html reqd ~status:`OK ~body:html
+
+(* ---- chat turn: the shared agent loop on this host (multipart/mixed) ---- *)
+
+type server_state = {
+  history : Provider.message list ref;
+  complete :
+    env:Eio_unix.Stdenv.base ->
+    sw:Eio.Switch.t ->
+    cfg:Provider.cfg ->
+    messages:Provider.message list ->
+    tools:Provider.tool_def list ->
+    on_delta:(Provider.delta -> unit) ->
+    (Provider.reply, string) Result.t;
+  rt : Remote.t;
+  cfg : Provider.cfg;
+}
+
+let is_closed_writer_exn = function
+  | Failure msg ->
+      String.equal msg "cannot write to closed writer"
+      || String.starts_with ~prefix:"cannot write to closed writer" msg
+  | _ -> false
+
+let close_writer_quiet (body : Httpun.Body.Writer.t) : unit =
+  (try Httpun.Body.Writer.close body
+   with exn when is_closed_writer_exn exn -> ())
+
+(* Bail out of the multipart drain loop when the client disconnects. *)
+exception Peer_gone
+
+(* One multipart part frame + flush. Mirrors the image's mp_write_part:
+   --boundary + Content-Type: text/html + optional HX-Target/HX-Swap +
+   blank + html. Returns `Peer_gone on closed writer so the drain loop
+   stops cleanly.
+
+   WRITE WATCHDOG: a client that disconnects mid-stream leaves the
+   socket in CLOSE-WAIT — writes keep SUCCEEDING into the kernel send
+   buffer until it fills, then the write/flush blocks FOREVER (and on
+   some teardowns gluten stops servicing writes without closing the
+   Body.Writer, so the flush callback never fires either way). Race
+   the whole write path against a 5s sleep: a healthy part write
+   completes in milliseconds; a timeout means the connection is gone
+   → Peer_gone. (Same fix in agent/lib/http_ui.ml, which had the same
+   latent hang.) *)
+let mp_write_part ~(env : Eio_unix.Stdenv.base) (body : Httpun.Body.Writer.t)
+    ~boundary ?(target : string option) ?(swap : string option)
+    (html : string) : [ `Ok | `Peer_gone ] =
+  let buf = Buffer.create 128 in
+  Buffer.add_string buf ("--" ^ boundary ^ "\r\n");
+  Buffer.add_string buf "Content-Type: text/html; charset=utf-8\r\n";
+  (match target with Some t -> Buffer.add_string buf ("HX-Target: " ^ t ^ "\r\n") | None -> ());
+  (match swap with Some s -> Buffer.add_string buf ("HX-Swap: " ^ s ^ "\r\n") | None -> ());
+  Buffer.add_string buf "\r\n";
+  Buffer.add_string buf html;
+  Buffer.add_string buf "\r\n";
+  let chunk = Buffer.contents buf in
+  let write_and_flush () =
+    Httpun.Body.Writer.write_string body chunk;
+    let promise, resolver = Eio.Promise.create () in
+    let wake () =
+      if not (Eio.Promise.is_resolved promise) then Eio.Promise.resolve resolver ()
+    in
+    (try Httpun.Body.Writer.flush body (fun () -> wake ())
+     with exn when is_closed_writer_exn exn -> wake ());
+    Eio.Promise.await promise
+  in
+  try
+    (* Race the WHOLE write path (write_string + flush + await): a dead
+       peer in CLOSE-WAIT accepts writes until the send buffer fills,
+       then the write blocks FOREVER — a healthy part write completes in
+       milliseconds, so a 5s timeout means the connection is gone. *)
+    let timed_out =
+      Eio.Fiber.any
+        [ (fun () -> write_and_flush (); false)
+        ; (fun () -> Eio.Time.sleep (Eio.Stdenv.clock env) 5.0; true) ]
+    in
+    if timed_out then `Peer_gone else `Ok
+  with exn when is_closed_writer_exn exn ->
+    `Peer_gone
+
+let mp_close (body : Httpun.Body.Writer.t) ~boundary : unit =
+  let chunk = "--" ^ boundary ^ "--\r\n" in
+  (try Httpun.Body.Writer.write_string body chunk
+   with exn when is_closed_writer_exn exn -> ());
+  close_writer_quiet body
+
+(* A captured part for hyper/stream replay, in the alist shape
+   soup/apply-parts! consumes: (("html" . frag) ("target" . sel) ("swap" . strat)). *)
+let part_alist ~html ~target ~swap : Ast.value =
+  Ast.VList
+    [ Ast.VPair (Ast.VStr "html", Ast.VStr html)
+    ; Ast.VPair (Ast.VStr "target", Ast.VStr target)
+    ; Ast.VPair (Ast.VStr "swap", Ast.VStr swap)
+    ]
+
+let handle_chat (env : Eio_unix.Stdenv.base) (sw : Eio.Switch.t)
+    (st : server_state) (reqd : Httpun.Reqd.t) : unit =
+  ignore sw;
+  let body_raw = read_body reqd in
+  let prompt = form_field body_raw "msg" in
+  let boundary = Printf.sprintf "pp%x%x" (Random.bits ()) (Random.bits ()) in
+  let rid = Printf.sprintf "llm-%d" (Random.bits () land 0xFFFFFF) in
+  let headers =
+    Httpun.Headers.of_list
+      [
+        ("content-type", "multipart/mixed; boundary=" ^ boundary);
+        ("cache-control", "no-cache");
+        ("x-accel-buffering", "no");
+        (* Chunked framing is MANDATORY for a streamed response (see
+           agent http_ui.ml): without it httpun close-delimits the body
+           and a keep-alive client can never detect end-of-body. *)
+        ("transfer-encoding", "chunked");
+      ]
+  in
+  let body_w =
+    Httpun.Reqd.respond_with_streaming ~flush_headers_immediately:true
+      reqd (Httpun.Response.create ~headers `OK)
+  in
+  (* Captured parts for hyper/stream replay (data). *)
+  let parts = ref [] in
+  let emit ?target ?swap html =
+    let target = match target with Some t -> t | None -> "#log" in
+    let swap = match swap with Some s -> s | None -> "beforeend" in
+    parts := part_alist ~html ~target ~swap :: !parts;
+    match mp_write_part ~env body_w ~boundary ~target ~swap html with
+    | `Ok -> ()
+    | `Peer_gone -> raise Peer_gone
+  in
+  (* Render a Nopales fragment template and emit it as a part; false if
+     the template is unbound (caller emits its OCaml fallback). *)
+  let tpl name args =
+    match Remote.call_template ~rt:st.rt name (List.map (fun s -> Ast.VStr s) args) with
+    | Some html -> emit html; true
+    | None -> false
+  in
+  let run () =
+    (* Openers: user echo bubble + turn skeleton (Nopales templates,
+       redefinable live; OCaml fallbacks if unbound). *)
+    if not (tpl "chat/user-bubble" [ prompt ]) then
+      emit (Printf.sprintf "<div class=\"bubble user\">%s</div>" (esc prompt));
+    if not (tpl "chat/turn-open" [ rid ]) then
+      emit
+        (Printf.sprintf
+           "<div class=\"turn\"><details class=\"think\"><summary>thinking + tools</summary><div id=\"%s-think\"></div></details><div class=\"bubble llm\" id=\"%s\"></div></div>"
+           rid rid);
+    (* Producer fiber: run the agent turn over THIS client's host seam,
+       pushing events to a queue. *)
+    let queue : Loop.turn_event Queue.t = Queue.create () in
+    let qmutex = Eio.Mutex.create () in
+    let qcond = Eio.Condition.create () in
+    let finished = ref false in
+    let push (e : Loop.turn_event) : unit =
+      Eio.Mutex.lock qmutex;
+      Queue.add e queue;
+      Eio.Condition.broadcast qcond;
+      Eio.Mutex.unlock qmutex
+    in
+    let on_event = function
+      | Loop.Reasoning_text s -> push (Loop.Reasoning_text s)
+      | Loop.Assistant_text s -> push (Loop.Assistant_text s)
+      | Loop.Tool_begin (n, i) -> push (Loop.Tool_begin (n, i))
+      | Loop.Tool_end (n, o) -> push (Loop.Tool_end (n, o))
+      | Loop.Turn_error msg -> push (Loop.Turn_error msg)
+    in
+    Eio.Switch.run @@ fun lsw ->
+    Eio.Fiber.fork ~sw:lsw (fun () ->
+        (match
+           Loop.run ~env ~sw:lsw ~host:(Remote.loop_host st.rt) ~cfg:st.cfg
+             ~complete:st.complete ~on_event st.history prompt
+         with
+         | Ok () -> ()
+         | Error e ->
+             (* A failed turn must be VISIBLE in the stream. *)
+             push (Loop.Turn_error e));
+        Eio.Mutex.lock qmutex;
+        finished := true;
+        Eio.Condition.broadcast qcond;
+        Eio.Mutex.unlock qmutex);
+    (* Nested collapsibles in the turn's "thinking + tools" zone
+       (#<rid>-think): each contiguous reasoning run its own <details>
+       (chat/think-open), each tool call its own (chat/tool-open,
+       summary marked done by chat/tool-done). Mirrors the agent's
+       drain loop. *)
+    let think_zone = "#" ^ rid ^ "-think" in
+    let think_n = ref 0 in
+    let cur_think : string option ref = ref None in
+    let tool_n = ref 0 in
+    let open_tools : string list ref = ref [] in
+    let open_think_block () : string =
+      incr think_n;
+      let tid = Printf.sprintf "%s-tk-%d" rid !think_n in
+      if not (tpl "chat/think-open" [ tid ]) then
+        emit ~target:think_zone
+          (Printf.sprintf
+             "<details class=\"tk\"><summary>thinking</summary><div id=\"%s\"></div></details>"
+             tid);
+      cur_think := Some tid;
+      tid
+    in
+    let emit_tool_line tid label text =
+      if not (tpl "chat/tool-line" [ label; text ]) then
+        emit ~target:("#" ^ tid)
+          (Printf.sprintf "<div class=\"trace\">%s %s</div>"
+             (esc label) (esc text))
+    in
+    let rec drain () =
+      Eio.Mutex.lock qmutex;
+      while Queue.is_empty queue && not !finished do
+        Eio.Condition.await qcond qmutex
+      done;
+      let items = List.of_seq (Queue.to_seq queue) in
+      Queue.clear queue;
+      let fin = !finished && Queue.is_empty queue in
+      Eio.Mutex.unlock qmutex;
+      List.iter
+        (fun e ->
+          match e with
+          | Loop.Reasoning_text s ->
+              let tid =
+                match !cur_think with
+                | Some t -> t
+                | None -> open_think_block ()
+              in
+              if not (tpl "chat/think-token" [ s ]) then
+                emit ~target:("#" ^ tid)
+                  (Printf.sprintf "<span class=\"reason\">%s</span>" (esc s))
+          | Loop.Assistant_text s ->
+              cur_think := None;
+              if not (tpl "chat/token" [ s ]) then
+                emit ~target:("#" ^ rid)
+                  (Printf.sprintf "<span>%s</span>" (esc s))
+          | Loop.Tool_begin (n, i) ->
+              cur_think := None;
+              incr tool_n;
+              let tid = Printf.sprintf "%s-tool-%d" rid !tool_n in
+              open_tools := tid :: !open_tools;
+              if not (tpl "chat/tool-open" [ tid; n ]) then
+                emit ~target:think_zone
+                  (Printf.sprintf
+                     "<details class=\"tool\"><summary id=\"%s-sum\">tool: %s</summary><div id=\"%s\"></div></details>"
+                     tid (esc n) tid);
+              emit_tool_line tid "in" i
+          | Loop.Tool_end (n, o) ->
+              let tid =
+                match !open_tools with
+                | t :: rest -> open_tools := rest; t
+                | [] -> rid ^ "-think"
+              in
+              emit_tool_line tid "out" o;
+              if tid <> rid ^ "-think" && not (tpl "chat/tool-done" [ n ]) then
+                emit ~target:("#" ^ tid ^ "-sum") ~swap:"innerHTML"
+                  (Printf.sprintf "tool: %s &#10003;" (esc n))
+          | Loop.Turn_error msg ->
+              if not (tpl "chat/error" [ msg ]) then
+                emit ~target:("#" ^ rid)
+                  (Printf.sprintf
+                     "<div class=\"trace\">[turn error: %s]</div>"
+                     (esc msg)))
+        items;
+      if not fin then drain ()
+    in
+    drain ()
+  in
+  (try run () with Peer_gone -> ());
+
+  (* Record the captured parts for hyper/stream replay. *)
+  st.rt.Remote.last_turn_parts <- Ast.VList (List.rev !parts);
+  (try mp_close body_w ~boundary with Peer_gone -> ())
+
+
+(* ---- serve: bind 127.0.0.1:0, print URL, accept loop ---- *)
+
+let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
+    ~(rt : Remote.t) ~(cfg : Provider.cfg)
+    ~(complete :
+        env:Eio_unix.Stdenv.base ->
+        sw:Eio.Switch.t ->
+        cfg:Provider.cfg ->
+        messages:Provider.message list ->
+        tools:Provider.tool_def list ->
+        on_delta:(Provider.delta -> unit) ->
+        (Provider.reply, string) Result.t)
+    ?(open_browser = false) (print : string -> unit) : unit =
+  let st = { history = ref []; complete; rt; cfg } in
+  (* Serialize all HTTP requests through one mutex: the client env is
+     single-threaded state (lazy def cache, route table, current_request
+     ref). [Remote.dispatch_route] and [Remote.call_template] run under
+     the proxy rim; the mutex keeps concurrent requests from interleaving
+     on the env / transport. A chat turn holds the mutex for its whole
+     lifetime — a long turn parks other tabs until it finishes (v0
+     single-user posture; the agent interleaves via its per-eval lock,
+     the client has no eval mutex yet). *)
+  let req_mutex = Eio.Mutex.create () in
+  let with_mutex f =
+    Eio.Mutex.lock req_mutex;
+    Fun.protect ~finally:(fun () -> Eio.Mutex.unlock req_mutex) f
+  in
+  let request_handler (sa : Eio.Net.Sockaddr.stream)
+      (g : Httpun.Reqd.t Gluten.reqd) : unit =
+    ignore sa;
+    let reqd = g.Gluten.reqd in
+    let req = Httpun.Reqd.request reqd in
+    let target = req.Httpun.Request.target in
+    let path, _query =
+      match String.index_opt target '?' with
+      | Some i ->
+          ( String.sub target 0 i,
+            Some (String.sub target (i + 1) (String.length target - i - 1)) )
+      | None -> (target, None)
+    in
+    let fork_work (f : unit -> unit) : unit =
+      Eio.Fiber.fork ~sw (fun () ->
+          (try f () with
+           | Eio.Cancel.Cancelled _ as e -> raise e
+           | exn -> Printf.eprintf "[pp-remote-ui] handler error: %s\n%!" (Printexc.to_string exn)))
+    in
+    match req.Httpun.Request.meth with
+    | `GET -> (
+        if String.length path >= 8 && String.sub path 0 8 = "/assets/" then
+          fork_work (fun () ->
+              serve_asset reqd (String.sub path 8 (String.length path - 8)))
+        else
+          fork_work (fun () -> with_mutex (fun () -> dispatch_get rt reqd target)))
+    | `POST -> (
+        match path with
+        | "/eval" -> fork_work (fun () -> with_mutex (fun () -> handle_eval rt reqd))
+        | "/chat" ->
+            fork_work (fun () -> with_mutex (fun () -> handle_chat env sw st reqd))
+        | _ ->
+            respond_html reqd ~status:`Not_found
+              ~body:(status_page "404" (Printf.sprintf "<p>no route %s</p>" (esc path))))
+    | _ -> respond_html reqd ~status:`Not_found ~body:(status_page "404" "<p>method not supported</p>")
+  in
+  let error_handler (_sa : Eio.Net.Sockaddr.stream)
+      ?(request : Httpun.Request.t option)
+      (err : Httpun.Server_connection.error)
+      (respond : Httpun.Headers.t -> Httpun.Body.Writer.t) : unit =
+    ignore request;
+    ignore err;
+    let body = "error" in
+    let body_w =
+      respond
+        (Httpun.Headers.of_list
+           [ ("content-type", "text/plain"); ("content-length", string_of_int (String.length body)) ])
+    in
+    Httpun.Body.Writer.write_string body_w body;
+    Httpun.Body.Writer.close body_w
+  in
+  let conn_handler =
+    Httpun_eio.Server.create_connection_handler ~request_handler
+      ~error_handler ~sw
+  in
+  let net = Eio.Stdenv.net env in
+  let listen_addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, 0) in
+  let socket =
+    Eio.Net.listen ~reuse_addr:true ~reuse_port:false ~backlog:64 ~sw net
+      listen_addr
+  in
+  let bound_addr = Eio.Net.listening_addr socket in
+  let port =
+    match bound_addr with `Tcp (_ip, p) -> p | _ -> 0
+  in
+  let url = Printf.sprintf "http://127.0.0.1:%d/" port in
+  print (Printf.sprintf "pp-remote serving %s\n" url);
+  if open_browser then (
+    try
+      let _ = Sys.command (Printf.sprintf "xdg-open '%s' >/dev/null 2>&1 &" url) in
+      ()
+    with _ -> ());
+  let on_error ex = ignore ex in
+  while true do
+    Eio.Net.accept_fork socket ~sw ~on_error (fun client_sock client_addr ->
+        try conn_handler client_addr client_sock
+        with exn -> ignore exn)
+  done

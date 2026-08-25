@@ -103,7 +103,7 @@ let test_loop_tool_round_trip ~env ~sw ~rt () =
   in
   let history = ref [] in
   match
-    Loop.run ~env ~sw ~rt ~cfg ~complete ~on_event:(fun _ -> ()) history
+    Loop.run ~env ~sw ~host:(Runtime.loop_host rt) ~cfg ~complete ~on_event:(fun _ -> ()) history
       "say hello using echo"
   with
   | Error e -> Alcotest.fail e
@@ -166,7 +166,7 @@ let test_loop_tool_block ~env ~sw ~rt () =
     { base_url = "http://127.0.0.1:1"; api_key = ""; model = "mock"; system = "" }
   in
   match
-    Loop.run ~env ~sw ~rt ~cfg ~complete ~on_event:(fun _ -> ()) (ref [])
+    Loop.run ~env ~sw ~host:(Runtime.loop_host rt) ~cfg ~complete ~on_event:(fun _ -> ()) (ref [])
       "delete everything"
   with
   | Error e -> Alcotest.fail e
@@ -238,11 +238,11 @@ let test_loop_turn2_history_shape ~env ~sw ~rt () =
   in
   let history = ref [] in
   (match
-     Loop.run ~env ~sw ~rt ~cfg ~complete ~on_event:(fun _ -> ()) history
+     Loop.run ~env ~sw ~host:(Runtime.loop_host rt) ~cfg ~complete ~on_event:(fun _ -> ()) history
        "first"
    with Error e -> Alcotest.fail e | Ok () -> ());
   (match
-     Loop.run ~env ~sw ~rt ~cfg ~complete ~on_event:(fun _ -> ()) history
+     Loop.run ~env ~sw ~host:(Runtime.loop_host rt) ~cfg ~complete ~on_event:(fun _ -> ()) history
        "second"
    with Error e -> Alcotest.fail e | Ok () -> ());
   let msgs = !captured in
@@ -577,7 +577,7 @@ let test_turn_replay_nested_blocks ~rt () =
 let () =
   Eio_main.run @@ fun env ->
   let rt = Runtime.make () in
-  Tools.install ~rt;
+  Tools.install ~resolve_path:Runtime.resolve_path ~register:(fun name run -> Runtime.register_builtin_tool rt name ~run);
   Eio.Switch.run @@ fun sw ->
   Alcotest.run "agent"
     [

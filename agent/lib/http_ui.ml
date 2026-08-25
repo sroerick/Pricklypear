@@ -112,10 +112,18 @@ exception Peer_gone
 (* One multipart part frame + flush. Mirrors the image's mp_write_part:
    --boundary + Content-Type: text/html + optional HX-Target/HX-Swap +
    blank + html. Returns `Peer_gone on closed writer so the drain loop
-   stops cleanly. *)
-let mp_write_part (body : Httpun.Body.Writer.t) ~boundary
-    ?(target : string option) ?(swap : string option) (html : string)
-  : [ `Ok | `Peer_gone ] =
+   stops cleanly.
+
+   WRITE WATCHDOG: a client that disconnects mid-stream leaves the
+   socket in CLOSE-WAIT — writes keep SUCCEEDING into the kernel send
+   buffer until it fills, then the write/flush blocks FOREVER, wedging
+   the turn (and with it the turn_mutex, so every later /chat parks).
+   Race the whole write path against a 5s sleep: a healthy part write
+   completes in milliseconds; a timeout means the connection is gone
+   → Peer_gone. (Same fix in remote/lib/http_ui.ml.) *)
+let mp_write_part ~(env : Eio_unix.Stdenv.base) (body : Httpun.Body.Writer.t)
+    ~boundary ?(target : string option) ?(swap : string option)
+    (html : string) : [ `Ok | `Peer_gone ] =
   let buf = Buffer.create 128 in
   Buffer.add_string buf ("--" ^ boundary ^ "\r\n");
   Buffer.add_string buf "Content-Type: text/html; charset=utf-8\r\n";
@@ -125,7 +133,7 @@ let mp_write_part (body : Httpun.Body.Writer.t) ~boundary
   Buffer.add_string buf html;
   Buffer.add_string buf "\r\n";
   let chunk = Buffer.contents buf in
-  try
+  let write_and_flush () =
     Httpun.Body.Writer.write_string body chunk;
     let promise, resolver = Eio.Promise.create () in
     let wake () =
@@ -133,8 +141,19 @@ let mp_write_part (body : Httpun.Body.Writer.t) ~boundary
     in
     (try Httpun.Body.Writer.flush body (fun () -> wake ())
      with exn when is_closed_writer_exn exn -> wake ());
-    Eio.Promise.await promise;
-    `Ok
+    Eio.Promise.await promise
+  in
+  try
+    (* Race the WHOLE write path (write_string + flush + await): a dead
+       peer in CLOSE-WAIT accepts writes until the send buffer fills,
+       then the write blocks FOREVER — a healthy part write completes in
+       milliseconds, so a 5s timeout means the connection is gone. *)
+    let timed_out =
+      Eio.Fiber.any
+        [ (fun () -> write_and_flush (); false)
+        ; (fun () -> Eio.Time.sleep (Eio.Stdenv.clock env) 5.0; true) ]
+    in
+    if timed_out then `Peer_gone else `Ok
   with exn when is_closed_writer_exn exn ->
     `Peer_gone
 
@@ -277,7 +296,7 @@ let handle_chat (env : Eio_unix.Stdenv.base) (sw : Eio.Switch.t)
     let target = match target with Some t -> t | None -> "#log" in
     let swap = match swap with Some s -> s | None -> "beforeend" in
     parts := part_alist ~html ~target ~swap :: !parts;
-    match mp_write_part body_w ~boundary ~target ~swap html with
+    match mp_write_part ~env body_w ~boundary ~target ~swap html with
     | `Ok -> ()
     | `Peer_gone -> raise Peer_gone
   in
@@ -350,7 +369,8 @@ let handle_chat (env : Eio_unix.Stdenv.base) (sw : Eio.Switch.t)
     Eio.Switch.run @@ fun lsw ->
     Eio.Fiber.fork ~sw:lsw (fun () ->
         (match
-           Loop.run ~env ~sw:lsw ~rt:st.rt ~cfg:st.cfg ~complete:st.complete
+           Loop.run ~env ~sw:lsw ~host:(Runtime.loop_host st.rt) ~cfg:st.cfg
+           ~complete:st.complete
              ~on_event st.history prompt
          with
          | Ok () -> ()

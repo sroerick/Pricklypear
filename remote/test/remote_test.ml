@@ -110,12 +110,21 @@ let test_genuinely_unbound () =
     exposes NO prim that writes to a local store. There is no local
     store; the only write-ish prim is function-source (a read). Assert
     the local prim table contains no DB/branch/admin prims — those can
-    only ever be proxied. *)
+    only ever be proxied.
+
+    NOTE: [route] is NOT in the forbidden set. The client owns a LOCAL
+    route table (the agent-route-table host seam, ported so the
+    Nopales-authored surface runs unchanged — borge/remote-eval.borg
+    surfaces). (route path handler) writes to the client's local
+    hashtbl, NOT the image's Postgres view_bindings; it is a surface
+    prim, not a store write. The image's server-side [route] stays
+    server-only (register_server_only) — a different prim with the same
+    name on a different host. *)
 let test_no_local_store_write () =
   let transport, _calls, _ = mock_transport () in
   let t = Remote.make ~transport () in
   let forbidden =
-    [ "create"; "update"; "delete"; "route"; "fork"; "merge"; "checkout"; "create-user" ]
+    [ "create"; "update"; "delete"; "fork"; "merge"; "checkout"; "create-user" ]
   in
   let local_names =
     Hashtbl.to_seq_keys t.Remote.local_prims |> List.of_seq |> List.sort String.compare
@@ -203,6 +212,50 @@ let test_stepping_via_client () =
   let fr = Explain.frames "(+ 1 (get 'user 42))" in
   Alcotest.(check bool) "frames inspectable (source-level AST)" true (fr <> [])
 
+(** Route table + template dispatch (agent-route-table host seam,
+    ported to the client — borge/remote-eval.borg surfaces). The client
+    owns a LOCAL route hashtbl; (route path handler) populates it;
+    [lookup_route] / [dispatch_route] / [call_template] run handlers
+    under the proxy rim so a handler's prim calls forward to /api/prim.
+    This is what makes the Nopales-authored surface run on pp-remote
+    unchanged. *)
+let test_route_table_and_dispatch () =
+  let transport, calls, table = mock_transport () in
+  (* a handler that calls a proxy prim (whoami) + pure compute *)
+  Hashtbl.replace table "whoami"
+    (fun _args -> Ok (VStr "admin"));
+  let t = Remote.make ~transport () in
+  (* define a handler + bind it to a route, in Nopales (the surface
+     boot-load path). *)
+  ignore (Remote.eval t
+    {|(define (hello) (render-html (string-append "<p>hi " (whoami) "</p>")))|} );
+  ignore (Remote.eval t {|(route "/x" "hello")|});
+  Alcotest.(check string) "lookup_route finds the handler"
+    "hello"
+    (match Remote.lookup_route ~rt:t "/x" with Some h -> h | None -> "");
+  (* dispatch_route runs the handler under the proxy rim: whoami proxies,
+     the result is rendered raw-HTML. *)
+  let v = Remote.dispatch_route ~rt:t ~handler:"hello" ~method_:"GET"
+            ~path:"/x" ~params:[] ~headers:[] ~body:"" in
+  (match v with
+   | VStr s ->
+       Alcotest.(check string) "dispatch renders handler html" "<p>hi admin</p>" s
+   | other -> Alcotest.fail ("dispatch wrong shape: " ^ Reader.pp_value other));
+  Alcotest.(check bool) "dispatch proxied whoami" true
+    (List.exists (fun (n, _) -> n = "whoami") !calls);
+  (* call_template renders a named fn for the OCaml HTTP surface. *)
+  (match Remote.call_template ~rt:t "hello" [] with
+   | Some s -> Alcotest.(check string) "call_template renders" "<p>hi admin</p>" s
+   | None -> Alcotest.fail "call_template returned None");
+  (* query-param resolves inside a dispatched handler. *)
+  ignore (Remote.eval t
+    {|(define (qp) (render-html (string-append "<p>" (query-param "q") "</p>")))|});
+  let v2 = Remote.dispatch_route ~rt:t ~handler:"qp" ~method_:"GET"
+            ~path:"/y" ~params:[ ("q", "stuff") ] ~headers:[] ~body:"" in
+  (match v2 with
+   | VStr s -> Alcotest.(check string) "query-param resolves" "<p>stuff</p>" s
+   | other -> Alcotest.fail ("qp wrong shape: " ^ Reader.pp_value other))
+
 let () =
   Alcotest.run "remote"
     [
@@ -216,5 +269,6 @@ let () =
           Alcotest.test_case "transaction routed to remote_eval wholesale" `Quick test_transaction_routed_remote;
           Alcotest.test_case "transaction without hook raises" `Quick test_transaction_without_hook_raises;
           Alcotest.test_case "stepping over a remote client" `Quick test_stepping_via_client;
+          Alcotest.test_case "route table + template dispatch" `Quick test_route_table_and_dispatch;
         ] );
     ]

@@ -321,6 +321,58 @@
          is the only addition. The story writes itself from there.
     |))))
 
+  (subsection agent-loop
+   (doc "The LLM agent loop runs CLIENT-SIDE: the shared llm/ package (provider + turn loop + builtin read/bash tools) is host-agnostic, and pp-remote supplies the same Loop.host seam the agent does. The API key is a value (AGENT_* env); only the data plane (DB prims inside tool bodies) crosses the wire.")
+   (status implemented)
+   (implements llm/lib/loop.ml llm/lib/provider.ml llm/lib/tools.ml remote/lib/remote.ml remote/lib/http_ui.ml remote/lib/surface.ml remote/test/loop_test.ml)
+   (verify
+    (test "a Nopales plugin tool (register-tool …) whose body calls a DB prim: the loop runs on the client, the prim crosses to /api/prim exactly once, and the tool result reaches the model as a tool-role message")
+    (test "a builtin tool (bash) executes LOCALLY through the proxy rim's local table — zero wire crossings")
+    (test "an (on \"tool_call\" …) hook blocks a call and the model sees the block reason — same hook semantics as the agent host")
+    (smoke "pp-remote --serve --mock-script: GET / renders the Nopales chat page; POST /chat streams multipart/mixed, chunked-framed, terminates promptly (scripts/smoke_remote_surface.sh)"))
+   (details
+    (doc (|
+         THE SEAM. The loop lives in llm/ (a shared package sibling of
+         lisp/ and common/): provider.ml is a pure-OCaml OpenAI-
+         compatible HTTP client (no image coupling), loop.ml is the turn
+         orchestration factored over a small [Loop.host] record
+         (tool_order, tool_entry, fire, eval_tool_body, call_prim),
+         tools.ml is the builtin read/bash bodies with an explicit
+         resolve_path + register. The agent links the same library and
+         supplies Runtime.loop_host; pp-remote supplies Remote.loop_host
+         over the proxy rim. ONE loop, two hosts — "agent/ is the
+         local-only instance; pp-remote is the relaxed instance" is
+         literally true in the code, not just in this spec.
+
+         THE KEY IS A VALUE. Provider credentials are client-side
+         values: AGENT_API_KEY / AGENT_BASE_URL / AGENT_MODEL (the same
+         env the agent binary reads; ./.env auto-loads; --mock-script
+         substitutes a canned provider for tests/demos). No server
+         round trip, no server-held secret. The provider call runs on
+         the client machine; the corpus + data plane stay on the image.
+
+         WHAT CROSSES THE WIRE. Only Prim_call. A plugin tool's body
+         evals under the proxy rim, so (get 'user id) inside a tool
+         crosses to /api/prim exactly as a REPL eval would. Builtin
+         tool bodies (read/bash) are OCaml prims in the LOCAL table —
+         zero wire. (on "tool_call" …) hooks and register-tool plugins
+         work identically to the agent host, so plugin sources
+         transfer between the hosts.
+
+         THE SURFACE. / is the chat page (Nopales-authored; the chat/*
+         fragment templates carry the same names/shapes as the agent's
+         surface so a restyle transfers); POST /chat streams
+         multipart/mixed htmx parts from the same emitter shape the
+         agent serves. The eval box moved to /eval; /code stays the
+         lens browser. session/last-turn-parts captures a consumed
+         turn's parts for hyper/stream replay, as on the agent.
+
+         V0 POSTURE. A chat turn holds the request mutex for its whole
+         lifetime (single-user local harness — other tabs park until
+         the turn finishes). The agent interleaves via its per-eval
+         lock; the client has no eval mutex yet. Filing, not fixing.
+    |))))
+
   (subsection hard-constraints
    (doc "Constraints that are correctness, not v0 limitations — do not relax them")
    (status implemented)

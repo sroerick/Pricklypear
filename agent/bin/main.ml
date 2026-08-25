@@ -225,7 +225,8 @@ let () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let rt = Runtime.make () in
-  Tools.install ~rt;
+  Tools.install ~resolve_path:Runtime.resolve_path
+    ~register:(fun name run -> Runtime.register_builtin_tool rt name ~run);
   (* Boot-load the Nopales surface (libs/html + libs/hyper + the chat/code
      route-table handlers) so the HTML surface is Nopales-authored and
      redefinable live (borge/agent.borg surfaces). *)
@@ -275,8 +276,8 @@ let () =
          reply) for the given prompt, streaming events via print_event.
          Returns Ok () / Error msg. Exit status is derived by callers. *)
       let run_turn prompt =
-        Loop.run ~env ~sw ~rt ~cfg ~complete ~on_event:print_event history
-          prompt
+        Loop.run ~env ~sw ~host:(Runtime.loop_host rt) ~cfg ~complete
+          ~on_event:print_event history prompt
       in
       if !serve then
         (* HTML primary surface: serve until Ctrl-C. Blocks forever in
@@ -341,8 +342,8 @@ let () =
               loop ())
             else (
               (match
-                 Loop.run ~env ~sw ~rt ~cfg ~complete ~on_event:print_event
-                   history line
+                 Loop.run ~env ~sw ~host:(Runtime.loop_host rt) ~cfg ~complete
+                 ~on_event:print_event history line
                with
                | Ok () -> ()
                | Error e -> Printf.printf "\027[31m[loop error] %s\027[0m\n%!" e);
