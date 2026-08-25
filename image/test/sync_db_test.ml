@@ -132,6 +132,65 @@ let test_commit_surfaces_conflict () =
            Alcotest.(check string) "theirs hash reported" (h 9) t
        | _ -> Alcotest.fail "unexpected conflicts"))
 
+let test_two_way_push_applies_client_only () =
+  (* The sync/push prim path: a TWO-WAY classify (no base) where the
+     server lacks a node the client holds (ClientOnly) is applied through
+     Sync.apply_client_node. This is the v1 local-first push-up mechanism
+     (borge/local-first.borg sync; diverge is reported, not auto-merged). *)
+  with_store (fun store ->
+      let uniq = Printf.sprintf "sp3%05d" (Random.int 1_000_000) in
+      let ty = "syncpush2_" ^ uniq in
+      let path = "data.u." ^ anon_enc ^ "." ^ ty ^ ".one" in
+      (match S.conn_of store with
+       | Some conn ->
+           ignore
+             (S.exec conn
+                ~params:[ Pgx.Value.of_string ty ]
+                "INSERT INTO type_defs (branch_id, name, fields) \
+                 VALUES ($1::uuid, $2, '[{\"name\":\"n\"}]'::jsonb) \
+                 ON CONFLICT (branch_id, name) DO NOTHING")
+       | None -> ());
+      let env : Yojson.Safe.t =
+        `Assoc
+          [ ("v", `Int 1)
+          ; ("kind", `String "datum")
+          ; ("path", `String path)
+          ; ("type", `String ty)
+          ; ("body", `Assoc [ ("n", `Int 7) ])
+          ; ("author", `String "anonymous")
+          ]
+      in
+      (* server manifest is EMPTY for this subtree; client offers the
+         node → classify reports it ClientOnly *)
+      let server = Sync.server_manifest store ~prefix:("data.u." ^ anon_enc) in
+      let server = Option.value server ~default:[] in
+      let r = Sync.classify server [ (path, "H") ] in
+      Alcotest.(check int) "one client_only" 1 (List.length r.client_only);
+      Alcotest.(check int) "no diverge" 0 (List.length r.diverge);
+      (* apply the ClientOnly push through the same surface the prim uses *)
+      let applied =
+        List.fold_left
+          (fun n (p, _) ->
+            if List.mem_assoc p r.client_only then
+              (match Sync.apply_client_node store ~env with
+               | Ok () -> n + 1
+               | Error _ -> n)
+            else n)
+          0 [ (path, "H") ]
+      in
+      Alcotest.(check int) "applied 1" 1 applied;
+      (match S.conn_of store with
+       | Some conn ->
+           Alcotest.(check bool) "pushed node persisted" true
+             (Pricklypear_image_lib.Tree_store.get_by_path conn ~path <> None);
+           ignore
+             (S.exec conn ~params:[ Pgx.Value.of_string path ]
+                "DELETE FROM tree_nodes WHERE path = $1::ltree");
+           ignore
+             (S.exec conn ~params:[ Pgx.Value.of_string ty ]
+                "DELETE FROM type_defs WHERE name = $1")
+       | None -> ()))
+
 let () =
   Random.self_init ();
   Alcotest.run "sync_db"
@@ -143,4 +202,6 @@ let () =
             test_commit_push;
           Alcotest.test_case "commit surfaces conflicts (no silent loss)"
             `Quick test_commit_surfaces_conflict;
+          Alcotest.test_case "two-way push applies client-only node"
+            `Quick test_two_way_push_applies_client_only;
         ] ) ]
