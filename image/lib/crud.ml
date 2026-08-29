@@ -1227,6 +1227,41 @@ let tree_search_text (store : Store.t) ~(prefix : string) ~(needle : string)
 
 let tree_path_label (s : string) : value = VStr (Tree_store.path_label s)
 
+(* ---- pure path-algebra prims (one-tree.tree-path-prims) ----
+   No DB, no auth. The kernel raises Invalid_argument on an invalid
+   path; converted here to a Prim_error so Nopales sees a clean raise
+   rather than a guess. Root paths (single label) have nil parent and
+   no strict ancestors. *)
+let tree_prim_error name msg =
+  raise
+    (Pricklypear_lisp.Ast.Interp_error
+       (Pricklypear_lisp.Ast.Prim_error (name, msg, "bad-args")))
+
+let wrap_path_exn name (f : unit -> value) : value =
+  try f () with Invalid_argument msg -> tree_prim_error name msg
+
+let tree_parent (path : string) : value =
+  wrap_path_exn "tree/parent" (fun () ->
+      match Tree_store.path_parent path with
+      | Some p -> VStr p
+      | None -> VNil (* root path has no parent *))
+
+let tree_leaf (path : string) : value =
+  wrap_path_exn "tree/leaf" (fun () -> VStr (Tree_store.path_leaf path))
+
+let tree_segments (path : string) : value =
+  wrap_path_exn "tree/segments" (fun () ->
+      VList (List.map (fun s -> VStr s) (Tree_store.path_segments path)))
+
+let tree_child ~(path : string) ~(label : string) : value =
+  wrap_path_exn "tree/child" (fun () ->
+      VStr (Tree_store.path_child path label))
+
+let tree_ancestors (path : string) : value =
+  wrap_path_exn "tree/ancestors" (fun () ->
+      VList
+        (List.map (fun s -> VStr s) (Tree_store.path_ancestors path)))
+
 let tree_garden_root ~(user : string) : value =
   VStr (Tree_store.garden_root ~user)
 

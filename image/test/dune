@@ -143,3 +143,8 @@
  (name jobs_test)
  (modules jobs_test)
  (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))
+
+(test
+ (name tree_path_prims_test)
+ (modules tree_path_prims_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest))

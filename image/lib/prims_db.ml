@@ -806,6 +806,50 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
       | _ ->
           (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/path-label", "need string", "bad-args")))));
 
+  (* Kernel path algebra (one-tree.tree-path-prims): one canonical set of
+     pure path constructors/accessors, replacing per-package string hacks
+     (notes/tree/*, todo/tree/*, tree/breadcrumb-parts). No DB, no auth;
+     label encoding on append is identical to tree/path-label except that
+     labels which are ALREADY valid ltree labels pass through untouched
+     (round-trip: (tree/child (tree/parent p) (tree/leaf p)) = p).
+     Invalid paths raise Prim_error; a root path has nil parent and no
+     strict ancestors. *)
+  register_crud "tree/parent"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr path ] -> Crud.tree_parent path
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/parent", "need path", "bad-args")))));
+
+  register_crud "tree/leaf"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr path ] -> Crud.tree_leaf path
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/leaf", "need path", "bad-args")))));
+
+  register_crud "tree/segments"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr path ] -> Crud.tree_segments path
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/segments", "need path", "bad-args")))));
+
+  register_crud "tree/child"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr path; Pricklypear_lisp.Ast.VStr label ] ->
+          Crud.tree_child ~path ~label
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/child", "need path label", "bad-args")))));
+
+  register_crud "tree/ancestors"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr path ] -> Crud.tree_ancestors path
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/ancestors", "need path", "bad-args")))));
+
   register_crud "tree/garden-root"
     (fun args ->
       match args with
