@@ -121,11 +121,20 @@ const arm = await send("Runtime.evaluate", {
     window.addEventListener('htmx:multipart:after:part', function(){ window.__partCount++; });
     window.addEventListener('htmx:after:request', function(){ window.__done = true; });
     var f = document.getElementById('f');
+    var m = document.getElementById('msg');
+    var mr = m ? m.getBoundingClientRect() : null;
+    window.__msgOk = !!(m && mr && mr.width > 10 && mr.height > 5);
     return !!f;
   })()`,
   returnByValue: true,
 });
 if (!arm?.result?.value) fail("chat form #f not found on page");
+// The input must EXIST and be VISIBLE: a quoted-attribute parse bug (e.g.
+// hx-on::after-request="this.reset()'>) makes the browser swallow the input
+// into an attribute value — the form still works programmatically, but a
+// human has no text box. Regression-guarded here since 2026-08-29.
+await send("Runtime.evaluate", { expression: "window.__msgOk", returnByValue: true })
+  .then((r) => { if (!r?.result?.value) fail("chat input #msg missing or zero-size (parse bug in chat/page markup?)"); });
 
 // Submit through the DOM (same path a user's click takes).
 const sub = await send("Runtime.evaluate", {
