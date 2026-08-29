@@ -1,0 +1,112 @@
+(project pricklypear-notify
+ (doc "Pricklypear book chapter: notify — getting events out of the image to a human. Server-push via ntfy (HTTP POST from a jobs schedule) is the v1; an in-habitat unread feed is the named next surface. Records the trigger-split: server-known events push from the image; locally-known events are the client lens's business (local-first.borg), never this chapter's.")
+ (status planned)
+ (* agent note (|2026-12 plan pass: chapter born from the daily-scripture discussion. Key recon that shapes it: (a) the Net effect tag and a curl-backed, admin/agent-gated http-get ALREADY ship (image/lib/prims_net.ml, lisp/lib/effect.ml); (b) jobs + cron schedules are live (borge/jobs.borg); (c) the ONLY missing kernel piece for push is image.outbound-http's http-post. The split that must not blur: server-known triggers (cron, chat mentions, shared events) push from the image — the phone need not run anything; locally-known triggers (lens-computed reminders while offline) belong to a resident agent on the client (Termux:API / WorkManager per local-first.borg), not to this chapter.|) *)
+ (convention ocaml-dune)
+ (section notify
+  (doc "Delivery of image-side events to humans. jobs.borg says 'result delivery is pull, not push'; this chapter is the sanctioned push exception — narrow, outbound-HTTP-based, identity-gated.")
+  (status planned)
+
+  (subsection ntfy-delivery
+   (doc "libs/ntfy — one POST per event to an ntfy topic; the ntfy Android app (or any UnifiedPush distributor reading the same topic) turns it into a native lock-screen notification. No native app development on our side.")
+   (status planned)
+   (verify
+    (smoke "(load-library \"ntfy\") then (ntfy/send \"t\" \"b\") POSTs to the configured topic (observe via the ntfy app or topic URL)")
+    (smoke "ntfy/send raises transient on unreachable host (job runner retries per jobs.runner backoff)")
+    (smoke "ntfy/send returns the payload dict for 4xx/5xx (caller can inspect); topic config row missing -> clean User_error, not a crash"))
+   (details
+    (doc (|
+         PACKAGE: libs/ntfy (own lib, standalone — NOT inside dabar;
+         daily-scripture is its first consumer, not its owner).
+
+         SURFACE:
+           (ntfy/send title body)                    ; no click target
+           (ntfy/send title body click-url)
+         Built on (http-post url headers-json body)
+         (image.outbound-http). Wire headers the ntfy convention:
+           Title: <title>  Priority: default  Tags: <+optional>
+           Click: <click-url>
+         (Icon/Actions/Markdown stay available as pass-through header
+         extras if a caller wants them — headers-json is the escape
+         hatch; the convenience surface stays three args.)
+
+         CONFIG (capability secrets OFF branches):
+           A data row of type ntfy-config, id \"default\",
+           fields {url, topic, token?}. url+topic are capability
+           URLs — treat like passwords: the row is admin-readable
+           (data.u.<admin>), never seeded to system/main, never in
+           git. token is ntfy's optional bearer for protected topics.
+           ntfy/send reads the row per call (cheap, and lets the user
+           rotate a topic without touching code).
+
+         SELF-HOST PATH: ntfy is a single static binary; pointing
+         ntfy-config.url at a self-hosted instance is a config change,
+         not a code change. The third-party dependency is a choice,
+         not an architecture.
+
+         RETRY DISCIPLINE: ntfy/send does NOT catch transient
+         Prim_errors — callers inside jobs let the runner's
+         attempts/backoff own retries (jobs.runner). Callers in
+         request paths (e.g. chat mention fan-out later) wrap in
+         guard themselves or fire via submit-job.
+    |))
+   )
+  )
+
+  (subsection in-habitat-feed
+   (doc "DEFERRED next surface: a (notify title body link) fn + per-user notification rows + an unread-count badge in the layout chrome that hx-polls. The pull-side 'inbox flow' generalization — every package (todo due-soon, flashcards due, chat mentions) gets a uniform in-image feed before any push adapter runs.")
+   (status planned)
+   (details
+    (doc (|
+         DESIGN (named, deliberately unbuilt): one package-owned type
+         notification {title, body, link, read bool, created_at} in
+         data.u.<user>, written by a plain package fn (no new prim —
+         create + a badge fragment; ship it as libs/notify when built).
+         The layout chrome gains one hx-poll fragment for unread
+         count. Delivery adapters (ntfy, in-habitat, future web-push)
+         fan out FROM this write when it exists: today dabar/daily-
+         deliver calls ntfy/send directly and that is FINE — the feed
+         is additive when it lands, not a prerequisite.
+
+         REASON FOR DEFERRAL: daily scripture doesn't need it; the
+         badge is chrome work across themes; and the notification
+         register's exact shape (per-type read cursors? retention?
+         issue-register reuse?) deserves its own dogfood round rather
+         than being rushed as daily-scripture scaffolding.
+    |))
+   )
+  )
+
+  (subsection non-goals
+   (doc "Delivery paths considered and rejected/deferred, with reasons (recorded 2026-12 discussion)")
+   (status implemented)
+   (details
+    (doc (|
+         - XMPP — rejected. A send-only client is still a protocol
+           stack (SASL/TLS/roster/carbons edge cases) and phone push
+           through XMPP depends on the server's FCM/APNs modules
+           anyway. Its real value (federated chat) is serviced by
+           chat/ in-habitat. Wrong shape for a single-image Lisp OS.
+         - Web Push (RFC 8291) — deferred, not rejected. Makes the
+           browser the push target (PWA, no third party) at the cost
+           of VAPID + aes128gcm/ECDH payload encryption in OCaml plus
+           a service worker. The trigger to revisit: the ntfy
+           third-party dependency becomes intolerable.
+         - Direct FCM/APNs + native app — deferred to the client
+           story. Belongs to local-first.borg's Termux/Termux:API/
+           WorkManager clients, where termux-notification and the ntfy
+           app's UnifiedPush-distributor role already cover it;
+           an own APK is an optional UX promotion there, not a
+           notification necessity.
+         - Outbound SMTP — unnecessary: email-via-HTTP-API
+           (Resend/Postmark-shaped) is a header set on the same
+           http-post prim if ever wanted; no SMTP client lands.
+         - Server-sent events / WebSocket browser push as a
+           notification channel — the htmx poll cadence already
+           covers in-tab freshness cheaply; SSE exists for the agent
+           surface and is not a notification bus.
+    |))
+   )
+  )
+ )
+)

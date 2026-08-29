@@ -811,6 +811,60 @@
    |))
    )
   )
+  (subsection outbound-http
+   (doc "(http-post url headers-json body) — send-side sibling of the shipped http-get. Same curl-backed shape, same gate, same payload contract. The first consumer is notify.ntfy-delivery (lock-screen push from jobs schedules).")
+   (status planned)
+   (* agent note (|2026-12 plan pass: daily-scripture campaign. The Net effect tag already exists in the lattice (lisp/lib/effect.ml tag 8; net_prims = [http-get]); http-get is shipped (prims_net.ml, curl-backed, admin/agent-only). http-post is the additive send half.|) *)
+   (verify
+    (build "dune build image")
+    (smoke "(http-post \"http://127.0.0.1:18080/health\" \"{}\" \"x\") as admin returns a payload dict with ok/status/body")
+    (smoke "anonymous + non-admin/non-agent caller -> denied Prim_error, same gate as http-get")
+    (smoke "unreachable host raises transient Prim_error (curl (7) ...), NOT a payload dict")
+    (smoke "(ntfy/send ...) from a jobs schedule delivers (integration smoke with notify.ntfy-delivery)"))
+   (details
+    (doc (|
+         SURFACE (one prim, additive — lisp-interpreter.frozen-surface
+         additive rule):
+           (http-post url)                          ; empty headers, empty body
+           (http-post url headers-json)             ; body = \"\"
+           (http-post url headers-json body)        ; full form
+
+         SEMANTICS: the EXACT http-get contract, send half:
+           - Curl-backed (do_http_get's shape in prims_net.ml):
+             -X POST --data-binary @body_tmp, same temp-file dance,
+             same shell_quote discipline, same -D/-o split.
+           - headers-json: same \"Assoc string->string\" format as
+             http-get; \"_timeout_ms\" reserved header honored the
+             same way (default 20000).
+           - Returns the SAME payload dict VStr:
+             {ok, status, headers, body, err, kind}; 4xx/5xx are
+             returned (kind = http-client-error / http-server-error),
+             never raised.
+           - status=0 / curl transport error RAISES Prim_error
+             transient (design note §4b), so guard handlers and the
+             jobs runner's attempts/backoff see a real failure.
+           - Effect: Net. Add \"http-post\" to net_prims in
+             lisp/lib/effect.ml (additive tag use; lattice unchanged).
+
+         GATE (unchanged from http-get): identity confinement, not host
+         confinement. anonymous -> denied; non-admin, non-*/*agent ->
+         denied (\"admin/agent/human only\"). Rationale carried from
+         http-get: SSRF risk is bounded by who may call, not by a
+         destination allowlist. Host allowlist (PP_HTTP_ALLOW_HOSTS)
+         stays DEFERRED — name it here so nobody thinks it shipped:
+         if outbound http ever opens to non-admin users, an allowlist
+         lands first.
+
+         NON-GOALS (v1): http-request general method surface (PUT/PATCH
+         /DELETE) — add when a consumer needs it, same shape;
+         streaming/chunked bodies; connection reuse; a native Eio
+         client replacing curl (the deps for tls-eio already build on
+         the image for remote/'s client, but curl is honest and
+         shipped — port only if curl's process-spawn cost measurably
+         hurts, e.g. notify fan-out loops).
+    |))
+   )
+  )
   (subsection system-browser
    (doc "The live environment UI: browse branches, functions, types as a place you live")
    (status implemented)

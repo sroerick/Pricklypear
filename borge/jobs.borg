@@ -1,11 +1,12 @@
 (project pricklypear-jobs
  (doc "Pricklypear book chapter: jobs — durable background jobs, step checkpoints, and cron; host owns concurrency, guests see rows")
- (status planned)
+ (status implemented)
+ (* agent note (|2026-12 plan pass: flipped planned -> implemented. All four deliverable subsections (node-shapes, runner, step-checkpoints, schedules) are implemented and live: image/lib/jobs.ml (5-field cron + every-ms, SKIP LOCKED claim, runner fiber forked in boot.ml), prims_db.ml registers submit-job/submit-job-at/job-status/cancel-job/jobs/schedule/unschedule/schedules. The label lagged the ship.|) *)
  (convention ocaml-dune)
  (section jobs
 
   (doc "Durable jobs as typed data nodes; a host-owned runner fiber; step checkpoints for exactly-once; schedules for cron. The async story for Nopales is job-shaped, not call-shaped.")
-  (status planned)
+  (status implemented)
   (details
    (doc (|
         =========================================================
