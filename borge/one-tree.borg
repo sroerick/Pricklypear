@@ -537,6 +537,235 @@
     (smoke "both prims return node JSON including created_at and updated_at keys")
     (smoke "tree/lens-get resolves a suffix across the branch chain with closest-wins (child override shadows parent; main effective on child)")
     (smoke "tree/lens-children/subtree read under the effective branch owning the resolved node")))
+  (subsection sibling-order
+   (doc "Children have a user-controlled order; the tree answers next/prev/first/last")
+   (status planned)
+   (details
+    (doc (|
+         THE GAP. ltree paths encode hierarchy, never order. Today
+         children come back in path::text ASC (or created_at) order
+         — an accident of the index, not a modelled fact. Every
+         consequence of that is visible downstream: notes cannot do
+         per-node move-up/move-down (its per-node store is "flat"
+         partly because outline order only exists in the outline
+         blob), no package can ask next/prev-sibling, and outline-
+         style structures keep a second source of truth (the blob)
+         just to carry sequence.
+
+         DESIGN. A nullable rank TEXT column on tree_nodes
+         (fractional-indexing string, Figma/Linear style: "a0",
+         "a1", "a1V", ...).
+
+           - NOT fractional path labels. The path is a materialized
+             path: changing a label rewrites the subtree. Rank must
+             be mutable without touching identity, so it lives in a
+             column, not the path. The path is WHERE a node is; the
+             rank is WHAT SLOT it is in.
+           - NULL rank means unordered: ORDER BY rank NULLS LAST,
+             path::text ASC. Existing rows need no backfill; ordering
+             is opt-in per sibling set.
+           - Ordering is a property of the node, so it is owned by
+             the branch that owns the node under lens rules, and
+             rank changes are ordinary writes: versioned, diffable,
+             undoable (tree-time carries them for free).
+
+         PRIMS.
+
+           (tree/reorder path rank)        set rank directly
+           (tree/move-before path anchor)  place before sibling anchor
+           (tree/move-after  path anchor)  place after sibling anchor
+           (tree/siblings path)            ordered children of parent
+           (tree/next path) (tree/prev path)     adjacent ranked sibling
+           (tree/insert-child parent kind type body [:after anchor])
+
+         tree/children-of and tree/subtree gain the ranked ORDER BY
+         (rank NULLS LAST, path ASC); no signature change. Rank
+         allocation is mid-point between neighbours, rebalance on
+         exhaustion — a write-path detail, not visible in the ABI.
+
+         UNGATES. Per-node reorder for notes (killing the last reason
+         for outline-as-blob), the notes/node-op move-up/move-down
+         exclusion, and any future package with sequenced content
+         (outline, playlist, pipeline stages) gets ordering from the
+         tree instead of a private mechanism.
+   |))
+   )
+   (verify
+    (smoke "insert three children, move third before first: children-of returns new order")
+    (smoke "unranked siblings sort after ranked, path-ordered among themselves")
+    (smoke "reorder is versioned: gen-read at old gen shows old order; undo restores")
+    (smoke "child-lens override of a node owns its rank; parent rank unchanged")))
+  (subsection tree-path-prims
+   (doc "Kernel path algebra: one canonical set, replacing per-package string hacks")
+   (status planned)
+   (details
+    (doc (|
+         THE GAP. Path manipulation is re-implemented in Nopales by
+         every package that touches the tree: notes/tree/parent-of,
+         notes/tree/butlast, notes/tree/split-folder,
+         notes/tree/join-slash, todo/tree/prefix, todo/tree/tail,
+         tree/breadcrumb-parts. Path semantics (label encoding,
+         segment splitting) belong in the kernel next to the ltree
+         type they describe.
+
+         PRIMS (pure — no DB, no auth; label semantics identical to
+         tree/path-label):
+
+           (tree/parent path)        parent path or nil at root
+           (tree/leaf path)          final label
+           (tree/segments path)      VList of labels
+           (tree/child path label)   append (encodes label)
+           (tree/ancestors path)     every strict prefix, root-first
+
+         These compose with the existing read/lens prims — e.g.
+         (tree/lens-children (tree/parent p)) is sibling navigation.
+         They are pure string operations over the ltree textual form;
+         invalid paths raise rather than guess.
+
+         DEPRECATION. notes/tree/parent-of &co become thin aliases to
+         the kernel prims, then are removed in a later pass. New
+         packages must not grow private path algebra.
+
+         NON-GOAL. Glob/pattern matching over paths (ltree ~ queries)
+         stays admin/SQL-side for v1; the Nopales surface is
+         constructor/accessor algebra only.
+   |))
+   )
+   (verify
+    (smoke "round-trip: (tree/child (tree/parent p) (tree/leaf p)) = p for data/b paths")
+    (smoke "label-encoding edge cases (dashes, dots, uuid labels) match tree/path-label")
+    (smoke "notes/tree/parent-of and kernel tree/parent agree on the notes corpus")))
+  (subsection tree-edges
+   (doc "Links between nodes are first-class typed nodes — the graph is nodes AND edges")
+   (status planned)
+   (details
+    (doc (|
+         MOTIVATION. typed-nodes already declares :ref fields as
+         literal path references and promises the tree answers
+         "what points at this node"; the one tree is an object
+         graph (GemStone/Smalltalk lineage) and a graph is nodes
+         AND edges. Today only one direction exists, and only as
+         brute force: (backlinks needle) seq-scans every datum
+         body for exact string equality. No out-links, no link
+         kinds, no integrity, and the scan does not scale.
+
+         THE WEIRD PART (per roerick): a link IS a typed node.
+         Not a wrapper type inside bodies, not a side table — an
+         edge is a node of kind link under its source:
+
+           <source-path>.lnk.<id>   kind=link, body { to, kind, label? }
+
+         Being a node, an edge inherits the whole tree stack for
+         free: typed-boundary validation, versioning and time
+         travel (gen-read/gen-diff/undo cover edges), authorship,
+         branch ownership, and lens visibility.
+
+         PATH PLACEMENT. Edges are children of their SOURCE —
+         links are content OF a node: a roam note links outward;
+         a flash-card's deck ref is part of the card.
+         Consequences, all intentional:
+           - out-links is a children-by-level index read (kind
+             filter), never a scan.
+           - tree/move of the source carries its edges; tree/delete
+             of the source removes them. Outgoing references die
+             with their owner; incoming references survive at the
+             target as dangles.
+           - "from" is positional (the parent path), never
+             duplicated in the body; bodies hold only to/kind/label.
+
+         DANGLING BY DESIGN. The tree is branched and lensed
+         (branching-interaction): an edge on <user>/personal can
+         point at a system/main node another branch later deletes
+         or overrides. Hard foreign-key integrity would make
+         deletion and global refactor impossible across lenses
+         and contradicts fork freedom. So: to is branch-qualified
+         path TEXT; resolution is a READ-TIME act against the
+         reader's lens (effective node, closest-wins). An
+         unresolved edge is DANGLING DATA — rendered as such,
+         repairable, never an error state and never a write
+         blocker. GemStone could enforce pointers because there
+         was one object space; the lenses are deliberately many.
+
+         :ref UNIFICATION. Declared :ref fields (typed-nodes) and
+         edge nodes are two spellings of one relation. At typed-
+         boundary validation time a datum's :ref fields are
+         materialized as edge nodes under the datum (edge kind
+         from the field name), refreshed on update/delete.
+         Free-form bodies may still contain path-valued strings —
+         those are HINTS tooling may promote, never truth. One
+         relation serves every graph query; the body field stays
+         the human-writeable spelling.
+
+         PRIMS.
+
+           (link from-path to-path [kind [label]])  create edge
+             node (from must resolve in the session lens; to is
+             stored as given — may dangle)
+           (unlink edge-path)                        tombstone the edge
+           (out-links path)                          VList of edge JSON
+             with resolution status (resolved target summary or a
+             dangling marker)
+           (backlinks needle [limit])                same signature;
+             backed by edges (to = needle) UNION legacy body-string
+             matches — the legacy half is DEPRECATED and logged
+
+         INTEGRITY AS WARN, NOT FORBID. tree/delete and tree/move
+         report the incoming-edge count for their target; UI faces
+         warn on non-zero. tree/move of a TARGET leaves inbound
+         edges dangling (a repair/report surface is v2, non-goal).
+   |))
+   )
+   (verify
+    (smoke "link a->b: (out-links a) lists b resolved; (backlinks <b-path>) includes the edge path")
+    (smoke "tree/move of the target: the edge reports dangling on read; textual backlink still finds it (legacy half)")
+    (smoke "tree/delete of a node with 2 inbound edges reports count 2 and succeeds (warn, not forbid)")
+    (smoke "edge nodes are versioned: gen-diff shows edge add; undo of unlink restores the edge")
+    (smoke "datum with a declared :ref field gains a materialized edge node; update refreshes it; delete removes it")))
+  (subsection tree-browser
+   (doc "Generic /tree face over tree_nodes: navigate any subtree on the session lens")
+   (status planned)
+   (details
+    (doc (|
+         THE GAP. There is a tree/browser-shaped package (tree/*)
+         but it is a single-document outline viewer hardwired to
+         scripture_concepts. There is no face over the store
+         itself. If everything is one tree, the user should be
+         able to stand at any node and walk.
+
+         SURFACE. /tree?path=P on the session branch lens,
+         anonymous confined to public prefixes per
+         tree-read-prims.
+
+           - Root defaults to the identity's garden root
+             (tree/garden-root); ?path= focuses any node.
+           - One level via tree/lens-children, lazy-expanded
+             through htmx partials (the notes-ui-contract
+             lazy-load pattern, CHILDREN-BY-LEVEL index form
+             only).
+           - Breadcrumb from tree/ancestors; kind/type filter;
+             ranked order from sibling-order; as-of-gen view via
+             tree-time (?gen=) with gen-diff highlighting against
+             head.
+           - Node detail pane: body JSON, created/updated, author,
+             rank, out-links/backlinks (tree-edges), edit
+             affordance per tree/upsert auth rules.
+
+         RELATIONSHIP TO EXISTING FACES. Complements, not
+         replaces: /data (typed-row tables), /bindings (code),
+         /sys (admin store-tree). The existing tree/* package is
+         renamed/merged into it later; no route changes in v1 of
+         this subsection.
+
+         BUDGET. Every level read is one index-driven query; no
+         whole-subtree walk is ever the page path (projections
+         invariant). Depth-limited like tree/subtree.
+   |))
+   )
+   (verify
+    (smoke "anonymous /tree shows public prefixes only; private paths are not listable")
+    (smoke "lazy expand of one level issues exactly one children query")
+    (smoke "session on <user>/personal sees effective lens overrides, not just its own branch")
+    (smoke "?gen=<old> renders the subtree as of that generation")))
   (subsection projections
    (doc "SQL over the tree: relational rows are derived, not truth")
    (status implemented)
