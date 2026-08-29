@@ -412,6 +412,15 @@
           derive them — both were copy-based schemes working around
           a substrate that discarded before-images.
 
+          FEEDS: branching.branch-status (IMPLEMENTED
+          2026-08-28). Branch status
+          status (clean/ahead/behind/diverged/synced) is a
+          hash-first read over tree_versions keyed on a
+          base_gen merge-base coordinate — the first
+          branch-axis (not gen-axis) consumer of the
+          versioned leaves, and the retirement of
+          list_overrides' name-presence classification.
+
           FEEDS: local-first.sync (planned). Sync's merge base was
           already defined as (branch, generation) snapshot pins;
           with gen as a storage key, "common ancestor at pin" is a
