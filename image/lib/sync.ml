@@ -297,7 +297,7 @@ let apply_client_node (store : Store.t) ~(env : Yojson.Safe.t) : (unit, string) 
                 | Some conn ->
                     ignore
                       (Tree_store.upsert_datum conn ~path:p ~type_name:ty
-                         ~body_json:(Yojson.Safe.to_string b) ~author);
+                         ~body_json:(Yojson.Safe.to_string b) ~author ~rank:None);
                     Ok ()))
        | _ -> Error "sync: datum node missing type/body")
   | Some p, Some ("fn" | "type" | "route" | "pkg" as k) ->
@@ -327,9 +327,10 @@ let apply_client_node (store : Store.t) ~(env : Yojson.Safe.t) : (unit, string) 
        | None -> Error "sync: no DB"
        | Some conn ->
            let body_json = match body with Some b -> Yojson.Safe.to_string b | None -> "{}" in
-           ignore (Tree_store.upsert_hier conn ~path:p ~kind:k
-                     ~type_name:(match type_name with Some t -> t | None -> k)
-                     ~body_json ~author);
+           ignore
+             (Tree_store.upsert_hier conn ~path:p ~kind:k
+                ~type_name:(match type_name with Some t -> t | None -> k)
+                ~body_json ~author ~rank:None);
            Ok ())
   | _ -> Error "sync: node envelope missing path/kind"
 

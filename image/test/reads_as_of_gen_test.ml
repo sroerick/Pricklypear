@@ -73,7 +73,7 @@ let make_datum (store : S.t) ~type_name ~title : string =
          T.upsert_datum conn ~path:"data.u.tester.new" ~type_name
            ~body_json:
              (Printf.sprintf "{\"title\":\"%s\",\"body\":\"b\"}" title)
-           ~author:"tester"
+           ~author:"tester" ~rank:None
        with
        | Ok p -> p
        | Error e -> Alcotest.fail ("create failed: " ^ e))
@@ -134,7 +134,7 @@ let test_tree_get_at_gen () =
            ignore
              (T.upsert_datum conn ~path ~type_name
                 ~body_json:"{\"title\":\"a2\",\"body\":\"b2\"}"
-                ~author:"tester")
+                ~author:"tester" ~rank:None)
        | None -> ());
       (* head now "a2" *)
       (match C.tree_get store ~path () with
@@ -171,7 +171,7 @@ let test_gen_read () =
            ignore
              (T.upsert_datum conn ~path ~type_name
                 ~body_json:"{\"title\":\"a2\",\"body\":\"b2\"}"
-                ~author:"tester")
+                ~author:"tester" ~rank:None)
        | None -> ());
       (* gen-read at g0 -> old body *)
       Alcotest.(check (option string)) "gen-read g0 -> a"
@@ -198,7 +198,7 @@ let test_gen_diff () =
            ignore
              (T.upsert_datum conn ~path ~type_name
                 ~body_json:"{\"title\":\"a2\",\"body\":\"b2\"}"
-                ~author:"tester")
+                ~author:"tester" ~rank:None)
        | None -> ());
       let g1 = head_gen store path in
       (match C.tree_gen_diff store ~path ~gen_a:g0 ~gen_b:g1 with
@@ -239,11 +239,11 @@ let test_undo () =
            ignore
              (T.upsert_datum conn ~path ~type_name
                 ~body_json:"{\"title\":\"v1\",\"body\":\"b\"}"
-                ~author:"tester");
+                ~author:"tester" ~rank:None);
            ignore
              (T.upsert_datum conn ~path ~type_name
                 ~body_json:"{\"title\":\"v2\",\"body\":\"b\"}"
-                ~author:"tester")
+                ~author:"tester" ~rank:None)
        | None -> ());
       let g2 = head_gen store path in
       Alcotest.(check bool) "history grew" true (Int64.compare g2 g0 > 0);
@@ -276,11 +276,11 @@ let test_undo () =
            ignore
              (T.upsert_datum conn ~path ~type_name
                 ~body_json:"{\"title\":\"v1\",\"body\":\"b\"}"
-                ~author:"tester");
+                ~author:"tester" ~rank:None);
            ignore
              (T.upsert_datum conn ~path ~type_name
                 ~body_json:"{\"title\":\"v2\",\"body\":\"b\"}"
-                ~author:"tester")
+                ~author:"tester" ~rank:None)
        | None -> ());
       (match C.tree_undo store ~path ~n:2L () with
        | VStr _ -> ()
@@ -336,14 +336,14 @@ let test_undo_note_kind () =
                   (Printf.sprintf
                      "{\"uuid\":\"%s\",\"slug\":\"%s\",\"title\":\"v1\",\"tags\":\"\",\"kind\":\"note\",\"day\":\"\"}"
                      slug slug)
-                ~author:"tester");
+                ~author:"tester" ~rank:None);
            ignore
              (T.upsert_hier conn ~path ~kind:"note" ~type_name:"note"
                 ~body_json:
                   (Printf.sprintf
                      "{\"uuid\":\"%s\",\"slug\":\"%s\",\"title\":\"v2\",\"tags\":\"\",\"kind\":\"note\",\"day\":\"\"}"
                      slug slug)
-                ~author:"tester")
+                ~author:"tester" ~rank:None)
        | None -> ());
       (match C.tree_undo store ~path () with
        | VStr _ -> ()

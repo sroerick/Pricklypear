@@ -148,3 +148,8 @@
  (name tree_path_prims_test)
  (modules tree_path_prims_test)
  (libraries pricklypear-image pricklypear-lisp alcotest))
+
+(test
+ (name tree_sibling_order_test)
+ (modules tree_sibling_order_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))

@@ -107,7 +107,7 @@ let test_datum_create_shadow () =
           let path =
             match
               T.upsert_datum conn ~path:"data.u.tester.new" ~type_name
-                ~body_json:"{\"title\":\"a\",\"body\":\"b\"}" ~author:"tester"
+                ~body_json:"{\"title\":\"a\",\"body\":\"b\"}" ~author:"tester" ~rank:None
             with
             | Ok p -> p
             | Error e -> Alcotest.fail ("create failed: " ^ e)
@@ -156,7 +156,7 @@ let test_datum_update_append () =
           let path =
             match
               T.upsert_datum conn ~path:"data.u.tester.new" ~type_name
-                ~body_json:"{\"title\":\"a\",\"body\":\"b\"}" ~author:"tester"
+                ~body_json:"{\"title\":\"a\",\"body\":\"b\"}" ~author:"tester" ~rank:None
             with
             | Ok p -> p
             | Error e -> Alcotest.fail ("create failed: " ^ e)
@@ -169,7 +169,7 @@ let test_datum_update_append () =
           (* update in place *)
           ignore
             (T.upsert_datum conn ~path ~type_name
-               ~body_json:"{\"title\":\"a2\",\"body\":\"b2\"}" ~author:"tester");
+               ~body_json:"{\"title\":\"a2\",\"body\":\"b2\"}" ~author:"tester" ~rank:None);
           let hist = T.versioned_history conn ~path () in
           Alcotest.(check int) "two version rows after update" 2
             (List.length hist);
@@ -202,7 +202,7 @@ let test_datum_delete_tombstone () =
           let path =
             match
               T.upsert_datum conn ~path:"data.u.tester.new" ~type_name
-                ~body_json:"{\"title\":\"a\",\"body\":\"b\"}" ~author:"tester"
+                ~body_json:"{\"title\":\"a\",\"body\":\"b\"}" ~author:"tester" ~rank:None
             with
             | Ok p -> p
             | Error e -> Alcotest.fail ("create failed: " ^ e)
