@@ -1091,6 +1091,8 @@
            WriteDb   create, update, update-field, delete, deftype, ...
            Branch    fork, merge, checkout
            Publish   route (and later define-page helpers)
+           Net       outbound HTTP (http-get, http-post); identity-
+                     gated admin/agent at the prim (image.outbound-http)
            Ai        propose-function / LLM client
            Html      render-html (soft; display intent, not security)
            Txn       body expects with-transaction scope

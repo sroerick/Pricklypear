@@ -430,6 +430,10 @@
   (doc "Book chapter — BSB study libraries (dabar); full text inlined from borge/dabar.borg")
   (inline borge/dabar.borg)
  )
+ (section notify
+  (doc "Book chapter — getting events out of the image to a human: ntfy server-push from jobs schedules v1, in-habitat feed deferred, delivery-path decisions recorded; full text inlined from borge/notify.borg")
+  (inline borge/notify.borg)
+ )
  (section migrations
   (doc "Book chapter — full text inlined from borge/migrations.borg")
   (inline borge/migrations.borg)
