@@ -500,16 +500,30 @@ let parse_bearer_auth (headers : (string * string) list) : string option =
         if scheme <> "bearer" then None
         else Some (String.trim (String.sub v 6 (String.length v - 6)))
 
+(** Emit "; Secure" on the session cookie unless explicitly disabled via
+    PP_COOKIE_SECURE=0/false, and only when a base domain is configured —
+    prod (base domain set) is https, while dev plain HTTP (no domain)
+    stays without Secure. *)
+let cookie_secure () : bool =
+  let forced_off =
+    match Sys.getenv_opt "PP_COOKIE_SECURE" with
+    | Some ("0" | "false" | "FALSE" | "False") -> true
+    | _ -> false
+  in
+  (not forced_off) && base_domain () <> None
+
 let set_cookie_header ~(token : string) : string =
-  (* Dev is plain HTTP — omit Secure. Path=/; HttpOnly; SameSite=Lax.
-     PP_BASE_DOMAIN scopes cookie across subdomains. *)
+  (* Path=/; HttpOnly; SameSite=Lax. PP_BASE_DOMAIN scopes cookie across
+     subdomains. Secure when a base domain is set unless PP_COOKIE_SECURE
+     forces it off (see cookie_secure). *)
   let domain =
     match base_domain () with
     | Some b -> "; Domain=." ^ b
     | None -> ""
   in
-  Printf.sprintf "%s=%s; Path=/; HttpOnly; SameSite=Lax; Max-Age=%d%s"
-    cookie_name token (60 * 60 * 24 * 14) domain
+  let secure = if cookie_secure () then "; Secure" else "" in
+  Printf.sprintf "%s=%s; Path=/; HttpOnly; SameSite=Lax; Max-Age=%d%s%s"
+    cookie_name token (60 * 60 * 24 * 14) domain secure
 
 let clear_cookie_header () : string =
   let domain =
@@ -913,7 +927,10 @@ let post_login (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
                         (match classify_host headers with
                          | Host_garden g when g = user.Auth_store.username -> "/"
                          | _ ->
-                             "http://" ^ user.Auth_store.username ^ "." ^ base ^ "/")
+                             (* garden_url is https — never bounce a fresh
+                                session cookie over plain http. *)
+                             garden_url ~username:user.Auth_store.username
+                               ~path:"/")
                     | None -> "/")
              in
              redirect_with_cookie reqd ~location
