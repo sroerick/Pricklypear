@@ -484,6 +484,19 @@ let export_package (t : t) (pkg : string) : string =
                           (h :: List.map (fun line -> "  " ^ line) t))
              in
              Buffer.add_string buf body_indented;
+             (* Re-inject the define-time docstring as a trailing
+                define-doc form so the vault round-trip preserves the
+                doc column. parse_top_define's 3-arg (trailing-doc)
+                case reads it back into the doc column on reseed; trailing
+                wins over any lambda-internal doc, and the trailing string
+                is treated as metadata (not evaluated). (i-1787318456) *)
+             (match Store.lookup_function_doc t.store name with
+              | Some doc ->
+                  Buffer.add_string buf "\n  ";
+                  Buffer.add_string buf
+                    (Pricklypear_lisp.Reader.pp_value
+                       (Pricklypear_lisp.Ast.VStr doc))
+              | None -> ());
              Buffer.add_string buf ")\n\n";
              go rest)
   in
