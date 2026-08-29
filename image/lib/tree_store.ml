@@ -169,7 +169,7 @@ let hash_body (canonical_body_json : string) : string =
 type node = {
   id : string;
   path : string;
-  kind : string;             (* fn | type | route | datum | folder | note | heading *)
+  kind : string;             (* fn | type | route | datum | folder | note | heading | link *)
   type_name : string option; (* datum: the Nopales type *)
   body : Yojson.Safe.t;      (* canonical body (AST / fields / route) *)
   author : string;
@@ -177,6 +177,7 @@ type node = {
   hash : string;
   created_at : string;       (* row column; source of truth (not in payload) *)
   updated_at : string;       (* row column; advanced on every upsert *)
+  rank : string option;      (* sibling-order: NULL = unordered (sorts last) *)
 }
 
 let envelope ~kind ~path ~type_ ~body ~author ~doc : Yojson.Safe.t =
@@ -193,10 +194,10 @@ let envelope ~kind ~path ~type_ ~body ~author ~doc : Yojson.Safe.t =
 
 let node_of_row (row : Pgx.row) : node option =
   (* Expected column order: id, path, kind, type_name, payload, hash,
-     author, created_at, updated_at *)
+     author, created_at, updated_at, rank (see select_cols) *)
   match row with
   | [ id_c; path_c; kind_c; type_c; payload_c; hash_c; author_c;
-      created_c; updated_c ] ->
+      created_c; updated_c; rank_c ] ->
       (match Pgx.Value.to_string id_c,
              Pgx.Value.to_string path_c,
              Pgx.Value.to_string kind_c,
@@ -228,7 +229,8 @@ let node_of_row (row : Pgx.row) : node option =
               Some { id; path; kind;
                      type_name = Pgx.Value.to_string type_c;
                      body; author; doc; hash;
-                     created_at; updated_at }
+                     created_at; updated_at;
+                     rank = Pgx.Value.to_string rank_c }
             with Yojson.Json_error _ -> None)
        | _ -> None)
   | _ -> None
@@ -392,7 +394,8 @@ let delete_datum (conn : Store_db.conn) ~(type_name : string) ~(id : string) : s
     body/hash/author so the same prim upserts and updates. The reverse
     mirror (tree_from_nodes) syncs data_rows. Returns Ok path | Error msg. *)
 let upsert_datum (conn : Store_db.conn) ~(path : string) ~(type_name : string)
-    ~(body_json : string) ~(author : string) : (string, string) result =
+    ~(body_json : string) ~(author : string) ~(rank : string option)
+    : (string, string) result =
   let last_label =
     let parts = String.split_on_char '.' path in
     match List.rev parts with [] -> "" | l :: _ -> l
@@ -420,38 +423,44 @@ let upsert_datum (conn : Store_db.conn) ~(path : string) ~(type_name : string)
     else
       let sql =
         "WITH nid AS (SELECT gen_random_uuid() AS id) " ^
-        "INSERT INTO tree_nodes (path, kind, type_name, payload, hash, author, updated_at) " ^
+        "INSERT INTO tree_nodes (path, kind, type_name, payload, hash, author, rank, updated_at) " ^
 "SELECT tree_datum_path($1::text, nid.id, $3::text, ''), 'datum', $1::text, " ^
         "  jsonb_build_object('v',1,'kind','datum', " ^
 "    'path', tree_datum_path($1::text, nid.id, $3::text, '')::text, " ^
         "    'type',$1::text,'body',$2::jsonb,'author',$3::text,'doc',NULL,'hash',$4::text), " ^
-        "  $4::text, $3::text, now() " ^
+        "  $4::text, $3::text, $5::text, now() " ^
         "FROM nid ON CONFLICT (path) DO UPDATE SET " ^
         "  payload = EXCLUDED.payload, hash = EXCLUDED.hash, " ^
-        "  author = EXCLUDED.author, updated_at = now() " ^
+        "  author = EXCLUDED.author, " ^
+        "  rank = COALESCE(EXCLUDED.rank, tree_nodes.rank), " ^
+        "  updated_at = now() " ^
         "RETURNING path::text"
       in
       run_sql ~params:
         [ Pgx.Value.of_string type_name; Pgx.Value.of_string body_json;
-          Pgx.Value.of_string author; Pgx.Value.of_string hash ]
+          Pgx.Value.of_string author; Pgx.Value.of_string hash;
+          (match rank with Some r -> Pgx.Value.of_string r | None -> Pgx.Value.null) ]
         sql
   else if type_name = "" then Error "upsert_datum: empty type_name"
   else
     let sql =
-      "INSERT INTO tree_nodes (path, kind, type_name, payload, hash, author, updated_at) " ^
+      "INSERT INTO tree_nodes (path, kind, type_name, payload, hash, author, rank, updated_at) " ^
       "VALUES ($1::ltree, 'datum', $2::text, " ^
       "  jsonb_build_object('v',1,'kind','datum','path',$1::text,'type',$2::text, " ^
       "    'body',$3::jsonb,'author',$4::text,'doc',NULL,'hash',$5::text), " ^
-      "  $5::text, $4::text, now()) " ^
+      "  $5::text, $4::text, $6::text, now()) " ^
       "ON CONFLICT (path) DO UPDATE SET " ^
       "  payload = EXCLUDED.payload, hash = EXCLUDED.hash, " ^
-      "  author = EXCLUDED.author, updated_at = now() " ^
+      "  author = EXCLUDED.author, " ^
+      "  rank = COALESCE(EXCLUDED.rank, tree_nodes.rank), " ^
+      "  updated_at = now() " ^
       "RETURNING path::text"
     in
     run_sql ~params:
       [ Pgx.Value.of_string path; Pgx.Value.of_string type_name;
         Pgx.Value.of_string body_json; Pgx.Value.of_string author;
-        Pgx.Value.of_string hash ]
+        Pgx.Value.of_string hash;
+        (match rank with Some r -> Pgx.Value.of_string r | None -> Pgx.Value.null) ]
       sql
 
 (** Validate [fields_json] against a declared type's field names.
@@ -520,7 +529,7 @@ let recompute_head_hash (conn : Store_db.conn) ~(branch_id : string) : unit =
 
 let select_cols =
   "id::text, path::text, kind, type_name, payload::text, hash, author, "
-  ^ "created_at::text, updated_at::text"
+  ^ "created_at::text, updated_at::text, rank"
 
 (** Fetch one node by exact path. *)
 let get_by_path (conn : Store_db.conn) ~(path : string) : node option =
@@ -546,12 +555,13 @@ type version = {
   v_author : string option;
   v_created_at : string option;
   v_tombstone : bool;
+  v_rank : string option;      (* sibling-order: rank in force at that gen *)
 }
 
 let version_of_row (row : Pgx.row) : version option =
   match row with
   | [ gen_c; path_c; kind_c; type_c; body_c; hash_c; author_c;
-      created_c; tomb_c ] ->
+      created_c; tomb_c; rank_c ] ->
       let body =
         match Pgx.Value.to_string body_c with
         | Some s -> (try Some (Yojson.Safe.from_string s) with _ -> None)
@@ -574,7 +584,8 @@ let version_of_row (row : Pgx.row) : version option =
                v_hash = Pgx.Value.to_string hash_c;
                v_author = Pgx.Value.to_string author_c;
                v_created_at = Pgx.Value.to_string created_c;
-               v_tombstone = tomb })
+               v_tombstone = tomb;
+               v_rank = Pgx.Value.to_string rank_c })
   | _ -> None
 
 (** Newest versioned row at head (or as-of [at_gen]) for [path], matching
@@ -587,11 +598,11 @@ let version_of_row (row : Pgx.row) : version option =
 let versioned_head (conn : Store_db.conn) ~(path : string)
     ?(at_gen : int64 option) () : version option =
   let sql =
-    "SELECT v.gen, v.path::text, v.kind, v.type_name, v.body::text, v.hash, " ^
-    "v.author, v.created_at::text, v.body->>'_tombstone'::text " ^
-    "FROM tree_versions v WHERE v.path = $1::ltree " ^
-    "AND ($2::bigint IS NULL OR v.gen <= $2::bigint) " ^
-    "ORDER BY v.gen DESC LIMIT 1"
+    "SELECT v.gen, v.path::text, v.kind, v.type_name, v.body::text, v.hash, "
+    ^ "v.author, v.created_at::text, v.body->>'_tombstone'::text, v.rank "
+    ^ "FROM tree_versions v WHERE v.path = $1::ltree "
+    ^ "AND ($2::bigint IS NULL OR v.gen <= $2::bigint) "
+    ^ "ORDER BY v.gen DESC LIMIT 1"
   in
   let rows =
     Io_lwt.Db.execute conn
@@ -606,9 +617,9 @@ let versioned_head (conn : Store_db.conn) ~(path : string)
 (** All version rows for [path], oldest gen first (append chain). *)
 let versioned_history (conn : Store_db.conn) ~(path : string) () : version list =
   let sql =
-    "SELECT v.gen, v.path::text, v.kind, v.type_name, v.body::text, v.hash, " ^
-    "v.author, v.created_at::text, v.body->>'_tombstone'::text " ^
-    "FROM tree_versions v WHERE v.path = $1::ltree ORDER BY v.gen ASC"
+    "SELECT v.gen, v.path::text, v.kind, v.type_name, v.body::text, v.hash, "
+    ^ "v.author, v.created_at::text, v.body->>'_tombstone'::text, v.rank "
+    ^ "FROM tree_versions v WHERE v.path = $1::ltree ORDER BY v.gen ASC"
   in
   let rows =
     Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string path ] sql
@@ -621,8 +632,11 @@ let list_subtree (conn : Store_db.conn) ~(prefix : string)
     ?(limit : int = 1000) () : node list =
   (* conn: Store_db.conn (tx-aware) *)
         let sql =
-        "SELECT " ^ select_cols ^ " FROM tree_nodes " ^
-        "WHERE path <@ $1::ltree ORDER BY path::text ASC LIMIT $2" in
+        "SELECT " ^ select_cols ^ " FROM tree_nodes "
+        ^ "WHERE path <@ $1::ltree "
+        (* sibling-order: ranked siblings first (byte-order rank), then
+           unranked, path-ordered among themselves. NULL rank = unordered. *)
+        ^ "ORDER BY rank COLLATE \"C\" NULLS LAST, path::text ASC LIMIT $2" in
       let rows =
         Io_lwt.Db.execute conn
           ~params:[ Pgx.Value.of_string prefix; Pgx.Value.of_int limit ] sql
@@ -856,6 +870,128 @@ let path_ancestors (path : string) : string list =
   in
   go [] "" labels
 
+(* ---- sibling-order rank (one-tree.sibling-order) ----
+
+   Fractional indexing over base-36 [0-9a-z], compared as raw bytes
+   (ORDER BY rank COLLATE "C") — the same alphabet byte order in every
+   locale. A rank is any nonempty [0-9a-z]+ string (the spec's examples
+   "a0", "a1", "a1V" included); allocated ranks additionally never end
+   in '0', which keeps byte order == the fractional-value order for
+   everything the allocator produces. Allocation is midpoint-between-
+   neighbours; when a generated rank would exceed [max_rank_len] — or a
+   degenerate value-aliased pair leaves no room (b = a ^ "0"*k) — the
+   whole sibling set is rebalanced onto fresh fixed-width ranks.
+   Write-path detail — not visible in the prim ABI. *)
+
+let max_rank_len = 12
+
+let rank_alphabet = "0123456789abcdefghijklmnopqrstuvwxyz"
+
+(** Rank check: nonempty [0-9a-z]+. *)
+let rank_valid (s : string) : bool =
+  let n = String.length s in
+  n > 0
+  && String.for_all
+       (fun c -> (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z'))
+       s
+
+let rank_digit_of (c : char) : int =
+  if c >= '0' && c <= '9' then Char.code c - Char.code '0'
+  else if c >= 'a' && c <= 'z' then Char.code c - Char.code 'a' + 10
+  else invalid_arg ("rank: digit out of alphabet: " ^ String.make 1 c)
+
+let rank_char_of (d : int) : char = rank_alphabet.[d]
+
+(** Strict midpoint between distinct ranks a < b (byte order). The result
+   is strictly between them (and canonical). Returns "" only for the
+   degenerate value-aliased pair (b = a ^ "0"*k): no rank exists between,
+   the caller must rebalance the sibling set. *)
+let rank_midpoint (a : string) (b : string) : string =
+  if not (rank_valid a && rank_valid b) then
+    invalid_arg "rank_midpoint: non-canonical rank";
+  if String.compare a b >= 0 then invalid_arg "rank_midpoint: need a < b";
+  let len_a = String.length a and len_b = String.length b in
+  let exception Degenerate in
+  let buf = Buffer.create (max len_a len_b + 3) in
+  let rec go i =
+    if i >= len_a then begin
+      (* a is a byte-prefix of b: emit a canonical Y strictly below b's
+         remainder R. R = leading '0's then a digit d > '0', so: Y = those
+         '0's followed by pred(d) — or "01" when d = 1 (pred '0' may not
+         terminate a rank; "0"+anything is still < "1..."). When R is ALL
+         zeros (b = a ^ "0"*k, value-aliased with a) no rank exists
+         between the two: signal the caller to rebalance. *)
+      let rec zeros j = if j < len_b && b.[j] = '0' then zeros (j + 1) else j in
+      let j = zeros i in
+      if j >= len_b then raise Degenerate;
+      let d = rank_digit_of b.[j] in
+      for _k = i to j - 1 do Buffer.add_char buf '0' done;
+      if d = 1 then Buffer.add_string buf "01"
+      else Buffer.add_char buf (rank_char_of (d - 1))
+    end
+    else if i >= len_b then
+      (* b is a byte-prefix of a -> byte order a > b: excluded above. *)
+      invalid_arg "rank_midpoint: b prefix of a"
+    else begin
+      let ca = a.[i] and cb = b.[i] in
+      if ca = cb then begin
+        Buffer.add_char buf ca;
+        go (i + 1)
+      end
+      else if rank_digit_of cb - rank_digit_of ca >= 2 then
+        (* room at the first differing position: one midpoint digit *)
+        Buffer.add_char buf
+          (rank_char_of
+             (rank_digit_of ca + (rank_digit_of cb - rank_digit_of ca) / 2))
+      else begin
+        (* adjacent digits: take ca, then any suffix past a's remainder
+           ('h' terminates the result canonically) *)
+        Buffer.add_char buf ca;
+        Buffer.add_string buf (String.sub a (i + 1) (len_a - i - 1));
+        Buffer.add_char buf 'h'
+      end
+    end
+  in
+  match go 0 with
+  | exception Degenerate -> ""
+  | () -> Buffer.contents buf
+
+(** Rank strictly below every existing rank (before-first). [first] is
+   the smallest ranked sibling's rank ("" = none ranked yet). None means
+   the caller must rebalance the sibling set first. *)
+let rank_before (first : string) : string option =
+  if first = "" then Some "a"
+  else if String.compare first "0" <= 0 then None (* "0" is the floor *)
+  else Some (rank_midpoint "0" first)
+
+(** Rank strictly above every existing rank (append / after-last).
+   [last] is the largest ranked sibling's rank ("" = none ranked yet). *)
+let rank_after (last : string) : string =
+  if last = "" then "a"
+  else
+    (try rank_midpoint last "zzzzzzzzzzzz"
+     with Invalid_argument _ -> last ^ "h")
+
+(** Fresh fixed-width ranks for a sibling set of [n]: base-36 (i+1)
+   zero-filled to a common width (fixed width orders correctly as plain
+   text). Starts at 1 so the "0" floor sentinel is never allocated. *)
+let rank_rebalance (n : int) : string list =
+  let rec base36 x acc =
+    if x = 0 then acc
+    else base36 (x / 36) (rank_char_of (x mod 36) :: acc)
+  in
+  let digits_of x =
+    match base36 x [] with [] -> "0" | l -> String.concat "" (List.map (String.make 1) l)
+  in
+  let width = max 1 (String.length (digits_of (max 1 n))) in
+  let zfill i =
+    let ds = digits_of i in
+    let pad = String.make (width - String.length ds) '0' in
+    pad ^ ds
+  in
+  List.init (max 0 n) (fun i -> zfill (i + 1))
+
+
 let node_to_json (n : node) : string =
   let body = n.body in
   Yojson.Safe.to_string
@@ -870,6 +1006,7 @@ let node_to_json (n : node) : string =
        ; ("hash", `String n.hash)
        ; ("created_at", `String n.created_at)
        ; ("updated_at", `String n.updated_at)
+       ; ("rank", match n.rank with Some r -> `String r | None -> `Null)
        ])
 
 (** Render a [version] row as the JSON the reads-as-of-gen prims return.
@@ -908,6 +1045,8 @@ let version_to_json (v : version) : string =
           match v.v_created_at with Some c -> `String c | None -> `Null)
        ; ("gen", gen)
        ; ("tombstone", `Bool v.v_tombstone)
+       ; ("rank",
+          match v.v_rank with Some r -> `String r | None -> `Null)
        ])
 
 (** Convert a versioned-leaf row into a [node] so the gen-as-of surface can
@@ -944,6 +1083,7 @@ let version_of_leaf (v : version) : node option =
           (match v.v_created_at with Some c -> c | None -> os "created_at" "")
       ; updated_at =
           (match v.v_created_at with Some c -> c | None -> os "created_at" "")
+      ; rank = v.v_rank
       }
 
 let parse_body_json (fields_json : string) : (Yojson.Safe.t, string) result =
@@ -1022,6 +1162,7 @@ let find_by_body_field (conn : Store_db.conn) ~(kind : string option)
     K1: notes enforce unique (author, slug); folder+note unique body.uuid. *)
 let upsert_hier (conn : Store_db.conn) ~(path : string) ~(kind : string)
     ~(type_name : string) ~(body_json : string) ~(author : string)
+    ~(rank : string option)
     : (string, string) result =
   if not (is_hier_kind kind) then
     (Error ("upsert_hier: kind must be folder|note|heading, got " ^ kind))
@@ -1074,16 +1215,22 @@ let upsert_hier (conn : Store_db.conn) ~(path : string) ~(kind : string)
               | Some err -> (Error err)
               | None ->
                   let hash = hash_body (Yojson.Safe.to_string body) in
+                  (* sibling-order: an explicit rank lands on INSERT and on
+                     CONFLICT UPDATE (COALESCE keeps the existing rank when
+                     the caller passes none — tree/upsert never clobbers
+                     order that tree/reorder established). *)
                   let sql =
-                    "INSERT INTO tree_nodes (path, kind, type_name, payload, hash, author, updated_at) "
+                    "INSERT INTO tree_nodes (path, kind, type_name, payload, hash, author, rank, updated_at) "
                     ^ "VALUES ($1::ltree, $2::text, $3::text, "
                     ^ "  jsonb_build_object('v',1,'kind',$2::text,'path',$1::text,'type',$3::text, "
                     ^ "    'body',$4::jsonb,'author',$5::text,'doc',NULL,'hash',$6::text), "
-                    ^ "  $6::text, $5::text, now()) "
+                    ^ "  $6::text, $5::text, $7::text, now()) "
                     ^ "ON CONFLICT (path) DO UPDATE SET "
                     ^ "  kind = EXCLUDED.kind, type_name = EXCLUDED.type_name, "
                     ^ "  payload = EXCLUDED.payload, hash = EXCLUDED.hash, "
-                    ^ "  author = EXCLUDED.author, updated_at = now() "
+                    ^ "  author = EXCLUDED.author, "
+                    ^ "  rank = COALESCE(EXCLUDED.rank, tree_nodes.rank), "
+                    ^ "  updated_at = now() "
                     ^ "RETURNING path::text"
                   in
                   (try
@@ -1096,6 +1243,9 @@ let upsert_hier (conn : Store_db.conn) ~(path : string) ~(kind : string)
                             ; Pgx.Value.of_string body_json
                             ; Pgx.Value.of_string author
                             ; Pgx.Value.of_string hash
+                            ; (match rank with
+                               | Some r -> Pgx.Value.of_string r
+                               | None -> Pgx.Value.null)
                             ]
                           sql
                       in
@@ -1482,7 +1632,9 @@ let list_children (conn : Store_db.conn) ~(prefix : string) ?(limit : int = 5000
       ^ "    AND subpath(n.path, nlevel($1::ltree), 1)::text = 'h' "
       ^ "  ) "
       ^ ") "
-      ^ "ORDER BY n.path::text ASC LIMIT $2"
+      (* sibling-order: ranked siblings first (byte-order rank — locale-
+         independent), then unranked, path-ordered among themselves. *)
+      ^ "ORDER BY n.rank COLLATE \"C\" NULLS LAST, n.path::text ASC LIMIT $2"
     in
     let rows =
       Io_lwt.Db.execute conn
@@ -1522,6 +1674,44 @@ let lens_subtree_in_chain (conn : Store_db.conn) ~(suffix : string)
   match resolve_in_chain conn ~mk_path chain with
   | None -> []
   | Some n -> list_subtree conn ~prefix:n.path ~limit ()
+
+(** Set the rank of one node (None clears it — back to unordered).
+   Returns the number of rows updated (0 = no such node). A rank change
+   is an ordinary versioned write (migration 025's trigger echoes the
+   rank column; a same-rank UPDATE is a suppressed mirror echo). *)
+let set_rank (conn : Store_db.conn) ~(path : string)
+    ~(rank : string option) : int =
+  if not (valid_path path) then 0
+  else
+    let sql =
+      "UPDATE tree_nodes SET rank = $2::text, updated_at = now() "
+      ^ "WHERE path = $1::ltree RETURNING path::text"
+    in
+    let rows =
+      Io_lwt.Db.execute conn
+        ~params:
+          [ Pgx.Value.of_string path
+          ; (match rank with Some r -> Pgx.Value.of_string r | None -> Pgx.Value.null)
+          ]
+        sql
+    in
+    List.length rows
+
+(** Re-assign fresh fixed-width ranks to every RANKED sibling under
+   [parent] (rank-ordered), keeping their relative order. Unranked
+   siblings stay NULL (they sort after the ranked block). Returns the
+   number reassigned. Caller wraps in a transaction if atomicity matters. *)
+let rebalance_siblings (conn : Store_db.conn) ~(parent : string) : int =
+  let ranked =
+    list_children conn ~prefix:parent ()
+    |> List.filter_map (fun (n : node) ->
+           match n.rank with Some r -> Some (n.path, r) | None -> None)
+  in
+  let fresh = rank_rebalance (List.length ranked) in
+  List.fold_left2
+    (fun acc (path, _old) new_rank ->
+      acc + set_rank conn ~path ~rank:(Some new_rank))
+    0 ranked fresh
 
 let html_escape_text (s : string) : string =
   let buf = Buffer.create (String.length s + 8) in

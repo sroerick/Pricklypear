@@ -539,7 +539,8 @@
     (smoke "tree/lens-children/subtree read under the effective branch owning the resolved node")))
   (subsection sibling-order
    (doc "Children have a user-controlled order; the tree answers next/prev/first/last")
-   (status planned)
+   (status implemented)
+   (implements migrations/025_sibling_order.sql image/lib/tree_store.ml image/lib/crud.ml image/lib/prims_db.ml)
    (details
     (doc (|
          THE GAP. ltree paths encode hierarchy, never order. Today

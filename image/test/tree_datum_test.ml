@@ -84,7 +84,7 @@ let test_upsert_placeholder () =
            match
              T.upsert_datum conn
                ~path:"data.u.tester.new"
-               ~type_name ~body_json:body ~author:"tester"
+               ~type_name ~body_json:body ~author:"tester" ~rank:None
            with
            | Ok p ->
                (* generated path: data.u.tester.<type>.<uuid> *)
@@ -112,7 +112,7 @@ let test_upsert_full_path () =
        | None -> ()
        | Some conn ->
            (match
-              T.upsert_datum conn ~path ~type_name ~body_json:body ~author:"tester"
+              T.upsert_datum conn ~path ~type_name ~body_json:body ~author:"tester" ~rank:None
             with
             | Error e -> Alcotest.fail ("upsert failed: " ^ e)
             | Ok p -> Alcotest.(check string) "returned path" path p);
@@ -146,7 +146,7 @@ let test_upsert_update_inplace () =
        | Some conn ->
            (match
               T.upsert_datum conn ~path ~type_name
-                ~body_json:"{\"title\":\"a\",\"body\":\"b\"}" ~author:"tester"
+                ~body_json:"{\"title\":\"a\",\"body\":\"b\"}" ~author:"tester" ~rank:None
             with
             | Error e -> Alcotest.fail ("create failed: " ^ e)
             | Ok _ -> ());
@@ -157,7 +157,7 @@ let test_upsert_update_inplace () =
                 (* update in place *)
                 (match
                    T.upsert_datum conn ~path ~type_name
-                     ~body_json:"{\"title\":\"a2\",\"body\":\"b2\"}" ~author:"tester"
+                     ~body_json:"{\"title\":\"a2\",\"body\":\"b2\"}" ~author:"tester" ~rank:None
                  with
                  | Error e -> Alcotest.fail ("update failed: " ^ e)
                  | Ok _ -> ());
@@ -223,7 +223,7 @@ let test_move_datum () =
        | Some conn ->
            (match
               T.upsert_datum conn ~path:old_path ~type_name
-                ~body_json:"{\"title\":\"move\",\"body\":\"me\"}" ~author:"tester"
+                ~body_json:"{\"title\":\"move\",\"body\":\"me\"}" ~author:"tester" ~rank:None
             with
             | Error e -> Alcotest.fail ("create failed: " ^ e) | Ok _ -> ());
            (match T.move_subtree conn ~old_path ~new_path with
@@ -254,7 +254,7 @@ let test_delete_datum () =
        | Some conn ->
            (match
               T.upsert_datum conn ~path ~type_name
-                ~body_json:"{\"title\":\"del\",\"body\":\"me\"}" ~author:"tester"
+                ~body_json:"{\"title\":\"del\",\"body\":\"me\"}" ~author:"tester" ~rank:None
             with
             | Error e -> Alcotest.fail ("create failed: " ^ e) | Ok _ -> ());
            let n = T.delete_path conn ~path ~recursive:false in
@@ -275,7 +275,7 @@ let test_readers_kind_agnostic () =
        | Some conn ->
            (match
               T.upsert_datum conn ~path ~type_name
-                ~body_json:"{\"title\":\"kind\",\"body\":\"agnostic\"}" ~author:"tester"
+                ~body_json:"{\"title\":\"kind\",\"body\":\"agnostic\"}" ~author:"tester" ~rank:None
             with
             | Error e -> Alcotest.fail ("create failed: " ^ e) | Ok _ -> ());
            (* tree/list-kind kind="datum" under the data prefix finds it *)
@@ -316,7 +316,7 @@ let test_move_type_change () =
        | Some conn ->
            (match
               T.upsert_datum conn ~path:old_path ~type_name:ta
-                ~body_json:"{\"title\":\"x\",\"body\":\"y\"}" ~author:"tester"
+                ~body_json:"{\"title\":\"x\",\"body\":\"y\"}" ~author:"tester" ~rank:None
             with
             | Error e -> Alcotest.fail ("create failed: " ^ e) | Ok _ -> ());
            (* type change to a type requiring 'status' -> reject naming it *)
@@ -349,7 +349,7 @@ let test_move_type_change_ok () =
        | Some conn ->
            (match
               T.upsert_datum conn ~path:old_path ~type_name:ta
-                ~body_json:"{\"title\":\"x\",\"body\":\"y\",\"status\":\"todo\"}" ~author:"tester"
+                ~body_json:"{\"title\":\"x\",\"body\":\"y\",\"status\":\"todo\"}" ~author:"tester" ~rank:None
             with
             | Error e -> Alcotest.fail ("create failed: " ^ e) | Ok _ -> ());
            (match C.tree_move store ~old_path ~new_path with

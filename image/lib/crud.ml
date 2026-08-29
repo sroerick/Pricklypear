@@ -657,6 +657,15 @@ let type_fields (store : Store.t) ~(type_name : string) : value =
   | None -> VNil
   | Some fields -> (VList (List.map (fun f -> VStr f) fields))
 
+let tree_prim_error name msg =
+  raise
+    (Pricklypear_lisp.Ast.Interp_error
+       (Pricklypear_lisp.Ast.Prim_error (name, msg, "bad-args")))
+
+let wrap_path_exn name (f : unit -> value) : value =
+  try f () with Invalid_argument msg -> tree_prim_error name msg
+
+
 (* ---- hierarchical tree prims (notes.tree-cutover K0) ---- *)
 
 let tree_get (store : Store.t) ~(path : string) ?(at_gen : int64 option) () : value =
@@ -912,7 +921,11 @@ let tree_gen_diff (store : Store.t) ~(path : string)
       let a = Tree_store.versioned_head conn ~path ~at_gen:gen_a () in
       let b = Tree_store.versioned_head conn ~path ~at_gen:gen_b () in
       (match a, b with
-       | Some va, Some vb when va.Tree_store.v_hash = vb.Tree_store.v_hash ->
+       | Some va, Some vb
+         when va.Tree_store.v_hash = vb.Tree_store.v_hash
+              && va.Tree_store.v_rank = vb.Tree_store.v_rank ->
+           (* sibling-order: a rank-only change (reorder) is a real
+              difference even when the body hash is unchanged *)
            (VStr "same")
        | Some va, Some vb ->
            let ba = body_of_version va in
@@ -936,6 +949,22 @@ let tree_gen_diff (store : Store.t) ~(path : string)
                            (match xb with Some x -> x | None -> `Null))
                         ]))
                keys
+           in
+           let delta_pairs =
+             if va.Tree_store.v_rank <> vb.Tree_store.v_rank then
+               delta_pairs
+               @ [ ( "rank"
+                   , `Assoc
+                       [ ( "a"
+                         , (match va.Tree_store.v_rank with
+                            | Some r -> `String r
+                            | None -> `Null) )
+                       ; ( "b"
+                         , (match vb.Tree_store.v_rank with
+                            | Some r -> `String r
+                            | None -> `Null) )
+                       ] ) ]
+             else delta_pairs
            in
            let g_of v =
              match v.Tree_store.v_gen with
@@ -1024,16 +1053,27 @@ let tree_undo (store : Store.t) ~(path : string) ?(n : int64 = 1L) () : value =
                   | Some k ->
                       (match
                          Tree_store.upsert_hier conn ~path ~kind:k ~type_name
-                           ~body_json ~author
+                           ~body_json ~author ~rank:None
                        with
-                       | Ok p -> (VStr p)
+                       | Ok p ->
+                           (* sibling-order: the restore is EXACT — the
+                              rank in force at the target gen (NULL clears
+                              a later reorder), not a COALESCE-keep *)
+                           let _ =
+                             Tree_store.set_rank conn ~path:p ~rank:v.Tree_store.v_rank
+                           in
+                           (VStr p)
                        | Error e -> (VStr e))
                   | None ->
                       (match
                          Tree_store.upsert_datum conn ~path ~type_name
-                           ~body_json ~author
+                           ~body_json ~author ~rank:None
                        with
-                       | Ok p -> (VStr p)
+                       | Ok p ->
+                           let _ =
+                             Tree_store.set_rank conn ~path:p ~rank:v.Tree_store.v_rank
+                           in
+                           (VStr p)
                        | Error e -> (VStr e))))
 
 let tree_children_html (store : Store.t) ~(prefix : string) ~(garden_root : string)
@@ -1061,6 +1101,7 @@ let tree_upsert (store : Store.t) ~(path : string) ~(kind : string)
      | Some conn ->
        let r =
          Tree_store.upsert_datum conn ~path ~type_name ~body_json ~author
+           ~rank:None
        in
        (match r with Ok p -> (VStr p) | Error e -> (VStr e)))
   else
@@ -1069,6 +1110,7 @@ let tree_upsert (store : Store.t) ~(path : string) ~(kind : string)
     | Some conn ->
       let r =
         Tree_store.upsert_hier conn ~path ~kind ~type_name ~body_json ~author
+          ~rank:None
       in
       (match r with
        | Ok p -> (VStr p)
@@ -1167,6 +1209,246 @@ let tree_move (store : Store.t) ~(old_path : string) ~(new_path : string)
        | Ok n -> (VInt (Int64.of_int n))
        | Error e -> (VStr e))
 
+(* ---- sibling-order prims (one-tree.sibling-order) ----
+
+   Rank allocation is midpoint-between-neighbours over canonical base-36
+   ranks (Tree_store.rank helpers); when a generated rank would exceed
+   max_rank_len the whole sibling set is rebalanced onto fresh fixed-
+   width ranks and the placement recomputed (always fits after a
+   rebalance). Mutations deny_anon at the prim layer. Ranks live in the
+   rank column (migration 025), are versioned by the tree-time trigger,
+   and reads order rank COLLATE "C" NULLS LAST, path ASC. *)
+
+(** Candidate rank for placing a node immediately before (before=true)
+   or after sibling [anchor] under [parent]. Rebalances the sibling set
+   (once) when the midpoint would exceed max_rank_len, then recomputes. *)
+let place_candidate (conn : Store_db.conn) ~(parent : string)
+    ~(anchor : string) ~(before : bool) : (string, string) result =
+  let rec attempt retried =
+    let children = Tree_store.list_children conn ~prefix:parent () in
+    (match
+       List.find_opt (fun (n : Tree_store.node) -> n.path = anchor) children
+     with
+     | None -> Error ("anchor not found under " ^ parent)
+     | Some a -> (
+         match a.rank with
+         | None -> Error "anchor has no rank (rank it first: tree/reorder)"
+         | Some ar ->
+             let ranked =
+               List.filter_map
+                 (fun (n : Tree_store.node) ->
+                   match n.rank with Some r -> Some (n.path, r) | None -> None)
+                 children
+             in
+             (* [ranked] is in rank order (SQL: ranked first, rank ASC).
+                The neighbour is the ranked sibling immediately before /
+                after the anchor. *)
+             let neighbor : (string * string) option =
+               if before then
+                 List.fold_left
+                   (fun acc (p, r) ->
+                     if String.compare r ar < 0 then Some (p, r) else acc)
+                   None ranked
+               else
+                 List.find_map
+                   (fun (p, r) ->
+                     if String.compare r ar > 0 then Some (p, r) else None)
+                   ranked
+             in
+             let candidate =
+               match neighbor with
+               | Some (_p, r) ->
+                   if before then Tree_store.rank_midpoint r ar
+                   else Tree_store.rank_midpoint ar r
+               | None -> (
+                   if before then
+                     match Tree_store.rank_before ar with
+                     | Some r -> r
+                     | None -> "" (* floor exhaustion -> rebalance *)
+                   else Tree_store.rank_after ar)
+             in
+             if
+               candidate = ""
+               || String.length candidate > Tree_store.max_rank_len
+             then
+               if retried then Error "rank rebalance failed"
+               else begin
+                 let _ = Tree_store.rebalance_siblings conn ~parent in
+                 attempt true
+               end
+             else Ok candidate))
+  in
+  attempt false
+
+let tree_move_before (store : Store.t) ~(path : string) ~(anchor : string)
+    : value =
+  wrap_path_exn "tree/move-before" (fun () ->
+      match Tree_store.path_parent path, Tree_store.path_parent anchor with
+      | Some parent, Some ap when parent = ap && path <> anchor -> (
+          match Io_lwt.Db.current_conn store with
+          | None -> VStr "tree/move-before: no DB"
+          | Some conn -> (
+              match place_candidate conn ~parent ~anchor ~before:true with
+              | Error e -> VStr ("tree/move-before: " ^ e)
+              | Ok rank ->
+                  if Tree_store.set_rank conn ~path ~rank:(Some rank) = 1 then
+                    VStr rank
+                  else VStr ("tree/move-before: no node at " ^ path)))
+      | Some _, Some _ when path = anchor ->
+          VStr (Tree_store.path_leaf path) (* no-op: already there *)
+      | _ ->
+          VStr "tree/move-before: path and anchor must be siblings (same parent)")
+
+let tree_move_after (store : Store.t) ~(path : string) ~(anchor : string)
+    : value =
+  wrap_path_exn "tree/move-after" (fun () ->
+      match Tree_store.path_parent path, Tree_store.path_parent anchor with
+      | Some parent, Some ap when parent = ap && path <> anchor -> (
+          match Io_lwt.Db.current_conn store with
+          | None -> VStr "tree/move-after: no DB"
+          | Some conn -> (
+              match place_candidate conn ~parent ~anchor ~before:false with
+              | Error e -> VStr ("tree/move-after: " ^ e)
+              | Ok rank ->
+                  if Tree_store.set_rank conn ~path ~rank:(Some rank) = 1 then
+                    VStr rank
+                  else VStr ("tree/move-after: no node at " ^ path)))
+      | Some _, Some _ when path = anchor ->
+          VStr (Tree_store.path_leaf path) (* no-op: already there *)
+      | _ ->
+          VStr "tree/move-after: path and anchor must be siblings (same parent)")
+
+(* (tree/reorder path rank) — set the rank directly. "" clears (back to
+   unordered). Rank must be base-36 ([0-9a-z]+) so midpoint allocation
+   stays well-defined. Returns node JSON. *)
+let tree_reorder (store : Store.t) ~(path : string) ~(rank : string) : value =
+  match Io_lwt.Db.current_conn store with
+  | None -> VStr "tree/reorder: no DB"
+  | Some conn ->
+      if rank <> "" && not (Tree_store.rank_valid rank) then
+        VStr "tree/reorder: rank must be base-36 ([0-9a-z]+)"
+      else if
+        Tree_store.set_rank conn ~path
+          ~rank:(if rank = "" then None else Some rank)
+        = 0
+      then VStr ("tree/reorder: no node at " ^ path)
+      else
+        (match Tree_store.get_by_path conn ~path with
+         | Some n -> VStr (Tree_store.node_to_json n)
+         | None -> VStr "ok")
+
+(* (tree/siblings path) — ordered children of path's parent (the node
+   itself included). Root paths have no siblings. *)
+let tree_siblings (store : Store.t) ~(path : string) : value =
+  wrap_path_exn "tree/siblings" (fun () ->
+      match Tree_store.path_parent path with
+      | None -> VList [] (* root: no parent, no siblings *)
+      | Some parent -> (
+          match Io_lwt.Db.current_conn store with
+          | None -> VList []
+          | Some conn ->
+              let nodes = Tree_store.list_children conn ~prefix:parent () in
+              VList
+                (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes)))
+
+(* (tree/next path) / (tree/prev path) — the adjacent sibling in the
+   total order (ranked first by rank, then unranked by path). Nil at
+   either end, or when the path is not a child of anything. *)
+let tree_neighbor (store : Store.t) ~(path : string) ~(dir : int) : value =
+  wrap_path_exn "tree/neighbor" (fun () ->
+      match Tree_store.path_parent path with
+      | None -> VNil
+      | Some parent -> (
+          match Io_lwt.Db.current_conn store with
+          | None -> VNil
+          | Some conn ->
+              let nodes = Tree_store.list_children conn ~prefix:parent () in
+              let idx =
+                List.find_index (fun (n : Tree_store.node) -> n.path = path) nodes
+              in
+              (match idx with
+               | None -> VNil (* not a child of its parent: nothing adjacent *)
+               | Some i ->
+                   let j = i + dir in
+                   if j >= 0 && j < List.length nodes then
+                     (match List.nth_opt nodes j with
+                      | Some n -> VStr (Tree_store.node_to_json n)
+                      | None -> VNil)
+                   else VNil)))
+
+let tree_next (store : Store.t) ~(path : string) : value =
+  tree_neighbor store ~path ~dir:1
+
+let tree_prev (store : Store.t) ~(path : string) : value =
+  tree_neighbor store ~path ~dir:(-1)
+
+(* (tree/insert-child parent kind type body [:after anchor]) — create a
+   child of [parent] with a rank allocated after [anchor] (or appended
+   after the last ranked sibling). Hier kinds only: a kind=datum node
+   must keep its data.<type>.<id> path grammar, so datum ordering stays
+   on tree/upsert + tree/reorder (borge issue filed). The leaf label
+   comes from the body's slug (or title), path_label-encoded. *)
+let tree_insert_child (store : Store.t) ~(parent : string) ~(kind : string)
+    ~(type_name : string) ~(body_json : string) ~(anchor : string option)
+    ~(author : string) : value =
+  if not (Tree_store.valid_path parent) then
+    VStr "tree/insert-child: invalid parent path"
+  else if not (Tree_store.is_hier_kind kind) then
+    VStr
+      "tree/insert-child: kind must be folder|note|heading (datum ordering: \
+       tree/upsert + tree/reorder)"
+  else
+    match Io_lwt.Db.current_conn store with
+    | None -> VStr "tree/insert-child: no DB"
+    | Some conn -> (
+        let label =
+          match Tree_store.parse_body_json body_json with
+          | Ok body -> (
+              match Tree_store.body_string_field body "slug" with
+              | Some s -> Some (Tree_store.path_label s)
+              | None -> (
+                  match Tree_store.body_string_field body "title" with
+                  | Some t when String.trim t <> "" ->
+                      Some (Tree_store.path_label t)
+                  | _ -> None))
+          | Error _ -> None
+        in
+        match label with
+        | None -> VStr "tree/insert-child: body needs a slug or title"
+        | Some lab ->
+            let path = Tree_store.path_child parent lab in
+            let rank_res =
+              match anchor with
+              | Some a -> (
+                  match Tree_store.path_parent a with
+                  | Some ap when ap = parent ->
+                      place_candidate conn ~parent ~anchor:a ~before:false
+                  | _ -> Error "anchor must be a ranked child of parent")
+              | None ->
+                  let last_ranked =
+                    List.fold_left
+                      (fun acc (n : Tree_store.node) ->
+                        match n.rank with Some r -> Some r | None -> acc)
+                      None
+                      (Tree_store.list_children conn ~prefix:parent ())
+                  in
+                  Ok
+                    (Tree_store.rank_after
+                       (match last_ranked with Some r -> r | None -> ""))
+            in
+            (match rank_res with
+             | Error e -> VStr ("tree/insert-child: " ^ e)
+             | Ok rank -> (
+                 match
+                   Tree_store.upsert_hier conn ~path ~kind ~type_name
+                     ~body_json ~author ~rank:(Some rank)
+                 with
+                 | Ok p -> (
+                     match Tree_store.get_by_path conn ~path:p with
+                     | Some n -> VStr (Tree_store.node_to_json n)
+                     | None -> VStr p)
+                 | Error e -> VStr ("tree/insert-child: " ^ e))))
+
 let tree_get_uuid (store : Store.t) ~(uuid : string) : value =
   match Io_lwt.Db.current_conn store with
   | None -> VNil
@@ -1232,14 +1514,6 @@ let tree_path_label (s : string) : value = VStr (Tree_store.path_label s)
    path; converted here to a Prim_error so Nopales sees a clean raise
    rather than a guess. Root paths (single label) have nil parent and
    no strict ancestors. *)
-let tree_prim_error name msg =
-  raise
-    (Pricklypear_lisp.Ast.Interp_error
-       (Pricklypear_lisp.Ast.Prim_error (name, msg, "bad-args")))
-
-let wrap_path_exn name (f : unit -> value) : value =
-  try f () with Invalid_argument msg -> tree_prim_error name msg
-
 let tree_parent (path : string) : value =
   wrap_path_exn "tree/parent" (fun () ->
       match Tree_store.path_parent path with
@@ -1462,7 +1736,7 @@ let merge_data_lens (store : Store.t) ~(lens : string) () : value =
                  (match n.type_name with
                   | Some tn -> tn
                   | None -> "")
-               ~body_json ~author:user
+               ~body_json ~author:user ~rank:None
            in
            (match result with
             | Ok _ -> incr merged
