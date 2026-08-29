@@ -15,7 +15,7 @@
           timing
           ast_html db_cost analyze http_analyze
           http_core http_code http_data http_branches http_agent http_pages http_ops
-          http_media
+          http_media http_tree
           agent_discovery http
           lineedit boot llm_client
           auth_password auth_store ai_store jobs sync)

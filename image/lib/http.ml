@@ -623,6 +623,10 @@ let request_handler ~(sw : Eio.Switch.t) ~(registry : Session_registry.t)
              (chrome ~session ~title:"Bad data path" [
                 HTML.p [] [txt "POST /data/<type> | /data/<type>/<id> | …/delete"];
               ]))
+  | `GET, "/tree" -> launch (fun session -> Http_tree.tree_page session reqd)
+  | `GET, "/partials/tree" ->
+      launch (fun session -> Http_tree.tree_partial session reqd)
+  | `POST, "/tree/edit" -> launch (fun session -> Http_tree.tree_edit session reqd)
   | `GET, "/repl" ->
       launch (fun session ->
         let () = () in
