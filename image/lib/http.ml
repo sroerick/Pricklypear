@@ -190,6 +190,14 @@ let request_handler ~(sw : Eio.Switch.t) ~(registry : Session_registry.t)
                         ~context:[("path", path)]
                         "peer gone (closed writer); skipping 500");
               ()
+            end else if
+              (match exn with Http_core.Body_too_large -> true | _ -> false)
+            then begin
+              (* Oversized request body (PP_MAX_BODY_BYTES): a 413, not a
+                 500 — the client, not the server, is at fault. *)
+              text_response reqd ~status:`Payload_too_large
+                ~content_type:"text/plain" "request body too large";
+              ()
             end else begin
             let msg = Printexc.to_string exn in
             Ops_incidents.emit_and_maybe_file session

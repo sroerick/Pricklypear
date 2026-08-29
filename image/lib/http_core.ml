@@ -616,19 +616,46 @@ let chrome_lwt ~(session : Session.t) ~(title : string)
   let nav_html = try_ui_fn session "ui/nav" in
   (chrome ?nav_html ~session ~title content)
 
+(* Request-body cap: read_body accumulates the whole body in memory, so
+   an unbounded read lets a client exhaust memory. Cap at PP_MAX_BODY_BYTES
+   (default 1 MiB); on exceed, raise Body_too_large — Http.launch maps it
+   to a 413. Uploads use http_media.read_body_limited (5 MiB) unchanged. *)
+exception Body_too_large
+
+let max_body_bytes =
+  match Sys.getenv_opt "PP_MAX_BODY_BYTES" with
+  | Some s ->
+      (match int_of_string_opt s with
+       | Some n when n > 0 -> n
+       | _ -> 1024 * 1024)
+  | None -> 1024 * 1024
+
 let read_body (reqd : Httpun.Reqd.t) : string =
   let body = Httpun.Reqd.request_body reqd in
+  (* The on_read callback may run on the connection fiber, not the handler
+     fiber — so signal overflow via the promise instead of raising inside
+     the callback, guaranteeing the exception surfaces in read_body's
+     caller where launch's 413 handler can catch it. *)
   let promise, resolver = Eio.Promise.create () in
   let buf = Buffer.create 1024 in
   let rec sched () =
     Httpun.Body.Reader.schedule_read body
-      ~on_eof:(fun () -> Eio.Promise.resolve resolver (Buffer.contents buf))
+      ~on_eof:(fun () ->
+        Eio.Promise.resolve resolver (`Ok (Buffer.contents buf)))
       ~on_read:(fun bs ~off ~len ->
-        Buffer.add_string buf (Bigstringaf.substring bs ~off ~len);
-        sched ())
+        if Buffer.length buf + len > max_body_bytes then begin
+          Eio.Promise.resolve resolver `Too_large
+          (* Stop rescheduling: the oversized request is abandoned and
+             answered with 413; the connection is closed after the reply. *)
+        end else begin
+          Buffer.add_string buf (Bigstringaf.substring bs ~off ~len);
+          sched ()
+        end)
   in
   sched ();
-  Eio.Promise.await promise
+  match Eio.Promise.await promise with
+  | `Ok s -> s
+  | `Too_large -> raise Body_too_large
 
 let url_decode (s : string) : string =
   let buf = Buffer.create (String.length s) in
