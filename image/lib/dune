@@ -48,4 +48,5 @@
    mirage-crypto
    mirage-crypto-rng
    mirage-crypto-rng.unix
+   ipaddr
    base64))
