@@ -176,3 +176,30 @@ the subsection status flip in the same commit; `borge drift` clean
 (no new structural drift) before each flip; final `borge report`
 delta goes in the last commit message. Update the live `agents` note
 only if you learn something durable about the tree prims.
+
+---
+
+## Completion (2026-08-28, branch `tree-traversal`)
+
+All four tasks landed; one-tree is now **10 implemented / 0 planned**
+in `borge report` (repo-wide 208/46/3, 81.4%).
+
+| Task | Commit | Notes |
+|---|---|---|
+| spec + handoff | 43c5438 | four subsections (planned) |
+| T1 tree-path-prims | 2908c83 | pure, labels pass through when ltree-safe |
+| T2 sibling-order | 2ec89d6 | migration 025, versioned rank, midpoint+rebalance |
+| T3 tree-edges | e7daf92 (+49bc1f6) | migration 026; partial: :ref deferred (BORGE-1787972072); insert-child hier-only (BORGE-1787971294) |
+| T4 tree-browser | 0da38c7 | /tree + /partials/tree + /tree/edit; ?gen= as-of |
+
+`tree/delete` + `tree/move` now return JSON `{deleted|moved,
+inbound_edges}` (warn-not-forbid) — habitat callers audited in-repo
+(discard the old VInt); the change is recorded in the live `agents`
+note + a dedicated `tree-traversal` note, and `log/sessions` carries
+the notes move-up/move-down ungate. A parallel error-shape pass
+(87edae1) landed mid-branch; the new prims were aligned to the raise
+convention afterwards. Verified: `dune runtest` green,
+`ksh scripts/verify_one_tree.sh` ALL CHECKS PASSED, `borge drift`
+structurally clean after every task, live smokes for every spec
+stanza on the dev image, habitat closeout (agents note, log/sessions,
+log/issues) done on prod.
