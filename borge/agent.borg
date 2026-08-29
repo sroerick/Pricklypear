@@ -317,7 +317,8 @@
          image/static/*.js, named here in this stanza's (implements …)).
 
          HTML PRIMARY, NOPALES SURFACE. Local HTTP server (Httpun_eio)
-         on 127.0.0.1:random-port; prints the URL (and --open to
+         on 127.0.0.1:18090 by default (--port overrides; a busy port
+         falls back to a random one); prints the URL (and --open to
          launch a browser). Chat and the code browser are htmx
          fragment routes on the agent route table (agent-route-
          table), rendered by Nopales via libs/html — NOT compiled

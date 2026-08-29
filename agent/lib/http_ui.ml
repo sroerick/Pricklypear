@@ -1,7 +1,8 @@
 (** glochid HTML primary surface (agent/lib; borge/agent.borg surfaces).
 
-    A local HTTP server (Httpun_eio) bound to 127.0.0.1 on a random
-    port. The chat + code browser pages are NOPALES-AUTHORED htmx
+    A local HTTP server (Httpun_eio) bound to 127.0.0.1 (default port
+    18090, --port to override; a busy port falls back to random). The
+    chat + code browser pages are NOPALES-AUTHORED htmx
     fragments on the agent route table (rendered by Nopales via
     libs/html), dispatched in-process through [Runtime.dispatch_route].
     A chat/agent turn streams as multipart/mixed htmx fragments (one
@@ -464,7 +465,7 @@ let handle_chat (env : Eio_unix.Stdenv.base) (sw : Eio.Switch.t)
       (try mp_close body_w ~boundary with Peer_gone -> ()))
     (fun () -> (try run () with Peer_gone -> ()))
 
-(* ---- serve: bind 127.0.0.1:0, print URL, accept loop ---- *)
+(* ---- serve: bind 127.0.0.1 (default 18090), print URL, accept loop ---- *)
 
 let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
     ~(rt : Runtime.t) ~(cfg : Provider.cfg)
@@ -476,7 +477,7 @@ let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
         tools:Provider.tool_def list ->
         on_delta:(Provider.delta -> unit) ->
         (Provider.reply, string) Result.t)
-    ?(open_browser = false) (print : string -> unit) : unit =
+    ?(port = 18090) ?(open_browser = false) (print : string -> unit) : unit =
   let st =
     {
       history = ref [];
@@ -540,10 +541,17 @@ let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
       ~error_handler ~sw
   in
   let net = Eio.Stdenv.net env in
-  let listen_addr = `Tcp (Eio.Net.Ipaddr.V4.loopback, 0) in
-  let socket =
+  (* Fixed default port so the URL is stable across runs; a busy port
+     falls back to a random one (the old --serve behavior). *)
+  let bind p =
     Eio.Net.listen ~reuse_addr:true ~reuse_port:false ~backlog:64 ~sw net
-      listen_addr
+      (`Tcp (Eio.Net.Ipaddr.V4.loopback, p))
+  in
+  let socket =
+    try bind port
+    with _ ->
+      print (Printf.sprintf "port %d busy; using a random port\n" port);
+      bind 0
   in
   let bound_addr = Eio.Net.listening_addr socket in
   let port =
