@@ -639,7 +639,19 @@
     (smoke "notes/tree/parent-of and kernel tree/parent agree on the notes corpus")))
   (subsection tree-edges
    (doc "Links between nodes are first-class typed nodes — the graph is nodes AND edges")
-   (status planned)
+   (status partial)
+   (implements migrations/026_tree_edges.sql image/lib/tree_store.ml image/lib/crud.ml image/lib/prims_db.ml)
+   (* agent note (|2026-08-28 make pass (tree-traversal branch): edges +
+      prims implemented and smoked (link/unlink/out-links/backlinks,
+      dangle-by-design, warn-not-forbid inbound reporting on
+      tree/delete + tree/move — both now return JSON
+      {deleted|moved, inbound_edges}, versioned edges incl. undo of
+      unlink). PARTIAL for one reason: :ref materialization is deferred
+      (BORGE-1787972072) because type_defs.fields are bare NAMES today —
+      no field types, no deftype surface for :ref; that is a slice of
+      the type-system track, not of this subsection. The edge shape and
+      read-time resolution are independent of typed-boundary
+      validation; materialization later is purely additive.|) *)
    (details
     (doc (|
          MOTIVATION. typed-nodes already declares :ref fields as

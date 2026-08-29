@@ -179,7 +179,8 @@ let select_for_update
                    | None -> VNil)
               | _ -> VNil))
 
-(** (create 'type "{fields-json}") -> VStr new-id | VStr "create failed".
+(** (create 'type "{fields-json}") -> VStr new-id; raises Prim_error
+    ("create", "failed", "failed") when the insert is rejected.
     INSERTs a row with the given JSON fields, returning the new UUID.
     The author is the session's current username.
 
@@ -640,15 +641,6 @@ let get_row
 let node_path ~(type_name : string) ~(id : string) : value =
   let user = session_user () in
   VStr (Tree_store.datum_path ~user ~type_name ~id ())
-
-(** (backlinks id-or-path [limit]) -> VList of VStr paths. *)
-let backlinks (store : Store.t) ~(needle : string) ?(limit : int = 200) ()
-  : value =
-  match Io_lwt.Db.current_conn store with
-  | None -> (VList [])
-  | Some conn ->
-      let paths = Tree_store.backlinks conn ~needle ~limit () in
-      (VList (List.map (fun p -> VStr p) paths))
 
 (** (type-fields 'type) -> VList of VStr field names | VNil if undeclared. *)
 let type_fields (store : Store.t) ~(type_name : string) : value =
@@ -1119,10 +1111,20 @@ let tree_upsert (store : Store.t) ~(path : string) ~(kind : string)
 let tree_delete (store : Store.t) ~(path : string) ~(recursive : bool)
     : value =
   match Io_lwt.Db.current_conn store with
-  | None -> (VInt 0L)
+  | None -> (VStr "{\"deleted\":0,\"inbound_edges\":0}")
   | Some conn ->
+      (* tree-edges: report incoming-edge count (warn, not forbid — the
+         delete succeeds; edges pointing at the deleted path dangle and
+         are repairable). Exact-path count only (recursive deletes do
+         not aggregate descendant inbound counts in v1). *)
+      let inbound = Tree_store.incoming_edge_count conn ~path in
       let n = Tree_store.delete_path conn ~path ~recursive in
-      (VInt (Int64.of_int n))
+      (VStr
+         (Yojson.Safe.to_string
+            (`Assoc
+               [ ("deleted", `Int n)
+               ; ("inbound_edges", `Int inbound)
+               ])))
 
 (* ---- datum type-change validation for tree/move (one-tree.tree-datum-prims) ----
    Moving a datum node to a path under a DIFFERENT <type_name> is a type
@@ -1204,10 +1206,179 @@ let tree_move (store : Store.t) ~(old_path : string) ~(new_path : string)
   match Io_lwt.Db.current_conn store with
   | None -> (VStr "tree/move: no DB")
   | Some conn ->
+      (* tree-edges: moving the TARGET of inbound edges leaves them
+         dangling (to is stored verbatim, never rewritten) — report the
+         count, warn-not-forbid. Moving a SOURCE carries its edges (the
+         subtree move rewrites their paths). *)
+      let inbound = Tree_store.incoming_edge_count conn ~path:old_path in
       let r = Tree_store.move_subtree conn ~old_path ~new_path in
       (match r with
-       | Ok n -> (VInt (Int64.of_int n))
+       | Ok n ->
+           (VStr
+              (Yojson.Safe.to_string
+                 (`Assoc
+                    [ ("moved", `Int n)
+                    ; ("inbound_edges", `Int inbound)
+                    ])))
        | Error e -> (VStr e))
+
+(* ---- tree-edges prims (one-tree.tree-edges) ---- *)
+
+(* (link from to [kind [label]]) — create an edge node (kind=link) at
+   <from>.lnk.<uuid>. from must resolve (get_by_path); to is stored
+   verbatim as branch-qualified path text and MAY dangle; resolution is
+   a read-time act against the reader's lens. Edge kind defaults to
+   "ref". Returns the edge node JSON. *)
+let link_edge (store : Store.t) ~(from_path : string) ~(to_path : string)
+    ~(edge_kind : string) ~(label : string option) ~(author : string) : value =
+  if not (Tree_store.valid_path to_path) then
+    VStr "link: to must be a well-formed absolute path (it may dangle)"
+  else
+    match Io_lwt.Db.current_conn store with
+    | None -> VStr "link: no DB"
+    | Some conn -> (
+        match Tree_store.get_by_path conn ~path:from_path with
+        | None -> VStr ("link: from does not resolve: " ^ from_path)
+        | Some _ ->
+            let body =
+              let base =
+                [ ("to", `String to_path); ("kind", `String edge_kind) ]
+              in
+              let base =
+                match label with
+                | Some l when l <> "" -> base @ [ ("label", `String l) ]
+                | _ -> base
+              in
+              Yojson.Safe.to_string (`Assoc base)
+            in
+            (* edge path = <from>.lnk.<uuid> — the uuid comes from PG *)
+            let sql_uuid =
+              "WITH nu AS (SELECT gen_random_uuid() AS id) "
+              ^ "SELECT tree_uuid_label(nu.id) FROM nu"
+            in
+            (match Io_lwt.Db.execute conn sql_uuid with
+             | [ [ u ] ] -> (
+                 match Pgx.Value.to_string u with
+                 | Some uuid ->
+                     let edge_path =
+                       Tree_store.path_child from_path "lnk" ^ "." ^ uuid
+                     in
+                     (match
+                        Tree_store.upsert_link conn ~path:edge_path
+                          ~body_json:body ~author
+                      with
+                      | Ok p -> (
+                          match Tree_store.get_by_path conn ~path:p with
+                          | Some n -> VStr (Tree_store.node_to_json n)
+                          | None -> VStr p)
+                      | Error e -> VStr ("link: " ^ e))
+                 | None -> VStr "link: uuid generation failed")
+             | _ -> VStr "link: uuid generation failed"))
+
+(* (unlink edge-path) — tombstone the edge: the same delete/versioning
+   path as any node (the tree-time trigger appends a tombstone; undo of
+   unlink restores the edge). Only kind=link nodes may be unlinked. *)
+let unlink_edge (store : Store.t) ~(edge_path : string) : value =
+  match Io_lwt.Db.current_conn store with
+  | None -> VStr "unlink: no DB"
+  | Some conn -> (
+      match Tree_store.get_by_path conn ~path:edge_path with
+      | None -> VStr ("unlink: no node at " ^ edge_path)
+      | Some n ->
+          if not (Tree_store.is_link_kind n.kind) then
+            VStr ("unlink: not an edge (kind " ^ n.kind ^ ")")
+          else
+            let deleted = Tree_store.delete_path conn ~path:edge_path ~recursive:false in
+            if deleted = 1 then VStr edge_path
+            else VStr "unlink: delete failed")
+
+(* (out-links path) — the node's outgoing edges with resolution status:
+   each item is JSON {path,to,kind,label,status,target}; status is
+   "resolved" (target summary from the reader's lens) or "dangling".
+   An edge list is a children-by-level index read, never a scan. *)
+let out_links (store : Store.t) ~(path : string) ?(limit : int = 1000) () :
+    value =
+  match Io_lwt.Db.current_conn store with
+  | None -> VList []
+  | Some conn ->
+      let edges = Tree_store.list_out_links conn ~path ~limit () in
+      let item (e : Tree_store.node) =
+        let to_path =
+          match Tree_store.body_string_field e.body "to" with
+          | Some t -> t
+          | None -> ""
+        in
+        let status, target =
+          if to_path = "" then ("dangling", `Null)
+          else
+            match Tree_store.get_by_path conn ~path:to_path with
+            | Some t ->
+                ( "resolved"
+                , `Assoc
+                    [ ("path", `String t.path)
+                    ; ("kind", `String t.kind)
+                    ; ( "type"
+                      , match t.type_name with
+                        | Some ty -> `String ty
+                        | None -> `Null )
+                    ; ("title", `String (Tree_store.node_display_title t))
+                    ] )
+            | None -> ("dangling", `Null)
+        in
+        VStr
+          (Yojson.Safe.to_string
+             (`Assoc
+                [ ("path", `String e.path)
+                ; ("to", `String to_path)
+                ; ( "kind"
+                  , match Tree_store.body_string_field e.body "kind" with
+                    | Some k -> `String k
+                    | None -> `Null )
+                ; ( "label"
+                  , match Tree_store.body_string_field e.body "label" with
+                    | Some l -> `String l
+                    | None -> `Null )
+                ; ("status", `String status)
+                ; ("target", target)
+                ]))
+      in
+      VList (List.map item edges)
+
+(* Backlinks upgrade (one-tree.tree-edges): edges whose to = needle —
+   backed by the migration-026 partial expression index — UNION the
+   legacy body-string scan (datum bodies holding the needle as a literal
+   value). The legacy half is DEPRECATED: logged once per process, kept
+   only until all body-valued references become edges. Same signature as
+   the old backlinks: a list of paths. *)
+let backlinks_deprecation_logged = ref false
+
+let backlinks (store : Store.t) ~(needle : string) ?(limit : int = 200) ()
+    : value =
+  match Io_lwt.Db.current_conn store with
+  | None -> VList []
+  | Some conn ->
+      let edge_paths =
+        Tree_store.edges_to conn ~needle ~limit ()
+        |> List.map (fun (e : Tree_store.node) -> e.path)
+      in
+      let legacy_paths =
+        if List.length edge_paths >= limit then []
+        else begin
+          if not !backlinks_deprecation_logged then begin
+            backlinks_deprecation_logged := true;
+            Printf.eprintf
+              "[backlinks] DEPRECATED: legacy body-string backlinks are a scan; materialize references as edges ((link from to)).\n%!"
+          end;
+          Tree_store.backlinks conn ~needle ~limit ()
+        end
+      in
+      (* edges first, then legacy paths not already present (dedup) *)
+      let seen = List.fold_left (fun acc p -> p :: acc) [] edge_paths in
+      let merged =
+        edge_paths
+        @ List.filter (fun p -> not (List.mem p seen)) legacy_paths
+      in
+      VList (List.map (fun p -> VStr p) merged)
 
 (* ---- sibling-order prims (one-tree.sibling-order) ----
 

@@ -153,3 +153,8 @@
  (name tree_sibling_order_test)
  (modules tree_sibling_order_test)
  (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))
+
+(test
+ (name tree_edges_test)
+ (modules tree_edges_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))
