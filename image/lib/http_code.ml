@@ -56,6 +56,8 @@ let skip_dirs : string list =
   ; ".borge-bugs"
   ; "public-artifacts"
   ; "_build_test"
+  ; "backups"
+  ; "log"
   ]
 
 let allowed_ext (name : string) : bool =
