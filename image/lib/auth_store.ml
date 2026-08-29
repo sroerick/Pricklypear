@@ -1229,6 +1229,22 @@ let list_users (store : Store.t) : user list =
 let bootstrap_admin_if_empty (store : Store.t) : user option =
   let username = env_or "PP_BOOTSTRAP_USER" "admin" in
   let password = env_or "PP_BOOTSTRAP_PASSWORD" "admin" in
+  (* i-1787971357: never boot a default admin/admin without explicit
+     opt-in. When the password is the default AND PP_ALLOW_INSECURE_BOOTSTRAP
+     is unset, mint a random password (printed once to stderr). Lazy so no
+     password is generated when the admin already has one / isn't created. *)
+  let password =
+    lazy
+      (if password = "admin"
+          && Sys.getenv_opt "PP_ALLOW_INSECURE_BOOTSTRAP" = None
+       then
+         let pw = Base64.encode_string (Mirage_crypto_rng.generate 18) in
+         Printf.eprintf
+           "[auth] generated admin password: %s — set PP_BOOTSTRAP_PASSWORD to control; PP_ALLOW_INSECURE_BOOTSTRAP=1 keeps admin/admin\n%!"
+           pw;
+         pw
+       else password)
+  in
   let n = count_users store in
   if n > 0 then
     let admin = get_user_by_username store username in
@@ -1239,7 +1255,7 @@ let bootstrap_admin_if_empty (store : Store.t) : user option =
         (match has_pw with
          | Some _ -> None
          | None ->
-             let pw = set_password store ~user_id:user.id ~password in
+             let pw = set_password store ~user_id:user.id ~password:(Lazy.force password) in
              (match pw with
               | Error e ->
                   Printf.eprintf
@@ -1258,7 +1274,7 @@ let bootstrap_admin_if_empty (store : Store.t) : user option =
         Printf.eprintf "[auth_store] bootstrap failed: %s\n%!" e;
         None
     | Ok user ->
-        let pw = set_password store ~user_id:user.id ~password in
+        let pw = set_password store ~user_id:user.id ~password:(Lazy.force password) in
         (match pw with
          | Error e ->
              Printf.eprintf "[auth_store] bootstrap password: %s\n%!" e;
