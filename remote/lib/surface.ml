@@ -85,7 +85,7 @@ let surface_source = {pp|
       "<nav class=\"muted\">chat: the agent turn runs here \u2014 provider local, DB prims proxy to the image.</nav>"
       "<div id=\"log\"><div class=\"muted\">pp-remote ready.</div></div>"
       "<form id=\"f\" hx-post=\"/chat\" hx-target=\"#log\" hx-swap=\"beforeend\" hx-ext=\"hx-multipart\""
-      " hx-config='{\"timeout\":0}'>"
+      " hx-config='{\"timeout\":0}' hx-on::after-request=\"this.reset()\'>"
       "<input id=\"msg\" name=\"msg\" type=\"text\" placeholder=\"prompt\u2026\" autofocus>"
       "<button>send</button>"
       "</form>"
