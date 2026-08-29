@@ -792,6 +792,70 @@ let valid_path (path : string) : bool =
 let garden_root ~user =
   Printf.sprintf "data.note.u.%s" (path_label user)
 
+(* ---- path algebra (one-tree.tree-path-prims; pure, no DB) ----
+
+   Kernel path constructors/accessors over the ltree textual form — the
+   ONE canonical set, replacing per-package string hacks (notes/tree/*,
+   todo/tree/*, tree/breadcrumb-parts). Label semantics for APPEND are
+   identical to [path_label] for labels that need sanitizing; labels that
+   are ALREADY valid ltree labels pass through untouched, so
+   (tree/child (tree/parent p) (tree/leaf p)) = p for every stored path
+   (including uppercase base64url-encoded fn/type/route labels, which
+   [path_label] alone would lowercase-mangle). Invalid paths raise
+   Invalid_argument — the prim layer converts that to a Prim_error;
+   nothing here guesses. *)
+
+(** True when [s] is already an ltree-safe label ([A-Za-z0-9_]+). *)
+let is_ltree_label (s : string) : bool =
+  s <> ""
+  && String.for_all
+       (fun c ->
+         (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+         || (c >= '0' && c <= '9') || c = '_')
+       s
+
+(** Labels of a path; raises Invalid_argument on an invalid path. *)
+let path_labels_exn (path : string) : string list =
+  if not (valid_path path) then invalid_arg ("invalid path: " ^ path)
+  else String.split_on_char '.' path
+
+(** Strict parent path; None at a root (single-label) path. *)
+let path_parent (path : string) : string option =
+  match path_labels_exn path with
+  | [ _ ] -> None
+  | labels ->
+      Some (String.concat "." (List.rev (List.tl (List.rev labels))))
+
+(** Final label. *)
+let path_leaf (path : string) : string =
+  match List.rev (path_labels_exn path) with
+  | last :: _ -> last
+  | [] -> invalid_arg "invalid path: empty" (* unreachable *)
+
+(** Every label, root-first. *)
+let path_segments (path : string) : string list = path_labels_exn path
+
+(** Append [label] to a valid path. A label that is already an ltree
+    label is used verbatim; anything else is sanitized via [path_label]
+    (identical encoding to tree/path-label). *)
+let path_child (path : string) (label : string) : string =
+  let labels = path_labels_exn path in
+  let lab = if is_ltree_label label then label else path_label label in
+  String.concat "." (labels @ [ lab ])
+
+(** Every STRICT prefix, root-first: "a.b.c" -> ["a"; "a.b"]. A root
+    path has no strict prefixes ([]). *)
+let path_ancestors (path : string) : string list =
+  let labels = path_labels_exn path in
+  let rec go acc prefix = function
+    | [] -> List.rev acc
+    | [ _ ] -> List.rev acc (* full path excluded: strict prefixes only *)
+    | x :: rest ->
+        let prefix = if prefix = "" then x else prefix ^ "." ^ x in
+        go (prefix :: acc) prefix rest
+  in
+  go [] "" labels
+
 let node_to_json (n : node) : string =
   let body = n.body in
   Yojson.Safe.to_string

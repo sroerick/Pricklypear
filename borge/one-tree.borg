@@ -597,7 +597,8 @@
     (smoke "child-lens override of a node owns its rank; parent rank unchanged")))
   (subsection tree-path-prims
    (doc "Kernel path algebra: one canonical set, replacing per-package string hacks")
-   (status planned)
+   (status implemented)
+   (implements image/lib/tree_store.ml image/lib/crud.ml image/lib/prims_db.ml)
    (details
     (doc (|
          THE GAP. Path manipulation is re-implemented in Nopales by
