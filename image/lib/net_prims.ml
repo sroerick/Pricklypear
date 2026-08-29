@@ -20,9 +20,9 @@ open Session_types
 let max_open_streams = 16
 
 let random_uuid () =
-  let b = Bytes.create 16 in
-  for i = 0 to 15 do Bytes.set b i (Char.chr (Random.int 256)) done
-  ;
+  (* i-1787971303: minted identifiers use the crypto RNG, never the
+     MT19937 Random state. *)
+  let b = Bytes.of_string (Mirage_crypto_rng.generate 16) in
   Bytes.set b 6 (Char.chr ((Char.code (Bytes.get b 6) land 0x0f) lor 0x40));
   Bytes.set b 8 (Char.chr ((Char.code (Bytes.get b 8) land 0x3f) lor 0x80));
   let hex i = Printf.sprintf "%02x" (Char.code (Bytes.get b i)) in

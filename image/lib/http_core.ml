@@ -1392,6 +1392,16 @@ let post_admin_users (session : Session.t) (reqd : Httpun.Reqd.t)
                     redirect_response reqd "/admin/users";
                     ()))
 
+(** i-1787971303: crypto-random hex string of n bytes (Mirage_crypto_rng,
+    never the MT19937 Random state) — used for minted multipart boundaries. *)
+let random_hex_bytes (n : int) : string =
+  let b = Mirage_crypto_rng.generate n in
+  let buf = Buffer.create (n * 2) in
+  String.iter
+    (fun c -> Buffer.add_string buf (Printf.sprintf "%02x" (Char.code c)))
+    b;
+  Buffer.contents buf
+
 (** Generate a MIME boundary that does not appear in any part body. *)
 let fresh_multipart_boundary (bodies : string list) : string =
   let rec try_n n =
@@ -1401,9 +1411,7 @@ let fresh_multipart_boundary (bodies : string list) : string =
            (Pricklypear_lisp.Ast.User_error
               ("multipart: could not choose a unique boundary", "bad-args")))
     else
-      let b =
-        Printf.sprintf "pp%x%x" (Random.bits ()) (Random.bits ())
-      in
+      let b = "pp" ^ random_hex_bytes 8 in
       if List.exists (fun body ->
            let rec find i =
              let bl = String.length b and n = String.length body in
