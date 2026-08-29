@@ -62,7 +62,7 @@ let surface_source = {pp|
       "<div id=\"log\"><div class=\"muted\">agent ready.</div></div>"
       "<form id=\"f\" hx-post=\"/chat\" hx-target=\"#log\" hx-swap=\"beforeend\" hx-ext=\"hx-multipart\""
       " hx-config='{\"timeout\":0}' hx-on::before:request=\"this.reset()\">"
-      "<input id=\"msg\" name=\"msg\" type=\"text\" placeholder=\"prompt…\" autofocus>"
+      "<input id=\"msg\" name=\"msg\" type=\"text\" placeholder=\"prompt…\" autocomplete=\"off\" autofocus>"
       "<button>send</button>"
       "</form>"
       "<script src=\"/assets/htmx.min.js\"></script>"
