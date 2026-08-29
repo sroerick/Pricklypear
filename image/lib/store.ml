@@ -401,47 +401,211 @@ let list_own_routes (t : t) ~(branch_id : string)
           [])
 
 (** Child own names left-joined to parent: name, child_updated, parent_updated opt. *)
-let list_overrides (t : t) ~(branch_id : string) ~(parent_id : string option)
-  : (string * string * string option) list =
-  match t.conn, parent_id with
-  | None, _ -> []
-  | Some _, None ->
-      (* Root branch: every own def is "new". *)
-      let own = list_own_functions t ~branch_id in
-      (List.map (fun (n, _, u) -> (n, u, None)) own)
-  | Some conn, Some pid ->
-      (try
-      let sql =
-            "SELECT c.name, c.updated_at::text, p.updated_at::text " ^
-            "FROM function_defs c " ^
-            "LEFT JOIN function_defs p " ^
-            "  ON p.branch_id = $2 AND p.name = c.name " ^
-            "WHERE c.branch_id = $1 ORDER BY c.name" in
-          let rows =
-            exec conn
-              ~params:[ Pgx.Value.of_string branch_id;
-                        Pgx.Value.of_string pid ]
-              sql
-          in
-          (List.filter_map
-               (fun row ->
-                 match row with
-                 | [ n; cu; pu ] ->
-                     (match Pgx.Value.to_string n, Pgx.Value.to_string cu with
-                      | Some name, Some child_u ->
-                          let parent_u =
-                            match Pgx.Value.to_string pu with
-                            | Some "" | None -> None
-                            | Some s -> Some s
-                          in
-                          Some (name, child_u, parent_u)
-                      | _ -> None)
-                 | _ -> None)
-               rows)
-    with exn ->
-      Printf.eprintf "[store] list_overrides: %s\n"
-            (Printexc.to_string exn);
-          [])
+(* ---- branch status (branching.branch-status) ----
+
+   Git-style per-name status of a branch against its parent chain, as ONE
+   derived read of the tree-time substrate (tree_versions, migrations
+   018-021) keyed on the base_gen merge-base coordinate (migration 024).
+   Hash-first per tree-time: equal hash = prune; bodies are never fetched.
+
+   Per name (fn | type | route), with values resolved closest-ancestor-wins
+   (a tombstone or missing newest version on one branch means that branch
+   is dead for the name and the walk continues up, matching the
+   scaffolding/unbind semantics):
+     b = branch value at own head
+     p = parent-chain value at parent head
+     a = parent-chain value at base_gen (the fork-time base)
+     own = a live scaffolding row exists on the branch (the pin)
+
+   HASH DOMAIN (make-phase lesson, 2026-08-28): the STORED
+   tree_versions.hash column is NOT comparable across write paths —
+   tree-first writes (Tree_store.hash_body over compact OCaml JSON) and
+   mirror writes (009 trigger digest over PG jsonb::text, which spaces
+   after colons) produce DIFFERENT digests for identical bodies (020
+   itself calls the stored hash "a consistency artifact, not content").
+   Comparing stored hashes mislabeled identical pins as diverged. Status
+   therefore computes digest((body->'body')::text) AT QUERY TIME — one
+   canonical domain (PG jsonb::text) regardless of which path wrote the
+   row. The stored column stays for retention/GC bookkeeping and
+   same-path gen-diff; a global rehash is tree-time's scope, not ours.
+
+   Tombstones are the reserved 019/020 marker (body->_tombstone). Deletion
+   on a branch REVEALS the parent binding (unbind semantics), so there is
+   no "locally deleted" status — a delete is a pin removal, not a divergent
+   state.
+
+   APPROXIMATION (documented in the spec): base_gen bounds ONLY the direct
+   parent's versions; ancestors above the parent contribute their full
+   head. Exact for the dominant topology (empty child of system/main);
+   for deeper chains, post-fork writes on grandparents fold into the base.
+   Accepted v1; revisit with per-ancestor bounds if it ever misleads. *)
+
+type diff_kind = DiffFn | DiffType | DiffRoute
+
+type st_status = SClean | SAheadNew | SAhead | SBehind | SDiverged | SSynced
+
+let st_status_s = function
+  | SClean -> "clean"
+  | SAheadNew -> "ahead-new"
+  | SAhead -> "ahead"
+  | SBehind -> "behind"
+  | SDiverged -> "diverged"
+  | SSynced -> "synced"
+
+type branch_status_row = {
+  st_kind : diff_kind;              (* DiffFn | DiffType | DiffRoute *)
+  st_name : string;                 (* fn/type name, or the route path *)
+  st_status : st_status;
+  st_own : bool;                    (* live pin on the branch *)
+  st_branch_hash : string option;   (* b *)
+  st_parent_hash : string option;   (* p *)
+  st_base_hash : string option;     (* a *)
+}
+
+let hash_eq (x : string option) (y : string option) : bool =
+  match x, y with
+  | None, None -> true
+  | Some a, Some b -> String.equal a b
+  | _ -> false
+
+(* The spec's decision table, as code. Comparisons are hash equality with
+   ABSENT (None) as its own value. *)
+let classify_status ~(own : bool) ~(b : string option) ~(p : string option)
+    ~(a : string option) : st_status =
+  if not own then (if hash_eq p a then SClean else SBehind)
+  else if hash_eq b p then SSynced
+  else if hash_eq p a then
+    (match a with None -> SAheadNew | Some _ -> SAhead)
+  else if hash_eq b a then SBehind   (* pin holds the base; parent moved *)
+  else SDiverged
+
+(* One round trip per call: chain walk + version resolution for all three
+   kinds (fn/type/route) + live-pin existence from the scaffolding tables.
+   Read-only (plain exec on the given conn — callers inside a transaction
+   pass the tx conn so the read shares its snapshot). *)
+let branch_status_conn (conn : conn) ~(branch_id : string)
+  : branch_status_row list =
+  (try
+        let sql =
+          "WITH RECURSIVE chain AS ( "^
+          "  SELECT id, parent_id, 0 AS depth FROM branches WHERE id = $1 "^
+          "  UNION ALL "^
+          "  SELECT b.id, b.parent_id, c.depth + 1 "^
+          "  FROM branches b JOIN chain c ON b.id = c.parent_id "^
+          "), vers AS ( "^
+          "  SELECT v.kind, "^
+          "         (string_to_array(v.path::text, '.'))[4] AS key, "^
+          "         c.depth, v.gen, v.hash, v.body "^
+          "  FROM tree_versions v "^
+          "  JOIN chain c ON c.id = v.branch_id "^
+          "  WHERE v.kind IN ('fn','type','route') "^
+          "), heads AS ( "^
+          "  SELECT DISTINCT ON (kind, key, depth) kind, key, depth, "^
+          "         encode(digest((body->'body')::text,'sha256'),'hex') "^
+          "           AS chash, body "^
+          "  FROM vers ORDER BY kind, key, depth, gen DESC "^
+          "), b_res AS ( "^
+          "  SELECT DISTINCT ON (kind, key) kind, key, chash AS b_hash "^
+          "  FROM heads WHERE (body->>'_tombstone') IS NULL "^
+          "  ORDER BY kind, key, depth ASC "^
+          "), p_res AS ( "^
+          "  SELECT DISTINCT ON (kind, key) kind, key, chash AS p_hash "^
+          "  FROM heads WHERE depth >= 1 AND (body->>'_tombstone') IS NULL "^
+          "  ORDER BY kind, key, depth ASC "^
+          "), vers_base AS ( "^
+          "  SELECT v.kind, "^
+          "         (string_to_array(v.path::text, '.'))[4] AS key, "^
+          "         c.depth, v.gen, v.hash, v.body "^
+          "  FROM tree_versions v "^
+          "  JOIN chain c ON c.id = v.branch_id "^
+          "  WHERE v.kind IN ('fn','type','route') "^
+          "    AND c.depth >= 1 "^
+          "    AND (c.depth > 1 OR v.gen <= (SELECT COALESCE(base_gen, 0) "^
+          "                                   FROM branches WHERE id = $1)) "^
+          "), heads_base AS ( "^
+          "  SELECT DISTINCT ON (kind, key, depth) kind, key, depth, "^
+          "         encode(digest((body->'body')::text,'sha256'),'hex') "^
+          "           AS chash, body "^
+          "  FROM vers_base ORDER BY kind, key, depth, gen DESC "^
+          "), a_res AS ( "^
+          "  SELECT DISTINCT ON (kind, key) kind, key, chash AS a_hash "^
+          "  FROM heads_base WHERE depth >= 1 AND (body->>'_tombstone') IS NULL "^
+          "  ORDER BY kind, key, depth ASC "^
+          "), own_fn AS ( "^
+          "  SELECT tree_enc_label(name) AS key FROM function_defs "^
+          "  WHERE branch_id = $1 "^
+          "), own_ty AS ( "^
+          "  SELECT tree_enc_label(name) AS key FROM type_defs "^
+          "  WHERE branch_id = $1 "^
+          "), own_rt AS ( "^
+          "  SELECT tree_enc_label(route) AS key FROM view_bindings "^
+          "  WHERE branch_id = $1 "^
+          "), keys AS ( "^
+          "  SELECT kind, key FROM heads "^
+          "  UNION SELECT 'fn', key FROM own_fn "^
+          "  UNION SELECT 'type', key FROM own_ty "^
+          "  UNION SELECT 'route', key FROM own_rt "^
+          ") SELECT k.kind, tree_dec_label(k.key) AS name, "^
+          "       b.b_hash, p.p_hash, a.a_hash, "^
+          "       (o1.key IS NOT NULL) AS own_fn, "^
+          "       (o2.key IS NOT NULL) AS own_ty, "^
+          "       (o3.key IS NOT NULL) AS own_rt "^
+          "FROM keys k "^
+          "LEFT JOIN b_res b ON b.kind = k.kind AND b.key = k.key "^
+          "LEFT JOIN p_res p ON p.kind = k.kind AND p.key = k.key "^
+          "LEFT JOIN a_res a ON a.kind = k.kind AND a.key = k.key "^
+          "LEFT JOIN own_fn o1 ON o1.key = k.key "^
+          "LEFT JOIN own_ty o2 ON o2.key = k.key "^
+          "LEFT JOIN own_rt o3 ON o3.key = k.key "^
+          "ORDER BY k.kind, name"
+        in
+        let rows = exec conn ~params:[ Pgx.Value.of_string branch_id ] sql in
+        List.filter_map
+          (fun row ->
+            match row with
+            | [ kind_c; name_c; bh_c; ph_c; ah_c; ofn_c; oty_c; ort_c ] ->
+                let kind =
+                  match Pgx.Value.to_string kind_c with
+                  | Some "type" -> DiffType
+                  | Some "route" -> DiffRoute
+                  | _ -> DiffFn
+                in
+                let name = Pgx.Value.to_string name_c in
+                let h c = Pgx.Value.to_string c in
+                let b = h bh_c and p = h ph_c and a = h ah_c in
+                let own =
+                  match kind with
+                  | DiffFn -> Pgx.Value.to_bool ofn_c = Some true
+                  | DiffType -> Pgx.Value.to_bool oty_c = Some true
+                  | DiffRoute -> Pgx.Value.to_bool ort_c = Some true
+                in
+                (match name with
+                 | None -> None
+                 | Some name ->
+                     (* Nothing live anywhere (tombstoned on every head):
+                        both sides agree it is gone - nothing to report. *)
+                     if (not own) && b = None then None
+                     else
+                       Some
+                         { st_kind = kind;
+                           st_name = name;
+                           st_status =
+                             classify_status ~own ~b ~p ~a;
+                           st_own = own;
+                           st_branch_hash = b;
+                           st_parent_hash = p;
+                           st_base_hash = a })
+            | _ -> None)
+          rows
+        with exn ->
+        Printf.eprintf "[store] branch_status error: %s\n"
+          (Printexc.to_string exn);
+        [])
+
+let branch_status (t : t) ~(branch_id : string) : branch_status_row list =
+  match t.conn with
+  | None -> []
+  | Some conn -> branch_status_conn conn ~branch_id
 
 let lookup_function_on_branch (t : t) ~(branch_id : string) ~(name : string)
   : (Pricklypear_lisp.Ast.expr * string * string * string option) option =
@@ -720,13 +884,14 @@ let list_branches (t : t) : Pricklypear_common.Branch.t list =
       let sql =
             "SELECT id::text, COALESCE(parent_id::text, ''), " ^
             "       owner, name, created_at::text, " ^
-            "       COALESCE(last_synced::text, '') " ^
+            "       COALESCE(last_synced::text, ''), " ^
+            "       COALESCE(base_gen, 0)::bigint " ^
             "FROM branches ORDER BY owner, name" in
           let rows = exec conn sql in
           (List.filter_map
                (fun row ->
                  match row with
-                 | [ id_c; pid_c; owner_c; name_c; created_c; synced_c ] ->
+                 | [ id_c; pid_c; owner_c; name_c; created_c; synced_c; bg_c ] ->
                      (match Pgx.Value.to_string id_c,
                               Pgx.Value.to_string owner_c,
                               Pgx.Value.to_string name_c,
@@ -742,10 +907,15 @@ let list_branches (t : t) : Pricklypear_common.Branch.t list =
                             | Some "" | None -> None
                             | Some s -> Some s
                           in
+                          let base_gen =
+                            match Pgx.Value.to_int64 bg_c with
+                            | Some g -> g
+                            | None -> 0L
+                          in
                           let base =
                             Pricklypear_common.Branch.make
-                              ~id ~parent_id ~owner ~name
-                              ~created_at:created ()
+                               ~id ~parent_id ~owner ~name
+                               ~created_at:created ~base_gen ()
                           in
                           Some
                             (match last_synced with
@@ -875,10 +1045,12 @@ let ensure_branch (t : t) ~(parent_id : string) ~(owner : string)
        | Some conn ->
            (try
       let sql =
-                 "INSERT INTO branches (id, parent_id, owner, name) " ^
-                 "VALUES (gen_random_uuid(), $1, $2, $3) " ^
-                 "ON CONFLICT (owner, name) DO UPDATE SET name = EXCLUDED.name " ^
-                 "RETURNING id::text" in
+            "INSERT INTO branches (id, parent_id, owner, name, base_gen) " ^
+            "VALUES (gen_random_uuid(), $1, $2, $3, " ^
+            "        COALESCE((SELECT generation FROM branch_generations " ^
+            "                  WHERE branch_id = $1), 0)) " ^
+            "ON CONFLICT (owner, name) DO UPDATE SET name = EXCLUDED.name " ^
+            "RETURNING id::text" in
                let rows =
                  exec conn
                    ~params:[ Pgx.Value.of_string parent_id;
@@ -1129,8 +1301,10 @@ let fork_branch (t : t) ~(parent_id : string) ~(owner : string)
         | None -> None
         | Some conn ->
             let insert_branch_sql =
-              "INSERT INTO branches (id, parent_id, owner, name) " ^
-              "VALUES (gen_random_uuid(), $1, $2, $3) " ^
+              "INSERT INTO branches (id, parent_id, owner, name, base_gen) " ^
+              "VALUES (gen_random_uuid(), $1, $2, $3, " ^
+              "        COALESCE((SELECT generation FROM branch_generations " ^
+              "                  WHERE branch_id = $1), 0)) " ^
               "RETURNING id::text" in
             let rows =
               exec conn
@@ -1165,12 +1339,14 @@ let fork_branch (t : t) ~(parent_id : string) ~(owner : string)
    own branches. Policy is enforced at the Lisp intercept layer
    (session.ml); Store.merge_branch just does the SQL.
 
-   Initial implementation: copies ALL function_defs from source to
-   target via INSERT ... ON CONFLICT (branch_id, name) DO UPDATE.
-   TODO: diff-based merge (only fns whose updated_at > parent's
-   last_synced_with_child, OR whose name was added in child).
-   TODO: detect conflicts (parent ALSO modified same name since fork)
-   and per-function conflict resolution.
+   branching.branch-status S3: status-driven merge. Into the source's
+   PARENT: upsert ONLY names the source moved since base_gen (ahead-new /
+   ahead / diverged); behind names would clobber the parent's newer work
+   and are skipped; synced/clean names are already identical. Conflict
+   report = the diverged set (both sides moved since the fork base) —
+   genuine conflict detection; resolution stays LWW (report-only).
+   Any other target (no shared base): head-vs-head fallback — upsert
+   source fns whose body differs from the target's own row, no report.
    TODO: schema-merge for type_defs — only main accepts schema changes
    via special migration-governed merge.
 
@@ -1182,8 +1358,6 @@ type merge_result = {
 }
 
 (* ---- branch diff (branching.diff) ---- *)
-
-type diff_kind = DiffFn | DiffType | DiffRoute
 
 type diff_status = DiffAdded | DiffRemoved | DiffModified
 
@@ -1229,56 +1403,134 @@ let format_merge_result (r : merge_result) : string =
 
 let merge_branch (t : t) ~(source_id : string) ~(target_id : string)
   : merge_result option =
-  (try
+  (* Is this a merge into the source's direct parent? Read BEFORE the tx
+     (the value is stable); the base advance runs AFTER the tx commits,
+     because the deferred gen-bump triggers (017/019) fire at COMMIT —
+     reading branch_generations inside the tx sees the PRE-merge counter. *)
+  let src_parent =
+    match t.conn with
+    | None -> None
+    | Some conn -> (
+        match
+          exec conn
+            ~params:[ Pgx.Value.of_string source_id ]
+            "SELECT parent_id::text FROM branches WHERE id = $1"
+        with
+        | [ [ c ] ] -> Pgx.Value.to_string c
+        | _ -> None)
+  in
+  let is_parent_merge = src_parent = Some target_id in
+  let merged =
+    try
       with_transaction t (fun conn ->
         match conn with
         | None -> None  (* no DB; can't merge *)
         | Some conn ->
-            (* CONFLICT REPORT (branching.merge): names both sides own where
-               target.updated_at > source.updated_at. Report-only; LWW still. *)
-            let conflict_sql =
-              "SELECT s.name FROM function_defs s " ^
-              "JOIN function_defs t ON t.name = s.name AND t.branch_id = $1 " ^
-              "WHERE s.branch_id = $2 AND t.updated_at > s.updated_at " ^
-              "ORDER BY s.name"
+            (* branching.branch-status S3: status-driven merge.
+               [is_parent_merge] was resolved before the tx (see above). *)
+            let names, conflicts =
+              if is_parent_merge then begin
+                let rows = branch_status_conn conn ~branch_id:source_id in
+                let fns =
+                  List.filter (fun r -> r.st_kind = DiffFn) rows in
+                let ups =
+                  List.filter_map
+                    (fun r ->
+                      match r.st_status with
+                      | SAheadNew | SAhead | SDiverged -> Some r.st_name
+                      | _ -> None)
+                    fns
+                in
+                let conf =
+                  List.filter_map
+                    (fun r ->
+                      if r.st_status = SDiverged then Some r.st_name
+                      else None)
+                    fns
+                in
+                (ups, conf)
+              end
+              else begin
+                let sql =
+                  "SELECT s.name FROM function_defs s " ^
+                  "WHERE s.branch_id = $1 AND NOT EXISTS ( " ^
+                  "  SELECT 1 FROM function_defs x " ^
+                  "  WHERE x.branch_id = $2 AND x.name = s.name " ^
+                  "  AND x.body IS NOT DISTINCT FROM s.body) " ^
+                  "ORDER BY s.name" in
+                let rows =
+                  exec conn
+                    ~params:[ Pgx.Value.of_string source_id;
+                              Pgx.Value.of_string target_id ]
+                    sql
+                in
+                (List.filter_map
+                   (function [ c ] -> Pgx.Value.to_string c | _ -> None)
+                   rows,
+                 [] (* no shared base: no conflict report *))
+              end
             in
-            let conflict_rows =
-              exec conn
-                ~params:
-                  [ Pgx.Value.of_string target_id
-                  ; Pgx.Value.of_string source_id ]
-                conflict_sql
+            (* Upsert only the selected names (per-name loop keeps binding
+               simple; merge sets are branch-scale, tens of rows). *)
+            let count =
+              List.fold_left
+                (fun acc name ->
+                  let sql =
+                    "INSERT INTO function_defs " ^
+                    "  (branch_id, name, body, author, doc, package, updated_at) " ^
+                    "SELECT $1, name, body, author, doc, package, updated_at " ^
+                    "FROM function_defs " ^
+                    "WHERE branch_id = $2 AND name = $3 " ^
+                    "ON CONFLICT (branch_id, name) DO UPDATE " ^
+                    "  SET body = EXCLUDED.body, author = EXCLUDED.author, " ^
+                    "      doc = EXCLUDED.doc, package = EXCLUDED.package, " ^
+                    "      updated_at = EXCLUDED.updated_at " ^
+                    "RETURNING name" in
+                  let rows =
+                    exec conn
+                      ~params:[ Pgx.Value.of_string target_id;
+                                Pgx.Value.of_string source_id;
+                                Pgx.Value.of_string name ]
+                      sql
+                  in
+                  if rows = [] then acc else acc + 1)
+                0 names
             in
-            let conflicts =
-              List.filter_map
-                (function
-                  | [ c ] -> Pgx.Value.to_string c
-                  | _ -> None)
-                conflict_rows
-            in
-            (* SCOPE: function_defs only — never type_defs / view_bindings. *)
-            let sql =
-              "INSERT INTO function_defs " ^
-              "  (branch_id, name, body, author, doc, package, updated_at) " ^
-              "SELECT $1, name, body, author, doc, package, updated_at " ^
-              "FROM function_defs WHERE branch_id = $2 " ^
-              "ON CONFLICT (branch_id, name) DO UPDATE " ^
-              "  SET body = EXCLUDED.body, author = EXCLUDED.author, " ^
-              "      doc = EXCLUDED.doc, package = EXCLUDED.package, " ^
-              "      updated_at = EXCLUDED.updated_at " ^
-              "RETURNING name" in
-            let rows =
-              exec conn
-                ~params:[ Pgx.Value.of_string target_id;
-                          Pgx.Value.of_string source_id ]
-                sql
-            in
+            (* Advance the source's merge base AFTER commit (see above):
+               post-commit, branch_generations carries the merge's own
+               bump, so base_gen lands on the parent's true head — git's
+               moving merge-base. Only meaningful for parent-merges;
+               promote deliberately does NOT advance. *)
             let () = Tree_store.recompute_head_hash conn ~branch_id:target_id in
-            (Some { count = List.length rows; conflicts }))
+            (Some { count; conflicts }))
     with exn ->
       Printf.eprintf "[store] merge_branch error: %s\n"
         (Printexc.to_string exn);
-      None)
+      None
+  in
+  let () =
+    if is_parent_merge then
+      match merged with
+      | Some _ -> (
+          match t.conn with
+          | None -> ()
+          | Some conn ->
+              (try
+                 let _ =
+                   exec conn
+                     ~params:[ Pgx.Value.of_string source_id;
+                               Pgx.Value.of_string target_id ]
+                     ("UPDATE branches SET base_gen = COALESCE( " ^
+                      "  (SELECT generation FROM branch_generations " ^
+                      "    WHERE branch_id = $2), 0) WHERE id = $1")
+                 in
+                 ()
+               with exn ->
+                 Printf.eprintf "[store] merge base advance: %s\n"
+                   (Printexc.to_string exn)))
+      | None -> ()
+  in
+  merged
 
 (** Branch diff (branching.diff). Compares the EFFECTIVE views of two
     branches (closest-ancestor-wins walk per branch, deduped) across

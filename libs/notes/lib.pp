@@ -1,4 +1,4 @@
-;; package notes -- exported from live branch admin/personal
+;; package notes -- exported from live branch system/main
 ;; Sync: scripts/pp_sync.py pull|push
 
 (define notes/all-todos
@@ -404,6 +404,10 @@
       "-"
       (as-str (string-length (outline/encode tree))))))
 
+(define notes/capture/outline-of-doc
+  (lambda (note) (notes/doc/outline note))
+  "Outline tree for a notes/doc row; when notes/doc/ensure-inbox has already patched in the loaded tree, return it without a second tree walk.")
+
 (define notes/capture/page
   (lambda
     ()
@@ -436,6 +440,21 @@
               b
               (string-append (substring b 0 45) "..."))))))))
 
+(define notes/capture/upsert-inbox
+  (lambda
+    (tree)
+    (seq
+      (notes/doc/upsert-in
+        "inbox"
+        "Inbox"
+        tree
+        "inbox"
+        "inbox"
+        ""
+        (notes/doc/row-folder (notes/doc/row "inbox")))
+      "inbox"))
+  "Upsert the inbox note from an already-decoded outline tree. Skips notes/doc/upsert's own outline reload.")
+
 (define notes/create-form
   (lambda
     ()
@@ -457,6 +476,84 @@
             (html/attr "placeholder" "my-note"))
           " "
           (html/button (html/attr "type" "submit") "Create"))))))
+
+(define notes/css
+  (lambda
+    ()
+    (css/sheet
+      (list
+        (css/rule
+          "img.note-media"
+          (list
+            "display"
+            "block"
+            "max-width"
+            "100%"
+            "max-height"
+            "28rem"
+            "height"
+            "auto"
+            "margin"
+            ".5rem 0"
+            "border"
+            "1px solid #000"
+            "background"
+            "var(--panel)"))
+        (css/rule
+          ".note-media-cap"
+          (list "margin" "0 0 .5rem" "font-size" ".85rem"))
+        (css/rule
+          "li.note-item"
+          (list
+            "display"
+            "flex"
+            "align-items"
+            "center"
+            "gap"
+            ".5rem"
+            "padding"
+            ".35rem 0"
+            "border-bottom"
+            "1px solid #c0c0c0"))
+        (css/rule "li.note-item > a" (list "flex" "1 1 auto"))
+        (css/rule
+          "li.note-item form.note-del"
+          (list "margin" "0"))
+        (css/rule
+          "li.note-item .note-del button"
+          (list
+            "width"
+            "auto"
+            "padding"
+            ".25rem .45rem"
+            "font-size"
+            ".85rem"))
+        (css/rule
+          ".note-title-row"
+          (list
+            "display"
+            "flex"
+            "flex-wrap"
+            "wrap"
+            "align-items"
+            "center"
+            "gap"
+            ".75rem"))
+        (css/rule
+          ".note-title-row h1"
+          (list
+            "flex"
+            "1 1 auto"
+            "margin"
+            "0"
+            "border-bottom"
+            "none"
+            "padding"
+            "0"))
+        (css/rule
+          ".note-title-row .note-del-page button"
+          (list "width" "auto")))))
+  "Render the notes component stylesheet (extracted from ui/theme).")
 
 (define notes/cycle-node-todo
   (lambda
@@ -1114,23 +1211,19 @@
 (define notes/issues/add
   (lambda
     (kind title body)
-    (let
-      ((n (notes/issues/ensure)))
-      (let
-        ((tree (notes/doc/outline n))
-          (full-title
-            (string-append
-              (as-str kind)
-              ": "
-              (notes/issues/title-or-kind kind title))))
-        (let
-          ((child
-            (outline/set-body
-              (outline/node (notes/issues/node-id tree) full-title)
-              (as-str body))))
-          (let
-            ((new-tree (outline/add-child-by-id tree "root" child)))
-            (notes/issues/upsert new-tree)))))))
+    (let*
+      ((np (notes/tree/note-path "" "log/issues"))
+        (full-title
+          (string-append
+            (as-str kind)
+            ": "
+            (notes/issues/title-or-kind kind title)))
+        (nid (notes/issues/node-id (list))))
+      (seq
+        (notes/issues/ensure)
+        (notes/node/upsert np nid full-title (as-str body) "")
+        nid)))
+  "Add an issue to log/issues as a single per-node write (no whole-tree rewrite). Ensures the register exists, then upserts one leaf heading with a collision-free id. Returns the new node id. Fixes the data-loss clobber.")
 
 (define notes/issues/body
   (lambda
@@ -1151,16 +1244,10 @@
 (define notes/issues/delete
   (lambda
     (id)
-    (let
-      ((n (notes/doc/get "log/issues")))
-      (if
-        (null? n)
-        #f
-        (let
-          ((tree (notes/doc/outline n)))
-          (let
-            ((new-tree (outline/delete tree (as-str id))))
-            (seq (notes/issues/upsert new-tree) #t)))))))
+    (notes/node/delete
+      (notes/tree/note-path "" "log/issues")
+      id))
+  "Delete one issue id from log/issues. Single per-node delete (no whole-tree rewrite). Returns #t if found, #f if absent. Fixes i-1786862188 and the data-loss clobber.")
 
 (define notes/issues/ensure
   (lambda
@@ -1319,7 +1406,10 @@
                           (html/text "Del"))))))))))))))
 
 (define notes/issues/node-id
-  (lambda (tree) (string-append "i-" (as-str (now)))))
+  (lambda
+    (tree)
+    (string-append "i-" (as-str (now)) "-" (random-uuid)))
+  "Generate a collision-free issue node id: i-<unix-seconds>-<uuid>. Fixes same-second collision in i-1786862188.")
 
 (define notes/issues/nodes-html
   (lambda
@@ -1349,20 +1439,11 @@
 (define notes/issues/set-todo
   (lambda
     (id todo)
-    (let
-      ((n (notes/doc/get "log/issues")))
-      (if
-        (null? n)
-        #f
-        (let
-          ((tree (notes/doc/outline n)))
-          (let
-            ((new-tree
-              (outline/update
-                tree
-                (as-str id)
-                (lambda (node) (outline/set-todo node todo)))))
-            (seq (notes/issues/upsert new-tree) #t)))))))
+    (notes/node/set-todo
+      (notes/tree/note-path "" "log/issues")
+      id
+      todo))
+  "Set todo status of one issue id in log/issues. Single per-node write (no whole-tree rewrite). Returns #t if found, #f if absent. Fixes i-1786862188 and the data-loss clobber.")
 
 (define notes/issues/title-or-kind
   (lambda
@@ -1913,6 +1994,100 @@
                   day)
                 (render-html (outline/html-lite slug new-tree #f))))))))))
 
+(define notes/node/delete
+  (lambda
+    (note-path node-id)
+    (let
+      ((p
+        (string-append
+          note-path
+          ".h."
+          (tree/path-label (as-str node-id)))))
+      (let
+        ((row (tree/get p)))
+        (if (null? row) #f (seq (tree/delete p "recursive") #t)))))
+  "Delete one heading node (and its subtree) at note-path.h.<node-id>. One tree write. Returns #t if deleted, #f if absent.")
+
+(define notes/node/get
+  (lambda
+    (note-path node-id)
+    (let
+      ((p
+        (string-append
+          note-path
+          ".h."
+          (tree/path-label (as-str node-id)))))
+      (let
+        ((row (tree/get p)))
+        (if
+          (null? row)
+          ()
+          (notes/tree/body (notes/tree/parse row))))))
+  "Read one heading node's body dict at note-path.h.<node-id>, or () if absent. Single-node read.")
+
+(define notes/node/path
+  (lambda
+    (note-path node-id)
+    (string-append
+      note-path
+      ".h."
+      (tree/path-label (as-str node-id))))
+  "The heading tree path note-path.h.<sanitized-node-id>. Pure string computation.")
+
+(define notes/node/set-todo
+  (lambda
+    (note-path node-id todo)
+    (let
+      ((p
+        (string-append
+          note-path
+          ".h."
+          (tree/path-label (as-str node-id)))))
+      (let
+        ((row (tree/get p)))
+        (if
+          (null? row)
+          #f
+          (seq
+            (tree/upsert
+              p
+              "heading"
+              "note"
+              (dict-set
+                (notes/tree/body (notes/tree/parse row))
+                "todo"
+                (as-str todo)))
+            #t)))))
+  "Set the todo field of one heading node at note-path.h.<node-id>. One read + one write on a single node (no whole-tree rewrite). Returns #t if the node exists, #f otherwise.")
+
+(define notes/node/upsert
+  (lambda
+    (note-path node-id title body todo)
+    (let
+      ((p
+        (string-append
+          note-path
+          ".h."
+          (tree/path-label (as-str node-id)))))
+      (seq
+        (tree/upsert
+          p
+          "heading"
+          "note"
+          (dict-set*
+            "{}"
+            (list
+              "id"
+              (as-str node-id)
+              "title"
+              (as-str title)
+              "body"
+              (as-str body)
+              "todo"
+              (as-str todo))))
+        (as-str node-id))))
+  "Upsert a single leaf heading node at note-path.h.<node-id>. One tree write (no whole-tree rewrite, no notes/doc/row read). Returns node-id. Fixes i-1787030118 / the data-loss clobber.")
+
 (define notes/open-todos
   (lambda
     ()
@@ -2418,14 +2593,55 @@
                         (notes/get-day src))
                       #t)))))))))))
 
-;; NOTES REFILE UI (BORGE-1785603757): the eager O(n) target <select>
-;; (notes/refile-form / notes/refile-options over (notes/list)) was the
-;; budget blowout on large gardens and is REMOVED. Refile is a lazy
-;; htmx modal: notes/ui/refile-modal (toolbar) + notes/ui/refile-partial
-;; (GET /partials/notes-refile) both render notes/ui/refile-modal-body — a
-;; typeahead destination picker over /partials/notes-search?mode=refile
-;; (Postgres-filtered) plus a raw slug input. notes/refile/move does the
-;; actual detach+attach write; no enumeration.
+(define notes/refile-form
+  (lambda
+    (src-slug nid)
+    (if
+      (string-eq (as-str nid) "root")
+      ""
+      (html/form
+        "POST"
+        "/notes"
+        (html/attr "class" "ol-refile")
+        (html/join
+          (list
+            (html/hidden "action" "refile")
+            (html/hidden "src_slug" (as-str src-slug))
+            (html/hidden "node_id" (as-str nid))
+            (html/select
+              "dst_slug"
+              (html/attr "class" "ol-refile-sel")
+              (notes/refile-options src-slug))
+            (html/button
+              (html/attrs
+                (list
+                  (html/attr "type" "submit")
+                  (html/attr "class" "ol-btn")
+                  (html/attr "title" "move node to another note")))
+              "refile")))))))
+
+(define notes/refile-options
+  (lambda
+    (src-slug)
+    (list/foldl
+      (lambda
+        (acc row)
+        (let
+          ((f (cdr row)))
+          (let
+            ((slug (as-str (dict-get f "slug")))
+              (title (as-str (dict-get f "title"))))
+            (if
+              (string-eq slug (as-str src-slug))
+              acc
+              (string-append
+                acc
+                (html/option
+                  slug
+                  (if (string-eq title "") slug title)
+                  #f))))))
+      ""
+      (notes/list))))
 
 (define notes/refile/extract
   (lambda
@@ -2515,6 +2731,33 @@
           (redirect (string-append "/notes?slug=" src))
           (redirect (string-append "/notes?slug=" new)))))))
 
+(define notes/refile/form
+  (lambda
+    (src-slug nid)
+    (if
+      (string-eq (as-str nid) "root")
+      ""
+      (html/form
+        "POST"
+        "/notes"
+        (html/attr "class" "ol-refile")
+        (html/join
+          (list
+            (html/hidden "action" "refile")
+            (html/hidden "src_slug" (as-str src-slug))
+            (html/hidden "node_id" (as-str nid))
+            (html/select
+              "dst_slug"
+              (html/attr "class" "ol-refile-sel")
+              (notes/refile/options src-slug))
+            (html/button
+              (html/attrs
+                (list
+                  (html/attr "type" "submit")
+                  (html/attr "class" "ol-btn")
+                  (html/attr "title" "move node to another note")))
+              "refile")))))))
+
 (define notes/refile/handle
   (lambda
     ()
@@ -2582,6 +2825,29 @@
                             (notes/doc/kind src)
                             (notes/doc/day src))
                           #t)))))))))))))
+
+(define notes/refile/options
+  (lambda
+    (src-slug)
+    (list/foldl
+      (lambda
+        (acc row)
+        (let
+          ((f (cdr row)))
+          (let
+            ((slug (as-str (dict-get f "slug")))
+              (title (as-str (dict-get f "title"))))
+            (if
+              (string-eq slug (as-str src-slug))
+              acc
+              (string-append
+                acc
+                (html/option
+                  slug
+                  (if (string-eq title "") slug title)
+                  #f))))))
+      ""
+      (notes/doc/list))))
 
 (define notes/refile/slug-char-ok?
   (lambda
@@ -2747,10 +3013,22 @@
         "/* notes-tree layout (component-scoped; colors via var(--*)) */")
       (css/rule
         ".notes-tree"
-        (list "list-style" "none" "padding" "0" "margin" "0"))
+        (list
+          "list-style"
+          "none"
+          "padding"
+          "0"
+          "margin"
+          "0"))
       (css/rule
         ".notes-tree ul.tree-root"
-        (list "list-style" "none" "padding" "0" "margin" "0"))
+        (list
+          "list-style"
+          "none"
+          "padding"
+          "0"
+          "margin"
+          "0"))
       (css/rule
         ".notes-tree .tree-folder"
         (list
@@ -2778,13 +3056,23 @@
         (list "text-decoration" "none" "color" "var(--link)"))
       (css/rule
         ".notes-tree .tree-folder-header a:hover"
-        (list "text-decoration" "underline" "color" "var(--ink)"))
+        (list
+          "text-decoration"
+          "underline"
+          "color"
+          "var(--ink)"))
       (css/rule
         ".notes-tree .tree-folder-icon"
         (list "font-size" ".9em"))
       (css/rule
         ".notes-tree ul.tree-children"
-        (list "list-style" "none" "padding" "0 0 0 1rem" "margin" ".15rem 0"))
+        (list
+          "list-style"
+          "none"
+          "padding"
+          "0 0 0 1rem"
+          "margin"
+          ".15rem 0"))
       (css/rule
         ".notes-tree li.note-item"
         (list "border-bottom" "none" "padding" ".15rem 0"))
@@ -3612,26 +3900,6 @@
       ((slug (as-str (request-param "slug"))))
       (seq (notes/doc/delete slug) (redirect "/notes")))))
 
-;; tree-time.consumers (notes undo, the first app consumer): restore the
-;; note's root node body (title/tags/kind/day/folder) to its previous
-;; version via ONE per-path (undo path) call — the substrate keeps the
-;; before-image, no per-app history journal (tree-time.consumers).
-;; path = notes/tree/note-path folder slug; undo is safe + non-random: an
-;; error-string return (no history / no value at gen) leaves the note
-;; unchanged and we just redirect back.
-(define notes/ui/do-undo
-  (lambda
-    ()
-    (let
-      ((slug (as-str (request-param "slug")))
-        (n (notes/doc/get (as-str (request-param "slug")))))
-      (let
-        ((folder (notes/doc/folder n))
-          (path (notes/tree/note-path folder slug)))
-        (seq
-          (undo path)
-          (redirect (string-append "/notes?slug=" slug)))))))
-
 (define notes/ui/do-save
   (lambda
     (slug raw)
@@ -3684,6 +3952,19 @@
                     "pre"
                     (html/attrs (list (html/attr "class" "err")))
                     (as-str raw)))))))))))
+
+(define notes/ui/do-undo
+  (lambda
+    ()
+    (let
+      ((slug (as-str (request-param "slug")))
+        (n (notes/doc/get (as-str (request-param "slug")))))
+      (let
+        ((folder (notes/doc/folder n))
+          (path (notes/tree/note-path folder slug)))
+        (seq
+          (undo path)
+          (redirect (string-append "/notes?slug=" slug)))))))
 
 (define notes/ui/edit-form
   (lambda
@@ -4356,11 +4637,6 @@
 (define notes/ui/refile-modal-body
   (lambda
     (slug)
-    ;; Lazy refile target picker (BORGE-1785603757): NO eager O(n)
-    ;; notes/refile/options <select>. Destination is a typeahead search
-    ;; partial (/partials/notes-search?mode=refile) filtered in Postgres
-    ;; plus a raw slug text input for agents/keyboard users. Renders no
-    ;; per-option HTML at page-open, so a large garden never enumerates.
     (html/tag
       "div"
       (html/attrs
@@ -4439,10 +4715,6 @@
 (define notes/ui/refile-partial
   (lambda
     ()
-    ;; GET /partials/notes-refile?src=SLUG — lazy modal body (BORGE-1785603757).
-    ;; Renders the same budget-safe typeahead refile picker as the toolbar
-    ;; modal; no eager notes/refile/options enumeration. Opened <details> so
-    ;; htmx toggling / direct fetch both present a ready-to-use picker.
     (let
       ((slug (as-str (request-param "src"))))
       (if
@@ -4766,24 +5038,24 @@
                           (html/attr "class" "secondary")
                           (html/attr "title" "delete note")))
                       "Delete note"))))
-            (html/form
-              "POST"
-              "/notes"
-              (html/attrs
-                (list
-                  (html/attr "class" "note-undo")
-                  (html/attr "title" "undo the last change to this note")))
-              (html/join
-                (list
-                  (html/hidden "action" "undo")
-                  (html/hidden "slug" (as-str slug))
-                  (html/button
-                    (html/attrs
-                      (list
-                        (html/attr "type" "submit")
-                        (html/attr "class" "secondary")
-                        (html/attr "title" "undo last note change")))
-                    "Undo")))))))
+              (html/form
+                "POST"
+                "/notes"
+                (html/attrs
+                  (list
+                    (html/attr "class" "note-undo")
+                    (html/attr "title" "undo the last change to this note")))
+                (html/join
+                  (list
+                    (html/hidden "action" "undo")
+                    (html/hidden "slug" (as-str slug))
+                    (html/button
+                      (html/attrs
+                        (list
+                          (html/attr "type" "submit")
+                          (html/attr "class" "secondary")
+                          (html/attr "title" "undo last note change")))
+                      "Undo")))))))
         (html/p*
           (html/attr "class" "muted")
           (string-append "tags: " (as-str tags)))
@@ -4973,96 +5245,11 @@
 (define notes/upsert
   (lambda
     (slug title outline tags kind day)
-    (let
-      ((row (notes/row slug)))
-      (let
-        ((fields
-          (notes/make-fields
-            slug
-            title
-            outline
-            tags
-            kind
-            day)))
-        (if
-          (null? row)
-          (create (quote note) fields)
-          (update (quote note) (car row) fields))))))
-
-(define notes/css
-  (lambda
-    ()
-    "Render the notes component stylesheet (extracted from ui/theme)."
-    (css/sheet
-      (list
-        (css/rule
-          "img.note-media"
-          (list
-            "display"
-            "block"
-            "max-width"
-            "100%"
-            "max-height"
-            "28rem"
-            "height"
-            "auto"
-            "margin"
-            ".5rem 0"
-            "border"
-            "1px solid #000"
-            "background"
-            "var(--panel)"))
-        (css/rule
-          ".note-media-cap"
-          (list "margin" "0 0 .5rem" "font-size" ".85rem"))
-        (css/rule
-          "li.note-item"
-          (list
-            "display"
-            "flex"
-            "align-items"
-            "center"
-            "gap"
-            ".5rem"
-            "padding"
-            ".35rem 0"
-            "border-bottom"
-            "1px solid #c0c0c0"))
-        (css/rule "li.note-item > a" (list "flex" "1 1 auto"))
-        (css/rule
-          "li.note-item form.note-del"
-          (list "margin" "0"))
-        (css/rule
-          "li.note-item .note-del button"
-          (list
-            "width"
-            "auto"
-            "padding"
-            ".25rem .45rem"
-            "font-size"
-            ".85rem"))
-        (css/rule
-          ".note-title-row"
-          (list
-            "display"
-            "flex"
-            "flex-wrap"
-            "wrap"
-            "align-items"
-            "center"
-            "gap"
-            ".75rem"))
-        (css/rule
-          ".note-title-row h1"
-          (list
-            "flex"
-            "1 1 auto"
-            "margin"
-            "0"
-            "border-bottom"
-            "none"
-            "padding"
-            "0"))
-        (css/rule
-          ".note-title-row .note-del-page button"
-          (list "width" "auto"))))))
+    (notes/doc/upsert
+      slug
+      title
+      outline
+      tags
+      kind
+      day))
+  "Upsert a note by slug. Delegates to notes/doc/upsert (tree path); body defaults to empty, folder preserved on update. Returns slug. Fixes i-1786914877.")

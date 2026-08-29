@@ -14,11 +14,17 @@ type t = {
   owner : string;         (* "system" for main, username otherwise *)
   name : string;          (* "main", "alice/main", "alice/experiment", ... *)
   created_at : string;    (* ISO 8601 timestamp *)
-  last_synced : string option;  (* for merge diffing *)
+  last_synced : string option;  (* retired (branching.branch-status); kept for protocol compat *)
+  (* branching.branch-status: the parent's head generation at fork time
+     (branch_generations counter). The merge base — advanced when a merge
+     lands this branch into its parent; NOT advanced by promote, so
+     selective pins stay visible as `synced`. *)
+  base_gen : int64;
 }
 
-let make ~id ~parent_id ~owner ~name ~created_at ?(last_synced = None) () : t =
-  { id; parent_id; owner; name; created_at; last_synced }
+let make ~id ~parent_id ~owner ~name ~created_at ?(last_synced = None)
+    ?(base_gen = 0L) () : t =
+  { id; parent_id; owner; name; created_at; last_synced; base_gen }
 
 let is_main (b : t) : bool = b.owner = "system" && b.name = "main"
 
@@ -37,6 +43,7 @@ let to_json (b : t) : Yojson.Safe.t =
     ("last_synced", match b.last_synced with
                     | Some s -> `String s
                     | None -> `Null);
+    ("base_gen", `Int (Int64.to_int b.base_gen));
   ]
 
 let of_json (j : Yojson.Safe.t) : (t, string) result =
@@ -53,5 +60,8 @@ let of_json (j : Yojson.Safe.t) : (t, string) result =
     let last_synced = match find "last_synced" with
                       | `String s -> Some s | `Null -> None
                       | _ -> failwith "last_synced" in
-    Ok { id; parent_id; owner; name; created_at; last_synced }
+    let base_gen = match find "base_gen" with
+                    | `Int i -> Int64.of_int i
+                    | _ -> 0L (* tolerant: pre-024 snapshots *) in
+    Ok { id; parent_id; owner; name; created_at; last_synced; base_gen }
   with Failure msg -> Error msg
