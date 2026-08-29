@@ -525,11 +525,11 @@ let media_get (session : Session.t) (reqd : Httpun.Reqd.t) ~(id : string)
            in
            let headers =
              Httpun.Headers.of_list
-               [ ("content-type", m.content_type)
-               ; ("content-length", string_of_int (String.length bytes))
-               ; ("cache-control", "private, max-age=3600")
-               ; ("content-disposition", disposition)
-               ]
+               ([ ("content-type", m.content_type)
+                ; ("content-length", string_of_int (String.length bytes))
+                ; ("cache-control", "private, max-age=3600")
+                ; ("content-disposition", disposition)
+                ] @ Http_core.security_headers ())
            in
            let resp = Httpun.Response.create ~headers `OK in
            safe_respond_with_string reqd resp bytes;

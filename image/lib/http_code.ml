@@ -291,10 +291,10 @@ let serve_bytes (reqd : Httpun.Reqd.t) ?(status = `OK) ~content_type
     (body : string) : unit =
   let headers =
     Httpun.Headers.of_list
-      [ ("content-type", content_type)
-      ; ("content-length", string_of_int (String.length body))
-      ; ("cache-control", "public, max-age=3600")
-      ]
+      ([ ("content-type", content_type)
+       ; ("content-length", string_of_int (String.length body))
+       ; ("cache-control", "public, max-age=3600")
+       ] @ Http_core.security_headers ())
   in
   let resp = Httpun.Response.create ~headers status in
   Http_core.safe_respond_with_string reqd resp body

@@ -131,6 +131,16 @@ let emergency_css : string =
    }\n\
    "
 
+(** Security headers appended to every response. Deliberately NOT a full
+    CSP: the chrome relies on inline <style>/<script> (htmx + outline
+    client script), so we only pin frame-ancestors 'none'. *)
+let security_headers () : (string * string) list =
+  [ ("x-content-type-options", "nosniff")
+  ; ("x-frame-options", "DENY")
+  ; ("referrer-policy", "strict-origin-when-cross-origin")
+  ; ("content-security-policy", "frame-ancestors 'none'")
+  ]
+
 let html_response (reqd : Httpun.Reqd.t) ?(status = `OK)
     ?session ?(css : string option) (body : Pure_html.node) : unit =
   let css =
@@ -190,7 +200,8 @@ let html_response (reqd : Httpun.Reqd.t) ?(status = `OK)
     Httpun.Headers.of_list
       ([("content-type", "text/html; charset=utf-8");
         ("content-length", string_of_int (String.length s))]
-       @ Timing.timing_header ())
+       @ Timing.timing_header ()
+       @ security_headers ())
   in
   let resp = Httpun.Response.create ~headers status in
   safe_respond_with_string reqd resp s
@@ -200,7 +211,8 @@ let text_response (reqd : Httpun.Reqd.t) ?(status = `OK) ~content_type (s : stri
     Httpun.Headers.of_list
       ([("content-type", content_type);
         ("content-length", string_of_int (String.length s))]
-       @ Timing.timing_header ())
+       @ Timing.timing_header ()
+       @ security_headers ())
   in
   let resp = Httpun.Response.create ~headers status in
   safe_respond_with_string reqd resp s
@@ -512,9 +524,10 @@ let redirect_with_cookie (reqd : Httpun.Reqd.t) ~(location : string)
     ~(set_cookie : string) : unit =
   let headers =
     Httpun.Headers.of_list
-      [ ("location", location)
-      ; ("set-cookie", set_cookie)
-      ; ("content-length", "0") ]
+      ([ ("location", location)
+       ; ("set-cookie", set_cookie)
+       ; ("content-length", "0") ]
+       @ security_headers ())
   in
   let resp = Httpun.Response.create ~headers `See_other in
   safe_respond_with_string reqd resp ""
@@ -764,7 +777,8 @@ let redirect_response (reqd : Httpun.Reqd.t) (location : string) : unit =
     Httpun.Headers.of_list
       ([ ("location", location)
        ; ("content-length", "0")
-       ] @ Timing.timing_header ())
+       ] @ Timing.timing_header ()
+       @ security_headers ())
   in
   let resp = Httpun.Response.create ~headers `See_other in
   safe_respond_with_string reqd resp ""
