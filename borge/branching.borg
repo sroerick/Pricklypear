@@ -311,13 +311,194 @@
            - merge TODO "diff-based merge (only changed
              rows)": merge calls diff, upserts only rows
              whose status != same.
-           - merge TODO "conflict detection": diff's
-             Modified classification + 3-way base
-             (code_history before-image at
-             last_synced) yields genuine conflict
-             detection. v2.
+           - merge TODO "conflict detection": the
+             3-way base is the base_gen coordinate of
+             branch-status (tree-time made it a READ,
+             superseding the code_history / timestamp
+             plan recorded here).
     |))
    )
+  )
+  (subsection branch-status
+   (doc "Git-style clean/ahead/behind/diverged status as ONE derived read of the tree-time substrate")
+   (status implemented)
+   (* agent note (|2026-08-28: implemented + verified same-day as the plan pass. Migration 024 (branches.base_gen + backfill-to-parent-current-gen approximation); fork/ensure write it; Store.branch_status (store.ml, one round trip, all three kinds, chain-walk over tree_versions + live-pin EXISTS on the scaffolding tables); classify_status decision table; /branches dirty+synced columns, branch detail status table (unbind hint on synced pins), /changes + (branch-changes) class = status; list_overrides DELETED (4 call sites); merge_branch status-driven (upserts only ahead-new/ahead/diverged; conflict report = the diverged set; base advance post-commit) + head-vs-head fallback for non-parent targets. TWO make-phase findings recorded in the details: (1) HASH DOMAIN - the stored tree_versions.hash column is NOT comparable across write paths (tree-first Tree_store.hash_body compact-JSON digests vs 009-mirror digest(jsonb::text) spaced-canonical digests: identical bodies, different hashes - 020 itself calls the stored hash "a consistency artifact, not content"), so status computes digest((body->'body')::text) AT QUERY TIME, one domain regardless of writer; a global rehash is tree-time scope, and gen-diff has the same latent cross-domain hazard when the two compared gens were written through different paths. (2) MERGE BASE ADVANCE MUST RUN POST-COMMIT - the 017/019 gen-bump triggers are deferred, so reading branch_generations inside the merge tx sees the pre-merge counter; the advance is a separate statement after with_transaction returns. Verified: image/test/branch_status_test (lifecycle: fork base_gen = parent head gen, empty fork clean, ahead-new, diverged, behind, post-promote synced, merge advances base_gen + post-merge synced; identical-pin-synced + unbind-returns-clean) + live smoke on the dev habitat (fork -> define -> ahead-new -> promote -> synced -> redefine -> diverged -> merge reports the conflict by name -> synced). Full dune runtest green; borge drift: none.|) *)
+   (details
+    (doc (|
+         PROBLEM: branch status is computed AD HOC, per
+         surface, as name-presence joins on the
+         scaffolding tables. Store.list_overrides
+         classifies every own function_defs row as
+         new | override | main newer by NAME EXISTENCE
+         + updated_at heuristics — never by content.
+         Consequences, all observed:
+           - a full fork marks every function
+             "override" though every body is identical
+           - after promote, the source pin stays
+             IDENTICAL to main but reads "override"
+             (or "main newer", the timestamp flip)
+             forever
+           - nothing can answer "does this branch
+             actually diverge?" without scraping /diff
+           - merge's conflict heuristic is updated_at
+             string comparison; there is no fork point
+             anywhere in storage (branches.last_synced
+             is an unused timestamp)
+         No incremental fix works: each surface re-
+         derives branch semantics itself. The fix is to
+         stop deriving branch semantics from row
+         geography and start deriving it from CONTENT
+         at GENERATIONS — the tree-time substrate that
+         already exists.
+
+         MODEL (two coordinates, additive):
+           - base_gen: NEW COLUMN on branches (bigint).
+             At fork, base_gen = parent head gen
+             (branch_generations.generation of the
+             parent at fork time, parent chain walked;
+             0 for branches forked before the column
+             exists whose parent has no own writes).
+             After a merge or promote lands on the
+             parent, base_gen ADVANCES to the merged
+             head — this is git's moving merge-base,
+             and it RETIRES branches.last_synced
+             (timestamp), which was designed for this
+             job in the code_history era and never
+             wired.
+           - head gens: already counted per branch by
+             branch_generations (migration 017), the
+             same counter tree-time promoted to a
+             storage key.
+
+         Because tree_versions (018-021 shadow) is
+         append-only with a content hash per version
+         row, "value of path P on branch B at gen G"
+         is a READ, not a snapshot: newest version row
+         for (resolved-owner-of-P, P) with gen <= G,
+         non-tombstone. Resolution for uncopied gens
+         uses the same closest-wins branch-lens rule as
+         head reads.
+
+         THE STATUSES (per name, fn | type | route):
+           b = branch value at own head,
+           p = parent-chain value at parent head,
+           a = value at base_gen
+           (absence = tombstone/never-existed;
+            comparisons are HASH comparisons, ast_hash
+            for fn bodies per diff's fast path):
+             clean      no own write since base,
+                        b == p (inherited; may differ
+                        from a — that is normal
+                        upstream movement, not dirt)
+             ahead-new  own write; parent has never
+                        had the name (a absent)
+             ahead      own write; b != a, p == a
+             behind     no own write since base;
+                        p != a  (upstream moved)
+             diverged   own write; b != a AND p != a
+                        AND b != p  (the genuine
+                        conflict set merge reports)
+             synced     own write; b == p  (identical
+                        pin — post-promote or package-
+                        pin noise; the unbind candidate
+                        class, replaces "override")
+         Git mapping: clean = up to date, ahead*
+           = committed-locally, behind = remote moved,
+           diverged = conflict, synced = cherry-picked
+           downstream already. "dirty" = anything but
+           clean|behind (own writes exist).
+
+         ONE COMPUTATION:
+           Store.branch_status ~branch_id
+           -> rows {name kind status branch_hash
+                    parent_hash base_gen head_gen}
+           Hash-first per tree-time: compare hashes,
+           prune on equality; bodies are fetched ONLY
+           for rendering (Modified rows go through
+           lisp/lib/ast_diff.ml exactly as /diff does
+           today). One round trip per path class, same
+           recursive-CTE chain walk style as
+           diff_branches — but against tree_versions,
+           not function_defs.
+
+         CONSUMERS (every current status surface
+         becomes a rendering of branch_status, none
+         keeps its own classifier):
+           - /branches list: "overrides" count becomes
+             dirty count (ahead-new + ahead + diverged);
+             synced pins counted separately, muted
+           - branch detail: Overrides table gains the
+             status column; synced rows offer unbind
+             as the primary action
+           - /changes + (branch-changes): class is the
+             status, not new|override|own
+           - /diff + (diff ...): same hash pairs; the
+             added/removed/modified classification is
+             a view of the same rows (ahead = modified
+             in to, absent in from at matching gens)
+           - merge: upserts ONLY ahead/ahead-new/
+             diverged paths (diff-based merge TODO
+             closes); conflict report = the diverged
+             set with real bases (conflict-detection
+             TODO closes; blocking resolution stays v2
+             per merge's recorded policy); on success
+             source and target base_gens advance
+           - promote: after landing, offer unbind of
+             synced pins on the source
+
+         RETIRES:
+           - Store.list_overrides (4 call sites: the
+             three /branches renderers + branch-changes;
+             no Nopales package depends on it)
+           - the "main newer" timestamp badge
+           - branches.last_synced (timestamp) — its job
+             is base_gen's, done correctly
+           - diff_branches' scaffolding-table CTEs
+             become historical the day PP_TREE_READS
+             stabilises; during coexistence BOTH the
+             versioned status and the classic diff prim
+             must agree (verifier below) — status is a
+             NEW consumer of the shadow table, not a
+             read-switch of the scaffolding
+
+         POSITION IN THE BOOK: this is a tree-time
+         consumer (tree-time.consumers gains a line),
+         sibling to code-history's re-implementation
+         over tree_versions. It does NOT require the
+         tree-time Phase-2 scaffolding read-switch:
+         tree_versions is maintained by the dual-write
+         shadow today, so reading it is additive.
+         Scope is code paths only (b.* / fn-type-route);
+         data rows are branch-free by the one-tree
+         DECISION and have no branch status to compute.
+
+         PHASES:
+           S1  migration: ALTER branches ADD base_gen +
+               backfill; fork writes it; merge/promote
+               advance it. Store.branch_status over
+               tree_versions + one equivalence verifier
+               (sample N branches: statuses vs
+               diff_branches head-vs-head where both
+               defined).
+           S2  surfaces re-render: /branches, branch
+               detail, /changes, branch-changes prim,
+               /diff alignment. list_overrides deleted
+               in this phase, not before.
+           S3  merge + promote consume the statuses;
+               conflict report = diverged set; base_gen
+               advancement tested end-to-end
+               (fork -> edit both sides -> merge ->
+               status clean again = git's post-merge
+               state).
+    |))
+   )
+   (verify
+    (build "dune build @all")
+    (test "image/test/branch_status_test.ml — lifecycle: fork sets base_gen = parent head gen; merge advances base_gen")
+    (test "statuses: empty fork = clean; own new fn = ahead-new; promote-then-status = synced; parent-only edit = behind; both-sides edit = diverged; identical pin = synced; unbind returns it to clean")
+    (test "equivalence: diff_branches reports the diverged fixture as modified head-vs-head, agreeing with branch_status")
+    (smoke "S2: /branches renders dirty + synced columns; branch detail status table with unbind hint on synced; (branch-changes) class = status; list_overrides has no callers")
+    (smoke "S3: merge upserts only ahead/diverged names (merged 0 rows when all synced); conflict report names the diverged set; base_gen advances post-commit"))
   )
   (subsection agent-promote
    (doc "Agent promotes from its workshop into the parent human's personal")
@@ -950,14 +1131,20 @@
            Never dump whole garden by default.
 
          UPDATES BADGE (package-updates):
-           override where main.updated_at > personal
-           → "main newer" + Accept (unoverride) | Keep | Diff
+           branching.branch-status supersedes the
+           updated_at badge: status = behind | synced
+           tells accept-vs-keep by CONTENT (behind =
+           main moved, offer accept/unoverride;
+           synced = identical pin, offer unbind).
 
          STORE HELPERS (own-branch, no CTE unless noted):
            count_functions_on_branch
            count_routes_on_branch
            list_own_function_names
-           list_overrides (own ∩ parent names)
+           branch_status (branching.branch-status:
+             clean/ahead-new/ahead/behind/diverged/
+             synced — replaces the retired
+             list_overrides name-presence join)
            lookup_function_on_branch (no CTE)
            delete_function_on_branch (unoverride)
 
@@ -1006,8 +1193,11 @@
            Store.list_own_functions ~branch_id
              → (name, author, updated_at)
            Store.list_own_routes ~branch_id
-           Store.list_overrides ~branch_id ~parent_id
-             → new | override vs parent
+           Store.branch_status ~branch_id
+             → clean/ahead-new/ahead/behind/diverged/
+               synced per name (branching.branch-status;
+               supersedes the retired list_overrides
+               new|override name-presence classes)
 
          "Changes" for branch B =
            own function_defs ∪ own view_bindings on B,
@@ -1021,7 +1211,10 @@
          Nopales prims (read-only, current branch default):
            (branch-changes) → list of dict/JSON strings
              {name, kind: fn|route, author, updated_at,
-              class: new|override|route}
+              class: clean|ahead-new|ahead|behind|
+                     diverged|synced}
+             (branching.branch-status; was new|override|route —
+              superseded 2026-08-28, content-based now)
            (branch-changes "owner/name") optional other branch
              if visible to user (same rules as /branches detail)
 
