@@ -1119,6 +1119,24 @@ let dialect_tests = [
      | other ->
          Alcotest.failf "lambda doc peel: %s"
            (match other with None -> "none" | Some _ -> "bad shape")));
+  ("export-package trailing doc round-trip (i-1787318456)", `Quick, fun () ->
+    (* export_package emits (define <name> <pp_expr body> <pp_value (VStr doc)>).
+       Verify the re-parsed form recovers body + doc, so the vault
+       round-trip preserves the doc column on reseed. *)
+    let body_expr = Reader.read_one "(lambda (x) (+ x 1))" in
+    let emitted =
+      Printf.sprintf "(define f %s %s)"
+        (Reader.pp_expr body_expr)
+        (Reader.pp_value (Ast.VStr "adds one to x"))
+    in
+    (match Eval.parse_top_define (Reader.read_one emitted) with
+     | Some { name = "f"; doc = Some "adds one to x";
+              body = Ast.App (Ast.Var "lambda", _) } -> ()
+     | other ->
+         Alcotest.failf "export trailing doc round-trip: %s"
+           (match other with
+            | None -> "none"
+            | Some s -> Reader.pp_expr s.body)));
   ("define lone string body is value not doc", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
