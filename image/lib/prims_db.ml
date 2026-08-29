@@ -2175,10 +2175,17 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
         | _ ->
             (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("revoke-ssh-key", "need fingerprint-or-id", "bad-args")))));
 
-  (* Smoke/admin: resolve openssh pubkey -> username | () *)
+  (* Smoke/admin: resolve openssh pubkey -> username | ().
+     ORACLE ONLY: this prim must never be reachable by anonymous callers
+     (it is a key-equality oracle). The future SSH login door must verify a
+     challenge SIGNATURE made by the private key — never test key equality
+     against a stored pubkey directly. *)
   Primitives.register tbl "verify-ssh-key"
     (fun args ->
-      match args with
+       if t.manifest.username = "anonymous" then
+         (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("verify-ssh-key", "denied for anonymous", "denied"))))
+       else
+         match args with
       | [ Pricklypear_lisp.Ast.VStr openssh ] ->
           let u = Auth_store.verify_ssh_key t.store ~openssh_or_blob:openssh () in
           (match u with
