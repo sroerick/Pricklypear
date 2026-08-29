@@ -257,6 +257,25 @@ let split_branch_ref (s : string) : string * string =
   | [ n ] -> "system", n  (* bare name = system/<name> *)
   | _ -> "system", s
 
+(** Branch-owner authorization (i-1787970640, spec branching.personal-
+    workspace): a session with username U (admin = t.is_admin || U =
+    "admin") may target a branch owner O iff O = U or the session is
+    admin. Agent users are named "<parent>/agent" and work in the
+    parent-owned <parent>/agent workshop branch, so their tenant is the
+    parent username. *)
+let branch_owner_authorized (t : t) (owner : string) : bool =
+  let u = t.manifest.username in
+  if t.is_admin || u = "admin" then true
+  else
+    let tenant =
+      let suffix = "/agent" in
+      let n = String.length u and m = String.length suffix in
+      if n > m && String.sub u (n - m) m = suffix then
+        String.sub u 0 (n - m)
+      else u
+    in
+    owner = u || owner = tenant
+
 let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
   (* (fork 'parent 'child) -> VStr new-branch-id | VStr "no such parent" *)
   Primitives.register_server_only tbl "fork"
@@ -281,6 +300,13 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
                (Pricklypear_lisp.Ast.VStr
                              (Printf.sprintf "no such parent: %s" parent_name))
            | Some pid ->
+               (* i-1787970640: child_owner must pass the branch-owner rule
+                  (blocks pre-claiming another user's garden). *)
+               if not (branch_owner_authorized t child_owner) then
+                 (Pricklypear_lisp.Ast.VStr
+                    (Printf.sprintf "denied: branch %s is owned by %s"
+                       child_name child_owner))
+               else
                let new_id =
                  Store.fork_branch t.store ~parent_id:pid
                    ~owner:child_owner ~child_name:child_short
@@ -310,14 +336,23 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
           Pricklypear_lisp.Ast.VStr target_ref ] ->
           let src_owner, src_short = split_branch_ref source_ref in
           let tgt_owner, tgt_short = split_branch_ref target_ref in
-          let authorized =
-            (tgt_owner <> "system")
-            || t.is_admin
-            || (t.manifest.username = "admin")
-          in
-          if not authorized then
+          (* i-1787970640: BOTH src_owner and tgt_owner must pass the
+             branch-owner rule. Target system/* stays admin-only (spec
+             branching.merge); the source check is new — it blocks reading
+             others' code via merge results. *)
+          if (tgt_owner = "system")
+             && not (t.is_admin || t.manifest.username = "admin")
+          then
             (Pricklypear_lisp.Ast.VStr
                           "denied: admin-only merge to system branch")
+          else if not (branch_owner_authorized t src_owner) then
+            (Pricklypear_lisp.Ast.VStr
+               (Printf.sprintf "denied: branch %s is owned by %s"
+                  source_ref src_owner))
+          else if not (branch_owner_authorized t tgt_owner) then
+            (Pricklypear_lisp.Ast.VStr
+               (Printf.sprintf "denied: branch %s is owned by %s"
+                  target_ref tgt_owner))
           else
             let src_id =
               Store.lookup_branch_id_by_name
@@ -463,6 +498,14 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
         match args with
         | [ Pricklypear_lisp.Ast.VStr branch_ref ] ->
             let owner, name = split_branch_ref branch_ref in
+            (* i-1787970640: owner of the target ref must pass the
+               branch-owner rule (system/* included — non-admin users
+               never need main; personal branches inherit it). *)
+            if not (branch_owner_authorized t owner) then
+              (Pricklypear_lisp.Ast.VStr
+                 (Printf.sprintf "denied: branch %s is owned by %s"
+                    branch_ref owner))
+            else
             let found =
               Store.lookup_branch_id_by_name t.store ~owner ~name
             in
@@ -484,6 +527,16 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
       if t.manifest.username = "anonymous" then
         (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("unbind", "denied for anonymous", "denied"))))
       else
+        (* i-1787970640: the current branch's owner must pass the
+           branch-owner rule (delete_function already refuses system/main
+           and the prim refuses anonymous). *)
+        let cur_owner, _cur_name =
+          split_branch_ref t.manifest.branch_name in
+        if not (branch_owner_authorized t cur_owner) then
+          (Pricklypear_lisp.Ast.VStr
+             (Printf.sprintf "denied: branch %s is owned by %s"
+                t.manifest.branch_name cur_owner))
+        else
         match args with
         | [ Pricklypear_lisp.Ast.VStr name ] ->
             (try
@@ -1679,23 +1732,38 @@ let clear_auth_token (t : t) : unit =
 (** Resolve owner/name ref and checkout. *)
 let checkout_ref (t : t) (branch_ref : string) : (unit, string) result =
   let owner, name = split_branch_ref branch_ref in
-  let ref' = owner ^ "/" ^ name in
-  let found = Store.lookup_branch_id_by_name t.store ~owner ~name in
-  match found with
-  | None -> (Error "no such branch")
-  | Some id ->
-      let () = checkout_to t ~branch_id:id ~branch_ref:ref' in
-      (Ok ())
+  (* i-1787970640: same branch-owner rule as the checkout prim — this is
+     the funnel behind http_branches.branches_checkout and
+     branches_unoverride. *)
+  if not (branch_owner_authorized t owner) then
+    (Error (Printf.sprintf "denied: branch %s is owned by %s"
+              branch_ref owner))
+  else
+    let ref' = owner ^ "/" ^ name in
+    let found = Store.lookup_branch_id_by_name t.store ~owner ~name in
+    match found with
+    | None -> (Error "no such branch")
+    | Some id ->
+        let () = checkout_to t ~branch_id:id ~branch_ref:ref' in
+        (Ok ())
 
 (** Delete a function row on the current branch (unoverride). Rehydrates. *)
 let unoverride (t : t) (name : string) : (bool, string) result =
-  let bid = Store.current_branch_id t.store in
-  let deleted =
-    Store.delete_function_on_branch t.store ~branch_id:bid ~name
-  in
-  let () = rehydrate t in
-  let () = refresh_ui_shell t in
-  (Ok deleted)
+  (* i-1787970640: current-branch owner must pass the branch-owner rule
+     (same guard as the unbind prim; branches_unoverride ignores its
+     checkout_ref result, so this is its own gate). *)
+  let cur_owner, _cur_name = split_branch_ref t.manifest.branch_name in
+  if not (branch_owner_authorized t cur_owner) then
+    (Error (Printf.sprintf "denied: branch %s is owned by %s"
+              t.manifest.branch_name cur_owner))
+  else
+    let bid = Store.current_branch_id t.store in
+    let deleted =
+      Store.delete_function_on_branch t.store ~branch_id:bid ~name
+    in
+    let () = rehydrate t in
+    let () = refresh_ui_shell t in
+    (Ok deleted)
 
 (** Soft habitat-workflow lint lines for packages touched by [names].
     Best-effort: missing libs/spec → empty string. Never blocks promote.
@@ -1770,19 +1838,26 @@ let fork_ref (t : t) ~(parent_ref : string) ~(child_ref : string)
   : (string, string) result =
   let p_owner, p_name = split_branch_ref parent_ref in
   let c_owner, c_name = split_branch_ref child_ref in
-  let parent_id =
-    Store.lookup_branch_id_by_name t.store ~owner:p_owner ~name:p_name
-  in
-  match parent_id with
-  | None -> (Error "no such parent branch")
-  | Some pid ->
-      let created =
-        Store.fork_branch t.store ~parent_id:pid ~owner:c_owner
-          ~child_name:c_name
-      in
-      (match created with
-       | None -> (Error "fork failed")
-       | Some id -> (Ok id))
+  (* i-1787970640: child_owner must pass the branch-owner rule (same as
+     the fork prim — blocks pre-claiming another user's garden). This is
+     the funnel behind http_branches.branches_fork. *)
+  if not (branch_owner_authorized t c_owner) then
+    (Error (Printf.sprintf "denied: branch %s is owned by %s"
+              child_ref c_owner))
+  else
+    let parent_id =
+      Store.lookup_branch_id_by_name t.store ~owner:p_owner ~name:p_name
+    in
+    match parent_id with
+    | None -> (Error "no such parent branch")
+    | Some pid ->
+        let created =
+          Store.fork_branch t.store ~parent_id:pid ~owner:c_owner
+            ~child_name:c_name
+        in
+        (match created with
+         | None -> (Error "fork failed")
+         | Some id -> (Ok id))
 
 (* Look up a route's handler name. Returns None if the route isn't
    registered on this branch. Called by http.ml's request_handler. *)
