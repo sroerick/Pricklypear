@@ -552,10 +552,19 @@ let unauthorized_api (reqd : Httpun.Reqd.t) : unit =
        [ ("ok", `Bool false)
        ; ("error", `String "authentication required") ])
 
+(** i-1787971251: derive the client source_ip from the connection sockaddr
+    so auth_log rows can record where a login/token use came from.
+    ADDR_UNIX paths are prefixed to stay distinguishable from IPs. *)
+let source_ip_of_sockaddr (sa : Unix.sockaddr) : string =
+  match sa with
+  | Unix.ADDR_INET (addr, _) -> Unix.string_of_inet_addr addr
+  | Unix.ADDR_UNIX path -> "unix:" ^ path
+
 (** Resolve identity for this request: cookie session, then Basic auth.
-    Returns None if unauthenticated. *)
+    Returns None if unauthenticated. [?source_ip] is propagated into the
+    auth_log rows written by verify_token / verify_password. *)
 let resolve_identity (session : Session.t)
-    ~(headers : (string * string) list)
+    ~(headers : (string * string) list) ?source_ip ()
   : Auth_store.user option =
   let store = Session.store session in
   match cookie_value headers cookie_name with
@@ -574,17 +583,19 @@ let resolve_identity (session : Session.t)
            (match parse_basic_auth headers with
             | None -> None
             | Some (u, p) ->
-                Auth_store.verify_password store ~username:u ~password:p ()))
+                Auth_store.verify_password store ~username:u ~password:p
+                  ?source_ip ()))
   | _ ->
       (* No cookie: try Bearer token, then Basic. *)
       (match parse_bearer_auth headers with
        | Some token when token <> "" ->
-           Auth_store.verify_token store ~raw_token:token ()
+           Auth_store.verify_token store ~raw_token:token ?source_ip ()
        | _ ->
            (match parse_basic_auth headers with
             | None -> None
             | Some (u, p) ->
-                Auth_store.verify_password store ~username:u ~password:p ()))
+                Auth_store.verify_password store ~username:u ~password:p
+                  ?source_ip ()))
 
 let attach_from_user (session : Session.t) (user : Auth_store.user)
     ?(auth_token : string option = None)
@@ -880,7 +891,7 @@ let login_form_page ?(error = "") ?(next = "") (reqd : Httpun.Reqd.t) : unit =
   in
   html_response reqd body
 
-let post_login (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
+let post_login (session : Session.t) ?source_ip (reqd : Httpun.Reqd.t) : unit =
   let body = read_body reqd in
   let username =
     Option.value (form_field body "username") ~default:"" |> String.trim
@@ -895,7 +906,7 @@ let post_login (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
   end else
     let store = Session.store session in
     let user_opt =
-      Auth_store.verify_password store ~username ~password ()
+      Auth_store.verify_password store ~username ~password ?source_ip ()
     in
     match user_opt with
     | None ->
@@ -904,7 +915,8 @@ let post_login (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
         ()
     | Some user ->
         let minted =
-          Auth_store.mint_session store ~user_id:user.Auth_store.id ()
+          Auth_store.mint_session store ~user_id:user.Auth_store.id
+            ?source_ip ()
         in
         (match minted with
          | Error e ->
