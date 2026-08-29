@@ -515,13 +515,19 @@ let media_get (session : Session.t) (reqd : Httpun.Reqd.t) ~(id : string)
            ()
        | Some (m, bytes) ->
            let disposition =
+             (* Stored-XSS hardening: SVG can carry script, so serve it as a
+                download. Galleries keep rendering it via <img> tags. *)
+             let kind =
+               if m.content_type = "image/svg+xml" then "attachment"
+               else "inline"
+             in
              match m.filename with
              | Some f ->
-                 Printf.sprintf "inline; filename=\"%s\""
+                 Printf.sprintf "%s; filename=\"%s\"" kind
                    (String.map
                       (function '"' | '\n' | '\r' -> '_' | c -> c)
                       f)
-             | None -> "inline"
+             | None -> kind
            in
            let headers =
              Httpun.Headers.of_list
