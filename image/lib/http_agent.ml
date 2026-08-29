@@ -425,9 +425,7 @@ let repl_llm (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
     | Pricklypear_lisp.Ast.VStr sid ->
       (* Streaming multipart/mixed response: one part per token, routed
          into the live bubble by hx-multipart. *)
-      let boundary =
-        Printf.sprintf "pp%x%x" (Random.bits ()) (Random.bits ())
-      in
+      let boundary = "pp" ^ random_hex_bytes 8 in
       let rid = "llm-" ^ sid in
       let headers =
         Httpun.Headers.of_list

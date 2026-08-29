@@ -145,6 +145,27 @@ let is_status = Prims_pure.is_status
 let status_response = Prims_pure.status_response
 let prim_dict_set = Prims_pure.prim_dict_set
 
+(* i-1787971303: image-side crypto-random variant of the pure
+   prims_pure.prim_random_uuid — minted identifiers (session-scoped
+   Lisp (random-uuid)) must come from Mirage_crypto_rng, never the
+   MT19937 Random state. Shadowing the pure prim for this registry;
+   the browser client keeps the pure version. *)
+let prim_random_uuid (_args : value list) : value =
+  let b = Bytes.of_string (Mirage_crypto_rng.generate 16) in
+  (* RFC 4122 version 4 + variant 10xx *)
+  Bytes.set b 6 (Char.chr ((Char.code (Bytes.get b 6) land 0x0f) lor 0x40));
+  Bytes.set b 8 (Char.chr ((Char.code (Bytes.get b 8) land 0x3f) lor 0x80));
+  let hex_byte i = Printf.sprintf "%02x" (Char.code (Bytes.get b i)) in
+  VStr
+    (String.concat ""
+       [ hex_byte 0; hex_byte 1; hex_byte 2; hex_byte 3; "-"
+       ; hex_byte 4; hex_byte 5; "-"
+       ; hex_byte 6; hex_byte 7; "-"
+       ; hex_byte 8; hex_byte 9; "-"
+       ; hex_byte 10; hex_byte 11; hex_byte 12; hex_byte 13; hex_byte 14;
+         hex_byte 15
+       ])
+
 (* Register the minimal set. Returns the populated table. *)
 let make_with_defaults () : t =
   let t = make () in
