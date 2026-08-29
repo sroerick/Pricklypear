@@ -68,10 +68,22 @@ let list_branches_page (session : Session.t) (reqd : Httpun.Reqd.t)
         let is_cur = ref_ = current || (current = "main" && ref_ = "system/main") in
         let n_fn = Store.count_functions_on_branch store ~branch_id:b.id in
         let n_rt = Store.count_routes_on_branch store ~branch_id:b.id in
-        let ov =
-          Store.list_overrides store ~branch_id:b.id ~parent_id:b.parent_id
+        (* branching.branch-status: content-based dirty/synced counts
+           (replaces the name-presence overrides count). *)
+        let st = Store.branch_status store ~branch_id:b.id in
+        let is_dirty (r : Store.branch_status_row) =
+          match r.Store.st_status with
+          | Store.SAheadNew | Store.SAhead | Store.SDiverged -> true
+          | _ -> false
         in
-        let n_ov = List.length ov in
+        let n_dirty = List.length (List.filter is_dirty st) in
+        let n_synced =
+          List.length
+            (List.filter
+               (fun (r : Store.branch_status_row) ->
+                 r.Store.st_status = Store.SSynced)
+               st)
+        in
         let star = if is_cur then "★" else "" in
         (HTML.tr
              (if is_cur then [HTML.class_ "br-current"] else [])
@@ -81,7 +93,8 @@ let list_branches_page (session : Session.t) (reqd : Httpun.Reqd.t)
                      [txt "%s" (branch_label b)] ]
              ; HTML.td [] [txt "%s" (parent_ref_of idmap b)]
              ; HTML.td [] [txt "%d" n_fn]
-             ; HTML.td [] [txt "%d" n_ov]
+             ; HTML.td [] [txt "%d" n_dirty]
+             ; HTML.td [HTML.class_ "muted"] [txt "%d" n_synced]
              ; HTML.td [] [txt "%d" n_rt]
              ; HTML.td [HTML.class_ "muted"] [txt "%s" (short_ts b.created_at)]
              ; HTML.td []
@@ -121,7 +134,8 @@ let list_branches_page (session : Session.t) (reqd : Httpun.Reqd.t)
                             ; HTML.th [] [txt "branch"]
                             ; HTML.th [] [txt "parent"]
                             ; HTML.th [] [txt "own code"]
-                            ; HTML.th [] [txt "overrides"]
+                            ; HTML.th [] [txt "dirty"]
+                            ; HTML.th [] [txt "synced"]
                             ; HTML.th [] [txt "routes"]
                             ; HTML.th [] [txt "created"]
                             ; HTML.th [] [txt "actions"]
@@ -197,30 +211,61 @@ let branch_detail_page (session : Session.t) (reqd : Httpun.Reqd.t)
       in
       let n_fn = Store.count_functions_on_branch store ~branch_id:bid in
       let n_rt = Store.count_routes_on_branch store ~branch_id:bid in
-      let ov = Store.list_overrides store ~branch_id:bid ~parent_id in
+      (* branching.branch-status: git-style status per name (replaces the
+         new/override/main-newer name-presence guess). *)
       let own = Store.list_own_functions store ~branch_id:bid in
       let routes = Store.list_own_routes store ~branch_id:bid in
-      let n_ov = List.length ov in
+      let status = Store.branch_status store ~branch_id:bid in
+      let st_of kind name =
+        List.find_opt
+          (fun (r : Store.branch_status_row) ->
+            r.Store.st_kind = kind && r.Store.st_name = name)
+          status
+      in
+      let is_dirty (r : Store.branch_status_row) =
+        match r.Store.st_status with
+        | Store.SAheadNew | Store.SAhead | Store.SDiverged -> true
+        | _ -> false
+      in
+      let n_dirty = List.length (List.filter is_dirty status) in
+      let n_synced =
+        List.length
+          (List.filter
+             (fun (r : Store.branch_status_row) ->
+               r.Store.st_status = Store.SSynced)
+             status)
+      in
+      let st_cls = function
+        | Store.SClean -> "muted"
+        | Store.SAheadNew | Store.SAhead -> "ok"
+        | Store.SBehind -> "warn"
+        | Store.SDiverged -> "err"
+        | Store.SSynced -> "muted"
+      in
+      let sorted_own =
+        List.sort (fun (a, _, _) (b, _, _) -> String.compare a b) own
+      in
       let override_rows =
         List.map
-          (fun (fname, child_u, parent_u) ->
-            let kind =
-              match parent_u with
-              | None -> "new"
-              | Some pu when pu > child_u -> "main newer"
-              | Some _ -> "override"
+          (fun (fname, _author, upd) ->
+            let status_s, status_c =
+              match st_of Store.DiffFn fname with
+              | Some r ->
+                  (Store.st_status_s r.Store.st_status,
+                   st_cls r.Store.st_status)
+              | None -> ("own", "muted")
             in
-            let kind_cls =
-              match kind with
-              | "main newer" -> "err"
-              | "new" -> "ok"
-              | _ -> "muted"
+            let unbind_hint =
+              match st_of Store.DiffFn fname with
+              | Some { Store.st_status = Store.SSynced; _ } ->
+                  "Pin identical to parent — safe to unbind"
+              | _ -> "Delete pin; inherit parent"
             in
             HTML.tr []
               [ HTML.td []
                   [ HTML.a [HTML.href "%s" ("/binding/" ^ fname)] [txt "%s" fname] ]
-              ; HTML.td [HTML.class_ "%s" kind_cls] [txt "%s" kind]
-              ; HTML.td [HTML.class_ "muted"] [txt "%s" (short_ts child_u)]
+              ; HTML.td [HTML.class_ "%s" status_c] [txt "%s" status_s]
+              ; HTML.td [HTML.class_ "muted"] [txt "%s" (short_ts upd)]
               ; HTML.td []
                   [ HTML.a
                       [ HTML.href "%s"
@@ -247,13 +292,13 @@ let branch_detail_page (session : Session.t) (reqd : Httpun.Reqd.t)
                       ; HTML.button
                           [ HTML.type_ "submit"
                           ; HTML.class_ "ol-btn"
-                          ; HTML.title_ "Delete pin; inherit parent"
+                          ; HTML.title_ "%s" unbind_hint
                           ]
                           [txt "use parent"]
                       ]
                   ]
               ])
-          ov
+          sorted_own
       in
       let own_rows =
         List.map
@@ -290,7 +335,7 @@ let branch_detail_page (session : Session.t) (reqd : Httpun.Reqd.t)
                   ; txt " %s" fname
                   ]
               ])
-          ov
+          sorted_own
       in
       (* optional diff *)
       let target = reqd |> Httpun.Reqd.request |> fun r -> r.Httpun.Request.target in
@@ -354,7 +399,9 @@ let branch_detail_page (session : Session.t) (reqd : Httpun.Reqd.t)
                [ HTML.span [HTML.class_ "card br-stat"]
                    [txt "own functions: %d" n_fn]
                ; HTML.span [HTML.class_ "card br-stat"]
-                   [txt "overrides: %d" n_ov]
+                   [txt "dirty: %d" n_dirty]
+               ; HTML.span [HTML.class_ "card br-stat"]
+                   [txt "synced pins: %d" n_synced]
                ; HTML.span [HTML.class_ "card br-stat"]
                    [txt "own routes: %d" n_rt]
                ]
@@ -396,12 +443,8 @@ let branch_detail_page (session : Session.t) (reqd : Httpun.Reqd.t)
                       List.map
                         (fun (fname, author, upd) ->
                           let kind =
-                            match
-                              List.find_opt
-                                (fun (n, _, _) -> n = fname) ov
-                            with
-                            | Some (_, _, None) -> "new"
-                            | Some (_, _, Some _) -> "override"
+                            match st_of Store.DiffFn fname with
+                            | Some r -> Store.st_status_s r.Store.st_status
                             | None -> "own"
                           in
                           HTML.tr []
@@ -478,7 +521,7 @@ let branch_detail_page (session : Session.t) (reqd : Httpun.Reqd.t)
                    [txt "Select pins to merge into live defaults. Also pp_sync pull + git push for durable libs/*.pp."]
                ; (let soft =
                     Session.promote_soft_warnings session
-                      ~names:(List.map (fun (n, _, _) -> n) ov)
+                      ~names:(List.map (fun (n, _, _) -> n) sorted_own)
                   in
                   if soft = "" then
                     HTML.p [HTML.class_ "muted"]
@@ -541,10 +584,17 @@ let changes_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
            [ HTML.p [HTML.class_ "err"] [txt "unknown branch %s" ref_] ]);
       ()
   | Some bid ->
-      let parent_id = Store.branch_parent_id store ~branch_id:bid in
       let own = Store.list_own_functions store ~branch_id:bid in
       let routes = Store.list_own_routes store ~branch_id:bid in
-      let ov = Store.list_overrides store ~branch_id:bid ~parent_id in
+      (* branching.branch-status: class is the git-style status, not a
+         name-presence guess. *)
+      let status = Store.branch_status store ~branch_id:bid in
+      let st_of kind name =
+        List.find_opt
+          (fun (r : Store.branch_status_row) ->
+            r.Store.st_kind = kind && r.Store.st_name = name)
+          status
+      in
       let sorted =
         List.sort (fun (_, _, a) (_, _, b) -> String.compare b a) own
       in
@@ -552,9 +602,8 @@ let changes_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
         List.map
           (fun (fname, author, upd) ->
             let kind =
-              match List.find_opt (fun (n, _, _) -> n = fname) ov with
-              | Some (_, _, None) -> "new"
-              | Some (_, _, Some _) -> "override"
+              match st_of Store.DiffFn fname with
+              | Some r -> Store.st_status_s r.Store.st_status
               | None -> "own"
             in
             HTML.tr []

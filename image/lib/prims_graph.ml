@@ -184,14 +184,18 @@ let register (t : t) (tbl : Primitives.t) : unit =
       | Some bid ->
           let own = Store.list_own_functions t.store ~branch_id:bid in
           let routes = Store.list_own_routes t.store ~branch_id:bid in
-          let parent_id = Store.branch_parent_id t.store ~branch_id:bid in
-          let ov =
-            Store.list_overrides t.store ~branch_id:bid ~parent_id
-          in
-          let class_of name =
-            match List.find_opt (fun (n, _, _) -> n = name) ov with
-            | Some (_, _, None) -> "new"
-            | Some (_, _, Some _) -> "override"
+          (* branching.branch-status: class is the git-style status
+             (clean/ahead-new/ahead/behind/diverged/synced), not a
+             name-presence guess. *)
+          let status = Store.branch_status t.store ~branch_id:bid in
+          let class_of kind name =
+            match
+              List.find_opt
+                (fun (r : Store.branch_status_row) ->
+                  r.Store.st_kind = kind && r.Store.st_name = name)
+                status
+            with
+            | Some r -> Store.st_status_s r.Store.st_status
             | None -> "own"
           in
           let fn_items =
@@ -204,7 +208,7 @@ let register (t : t) (tbl : Primitives.t) : unit =
                        ; ("kind", `String "fn")
                        ; ("author", `String author)
                        ; ("updated_at", `String updated)
-                       ; ("class", `String (class_of name))
+                       ; ("class", `String (class_of Store.DiffFn name))
                        ])
                 in
                 Pricklypear_lisp.Ast.VStr j)
@@ -219,7 +223,7 @@ let register (t : t) (tbl : Primitives.t) : unit =
                        [ ("name", `String path)
                        ; ("kind", `String "route")
                        ; ("handler", `String handler)
-                       ; ("class", `String "route")
+                       ; ("class", `String (class_of Store.DiffRoute path))
                        ])
                 in
                 Pricklypear_lisp.Ast.VStr j)
