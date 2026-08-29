@@ -198,6 +198,7 @@ let () =
   let once = ref false in
   let serve = ref false in
   let open_browser = ref false in
+  let port = ref 18090 in
   let anon (_ : string) = () in
   let speclist =
     Arg.align
@@ -206,12 +207,13 @@ let () =
         ("--model", Arg.String (fun s -> model := Some s), "NAME");
         ("--base-url", Arg.String (fun s -> base_url := Some s), "URL");
         ("--once", Arg.Set once, "run one full agent turn from piped stdin and exit");
-        ("--serve", Arg.Set serve, "serve the HTML chat surface on 127.0.0.1:random-port until Ctrl-C");
+        ("--serve", Arg.Set serve, "serve the HTML chat surface on 127.0.0.1 until Ctrl-C (default port 18090)");
+        ("--port", Arg.Int (fun p -> port := p), "PORT fixed port for --serve (default 18090; 0 = random)");
         ("--open", Arg.Set open_browser, "with --serve: best-effort browser launch");
         ("-p", Arg.String (fun s -> pipe_expr := Some s), "EXPR eval and exit");
       ]
   in
-  Arg.parse speclist anon "agent [--mock-script F] [--provider N] [--once] [--serve [--open]] [-p EXPR]";
+  Arg.parse speclist anon "agent [--mock-script F] [--provider N] [--once] [--serve [--port P] [--open]] [-p EXPR]";
   (* Pipe mode is entered either explicitly (--once) or implicitly when
      stdin is not a tty (surfaces smoke #2: `echo ... | agent ...`). *)
   let pipe_mode = !once || not (Unix.isatty Unix.stdin) in
@@ -283,7 +285,7 @@ let () =
         (* HTML primary surface: serve until Ctrl-C. Blocks forever in
            the accept loop. wrap_serve passes the sink-only [print]
            used for URL output. --open is best-effort browser launch. *)
-        Http_ui.serve ~env ~sw ~rt ~cfg ~complete
+        Http_ui.serve ~env ~sw ~rt ~cfg ~complete ~port:!port
           ~open_browser:!open_browser print_endline
       else if pipe_mode then (
         (* Piped-turn smoke: read ALL of stdin as the prompt, run ONE

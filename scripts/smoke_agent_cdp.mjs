@@ -66,7 +66,7 @@ if (!fs.existsSync(AGENT)) fail(`${AGENT} missing (run: dune build agent/bin/mai
 fs.writeFileSync(MOCK, JSON.stringify([{ text: "cdp smoke reply", calls: [] }]) + "\n");
 
 // --- boot agent surface ---
-agent = spawn(AGENT, ["--serve", "--mock-script", MOCK], { stdio: ["ignore", "pipe", "pipe"] });
+agent = spawn(AGENT, ["--serve", "--port", "0", "--mock-script", MOCK], { stdio: ["ignore", "pipe", "pipe"] });
 let agentUrl = "";
 let buf = "";
 agent.stdout.on("data", (c) => {

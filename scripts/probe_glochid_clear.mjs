@@ -24,7 +24,7 @@ function cleanup() { try { agent?.kill(); } catch (_) {} try { chrome?.kill(); }
 process.on("exit", cleanup);
 
 fs.writeFileSync(MOCK, JSON.stringify([{ text: "clear-probe reply", calls: [] }]) + "\n");
-agent = spawn(AGENT, ["--serve", "--mock-script", MOCK], { stdio: ["ignore", "pipe", "pipe"], cwd: "/home/roerick/dev/wyo.tech/pricklypear" });
+agent = spawn(AGENT, ["--serve", "--port", "0", "--mock-script", MOCK], { stdio: ["ignore", "pipe", "pipe"], cwd: "/home/roerick/dev/wyo.tech/pricklypear" });
 let agentUrl = "", buf = "";
 agent.stdout.on("data", (c) => { buf += c; const m = buf.match(/agent serving (http:\/\/\S+)/); if (m) agentUrl = m[1].replace(/\/$/, ""); });
 for (let i = 0; i < 60 && !agentUrl; i++) await sleep(250);
