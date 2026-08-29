@@ -316,7 +316,11 @@ let handle_chat (env : Eio_unix.Stdenv.base) (sw : Eio.Switch.t)
          Errors land in the chat/error template, not a model turn. *)
       let result =
         try `Ok (Runtime.eval_string ~rt:st.rt trimmed)
-        with e -> `Err (Printexc.to_string e)
+        with
+        (* Render interp errors like the stdin REPL does — the OCaml
+           default printer shows the opaque Interp_error(_). *)
+        | Ast.Interp_error ie -> `Err (Ast.pp_interp_error ie)
+        | e -> `Err (Printexc.to_string e)
       in
       (match result with
        | `Ok v ->

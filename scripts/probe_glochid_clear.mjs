@@ -80,4 +80,18 @@ const r3 = await send("Runtime.evaluate", { expression: `(function(){
   return JSON.stringify({ replBubbles: repl.length,
     last: repl.length ? repl[repl.length-1].textContent : null }); })()`, returnByValue: true });
 console.log("repl:", r3.result.value);
+
+// ---- error path: unbound var must render READABLY, not Interp_error(_) ----
+await send("Runtime.evaluate", { expression: `(function(){
+  var m = document.getElementById('msg');
+  m.value = '(no-such-fn 1)';
+  document.getElementById('f').requestSubmit(document.querySelector('#f button'));
+  return true; })()`, returnByValue: true });
+await sleep(500);
+const r4 = await send("Runtime.evaluate", { expression: `(function(){
+  var traces = document.querySelectorAll('#log .trace');
+  var last = traces.length ? traces[traces.length-1].textContent : '';
+  return JSON.stringify({ opaque: last.indexOf('Interp_error') >= 0,
+    readable: last.indexOf('unbound') >= 0, last }); })()`, returnByValue: true });
+console.log("err:", r4.result.value);
 process.exit(0);
