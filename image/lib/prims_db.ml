@@ -777,7 +777,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
             Crud.link_edge t.store ~from_path:from_p ~to_path:to_p
               ~edge_kind ~label:(Some label) ~author:uname
         | _ ->
-            (Pricklypear_lisp.Ast.VStr "link: need from to [, kind [, label]]"));
+            (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("link", "need from to [, kind [, label]]", "bad-args")))));
 
   register_crud "unlink"
     (fun args ->
@@ -787,7 +787,8 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
         match args with
         | [ Pricklypear_lisp.Ast.VStr edge_path ] ->
             Crud.unlink_edge t.store ~edge_path
-        | _ -> (Pricklypear_lisp.Ast.VStr "unlink: need edge-path"));
+        | _ ->
+            (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("unlink", "need edge-path", "bad-args")))));
 
   register_crud "out-links"
     (fun args ->
@@ -796,7 +797,8 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
           Crud.out_links t.store ~path ()
       | [ Pricklypear_lisp.Ast.VStr path; Pricklypear_lisp.Ast.VInt lim ] ->
           Crud.out_links t.store ~path ~limit:(Int64.to_int lim) ()
-      | _ -> (Pricklypear_lisp.Ast.VStr "out-links: need path [, limit]"));
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("out-links", "need path [, limit]", "bad-args")))));
 
   register_crud "tree/get-uuid"
     (fun args ->
