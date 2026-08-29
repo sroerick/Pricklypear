@@ -272,6 +272,10 @@ let handle_chat (env : Eio_unix.Stdenv.base) (sw : Eio.Switch.t)
     (st : server_state) (reqd : Httpun.Reqd.t) : unit =
   let body_raw = read_body reqd in
   let prompt = form_field body_raw "msg" in
+  (* REPL rule (same as the stdin REPL): a prompt whose first non-space
+     char is ( evaluates as Nopales in the shared env — no model call. *)
+  let trimmed = String.trim prompt in
+  let repl_expr = String.length trimmed > 0 && trimmed.[0] = '(' in
   let boundary = Printf.sprintf "pp%x%x" (Random.bits ()) (Random.bits ()) in
   let rid = Printf.sprintf "llm-%d" (Random.bits () land 0xFFFFFF) in
   let headers =
@@ -306,6 +310,28 @@ let handle_chat (env : Eio_unix.Stdenv.base) (sw : Eio.Switch.t)
        templates so they are redefinable live). *)
     (match Runtime.call_template ~rt:st.rt "chat/user-bubble" [ Ast.VStr prompt ]
      with Some html -> emit html | None -> emit (Printf.sprintf "<div class=\"bubble user\">%s</div>" (esc prompt)));
+    if repl_expr then begin
+      (* REPL mode: evaluate locally (eval lock + rim, same env as
+         plugins/stdin-REPL/surfaces), render the last value REPL-style.
+         Errors land in the chat/error template, not a model turn. *)
+      let result =
+        try `Ok (Runtime.eval_string ~rt:st.rt trimmed)
+        with e -> `Err (Printexc.to_string e)
+      in
+      (match result with
+       | `Ok v ->
+           let s = Ast.pp_value_short v in
+           (match Runtime.call_template ~rt:st.rt "chat/repl-bubble" [ Ast.VStr s ]
+            with Some html -> emit html
+             | None ->
+                 emit (Printf.sprintf "<div class=\"bubble repl\">%s</div>" (esc s)))
+       | `Err msg ->
+           (match Runtime.call_template ~rt:st.rt "chat/error" [ Ast.VStr msg ]
+            with Some html -> emit html
+             | None ->
+                 emit (Printf.sprintf "<div class=\"trace\">[repl error: %s]</div>" (esc msg))))
+    end
+    else begin
     (* Turn skeleton: one container with TWO swap targets -- #<rid>-think
        inside the collapsible <details> (reasoning spans + tool traces)
        and #<rid> response bubble (content tokens). *)
@@ -455,6 +481,7 @@ let handle_chat (env : Eio_unix.Stdenv.base) (sw : Eio.Switch.t)
       if not fin then drain ()
     in
     drain ()
+    end
   in
   Eio.Mutex.lock st.turn_mutex;
   Fun.protect
