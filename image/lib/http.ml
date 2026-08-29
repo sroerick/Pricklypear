@@ -28,6 +28,8 @@ let request_handler ~(sw : Eio.Switch.t) ~(registry : Session_registry.t)
   in
   let meth = req.Httpun.Request.meth in
   let headers = header_list req in
+  (* i-1787971251: client source_ip for auth_log rows (login/token use). *)
+  let source_ip = source_ip_of_sockaddr sockaddr in
   (* Fork page work off the connection fiber (gluten_eio runs request_handler
      on the same fiber as the read loop). Awaiting body reads without forking
      deadlocks: schedule_read callbacks never fire. Same role as the old
@@ -72,7 +74,9 @@ let request_handler ~(sw : Eio.Switch.t) ~(registry : Session_registry.t)
                  mutates another identity's session; anonymous traffic
                  runs on the parked anonymous session. *)
               let attach_and_select () =
-                let user_opt = resolve_identity session ~headers in
+                let user_opt =
+                  resolve_identity session ~headers ~source_ip ()
+                in
                 let session = Session_registry.select registry ~user:user_opt in
                 let () =
                   match user_opt with
@@ -330,7 +334,8 @@ let request_handler ~(sw : Eio.Switch.t) ~(registry : Session_registry.t)
         let () = () in
          login_form_page reqd;
          ())
-  | `POST, "/login" -> launch (fun session -> post_login session reqd)
+  | `POST, "/login" ->
+      launch (fun session -> post_login session ~source_ip reqd)
   | `POST, "/logout" -> launch (fun session -> post_logout session reqd)
   | `GET, "/admin/users" -> launch (fun session -> admin_users_page session reqd)
   | `POST, "/admin/users" -> launch (fun session -> post_admin_users session reqd)
