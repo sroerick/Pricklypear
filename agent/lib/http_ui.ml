@@ -1,4 +1,4 @@
-(** Agent HTML primary surface (borge/agent.borg surfaces).
+(** glochid HTML primary surface (agent/lib; borge/agent.borg surfaces).
 
     A local HTTP server (Httpun_eio) bound to 127.0.0.1 on a random
     port. The chat + code browser pages are NOPALES-AUTHORED htmx

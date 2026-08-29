@@ -77,6 +77,7 @@ history only.)
 | `image/` | Sole runtime binary |
 | `libs/` | Nopales packages seeded to `system/main` |
 | `cli/` | OCaml laptop clients: `pp-eval`, `pp-sync` (no Python) |
+| `agent/` | **glochid** — local-first agent harness: Nopales-native coding agent; Nopales htmx fragments + multipart/mixed streamed turns ([`borge/agent.borg`](borge/agent.borg)) |
 | `scripts/` | `dev.sh`, `pp-eval.sh` wrappers, `verify_habitat.sh` (on-image `libs/verify`), seed ETL |
 | `docs/` | Book PDF, ops notes, [`runtime-effects-transition.md`](docs/runtime-effects-transition.md) (OCaml 5 / effects path), [`agent-ui-harness.md`](docs/agent-ui-harness.md) (agent FE verify research) |
 | `borge/` | Design chapters |

@@ -497,7 +497,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
      manifest against the client's, then for each ClientOnly path
      (server missing it) applies the client body through the typed-
      boundary-validated datum write surface (Sync.apply_client_node).
-     Diverge paths are REPORTED, not auto-merged (the-glochids
+     Diverge paths are REPORTED, not auto-merged (sync-conflicts
      conflict resolution is planned; v1 surfaces them honestly
      rather than silently clobbering). ServerOnly paths are returned
      so the client can pull them. Returns a JSON object:
