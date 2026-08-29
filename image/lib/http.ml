@@ -199,14 +199,17 @@ let request_handler ~(sw : Eio.Switch.t) ~(registry : Session_registry.t)
                 ~content_type:"text/plain" "request body too large";
               ()
             end else begin
-            let msg = Printexc.to_string exn in
+            (* Log the real exception to ops; never echo raw exception text
+               back to the client (500 bodies are generic — incident is
+               correlated server-side via ops log). *)
             Ops_incidents.emit_and_maybe_file session
               ~level:Ops_log.Error ~component:"http"
               ~file:(not (Ops_incidents.is_expected_runtime_error exn))
-              ~context:[("path", path)] msg;
+              ~context:[("path", path)] (Printexc.to_string exn);
             let body =
               chrome ~session ~title:"Error" [
-                HTML.p [HTML.class_ "err"] [txt "%s" msg];
+                HTML.p [HTML.class_ "err"]
+                  [txt "internal server error — incident logged"];
               ]
             in
             html_response reqd ~session ~status:`Internal_server_error body;
@@ -904,7 +907,8 @@ let error_handler (_sockaddr : Unix.sockaddr)
     | `Bad_request -> `Bad_request, "bad request"
     | `Bad_gateway -> `Bad_gateway, "bad gateway"
     | `Internal_server_error -> `Internal_server_error, "internal server error"
-    | `Exn exn -> `Internal_server_error, Printexc.to_string exn
+    (* Never echo raw exception text to the client — generic body only. *)
+    | `Exn _ -> `Internal_server_error, "internal server error — incident logged"
   in
   let _ = request in
   let body_str =
