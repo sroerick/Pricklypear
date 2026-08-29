@@ -1,7 +1,7 @@
 (project pricklypear-local-first
  (doc "Pricklypear book chapter: local-first — a local lens is a branch of the one tree whose root lives on the client. The pad detaches, roots independently, and grafts back. This revisits remote-eval's 'no second store on the client' hard-out: the hard-out was written against an uncoordinated client copy; a lens is a governed copy whose merge semantics already exist (three-way tree-diff, branching.borg / one-tree.branching-interaction). Same Prim_call seam, same tree, different lens policy.")
  (status planned)
- (* agent note (|2026-08-14 chapter created from the local-first design discussion. Thesis: one-tree + user-owned data + three-way tree-diff merge are, almost without addition, the local-first primitives. The 2026-08-02 /data revision (data.u.<user>.*) was made for multi-user isolation and turns out to also fix the replication unit — the isolation boundary and the replication boundary are the same shape. remote-eval is the online-remote mode (local compute, remote data plane); local-first is the offline-capable mode (local lens, sync on reconnect). One seam, two policies. The cactus metaphor (pads = lenses, grafting = merge, glochids = sync conflicts) is evocative and correct but is NOT load-bearing in this spec text — it lives in prose, not the source of truth.
+ (* agent note (|2026-08-14 chapter created from the local-first design discussion. Thesis: one-tree + user-owned data + three-way tree-diff merge are, almost without addition, the local-first primitives. The 2026-08-02 /data revision (data.u.<user>.*) was made for multi-user isolation and turns out to also fix the replication unit — the isolation boundary and the replication boundary are the same shape. remote-eval is the online-remote mode (local compute, remote data plane); local-first is the offline-capable mode (local lens, sync on reconnect). One seam, two policies. The cactus metaphor (pads = lenses, grafting = merge, pads = lenses, grafting = merge) is evocative but is NOT load-bearing in this spec text — it lives in prose, not the source of truth. (2026-08-29 NAMING UPDATE: 'glochid' is RESERVED for the local-first harness itself — the detachable spine you pull off the pad and work with; see borge/agent.borg. The conflict work this note once called glochids is named sync-conflicts below, no metaphor.)
 
  2026-12 campaign 8.0 plan pass: lens-model + replication-units pinned for the 8.1 make (details CONTRACT blocks below). A lens = a CHILD BRANCH of the checked-out branch via (fork) / Store.fork_branch (P5 empty-lens fork); the server branch stays the parent; single-writer-per-lens pins to the branch model; code sync = branch-pointer move (promote/merge), data sync = in-place reconcile. Replication unit = data.u.user, data.shared, b.lens plus branch ancestry; path-prefix RLS confinement is the replication boundary. Sync-negotiation handle = the branch,generation coordinate — the same migration-017 branch_generations / gen-now clock remote-eval.caching already keys on (one counter, three consumers). Status stays planned; the 8.1 make flips.|) *)
  (convention ocaml-dune)
@@ -423,7 +423,7 @@
          One counter, two uses.
     |))))
 
-  (subsection the-glochids
+  (subsection sync-conflicts
    (doc "The honest open work: conflict RESOLUTION policy, offline identity, semantics skew, transactions-under-sync. Detection is free; resolution is not.")
    (status planned)
    (details
@@ -432,7 +432,7 @@
          node-granular conflict DETECTION (these two nodes diverged
          since the common ancestor). They do not give a RESOLUTION
          policy. Naming the policy is the real research-shaped gap —
-         the pads graft easily most of the time; the glochids bite at
+         the pads graft easily most of the time; the conflicts bite at
          sync. Candidates, in increasing ambition:
            - LAST-WRITER-WINS per node (updated_at arbitrates). Cheap,
              loses concurrent edits to the same node. Acceptable for
@@ -520,7 +520,7 @@
     |))))
 
   (subsection phasing
-   (doc "Read-only offline first (achievable, defers the glochids); write-capable lenses with automatic merge second")
+   (doc "Read-only offline first (achievable, defers the conflicts); write-capable lenses with automatic merge second")
    (status planned)
    (details
     (doc (|
@@ -539,8 +539,8 @@
 
          PHASE 2 — WRITE-CAPABLE LENSES. Fork-on-clone, local writes,
          automatic merge on sync (lens-model + sync). LWW-per-node
-         conflict resolution with surfaced conflicts (the-glochids
-         v0). This is the full local-first design. The glochids
+         conflict resolution with surfaced conflicts (sync-conflicts
+         v0). This is the full local-first design. The hard problems
          (semantic merge, offline identity, semantics skew) mature
          within phase 2, not before it.
 
@@ -571,7 +571,7 @@
          end-to-end needs (a) the sync/commit prim applying a plan's
          Theirs_* ops from client bodies + the HTTP rendezvous
          shipping manifests/bodies (recorded as the 8.3
-         transport-side follow-up, not yet built) and (b) the-glochids
+         transport-side follow-up, not yet built) and (b) sync-conflicts
          v0 LWW policy actually applied (not shipped). Subsection
          stays planned; the open work is the Phase-2 tail (transport +
          resolution) plus the Phase-1 end-user flow.
@@ -592,7 +592,7 @@
            sole writer of its own lens; multi-writer appears only at
            merge.
          - NOT automatic conflict RESOLUTION. The tree DETECTS
-           conflicts (hashes); resolution is a policy (the-glochids).
+           conflicts (hashes); resolution is a policy (sync-conflicts).
            v0 surfaces; it does not silently resolve.
           - Data lens versioning (IMPLEMENTED v0, 2026-08-23 make).
             data.u.<user>.* stays single-head and branch-free (this

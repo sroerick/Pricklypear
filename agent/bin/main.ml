@@ -1,4 +1,4 @@
-(** agent — local Nopales-native coding agent (borge/agent.borg).
+(** glochid — local-first Nopales-native agent harness (borge/agent.borg).
 
     v0.0 surface: stdin REPL. `agent` boots, loads ~/.config/agent/plugins/*.pp
     then ./.agent/plugins/*.pp, and enters a read/eval/print loop. Lines

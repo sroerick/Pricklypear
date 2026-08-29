@@ -9,7 +9,7 @@
         straight from tree_nodes (the exchange's server-side offer).
       - commit applies a client push (theirs_add) node through the
         typed-boundary-validated datum write path, and SURFACES conflicts
-        report-only (the-glochids v0: LWW keeps server, conflict reported,
+        report-only (sync-conflicts v0: LWW keeps server, conflict reported,
         no silent loss).
 
     Needs scripts/dev.sh Postgres; skips cleanly when unreachable.
