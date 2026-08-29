@@ -104,7 +104,8 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
           Crud.get t.store ~type_name ~id
       | _ -> (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("get", "bad args (need type, id)", "bad-args")))));
 
-  (* (create 'type "{fields-json}") -> VStr new-id | VStr "create failed" *)
+  (* (create 'type "{fields-json}") -> VStr new-id; raises Prim_error
+     "failed" when the insert is rejected. *)
   register_crud "create"
     (fun args ->
       let uname =
@@ -681,8 +682,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
         | [ Pricklypear_lisp.Ast.VStr path; Pricklypear_lisp.Ast.VStr rank ] ->
             Crud.tree_reorder t.store ~path ~rank
         | _ ->
-            (Pricklypear_lisp.Ast.VStr
-                 "tree/reorder: need path rank (\"\" clears)"));
+            (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/reorder", "need path rank (\"\" clears)", "bad-args")))));
 
   register_crud "tree/move-before"
     (fun args ->
@@ -693,8 +693,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
         | [ Pricklypear_lisp.Ast.VStr path; Pricklypear_lisp.Ast.VStr anchor ] ->
             Crud.tree_move_before t.store ~path ~anchor
         | _ ->
-            (Pricklypear_lisp.Ast.VStr
-                 "tree/move-before: need path anchor (siblings)"));
+            (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/move-before", "need path anchor (siblings)", "bad-args")))));
 
   register_crud "tree/move-after"
     (fun args ->
@@ -705,8 +704,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
         | [ Pricklypear_lisp.Ast.VStr path; Pricklypear_lisp.Ast.VStr anchor ] ->
             Crud.tree_move_after t.store ~path ~anchor
         | _ ->
-            (Pricklypear_lisp.Ast.VStr
-                 "tree/move-after: need path anchor (siblings)"));
+            (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/move-after", "need path anchor (siblings)", "bad-args")))));
 
   register_crud "tree/siblings"
     (fun args ->
@@ -714,19 +712,19 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
       | [ Pricklypear_lisp.Ast.VStr path ] ->
           Crud.tree_siblings t.store ~path
       | _ ->
-          (Pricklypear_lisp.Ast.VStr "tree/siblings: need path"));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/siblings", "need path", "bad-args")))));
 
   register_crud "tree/next"
     (fun args ->
       match args with
       | [ Pricklypear_lisp.Ast.VStr path ] -> Crud.tree_next t.store ~path
-      | _ -> (Pricklypear_lisp.Ast.VStr "tree/next: need path"));
+      | _ -> (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/next", "need path", "bad-args")))));
 
   register_crud "tree/prev"
     (fun args ->
       match args with
       | [ Pricklypear_lisp.Ast.VStr path ] -> Crud.tree_prev t.store ~path
-      | _ -> (Pricklypear_lisp.Ast.VStr "tree/prev: need path"));
+      | _ -> (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/prev", "need path", "bad-args")))));
 
   register_crud "tree/insert-child"
     (fun args ->
@@ -750,8 +748,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
             Crud.tree_insert_child t.store ~parent ~kind ~type_name
               ~body_json ~anchor:(Some anchor) ~author:uname
         | _ ->
-            (Pricklypear_lisp.Ast.VStr
-                 "tree/insert-child: need parent kind type body [, after-anchor]"));
+            (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/insert-child", "need parent kind type body [, after-anchor]", "bad-args")))));
 
   register_crud "tree/get-uuid"
     (fun args ->

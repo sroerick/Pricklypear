@@ -39,6 +39,14 @@ if [ "$FIXTURE" = "1" ]; then
 fi
 
 hits=$(perl -0777 -ne '
+  # Strip OCaml comments (nesting-aware, innermost-first) so docstrings
+  # never false-positive.
+  my $src = $_;
+  while ($src =~ /\(\*/) {
+    my $n2 = ($src =~ s/\(\*(?:(?!\(\*)(?!\*\)).)*\*\)//gs);
+    last unless $n2;
+  }
+  $_ = $src;
   my $n = 0;
   while (/VStr\s*(?:\(\s*)?"((?:[^"\\]|\\.)*)"/g) {
     my $lit = $1;
