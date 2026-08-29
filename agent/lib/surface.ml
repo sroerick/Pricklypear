@@ -61,7 +61,7 @@ let surface_source = {pp|
       "<h1><a href=\"/\">agent</a> <span class=\"muted\">— <a href=\"/code\">/code</a></span></h1>"
       "<div id=\"log\"><div class=\"muted\">agent ready.</div></div>"
       "<form id=\"f\" hx-post=\"/chat\" hx-target=\"#log\" hx-swap=\"beforeend\" hx-ext=\"hx-multipart\""
-      " hx-config='{\"timeout\":0}' hx-on::after-request=\"this.reset()\'>"
+      " hx-config='{\"timeout\":0}' hx-on::after-request=\"this.reset()\">"
       "<input id=\"msg\" name=\"msg\" type=\"text\" placeholder=\"prompt…\" autofocus>"
       "<button>send</button>"
       "</form>"
