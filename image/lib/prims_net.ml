@@ -1,17 +1,107 @@
 (** Prim registration extracted from session.ml (Eio-floor Phase 4). *)
 open Session_types
 
+(* http-get hardening (i-1787971188) ---------------------------------- *)
+
+(* Unique temp file created with perms 0o600 via Unix.openfile O_EXCL —
+   never world-readable, no name/symlink race. Filename.temp_file is
+   avoided on purpose: creation mode and perms stay explicit here. *)
+let make_private_temp (prefix : string) (suffix : string) : string =
+  let tmpdir = Filename.get_temp_dir_name () in
+  let rec attempt n =
+    let path =
+      Filename.concat tmpdir
+        (prefix ^ string_of_int (Unix.getpid ()) ^ "-" ^ string_of_int n
+         ^ suffix)
+    in
+    (match
+       (try
+          Some
+            (Unix.openfile path
+               [ Unix.O_WRONLY; Unix.O_CREAT; Unix.O_EXCL ] 0o600)
+        with Unix.Unix_error (Unix.EEXIST, _, _) -> None)
+     with
+     | Some fd -> Unix.close fd; path
+     | None -> attempt (n + 1))
+  in
+  attempt 0
+
+(* Host portion of a URL: strip the scheme ("//"), then path/query/
+   fragment, userinfo (user:pass@host) and :port; un-bracket IPv6
+   literals. Not a full RFC 3986 parser — anything still malformed
+   fails later in curl as a transient. *)
+let url_host (url : string) : string =
+  let cut_at s c =
+    match String.index_opt s c with
+    | Some i -> String.sub s 0 i
+    | None -> s
+  in
+  let rec after_scheme i =
+    if i + 3 > String.length url then None
+    else if url.[i] = ':' && url.[i + 1] = '/' && url.[i + 2] = '/' then
+      Some (i + 3)
+    else after_scheme (i + 1)
+  in
+  let rest =
+    match after_scheme 0 with
+    | Some i -> String.sub url i (String.length url - i)
+    | None -> url
+  in
+  let authority = cut_at (cut_at (cut_at rest '/') '?') '#' in
+  let authority =
+    match String.rindex_opt authority '@' with
+    | Some i -> String.sub authority (i + 1) (String.length authority - i - 1)
+    | None -> authority
+  in
+  if String.length authority >= 2 && authority.[0] = '[' then
+    (* bracketed IPv6 literal, optional :port after ']' *)
+    (match String.index_opt authority ']' with
+     | Some i when i > 1 -> String.sub authority 1 (i - 1)
+     | _ -> authority)
+  else cut_at authority ':'
+
+(* Loopback / private / link-local space, v4 and v6. *)
+let private_subnets : Ipaddr.Prefix.t list =
+  List.map Ipaddr.Prefix.of_string_exn
+    [ "127.0.0.0/8"      (* v4 loopback *)
+    ; "10.0.0.0/8"       (* RFC 1918 private *)
+    ; "172.16.0.0/12"    (* RFC 1918 private *)
+    ; "192.168.0.0/16"   (* RFC 1918 private *)
+    ; "169.254.0.0/16"   (* v4 link-local (incl. cloud metadata) *)
+    ; "::1/128"          (* v6 loopback *)
+    ; "fc00::/7"         (* v6 unique-local *)
+    ; "fe80::/10"        (* v6 link-local *)
+    ]
+
+let addr_is_private (addr : Unix.inet_addr) : bool =
+  match Ipaddr.of_string (Unix.string_of_inet_addr addr) with
+  | Ok ip -> List.exists (Ipaddr.Prefix.mem ip) private_subnets
+  | Error _ -> true (* unparseable: fail closed *)
+
+(* True when the URL's host resolves into private space. Resolution
+   failure is NOT a block: curl surfaces it as its own transient. *)
+let egress_blocked (url : string) : bool =
+  let host = url_host url in
+  host <> ""
+  && (match
+        (try
+           Unix.getaddrinfo host "80" [ Unix.AI_SOCKTYPE Unix.SOCK_STREAM ]
+         with _ -> [])
+      with
+      | [] -> false
+      | addrs ->
+          List.exists
+            (fun ai ->
+               match ai.Unix.ai_addr with
+               | Unix.ADDR_INET (a, _) -> addr_is_private a
+               | Unix.ADDR_UNIX _ -> true)
+            addrs)
+
 let do_http_get (url : string)
     (req_hdrs : (string * string) list)
     : Pricklypear_lisp.Ast.value =
   let open Pricklypear_lisp.Ast in
   let shell_quote = Llm_client.shell_quote in
-  let hdr_tmp = Filename.temp_file "pp_http_" ".hdr" in
-  let body_tmp = Filename.temp_file "pp_http_" ".body" in
-  let cleanup () =
-    (try Sys.remove hdr_tmp with _ -> ());
-    (try Sys.remove body_tmp with _ -> ())
-  in
   let timeout =
     List.assoc_opt "_timeout_ms" req_hdrs
     |> Option.map int_of_string
@@ -27,121 +117,148 @@ let do_http_get (url : string)
             shell_quote (k ^ ": " ^ v))
          real_hdrs)
   in
-  let cmd =
-    Printf.sprintf
-      "curl -sS -L --max-redirs 5 -D %s -o %s --max-time %d %s %s 2>&1"
-      (shell_quote hdr_tmp)
-      (shell_quote body_tmp)
-      (max 1 (timeout / 1000))
-      hdr_args
-      (shell_quote url)
-  in
-  (try
-      let stderr =
-        Lwt_eio.run_lwt (fun () ->
-          Lwt_process.pread ~timeout:(float_of_int timeout /. 1000. +. 5.)
-            (Lwt_process.shell cmd))
-      in
-      let body =
-        try
-          let ic = open_in body_tmp in
-          let n = in_channel_length ic in
-          let s = really_input_string ic n in
-          close_in ic; s
-        with _ -> ""
-      in
-      let hdr_blob =
-        try
-          let ic = open_in hdr_tmp in
-          let n = in_channel_length ic in
-          let s = really_input_string ic n in
-          close_in ic; s
-        with _ -> ""
-      in
-      (* status: parse the last HTTP/x.y NNN line (after redirects). *)
-      let status =
-        let lines = String.split_on_char '\n' hdr_blob in
-        let rec last_status = function
-          | [] -> 0
-          | line :: rest ->
-              let line = String.trim line in
-              if String.length line >= 8
-                 && String.sub line 0 5 = "HTTP/"
-              then
-                (match String.split_on_char ' ' line with
-                 | _ :: n :: _ ->
-                     (try int_of_string (String.trim n) with _ -> last_status rest)
-                 | _ -> last_status rest)
-              else last_status rest
+  (* SSRF guard: refuse targets that resolve into loopback/private/
+     link-local space so tenant lisp cannot reach internal services
+     (DB, admin faces, cloud metadata). Opt-out: env
+     PP_NET_EGRESS_UNRESTRICTED=1.
+
+     KNOWN RESIDUAL (documented, accepted): only the URL's initial host
+     is resolved here — curl -L follows redirects itself, so a public
+     URL that 3xx-redirects to a private address can still bounce past
+     this blocklist. Closing it needs a local proxy or curl metadata
+     hooks; out of scope for this fix. *)
+  (match Sys.getenv_opt "PP_NET_EGRESS_UNRESTRICTED" with
+   | Some "1" -> ()
+   | _ ->
+       if egress_blocked url then
+         raise
+           (Interp_error
+              (Prim_error
+                 ( "http-get"
+                 , "blocked: target host resolves to a private/loopback/link-local address (egress restricted)"
+                 , "denied" ))));
+  let hdr_tmp = ref "" and body_tmp = ref "" in
+  (* Fun.protect keeps hdr/body temp files off disk on every path,
+     including exceptions from temp creation, curl and parsing. *)
+  Fun.protect
+    (fun () ->
+      try
+        hdr_tmp := make_private_temp "pp_http_" ".hdr";
+        body_tmp := make_private_temp "pp_http_" ".body";
+        let cmd =
+          Printf.sprintf
+            "curl -sS -L --max-redirs 5 -D %s -o %s --max-time %d %s %s 2>&1"
+            (shell_quote !hdr_tmp)
+            (shell_quote !body_tmp)
+            (max 1 (timeout / 1000))
+            hdr_args
+            (shell_quote url)
         in
-        last_status lines
-      in
-      let headers_json = Prims_pure.http_parse_headers hdr_blob in
-      (* D1: network-transient detection. curl writes errors to stderr
-         (curl: (NN) ...) or returns non-zero. A status of 0 means no
-         HTTP response was received → transient network failure. *)
-      let curl_err =
-        if stderr = "" then ""
-        else if String.length stderr > 5
-                && (String.sub stderr 0 5 = "curl "
-                    || String.sub stderr 0 5 = "curl:") then
-          String.trim stderr
-        else ""
-      in
-      cleanup ();
-      if status = 0 && curl_err <> "" then
-        (* Network transient: DNS, connection refused, timeout, etc.
-           RAISE so guard handlers see a real error (design note §4b). *)
-        raise
-          (Interp_error
-             (Prim_error
-                ( "http-get"
-                , "transient: " ^ curl_err
-                , "transient" )))
-      else if status = 0 then
-        (* No status AND no curl error — still a transient (no response). *)
-        raise
-          (Interp_error
-             (Prim_error
-                ( "http-get"
-                , "transient: no HTTP response"
-                , "transient" )))
-      else
-        (* Semantic HTTP response (2xx/3xx/4xx/5xx). Return a payload
-           dict with ok/err/kind so callers can branch without string
-           parsing. 4xx/5xx are NOT raised — they're real responses the
-           caller may want to inspect (design note §4b). *)
-        let ok = status < 400 in
-        let err = if ok then "" else Printf.sprintf "HTTP %d" status in
-        let kind =
-          if ok then "ok"
-          else if status >= 500 then "http-server-error"
-          else "http-client-error"
+        let stderr =
+          Lwt_eio.run_lwt (fun () ->
+            Lwt_process.pread ~timeout:(float_of_int timeout /. 1000. +. 5.)
+              (Lwt_process.shell cmd))
         in
-        let result_json =
-          let open Yojson.Safe in
-          `Assoc
-            [ ("ok", `Bool ok)
-            ; ("status", `Int status)
-            ; ("headers",
-               (try from_string headers_json with _ -> `Null))
-            ; ("body", `String body)
-            ; ("err", `String err)
-            ; ("kind", `String kind) ]
+        let body =
+          try
+            let ic = open_in !body_tmp in
+            let n = in_channel_length ic in
+            let s = really_input_string ic n in
+            close_in ic; s
+          with _ -> ""
         in
-        (VStr (Yojson.Safe.to_string result_json))
-    with exn ->
-      cleanup ();
-      (* Re-raise Interp_error (transient) unchanged; wrap unknown exns. *)
-      match exn with
-      | Interp_error _ as e -> raise e
-      | _ ->
+        let hdr_blob =
+          try
+            let ic = open_in !hdr_tmp in
+            let n = in_channel_length ic in
+            let s = really_input_string ic n in
+            close_in ic; s
+          with _ -> ""
+        in
+        (* status: parse the last HTTP/x.y NNN line (after redirects). *)
+        let status =
+          let lines = String.split_on_char '\n' hdr_blob in
+          let rec last_status = function
+            | [] -> 0
+            | line :: rest ->
+                let line = String.trim line in
+                if String.length line >= 8
+                   && String.sub line 0 5 = "HTTP/"
+                then
+                  (match String.split_on_char ' ' line with
+                   | _ :: n :: _ ->
+                       (try int_of_string (String.trim n) with _ -> last_status rest)
+                   | _ -> last_status rest)
+                else last_status rest
+          in
+          last_status lines
+        in
+        let headers_json = Prims_pure.http_parse_headers hdr_blob in
+        (* D1: network-transient detection. curl writes errors to stderr
+           (curl: (NN) ...) or returns non-zero. A status of 0 means no
+           HTTP response was received → transient network failure. *)
+        let curl_err =
+          if stderr = "" then ""
+          else if String.length stderr > 5
+                  && (String.sub stderr 0 5 = "curl "
+                      || String.sub stderr 0 5 = "curl:") then
+            String.trim stderr
+          else ""
+        in
+        if status = 0 && curl_err <> "" then
+          (* Network transient: DNS, connection refused, timeout, etc.
+             RAISE so guard handlers see a real error (design note §4b). *)
           raise
             (Interp_error
                (Prim_error
                   ( "http-get"
-                  , "transient: " ^ Printexc.to_string exn
-                  , "transient" ))))
+                  , "transient: " ^ curl_err
+                  , "transient" )))
+        else if status = 0 then
+          (* No status AND no curl error — still a transient (no response). *)
+          raise
+            (Interp_error
+               (Prim_error
+                  ( "http-get"
+                  , "transient: no HTTP response"
+                  , "transient" )))
+        else
+          (* Semantic HTTP response (2xx/3xx/4xx/5xx). Return a payload
+             dict with ok/err/kind so callers can branch without string
+             parsing. 4xx/5xx are NOT raised — they're real responses the
+             caller may want to inspect (design note §4b). *)
+          let ok = status < 400 in
+          let err = if ok then "" else Printf.sprintf "HTTP %d" status in
+          let kind =
+            if ok then "ok"
+            else if status >= 500 then "http-server-error"
+            else "http-client-error"
+          in
+          let result_json =
+            let open Yojson.Safe in
+            `Assoc
+              [ ("ok", `Bool ok)
+              ; ("status", `Int status)
+              ; ("headers",
+                 (try from_string headers_json with _ -> `Null))
+              ; ("body", `String body)
+              ; ("err", `String err)
+              ; ("kind", `String kind) ]
+          in
+          (VStr (Yojson.Safe.to_string result_json))
+      with exn ->
+        match exn with
+        | Interp_error _ as e -> raise e
+        | _ ->
+            raise
+              (Interp_error
+                 (Prim_error
+                    ( "http-get"
+                    , "transient: " ^ Printexc.to_string exn
+                    , "transient" ))))
+    ~finally:(fun () ->
+      (try if !hdr_tmp <> "" then Sys.remove !hdr_tmp with _ -> ());
+      (try if !body_tmp <> "" then Sys.remove !body_tmp with _ -> ()))
 
 let register (t : t) (tbl : Primitives.t) : unit =
   let deny_anon name =
@@ -213,4 +330,3 @@ let register (t : t) (tbl : Primitives.t) : unit =
             do_http_get url hdrs
         | _ ->
             (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("http-get", "need url [headers-json]", "bad-args")))))
-
