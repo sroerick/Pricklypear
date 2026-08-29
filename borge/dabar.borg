@@ -252,6 +252,63 @@
     |))
    )
   )
+  (subsection daily-scripture
+   (doc "Verse-of-the-day, pushed to yourself: a deterministic picker, a deliver fn that lands the verse in your daily note and pings ntfy, fired by a jobs schedule. The product answer to 'at the very least I want to push daily scripture to myself.'")
+   (status planned)
+   (* agent note (|2026-12 plan pass: daily-scripture campaign. Substrate is ALL shipped — jobs/schedules (borge/jobs.borg), bible/random-row+verse+chapter-counts, calendar's daily-YYYY-MM-DD note convention, notes/doc upserts. New work pinned: this subsection's two Nopales fns, image.outbound-http's http-post, notify.ntfy-delivery's ntfy/send.|) *)
+   (verify
+    (build "dune build image")
+    (smoke "(dabar/daily-ref) called twice on the same day returns the same ref; advances next day")
+    (smoke "(dabar/daily-deliver) appends a (bible …) ref + verse text outline node to notes doc daily-<today>; second call same day is a no-op (idempotent)")
+    (smoke "(submit-job \"dabar/daily-deliver\" '()) -> job row done; daily note grew exactly one verse node")
+    (smoke "(schedule \"daily-scripture\" \"30 6 * * *\" \"dabar/daily-deliver\" '()) then (schedules) shows it; PP_TZ respected in cron fire time"))
+   (details
+    (doc (|
+         THE PICKER (dabar/daily-ref). DETERMINISTIC, not random:
+           n = days-since-epoch (floor (now-ms) / 86400000)
+           verse-index = n mod total-canonical-verses (~31086 BSB rows)
+           walk = book ordinal -> chapter-counts (bible/chapter-counts)
+                  -> (book chapter verse)
+         Same verse for every habitat user on the same day, survives
+         re-fire, no state to store, annual-ish cycle. bible/random-row
+         stays the Surprise control; it is NOT the daily picker.
+
+         THE DELIVERY (dabar/daily-deliver). Three writes, one job:
+           1. Verse text via (bible/verse book ch v).
+           2. Append into the DAILY NOTE (slug daily-YYYY-MM-DD, the
+              calendar package's convention — calendar/has-daily? then
+              shows the dot organically) as an outline node carrying a
+              (bible BOOK ch v) ref body -> note-bible-links renders
+              it as a one-click dabar study link. NOT notes/capture
+              into the Inbox: daily capture is a refile chore; the
+              daily note is where underlining/annotation happens.
+           3. (ntfy/send title body click-url) — lock-screen ping;
+              Click: opens /dabar?book=&chapter=&verse= (the existing
+              dabar/verse-study-from-params route).
+
+         IDEMPOTENCY: deliver checks the daily note's outline for an
+         existing node whose body carries today's dabar/daily-ref
+         before appending (jobs re-fire after retry must not double
+         the verse). with-step exists if the fn grows real stages;
+         the dedupe check is honest enough for v1.
+
+         THE SCHEDULE. Pinned at schedule time by the jobs substrate
+         (submitted_by + branch, jobs.node-shapes): the SCHEDULER
+         defines dabar/daily-ref + dabar/daily-deliver on their own
+         branch (garden rule — admin/personal or a dev branch, then
+         promote), then upserts:
+           (schedule \"daily-scripture\" \"30 6 * * *\" \"dabar/daily-deliver\" '())
+         Cron strings evaluate in image-local time; PP_TZ or offset
+         the cron fields, pinned at make time.
+
+         PROMOTE POLICY: the picker + deliver fn are shared-default
+         worthy (system/main) once dogfooded; each user's schedule row
+         and notification target stay personal (jobs rows are
+         submitted_by-scoped).
+    |))
+   )
+  )
+
   (subsection work-packages
    (doc "Core dabar features")
    (status implemented)
