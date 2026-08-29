@@ -18,7 +18,7 @@
           http_media
           agent_discovery http
           lineedit boot llm_client
-          auth_password auth_store ai_store jobs sync)
+          auth_password auth_throttle auth_store ai_store jobs sync)
  (modules_without_implementation io)
  (libraries
    pricklypear-lisp

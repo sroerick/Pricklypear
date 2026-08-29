@@ -107,6 +107,14 @@ let hash_password ?(salt_len = 16) (password : string) : string =
   let salt = random_bytes salt_len in
   hash_argonid ~salt password
 
+(** Fixed dummy argon2id hash for unknown-username verifies (timing
+    flatten, i-1787970741): a lookup for a nonexistent account burns the
+    same argon2 work as one for a real row, so usernames are not
+    distinguishable by response latency. The salt is a fixed public
+    constant — this hash is never compared for success, only spent, so
+    no RNG dependency at force time either. *)
+let dummy_hash = lazy (hash_argonid ~salt:"pp-unknown-user-dummy" "throttle-dummy")
+
 (** True when [stored] is in the legacy interim scheme and a successful
     verify should rewrite it to argon2id. *)
 let needs_upgrade (stored : string) : bool =

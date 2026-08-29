@@ -340,51 +340,69 @@ let password_hash_for_user (store : Store.t) ~(username : string)
 
 let verify_password (store : Store.t) ~(username : string)
     ~(password : string) ?source_ip () : user option =
-  let found = password_hash_for_user store ~username in
-  match found with
-  | None ->
-      let () =
-        log_auth store ~kind:"password" ~success:false ?source_ip ()
-      in
-      None
-  | Some (user, stored) ->
-      if Auth_password.verify_password ~stored password then
-        let () =
-          log_auth store ~user_id:user.id ~kind:"password" ~success:true
-            ?source_ip ()
+  (* Login throttle (i-1787970741): keyed by lowercase username so case
+     variants share one bucket, checked BEFORE the DB lookup — admit=false
+     returns None immediately with no DB work. Only ever engages after
+     recorded failures, so ordinary correct logins are never blocked. *)
+  let throttle_key = String.lowercase_ascii username in
+  if not (Auth_throttle.admit throttle_key (Auth_throttle.now ())) then None
+  else
+    let found = password_hash_for_user store ~username in
+    match found with
+    | None ->
+        (* Timing flatten: unknown usernames still pay one argon2 verify
+           against a fixed dummy hash, so known/unknown accounts cost the
+           same and are not distinguishable by latency. Counts as a
+           throttle failure. *)
+        let _ =
+          Auth_password.verify_password
+            ~stored:(Lazy.force Auth_password.dummy_hash) password
         in
-        (* Transparent argon2id upgrade (BORGE-1785545259): a successful
-           legacy-scheme verify rewrites the stored hash to argon2id, so
-           principals migrate without a flag day. *)
-        if Auth_password.needs_upgrade stored then
-          (match set_password store ~user_id:user.id ~password with
-           | Ok () ->
-               Printf.eprintf
-                 "[auth] %s password upgraded interim -> argon2id\n%!"
-                 user.username
-           | Error e ->
-               Printf.eprintf "[auth] %s argon2id upgrade failed: %s\n%!"
-                 user.username e);
-        (* Touch last_used_at *)
-        (match pg_conn store with
-         | None -> Some user
-         | Some conn ->
-             let _ =
-               (try
-      Io_lwt.Db.execute conn
-                     ~params:[ Pgx.Value.of_string user.id ]
-                     "UPDATE credentials SET last_used_at = now() \
-                      WHERE user_id = $1::uuid AND kind = 'password'"
-    with _ ->
-      [])
-             in
-             Some user)
-      else
         let () =
-          log_auth store ~user_id:user.id ~kind:"password" ~success:false
-            ?source_ip ()
+          Auth_throttle.record_failure throttle_key (Auth_throttle.now ());
+          log_auth store ~kind:"password" ~success:false ?source_ip ()
         in
         None
+    | Some (user, stored) ->
+        if Auth_password.verify_password ~stored password then
+          let () =
+            Auth_throttle.clear throttle_key;
+            log_auth store ~user_id:user.id ~kind:"password" ~success:true
+              ?source_ip ()
+          in
+          (* Transparent argon2id upgrade (BORGE-1785545259): a successful
+             legacy-scheme verify rewrites the stored hash to argon2id, so
+             principals migrate without a flag day. *)
+          if Auth_password.needs_upgrade stored then
+            (match set_password store ~user_id:user.id ~password with
+             | Ok () ->
+                 Printf.eprintf
+                   "[auth] %s password upgraded interim -> argon2id\n%!"
+                   user.username
+             | Error e ->
+                 Printf.eprintf "[auth] %s argon2id upgrade failed: %s\n%!"
+                   user.username e);
+          (* Touch last_used_at *)
+          (match pg_conn store with
+           | None -> Some user
+           | Some conn ->
+               let _ =
+                 (try
+      Io_lwt.Db.execute conn
+                       ~params:[ Pgx.Value.of_string user.id ]
+                       "UPDATE credentials SET last_used_at = now() \
+                        WHERE user_id = $1::uuid AND kind = 'password'"
+    with _ ->
+      [])
+               in
+               Some user)
+        else
+          let () =
+            Auth_throttle.record_failure throttle_key (Auth_throttle.now ());
+            log_auth store ~user_id:user.id ~kind:"password" ~success:false
+              ?source_ip ()
+          in
+          None
 
 (** Session token: opaque random id. Cookie carries raw token; DB stores
     only SHA-256 hex of the token (auth.web-login). *)
