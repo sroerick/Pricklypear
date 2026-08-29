@@ -1713,6 +1713,163 @@ let rebalance_siblings (conn : Store_db.conn) ~(parent : string) : int =
       acc + set_rank conn ~path ~rank:(Some new_rank))
     0 ranked fresh
 
+(* ---- tree-edges (one-tree.tree-edges) ----
+
+   An edge IS a node: kind=link at <source-path>.lnk.<uuid>, body
+   {to, kind, label?}. "from" is positional (the parent path), never
+   duplicated in the body. to is branch-qualified path TEXT stored
+   verbatim — it may dangle; resolution is a READ-TIME act against the
+   reader's lens (get_by_path on the absolute path). An unresolved edge
+   is dangling data — rendered as such, repairable, never an error
+   state and never a write blocker. *)
+
+let is_link_kind (k : string) : bool = k = "link"
+
+(** Validate an edge body: JSON object; required non-empty string "to"
+    that is a well-formed absolute ltree path (it may DANGLE — no node
+    needs to exist there); required non-empty string "kind" (the edge
+    kind, e.g. "mentions"); optional string "label". "from" is
+    positional and must NOT appear in the body. Returns the validated
+    body JSON text or an error message. *)
+let validate_link_body (body_json : string) : (string, string) result =
+  match parse_body_json body_json with
+  | Error e -> Error e
+  | Ok body -> (
+      match body with
+      | `Assoc kvs ->
+          let field k =
+            match List.assoc_opt k kvs with
+            | Some (`String s) -> Some s
+            | Some _ when k <> "label" -> Some "" (* present but not a string *)
+            | _ -> None
+          in
+          if List.mem_assoc "from" kvs then
+            Error "link body: \"from\" is positional (the parent path); never put it in the body"
+          else
+            (match field "to" with
+             | Some to_p when to_p <> "" && valid_path to_p ->
+                 (match field "kind" with
+                  | Some k when k <> "" ->
+                      (match List.assoc_opt "label" kvs with
+                       | Some (`String _) | None -> Ok body_json
+                       | Some _ -> Error "link body: label must be a string")
+                  | _ -> Error "link body: need non-empty string kind")
+             | Some _ ->
+                 Error "link body: to must be a non-empty well-formed absolute path"
+             | None -> Error "link body: need to")
+      | _ -> Error "link body must be a JSON object")
+
+(** Upsert an edge node at [path] (kind=link). [path] must be an edge
+    path: <source>.lnk.<label>. The body is validated via
+    [validate_link_body]. ON CONFLICT (path) DO UPDATE, same as nodes. *)
+let upsert_link (conn : Store_db.conn) ~(path : string)
+    ~(body_json : string) ~(author : string) : (string, string) result =
+  if not (valid_path path) then Error "upsert_link: invalid path labels"
+  else
+    let labels = String.split_on_char '.' path in
+    let n = List.length labels in
+    let mid_ok =
+      n >= 3
+      && (match List.nth_opt labels (n - 2) with Some "lnk" -> true | _ -> false)
+    in
+    if not mid_ok then
+      Error "upsert_link: edge paths live at <source>.lnk.<id>"
+    else
+      match validate_link_body body_json with
+      | Error e -> Error e
+      | Ok _ ->
+          let body =
+            match Yojson.Safe.from_string body_json with
+            | b -> b
+            | exception _ -> `Null
+          in
+          let hash = hash_body (Yojson.Safe.to_string body) in
+          let sql =
+            "INSERT INTO tree_nodes (path, kind, type_name, payload, hash, author, updated_at) "
+            ^ "VALUES ($1::ltree, 'link', NULL, "
+            ^ "  jsonb_build_object('v',1,'kind','link','path',$1::text,'type','link', "
+            ^ "    'body',$2::jsonb,'author',$3::text,'doc',NULL,'hash',$4::text), "
+            ^ "  $4::text, $3::text, now()) "
+            ^ "ON CONFLICT (path) DO UPDATE SET "
+            ^ "  payload = EXCLUDED.payload, hash = EXCLUDED.hash, "
+            ^ "  author = EXCLUDED.author, updated_at = now() "
+            ^ "RETURNING path::text"
+          in
+          (try
+             let rows =
+               Io_lwt.Db.execute conn
+                 ~params:
+                   [ Pgx.Value.of_string path
+                   ; Pgx.Value.of_string (Yojson.Safe.to_string body)
+                   ; Pgx.Value.of_string author
+                   ; Pgx.Value.of_string hash
+                   ]
+                 sql
+             in
+             (match rows with
+              | [ [ p ] ] ->
+                  (match Pgx.Value.to_string p with
+                   | Some s -> Ok s
+                   | None -> Error "upsert_link: no path returned")
+              | _ -> Error "upsert_link: failed")
+           with exn -> Error ("upsert_link: " ^ Printexc.to_string exn))
+
+(** Outgoing edges of [path]: edge nodes with kind=link at
+    <path>.lnk.<id> — a children-by-level index read (CHILDREN-BY-LEVEL
+    invariant; the edge grammar is TWO labels under the source, the
+    literal mid-label lnk), never a scan. Ordered by path. *)
+let list_out_links (conn : Store_db.conn) ~(path : string)
+    ?(limit : int = 1000) () : node list =
+  if not (valid_path path) then []
+  else
+    let sql =
+      "SELECT " ^ select_cols ^ " FROM tree_nodes n "
+      ^ "WHERE n.path <@ $1::ltree AND n.path <> $1::ltree "
+      ^ "AND nlevel(n.path) = nlevel($1::ltree) + 2 "
+      ^ "AND subpath(n.path, nlevel($1::ltree), 1)::text = 'lnk' "
+      ^ "AND n.kind = 'link' "
+      ^ "ORDER BY n.path::text ASC LIMIT $2"
+    in
+    let rows =
+      Io_lwt.Db.execute conn
+        ~params:[ Pgx.Value.of_string path; Pgx.Value.of_int limit ]
+        sql
+    in
+    List.filter_map node_of_row rows
+
+(** Edges pointing AT [needle] (to = needle exactly) — backed by the
+    migration-026 partial expression index on
+    (payload->'body'->>'to') WHERE kind='link'. *)
+let edges_to (conn : Store_db.conn) ~(needle : string)
+    ?(limit : int = 200) () : node list =
+  let sql =
+    "SELECT " ^ select_cols ^ " FROM tree_nodes n "
+    ^ "WHERE n.kind = 'link' AND n.payload->'body'->>'to' = $1::text "
+    ^ "ORDER BY n.path::text ASC LIMIT $2"
+  in
+  let rows =
+    Io_lwt.Db.execute conn
+      ~params:[ Pgx.Value.of_string needle; Pgx.Value.of_int limit ]
+      sql
+  in
+  List.filter_map node_of_row rows
+
+(** Incoming-edge count for [path]: edges whose to = path exactly (the
+    warn-not-forbid report surface for tree/delete and tree/move). *)
+let incoming_edge_count (conn : Store_db.conn) ~(path : string) : int =
+  if not (valid_path path) then 0
+  else
+    let sql =
+      "SELECT count(*)::int FROM tree_nodes "
+      ^ "WHERE kind = 'link' AND payload->'body'->>'to' = $1::text"
+    in
+    let rows =
+      Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string path ] sql
+    in
+    (match rows with
+     | [ [ c ] ] -> (match Pgx.Value.to_int c with Some n -> n | None -> 0)
+     | _ -> 0)
+
 let html_escape_text (s : string) : string =
   let buf = Buffer.create (String.length s + 8) in
   String.iter

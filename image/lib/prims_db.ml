@@ -750,6 +750,54 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
         | _ ->
             (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/insert-child", "need parent kind type body [, after-anchor]", "bad-args")))));
 
+  (* Tree-edges prims (one-tree.tree-edges). An edge IS a node: kind=link
+     at <source-path>.lnk.<uuid>, body {to, kind, label?}. "from" is
+     positional; to is stored verbatim and MAY dangle (resolution is a
+     read-time act against the reader's lens). Mutations deny_anon. *)
+  register_crud "link"
+    (fun args ->
+      let uname = actor () in
+      if uname = "anonymous" then deny_anon "link"
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr from_p; Pricklypear_lisp.Ast.VStr to_p ] ->
+            Crud.link_edge t.store ~from_path:from_p ~to_path:to_p
+              ~edge_kind:"ref" ~label:None ~author:uname
+        | [ Pricklypear_lisp.Ast.VStr from_p
+          ; Pricklypear_lisp.Ast.VStr to_p
+          ; Pricklypear_lisp.Ast.VStr edge_kind
+          ] ->
+            Crud.link_edge t.store ~from_path:from_p ~to_path:to_p
+              ~edge_kind ~label:None ~author:uname
+        | [ Pricklypear_lisp.Ast.VStr from_p
+          ; Pricklypear_lisp.Ast.VStr to_p
+          ; Pricklypear_lisp.Ast.VStr edge_kind
+          ; Pricklypear_lisp.Ast.VStr label
+          ] ->
+            Crud.link_edge t.store ~from_path:from_p ~to_path:to_p
+              ~edge_kind ~label:(Some label) ~author:uname
+        | _ ->
+            (Pricklypear_lisp.Ast.VStr "link: need from to [, kind [, label]]"));
+
+  register_crud "unlink"
+    (fun args ->
+      let uname = actor () in
+      if uname = "anonymous" then deny_anon "unlink"
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr edge_path ] ->
+            Crud.unlink_edge t.store ~edge_path
+        | _ -> (Pricklypear_lisp.Ast.VStr "unlink: need edge-path"));
+
+  register_crud "out-links"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr path ] ->
+          Crud.out_links t.store ~path ()
+      | [ Pricklypear_lisp.Ast.VStr path; Pricklypear_lisp.Ast.VInt lim ] ->
+          Crud.out_links t.store ~path ~limit:(Int64.to_int lim) ()
+      | _ -> (Pricklypear_lisp.Ast.VStr "out-links: need path [, limit]"));
+
   register_crud "tree/get-uuid"
     (fun args ->
       match args with
