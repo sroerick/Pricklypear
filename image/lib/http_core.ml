@@ -364,6 +364,13 @@ let is_system_hard_public (path : string) : bool =
   || has_prefix path "/assets"
   || path = "/.well-known/agent.json"
   || path = "/agent.txt"
+  (* one-tree.tree-browser: the store-tree face renders for anonymous
+     sessions CONFINED to public prefixes (data.shared, own garden,
+     the anonymous lens's main store-tree) — private paths are not
+     listable (path_visible in Http_tree enforces it; POST /tree/edit
+     stays private + anonymous-denied). *)
+  || path = "/tree"
+  || path = "/partials/tree"
 
 (** Kernel paths Lisp cannot open to the world (auth.route-visibility). *)
 let is_system_hard_private (path : string) : bool =

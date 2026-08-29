@@ -1675,6 +1675,62 @@ let lens_subtree_in_chain (conn : Store_db.conn) ~(suffix : string)
   | None -> []
   | Some n -> list_subtree conn ~prefix:n.path ~limit ()
 
+(** Children of [prefix] AS OF [gen] (tree-time reads-as-of-gen): the
+    newest version row at-or-below [gen] per child path, LEVEL predicate
+    on the version paths (same shape as list_children, + the +2 'h'
+    covering), tombstones skipped. One index-driven query — the
+    /tree?gen= browser surface. Result re-ordered by sibling-order
+    (rank COLLATE "C" NULLS LAST, path ASC).
+
+    NOTE: a version's gen comes from the writer's counter class
+    (branch_generations for b.* paths, the tree-wide tree_generations
+    for data.* paths) — a ?gen= read is meaningful within one path
+    class, never across both. *)
+let list_children_as_of (conn : Store_db.conn) ~(prefix : string)
+    ~(gen : int64) ?(limit : int = 1000) () : node list =
+  if not (valid_path prefix) then []
+  else
+    let sql =
+      "SELECT DISTINCT ON (v.path) v.gen, v.path::text, v.kind, "
+      ^ "v.type_name, v.body::text, v.hash, v.author, "
+      ^ "v.created_at::text, v.body->>'_tombstone'::text, v.rank "
+      ^ "FROM tree_versions v "
+      ^ "WHERE v.path <@ $1::ltree AND v.path <> $1::ltree "
+      ^ "AND ( nlevel(v.path) = nlevel($1::ltree) + 1 "
+      ^ "      OR ( nlevel(v.path) = nlevel($1::ltree) + 2 "
+      ^ "           AND subpath(v.path, nlevel($1::ltree), 1)::text = 'h' ) ) "
+      ^ "AND v.gen <= $2::bigint "
+      ^ "ORDER BY v.path, v.gen DESC LIMIT $3"
+    in
+    let rows =
+      Io_lwt.Db.execute conn
+        ~params:
+          [ Pgx.Value.of_string prefix
+          ; Pgx.Value.of_int64 gen
+          ; Pgx.Value.of_int limit
+          ]
+        sql
+    in
+    let nodes =
+      List.filter_map
+        (fun row ->
+          match version_of_row row with
+          | Some v -> version_of_leaf v
+          | None -> None)
+        rows
+    in
+    (* sibling-order: ranked first (byte order), then unranked by path *)
+    let rank_key (n : node) =
+      (match n.rank with Some r -> (0, r) | None -> (1, ""))
+    in
+    List.sort
+      (fun a b ->
+        let (ka, ra) = rank_key a and (kb, rb) = rank_key b in
+        if ka <> kb then ka - kb
+        else if ka = 0 && String.compare ra rb <> 0 then String.compare ra rb
+        else String.compare a.path b.path)
+      nodes
+
 (** Set the rank of one node (None clears it — back to unordered).
    Returns the number of rows updated (0 = no such node). A rank change
    is an ordinary versioned write (migration 025's trigger echoes the

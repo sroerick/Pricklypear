@@ -737,7 +737,8 @@
     (smoke "datum with a declared :ref field gains a materialized edge node; update refreshes it; delete removes it")))
   (subsection tree-browser
    (doc "Generic /tree face over tree_nodes: navigate any subtree on the session lens")
-   (status planned)
+   (status implemented)
+   (implements image/lib/http_tree.ml image/lib/http.ml image/lib/http_core.ml image/lib/tree_store.ml)
    (details
     (doc (|
          THE GAP. There is a tree/browser-shaped package (tree/*)
