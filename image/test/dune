@@ -163,3 +163,8 @@
  (name branch_status_test)
  (modules branch_status_test)
  (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))
+
+(test
+ (name auth_throttle_test)
+ (modules auth_throttle_test)
+ (libraries pricklypear-image alcotest unix))
