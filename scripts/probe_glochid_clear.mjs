@@ -67,4 +67,17 @@ const r2 = await send("Runtime.evaluate", { expression: `(function(){
     reply: document.querySelector('#log .bubble.llm')?.textContent || null }); })()`, returnByValue: true });
 console.log("value right after requestSubmit:", JSON.stringify(immediately));
 console.log(r2.result.value);
+
+// ---- REPL mode: a leading ( evaluates locally, no model turn ----
+await send("Runtime.evaluate", { expression: `(function(){
+  var m = document.getElementById('msg');
+  m.value = '(+ 2 2)';
+  document.getElementById('f').requestSubmit(document.querySelector('#f button'));
+  return true; })()`, returnByValue: true });
+await sleep(500);
+const r3 = await send("Runtime.evaluate", { expression: `(function(){
+  var repl = document.querySelectorAll('#log .bubble.repl');
+  return JSON.stringify({ replBubbles: repl.length,
+    last: repl.length ? repl[repl.length-1].textContent : null }); })()`, returnByValue: true });
+console.log("repl:", r3.result.value);
 process.exit(0);

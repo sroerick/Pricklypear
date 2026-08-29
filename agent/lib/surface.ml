@@ -44,7 +44,7 @@ let surface_source = {pp|
       "#log{height:70vh;overflow-y:scroll;border:1px solid #333;border-radius:6px;padding:.75rem;margin-bottom:.75rem}"
       ".bubble{background:#1b1f2a;border-radius:6px;padding:.5rem .75rem;margin:.5rem 0;white-space:pre-wrap}"
       ".bubble.user{color:#9ece6a}"
-      ".bubble.llm{color:#c0caf5}"
+      ".bubble.llm{color:#c0caf5}.bubble.repl{color:#bb9af7}"
       ".trace{color:#6b7080;font-size:.85em;white-space:pre-wrap}"
       ".think{color:#6b7080;font-size:.9em;margin:.4rem 0}"
       ".think summary{cursor:pointer}"
@@ -79,6 +79,12 @@ let surface_source = {pp|
 
 (define (chat/llm-bubble-open id)
   (render-html (string-append "<div class=\"bubble llm\" id=\"" id "\"></div>")))
+
+;; REPL result bubble: a chat prompt starting with ( evaluates LOCALLY in
+;; the shared env (same rule as the stdin REPL — no model turn) and the
+;; last value lands here, REPL-style via the host printer.
+(define (chat/repl-bubble text)
+  (render-html (string-append "<div class=\"bubble repl\">" (html-escape text) "</div>")))
 
 ;; Per-turn skeleton: collapsible thinking zone (reasoning + tool traces)
 ;; followed by the streamed response bubble. Render order in one part

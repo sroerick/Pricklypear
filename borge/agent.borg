@@ -323,7 +323,11 @@
          fragment routes on the agent route table (agent-route-
          table), rendered by Nopales via libs/html — NOT compiled
          OCaml pages and NOT vanilla-JS SSE. The surface is
-         redefinable live (same env as plugins/REPL).
+         redefinable live (same env as plugins/REPL). REPL RULE: a
+         chat prompt whose first non-space char is ( evaluates as
+         Nopales in the shared env (Runtime.eval_string — same rule
+         as the stdin REPL), rendering the last value as a
+         chat/repl-bubble; anything else is a model turn.
 
          STREAMING IS OCAML. A chat/agent turn's stream is a compiled
          host concern: provider SSE -> delta assembly -> per-part
