@@ -172,6 +172,14 @@ if (!st.html.includes('bubble user')) fail("user bubble missing from #log");
 if (!st.html.includes('bubble llm')) fail("llm bubble missing from #log");
 if (!st.html.includes('cdp smoke reply')) fail("assistant token span missing from #log");
 
+// Clear-on-submit regression guard (2026-08-29): the input must be EMPTY
+// once the turn completes — hx-on::before:request="this.reset()". htmx 4
+// fires htmx:before:request (colon-namespaced); the htmx-2 spelling
+// hx-on::after-request never fires here. Note the value must be captured
+// BEFORE the clear (htmx builds e.request before before:request fires).
+if ((await send("Runtime.evaluate", { expression: "document.getElementById('msg')?.value ?? 'gone'", returnByValue: true }))?.result?.value !== "")
+  fail("input #msg not cleared on submit (hx-on event-name regression?)");
+
 ok(`turn streamed: ${st.parts} parts, DOM has user+llm bubbles + assistant text`);
 cleanup();
 process.exit(0);
