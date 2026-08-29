@@ -650,6 +650,23 @@ let boot_stdlib = {|
             (list (quote let*) (cdr bindings) body))))
 |}
 
+(** Identity prims — host-local backing. The image's whoami/current-author
+    read the HTTP session identity. In the agent: whoami is the OPERATOR
+    (one unix process on their machine); current-author stays INTENTIONALLY
+    UNBOUND — authorship is a DB-row concept (agent-route-table.pg-prim-
+    unbound pins it: routes calling it must report unbound), and the lens
+    has no author column. Same name, host-local backing — the route/
+    dispatch seam philosophy (borge/agent.borg, borge/local-first.borg). *)
+let operator_name () : string =
+  try Unix.getlogin ()
+  with _ -> (
+    try Sys.getenv "USER"
+    with _ -> (
+      try Sys.getenv "LOGNAME" with _ -> "glochid"))
+
+let register_identity_prims (t : t) : unit =
+  add_prim t "whoami" (fun _args -> Ast.VStr (operator_name ()))
+
 let make () : t =
   let t =
     {
@@ -672,6 +689,7 @@ let make () : t =
   register_event_prims t;
   register_ui_prims t;
   register_route_prims t;
+  register_identity_prims t;
   (* Host library layer: the minimal stdlib (let* macro) so libs/hyper
      and the Nopales surface run unchanged. *)
   load_source ~rt:t boot_stdlib;
