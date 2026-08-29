@@ -734,7 +734,14 @@ let is_raw_html (v : value) : string option =
   | _ -> None
 
 let redirect_value (path : string) : value =
-  VStr (redirect_sentinel ^ path)
+  (* Single funnel for redirect targets (the redirect prim is its only
+     caller). Reject CR/LF: httpun does not validate header values, so a
+     newline in the target would let a handler inject response headers. *)
+  if String.contains path '\r' || String.contains path '\n' then
+    raise
+      (Interp_error
+         (User_error ("redirect target must not contain CR or LF", "bad-args")))
+  else VStr (redirect_sentinel ^ path)
 
 let is_redirect (v : value) : string option =
   match v with
