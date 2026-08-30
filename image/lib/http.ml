@@ -249,6 +249,90 @@ let request_handler ~(sw : Eio.Switch.t) ~(registry : Session_registry.t)
               ~content_type:"text/plain" msg);
     ()
   in
+  (* habitat-book.eval-examples: run-button target for nopales example
+     blocks. htmx posts the tree-row path (hx-vals); we read the row,
+     eval its src via the RESTRICTED example engine
+     (Session.example_eval_engine — whitelisted pure + read-only prims,
+     static gate, child of the session env, fresh budget), and return a
+     replacement .book-example div (hx-target closest, hx-swap
+     outerHTML) showing value/error + elapsed. Kernel-dispatched like
+     the /book GET surface — no route pins in the /book namespace. *)
+  let post_book_eval_example (session : Session.t) : unit =
+    let body = read_body reqd in
+    let row_path =
+      Option.value (form_field body "path") ~default:"" |> String.trim
+    in
+    let fail ?(status = `Bad_request) msg =
+      text_response reqd ~status ~content_type:"text/plain" msg
+    in
+    let esc = Prims_pure.html_escape_str in
+    if row_path = "" then fail "path required"
+    else if not (String.starts_with ~prefix:"data.book." row_path) then
+      fail "not a book row path"
+    else
+      match Crud.tree_get (Session.store session) ~path:row_path () with
+      | Pricklypear_lisp.Ast.VNil ->
+          fail ~status:`Not_found ("no such book row: " ^ row_path)
+      | Pricklypear_lisp.Ast.VStr json -> (
+          match Yojson.Safe.from_string json with
+          | `Assoc fields ->
+              (* tree/get rows wrap the payload under "body" (see
+                 book/row-body in libs/book/lib.pp); fall back to the
+                 top level for flat rows. *)
+              let fields =
+                match List.assoc_opt "body" fields with
+                | Some (`Assoc body) -> body
+                | _ -> fields
+              in
+              let f k =
+                match List.assoc_opt k fields with
+                | Some (`String s) -> s
+                | _ -> ""
+              in
+              let lang = f "lang" and src = f "src" and expected = f "expected" in
+              if lang <> "nopales" then
+                fail "captured, not live (ocaml examples do not eval in v1)"
+              else if src = "" then fail "example row has no src"
+              else
+                let t0 = Unix.gettimeofday () in
+                let elapsed () =
+                  Printf.sprintf "%.0f ms"
+                    ((Unix.gettimeofday () -. t0) *. 1000.0)
+                in
+                let result_html =
+                  match Session.example_eval_engine session src with
+                  | v ->
+                      Printf.sprintf
+                        "<div class=\"book-result\">⇒ <code>%s</code> <span class=\"book-elapsed\">(%s)</span></div>"
+                        (esc (Pricklypear_lisp.Reader.pp_value v))
+                        (elapsed ())
+                  | exception Example_eval.Refused reason ->
+                      Printf.sprintf
+                        "<div class=\"book-error\">refused: %s <span class=\"book-elapsed\">(%s)</span></div>"
+                        (esc reason) (elapsed ())
+                  | exception exn ->
+                      Printf.sprintf
+                        "<div class=\"book-error\">error: %s <span class=\"book-elapsed\">(%s)</span></div>"
+                        (esc (Printexc.to_string exn))
+                        (elapsed ())
+                in
+                let expected_html =
+                  if expected = "" then ""
+                  else
+                    Printf.sprintf
+                      "<p class=\"book-expected\">expect =&gt; %s</p>"
+                      (esc expected)
+                in
+                let html =
+                  Printf.sprintf
+                    "<div class=\"book-example\"><pre><code>%s</code></pre>%s%s</div>"
+                    (esc src) result_html expected_html
+                in
+                text_response reqd ~content_type:"text/html" html
+          | _ -> fail "bad book row JSON"
+          | exception _ -> fail "bad book row JSON")
+      | _ -> fail "bad book row"
+  in
   (** Lisp user-route if bound; else kernel [fallback]. *)
   let launch_user_route_or (fallback : unit -> unit) : unit =
     (* Resolve the route INSIDE page work, after the gate has attached
@@ -441,6 +525,9 @@ let request_handler ~(sw : Eio.Switch.t) ~(registry : Session_registry.t)
     when String.length path > 11 && String.sub path 0 11 = "/book/code/" ->
       (* habitat-book.web-renderer: one code-chapter listing. *)
       launch_book_handler "book/code-page"
+  | `POST, "/book/eval-example" ->
+      launch (fun session -> post_book_eval_example session);
+      ()
   | `GET, path
     when String.length path > 6 && String.sub path 0 6 = "/book/" ->
       (* habitat-workflow.book-view: /book/<pkg> → (spec/book-page).

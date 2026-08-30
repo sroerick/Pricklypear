@@ -371,6 +371,8 @@ let prim_summary (name : string) : string =
   | "json-emit" -> "emit Lisp value as JSON string"
   | "read-string" -> "read one s-expr from string → quoted data (no eval)"
   | "read-all-string" -> "read all top-level s-exprs from string → list"
+  | "example-eval" ->
+      "restricted read-time eval of a book example: (example-eval src) -> rendered value; whitelisted pure + read-only prims, no define/route/write"
   | "with-public-write" ->
       "(with-public-write (lambda () …)) run body with write privs for public forms"
   | "request-method" -> "HTTP method of active request"

@@ -61,6 +61,19 @@ let eval_string_rim (t : t) (input : string) : Pricklypear_lisp.Ast.value =
   then persist_last_budget_stats t ~label;
   v
 
+(* habitat-book.eval-examples: shared engine for the (example-eval …)
+   prim and the POST /book/eval-example endpoint. Restriction lives in
+   Example_eval (whitelisted prim table + static gate + child env +
+   fresh budget); known_fn comes from the branch's visible defs — the
+   same body source forge-effects uses. *)
+let example_eval_engine (t : t) (src : string) : Pricklypear_lisp.Ast.value =
+  let known_fn =
+    Pricklypear_lisp.Effect.known_fn_of_bindings
+      (List.map (fun (n, e, _) -> (n, e))
+         (Store.list_function_names t.store))
+  in
+  Example_eval.eval_source ~env:t.env ~full_prims:t.prims ~known_fn src
+
 let eval_expr_rim (t : t) (expr : Pricklypear_lisp.Ast.expr)
   : Pricklypear_lisp.Ast.value =
   let budget = Pricklypear_lisp.Eval.make_budget () in
@@ -1582,6 +1595,36 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
             (Pricklypear_lisp.Ast.Interp_error
                (Pricklypear_lisp.Ast.User_error
                   ("eval-string: need 1 string", "bad-args"))));
+  (* habitat-book.eval-examples: (example-eval src) -> VStr (rendered
+     value). Parses + evals Nopales source in a RESTRICTED environment:
+     whitelisted pure + read-only-DB prim table (absent prims fail
+     closed), static gate on mutation special forms + capabilities,
+     child of the session env (bindings resolve, nothing persists),
+     fresh step budget + wall-clock cap. Read-time eval in the
+     reader's session; the POST /book/eval-example endpoint shares
+     [example_eval_engine]. *)
+  Primitives.register prim_table "example-eval"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr src ]
+      | [ Pricklypear_lisp.Ast.VSymbol src ] ->
+          let v =
+            try Ok (example_eval_engine !t src)
+            with Example_eval.Refused reason ->
+              Error ("refused: " ^ reason)
+          in
+          (match v with
+           | Ok v -> Pricklypear_lisp.Ast.VStr (Pricklypear_lisp.Reader.pp_value v)
+           | Error msg ->
+               (raise
+                  (Pricklypear_lisp.Ast.Interp_error
+                     (Pricklypear_lisp.Ast.User_error
+                        ("example-eval: " ^ msg, "denied")))))
+      | _ ->
+          (raise
+             (Pricklypear_lisp.Ast.Interp_error
+                (Pricklypear_lisp.Ast.Prim_error
+                   ("example-eval", "need 1 source string", "bad-args")))));
   Primitives.register prim_table "load-library"
     (fun args ->
       match args with
@@ -1623,6 +1666,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
   (* Bind load prims into env (registered after the bulk VPrim bind). *)
   Pricklypear_lisp.Env.define env "load-string" (Pricklypear_lisp.Ast.VPrim "load-string");
   Pricklypear_lisp.Env.define env "eval-string" (Pricklypear_lisp.Ast.VPrim "eval-string");
+  Pricklypear_lisp.Env.define env "example-eval" (Pricklypear_lisp.Ast.VPrim "example-eval");
   Pricklypear_lisp.Env.define env "load-library" (Pricklypear_lisp.Ast.VPrim "load-library");
   Pricklypear_lisp.Env.define env "reseed-package" (Pricklypear_lisp.Ast.VPrim "reseed-package");
   let session : t = !t in

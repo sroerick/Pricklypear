@@ -4,6 +4,11 @@
  (libraries pricklypear-image pricklypear-lisp alcotest lwt lwt.unix))
 
 (test
+ (name example_eval_test)
+ (modules example_eval_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest))
+
+(test
  (name api_prim_test)
  (modules api_prim_test)
  (libraries pricklypear-image pricklypear-lisp pricklypear-pure-prims alcotest yojson))
