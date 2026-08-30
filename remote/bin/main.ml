@@ -196,6 +196,8 @@ let () =
   let lens_pull_tree = ref [] in
   let lens_pull_data = ref [] in
   let sync_flag = ref false in
+  let sync_loop_flag = ref false in
+  let sync_interval = ref 30.0 in
   let serve_flag = ref false in
   let open_browser = ref false in
   let model = ref None in
@@ -218,6 +220,8 @@ let () =
         ("--lens-pull-tree", Arg.String (fun s -> lens_pull_tree := s :: !lens_pull_tree), "NAME fetch def + transitive deps into lens (repeatable)");
         ("--lens-pull-data", Arg.String (fun s -> lens_pull_data := s :: !lens_pull_data), "PREFIX fetch data subtree into lens: 'user' | 'shared' | path (repeatable)");
         ("--sync", Arg.Unit (fun () -> sync_flag := true), "push local lens data up to the image (two-way, data-only v1) then pull server-only paths; records the new (branch, generation) snapshot");
+        ("--sync-loop", Arg.Unit (fun () -> sync_loop_flag := true), "run the sync round on a timer in the background (the invisible part; needs --lens)");
+        ("--sync-interval", Arg.Float (fun f -> sync_interval := f), "SECONDS between background sync rounds (default 30)");
         ("--serve", Arg.Set serve_flag, "serve the Nopales-authored HTML surface (chat + eval box + /code lens browser) on 127.0.0.1:random-port until Ctrl-C");
         ("--open", Arg.Set open_browser, "with --serve: best-effort browser launch");
         ("--model", Arg.String (fun s -> model := Some s), "NAME provider model (AGENT_MODEL)");
@@ -225,9 +229,9 @@ let () =
         ("--mock-script", Arg.String (fun s -> mock_script := Some s), "FILE canned provider replies (test/demo of /chat)");
       ]
   in
-  Arg.parse speclist anon
+    Arg.parse speclist anon
     "pp-remote [--image URL] [--user U --pass P] [-e EXPR]\n\
-     \                  [--lens DIR] [--lens-pull NAME] ... [--sync] [--serve [--open]]\n\
+     \                  [--lens DIR] [--lens-pull NAME] ... [--sync] [--sync-loop] [--serve [--open]]\n\
      \                  [--model NAME] [--base-url URL] [--mock-script FILE]";
   load_dotenv ();
   (* TLS (tls-eio) needs a seeded RNG before any HTTPS proxy call;
@@ -489,100 +493,53 @@ let () =
     exit 0
   end);
 
-  (* ---- --sync: push local lens data up to the image (borge/local-first.borg
-     sync, v1 two-way / data-only). Build the data manifest + bodies from
-     the lens substrate, call sync/push, pull any server-only paths, and
-     pin the new (branch, generation) snapshot as the next merge base. *)
+  (* ---- --sync: run ONE sync round via remote/lib/sync_client.ml
+     (borge/local-first.borg sync): push local lens data up to the image,
+     pull server copies, mirror server deletions, surface every LWW
+     resolution, and pin the new (branch, generation) snapshot + merged
+     manifest as the next round's base. *)
   (if !sync_flag then begin
     match lens_opt with
     | None ->
         prerr_endline "--sync requires --lens DIR"; exit 2
     | Some lens ->
-        let user_prefix = "data.u." ^ Lens_store.enc_label lens.owner in
-        let plen = String.length user_prefix in
-        let is_data p =
-          String.length p >= plen && String.sub p 0 plen = user_prefix
-        in
-        let full = Lens_store.node_manifest ~lens in
-        let data_manifest = List.filter (fun (p, _) -> is_data p) full in
-        let manifest_v =
-          Ast.VList
-            (List.map
-               (fun (p, h) -> Ast.VList [ Ast.VStr p; Ast.VStr h ])
-               data_manifest)
-        in
-        let bodies_v =
-          Ast.VList
-            (List.filter_map
-               (fun (p, _) ->
-                 match Lens_store.get ~lens p with
-                 | Some env -> Some (Ast.VList [ Ast.VStr p; Ast.VStr env ])
-                 | None -> None)
-               data_manifest)
-        in
-        Printf.eprintf "[sync] pushing %d data node(s) to %s\n%!"
-          (List.length data_manifest) cfg.base_url;
-        (match transport "sync/push" [ manifest_v; bodies_v ] with
-         | Ok (Ast.VStr json) ->
-             (match Yojson.Safe.from_string json with
-              | `Assoc kv ->
-                  let int k =
-                    match List.assoc_opt k kv with
-                    | Some (`Int n) -> n | _ -> 0
-                  in
-                  let str k =
-                    match List.assoc_opt k kv with
-                    | Some (`String s) -> s | _ -> ""
-                  in
-                  let strs k =
-                    match List.assoc_opt k kv with
-                    | Some (`List xs) ->
-                        List.filter_map
-                          (function `String s -> Some s | _ -> None) xs
-                    | _ -> []
-                  in
-                  let applied = int "applied" in
-                  let server_only = strs "server_only_paths" in
-                  let diverge = strs "diverge_paths" in
-                  let gen_str = str "generation" in
-                  let gen =
-                    try Int64.of_string gen_str with _ -> 0L
-                  in
-                  Printf.eprintf
-                    "[sync] applied=%d  server_only=%d  diverge=%d  gen=%s\n%!"
-                    applied (List.length server_only) (List.length diverge)
-                    gen_str;
-                  List.iter
-                    (fun p -> prerr_endline ("[sync] DIVERGE: " ^ p))
-                    diverge;
-                  (* pull server-only paths so the lens catches up to the
-                     server's side of the world in the same round *)
-                  List.iter
-                    (fun p ->
-                      match transport "tree/get" [ Ast.VStr p ] with
-                      | Ok (Ast.VStr env) ->
-                          ignore (Lens_store.materialize ~lens env);
-                          Printf.eprintf "[sync] pulled %s\n%!" p
-                      | Ok _ -> ()
-                      | Error e ->
-                          Printf.eprintf "[sync] pull %s: %s\n%!"
-                            p (Printexc.to_string e))
-                    server_only;
-                  (* pin the new (branch, generation) snapshot as the next
-                     merge base — the coordinate a later sync keys on. *)
-                  let branch =
-                    match (try transport "current-branch" [] with _ -> Error (Failure "offline")) with
-                    | Ok (Ast.VStr b) -> b | _ -> ""
-                  in
-                  Lens_store.record_snapshot ~lens ~branch ~generation:gen;
-                  Printf.eprintf "[sync] done; snapshot pinned (branch=%s, gen=%s)\n%!"
-                    branch gen_str
-              | _ -> prerr_endline "[sync] bad response shape")
-         | Ok _ -> prerr_endline "[sync] unexpected return value"
-         | Error e ->
-             Printf.eprintf "[sync] failed: %s\n%!" (Printexc.to_string e);
-             exit 1)
+        let r = Sync_client.run_round ~transport ~lens ~quiet:false () in
+        if not r.Sync_client.ok then exit 1
   end);
+
+  (* ---- --sync-loop: the BACKGROUND half of "sync invisibly in the
+     background" (borge/local-first.borg sync — "'background' is client
+     scheduling, not new machinery"). An Eio fiber runs the same round
+     every --sync-interval seconds (quiet mode: activity and surfaced
+     resolutions print, a clean round is silent); a failed round (image
+     unreachable — offline work continues locally) retries on a short
+     backoff so reconnect is automatic. Runs alongside --serve / the
+     REPL. *)
+  (if !sync_loop_flag then
+     match lens_opt with
+     | None ->
+         prerr_endline "--sync-loop requires --lens DIR"; exit 2
+     | Some lens ->
+         let clock = Eio.Stdenv.clock env in
+         Printf.eprintf "[sync-loop] every %.0fs against %s\n%!"
+           !sync_interval cfg.base_url;
+         Eio.Fiber.fork ~sw (fun () ->
+             while true do
+               let r =
+                 try Sync_client.run_round ~transport ~lens ~quiet:true ()
+                 with exn ->
+                   Printf.eprintf "[sync-loop] round failed: %s\n%!"
+                     (Printexc.to_string exn);
+                   { (Sync_client.empty_report ()) with
+                     Sync_client.ok = false;
+                     error = Some (Printexc.to_string exn) }
+               in
+               let backoff =
+                 if r.Sync_client.ok then !sync_interval
+                 else Float.min !sync_interval 5.0
+               in
+               Eio.Time.sleep clock backoff
+           done));
 
   let eval_print src =
     try

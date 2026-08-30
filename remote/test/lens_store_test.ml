@@ -239,6 +239,56 @@ let test_lens_fetch_first () =
     | Some src -> Alcotest.(check string) "lens-first src" "(define (off) 7)" src
     | None -> Alcotest.fail "fetch_def None despite substrate hit")
 
+let test_delete_node () =
+  (* Ours_del mirror: the server deleted the node, the client's stale
+     copy goes too. delete_node removes the envelope file, prunes empty
+     parents, and is false on an absent path. *)
+  with_tmpdir (fun root ->
+    let lens = lens_of ~root in
+    let path = "data.u.admin.todo.gone" in
+    ignore
+      (materialize ~lens
+         (Yojson.Safe.to_string
+            (`Assoc [ ("v", `Int 1); ("kind", `String "datum");
+                      ("path", `String path);
+                      ("type", `String "todo"); ("body", `Assoc []);
+                      ("author", `String "admin"); ("hash", `String "h9");
+                      ("created_at", `String "t"); ("updated_at", `String "t") ])));
+    Alcotest.(check bool) "node present before delete" true
+      (get ~lens path <> None);
+    Alcotest.(check bool) "delete removes" true (delete_node ~lens path);
+    Alcotest.(check bool) "node gone" true (get ~lens path = None);
+    Alcotest.(check bool) "delete absent is false" false
+      (delete_node ~lens path))
+
+let test_base_manifest () =
+  (* the sync common ancestor, client side: record the last-synced merged
+     manifest, read it back as the next round's base; it must NOT appear
+     in the node manifest (metadata file). *)
+  with_tmpdir (fun root ->
+    let lens = lens_of ~root in
+    Alcotest.(check (list (pair string string))) "no base on a fresh lens" []
+      (base_manifest ~lens);
+    record_base_manifest ~lens
+      [ ("data.u.admin.todo.a", "h1"); ("data.u.admin.todo.b", "h2") ];
+    let base = base_manifest ~lens in
+    Alcotest.(check int) "two base entries" 2 (List.length base);
+    Alcotest.(check bool) "base entry round-trips" true
+      (List.mem_assoc "data.u.admin.todo.a" base);
+    (* a datum node coexisting with the base file still manifests; the
+       base file itself never does *)
+    ignore
+      (materialize ~lens
+         (Yojson.Safe.to_string
+            (`Assoc [ ("v", `Int 1); ("kind", `String "datum");
+                      ("path", `String "data.u.admin.todo.a");
+                      ("type", `String "todo"); ("body", `Assoc []);
+                      ("author", `String "admin"); ("hash", `String "h1");
+                      ("created_at", `String "t"); ("updated_at", `String "t") ])));
+    let manifest = node_manifest ~lens in
+    Alcotest.(check (list string)) "manifest holds the datum only"
+      [ "data.u.admin.todo.a" ] (List.map fst manifest))
+
 let () =
   Random.self_init ();
   Alcotest.run "lens_store"
@@ -252,5 +302,7 @@ let () =
          ; Alcotest.test_case "code_kind_path" `Quick test_code_kind_path
          ; Alcotest.test_case "materialize_code_and_resolve" `Quick test_materialize_code_and_resolve
          ; Alcotest.test_case "node_manifest" `Quick test_node_manifest
+         ; Alcotest.test_case "delete_node" `Quick test_delete_node
+         ; Alcotest.test_case "base_manifest" `Quick test_base_manifest
          ; Alcotest.test_case "lens_fetch_first" `Quick test_lens_fetch_first ])
     ]
