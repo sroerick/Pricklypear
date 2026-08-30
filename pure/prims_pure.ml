@@ -222,6 +222,12 @@ let prim_string_join args =
   | [ lst; sep_v ] -> join (unwrap lst) (coerce_str ~ctx:"string-join" sep_v)
   | _ -> raise (Interp_error (User_error ("string-join needs a list [sep]", "bad-args")))
 
+(* prim_string_split is DEFINED LATER in this file (agent section, ~line
+   1830) — it is now ALSO a kernel image prim (habitat-book web-renderer:
+   the interpreted libs/std char-walk cost ~interpreter steps per input
+   byte, so one 3KB prose paragraph blew the 100k-step page budget).
+   libs/std no longer defines it; keep agent semantics in one place. *)
+
 (* (type-of x) -> VStr. Returns a type tag for runtime reflection. *)
 let prim_type_of args =
   match args with
@@ -1723,6 +1729,130 @@ let prim_render_links args =
       raise
         (Interp_error (User_error ("render-links needs one string arg", "bad-args")))
 
+(** habitat-book web-renderer: prose tokenization for binding-token
+    links. Both prims are ONE OCaml scan over the prose (Buffer + direct
+    char tests, zero interpreter steps) — the interpreted per-word
+    pipeline they replace (book/split-piece + spec/token-binding? per
+    word in libs/book) cost ~300 steps per word, so a 12.7k-word chapter
+    needed ~4M steps against a 100k page budget. Resolution stays in
+    Nopales (spec/binding-resolves? via function-source) but at
+    O(unique tokens), not O(words).
+
+    (prose-tokens s) -> list of UNIQUE token-shaped cores in first-
+    occurrence order. Whitespace runs (space/tab/newline) separate
+    words; at most one leading char from ( [ ' , and one trailing char
+    from ) ] , . ; : is stripped as edge punctuation (the retired
+    book/split-piece sets, minus \n which is now a separator). The
+    token-shape test MIRRORS spec/token-binding? (len>2, contains "/",
+    not "->", not "/", no space, not leading "/") — spec/ keeps the
+    authoritative definition; keep the two in lockstep (parity-tested
+    in image/test/primitives_test.ml). *)
+let token_shape (core : string) : bool =
+  String.length core > 2
+  && String.contains core '/'
+  && core <> "->"
+  && core <> "/"
+  && not (String.contains core ' ')
+  && core.[0] <> '/'
+
+let prose_token_edges (s : string) : string * string * string =
+  let is_lead = function '(' | '[' | '\'' | ',' -> true | _ -> false in
+  let is_trail = function ')' | ']' | ',' | '.' | ';' | ':' -> true | _ -> false in
+  let n = String.length s in
+  let lead = if n > 0 && is_lead s.[0] then 1 else 0 in
+  let s1 = if lead = 1 then String.sub s 1 (n - 1) else s in
+  let n1 = String.length s1 in
+  let trail = if n1 > 0 && is_trail s1.[n1 - 1] then 1 else 0 in
+  (String.sub s 0 lead,
+   (if n1 - trail > 0 then String.sub s1 0 (n1 - trail) else ""),
+   (if trail = 1 then String.sub s1 (n1 - 1) 1 else ""))
+
+let is_word_char = function
+  | ' ' | '\t' | '\n' | '\r' -> false
+  | _ -> true
+
+let prim_prose_tokens args =
+  let s = coerce_str ~ctx:"prose-tokens" (match args with [ v ] -> v | _ -> raise (Interp_error (User_error ("prose-tokens needs one string", "bad-args")))) in
+  let seen = Hashtbl.create 64 in
+  let out = ref [] in
+  let n = String.length s in
+  let i = ref 0 in
+  while !i < n do
+    if is_word_char s.[!i] then begin
+      let j = ref !i in
+      while !j < n && is_word_char s.[!j] do incr j done;
+      let _, core, _ = prose_token_edges (String.sub s !i (!j - !i)) in
+      if core <> "" && token_shape core && not (Hashtbl.mem seen core) then begin
+        Hashtbl.add seen core ();
+        out := VStr core :: !out
+      end;
+      i := !j
+    end else incr i
+  done;
+  VList (List.rev !out)
+
+(** (render-tokens s resolved unresolved) -> HTML string for one prose
+    paragraph body. Same word scan as prose-tokens; each word renders as
+    escape(lead) ++ core-html ++ escape(trail) where core-html is:
+      - core in `resolved`   -> <a href="/binding/CORE">CORE</a>
+      - core in `unresolved` -> <span class="book-hole">CORE&#8709;</span>
+      - otherwise (incl. empty core / non-token-shaped word) -> the whole
+        word escaped verbatim
+    Inter-word whitespace is preserved verbatim. Presentation constants
+    (/binding/ href, book-hole class) mirror render-links' kernel-side
+    anchors (/notes?slug=); the book package owns the .book-hole CSS. *)
+let prim_render_tokens args =
+  let unwrap = function
+    | VList xs -> xs
+    | VNil -> []
+    | _ -> raise (Interp_error (User_error ("render-tokens needs lists of strings", "bad-args")))
+  in
+  match args with
+  | [ s_v; resolved_v; unresolved_v ] ->
+      let s = coerce_str ~ctx:"render-tokens" s_v in
+      let strset vals =
+        let h = Hashtbl.create 64 in
+        List.iter (fun v -> Hashtbl.replace h (coerce_str ~ctx:"render-tokens" v) ()) vals;
+        h
+      in
+      let resolved = strset (unwrap resolved_v) in
+      let unresolved = strset (unwrap unresolved_v) in
+      let buf = Buffer.create (String.length s + 16) in
+      let n = String.length s in
+      let i = ref 0 in
+      while !i < n do
+        if is_word_char s.[!i] then begin
+          let j = ref !i in
+          while !j < n && is_word_char s.[!j] do incr j done;
+          let word = String.sub s !i (!j - !i) in
+          let lead, core, trail = prose_token_edges word in
+          if core <> "" && token_shape core && Hashtbl.mem resolved core then begin
+            html_escape_to_buffer buf lead;
+            Buffer.add_string buf "<a href=\"/binding/";
+            html_escape_to_buffer buf core;
+            Buffer.add_string buf "\">";
+            html_escape_to_buffer buf core;
+            Buffer.add_string buf "</a>";
+            html_escape_to_buffer buf trail
+          end
+          else if core <> "" && token_shape core && Hashtbl.mem unresolved core then begin
+            html_escape_to_buffer buf lead;
+            Buffer.add_string buf "<span class=\"book-hole\">";
+            html_escape_to_buffer buf core;
+            Buffer.add_string buf "&#8709;</span>";
+            html_escape_to_buffer buf trail
+          end
+          else html_escape_to_buffer buf word;
+          i := !j
+        end else begin
+          Buffer.add_char buf s.[!i];
+          incr i
+        end
+      done;
+      VStr (Buffer.contents buf)
+  | _ ->
+      raise (Interp_error (User_error ("render-tokens needs (s resolved unresolved)", "bad-args")))
+
 (* ---- string helpers (P2 from kernel-io-primitives note) ---- *)
 
 let prim_string_replace args =
@@ -1780,8 +1910,12 @@ let prim_string_ends_with_p args =
    unchanged on hosts that don't load libs/std (the agent): empty/no-match
    -> single-element list of the whole string; otherwise splits on each
    non-overlapping occurrence of delim, preserving empty trailing
-   segments. The image gets string-split from libs/std (its `(define …)`
-   shadows this prim in env); the agent registers this prim directly. *)
+   segments. KERNEL PRIM as of 2026-08-30 (habitat-book web-renderer):
+   the interpreted libs/std definition cost ~O(n) interpreter steps per
+   input byte — one 3KB prose paragraph blew the 100k-step page budget —
+   so std no longer defines it and the image registers this prim
+   (string-split moves to the reserved catalog). Empty delimiter returns
+   the whole string (the retired std version looped forever there). *)
 let prim_string_split args =
   match args with
   | [ s_v; d_v ] ->

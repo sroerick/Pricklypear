@@ -589,6 +589,7 @@ let register_pure_prims (t : t) : unit =
   r "string-length" prim_string_length;
   r "substring" prim_substring;
   r "string-contains?" prim_string_contains;
+  r "string-split" prim_string_split;
   r "string-trim" prim_string_trim;
   r "string-replace" prim_string_replace;
   r "string-downcase" prim_string_downcase;
