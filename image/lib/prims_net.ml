@@ -1,7 +1,7 @@
 (** Prim registration extracted from session.ml (Eio-floor Phase 4). *)
 open Session_types
 
-(* http-get hardening (i-1787971188) ---------------------------------- *)
+(* outbound-HTTP hardening (i-1787971188) ----------------------------- *)
 
 (* Unique temp file created with perms 0o600 via Unix.openfile O_EXCL —
    never world-readable, no name/symlink race. Filename.temp_file is
@@ -97,7 +97,18 @@ let egress_blocked (url : string) : bool =
                | Unix.ADDR_UNIX _ -> true)
             addrs)
 
-let do_http_get (url : string)
+(* Shared outbound-HTTP engine behind http-get (borge/image.borg
+   primitives-layer) and http-post (borge/image.borg outbound-http).
+   Same curl-backed shape, same payload-dict contract, same
+   transient-vs-semantic discipline; [name] tags Prim_errors, [meth]
+   is the HTTP verb, [body] is Some for send verbs (POST:
+   --data-binary @file). Hardening (i-1787971188) covers both verbs:
+   SSRF egress blocklist, 0600 O_EXCL temp files, Fun.protect
+   cleanup. *)
+let do_http (name : string)
+    (meth : string)
+    (body : string option)
+    (url : string)
     (req_hdrs : (string * string) list)
     : Pricklypear_lisp.Ast.value =
   let open Pricklypear_lisp.Ast in
@@ -134,23 +145,41 @@ let do_http_get (url : string)
          raise
            (Interp_error
               (Prim_error
-                 ( "http-get"
+                 ( name
                  , "blocked: target host resolves to a private/loopback/link-local address (egress restricted)"
                  , "denied" ))));
-  let hdr_tmp = ref "" and body_tmp = ref "" in
-  (* Fun.protect keeps hdr/body temp files off disk on every path,
+  let hdr_tmp = ref "" and body_tmp = ref "" and req_tmp = ref "" in
+  (* Fun.protect keeps hdr/body/req temp files off disk on every path,
      including exceptions from temp creation, curl and parsing. *)
   Fun.protect
     (fun () ->
       try
         hdr_tmp := make_private_temp "pp_http_" ".hdr";
         body_tmp := make_private_temp "pp_http_" ".body";
+        (* Send-verb payload: write the body to a private temp file and
+           hand curl --data-binary @file (never the command line). *)
+        (match body with
+         | Some b ->
+             let req = make_private_temp "pp_http_" ".req" in
+             req_tmp := req;
+             let oc = open_out req in
+             output_string oc b;
+             close_out oc
+         | None -> ());
+        let meth_args =
+          match body with
+          | Some _ ->
+              Printf.sprintf "-X %s --data-binary @%s" (shell_quote meth)
+                (shell_quote !req_tmp)
+          | None -> ""
+        in
         let cmd =
           Printf.sprintf
-            "curl -sS -L --max-redirs 5 -D %s -o %s --max-time %d %s %s 2>&1"
+            "curl -sS -L --max-redirs 5 -D %s -o %s --max-time %d %s %s %s 2>&1"
             (shell_quote !hdr_tmp)
             (shell_quote !body_tmp)
             (max 1 (timeout / 1000))
+            meth_args
             hdr_args
             (shell_quote url)
         in
@@ -159,7 +188,7 @@ let do_http_get (url : string)
             Lwt_process.pread ~timeout:(float_of_int timeout /. 1000. +. 5.)
               (Lwt_process.shell cmd))
         in
-        let body =
+        let resp_body =
           try
             let ic = open_in !body_tmp in
             let n = in_channel_length ic in
@@ -211,7 +240,7 @@ let do_http_get (url : string)
           raise
             (Interp_error
                (Prim_error
-                  ( "http-get"
+                  ( name
                   , "transient: " ^ curl_err
                   , "transient" )))
         else if status = 0 then
@@ -219,7 +248,7 @@ let do_http_get (url : string)
           raise
             (Interp_error
                (Prim_error
-                  ( "http-get"
+                  ( name
                   , "transient: no HTTP response"
                   , "transient" )))
         else
@@ -241,7 +270,7 @@ let do_http_get (url : string)
               ; ("status", `Int status)
               ; ("headers",
                  (try from_string headers_json with _ -> `Null))
-              ; ("body", `String body)
+              ; ("body", `String resp_body)
               ; ("err", `String err)
               ; ("kind", `String kind) ]
           in
@@ -253,12 +282,19 @@ let do_http_get (url : string)
             raise
               (Interp_error
                  (Prim_error
-                    ( "http-get"
+                    ( name
                     , "transient: " ^ Printexc.to_string exn
                     , "transient" ))))
     ~finally:(fun () ->
       (try if !hdr_tmp <> "" then Sys.remove !hdr_tmp with _ -> ());
-      (try if !body_tmp <> "" then Sys.remove !body_tmp with _ -> ()))
+      (try if !body_tmp <> "" then Sys.remove !body_tmp with _ -> ());
+      (try if !req_tmp <> "" then Sys.remove !req_tmp with _ -> ()))
+
+(* Compatibility alias: http-get engine under its pre-refactor name
+   (session.ml binding + http_get_test.ml). *)
+let do_http_get (url : string) (req_hdrs : (string * string) list) :
+    Pricklypear_lisp.Ast.value =
+  do_http "http-get" "GET" None url req_hdrs
 
 let register (t : t) (tbl : Primitives.t) : unit =
   let deny_anon name =
@@ -295,38 +331,61 @@ let register (t : t) (tbl : Primitives.t) : unit =
     in
     t.is_admin || String.ends_with ~suffix:"/agent" uname
   in
+  (* Identity gate shared by http-get / http-post (image.outbound-http):
+     SSRF confinement is by CALLER, not by destination allowlist. *)
+  let gate_http name =
+    let uname =
+      match Request_context.get () with
+      | Some c -> (Request_context.manifest c).username
+      | None -> t.manifest.username
+    in
+    if uname = "anonymous" then deny_anon name
+    else if not (is_admin_or_agent ()) then
+      (raise (Pricklypear_lisp.Ast.Interp_error
+                (Pricklypear_lisp.Ast.Prim_error
+                   (name, "denied (admin/agent/human only)", "denied"))))
+  in
+  (* headers-json -> (string * string) list; same Assoc format as the
+     payload's "headers" field. Unknown shapes parse to []. *)
+  let hdrs_of_json (hdrs_json : string) : (string * string) list =
+    (try
+       let j = Yojson.Safe.from_string hdrs_json in
+       (match j with
+        | `Assoc kvs ->
+            List.filter_map
+              (fun (k, v) ->
+                 match v with
+                 | `String s -> Some (k, s)
+                 | `Int n -> Some (k, string_of_int n)
+                 | _ -> None)
+              kvs
+        | _ -> [])
+     with _ -> [])
+  in
   Primitives.register tbl "http-get"
     (fun args ->
-      let uname =
-        match Request_context.get () with
-        | Some c -> (Request_context.manifest c).username
-        | None -> t.manifest.username
-      in
-      if uname = "anonymous" then deny_anon "http-get"
-      else if not (is_admin_or_agent ()) then
-        (raise (Pricklypear_lisp.Ast.Interp_error
-                  (Pricklypear_lisp.Ast.Prim_error
-                     ("http-get", "denied (admin/agent/human only)", "denied"))))
-      else
-        match args with
-        | [ Pricklypear_lisp.Ast.VStr url ] ->
-            do_http_get url []
-        | [ Pricklypear_lisp.Ast.VStr url; Pricklypear_lisp.Ast.VStr hdrs_json ] ->
-            let hdrs =
-              (try
-                 let j = Yojson.Safe.from_string hdrs_json in
-                 (match j with
-                  | `Assoc kvs ->
-                      List.filter_map
-                        (fun (k, v) ->
-                          match v with
-                          | `String s -> Some (k, s)
-                          | `Int n -> Some (k, string_of_int n)
-                          | _ -> None)
-                        kvs
-                  | _ -> [])
-               with _ -> [])
-            in
-            do_http_get url hdrs
-        | _ ->
-            (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("http-get", "need url [headers-json]", "bad-args")))))
+      gate_http "http-get";
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr url ] ->
+          do_http "http-get" "GET" None url []
+      | [ Pricklypear_lisp.Ast.VStr url; Pricklypear_lisp.Ast.VStr hdrs_json ] ->
+          do_http "http-get" "GET" None url (hdrs_of_json hdrs_json)
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("http-get", "need url [headers-json]", "bad-args")))));
+  (* (http-post url [headers-json [body]]) -> payload dict VStr
+     {ok,status,headers,body,err,kind}. Same gate + contract as
+     http-get (borge/image.borg outbound-http). 4xx/5xx RETURN; curl
+     transport failure RAISES transient so jobs backoff sees it. *)
+  Primitives.register tbl "http-post"
+    (fun args ->
+      gate_http "http-post";
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr url ] ->
+          do_http "http-post" "POST" (Some "") url []
+      | [ Pricklypear_lisp.Ast.VStr url; Pricklypear_lisp.Ast.VStr hdrs_json ] ->
+          do_http "http-post" "POST" (Some "") url (hdrs_of_json hdrs_json)
+      | [ Pricklypear_lisp.Ast.VStr url; Pricklypear_lisp.Ast.VStr hdrs_json;
+          Pricklypear_lisp.Ast.VStr body ] ->
+          do_http "http-post" "POST" (Some body) url (hdrs_of_json hdrs_json)
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("http-post", "need url [headers-json [body]]", "bad-args")))))

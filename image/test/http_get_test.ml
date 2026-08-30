@@ -75,6 +75,31 @@ let tests = [
     | exn ->
         Alcotest.failf "expected Prim_error transient, got %s"
           (Printexc.to_string exn));
+  ("http-post transient raises (closed port)", `Quick, fun () ->
+    (* Same transient contract as http-get (image.outbound-http): a
+       send verb raises Prim_error named for the prim. Egress is
+       unrestricted for it (the SSRF blocklist would refuse the
+       loopback target before curl runs); env restored after. *)
+    Unix.putenv "PP_NET_EGRESS_UNRESTRICTED" "1";
+    let port = grab_closed_port () in
+    let url = Printf.sprintf "http://127.0.0.1:%d/" port in
+    try
+      let _ =
+        Pricklypear_image_lib.Prims_net.do_http "http-post" "POST"
+          (Some "x") url [("_timeout_ms", "3000")]
+      in
+      Unix.putenv "PP_NET_EGRESS_UNRESTRICTED" "0";
+      Alcotest.fail "expected http-post to raise on closed port (transient)"
+    with
+    | Interp_error (Prim_error ("http-post", msg, kind)) ->
+        Unix.putenv "PP_NET_EGRESS_UNRESTRICTED" "0";
+        Alcotest.(check string) "kind" "transient" kind;
+        Alcotest.(check bool) "msg mentions transient" true
+          (String.length msg > 0)
+    | exn ->
+        Unix.putenv "PP_NET_EGRESS_UNRESTRICTED" "0";
+        Alcotest.failf "expected Prim_error transient, got %s"
+          (Printexc.to_string exn));
   ("http-get bad-args raises on wrong arity", `Quick, fun () ->
     (* The arg-shape check is in the registered prim, not do_http_get.
        We can't easily call the registered prim without a Session.t.

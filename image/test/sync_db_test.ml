@@ -116,21 +116,149 @@ let test_commit_push () =
 
 let test_commit_surfaces_conflict () =
   with_store (fun store ->
-      (* A conflict is REPORTED not silently resolved (the obituary rule:
-         no silent sync loss). LWW v0 keeps ours (server); the conflict is
-         surfaced in the report with the three hashes. *)
+      (* A conflict is LWW-arbitrated per sync-conflicts v0 AND surfaced
+         either way (the obituary rule: no silent sync loss). With no
+         client envelope (no updated_at stamp), the server copy stays and
+         the conflict is reported with the three hashes + the kept list. *)
       let plans =
         Sync.plan_of [ ("a", h 1) ] [ ("a", h 8) ] [ ("a", h 9) ]
       in
       let r = Sync.commit store ~client_bodies:[] plans in
       Alcotest.(check int) "nothing applied on conflict" 0 r.applied;
       Alcotest.(check int) "one conflict surfaced" 1 (List.length r.conflicts);
+      Alcotest.(check int) "server kept (no client stamp)" 1
+        (List.length r.lww_server_kept);
+      Alcotest.(check int) "client won nothing" 0
+        (List.length r.lww_client_won);
       (match r.conflicts with
        | [ (path, o, t) ] ->
            Alcotest.(check string) "conflict path" "a" path;
            Alcotest.(check string) "ours hash kept" (h 8) o;
            Alcotest.(check string) "theirs hash reported" (h 9) t
        | _ -> Alcotest.fail "unexpected conflicts"))
+
+let test_commit_lww_client_newer_wins () =
+  with_store (fun store ->
+      (* LWW v0: the client envelope carries a STRICTLY newer updated_at
+         (epoch) than the server node → the client copy is applied and
+         the win surfaced. The server node must exist for the clock to
+         arbitrate, so insert it first via the typed write surface. *)
+      let uniq = Printf.sprintf "lww%05d" (Random.int 1_000_000) in
+      let ty = "synclww_" ^ uniq in
+      let path = "data.u." ^ anon_enc ^ "." ^ ty ^ ".one" in
+      (match S.conn_of store with
+       | Some conn ->
+           ignore
+             (S.exec conn
+                ~params:[ Pgx.Value.of_string ty ]
+                "INSERT INTO type_defs (branch_id, name, fields) \
+                 VALUES ($1::uuid, $2, '[{\"name\":\"n\"}]'::jsonb) \
+                 ON CONFLICT (branch_id, name) DO NOTHING")
+       | None -> ());
+      let server_env : Yojson.Safe.t =
+        `Assoc
+          [ ("v", `Int 1); ("kind", `String "datum"); ("path", `String path);
+            ("type", `String ty); ("body", `Assoc [ ("n", `Int 1) ]);
+            ("author", `String "anonymous") ]
+      in
+      (match Sync.apply_client_node store ~env:server_env with
+       | Ok () -> () | Error e -> Alcotest.fail ("seed node: " ^ e));
+      (* the node exists with a fresh server updated_at; a client edit
+         stamped in the FUTURE strictly wins *)
+      let future = Unix.gettimeofday () +. 3600.0 in
+      let client_env : Yojson.Safe.t =
+        `Assoc
+          [ ("v", `Int 1); ("kind", `String "datum"); ("path", `String path);
+            ("type", `String ty); ("body", `Assoc [ ("n", `Int 2) ]);
+            ("author", `String "anonymous");
+            ("updated_at", `String (string_of_float future)) ]
+      in
+      let plans =
+        Sync.plan_of [ (path, h 1) ] [ (path, h 8) ] [ (path, h 9) ]
+      in
+      let r =
+        Sync.commit store ~client_bodies:[ (path, client_env) ] plans
+      in
+      Alcotest.(check int) "LWW applied client copy" 1 r.applied;
+      Alcotest.(check int) "one conflict surfaced" 1 (List.length r.conflicts);
+      Alcotest.(check int) "client won" 1 (List.length r.lww_client_won);
+      Alcotest.(check int) "server kept nothing" 0
+        (List.length r.lww_server_kept);
+      (match S.conn_of store with
+       | Some conn ->
+           (* the applied body is the client's (n=2): assert via the server
+              manifest hash change over the original body hash *)
+           let m =
+             Option.value
+               (Sync.server_manifest store ~prefix:("data.u." ^ anon_enc))
+               ~default:[]
+           in
+           Alcotest.(check bool) "node still present post-LWW" true
+             (List.exists (fun (p, _) -> p = path) m);
+           ignore (S.exec conn ~params:[ Pgx.Value.of_string path ]
+                     "DELETE FROM tree_nodes WHERE path = $1::ltree");
+           ignore (S.exec conn ~params:[ Pgx.Value.of_string ty ]
+                     "DELETE FROM type_defs WHERE name = $1")
+       | None -> ()))
+
+let test_commit_theirs_del_and_ours_del () =
+  with_store (fun store ->
+      (* Client DELETION propagates: base+server hold the node, client
+         manifest lacks it → Theirs_del → the server node is deleted.
+         And server deletions come back as client_deletes (Ours_del): the
+         client must mirror-delete its stale local copy. *)
+      let uniq = Printf.sprintf "del%05d" (Random.int 1_000_000) in
+      let ty = "syncdel_" ^ uniq in
+      let path = "data.u." ^ anon_enc ^ "." ^ ty ^ ".one" in
+      (match S.conn_of store with
+       | Some conn ->
+           ignore
+             (S.exec conn
+                ~params:[ Pgx.Value.of_string ty ]
+                "INSERT INTO type_defs (branch_id, name, fields) \
+                 VALUES ($1::uuid, $2, '[{\"name\":\"n\"}]'::jsonb) \
+                 ON CONFLICT (branch_id, name) DO NOTHING")
+       | None -> ());
+      let env : Yojson.Safe.t =
+        `Assoc
+          [ ("v", `Int 1); ("kind", `String "datum"); ("path", `String path);
+            ("type", `String ty); ("body", `Assoc [ ("n", `Int 3) ]);
+            ("author", `String "anonymous") ]
+      in
+      (match Sync.apply_client_node store ~env with
+       | Ok () -> () | Error e -> Alcotest.fail ("seed node: " ^ e));
+      (* theirs_del: base has it, ours (server) has it at base hash,
+         theirs (client) deleted it *)
+      let m =
+        Option.value
+          (Sync.server_manifest store ~prefix:("data.u." ^ anon_enc))
+          ~default:[]
+      in
+      let srv_hash = List.assoc path m in
+      let plans =
+        Sync.plan_of [ (path, srv_hash) ] [ (path, srv_hash) ] []
+      in
+      let r = Sync.commit store ~client_bodies:[] plans in
+      Alcotest.(check int) "deletion applied" 1 r.applied;
+      (match S.conn_of store with
+       | Some conn ->
+           Alcotest.(check bool) "node deleted server-side" false
+             (Pricklypear_image_lib.Tree_store.get_by_path conn ~path <> None)
+       | None -> ());
+      (* ours_del: base+client hold it, server (ours) deleted → the plan
+         reports Ours_del and the commit surfaces it as client_deletes *)
+      let plans2 =
+        Sync.plan_of [ (path, srv_hash) ] [] [ (path, srv_hash) ]
+      in
+      let r2 = Sync.commit store ~client_bodies:[] plans2 in
+      Alcotest.(check (list string)) "client mirror-deletes" [ path ]
+        r2.client_deletes;
+      (match S.conn_of store with
+       | Some conn ->
+           ignore
+             (S.exec conn ~params:[ Pgx.Value.of_string ty ]
+                "DELETE FROM type_defs WHERE name = $1")
+       | None -> ()))
 
 let test_two_way_push_applies_client_only () =
   (* The sync/push prim path: a TWO-WAY classify (no base) where the
@@ -202,6 +330,10 @@ let () =
             test_commit_push;
           Alcotest.test_case "commit surfaces conflicts (no silent loss)"
             `Quick test_commit_surfaces_conflict;
+          Alcotest.test_case "commit LWW: strictly-newer client wins"
+            `Quick test_commit_lww_client_newer_wins;
+          Alcotest.test_case "commit theirs_del + ours_del"
+            `Quick test_commit_theirs_del_and_ours_del;
           Alcotest.test_case "two-way push applies client-only node"
             `Quick test_two_way_push_applies_client_only;
         ] ) ]

@@ -64,7 +64,13 @@ let select_cols =
    JSON text turned every non-string arg into a string literal and broke
    numerics/json — see the runner agent-note in borge/jobs.borg (4.1). *)
 let eval_src ~(fn : string) ~(args : string) : string =
-  Printf.sprintf "(%s %s)" fn args
+  (* Zero-arg convention: args stored as JSON "[]"/"null"/"" fire as a
+     0-arity call. Anything else is spliced positionally (must therefore
+     be Nopales-readable, e.g. "[1 2]" is NOT — pass "1 2"-style JSON
+     scalars or a JSON string). *)
+  let a = String.trim args in
+  if a = "" || a = "[]" || a = "null" then Printf.sprintf "(%s)" fn
+  else Printf.sprintf "(%s %s)" fn args
 
 let row_to_job row : job option =
   try

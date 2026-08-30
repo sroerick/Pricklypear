@@ -208,7 +208,7 @@ let html_prims = [ "render-html"; "redirect" ]
 (* Outbound network (HTTP fetch). Gated to admin/agent at the prim level
    (session.ml); tracked as a capability badge so public routes and AI install
    policy can deny it by default. *)
-let net_prims = [ "http-get" ]
+let net_prims = [ "http-get"; "http-post" ]
 (* Author tools that freeze into function_defs or drive the model (Ai + WriteDb). *)
 let ai_write_prims = [
   "propose-function"; "install-function"; "agent-task";
