@@ -73,6 +73,7 @@ log "pack public source tree"
     --exclude='scripts/post-receive-prod-hook.ksh' \
     --exclude='*.pdf' \
     --exclude='*.book.manifest' \
+    --exclude='*.book.json' \
     . \
   | tar -C "$STAGE/src" -xf -
 ) 2>/dev/null || {
@@ -108,6 +109,15 @@ if [ -x scripts/public_artifacts.sh ]; then
   fi
   if [ ! -f "$STAGE/public/book.pdf" ]; then
     log "WARN: release has no book.pdf"
+  fi
+  # habitat-book: reader flavor + loader feed ride in the release
+  # archive when borge was available at build time.
+  if [ -f "$STAGE/public/pricklypear-book-reader.pdf" ]; then
+    log "reader flavor: $STAGE/public/pricklypear-book-reader.pdf"
+  fi
+  if [ -f "$STAGE/public/pricklypear-book.book.json" ]; then
+    log "loader feed: $STAGE/public/pricklypear-book.book.json" \
+        "(seed: scripts/load-book.sh <json> against the deployed image)"
   fi
 else
   log "WARN: scripts/public_artifacts.sh missing"
