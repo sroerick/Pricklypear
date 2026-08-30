@@ -5,7 +5,9 @@
      /book/chapter render + reader suppression (loop 17), run-button
      click-eval (loop 18), book/verify hole render
      (scripts/smoke_book.py), export/print order parity (borge loop
-     12). course-documents below stays planned — courses are P3.1.|) *)
+     12). course-documents verified 2026-08-31 (P3.1, loop 23) —
+     /book/course/cs-interpreters + the compose-never-copy smoke; all
+     five top-level smokes now hold.|) *)
  (* agent note (|2026-08-29 authored from the cs-curriculum design session
      (docs/cs-curriculum.md). Probe of `borge book print .` on the
      post-pivot tree: chapters land p788+ in readdir order, inline not
@@ -141,7 +143,18 @@
 
   (subsection web-renderer
    (doc "Nopales package `book`: /book index of borg chapters + package specs; /book/chapter/<slug> pretty-printed with references, example blocks, reader/workshop toggle")
-   (status planned)
+   (status implemented)
+   (* agent note (|2026-08-30 all four smokes verified. Loops 17+20:
+       /book index lists the 34 borg chapters in export order + the
+       spec + code corpora; chapter pages render headings/prose/sections
+       from tree rows; reader strips statuses + verify blocks, workshop
+       shows both. Loop 23 (P3.1): \"course groupings\" verified — /book
+       lists the Courses section (notes kind=course via tree/find-by)
+       and a second throwaway course renders the SAME chapter by
+       reference with zero tree duplication.
+       Kernel delta rode along in P2.2: prose-tokens/render-tokens
+       one-scan prims + string-split promotion (budget, see libs/book
+       obituary).|) *)
    (verify
     (smoke "GET /book lists chapters in exported order with course groupings")
     (smoke "chapter page renders headings/prose/code/examples from tree rows")
@@ -207,7 +220,22 @@
 
   (subsection course-documents
    (doc "courses as typed outline documents over chapters: front matter, ordered chapters, lab nodes — compose, never copy")
-   (status planned)
+   (status implemented)
+   (* agent note (|2026-08-31 both smokes verified by scripts/
+       smoke_book.py section 8 on the local dev image: course doc
+       course/cs-interpreters renders /book/course/cs-interpreters
+       with the ordered reading list (document order asserted),
+       chapter status badges from the seeded rows, front matter +
+       labs sections, reader + workshop registers; a throwaway second
+       course referencing the same chapter adds ZERO rows to
+       data.book.ch — compose, never copy proven. Course root
+       course/cs-interpreters.borg (repo) exports the 4-chapter paper
+       via borge book export/print --root; the canonical walk excludes
+       course/ roots (borge 9c1d52e). Renderer notes: reading nodes
+       reference chapters by a `chapter: <label>` first body line;
+       unresolvable refs render as holes; kernel count is
+       VList-strict so the run length uses book/course-len (kernel
+       issue filed in log/issues).|) *)
    (verify
     (smoke "course doc `course/cs-interpreters` renders its ordered reading list with chapter status badges")
     (smoke "same chapter renders inside two courses without duplication in the tree"))
