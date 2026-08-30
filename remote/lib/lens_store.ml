@@ -479,9 +479,85 @@ let node_manifest ~(lens : lens) : (string * string) list =
     walk prefix_dir []
     |> List.filter (fun f ->
          let b = Filename.basename f in
-         b <> "__root.json" && b <> "__ancestry.json" && b <> "__snapshot.json")
+         b <> "__root.json" && b <> "__ancestry.json" && b <> "__snapshot.json"
+         && b <> "__base.json")
   in
   List.filter_map path_hash_of_file files
+
+(** delete_node: remove the node envelope at [path] (the Ours_del mirror:
+    the server deleted the node, the client's stale copy goes too).
+    Best-effort empty-parent cleanup; returns true when a file was
+    removed. *)
+let delete_node ~(lens : lens) (path : string) : bool =
+  let file = path_to_file ~root:lens.root path in
+  if Sys.file_exists file then begin
+    (try Sys.remove file with _ -> ());
+    (* prune now-empty parent dirs up to the lens root (cosmetic; the
+       filesystem index regenerates on demand) *)
+    let rec prune d =
+      let root = Filename.concat lens.root "" in
+      if d <> lens.root && String.length d > String.length root then begin
+        (try if Sys.readdir d |> Array.length = 0 then Sys.rmdir d with _ -> ());
+        prune (Filename.dirname d)
+      end
+    in
+    prune (Filename.dirname file);
+    true
+  end
+  else false
+
+(* ====================================================================
+   BASE MANIFEST (sync's common ancestor, client side)
+
+   The (path, hash) manifest the server returned at the client's last
+   successful sync round (merged_manifest). Recorded to __base.json and
+   offered as the OPTIONAL third argument of the next sync/push so the
+   server runs the full three-way plan: clean client edits apply,
+   client DELETIONS propagate (theirs_del), server deletions come back
+   as client_delete_paths (Ours_del), conflicts LWW-arbitrate. Without
+   a recorded base the round degrades to two-way (additions + LWW only)
+   — the exact behavior before a first sync ever ran.
+   ==================================================================== *)
+
+let base_file (root : string) : string =
+  Filename.concat root "__base.json"
+
+(** Record the last-synced (merged) server manifest as the next round's
+    base. Atomic (rename(2)) like every substrate write. *)
+let record_base_manifest ~(lens : lens) (m : (string * string) list) : unit =
+  let json =
+    Yojson.Safe.to_string
+      (`Assoc
+         [ ( "paths"
+           , `List
+               (List.map
+                  (fun (p, h) -> `List [ `String p; `String h ])
+                  m)
+           )
+         ; ("recorded_at", `String (string_of_float (Unix.gettimeofday ())))
+         ])
+  in
+  atomic_write (base_file lens.root) json
+
+(** Read back the recorded base manifest (empty when none was ever
+    recorded — a fresh lens syncs two-way first). *)
+let base_manifest ~(lens : lens) : (string * string) list =
+  let f = base_file lens.root in
+  if not (Sys.file_exists f) then []
+  else
+    (try
+       match Yojson.Safe.from_string (read_file f) with
+       | `Assoc kv -> (
+           match List.assoc_opt "paths" kv with
+           | Some (`List rows) ->
+               List.filter_map
+                 (function
+                   | `List [ `String p; `String h ] -> Some (p, h)
+                   | _ -> None)
+                 rows
+           | _ -> [])
+       | _ -> []
+     with _ -> [])
 
 (* ====================================================================
    SNAPSHOT COORDINATE (sync's common ancestor)

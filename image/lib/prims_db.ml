@@ -489,52 +489,108 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
            | None -> ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("sync/plan", "manifest must be [[path, hash], …]", "bad-args"))))))
       | _ -> ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("sync/plan", "need client-manifest [, base-manifest]", "bad-args"))))));
 
-  (* sync/push — apply a client two-way push for the caller's data
-     subtree (borge/local-first.borg sync, v1 two-way / data-only).
+  (* sync/push — apply a client push for the caller's data subtree
+     (borge/local-first.borg sync, v1 two-way + three-way / data-only).
      Takes the client (path, hash) manifest (same shape as sync/plan)
      plus a list of (path, envelope-json) pairs for the bodies the
-     client holds. The server classifies its own data.u.<user>.*
-     manifest against the client's, then for each ClientOnly path
-     (server missing it) applies the client body through the typed-
-     boundary-validated datum write surface (Sync.apply_client_node).
-     Diverge paths are REPORTED, not auto-merged (the-glochids
-     conflict resolution is planned; v1 surfaces them honestly
-     rather than silently clobbering). ServerOnly paths are returned
-     so the client can pull them. Returns a JSON object:
-       {applied, client_only, server_only, diverge,
-        server_only_paths, diverge_paths, generation}
-     where generation is the new (branch, generation) coordinate to
-     pin as the next merge base. Code-lens sync (the b.<lens> code
-     paths) is NOT in scope here - it is the branch-pointer move
-     (promote/merge), a separate path; callers filter the manifest to
-     data paths first.
-       (sync/push client-manifest client-bodies)
+     client holds, and an OPTIONAL third argument: the base manifest
+     the client recorded at its last successful sync (the common
+     ancestor — the __base.json the client pins from the previous
+     round's merged_manifest). The server classifies its own
+     data.u.<user>.* manifest against the client's, then:
+
+       - ClientOnly paths (server missing the node) are applied through
+         the typed-boundary-validated datum write surface
+         (Sync.apply_client_node).
+       - Diverge/conflict paths (both sides hold different hashes) are
+         LWW-ARBITRATED per the-glochids v0: the client envelope wins iff
+         its updated_at (epoch, stamped by the lens substrate on every
+         local put) is STRICTLY newer than the server node's; otherwise
+         the server copy stays. EVERY resolution is surfaced with its
+         winner (lww_client_won / lww_server_kept) — the obituary rule
+         applies to the losing side; nothing is silently dropped.
+       - With a base, the FULL three-way plan (Sync.plan_of) runs:
+         clean client edits apply (theirs_add/theirs_mod), client
+         DELETIONS propagate (theirs_del), server deletions come back
+         as client_delete_paths for the client to mirror locally, and
+         conflicts get the same LWW arbitration.
+       - ServerOnly paths are returned so the client can pull them.
+
+     Returns a JSON object:
+       {mode, applied, client_only, server_only, diverge,
+        server_only_paths, diverge_paths, conflicts, lww_client_won,
+        lww_server_kept, client_delete_paths, merged_manifest,
+        generation}
+     where merged_manifest is the server's post-apply subtree manifest —
+     the (path, hash) list the client records as its NEXT round's base —
+     and generation is the new (branch, generation) coordinate to pin.
+     Code-lens sync (the b.<lens> code paths) is NOT in scope here - it
+     is the branch-pointer move (promote/merge), a separate path; callers
+     filter the manifest to data paths first.
+       (sync/push client-manifest client-bodies [base-manifest])
      client-manifest: [[path, hash], ...]  (same as sync/plan)
-     client-bodies:    [[path, envelope-json-str], ...] *)
+     client-bodies:    [[path, envelope-json-str], ...]
+     base-manifest:    [[path, hash], ...]  (client's last-synced state) *)
   register_crud "sync/push"
     (fun args ->
+      (* [cm] client manifest; [bodies] client envelope bodies;
+         [base] optional last-synced manifest — three-way when present. *)
+      let parse_bodies body_pairs =
+        match body_pairs with
+        | Pricklypear_lisp.Ast.VList pairs ->
+            List.filter_map
+              (function
+               | Pricklypear_lisp.Ast.VList
+                   [ Pricklypear_lisp.Ast.VStr p;
+                     Pricklypear_lisp.Ast.VStr env ] ->
+                   (try Some (p, Yojson.Safe.from_string env)
+                    with _ -> None)
+               | _ -> None)
+              pairs
+        | _ -> []
+      in
+      let lww_diverge ~server ~cb (diverge : (string * string) list) =
+        (* the-glochids v0: LWW-arbitrate diverge pairs. Client strictly
+           newer wins (applied); otherwise the server copy stays. Every
+           resolution is surfaced with its winner. *)
+        let client_paths = List.map fst diverge in
+        let epochs = Sync.server_updated_at t.store client_paths in
+        List.fold_left
+          (fun (won, kept) (p, _) ->
+            let cl =
+              match List.assoc_opt p cb with
+              | Some env -> Sync.envelope_updated_at env
+              | None -> None
+            in
+            let client_wins =
+              match List.assoc_opt p epochs with
+              | Some sv -> Sync.lww_client_wins cl sv
+              | None -> false
+            in
+            if client_wins then
+              match List.assoc_opt p cb with
+              | Some env -> (
+                  match Sync.apply_client_node t.store ~env with
+                  | Ok () -> (p :: won, kept)
+                  | Error _ -> (won, p :: kept))
+              | None -> (won, p :: kept)
+            else (won, p :: kept))
+          ([], []) diverge
+      in
       match args with
       | [ cm; bodies ] ->
           (match parse_manifest cm, bodies with
-           | Some c, Pricklypear_lisp.Ast.VList body_pairs ->
+           | Some c, _ ->
                let prefix = sync_user_prefix () in
                (match Sync.server_manifest t.store ~prefix with
                 | None ->
                     ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("sync/push", "no DB", "failed")))))
                 | Some server ->
+                    let cb = parse_bodies bodies in
                     let r = Sync.classify server c in
-                    let cb =
-                      List.filter_map
-                        (function
-                         | Pricklypear_lisp.Ast.VList
-                             [ Pricklypear_lisp.Ast.VStr p;
-                               Pricklypear_lisp.Ast.VStr env ] ->
-                             (try Some (p, Yojson.Safe.from_string env)
-                              with _ -> None)
-                         | _ -> None)
-                        body_pairs
-                    in
-                    let applied =
+                    (* 1. ClientOnly pushes (server missing the node) —
+                       no arbitration needed, the server has no copy. *)
+                    let applied_co =
                       List.fold_left
                         (fun n (p, _) ->
                           match List.assoc_opt p cb with
@@ -545,6 +601,11 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
                           | None -> n)
                         0 r.client_only
                     in
+                    (* 2. Diverge pairs LWW-arbitrate (the-glochids v0). *)
+                    let lww_won, lww_kept =
+                      lww_diverge ~server ~cb r.diverge
+                    in
+                    let applied = applied_co + List.length lww_won in
                     let bid = Store.current_branch_id t.store in
                     let gen =
                       match Store.current_generation t.store ~branch_id:bid with
@@ -554,7 +615,8 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
                     let json =
                       Yojson.Safe.to_string
                         (`Assoc
-                           [ ("applied", `Int applied)
+                           [ ("mode", `String "two-way")
+                           ; ("applied", `Int applied)
                            ; ("client_only",
                               `Int (List.length r.client_only))
                            ; ("server_only",
@@ -568,6 +630,12 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
                               `List (List.map
                                        (fun (p, _) -> `String p)
                                        (Sync.normalize r.diverge)))
+                           ; ("lww_client_won",
+                              `List (List.map (fun p -> `String p)
+                                       (List.rev lww_won)))
+                           ; ("lww_server_kept",
+                              `List (List.map (fun p -> `String p)
+                                       (List.rev lww_kept)))
                            ; ("generation",
                               `String (Int64.to_string gen))
                            ])
@@ -575,8 +643,93 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
                     (Pricklypear_lisp.Ast.VStr json))
            | _ ->
                ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("sync/push", "args must be (client-manifest client-bodies)", "bad-args"))))))
+      | [ cm; bodies; base ] ->
+          (match parse_manifest cm, bodies, parse_manifest base with
+           | Some c, _, Some base ->
+               let prefix = sync_user_prefix () in
+               (match Sync.server_manifest t.store ~prefix with
+                | None ->
+                    ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("sync/push", "no DB", "failed")))))
+                | Some server ->
+                    let cb = parse_bodies bodies in
+                    (* the full three-way: base = last-synced, ours =
+                       server, theirs = client. Clean client edits and
+                       deletions apply; conflicts LWW-arbitrate; server
+                       deletions come back as client_delete_paths. *)
+                    let plans = Sync.plan_of base server c in
+                    let report = Sync.commit t.store ~client_bodies:cb plans in
+                    let r = Sync.classify server c in
+                    let bid = Store.current_branch_id t.store in
+                    let gen =
+                      match Store.current_generation t.store ~branch_id:bid with
+                      | Some n -> n
+                      | None -> 0L
+                    in
+                    (* post-apply server subtree = the client's next
+                       round's base (the merged state both sides now
+                       hold — or will, once the client mirrors the
+                       deletions and pulls). *)
+                    let merged =
+                      match Sync.server_manifest t.store ~prefix with
+                      | Some m -> m
+                      | None -> []
+                    in
+                    (* pulls = server-only (client missing) + conflicts
+                       the LWW kept on the server (client stale copy must
+                       converge to the winner or the pair re-conflicts
+                       every round). *)
+                    let pull =
+                      Sync.normalize
+                        (r.server_only
+                         @ List.map (fun p -> (p, "")) report.lww_server_kept)
+                    in
+                    let json =
+                      Yojson.Safe.to_string
+                        (`Assoc
+                           [ ("mode", `String "three-way")
+                           ; ("applied", `Int report.applied)
+                           ; ("client_only",
+                              `Int (List.length r.client_only))
+                           ; ("server_only",
+                              `Int (List.length r.server_only))
+                           ; ("diverge", `Int (List.length r.diverge))
+                           ; ("server_only_paths",
+                              `List (List.map
+                                       (fun (p, _) -> `String p)
+                                       (Sync.normalize r.server_only)))
+                           ; ("diverge_paths",
+                              `List (List.map
+                                       (fun (p, _) -> `String p)
+                                       (Sync.normalize r.diverge)))
+                           ; ("conflicts",
+                              `List (List.map
+                                       (fun (p, _, _) -> `String p)
+                                       (List.rev report.conflicts)))
+                           ; ("lww_client_won",
+                              `List (List.map (fun p -> `String p)
+                                       (List.rev report.lww_client_won)))
+                           ; ("lww_server_kept",
+                              `List (List.map (fun p -> `String p)
+                                       (List.rev report.lww_server_kept)))
+                           ; ("client_delete_paths",
+                              `List (List.map (fun p -> `String p)
+                                       (List.rev report.client_deletes)))
+                           ; ("pull_paths",
+                              `List (List.map (fun (p, _) -> `String p) pull))
+                           ; ("merged_manifest",
+                              `List (List.map
+                                       (fun (p, h) ->
+                                         `List [ `String p; `String h ])
+                                       (Sync.normalize merged)))
+                           ; ("generation",
+                              `String (Int64.to_string gen))
+                           ])
+                    in
+                    (Pricklypear_lisp.Ast.VStr json))
+           | _ ->
+               ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("sync/push", "args must be (client-manifest client-bodies [base-manifest])", "bad-args"))))))
       | _ ->
-          ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("sync/push", "need (client-manifest client-bodies)", "bad-args"))))));
+          ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("sync/push", "need (client-manifest client-bodies [base-manifest])", "bad-args"))))));
 
 
   (* data lens operations (one-tree.borg branching-interaction, 2026-08-23

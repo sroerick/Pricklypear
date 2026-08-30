@@ -336,19 +336,90 @@ let apply_client_node (store : Store.t) ~(env : Yojson.Safe.t) : (unit, string) 
 
 (** Apply a whole reconcile/merge plan to the server: for every actionable
     row the plan directs the server to take (Theirs_add / Theirs_mod /
-    Theirs_del and conflict LWW-keep-thiers-side is applied), look up the
-    client node envelope. Since this server harness applies the PLAN (not
-    the bodies it must first receive), the client bodies are passed as an
-    assoc path -> envelope JSON. Returns a report of what was applied vs
-    surfaced as conflicts. *)
+    Theirs_del are applied from the client bodies; a Conflict is LWW-
+    arbitrated per the-glochids v0 — client envelope strictly newer wins
+    and is applied, otherwise the server copy stays), look up the client
+    node envelope. Since this server harness applies the PLAN (not the
+    bodies it must first receive), the client bodies are passed as an
+    assoc path -> envelope JSON. Every resolution is SURFACED: the report
+    lists the conflicts with their hashes, which side LWW picked per
+    path, and the Ours_del paths the client must mirror-delete locally. *)
+
+(* ---- the-glochids v0: LWW-per-node resolution (applied + surfaced) ----
+
+    Detection was 8.3 (hashes classify; conflicts REPORT-only). The v0
+    RESOLUTION policy the-glochids names is LAST-WRITER-WINS per node,
+    updated_at arbitrating, with every loss SURFACED (the obituary rule
+    applies to sync losses — no silent drop). One clock, both sides:
+    the client lens substrate stamps its envelope updated_at as an epoch
+    float (string_of_float Unix.gettimeofday); the server reads its node
+    updated_at as the same epoch float (extract(epoch from updated_at)).
+    The client wins a diverge/conflict pair iff its stamp is STRICTLY
+    newer — ties and missing/unparseable stamps keep the server copy
+    (deterministic, conservative; a materialized-from-server envelope
+    carries the server's PG-format stamp, which is intentionally not
+    parseable as an epoch here, so an unedited pull can never wrongly
+    out-vote a newer server edit). Cross-machine clock skew is the
+    classic LWW tax; the spec accepts it for v0 and surfaces every
+    resolution. `commit` and the sync/push prim both apply this policy. *)
+
+(** The server's updated_at epochs (float seconds since the epoch) for
+    the given paths — the LWW arbitration clock. Paths absent from
+    tree_nodes are absent from the result. *)
+let server_updated_at (store : Store.t) (paths : string list)
+    : (string * float) list =
+  match Store.conn_of store with
+  | None -> []
+  | Some conn ->
+      List.filter_map
+        (fun p ->
+          match
+            Io_lwt.Db.execute conn
+              ~params:[ Pgx.Value.of_string p ]
+              "SELECT extract(epoch from updated_at)::float8 FROM tree_nodes \
+               WHERE path = $1::ltree"
+          with
+          | [ [ v ] ] -> (
+              match Pgx.Value.to_float v with
+              | Some f -> Some (p, f)
+              | None -> None)
+          | _ -> None)
+        paths
+
+(** A client node envelope's updated_at as an epoch float, or None when
+    absent/unparseable. *)
+let envelope_updated_at (env : Yojson.Safe.t) : float option =
+  match env with
+  | `Assoc kv -> (
+      match List.assoc_opt "updated_at" kv with
+      | Some (`String s) -> (try Some (float_of_string s) with _ -> None)
+      | _ -> None)
+  | _ -> None
+
+(** LWW v0 for one diverge/conflict pair: the client wins iff its stamp
+    is STRICTLY newer than the server node's. *)
+let lww_client_wins (client_updated : float option) (server_updated : float)
+    : bool =
+  match client_updated with Some c -> c > server_updated | None -> false
+
 type commit_report = {
   applied : int;
   conflicts : (string * string * string) list; (* path, ours_hash, theirs_hash *)
+  lww_client_won : string list;  (* conflicts arbitrated TO the client copy (applied) *)
+  lww_server_kept : string list; (* conflicts arbitrated TO the server copy (client edit surfaced as lost) *)
+  client_deletes : string list;  (* Ours_del: server deleted; client's stale copy must go too *)
 }
 
 let commit (store : Store.t)
     ~(client_bodies : (string * Yojson.Safe.t) list)
     (plans : plan list) : commit_report =
+  let epochs =
+    server_updated_at store
+      (List.filter_map
+         (fun { path; outcome } ->
+           match outcome with Conflict (p, _, _, _) -> Some p | _ -> None)
+         plans)
+  in
   List.fold_left
     (fun r { path; outcome } ->
       match outcome with
@@ -366,11 +437,42 @@ let commit (store : Store.t)
                if n > 0 then { r with applied = r.applied + 1 } else r
            | None -> r)
       | Conflict (p, _b, o, t) ->
-          (* LWW v0: keep ours (server) and SURFACE the conflict — no
-             silent loss (the obituary rule applies). *)
-          { r with conflicts = (p, o, t) :: r.conflicts }
-      | Unchanged | Ours_keep | Identical | Ours_del -> r)
-    { applied = 0; conflicts = [] }
+          (* LWW v0 (the-glochids): arbitrate by updated_at, then SURFACE
+             the resolution either way — the obituary rule applies to the
+             losing side, never a silent drop. *)
+          let r = { r with conflicts = (p, o, t) :: r.conflicts } in
+          let client_won =
+            match List.assoc_opt p epochs with
+            | None -> false (* server node unreadable: keep the server *)
+            | Some sv ->
+                let cl =
+                  match List.assoc_opt p client_bodies with
+                  | Some env -> envelope_updated_at env
+                  | None -> None
+                in
+                lww_client_wins cl sv
+          in
+          if client_won then
+            match List.assoc_opt p client_bodies with
+            | Some env -> (
+                match apply_client_node store ~env with
+                | Ok () ->
+                    { r with
+                      applied = r.applied + 1;
+                      lww_client_won = p :: r.lww_client_won }
+                | Error _ ->
+                    { r with lww_server_kept = p :: r.lww_server_kept })
+            | None -> { r with lww_server_kept = p :: r.lww_server_kept }
+          else { r with lww_server_kept = p :: r.lww_server_kept }
+      | Ours_del -> { r with client_deletes = path :: r.client_deletes }
+      | Unchanged | Ours_keep | Identical -> r)
+    {
+      applied = 0;
+      conflicts = [];
+      lww_client_won = [];
+      lww_server_kept = [];
+      client_deletes = [];
+    }
     plans
 
 (* ---- report rendering (for the sync/plan prim + UI) ---- *)

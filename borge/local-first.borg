@@ -39,6 +39,16 @@
              the wire per-hit (remote-eval) or read the local lens
              (local-first) until reconnect.
 
+         THE USER LOOP, IN ONE BREATH. Fork locally (lens-model),
+         evaluate against the local lens (local-substrate), sync in
+         the background on reconnect (sync). "Invisible" is the
+         property of the COMMON CASE — disjoint edits union cleanly
+         and the user never sees the machinery. It has ONE designed
+         exception: when the SAME node was edited on both sides since
+         the last sync, the divergence is SURFACED (the-glochids),
+         never silently resolved. The obituary rule
+         (habitat-workflow) applies to sync losses.
+
          IS NOT:
            - A second source of truth. The lens is a branch; the
              server is the integration point and the merge authority.
@@ -356,7 +366,7 @@
   (subsection sync
    (doc "Sync = three-way tree-diff (branching.borg / one-tree.branching-interaction), keyed on subtree node hashes. The exchange is the git protocol in miniature.")
    (status implemented)
-   (implements image/lib/tree_store.ml image/lib/sync.ml image/test/sync_test.ml branching.borg)
+   (implements image/lib/tree_store.ml image/lib/sync.ml image/test/sync_test.ml image/lib/prims_db.ml image/test/sync_db_test.ml branching.borg)
    (verify
     (doc (|
          Sync = the server-side merge authority over tree_nodes, keyed on
@@ -421,6 +431,32 @@
          the remote-eval.caching generation counter, repurposed from
          "is my cache fresh" to "what was our last common state."
          One counter, two uses.
+
+         SHIPPED V1 TRANSPORT (data paths, 0bebd9a). The exchange is
+         no longer only a planned protocol: the sync/push prim
+         (image/lib/prims_db.ml) classifies a client data.u.<user>.*
+         (path, hash) manifest against the server, applies ClientOnly
+         pushes through Sync.apply_client_node (the typed-boundary-
+         validated datum write surface; image/test/sync_db_test.ml),
+         returns ServerOnly paths for the client to pull, and REPORTS
+         diverge paths without auto-merging them (the-glochids stance:
+         v1 surfaces, it does not silently resolve). pp-remote --sync
+         (remote/bin/main.ml) drives the round — push, pull
+         server-only paths, print DIVERGE lines, and pin the returned
+         (branch, generation) as the next merge base.
+
+         CODE-LENS SYNC STAYS THE BRANCH-POINTER MOVE. b.<lens>.* is
+         deliberately OUT of sync/push's scope: code sync merges
+         lens -> server branch via the existing promote/merge
+         primitive (branching.borg), server-mediated. Data sync is
+         in-place reconcile; code sync is a pointer move — one
+         algorithm family, two landing policies, as lens-model pins.
+
+         "BACKGROUND" IS CLIENT SCHEDULING, NOT NEW MACHINERY. Sync
+         is round-based; --sync is the manual v1 entry point. Making
+         it invisible is the client invoking rounds on reconnect /
+         on a timer against the same prims — no new server surface
+         is needed or planned for it.
     |))))
 
   (subsection the-glochids
@@ -496,27 +532,32 @@
          as a conflict on all its constituent nodes rather than
          silently partial-merged.
 
-         STATUS (8.4 reconcile): CONFLICT DETECTION IS SHIPPED.
-         Campaign 8.3 (sync subsection, implemented) delivers the
+         STATUS (reconcile after 0bebd9a): DETECTION IS SHIPPED, THE
+         v1 DATA TRANSPORT IS SHIPPED, RESOLUTION IS DELIBERATELY NOT.
+         Campaign 8.3 (sync subsection, implemented) delivered the
          node-granular divergence detection this subsection's thesis
          names: image/lib/sync.ml manifests path,hash deltas,
          classifies them, and three-way-merges (base = last-synced
          generation, ours = server, theirs = client) to a plan whose
-         conflict outcome is surfaced REPORT-ONLY — the obituary rule
-         applied to sync losses, exactly the "v0 surfaces; it does not
-         silently resolve" stance. What is NOT yet shipped is the
-         RESOLUTION half: the LWW-per-node v0 policy is named here but
-         not applied anywhere — sync/plan emits a plan with conflict
-         outcomes and stops; there is no sync/commit prim applying a
-         plan's Theirs_* ops, and no automatic LWW arbitration of a
-         same-node divergent pair at sync (the transport-side follow-up
-         recorded in the 8.3 notes). OFFLINE IDENTITY, SEMANTICS
-         VERSION SKEW, and TRANSACTIONS UNDER SYNC also remain unbuilt
-         (no durable device-signing credential, no branch generation
-         semantics snapshot pin carried by a lens, no sync-time rebase
-         gate or post-merge re-eval). Subsection stays planned; the
-         open work is resolution + identity + skew + txns-under-sync,
-         not detection.
+         conflict outcome is surfaced REPORT-ONLY. The transport the
+         previous reconcile called "not yet built" then landed in
+         0bebd9a: sync/push (image/lib/prims_db.ml) + pp-remote --sync
+         (remote/bin/main.ml) — a two-way, data-only round that
+         applies client-only pushes, pulls server-only paths, and
+         REPORTS diverge paths with the server copy kept. That report
+         IS the v1 conflict stance, and it is deliberate, not a gap
+         in the transport: no automatic LWW arbitration of a same-node
+         divergent pair — v1 surfaces honestly rather than silently
+         clobbering. What remains genuinely open here is the
+         RESOLUTION POLICY menu above (LWW-per-node as an APPLIED
+         policy, semantic merge per type, CRDT-ish fields), OFFLINE
+         IDENTITY (durable device-signing credential presented at
+         sync), SEMANTICS VERSION SKEW (lens-pinned semantics
+         snapshot + sync-time rebase/re-eval gate), and TRANSACTIONS
+         UNDER SYNC (conflict surfacing for cross-sync txns).
+         Subsection stays planned; the open work is resolution +
+         identity + skew + txns-under-sync, not detection and not
+         the v1 data transport.
     |))))
 
   (subsection phasing
@@ -550,31 +591,26 @@
          because it defers the one piece of real research (conflict
          resolution policy) while delivering the working-copy feel.
 
-         STATUS (8.4 reconcile): PHASE 1 READ-ONLY OFFLINE LANDED IN
-         SUBSTRATE. The branch generation snapshot coordinate is the
-         migration-017 / gen-now clock (remote-eval.caching — one
-         counter, three consumers); the filesystem lens substrate
-         (remote/lib/lens_store.ml, 8.2) materializes a lens root
-         path-addressed get/put/subtree-list + envelope + hash as
-         rename(2) atomicity; materialize_code_node + ancestry
-         resolution let a client eval defs from the substrate offline
-         (offline-first: fetch_def resolves from the substrate BEFORE
-         proxying). What is NOT shipped is a user-facing read-only
-         offline FLOW (a CLI/app that pins a snapshot, materializes,
-         evaluates read-only, and re-syncs by discard-and-re-pull on
-         reconnect) — the primitives exist, the flow does not, so
-         Phase 1 as a shippable milestone is still open. PHASE 2
-         WRITE-CAPABLE AUTOMATIC MERGE LANDED IN AUTHORITY, OPEN IN
-         TRANSPORT+RESOLUTION. The server-side three-way merge
-         authority (8.3 sync) + lens/fork + replication/unit (8.1) +
-         the substrate give the merge MACHINERY, but automatic merge
-         end-to-end needs (a) the sync/commit prim applying a plan's
-         Theirs_* ops from client bodies + the HTTP rendezvous
-         shipping manifests/bodies (recorded as the 8.3
-         transport-side follow-up, not yet built) and (b) the-glochids
-         v0 LWW policy actually applied (not shipped). Subsection
-         stays planned; the open work is the Phase-2 tail (transport +
-         resolution) plus the Phase-1 end-user flow.
+         STATUS (reconcile after b15a06a + 0bebd9a): BOTH FLOWS NOW
+         EXIST AS pp-remote ENTRY POINTS — MANUAL v1, NOT YET
+         BACKGROUND. Phase 1's "user-facing read-only offline flow"
+         the previous reconcile called unshipped exists: pp-remote
+         --lens DIR + --lens-pull materializes a lens and evaluates
+         offline-first against the substrate. Phase 2's "transport
+         not yet built" also landed for DATA: sync/push +
+         pp-remote --sync (0bebd9a) close the write loop — local
+         eval, tree to disk, push up, pull down, diverge surfaced,
+         new (branch, generation) merge base pinned. What is NOT yet
+         shipped: (a) sync as an AUTOMATIC background/on-reconnect
+         loop — today it is user-invoked (--sync); the scheduling is
+         client-side and needs no new server machinery, but the loop
+         itself is unbuilt; (b) code-lens sync through the exchange
+         — b.<lens>.* syncs via the server-mediated promote/merge
+         pointer move, a separate path sync/push deliberately
+         excludes; (c) the-glochids resolution POLICY (v1 reports
+         diverge; nothing auto-resolves). Subsection stays planned;
+         the open work is the background loop + the resolution
+         policy, not the transport and not the flows.
     |))))
 
   (subsection non-goals
