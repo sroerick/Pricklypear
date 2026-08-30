@@ -1,6 +1,7 @@
 (project pricklypear-remote-eval
  (doc "Pricklypear book chapter: remote-eval — Nopales interprets in a client process while the corpus and data plane stay authoritative in Postgres. The seam already exists (agent.borg exercises it locally); this chapter specifies relaxing it across HTTP.")
- (status planned)
+ (status implemented)
+ (* agent note (|reconcile: chapter-top flipped planned -> implemented (campaign 7 note below: "campaign 7 (remote-eval) is FULLY complete" — the label lagged the ship). Same pass: substrate partial -> implemented (the error codec the partial status waited on was factored into pure/prims_pure.ml in 7.1 and round-trip tested). The v0-non-goals HARD OUT reworded: local-first.borg is the in-book RESOLUTION of the second-store question (a governed lens), not "a different project" — the two chapters are one seam, two lens policies.|) *)
  (* agent note (|2026-08-14 chapter created from the remote-eval design discussion. Thesis: the interpreter is a pure portable library (~few kloc OCaml, no service deps); the corpus (function_defs, type_defs, data_rows) is branchy rows in Postgres. They are separated along exactly the right line — the cheap-to-copy thing travels, the expensive-to-replicate thing stays home. Remote-eval is NOT a new product: it is a mode of the same Prim_call seam the agent host already uses, with the rim handler replaced by an HTTP proxy. agent/ is the local-only instance today; pp-remote --image=URL is the relaxed instance. Statuses are honest: the substrate is implemented (the seam, run_with_rim, read_eval_all_direct, the api-eval JSON boundary from i-fields-as-string 2026-08-12), everything else is planned.|) *)
  (* agent note (|2026-08-14 RECONCILE: a shared codec already exists — pure/prims_pure.ml (pricklypear-pure-prims, wrapped false as Prims_pure) defines value_to_json AND json_to_value (the inverse), explicitly shared between the image and a browser client per its dune comment. So the substrate codec is DONE; the remaining codec work is the ERROR codec (Interp_error/Prim_error/Reader_error -> JSON with kind/name/line/col, currently inline in image/lib/http_pages.ml api_eval) factored into pure/ + its inverse, plus a round-trip property test. ALSO RECONCILE: borge/structural-editing.borg client-eval already plans a browser client/ package (interp.js, js_of_ocaml --effects=cps, pure-prims-only, optimistic structural ops reconciled via op-protocol). client-eval and remote-eval share the seam (same pure interpreter, prims_pure factored out) but DIFFER: client-eval leaves DB prims UNBOUND in the browser and reconciles via op-protocol; remote-eval PROXIES DB prims over HTTP. Complementary, not duplicate. To avoid the client/ package-name collision (client/ is a tracked browser package), remote-eval's native host is the remote/ package (binary pp-remote), NOT client/.|) *)
  (* agent note (|2026-12 CAMPAIGN 7.0 PLAN PASS (server-endpoint + caching spec) — reconcile + spec the tree-time dependency. Revealed the remote-eval implementation is ALREADY COMPLETE and ON MASTER (built since the 2026-08 design, merged as a chain: 1a ee309e3 shared error codec factored into pure/prims_pure.ml; 1b ff3b0a5 migration 017 branch_generations counter + Store.current_generation; 2a 540e1a2 POST /api/prim endpoint with server-only refuse-or-forward; 2b 8e75797 remote/ package + proxy rim (pp-remote); 3 623ddd9 hybrid placer + e01a3cc shared http_transport + de61e34 pp-remote hook + f1dae70 transaction-routing tests). VERIFIED green this pass: dune build @all clean; remote/test/placer_test 5/5; remote/test/remote_test 7/7; image/test/api_prim_test (server-endpoint refuse-or-forward dispatch: proxyable prim ok, server-only refused-not-executed with structured server_only kind, classification derived from register_server_only metadata, never a hand list); image/test/branch_generation_test (write-in-ancestry bumps / distinct (branch,generation) key / no-write unchanged / type+route+shared-data bumps). So server-endpoint (7.1) and placement + proxy-rim client (7.3) substrate are DONE; the CLIENT-SIDE DEF CACHE — remote/lib/def_cache.ml, keyed (branch, generation) — is NOT yet built (that is the open 7.2 make slice). THE TREE-TIME DEPENDENCY (the point of this plan pass, per campaign 7.0): the caching subsection's generation key is NOT a remote-eval invention — it IS migration 017 branch_generations, which tree-time (campaign 5, landed 2026-12) PROMOTED from a cache-invalidation signal to the head/gen coordinate (the reads-as-of-gen clock; (gen-now) prim + Store.current_generation). So the def cache must key on the SAME coordinate tree-time reads as-of and the (gen-now) clock reads — one counter, one namespace. Enumeration: server-endpoint (planned; make 7.1 flips), client (planned; make 7.2 — proxy rim done, def_cache open), caching (planned; make 7.2 — 017 counters done, def_cache open), placement (planned; make 7.3 — done), stepping (planned; make 7.3 — explain.ml stepping evaluator + proxy-rim integration NOT built). This is a spec-reality reconcile + dependency-pin pass; NO status flips here (7.1/7.2/7.3 make own the flips).|) *)
@@ -48,7 +49,7 @@
 
   (subsection substrate
    (doc "The seam remote-eval relaxes, and the boundary that makes it honest")
-   (status partial)
+   (status implemented)
    (implements lisp/lib/control.ml lisp/lib/eval.ml image/lib/http_pages.ml)
    (verify
     (test "Control.run_with_rim services Prim_call from a caller-supplied table; a second table (the proxy) drops in with no interpreter change")
@@ -425,15 +426,23 @@
            - A second transport. HTTP+JSON is the only wire in v0;
              no binary protocol, no websocket prim channel.
 
-         HARD OUT (forever, or a different project):
-           - A second store on the client. The client is a cache and
-             an interpreter, never a source of truth. (Revisited by
-             local-first.borg: a LENS is not a second store — it is a
-             governed branch with merge semantics. The hard-out
-             stands for an UNCOORDINATED client copy; local-first is
-             the project that reframes it. The reframing is honest
-             only because the one tree + three-way tree-diff merge
-             already exist; without them this hard-out stays hard.)
+         HARD OUT (within remote-eval; RESOLVED in-book by local-first.borg):
+           - A second store on the client. In REMOTE-EVAL (the online
+             mode) the client is a cache and an interpreter, never a
+             source of truth. The offline mode this hard-out appears
+             to forbid is NOT a different project — it is
+             local-first.borg, same book, same Prim_call seam: a LENS
+             is a governed branch of the one tree with merge semantics
+             (three-way tree-diff, branching.borg), not an
+             uncoordinated copy. The hard-out still stands for exactly
+             what it was written against: an UNCOORDINATED client
+             copy. remote-eval and local-first are two policies of
+             one seam (local-first.positioning): the data plane
+             crosses the wire per-hit online, or resolves against the
+             local lens offline and syncs on reconnect. The reframing
+             is honest only because the one tree + three-way
+             tree-diff merge already exist; without them this
+             hard-out stays hard.)
            - Multi-user on the client. One client = one user.
            - Language changes made in remote/ instead of through
              lisp-interpreter.borg. The client is a host, not a fork.
