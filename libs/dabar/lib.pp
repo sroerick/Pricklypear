@@ -274,3 +274,149 @@
               (dabar/verse-study book chapter verse)))))))  "Render verse-study from a plain ref string, or an unknown-ref error with a go-form.")
 
 (route "/dabar" "dabar/page")
+
+;; ---- daily-scripture (borge/dabar.borg daily-scripture) ------------
+;; Verse-of-the-day, pushed to yourself: deterministic day-indexed pick,
+;; delivered into the calendar's daily note and pinged via ntfy.
+;; Requires: bible/*, notes/doc/*, outline/*, ntfy/* (seeded libs).
+
+(define dabar/day-index
+  (lambda
+    ()
+    "Days since 1970-01-01 in image-local time — the daily cycle."
+    (date-diff-days "1970-01-01" (date-today))))
+
+(define dabar/daily-ref
+  (lambda
+    ()
+    "Verse-of-the-day as (abbrev chapter verse). Deterministic and
+stateless: book = day mod 66 (canonical ordinal), chapter = day within
+the book's chapters, verse = day within the chapter's verse count.
+Same verse for every user on the same day; survives re-fire; cycles
+annually-ish. bible/random-row stays the Surprise control."
+    (let
+      ((n (dabar/day-index)))
+      (let
+        ((book-fields (bible/book-by-ordinal (+ 1 (mod n 66)))))
+        (let
+          ((book
+            (if
+              (null? book-fields)
+              (error "dabar/daily-ref: bible corpus empty — run scripts/seed_bible_bsb.py")
+              (as-str (dict-get book-fields "abbrev")))))
+          (let
+            ((c (+ 1 (mod (quotient n 66) (bible/chapter-count book)))))
+            (let
+              ((vs (bible/chapter book c)))
+              (let
+                ((vc (count vs)))
+                (list
+                  book
+                  c
+                  (if (<= vc 0) 1 (+ 1 (mod n vc))))))))))))
+
+(define dabar/starts-with?
+  (lambda
+    (s prefix)
+    (if
+      (< (string-length s) (string-length prefix))
+      #f
+      (string-eq (substring s 0 (string-length prefix)) prefix))))
+
+(define dabar/daily-has?
+  (lambda
+    (tree marker)
+    "True when a root-level kid body already starts with marker (today's ref was delivered — idempotency for job re-fires)."
+    (dabar/daily-has-loop (outline/kids tree) marker)))
+
+(define dabar/daily-has-loop
+  (lambda
+    (kids marker)
+    (if
+      (null? kids)
+      #f
+      (if
+        (dabar/starts-with? (outline/body (car kids)) marker)
+        #t
+        (dabar/daily-has-loop (cdr kids) marker)))))
+
+(define dabar/daily-click
+  (lambda
+    (book c v)
+    "Absolute study URL for the ntfy Click: header (empty when no site configured)."
+    (let
+      ((cfg (guard (lambda (e) ()) (ntfy/config))))
+      (let
+        ((site-f (if (null? cfg) () (dict-get cfg "site"))))
+        (let
+          ((site (if (null? site-f) "" (as-str site-f))))
+          (if
+            (string-eq site "")
+            ""
+            (string-append
+              site
+              "/dabar?book="
+              (as-str book)
+              "&chapter="
+              (as-str c)
+              "&verse="
+              (as-str v))))))))
+
+(define dabar/daily-deliver
+  (lambda
+    ()
+    "Verse-of-the-day -> append to the daily note (daily-YYYY-MM-DD,
+the calendar package's slug convention) as a (bible …) ref node, then
+ntfy-push with a Click: straight to the dabar study view. Idempotent
+per day; returns a short status string."
+    (let
+      ((r (dabar/daily-ref)))
+      (let
+        ((book (car r))
+          (c (cadr r))
+          (v (caddr r)))
+        (let
+          ((ref-str
+            (string-append
+              (as-str book) " " (as-str c) ":" (as-str v)))
+            (marker
+              (string-append "(bible " (as-str book) " " (as-str c) " " (as-str v) ")"))
+            (text (as-str (bible/verse book c v)))
+            (day (date-today)))
+          (let
+            ((slug (string-append "daily-" day)))
+            (let
+              ((prev (notes/doc/get slug)))
+              (let
+                ((tree
+                  (if
+                    (null? prev)
+                    (notes/doc/empty-outline day)
+                    (notes/doc/outline prev))))
+                (if
+                  (dabar/daily-has? tree marker)
+                  (string-append "already: " ref-str)
+                  (let
+                    ((node
+                      (outline/set-body
+                        (outline/node
+                          (string-append "dv-" (as-str (now)))
+                          (string-append "Daily scripture — " ref-str))
+                        (string-append marker "\n\n" text "\n"))))
+                    (let
+                      ((new-tree (outline/add-child-by-id tree "root" node)))
+                      (let
+                        ((title (string-append "Daily scripture — " ref-str)))
+                        (let
+                          ((payload
+                            (guard
+                              (lambda (e) (str e))
+                              (ntfy/send/click title text (dabar/daily-click book c v)))))
+                          (seq
+                            (notes/doc/upsert slug day new-tree "daily" "note" day)
+                            (string-append
+                              "delivered: "
+                              ref-str
+                              (if (string-eq (as-str payload) "")
+                                  ""
+                                  (string-append " (ntfy: " (as-str payload) ")")))))))))))))))))
