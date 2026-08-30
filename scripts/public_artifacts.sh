@@ -36,7 +36,41 @@ if [ -n "$BORGE" ]; then
     if [ "$SRC" = "$ROOT" ] && [ -d "$ROOT/docs" ]; then
       cp -f "$OUT/book.pdf" "$ROOT/docs/pricklypear-book.pdf"
     fi
-    echo "[public] wrote $OUT/book.pdf"
+    echo "[public] wrote $OUT/book.pdf (full workshop book)"
+  fi
+
+  # Reader-mode flavor (habitat-book.borg out-of-scope-v1: the public
+  # release is the existing /book.pdf face + its reader-mode flavor).
+  # The full workshop book stays book.pdf / the vendored docs copy; the
+  # reader edition (statuses/verify/agent-notes stripped) ships
+  # alongside in the release archive — same walk, one parser.
+  echo "[public] borge book print --mode reader …"
+  (
+    cd "$SRC"
+    "$BORGE" book print . --mode reader -o "$OUT/pricklypear-book-reader" || {
+      echo "[public] WARN: borge book print --mode reader failed" >&2
+    }
+  )
+  [ -f "$OUT/pricklypear-book-reader.pdf" ] && \
+    echo "[public] wrote $OUT/pricklypear-book-reader.pdf (reader flavor)"
+
+  # Export JSON: the habitat loader's feed. Release-time seeding per
+  # habitat-book.borg habitat-loader — operator runs
+  #   scripts/load-book.sh <json>
+  # against the deployed image (additive upsert under system/main).
+  echo "[public] borge book export …"
+  (
+    cd "$SRC"
+    "$BORGE" book export . -o "$OUT/pricklypear-book" || {
+      echo "[public] WARN: borge book export failed" >&2
+    }
+  )
+  if [ -f "$OUT/pricklypear-book.book.json" ]; then
+    echo "[public] wrote $OUT/pricklypear-book.book.json" \
+         "(seed the habitat: scripts/load-book.sh)"
+  else
+    echo "[public] WARN: no export JSON — seed by hand:" \
+         "borge book export + scripts/load-book.sh" >&2
   fi
 fi
 
@@ -76,6 +110,7 @@ tar -C "$SRC" -czf "$TGZ" \
   --exclude='AGENTS.md' \
   --exclude='*.pdf' \
   --exclude='*.book.manifest' \
+  --exclude='*.book.json' \
   . \
   2>/dev/null || {
     # OpenBSD tar may not like some long options — fallback
