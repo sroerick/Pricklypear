@@ -324,6 +324,8 @@ let prim_summary (name : string) : string =
   | "now" -> "unix epoch seconds (UTC int)"
   | "now-ms" -> "unix epoch milliseconds (UTC int)"
   | "sleep" -> "sleep N seconds (float or int); yields on Lwt"
+  | "http-get" -> "outbound HTTP GET: (http-get url [headers-json]) -> {ok,status,headers,body,err,kind} dict; admin/agent only"
+  | "http-post" -> "outbound HTTP POST: (http-post url [headers-json [body]]) -> {ok,status,headers,body,err,kind} dict; admin/agent only"
   | "parse-int" -> "string or int to int"
   | "parse-float" -> "string or number to float"
   | "floor" | "round" -> "float to int"
