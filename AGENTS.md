@@ -9,13 +9,20 @@ must change (spec is locked then), or (b) you find a genuine problem
 outside the scope of your current instructions. In `plan` phase or spec
 discussions, edit the spec directly or just talk — do NOT file issues.
 
-## Status (2026-07-12 reconcile)
+## Status (2026-08-31 reconcile)
 
 **Single-image v1 habitat is the running system.** Spec is a multi-file
 literate book (chapter `.borg` files + root). `borge report` after the
-status-reconcile pass is roughly **55 implemented / 10 planned /
-9 deprecated (~74%)** — planned items are real gaps (roam, promote UX,
-type-system, review-merge, full FTS), not stale foundation work.
+habitat-book reconcile is roughly **268 implemented / 53 planned /
+3 deprecated (~83%)** — planned items are real gaps (roam, promote UX,
+type-system, review-merge, full FTS, habitat chapter editing, live
+OCaml eval), not stale foundation work. The spec-as-book pipeline
+(habitat-book chapter) is implemented end to end: borge book
+print/export over the inline walk, `scripts/load-book.sh` seeding,
+`/book` + `/book/chapter/<slug>` + `/book/course/<slug>` habitat faces
+(libs/book), restricted `example-eval` prim + `book/verify`
+(drift-as-rendering), first course `course/cs-interpreters.borg`, and
+release artifacts (book.pdf workshop + reader flavor + export JSON).
 Packages on poohstack; build/tests on lisp + common + image. Product
 libs (notes/todo/outline/ui/bible/dabar/ai/…) seed to `system/main`.
 Supervisor/authd multi-process topology is retired (see
