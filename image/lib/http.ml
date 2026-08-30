@@ -525,6 +525,12 @@ let request_handler ~(sw : Eio.Switch.t) ~(registry : Session_registry.t)
     when String.length path > 11 && String.sub path 0 11 = "/book/code/" ->
       (* habitat-book.web-renderer: one code-chapter listing. *)
       launch_book_handler "book/code-page"
+  | `GET, path
+    when String.length path > 13 && String.sub path 0 13 = "/book/course/" ->
+      (* habitat-book.course-documents: notes/outline course docs (slug
+         course/<suffix>, kind course) assembled into an ordered reading
+         list over the seeded chapter rows — compose, never copy. *)
+      launch_book_handler "book/course-page"
   | `POST, "/book/eval-example" ->
       launch (fun session -> post_book_eval_example session);
       ()

@@ -11,6 +11,7 @@
 ;;   GET /book                  -> book/page        merged index: borg chapters + package specs
 ;;   GET /book/chapter/<label>  -> book/chapter-page
 ;;   GET /book/code/<label>     -> book/code-page
+;;   GET /book/course/<suffix>  -> book/course-page notes/outline course doc (kind course)
 ;;   GET /book/<pkg>            -> spec/book-page   (kernel fallthrough, unchanged)
 ;;   GET /book/pkg/<pkg>        -> alias of /book/<pkg>
 ;;
@@ -475,6 +476,205 @@
                       (html/pre (html-escape (as-str src)))))))))))
   "GET /book/code/<label> — one code-chapter listing from its row.")
 
+;; ---------------------------------------------------------------- courses
+;;
+;; habitat-book.course-documents: a course is a NOTES/OUTLINE doc (slug
+;; course/<suffix>, kind course — the spec/<pkg> slash-slug pattern)
+;; whose reading nodes reference chapter labels — compose, never copy
+;; (decision 5). The renderer assembles the doc's outline into an
+;; ordered reading list over the seeded chapter rows; the chapter rows
+;; themselves never move (data.book.ch.* stays a chapter's ONE home —
+;; two courses referencing one chapter duplicate nothing in the tree).
+;; A reading node's body starts with a `chapter: <label>` line (the
+;; machine reference, book/label-safe? shape); the rest renders as
+;; description prose. Status badges show in BOTH registers here: the
+;; reading list is itself a status view (spec smoke), unlike
+;; chapter-index rows (workshop-only).
+
+(define book/course-suffix-chars?
+  (lambda (s i n)
+    (if (= i n)
+        (> n 0)
+        (let ((c (substring s i 1)))
+          (if (or (string-eq c "_") (string-eq c "-")
+                  (and (string>=? c "a") (string<=? c "z"))
+                  (and (string>=? c "0") (string<=? c "9")))
+              (book/course-suffix-chars? s (+ i 1) n)
+              #f))))
+  "Char walk for course-suffix-safe?.")
+
+(define book/course-suffix-safe?
+  (lambda (s)
+    (book/course-suffix-chars? s 0 (string-length s)))
+  "Nonempty [a-z0-9_-] course URL suffix (notes slugs carry hyphens;
+   the doc slug gets the course/ prefix before any lookup, so the URL
+   suffix alone can never traverse the notes tree).")
+
+(define book/course-doc-slug
+  (lambda (suffix)
+    (string-append "course/" (as-str suffix)))
+  "Notes-doc slug for a course URL suffix.")
+
+(define book/course-chapter-ref
+  (lambda (body)
+    (let ((lines (string-split (as-str body) "\n")))
+      (if (null? lines)
+          ""
+          (let ((first (as-str (car lines))))
+            (if (string-starts-with? first "chapter: ")
+                (substring first 9 (string-length first))
+                "")))))
+  "Chapter label referenced by an outline node — the `chapter: <label>`
+   first line of its body — or \"\" when the node is not a reading.
+   Labels are book/label-safe? (the loader's ltree shape); validated
+   before any link or row lookup.")
+
+(define book/course-desc
+  (lambda (body)
+    (list/foldl
+      (lambda (acc line)
+        (if (string-eq acc "")
+            (as-str line)
+            (string-append acc "\n" (as-str line))))
+      ""
+      (cdr (string-split (as-str body) "\n"))))
+  "Node body minus its first (chapter-reference) line, rejoined —
+   prose-html re-paragraphs on blank lines.")
+
+(define book/course-reading-html
+  (lambda (node)
+    (let ((ref (book/course-chapter-ref (outline/body node))))
+      (let ((safe (book/label-safe? ref)))
+        (let ((ch-row (if safe
+                          (book/row (string-append "data.book.ch." ref))
+                          ())))
+          (html/li ""
+            (html/join
+              (list
+                (if safe
+                    (html/a
+                      (string-append "/book/chapter/" ref)
+                      (html-escape (as-str (outline/title node))))
+                    (html/span
+                      (html/attr "class" "book-hole")
+                      (html-escape
+                        (string-append (as-str (outline/title node))
+                                       " — unresolvable chapter ref"))))
+                (if (null? ch-row)
+                    ""
+                    (string-append " "
+                      (book/status-badge (book/f ch-row "status"))))
+                (book/prose-html (book/course-desc (outline/body node))
+                                 (book/fn-bound? "spec/token-binding?")))))))))
+  "One ordered reading-list entry: chapter link (node title), the
+   chapter's status badge from its seeded row (always shown — the
+   reading list is a status view), then the description prose. An
+   unresolvable ref renders as a hole, never silently.")
+
+(define book/course-readers
+  (lambda (nodes)
+    (if (null? nodes)
+        ()
+        (if (string-eq (book/course-chapter-ref (outline/body (car nodes))) "")
+            ()
+            (cons (car nodes) (book/course-readers (cdr nodes))))))
+  "The leading run of reading nodes (consecutive chapter refs).")
+
+(define book/course-len
+  (lambda (xs)
+    (if (null? xs)
+        0
+        (+ 1 (book/course-len (cdr xs)))))
+  "Length of a cons-built (pair) or kernel list. Kernel count is
+   VList-strict — it refuses pair chains (the cons-recursion shape
+   book/course-readers builds; spec/append produces them too), while
+   list/map, list/filter and html/join all accept pairs. Pair-friendly
+   length here; kernel count relaxation filed in log/issues.")
+
+(define book/course-drop
+  (lambda (n xs)
+    (if (= n 0)
+        xs
+        (book/course-drop (- n 1) (cdr xs))))
+  "Tail after n elements.")
+
+(define book/course-section-html
+  (lambda (node depth link?)
+    (let ((title (as-str (outline/title node))))
+      (html/join
+        (list
+          (if (string-eq title "")
+              ""
+              ((if (= depth 1) html/h2 html/h3) (html-escape title)))
+          (book/prose-html (outline/body node) link?)
+          (book/course-level-html (outline/kids node) (+ depth 1) link?)))))
+  "Non-reading outline node: heading (h2 at depth 1, h3 below), body
+   prose (binding tokens link when the spec machinery is loaded),
+   children.")
+
+(define book/course-level-html
+  (lambda (nodes depth link?)
+    (if (null? nodes)
+        ""
+        (if (string-eq (book/course-chapter-ref (outline/body (car nodes))) "")
+            (html/join
+              (list
+                (book/course-section-html (car nodes) depth link?)
+                (book/course-level-html (cdr nodes) depth link?)))
+            (let ((run (book/course-readers nodes)))
+              (html/join
+                (list
+                  (html/tag "ol" ""
+                    (html/join (list/map book/course-reading-html run)))
+                  (book/course-level-html
+                    (book/course-drop (book/course-len run) nodes)
+                    depth link?)))))))
+  "One outline level: consecutive reading nodes group into a single
+   ordered list (the course's reading order); other nodes render as
+   sections with their children.")
+
+(define book/course-html
+  (lambda (suffix doc mode link?)
+    (let ((title (as-str (notes/doc/title doc)))
+          (outline (notes/get-outline doc)))
+      (html/page
+        (list
+          (book/style-html)
+          (html/p*
+            (html/attr "class" "muted")
+            (html/join (list (html/a "/book" "book") " · course")))
+          (book/toggle-html (string-append "/book/course/" suffix) mode)
+          (html/h1 (html-escape title))
+          (book/prose-html (outline/body outline) link?)
+          (book/course-level-html (outline/kids outline) 1 link?)
+          (html/p*
+            (html/attr "class" "muted")
+            (html-escape
+              (string-append
+                "course " suffix
+                " · a composition over the book's chapters, never a copy — "
+                "paper edition: borge book print --root course/"
+                suffix ".borg")))))))
+  "Course page from a notes doc: title, blurb, ordered reading list
+   with chapter status badges, labs.")
+
+(define book/course-page
+  (lambda ()
+    (let ((suffix (book/path-suffix "/book/course/" (request-path))))
+      (if (not (book/course-suffix-safe? suffix))
+          (book/not-found "course")
+          (if (not (book/fn-bound? "notes/doc/get"))
+              (book/not-found
+                (string-append "course " suffix
+                  " (notes not loaded — (load-library \"notes\"))"))
+              (let ((doc (notes/doc/get (book/course-doc-slug suffix))))
+                (if (null? doc)
+                    (book/not-found (string-append "course " suffix))
+                    (book/course-html suffix doc (book/mode)
+                      (book/fn-bound? "spec/token-binding?"))))))))
+  "GET /book/course/<suffix> — assemble the notes doc course/<suffix>
+   (kind course) over the seeded chapter rows.")
+
 ;; ---------------------------------------------------------------- index
 
 (define book/chapter-li
@@ -493,6 +693,46 @@
                   (string-append " " (book/status-badge status))
                   "")))))))
   "Index row for one chapter (status badge in workshop register only).")
+
+(define book/course-index-li
+  (lambda (node)
+    (let ((n (json-parse (as-str node))))
+      (if (null? n)
+          ""
+          (let ((b (dict-get n "body")))
+            (let ((slug (if (null? b) "" (as-str (dict-get b "slug")))))
+              (let ((suffix (book/path-suffix "course/" slug)))
+                (if (string-eq suffix "")
+                    ""
+                    (html/li ""
+                      (html/a
+                        (string-append "/book/course/" suffix)
+                        (html-escape
+                          (if (null? b)
+                              suffix
+                              (as-str (dict-get b "title")))))))))))))
+  "Index row for one course doc (a tree/find-by hit); empty for
+   non-course/ slugs — kind=course is course-facing only when the slug
+   carries the course/ prefix.")
+
+(define book/courses-index-html
+  (lambda ()
+    (let ((hits (tree/find-by "note" "kind" "course" 50)))
+      (let ((lis (list/filter
+                   (lambda (li) (not (string-eq li "")))
+                   (list/map book/course-index-li hits))))
+        (if (null? lis)
+            ""
+            (html/join
+              (list
+                (html/h2 "Courses")
+                (html/p*
+                  (html/attr "class" "muted")
+                  "compositions over the chapters (habitat-book course-documents) — ordered readings, never copies")
+                (html/ul "" (html/join lis))))))))
+  "Index of course docs (notes kind=course via tree/find-by — the same
+   read-only lookup notes/doc/row uses for slugs); empty section when
+   none are seeded.")
 
 (define book/spec-index-html
   (lambda ()
@@ -595,10 +835,11 @@
                           (list/map
                             (lambda (node) (book/chapter-li node mode))
                             chapters))))))
+              (book/courses-index-html)
               (book/spec-index-html)
               (book/code-index-html)))))))
-  "GET /book — merged index: borg chapters (export order) + package
-   spec docs + the code appendix.")
+  "GET /book — merged index: borg chapters (export order) + course
+   compositions + package spec docs + the code appendix.")
 
 ;; ---------------------------------------------------------------- verify
 ;;
