@@ -220,6 +220,35 @@ let request_handler ~(sw : Eio.Switch.t) ~(registry : Session_registry.t)
             ()
             end)))
   in
+  (** habitat-book.web-renderer: kernel-dispatched book handlers
+      (book/page, book/chapter-page, book/code-page in libs/book/lib.pp).
+      Same shape as the /book/<pkg> fallthrough: resolve the handler
+      INSIDE page work (post-gate per-request context), zero-arg call,
+      params ride the request record. No route pins — the kernel owns
+      the /book namespace dispatch (spec keeps its /book route pin for
+      the unbound-book fallback below). *)
+  let launch_book_handler (handler : string) : unit =
+    launch (fun session ->
+        let request : Session.request =
+          { method_ = `GET
+          ; path
+          ; params = parse_query target
+          ; body = ""
+          ; headers = header_list req
+          }
+        in
+        match Session.call_handler session ~request handler with
+        | Session.Handler_ok value ->
+            respond_handler_value ~session ~reqd ~path ~fragment:false value
+        | Session.Handler_unbound ->
+            text_response reqd ~status:`Not_found ~content_type:"text/plain"
+              (String.concat " "
+                 [ handler; "unbound — (load-library \"book\")" ])
+        | Session.Handler_error msg ->
+            text_response reqd ~status:`Internal_server_error
+              ~content_type:"text/plain" msg);
+    ()
+  in
   (** Lisp user-route if bound; else kernel [fallback]. *)
   let launch_user_route_or (fallback : unit -> unit) : unit =
     (* Resolve the route INSIDE page work, after the gate has attached
@@ -364,12 +393,66 @@ let request_handler ~(sw : Eio.Switch.t) ~(registry : Session_registry.t)
         Http_code.serve_public_body reqd ~title:"Guestbook"
           "<p><a href=\"/welcome\">welcome</a> · guestbook page not seeded yet.</p>")
   | `GET, "/book" ->
-      (* Prefer Nopales (spec/book-page) when seeded; else static fallback. *)
-      launch_user_route_or (fun () -> Http_code.fallback_book reqd)
+      (* habitat-book.web-renderer: the book package's merged index (borg
+         chapters + package spec docs) when book/page is bound; else the
+         /book route pin (spec/book-page, habitat-workflow.book-view);
+         else the static release face. A handler ERROR is surfaced (500),
+         never masked by falling through. *)
+      launch (fun session ->
+          let request : Session.request =
+            { method_ = `GET
+            ; path
+            ; params = parse_query target
+            ; body = ""
+            ; headers = header_list req
+            }
+          in
+          let serve_handler handler_name =
+            match Session.call_handler session ~request handler_name with
+            | Session.Handler_ok value ->
+                respond_handler_value ~session ~reqd ~path ~fragment:false value;
+                true
+            | Session.Handler_unbound -> false
+            | Session.Handler_error msg ->
+                text_response reqd ~status:`Internal_server_error
+                  ~content_type:"text/plain" msg;
+                true
+          in
+          let served =
+            serve_handler "book/page"
+            ||
+            (match
+               (match Request_context.get () with
+                | Some ctx -> Request_context.lookup_route ctx path
+                | None -> Session.lookup_route session path)
+             with
+             | Some handler_name -> serve_handler handler_name
+             | None -> false)
+          in
+          if not served then Http_code.fallback_book reqd;
+          ())
+  | `GET, path
+    when String.length path > 14 && String.sub path 0 14 = "/book/chapter/" ->
+      (* habitat-book.web-renderer: borg chapter pages over the seeded
+         tree rows (scripts/load-book.sh). Prefix is 14 bytes; >14 means
+         a nonempty label follows. *)
+      launch_book_handler "book/chapter-page"
+  | `GET, path
+    when String.length path > 11 && String.sub path 0 11 = "/book/code/" ->
+      (* habitat-book.web-renderer: one code-chapter listing. *)
+      launch_book_handler "book/code-page"
   | `GET, path
     when String.length path > 6 && String.sub path 0 6 = "/book/" ->
       (* habitat-workflow.book-view: /book/<pkg> → (spec/book-page).
-         request-path carries the full path so Nopales can extract pkg. *)
+         request-path carries the full path so Nopales can extract pkg.
+         habitat-book.web-renderer keeps /book/pkg/<pkg> as an alias:
+         the effective path strips the pkg/ segment. *)
+      let path =
+        if
+          String.length path > 10 && String.sub path 0 10 = "/book/pkg/"
+        then "/book/" ^ String.sub path 10 (String.length path - 10)
+        else path
+      in
       launch (fun session ->
           let request : Session.request =
             { method_ = `GET

@@ -217,6 +217,9 @@ let make_with_defaults () : t =
   register_sync t "string-length" prim_string_length;
   register_sync t "substring" prim_substring;
   register_sync t "string-contains?" prim_string_contains;
+  register_sync t "string-split" prim_string_split;
+  register_sync t "prose-tokens" prim_prose_tokens;
+  register_sync t "render-tokens" prim_render_tokens;
   register_sync t "string-eq" prim_string_eq;
   register_sync t "string<?" prim_string_lt;
   register_sync t "string<=?" prim_string_le;
@@ -354,6 +357,9 @@ let prim_summary (name : string) : string =
   | "string-length" -> "length of string"
   | "substring" -> "substring start [len]"
   | "string-contains?" -> "haystack contains needle?"
+  | "string-split" -> "split string on delimiter string → list of pieces"
+  | "prose-tokens" -> "unique token-shaped binding cores in prose (scan, budget-safe)"
+  | "render-tokens" -> "prose paragraph HTML with binding-token links/holes"
   | "string-eq" -> "string equality"
   | "string<?" -> "string less-than (lexicographic)"
   | "string<=?" -> "string less-or-equal (lexicographic)"

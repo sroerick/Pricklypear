@@ -317,9 +317,76 @@ let string_tests = [
   ("string>=? true on equal", `Quick, fun () ->
     Alcotest.(check string) "ge eq" "#t"
       (eval_str "(string>=? \"abc\" \"abc\")"));
+  ("string-split basic", `Quick, fun () ->
+    Alcotest.(check string) "split" "(\"a\" \"b\" \"c\")"
+      (eval_str "(string-split \"a,b,c\" \",\")"));
+  ("string-split keeps empty pieces", `Quick, fun () ->
+    Alcotest.(check string) "empties" "(\"a\" \"\" \"b\")"
+      (eval_str "(string-split \"a,,b\" \",\")"));
+  ("string-split leading/trailing delims", `Quick, fun () ->
+    Alcotest.(check string) "edges" "(\"\" \"a\" \"\")"
+      (eval_str "(string-split \",a,\" \",\")"));
+  ("string-split no match → whole string", `Quick, fun () ->
+    Alcotest.(check string) "nomatch" "(\"abc\")"
+      (eval_str "(string-split \"abc\" \",\")"));
+  ("string-split empty string → one empty piece", `Quick, fun () ->
+    Alcotest.(check string) "empty-s" "(\"\")"
+      (eval_str "(string-split \"\" \",\")"));
+  ("string-split multi-char delimiter", `Quick, fun () ->
+    Alcotest.(check string) "multichar" "(\"one\" \"two\")"
+      (eval_str "(string-split \"one--two\" \"--\")"));
+  ("string-split whole-string delimiter", `Quick, fun () ->
+    Alcotest.(check string) "whole" "(\"\" \"\")"
+      (eval_str "(string-split \"abc\" \"abc\")"));
+  ("string-split empty delimiter → whole string", `Quick, fun () ->
+    Alcotest.(check string) "empty delim" "(\"abc\")"
+      (eval_str "(string-split \"abc\" \"\")"));
 ]
 
 (* --- composition: define + call + nested arithmetic --- *)
+(* habitat-book web-renderer: prose-tokens / render-tokens (kernel one-
+   scan replacements for the interpreted per-word pipeline that blew the
+   page budget). Shape test mirrors spec/token-binding? — these cases
+   pin that parity. *)
+let prose_token_tests = [
+  ("prose-tokens finds pkg/name cores", `Quick, fun () ->
+    Alcotest.(check string) "one core" "(\"spec/book-page\")"
+      (eval_str "(prose-tokens \"see spec/book-page here\")"));
+  ("prose-tokens unique, first-occurrence order", `Quick, fun () ->
+    Alcotest.(check string) "dedup" "(\"a/x\" \"b/y\")"
+      (eval_str "(prose-tokens \"a/x b/y a/x\")"));
+  ("prose-tokens strips one edge-punct layer", `Quick, fun () ->
+    Alcotest.(check string) "edges" "(\"spec/todos\")"
+      (eval_str "(prose-tokens \"(spec/todos: end).\")"));
+  ("prose-tokens skips non-token-shaped words", `Quick, fun () ->
+    Alcotest.(check string) "shape" "(\"yes/fine\")"
+      (eval_str "(prose-tokens \"plain words -> / /nope yes/fine\")"));
+  ("prose-tokens newlines separate words", `Quick, fun () ->
+    Alcotest.(check string) "newline sep" "(\"a/bar\")"
+      (eval_str "(prose-tokens \"foo\na/bar\")"));
+  ("prose-tokens empty", `Quick, fun () ->
+    Alcotest.(check string) "empty" "()"
+      (eval_str "(prose-tokens \"\")"));
+  ("render-tokens resolved core links", `Quick, fun () ->
+    Alcotest.(check string) "link"
+      "\"see <a href=\\\"/binding/spec/page\\\">spec/page</a> now\""
+      (eval_str
+        "(render-tokens \"see spec/page now\" (list \"spec/page\") ())"));
+  ("render-tokens unresolved core is a hole", `Quick, fun () ->
+    Alcotest.(check string) "hole"
+      "\"(<span class=\\\"book-hole\\\">spec/ghost&#8709;</span>)\""
+      (eval_str
+        "(render-tokens \"(spec/ghost)\" () (list \"spec/ghost\"))"));
+  ("render-tokens plain words verbatim + whitespace kept", `Quick, fun () ->
+    Alcotest.(check string) "verbatim" "\"a  b\\nc\""
+      (eval_str "(render-tokens \"a  b\\nc\" () ())"));
+  ("render-tokens classifies word-by-word", `Quick, fun () ->
+    Alcotest.(check string) "mixed"
+      "\"<a href=\\\"/binding/a/x\\\">a/x</a> and <span class=\\\"book-hole\\\">b/y&#8709;</span> end\""
+      (eval_str
+        "(render-tokens \"a/x and b/y end\" (list \"a/x\") (list \"b/y\"))"));
+]
+
 let composition_tests = [
   ("let-bind persists through lambda", `Quick, fun () ->
     Alcotest.(check string) "let persists"
@@ -845,6 +912,7 @@ let () =
     "list", list_tests;
     "string", string_tests;
     "probe", probe_tests;
+    "prose-tokens", prose_token_tests;
     "dict", dict_tests;
     "render-html", render_html_tests;
     "composition", composition_tests;

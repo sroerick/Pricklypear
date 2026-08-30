@@ -597,22 +597,16 @@
             start
             (string-find-pos s delim (+ start 1) dlen)))))
 
-;; Split s on delim (string). Empty or no match → single-element list.
-(define string-split
-  (lambda (s delim)
-    "Split string s on delimiter string delim."
-    (let ((dlen (string-length delim))
-          (slen (string-length s)))
-      (if (or (= slen 0) (not (string-contains? s delim)))
-          (list s)
-          (let ((pos (string-find-pos s delim 0 dlen)))
-            (if (= pos -1)
-                (list s)
-                (cons
-                  (substring s 0 pos)
-                  (string-split
-                    (substring s (+ pos dlen) (- slen (+ pos dlen)))
-                    delim))))))))
+;; string-split: now a KERNEL PRIM (pure/prims_pure.ml prim_string_split,
+;; registered in image/lib/primitives.ml + agent + remote runtimes).
+;; DECISION (2026-08-30, habitat-book web-renderer): the interpreted
+;; char-walk version below cost ~O(n) interpreter steps per input BYTE
+;; (string-find-pos recursion per position), so one 3KB prose paragraph
+;; blew the 100k-step page budget — book chapter pages could not render
+;; at all. The kernel prim keeps the split semantics (empty s or no
+;; match → single-element list; empty pieces kept); an empty delimiter
+;; returns the whole string (the old version looped forever).
+;; string-find-pos STAYS (notes/ uses it directly).
 
 ;; Package prefix before first / (or whole name).
 (define prefix-of
