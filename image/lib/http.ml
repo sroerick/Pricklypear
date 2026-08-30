@@ -528,6 +528,12 @@ let request_handler ~(sw : Eio.Switch.t) ~(registry : Session_registry.t)
   | `POST, "/book/eval-example" ->
       launch (fun session -> post_book_eval_example session);
       ()
+  | `GET, "/book/verify" ->
+      (* habitat-book.eval-examples: (book/verify) as the book's
+         self-test — re-evals every nopales example row with an
+         `expect` trailer; mismatch/refusal renders as a hole row
+         (drift-as-rendering). ?chapter=<slug> scopes to one chapter. *)
+      launch_book_handler "book/verify-page"
   | `GET, path
     when String.length path > 6 && String.sub path 0 6 = "/book/" ->
       (* habitat-workflow.book-view: /book/<pkg> → (spec/book-page).

@@ -115,7 +115,10 @@
         ".book-result{border-top:1px dashed #333;margin-top:.4rem;"
         "padding-top:.3rem;color:#cde;font-size:.9rem}"
         ".book-elapsed{color:#667;font-size:.75rem}"
-        ".book-error{color:#f88;margin-top:.3rem;font-size:.85rem}")))
+        ".book-error{color:#f88;margin-top:.3rem;font-size:.85rem}"
+        ".book-hole-row{border:1px solid #c44;border-radius:.4rem;"
+        "padding:.5rem .6rem;margin:.6rem 0;color:#f88}"
+        ".book-hole-row pre{color:#cde;margin:.3rem 0}")))
   "Book-page styles (phone-honest; print-considerate by restraint).")
 
 (define book/status-color
@@ -573,6 +576,12 @@
                         (string-append ", root " book-root))
                     ").")))
               (book/toggle-html "/book" mode)
+              (html/p*
+                (html/attr "class" "muted")
+                (html/join
+                  (list
+                    (html/a "/book/verify" "verify")
+                    " — re-run every expect trailer (the book's dune runtest)")))
               (if (null? chapters)
                   (html/p*
                     (html/attr "class" "muted")
@@ -590,3 +599,148 @@
               (book/code-index-html)))))))
   "GET /book — merged index: borg chapters (export order) + package
    spec docs + the code appendix.")
+
+;; ---------------------------------------------------------------- verify
+;;
+;; habitat-book.eval-examples: (book/verify [slug]) is the book's
+;; `dune runtest`. Every nopales example row carrying an `expect`
+;; trailer re-evals in THIS session's env through the restricted
+;; example-eval prim (same engine as the run button); the rendered
+;; value is compared to the trimmed trailer. Mismatch, refusal, or
+;; error => a hole record (path src expected got) — drift-as-rendering:
+;; reported, never silent. GET /book/verify[?chapter=slug] renders the
+;; report; /api/eval consumes the fn directly (smoke: smoke_book.py).
+
+(define book/guard-msg
+  (lambda (e)
+    (if (pair? e) (as-str (nth e 1)) (str e)))
+  "Message slot of a guard error value ((error msg kind)); anything
+   else renders via str.")
+
+(define book/verify-skip?
+  (lambda (b)
+    (or (null? (book/f b "expected"))
+        (not (string-eq (as-str (book/f b "lang")) "nopales"))))
+  "Out of verify scope: no expect trailer, or an ocaml block
+   (captured, not live — habitat-book eval-examples v1).")
+
+(define book/verify-one
+  (lambda (node)
+    (let ((b (dict-get node "body")))
+      (if (book/verify-skip? b)
+          ()
+          (let ((path (book/row-path node))
+                (src (as-str (book/f b "src")))
+                (expected (string-trim (as-str (book/f b "expected")))))
+            (guard
+              (lambda (e)
+                (list path src expected (book/guard-msg e)))
+              (let ((got (string-trim (as-str (example-eval src)))))
+                (if (string-eq got expected)
+                    ()
+                    (list path src expected got))))))))
+  "One example row -> () (skip or pass), else a hole record (path src
+   expected got). Refusals/eval errors are holes too: an example that
+   cannot run in the reader's restricted env is drift — the got slot
+   then carries the message verbatim (\"example-eval: refused: …\" for
+   gate/budget refusals, \"unbound: …\" for eval errors).")
+
+(define book/verify-candidates
+  (lambda (rows)
+    (list/filter
+      (lambda (n) (not (book/verify-skip? (dict-get n "body"))))
+      rows))
+  "Example rows verify will actually run (nopales + expect trailer).")
+
+(define book/verify-holes
+  (lambda (rows)
+    (list/filter
+      (lambda (h) (not (null? h)))
+      (list/map book/verify-one rows)))
+  "Hole records over a row set, document order (tree/subtree order).")
+
+(define book/verify
+  (lambda (&optional slug)
+    (let ((root (if (string-eq (as-str slug) "")
+                    "data.book.ch"
+                    (string-append "data.book.ch." (as-str slug)))))
+      (book/verify-holes (tree/subtree root 20000))))
+  "(book/verify [slug]) — the book's self-test: re-eval every nopales
+   example with an expect trailer under data.book.ch[.slug]; returns
+   hole records (path src expected got); empty list = all green.
+   Author-time verify half of habitat-book eval-examples (the run
+   button is the read-time half).")
+
+(define book/hole-html
+  (lambda (h)
+    (let ((path (as-str (car h)))
+          (src (as-str (car (cdr h))))
+          (expected (as-str (car (cdr (cdr h)))))
+          (got (as-str (car (cdr (cdr (cdr h)))))))
+      (html/div
+        (html/attr "class" "book-hole-row")
+        (html/join
+          (list
+            (html/p* "" (html-escape path))
+            (html/pre (html-escape src))
+            (html/p*
+              ""
+              (html/join
+                (list
+                  "expect => "
+                  (html/code expected)
+                  " · got "
+                  (html/code got)))))))))
+  "One verify hole row (drift-as-rendering): row path, the example
+   source, expected trailer vs actual render/refusal.")
+
+(define book/verify-page-html
+  (lambda (slug n holes)
+    (html/page
+      (list
+        (book/style-html)
+        (html/p*
+          (html/attr "class" "muted")
+          (html/join (list (html/a "/book" "book") " · verify")))
+        (html/h1 "book verify")
+        (html/p*
+          (html/attr "class" "muted")
+          (html-escape
+            (string-append
+              (if (string-eq slug "")
+                  "the whole book · "
+                  (string-append "chapter " slug " · "))
+              "checked " (as-str n)
+              (if (= n 1) " example" " examples")
+              " with expect trailers · holes " (as-str (count holes)))))
+        (if (= (count holes) 0)
+            (html/p* "" "all green — every expect trailer matches its render.")
+            (html/join (list/map book/hole-html holes))))))
+  "Report body for GET /book/verify: counts + one hole row per
+   mismatched/refused example.")
+
+(define book/verify-page
+  (lambda ()
+    (let ((m (request-param "chapter")))
+      (let ((slug (if (null? m) "" (string-trim (as-str m)))))
+        (let ((root (if (string-eq slug "")
+                        "data.book.ch"
+                        (string-append "data.book.ch." slug))))
+          (let ((rows (tree/subtree root 20000)))
+            (if (null? rows)
+                (if (string-eq slug "")
+                    (html/page
+                      (list
+                        (book/style-html)
+                        (html/h1 "book verify")
+                        (html/p*
+                          (html/attr "class" "muted")
+                          "No book rows seeded yet — run scripts/load-book.sh <export.book.json>.")))
+                    (book/not-found (string-append "chapter " slug)))
+                (book/verify-page-html
+                  slug
+                  (count (book/verify-candidates rows))
+                  (book/verify-holes rows))))))))
+  "GET /book/verify[?chapter=slug] — the verify report: every nopales
+   example with an expect trailer re-evaluated; mismatches/refusals
+   render as hole rows (habitat-book eval-examples).")

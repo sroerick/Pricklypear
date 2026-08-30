@@ -15,7 +15,8 @@
        closed — including through macro expansion and function bodies;
      - env semantics: parent bindings resolve, thunks force, nothing
        leaks back (child env);
-     - caps: step budget kills runaway nesting.
+     - caps: step budget kills runaway nesting — CONVERTED to Refused
+       (budget -> refusal) so (book/verify)'s guard can hole it.
 
    The eval path runs under Example_eval's own nested rim, so no outer
    Control_rim is needed in the test (bench precedent). *)
@@ -262,14 +263,48 @@ let runtime_tests =
 (* --- caps --- *)
 
 let cap_tests =
-  [ ("step budget kills runaway nesting", `Quick, fun () ->
+  [ ("step budget converts runaway nesting to a refusal", `Quick, fun () ->
       let deep =
         String.concat "" (List.init 2000 (fun _ -> "(+ 1 "))
         ^ "0" ^ String.concat "" (List.init 2000 (fun _ -> ")"))
       in
       let out = run ~limit:100 deep in
-      Alcotest.(check bool) "budget exceeded"
-        (String.starts_with ~prefix:"ERR: budget_exceeded" out) true);
+      (* v2 (P2.4): budget exhaustion CONVERTS to Refused — the only
+         live budget here is the nested one, and guard (book/verify's
+         only catch) re-raises Budget_exceeded by design, so a runaway
+         example must surface as a hole-able refusal, not a page
+         killer. Pre-P2.4 this surfaced as ERR: budget_exceeded. *)
+      Alcotest.(check bool) "budget -> refused"
+        (String.starts_with ~prefix:"REFUSED: example budget exceeded" out)
+        true);
+    ("self-application loop refused at the default limit", `Quick, fun () ->
+      (* ((lambda (x) (x x)) (lambda (x) (x x))) — pure-lambda runaway
+         (no recursion special form needed), the shape book/verify can
+         actually meet in curated examples. Must come back as a
+         refusal well under the wall-clock cap. *)
+      let out = run "((lambda (x) (x x)) (lambda (x) (x x)))" in
+      Alcotest.(check bool) "y-loop refused"
+        (String.starts_with ~prefix:"REFUSED: example budget exceeded" out)
+        true);
+    ("outer caller budget untouched by a runaway example", `Quick, fun () ->
+      (* The nested budget dies; the caller's current_budget is
+         restored in finally — prove the session can keep evaluating
+         after a refusal. *)
+      let env, full = make_full () in
+      (try
+         ignore
+           (Pricklypear_image_lib.Example_eval.eval_source ~env ~full_prims:full
+              ~known_fn:(fun _ -> None)
+              "((lambda (x) (x x)) (lambda (x) (x x)))")
+       with Pricklypear_image_lib.Example_eval.Refused _ -> ());
+      let v =
+        Pricklypear_image_lib.Control_rim.run ~prims:full (fun () ->
+            Pricklypear_lisp.Eval.eval
+              ~budget:(Pricklypear_lisp.Eval.make_budget ())
+              ~prims:Pricklypear_lisp.Eval.empty_prims env
+              (App (Var "+", [ int 1; int 2 ])))
+      in
+      Alcotest.(check string) "caller alive" "3" (pp v));
     ("empty source refused", `Quick, fun () ->
       Alcotest.(check string) "empty" "REFUSED: empty source" (run ""));
     ("parse error propagates as ERR", `Quick, fun () ->
