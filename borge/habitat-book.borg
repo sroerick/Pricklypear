@@ -1,6 +1,11 @@
 (project pricklypear-habitat-book
  (doc "Pricklypear book chapter: the spec IS the book — borg chapters rendered beautifully to paper AND to the habitat, with live code examples")
- (status planned)
+ (status implemented)
+ (* agent note (|2026-08-30 top-level smokes verified: index order +
+     /book/chapter render + reader suppression (loop 17), run-button
+     click-eval (loop 18), book/verify hole render
+     (scripts/smoke_book.py), export/print order parity (borge loop
+     12). course-documents below stays planned — courses are P3.1.|) *)
  (* agent note (|2026-08-29 authored from the cs-curriculum design session
      (docs/cs-curriculum.md). Probe of `borge book print .` on the
      post-pivot tree: chapters land p788+ in readdir order, inline not
@@ -14,7 +19,7 @@
         borge renders them to paper; the habitat renders them to live,
         evaluable pages. Courses are compositions over chapters, never
         copies of them.")
-  (status planned)
+  (status implemented)
 
   (verify
    (build "dune build image")
@@ -78,7 +83,7 @@
 
   (subsection export-projection
    (doc "borge-side render stream: ordered inline-tree walk, reader/workshop modes, JSON/sexp export artifact — the habitat's feed and the paper's spine")
-   (status planned)
+   (status implemented)
    (verify
     (smoke "`borge book export .` writes <stem>.book.json with chapters in inline order")
     (smoke "export includes .pp package sources and migrations as code chapters")
@@ -113,7 +118,7 @@
 
   (subsection habitat-loader
    (doc "seed the export into the one tree: chapters as typed nodes, refresh on release — reads then inherit branch/lens semantics for free")
-   (status planned)
+   (status implemented)
    (verify
     (smoke "scripts/load-book.sh <stem>.book.json upserts book chapters without clobbering hand edits elsewhere")
     (smoke "(load-library \"book\") renders an index from tree rows, not from files"))
@@ -164,7 +169,17 @@
 
   (subsection eval-examples
    (doc "read-time eval of nopales example blocks in the reader's session; restricted prim table; (book/verify) as the book's self-test")
-   (status planned)
+   (status implemented)
+   (* agent note (|2026-08-30 all three smokes verified: POST
+       /book/eval-example returns value + elapsed and the run button is
+       live (loop 18); define refused at the static gate, create/delete
+       refused via known_fn capability, tree/upsert fails closed at the
+       restricted rim; (book/verify) hole mechanics proven by
+       scripts/smoke_book.py on a smoke_verify chapter — fail,
+       refusal, and fix-forward all hole — and whole-book verify is
+       green at the current 0 real example fences. Example fences in
+       the .borg chapters themselves remain unwritten (authoring work,
+       not machinery).|) *)
    (verify
     (smoke "clicking a nopales block evals it and renders value + elapsed")
     (smoke "blocks cannot define/persist: define/route/create prims are absent from the example table")

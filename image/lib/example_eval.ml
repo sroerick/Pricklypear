@@ -26,7 +26,13 @@
       limit) — the lisp/ recursion/loop guardrail; plus a wall-clock
       cap checked between top-level forms. Blocking prims (sleep,
       http-get, llm/agent families) are not whitelisted, so nothing
-      inside the example can park the fiber past the step budget.
+      inside the example can park the fiber past the step budget. A
+      runaway example's budget exhaustion converts to [Refused], NOT
+      a bare Budget_exceeded: the only budget in play here is the
+      nested one (the caller's is restored in [finally]), and guard —
+      the only catch Nopales has — deliberately re-raises
+      Budget_exceeded, so (book/verify) must see a refusal to render
+      the runaway as a hole instead of dying with the report.
 
     The caller's current_budget and the ambient rim are saved/restored
     around the nested run (Control.run_with_rim nests by design; same
@@ -206,8 +212,9 @@ let check_form ~(known_fn : Pricklypear_lisp.Effect.known_fn_lookup)
 
 (** Parse + gate + eval [src] (all top-level forms, last value
     returned) in a child of [env] under a fresh budget and a restricted
-    rim over [full_prims]. Raises [Refused] on gate refusals, parse
-    errors and eval errors propagate as-is. *)
+    rim over [full_prims]. Raises [Refused] on gate refusals and on
+    the example's own step-budget exhaustion; parse errors and eval
+    errors propagate as-is. *)
 let eval_source ~(env : Pricklypear_lisp.Ast.env)
     ~(full_prims : Primitives.t)
     ~(known_fn : Pricklypear_lisp.Effect.known_fn_lookup)
@@ -227,23 +234,31 @@ let eval_source ~(env : Pricklypear_lisp.Ast.env)
   let budget = Pricklypear_lisp.Eval.make_budget ~limit () in
   let prev_budget = !Pricklypear_lisp.Eval.current_budget in
   let t0 = Unix.gettimeofday () in
-  Fun.protect
-    ~finally:(fun () ->
-      Pricklypear_lisp.Eval.current_budget := prev_budget)
-    (fun () ->
-      Control_rim.run ~prims:rprims (fun () ->
-          let rec loop last = function
-            | [] -> last
-            | e :: rest ->
-                if Unix.gettimeofday () -. t0 > time_cap then
-                  raise
-                    (Interp_error
-                       (User_error
-                          ("example-eval: time cap exceeded", "timeout")));
-                let v =
-                  Pricklypear_lisp.Eval.eval ~budget
-                    ~prims:Pricklypear_lisp.Eval.empty_prims cenv e
-                in
-                loop v rest
-          in
-          loop VNil forms))
+  try
+    Fun.protect
+      ~finally:(fun () ->
+        Pricklypear_lisp.Eval.current_budget := prev_budget)
+      (fun () ->
+        Control_rim.run ~prims:rprims (fun () ->
+            let rec loop last = function
+              | [] -> last
+              | e :: rest ->
+                  if Unix.gettimeofday () -. t0 > time_cap then
+                    raise
+                      (Interp_error
+                         (User_error
+                            ("example-eval: time cap exceeded", "timeout")));
+                  let v =
+                    Pricklypear_lisp.Eval.eval ~budget
+                      ~prims:Pricklypear_lisp.Eval.empty_prims cenv e
+                  in
+                  loop v rest
+            in
+            loop VNil forms))
+  with
+    (* Inside this window the only live budget is the nested one — the
+       caller's is stashed in [prev_budget] until [finally]. Convert so
+       both consumers (POST run button, (example-eval) prim →
+       book/verify's guard) render a runaway example as a refusal. *)
+    Interp_error Budget_exceeded ->
+      raise (Refused (Printf.sprintf "example budget exceeded (%d steps)" limit))
