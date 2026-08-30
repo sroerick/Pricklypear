@@ -1,0 +1,95 @@
+(project cs-interpreters
+ (doc "Course: interpreters and code as data — build a Lisp, then fork, diff, and merge programs as trees (CS 201 + CS 202 of docs/cs-curriculum.md)")
+ (status implemented)
+ (* agent note (|2026-08-31 authored per borge/habitat-book.borg
+     course-documents: a course is a COMPOSITION — this root selects
+     chapters in course order for `borge book print/export --root`
+     (the per-course paper), and the habitat mirrors it as the notes
+     outline doc `course/cs-interpreters` (kind course), rendered by
+     libs/book at /book/course/cs-interpreters. Course roots are
+     excluded from the canonical book walk (borge composition-root
+     rule): they compose chapters, never copy or reorder them.|) *)
+ (convention ocaml-dune)
+ (section front-matter
+  (doc "Who this course is for, what you will be able to do, and how the readings and labs run on the habitat itself")
+  (status implemented)
+  (details
+   (doc (|
+        AUDIENCE
+
+        Anyone who wants to know what a programming language IS —
+        not by reading about interpreters, but by building one that
+        runs a real multi-user operating system. The system you are
+        reading this in (Nopales on Pricklypear) is the course's
+        running example AND its lab bench: every reading is a spec
+        chapter of the very interpreter you are using, served live
+        at /book/course/cs-interpreters with runnable examples.
+
+        OUTCOMES
+
+        By the end you can, from source and from the habitat:
+        1. Build a Lisp: reader, AST, evaluator, environments,
+           closures, tail calls, lazy thunks ((delay)/(force)).
+        2. Extend a language: add a special form or primitive to
+           Nopales and prove it with a conformance test.
+        3. Treat programs as data: read a function's AST at
+           /binding/<name>, fork a branch, patch the AST, merge
+           back, and diff two generations of a binding.
+
+        HOW TO TAKE IT
+
+        Read the chapters in course order (below). Examples in the
+        habitat reader evaluate in YOUR session — run them as you
+        read (habitat-first eval); `(book/verify)` re-checks every
+        worked example. The labs are habitat objects, not
+        worksheets: see the labs paragraph. The paper edition is
+        the same chapters via
+        `borge book print --root course/cs-interpreters.borg`.
+   |)))
+  (subsection readings
+   (doc "Three chapters, in course order — each is the spec of a layer you then extend in the lab")
+   (status implemented)
+   (details
+    (doc (|
+         1. borge/lisp-interpreter.borg — the language layer: the
+            reader, the AST, the evaluator, environments, closures,
+            tail calls, lazy thunks. Read `lisp/lib/eval.ml` as the
+            primary source; it is the chapter's running code.
+         2. borge/structural-editing.borg — programs as trees: one
+            shared tree-op protocol (slurp, barf, wrap, splice,
+            raise) over outlines AND code ASTs; you never type
+            structure.
+         3. borge/branching.borg — code as institutional data:
+            branches as fork/merge over program text, AST diffing,
+            inheritance of definitions on the one tree.
+
+         Course order is deliberate: build the machine (1), then
+         learn to operate on its programs as data (2), then see what
+         a version-control system becomes when programs are data
+         (3). The canonical book orders these chapters by system
+         concern; the course re-orders them for the learner — a
+         composition, never a copy.
+   |)))
+   (subsection labs
+    (doc "The labs are habitat objects: routes on the running image, graded by whether the thing exists and works")
+    (status implemented)
+    (details
+     (doc (|
+          LAB 1 — extend the language (after reading 1). Add one
+          special form or primitive to Nopales behind a conformance
+          test in lisp/conformance/. Bench: /repl (try it), /code
+          (read lisp/lib/), /binding/<name> (inspect what the reader
+          made of your forms).
+
+          LAB 2 — operate on a program as data (after readings 2-3).
+          Fork a branch, patch a function's AST, merge back, and
+          diff two generations of a binding. Bench: /branches,
+          /bindings, /binding/<name>, and the /book chapter pages
+          for branching and structural-editing.
+
+          Report problems in log/issues (the habitat's own register)
+          — issue hygiene is part of the coursework.
+   |))))))	 
+ (inline ../borge/lisp-interpreter.borg)
+ (inline ../borge/structural-editing.borg)
+ (inline ../borge/branching.borg))

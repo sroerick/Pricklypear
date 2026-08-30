@@ -16,10 +16,18 @@ Covers the habitat-book verify smokes:
     (value + elapsed, refused, captured-not-live, 400/404)
   - book/verify: pass/fail/refusal holes via /api/eval + the
     GET /book/verify report page; fix-forward transition
+  - courses (habitat-book.course-documents): /book/course/<slug>
+    renders the ordered reading list with chapter status badges; a
+    second course referencing the same chapter duplicates nothing in
+    the tree; /book index lists course groupings
 
 Seeds throwaway rows under data.book.ch.smoke_verify and deletes them
 in a finally (branch-free data.* namespace; the real book rows stay
 untouched). Requires the book rows seeded (data.book.ch nonempty).
+The real course doc (notes slug course/cs-interpreters, kind course)
+is seeded ONLY when absent — content discipline: the smoke never
+clobbers manual edits. The throwaway second course doc is deleted in
+a finally.
 """
 from __future__ import annotations
 
@@ -41,6 +49,12 @@ X1 = CH + ".x901"  # (+ 40 2) expect 42      -> PASS
 X2 = CH + ".x902"  # (+ 1 1)  expect 3       -> FAIL (hole)
 X3 = CH + ".x903"  # (define x 1) expect 1   -> REFUSED (hole)
 X4 = CH + ".x904"  # ocaml, no expect        -> skipped by verify
+
+COURSE = "course/cs-interpreters"  # the real course doc (seed if absent)
+SECOND = "course/smoke-second"  # throwaway second course (deleted)
+CH1 = "borge_lisp_interpreter"  # real chapter labels (loader slug_label)
+CH2 = "borge_structural_editing"
+CH3 = "borge_branching"
 
 
 def auth_headers(extra=None):
@@ -170,6 +184,160 @@ def cleanup():
     delete_row(CH)
 
 
+def upsert_doc(slug, title, root_body, kids, tags, day):
+    """notes/doc/upsert of one course doc. kids: (id, title, body, kids)
+    tuples; a reading node's body starts with its `chapter: <label>`
+    line. Upserts report failures as strings — wrapped to raise."""
+
+    def node(nid, ntitle, nbody, nkids):
+        # kids entries are (id, title, body, kids) tuples — recurse to
+        # s-expression strings before joining (draft joined raw tuples).
+        kid_exprs = [node(*k) for k in nkids]
+        kids = ("(list " + " ".join(kid_exprs) + ")") if kid_exprs else "(list)"
+        return (
+            "(outline/node* %s %s %s \"\" %s)"
+            % (
+                nop_quote(nid),
+                nop_quote(ntitle),
+                nop_quote(nbody),
+                kids,
+            )
+        )
+
+    root = node("root", title, root_body, kids)
+    expr = (
+        "(notes/doc/upsert %s %s %s %s \"course\" %s)"
+        % (nop_quote(slug), nop_quote(title), root, nop_quote(tags), nop_quote(day))
+    )
+    r = eval_lisp(expr)
+    if not r.get("ok"):
+        raise RuntimeError(f"course doc upsert failed: {slug} -> {r.get('error')}")
+
+
+def doc_path(slug):
+    # notes/doc/row is a (uuid . body) pair — the kernel's row-path
+    # accessor reads (cdr row) and returns "" when the row is absent
+    # (dict-get on the raw pair errors: "dict-get needs 2 strings").
+    return value(
+        f'(notes/doc/row-path (notes/doc/row {nop_quote(slug)}))'
+    )
+
+
+def seed_course_doc():
+    """Seed the REAL course doc only when absent (content discipline:
+    the smoke must never clobber manual edits)."""
+    absent = value(f'(null? (notes/doc/row {nop_quote(COURSE)}))')
+    if absent is True:
+        upsert_doc(
+            COURSE,
+            "CS: interpreters and code as data",
+            "Build a Lisp, then fork, diff, and merge programs as trees — on the "
+            "habitat you are reading this in. Every reading is a spec chapter of "
+            "the very interpreter under your session; examples evaluate live in "
+            "YOUR session (habitat-first eval), and (book/verify) re-checks every "
+            "worked example. The paper edition is the same chapters: borge book "
+            "print --root course/cs-interpreters.borg.",
+            [
+                (
+                    "front-matter",
+                    "Front matter",
+                    "WHO: anyone who wants to know what a programming language IS — "
+                    "by building one that runs a real multi-user operating system.\n\n"
+                    "OUTCOMES: build a Lisp (reader, AST, evaluator, environments, "
+                    "closures, tail calls, lazy thunks — (delay)/(force)); extend the "
+                    "language (add a special form or primitive to Nopales behind a "
+                    "conformance test in lisp/conformance/); treat programs as data "
+                    "(read a function's AST, fork a branch, patch, merge, diff).\n\n"
+                    "HOW: read in course order below; run the examples as you read — "
+                    "they evaluate in your session. Labs are habitat objects, not "
+                    "worksheets. Report problems in log/issues — issue hygiene is "
+                    "part of the coursework.",
+                    [],
+                ),
+                (
+                    "readings",
+                    "Readings",
+                    "Three chapters, in course order — each is the spec of a layer "
+                    "you then extend in the lab.",
+                    [
+                        (
+                            "r1",
+                            "1 — build a Lisp (the language layer)",
+                            f"chapter: {CH1}\nThe reader, the AST, the evaluator, "
+                            "environments, closures, tail calls, lazy thunks. Read "
+                            "lisp/lib/eval.ml as the primary source — it is this "
+                            "chapter's running code.",
+                            [],
+                        ),
+                        (
+                            "r2",
+                            "2 — programs as trees (structural editing)",
+                            f"chapter: {CH2}\nOne shared tree-op protocol (slurp, "
+                            "barf, wrap, splice, raise) over outlines AND code "
+                            "ASTs — you never type structure.",
+                            [],
+                        ),
+                        (
+                            "r3",
+                            "3 — code as institutional data (branching)",
+                            f"chapter: {CH3}\nBranches as fork/merge over program "
+                            "text, AST diffing, inheritance of definitions on the "
+                            "one tree — what version control becomes when programs "
+                            "are data.",
+                            [],
+                        ),
+                    ],
+                ),
+                (
+                    "labs",
+                    "Labs",
+                    "LAB 1 — extend the language (after reading 1): add one special "
+                    "form or primitive to Nopales behind a conformance test. Bench: "
+                    "/repl, /code, and the /binding pages.\n\n"
+                    "LAB 2 — operate on a program as data (after readings 2-3): fork "
+                    "a branch, patch a function's AST, merge back, diff two "
+                    "generations of a binding. Bench: /branches, /bindings, and the "
+                    "/book chapter pages.\n\n"
+                    "Report problems in log/issues — the habitat's own register.",
+                    [],
+                ),
+            ],
+            "course,interpreters,nopales",
+            "2026-08-30",
+        )
+        print("ok: course doc seeded")
+    else:
+        print("ok: course doc already seeded (leaving manual edits alone)")
+
+
+def seed_second_course():
+    """Throwaway second course referencing the SAME chapter — proves
+    composition duplicates nothing in the tree."""
+    upsert_doc(
+        SECOND,
+        "smoke: second course (throwaway)",
+        "Throwaway smoke course — deleted by smoke_book.py.",
+        [
+            (
+                "only",
+                "the shared chapter",
+                f"chapter: {CH1}\nSame chapter, second course — the tree must "
+                "not grow a copy.",
+                [],
+            )
+        ],
+        "course,smoke",
+        "2026-08-30",
+    )
+
+
+def cleanup_second_course():
+    try:
+        delete_row(doc_path(SECOND))
+    except Exception:
+        pass  # cleanup must never mask the real failure
+
+
 def main():
     # -- preconditions ------------------------------------------------
     nch = value('(count (tree/children-of "data.book.ch"))')
@@ -276,11 +444,55 @@ def main():
         left = value(f'(null? (tree/get "{CH}"))')
         must(left is True, "smoke rows cleaned up")
 
+    # -- 8. courses (habitat-book.course-documents) --------------------
+    seed_course_doc()  # real doc; seeded only when absent
+    st, page = http_get("/book/course/cs-interpreters")
+    must(st == 200, f"GET /book/course/cs-interpreters -> {st}")
+    must("CS: interpreters and code as data" in page,
+         "course page carries the doc title")
+    must(f"/book/chapter/{CH1}" in page
+         and f"/book/chapter/{CH2}" in page
+         and f"/book/chapter/{CH3}" in page,
+         "reading list links the three chapters in course order")
+    must(page.find(f"/book/chapter/{CH1}")
+         < page.find(f"/book/chapter/{CH2}")
+         < page.find(f"/book/chapter/{CH3}"),
+         "reading order is document order (compose, never reorder)")
+    must("<ol" in page, "readings render as one ordered list")
+    must(page.count('class="book-status"') >= 3,
+         "chapter status badges on the reading list")
+    must("Front matter" in page and "Labs" in page,
+         "front matter + labs sections render")
+    st, page = http_get("/book/course/cs-interpreters?mode=workshop")
+    must(st == 200 and 'class="book-status"' in page,
+         "workshop register renders the course too")
+    n_before = value('(count (tree/children-of "data.book.ch"))')
+    try:
+        seed_second_course()
+        n_after = value('(count (tree/children-of "data.book.ch"))')
+        must(n_before == n_after,
+             f"second course duplicates nothing in the tree ({n_before} chapters)")
+        st, page = http_get("/book/course/smoke-second")
+        must(st == 200 and f"/book/chapter/{CH1}" in page,
+             "second course renders the SAME chapter by reference")
+        st, idx = http_get("/book")
+        must("/book/course/cs-interpreters" in idx
+             and "/book/course/smoke-second" in idx,
+             "index lists course groupings")
+    finally:
+        cleanup_second_course()
+        gone = value(f'(null? (notes/doc/row {nop_quote(SECOND)}))')
+        must(gone is True, "second course doc cleaned up")
+    st, _ = http_get("/book/course/nope")
+    must(st == 404, "unknown course 404s")
+    st, _ = http_get("/book/course/Not_A_Slug")
+    must(st == 404, "unsafe course suffix 404s")
+
     # real book has no example fences yet -> whole-book verify is green
     must(value("(count (book/verify))") == 0,
          "whole-book verify green after cleanup (real book: 0 examples)")
 
-    print("\nSMOKE OK: habitat-book /book surface + book/verify")
+    print("\nSMOKE OK: habitat-book /book surface + book/verify + courses")
 
 
 if __name__ == "__main__":
