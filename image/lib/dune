@@ -7,6 +7,7 @@
           session_types call_graph agent_tools
           prims_request prims_net prims_media prims_graph prims_db
           net_prims prims_hyper
+          example_eval
           session
           session_registry
           function_stats

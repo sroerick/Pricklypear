@@ -111,7 +111,11 @@
         "details.book-verify summary{cursor:pointer;color:#9aa0a6}"
         "blockquote.book-note{border-left:3px solid #666;margin:.5rem 0;"
         "padding:.1rem .8rem;color:#b9bdc4}"
-        ".book-hole{color:#f88;border-bottom:2px dashed #c44}")))
+        ".book-hole{color:#f88;border-bottom:2px dashed #c44}"
+        ".book-result{border-top:1px dashed #333;margin-top:.4rem;"
+        "padding-top:.3rem;color:#cde;font-size:.9rem}"
+        ".book-elapsed{color:#667;font-size:.75rem}"
+        ".book-error{color:#f88;margin-top:.3rem;font-size:.85rem}")))
   "Book-page styles (phone-honest; print-considerate by restraint).")
 
 (define book/status-color
