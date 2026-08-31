@@ -218,9 +218,19 @@
 (define book/json-array
   (lambda (xs)
     (string-append "["
-      (html/join (list/map (lambda (x) (string-append "\"" (book/json-esc (as-str x) 0 "") "\"")) xs))
-      "]"))
-  "Token list to JSON array string (dict-set needs strings; stored on\n   section rows by book/precompute1).")
+      (book/json-array-join xs "" #t)))
+  "JSON array string with comma separators (dict-set needs strings;\n   stored on section rows by book/precompute1).")
+(define book/json-array-join
+  (lambda (xs acc first?)
+    (if (null? xs)
+        acc
+        (book/json-array-join
+          (cdr xs)
+          (string-append acc
+            (if first? "" ",")
+            "\"" (book/json-esc (as-str (car xs)) 0 "") "\"")
+          #f)))
+  "Comma-separated quoted elements for book/json-array.")
 (define book/partition-toks
   (lambda (toks resolved holes)
     (if (null? toks)
