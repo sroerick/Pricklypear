@@ -213,19 +213,14 @@
           (book/json-esc s (+ i 1)
             (string-append acc
               (if (string-eq c "\\") "\\\\"
-                (if (string-eq c "\"") "\\\"" c))))))
+                (if (string-eq c "\"") "\\\"" c)))))))
   "Escape one string for embedding in a JSON array literal.")
-)
-
 (define book/json-array
   (lambda (xs)
     (string-append "["
-      (html/join (list/map (lambda (x) (string-append "\"" (book/json-esc (as-str x)) "\"")) xs))
-      "]")
-  "Token list to JSON array string (dict-set needs strings; stored on
-   section rows by book/precompute1).")
-)
-
+      (html/join (list/map (lambda (x) (string-append "\"" (book/json-esc (as-str x) 0 "") "\"")) xs))
+      "]"))
+  "Token list to JSON array string (dict-set needs strings; stored on\n   section rows by book/precompute1).")
 (define book/partition-toks
   (lambda (toks resolved holes)
     (if (null? toks)
@@ -284,20 +279,13 @@
           (html/join
             (list/map
               (lambda (para) (book/para-html para link? classes))
-              (string-split p "\n\n")))))
-  "Prose paragraphs with caller-supplied (resolved holes) classes:
-   the stored-fields fast path (book/row-classes) or fresh compute.")
-)
-
+              (string-split p "\n\n"))))))
+  "Prose paragraphs with caller-supplied (resolved holes) classes:\n   the stored-fields fast path (book/row-classes) or fresh compute.")
 (define book/prose-html
   (lambda (prose link?)
     (book/prose-html-cls prose
       (if link? (book/classes-compute prose) (list () ())) link?))
-  "Course/outline surfaces (no book row in hand): compute live. Book
-   section/chapter pages call book/prose-html-cls with row classes."
-)
-
-
+  "Course/outline surfaces (no book row in hand): compute live. Book\n   section/chapter pages call book/prose-html-cls with row classes.")
 (define book/verify-html
   (lambda (verify)
     (if (null? verify)
@@ -564,45 +552,20 @@
                         (dict-set* (as-str b) (list
                           "resolved" (book/json-array (car cls))
                           "holes"    (book/json-array (car (cdr cls))))))
-                      1)))))))
-  "Resolve + store resolved/holes on ONE section row. Returns 1 when
-   the row had prose. Budget-safe per call (one section's tokens).")
-)
-
+                      1))))))))
+  "Resolve + store resolved/holes on ONE section row. Returns 1 when\n   the row had prose. Budget-safe per call (one section's tokens).")
 (define book/precompute-rows
   (lambda (rows acc)
     (if (null? rows)
         acc
         (let ((p (book/row-path (car rows))))
           (book/precompute-rows (cdr rows)
-            (+ acc (book/precompute1 p) (book/precompute-rows (book/children p) 0)))))
+            (+ acc (book/precompute1 p) (book/precompute-rows (book/children p) 0))))))
   "Depth-first over a chapter's section tree; returns rows stored.")
-)
-
 (define book/precompute
   (lambda (label)
     (book/precompute-rows (book/children (string-append "data.book.ch." label)) 0))
-  "(book/precompute) over one chapter slug: store classes for its
-   whole section tree. Big chapters may exceed the 100k step budget
-   in ONE call; the refresh flow drives book/precompute1 per section
-   path in that case."
-)
-
-;; ---------------------------------------------------------------- courses
-;;
-;; habitat-book.course-documents: a course is a NOTES/OUTLINE doc (slug
-;; course/<suffix>, kind course — the spec/<pkg> slash-slug pattern)
-;; whose reading nodes reference chapter labels — compose, never copy
-;; (decision 5). The renderer assembles the doc's outline into an
-;; ordered reading list over the seeded chapter rows; the chapter rows
-;; themselves never move (data.book.ch.* stays a chapter's ONE home —
-;; two courses referencing one chapter duplicate nothing in the tree).
-;; A reading node's body starts with a `chapter: <label>` line (the
-;; machine reference, book/label-safe? shape); the rest renders as
-;; description prose. Status badges show in BOTH registers here: the
-;; reading list is itself a status view (spec smoke), unlike
-;; chapter-index rows (workshop-only).
-
+  "(book/precompute) over one chapter slug: store classes for its\n   whole section tree. Big chapters may exceed the 100k step budget\n   in ONE call; the refresh flow drives book/precompute1 per section\n   path in that case.")
 (define book/course-suffix-chars?
   (lambda (s i n)
     (if (= i n)
@@ -846,45 +809,22 @@
    read-only lookup notes/doc/row uses for slugs); empty section when
    none are seeded.")
 
-(define book/spec-packages
-  (lambda ()
-    (list/map
-      (lambda (row)
-        (let ((slug (as-str (dict-get (car (cdr row)) "slug"))))
-          (substring slug 5 (string-length slug))))
-      (list/filter
-        (lambda (row)
-          (spec/starts-with? (as-str (dict-get (car (cdr row)) "slug")) "spec/"))
-        (notes/doc/list))))
-  "Package slugs with spec docs, via notes/doc/list (cheap listing;
-   spec/packages-with-docs builds on notes/list, which decodes every
-   outline and blew the 100k-step page budget on prod's 3361 docs).")
-
 (define book/spec-index-html
   (lambda ()
-    (if (book/fn-bound? "notes/doc/list")
-        (let ((pkgs (book/spec-packages)))
-          (if (null? pkgs)
-              ""
-              (html/join
-                (list
-                  (html/h2 (string-append "Package specs (" (as-str (count pkgs)) ")"))
-                  (html/p*
-                    (html/attr "class" "muted")
-                    "spec/<pkg> intent docs — the other corpus this index merges (habitat-workflow.book-view).")
-                  (html/ul
-                    ""
-                    (html/join
-                      (list/map
-                        (lambda (p)
-                          (html/li
-                            ""
-                            (html/a (string-append "/book/" (as-str p)) (as-str p))))
-                        pkgs)))))))
-        ""))
-  "Index of package spec docs (reuses spec/packages-with-docs; empty
-   section when the spec package is not loaded).")
-
+    (html/join
+      (list
+        (html/h2 "Package specs")
+        (html/p*
+          (html/attr "class" "muted")
+          (html/join
+            (list
+              "spec/<pkg> intent docs -- the other corpus this index merges "
+              "(habitat-workflow.book-view). Live listing at "
+              (html/a "/spec" "/spec health")
+              " (an inline listing here decoded every note outline and blew "
+              "the page budget -- DECISION 2026-08-30: point, don't list; a "
+              "kernel-side bulk listing prim is the v2 fix)."))))))
+  "Index of package spec docs: a pointer to /spec, not a listing\n   (notes/list decodes every outline; blew the page budget on\n   prod's 3361 docs -- DECISION 2026-08-30).")
 (define book/code-index-html
   (lambda ()
     (let ((code (book/children "data.book.code")))
