@@ -190,14 +190,78 @@
 ;; book/split-piece + book/piece-html + the has-prefix?/has-suffix?
 ;; helpers are retired with this change.
 
-(define book/binding-classes
+;; ------------------------------------------------- seed-time resolution
+;;
+;; DECISION (2026-08-30, prod dogfood -- obituary): chapter pages died
+;; with "budget exceeded" on the real 629-row seed. Root cause:
+;; book/binding-classes ran spec/binding-resolves? (=> function-source,
+;; one DB round trip) per unique token PER REQUEST -- a chapter costs
+;; hundreds of DB hits, far over the 100k-step page budget on prod's
+;; loaded DB. Fix, kernel-free: resolve ONCE at seed time and STORE
+;; resolved/holes on each section row (book/precompute1, driven per
+;; section by the refresh flow); pages then json-parse the stored
+;; lists and render via the kernel render-tokens pass. Drift note:
+;; stored links are as-fresh-as-the-seed (rev prints on the index);
+;; a re-seed or precompute re-run refreshes them. Live compute remains
+;; the fallback for un-precomputed rows.
+
+(define book/json-esc
+  (lambda (s i acc)
+    (if (>= i (string-length s))
+        acc
+        (let ((c (substring s i 1)))
+          (book/json-esc s (+ i 1)
+            (string-append acc
+              (if (string-eq c "\\") "\\\\"
+                (if (string-eq c "\"") "\\\"" c))))))
+  "Escape one string for embedding in a JSON array literal.")
+)
+
+(define book/json-array
+  (lambda (xs)
+    (string-append "["
+      (html/join (list/map (lambda (x) (string-append "\"" (book/json-esc (as-str x)) "\"")) xs))
+      "]")
+  "Token list to JSON array string (dict-set needs strings; stored on
+   section rows by book/precompute1).")
+)
+
+(define book/partition-toks
+  (lambda (toks resolved holes)
+    (if (null? toks)
+        (list resolved holes)
+        (if (spec/binding-resolves? (car toks))
+            (book/partition-toks (cdr toks) (cons (car toks) resolved) holes)
+            (book/partition-toks (cdr toks) resolved (cons (car toks) holes)))))
+  "Single pass over unique token cores: ONE spec/binding-resolves? per
+   token (the old double filter called it twice per token)."
+)
+
+(define book/classes-compute
   (lambda (prose)
-    (let ((toks (prose-tokens (as-str prose))))
-      (list
-        (list/filter spec/binding-resolves? toks)
-        (list/filter (lambda (n) (not (spec/binding-resolves? n))) toks))))
+    (book/partition-toks (prose-tokens (as-str prose)) () ()))
   "(resolved holes) over prose's UNIQUE token-shaped cores: one kernel
-   scan + O(unique tokens) function-source lookups, never O(words).")
+   scan + O(unique tokens) function-source lookups, never O(words).
+   PAGE PATHS MUST NOT RUN THIS against the seeded book: on prod each
+   function-source is a DB round trip, and a chapter costs hundreds,
+   so pages blow the 100k-step budget. Page paths use book/row-classes
+   (stored fields); this compute path is for book/precompute1
+   (seed-time) and the small course/outline surfaces."
+)
+
+(define book/row-classes
+  (lambda (b prose link?)
+    (if (not link?)
+        (list () ())
+        (let ((r (book/f b "resolved")) (h (book/f b "holes")))
+          (if (and (not (null? r)) (not (null? h)))
+              (list (json-parse (as-str r)) (json-parse (as-str h)))
+              (book/classes-compute prose)))))
+  "Prefer the seed-time resolved/holes stored on the row (fast path:
+   json-parse only); fall back to live compute for rows that predate
+   precompute (dev fixtures, course notes)."
+)
+
 
 (define book/para-html
   (lambda (para link? classes)
@@ -212,20 +276,27 @@
    the kernel's HTML raw; the plain branch escapes manually (html/p
    would double-escape the render-tokens output).")
 
-(define book/prose-html
-  (lambda (prose link?)
+(define book/prose-html-cls
+  (lambda (prose classes link?)
     (let ((p (as-str prose)))
       (if (string-eq p "")
           ""
-          (let ((classes (if link? (book/binding-classes p) (list () ()))))
-            (html/join
-              (list/map
-                (lambda (para) (book/para-html para link? classes))
-                (string-split p "\n\n")))))))
-  "Prose text as paragraphs; binding tokens link/hole via the kernel
-   render-tokens pass (drift-as-rendering inherited from spec).")
+          (html/join
+            (list/map
+              (lambda (para) (book/para-html para link? classes))
+              (string-split p "\n\n")))))
+  "Prose paragraphs with caller-supplied (resolved holes) classes:
+   the stored-fields fast path (book/row-classes) or fresh compute.")
+)
 
-;; ---------------------------------------------------------------- scaffolding
+(define book/prose-html
+  (lambda (prose link?)
+    (book/prose-html-cls prose
+      (if link? (book/classes-compute prose) (list () ())) link?))
+  "Course/outline surfaces (no book row in hand): compute live. Book
+   section/chapter pages call book/prose-html-cls with row classes."
+)
+
 
 (define book/verify-html
   (lambda (verify)
@@ -393,7 +464,8 @@
               (html/tag tag "" (html-escape (as-str title)))
               (book/workshop-html b mode)
               (book/raw-html raw)
-              (book/prose-html prose (book/fn-bound? "spec/token-binding?"))
+              (let ((link? (book/fn-bound? "spec/token-binding?")))
+                (book/prose-html-cls prose (book/row-classes b prose link?) link?))
               (book/children-html (book/row-path node) mode)))))))
   "One section/subsection: heading, register scaffolding, prose, then
    nested children (document order via tree rank).")
@@ -425,7 +497,8 @@
           (html/h1 (html-escape (as-str title)))
           (book/workshop-html b mode)
           (book/raw-html raw)
-          (book/prose-html prose (book/fn-bound? "spec/token-binding?"))
+          (let ((link? (book/fn-bound? "spec/token-binding?")))
+            (book/prose-html-cls prose (book/row-classes b prose link?) link?))
           (book/children-html path mode)
           (html/p*
             (html/attr "class" "muted")
@@ -475,6 +548,45 @@
                         (string-append "lang: " (as-str lang)))
                       (html/pre (html-escape (as-str src)))))))))))
   "GET /book/code/<label> — one code-chapter listing from its row.")
+
+(define book/precompute1
+  (lambda (path)
+    (let ((row (tree/get path)))
+      (if (null? row)
+          0
+          (let ((b (dict-get row "body")))
+            (let ((prose (as-str (book/f b "prose"))))
+              (if (string-eq prose "")
+                  0
+                  (let ((cls (book/classes-compute prose)))
+                    (seq
+                      (tree/upsert path (dict-get row "kind") (dict-get row "type")
+                        (dict-set* (as-str b) (list
+                          "resolved" (book/json-array (car cls))
+                          "holes"    (book/json-array (car (cdr cls))))))
+                      1)))))))
+  "Resolve + store resolved/holes on ONE section row. Returns 1 when
+   the row had prose. Budget-safe per call (one section's tokens).")
+)
+
+(define book/precompute-rows
+  (lambda (rows acc)
+    (if (null? rows)
+        acc
+        (let ((p (book/row-path (car rows))))
+          (book/precompute-rows (cdr rows)
+            (+ acc (book/precompute1 p) (book/precompute-rows (book/children p) 0)))))
+  "Depth-first over a chapter's section tree; returns rows stored.")
+)
+
+(define book/precompute
+  (lambda (label)
+    (book/precompute-rows (book/children (string-append "data.book.ch." label)) 0))
+  "(book/precompute) over one chapter slug: store classes for its
+   whole section tree. Big chapters may exceed the 100k step budget
+   in ONE call; the refresh flow drives book/precompute1 per section
+   path in that case."
+)
 
 ;; ---------------------------------------------------------------- courses
 ;;
@@ -734,10 +846,24 @@
    read-only lookup notes/doc/row uses for slugs); empty section when
    none are seeded.")
 
+(define book/spec-packages
+  (lambda ()
+    (list/map
+      (lambda (row)
+        (let ((slug (as-str (dict-get (car (cdr row)) "slug"))))
+          (substring slug 5 (string-length slug))))
+      (list/filter
+        (lambda (row)
+          (spec/starts-with? (as-str (dict-get (car (cdr row)) "slug")) "spec/"))
+        (notes/doc/list))))
+  "Package slugs with spec docs, via notes/doc/list (cheap listing;
+   spec/packages-with-docs builds on notes/list, which decodes every
+   outline and blew the 100k-step page budget on prod's 3361 docs).")
+
 (define book/spec-index-html
   (lambda ()
-    (if (book/fn-bound? "spec/packages-with-docs")
-        (let ((pkgs (spec/packages-with-docs)))
+    (if (book/fn-bound? "notes/doc/list")
+        (let ((pkgs (book/spec-packages)))
           (if (null? pkgs)
               ""
               (html/join
