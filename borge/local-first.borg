@@ -457,6 +457,23 @@
          it invisible is the client invoking rounds on reconnect /
          on a timer against the same prims — no new server surface
          is needed or planned for it.
+
+         LLM CONFIG AS ROUND METADATA (2026-12, auth.user-llm-keys 5b).
+         A sync/push response additionally carries llm_config:
+         {api_key, base} — the CALLER's OWN llm credential, resolved
+         server-side from session/basic-auth identity. It is control-
+         channel metadata, NOT tree data: never a data.u.<user> row,
+         never in a node manifest, never in a pp-sync snapshot. The
+         client records it to <lens>/__config.json (lens-root
+         metadata, excluded from node_manifest like __ancestry.json /
+         __base.json / __snapshot.json) so the lens can reach the
+         provider invisibly after sync — the "copy user data down for
+         a seamless experience" case, without teaching the tree about
+         secrets. MODEL is deliberately not exported: it is a
+         per-surface dial resolved from the provider ABI
+         (GET {base}/models) and persisted per surface; sync carries
+         base so the ABI is reachable, and the client-side record
+         merge PRESERVES a locally chosen model across rounds.
     |))))
 
   (subsection sync-conflicts

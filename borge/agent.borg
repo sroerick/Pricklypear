@@ -386,6 +386,47 @@
          the surfaces stanza.
     |))))
 
+  (subsection llm-config
+   (doc "Provider key/base arrive via sync round metadata (__config.json); model is a per-surface dial from the provider ABI; /settings surface + chat-header dropdown")
+   (status implemented)
+   (implements agent/lib/config.ml agent/lib/http_ui.ml agent/lib/surface.ml agent/bin/main.ml llm/lib/provider.ml)
+   (details
+    (doc (|
+         SEAMLESS VIA SYNC, NOT A BESPOKE EXPORT. The operator's LLM
+         key already lives on the habitat (auth.user-llm-keys). Glochid
+         never asks for it by hand: a sync/push round returns the
+         CALLER's OWN credential as round metadata (llm_config:
+         {api_key, base} — local-first.sync / auth.user-llm-keys 5b),
+         recorded to <lens>/__config.json. Boot with --lens DIR and the
+         key + base are simply THERE (precedence: --flag > env > lens
+         __config.json > ~/.config/agent/config.json). For lens-less
+         runs the config file (~/.config/agent/config.json, JSON —
+         yojson is already the dep; NOT the v0-non-goals toml table,
+         which named a model REGISTRY, still out) holds the same three
+         fields written from the settings surface.
+
+         MODEL IS A PER-SURFACE DIAL, FROM THE ABI. Model is NOT
+         replicated user data (auth.user-llm-keys 5b pins this). Each
+         surface populates a DROPDOWN from the provider's own ABI —
+         GET {base}/models with the resolved key — and persists its
+         OWN choice locally. /settings (Nopales-authored settings/page,
+         fed by agent/config + agent/models prims) edits key/base/model
+         and POST /settings persists + retargets the RUNNING turn loop
+         (Provider.cfg is a mutable ref, not a boot-time constant).
+         The chat header carries the same dropdown (hx-post on change)
+         so model switches are one gesture from the prompt line.
+    |))))
+   (verify
+    (build "dune build @all")
+    (smoke "scripts/smoke_agent_surface.sh 16/16 PASS (incl. /settings has model select + chat header has model dropdown)")
+    (smoke "remote/test/lens_store_test.ml client-config group: sync round records key+base to __config.json; the file is EXCLUDED from node_manifest; a locally chosen model SURVIVES the next sync round")
+    (smoke "LIVE-VERIFIED (real provider): GET /settings renders a <select> populated from GET {base}/models (11 models, current selected); POST /settings persists ~/.config/agent/config.json (0600) and the next render shows the new model selected; browser form gets 303, hx-post gets 200"))
+   (* agent note (|2026-12 make note: NOT YET live-verified — the image's
+      sync/push llm_config field end-to-end against a real habitat round
+      (needs the prod deploy of this change). The client tolerates its
+      absence (no __config.json write) and the field shape is pinned in
+      auth.user-llm-keys 5b.|) *)
+
   (subsection v0-non-goals
    (doc "Explicit exclusions for the first working version")
    (status implemented)

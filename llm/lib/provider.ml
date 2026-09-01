@@ -63,7 +63,7 @@ module Llm_codec = Pricklypear_common.Llm_codec
    Handles content-length and chunked framing. Returns the raw response
    body string on 2xx (error string otherwise); callers parse it as
    JSON ([post_json]) or as SSE event lines ([Openai.complete]). *)
-let post_body ~(env : Eio_unix.Stdenv.base) ~sw ~(cfg : cfg) ~path
+let request_body ~meth ~(env : Eio_unix.Stdenv.base) ~sw ~(cfg : cfg) ~path
     ~extra_headers ~body : (string, string) Result.t =
   let open Eio in
   let host, port, tls =
@@ -106,7 +106,7 @@ let post_body ~(env : Eio_unix.Stdenv.base) ~sw ~(cfg : cfg) ~path
               ("connection", "close") ]
             @ extra_headers))
     in
-    Printf.sprintf "POST %s HTTP/1.1\r\n%s\r\n\r\n%s" path hdrs body
+    Printf.sprintf "%s %s HTTP/1.1\r\n%s\r\n\r\n%s" meth path hdrs body
   in
   Flow.copy_string request_text flow;
   let br = Buf_read.of_flow ~initial_size:4096 ~max_size:(20 * 1024 * 1024) flow in
@@ -153,6 +153,14 @@ let post_body ~(env : Eio_unix.Stdenv.base) ~sw ~(cfg : cfg) ~path
   (try Flow.shutdown flow `All with _ -> ());
   if code >= 200 && code < 300 then Ok body
   else Error (Printf.sprintf "HTTP %d: %s" code body)
+
+let post_body ~(env : Eio_unix.Stdenv.base) ~sw ~(cfg : cfg) ~path
+    ~extra_headers ~body : (string, string) Result.t =
+  request_body ~meth:"POST" ~env ~sw ~cfg ~path ~extra_headers ~body
+
+let get_body ~(env : Eio_unix.Stdenv.base) ~sw ~(cfg : cfg) ~path
+    ~extra_headers : (string, string) Result.t =
+  request_body ~meth:"GET" ~env ~sw ~cfg ~path ~extra_headers ~body:""
 
 (* Convenience wrapper: POST and parse the response as JSON. *)
 let post_json ~(env : Eio_unix.Stdenv.base) ~sw ~(cfg : cfg) ~path
@@ -444,6 +452,38 @@ module Openai = struct
           |> List.filter_map sse_data_payload
         in
         Ok (parse_stream_lines data_lines ~on_delta)
+
+  (** GET {base}/models — the provider ABI's own model catalog
+      (borge/agent.borg llm-config: the dropdown's source is the ABI,
+      NOT replicated user data). Returns model ids from the OpenAI
+      "data" array; Error on transport/HTTP failure (the surface then
+      renders the current model as the only option). A missing key just
+      round-trips the provider's 401 as an Error string. *)
+  let list_models ~(env : Eio_unix.Stdenv.base) ~sw ~(cfg : cfg) ()
+      : (string list, string) Result.t =
+    match
+      get_body ~env ~sw ~cfg ~path:"/v1/models"
+        ~extra_headers:[ ("authorization", "Bearer " ^ cfg.api_key) ]
+    with
+    | Error e -> Error e
+    | Ok body ->
+        (try
+           match Yojson.Safe.from_string body with
+           | `Assoc kv ->
+               (match List.assoc_opt "data" kv with
+                | Some (`List ms) ->
+                    Ok
+                      (List.filter_map
+                         (function
+                          | `Assoc m ->
+                              (match List.assoc_opt "id" m with
+                               | Some (`String s) when s <> "" -> Some s
+                               | _ -> None)
+                          | _ -> None)
+                         ms)
+                | _ -> Error "no models array in /models response")
+           | _ -> Error "bad /models response shape"
+         with exn -> Error (Printexc.to_string exn))
 end
 
 

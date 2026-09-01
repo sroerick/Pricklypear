@@ -33,7 +33,8 @@ type server_state = {
     on_delta:(Provider.delta -> unit) ->
     (Provider.reply, string) Result.t;
   rt : Runtime.t;
-  cfg : Provider.cfg;
+  cfg : Provider.cfg ref;
+  models : string list ref;
   turn_mutex : Eio.Mutex.t;
 }
 
@@ -400,7 +401,7 @@ let handle_chat (env : Eio_unix.Stdenv.base) (sw : Eio.Switch.t)
     Eio.Switch.run @@ fun lsw ->
     Eio.Fiber.fork ~sw:lsw (fun () ->
         (match
-           Loop.run ~env ~sw:lsw ~host:(Runtime.loop_host st.rt) ~cfg:st.cfg
+           Loop.run ~env ~sw:lsw ~host:(Runtime.loop_host st.rt) ~cfg:!(st.cfg)
            ~complete:st.complete
              ~on_event st.history prompt
          with
@@ -496,6 +497,51 @@ let handle_chat (env : Eio_unix.Stdenv.base) (sw : Eio.Switch.t)
       (try mp_close body_w ~boundary with Peer_gone -> ()))
     (fun () -> (try run () with Peer_gone -> ()))
 
+(* ---- POST /settings: retarget the running turn loop (borge/agent.borg
+   llm-config). Blank fields keep their current values (the api_key
+   password input round-trips blank on every render — a blank POST body
+   field is KEEP, not clear). Persists to ~/.config/agent/config.json so
+   the choice survives restarts; model is a per-surface dial (never
+   replicated). htmx hx-posts (chat-header dropdown, hx-swap="none") get
+   a bare 200; a browser form gets a 303 back to /settings. *)
+let handle_settings (env : Eio_unix.Stdenv.base) (sw : Eio.Switch.t)
+    (st : server_state) (reqd : Httpun.Reqd.t) : unit =
+  let body = read_body reqd in
+  let field n = String.trim (form_field body n) in
+  let c = !(st.cfg) in
+  let c : Provider.cfg =
+    { c with
+      model = (match field "model" with "" -> c.model | m -> m);
+      base_url = (match field "base_url" with "" -> c.base_url | b -> b);
+      api_key = (match field "api_key" with "" -> c.api_key | k -> k) }
+  in
+  st.cfg := c;
+  (* refresh the model catalog against the new key/base so the next
+     settings/chat render reflects it; a FAILED fetch keeps the
+     current-model-only default, never the stale catalog *)
+  st.models := [];
+  (if c.api_key <> "" then
+     match Provider.Openai.list_models ~env ~sw ~cfg:c () with
+     | Ok ms -> st.models := ms
+     | Error _ -> ());
+  Config.save
+    { Config.api_key = (if c.api_key = "" then None else Some c.api_key);
+      base_url = Some c.base_url;
+      model = Some c.model };
+  let hx =
+    match Httpun.Headers.get (Httpun.Reqd.request reqd).Httpun.Request.headers "hx-request" with
+    | Some "true" -> true
+    | _ -> false
+  in
+  if hx then respond_text reqd ~status:`OK ~content_type:"text/plain" ~body:"ok"
+  else begin
+    let headers =
+      Httpun.Headers.of_list [ ("location", "/settings"); ("content-length", "0") ]
+    in
+    ignore (Httpun.Reqd.respond_with_string reqd (Httpun.Response.create ~headers `See_other) "");
+    ()
+  end
+
 (* ---- serve: bind 127.0.0.1 (default 18090), print URL, accept loop ---- *)
 
 let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
@@ -514,10 +560,40 @@ let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
       history = ref [];
       complete;
       rt;
-      cfg;
+      cfg = ref cfg;
+      models = ref [];
       turn_mutex = Eio.Mutex.create ();
     }
   in
+  (* llm-config host prims for the Nopales settings/chat surfaces
+     (borge/agent.borg llm-config). agent/models is CACHED — the
+     provider ABI (/models) is hit once lazily and refetched on POST
+     /settings, so a chat-page render stays local. *)
+  Runtime.add_prim st.rt "agent/models"
+    (fun _ ->
+      (match !(st.models) with
+       | [] when !(st.cfg).Provider.api_key <> "" ->
+           (match Provider.Openai.list_models ~env ~sw ~cfg:!(st.cfg) () with
+            | Ok ms -> st.models := ms
+            | Error _ -> ())
+       | _ -> ());
+      let models =
+        match !(st.models) with
+        | [] -> [ !(st.cfg).Provider.model ]
+        | ms ->
+            if List.mem !(st.cfg).Provider.model ms then ms
+            else !(st.cfg).Provider.model :: ms
+      in
+      Ast.VList (List.map (fun m -> Ast.VStr m) models));
+  Runtime.add_prim st.rt "agent/model"
+    (fun _ -> Ast.VStr !(st.cfg).Provider.model);
+  Runtime.add_prim st.rt "agent/base-url"
+    (fun _ -> Ast.VStr !(st.cfg).Provider.base_url);
+  Runtime.add_prim st.rt "agent/key-status"
+    (fun _ ->
+      match !(st.cfg).Provider.api_key with
+      | "" -> Ast.VStr "not set"
+      | k -> Ast.VStr ("set · last4=" ^ Config.last4 k));
   let request_handler (sa : Eio.Net.Sockaddr.stream)
       (g : Httpun.Reqd.t Gluten.reqd) : unit =
     ignore sa;
@@ -547,6 +623,7 @@ let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
     | `POST -> (
         match path with
         | "/chat" -> fork_work (fun () -> handle_chat env sw st reqd)
+        | "/settings" -> fork_work (fun () -> handle_settings env sw st reqd)
         | _ ->
             respond_html reqd ~status:`Not_found
               ~body:(status_page "404" (Printf.sprintf "<p>no route %s</p>" (esc path))))

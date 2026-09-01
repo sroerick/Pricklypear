@@ -1576,6 +1576,50 @@ let settings_keys_page (session : Session.t) (reqd : Httpun.Reqd.t)
           Auth_store.get_llm_key_meta (Session.store session)
             ~user_id:user.Auth_store.id
         in
+        (* The model dropdown is the provider ABI's own catalog
+           (borge/agent.borg llm-config: /models with the RESOLVED key —
+           the user's credential when set, else env fallback). No fetch
+           or empty catalog -> the free-text input stands. *)
+        let models =
+          match
+            Auth_store.get_llm_key_secret (Session.store session)
+              ~user_id:user.Auth_store.id
+          with
+          | Some (key, m) ->
+              Llm_client.list_models
+                ~creds:(Some
+                  { Llm_client.api_key = key;
+                    api_base =
+                      (match m.Auth_store.base with
+                       | Some b -> b
+                       | None -> Llm_client.api_base ());
+                    model = "" })
+                ()
+          | None -> Llm_client.list_models ()
+        in
+        let current_model =
+          match meta with
+          | Some m -> Option.value m.Auth_store.model ~default:""
+          | None -> ""
+        in
+        let model_field =
+          match models with
+          | [] -> HTML.input [HTML.type_ "text"; HTML.name "model"]
+          | ms ->
+              let ms =
+                if current_model <> "" && not (List.mem current_model ms)
+                then current_model :: ms
+                else ms
+              in
+              HTML.select [HTML.name "model"]
+                (HTML.option [HTML.value ""] "%s" "(server default)"
+                 :: List.map
+                      (fun mo ->
+                        if mo = current_model then
+                          HTML.option [HTML.value "%s" mo; HTML.selected] "%s" mo
+                        else HTML.option [HTML.value "%s" mo] "%s" mo)
+                      ms)
+        in
         let status_line =
           match meta with
           | None ->
@@ -1610,7 +1654,7 @@ let settings_keys_page (session : Session.t) (reqd : Httpun.Reqd.t)
                 ];
                 HTML.p [] [
                   HTML.label [] [txt "Model (optional)"];
-                  HTML.input [HTML.type_ "text"; HTML.name "model"];
+                  model_field;
                 ];
                 HTML.button [HTML.type_ "submit"] [txt "Save key"];
               ];

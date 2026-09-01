@@ -139,6 +139,27 @@ let run_round ~(transport : transport) ~(lens : Lens_store.lens)
              let kept = strs "lww_server_kept" in
              let gen_str = str "generation" in
              let gen = try Int64.of_string gen_str with _ -> 0L in
+             (* auth.user-llm-keys 5b: the round metadata export — the
+                caller's OWN llm credential. Record to __config.json
+                (preserving any locally chosen model); key last4 only
+                in logs — never the raw secret. *)
+             (match List.assoc_opt "llm_config" kv with
+              | Some (`Assoc lc) ->
+                  let lc_str k =
+                    match List.assoc_opt k lc with
+                    | Some (`String s) -> s | _ -> ""
+                  in
+                  let ak, b = lc_str "api_key", lc_str "base" in
+                  if ak <> "" || b <> "" then begin
+                    Lens_store.record_sync_config ~lens ~api_key:ak ~base:b;
+                    if not quiet then
+                      log "llm config updated (key last4=%s base=%s)"
+                        (if String.length ak >= 4
+                         then String.sub ak (String.length ak - 4) 4
+                         else "????")
+                        b
+                  end
+              | _ -> ());
              (* pull server copies (tree/get bypasses the rim's lens-local
                 reads on purpose: the pull must come from the server) *)
              let pulled =
