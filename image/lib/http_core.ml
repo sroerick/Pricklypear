@@ -675,7 +675,7 @@ let max_body_bytes =
        | _ -> 1024 * 1024)
   | None -> 1024 * 1024
 
-let read_body (reqd : Httpun.Reqd.t) : string =
+let read_body ?(max_bytes = max_body_bytes) (reqd : Httpun.Reqd.t) : string =
   let body = Httpun.Reqd.request_body reqd in
   (* The on_read callback may run on the connection fiber, not the handler
      fiber — so signal overflow via the promise instead of raising inside
@@ -688,7 +688,7 @@ let read_body (reqd : Httpun.Reqd.t) : string =
       ~on_eof:(fun () ->
         Eio.Promise.resolve resolver (`Ok (Buffer.contents buf)))
       ~on_read:(fun bs ~off ~len ->
-        if Buffer.length buf + len > max_body_bytes then begin
+        if Buffer.length buf + len > max_bytes then begin
           Eio.Promise.resolve resolver `Too_large
           (* Stop rescheduling: the oversized request is abandoned and
              answered with 413; the connection is closed after the reply. *)
