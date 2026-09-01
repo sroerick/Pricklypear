@@ -1,4 +1,4 @@
-;; package music -- exported from live branch admin/personal
+;; package music -- exported from live branch system/main
 ;; Sync: scripts/pp_sync.py pull|push
 ;;
 ;; Little music player. Track rows live in data_rows (type music-track,
@@ -7,25 +7,36 @@
 ;; streams via GET /media/<id> with the normal cookie session — the
 ;; kernel serve path gives Range/206 seeking for free (storage.media).
 ;;
-;; FLOWS
-;;   1. upload:   POST /music  (multipart file, title, artist)
-;;                -> media-put -> music-track row -> title row on page
-;;   2. play:     GET /music  renders player card + track table;
-;;                ?play=<track-id> loads that track into the player
-;;   3. playlist: POST /music action=pl-create title=...
-;;                POST /music action=pl-add pl=<id> track=<id>
-;;   4. delete:   POST /music action=delete track=<id>
+;; FLOWS (spec borge/music.borg)
+;;   1. upload:   POST /music multipart (file,title,artist,album)
+;;                -> (request-multipart) -> (media-put-raw) -> track row
+;;   2. play:     ?play=<track-id> (or POST action=play) loads the
+;;                row's media into the player card
+;;   3. playlist: POST /music action=pl-create|pl-add|pl-delete
+;;   4. delete:   POST /music action=delete track=<id> (row + its blob)
 ;;
-;; Notes: get/create/update/delete take the fields DICT (not the pair);
-;; string-split is (string-split s sep). Verified on prod 2026-08-31.
+;; Kernel prims this package depends on (borge/image.borg
+;; htmx-interface + borge/storage.borg media): request-multipart,
+;; media-put-raw, media-url, media-delete, plus the Range/206 serve
+;; path on GET /media/<id>.
+;;
+;; Signatures verified live 2026-08-31: string-split is (s sep); get
+;; returns the fields dict; rows returns (id . fields) pairs; html/p
+;; takes only body; html/p* takes (attrs body); html/select is
+;; (name attrs body); html/option is (value label selected?).
 
 (define music/blank?
   (lambda (s) "True when s is null or an empty string."
     (if (null? s) #t (string-eq (as-str s) ""))))
 
+(define music/nonblank
+  (lambda (s fallback) "s when nonblank, else fallback."
+    (if (music/blank? s) (as-str fallback) s)))
+
+;; ---- model ----
+
 (define music/fields
-  (lambda
-    (title artist album media-id)
+  (lambda (title artist album media-id)
     "Build a track fields JSON string."
     (dict-set*
       "{}"
@@ -38,15 +49,15 @@
 
 (define music/pl-fields
   (lambda (title ids-str) "Build playlist fields JSON."
-    (dict-set* "{}" (list "title" (as-str title) "track_ids" (as-str ids-str)))))
+    (dict-set*
+      "{}"
+      (list "title" (as-str title) "track_ids" (as-str ids-str)))))
 
 (define music/create
-  (lambda
-    (title artist album media-id)
+  (lambda (title artist album media-id)
     "Create a music-track row; returns the row id."
-    (create
-      (quote music-track)
-      (music/fields title artist album media-id))))
+    (create (quote music-track)
+            (music/fields title artist album media-id))))
 
 (define music/all
   (lambda () "All track rows on the branch, up to 500."
@@ -57,12 +68,11 @@
     (rows (quote music-playlist) 100)))
 
 (define music/by-id
-  (lambda (id) "Get one track row (fields dict) by id, null when missing."
+  (lambda (id) "Get one track fields dict by id, null when missing."
     (get (quote music-track) (as-str id))))
 
 (define music/pl-create
-  (lambda (title)
-    "Create an empty playlist row; returns the row id."
+  (lambda (title) "Create an empty playlist row; returns the row id."
     (create (quote music-playlist) (music/pl-fields title ""))))
 
 (define music/pl-add
@@ -84,7 +94,8 @@
 
 (define music/pl-tracks
   (lambda (pl-id)
-    "Resolve a playlist to track fields dicts in track_ids order."
+    "Resolve a playlist to track fields dicts in track_ids order;
+dangling ids (deleted tracks) are skipped."
     (let
       ((f (get (quote music-playlist) (as-str pl-id))))
       (if (null? f) ()
@@ -94,9 +105,64 @@
             (lambda (tid) (get (quote music-track) (as-str tid)))
             (string-split (as-str (dict-get f "track_ids")) ",")))))))
 
+(define music/pl-delete
+  (lambda (pl-id) "Delete a playlist row by id."
+    (delete (quote music-playlist) (as-str pl-id))))
+
+;; ---- upload (flow 1) ----
+
+(define music/guess-type
+  (lambda (filename)
+    "Guess a whitelisted audio type by extension; audio/mpeg fallback."
+    (let
+      ((name (string-downcase (as-str filename))))
+      (if (string-ends-with? name ".mp3") "audio/mpeg"
+        (if (string-ends-with? name ".m4a") "audio/mp4"
+          (if (string-ends-with? name ".ogg") "audio/ogg"
+            (if (string-ends-with? name ".flac") "audio/flac"
+              (if (string-ends-with? name ".wav") "audio/wav"
+                "audio/mpeg"))))))))
+
+(define music/part
+  (lambda (parts name)
+    "First multipart part matching name: (name filename ct data)."
+    (if (null? parts) ()
+      (if (string-eq (as-str (car (car parts))) name)
+        (car parts)
+        (music/part (cdr parts) name)))))
+
+(define music/part-str
+  (lambda (parts name)
+    "Text value (element 4) of a multipart part by field name.
+    Parts are (name filename content-type data); text parts carry the
+    value in data with filename/content-type nil."
+    (let
+      ((p (music/part parts name)))
+      (if (null? p) "" (as-str (car (cdr (cdr (cdr p)))))))))
+
+(define music/upload-multipart
+  (lambda (parts)
+    "Store the file part via media-put-raw; returns media id or ()."
+    (let
+      ((p (music/part parts "file")))
+      (if (null? p) ()
+        (let
+          ((filename
+            (if (null? (car (cdr p))) "" (as-str (car (cdr p)))))
+            (ct
+              (if (null? (car (cdr (cdr p))))
+                ""
+                (as-str (car (cdr (cdr p))))))
+            (data (as-str (car (cdr (cdr (cdr p)))))))
+          (let
+            ((type (music/nonblank ct (music/guess-type filename))))
+            (media-put-raw type data filename)))))))
+
+;; ---- player (flow 2) ----
+
 (define music/media-url
   (lambda (media-id) "The /media/<uuid> stream path for a media id."
-    (string-append "/media/" (as-str media-id))))
+    (as-str (media-url (as-str media-id)))))
 
 (define music/audio-tag
   (lambda (media-id)
@@ -114,15 +180,85 @@
           "Your browser does not support audio. "
           (html/tag "a" (html/attr "href" (music/media-url media-id)) "Raw file"))))))
 
+(define music/sel-id
+  (lambda ()
+    "Selected track id: ?play=<id> on GET, or the POST action=play track."
+    (let
+      ((p (request-param "play")))
+      (if (null? p)
+        (if (string-eq (as-str (request-param "action")) "play")
+          (request-param "track")
+          ())
+        p))))
+
+(define music/player-html
+  (lambda ()
+    "The player card: selected track title + <audio>, or a hint."
+    (let
+      ((sel (music/sel-id)))
+      (let
+        ((f (if (null? sel) () (music/by-id sel))))
+        (let
+          ((body
+            (if (null? f)
+              (html/p* (html/attr "class" "muted")
+                       (html/text "Pick a track and press Play."))
+              (html/join
+                (list
+                  (html/p*
+                    (html/attr "class" "muted")
+                    (html/text
+                      (string-append
+                        (music/nonblank (as-str (dict-get f "title")) "Untitled")
+                        " — "
+                        (music/nonblank (as-str (dict-get f "artist")) "unknown"))))
+                  (music/audio-tag (as-str (dict-get f "media_id"))))))))
+          (html/div
+            (html/attr "class" "card")
+            (html/join (list (html/h2 "Player") body))))))))
+
+;; ---- rendering ----
+
+(define music/style-html
+  (lambda ()
+    "Small style block for the player page."
+    (html/tag
+      "style"
+      ""
+      (html/join
+        (list
+          ".music-table{width:100%;border-collapse:collapse}"
+          ".music-table td,.music-table th{padding:.35rem .5rem;text-align:left;border-bottom:1px solid var(--border,#ddd)}"
+          ".music-player{width:100%;max-width:32rem;display:block;margin-top:.5rem}")))))
+
+(define music/action-form
+  (lambda (pairs label)
+    "One inline hx-post form from (action . extra-pairs) pairs."
+    (html/form
+      "POST"
+      "/music"
+      (html/attrs
+        (list
+          (html/attr "style" "display:inline")
+          (html/attr "hx-post" "/music")
+          (html/attr "hx-target" "#music-main")
+          (html/attr "hx-swap" "outerHTML")))
+      (html/join
+        (append
+          (list (html/hidden "action" (as-str (car pairs))))
+          (map (lambda (kv) (html/hidden (as-str (car kv)) (as-str (car (cdr kv)))))
+               (cdr pairs))
+          (list (html/button (html/attr "type" "submit") label)))))))
+
 (define music/row-html
   (lambda (row)
-    "Render one track row with title, artist/album, play and delete actions."
+    "Render one track row with title, artist, album, play + delete."
     (let
       ((id (as-str (car row))) (f (cdr row)))
       (let
         ((title (music/nonblank (as-str (dict-get f "title")) id))
-          (artist (as-str (dict-get f "artist")))
-          (album (as-str (dict-get f "album"))))
+          (artist (music/nonblank (as-str (dict-get f "artist")) "—"))
+          (album (music/nonblank (as-str (dict-get f "album")) "—")))
         (html/tag
           "tr"
           ""
@@ -136,49 +272,18 @@
                 ""
                 (html/join
                   (list
-                    (html/form
-                      "POST"
-                      "/music"
-                      (html/attrs
-                        (list
-                          (html/attr "style" "display:inline")
-                          (html/attr "hx-post" "/music")
-                          (html/attr "hx-target" "#music-main")
-                          (html/attr "hx-swap" "outerHTML")))
-                      (html/join
-                        (list
-                          (html/hidden "action" "play")
-                          (html/hidden "track" id)
-                          (html/button
-                            (html/attr "type" "submit")
-                            "Play")))
+                    (music/action-form
+                      (list "play" (list "track" id)) "Play")
                     " "
-                    (html/form
-                      "POST"
-                      "/music"
-                      (html/attrs
-                        (list
-                          (html/attr "style" "display:inline")
-                          (html/attr "hx-post" "/music")
-                          (html/attr "hx-target" "#music-main")
-                          (html/attr "hx-swap" "outerHTML")))
-                      (html/join
-                        (list
-                          (html/hidden "action" "delete")
-                          (html/hidden "track" id)
-                          (html/button
-                            (html/attr "type" "submit")
-                            "Del")))))))))))))))
-
-(define music/nonblank
-  (lambda (s fallback) "s when nonblank, else fallback."
-    (if (music/blank? s) (as-str fallback) s)))
+                    (music/action-form
+                      (list "delete" (list "track" id)) "Del")))))))))))
 
 (define music/table-html
   (lambda (rows-list)
     "The track table, or an empty-state line."
     (if (null? rows-list)
-      (html/p* (html/attr "class" "muted") (html/text "No tracks yet — upload one below."))
+      (html/p* (html/attr "class" "muted")
+               (html/text "No tracks yet — upload one below."))
       (html/tag
         "table"
         (html/attr "class" "music-table")
@@ -227,15 +332,15 @@
                     (list
                       (html/attr "type" "file")
                       (html/attr "name" "file")
-                      (html/attr "accept" "audio/*,.mp3,.ogg,.flac,.wav,.m4a,.aac,.webm")
-                      (html/attr "required" "required"))))
+                      (html/attr "required" "required")
+                      (html/attr "accept"
+                                 "audio/*,.mp3,.ogg,.flac,.wav,.m4a,.aac,.webm"))))
                 " "
                 (html/input
                   (html/attrs
                     (list
                       (html/attr "type" "text")
                       (html/attr "name" "title")
-                      (html/attr "method" "")
                       (html/attr "placeholder" "Title"))))
                 " "
                 (html/input
@@ -256,127 +361,160 @@
                 (html/p*
                   (html/attr "class" "muted")
                   (html/text
-                    "audio/mpeg ogg flac wav mp4 up to 64 MiB (see /media)."))))))))))
+                    "audio/mpeg ogg flac wav mp4 aac webm, up to 64 MiB."))))))))))
+
+(define music/pl-row-html
+  (lambda (row track-options)
+    "One playlist line: title (n tracks) + add-track select + delete."
+    (let ((id (as-str (car row))) (f (cdr row)))
+      (let ((title (music/nonblank (as-str (dict-get f "title")) "Playlist"))
+            (count (count (string-split (as-str (dict-get f "track_ids")) ","))))
+        (html/p*
+          ""
+          (html/join
+            (list
+              (html/strong title)
+              (html/text (string-append " (" (as-str count) " tracks) "))
+              (html/form
+                "POST"
+                "/music"
+                (html/attrs
+                  (list
+                    (html/attr "style" "display:inline")
+                    (html/attr "hx-post" "/music")
+                    (html/attr "hx-target" "#music-main")
+                    (html/attr "hx-swap" "outerHTML")))
+                (html/join
+                  (list
+                    (html/hidden "action" "pl-add")
+                    (html/hidden "pl" id)
+                    (html/select "track" "" track-options)
+                    " "
+                    (html/button (html/attr "type" "submit") "Add"))))
+              " "
+              (music/action-form
+                (list "pl-delete" (list "pl" id))
+                "Delete playlist"))))))))
+
+(define music/track-options-html
+  (lambda (tracks)
+    "An <option> per track for the playlist add-select."
+    (html/join
+      (list/map
+        (lambda (row)
+          (html/option
+            (as-str (car row))
+            (music/nonblank (as-str (dict-get (cdr row) "title")) "Untitled")
+            #f))
+        tracks))))
+
+(define music/playlist-html
+  (lambda ()
+    "Playlists card: per-playlist rows + create form."
+    (let ((pls (music/playlists)))
+      (let ((opts (music/track-options-html (music/all))))
+        (html/div
+          (html/attr "class" "card")
+          (html/join
+            (append
+              (list (html/h2 "Playlists"))
+              (if (null? pls)
+                (list (html/p* (html/attr "class" "muted")
+                               (html/text "No playlists yet.")))
+                (list/map (lambda (row) (music/pl-row-html row opts)) pls))
+              (list
+                (html/form
+                  "POST"
+                  "/music"
+                  (html/attrs
+                    (list
+                      (html/attr "hx-post" "/music")
+                      (html/attr "hx-target" "#music-main")
+                      (html/attr "hx-swap" "outerHTML")))
+                  (html/join
+                    (list
+                      (html/hidden "action" "pl-create")
+                      (html/input
+                        (html/attrs
+                          (list
+                            (html/attr "type" "text")
+                            (html/attr "name" "title")
+                            (html/attr "placeholder" "New playlist name")
+                            (html/attr "required" "required"))))
+                      " "
+                      (html/button (html/attr "type" "submit") "Create"))))))))))))
+
+(define music/main-html
+  (lambda (status)
+    "Player + library + playlists + upload; the #music-main fragment.
+Status is a string or ()."
+    (let
+      ((status-html
+        (if (music/blank? status) ()
+          (html/p* (html/attr "class" "muted") (html/text (as-str status))))))
+      (html/div
+        (html/attr "id" "music-main")
+        (html/join
+          (list
+            (html/div
+              (html/attr "class" "card")
+              (html/join
+                (list (html/h2 "Player") status-html (music/player-html))))
+            (html/h2 "Library")
+            (music/table-html (music/all))
+            (music/playlist-html)
+            (music/upload-form)))))))
+
+;; ---- dispatch ----
 
 (define music/handle-post
   (lambda ()
-    "Dispatch a POST action: upload / create / pl-create / pl-add / delete. Returns a short status string."
-    (let
-      ((action (as-str (request-param "action"))))
-      (if (string-eq action "delete")
-        (let
-          ((track-id (as-str (request-param "track"))))
-          (let
-            ((f (get (quote music-track) track-id)))
-            (seq
-              (when (not (null? f))
-                (delete (quote music-track) track-id))
-              "deleted")))
-        (if (string-eq action "pl-create")
-          (let
-            ((t (music/nonblank (as-str (request-param "title")) "Playlist")))
-            (seq (music/pl-create t) (string-append "playlist " t " created")))
-          (if (string-eq action "pl-add")
-            (seq
-              (music/pl-add
-                (as-str (request-param "pl"))
-                (as-str (request-param "track")))
-              "added to playlist")
-            ;; default: multipart upload (no action param)
-            (let
-              ((parts (multipart)))
-              (let
-                ((media-id (music/upload-multipart parts))
-                  (title (music/part-str parts "title"))
-                  (artist (music/part-str parts "artist"))
-                  (album (music/part-str parts "album")))
-                (if (null? media-id)
-                  "upload failed: no audio file"
-                  (seq
-                    (music/create
-                      (music/nonblank title "Untitled")
-                      artist
-                      album
-                      (as-str media-id))
-                    "uploaded"))))))))))
-
-(define music/part-str
-  (lambda (parts name)
-    "Text value of a multipart part by field name, empty when missing."
-    (let
-      ((p (music/part parts name)))
-      (if (null? p) "" (as-str (car p))))))
-
-(define music/part
-  (lambda (parts name)
-    "First part whose field name matches: (name filename content-type data)."
-    (if (null? parts) ()
-      (if (string-eq (as-str (car (car parts))) name)
-        (car parts)
-        (music/part (cdr parts) name)))))
-
-(define music/upload-multipart
-  (lambda (parts)
-    "Store the file part via media-put; returns media id or ()."
-    (let
-      ((p (music/part parts "file")))
-      (if (null? p) ()
-        (let
-          ((fn (as-str (car (cdr p))))
-            (ct (as-str (car (cdr (cdr p)))))
-            (data (as-str (car (cdr (cdr (cdr p)))))))
-          (let
-            ((type
-              (if (music/blank? ct)
-                (music/guess-type fn)
-                ct)))
-            (media-put type (as-str data) fn)))))))
-
-(define music/guess-type
-  (lambda (filename)
-    "Guess a whitelisted audio type by extension; audio/mpeg fallback."
-    (let
-      ((name (string-downcase (as-str filename))))
-      (if (string-ends-with? name ".mp3") "audio/mpeg"
-        (if (string-ends-with? name ".m4a") "audio/mp4"
-          (if (string-ends-with? name ".ogg") "audio/ogg"
-            (if (string-ends-with? name ".flac") "audio/flac"
-              (if (string-ends-with? name ".wav") "audio/wav"
-                "audio/mpeg"))))))))
-
-(define music/main-html
-  (lambda ()
-    "Player + table + upload form, htmx-targeted fragment root."
-    (let
-      ((rows-list (music/all))
-        (play-id (as-str (request-param "play")))
-        (msg (as-str (request-param "msg"))))
-      (let
-        ((sel
-          (if (music/blank? play-id) ()
-            (get (quote music-track) play-id)))
-          (status
-            (if (music/blank? msg) ()
-              (html/p* (html/attr "class" "muted") (html/text msg)))))
-        (let
-          ((player
-            (if (null? sel)
-              (html/p* (html/attr "class" "muted") (html/text "Pick a track and press Play."))
-              (music/audio-tag (as-str (dict-get (cdr sel) "media_id"))))))
-          (html/div
-            (html/attr "id" "music-main")
-            (html/join
-              (list
-                (html/div
-                  (html/attr "class" "card")
-                  (html/join
-                    (list
-                      (html/h2 "Player")
-                      (if (null? status) "" status)
-                      player)))
-                (html/h2 "Library")
-                (music/table-html rows-list)
-                (music/upload-form)))))))))
+    "Dispatch a POST action; returns a short status string.
+upload (default, multipart) / play / delete / pl-create / pl-add /
+pl-delete. Delete also removes the track's media blob — the bytes
+were uploaded for that track."
+    (let ((action (as-str (request-param "action"))))
+      (cond
+        ((string-eq action "play") "playing")
+        ((string-eq action "delete")
+         (let ((track-id (as-str (request-param "track"))))
+           (let ((f (get (quote music-track) track-id)))
+             (seq
+               (when (not (null? f))
+                 (let ((mid (as-str (dict-get f "media_id"))))
+                   (unless (music/blank? mid) (media-delete mid))))
+               (delete (quote music-track) track-id)
+               (string-append "deleted " track-id)))))
+        ((string-eq action "pl-create")
+         (let ((t (music/nonblank (as-str (request-param "title")) "Playlist")))
+           (seq (music/pl-create t) (string-append "playlist created: " t))))
+        ((string-eq action "pl-add")
+         (seq
+           (music/pl-add
+             (as-str (request-param "pl"))
+             (as-str (request-param "track")))
+           "added to playlist"))
+        ((string-eq action "pl-delete")
+         (seq
+           (music/pl-delete (as-str (request-param "pl")))
+           "playlist deleted"))
+        (else
+         (let ((parts (request-multipart)))
+           (let ((media-id (music/upload-multipart parts))
+                 (title (music/part-str parts "title"))
+                 (artist (music/part-str parts "artist"))
+                 (album (music/part-str parts "album")))
+             (if (null? media-id)
+               "upload failed: no audio file part"
+               (seq
+                 (music/create
+                   (music/nonblank title "Untitled")
+                   (music/nonblank artist "")
+                   (music/nonblank album "")
+                   (as-str media-id))
+                 (string-append
+                   "uploaded "
+                    (music/nonblank title "Untitled")))))))))))
 
 (define music/page
   (lambda ()
@@ -384,18 +522,16 @@
     (if (string-eq (request-method) "POST")
       (let
         ((status (music/handle-post)))
-        (seq
-          (if (hx-request?)
-            (render-html (music/main-html))
-            (redirect "/music?msg=%s")))
-        )
+        (if (hx-request?)
+          (render-html (music/main-html status))
+          (redirect
+            (string-append "/music?msg=" (url-encode (as-str status))))))
       (html/page
         (list
+          (music/style-html)
           (html/h1 "Music")
           (html/p*
             (html/attr "class" "muted")
             (html/text
               "Tracks on data_rows (type music-track); audio streams from media_blobs with Range/206 seek."))
-          (music/main-html))))
-    )
-  )
+          (music/main-html (as-str (request-param "msg"))))))))
