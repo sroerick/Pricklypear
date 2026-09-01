@@ -276,12 +276,19 @@ let get_meta (store : Store.t) ~(id : string)
       let sql, params =
         match visible_to with
         | Some (actor, is_admin) ->
+            (* BORGE-1785695911 regression fix: the admin predicate is
+               literal TRUE — no $2 placeholder — so binding the actor
+               param unconditionally made pgx reject the statement
+               ("supplies 2 parameters, requires 1") and the swallowed
+               exception turned every admin GET-by-uuid into a 404. *)
             ( "SELECT id::text, author, content_type, \
                NULLIF(filename, ''), byte_size::text, sha256, meta::text, \
                created_at::text \
                FROM media_blobs WHERE id = $1::uuid AND "
               ^ visible_sql ~is_admin ~actor_param:2
-            , [ Pgx.Value.of_string id; Pgx.Value.of_string actor ] )
+            , if is_admin then [ Pgx.Value.of_string id ]
+              else
+                [ Pgx.Value.of_string id; Pgx.Value.of_string actor ] )
         | None ->
             ( "SELECT id::text, author, content_type, \
                NULLIF(filename, ''), byte_size::text, sha256, meta::text, \
@@ -309,12 +316,15 @@ let get_bytes (store : Store.t) ~(id : string)
       let sql, params =
         match visible_to with
         | Some (actor, is_admin) ->
+            (* Same admin-predicate param discipline as get_meta. *)
             ( "SELECT id::text, author, content_type, \
                NULLIF(filename, ''), byte_size::text, sha256, meta::text, \
                created_at::text, data \
                FROM media_blobs WHERE id = $1::uuid AND "
               ^ visible_sql ~is_admin ~actor_param:2
-            , [ Pgx.Value.of_string id; Pgx.Value.of_string actor ] )
+            , if is_admin then [ Pgx.Value.of_string id ]
+              else
+                [ Pgx.Value.of_string id; Pgx.Value.of_string actor ] )
         | None ->
             ( "SELECT id::text, author, content_type, \
                NULLIF(filename, ''), byte_size::text, sha256, meta::text, \
