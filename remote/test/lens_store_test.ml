@@ -289,6 +289,39 @@ let test_base_manifest () =
     Alcotest.(check (list string)) "manifest holds the datum only"
       [ "data.u.admin.todo.a" ] (List.map fst manifest))
 
+(* --- client llm config (sync round metadata, auth.user-llm-keys 5b) ---
+   __config.json is lens-root metadata: excluded from node_manifest,
+   sync-provided key/base record, and a locally chosen model SURVIVES a
+   later sync round (per-surface dial, never replicated). *)
+let test_client_config () =
+  with_tmpdir (fun root ->
+    let lens = lens_of ~root in
+    (* absent -> empty *)
+    let c0 = config ~lens in
+    Alcotest.(check bool) "no config yet" true
+      (c0.api_key = None && c0.base = None && c0.model = None);
+    (* a sync round records key + base *)
+    record_sync_config ~lens ~api_key:"sk-test-ab12" ~base:"https://llm.example/v1";
+    let c1 = config ~lens in
+    Alcotest.(check (option string)) "key landed"
+      (Some "sk-test-ab12") c1.api_key;
+    Alcotest.(check (option string)) "base landed"
+      (Some "https://llm.example/v1") c1.base;
+    Alcotest.(check (option string)) "no model yet" None c1.model;
+    (* the file must NOT appear in the sync manifest (metadata, not corpus) *)
+    Alcotest.(check bool) "config not in manifest" false
+      (List.exists (fun (p, _) -> p = "__config.json") (node_manifest ~lens));
+    (* a local model choice survives the NEXT sync round *)
+    write_config ~lens { c1 with model = Some "hf:local/dial" };
+    record_sync_config ~lens ~api_key:"sk-new-cd34" ~base:"https://llm2.example/v1";
+    let c2 = config ~lens in
+    Alcotest.(check (option string)) "sync overwrote key"
+      (Some "sk-new-cd34") c2.api_key;
+    Alcotest.(check (option string)) "sync overwrote base"
+      (Some "https://llm2.example/v1") c2.base;
+    Alcotest.(check (option string)) "model preserved"
+      (Some "hf:local/dial") c2.model)
+
 let () =
   Random.self_init ();
   Alcotest.run "lens_store"
@@ -305,4 +338,5 @@ let () =
          ; Alcotest.test_case "delete_node" `Quick test_delete_node
          ; Alcotest.test_case "base_manifest" `Quick test_base_manifest
          ; Alcotest.test_case "lens_fetch_first" `Quick test_lens_fetch_first ])
+    ; ("client-config", [ Alcotest.test_case "record_and_preserve" `Quick test_client_config ])
     ]

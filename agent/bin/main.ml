@@ -194,6 +194,7 @@ let () =
   let mock_script = ref None in
   let model = ref None in
   let base_url = ref None in
+  let lens_dir = ref None in
   let pipe_expr = ref None in
   let once = ref false in
   let serve = ref false in
@@ -206,6 +207,9 @@ let () =
         ("--mock-script", Arg.String (fun s -> mock_script := Some s), "FILE canned provider replies");
         ("--model", Arg.String (fun s -> model := Some s), "NAME");
         ("--base-url", Arg.String (fun s -> base_url := Some s), "URL");
+        ("--lens",
+         Arg.String (fun s -> lens_dir := Some s),
+         "DIR local-first lens root; its __config.json (sync-provided llm key+base) feeds provider config");
         ("--once", Arg.Set once, "run one full agent turn from piped stdin and exit");
         ("--serve", Arg.Set serve, "serve the HTML chat surface on 127.0.0.1 until Ctrl-C (default port 18090)");
         ("--port", Arg.Int (fun p -> port := p), "PORT fixed port for --serve (default 18090; 0 = random)");
@@ -243,27 +247,49 @@ let () =
          Printf.eprintf "error: %s\n%!" (Ast.pp_interp_error ie);
          exit 1)
   | None ->
+      (* borge/agent.borg llm-config — layered provider config.
+         Per field, first non-empty wins:
+           --flag > env (the AGENT_ vars) > <lens>/__config.json
+             (sync-provided) > ~/.config/agent/config.json (the
+             /settings surface's store).
+         The lens file is how the habitat's llm credential arrives
+         INVISIBLY through the sync exchange (auth.user-llm-keys 5b) —
+         no bespoke export, no tree datum. *)
+      let file_cfg = Config.load () in
+      let lens_cfg =
+        match !lens_dir with
+        | Some d -> Config.load_lens d
+        | None -> Config.empty
+      in
+      let merged = Config.merge ~primary:lens_cfg ~fallback:file_cfg in
+      let pick ~flag ~env ~fallback ~default =
+        match flag with
+        | Some v -> v
+        | None ->
+            if env <> "" then env
+            else (match fallback with Some v -> v | None -> default)
+      in
+      let cfg_model =
+        pick ~flag:!model ~env:(getenv "AGENT_MODEL" ~default:"")
+          ~fallback:merged.model ~default:"hf:zai-org/GLM-4.7-Flash"
+      in
+      let cfg_base =
+        pick ~flag:!base_url ~env:(getenv "AGENT_BASE_URL" ~default:"")
+          ~fallback:merged.base_url
+          ~default:"https://api.synthetic.new/openai/v1"
+      in
+      let cfg_key =
+        pick ~flag:None ~env:(getenv "AGENT_API_KEY" ~default:"")
+          ~fallback:merged.api_key ~default:""
+      in
       let cfg : Provider.cfg =
         {
-          base_url =
-            Option.value !base_url
-              ~default:(getenv "AGENT_BASE_URL" ~default:"https://api.synthetic.new/openai/v1");
-          api_key = getenv "AGENT_API_KEY" ~default:"";
-          model = Option.value !model ~default:(getenv "AGENT_MODEL" ~default:"hf:zai-org/GLM-4.7-Flash");
+          base_url = cfg_base;
+          api_key = cfg_key;
+          model = cfg_model;
           system =
             getenv "AGENT_SYSTEM"
-              ~default:
-                (harness_context
-                   ~model:
-                     (Option.value !model
-                        ~default:
-                          (getenv "AGENT_MODEL"
-                             ~default:"hf:zai-org/GLM-4.7-Flash"))
-                   ~base_url:
-                     (Option.value !base_url
-                        ~default:
-                          (getenv "AGENT_BASE_URL"
-                             ~default:"https://api.synthetic.new/openai/v1")));
+              ~default:(harness_context ~model:cfg_model ~base_url:cfg_base);
         }
       in
       let script_cell = ref (Option.map parse_mock_script !mock_script |> Option.value ~default:[]) in

@@ -2,7 +2,7 @@
  (name pricklypear_agent_lib)
  (public_name pricklypear-agent.lib)
  (wrapped false)
- (modules runtime plugins http_ui surface assets libs_source)
+ (modules runtime plugins http_ui surface assets libs_source config)
  (libraries
   pricklypear-llm
   pricklypear-lisp

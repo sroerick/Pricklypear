@@ -51,6 +51,7 @@ let active_model () =
 
 type call_result = (string, string) result
 
+
 (** Progress events for live sinks (SSE / REPL). Not a capability effect. *)
 type agent_event =
   | Token of string
@@ -68,6 +69,45 @@ let shell_quote (s : string) : string =
     s;
   Buffer.add_char buf '\'';
   Buffer.contents buf
+
+(** GET {base}/models — the provider ABI's model catalog for the
+    /settings/keys dropdown (borge/agent.borg llm-config: model is a
+    per-surface dial sourced from the ABI, not replicated user data).
+    Empty list on any failure (no key, transport, bad shape) — the
+    settings form then falls back to a free-text input. *)
+let list_models ?(creds : creds option = None) () : string list =
+  let key, base =
+    match creds with
+    | Some c -> (c.api_key, c.api_base)
+    | None -> (active_api_key (), active_api_base ())
+  in
+  if key = "" then []
+  else
+    let url = base ^ "/models" in
+    let cmd =
+      Printf.sprintf "curl -sS --max-time 20 %s -H %s 2>&1"
+        (shell_quote url)
+        (shell_quote ("Authorization: Bearer " ^ key))
+    in
+    (try
+       let stdout =
+         Lwt_eio.run_lwt (fun () -> Lwt_process.pread ~timeout:25. (Lwt_process.shell cmd))
+       in
+       match Yojson.Safe.from_string stdout with
+       | `Assoc kv ->
+           (match List.assoc_opt "data" kv with
+            | Some (`List ms) ->
+                List.filter_map
+                  (function
+                   | `Assoc m ->
+                       (match List.assoc_opt "id" m with
+                        | Some (`String s) when s <> "" -> Some s
+                        | _ -> None)
+                   | _ -> None)
+                  ms
+            | _ -> [])
+       | _ -> []
+     with _ -> [])
 
 (* string_field / looks_complete_json / extract_content moved to
    common/lib/llm_codec.ml — shared with the standalone agent. *)

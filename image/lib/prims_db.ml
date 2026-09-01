@@ -531,6 +531,31 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
      client-manifest: [[path, hash], ...]  (same as sync/plan)
      client-bodies:    [[path, envelope-json-str], ...]
      base-manifest:    [[path, hash], ...]  (client's last-synced state) *)
+  (* auth.user-llm-keys 5b — the sync round exports the CALLER's OWN
+     llm credential as round metadata (never a datum, never another
+     user's). API key + base only: model is a per-surface dial
+     (provider ABI), deliberately not replicated. Agent users inherit
+     the parent human's key via get_llm_key_secret's fallback. *)
+  let llm_config_field () : (string * Yojson.Safe.t) list =
+    let uname = actor () in
+    match Auth_store.get_user_by_username t.store uname with
+    | None -> []
+    | Some u ->
+        (match Auth_store.get_llm_key_secret t.store ~user_id:u.Auth_store.id with
+         | None -> []
+         | Some (key, meta) ->
+             let base =
+               match meta.Auth_store.base with
+               | Some b when b <> "" -> b
+               | _ -> Llm_client.api_base ()
+             in
+             [ ( "llm_config"
+               , `Assoc
+                   [ ("api_key", `String key)
+                   ; ("base", `String base)
+                   ])
+             ])
+  in
   register_crud "sync/push"
     (fun args ->
       (* [cm] client manifest; [bodies] client envelope bodies;
@@ -614,7 +639,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
                     in
                     let json =
                       Yojson.Safe.to_string
-                        (`Assoc
+                        (`Assoc (
                            [ ("mode", `String "two-way")
                            ; ("applied", `Int applied)
                            ; ("client_only",
@@ -638,7 +663,8 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
                                        (List.rev lww_kept)))
                            ; ("generation",
                               `String (Int64.to_string gen))
-                           ])
+                           ]
+                          @ (llm_config_field ())))
                     in
                     (Pricklypear_lisp.Ast.VStr json))
            | _ ->
@@ -685,7 +711,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
                     in
                     let json =
                       Yojson.Safe.to_string
-                        (`Assoc
+                        (`Assoc (
                            [ ("mode", `String "three-way")
                            ; ("applied", `Int report.applied)
                            ; ("client_only",
@@ -723,7 +749,8 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
                                        (Sync.normalize merged)))
                            ; ("generation",
                               `String (Int64.to_string gen))
-                           ])
+                           ]
+                          @ (llm_config_field ())))
                     in
                     (Pricklypear_lisp.Ast.VStr json))
            | _ ->

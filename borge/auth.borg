@@ -604,6 +604,34 @@
          - Export/pp_sync: do NOT dump secret_data into lib.pp
 
          ==========================================================
+         5b. THE LOCAL-FIRST EXPORT EXCEPTION (2026-12)
+         ==========================================================
+
+         The "secret_data NEVER returned on get/list APIs" rule has
+         exactly ONE exception, pinned here for local-first: a
+         sync/push round (borge/local-first.borg sync) MAY return the
+         CALLER's OWN llm credential as ROUND METADATA —
+         llm_config: {api_key, base} — so a lens can hit the provider
+         invisibly after sync, exactly the way the online session
+         resolves it server-side. This is NOT a datum: it never
+         enters the tree (no data.u.<user> row, no pp-sync snapshot,
+         no /data browser row, no corpus-code read path). The client
+         records it in <lens>/__config.json — lens-root metadata,
+         excluded from the node manifest like __ancestry.json /
+         __base.json / __snapshot.json.
+
+         MODEL IS NOT EXPORTED. Model is a per-surface dial, not user
+         data to replicate: each surface (image /settings/keys,
+         glochid) populates a dropdown from the provider's own ABI
+         (GET {base}/models with the resolved key) and persists its
+         OWN choice locally. Sync carries base (the endpoint) so the
+         ABI is reachable; the choice itself never travels.
+
+         Server-asserted identity: llm_config is resolved from the
+         caller's session/basic-auth user — a client can only ever
+         receive its own key, never another user's.
+
+         ==========================================================
          6. PHASES
          ==========================================================
 

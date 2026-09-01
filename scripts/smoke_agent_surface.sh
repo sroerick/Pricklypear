@@ -11,6 +11,8 @@
 #      all parts present, close boundary, and curl EXIT CODE 0 promptly
 #      (pre-fix: curl rc=28 'Operation timed out' — body never terminated)
 #   4. GET /code        => code browser lists files
+#   5. GET /settings    => llm-config surface renders with the model
+#                          <select> (borge/agent.borg llm-config)
 #
 # Usage:  scripts/smoke_agent_surface.sh
 # Prereq: dune build agent/bin/main.exe
@@ -75,6 +77,14 @@ rm -f "$H" "$B"
 # 4. code browser renders a file tree
 CODE=$(curl -sS -m 5 "$URL/code")
 echo "$CODE" | grep -q 'name</th>'                            ; check "/code renders file tree" $?
+
+# 5. llm-config surface: settings page renders with a model <select>,
+#    and the chat header carries the same dropdown (hx-post /settings).
+#    With no API key in the smoke env the catalog is current-model-only
+#    (the provider /models fetch is skipped) — shape, not contents.
+SETTINGS=$(curl -sS -m 5 "$URL/settings")
+echo "$SETTINGS" | grep -q '<select name="model"'             ; check "/settings has model select" $?
+echo "$PAGE" | grep -q 'hx-post="/settings"'                  ; check "chat header has model dropdown" $?
 
 if [ "$fails" = 0 ]; then echo "PASS agent surface smoke"; exit 0
 else echo "FAIL ($fails checks)"; exit 1; fi

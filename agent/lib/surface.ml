@@ -26,6 +26,19 @@ open Pricklypear_lisp
     the / and /code routes via the agent route table. Uses libs/html +
     the agent's request-shape prims (query-param). *)
 let surface_source = {pp|
+;; ---- llm-config helpers (borge/agent.borg llm-config) ----
+;; The model dropdown is fed by the provider ABI (agent/models = GET
+;; {base}/models, cached host-side); the choice POSTs to /settings and
+;; persists per-surface (model is NEVER replicated user data).
+(define (settings/model-options current ms)
+  (if (null? ms)
+      ""
+      (string-append
+        (if (string=? (car ms) current)
+            (string-append "<option value=\"" (html-escape (car ms)) "\" selected>" (html-escape (car ms)) "</option>")
+            (string-append "<option value=\"" (html-escape (car ms)) "\">" (html-escape (car ms)) "</option>"))
+        (settings/model-options current (cdr ms)))))
+
 ;; ---- chat surface (GET /) ----
 ;; The chat page skeleton: log target + an hx-post=/chat form with the
 ;; upstream htmx-4 hx-multipart extension so a multipart/mixed reply
@@ -65,7 +78,11 @@ let surface_source = {pp|
       "::-webkit-scrollbar-thumb:hover{background:#4a4f5c}"
       "::-webkit-scrollbar-corner{background:transparent}"
       "</style></head><body>"
-      "<h1><a href=\"/\">agent</a> <span class=\"muted\">— <a href=\"/code\">/code</a></span></h1>"
+      "<h1><a href=\"/\">agent</a> <span class=\"muted\">— <a href=\"/code\">/code</a> · <a href=\"/settings\">/settings</a> · model: "
+      "<select name=\"model\" hx-post=\"/settings\" hx-trigger=\"change\" hx-swap=\"none\" "
+      "style=\"background:#1b1f2a;color:#d8dee9;border:1px solid #333;border-radius:4px;font-size:.6em\">"
+      (settings/model-options (agent/model) (agent/models))
+      "</select></span></h1>"
       "<div id=\"log\"><div class=\"muted\">agent ready.</div></div>"
       "<form id=\"f\" hx-post=\"/chat\" hx-target=\"#log\" hx-swap=\"beforeend\" hx-ext=\"hx-multipart\""
       " hx-config='{\"timeout\":0}' hx-on::before:request=\"this.reset()\">"
@@ -77,6 +94,41 @@ let surface_source = {pp|
       "<script src=\"/assets/hx-multipart.js\"></script>"
       "</body></html>")))
 (route "/" "chat/page")
+
+;; ---- settings surface (GET /settings; borge/agent.borg llm-config) ----
+;; Blank fields KEEP their values (password input round-trips blank).
+;; Key + base normally arrive invisibly: pp-remote --sync writes them
+;; to <lens>/__config.json from the habitat's sync round metadata
+;; (auth.user-llm-keys 5b). Model is a per-surface dial from the
+;; provider's own /models catalog.
+(define (settings/page)
+  (render-html
+    (string-append
+      "<!doctype html><html><head><meta charset=utf-8><title>agent settings</title>"
+      "<style>"
+      "body{background:#0f1117;color:#d8dee9;font-family:ui-monospace,Menlo,monospace;margin:0;padding:1.5rem}"
+      "a{color:#7aa2f7;text-decoration:none}a:hover{text-decoration:underline}"
+      ".muted{color:#6b7080}"
+      ".card{background:#1b1f2a;border:1px solid #2a2e3a;border-radius:6px;padding:1rem;max-width:38rem}"
+      "label{color:#8a8f9e}"
+      "input,select{width:100%;background:#0f1117;color:#d8dee9;border:1px solid #333;border-radius:6px;padding:.5rem;margin-top:.25rem}"
+      "button{background:#2a6fdb;color:#fff;border:0;border-radius:6px;padding:.5rem 1rem;cursor:pointer;margin-top:.5rem}"
+      "</style></head><body>"
+      "<h1><a href=\"/\">agent</a> <span class=\"muted\">— /settings</span></h1>"
+      "<div class=\"card\"><form method=\"post\" action=\"/settings\">"
+      "<p><label>API key — " (agent/key-status) " · blank keeps current</label>"
+      "<input type=\"password\" name=\"api_key\" autocomplete=\"off\"></p>"
+      "<p><label>Base URL</label>"
+      "<input type=\"text\" name=\"base_url\" value=\"" (html-escape (agent/base-url)) "\"></p>"
+      "<p><label>Model</label>"
+      "<select name=\"model\">" (settings/model-options (agent/model) (agent/models)) "</select></p>"
+      "<button>save</button></form>"
+      "<p class=\"muted\">Key + base come down invisibly via pp-remote --sync "
+      "(lens __config.json). Model is chosen per surface from the provider's /models.</p>"
+      "</div>"
+      "<script src=\"/assets/htmx.min.js\"></script>"
+      "</body></html>")))
+(route "/settings" "settings/page")
 
 ;; ---- chat fragment templates (called per-part by the OCaml stream) ----
 ;; Each returns a raw-HTML fragment the multipart emitter writes as one
@@ -217,7 +269,19 @@ let surface_source = {pp|
 (** Boot-load the embedded Nopales packages + this surface into the
     shared env, registering the route-table routes. Idempotent-ish:
     re-evaluating defines redefines bindings live. *)
+(** Inert defaults for the llm-config host prims (agent/models,
+    agent/model, agent/base-url, agent/key-status) so the surface
+    renders in non-serve contexts (tests, -p pipe evals).
+    [Http_ui.serve] RE-REGISTERS them with live cfg backing — prim
+    registration is last-write-wins on the same name. *)
+let register_config_default_prims ~(rt : Runtime.t) : unit =
+  Runtime.add_prim rt "agent/models" (fun _ -> Ast.VList []);
+  Runtime.add_prim rt "agent/model" (fun _ -> Ast.VStr "");
+  Runtime.add_prim rt "agent/base-url" (fun _ -> Ast.VStr "");
+  Runtime.add_prim rt "agent/key-status" (fun _ -> Ast.VStr "not set")
+
 let load ~(rt : Runtime.t) : unit =
+  register_config_default_prims ~rt;
   Runtime.load_source ~rt Libs_source.html_lib;
   Runtime.load_source ~rt Libs_source.hyper_lib;
   Runtime.load_source ~rt surface_source

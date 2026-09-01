@@ -480,7 +480,7 @@ let node_manifest ~(lens : lens) : (string * string) list =
     |> List.filter (fun f ->
          let b = Filename.basename f in
          b <> "__root.json" && b <> "__ancestry.json" && b <> "__snapshot.json"
-         && b <> "__base.json")
+         && b <> "__base.json" && b <> "__config.json")
   in
   List.filter_map path_hash_of_file files
 
@@ -607,3 +607,70 @@ let snapshot ~(lens : lens) : (string * int64) option =
             | _ -> None)
        | _ -> None
      with _ -> None)
+
+(* ====================================================================
+   CLIENT LLM CONFIG (sync round metadata, auth.user-llm-keys 5b)
+
+   The sync/push response carries llm_config: {api_key, base} — the
+   CALLER's OWN llm credential as control-channel metadata, never a
+   tree datum. Recorded to __config.json at the lens root (excluded
+   from node_manifest like __ancestry.json / __base.json /
+   __snapshot.json) so the lens can reach the provider invisibly after
+   sync. MODEL is a per-surface dial (provider ABI dropdown) and is
+   NOT overwritten by sync: record_sync_config preserves a locally
+   chosen model across rounds.
+   ==================================================================== *)
+
+let config_file (root : string) : string =
+  Filename.concat root "__config.json"
+
+(** The lens's client-side LLM config. All fields optional: sync may
+    have filled key/base while model stays a local choice. *)
+type client_config = {
+  api_key : string option;
+  base : string option;
+  model : string option;
+}
+
+let empty_config = { api_key = None; base = None; model = None }
+
+(** Read back the recorded client config (all None when none exists). *)
+let config ~(lens : lens) : client_config =
+  let f = config_file lens.root in
+  if not (Sys.file_exists f) then empty_config
+  else
+    (try
+       match Yojson.Safe.from_string (read_file f) with
+       | `Assoc kv ->
+           let opt_str k =
+             match List.assoc_opt k kv with
+             | Some (`String s) when s <> "" -> Some s
+             | _ -> None
+           in
+           { api_key = opt_str "api_key";
+             base = opt_str "base";
+             model = opt_str "model" }
+       | _ -> empty_config
+     with _ -> empty_config)
+
+let write_config ~(lens : lens) (c : client_config) : unit =
+  let opt k = function Some v -> [ (k, `String v) ] | None -> [] in
+  let json =
+    Yojson.Safe.to_string
+      (`Assoc
+         (opt "api_key" c.api_key
+          @ opt "base" c.base
+          @ opt "model" c.model
+          @ [ ("recorded_at", `String (string_of_float (Unix.gettimeofday ()))) ]))
+  in
+  atomic_write (config_file lens.root) json
+
+(** Record the server-provided llm_config from a sync round. Overwrites
+    api_key/base with the server's values; PRESERVES a locally chosen
+    model (per-surface dial, not replicated user data). Atomic. *)
+let record_sync_config ~(lens : lens) ~(api_key : string) ~(base : string) : unit =
+  let prev = config ~lens in
+  write_config ~lens
+    { api_key = (if api_key <> "" then Some api_key else prev.api_key);
+      base = (if base <> "" then Some base else prev.base);
+      model = prev.model }
