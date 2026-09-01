@@ -1,11 +1,11 @@
 (project pricklypear-music
  (doc "Pricklypear book chapter: music — the little music player package")
- (status in-progress)
- (* agent note (|2026-08-31: kernel layer (audio whitelist, type-aware caps, Range/206) shipped in 8684cc8 + 28e0893 + 4ec10ee; package live on admin/personal for smoke, promote pending.|) *)
+ (status implemented)
+ (* agent note (|2026-08-31: shipped end to end. Kernel 8684cc8 (audio whitelist + caps + Range/206) + 28e0893 (admin get-by-uuid 404 fix) + 4ec10ee (register media prims) + fb477ca (request-multipart + media-put-raw + multipart route cap). Package promoted to system/main (24 music/* bindings + /music route), vault synced via pp-sync snapshot. Verified on prod: multipart upload w/ metadata, ?play player card, pl-create/pl-add/pl-tracks, delete row+blob, htmx fragment swaps, Range/206 on the player src. Data rows are branch-shared; test data cleaned after smoke.|) *)
  (convention nopales-package)
  (section music
   (doc "Tracks + playlists on data_rows; audio bytes in media_blobs; player is <audio controls> over the kernel Range/206 serve path")
-  (status in-progress)
+  (status implemented)
 
   (subsection model
    (doc "music-track and music-playlist rows; media_id points at media_blobs")
