@@ -86,10 +86,12 @@ let rules =
      examples are below; local hosts may use the pp-eval CLI."
   ; "Knowledge wiki (Karpathy loop): (wiki/ingest-from-source …), \
      (wiki/query …), (wiki/lint); wiki links are [[slug]] on outline bodies."
-  ; "Binary media (images/PDF): do NOT push multi-KiB bytes through /api/eval \
+  ; "Binary media (images/PDF/audio): do NOT push multi-KiB bytes through /api/eval \
      (64 KiB cap). Use POST /api/media (Basic auth; raw body, JSON data_b64, or \
-     multipart field name=file; up to 5 MiB) or scripts/pp_media.py. Browser UI: \
-     GET /media + POST /media/upload. Serve via GET /media/<id>. Meta via \
+     multipart field name=file; 5 MiB images/pdf, 64 MiB audio/*) or \
+     scripts/pp_media.py. Browser UI: \
+     GET /media + POST /media/upload. Serve via GET /media/<id> (supports \
+     HTTP Range for audio seek). Meta via \
      (media-meta id) / (media-list); tiny fixtures only via (media-put …)."
   ]
 
@@ -499,10 +501,12 @@ let agent_markdown ?(base_url : string option = None) () : string =
     ; "### Write (auth required — HTTP Basic or session)"
     ; ""
     ; "POST " ^ origin ^ "/api/media"
-    ; "  Max body: 5 MiB."
+    ; "  Max body: 5 MiB (images/pdf), 64 MiB (audio/*)."
     ; "  Allowed Content-Types:"
     ; "    image/png image/jpeg image/gif image/webp image/svg+xml"
     ; "    application/pdf"
+    ; "    audio/mpeg audio/ogg audio/flac audio/wav audio/mp4"
+    ; "    audio/aac audio/webm"
     ; ""
     ; "Body modes:"
     ; "  1. Raw binary — set Content-Type to the media type;"
@@ -520,7 +524,7 @@ let agent_markdown ?(base_url : string option = None) () : string =
     ; ""
     ; "### Read / list / delete"
     ; ""
-    ; "GET  " ^ origin ^ "/media/<uuid>     → raw bytes (auth required)"
+    ; "GET  " ^ origin ^ "/media/<uuid>     → raw bytes (auth; Range/206 for audio seek)"
     ; "GET  " ^ origin ^ "/api/media        → JSON meta list (no bytes)"
     ; "DELETE " ^ origin ^ "/api/media/<uuid> → author or admin"
     ; "GET  " ^ origin ^ "/media           → browser gallery + upload form"
