@@ -319,6 +319,11 @@ dangling ids (deleted tracks) are skipped."
             "/music"
             (html/attrs
               (list
+                ;; File inputs REQUIRE multipart encoding: a plain form
+                ;; urlencodes the filename only, and htmx does the same
+                ;; unless hx-encoding is set.
+                (html/attr "enctype" "multipart/form-data")
+                (html/attr "hx-encoding" "multipart/form-data")
                 (html/attr "hx-post" "/music")
                 (html/attr "hx-target" "#music-main")
                 (html/attr "hx-swap" "outerHTML")
@@ -498,23 +503,31 @@ were uploaded for that track."
          (seq
            (music/pl-delete (as-str (request-param "pl")))
            "playlist deleted"))
-        (else
-         (let ((parts (request-multipart)))
-           (let ((media-id (music/upload-multipart parts))
-                 (title (music/part-str parts "title"))
-                 (artist (music/part-str parts "artist"))
-                 (album (music/part-str parts "album")))
-             (if (null? media-id)
-               "upload failed: no audio file part"
-               (seq
-                 (music/create
-                   (music/nonblank title "Untitled")
-                   (music/nonblank artist "")
-                   (music/nonblank album "")
-                   (as-str media-id))
-                 (string-append
-                   "uploaded "
-                    (music/nonblank title "Untitled")))))))))))
+         (else
+          ;; default: multipart upload (no action param). Guard the
+          ;; content-type: a urlencoded body (form without enctype,
+          ;; curl without headers) would make request-multipart
+          ;; raise -- answer with a status string, not a 500.
+          (let
+            ((ct (string-downcase (as-str (request-header "content-type")))))
+            (if (string-contains? ct "multipart/form-data")
+              (let ((parts (request-multipart)))
+                (let ((media-id (music/upload-multipart parts))
+                      (title (music/part-str parts "title"))
+                      (artist (music/part-str parts "artist"))
+                      (album (music/part-str parts "album")))
+                  (if (null? media-id)
+                    "upload failed: no audio file part"
+                    (seq
+                      (music/create
+                        (music/nonblank title "Untitled")
+                        (music/nonblank artist "")
+                        (music/nonblank album "")
+                        (as-str media-id))
+                      (string-append
+                        "uploaded "
+                        (music/nonblank title "Untitled"))))))
+              "upload failed: form did not send multipart data")))))))
 
 (define music/page
   (lambda ()
