@@ -108,7 +108,8 @@ def cmd_put(args: argparse.Namespace) -> int:
     if ctype == "application/octet-stream" and not args.type:
         print(
             "warning: could not guess content-type; pass --type "
-            "(allowed: image/png jpeg gif webp svg+xml, application/pdf)",
+            "(allowed: image/png jpeg gif webp svg+xml, application/pdf, "
+            "audio/mpeg ogg flac wav mp4)",
             file=sys.stderr,
         )
     status, body, _ = request(

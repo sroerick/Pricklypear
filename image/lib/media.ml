@@ -24,6 +24,8 @@ type put_result = {
 }
 
 let max_http_bytes = 5 * 1024 * 1024
+(* Audio (music files) routinely dwarfs the image/pdf ceiling. *)
+let max_http_audio_bytes = 64 * 1024 * 1024
 let max_eval_put_bytes = 256 * 1024
 
 let allowed_content_types =
@@ -33,16 +35,47 @@ let allowed_content_types =
   ; "image/webp"
   ; "image/svg+xml"
   ; "application/pdf"
+  ; "audio/mpeg" (* .mp3 *)
+  ; "audio/ogg" (* .ogg / vorbis / opus *)
+  ; "audio/flac" (* .flac *)
+  ; "audio/wav" (* .wav *)
+  ; "audio/mp4" (* .m4a / aac in mp4 *)
+  ; "audio/aac" (* raw ADTS .aac *)
+  ; "audio/webm" (* opus in webm (browser recordings) *)
+  ]
+
+(* Friendly aliases normalized to a canonical whitelisted type on
+   put, so clients guessing mime by extension still land. *)
+let content_type_aliases =
+  [ ("audio/mp3", "audio/mpeg")
+  ; ("audio/x-mp3", "audio/mpeg")
+  ; ("audio/m4a", "audio/mp4")
+  ; ("audio/x-m4a", "audio/mp4")
+  ; ("audio/x-wav", "audio/wav")
+  ; ("audio/wave", "audio/wav")
+  ; ("audio/x-flac", "audio/flac")
   ]
 
 let normalize_content_type (ct : string) : string =
   let ct = String.trim (String.lowercase_ascii ct) in
-  match String.index_opt ct ';' with
-  | None -> ct
-  | Some i -> String.trim (String.sub ct 0 i)
+  let base =
+    match String.index_opt ct ';' with
+    | None -> ct
+    | Some i -> String.trim (String.sub ct 0 i)
+  in
+  match List.assoc_opt base content_type_aliases with
+  | Some canon -> canon
+  | None -> base
 
 let content_type_allowed (ct : string) : bool =
   List.mem (normalize_content_type ct) allowed_content_types
+
+let is_audio_content_type (ct : string) : bool =
+  String.starts_with ~prefix:"audio/" (normalize_content_type ct)
+
+(* Type-aware upload ceiling: music files get the big one. *)
+let max_http_bytes_for (ct : string) : int =
+  if is_audio_content_type ct then max_http_audio_bytes else max_http_bytes
 
 let sanitize_filename (name : string option) : string option =
   match name with

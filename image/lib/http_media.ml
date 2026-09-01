@@ -10,7 +10,21 @@
 open Pure_html
 open Http_core
 
-let max_media_body_bytes = Media.max_http_bytes
+(* Type-aware HTTP body cap. Audio (music files) gets the big
+   ceiling; images/pdf keep the v1 5 MiB. Multipart may carry audio
+   parts (framing overhead) and JSON data_b64 inflates bytes by 4/3,
+   so both get slack over the audio ceiling. The per-stored-type cap
+   is enforced a second time inside Media.put (store_upload). *)
+let request_body_cap (content_type : string option) : int =
+  match content_type with
+  | None -> Media.max_http_bytes
+  | Some ct ->
+      let ct = String.lowercase_ascii ct in
+      if String.starts_with ~prefix:"multipart/form-data" ct then
+        Media.max_http_audio_bytes + 65536
+      else if String.starts_with ~prefix:"application/json" ct then
+        ((Media.max_http_audio_bytes * 4) / 3) + 4096
+      else Media.max_http_bytes_for ct
 
 (** Read body with a hard byte ceiling; Error `Too_large if exceeded. *)
 let read_body_limited (reqd : Httpun.Reqd.t) ~(max_bytes : int)
@@ -51,13 +65,12 @@ let require_authed_user (session : Session.t) : (string * bool, unit) result =
   if uname = "" || uname = "anonymous" then Error ()
   else Ok (uname, Session.is_admin session)
 
-let too_large (reqd : Httpun.Reqd.t) : unit =
+let too_large (reqd : Httpun.Reqd.t) ~(max_bytes : int) : unit =
   json_response reqd ~status:`Payload_too_large
     (`Assoc
        [ ("ok", `Bool false)
        ; ( "error"
-         , `String
-             (Printf.sprintf "body exceeds %d bytes" max_media_body_bytes) )
+         , `String (Printf.sprintf "body exceeds %d bytes" max_bytes) )
        ])
 
 let bad_request (reqd : Httpun.Reqd.t) (msg : string) : unit =
@@ -384,7 +397,7 @@ let store_upload
     ~(meta_json : string)
   : (Media.put_result, string) result =
   Media.put (Session.store session) ~author ~content_type ~data ~filename
-    ~meta_json ~max_bytes:max_media_body_bytes ()
+    ~meta_json ~max_bytes:(Media.max_http_bytes_for content_type) ()
 
 let put_error_status (msg : string) : Httpun.Status.t =
   if String.starts_with ~prefix:"payload too large" msg then
@@ -406,19 +419,18 @@ let api_media_post (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
       unauthorized_api reqd;
       ()
   | Ok (author, _) ->
-      let body_res =
-        read_body_limited reqd ~max_bytes:max_media_body_bytes
+      let req = Httpun.Reqd.request reqd in
+      let headers = header_list req in
+      let ct_hdr =
+        Option.map String.trim (header_ci headers "content-type")
       in
+      let cap = request_body_cap ct_hdr in
+      let body_res = read_body_limited reqd ~max_bytes:cap in
       (match body_res with
        | Error `Too_large ->
-           too_large reqd;
+           too_large reqd ~max_bytes:cap;
            ()
        | Ok body ->
-           let req = Httpun.Reqd.request reqd in
-           let headers = header_list req in
-           let ct_hdr =
-             Option.map String.trim (header_ci headers "content-type")
-           in
            let filename_hdr = header_ci headers "x-filename" in
            (match
               parse_upload_body ~content_type:ct_hdr ~filename_hdr body
@@ -495,6 +507,58 @@ let api_media_delete (session : Session.t) (reqd : Httpun.Reqd.t)
              (`Assoc [ ("ok", `Bool false); ("error", `String msg) ]);
            ())
 
+(* HTTP Range for audio seek (RFC 9110). Single byte range only;
+   malformed or multi-range requests are IGNORED (full 200); an
+   unsatisfiable start (>= total) yields 416. *)
+type range_req = [ `Range of int * int | `Full | `Unsatisfiable ]
+
+let parse_range ~(total : int) (hdr : string option) : range_req =
+  match hdr with
+  | None -> `Full
+  | Some h ->
+      let h = String.trim h in
+      let unit, spec =
+        match String.index_opt h '=' with
+        | Some i ->
+            ( String.trim (String.sub h 0 i)
+            , String.sub h (i + 1) (String.length h - i - 1) )
+        | None -> ("", h)
+      in
+      if String.lowercase_ascii unit <> "bytes" then `Full
+      else if String.contains spec ',' then `Full (* multi-range: ignore *)
+      else
+        let spec = String.trim spec in
+        match String.index_opt spec '-' with
+        | None -> `Full
+        | Some dash ->
+            let first = String.trim (String.sub spec 0 dash) in
+            let last =
+              String.trim
+                (String.sub spec (dash + 1) (String.length spec - dash - 1))
+            in
+            if first = "" then
+              (* Suffix form: bytes=-N (last N bytes). Zero-length
+                 suffix is syntactically valid but unsatisfiable. *)
+              (match int_of_string_opt last with
+               | Some 0 -> `Unsatisfiable
+               | Some n when n > 0 ->
+                   if total = 0 then `Unsatisfiable
+                   else
+                     let n = min n total in
+                     `Range (total - n, total - 1)
+               | _ -> `Full)
+            else
+              (match int_of_string_opt first with
+               | Some s when s >= 0 -> (
+                   if s >= total then `Unsatisfiable
+                   else
+                     match int_of_string_opt last with
+                     | None -> `Range (s, total - 1) (* bytes=5- *)
+                     | Some e when e >= s ->
+                         `Range (s, min e (total - 1))
+                     | Some _ -> `Full (* start > end: ignore *))
+               | _ -> `Full)
+
 let media_get (session : Session.t) (reqd : Httpun.Reqd.t) ~(id : string)
   : unit =
   match require_authed_user session with
@@ -529,22 +593,65 @@ let media_get (session : Session.t) (reqd : Httpun.Reqd.t) ~(id : string)
                       f)
              | None -> kind
            in
-           let headers =
+           let total = String.length bytes in
+           let base_headers extra =
              Httpun.Headers.of_list
                ([ ("content-type", m.content_type)
-                ; ("content-length", string_of_int (String.length bytes))
+                ; ("accept-ranges", "bytes")
                 ; ("cache-control", "private, max-age=3600")
                 ; ("content-disposition", disposition)
-                ] @ Http_core.security_headers ())
+                ]
+               @ extra
+               @ Http_core.security_headers ())
            in
-           let resp = Httpun.Response.create ~headers `OK in
-           safe_respond_with_string reqd resp bytes;
-           ())
+           let req_headers = header_list (Httpun.Reqd.request reqd) in
+           let range_hdr = header_ci req_headers "range" in
+           (match parse_range ~total range_hdr with
+            | `Unsatisfiable ->
+                let headers =
+                  base_headers
+                    [ ("content-length", "0")
+                    ; ( "content-range"
+                      , Printf.sprintf "bytes */%d" total )
+                    ]
+                in
+                let resp =
+                  Httpun.Response.create ~headers `Range_not_satisfiable
+                in
+                safe_respond_with_string reqd resp "";
+                ()
+            | `Full ->
+                let headers =
+                  base_headers [ ("content-length", string_of_int total) ]
+                in
+                let resp = Httpun.Response.create ~headers `OK in
+                safe_respond_with_string reqd resp bytes;
+                ()
+            | `Range (start, stop) ->
+                let slice =
+                  String.sub bytes start ((stop - start) + 1)
+                in
+                let headers =
+                  base_headers
+                    [ ( "content-length"
+                      , string_of_int (String.length slice) )
+                    ; ( "content-range"
+                      , Printf.sprintf "bytes %d-%d/%d" start stop total )
+                    ]
+                in
+                let resp =
+                  Httpun.Response.create ~headers `Partial_content
+                in
+                safe_respond_with_string reqd resp slice;
+                ()))
 
 (* ---- Browser UI: GET /media + POST /media/upload ---- *)
 
 let is_image_ct (ct : string) : bool =
   String.starts_with ~prefix:"image/" (String.lowercase_ascii ct)
+
+let is_audio_ct (ct : string) : bool =
+  String.starts_with ~prefix:"audio/" (String.lowercase_ascii ct)
 
 let media_row_card (m : Media.meta) : Pure_html.node =
   let name =
@@ -558,6 +665,18 @@ let media_row_card (m : Media.meta) : Pure_html.node =
           ; HTML.alt "%s" name
           ; HTML.style_ "max-width:12rem;max-height:12rem;object-fit:contain;border:1px solid #ccc;background:#fafafa"
           ]
+      ]
+    else if is_audio_ct m.content_type then
+      (* Inline player — /media doubles as the little music library. *)
+      HTML.div [] [
+        HTML.audio
+          [ HTML.controls
+          ; HTML.preload `none
+          ; HTML.src "%s" (Media.url_of_id m.id)
+          ; HTML.style_ "width:100%%;max-width:24rem;display:block"
+          ]
+          [];
+        HTML.a [HTML.href "%s" (Media.url_of_id m.id)] [txt "download / open"];
       ]
     else
       HTML.p [] [
@@ -628,7 +747,7 @@ let media_page (session : Session.t) (reqd : Httpun.Reqd.t)
                 ; HTML.id "file"
                 ; HTML.required
                 ; HTML.accept
-                    "image/png,image/jpeg,image/gif,image/webp,image/svg+xml,application/pdf,.png,.jpg,.jpeg,.gif,.webp,.svg,.pdf"
+                    "image/png,image/jpeg,image/gif,image/webp,image/svg+xml,application/pdf,audio/mpeg,audio/ogg,audio/flac,audio/wav,audio/mp4,.png,.jpg,.jpeg,.gif,.webp,.svg,.pdf,.mp3,.ogg,.flac,.wav,.m4a"
                 ];
             ];
             HTML.button [HTML.type_ "submit"] [txt "Upload"];
@@ -660,7 +779,8 @@ let media_page (session : Session.t) (reqd : Httpun.Reqd.t)
         chrome ~session ~title:"Media" (
           flash
           @ [ HTML.p [HTML.class_ "meta"] [
-                txt "Your binary blobs (images/PDF). Auth required to view.";
+                txt
+                  "Your binary blobs (images/PDF/audio). Auth required to view.";
               ]
             ; upload_card
             ; admin_note
@@ -679,13 +799,18 @@ let media_upload_post (session : Session.t) (reqd : Httpun.Reqd.t)
       require_login_redirect reqd ~path:"/media" ~target:"/media";
       ()
   | Ok (author, _) ->
-      let body_res =
-        read_body_limited reqd ~max_bytes:max_media_body_bytes
+      let cap =
+        request_body_cap
+          (Option.map String.trim
+             (header_ci (header_list (Httpun.Reqd.request reqd)) "content-type"))
       in
+      let body_res = read_body_limited reqd ~max_bytes:cap in
       (match body_res with
        | Error `Too_large ->
            redirect_response reqd
-             ("/media?err=" ^ url_encode "file too large (max 5 MiB)");
+             ("/media?err="
+             ^ url_encode
+                 (Printf.sprintf "file too large (max %d bytes)" cap));
            ()
        | Ok body ->
            let req = Httpun.Reqd.request reqd in
@@ -752,4 +877,5 @@ let media_delete_post (session : Session.t) (reqd : Httpun.Reqd.t)
 (* Exposed for unit tests *)
 let multipart_boundary_for_test = multipart_boundary
 let parse_multipart_for_test = parse_multipart
+let parse_range_for_test = parse_range
 let pick_upload_file_for_test = pick_upload_file

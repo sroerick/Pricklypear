@@ -289,11 +289,22 @@
                     , "data_b64": "…"
                     , "filename": "shot.png"   // optional
                     , "meta": {…} }            // optional
-             Body limit for this route: 5 MiB (not the 64 KiB
-             eval cap). Reject oversize with 413.
+             Body limit for this route: TYPE-AWARE (not the 64
+             KiB eval cap) — 5 MiB for images/pdf, 64 MiB for
+             audio/* (music files for the player package).
+             Multipart gets the audio ceiling (parts may be
+             audio); JSON data_b64 gets a 4/3 inflation slack;
+             the per-stored-type cap is enforced again inside
+             media.put. Reject oversize with 413.
              MIME whitelist (v1):
                image/png image/jpeg image/gif image/webp
                image/svg+xml application/pdf
+               audio/mpeg audio/ogg audio/flac audio/wav
+               audio/mp4 audio/aac audio/webm
+             Aliases normalize on put: audio/mp3|audio/x-mp3 →
+             audio/mpeg; audio/m4a|audio/x-m4a → audio/mp4;
+             audio/x-wav|audio/wave → audio/wav;
+             audio/x-flac → audio/flac.
              On success 201:
                { "ok": true
                , "id": "<uuid>"
@@ -311,6 +322,19 @@
              the row, Content-Length, Cache-Control: private,
              optional Content-Disposition inline; filename=
              when filename is set. 404 if missing.
+
+             HTTP Range (audio seek; RFC 9110): every 200
+             carries Accept-Ranges: bytes. A single-range
+             `Range: bytes=…` header is honored with 206
+             Partial Content + Content-Range: bytes start-
+             end/total; suffix form (bytes=-N) and clamped
+             end (end > size-1) supported. Unsatisfiable
+             start (start >= size) → 416 with Content-Range:
+             bytes */total and empty body. Malformed ranges
+             and multi-range requests are IGNORED (full 200).
+             Browsers use this to seek in <audio> elements;
+             the /media gallery renders inline <audio
+             controls> cards for audio/* blobs.
 
            DELETE /api/media/<uuid>
              Auth required. Author-or-admin may delete.
@@ -386,7 +410,10 @@
     (test "image/test/media_test.ml — put/meta/list/delete + mime reject")
     (smoke "scripts/dev.sh applies 007; POST /api/media with basic auth stores png; GET /media/<id> returns image/png bytes")
     (smoke "python3 scripts/pp_media.py put <fixture.png> prints id; get round-trips bytes")
-    (smoke "POST /api/eval still capped at 64 KiB; media route accepts up to 5 MiB"))
+    (smoke "POST /api/eval still capped at 64 KiB; media route accepts images/pdf up to 5 MiB, audio/* up to 64 MiB")
+    (smoke "POST /api/media audio/mpeg accepted; images still rejected past 5 MiB; audio past 64 MiB rejected with 413")
+    (smoke "GET /media/<id> with Range: bytes=0-99 returns 206 + Content-Range; bytes=10- over a 10-byte blob returns 416")
+    (smoke "<audio controls> card in /media gallery plays an uploaded mp3 and seeks (browser)"))
 
   )
  )
