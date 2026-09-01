@@ -16,6 +16,17 @@ open Http_pages
 open Http_ops
 open Http_media
 
+(* Route POST body cap: multipart/form-data may carry media files for
+   package upload flows (e.g. music) up to the audio ceiling plus
+   framing slack; every other body keeps the 64 KiB form cap.
+   Handlers parse these bodies via (request-multipart) and store the
+   file part via (media-put-raw). *)
+let route_body_cap (content_type : string) : int =
+  let ct = String.lowercase_ascii (String.trim content_type) in
+  if String.starts_with ~prefix:"multipart/form-data" ct
+  then Media.max_http_audio_bytes + 65536
+  else max_user_body_bytes
+
 let request_handler ~(sw : Eio.Switch.t) ~(registry : Session_registry.t)
     (session : Session.t) (sockaddr : Unix.sockaddr)
     (reqd : Httpun.Reqd.t) : unit =
@@ -352,15 +363,21 @@ let request_handler ~(sw : Eio.Switch.t) ~(registry : Session_registry.t)
           ()
       | Some handler_name ->
           let page () : unit =
+            let body_cap =
+              route_body_cap
+                (match Httpun.Headers.get req.headers "content-type" with
+                 | Some s -> s
+                 | None -> "")
+            in
             let body_str =
               match meth with
-              | `POST -> read_body reqd
+              | `POST -> read_body reqd ~max_bytes:body_cap
               | _ -> ""
             in
-          if String.length body_str > max_user_body_bytes then begin
+          if String.length body_str > body_cap then begin
             text_response reqd ~status:`Payload_too_large
               ~content_type:"text/plain"
-              "request body too large (max 64KiB)";
+              "request body too large";
             ()
           end else begin
             let query = parse_query target in
@@ -954,15 +971,21 @@ let request_handler ~(sw : Eio.Switch.t) ~(registry : Session_registry.t)
       match route_opt with
        | Some handler_name ->
            let page () : unit =
+             let body_cap =
+               route_body_cap
+                 (match Httpun.Headers.get req.headers "content-type" with
+                  | Some s -> s
+                  | None -> "")
+             in
              let body_str =
                match umeth with
-               | `POST -> read_body reqd
+               | `POST -> read_body reqd ~max_bytes:body_cap
                | `GET -> ""
              in
-             if String.length body_str > max_user_body_bytes then begin
+             if String.length body_str > body_cap then begin
                text_response reqd ~status:`Payload_too_large
                  ~content_type:"text/plain"
-                 "request body too large (max 64KiB)";
+                 "request body too large";
                ()
              end else begin
                let query = parse_query target in

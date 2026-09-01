@@ -371,6 +371,8 @@
     (smoke "POST user route hits same path handler; (request-method) => POST")
     (smoke "POST form-urlencoded body: (request-param \"title\") returns field")
     (smoke "GET query: (request-param \"q\") returns query value")
+    (smoke "multipart route POST: (request-multipart) parses the file part; urlencoded bodies still capped at 64 KiB; multipart capped at the media ceiling")
+    (smoke "(media-put-raw \"audio/wav\" bytes \"t.wav\") inside a route handler stores a >256 KiB blob; media-put still enforces 256 KiB")
     (smoke "(redirect \"/todos\") => 303 Location: /todos")
     (smoke "POST /api/recipe/todo then POST /todos title=… creates row + redirects; GET /todos lists it"))
    (details
@@ -418,6 +420,21 @@
            (request-param k)    -> VStr value | VNil if missing
            (request-params)     -> VStr JSON object of all params
            (request-body)       -> VStr raw body (\"\" on GET)
+           (request-multipart)  -> VList of (name filename content-type
+                                   data) string lists; VNil fields when
+                                   the part omits them; raises
+                                   User_error on non-multipart requests
+                                   or a malformed body. Added for
+                                   package upload flows (music): the
+                                   multipart route-POST body cap is the
+                                   media ceiling (64 MiB audio + slack,
+                                   http.route_body_cap); urlencoded and
+                                   other bodies keep the 64 KiB form
+                                   cap. Store the file part via
+                                   (media-put-raw type bytes [filename])
+                                   — like media-put but RAW bytes and
+                                   the type-aware HTTP ceiling instead
+                                   of the 256 KiB eval ceiling.
 
          HANDLER RETURN VALUES:
          1. render-html tagged VStr (__html__:…)

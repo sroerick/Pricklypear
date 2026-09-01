@@ -98,6 +98,47 @@ let register (t : t) (tbl : Primitives.t) : unit =
           (List.map (fun (k, v) -> (k, `String v)) r.params)
       in
       Pricklypear_lisp.Ast.VStr (Yojson.Safe.to_string j));
+  (* (request-multipart) -> VList of (name filename content-type data)
+     string lists; filename/content-type are VNil when the part omits
+     them. Raises User_error on non-multipart requests or a malformed
+     body. Pairs with (media-put-raw) for package upload flows (e.g.
+     music): the multipart route-POST body cap is the media ceiling
+     (http.route_body_cap), so real audio files reach the handler. *)
+  Primitives.register_sync tbl "request-multipart" (fun _args ->
+      let r = require_request t in
+      let ct =
+        match List.assoc_opt "content-type" r.headers with
+        | Some s -> s
+        | None -> ""
+      in
+      (match Http_multipart.multipart_boundary ct with
+       | None ->
+           raise
+             (Pricklypear_lisp.Ast.Interp_error
+                (Pricklypear_lisp.Ast.User_error
+                   ( "request-multipart: request is not multipart/form-data"
+                   , "bad-args" )))
+       | Some boundary ->
+           (match Http_multipart.parse_multipart ~boundary r.body with
+            | Error e ->
+                raise
+                  (Pricklypear_lisp.Ast.Interp_error
+                     (Pricklypear_lisp.Ast.User_error
+                        ("request-multipart: " ^ e, "bad-args")))
+            | Ok parts ->
+                Pricklypear_lisp.Ast.VList
+                  (List.map
+                     (fun (p : Http_multipart.multipart_file) ->
+                        Pricklypear_lisp.Ast.VList
+                          [ Pricklypear_lisp.Ast.VStr p.field_name
+                          ; (match p.filename with
+                             | Some f -> Pricklypear_lisp.Ast.VStr f
+                             | None -> Pricklypear_lisp.Ast.VNil)
+                          ; (match p.content_type with
+                             | Some c -> Pricklypear_lisp.Ast.VStr c
+                             | None -> Pricklypear_lisp.Ast.VNil)
+                          ; Pricklypear_lisp.Ast.VStr p.data ])
+                     parts))));
   Primitives.register_sync tbl "redirect" (fun args ->
       match args with
       | [ Pricklypear_lisp.Ast.VStr path ] ->

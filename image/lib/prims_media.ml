@@ -111,6 +111,42 @@ let register (t : t) (tbl : Primitives.t) : unit =
                   | Ok r -> (Pricklypear_lisp.Ast.VStr r.id)
                   | Error e ->
                       (Pricklypear_lisp.Ast.VStr ("media-put: " ^ e)))));
+  (* (media-put-raw content-type data [filename]) -> VStr id | error
+     Like media-put but takes RAW bytes (no base64) and uses the
+     type-aware HTTP ceiling instead of the 256 KiB eval ceiling.
+     For package upload flows: a route handler receives the file part
+     bytes via (request-multipart) and hands them here — a 5 MiB image
+     or 64 MiB audio never passes through /api/eval, so the eval cap
+     does not apply. Anonymous denied, same as media-put. *)
+  Primitives.register tbl "media-put-raw"
+    (fun args ->
+      let uname = actor () in
+      if uname = "anonymous" then deny_anon "media-put-raw"
+      else
+        let parse =
+          match args with
+          | [ Pricklypear_lisp.Ast.VStr ct
+            ; Pricklypear_lisp.Ast.VStr data ] ->
+              Ok (ct, data, None)
+          | [ Pricklypear_lisp.Ast.VStr ct
+            ; Pricklypear_lisp.Ast.VStr data
+            ; Pricklypear_lisp.Ast.VStr filename ] ->
+              Ok (ct, data, Some filename)
+          | _ ->
+              Error "media-put-raw: need content-type, data [, filename]"
+        in
+        match parse with
+        | Error e -> (Pricklypear_lisp.Ast.VStr e)
+        | Ok (ct, data, filename) ->
+            let res =
+              Media.put t.store ~author:uname ~content_type:ct ~data
+                ~filename
+                ~max_bytes:(Media.max_http_bytes_for ct)
+                ()
+            in
+            (match res with
+             | Ok r -> (Pricklypear_lisp.Ast.VStr r.id)
+             | Error e -> (Pricklypear_lisp.Ast.VStr ("media-put-raw: " ^ e))));
   (* (media-url id) -> VStr "/media/<id>" *)
   Primitives.register tbl "media-url"
     (fun args ->
