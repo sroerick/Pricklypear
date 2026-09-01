@@ -50,6 +50,15 @@
          Flow numbering: upload=1, play=2, playlist=3, delete=4.
          Canonical path: upload -> media-put-raw -> music/create ->
          music/table-html renders the new row.
+
+         FORM ENCODING (2026-09-01 fix): the upload form MUST carry
+         enctype=multipart/form-data AND hx-encoding=multipart/form-data
+         — a plain form urlencodes the filename only, and htmx does the
+         same unless hx-encoding is set. The first ship omitted both;
+         curl-based smokes (raw multipart) passed while the browser
+         button did nothing. handle-post answers non-multipart bodies
+         with a status string instead of letting request-multipart
+         raise. FE-verify lesson: test through the real form encoding.
    |))
    )
    (verify
