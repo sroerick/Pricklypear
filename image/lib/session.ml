@@ -1500,6 +1500,11 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
   (* Network primitives (tcp-connect, stream-read/write/close) —
      single-image.net-prims. *)
   register_net_prims !t prim_table;
+  (* Media prims (media-put/meta/list/delete/url) — storage.media.
+     Was defined since the media blob store landed but never
+     registered (filed as habitat BUG 2026-08-31); (media-meta)
+     et al were unbound on every branch. *)
+  register_media_prims !t prim_table;
   (* Hypermedia harness: html/* lambdasoup prims + route/dispatch
      (headless htmx swap simulator; spec borge/hypermedia-harness.borg).
      route/dispatch is registered inline here (not in Prims_hyper) so it
