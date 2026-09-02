@@ -597,6 +597,139 @@ function kbDrop(ev){
             (kanban/board list-id)))))))
 
 (route "/kanban" "kanban/page")
+(define kanban/review-li
+  (lambda
+    (row)
+    "Render one card row with priority, assignee, state and truncated notes."
+    (let*
+      ((f (cdr row))
+        (t0 (dict-get f "title"))
+        (st0 (dict-get f "state"))
+        (pr0 (dict-get f "priority"))
+        (as0 (dict-get f "assignee"))
+        (nt0 (dict-get f "notes")))
+      (let*
+        ((t (if (null? t0) "" (as-str t0)))
+          (st (if (null? st0) "" (as-str st0)))
+          (pr (if (null? pr0) "" (as-str pr0)))
+          (as (if (null? as0) "" (as-str as0)))
+          (nt (if (null? nt0) "" (as-str nt0))))
+        (let*
+          ((badge (string-append "[" (if (string-eq pr "") "-" pr) "] "))
+            (who (string-append " @" (if (string-eq as "") "unassigned" as) " (" st ")"))
+            (nts (if (> (string-length nt) 90) (string-append (substring nt 0 90) "...") nt)))
+          (html/li
+            (html/attr "class" "todo-item")
+            (html/join
+              (list
+                (html/span (html/attr "class" "prio") (html/text badge))
+                (html/span (html/attr "class" "todo-title") (html/text t))
+                (html/span (html/attr "class" "muted") (html/text who))
+                (html/span (html/attr "class" "muted") (html/text (string-append " " nts)))))))))))
+(define kanban/review-prio-rank
+  (lambda
+    (fields)
+    "Numeric work rank of the priority field: P0=0 .. P3=3, unknown or empty = 4."
+    (let
+      ((p (dict-get fields "priority")))
+      (if
+        (null? p)
+        4
+        (let
+          ((s (as-str p)))
+          (if
+            (string-eq s "P0")
+            0
+            (if
+              (string-eq s "P1")
+              1
+              (if
+                (string-eq s "P2")
+                2
+                (if
+                  (string-eq s "P3")
+                  3
+                  4)))))))))
+
+(define kanban/review-prio-pos
+  (lambda
+    (fields)
+    "The position field as a number; 0 when absent or non-numeric."
+    (let
+      ((q (dict-get fields "position")))
+      (if
+        (null? q)
+        0
+        (let
+          ((s (as-str q)))
+          (if
+            (string-eq s "")
+            0
+            (parse-int s)))))))
+
+(define kanban/review-le?
+  (lambda
+    (a b)
+    "True when row a sorts before or equal to row b by (priority rank, position, id)."
+    (let
+      ((ra (kanban/review-prio-rank (cdr a)))
+        (rb (kanban/review-prio-rank (cdr b))))
+      (if
+        (< ra rb)
+        #t
+        (if
+          (> ra rb)
+          #f
+          (let
+            ((pa (kanban/review-prio-pos (cdr a)))
+              (pb (kanban/review-prio-pos (cdr b))))
+            (if
+              (< pa pb)
+              #t
+              (if
+                (> pa pb)
+                #f
+                (string<=? (car a) (car b))))))))))
+
+(define kanban/review-ins
+  (lambda
+    (sorted row)
+    "Insertion-sort step for kanban/review-sorted."
+    (if
+      (null? sorted)
+      (list row)
+      (if
+        (kanban/review-le? row (car sorted))
+        (cons row sorted)
+        (cons (car sorted) (kanban/review-ins (cdr sorted) row))))))
+
+(define kanban/review-sorted
+  (lambda
+    (rows)
+    "Rows ordered by priority rank, then position, then id."
+    (list/foldl kanban/review-ins () rows)))
+
+(define kanban/review-page
+  (lambda
+    ()
+    "Work-order view of the default board: priority, then position, then id."
+    (html/page
+      (list
+        (html/h1 "Board review - todo-assignment branch")
+        (html/p*
+          (html/attr "class" "muted")
+          "Queue order: priority P0-P3, then position, then id. Empty bracket = unprioritized, sinks to bottom.")
+        (html/h2 "Cards in work order")
+        (html/ul
+          (html/attr "class" "card todo-list")
+          (list/foldl
+            (lambda
+              (acc row)
+              (string-append acc (kanban/review-li row)))
+            ""
+            (kanban/review-sorted (todo/items-for-list "0b21ffaa-3a67-4bed-a9ac-658c855b4704"))))))))
+
+(route "/kanban-review" "kanban/review-page")
 
 ;; ------------------------------------------------------------------
 ;; org card vocabulary (agents): make / move / stale
