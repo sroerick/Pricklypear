@@ -1089,18 +1089,49 @@ let delete_function (t : t) (name : string) : bool =
     ahead-new / diverged pins are untouched (they carry a real diff);
     types and routes are untouched (unbind is fn-only for v1). Deletion
     is unbind semantics: the parent binding is revealed, nothing is lost.
-    Caller guards system/main (a root pin can never be synced;
-    delete_function would raise). Returns the names unpinned. *)
+    system/main returns [] (a root pin can never be synced).
+
+    The deletions run in ONE SERIALIZABLE transaction: deferred triggers
+    (009 reverse mirror, 018-021 version shadow) flush once at commit,
+    so a multi-thousand-pin sweep is a couple of SQL round trips, not a
+    per-pin autocommit procession (prod sweep 2026-12-30: ~0.7s/pin
+    one-shot -> sub-second for ~1.2k pins in-tx). Returns the names
+    unpinned. *)
 let prune_synced_fn_pins (t : t) : string list =
-  let rows = branch_status t ~branch_id:t.branch_id in
-  List.fold_left
-    (fun acc (r : branch_status_row) ->
-      if r.st_kind = DiffFn && r.st_status = SSynced then
-        (try
-           if delete_function t r.st_name then r.st_name :: acc else acc
-         with Failure _ -> acc)
-      else acc)
-    [] rows
+  if t.branch_id = system_main_id then []
+  else
+    let rows = branch_status t ~branch_id:t.branch_id in
+    let synced =
+      List.filter_map
+        (fun (r : branch_status_row) ->
+          if r.st_kind = DiffFn && r.st_status = SSynced then
+            Some r.st_name
+          else None)
+        rows
+    in
+    (match synced with
+     | [] -> []
+     | names ->
+         (try
+            with_transaction t (fun conn ->
+              match conn with
+              | None -> []
+              | Some conn ->
+                  List.filter
+                    (fun name ->
+                      try
+                        Tree_store.delete_fn conn ~branch_id:t.branch_id
+                          ~name
+                      with exn ->
+                        Printf.eprintf
+                          "[store] prune_synced_fn_pins %s: %s\n" name
+                          (Printexc.to_string exn);
+                        false)
+                    names)
+          with exn ->
+            Printf.eprintf "[store] prune_synced_fn_pins: %s\n"
+              (Printexc.to_string exn);
+            []))
 
 (** Temporarily rebind [t.branch_id] for the duration of [f], then restore.
     Used so seed_stdlib can write package defaults to system/main without
