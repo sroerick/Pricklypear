@@ -1713,17 +1713,30 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
   Pricklypear_lisp.Env.define env "load-library" (Pricklypear_lisp.Ast.VPrim "load-library");
   Pricklypear_lisp.Env.define env "reseed-package" (Pricklypear_lisp.Ast.VPrim "reseed-package");
   let session : t = !t in
-  (* Boot order (personal-branch safety):
-       1. ensure username/personal exists (empty child of system/main)
-       2. seed_stdlib writes package defaults ONLY to system/main
-       3. checkout personal + rehydrate env (inherits main via CTE)
-       4. refresh ui shell from the personal-visible ui/nav
-     User (define)s land on personal and are never wiped by reseed. *)
-  let _ = ensure_personal_branch session in
-  let () = seed_stdlib session in
-  let () = checkout_personal session in
-  let () = refresh_ui_shell session in
+  (* BORGE-1788334666: [make] must be PURE CONSTRUCTION — no seed, no
+     branch movement, no shell refresh. Per-identity sessions are built
+     lazily by Session_registry on first attach; the boot-order steps
+     below (seed_stdlib especially, a full 55-package additive libs
+     pass) cost seconds-to-minutes and used to run once per identity
+     while the registry mutex was held, stalling all HTTP. Boot calls
+     [boot_personal] once on the boot session; per-identity sessions
+     get their branch via attach_identity's checkout path instead. *)
   session
+
+(** Process-boot personalization + the ONE-TIME additive seed.
+    Runs ONCE at image boot on the boot session (Boot.prepare), never
+    inside per-identity session construction. Boot order
+    (personal-branch safety):
+      1. ensure username/personal exists (empty child of system/main)
+      2. seed_stdlib writes package defaults ONLY to system/main
+      3. checkout personal + rehydrate env (inherits main via CTE)
+      4. refresh ui shell from the personal-visible ui/nav
+    User (define)s land on personal and are never wiped by reseed. *)
+let boot_personal (t : t) : unit =
+  let _ = ensure_personal_branch t in
+  seed_stdlib t;
+  checkout_personal t;
+  refresh_ui_shell t
 
 
 let uptime_seconds (t : t) : int =
