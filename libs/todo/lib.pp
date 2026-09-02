@@ -18,6 +18,9 @@
     todo/item/cycle
     todo/item/delete
     todo/item/for-user
+    todo/item/priority
+    todo/item/queue
+    todo/item/set-priority
     todo/item/unassign
     todo/list/all
     todo/list/create
