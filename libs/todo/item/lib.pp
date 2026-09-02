@@ -57,6 +57,48 @@
         (todo/state/archived? (todo/item/state (cdr row))))
       (todo/item/all))))
 
+(define todo/item/assign
+  (lambda
+    (id user)
+    "Assign item id to user (empty user clears). Returns id, or () when the item is missing."
+    (let
+      ((row (todo/tree/get "todo-item" (as-str id))))
+      (if
+        (null? row)
+        ()
+        (seq
+          (todo/tree/set-field "todo-item" (as-str id) "assignee" (as-str user))
+          (as-str id))))))
+
+(define todo/item/assignee
+  (lambda
+    (fields)
+    "The assignee field of item fields; empty when absent."
+    (let
+      ((a (dict-get fields "assignee")))
+      (if
+        (null? a)
+        ""
+        (as-str a)))))
+
+(define todo/item/unassign
+  (lambda
+    (id)
+    "Clear item id's assignee."
+    (todo/item/assign id "")))
+
+(define todo/item/for-user
+  (lambda
+    (user)
+    "All items assigned to user, as rows."
+    (let
+      ((u (as-str user)))
+      (list/filter
+        (lambda
+          (row)
+          (string-eq (todo/item/assignee (cdr row)) u))
+        (todo/item/all)))))
+
 (define todo/item/count-all
   (lambda
     (items)
