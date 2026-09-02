@@ -46,6 +46,11 @@ let prepare () : Session.t * int * int =
    | Some conn -> Tree_store.verify_seed_types conn
    | None -> ());
   let session = Session.make ~manifest ~store () in
+  (* BORGE-1788334666: the one-time additive libs seed +
+     boot-identity personal checkout run HERE, once per process, on
+     the boot session. Per-identity sessions (Session_registry) build
+     cheap and attach directly, never re-seeding system/main. *)
+  Session.boot_personal session;
   let http_port = int_of_string (env_or "PP_HTTP_PORT" "8080") in
   let repl_port = int_of_string (env_or "PP_REPL_PORT" "7878") in
   Printf.eprintf "[boot] REPL endpoint 127.0.0.1:%d (internal)\n%!" repl_port;
