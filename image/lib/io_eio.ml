@@ -87,6 +87,21 @@ module Pgx_io = struct
                failwith ("Io_eio: getaddrinfo empty for " ^ host ^ ":" ^ service)
            | addr :: _ -> (Eio.Net.connect ~sw net addr :> flow))
     in
+    (* BORGE-1788334666 follow-up (perf): pgx writes each wire message
+       (Parse/Bind/Execute/Sync) as a separate small send. Without
+       TCP_NODELAY, Nagle holds every segment after the first until the
+       server's delayed ACK (~40 ms each), so EVERY statement pays
+       ~120+ ms client-side while the server itself runs in
+       microseconds. libpq sets TCP_NODELAY for exactly this reason;
+       the raw Eio flow does not. Set it once at connect (best-effort —
+       AF_UNIX sockets / exotic backends have no such option). *)
+    (match Eio_unix.Resource.fd_opt flow with
+     | Some fd ->
+         (try
+            Eio_unix.Fd.use_exn "pgx_tcp_nodelay" fd
+              (fun u -> Unix.setsockopt u Unix.TCP_NODELAY true)
+          with _ -> ())
+     | None -> ());
     (flow, flow)
 
   type ssl_config

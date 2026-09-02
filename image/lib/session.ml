@@ -966,11 +966,22 @@ and handle_package_form (t : t) (args : Pricklypear_lisp.Ast.expr list)
              let () =
                if t.manifest.username = "anonymous" then ()
                else begin
+                 let trace = Sys.getenv_opt "PP_TRACE_LOAD" <> None in
+                 let t1 = Unix.gettimeofday () in
                  let () =
                    Store.upsert_package_registry t.store ~name ~exports
                      ~author:t.manifest.username ~enabled_preserve:true ()
                  in
-                 Store.stamp_package_bindings t.store ~package:name ~exports
+                 let t2 = Unix.gettimeofday () in
+                 Store.stamp_package_bindings t.store ~package:name ~exports;
+                 let t3 = Unix.gettimeofday () in
+                 let () =
+                   if trace then
+                     Printf.eprintf
+                       "[package] %s: registry %.1f ms, stamp %.1f ms\n%!"
+                       name ((t2 -. t1) *. 1000.0) ((t3 -. t2) *. 1000.0)
+                 in
+                 ()
                end
              in
              (Pricklypear_lisp.Ast.VStr
