@@ -148,8 +148,14 @@ curl -sS "$PP_URL/agent.txt" | head
 - **`<user>/dev`** — optional workshop (empty child); product spikes
   you intend to promote (keep long-lived custom pins on personal).
 - Switch: `(checkout "system/main")` / `(checkout "admin/personal")`.
-- Explicit `(load-library "ui")` **upserts the current branch** — on
-  personal that pins the package. Prefer small defines or promote.
+- Explicit `(load-library "ui")` upserts the current branch, but
+  **pin-hygiene** (branching.pin-hygiene, 2026-12-30) means a
+  contentless pin no longer sticks: rows identical to the inherited
+  (parent-chain) body are never written, and an identical re-define
+  unpins. Pins exist only where the branch genuinely differs. Sweep
+  historical sludge with `(prune-synced)` (returns
+  `{"pruned":N,"names":[...]}`); `synced` pins in `/branches` are
+  prune candidates.
 - Vault: `pp-sync pull <pkg>`, `pp-sync pull-all`,
   `pp-sync snapshot [--branch system/main] [--out backups/…]`.
   `libs/` = main vault (seed input); `backups/<ref>/` = non-main dumps.

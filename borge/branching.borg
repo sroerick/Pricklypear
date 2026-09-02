@@ -655,6 +655,87 @@
    )
   )
 
+  (subsection pin-hygiene
+   (doc "No diff, no pin: define-time suppression and the (prune-synced) sweep for contentless function pins")
+   (status implemented)
+   (* agent note (|2026-12-30: implemented same-session as the plan pass. Store.inherited_fn_body_matches (parent-chain closest-wins, canonical jsonb::text equality — the single hash domain branch-status recorded) gates persist_function: equal-to-inherited writes nothing and UNPINS an existing own row (system/main never matches, empty parent chain; boot seed via persist_function_if_absent bypasses). Store.prune_synced_fn_pins + (prune-synced) prim sweep synced fn pins (unbind semantics; parent revealed), guarded like unbind (anonymous denied, branch-owner rule, system/main no-op). branch_status_test: test_identical_pin_is_synced (which asserted the OLD pin-identical-bodies behavior) replaced by test_define_suppression (equal define no pin / divergent pins / resync unpins) + test_prune_synced (caught-up pin synced → pruned to clean; diff pin kept ahead); lifecycle test's synced-via-promote path still exercises the synced class. Full dune runtest green.|) *)
+   (implements image/lib/store.ml image/lib/session.ml)
+   (verify
+    (build "dune build @all")
+    (test "define equal to the inherited body leaves no pin (status stays clean)")
+    (test "re-defining a divergent pin back to the parent body unpins it; parent revealed")
+    (test "system/main never suppresses (root author owns defaults); if-absent seed bypasses")
+    (test "(prune-synced) removes exactly synced fn pins; ahead/ahead-new/diverged untouched")
+    (test "synced pins still arise legitimately post-promote and classify synced"))
+   (details
+    (doc (|
+         RULE: a PIN is a statement of intent (a diff), not a side
+         effect of touching a name. branch-status made status
+         content-based on the READ side (synced = own write,
+         identical to parent), but the WRITE side stayed boolean:
+         every (define) wrote a row whether or not it differed from
+         what the branch would inherit. Observed on prod
+         (2026-12-30): admin/personal carried 2,469 synced pins and
+         admin/dev 466 — pure sludge from the copy-on-fork era,
+         personal load-library upserts, and post-promote residue.
+         Pin-hygiene closes the write side.
+
+         1. WRITE-TIME SUPPRESSION (define / defmacro persist,
+            install-function, ai-authoring Store.persist_function
+            callers — all of them). Before Tree_store.upsert_fn,
+            walk the parent chain (the branch itself excluded),
+            closest-wins, canonical jsonb::text equality:
+              - inherited body identical -> do NOT write; if an own
+                row exists, UNPIN it (delete_function semantics),
+                revealing the parent binding.
+              - otherwise write as today.
+            system/main never matches (empty parent chain): the
+            root author owns defaults. persist_function_if_absent
+            (boot seed) bypasses the check. Docstrings do not
+            participate in identity — a suppressed define drops its
+            docstring.
+
+            Intended consequence: load-library on personal no longer
+            pins the package — upserts identical to main leave no
+            rows. Package pins exist only where the branch body
+            genuinely differs. The AGENTS.md warning pivots from
+            "load-library pins everything" to "load-library pins a
+            package only insofar as it differs from main".
+
+         2. (prune-synced) SWEEP for historical sludge and for pins
+            that BECAME synced after the fact (the parent caught up
+            to the pinned value; post-promote). Uses branch-status's
+            synced class as its candidate set, delete_function as
+            its mechanism (unbind; the parent value is revealed,
+            nothing is lost):
+              (prune-synced) -> VStr JSON {"pruned": N, "names": [...]}
+            fn pins only (same scope as unbind v1: routes and types
+            keep manual status-table review). Denied for anonymous;
+            same branch-owner rule as unbind; no-op on system/main.
+
+         SEMANTIC CAVEAT (accepted): an unbound name TRACKS the
+         parent; a synced pin would have FROZEN the parent's value
+         at pin time if the parent later moved. Suppression and
+         prune therefore change the future behavior of contentless
+         pins from "freeze" to "track". That is the point: intent-
+         free rows must not freeze anything; a deliberate freeze
+         carries an actual diff and classifies ahead/diverged.
+
+         WHAT SURVIVES / RELATION TO branch-status: the synced class
+         itself is NOT retired — pins can still legitimately be
+         synced (post-promote: promote_functions upserts the target
+         directly, leaving the source pin identical to the new
+         parent; historical rows predating suppression). The status
+         table, /branches dirty+synced columns, and the unbind hint
+         remain correct for any pins created before/between
+         enforcers; prune is the periodic broom, suppression is the
+         door. Data rows are untouched (branch-free by the one-tree
+         /data decision; data versioning is the opt-in data.l lens,
+         a separate axis).
+    |))
+   )
+  )
+
   (subsection package-updates
    (doc "Authority model: live Postgres Nopales, git kernel + vault, additive seed")
    (status implemented)

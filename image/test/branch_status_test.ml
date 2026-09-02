@@ -197,17 +197,18 @@ let test_status_lifecycle () =
                cleanup_branch store ~branch_id:child_id;
                ()))
 
-(** The motivating bug: today's status called every post-fork row an
-    "override" even when bodies are identical. A pinned fn whose body is
-    IDENTICAL to main's must read synced, not diverged/ahead. *)
-let test_identical_pin_is_synced () =
+(** branching.pin-hygiene: no diff => no pin. Defining the parent's
+    exact body on a child writes NO row; re-defining a divergent pin
+    back to the parent's body UNPINS it (parent revealed), returning
+    the name to clean inheritance. system/main always writes (root). *)
+let test_define_suppression () =
   with_store (fun store ->
       match S.conn_of store with
       | None -> ()
       | Some _ ->
           let suffix = string_of_int (Random.int 1_000_000) in
-          let child_name = "bst_pin_" ^ suffix in
-          let fn = "bst_pin_fn_" ^ suffix in
+          let child_name = "bst_sup_" ^ suffix in
+          let fn = "bst_sup_fn_" ^ suffix in
           store.branch_id <- main_id;
           S.persist_function store fn (expr_of_int 42) "tester";
           (match
@@ -216,25 +217,89 @@ let test_identical_pin_is_synced () =
            with
            | None -> Alcotest.fail "fork failed"
            | Some child_id ->
-               (* child pins the SAME body *)
+               let own_row () =
+                 List.exists
+                   (fun (r : S.branch_status_row) ->
+                     r.S.st_name = fn && r.S.st_own)
+                   (S.branch_status store ~branch_id:child_id)
+               in
+               (* define identical to parent: suppressed, no pin *)
                store.branch_id <- child_id;
                S.persist_function store fn (expr_of_int 42) "tester";
-               let rows = S.branch_status store ~branch_id:child_id in
-               Alcotest.(check bool) "identical pin = synced" true
-                 (status_of rows ~name:fn = Some S.SSynced);
-               Alcotest.(check bool) "identical pin is own" true
-                 (List.exists
-                    (fun (r : S.branch_status_row) ->
-                      r.S.st_name = fn && r.S.st_own)
-                    rows);
-               (* unbind (delete the pin) -> back to clean inheritance *)
-               ignore (
-                 S.delete_function_on_branch store ~branch_id:child_id
-                   ~name:fn);
-               let rows = S.branch_status store ~branch_id:child_id in
-               Alcotest.(check bool) "unbound pin = clean" true
-                 (status_of rows ~name:fn = Some S.SClean);
+               Alcotest.(check bool) "equal define leaves no pin" false
+                 (own_row ());
+               Alcotest.(check bool) "equal define stays clean" true
+                 (status_of
+                    (S.branch_status store ~branch_id:child_id)
+                    ~name:fn
+                 = Some S.SClean);
+               (* divergent define: pins *)
+               S.persist_function store fn (expr_of_int 7) "tester";
+               Alcotest.(check bool) "divergent define pins" true
+                 (own_row ());
+               (* redefine equal to parent: unpins, parent revealed *)
+               S.persist_function store fn (expr_of_int 42) "tester";
+               Alcotest.(check bool) "resync define unpins" false
+                 (own_row ());
+               Alcotest.(check bool) "resynced name is clean" true
+                 (status_of
+                    (S.branch_status store ~branch_id:child_id)
+                    ~name:fn
+                 = Some S.SClean);
                cleanup_fn store ~branch_id:main_id ~name:fn;
+               cleanup_branch store ~branch_id:child_id;
+               ()))
+
+(** branching.pin-hygiene: (prune-synced). A pin that BECAME synced
+    (parent caught up to the pinned value) is removed by the sweep;
+    pins with a real diff survive. *)
+let test_prune_synced () =
+  with_store (fun store ->
+      match S.conn_of store with
+      | None -> ()
+      | Some _ ->
+          let suffix = string_of_int (Random.int 1_000_000) in
+          let child_name = "bst_prune_" ^ suffix in
+          let synced_fn = "bst_prune_synced_" ^ suffix in
+          let diff_fn = "bst_prune_diff_" ^ suffix in
+          store.branch_id <- main_id;
+          S.persist_function store synced_fn (expr_of_int 1) "tester";
+          S.persist_function store diff_fn (expr_of_int 1) "tester";
+          (match
+             S.fork_branch store ~parent_id:main_id ~owner:"bst_test"
+               ~child_name
+           with
+           | None -> Alcotest.fail "fork failed"
+           | Some child_id ->
+               store.branch_id <- child_id;
+               (* pin both: synced_fn diverges temporarily, diff_fn
+                  keeps a real permanent diff *)
+               S.persist_function store synced_fn (expr_of_int 2)
+                 "tester";
+               S.persist_function store diff_fn (expr_of_int 9)
+                 "tester";
+               (* parent catches up on synced_fn: the pin is now
+                  contentless (synced), still own *)
+               store.branch_id <- main_id;
+               Unix.sleepf 0.02;
+               S.persist_function store synced_fn (expr_of_int 2)
+                 "tester";
+               store.branch_id <- child_id;
+               let rows = S.branch_status store ~branch_id:child_id in
+               Alcotest.(check bool) "caught-up pin is synced" true
+                 (status_of rows ~name:synced_fn = Some S.SSynced);
+               let unpinned = S.prune_synced_fn_pins store in
+               Alcotest.(check bool) "prune removes synced pin" true
+                 (List.mem synced_fn unpinned);
+               Alcotest.(check bool) "prune keeps diff pin" false
+                 (List.mem diff_fn unpinned);
+               let rows = S.branch_status store ~branch_id:child_id in
+               Alcotest.(check bool) "pruned name is clean" true
+                 (status_of rows ~name:synced_fn = Some S.SClean);
+               Alcotest.(check bool) "diff pin still ahead" true
+                 (status_of rows ~name:diff_fn = Some S.SAhead);
+               cleanup_fn store ~branch_id:main_id ~name:synced_fn;
+               cleanup_fn store ~branch_id:main_id ~name:diff_fn;
                cleanup_branch store ~branch_id:child_id;
                ()))
 
@@ -243,7 +308,8 @@ let () =
   Alcotest.run "branch-status"
     [ ( "db"
       , [ Alcotest.test_case "lifecycle" `Quick test_status_lifecycle
-        ; Alcotest.test_case "identical pin synced" `Quick
-            test_identical_pin_is_synced
+        ; Alcotest.test_case "define suppression" `Quick
+            test_define_suppression
+        ; Alcotest.test_case "prune-synced" `Quick test_prune_synced
         ] )
     ]
