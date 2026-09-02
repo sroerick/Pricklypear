@@ -597,3 +597,60 @@ function kbDrop(ev){
             (kanban/board list-id)))))))
 
 (route "/kanban" "kanban/page")
+
+;; ------------------------------------------------------------------
+;; org card vocabulary (agents): make / move / stale
+;; ------------------------------------------------------------------
+
+(define kanban/make-card
+  (lambda
+    (list-id title notes)
+    "Create a card with title and notes on list-id (empty = inbox). Returns the new id."
+    (let
+      ((lid
+        (if
+          (string-eq (as-str list-id) "")
+          (todo/list/ensure-inbox)
+          (as-str list-id))))
+      (todo/tree/create
+        "todo-item"
+        (dict-set*
+          "{}"
+          (list
+            "list_id"
+            lid
+            "title"
+            (as-str title)
+            "notes"
+            (as-str notes)
+            "state"
+            "TODO"
+            "due"
+            ""
+            "position"
+            "0"
+            "done"
+            "false"))))))
+
+(define kanban/move-card
+  (lambda
+    (id state)
+    "Move card id to state. Returns id, or () when the card is missing."
+    (let
+      ((row (todo/tree/get "todo-item" (as-str id))))
+      (if
+        (null? row)
+        ()
+        (seq
+          (todo/item/set-state (as-str id) (as-str state))
+          (as-str id))))))
+
+(define kanban/stale
+  (lambda
+    ()
+    "Open cards (state not DONE or ARCHIVED) as (id . fields) rows."
+    (list/filter
+      (lambda
+        (row)
+        (todo/state/open? (todo/item/state (cdr row))))
+      (todo/item/all))))
