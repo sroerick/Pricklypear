@@ -13,8 +13,12 @@
     todo/item/add
     todo/item/active
     todo/item/archive
+    todo/item/assign
+    todo/item/assignee
     todo/item/cycle
     todo/item/delete
+    todo/item/for-user
+    todo/item/unassign
     todo/list/all
     todo/list/create
     todo/list/delete
