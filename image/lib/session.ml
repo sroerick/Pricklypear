@@ -565,6 +565,44 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
         | _ ->
             (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("unbind", "need a name", "bad-args")))));
 
+  (* (prune-synced) -> VStr JSON {"pruned": N, "names": [...]}.
+     branching.pin-hygiene: unbinds every synced FN pin on the current
+     branch (body canonically identical to the parent chain — a
+     contentless pin). ahead/ahead-new/diverged pins untouched.
+     Denied for anonymous; system/main is a no-op (a root pin can never
+     be synced). Same branch-owner rule as unbind. *)
+  Primitives.register tbl "prune-synced"
+    (fun args ->
+      if t.manifest.username = "anonymous" then
+        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("prune-synced", "denied for anonymous", "denied"))))
+      else
+        (match args with
+         | [] ->
+             let cur_owner, _cur_name =
+               split_branch_ref t.manifest.branch_name in
+             if not (branch_owner_authorized t cur_owner) then
+               (Pricklypear_lisp.Ast.VStr
+                  (Printf.sprintf "denied: branch %s is owned by %s"
+                     t.manifest.branch_name cur_owner))
+             else if t.store.Store.branch_id = Store.system_main_id then
+               (Pricklypear_lisp.Ast.VStr
+                  (Yojson.Safe.to_string
+                     (`Assoc [ "pruned", `Int 0;
+                               "note", `String "system/main: nothing can be synced" ])))
+             else
+               let names = Store.prune_synced_fn_pins t.store in
+               let () = if names <> [] then rehydrate t in
+               Pricklypear_lisp.Ast.VStr
+                 (Yojson.Safe.to_string
+                    (`Assoc
+                      [ "pruned", `Int (List.length names);
+                        "names",
+                          `List
+                            (List.map (fun n -> `String n)
+                               (List.rev names)) ]))
+         | _ ->
+             (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("prune-synced", "no args", "bad-args"))))));
+
   (* (bench expr-string [n]) -> VFloat average microseconds per iteration.
      Parses once, warms up once, runs n times (default 1000) under a max
      budget so the bench loop itself never hits Budget_exceeded. Uses the

@@ -607,6 +607,7 @@ let branch_status (t : t) ~(branch_id : string) : branch_status_row list =
   | None -> []
   | Some conn -> branch_status_conn conn ~branch_id
 
+
 let lookup_function_on_branch (t : t) ~(branch_id : string) ~(name : string)
   : (Pricklypear_lisp.Ast.expr * string * string * string option) option =
   match t.conn with
@@ -726,10 +727,54 @@ let promote_functions (t : t) ~(source_id : string) ~(target_id : string)
             (Printexc.to_string exn);
           0)
 
+(* [inherited_fn_body_matches conn ~branch_id ~name ~body_json]: walks
+   the PARENT chain of [branch_id] (the branch itself is excluded, so
+   system/main with no parent never matches), first own body closest to
+   the branch wins, and is true iff that inherited body is canonically
+   identical to [body_json]. Both sides are normalized by PG's
+   jsonb::text (key order + spacing), so the comparison is content
+   equality regardless of which write path produced the row — the same
+   single-domain rule branch_status recorded 2026-08-28.
+   branching.pin-hygiene: write-time suppression + unpin-on-resync. *)
+let inherited_fn_body_matches (conn : conn) ~(branch_id : string)
+    ~(name : string) ~(body_json : string) : bool =
+  try
+    let sql =
+      "WITH RECURSIVE chain AS ( " ^
+      "  SELECT b.id, b.parent_id, 0 AS depth FROM branches b " ^
+      "  WHERE b.id = (SELECT parent_id FROM branches WHERE id = $1::uuid) " ^
+      "  UNION ALL " ^
+      "  SELECT b.id, b.parent_id, c.depth + 1 " ^
+      "  FROM branches b JOIN chain c ON b.id = c.parent_id " ^
+      ") SELECT fd.body::text = $3::jsonb::text " ^
+      "FROM function_defs fd JOIN chain c ON fd.branch_id = c.id " ^
+      "WHERE fd.name = $2 ORDER BY c.depth ASC LIMIT 1" in
+    (match
+       exec conn
+         ~params:[ Pgx.Value.of_string branch_id;
+                   Pgx.Value.of_string name;
+                   Pgx.Value.of_string body_json ]
+         sql
+     with
+     | [ [ cell ] ] -> Pgx.Value.to_bool cell = Some true
+     | _ -> false)
+  with exn ->
+    Printf.eprintf "[store] inherited_fn_body_matches error: %s\n"
+      (Printexc.to_string exn);
+    false
+
 (* Persist a function def. INSERT ... ON CONFLICT (branch_id, name)
    DO UPDATE so redefining a name in the same branch upserts. The body
    is serialized to JSONB. [doc] writes function_defs.doc; None clears
-   (NULL) so stale docs do not survive a docstring-free redefine. *)
+   (NULL) so stale docs do not survive a docstring-free redefine.
+
+   branching.pin-hygiene (2026-12-30): NO DIFF => NO PIN. Before writing,
+   compare against the body the branch would INHERIT (parent chain,
+   closest-wins). If identical: do not write, and if an own pin exists
+   UNPIN it (delete_fn), revealing the parent. A contentless pin freezes
+   today's parent value with no intent behind it; it must not exist.
+   system/main never suppresses (empty parent chain); the boot-seed uses
+   persist_function_if_absent, which bypasses this path. *)
 let persist_function (t : t) (name : string)
     (body : Pricklypear_lisp.Ast.expr)
     ?(doc : string option = None)
@@ -743,6 +788,21 @@ let persist_function (t : t) (name : string)
       let body_json =
             Yojson.Safe.to_string
               (Pricklypear_lisp.Ast.expr_to_json body) in
+          if inherited_fn_body_matches conn ~branch_id:t.branch_id ~name
+               ~body_json
+          then
+            (* No diff => no pin: drop any own row, revealing the parent.
+               Never reached on system/main (empty parent chain). *)
+            (try
+               let _ =
+                 Tree_store.delete_fn conn ~branch_id:t.branch_id ~name
+               in
+               ()
+             with exn ->
+               Printf.eprintf
+                 "[store] persist_function unpin-on-sync error: %s\n"
+                 (Printexc.to_string exn))
+          else
           (* tree is truth; reverse trigger mirrors to table. Package
              provenance is scaffolding-only — stamped on function_defs
              directly since the tree node envelope has no package field. *)
@@ -1021,6 +1081,26 @@ let delete_function (t : t) (name : string) : bool =
           Printf.eprintf "[store] delete_function error: %s\n"
             (Printexc.to_string exn);
           false)
+
+(** branching.pin-hygiene: (prune-synced). Removes every SYNCED FN pin on
+    the CURRENT branch — pins whose body is canonically identical to the
+    parent-chain body (contentless pin noise: historical full-copy forks,
+    personal load-library upserts, post-promote residue). ahead /
+    ahead-new / diverged pins are untouched (they carry a real diff);
+    types and routes are untouched (unbind is fn-only for v1). Deletion
+    is unbind semantics: the parent binding is revealed, nothing is lost.
+    Caller guards system/main (a root pin can never be synced;
+    delete_function would raise). Returns the names unpinned. *)
+let prune_synced_fn_pins (t : t) : string list =
+  let rows = branch_status t ~branch_id:t.branch_id in
+  List.fold_left
+    (fun acc (r : branch_status_row) ->
+      if r.st_kind = DiffFn && r.st_status = SSynced then
+        (try
+           if delete_function t r.st_name then r.st_name :: acc else acc
+         with Failure _ -> acc)
+      else acc)
+    [] rows
 
 (** Temporarily rebind [t.branch_id] for the duration of [f], then restore.
     Used so seed_stdlib can write package defaults to system/main without
