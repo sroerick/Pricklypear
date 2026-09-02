@@ -65,14 +65,29 @@ let load_string
     (src : string)
     : (string, string) result =
   try
+    let trace = Sys.getenv_opt "PP_TRACE_LOAD" <> None in
+    let t0 = Unix.gettimeofday () in
     let src = strip_line_comments src in
     let forms = Pricklypear_lisp.Reader.read_all src in
+    let () =
+      if trace then
+        Printf.eprintf "[loader] parse: %d forms, %.1f ms\n%!"
+          (List.length forms)
+          ((Unix.gettimeofday () -. t0) *. 1000.0)
+    in
     let rec go i = function
       | [] ->
           (Ok (Printf.sprintf "loaded %d form(s)" i))
       | e :: rest ->
           (try
+      let tf = Unix.gettimeofday () in
       let _ = eval_form e in
+              let () =
+                if trace then
+                  let ms = (Unix.gettimeofday () -. tf) *. 1000.0 in
+                  if ms > 10.0 then
+                    Printf.eprintf "[loader] form %d: %.1f ms\n%!" (i + 1) ms
+              in
               go (i + 1) rest
     with exn ->
       let msg =

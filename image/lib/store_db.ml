@@ -76,10 +76,34 @@ let current_conn (t : t) : conn option =
 let in_transaction (t : t) : bool = t.current_tx <> None
 
 let exec ((pg, mu) : conn) ?params sql : Pgx.row list =
-  with_eio_conn_lock mu (fun () ->
-      match params with
-      | None -> Io_eio.Pg.execute pg sql
-      | Some params -> Io_eio.Pg.execute ~params pg sql)
+  if Sys.getenv_opt "PP_TRACE_DB" = None then
+    (* fast path: no timing, no getenv after the one check *)
+    with_eio_conn_lock mu (fun () ->
+        match params with
+        | None -> Io_eio.Pg.execute pg sql
+        | Some params -> Io_eio.Pg.execute ~params pg sql)
+  else begin
+    let t0 = Unix.gettimeofday () in
+    let r =
+      with_eio_conn_lock mu (fun () ->
+          let t1 = Unix.gettimeofday () in
+          let r =
+            match params with
+            | None -> Io_eio.Pg.execute pg sql
+            | Some params -> Io_eio.Pg.execute ~params pg sql
+          in
+          let ms = (Unix.gettimeofday () -. t1) *. 1000.0 in
+          if ms > 20.0 then
+            Printf.eprintf "[db] execute %.1f ms: %s\n%!" ms
+              (String.sub sql 0 (min 60 (String.length sql)));
+          r)
+    in
+    let ms = (Unix.gettimeofday () -. t0) *. 1000.0 in
+    if ms > 20.0 then
+      Printf.eprintf "[db] total (incl lock) %.1f ms: %s\n%!" ms
+        (String.sub sql 0 (min 60 (String.length sql)));
+    r
+  end
 
 (** Fiber-local session username for SET LOCAL pp.user (RLS floor).
     Bound by Request_context.with_current so store_db need not depend on
