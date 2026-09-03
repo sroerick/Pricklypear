@@ -190,15 +190,33 @@ fi
 # Health gate: require ok:true (not mere "ok"), 0.25s x 120 = 30s budget
 # (was 20 x 1s — a 1s poll floor on every promote). On timeout do NOT
 # declare success: roll back to the previous release and die, so the deploy
-# hook sees the failure and prod keeps serving the old release. (Proving
-# WHICH release answers lands with boot_epoch — promote task 4.)
+# hook sees the failure and prod keeps serving the old release.
+# (2026-09-03, promote task 4) ok:true alone is NOT proof: a pre-restart
+# ORPHAN still holding :18080 answers ok:true too — that is exactly how the
+# 2026-09-03 prod incident served the old release under a green gate. So the
+# gate also requires boot_epoch (unix seconds at image boot, emitted by
+# /health) >= promote_start: only an image started by THIS restart passes.
+# -ge (not >) absorbs `date +%s` integer truncation (a new image booting
+# inside promote_start's own second must not fail the gate); an orphan
+# false-accept would need the old image to have booted during this promote's
+# same second — impossible on the common path since it was already serving
+# when promote began.
+promote_start=$(date +%s)
 ok=0
 attempts=0
+orphan_seen=0
 while [ "${attempts}" -lt 120 ]; do
   body="$(ftp -o - "${health_url}" 2>/dev/null || true)"
   if print -r -- "${body}" | grep -q '"ok"[[:space:]]*:[[:space:]]*true'; then
-    ok=1
-    break
+    boot_epoch="$(print -r -- "${body}" | sed -n 's/.*"boot_epoch"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
+    if [ -n "${boot_epoch}" ] && [ "${boot_epoch}" -ge "${promote_start}" ]; then
+      ok=1
+      break
+    fi
+    if [ "${orphan_seen}" -eq 0 ]; then
+      orphan_seen=1
+      log "ok:true but boot_epoch ${boot_epoch:-missing} < promote_start ${promote_start} — old image/orphan still answering; waiting for the NEW release"
+    fi
   fi
   attempts=$((attempts + 1))
   sleep 0.25

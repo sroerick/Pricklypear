@@ -1753,6 +1753,15 @@ let boot_personal (t : t) : unit =
 let uptime_seconds (t : t) : int =
   int_of_float (Unix.gettimeofday () -. t.started_at)
 
+(** Unix seconds at image boot, surfaced by /health as boot_epoch (promote
+    task 4, 2026-09-03): the promote gate requires boot_epoch >= its restart
+    stamp so a pre-restart orphan still holding :18080 can't false-OK the
+    health gate with the OLD release. Contract: /health runs on the BOOT
+    session (Http.serve_eio's [session], created in Boot.prepare at process
+    start), so this session's started_at IS image boot time. Per-identity
+    sessions attach later and never serve /health. *)
+let boot_epoch (t : t) : int = int_of_float t.started_at
+
 let branch_name (t : t) : string = t.manifest.branch_name
 let username (t : t) : string = t.manifest.username
 (** Snapshot of the attached identity/branch fields for per-request context.
