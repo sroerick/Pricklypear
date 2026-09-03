@@ -1006,7 +1006,10 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
      post-seed rehydrate (boot_personal: seed → checkout → rehydrate).
      Skip the eval entirely; ~2300 define forms re-eval per warm boot for
      nothing. Scoped to the seed window (seed_additive + seed_names both
-     active); interactive load-library / reseed-package keep full eval.
+     active). image.load-library-skip (2026-09-03) gives interactive
+     load-library / reseed-package the same medicine for IDENTICAL
+     normalized body + doc via load_skip_names; changed/new defines keep
+     full eval.
      Safety: no libs/*/lib.pp has a top-level CALL form (scan 2026-09-04:
      only define/defmacro/route/deftype/package/export/public-route), so
      a later top-level form in the same load cannot need a skipped
@@ -1033,7 +1036,43 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
              | None -> false)
         | _ -> false)
   in
-  if seed_skip then Pricklypear_lisp.Ast.VNil
+  (* image.load-library-skip (2026-09-03): inside load-library /
+     reseed-package, skip defines whose name is among the branch's OWN
+     stored defs with an IDENTICAL normalized body + doc — the env
+     binding is already the branch thunk, so eval + persist are pure
+     waste. This is what made (load-library "todo") re-evaluate +
+     re-persist ~1000 defines per call and blow page/eval budgets
+     (budget-exceeded loops). Changed/new defines still eval + persist
+     normally. *)
+  let load_skip_hit =
+    match t.load_skip_names with
+    | None -> false
+    | Some tbl ->
+      (match Pricklypear_lisp.Eval.parse_top_define expr with
+       | Some { name; body; doc } ->
+           (match Hashtbl.find_opt tbl name with
+            | Some stored ->
+                stored =
+                  (Pricklypear_lisp.Reader.pp_expr body ^ "\x00"
+                   ^ (match doc with Some d -> d | None -> ""))
+            | None -> false)
+       | None ->
+           (match expr with
+            | Pricklypear_lisp.Ast.App
+                (Pricklypear_lisp.Ast.Var "defmacro",
+                 [ Pricklypear_lisp.Ast.Var name; params_expr; body_expr ]) ->
+                let stored_macro =
+                  Pricklypear_lisp.Reader.pp_expr
+                    (Pricklypear_lisp.Ast.App
+                       (Pricklypear_lisp.Ast.Var "__macro__",
+                        [ params_expr; body_expr ]))
+                in
+                (match Hashtbl.find_opt tbl name with
+                 | Some stored -> stored = stored_macro ^ "\x00"
+                 | None -> false)
+            | _ -> false))
+  in
+  if seed_skip || load_skip_hit then Pricklypear_lisp.Ast.VNil
   else
   let v = eval_expr_rim t expr in
   let pkg = t.current_package in
@@ -1106,10 +1145,59 @@ and load_library (t : t) (name : string) : (string, string) result =
   let prev_suppress = t.suppress_refresh_on_define in
   t.current_package <- None;
   t.suppress_refresh_on_define <- true;
+  (* image.load-library-skip (2026-09-03): fingerprint the branch's OWN
+     stored defs (pp_expr of the stripped body + doc) once per load so
+     eval_form can skip re-evaluating + re-persisting unchanged defines.
+     Excluded from the map, i.e. full eval path preserved: inherited
+     names (persist_function's no-diff-no-pin unpin must stay reachable
+     for re-defines of a parent body), kernel-prim shadow names
+     (load_defs never binds those rows), and disabled-package names.
+     Not built during the boot-seed window: seed_skip already covers the
+     seed by name, and this map would rebuild once per seeded package.
+     Note: skipped identical defines no longer trigger persist_function's
+     unpin sweep on personal branches — (prune-synced) remains the
+     contentless-pin sweep. Restored in finally: the skip window is
+     exactly this load. *)
+  let prev_skip = t.load_skip_names in
+  let () =
+    if t.seed_additive then ()
+    else begin
+      let disabled_set = Hashtbl.create 16 in
+      List.iter
+        (fun p -> Hashtbl.replace disabled_set p ())
+        (Store.disabled_package_names t.store);
+      let name_disabled name =
+        Hashtbl.fold
+          (fun d _ acc ->
+            acc || name = d || String.starts_with ~prefix:(d ^ "/") name)
+          disabled_set false
+      in
+      let kernel_set = Hashtbl.create 64 in
+      List.iter
+        (fun (n, _) -> Hashtbl.replace kernel_set n ())
+        t.kernel_catalog;
+      let tbl = Hashtbl.create 1024 in
+      List.iter
+        (fun (name, body, _author, pkg, doc) ->
+          let hidden =
+            match pkg with
+            | Some p -> Hashtbl.mem disabled_set p || name_disabled name
+            | None -> name_disabled name
+          in
+          if hidden || Hashtbl.mem kernel_set name then ()
+          else
+            Hashtbl.replace tbl name
+              (Pricklypear_lisp.Reader.pp_expr body ^ "\x00"
+               ^ (match doc with Some d -> d | None -> "")))
+        (Store.list_own_function_defs t.store);
+      t.load_skip_names <- Some tbl
+    end
+  in
   Fun.protect
     ~finally:(fun () ->
       t.current_package <- prev;
-      t.suppress_refresh_on_define <- prev_suppress)
+      t.suppress_refresh_on_define <- prev_suppress;
+      t.load_skip_names <- prev_skip)
     (fun () ->
       let r = Loader.load_library ~eval_form:(eval_form t) name in
       let () =
@@ -1527,6 +1615,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
       impact_queue = [];
       change_transcript = [];
       current_package = None;
+      load_skip_names = None;
       net_streams = Hashtbl.create 16;
     }
   in
