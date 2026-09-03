@@ -44,20 +44,108 @@ rc_check() {
 	print -r -- "${body}" | grep -q '"ok"[[:space:]]*:[[:space:]]*true' || return 1
 }
 
+# --- Port-free teardown gate (2026-09-03) -------------------------------
+# Promote-outage rationale (push ebd16ef, 2026-09-03): the old image kept
+# holding :18080 past rc_stop's blind `sleep 1` (long SIGTERM handling), the
+# restarted boot died EADDRINUSE, and the health gate then measured the
+# healthy ORPHAN — "deploy OK" while prod served the pre-promote release and
+# flapped for ~25min. Lesson: teardown is done only when the listen ports
+# are actually UNBOUND, so rc_stop polls (bounded) instead of sleeping fixed
+# intervals. Ports come from the same env knobs the image uses
+# (PP_HTTP_PORT / PP_REPL_PORT via the sourced env file; defaults as in
+# run-image.ksh; the image binds v4 only: 0.0.0.0 HTTP, 127.0.0.1 REPL — so
+# netstat -anf inet is sufficient). This is the intentional-restart path
+# only: rc_check stays health-only (2026-08-21 orphan lesson, above).
+
+# True (0) if some tcp socket is LISTENing on $1. OpenBSD netstat prints
+# the local address as a.b.c.d.port with the state in the last column;
+# LISTEN lines carry remote *.*, so the port can only match locally.
+rc_port_listens() {
+	netstat -anf inet 2>/dev/null | grep LISTEN \
+		| grep -Eq "[.]${1}([[:space:]]|$)"
+}
+
+# Poll until port $1 is free. $2 = max seconds (default 10), 0.25s steps.
+# Returns 1 if still held at expiry.
+rc_wait_port_free() {
+	port="${1:?rc_wait_port_free: port required}"
+	max=$(( (${2:-10}) * 4 ))
+	i=0
+	while [ "${i}" -lt "${max}" ]; do
+		rc_port_listens "${port}" || return 0
+		sleep 0.25
+		i=$((i + 1))
+	done
+	rc_port_listens "${port}" || return 0
+	return 1
+}
+
+# Poll until pid $1 is gone. $2 = max seconds (default 1). Replaces the old
+# unconditional `sleep 1` TERM grace: same 1s KILL deadline, but returns as
+# soon as the image actually exits instead of always waiting the full second.
+rc_wait_pid_gone() {
+	pid="${1:?rc_wait_pid_gone: pid required}"
+	max=$(( (${2:-1}) * 10 ))
+	i=0
+	while [ "${i}" -lt "${max}" ]; do
+		kill -0 "${pid}" 2>/dev/null || return 0
+		sleep 0.1
+		i=$((i + 1))
+	done
+	kill -0 "${pid}" 2>/dev/null || return 0
+	return 1
+}
+
+# Last resort: KILL whatever still LISTENs on $1 (straggler). fstat marks a
+# listener as an `internet stream tcp` socket with a local address and NO
+# `<--`/`-->` peer; the pid is field 3. Transient clients (health checks,
+# served requests) all carry a peer arrow and are never touched.
+rc_kill_port_holders() {
+	port="${1:?rc_kill_port_holders: port required}"
+	pids="$(fstat 2>/dev/null | awk -v port="${port}" '
+		$5 == "internet" && $7 == "tcp" &&
+		index($0, "<--") == 0 && index($0, "-->") == 0 &&
+		$9 ~ "[.:]" port "$" { print $3 }' | sort -u)"
+	[ -n "${pids}" ] || return 0
+	for pid in ${pids}; do
+		logger -t pricklypear-rc -- "rc_stop: kill -KILL straggler pid ${pid} holding tcp/${port}" 2>/dev/null
+		print -ru2 -- "pricklypear-rc: kill -KILL straggler pid ${pid} holding tcp/${port}"
+		kill -KILL "${pid}" 2>/dev/null || true
+	done
+}
+
 # Drop any leftover image listener before start/restart. A poisoned process
 # can hold :18080 after pidfile loss; plain start then fails EADDRINUSE.
+# Teardown now ends with a bounded port-free poll (see gate rationale above)
+# instead of a blind `sleep 1`, so restart cannot race a lingering listener.
 rc_stop() {
+	http_port="${PP_HTTP_PORT:-18080}"
+	repl_port="${PP_REPL_PORT:-17878}"
 	if [ -f "${pidfile}" ]; then
 		pid="$(cat "${pidfile}" 2>/dev/null)" || true
 		if [ -n "${pid}" ]; then
 			kill "${pid}" 2>/dev/null || true
-			sleep 1
-			kill -0 "${pid}" 2>/dev/null && kill -KILL "${pid}" 2>/dev/null || true
+			# TERM grace, pid-gone-aware: same 1s KILL deadline as the old
+			# sleep 1, without the fixed wait when the image exits fast.
+			rc_wait_pid_gone "${pid}" 1 || kill -KILL "${pid}" 2>/dev/null || true
 		fi
 	fi
 	# Belt: any leftover runtime-user image binary on this host.
 	pkill -U "${daemon_user}" -f '/bin/image' 2>/dev/null || true
-	sleep 1
+	# Bounded poll (10s) until BOTH listen ports are actually unbound; on
+	# expiry KILL the stragglers still holding them, confirm briefly, and
+	# if STILL held log loudly and return — the image's bind retry and the
+	# promote health gate are the next lines of defense.
+	for p in "${http_port}" "${repl_port}"; do
+		if rc_wait_port_free "${p}" 10; then
+			continue
+		fi
+		rc_kill_port_holders "${p}"
+		if ! rc_wait_port_free "${p}" 2; then
+			logger -t pricklypear-rc -- "rc_stop: tcp/${p} STILL HELD after KILL; start may EADDRINUSE" 2>/dev/null
+			print -ru2 -- "pricklypear-rc: tcp/${p} still held after KILL; start may EADDRINUSE"
+		fi
+	done
 	rm -f "${pidfile}" 2>/dev/null || true
 	return 0
 }
