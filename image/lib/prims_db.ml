@@ -990,21 +990,41 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
 
   register_crud "tree/find-by"
     (fun args ->
+      (* i-1788348645: reads are garden-scoped by default (writes always
+         were). (tree/find-by kind field value [limit] [prefix]); an
+         explicit prefix opts out to a wider subtree, "" = whole store. *)
+      let garden () = Tree_store.garden_root ~user:(actor ()) in
       match args with
       | [ Pricklypear_lisp.Ast.VStr kind
         ; Pricklypear_lisp.Ast.VStr field
         ; Pricklypear_lisp.Ast.VStr value
         ] ->
-          Crud.tree_find_by t.store ~kind:(Some kind) ~field ~value ()
+            Crud.tree_find_by t.store ~kind:(Some kind) ~field ~value
+              ~prefix:(garden ()) ()
       | [ Pricklypear_lisp.Ast.VStr kind
         ; Pricklypear_lisp.Ast.VStr field
         ; Pricklypear_lisp.Ast.VStr value
         ; Pricklypear_lisp.Ast.VInt n
         ] ->
-          Crud.tree_find_by t.store ~kind:(Some kind) ~field ~value
-            ~limit:(Int64.to_int n) ()
+            Crud.tree_find_by t.store ~kind:(Some kind) ~field ~value
+              ~prefix:(garden ()) ~limit:(Int64.to_int n) ()
+      | [ Pricklypear_lisp.Ast.VStr kind
+        ; Pricklypear_lisp.Ast.VStr field
+        ; Pricklypear_lisp.Ast.VStr value
+        ; Pricklypear_lisp.Ast.VStr p
+        ] ->
+            Crud.tree_find_by t.store ~kind:(Some kind) ~field ~value
+              ~prefix:p ()
+      | [ Pricklypear_lisp.Ast.VStr kind
+        ; Pricklypear_lisp.Ast.VStr field
+        ; Pricklypear_lisp.Ast.VStr value
+        ; Pricklypear_lisp.Ast.VInt n
+        ; Pricklypear_lisp.Ast.VStr p
+        ] ->
+            Crud.tree_find_by t.store ~kind:(Some kind) ~field ~value
+              ~prefix:p ~limit:(Int64.to_int n) ()
       | _ ->
-          ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/find-by", "need kind field value [, limit]", "bad-args"))))));
+          ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/find-by", "need kind field value [, limit] [, prefix]", "bad-args"))))));
 
   register_crud "tree/list-kind"
     (fun args ->
