@@ -999,6 +999,42 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
        (Pricklypear_lisp.Ast.Var "package", args) ->
        handle_package_form t args
    | _ ->
+  (* image.boot-seed-skip (promote-window task 7, 2026-09-04): during the
+     ADDITIVE boot seed, a top-level define/defmacro whose name already
+     exists on the branch is a guaranteed no-op — persist_*_if_absent
+     skips (seed_names hit) and the in-env binding is discarded by the
+     post-seed rehydrate (boot_personal: seed → checkout → rehydrate).
+     Skip the eval entirely; ~2300 define forms re-eval per warm boot for
+     nothing. Scoped to the seed window (seed_additive + seed_names both
+     active); interactive load-library / reseed-package keep full eval.
+     Safety: no libs/*/lib.pp has a top-level CALL form (scan 2026-09-04:
+     only define/defmacro/route/deftype/package/export/public-route), so
+     a later top-level form in the same load cannot need a skipped
+     binding; route/deftype/package forms are NOT skipped, and
+     record_define_side_effects already no-ops under the seed's
+     suppress_refresh_on_define. Name extraction is by pattern only —
+     malformed defines still fall through to eval and raise exactly as
+     before. *)
+  let seed_skip =
+    t.seed_additive
+    && (match t.store.seed_names with Some _ -> true | None -> false)
+    && (match expr with
+        | Pricklypear_lisp.Ast.App
+            (Pricklypear_lisp.Ast.Var "define",
+             (Pricklypear_lisp.Ast.Var name :: _))
+        | Pricklypear_lisp.Ast.App
+            (Pricklypear_lisp.Ast.Var "define",
+             Pricklypear_lisp.Ast.App (Pricklypear_lisp.Ast.Var name, _) :: _)
+        | Pricklypear_lisp.Ast.App
+            (Pricklypear_lisp.Ast.Var "defmacro",
+             [ Pricklypear_lisp.Ast.Var name; _; _ ]) ->
+            (match t.store.seed_names with
+             | Some set -> Hashtbl.mem set name
+             | None -> false)
+        | _ -> false)
+  in
+  if seed_skip then Pricklypear_lisp.Ast.VNil
+  else
   let v = eval_expr_rim t expr in
   let pkg = t.current_package in
   let persist_fn name body_expr doc =
@@ -1197,10 +1233,14 @@ and refresh_ui_shell (t : t) : unit =
         refresh "ui/css" "(ui/css)" (fun v -> t.ui_css <- v)
 
 and seed_one (t : t) (name : string) : unit =
+  (* promote-window task 7 (2026-09-04): per-package ms on the existing
+     load line — the boot-phase table drills into seed_stdlib here. *)
+  let t0 = Unix.gettimeofday () in
   let r = load_library t name in
+  let ms = (Unix.gettimeofday () -. t0) *. 1000.0 in
   (match r with
-   | Ok msg -> Printf.eprintf "[session] %s: %s\n%!" name msg
-   | Error e -> Printf.eprintf "[session] %s load: %s\n%!" name e);
+   | Ok msg -> Printf.eprintf "[session] %s: %s (%.0f ms)\n%!" name msg ms
+   | Error e -> Printf.eprintf "[session] %s load: %s (%.0f ms)\n%!" name e ms);
   ()
 
 (** Boot seed order (BORGE-1785211333).
@@ -1744,10 +1784,26 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
       4. refresh ui shell from the personal-visible ui/nav
     User (define)s land on personal and are never wiped by reseed. *)
 let boot_personal (t : t) : unit =
+  (* promote-window task 7 (2026-09-04): per-step ms lines, indented under
+     Boot.prepare's [boot-phase] marks (session.ml cannot depend on Boot,
+     so these use a local clock — same stderr tag for greppability).
+     seed_stdlib's own total + per-package lines are unchanged. *)
+  let mark prev name =
+    let now = Unix.gettimeofday () in
+    Printf.eprintf "[boot-phase]   %-18s %5d ms\n%!"
+      name (int_of_float ((now -. prev) *. 1000.0));
+    now
+  in
+  let t0 = Unix.gettimeofday () in
   let _ = ensure_personal_branch t in
+  let p = mark t0 "ensure-personal" in
   seed_stdlib t;
+  let p = mark p "seed-stdlib" in
   checkout_personal t;
-  refresh_ui_shell t
+  let p = mark p "checkout-personal" in
+  refresh_ui_shell t;
+  let _ = mark p "ui-shell" in
+  ()
 
 
 let uptime_seconds (t : t) : int =

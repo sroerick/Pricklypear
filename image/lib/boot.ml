@@ -13,6 +13,30 @@
 
 let env_or name dft = match Sys.getenv_opt name with Some s -> s | None -> dft
 
+(* promote-window task 7 (2026-09-04): boot-phase timing. The t0 is a
+   module initializer, so it fires at program start (before Eio_main.run) —
+   effectively process start. [Phase.log name] prints one stderr line:
+   wall-clock ms since the previous mark + cumulative ms since t0. Grep
+   [boot-phase] in image.log for the boot cost table (promote-optimization
+   plan, task 7). Migrations are deliberately NOT a phase here — they are
+   applied by dev.sh / the promote script BEFORE the image execs, never in
+   the image boot path. *)
+module Phase : sig
+  val log : string -> unit
+  val since_boot_ms : unit -> int
+end = struct
+  let t0 = Unix.gettimeofday ()
+  let last = ref t0
+  let since_boot_ms () =
+    int_of_float ((Unix.gettimeofday () -. t0) *. 1000.0)
+  let log name =
+    let now = Unix.gettimeofday () in
+    let delta = int_of_float ((now -. !last) *. 1000.0) in
+    last := now;
+    Printf.eprintf "[boot-phase] %-20s %5d ms  (%d ms from start)\n%!"
+      name delta (since_boot_ms ())
+end
+
 let manifest_from_env () : Pricklypear_common.Manifest.t =
   let boot_mode =
     match env_or "PP_BOOT_MODE" "on-connect" with
@@ -39,18 +63,23 @@ let prepare () : Session.t * int * int =
   let cfg = Store.config_from_env () in
   let store = Store.make ~cfg ~branch_id:manifest.branch_id () in
   Store.connect store;
+  Phase.log "pg-connect";
   ignore (Auth_store.bootstrap_admin_if_empty store);
+  Phase.log "bootstrap-admin";
   (* Surface any drift between the OCaml seed-type mirror and the SQL
      authority (tree_seed_types) — non-fatal warning. See i-seed-list-3copies. *)
   (match Store.current_conn store with
    | Some conn -> Tree_store.verify_seed_types conn
    | None -> ());
+  Phase.log "seed-types-verify";
   let session = Session.make ~manifest ~store () in
+  Phase.log "session-make";
   (* BORGE-1788334666: the one-time additive libs seed +
      boot-identity personal checkout run HERE, once per process, on
      the boot session. Per-identity sessions (Session_registry) build
      cheap and attach directly, never re-seeding system/main. *)
   Session.boot_personal session;
+  Phase.log "boot-personal";
   let http_port = int_of_string (env_or "PP_HTTP_PORT" "8080") in
   let repl_port = int_of_string (env_or "PP_REPL_PORT" "7878") in
   Printf.eprintf "[boot] REPL endpoint 127.0.0.1:%d (internal)\n%!" repl_port;
@@ -262,7 +291,10 @@ let start_eio ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t) : unit =
   let registry = Session_registry.create ~boot:session in
   Printf.eprintf "[boot] serving http://0.0.0.0:%d/  (htmx, httpun-eio)\n%!"
     http_port;
-  Http.serve_eio ~session ~registry ~env ~sw ~port:http_port ()
+  (* server-bind phase fires inside serve_eio the moment the listen socket
+     is actually bound (task 6's retry loop can spend up to 10s there). *)
+  Http.serve_eio ~session ~registry ~env ~sw ~port:http_port
+    ~on_bound:(fun () -> Phase.log "server-bind") ()
 
 (** Legacy name — same as start_eio without env (not used by main). *)
 let start () : unit =
