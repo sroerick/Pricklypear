@@ -460,7 +460,7 @@ let prim_summary (name : string) : string =
   | "unlink" -> "tombstone an edge node (kind=link only) → edge path"
   | "out-links" -> "outgoing edges of path with resolution status (resolved/dangling) → edge JSONs"
   | "tree/get-uuid" -> "lookup node by payload body.uuid"
-  | "tree/find-by" -> "find nodes by kind + body field"
+  | "tree/find-by" -> "find nodes by kind + body field; garden-scoped by default, optional limit then prefix (\"\" = whole store)"
   | "tree/path-label" -> "sanitize string to ltree-safe label"
   | "tree/parent" -> "strict parent path of path, or nil at root (pure)"
   | "tree/leaf" -> "final label of path (pure)"

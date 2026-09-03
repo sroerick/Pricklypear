@@ -1121,41 +1121,48 @@ let get_by_uuid (conn : Store_db.conn) ~(uuid : string) : node option =
   | row :: _ -> (node_of_row row)
   | [] -> None
 
-(** Find hierarchical nodes where body->>field = value (e.g. slug). *)
+(** Find hierarchical nodes where body->>field = value (e.g. slug).
+    [prefix] restricts hits to an ltree subtree ("" = whole store).
+    The tree/find-by prim passes the caller's garden root by default
+    (i-1788348645); internal callers (slug uniqueness) keep "". *)
 let find_by_body_field (conn : Store_db.conn) ~(kind : string option)
-    ~(field : string) ~(value : string) ?(limit : int = 50) () : node list =
-  let sql =
-    match kind with
-    | Some k ->
-        "SELECT " ^ select_cols ^ " FROM tree_nodes "
-        ^ "WHERE kind = $1 AND payload #>> ARRAY['body',$2] = $3 "
-        ^ "ORDER BY path::text ASC LIMIT $4"
-    | None ->
-        "SELECT " ^ select_cols ^ " FROM tree_nodes "
-        ^ "WHERE payload #>> ARRAY['body',$1] = $2 "
-        ^ "ORDER BY path::text ASC LIMIT $3"
-  in
-  let rows =
-    match kind with
-    | Some k ->
-        Io_lwt.Db.execute conn
-          ~params:
-            [ Pgx.Value.of_string k
-            ; Pgx.Value.of_string field
-            ; Pgx.Value.of_string value
-            ; Pgx.Value.of_int limit
-            ]
-          sql
-    | None ->
-        Io_lwt.Db.execute conn
-          ~params:
-            [ Pgx.Value.of_string field
-            ; Pgx.Value.of_string value
-            ; Pgx.Value.of_int limit
-            ]
-          sql
-  in
-  (List.filter_map node_of_row rows)
+    ~(field : string) ~(value : string) ?(prefix : string = "")
+    ?(limit : int = 50) () : node list =
+  if prefix <> "" && not (valid_path prefix) then []
+  else
+    let scoped = prefix <> "" in
+    (* Placeholders: the kind match consumes $1..$base, an optional scope
+       filter takes $base+1, and LIMIT always comes last. *)
+    let base = match kind with Some _ -> 3 | None -> 2 in
+    let scope_i = base + 1 in
+    let limit_i = if scoped then base + 2 else base + 1 in
+    let sql =
+      (match kind with
+       | Some _ ->
+           "SELECT " ^ select_cols ^ " FROM tree_nodes "
+           ^ "WHERE kind = $1 AND payload #>> ARRAY['body',$2] = $3 "
+       | None ->
+           "SELECT " ^ select_cols ^ " FROM tree_nodes "
+           ^ "WHERE payload #>> ARRAY['body',$1] = $2 ")
+      ^ (if scoped then Printf.sprintf "AND path <@ $%d::ltree " scope_i else "")
+      ^ Printf.sprintf "ORDER BY path::text ASC LIMIT $%d" limit_i
+    in
+    let head =
+      match kind with
+      | Some k ->
+          [ Pgx.Value.of_string k
+          ; Pgx.Value.of_string field
+          ; Pgx.Value.of_string value
+          ]
+      | None ->
+          [ Pgx.Value.of_string field; Pgx.Value.of_string value ]
+    in
+    let tail =
+      (if scoped then [ Pgx.Value.of_string prefix ] else [])
+      @ [ Pgx.Value.of_int limit ]
+    in
+    (List.filter_map node_of_row
+       (Io_lwt.Db.execute conn ~params:(head @ tail) sql))
 
 (** Upsert a hierarchical node at [path]. [body_json] is the payload body
     object (fields). [kind] must be folder|note|heading.
