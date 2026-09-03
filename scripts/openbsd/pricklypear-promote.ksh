@@ -172,10 +172,12 @@ rollback() {
   rcctl restart "${service}" >/dev/null 2>&1 || true
 }
 
-# Drop the stale image listener (one process, one port, clean shutdown).
-pkill -U "${runtime_user}" 2>/dev/null || true
-sleep 1
-rm -f /var/run/pricklypear/*.pid 2>/dev/null || true
+# No pre-restart teardown here (2026-09-03): rc_stop owns teardown — TERM →
+# pid-gone poll → pkill belt → bounded port-free poll on BOTH listen ports →
+# straggler KILL → pidfile removed. The old script-local `pkill`+`sleep 1`
+# raced rcctl restart (blind 1s can be shorter than the image's SIGTERM
+# handling → EADDRINUSE boot death) and waited a fixed second for nothing on
+# the common path.
 
 log "restart ${service}"
 if ! rcctl restart "${service}"; then
@@ -185,22 +187,31 @@ if ! rcctl restart "${service}"; then
   }
 fi
 
-# Health check (best-effort): require ok:true, not mere "ok" substring.
+# Health gate: require ok:true (not mere "ok"), 0.25s x 120 = 30s budget
+# (was 20 x 1s — a 1s poll floor on every promote). On timeout do NOT
+# declare success: roll back to the previous release and die, so the deploy
+# hook sees the failure and prod keeps serving the old release. (Proving
+# WHICH release answers lands with boot_epoch — promote task 4.)
 ok=0
 attempts=0
-while [ "${attempts}" -lt 20 ]; do
+while [ "${attempts}" -lt 120 ]; do
   body="$(ftp -o - "${health_url}" 2>/dev/null || true)"
   if print -r -- "${body}" | grep -q '"ok"[[:space:]]*:[[:space:]]*true'; then
     ok=1
     break
   fi
   attempts=$((attempts + 1))
-  sleep 1
+  sleep 0.25
 done
 
 if [ "${ok}" -ne 1 ]; then
-  log "WARN: health endpoint not ready after promote"
+  log "health endpoint not ok:true within 30s of restart"
   log "  image log: /var/log/pricklypear/image.log"
+  if rollback; then
+    die "health gate failed (30s); rolled back to ${previous_target}"
+  else
+    die "health gate failed (30s); no previous release to roll back to"
+  fi
 fi
 
 log "promoted ${release_id}"
