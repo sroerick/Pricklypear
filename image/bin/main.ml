@@ -15,6 +15,7 @@ let () =
   Io_eio.with_ctx ctx (fun () ->
       Printf.eprintf
         "[boot] Eio_main + Httpun_eio + Io_eio PG\n%!";
+      Boot.Phase.log "eio-event-loop";
       (try
          let cfg = Io_eio.Db.config_from_env () in
          let st =
@@ -26,4 +27,5 @@ let () =
        with e ->
          Printf.eprintf "[boot] Io_eio.Db health failed: %s\n%!"
            (Printexc.to_string e));
+      Boot.Phase.log "io-health-probe";
       Boot.start_eio ~env ~sw)

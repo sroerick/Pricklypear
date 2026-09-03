@@ -57,6 +57,9 @@ let repl_turn ~(session : Session.t) ~(ic : Lwt_io.input_channel)
               Lwt.return true))
 
 let serve ~(session : Session.t) ?(port = default_port) () : unit Lwt.t =
+  (* promote-window task 7 (2026-09-04): report bind cost (the retry loop
+     from task 6 can legally spend up to 10s here; the clean path is ~ms). *)
+  let t0 = Unix.gettimeofday () in
   let addr = Lwt_unix.ADDR_INET (Unix.inet_addr_loopback, port) in
   let sock = Lwt_unix.socket Lwt_unix.PF_INET Lwt_unix.SOCK_STREAM 0 in
   Lwt_unix.setsockopt sock Lwt_unix.SO_REUSEADDR true;
@@ -85,7 +88,8 @@ let serve ~(session : Session.t) ?(port = default_port) () : unit Lwt.t =
   in
   let* () = bind_retry 0 in
   Lwt_unix.listen sock 5;
-  Printf.eprintf "[repl] listening on 127.0.0.1:%d\n" port;
+  Printf.eprintf "[repl] listening on 127.0.0.1:%d (bind %d ms)\n" port
+    (int_of_float ((Unix.gettimeofday () -. t0) *. 1000.0));
   flush stderr;
   let rec loop () =
     let* fd, _peer = Lwt_unix.accept sock in

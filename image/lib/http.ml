@@ -1170,6 +1170,7 @@ let serve_eio
     ~(registry : Session_registry.t)
     ~(env : Eio_unix.Stdenv.base)
     ~(sw : Eio.Switch.t)
+    ?(on_bound : unit -> unit = fun () -> ())
     ?(port = default_port)
     () : unit =
   let request_handler (sa : Eio.Net.Sockaddr.stream)
@@ -1228,6 +1229,11 @@ let serve_eio
         listen_retry attempts ()
   in
   let socket = listen_retry 0 () in
+  (* promote-window task 7 (2026-09-04): boot-phase hook — fires after the
+     listen socket is bound (possibly after bind retries), before the accept
+     loop starts. Optional, no-op default, so the dependency direction
+     http.ml ← boot.ml is preserved. *)
+  on_bound ();
   Printf.eprintf
     "[http] serving htmx (httpun-eio) on 0.0.0.0:%d (max_inflight=%d)\n%!"
     port max_inflight;
