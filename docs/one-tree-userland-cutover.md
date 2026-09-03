@@ -81,7 +81,9 @@ cd /tmp/pp-audit && grep -rEno '\((get|create|update|update-field|delete|rows|fi
   upsert, same as `create`/`update` today — no partial updates; use
   `(get …)` + merge + upsert to emulate `update-field`.
 - `tree/list prefix [depth] [limit]`; `tree/find-by kind field value
-  [limit]` — for flat data, kind is `"datum"`.
+  [limit] [prefix]` — for flat data, kind is `"datum"`. find-by is
+  garden-scoped by default (i-1788348645); an explicit `prefix` opts out
+  to a wider subtree, `""` = whole store.
 - Old-family call sites in grep output include false positives: local
   vars/params named `rows`, docstrings, comments. Check each site;
   the maps below mark known ones.
