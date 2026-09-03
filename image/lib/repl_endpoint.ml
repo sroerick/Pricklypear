@@ -60,7 +60,30 @@ let serve ~(session : Session.t) ?(port = default_port) () : unit Lwt.t =
   let addr = Lwt_unix.ADDR_INET (Unix.inet_addr_loopback, port) in
   let sock = Lwt_unix.socket Lwt_unix.PF_INET Lwt_unix.SOCK_STREAM 0 in
   Lwt_unix.setsockopt sock Lwt_unix.SO_REUSEADDR true;
-  let* () = Lwt_unix.bind sock addr in
+  (* promote-window task 6 (2026-09-04): old image may still hold the REPL
+     port at exec (same teardown race as the HTTP bind). Retry on EADDRINUSE
+     for 10s (0.5s cadence, log every ~2s); after the budget fail as before
+     — boot.ml's fiber catch keeps REPL failure non-fatal (unchanged). *)
+  let bind_retry_budget = 10.0 and bind_retry_interval = 0.5 in
+  let deadline = Unix.gettimeofday () +. bind_retry_budget in
+  let rec bind_retry attempts =
+    Lwt.catch
+      (fun () -> Lwt_unix.bind sock addr)
+      (function
+        | Unix.Unix_error (Unix.EADDRINUSE, _, _)
+          when Unix.gettimeofday () < deadline ->
+            let attempts = attempts + 1 in
+            if attempts = 1 || attempts mod 4 = 0 then begin
+              Printf.eprintf
+                "[repl] :%d in use, bind retry %d (budget %.0fs)\n%!"
+                port attempts bind_retry_budget;
+              flush stderr
+            end;
+            let* () = Lwt_unix.sleep bind_retry_interval in
+            bind_retry attempts
+        | e -> Lwt.fail e)
+  in
+  let* () = bind_retry 0 in
   Lwt_unix.listen sock 5;
   Printf.eprintf "[repl] listening on 127.0.0.1:%d\n" port;
   flush stderr;

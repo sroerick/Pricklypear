@@ -1187,10 +1187,47 @@ let serve_eio
   let listen_addr = `Tcp (Eio.Net.Ipaddr.V4.any, port) in
   (* reuse_port off: OpenBSD SO_REUSEPORT semantics differ and caused
      EADDRINUSE races on rcctl restart when dual-binding. reuse_addr is enough. *)
-  let socket =
-    Eio.Net.listen ~reuse_addr:true ~reuse_port:false ~backlog:128 ~sw net
-      listen_addr
+  (* promote-window task 6 (2026-09-04): residual teardown races used to kill
+     the new image with a fatal EADDRINUSE (old image still holding :18080
+     when the new one execs). rc_stop's port-free poll narrows the race but
+     cannot make it impossible; retry the bind for 10s (0.5s cadence, log
+     every ~2s) so the race self-heals. After the budget the exception
+     propagates (fatal, as before) and the watchdog owns recovery. *)
+  let bind_retry_budget = 10.0 and bind_retry_interval = 0.5 in
+  let addr_in_use = function
+    | Unix.Unix_error (Unix.EADDRINUSE, _, _) -> true
+    (* eio 1.x wraps bind errors:
+       Eio.Exn.Io (Eio.Exn.X (Eio_unix.Unix_error (EADDRINUSE, ...)), _) *)
+    | Eio.Exn.Io
+        (Eio.Exn.X (Eio_unix.Unix_error (Unix.EADDRINUSE, _, _)), _) ->
+        true
+    | _ -> false
   in
+  let deadline = Unix.gettimeofday () +. bind_retry_budget in
+  let rec listen_retry attempts () =
+    match
+      Eio.Net.listen ~reuse_addr:true ~reuse_port:false ~backlog:128 ~sw net
+        listen_addr
+    with
+    | socket -> socket
+    | exception e
+      when addr_in_use e && Unix.gettimeofday () < deadline ->
+        let attempts = attempts + 1 in
+        if attempts = 1 || attempts mod 4 = 0 then begin
+          let msg =
+            Printf.sprintf "[http] :%d in use, bind retry %d (budget %.0fs)"
+              port attempts bind_retry_budget
+          in
+          Printf.eprintf "%s\n%!" msg;
+          ignore
+            (Ops_log.warn ~component:"http"
+               ~context:[ ("phase", "bind-retry") ]
+               msg)
+        end;
+        Eio.Time.sleep (Eio.Stdenv.clock env) bind_retry_interval;
+        listen_retry attempts ()
+  in
+  let socket = listen_retry 0 () in
   Printf.eprintf
     "[http] serving htmx (httpun-eio) on 0.0.0.0:%d (max_inflight=%d)\n%!"
     port max_inflight;
