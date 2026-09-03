@@ -767,6 +767,7 @@ let request_handler ~(sw : Eio.Switch.t) ~(registry : Session_registry.t)
          poison and locked out all logins while watchdog saw green. *)
       let branch = Session.branch_name session in
       let uptime = Session.uptime_seconds session in
+      let boot_epoch = Session.boot_epoch session in
       let check = Store.health_check (Session.store session) in
       let h, status =
         match check with
@@ -774,12 +775,14 @@ let request_handler ~(sw : Eio.Switch.t) ~(registry : Session_registry.t)
             ( { Pricklypear_common.Protocol.ok = true;
                 branch;
                 uptime_seconds = uptime;
+                boot_epoch;
                 error = None },
               `OK )
         | Error msg ->
             ( { Pricklypear_common.Protocol.ok = false;
                 branch;
                 uptime_seconds = uptime;
+                boot_epoch;
                 error = Some msg },
               `Service_unavailable )
       in
