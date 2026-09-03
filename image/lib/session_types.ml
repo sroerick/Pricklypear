@@ -98,6 +98,17 @@ type t = {
       with (package NAME (export …)), stamp new defines with this package
       name. None outside a package load / REPL package form. *)
   mutable current_package : string option;
+  (** image.load-library-skip (2026-09-03): during interactive
+      load-library / reseed, maps define-name -> fingerprint (pp_expr
+      body + doc) of the branch's OWN stored defs; eval_form skips
+      defines whose normalized body + doc are identical, so re-loading
+      a big lib no longer re-evaluates + re-persists ~1000 unchanged
+      defines (the boot seed got the same medicine via
+      persist_if_absent). Kernel-prim + disabled-package names excluded;
+      inherited names keep full eval (no-diff-no-pin unpin must stay
+      reachable). None outside load-library; a nested load-string during
+      the load window inherits it. *)
+  mutable load_skip_names : (string, string) Hashtbl.t option;
   (** single-image.net-prims: session-local stream table for tcp-connect.
       Maps handle-id (UUID string) -> stream handle. Populated by
       (tcp-connect ...); drained by (stream-close ...) and by the switch
