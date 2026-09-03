@@ -1630,12 +1630,12 @@ let tree_get_uuid (store : Store.t) ~(uuid : string) : value =
        | Some node -> (VStr (Tree_store.node_to_json node)))
 
 let tree_find_by (store : Store.t) ~(kind : string option) ~(field : string)
-    ~(value : string) ?(limit : int = 50) () : value =
+    ~(value : string) ?(prefix : string = "") ?(limit : int = 50) () : value =
   match Io_lwt.Db.current_conn store with
   | None -> (VList [])
   | Some conn ->
       let nodes =
-        Tree_store.find_by_body_field conn ~kind ~field ~value ~limit ()
+        Tree_store.find_by_body_field conn ~kind ~field ~value ~prefix ~limit ()
       in
       (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes))
 
