@@ -1,4 +1,5 @@
-(lang dune 3.23)
+(lang dune 3.8)
+; local: OpenBSD pkg dune-3.8.3; upstream wyo opam dune accepts 3.8
 
 (name pricklypear)
 
