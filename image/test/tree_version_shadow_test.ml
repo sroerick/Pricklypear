@@ -247,6 +247,82 @@ let test_fn_code_path_shadow () =
           (* cleanup *)
           ignore (T.delete_fn conn ~branch_id:main_id ~name) )
 
+(** one-tree.hash-domain (migration 027): identical bodies written through
+    BOTH paths — tree-first (Tree_store.upsert_fn) and scaffolding-first
+    (raw function_defs INSERT, forward-mirrored by the 009 trigger) — must
+    land the SAME stored hash. The body's key order is deliberately NOT
+    canonical ("params" before "zz"), so the pre-027 writers (OCaml
+    compact-JSON digest vs mirror jsonb-canonical digest) would disagree
+    here; since 027 both hash DB-side over PG canonical jsonb text. Also
+    asserts the tree_versions shadow row carries the same-domain hash. *)
+let test_hash_domain_cross_writer () =
+  with_store (fun store ->
+      match S.conn_of store with
+      | None -> ()
+      | Some conn ->
+          let suffix = string_of_int (Random.int 1_000_000) in
+          let name = "tv_hash_" ^ suffix in
+          let body = "{\"params\":[\"x\"],\"zz\":1}" in
+          (* Path 1: tree-first upsert (OCaml writer). *)
+          T.upsert_fn conn ~branch_id:main_id ~name ~body_json:body
+            ~author:"tester" ~doc:None;
+          let path = T.fn_path ~branch_id:main_id ~name in
+          let h_treefirst =
+            match T.get_by_path conn ~path with
+            | Some n -> n.T.hash
+            | None -> Alcotest.fail "tree-first node missing"
+          in
+          (* Path 2: scaffolding-first raw INSERT (009 mirror writer,
+             deferred trigger — autocommit settles it before the read). *)
+          let _ =
+            S.exec conn
+              ~params:
+                [ Pgx.Value.of_string main_id
+                ; Pgx.Value.of_string (name ^ "_mir")
+                ; Pgx.Value.of_string body ]
+              "INSERT INTO function_defs (branch_id, name, body, author) VALUES ($1::uuid, $2, $3::jsonb, 'tester')"
+          in
+          let path2 = T.fn_path ~branch_id:main_id ~name:(name ^ "_mir") in
+          let h_mirror =
+            match T.get_by_path conn ~path:path2 with
+            | Some n -> n.T.hash
+            | None -> Alcotest.fail "mirrored node missing"
+          in
+          Alcotest.(check string) "tree-first hash == mirror hash" h_mirror
+            h_treefirst;
+          (* and it IS the canonical jsonb digest of the body *)
+          (match
+             S.exec conn
+               ~params:[ Pgx.Value.of_string body ]
+               "SELECT encode(digest($1::jsonb::text,'sha256'),'hex')"
+           with
+          | [ [ c ] ] ->
+              (match Pgx.Value.to_string c with
+               | Some expect ->
+                   Alcotest.(check string) "hash is canonical jsonb digest"
+                     expect h_treefirst
+               | None -> Alcotest.fail "digest query returned null")
+          | _ -> Alcotest.fail "digest query failed");
+          (* tree_versions shadow row carries the SAME domain hash *)
+          (match T.versioned_head conn ~path () with
+           | Some v ->
+               (match v.T.v_hash with
+                | Some vh ->
+                    Alcotest.(check string) "version hash same domain"
+                      h_treefirst vh
+                | None -> Alcotest.fail "version hash missing")
+           | None -> Alcotest.fail "version row missing");
+          (* cleanup *)
+          ignore (T.delete_fn conn ~branch_id:main_id ~name);
+          let (_ : Pgx.row list) =
+            S.exec conn
+              ~params:
+                [ Pgx.Value.of_string main_id
+                ; Pgx.Value.of_string (name ^ "_mir") ]
+              "DELETE FROM function_defs WHERE branch_id = $1::uuid AND name = $2"
+          in
+          ())
+
 let () =
   Alcotest.run "tree_version_shadow"
     [
@@ -260,5 +336,7 @@ let () =
             test_datum_delete_tombstone;
           Alcotest.test_case "fn code-path shadow bumps branch gen" `Quick
             test_fn_code_path_shadow;
+          Alcotest.test_case "hash domain cross-writer equality" `Quick
+            test_hash_domain_cross_writer;
         ] );
     ]

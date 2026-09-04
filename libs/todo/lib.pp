@@ -36,6 +36,7 @@
         (row)
         (not (todo/archived? (todo/item-state (cdr row)))))
       items)))
+  "Non-archived items from a list of rows."
 
 (define todo/add
   (lambda
@@ -65,6 +66,7 @@
             "0"
             "done"
             "false"))))))
+  "Create a todo item in list-id (default inbox) with the given title."
 
 (define todo/add-form
   (lambda
@@ -115,12 +117,15 @@
                           (html/attr "placeholder" "buy milk")
                           (html/attr "autocomplete" "off"))))
                     (html/button (html/attr "type" "submit") "Add")))))))))))
+  "HTML add form (or hint) for the given view/list."
 
 (define todo/all-items
   (lambda () (todo/tree/rows "todo-item" 200)))
+  "All todo-item rows (up to 200)."
 
 (define todo/archive
   (lambda (id) (todo/set-state id "ARCHIVED")))
+  "Set an item state to ARCHIVED."
 
 (define todo/archived-items
   (lambda
@@ -130,14 +135,17 @@
         (row)
         (todo/archived? (todo/item-state (cdr row))))
       (todo/all-items))))
+  "Items whose state is ARCHIVED."
 
 (define todo/archived?
   (lambda (s) (string-eq (as-str s) "ARCHIVED")))
+  "True when a state string is ARCHIVED."
 
 (define todo/count-all-in
   (lambda
     (items)
     (list/foldl (lambda (acc _) (+ acc 1)) 0 items)))
+  "Count of rows in items."
 
 (define todo/count-open-in
   (lambda
@@ -151,6 +159,7 @@
           acc))
       0
       items)))
+  "Count of open items in items."
 
 (define todo/create-list
   (lambda
@@ -166,6 +175,7 @@
           ""
           "is_default"
           "false")))))
+  "Create a todo-list with the given title."
 
 (define todo/cycle
   (lambda
@@ -200,6 +210,7 @@
         (string-starts-with? r "data.")
         (todo/db/path-id r)
         r))))
+  "Create a datum node of type with fields; returns the id."
 
 (define todo/db/delete
   (lambda
@@ -210,6 +221,7 @@
         (null? (tree/get p))
         ()
         (seq (tree/delete p) (as-str id))))))
+  "Delete a datum node; returns the id or ()."
 
 (define todo/db/get
   (lambda
@@ -217,6 +229,7 @@
     (let
       ((n (tree/get (node-path type (as-str id)))))
       (if (null? n) () (dict-get n "body")))))
+  "Fields dict for a datum node; () when absent."
 
 (define todo/db/insert-by-created
   (lambda
@@ -232,6 +245,7 @@
         (cons
           (car sorted)
           (todo/db/insert-by-created n (cdr sorted)))))))
+  "Insert node n into a sorted list by created_at."
 
 (define todo/db/node-row
   (lambda
@@ -239,6 +253,7 @@
     (cons
       (todo/db/path-id (dict-get node "path"))
       (dict-get node "body"))))
+  "Convert a tree node to an (id . fields) pair."
 
 (define todo/db/path-id
   (lambda
@@ -255,6 +270,7 @@
         (substring h 16 4)
         "-"
         (substring h 20 12)))))
+  "Derive an id string from a data path."
 
 (define todo/db/prefix
   (lambda
@@ -262,6 +278,7 @@
     (let
       ((p (node-path type "")))
       (substring p 0 (- (string-length p) 1)))))
+  "The path prefix for a type."
 
 (define todo/db/rows
   (lambda
@@ -269,6 +286,7 @@
     (map
       todo/db/node-row
       (tree/list-kind (todo/db/prefix type) "datum" limit))))
+  "Rows of a type as (id . fields) pairs up to limit."
 
 (define todo/db/sort-by-created
   (lambda
@@ -279,6 +297,7 @@
       (todo/db/insert-by-created
         (car ns)
         (todo/db/sort-by-created (cdr ns))))))
+  "Sort nodes by created_at."
 
 (define todo/db/update
   (lambda
@@ -291,6 +310,7 @@
         (let
           ((r (tree/upsert p "datum" (as-str type) fields)))
           (if (string-starts-with? r "data.") (as-str id) r))))))
+  "Update a datum node fields; returns the id."
 
 (define todo/db/update-field
   (lambda
@@ -301,9 +321,11 @@
         (null? fields)
         ()
         (todo/db/update type id (dict-set fields field value))))))
+  "Set one field on a datum node and persist."
 
 (define todo/delete
   (lambda (id) (todo/tree/del "todo-item" id)))
+  "Delete a todo-item by id."
 
 (define todo/delete-list
   (lambda
@@ -324,6 +346,7 @@
               (seq
                 (todo/delete-list-items (todo/all-items) lid)
                 (seq (todo/tree/del "todo-list" lid) "ok")))))))))
+  "Delete a list and its items; guards the default list."
 
 (define todo/delete-list-items
   (lambda
@@ -339,6 +362,7 @@
           (todo/delete (car (car items)))
           ())
         (todo/delete-list-items (cdr items) lid)))))
+  "Delete items belonging to lid from the items list."
 
 (define todo/detail-html
   (lambda
@@ -425,6 +449,7 @@
                                     (html/button (html/attr "type" "submit") "Save")
                                     " "
                                     (html/a (string-append "/todos?view=" view) "Cancel")))))))))))))))))))
+  "HTML detail/edit card for an item by id."
 
 (define todo/done?
   (lambda
@@ -432,6 +457,7 @@
     (let
       ((d (dict-get fields "done")))
       (if (null? d) false (string-eq d "true")))))
+  "True when the item done field is "true"."
 
 (define todo/ensure-inbox
   (lambda
@@ -452,6 +478,7 @@
               "is_default"
               "true")))
         (car found)))))
+  "The default list id, creating an Inbox when none exists."
 
 (define todo/find-default-in
   (lambda
@@ -468,15 +495,19 @@
             (string-eq t "Inbox")
             (car xs)
             (todo/find-default-in (cdr xs))))))))
+  "Find the default (or Inbox-titled) list in xs."
 
 (define todo/find-default-list
   (lambda () (todo/find-default-in (todo/lists))))
+  "The default list, or ()."
 
 (define todo/get-item
   (lambda (id) (todo/tree/get "todo-item" id)))
+  "Fields of a todo-item by id; () when absent."
 
 (define todo/get-list
   (lambda (id) (todo/tree/get "todo-list" id)))
+  "Fields of a todo-list by id; () when absent."
 
 (define todo/handle-post
   (lambda
@@ -518,6 +549,7 @@
                         (request-param "state")
                         (request-param "list_id"))
                       (todo/add (todo/ensure-inbox) (request-param "title")))))))))))))
+  "Dispatch a POST /todos action to the matching handler."
 
 (define todo/item-due
   (lambda
@@ -525,6 +557,7 @@
     (let
       ((d (dict-get fields "due")))
       (if (null? d) "" (as-str d)))))
+  "An item due string; "" when absent."
 
 (define todo/item-li
   (lambda
@@ -589,6 +622,7 @@
                               (html/attr "class" "secondary")
                               (html/attr "title" "delete")))
                           "del")))))))))))))
+  "HTML <li> for a todo item row."
 
 (define todo/item-list-id
   (lambda
@@ -596,6 +630,7 @@
     (let
       ((lid (dict-get fields "list_id")))
       (if (null? lid) "" (as-str lid)))))
+  "An item list_id string; "" when absent."
 
 (define todo/item-notes
   (lambda
@@ -603,6 +638,7 @@
     (let
       ((n (dict-get fields "notes")))
       (if (null? n) "" (as-str n)))))
+  "An item notes string; "" when absent."
 
 (define todo/item-state
   (lambda
@@ -618,9 +654,11 @@
             "TODO"
             (if (string-eq d "true") "DONE" "TODO")))
         (as-str s)))))
+  "An item state string, deriving from done when absent."
 
 (define todo/item-title
   (lambda (fields) (as-str (dict-get fields "title"))))
+  "An item title string."
 
 (define todo/item/active
   (lambda
@@ -630,6 +668,7 @@
         (row)
         (not (todo/state/archived? (todo/item/state (cdr row)))))
       items)))
+  "Non-archived items from a list of rows (item/ set)."
 
 (define todo/item/add
   (lambda
@@ -659,12 +698,15 @@
             "0"
             "done"
             "false"))))))
+  "Create a todo item in list-id with the given title (item/ set)."
 
 (define todo/item/all
   (lambda () (todo/tree/rows "todo-item" 200)))
+  "All todo-item rows (up to 200) (item/ set)."
 
 (define todo/item/archive
   (lambda (id) (todo/item/set-state id "ARCHIVED")))
+  "Set an item state to ARCHIVED (item/ set)."
 
 (define todo/item/archived
   (lambda
@@ -674,11 +716,13 @@
         (row)
         (todo/state/archived? (todo/item/state (cdr row))))
       (todo/item/all))))
+  "Items whose state is ARCHIVED (item/ set)."
 
 (define todo/item/count-all
   (lambda
     (items)
     (list/foldl (lambda (acc _) (+ acc 1)) 0 items)))
+  "Count of rows in items (item/ set)."
 
 (define todo/item/count-open
   (lambda
@@ -692,6 +736,7 @@
           acc))
       0
       items)))
+  "Count of open items in items (item/ set)."
 
 (define todo/item/cycle
   (lambda
@@ -711,6 +756,7 @@
 
 (define todo/item/delete
   (lambda (id) (todo/tree/del "todo-item" id)))
+  "Delete a todo-item by id (item/ set)."
 
 (define todo/item/due
   (lambda
@@ -718,6 +764,7 @@
     (let
       ((d (dict-get fields "due")))
       (if (null? d) "" (as-str d)))))
+  "An item due string; "" when absent (item/ set)."
 
 (define todo/item/for-list
   (lambda
@@ -735,9 +782,11 @@
               #t
               (if (string-eq fl "") (string-eq lid inbox-id) #f))))
         (todo/item/all)))))
+  "Items for list-id, treating a blank list_id as the inbox (item/ set)."
 
 (define todo/item/get
   (lambda (id) (todo/tree/get "todo-item" id)))
+  "Fields of a todo-item by id; () when absent (item/ set)."
 
 (define todo/item/html
   (lambda
@@ -795,6 +844,7 @@
                 (string-append acc (todo/item/list-li row view)))
               ""
               (todo/item/active (todo/item/for-list view)))))))))
+  "HTML <ul> of items per view (item/ set)."
 
 (define todo/item/list-id
   (lambda
@@ -802,6 +852,7 @@
     (let
       ((lid (dict-get fields "list_id")))
       (if (null? lid) "" (as-str lid)))))
+  "An item list_id string; "" when absent (item/ set)."
 
 (define todo/item/list-li
   (lambda
@@ -895,6 +946,7 @@
                           (html/attr "class" "secondary")
                           (html/attr "title" "delete")))
                       "del")))))))))))
+  "HTML <li> for a todo item row in a list view (item/ set)."
 
 (define todo/item/note-li
   (lambda
@@ -945,6 +997,7 @@
                 (html/span
                   (html/attr "class" "muted todo-src")
                   (html/text slug))))))))))
+  "HTML <li> for a note-derived TODO (item/ set)."
 
 (define todo/item/notes
   (lambda
@@ -952,6 +1005,7 @@
     (let
       ((n (dict-get fields "notes")))
       (if (null? n) "" (as-str n)))))
+  "An item notes string; "" when absent (item/ set)."
 
 (define todo/item/save
   (lambda
@@ -983,6 +1037,7 @@
                 (as-str state)
                 "list_id"
                 lid))))))))
+  "Save edited fields on an item; () when missing."
 
 (define todo/item/set-state
   (lambda
@@ -992,6 +1047,7 @@
       id
       "state"
       (as-str state))))
+  "Set an item state field (item/ set)."
 
 (define todo/item/state
   (lambda
@@ -1007,9 +1063,11 @@
             "TODO"
             (if (string-eq d "true") "DONE" "TODO")))
         (as-str s)))))
+  "An item state string, deriving from done when absent (item/ set)."
 
 (define todo/item/title
   (lambda (fields) (as-str (dict-get fields "title"))))
+  "An item title string (item/ set)."
 
 (define todo/items-for-list
   (lambda
@@ -1026,6 +1084,7 @@
               #t
               (if (string-eq fl "") (string-eq lid inbox-id) #f))))
         (todo/all-items)))))
+  "Items for list-id, treating a blank list_id as the inbox."
 
 (define todo/items-html
   (lambda
@@ -1083,12 +1142,14 @@
                 (string-append acc (todo/list-item-li row view)))
               ""
               (todo/active-items (todo/items-for-list view)))))))))
+  "HTML <ul> of items per view."
 
 (define todo/land-ping
   1)
 
 (define todo/list
   (lambda () (todo/tree/rows "todo-item" 50)))
+  "Most recent todo-item rows (up to 50)."
 
 (define todo/list-default?
   (lambda
@@ -1096,6 +1157,7 @@
     (let
       ((d (dict-get fields "is_default")))
       (if (null? d) #f (string-eq d "true")))))
+  "True when list fields mark it default."
 
 (define todo/list-html
   (lambda
@@ -1108,6 +1170,7 @@
           (string-append acc (todo/item-li row)))
         ""
         (todo/list)))))
+  "HTML <ul> of the most recent todo items."
 
 (define todo/list-item-li
   (lambda
@@ -1201,6 +1264,7 @@
                           (html/attr "class" "secondary")
                           (html/attr "title" "delete")))
                       "del")))))))))))
+  "HTML <li> for a todo item row in a list view."
 
 (define todo/list-options
   (lambda
@@ -1220,12 +1284,15 @@
                 (string-eq (as-str id) (as-str selected)))))))
       ""
       (todo/lists))))
+  "HTML <option> elements over all lists with selected."
 
 (define todo/list-title
   (lambda (fields) (as-str (dict-get fields "title"))))
+  "A list title string."
 
 (define todo/list/all
   (lambda () (todo/tree/rows "todo-list" 50)))
+  "All todo-list rows (up to 50) (list/ set)."
 
 (define todo/list/create
   (lambda
@@ -1241,6 +1308,7 @@
           ""
           "is_default"
           "false")))))
+  "Create a todo-list with the given title (list/ set)."
 
 (define todo/list/default?
   (lambda
@@ -1248,6 +1316,7 @@
     (let
       ((d (dict-get fields "is_default")))
       (if (null? d) #f (string-eq d "true")))))
+  "True when list fields mark it default (list/ set)."
 
 (define todo/list/delete
   (lambda
@@ -1268,6 +1337,7 @@
               (seq
                 (todo/list/delete-items (todo/item/all) lid)
                 (seq (todo/tree/del "todo-list" lid) "ok")))))))))
+  "Delete a list and its items; guards the default list (list/ set)."
 
 (define todo/list/delete-items
   (lambda
@@ -1283,6 +1353,7 @@
           (todo/item/delete (car (car items)))
           ())
         (todo/list/delete-items (cdr items) lid)))))
+  "Delete items belonging to lid from the items list (list/ set)."
 
 (define todo/list/ensure-inbox
   (lambda
@@ -1303,9 +1374,11 @@
               "is_default"
               "true")))
         (car found)))))
+  "Default list id, creating an Inbox when none exists (list/ set)."
 
 (define todo/list/find-default
   (lambda () (todo/list/find-default-in (todo/list/all))))
+  "The default list, or () (list/ set)."
 
 (define todo/list/find-default-in
   (lambda
@@ -1322,9 +1395,11 @@
             (string-eq t "Inbox")
             (car xs)
             (todo/list/find-default-in (cdr xs))))))))
+  "Find the default Inbox list in xs (list/ set)."
 
 (define todo/list/get
   (lambda (id) (todo/tree/get "todo-list" id)))
+  "Fields of a todo-list by id; () when absent (list/ set)."
 
 (define todo/list/nav-li
   (lambda
@@ -1377,6 +1452,7 @@
                           (html/attr "class" "secondary")
                           (html/attr "title" "delete list")))
                       "×")))))))))))
+  "HTML nav <li> for one list with an open/count ratio."
 
 (define todo/list/options
   (lambda
@@ -1396,12 +1472,15 @@
                 (string-eq (as-str id) (as-str selected)))))))
       ""
       (todo/list/all))))
+  "HTML <option> elements over all lists with selected (list/ set)."
 
 (define todo/list/title
   (lambda (fields) (as-str (dict-get fields "title"))))
+  "A list title string (list/ set)."
 
 (define todo/lists
   (lambda () (todo/tree/rows "todo-list" 50)))
+  "All todo-list rows (up to 50)."
 
 (define todo/main-html
   (lambda
@@ -1457,6 +1536,7 @@
                           (list
                             (todo/add-form view list-id)
                             (todo/items-html view)))))))))))))))
+  "Main todo body HTML for a view, or the detail card when an id is present."
 
 (define todo/nav-html
   (lambda
@@ -1505,6 +1585,7 @@
                           (html/attr "required" "required")
                           (html/attr "class" "todo-new-list-input"))))
                     (html/button (html/attr "type" "submit") "+ list")))))))))))
+  "HTML <ul> navigation with view links, lists, and a new-list form."
 
 (define todo/nav-link
   (lambda
@@ -1521,6 +1602,7 @@
         (string-append
           label
           (if (string-eq extra "") "" (string-append " " extra)))))))
+  "HTML nav <li> link for a view key with active state."
 
 (define todo/nav-list-li
   (lambda
@@ -1573,11 +1655,13 @@
                           (html/attr "class" "secondary")
                           (html/attr "title" "delete list")))
                       "×")))))))))))
+  "HTML nav <li> for one list with an open/count ratio."
 
 (define todo/next-state
   (lambda
     (cur)
     (outline/todo-next-in todo/states (as-str cur))))
+  "The next state after cur in todo/states."
 
 (define todo/note-item-li
   (lambda
@@ -1628,6 +1712,7 @@
                 (html/span
                   (html/attr "class" "muted todo-src")
                   (html/text slug))))))))))
+  "HTML <li> for a note-derived TODO."
 
 (define todo/open?
   (lambda
@@ -1644,6 +1729,7 @@
             (string-eq t "CANCELLED")
             #f
             (if (string-eq t "ARCHIVED") #f #t)))))))
+  "True when a state string is not a closed state."
 
 (define todo/page
   (lambda
@@ -1670,6 +1756,7 @@
               (html/attr "class" "muted")
               "Lists (Basecamp) + notes scrape (org). Click a title for details.")
             (todo/ui/main (todo/ui/view))))))))
+  "Full /todos page: ensure inbox, handle POST, render HTML."
 
 (define todo/partial
   (lambda
@@ -1677,6 +1764,7 @@
     (seq
       (todo/list/ensure-inbox)
       (render-html (todo/ui/main (todo/ui/view))))))
+  "Render the todo main partial for an HTMX request."
 
 (define todo/ratio
   (lambda
@@ -1685,6 +1773,7 @@
       ((n (todo/count-all-in items))
         (open (todo/count-open-in items)))
       (string-append (as-str (- n open)) "/" (as-str n)))))
+  "String "done/total" for items."
 
 (define todo/save
   (lambda
@@ -1716,9 +1805,11 @@
                 (as-str state)
                 "list_id"
                 lid))))))))
+  "Save edited fields on an item; () when missing."
 
 (define todo/seqtest
   (lambda () 7))
+  "Test helper returning 7."
 
 (define todo/set-state
   (lambda
@@ -1728,6 +1819,7 @@
       id
       "state"
       (as-str state))))
+  "Set an item state field."
 
 (define todo/state-options
   (lambda
@@ -1742,6 +1834,7 @@
             (html/option st lab (string-eq st (as-str selected))))))
       ""
       todo/states)))
+  "HTML <option> elements over todo/states with selected."
 
 (define todo/state-options-all
   (lambda
@@ -1749,6 +1842,7 @@
     (todo/state-options-from
       selected
       (append todo/states (list "ARCHIVED")))))
+  "HTML <option> elements over states plus ARCHIVED."
 
 (define todo/state-options-from
   (lambda
@@ -1763,9 +1857,11 @@
             (html/option st lab (string-eq st (as-str selected))))))
       ""
       states)))
+  "HTML <option> elements over the given states with selected."
 
 (define todo/state/archived?
   (lambda (s) (string-eq (as-str s) "ARCHIVED")))
+  "True when a state string is ARCHIVED (state/ set)."
 
 (define todo/state/list
   (list "" "TODO" "DONE" "WAITING" "CANCELLED"))
@@ -1774,6 +1870,7 @@
   (lambda
     (cur)
     (outline/todo-next-in todo/state/list (as-str cur))))
+  "The next state after cur in todo/state/list (state/ set)."
 
 (define todo/state/columns-for-list
   (lambda
@@ -1851,6 +1948,7 @@
             (string-eq t "CANCELLED")
             #f
             (if (string-eq t "ARCHIVED") #f #t)))))))
+  "True when a state string is not a closed state (state/ set)."
 
 (define todo/state/options
   (lambda
@@ -1865,6 +1963,7 @@
             (html/option st lab (string-eq st (as-str selected))))))
       ""
       todo/state/list)))
+  "HTML <option> elements over todo/state/list with selected (state/ set)."
 
 (define todo/state/options-all
   (lambda
@@ -1872,6 +1971,7 @@
     (todo/state/options-from
       selected
       (append todo/state/list (list "ARCHIVED")))))
+  "HTML <option> elements over states plus ARCHIVED (state/ set)."
 
 (define todo/state/options-from
   (lambda
@@ -1886,6 +1986,7 @@
             (html/option st lab (string-eq st (as-str selected))))))
       ""
       states)))
+  "HTML <option> elements over the given states with selected (state/ set)."
 
 (define todo/state/options-for-list
   (lambda
@@ -1913,6 +2014,7 @@
           id
           "done"
           (if (todo/done? row) "false" "true"))))))
+  "Flip an item done flag."
 
 (define todo/tree/create
   (lambda
@@ -1923,11 +2025,13 @@
         (todo/tree/path-ok? r)
         (todo/tree/redash (todo/tree/tail r))
         r))))
+  "Create a datum node; returns the new id."
 
 (define todo/tree/del
   (lambda
     (t id)
     (seq (tree/delete (node-path t (as-str id))) id)))
+  "Delete a datum node by id; returns the id."
 
 (define todo/tree/get
   (lambda
@@ -1935,6 +2039,7 @@
     (let
       ((n (tree/get (node-path t (as-str id)))))
       (if (null? n) (list) (dict-get n "body")))))
+  "Fields of a datum node by id; () when absent."
 
 (define todo/tree/insert-by-created
   (lambda
@@ -1950,6 +2055,7 @@
         (cons
           (car sorted)
           (todo/tree/insert-by-created nj (cdr sorted)))))))
+  "Insert a node into a sorted list by created_at."
 
 (define todo/tree/node->pair
   (lambda
@@ -1957,6 +2063,7 @@
     (cons
       (todo/tree/redash (todo/tree/tail (dict-get nj "path")))
       (dict-get nj "body"))))
+  "Convert a tree node to an (id . fields) pair."
 
 (define todo/tree/path-ok?
   (lambda
@@ -1965,6 +2072,7 @@
       (null? r)
       #f
       (string-eq (substring (as-str r) 0 5) "data."))))
+  "True when an upsert result path starts with "data."."
 
 (define todo/tree/prefix
   (lambda
@@ -1972,6 +2080,7 @@
     (let
       ((p (node-path t "")))
       (substring p 0 (- (string-length p) 1)))))
+  "The path prefix for a type."
 
 (define todo/tree/redash
   (lambda
@@ -1986,6 +2095,7 @@
       (substring h 16 4)
       "-"
       (substring h 20 12))))
+  "Reformat a trailing ID hex slice into dashed UUID form."
 
 (define todo/tree/rows
   (lambda
@@ -1993,6 +2103,7 @@
     (list/map
       todo/tree/node->pair
       (tree/list (todo/tree/prefix t) 1 n))))
+  "Rows of a type as (id . fields) pairs up to n."
 
 (define todo/tree/save
   (lambda
@@ -2000,6 +2111,7 @@
     (seq
       (tree/upsert (node-path t (as-str id)) "datum" t fields)
       id)))
+  "Upsert a datum node fields; returns the id."
 
 (define todo/tree/set-field
   (lambda
@@ -2013,6 +2125,7 @@
           t
           id
           (dict-set* cur (list f (as-str v))))))))
+  "Set one field on a datum node and persist."
 
 (define todo/tree/sort-by-created
   (lambda
@@ -2021,9 +2134,11 @@
       (lambda (acc n) (todo/tree/insert-by-created n acc))
       (list)
       nodes)))
+  "Sort nodes by created_at."
 
 (define todo/tree/tail
   (lambda (p) (substring p (- (string-length p) 32) 32)))
+  "Last 32 chars of a path (the id hex)."
 
 (define todo/ui/add-form
   (lambda
@@ -2074,6 +2189,7 @@
                           (html/attr "placeholder" "buy milk")
                           (html/attr "autocomplete" "off"))))
                     (html/button (html/attr "type" "submit") "Add")))))))))))
+  "HTML add form (or hint) for the given view/list (ui set)."
 
 (define todo/ui/detail
   (lambda
@@ -2160,6 +2276,7 @@
                                     (html/button (html/attr "type" "submit") "Save")
                                     " "
                                     (html/a (string-append "/todos?view=" view) "Cancel")))))))))))))))))))
+  "HTML detail/edit card for an item by id (ui set)."
 
 (define todo/ui/handle-post
   (lambda
@@ -2197,6 +2314,7 @@
           (todo/item/add
             (todo/list/ensure-inbox)
             (request-param "title")))))))
+  "Dispatch a POST /todos action to the matching handler (ui set)."
 
 (define todo/ui/main
   (lambda
@@ -2252,6 +2370,7 @@
                           (list
                             (todo/ui/add-form view list-id)
                             (todo/item/html view)))))))))))))))
+  "Main todo body HTML for a view, or the detail card when an id is present (ui set)."
 
 (define todo/ui/nav
   (lambda
@@ -2300,6 +2419,7 @@
                           (html/attr "required" "required")
                           (html/attr "class" "todo-new-list-input"))))
                     (html/button (html/attr "type" "submit") "+ list")))))))))))
+  "HTML <ul> navigation with view links, lists, and a new-list form (ui set)."
 
 (define todo/ui/nav-link
   (lambda
@@ -2316,6 +2436,7 @@
         (string-append
           label
           (if (string-eq extra "") "" (string-append " " extra)))))))
+  "HTML nav <li> link for a view key with active state (ui set)."
 
 (define todo/ui/ratio
   (lambda
@@ -2324,6 +2445,7 @@
       ((n (todo/item/count-all items))
         (open (todo/item/count-open items)))
       (string-append (as-str (- n open)) "/" (as-str n)))))
+  "String "done/total" for items (ui set)."
 
 (define todo/ui/view
   (lambda
@@ -2331,6 +2453,7 @@
     (let
       ((v (request-param "view")))
       (if (null? v) "everything" (as-str v)))))
+  "The current view param, defaulting to "everything" (ui set)."
 
 (define todo/view
   (lambda
@@ -2338,6 +2461,7 @@
     (let
       ((v (request-param "view")))
       (if (null? v) "everything" (as-str v)))))
+  "The current view param, defaulting to "everything"."
 
 
 (define todo/css

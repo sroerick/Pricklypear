@@ -161,8 +161,17 @@ let datum_path ?user ?(lens : string option = None) ~type_name ~id () =
 
 (* ---- content hashing ---- *)
 
-let hash_body (canonical_body_json : string) : string =
-  Auth_password.sha256_hex canonical_body_json
+(* HASH DOMAIN (unified 2026-09, one-tree.hash-domain): node hashes are
+   sha256 over PG's CANONICAL jsonb text of the body —
+   digest((payload->'body')::text) — computed DB-SIDE in every writer
+   (below + the 009 mirror triggers), never OCaml-side. One
+   canonicalization, one implementation, writer-independent: the 009
+   mirror and tree-first writes now produce IDENTICAL hashes for
+   identical bodies, so tree_versions.hash is comparable across write
+   paths and branch_status reads stored hashes directly. The old
+   OCaml-side hash_body (sha256 of compact Yojson text) is GONE — it
+   produced a different domain for the same body and was the root of
+   the 2026-08-28 cross-writer mismatch. *)
 
 (* ---- node envelope ---- *)
 
@@ -179,18 +188,6 @@ type node = {
   updated_at : string;       (* row column; advanced on every upsert *)
   rank : string option;      (* sibling-order: NULL = unordered (sorts last) *)
 }
-
-let envelope ~kind ~path ~type_ ~body ~author ~doc : Yojson.Safe.t =
-  `Assoc [
-    ("v", `Int 1);
-    ("kind", `String kind);
-    ("path", `String path);
-    ("type", `String type_);
-    ("body", body);
-    ("author", `String author);
-    ("doc", (match doc with Some d -> `String d | None -> `Null));
-    ("hash", `String (hash_body (Yojson.Safe.to_string body)));
-  ]
 
 let node_of_row (row : Pgx.row) : node option =
   (* Expected column order: id, path, kind, type_name, payload, hash,
@@ -243,19 +240,20 @@ let upsert_fn (conn : Store_db.conn) ~(branch_id : string) ~(name : string)
     : unit =
   (* conn: Store_db.conn (tx-aware) *)
         let path = fn_path ~branch_id ~name in
-      let hash = hash_body body_json in
       let sql =
         "INSERT INTO tree_nodes (path, kind, type_name, payload, hash, author, updated_at) " ^
         "VALUES ($1::ltree, 'fn', NULL, " ^
         "  jsonb_build_object('v',1,'kind','fn','path',$1::text,'type','fn','body',$2::jsonb, " ^
-        "    'author',$3::text,'doc',$4::text,'hash',$5::text), $5::text, $3::text, now()) " ^
+        "    'author',$3::text,'doc',$4::text, " ^
+        "    'hash',encode(digest($2::jsonb::text,'sha256'),'hex')), " ^
+        "  encode(digest($2::jsonb::text,'sha256'),'hex'), $3::text, now()) " ^
         "ON CONFLICT (path) DO UPDATE SET payload=EXCLUDED.payload, hash=EXCLUDED.hash, " ^
         "  author=EXCLUDED.author, updated_at=now()" in
       let doc_param = match doc with Some d -> Pgx.Value.of_string d | None -> Pgx.Value.null in
       let _ =
         Io_lwt.Db.execute conn
           ~params:[ Pgx.Value.of_string path; Pgx.Value.of_string body_json;
-                    Pgx.Value.of_string author; doc_param; Pgx.Value.of_string hash ]
+                    Pgx.Value.of_string author; doc_param ]
           sql
       in
       ()
@@ -264,19 +262,19 @@ let upsert_type (conn : Store_db.conn) ~(branch_id : string) ~(name : string)
     ~(fields_json : string) ~(author : string) : unit =
   (* conn: Store_db.conn (tx-aware) *)
         let path = type_path ~branch_id ~name in
-      let hash = hash_body fields_json in
       let sql =
         "INSERT INTO tree_nodes (path, kind, type_name, payload, hash, author, updated_at) " ^
         "VALUES ($1::ltree, 'type', $2::text, " ^
         "  jsonb_build_object('v',1,'kind','type','path',$1::text,'type',$2::text,'body',$3::jsonb, " ^
-        "    'author',$4::text,'doc',NULL,'hash',$5::text), $5::text, $4::text, now()) " ^
+        "    'author',$4::text,'doc',NULL, " ^
+        "    'hash',encode(digest($3::jsonb::text,'sha256'),'hex')), " ^
+        "  encode(digest($3::jsonb::text,'sha256'),'hex'), $4::text, now()) " ^
         "ON CONFLICT (path) DO UPDATE SET payload=EXCLUDED.payload, hash=EXCLUDED.hash, " ^
         "  author=EXCLUDED.author, updated_at=now()" in
       let _ =
         Io_lwt.Db.execute conn
           ~params:[ Pgx.Value.of_string path; Pgx.Value.of_string name;
-                    Pgx.Value.of_string fields_json; Pgx.Value.of_string author;
-                    Pgx.Value.of_string hash ]
+                    Pgx.Value.of_string fields_json; Pgx.Value.of_string author ]
           sql
       in
       ()
@@ -289,18 +287,18 @@ let upsert_route (conn : Store_db.conn) ~(branch_id : string) ~(route : string)
         Yojson.Safe.to_string
           (`Assoc [ ("route", `String route); ("handler", `String handler);
                     ("visibility", `String visibility) ]) in
-      let hash = hash_body body_json in
       let sql =
         "INSERT INTO tree_nodes (path, kind, type_name, payload, hash, author, updated_at) " ^
         "VALUES ($1::ltree, 'route', NULL, " ^
         "  jsonb_build_object('v',1,'kind','route','path',$1::text,'type','route','body',$2::jsonb, " ^
-        "    'author','system','doc',NULL,'hash',$3::text), $3::text, 'system', now()) " ^
+        "    'author','system','doc',NULL, " ^
+        "    'hash',encode(digest($2::jsonb::text,'sha256'),'hex')), " ^
+        "  encode(digest($2::jsonb::text,'sha256'),'hex'), 'system', now()) " ^
         "ON CONFLICT (path) DO UPDATE SET payload=EXCLUDED.payload, hash=EXCLUDED.hash, " ^
         "  updated_at=now()" in
       let _ =
         Io_lwt.Db.execute conn
-          ~params:[ Pgx.Value.of_string path; Pgx.Value.of_string body_json;
-                    Pgx.Value.of_string hash ]
+          ~params:[ Pgx.Value.of_string path; Pgx.Value.of_string body_json ]
           sql
       in
       ()
@@ -317,20 +315,20 @@ let insert_datum (conn : Store_db.conn) ~(type_name : string) ~(fields_json : st
     ~(author : string) : string option =
   (* id generated by PG; path via tree_datum_path (013) so seed vs user
      roots stay consistent with the SQL mirror. *)
-  let hash = hash_body fields_json in
   let sql =
     "WITH nid AS (SELECT gen_random_uuid() AS id) " ^
     "INSERT INTO tree_nodes (path, kind, type_name, payload, hash, author, updated_at) " ^
 "SELECT tree_datum_path($1::text, nid.id, $3::text, ''), 'datum', $1::text, " ^
     "  jsonb_build_object('v',1,'kind','datum', " ^
 "    'path', tree_datum_path($1::text, nid.id, $3::text, '')::text, " ^
-    "    'type',$1::text,'body',$2::jsonb,'author',$3::text,'doc',NULL,'hash',$4::text), " ^
-    "  $4::text, $3::text, now() " ^
+    "    'type',$1::text,'body',$2::jsonb,'author',$3::text,'doc',NULL, " ^
+    "    'hash',encode(digest($2::jsonb::text,'sha256'),'hex')), " ^
+    "  encode(digest($2::jsonb::text,'sha256'),'hex'), $3::text, now() " ^
     "FROM nid RETURNING tree_datum_id(path)::text" in
   let rows =
     Io_lwt.Db.execute conn
       ~params:[ Pgx.Value.of_string type_name; Pgx.Value.of_string fields_json;
-                Pgx.Value.of_string author; Pgx.Value.of_string hash ]
+                Pgx.Value.of_string author ]
       sql
   in
   (match rows with
@@ -347,19 +345,19 @@ let update_datum (conn : Store_db.conn) ~(type_name : string) ~(id : string)
      mirror trigger (tree_mirror_data_rows) purges the lens copy. With the
      guard the lens keeps its snapshot body and survives until merge/abandon.
      Take the first RETURNING row as a safety net against stale live paths. *)
-  let hash = hash_body fields_json in
   let sql =
     "UPDATE tree_nodes SET " ^
-    "  payload = jsonb_set(jsonb_set(payload,'{body}',$2::jsonb),'{hash}',to_jsonb($3::text)), " ^
-    "  hash = $3::text, updated_at = now() " ^
+    "  payload = jsonb_set(jsonb_set(payload,'{body}',$2::jsonb),'{hash}', " ^
+    "    to_jsonb(encode(digest($2::jsonb::text,'sha256'),'hex'))), " ^
+    "  hash = encode(digest($2::jsonb::text,'sha256'),'hex'), updated_at = now() " ^
     "WHERE kind='datum' AND tree_datum_id(path) = $1::uuid " ^
-    "  AND (type_name = $4 OR type_name IS NULL) " ^
+    "  AND (type_name = $3 OR type_name IS NULL) " ^
     "  AND NOT (path <@ 'data.l'::ltree) " ^
     "RETURNING tree_datum_id(path)::text" in
   let rows =
     Io_lwt.Db.execute conn
       ~params:[ Pgx.Value.of_string id; Pgx.Value.of_string fields_json;
-                Pgx.Value.of_string hash; Pgx.Value.of_string type_name ]
+                Pgx.Value.of_string type_name ]
       sql
   in
   (match rows with
@@ -403,7 +401,6 @@ let upsert_datum (conn : Store_db.conn) ~(path : string) ~(type_name : string)
   let is_placeholder =
     last_label = "" || last_label = "_" || last_label = "new"
   in
-  let hash = hash_body body_json in
   let run_sql ~params sql =
     try
       let rows = Io_lwt.Db.execute conn ~params sql in
@@ -427,8 +424,9 @@ let upsert_datum (conn : Store_db.conn) ~(path : string) ~(type_name : string)
 "SELECT tree_datum_path($1::text, nid.id, $3::text, ''), 'datum', $1::text, " ^
         "  jsonb_build_object('v',1,'kind','datum', " ^
 "    'path', tree_datum_path($1::text, nid.id, $3::text, '')::text, " ^
-        "    'type',$1::text,'body',$2::jsonb,'author',$3::text,'doc',NULL,'hash',$4::text), " ^
-        "  $4::text, $3::text, $5::text, now() " ^
+        "    'type',$1::text,'body',$2::jsonb,'author',$3::text,'doc',NULL, " ^
+        "    'hash',encode(digest($2::jsonb::text,'sha256'),'hex')), " ^
+        "  encode(digest($2::jsonb::text,'sha256'),'hex'), $3::text, $4::text, now() " ^
         "FROM nid ON CONFLICT (path) DO UPDATE SET " ^
         "  payload = EXCLUDED.payload, hash = EXCLUDED.hash, " ^
         "  author = EXCLUDED.author, " ^
@@ -438,7 +436,7 @@ let upsert_datum (conn : Store_db.conn) ~(path : string) ~(type_name : string)
       in
       run_sql ~params:
         [ Pgx.Value.of_string type_name; Pgx.Value.of_string body_json;
-          Pgx.Value.of_string author; Pgx.Value.of_string hash;
+          Pgx.Value.of_string author;
           (match rank with Some r -> Pgx.Value.of_string r | None -> Pgx.Value.null) ]
         sql
   else if type_name = "" then Error "upsert_datum: empty type_name"
@@ -447,8 +445,9 @@ let upsert_datum (conn : Store_db.conn) ~(path : string) ~(type_name : string)
       "INSERT INTO tree_nodes (path, kind, type_name, payload, hash, author, rank, updated_at) " ^
       "VALUES ($1::ltree, 'datum', $2::text, " ^
       "  jsonb_build_object('v',1,'kind','datum','path',$1::text,'type',$2::text, " ^
-      "    'body',$3::jsonb,'author',$4::text,'doc',NULL,'hash',$5::text), " ^
-      "  $5::text, $4::text, $6::text, now()) " ^
+      "    'body',$3::jsonb,'author',$4::text,'doc',NULL, " ^
+      "    'hash',encode(digest($3::jsonb::text,'sha256'),'hex')), " ^
+      "  encode(digest($3::jsonb::text,'sha256'),'hex'), $4::text, $5::text, now()) " ^
       "ON CONFLICT (path) DO UPDATE SET " ^
       "  payload = EXCLUDED.payload, hash = EXCLUDED.hash, " ^
       "  author = EXCLUDED.author, " ^
@@ -459,7 +458,6 @@ let upsert_datum (conn : Store_db.conn) ~(path : string) ~(type_name : string)
     run_sql ~params:
       [ Pgx.Value.of_string path; Pgx.Value.of_string type_name;
         Pgx.Value.of_string body_json; Pgx.Value.of_string author;
-        Pgx.Value.of_string hash;
         (match rank with Some r -> Pgx.Value.of_string r | None -> Pgx.Value.null) ]
       sql
 
@@ -1221,7 +1219,6 @@ let upsert_hier (conn : Store_db.conn) ~(path : string) ~(kind : string)
              (match uuid_clash with
               | Some err -> (Error err)
               | None ->
-                  let hash = hash_body (Yojson.Safe.to_string body) in
                   (* sibling-order: an explicit rank lands on INSERT and on
                      CONFLICT UPDATE (COALESCE keeps the existing rank when
                      the caller passes none — tree/upsert never clobbers
@@ -1230,8 +1227,9 @@ let upsert_hier (conn : Store_db.conn) ~(path : string) ~(kind : string)
                     "INSERT INTO tree_nodes (path, kind, type_name, payload, hash, author, rank, updated_at) "
                     ^ "VALUES ($1::ltree, $2::text, $3::text, "
                     ^ "  jsonb_build_object('v',1,'kind',$2::text,'path',$1::text,'type',$3::text, "
-                    ^ "    'body',$4::jsonb,'author',$5::text,'doc',NULL,'hash',$6::text), "
-                    ^ "  $6::text, $5::text, $7::text, now()) "
+                    ^ "    'body',$4::jsonb,'author',$5::text,'doc',NULL, "
+                    ^ "    'hash',encode(digest($4::jsonb::text,'sha256'),'hex')), "
+                    ^ "  encode(digest($4::jsonb::text,'sha256'),'hex'), $5::text, $6::text, now()) "
                     ^ "ON CONFLICT (path) DO UPDATE SET "
                     ^ "  kind = EXCLUDED.kind, type_name = EXCLUDED.type_name, "
                     ^ "  payload = EXCLUDED.payload, hash = EXCLUDED.hash, "
@@ -1249,7 +1247,6 @@ let upsert_hier (conn : Store_db.conn) ~(path : string) ~(kind : string)
                             ; Pgx.Value.of_string type_name
                             ; Pgx.Value.of_string body_json
                             ; Pgx.Value.of_string author
-                            ; Pgx.Value.of_string hash
                             ; (match rank with
                                | Some r -> Pgx.Value.of_string r
                                | None -> Pgx.Value.null)
@@ -1846,13 +1843,13 @@ let upsert_link (conn : Store_db.conn) ~(path : string)
             | b -> b
             | exception _ -> `Null
           in
-          let hash = hash_body (Yojson.Safe.to_string body) in
           let sql =
             "INSERT INTO tree_nodes (path, kind, type_name, payload, hash, author, updated_at) "
             ^ "VALUES ($1::ltree, 'link', NULL, "
             ^ "  jsonb_build_object('v',1,'kind','link','path',$1::text,'type','link', "
-            ^ "    'body',$2::jsonb,'author',$3::text,'doc',NULL,'hash',$4::text), "
-            ^ "  $4::text, $3::text, now()) "
+            ^ "    'body',$2::jsonb,'author',$3::text,'doc',NULL, "
+            ^ "    'hash',encode(digest($2::jsonb::text,'sha256'),'hex')), "
+            ^ "  encode(digest($2::jsonb::text,'sha256'),'hex'), $3::text, now()) "
             ^ "ON CONFLICT (path) DO UPDATE SET "
             ^ "  payload = EXCLUDED.payload, hash = EXCLUDED.hash, "
             ^ "  author = EXCLUDED.author, updated_at = now() "
@@ -1865,7 +1862,6 @@ let upsert_link (conn : Store_db.conn) ~(path : string)
                    [ Pgx.Value.of_string path
                    ; Pgx.Value.of_string (Yojson.Safe.to_string body)
                    ; Pgx.Value.of_string author
-                   ; Pgx.Value.of_string hash
                    ]
                  sql
              in

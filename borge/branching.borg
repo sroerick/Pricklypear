@@ -437,12 +437,14 @@
              a view of the same rows (ahead = modified
              in to, absent in from at matching gens)
            - merge: upserts ONLY ahead/ahead-new/
-             diverged paths (diff-based merge TODO
-             closes); conflict report = the diverged
-             set with real bases (conflict-detection
-             TODO closes; blocking resolution stays v2
-             per merge's recorded policy); on success
-             source and target base_gens advance
+             paths (diff-based merge TODO
+             closes); DIVERGED paths are NEVER
+             auto-applied — they come back as the
+             conflict report and resolve only by an
+             explicit re-define + re-merge (obituary
+             rule: no silent reversals; LWW resolution
+             retired 2026-09); on success source and
+             target base_gens advance
            - promote: after landing, offer unbind of
              synced pins on the source
 
@@ -485,11 +487,11 @@
                /diff alignment. list_overrides deleted
                in this phase, not before.
            S3  merge + promote consume the statuses;
-               conflict report = diverged set; base_gen
-               advancement tested end-to-end
-               (fork -> edit both sides -> merge ->
-               status clean again = git's post-merge
-               state).
+               diverged = conflict report only, never
+               auto-applied; base_gen advancement tested
+               end-to-end (fork -> edit both sides ->
+               merge -> status clean again = git's
+               post-merge state).
     |))
    )
    (verify
@@ -498,7 +500,7 @@
     (test "statuses: empty fork = clean; own new fn = ahead-new; promote-then-status = synced; parent-only edit = behind; both-sides edit = diverged; identical pin = synced; unbind returns it to clean")
     (test "equivalence: diff_branches reports the diverged fixture as modified head-vs-head, agreeing with branch_status")
     (smoke "S2: /branches renders dirty + synced columns; branch detail status table with unbind hint on synced; (branch-changes) class = status; list_overrides has no callers")
-    (smoke "S3: merge upserts only ahead/diverged names (merged 0 rows when all synced); conflict report names the diverged set; base_gen advances post-commit"))
+    (smoke "S3: merge upserts only ahead/ahead-new names; diverged names are conflict-report-only, never auto-applied (merged 0 rows when all synced); base_gen advances post-commit"))
   )
   (subsection agent-promote
    (doc "Agent promotes from its workshop into the parent human's personal")
