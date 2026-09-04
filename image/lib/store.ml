@@ -467,15 +467,18 @@ let hash_eq (x : string option) (y : string option) : bool =
   | _ -> false
 
 (* The spec's decision table, as code. Comparisons are hash equality with
-   ABSENT (None) as its own value. *)
+   ABSENT (None) as its own value. DELEGATES to Branch_algebra.classify —
+   the pure decision table lives there (formal-verification island 1, one
+   table shared by the property tests and the store). *)
 let classify_status ~(own : bool) ~(b : string option) ~(p : string option)
     ~(a : string option) : st_status =
-  if not own then (if hash_eq p a then SClean else SBehind)
-  else if hash_eq b p then SSynced
-  else if hash_eq p a then
-    (match a with None -> SAheadNew | Some _ -> SAhead)
-  else if hash_eq b a then SBehind   (* pin holds the base; parent moved *)
-  else SDiverged
+  match Branch_algebra.classify ~own ~b ~p ~a with
+  | Branch_algebra.Clean -> SClean
+  | Branch_algebra.AheadNew -> SAheadNew
+  | Branch_algebra.Ahead -> SAhead
+  | Branch_algebra.Behind -> SBehind
+  | Branch_algebra.Diverged -> SDiverged
+  | Branch_algebra.Synced -> SSynced
 
 (* One round trip per call: chain walk + version resolution for all three
    kinds (fn/type/route) + live-pin existence from the scaffolding tables.
