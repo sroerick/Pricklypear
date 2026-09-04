@@ -1,5 +1,6 @@
 (** Unit tests for tree_store pure helpers: label codec round-trip,
-    path constructors, hashing, envelope. No DB. *)
+    path constructors. No DB. (Hashing moved DB-side by the 2026-09
+    hash-domain unification; see tree_version_shadow_test.) *)
 
 open Alcotest
 module T = Pricklypear_image_lib.Tree_store
@@ -70,26 +71,11 @@ let test_paths () =
     (String.length (String.concat "" (String.split_on_char '.' p)) >= 0
      && List.length (String.split_on_char '.' p) = 4)
 
-let test_hash () =
-  check string "sha256(abc)"
-    "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-    (T.hash_body "abc")
-
-let test_envelope () =
-  let env =
-    T.envelope ~kind:"fn" ~path:"b.x.fn.y" ~type_:"fn"
-      ~body:(`String "(lambda ())") ~author:"admin" ~doc:(Some "d")
-  in
-  match env with
-  | `Assoc kvs ->
-      check (option string) "kind" (Some "fn")
-        (match List.assoc_opt "kind" kvs with
-         | Some (`String s) -> Some s | _ -> None);
-      check (option string) "doc" (Some "d")
-        (match List.assoc_opt "doc" kvs with
-         | Some (`String s) -> Some s | _ -> None);
-      check bool "has hash" true (List.mem_assoc "hash" kvs)
-  | _ -> fail "envelope not assoc"
+(* hash + envelope OCaml builders were REMOVED by the 2026-09 hash-domain
+   unification (one-tree.hash-domain): node hashes are computed DB-side
+   over PG canonical jsonb text, one domain for every writer (Tree_store
+   upserts + the 009 mirror). The domain is guarded by the cross-writer
+   equality test in tree_version_shadow_test (hash domain cross-writer). *)
 
 let test_validate () =
   let open T in
@@ -128,7 +114,5 @@ let () =
                ; test_case "uuid label" `Quick test_uuid_label ]
     ; "paths", [ test_case "constructors" `Quick test_paths
                ; test_case "path_label" `Quick test_path_label ]
-    ; "envelope", [ test_case "hash" `Quick test_hash
-                  ; test_case "build" `Quick test_envelope ]
     ; "typed", [ test_case "validate_fields" `Quick test_validate ]
     ]
