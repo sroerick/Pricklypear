@@ -1,6 +1,7 @@
 (project pricklypear-local-first
  (doc "Pricklypear book chapter: local-first — a local lens is a branch of the one tree whose root lives on the client. The pad detaches, roots independently, and grafts back. This revisits prim-seam's 'no second store on the client' hard-out: the hard-out was written against an uncoordinated client copy; a lens is a governed copy whose merge semantics already exist (three-way tree-diff, branching.borg / one-tree.branching-interaction). Same Prim_call seam, same tree, different lens policy.")
  (status planned)
+ (* agent note (|2026-09-04 collab reconcile (with prim-seam rename + branching.shared-data-spaces, same date): the replication unit gains a PLANNED fourth component — data.s.<space>.* member spaces — under the data.shared pull+propose/server-authoritative policy; sync-conflicts' policy menu names space rows in scope for LAPTOP-LENS divergence only. Single-writer-per-lens is PRESERVED: space subtrees are never in a lens's write scope. What this chapter deliberately does NOT become: the collaboration model for online server-resident identities — that need (a shared todo list between a human and their agent users) is a visibility/compartment question (RLS + membership), not a sync question, and lives in branching.shared-data-spaces. Also recorded same date: prim-seam.borg is the renamed remote-eval.borg — the mechanism/policy split stands (mechanism there, lens policy here).|) *)
  (* agent note (|2026-08-14 chapter created from the local-first design discussion. Thesis: one-tree + user-owned data + three-way tree-diff merge are, almost without addition, the local-first primitives. The 2026-08-02 /data revision (data.u.<user>.*) was made for multi-user isolation and turns out to also fix the replication unit — the isolation boundary and the replication boundary are the same shape. prim-seam is the online-remote mode (local compute, remote data plane); local-first is the offline-capable mode (local lens, sync on reconnect). One seam, two policies. The cactus metaphor (pads = lenses, grafting = merge, pads = lenses, grafting = merge) is evocative but is NOT load-bearing in this spec text — it lives in prose, not the source of truth. (2026-08-29 NAMING UPDATE: 'glochid' is RESERVED for the local-first harness itself — the detachable spine you pull off the pad and work with; see borge/agent.borg. The conflict work this note once called glochids is named sync-conflicts below, no metaphor.)
 
  2026-12 campaign 8.0 plan pass: lens-model + replication-units pinned for the 8.1 make (details CONTRACT blocks below). A lens = a CHILD BRANCH of the checked-out branch via (fork) / Store.fork_branch (P5 empty-lens fork); the server branch stays the parent; single-writer-per-lens pins to the branch model; code sync = branch-pointer move (promote/merge), data sync = in-place reconcile. Replication unit = data.u.user, data.shared, b.lens plus branch ancestry; path-prefix RLS confinement is the replication boundary. Sync-negotiation handle = the branch,generation coordinate — the same migration-017 branch_generations / gen-now clock prim-seam.caching already keys on (one counter, three consumers). Status stays planned; the 8.1 make flips.|) *)
@@ -187,14 +188,21 @@
          WHAT A CLIENT REPLICATES:
            - data.u.<user>.<type>.<id>  — the user's own data (full)
            - data.shared.<type>.<id>   — shared/seed content (read-mostly)
+           - data.s.<space>.<type>.<id> — PLANNED: member spaces
+             (branching.shared-data-spaces) the identity belongs to;
+             replicates under the data.shared READ+PROPOSE policy
+             (see sync), never inside the lens's single-writer scope
            - b.<lens>.{fn,type,route,pkg}.* — the forked code lens
          NOTHING ELSE. Another user's data.u.<other>.* never
          replicates to this client — not by a policy added for
          local-first, but by the path-prefix confinement that already
          governs reads (one-tree RLS floor). The client cannot ask
          for, and the server cannot send, a subtree the client's
-         identity cannot read. Replication is authorized reads,
-         batched.
+         identity cannot read. (A member space is NOT another user's
+         u-subtree: it is a shared compartment the identity has read
+         rights to BY MEMBERSHIP, so it belongs inside the replication
+         unit under the same authorized-reads argument.) Replication
+         is authorized reads, batched.
 
          CODE LENS SCOPE. The code lens replicated is the forked
          branch and its ancestry (defs resolve through inheritance,
@@ -224,6 +232,10 @@
          authorized-read subtree:
            data.u.<user>.*                        the user's own data (full)
            data.shared.*                          read-mostly seed
+           data.s.<space>.*                       member spaces (PLANNED —
+                                                  branching.shared-data-spaces;
+                                                  pull + propose, server-
+                                                  authoritative, like shared)
            b.<lens>.{fn,type,route,pkg}.*         forked code lens (pinned at fork)
            PLUS the branch ancestry the lens resolves through (the
            system/main + parent overrides a server-side eval of the
@@ -424,6 +436,21 @@
          devices. data.shared.* is pulled (server-sole-writer);
          client proposals into shared go through an explicit
          merge-request, not direct write.
+
+         SPACE SUBTREES (PLANNED — branching.shared-data-spaces)
+         INHERIT THE data.shared POLICY VERBATIM. A space
+         (data.s.<space>.*) is multi-writer on the server (a human
+         plus their agent identities, all online), so it is OUTSIDE
+         every client lens's single-writer scope — the single-writer-
+         per-lens invariant is untouched because a space is never in
+         a lens's write scope. The lens pulls its member spaces; the
+         server stays authority; a divergent local edit to a space
+         row is surfaced at sync (never silently resolved; server
+         copy kept) and lands via merge-request. Server-resident
+         identities write spaces DIRECTLY — no reconciliation exists
+         because no divergence exists. sync/push stays data.u.*-only
+         in v1 transport; spaces join the round when they land in
+         the replication unit above.
 
          LAST-SYNCED AS THE COMMON ANCESTOR. Three-way merge needs a
          common ancestor. The client records the (branch, generation)
