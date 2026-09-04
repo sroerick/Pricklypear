@@ -1,0 +1,3 @@
+(executable
+ (name soil_hello)
+ (libraries wayland wayland.protocols eio eio_main unix yojson logs logs.fmt))
