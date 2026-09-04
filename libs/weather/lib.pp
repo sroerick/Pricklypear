@@ -24,6 +24,7 @@
           (html/attr "class" "muted")
           "Browser fetch via Open-Meteo. Location is stored in this browser only.")
         (weather/widget)))))
+  "Full weather page HTML with the widget."
 
 (define weather/script
   (lambda
@@ -116,6 +117,7 @@
         "}"
         "fetchWx(loadLoc());"
         "})();"))))
+  "The JS widget body: browser fetch + geocode + render (ASCII-safe strings)."
 
 (define weather/style
   (lambda
