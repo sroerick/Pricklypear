@@ -461,17 +461,15 @@ let list_own_routes (t : t) ~(branch_id : string)
      a = parent-chain value at base_gen (the fork-time base)
      own = a live scaffolding row exists on the branch (the pin)
 
-   HASH DOMAIN (make-phase lesson, 2026-08-28): the STORED
-   tree_versions.hash column is NOT comparable across write paths —
-   tree-first writes (Tree_store.hash_body over compact OCaml JSON) and
-   mirror writes (009 trigger digest over PG jsonb::text, which spaces
-   after colons) produce DIFFERENT digests for identical bodies (020
-   itself calls the stored hash "a consistency artifact, not content").
-   Comparing stored hashes mislabeled identical pins as diverged. Status
-   therefore computes digest((body->'body')::text) AT QUERY TIME — one
-   canonical domain (PG jsonb::text) regardless of which path wrote the
-   row. The stored column stays for retention/GC bookkeeping and
-   same-path gen-diff; a global rehash is tree-time's scope, not ours.
+   HASH DOMAIN (unified 2026-09, migration 027 / one-tree.hash-domain):
+   every writer — Tree_store upserts AND the 009 mirror triggers — now
+   computes the hash DB-SIDE over PG's canonical jsonb text of the body
+   (digest(body_jsonb::text)). One canonicalization, writer-independent.
+   The 2026-08-28 cross-writer mismatch (OCaml compact-JSON digests vs
+   mirror jsonb::text digests) is gone, the 027 backfill converted old
+   rows, so status reads the STORED tree_versions.hash column directly
+   (no more per-row query-time re-digest). The stored column is guarded
+   by the cross-writer hash-equality test in tree_store_test.
 
    Tombstones are the reserved 019/020 marker (body->_tombstone). Deletion
    on a branch REVEALS the parent binding (unbind semantics), so there is
@@ -513,15 +511,18 @@ let hash_eq (x : string option) (y : string option) : bool =
   | _ -> false
 
 (* The spec's decision table, as code. Comparisons are hash equality with
-   ABSENT (None) as its own value. *)
+   ABSENT (None) as its own value. DELEGATES to Branch_algebra.classify —
+   the pure decision table lives there (formal-verification island 1, one
+   table shared by the property tests and the store). *)
 let classify_status ~(own : bool) ~(b : string option) ~(p : string option)
     ~(a : string option) : st_status =
-  if not own then (if hash_eq p a then SClean else SBehind)
-  else if hash_eq b p then SSynced
-  else if hash_eq p a then
-    (match a with None -> SAheadNew | Some _ -> SAhead)
-  else if hash_eq b a then SBehind   (* pin holds the base; parent moved *)
-  else SDiverged
+  match Branch_algebra.classify ~own ~b ~p ~a with
+  | Branch_algebra.Clean -> SClean
+  | Branch_algebra.AheadNew -> SAheadNew
+  | Branch_algebra.Ahead -> SAhead
+  | Branch_algebra.Behind -> SBehind
+  | Branch_algebra.Diverged -> SDiverged
+  | Branch_algebra.Synced -> SSynced
 
 (* One round trip per call: chain walk + version resolution for all three
    kinds (fn/type/route) + live-pin existence from the scaffolding tables.
@@ -545,8 +546,7 @@ let branch_status_conn (conn : conn) ~(branch_id : string)
           "  WHERE v.kind IN ('fn','type','route') "^
           "), heads AS ( "^
           "  SELECT DISTINCT ON (kind, key, depth) kind, key, depth, "^
-          "         encode(digest((body->'body')::text,'sha256'),'hex') "^
-          "           AS chash, body "^
+          "         hash AS chash, body "^
           "  FROM vers ORDER BY kind, key, depth, gen DESC "^
           "), b_res AS ( "^
           "  SELECT DISTINCT ON (kind, key) kind, key, chash AS b_hash "^
@@ -568,8 +568,7 @@ let branch_status_conn (conn : conn) ~(branch_id : string)
           "                                   FROM branches WHERE id = $1)) "^
           "), heads_base AS ( "^
           "  SELECT DISTINCT ON (kind, key, depth) kind, key, depth, "^
-          "         encode(digest((body->'body')::text,'sha256'),'hex') "^
-          "           AS chash, body "^
+          "         hash AS chash, body "^
           "  FROM vers_base ORDER BY kind, key, depth, gen DESC "^
           "), a_res AS ( "^
           "  SELECT DISTINCT ON (kind, key) kind, key, chash AS a_hash "^
@@ -699,14 +698,23 @@ let delete_function_on_branch (t : t) ~(branch_id : string) ~(name : string)
             (Printexc.to_string exn);
           false)
 
-(** Copy selected function names from source branch to target (upsert). *)
+(** Copy selected function names from source branch to target (upsert).
+    ATOMIC (branching.promote): the whole promote — fn upserts, route
+    upserts, head-hash refresh — runs in ONE SERIALIZABLE transaction;
+    any failure rolls back everything, so a crash mid-promote can no
+    longer leave a half-promoted target (merge_branch already had this
+    shape; this closes the same gap for promote). *)
 let promote_functions (t : t) ~(source_id : string) ~(target_id : string)
     ~(names : string list) : int =
   match t.conn with
   | None -> 0
   | Some _ when names = [] -> 0
-  | Some conn ->
+  | Some _ ->
       (try
+        with_transaction t (fun conn ->
+        match conn with
+        | None -> 0
+        | Some conn ->
       let n =
             List.fold_left
               (fun acc name ->
@@ -764,12 +772,20 @@ let promote_functions (t : t) ~(source_id : string) ~(target_id : string)
                 ())
               names
           in
+          (* 009 mirror triggers are DEFERRED to COMMIT; force them to fire
+             NOW inside the tx so the head-hash refresh sees the promoted
+             nodes. Firing early is safe — same triggers, same order, just
+             before commit instead of at it — and a mirror failure here
+             rolls the WHOLE promote back, which is the point. *)
+          let (_ : Pgx.row list) =
+            exec conn "SET CONSTRAINTS ALL IMMEDIATE"
+          in
           let () = Tree_store.recompute_head_hash conn ~branch_id:target_id in
-          n
-    with exn ->
-      Printf.eprintf "[store] promote_functions: %s\n"
-            (Printexc.to_string exn);
-          0)
+          n)
+      with exn ->
+        Printf.eprintf "[store] promote_functions: %s\n"
+          (Printexc.to_string exn);
+        0)
 
 (* [inherited_fn_body_matches conn ~branch_id ~name ~body_json]: walks
    the PARENT chain of [branch_id] (the branch itself is excluded, so
@@ -1495,11 +1511,13 @@ let fork_branch (t : t) ~(parent_id : string) ~(owner : string)
    (session.ml); Store.merge_branch just does the SQL.
 
    branching.branch-status S3: status-driven merge. Into the source's
-   PARENT: upsert ONLY names the source moved since base_gen (ahead-new /
-   ahead / diverged); behind names would clobber the parent's newer work
-   and are skipped; synced/clean names are already identical. Conflict
-   report = the diverged set (both sides moved since the fork base) —
-   genuine conflict detection; resolution stays LWW (report-only).
+   PARENT: upsert ONLY names the source moved since base_gen that the
+   parent did NOT also move (ahead-new / ahead); behind names would
+   clobber the parent's newer work and are skipped; synced/clean names
+   are already identical. DIVERGED names (both sides moved since the
+   fork base) are NEVER auto-applied: they are returned in the conflict
+   report and need an explicit human decision (obituary rule — no
+   silent reversals; resolution is re-define + re-merge, not LWW).
    Any other target (no shared base): head-vs-head fallback — upsert
    source fns whose body differs from the target's own row, no report.
    TODO: schema-merge for type_defs — only main accepts schema changes
@@ -1588,11 +1606,16 @@ let merge_branch (t : t) ~(source_id : string) ~(target_id : string)
                 let rows = branch_status_conn conn ~branch_id:source_id in
                 let fns =
                   List.filter (fun r -> r.st_kind = DiffFn) rows in
+                (* DIVERGED is deliberately NOT in the applied set:
+                   both sides moved, so auto-applying the source would
+                   silently reverse the parent's work. Diverged names
+                   come back as conflicts; re-define + re-merge resolves
+                   them (branching.merge S3, 2026-09 decision). *)
                 let ups =
                   List.filter_map
                     (fun r ->
                       match r.st_status with
-                      | SAheadNew | SAhead | SDiverged -> Some r.st_name
+                      | SAheadNew | SAhead -> Some r.st_name
                       | _ -> None)
                     fns
                 in

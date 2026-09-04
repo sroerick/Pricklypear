@@ -6,9 +6,10 @@
     Verifies: fork records base_gen = parent head gen; empty fork reads
     clean; own new fn reads ahead-new; post-promote pin reads synced;
     parent-only move reads behind; both-sides move reads diverged; merge
-    upserts only ahead/diverged and ADVANCES base_gen (post-merge the
-    branch reads synced, not diverged); status agrees with diff_branches
-    head-vs-head on the diverged fixture. *)
+    upserts only ahead/ahead-new and ADVANCES base_gen (diverged is
+    conflict-only — never auto-applied — and reclassifies ahead vs the
+    advanced base); status agrees with diff_branches head-vs-head on the
+    diverged fixture. *)
 
 module S = Pricklypear_image_lib.Store
 
@@ -101,9 +102,12 @@ let cleanup_branch store ~branch_id =
       "DELETE FROM branches WHERE id = $1")
 
 (** The full lifecycle: fork -> ahead-new -> diverged -> merge advances
-    base_gen -> synced. Also covers clean (empty fork), behind (parent
-    moves, child does not), synced-by-promote, and the diff_branches
-    equivalence on the diverged fixture. *)
+    base_gen -> the diverged name reclassifies ahead (conflict-only
+    merge: diverged is never auto-applied; the child keeps its own
+    change vs the advanced base until a human resolves). Also covers
+    clean (empty fork), behind (parent moves, child does not),
+    synced-by-promote, and the diff_branches equivalence on the
+    diverged fixture. *)
 let test_status_lifecycle () =
   with_store (fun store ->
       match S.conn_of store with
@@ -171,8 +175,11 @@ let test_status_lifecycle () =
                let rows = S.branch_status store ~branch_id:child_id in
                Alcotest.(check bool) "post-promote pin = synced" true
                  (status_of rows ~name:newfn = Some S.SSynced);
-               (* merge child -> main: only ahead/diverged names upsert;
-                  base_gen advances; the diverged name reads synced *)
+               (* merge child -> main: only ahead/ahead-new names upsert;
+                  base_gen advances; the diverged name is conflict-only
+                  (never auto-applied) and reclassifies ahead vs the new
+                  base — the child still holds its own change until a
+                  human resolves (re-define + re-merge). *)
                let base_before = base_gen_of store ~branch_id:child_id in
                (match
                   S.merge_branch store ~source_id:child_id
@@ -186,9 +193,18 @@ let test_status_lifecycle () =
                  (Int64.compare (base_gen_of store ~branch_id:child_id)
                     base_before
                  > 0);
+               (* target kept its own body — diverged was NOT applied *)
+               (match
+                  S.lookup_function_on_branch store ~branch_id:main_id
+                    ~name:shared
+                with
+               | Some (body, _, _, _) ->
+                   Alcotest.(check bool) "target not overwritten" true
+                     (body = expr_of_int 3)
+               | None -> Alcotest.fail "target row vanished");
                let rows = S.branch_status store ~branch_id:child_id in
-               Alcotest.(check bool) "post-merge diverged = synced" true
-                 (status_of rows ~name:shared = Some S.SSynced);
+               Alcotest.(check bool) "post-merge diverged = ahead" true
+                 (status_of rows ~name:shared = Some S.SAhead);
                Alcotest.(check bool) "post-merge pin still synced" true
                  (status_of rows ~name:newfn = Some S.SSynced);
                (* cleanup *)

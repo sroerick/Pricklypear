@@ -1,0 +1,134 @@
+(project pricklypear-filmstrip
+ (doc "Pricklypear book chapter: FILMSTRIP — the habitat shell. Two infinite horizontal strips stacked iTunes-style: the top strip is a Miller-column cascade (structural menus, not popups), the bottom strip is the niri-style row of content panes. Panes are ordinary routes in partial mode — they don't know they're windowed. Workspace state is a per-user row; the desktop persists in the same object store as the todos it displays.")
+ (status planned)
+ (* agent note (|2026-09 DESIGN SESSION (with pads.borg): the user's sketch (waybar + three small top panels + one large content area, \"kind of how iTunes is laid out\") plus \"two separate infinite horizontal panes\" crystallized the model. Prior art named in-session: iTunes column browser / Finder column view / ranger / Smalltalk browser for the top (Miller-column cascade); niri (and not-quite acme) for the bottom. The point that made it click: the cascade is STATE, not styling — which is why the filmstrip idea never modalized in CSS. Filmstrip is the FIRST consumer of pads vocabulary but is itself buildable stringly as a product; pads migration makes it provable. Dialog/overlay needs come from pads/layers-modality; filmstrip keeps floats for genuinely transient things only — navigation is structural.|) *)
+ (convention ocaml-dune)
+
+ (section filmstrip-shell
+  (doc "The default habitat view. Screen model: a column of two rows —
+      the cascade strip (short, iTunes browser proportions) over the
+      content strip (grow). Both scroll horizontally and independently;
+      both are ordinary pad rows with (scroll . x) once pads exists.
+      Panes do not know they are windowed: a pane is any route
+      dispatched in partial mode (HX-Request on — the route gate's
+      existing fragment path, the hyper/visit trick productized). All
+      htmx inside a pane works unchanged, targeting its own fragment.")
+
+  (subsection workspace-model
+   (doc "Per-user workspace row: two sequences plus focus. cascade = an
+       ordered crumb path; content = an ordered list of pane records
+       {id route width}; focus = (strip . index). Open/close/focus/
+       width-preset are row mutations rendered back as swaps — the
+       strip follows niri's set-column-width presets (third / half /
+       full), never free pixel widths. Sessions persist: close the
+       laptop, the strip is where you left it, because the row is
+       Postgres like everything else grown in the garden.")
+   (details
+    (doc (|
+         ROW SHAPE (target):
+           (ws (user)
+             (cascade (list \"packages\" \"todo\" \"today\"))
+             (content (list (pane todo/today 'half)
+                            (pane notes/inbox 'third)))
+             (focus (cons 'content 0)))
+         EPHEMERAL CORNER (pads/layers-modality rule applied): scroll
+         position, hovered pane, live-drag in progress — transient,
+         keyed by pane id, patched around on sync; never rendered from.
+    |))
+   )
+   (implements libs/filmstrip/lib.pp)
+   (status planned)
+  )
+
+  (subsection cascade-protocol
+   (doc "The top strip is a Miller-column cascade: column N's selection
+       determines column N+1; the deepest selection acts on the content
+       strip. One function per package makes it filmstrip-native:
+       (pkg/browse path) -> (columns . leaf?). Clicking an entry at
+       depth d truncates the path to d, appends the choice, swaps the
+       tail columns. Leaf action opens-or-focuses a content pane.
+       Menus as STRUCTURE, not popups — plan 9's menus-are-text moved
+       from overlay into chrome; the float band survives only for
+       genuinely transient things (confirmations, plumbing menus,
+       notifications).")
+   (details
+    (doc (|
+         BROWSE IS THE WHOLE TRICK. Every package already has the
+         shape, it just renders it wrong today:
+           notes     outline headings walk down
+           calendar  year -> month -> day
+           bible     book -> chapter -> verse (dabar/strongs adjacent)
+           contacts  group -> person
+           todo      list -> item
+         DECISION RECORDED: cascade is GLOBAL v1 — one crumb path for
+         the shell, iTunes-style. Per-pane cascades (each content pane
+         carrying its own crumb path, workspace = N uniform cascade+
+         content columns) is the elegant unification but doubles the
+         state surface; revisit after v1 is dogfooded. NOTIFICATIONS:
+         transient cards in the cascade strip (waybar's \"pi finished\"
+         earns a home), promotable into content panes or dismissed —
+         filmstrip gives notifications a place to LIVE that isn't a
+         popup.
+    |))
+   )
+   (status planned)
+  )
+
+  (subsection pane-protocol
+   (doc "A pane = route dispatched in-process with HX-Request on, the
+       route gate's existing fragment path. Zero-JS hotkeys: htmx key
+       filters on the shell body (keydown[altKey&&key=='ArrowLeft'] and
+       kin) POST focus/width/open to filmstrip routes; the server owns
+       which pane wears .focused and answers with OOB class swaps.
+       Optional JS is quarantined to ONE static file and buys only
+       scroll-into-view smoothness and horizontal wheel mapping —
+       nothing semantic. Twin-pane mode is a first-class pane kind for
+       the pads migration: one column showing [old string render |
+       pads-lowered render | soup/diff badge] — drift as something you
+       LOOK at, pads/drift-proofing made interactive.")
+   (details
+    (doc (|
+         NO NEW SUBSTRATE inventory (why this is a product, not a
+         research project): route/lookup + route/dispatch with the
+         header seam already exist; the route gate already serves
+         partial mode; css/sheet + theme/ extend to ~50 lines of strip
+         CSS; the workspace row is data_rows; the only optional
+         non-Nopales artifact is the quarantined scroll.js. Nothing in
+         image/ moves for v1.
+    |))
+   )
+   (status planned)
+  )
+
+  (subsection shell-events
+   (doc "Open: launcher picks a route, POST /filmstrip/open, server
+       appends the pane record and dispatches the route — fragment goes
+       beforeend into the strip. Close/width/focus likewise: row
+       mutation, then minimal OOB swaps (this is the ops-contract of
+       pads worn by the web backend before pads exists — the shell is
+       the ops pilot). Dialogs and menus follow pads/layers-modality:
+       a #layers sibling of the strips takes float/scrim nodes; modal
+       = router scope while the node lives.")
+   (verify
+    (smoke "open todo -> strip gains pane with todo partial; interactions inside pane swap in-place")
+    (smoke "alt+arrows move .focused between panes with no JS")
+    (smoke "workspace row round-trip: reload restores strip order/widths/focus")
+    (smoke "cascade: packages -> todo -> today opens the today pane; truncation re-walks"))
+   (status planned)
+  )
+
+  (subsection roadmap-tiers
+   (doc "Where filmstrip points once the web product runs: (1) pads
+       migration makes the shell a pad tree — the same workspace value
+       then lowers to pads/render-ansi for a terminal desktop beside
+       pp-eval, and the twin-pane verify loop runs the port route by
+       route. (2) The native tier (river-protocol shim, C/clay soil)
+       consumes the SAME two-sequence workspace: policy events are
+       Lisp-frequency; frames never eval (pads/renderer-dialects
+       latency non-goal). (3) Multi-user + one seat stays the known
+       weirdness: single seat resolves to admin's workspace row; per-
+       identity strips are a later flourish, not a v1 promise.")
+   (status planned)
+  )
+ )
+)
