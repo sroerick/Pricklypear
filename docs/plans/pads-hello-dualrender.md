@@ -194,10 +194,10 @@ the NEXT pass after this loop exists); CSS/theme port.
 
 ## 6. Acceptance checklist
 
-- [ ] `dune build @all` clean; `dune runtest --force` as before (no new failures)
-- [ ] `scripts/dev.sh start` → `curl -u admin:admin localhost:18080/hello` serves the card
-- [ ] `scripts/smoke_pads_hello.py` green (byte-identity, legacy vs pads)
-- [ ] `soil-hello --frames 60 --scene fixture.json` exits 0, window visible on Hyprland
-- [ ] `soil-hello --frames 60` (live eval path) renders identically to V1 content
-- [ ] V3: greeting text edit reflects in both renders with no shim/route edits
-- [ ] `borge check .` shows no NEW failures; touched `.borg` files balance
+- [x] `dune build @all` clean; `dune runtest --force` as before (no new failures)
+- [x] `scripts/dev.sh start` → `curl -u admin:admin localhost:18080/hello` serves the card
+- [x] `scripts/smoke_pads_hello.py` green (byte-identity, legacy vs pads)
+- [x] `soil-hello --frames 60 --scene fixture.json` exits 0, window visible on Hyprland
+- [x] `soil-hello --frames 60` (live eval path) renders identically to V1 content
+- [x] V3: greeting text edit reflects in both renders with no shim/route edits
+- [x] `borge check .` shows no NEW failures; touched `.borg` files balance
