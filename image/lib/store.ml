@@ -1468,11 +1468,13 @@ let fork_branch (t : t) ~(parent_id : string) ~(owner : string)
    (session.ml); Store.merge_branch just does the SQL.
 
    branching.branch-status S3: status-driven merge. Into the source's
-   PARENT: upsert ONLY names the source moved since base_gen (ahead-new /
-   ahead / diverged); behind names would clobber the parent's newer work
-   and are skipped; synced/clean names are already identical. Conflict
-   report = the diverged set (both sides moved since the fork base) —
-   genuine conflict detection; resolution stays LWW (report-only).
+   PARENT: upsert ONLY names the source moved since base_gen that the
+   parent did NOT also move (ahead-new / ahead); behind names would
+   clobber the parent's newer work and are skipped; synced/clean names
+   are already identical. DIVERGED names (both sides moved since the
+   fork base) are NEVER auto-applied: they are returned in the conflict
+   report and need an explicit human decision (obituary rule — no
+   silent reversals; resolution is re-define + re-merge, not LWW).
    Any other target (no shared base): head-vs-head fallback — upsert
    source fns whose body differs from the target's own row, no report.
    TODO: schema-merge for type_defs — only main accepts schema changes
@@ -1561,11 +1563,16 @@ let merge_branch (t : t) ~(source_id : string) ~(target_id : string)
                 let rows = branch_status_conn conn ~branch_id:source_id in
                 let fns =
                   List.filter (fun r -> r.st_kind = DiffFn) rows in
+                (* DIVERGED is deliberately NOT in the applied set:
+                   both sides moved, so auto-applying the source would
+                   silently reverse the parent's work. Diverged names
+                   come back as conflicts; re-define + re-merge resolves
+                   them (branching.merge S3, 2026-09 decision). *)
                 let ups =
                   List.filter_map
                     (fun r ->
                       match r.st_status with
-                      | SAheadNew | SAhead | SDiverged -> Some r.st_name
+                      | SAheadNew | SAhead -> Some r.st_name
                       | _ -> None)
                     fns
                 in
