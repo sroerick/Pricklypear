@@ -417,17 +417,15 @@ let list_own_routes (t : t) ~(branch_id : string)
      a = parent-chain value at base_gen (the fork-time base)
      own = a live scaffolding row exists on the branch (the pin)
 
-   HASH DOMAIN (make-phase lesson, 2026-08-28): the STORED
-   tree_versions.hash column is NOT comparable across write paths —
-   tree-first writes (Tree_store.hash_body over compact OCaml JSON) and
-   mirror writes (009 trigger digest over PG jsonb::text, which spaces
-   after colons) produce DIFFERENT digests for identical bodies (020
-   itself calls the stored hash "a consistency artifact, not content").
-   Comparing stored hashes mislabeled identical pins as diverged. Status
-   therefore computes digest((body->'body')::text) AT QUERY TIME — one
-   canonical domain (PG jsonb::text) regardless of which path wrote the
-   row. The stored column stays for retention/GC bookkeeping and
-   same-path gen-diff; a global rehash is tree-time's scope, not ours.
+   HASH DOMAIN (unified 2026-09, migration 027 / one-tree.hash-domain):
+   every writer — Tree_store upserts AND the 009 mirror triggers — now
+   computes the hash DB-SIDE over PG's canonical jsonb text of the body
+   (digest(body_jsonb::text)). One canonicalization, writer-independent.
+   The 2026-08-28 cross-writer mismatch (OCaml compact-JSON digests vs
+   mirror jsonb::text digests) is gone, the 027 backfill converted old
+   rows, so status reads the STORED tree_versions.hash column directly
+   (no more per-row query-time re-digest). The stored column is guarded
+   by the cross-writer hash-equality test in tree_store_test.
 
    Tombstones are the reserved 019/020 marker (body->_tombstone). Deletion
    on a branch REVEALS the parent binding (unbind semantics), so there is
@@ -501,8 +499,7 @@ let branch_status_conn (conn : conn) ~(branch_id : string)
           "  WHERE v.kind IN ('fn','type','route') "^
           "), heads AS ( "^
           "  SELECT DISTINCT ON (kind, key, depth) kind, key, depth, "^
-          "         encode(digest((body->'body')::text,'sha256'),'hex') "^
-          "           AS chash, body "^
+          "         hash AS chash, body "^
           "  FROM vers ORDER BY kind, key, depth, gen DESC "^
           "), b_res AS ( "^
           "  SELECT DISTINCT ON (kind, key) kind, key, chash AS b_hash "^
@@ -524,8 +521,7 @@ let branch_status_conn (conn : conn) ~(branch_id : string)
           "                                   FROM branches WHERE id = $1)) "^
           "), heads_base AS ( "^
           "  SELECT DISTINCT ON (kind, key, depth) kind, key, depth, "^
-          "         encode(digest((body->'body')::text,'sha256'),'hex') "^
-          "           AS chash, body "^
+          "         hash AS chash, body "^
           "  FROM vers_base ORDER BY kind, key, depth, gen DESC "^
           "), a_res AS ( "^
           "  SELECT DISTINCT ON (kind, key) kind, key, chash AS a_hash "^
