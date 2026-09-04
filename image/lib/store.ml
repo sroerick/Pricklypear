@@ -655,14 +655,23 @@ let delete_function_on_branch (t : t) ~(branch_id : string) ~(name : string)
             (Printexc.to_string exn);
           false)
 
-(** Copy selected function names from source branch to target (upsert). *)
+(** Copy selected function names from source branch to target (upsert).
+    ATOMIC (branching.promote): the whole promote — fn upserts, route
+    upserts, head-hash refresh — runs in ONE SERIALIZABLE transaction;
+    any failure rolls back everything, so a crash mid-promote can no
+    longer leave a half-promoted target (merge_branch already had this
+    shape; this closes the same gap for promote). *)
 let promote_functions (t : t) ~(source_id : string) ~(target_id : string)
     ~(names : string list) : int =
   match t.conn with
   | None -> 0
   | Some _ when names = [] -> 0
-  | Some conn ->
+  | Some _ ->
       (try
+        with_transaction t (fun conn ->
+        match conn with
+        | None -> 0
+        | Some conn ->
       let n =
             List.fold_left
               (fun acc name ->
@@ -720,12 +729,20 @@ let promote_functions (t : t) ~(source_id : string) ~(target_id : string)
                 ())
               names
           in
+          (* 009 mirror triggers are DEFERRED to COMMIT; force them to fire
+             NOW inside the tx so the head-hash refresh sees the promoted
+             nodes. Firing early is safe — same triggers, same order, just
+             before commit instead of at it — and a mirror failure here
+             rolls the WHOLE promote back, which is the point. *)
+          let (_ : Pgx.row list) =
+            exec conn "SET CONSTRAINTS ALL IMMEDIATE"
+          in
           let () = Tree_store.recompute_head_hash conn ~branch_id:target_id in
-          n
-    with exn ->
-      Printf.eprintf "[store] promote_functions: %s\n"
-            (Printexc.to_string exn);
-          0)
+          n)
+      with exn ->
+        Printf.eprintf "[store] promote_functions: %s\n"
+          (Printexc.to_string exn);
+        0)
 
 (* [inherited_fn_body_matches conn ~branch_id ~name ~body_json]: walks
    the PARENT chain of [branch_id] (the branch itself is excluded, so

@@ -218,6 +218,89 @@ let test_promote_routes_with_handler () =
               in
               ())
 
+(** Promote is all-or-nothing (branching.promote atomicity): an injected
+    failure on one name must roll back EVERYTHING — zero rows on target.
+    Regression guard for the with_transaction wrap: pre-transaction, the
+    names before the failing one landed (autocommit per statement). *)
+let test_promote_atomic () =
+  with_store (fun store ->
+      match S.conn_of store with
+      | None -> ()
+      | Some conn ->
+          let drop_injection () =
+            let (_ : Pgx.row list) =
+              S.exec conn
+                "DROP TRIGGER IF EXISTS pp_test_boom_trg ON function_defs"
+            in
+            let (_ : Pgx.row list) =
+              S.exec conn "DROP FUNCTION IF EXISTS pp_test_boom()"
+            in
+            ()
+          in
+          Fun.protect
+            (fun () ->
+              let suffix = string_of_int (Random.int 1_000_000) in
+              let child_name = "prm_atom_" ^ suffix in
+              let ok1 = "prm_ok1_" ^ suffix in
+              let boom = "boom_" ^ suffix in
+              let ok2 = "prm_ok2_" ^ suffix in
+              match
+                S.fork_branch store ~parent_id:main_id ~owner:"prm_test"
+                  ~child_name
+              with
+              | None -> Alcotest.fail "fork failed"
+              | Some child_id ->
+                  (* Seed all three BEFORE the rogue trigger exists, so
+                     seeding itself is unaffected. *)
+                  store.branch_id <- child_id;
+                  S.persist_function store ok1 (expr_of_int 1) "tester";
+                  S.persist_function store boom (expr_of_int 2) "tester";
+                  S.persist_function store ok2 (expr_of_int 3) "tester";
+                  (* Rogue trigger: any INSERT/UPDATE whose name starts with
+                     'boom' raises. Fires on the target upsert mid-fold. *)
+                  let (_ : Pgx.row list) =
+                    S.exec conn
+                      "CREATE OR REPLACE FUNCTION pp_test_boom() RETURNS trigger AS $FN$ BEGIN RAISE EXCEPTION 'pp_test_boom: injected'; END $FN$ LANGUAGE plpgsql"
+                  in
+                  let (_ : Pgx.row list) =
+                    S.exec conn
+                      "CREATE TRIGGER pp_test_boom_trg BEFORE INSERT OR UPDATE ON function_defs FOR EACH ROW WHEN (NEW.name LIKE 'boom%') EXECUTE FUNCTION pp_test_boom()"
+                  in
+                  let n =
+                    S.promote_functions store ~source_id:child_id
+                      ~target_id:main_id ~names:[ ok1; boom; ok2 ]
+                  in
+                  (* promote swallows the failure and reports 0. *)
+                  Alcotest.(check int) "promoted 0 (rolled back)" 0 n;
+                  (match
+                     S.lookup_function_on_branch store ~branch_id:main_id
+                       ~name:ok1
+                   with
+                  | Some _ ->
+                      Alcotest.fail
+                        "ok1 landed despite failure — promote is NOT atomic"
+                  | None -> ());
+                  (match
+                     S.lookup_function_on_branch store ~branch_id:main_id
+                       ~name:ok2
+                   with
+                  | Some _ ->
+                      Alcotest.fail
+                        "ok2 landed despite failure — promote is NOT atomic"
+                  | None -> ());
+                  (* cleanup child rows *)
+                  let (_ : Pgx.row list) =
+                    S.exec conn
+                      ~params:
+                        [ Pgx.Value.of_string child_id
+                        ; Pgx.Value.of_string ok1
+                        ; Pgx.Value.of_string boom
+                        ; Pgx.Value.of_string ok2 ]
+                      "DELETE FROM function_defs WHERE branch_id = $1 AND name IN ($2,$3,$4)"
+                  in
+                  ())
+            ~finally:drop_injection)
+
 let test_format_merge_result () =
   Alcotest.(check string) "no conflicts" "merged 3 rows"
     (S.format_merge_result { count = 3; conflicts = [] });
@@ -238,5 +321,6 @@ let () =
             test_merge_scope_no_types_or_routes
         ; Alcotest.test_case "promote routes with handler" `Quick
             test_promote_routes_with_handler
+        ; Alcotest.test_case "promote atomic" `Quick test_promote_atomic
         ] )
     ]
