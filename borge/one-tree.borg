@@ -191,6 +191,24 @@
            placement. Per-subtree root hashes compose from leaf
            hashes (content-addressing later).
 
+           HASH DOMAIN (unified 2026-09, migration 027): "canonical
+           body" means PG's CANONICAL jsonb text of the body —
+           digest((payload->'body')::text,'sha256') — computed
+           DB-SIDE in EVERY writer (Tree_store upserts and the 009
+           mirror triggers alike). One canonicalization, one
+           implementation, writer-independent: identical bodies
+           hash identically regardless of which path wrote them.
+           The pre-027 OCaml-side hasher (sha256 of compact Yojson
+           text) produced a second domain and is deleted; the 027
+           backfill converted stored rows and recomputed
+           head_hash aggregates. branch_status reads the stored
+           tree_versions.hash column directly (the query-time
+           re-digest workaround is retired). Sync's WIRE hash —
+           the (path,hash) manifest negotiated with the offline
+           lens client — is a separate contract (client-side
+           content_hash); re-pointing it at the unified storage
+           domain is a local-first follow-up, not done here.
+
            TIMESTAMPS: created_at and updated_at are ROW COLUMNS
            on tree_nodes (see physical layout), NOT duplicated
            into the payload jsonb. They are the source of truth
