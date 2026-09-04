@@ -365,12 +365,12 @@
   (doc "Book chapter — local Nopales-native coding agent (pi-inspired sibling, not the image); full text inlined from borge/agent.borg")
   (inline borge/agent.borg)
  )
- (section remote-eval
-  (doc "Book chapter — Nopales interprets in a client process while the corpus + data plane stay authoritative in Postgres (the Prim_call seam agent.borg uses, relaxed across HTTP); full text inlined from borge/remote-eval.borg")
-  (inline borge/remote-eval.borg)
+ (section prim-seam
+  (doc "Book chapter — the Prim_call seam: eval is local, prims are remote (renamed from remote-eval 2026-09-04). Nopales interprets in a client process while the corpus + data plane stay authoritative in Postgres; full text inlined from borge/prim-seam.borg")
+  (inline borge/prim-seam.borg)
  )
  (section local-first
-  (doc "Book chapter — a local lens is a branch of the one tree whose root lives on the client (the pad detaches, roots independently, grafts back). Revisits remote-eval's 'no second store' hard-out: a lens is a governed branch with merge semantics, not an uncoordinated copy. Same Prim_call seam, same tree, offline-capable. Full text inlined from borge/local-first.borg")
+  (doc "Book chapter — a local lens is a branch of the one tree whose root lives on the client (the pad detaches, roots independently, grafts back). Revisits prim-seam's 'no second store' hard-out: a lens is a governed branch with merge semantics, not an uncoordinated copy. Same Prim_call seam, same tree, offline-capable. Full text inlined from borge/local-first.borg")
   (inline borge/local-first.borg)
  )
  (section storage

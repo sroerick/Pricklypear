@@ -84,7 +84,7 @@
             counter ALREADY COUNTED by branch_generations (migration
             017) and the tree_generations variant proposed with it.
             017 was built as a cache-invalidation signal for
-            remote-eval.caching; this chapter promotes the counter
+            prim-seam.caching; this chapter promotes the counter
             to the storage key — same counter, second use, exactly
             as local-first.sync's last-synced merge base is the
             same counter's third use.

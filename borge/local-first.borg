@@ -1,27 +1,27 @@
 (project pricklypear-local-first
- (doc "Pricklypear book chapter: local-first — a local lens is a branch of the one tree whose root lives on the client. The pad detaches, roots independently, and grafts back. This revisits remote-eval's 'no second store on the client' hard-out: the hard-out was written against an uncoordinated client copy; a lens is a governed copy whose merge semantics already exist (three-way tree-diff, branching.borg / one-tree.branching-interaction). Same Prim_call seam, same tree, different lens policy.")
+ (doc "Pricklypear book chapter: local-first — a local lens is a branch of the one tree whose root lives on the client. The pad detaches, roots independently, and grafts back. This revisits prim-seam's 'no second store on the client' hard-out: the hard-out was written against an uncoordinated client copy; a lens is a governed copy whose merge semantics already exist (three-way tree-diff, branching.borg / one-tree.branching-interaction). Same Prim_call seam, same tree, different lens policy.")
  (status planned)
- (* agent note (|2026-08-14 chapter created from the local-first design discussion. Thesis: one-tree + user-owned data + three-way tree-diff merge are, almost without addition, the local-first primitives. The 2026-08-02 /data revision (data.u.<user>.*) was made for multi-user isolation and turns out to also fix the replication unit — the isolation boundary and the replication boundary are the same shape. remote-eval is the online-remote mode (local compute, remote data plane); local-first is the offline-capable mode (local lens, sync on reconnect). One seam, two policies. The cactus metaphor (pads = lenses, grafting = merge, pads = lenses, grafting = merge) is evocative but is NOT load-bearing in this spec text — it lives in prose, not the source of truth. (2026-08-29 NAMING UPDATE: 'glochid' is RESERVED for the local-first harness itself — the detachable spine you pull off the pad and work with; see borge/agent.borg. The conflict work this note once called glochids is named sync-conflicts below, no metaphor.)
+ (* agent note (|2026-08-14 chapter created from the local-first design discussion. Thesis: one-tree + user-owned data + three-way tree-diff merge are, almost without addition, the local-first primitives. The 2026-08-02 /data revision (data.u.<user>.*) was made for multi-user isolation and turns out to also fix the replication unit — the isolation boundary and the replication boundary are the same shape. prim-seam is the online-remote mode (local compute, remote data plane); local-first is the offline-capable mode (local lens, sync on reconnect). One seam, two policies. The cactus metaphor (pads = lenses, grafting = merge, pads = lenses, grafting = merge) is evocative but is NOT load-bearing in this spec text — it lives in prose, not the source of truth. (2026-08-29 NAMING UPDATE: 'glochid' is RESERVED for the local-first harness itself — the detachable spine you pull off the pad and work with; see borge/agent.borg. The conflict work this note once called glochids is named sync-conflicts below, no metaphor.)
 
- 2026-12 campaign 8.0 plan pass: lens-model + replication-units pinned for the 8.1 make (details CONTRACT blocks below). A lens = a CHILD BRANCH of the checked-out branch via (fork) / Store.fork_branch (P5 empty-lens fork); the server branch stays the parent; single-writer-per-lens pins to the branch model; code sync = branch-pointer move (promote/merge), data sync = in-place reconcile. Replication unit = data.u.user, data.shared, b.lens plus branch ancestry; path-prefix RLS confinement is the replication boundary. Sync-negotiation handle = the branch,generation coordinate — the same migration-017 branch_generations / gen-now clock remote-eval.caching already keys on (one counter, three consumers). Status stays planned; the 8.1 make flips.|) *)
+ 2026-12 campaign 8.0 plan pass: lens-model + replication-units pinned for the 8.1 make (details CONTRACT blocks below). A lens = a CHILD BRANCH of the checked-out branch via (fork) / Store.fork_branch (P5 empty-lens fork); the server branch stays the parent; single-writer-per-lens pins to the branch model; code sync = branch-pointer move (promote/merge), data sync = in-place reconcile. Replication unit = data.u.user, data.shared, b.lens plus branch ancestry; path-prefix RLS confinement is the replication boundary. Sync-negotiation handle = the branch,generation coordinate — the same migration-017 branch_generations / gen-now clock prim-seam.caching already keys on (one counter, three consumers). Status stays planned; the 8.1 make flips.|) *)
  (convention ocaml-dune)
  (section local-first
   (doc "A client process that holds a durable local lens of the one tree, evaluates Nopales against it offline, and reconciles with the server on reconnect. The server keeps the corpus, the data plane authority, and the merge index; the client keeps a working copy and the interactive surface. Single-user per client; the server stays multi-user.")
 
   (subsection positioning
-   (doc "What local-first is and is not, relative to remote-eval, one-tree, and branching")
+   (doc "What local-first is and is not, relative to prim-seam, one-tree, and branching")
    (status implemented)
    (details
     (doc (|
          IS:
            - A MODE of the Prim_call seam and the one tree, not a new
-             product. remote-eval proxies DB prims over HTTP to a
+             product. prim-seam proxies DB prims over HTTP to a
              remote store; local-first resolves them against a LOCAL
              lens and syncs the lens on reconnect. Same interpreter,
              same rim abstraction, different backing for the data
              plane between syncs.
            - A BRANCH OF THE ONE TREE whose root lives on a client.
-             This is what reopens remote-eval's "no second store on
+             This is what reopens prim-seam's "no second store on
              the client" hard-out honestly: the hard-out was written
              against an UNCOORDINATED client copy (a second source of
              truth with no merge semantics). A lens is a GOVERNED copy
@@ -29,14 +29,14 @@
              semantics (branching.borg three-way tree-diff). The lens
              is not a second store; it is a remote branch of the one
              store.
-           - The generalization remote-eval was deliberately scoped
-             NOT to be. remote-eval's v0 is online-remote (local
+           - The generalization prim-seam was deliberately scoped
+             NOT to be. prim-seam's v0 is online-remote (local
              compute, every DB hit crosses the wire); local-first is
              offline-capable (local lens, DB hits resolve locally
              until sync). The placement heuristic
-             (remote-eval.placement) is shared: pure compute stays
+             (prim-seam.placement) is shared: pure compute stays
              local in both; the difference is whether DB reads cross
-             the wire per-hit (remote-eval) or read the local lens
+             the wire per-hit (prim-seam) or read the local lens
              (local-first) until reconnect.
 
          THE USER LOOP, IN ONE BREATH. Fork locally (lens-model),
@@ -54,7 +54,7 @@
              server is the integration point and the merge authority.
              Quit all clients; the server's tree is whole.
            - A Nopales fork. Same interpreter, same reader, same
-             special forms (inherited from remote-eval.substrate and
+             special forms (inherited from prim-seam.substrate and
              lisp-interpreter.borg).
            - Multi-user on the client. One client = one user's lens.
            - A relaxation of single-writer-per-lens. Each client is
@@ -204,7 +204,7 @@
          eval would build, materialized locally. Inheritance is
          read-time resolution (one-tree tree-model); the client
          stores the pinned overrides and resolves ancestors per the
-         cache policy (remote-eval.caching generalizes).
+         cache policy (prim-seam.caching generalizes).
 
          NO CROSS-USER REPLICATION. Because replication is the
          authorized-read subtree, a compromised client that replays
@@ -213,7 +213,7 @@
          session. The trust boundary for local-first is the SAME
          trust boundary the online session already has, restated as
          "what subtree may replicate." This is why local-first does
-         not inherit a new leak surface from remote-eval's browser/
+         not inherit a new leak surface from prim-seam's browser/
          WASM trust punt: the browser punt is about EXECUTING
          untrusted corpus code in a browser; local-first executes
          the user's OWN corpus on the user's OWN device, which is the
@@ -240,7 +240,7 @@
          synced at; that snapshot is the merge base. This is NOT a new
          counter — it is the SAME migration-017 branch_generations
          coordinate tree-time promoted to the head/gen clock
-         (gen-now / Store.current_generation) and remote-eval.caching
+         (gen-now / Store.current_generation) and prim-seam.caching
          keys its def cache on. One counter, three consumers
          (def-cache freshness, reads-as-of-gen, last-synced merge
          base). A sync round negotiates (path, hash) manifests and
@@ -272,7 +272,7 @@
          queries are readdir/find; uniqueness is the filesystem; the
          envelope is a JSON file. There is no engine to align with
          Postgres, no second schema, no second set of migrations —
-         the thing the remote-eval hard-out was trying to prevent
+         the thing the prim-seam hard-out was trying to prevent
          (a second store) does not arise, because the lens is not a
          store, it is a materialized subtree.
 
@@ -297,7 +297,7 @@
          a query engine. Indexed reads over the whole corpus
          (tree/find-by with a body predicate, rows with a filter,
          list-kind over a large type) route to the server — the
-         remote-eval placement heuristic, inherited. The lens holds
+         prim-seam placement heuristic, inherited. The lens holds
          the working set (open notes, current todos, the def being
          edited); the server holds the index over the corpus. Pure
          compute and working-set reads stay local; analytical reads
@@ -392,7 +392,7 @@
          for promote/merge. Subtree content hashes (one-tree.tree-
          model: hash over canonical body, root hashes compose from
          leaves) give CONFLICT DETECTION at node granularity.
-         Generation counters (remote-eval.caching) generalize from
+         Generation counters (prim-seam.caching) generalize from
          one-way cache invalidation to bidirectional sync
          negotiation. Nothing new is invented: local-first sync is
          the merge primitive with a second consumer.
@@ -428,7 +428,7 @@
          LAST-SYNCED AS THE COMMON ANCESTOR. Three-way merge needs a
          common ancestor. The client records the (branch, generation)
          it last synced at; that snapshot is the merge base. This is
-         the remote-eval.caching generation counter, repurposed from
+         the prim-seam.caching generation counter, repurposed from
          "is my cache fresh" to "what was our last common state."
          One counter, two uses.
 
@@ -504,7 +504,7 @@
          to sync losses too). Semantic merge is the v1 ambition and
          the place typed-nodes earns a third salary.
 
-         OFFLINE IDENTITY. remote-eval: "identity is server-asserted,
+         OFFLINE IDENTITY. prim-seam: "identity is server-asserted,
          never client-asserted." Offline edits must assert author
          locally and reconcile at sync. The per-node author field +
          branch ownership give the audit trail; the mechanism is
@@ -514,16 +514,16 @@
          author it does not hold — it stamps its credential; the
          server validates and attributes. This is a real trust-
          boundary change from online (where the session asserts per
-         request) and it inherits remote-eval's browser/WASM trust
+         request) and it inherits prim-seam's browser/WASM trust
          punt as an open question for untrusted-client execution.
 
-         SEMANTICS VERSION SKEW. remote-eval hard-constraint already
+         SEMANTICS VERSION SKEW. prim-seam hard-constraint already
          flags "a story for branch pinned to Nopales-semantics vN is
          required once the corpus is the product." Local-first makes
          it acute: an offline client runs old interpreter semantics
          against a corpus that may have evolved at sync. The lens
          pins a (branch, generation, semantics-version) snapshot
-         (remote-eval.stepping's "pin a snapshot and replay" is the
+         (prim-seam.stepping's "pin a snapshot and replay" is the
          substrate). At sync, a semantics-version mismatch is a
          merge-gate event: the client must rebase to the server's
          semantics before merging edits, or the server re-evaluates
@@ -534,7 +534,7 @@
          offline, not in the source. Behavior skew is surfaced, not
          silently merged.
 
-         TRANSACTIONS UNDER SYNC. Online, the remote-eval hard
+         TRANSACTIONS UNDER SYNC. Online, the prim-seam hard
          constraint stands: (with-transaction ...) holds
          (select-for-update) locks that cannot span HTTP, so
          transaction-wrapped exprs execute server-side. Offline,
@@ -587,12 +587,12 @@
          lens, and evaluates read-only against it offline. No local
          writes; on reconnect, the client re-syncs the snapshot
          (cheap — discard and re-pull, since it made no edits). This
-         is much closer to shipped: it reuses remote-eval.caching's
+         is much closer to shipped: it reuses prim-seam.caching's
          generation pin and the filesystem substrate, with NO merge
          machinery. It delivers most of the local-first FEEL (no
          spinners on reads, offline read access, instant open) without
          the merge-conflict policy. The debugger substrate
-         (remote-eval.stepping) works against a read-only lens
+         (prim-seam.stepping) works against a read-only lens
          unchanged.
 
          PHASE 2 — WRITE-CAPABLE LENSES. Fork-on-clone, local writes,
@@ -638,9 +638,9 @@
          - NOT a second store. The lens is a branch of the one tree;
            the server is the integration point and merge authority.
          - NOT multi-user on the client. One client = one user's
-           lens, same as remote-eval.
+           lens, same as prim-seam.
          - NOT a Nopales fork. Same interpreter, same reader, same
-           special forms (remote-eval.substrate).
+           special forms (prim-seam.substrate).
          - NOT a relaxation of single-writer-per-lens. Each client is
            sole writer of its own lens; multi-writer appears only at
            merge.
@@ -655,11 +655,11 @@
             The local-first lens materializes and syncs the user's
             data subtree; the data lens fork makes that first-class.
          - NOT a second transport. HTTP+JSON is the only wire in v0
-           (inherited from remote-eval). The filesystem is the local
+           (inherited from prim-seam). The filesystem is the local
            substrate, not a wire.
          - NOT a browser/WASM client. Executing a user's corpus in a
            browser is a trust boundary local-first inherits from
-           remote-eval's punt and does not reopen; local-first runs
+           prim-seam's punt and does not reopen; local-first runs
            on a client the user controls (laptop, phone), where the
            trust relationship is "my code on my device."
     |))))

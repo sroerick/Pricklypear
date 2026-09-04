@@ -1,0 +1,491 @@
+(project pricklypear-prim-seam
+ (doc "Pricklypear book chapter: prim-seam — the Prim_call seam: EVAL IS LOCAL, PRIMS ARE REMOTE. (Renamed from borge/remote-eval.borg 2026-09-04: the old name inverted the truth it specified — see the rename agent note below.) The CAPABILITY/LIBRARY that lets a client process sync the one tree's AST + data down, eval Nopales locally, and proxy out-of-working-set prim calls up to the image. The seam is one Prim_call effect handler swapped for an HTTP proxy; the image keeps the corpus, the data plane authority, and the merge index. No surface, no chat — the AGENT product (agent.borg) links this; so would a debugger, test harness, or future CLI.")
+ (status planned)
+ (* agent note (|2026-09-04 RENAME + SURFACE RECONCILE: chapter renamed borge/remote-eval.borg -> borge/prim-seam.borg. Rationale: the old name INVERTED the truth it specified — eval happens LOCALLY in the client; what is remote are the PRIM CALLS (/api/prim). The inversion did real damage: (a) readers landing from remote/lib/proxy_rim.ml found the transport story but had to follow a forward ref into local-first.borg to discover the branching story (lens = fork, sync = graft) — the local-first mechanism was effectively misfiled; (b) 'remote-eval' read as a product ('eval remotely from elsewhere -> needs a UI'), which is precisely how pp-remote grew the duplicated chat surface the 2026-12 alignment pass had to order retired. All cross-refs chased (borge/*.borg, pricklypear.borg, docs/cs-curriculum.md); historical notes below keep their 2026 dates and now say 'prim-seam' — this note is the global rename record. Package remote/ + binary pp-remote KEEP their names — 'remote' still accurately names talking to the remote image; no dune churn. SAME PASS: agent-loop subsection flipped implemented -> deprecated per the 2026-12 alignment decision (pp-remote's chat surface + /code lens browser retire into agent.borg; deleting remote/lib/surface.ml + http_ui.ml and collapsing the duplicated chat is the pending make). Its --serve chat verify smoke is DROPPED — it passed only because the retired surface still runs, and an 'implemented' stanza asserting ownership of a screen contradicted the 'implemented' positioning stanza in the same chapter. NOT deprecated: the loop SEAM (llm/ shared package, Loop.host) — agent.borg links it; what dies here is only the claim that prim-seam owns any screen. Mechanism/policy split reaffirmed: prim-seam = the Prim_call seam MACHINERY (substrate, server-endpoint, client, caching, placement, stepping); local-first = the lens POLICY (fork/sync/conflicts), pointing here, never re-spec'd.|) *)
+ (* agent note (|2026-12 ALIGNMENT PASS (product vs capability — the line the code was reaching for). HISTORY: prim-seam arrived 2026-08-14 explicitly as 'NOT a new product — a mode of the Prim_call seam the agent host already uses, with the rim replaced by an HTTP proxy. agent/ is the local-only instance; pp-remote is the relaxed instance.' The code forked instead: pp-remote grew a chat surface + /code browser + --serve (a second product), and the two hosts duplicated the chat templates, the serve functions, and the t-records. The duplication is a SYMPTOM of a missing noun, not an independent design. ALIGNMENT: (1) prim-seam is the CAPABILITY/LIBRARY: sync the AST/data down, eval locally, proxy out-of-working-set prims up to the image, three-way merge on reconnect. NO surface, NO chat. (2) The AGENT (agent.borg positioning) is the PRODUCT that links it: one process, one screen, own-forked branch, local-first edits synced up, installable browsers. (3) pp-remote shrinks back to this library + a minimal /eval harness (a capability DEMO, not a product); the chat surface + chat/* templates + /code lens browser the prior session built MOVE to the agent (one copy), and the shared llm/ loop the agent already links stays shared. (4) local-first.borg already owns the merge/conflict/identity/semantics-skew open work (sync-conflicts); prim-seam points at it, does not re-spec it. WHAT THIS PASS DOES NOT DO: restatus the implementation subsections (client, caching, placement, stepping, agent-loop) or touch code — this redraws the POSITIONING line only; a make pass retires pp-remote's product surface, collapses the duplicated chat into one on the agent, and re-roots the agent's eval path on local-first (own-fork, sync-push, offline-tolerant). The top-level doc's old phrase 'the client keeps ... the interactive surface (REPL, stepping debugger, agent loop)' was the conflation this pass fixes: the interactive surface + agent loop belong to the PRODUCT (agent.borg); prim-seam is the capability the product is built on.|) *)
+ (* agent note (|2026-08-14 chapter created from the prim-seam design discussion. Thesis: the interpreter is a pure portable library (~few kloc OCaml, no service deps); the corpus (function_defs, type_defs, data_rows) is branchy rows in Postgres. They are separated along exactly the right line — the cheap-to-copy thing travels, the expensive-to-replicate thing stays home. Remote-eval is NOT a new product: it is a mode of the same Prim_call seam the agent host already uses, with the rim handler replaced by an HTTP proxy. agent/ is the local-only instance today; pp-remote --image=URL is the relaxed instance. Statuses are honest: the substrate is implemented (the seam, run_with_rim, read_eval_all_direct, the api-eval JSON boundary from i-fields-as-string 2026-08-12), everything else is planned.|) *)
+ (* agent note (|2026-08-14 RECONCILE: a shared codec already exists — pure/prims_pure.ml (pricklypear-pure-prims, wrapped false as Prims_pure) defines value_to_json AND json_to_value (the inverse), explicitly shared between the image and a browser client per its dune comment. So the substrate codec is DONE; the remaining codec work is the ERROR codec (Interp_error/Prim_error/Reader_error -> JSON with kind/name/line/col, currently inline in image/lib/http_pages.ml api_eval) factored into pure/ + its inverse, plus a round-trip property test. ALSO RECONCILE: borge/structural-editing.borg client-eval already plans a browser client/ package (interp.js, js_of_ocaml --effects=cps, pure-prims-only, optimistic structural ops reconciled via op-protocol). client-eval and prim-seam share the seam (same pure interpreter, prims_pure factored out) but DIFFER: client-eval leaves DB prims UNBOUND in the browser and reconciles via op-protocol; prim-seam PROXIES DB prims over HTTP. Complementary, not duplicate. To avoid the client/ package-name collision (client/ is a tracked browser package), prim-seam's native host is the remote/ package (binary pp-remote), NOT client/.|) *)
+ (* agent note (|2026-12 CAMPAIGN 7.0 PLAN PASS (server-endpoint + caching spec) — reconcile + spec the tree-time dependency. Revealed the prim-seam implementation is ALREADY COMPLETE and ON MASTER (built since the 2026-08 design, merged as a chain: 1a ee309e3 shared error codec factored into pure/prims_pure.ml; 1b ff3b0a5 migration 017 branch_generations counter + Store.current_generation; 2a 540e1a2 POST /api/prim endpoint with server-only refuse-or-forward; 2b 8e75797 remote/ package + proxy rim (pp-remote); 3 623ddd9 hybrid placer + e01a3cc shared http_transport + de61e34 pp-remote hook + f1dae70 transaction-routing tests). VERIFIED green this pass: dune build @all clean; remote/test/placer_test 5/5; remote/test/remote_test 7/7; image/test/api_prim_test (server-endpoint refuse-or-forward dispatch: proxyable prim ok, server-only refused-not-executed with structured server_only kind, classification derived from register_server_only metadata, never a hand list); image/test/branch_generation_test (write-in-ancestry bumps / distinct (branch,generation) key / no-write unchanged / type+route+shared-data bumps). So server-endpoint (7.1) and placement + proxy-rim client (7.3) substrate are DONE; the CLIENT-SIDE DEF CACHE — remote/lib/def_cache.ml, keyed (branch, generation) — is NOT yet built (that is the open 7.2 make slice). THE TREE-TIME DEPENDENCY (the point of this plan pass, per campaign 7.0): the caching subsection's generation key is NOT a prim-seam invention — it IS migration 017 branch_generations, which tree-time (campaign 5, landed 2026-12) PROMOTED from a cache-invalidation signal to the head/gen coordinate (the reads-as-of-gen clock; (gen-now) prim + Store.current_generation). So the def cache must key on the SAME coordinate tree-time reads as-of and the (gen-now) clock reads — one counter, one namespace. Enumeration: server-endpoint (planned; make 7.1 flips), client (planned; make 7.2 — proxy rim done, def_cache open), caching (planned; make 7.2 — 017 counters done, def_cache open), placement (planned; make 7.3 — done), stepping (planned; make 7.3 — explain.ml stepping evaluator + proxy-rim integration NOT built). This is a spec-reality reconcile + dependency-pin pass; NO status flips here (7.1/7.2/7.3 make own the flips).|) *)
+ (* agent note (|2026-12 CAMPAIGN 7.1 MAKE (server-endpoint) — spec status flip planned->implemented only (implementation was already complete + merged 2026-08; verified green in the 7.0 plan pass + re-verified this pass). Reconcile: the endpoint + refusal machinery actually ships in image/lib/http_pages.ml (POST /api/prim, api_prim handler via Primitives.dispatch) + image/lib/primitives.ml (register_server_only / register_server_only_sync / is_server_only metadata tags + Primitives.dispatch refuse-or-forward) + pure/prims_pure.ml (shared value_to_json / json_to_value / error_to_json codec — the wire boundary the client observes as identical to in-process eval). The previous (implements …) listed store_db.ml which shares NO code with this endpoint (dispatch goes through session.prims + Primitives.dispatch, not store_db) — corrected to the true set. Verify stanza unchanged: all four checks map to image/test/api_prim_test.ml (5/5: same-value-as-in-process, unregistered-name Prim_error, server-only refused-not-executed with structured server_only kind, metadata-derived classification, DB CRUD proxyable on a real table). Re-verified green this make: dune build @all clean; api_prim_test 5/5; placer_test 5/5; remote_test 7/7; branch_generation_test 5/5; borge check / drift clean. server-endpoint is now implemented; client (7.2) + placement (7.3) keep their own plan/make cycle (def_cache is the open 7.2 slice; stepping explain.ml is the open 7.3 slice).|) *)
+(* agent note (|2026-12 CAMPAIGN 7.2 MAKE (client + caching) — built the open 7.2 slice: the CLIENT-SIDE DEF CACHE (remote/lib/def_cache.ml, keyed (branch, generation)). This is the caching half of prim-seam that the 7.0 plan pass flagged as the one not-yet-built piece. Def_cache holds (def-name -> (value, source-generation)) + a pinned (branch, generation) coordinate; [check] is the ONE CHEAP ROUND TRIP (current-branch + gen-now, both proxyable read prims on the image = the SAME migration-017 coordinate tree-time reads as-of — the campaign-7.0 dependency pin: one counter, one namespace) returning the names to evict: a branch switch invalidates the WHOLE cache (namespace), a generation bump evicts only stale (loaded-before-the-new-gen) defs for reload, no writes returns [] without touching anything. [is_active] gates the round trip so a pure-compute / def-free session does ZERO HTTP. Wired into the lazy env: Remote.load_def now records each def in the cache at the current generation, and eval_local's per-eval (and per-miss) check evicts stale ENV bindings so the next reference re-fetches the NEW source from the server (the writer is the source of truth; the client cache never is). Added current-branch + gen-now to the client's proxyable prim set. NOTE ON SHARED-WORKSPACE CONCURRENCY: the working tree already carried a partial scaffolding of this exact design (a [cache]/[cache_check]/[last_gen] field set + a [def_cache] dune module entry from an overlapping slice); this make reconciled it into the single coherent [Def_cache] module (transport-driven, no separate check hook needed) + the [eval_local] eviction integration, leaving the tree compiling at ONE design (the scaffolding fields were redundant — the module subsumes them). Verify maps to remote/test/def_cache_test.ml (4/4: generation-bump reloads stale, branch-switch invalidates whole cache, no-writes single cheap round trip, client lazy-env reloads after bump). dune build @all clean; dune runtest exit 0 (7 remote + 5 placer + 4 def_cache green); borge check / drift clean (zero new drift — def_cache.ml + def_cache_test.ml + the two verify-stanza flips are the whole delta). client + caching flipped planned->implemented.|) *)
+(* agent note (|2026-12 CAMPAIGN 7.3 MAKE (placement + stepping) — reconciled the two remaining prim-seam stanzas to implemented. PLACEMENT was already complete (remote/lib/placer.ml: hybrid LOCAL vs REMOTE(/api/eval) via a pure AST walk counting prim calls + hard-routing (with-transaction …) server-side; placer_test 5/5) — this make verified it green and flipped the status. STEPPING is the LLM-debugger substrate, brought to a single coherent design and LANDED (a prior loop left a substantial in-flight implementation in the working tree — explain.ml trace/stepper + remote.ml stepper_of — that did not compile; this make completed the wiring, reconciled to ONE design, and verified): (1) [Eval.current_steps] (lisp/lib/eval.ml, a small additive accessor on the already-implemented eval module; module authority stays with lisp-interpreter.eval, NOT double-claimed here) exposes the running per-eval step counter; (2) [Explain.trace] (lisp/lib/explain.ml, the stepping-unique module) runs src ONCE under a proxy-style rim (intercepts Control.Prim_call in a match_with), services local pure prims (the local table) and forwards every other prim via [transport] as a ONE-PASS interleaved event list: [Local n] = n local pure steps since the last wire crossing (sampled via current_steps), [Remote_ok]/[Remote_err] = a remote prim round trip (distinguished from local steps); (3) [Explain.stepper]/[step]/[continue]/[add_breakpoint]/[break_on_remote]/[frames] drive the already-produced trace (PRESENTATION stepping — NEVER re-evals, so side effects are never repeated and the wire is never re-crossed; a breakpoint just stops walking the trace). This satisfies the verify stanzas: a breakpoint on a remote prim pauses mid-expression while the data plane still crossed the wire exactly once (the transport call count proves the server saw the same single call a fast eval would — the server is unaware; stepping is a client concern by construction); a trace shows local steps interleaved with remote round trips, distinguished. Remote client integration: [Remote.stepper_of] (remote/lib/remote.ml; module authority stays with the client stanza) runs Explain.trace over this client's env + local_prims + transport. Verify: new lisp/test/stepping_test.ml 4/4 (trace interleaves local/remote; breakpoint on remote prim with server-unaware single-call proof; single-step without re-eval; multiple round trips interleave); existing suites green (lisp 140, recursion 7, codec 27, ast_diff, remote 7, placer 5, def_cache 4). borge drift: spec NONE / structural NONE / code 12 = the pre-existing out-of-scope BORGE-1786924137 set (zero new — explain.ml + stepping_test.ml wire into the stepping implements clause; the eval.ml + remote.ml additions ride their existing owner stanzas). placement + stepping now implemented — campaign 7 (prim-seam) is FULLY complete.|) *)
+ (* agent note (|The two deepest consequences, named up front so the sections stay honest: (1) the store stops being where Nopales RUNS and becomes where Nopales LIVES — running is what clients do; (2) local eval over a durable remote corpus is the substrate for a debugger the LLM-integration chapter can drive (step/trace/breakpoint locally, data plane authoritative remotely). Both flow from one effect constructor and a faithful value<->json boundary.|) *)
+ (convention ocaml-dune)
+ (section prim-seam
+  (doc "A CAPABILITY/LIBRARY: a client process syncs the one tree's AST + data down, embeds pricklypear-lisp, materializes function definitions lazily, and services Prim_call effects by proxying out-of-working-set prims up to the image over HTTP. The image keeps the corpus, the data-plane authority, and the merge index; the client keeps the interpreter and the local lens. Single-user per client; the image stays multi-user. The AGENT product (agent.borg) links this; so would a debugger, a test harness, or a future CLI. prim-seam owns NO interactive surface — the surface + the agent loop are the product's, in agent.borg.")
+
+  (subsection positioning
+   (doc "What prim-seam is and is not — the CAPABILITY, against the agent (the product) and the image (the authority)")
+   (status implemented)
+   (details
+    (doc (|
+         IS:
+           - A CAPABILITY/LIBRARY, not a product. Sync the AST + data
+             down (local-first.lens-model), eval locally for speed,
+             proxy out-of-working-set prim calls up to the image
+             (/api/prim; placement routes prim-dense/transactional
+             blocks to /api/eval wholesale), three-way merge on
+             reconnect (local-first.sync). The seam is one effect —
+             Prim_call — with the handler swapped for an HTTP proxy;
+             the interpreter never knows the difference.
+           - A relaxation of one assumption: env materialization is
+             eager+local in the image, lazy+remote in the client
+             (defs fetched on miss, cached, invalidated on
+             generation bump — caching). Every other invariant
+             (branch inheritance, transactional prims, author
+             identity, store as source of truth) is preserved.
+           - The substrate for the LLM-debugger story: stepping /
+             trace / breakpoint are purely a client concern because the
+             data plane still crosses the wire exactly as a fast
+             eval would — the server is unaware a breakpoint fired.
+           - Linked by the AGENT product (agent.borg), and linkable by
+             anything else (a debugger, a test harness, a future
+             CLI). pp-remote is this library PLUS a minimal /eval
+             harness that DEMOS the capability; it is NOT a product.
+
+         IS NOT:
+           - A PRODUCT. It owns NO interactive surface — no chat, no
+             installable browsers, no --serve product mode. The
+             surface + the agent loop belong to the product
+             (agent.borg). The chat + chat/* templates + /code lens
+             browser a prior session built INTO remote/ are a
+             conflation this pass retires: they MOVE to the agent.
+           - A Nopales fork. Same interpreter, same reader, same
+             special forms. A language change for prim-seam is a
+             lisp-interpreter.borg change, full stop.
+           - A second store. The client holds a cache of definitions
+             + a governed LENS (local-first.borg), never the source
+             of truth. Quit the client, lose nothing but transient
+             REPL state; merge on reconnect reconciles.
+           - Multi-user on the client side. One client = one user's
+             interactive session. The image remains the multi-user
+             habitat (multi-user.borg). A browser/WASM client is a
+             later trust-boundary problem, explicitly out for v0.
+    |))))
+
+  (subsection substrate
+   (doc "The seam prim-seam relaxes, and the boundary that makes it honest")
+   (status implemented)
+   (implements lisp/lib/control.ml lisp/lib/eval.ml image/lib/http_pages.ml)
+   (verify
+    (test "Control.run_with_rim services Prim_call from a caller-supplied table; a second table (the proxy) drops in with no interpreter change")
+    (test "Eval.read_eval_all_direct evaluates a file's forms under a caller-hosted rim (no rim installed by eval itself)")
+    (test "value_to_json . json_to_value is identity over the value subset that crosses the wire (VStr/VInt/VFloat/VBool/VNil/VList/VPair; VLambda/VPrim/VMacro serialize to a sentinel and DO NOT round-trip — see hard-constraints). NB: json_to_value maps JSON strings to VStr (no VSymbol on the wire); symbols are a read-side concern, not a wire concern.")
+    (test "an Interp_error / Prim_error / Reader_error serializes via the shared error codec to the error-kind JSON shape already used by /api/eval, and the inverse re-raises the same exception the local rim would"))
+   (details
+    (doc (|
+         THE SEAM. One effect constructor:
+           | Prim_call : string * value list -> value Effect.t
+         in lisp/lib/control.ml. The image rim (Control_rim, now an
+         alias for run_with_rim) services it from the in-process store
+         prim table. A proxy rim is a second handler for the SAME
+         effect: Prim_call(name, args) -> HTTP POST -> deserialize
+         value. The interpreter is identical; only the handler swaps.
+
+         THE BOUNDARY. Every value that crosses the wire must
+         serialize losslessly. The shared codec ALREADY EXISTS in
+         pure/prims_pure.ml: Prims_pure.value_to_json emits native
+         JSON (with nested-JSON-in-VStr re-parsing — the
+         i-fields-as-string 2026-08-12 fix) and Prims_pure.json_to_value
+         is the inverse. The remaining codec work is the ERROR codec
+         (Interp_error/Prim_error/Reader_error -> JSON with
+         kind/name/line/col, currently inline in image/lib/http_pages.ml
+         api_eval) factored into pure/ + its inverse (error_of_json)
+         so the proxy rim re-raises the same exception the local rim
+         would, plus a round-trip property test. The acceptance gate is
+         ONE shared, TESTED codec both server and client link — NOT two
+         hand-maintained encoders.
+
+         DEFS AS DATA. An env is function_defs rows with branch
+         inheritance via the CTE. pp_sync pull already ships source
+         out; boot.ml/loader.ml turn source+defs into an env. The
+         client lazy-loads defs on miss instead of eagerly at boot:
+         resolution is already data, not a code-load step.
+    |))))
+
+  (subsection server-endpoint
+   (doc "POST /api/prim: one new endpoint next to api_eval on the image")
+   (status implemented)
+   (implements image/lib/http_pages.ml image/lib/primitives.ml pure/prims_pure.ml)
+   (verify
+    (test "/api/prim {name,args} returns the same value (and same error kind) as evaluating the prim in-process under the caller's identity")
+    (test "a server-only prim (route/fork/merge/auth-admin) is refused with a structured error citing locality, not silently executed")
+    (test "refuse-or-forward classification is derived from prim-registry metadata, not a hand-maintained list")
+    (smoke "a remote client drives a full (get 'todo id) -> (update ...) round trip over /api/prim under basic auth"))
+   (details
+    (doc (|
+         SHAPE. POST /api/prim with JSON {name: str, args: [json…]}
+         next to api_eval in http_pages.ml — ~40 lines, reusing the
+         shared value_to_json/error-kind codec. Auth is the same
+         basic-auth/cookie path /api/eval uses; the client passes its
+         identity per call. No new privilege — a prim call is
+         equivalent privilege to an eval that performs the prim.
+
+         GRANULARITY. A prim endpoint is per-DB-hit granularity, NOT
+         per-expression. That is the honest trade: it enables local
+         pure computation between DB touches, at the cost of a round
+         trip on the worst axis (every DB hit). Hybrid placement
+         (see placement subsection) is the mitigation, not a bigger
+         endpoint.
+
+         REFUSE-OR-FORWARD. Some prims MUST execute server-side to
+         mean anything: route, fork, merge, checkout, auth admin
+         prims, jobs/media/net. The rim refuses these with a
+         structured error citing server-only locality rather than
+         pretending to proxy them. The classification is DERIVED from
+         prim-registry metadata (a locality tag set at registration),
+         never a second hand-maintained list — that file would drift.
+
+         NO TRANSACTION OVER WIRE. (with-transaction …) cannot span
+         HTTP calls; the server keeps the transaction body, the client
+         gets the result. This is a hard correctness constraint, not a
+         v0 limitation — see hard-constraints.
+
+         IMPLEMENTED (campaign 7.1 substrate, 2026-08, merged; plan-pass
+         reconciled 2026-12). The endpoint + refusal machinery ships in
+         image/lib/primitives.ml + http_pages.ml:
+           - [Primitives.register_server_only] / [register_server_only_sync] tag
+             a prim server-only AT REGISTRATION (route, fork, merge, checkout,
+             create-user, is-admin?, …); [Primitives.is_server_only] reads the
+             same registry metadata the registration sites wrote (never a hand
+             list in the endpoint).
+           - [Primitives.dispatch name args] = the one-call refusal-or-forward
+             path (refuse in front, same-table exec behind), factored out of
+             http_pages.ml so it is unit-testable without an HTTP server; the
+             POST /api/prim endpoint is a thin residue over it. Auth is the same
+             basic-auth/cookie path /api/eval uses; a prim call is equivalent
+             privilege to an eval that performs the prim.
+           - Tests: image/test/api_prim_test.ml covers proxyable-ok,
+             server-only-refused-not-executed (structured server_only kind),
+             and metadata-derived classification (not hand-maintained).
+           GRANULARITY (per-DB-hit), REFUSE-OR-FORWARD (metadata-derived),
+           and NO-TRANSACTION-OVER-WIRE all stand exactly as specified.
+    |))))
+
+  (subsection client
+   (doc "remote/ package: pp-remote binary = pricklypear_lisp + a proxy prim rim + lazy env. NB: this is NOT the browser client/ package (structural-editing.borg client-eval, js_of_ocaml interp.js); prim-seam proxies DB prims over HTTP where client-eval leaves them unbound.")
+   (status implemented)
+   (implements remote/lib/proxy_rim.ml remote/lib/remote.ml remote/lib/http_transport.ml remote/lib/def_cache.ml remote/bin/main.ml)
+   (verify
+    (test "pp-remote boots, connects to an image URL, and evaluates (+ 1 2) with zero prim calls (pure compute stays local)")
+    (test "a prim call in client eval proxies to /api/prim and the result binds locally for subsequent pure use")
+    (test "a function-def referenced but not yet loaded is fetched on first call (lazy env miss) and cached")
+    (test "a def loaded at gen N is re-fetched once the branch generation bumps (lazy env reload after invalidation)")
+    (test "quit the client; re-launch against the same branch; (define …) made last session is present (server is source of truth)"))
+   (details
+    (doc (|
+         PACKAGE. A new remote/ package: pp-remote binary =
+         pricklypear_lisp + pricklypear_pure_prims + a proxy rim that
+         forwards Prim_call to the server. Sibling of cli/, agent/,
+         and the browser client/, not a child of image/. No Postgres
+         link, no Lwt, no store_db.
+
+         PROXY RIM DISCIPLINE. The proxy rim is a PURE proxy with zero
+         logic. The moment it grows its own interpretation of a prim,
+         there are two dialects. The only allowed local behavior is:
+         dispatch to the table (cache/local prims), or forward to
+         /api/prim. Nothing in between.
+
+         LAZY ENV. Function resolution is data (CTE over
+         function_defs). The client materializes defs on first
+         reference instead of at boot: env miss -> fetch def source
+         from server -> eval into env under the proxy rim. The env is
+         a cache; invalidation is the caching subsection's job.
+
+         IDENTITY. whoami/current-author/auth attach to the live
+         session server-side. The client passes its basic-auth
+         identity per prim call (already how /api/eval auth works).
+         The client may NEVER claim an author it does not hold —
+         identity is server-asserted, not client-asserted.
+    |))))
+
+  (subsection caching
+   (doc "Definition cache invalidation via branch generation; the one cheap round trip")
+   (status implemented)
+   (implements remote/lib/def_cache.ml migrations/)
+   (verify
+    (test "a write in the client's branch ancestry bumps a generation counter; the client's next cache-check round trip observes the bump and reloads affected defs")
+    (test "a checkout to a different branch invalidates the whole local def cache (branch is the namespace)")
+    (test "with no writes, the cache-check round trip is a single cheap HEAD-ish returning unchanged-generation, not an N-way hash diff")
+    (test "a def-free / pure-compute session performs zero cache round trips"))
+   (details
+    (doc (|
+         KEY. The cache is keyed by (branch, generation). Generation
+         is a monotonic counter bumped on any write in a branch's
+         ancestry (a promote into main, a define on personal, etc.).
+         The inheritance CTE is decorated with it. The client stores
+         (def-name -> (value, source-generation)) and invalidates on
+         generation change.
+
+         WHY NOT CONTENT-HASHING. Pricklypear names are mutable per
+         branch; defs can be redefined. Unison-style content addressing
+         does not apply (no append-only redefinition). Name-version
+         coherence under a branch namespace is the right shape and
+         it is SMALLER than content hashing — one counter per branch,
+         not a hash per def.
+
+         THE ONE ROUND TRIP. Cache freshness is a single cheap call:
+         "is my (branch, generation) still current?" Not an N-way
+         diff. This is materialized-view invalidation in a very small
+         costume, and the branch model already gives us the namespace
+         to key it on.
+
+         READ-HEAVY CONFIG. Function defs + read-heavy config rows are
+         the cache's first citizens. Hot (data_rows) reads stay remote
+         (placement subsection).
+
+         THE GEN COORDINATE IS TREE-TIME'S (DEPENDENCY PIN — campaign 7.0
+         plan pass). The cache does NOT invent its own version key. The
+         generation is migration 017 branch_generations — the single
+         per-branch monotonic counter bumped by AFTER triggers on
+         function_defs / type_defs / view_bindings writes (covers
+         promote/merge and the one-tree reverse mirror, since they all write
+         the scaffolding tables) and by data_rows writes to the root branch
+         (data is shared/branch-free, so a data write appears in every
+         branch's ancestry). It is surfaced as
+         current_branch_generation(branch_id) (walks the ancestry chain so an
+         ancestor write appears to every descendant via the inheritance CTE),
+         Store.current_generation, and the tree-time (gen-now) prim. Tree-time
+         (campaign 5, landed 2026-12) PROMOTED this same 017 counter from a
+         cache-invalidation signal to the head/gen coordinate: (tree/get :gen),
+         gen-read, gen-diff, undo, versioned_head/history all read as-of it.
+         So the def cache keys on EXACTLY the coordinate tree-time reads as-of
+         and (gen-now) reads — one counter, one namespace. A remote client's
+         'is my (branch, generation) still current?' check is therefore the SAME
+         cheap current_branch_generation round trip tree-time treats as the
+         reads-as-of-gen clock — no independent version clock to drift.
+
+         IMPLEMENTED SUBSTRATE + OPEN CLIENT MODULE. The server-side half is
+         DONE (migration 017 + Store.current_generation + image/test/
+         branch_generation_test.ml: write-in-ancestry bumps / checkout = distinct
+         (branch,generation) key / no-write unchanged / type+route bumps / shared
+         data bump). The client-side half — remote/lib/def_cache.ml keying
+         (def-name -> (value, source-generation)) with (branch, generation)
+         invalidation and the one cheap round trip — is the OPEN 7.2 make slice
+         (cf. the client subsection, whose [implements remote/lib/def_cache.ml]
+         line is the make target).
+    |))))
+
+  (subsection placement
+   (doc "Hybrid placement: prim-dense / transactional exprs go to /api/eval, pure compute stays local")
+   (status implemented)
+   (implements remote/lib/placer.ml)
+   (verify
+    (test "an expression containing (with-transaction …) is detected as non-proxyable and POSTed to /api/eval wholesale")
+    (test "an expression with zero prim calls evaluates locally with no round trip")
+    (test "a prim-dense expression above a call-count threshold is routed to /api/eval rather than issuing N prim round trips")
+    (test "placement decision is logged/visible so the user can see WHY an expr went remote (no silent boundary)"))
+   (details
+    (doc (|
+         THE LATENCY INVERSION. Nopales product code is prim-heavy:
+         (get 'user id), (rows …), (create …). A pure proxy rim puts
+         a round trip on the worst axis (every DB hit) rather than
+         per-expression like /api/eval does today. v0 (pure proxy)
+         LOSES to pp_eval on prim-dense code. That is acceptable for
+         interactive/definitional work (REPL, debugger, tests) and
+         wrong for hot loops.
+
+         THE HEURISTIC. Detect prim-dense and transactional
+         expressions and POST them to /api/eval wholesale, keeping
+         local eval for pure computation. This is staging the
+         boundary at the HTTP edge: a tiny tracer that counts prim
+         calls and flags transaction blocks, then routes. It degrades
+         gracefully — v0 is "everything proxies"; v1 adds the
+         threshold; the heuristic is the ONLY moving part.
+
+         TRANSACTION BOUNDARIES ARE HARD. (with-transaction (lambda
+         () body)) MUST run server-side: the transaction holds
+         (select-for-update …) locks across prims in the body, and
+         locks cannot span HTTP calls. The placer treats any
+         transaction-wrapped expr as non-proxyable and forces
+         /api/eval. This is correctness, not optimization.
+    |))))
+
+  (subsection stepping
+   (doc "Local single-step / trace / breakpoint over a proxy rim: the LLM-debugger substrate")
+   (status implemented)
+   (implements lisp/lib/explain.ml remote/lib/remote.ml)
+   (verify
+    (test "a breakpoint set on a def pauses local eval mid-expression; the data plane (prim calls) still crosses the wire and returns")
+    (test "the server is unaware a breakpoint fired (stepping is purely a client concern)")
+    (test "a trace of an expression shows local pure steps interleaved with remote prim round trips, distinguished")
+    (smoke "an agent loop drives a stepping eval against a remote branch: set bp, step, inspect frame, continue"))
+   (details
+    (doc (|
+         THE PAYOFF. Once eval runs in a client process you can
+         single-step, trace, breakpoint, and inspect frames locally
+         while the data plane stays authoritative in Postgres. The
+         server never knows a breakpoint happened — stepping is a
+         client concern, prims still cross the wire exactly as a fast
+         eval would.
+
+         DEBUGGER AS PRODUCT. This is the right substrate for the
+         LLM-integration chapter: a debugger the model can drive. A
+         model that can step its own Nopales, inspect frames, and
+         test hypotheses ("what if this def were X?") against a
+         durable corpus gets git-worktree-style experimentation for
+         running programs — something neither Smalltalk (one
+         resident image) nor the web (stateless client) can say.
+
+         REPLAY. Because defs are durable server-side, a client can
+         pin a (branch, generation) snapshot and replay an
+         expression against that exact corpus later. Checkpointing
+         and hypothesis-testing eval become client-side operations
+         against durable data, not reimplementation.
+
+         explain.ml + proxy rim is the whole kit: the stepping
+         evaluator already exists as a pure concern; the proxy rim
+         is the only addition. The story writes itself from there.
+    |))))
+
+  (subsection agent-loop
+   (doc "DEPRECATED (2026-09-04 reconcile) — prim-seam owns NO screen. The agent loop and its chat surface are the PRODUCT's (agent.borg positioning + agent.borg surfaces, implemented); this stanza's historical claims about pp-remote's chat page / /code browser / --serve are design-sketch only, pending the make that deletes remote/lib/surface.ml + remote/lib/http_ui.ml and collapses the duplicated chat into the agent. What SURVIVES here (and is not deprecated): the loop SEAM — the llm/ shared package + Loop.host seam — which the agent product links; ownership of that seam's spec moves to agent.borg with the surface.")
+   (status deprecated)
+   (implements llm/lib/loop.ml llm/lib/provider.ml llm/lib/tools.ml remote/lib/remote.ml remote/lib/http_ui.ml remote/lib/surface.ml remote/test/loop_test.ml) ; modules all still exist; llm/* + the Loop.host claim transfer to agent.borg with the pending surface-collapse make
+   (details
+    (doc (|
+         DESIGN SKETCH (not the shipping product split; recorded so the
+         pending surface-collapse make has the original shape to cut).
+
+         THE SEAM (SURVIVES, SPEC MOVES TO agent.borg). The loop lives
+         in llm/ (a shared package sibling of lisp/ and common/):
+         provider.ml is a pure-OCaml OpenAI-compatible HTTP client (no
+         image coupling), loop.ml is the turn orchestration factored
+         over a small [Loop.host] record (tool_order, tool_entry, fire,
+         eval_tool_body, call_prim), tools.ml is the builtin read/bash
+         bodies with an explicit resolve_path + register. The agent
+         product supplies its Loop.host over the local-first rim.
+         "agent/ is the local-only instance; pp-remote is the relaxed
+         instance" was literally true in the code — one loop, two
+         hosts; the deprecation is about the SCREEN, not the seam.
+
+         THE KEY IS A VALUE (SURVIVES, moves with agent.borg.auth /
+         auth.user-llm-keys). Provider credentials are client-side
+         values: AGENT_API_KEY / AGENT_BASE_URL / AGENT_MODEL; --mock-
+         script substitutes a canned provider for tests/demos. No
+         server round trip, no server-held secret. (The llm_config
+         sync-round metadata — local-first.sync — carries the caller's
+         OWN credential to a lens so the loop can reach the provider
+         after sync; control-channel metadata, never tree data.)
+
+         WHAT CROSSES THE WIRE (still the prim-seam truth). Only
+         Prim_call. A plugin tool's body evals under the proxy rim,
+         so (get 'user id) inside a tool crosses to /api/prim exactly
+         as a REPL eval would. Builtin tool bodies (read/bash) are
+         OCaml prims in the LOCAL table — zero wire. (on "tool_call"
+         …) hooks and register-tool plugins work identically across
+         hosts, so plugin sources transfer. THIS paragraph is why the
+         seam description lived in this chapter at all: the wire
+         contract is prim-seam's; the turn loop is agent.borg's.
+
+         THE KEY IS A VALUE. Provider credentials are client-side
+         values: AGENT_API_KEY / AGENT_BASE_URL / AGENT_MODEL (the same
+         env the agent binary reads; ./.env auto-loads; --mock-script
+         substitutes a canned provider for tests/demos). No server
+         round trip, no server-held secret. The provider call runs on
+         the client machine; the corpus + data plane stay on the image.
+
+         WHAT CROSSES THE WIRE. Only Prim_call. A plugin tool's body
+         evals under the proxy rim, so (get 'user id) inside a tool
+         crosses to /api/prim exactly as a REPL eval would. Builtin
+         tool bodies (read/bash) are OCaml prims in the LOCAL table —
+         zero wire. (on "tool_call" …) hooks and register-tool plugins
+         work identically to the agent host, so plugin sources
+         transfer between the hosts.
+
+         THE SURFACE (DEPRECATED — this is the claim that contradicted
+         positioning). pp-remote serving / as a Nopales-authored chat
+         page, POST /chat streaming multipart/mixed, /eval as the eval
+         box, /code as the lens browser, session/last-turn-parts for
+         hyper/stream replay: all of this still RUNS in remote/lib/
+         surface.ml + http_ui.ml as of this note, which is exactly the
+         problem — a second product in a capability library. It retires
+         into agent.borg surfaces (one surface file, one set of chat/*
+         templates, one --serve); pp-remote keeps ONLY a minimal /eval
+         harness as a capability demo. The smoke that verified this
+         surface (scripts/smoke_remote_surface.sh) is dropped from this
+         stanza's verify because a green check on a retired surface
+         validates the wrong thing; the equivalent smoke lives in
+         agent.borg surfaces (scripts/smoke_agent_surface.sh).
+
+         V0 POSTURE (historical). A chat turn held the request mutex
+         for its whole lifetime on the client harness. Moot once the
+         surface collapses into the agent, which interleaves via its
+         per-eval lock.
+    |))))
+
+  (subsection hard-constraints
+   (doc "Constraints that are correctness, not v0 limitations — do not relax them")
+   (status implemented)
+   (details
+    (doc (|
+         TRANSACTIONS DON'T SPAN PRIM CALLS. (with-transaction …)
+         holds (select-for-update …) locks across prims in its body.
+         Locks cannot survive an HTTP round trip. Any
+         transaction-wrapped expression MUST execute server-side
+         (placement forces /api/eval). Relaxing this corrupts the
+         store.
+
+         CLOSURES DON'T CROSS THE WIRE. VLambda/VPrim serialize to a
+         sentinel and do not round-trip. A server function invoked
+         remotely returns a sentinel, not a callable. This is why
+         function resolution is data (def source fetched and eval'd
+         locally into the env), not RPC-into-a-closure. The proxy
+         rim never tries to call a remote closure.
+
+         VERSION SKEW IS THE TAX. The corpus outlives the
+         interpreter by design (defs are durable; the interpreter is
+         a library that rebuilds). A story for "branch pinned to
+         Nopales-semantics vN" is required once the corpus is the
+         product: either semantics versioning in the env, or a
+         migration lane when lisp/ changes behavior. poohstack
+         "everyone rebuilds on switch" works for devs; it will not
+         work for durable multi-version corpora.
+
+         IDENTITY IS SERVER-ASSERTED. The client passes basic-auth;
+         it may not claim an author. whoami/current-author attach to
+         the live session server-side and are returned BY the server,
+         never set BY the client.
+    |))))
+
+  (subsection v0-non-goals
+   (doc "Explicit exclusions for the first prim-seam version")
+   (status implemented)
+   (details
+    (doc (|
+         OUT for v0, deferred:
+           - Browser/WASM client. Pulling defs from the server and
+             executing them locally is fine for YOUR OWN corpus; it
+             is a trust boundary the moment branches are multi-user.
+             Later, with a capability model, not now.
+           - Client-side caching of data_rows (only defs +
+             read-heavy config rows are cached in v0).
+           - Server-side caching of client state. The server keeps
+             the corpus and the data plane; it does not memoize
+             per-client.
+           - A second transport. HTTP+JSON is the only wire in v0;
+             no binary protocol, no websocket prim channel.
+
+         HARD OUT (within prim-seam; RESOLVED in-book by local-first.borg):
+           - A second store on the client. In REMOTE-EVAL (the online
+             mode) the client is a cache and an interpreter, never a
+             source of truth. The offline mode this hard-out appears
+             to forbid is NOT a different project — it is
+             local-first.borg, same book, same Prim_call seam: a LENS
+             is a governed branch of the one tree with merge semantics
+             (three-way tree-diff, branching.borg), not an
+             uncoordinated copy. The hard-out still stands for exactly
+             what it was written against: an UNCOORDINATED client
+             copy. prim-seam and local-first are two policies of
+             one seam (local-first.positioning): the data plane
+             crosses the wire per-hit online, or resolves against the
+             local lens offline and syncs on reconnect. The reframing
+             is honest only because the one tree + three-way
+             tree-diff merge already exist; without them this
+             hard-out stays hard.)
+           - Multi-user on the client. One client = one user.
+           - Language changes made in remote/ instead of through
+             lisp-interpreter.borg. The client is a host, not a fork.
+    |))))
+ )
+)
