@@ -167,13 +167,55 @@ mirror — explicitly out of the provable fragment. Say so in the spec note.
 
 ## Definition of done (whole plan)
 
-- [ ] T1: promote is one transaction; atomicity regression test green.
-- [ ] T2: merge-on-diverged semantics decided + implemented + spec says the
-  rule in one sentence; test covers conflict-not-overwritten.
-- [ ] T3: single hash domain; cross-writer hash equality test; migration
-  applied on dev stack; verify_one_tree green.
-- [ ] T4: pure branch-algebra module + QCheck properties green;
-  formal-verification chapter status updated.
-- [ ] T5: docs consistent; `borge drift` clean.
-- [ ] All existing alcotest suites green on this branch.
-- [ ] Commits are individually sane; branch ready for merge to master.
+**STATUS 2026-09 (executed on this branch): ALL FIVE TASKS LANDED.**
+
+- [x] T1: promote is one transaction; atomicity regression test green
+  (commit 4f5ec4f — verified to FAIL on pre-fix promote).
+- [x] T2: merge-on-diverged = conflict-only (recommended option taken;
+  commit 0773ae4); spec says the rule in one sentence; tests cover
+  conflict-not-overwritten + post-merge ahead reclassification.
+- [x] T3: single hash domain — DB-side canonical jsonb digest in every
+  writer + migration 027 backfill; cross-writer equality test green;
+  branch_status reads the stored column (query-time workaround retired)
+  (commit 3d12cde).
+- [x] T4: pure branch_algebra module + 8 QCheck properties green;
+  store.ml delegates to it; formal-verification chapter → partial
+  (commit ef66e1c). qcheck 0.91 installed on poohstack (new dep).
+- [x] T5: docs consistent (AGENTS.md tree-flag default fixed;
+  docs/one-tree.md shipped-table + residual updated); borge drift clean.
+- [x] All DB-backed suites that passed on pristine master still pass;
+  lisp/ + common/ suites green.
+
+### Pre-existing master failures (NOT introduced here — verified on
+### pristine master + fresh DB; document/file, don't fix in this branch)
+
+- branch_generation_test/1: child fn write bumps the PARENT's branch
+  generation, not the child's (migration-017 trigger misclassification)
+  AND the test has no Random.self_init → deterministic branch names
+  collide across runs.
+- branch_status_test/2 prune-synced: caught-up-pin reads something other
+  than synced; all four assertions fail on a fresh DB.
+- tree_datum_test 1/9, tree_edges_test 4/5, tree_sibling_order_test 5/6,
+  sync_db_test 5/6: fail identically on pristine master, fresh DB.
+
+### Follow-ups surfaced by this work (out of scope here)
+
+- Sync WIRE hash (server manifest ↔ remote lens client content_hash) is
+  still the compact-Yojson domain; the storage column is now canonical
+  jsonb. One noisy Diverge round per client-created node until the lens
+  refreshes its envelope files; re-point the wire at a canonical-JSON
+  domain as a local-first follow-up (noted in borge/one-tree.borg).
+- DB-backed suites flake when a live image shares the DB (SERIALIZABLE
+  40001 from its background flushes): `scripts/dev.sh stop` the image
+  for deterministic runs.
+
+### Environment notes for the executing agent
+
+- qcheck 0.91 + qcheck-core.runner installed on the poohstack switch.
+- Tests connect via PP_DB_HOST/PP_DB_PORT/PP_DB_USER/PP_DB_NAME env
+  (default user `pricklypear_image` does NOT exist on dev — set
+  PP_DB_USER=postgres); without them the suites SKIP silently, which
+  makes green runs meaningless. Always check the run actually hit PG.
+- An ephemeral stack on different ports works well: PP_DATA_DIR=/tmp/
+  pp-pgtest PP_DEV_DIR=/tmp/pp-devtest PP_DB_PORT=5434 PP_HTTP_PORT=
+  18081 PP_REPL_PORT=17879 scripts/dev.sh start.
