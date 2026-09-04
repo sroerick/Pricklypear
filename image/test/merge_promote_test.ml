@@ -301,6 +301,93 @@ let test_promote_atomic () =
                   ())
             ~finally:drop_injection)
 
+(** branching.merge S3 (2026-09 decision): diverged names are NEVER
+    auto-applied — they come back as conflicts, the target keeps its own
+    body, and post-merge (base advanced) the source's pin reclassifies
+    ahead (its own change vs the new base) until a human resolves.
+    ahead-new names still apply normally. *)
+let test_merge_diverged_not_applied () =
+  with_store (fun store ->
+      match S.conn_of store with
+      | None -> ()
+      | Some _ ->
+          let suffix = string_of_int (Random.int 1_000_000) in
+          let child_name = "mrg_div_" ^ suffix in
+          let div_fn = "mrg_divfn_" ^ suffix in
+          let new_fn = "mrg_newfn_" ^ suffix in
+          store.branch_id <- main_id;
+          S.persist_function store div_fn (expr_of_int 1) "tester";
+          match
+            S.fork_branch store ~parent_id:main_id ~owner:"mrg_test"
+              ~child_name
+          with
+          | None -> Alcotest.fail "fork failed"
+          | Some child_id ->
+              (* child moves its copy; parent ALSO moves its copy since
+                 the fork base → diverged. child adds a fresh fn →
+                 ahead-new. *)
+              store.branch_id <- child_id;
+              S.persist_function store div_fn (expr_of_int 2) "tester";
+              S.persist_function store new_fn (expr_of_int 5) "tester";
+              store.branch_id <- main_id;
+              S.persist_function store div_fn (expr_of_int 3) "tester";
+              (match
+                 S.merge_branch store ~source_id:child_id ~target_id:main_id
+               with
+              | None -> Alcotest.fail "merge failed"
+              | Some res ->
+                  Alcotest.(check bool) "diverged name in conflicts" true
+                    (List.mem div_fn res.conflicts);
+                  Alcotest.(check int) "only ahead-new applied" 1 res.count;
+                  (* target kept its own body — NOT clobbered by the
+                     child's 2. *)
+                  (match
+                     S.lookup_function_on_branch store ~branch_id:main_id
+                       ~name:div_fn
+                   with
+                  | Some (body, _, _, _) ->
+                      Alcotest.(check bool) "target body not overwritten" true
+                        (body = expr_of_int 3)
+                  | None -> Alcotest.fail "target row vanished");
+                  (* ahead-new landed *)
+                  (match
+                     S.lookup_function_on_branch store ~branch_id:main_id
+                       ~name:new_fn
+                   with
+                  | Some (body, _, _, _) ->
+                      Alcotest.(check bool) "ahead-new applied" true
+                        (body = expr_of_int 5)
+                  | None -> Alcotest.fail "ahead-new not merged"));
+              (* post-merge: base advanced; the child's pin is its own
+                 change vs the new base → ahead, NOT diverged, NOT synced. *)
+              let st =
+                S.branch_status store ~branch_id:child_id
+                |> List.find_opt (fun r -> r.S.st_name = div_fn)
+              in
+              (match st with
+              | Some r ->
+                  Alcotest.(check bool) "post-merge reclassifies ahead" true
+                    (r.S.st_status = S.SAhead)
+              | None -> Alcotest.fail "status row missing post-merge");
+              (* cleanup *)
+              let _ =
+                S.delete_function_on_branch store ~branch_id:main_id
+                  ~name:div_fn
+              in
+              let _ =
+                S.delete_function_on_branch store ~branch_id:main_id
+                  ~name:new_fn
+              in
+              let _ =
+                S.delete_function_on_branch store ~branch_id:child_id
+                  ~name:div_fn
+              in
+              let _ =
+                S.delete_function_on_branch store ~branch_id:child_id
+                  ~name:new_fn
+              in
+              ())
+
 let test_format_merge_result () =
   Alcotest.(check string) "no conflicts" "merged 3 rows"
     (S.format_merge_result { count = 3; conflicts = [] });
@@ -322,5 +409,7 @@ let () =
         ; Alcotest.test_case "promote routes with handler" `Quick
             test_promote_routes_with_handler
         ; Alcotest.test_case "promote atomic" `Quick test_promote_atomic
+        ; Alcotest.test_case "merge diverged not applied" `Quick
+            test_merge_diverged_not_applied
         ] )
     ]
