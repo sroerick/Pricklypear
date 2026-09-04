@@ -191,18 +191,29 @@
          environment), we'd pick differently, but
          SSH-first implies Unix-style multi-user.
 
-         SOCIAL LAYER (chat + plan) uses SHARED data_rows
-         (existing storage rule) with handler-enforced
-         filters by (whoami). That is intentional: messages
-         and plans are multi-user objects, not personal-branch
-         pins. Branch gardens stay code/UI; social state is
-         rows. See multi-user.chat and multi-user.user-plan.
+         SOCIAL LAYER (chat + plan): RECONCILED 2026-09-04.
+         The original mechanism — 'SHARED data_rows + handler-
+         enforced filters by (whoami)' — died with migration 013
+         (user-scoped datum paths + RLS floor): handler filters
+         can NARROW, never WIDEN past the prim-layer confinement
+         (crud.ml: (author = whoami OR tree_is_seed_type)), and
+         chat-message / chat-room / user-plan are not seed types.
+         A lobby built on (rows 'chat-message) therefore shows
+         each user only their OWN posts today (prod is single-
+         user in practice, so the break is latent). The social
+         layer's shared-multi-writer DATA need is real and now
+         has a named home: data.s.<space>.* member spaces
+         (branching.shared-data-spaces, planned) — or a per-type
+         shared admit for the world-readable lobby case. Chat
+         and plan stanzas below are reconciled to partial until
+         their shared-row mechanism lands.
    |))
    )
   )
   (subsection chat
    (doc "Multi-user chat: site lobby + DMs so humans on the box can talk")
-   (status implemented)
+   (status partial)
+   (* agent note (|2026-09-04 reconcile: stanza implemented->partial. Code ships (libs/chat ~552 lines; GET /chat 200) but the MULTI-USER semantics the verify stanzas assert are broken by migration 013's data confinement: (rows 'chat-message) returns only the session's own-authored rows, so 'alice and bob post to /chat lobby; each sees both messages' cannot pass — bob's lobby posts live at data.u.bob.chat_message.*, outside alice's visibility (chat types not in tree_seed_types(); observed mechanism-level 2026-09-04 via crud.ml + tree_seed_types() + live (rows 'chat-message) => 1 own row as admin). The repair is named: data.s.<space>.* spaces with chat types admitted (branching.shared-data-spaces — lobby = a space with all users as members; DMs = a space per pair), or per-type shared admit for the world-readable lobby. No code change in this pass; the stanza's DATA section text below is corrected, verify left as the TARGET (it passes again post-repair and serves as the space feature's first consumer test).|) *)
    (* agent note (|2026-08-02: libs/chat ~552 lines lobby+DM; live GET /chat 200.|) *)
    (implements libs/chat/lib.pp image/lib/http.ml)
    (verify
@@ -267,11 +278,17 @@
              'body          ; plain text (escape on render)
              'created_at)
 
-         data_rows are SHARED across branches (storage rule).
-         Access control is in chat/* handlers:
+         data_rows are SHARED across branches (storage rule)
+         BUT USER-SCOPED since migration 013 — 'access control
+         is in chat/* handlers' is no longer sufficient: the
+         handler filter runs INSIDE a visibility set that
+         already excludes other users' rows (see the 2026-09-04
+         agent note). TARGET shape post-repair: chat types
+         admitted into a space (lobby space / per-DM pair
+         space), keeping the same handler-level rules below:
            - post: from MUST equal (whoami); reject spoof
-           - list lobby: any authenticated user
-           - list dm: whoami is member
+           - list lobby: any authenticated user (lobby-space member)
+           - list dm: whoami is member (pair-space membership IS the check)
            - create dm room: both users must exist
 
          Retention v1: keep all messages (personal OS scale).
@@ -345,7 +362,8 @@
   )
   (subsection user-plan
    (doc "Unix-style .plan: short per-user status of what they intend to work on")
-   (status implemented)
+   (status partial)
+   (* agent note (|2026-09-04 reconcile: implemented->partial — (plan-of user) / (plan-list) are cross-user reads by design and are broken by migration 013's per-author data confinement (see DATA section text below + chat's reconcile note, same date). The single-user path ((plan) / (plan body) on own whoami) still works. Repair = space admission; stanza returns to implemented with the space make.|) *)
    (* agent note (|2026-08-02: libs/plan user-plan + plan/set!/of; live GET /plan 200.|) *)
    (implements libs/plan/lib.pp)
    (verify
@@ -380,7 +398,14 @@
          One logical plan per username. Implementation:
            find existing row where username matches whoami;
            update body + updated_at, or create if missing.
-         Shared data_rows; filter by username field.
+         RECONCILED 2026-09-04: 'Shared data_rows; filter by
+         username field' is dead text — migration 013 scopes
+         rows per author, so (plan-of user) / (plan-list) can
+         only ever see the CALLER's own plan row today. Plan
+         is a broadcast-by-design surface; its repair is the
+         same one chat takes (space admission or world-readable
+         shared admit; branching.shared-data-spaces). Stanza
+         flips to partial until then.
 
          Optional later: project / until date — not v1.
 

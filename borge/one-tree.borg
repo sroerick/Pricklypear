@@ -143,9 +143,13 @@
            create time:
              datum    data.u.<user>.<type_name>.<id>
              shared   data.shared.<type_name>.<id>
+             space    data.s.<space>.<type_name>.<id>
+                      (PLANNED — member-gated collaboration;
+                      branching.shared-data-spaces)
            No branch id in the path, no lens walk, no inheritance —
            a session sees exactly its own data.u.<user>.* plus
-           data.shared.*. Branches stay purely a CODE concept
+           data.shared.* plus the data.s.<space>.* of spaces it is
+           a member of. Branches stay purely a CODE concept
            (branching.borg's "branches are for code, not data"
            stands). Fork/merge/promote never touch datum nodes, so
            there are no data carve-outs in those semantics.
@@ -275,8 +279,10 @@
            outside the branch lenses entirely. /meta is system
            bookkeeping. /data is partitioned BY USER, not by branch:
            data.u.<user>.* is that user's rows, data.shared.* is
-           shared/seed content. A session sees exactly its own
-           u.<user> subtree plus shared — visibility is a path-prefix
+           shared/seed content, data.s.<space>.* is member-gated
+           collaboration space (PLANNED — branching.shared-data-spaces).
+           A session sees exactly its own
+           u.<user> subtree plus shared plus member spaces — visibility is a path-prefix
            confinement, not a lens walk, and there is no inheritance.
            See branching-interaction for the full rule.
 
@@ -850,6 +856,7 @@
   (subsection branching-interaction
    (doc "Branches as tree lenses; the /data question; merge as tree-diff")
     (status implemented)
+   (* agent note (|2026-09-04 /data gains a THIRD compartment (planned): data.s.<space>.* member-gated shared spaces for multi-identity collaboration (a human + their agent users on shared projects; full spec + rejected alternatives at branching.shared-data-spaces). NOT org-level branches — branches stay code-only; a space is single-head, multi-writer on the server, and inherits data.shared's local-first sync policy (pull + propose, server-authoritative) for client lenses. The 'deliberate grants mechanism' phrase in the DECISION text below was the placeholder this fills. The 2026-08-02 isolation rule and the 2026-08-14 single-head stance are PRESERVED: spaces are single-head; the versioning axis stays data.l.*; fork/merge/promote still never touch a datum node of any compartment.|) *)
    (* agent note (|2026-08-02 /data DECISION revised to USER-OWNED data (resolves BORGE-1785693032): datum under data.u.<user>.* + data.shared.*, RLS floor keyed on user. An earlier branch-keyed draft (b.<branch>.data.*) was rejected as a leaky abstraction — encoded user ownership in a branch path, then needed fork/merge carve-outs. Three-way tree-diff merge / promote-as-pointer-move still incomplete vs scaffolding promote. Code still on the old shared pile — spec leads code here.|) *)
    (* agent note (|2026-08-14 DATA-BRANCHING BOUNDARY (design discussion, with local-first): single-head, user-keyed data STANDS — but it is a current-shape decision, not a hard no forever. Split MECHANISM from CONCEPT: (1) MECHANISM is SHARED — the 3-way tree-diff merge (subtree/node hashes) is one generic tool for both code lenses AND local-first data sync; do not build two merge algorithms. (2) CONCEPT is NOT branchable — data has no user-facing branch concept (no checkout, no 'dev copy of your todos', no lens-walking data). A device lens snapshot (admin/laptop) is SYN/MERGE-BASE METADATA — a replication convenience — not a sibling world; data is SPATIAL (which copy of one datum), not TEMPORAL (which version of the world). Local-first sync gets its merge base from (branch, generation) snapshot pins + node hashes, NOT from making data semantically branchable. REOPEN TRIGGER (falsifies the boundary): a real feature where a USER forks their OWN data to experiment and later merges it back (e.g. clone my notes, rewrite offline over a week, reintegrate). If that use case becomes real, user-keyed flat data creaks and this boundary gets a plan-phase re-look — with the branch-keyed rejection above as the explicit prior to beat. Near-term evidence single-head is right: local-first's first payloads (transcript appends, memory LWW) are deliberately single-head.|) *)
     (* agent note (|2026-08-23 PLAN-PHASE PROPOSAL (versioned user-keyed data): reopen the data-branching boundary recorded above. The 2026-08-14 boundary split mechanism (shared 3-way tree-diff) from concept (data not branchable) and named a reopen trigger: a user forking their own data to experiment and reintegrate. The local-first lens model IS that use case — a lens materializes a user's data subtree, edits offline, syncs back via three-way merge — and the boundary's defense ("data is spatial, not temporal") is contradicted by local-first's own sync design ("the git protocol in miniature": base/ours/theirs is a versioning act over a store claimed unversioned). The defense does not hold under the machinery built on it.
@@ -911,8 +918,12 @@
            whose session created it, keyed by that user:
              per-user  data.u.<user>.<type_name>.<id>
              shared    data.shared.<type_name>.<id>
+             space     data.s.<space>.<type_name>.<id>
+                       (added 2026-09-04 — member-gated
+                       collaboration; branching.shared-data-spaces)
            A session sees exactly its own data.u.<user>.*
-           subtree plus data.shared.*. There is NO branch id
+           subtree plus data.shared.* plus member spaces.
+           There is NO branch id
            in the path, NO lens walk, and NO inheritance —
            visibility is a plain path-prefix confinement on
            the owning user. (An earlier draft of this revision
@@ -955,7 +966,10 @@
            - The /data browser shows the session's own +
              shared rows, not the global table.
            - Cross-user reads require an explicit copy/move
-             into data.shared or a deliberate grants
+             into data.shared, membership in a shared space
+             (data.s.<space>.* — branching.shared-data-spaces;
+             THE deliberate grants mechanism this line
+             anticipated), or a deliberate future grants
              mechanism — the right kind of friction.
            - NO inheritance of main data: a fresh user sees
              only data.shared (which an app seeds explicitly

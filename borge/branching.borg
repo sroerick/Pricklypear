@@ -594,6 +594,141 @@
    )
   )
 
+  (subsection shared-data-spaces
+   (doc "Multi-identity collaboration on the data plane: named, membership-gated shared compartments data.s.<space>.* — NOT org-level branches")
+   (status planned)
+   (* agent note (|2026-09-04 design discussion + plan-phase spec: USE CASE — a human collaborates with AGENT identities (separate users, 008_agent_users) on shared projects: a shared todo list both sides can read and write. Today data visibility is USER-scoped (one-tree.branching-interaction /data DECISION: data.u.<user>.* ∪ data.shared.*), so neither side sees the other's rows. THE REJECTED CANDIDATE: org-level branches. Branches are for CODE, not data (this chapter's framing decision; one-tree /data): a branch costs exactly ZERO for data because fork/merge/promote structurally never touch a datum — so an org branch buys nothing for collaboration and drags in checkout / inheritance / merge / base_gen semantics the data plane explicitly does not have. THE REAL PRECEDENT is in-repo: migration 014 promoted guestbook_entry into data.shared.* when its per-user rows turned out invisible to other sessions. Spaces GENERALIZE that move from a global hardcoded allowlist to a named, membership-gated compartment. THE REJECTED ALTERNATIVE (local-first purist): no shared compartment; each identity keeps data.u.<identity>.* and collaboration is merge proposals across user subtrees using the shipped sync/push machinery. Rejected on the facts for this use case: (1) the collaborating agents are ONLINE and server-resident (POST /api/prim and /api/eval) — local-first's machinery exists for OFFLINE clients with no shared server, and its open research (sync-conflicts resolution policy) is not a price worth paying to avoid an RLS predicate; (2) the use case is a LIVE shared view ('see what agents are doing'), which federation has no answer for until merge time. THE ZERO-BUILD OPTION (agents auth AS the human: everything lands in data.u.admin.*) is recorded and rejected for >1 agent: authorship attribution collapses (every row says admin) and the agent-promote human-in-the-loop gate is lost. THE LOG QUESTION ('does the model keep a correct log'): attribution is free (data_rows.author = session username on every write, already), and tree-time's tree_versions (018-021) versions kind=datum on every destructive write, path-based, so data.s.* rows get before-images with no new machinery; what's missing is only the consumer — S3 builds (data-history). Includes the chat/plan repair: multi-user.borg's social layer assumed 'shared data_rows + handler filters', a mechanism migration 013 killed — spaces are its named home (see multi-user.borg chat/user-plan reconciles, same date).|) *)
+   (details
+    (doc (|
+         PATH GRAMMAR (third compartment, additive):
+           per-user  data.u.<user>.<type>.<id>       owner, single-head
+           seed      data.shared.<type>.<id>         all sessions,
+                                                     read-mostly
+           space     data.s.<space>.<type>.<id>      members only,
+                                                     multi-writer
+           lens      data.l.<lens>.<user>.<type>.<id> UNCHANGED — the
+                                                     opt-in versioning
+                                                     axis, NOT a
+                                                     collaboration unit
+
+         MEMBERSHIP (one new table, additive migration):
+           data_spaces(
+             name       text PRIMARY KEY,
+             owner      text NOT NULL,
+             created_at timestamptz NOT NULL DEFAULT now())
+           data_space_members(
+             space    text NOT NULL REFERENCES data_spaces(name),
+             username text NOT NULL,
+             role     text NOT NULL DEFAULT 'member', -- 'member'|'owner'
+             PRIMARY KEY (space, username))
+         The owner manages members; members read + write. An identity
+         (human or agent — no distinction; both are users) is in the
+         visibility set iff it rows in data_space_members. Kernel admin
+         with pp.user unset keeps its all-paths view (scripts / repair),
+         unchanged from 013.
+
+         VISIBILITY RULE (extends the 013 pattern, one predicate):
+           A session sees exactly:
+             data.u.<whoami>.*
+             ∪ data.shared.*
+             ∪ { data.s.<space>.* | whoami ∈ data_space_members(space) }
+         Mechanism: a tree_seed_types()-style SQL helper
+         tree_is_space_member(space, username) (or an EXISTS against
+         data_space_members); tree_data_rows view gains the third
+         disjunct; the datum_user_isolation RLS policy gains the same;
+         crud.ml's (author = $u OR tree_is_seed_type(t)) confinement
+         gains OR tree_path_in_member_space(path, $u). SET pp.user
+         stays the request-scoped identity (prim-seam.server-endpoint:
+         a proxied /api/prim call inherits exactly this visibility,
+         because identity is server-asserted per request).
+
+         ROUTING (which writes land in a space) — TYPE-LEVEL v1:
+           (space-create "garden-agents")            owner = whoami
+           (space-add-member "garden-agents" "agent-1") ; owner only
+           (space-remove-member …) / (space-list) / (space-members s)
+           (space-admit 'todo "garden-agents")
+         A type ADMITTED INTO A SPACE lives there: (create 'todo …)
+         routes by TYPE → tree_datum_path gains the space variant
+         (data.s.<space>.<type>.<id>) exactly as 023 added the ~lens
+         variant; get/rows/update/delete/find-row resolve the type's
+         home and confine by membership. Type-level (not row-level)
+         is the deliberate v1 cut: a todo LIST is either shared or
+         personal; row-granular sharing ('share this one note') is
+         honest v2 and must not be paid for now. A type lives in at
+         most ONE space; un-admit moves the type home to per-user
+         for FUTURE writes and LEAVES existing space rows in place
+         (a migrator is v2; spaces are single-head, so stranded rows
+         stay readable by members).
+
+         WHAT THIS DELIBERATELY IS NOT:
+           - NOT a branch. No fork, no merge, no inheritance chain,
+             no checkout, no base_gen, no dirty/diverged status. The
+             entire code-axis machinery is absent because it solves a
+             problem the data plane does not have.
+           - NOT versioned. Single-head rows, last-write-wins at row
+             granularity, serialized by the one image (SERIALIZABLE,
+             Store.with_transaction) — multi-writer on the server is
+             a NON-EVENT. The versioning axis remains opt-in data.l.*;
+             the offline-conflict axis remains local-first.sync-conflicts
+             (and its policy menu now names space rows in scope for
+             LAPTOP-LENS divergence only — see below).
+           - NOT a sizing-up of data.shared. data.shared stays the
+             global seed/wall corpus it is (world-readable on the
+             habitat); spaces are the membership-gated middle.
+
+         LOCAL-FIRST COUPLING (the one place spaces touch the sync
+         model): a space subtree is multi-writer, so it can never be
+         in any client lens's single-writer scope. It replicates
+         under EXACTLY the data.shared policy: pulled, server-
+         authoritative; a laptop lens's divergent edits to a space
+         row are surfaced at sync (never silently resolved; server
+         copy kept), applied via merge-request. Server-resident
+         identities (the agents this subsection exists for) write
+         spaces DIRECTLY — no reconciliation exists because no
+         divergence exists. sync/push stays data.u.*-only until this
+         lands in the replication unit (local-first.replication-units
+         pinned block amended same date).
+
+         AUTHOR-RUNS-AS-AUTHOR INTERACTION (decided): multi-user.borg's
+         permissions stanza executes a function with ITS AUTHOR's data
+         perms. For space rows that rule is BYPASSED: space visibility
+         checks the CALLER's membership, or every agent could read the
+         space through any admin-authored handler and, symmetrically, a
+         removed member could still read the space via another member's
+         handler. Caller-membership is the check; the author field
+         stays attribution, not authority. (Personal data.u.* rows
+         keep author-runs-as-author unchanged; only the space
+         compartment re-keys on caller.)
+
+         THE LOG (answers the design-discussion worry 'does it keep a
+         correct log'): attribution is FREE — data_rows.author is the
+         session username on every write, today. History is BUILT —
+         tree-time's tree_versions (018-021) versions kind=datum on
+         every destructive write, keyed by path: data.s.* rows get
+         before-images per write with zero new storage. What is
+         missing is only the CONSUMER: S3 adds
+           (data-history 'todo <id>) -> VList version dicts
+             newest-first {author, gen, body-as-json}
+         over tree_versions datum rows for the path (any compartment),
+         mirroring code-history's re-implementation over the same
+         substrate; the /data browser drills into it.
+
+         CONCURRENCY HONESTY: two members editing the SAME row
+         simultaneously is row-level LWW under SERIALIZABLE — same
+         semantics as data.shared today, with the lost update visible
+         afterward via data-history (surfaced, never silent). Field-
+         level merge / semantic merge per type is sync-conflicts'
+         policy menu, not this subsection's.
+    |))
+   )
+   (verify
+    (build "dune build @all")
+    (test "S1: migration adds data_spaces + data_space_members; tree_datum_path gains the space variant; tree_data_rows + datum_user_isolation RLS gain the member-space disjunct; two member users see each other's space rows; a non-member's identical query returns nothing (RLS-enforced, not just view-filtered)")
+    (test "S2: (space-admit 'todo s) routes (create 'todo …) to data.s.s.todo.<id>; (rows 'todo) as a member returns the union of members' space rows with per-row author attribution; a removed member's subsequent create errors with a membership error, not a silent per-user write")
+    (smoke "S3: agent edits a shared todo; (data-history 'todo id) returns the human's before-image newest-first with author; the /data browser shows the space compartment and drills into history")
+    (smoke "a proxied /api/prim (rows 'todo) under an agent's basic auth sees exactly the spaces that agent is a member of — no more"))
+  )
+
   (subsection unbind
    (doc "Remove a branch-local binding; reveal shadowed system/main, never delete through")
    (implements image/lib/store.ml image/lib/primitives.ml image/lib/session.ml)

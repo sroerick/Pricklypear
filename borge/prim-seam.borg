@@ -120,6 +120,12 @@
          basic-auth/cookie path /api/eval uses; the client passes its
          identity per call. No new privilege — a prim call is
          equivalent privilege to an eval that performs the prim.
+         DATA VISIBILITY FOLLOWS THAT IDENTITY, server-side, per
+         request (data.u.<whoami>.* ∪ data.shared.* ∪ member
+         data.s.<space>.* — branching.shared-data-spaces): a proxied
+         prim sees exactly what the same expr evaluated in-process
+         under the same identity would see. Nothing about remote
+         clients widens or narrows the data plane.
 
          GRANULARITY. A prim endpoint is per-DB-hit granularity, NOT
          per-expression. That is the honest trade: it enables local
