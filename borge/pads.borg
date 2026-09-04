@@ -1,0 +1,191 @@
+(project pricklypear-pads
+ (doc "Pricklypear book chapter: PADS — the platform-agnostic UI tree. Views build an immutable tree VALUE (a pad tree), not an HTML string; renderer dialects lower that tree to HTML (byte-identical with today's html/ output), to ANSI for terminal clients, and eventually to a native scene description. Retained storage, immutable surface, four edit verbs as data; structed conforms day one. The HTML layer becomes a renderer, not the model.")
+ (status planned)
+ (* agent note (|2026-09 DESIGN SESSION (filmstrip/pads conversation, pi agent): origin of the chapter. Empirical basis: libs/ CSS inventory shows 18 display:flex vs 1 display:grid vs 0 floats — the habitat is ALREADY a box-tree UI serialized as class-soup; pads hoists the implicit tree into a value. soup/* (handles, page-copy immutability, diff) and structed (structure-parametric tree surgery over get-kids/set-kids) are the precedents the chapter builds on. hyper/ is the accidental proof that the EVENT side is already platform-agnostic (hyper/click = event -> dispatch -> new page; the WM event-loop shape). Name: pads (cladodes) — prickly pear pads stack and branch into the tree; renderers lower pads into soil: the native shim prospect (Clay layout library, ~/dev/clay_test holds clay.h 0.14) is the clay soil pun. divsoup was rejected on theme grounds despite tag-soup lineage (soup/ descends from lambdasoup <- BeautifulSoup <- tag soup).|) *)
+ (convention ocaml-dune)
+
+ (section pads-contract
+  (doc "Pads is the intermediate representation between Nopales view code
+      and any display. The DOM is retained; wlr_scene is retained; the
+      terminal screen is retained — so pads is retained storage with an
+      immutable interface and diff-driven sync. Nopales code never holds
+      a mutable grip on any version of the tree; it holds values and
+      emits ops. This chapter fixes the vocabulary, the value shape, the
+      op contract, the layering/modality rules, and the renderer dialect
+      contract. It does NOT fix any one backend; backends are chapters
+      of their own (filmstrip for the web shell; a future native shim).")
+
+  (subsection vocabulary-tiers
+   (doc "Three tiers, quarantined by rule. Tier 1 document semantics are
+       universal (markdown/HTML/man/LaTeX agree on them): heading with a
+       LEVEL attribute (not h1..h6 — a heading IS its level; the six-tag
+       fossil is HTML's accident), para, link, list, code, table, image,
+       emphasis. Tier 2 layout structure is box vocabulary: row, column,
+       flow(+wrap) — with Clay's sizing algebra: size = fit | grow(n) |
+       fixed(n), plus padding, gap, align. float is the fourth layout
+       primitive (see layers-modality). Tier 3 transport specifics are
+       namespaced in attrs and never leak into tier 1/2 names. One
+       escape hatch: (pad raw '((tag . \"details\")) ...) passes a tag
+       through, documented web-only.")
+   (details
+    (doc (|
+         ATTR CONVENTION: attrs are alists of string pairs — the same
+         shape html/attr and data_rows JSON already speak. Three
+         namespaces:
+           semantic      href, level, value, label   (portable)
+           presentation  class (theme-owned paint)   (backend-honored)
+           transport     (on . ((submit . \"/x\")))   event semantics first;
+                         (html . ((hx-swap . \"...\"))) web encoding second
+         A renderer reads the namespace it understands and ignores the
+         rest. The ANSI backend ignoring hx-* is a FEATURE: it proves
+         the quarantine holds.
+    |))
+   )
+   (status planned)
+  )
+
+  (subsection text-runs
+   (doc "Text is not a box; it is a stream. Inline primitives (link,
+       code, badge spans, emphasis) live INSIDE a text-run node, not as
+       sibling boxes: paragraphs must stay measurable and breakable by
+       the renderer. The box tree resumes outside text runs. This is the
+       one place a naive box model fails, and the libs/ inventory shows
+       it live: tree/badge's inline-blocks are text-run members wearing
+       box clothing. Renderer rule, copied from Clay's text elements:
+       the RENDERER measures text; the tree never carries pixel
+       geometry. Layout intents (grow/fit) are medium-agnostic because
+       they are measured per medium: flexbox on web, character cells in
+       terminal, Clay in a native shim.")
+   (status planned)
+  )
+
+  (subsection value-and-constructors
+   (doc "A pad is a proper-list tree value: (tag attrs kids...) where a
+       string in kid position is implicitly a text leaf — the ONE dwim
+       rule that kills most (pad \"span\" '() ...) noise. Constructor
+       discipline is three layers, each emitting the layer below, so
+       adoption is bottom-up and bailable at any altitude: (1) base
+       constructor function, positional; (2) variadic &rest kids
+       wrapper; (3) defmacro sugar (bare-symbol tags, hiccup-ish
+       div.class splitting at expand time) — kept strictly thin because
+       quote-compounds is an open macro edge-case area. Proper-list kids
+       is the structed handshake: get-kids/set-kids conformity is a DAY
+       ONE requirement, so every pads tree is paredit-editable in the
+       structed editor immediately.")
+   (details
+    (doc (|
+         SKETCH (target shape, style of libs/html):
+           (define pad
+             (lambda (tag attrs &rest kids) ...))
+           (pad row '((gap . \"8\") (size . (grow 1)))
+             (pad heading '((level . \"2\")) \"Notes\")
+             (pad flow '((wrap . #t))
+               (map render-card cards)))
+         Macro layer desugars (pad div.card ...) to the above; never to
+         reader tricks. Stable node ids come from the tree/* id
+         discipline: ids survive replacement, and backends key ephemeral
+         state (focus, scroll, caret) against them.
+    |))
+   )
+   (status planned)
+  )
+
+  (subsection ops-contract
+   (doc "Four edit verbs as data — the platform-agnostic contract
+       structed already implies: (replace id subtree), (insert-at id idx
+       node), (remove id), (move id new-parent idx). Every backend
+       interprets the same verbs into its retained surface: web -> htmx
+       morph/swap fragments; terminal -> re-pack and repaint region;
+       native scene -> reparent/move nodes (wlr_scene is itself a
+       retained tree with exactly these semantics). View code calls
+       structed, structed emits ops, renderers consume ops; nobody
+       diffs strings at the model layer.")
+   (implements libs/pads/lib.pp)
+   (status planned)
+  )
+
+  (subsection layers-modality
+   (doc "Menus, popups, modals, tooltips are NOT in layout flow — they
+       are a second tree floating above it, and pretending otherwise is
+       where box UIs cheat (plan 9 rio and raygui both knew: a dialog
+       is a suspended interaction, not a window). So day one: three
+       z-bands — base (content), float (anchored/transient), scrim
+       (modal dimmer) — plus float as the fourth layout primitive with
+       anchor specs: event-point | element-id+attach | viewport, plus
+       offset and capture mode (passthrough | capture — Clay's floating
+       semantics). Modal is an EVENT-ROUTER SCOPE, not a visual class:
+       while node X is modal, events targeting outside X's subtree are
+       swallowed (rio eat-or-dismiss rule). This is also what
+       xdg_toplevel.set_modal means, so the semantic survives to native
+       unchanged. Mappings: CSS stacking contexts / wlr-layer-shell
+       background-bottom-top-overlay bands / xdg-popup for anchored.")
+   (details
+    (doc (|
+         EPHEMERAL STATE RULE (the retained-mode discipline): ephemeral
+         UI state — open/closed menus, focus, scroll, caret, hover — is
+         NEVER in the pad tree the app sees; it lives in a transient
+         corner of workspace state, keyed by stable node id, patched
+         around during sync. Dialog results are plan 9 shaped: text in,
+         plumbing event out — menu entries are (label . event) alists;
+         choosing routes the event through ordinary dispatch. raygui's
+         lesson kept: dialog state is a value; Nopales stays the truth.
+         POINTER GEOMETRY: pointer events carry x/y, so cursor-anchored
+         (rio right-click) floats are server-placeable with zero client
+         geometry. Element-anchored floats (dropdowns) are a web
+         renderer job — CSS anchor positioning — the server never learns
+         pixels.
+    |))
+   )
+   (status planned)
+  )
+
+  (subsection renderer-dialects
+   (doc "One tree, three dialect paths, renderer owns measurement:
+       pads/render-html (the blessed path; MUST byte-match html/tag
+       output node-for-node so adoption is provable), pads/render-ansi
+       (terminal client beside pp-eval; rows become character columns),
+       pads/render-scene (deferred: flat (rect text style) op list for a
+       native shim; Clay is the candidate layout engine — its feature
+       list IS this chapter's tier 2). The theme/ system changes jobs:
+       CSS stops being load-bearing structure (that moves into the tree)
+       and becomes pure paint — colors, fonts, borders — per backend.
+       Non-goal, stated for latency discipline: no Nopales eval on any
+       frame path today or later; policy events are 10-100x/sec and
+       fine, frame loops are not.")
+   (details
+    (doc (|
+         ADOPTION ORDER (bottom-up, bailable everywhere):
+           1. pads/render-html byte-identity proven on ONE widget
+              (layout/card) via hyper/expect against live routes.
+           2. libs/html string-splicing stays as-is during migration;
+              packages port one at a time; unported packages render
+              fine — old and new trees interop at the page fragment
+              level.
+           3. render-ansi when a terminal client wants the same views.
+           4. render-scene only when a native shim chapter exists.
+         INTEROP AT FRAGMENTS: a page may contain string fragments and
+         pad fragments side by side during migration; the boundary is
+         the as-str coercion at fragment assembly, exactly how html/join
+         already composes.
+    |))
+   )
+   (status planned)
+  )
+
+  (subsection drift-proofing
+   (doc "Acceptance is rendered, not asserted — drift-as-rendering, the
+       book/verify culture applied to views. pads/verify walks
+       view_bindings, renders each route both ways (string pipeline and
+       pads lowering), soup/diff's the pair, and reports per-route
+       red/green. The filmstrip chapter adds the interactive form:
+       twin-pane mode renders old and new side by side in one column
+       with the diff badge visible. Byte-identity is the port gate; a
+       route may not be called ported while its twin is red.")
+   (verify
+    (test "dune runtest — pads constructor/render-html unit cases")
+    (smoke "(hyper/expect ...) byte-identity on /welcome after layout/card port")
+    (smoke "pads/verify-all red/green report over view_bindings"))
+   (status planned)
+  )
+ )
+)

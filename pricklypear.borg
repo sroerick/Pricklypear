@@ -23,6 +23,7 @@
  (untracked "docs/p3-debt-handoff.md" "phase-3 debt handoff notes")
  (untracked "docs/plans/borge-status-reconcile-checklist.md" "status reconcile checklist scratch")
  (untracked "docs/plans/interlinear-wp.md" "interlinear work-in-progress plan")
+ (untracked "docs/plans/pads-hello-dualrender.md" "pads hello dual-render spike: make-phase handoff plan (V1 web byte-identity + V2 native wayland window + V3 one-authoring proof)")
  (untracked "docs/pricklypear-book.pdf" "generated book PDF artifact")
  (untracked "docs/runtime-effects-transition.md" "runtime effects transition notes")
  (untracked "docs/ssh-repl-bridge.md" "SSH REPL bridge design notes")
@@ -402,9 +403,30 @@
         inlined from borge/hypermedia-harness.borg.")
   (inline borge/hypermedia-harness.borg)
  )
+ (section pads
+  (doc "Book chapter — PADS, the platform-agnostic UI tree: immutable pad
+        values, four edit verbs as data, three-tier vocabulary, renderer
+        dialects (html / ansi / scene) with drift-as-rendering proof.
+        Full text inlined from borge/pads.borg.")
+  (inline borge/pads.borg)
+ )
+ (section soil
+  (doc "Book chapter — SOIL, the native/Wayland tier: a shim owns the
+        frame loop (River + Clay), Nopales owns all policy over the
+        wire; filmstrip's workspace becomes real windows. Full text
+        inlined from borge/soil.borg.")
+  (inline borge/soil.borg)
+ )
  (section product-experience
   (doc "Book chapter — full text inlined from borge/product-experience.borg")
   (inline borge/product-experience.borg)
+ )
+ (section filmstrip
+  (doc "Book chapter — FILMSTRIP, the habitat shell: a Miller-column
+        cascade strip over a niri-style content strip; panes are routes
+        in partial mode; the desktop is a per-user row. Full text
+        inlined from borge/filmstrip.borg.")
+  (inline borge/filmstrip.borg)
  )
  (section notes
   (doc "Book chapter — outline-first notes (org/roam/obsidian-shaped); full text inlined from borge/notes.borg")
