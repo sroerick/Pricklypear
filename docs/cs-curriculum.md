@@ -42,11 +42,11 @@ Habitat-native courseware (the course hosts itself):
 | Imperative programming | `lisp-interpreter.borg` (mutation as design question) | kernel OCaml (refs, ring buffers, runners); `set!` dialect lab |
 | Computer architecture | (chapter candidate: layout & cost) | OxCaml layouts / `stack_` / SIMD; `spikes/mirage_solo5/` |
 | Machine learning | (companion text: *The Little Learner*) | `libs/learn` port, tensor prims, jobs-based training runs |
-| Networking | `image.borg`, `remote-eval.borg` | `http.ml`, Httpun_eio, Eio.Net, routing, nginx edge, multipart |
+| Networking | `image.borg`, `prim-seam.borg` | `http.ml`, Httpun_eio, Eio.Net, routing, nginx edge, multipart |
 | Web / HCI | `hypermedia-harness.borg`, `product-experience.borg` | htmx, `pure-html`, `HTML.Hx.*`, a11y harness, `/assets` |
 | Security | `auth.borg`, `multi-user.borg` | `auth_password.ml` (argon2id), `auth_store.ml`, cookies, Basic, public-route ACLs |
 | Version control / time | `branching.borg`, `tree-time.borg` | branches in Postgres, generations, as-of reads, snapshots |
-| Distributed (edges of) | `remote-eval.borg`, `local-first.borg` | client lenses, `sync.ml`, `libs/replication`, merge semantics |
+| Distributed (edges of) | `prim-seam.borg`, `local-first.borg` | client lenses, `sync.ml`, `libs/replication`, merge semantics |
 | Software engineering | `habitat-workflow.borg`, whole book | spec-as-source-of-truth, `borge drift`, issues, promote/seed policy |
 | Testing & verification | `formal-verification.borg` | `alcotest`, `lisp/conformance/`, planned proof track |
 | Graphics | `product-experience.borg` | SVG/canvas over htmx routes |
@@ -110,7 +110,7 @@ and imperative); argue which version belongs on the habitat.
 
 ### Year 3 — The connected machine
 
-**CS 301 · Networking & the HTTP floor** *(image, remote-eval)*
+**CS 301 · Networking & the HTTP floor** *(image, prim-seam)*
 The full request lifecycle: TCP (Eio.Net), HTTP parsing (httpun), routing,
 middleware, sessions, response rendering. Media and multipart as the hard
 case.
@@ -233,7 +233,7 @@ Two parallel book systems exist today, explicitly un-merged:
    numbers + wide annotation margin. `.book.manifest` sidecar = output
    record. Only selection knob: DIR. Current vendored `/book.pdf` predates
    the multi-file pivot (manifest 2026-07-12; contains retired chapters
-   architecture/supervisor/workflow; missing one-tree/jobs/remote-eval/…).
+   architecture/supervisor/workflow; missing one-tree/jobs/prim-seam/…).
    Regenerating from the current inline-root tree is untested ground.
 2. **The live /book (HTML, private)** — kernel routes `/book/<pkg>` →
    Nopales `spec/book-page` (`libs/spec/lib.pp`). Chapter = notes doc
