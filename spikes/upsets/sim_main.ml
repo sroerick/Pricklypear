@@ -84,6 +84,13 @@ let () =
             (fun (b, tx, n) ->
               Printf.printf "  band %.2f  tax %.3f  (n=%d)\n" b tx n)
             m.Replay.mt_entry_tax;
+          (match Yojson.Basic.Util.member "sanity_suspicious_bands" rr.rr_manifest with
+           | `List (_ :: _ as suspicious) ->
+               Printf.printf "!! DATASET SANITY: winner-heavy corpus suspected —\n";
+               Printf.printf "!! %d band(s) lose far less than the efficient-market prior.\n"
+                 (List.length suspicious);
+               Printf.printf "!! Expectancy measured here is CONTAMINATED (L-1), not edge.\n"
+           | _ -> ());
           (match !out with
            | Some o ->
                Yojson.Basic.to_file o rr.rr_manifest;

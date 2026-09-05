@@ -220,7 +220,8 @@ let test_holdout_once () =
   | Error _ -> ()
   | Ok _ -> Alcotest.fail "holdout ran twice without refusal"
 
-(* ---- L-1 base-rate tax present in manifest ---- *)
+(* ---- L-1 base-rate tax present in manifest + sanity gate fires on
+   winner-heavy corpora (the Clacton lesson, mechanized) ---- *)
 
 let test_tax () =
   let snap = base_snapshot () in
@@ -231,9 +232,16 @@ let test_tax () =
   let band20 =
     List.find_opt (fun (b, _, _) -> Float.abs (b -. 0.20) < 1e-9) r.Replay.rr_metrics.Replay.mt_tax_all
   in
-  match band20 with
-  | Some (_, lost, _) -> Alcotest.(check bool "band 0.20 has losses" true (lost > 0))
-  | None -> Alcotest.fail "band 0.20 missing from tax table"
+  (match band20 with
+   | Some (_, lost, _) -> Alcotest.(check bool "band 0.20 has losses" true (lost > 0))
+   | None -> Alcotest.fail "band 0.20 missing from tax table");
+  (* the synthetic corpus is 4-of-5 YES-resolving -> sanity gate MUST fire *)
+  let suspicious =
+    match Yojson.Basic.Util.member "dataset_suspicious" r.Replay.rr_manifest with
+    | `Bool b -> b
+    | _ -> false
+  in
+  Alcotest.(check bool "winner-heavy corpus flagged" true suspicious)
 
 let () =
   Random.self_init ();
