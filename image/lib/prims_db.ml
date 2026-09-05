@@ -6,11 +6,11 @@ let promote_to_personal (t : t) ~(names : string list)
   let me_opt = Auth_store.get_user_by_username t.store t.manifest.username in
   match me_opt with
   | None -> (Error "no such user")
-  | Some me when me.user_type <> "Agent_tools.agent" ->
-      (Error "promote-to-personal is for Agent_tools.agent users")
+  | Some me when me.user_type <> "agent" ->
+      (Error "promote-to-personal is for agent users")
   | Some me ->
       (match me.parent_user_id with
-       | None -> (Error "Agent_tools.agent has no parent")
+       | None -> (Error "agent has no parent")
        | Some pid ->
            let parent_opt = Auth_store.get_user_by_id t.store pid in
            (match parent_opt with
@@ -21,7 +21,7 @@ let promote_to_personal (t : t) ~(names : string list)
                     ~user_id:parent.id
                 in
                 if not allowed then
-                  (Error "Agent_tools.agent promote disabled by parent")
+                  (Error "agent promote disabled by parent")
                 else
                   let final_names =
                     if names <> [] then names
@@ -1520,20 +1520,20 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
         | _ ->
             ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("create-user", "need username password [is-admin]", "bad-args")))))));
 
-  (* (create-Agent_tools.agent parent-username) -> VStr Agent_tools.agent-user-id. Admin only. *)
-  Primitives.register tbl "create-Agent_tools.agent"
+  (* (create-agent parent-username) -> VStr agent-user-id. Admin only. *)
+  Primitives.register tbl "create-agent"
     (fun args ->
-      require_admin "create-Agent_tools.agent" (fun () ->
+      require_admin "create-agent" (fun () ->
         match args with
         | [ Pricklypear_lisp.Ast.VStr parent ] ->
             let r = Auth_store.create_agent t.store ~parent_username:parent in
             (match r with
              | Error e ->
-                 (Pricklypear_lisp.Ast.VStr ("create-Agent_tools.agent: " ^ e))
+                 (Pricklypear_lisp.Ast.VStr ("create-agent: " ^ e))
              | Ok u ->
                  (Pricklypear_lisp.Ast.VStr u.Auth_store.id))
         | _ ->
-            (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("prim", "create-Agent_tools.agent: need parent-username", "bad-args"))))));
+            (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("prim", "create-agent: need parent-username", "bad-args"))))));
 
   (* (issue-token [label]) -> VStr raw-token (returned ONCE). Caller's own user. *)
   (* (issue-token user-id [label]) -> VStr raw token. Admin only when user-id given. *)
@@ -1664,8 +1664,8 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
               | Ok raw -> (Pricklypear_lisp.Ast.VStr raw))
        | _ -> (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("rotate-token", "need credential-id", "bad-args"))))));
 
-  (* (set-allow-Agent_tools.agent-promote bool) -> VStr ok|error. Sets the CALLER's own toggle. *)
-  Primitives.register tbl "set-allow-Agent_tools.agent-promote"
+  (* (set-allow-agent-promote bool) -> VStr ok|error. Sets the CALLER's own toggle. *)
+  Primitives.register tbl "set-allow-agent-promote"
     (fun args ->
       let parse_bool = function
         | Pricklypear_lisp.Ast.VBool b -> b
@@ -1678,7 +1678,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
       in
       let caller = caller_username () in
       if caller = "anonymous" then
-        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("prim", "set-allow-Agent_tools.agent-promote: denied for anonymous", "denied"))))
+        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("prim", "set-allow-agent-promote: denied for anonymous", "denied"))))
       else
         (match args with
          | [ flag ] ->
@@ -1687,7 +1687,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
               | None ->
                   raise (Pricklypear_lisp.Ast.Interp_error
                            (Pricklypear_lisp.Ast.Prim_error
-                              ("prim", "set-allow-Agent_tools.agent-promote: no such user", "not-found")))
+                              ("prim", "set-allow-agent-promote: no such user", "not-found")))
               | Some user ->
                   let v = parse_bool flag in
                   let r = Auth_store.set_allow_agent_promote t.store ~user_id:user.id ~value:v in
@@ -1695,9 +1695,80 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
                    | Error e ->
                        raise (Pricklypear_lisp.Ast.Interp_error
                                 (Pricklypear_lisp.Ast.Prim_error
-                                   ("prim", "set-allow-Agent_tools.agent-promote: " ^ e, "failed")))
+                                   ("prim", "set-allow-agent-promote: " ^ e, "failed")))
                    | Ok () -> (Pricklypear_lisp.Ast.VStr "ok")))
-         | _ -> (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("prim", "set-allow-Agent_tools.agent-promote: need bool", "bad-args"))))));
+         | _ -> (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("prim", "set-allow-agent-promote: need bool", "bad-args"))))));
+
+  (* (set-user-type username "agent"|"human") -> VStr "ok". Admin only;
+     server-only like create-user (account administration, never a
+     remote-proxy op). Mirrors POST /admin/users action=set_user_type
+     (auth.user-management; the type flip the agent-native chapter
+     recorded as pending). Flipping to 'agent' sets parent_user_id to
+     the CALLING admin; 'human' clears it. An is_admin target is never
+     flipped to agent (admin agents are a foot-gun). *)
+  Primitives.register_server_only tbl "set-user-type"
+    (fun args ->
+      require_admin "set-user-type" (fun () ->
+        let arg_str = function
+          | Pricklypear_lisp.Ast.VStr s -> Some s
+          | Pricklypear_lisp.Ast.VSymbol s -> Some s
+          | _ -> None
+        in
+        let bad_args () =
+          (raise (Pricklypear_lisp.Ast.Interp_error
+                    (Pricklypear_lisp.Ast.Prim_error
+                       ("set-user-type",
+                        "need username and user-type (human|agent)",
+                        "bad-args"))))
+        in
+        match args with
+        | [ username_arg; utype_arg ] ->
+            (match arg_str username_arg, arg_str utype_arg with
+             | Some username, Some utype ->
+                 let username =
+                   String.lowercase_ascii (String.trim username) in
+                 let utype = String.lowercase_ascii (String.trim utype) in
+                 if username = "" then bad_args ()
+                 else
+                 let target =
+                   Auth_store.get_user_by_username t.store username in
+                 (match target with
+                  | None ->
+                      (raise (Pricklypear_lisp.Ast.Interp_error
+                                (Pricklypear_lisp.Ast.Prim_error
+                                   ("set-user-type", "no such user: " ^ username, "not-found"))))
+                  | Some u when u.Auth_store.is_admin && utype = "agent" ->
+                      (raise (Pricklypear_lisp.Ast.Interp_error
+                                (Pricklypear_lisp.Ast.Prim_error
+                                   ("set-user-type", "cannot make an admin user an agent", "denied"))))
+                  | Some u ->
+                      let parent_user_id =
+                        if utype = "agent" then
+                          (match
+                             Auth_store.get_user_by_username t.store
+                               (caller_username ())
+                           with
+                           | Some p -> Some p.Auth_store.id
+                           | None -> None)
+                        else None
+                      in
+                      let r =
+                        Auth_store.set_user_type t.store ~user_id:u.id
+                          ~user_type:utype ~parent_user_id
+                      in
+                      (match r with
+                       | Error e ->
+                           (raise (Pricklypear_lisp.Ast.Interp_error
+                                     (Pricklypear_lisp.Ast.Prim_error
+                                        ("set-user-type", e, "failed"))))
+                       | Ok () ->
+                           let () =
+                             Auth_store.log_auth t.store ~user_id:u.id
+                               ~kind:"admin_set_user_type" ~success:true ()
+                           in
+                           (Pricklypear_lisp.Ast.VStr "ok")))
+             | _ -> bad_args ())
+        | _ -> bad_args ()));
 
   (* (promote [name...]) -> VStr count|error. Agent: promote own defs (or named)
      into parent's personal. Human: denied (use promote-to-main admin path). *)
@@ -2120,7 +2191,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
     ; "symbol?"; "string?"; "symbol=?"; "symbol->string"; "string->symbol"
     ; "not"; "type-of"; "read-string"; "read-all-string"; "function-ast"
     ; "function-source"; "function-doc"; "apropos"; "apropos-docs"
-    ; "Agent_tools.describe"; "list-packages"; "package-bindings"; "package-exports"
+    ; "describe"; "list-packages"; "package-bindings"; "package-exports"
     ; "packages"; "package-enable"; "package-disable"; "prefix-of"
     ]
   in
@@ -2299,7 +2370,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
           let s = Agent_tools.describe t needle in
           (Pricklypear_lisp.Ast.VStr s)
       | _ ->
-          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("prim", "Agent_tools.describe: need name-or-package-str", "bad-args")))));
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("prim", "describe: need name-or-package-str", "bad-args")))));
 
   (* (export-package pkg) -> VStr lib.pp text *)
   Primitives.register tbl "export-package"

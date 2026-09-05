@@ -748,6 +748,57 @@ let get_allow_agent_promote (store : Store.t) ~(user_id : string)
     with _ ->
       true)
 
+(** Set a user's type + parent (auth.user-management admin surface;
+    the missing type flip the agent-native chapter recorded as pending).
+    user_type "agent" requires parent_user_id = Some <human id> (the
+    owning human — an agent can never parent another agent, matching
+    create_agent); "human" clears the parent. Unknown user -> Error.
+    Does not touch is_admin or credentials. *)
+let set_user_type (store : Store.t) ~(user_id : string)
+    ~(user_type : string) ~(parent_user_id : string option)
+  : (unit, string) result =
+  if user_type <> "human" && user_type <> "agent" then
+    (Error "user_type must be 'human' or 'agent'")
+  else
+  match get_user_by_id store user_id with
+  | None -> (Error "no such user")
+  | Some _u ->
+  let parent =
+    match (user_type, parent_user_id) with
+    | "agent", Some pid ->
+        (match get_user_by_id store pid with
+         | None -> (Error "parent user not found")
+         | Some p when p.user_type <> "human" ->
+             (Error "agent cannot be a parent of another agent")
+         | Some _ -> Ok (Some pid))
+    | "agent", None -> (Error "agent requires parent_user_id")
+    | "human", _ -> Ok None
+    | _ -> (Error "user_type must be 'human' or 'agent'")
+  in
+  match parent with
+  | Error e -> (Error e)
+  | Ok parent_id ->
+  match pg_conn store with
+  | None -> (Error "no database")
+  | Some conn ->
+      (try
+      let _ =
+            Io_lwt.Db.execute conn
+              ~params:
+                [ Pgx.Value.of_string user_type;
+                  (match parent_id with
+                   | Some pid -> Pgx.Value.of_string pid
+                   | None -> Pgx.Value.null);
+                  Pgx.Value.of_string user_id ]
+              "UPDATE users SET user_type = $1, parent_user_id = $2::uuid \
+               WHERE id = $3::uuid"
+          in
+          (Ok ())
+    with exn ->
+      let msg = Printexc.to_string exn in
+          Printf.eprintf "[auth_store] set_user_type: %s\n%!" msg;
+          (Error msg))
+
 let set_allow_agent_promote (store : Store.t) ~(user_id : string)
     ~(value : bool) : (unit, string) result =
   match pg_conn store with
