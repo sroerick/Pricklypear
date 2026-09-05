@@ -30,7 +30,12 @@
     filmstrip/css
     filmstrip/ws-fields
     filmstrip/browse
-    filmstrip/scene))
+    filmstrip/scene
+    filmstrip/native-state
+    filmstrip/native-open
+    filmstrip/native-close
+    filmstrip/native-focus
+    filmstrip/native-move))
 
 ;; ---------- constants ----------
 
@@ -1459,3 +1464,129 @@ native shim consumes it via loopback eval --eval \"(filmstrip/scene)\"."
           (pad 'text (list (cons 'dim "1"))
             "kiosk view -- edit at /filmstrip")
           (filmstrip/scene-strip panes focus))))))
+
+;; ---------- native policy surface (soil M-B) --------------------------
+;; soil-strip (the river window-manager client) drives the SAME workspace
+;; row the browser shell serves: a mapped river window becomes a pane
+;; record carrying a `view` key (its river window identity); habitat
+;; panes have no view field. All evals return native-state so one round
+;; trip drives the next manage sequence.
+
+(define filmstrip/pane-view
+  (lambda (p)
+    (as-str (dict-get p "view")))
+  "Pane record's river window key (empty for habitat panes).")
+
+(define filmstrip/native-pane-json
+  (lambda (p focused?)
+    (dict-set* "{}"
+      (list
+        "id" (filmstrip/pane-id p)
+        "route" (filmstrip/pane-route p)
+        "width" (filmstrip/pane-width p)
+        "view" (filmstrip/pane-view p)
+        "focused" (if focused? "1" "0"))))
+  "One pane as the policy-state JSON object.")
+
+(define filmstrip/native-state
+  (lambda ()
+    "Policy state for soil-strip: panes (with view keys + focused flags),
+cascade, focus index — the layout source of the next manage sequence."
+    (let* ((row (filmstrip/row))
+           (cascade (nth row 0))
+           (panes (nth row 1))
+           (focus (nth row 2)))
+      (json-emit
+        (dict-set* "{}"
+          (list
+            "panes"
+            (json-emit
+              (filmstrip/map-indexed
+                (lambda (p i) (filmstrip/native-pane-json p (= i focus)))
+                panes
+                0))
+            "cascade" (json-emit cascade)
+            "focus" (as-str focus)))))))
+
+(define filmstrip/native-find-view
+  (lambda (panes view-key)
+    (filmstrip/find-index
+      (lambda (p) (string-eq (filmstrip/pane-view p) view-key))
+      panes
+      0))
+  "Index of the pane bound to a river window key, else -1.")
+
+(define filmstrip/native-open
+  (lambda (app-id view-key)
+    "A foreign river window mapped: open-or-focus the pane bound to
+view-key (route app:<app-id>, default width preset). Returns
+native-state."
+    (let* ((row (filmstrip/row))
+           (cascade (nth row 0))
+           (panes (nth row 1))
+           (i (filmstrip/native-find-view panes view-key)))
+      (if (>= i 0)
+          (seq
+            (filmstrip/save-all cascade panes i)
+            (filmstrip/native-state))
+          (let ((panes2
+                  (append
+                    panes
+                    (list
+                      (dict-set* "{}"
+                        (list
+                          "id" (filmstrip/new-id)
+                          "route" (string-append "app:" app-id)
+                          "width" filmstrip/default-width
+                          "view" view-key))))))
+            (seq
+              (filmstrip/save-all cascade panes2 (length panes))
+              (filmstrip/native-state)))))))
+
+(define filmstrip/native-close
+  (lambda (view-key)
+    "A foreign river window closed: remove its pane, focus hand-off per
+close-focus. Returns native-state."
+    (let* ((row (filmstrip/row))
+           (cascade (nth row 0))
+           (panes (nth row 1))
+           (focus (nth row 2))
+           (i (filmstrip/native-find-view panes view-key)))
+      (if (< i 0)
+          (filmstrip/native-state)
+          (let* ((panes2 (filmstrip/remove-at panes i))
+                 (focus2 (filmstrip/close-focus i focus (length panes2))))
+            (seq
+              (filmstrip/save-all cascade panes2 focus2)
+              (filmstrip/native-state)))))))
+
+(define filmstrip/native-focus
+  (lambda (dir)
+    "alt+arrows policy: the focus handler's row mutation, clamped no
+wrap. Returns native-state."
+    (let* ((row (filmstrip/row))
+           (cascade (nth row 0))
+           (panes (nth row 1))
+           (focus (nth row 2))
+           (focus2 (filmstrip/focus-step (length panes) focus dir)))
+      (seq
+        (filmstrip/save-all cascade panes focus2)
+        (filmstrip/native-state)))))
+
+(define filmstrip/native-move
+  (lambda (dir)
+    "alt+shift+arrows policy: adjacent transpose of the focused pane;
+focus follows. Returns native-state."
+    (let* ((row (filmstrip/row))
+           (cascade (nth row 0))
+           (panes (nth row 1))
+           (focus (nth row 2))
+           (j (if (string-eq dir "left") (- focus 1) (+ focus 1))))
+      (if (if (< focus 0) #t (or (< j 0) (>= j (length panes))))
+          (filmstrip/native-state)
+          (let ((panes2 (if (string-eq dir "left")
+                            (filmstrip/swap-at panes j)
+                            (filmstrip/swap-at panes focus))))
+            (seq
+              (filmstrip/save-all cascade panes2 j)
+              (filmstrip/native-state)))))))
