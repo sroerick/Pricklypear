@@ -75,8 +75,16 @@ let current_conn (t : t) : conn option =
 
 let in_transaction (t : t) : bool = t.current_tx <> None
 
+(* PP_EVAL_TRACE profiling (tmp/eval-fast-path): per-request DB statement
+   counters, bumped by exec when the env knob is set. Read by http.ml
+   phase tracing to attribute DB time/hits to request phases. *)
+let trace_on = Sys.getenv_opt "PP_EVAL_TRACE" <> None
+let slow_trace_on = Sys.getenv_opt "PP_TRACE_DB" <> None
+let trace_count = Atomic.make 0
+let trace_ms = Atomic.make 0.0
+
 let exec ((pg, mu) : conn) ?params sql : Pgx.row list =
-  if Sys.getenv_opt "PP_TRACE_DB" = None then
+  if not (trace_on || slow_trace_on) then
     (* fast path: no timing, no getenv after the one check *)
     with_eio_conn_lock mu (fun () ->
         match params with
@@ -86,21 +94,17 @@ let exec ((pg, mu) : conn) ?params sql : Pgx.row list =
     let t0 = Unix.gettimeofday () in
     let r =
       with_eio_conn_lock mu (fun () ->
-          let t1 = Unix.gettimeofday () in
-          let r =
-            match params with
-            | None -> Io_eio.Pg.execute pg sql
-            | Some params -> Io_eio.Pg.execute ~params pg sql
-          in
-          let ms = (Unix.gettimeofday () -. t1) *. 1000.0 in
-          if ms > 20.0 then
-            Printf.eprintf "[db] execute %.1f ms: %s\n%!" ms
-              (String.sub sql 0 (min 60 (String.length sql)));
-          r)
+          match params with
+          | None -> Io_eio.Pg.execute pg sql
+          | Some params -> Io_eio.Pg.execute ~params pg sql)
     in
     let ms = (Unix.gettimeofday () -. t0) *. 1000.0 in
-    if ms > 20.0 then
-      Printf.eprintf "[db] total (incl lock) %.1f ms: %s\n%!" ms
+    if trace_on then begin
+      Atomic.incr trace_count;
+      Atomic.set trace_ms (Atomic.get trace_ms +. ms)
+    end;
+    if slow_trace_on && ms > 20.0 then
+      Printf.eprintf "[db] execute %.1f ms: %s\n%!" ms
         (String.sub sql 0 (min 60 (String.length sql)));
     r
   end

@@ -1572,7 +1572,10 @@ let api_eval (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
       ()
   | Some expr ->
       (try
+      let trace = Sys.getenv_opt "PP_EVAL_TRACE" <> None in
+      let t0 = if trace then Unix.gettimeofday () else 0.0 in
       let v = Session.eval_one session expr in
+      let t1 = if trace then Unix.gettimeofday () else 0.0 in
           (* Serialize the Lisp value as NATIVE JSON (not a pp_value
              string). CRUD read prims return fields as a VStr of JSON
              text; pp_value would backslash-escape those quotes and
@@ -1580,8 +1583,12 @@ let api_eval (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
              output. value_to_json re-parses JSON-lookalike VStrs into
              real JSON objects/arrays so field data round-trips as
              clean, valid JSON (i-fields-as-string-2026-08-12). *)
-          json_response reqd
-            (`Assoc [("ok", `Bool true); ("value", Prims_pure.value_to_json v)]);
+          let j = `Assoc [("ok", `Bool true); ("value", Prims_pure.value_to_json v)] in
+          let t2 = if trace then Unix.gettimeofday () else 0.0 in
+          if trace then
+            Printf.eprintf "[eval-trace] api_eval           eval %7.1f ms  json %7.1f ms\n%!"
+              ((t1 -. t0) *. 1000.0) ((t2 -. t1) *. 1000.0);
+          json_response reqd j;
           ()
     with exn ->
       (* Shared codec (remote-eval.borg substrate): same wire shape as

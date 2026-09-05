@@ -84,10 +84,28 @@ let request_handler ~(sw : Eio.Switch.t) ~(registry : Session_registry.t)
                  image.per-identity-sessions: attach selects, never
                  mutates another identity's session; anonymous traffic
                  runs on the parked anonymous session. *)
+              (* PP_EVAL_TRACE phase tracing (tmp/eval-fast-path): attribute
+                 per-request wall time + DB statements to attach phases. *)
+              let trace = Sys.getenv_opt "PP_EVAL_TRACE" <> None in
+              let phase (name : string) (t0 : float) (c0 : int) (m0 : float) : float =
+                if not trace then Unix.gettimeofday ()
+                else begin
+                  let t1 = Unix.gettimeofday () in
+                  let c1 = Atomic.get Store_db.trace_count in
+                  let m1 = Atomic.get Store_db.trace_ms in
+                  Printf.eprintf "[eval-trace] %-18s %7.1f ms  db %2d stmts %7.1f ms\n%!"
+                    name ((t1 -. t0) *. 1000.0) (c1 - c0) (m1 -. m0);
+                  t1
+                end
+              in
               let attach_and_select () =
+                let t0 = Unix.gettimeofday () in
+                let c0 = Atomic.get Store_db.trace_count in
+                let m0 = Atomic.get Store_db.trace_ms in
                 let user_opt =
                   resolve_identity session ~headers ~source_ip ()
                 in
+                let t1 = phase "resolve_identity" t0 c0 m0 in
                 let session = Session_registry.select registry ~user:user_opt in
                 let () =
                   match user_opt with
@@ -97,7 +115,11 @@ let request_handler ~(sw : Eio.Switch.t) ~(registry : Session_registry.t)
                         ~checkout_personal_now:false ()
                   | None -> Session.attach_anonymous session
                 in
+                let t2 = phase "registry+attach" t1 (Atomic.get Store_db.trace_count) (Atomic.get Store_db.trace_ms) in
+                let c2 = Atomic.get Store_db.trace_count in
+                let m2 = Atomic.get Store_db.trace_ms in
                 Session.ensure_fresh session;
+                let _ = phase "ensure_fresh" t2 c2 m2 in
                 (session, user_opt)
               in
               let proceed_ctx =
@@ -192,7 +214,11 @@ let request_handler ~(sw : Eio.Switch.t) ~(registry : Session_registry.t)
                 in
                 (* GATE COMPLETE — request_mutex released above. page_fn runs
                    lock-free (invariant 4b) on the SELECTED session. *)
-                page_fn session
+                let tgate0 = Unix.gettimeofday () in
+                let cgate0 = Atomic.get Store_db.trace_count in
+                let mgate0 = Atomic.get Store_db.trace_ms in
+                page_fn session;
+                ignore (phase "page_fn (handler)" tgate0 cgate0 mgate0)
                 end
               )
     with exn ->
