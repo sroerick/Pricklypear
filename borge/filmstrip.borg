@@ -129,6 +129,7 @@
        latency non-goal). (3) Multi-user + one seat stays the known
        weirdness: single seat resolves to admin's workspace row; per-
        identity strips are a later flourish, not a v1 promise.")
+ (* agent note (|2026-09-04 (soil M-A): roadmap tier (1) has STARTED — filmstrip/scene (in libs/filmstrip/lib.pp) renders the workspace as a pad tree via pads/render-scene; the native kiosk (soil-hello --eval "(filmstrip/scene)") consumes it (scripts/smoke_soil_ma.py). The HTML shell is unchanged; scene + HTML are two lowerings of one workspace row. Terminal (render-ansi) remains open.|) *)
    (status planned)
   )
  )

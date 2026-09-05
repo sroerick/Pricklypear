@@ -169,6 +169,7 @@
          already composes.
     |))
    )
+ (* agent note (|2026-09-04 (soil M-A): DISPLAY-HINT ATTRS sel/dim — v0 dialect stays kinds row|column|text, but tree nodes may carry pass-through display-hint attrs (sel = "this is the selection/focus", dim = "de-emphasize"). scene-attrs already serialized any attrs, so this is a CONVENTION not a dialect bump: the tree carries hints, each backend decides paint (soil-hello: sel -> accent color on text, 2px accent border on boxes; dim -> muted). Consumers may ignore unknown attrs. Same doctrine as theme-as-pure-paint above.|) *)
    (status planned)
   )
 

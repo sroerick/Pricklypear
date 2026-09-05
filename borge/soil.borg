@@ -2,6 +2,7 @@
  (doc "Pricklypear book chapter: SOIL — the native/Wayland tier. Pads grow in soil: a shim process buys the frame loop (Wayland compositing, layout, pixels) while the image owns all policy in Nopales. Build order: River as the compositor (tier 2), filmstrip's two-sequence workspace as the policy, Clay as the layout engine, pads/render-scene as the view dialect. Full compositor (tier 3) is explicitly out of scope until the policy layer is proven.")
  (status planned)
  (* agent note (|2026-09 DESIGN SESSION (with pads.borg, filmstrip.borg): the tier ladder from the lisp-machine conversation — tier 1 filmstrip-in-browser (product), tier 2 Nopales-as-River-WM (the rau/mtwm architecture: C compositor, Lisp policy over the wire), tier 3 full compositor C shim + eval listeners (the mahogany/lispwc architecture) — with tier 2 fixed as THE chapter scope and tier 3 deferred. Precedents named in-session: rau (pure elisp WM on River), mtwm (Common Lisp on River, WIP), mahogany (CL on wlroots, C backend split), lispwc (wl_listener as Lisp closure workout), StumpWM issue #739 (why you never port an X11 WM to Wayland). ~/dev/clay_test holds clay.h 0.14 — the pun that named the chapter: prickly pears grow in clay soil; pads lower into Clay.|) *)
+ (* agent note (|2026-09-04 MAKE (soil M-A, branch filmstrip-v1): the kiosk milestone shipped — soil-hello renders (filmstrip/scene) fullscreen on the running compositor (scripts/smoke_soil_ma.py green: scene validation over live workspace mutations + --frames 12 exit 0). Shipped in this pass: filmstrip/scene (workspace -> pad tree -> render-scene, in libs/filmstrip), niri width presets as grow weights 2/3/6 over denominator 6 with a trailing spacer for exact fractions, sel/dim pass-through display-hint attrs (scene-attrs already serialized them; shim paints accent color + 2px border). Binding-path decision (a) thin shim now PROVEN twice (hello card + filmstrip shell); native-rendering implemented; river-split + milestones stay planned — river-window-management is M-B, and M-A ran on plain Hyprland, no river needed yet. Scene dialect stayed v0: no new kinds, hints not paint in the tree.|) *)
  (convention ocaml-dune)
 
  (section soil-contract
@@ -56,7 +57,7 @@
        Default (a); measure; promote (b) only if policy latency is
        felt. Security follows the REPL rule: loopback only, no
        application auth in the shim channel v1.")
-   (status planned)
+   (status implemented)
   )
 
   (subsection native-rendering
@@ -70,7 +71,7 @@
        kiosk-sized repaint on change; culling/occlusion/motion damage
        are v2 concerns, stated so nobody gold-plates the blitter.")
    (implements libs/pads/render-scene.pp)
-   (status planned)
+   (status implemented)
   )
 
   (subsection milestones

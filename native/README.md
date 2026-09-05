@@ -1,4 +1,4 @@
-# native/ — soil-hello (pads hello dual-render spike, V2)
+# native/ — soil-hello (pads hello dual-render spike, V2 + filmstrip kiosk)
 
 `soil-hello` is the OCaml native shim for the pads spike
 (`docs/plans/pads-hello-dualrender.md`, W5; spec: `borge/soil.borg`
@@ -8,6 +8,15 @@ layout (D1), software raster (rect fill + bitmap font, D4), `wl_shm`
 ARGB32 buffer, xdg-shell toplevel on the running compositor. Full-surface
 repaint per commit (dumb v1). No Nopales eval on any frame path; no input
 beyond window-close (D5).
+
+Soil M-A (filmstrip kiosk, `docs/plans/soil-m-a.md`): the shim renders the
+habitat shell from the live workspace —
+`./_build/default/native/soil_hello.exe --eval "(filmstrip/scene)"` (needs
+the dev image + `PP_USER`/`PP_PASS`). Display-hint attrs honored: `sel`
+-> accent text color / 2px accent border on boxes (focused pane, selected
+cascade entry), `dim` -> muted text (hints, +N more tails). Niri width
+presets arrive as grow weights (third=2, half=3, full=6, denominator 6)
+plus a trailing spacer for exact fractions.
 
 ## Build
 
