@@ -104,6 +104,19 @@ type t = {
       finishing. Quota enforced at insert. The stream type is defined
       here to avoid a module cycle (Net_prims references it). *)
   mutable net_streams : (string, Unix.file_descr) Hashtbl.t;
+  (** tmp/eval-fast-path incremental rehydrate: Def_journal cursor —
+      the journal seq this session has consumed. ensure_fresh drains
+      entries newer than the cursor and rebinds exactly those defs,
+      instead of re-fetching + re-parsing the whole visible chain
+      (~2800 bodies, measured ~280-520ms per rehydrate). *)
+  mutable def_journal_seq : int;
+  (** tmp/eval-fast-path: parsed body per bound def thunk (load_defs +
+      incremental rebind). Lets an incremental rehydrate RE-THUNK carried
+      defs from cached bodies — resetting memoization and re-capturing
+      the fresh env — without re-fetching/re-parsing from the DB.
+      Memory: retains def ASTs after first force (they would otherwise
+      be dropped by the memoized cell); bounded by the def count. *)
+  mutable thunk_bodies : (string, Pricklypear_lisp.Ast.expr) Hashtbl.t;
 }
 
 (* Load persisted function_defs + routes into the env.
