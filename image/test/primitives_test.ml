@@ -343,6 +343,44 @@ let string_tests = [
       (eval_str "(string-split \"abc\" \"\")"));
 ]
 
+(* --- sort (image.borg stdlib-round-2, BORGE-1788622799) --- *)
+let sort_tests = [
+  ("sort numeric ascending", `Quick, fun () ->
+    Alcotest.(check string) "asc" "(1 2 3)"
+      (eval_str "(sort (list 3 1 2))"));
+  ("sort mixed int/float numerically", `Quick, fun () ->
+    Alcotest.(check string) "mixed num" "(0.5 2 3.5)"
+      (eval_str "(sort (list 2 3.5 0.5))"));
+  ("sort strings lexicographic", `Quick, fun () ->
+    Alcotest.(check string) "str" "(\"a\" \"b\" \"c\")"
+      (eval_str "(sort (list \"c\" \"a\" \"b\"))"));
+  ("sort keeps duplicates", `Quick, fun () ->
+    Alcotest.(check string) "dupes" "(1 2 2)"
+      (eval_str "(sort (list 2 1 2))"));
+  ("sort single + empty", `Quick, fun () ->
+    Alcotest.(check string) "edge" "()"
+      (eval_str "(sort (list))"));
+  ("sort negative numbers", `Quick, fun () ->
+    Alcotest.(check string) "neg" "(-3 1 2)"
+      (eval_str "(sort (list 2 -3 1))"));
+  ("sort mixed kinds raises bad-args", `Quick, fun () ->
+    match eval "(sort (list 1 \"a\"))" with
+    | _ -> Alcotest.fail "expected User_error"
+    | exception Pricklypear_lisp.Ast.Interp_error
+        (Pricklypear_lisp.Ast.User_error (_, k)) ->
+        Alcotest.(check string) "kind" "bad-args" k
+    | exception exn ->
+        Alcotest.failf "expected User_error, got %s" (Printexc.to_string exn));
+  ("sort non-list raises bad-args", `Quick, fun () ->
+    match eval "(sort 5)" with
+    | _ -> Alcotest.fail "expected User_error"
+    | exception Pricklypear_lisp.Ast.Interp_error
+        (Pricklypear_lisp.Ast.User_error (_, k)) ->
+        Alcotest.(check string) "kind" "bad-args" k
+    | exception exn ->
+        Alcotest.failf "expected User_error, got %s" (Printexc.to_string exn));
+]
+
 (* --- composition: define + call + nested arithmetic --- *)
 (* habitat-book web-renderer: prose-tokens / render-tokens (kernel one-
    scan replacements for the interpreted per-word pipeline that blew the
@@ -911,6 +949,7 @@ let () =
     "math", math_tests;
     "list", list_tests;
     "string", string_tests;
+    "sort", sort_tests;
     "probe", probe_tests;
     "prose-tokens", prose_token_tests;
     "dict", dict_tests;
