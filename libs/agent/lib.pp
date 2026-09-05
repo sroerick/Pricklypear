@@ -95,106 +95,192 @@
         (as-str (car (car rows)))
         (agent/find-wake (cdr rows) wid)))))
 
-(define agent/wake-room
+(define agent/humans
+  (list "admin" "gregor"))
+
+(define agent/match-names
   (lambda
-    (room)
-    "One room's tick: quiet (advance nothing, no provider call) or loud (observe, decide, post one wake-id-stamped reply, advance cursor to the reply's own id). Provider failure returns a bounded note WITHOUT advancing - the next tick retries."
-    (let*
-      ((st (agent/state-for room))
-        (id (as-str (car st)))
-        (f (cdr st))
-        (sid (as-str (dict-get f "sid")))
-        (cur (as-str (dict-get f "cursor")))
-        (all (agent/room-msgs room)))
+    (names body)
+    "True when any name appears as a substring of body (loose mention check, v1)."
+    (if
+      (null? names)
+      #f
       (if
-        (null? all)
-        (string-append room ": empty")
+        (agent/has? body (car names) 0)
+        #t
+        (agent/match-names (cdr names) body)))))
+
+(define agent/mentioned?
+  (lambda
+    (body)
+    "True when a member human (agent/humans) is mentioned in body."
+    (agent/match-names agent/humans body)))
+
+(define agent/notify
+  (lambda
+    (title body)
+    "One ntfy push, guard-wrapped: returns \"\" on success (or quiet skip), a bounded notify-error string on failure - never fails the wake."
+    (guard
+      (lambda
+        (e)
+        (string-append "notify-error " (as-str (car (cdr e)))))
+      (begin (ntfy/send title body) ""))))
+
+(define agent/notify-talk
+  (lambda
+    (room talk)
+    "Push an ntfy mention for every new row that mentions a member human; concatenates notify results (\"\" when all quiet)."
+    (if
+      (null? talk)
+      ""
+      (let
+        ((f (cdr (car talk)))
+          (rest (agent/notify-talk room (cdr talk))))
         (if
-          (string-eq cur "")
-          (seq
-            (update-field (quote agent-state) id "cursor" (agent/last-id all))
-            (string-append room ": init-quiet"))
-          (let
-            ((newm (agent/after all cur)))
-            (if
-              (null? newm)
-              (string-append room ": quiet")
-              (let
-                ((wid (agent/wake-id room cur)))
-                (if
-                  (string-eq (agent/find-wake all wid) "")
-                  (let
-                    ((talk (agent/notbot newm ())))
-                    (if
-                      (null? talk)
-                      (seq
-                        (update-field (quote agent-state) id "cursor" (agent/last-id all))
-                        (string-append room ": quiet-self"))
-                      (let*
-                        ((transcript (agent/join talk ""))
-                          (tl (string-length transcript))
-                          (body
-                            (if (> tl 3000) (substring transcript (- tl 3000) 3000) transcript))
-                          (prompt
-                            (string-append
-                              "You are agent-prickle, resident agent of room "
-                              room
-                              " in this Pricklypear habitat. Messages since you last looked:"
-                              body
-                              "\nReply with ONE short plain-text room message addressed to the people in it. You have tools if you need to check facts, but keep it to one reply. If nothing needs a reply, reply exactly NO-REPLY.")))
-                        (let
-                          ((reply (as-str (agent-say sid prompt 4))))
+          (agent/mentioned? (as-str (dict-get f "body")))
+          (string-append
+            (agent/notify
+              (string-append room ": " (as-str (dict-get f "from")))
+              (agent/clamp (as-str (dict-get f "body")) 200))
+            rest)
+          rest)))))
+
+(define agent/wake-room
+(lambda
+  (room)
+  (let*
+    ((st (agent/state-for room))
+      (id (as-str (car st)))
+      (f (cdr st))
+      (sid (as-str (dict-get f "sid")))
+      (cur (as-str (dict-get f "cursor")))
+      (all (agent/room-msgs room)))
+    (if
+      (null? all)
+      (string-append room ": empty")
+      (if
+        (string-eq cur "")
+        (seq
+          (update-field
+            (quote agent-state)
+            id
+            "cursor"
+            (agent/last-id all))
+          (string-append room ": init-quiet"))
+        (let
+          ((newm (agent/after all cur)))
+          (if
+            (null? newm)
+            (string-append room ": quiet")
+            (let
+              ((wid (agent/wake-id room cur)))
+              (if
+                (string-eq (agent/find-wake all wid) "")
+                (let
+                  ((talk (agent/notbot newm ())))
+                  (if
+                    (null? talk)
+                    (seq
+                      (update-field
+                        (quote agent-state)
+                        id
+                        "cursor"
+                        (agent/last-id all))
+                      (string-append room ": quiet-self"))
+                    (let*
+                      ((noted (agent/notify-talk room talk))
+                        (transcript (agent/join talk ""))
+                        (tl (string-length transcript))
+                        (body
                           (if
-                            (agent/fail? reply)
-                            (string-append room ": provider failed - " (agent/clamp reply 160))
-                            (if
-                              (agent/has? reply "NO-REPLY" 0)
+                            (> tl 3000)
+                            (substring transcript (- tl 3000) 3000)
+                            transcript))
+                        (prompt
+                          (string-append
+                            "You are agent-prickle, resident agent of room "
+                            room
+                            " in this Pricklypear habitat. Messages since you last looked:"
+                            body
+                            "nReply with ONE short plain-text room message addressed to the people in it. You have tools if you need to check facts, but keep it to one reply. If nothing needs a reply, reply exactly NO-REPLY.")))
+                      (let
+                        ((reply (as-str (agent-say sid prompt 4))))
+                        (if
+                          (agent/fail? reply)
+                          (string-append
+                            (agent/notify
+                              (string-append room ": wake failed")
+                              (agent/clamp reply 200))
+                            room
+                            ": provider failed - "
+                            (agent/clamp reply 160))
+                          (if
+                            (agent/has? reply "NO-REPLY" 0)
+                            (seq
+                              (update-field
+                                (quote agent-state)
+                                id
+                                "cursor"
+                                (agent/last-id all))
+                              (string-append room ": nothing to say"))
+                            (let
+                              ((nid
+                                (create
+                                  (quote chat-message)
+                                  (dict-set*
+                                    "{}"
+                                    (list
+                                      "room_id"
+                                      room
+                                      "from"
+                                      agent/bot
+                                      "body"
+                                      (agent/clamp reply 3900)
+                                      "created_at"
+                                      (as-str (now))
+                                      "wake_id"
+                                      wid)))))
                               (seq
-                                (update-field (quote agent-state) id "cursor" (agent/last-id all))
-                                (string-append room ": nothing to say"))
-                              (let
-                                ((nid
-                                  (create
-                                    (quote chat-message)
-                                    (dict-set*
-                                      "{}"
-                                      (list
-                                        "room_id"
-                                        room
-                                        "from"
-                                        agent/bot
-                                        "body"
-                                        (agent/clamp reply 3900)
-                                        "created_at"
-                                        (as-str (now))
-                                        "wake_id"
-                                        wid)))))
-                                (seq
-                                  (update-field (quote agent-state) id "cursor" (as-str nid))
-                                  (string-append room ": posted")))))))))
-                  (seq
-                    (update-field (quote agent-state) id "cursor" (agent/last-id all))
-                    (string-append room ": replay-quiet"))))))))))))
+                                (update-field
+                                  (quote agent-state)
+                                  id
+                                  "cursor"
+                                  (as-str nid))
+                                (string-append
+                                  room
+                                  ": posted"
+                                  (if
+                                    (string-eq noted "")
+                                    ""
+                                    (string-append " [" noted "]")))))))))))
+                (seq
+                  (update-field
+                    (quote agent-state)
+                    id
+                    "cursor"
+                    (agent/last-id all))
+                  (string-append room ": replay-quiet")))))))))))
 
 (define agent/wake-all
-  (lambda
-    (rooms acc)
-    "Run every room's tick under a per-room guard; budget exceeded still propagates (transactional abort)."
-    (if
-      (null? rooms)
-      (agent/reverse acc ())
-      (agent/wake-all
-        (cdr rooms)
-        (cons
-          (guard
-            (lambda
-              (e)
-              (string-append (car rooms) ": room-error " (as-str (car (cdr e)))))
-            (agent/wake-room (car rooms)))
-          acc)))))
+(lambda
+  (rooms acc)
+  (if
+    (null? rooms)
+    (agent/reverse acc ())
+    (agent/wake-all
+      (cdr rooms)
+      (cons
+        (guard
+          (lambda
+            (e)
+            (string-append
+              (car rooms)
+              ": room-error "
+              (as-str (car (cdr e)))))
+          (agent/wake-room (car rooms)))
+        acc)))))
 
 (define agent/wake
-  (lambda
-    ()
-    "The cron heartbeat: tick every room in agent/rooms, results joined with \"; \"."
-    (agent/strjoin (agent/wake-all agent/rooms ()) "" "; ")))
+(lambda
+  ()
+  (agent/strjoin (agent/wake-all agent/rooms ()) "" "; ")))
