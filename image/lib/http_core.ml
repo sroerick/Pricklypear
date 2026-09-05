@@ -576,15 +576,11 @@ let resolve_identity (session : Session.t)
   let store = Session.store session in
   match cookie_value headers cookie_name with
   | Some token when token <> "" ->
-      let row = Auth_store.lookup_session store ~raw_token:token in
-      (match row with
-       | Some s ->
-           (* Fetch the full user (user_type, parent_user_id) — the session
-              row only carries id/username/is_admin. *)
-           let user_opt = Auth_store.get_user_by_id store s.user_id in
-           (match user_opt with
-            | Some u -> Some u
-            | None -> None)
+      (* tmp/eval-fast-path: one JOIN query for session + user (was two
+         round trips: lookup_session then get_user_by_id). *)
+      let user_opt = Auth_store.lookup_session_user store ~raw_token:token in
+      (match user_opt with
+       | Some u -> Some u
        | None ->
            (* Fall through to Basic if cookie stale. *)
            (match parse_basic_auth headers with

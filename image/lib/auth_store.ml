@@ -29,6 +29,59 @@ let cell_uuid_opt row i =
        | _ -> None)
   | None -> None
 
+(* ---- tmp/eval-fast-path: positive password-verify cache ----
+
+   i-1787300749: every Basic-auth request pays a full argon2id verify
+   (~0.2-1s CPU) plus 3-4 DB statements, so agent tooling pays ~0.5s per
+   eval. Cache POSITIVE verifies keyed (username, sha256(password)) —
+   the password itself is never stored, only its digest inside the key.
+   Negative results are never cached (throttle + timing-flatten path
+   stay live). Entries expire after [verify_cache_ttl] seconds and the
+   whole cache is dropped whenever any password is written
+   (set_password), so a password change invalidates immediately.
+
+   Cached identity fields (is_admin/user_type) may lag admin edits by up
+   to the TTL — acceptable for the same reason session cookies are
+   long-lived; revoke-sessions does not (and did not) affect Basic. *)
+
+let verify_cache_ttl = 300.0
+let verify_cache_max = 64
+let verify_cache : (string, user * float) Hashtbl.t = Hashtbl.create 16
+let verify_cache_mu = Mutex.create ()
+
+let verify_cache_key ~username ~password =
+  let open Digestif.SHA256 in
+  let hex = to_hex (digest_string (username ^ "\x00" ^ password)) in
+  username ^ "|" ^ hex
+
+let verify_cache_get key =
+  Mutex.lock verify_cache_mu;
+  let r =
+    match Hashtbl.find_opt verify_cache key with
+    | Some (u, t) when Unix.gettimeofday () -. t < verify_cache_ttl ->
+        Some u
+    | _ ->
+        (match Hashtbl.find_opt verify_cache key with
+         | Some _ -> Hashtbl.remove verify_cache key
+         | None -> ());
+        None
+  in
+  Mutex.unlock verify_cache_mu;
+  r
+
+let verify_cache_put key user =
+  Mutex.lock verify_cache_mu;
+  (if Hashtbl.length verify_cache >= verify_cache_max then
+     Hashtbl.reset verify_cache);
+  Hashtbl.replace verify_cache key (user, Unix.gettimeofday ());
+  Mutex.unlock verify_cache_mu
+
+(* Drop every cached verify: called on any credential rewrite. *)
+let clear_verify_cache () =
+  Mutex.lock verify_cache_mu;
+  Hashtbl.reset verify_cache;
+  Mutex.unlock verify_cache_mu
+
 let last4_of_key (key : string) : string =
   let n = String.length key in
   if n <= 4 then key else String.sub key (n - 4) 4
@@ -254,6 +307,9 @@ let create_agent (store : Store.t) ~(parent_username : string)
 
 let set_password (store : Store.t) ~(user_id : string) ~(password : string)
   : (unit, string) result =
+  (* tmp/eval-fast-path: any credential rewrite invalidates cached
+     verifies for everyone (simplest correct policy). *)
+  let () = clear_verify_cache () in
   match pg_conn store with
   | None -> (Error "no database")
   | Some conn ->
@@ -347,6 +403,12 @@ let verify_password (store : Store.t) ~(username : string)
   let throttle_key = String.lowercase_ascii username in
   if not (Auth_throttle.admit throttle_key (Auth_throttle.now ())) then None
   else
+    (* tmp/eval-fast-path: cached positive verify (i-1787300749) — no
+       argon2, no DB, no log on hit. *)
+    let key = verify_cache_key ~username ~password in
+    match verify_cache_get key with
+    | Some user -> Some user
+    | None ->
     let found = password_hash_for_user store ~username in
     match found with
     | None ->
@@ -367,6 +429,7 @@ let verify_password (store : Store.t) ~(username : string)
         if Auth_password.verify_password ~stored password then
           let () =
             Auth_throttle.clear throttle_key;
+            verify_cache_put key user;
             log_auth store ~user_id:user.id ~kind:"password" ~success:true
               ?source_ip ()
           in
@@ -493,6 +556,38 @@ let lookup_session (store : Store.t) ~(raw_token : string)
       Printf.eprintf "[auth_store] lookup_session: %s\n%!"
               (Printexc.to_string exn);
             None)
+
+(* tmp/eval-fast-path: cookie identity in ONE query (was lookup_session
+   + get_user_by_id = 2 round trips per request). Returns the full user
+   for attach when the session row is live (unrevoked, unexpired). *)
+let lookup_session_user (store : Store.t) ~(raw_token : string)
+  : user option =
+  if raw_token = "" then None
+  else
+    match pg_conn store with
+    | None -> None
+    | Some conn ->
+        (try
+          let th = token_hash raw_token in
+          let sql =
+            "SELECT " ^ user_cols ^ " FROM auth_sessions s "
+            ^ "JOIN users u ON u.id = s.user_id "
+            ^ "WHERE s.token_hash = $1 "
+            ^ "AND s.revoked_at IS NULL "
+            ^ "AND s.expires_at > now() "
+            ^ "LIMIT 1"
+          in
+          let rows =
+            Io_lwt.Db.execute conn
+              ~params:[ Pgx.Value.of_string th ] sql
+          in
+          match rows with
+          | row :: _ -> user_of_row row
+          | [] -> None
+        with exn ->
+          Printf.eprintf "[auth_store] lookup_session_user: %s\n%!"
+            (Printexc.to_string exn);
+          None)
 
 let revoke_session (store : Store.t) ~(raw_token : string) ?source_ip ()
   : unit =
