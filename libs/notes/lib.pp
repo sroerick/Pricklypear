@@ -4,7 +4,6 @@
 (define notes/all-todos
   (lambda
     ()
-    "Collect todo rows (slug title nid done?) across every note."
     (list/foldl
       (lambda
         (acc row)
@@ -27,7 +26,6 @@
 (define notes/apply-op
   (lambda
     (slug tree op nid)
-    "Apply a single op to an outline node by id, returning the new tree."
     (if
       (string-eq op "add-child")
       (outline/add-child-by-id
@@ -77,10 +75,43 @@
                         (lambda (n) (outline/cycle-todo n)))
                       tree)))))))))))
 
+(define notes/browse
+  (lambda
+    (path)
+    (filmstrip/browse-walk
+      notes/browse-headings
+      (list (notes/browse-docs))
+      path))
+  "notes cascade: docs -> outline headings. Heading entries leaf to\n/notes?slug=<doc> (headings have no route of their own).")
+
+(define notes/browse-docs
+  (lambda
+    ()
+    (list/map
+      (lambda (r) (list (nth r 2) (nth r 3)))
+      (notes/list-light)))
+  "Column of docs: (title . slug).")
+
+(define notes/browse-headings
+  (lambda
+    (slug)
+    (let
+      ((n (notes/get slug)))
+      (if
+        (null? n)
+        (list)
+        (list/map
+          (lambda
+            (kid)
+            (list
+              (as-str (outline/body kid))
+              (string-append "/notes?slug=" slug)))
+          (outline/kids (notes/get-outline n))))))
+  "Top-level outline headings of one doc, each a leaf to the doc view.")
+
 (define notes/capture
   (lambda
     (title body)
-    "Capture a new node into the Inbox note; returns the inbox slug."
     (let
       ((prev (notes/ensure-inbox)))
       (let
@@ -107,7 +138,6 @@
 (define notes/capture-form
   (lambda
     ()
-    "HTML capture form posting a new node into the Inbox."
     (html/form
       "POST"
       "/notes"
@@ -157,7 +187,6 @@
 (define notes/capture-nav
   (lambda
     ()
-    "Collapsible capture form for the nav bar."
     (html/tag
       "details"
       (html/attr "class" "menu-drop capture-drop")
@@ -211,7 +240,6 @@
 (define notes/capture-node-id
   (lambda
     (tree)
-    "Derive a fresh node id from tree size and encoded length."
     (string-append
       "c"
       (as-str (count (outline/kids tree)))
@@ -221,7 +249,6 @@
 (define notes/capture-page
   (lambda
     ()
-    "Serve the capture page: handle a POST, else render the form."
     (if
       (string-eq (request-method) "POST")
       (notes/do-capture)
@@ -231,13 +258,11 @@
 (define notes/capture-status-html
   (lambda
     (ok msg)
-    "HTML capture status paragraph, ok/err classed."
     (html/p* (html/attr "class" (if ok "ok" "err")) msg)))
 
 (define notes/capture-title
   (lambda
     (title body)
-    "Page title for a capture: title, else the first 45 chars of body, else the default 'capture'."
     (let
       ((t (string-trim (as-str title))))
       (if
@@ -251,12 +276,12 @@
             (if
               (<= (string-length b) 48)
               b
-              (string-append (substring b 0 45) "226128166"))))))))
+              (string-append (substring b 0 45) "226128166")))))))
+  "Page title for a capture: title, else the first 45 chars of body, else the default 'capture'.")
 
 (define notes/capture/add
   (lambda
     (title body)
-    "Capture a node into the Inbox note via the doc store; returns the inbox slug."
     (let
       ((prev (notes/doc/ensure-inbox)))
       (let
@@ -278,12 +303,12 @@
                 "inbox"
                 "inbox"
                 "")
-              "inbox")))))))
+              "inbox"))))))
+  "Capture a node into the Inbox note via the doc store; returns the inbox slug.")
 
 (define notes/capture/form
   (lambda
     ()
-    "HTML capture form (doc variant) posting a new node into the Inbox."
     (html/form
       "POST"
       "/notes"
@@ -328,12 +353,12 @@
               (list
                 (html/button (html/attr "type" "submit") "Capture")
                 (html/a "/notes?slug=inbox" "Open inbox"))))
-          (html/div (html/attr "id" "capture-status") ""))))))
+          (html/div (html/attr "id" "capture-status") "")))))
+  "HTML capture form (doc variant) posting a new node into the Inbox.")
 
 (define notes/capture/handle
   (lambda
     ()
-    "Handle a capture POST: validate body, save, then redirect or render status."
     (let
       ((title (request-param "title"))
         (body (request-param "body")))
@@ -352,12 +377,12 @@
               (hx-request?)
               (render-html
                 (notes/capture/status #t "Saved to Inbox."))
-              (redirect "/notes?slug=inbox"))))))))
+              (redirect "/notes?slug=inbox")))))))
+  "Handle a capture POST: validate body, save, then redirect or render status.")
 
 (define notes/capture/nav
   (lambda
     ()
-    "Collapsible capture form for the nav bar (doc variant)."
     (html/tag
       "details"
       (html/attr "class" "menu-drop capture-drop")
@@ -406,17 +431,18 @@
                       (list
                         (html/button (html/attr "type" "submit") "Save")
                         (html/a "/notes?slug=inbox" "inbox"))))
-                  (html/div (html/attr "id" "capture-status") ""))))))))))
+                  (html/div (html/attr "id" "capture-status") "")))))))))
+  "Collapsible capture form for the nav bar (doc variant).")
 
 (define notes/capture/node-id
   (lambda
     (tree)
-    "Derive a fresh node id from tree size and encoded length (doc variant)."
     (string-append
       "c"
       (as-str (count (outline/kids tree)))
       "-"
-      (as-str (string-length (outline/encode tree))))))
+      (as-str (string-length (outline/encode tree)))))
+  "Derive a fresh node id from tree size and encoded length (doc variant).")
 
 (define notes/capture/outline-of-doc
   (lambda (note) (notes/doc/outline note))
@@ -425,23 +451,22 @@
 (define notes/capture/page
   (lambda
     ()
-    "Serve the capture page: handle a POST, else render the form (doc variant)."
     (if
       (string-eq (request-method) "POST")
       (notes/capture/handle)
       (html/page
-        (list (html/h1 "Capture") (notes/capture/form))))))
+        (list (html/h1 "Capture") (notes/capture/form)))))
+  "Serve the capture page: handle a POST, else render the form (doc variant).")
 
 (define notes/capture/status
   (lambda
     (ok msg)
-    "HTML capture status paragraph, ok/err classed (doc variant)."
-    (html/p* (html/attr "class" (if ok "ok" "err")) msg)))
+    (html/p* (html/attr "class" (if ok "ok" "err")) msg))
+  "HTML capture status paragraph, ok/err classed (doc variant).")
 
 (define notes/capture/title
   (lambda
     (title body)
-    "Page title for a capture: title, else the first 45 chars of body, else the default 'capture'."
     (let
       ((t (string-trim (as-str title))))
       (if
@@ -455,7 +480,8 @@
             (if
               (<= (string-length b) 48)
               b
-              (string-append (substring b 0 45) "..."))))))))
+              (string-append (substring b 0 45) "...")))))))
+  "Page title for a capture: title, else the first 45 chars of body, else the default 'capture'.")
 
 (define notes/capture/upsert-inbox
   (lambda
@@ -475,7 +501,6 @@
 (define notes/create-form
   (lambda
     ()
-    "HTML form to create a new note by title and slug."
     (html/form
       "POST"
       "/notes"
@@ -493,7 +518,8 @@
             "slug"
             (html/attr "placeholder" "my-note"))
           " "
-          (html/button (html/attr "type" "submit") "Create"))))))
+          (html/button (html/attr "type" "submit") "Create")))))
+  "HTML form to create a new note by title and slug.")
 
 (define notes/css
   (lambda
@@ -576,7 +602,6 @@
 (define notes/cycle-node-todo
   (lambda
     (slug nid)
-    "Cycle the todo state of a node in a note."
     (let
       ((prev (notes/get slug)))
       (if
@@ -600,12 +625,12 @@
               new-tree
               tags
               kind
-              day)))))))
+              day))))))
+  "Cycle the todo state of a node in a note.")
 
 (define notes/daily
   (lambda
     (day)
-    "Get the daily note for a day, creating it if missing."
     (let
       ((slug (string-append "daily-" (as-str day))))
       (if
@@ -620,20 +645,20 @@
             "daily"
             (as-str day))
           (notes/get slug))
-        (notes/get slug)))))
+        (notes/get slug))))
+  "Get the daily note for a day, creating it if missing.")
 
 (define notes/delete
   (lambda
     (slug)
-    "Delete a note row by slug."
     (let
       ((row (notes/row (as-str slug))))
-      (if (null? row) () (delete (quote note) (car row))))))
+      (if (null? row) () (delete (quote note) (car row)))))
+  "Delete a note row by slug.")
 
 (define notes/do-capture
   (lambda
     ()
-    "Handle a capture POST: validate, save, then redirect or render status."
     (let
       ((title (request-param "title"))
         (body (request-param "body")))
@@ -652,12 +677,12 @@
               (hx-request?)
               (render-html
                 (notes/capture-status-html #t "Saved to Inbox."))
-              (redirect "/notes?slug=inbox"))))))))
+              (redirect "/notes?slug=inbox")))))))
+  "Handle a capture POST: validate, save, then redirect or render status.")
 
 (define notes/do-create
   (lambda
     (title slug)
-    "Create a note with an auto or given slug, then redirect to it."
     (let
       ((s
         (if
@@ -675,32 +700,32 @@
           ""
           "note"
           "")
-        (redirect (string-append "/notes?slug=" s))))))
+        (redirect (string-append "/notes?slug=" s)))))
+  "Create a note with an auto or given slug, then redirect to it.")
 
 (define notes/do-delete
   (lambda
     ()
-    "Delete the note named by the slug request param, then redirect."
     (let
       ((slug (as-str (request-param "slug"))))
-      (seq (notes/delete slug) (redirect "/notes")))))
+      (seq (notes/delete slug) (redirect "/notes"))))
+  "Delete the note named by the slug request param, then redirect.")
 
 (define notes/do-refile
   (lambda
     ()
-    "Refile a node from the src to the dst note, then redirect to source."
     (let
       ((src (as-str (request-param "src_slug")))
         (nid (as-str (request-param "node_id")))
         (dst (as-str (request-param "dst_slug"))))
       (seq
         (notes/refile src nid dst)
-        (redirect (string-append "/notes?slug=" src))))))
+        (redirect (string-append "/notes?slug=" src)))))
+  "Refile a node from the src to the dst note, then redirect to source.")
 
 (define notes/do-save
   (lambda
     (slug raw)
-    "Save an outline (from raw JSON) into a note, then redirect to it."
     (let
       ((tree (outline/decode raw)) (prev (notes/get slug)))
       (let
@@ -717,12 +742,12 @@
             tags
             kind
             day)
-          (redirect (string-append "/notes?slug=" (as-str slug))))))))
+          (redirect (string-append "/notes?slug=" (as-str slug)))))))
+  "Save an outline (from raw JSON) into a note, then redirect to it.")
 
 (define notes/doc/daily
   (lambda
     (day)
-    "Get the daily note for a day via the doc store, creating if missing."
     (let
       ((slug (string-append "daily-" (as-str day))))
       (if
@@ -737,15 +762,16 @@
             "daily"
             (as-str day))
           (notes/doc/get slug))
-        (notes/doc/get slug)))))
+        (notes/doc/get slug))))
+  "Get the daily note for a day via the doc store, creating if missing.")
 
 (define notes/doc/day
-  (lambda (n) "Extract the day field from a decoded note row." (car (cdr (cdr (cdr (cdr (cdr (cdr n)))))))))
+  (lambda (n) (car (cdr (cdr (cdr (cdr (cdr (cdr n))))))))
+  "Extract the day field from a decoded note row.")
 
 (define notes/doc/delete
   (lambda
     (slug)
-    "Delete a note (and its tree node) by slug."
     (let
       ((row (notes/doc/row (as-str slug))))
       (if
@@ -759,7 +785,8 @@
               (and (notes/tree/enabled?) (not (string-eq p "")))
               (tree/delete p "recursive")
               (delete (quote note) (car row))))
-          slug)))))
+          slug))))
+  "Delete a note (and its tree node) by slug.")
 
 (define notes/doc/display-folder
   (lambda
@@ -775,12 +802,12 @@
         (string-replace stripped "_" "-")))))
 
 (define notes/doc/empty-outline
-  (lambda (title) "Build an empty root-only outline titled title." (outline/node "root" title)))
+  (lambda (title) (outline/node "root" title))
+  "Build an empty root-only outline titled title.")
 
 (define notes/doc/ensure-inbox
   (lambda
     ()
-    "Get the Inbox note, creating it if missing."
     (if
       (null? (notes/doc/get "inbox"))
       (seq
@@ -792,18 +819,19 @@
           "inbox"
           "")
         (notes/doc/get "inbox"))
-      (notes/doc/get "inbox"))))
+      (notes/doc/get "inbox")))
+  "Get the Inbox note, creating it if missing.")
 
 (define notes/doc/folder
   (lambda
     (n)
-    "Extract the folder field from a decoded note row (empty when absent)."
     (if
       (null? n)
       ""
       (let
         ((f (car (cdr (cdr (cdr (cdr (cdr (cdr (cdr n))))))))))
-        (if (null? f) "" (as-str f))))))
+        (if (null? f) "" (as-str f)))))
+  "Extract the folder field from a decoded note row (empty when absent).")
 
 (define notes/doc/folder-names
   (lambda () (tree/folder-index (notes/tree/root))))
@@ -811,19 +839,18 @@
 (define notes/doc/folder-seen?
   (lambda
     (xs f)
-    "Whether a folder already appears in a list."
     (if
       (null? xs)
       #f
       (if
         (string-eq (car xs) f)
         #t
-        (notes/doc/folder-seen? (cdr xs) f)))))
+        (notes/doc/folder-seen? (cdr xs) f))))
+  "Whether a folder already appears in a list.")
 
 (define notes/doc/get
   (lambda
     (slug)
-    "Decode a note row by slug into (id slug title outline tags kind day folder)."
     (let
       ((row (notes/doc/row slug)))
       (if
@@ -841,12 +868,12 @@
             (dict-get f "day")
             (let
               ((folder (dict-get f "folder")))
-              (if (null? folder) "" folder))))))))
+              (if (null? folder) "" folder)))))))
+  "Decode a note row by slug into (id slug title outline tags kind day folder).")
 
 (define notes/doc/hidden?
   (lambda
     (row)
-    "Whether a row should be hidden from the index (inbox/hidden/tagged)."
     (let
       ((f (cdr row)))
       (let
@@ -865,18 +892,20 @@
               (if
                 (string-eq slug "inbox")
                 #t
-                (string-contains? tags "hidden")))))))))
+                (string-contains? tags "hidden"))))))))
+  "Whether a row should be hidden from the index (inbox/hidden/tagged).")
 
 (define notes/doc/index-list
   (lambda
     ()
-    "All visible (non-hidden) notes for the index."
     (list/filter
       (lambda (row) (not (notes/doc/hidden? row)))
-      (notes/doc/list))))
+      (notes/doc/list)))
+  "All visible (non-hidden) notes for the index.")
 
 (define notes/doc/kind
-  (lambda (n) "Extract the kind field from a decoded note row." (car (cdr (cdr (cdr (cdr (cdr n))))))))
+  (lambda (n) (car (cdr (cdr (cdr (cdr (cdr n)))))))
+  "Extract the kind field from a decoded note row.")
 
 (define notes/doc/list
   (lambda
@@ -889,14 +918,14 @@
 (define notes/doc/list-folder
   (lambda
     (folder)
-    "All visible notes whose folder matches."
     (let
       ((want (as-str folder)))
       (list/filter
         (lambda
           (row)
           (string-eq (notes/doc/row-folder row) want))
-        (notes/doc/index-list)))))
+        (notes/doc/index-list))))
+  "All visible notes whose folder matches.")
 
 (define notes/doc/make-fields
   (lambda
@@ -907,7 +936,6 @@
       kind
       day
       folder)
-      "Build the JSON fields string for a note row."
     (dict-set*
       "{}"
       (list
@@ -924,15 +952,16 @@
         "day"
         (as-str day)
         "folder"
-        (as-str folder)))))
+        (as-str folder))))
+  "Build the JSON fields string for a note row.")
 
 (define notes/doc/outline
-  (lambda (n) "Extract the outline tree from a decoded note row." (car (cdr (cdr (cdr n))))))
+  (lambda (n) (car (cdr (cdr (cdr n)))))
+  "Extract the outline tree from a decoded note row.")
 
 (define notes/doc/row
   (lambda
     (slug)
-    "Look up a note row by slug from the tree or data_rows."
     (let
       ((tr
         (if
@@ -944,34 +973,34 @@
         (let
           ((rs (find-rows (quote note) "slug" (as-str slug) 1)))
           (if (null? rs) () (car rs)))
-        tr))))
+        tr)))
+  "Look up a note row by slug from the tree or data_rows.")
 
 (define notes/doc/row-folder
   (lambda
     (row)
-    "Folder field of a row (empty when absent)."
     (if
       (null? row)
       ""
       (let
         ((f (dict-get (cdr row) "folder")))
-        (if (null? f) "" (as-str f))))))
+        (if (null? f) "" (as-str f)))))
+  "Folder field of a row (empty when absent).")
 
 (define notes/doc/row-path
   (lambda
     (row)
-    "Tree path of a row (empty when absent)."
     (if
       (null? row)
       ""
       (let
         ((p (dict-get (cdr row) "_path")))
-        (if (null? p) "" (as-str p))))))
+        (if (null? p) "" (as-str p)))))
+  "Tree path of a row (empty when absent).")
 
 (define notes/doc/search
   (lambda
     (q)
-    "Full-text search the garden, returning hit dicts."
     (let
       ((needle (string-trim (as-str q))))
       (if
@@ -979,12 +1008,12 @@
         (list)
         (list/map
           (lambda (j) (if (null? j) "{}" (as-str j)))
-          (tree/search-text needle 20))))))
+          (tree/search-text needle 20)))))
+  "Full-text search the garden, returning hit dicts.")
 
 (define notes/doc/set-folder
   (lambda
     (slug folder)
-    "Move a note into a folder (tree move or folder-field update)."
     (let
       ((row (notes/doc/row (as-str slug))))
       (if
@@ -1010,24 +1039,26 @@
             (quote note)
             (car row)
             "folder"
-            (as-str folder)))))))
+            (as-str folder))))))
+  "Move a note into a folder (tree move or folder-field update).")
 
 (define notes/doc/show-archived?
   (lambda
     ()
-    "Whether the show=archived request param is set."
-    (string-eq (as-str (request-param "show")) "archived")))
+    (string-eq (as-str (request-param "show")) "archived"))
+  "Whether the show=archived request param is set.")
 
 (define notes/doc/tags
-  (lambda (n) "Extract the tags field from a decoded note row." (car (cdr (cdr (cdr (cdr n)))))))
+  (lambda (n) (car (cdr (cdr (cdr (cdr n))))))
+  "Extract the tags field from a decoded note row.")
 
 (define notes/doc/title
-  (lambda (n) "Extract the title field from a decoded note row." (car (cdr (cdr n)))))
+  (lambda (n) (car (cdr (cdr n))))
+  "Extract the title field from a decoded note row.")
 
 (define notes/doc/upsert
   (lambda
     (slug title outline tags kind day)
-    "Insert or update a note, preserving its folder."
     (let
       ((row (notes/doc/row slug)))
       (notes/doc/upsert-in
@@ -1037,7 +1068,8 @@
         tags
         kind
         day
-        (if (null? row) "" (notes/doc/row-folder row))))))
+        (if (null? row) "" (notes/doc/row-folder row)))))
+  "Insert or update a note, preserving its folder.")
 
 (define notes/doc/upsert-in
   (lambda
@@ -1048,7 +1080,6 @@
       kind
       day
       folder)
-      "Insert or update a note into a given folder."
     (if
       (notes/tree/enabled?)
       (let
@@ -1109,12 +1140,12 @@
             (create (quote note) fields)
             (update (quote note) (car row) fields))
           (roam/reindex (as-str slug) outline)
-          slug)))))
+          slug))))
+  "Insert or update a note into a given folder.")
 
 (define notes/edit-form
   (lambda
     (slug outline)
-    "HTML textarea form to save a note's outline."
     (html/form
       "POST"
       "/notes"
@@ -1132,15 +1163,16 @@
             (outline/encode outline))
           (html/p*
             ""
-            (html/button (html/attr "type" "submit") "Save outline")))))))
+            (html/button (html/attr "type" "submit") "Save outline"))))))
+  "HTML textarea form to save a note's outline.")
 
 (define notes/empty-outline
-  (lambda (title) "Build an empty root-only outline titled title." (outline/node "root" title)))
+  (lambda (title) (outline/node "root" title))
+  "Build an empty root-only outline titled title.")
 
 (define notes/ensure-inbox
   (lambda
     ()
-    "Get the Inbox note, creating it if missing."
     (if
       (null? (notes/get "inbox"))
       (seq
@@ -1152,12 +1184,12 @@
           "inbox"
           "")
         (notes/get "inbox"))
-      (notes/get "inbox"))))
+      (notes/get "inbox")))
+  "Get the Inbox note, creating it if missing.")
 
 (define notes/get
   (lambda
     (slug)
-    "Decode a note row by slug into (id slug title outline tags kind day)."
     (let
       ((row (notes/row slug)))
       (if
@@ -1172,27 +1204,32 @@
             (outline/decode (dict-get f "outline"))
             (dict-get f "tags")
             (dict-get f "kind")
-            (dict-get f "day")))))))
+            (dict-get f "day"))))))
+  "Decode a note row by slug into (id slug title outline tags kind day).")
 
 (define notes/get-day
-  (lambda (n) "Extract the day field from a decoded note row." (car (cdr (cdr (cdr (cdr (cdr (cdr n)))))))))
+  (lambda (n) (car (cdr (cdr (cdr (cdr (cdr (cdr n))))))))
+  "Extract the day field from a decoded note row.")
 
 (define notes/get-kind
-  (lambda (n) "Extract the kind field from a decoded note row." (car (cdr (cdr (cdr (cdr (cdr n))))))))
+  (lambda (n) (car (cdr (cdr (cdr (cdr (cdr n)))))))
+  "Extract the kind field from a decoded note row.")
 
 (define notes/get-outline
-  (lambda (n) "Extract the outline tree from a decoded note row." (car (cdr (cdr (cdr n))))))
+  (lambda (n) (car (cdr (cdr (cdr n)))))
+  "Extract the outline tree from a decoded note row.")
 
 (define notes/get-tags
-  (lambda (n) "Extract the tags field from a decoded note row." (car (cdr (cdr (cdr (cdr n)))))))
+  (lambda (n) (car (cdr (cdr (cdr (cdr n))))))
+  "Extract the tags field from a decoded note row.")
 
 (define notes/get-title
-  (lambda (n) "Extract the title field from a decoded note row." (car (cdr (cdr n)))))
+  (lambda (n) (car (cdr (cdr n))))
+  "Extract the title field from a decoded note row.")
 
 (define notes/handle-post
   (lambda
     ()
-    "Dispatch a notes POST by action to the matching handler."
     (let
       ((action (as-str (request-param "action"))))
       (if
@@ -1211,12 +1248,12 @@
             (if
               (string-eq action "delete")
               (notes/do-delete)
-              (redirect "/notes"))))))))
+              (redirect "/notes")))))))
+  "Dispatch a notes POST by action to the matching handler.")
 
 (define notes/hidden-from-index?
   (lambda
     (row)
-    "Whether a row should be hidden from the index (inbox/hidden/tagged)."
     (let
       ((f (cdr row)))
       (let
@@ -1235,12 +1272,12 @@
               (if
                 (string-eq slug "inbox")
                 #t
-                (string-contains? tags "hidden")))))))))
+                (string-contains? tags "hidden"))))))))
+  "Whether a row should be hidden from the index (inbox/hidden/tagged).")
 
 (define notes/index-html
   (lambda
     ()
-    "HTML index page: create form and recent notes."
     (html/join
       (list
         (html/h1 "Notes")
@@ -1249,15 +1286,16 @@
           "Outline-first notes. Create or open a slug.")
         (notes/create-form)
         (html/h2 "Recent")
-        (html/ul (html/attr "class" "card") (notes/recent-list))))))
+        (html/ul (html/attr "class" "card") (notes/recent-list)))))
+  "HTML index page: create form and recent notes.")
 
 (define notes/index-list
   (lambda
     ()
-    "All visible (non-hidden) notes for the index."
     (list/filter
       (lambda (row) (not (notes/hidden-from-index? row)))
-      (notes/list))))
+      (notes/list)))
+  "All visible (non-hidden) notes for the index.")
 
 (define notes/issues/add
   (lambda
@@ -1519,7 +1557,6 @@
 (define notes/item-li
   (lambda
     (row)
-    "HTML list item for a note row with a delete button."
     (let
       ((f (cdr row)) (id (car row)))
       (let
@@ -1549,31 +1586,31 @@
                           (html/attr "type" "submit")
                           (html/attr "class" "secondary")
                           (html/attr "title" "delete note")))
-                      "del")))))))))))
+                      "del"))))))))))
+  "HTML list item for a note row with a delete button.")
 
 (define notes/legacy/tree-render
   (lambda
     ()
-    "HTML note that the retired tree/render is gone."
     (html/p*
       (html/attr "class" "muted")
-      "notes/tree/render retired — use notes/ui/folders-html (flat index).")))
+      "notes/tree/render retired — use notes/ui/folders-html (flat index)."))
+  "HTML note that the retired tree/render is gone.")
 
 (define notes/legacy/tree-render-folder
   (lambda
     (path names depth)
-    "HTML note that the retired tree/render-folder is gone."
     (html/p*
       (html/attr "class" "muted")
       (string-append
         "notes/tree/render-folder retired ("
         (as-str path)
-        ")"))))
+        ")")))
+  "HTML note that the retired tree/render-folder is gone.")
 
 (define notes/light/add-prefixes
   (lambda
     (parts prefix acc)
-    "Collect every ancestor folder prefix of a path into acc."
     (if
       (null? parts)
       acc
@@ -1587,12 +1624,12 @@
         (notes/light/add-prefixes
           (cdr parts)
           full
-          (notes/light/cons-unique full acc))))))
+          (notes/light/cons-unique full acc)))))
+  "Collect every ancestor folder prefix of a path into acc.")
 
 (define notes/light/all-folder-paths
   (lambda
     (all-notes)
-    "All distinct folder paths (with ancestors) across notes."
     (notes/light/dedupe
       (notes/tree/sort-by-name
         (list/foldl
@@ -1605,51 +1642,51 @@
                 acc
                 (notes/light/add-prefixes (string-split f "/") "" acc))))
           (list)
-          all-notes)))))
+          all-notes))))
+  "All distinct folder paths (with ancestors) across notes.")
 
 (define notes/light/children-of
   (lambda
     (parent paths)
-    "Paths whose immediate parent equals parent."
     (list/filter
       (lambda
         (p)
         (string-eq (notes/light/parent-of p) parent))
-      paths)))
+      paths))
+  "Paths whose immediate parent equals parent.")
 
 (define notes/light/cons-unique
   (lambda
     (x xs)
-    "Prepend x to xs unless already present."
-    (if (notes/light/contains? x xs) xs (cons x xs))))
+    (if (notes/light/contains? x xs) xs (cons x xs)))
+  "Prepend x to xs unless already present.")
 
 (define notes/light/contains?
   (lambda
     (x xs)
-    "Whether a string occurs in a list."
     (if
       (null? xs)
       #f
       (if
         (string-eq x (as-str (car xs)))
         #t
-        (notes/light/contains? x (cdr xs))))))
+        (notes/light/contains? x (cdr xs)))))
+  "Whether a string occurs in a list.")
 
 (define notes/light/dedupe
   (lambda
     (xs)
-    "Remove duplicate strings, keeping first-occurrence order."
     (if
       (null? xs)
       (list)
       (notes/light/cons-unique
         (car xs)
-        (notes/light/dedupe (cdr xs))))))
+        (notes/light/dedupe (cdr xs)))))
+  "Remove duplicate strings, keeping first-occurrence order.")
 
 (define notes/light/folder-section
   (lambda
     (folder)
-    "HTML card section for a folder's notes."
     (let*
       ((all-notes (notes/list-light))
         (items (notes/light/notes-in folder all-notes))
@@ -1666,30 +1703,30 @@
               (html/p*
                 (html/attr "class" "muted")
                 "No notes in this folder.")
-              (notes/light/render-notes items))))))))
+              (notes/light/render-notes items)))))))
+  "HTML card section for a folder's notes.")
 
 (define notes/light/last
   (lambda
     (xs)
-    "Last element of a non-empty list."
     (if
       (null? (cdr xs))
       (car xs)
-      (notes/light/last (cdr xs)))))
+      (notes/light/last (cdr xs))))
+  "Last element of a non-empty list.")
 
 (define notes/light/last-segment
   (lambda
     (path)
-    "Final slash-separated segment of a path."
     (if
       (string-eq path "")
       ""
-      (notes/light/last (string-split path "/")))))
+      (notes/light/last (string-split path "/"))))
+  "Final slash-separated segment of a path.")
 
 (define notes/light/note-li
   (lambda
     (note)
-    "HTML list item for a light note row."
     (let*
       ((title (as-str (notes/light/nth note 2)))
         (slug (as-str (notes/light/nth note 3))))
@@ -1697,31 +1734,31 @@
         (html/attr "class" "note-item")
         (html/a
           (string-append "/notes?slug=" slug)
-          (html/text title))))))
+          (html/text title)))))
+  "HTML list item for a light note row.")
 
 (define notes/light/notes-in
   (lambda
     (folder all-notes)
-    "Notes whose folder equals folder."
     (list/filter
       (lambda
         (n)
         (string-eq (as-str (notes/light/nth n 1)) folder))
-      all-notes)))
+      all-notes))
+  "Notes whose folder equals folder.")
 
 (define notes/light/nth
   (lambda
     (xs i)
-    "The i-th element of a list (0-based)."
     (if
       (<= i 0)
       (car xs)
-      (notes/light/nth (cdr xs) (- i 1)))))
+      (notes/light/nth (cdr xs) (- i 1))))
+  "The i-th element of a list (0-based).")
 
 (define notes/light/page
   (lambda
     ()
-    "HTML page for a slug or the flat folder index."
     (let
       ((slug (request-param "slug")))
       (if
@@ -1740,12 +1777,12 @@
                   (not (string-eq (as-str folder) "")))
                 (notes/light/folder-section (as-str folder))
                 (notes/light/render)))))
-        (html/page (list (notes/ui/show (as-str slug))))))))
+        (html/page (list (notes/ui/show (as-str slug)))))))
+  "HTML page for a slug or the flat folder index.")
 
 (define notes/light/parent-of
   (lambda
     (path)
-    "Parent folder of a slash path (empty for a root)."
     (if
       (string-eq path "")
       ""
@@ -1754,12 +1791,12 @@
         (if
           (<= (length parts) 1)
           ""
-          (notes/tree/join-slash (notes/tree/butlast parts)))))))
+          (notes/tree/join-slash (notes/tree/butlast parts))))))
+  "Parent folder of a slash path (empty for a root).")
 
 (define notes/light/render
   (lambda
     ()
-    "HTML flat folder tree of all notes."
     (let*
       ((all-notes (notes/list-light))
         (paths (notes/light/all-folder-paths all-notes))
@@ -1801,12 +1838,12 @@
                 (lambda
                   (root)
                   (notes/light/render-folder root paths all-notes))
-                roots))))))))
+                roots)))))))
+  "HTML flat folder tree of all notes.")
 
 (define notes/light/render-folder
   (lambda
     (path paths all-notes)
-    "HTML tree <details> block for one folder and its children."
     (let*
       ((label (notes/light/last-segment path))
         (children (notes/light/children-of path paths))
@@ -1843,12 +1880,12 @@
                   (lambda
                     (child)
                     (notes/light/render-folder child paths all-notes))
-                  (notes/tree/sort-by-name children))))))))))
+                  (notes/tree/sort-by-name children)))))))))
+  "HTML tree <details> block for one folder and its children.")
 
 (define notes/light/render-notes
   (lambda
     (note-list)
-    "HTML list of note items for a folder."
     (if
       (null? note-list)
       ""
@@ -1857,15 +1894,16 @@
         (html/join
           (list/map
             (lambda (n) (notes/light/note-li n))
-            note-list))))))
+            note-list)))))
+  "HTML list of note items for a folder.")
 
 (define notes/list
-  (lambda () "List all notes (doc store)." (notes/doc/list)))
+  (lambda () (notes/doc/list))
+  "List all notes (doc store).")
 
 (define notes/list-light
   (lambda
     ()
-    "Light rows (id folder title slug) for every visible note."
     (map
       (lambda
         (r)
@@ -1876,7 +1914,8 @@
             (as-str (dict-get d "folder"))
             (as-str (dict-get d "title"))
             (as-str (dict-get d "slug")))))
-      (notes/doc/index-list))))
+      (notes/doc/index-list)))
+  "Light rows (id folder title slug) for every visible note.")
 
 (define notes/list-light-cap
   (lambda () (notes/list-take (notes/list-light) 40)))
@@ -1884,16 +1923,15 @@
 (define notes/list-take
   (lambda
     (xs n)
-    "First n elements of a list."
     (if
       (or (null? xs) (<= n 0))
       (list)
-      (cons (car xs) (notes/list-take (cdr xs) (- n 1))))))
+      (cons (car xs) (notes/list-take (cdr xs) (- n 1)))))
+  "First n elements of a list.")
 
 (define notes/make-fields
   (lambda
     (slug title outline tags kind day)
-    "Build the JSON fields string for a note row."
     (dict-set*
       "{}"
       (list
@@ -1908,15 +1946,16 @@
         "kind"
         (as-str kind)
         "day"
-        (as-str day)))))
+        (as-str day))))
+  "Build the JSON fields string for a note row.")
 
 (define notes/migrate/legacy-all
   (lambda
     ()
-    "Migrate every legacy note row into the tree."
     (list/map
       notes/migrate/legacy-one
-      (rows (quote note) 2000))))
+      (rows (quote note) 2000)))
+  "Migrate every legacy note row into the tree.")
 
 (define notes/migrate/legacy-delete-all
   (lambda
@@ -1945,7 +1984,6 @@
 (define notes/migrate/legacy-force-one
   (lambda
     (row)
-    "Force-write legacy row headings into the tree, re-outlining existing rows."
     (if
       (null? row)
       "skip-empty"
@@ -1965,12 +2003,12 @@
                 (seq
                   (notes/tree/save-outline path outline)
                   (roam/reindex slug outline)
-                  (string-append "reoutlined:" slug))))))))))
+                  (string-append "reoutlined:" slug)))))))))
+  "Force-write legacy row headings into the tree, re-outlining existing rows.")
 
 (define notes/migrate/legacy-one
   (lambda
     (row)
-    "Migrate a single legacy note row into the tree."
     (if
       (null? row)
       "skip-empty"
@@ -2016,19 +2054,20 @@
                     (tree/upsert path "note" "note" body)
                     (notes/tree/save-outline path outline)
                     (roam/reindex slug outline)
-                    (string-append "migrated:" slug)))))))))))
+                    (string-append "migrated:" slug))))))))))
+  "Migrate a single legacy note row into the tree.")
 
 (define notes/missing-html
   (lambda
     (slug)
-    "HTML 'no note' page for a missing slug."
     (html/join
       (list
         (html/h1 "Missing")
         (html/p*
           (html/attr "class" "err")
           (string-append "No note " (as-str slug)))
-        (html/p* "" (html/a "/notes" "All notes"))))))
+        (html/p* "" (html/a "/notes" "All notes")))))
+  "HTML 'no note' page for a missing slug.")
 
 (define notes/move-folder
   (lambda
@@ -2044,7 +2083,6 @@
 (define notes/node-op
   (lambda
     ()
-    "Handle a notes-node-op POST applied to a note's outline."
     (let
       ((slug (as-str (request-param "slug")))
         (op (as-str (request-param "op")))
@@ -2071,7 +2109,8 @@
                   tags
                   kind
                   day)
-                (render-html (outline/html-lite slug new-tree #f))))))))))
+                (render-html (outline/html-lite slug new-tree #f)))))))))
+  "Handle a notes-node-op POST applied to a note's outline.")
 
 (define notes/node/delete
   (lambda
@@ -2170,17 +2209,16 @@
 (define notes/open-todos
   (lambda
     ()
-    "All open (incomplete) todo rows across notes."
     (list/filter
       (lambda
         (t)
         (outline/todo-open? (car (cdr (cdr (cdr t))))))
-      (notes/all-todos))))
+      (notes/all-todos)))
+  "All open (incomplete) todo rows across notes.")
 
 (define notes/outline-partial
   (lambda
     ()
-    "HTML partial of a note's outline for htmx."
     (let
       ((n (notes/get (request-param "slug"))))
       (if
@@ -2191,12 +2229,12 @@
           (outline/html-lite
             (as-str (request-param "slug"))
             (notes/get-outline n)
-            #f))))))
+            #f)))))
+  "HTML partial of a note's outline for htmx.")
 
 (define notes/outline/all-todos
   (lambda
     ()
-    "Collect todo rows across every note (doc store)."
     (list/foldl
       (lambda
         (acc row)
@@ -2214,12 +2252,12 @@
               acc
               (outline/todos tree)))))
       (list)
-      (notes/doc/list))))
+      (notes/doc/list)))
+  "Collect todo rows across every note (doc store).")
 
 (define notes/outline/apply-op
   (lambda
     (slug tree op nid)
-    "Apply a single op to an outline node, returning the new tree."
     (cond
       ((string-eq op "add-child")
         (outline/add-child-by-id
@@ -2307,22 +2345,22 @@
               outline/set-kids
               tree
               nid))))
-      (else tree))))
+      (else tree)))
+  "Apply a single op to an outline node, returning the new tree.")
 
 (define notes/outline/apply-op-sel
   (lambda
     (slug tree op nid)
-    "Apply an op and return (new-tree selected-id)."
     (let
       ((new-tree (notes/outline/apply-op slug tree op nid)))
       (let
         ((sel (notes/outline/sel-for op nid new-tree tree)))
-        (list new-tree sel)))))
+        (list new-tree sel))))
+  "Apply an op and return (new-tree selected-id).")
 
 (define notes/outline/cycle-todo
   (lambda
     (slug nid)
-    "Cycle the todo state of a node in a note (doc store)."
     (let
       ((prev (notes/doc/get slug)))
       (if
@@ -2346,12 +2384,12 @@
               new-tree
               tags
               kind
-              day)))))))
+              day))))))
+  "Cycle the todo state of a node in a note (doc store).")
 
 (define notes/outline/eval-form
   (lambda
     (slug nid)
-    "HTML form to eval a Lisp expression and splice the result."
     (html/form
       "POST"
       "/partials/notes-node-op"
@@ -2389,12 +2427,12 @@
                 (html/attr "type" "submit")
                 (html/attr "class" "ol-btn")
                 (html/attr "title" "eval Lisp and splice result")))
-            "eval"))))))
+            "eval")))))
+  "HTML form to eval a Lisp expression and splice the result.")
 
 (define notes/outline/eval-result
   (lambda
     (slug nid expr)
-    "Eval expr against a node and return the result value."
     (let
       ((prev (notes/doc/get slug)))
       (if
@@ -2413,26 +2451,27 @@
                     "(define __notes_eval_fn (lambda (self doc slug) "
                     (as-str expr)
                     "))"))
-                (__notes_eval_fn node prev (as-str slug))))))))))
+                (__notes_eval_fn node prev (as-str slug)))))))))
+  "Eval expr against a node and return the result value.")
 
 (define notes/outline/eval-target
   (lambda
     ()
-    "Request eval-splice target (child/sibling/body), default child."
     (let
       ((tg (request-param "target")))
       (if
         (if (null? tg) #t (string-eq (as-str tg) ""))
         "child"
-        (as-str tg)))))
+        (as-str tg))))
+  "Request eval-splice target (child/sibling/body), default child.")
 
 (define notes/outline/new-node
-  (lambda () "A fresh outline node with a generated id and default title." (outline/node (gensym "n") "New node")))
+  (lambda () (outline/node (gensym "n") "New node"))
+  "A fresh outline node with a generated id and default title.")
 
 (define notes/outline/node-op
   (lambda
     ()
-    "Handle a node-op, persist the tree, and return updated outline HTML."
     (let
       ((slug (as-str (request-param "slug")))
         (op (as-str (request-param "op")))
@@ -2477,12 +2516,12 @@
                             (html/attr "id" "ol-selected-id")
                             (html/attr "name" "node-id")
                             (html/attr "hx-swap-oob" "true")
-                            (html/attr "value" sel)))))))))))))))
+                            (html/attr "value" sel))))))))))))))
+  "Handle a node-op, persist the tree, and return updated outline HTML.")
 
 (define notes/outline/node-op-eval
   (lambda
     (tree nid slug)
-    "Splice an eval result into the tree at a target; returns (new-tree nid)."
     (let
       ((et
         (notes/outline/splice-eval
@@ -2493,22 +2532,22 @@
             slug
             nid
             (request-param "expr")))))
-      (list et nid))))
+      (list et nid)))
+  "Splice an eval result into the tree at a target; returns (new-tree nid).")
 
 (define notes/outline/open-todos
   (lambda
     ()
-    "All open (incomplete) todo rows across notes (doc store)."
     (list/filter
       (lambda
         (t)
         (outline/todo-open? (car (cdr (cdr (cdr t))))))
-      (notes/outline/all-todos))))
+      (notes/outline/all-todos)))
+  "All open (incomplete) todo rows across notes (doc store).")
 
 (define notes/outline/partial
   (lambda
     ()
-    "HTML partial of a note's outline for htmx (doc store)."
     (let
       ((n (notes/doc/get (request-param "slug")))
         (show-archived (notes/doc/show-archived?)))
@@ -2520,12 +2559,12 @@
           (outline/html-lite
             (as-str (request-param "slug"))
             (notes/doc/outline n)
-            show-archived))))))
+            show-archived)))))
+  "HTML partial of a note's outline for htmx (doc store).")
 
 (define notes/outline/sel-after-add-child
   (lambda
     (new-tree nid)
-    "Selected node id after adding a child (the new child)."
     (let
       ((node (structed/find outline/kids new-tree nid)))
       (if
@@ -2536,12 +2575,12 @@
           (if
             (null? ks)
             nid
-            (structed/id (structed/list/nth ks 0))))))))
+            (structed/id (structed/list/nth ks 0)))))))
+  "Selected node id after adding a child (the new child).")
 
 (define notes/outline/sel-after-add-sibling
   (lambda
     (new-tree nid)
-    "Selected node id after adding a sibling (the node after)."
     (let
       ((parent
         (structed/find-parent outline/kids new-tree nid)))
@@ -2555,12 +2594,12 @@
             (if
               (>= (+ i 1) (structed/count sibs))
               nid
-              (structed/id (structed/list/nth sibs (+ i 1))))))))))
+              (structed/id (structed/list/nth sibs (+ i 1)))))))))
+  "Selected node id after adding a sibling (the node after).")
 
 (define notes/outline/sel-after-delete
   (lambda
     (tree nid)
-    "Selected node id after deleting a node."
     (let
       ((parent (structed/find-parent outline/kids tree nid)))
       (if
@@ -2569,12 +2608,12 @@
         (notes/outline/sel-after-delete-in
           parent
           (outline/kids parent)
-          (structed/sibling-index outline/kids tree nid))))))
+          (structed/sibling-index outline/kids tree nid)))))
+  "Selected node id after deleting a node.")
 
 (define notes/outline/sel-after-delete-in
   (lambda
     (parent sibs i)
-    "Pick the id to select after a deletion within a sibling list."
     (let
       ((after (structed/list/drop sibs (+ i 1))))
       (if
@@ -2583,12 +2622,12 @@
         (if
           (> i 0)
           (structed/id (structed/list/nth sibs (- i 1)))
-          (structed/id parent))))))
+          (structed/id parent)))))
+  "Pick the id to select after a deletion within a sibling list.")
 
 (define notes/outline/sel-for
   (lambda
     (op nid new-tree old-tree)
-    "Selected id after an op, given the old and new trees."
     (cond
       ((string-eq op "delete")
         (if
@@ -2599,12 +2638,12 @@
         (notes/outline/sel-after-add-child new-tree nid))
       ((string-eq op "add-sibling")
         (notes/outline/sel-after-add-sibling new-tree nid))
-      (else nid))))
+      (else nid)))
+  "Selected id after an op, given the old and new trees.")
 
 (define notes/outline/splice-eval
   (lambda
     (tree nid target result)
-    "Splice an eval result into the tree as body, child, or sibling."
     (let
       ((t (as-str target)))
       (if
@@ -2622,12 +2661,12 @@
           (if
             (string-eq t "sibling")
             (outline/insert-sibling tree nid child)
-            (outline/add-child-by-id tree nid child)))))))
+            (outline/add-child-by-id tree nid child))))))
+  "Splice an eval result into the tree as body, child, or sibling.")
 
 (define notes/page
   (lambda
     ()
-    "Serve the notes page: handle a POST, else render index or show."
     (if
       (string-eq (request-method) "POST")
       (notes/ui/handle-post)
@@ -2636,23 +2675,23 @@
         (if
           (if (null? slug) #t (string-eq (as-str slug) ""))
           (html/page (list (notes/ui/index)))
-          (html/page (list (notes/ui/show (as-str slug)))))))))
+          (html/page (list (notes/ui/show (as-str slug))))))))
+  "Serve the notes page: handle a POST, else render index or show.")
 
 (define notes/recent-list
   (lambda
     ()
-    "Concatenated HTML of recent note list items."
     (list/foldl
       (lambda
         (acc row)
         (string-append acc (notes/item-li row)))
       ""
-      (notes/list))))
+      (notes/list)))
+  "Concatenated HTML of recent note list items.")
 
 (define notes/refile
   (lambda
     (src-slug nid dst-slug)
-    "Move a node from one note into another, returning success."
     (let
       ((src (notes/get src-slug))
         (dst (notes/get dst-slug))
@@ -2692,12 +2731,12 @@
                         (notes/get-tags src)
                         (notes/get-kind src)
                         (notes/get-day src))
-                      #t)))))))))))
+                      #t))))))))))
+  "Move a node from one note into another, returning success.")
 
 (define notes/refile-form
   (lambda
     (src-slug nid)
-    "HTML refile select form for a node."
     (if
       (string-eq (as-str nid) "root")
       ""
@@ -2720,12 +2759,12 @@
                   (html/attr "type" "submit")
                   (html/attr "class" "ol-btn")
                   (html/attr "title" "move node to another note")))
-              "refile")))))))
+              "refile"))))))
+  "HTML refile select form for a node.")
 
 (define notes/refile-options
   (lambda
     (src-slug)
-    "HTML option list of destination slugs except the source."
     (list/foldl
       (lambda
         (acc row)
@@ -2744,12 +2783,12 @@
                   (if (string-eq title "") slug title)
                   #f))))))
       ""
-      (notes/list))))
+      (notes/list)))
+  "HTML option list of destination slugs except the source.")
 
 (define notes/refile/extract
   (lambda
     (src-slug nid)
-    "Extract a node into its own new note; returns the new slug."
     (let
       ((src (notes/doc/get src-slug)) (id (as-str nid)))
       (if
@@ -2797,12 +2836,12 @@
                               (notes/doc/tags src)
                               (notes/doc/kind src)
                               (notes/doc/day src))
-                            new-slug))))))))))))))
+                            new-slug)))))))))))))
+  "Extract a node into its own new note; returns the new slug.")
 
 (define notes/refile/extract-form
   (lambda
     (src-slug nid)
-    "HTML extract button form for a node."
     (if
       (string-eq (as-str nid) "root")
       ""
@@ -2821,12 +2860,12 @@
                   (html/attr "type" "submit")
                   (html/attr "class" "ol-btn")
                   (html/attr "title" "extract node into its own note")))
-              "extract")))))))
+              "extract"))))))
+  "HTML extract button form for a node.")
 
 (define notes/refile/extract-handle
   (lambda
     ()
-    "Handle an extract POST, redirecting to the new note."
     (let
       ((src (as-str (request-param "src_slug")))
         (nid (as-str (request-param "node_id"))))
@@ -2835,12 +2874,12 @@
         (if
           (null? new)
           (redirect (string-append "/notes?slug=" src))
-          (redirect (string-append "/notes?slug=" new)))))))
+          (redirect (string-append "/notes?slug=" new))))))
+  "Handle an extract POST, redirecting to the new note.")
 
 (define notes/refile/form
   (lambda
     (src-slug nid)
-    "HTML refile select form for a node (doc variant)."
     (if
       (string-eq (as-str nid) "root")
       ""
@@ -2863,12 +2902,12 @@
                   (html/attr "type" "submit")
                   (html/attr "class" "ol-btn")
                   (html/attr "title" "move node to another note")))
-              "refile")))))))
+              "refile"))))))
+  "HTML refile select form for a node (doc variant).")
 
 (define notes/refile/handle
   (lambda
     ()
-    "Handle a refile POST, moving the node and redirecting."
     (let
       ((src (as-str (request-param "src_slug")))
         (nid (as-str (request-param "node_id")))
@@ -2880,12 +2919,12 @@
             (as-str (request-param "dst_node_id")))))
       (seq
         (notes/refile/move src nid dst dst-nid)
-        (redirect (string-append "/notes?slug=" src))))))
+        (redirect (string-append "/notes?slug=" src)))))
+  "Handle a refile POST, moving the node and redirecting.")
 
 (define notes/refile/move
   (lambda
     (src-slug nid dst-slug dst-nid)
-    "Move a node between notes, returning success."
     (let
       ((src (notes/doc/get src-slug))
         (dst (notes/doc/get dst-slug))
@@ -2933,12 +2972,12 @@
                             (notes/doc/tags src)
                             (notes/doc/kind src)
                             (notes/doc/day src))
-                          #t)))))))))))))
+                          #t))))))))))))
+  "Move a node between notes, returning success.")
 
 (define notes/refile/options
   (lambda
     (src-slug)
-    "HTML option list of destination slugs except the source (doc variant)."
     (list/foldl
       (lambda
         (acc row)
@@ -2957,20 +2996,20 @@
                   (if (string-eq title "") slug title)
                   #f))))))
       ""
-      (notes/doc/list))))
+      (notes/doc/list)))
+  "HTML option list of destination slugs except the source (doc variant).")
 
 (define notes/refile/slug-char-ok?
   (lambda
     (c)
-    "Whether a character is safe in a slug."
     (string-contains?
       "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-      (as-str c))))
+      (as-str c)))
+  "Whether a character is safe in a slug.")
 
 (define notes/refile/slugify
   (lambda
     (title)
-    "Slugify a title, trimming, hyphenating invalid runs, capping length."
     (let
       ((raw
         (notes/refile/slugify-acc
@@ -2992,12 +3031,12 @@
           (if
             (string-eq s "")
             (string-append "note-" (as-str (gensym "n")))
-            (if (> (string-length s) 48) (substring s 0 48) s)))))))
+            (if (> (string-length s) 48) (substring s 0 48) s))))))
+  "Slugify a title, trimming, hyphenating invalid runs, capping length.")
 
 (define notes/refile/slugify-acc
   (lambda
     (s i acc last-hyphen?)
-    "Accumulate a slug from a title, collapsing invalid runs to single hyphens."
     (if
       (>= i (string-length s))
       acc
@@ -3017,25 +3056,26 @@
               s
               (+ i 1)
               (string-append acc "-")
-              #t)))))))
+              #t))))))
+  "Accumulate a slug from a title, collapsing invalid runs to single hyphens.")
 
 (define notes/refile/unique-slug
   (lambda
     (base)
-    "A slug that does not collide with an existing note."
     (if
       (null? (notes/doc/row (as-str base)))
       (as-str base)
       (notes/refile/unique-slug
-        (string-append (as-str base) "-" (as-str (gensym "x")))))))
+        (string-append (as-str base) "-" (as-str (gensym "x"))))))
+  "A slug that does not collide with an existing note.")
 
 (define notes/row
   (lambda
     (slug)
-    "Look up a note row by slug from data_rows."
     (let
       ((rs (find-rows (quote note) "slug" (as-str slug) 1)))
-      (if (null? rs) () (car rs)))))
+      (if (null? rs) () (car rs))))
+  "Look up a note row by slug from data_rows.")
 
 (define notes/search
   (lambda (q) (notes/doc/search q)))
@@ -3043,13 +3083,12 @@
 (define notes/show-archived?
   (lambda
     ()
-    "Whether the show=archived request param is set."
-    (string-eq (as-str (request-param "show")) "archived")))
+    (string-eq (as-str (request-param "show")) "archived"))
+  "Whether the show=archived request param is set.")
 
 (define notes/show-body
   (lambda
     (slug title outline tags)
-    "HTML body for a note page with outline and controls."
     (html/join
       (list
         (html/p*
@@ -3107,12 +3146,12 @@
             "&op=set-'+t.dataset.field+'&node-id='+t.dataset.id;"
             "p+='&'+t.dataset.field+'='+encodeURIComponent(t.innerText);"
             "fetch('/partials/notes-node-op',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:p});"
-            "},true);"))))))
+            "},true);")))))
+  "HTML body for a note page with outline and controls.")
 
 (define notes/show-html
   (lambda
     (slug)
-    "HTML page for a note slug (legacy store)."
     (let
       ((n (notes/get slug)))
       (if
@@ -3122,7 +3161,8 @@
           slug
           (notes/get-title n)
           (notes/get-outline n)
-          (notes/get-tags n))))))
+          (notes/get-tags n)))))
+  "HTML page for a note slug (legacy store).")
 
 (define notes/tree-css
   (css/sheet
@@ -3252,7 +3292,6 @@
 (define notes/tree/all-paths
   (lambda
     (names)
-    "Parents of each path missing from names, for rendering."
     (list/foldl
       (lambda
         (acc name)
@@ -3272,30 +3311,30 @@
                   acc
                   (append acc (list parent))))))))
       (list)
-      names)))
+      names))
+  "Parents of each path missing from names, for rendering.")
 
 (define notes/tree/body
   (lambda
     (node)
-    "The content dict of a parsed tree node."
-    (if (null? node) () (dict-get node "body"))))
+    (if (null? node) () (dict-get node "body")))
+  "The content dict of a parsed tree node.")
 
 (define notes/tree/butlast
   (lambda
     (xs)
-    "All but the last element of a list."
     (if
       (null? xs)
       (list)
       (if
         (null? (cdr xs))
         (list)
-        (cons (car xs) (notes/tree/butlast (cdr xs)))))))
+        (cons (car xs) (notes/tree/butlast (cdr xs))))))
+  "All but the last element of a list.")
 
 (define notes/tree/children-of
   (lambda
     (parent names)
-    "Names whose immediate parent equals parent."
     (list/filter
       (lambda
         (name)
@@ -3305,12 +3344,12 @@
           (let
             ((p (notes/tree/parent-of name)))
             (string-eq p parent))))
-      names)))
+      names))
+  "Names whose immediate parent equals parent.")
 
 (define notes/tree/clear-headings
   (lambda
     (note-path)
-    "Delete all heading nodes under a note path."
     (list/foldl
       (lambda
         (acc nj)
@@ -3326,12 +3365,35 @@
                 acc)
               acc))))
       0
-      (tree/list note-path 1))))
+      (tree/list note-path 1)))
+  "Delete all heading nodes under a note path.")
+
+(define notes/tree/clear-stale-headings
+  (lambda
+    (note-path keep)
+    (list/foldl
+      (lambda
+        (acc nj)
+        (let
+          ((n (notes/tree/parse nj)))
+          (if
+            (null? n)
+            acc
+            (let
+              ((p (as-str (dict-get n "path"))))
+              (if
+                (and
+                  (string-eq (as-str (dict-get n "kind")) "heading")
+                  (not (notes/doc/folder-seen? keep p)))
+                (seq (tree/delete p "recursive") acc)
+                acc)))))
+      0
+      (tree/subtree note-path)))
+  "Ghost sweep: delete heading nodes under note-path whose path is not in keep. tree/delete on an already-deleted path is a no-op, so ancestor-first order is safe.")
 
 (define notes/tree/details-css
   (lambda
     ()
-    "CSS stylesheet for the drawer-style folder tree."
     (css/sheet
       (list
         (css/raw "/* details/summary tree nesting */")
@@ -3541,15 +3603,16 @@
           (list "display" "none"))
         (css/rule
           "details.notes-create > .notes-create-body"
-          (list "margin-top" ".5rem"))))))
+          (list "margin-top" ".5rem")))))
+  "CSS stylesheet for the drawer-style folder tree.")
 
 (define notes/tree/enabled?
-  (lambda () "Whether the one-tree storage path is enabled." #t))
+  (lambda () #t)
+  "Whether the one-tree storage path is enabled.")
 
 (define notes/tree/ensure-chain
   (lambda
     (base segs)
-    "Ensure the folder chain for base plus segs exists."
     (if
       (null? segs)
       base
@@ -3558,12 +3621,12 @@
           (string-append base "." (tree/path-label (car segs)))))
         (seq
           (notes/tree/ensure-folder next (car segs))
-          (notes/tree/ensure-chain next (cdr segs)))))))
+          (notes/tree/ensure-chain next (cdr segs))))))
+  "Ensure the folder chain for base plus segs exists.")
 
 (define notes/tree/ensure-folder
   (lambda
     (path title)
-    "Create a folder node at path if missing."
     (let
       ((cur (tree/get path)))
       (if
@@ -3575,23 +3638,23 @@
           (dict-set*
             "{}"
             (list "uuid" (random-uuid) "title" (as-str title))))
-        path))))
+        path)))
+  "Create a folder node at path if missing.")
 
 (define notes/tree/find-slug
   (lambda
     (slug)
-    "Tree row for a note slug, or () if absent."
     (let
       ((hits (tree/find-by "note" "slug" (as-str slug) 5)))
       (if
         (null? hits)
         ()
-        (notes/tree/node->row (car hits) #t)))))
+        (notes/tree/node->row (car hits) #t))))
+  "Tree row for a note slug, or () if absent.")
 
 (define notes/tree/folder-label
   (lambda
     (path)
-    "Last dot-separated label of a folder path."
     (let
       ((pos (string-find-pos path "/" 0 1)))
       (if
@@ -3600,12 +3663,12 @@
         (substring
           path
           (+ pos 1)
-          (- (string-length path) (+ pos 1)))))))
+          (- (string-length path) (+ pos 1))))))
+  "Last dot-separated label of a folder path.")
 
 (define notes/tree/folder-of-path
   (lambda
     (path)
-    "Folder name of a tree path (empty for the root)."
     (let
       ((root (notes/tree/root)) (p (as-str path)))
       (if
@@ -3619,12 +3682,12 @@
           (let
             ((parts (string-split rest ".")))
             (notes/tree/join-slash (notes/tree/butlast parts))))
-        ""))))
+        "")))
+  "Folder name of a tree path (empty for the root).")
 
 (define notes/tree/heading-kids
   (lambda
     (parent-path)
-    "Recursively load heading nodes under a parent path into an outline."
     (list/foldl
       (lambda
         (acc nj)
@@ -3650,12 +3713,12 @@
                         (notes/tree/heading-kids p))))))
               acc))))
       (list)
-      (tree/list parent-path 1))))
+      (tree/list parent-path 1)))
+  "Recursively load heading nodes under a parent path into an outline.")
 
 (define notes/tree/join-slash
   (lambda
     (xs)
-    "Join a list of strings with a slash."
     (if
       (null? xs)
       ""
@@ -3665,26 +3728,27 @@
         (string-append
           (as-str (car xs))
           "/"
-          (notes/tree/join-slash (cdr xs)))))))
+          (notes/tree/join-slash (cdr xs))))))
+  "Join a list of strings with a slash.")
 
 (define notes/tree/list-notes
-  (lambda () "All notes in the garden via the tree index." (tree/note-index (notes/tree/root) 50000)))
+  (lambda () (tree/note-index (notes/tree/root) 50000))
+  "All notes in the garden via the tree index.")
 
 (define notes/tree/load-outline
   (lambda
     (note-path title)
-    "Reconstruct an outline for a note path from its stored headings."
     (outline/node*
       "root"
       (as-str title)
       (notes/tree/root-body note-path)
       ""
-      (notes/tree/heading-kids note-path))))
+      (notes/tree/heading-kids note-path)))
+  "Reconstruct an outline for a note path from its stored headings.")
 
 (define notes/tree/node->row
   (lambda
     (nj load-outline?)
-    "Convert a parsed tree note node into a row cons (uuid . fields)."
     (let
       ((n (notes/tree/parse nj)))
       (if
@@ -3730,34 +3794,56 @@
                           (list
                             "outline"
                             (outline/encode (notes/tree/load-outline path title))))
-                        (append fields (list "outline" "[]"))))))))))))))
+                        (append fields (list "outline" "[]")))))))))))))
+  "Convert a parsed tree note node into a row cons (uuid . fields).")
 
 (define notes/tree/note-path
   (lambda
     (folder slug)
-    "Tree path for a slug within a folder."
     (let
       ((base
         (notes/tree/ensure-chain
           (notes/tree/root)
           (notes/tree/split-folder folder))))
-      (string-append base "." (tree/path-label slug)))))
+      (string-append base "." (tree/path-label slug))))
+  "Tree path for a slug within a folder.")
+
+(define notes/tree/outline-paths
+  (lambda
+    (parent-path kids)
+    (list/foldl
+      (lambda
+        (acc node)
+        (let
+          ((p
+            (string-append
+              parent-path
+              ".h."
+              (tree/path-label (outline/id node)))))
+          (append
+            acc
+            (cons
+              p
+              (notes/tree/outline-paths p (outline/kids node))))))
+      (list)
+      kids))
+  "Flat list of every heading path the outline occupies under parent-path (matches write-heading layout).")
 
 (define notes/tree/parent-of
   (lambda
     (path)
-    "Parent folder of a slash path (empty for a root)."
     (let
       ((pos (string-find-pos path "/" 0 1)))
-      (if (< pos 0) "" (substring path 0 pos)))))
+      (if (< pos 0) "" (substring path 0 pos))))
+  "Parent folder of a slash path (empty for a root).")
 
 (define notes/tree/parse
-  (lambda (s) "JSON-parse a node string, or () when null." (if (null? s) () (json-parse (as-str s)))))
+  (lambda (s) (if (null? s) () (json-parse (as-str s))))
+  "JSON-parse a node string, or () when null.")
 
 (define notes/tree/render
   (lambda
     ()
-    "HTML flat folder tree of all notes (doc store)."
     (let*
       ((names (notes/doc/folder-names))
         (all-names (append names (notes/tree/all-paths names)))
@@ -3801,12 +3887,12 @@
                 (lambda
                   (root)
                   (notes/tree/render-folder root all-names 0))
-                roots))))))))
+                roots)))))))
+  "HTML flat folder tree of all notes (doc store).")
 
 (define notes/tree/render-folder
   (lambda
     (path names depth)
-    "HTML block for a folder and its children."
     (let*
       ((label (notes/tree/folder-label path))
         (children (notes/tree/children-of path names))
@@ -3848,10 +3934,12 @@
                   (lambda
                     (child)
                     (notes/tree/render-folder child names (+ depth 1)))
-                  (notes/tree/sort-by-name children))))))))))
+                  (notes/tree/sort-by-name children)))))))))
+  "HTML block for a folder and its children.")
 
 (define notes/tree/root
-  (lambda () "The garden root tree path." (tree/garden-root)))
+  (lambda () (tree/garden-root))
+  "The garden root tree path.")
 
 (define notes/tree/root-body
   (lambda
@@ -3871,24 +3959,27 @@
 (define notes/tree/save-outline
   (lambda
     (note-path outline)
-    "Persist a note's outline under its tree path."
     (seq
-      (notes/tree/clear-headings note-path)
-      (notes/tree/write-root-body
-        note-path
-        (outline/body outline))
       (list/foldl
         (lambda
           (acc kid)
           (seq (notes/tree/write-heading note-path kid) acc))
         0
         (outline/kids outline))
-      note-path)))
+      (notes/tree/write-root-body
+        note-path
+        (outline/body outline))
+      (notes/tree/clear-stale-headings
+        note-path
+        (notes/tree/outline-paths
+          note-path
+          (outline/kids outline)))
+      note-path))
+  "Save outline under note-path. WRITE-NEW-THEN-CLEAR-OLD (2026-09-05): tree ops commit outside the eval transaction, so the old clear-headings-then-write order lost the whole outline on a mid-write crash (i-1788593705-d7b6ef41, agents-note loss 2026-09-04). Now: upsert new headings and root body first, then sweep paths the new outline no longer occupies. A crash mid-save leaves recoverable ghosts (superset), never a wiped note; the next save sweeps them.")
 
 (define notes/tree/sort-by-name
   (lambda
     (names)
-    "Sort names lexicographically (quicksort)."
     (if
       (null? names)
       (list)
@@ -3899,15 +3990,16 @@
             (list/filter (lambda (x) (string<? x pivot)) rest))
           (list pivot)
           (notes/tree/sort-by-name
-            (list/filter (lambda (x) (not (string<? x pivot))) rest)))))))
+            (list/filter (lambda (x) (not (string<? x pivot))) rest))))))
+  "Sort names lexicographically (quicksort).")
 
 (define notes/tree/split-folder
   (lambda
     (folder)
-    "Split a folder into non-empty segments."
     (list/filter
       (lambda (s) (not (string-eq (as-str s) "")))
-      (string-split (as-str folder) "/"))))
+      (string-split (as-str folder) "/")))
+  "Split a folder into non-empty segments.")
 
 (define notes/tree/style
   (lambda () (html/tag "style" "" notes/tree/style-css)))
@@ -3921,7 +4013,6 @@
 (define notes/tree/write-heading
   (lambda
     (parent-path node)
-    "Persist an outline node and its children under a parent path."
     (let
       ((nid (tree/path-label (outline/id node)))
         (path
@@ -3951,7 +4042,8 @@
             (seq (notes/tree/write-heading path kid) acc))
           0
           (outline/kids node))
-        path))))
+        path)))
+  "Persist an outline node and its children under a parent path.")
 
 (define notes/tree/write-root-body
   (lambda
@@ -3974,7 +4066,6 @@
 (define notes/ui/create-form
   (lambda
     ()
-    "Collapsible HTML form to create a new note."
     (html/tag
       "details"
       (html/attr "class" "notes-create card")
@@ -4006,12 +4097,12 @@
                   "folder"
                   (html/attr "placeholder" "wiki/entities"))
                 " "
-                (html/button (html/attr "type" "submit") "Create")))))))))
+                (html/button (html/attr "type" "submit") "Create"))))))))
+  "Collapsible HTML form to create a new note.")
 
 (define notes/ui/do-create
   (lambda
     (title slug folder)
-    "Create a note with an auto or given slug and folder, then redirect."
     (let
       ((s
           (if
@@ -4034,20 +4125,20 @@
           "note"
           ""
           fld)
-        (redirect (string-append "/notes?slug=" s))))))
+        (redirect (string-append "/notes?slug=" s)))))
+  "Create a note with an auto or given slug and folder, then redirect.")
 
 (define notes/ui/do-delete
   (lambda
     ()
-    "Delete the note named by slug, then redirect."
     (let
       ((slug (as-str (request-param "slug"))))
-      (seq (notes/doc/delete slug) (redirect "/notes")))))
+      (seq (notes/doc/delete slug) (redirect "/notes"))))
+  "Delete the note named by slug, then redirect.")
 
 (define notes/ui/do-save
   (lambda
     (slug raw)
-    "Save a note outline, validating JSON, then redirect or show errors."
     (let
       ((slug-s (as-str slug))
         (prev (notes/doc/get (as-str slug))))
@@ -4096,7 +4187,8 @@
                   (html/tag
                     "pre"
                     (html/attrs (list (html/attr "class" "err")))
-                    (as-str raw)))))))))))
+                    (as-str raw))))))))))
+  "Save a note outline, validating JSON, then redirect or show errors.")
 
 (define notes/ui/do-undo
   (lambda
@@ -4114,7 +4206,6 @@
 (define notes/ui/edit-form
   (lambda
     (slug outline)
-    "HTML textarea form to save a note's outline."
     (html/form
       "POST"
       "/notes"
@@ -4132,7 +4223,8 @@
             (outline/encode outline))
           (html/p*
             ""
-            (html/button (html/attr "type" "submit") "Save outline")))))))
+            (html/button (html/attr "type" "submit") "Save outline"))))))
+  "HTML textarea form to save a note's outline.")
 
 (define notes/ui/find-modal
   (lambda
@@ -4326,7 +4418,6 @@
 (define notes/ui/folder-form
   (lambda
     (slug folder)
-    "HTML form to move a note into a folder."
     (html/form
       "POST"
       "/notes"
@@ -4344,7 +4435,8 @@
                 (html/attr "placeholder" "wiki/entities")
                 (html/attr "style" "width:12rem"))))
           " "
-          (html/button (html/attr "type" "submit") "move"))))))
+          (html/button (html/attr "type" "submit") "move")))))
+  "HTML form to move a note into a folder.")
 
 (define notes/ui/folder-group-keys
   (lambda
@@ -4355,18 +4447,17 @@
 (define notes/ui/folder-list
   (lambda
     (folder)
-    "Concatenated HTML of list items for a folder."
     (list/foldl
       (lambda
         (acc row)
         (string-append acc (notes/ui/item-li row)))
       ""
-      (notes/doc/list-folder folder))))
+      (notes/doc/list-folder folder)))
+  "Concatenated HTML of list items for a folder.")
 
 (define notes/ui/folder-section
   (lambda
     (folder)
-    "HTML card section for a folder's notes."
     (let
       ((label
           (if
@@ -4383,7 +4474,8 @@
         (html/join
           (list
             (html/h3 (html/a href (html/text label)))
-            (html/ul "" (notes/ui/folder-list folder))))))))
+            (html/ul "" (notes/ui/folder-list folder)))))))
+  "HTML card section for a folder's notes.")
 
 (define notes/ui/folders-html
   (lambda
@@ -4428,7 +4520,6 @@
 (define notes/ui/handle-post
   (lambda
     ()
-    "Dispatch a notes POST by action to the matching handler."
     (let
       ((action (as-str (request-param "action"))))
       (cond
@@ -4459,7 +4550,8 @@
         ((string-eq action "refile") (notes/refile/handle))
         ((string-eq action "extract")
           (notes/refile/extract-handle))
-        (else (redirect "/notes"))))))
+        (else (redirect "/notes")))))
+  "Dispatch a notes POST by action to the matching handler.")
 
 (define notes/ui/index
   (lambda
@@ -4529,7 +4621,6 @@
 (define notes/ui/item-li
   (lambda
     (row)
-    "HTML list item for a note row with folder and delete."
     (let
       ((f (cdr row)) (id (car row)))
       (let
@@ -4566,12 +4657,12 @@
                           (html/attr "type" "submit")
                           (html/attr "class" "secondary")
                           (html/attr "title" "delete note")))
-                      "del")))))))))))
+                      "del"))))))))))
+  "HTML list item for a note row with folder and delete.")
 
 (define notes/ui/item-li-lite
   (lambda
     (row)
-    "HTML list item for a note row (title and folder only)."
     (let
       ((f (cdr row)))
       (let
@@ -4590,19 +4681,20 @@
                 ""
                 (html/span
                   (html/attr "class" "muted")
-                  (html/text (string-append " · " folder)))))))))))
+                  (html/text (string-append " · " folder))))))))))
+  "HTML list item for a note row (title and folder only).")
 
 (define notes/ui/missing
   (lambda
     (slug)
-    "HTML 'no note' page for a missing slug."
     (html/join
       (list
         (html/h1 "Missing")
         (html/p*
           (html/attr "class" "err")
           (string-append "No note " (as-str slug)))
-        (html/p* "" (html/a "/notes" "All notes"))))))
+        (html/p* "" (html/a "/notes" "All notes")))))
+  "HTML 'no note' page for a missing slug.")
 
 (define notes/ui/node-kind
   (lambda (n) (as-str (dict-get n "kind"))))
@@ -4646,7 +4738,6 @@
 (define notes/ui/outline-script
   (lambda
     (slug show-archived tree)
-    "Inline JS driving the interactive outline editor."
     (html/tag
       "script"
       ""
@@ -4747,7 +4838,8 @@
         "else if(k==='ArrowLeft')op='barf-forward';"
         "if(op){e.preventDefault();postOp(op);}"
         "},true);"
-        "setSel('root');document.body.addEventListener('htmx:afterSwap',function(){setSel(selId());});})();"))))
+        "setSel('root');document.body.addEventListener('htmx:afterSwap',function(){setSel(selId());});})();")))
+  "Inline JS driving the interactive outline editor.")
 
 (define notes/ui/path-label
   (lambda
@@ -4762,13 +4854,13 @@
 (define notes/ui/recent-list
   (lambda
     ()
-    "Concatenated HTML of recent note list items."
     (list/foldl
       (lambda
         (acc row)
         (string-append acc (notes/ui/item-li row)))
       ""
-      (notes/doc/index-list))))
+      (notes/doc/index-list)))
+  "Concatenated HTML of recent note list items.")
 
 (define notes/ui/refile-modal
   (lambda
@@ -5134,7 +5226,6 @@
 (define notes/ui/show
   (lambda
     (slug)
-    "HTML page for a note slug (doc store)."
     (let
       ((n (notes/doc/get slug))
         (show-archived (notes/doc/show-archived?)))
@@ -5147,12 +5238,12 @@
           (notes/doc/outline n)
           (notes/doc/tags n)
           show-archived
-          (notes/doc/folder n))))))
+          (notes/doc/folder n)))))
+  "HTML page for a note slug (doc store).")
 
 (define notes/ui/show-body
   (lambda
     (slug title outline tags show-archived folder)
-    "Full HTML body for a note page."
     (html/join
       (list
         (notes/tree/style)
@@ -5234,12 +5325,12 @@
                 "Raw JSON (debug)")
               (notes/ui/edit-form slug outline))))
         (notes/ui/outline-script slug show-archived outline)
-        (notes/ui/find-script)))))
+        (notes/ui/find-script))))
+  "Full HTML body for a note page.")
 
 (define notes/ui/tb-btn
   (lambda
     (op label)
-    "HTML toolbar button submitting an outline op."
     (html/tag
       "button"
       (html/attrs
@@ -5249,12 +5340,12 @@
           (html/attr "title" op)
           (html/attr "data-op" op)
           (html/attr "form" "ol-op-form")))
-      label)))
+      label))
+  "HTML toolbar button submitting an outline op.")
 
 (define notes/ui/toolbar
   (lambda
     (slug show-archived)
-    "HTML toolbar of outline ops for the selected node."
     (html/div
       (html/attr "class" "ol-toolbar")
       (html/join
@@ -5366,7 +5457,8 @@
               "Hide archived")
             (html/a
               (string-append "/notes?slug=" slug "&show=archived")
-              "Show archived")))))))
+              "Show archived"))))))
+  "HTML toolbar of outline ops for the selected node.")
 
 (define notes/ui/top-folder
   (lambda
@@ -5389,7 +5481,6 @@
 (define notes/ui/tree-partial
   (lambda
     ()
-    "HTML partial of a folder's tree children."
     (let
       ((path (as-str (request-param "path")))
         (root (notes/tree/root)))
@@ -5400,7 +5491,8 @@
         (render-html
           (html/div
             (html/attr "class" "tree-children-inner")
-            (notes/ui/tree-children-html path root)))))))
+            (notes/ui/tree-children-html path root))))))
+  "HTML partial of a folder's tree children.")
 
 (define notes/upsert
   (lambda
