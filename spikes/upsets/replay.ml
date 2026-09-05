@@ -349,6 +349,35 @@ let run ~(snapshot : Types.snapshot) ~(rule : Types.rule) ~(manifests_dir : stri
           orders
         |> List.sort_uniq compare
       in
+      (* dataset sanity gate (L-1): in an unbiased corpus the realized
+         loss rate at odds p should approximate (1 - p). Bands that are
+         suspiciously PROFITABLE mean the snapshot is winner-heavy
+         (selection artifact) and any expectancy measured on it is
+         contaminated — this caught the first Clacton fixture's false
+         alpha: hand-picked upset markets made RANDOM entries look
+         golden. *)
+      let sanity_suspicious =
+        Hashtbl.fold
+          (fun band (l, w) acc ->
+            let n = l + w in
+            if n >= 30 then
+              let realized = float_of_int l /. float_of_int n in
+              let prior = 1.0 -. (band +. 0.025) in
+              if realized < prior -. 0.15 then
+                (band,
+                 `Assoc
+                   [ ("band", `Float band);
+                     ("realized_loss", `Float realized);
+                     ("prior_loss", `Float prior);
+                     ("n", `Int n);
+                   ])
+                :: acc
+              else acc
+            else acc)
+          tax []
+        |> List.sort (fun a b -> compare (fst a) (fst b))
+        |> List.map snd
+      in
       let metrics =
         {
           mt_n_signals = List.length signals;
@@ -404,6 +433,9 @@ let run ~(snapshot : Types.snapshot) ~(rule : Types.rule) ~(manifests_dir : stri
                 ] );
             ("tax_all", tax_json);
             ("entry_tax", entry_tax_json);
+            ("sanity_suspicious_bands", `List sanity_suspicious);
+            ( "dataset_suspicious",
+              `Bool (List.length sanity_suspicious > 0) );
             ( "equity",
               `List
                 (List.map (fun (ts, v) -> `Assoc [ ("ts", `Int ts); ("pnl", `Float v) ]) equity_sorted)
