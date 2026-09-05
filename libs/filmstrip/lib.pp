@@ -29,7 +29,8 @@
     filmstrip/page
     filmstrip/css
     filmstrip/ws-fields
-    filmstrip/browse))
+    filmstrip/browse
+    filmstrip/scene))
 
 ;; ---------- constants ----------
 
@@ -1288,3 +1289,173 @@ the columns; a route target (leaf) also open-or-focuses its pane."
           (list "display" "none")))))
   "Strip + pane + launcher stylesheet (~50 lines of rules). Widths are
 the three presets only; .focused is the server-owned ring.")
+
+;; ---------- scene (soil M-A): the workspace as pads/render-scene ------
+;; The kiosk render: same workspace row, same Miller walk, lowered to a
+;; scene-dialect-v0 pad tree instead of HTML (docs/plans/soil-m-a.md).
+;; Pure data — no eval on any consumer frame path (soil contract).
+
+(define filmstrip/scene-w
+  (lambda (w)
+    "niri width preset -> grow weight (denominator 6): third=2, half=3,
+full=6. The strip splits grow space by weight, so 2/3/6 against a
+trailing spacer reproduces exact niri fractions; full+others shrink
+proportionally (niri scrolls; the shim has no scroll in v1)."
+    (cond
+      ((string-eq w "half") 3)
+      ((string-eq w "full") 6)
+      (#t 2))))
+
+(define filmstrip/scene-weights-sum
+  (lambda (panes)
+    "Sum of pane grow weights (for the spacer's remainder)."
+    (if (null? panes)
+        0
+        (+ (filmstrip/scene-w (filmstrip/pane-width (car panes)))
+           (filmstrip/scene-weights-sum (cdr panes))))))
+
+(define filmstrip/scene-lines
+  (lambda (labels)
+    "Label strings -> text pad nodes, capped at 12 with a dim +N more
+tail (the shim clips rather than scrolls, so columns cap instead)."
+    (let ((capped (filmstrip/take labels 12)))
+      (append
+        (list/map (lambda (s) (pad 'text (list) s)) capped)
+        (if (> (length labels) 12)
+            (list (pad 'text (list (cons 'dim "1"))
+                    (string-append "+ " (as-str (- (length labels) 12)) " more")))
+            (list))))))
+
+(define filmstrip/scene-todo-count
+  (lambda (lid)
+    "Item count of one todo list (the browse data, counted)."
+    (length
+      (list/filter
+        (lambda (row) (string-eq (as-str (dict-get (cdr row) "list_id")) lid))
+        (todo/item/all)))))
+
+(define filmstrip/scene-pane-body
+  (lambda (route)
+    "Text summary lines for a pane route (D4: summaries from existing
+prims — the shell is the M-A subject, not live pane interiors)."
+    (cond
+      ((string-starts-with? route "/todos")
+       (filmstrip/scene-lines
+         (list/map
+           (lambda (row)
+             (string-append
+               (as-str (dict-get (cdr row) "title"))
+               " ("
+               (as-str (filmstrip/scene-todo-count (as-str (car row))))
+               ")"))
+           (todo/list/all))))
+      ((string-starts-with? route "/notes")
+       (filmstrip/scene-lines
+         (list/map (lambda (r) (as-str (nth r 2))) (notes/list-light))))
+      ((string-starts-with? route "/calendar")
+       (list
+         (pad 'text (list) (string-append "today: " (calendar/today)))
+         (pad 'text (list)
+           (string-append (as-str (length (calendar/all-events))) " events"))))
+      (#t
+       (list (pad 'text (list (cons 'dim "1")) "open in browser /filmstrip"))))))
+
+(define filmstrip/scene-pane
+  (lambda (p focused?)
+    "One content pane as a scene column: niri weight from the width
+preset, route title (level 1) wearing sel when focused, summary body."
+    (let ((route (filmstrip/pane-route p))
+          (attrs (list
+                   (cons 'size
+                     (list 'grow (filmstrip/scene-w (filmstrip/pane-width p))))
+                   (cons 'gap "2")
+                   (cons 'padding "6"))))
+      (pad 'column attrs
+        (pad 'text
+          (if focused?
+              (list (cons 'level "1") (cons 'sel "1"))
+              (list (cons 'level "1")))
+          route)
+        (filmstrip/scene-pane-body route)))))
+
+(define filmstrip/scene-strip
+  (lambda (panes focus)
+    "The content strip: pane columns at niri weights + a trailing
+spacer absorbing unused fraction (third+half -> 2:3 + 1/6 empty);
+empty state is a dim hint."
+    (let ((pane-nodes
+            (filmstrip/map-indexed
+              (lambda (p i) (filmstrip/scene-pane p (= i focus)))
+              panes
+              0))
+          (wsum (filmstrip/scene-weights-sum panes)))
+      (pad 'row (list (cons 'gap "8") (cons 'size (list 'grow 1)))
+        (if (null? panes)
+            (list (pad 'text (list (cons 'dim "1"))
+                    "no panes -- open /todos from the browser"))
+            (append
+              pane-nodes
+              (if (< wsum 6)
+                  (list (pad 'text
+                          (list (cons 'size (list 'grow (- 6 wsum))))
+                          ""))
+                  (list))))))))
+
+(define filmstrip/scene-entry-sel?
+  (lambda (i e path)
+    "Entry selected when the crumb path at depth i names its target."
+    (and (< i (length path))
+         (string-eq (as-str (nth path i)) (as-str (car (cdr e)))))))
+
+(define filmstrip/scene-col
+  (lambda (i col path)
+    "One Miller column: entries as text (selected wears sel), capped at
+12 with a dim +N more tail; column 0 carries the shell header."
+    (pad 'column (list (cons 'gap "2") (cons 'padding "6"))
+      (append
+        (if (= i 0)
+            (list (pad 'text (list (cons 'level "1")) "filmstrip"))
+            (list))
+        (let ((capped (filmstrip/take col 12)))
+          (append
+            (list/map
+              (lambda (e)
+                (pad 'text
+                  (if (filmstrip/scene-entry-sel? i e path)
+                      (list (cons 'sel "1"))
+                      (list))
+                  (as-str (car e))))
+              capped)
+            (if (> (length col) 12)
+                (list (pad 'text (list (cons 'dim "1"))
+                        (string-append "+ " (as-str (- (length col) 12)) " more")))
+                (list))))))))
+
+(define filmstrip/scene-cascade
+  (lambda (cols path)
+    "The cascade strip: one column per browse level over the app
+chooser (cols from filmstrip/browse)."
+    (pad 'row (list (cons 'gap "6"))
+      (filmstrip/map-indexed
+        (lambda (col i) (filmstrip/scene-col i col path))
+        cols
+        0))))
+
+(define filmstrip/scene
+  (lambda ()
+    "SCENE v0 kiosk render of the workspace (soil M-A): cascade strip
+(Miller columns, selected entry wears sel) over a dim launcher hint over
+the content strip (pane columns at niri weights, focused pane wears
+sel). Pure data: pads/render-scene output; eval-only (no route), the
+native shim consumes it via loopback eval --eval \"(filmstrip/scene)\"."
+    (let* ((row (filmstrip/row))
+           (cascade (nth row 0))
+           (panes (nth row 1))
+           (focus (nth row 2))
+           (br (filmstrip/browse cascade)))
+      (pads/render-scene
+        (pad 'column (list (cons 'gap "4") (cons 'padding "8"))
+          (filmstrip/scene-cascade (car br) cascade)
+          (pad 'text (list (cons 'dim "1"))
+            "kiosk view -- edit at /filmstrip")
+          (filmstrip/scene-strip panes focus))))))

@@ -263,11 +263,28 @@ module Raster = struct
 end
 
 (* v0 presentational palette (no bg attrs in dialect v0; nested boxes
-   get a faint panel fill so layout is visible). *)
+   get a faint panel fill so layout is visible). Display-hint attrs
+   (soil M-A): sel -> accent (text color / 2px box border), dim ->
+   muted text. The tree carries hints; the backend decides paint. *)
 let col_bg = 0xFF16181Dl
 let col_box = 0xFF1E222Al
 let col_text = 0xFFE6E6E6l
 let col_heading = 0xFF82AAFFl
+let col_sel = 0xFFE0AF68l
+let col_dim = 0xFF7A8190l
+
+let sel_attrs attrs = List.mem_assoc "sel" attrs
+let dim_attrs attrs = List.mem_assoc "dim" attrs
+
+(* 2px accent border: four fill rects, guarded against tiny rects. *)
+let border (buf : Raster.buf) (r : rect) color =
+  let t = 2 in
+  if r.w >= 2 * t && r.h >= 2 * t then begin
+    Raster.fill buf { r with h = t } color;
+    Raster.fill buf { r with y = r.y + r.h - t; h = t } color;
+    Raster.fill buf { r with w = t } color;
+    Raster.fill buf { r with x = r.x + r.w - t; w = t } color
+  end
 
 let paint (buf : Raster.buf) (placed : placed list) : unit =
   let h = Bigarray.Array2.dim1 buf and w = Bigarray.Array2.dim2 buf in
@@ -276,12 +293,15 @@ let paint (buf : Raster.buf) (placed : placed list) : unit =
     (fun i p ->
       match p.node.kind with
       | Row | Column ->
-          if i > 0 then Raster.fill buf p.rect col_box
+          if i > 0 then Raster.fill buf p.rect col_box;
+          if sel_attrs p.node.attrs then border buf p.rect col_sel
           (* the root keeps the page background *)
       | Text ->
           let scale = scale_of p.node.attrs in
           let color =
-            if level p.node.attrs >= 1 then col_heading else col_text
+            if sel_attrs p.node.attrs then col_sel
+            else if dim_attrs p.node.attrs then col_dim
+            else if level p.node.attrs >= 1 then col_heading else col_text
           in
           Raster.text buf p.rect ~x:p.rect.x ~y:p.rect.y ~scale p.node.text
             color)
