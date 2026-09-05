@@ -1,7 +1,8 @@
 (project pricklypear-filmstrip
  (doc "Pricklypear book chapter: FILMSTRIP — the habitat shell. Two infinite horizontal strips stacked iTunes-style: the top strip is a Miller-column cascade (structural menus, not popups), the bottom strip is the niri-style row of content panes. Panes are ordinary routes in partial mode — they don't know they're windowed. Workspace state is a per-user row; the desktop persists in the same object store as the todos it displays.")
- (status planned)
+ (status implemented)
  (* agent note (|2026-09 DESIGN SESSION (with pads.borg): the user's sketch (waybar + three small top panels + one large content area, \"kind of how iTunes is laid out\") plus \"two separate infinite horizontal panes\" crystallized the model. Prior art named in-session: iTunes column browser / Finder column view / ranger / Smalltalk browser for the top (Miller-column cascade); niri (and not-quite acme) for the bottom. The point that made it click: the cascade is STATE, not styling — which is why the filmstrip idea never modalized in CSS. Filmstrip is the FIRST consumer of pads vocabulary but is itself buildable stringly as a product; pads migration makes it provable. Dialog/overlay needs come from pads/layers-modality; filmstrip keeps floats for genuinely transient things only — navigation is structural.|) *)
+ (* agent note (|2026-09-04 MAKE (filmstrip v1, branch filmstrip-v1): shell shipped stringly per the handoff plan (docs/plans/filmstrip-v1.md). Dialect notes for the next agent: let* is a SINGLE-BODY macro — multi-step handlers wrap their tail in (seq ...); cons builds VPair chains which count rejects (length accepts both). browse lives as <pkg>/browse defs inside libs/filmstrip until promotion into todo/notes/calendar. Routes are exact-match, so /filmstrip/width/<id> became /filmstrip/<action> routes with id/dir/d/t params — same semantics, different spelling than this chapter's prose. Smoke: scripts/smoke_filmstrip.py (11 checks incl. zero-JS + round-trip).|) *)
  (convention ocaml-dune)
 
  (section filmstrip-shell
@@ -37,7 +38,7 @@
     |))
    )
    (implements libs/filmstrip/lib.pp)
-   (status planned)
+   (status implemented)
   )
 
   (subsection cascade-protocol
@@ -71,7 +72,7 @@
          popup.
     |))
    )
-   (status planned)
+   (status implemented)
   )
 
   (subsection pane-protocol
@@ -97,7 +98,7 @@
          image/ moves for v1.
     |))
    )
-   (status planned)
+   (status implemented)
   )
 
   (subsection shell-events
@@ -114,7 +115,7 @@
     (smoke "alt+arrows move .focused between panes with no JS")
     (smoke "workspace row round-trip: reload restores strip order/widths/focus")
     (smoke "cascade: packages -> todo -> today opens the today pane; truncation re-walks"))
-   (status planned)
+   (status implemented)
   )
 
   (subsection roadmap-tiers

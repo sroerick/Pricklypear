@@ -152,13 +152,58 @@ multi-user seats (each user's row is theirs; nothing cross-user).
 
 ## 6. Acceptance checklist
 
-- [ ] `dune build @all` clean; `dune runtest --force` no NEW failures
-- [ ] `scripts/dev.sh start` → logged-in `/filmstrip` renders two strips (empty state ok)
-- [ ] Launcher opens todo → pane appears with the todo fragment; in-pane interactions swap in-place
-- [ ] Cascade: walk todo → list → leaf opens/focuses pane; mid-path click truncates + re-walks
-- [ ] Focus POST moves `.focused` via OOB; alt+arrows wired via key filters
-- [ ] Width preset cycles on a pane
-- [ ] Reload round-trips panes/order/widths/focus/cascade
-- [ ] `scripts/smoke_filmstrip.py` green
-- [ ] `borge/filmstrip.borg` shipped subsections flipped; `borge check .` no NEW failures
-- [ ] All work committed on `filmstrip-v1`
+- [x] `dune build @all` clean; `dune runtest --force` no NEW failures
+- [x] `scripts/dev.sh start` → logged-in `/filmstrip` renders two strips (empty state ok)
+- [x] Launcher opens todo → pane appears with the todo fragment; in-pane interactions swap in-place
+- [x] Cascade: walk todo → list → leaf opens/focuses pane; mid-path click truncates + re-walks
+- [x] Focus POST moves `.focused` via OOB; alt+arrows wired via key filters
+- [x] Width preset cycles on a pane
+- [x] Reload round-trips panes/order/widths/focus/cascade
+- [x] `scripts/smoke_filmstrip.py` green
+- [x] `borge/filmstrip.borg` shipped subsections flipped; `borge check .` no NEW failures
+- [x] All work committed on `filmstrip-v1`
+
+## 7. Runbook (seeding + demo)
+
+Seeding (dev stack, from the `filmstrip-v1` worktree):
+
+```sh
+eval $(opam env --switch=poohstack --set-switch)
+dune build @all
+scripts/dev.sh start                    # PG :5433, image :18080
+export PP_URL=http://127.0.0.1:18080 PP_USER=admin PP_PASS=admin
+python3 scripts/pp_sync.py push filmstrip   # loads 98 forms, binds routes
+python3 scripts/smoke_filmstrip.py          # 11 checks, all green
+```
+
+Routes are bound by the push itself — `(route "/filmstrip" …)` rows land
+in `view_bindings` on the current branch (admin/personal in dev). No
+image restart is needed after a push; restart only after an OCaml
+change (`dune build` then `scripts/dev.sh restart`). To promote the
+package defaults: checkout `system/main`, `(load-library "filmstrip")`,
+then `pp-sync snapshot` into the repo vault — same policy as every
+other Nopales package.
+
+Demo (browser, logged in as admin):
+
+1. `GET /filmstrip` — cascade strip (todos/notes/calendar) over the
+   content strip; launcher row between them.
+2. Type `/todos` in the launcher, Enter — a third-width focused pane
+   appears with the live todo UI; add a todo inside the pane (swaps
+   in-place; the pane never reloads).
+3. Click `todo` in the cascade — a second Miller column (todo lists);
+   click a list, then an item — the item opens-or-focuses a pane.
+4. Click `notes` at depth 0 — path truncates and the columns re-walk.
+5. `Alt+←/→` moves the focus ring (server-owned `.focused`, OOB class
+   swaps); `Alt+Shift+←/→` reorders panes; the `width` button cycles
+   third → half → full; `close` removes the pane.
+6. Reload the page — panes, order, widths, focus, and cascade path all
+   come back (workspace row in Postgres, id = username).
+
+Zero-JS discipline held: no `<script>` tags; hotkeys are htmx key
+filters on invisible sentinel divs (`keydown[altKey…&&key=='Arrow…']
+from:body`); launcher focus is the native `accesskey` attribute.
+
+Dialect gotchas hit during make (see the dated agent note in
+`borge/filmstrip.borg`): `let*` is single-body (wrap multi-step tails
+in `seq`), and `count` rejects cons-built VPair chains (use `length`).
