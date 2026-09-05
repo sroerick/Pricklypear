@@ -1,0 +1,17 @@
+;; upsets bench — borge/upsets.borg analytics-bench + simulator.
+;; Pure library (no DB, no image), CLI, alcotest suite.
+
+(library
+ (name upsets_bench)
+ (modules types stats flow cooc rules fills replay)
+ (libraries yojson digestif unix))
+
+(executable
+ (name sim_main)
+ (modules sim_main)
+ (libraries upsets_bench))
+
+(tests
+ (names upsets_test)
+ (modules upsets_test)
+ (libraries upsets_bench alcotest))
