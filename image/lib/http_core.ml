@@ -1065,6 +1065,24 @@ let admin_users_page (session : Session.t) (reqd : Httpun.Reqd.t)
                 [ HTML.method_ `POST; HTML.action "/admin/users" ]
                 [ HTML.input
                     [ HTML.type_ "hidden"; HTML.name "action";
+                      HTML.value "set_user_type" ]
+                ; HTML.input
+                    [ HTML.type_ "hidden"; HTML.name "user_id";
+                      HTML.value "%s" u.id ]
+                ; HTML.input
+                    [ HTML.type_ "hidden"; HTML.name "user_type";
+                      HTML.value
+                        (if u.user_type = "agent" then "human"
+                         else "agent") ]
+                ; HTML.button [HTML.type_ "submit"]
+                    [ txt "%s"
+                        (if u.user_type = "agent" then "Make human"
+                         else "Make agent") ]
+                ];
+              HTML.form
+                [ HTML.method_ `POST; HTML.action "/admin/users" ]
+                [ HTML.input
+                    [ HTML.type_ "hidden"; HTML.name "action";
                       HTML.value "revoke_sessions" ]
                 ; HTML.input
                     [ HTML.type_ "hidden"; HTML.name "user_id";
@@ -1362,6 +1380,37 @@ let post_admin_users (session : Session.t) (reqd : Httpun.Reqd.t)
           (match r with
            | Error e -> admin_err ~session ~reqd ~title:"Agent promote" e
            | Ok () ->
+               redirect_response reqd "/admin/users";
+               ())
+    | "set_user_type" ->
+        let user_id = field "user_id" in
+        let utype = field "user_type" in
+        if user_id = "" || (utype <> "agent" && utype <> "human") then
+          admin_err ~session ~reqd ~title:"Set user type"
+            "user_id and user_type (human|agent) required"
+        else
+          (* Flipping to agent: the acting admin is the owning parent
+             (matches the prim + the agent-native chapter flip). The
+             store validates parent type/user existence. *)
+          let parent_user_id =
+            if utype = "agent" then
+              (match
+                 Auth_store.get_user_by_username store
+                   (Session.username session)
+               with Some p -> Some p.Auth_store.id | None -> None)
+            else None
+          in
+          let r =
+            Auth_store.set_user_type store ~user_id ~user_type:utype
+              ~parent_user_id
+          in
+          (match r with
+           | Error e -> admin_err ~session ~reqd ~title:"Set user type" e
+           | Ok () ->
+               let () =
+                 Auth_store.log_auth store ~user_id
+                   ~kind:"admin_set_user_type" ~success:true ()
+               in
                redirect_response reqd "/admin/users";
                ())
     | "create" | _ ->

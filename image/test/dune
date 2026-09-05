@@ -150,6 +150,11 @@
  (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))
 
 (test
+ (name auth_store_test)
+ (modules auth_store_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio pgx unix))
+
+(test
  (name jobs_test)
  (modules jobs_test)
  (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))
