@@ -186,6 +186,7 @@
          routes stay private, schedules submit as the scheduled-by
          user (jobs.prims semantics).
          |)))
+   (* agent note (|2026-09-05 make pass: package libs/upsets/lib.pp written + loaded; lab-verified END TO END on the dev image (scripts/dev.sh): poll {markets:226} idempotent, poll-odds {points:4349} watermarked by last-odds-ts, poll-flow {flows:1093} idempotent (delta 0 on immediate re-run). REQUIRED kernel ships in the same cycle: jobs runner unbudgeted (jobs.borg runner agent note - request-path 100k budget killed the first tick mid-poll) + image.prim sort (stdlib-round-2 batch). PROD DEPLOY PENDING (operator call): the running prod image predates both kernel changes, so schedules stay OFF until deploy. Loader: scripts/load_upsets.py (one pp_eval -i session; defines bind that session env AND persist via Store.persist_function). GOTCHAS recorded: (1) begin-checkout does not switch the env for the rest of the same eval - the session default branch owns defines (admin/personal on lab); (2) dict-get returns complex sub-values as JSON STRINGS - json-parse arrays explicitly; (3) kernel let / std let* are single-body forms; (4) clob prices-history points are objects {t,p}; data-api ts parses as float - floor before quotient.|) *)
    (implements libs/upsets/lib.pp)
   )
 
