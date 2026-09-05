@@ -54,6 +54,8 @@
  (untracked "scripts/pp-eval.sh" "pp-eval CLI client wrapper for POST /api/eval")
  (untracked "scripts/pp_eval.py" "pp-eval CLI client for POST /api/eval")
  (untracked "scripts/pp_sync.py" "pp-sync vault/snapshot tooling for package branches")
+ (untracked "scripts/load_upsets.py" "upsets package loader (one pp_eval -i session; defines persist)")
+ (untracked "scripts/load_upsets_lib.py" "Nopales top-level form splitter used by the upsets loader")
  (untracked "scripts/pp_outline.py" "pp-outline tooling for structural editing")
  (untracked "scripts/build-release-openbsd.ksh" "OpenBSD release build infra (docs/openbsd-prod-branch-deploy.md)")
  (untracked "scripts/ship-to-vultr.ksh" "OpenBSD deploy/ship infra")
