@@ -1,3 +1,29 @@
+; soil-strip -- river window-manager client bindings, generated from the
+; vendored river 0.4.8 protocol XMLs (native/protocol/). The scanner
+; also emits *_server.ml (not linked here; excluded from the executables
+; since only the client side is used).
+
+(rule
+ (targets river_window_management_v1_proto.ml river_window_management_v1_client.ml
+          river_window_management_v1_server.ml)
+ (deps protocol/river-window-management-v1.xml)
+ (action (run wayland-scanner-ocaml protocol/river-window-management-v1.xml)))
+
+(rule
+ (targets river_xkb_bindings_v1_proto.ml river_xkb_bindings_v1_client.ml
+          river_xkb_bindings_v1_server.ml)
+ (deps protocol/river-xkb-bindings-v1.xml)
+ ;; river-xkb-bindings references river_seat_v1's modifiers enum from the
+ ;; window-management protocol -- merge its proto into Imports.
+ (action (run wayland-scanner-ocaml --open=River_window_management_v1_proto
+              protocol/river-xkb-bindings-v1.xml)))
+
+(executable
+ (name soil_strip)
+ (modules (:standard \ river_window_management_v1_server river_xkb_bindings_v1_server))
+ (libraries wayland eio eio_main unix yojson logs logs.fmt))
+
 (executable
  (name soil_hello)
+ (modules (:standard \ river_window_management_v1_server river_xkb_bindings_v1_server))
  (libraries wayland wayland.protocols eio eio_main unix yojson logs logs.fmt))

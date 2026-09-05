@@ -1,8 +1,9 @@
 (project pricklypear-soil
  (doc "Pricklypear book chapter: SOIL — the native/Wayland tier. Pads grow in soil: a shim process buys the frame loop (Wayland compositing, layout, pixels) while the image owns all policy in Nopales. Build order: River as the compositor (tier 2), filmstrip's two-sequence workspace as the policy, Clay as the layout engine, pads/render-scene as the view dialect. Full compositor (tier 3) is explicitly out of scope until the policy layer is proven.")
- (status planned)
+ (status implemented)
  (* agent note (|2026-09 DESIGN SESSION (with pads.borg, filmstrip.borg): the tier ladder from the lisp-machine conversation — tier 1 filmstrip-in-browser (product), tier 2 Nopales-as-River-WM (the rau/mtwm architecture: C compositor, Lisp policy over the wire), tier 3 full compositor C shim + eval listeners (the mahogany/lispwc architecture) — with tier 2 fixed as THE chapter scope and tier 3 deferred. Precedents named in-session: rau (pure elisp WM on River), mtwm (Common Lisp on River, WIP), mahogany (CL on wlroots, C backend split), lispwc (wl_listener as Lisp closure workout), StumpWM issue #739 (why you never port an X11 WM to Wayland). ~/dev/clay_test holds clay.h 0.14 — the pun that named the chapter: prickly pears grow in clay soil; pads lower into Clay.|) *)
  (* agent note (|2026-09-04 MAKE (soil M-A, branch filmstrip-v1): the kiosk milestone shipped — soil-hello renders (filmstrip/scene) fullscreen on the running compositor (scripts/smoke_soil_ma.py green: scene validation over live workspace mutations + --frames 12 exit 0). Shipped in this pass: filmstrip/scene (workspace -> pad tree -> render-scene, in libs/filmstrip), niri width presets as grow weights 2/3/6 over denominator 6 with a trailing spacer for exact fractions, sel/dim pass-through display-hint attrs (scene-attrs already serialized them; shim paints accent color + 2px border). Binding-path decision (a) thin shim now PROVEN twice (hello card + filmstrip shell); native-rendering implemented; river-split + milestones stay planned — river-window-management is M-B, and M-A ran on plain Hyprland, no river needed yet. Scene dialect stayed v0: no new kinds, hints not paint in the tree.|) *)
+ (* agent note (|2026-09-04 MAKE (soil M-B, branch filmstrip-v1): window policy shipped — native/soil_strip.ml is a river-window-management-v1 client (river 0.4.8, protocol XMLs vendored in native/protocol/, ocaml-wayland scanner via dune rule; the xkb-bindings proto needs --open=River_window_management_v1_proto for the seat modifiers enum). DECISION RECORDED: river 0.4 (stable river-window-management-v1; the compositor ships NO window manager) over river-classic (maintenance fork, riverctl-script keybindings) — the 0.4 protocol is the one this chapter names; manager global bound at v1. The manage/render loop: manage_start -> propose_dimensions/focus_window/bindings-enable -> manage_finish; render_start -> river_node_v1.set_position + set_borders (the focus ring) -> render_finish. TRANSPORT LESSON: per-eval Basic auth re-pays argon2id (~0.25-1s/eval, the AGENTS.md floor) — measured p95 740ms event->applied; the shim now logs in ONCE and POSTs /api/eval with the pp_session cookie (p95 63-224ms with image load; the remaining floor is the image's per-eval cost — an image-side matter). Foreign panes carry a `view` key (river window id) in the row record; habitat panes have no view field (D4 split: one row, per-tier geometry). Keybindings alt+arrows / alt+shift+arrows are WM policy via river-xkb-bindings-v1 (enable inside a manage sequence; the pressed path shares the browser-leg code). Exit shortcut: main exits explicitly after the report — the wayland dispatch thread outlives switch teardown. Smoke: scripts/smoke_soil_mb.py (nested river + foot round-trip + latency under budget).|) *)
  (convention ocaml-dune)
 
  (section soil-contract
@@ -40,7 +41,7 @@
          close to River's native mental model.
     |))
    )
-   (status planned)
+   (status implemented)
   )
 
   (subsection binding-path
@@ -91,7 +92,7 @@
     (smoke "M-A: nested river shows the filmstrip shell fullscreen from pads/render-scene + owned layout")
     (smoke "M-B: foot maps into the strip, alt+arrows focus it, close event removes the pane record")
     (test "policy latency: p95 manage-event -> layout-reply eval under event budget, measured on the thin shim"))
-   (status planned)
+   (status implemented)
   )
  )
 )

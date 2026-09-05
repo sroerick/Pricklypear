@@ -1,4 +1,36 @@
-# native/ — soil-hello (pads hello dual-render spike, V2 + filmstrip kiosk)
+# native/ — soil-hello (pads spike) + soil-strip (river window policy)
+
+## soil-strip — the river window-manager client (soil M-B)
+
+`soil_strip.exe` attaches to a **river 0.4.x** compositor as its window
+manager (`borge/soil.borg` river-split; plan `docs/plans/soil-m-b.md`):
+every mapped window becomes a filmstrip pane (a row record with a `view`
+key), each manage sequence lays view-carrying panes out as the niri strip
+(same 2/3/6 weights as the scene), the focused pane's REAL window gets
+keyboard focus + a 2px amber border, and alt+arrows / alt+shift+arrows
+are WM keybindings (river-xkb-bindings-v1) that eval policy and re-sequence.
+Policy transport: one `POST /login`, then `/api/eval` with the
+`pp_session` cookie — per-request Basic auth re-pays argon2id (measured
+740ms p95 event->applied; cookie transport: 63-224ms, floor is the
+image's per-eval cost).
+
+Dev loop (nested in Hyprland):
+
+```
+river                                            # nested; creates wayland-N
+WAYLAND_DISPLAY=wayland-N ./_build/default/native/soil_strip.exe
+WAYLAND_DISPLAY=wayland-N foot                   # maps into the strip
+```
+
+Browser `/filmstrip` and the shim share the same workspace row; edits
+from either side are picked up via the 500ms poll / next manage sequence.
+Smoke: `python3 scripts/smoke_soil_mb.py` (nested river + foot round-trip
++ latency under budget; SKIP without a desktop). Alt+arrow physical keys
+are a manual test (D6) — same code path as the browser focus leg.
+
+---
+
+## soil-hello — the kiosk shim (pads hello dual-render spike, V2 + M-A)
 
 `soil-hello` is the OCaml native shim for the pads spike
 (`docs/plans/pads-hello-dualrender.md`, W5; spec: `borge/soil.borg`
