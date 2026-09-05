@@ -244,7 +244,11 @@ let search_function_bodies (t : t) ~(needle : string) ~(limit : int)
     redefine — last write wins (child override). 4th = package provenance
     (None = untagged / always load). See session.load_defs note. *)
 let list_function_names_for_load (t : t)
-  : (string * Pricklypear_lisp.Ast.expr * string * string option) list =
+  : (string * Pricklypear_lisp.Ast.expr * string * string option
+     * string * string) list =
+  (* tmp/eval-fast-path: rows also carry (branch_id, updated_at) so
+     load_defs can record per-def fingerprints for incremental
+     rehydrate. *)
   match t.conn with
   | None -> []
   | Some conn ->
@@ -255,7 +259,8 @@ let list_function_names_for_load (t : t)
             "  UNION ALL " ^
             "  SELECT b.id, b.parent_id, c.depth + 1 " ^
             "  FROM branches b JOIN chain c ON b.id = c.parent_id " ^
-            ") SELECT fd.name, fd.body, fd.author, chain.depth, fd.package " ^
+            ") SELECT fd.name, fd.body, fd.author, chain.depth, fd.package, " ^
+            "fd.branch_id::text, fd.updated_at::text " ^
             "FROM " ^ fn_rel () ^ " fd " ^
             "JOIN chain ON fd.branch_id = chain.id " ^
             "ORDER BY chain.depth DESC, fd.name ASC" in
@@ -267,16 +272,18 @@ let list_function_names_for_load (t : t)
             List.filter_map
               (fun row ->
                 match row with
-                | [ name_c; body_cell; author_cell; _depth_c; pkg_c ] ->
+                | [ name_c; body_cell; author_cell; _depth_c; pkg_c; branch_c; updated_c ] ->
                     (match Pgx.Value.to_string name_c,
                             Pgx.Value.to_string body_cell,
-                            Pgx.Value.to_string author_cell with
-                     | Some name, Some body_str, Some author ->
+                            Pgx.Value.to_string author_cell,
+                            Pgx.Value.to_string branch_c,
+                            Pgx.Value.to_string updated_c with
+                     | Some name, Some body_str, Some author, Some branch, Some updated ->
                          let pkg = Pgx.Value.to_string pkg_c in
                          (try
                             let j = Yojson.Safe.from_string body_str in
                             (match Pricklypear_lisp.Ast.expr_of_json j with
-                             | Ok e -> Some (name, e, author, pkg)
+                             | Ok e -> Some (name, e, author, pkg, branch, updated)
                              | Error _ -> None)
                           with Yojson.Json_error _ -> None)
                      | _ -> None)
@@ -288,6 +295,108 @@ let list_function_names_for_load (t : t)
       Printf.eprintf "[store] list_function_names_for_load error: %s\n"
             (Printexc.to_string exn);
           [])
+
+(** tmp/eval-fast-path: cheap per-def fingerprints for incremental
+    rehydrate — (name, branch_id, depth, updated_at, package) for every
+    def row on the branch chain, NO bodies. Same ordering contract as
+    [list_function_names_for_load] (depth DESC = ancestors first) so the
+    caller can resolve the effective (closest-branch) row per name.
+    Empty on error / no DB (caller falls back to a full load). *)
+let list_def_fingerprints (t : t)
+  : (string * string * int * string * string option) list =
+  match t.conn with
+  | None -> []
+  | Some conn ->
+      (try
+      let sql =
+            "WITH RECURSIVE chain AS ( " ^
+            "  SELECT id, parent_id, 0 AS depth FROM branches WHERE id = $1 " ^
+            "  UNION ALL " ^
+            "  SELECT b.id, b.parent_id, c.depth + 1 " ^
+            "  FROM branches b JOIN chain c ON b.id = c.parent_id " ^
+            ") SELECT fd.name, fd.branch_id::text, chain.depth, " ^
+            "fd.updated_at::text, fd.package " ^
+            "FROM " ^ fn_rel () ^ " fd " ^
+            "JOIN chain ON fd.branch_id = chain.id " ^
+            "ORDER BY chain.depth DESC, fd.name ASC" in
+          let rows =
+            exec conn
+              ~params:[ Pgx.Value.of_string t.branch_id ]
+              sql in
+          List.filter_map
+            (fun row ->
+              match row with
+              | [ name_c; branch_c; depth_c; updated_c; pkg_c ] ->
+                  (match Pgx.Value.to_string name_c,
+                          Pgx.Value.to_string branch_c,
+                          Pgx.Value.to_string updated_c with
+                   | Some name, Some branch, Some updated ->
+                       let depth =
+                         match Pgx.Value.to_int depth_c with
+                         | Some d -> d
+                         | None -> 0 in
+                       let pkg = Pgx.Value.to_string pkg_c in
+                       Some (name, branch, depth, updated, pkg)
+                   | _ -> None)
+              | _ -> None)
+            rows
+    with exn ->
+      Printf.eprintf "[store] list_def_fingerprints error: %s\n"
+            (Printexc.to_string exn);
+          [])
+
+(** tmp/eval-fast-path: bodies for SPECIFIC (branch_id, name) pairs —
+    the incremental-rehydrate delta fetch. Same row shape as
+    [list_function_names_for_load] (name, body, author, package),
+    restricted to the given pairs. Empty list on error. *)
+let list_function_bodies_for (t : t)
+    ~pairs:(branch_name_pairs : (string * string) list)
+  : (string * Pricklypear_lisp.Ast.expr * string * string option) list =
+  match t.conn with
+  | None -> []
+  | _ when branch_name_pairs = [] -> []
+  | Some conn ->
+      (try
+        let placeholders =
+          String.concat ", "
+            (List.mapi
+               (fun i _ -> Printf.sprintf "($%d::text, $%d::text)" (2 * i + 1) (2 * i + 2))
+               branch_name_pairs)
+        in
+        let sql =
+          "SELECT fd.name, fd.body, fd.author, fd.package FROM " ^ fn_rel ()
+          ^ " fd WHERE (fd.branch_id::text, fd.name) IN ("
+          ^ placeholders ^ ")" in
+        let params =
+          List.flatten
+            (List.map
+               (fun (b, n) ->
+                 [ Pgx.Value.of_string b; Pgx.Value.of_string n ])
+               branch_name_pairs)
+        in
+        let rows = exec conn ~params sql in
+        List.filter_map
+          (fun row ->
+            match row with
+            | [ name_c; body_cell; author_cell; pkg_c ] ->
+                (match Pgx.Value.to_string name_c,
+                        Pgx.Value.to_string body_cell,
+                        Pgx.Value.to_string author_cell with
+                 | Some name, Some body_str, Some author ->
+                     let pkg = Pgx.Value.to_string pkg_c in
+                     (try
+                        let j = Yojson.Safe.from_string body_str in
+                        (match Pricklypear_lisp.Ast.expr_of_json j with
+                         | Ok e -> Some (name, e, author, pkg)
+                         | Error _ -> None)
+                      with Yojson.Json_error _ -> None)
+                 | _ -> None)
+            | _ -> None)
+          rows
+      with exn ->
+        Printf.eprintf "[store] list_function_bodies_for error: %s\n"
+          (Printexc.to_string exn);
+        [])
 
 (* ---- own-branch stats / overrides (no recursive CTE) ---- *)
 
@@ -726,6 +835,13 @@ let promote_functions (t : t) ~(source_id : string) ~(target_id : string)
                     (if rows = [] then acc else acc + 1))
               0 names
           in
+          (* tmp/eval-fast-path: promote/fork-copy journal (scaffolding
+             direct writes; the mirror reaches tree_nodes). *)
+          let () =
+            List.iter
+              (fun name -> Def_journal.record_upsert ~branch_id:target_id ~name)
+              names
+          in
           (* branching.promote ROUTES TRAVEL WITH THEIR HANDLER:
              upsert source view_bindings whose handler is a promoted name;
              preserve visibility. Non-promoted handlers' routes stay put. *)
@@ -751,6 +867,8 @@ let promote_functions (t : t) ~(source_id : string) ~(target_id : string)
                       ; Pgx.Value.of_string name ]
                     sql
                 in
+                (* tmp/eval-fast-path: promoted routes dirty the target. *)
+                Def_journal.record_routes ~branch_id:target_id;
                 ())
               names
           in
@@ -1656,6 +1774,10 @@ let merge_branch (t : t) ~(source_id : string) ~(target_id : string)
                   if rows = [] then acc else acc + 1)
                 0 names
             in
+            (* tmp/eval-fast-path: merge writes scaffolding directly (the
+               deferred mirror reaches tree_nodes) — journal the names so
+               sessions on the target chain rebind only these. *)
+            List.iter (fun name -> Def_journal.record_upsert ~branch_id:target_id ~name) names;
             (* Advance the source's merge base AFTER commit (see above):
                post-commit, branch_generations carries the merge's own
                bump, so base_gen lands on the parent's true head — git's

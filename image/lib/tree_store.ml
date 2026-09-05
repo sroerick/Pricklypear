@@ -256,6 +256,8 @@ let upsert_fn (conn : Store_db.conn) ~(branch_id : string) ~(name : string)
                     Pgx.Value.of_string author; doc_param ]
           sql
       in
+      (* tmp/eval-fast-path: incremental-rehydrate journal (def writes). *)
+      Def_journal.record_upsert ~branch_id ~name;
       ()
 
 let upsert_type (conn : Store_db.conn) ~(branch_id : string) ~(name : string)
@@ -301,6 +303,8 @@ let upsert_route (conn : Store_db.conn) ~(branch_id : string) ~(route : string)
           ~params:[ Pgx.Value.of_string path; Pgx.Value.of_string body_json ]
           sql
       in
+      (* tmp/eval-fast-path: route writes dirty the session route table. *)
+      Def_journal.record_routes ~branch_id;
       ()
 
 let delete_fn (conn : Store_db.conn) ~(branch_id : string) ~(name : string) : bool =
@@ -309,6 +313,11 @@ let delete_fn (conn : Store_db.conn) ~(branch_id : string) ~(name : string) : bo
       let rows =
         Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string (fn_path ~branch_id ~name) ] sql
       in
+      (* tmp/eval-fast-path: journal removes even when the row was absent
+         (the pin-hygiene unpin path relies on delete_fn being idempotent;
+         a spurious journal Remove is harmless — the name is simply not
+         bound). *)
+      Def_journal.record_remove ~branch_id ~name;
       (rows <> [])
 
 let insert_datum (conn : Store_db.conn) ~(type_name : string) ~(fields_json : string)

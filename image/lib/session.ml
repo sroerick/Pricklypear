@@ -109,7 +109,7 @@ let load_defs (t : t) : unit =
   in
   let _ =
     List.iter
-      (fun (name, body, _author, pkg) ->
+      (fun (name, body, _author, pkg, branch_id, updated_at) ->
         if binding_disabled name pkg then ()
         else if is_kernel_prim name then begin
           Printf.eprintf
@@ -140,9 +140,16 @@ let load_defs (t : t) : unit =
                   in
                   Pricklypear_lisp.Env.define t.env name
                     (Pricklypear_lisp.Ast.VMacro (params, body_expr, t.env));
-                  ()
               | _ ->
-                  let force env' expr' =
+                  let force _env' expr' =
+                    (* tmp/eval-fast-path: resolve against the session's
+                       CURRENT env at force time, not the bind-time
+                       capture. Top-level def bodies are dynamically
+                       scoped to the session env — a thunk forced after
+                       an incremental rehydrate sees the rebound defs
+                       (full rehydrate gave the same guarantee by
+                       re-thunking everything; this keeps unchanged
+                       thunks fresh without rebinding them). *)
                     eval_under_rim t (fun () ->
                         let b =
                           match !Pricklypear_lisp.Eval.current_budget with
@@ -150,9 +157,10 @@ let load_defs (t : t) : unit =
                           | None -> Pricklypear_lisp.Eval.make_budget ()
                         in
                         Pricklypear_lisp.Eval.eval ~budget:b
-                          ~prims:Pricklypear_lisp.Eval.empty_prims env' expr')
+                          ~prims:Pricklypear_lisp.Eval.empty_prims t.env expr')
                   in
-                  Pricklypear_lisp.Env.define_thunk t.env name ~force body))
+                  Pricklypear_lisp.Env.define_thunk t.env name ~force body;
+                  Hashtbl.replace t.thunk_bodies name body))
       defs
   in
   (* Also load view_bindings into the in-memory routes table. The
@@ -217,6 +225,201 @@ let rehydrate (t : t) : unit =
   load_defs t;
   t.load_stamp <- Store.visible_stamp t.store
 
+(** tmp/eval-fast-path: incremental rehydrate — drain the process-global
+    Def_journal (all in-process def writes funnel through it) and rebind
+    exactly the defs whose effective row changed since this session's
+    last check, instead of re-fetching + re-parsing the whole visible
+    chain (~2800 bodies, ~280-520ms measured).
+
+    Contract identical to [rehydrate]: fresh env record SWAPPED in
+    (invariant 4a — the old record is never mutated; in-flight closures
+    keep their captured env), routes rebuilt when dirty, stamp
+    refreshed. Unchanged defs are carried over by SHALLOW-COPYING the
+    old binding table (values shared). VThunk bodies resolve against the
+    session's CURRENT env at force time (dynamic, see load_defs), so
+    carried-over thunks see rebound defs and never go stale. Macros are
+    re-fetched + re-bound whenever they change, capturing the fresh env.
+
+    The def_gen stamp is the BACKSTOP: journal coverage is in-process
+    only. Stamp changed + journal has entries for this chain → journal
+    applies. Stamp changed + journal overflow / no chain entries
+    (out-of-band write, ring overflow, another image on the DB) → full
+    [rehydrate], which is always correct. *)
+let rehydrate_incremental (t : t) : unit =
+  let full () =
+    let () = rehydrate t in
+    t.def_journal_seq <- Def_journal.current_epoch ()
+  in
+  let delta = Def_journal.since t.def_journal_seq in
+  if delta.Def_journal.overflow then full ()
+  else
+    (try
+       let chain = Store.branch_chain t.store ~branch_id:t.store.Store.branch_id in
+       let in_chain b = List.mem b chain in
+       let ups =
+         List.filter (fun (b, _) -> in_chain b) delta.Def_journal.ups in
+       let rems =
+         List.filter (fun (b, _) -> in_chain b) delta.Def_journal.rems in
+       let routes_dirty = delta.Def_journal.routes_dirty in
+       (* nothing for this chain: advance the cursor, keep the env *)
+       if ups = [] && rems = [] && not routes_dirty then
+         t.def_journal_seq <- delta.Def_journal.epoch
+       else begin
+         let old = t.env in
+         let fresh =
+           { Pricklypear_lisp.Ast.bindings = Hashtbl.copy old.bindings;
+             parent = old.parent } in
+         List.iter
+           (fun (_b, name) ->
+             Hashtbl.remove fresh.bindings name;
+             Hashtbl.remove t.thunk_bodies name)
+           rems;
+         if ups <> [] then begin
+           let disabled_set = Hashtbl.create 16 in
+           List.iter
+             (fun p -> Hashtbl.replace disabled_set p ())
+             (Store.disabled_package_names t.store);
+           let name_disabled name =
+             Hashtbl.fold
+               (fun d _ acc ->
+                 acc || name = d
+                 || String.starts_with ~prefix:(d ^ "/") name)
+               disabled_set false in
+           let is_kernel_prim name =
+             List.exists (fun (n, _) -> n = name) t.kernel_catalog in
+           let bodies =
+             Store.list_function_bodies_for t.store ~pairs:ups in
+           (* a row may legitimately be gone already (removed between
+              events) — only bail when we got NONE of what we asked for
+              and asked for several *)
+           if bodies = [] && List.length ups > 1 then
+             failwith "incr: body fetch empty"
+           else
+             List.iter
+               (fun (name, body, _author, pkg) ->
+                 let disabled =
+                   match pkg with
+                   | Some p ->
+                       Hashtbl.mem disabled_set p || name_disabled name
+                   | None -> name_disabled name in
+                 if disabled then Hashtbl.remove fresh.bindings name
+                 else if is_kernel_prim name then
+                   Printf.eprintf
+                     "[session] incr def %s skipped: kernel prim name\n%!"
+                     name
+                 else
+                   match body with
+                   | Pricklypear_lisp.Ast.App
+                       (Pricklypear_lisp.Ast.Var "__macro__",
+                        [ params_expr; body_expr ]) ->
+                       let params =
+                         match params_expr with
+                         | Pricklypear_lisp.Ast.Lit
+                             Pricklypear_lisp.Ast.VNil -> []
+                         | Pricklypear_lisp.Ast.App
+                             (Pricklypear_lisp.Ast.Var p, rest) ->
+                             p
+                             :: List.filter_map
+                                  (function
+                                    | Pricklypear_lisp.Ast.Var s -> Some s
+                                    | _ -> None)
+                                  rest
+                         | _ -> []
+                       in
+                       Pricklypear_lisp.Env.define fresh name
+                         (Pricklypear_lisp.Ast.VMacro
+                            (params, body_expr, fresh))
+                   | _ ->
+                       let force _env' expr' =
+                         eval_under_rim t (fun () ->
+                             let b =
+                               match !Pricklypear_lisp.Eval.current_budget
+                               with
+                               | Some b -> b
+                               | None -> Pricklypear_lisp.Eval.make_budget ()
+                             in
+                             Pricklypear_lisp.Eval.eval ~budget:b
+                               ~prims:Pricklypear_lisp.Eval.empty_prims
+                               t.env expr')
+                       in
+                       Pricklypear_lisp.Env.define_thunk fresh name
+                         ~force body;
+                       Hashtbl.replace t.thunk_bodies name body)
+               bodies
+         end;
+         (* Re-thunk every carried def from the cached body registry:
+              resets memoization (a forced def would otherwise keep a
+              VLambda capturing the PREVIOUS env — stale deps) and gives
+              incremental loads the same freshness semantics as a full
+              rehydrate, without re-fetching/re-parsing from the DB. *)
+         Hashtbl.iter
+           (fun name body ->
+             if Hashtbl.mem fresh.bindings name then
+               let force _env' expr' =
+                 eval_under_rim t (fun () ->
+                     let b =
+                       match !Pricklypear_lisp.Eval.current_budget with
+                       | Some b -> b
+                       | None -> Pricklypear_lisp.Eval.make_budget ()
+                     in
+                     Pricklypear_lisp.Eval.eval ~budget:b
+                       ~prims:Pricklypear_lisp.Eval.empty_prims t.env expr')
+               in
+               Pricklypear_lisp.Env.define_thunk fresh name ~force body)
+           t.thunk_bodies;
+         if routes_dirty then begin
+           (* rebuild routes into a temp table, then swap contents in
+              (no clear-then-refill DB gap for in-flight dispatch) *)
+           let disabled_set = Hashtbl.create 16 in
+           List.iter
+             (fun p -> Hashtbl.replace disabled_set p ())
+             (Store.disabled_package_names t.store);
+           let name_disabled name =
+             Hashtbl.fold
+               (fun d _ acc ->
+                 acc || name = d
+                 || String.starts_with ~prefix:(d ^ "/") name)
+               disabled_set false in
+           let routes =
+             (* handler->package filtering only matters when some package
+                is disabled — skips the ~2800-row package map otherwise *)
+             if Hashtbl.length disabled_set = 0 then
+               Store.list_routes t.store
+             else begin
+               let pkg_of_fn = Store.function_package_map t.store in
+               List.filter
+                 (fun (_route, handler, _vis) ->
+                   let hp = Hashtbl.find_opt pkg_of_fn handler in
+                   not
+                     (match hp with
+                      | Some p ->
+                          Hashtbl.mem disabled_set p || name_disabled handler
+                      | None -> name_disabled handler))
+                 (Store.list_routes t.store)
+             end in
+           let seen_r = Hashtbl.create 16 in
+           let fresh_routes : (string, string * string) Hashtbl.t =
+             Hashtbl.create 64 in
+           List.iter
+             (fun (route, handler, visibility) ->
+               if not (Hashtbl.mem seen_r route) then begin
+                 Hashtbl.replace seen_r route ();
+                 Hashtbl.replace fresh_routes route (handler, visibility)
+               end)
+             routes;
+           Hashtbl.reset t.routes;
+           Hashtbl.iter (fun r v -> Hashtbl.replace t.routes r v) fresh_routes
+         end;
+         t.env <- fresh;
+         t.def_journal_seq <- delta.Def_journal.epoch;
+         t.load_stamp <- Store.visible_stamp t.store
+       end
+     with exn ->
+       Printf.eprintf
+         "[session] incremental rehydrate failed (%s); full load\n%!"
+         (Printexc.to_string exn);
+       full ())
+
 (** Rehydrate iff the visible def chain changed since the last load.
     Called by the session registry at attach time; with image.lazy-env-load
     the rehydrate itself is a CTE + thunk binds (no body evals), so the
@@ -225,7 +428,10 @@ let ensure_fresh (t : t) : unit =
   match Store.visible_stamp t.store with
   | "" -> ()  (* no DB: stay on whatever is in memory *)
   | stamp when stamp = t.load_stamp -> ()
-  | _ -> rehydrate t
+  | _ ->
+      (* tmp/eval-fast-path: incremental first (binds only changed defs,
+         ~ms) with automatic full-load fallback; see rehydrate_incremental. *)
+      rehydrate_incremental t
 
 (** Force the next refresh_ui_shell to re-eval ui/nav + ui/css.
     image.product-theme: invalidation is DEPENDENCY-TRACKED — a define
@@ -1528,6 +1734,8 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
       change_transcript = [];
       current_package = None;
       net_streams = Hashtbl.create 16;
+      def_journal_seq = 0;
+      thunk_bodies = Hashtbl.create 512;
     }
   in
   (* Register session-aware primitives (whoami, current-author,
