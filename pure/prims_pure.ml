@@ -222,6 +222,39 @@ let prim_string_join args =
   | [ lst; sep_v ] -> join (unwrap lst) (coerce_str ~ctx:"string-join" sep_v)
   | _ -> raise (Interp_error (User_error ("string-join needs a list [sep]", "bad-args")))
 
+(* (sort lst) -> stable ascending list. All-number lists (int/float
+   mixed) sort numerically; all-string lists lexicographically; mixed
+   kinds are a User_error. Spec: image.borg stdlib-round-2
+   (BORGE-1788622799). *)
+let prim_sort args =
+  match args with
+  | [ VList items ] ->
+      let kind = function
+        | VInt _ | VFloat _ -> `Num
+        | VStr _ -> `Str
+        | _ -> `Other
+      in
+      let kinds = List.map kind items in
+      let all k = List.for_all (fun k' -> k' = k) kinds in
+      if all `Num then
+        VList
+          (List.stable_sort
+             (fun a b ->
+               compare
+                 (float_of_num (num_of_value a))
+                 (float_of_num (num_of_value b)))
+             items)
+      else if all `Str then VList (List.stable_sort compare items)
+      else
+        raise
+          (Interp_error
+             (User_error
+                ( "sort: mixed types (need all numbers or all strings)"
+                , "bad-args" )))
+  | _ ->
+      raise
+        (Interp_error (User_error ("sort needs one list", "bad-args")))
+
 (* prim_string_split is DEFINED LATER in this file (agent section, ~line
    1830) — it is now ALSO a kernel image prim (habitat-book web-renderer:
    the interpreted libs/std char-walk cost ~interpreter steps per input

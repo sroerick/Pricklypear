@@ -828,6 +828,31 @@
    |))
    )
   )
+  (subsection stdlib-round-2
+   (doc "sort: the one pure prim market-data packages actually lack (BORGE-1788622799 resolution). Recon: the rest of the wishlist already shipped — min/max/abs/nth/mod; find-rows (crud.ml) is the server-side filtered row fetch, i.e. the dataframe duty at the SQL layer; and the whole ?-suffix predicate family (string-contains?, string-starts-with?, equal?, reverse, length, ...) predates this — it was invisible to doc inventories because AGENTS.md's prim list is v1-stale and regexes dropped the question marks. No rows-where, no columnar frame VM in the kernel: Postgres + the OCaml bench are the heavy tiers (borge/upsets.borg two-tier compute).")
+   (status implemented)
+   (verify
+    (build "dune build @all (lisp + image + client)")
+    (test "image/test/primitives_test.ml: sort numeric/string/mixed-error (8 cases)")
+    (smoke "(sort (list 3 1 2)) => (1 2 3) on the image (eval or /repl)"))
+   (* agent note (|2026-09-05 plan+make in one cycle (operator directed): issue BORGE-1788622799 asked for sort/min/max/abs/string-contains/rows-where; recon shrank it to sort ALONE — min/max/abs/nth/mod ship, string-contains? ships (the ?-suffix predicate family was invisible to doc inventories), find-rows (crud.ml) is the server-side filtered rows fetch. sort implemented in pure/prims_pure.ml (prim_sort: stable ascending, numeric or lexicographic, mixed kinds User_error), registered in primitives.ml, 8 alcotest cases in image/test/primitives_test.ml (196 total green), smoke-verified live on the dev lab image (dune rebuild + restart required — a running image does not hot-load prims).|) *)
+   (details
+    (doc (|
+         SURFACE (additive — lisp-interpreter.frozen-surface
+         additive rule):
+           (sort lst)               ; stable ascending; all-number lists
+                                    ; sort numerically (int/float mixed),
+                                    ; all-string lists lexicographically;
+                                    ; mixed kinds are a User_error
+
+         NON-GOALS (recorded so they stay non-goals): no comparator
+         argument (compose in Nopales when a custom order is needed);
+         no kernel dataframe / columnar frame construct — the database
+         is the query engine and the OCaml bench is the heavy tier;
+         no raw sql prim (it would bypass branch scoping and break
+         multi-user isolation).
+         |)))
+  )
   (subsection outbound-http
    (doc "(http-post url headers-json body) — send-side sibling of the shipped http-get. Same curl-backed shape, same gate, same payload contract. The first consumer is notify.ntfy-delivery (lock-screen push from jobs schedules).")
    (status planned)

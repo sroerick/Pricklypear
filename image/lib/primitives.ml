@@ -241,6 +241,7 @@ let make_with_defaults () : t =
   register_sync t "as-str" prim_as_str;
   register_sync t "append" prim_append;
   register_sync t "reverse" prim_reverse;
+  register_sync t "sort" prim_sort;
   register_sync t "nth" prim_nth;
   (* list-branches is registered as a session DB prim in session.ml *)
   register_sync t "hx-get" prim_hx_get;
@@ -304,6 +305,7 @@ let prim_summary (name : string) : string =
   | "abs" -> "absolute value"
   | "min" -> "minimum of VInts"
   | "max" -> "maximum of VInts"
+  | "sort" -> "stable ascending: all-number lists numerically, all-string lists lexicographically; mixed kinds error"
   | "=" -> "numeric equality"
   | "<" | ">" | "<=" | ">=" -> "numeric compare"
   | "not" -> "boolean not"
