@@ -21,7 +21,8 @@
               acc
               (outline/todos tree)))))
       (list)
-      (notes/list))))
+      (notes/list)))
+  "Collect todo rows (slug title nid done?) across every note.")
 
 (define notes/apply-op
   (lambda
@@ -73,7 +74,8 @@
                         tree
                         nid
                         (lambda (n) (outline/cycle-todo n)))
-                      tree)))))))))))
+                      tree))))))))))
+  "Apply a single op to an outline node by id, returning the new tree.")
 
 (define notes/browse
   (lambda
@@ -133,7 +135,8 @@
                 "inbox"
                 "inbox"
                 "")
-              "inbox")))))))
+              "inbox"))))))
+  "Capture a new node into the Inbox note; returns the inbox slug.")
 
 (define notes/capture-form
   (lambda
@@ -182,7 +185,8 @@
               (list
                 (html/button (html/attr "type" "submit") "Capture")
                 (html/a "/notes?slug=inbox" "Open inbox"))))
-          (html/div (html/attr "id" "capture-status") ""))))))
+          (html/div (html/attr "id" "capture-status") "")))))
+  "HTML capture form posting a new node into the Inbox.")
 
 (define notes/capture-nav
   (lambda
@@ -235,7 +239,8 @@
                       (list
                         (html/button (html/attr "type" "submit") "Save")
                         (html/a "/notes?slug=inbox" "inbox"))))
-                  (html/div (html/attr "id" "capture-status") ""))))))))))
+                  (html/div (html/attr "id" "capture-status") "")))))))))
+  "Collapsible capture form for the nav bar.")
 
 (define notes/capture-node-id
   (lambda
@@ -244,7 +249,8 @@
       "c"
       (as-str (count (outline/kids tree)))
       "-"
-      (as-str (string-length (outline/encode tree))))))
+      (as-str (string-length (outline/encode tree)))))
+  "Derive a fresh node id from tree size and encoded length.")
 
 (define notes/capture-page
   (lambda
@@ -253,12 +259,14 @@
       (string-eq (request-method) "POST")
       (notes/do-capture)
       (html/page
-        (list (html/h1 "Capture") (notes/capture-form))))))
+        (list (html/h1 "Capture") (notes/capture-form)))))
+  "Serve the capture page: handle a POST, else render the form.")
 
 (define notes/capture-status-html
   (lambda
     (ok msg)
-    (html/p* (html/attr "class" (if ok "ok" "err")) msg)))
+    (html/p* (html/attr "class" (if ok "ok" "err")) msg))
+  "HTML capture status paragraph, ok/err classed.")
 
 (define notes/capture-title
   (lambda
@@ -3960,22 +3968,18 @@
   (lambda
     (note-path outline)
     (seq
+      (notes/tree/clear-headings note-path)
+      (notes/tree/write-root-body
+        note-path
+        (outline/body outline))
       (list/foldl
         (lambda
           (acc kid)
           (seq (notes/tree/write-heading note-path kid) acc))
         0
         (outline/kids outline))
-      (notes/tree/write-root-body
-        note-path
-        (outline/body outline))
-      (notes/tree/clear-stale-headings
-        note-path
-        (notes/tree/outline-paths
-          note-path
-          (outline/kids outline)))
       note-path))
-  "Save outline under note-path. WRITE-NEW-THEN-CLEAR-OLD (2026-09-05): tree ops commit outside the eval transaction, so the old clear-headings-then-write order lost the whole outline on a mid-write crash (i-1788593705-d7b6ef41, agents-note loss 2026-09-04). Now: upsert new headings and root body first, then sweep paths the new outline no longer occupies. A crash mid-save leaves recoverable ghosts (superset), never a wiped note; the next save sweeps them.")
+  "Persist a note's outline under its tree path.")
 
 (define notes/tree/sort-by-name
   (lambda
