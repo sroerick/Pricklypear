@@ -13,6 +13,24 @@ let ty_rel () = "tree_type_defs"
 let rt_rel () = "tree_view_bindings"
 let pkg_rel () = "tree_package_registry"
 
+(** The branch-chain recursive CTE — the closest-ancestor-wins
+    inheritance rule, defined ONCE (was copy-pasted across 12 store.ml
+    queries in slightly divergent spellings, i-1788671262-4). Any
+    semantic change to the walk (cycle guard, depth cap) now happens
+    here. [cte] names the chain (diff_branches walks two); [anchor] is
+    the SQL expression the walk starts at — default the $1 param, the
+    parent-excluding walk passes a subselect. [body] is everything
+    after the chain CTE: the final SELECT/ORDER/LIMIT, or further
+    CTEs (WITH RECURSIVE marks the whole WITH list, so a second
+    recursive chain may follow inside [body]). *)
+let chain_sql ?(cte = "chain") ?(anchor = "$1") body =
+  "WITH RECURSIVE " ^ cte ^ " AS ( "
+  ^ "  SELECT id, parent_id, 0 AS depth FROM branches WHERE id = " ^ anchor ^ " "
+  ^ "  UNION ALL "
+  ^ "  SELECT b.id, b.parent_id, c.depth + 1 "
+  ^ "  FROM branches b JOIN " ^ cte ^ " c ON b.id = c.parent_id "
+  ^ ") " ^ body
+
 (** Cheap visibility signature for staleness checks
     (image.per-identity-sessions): a value that changes iff any
     fn/type/route def on the session's branch chain changed, one round
@@ -33,12 +51,6 @@ let visible_stamp (t : t) : string =
   | None -> ""
   | Some conn ->
       (try
-         let chain_sql chain_body =
-           "WITH RECURSIVE chain AS ( "
-           ^ "  SELECT id, parent_id FROM branches WHERE id = $1 "
-           ^ "  UNION ALL "
-           ^ "  SELECT b.id, b.parent_id FROM branches b JOIN chain c ON b.id = c.parent_id "
-           ^ ") " ^ chain_body in
          let fast_sql =
            chain_sql
              "SELECT max(d.def_gen)::text || '|' || count(*)::text "
@@ -81,15 +93,10 @@ let lookup_function (t : t) (name : string)
              Return the FIRST row matching [name] when ordered by depth
              ascending (closest ancestor wins). *)
           let sql =
-            "WITH RECURSIVE chain AS ( " ^
-            "  SELECT id, parent_id, 0 AS depth FROM branches WHERE id = $1 " ^
-            "  UNION ALL " ^
-            "  SELECT b.id, b.parent_id, c.depth + 1 " ^
-            "  FROM branches b JOIN chain c ON b.id = c.parent_id " ^
-            ") SELECT fd.body, fd.author, fd.doc FROM " ^ fn_rel () ^ " fd " ^
+            chain_sql ("SELECT fd.body, fd.author, fd.doc FROM " ^ fn_rel () ^ " fd " ^
             "JOIN chain ON fd.branch_id = chain.id " ^
             "WHERE fd.name = $2 " ^
-            "ORDER BY chain.depth ASC LIMIT 1" in
+            "ORDER BY chain.depth ASC LIMIT 1") in
           let rows =
             exec conn
               ~params:[ Pgx.Value.of_string t.branch_id;
@@ -138,15 +145,10 @@ let list_function_names_meta (t : t)
   | Some conn ->
       (try
       let sql =
-            "WITH RECURSIVE chain AS ( " ^
-            "  SELECT id, parent_id, 0 AS depth FROM branches WHERE id = $1 " ^
-            "  UNION ALL " ^
-            "  SELECT b.id, b.parent_id, c.depth + 1 " ^
-            "  FROM branches b JOIN chain c ON b.id = c.parent_id " ^
-            ") SELECT fd.name, fd.body, fd.author, chain.depth, fd.package " ^
+            chain_sql ("SELECT fd.name, fd.body, fd.author, chain.depth, fd.package " ^
             "FROM " ^ fn_rel () ^ " fd " ^
             "JOIN chain ON fd.branch_id = chain.id " ^
-            "ORDER BY chain.depth ASC, fd.name ASC" in
+            "ORDER BY chain.depth ASC, fd.name ASC") in
           let rows =
             exec conn
               ~params:[ Pgx.Value.of_string t.branch_id ]
@@ -206,18 +208,13 @@ let search_function_bodies (t : t) ~(needle : string) ~(limit : int)
     | Some conn ->
         (try
            let sql =
-             "WITH RECURSIVE chain AS ( " ^
-             "  SELECT id, parent_id, 0 AS depth FROM branches WHERE id = $1 " ^
-             "  UNION ALL " ^
-             "  SELECT b.id, b.parent_id, c.depth + 1 " ^
-             "  FROM branches b JOIN chain c ON b.id = c.parent_id " ^
-             "), ranked AS ( " ^
+             chain_sql (", ranked AS ( " ^
              "  SELECT fd.name, chain.depth, " ^
              "         row_number() OVER (PARTITION BY fd.name ORDER BY chain.depth ASC) AS rn " ^
              "  FROM " ^ fn_rel () ^ " fd " ^
              "  JOIN chain ON fd.branch_id = chain.id " ^
              "  WHERE fd.body::text ILIKE '%' || $2 || '%' " ^
-             ") SELECT name FROM ranked WHERE rn = 1 ORDER BY name ASC LIMIT $3"
+             ") SELECT name FROM ranked WHERE rn = 1 ORDER BY name ASC LIMIT $3")
            in
            let rows =
              exec conn
@@ -254,16 +251,11 @@ let list_function_names_for_load (t : t)
   | Some conn ->
       (try
       let sql =
-            "WITH RECURSIVE chain AS ( " ^
-            "  SELECT id, parent_id, 0 AS depth FROM branches WHERE id = $1 " ^
-            "  UNION ALL " ^
-            "  SELECT b.id, b.parent_id, c.depth + 1 " ^
-            "  FROM branches b JOIN chain c ON b.id = c.parent_id " ^
-            ") SELECT fd.name, fd.body, fd.author, chain.depth, fd.package, " ^
+            chain_sql ("SELECT fd.name, fd.body, fd.author, chain.depth, fd.package, " ^
             "fd.branch_id::text, fd.updated_at::text " ^
             "FROM " ^ fn_rel () ^ " fd " ^
             "JOIN chain ON fd.branch_id = chain.id " ^
-            "ORDER BY chain.depth DESC, fd.name ASC" in
+            "ORDER BY chain.depth DESC, fd.name ASC") in
           let rows =
             exec conn
               ~params:[ Pgx.Value.of_string t.branch_id ]
@@ -309,16 +301,11 @@ let list_def_fingerprints (t : t)
   | Some conn ->
       (try
       let sql =
-            "WITH RECURSIVE chain AS ( " ^
-            "  SELECT id, parent_id, 0 AS depth FROM branches WHERE id = $1 " ^
-            "  UNION ALL " ^
-            "  SELECT b.id, b.parent_id, c.depth + 1 " ^
-            "  FROM branches b JOIN chain c ON b.id = c.parent_id " ^
-            ") SELECT fd.name, fd.branch_id::text, chain.depth, " ^
+            chain_sql ("SELECT fd.name, fd.branch_id::text, chain.depth, " ^
             "fd.updated_at::text, fd.package " ^
             "FROM " ^ fn_rel () ^ " fd " ^
             "JOIN chain ON fd.branch_id = chain.id " ^
-            "ORDER BY chain.depth DESC, fd.name ASC" in
+            "ORDER BY chain.depth DESC, fd.name ASC") in
           let rows =
             exec conn
               ~params:[ Pgx.Value.of_string t.branch_id ]
@@ -666,12 +653,7 @@ let branch_status_conn (conn : conn) ~(branch_id : string)
   : branch_status_row list =
   (try
         let sql =
-          "WITH RECURSIVE chain AS ( "^
-          "  SELECT id, parent_id, 0 AS depth FROM branches WHERE id = $1 "^
-          "  UNION ALL "^
-          "  SELECT b.id, b.parent_id, c.depth + 1 "^
-          "  FROM branches b JOIN chain c ON b.id = c.parent_id "^
-          "), vers AS ( "^
+          chain_sql (", vers AS ( "^
           "  SELECT v.kind, "^
           "         (string_to_array(v.path::text, '.'))[4] AS key, "^
           "         c.depth, v.gen, v.hash, v.body "^
@@ -734,7 +716,7 @@ let branch_status_conn (conn : conn) ~(branch_id : string)
           "LEFT JOIN own_fn o1 ON o1.key = k.key "^
           "LEFT JOIN own_ty o2 ON o2.key = k.key "^
           "LEFT JOIN own_rt o3 ON o3.key = k.key "^
-          "ORDER BY k.kind, name"
+          "ORDER BY k.kind, name")
         in
         let rows = exec conn ~params:[ Pgx.Value.of_string branch_id ] sql in
         List.filter_map
@@ -945,15 +927,10 @@ let inherited_fn_body_matches (conn : conn) ~(branch_id : string)
     ~(name : string) ~(body_json : string) : bool =
   try
     let sql =
-      "WITH RECURSIVE chain AS ( " ^
-      "  SELECT b.id, b.parent_id, 0 AS depth FROM branches b " ^
-      "  WHERE b.id = (SELECT parent_id FROM branches WHERE id = $1::uuid) " ^
-      "  UNION ALL " ^
-      "  SELECT b.id, b.parent_id, c.depth + 1 " ^
-      "  FROM branches b JOIN chain c ON b.id = c.parent_id " ^
-      ") SELECT fd.body::text = $3::jsonb::text " ^
+      chain_sql ~anchor:"(SELECT parent_id FROM branches WHERE id = $1::uuid)"
+        ("SELECT fd.body::text = $3::jsonb::text " ^
       "FROM function_defs fd JOIN chain c ON fd.branch_id = c.id " ^
-      "WHERE fd.name = $2 ORDER BY c.depth ASC LIMIT 1" in
+      "WHERE fd.name = $2 ORDER BY c.depth ASC LIMIT 1") in
     (match
        exec conn
          ~params:[ Pgx.Value.of_string branch_id;
@@ -1473,16 +1450,11 @@ let list_routes (t : t) : (string * string * string) list =
   | Some conn ->
       (try
       let sql =
-            "WITH RECURSIVE chain AS ( " ^
-            "  SELECT id, parent_id, 0 AS depth FROM branches WHERE id = $1 " ^
-            "  UNION ALL " ^
-            "  SELECT b.id, b.parent_id, c.depth + 1 " ^
-            "  FROM branches b JOIN chain c ON b.id = c.parent_id " ^
-            ") SELECT vb.route, vb.handler, " ^
+            chain_sql ("SELECT vb.route, vb.handler, " ^
             "COALESCE(vb.visibility, 'private') " ^
             "FROM " ^ rt_rel () ^ " vb " ^
             "JOIN chain ON vb.branch_id = chain.id " ^
-            "ORDER BY chain.depth ASC" in
+            "ORDER BY chain.depth ASC") in
           let rows =
             exec conn
               ~params:[ Pgx.Value.of_string t.branch_id ]
@@ -1560,14 +1532,9 @@ let list_types (t : t) : (string * string list) list =
   | Some conn ->
       (try
       let sql =
-            "WITH RECURSIVE chain AS ( " ^
-            "  SELECT id, parent_id, 0 AS depth FROM branches WHERE id = $1 " ^
-            "  UNION ALL " ^
-            "  SELECT b.id, b.parent_id, c.depth + 1 " ^
-            "  FROM branches b JOIN chain c ON b.id = c.parent_id " ^
-            ") SELECT td.name, td.fields::text FROM " ^ ty_rel () ^ " td " ^
+            chain_sql ("SELECT td.name, td.fields::text FROM " ^ ty_rel () ^ " td " ^
             "JOIN chain ON td.branch_id = chain.id " ^
-            "ORDER BY chain.depth ASC" in
+            "ORDER BY chain.depth ASC") in
           let rows =
             exec conn
               ~params:[ Pgx.Value.of_string t.branch_id ]
@@ -1900,17 +1867,12 @@ let diff_branches (t : t) ~(from_id : string) ~(to_id : string)
             in
             let sql =
               String.concat ""
-                [ "WITH RECURSIVE chain_from AS ( "
-                ; "  SELECT id, parent_id, 0 AS depth FROM branches WHERE id = $1 "
-                ; "  UNION ALL "
-                ; "  SELECT b.id, b.parent_id, c.depth + 1 "
-                ; "  FROM branches b JOIN chain_from c ON b.id = c.parent_id "
-                ; "), chain_to AS ( "
-                ; "  SELECT id, parent_id, 0 AS depth FROM branches WHERE id = $2 "
-                ; "  UNION ALL "
-                ; "  SELECT b.id, b.parent_id, c.depth + 1 "
-                ; "  FROM branches b JOIN chain_to c ON b.id = c.parent_id "
-                ; "), fromd AS ( "
+                [ chain_sql ~cte:"chain_from" (", chain_to AS ( "
+                 ^ "  SELECT id, parent_id, 0 AS depth FROM branches WHERE id = $2 "
+                 ^ "  UNION ALL "
+                 ^ "  SELECT b.id, b.parent_id, c.depth + 1 "
+                 ^ "  FROM branches b JOIN chain_to c ON b.id = c.parent_id "
+                 ^ "), fromd AS ( ")
                 ; "  SELECT " ^ key_sql ^ " AS key, " ^ body_expr ^ " AS body, "
                   ^ "updated_at::text AS up, "
                 ; "         row_number() OVER (PARTITION BY " ^ key_sql
@@ -2026,16 +1988,11 @@ let list_packages (t : t) : package_row list =
   | Some conn ->
       (try
       let sql =
-            "WITH RECURSIVE chain AS ( " ^
-            "  SELECT id, parent_id, 0 AS depth FROM branches WHERE id = $1 " ^
-            "  UNION ALL " ^
-            "  SELECT b.id, b.parent_id, c.depth + 1 " ^
-            "  FROM branches b JOIN chain c ON b.id = c.parent_id " ^
-            ") SELECT pr.name, pr.enabled::text, pr.exports::text, pr.author, " ^
+            chain_sql ("SELECT pr.name, pr.enabled::text, pr.exports::text, pr.author, " ^
             "       chain.depth " ^
             "FROM " ^ pkg_rel () ^ " pr " ^
             "JOIN chain ON pr.branch_id = chain.id " ^
-            "ORDER BY chain.depth ASC, pr.name ASC" in
+            "ORDER BY chain.depth ASC, pr.name ASC") in
           let rows =
             exec conn ~params:[ Pgx.Value.of_string t.branch_id ] sql
           in
@@ -2203,16 +2160,11 @@ let function_package_map (t : t) : (string, string) Hashtbl.t =
   | Some conn ->
       (try
       let sql =
-            "WITH RECURSIVE chain AS ( " ^
-            "  SELECT id, parent_id, 0 AS depth FROM branches WHERE id = $1 " ^
-            "  UNION ALL " ^
-            "  SELECT b.id, b.parent_id, c.depth + 1 " ^
-            "  FROM branches b JOIN chain c ON b.id = c.parent_id " ^
-            ") SELECT fd.name, fd.package, chain.depth " ^
+            chain_sql ("SELECT fd.name, fd.package, chain.depth " ^
             "FROM " ^ fn_rel () ^ " fd " ^
             "JOIN chain ON fd.branch_id = chain.id " ^
             "WHERE fd.package IS NOT NULL " ^
-            "ORDER BY chain.depth ASC, fd.name ASC" in
+            "ORDER BY chain.depth ASC, fd.name ASC") in
           let rows =
             exec conn ~params:[ Pgx.Value.of_string t.branch_id ] sql
           in
