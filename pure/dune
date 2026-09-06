@@ -6,5 +6,6 @@
  (name pricklypear_pure_prims)
  (public_name pricklypear-pure-prims)
  (wrapped false)
- (modules prims_pure prims_soup)
+ (modules prims_common prims_num prims_list prims_string prims_json
+         prims_html prims_mime wire_codec prims_pure prims_soup)
  (libraries pricklypear-lisp yojson markup lambdasoup))

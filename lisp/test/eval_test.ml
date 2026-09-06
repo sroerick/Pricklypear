@@ -1576,6 +1576,36 @@ let macro_engine_tests = [
           (Reader.pp_value (match other with Some x -> x | None -> Ast.VNil)));
 ]
 
+(* i-1788671384: the kernel's list-unwrapping policy — THE improper-tail
+   decision every prim now shares (prims_pure's list_of_value aliases
+   this). VList/VNil/proper VPair chains flatten; atom tails error. *)
+let value_to_list_policy_tests = [
+  ("value_to_list VList", `Quick, fun () ->
+    Alcotest.(check int) "len" 2
+      (List.length (Eval.value_to_list (VList [VInt 1L; VInt 2L]))));
+  ("value_to_list nil", `Quick, fun () ->
+    Alcotest.(check int) "len" 0 (List.length (Eval.value_to_list VNil)));
+  ("value_to_list proper cons chain", `Quick, fun () ->
+    Alcotest.(check int) "len" 2
+      (List.length (Eval.value_to_list
+        (VPair (VInt 1L, VPair (VInt 2L, VNil))))));
+  ("value_to_list cons onto VList", `Quick, fun () ->
+    Alcotest.(check int) "len" 2
+      (List.length (Eval.value_to_list
+        (VPair (VInt 1L, VList [VInt 2L])))));
+  ("value_to_list dotted tail errors", `Quick, fun () ->
+    match Eval.value_to_list (VPair (VInt 1L, VInt 2L)) with
+    | _ -> Alcotest.fail "expected error on improper tail"
+    | exception Ast.Interp_error (Ast.User_error (m, _)) ->
+        Alcotest.(check bool) "msg" true
+          (String.length m > 0));
+  ("value_to_list atom errors", `Quick, fun () ->
+    match Eval.value_to_list (VInt 5L) with
+    | _ -> Alcotest.fail "expected error on atom"
+    | exception Ast.Interp_error _ -> ()
+    | exception e -> Alcotest.failf "wrong exn %s" (Printexc.to_string e));
+]
+
 let () =
   Alcotest.run "pricklypear-lisp" [
     "reader", reader_tests @ reader_list_tests @ reader_completeness_tests
@@ -1593,4 +1623,5 @@ let () =
     "dialect", dialect_tests;
     "gate", gate_tests;
     "shadow", shadow_tests;
+    "value-to-list-policy", value_to_list_policy_tests;
   ]
