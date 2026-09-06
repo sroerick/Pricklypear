@@ -208,3 +208,8 @@
  (name prim_catalog_test)
  (modules prim_catalog_test)
  (libraries pricklypear-image pricklypear-lisp pricklypear-pure-prims alcotest))
+
+(test
+ (name row_kit_test)
+ (modules row_kit_test)
+ (libraries pricklypear-image alcotest))

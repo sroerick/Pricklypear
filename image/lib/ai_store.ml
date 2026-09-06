@@ -17,27 +17,18 @@ type session = {
 
 let pg_conn (store : Store.t) : Io_lwt.Db.conn option = Io_lwt.Db.current_conn store
 
-let cell_string row i =
-  match List.nth_opt row i with
-  | Some v -> Pgx.Value.to_string v
-  | None -> None
-
-let cell_bool row i =
-  match cell_string row i with
-  | Some ("t" | "true" | "TRUE" | "1") -> true
-  | Some ("f" | "false" | "FALSE" | "0") -> false
-  | _ -> false
+(* row-cell accessors live in Row (was a local copy here). *)
 
 let row_to_session row : session option =
   match
-    ( cell_string row 0
-    , cell_string row 1
-    , cell_string row 2
-    , cell_string row 3
-    , cell_string row 4
-    , cell_string row 6
-    , cell_string row 7
-    , cell_string row 8 )
+    ( Row.cell_string row 0
+    , Row.cell_string row 1
+    , Row.cell_string row 2
+    , Row.cell_string row 3
+    , Row.cell_string row 4
+    , Row.cell_string row 6
+    , Row.cell_string row 7
+    , Row.cell_string row 8 )
   with
   | ( Some id
     , Some owner
@@ -53,7 +44,7 @@ let row_to_session row : session option =
         ; title
         ; seed
         ; branch_ref
-        ; tools = cell_bool row 5
+        ; tools = Row.cell_bool row 5
         ; model
         ; created_at
         ; updated_at
@@ -341,7 +332,7 @@ let next_seq (conn : Io_lwt.Db.conn) ~(session_id : string) : int =
   in
   match rows with
   | row :: _ ->
-      (match cell_string row 0 with
+      (match Row.cell_string row 0 with
        | Some s ->
            ((int_of_string_opt s |> Option.value ~default:(-1)) + 1)
        | None -> 0)
@@ -367,14 +358,14 @@ let list_messages (store : Store.t) ~(session_id : string)
           let msgs =
             List.filter_map
               (fun row ->
-                match cell_string row 0 with
+                match Row.cell_string row 0 with
                 | None -> None
                 | Some role ->
                     row_to_chat_message
                       ~role
-                      ~content:(cell_string row 1)
-                      ~tool_calls:(cell_string row 2)
-                      ~tool_call_id:(cell_string row 3))
+                      ~content:(Row.cell_string row 1)
+                      ~tool_calls:(Row.cell_string row 2)
+                      ~tool_call_id:(Row.cell_string row 3))
               rows
           in
           msgs

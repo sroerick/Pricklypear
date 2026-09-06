@@ -3,6 +3,7 @@
  (public_name pricklypear-image)
  (modules store_db store tree_store branch_algebra def_journal
           primitives request_context control_rim io io_lwt io_eio
+          row http_kit
           prims_time prims_crypto
           session_types call_graph agent_tools
           prims_request prims_net prims_media prims_graph prims_db

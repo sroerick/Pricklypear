@@ -89,18 +89,15 @@ let max_file_bytes = 2 * 1024 * 1024
     of 404ing with "file too large". Still bounded to prevent abuse. *)
 let max_public_artifact_bytes = 64 * 1024 * 1024
 
-let html_escape (s : string) : string =
-  let buf = Buffer.create (String.length s) in
-  String.iter
-    (function
-      | '&' -> Buffer.add_string buf "&amp;"
-      | '<' -> Buffer.add_string buf "&lt;"
-      | '>' -> Buffer.add_string buf "&gt;"
-      | '"' -> Buffer.add_string buf "&quot;"
-      | '\'' -> Buffer.add_string buf "&#39;"
-      | c -> Buffer.add_char buf c)
-    s;
-  Buffer.contents buf
+(* html escaping: one string-level implementation lives in the kernel
+   (Prims_pure.html_escape_str — the html-escape prim's engine, byte-identical
+   escape set); Http_code.html_escape was a third copy. *)
+let html_escape = Prims_pure.html_escape_str
+
+(* percent/query decoding lives in Http_kit (was pct_decode/query_param here,
+   hand-rolled a second time). *)
+let pct_decode = Http_kit.pct_decode
+let query_param = Http_kit.query_param
 
 let pct_encode (s : string) : string =
   let buf = Buffer.create (String.length s * 2) in
@@ -111,35 +108,6 @@ let pct_encode (s : string) : string =
       | c -> Buffer.add_string buf (Printf.sprintf "%%%02X" (Char.code c)))
     s;
   Buffer.contents buf
-
-let hex_nibble (c : char) : int option =
-  match c with
-  | '0' .. '9' -> Some (Char.code c - Char.code '0')
-  | 'a' .. 'f' -> Some (Char.code c - Char.code 'a' + 10)
-  | 'A' .. 'F' -> Some (Char.code c - Char.code 'A' + 10)
-  | _ -> None
-
-let pct_decode (s : string) : string =
-  let buf = Buffer.create (String.length s) in
-  let len = String.length s in
-  let rec loop i =
-    if i >= len then Buffer.contents buf
-    else if s.[i] = '%' && i + 2 < len then (
-      match hex_nibble s.[i + 1], hex_nibble s.[i + 2] with
-      | Some a, Some b ->
-          Buffer.add_char buf (Char.chr ((a lsl 4) lor b));
-          loop (i + 3)
-      | _ ->
-          Buffer.add_char buf s.[i];
-          loop (i + 1))
-    else if s.[i] = '+' then (
-      Buffer.add_char buf ' ';
-      loop (i + 1))
-    else (
-      Buffer.add_char buf s.[i];
-      loop (i + 1))
-  in
-  loop 0
 
 let realpath_opt (path : string) : string option =
   try Some (Unix.realpath path) with
@@ -422,21 +390,6 @@ let handle_raw (reqd : Httpun.Reqd.t) ~(rel : string) : unit =
         | Error e -> serve_read_error reqd ~path e
         | Ok body ->
             serve_bytes reqd ~content_type:"text/plain; charset=utf-8" body)
-
-let query_param (target : string) (key : string) : string option =
-  match String.index_opt target '?' with
-  | None -> None
-  | Some i ->
-      let q = String.sub target (i + 1) (String.length target - i - 1) in
-      let pairs = String.split_on_char '&' q in
-      List.find_map
-        (fun pair ->
-          match String.split_on_char '=' pair with
-          | k :: rest when k = key ->
-              let v = String.concat "=" rest in
-              Some (pct_decode v)
-          | _ -> None)
-        pairs
 
 let handle_code_page (reqd : Httpun.Reqd.t) ~(target : string) : unit =
   let root = source_root () in

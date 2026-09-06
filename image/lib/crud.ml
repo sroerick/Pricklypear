@@ -1463,18 +1463,9 @@ let tree_undo (store : Store.t) ~(path : string) ?(n : int64 = 1L) () : value =
                            (VStr p)
                        | Error e -> (VStr e))))
 
-let html_escape_text (s : string) : string =
-  let buf = Buffer.create (String.length s + 8) in
-  String.iter
-    (function
-      | '&' -> Buffer.add_string buf "&amp;"
-      | '<' -> Buffer.add_string buf "&lt;"
-      | '>' -> Buffer.add_string buf "&gt;"
-      | '"' -> Buffer.add_string buf "&quot;"
-      | '\'' -> Buffer.add_string buf "&#39;"
-      | c -> Buffer.add_char buf c)
-    s;
-  Buffer.contents buf
+(* html escaping: one string-level implementation lives in the kernel
+   (Prims_pure.html_escape_str); html_escape_text was a fourth image copy —
+   the tree fragment renderer just calls the kernel escaper now. *)
 
 (* Budget-safe HTML for notes tree children under [prefix].
    Mirrors notes/ui/tree-children-html (libs/notes/ui) but runs in OCaml so
@@ -1507,7 +1498,7 @@ let render_children_html (conn : Store_db.conn) ~(prefix : string)
       let emit_folder_details ~path ~label ~open_slug =
         Buffer.add_string buf "<details class=\"tree-folder\" hx-get=\"";
         Buffer.add_string buf "/partials/notes-tree?path=";
-        Buffer.add_string buf (html_escape_text path);
+        Buffer.add_string buf (Prims_pure.html_escape_str path);
         Buffer.add_string buf
           "\" hx-trigger=\"toggle once\" hx-target=\"find .tree-children\" ";
         Buffer.add_string buf "hx-swap=\"innerHTML\"><summary class=\"tree-folder-header\">";
@@ -1516,11 +1507,11 @@ let render_children_html (conn : Store_db.conn) ~(prefix : string)
         (match open_slug with
          | Some slug ->
              Buffer.add_string buf "<a href=\"/notes?slug=";
-             Buffer.add_string buf (html_escape_text slug);
+             Buffer.add_string buf (Prims_pure.html_escape_str slug);
              Buffer.add_string buf "\" onclick=\"event.stopPropagation()\">";
-             Buffer.add_string buf (html_escape_text label);
+             Buffer.add_string buf (Prims_pure.html_escape_str label);
              Buffer.add_string buf "</a>"
-         | None -> Buffer.add_string buf (html_escape_text label));
+         | None -> Buffer.add_string buf (Prims_pure.html_escape_str label));
         Buffer.add_string buf
           "</summary><div class=\"tree-children\"><span class=\"muted\">";
         Buffer.add_string buf "open to load…</span></div></details>"
@@ -1529,9 +1520,9 @@ let render_children_html (conn : Store_db.conn) ~(prefix : string)
         let slug = Tree_store.node_display_slug n in
         let title = Tree_store.node_display_title n in
         Buffer.add_string buf "<li class=\"tree-item\"><a href=\"/notes?slug=";
-        Buffer.add_string buf (html_escape_text slug);
+        Buffer.add_string buf (Prims_pure.html_escape_str slug);
         Buffer.add_string buf "\">";
-        Buffer.add_string buf (html_escape_text title);
+        Buffer.add_string buf (Prims_pure.html_escape_str title);
         Buffer.add_string buf "</a></li>"
       in
       let rec emit_inlined path =

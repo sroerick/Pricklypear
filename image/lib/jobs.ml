@@ -18,22 +18,7 @@ open Pricklypear_lisp.Ast
 let runner_id : string =
   Printf.sprintf "boot-%s" (string_of_int (Unix.getpid ()))
 
-(* ---- field accessors (pgx row helpers, ai_store pattern) ---- *)
-
-let cell_string row i =
-  match List.nth_opt row i with
-  | Some v -> Pgx.Value.to_string v
-  | None -> None
-
-let cell_int row i =
-  match cell_string row i with
-  | Some s -> (try Some (int_of_string s) with _ -> None)
-  | None -> None
-
-let cell_int64 row i =
-  match cell_string row i with
-  | Some s -> (try Some (Int64.of_string s) with _ -> None)
-  | None -> None
+(* row-cell accessors live in Row (was a local copy here, "ai_store pattern"). *)
 
 (* ---- job row type ---- *)
 
@@ -74,18 +59,18 @@ let eval_src ~(fn : string) ~(args : string) : string =
 
 let row_to_job row : job option =
   try
-    let id = cell_string row 0
-    and fn = cell_string row 1
-    and args = cell_string row 2
-    and branch = cell_string row 3
-    and submitted_by = cell_string row 4
-    and status = cell_string row 5
-    and run_at = cell_int64 row 6
-    and attempts = cell_int row 7
-    and max_attempts = cell_int row 8
-    and result = cell_string row 9
-    and error = cell_string row 10
-    and runner_id = cell_string row 11
+    let id = Row.cell_string row 0
+    and fn = Row.cell_string row 1
+    and args = Row.cell_string row 2
+    and branch = Row.cell_string row 3
+    and submitted_by = Row.cell_string row 4
+    and status = Row.cell_string row 5
+    and run_at = Row.cell_int64 row 6
+    and attempts = Row.cell_int row 7
+    and max_attempts = Row.cell_int row 8
+    and result = Row.cell_string row 9
+    and error = Row.cell_string row 10
+    and runner_id = Row.cell_string row 11
     in
     match id, fn, branch, submitted_by, status with
     | Some id, Some fn, Some branch, Some submitted_by, Some status ->
@@ -160,7 +145,7 @@ let submit ~(store : Store.t) ~(fn : string) ~(args_json : string)
       in
       (match rows with
        | row :: _ ->
-           (match cell_string row 0 with
+           (match Row.cell_string row 0 with
             | Some id -> id
             | None -> "submit-job: no id returned")
        | [] -> "submit-job: insert returned no row")
@@ -241,7 +226,7 @@ let cancel ~(store : Store.t) ~(id : string) ~(caller : string) ~(is_admin : boo
     let rows = Store_db.exec conn ~params sql in
     (match rows with
      | row :: _ ->
-         (match cell_string row 0 with
+         (match Row.cell_string row 0 with
           | Some id -> VStr id
           | None -> VStr "cancel-job: no id returned")
      | [] -> VStr "cancel-job: not pending or not yours")
@@ -292,7 +277,7 @@ let rec expt_backoff (store : Store.t) (id : string) : int =
     in
     (match rows with
      | row :: _ ->
-         (match cell_int row 0 with
+         (match Row.cell_int row 0 with
           | Some a ->
               let secs = 1 lsl (min a 6) in
               min secs 60
@@ -392,7 +377,7 @@ let checkpoint_lookup ~(store : Store.t) ~(job_id : string) ~(name : string)
          AND step_name = $2"
     in
     (match rows with
-     | row :: _ -> cell_string row 0
+     | row :: _ -> Row.cell_string row 0
      | [] -> None)
 
 (** Write a checkpoint row for (job_id, name) storing [value] (a JSON
@@ -582,15 +567,15 @@ let schedule_to_value (s : schedule) : value =
 
 let row_to_schedule (row : Pgx.row) : schedule option =
   try
-    let name = cell_string row 0
-    and fn = cell_string row 1
-    and args = cell_string row 2
-    and branch = cell_string row 3
-    and submitted_by = cell_string row 4
-    and cron = cell_string row 5
-    and every_ms = cell_int64 row 6
-    and next_run = cell_int64 row 7
-    and enabled = cell_string row 8
+    let name = Row.cell_string row 0
+    and fn = Row.cell_string row 1
+    and args = Row.cell_string row 2
+    and branch = Row.cell_string row 3
+    and submitted_by = Row.cell_string row 4
+    and cron = Row.cell_string row 5
+    and every_ms = Row.cell_int64 row 6
+    and next_run = Row.cell_int64 row 7
+    and enabled = Row.cell_string row 8
     in
     match name, fn, branch, submitted_by, next_run with
     | Some name, Some fn, Some branch, Some submitted_by, Some next_run ->
@@ -661,7 +646,7 @@ let schedule_upsert ~(store : Store.t) ~(name : string) ~(spec : string)
         in
         (match rows with
          | row :: _ ->
-             (match cell_string row 0 with Some n -> VStr n | None -> VStr name)
+             (match Row.cell_string row 0 with Some n -> VStr n | None -> VStr name)
          | [] -> VStr name)
       with exn -> VStr ("schedule: " ^ Printexc.to_string exn))
 
@@ -677,7 +662,7 @@ let unschedule ~(store : Store.t) ~(name : string) () : value =
       in
       (match rows with
        | row :: _ ->
-           (match cell_string row 0 with Some n -> VStr n | None -> VStr "")
+           (match Row.cell_string row 0 with Some n -> VStr n | None -> VStr "")
        | [] -> VStr "unschedule: no such schedule")
     with exn -> VStr ("unschedule: " ^ Printexc.to_string exn))
 
