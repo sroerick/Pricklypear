@@ -1,6 +1,17 @@
 (** Pricklypear Image — Storage layer (branch-aware queries + fork/merge).
     Connection/tx substrate is [Store_db], included below.
-    H3: SQL via [exec] on dual conn (lwt|eio from PP_IO). *)
+    H3: SQL via [exec] on dual conn (lwt|eio from PP_IO).
+
+    ERROR POLICY (i-1788671060-2): a failed query is an ERROR, not an
+    empty result. DB-error catch-arms log-and-PROPAGATE via
+    [Store_db.reraise]; the session/HTTP boundaries already convert
+    (/api/eval error JSON, HTTP 500 + ops incident, REPL Lwt.catch), so a
+    DB outage, missing migration, or bad row can no longer present as
+    no-functions / count-0 / no-user. Remaining swallows are genuine
+    optional probes, each commented as such (visible_stamp fast path,
+    begin_seed_names, best-effort post-success bookkeeping) or honest
+    (Error msg) result contracts. The no-DB (conn=None) arms are
+    unchanged: "not configured" is a distinct, truthful degraded mode. *)
 include Store_db
 
 (* ---- one-tree: reads source from the tree-backed views ----
@@ -74,15 +85,24 @@ let visible_stamp (t : t) : string =
          if fast <> "" && not (String.starts_with ~prefix:"|" fast)
          then "g" ^ fast
          else run legacy_sql
-       with _ -> "")
+       with _ ->
+         (* PROBE (i-1788671060-2 keep): a failed stamp must not break
+            attach — ensure_fresh treats "" as "stay on whatever is in
+            memory" (session.ml), so during a DB blip sessions keep
+            serving their loaded env instead of 500-ing every request;
+            freshness detection resumes when the DB returns. *)
+         "")
 
 (* Branch-aware lookup. Walks the branch parent chain via a recursive
    CTE so that a definition in [main] is visible from a child branch,
    and a definition in the child OVERRIDES the same name in main
    (per spec storage.no-inheritance: OVERRIDE, not UNION).
 
-   Returns (body, author, doc option). Errors/misses are logged and
-   return None so the REPL keeps working with no DB. *)
+   Returns (body, author, doc option). A miss (no such name) is None; a
+   FAILED query propagates (Store_db.reraise, i-1788671060-2) — an
+   outage must surface as an error, never as "unbound variable". With
+   no DB configured this still returns None so the REPL keeps
+   working (the no-DB arm, a distinct degraded mode). *)
 let lookup_function (t : t) (name : string)
   : (Pricklypear_lisp.Ast.expr * string * string option) option =
   match t.conn with
@@ -126,10 +146,7 @@ let lookup_function (t : t) (name : string)
                              None)
                      | _ -> None)
                 | _ -> None))
-    with exn ->
-      Printf.eprintf "[store] lookup_function error: %s\n"
-            (Printexc.to_string exn);
-          None)
+    with exn -> Store_db.reraise ~op:"lookup_function" exn)
 
 (* List all function names visible to this branch (via the same
    recursive-CTE override walk). Used at session-make time to load
@@ -182,10 +199,7 @@ let list_function_names_meta (t : t)
               rows
           in
           acc
-    with exn ->
-      Printf.eprintf "[store] list_function_names error: %s\n"
-            (Printexc.to_string exn);
-          [])
+    with exn -> Store_db.reraise ~op:"list_function_names" exn)
 
 (** Effective defs only (deduped). Same as [list_function_names_meta] without depth. *)
 let list_function_names (t : t)
@@ -231,10 +245,7 @@ let search_function_bodies (t : t) ~(needle : string) ~(limit : int)
                | [ name_c ] -> Pgx.Value.to_string name_c
                | _ -> None)
              rows
-         with exn ->
-           Printf.eprintf "[store] search_function_bodies error: %s\n"
-             (Printexc.to_string exn);
-           [])
+         with exn -> Store_db.reraise ~op:"search_function_bodies" exn)
 
 (** Full branch-chain defs for env rehydrate: parents first (depth DESC),
     then children. Includes ALL rows (not deduped) so Session.load_defs can
@@ -283,10 +294,7 @@ let list_function_names_for_load (t : t)
               rows
           in
           acc
-    with exn ->
-      Printf.eprintf "[store] list_function_names_for_load error: %s\n"
-            (Printexc.to_string exn);
-          [])
+    with exn -> Store_db.reraise ~op:"list_function_names_for_load" exn)
 
 (** tmp/eval-fast-path: cheap per-def fingerprints for incremental
     rehydrate — (name, branch_id, depth, updated_at, package) for every
@@ -327,10 +335,7 @@ let list_def_fingerprints (t : t)
                    | _ -> None)
               | _ -> None)
             rows
-    with exn ->
-      Printf.eprintf "[store] list_def_fingerprints error: %s\n"
-            (Printexc.to_string exn);
-          [])
+    with exn -> Store_db.reraise ~op:"list_def_fingerprints" exn)
 
 (** tmp/eval-fast-path: bodies for SPECIFIC (branch_id, name) pairs —
     the incremental-rehydrate delta fetch. Same row shape as
@@ -380,10 +385,7 @@ let list_function_bodies_for (t : t)
                  | _ -> None)
             | _ -> None)
           rows
-      with exn ->
-        Printf.eprintf "[store] list_function_bodies_for error: %s\n"
-          (Printexc.to_string exn);
-        [])
+      with exn -> Store_db.reraise ~op:"list_function_bodies_for" exn)
 
 (** image.load-library-skip (2026-09-03): OWN-branch defs only (no
     recursive CTE). load-library fingerprints these via pp_expr + doc to
@@ -423,10 +425,7 @@ let list_own_function_defs (t : t)
                   | _ -> None)
              | _ -> None)
            rows
-       with exn ->
-         Printf.eprintf "[store] list_own_function_defs error: %s\n"
-           (Printexc.to_string exn);
-         [])
+       with exn -> Store_db.reraise ~op:"list_own_function_defs" exn)
 
 (* ---- own-branch stats / overrides (no recursive CTE) ---- *)
 
@@ -446,10 +445,7 @@ let count_functions_on_branch (t : t) ~(branch_id : string) : int =
                 | Some s -> (int_of_string_opt s |> Option.value ~default:0)
                 | None -> 0)
            | _ -> 0)
-    with exn ->
-      Printf.eprintf "[store] count_functions_on_branch: %s\n"
-            (Printexc.to_string exn);
-          0)
+    with exn -> Store_db.reraise ~op:"count_functions_on_branch" exn)
 
 let count_routes_on_branch (t : t) ~(branch_id : string) : int =
   match t.conn with
@@ -467,10 +463,7 @@ let count_routes_on_branch (t : t) ~(branch_id : string) : int =
                 | Some s -> (int_of_string_opt s |> Option.value ~default:0)
                 | None -> 0)
            | _ -> 0)
-    with exn ->
-      Printf.eprintf "[store] count_routes_on_branch: %s\n"
-            (Printexc.to_string exn);
-          0)
+    with exn -> Store_db.reraise ~op:"count_routes_on_branch" exn)
 
 (** Parent branch id for [branch_id], if any. *)
 let branch_parent_id (t : t) ~(branch_id : string) : string option =
@@ -490,8 +483,7 @@ let branch_parent_id (t : t) ~(branch_id : string) : string option =
                | Some "" | None -> None
                | Some s -> (Some s))
           | _ -> None
-    with _ ->
-      None)
+    with exn -> Store_db.reraise ~op:"branch_parent_id" exn)
 
 (** Branch LENS CHAIN for [branch_id]: self-first (closest-wins) walk up
     the parent chain to system/main (inclusive), oldest ancestor last.
@@ -534,10 +526,7 @@ let list_own_functions (t : t) ~(branch_id : string)
                       | _ -> None)
                  | _ -> None)
                rows)
-    with exn ->
-      Printf.eprintf "[store] list_own_functions: %s\n"
-            (Printexc.to_string exn);
-          [])
+    with exn -> Store_db.reraise ~op:"list_own_functions" exn)
 
 let list_own_routes (t : t) ~(branch_id : string)
   : (string * string) list =
@@ -560,10 +549,7 @@ let list_own_routes (t : t) ~(branch_id : string)
                       | _ -> None)
                  | _ -> None)
                rows)
-    with exn ->
-      Printf.eprintf "[store] list_own_routes: %s\n"
-            (Printexc.to_string exn);
-          [])
+    with exn -> Store_db.reraise ~op:"list_own_routes" exn)
 
 (** Child own names left-joined to parent: name, child_updated, parent_updated opt. *)
 (* ---- branch status (branching.branch-status) ----
@@ -756,10 +742,7 @@ let branch_status_conn (conn : conn) ~(branch_id : string)
                            st_base_hash = a })
             | _ -> None)
           rows
-        with exn ->
-        Printf.eprintf "[store] branch_status error: %s\n"
-          (Printexc.to_string exn);
-        [])
+        with exn -> Store_db.reraise ~op:"branch_status" exn)
 
 let branch_status (t : t) ~(branch_id : string) : branch_status_row list =
   match t.conn with
@@ -797,10 +780,7 @@ let lookup_function_on_branch (t : t) ~(branch_id : string) ~(name : string)
                      with _ -> None)
                 | _ -> None)
            | _ -> None)
-    with exn ->
-      Printf.eprintf "[store] lookup_function_on_branch: %s\n"
-            (Printexc.to_string exn);
-          None)
+    with exn -> Store_db.reraise ~op:"lookup_function_on_branch" exn)
 
 let delete_function_on_branch (t : t) ~(branch_id : string) ~(name : string)
   : bool =
@@ -811,10 +791,7 @@ let delete_function_on_branch (t : t) ~(branch_id : string) ~(name : string)
         match Tree_store.delete_fn conn ~branch_id ~name with
         | Ok _ -> true
         | Error _ -> false
-     with exn ->
-      Printf.eprintf "[store] delete_function_on_branch: %s\n"
-            (Printexc.to_string exn);
-          false)
+     with exn -> Store_db.reraise ~op:"delete_function_on_branch" exn)
 
 (** Copy selected function names from source branch to target (upsert).
     ATOMIC (branching.promote): the whole promote — fn upserts, route
@@ -909,10 +886,7 @@ let promote_functions (t : t) ~(source_id : string) ~(target_id : string)
           in
           let () = Tree_store.recompute_head_hash conn ~branch_id:target_id in
           n)
-      with exn ->
-        Printf.eprintf "[store] promote_functions: %s\n"
-          (Printexc.to_string exn);
-        0)
+      with exn -> Store_db.reraise ~op:"promote_functions" exn)
 
 (* [inherited_fn_body_matches conn ~branch_id ~name ~body_json]: walks
    the PARENT chain of [branch_id] (the branch itself is excluded, so
@@ -940,10 +914,7 @@ let inherited_fn_body_matches (conn : conn) ~(branch_id : string)
      with
      | [ [ cell ] ] -> Pgx.Value.to_bool cell = Some true
      | _ -> false)
-  with exn ->
-    Printf.eprintf "[store] inherited_fn_body_matches error: %s\n"
-      (Printexc.to_string exn);
-    false
+  with exn -> Store_db.reraise ~op:"inherited_fn_body_matches" exn
 
 (* Persist a function def. INSERT ... ON CONFLICT (branch_id, name)
    DO UPDATE so redefining a name in the same branch upserts. The body
@@ -981,6 +952,10 @@ let persist_function (t : t) (name : string)
                in
                ()
              with exn ->
+               (* PROBE (i-1788671060-2 keep): best-effort post-success
+                  cleanup — the persist already landed; a failed unpin is
+                  logged and retried on the next resync, never blocks the
+                  write it trails. *)
                Printf.eprintf
                  "[store] persist_function unpin-on-sync error: %s\n"
                  (Printexc.to_string exn))
@@ -1005,10 +980,7 @@ let persist_function (t : t) (name : string)
                                Pgx.Value.of_string pkg ]
                      sql in
                  ())
-    with exn ->
-      Printf.eprintf "[store] persist_function error: %s\n"
-            (Printexc.to_string exn);
-          ())
+    with exn -> Store_db.reraise ~op:"persist_function" exn)
 
 (** image.boot-seed-batch: preload the set of function names and route
     paths already present on the current branch (system/main during boot
@@ -1031,6 +1003,10 @@ let begin_seed_names (t : t) : unit =
                   | None -> ())
              | _ -> ()) rows
        with exn ->
+         (* PROBE (i-1788671060-2 keep): boot-seed OPTIMIZATION — preload
+            the already-present names so seed_one can skip per-name
+            SELECTs; a failure just means no skipping (full seed pass
+            proceeds). The boot-seed-batch doc above covers the shape. *)
          Printf.eprintf "[store] begin_seed_names (fns) error: %s\n"
            (Printexc.to_string exn));
       (try
@@ -1044,6 +1020,7 @@ let begin_seed_names (t : t) : unit =
                   | None -> ())
              | _ -> ()) rows
        with exn ->
+         (* PROBE — same boot-seed-skip optimization as the fn half above. *)
          Printf.eprintf "[store] begin_seed_names (routes) error: %s\n"
            (Printexc.to_string exn));
       t.seed_names <- Some set
@@ -1106,10 +1083,7 @@ let persist_function_if_absent (t : t) (name : string)
             (match t.seed_names with
              | Some set -> Hashtbl.replace set name ()
              | None -> ())
-      with exn ->
-      Printf.eprintf "[store] persist_function_if_absent error: %s\n"
-            (Printexc.to_string exn);
-          ()))
+      with exn -> Store_db.reraise ~op:"persist_function_if_absent" exn))
 
 (** Visible docstring for [name], or None. *)
 let lookup_function_doc (t : t) (name : string) : string option =
@@ -1166,10 +1140,7 @@ let list_branches (t : t) : Pricklypear_common.Branch.t list =
                       | _ -> None)
                  | _ -> None)
                rows)
-    with exn ->
-      Printf.eprintf "[store] list_branches error: %s\n"
-            (Printexc.to_string exn);
-          [])
+    with exn -> Store_db.reraise ~op:"list_branches" exn)
 
 (* Look up a branch id by (owner, name). Used by (fork ...) to find
    the parent's UUID from its Lisp-level reference. Returns None if
@@ -1191,10 +1162,7 @@ let lookup_branch_id_by_name (t : t) ~(owner : string) ~(name : string)
            | [ [ id_cell ] ] ->
                (Pgx.Value.to_string id_cell)
            | _ -> None)
-    with exn ->
-      Printf.eprintf "[store] lookup_branch_id error: %s\n"
-            (Printexc.to_string exn);
-          None)
+    with exn -> Store_db.reraise ~op:"lookup_branch_id" exn)
 
 (* Switch the store's branch_id: subsequent lookups/persists/registers
    will target the new branch. Per spec [image.repl-experience]:
@@ -1236,10 +1204,7 @@ let current_generation (t : t) ~(branch_id : string) : int64 option =
          | [ [ cell ] ] ->
              Option.bind (Pgx.Value.to_int64 cell) (fun g -> Some g)
          | _ -> None
-       with exn ->
-         Printf.eprintf "[store] current_generation error: %s\n"
-           (Printexc.to_string exn);
-         None)
+       with exn -> Store_db.reraise ~op:"current_generation" exn)
 
 (** Canonical system/main UUID — seeded by migrations/001_branches.sql. *)
 let system_main_id = "00000000-0000-0000-0000-000000000001"
@@ -1261,10 +1226,7 @@ let delete_function (t : t) (name : string) : bool =
           match Tree_store.delete_fn conn ~branch_id:t.branch_id ~name with
           | Ok _ -> true
           | Error _ -> false
-        with exn ->
-          Printf.eprintf "[store] delete_function error: %s\n"
-            (Printexc.to_string exn);
-          false)
+        with exn -> Store_db.reraise ~op:"delete_function" exn)
 
 (** branching.pin-hygiene: (prune-synced). Removes every SYNCED FN pin on
     the CURRENT branch — pins whose body is canonically identical to the
@@ -1311,15 +1273,16 @@ let prune_synced_fn_pins (t : t) : string list =
                         | Ok _ -> true
                         | Error _ -> false
                       with exn ->
+                        (* PROBE (i-1788671060-2 keep): per-pin batch
+                           semantics — one un-prunable pin must not abort
+                           the prune of the others; it stays a pin and the
+                           failure is logged. *)
                         Printf.eprintf
                           "[store] prune_synced_fn_pins %s: %s\n" name
                           (Printexc.to_string exn);
                         false)
                     names)
-          with exn ->
-            Printf.eprintf "[store] prune_synced_fn_pins: %s\n"
-              (Printexc.to_string exn);
-            []))
+          with exn -> Store_db.reraise ~op:"prune_synced_fn_pins" exn))
 
 (** Temporarily rebind [t.branch_id] for the duration of [f], then restore.
     Used so seed_stdlib can write package defaults to system/main without
@@ -1363,9 +1326,14 @@ let ensure_branch (t : t) ~(parent_id : string) ~(owner : string)
                     (* Race: another image created it; re-lookup. *)
                     lookup_branch_id_by_name t ~owner ~name)
     with exn ->
-      Printf.eprintf "[store] ensure_branch error: %s\n"
-                 (Printexc.to_string exn);
-               lookup_branch_id_by_name t ~owner ~name))
+      (* Narrow probe-recovery (i-1788671060-2 keep): only a genuine
+         unique race re-looks-up (the loser of a concurrent create).
+         ON CONFLICT DO UPDATE above already absorbs the common insert
+         race; every other failure is real and propagates — a failed
+         create must not masquerade as "some other branch id". *)
+      if Store_db.is_unique_violation exn then
+        lookup_branch_id_by_name t ~owner ~name
+      else Store_db.reraise ~op:"ensure_branch" exn))
 
 (* Fork a branch: create an EMPTY lens with parent_id as its parent.
    one-tree P5 / branching.personal-workspace: NO copy of code rows.
@@ -1399,10 +1367,7 @@ let register_route (t : t) ~(route : string) ~(handler : string)
           ignore
             (Tree_store.upsert_route conn ~branch_id:t.branch_id ~route
                ~handler ~visibility:vis)
-    with exn ->
-      Printf.eprintf "[store] register_route error: %s\n"
-            (Printexc.to_string exn);
-          ())
+    with exn -> Store_db.reraise ~op:"register_route" exn)
 
 (** branching.seed-policy: insert route only if absent on this branch. *)
 let register_route_if_absent (t : t) ~(route : string) ~(handler : string)
@@ -1435,10 +1400,7 @@ let register_route_if_absent (t : t) ~(route : string) ~(handler : string)
             (match t.seed_names with
              | Some set -> Hashtbl.replace set route ()
              | None -> ())
-      with exn ->
-      Printf.eprintf "[store] register_route_if_absent error: %s\n"
-            (Printexc.to_string exn);
-          ()))
+      with exn -> Store_db.reraise ~op:"register_route_if_absent" exn))
 
 (* List all route bindings visible to this branch (recursive-CTE walk,
    same as list_function_names — annotations from ancestors are visible
@@ -1482,10 +1444,7 @@ let list_routes (t : t) : (string * string * string) list =
                       | _ -> None)
                  | _ -> None)
                rows)
-    with exn ->
-      Printf.eprintf "[store] list_routes error: %s\n"
-            (Printexc.to_string exn);
-          [])
+    with exn -> Store_db.reraise ~op:"list_routes" exn)
 
 (* ---- type_defs ----
 
@@ -1518,10 +1477,7 @@ let persist_type (t : t) ~(name : string) ~(fields : string list)
           ignore
             (Tree_store.upsert_type conn ~branch_id:t.branch_id ~name
                ~fields_json ~author)
-    with exn ->
-      Printf.eprintf "[store] persist_type error: %s\n"
-            (Printexc.to_string exn);
-          ())
+    with exn -> Store_db.reraise ~op:"persist_type" exn)
 
 (* List all type declarations visible to this branch via the recursive
    CTE override walk. Returns (name, fields) pairs with closest
@@ -1563,10 +1519,7 @@ let list_types (t : t) : (string * string list) list =
                       | _ -> None)
                  | _ -> None)
                rows)
-    with exn ->
-      Printf.eprintf "[store] list_types error: %s\n"
-            (Printexc.to_string exn);
-          [])
+    with exn -> Store_db.reraise ~op:"list_types" exn)
 
 (** Field names for a type visible on the current branch (CTE walk).
     None if the type is not declared. *)
@@ -1617,10 +1570,7 @@ let fork_branch (t : t) ~(parent_id : string) ~(owner : string)
                       (Some new_branch_id)
                   | None -> None)
              | _ -> None))
-    with exn ->
-      Printf.eprintf "[store] fork_branch error: %s\n"
-        (Printexc.to_string exn);
-      None)
+    with exn -> Store_db.reraise ~op:"fork_branch" exn)
 
 (* Merge a source branch's function_defs into a target branch.
 
@@ -1806,10 +1756,7 @@ let merge_branch (t : t) ~(source_id : string) ~(target_id : string)
                promote deliberately does NOT advance. *)
             let () = Tree_store.recompute_head_hash conn ~branch_id:target_id in
             (Some { count; conflicts }))
-    with exn ->
-      Printf.eprintf "[store] merge_branch error: %s\n"
-        (Printexc.to_string exn);
-      None
+    with exn -> Store_db.reraise ~op:"merge_branch" exn
   in
   let () =
     if is_parent_merge then
@@ -1829,6 +1776,9 @@ let merge_branch (t : t) ~(source_id : string) ~(target_id : string)
                  in
                  ()
                with exn ->
+                 (* PROBE (i-1788671060-2 keep): best-effort post-merge
+                    bookkeeping — the merge already landed; a stale merge
+                    base only makes the NEXT merge re-diff (conservative). *)
                  Printf.eprintf "[store] merge base advance: %s\n"
                    (Printexc.to_string exn)))
       | None -> ()
@@ -1955,10 +1905,7 @@ let diff_branches (t : t) ~(from_id : string) ~(to_id : string)
             [ read_kind DiffFn
             ; read_kind DiffType
             ; read_kind DiffRoute ]
-    with exn ->
-      Printf.eprintf "[store] diff_branches error: %s\n"
-        (Printexc.to_string exn);
-      [])
+    with exn -> Store_db.reraise ~op:"diff_branches" exn)
 
 (* ---- package-surface: package_registry (branch-lensed) ---- *)
 
@@ -2024,10 +1971,7 @@ let list_packages (t : t) : package_row list =
               rows
           in
           acc
-    with exn ->
-      Printf.eprintf "[store] list_packages error: %s\n"
-            (Printexc.to_string exn);
-          [])
+    with exn -> Store_db.reraise ~op:"list_packages" exn)
 
 (** Set of package names disabled on the current branch (effective). *)
 let disabled_package_names (t : t) : string list =
@@ -2078,10 +2022,7 @@ let upsert_package_registry (t : t) ~(name : string)
               sql
           in
           ()
-    with exn ->
-      Printf.eprintf "[store] upsert_package_registry error: %s\n"
-            (Printexc.to_string exn);
-          ())
+    with exn -> Store_db.reraise ~op:"upsert_package_registry" exn)
 
 (** Write enabled bit on the *current* branch (creates a shadowing row if
     the package only exists on an ancestor). Copies exports from effective
@@ -2117,10 +2058,7 @@ let set_package_enabled (t : t) ~(name : string) ~(enabled : bool)
               sql
           in
           ()
-    with exn ->
-      Printf.eprintf "[store] set_package_enabled error: %s\n"
-            (Printexc.to_string exn);
-          ())
+    with exn -> Store_db.reraise ~op:"set_package_enabled" exn)
 
 (** Stamp untagged function_defs on the current branch with [package].
     Matches export list names and [package]/ prefix. Used when a
@@ -2148,10 +2086,7 @@ let stamp_package_bindings (t : t) ~(package : string)
               sql
           in
           ()
-    with exn ->
-      Printf.eprintf "[store] stamp_package_bindings error: %s\n"
-            (Printexc.to_string exn);
-          ())
+    with exn -> Store_db.reraise ~op:"stamp_package_bindings" exn)
 
 (** Map name -> package provenance for effective function_defs (closest wins). *)
 let function_package_map (t : t) : (string, string) Hashtbl.t =
@@ -2181,10 +2116,7 @@ let function_package_map (t : t) : (string, string) Hashtbl.t =
               | _ -> ())
             rows;
           tbl
-    with exn ->
-      Printf.eprintf "[store] function_package_map error: %s\n"
-            (Printexc.to_string exn);
-          (Hashtbl.create 1))
+    with exn -> Store_db.reraise ~op:"function_package_map" exn)
 
 (* ---- code-history (branching.code-history) ---- *)
 
@@ -2261,10 +2193,7 @@ let list_code_history_012 (t : t) ~(branch_id : string) ~(name : string)
                   | _ -> None)
              | _ -> None)
            rows
-       with exn ->
-         Printf.eprintf "[store] list_code_history_012: %s\n"
-           (Printexc.to_string exn);
-         [])
+       with exn -> Store_db.reraise ~op:"list_code_history_012" exn)
 
 (* ---- code-history over tree_versions (tree-time.projections, Phase 3) ----
    Re-implements branching.code-history / code-diff over the versioned tree
@@ -2454,10 +2383,7 @@ let live_code_body_text (t : t) ~(branch_id : string) ~(name : string)
               (match try_ty () with
                | Some s -> Some s
                | None -> try_rt ()))
-       with exn ->
-         Printf.eprintf "[store] live_code_body_text: %s\n"
-           (Printexc.to_string exn);
-         None)
+       with exn -> Store_db.reraise ~op:"live_code_body_text" exn)
 
 (** Minimal line-oriented text diff: lines only in [a], only in [b], or
     shared. Not a full LCS unified diff — good enough for prim smoke. *)
@@ -2655,6 +2581,8 @@ let retention_set_policy (t : t) ~(path_class : string)
           | Some tnm ->
               Printf.sprintf "retention policy %s/%s: keep %Ld windows" path_class tnm keep_windows
         with ex ->
+          (* Honest error-string result contract (i-1788671060-2 keep):
+             the failure text IS the return value the prim displays. *)
           Printf.sprintf "retention-policy-set: %s" (Printexc.to_string ex))
 
 let retention_delete_policy (t : t) ~(path_class : string)
@@ -2676,6 +2604,7 @@ let retention_delete_policy (t : t) ~(path_class : string)
             : Pgx.row list);
         "retention policy deleted"
       with ex ->
+        (* Honest error-string result contract (same class as above). *)
         Printf.sprintf "retention-delete-policy: %s" (Printexc.to_string ex))
 
 let retention_list_policies (t : t)
@@ -2711,7 +2640,7 @@ let retention_list_policies (t : t)
                  | None -> ""
                in
                (pc, tn, kw, ca))
-      with _ -> [])
+      with exn -> Store_db.reraise ~op:"retention_list_policies" exn)
 
 (* Run the retention worker for each path class that has an explicit
    whole-class policy (type_name IS NULL). Whole-class policies are the v1
@@ -2771,5 +2700,5 @@ let retention_run (t : t) ~(path_class : string option) ()
                      | _ -> []))
             | _ -> [])
           all
-      with _ -> [])
+      with exn -> Store_db.reraise ~op:"retention_run" exn)
 

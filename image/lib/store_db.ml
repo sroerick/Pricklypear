@@ -159,6 +159,39 @@ let is_serialization_failure (exn : exn) : bool =
       String.equal fields.Pgx.Error_response.code "40001"
   | _ -> false
 
+(** unique_violation (SQLSTATE 23505): the one failure class a caller may
+    recover from by re-reading (insert races). ensure_branch narrows its
+    catch to this; every other class propagates. *)
+let is_unique_violation (exn : exn) : bool =
+  match exn with
+  | Pgx.PostgreSQL_Error (_, fields) ->
+      String.equal fields.Pgx.Error_response.code "23505"
+  | _ -> false
+
+(** i-1788671060-2 (swallow-and-default retirement): a FAILED query is an
+    error, not an empty result. Store/auth_store DB-error catch-arms call
+    this instead of eprintf + default, so an outage, missing migration, or
+    bad row PROPAGATES to the session/HTTP boundary (which already
+    converts: /api/eval error JSON, HTTP 500 + ops incident, REPL
+    Lwt.catch) instead of presenting as no-functions / count-0 / no-user —
+    degraded must be distinguishable from legitimately empty.
+
+    Swallows that remain are genuine optional probes and say so in a
+    comment at the site (visible_stamp fast path, begin_seed_names,
+    best-effort post-success bookkeeping, log_auth). The no-DB
+    (conn=None) arms are unchanged: "not configured" is a distinct,
+    truthful degraded mode, not an error to mask.
+
+    Greppable invariant: every remaining catch-arm in
+    store.ml/auth_store.ml is either [with exn -> Store_db.reraise …]
+    (log + propagate), an honest (Error msg) result contract, a
+    comment-marked probe, or a per-row DECODE GUARD after a successful
+    query (try <parse a cell> with _ -> skip-row — one malformed cell
+    never masks a DB failure; the query-error class propagates). *)
+let reraise ~(op : string) (exn : exn) : 'a =
+  Printf.eprintf "[store] %s failed: %s\n%!" op (Printexc.to_string exn);
+  raise exn
+
 let with_transaction ?(isolation = Pgx.Isolation.Serializable) (t : t)
     (f : conn option -> 'a) : 'a =
   match t.conn with

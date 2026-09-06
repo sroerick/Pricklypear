@@ -2,7 +2,16 @@
 
     Operates on migrations/002_auth.sql tables from the image process.
     No separate authd. Auth holds verify + mint only; session identity
-    is attached per HTTP request (auth.multi-user-product / web-login). *)
+    is attached per HTTP request (auth.multi-user-product / web-login).
+
+    ERROR POLICY (i-1788671060-2): auth LOOKUPS no longer swallow DB
+    errors into None/0/true — an outage must not present as "bad
+    credentials", an empty user table (which would re-trigger admin
+    bootstrap), or a fail-open allow_agent_promote default. Catch-arms
+    log-and-propagate via [Store_db.reraise]; the HTTP boundary renders
+    500. Write actions keep their honest (unit, string) result Error
+    contracts (callers surface the failure). Genuine probes (log_auth,
+    the last_used_at touch) keep a swallow and say so. *)
 (* H2.4: DB execute via Store_db.exec *)
 
 type user = {
@@ -87,6 +96,9 @@ let pg_conn (store : Store.t) : Io_lwt.Db.conn option = Io_lwt.Db.current_conn s
 
 let log_auth (store : Store.t) ?user_id ~kind ~success ?source_ip ()
   : unit =
+  (* PROBE (i-1788671060-2 keep): the audit trail must never block or
+     fail the auth decision it records — a failed INSERT logs to stderr
+     and returns, like any best-effort telemetry emit. *)
   match pg_conn store with
   | None -> ()
   | Some conn ->
@@ -129,10 +141,7 @@ let count_users (store : Store.t) : int =
                    (int_of_string_opt s |> Option.value ~default:0)
                | None -> 0)
           | [] -> 0
-    with exn ->
-      Printf.eprintf "[auth_store] count_users: %s\n%!"
-            (Printexc.to_string exn);
-          0)
+    with exn -> Store_db.reraise ~op:"count_users" exn)
 
 let user_cols = "id::text, username, is_admin::text, user_type, parent_user_id::text"
 
@@ -164,10 +173,7 @@ let get_user_by_username (store : Store.t) (username : string)
                | Some u -> Some u
                | None -> None)
           | [] -> None
-    with exn ->
-      Printf.eprintf "[auth_store] get_user_by_username: %s\n%!"
-            (Printexc.to_string exn);
-          None)
+    with exn -> Store_db.reraise ~op:"get_user_by_username" exn)
 
 let get_user_by_id (store : Store.t) (user_id : string) : user option =
   match pg_conn store with
@@ -187,10 +193,7 @@ let get_user_by_id (store : Store.t) (user_id : string) : user option =
                | Some u -> Some u
                | None -> None)
           | [] -> None
-    with exn ->
-      Printf.eprintf "[auth_store] get_user_by_id: %s\n%!"
-            (Printexc.to_string exn);
-          None)
+    with exn -> Store_db.reraise ~op:"get_user_by_id" exn)
 
 let username_dns_ok (name : string) : bool =
   let name = String.lowercase_ascii (String.trim name) in
@@ -372,10 +375,7 @@ let password_hash_for_user (store : Store.t) ~(username : string)
                     | None -> None)
                | _ -> None)
           | [] -> None
-    with exn ->
-      Printf.eprintf "[auth_store] password_hash_for_user: %s\n%!"
-            (Printexc.to_string exn);
-          None)
+    with exn -> Store_db.reraise ~op:"password_hash_for_user" exn)
 
 let verify_password (store : Store.t) ~(username : string)
     ~(password : string) ?source_ip () : user option =
@@ -428,7 +428,8 @@ let verify_password (store : Store.t) ~(username : string)
              | Error e ->
                  Printf.eprintf "[auth] %s argon2id upgrade failed: %s\n%!"
                    user.username e);
-          (* Touch last_used_at *)
+          (* Touch last_used_at — PROBE (i-1788671060-2 keep): telemetry
+             only; login must succeed even if the touch fails. *)
           (match pg_conn store with
            | None -> Some user
            | Some conn ->
@@ -535,10 +536,7 @@ let lookup_session (store : Store.t) ~(raw_token : string)
                          expires_at = exp }
                  | _ -> None)
             | [] -> None
-    with exn ->
-      Printf.eprintf "[auth_store] lookup_session: %s\n%!"
-              (Printexc.to_string exn);
-            None)
+    with exn -> Store_db.reraise ~op:"lookup_session" exn)
 
 (* tmp/eval-fast-path: cookie identity in ONE query (was lookup_session
    + get_user_by_id = 2 round trips per request). Returns the full user
@@ -567,10 +565,7 @@ let lookup_session_user (store : Store.t) ~(raw_token : string)
           match rows with
           | row :: _ -> user_of_row row
           | [] -> None
-        with exn ->
-          Printf.eprintf "[auth_store] lookup_session_user: %s\n%!"
-            (Printexc.to_string exn);
-          None)
+        with exn -> Store_db.reraise ~op:"lookup_session_user" exn)
 
 let revoke_session (store : Store.t) ~(raw_token : string) ?source_ip ()
   : unit =
@@ -594,10 +589,7 @@ let revoke_session (store : Store.t) ~(raw_token : string) ?source_ip ()
               log_auth store ?user_id:uid ~kind:"logout" ~success:true
                 ?source_ip ()
           | [] -> ()
-    with exn ->
-      Printf.eprintf "[auth_store] revoke_session: %s\n%!"
-            (Printexc.to_string exn);
-          ())
+    with exn -> Store_db.reraise ~op:"revoke_session" exn)
 
 let revoke_all_sessions (store : Store.t) ~(user_id : string) : int =
   match pg_conn store with
@@ -617,10 +609,7 @@ let revoke_all_sessions (store : Store.t) ~(user_id : string) : int =
             log_auth store ~user_id ~kind:"revoke_all" ~success:true ()
           in
           (List.length rows)
-    with exn ->
-      Printf.eprintf "[auth_store] revoke_all_sessions: %s\n%!"
-            (Printexc.to_string exn);
-          0)
+    with exn -> Store_db.reraise ~op:"revoke_all_sessions" exn)
 
 (** API token (Bearer) credentials — auth INTO the OS for agents/pp_eval.
     kind='api_key' rows. Raw token returned ONCE at issue time; only the
@@ -723,10 +712,7 @@ let verify_token (store : Store.t) ~(raw_token : string) ?source_ip ()
                   log_auth store ~kind:"api_key" ~success:false ?source_ip ()
                 in
                 None
-    with exn ->
-      Printf.eprintf "[auth_store] verify_token: %s\n%!"
-              (Printexc.to_string exn);
-            None)
+    with exn -> Store_db.reraise ~op:"verify_token" exn)
 
 type token_meta = {
   id : string;
@@ -778,10 +764,7 @@ let list_tokens (store : Store.t) ~(user_id : string) : token_meta list =
               rows
           in
           metas
-    with exn ->
-      Printf.eprintf "[auth_store] list_tokens: %s\n%!"
-            (Printexc.to_string exn);
-          [])
+    with exn -> Store_db.reraise ~op:"list_tokens" exn)
 
 let revoke_token (store : Store.t) ~(credential_id : string)
   : (unit, string) result =
@@ -823,8 +806,7 @@ let get_allow_agent_promote (store : Store.t) ~(user_id : string)
           match rows with
           | row :: _ -> (Row.cell_bool row 0)
           | [] -> true
-    with _ ->
-      true)
+    with exn -> Store_db.reraise ~op:"get_allow_agent_promote" exn)
 
 (** Set a user's type + parent (auth.user-management admin surface;
     the missing type flip the agent-native chapter recorded as pending).
@@ -1037,8 +1019,7 @@ let get_llm_key_meta_direct (store : Store.t) ~(user_id : string)
           match rows with
           | row :: _ -> llm_key_meta_of_public (Row.cell_string row 0)
           | [] -> None
-    with _ ->
-      None)
+    with exn -> Store_db.reraise ~op:"get_llm_key_meta_direct" exn)
 
 (** get_llm_key_meta with agent fallback to parent's key. *)
 let get_llm_key_meta (store : Store.t) ~(user_id : string)
@@ -1089,10 +1070,7 @@ let get_llm_key_secret_direct (store : Store.t) ~(user_id : string)
                         Some (key, meta))
                | None -> None)
           | [] -> None
-    with exn ->
-      Printf.eprintf "[auth_store] get_llm_key_secret_direct: %s\n%!"
-            (Printexc.to_string exn);
-          None)
+    with exn -> Store_db.reraise ~op:"get_llm_key_secret_direct" exn)
 
 (** get_llm_key_secret with agent fallback: if the user has no own llm_key
     and is an agent (user_type='agent', parent_user_id set), look up the
@@ -1235,10 +1213,7 @@ let list_ssh_keys (store : Store.t) ~(user_id : string)
               rows
           in
           metas
-    with exn ->
-      Printf.eprintf "[auth_store] list_ssh_keys: %s\n%!"
-            (Printexc.to_string exn);
-          [])
+    with exn -> Store_db.reraise ~op:"list_ssh_keys" exn)
 
 let revoke_ssh_key (store : Store.t) ~(user_id : string)
     ~(id_or_fingerprint : string) : (unit, string) result =
@@ -1317,10 +1292,7 @@ let verify_ssh_key (store : Store.t) ~(openssh_or_blob : string)
                 log_auth store ~kind:"ssh_key" ~success:false ?source_ip ()
               in
               None
-    with exn ->
-      Printf.eprintf "[auth_store] verify_ssh_key: %s\n%!"
-            (Printexc.to_string exn);
-          None)
+    with exn -> Store_db.reraise ~op:"verify_ssh_key" exn)
 
 let list_users (store : Store.t) : user list =
   match pg_conn store with
@@ -1333,10 +1305,7 @@ let list_users (store : Store.t) : user list =
           in
           let users = List.filter_map user_of_row rows in
           users
-    with exn ->
-      Printf.eprintf "[auth_store] list_users: %s\n%!"
-            (Printexc.to_string exn);
-          [])
+    with exn -> Store_db.reraise ~op:"list_users" exn)
 
 (** First boot: if users table empty, create admin from env.
     PP_BOOTSTRAP_USER (default admin), PP_BOOTSTRAP_PASSWORD (default admin).
