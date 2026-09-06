@@ -323,6 +323,66 @@ let test_routing_and_guard () =
       expect_denied "removed member create denied" (fun () ->
           Crud.create store ~type_name:ty ~fields_json:"{\"n\":3}" ~author:"bob"))
 
+(* ---------------- S3: the log consumer (data-history) ---------------- *)
+
+(* S3: member edits produce per-author before-images, newest-first;
+   non-member history reads return nothing (visibility holds). *)
+let test_history () =
+  with_s2 (fun store ~sp ~ty ->
+      ignore (Crud.space_create store ~caller:"alice" ~name:sp);
+      ignore
+        (Crud.space_add_member store ~caller:"alice" ~kernel_admin:false
+           ~space:sp ~username:"bob");
+      ignore
+        (Crud.space_admit store ~caller:"alice" ~kernel_admin:false ~space:sp
+           ~type_name:ty);
+      let id =
+        match Crud.create store ~type_name:ty ~fields_json:"{\"n\":1}" ~author:"alice" with
+        | Ast.VStr id -> id
+        | _ -> Alcotest.fail "create did not return id"
+      in
+      ignore
+        (Crud.update_guarded store ~type_name:ty ~id ~fields_json:"{\"n\":2}"
+           ~caller:"alice");
+      ignore
+        (Crud.update_guarded store ~type_name:ty ~id ~fields_json:"{\"n\":3}"
+           ~caller:"bob");
+      let hist = Crud.data_history_json store ~viewer:"bob" ~type_name:ty ~id in
+      Alcotest.(check int) "three versions" 3 (List.length hist);
+      let authors =
+        List.map
+          (fun v ->
+            match Yojson.Safe.Util.member "author" v with
+            | `String a -> a
+            | _ -> Alcotest.fail "version missing author")
+          hist
+      in
+      Alcotest.(check (list string)) "newest-first authors"
+        [ "bob"; "alice"; "alice" ] authors;
+      let head_n =
+        match Yojson.Safe.Util.member "body" (List.hd hist) with
+        | `Assoc a -> (
+            match List.assoc_opt "n" a with
+            | Some (`Int n) -> n
+            | Some (`Intlit s) -> int_of_string s
+            | _ -> Alcotest.fail "head body missing n")
+        | _ -> Alcotest.fail "head body not an object"
+      in
+      Alcotest.(check int) "head is bob's write" 3 head_n;
+      let deletes =
+        List.for_all
+          (fun v ->
+            match Yojson.Safe.Util.member "delete" v with
+            | `Bool b -> b
+            | _ -> false)
+          hist
+      in
+      Alcotest.(check bool) "no tombstones yet" false deletes;
+      (* prim shape + non-member confinement *)
+      (match Crud.data_history store ~viewer:"carol" ~type_name:ty ~id with
+       | Ast.VNil -> ()
+       | _ -> Alcotest.fail "carol should see no history"))
+
 let () =
   Alcotest.run "data_spaces"
     [
@@ -344,5 +404,10 @@ let () =
             test_lifecycle;
           Alcotest.test_case "admit routing + non-member guard" `Quick
             test_routing_and_guard;
+        ] );
+      ( "shared-data-spaces S3",
+        [
+          Alcotest.test_case "data-history: per-author before-images" `Quick
+            test_history;
         ] );
     ]

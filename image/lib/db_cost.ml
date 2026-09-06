@@ -24,7 +24,7 @@ let static_cost (prim_name : string) : cost_tier =
   | "space-admit" -> Constant
   | "rows" | "find-random" | "tree/list" -> Seq_scan
   | "find-rows" | "find-text" | "backlinks" | "tree/find-by"
-  | "space-list" | "space-members" -> Linear
+  | "space-list" | "space-members" | "data-history" -> Linear
   | _ -> Unknown
 
 let sql_hint = function

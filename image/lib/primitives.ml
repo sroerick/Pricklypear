@@ -441,6 +441,7 @@ let prim_summary (name : string) : string =
   | "space-admit" -> "admit a type into a space; writes route to data.s.<space>.* (owner only)"
   | "space-list" -> "spaces the caller is a member of"
   | "space-members" -> "members (with roles) of a space (caller must be member)"
+  | "data-history" -> "version history for a data row (newest-first: gen, author, created_at, delete, body; any compartment)"
   | "backlinks" -> "paths that reference needle (edges first, then DEPRECATED legacy body-string matches)"
   | "type-fields" -> "declared fields for a type"
   | "tree/get" -> "get hierarchical tree node by path → JSON"
