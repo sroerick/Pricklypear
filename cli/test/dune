@@ -1,0 +1,4 @@
+(test
+ (name sync_vault_test)
+ (modules sync_vault_test)
+ (libraries pricklypear-cli.lib alcotest))
