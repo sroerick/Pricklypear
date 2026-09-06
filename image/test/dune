@@ -67,7 +67,7 @@
 (test
  (name http_robust_test)
  (modules http_robust_test)
- (libraries pricklypear-image alcotest eio_main))
+ (libraries pricklypear-image alcotest eio_main unix))
 
 (test
  (name http_robust_env_test)

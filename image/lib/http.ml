@@ -184,9 +184,13 @@ let request_handler ~(sw : Eio.Switch.t) ~(registry : Session_registry.t)
                 in
                 if mismatch then begin
                   (match host_mode, base_domain () with
-                   | Host_garden _, Some base when uname_now <> "anonymous" ->
+                   | Host_garden _, Some _ when uname_now <> "anonymous" ->
+                       (* https only: a plain-http bounce drops the Secure
+                          session cookie and loops the user through login
+                          (same rule as the post-login garden redirect,
+                          garden_url comment in http_core). i-1788670736. *)
                        redirect_response reqd
-                         ("http://" ^ uname_now ^ "." ^ base ^ "/")
+                         (garden_url ~username:uname_now ~path:"/")
                    | Host_unknown, _ ->
                        text_response reqd ~status:`Not_found
                          ~content_type:"text/plain" "unknown host"

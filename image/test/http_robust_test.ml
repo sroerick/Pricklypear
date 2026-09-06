@@ -64,6 +64,26 @@ let test_inflight_acquire_release () =
   Alcotest.(check int) "release decrements count" before
     Pricklypear_image_lib.Http_core.inflight_sem.count
 
+(* i-1788670736: the subdomain-mismatch redirect (http.ml) and the
+   post-login redirect (http_core.ml) both route users to their garden
+   host via garden_url. The contract that matters: with PP_BASE_DOMAIN
+   set the URL is always https (a plain-http bounce drops the Secure
+   session cookie and loops the user through login); with no base
+   domain (dev plain HTTP) it degrades to a relative path. *)
+let test_garden_url_https_contract () =
+  Unix.putenv "PP_BASE_DOMAIN" "pricklypear.rocks";
+  Alcotest.(check string) "garden url is https with base domain"
+    "https://alice.pricklypear.rocks/"
+    (Pricklypear_image_lib.Http_core.garden_url ~username:"alice" ~path:"/");
+  Alcotest.(check string) "garden url keeps deep paths"
+    "https://alice.pricklypear.rocks/notes?slug=agents"
+    (Pricklypear_image_lib.Http_core.garden_url ~username:"alice"
+       ~path:"/notes?slug=agents");
+  Unix.putenv "PP_BASE_DOMAIN" "";
+  Alcotest.(check string) "no base domain degrades to relative path"
+    "/notes"
+    (Pricklypear_image_lib.Http_core.garden_url ~username:"alice" ~path:"/notes")
+
 let () =
   Alcotest.run "http_robust"
     [ ("closed-writer predicate",
@@ -75,5 +95,9 @@ let () =
     ; ("inflight gate",
         [ Alcotest.test_case "acquire/release counting" `Quick
             (fun () ->  (test_inflight_acquire_release ()))
+        ])
+    ; ("garden url scheme",
+        [ Alcotest.test_case "https contract" `Quick
+            (fun () -> test_garden_url_https_contract ())
         ])
     ]
