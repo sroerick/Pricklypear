@@ -40,6 +40,11 @@
  (libraries pricklypear-image alcotest))
 
 (test
+ (name crud_no_db_test)
+ (modules crud_no_db_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest))
+
+(test
  (name branch_algebra_test)
  (modules branch_algebra_test)
  (libraries pricklypear-image qcheck qcheck-core.runner))

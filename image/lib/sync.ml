@@ -316,8 +316,10 @@ let apply_client_node (store : Store.t) ~(env : Yojson.Safe.t) : (unit, string) 
                 let name =
                   try List.nth (String.split_on_char '.' p) 3 with _ -> p
                 in
-                Tree_store.upsert_fn conn ~branch_id:(Store.current_branch_id store)
-                  ~name ~body_json ~author ~doc:(Some ("code:" ^ name));
+                ignore
+                  (Tree_store.upsert_fn conn
+                     ~branch_id:(Store.current_branch_id store)
+                     ~name ~body_json ~author ~doc:(Some ("code:" ^ name)));
                 Ok ()
             | _ -> Error "sync: code kind not yet reconciled in place"))
   | Some p, Some k ->
