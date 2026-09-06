@@ -111,7 +111,7 @@ let test_plugin_tool_proxies_db_prim ~env ~sw () =
 let test_builtin_tool_stays_local ~env ~sw () =
   let transport, calls, _ = mock_transport () in
   let t = Remote.make ~transport () in
-  Tools.install ~resolve_path:Remote.resolve_path
+  Tools.install ~env ~resolve_path:Remote.resolve_path
     ~register:(fun name run -> Remote.register_builtin_tool t name ~run);
   let history = ref [] in
   (match
@@ -138,7 +138,7 @@ let test_builtin_tool_stays_local ~env ~sw () =
 let test_tool_call_hook_blocks ~env ~sw () =
   let transport, _calls, _table = mock_transport () in
   let t = Remote.make ~transport () in
-  Tools.install ~resolve_path:Remote.resolve_path
+  Tools.install ~env ~resolve_path:Remote.resolve_path
     ~register:(fun name run -> Remote.register_builtin_tool t name ~run);
   ignore
     (Remote.eval t
