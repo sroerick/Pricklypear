@@ -695,23 +695,11 @@ let read_body ?(max_bytes = max_body_bytes) (reqd : Httpun.Reqd.t) : string =
   | `Ok s -> s
   | `Too_large -> raise Body_too_large
 
-let url_decode (s : string) : string =
-  let buf = Buffer.create (String.length s) in
-  let len = String.length s in
-  let rec loop i =
-    if i >= len then Buffer.contents buf
-    else match s.[i] with
-    | '+' -> Buffer.add_char buf ' '; loop (i + 1)
-    | '%' when i + 2 < len ->
-        let hex = String.sub s (i + 1) 2 in
-        (try
-           let code = int_of_string ("0x" ^ hex) in
-           Buffer.add_char buf (Char.chr code)
-         with _ -> Buffer.add_char buf '%');
-        loop (i + 3)
-    | c -> Buffer.add_char buf c; loop (i + 1)
-  in
-  loop 0
+(* percent/query decoding lives in Http_kit (one implementation; was
+   duplicated here as url_decode and in Http_code as pct_decode).
+   url_decode mapped '+' to space and decoded %XX but ATE the two hex
+   characters of a malformed escape; Http_kit.pct_decode preserves them. *)
+let url_decode = Http_kit.pct_decode
 
 (** application/x-www-form-urlencoded / query component encode. *)
 let url_encode (s : string) : string =
@@ -792,8 +780,9 @@ let parse_query (target : string) : (string * string) list =
                  Some (url_decode k, url_decode (String.concat "=" vs))
              | _ -> None)
 
-let query_param (target : string) (key : string) : string option =
-  List.assoc_opt key (parse_query target)
+(* One implementation in Http_kit; re-exported here because the http_*
+   pages open Http_core and call it unqualified. *)
+let query_param = Http_kit.query_param
 
 let max_user_body_bytes = 64 * 1024
 

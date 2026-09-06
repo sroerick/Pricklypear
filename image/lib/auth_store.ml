@@ -21,13 +21,7 @@ type session_row = {
   expires_at : string;
 }
 
-let cell_uuid_opt row i =
-  match List.nth_opt row i with
-  | Some v ->
-      (match Pgx.Value.to_string v with
-       | Some s when s <> "" -> Some s
-       | _ -> None)
-  | None -> None
+(* row-cell accessors live in Row (was a local copy here). *)
 
 (* ---- tmp/eval-fast-path: positive password-verify cache ----
 
@@ -91,17 +85,6 @@ let env_or name dft =
 
 let pg_conn (store : Store.t) : Io_lwt.Db.conn option = Io_lwt.Db.current_conn store
 
-let cell_string row i =
-  match List.nth_opt row i with
-  | Some v -> Pgx.Value.to_string v
-  | None -> None
-
-let cell_bool row i =
-  match cell_string row i with
-  | Some ("t" | "true" | "TRUE" | "1") -> true
-  | Some ("f" | "false" | "FALSE" | "0") -> false
-  | _ -> false
-
 let log_auth (store : Store.t) ?user_id ~kind ~success ?source_ip ()
   : unit =
   match pg_conn store with
@@ -141,7 +124,7 @@ let count_users (store : Store.t) : int =
           in
           match rows with
           | row :: _ ->
-              (match cell_string row 0 with
+              (match Row.cell_string row 0 with
                | Some s ->
                    (int_of_string_opt s |> Option.value ~default:0)
                | None -> 0)
@@ -154,12 +137,12 @@ let count_users (store : Store.t) : int =
 let user_cols = "id::text, username, is_admin::text, user_type, parent_user_id::text"
 
 let user_of_row row =
-  match cell_string row 0, cell_string row 1, cell_string row 3 with
+  match Row.cell_string row 0, Row.cell_string row 1, Row.cell_string row 3 with
   | Some id, Some uname, Some utype ->
       Some { id; username = uname;
-             is_admin = cell_bool row 2;
+             is_admin = Row.cell_bool row 2;
              user_type = utype;
-             parent_user_id = cell_uuid_opt row 4 }
+             parent_user_id = Row.cell_uuid_opt row 4 }
   | _ -> None
 
 let get_user_by_username (store : Store.t) (username : string)
@@ -362,7 +345,7 @@ let password_hash_for_user (store : Store.t) ~(username : string)
           match rows with
           | row :: _ ->
               (match
-                 cell_string row 0, cell_string row 1, cell_string row 5
+                 Row.cell_string row 0, Row.cell_string row 1, Row.cell_string row 5
                with
                | Some id, Some uname, Some secret_json ->
                    let hash_opt =
@@ -380,11 +363,11 @@ let password_hash_for_user (store : Store.t) ~(username : string)
                     | Some h ->
                         Some
                           ( { id; username = uname;
-                              is_admin = cell_bool row 2;
+                              is_admin = Row.cell_bool row 2;
                               user_type =
-                                (match cell_string row 3 with
+                                (match Row.cell_string row 3 with
                                  | Some s -> s | None -> "human");
-                              parent_user_id = cell_uuid_opt row 4 },
+                              parent_user_id = Row.cell_uuid_opt row 4 },
                             h )
                     | None -> None)
                | _ -> None)
@@ -540,15 +523,15 @@ let lookup_session (store : Store.t) ~(raw_token : string)
             match rows with
             | row :: _ ->
                 (match
-                   cell_string row 0,
-                   cell_string row 1,
-                   cell_string row 2,
-                   cell_string row 4
+                   Row.cell_string row 0,
+                   Row.cell_string row 1,
+                   Row.cell_string row 2,
+                   Row.cell_string row 4
                  with
                  | Some id, Some uid, Some uname, Some exp ->
                      Some
                        { id; user_id = uid; username = uname;
-                         is_admin = cell_bool row 3;
+                         is_admin = Row.cell_bool row 3;
                          expires_at = exp }
                  | _ -> None)
             | [] -> None
@@ -607,7 +590,7 @@ let revoke_session (store : Store.t) ~(raw_token : string) ?source_ip ()
           in
           match rows with
           | row :: _ ->
-              let uid = cell_string row 0 in
+              let uid = Row.cell_string row 0 in
               log_auth store ?user_id:uid ~kind:"logout" ~success:true
                 ?source_ip ()
           | [] -> ()
@@ -711,7 +694,7 @@ let verify_token (store : Store.t) ~(raw_token : string) ?source_ip ()
             | row :: _ ->
                 (match user_of_row row with
                  | Some user ->
-                     (match cell_string row 5 with
+                     (match Row.cell_string row 5 with
                       | Some cid ->
                           let _ =
                             Store_db.exec conn
@@ -771,7 +754,7 @@ let list_tokens (store : Store.t) ~(user_id : string) : token_meta list =
           let metas =
             List.filter_map
               (fun row ->
-                match cell_string row 0, cell_string row 1, cell_string row 2 with
+                match Row.cell_string row 0, Row.cell_string row 1, Row.cell_string row 2 with
                 | Some id, Some js, Some created ->
                     let label, token_last4 =
                       match Yojson.Safe.from_string js with
@@ -790,7 +773,7 @@ let list_tokens (store : Store.t) ~(user_id : string) : token_meta list =
                       | _ -> (None, "????")
                     in
                     Some { id; label; token_last4; created_at = created;
-                           last_used_at = cell_string row 3 }
+                           last_used_at = Row.cell_string row 3 }
                 | _ -> None)
               rows
           in
@@ -838,7 +821,7 @@ let get_allow_agent_promote (store : Store.t) ~(user_id : string)
               "SELECT allow_agent_promote::text FROM users WHERE id = $1::uuid"
           in
           match rows with
-          | row :: _ -> (cell_bool row 0)
+          | row :: _ -> (Row.cell_bool row 0)
           | [] -> true
     with _ ->
       true)
@@ -989,6 +972,53 @@ let clear_llm_key (store : Store.t) ~(user_id : string)
           Printf.eprintf "[auth_store] clear_llm_key: %s\n%!" msg;
           (Error msg))
 
+(* ---- llm_key credential parsing (one home; was duplicated between
+   get_llm_key_meta_direct and get_llm_key_secret_direct, ~79 lines) ---- *)
+
+(* Parse a public_data JSON blob into the display meta. [default_last4] fills
+   in when the blob is absent, unparseable, not an object, or lacks last4.
+   Returns None only for absent/unparseable/non-object blobs — callers decide
+   whether that means None or a fully-default record. *)
+let llm_key_meta_of_public ?(default_last4 = "????") (js : string option)
+  : llm_key_meta option =
+  match js with
+  | None -> None
+  | Some js ->
+      (try
+         match Yojson.Safe.from_string js with
+         | `Assoc a ->
+             let last4 =
+               match List.assoc_opt "last4" a with
+               | Some (`String s) -> s
+               | _ -> default_last4
+             in
+             let opt_str k =
+               match List.assoc_opt k a with
+               | Some (`String s) when s <> "" -> Some s
+               | _ -> None
+             in
+             Some
+               { last4;
+                 label = opt_str "label";
+                 base = opt_str "base";
+                 model = opt_str "model" }
+         | _ -> None
+       with _ -> None)
+
+(* Extract the api_key from a secret_data JSON blob. *)
+let llm_key_of_secret (js : string) : string option =
+  try
+    match Yojson.Safe.from_string js with
+    | `Assoc a ->
+        (match List.assoc_opt "api_key" a with
+         | Some (`String k) when k <> "" -> Some k
+         | _ -> None)
+    | _ -> None
+  with _ -> None
+
+let default_llm_key_meta (key : string) : llm_key_meta =
+  { last4 = last4_of_key key; label = None; base = None; model = None }
+
 let get_llm_key_meta_direct (store : Store.t) ~(user_id : string)
   : llm_key_meta option =
   match pg_conn store with
@@ -1005,30 +1035,7 @@ let get_llm_key_meta_direct (store : Store.t) ~(user_id : string)
               ~params:[ Pgx.Value.of_string user_id ] sql
           in
           match rows with
-          | row :: _ ->
-              (match cell_string row 0 with
-               | None -> None
-               | Some js ->
-                   (try
-                      match Yojson.Safe.from_string js with
-                      | `Assoc a ->
-                          let last4 =
-                            match List.assoc_opt "last4" a with
-                            | Some (`String s) -> s
-                            | _ -> "????"
-                          in
-                          let opt_str k =
-                            match List.assoc_opt k a with
-                            | Some (`String s) when s <> "" -> Some s
-                            | _ -> None
-                          in
-                          Some
-                            { last4;
-                              label = opt_str "label";
-                              base = opt_str "base";
-                              model = opt_str "model" }
-                      | _ -> None
-                    with _ -> None))
+          | row :: _ -> llm_key_meta_of_public (Row.cell_string row 0)
           | [] -> None
     with _ ->
       None)
@@ -1065,59 +1072,22 @@ let get_llm_key_secret_direct (store : Store.t) ~(user_id : string)
           in
           match rows with
           | row :: _ ->
-              (match cell_string row 0, cell_string row 1 with
-               | Some secret_js, public_js_opt ->
-                   let key_opt =
-                     try
-                       match Yojson.Safe.from_string secret_js with
-                       | `Assoc a ->
-                           (match List.assoc_opt "api_key" a with
-                            | Some (`String k) when k <> "" -> Some k
-                            | _ -> None)
-                       | _ -> None
-                     with _ -> None
-                   in
-                   (match key_opt with
+              (match Row.cell_string row 0 with
+               | Some secret_js ->
+                   (match llm_key_of_secret secret_js with
                     | None -> None
                     | Some key ->
                         let meta =
-                          match public_js_opt with
-                          | Some js ->
-                              (try
-                                 match Yojson.Safe.from_string js with
-                                 | `Assoc a ->
-                                     let last4 =
-                                       match List.assoc_opt "last4" a with
-                                       | Some (`String s) -> s
-                                       | _ -> last4_of_key key
-                                     in
-                                     let opt_str k =
-                                       match List.assoc_opt k a with
-                                       | Some (`String s) when s <> "" -> Some s
-                                       | _ -> None
-                                     in
-                                     { last4;
-                                       label = opt_str "label";
-                                       base = opt_str "base";
-                                       model = opt_str "model" }
-                                 | _ ->
-                                     { last4 = last4_of_key key;
-                                       label = None;
-                                       base = None;
-                                       model = None }
-                               with _ ->
-                                 { last4 = last4_of_key key;
-                                   label = None;
-                                   base = None;
-                                   model = None })
-                          | None ->
-                              { last4 = last4_of_key key;
-                                label = None;
-                                base = None;
-                                model = None }
+                          match
+                            llm_key_meta_of_public
+                              ~default_last4:(last4_of_key key)
+                              (Row.cell_string row 1)
+                          with
+                          | Some m -> m
+                          | None -> default_llm_key_meta key
                         in
                         Some (key, meta))
-               | _ -> None)
+               | None -> None)
           | [] -> None
     with exn ->
       Printf.eprintf "[auth_store] get_llm_key_secret_direct: %s\n%!"
@@ -1205,7 +1175,7 @@ let add_ssh_key (store : Store.t) ~(user_id : string) ~(openssh : string)
               in
               match rows with
               | row :: _ ->
-                  (match cell_string row 0 with
+                  (match Row.cell_string row 0 with
                    | Some id ->
                        (Ok
                             { id;
@@ -1237,7 +1207,7 @@ let list_ssh_keys (store : Store.t) ~(user_id : string)
           let metas =
             List.filter_map
               (fun row ->
-                match cell_string row 0, cell_string row 1 with
+                match Row.cell_string row 0, Row.cell_string row 1 with
                 | Some id, Some js ->
                     (try
                        match Yojson.Safe.from_string js with
@@ -1327,7 +1297,7 @@ let verify_ssh_key (store : Store.t) ~(openssh_or_blob : string)
                      log_auth store ~user_id:user.id ~kind:"ssh_key" ~success:true
                        ?source_ip ()
                    in
-                   (match cell_string row 5 with
+                   (match Row.cell_string row 5 with
                     | Some cid ->
                         let _ =
                           Store_db.exec conn

@@ -142,26 +142,18 @@ let put_result_to_yojson (r : put_result) : Yojson.Safe.t =
     ; ("url", `String (url_of_id r.id))
     ]
 
-let cell_string row i =
-  match List.nth_opt row i with
-  | Some c -> Pgx.Value.to_string c
-  | None -> None
-
-let cell_int row i =
-  match cell_string row i with
-  | Some s -> (try Some (int_of_string s) with _ -> None)
-  | None -> None
+(* row-cell accessors live in Row (was a local copy here). *)
 
 let row_to_meta (row : Pgx.row) : meta option =
   match
-    ( cell_string row 0
-    , cell_string row 1
-    , cell_string row 2
-    , cell_string row 3
-    , cell_int row 4
-    , cell_string row 5
-    , cell_string row 6
-    , cell_string row 7 )
+    ( Row.cell_string row 0
+    , Row.cell_string row 1
+    , Row.cell_string row 2
+    , Row.cell_string row 3
+    , Row.cell_int row 4
+    , Row.cell_string row 5
+    , Row.cell_string row 6
+    , Row.cell_string row 7 )
   with
   | ( Some id
     , Some author
@@ -240,7 +232,7 @@ let put
               in
               match rows with
               | row :: _ ->
-                  (match cell_string row 0 with
+                  (match Row.cell_string row 0 with
                    | Some id ->
                        (* Normalize empty filename column to None. *)
                        let filename =
