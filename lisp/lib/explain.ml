@@ -205,9 +205,16 @@ let trace
   in
   let budget = Eval.make_budget () in
   Eval.last_budget := Some budget;
+  (* Fiber-scope the budget (i-1788670103-5): local-prim bodies and the
+     resumed eval resolve through the scope rather than the publish
+     ref, which any concurrent eval could clobber. [add_local] runs in
+     the handler body OUTSIDE the captured continuation, so it still
+     reads the ref fallback — fine here: the trace is single-fiber and
+     eval_step republishes before every sample. *)
   let outcome =
     try
       let forms = Reader.read_all src in
+      Eval.with_scope (Some budget) (fun () ->
       let open Effect.Deep in
       match_with
         (fun () ->
@@ -243,6 +250,7 @@ let trace
                                discontinue k e))
               | _ -> None)
         }
+      )
     with exn -> `Exn exn
   in
   add_local ();

@@ -29,14 +29,18 @@
       inside the example can park the fiber past the step budget. A
       runaway example's budget exhaustion converts to [Refused], NOT
       a bare Budget_exceeded: the only budget in play here is the
-      nested one (the caller's is restored in [finally]), and guard —
-      the only catch Nopales has — deliberately re-raises
+      nested one (the caller's scope becomes visible again on exit),
+      and guard — the only catch Nopales has — deliberately re-raises
       Budget_exceeded, so (book/verify) must see a refusal to render
       the runaway as a hole instead of dying with the report.
 
-    The caller's current_budget and the ambient rim are saved/restored
-    around the nested run (Control.run_with_rim nests by design; same
-    pattern as Session.bench). *)
+    The nested budget is FIBER-SCOPED (i-1788670103-5): the scope
+    answers [current ()] inside the window and the caller's scope
+    re-emerges on exit (same shadow/restore semantics the old ref
+    stash provided, invisible to concurrent requests). The ambient
+    rim is saved/restored around the nested run
+    (Control.run_with_rim nests by design; same pattern as
+    Session.bench). *)
 
 open Pricklypear_lisp.Ast
 
@@ -232,14 +236,15 @@ let eval_source ~(env : Pricklypear_lisp.Ast.env)
   let rprims = restricted_prims full_prims in
   let cenv = Pricklypear_lisp.Env.child env in
   let budget = Pricklypear_lisp.Eval.make_budget ~limit () in
-  let prev_budget = !Pricklypear_lisp.Eval.current_budget in
   let t0 = Unix.gettimeofday () in
   try
-    Fun.protect
-      ~finally:(fun () ->
-        Pricklypear_lisp.Eval.current_budget := prev_budget)
-      (fun () ->
-        Control_rim.run ~prims:rprims (fun () ->
+    Control_rim.run ~prims:rprims (fun () ->
+        (* Fiber-scope the nested budget (i-1788670103-5): inside this
+           window the scope answers [current ()] with the nested budget
+           and the caller's scope becomes visible again on exit — the
+           same shadow/restore semantics the old ref stash provided,
+           but invisible to concurrently-published requests. *)
+        Pricklypear_lisp.Eval.with_scope (Some budget) (fun () ->
             let rec loop last = function
               | [] -> last
               | e :: rest ->
@@ -256,8 +261,8 @@ let eval_source ~(env : Pricklypear_lisp.Ast.env)
             in
             loop VNil forms))
   with
-    (* Inside this window the only live budget is the nested one — the
-       caller's is stashed in [prev_budget] until [finally]. Convert so
+    (* Inside this window the only live budget is the nested one (the
+       caller's scope becomes visible again on exit). Convert so
        both consumers (POST run button, (example-eval) prim →
        book/verify's guard) render a runaway example as a refusal. *)
     Interp_error Budget_exceeded ->

@@ -27,21 +27,47 @@ let total_count : int ref = ref 0
 let now_ms () : int64 =
   Int64.of_float (Unix.gettimeofday () *. 1000.0)
 
-(** Read the current eval budget's DB accumulators (defaults when no
-    budget is active). *)
-let budget_db () : float * int =
-  match !Pricklypear_lisp.Eval.last_budget with
-  | Some b -> (b.db_ms, b.db_hits)
-  | None -> (0., 0)
+(** {2 Fiber-keyed budget slot (i-1788670103-5)}
+
+    [measure] wraps a handler invocation whose eval creates its OWN
+    budget deep inside [Session.eval_string_rim] — the caller cannot
+    thread the budget in, and the old pre/post delta against the
+    [Eval.last_budget] global was a cross-request race: while this
+    request's DB prim awaited, another request's eval entry re-set
+    [last_budget], so [record] read a foreign budget's accumulators.
+
+    Instead, [measure] binds a fiber-local slot (Eio fiber key, the
+    same pattern as Request_context); the session eval paths publish
+    their budget into it via [note_eval_budget], and the post-run read
+    sees exactly THIS fiber's eval budget — race-free by construction.
+    Outside any Eio fiber (tests, lwt rollback) the key read degrades
+    to [None] and samples report zero DB cost. *)
+
+let budget_key : Pricklypear_lisp.Eval.budget option ref Eio.Fiber.key =
+  Eio.Fiber.create_key ()
+
+(** Read the fiber-keyed slot; [None] outside any Eio fiber (the key
+    read performs Eio's Get_context effect, which raises Unhandled
+    there) or when no [measure] window is active. *)
+let fiber_slot () : Pricklypear_lisp.Eval.budget option ref option =
+  match Eio.Fiber.get budget_key with
+  | slot -> slot
+  | exception Effect.Unhandled _ -> None
+
+(** Publish [b] as the budget of the eval running inside the active
+    [measure] window on this fiber. No-op outside [measure]. *)
+let note_eval_budget (b : Pricklypear_lisp.Eval.budget) : unit =
+  match fiber_slot () with
+  | Some slot -> slot := Some b
+  | None -> ()
 
 (** Record a sample for [route], dropping oldest once the ring exceeds
     its bound. [total_ms] is passed in (measured by the caller around
-    the handler); db_ms/db_hits are read from the just-run eval budget
-    as a delta against their pre-call snapshot. *)
-let record ~route ~total_ms ~db0 ~hits0 : unit =
-  let db_ms, db_hits = budget_db () in
-  let db_ms = max 0. (db_ms -. db0)
-  and db_hits = max 0 (db_hits - hits0) in
+    the handler); db_ms/db_hits are the ABSOLUTE accumulators of this
+    request's own eval budget (fresh per eval), read from the
+    fiber-keyed slot — no cross-request delta. *)
+let record ~route ~total_ms ~db_ms ~db_hits : unit =
+  let db_ms = max 0. db_ms and db_hits = max 0 db_hits in
   let q =
     match Hashtbl.find_opt samples route with
     | Some q -> q
@@ -79,15 +105,23 @@ let last_total_ms : float option ref = ref None
 let set_last_total_ms (ms : float) : unit = last_total_ms := Some ms
 
 (** Measure [f] (a handler invocation) for [route]: time it, record a
-    sample (even on failure), and return the result + total_ms. *)
+    sample (even on failure), and return the result + total_ms. The
+    fiber-keyed slot is bound for [f]'s extent; the session eval paths
+    fill it via [note_eval_budget]. *)
 let measure ~route (f : unit -> 'a) : 'a * float =
-  let db0, hits0 = budget_db () in
-  let t0 = Unix.gettimeofday () in
-  let result = f () in
-  let total_ms = (Unix.gettimeofday () -. t0) *. 1000. in
-  record ~route ~total_ms ~db0 ~hits0;
-  set_last_total_ms total_ms;
-  (result, total_ms)
+  let slot = ref None in
+  Eio.Fiber.with_binding budget_key slot (fun () ->
+      let t0 = Unix.gettimeofday () in
+      let result = f () in
+      let total_ms = (Unix.gettimeofday () -. t0) *. 1000. in
+      let db_ms, db_hits =
+        match !slot with
+        | Some b -> (b.db_ms, b.db_hits)
+        | None -> (0., 0)
+      in
+      record ~route ~total_ms ~db_ms ~db_hits;
+      set_last_total_ms total_ms;
+      (result, total_ms))
 
 type agg = {
   route : string;

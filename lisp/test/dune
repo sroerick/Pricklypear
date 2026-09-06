@@ -42,3 +42,8 @@
  (name prims_pure_test)
  (modules prims_pure_test)
  (libraries pricklypear-lisp pricklypear-pure-prims alcotest))
+
+(test
+ (name budget_scope_test)
+ (modules budget_scope_test)
+ (libraries pricklypear-lisp alcotest))

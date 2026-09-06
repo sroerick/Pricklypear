@@ -21,6 +21,9 @@ let default_limit = Budget.default_limit
 let make_budget = Budget.make_budget
 let current_budget = Budget.current_budget
 let last_budget = Budget.last_budget
+let with_scope = Budget.with_scope
+let current = Budget.current
+let current_or_fresh = Budget.current_or_fresh
 let budget_remaining_steps = Budget.budget_remaining_steps
 let current_steps = Budget.current_steps
 let note_db_hit = Budget.note_db_hit
@@ -536,11 +539,11 @@ and eval_special_form
       (* lisp-interpreter.lazy-env-thunks: capture the recipe, cook on
          first force. The payload evaluator charges the ACTIVE budget
          at force time (the request that forces pays) when one exists,
-         else a fresh one, and reuses this eval's prim table. *)
+         else a fresh one, and reuses this eval's prim table. Resolves
+         through the fiber scope (i-1788670103-5), so a concurrent
+         request's publish never steals the charge. *)
       let force env' expr' =
-        let b =
-          match !current_budget with Some b -> b | None -> make_budget ()
-        in
+        let b = Budget.current_or_fresh () in
         eval ~budget:b ~prims env' expr'
       in
       Done
@@ -1062,12 +1065,17 @@ and apply
 
 (** Eval one toplevel form read from [s] directly, without any rim —
     the caller owns the [Prim_call] effect. Records the fresh budget in
-    [last_budget] for image persistence. *)
+    [last_budget] for image persistence and establishes it as the
+    FIBER-SCOPED current budget for the whole eval (i-1788670103-5): prim
+    bodies (including post-yield DB accounting) resolve the calling
+    eval's budget through the scope, never a concurrently-published
+    ref. *)
 let eval_string_direct ~(prims : prim_table) (env : env) ~(budget : budget)
     (s : string) : value =
-  last_budget := Some budget;
-  let e = Reader.read_one s in
-  eval ~budget ~prims env e
+  Budget.with_scope (Some budget) (fun () ->
+      last_budget := Some budget;
+      let e = Reader.read_one s in
+      eval ~budget ~prims env e)
 
 (** Evaluate under [Control.run_sync] (pure tests; sync prim table). *)
 let eval_string ~(prims : prim_table) (env : env) (s : string) : value =
@@ -1086,9 +1094,10 @@ let read_eval_all_direct ~(prims : prim_table) (env : env) (s : string)
   let forms = Reader.read_all s in
   let budget = make_budget () in
   last_budget := Some budget;
-  List.fold_left
-    (fun _acc form -> eval ~budget ~prims env form)
-    VNil forms
+  Budget.with_scope (Some budget) (fun () ->
+      List.fold_left
+        (fun _acc form -> eval ~budget ~prims env form)
+        VNil forms)
 
 (** An empty [prim_table] convenience value. *)
 let empty_prims : prim_table = make_prim_table ()
