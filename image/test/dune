@@ -223,3 +223,8 @@
  (name timing_slot_test)
  (modules timing_slot_test)
  (libraries pricklypear-image pricklypear-lisp eio_main))
+
+(test
+ (name rls_floor_test)
+ (modules rls_floor_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt lwt.unix))

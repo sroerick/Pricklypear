@@ -42,6 +42,37 @@ let session_user () : string =
   | Some c -> (Request_context.manifest c).username
   | None -> "anonymous"
 
+(** RLS floor for the datum prims (i-1788670872-3).
+
+    The CRUD tree/edge/data-lens prims read or write tree_nodes rows —
+    including kind='datum' rows that migration 013's datum_user_isolation
+    policy confines to the session identity WHEN pp.user is set. The floor
+    only exists inside a transaction (set_config('pp.user', …, true) is
+    LOCAL); on the bare pool conn the policy passes everything, so tree
+    prims and http_tree reads could touch another identity's datums while
+    the CRUD get/find-* prims (i-rls-nontx) confined.
+
+    with_tree_tx routes each prim through a READ COMMITTED transaction so
+    set_local_pp_user arms the floor and multi-statement sequences (link,
+    tree/move, tree/delete + edge count) are atomic. READ COMMITTED, not
+    the SERIALIZABLE default: these prims ran per-statement autocommit
+    before, so low isolation preserves their concurrency behavior exactly
+    (no new 40001 abort class).
+
+    Inside a caller's transaction ((with-transaction …) Lisp bodies, the
+    job runner) the floor is already armed by the outer tx and a nested
+    BEGIN would abort (pgx begin_work) — so the callback rides the
+    current conn unchanged. *)
+let with_tree_tx (store : Store.t) ~(none : unit -> 'a)
+    (f : Store_db.conn -> 'a) : 'a =
+  if Io_lwt.Db.in_transaction store then
+    (match Io_lwt.Db.current_conn store with
+     | None -> none () (* unreachable: in_transaction ⇒ tx conn bound *)
+     | Some conn -> f conn)
+  else
+    Io_lwt.Db.with_transaction_low store
+      (function None -> none () | Some conn -> f conn)
+
 (** SQL fragment: row is visible to $N (author match OR seed type OR
     member space). Seed membership derives from the authoritative SQL
     predicate tree_is_seed_type (migrations/016_seed_single_source.sql)
@@ -562,9 +593,7 @@ let create_outcome
   match reject with
   | Some msg -> (W_rejected msg)
   | None ->
-  match Io_lwt.Db.current_conn store with
-  | None -> no_db "create"
-  | Some conn ->
+  with_tree_tx store ~none:(fun () -> no_db "create") (fun conn ->
     guard_space_write conn ~prim:"create" ~type_name ~caller:author ~id:None;
     (* tree is truth; reverse trigger mirrors to data_rows *)
     let id = Tree_store.insert_datum conn ~type_name ~fields_json ~author in
@@ -573,7 +602,7 @@ let create_outcome
      | Error _ ->
          raise (Pricklypear_lisp.Ast.Interp_error
                   (Pricklypear_lisp.Ast.Prim_error
-                     ("create", "failed", "failed"))))
+                     ("create", "failed", "failed")))))
 
 let create
     (store : Store.t) ~(type_name : string) ~(fields_json : string)
@@ -599,13 +628,11 @@ let update_outcome
   match reject with
   | Some msg -> (W_rejected msg)
   | None ->
-  match Io_lwt.Db.current_conn store with
-  | None -> no_db "update"
-  | Some conn ->
+  with_tree_tx store ~none:(fun () -> no_db "update") (fun conn ->
     guard_space_write conn ~prim:"update" ~type_name ~caller
       ~id:(Some id);
     let id' = Tree_store.update_datum conn ~type_name ~id ~fields_json in
-    (match id' with Ok s -> W_ok s | Error _ -> W_no_row)
+    (match id' with Ok s -> W_ok s | Error _ -> W_no_row))
 
 let update_impl
     (store : Store.t) ~(type_name : string) ~(id : string)
@@ -713,14 +740,12 @@ let update_field_guarded store ~type_name ~id ~field ~value ~caller =
     (echo), VNil if no row matched. *)
 let delete_impl (store : Store.t) ~(type_name : string) ~(id : string)
     ~(caller : string) : value =
-  match Io_lwt.Db.current_conn store with
-  | None -> no_db "delete"
-  | Some conn ->
+  with_tree_tx store ~none:(fun () -> no_db "delete") (fun conn ->
     (* Closes the delete-by-id hole at the space boundary (loud error;
-       the RLS floor already rejected cross-user deletes where active). *)
+       the RLS floor armed by this tx rejects cross-user deletes). *)
     guard_space_write conn ~prim:"delete" ~type_name ~caller ~id:(Some id);
     let id' = Tree_store.delete_datum conn ~type_name ~id in
-    (match id' with Ok s -> VStr s | Error _ -> VNil)
+    (match id' with Ok s -> VStr s | Error _ -> VNil))
 
 let delete store ~type_name ~id =
   delete_impl store ~type_name ~id ~caller:"unknown"
@@ -1082,9 +1107,7 @@ let wrap_path_exn name (f : unit -> value) : value =
 (* ---- hierarchical tree prims (notes.tree-cutover K0) ---- *)
 
 let tree_get (store : Store.t) ~(path : string) ?(at_gen : int64 option) () : value =
-  match Io_lwt.Db.current_conn store with
-  | None -> VNil
-  | Some conn ->
+  with_tree_tx store ~none:(fun () -> VNil) (fun conn ->
       let n =
         match at_gen with
         | None -> Tree_store.get_by_path conn ~path
@@ -1099,19 +1122,17 @@ let tree_get (store : Store.t) ~(path : string) ?(at_gen : int64 option) () : va
       in
       (match n with
        | None -> VNil
-       | Some node -> (VStr (Tree_store.node_to_json node)))
+       | Some node -> (VStr (Tree_store.node_to_json node))))
 
 let tree_list (store : Store.t) ~(prefix : string) ?(depth : int option)
     ?(limit : int = 50000) () : value =
-  match Io_lwt.Db.current_conn store with
-  | None -> (VList [])
-  | Some conn ->
+  with_tree_tx store ~none:(fun () -> VList []) (fun conn ->
       let nodes =
         match depth with
         | Some 1 -> Tree_store.list_children conn ~prefix ~limit ()
         | _ -> Tree_store.list_subtree conn ~prefix ~limit ()
       in
-      (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes))
+      (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes)))
 
 (* (tree/children-of path [limit]) -> VList of direct-child node JSON.
    Level-predicate read (nlevel(path)+1, + outline covering at +2 under
@@ -1119,22 +1140,18 @@ let tree_list (store : Store.t) ~(prefix : string) ?(depth : int option)
    CHILDREN-BY-LEVEL. Same surface as tree/list depth 1; explicit name. *)
 let tree_children_of (store : Store.t) ~(path : string)
     ?(limit : int = 50000) () : value =
-  match Io_lwt.Db.current_conn store with
-  | None -> (VList [])
-  | Some conn ->
+  with_tree_tx store ~none:(fun () -> VList []) (fun conn ->
       let nodes = Tree_store.list_children conn ~prefix:path ~limit () in
-      (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes))
+      (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes)))
 
 (* (tree/subtree path [limit]) -> VList of all-descendant node JSON under
    path, capped at limit. Backed by list_subtree; same surface as
    (tree/list path) with no depth. Explicit bounded-snapshot name. *)
 let tree_subtree (store : Store.t) ~(path : string)
     ?(limit : int = 50000) () : value =
-  match Io_lwt.Db.current_conn store with
-  | None -> (VList [])
-  | Some conn ->
+  with_tree_tx store ~none:(fun () -> VList []) (fun conn ->
       let nodes = Tree_store.list_subtree conn ~prefix:path ~limit () in
-      (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes))
+      (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes)))
 
 (* ---- lens-aware read prims (one-tree.tree-read-prims, BORGE-1785516993) ----
    Resolve a RELATIVE logical path (e.g. "fn.notes/doc/get",
@@ -1147,35 +1164,29 @@ let lens_chain (store : Store.t) : string list =
   Store.branch_chain store ~branch_id:(Store.current_branch_id store)
 
 let tree_lens_get (store : Store.t) ~(suffix : string) : value =
-  match Io_lwt.Db.current_conn store with
-  | None -> VNil
-  | Some conn ->
+  with_tree_tx store ~none:(fun () -> VNil) (fun conn ->
       let n = Tree_store.lens_get_in_chain conn ~suffix (lens_chain store) in
       (match n with
        | None -> VNil
-       | Some node -> (VStr (Tree_store.node_to_json node)))
+       | Some node -> (VStr (Tree_store.node_to_json node))))
 
 let tree_lens_children (store : Store.t) ~(suffix : string)
     ?(limit : int = 50000) () : value =
-  match Io_lwt.Db.current_conn store with
-  | None -> (VList [])
-  | Some conn ->
+  with_tree_tx store ~none:(fun () -> VList []) (fun conn ->
       let nodes =
         Tree_store.lens_children_in_chain conn ~suffix ~limit
           (lens_chain store)
       in
-      (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes))
+      (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes)))
 
 let tree_lens_subtree (store : Store.t) ~(suffix : string)
     ?(limit : int = 50000) () : value =
-  match Io_lwt.Db.current_conn store with
-  | None -> (VList [])
-  | Some conn ->
+  with_tree_tx store ~none:(fun () -> VList []) (fun conn ->
       let nodes =
         Tree_store.lens_subtree_in_chain conn ~suffix ~limit
           (lens_chain store)
       in
-      (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes))
+      (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes)))
 
 (* ---- local-first prims (borge/local-first.borg lens-model +
    replication-units, campaign 8.1). A lens is a NAMED CHILD BRANCH of the
@@ -1288,9 +1299,7 @@ let absolute_tree_path (path : string) : bool =
   String.starts_with ~prefix:"b." path || String.starts_with ~prefix:"data." path
 
 let tree_gen_read (store : Store.t) ~(path : string) ~(gen : int64) : value =
-  match Io_lwt.Db.current_conn store with
-  | None -> VNil
-  | Some conn ->
+  with_tree_tx store ~none:(fun () -> VNil) (fun conn ->
       let v =
         if absolute_tree_path path then
           if gen <= 0L then
@@ -1312,7 +1321,7 @@ let tree_gen_read (store : Store.t) ~(path : string) ~(gen : int64) : value =
       in
       (match v with
        | None -> VNil
-       | Some v -> (VStr (Tree_store.version_to_json v)))
+       | Some v -> (VStr (Tree_store.version_to_json v))))
 
 let body_of_version (v : Tree_store.version) : (string * Yojson.Safe.t) list =
   match v.Tree_store.v_body with
@@ -1328,9 +1337,7 @@ let body_of_version (v : Tree_store.version) : (string * Yojson.Safe.t) list =
    the two bodies and return a JSON object {path, a, b, same, delta}. *)
 let tree_gen_diff (store : Store.t) ~(path : string)
     ~(gen_a : int64) ~(gen_b : int64) : value =
-  match Io_lwt.Db.current_conn store with
-  | None -> VNil
-  | Some conn ->
+  with_tree_tx store ~none:(fun () -> VNil) (fun conn ->
       let a = Tree_store.versioned_head conn ~path ~at_gen:gen_a () in
       let b = Tree_store.versioned_head conn ~path ~at_gen:gen_b () in
       (match a, b with
@@ -1393,7 +1400,7 @@ let tree_gen_diff (store : Store.t) ~(path : string)
                     ; ("same", `Bool false)
                     ; ("delta", `Assoc delta_pairs)
                     ])))
-       | _ -> VNil)
+       | _ -> VNil))
 
 (* (undo path [n]) -> restore the value at head-n as a NEW write at head+1.
    Restore-by-write (not head-pointer manipulation): the restore is itself a
@@ -1404,9 +1411,7 @@ let tree_gen_diff (store : Store.t) ~(path : string)
    consumer (consumers subsection) — this prim reports that cleanly. Returns
    the written path or an error string. *)
 let tree_undo (store : Store.t) ~(path : string) ?(n : int64 = 1L) () : value =
-  match Io_lwt.Db.current_conn store with
-  | None -> no_db "undo"
-  | Some conn ->
+  with_tree_tx store ~none:(fun () -> no_db "undo") (fun conn ->
       if not (absolute_tree_path path) then
         (VStr "undo: path must be an absolute b.* or data.* path")
       else
@@ -1487,7 +1492,7 @@ let tree_undo (store : Store.t) ~(path : string) ?(n : int64 = 1L) () : value =
                              Tree_store.set_rank conn ~path:p ~rank:v.Tree_store.v_rank
                            in
                            (VStr p)
-                       | Error e -> (VStr e))))
+                       | Error e -> (VStr e)))))
 
 (* html escaping: one string-level implementation lives in the kernel
    (Prims_pure.html_escape_str); html_escape_text was a fourth image copy —
@@ -1586,11 +1591,10 @@ let render_children_html (conn : Store_db.conn) ~(prefix : string)
 
 let tree_children_html (store : Store.t) ~(prefix : string) ~(garden_root : string)
     () : value =
-  match Io_lwt.Db.current_conn store with
-  | None -> (VStr "<p class=\"muted\">(empty)</p>")
-  | Some conn ->
-      let html = render_children_html conn ~prefix ~garden_root () in
-      (VStr html)
+  with_tree_tx store ~none:(fun () -> VStr "<p class=\"muted\">(empty)</p>")
+    (fun conn ->
+       let html = render_children_html conn ~prefix ~garden_root () in
+       (VStr html))
 
 let tree_upsert_outcome (store : Store.t) ~(path : string) ~(kind : string)
     ~(type_name : string) ~(body_json : string) ~(author : string)
@@ -1603,17 +1607,13 @@ let tree_upsert_outcome (store : Store.t) ~(path : string) ~(kind : string)
     (match reject with
      | Some msg -> (Error msg)
      | None ->
-     match Io_lwt.Db.current_conn store with
-     | None -> no_db "tree/upsert"
-     | Some conn ->
+     with_tree_tx store ~none:(fun () -> no_db "tree/upsert") (fun conn ->
        Tree_store.upsert_datum conn ~path ~type_name ~body_json ~author
-         ~rank:None)
+         ~rank:None))
   else
-    match Io_lwt.Db.current_conn store with
-    | None -> no_db "tree/upsert"
-    | Some conn ->
+    with_tree_tx store ~none:(fun () -> no_db "tree/upsert") (fun conn ->
       Tree_store.upsert_hier conn ~path ~kind ~type_name ~body_json ~author
-        ~rank:None
+        ~rank:None)
 
 let tree_upsert (store : Store.t) ~(path : string) ~(kind : string)
     ~(type_name : string) ~(body_json : string) ~(author : string) : value =
@@ -1625,13 +1625,14 @@ let tree_upsert (store : Store.t) ~(path : string) ~(kind : string)
 
 let tree_delete (store : Store.t) ~(path : string) ~(recursive : bool)
     : value =
-  match Io_lwt.Db.current_conn store with
-  | None ->
+  (* One tx: the incoming-edge count and the delete see the same state,
+     and the delete cannot race a concurrent link creation. *)
+  with_tree_tx store ~none:(fun () ->
       (* i-1788670475: was VStr "{\"deleted\":0,...}" — a fabricated
          success shape that made destructive flows look idempotent with
          the DB down. A write with no DB raises, loudly. *)
-      no_db "tree/delete"
-  | Some conn ->
+      no_db "tree/delete")
+    (fun conn ->
       (* tree-edges: report incoming-edge count (warn, not forbid — the
          delete succeeds; edges pointing at the deleted path dangle and
          are repairable). Exact-path count only (recursive deletes do
@@ -1643,7 +1644,7 @@ let tree_delete (store : Store.t) ~(path : string) ~(recursive : bool)
             (`Assoc
                [ ("deleted", `Int n)
                ; ("inbound_edges", `Int inbound)
-               ])))
+               ]))))
 
 (* ---- datum type-change validation for tree/move (one-tree.tree-datum-prims) ----
    Moving a datum node to a path under a DIFFERENT <type_name> is a type
@@ -1711,27 +1712,31 @@ let datum_move_type_reject (store : Store.t) ~(old_path : string)
 
 let tree_move (store : Store.t) ~(old_path : string) ~(new_path : string)
     : value =
-  match datum_move_type_reject store ~old_path ~new_path with
-  | Some msg -> (VStr ("tree/move: " ^ msg))
-  | None ->
-  match Io_lwt.Db.current_conn store with
-  | None -> no_db "tree/move"
-  | Some conn ->
+  (* One tx: the type-change validation read, the inbound-edge count and
+     the subtree move are atomic (the move cannot land on a node that
+     changed validation state mid-flight). datum_move_type_reject rides
+     this same conn via current_conn. *)
+  with_tree_tx store ~none:(fun () -> no_db "tree/move") (fun conn ->
       (* tree-edges: moving the TARGET of inbound edges leaves them
          dangling (to is stored verbatim, never rewritten) — report the
          count, warn-not-forbid. Moving a SOURCE carries its edges (the
          subtree move rewrites their paths). *)
       let inbound = Tree_store.incoming_edge_count conn ~path:old_path in
-      let r = Tree_store.move_subtree conn ~old_path ~new_path in
-      (match r with
-       | Ok n ->
-           (VStr
-              (Yojson.Safe.to_string
-                 (`Assoc
-                    [ ("moved", `Int n)
-                    ; ("inbound_edges", `Int inbound)
-                    ])))
-       | Error e -> (VStr e))
+      (* Validate BEFORE moving: a type-change rejection must leave the
+         tree untouched (the tx would otherwise commit the move). *)
+      (match datum_move_type_reject store ~old_path ~new_path with
+       | Some msg -> (VStr ("tree/move: " ^ msg))
+       | None ->
+           let r = Tree_store.move_subtree conn ~old_path ~new_path in
+           (match r with
+            | Ok n ->
+                (VStr
+                   (Yojson.Safe.to_string
+                      (`Assoc
+                         [ ("moved", `Int n)
+                         ; ("inbound_edges", `Int inbound)
+                         ])))
+            | Error e -> (VStr e))))
 
 (* ---- tree-edges prims (one-tree.tree-edges) ---- *)
 
@@ -1745,9 +1750,9 @@ let link_edge (store : Store.t) ~(from_path : string) ~(to_path : string)
   if not (Tree_store.valid_path to_path) then
     VStr "link: to must be a well-formed absolute path (it may dangle)"
   else
-    match Io_lwt.Db.current_conn store with
-    | None -> no_db "link"
-    | Some conn -> (
+    (* One tx: resolve-from + uuid + upsert + read-back are atomic; the
+       from-node read rides the same pp.user floor. *)
+    with_tree_tx store ~none:(fun () -> no_db "link") (fun conn ->
         match Tree_store.get_by_path conn ~path:from_path with
         | None -> VStr ("link: from does not resolve: " ^ from_path)
         | Some _ ->
@@ -1790,9 +1795,7 @@ let link_edge (store : Store.t) ~(from_path : string) ~(to_path : string)
    path as any node (the tree-time trigger appends a tombstone; undo of
    unlink restores the edge). Only kind=link nodes may be unlinked. *)
 let unlink_edge (store : Store.t) ~(edge_path : string) : value =
-  match Io_lwt.Db.current_conn store with
-  | None -> no_db "unlink"
-  | Some conn -> (
+  with_tree_tx store ~none:(fun () -> no_db "unlink") (fun conn ->
       match Tree_store.get_by_path conn ~path:edge_path with
       | None -> VStr ("unlink: no node at " ^ edge_path)
       | Some n ->
@@ -1809,9 +1812,7 @@ let unlink_edge (store : Store.t) ~(edge_path : string) : value =
    An edge list is a children-by-level index read, never a scan. *)
 let out_links (store : Store.t) ~(path : string) ?(limit : int = 1000) () :
     value =
-  match Io_lwt.Db.current_conn store with
-  | None -> VList []
-  | Some conn ->
+  with_tree_tx store ~none:(fun () -> VList []) (fun conn ->
       let edges = Tree_store.list_out_links conn ~path ~limit () in
       let item (e : Tree_store.node) =
         let to_path =
@@ -1853,7 +1854,7 @@ let out_links (store : Store.t) ~(path : string) ?(limit : int = 1000) () :
                 ; ("target", target)
                 ]))
       in
-      VList (List.map item edges)
+      VList (List.map item edges))
 
 (* Backlinks upgrade (one-tree.tree-edges): edges whose to = needle —
    backed by the migration-026 partial expression index — UNION the
@@ -1865,9 +1866,7 @@ let backlinks_deprecation_logged = ref false
 
 let backlinks (store : Store.t) ~(needle : string) ?(limit : int = 200) ()
     : value =
-  match Io_lwt.Db.current_conn store with
-  | None -> VList []
-  | Some conn ->
+  with_tree_tx store ~none:(fun () -> VList []) (fun conn ->
       let edge_paths =
         Tree_store.edges_to conn ~needle ~limit ()
         |> List.map (fun (e : Tree_store.node) -> e.path)
@@ -1889,7 +1888,7 @@ let backlinks (store : Store.t) ~(needle : string) ?(limit : int = 200) ()
         edge_paths
         @ List.filter (fun p -> not (List.mem p seen)) legacy_paths
       in
-      VList (List.map (fun p -> VStr p) merged)
+      VList (List.map (fun p -> VStr p) merged))
 
 (* ---- sibling-order prims (one-tree.sibling-order) ----
 
@@ -1967,15 +1966,14 @@ let tree_move_before (store : Store.t) ~(path : string) ~(anchor : string)
   wrap_path_exn "tree/move-before" (fun () ->
       match Tree_store.path_parent path, Tree_store.path_parent anchor with
       | Some parent, Some ap when parent = ap && path <> anchor -> (
-          match Io_lwt.Db.current_conn store with
-          | None -> no_db "tree/move-before"
-          | Some conn -> (
-              match place_candidate conn ~parent ~anchor ~before:true with
-              | Error e -> VStr ("tree/move-before: " ^ e)
-              | Ok rank ->
-                  if Tree_store.set_rank conn ~path ~rank:(Some rank) = 1 then
-                    VStr rank
-                  else VStr ("tree/move-before: no node at " ^ path)))
+          with_tree_tx store ~none:(fun () -> no_db "tree/move-before")
+            (fun conn ->
+               match place_candidate conn ~parent ~anchor ~before:true with
+               | Error e -> VStr ("tree/move-before: " ^ e)
+               | Ok rank ->
+                   if Tree_store.set_rank conn ~path ~rank:(Some rank) = 1 then
+                     VStr rank
+                   else VStr ("tree/move-before: no node at " ^ path)))
       | Some _, Some _ when path = anchor ->
           VStr (Tree_store.path_leaf path) (* no-op: already there *)
       | _ ->
@@ -1986,15 +1984,14 @@ let tree_move_after (store : Store.t) ~(path : string) ~(anchor : string)
   wrap_path_exn "tree/move-after" (fun () ->
       match Tree_store.path_parent path, Tree_store.path_parent anchor with
       | Some parent, Some ap when parent = ap && path <> anchor -> (
-          match Io_lwt.Db.current_conn store with
-          | None -> no_db "tree/move-after"
-          | Some conn -> (
-              match place_candidate conn ~parent ~anchor ~before:false with
-              | Error e -> VStr ("tree/move-after: " ^ e)
-              | Ok rank ->
-                  if Tree_store.set_rank conn ~path ~rank:(Some rank) = 1 then
-                    VStr rank
-                  else VStr ("tree/move-after: no node at " ^ path)))
+          with_tree_tx store ~none:(fun () -> no_db "tree/move-after")
+            (fun conn ->
+               match place_candidate conn ~parent ~anchor ~before:false with
+               | Error e -> VStr ("tree/move-after: " ^ e)
+               | Ok rank ->
+                   if Tree_store.set_rank conn ~path ~rank:(Some rank) = 1 then
+                     VStr rank
+                   else VStr ("tree/move-after: no node at " ^ path)))
       | Some _, Some _ when path = anchor ->
           VStr (Tree_store.path_leaf path) (* no-op: already there *)
       | _ ->
@@ -2004,9 +2001,7 @@ let tree_move_after (store : Store.t) ~(path : string) ~(anchor : string)
    unordered). Rank must be base-36 ([0-9a-z]+) so midpoint allocation
    stays well-defined. Returns node JSON. *)
 let tree_reorder (store : Store.t) ~(path : string) ~(rank : string) : value =
-  match Io_lwt.Db.current_conn store with
-  | None -> no_db "tree/reorder"
-  | Some conn ->
+  with_tree_tx store ~none:(fun () -> no_db "tree/reorder") (fun conn ->
       if rank <> "" && not (Tree_store.rank_valid rank) then
         VStr "tree/reorder: rank must be base-36 ([0-9a-z]+)"
       else if
@@ -2017,7 +2012,7 @@ let tree_reorder (store : Store.t) ~(path : string) ~(rank : string) : value =
       else
         (match Tree_store.get_by_path conn ~path with
          | Some n -> VStr (Tree_store.node_to_json n)
-         | None -> VStr "ok")
+         | None -> VStr "ok"))
 
 (* (tree/siblings path) — ordered children of path's parent (the node
    itself included). Root paths have no siblings. *)
@@ -2026,12 +2021,10 @@ let tree_siblings (store : Store.t) ~(path : string) : value =
       match Tree_store.path_parent path with
       | None -> VList [] (* root: no parent, no siblings *)
       | Some parent -> (
-          match Io_lwt.Db.current_conn store with
-          | None -> VList []
-          | Some conn ->
+          with_tree_tx store ~none:(fun () -> VList []) (fun conn ->
               let nodes = Tree_store.list_children conn ~prefix:parent () in
               VList
-                (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes)))
+                (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes))))
 
 (* (tree/next path) / (tree/prev path) — the adjacent sibling in the
    total order (ranked first by rank, then unranked by path). Nil at
@@ -2041,9 +2034,7 @@ let tree_neighbor (store : Store.t) ~(path : string) ~(dir : int) : value =
       match Tree_store.path_parent path with
       | None -> VNil
       | Some parent -> (
-          match Io_lwt.Db.current_conn store with
-          | None -> VNil
-          | Some conn ->
+          with_tree_tx store ~none:(fun () -> VNil) (fun conn ->
               let nodes = Tree_store.list_children conn ~prefix:parent () in
               let idx =
                 List.find_index (fun (n : Tree_store.node) -> n.path = path) nodes
@@ -2056,7 +2047,7 @@ let tree_neighbor (store : Store.t) ~(path : string) ~(dir : int) : value =
                      (match List.nth_opt nodes j with
                       | Some n -> VStr (Tree_store.node_to_json n)
                       | None -> VNil)
-                   else VNil)))
+                   else VNil))))
 
 let tree_next (store : Store.t) ~(path : string) : value =
   tree_neighbor store ~path ~dir:1
@@ -2080,9 +2071,8 @@ let tree_insert_child (store : Store.t) ~(parent : string) ~(kind : string)
       "tree/insert-child: kind must be folder|note|heading (datum ordering: \
        tree/upsert + tree/reorder)"
   else
-    match Io_lwt.Db.current_conn store with
-    | None -> no_db "tree/insert-child"
-    | Some conn -> (
+    (* One tx: label parse + rank placement + upsert + read-back atomic. *)
+    with_tree_tx store ~none:(fun () -> no_db "tree/insert-child") (fun conn ->
         let label =
           match Tree_store.parse_body_json body_json with
           | Ok body -> (
@@ -2132,62 +2122,50 @@ let tree_insert_child (store : Store.t) ~(parent : string) ~(kind : string)
                  | Error e -> VStr ("tree/insert-child: " ^ e))))
 
 let tree_get_uuid (store : Store.t) ~(uuid : string) : value =
-  match Io_lwt.Db.current_conn store with
-  | None -> VNil
-  | Some conn ->
+  with_tree_tx store ~none:(fun () -> VNil) (fun conn ->
       let n = Tree_store.get_by_uuid conn ~uuid in
       (match n with
        | None -> VNil
-       | Some node -> (VStr (Tree_store.node_to_json node)))
+       | Some node -> (VStr (Tree_store.node_to_json node))))
 
 let tree_find_by (store : Store.t) ~(kind : string option) ~(field : string)
     ~(value : string) ?(prefix : string = "") ?(limit : int = 50) () : value =
-  match Io_lwt.Db.current_conn store with
-  | None -> (VList [])
-  | Some conn ->
+  with_tree_tx store ~none:(fun () -> VList []) (fun conn ->
       let nodes =
         Tree_store.find_by_body_field conn ~kind ~field ~value ~prefix ~limit ()
       in
-      (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes))
+      (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes)))
 
 let tree_list_kind (store : Store.t) ~(prefix : string) ~(kind : string)
     ?(limit : int = 2000) () : value =
-  match Io_lwt.Db.current_conn store with
-  | None -> (VList [])
-  | Some conn ->
+  with_tree_tx store ~none:(fun () -> VList []) (fun conn ->
       let nodes =
         Tree_store.list_by_kind conn ~prefix ~kind ~limit ()
       in
-      (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes))
+      (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes)))
 
 let tree_note_index (store : Store.t) ~(prefix : string) ?(limit : int = 2000)
     () : value =
-  match Io_lwt.Db.current_conn store with
-  | None -> (VList [])
-  | Some conn ->
+  with_tree_tx store ~none:(fun () -> VList []) (fun conn ->
       let rows = Tree_store.list_note_index conn ~prefix ~limit () in
       (VList
            (List.map
               (fun (id, fields) -> VPair (VStr id, VStr fields))
-              rows))
+              rows)))
 
 let tree_folder_index (store : Store.t) ~(prefix : string) () : value =
-  match Io_lwt.Db.current_conn store with
-  | None -> (VList [])
-  | Some conn ->
+  with_tree_tx store ~none:(fun () -> VList []) (fun conn ->
       let folders = Tree_store.list_folder_index conn ~prefix () in
-      (VList (List.map (fun f -> VStr f) folders))
+      (VList (List.map (fun f -> VStr f) folders)))
 
 (** Substring search over tree notes+headings. Returns list of hit JSON. *)
 let tree_search_text (store : Store.t) ~(prefix : string) ~(needle : string)
     ?(limit : int = 20) () : value =
-  match Io_lwt.Db.current_conn store with
-  | None -> (VList [])
-  | Some conn ->
+  with_tree_tx store ~none:(fun () -> VList []) (fun conn ->
       let hits =
         Tree_store.search_text conn ~prefix ~needle ~limit ()
       in
-      (VList (List.map (fun j -> VStr j) hits))
+      (VList (List.map (fun j -> VStr j) hits)))
 
 let tree_path_label (s : string) : value = VStr (Tree_store.path_label s)
 
@@ -2295,9 +2273,9 @@ let fork_data (store : Store.t) ~(lens : string)
   let lens_prefix =
     Printf.sprintf "data.l.%s.%s" lens_enc user_enc
   in
-  (match Io_lwt.Db.current_conn store with
-   | None -> VStr "fork-data: no database connection"
-   | Some conn ->
+  (with_tree_tx store
+     ~none:(fun () -> VStr "fork-data: no database connection")
+     (fun conn ->
        (* Check the lens doesn't already exist (avoid silent double-fork). *)
        let existing =
          Tree_store.list_subtree conn ~prefix:lens_prefix ~limit:1 ()
@@ -2342,7 +2320,7 @@ let fork_data (store : Store.t) ~(lens : string)
            Store_db.exec conn ~params sql
          in
          let n = List.length rows in
-         VStr (Printf.sprintf "ok %s (%d nodes forked)" lens n))
+         VStr (Printf.sprintf "ok %s (%d nodes forked)" lens n)))
 
 (* (abandon-data lens-name) -> VStr.
    Drop the data lens subtree entirely. The user's live data.u is
@@ -2354,11 +2332,11 @@ let abandon_data_lens (store : Store.t) ~(lens : string) () : value =
   let lens_prefix =
     Printf.sprintf "data.l.%s.%s" lens_enc user_enc
   in
-  (match Io_lwt.Db.current_conn store with
-   | None -> VStr "abandon-data: no database connection"
-   | Some conn ->
+  (with_tree_tx store
+     ~none:(fun () -> VStr "abandon-data: no database connection")
+     (fun conn ->
        let n = Tree_store.delete_path conn ~path:lens_prefix ~recursive:true in
-       VStr (Printf.sprintf "ok %s (%d nodes abandoned)" lens n))
+       VStr (Printf.sprintf "ok %s (%d nodes abandoned)" lens n)))
 
 (* (merge-data lens-name) -> VStr.
    Merge a data lens back into the user's live data.u.<user>. v0 policy:
@@ -2383,9 +2361,9 @@ let merge_data_lens (store : Store.t) ~(lens : string) () : value =
   let lens_prefix =
     Printf.sprintf "data.l.%s.%s" lens_enc user_enc
   in
-  (match Io_lwt.Db.current_conn store with
-   | None -> VStr "merge-data: no database connection"
-   | Some conn ->
+  (with_tree_tx store
+     ~none:(fun () -> VStr "merge-data: no database connection")
+     (fun conn ->
        (* For each lens datum, upsert into the corresponding live path.
           The live path is constructed by replacing the data.l.<lens> prefix
           with data.u — i.e. dropping the lens segment. *)
@@ -2437,7 +2415,7 @@ let merge_data_lens (store : Store.t) ~(lens : string) () : value =
            ; ("dropped", `Int dropped)
            ]
        in
-       VStr (Yojson.Safe.to_string report))
+       VStr (Yojson.Safe.to_string report)))
 
 (* (list-data-lenses) -> VList of VStr lens names.
    Enumerate the user's data lenses by scanning for distinct data.l.<lens>.<user>
@@ -2445,9 +2423,7 @@ let merge_data_lens (store : Store.t) ~(lens : string) () : value =
 let list_data_lenses (store : Store.t) () : value =
   let user = session_user () in
   let user_enc = Tree_store.enc_label user in
-  (match Io_lwt.Db.current_conn store with
-   | None -> VList []
-   | Some conn ->
+  (with_tree_tx store ~none:(fun () -> VList []) (fun conn ->
         let sql =
           "SELECT DISTINCT tree_dec_label(subltree(path, 2, 3)::text) "
           ^ "FROM tree_nodes "
@@ -2467,4 +2443,4 @@ let list_data_lenses (store : Store.t) () : value =
              | _ -> None)
            rows
        in
-       VList lenses)
+       VList lenses))

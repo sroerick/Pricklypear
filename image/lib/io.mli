@@ -32,12 +32,20 @@ module type DB = sig
   (** Execute SQL on [conn]. Params are pgx values. Blocks the fiber. *)
   val execute : conn -> ?params:Pgx.row -> string -> Pgx.row list
 
-  (** SERIALIZABLE (default) transaction; [f] sees upgraded conn. *)
+  (** SERIALIZABLE (default) transaction; [f] sees upgraded conn.
+      Serialization failures (SQLSTATE 40001) are retried a bounded
+      number of times before propagating. *)
   val with_transaction :
     ?isolation:Pgx.Isolation.t ->
     store ->
     (conn option -> 'a) ->
     'a
+
+  (** Low-isolation (READ COMMITTED) transaction for the datum-touching
+      tree/edge prims: arms the pp.user RLS floor (set_config LOCAL)
+      without adding SSI conflict surface the prims' former per-statement
+      autocommit did not have. *)
+  val with_transaction_low : store -> (conn option -> 'a) -> 'a
 
   (** Session-scoped dynamic tx for (with-transaction ...) Lisp prim. *)
   val with_dynamic_transaction :
