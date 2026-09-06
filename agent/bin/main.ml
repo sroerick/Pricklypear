@@ -22,95 +22,32 @@
 
 open Pricklypear_lisp
 
-let getenv name ~default =
-  match Sys.getenv_opt name with
-  | Some s -> if s = "" then default else s
-  | None -> default
+(* Identity + harness-specific fact lines / conduct for the system
+   prompt. The shared skeleton (facts block + assembly) lives in
+   llm/lib/harness.ml; these segments are this binary's own narrative
+   (i-1788671587-9). *)
+let pre_facts =
+  "You are pp-agent, the local Nopales-native coding agent of the \
+   Pricklypear project. The human operator talks to you through this \
+   binary's browser chat surface or line REPL. You run as ONE unix \
+   process directly on the operator's machine -- no container, no \
+   sandbox; your commands affect the operator's real system."
 
-(* Auto-load ./.env if present (KEY=VALUE or `export KEY=VALUE` lines).
-   Runs before any cfg/env read so AGENT_API_KEY etc. land without the
-   user sourcing the file. Quoted values are unquoted; blank lines and
-   # comments are skipped. Failures are silent (file optional). *)
-let load_dotenv () : unit =
-  let path = ".env" in
-  match open_in path with
-  | exception _ -> ()
-  | ic ->
-    (try
-       while true do
-         let line = String.trim (input_line ic) in
-         if line = "" || line.[0] = '#' then ()
-         else begin
-           let line =
-             if String.length line > 7 && String.sub line 0 7 = "export "
-             then String.trim (String.sub line 7 (String.length line - 7))
-             else line
-           in
-           match String.index_opt line '=' with
-           | Some i ->
-               let k = String.trim (String.sub line 0 i) in
-               let v_raw = String.trim (String.sub line (i + 1) (String.length line - i - 1)) in
-               let v =
-                 let n = String.length v_raw in
-                 if n >= 2
-                    && (v_raw.[0] = '"' && v_raw.[n - 1] = '"'
-                        || v_raw.[0] = '\'' && v_raw.[n - 1] = '\'')
-                 then String.sub v_raw 1 (n - 2)
-                 else v_raw
-               in
-               Unix.putenv k v
-           | None -> ()
-         end
-       done
-     with End_of_file -> ());
-    close_in ic
+let fact_lines =
+  "- tools: read, bash, plus any Nopales plugin tools loaded from \
+   ~/.config/agent/plugins/*.pp and ./.agent/plugins/*.pp\n\
+   - /code on this binary's web surface is a read-only file browser over cwd\n"
 
-(* Mock provider: reads a JSON script of turns. Each entry:
-   {"text": "...", "calls": [{"id","name","input"}]} — entries are
-   consumed in order; running out ends the turn loop. *)
-let mock_complete ~(env : Eio_unix.Stdenv.base) ~sw ~cfg ~messages
-    ~tools ~on_delta script_cell
-    : (Provider.reply, string) Result.t =
-  ignore env;
-  ignore sw;
-  ignore cfg;
-  ignore tools;
-  (* Mirror the real provider's streaming contract: fire the reply's
-     text as an [on_delta] so the loop/print_event path is identical,
-     no matter the canned or live provider. *)
-  match !script_cell with
-  | [] ->
-      on_delta (Provider.Text "");
-      on_delta Provider.Done;
-      Ok { Provider.text = ""; calls = []; stop_reason = "end_turn"; raw = `Null }
-  | r :: rest ->
-      script_cell := rest;
-      ignore messages;
-      let r : Provider.reply = r in
-      if r.text <> "" then on_delta (Provider.Text r.text);
-      on_delta Provider.Done;
-      Ok r
+let post_facts =
+  "Conduct:\n\
+   - Prefer the read and bash tools. Be terse.\n\
+   - For questions about the project, read AGENTS.md/docs in cwd -- do not \
+   probe the OS for facts listed above.\n\
+   - Never print secret VALUES (env vars ending in _API_KEY, _TOKEN, \
+   _SECRET); reference them by name. Avoid full `env` dumps."
 
-let parse_mock_script script_path : Provider.reply list =
-  let open Yojson.Safe.Util in
-  let j = Yojson.Safe.from_file script_path in
-  j |> to_list
-  |> List.map (fun t ->
-         let text = t |> member "text" |> to_string_option |> Option.value ~default:"" in
-         let calls =
-           match t |> member "calls" with
-           | `List cs ->
-               List.map
-                 (fun c ->
-                   {
-                     Provider.id = c |> member "id" |> to_string;
-                     name = c |> member "name" |> to_string;
-                     input = c |> member "input";
-                   })
-                 cs
-           | _ -> []
-         in
-         { Provider.text; calls; stop_reason = "stop"; raw = `Assoc [ ("role", `String "assistant"); ("content", `String text) ] })
+let harness_context ~(model : string) ~(base_url : string) : string =
+  Harness.context ~pre_facts ~fact_lines ~post_facts ~model ~base_url
 
 (* Streaming-aware print: accumulate text deltas into the current
    assistant line so token fragments don't each get their own header.
@@ -142,55 +79,11 @@ let print_event = function
   | Loop.Turn_error msg ->
       Printf.printf "\027[31m[turn error] %s\027[0m\n%!" msg
 
-(* One-shot harness identity for the system prompt. The model otherwise
-   spends its first turns probing env/cgroups/os-release for facts it was
-   never told (and leaks secrets like AGENT_API_KEY into the transcript
-   via `env` dumps while doing so). Computed once at boot. *)
-let run_captured (cmd : string) : string =
-  try
-    let ic = Unix.open_process_in cmd in
-    let out = String.trim (In_channel.input_all ic) in
-    match Unix.close_process_in ic with
-    | Unix.WEXITED 0 -> out
-    | _ -> ""
-  with _ -> ""
-
-let harness_context ~(model : string) ~(base_url : string) : string =
-  let host = try Unix.gethostname () with _ -> "?" in
-  let uname = run_captured "uname -srm" in
-  let cwd = Sys.getcwd () in
-  let tm = Unix.localtime (Unix.gettimeofday ()) in
-  let date =
-    Printf.sprintf "%04d-%02d-%02d %02d:%02d"
-      (tm.Unix.tm_year + 1900) (tm.Unix.tm_mon + 1) tm.Unix.tm_mday
-      tm.Unix.tm_hour tm.Unix.tm_min
-  in
-  Printf.sprintf
-    "You are pp-agent, the local Nopales-native coding agent of the \
-     Pricklypear project. The human operator talks to you through this \
-     binary's browser chat surface or line REPL. You run as ONE unix \
-     process directly on the operator's machine -- no container, no \
-     sandbox; your commands affect the operator's real system.\n\
-     \n\
-     Harness facts (told to you here; do NOT probe the OS to discover them):\n\
-     - host: %s (%s)\n\
-     - cwd: %s -- the operator's working directory; treat as project root\n\
-     - date: %s (operator local)\n\
-     - model: %s via %s\n\
-     - tools: read, bash, plus any Nopales plugin tools loaded from \
-     ~/.config/agent/plugins/*.pp and ./.agent/plugins/*.pp\n\
-     - /code on this binary's web surface is a read-only file browser over cwd\n\
-     \n\
-     Conduct:\n\
-     - Prefer the read and bash tools. Be terse.\n\
-     - For questions about the project, read AGENTS.md/docs in cwd -- do not \
-     probe the OS for facts listed above.\n\
-     - Never print secret VALUES (env vars ending in _API_KEY, _TOKEN, \
-     _SECRET); reference them by name. Avoid full `env` dumps."
-    host (if uname = "" then "?" else uname) cwd date model base_url
-
+(* One-shot harness identity for the system prompt: the shared facts
+   block + assembly (llm/lib/harness.ml) with this binary's own narrative
+   segments. *)
 let () =
-  load_dotenv ();
+  Envcfg.load_dotenv ();
   let mock_script = ref None in
   let model = ref None in
   let base_url = ref None in
@@ -270,16 +163,16 @@ let () =
             else (match fallback with Some v -> v | None -> default)
       in
       let cfg_model =
-        pick ~flag:!model ~env:(getenv "AGENT_MODEL" ~default:"")
+        pick ~flag:!model ~env:(Envcfg.getenv "AGENT_MODEL" ~default:"")
           ~fallback:merged.model ~default:"hf:zai-org/GLM-4.7-Flash"
       in
       let cfg_base =
-        pick ~flag:!base_url ~env:(getenv "AGENT_BASE_URL" ~default:"")
+        pick ~flag:!base_url ~env:(Envcfg.getenv "AGENT_BASE_URL" ~default:"")
           ~fallback:merged.base_url
           ~default:"https://api.synthetic.new/openai/v1"
       in
       let cfg_key =
-        pick ~flag:None ~env:(getenv "AGENT_API_KEY" ~default:"")
+        pick ~flag:None ~env:(Envcfg.getenv "AGENT_API_KEY" ~default:"")
           ~fallback:merged.api_key ~default:""
       in
       let cfg : Provider.cfg =
@@ -288,15 +181,16 @@ let () =
           api_key = cfg_key;
           model = cfg_model;
           system =
-            getenv "AGENT_SYSTEM"
+            Envcfg.getenv "AGENT_SYSTEM"
               ~default:(harness_context ~model:cfg_model ~base_url:cfg_base);
         }
       in
-      let script_cell = ref (Option.map parse_mock_script !mock_script |> Option.value ~default:[]) in
+      let script_cell =
+        ref (Option.map Mock.parse_mock_script !mock_script |> Option.value ~default:[])
+      in
       let complete =
         match !mock_script with
-        | Some _ -> (fun ~env ~sw ~cfg ~messages ~tools ~on_delta ->
-            mock_complete ~env ~sw ~cfg ~messages ~tools ~on_delta script_cell)
+        | Some _ -> Mock.complete ~script_cell
         | None -> Provider.Openai.complete
       in
       let history : Provider.message list ref = ref [] in

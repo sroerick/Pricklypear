@@ -209,6 +209,70 @@ let llm_codec_tests = [
     (match Llm_codec.extract_content body with
      | Ok c -> Alcotest.(check string) "complete json wins" "{\"x\":1}" c
      | Error e -> Alcotest.fail e));
+  ("llm-codec: sse_data_payload parses data lines", `Quick, fun () ->
+    Alcotest.(check (option string)) "spaced" (Some "{}")
+      (Llm_codec.sse_data_payload "data: {}");
+    Alcotest.(check (option string)) "unspaced" (Some "x")
+      (Llm_codec.sse_data_payload "data:x");
+    Alcotest.(check (option string)) "done marker" (Some "[DONE]")
+      (Llm_codec.sse_data_payload "data: [DONE]");
+    Alcotest.(check (option string)) "empty payload" None
+      (Llm_codec.sse_data_payload "data:   ");
+    Alcotest.(check (option string)) "comment line" None
+      (Llm_codec.sse_data_payload ": keepalive"));
+  ("llm-codec: reassemble_stream rebuilds text+reasoning+tool fragments",
+   `Quick, fun () ->
+    let deltas = ref [] and reasons = ref [] in
+    let lines =
+      [ {|{"choices":[{"delta":{"reasoning_content":"thinking "},"finish_reason":null}]}|};
+        {|{"choices":[{"delta":{"reasoning":"rea"},"finish_reason":null}]}|};
+        {|{"choices":[{"delta":{"content":"hello "},"finish_reason":null}]}|};
+        {|{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"t1","function":{"name":"bash","arguments":"{\"command\":\"ech"}}]}}]}|};
+        {|{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"o hello\"}"}}]}}]}|};
+        {|{"choices":[{"delta":{"content":" world"},"finish_reason":null}]}|};
+        {|{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}|};
+        "[DONE]";
+      ]
+    in
+    let r =
+      Llm_codec.reassemble_stream
+        ~on_text:(fun s -> deltas := !deltas @ [ s ])
+        ~on_reasoning:(fun s -> reasons := !reasons @ [ s ])
+        lines
+    in
+    Alcotest.(check string) "concatenated text" "hello  world" r.text;
+    Alcotest.(check string) "concatenated reasoning" "thinking rea" r.reasoning;
+    Alcotest.(check (list string)) "text deltas in stream order"
+      [ "hello "; " world" ] !deltas;
+    Alcotest.(check (list string)) "reasoning deltas incl. plain-reasoning alias"
+      [ "thinking "; "rea" ] !reasons;
+    Alcotest.(check string) "finish captured" "tool_calls" r.finish;
+    Alcotest.(check int) "one reassembled tool call" 1 (List.length r.tool_calls);
+    (match r.tool_calls with
+     | [ tc ] ->
+        Alcotest.(check string) "tool id" "t1" tc.Llm_codec.id;
+        Alcotest.(check string) "tool name" "bash" tc.Llm_codec.name;
+        Alcotest.(check string) "arguments reassembled"
+          {|{"command":"echo hello"}|} tc.Llm_codec.arguments
+     | _ -> Alcotest.fail "expected one tool call");
+    (* The synthetic response parses through the shared response parser
+       and keeps the reassembled tool call + text. *)
+    (match Llm_codec.parse_turn_response_json r.response with
+     | Llm_codec.Need_tools { content = Some "hello  world"; tool_calls = [ tc ]; _ } ->
+        Alcotest.(check string) "parsed arguments"
+          {|{"command":"echo hello"}|} tc.Llm_codec.arguments
+     | other ->
+        Alcotest.fail
+          ("expected Need_tools with content, got raw: "
+           ^ Yojson.Safe.to_string (match other with
+              | Llm_codec.Need_tools { raw; _ } -> raw
+              | Llm_codec.Final { raw; _ } -> raw
+              | Llm_codec.Turn_error _ -> `String "turn_error"))));
+  ("llm-codec: reassemble_stream skips malformed lines", `Quick, fun () ->
+    let r = Llm_codec.reassemble_stream [ "not json"; "{}" ] in
+    Alcotest.(check string) "no text from garbage" "" r.text;
+    Alcotest.(check string) "default finish" "stop" r.finish;
+    Alcotest.(check int) "no tool calls" 0 (List.length r.tool_calls));
 ]
 
 let () =

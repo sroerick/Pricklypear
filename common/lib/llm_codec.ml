@@ -291,6 +291,181 @@ let extract_content (body : string) : (string, string) result =
     in
     Error ("LLM parse error: " ^ Printexc.to_string e ^ " body=" ^ trunc)
 
+(** ---- Streaming reassembly (SSE) ----
+
+    ONE engine for reassembling an OpenAI [stream:true] response from
+    its SSE [data:] lines: text + reasoning deltas (incl. the Synthetic
+    plain-"reasoning" alias), tool-call argument fragments split across
+    chunks, and [finish_reason]. Formerly re-implemented in
+    llm/lib/provider.ml (the full engine) and hand-looped in
+    image/lib/llm_client.ml (line parse); this module owns it beside
+    [parse_turn_response] so the wire shape has one definition
+    (i-1788671587-9). Pure: unit-testable without a socket. *)
+
+(* Parse one SSE [data:] line from the raw body: returns the payload
+   after the "data:" prefix. Empty/comment lines yield None. *)
+let sse_data_payload (line : string) : string option =
+  let line = String.trim line in
+  if String.length line >= 5 && String.sub line 0 5 = "data:" then
+    let rest = String.trim (String.sub line 5 (String.length line - 5)) in
+    if rest = "" then None else Some rest
+  else None
+
+(** One reassembled streaming response, before host-shape mapping.
+    [response] is the synthetic FULL chat-completions response (a
+    choices wrapper over a synthetic assistant [message]) so hosts run
+    it through their usual response parser ([parse_turn_response_json]
+    here, [Openai.parse_reply] in the standalone agent) and inherit the
+    XML-fallback / reasoning_content handling and history [raw] shape
+    unchanged. *)
+type stream_result = {
+  text : string;
+  reasoning : string;
+  tool_calls : tool_call list;  (* arguments = concatenated fragments *)
+  finish : string;
+  response : Yojson.Safe.t;
+}
+
+(** Reassemble [lines] (the SSE [data:] payloads of one streaming
+    response, in order) into a [stream_result]. [on_text] /
+    [on_reasoning] fire per content/reasoning chunk as it is decoded
+    (in stream order) so incremental surfaces keep their per-chunk
+    events. Malformed data lines are skipped (lenient, as on the
+    wire). *)
+let reassemble_stream ?(on_text : string -> unit = fun _ -> ())
+    ?(on_reasoning : string -> unit = fun _ -> ())
+    (lines : string list) : stream_result =
+  let open Yojson.Safe.Util in
+  let text_buf = Buffer.create 128 in
+  let reasoning_buf = Buffer.create 128 in
+  (* index -> accumulated tool-call fragment {id; name; arguments buf} *)
+  let tool_bufs : (int, string * string * Buffer.t) Hashtbl.t = Hashtbl.create 4 in
+  let finish = ref "stop" in
+  List.iter
+    (fun data ->
+      if data <> "[DONE]" then
+        (try
+           let json = Yojson.Safe.from_string data in
+           match json |> member "choices" |> to_list with
+           | choice :: _ ->
+               (match choice |> member "finish_reason" |> to_string_option with
+                | Some f when f <> "" -> finish := f
+                | _ -> ());
+               let delta = choice |> member "delta" in
+               let reasoning_chunk =
+                 match delta |> member "reasoning_content" |> to_string_option with
+                 | Some s when s <> "" -> Some s
+                 | _ ->
+                     (* Synthetic OpenAI-compat streams thinking as
+                        plain "reasoning" deltas. *)
+                     (match delta |> member "reasoning" |> to_string_option with
+                      | Some s when s <> "" -> Some s
+                      | _ -> None)
+               in
+               (match reasoning_chunk with
+                | Some s ->
+                    Buffer.add_string reasoning_buf s;
+                    on_reasoning s
+                | None -> ());
+               (match delta |> member "content" |> to_string_option with
+                | Some s when s <> "" ->
+                    Buffer.add_string text_buf s;
+                    on_text s
+                | _ -> ());
+               (match delta |> member "tool_calls" with
+                | `List tcs ->
+                    List.iter
+                      (fun tc ->
+                        let idx =
+                          match tc |> member "index" with
+                          | `Int i -> i
+                          | `Intlit s -> (try int_of_string s with _ -> 0)
+                          | _ -> 0
+                        in
+                        let id', name', args =
+                          match Hashtbl.find_opt tool_bufs idx with
+                          | Some e -> e
+                          | None ->
+                              let e = ("", "", Buffer.create 64) in
+                              Hashtbl.replace tool_bufs idx e;
+                              e
+                        in
+                        let id'' =
+                          match tc |> member "id" |> to_string_option with
+                          | Some i when i <> "" -> i
+                          | _ -> id'
+                        in
+                        let fn = tc |> member "function" in
+                        let name'' =
+                          match fn |> member "name" |> to_string_option with
+                          | Some n when n <> "" -> n
+                          | _ -> name'
+                        in
+                        (match fn |> member "arguments" |> to_string_option with
+                         | Some a when a <> "" -> Buffer.add_string args a
+                         | _ -> ());
+                        Hashtbl.replace tool_bufs idx (id'', name'', args))
+                      tcs
+                | _ -> ())
+           | [] -> ()
+         with _ -> ()) (* malformed data line -> skip, lenient *))
+    lines;
+  let text = Buffer.contents text_buf in
+  let reasoning = Buffer.contents reasoning_buf in
+  let tool_calls =
+    Hashtbl.fold
+      (fun _ (id, name, args) acc ->
+        if name = "" then acc
+        else
+          (* Canonicalize the concatenated fragments the way the
+             reassembled wire would carry them (malformed -> {}). *)
+          let arguments =
+            match Yojson.Safe.from_string (Buffer.contents args) with
+            | j -> Yojson.Safe.to_string j
+            | exception _ -> "{}"
+          in
+          { id = (if id = "" then "tool-call" else id); name; arguments }
+          :: acc)
+      tool_bufs []
+  in
+  (* Synthetic assistant message, so the shared XML/GLM fallbacks and
+     [raw] history shape apply when hosts parse [response]. *)
+  let msg =
+    `Assoc
+      ([ ("role", `String "assistant"); ("content", `String text) ]
+       @ (if reasoning = "" then []
+          else [ ("reasoning_content", `String reasoning) ])
+       @ (if tool_calls = [] then []
+          else
+            [
+              ( "tool_calls",
+                `List
+                  (List.map
+                     (fun (tc : tool_call) ->
+                       `Assoc
+                         [ ("id", `String tc.id)
+                         ; ("type", `String "function")
+                         ; ( "function",
+                             `Assoc
+                               [ ("name", `String tc.name)
+                               ; ("arguments", `String tc.arguments) ])
+                         ])
+                     tool_calls) );
+            ]))
+  in
+  let response =
+    `Assoc
+      [
+        ( "choices",
+          `List
+            [
+              `Assoc
+                [ ("message", msg); ("finish_reason", `String !finish) ];
+            ] );
+      ]
+  in
+  { text; reasoning; tool_calls; finish = !finish; response }
+
 (** Extract delta content from one streaming SSE JSON payload ([DONE]
     or a [choices[0].delta.content] chunk). *)
 let extract_stream_delta (data : string) : string option =
