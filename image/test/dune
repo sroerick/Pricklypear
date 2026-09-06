@@ -213,3 +213,8 @@
  (name row_kit_test)
  (modules row_kit_test)
  (libraries pricklypear-image alcotest))
+
+(test
+ (name http_body_stream_test)
+ (modules http_body_stream_test)
+ (libraries pricklypear-image alcotest eio_main))

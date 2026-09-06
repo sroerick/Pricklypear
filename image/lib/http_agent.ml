@@ -4,15 +4,9 @@ open Http_core
 
 (* Client disconnect mid-SSE closes the httpaf body writer. Writing after
    that raises Failure("cannot write to closed writer") and — if uncaught —
-   kills the whole single-image process. Treat peer-gone as a normal end. *)
-let is_closed_writer_exn = function
-  | Failure msg ->
-      String.equal msg "cannot write to closed writer"
-      || String.starts_with ~prefix:"cannot write to closed writer" msg
-  | _ -> false
-
-(* [is_closed_writer_exn] now shadows Http_core's identical helper; kept as a
-   local alias so existing call sites stay unchanged. Body writes route
+   kills the whole single-image process. Treat peer-gone as a normal end.
+   The guard is Http_core.is_closed_writer_exn (open below); it was
+   re-defined here identically — the shadow is deleted. Body writes route
    through Http_core.safe_close_writer / safe_respond_with_string. *)
 
 let sse_write (body : Httpun.Body.Writer.t) (event_json : string)
@@ -74,6 +68,66 @@ let mp_close (body : Httpun.Body.Writer.t) ~boundary : unit =
    with exn when is_closed_writer_exn exn -> ());
   close_writer_quiet body
 
+(* ONE queue-mutex-condition drain rig for the two streamed agent
+   endpoints: api_agent's SSE progress events and repl_llm's
+   multipart/mixed token parts (was ~70 lines duplicated twice here,
+   differing only in the frame writer and final close). [produce] runs
+   on a forked fiber and receives [push] (enqueue a frame) and [finish]
+   (mark the stream complete). The drain loop writes queued frames
+   through [write_frame], stopping on `Peer_gone; [close_stream] gets
+   `Finish on a clean end and `Peer_gone when the peer went away
+   mid-stream.
+   Ordering contract for producers: ALWAYS push before finishing — a
+   [finish] observed with an empty queue closes the stream immediately,
+   so frames pushed after [finish] may never be written. Both callers
+   satisfy this (Done/Fail push their final event, then finish). If
+   [produce] raises, the fiber failure cancels the switch and unwinds
+   the awaiting drain — same failure semantics as the old inline rigs. *)
+let stream_events ~(write_frame : 'frame -> [ `Ok | `Peer_gone ])
+    ~(close_stream : [ `Peer_gone | `Finish ] -> unit)
+    ~(produce : (('frame -> unit) -> (unit -> unit) -> unit)) : unit =
+  let queue : 'frame Queue.t = Queue.create () in
+  let mutex = Eio.Mutex.create () in
+  let cond = Eio.Condition.create () in
+  let finished = ref false in
+  let push frame =
+    Eio.Mutex.lock mutex;
+    Queue.add frame queue;
+    Eio.Condition.broadcast cond;
+    Eio.Mutex.unlock mutex
+  in
+  (* Flag write precedes the lock, matching the original rigs: the
+     broadcast under the mutex publishes it to the drain loop. *)
+  let finish () =
+    finished := true;
+    Eio.Mutex.lock mutex;
+    Eio.Condition.broadcast cond;
+    Eio.Mutex.unlock mutex
+  in
+  (* Producer + drain under a local switch so frames stream. *)
+  Eio.Switch.run @@ fun sw ->
+  Eio.Fiber.fork ~sw (fun () -> produce push finish);
+  let rec drain () =
+    Eio.Mutex.lock mutex;
+    if not (Queue.is_empty queue) then begin
+      let frame = Queue.take queue in
+      Eio.Mutex.unlock mutex;
+      (match write_frame frame with
+       | `Peer_gone ->
+           finished := true;
+           close_stream `Peer_gone
+       | `Ok -> drain ())
+    end else if !finished then begin
+      Eio.Mutex.unlock mutex;
+      close_stream `Finish
+    end else begin
+      Eio.Condition.await cond mutex;
+      Eio.Mutex.unlock mutex;
+      drain ()
+    end
+  in
+  drain ()
+
 let default_http_agent_seed =
   (* Short fallback when no session seed; tools sessions should prefer
      Session.default_agent_seed (dogfood + register_route rules). *)
@@ -131,60 +185,54 @@ let agent_session_label (s : Ai_store.session) : string =
 let api_agent (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
   let body = read_body reqd in
   let seed, prompt, session_id_opt, tools, max_steps, want_stream =
-    try
-      match Yojson.Safe.from_string body with
-      | `Assoc items ->
-          let seed =
-            match List.assoc_opt "seed" items with
-            | Some (`String s) -> s
-            | _ -> default_http_agent_seed
-          in
-          let prompt =
-            match List.assoc_opt "prompt" items with
-            | Some (`String s) -> s
-            | _ ->
-                (match List.assoc_opt "q" items with
-                 | Some (`String s) -> s
-                 | _ -> "")
-          in
-          let sid =
-            match List.assoc_opt "session_id" items with
-            | Some (`String s) when String.trim s <> "" -> Some (String.trim s)
-            | _ -> None
-          in
-          let tools =
-            match List.assoc_opt "tools" items with
-            | Some (`Bool b) -> b
-            | Some (`String "0") | Some (`String "false") -> false
-            | _ -> true
-          in
-          let max_steps =
-            match List.assoc_opt "max_steps" items with
-            | Some (`Int n) -> n
-            | Some (`String s) ->
-                (match int_of_string_opt s with Some n -> n | None -> 16)
-            | _ -> 16
-          in
-          let stream =
-            match List.assoc_opt "stream" items with
-            | Some (`Bool b) -> b
-            | Some (`String "1") | Some (`String "true") -> true
-            | Some (`String "0") | Some (`String "false") -> false
-            | _ -> false
-          in
-          (seed, prompt, sid, tools, max_steps, stream)
-      | _ -> (default_http_agent_seed, "", None, true, 16, false)
-    with _ ->
-      let seed =
-        Option.value (form_field body "seed") ~default:default_http_agent_seed
-      in
-      let prompt =
-        match form_field body "prompt" with
-        | Some p -> p
-        | None -> Option.value (form_field body "q") ~default:""
-      in
-      let sid = form_field body "session_id" in
-      (seed, prompt, sid, true, 16, false)
+    match parse_body body with
+    | Body_fields items ->
+        let seed =
+          json_field_str items "seed" ~default:default_http_agent_seed
+        in
+        let prompt =
+          match List.assoc_opt "prompt" items with
+          | Some (`String s) -> s
+          | _ -> json_field_str items "q"
+        in
+        let sid =
+          match List.assoc_opt "session_id" items with
+          | Some (`String s) when String.trim s <> "" -> Some (String.trim s)
+          | _ -> None
+        in
+        let tools =
+          match List.assoc_opt "tools" items with
+          | Some (`Bool b) -> b
+          | Some (`String "0") | Some (`String "false") -> false
+          | _ -> true
+        in
+        let max_steps =
+          match List.assoc_opt "max_steps" items with
+          | Some (`Int n) -> n
+          | Some (`String s) ->
+              (match int_of_string_opt s with Some n -> n | None -> 16)
+          | _ -> 16
+        in
+        let stream =
+          match List.assoc_opt "stream" items with
+          | Some (`Bool b) -> b
+          | Some (`String "1") | Some (`String "true") -> true
+          | Some (`String "0") | Some (`String "false") -> false
+          | _ -> false
+        in
+        (seed, prompt, sid, tools, max_steps, stream)
+    | Body_other -> (default_http_agent_seed, "", None, true, 16, false)
+    | Body_form ->
+        let seed =
+          Option.value (form_field body "seed") ~default:default_http_agent_seed
+        in
+        let prompt =
+          match form_field body "prompt" with
+          | Some p -> p
+          | None -> Option.value (form_field body "q") ~default:""
+        in
+        let sid = form_field body "session_id" in
+        (seed, prompt, sid, true, 16, false)
   in
   if String.trim prompt = "" then begin
     json_response reqd
@@ -263,108 +311,70 @@ let api_agent (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
                         "peer gone before stream start");
               raise exn
           in
-          let queue : string Queue.t = Queue.create () in
-          let mutex = Eio.Mutex.create () in
-          let cond = Eio.Condition.create () in
-          let finished = ref false in
-          let push_json (j : string) : unit =
-            Eio.Mutex.lock mutex;
-            Queue.add j queue;
-            Eio.Condition.broadcast cond;
-            Eio.Mutex.unlock mutex
-          in
-          push_json
-            (Yojson.Safe.to_string
-               (`Assoc
-                  [ ("t", `String "session")
-                  ; ("session_id", `String sid)
-                  ]));
-          let on_event = function
-            | Llm_client.Token tok ->
-                push_json
+          stream_events
+            ~write_frame:(fun j -> sse_write body_w j)
+            ~close_stream:(fun _ -> close_writer_quiet body_w)
+            ~produce:(fun push finish ->
+                let saw_end = ref false in
+                push
                   (Yojson.Safe.to_string
-                     (`Assoc [ ("t", `String "token"); ("s", `String tok) ]))
-            | Llm_client.Done ->
-                push_json
-                  (Yojson.Safe.to_string (`Assoc [ ("t", `String "done") ]));
-                finished := true;
-                Eio.Mutex.lock mutex;
-                Eio.Condition.broadcast cond;
-                Eio.Mutex.unlock mutex
-            | Llm_client.Fail e ->
-                push_json
-                  (Yojson.Safe.to_string
-                     (`Assoc [ ("t", `String "error"); ("s", `String e) ]));
-                finished := true;
-                Eio.Mutex.lock mutex;
-                Eio.Condition.broadcast cond;
-                Eio.Mutex.unlock mutex
-          in
-          (* Producer + drain under a local switch so tokens stream. *)
-          Eio.Switch.run @@ fun sw ->
-          Eio.Fiber.fork ~sw (fun () ->
-              let v =
-                Session.agent_say session ~session_id:sid ~prompt ~max_steps
-                  ~on_event ()
-              in
-              if not !finished then begin
-                (match v with
-                 | Pricklypear_lisp.Ast.VStr s ->
-                     push_json
-                       (Yojson.Safe.to_string
-                          (`Assoc
-                             [ ("t", `String "done")
-                             ; ("text", `String s)
-                             ; ("session_id", `String sid)
-                             ]))
-                 | _ ->
-                     push_json
-                       (Yojson.Safe.to_string
-                          (`Assoc [ ("t", `String "done") ])));
-                finished := true;
-                Eio.Mutex.lock mutex;
-                Eio.Condition.broadcast cond;
-                Eio.Mutex.unlock mutex
-              end);
-          let rec drain () =
-            Eio.Mutex.lock mutex;
-            if not (Queue.is_empty queue) then begin
-              let j = Queue.take queue in
-              Eio.Mutex.unlock mutex;
-              match sse_write body_w j with
-              | `Peer_gone ->
-                  finished := true;
-                  close_writer_quiet body_w
-              | `Ok -> drain ()
-            end else if !finished then begin
-              Eio.Mutex.unlock mutex;
-              close_writer_quiet body_w
-            end else begin
-              Eio.Condition.await cond mutex;
-              Eio.Mutex.unlock mutex;
-              drain ()
-            end
-          in
-          drain ()
+                     (`Assoc
+                        [ ("t", `String "session")
+                        ; ("session_id", `String sid)
+                        ]));
+                let on_event = function
+                  | Llm_client.Token tok ->
+                      push
+                        (Yojson.Safe.to_string
+                           (`Assoc [ ("t", `String "token"); ("s", `String tok) ]))
+                  | Llm_client.Done ->
+                      push
+                        (Yojson.Safe.to_string (`Assoc [ ("t", `String "done") ]));
+                      saw_end := true;
+                      finish ()
+                  | Llm_client.Fail e ->
+                      push
+                        (Yojson.Safe.to_string
+                           (`Assoc [ ("t", `String "error"); ("s", `String e) ]));
+                      saw_end := true;
+                      finish ()
+                in
+                let v =
+                  Session.agent_say session ~session_id:sid ~prompt ~max_steps
+                    ~on_event ()
+                in
+                if not !saw_end then begin
+                  (match v with
+                   | Pricklypear_lisp.Ast.VStr s ->
+                       push
+                         (Yojson.Safe.to_string
+                            (`Assoc
+                               [ ("t", `String "done")
+                               ; ("text", `String s)
+                               ; ("session_id", `String sid)
+                               ]))
+                   | _ ->
+                       push
+                         (Yojson.Safe.to_string
+                            (`Assoc [ ("t", `String "done") ])));
+                  saw_end := true;
+                  finish ()
+                end)
         end
 
 let api_agent_task (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
   (* Alias: create tools session + say (same as /api/agent with tools). *)
   let body = read_body reqd in
   let prompt =
-    try
-      match Yojson.Safe.from_string body with
-      | `Assoc items ->
-          (match List.assoc_opt "prompt" items with
-           | Some (`String s) -> s
-           | _ ->
-               (match List.assoc_opt "task" items with
-                | Some (`String s) -> s
-                | _ -> ""))
-      | _ -> ""
-    with _ ->
-      Option.value (form_field body "prompt")
-        ~default:(Option.value (form_field body "task") ~default:"")
+    match parse_body body with
+    | Body_fields items ->
+        (match List.assoc_opt "prompt" items with
+         | Some (`String s) -> s
+         | _ -> json_field_str items "task")
+    | Body_other -> ""
+    | Body_form ->
+        Option.value (form_field body "prompt")
+          ~default:(Option.value (form_field body "task") ~default:"")
   in
   if String.trim prompt = "" then begin
     json_response reqd
@@ -388,19 +398,15 @@ let repl_llm (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
      route; this handles plain-text (LLM) input only. *)
   let body = read_body reqd in
   let prompt =
-    try
-      match Yojson.Safe.from_string body with
-      | `Assoc items ->
-          (match List.assoc_opt "q" items with
-           | Some (`String s) -> s
-           | _ ->
-               (match List.assoc_opt "prompt" items with
-                | Some (`String s) -> s
-                | _ -> ""))
-      | _ -> ""
-    with _ ->
-      Option.value (form_field body "q")
-        ~default:(Option.value (form_field body "prompt") ~default:"")
+    match parse_body body with
+    | Body_fields items ->
+        (match List.assoc_opt "q" items with
+         | Some (`String s) -> s
+         | _ -> json_field_str items "prompt")
+    | Body_other -> ""
+    | Body_form ->
+        Option.value (form_field body "q")
+          ~default:(Option.value (form_field body "prompt") ~default:"")
   in
   if String.trim prompt = "" then begin
     json_response reqd
@@ -450,82 +456,62 @@ let repl_llm (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
                     "peer gone before stream start");
           raise exn
       in
-      let queue : (string option * string) Queue.t = Queue.create () in
-      let mutex = Eio.Mutex.create () in
-      let cond = Eio.Condition.create () in
-      let finished = ref false in
-      let push t html =
-        Eio.Mutex.lock mutex;
-        Queue.add (t, html) queue;
-        Eio.Condition.broadcast cond;
-        Eio.Mutex.unlock mutex
-      in
-      let esc = Http_code.html_escape in
-      (* Part 1: user echo bubble. *)
-      push (Some "#repl-transcript")
-        (Printf.sprintf
-           "<div class=\"repl-line repl-user\"><span class=\"repl-kind\">user</span> <div class=\"repl-user\">%s</div></div>"
-           (esc prompt));
-      (* Part 2: llm bubble opener with empty inner div for tokens. *)
-      push (Some "#repl-transcript")
-        (Printf.sprintf
-           "<div class=\"repl-line repl-llm\"><span class=\"repl-kind\">llm</span><div class=\"repl-llm\" id=\"%s\"></div></div>"
-           rid);
-      let on_event = function
-        | Llm_client.Token tok ->
-            push (Some ("#" ^ rid))
-              (Printf.sprintf "<span>%s</span>" (esc tok))
-        | Llm_client.Done ->
-            finished := true;
-            Eio.Mutex.lock mutex;
-            Eio.Condition.broadcast cond;
-            Eio.Mutex.unlock mutex
-        | Llm_client.Fail e ->
-            push (Some ("#" ^ rid))
-              (Printf.sprintf "<span class=\"repl-error\">%s</span>"
-                 (esc ("error: " ^ e)));
-            finished := true;
-            Eio.Mutex.lock mutex;
-            Eio.Condition.broadcast cond;
-            Eio.Mutex.unlock mutex
-      in
-      Eio.Switch.run @@ fun sw ->
-      Eio.Fiber.fork ~sw (fun () ->
-          let v =
-            Session.agent_say session ~session_id:sid ~prompt ~max_steps:16
-              ~on_event ()
-          in
-          if not !finished then begin
-            (match v with
-             | Pricklypear_lisp.Ast.VStr s when String.trim s <> "" ->
-                 push (Some ("#" ^ rid))
-                   (Printf.sprintf "<span>%s</span>" (esc s))
-             | _ -> ());
-            finished := true;
-            Eio.Mutex.lock mutex;
-            Eio.Condition.broadcast cond;
-            Eio.Mutex.unlock mutex
-          end);
-      let rec drain () =
-        Eio.Mutex.lock mutex;
-        if not (Queue.is_empty queue) then begin
-          let (t, html) = Queue.take queue in
-          Eio.Mutex.unlock mutex;
-          (match mp_write_part body_w ~boundary ?target:t html with
-           | `Peer_gone ->
-               finished := true;
-               close_writer_quiet body_w
-           | `Ok -> drain ())
-        end else if !finished then begin
-          Eio.Mutex.unlock mutex;
-          mp_close body_w ~boundary
-        end else begin
-          Eio.Condition.await cond mutex;
-          Eio.Mutex.unlock mutex;
-          drain ()
-        end
-      in
-      drain ()
+      stream_events
+        ~write_frame:(fun (t, html) ->
+            mp_write_part body_w ~boundary ?target:t html)
+        ~close_stream:(function
+          | `Finish -> mp_close body_w ~boundary
+          | `Peer_gone -> close_writer_quiet body_w)
+        ~produce:(fun push finish ->
+            let saw_end = ref false in
+            (* Part 1: user echo bubble. *)
+            push
+              (Some "#repl-transcript",
+               Pure_html.to_string
+                 (HTML.div [HTML.class_ "repl-line repl-user"]
+                    [ HTML.span [HTML.class_ "repl-kind"] [txt "user"]
+                    ; txt " "
+                    ; HTML.div [HTML.class_ "repl-user"] [txt "%s" prompt]
+                    ]));
+            (* Part 2: llm bubble opener with empty inner div for tokens. *)
+            push
+              (Some "#repl-transcript",
+               Pure_html.to_string
+                 (HTML.div [HTML.class_ "repl-line repl-llm"]
+                    [ HTML.span [HTML.class_ "repl-kind"] [txt "llm"]
+                    ; HTML.div [HTML.class_ "repl-llm"; HTML.id "%s" rid] []
+                    ]));
+            let on_event = function
+              | Llm_client.Token tok ->
+                  push
+                    (Some ("#" ^ rid),
+                     Pure_html.to_string (HTML.span [] [txt "%s" tok]))
+              | Llm_client.Done ->
+                  saw_end := true;
+                  finish ()
+              | Llm_client.Fail e ->
+                  push
+                    ( Some ("#" ^ rid),
+                      Pure_html.to_string
+                        (HTML.span [HTML.class_ "repl-error"]
+                           [txt "error: %s" e]) );
+                  saw_end := true;
+                  finish ()
+            in
+            let v =
+              Session.agent_say session ~session_id:sid ~prompt ~max_steps:16
+                ~on_event ()
+            in
+            if not !saw_end then begin
+              (match v with
+               | Pricklypear_lisp.Ast.VStr s when String.trim s <> "" ->
+                   push
+                     (Some ("#" ^ rid),
+                      Pure_html.to_string (HTML.span [] [txt "%s" s]))
+               | _ -> ());
+              saw_end := true;
+              finish ()
+            end)
     | other ->
         let e = Pricklypear_lisp.Reader.pp_value other in
         json_response reqd
@@ -786,32 +772,31 @@ let agent_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
 let ai_propose (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
   let body = read_body reqd in
   let name_opt, spec_opt =
-    try
-      match Yojson.Safe.from_string body with
-      | `Assoc items ->
-          let name =
-            match List.assoc_opt "name" items with
-            | Some (`String s) -> Some s
-            | _ -> None
-          in
-          let spec =
-            match List.assoc_opt "spec" items with
-            | Some (`String s) -> Some s
-            | _ -> None
-          in
-          (name, spec)
-      | _ -> (None, None)
-    with _ ->
-      let pkg = Option.value (form_field body "package") ~default:"" in
-      let local = Option.value (form_field body "local") ~default:"" in
-      let name =
-        match form_field body "name" with
-        | Some n when String.trim n <> "" -> Some (String.trim n)
-        | _ ->
-            let j = Packages.join_name ~package:pkg ~local in
-            if j = "" then None else Some j
-      in
-      (name, form_field body "spec")
+    match parse_body body with
+    | Body_fields items ->
+        let name =
+          match List.assoc_opt "name" items with
+          | Some (`String s) -> Some s
+          | _ -> None
+        in
+        let spec =
+          match List.assoc_opt "spec" items with
+          | Some (`String s) -> Some s
+          | _ -> None
+        in
+        (name, spec)
+    | Body_other -> (None, None)
+    | Body_form ->
+        let pkg = Option.value (form_field body "package") ~default:"" in
+        let local = Option.value (form_field body "local") ~default:"" in
+        let name =
+          match form_field body "name" with
+          | Some n when String.trim n <> "" -> Some (String.trim n)
+          | _ ->
+              let j = Packages.join_name ~package:pkg ~local in
+              if j = "" then None else Some j
+        in
+        (name, form_field body "spec")
   in
   match name_opt, spec_opt with
   | Some name, Some spec when name <> "" && spec <> "" ->

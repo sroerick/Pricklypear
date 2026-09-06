@@ -784,6 +784,40 @@ let parse_query (target : string) : (string * string) list =
    pages open Http_core and call it unqualified. *)
 let query_param = Http_kit.query_param
 
+(* ------------------------------------------------------------------
+   REQUEST BODY SHAPE — one parser for the JSON-else-form POST handlers.
+
+   Six handlers (http_pages api_eval/api_prim, http_agent api_agent/
+   api_agent_task/repl_llm/ai_propose) used to hand-roll the same
+   "try Yojson, catch, fall back to form fields" scaffolding, each with
+   its own drift-prone copy. One shape decision, made here:
+
+     - Body_fields: body is a JSON object — read fields from it.
+     - Body_other:  body parses as JSON but is not an object (bare
+                    string/array/number) — handlers use their defaults,
+                    NOT the form fallback (a JSON array like
+                    ["prompt=x"] must not be sniffed as a form).
+     - Body_form:   not JSON at all — read urlencoded form fields. *)
+type body_shape =
+  | Body_fields of (string * Yojson.Safe.t) list
+  | Body_other
+  | Body_form
+
+let parse_body (body : string) : body_shape =
+  match Yojson.Safe.from_string body with
+  | `Assoc items -> Body_fields items
+  | _ -> Body_other
+  | exception _ -> Body_form
+
+(* Read a string field out of parsed [Body_fields]; missing/non-string
+   falls back to [default]. Non-string fields (bools, ints, arg lists)
+   stay at the call site via List.assoc_opt. *)
+let json_field_str ?(default = "")
+    (fields : (string * Yojson.Safe.t) list) (name : string) : string =
+  match List.assoc_opt name fields with
+  | Some (`String s) -> s
+  | _ -> default
+
 let max_user_body_bytes = 64 * 1024
 
 let redirect_response (reqd : Httpun.Reqd.t) (location : string) : unit =

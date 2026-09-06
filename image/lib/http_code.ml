@@ -2,6 +2,7 @@
     book.pdf + src.tgz from PP_PUBLIC_DIR.
 
     See product-experience.public-release. *)
+open Pure_html
 let env_dir (name : string) (default : string) : string =
   match Sys.getenv_opt name with
   | Some d when String.trim d <> "" -> d
@@ -88,11 +89,6 @@ let max_file_bytes = 2 * 1024 * 1024
     larger bound so [/src.tgz] and [/book.pdf] actually serve instead
     of 404ing with "file too large". Still bounded to prevent abuse. *)
 let max_public_artifact_bytes = 64 * 1024 * 1024
-
-(* html escaping: one string-level implementation lives in the kernel
-   (Prims_pure.html_escape_str — the html-escape prim's engine, byte-identical
-   escape set); Http_code.html_escape was a third copy. *)
-let html_escape = Prims_pure.html_escape_str
 
 (* percent/query decoding lives in Http_kit (was pct_decode/query_param here,
    hand-rolled a second time). *)
@@ -242,30 +238,27 @@ let walk_tree_cached ~(root : string) ~(now : float) ~(ttl : float) :
       walk_tree_cache := Some (root, now, tree);
       tree
 
-let rec tree_to_html (nodes : tree_node list) ~(active : string) : string =
-  let buf = Buffer.create 256 in
-  Buffer.add_string buf "<ul class=\"code-tree\">";
-  List.iter
-    (function
-      | Dir (name, kids) ->
-          Buffer.add_string buf "<li class=\"code-dir\"><details open>";
-          Buffer.add_string buf "<summary>";
-          Buffer.add_string buf (html_escape name);
-          Buffer.add_string buf "</summary>";
-          Buffer.add_string buf (tree_to_html kids ~active);
-          Buffer.add_string buf "</details></li>"
-      | File (name, rel) ->
-          let cls =
-            if rel = active then "code-file active" else "code-file"
-          in
-          let href = "/code?f=" ^ pct_encode rel in
-          Buffer.add_string buf (Printf.sprintf "<li class=\"%s\">" cls);
-          Buffer.add_string buf
-            (Printf.sprintf "<a href=\"%s\">%s</a>" href (html_escape name));
-          Buffer.add_string buf "</li>")
-    nodes;
-  Buffer.add_string buf "</ul>";
-  Buffer.contents buf
+let rec tree_ul (nodes : tree_node list) ~(active : string) : Pure_html.node =
+  (* Source-tree navigation as a pure-html tree (was a Buffer-assembled
+     HTML string with hand escaping). *)
+  HTML.ul [HTML.class_ "code-tree"]
+    (List.filter_map
+       (function
+         | Dir (name, kids) ->
+             Some
+               (HTML.li [HTML.class_ "code-dir"]
+                  [ HTML.details [HTML.open_]
+                      [ HTML.summary [] [txt "%s" name]
+                      ; tree_ul kids ~active ]])
+         | File (name, rel) ->
+             let cls =
+               if rel = active then "code-file active" else "code-file"
+             in
+             Some
+               (HTML.li [HTML.class_ "%s" cls]
+                  [ HTML.a [HTML.href "/code?f=%s" (pct_encode rel)]
+                      [txt "%s" name] ]))
+       nodes)
 
 let code_css : string =
   "body{margin:0;font-family:ui-monospace,Menlo,monospace;background:#faf7f4;color:#1a1a1a}\n\
@@ -349,24 +342,43 @@ let handle_asset (reqd : Httpun.Reqd.t) ~(rel : string) : unit =
 
 let handle_public_artifact (reqd : Httpun.Reqd.t) ~(name : string) : unit =
   let root = public_dir () in
+  let missing_page (msg_nodes : Pure_html.node list) : unit =
+    let doc =
+      HTML.html []
+        [ HTML.head [] [HTML.title [] "missing"]
+        ; HTML.body [] msg_nodes
+        ]
+    in
+    serve_bytes reqd ~status:`Not_found ~content_type:"text/html; charset=utf-8"
+      (Pure_html.to_string doc)
+  in
   match resolve_under ~root name with
   | None ->
-      serve_bytes reqd ~status:`Not_found ~content_type:"text/html; charset=utf-8"
-        ("<!doctype html><title>missing</title><p>Artifact <code>"
-         ^ name
-         ^ "</code> not installed. Run <code>scripts/public_artifacts.sh</code> \
-            and set <code>PP_PUBLIC_DIR</code>.</p><p><a href=\"/welcome\">welcome</a></p>")
+      missing_page
+        [ HTML.p []
+            [ txt "Artifact "; HTML.code [] [txt "%s" name]
+            ; txt " not installed. Run "
+            ; HTML.code [] [txt "scripts/public_artifacts.sh"]
+            ; txt " and set "; HTML.code [] [txt "PP_PUBLIC_DIR"]; txt "."
+            ]
+        ; HTML.p [] [HTML.a [HTML.href "/welcome"] [txt "welcome"]]
+        ]
   | Some path ->
       if Sys.file_exists path && not (Sys.is_directory path) then
         serve_file_path reqd ~max:max_public_artifact_bytes ~path
       else
-        serve_bytes reqd ~status:`Not_found ~content_type:"text/html; charset=utf-8"
-          ("<!doctype html><title>missing</title><p>No <code>"
-           ^ name
-           ^ "</code> in <code>"
-           ^ root
-           ^ "</code>. Run <code>scripts/public_artifacts.sh</code>.</p>\
-              <p><a href=\"/welcome\">welcome</a> · <a href=\"/code\">code</a></p>")
+        missing_page
+          [ HTML.p []
+              [ txt "No "; HTML.code [] [txt "%s" name]
+              ; txt " in "; HTML.code [] [txt "%s" root]; txt ". Run "
+              ; HTML.code [] [txt "scripts/public_artifacts.sh"]; txt "."
+              ]
+          ; HTML.p []
+              [ HTML.a [HTML.href "/welcome"] [txt "welcome"]
+              ; txt " · "
+              ; HTML.a [HTML.href "/code"] [txt "code"]
+              ]
+          ]
 
 let handle_raw (reqd : Httpun.Reqd.t) ~(rel : string) : unit =
   let root = source_root () in
@@ -404,7 +416,6 @@ let handle_code_page (reqd : Httpun.Reqd.t) ~(target : string) : unit =
   let tree =
     walk_tree_cached ~root ~now:(Unix.gettimeofday ()) ~ttl:walk_tree_ttl
   in
-  let tree_html = tree_to_html tree ~active in
   let mode = cm_mode_for active in
   let title =
     if active = "" then "Source" else active
@@ -441,103 +452,143 @@ loadFile(FILE);
       (Yojson.Safe.to_string (`String mode))
       (Yojson.Safe.to_string (`String active))
   in
-  let html =
-    Printf.sprintf
-      {|<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>Pricklypear — %s</title>
-<link rel="stylesheet" href="/assets/cm/codemirror.min.css"/>
-<style>%s</style>
-</head>
-<body>
-<header class="code-hdr">
-  <div><strong>Pricklypear source</strong> · read-only</div>
-  <nav>
-    <a href="/welcome">Welcome</a> ·
-    <a href="/book.pdf">Book PDF</a> ·
-    <a href="/src.tgz">.tgz</a> ·
-    <a href="/login">Log in</a>
-  </nav>
-</header>
-<div class="code-wrap">
-  <aside class="code-side">%s</aside>
-  <div class="code-main">
-    <div class="code-meta">file: <span id="code-path">%s</span> · root: <code>%s</code></div>
-    <div class="code-editor"><textarea id="src"></textarea></div>
-  </div>
-</div>
-<script src="/assets/cm/codemirror.min.js"></script>
-<script src="/assets/cm/mode/mllike/mllike.min.js"></script>
-<script src="/assets/cm/mode/markdown/markdown.min.js"></script>
-<script>%s</script>
-</body>
-</html>|}
-      (html_escape title) code_css tree_html (html_escape active)
-      (html_escape root) boot_js
+  (* The whole document as a pure-html tree (was one sprintf template
+     with hand-escaped interpolations — a third document-assembly path
+     beside html_response and the login page). *)
+  let doc =
+    HTML.html [HTML.lang "en"]
+      [ HTML.head []
+          [ HTML.meta [HTML.charset "utf-8"]
+          ; HTML.meta [HTML.name "viewport";
+                       HTML.content "width=device-width, initial-scale=1"]
+          ; HTML.title [] "Pricklypear — %s" title
+          ; HTML.link [HTML.rel "stylesheet";
+                       HTML.href "/assets/cm/codemirror.min.css"]
+          ; HTML.style [] "%s" code_css
+          ]
+      ; HTML.body []
+          [ HTML.header [HTML.class_ "code-hdr"]
+              [ HTML.div []
+                  [ HTML.strong [] [txt "Pricklypear source"]
+                  ; txt " · read-only" ]
+              ; HTML.nav []
+                  [ HTML.a [HTML.href "/welcome"] [txt "Welcome"]
+                  ; txt " · "
+                  ; HTML.a [HTML.href "/book.pdf"] [txt "Book PDF"]
+                  ; txt " · "
+                  ; HTML.a [HTML.href "/src.tgz"] [txt ".tgz"]
+                  ; txt " · "
+                  ; HTML.a [HTML.href "/login"] [txt "Log in"]
+                  ]
+              ]
+          ; HTML.div [HTML.class_ "code-wrap"]
+              [ HTML.aside [HTML.class_ "code-side"] [tree_ul tree ~active]
+              ; HTML.div [HTML.class_ "code-main"]
+                  [ HTML.div [HTML.class_ "code-meta"]
+                      [ txt "file: "
+                      ; HTML.span [HTML.id "code-path"] [txt "%s" active]
+                      ; txt " · root: "
+                      ; HTML.code [] [txt "%s" root]
+                      ]
+                  ; HTML.div [HTML.class_ "code-editor"]
+                      [HTML.textarea [HTML.id "src"] ""]
+                  ]
+              ]
+          ; HTML.script [HTML.src "/assets/cm/codemirror.min.js"] ""
+          ; HTML.script [HTML.src "/assets/cm/mode/mllike/mllike.min.js"] ""
+          ; HTML.script
+              [HTML.src "/assets/cm/mode/markdown/markdown.min.js"] ""
+          ; HTML.script [] "%s" boot_js
+          ]
+      ]
   in
-  serve_bytes reqd ~content_type:"text/html; charset=utf-8" html
+  serve_bytes reqd ~content_type:"text/html; charset=utf-8"
+    (Pure_html.to_string doc)
 
-(** Public Lisp pages: body HTML only (no product chrome / private nav). *)
+(** Public Lisp pages: body HTML only (no product chrome / private nav).
+    [body_html] is raw HTML by contract — the Lisp faces return
+    render-html-marked strings — so it is injected unescaped. *)
 let serve_public_body (reqd : Httpun.Reqd.t) ?(title = "Pricklypear")
     (body_html : string) : unit =
   let doc =
-    Printf.sprintf
-      {|<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>%s</title>
-<style>
-body{margin:0;font-family:system-ui,-apple-system,sans-serif;background:#faf7f4;color:#1a1a1a;line-height:1.5}
+    HTML.html [HTML.lang "en"]
+      [ HTML.head []
+          [ HTML.meta [HTML.charset "utf-8"]
+          ; HTML.title [] "%s" title
+          ; HTML.meta [HTML.name "viewport";
+                       HTML.content "width=device-width, initial-scale=1"]
+          ; HTML.style []
+              {|body{margin:0;font-family:system-ui,-apple-system,sans-serif;background:#faf7f4;color:#1a1a1a;line-height:1.5}
 a{color:#000080}
-</style>
-</head>
-<body>
-%s
-</body>
-</html>|}
-      (html_escape title) body_html
+|}
+          ]
+      ; HTML.body [] [txt ~raw:true "%s" body_html]
+      ]
   in
-  serve_bytes reqd ~content_type:"text/html; charset=utf-8" doc
+  serve_bytes reqd ~content_type:"text/html; charset=utf-8"
+    (Pure_html.to_string doc)
 
 let fallback_welcome (reqd : Httpun.Reqd.t) : unit =
-  let body =
-    {|<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
-<title>Pricklypear</title>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
-<style>
-body{font-family:system-ui,sans-serif;max-width:40rem;margin:2rem auto;padding:0 1rem;line-height:1.5;background:#faf7f4}
+  let doc =
+    HTML.html [HTML.lang "en"]
+      [ HTML.head []
+          [ HTML.meta [HTML.charset "utf-8"]
+          ; HTML.title [] "Pricklypear"
+          ; HTML.meta [HTML.name "viewport";
+                       HTML.content "width=device-width, initial-scale=1"]
+          ; HTML.style []
+              {|body{font-family:system-ui,sans-serif;max-width:40rem;margin:2rem auto;padding:0 1rem;line-height:1.5;background:#faf7f4}
 a{color:#000080;font-weight:700} h1{letter-spacing:-.02em}
 .actions a{display:inline-block;margin:.25rem .35rem .25rem 0;padding:.4rem .75rem;border:2px solid #000;text-decoration:none;color:#000;background:#fff}
-</style></head><body>
-<h1>Pricklypear</h1>
-<p>A multi-user Lisp OS — live image, Postgres object store, htmx interface.</p>
-<p class="actions">
-<a href="/code">Explore the source</a>
-<a href="/book.pdf">Book (PDF)</a>
-<a href="/src.tgz">Source tarball</a>
-<a href="/login">Log in</a>
-</p>
-<p>Lisp welcome page not loaded yet (seed layout + welcome packages).</p>
-</body></html>|}
+|}
+          ]
+      ; HTML.body []
+          [ HTML.h1 [] [txt "Pricklypear"]
+          ; HTML.p []
+              [txt "A multi-user Lisp OS — live image, Postgres object store, htmx interface."]
+          ; HTML.p [HTML.class_ "actions"]
+              [ HTML.a [HTML.href "/code"] [txt "Explore the source"]
+              ; HTML.a [HTML.href "/book.pdf"] [txt "Book (PDF)"]
+              ; HTML.a [HTML.href "/src.tgz"] [txt "Source tarball"]
+              ; HTML.a [HTML.href "/login"] [txt "Log in"]
+              ]
+          ; HTML.p []
+              [txt "Lisp welcome page not loaded yet (seed layout + welcome packages)."]
+          ]
+      ]
   in
-  serve_bytes reqd ~content_type:"text/html; charset=utf-8" body
+  serve_bytes reqd ~content_type:"text/html; charset=utf-8"
+    (Pure_html.to_string doc)
 
 let fallback_book (reqd : Httpun.Reqd.t) : unit =
-  let body =
-    {|<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"/>
-<title>Pricklypear book</title>
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
-<style>body{font-family:system-ui,sans-serif;max-width:40rem;margin:2rem auto;padding:0 1rem;line-height:1.5}
-a{font-weight:700}</style></head><body>
-<h1>The Pricklypear book</h1>
-<p>Paginated literate rendering of the codebase via <code>borge book print</code>.</p>
-<p><a href="/book.pdf">Download PDF</a> · <a href="/src.tgz">tarball</a> ·
-<a href="/code">browse</a> · <a href="/welcome">welcome</a></p>
-</body></html>|}
+  let doc =
+    HTML.html [HTML.lang "en"]
+      [ HTML.head []
+          [ HTML.meta [HTML.charset "utf-8"]
+          ; HTML.title [] "Pricklypear book"
+          ; HTML.meta [HTML.name "viewport";
+                       HTML.content "width=device-width, initial-scale=1"]
+          ; HTML.style []
+              {|body{font-family:system-ui,sans-serif;max-width:40rem;margin:2rem auto;padding:0 1rem;line-height:1.5}
+a{font-weight:700}|}
+          ]
+      ; HTML.body []
+          [ HTML.h1 [] [txt "The Pricklypear book"]
+          ; HTML.p []
+              [ txt "Paginated literate rendering of the codebase via "
+              ; HTML.code [] [txt "borge book print"]
+              ]
+          ; HTML.p []
+              [ HTML.a [HTML.href "/book.pdf"] [txt "Download PDF"]
+              ; txt " · "
+              ; HTML.a [HTML.href "/src.tgz"] [txt "tarball"]
+              ; txt " · "
+              ; HTML.a [HTML.href "/code"] [txt "browse"]
+              ; txt " · "
+              ; HTML.a [HTML.href "/welcome"] [txt "welcome"]
+              ]
+          ]
+      ]
   in
-  serve_bytes reqd ~content_type:"text/html; charset=utf-8" body
+  serve_bytes reqd ~content_type:"text/html; charset=utf-8"
+    (Pure_html.to_string doc)

@@ -306,7 +306,6 @@ let request_handler ~(sw : Eio.Switch.t) ~(registry : Session_registry.t)
     let fail ?(status = `Bad_request) msg =
       text_response reqd ~status ~content_type:"text/plain" msg
     in
-    let esc = Prims_pure.html_escape_str in
     if row_path = "" then fail "path required"
     else if not (String.starts_with ~prefix:"data.book." row_path) then
       fail "not a book row path"
@@ -340,36 +339,53 @@ let request_handler ~(sw : Eio.Switch.t) ~(registry : Session_registry.t)
                   Printf.sprintf "%.0f ms"
                     ((Unix.gettimeofday () -. t0) *. 1000.0)
                 in
-                let result_html =
+                let elapsed_node () =
+                  HTML.span [HTML.class_ "book-elapsed"]
+                    [txt "(%s)" (elapsed ())]
+                in
+                (* The htmx replacement fragment, built as a pure-html
+                   tree instead of hand-assembled sprintf HTML (which
+                   hand-escaped everything, e.g. the literal =&gt;).
+                   Text nodes escape & < >; quotes stay literal — valid
+                   HTML text either way. *)
+                let result_node =
                   match Session.example_eval_engine session src with
                   | v ->
-                      Printf.sprintf
-                        "<div class=\"book-result\">⇒ <code>%s</code> <span class=\"book-elapsed\">(%s)</span></div>"
-                        (esc (Pricklypear_lisp.Reader.pp_value v))
-                        (elapsed ())
+                      HTML.div [HTML.class_ "book-result"]
+                        [ txt "⇒ "
+                        ; HTML.code []
+                            [txt "%s" (Pricklypear_lisp.Reader.pp_value v)]
+                        ; txt " "
+                        ; elapsed_node () ]
                   | exception Example_eval.Refused reason ->
-                      Printf.sprintf
-                        "<div class=\"book-error\">refused: %s <span class=\"book-elapsed\">(%s)</span></div>"
-                        (esc reason) (elapsed ())
+                      HTML.div [HTML.class_ "book-error"]
+                        [ txt "refused: "; txt "%s" reason; txt " "
+                        ; elapsed_node () ]
                   | exception exn ->
-                      Printf.sprintf
-                        "<div class=\"book-error\">error: %s <span class=\"book-elapsed\">(%s)</span></div>"
-                        (esc (Printexc.to_string exn))
-                        (elapsed ())
+                      HTML.div [HTML.class_ "book-error"]
+                        [ txt "error: "; txt "%s" (Printexc.to_string exn)
+                        ; txt " "; elapsed_node () ]
                 in
-                let expected_html =
-                  if expected = "" then ""
+                let expected_node =
+                  if expected = "" then None
                   else
-                    Printf.sprintf
-                      "<p class=\"book-expected\">expect =&gt; %s</p>"
-                      (esc expected)
+                    Some
+                      (HTML.p [HTML.class_ "book-expected"]
+                         [txt "expect => %s" expected])
                 in
-                let html =
-                  Printf.sprintf
-                    "<div class=\"book-example\"><pre><code>%s</code></pre>%s%s</div>"
-                    (esc src) result_html expected_html
+                (* The trailing empty txt inside pre keeps the
+                   pretty-printer from wrapping the element in newlines
+                   (whitespace is significant inside pre, and the htmx
+                   replacement must render the example source exactly). *)
+                let node =
+                  HTML.div [HTML.class_ "book-example"]
+                    ([ HTML.pre []
+                         [ HTML.code [] [txt "%s" src]; txt "" ]
+                     ; result_node ]
+                     @
+                     (match expected_node with Some n -> [ n ] | None -> []))
                 in
-                text_response reqd ~content_type:"text/html" html
+                fragment_response reqd (Pure_html.to_string node)
           | _ -> fail "bad book row JSON"
           | exception _ -> fail "bad book row JSON")
       | _ -> fail "bad book row"
