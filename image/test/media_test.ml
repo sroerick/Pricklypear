@@ -58,6 +58,40 @@ let test_visible_sql () =
   check string "admin unconstrained" "TRUE"
     (Pricklypear_image_lib.Media.visible_sql ~is_admin:true ~actor_param:2)
 
+(** i-1788670909: typed Media.put failures. [status_of_put_error] is the
+    ONE edge mapping (exhaustive over the variant — a new constructor is
+    a compile error, not a silent 500); [put_error_message] must keep the
+    exact strings the old stringly-typed contract produced (prim output
+    compat). *)
+let test_put_error_messages () =
+  let open Pricklypear_image_lib.Media in
+  let m e = put_error_message e in
+  Alcotest.(check string) "disallowed renders old string"
+    "disallowed content_type: application/octet-stream"
+    (m (Disallowed_content_type "application/octet-stream"));
+  Alcotest.(check string) "empty renders old string" "empty body"
+    (m Empty_body);
+  Alcotest.(check string) "too large renders old string"
+    "payload too large (10 > 5)" (m (Too_large (10, 5)));
+  Alcotest.(check string) "no db renders old string" "no db connection"
+    (m No_db);
+  Alcotest.(check string) "store failure detail passthrough"
+    "store failed: boom" (m (Store_failed "store failed: boom"))
+
+let test_status_of_put_error () =
+  let open Pricklypear_image_lib in
+  let s e = Http_media.status_of_put_error e in
+  Alcotest.(check bool) "disallowed -> 400" true
+    (s (Media.Disallowed_content_type "x") = `Bad_request);
+  Alcotest.(check bool) "empty -> 400" true
+    (s Media.Empty_body = `Bad_request);
+  Alcotest.(check bool) "too large -> 413" true
+    (s (Media.Too_large (2, 1)) = `Payload_too_large);
+  Alcotest.(check bool) "no db -> 500 (was the prefix-fallthrough 500)" true
+    (s Media.No_db = `Internal_server_error);
+  Alcotest.(check bool) "store failure -> 500" true
+    (s (Media.Store_failed "x") = `Internal_server_error)
+
 let test_multipart_boundary () =
   let open Pricklypear_image_lib.Http_media in
   check (option string) "quoted"
@@ -164,6 +198,11 @@ let () =
         ; test_case "range parse" `Quick test_parse_range ] )
     ; ( "visibility"
       , [ test_case "sql confinement" `Quick test_visible_sql ] )
+    ; ( "put-errors"
+      , [ test_case "messages match the old stringly contract" `Quick
+            test_put_error_messages
+        ; test_case "status mapping is exhaustive" `Quick
+            test_status_of_put_error ] )
     ; ( "multipart"
       , [ test_case "boundary" `Quick test_multipart_boundary
         ; test_case "parse file part" `Quick test_multipart_parse

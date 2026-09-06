@@ -444,25 +444,24 @@ let tree_edit (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
               let type_name =
                 match n.type_name with Some t -> t | None -> n.kind
               in
-              let result =
-                match
-                  C.tree_upsert (Session.store session) ~path ~kind:n.kind
-                    ~type_name ~body_json ~author:uname
-                with
-                | VStr s -> s
-                | _ -> "unexpected tree/upsert result"
-              in
-              let ok = not (String.starts_with ~prefix:"upsert_" result) in
-              if ok then
-                redirect_response reqd ("/tree?path=" ^ path)
-              else
-                html_response reqd ~session ~status:`Bad_request
-                  (chrome ~session ~title:"tree"
-                     [
-                       HTML.p [HTML.class_ "err"] [txt "%s" result];
-                       HTML.p []
-                         [
-                           HTML.a [HTML.href "/tree?path=%s" path]
-                             [txt "back to node"];
-                         ];
-                     ]))
+              (* i-1788670909: typed result — the old edge sniffed
+                 "upsert_"-prefixed failure text, which silently treated
+                 a validation rejection (different prefix) as success and
+                 redirected. *)
+              match
+                C.tree_upsert_outcome (Session.store session) ~path
+                  ~kind:n.kind ~type_name ~body_json ~author:uname
+              with
+              | Ok _p ->
+                  redirect_response reqd ("/tree?path=" ^ path)
+              | Error msg ->
+                  html_response reqd ~session ~status:`Bad_request
+                    (chrome ~session ~title:"tree"
+                       [
+                         HTML.p [HTML.class_ "err"] [txt "%s" msg];
+                         HTML.p []
+                           [
+                             HTML.a [HTML.href "/tree?path=%s" path]
+                               [txt "back to node"];
+                           ];
+                       ]))

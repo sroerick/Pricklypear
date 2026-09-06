@@ -2154,11 +2154,14 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
           let now_ms =
             Int64.of_float (Unix.gettimeofday () *. 1000.0)
           in
-          let id =
+          (match
             Jobs.submit ~store:t.store ~fn ~args_json ~branch
               ~submitted_by:caller ~run_at_ms:now_ms ()
-          in
-          (Pricklypear_lisp.Ast.VStr id)
+          with
+          | Ok id -> (Pricklypear_lisp.Ast.VStr id)
+          (* prim value contract unchanged: the failure text WAS the
+             returned string; only the module boundary is typed now. *)
+          | Error msg -> (Pricklypear_lisp.Ast.VStr msg))
       | _ ->
         (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("submit-job", "need fn-str, args", "bad-args")))));
 
@@ -2182,11 +2185,12 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
             | Some c -> (Request_context.manifest c).branch_name
             | None -> t.manifest.branch_name
           in
-          let id =
+          (match
             Jobs.submit ~store:t.store ~fn ~args_json ~branch
               ~submitted_by:caller ~run_at_ms ()
-          in
-          (Pricklypear_lisp.Ast.VStr id)
+          with
+          | Ok id -> (Pricklypear_lisp.Ast.VStr id)
+          | Error msg -> (Pricklypear_lisp.Ast.VStr msg))
       | _ ->
         (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("submit-job-at", "need fn-str, args, run-at-ms", "bad-args")))));
 

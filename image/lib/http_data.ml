@@ -420,16 +420,14 @@ let data_create (session : Session.t) (type_name : string)
         ()
     | Ok fields_json ->
         let author = Session.username session in
-        let v =
-          Crud.create store ~type_name ~fields_json ~author
-        in
-        (match v with
-         | Pricklypear_lisp.Ast.VStr id
-           when String.length id = 36 && not (String.contains id ' ') ->
+        (match
+           Crud.create_outcome store ~type_name ~fields_json ~author
+         with
+         | Crud.W_ok id ->
              redirect_response reqd
                (Printf.sprintf "/data/%s/%s" type_name id);
              ()
-         | Pricklypear_lisp.Ast.VStr msg ->
+         | Crud.W_rejected msg ->
              html_response reqd ~session ~status:`Internal_server_error
                (chrome ~session ~title:"Create failed" [
                   HTML.p [HTML.class_ "err"] [txt "%s" msg];
@@ -438,7 +436,7 @@ let data_create (session : Session.t) (type_name : string)
                   ];
                 ]);
              ()
-         | _ ->
+         | Crud.W_no_row ->
              html_response reqd ~session ~status:`Internal_server_error
                (chrome ~session ~title:"Create failed" [
                   HTML.p [HTML.class_ "err"] [txt "create failed"];
@@ -647,16 +645,30 @@ let data_update (session : Session.t) (type_name : string) (id : string)
                 ]);
              ()
          | Ok fields_json ->
-             let v =
-               Crud.update_guarded store ~type_name ~id ~fields_json
-                 ~caller:(Session.username session)
-             in
-             (match v with
-              | Pricklypear_lisp.Ast.VStr _ ->
+             (match
+                Crud.update_outcome store ~type_name ~id ~fields_json
+                  ~caller:(Session.username session)
+              with
+              | Crud.W_ok _ ->
                   redirect_response reqd
                     (Printf.sprintf "/data/%s/%s" type_name id);
                   ()
-              | _ ->
+              | Crud.W_rejected msg ->
+                  (* i-1788670909: a typed-boundary rejection is a client
+                     error, not a missing row and not a success — the old
+                     shape-sniffing arm folded it into the VStr success
+                     redirect. *)
+                  html_response reqd ~session ~status:`Bad_request
+                    (chrome ~session ~title:"Update failed" [
+                       HTML.p [HTML.class_ "err"] [txt "%s" msg];
+                       HTML.p [] [
+                         HTML.a
+                           [HTML.href "/data/%s/%s" type_name id]
+                           [txt "Back"];
+                       ];
+                     ]);
+                  ()
+              | Crud.W_no_row ->
                   html_response reqd ~session ~status:`Not_found
                     (chrome ~session ~title:"Update failed" [
                        HTML.p [HTML.class_ "err"] [txt "row not found"];

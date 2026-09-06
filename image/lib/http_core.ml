@@ -1545,6 +1545,22 @@ let multipart_response (reqd : Httpun.Reqd.t)
   let resp = Httpun.Response.create ~headers `OK in
   safe_respond_with_string reqd resp body
 
+(** i-1788670909: ONE status mapping for handler-signalled codes — the
+    named common cases, then any valid 3-digit HTTP code passes through
+    (Httpun.Status.of_code), and only non-3-digit garbage coerces to 400
+    (was: every unknown code silently became 400). *)
+let status_of_handler_code (code : int) : Httpun.Status.t =
+  match code with
+  | 409 -> `Conflict
+  | 400 -> `Bad_request
+  | 403 -> `Forbidden
+  | 404 -> `Not_found
+  | 500 -> `Internal_server_error
+  | _ -> (try Httpun.Status.of_code code with Failure _ -> `Bad_request)
+
+(* Exposed for unit tests *)
+let status_of_handler_code_for_test = status_of_handler_code
+
 let respond_handler_value
     ~(session : Session.t)
     ~(reqd : Httpun.Reqd.t)
@@ -1566,15 +1582,7 @@ let respond_handler_value
        | Some (code, body) ->
            (* Handler signalled a non-200 status (e.g. op-seq 409).
               Respond with the status + body as a fragment/HTML. *)
-           let status =
-             match code with
-             | 409 -> `Conflict
-             | 400 -> `Bad_request
-             | 403 -> `Forbidden
-             | 404 -> `Not_found
-             | 500 -> `Internal_server_error
-             | _ -> `Bad_request
-           in
+           let status = status_of_handler_code code in
            if fragment then fragment_response reqd ~status body
            else
              html_response reqd ~session ~status

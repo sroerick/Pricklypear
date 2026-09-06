@@ -1014,6 +1014,7 @@ let export_package = Agent_tools.export_package
 let propose_function = Agent_tools.propose_function
 let default_agent_seed = Agent_tools.default_agent_seed
 let agent_session_new = Agent_tools.agent_session_new
+let agent_session_new_res = Agent_tools.agent_session_new_res
 let agent_say = Agent_tools.agent_say
 let agent_history = Agent_tools.agent_history
 let agent_sessions = Agent_tools.agent_sessions

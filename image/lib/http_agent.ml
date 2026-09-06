@@ -250,16 +250,10 @@ let api_agent (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
               Some
                 (if String.length p > 80 then String.sub p 0 80 ^ "…" else p)
           in
-          let v =
-            Session.agent_session_new session ~seed ~tools ?title:title_opt ()
-          in
-          (match v with
-           | Pricklypear_lisp.Ast.VStr s
-             when not (String.starts_with ~prefix:"agent-session-new error" s) ->
-               (Ok s)
-           | Pricklypear_lisp.Ast.VStr e -> (Error e)
-           | other ->
-               (Error (Pricklypear_lisp.Reader.pp_value other)))
+          (* i-1788670909: typed result; the error string keeps the same
+             "agent-session-new error: ..." rendering the old prefix-sniff
+             matched. *)
+          Session.agent_session_new_res session ~seed ~tools ?title:title_opt ()
     in
     match sid_r with
     | Error e ->
@@ -418,17 +412,21 @@ let repl_llm (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
       if String.trim p = "" then None
       else Some (if String.length p > 80 then String.sub p 0 80 ^ "…" else p)
     in
-    let sid_v =
-      Session.agent_session_new session ~seed:default_http_agent_seed
+    (* i-1788670909: typed result; the error string keeps the same
+       "agent-session-new error: ..." rendering the old prefix-sniff
+       matched. *)
+    match
+      Session.agent_session_new_res session ~seed:default_http_agent_seed
         ~tools:true ?title:title_opt ()
-    in
-    match sid_v with
-    | Pricklypear_lisp.Ast.VStr e
-      when String.starts_with ~prefix:"agent-session-new error" e ->
+    with
+    | Error e ->
         json_response reqd
-          (`Assoc [ ("ok", `Bool false); ("error", `String e) ]);
+          (`Assoc
+             [ ("ok", `Bool false)
+             ; ("error", `String ("agent-session-new error: " ^ e))
+             ]);
         ()
-    | Pricklypear_lisp.Ast.VStr sid ->
+    | Ok sid ->
       (* Streaming multipart/mixed response: one part per token, routed
          into the live bubble by hx-multipart. *)
       let boundary = "pp" ^ random_hex_bytes 8 in
@@ -512,11 +510,7 @@ let repl_llm (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
               saw_end := true;
               finish ()
             end)
-    | other ->
-        let e = Pricklypear_lisp.Reader.pp_value other in
-        json_response reqd
-          (`Assoc [ ("ok", `Bool false); ("error", `String e) ]);
-        ()
+    (* Ok/Error both handled above; nothing else can arrive *)
   end
 
 let agent_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
