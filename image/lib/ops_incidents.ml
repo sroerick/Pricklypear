@@ -89,7 +89,8 @@ let file_todo_and_note (session : Session_types.t) ~(title : string)
       let v =
         Control_rim.run_lwt ~prims:session.prims (fun () ->
             Pricklypear_lisp.Eval.eval_string_direct
-              ~prims:Pricklypear_lisp.Eval.empty_prims session.env expr)
+              ~prims:Pricklypear_lisp.Eval.empty_prims session.env
+              ~budget:(Pricklypear_lisp.Eval.make_budget ()) expr)
       in
       match v with
       | VStr s when String.trim s <> "" -> (Some s)

@@ -130,9 +130,14 @@ let jobs_runner_loop ~(session : Session.t) : unit =
          job (borge/jobs.borg step-checkpoints). Outside this binding there
          is no job context and with-step is a plain thunk call. *)
       Jobs.with_current_job_id job.Jobs.id (fun () ->
+        (* Jobs run UNBUDGETED (jobs.borg runner, 2026-09-05): the job
+           eval gets a max_int-step budget. Request-path evals keep the
+           100k sync budget; the runaway guard for jobs is attempts/
+           backoff + step checkpoints + host ownership. *)
         let v =
           Request_context.with_current ctx (fun () ->
-            Session.eval_string_rim t call_src)
+              Session.eval_string_rim_budgeted t call_src
+                (Pricklypear_lisp.Eval.make_budget ~limit:max_int ()))
         in
         let result_json =
           match v with

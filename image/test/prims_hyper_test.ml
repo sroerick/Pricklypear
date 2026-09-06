@@ -24,7 +24,8 @@ let eval s =
   let env, prims = make_test_env () in
   Pricklypear_image_lib.Control_rim.run ~prims (fun () ->
       Pricklypear_lisp.Eval.eval_string_direct
-        ~prims:Pricklypear_lisp.Eval.empty_prims env s)
+        ~prims:Pricklypear_lisp.Eval.empty_prims env
+        ~budget:(Pricklypear_lisp.Eval.make_budget ()) s)
 
 let eval_str s =
   Pricklypear_lisp.Reader.pp_value (eval s)

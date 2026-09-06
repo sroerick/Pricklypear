@@ -58,7 +58,8 @@ let define_binding (t : t) ~(name : string) ~(body_src : string)
       let v =
         Control_rim.run_lwt ~prims:t.prims (fun () ->
           Pricklypear_lisp.Eval.eval_string_direct
-            ~prims:Pricklypear_lisp.Eval.empty_prims t.env input)
+            ~prims:Pricklypear_lisp.Eval.empty_prims t.env
+            ~budget:(Pricklypear_lisp.Eval.make_budget ()) input)
       in
       (match Pricklypear_lisp.Eval.parse_top_define expr with
        | Some { name = n; body = body_expr; doc } ->
@@ -804,6 +805,7 @@ let run_smoke_route
                          Control_rim.run_lwt ~prims:t.prims (fun () ->
                              Pricklypear_lisp.Eval.eval_string_direct
                                ~prims:Pricklypear_lisp.Eval.empty_prims t.env
+                               ~budget:(Pricklypear_lisp.Eval.make_budget ())
                                ("(" ^ handler ^ ")"))
                        in
                        (`Ok v)
@@ -1000,7 +1002,7 @@ let run_agent_tool (t : t) ~(name : string) ~(arguments : string)
                         Control_rim.run_lwt ~prims:t.prims (fun () ->
                             Pricklypear_lisp.Eval.eval_string_direct
                               ~prims:Pricklypear_lisp.Eval.empty_prims t.env
-                              expr)
+                              ~budget:(Pricklypear_lisp.Eval.make_budget ()) expr)
                       in
                       let s = Pricklypear_lisp.Reader.pp_value v in
                       ("ok: true\nvalue: "
