@@ -329,7 +329,15 @@ let register (t : t) (tbl : Primitives.t) : unit =
       | Some c -> (Request_context.manifest c).username
       | None -> t.manifest.username
     in
-    t.is_admin || String.ends_with ~suffix:"/agent" uname
+    if t.is_admin || String.ends_with ~suffix:"/agent" uname then true
+    else
+      (* auth 008: native agents are users with user_type='agent',
+         whatever their username (M1 hand-created agent-prickle has no
+         "/agent" suffix). One lookup per outbound-http call; the
+         lookup is exception-safe (None on DB trouble -> deny closed). *)
+      (match Auth_store.get_user_by_username t.store uname with
+       | Some u -> u.user_type = "agent"
+       | None -> false)
   in
   (* Identity gate shared by http-get / http-post (image.outbound-http):
      SSRF confinement is by CALLER, not by destination allowlist. *)
