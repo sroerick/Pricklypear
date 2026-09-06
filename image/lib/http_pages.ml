@@ -1552,17 +1552,19 @@ let inspect_row_page (session : Session.t) (type_name : string) (id : string)
 let api_eval (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
   let body = read_body reqd in
   let expr_opt =
-    try
-      match Yojson.Safe.from_string body with
-      | `Assoc items ->
-          (match List.assoc_opt "expr" items with
-           | Some (`String s) -> Some s
-           | _ -> None)
-      | `String s -> Some s
-      | _ -> None
-    with _ ->
-      (* also accept raw text body *)
-      if String.trim body = "" then None else Some body
+    match parse_body body with
+    | Body_fields items ->
+        (match List.assoc_opt "expr" items with
+         | Some (`String s) -> Some s
+         | _ -> None)
+    | Body_other -> (
+        (* a bare JSON string is accepted as the expression *)
+        match Yojson.Safe.from_string body with
+        | `String s -> Some s
+        | _ -> None)
+    | Body_form ->
+        (* also accept raw text body *)
+        if String.trim body = "" then None else Some body
   in
   match expr_opt with
   | None ->
@@ -1622,22 +1624,16 @@ let api_eval (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
 let api_prim (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
   let body = read_body reqd in
   let name, args =
-    try
-      match Yojson.Safe.from_string body with
-      | `Assoc items ->
-          let n =
-            match List.assoc_opt "name" items with
-            | Some (`String s) -> s
-            | _ -> ""
-          in
-          let a =
-            match List.assoc_opt "args" items with
-            | Some (`List xs) -> List.map Prims_pure.json_to_value xs
-            | _ -> []
-          in
-          (n, a)
-      | _ -> ("", [])
-    with _ -> ("", [])
+    match parse_body body with
+    | Body_fields items ->
+        let n = json_field_str items "name" in
+        let a =
+          match List.assoc_opt "args" items with
+          | Some (`List xs) -> List.map Prims_pure.json_to_value xs
+          | _ -> []
+        in
+        (n, a)
+    | (Body_other | Body_form) -> ("", [])
   in
   if name = "" then
     json_response reqd ~status:`Bad_request

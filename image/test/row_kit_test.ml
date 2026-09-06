@@ -160,14 +160,13 @@ let test_llm_key_parsing () =
 
 let test_html_escape_single_source () =
   (* the escaped set is amp, lt, gt, quot, apos — the one string-level escaper is
-     Prims_pure.html_escape_str; Http_code.html_escape / Crud's renderer /
-     Http_core's decoders all delegate to the shared implementations now *)
+     Prims_pure.html_escape_str (the html-escape prim's engine);
+     Http_code's copy and Crud's renderer were deleted, and pure-html
+     text nodes are the structural escaper *)
   Alcotest.(check string) "full set" "&amp;&lt;&gt;&quot;&#39;"
     (Prims_pure.html_escape_str "&<>\"'");
   Alcotest.(check string) "passthrough" "plain text 123"
-    (Prims_pure.html_escape_str "plain text 123");
-  Alcotest.(check string) "Http_code delegates" "&lt;tag&gt;"
-    (Http_code.html_escape "<tag>")
+    (Prims_pure.html_escape_str "plain text 123")
 
 let () =
   let open Alcotest in
