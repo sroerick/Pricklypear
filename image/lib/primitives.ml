@@ -133,8 +133,6 @@ let register_session_prims
 
 (* (date-today) -> VStr "YYYY-MM-DD" in local time. *)
 
-open Prims_pure
-
 (* Re-export pure helpers used by Session / Http. *)
 let is_raw_html = Prims_pure.is_raw_html
 let is_multipart = Prims_pure.is_multipart
@@ -166,131 +164,26 @@ let prim_random_uuid (_args : value list) : value =
          hex_byte 15
        ])
 
-(* Register the minimal set. Returns the populated table. *)
+(* Register the prim set. Returns the populated table. *)
 let make_with_defaults () : t =
   let t = make () in
-  register_sync t "+" prim_add;
-  register_sync t "-" prim_sub;
-  register_sync t "*" prim_mul;
-  register_sync t "div" prim_div;
-  register_sync t "/" prim_div; (* Scheme-style alias of div *)
-  register_sync t "mod" prim_mod;
-  register_sync t "quotient" prim_quotient;
-  register_sync t "remainder" prim_remainder;
-  register_sync t "abs" prim_abs;
-  register_sync t "min" prim_min;
-  register_sync t "max" prim_max;
-  (* lisp-interpreter.math — transcendental + predicates + RNG *)
-  register_sync t "expt" prim_expt;
-  register_sync t "sqrt" prim_sqrt;
-  register_sync t "exp" prim_exp;
-  register_sync t "log" prim_log;
-  register_sync t "sin" prim_sin;
-  register_sync t "cos" prim_cos;
-  register_sync t "tan" prim_tan;
-  register_sync t "asin" prim_asin;
-  register_sync t "acos" prim_acos;
-  register_sync t "atan" prim_atan;
-  register_sync t "number?" prim_number_p;
-  register_sync t "integer?" prim_integer_p;
-  register_sync t "zero?" prim_zero_p;
-  register_sync t "positive?" prim_positive_p;
-  register_sync t "negative?" prim_negative_p;
-  register_sync t "even?" prim_even_p;
-  register_sync t "odd?" prim_odd_p;
-  register_sync t "random" prim_random;
-  register_sync t "random-seed" prim_random_seed;
-  register_sync t "=" prim_num_eq;
-  register_sync t "<" prim_lt;
-  register_sync t ">" prim_gt;
-  register_sync t "<=" prim_le;
-  register_sync t ">=" prim_ge;
-  register_sync t "not" prim_not;
-  register_sync t "list" prim_list;
-  register_sync t "car" prim_car;
-  register_sync t "cdr" prim_cdr;
-  register_sync t "cons" prim_cons;
-  register_sync t "null?" prim_null_p;
-  register_sync t "pair?" prim_pair_p;
-  register_sync t "string-append" prim_string_append;
-  register_sync t "string-join" prim_string_join;
-  register_sync t "string-length" prim_string_length;
-  register_sync t "substring" prim_substring;
-  register_sync t "string-contains?" prim_string_contains;
-  register_sync t "string-split" prim_string_split;
-  register_sync t "prose-tokens" prim_prose_tokens;
-  register_sync t "render-tokens" prim_render_tokens;
-  register_sync t "string-eq" prim_string_eq;
-  register_sync t "string<?" prim_string_lt;
-  register_sync t "string<=?" prim_string_le;
-  register_sync t "string>?" prim_string_gt;
-  register_sync t "string>=?" prim_string_ge;
-  register_sync t "string-trim" prim_string_trim;
-  register_sync t "html-escape" prim_html_escape;
-  register_sync t "json-parse" prim_json_parse;
-  register_sync t "json-emit" prim_json_emit;
-  register_sync t "read-string" prim_read_string;
-  register_sync t "read-all-string" prim_read_all_string;
-  register_sync t "type-of" prim_type_of;
-  register_sync t "symbol?" prim_symbol_p;
-  register_sync t "string?" prim_string_p;
-  register_sync t "symbol=?" prim_symbol_eq;
-  register_sync t "symbol->string" prim_symbol_to_string;
-  register_sync t "string->symbol" prim_string_to_symbol;
-  register_sync t "str" prim_str;
-  register_sync t "as-str" prim_as_str;
-  register_sync t "append" prim_append;
-  register_sync t "reverse" prim_reverse;
-  register_sync t "sort" prim_sort;
-  register_sync t "nth" prim_nth;
-  (* list-branches is registered as a session DB prim in session.ml *)
-  register_sync t "hx-get" prim_hx_get;
-  register_sync t "hx-post" prim_hx_post;
-  register_sync t "err/shape" prim_err_shape;
-  register_sync t "count" prim_count;
-  register_sync t "length" prim_length;
-  register_sync t "equal?" prim_equal_p;
-  register_sync t "cadr" prim_cadr;
-  register_sync t "caar" prim_caar;
-  register_sync t "caddr" prim_caddr;
-  register_sync t "cddr" prim_cddr;
-  register_sync t "assoc" prim_assoc;
-  register_sync t "member" prim_member;
-  register_sync t "dict-get" prim_dict_get;
-  register_sync t "dict-set" prim_dict_set;
+  (* ONE shared pure catalog (pure/prims_pure.ml [Prims_pure.install])
+     — the frozen pure surface every host registers (i-1788670799-f:
+     the per-host hand copies here / client / agent / remote had
+     already diverged). Image-only extras layer ON TOP
+     (Hashtbl.replace semantics): wall-clock prims (prims_time.ml
+     reads Unix), sha1 (prims_crypto.ml), and the crypto-grade
+     random-uuid shadow below (the browser client keeps the pure
+     MT19937 version). *)
+  Prims_pure.install t;
   register_sync t "date-today" Prims_time.prim_date_today;
   register_sync t "now" Prims_time.prim_now;
   register_sync t "now-ms" Prims_time.prim_now_ms;
-  register_sync t "parse-int" prim_parse_int;
-  register_sync t "parse-float" prim_parse_float;
-  register_sync t "floor" prim_floor;
-  register_sync t "round" prim_round;
   register_sync t "date-weekday" Prims_time.prim_date_weekday;
   register_sync t "date-format" Prims_time.prim_date_format;
   register_sync t "date-add-days" Prims_time.prim_date_add_days;
   register_sync t "date-diff-days" Prims_time.prim_date_diff_days;
-  register_sync t "fsrs-schedule" prim_fsrs_schedule;
-  register_sync t "dict-keys" prim_dict_keys;
-  register_sync t "render-html" prim_render_html;
-  register_sync t "status-response" prim_status_response;
-  register_sync t "part" Prims_pure.prim_part;
-  register_sync t "json-part" Prims_pure.prim_json_part;
-  register_sync t "multipart" Prims_pure.prim_multipart;
-  register_sync t "extract-links" prim_extract_links;
-  register_sync t "render-links" prim_render_links;
-  register_sync t "budget-remaining" prim_budget_remaining;
-  (* kernel I/O primitives (from notes inbox kernel-io-primitives-2026-07-27) *)
-  register_sync t "string-replace" prim_string_replace;
-  register_sync t "string-downcase" prim_string_downcase;
-  register_sync t "string-upcase" prim_string_upcase;
-  register_sync t "string-starts-with?" prim_string_starts_with_p;
-  register_sync t "string-ends-with?" prim_string_ends_with_p;
-  register_sync t "url-encode" prim_url_encode;
-  register_sync t "url-decode" prim_url_decode;
   register_sync t "sha1" Prims_crypto.prim_sha1;
-  register_sync t "html-decode" prim_html_decode;
-  register_sync t "parse-date" prim_parse_date;
-  register_sync t "xml-parse" prim_xml_parse;
   register_sync t "random-uuid" prim_random_uuid;
   t
 

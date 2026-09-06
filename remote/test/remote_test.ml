@@ -256,6 +256,23 @@ let test_route_table_and_dispatch () =
    | VStr s -> Alcotest.(check string) "query-param resolves" "<p>stuff</p>" s
    | other -> Alcotest.fail ("qp wrong shape: " ^ Reader.pp_value other))
 
+(** i-1788670799-f: the local table covers the shared pure catalog (the
+    hand copy here registered string-split twice and skipped the
+    math/render towers), and pure compute through it stays LOCAL and
+    callable. *)
+let test_pure_catalog_parity () =
+  let transport, calls, _ = mock_transport () in
+  let t = Remote.make ~transport () in
+  List.iter
+    (fun name ->
+       if not (Hashtbl.mem t.Remote.local_prims name) then
+         Alcotest.fail ("remote local table missing pure prim: " ^ name))
+    Prims_pure.catalog_names;
+  Alcotest.check pp_value_testable "pure parity callable" (VInt 2L)
+    (Remote.eval t "(length (string-split \"a,b\" \",\"))");
+  Alcotest.(check int) "zero prim calls (pure stayed local)" 0
+    (List.length !calls)
+
 let () =
   Alcotest.run "remote"
     [
@@ -270,5 +287,6 @@ let () =
           Alcotest.test_case "transaction without hook raises" `Quick test_transaction_without_hook_raises;
           Alcotest.test_case "stepping over a remote client" `Quick test_stepping_via_client;
           Alcotest.test_case "route table + template dispatch" `Quick test_route_table_and_dispatch;
+          Alcotest.test_case "pure catalog parity" `Quick test_pure_catalog_parity;
         ] );
     ]

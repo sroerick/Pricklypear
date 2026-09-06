@@ -482,77 +482,16 @@ let register_route_prims (t : t) : unit =
   in
   add_prim t "session/last-turn-parts" last_turn_parts
 
-(** Install the pricklypear-pure-prims surface (dict/json/string/
-    list/math — the frozen core set per lisp-interpreter.core-freeze)
-    into our table. The image's registry (image/lib/primitives.ml)
-    enumerates the same set with image-specific additions; here we
-    bind only what exists in pure/, no DB/auth/hx prims. *)
+(** Install the shared pure-prim catalog (pure/prims_pure.ml
+    [Prims_pure.catalog] — the ONE hand-enumerated frozen surface,
+    i-1788670799-f: the per-host hand copies here / client / remote had
+    already diverged — this one lacked length and the math tower and
+    registered string-split twice). add_prim registers in the table AND
+    binds the VPrim in env, mirroring how the image session binds its
+    registry. Host-specific prims (fs/event/ui/route/identity, below)
+    layer on top. *)
 let register_pure_prims (t : t) : unit =
-  let open Prims_pure in
-  let r n f = add_prim t n f in
-  r "+" prim_add;
-  r "-" prim_sub;
-  r "*" prim_mul;
-  r "/" prim_div;
-  r "div" prim_div;
-  r "mod" prim_mod;
-  r "quotient" prim_quotient;
-  r "remainder" prim_remainder;
-  r "abs" prim_abs;
-  r "min" prim_min;
-  r "max" prim_max;
-  r "=" prim_num_eq;
-  r "<" prim_lt;
-  r ">" prim_gt;
-  r "<=" prim_le;
-  r ">=" prim_ge;
-  r "not" prim_not;
-  r "list" prim_list;
-  r "car" prim_car;
-  r "cdr" prim_cdr;
-  r "cons" prim_cons;
-  r "cadr" prim_cadr;
-  r "caar" prim_caar;
-  r "caddr" prim_caddr;
-  r "cddr" prim_cddr;
-  r "null?" prim_null_p;
-  r "pair?" prim_pair_p;
-  r "append" prim_append;
-  r "reverse" prim_reverse;
-  r "nth" prim_nth;
-  r "count" prim_count;
-  r "string-append" prim_string_append;
-  r "string-length" prim_string_length;
-  r "substring" prim_substring;
-  r "string-contains?" prim_string_contains;
-  r "string-split" prim_string_split;
-  r "string-trim" prim_string_trim;
-  r "string-replace" prim_string_replace;
-  r "string-downcase" prim_string_downcase;
-  r "string-upcase" prim_string_upcase;
-  r "string-starts-with?" prim_string_starts_with_p;
-  r "string-ends-with?" prim_string_ends_with_p;
-  r "string=?" prim_string_eq;
-  r "string-eq" prim_string_eq;
-  r "type-of" prim_type_of;
-  r "symbol?" prim_symbol_p;
-  r "string?" prim_string_p;
-  r "symbol->string" prim_symbol_to_string;
-  r "string->symbol" prim_string_to_symbol;
-  r "str" prim_str;
-  r "as-str" prim_as_str;
-  r "assoc" prim_assoc;
-  r "member" prim_member;
-  r "json-parse" prim_json_parse;
-  r "json-emit" prim_json_emit;
-  r "dict-get" prim_dict_get;
-  r "dict-set" prim_dict_set;
-  r "dict-keys" prim_dict_keys;
-  r "equal?" prim_equal_p;
-  r "random-uuid" prim_random_uuid;
-  r "render-html" prim_render_html;
-  r "html-escape" prim_html_escape;
-  r "string-split" prim_string_split
+  List.iter (fun (name, fn) -> add_prim t name fn) Prims_pure.catalog
 
 (** Register the SHARED soup/ tree prims (Phase 0: lifted into
     pure/prims_soup.ml so both hosts register the same tree prims).

@@ -619,6 +619,19 @@ let test_turn_replay_nested_blocks ~rt () =
     (Runtime.eval_string ~rt
        {|(soup/serialize (soup/select-one (hyper/stream npg nparts) "#t1"))|})
 
+(** i-1788670799-f: the agent's table covers the shared pure catalog
+    (the hand copy here lacked length and the math tower entirely and
+    registered string-split twice), and the catalog is callable through
+    the runtime env. *)
+let test_pure_catalog_parity ~rt () =
+  List.iter
+    (fun name ->
+       if not (Hashtbl.mem rt.Runtime.prims name) then
+         Alcotest.fail ("agent table missing pure prim: " ^ name))
+    Prims_pure.catalog_names;
+  Alcotest.check pp_value_testable "length callable (was unbound)"
+    (Ast.VInt 2L) (Runtime.eval_string ~rt "(length (list 1 2))")
+
 let () =
   Eio_main.run @@ fun env ->
   let rt = Runtime.make () in
@@ -631,6 +644,9 @@ let () =
       ( "nopales-embed",
         [ Alcotest.test_case "rim-errors-redefine" `Quick
             (test_rim_errors_and_redefine ~rt) ] );
+      ( "pure-catalog",
+        [ Alcotest.test_case "parity" `Quick
+            (test_pure_catalog_parity ~rt) ] );
       ( "agent-loop",
         [
           Alcotest.test_case "tool-round-trip" `Quick

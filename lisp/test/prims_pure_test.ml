@@ -245,9 +245,59 @@ let coercion_tests =
           Prims_pure.prim_dict_set [ Ast.VStr "{}"; Ast.VStr "k" ]) )
   ]
 
+(* --- the ONE pure-prim catalog (i-1788670799-f) ---------------------
+   Every host table (image / browser client / agent / remote) is built
+   from [Prims_pure.catalog] via [install]; the per-host parity tests
+   assert coverage. This group locks the catalog contract itself. *)
+
+let catalog_tests =
+  [ ( "catalog has no duplicate names"
+    , `Quick
+    , fun () ->
+        let names = List.map fst Prims_pure.catalog in
+        Alcotest.(check int) "uniq = raw" (List.length names)
+          (List.length (List.sort_uniq String.compare names)) )
+  ; ( "install registers every catalog name"
+    , `Quick
+    , fun () ->
+        let t = Hashtbl.create 32 in
+        Prims_pure.install t;
+        List.iter
+          (fun name ->
+             Alcotest.(check bool) ("registered: " ^ name) true
+               (Hashtbl.mem t name))
+          Prims_pure.catalog_names )
+  ; ( "the 8 prims the client hand-copy had dropped are catalogued"
+    , `Quick
+    , fun () ->
+        List.iter
+          (fun name ->
+             Alcotest.(check bool) ("catalogued: " ^ name) true
+               (List.mem_assoc name Prims_pure.catalog))
+          [ "sort"; "string-join"; "string-split"; "prose-tokens"
+          ; "render-tokens"; "err/shape"; "hx-get"; "hx-post" ];
+        Alcotest.(check bool) "length catalogued" true
+          (List.mem_assoc "length" Prims_pure.catalog) )
+  ; ( "alias / is div; alias string=? is string-eq"
+    , `Quick
+    , fun () ->
+        let t = Hashtbl.create 32 in
+        Prims_pure.install t;
+        let call n args = Hashtbl.find t n args in
+        Alcotest.(check bool) "/ aliases div"
+          (call "/" [ Ast.VInt 7L; Ast.VInt 2L ]
+           = call "div" [ Ast.VInt 7L; Ast.VInt 2L ])
+          true;
+        Alcotest.(check bool) "string=? aliases string-eq"
+          (call "string=?" [ Ast.VStr "a"; Ast.VStr "a" ]
+           = call "string-eq" [ Ast.VStr "a"; Ast.VStr "a" ])
+          true )
+  ]
+
 let () =
   Alcotest.run "prims_pure"
     [ ("entities", entity_tests @ [ nbsp_regression ])
     ; ("quotient-remainder", quotient_tests)
     ; ("list-policy", list_policy_tests)
-    ; ("coercion-policy", coercion_tests) ]
+    ; ("coercion-policy", coercion_tests)
+    ; ("catalog", catalog_tests) ]

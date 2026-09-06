@@ -27,114 +27,12 @@ let prims : Eval.prim_table option ref = ref None
 let env : Ast.env option ref = ref None
 
 let boot () =
-  let t = Eval.make_prim_table () in
-  (* Register every pure prim by name. Prims_pure is the shared Unix-free
-     library; it has no DB/IO/net/wall-clock prims. *)
-  let register name fn = Eval.register_prim t name fn in
-  register "+" Prims_pure.prim_add;
-  register "-" Prims_pure.prim_sub;
-  register "*" Prims_pure.prim_mul;
-  register "div" Prims_pure.prim_div;
-  register "/" Prims_pure.prim_div;
-  register "mod" Prims_pure.prim_mod;
-  register "quotient" Prims_pure.prim_quotient;
-  register "remainder" Prims_pure.prim_remainder;
-  register "abs" Prims_pure.prim_abs;
-  register "min" Prims_pure.prim_min;
-  register "max" Prims_pure.prim_max;
-  register "expt" Prims_pure.prim_expt;
-  register "sqrt" Prims_pure.prim_sqrt;
-  register "exp" Prims_pure.prim_exp;
-  register "log" Prims_pure.prim_log;
-  register "sin" Prims_pure.prim_sin;
-  register "cos" Prims_pure.prim_cos;
-  register "tan" Prims_pure.prim_tan;
-  register "asin" Prims_pure.prim_asin;
-  register "acos" Prims_pure.prim_acos;
-  register "atan" Prims_pure.prim_atan;
-  register "number?" Prims_pure.prim_number_p;
-  register "integer?" Prims_pure.prim_integer_p;
-  register "zero?" Prims_pure.prim_zero_p;
-  register "positive?" Prims_pure.prim_positive_p;
-  register "negative?" Prims_pure.prim_negative_p;
-  register "even?" Prims_pure.prim_even_p;
-  register "odd?" Prims_pure.prim_odd_p;
-  register "random" Prims_pure.prim_random;
-  register "random-seed" Prims_pure.prim_random_seed;
-  register "=" Prims_pure.prim_num_eq;
-  register "<" Prims_pure.prim_lt;
-  register ">" Prims_pure.prim_gt;
-  register "<=" Prims_pure.prim_le;
-  register ">=" Prims_pure.prim_ge;
-  register "not" Prims_pure.prim_not;
-  register "list" Prims_pure.prim_list;
-  register "car" Prims_pure.prim_car;
-  register "cdr" Prims_pure.prim_cdr;
-  register "cons" Prims_pure.prim_cons;
-  register "null?" Prims_pure.prim_null_p;
-  register "pair?" Prims_pure.prim_pair_p;
-  register "string-append" Prims_pure.prim_string_append;
-  register "string-length" Prims_pure.prim_string_length;
-  register "substring" Prims_pure.prim_substring;
-  register "string-contains?" Prims_pure.prim_string_contains;
-  register "string-eq" Prims_pure.prim_string_eq;
-  register "string<?" Prims_pure.prim_string_lt;
-  register "string<=?" Prims_pure.prim_string_le;
-  register "string>?" Prims_pure.prim_string_gt;
-  register "string>=?" Prims_pure.prim_string_ge;
-  register "string-trim" Prims_pure.prim_string_trim;
-  register "html-escape" Prims_pure.prim_html_escape;
-  register "json-parse" Prims_pure.prim_json_parse;
-  register "json-emit" Prims_pure.prim_json_emit;
-  register "read-string" Prims_pure.prim_read_string;
-  register "read-all-string" Prims_pure.prim_read_all_string;
-  register "type-of" Prims_pure.prim_type_of;
-  register "symbol?" Prims_pure.prim_symbol_p;
-  register "string?" Prims_pure.prim_string_p;
-  register "symbol=?" Prims_pure.prim_symbol_eq;
-  register "symbol->string" Prims_pure.prim_symbol_to_string;
-  register "string->symbol" Prims_pure.prim_string_to_symbol;
-  register "str" Prims_pure.prim_str;
-  register "as-str" Prims_pure.prim_as_str;
-  register "append" Prims_pure.prim_append;
-  register "reverse" Prims_pure.prim_reverse;
-  register "nth" Prims_pure.prim_nth;
-  register "count" Prims_pure.prim_count;
-  register "length" Prims_pure.prim_length;
-  register "equal?" Prims_pure.prim_equal_p;
-  register "cadr" Prims_pure.prim_cadr;
-  register "caar" Prims_pure.prim_caar;
-  register "caddr" Prims_pure.prim_caddr;
-  register "cddr" Prims_pure.prim_cddr;
-  register "assoc" Prims_pure.prim_assoc;
-  register "member" Prims_pure.prim_member;
-  register "dict-get" Prims_pure.prim_dict_get;
-  register "dict-set" Prims_pure.prim_dict_set;
-  register "dict-keys" Prims_pure.prim_dict_keys;
-  register "parse-int" Prims_pure.prim_parse_int;
-  register "parse-float" Prims_pure.prim_parse_float;
-  register "floor" Prims_pure.prim_floor;
-  register "round" Prims_pure.prim_round;
-  register "fsrs-schedule" Prims_pure.prim_fsrs_schedule;
-  register "render-html" Prims_pure.prim_render_html;
-  register "status-response" Prims_pure.prim_status_response;
-  register "part" Prims_pure.prim_part;
-  register "json-part" Prims_pure.prim_json_part;
-  register "multipart" Prims_pure.prim_multipart;
-  register "extract-links" Prims_pure.prim_extract_links;
-  register "render-links" Prims_pure.prim_render_links;
-  register "budget-remaining" Prims_pure.prim_budget_remaining;
-  register "string-replace" Prims_pure.prim_string_replace;
-  register "string-downcase" Prims_pure.prim_string_downcase;
-  register "string-upcase" Prims_pure.prim_string_upcase;
-  register "string-starts-with?" Prims_pure.prim_string_starts_with_p;
-  register "string-ends-with?" Prims_pure.prim_string_ends_with_p;
-  register "url-encode" Prims_pure.prim_url_encode;
-  register "url-decode" Prims_pure.prim_url_decode;
-  register "html-decode" Prims_pure.prim_html_decode;
-  register "parse-date" Prims_pure.prim_parse_date;
-  register "xml-parse" Prims_pure.prim_xml_parse;
-  register "random-uuid" Prims_pure.prim_random_uuid;
+  (* ONE shared catalog (pure/prims_pure.ml [Prims_pure.install], built
+     in client/lib/pp_client_table.ml) instead of a hand enumeration
+     that had drifted 8 prims behind the image (i-1788670799-f). The
+     pure table EXCLUDES every DB / IO / net / wall-clock prim — the
+     capability boundary IS the prim table. *)
+  let t = Pp_client_table.build () in
   (* Bind each prim name as VPrim in env, mirroring session.ml. *)
   let e = Env.create () in
   Hashtbl.iter

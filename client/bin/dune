@@ -6,7 +6,8 @@
  (name main)
  (modes byte)
  (modules main)
- (libraries pricklypear-lisp pricklypear-pure-prims js_of_ocaml))
+ (libraries pricklypear-lisp pricklypear-pure-prims
+            pricklypear_client_runtime js_of_ocaml))
 
 (rule
  (target interp.js)
