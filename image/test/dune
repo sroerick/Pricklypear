@@ -198,3 +198,8 @@
  (name seed_sources_test)
  (modules seed_sources_test)
  (libraries pricklypear-image pricklypear-lisp pricklypear-pure-prims alcotest yojson unix))
+
+(test
+ (name http_code_test)
+ (modules http_code_test)
+ (libraries pricklypear-image alcotest unix))

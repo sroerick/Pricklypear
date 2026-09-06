@@ -175,20 +175,34 @@ let resolve_under ~(root : string) (rel : string) : string option =
        | Some "" -> Some root_real
        | Some rel -> Some (Filename.concat root_real rel))
 
-let read_file_within ~(max : int) (path : string) : (string, string) result =
+(** Typed read errors for the public file faces (/code/raw, /assets,
+    /book.pdf, /src.tgz — all hard-public). The [Io_error] detail goes
+    to the ops log only, never into a response body: unauthenticated
+    clients must not see raw OS/exception text with resolved absolute
+    paths (same sanitize invariant as http.ml's 500 handler and
+    error_handler). i-1788670545-5347dabd. *)
+type file_error =
+  | Not_found
+  | Too_large
+  | Io_error of string
+
+let read_file_within ~(max : int) (path : string) :
+    (string, file_error) result =
   try
     let st = Unix.stat path in
-    if st.Unix.st_kind <> Unix.S_REG then Error "not a file"
-    else if st.Unix.st_size > max then Error "file too large"
+    if st.Unix.st_kind <> Unix.S_REG then Error Not_found
+    else if st.Unix.st_size > max then Error Too_large
     else
       let ic = open_in_bin path in
       let len = in_channel_length ic in
       let s = really_input_string ic len in
       close_in ic;
       Ok s
-  with exn -> Error (Printexc.to_string exn)
+  with
+  | Unix.Unix_error (Unix.ENOENT, _, _) -> Error Not_found
+  | exn -> Error (Io_error (Printexc.to_string exn))
 
-let read_file_limited (path : string) : (string, string) result =
+let read_file_limited (path : string) : (string, file_error) result =
   read_file_within ~max:max_file_bytes path
 
 let mime_for_name (name : string) : string =
@@ -240,6 +254,25 @@ let rec walk_tree ~(root : string) ~(rel : string) : tree_node list =
           else None
         with Sys_error _ -> None)
     entries
+
+(** Memo for the /code source tree: [walk_tree] is O(the whole source
+    tree) and the /code page is hard-public, so every anonymous GET
+    re-walked it. The tree is advisory navigation — a short TTL memo
+    (keyed by root, ref-based; a concurrent-fiber race is harmless:
+    worst case both walk and one result wins) bounds that to one walk
+    per minute. Source edits surface within the TTL. *)
+let walk_tree_ttl = 60.0
+
+let walk_tree_cache : (string * float * tree_node list) option ref = ref None
+
+let walk_tree_cached ~(root : string) ~(now : float) ~(ttl : float) :
+    tree_node list =
+  match !walk_tree_cache with
+  | Some (r, at, tree) when String.equal r root && now -. at < ttl -> tree
+  | _ ->
+      let tree = walk_tree ~root ~rel:"" in
+      walk_tree_cache := Some (root, now, tree);
+      tree
 
 let rec tree_to_html (nodes : tree_node list) ~(active : string) : string =
   let buf = Buffer.create 256 in
@@ -301,11 +334,28 @@ let serve_bytes (reqd : Httpun.Reqd.t) ?(status = `OK) ~content_type
   let resp = Httpun.Response.create ~headers status in
   Http_core.safe_respond_with_string reqd resp body
 
+(** One generic-body mapping for every typed read error; the raw detail
+    of Io_error is correlated server-side via the ops log. *)
+let serve_read_error (reqd : Httpun.Reqd.t) ~(path : string)
+    (e : file_error) : unit =
+  match e with
+  | Not_found ->
+      serve_bytes reqd ~status:`Not_found ~content_type:"text/plain; charset=utf-8"
+        "not found"
+  | Too_large ->
+      serve_bytes reqd ~status:`Payload_too_large
+        ~content_type:"text/plain; charset=utf-8" "file too large"
+  | Io_error detail ->
+      ignore
+        (Ops_log.error ~component:"code" ~context:[ ("path", path) ]
+           ("file read failed: " ^ detail));
+      serve_bytes reqd ~status:`Internal_server_error
+        ~content_type:"text/plain; charset=utf-8"
+        "read error — incident logged"
+
 let serve_file_path ?(max = max_file_bytes) (reqd : Httpun.Reqd.t) ~(path : string) : unit =
   match read_file_within ~max path with
-  | Error msg ->
-      serve_bytes reqd ~status:`Not_found ~content_type:"text/plain; charset=utf-8"
-        ("not found: " ^ msg)
+  | Error e -> serve_read_error reqd ~path e
   | Ok body ->
       let ct = mime_for_name (Filename.basename path) in
       serve_bytes reqd ~content_type:ct body
@@ -369,9 +419,7 @@ let handle_raw (reqd : Httpun.Reqd.t) ~(rel : string) : unit =
           "extension not allowed"
       else (
         match read_file_limited path with
-        | Error msg ->
-            serve_bytes reqd ~status:`Bad_request
-              ~content_type:"text/plain; charset=utf-8" msg
+        | Error e -> serve_read_error reqd ~path e
         | Ok body ->
             serve_bytes reqd ~content_type:"text/plain; charset=utf-8" body)
 
@@ -400,7 +448,9 @@ let handle_code_page (reqd : Httpun.Reqd.t) ~(target : string) : unit =
           "pricklypear.borg"
         else ""
   in
-  let tree = walk_tree ~root ~rel:"" in
+  let tree =
+    walk_tree_cached ~root ~now:(Unix.gettimeofday ()) ~ttl:walk_tree_ttl
+  in
   let tree_html = tree_to_html tree ~active in
   let mode = cm_mode_for active in
   let title =
