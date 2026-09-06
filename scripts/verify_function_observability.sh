@@ -11,6 +11,8 @@ trap 'rm -f "$COOKIE"' EXIT
 fail() { echo "FAIL: $*" >&2; exit 1; }
 ok() { echo "OK: $*"; }
 
+. "$(dirname "$0")/eval_json.sh"
+
 # Login
 code=$(curl -sS -c "$COOKIE" -o /tmp/pp_login.html -w '%{http_code}' \
   -X POST -d "username=$USER&password=$PASS" "$BASE/login" || echo 000)
@@ -33,11 +35,11 @@ eval_json() {
 }
 
 r=$(eval_json '(define obs/fact (lambda (n) (if (= n 0) 1 (* n (obs/fact (- n 1))))))')
-echo "$r" | grep -q '"ok":true' || fail "define obs/fact: $r"
+printf '%s' "$r" | pp_json_ok || fail "define obs/fact: $r"
 ok "define obs/fact"
 
 r=$(eval_json '(obs/fact 5)')
-echo "$r" | grep -q '"ok":true' || fail "call obs/fact: $r"
+printf '%s' "$r" | pp_json_ok || fail "call obs/fact: $r"
 ok "call obs/fact (steps + function_stat)"
 
 # Binding page
@@ -79,7 +81,7 @@ ok "POST /api/explain/obs/fact"
 
 # Prim paths
 r=$(eval_json '(explain "obs/fact")')
-echo "$r" | grep -q '"ok":true' || fail "explain prim: $r"
+printf '%s' "$r" | pp_json_ok || fail "explain prim: $r"
 ok "(explain \"obs/fact\")"
 
 r=$(eval_json '(analyze "obs/fact")')
