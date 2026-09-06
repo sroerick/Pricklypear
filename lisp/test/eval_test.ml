@@ -149,6 +149,23 @@ let reader_completeness_tests = [
     Alcotest.(check bool) "unclosed" false (Reader.is_complete "\"hello"));
   ("is_complete: comment only", `Quick, fun () ->
     Alcotest.(check bool) "comment" true (Reader.is_complete "; comment only"));
+  (* Backslash escapes inside strings must not flip string mode
+     (i-1788670273: the REPL used to prompt forever on these). *)
+  ("is_complete: escaped quote closes nothing early", `Quick, fun () ->
+    Alcotest.(check bool) "escaped-quote" true
+      (Reader.is_complete "(print \"a\\\"b\")"));
+  ("is_complete: escaped quote inside parens", `Quick, fun () ->
+    Alcotest.(check bool) "escaped-quote-parens" true
+      (Reader.is_complete "(foo \"a\\\"b\" (bar))"));
+  ("is_complete: escaped backslash then real quote", `Quick, fun () ->
+    Alcotest.(check bool) "escaped-backslash" true
+      (Reader.is_complete "\"a\\\\\""));
+  ("is_complete: trailing backslash still open", `Quick, fun () ->
+    Alcotest.(check bool) "trailing-backslash" false
+      (Reader.is_complete "\"abc\\"));
+  (* Parity: whatever is_complete accepts, the reader must parse. *)
+  ("is_complete agrees with read_one on escaped quotes", `Quick, fun () ->
+    ignore (Reader.read_one "(print \"a\\\"b\")"));
 ]
 
 (* Dotted-pair notation is rejected at read time (improper lists are not
