@@ -824,9 +824,23 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
       else
         match args with
         | [ Pricklypear_lisp.Ast.VStr name ] ->
-            Crud.space_create t.store ~caller:uname ~name
+            Crud.space_create t.store ~caller:uname ~name ()
+        | [ Pricklypear_lisp.Ast.VStr name; Pricklypear_lisp.Ast.VStr flag ]
+          when flag = "open" ->
+            Crud.space_create t.store ~caller:uname ~name ~open_:true ()
         | _ ->
-            ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("space-create", "need space-name", "bad-args"))))));
+            ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("space-create", "need space-name [open]", "bad-args"))))));
+
+  register_crud "space-exists?"
+    (fun args ->
+      let uname = actor () in
+      if uname = "anonymous" then deny_anon "space-exists?"
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr name ] ->
+            Crud.space_exists_prim t.store ~name
+        | _ ->
+            ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("space-exists?", "need space-name", "bad-args"))))));
 
   register_crud "space-add-member"
     (fun args ->
