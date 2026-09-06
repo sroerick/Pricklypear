@@ -89,54 +89,53 @@
   (lambda (id target-state target-index)
     "Move card id to target-state at target-index (0-based; clamps to end).
      Renumbers the old and new columns so no two cards share a position.
-     All tree/upserts run in one with-transaction."
-    (with-transaction
-      (lambda ()
-        (let ((fields (get (quote todo-item) id)))
-          (if (null? fields)
-            "no such card"
-            (let ((old-state (as-str (dict-get fields "state")))
-                  (list-id (as-str (dict-get fields "list_id"))))
-              (let ((all (todo/items-for-list list-id)))
-                (let ((without (kanban/remove-id all id)))
-                  (if (string-eq old-state target-state)
-                    (let ((col (list/filter
+     Runs inside the caller's transaction: /api/eval wraps each request in
+     one (nested with-transaction raises begin_work), and page handlers
+     that need atomicity wrap their own. i-kanban-move-card 2026-09-03."
+    (let ((fields (get (quote todo-item) id)))
+      (if (null? fields)
+        "no such card"
+        (let ((old-state (as-str (dict-get fields "state")))
+              (list-id (as-str (dict-get fields "list_id"))))
+          (let ((all (todo/items-for-list list-id)))
+            (let ((without (kanban/remove-id all id)))
+              (if (string-eq old-state target-state)
+                (let ((col (list/filter
+                             (lambda (row)
+                               (string-eq (as-str (dict-get (cdr row) "state")) old-state))
+                             without)))
+                  (let ((reordered (kanban/insert-at col (cons id fields) target-index)))
+                    (kanban/renumber reordered old-state)))
+                (let ((old-col (list/filter
                                  (lambda (row)
                                    (string-eq (as-str (dict-get (cdr row) "state")) old-state))
                                  without)))
-                      (let ((reordered (kanban/insert-at col (cons id fields) target-index)))
-                        (kanban/renumber reordered old-state)))
-                    (let ((old-col (list/filter
-                                     (lambda (row)
-                                       (string-eq (as-str (dict-get (cdr row) "state")) old-state))
-                                     without)))
-                      (let ((new-col (list/filter
-                                       (lambda (row)
-                                         (string-eq (as-str (dict-get (cdr row) "state")) target-state))
-                                       without)))
-                        (let ((reordered (kanban/insert-at new-col (cons id fields) target-index)))
-                          (seq
-                            (kanban/renumber old-col old-state)
-                            (kanban/renumber reordered target-state)))))))))))))))
+                  (let ((new-col (list/filter
+                                   (lambda (row)
+                                     (string-eq (as-str (dict-get (cdr row) "state")) target-state))
+                                   without)))
+                    (let ((reordered (kanban/insert-at new-col (cons id fields) target-index)))
+                      (seq
+                        (kanban/renumber old-col old-state)
+                        (kanban/renumber reordered target-state)))))))))))))
 
 (define kanban/swap
   (lambda (id1 id2)
-    "Swap the position fields of two cards (same column) in one with-transaction."
-    (with-transaction
-      (lambda ()
-        (let ((f1 (get (quote todo-item) id1)))
-          (if (null? f1)
+    "Swap the position fields of two cards (same column). Runs inside the
+     caller's transaction (see kanban/move-card note)."
+    (let ((f1 (get (quote todo-item) id1)))
+      (if (null? f1)
+        "no such card"
+        (let ((f2 (get (quote todo-item) id2)))
+          (if (null? f2)
             "no such card"
-            (let ((f2 (get (quote todo-item) id2)))
-              (if (null? f2)
-                "no such card"
-                (let ((p1 (as-str (dict-get f1 "position")))
-                      (p2 (as-str (dict-get f2 "position"))))
-                  (seq
-                    (tree/upsert (node-path (quote todo-item) id1) "datum" "todo-item"
-                      (dict-set* f1 (list "position" p2)))
-                    (tree/upsert (node-path (quote todo-item) id2) "datum" "todo-item"
-                      (dict-set* f2 (list "position" p1)))))))))))))
+            (let ((p1 (as-str (dict-get f1 "position")))
+                  (p2 (as-str (dict-get f2 "position"))))
+              (seq
+                (tree/upsert (node-path (quote todo-item) id1) "datum" "todo-item"
+                  (dict-set* f1 (list "position" p2)))
+                (tree/upsert (node-path (quote todo-item) id2) "datum" "todo-item"
+                  (dict-set* f2 (list "position" p1)))))))))))
 
 (define kanban/index-of
   (lambda (cards id i)
@@ -172,14 +171,13 @@
 (define kanban/rename-column
   (lambda (list-id old-name new-name)
     "Rename a column: update the list's columns AND cascade-rename the state
-     field of every card in that column, in one with-transaction."
-    (with-transaction
-      (lambda ()
-        (let ((cols (kanban/columns-for-list list-id)))
-          (let ((renamed (kanban/replace-named cols (as-str old-name) (as-str new-name))))
-            (seq
-              (kanban/columns-set list-id renamed)
-              (kanban/cascade-rename-state list-id (as-str old-name) (as-str new-name)))))))))
+     field of every card in that column. Runs inside the caller's
+     transaction (see kanban/move-card note)."
+    (let ((cols (kanban/columns-for-list list-id)))
+      (let ((renamed (kanban/replace-named cols (as-str old-name) (as-str new-name))))
+        (seq
+          (kanban/columns-set list-id renamed)
+          (kanban/cascade-rename-state list-id (as-str old-name) (as-str new-name)))))))
 
 (define kanban/replace-named
   (lambda (cols old-name new-name)
@@ -765,19 +763,9 @@ function kbDrop(ev){
             "done"
             "false"))))))
 
-(define kanban/move-card
-  (lambda
-    (id state)
-    "Move card id to state. Returns id, or () when the card is missing."
-    (let
-      ((row (todo/tree/get "todo-item" (as-str id))))
-      (if
-        (null? row)
-        ()
-        (seq
-          (todo/item/set-state (as-str id) (as-str state))
-          (as-str id))))))
-
+;; (The old 2-arg kanban/move-card that lived here was removed 2026-09-03:
+;;  it shadowed the 3-arg renumbering move-card above depending on define
+;;  order. Callers that just want a state flip can use todo/item/set-state.)
 (define kanban/stale
   (lambda
     ()
