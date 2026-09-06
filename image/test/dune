@@ -238,3 +238,8 @@
  (name book_roundtrip_test)
  (modules book_roundtrip_test)
  (libraries pricklypear-image pricklypear-lisp alcotest yojson))
+
+(test
+ (name store_reraise_test)
+ (modules store_reraise_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt lwt.unix))
