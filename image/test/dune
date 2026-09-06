@@ -248,3 +248,8 @@
  (name session_split_test)
  (modules session_split_test)
  (libraries pricklypear-image pricklypear-lisp alcotest eio_main))
+
+(test
+ (name http_router_test)
+ (modules http_router_test)
+ (libraries pricklypear-image alcotest httpun))
