@@ -223,13 +223,20 @@ let space_of_type (conn : Store_db.conn) ~(type_name : string) : string option =
   | [ [ c ] ] -> Pgx.Value.to_string c
   | _ -> None
 
+(** Membership mirror of the SQL tree_path_in_member_space
+    (migrations/029 + 030): explicit member rows, or ANY authenticated
+    identity for an open space ('anonymous' explicitly excluded — keep
+    the two mirrors' anonymous handling identical). *)
 let is_space_member (conn : Store_db.conn) ~(space : string)
     ~(username : string) : bool =
   match
     Io_lwt.Db.execute conn
       ~params:[ Pgx.Value.of_string space; Pgx.Value.of_string username ]
-      "SELECT EXISTS (SELECT 1 FROM data_space_members \
-       WHERE space = $1 AND username = $2)::text"
+      "SELECT (EXISTS (SELECT 1 FROM data_space_members \
+                WHERE space = $1 AND username = $2) \
+              OR ($2 <> '' AND $2 <> 'anonymous' \
+                  AND EXISTS (SELECT 1 FROM data_spaces \
+                              WHERE name = $1 AND open)))  "
   with
   | [ [ c ] ] -> Pgx.Value.to_bool c |> Option.value ~default:false
   | _ -> false
@@ -284,7 +291,7 @@ let guard_space_write (conn : Store_db.conn) ~(prim : string)
 let space_exists (conn : Store_db.conn) ~(space : string) : bool =
   match
     Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string space ]
-      "SELECT EXISTS (SELECT 1 FROM data_spaces WHERE name = $1)::text"
+      "SELECT EXISTS (SELECT 1 FROM data_spaces WHERE name = $1)  "
   with
   | [ [ c ] ] -> Pgx.Value.to_bool c |> Option.value ~default:false
   | _ -> false
@@ -298,17 +305,25 @@ let space_owner_ok (conn : Store_db.conn) ~(space : string)
         ~params:[ Pgx.Value.of_string space; Pgx.Value.of_string caller ]
         "SELECT EXISTS (SELECT 1 FROM data_spaces WHERE name = $1 AND owner = $2 \
          UNION SELECT 1 FROM data_space_members \
-         WHERE space = $1 AND username = $2 AND role = 'owner')::text"
+         WHERE space = $1 AND username = $2 AND role = 'owner')  "
     with
     | [ [ c ] ] -> Pgx.Value.to_bool c |> Option.value ~default:false
     | _ -> false
+
+(** The space-exists? prim body (lazy ensure paths in Nopales packages
+    create-or-skip without parsing the duplicate-creation error). *)
+let space_exists_prim (store : Store.t) ~(name : string) : value =
+  match Io_lwt.Db.current_conn store with
+  | None -> VBool false
+  | Some conn -> VBool (space_exists conn ~space:name)
 
 let validate_space_name name =
   (* Space names become single ltree labels; the encoder is the validator. *)
   try ignore (Tree_store.enc_label name) with
   | Invalid_argument msg -> space_prim_error "space-create" msg
 
-let space_create (store : Store.t) ~(caller : string) ~(name : string) : value =
+let space_create (store : Store.t) ~(caller : string) ~(name : string)
+    ?(open_ : bool = false) () : value =
   validate_space_name name;
   match Io_lwt.Db.current_conn store with
   | None -> space_prim_error "space-create" "failed: no DB"
@@ -318,9 +333,10 @@ let space_create (store : Store.t) ~(caller : string) ~(name : string) : value =
           (Printf.sprintf "space %s already exists" name);
       let rows =
         Io_lwt.Db.execute conn
-          ~params:[ Pgx.Value.of_string name; Pgx.Value.of_string caller ]
-          "INSERT INTO data_spaces (name, owner) VALUES ($1, $2) \
-           RETURNING name"
+          ~params:[ Pgx.Value.of_string name; Pgx.Value.of_string caller;
+                    Pgx.Value.of_bool open_ ]
+          "INSERT INTO data_spaces (name, owner, open) \
+           VALUES ($1, $2, $3) RETURNING name"
       in
       (match rows with
        | [ [ _ ] ] ->
@@ -330,7 +346,9 @@ let space_create (store : Store.t) ~(caller : string) ~(name : string) : value =
                           Pgx.Value.of_string caller ]
                 "INSERT INTO data_space_members (space, username, role) \
                  VALUES ($1, $2, 'owner') ON CONFLICT DO NOTHING");
-           VStr (Printf.sprintf "created space %s (owner %s)" name caller)
+           VStr
+             (Printf.sprintf "created %sspace %s (owner %s)"
+                (if open_ then "open " else "") name caller)
        | _ -> space_prim_error "space-create" "failed")
 
 let space_add_member (store : Store.t) ~(caller : string)
@@ -397,7 +415,11 @@ let space_list (store : Store.t) ~(caller : string) ~(kernel_admin : bool)
         if kernel_admin then
           ("SELECT name FROM data_spaces ORDER BY name", [])
         else
-          ( "SELECT space FROM data_space_members WHERE username = $1 \
+          ( "SELECT space FROM ( \
+               SELECT space FROM data_space_members WHERE username = $1 \
+               UNION \
+               SELECT name FROM data_spaces WHERE open \
+                 AND $1 <> 'anonymous') t \
              ORDER BY space"
           , [ Pgx.Value.of_string caller ] )
       in

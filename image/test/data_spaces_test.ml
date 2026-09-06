@@ -247,7 +247,7 @@ let vlist_strs = function
 (* S2: lifecycle — create, list, add, members, owner-gate on add. *)
 let test_lifecycle () =
   with_s2 (fun store ~sp ~ty:_ ->
-      ignore (Crud.space_create store ~caller:"alice" ~name:sp);
+      ignore (Crud.space_create store ~caller:"alice" ~name:sp ());
       let as_alice =
         vlist_strs (Crud.space_list store ~caller:"alice" ~kernel_admin:false)
       in
@@ -272,14 +272,14 @@ let test_lifecycle () =
           Crud.space_add_member store ~caller:"bob" ~kernel_admin:false
             ~space:sp ~username:"dave");
       expect_denied "duplicate create denied" (fun () ->
-          Crud.space_create store ~caller:"bob" ~name:sp))
+          Crud.space_create store ~caller:"bob" ~name:sp ()))
 
 (* S2: admit routes create; non-member create/update/delete denied;
    removed member's create denied; node-path reports the space home. *)
 let test_routing_and_guard () =
   with_s2 (fun store ~sp ~ty ->
       let conn = Option.get (S.conn_of store) in
-      ignore (Crud.space_create store ~caller:"alice" ~name:sp);
+      ignore (Crud.space_create store ~caller:"alice" ~name:sp ());
       ignore
         (Crud.space_add_member store ~caller:"alice" ~kernel_admin:false
            ~space:sp ~username:"bob");
@@ -329,7 +329,7 @@ let test_routing_and_guard () =
    non-member history reads return nothing (visibility holds). *)
 let test_history () =
   with_s2 (fun store ~sp ~ty ->
-      ignore (Crud.space_create store ~caller:"alice" ~name:sp);
+      ignore (Crud.space_create store ~caller:"alice" ~name:sp ());
       ignore
         (Crud.space_add_member store ~caller:"alice" ~kernel_admin:false
            ~space:sp ~username:"bob");
@@ -383,6 +383,50 @@ let test_history () =
        | Ast.VNil -> ()
        | _ -> Alcotest.fail "carol should see no history"))
 
+(* ---------------- open spaces (migration 030, chat-lobby consumer) ---- *)
+
+(* Open space: every AUTHENTICATED identity is implicitly a member;
+   'anonymous' is explicitly excluded on both mirrors. *)
+let test_open_space () =
+  with_s2 (fun store ~sp ~ty ->
+      let conn = Option.get (S.conn_of store) in
+      ignore (Crud.space_create store ~caller:"alice" ~name:sp ~open_:true ());
+      ignore
+        (Crud.space_admit store ~caller:"alice" ~kernel_admin:false ~space:sp
+           ~type_name:ty);
+      (* carol is NOT a member row — but the space is open: write works *)
+      let id =
+        match Crud.create store ~type_name:ty ~fields_json:"{\"n\":1}" ~author:"carol" with
+        | Ast.VStr id -> id
+        | _ -> Alcotest.fail "open-space create by non-member denied"
+      in
+      let p = path_of conn ~id in
+      Alcotest.(check bool) ("space path " ^ p) true (String.sub p 0 7 = "data.s.");
+      (* view visibility: carol (auth) sees; anonymous does NOT *)
+      let count_as who =
+        set_pp_user conn who;
+        q_count conn ~params:[ s ty ]
+          "SELECT COUNT(*)::int FROM tree_data_rows WHERE type_name = $1"
+      in
+      Alcotest.(check int) "carol (implicit member) sees" 1 (count_as "carol");
+      Alcotest.(check int) "anonymous excluded" 0 (count_as "anonymous");
+      set_pp_user conn "";
+      (* anonymous write denied by the guard (not an implicit member) *)
+      expect_denied "anonymous create denied" (fun () ->
+          Crud.create store ~type_name:ty ~fields_json:"{\"n\":2}"
+            ~author:"anonymous");
+      (* space-list: carol sees the open space *)
+      let carol_spaces =
+        vlist_strs
+          (Crud.space_list store ~caller:"carol" ~kernel_admin:false)
+      in
+      Alcotest.(check bool) "carol lists open space" true
+        (List.mem sp carol_spaces);
+      (* open does not relax the OWNER gate: bob still cannot admit *)
+      expect_denied "non-owner admit on open space denied" (fun () ->
+          Crud.space_admit store ~caller:"bob" ~kernel_admin:false ~space:sp
+            ~type_name:(ty ^ "x")))
+
 let () =
   Alcotest.run "data_spaces"
     [
@@ -409,5 +453,10 @@ let () =
         [
           Alcotest.test_case "data-history: per-author before-images" `Quick
             test_history;
+        ] );
+      ( "open spaces",
+        [
+          Alcotest.test_case "implicit membership, anonymous excluded" `Quick
+            test_open_space;
         ] );
     ]
