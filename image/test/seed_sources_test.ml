@@ -22,7 +22,26 @@
     S6. Behavioral: the SHIPPED std json-escape define, evaluated
         against the image prim table, escapes the full set (backslash
         quote newline CR tab) and its output parses as valid JSON and
-        round-trips — the book/json-esc newline corruption class. *)
+        round-trips — the book/json-esc newline corruption class.
+    S7. No bare top-level forms (i-1788685367, bi/wiki class): an
+        UNESCAPED inner double quote inside a top-level docstring string
+        closes the string early and leaks the rest as bare top-level
+        forms (bi: a Var `published`; wiki: a Var `{}`) that the seed
+        eval refuses with unbound-var, aborting the package mid-file.
+        Every top-level form must be a define/defmacro/route/deftype/
+        package/export/public-route call or a docstring string literal
+        (the established libs convention: docstrings follow the define
+        as top-level strings). A reader-level test — parse errors and
+        corrupted shapes cannot hide behind a swallowed seed failure.
+    S8. No define-time calls to file-local bindings (i-1788685367, rb
+        class): under the additive boot-seed skip (session.ml seed_skip)
+        a define whose name already exists on the branch is NOT
+        evaluated and NOT bound into the seed env, so a NEW value define
+        whose body calls that sibling raises unbound at boot (rb's
+        (define rb/plan-config (plan 4 …)) on warm DBs; every rb recipe
+        define likewise). Value defines must be data-only (quote/lambdas
+       /kernel prims fine); DSL data that needs sibling helpers ships as
+        a zero-arg function the consumers call. *)
 
 let find_libs_dir () =
   (* Dune runs tests under _build; the seed sources live at the repo
@@ -274,6 +293,151 @@ let test_book_json_array_roundtrip () =
           failwith ("book/json-array produced invalid JSON: " ^ arr ^ " (" ^ Printexc.to_string e ^ ")"))
   | v -> failwith ("book/json-array returned non-string: " ^ Pricklypear_lisp.Reader.pp_value v)
 
+(* --- S7/S8: the i-1788685367 seed-abort classes ---
+
+   Both work over the real reader's top-level forms; neither needs a
+   DB. They complement the runtime banner (which a swallowed seed
+   failure turns into one stderr line) with a parse-level tripwire. *)
+
+(* Heads a seedable lib.pp may call at top level, mirroring the
+   boot-seed-skip safety scan in session.ml. Plus string literals:
+   the libs docstring convention places the doc AFTER the define as a
+   top-level string. *)
+let top_level_allowed_heads =
+  [ "define"; "defmacro"; "route"; "deftype"; "package"; "export"; "public-route" ]
+
+(* S7: no bare top-level forms — an unescaped inner quote in a top-level
+   docstring leaks Var forms (`published`, `{}`) that abort the seed. *)
+let test_no_bare_top_level_forms () =
+  let root = find_libs_dir () in
+  let offenders =
+    seedable_packages root
+    |> List.map (fun pkg ->
+           let src = load_package_src root pkg in
+           let forms =
+             Pricklypear_lisp.Reader.read_all
+               (Pricklypear_image_lib.Loader.strip_line_comments src)
+           in
+           let bad =
+             List.filter
+               (fun form ->
+                 match form with
+                 | Pricklypear_lisp.Ast.App
+                     (Pricklypear_lisp.Ast.Var head, _) ->
+                     not (List.mem head top_level_allowed_heads)
+                 | Pricklypear_lisp.Ast.Lit (Pricklypear_lisp.Ast.VStr _) ->
+                     false (* docstring-after-define convention *)
+                 | _ -> true)
+               forms
+           in
+           (pkg, bad))
+    |> List.filter (fun (_, bad) -> bad <> [])
+  in
+  match offenders with
+  | [] -> ()
+  | xs ->
+      failwith
+        ( Printf.sprintf
+            "%d package(s) have bare top-level forms (docstring quote \
+             corruption class — escape the inner quotes): "
+            (List.length xs)
+        ^ String.concat "; "
+            (List.map
+               (fun (pkg, bad) ->
+                 pkg ^ ": "
+                 ^ String.concat ", "
+                     (List.map Pricklypear_lisp.Reader.pp_expr bad))
+               xs) )
+
+(* References a name inside [binds] found outside nested lambda/quote
+   bodies — i.e. something a VALUE define would evaluate at define time.
+   The reader produces plain App nodes for special forms (they are
+   recognized at EVAL time, reader.ml header), so the call-time
+   boundaries are App (Var "lambda") / (Var "quote") / (Var "delay")
+   here, and let/letrec/if/seq are transparent (their bodies DO run at
+   define time when the define is a value define). *)
+let rec define_time_refs ~(binds : string list) ~(owner : string) (acc : string list)
+    (expr : Pricklypear_lisp.Ast.expr) : string list =
+  let open Pricklypear_lisp.Ast in
+  let go acc e = define_time_refs ~binds ~owner acc e in
+  match expr with
+  | Var v when v <> owner && List.mem v binds -> v :: acc
+  | App (Var ("lambda" | "quote" | "delay"), _) ->
+      acc (* call-time / data / thunk body: not evaluated at define time *)
+  | App (Var ("define" | "defmacro"), _) ->
+      acc (* nested/local binding, not a top-level sibling *)
+  | App (Var v, args) when v <> owner && List.mem v binds ->
+      List.fold_left go (v :: acc) args
+  | App (f, args) -> List.fold_left go acc (f :: args)
+  | Lambda (_, body) -> acc
+  | Quote _ -> acc
+  | Lit _ -> acc
+  | Let (_, e, body) -> go (go acc e) body
+  | Letrec (bs, body) -> List.fold_left go (go acc body) (List.map snd bs)
+  | If (c, t, e) -> go (go (go acc c) t) e
+  | Prim (_, args) -> List.fold_left go acc args
+  | Seq (a, b) -> go (go acc a) b
+  | Define _ -> acc (* nested/local binding, not a top-level sibling *)
+  | Var _ -> acc (* a file-local ref is handled by the guarded clause *)
+
+(* S8: value defines may not call file-local siblings at define time —
+   the additive boot-seed skip leaves an existing sibling unbound in the
+   seed env, so a new define calling it raises unbound at every warm
+   boot (rb/plan-config → plan). Function-style defines (define (f x) …)
+   evaluate nothing at define time and are exempt. *)
+let test_no_define_time_sibling_calls () =
+  let root = find_libs_dir () in
+  let offenders =
+    seedable_packages root
+    |> List.map (fun pkg ->
+           let src = load_package_src root pkg in
+           let forms =
+             Pricklypear_lisp.Reader.read_all
+               (Pricklypear_image_lib.Loader.strip_line_comments src)
+           in
+           let binds = top_level_binds src in
+           let bad =
+             List.filter_map
+               (fun form ->
+                 match form with
+                 | Pricklypear_lisp.Ast.App
+                     (Pricklypear_lisp.Ast.Var "define", target :: body)
+                   when not (List.is_empty body) -> (
+                     match target with
+                     | Pricklypear_lisp.Ast.Var name ->
+                         let refs =
+                           List.fold_left
+                             (define_time_refs ~binds ~owner:name)
+                             [] body
+                         in
+                         if refs = [] then None else Some (name, refs)
+                     | _ -> None (* (define (f x) …): body is call-time *) )
+                 | _ -> None)
+               forms
+           in
+           (pkg, bad))
+    |> List.filter (fun (_, bad) -> bad <> [])
+  in
+  match offenders with
+  | [] -> ()
+  | xs ->
+      failwith
+        ( Printf.sprintf
+            "%d package(s) define data by calling file-local bindings at \
+             define time (unbound under the additive boot-seed skip on \
+             warm DBs — make them zero-arg functions): "
+            (List.length xs)
+        ^ String.concat "; "
+            (List.map
+               (fun (pkg, bad) ->
+                 pkg ^ ": "
+                 ^ String.concat ", "
+                     (List.map
+                        (fun (name, refs) ->
+                          name ^ " -> " ^ String.concat ", " refs)
+                        bad))
+               xs) )
+
 let () =
   Alcotest.run "pricklypear-seed-sources"
     [ ( "seed-sources"
@@ -284,4 +448,6 @@ let () =
         ; ("no-escape-xml", `Quick, test_no_escape_xml)
         ; ("json-escape-full-set", `Quick, test_json_escape_full_set)
         ; ("book-json-array-roundtrip", `Quick, test_book_json_array_roundtrip)
+        ; ("no-bare-top-level-forms", `Quick, test_no_bare_top_level_forms)
+        ; ("no-define-time-sibling-calls", `Quick, test_no_define_time_sibling_calls)
         ] ) ]
