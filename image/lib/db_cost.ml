@@ -17,7 +17,7 @@ let badge = function
 let static_cost (prim_name : string) : cost_tier =
   match prim_name with
   | "get" | "find-row" | "select-for-update" | "node-path" | "type-fields"
-  | "tree/get" | "tree/get-uuid" -> Index_seek
+  | "tree/get" | "tree/get-uuid" | "space-exists?" -> Index_seek
   | "create" | "update" | "update-field" | "delete" | "tree/upsert"
   | "tree/delete" | "tree/move"
   | "space-create" | "space-add-member" | "space-remove-member"
