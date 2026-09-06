@@ -398,6 +398,49 @@ let list_function_bodies_for (t : t)
           (Printexc.to_string exn);
         [])
 
+(** image.load-library-skip (2026-09-03): OWN-branch defs only (no
+    recursive CTE). load-library fingerprints these via pp_expr + doc to
+    skip re-evaluating unchanged defines; inherited names must stay OFF
+    the skip map so persist_function's no-diff-no-pin unpin stays
+    reachable for re-defines of parent bodies. Same row shape as
+    [list_function_names_for_load] plus the doc column. *)
+let list_own_function_defs (t : t)
+  : (string * Pricklypear_lisp.Ast.expr * string * string option
+     * string option) list =
+  match t.conn with
+  | None -> []
+  | Some conn ->
+      (try
+         let sql =
+           "SELECT fd.name, fd.body, fd.author, fd.package, fd.doc " ^
+           "FROM " ^ fn_rel () ^ " fd " ^
+           "WHERE fd.branch_id = $1 ORDER BY fd.name ASC" in
+         let rows =
+           exec conn ~params:[ Pgx.Value.of_string t.branch_id ] sql in
+         List.filter_map
+           (fun row ->
+             match row with
+             | [ name_c; body_cell; author_cell; pkg_c; doc_c ] ->
+                 (match Pgx.Value.to_string name_c,
+                         Pgx.Value.to_string body_cell,
+                         Pgx.Value.to_string author_cell with
+                  | Some name, Some body_str, Some author ->
+                      let pkg = Pgx.Value.to_string pkg_c in
+                      let doc = Pgx.Value.to_string doc_c in
+                      (try
+                         let j = Yojson.Safe.from_string body_str in
+                         (match Pricklypear_lisp.Ast.expr_of_json j with
+                          | Ok e -> Some (name, e, author, pkg, doc)
+                          | Error _ -> None)
+                       with Yojson.Json_error _ -> None)
+                  | _ -> None)
+             | _ -> None)
+           rows
+       with exn ->
+         Printf.eprintf "[store] list_own_function_defs error: %s\n"
+           (Printexc.to_string exn);
+         [])
+
 (* ---- own-branch stats / overrides (no recursive CTE) ---- *)
 
 let count_functions_on_branch (t : t) ~(branch_id : string) : int =

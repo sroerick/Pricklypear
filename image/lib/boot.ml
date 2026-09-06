@@ -132,8 +132,8 @@ let jobs_runner_loop ~(session : Session.t) : unit =
       Jobs.with_current_job_id job.Jobs.id (fun () ->
         (* Jobs run UNBUDGETED (jobs.borg runner, 2026-09-05): the job
            eval gets a max_int-step budget. Request-path evals keep the
-           100k sync budget; the runaway guard for jobs is attempts/
-           backoff + step checkpoints + host ownership. *)
+           default sync budget (400k); the runaway guard for jobs is
+           attempts/backoff + step checkpoints + host ownership. *)
         let v =
           Request_context.with_current ctx (fun () ->
               Session.eval_string_rim_budgeted t call_src

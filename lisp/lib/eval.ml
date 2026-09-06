@@ -21,8 +21,14 @@ type budget = {
   fn_step_counts : (string, int) Hashtbl.t;
 }
 
-(** Default per-call step limit for [make_budget] (100k steps). *)
-let default_limit = 100_000
+(** Default per-call step limit for [make_budget]. Raised 100k -> 400k
+    2026-09-03 (budget-exceeded loops): DB time does not consume steps,
+    but the ui shell re-render alone costs ~71k steps (ui/css 56k,
+    ui/nav 4k, ui/home 11k) whenever a page session refreshes it, so
+    real pages like todo/page could not fit 100k alongside the render.
+    400k steps ~= 0.25s of pure eval CPU; wall time is still bounded by
+    the request gate. *)
+let default_limit = 400_000
 
 (** Allocate a fresh [budget] with the given [limit] (default
     [default_limit]); counters start at zero. *)
