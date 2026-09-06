@@ -80,35 +80,46 @@ let sanitize_ref ref_ =
   let s = Buffer.contents buf in
   if s = "" then "branch" else s
 
+(* Local define names, collected by the real reader (i-1788670358-d).
+
+   The previous hand-rolled regex \(\s*define\s+([^\s()]+) could not
+   match function-style (define (f x) ...) — the ( after define is
+   excluded by [^\s()]+ — so vault diffs lied about packages that use
+   define sugar (libs/rb: 124 of 141 defines invisible, reported as
+   only-live). It also mis-fired inside string literals and quoted
+   data, since its hand-rolled comment stripper kept string bodies.
+
+   Reader.read_all handles comments, strings and both define styles;
+   Eval.parse_top_define is the kernel's one definition of what counts
+   as a top-level define, so this list cannot drift from what eval
+   accepts. Top-level only: nested defines are local bindings, not
+   package bindings (matching what the live package-bindings reports).
+   A file that does not parse is loud on stderr and yields [] — an
+   empty-with-warning diff beats a confidently wrong one. *)
 let parse_local_defines text =
-  let strip_comments s =
-    let buf = Buffer.create (String.length s) in
-    let in_str = ref false in
-    let i = ref 0 in
-    let n = String.length s in
-    while !i < n do
-      let c = s.[!i] in
-      if c = '"' && (!i = 0 || s.[!i - 1] <> '\\') then begin
-        in_str := not !in_str;
-        Buffer.add_char buf c;
-        incr i
-      end else if c = ';' && not !in_str then begin
-        while !i < n && s.[!i] <> '\n' do
-          incr i
-        done
-      end else begin
-        Buffer.add_char buf c;
-        incr i
-      end
-    done;
-    Buffer.contents buf
-  in
-  let blob = strip_comments text in
-  let re = Re.Perl.compile_pat {|\(\s*define\s+([^\s()]+)|} in
-  Re.all re blob
-  |> List.filter_map (fun g ->
-         try Some (Re.Group.get g 1) with Not_found -> None)
-  |> List.sort_uniq String.compare
+  match
+    (try
+       Ok
+         (List.filter_map
+            (fun e ->
+              match Pricklypear_lisp.Eval.parse_top_define e with
+              | Some { name; _ } -> Some name
+              | None -> None)
+            (Pricklypear_lisp.Reader.read_all text))
+     with
+    | Pricklypear_lisp.Reader.Reader_error (msg, line, col) ->
+        Error (Printf.sprintf "line %d col %d: %s" line col msg)
+    | Pricklypear_lisp.Ast.Interp_error e ->
+        Error (Pricklypear_lisp.Ast.pp_interp_error e)
+    | exn -> Error (Printexc.to_string exn))
+  with
+  | Ok names -> List.sort_uniq String.compare names
+  | Error err ->
+      Printf.eprintf
+        "pp-sync: local file does not parse (%s); local define list \"only-live\" \
+         counts unreliable\n%!"
+        err;
+      []
 
 let unwrap_list_of_strings (printed : string) : string list =
   let re = Re.Perl.compile_pat {|"([^"]+)"|} in
