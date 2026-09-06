@@ -8,6 +8,7 @@
     list/filter
     list/foldl
     list/range
+    list/take
     map
     filter
     foldl
@@ -60,10 +61,12 @@
     string-find-pos))
 
 ;; --- list/ ---
-;; list/map, list/filter, list/foldl are KERNEL SPECIAL FORMS (eval.ml):
-;; OCaml loops + apply, provided by the image; defining them here trips
-;; assert_bindable_name (BORGE-1785213238) and aborts std seeding.
-;; Do NOT re-add fallback defines — the kernel always provides them.
+;; list/map, list/filter, list/foldl (and list/foldr) are KERNEL SPECIAL
+;; FORMS (eval.ml): OCaml loops + apply, provided by the image; defining
+;; them here trips assert_bindable_name (BORGE-1785213238) and aborts std
+;; seeding. Do NOT re-add fallback defines — the kernel always provides
+;; them. (The libs/list package did exactly that and failed to seed at
+;; every boot; deleted 2026-09-09, i-1788670156 — list/take moved here.)
 
 ;; (list/range n) → (0 1 ... n-1) for synthetic tests / generators.
 (define list/range
@@ -77,6 +80,21 @@
         acc
         (list/range-acc (- n 1) (cons (- n 1) acc))))
   "Internal accumulator for list/range.")
+
+;; (list/take xs n) → first n elements of xs. Was libs/list's only
+;; surviving non-kernel define; calendar/upcoming calls it, so it must
+;; exist on every clean environment (std seeds first).
+(define list/take
+  (lambda (xs n)
+    (list/take-acc xs n (list)))
+  "Return the first n elements of xs.")
+
+(define list/take-acc
+  (lambda (xs n acc)
+    (if (or (null? xs) (<= n 0))
+        (reverse acc)
+        (list/take-acc (cdr xs) (- n 1) (cons (car xs) acc))))
+  "Internal accumulator for list/take.")
 
 ;; --- unprefixed list aliases (conventional Lisp names; thin wrappers
 ;;     over the kernel list/ special forms). Not part of the frozen

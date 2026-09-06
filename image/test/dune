@@ -188,3 +188,8 @@
  (name auth_throttle_test)
  (modules auth_throttle_test)
  (libraries pricklypear-image alcotest unix))
+
+(test
+ (name seed_sources_test)
+ (modules seed_sources_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest unix))
