@@ -1663,8 +1663,8 @@ let fork_branch (t : t) ~(parent_id : string) ~(owner : string)
    silent reversals; resolution is re-define + re-merge, not LWW).
    Any other target (no shared base): head-vs-head fallback — upsert
    source fns whose body differs from the target's own row, no report.
-   TODO: schema-merge for type_defs — only main accepts schema changes
-   via special migration-governed merge.
+   Schema-merge for type_defs is deliberately not implemented: only
+   main accepts schema changes, via special migration-governed merge.
 
    Wrapped in a SERIALIZABLE transaction via [with_transaction] since
    it16 (previously best-effort atomic — carried-forward since it9). *)
@@ -2656,7 +2656,7 @@ let code_restore (t : t) ~(branch_id : string) ~(name : string)
        gen-window entirely below the floor (never the base window). Idempotent
        + conservative; on the real habitat it is gated by a scheduled job on
        the jobs runner (migration 015), not ad-hoc deletion.
-   The first long pole is code paths (tiny); retention is a TODO until a
+   The first long pole is code paths (tiny); retention is deferred until a
    path class outgrows its welcome — measured via /timing-style storage
    accounting, not vibes. *) 
 
@@ -2749,7 +2749,7 @@ let retention_list_policies (t : t)
 
 (* Run the retention worker for each path class that has an explicit
    whole-class policy (type_name IS NULL). Whole-class policies are the v1
-   gate: retention is a TODO until a path class outgrows its welcome, and
+   gate: retention is deferred until a path class outgrows its welcome, and
    the global gen-window partitions mean the floor is whole-class regardless
    of any per-type rows (per-type rows are recorded for future finer-grained
    work but do not change the shared floor). keep_everything until a

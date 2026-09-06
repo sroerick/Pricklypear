@@ -23,9 +23,6 @@ module Db = struct
   let branch_id (s : store) = s.Store_db.branch_id
   let set_branch_id (s : store) id = s.Store_db.branch_id <- id
 
-  let execute (conn : conn) ?params sql =
-    Store_db.exec conn ?params sql
-
   let with_transaction ?isolation store f =
     Store_db.with_transaction ?isolation store f
 

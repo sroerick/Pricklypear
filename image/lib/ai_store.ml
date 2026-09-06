@@ -84,7 +84,7 @@ let create_session
              RETURNING " ^ session_select_cols
           in
           let rows =
-            Io_lwt.Db.execute conn
+            Store_db.exec conn
               ~params:
                 [ Pgx.Value.of_string owner
                 ; (match title with
@@ -121,7 +121,7 @@ let get_session (store : Store.t) ~(owner : string) ~(id : string)
             " FROM ai_sessions WHERE id = $1::uuid AND owner = $2 LIMIT 1"
           in
           let rows =
-            Io_lwt.Db.execute conn
+            Store_db.exec conn
               ~params:
                 [ Pgx.Value.of_string id; Pgx.Value.of_string owner ]
               sql
@@ -146,7 +146,7 @@ let list_sessions (store : Store.t) ~(owner : string) ?(limit = 50) ()
              ORDER BY updated_at DESC LIMIT $2"
           in
           let rows =
-            Io_lwt.Db.execute conn
+            Store_db.exec conn
               ~params:
                 [ Pgx.Value.of_string owner
                 ; Pgx.Value.of_string (string_of_int limit)
@@ -171,7 +171,7 @@ let delete_session (store : Store.t) ~(owner : string) ~(id : string)
              RETURNING id::text"
           in
           let rows =
-            Io_lwt.Db.execute conn
+            Store_db.exec conn
               ~params:
                 [ Pgx.Value.of_string id; Pgx.Value.of_string owner ]
               sql
@@ -200,7 +200,7 @@ let touch_session
              WHERE id = $1::uuid"
           in
           let _ =
-            Io_lwt.Db.execute conn
+            Store_db.exec conn
               ~params:
                 [ Pgx.Value.of_string id
                 ; (match title with
@@ -337,7 +337,7 @@ let next_seq (conn : Io_lwt.Db.conn) ~(session_id : string) : int =
      WHERE session_id = $1::uuid"
   in
   let rows =
-    Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string session_id ] sql
+    Store_db.exec conn ~params:[ Pgx.Value.of_string session_id ] sql
   in
   match rows with
   | row :: _ ->
@@ -360,7 +360,7 @@ let list_messages (store : Store.t) ~(session_id : string)
              ORDER BY seq ASC"
           in
           let rows =
-            Io_lwt.Db.execute conn
+            Store_db.exec conn
               ~params:[ Pgx.Value.of_string session_id ]
               sql
           in
@@ -406,7 +406,7 @@ let append_messages
                           VALUES ($1::uuid, $2, $3, $4, $5::jsonb, $6)"
                        in
                        let _ =
-                         Io_lwt.Db.execute conn
+                         Store_db.exec conn
                            ~params:
                              [ Pgx.Value.of_string session_id
                              ; Pgx.Value.of_string (string_of_int i)

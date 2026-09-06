@@ -323,7 +323,6 @@ let stub_body (name : string) : string =
   Printf.sprintf "(lambda ()\n  \"TODO: implement %s\")" name
 
 (* Static call graph — shared module (image.inspector I1). *)
-let collect_var_apps = Call_graph.collect_var_apps
 let page_function_graph = Call_graph.page_function_graph
 
 let contains_ci (hay : string) (needle : string) : bool =

@@ -17,7 +17,7 @@
 
 module S = Pricklypear_image_lib.Store
 module TS = Pricklypear_image_lib.Tree_store
-module Db = Pricklypear_image_lib.Io_lwt.Db
+module Db = Pricklypear_image_lib.Store_db
 
 let main_id = "00000000-0000-0000-0000-000000000001"
 
@@ -39,10 +39,10 @@ let with_store f =
 
 let s = Pgx.Value.of_string
 
-let exec conn sql = ignore (Db.execute conn sql)
+let exec conn sql = ignore (Db.exec conn sql)
 
 let q_count conn ?(params = []) sql : int =
-  match Db.execute conn ~params sql with
+  match Db.exec conn ~params sql with
   | [ [ c ] ] -> (
       match Pgx.Value.to_string c with
       | Some n -> int_of_string n
@@ -50,7 +50,7 @@ let q_count conn ?(params = []) sql : int =
   | _ -> Alcotest.fail ("count query shape: " ^ sql)
 
 let q_string conn ?(params = []) sql : string =
-  match Db.execute conn ~params sql with
+  match Db.exec conn ~params sql with
   | [ [ c ] ] -> (
       match Pgx.Value.to_string c with
       | Some v -> v

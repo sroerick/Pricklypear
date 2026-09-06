@@ -271,7 +271,7 @@ let count_logins (store : Store.t) : (int * int) =
         in
         (try
       let rows =
-              Io_lwt.Db.execute conn
+              Store_db.exec conn
                 ~params:
                   [ Pgx.Value.of_bool success; Pgx.Value.of_string day ]
                 sql

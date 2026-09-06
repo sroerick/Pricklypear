@@ -54,39 +54,11 @@ type t = {
    process: agent never chdir-s. *)
 let cwd = ref (Sys.getcwd ())
 
-let value_to_json (v : Ast.value) : Yojson.Safe.t =
-  let rec go = function
-    | Ast.VStr s -> `String s
-    | VInt i -> `Intlit (Int64.to_string i)
-    | VFloat f -> `Float f
-    | VBool b -> `Bool b
-    | VNil -> `Null
-    | VSymbol s -> `String s
-    | VList vs -> `List (List.map go vs)
-    | VLambda _ -> `String "<lambda>"
-    | VPrim n -> `String ("<prim " ^ n ^ ">")
-    | other -> `String (Reader.pp_value other)
-  in
-  go v
-
 (** Parse a plugin-produced value back to host JSON. VStr is treated
     as raw JSON first (dict prims produce JSON strings), else a plain
-    string. The reverse of value_to_json for event payloads. Moved to
-    the shared loop (llm/lib/loop.ml owns it now that agent + pp-remote
-    share the loop); re-exported for host callers. *)
+    string. Live codec owned by the shared loop (llm/lib/loop.ml,
+    agent + pp-remote); re-exported for host callers. *)
 let json_of_value = Loop.json_of_value
-
-let rec value_of_json (j : Yojson.Safe.t) : Ast.value =
-  match j with
-  | `String s -> VStr s
-  | `Int i -> VInt (Int64.of_int i)
-  | `Intlit s -> (
-      match Int64.of_string_opt s with Some i -> VInt i | None -> VStr s)
-  | `Float f -> VFloat f
-  | `Bool b -> VBool b
-  | `Null -> VNil
-  | `List js -> VList (List.map value_of_json js)
-  | `Assoc _ -> VStr (Yojson.Safe.to_string j)
 
 let str_arg name v =
   match v with

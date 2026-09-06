@@ -1175,12 +1175,6 @@ let error_handler (_sockaddr : Unix.sockaddr)
     safe_close_writer body_w
   with exn when is_closed_writer_exn exn -> ()
 
-(** Legacy httpun-lwt-unix accept loop — retired. Process always uses [serve_eio]. *)
-let serve ~(session : Session.t) ?(port = default_port) () : unit Lwt.t =
-  let _ = session in
-  let _ = port in
-  failwith "Http.serve (lwt-unix): retired; use serve_eio under Eio_main"
-
 (** Convert Eio stream sockaddr → Unix.sockaddr for shared request_handler. *)
 let unix_sockaddr_of_eio (sa : Eio.Net.Sockaddr.stream) : Unix.sockaddr =
   match sa with

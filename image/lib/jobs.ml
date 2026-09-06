@@ -138,7 +138,7 @@ let submit ~(store : Store.t) ~(fn : string) ~(args_json : string)
            VALUES ($1, $2::jsonb, $3, $4, $5) RETURNING id::text"
       in
       let rows =
-        Io_lwt.Db.execute conn
+        Store_db.exec conn
           ~params:
             [ Pgx.Value.of_string fn
             ; Pgx.Value.of_string args_json
@@ -168,7 +168,7 @@ let get ~(store : Store.t) ~(id : string) ~(caller : string) ~(is_admin : bool)
       Printf.sprintf "SELECT %s FROM jobs WHERE id = $1::uuid" select_cols
     in
     let rows =
-      Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string id ] sql
+      Store_db.exec conn ~params:[ Pgx.Value.of_string id ] sql
     in
     (match rows with
      | row :: _ ->
@@ -197,7 +197,7 @@ let list ~(store : Store.t) ~(caller : string) ~(is_admin : bool) ~(limit : int)
       Printf.sprintf "SELECT %s FROM jobs %sORDER BY created_at DESC LIMIT $1"
         select_cols where
     in
-    let rows = Io_lwt.Db.execute conn ~params sql in
+    let rows = Store_db.exec conn ~params sql in
     let vals =
       List.filter_map
         (fun r ->
@@ -228,7 +228,7 @@ let cancel ~(store : Store.t) ~(id : string) ~(caller : string) ~(is_admin : boo
          WHERE id = $1::uuid AND status = 'pending' %sRETURNING id::text"
         confinement
     in
-    let rows = Io_lwt.Db.execute conn ~params sql in
+    let rows = Store_db.exec conn ~params sql in
     (match rows with
      | row :: _ ->
          (match cell_string row 0 with
@@ -260,7 +260,7 @@ let claim_due ~(store : Store.t) : job option =
             select_cols
         in
         let rows =
-          Io_lwt.Db.execute conn
+          Store_db.exec conn
             ~params:
               [ Pgx.Value.of_string runner_id
               ; Pgx.Value.of_int64 now_ms
@@ -277,7 +277,7 @@ let rec expt_backoff (store : Store.t) (id : string) : int =
   | None -> 2
   | Some conn ->
     let rows =
-      Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string id ]
+      Store_db.exec conn ~params:[ Pgx.Value.of_string id ]
         "SELECT attempts FROM jobs WHERE id = $1::uuid"
     in
     (match rows with
@@ -302,7 +302,7 @@ let record_done ~(store : Store.t) ~(id : string) ~(result_json : string) : unit
     in
     (* Wrap the result in a JSON string value so it's always valid jsonb. *)
     let wrapped = Printf.sprintf "%s" (Yojson.Safe.to_string (`String result_json)) in
-    ignore (Io_lwt.Db.execute conn
+    ignore (Store_db.exec conn
               ~params:[ Pgx.Value.of_string id; Pgx.Value.of_string wrapped ]
               sql)
 
@@ -320,7 +320,7 @@ let record_failed ~(store : Store.t) ~(id : string) ~(error : string)
                                   ELSE $4 END \
        WHERE id = $1::uuid"
     in
-    ignore (Io_lwt.Db.execute conn
+    ignore (Store_db.exec conn
               ~params:
                 [ Pgx.Value.of_string id
                 ; Pgx.Value.of_string error
@@ -344,7 +344,7 @@ let reap_dead ~(store : Store.t) : unit =
        error = 'runner died: ' || runner_id \
        WHERE status = 'running' AND runner_id <> $1"
     in
-    ignore (Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string runner_id ] sql)
+    ignore (Store_db.exec conn ~params:[ Pgx.Value.of_string runner_id ] sql)
 
 (* The runner loop (eval_job + runner_loop) lives in boot.ml to avoid a
    dependency cycle: Jobs (DB ops) must not depend on Session, which
@@ -375,7 +375,7 @@ let checkpoint_lookup ~(store : Store.t) ~(job_id : string) ~(name : string)
   | None -> None
   | Some conn ->
     let rows =
-      Io_lwt.Db.execute conn
+      Store_db.exec conn
         ~params:
           [ Pgx.Value.of_string job_id; Pgx.Value.of_string name ]
         "SELECT value::text FROM job_steps WHERE job_id = $1::uuid \
@@ -395,7 +395,7 @@ let checkpoint_write ~(store : Store.t) ~(job_id : string) ~(name : string)
   | None -> ()
   | Some conn ->
     ignore
-      (Io_lwt.Db.execute conn
+      (Store_db.exec conn
          ~params:
            [ Pgx.Value.of_string job_id; Pgx.Value.of_string name;
              Pgx.Value.of_string value ]
@@ -636,7 +636,7 @@ let schedule_upsert ~(store : Store.t) ~(name : string) ~(spec : string)
            RETURNING name::text"
         in
         let rows =
-          Io_lwt.Db.execute conn
+          Store_db.exec conn
             ~params:
               [ Pgx.Value.of_string name; Pgx.Value.of_string fn;
                 Pgx.Value.of_string args_json; Pgx.Value.of_string branch;
@@ -659,7 +659,7 @@ let unschedule ~(store : Store.t) ~(name : string) () : value =
   | Some conn ->
     (try
       let rows =
-        Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string name ]
+        Store_db.exec conn ~params:[ Pgx.Value.of_string name ]
           "UPDATE schedules SET enabled = false WHERE name = $1 RETURNING name::text"
       in
       (match rows with
@@ -675,7 +675,7 @@ let list_schedules ~(store : Store.t) () : value =
   | Some conn ->
     (try
       let rows =
-        Io_lwt.Db.execute conn
+        Store_db.exec conn
           "SELECT name, fn, args::text, branch, submitted_by, cron, every_ms, \
            next_run, enabled FROM schedules ORDER BY name"
       in
@@ -707,7 +707,7 @@ let claim_due_schedule ~(store : Store.t) : schedule option =
            ORDER BY next_run, name FOR UPDATE SKIP LOCKED LIMIT 1"
         in
         let rows =
-          Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_int64 now_ms ] sql
+          Store_db.exec conn ~params:[ Pgx.Value.of_int64 now_ms ] sql
         in
         (match rows with row :: _ -> row_to_schedule row | [] -> None))
 
@@ -728,7 +728,7 @@ let advance_schedule ~(store : Store.t) ~(name : string) ~(fired_at : int64)
       | None, None -> Int64.add now_ms 60_000L
     in
     ignore
-      (Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string name; Pgx.Value.of_int64 next ]
+      (Store_db.exec conn ~params:[ Pgx.Value.of_string name; Pgx.Value.of_int64 next ]
          "UPDATE schedules SET next_run = $2 WHERE name = $1")
 
 (* The runner loop (eval_job + runner_loop) lives in boot.ml to avoid a

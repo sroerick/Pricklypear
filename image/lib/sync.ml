@@ -225,7 +225,7 @@ let server_manifest (store : Store.t) ~(prefix : string) : manifest option =
   | None -> None
   | Some conn ->
       let rows =
-        Io_lwt.Db.execute conn
+        Store_db.exec conn
           ~params:
             [ Pgx.Value.of_string prefix ]
           "SELECT path::text, hash FROM tree_nodes \
@@ -374,7 +374,7 @@ let server_updated_at (store : Store.t) (paths : string list)
       List.filter_map
         (fun p ->
           match
-            Io_lwt.Db.execute conn
+            Store_db.exec conn
               ~params:[ Pgx.Value.of_string p ]
               "SELECT extract(epoch from updated_at)::float8 FROM tree_nodes \
                WHERE path = $1::ltree"

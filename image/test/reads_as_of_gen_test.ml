@@ -314,7 +314,7 @@ let test_undo () =
 let live_payload_kind (conn : _) (path : string) : string option =
   try
     let rows =
-      Pricklypear_image_lib.Io_lwt.Db.execute conn
+      Pricklypear_image_lib.Store_db.exec conn
         ~params:[ Pgx.Value.of_string path ]
         "SELECT payload->>'kind' FROM tree_nodes WHERE path = $1::ltree"
     in

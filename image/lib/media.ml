@@ -224,7 +224,7 @@ let put
           in
           (try
       let rows =
-                Io_lwt.Db.execute conn
+                Store_db.exec conn
                   ~params:
                     [ Pgx.Value.of_string author
                     ; Pgx.Value.of_string ct
@@ -298,7 +298,7 @@ let get_meta (store : Store.t) ~(id : string)
       in
       (try
       let rows =
-            Io_lwt.Db.execute conn
+            Store_db.exec conn
               ~params
               sql
           in
@@ -334,7 +334,7 @@ let get_bytes (store : Store.t) ~(id : string)
       in
       (try
       let rows =
-            Io_lwt.Db.execute conn
+            Store_db.exec conn
               ~params
               sql
           in
@@ -381,7 +381,7 @@ let list
             , [ Pgx.Value.of_int limit ] )
       in
       (try
-      let rows = Io_lwt.Db.execute conn ~params sql in
+      let rows = Store_db.exec conn ~params sql in
           (List.filter_map row_to_meta rows)
     with _ ->
       [])
@@ -405,7 +405,7 @@ let delete
             let sql = "DELETE FROM media_blobs WHERE id = $1::uuid" in
             (try
       let _ =
-                  Io_lwt.Db.execute conn
+                  Store_db.exec conn
                     ~params:[ Pgx.Value.of_string id ]
                     sql
                 in
