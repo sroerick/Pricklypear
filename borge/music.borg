@@ -24,6 +24,7 @@
            every data_rows type. Personal libraries = personal branch.
    |))
    )
+  )
 
   (subsection upload-flow
    (doc "Browser multipart POST /music -> (request-multipart) -> (media-put-raw) -> music-track row")
@@ -65,6 +66,7 @@
     (smoke "POST /music multipart (wav + title): 201-equivalent row appears in the table; blob in media_blobs with audio/wav")
     (smoke "title part missing -> row titled 'Untitled'; file part missing -> status line, no row")
     (smoke ">64 MiB audio -> 413; non-audio type -> media-put-raw error string, no row"))
+  )
 
   (subsection play
    (doc "?play=<track-id> loads the row's media_id into the player card; Range/206 seeking comes from the kernel serve path")
@@ -82,6 +84,7 @@
    (verify
     (smoke "GET /music?play=<id> renders <audio src=/media/<media_id>>")
     (smoke "seeking in the browser sends Range and gets 206 (kernel storage.media)"))
+  )
 
   (subsection playlists
    (doc "music-playlist rows with a comma-separated track_ids order")
@@ -97,6 +100,7 @@
    )
    (verify
     (smoke "pl-create + two pl-add: pl-tracks returns the two tracks in order"))
+  )
 
   (subsection non-goals
    (doc "Explicitly NOT in v1, with reasons")
