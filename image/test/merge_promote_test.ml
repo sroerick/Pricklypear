@@ -29,6 +29,10 @@ let with_store f =
 let expr_of_int n =
   Pricklypear_lisp.Ast.Lit (Pricklypear_lisp.Ast.VInt (Int64.of_int n))
 
+(* i-1788671083-c: the store persists raw jsonb bodies. *)
+let body_json_of_int n =
+  Pricklypear_lisp.Ast.expr_to_body_json (expr_of_int n)
+
 let uniq p = Printf.sprintf "%s_%d" p (Random.int 1_000_000)
 
 let count_types ~conn ~branch_id =
@@ -80,7 +84,7 @@ let test_merge_conflict_report () =
           let fname = "mrg_conflict_" ^ suffix in
           store.branch_id <- main_id;
           (* seed on main *)
-          S.persist_function store fname (expr_of_int 1) "tester";
+          S.persist_function store fname (body_json_of_int 1) "tester";
           match
             S.fork_branch store ~parent_id:main_id ~owner:"mrg_test"
               ~child_name
@@ -89,11 +93,11 @@ let test_merge_conflict_report () =
           | Some child_id ->
               (* child pins older-ish body first *)
               store.branch_id <- child_id;
-              S.persist_function store fname (expr_of_int 2) "tester";
+              S.persist_function store fname (body_json_of_int 2) "tester";
               (* bump main (target) AFTER child so target.updated_at > source *)
               store.branch_id <- main_id;
               Unix.sleepf 0.05;
-              S.persist_function store fname (expr_of_int 3) "tester";
+              S.persist_function store fname (body_json_of_int 3) "tester";
               let r =
                 S.merge_branch store ~source_id:child_id ~target_id:main_id
               in
@@ -137,7 +141,7 @@ let test_merge_scope_no_types_or_routes () =
           | None -> Alcotest.fail "fork failed"
           | Some child_id ->
               store.branch_id <- child_id;
-              S.persist_function store fname (expr_of_int 1) "tester";
+              S.persist_function store fname (body_json_of_int 1) "tester";
               S.persist_type store ~name:tname ~fields:[ "a"; "b" ] ~author:"tester";
               S.register_route store ~route ~handler:fname
                 ~visibility:"public" ();
@@ -186,8 +190,8 @@ let test_promote_routes_with_handler () =
           | None -> Alcotest.fail "fork failed"
           | Some child_id ->
               store.branch_id <- child_id;
-              S.persist_function store h_yes (expr_of_int 1) "tester";
-              S.persist_function store h_no (expr_of_int 2) "tester";
+              S.persist_function store h_yes (body_json_of_int 1) "tester";
+              S.persist_function store h_no (body_json_of_int 2) "tester";
               S.register_route store ~route:r_yes ~handler:h_yes
                 ~visibility:"public" ();
               S.register_route store ~route:r_no ~handler:h_no
@@ -253,9 +257,9 @@ let test_promote_atomic () =
                   (* Seed all three BEFORE the rogue trigger exists, so
                      seeding itself is unaffected. *)
                   store.branch_id <- child_id;
-                  S.persist_function store ok1 (expr_of_int 1) "tester";
-                  S.persist_function store boom (expr_of_int 2) "tester";
-                  S.persist_function store ok2 (expr_of_int 3) "tester";
+                  S.persist_function store ok1 (body_json_of_int 1) "tester";
+                  S.persist_function store boom (body_json_of_int 2) "tester";
+                  S.persist_function store ok2 (body_json_of_int 3) "tester";
                   (* Rogue trigger: any INSERT/UPDATE whose name starts with
                      'boom' raises. Fires on the target upsert mid-fold. *)
                   let (_ : Pgx.row list) =
@@ -316,7 +320,7 @@ let test_merge_diverged_not_applied () =
           let div_fn = "mrg_divfn_" ^ suffix in
           let new_fn = "mrg_newfn_" ^ suffix in
           store.branch_id <- main_id;
-          S.persist_function store div_fn (expr_of_int 1) "tester";
+          S.persist_function store div_fn (body_json_of_int 1) "tester";
           match
             S.fork_branch store ~parent_id:main_id ~owner:"mrg_test"
               ~child_name
@@ -327,10 +331,10 @@ let test_merge_diverged_not_applied () =
                  the fork base → diverged. child adds a fresh fn →
                  ahead-new. *)
               store.branch_id <- child_id;
-              S.persist_function store div_fn (expr_of_int 2) "tester";
-              S.persist_function store new_fn (expr_of_int 5) "tester";
+              S.persist_function store div_fn (body_json_of_int 2) "tester";
+              S.persist_function store new_fn (body_json_of_int 5) "tester";
               store.branch_id <- main_id;
-              S.persist_function store div_fn (expr_of_int 3) "tester";
+              S.persist_function store div_fn (body_json_of_int 3) "tester";
               (match
                  S.merge_branch store ~source_id:child_id ~target_id:main_id
                with
@@ -347,7 +351,7 @@ let test_merge_diverged_not_applied () =
                    with
                   | Some (body, _, _, _) ->
                       Alcotest.(check bool) "target body not overwritten" true
-                        (body = expr_of_int 3)
+                        (body = body_json_of_int 3)
                   | None -> Alcotest.fail "target row vanished");
                   (* ahead-new landed *)
                   (match
@@ -356,7 +360,7 @@ let test_merge_diverged_not_applied () =
                    with
                   | Some (body, _, _, _) ->
                       Alcotest.(check bool) "ahead-new applied" true
-                        (body = expr_of_int 5)
+                        (body = body_json_of_int 5)
                   | None -> Alcotest.fail "ahead-new not merged"));
               (* post-merge: base advanced; the child's pin is its own
                  change vs the new base → ahead, NOT diverged, NOT synced. *)

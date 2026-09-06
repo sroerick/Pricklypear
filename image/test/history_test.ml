@@ -45,11 +45,15 @@ let uniq suffix =
 let expr_of_int n =
   Pricklypear_lisp.Ast.Lit (Pricklypear_lisp.Ast.VInt (Int64.of_int n))
 
+(* i-1788671083-c: the store persists raw jsonb bodies. *)
+let body_json_of_int n =
+  Pricklypear_lisp.Ast.expr_to_body_json (expr_of_int n)
+
 let test_redefine_records_old_body () =
   with_store (fun store ->
       let name = uniq "fn" in
-      S.persist_function store name (expr_of_int 1) ~doc:(Some "v1") "tester";
-      S.persist_function store name (expr_of_int 2) ~doc:(Some "v2") "tester";
+      S.persist_function store name (body_json_of_int 1) ~doc:(Some "v1") "tester";
+      S.persist_function store name (body_json_of_int 2) ~doc:(Some "v2") "tester";
       let hist =
         S.list_code_history store ~branch_id:(S.current_branch_id store) ~name
       in
@@ -74,14 +78,14 @@ let test_merge_clobber_records_history () =
       let child_name = "hist_child_" ^ suffix in
       let name = "hist_merge_fn_" ^ suffix in
       store.branch_id <- main_id;
-      S.persist_function store name (expr_of_int 10) ~doc:(Some "main") "tester";
+      S.persist_function store name (body_json_of_int 10) ~doc:(Some "main") "tester";
       match
         S.fork_branch store ~parent_id:main_id ~owner:"hist_test" ~child_name
       with
       | None -> Alcotest.fail "fork failed"
       | Some child_id ->
           store.branch_id <- child_id;
-          S.persist_function store name (expr_of_int 99) ~doc:(Some "child")
+          S.persist_function store name (body_json_of_int 99) ~doc:(Some "child")
             "tester";
           let n =
             S.merge_branch store ~source_id:child_id ~target_id:main_id
@@ -101,7 +105,7 @@ let test_additive_insert_no_history () =
   with_store (fun store ->
       let name = uniq "add" in
       store.branch_id <- main_id;
-      S.persist_function store name (expr_of_int 7) "tester";
+      S.persist_function store name (body_json_of_int 7) "tester";
       let hist =
         S.list_code_history store ~branch_id:(S.current_branch_id store) ~name
       in
@@ -116,7 +120,7 @@ let test_rollback_no_history () =
   with_store (fun store ->
       let name = uniq "rb" in
       store.branch_id <- main_id;
-      S.persist_function store name (expr_of_int 1) "tester";
+      S.persist_function store name (body_json_of_int 1) "tester";
       let before =
         List.length (S.list_code_history store ~branch_id:main_id ~name)
       in
@@ -156,8 +160,8 @@ let test_code_diff_smoke () =
   with_store (fun store ->
       let name = uniq "diff" in
       store.branch_id <- main_id;
-      S.persist_function store name (expr_of_int 1) "tester";
-      S.persist_function store name (expr_of_int 2) "tester";
+      S.persist_function store name (body_json_of_int 1) "tester";
+      S.persist_function store name (body_json_of_int 2) "tester";
       match S.code_diff store ~branch_id:main_id ~name ~n:1 with
       | Error e -> Alcotest.fail e
       | Ok s ->

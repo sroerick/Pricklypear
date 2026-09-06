@@ -38,6 +38,11 @@ let with_store f =
 let expr_of_int n =
   Pricklypear_lisp.Ast.Lit (Pricklypear_lisp.Ast.VInt (Int64.of_int n))
 
+(* i-1788671083-c: the store persists raw jsonb bodies; tests serialize
+   at the boundary exactly like session.ml does. *)
+let body_json_of_int n =
+  Pricklypear_lisp.Ast.expr_to_body_json (expr_of_int n)
+
 let uniq p = Printf.sprintf "%s_%d" p (Random.int 1_000_000)
 
 let status_of rows ~name =
@@ -119,7 +124,7 @@ let test_status_lifecycle () =
           let newfn = "bst_new_" ^ suffix in
           store.branch_id <- main_id;
           (* main holds a shared def BEFORE the fork *)
-          S.persist_function store shared (expr_of_int 1) "tester";
+          S.persist_function store shared (body_json_of_int 1) "tester";
           (match
              S.fork_branch store ~parent_id:main_id ~owner:"bst_test"
                ~child_name
@@ -138,15 +143,15 @@ let test_status_lifecycle () =
                  (status_of rows ~name:shared = Some S.SClean);
                (* ahead-new: child adds a fresh fn *)
                store.branch_id <- child_id;
-               S.persist_function store newfn (expr_of_int 7) "tester";
+               S.persist_function store newfn (body_json_of_int 7) "tester";
                let rows = S.branch_status store ~branch_id:child_id in
                Alcotest.(check bool) "own new fn = ahead-new" true
                  (status_of rows ~name:newfn = Some S.SAheadNew);
                (* diverged: both sides move the shared fn *)
-               S.persist_function store shared (expr_of_int 2) "tester";
+               S.persist_function store shared (body_json_of_int 2) "tester";
                store.branch_id <- main_id;
                Unix.sleepf 0.02;
-               S.persist_function store shared (expr_of_int 3) "tester";
+               S.persist_function store shared (body_json_of_int 3) "tester";
                let rows = S.branch_status store ~branch_id:child_id in
                Alcotest.(check bool) "both moved = diverged" true
                  (status_of rows ~name:shared = Some S.SDiverged);
@@ -162,9 +167,9 @@ let test_status_lifecycle () =
                     drows);
                (* behind: parent moves ANOTHER fn the child only inherits *)
                let behind_fn = "bst_behind_" ^ suffix in
-               S.persist_function store behind_fn (expr_of_int 1) "tester";
+               S.persist_function store behind_fn (body_json_of_int 1) "tester";
                Unix.sleepf 0.02;
-               S.persist_function store behind_fn (expr_of_int 2) "tester";
+               S.persist_function store behind_fn (body_json_of_int 2) "tester";
                let rows = S.branch_status store ~branch_id:child_id in
                Alcotest.(check bool) "parent-only move = behind" true
                  (status_of rows ~name:behind_fn = Some S.SBehind);
@@ -200,7 +205,7 @@ let test_status_lifecycle () =
                 with
                | Some (body, _, _, _) ->
                    Alcotest.(check bool) "target not overwritten" true
-                     (body = expr_of_int 3)
+                     (body = body_json_of_int 3)
                | None -> Alcotest.fail "target row vanished");
                let rows = S.branch_status store ~branch_id:child_id in
                Alcotest.(check bool) "post-merge diverged = ahead" true
@@ -226,7 +231,7 @@ let test_define_suppression () =
           let child_name = "bst_sup_" ^ suffix in
           let fn = "bst_sup_fn_" ^ suffix in
           store.branch_id <- main_id;
-          S.persist_function store fn (expr_of_int 42) "tester";
+          S.persist_function store fn (body_json_of_int 42) "tester";
           (match
              S.fork_branch store ~parent_id:main_id ~owner:"bst_test"
                ~child_name
@@ -241,7 +246,7 @@ let test_define_suppression () =
                in
                (* define identical to parent: suppressed, no pin *)
                store.branch_id <- child_id;
-               S.persist_function store fn (expr_of_int 42) "tester";
+               S.persist_function store fn (body_json_of_int 42) "tester";
                Alcotest.(check bool) "equal define leaves no pin" false
                  (own_row ());
                Alcotest.(check bool) "equal define stays clean" true
@@ -250,11 +255,11 @@ let test_define_suppression () =
                     ~name:fn
                  = Some S.SClean);
                (* divergent define: pins *)
-               S.persist_function store fn (expr_of_int 7) "tester";
+               S.persist_function store fn (body_json_of_int 7) "tester";
                Alcotest.(check bool) "divergent define pins" true
                  (own_row ());
                (* redefine equal to parent: unpins, parent revealed *)
-               S.persist_function store fn (expr_of_int 42) "tester";
+               S.persist_function store fn (body_json_of_int 42) "tester";
                Alcotest.(check bool) "resync define unpins" false
                  (own_row ());
                Alcotest.(check bool) "resynced name is clean" true
@@ -279,8 +284,8 @@ let test_prune_synced () =
           let synced_fn = "bst_prune_synced_" ^ suffix in
           let diff_fn = "bst_prune_diff_" ^ suffix in
           store.branch_id <- main_id;
-          S.persist_function store synced_fn (expr_of_int 1) "tester";
-          S.persist_function store diff_fn (expr_of_int 1) "tester";
+          S.persist_function store synced_fn (body_json_of_int 1) "tester";
+          S.persist_function store diff_fn (body_json_of_int 1) "tester";
           (match
              S.fork_branch store ~parent_id:main_id ~owner:"bst_test"
                ~child_name
@@ -290,15 +295,15 @@ let test_prune_synced () =
                store.branch_id <- child_id;
                (* pin both: synced_fn diverges temporarily, diff_fn
                   keeps a real permanent diff *)
-               S.persist_function store synced_fn (expr_of_int 2)
+               S.persist_function store synced_fn (body_json_of_int 2)
                  "tester";
-               S.persist_function store diff_fn (expr_of_int 9)
+               S.persist_function store diff_fn (body_json_of_int 9)
                  "tester";
                (* parent catches up on synced_fn: the pin is now
                   contentless (synced), still own *)
                store.branch_id <- main_id;
                Unix.sleepf 0.02;
-               S.persist_function store synced_fn (expr_of_int 2)
+               S.persist_function store synced_fn (body_json_of_int 2)
                  "tester";
                store.branch_id <- child_id;
                let rows = S.branch_status store ~branch_id:child_id in

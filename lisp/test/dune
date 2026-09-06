@@ -47,3 +47,8 @@
  (name budget_scope_test)
  (modules budget_scope_test)
  (libraries pricklypear-lisp alcotest))
+
+(test
+ (name ast_body_codec_test)
+ (modules ast_body_codec_test)
+ (libraries pricklypear-lisp alcotest))

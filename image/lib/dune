@@ -1,7 +1,8 @@
 (library
  (name pricklypear_image_lib)
  (public_name pricklypear-image)
- (modules store_db store tree_store branch_algebra def_journal
+ (modules store_db store_common store_defs store_branch store_packages
+          store_history store_retention store tree_store branch_algebra def_journal
           primitives request_context control_rim io io_lwt io_eio
           row http_kit
           prims_time prims_crypto

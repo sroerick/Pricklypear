@@ -228,7 +228,16 @@ let holes (snap : snapshot) (name : string) : string list =
 (** Load defs + routes from session store and build snapshot. *)
 let snapshot_of_session (session : Session_types.t) : snapshot =
   let defs = Store.list_function_names session.store in
-  let bodies = List.map (fun (n, e, _) -> (n, e)) defs in
+  (* Opaque-body contract (i-1788671083-c): parse at the eval boundary;
+     a malformed row is skipped, as the store's old decode guard did. *)
+  let bodies =
+    List.filter_map
+      (fun (n, body, _) ->
+        match Pricklypear_lisp.Ast.expr_of_body_json body with
+        | Some e -> Some (n, e)
+        | None -> None)
+      defs
+  in
   let routes =
     Hashtbl.fold
       (fun path (handler, _) acc -> (path, handler) :: acc)

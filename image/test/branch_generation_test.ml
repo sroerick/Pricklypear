@@ -51,7 +51,8 @@ let uniq p = Printf.sprintf "gen_%s_%d" p (Random.int 1_000_000)
 let write_fn store ~branch_id ~name =
   S.with_branch store ~branch_id (fun () ->
       S.persist_function store name
-        (Pricklypear_lisp.Ast.Lit (Pricklypear_lisp.Ast.VInt 1L))
+        (Pricklypear_lisp.Ast.expr_to_body_json
+           (Pricklypear_lisp.Ast.Lit (Pricklypear_lisp.Ast.VInt 1L)))
         ~doc:(Some "gen-test") "tester")
 
 let test_write_in_ancestry_bumps () =

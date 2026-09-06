@@ -32,6 +32,10 @@ let with_store f =
 let expr_of_int n =
   Pricklypear_lisp.Ast.Lit (Pricklypear_lisp.Ast.VInt (Int64.of_int n))
 
+(* i-1788671083-c: the store persists raw jsonb bodies. *)
+let body_json_of_int n =
+  Pricklypear_lisp.Ast.expr_to_body_json (expr_of_int n)
+
 let uniq p = Printf.sprintf "%s_%d" p (Random.int 1_000_000)
 
 let find rows ~name =
@@ -59,7 +63,7 @@ let test_diff_classification () =
           let handler_b = "dfn_b_" ^ suffix in
           store.branch_id <- main_id;
           (* shared on main: identical effective def on both children *)
-          S.persist_function store fn_shared (expr_of_int 1) "tester";
+          S.persist_function store fn_shared (body_json_of_int 1) "tester";
           S.persist_type store ~name:ty_shared ~fields:[ "a" ] ~author:"tester";
           (match
              S.fork_branch store ~parent_id:main_id ~owner:"dfa_test"
@@ -75,13 +79,13 @@ let test_diff_classification () =
                 | Some b_id ->
                     (* child A: own fn_a_add + fn_mod (int 1) *)
                     store.branch_id <- a_id;
-                    S.persist_function store fn_a_add (expr_of_int 5) "tester";
-                    S.persist_function store fn_mod (expr_of_int 1) "tester";
+                    S.persist_function store fn_a_add (body_json_of_int 5) "tester";
+                    S.persist_function store fn_mod (body_json_of_int 1) "tester";
                     (* child B: own fn_b_add + fn_mod (int 2) + type override
                        + a route *)
                     store.branch_id <- b_id;
-                    S.persist_function store fn_b_add (expr_of_int 6) "tester";
-                    S.persist_function store fn_mod (expr_of_int 2) "tester";
+                    S.persist_function store fn_b_add (body_json_of_int 6) "tester";
+                    S.persist_function store fn_mod (body_json_of_int 2) "tester";
                     S.persist_type store ~name:ty_shared
                       ~fields:[ "a"; "b" ] ~author:"tester";
                     S.register_route store ~route:route_b ~handler:handler_b
@@ -98,10 +102,16 @@ let test_diff_classification () =
                            (kind_of r = S.DiffFn);
                          Alcotest.(check bool) "fn_mod modified" true
                            (status_of r = S.DiffModified);
-                         Alcotest.(check bool) "fn_mod parses from_expr" true
-                           (r.S.from_expr <> None);
-                         Alcotest.(check bool) "fn_mod parses to_expr" true
-                           (r.S.to_expr <> None));
+                         (* i-1788671083-c: rows carry RAW jsonb bodies; the
+                            AST parses at the boundary. *)
+                         Alcotest.(check bool) "fn_mod from_body parses" true
+                           (Option.bind r.S.from_body
+                              Pricklypear_lisp.Ast.expr_of_body_json
+                            <> None);
+                         Alcotest.(check bool) "fn_mod to_body parses" true
+                           (Option.bind r.S.to_body
+                              Pricklypear_lisp.Ast.expr_of_body_json
+                            <> None));
                     (* fn_a_add removed (in A, not B) *)
                     (match find rows ~name:fn_a_add with
                      | None -> Alcotest.fail "fn_a_add missing"

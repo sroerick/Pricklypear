@@ -321,3 +321,22 @@ and value_of_json (j : Yojson.Safe.t) : (value, string) result =
       in
       (match lst' with Ok lst -> Ok (VList lst) | Error e -> Error e)
   | _ -> Error ("unrecognized value JSON: " ^ Yojson.Safe.to_string j)
+
+(** Opaque store-body codec (i-1788671083-c): the storage layer hands
+    function bodies across its boundary as the raw jsonb text it stored;
+    parsing to an [expr] happens HERE at the interpreter boundary, not in
+    the store (the store no longer links AST types).
+    [expr_of_body_json] is [None] on any parse failure — the per-row
+    decode-guard policy the store used to own, now owned by the caller.
+    [expr_to_body_json] is the exact serialization the store persists. *)
+let expr_of_body_json (body : string) : expr option =
+  match Yojson.Safe.from_string body with
+  | j -> (
+      match expr_of_json j with
+      | Ok e -> Some e
+      | Error _ -> None)
+  | exception Yojson.Json_error _ -> None
+
+let expr_to_body_json (e : expr) : string =
+  Yojson.Safe.to_string (expr_to_json e)
+

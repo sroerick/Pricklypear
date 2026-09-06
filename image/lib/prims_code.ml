@@ -275,9 +275,16 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
               | [] -> (Pricklypear_lisp.Ast.VStr "pure")
               | expr :: _ ->
                   let defs = Store.list_function_names t.store in
+                  (* Opaque-body contract (i-1788671083-c): parse at the
+                     eval boundary; malformed rows skipped as before. *)
                   let known_fn =
                     Pricklypear_lisp.Effect.known_fn_of_bindings
-                      (List.map (fun (n, e, _) -> (n, e)) defs)
+                      (List.filter_map
+                         (fun (n, body, _) ->
+                           match Pricklypear_lisp.Ast.expr_of_body_json body with
+                           | Some e -> Some (n, e)
+                           | None -> None)
+                         defs)
                   in
                   let badge =
                     Pricklypear_lisp.Effect.EffSet.badge

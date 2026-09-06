@@ -42,7 +42,8 @@ let uniq p = Printf.sprintf "lens_%s_%d" p (Random.int 1_000_000)
 let persist store ~branch ~name =
   S.with_branch store ~branch_id:branch (fun () ->
       S.persist_function store name
-        (Pricklypear_lisp.Ast.Lit (Pricklypear_lisp.Ast.VInt 1L))
+        (Pricklypear_lisp.Ast.expr_to_body_json
+           (Pricklypear_lisp.Ast.Lit (Pricklypear_lisp.Ast.VInt 1L)))
         ~doc:(Some "lens-test") "tester")
 
 (* ---- pure: suffix path materialization ---- *)
@@ -159,7 +160,8 @@ let test_lens_get_prim () =
           (* effective override: child re-defines fn to a marker body *)
           S.with_branch store ~branch_id:child_id (fun () ->
               S.persist_function store fn
-                (Pricklypear_lisp.Ast.Lit (Pricklypear_lisp.Ast.VInt 42L))
+                (Pricklypear_lisp.Ast.expr_to_body_json
+                   (Pricklypear_lisp.Ast.Lit (Pricklypear_lisp.Ast.VInt 42L)))
                 ~doc:(Some "lens-prim-override") "tester");
           S.with_branch store ~branch_id:child_id (fun () ->
               match S.conn_of store with
