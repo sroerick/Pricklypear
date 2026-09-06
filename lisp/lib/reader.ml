@@ -400,7 +400,12 @@ let read_all (s : string) : expr list =
 
 (** [is_complete s] returns true if [s] has balanced parens and closed
     strings, i.e. the REPL can evaluate it. Used by the REPL to know
-    whether to prompt for more input vs. evaluate now. *)
+    whether to prompt for more input vs. evaluate now.
+
+    String scanning mirrors [read_string]'s escape rule: a backslash
+    escapes the next character, so [\"] does not close the string (and
+    [\\"] still closes at the real quote). Without this, the REPL would
+    prompt forever on inputs like [(print "a\"b")]. *)
 let is_complete (s : string) : bool =
   let st = make_state s in
   let depth = ref 0 in
@@ -414,9 +419,17 @@ let is_complete (s : string) : bool =
         ignore (advance st)
       end else if !in_string then begin
         (match c with
-         | '"' -> in_string := false
-         | _ -> ());
-        ignore (advance st)
+         | '\\' ->
+             (* Backslash escapes the next character (read_string's
+                forgiving rule): skip both, so an escaped quote does not
+                close the string and an escaped backslash does not
+                toggle anything. *)
+             ignore (advance st);
+             ignore (advance st)
+         | '"' ->
+             in_string := false;
+             ignore (advance st)
+         | _ -> ignore (advance st))
       end else begin
         (match c with
          | ';' -> in_comment := true
