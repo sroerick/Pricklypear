@@ -29,23 +29,21 @@
     Substrate interface (the spec pins: path-addressed get/put/subtree-list
     + envelope + hash). [materialize] writes a single node JSON under the
     lens root at its path (one file per node); [get]/[subtree_list] are the
-    path-addressed reads; [node_hash] is the content hash (the git-style
-    "hash over the canonical body" that sync's three-way-diff keys on).
-    Every write is atomic (temp file + rename(2)) — the single-writer
-    atomicity the lens gets WITHOUT a second engine (no SQLite, no second
-    query engine; the server stays the index).
+    path-addressed reads; [node_hash] reads the envelope [hash] field —
+    the sync three-way-diff key. HASH AUTHORITY IS SERVER-SIDE: hashes
+    are sha256 over PG's canonical jsonb body text, computed DB-side in
+    every writer (one-tree.hash-domain; the pre-027 OCaml-side hash domain
+    is deleted — it classified identical bodies as divergent). The client
+    NEVER computes a hash: pulled envelopes carry the server's hash
+    verbatim; a locally-built envelope (put_body / materialize_code_node)
+    carries "" until the sync round's convergence pull fetches the server
+    envelope (sync_client). Every write is atomic (temp file + rename(2))
+    — the single-writer atomicity the lens gets WITHOUT a second engine
+    (no SQLite, no second query engine; the server stays the index).
 
     This module is pure filesystem + JSON: no Postgres, no Lwt, no network.
     It lives in the client package (remote/) so the offline lens works even
     when the server is unreachable. *)
-
-(** Content hash over a canonical JSON string — the node-envelope [hash]
-    field, the git-style "hash over the canonical body" that sync's
-    three-way-diff keys on. Pure digestif (the same digest family the lisp
-    package uses); no image-side dependency, so the client computes hashes
-    offline. *) 
-let content_hash (s : string) : string =
-  Digestif.SHA256.to_hex (Digestif.SHA256.digest_string s)
 
 (** Whole-file read (standard library; no external File_io). *) 
 let read_file (file : string) : string =
@@ -212,11 +210,15 @@ let materialize ~(lens : lens) (node_json : string) : string option =
 
 (** put_body: build a node envelope from a canonical body and write it at
     [path]. This is the substrate write path a local edit uses while the
-    lens is offline (single-writer; no server round trip). The hash is the
-    content hash over the canonical body (the sync/three-way-diff key). *)
+    lens is offline (single-writer; no server round trip). The envelope's
+    [hash] field is "": the client does not compute hashes (the OCaml-side
+    hash domain is deleted; one-tree.hash-domain digests DB-side) — the
+    server stamps the canonical hash when the pushed body is applied, and
+    the sync round's convergence pull (sync_client) replaces the envelope
+    with the server's. The body itself travels intact. *)
 let put_body ~(lens : lens) ~path ~kind ~type_ ~author ~(body : Yojson.Safe.t)
     : unit =
-  let hash = content_hash (Yojson.Safe.to_string body) in
+  let hash = "" in
   let env =
     Yojson.Safe.to_string
       (`Assoc
@@ -272,9 +274,11 @@ let subtree_list ~(lens : lens) (prefix : string) : string list =
   |> List.filter (fun p -> p <> "" && String.length p >= String.length prefix
                           && String.sub p 0 (String.length prefix) = prefix)
 
-(** node_hash: the content hash for the node envelope at [path] — the
+(** node_hash: the hash carried in the node envelope at [path] — the
     {v,kind,path,type,body,author,doc,hash} envelope hash field, which
-    sync's three-way-diff keys on. *)
+    sync's three-way-diff keys on. A server-computed digest for pulled
+    envelopes; "" for a locally-built envelope not yet converged to a
+    server stamp. *)
 let node_hash ~(lens : lens) (path : string) : string option =
   match get ~lens path with
   | None -> None
@@ -314,8 +318,11 @@ let code_kind_path ~branch (kind : string) ~(name : string) : string option =
 (** Materialize one code-node envelope at its b.<branch>.<kind>.<name> tree
     path. [src] is the evaluable definition source (a toplevel (define …)
     form — the same string a server-side eval would build); [doc] the
-    docstring. The envelope follows the one-tree tree-model shape; [hash]
-    is the content hash over the canonical body.
+    docstring. The envelope follows the one-tree tree-model shape; the
+    [hash] field is "" — the client never computes hashes (see put_body);
+    code-lens sync is the branch-pointer move, so these envelopes do not
+    travel the data sync round anyway (data_manifest confines to the
+    data.u.<owner> prefix).
 
     Returns the written file path, or None when [kind] is not a code kind. *)
 let materialize_code_node ~(lens : lens) ~branch ~kind ~(name : string)
@@ -327,7 +334,7 @@ let materialize_code_node ~(lens : lens) ~branch ~kind ~(name : string)
       let body =
         `Assoc [ ("src", `String src); ("doc", `String doc) ]
       in
-      let hash = content_hash (Yojson.Safe.to_string body) in
+      let hash = "" in
       let env =
         Yojson.Safe.to_string
           (`Assoc

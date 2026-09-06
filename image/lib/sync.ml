@@ -12,12 +12,16 @@
        4. Server applies the three-way merge (common ancestor = the
           last-synced generation) and returns the merged subtree state.
 
-    The envelope hash is the negotiation; the file is the transfer. On
-    the tree_nodes side the hash is [Tree_store.hash_body] (sha256 over
-    the canonical body), the SAME content hash the client's lens
-    substrate computes offline ([Lens_store.content_hash]) — one hash
-    scheme, both sides, so a Same/Diverge classification is meaningful
-    across the wire.
+    The envelope hash is the negotiation; the file is the transfer. The
+    hash domain is the unified one-tree.hash-domain digest: sha256 over
+    PG's CANONICAL jsonb text of the body, computed DB-side in every
+    writer (the pre-027 OCaml-side hash_body is deleted — it was a second
+    domain for the same body). The client does NOT compute hashes: its
+    manifest carries server hashes verbatim from pulled envelopes, and a
+    locally-written envelope carries "" until the round's convergence
+    pull (sync_client) fetches the server envelope — one hash scheme,
+    both sides, so a Same/Diverge classification is meaningful across
+    the wire.
 
     This module owns the pure reconciliation + three-way merge planner
     (the heart of the exchange — classification of a manifest union and
@@ -40,7 +44,9 @@
 (** A (path, hash) manifest: path -> content hash. This is the exact
     shape [Lens_store.node_manifest] produces on the client and
     [server_manifest] below reads from tree_nodes. The hash is the
-    node-envelope content hash (sha256 over the canonical body). *)
+    one-tree.hash-domain digest (sha256 over PG's canonical jsonb text
+    of the body, computed DB-side); the client carries it verbatim, or
+    "" for a locally-written envelope not yet converged. *)
 type manifest = (string * string) list
 
 (** Association-list lookup. *)
