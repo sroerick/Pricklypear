@@ -41,6 +41,11 @@ let http_parse_headers (blob : string) : string =
    The shape is {ok:false, error, kind, name?, line?, col?} plus two
    additive round-trip fields ([raw_error], and [name] on Prim_error)
    that let the inverse reconstruct Prim_error / Reader_error exactly.
+   An exn matching none of the known classes serializes with
+   kind:"exn" and the Printexc text as [error] — the inverse maps it
+   back as User_error(msg,"exn"), NOT Reader_error, so an arbitrary
+   server failure (DB outage, Sys_error, …) is never misattributed as
+   a parse failure (i-1788714788).
    NB: [json_to_value] maps JSON strings to VStr, so a deserialized
    value is never a VSymbol on its own — symbols are a read-side
    concern. *)
@@ -73,9 +78,13 @@ let error_to_json (exn : exn) : Yojson.Safe.t =
         ; ("line", `Int line)
         ; ("col", `Int col) ]
   | _ ->
+      (* Generic server exception: the original constructor cannot
+         cross the wire, but the kind tag must — without it the inverse
+         degraded this shape to Reader_error(msg,0,0). *)
       `Assoc
         [ ("ok", `Bool false)
-        ; ("error", `String (Printexc.to_string exn)) ]
+        ; ("error", `String (Printexc.to_string exn))
+        ; ("kind", `String "exn") ]
 
 (** Inverse of [error_to_json]. Returns an [exn] that, when raised by a
     proxy rim, is the same exception the local rim would raise. *)
@@ -113,6 +122,11 @@ let error_of_json (j : Yojson.Safe.t) : exn =
             | None, _ ->
                 (match k with
                  | "budget_exceeded" -> interp Budget_exceeded
+                 (* kind:"exn" (error_to_json's generic-exn shape): the
+                    message is the Printexc text — the original exn
+                    constructor is unreconstructable, but the failure is
+                    NOT a parse failure, so re-raise as User_error with
+                    the "exn" kind preserved. *)
                  | _ ->
                      interp
                        (User_error
