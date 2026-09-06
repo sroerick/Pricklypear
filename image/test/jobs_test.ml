@@ -597,6 +597,109 @@ let test_eval_src_args () =
     "(jfn {})" (J.eval_src ~fn:"jfn" ~args:"{}")
 
 
+(* ------------------------------------------------------------------ *)
+(* JSON serialization (i-1788670620-4): job/schedule rows render as     *)
+(* VALID JSON even for adversarial field values. The old sprintf        *)
+(* spliced fn/branch/submitted_by raw, so a fn containing a quote or    *)
+(* backslash produced invalid JSON in job-status/jobs/schedules output. *)
+(* Now built with Yojson: every string field is escaped, stored jsonb   *)
+(* literals (args/result) stay JSON literals, not strings.              *)
+(* ------------------------------------------------------------------ *)
+
+(* Field value hitting every escaping hazard: quote, backslash, newline, *)
+(* tab, control byte.                                                    *)
+let adversarial = "f\"n\\x\n\tend\000"
+
+let parse_json (s : string) : Yojson.Safe.t =
+  match Yojson.Safe.from_string s with
+  | j -> j
+  | exception e ->
+      Alcotest.fail
+        (Printf.sprintf "invalid JSON %S: %s" s (Printexc.to_string e))
+
+let member key (json : Yojson.Safe.t) : Yojson.Safe.t option =
+  match json with
+  | `Assoc kvs -> List.assoc_opt key kvs
+  | _ -> None
+
+let test_job_to_value_json () =
+  let j : J.job =
+    { J.id = "id-1"; J.fn = adversarial; J.args = "42"; J.branch = "b\"r"
+    ; J.submitted_by = "a\\ice"; J.status = "pending"; J.run_at = 1234L
+    ; J.attempts = 1; J.max_attempts = 3; J.result = None
+    ; J.error = adversarial; J.runner_id = "boot-1" }
+  in
+  let json = parse_json (match J.job_to_value j with
+                         | Pricklypear_lisp.Ast.VStr s -> s
+                         | _ -> Alcotest.fail "job_to_value returned non-string")
+  in
+  Alcotest.(check bool) "fn round-trips escaped" true
+    (member "fn" json = Some (`String adversarial));
+  Alcotest.(check bool) "error round-trips escaped" true
+    (member "error" json = Some (`String adversarial));
+  Alcotest.(check bool) "branch/submitted_by round-trip" true
+    (member "branch" json = Some (`String "b\"r")
+     && member "submitted_by" json = Some (`String "a\\ice"));
+  Alcotest.(check bool) "numeric args stays a JSON number" true
+    (member "args" json = Some (`Int 42));
+  Alcotest.(check bool) "no result -> null" true
+    (member "result" json = Some `Null);
+  Alcotest.(check bool) "scalar fields preserved" true
+    (member "run_at" json = Some (`Int 1234)
+     && member "attempts" json = Some (`Int 1)
+     && member "max_attempts" json = Some (`Int 3)
+     && member "status" json = Some (`String "pending"));
+  (* a string-valued jsonb result stays a JSON string (record_done wraps     *)
+  (* results in a JSON string before storing, so this is the live shape)     *)
+  let j2 = { j with J.args = "{}"; J.result = Some "\"ok-result\"" } in
+  let json2 = parse_json (match J.job_to_value j2 with
+                          | Pricklypear_lisp.Ast.VStr s -> s
+                          | _ -> Alcotest.fail "job_to_value returned non-string")
+  in
+  Alcotest.(check bool) "result jsonb stays a literal string" true
+    (member "result" json2 = Some (`String "ok-result"));
+  Alcotest.(check bool) "empty-object args stays an object" true
+    (member "args" json2 = Some (`Assoc []));
+  (* a string arg is stored as the QUOTED jsonb literal -> JSON string *)
+  let j3 = { j with J.args = "\"hello\"" } in
+  let json3 = parse_json (match J.job_to_value j3 with
+                          | Pricklypear_lisp.Ast.VStr s -> s
+                          | _ -> Alcotest.fail "job_to_value returned non-string")
+  in
+  Alcotest.(check bool) "string args stays a JSON string" true
+    (member "args" json3 = Some (`String "hello"))
+
+let test_schedule_to_value_json () =
+  let s : J.schedule =
+    { J.s_name = "s\"ch"; J.s_fn = adversarial; J.s_args = "{}"
+    ; J.s_branch = "b\"r"; J.s_submitted_by = "a\\ice"
+    ; J.s_cron = Some "* * * * *"; J.s_every_ms = None; J.s_next_run = 99L
+    ; J.s_enabled = true }
+  in
+  let json = parse_json (match J.schedule_to_value s with
+                         | Pricklypear_lisp.Ast.VStr s -> s
+                         | _ -> Alcotest.fail "schedule_to_value returned non-string")
+  in
+  Alcotest.(check bool) "fn round-trips escaped" true
+    (member "fn" json = Some (`String adversarial));
+  Alcotest.(check bool) "cron is a JSON string" true
+    (member "cron" json = Some (`String "* * * * *"));
+  Alcotest.(check bool) "no every_ms -> null" true
+    (member "every_ms" json = Some `Null);
+  Alcotest.(check bool) "next_run/enabled preserved" true
+    (member "next_run" json = Some (`Int 99)
+     && member "enabled" json = Some (`Bool true));
+  (* every-ms variant *)
+  let s2 = { s with J.s_cron = None; J.s_every_ms = Some 60_000L } in
+  let json2 = parse_json (match J.schedule_to_value s2 with
+                          | Pricklypear_lisp.Ast.VStr s -> s
+                          | _ -> Alcotest.fail "schedule_to_value returned non-string")
+  in
+  Alcotest.(check bool) "every_ms variant" true
+    (member "cron" json2 = Some `Null
+     && member "every_ms" json2 = Some (`Int 60000))
+
+
 let () =
   Random.self_init ();
   Alcotest.run "jobs"
@@ -613,6 +716,11 @@ let () =
     ; ( "args-bug"
       , [ Alcotest.test_case "eval_src splices jsonb args as literal" `Quick
             test_eval_src_args ] )
+    ; ( "json-serialization"
+      , [ Alcotest.test_case "job_to_value escapes adversarial fields" `Quick
+            test_job_to_value_json
+        ; Alcotest.test_case "schedule_to_value escapes adversarial fields" `Quick
+            test_schedule_to_value_json ] )
     ; ( "step-checkpoints"
       , [ Alcotest.test_case "job-id fiber binding" `Quick
             test_current_job_id_binding

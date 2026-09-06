@@ -107,21 +107,31 @@ let pg_conn (store : Store.t) : Io_lwt.Db.conn option =
 
 (* ---- value serialization ---- *)
 
+(* Embed a stored jsonb column rendered ::text as a JSON value. PG only
+   ever hands back valid jsonb text, but a parse failure here must not
+   yield invalid output — fall back to a JSON string of the raw text. *)
+let json_of_stored_literal (s : string) : Yojson.Safe.t =
+  try Yojson.Safe.from_string s with _ -> `String s
+
 let job_to_value (j : job) : value =
-  let fields =
-    Printf.sprintf
-      "{\"id\":\"%s\",\"fn\":\"%s\",\"args\":%s,\"branch\":\"%s\",\
-       \"submitted_by\":\"%s\",\"status\":\"%s\",\"run_at\":%s,\
-       \"attempts\":%d,\"max_attempts\":%d,\"result\":%s,\"error\":\"%s\",\
-       \"runner_id\":\"%s\"}"
-      j.id j.fn j.args j.branch j.submitted_by j.status
-      (Int64.to_string j.run_at)
-      j.attempts j.max_attempts
-      (match j.result with Some r -> r | None -> "null")
-      (String.concat "" (List.map (fun c -> if c = '"' then "\\\"" else String.make 1 c) (String.to_seq j.error |> List.of_seq)))
-      j.runner_id
-  in
-  VStr fields
+  VStr
+    (Yojson.Safe.to_string
+       (`Assoc
+          [ ("id", `String j.id)
+          ; ("fn", `String j.fn)
+          ; ("args", json_of_stored_literal j.args)
+          ; ("branch", `String j.branch)
+          ; ("submitted_by", `String j.submitted_by)
+          ; ("status", `String j.status)
+          ; ("run_at", `Intlit (Int64.to_string j.run_at))
+          ; ("attempts", `Int j.attempts)
+          ; ("max_attempts", `Int j.max_attempts)
+          ; ("result",
+             match j.result with
+             | Some r -> json_of_stored_literal r
+             | None -> `Null)
+          ; ("error", `String j.error)
+          ; ("runner_id", `String j.runner_id) ]))
 
 
 (* ---- submit ---- *)
@@ -554,18 +564,21 @@ type schedule = {
 }
 
 let schedule_to_value (s : schedule) : value =
-  let fields =
-    Printf.sprintf
-      "{\"name\":\"%s\",\"fn\":\"%s\",\"args\":%s,\"branch\":\"%s\",\
-       \"submitted_by\":\"%s\",\"cron\":%s,\"every_ms\":%s,\
-       \"next_run\":%s,\"enabled\":%s}"
-      s.s_name s.s_fn s.s_args s.s_branch s.s_submitted_by
-      (match s.s_cron with Some c -> Printf.sprintf "\"%s\"" c | None -> "null")
-      (match s.s_every_ms with Some e -> Int64.to_string e | None -> "null")
-      (Int64.to_string s.s_next_run)
-      (if s.s_enabled then "true" else "false")
-  in
-  VStr fields
+  VStr
+    (Yojson.Safe.to_string
+       (`Assoc
+          [ ("name", `String s.s_name)
+          ; ("fn", `String s.s_fn)
+          ; ("args", json_of_stored_literal s.s_args)
+          ; ("branch", `String s.s_branch)
+          ; ("submitted_by", `String s.s_submitted_by)
+          ; ("cron", match s.s_cron with Some c -> `String c | None -> `Null)
+          ; ("every_ms",
+             match s.s_every_ms with
+             | Some e -> `Intlit (Int64.to_string e)
+             | None -> `Null)
+          ; ("next_run", `Intlit (Int64.to_string s.s_next_run))
+          ; ("enabled", `Bool s.s_enabled) ]))
 
 let row_to_schedule (row : Pgx.row) : schedule option =
   try
