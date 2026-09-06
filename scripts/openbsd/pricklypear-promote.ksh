@@ -179,6 +179,18 @@ rollback() {
 # handling → EADDRINUSE boot death) and waited a fixed second for nothing on
 # the common path.
 
+# promote_start MUST be captured BEFORE the restart: rcctl restart BLOCKS
+# through the image's whole boot (rc_stop teardown + rc_start + pwait), so
+# a promote_start taken after it returns POSTdates the new image's
+# boot_epoch by the entire boot time. That is exactly the
+# 2026-09-05 incident: an 11.7s boot (cold seed) made the healthy NEW image
+# answer with boot_epoch < promote_start, the gate read it as the old
+# orphan, waited out 30s and rolled back a good release. Captured before
+# the restart, boot_epoch >= promote_start still means "started by THIS
+# restart" (an orphan old image was already serving, its boot_epoch is
+# far older), and a boot finishing after the restart returns passes too.
+promote_start=$(date +%s)
+
 log "restart ${service}"
 if ! rcctl restart "${service}"; then
   rcctl start "${service}" || {
@@ -200,8 +212,7 @@ fi
 # inside promote_start's own second must not fail the gate); an orphan
 # false-accept would need the old image to have booted during this promote's
 # same second — impossible on the common path since it was already serving
-# when promote began.
-promote_start=$(date +%s)
+# when promote began. promote_start is captured pre-restart (see above).
 ok=0
 attempts=0
 orphan_seen=0
