@@ -1,0 +1,622 @@
+(* Code (generations, function introspection, forge, packages, history) prims - split out of prims_db.ml (i-1788671035-8 fix pass).
+
+   Bodies are verbatim relocations from the old single register closure;
+   shared closure helpers come from Prims_db_common, re-bound below so the
+   moved code stays byte-identical. *)
+open Session_types
+
+let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives.t) : unit =
+  let register_crud name fn = Prims_db_common.register_crud ~tbl name fn in
+
+  (* (list-branches) -> VList of "owner/name" strings *)
+  Primitives.register tbl "list-branches"
+    (fun _args ->
+      let bs = Store.list_branches t.store in
+      let names =
+        List.map
+          (fun (b : Pricklypear_common.Branch.t) ->
+            Pricklypear_lisp.Ast.VStr
+              (b.Pricklypear_common.Branch.owner ^ "/" ^
+               b.Pricklypear_common.Branch.name))
+          bs
+      in
+      (Pricklypear_lisp.Ast.VList names));
+
+  (* (gen-now) -> current tree gen (int). Spec: tree-time.reads-as-of-gen.
+     Returns the current branch's generation (migration 017 ancestry-walked
+     counter) = the code-path head gen coordinate for this session's branch
+     (what a :gen read-as-of coordinate on code paths compares against). A
+     write anywhere in the branch's ancestry bumps it, so a descendant sees
+     its own writes via inheritance, consistent with how a session resolves
+     code-path tree nodes. Unknown/unreachable -> 0 (caller treats as
+     "at head / reload"). Pure read, no gen allocation. *)
+  Primitives.register tbl "gen-now"
+    (fun _args ->
+      let bid = Store.current_branch_id t.store in
+      let g =
+        match Store.current_generation t.store ~branch_id:bid with
+        | Some n -> n
+        | None -> 0L
+      in
+      (Pricklypear_lisp.Ast.VInt g));
+
+  (* (gen-read path gen) -> node body at gen, crossed over the same branch
+     lens rules head reads use (tree-time.reads-as-of-gen). path may be an
+     absolute b.*/data.* path or a RELATIVE logical suffix (kind.name)
+     resolved closest-wins through the branch lens chain. gen is the as-of
+     coordinate; 0/omitted means head. Returns version JSON (the version_to_json
+     surface: id/path/kind/type/body/author/hash/created_at/gen/tombstone) or
+     nil when the path is unversioned at that gen. ReadDb cap. *)
+  register_crud "gen-read"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr path
+        ; Pricklypear_lisp.Ast.VInt g
+        ] ->
+          Crud.tree_gen_read t.store ~path ~gen:g
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error
+                    (Pricklypear_lisp.Ast.Prim_error
+                       ("gen-read", "need path gen", "bad-args")))));
+
+  (* (gen-diff path gen-a gen-b) -> node-granular diff: reads both leaves
+     via the versioned store (hashes first, walk on mismatch) and returns
+     "same" when hash-equal, else a JSON {path,a,b,same,delta}. ReadDb. *)
+  register_crud "gen-diff"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr path
+        ; Pricklypear_lisp.Ast.VInt ga
+        ; Pricklypear_lisp.Ast.VInt gb
+        ] ->
+          Crud.tree_gen_diff t.store ~path ~gen_a:ga ~gen_b:gb
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error
+                    (Pricklypear_lisp.Ast.Prim_error
+                       ("gen-diff",
+                        "need path gen-a gen-b", "bad-args")))));
+
+  (* (undo path [n]) -> restore value at head-n as a NEW write at head+1
+     (restore-by-write, so the undo itself is versioned and redoable).
+     Supports datum paths (data-prefixed; the documents' first consumer is notes
+     undo). Code paths (b-prefixed) report the code-restore consumer deferral.
+     WriteDb cap (it appends a version row). Returns the written path or an
+     error string. *)
+  register_crud "undo"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr path ] ->
+          Crud.tree_undo t.store ~path ()
+      | [ Pricklypear_lisp.Ast.VStr path
+        ; Pricklypear_lisp.Ast.VInt n
+        ] ->
+          Crud.tree_undo t.store ~path ~n ()
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error
+                    (Pricklypear_lisp.Ast.Prim_error
+                       ("undo", "need path [, n]", "bad-args")))));
+
+  (* (code-restore name [n] [owner/branch]) -> restore a code node (fn/type/
+     route) at head-n as a NEW write at head+1 (restore-by-write). The
+     code-path analogue of (undo) (which is datum-path only): gen-read + write
+     the same value back via the code write surface (upsert_fn / upsert_type /
+     upsert_route), so the reverse mirror re-populates function_defs /
+     type_defs / view_bindings and the restore itself is versioned + redoable
+     (the restored value becomes the new head). n default 1 = the state just
+     before the latest change. Clean error strings (never a crash). WriteDb
+     cap. Consumers: tree-time.consumers — code-restore = gen-read + define. *)
+  register_crud "code-restore"
+    (fun args ->
+      let resolve_branch_id ref_opt =
+        match ref_opt with
+        | None -> Store.current_branch_id t.store
+        | Some branch_ref ->
+            let owner, name =
+              match String.split_on_char '/' branch_ref with
+              | [ o; n ] when o <> "" && n <> "" -> (o, n)
+              | _ -> ("", branch_ref)
+            in
+            (match Store.lookup_branch_id_by_name t.store ~owner ~name with
+             | Some id -> id
+             | None -> "")
+      in
+      let err = "code-restore: need name [n] [owner/branch]" in
+      let bad_branch ref_opt bid =
+        match ref_opt with
+        | None -> (Pricklypear_lisp.Ast.VStr err)
+        | Some branch_ref ->
+            (Pricklypear_lisp.Ast.VStr
+               (Printf.sprintf "code-restore: no such branch: %s" branch_ref))
+      in
+      let default_author = t.manifest.username in
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr name ] ->
+          let bid = resolve_branch_id None in
+          if bid = "" then bad_branch None bid
+          else
+            (Pricklypear_lisp.Ast.VStr
+               (Store.code_restore t.store ~branch_id:bid ~name
+                  ~author:default_author ()))
+      | [ Pricklypear_lisp.Ast.VStr name; Pricklypear_lisp.Ast.VInt n64 ] ->
+          let bid = resolve_branch_id None in
+          if bid = "" then bad_branch None bid
+          else
+            (Pricklypear_lisp.Ast.VStr
+               (Store.code_restore t.store ~branch_id:bid ~name
+                  ~author:default_author ~n:(Int64.to_int n64) ()))
+      | [ Pricklypear_lisp.Ast.VStr name; Pricklypear_lisp.Ast.VStr branch_ref
+        ] ->
+          let bid = resolve_branch_id (Some branch_ref) in
+          if bid = "" then bad_branch (Some branch_ref) bid
+          else
+            (Pricklypear_lisp.Ast.VStr
+               (Store.code_restore t.store ~branch_id:bid ~name
+                  ~author:default_author ()))
+      | [ Pricklypear_lisp.Ast.VStr name; Pricklypear_lisp.Ast.VInt n64
+        ; Pricklypear_lisp.Ast.VStr branch_ref
+        ] ->
+          let bid = resolve_branch_id (Some branch_ref) in
+          if bid = "" then bad_branch (Some branch_ref) bid
+          else
+            (Pricklypear_lisp.Ast.VStr
+               (Store.code_restore t.store ~branch_id:bid ~name
+                  ~author:default_author ~n:(Int64.to_int n64) ()))
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error
+                    (Pricklypear_lisp.Ast.Prim_error
+                       ("code-restore", err, "bad-args")))));
+
+  (* (propose-function 'name "spec text") -> VStr name | error string.
+     Calls OpenAI-compat LLM, defines the function on the CURRENT branch
+     with author = Agent_tools.agent:<model> (AI provenance). Never merges to system. *)
+  Primitives.register tbl "propose-function"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr name;
+          Pricklypear_lisp.Ast.VStr spec ] ->
+          Agent_tools.propose_function t ~name ~spec
+      | _ ->
+          ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("propose-function", "bad args (need name-str, spec-str)", "bad-args"))))));
+
+  (* (install-function name body-src) -> install AI-authored body (effect gate). *)
+  Primitives.register tbl "install-function"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr name;
+          Pricklypear_lisp.Ast.VStr body ] ->
+          Agent_tools.install_ai_function t ~name ~body_src:body
+      | _ ->
+          ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("install-function", "need name-str, body-str", "bad-args"))))));
+
+  (* (function-source name) -> VStr pretty body | VNil *)
+  Primitives.register tbl "function-source"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr name ] ->
+          let src = Agent_tools.function_source t name in
+          (match src with
+           | Some s -> (Pricklypear_lisp.Ast.VStr s)
+           | None -> Pricklypear_lisp.Ast.VNil)
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("function-source", "need name-str", "bad-args")))));
+
+  (* (find-code needle [limit]) -> VList of name strings.
+     Postgres ILIKE over effective function_defs.body::text (branch chain). *)
+  Primitives.register tbl "find-code"
+    (fun args ->
+      let names_of needle limit =
+        let ns =
+          Store.search_function_bodies t.store ~needle ~limit
+        in
+        Pricklypear_lisp.Ast.VList
+          (List.map (fun n -> Pricklypear_lisp.Ast.VStr n) ns)
+      in
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr needle ] -> names_of needle 200
+      | [ Pricklypear_lisp.Ast.VStr needle; Pricklypear_lisp.Ast.VInt n ] ->
+          names_of needle (Int64.to_int n)
+      | [ Pricklypear_lisp.Ast.VStr needle; Pricklypear_lisp.Ast.VStr n_s ] ->
+          (match int_of_string_opt n_s with
+           | Some n -> names_of needle n
+           | None ->
+               ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("find-code", "limit must be int", "bad-args"))))))
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("find-code", "need needle-str [, limit]", "bad-args")))));
+
+  (* (function-doc name) -> VStr docstring | VNil
+     Store metadata first; special-form / prim blurbs as fallback. *)
+  Primitives.register tbl "function-doc"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr name ] ->
+          let doc = Store.lookup_function_doc t.store name in
+          (match doc with
+           | Some s -> (Pricklypear_lisp.Ast.VStr s)
+           | None ->
+               (match Pricklypear_lisp.Special_forms.find name with
+                | Some e ->
+                    (Pricklypear_lisp.Ast.VStr e.summary)
+                | None ->
+                    let blurb = Primitives.prim_summary name in
+                    if blurb = "built-in primitive" then
+                      Pricklypear_lisp.Ast.VNil
+                    else (Pricklypear_lisp.Ast.VStr blurb)))
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("function-doc", "need name-str", "bad-args")))));
+
+  (* (function-ast name) -> quoted body value tree | VNil.
+     Does not eval the body; reifies the stored AST via quote_to_value. *)
+  Primitives.register tbl "function-ast"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr name ] ->
+          let ast = Agent_tools.function_ast t name in
+          (match ast with
+           | Some v -> v
+           | None -> Pricklypear_lisp.Ast.VNil)
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("function-ast", "need name-str", "bad-args")))));
+
+  (* ===== Forge prims ===== *)
+
+  (* (forge-effects "src-or-name") -> VStr badge string.
+     Exposes lisp/lib/effect.ml infer over a parsed source expression
+     (or a named binding's body). The SAME analysis install-function
+     gates on; this prim merely exposes it for the forge mechanical
+     flaggers (capability escalation check). Read-only, pure-ish.
+     Spec: borge/forge.borg mechanical-flags. *)
+  Primitives.register tbl "forge-effects"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr s ] ->
+          (try
+             let forms = Pricklypear_lisp.Reader.read_all s in
+             (match forms with
+              | [] -> (Pricklypear_lisp.Ast.VStr "pure")
+              | expr :: _ ->
+                  let defs = Store.list_function_names t.store in
+                  let known_fn =
+                    Pricklypear_lisp.Effect.known_fn_of_bindings
+                      (List.map (fun (n, e, _) -> (n, e)) defs)
+                  in
+                  let badge =
+                    Pricklypear_lisp.Effect.EffSet.badge
+                      (Pricklypear_lisp.Effect.infer ~known_fn expr)
+                  in
+                  (Pricklypear_lisp.Ast.VStr badge))
+           with exn ->
+             raise (Pricklypear_lisp.Ast.Interp_error
+                      (Pricklypear_lisp.Ast.Prim_error
+                         ("forge-effects",
+                          "parse/infer failed: " ^ Printexc.to_string exn,
+                          "failed"))))
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("forge-effects", "need src-or-name-str", "bad-args")))));
+
+  (* (package-exports pkg) -> VList of public names (package-surface).
+     Resolution: declared registry exports -> kernel_std_exports for
+     std/kernel -> shallow heuristic. *)
+  let kernel_std_exports =
+    [ "list/map"; "list/filter"; "list/foldl"; "reverse"; "append"; "nth"
+    ; "null?"; "pair?"; "car"; "cdr"; "cons"; "list"; "count"
+    ; "string-append"; "string-length"; "substring"; "string-eq"
+    ; "string-contains?"; "string-split"; "string-trim"; "html-escape"; "as-str"; "str"
+    ; "string-join"
+    ; "string<?"; "string<=?"; "string>?"; "string>=?"
+    ; "symbol?"; "string?"; "symbol=?"; "symbol->string"; "string->symbol"
+    ; "not"; "type-of"; "read-string"; "read-all-string"; "function-ast"
+    ; "function-source"; "function-doc"; "apropos"; "apropos-docs"
+    ; "describe"; "list-packages"; "package-bindings"; "package-exports"
+    ; "packages"; "package-enable"; "package-disable"; "prefix-of"
+    ]
+  in
+  Primitives.register tbl "package-exports"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr pkg ] ->
+          let pkg = String.lowercase_ascii (String.trim pkg) in
+          if pkg = "std" || pkg = "kernel" || pkg = "(kernel)" then
+            (Pricklypear_lisp.Ast.VList
+                 (List.map
+                    (fun n -> Pricklypear_lisp.Ast.VStr n)
+                    kernel_std_exports))
+          else begin
+            let reg = Store.lookup_package t.store pkg in
+            match reg with
+            | Some r when r.exports <> [] ->
+                (Pricklypear_lisp.Ast.VList
+                     (List.map
+                        (fun n -> Pricklypear_lisp.Ast.VStr n)
+                        r.exports))
+            | _ ->
+                let names = Agent_tools.package_export_names t pkg in
+                (Pricklypear_lisp.Ast.VList
+                     (List.map (fun n -> Pricklypear_lisp.Ast.VStr n) names))
+          end
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("package-exports", "need package-str", "bad-args")))));
+
+  (* (package-bindings pkg) -> VList of name strings (prefix pkg/ any depth) *)
+  Primitives.register tbl "package-bindings"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr pkg ] ->
+          let names = Agent_tools.package_binding_names t pkg in
+          (Pricklypear_lisp.Ast.VList
+               (List.map (fun n -> Pricklypear_lisp.Ast.VStr n) names))
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("package-bindings", "need package-str", "bad-args")))));
+
+  (* (list-packages) -> VList of top-level package prefix strings *)
+  Primitives.register tbl "list-packages"
+    (fun args ->
+      match args with
+      | [] | [ Pricklypear_lisp.Ast.VNil ] ->
+          let names = Agent_tools.list_package_names t in
+          (Pricklypear_lisp.Ast.VList
+               (List.map (fun n -> Pricklypear_lisp.Ast.VStr n) names))
+      | _ ->
+          ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("list-packages", "takes no args", "bad-args"))))));
+
+  (* (packages) -> VList of (name enabled exports-count) rows from registry +
+     prefix-discovered packages (enabled=true, exports=0 if unregistered). *)
+  Primitives.register tbl "packages"
+    (fun args ->
+      match args with
+      | [] | [ Pricklypear_lisp.Ast.VNil ] ->
+          let reg = Store.list_packages t.store in
+          let prefixes = Agent_tools.list_package_names t in
+          let seen = Hashtbl.create 32 in
+          let rows = ref [] in
+          List.iter
+            (fun (r : Store.package_row) ->
+              Hashtbl.replace seen r.name ();
+              rows :=
+                Pricklypear_lisp.Ast.VList
+                  [ Pricklypear_lisp.Ast.VStr r.name
+                  ; Pricklypear_lisp.Ast.VBool r.enabled
+                  ; Pricklypear_lisp.Ast.VInt
+                      (Int64.of_int (List.length r.exports))
+                  ]
+                :: !rows)
+            reg;
+          List.iter
+            (fun p ->
+              if not (Hashtbl.mem seen p) then
+                rows :=
+                  Pricklypear_lisp.Ast.VList
+                    [ Pricklypear_lisp.Ast.VStr p
+                    ; Pricklypear_lisp.Ast.VBool true
+                    ; Pricklypear_lisp.Ast.VInt 0L
+                    ]
+                  :: !rows)
+            prefixes;
+          let sorted =
+            List.sort
+              (fun a b ->
+                match a, b with
+                | Pricklypear_lisp.Ast.VList (Pricklypear_lisp.Ast.VStr na :: _),
+                  Pricklypear_lisp.Ast.VList (Pricklypear_lisp.Ast.VStr nb :: _) ->
+                    String.compare na nb
+                | _ -> 0)
+              !rows
+          in
+          (Pricklypear_lisp.Ast.VList sorted)
+      | _ ->
+          ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("packages", "takes no args", "bad-args"))))));
+
+  let protected_pkg name =
+    let n = String.lowercase_ascii (String.trim name) in
+    n = "std" || n = "kernel" || n = "(kernel)"
+  in
+
+  (* (package-enable name) — flip enabled=true on current branch + rehydrate *)
+  Primitives.register tbl "package-enable"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr name ]
+      | [ Pricklypear_lisp.Ast.VSymbol name ] ->
+          let name = String.trim name in
+          if name = "" then
+            ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("package-enable", "empty name", "bad-args")))))
+          else if protected_pkg name then
+            ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("package-enable", name ^ " is always enabled", "denied")))))
+          else if t.manifest.username = "anonymous" then
+            ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("package-enable", "auth required", "denied")))))
+          else begin
+            let () =
+              Store.set_package_enabled t.store ~name ~enabled:true
+                ~author:t.manifest.username
+            in
+            let () = rehydrate_fn t in
+            (Pricklypear_lisp.Ast.VStr ("enabled " ^ name))
+          end
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("package-enable", "need package-str", "bad-args")))));
+
+  (* (package-disable name) — hide package bindings on current branch *)
+  Primitives.register tbl "package-disable"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr name ]
+      | [ Pricklypear_lisp.Ast.VSymbol name ] ->
+          let name = String.trim name in
+          if name = "" then
+            ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("package-disable", "empty name", "bad-args")))))
+          else if protected_pkg name then
+            ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("package-disable", "cannot disable " ^ name, "denied")))))
+          else if t.manifest.username = "anonymous" then
+            ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("package-disable", "auth required", "denied")))))
+          else begin
+            let () =
+              Store.set_package_enabled t.store ~name ~enabled:false
+                ~author:t.manifest.username
+            in
+            let () = rehydrate_fn t in
+            (Pricklypear_lisp.Ast.VStr ("disabled " ^ name))
+          end
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("package-disable", "need package-str", "bad-args")))));
+
+  (* (apropos-docs pat) -> VList of (name . doc) pairs *)
+  Primitives.register tbl "apropos-docs"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr pat ] ->
+          let pairs = Agent_tools.apropos_docs t pat in
+          let rows =
+            List.map
+              (fun (n, d) ->
+                Pricklypear_lisp.Ast.VList
+                  [ Pricklypear_lisp.Ast.VStr n
+                  ; Pricklypear_lisp.Ast.VStr d
+                  ])
+              pairs
+          in
+          (Pricklypear_lisp.Ast.VList rows)
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("apropos-docs", "need pattern-str", "bad-args")))));
+
+  (* (Agent_tools.describe name-or-pkg) -> VStr selective reveal text *)
+  Primitives.register tbl "describe"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr needle ] ->
+          let s = Agent_tools.describe t needle in
+          (Pricklypear_lisp.Ast.VStr s)
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("prim", "describe: need name-or-package-str", "bad-args")))));
+
+  (* (export-package pkg) -> VStr lib.pp text *)
+  Primitives.register tbl "export-package"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr pkg ] ->
+          let text = Agent_tools.export_package t pkg in
+          (Pricklypear_lisp.Ast.VStr text)
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("export-package", "need package-str", "bad-args")))));
+
+  (* (code-history "name") / (code-history "name" "owner/branch")
+     → VStr JSON list newest-first. Spec: branching.code-history. *)
+  Primitives.register tbl "code-history"
+    (fun args ->
+      let resolve_branch_id ref_opt =
+        match ref_opt with
+        | None -> Store.current_branch_id t.store
+        | Some branch_ref ->
+            let owner, name =
+              match String.split_on_char '/' branch_ref with
+              | [ o; n ] when o <> "" && n <> "" -> (o, n)
+              | _ -> ("", branch_ref)
+            in
+            (match
+               Store.lookup_branch_id_by_name t.store ~owner ~name
+             with
+             | Some id -> id
+             | None -> "")
+      in
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr name ] ->
+          let bid = resolve_branch_id None in
+          if bid = "" then
+            (Pricklypear_lisp.Ast.VStr "[]")
+          else
+            (Pricklypear_lisp.Ast.VStr
+               (Store.list_code_history_json t.store ~branch_id:bid ~name))
+      | [ Pricklypear_lisp.Ast.VStr name
+        ; Pricklypear_lisp.Ast.VStr branch_ref ] ->
+          let bid = resolve_branch_id (Some branch_ref) in
+          if bid = "" then
+            (Pricklypear_lisp.Ast.VStr
+               (Printf.sprintf
+                  "code-history: no such branch: %s" branch_ref))
+          else
+            (Pricklypear_lisp.Ast.VStr
+               (Store.list_code_history_json t.store ~branch_id:bid ~name))
+      | _ ->
+          ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("code-history", "need name [owner/branch]", "bad-args"))))));
+
+  (* (code-diff "name" n) → VStr text diff of current vs nth-newest history. *)
+  Primitives.register tbl "code-diff"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr name; Pricklypear_lisp.Ast.VInt n64 ] ->
+          let n = Int64.to_int n64 in
+          let bid = Store.current_branch_id t.store in
+          (match Store.code_diff t.store ~branch_id:bid ~name ~n with
+           | Ok s -> (Pricklypear_lisp.Ast.VStr s)
+           | Error e -> (Pricklypear_lisp.Ast.VStr e))
+      | [ Pricklypear_lisp.Ast.VStr name
+        ; Pricklypear_lisp.Ast.VStr n_s ] ->
+          (match int_of_string_opt n_s with
+           | None ->
+               ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("code-diff", "n must be int", "bad-args")))))
+           | Some n ->
+               let bid = Store.current_branch_id t.store in
+               (match Store.code_diff t.store ~branch_id:bid ~name ~n with
+                | Ok s -> (Pricklypear_lisp.Ast.VStr s)
+                | Error e -> (Pricklypear_lisp.Ast.VStr e)))
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("code-diff", "need name n", "bad-args")))));
+
+  (* (diff source target) -> VList of VStr change summaries.
+     Spec: branching.diff.  Args: two branch specs (owner/name strings, same
+     parsing as checkout/merge/promote).  Returns one summary string per
+     divergent row across function_defs + type_defs + view_bindings:
+       "<kind>\t<status>\t<name>\t<from-updated>\t<to-updated>"
+     Summary level ONLY — the structured AST delta is consumed in-process by
+     the /diff page renderer, not surfaced here (a programmatic (diff-ast …)
+     prim is explicit v2). *)
+  Primitives.register tbl "diff"
+    (fun args ->
+      let resolve ref_ =
+        let owner, name =
+          match String.split_on_char '/' ref_ with
+          | [ o; n ] when o <> "" && n <> "" -> (o, n)
+          | _ -> ("", ref_)
+        in
+        Store.lookup_branch_id_by_name t.store ~owner ~name
+      in
+      let to_ref = function
+        | Pricklypear_lisp.Ast.VStr s -> Some s
+        | Pricklypear_lisp.Ast.VSymbol s -> Some s
+        | _ -> None
+      in
+      match args with
+      | [ a; b ] ->
+          (match to_ref a, to_ref b with
+           | Some from_ref, Some to_ref ->
+               (match resolve from_ref, resolve to_ref with
+                | Some from_id, Some to_id ->
+                    let rows = Store.diff_branches t.store ~from_id ~to_id in
+                    let kind_s = function
+                      | Store.DiffFn -> "fn"
+                      | Store.DiffType -> "type"
+                      | Store.DiffRoute -> "route"
+                    in
+                    let status_s = function
+                      | Store.DiffAdded -> "added"
+                      | Store.DiffRemoved -> "removed"
+                      | Store.DiffModified -> "modified"
+                    in
+                    let line (r : Store.branch_diff_row) =
+                      let fu = Option.value ~default:"-" r.Store.from_updated in
+                      let tu = Option.value ~default:"-" r.Store.to_updated in
+                      Printf.sprintf "%s\t%s\t%s\t%s\t%s"
+                        (kind_s r.Store.diff_kind) (status_s r.Store.diff_status)
+                        r.Store.diff_name fu tu
+                    in
+                    (Pricklypear_lisp.Ast.VList
+                       (List.map (fun r -> Pricklypear_lisp.Ast.VStr (line r)) rows))
+                | _ ->
+                    (Pricklypear_lisp.Ast.VStr
+                       (Printf.sprintf "diff: no such branch pair (%s, %s)"
+                          from_ref to_ref)))
+           | _ ->
+               (raise
+                  (Pricklypear_lisp.Ast.Interp_error
+                     (Pricklypear_lisp.Ast.Prim_error
+                        ("diff", "need source target", "bad-args")))))
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("diff", "need source target", "bad-args")))));
