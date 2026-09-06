@@ -5,6 +5,113 @@ open Http_data
 open Http_branches
 open Http_agent
 
+(* One definition of the binding observability widget — recursion/complexity
+   badges, DB-cost badges, last-run stats, pretty-printed source, and the
+   analyze/explain htmx buttons — shared by /binding/<name> and the /bindings
+   observe tab (was copy-pasted; change it here once). Pass ~mutual when the
+   caller already has a Call_graph snapshot; pass ~mutual:None to snapshot
+   here. *)
+let binding_observability_nodes (session : Session.t)
+    ~(mutual : string list option) ~(name : string)
+    ~(expr : Pricklypear_lisp.Ast.expr) : Pure_html.node list =
+  let mutual =
+    match mutual with
+    | Some m -> m
+    | None -> Call_graph.mutual_of (Call_graph.snapshot_of_session session) name
+  in
+  let cx =
+    Pricklypear_lisp.Complexity.badge
+      (Pricklypear_lisp.Complexity.classify ~fn_name:name expr)
+  in
+  let db_prims = Db_cost.db_prims_of_expr expr in
+  let db_nodes =
+    if db_prims = [] then [ txt "" ]
+    else
+      List.concat_map
+        (fun p ->
+          [
+            HTML.span [ HTML.class_ "badge db-cost" ]
+              [ txt "%s: %s" p (Db_cost.badge (Db_cost.static_cost p)) ];
+            txt " ";
+          ])
+        db_prims
+  in
+  let stats_node =
+    match
+      Crud.find_row (Session.store session) ~type_name:"function_stat"
+        ~field:"fn" ~value:name
+    with
+    | Pricklypear_lisp.Ast.VStr fields_json ->
+        (try
+           let j = Yojson.Safe.from_string fields_json in
+           let open Yojson.Safe.Util in
+           let steps = member "steps" j |> to_int_option |> Option.value ~default:0 in
+           let prims = member "prim_calls" j |> to_int_option |> Option.value ~default:0 in
+           let dbh = member "db_hits" j |> to_int_option |> Option.value ~default:0 in
+           HTML.p [ HTML.class_ "meta last-run" ]
+             [ txt "last run: %d steps, %d prim calls, %d DB hits" steps prims dbh ]
+         with _ -> HTML.p [ HTML.class_ "muted" ] [ txt "" ])
+    | _ -> HTML.p [ HTML.class_ "muted" ] [ txt "(no measured run yet)" ]
+  in
+  let explain_text =
+    match Analyze.explain_function (Session.store session) ~fn_name:name with
+    | Ok t -> t
+    | Error _ -> ""
+  in
+  [
+    HTML.p []
+      (Ast_html.recursion_badges ~fn_name:name expr
+       @ [
+           txt " ";
+           HTML.span [ HTML.class_ "badge complexity" ] [ txt "%s" cx ];
+           txt " ";
+         ]
+       @ db_nodes);
+    stats_node;
+    Ast_html.pp_expr_html ~fn_name:name ~mutual expr;
+    HTML.p [] [
+      HTML.button
+        [
+          HTML.type_ "button";
+          HTML.class_ "btn";
+          Hx.post "%s" ("/api/analyze/" ^ Packages.name_encode name);
+          Hx.target "#analyze-result";
+          Hx.swap "innerHTML";
+        ]
+        [ txt "Analyze" ];
+      txt " ";
+      HTML.button
+        [
+          HTML.type_ "button";
+          HTML.class_ "btn secondary";
+          Hx.post "%s" ("/api/analyze/" ^ Packages.name_encode name ^ "?llm=1");
+          Hx.target "#analyze-result";
+          Hx.swap "innerHTML";
+        ]
+        [ txt "Analyze (LLM)" ];
+      txt " ";
+      HTML.button
+        [
+          HTML.type_ "button";
+          HTML.class_ "btn secondary";
+          Hx.post "%s" ("/api/explain/" ^ Packages.name_encode name);
+          Hx.target "#explain-result";
+          Hx.swap "innerHTML";
+        ]
+        [ txt "Explain" ];
+    ];
+    HTML.div [ HTML.id "analyze-result" ] [ txt "" ];
+    HTML.details [ HTML.class_ "explain-panel" ]
+      [
+        HTML.summary [] [ txt "Inside-out breakdown" ];
+        HTML.div [ HTML.id "explain-result" ]
+          [
+            HTML.pre [ HTML.class_ "bb-source explain-layer" ]
+              [ txt "%s" explain_text ];
+          ];
+      ];
+  ]
+
 let show_binding_page (session : Session.t) (name : string)
     (reqd : Httpun.Reqd.t) : unit =
   let found = Store.lookup_function (Session.store session) name in
@@ -16,106 +123,16 @@ let show_binding_page (session : Session.t) (name : string)
           HTML.p [] [HTML.a [HTML.href "%s" ("/edit/" ^ name)] [txt "create it"]];
         ]
     | Some (expr, author, _doc) ->
-        let snap = Call_graph.snapshot_of_session session in
-        let mutual = Call_graph.mutual_of snap name in
-        let cx =
-          Pricklypear_lisp.Complexity.badge
-            (Pricklypear_lisp.Complexity.classify ~fn_name:name expr)
-        in
-        let db_prims = Db_cost.db_prims_of_expr expr in
-        let db_nodes =
-          if db_prims = [] then [ txt "" ]
-          else
-            List.concat_map
-              (fun p ->
-                [
-                  HTML.span [ HTML.class_ "badge db-cost" ]
-                    [ txt "%s: %s" p (Db_cost.badge (Db_cost.static_cost p)) ];
-                  txt " ";
-                ])
-              db_prims
-        in
-        let stats_node =
-          match
-            Crud.find_row (Session.store session) ~type_name:"function_stat"
-              ~field:"fn" ~value:name
-          with
-          | Pricklypear_lisp.Ast.VStr fields_json ->
-              (try
-                 let j = Yojson.Safe.from_string fields_json in
-                 let open Yojson.Safe.Util in
-                 let steps = member "steps" j |> to_int_option |> Option.value ~default:0 in
-                 let prims = member "prim_calls" j |> to_int_option |> Option.value ~default:0 in
-                 let dbh = member "db_hits" j |> to_int_option |> Option.value ~default:0 in
-                 HTML.p [ HTML.class_ "meta last-run" ]
-                   [ txt "last run: %d steps, %d prim calls, %d DB hits" steps prims dbh ]
-               with _ -> HTML.p [ HTML.class_ "muted" ] [ txt "" ])
-          | _ -> HTML.p [ HTML.class_ "muted" ] [ txt "(no measured run yet)" ]
-        in
-        let explain_text =
-          match Analyze.explain_function (Session.store session) ~fn_name:name with
-          | Ok t -> t
-          | Error _ -> ""
-        in
-        chrome ~session ~title:name [
-          HTML.p [] [txt "author: %s" author];
-          HTML.p []
-            (Ast_html.recursion_badges ~fn_name:name expr
-             @ [
-                 txt " ";
-                 HTML.span [ HTML.class_ "badge complexity" ] [ txt "%s" cx ];
-                 txt " ";
-               ]
-             @ db_nodes);
-          stats_node;
-          Ast_html.pp_expr_html ~fn_name:name ~mutual expr;
-          HTML.p [] [
-            HTML.button
-              [
-                HTML.type_ "button";
-                HTML.class_ "btn";
-                Hx.post "%s" ("/api/analyze/" ^ Packages.name_encode name);
-                Hx.target "#analyze-result";
-                Hx.swap "innerHTML";
-              ]
-              [ txt "Analyze" ];
-            txt " ";
-            HTML.button
-              [
-                HTML.type_ "button";
-                HTML.class_ "btn secondary";
-                Hx.post "%s" ("/api/analyze/" ^ Packages.name_encode name ^ "?llm=1");
-                Hx.target "#analyze-result";
-                Hx.swap "innerHTML";
-              ]
-              [ txt "Analyze (LLM)" ];
-            txt " ";
-            HTML.button
-              [
-                HTML.type_ "button";
-                HTML.class_ "btn secondary";
-                Hx.post "%s" ("/api/explain/" ^ Packages.name_encode name);
-                Hx.target "#explain-result";
-                Hx.swap "innerHTML";
-              ]
-              [ txt "Explain" ];
-          ];
-          HTML.div [ HTML.id "analyze-result" ] [ txt "" ];
-          HTML.details [ HTML.class_ "explain-panel" ]
-            [
-              HTML.summary [] [ txt "Inside-out breakdown" ];
-              HTML.div [ HTML.id "explain-result" ]
-                [
-                  HTML.pre [ HTML.class_ "bb-source explain-layer" ]
-                    [ txt "%s" explain_text ];
-                ];
-            ];
-          HTML.p [] [
-            HTML.a [HTML.href "%s" (Packages.edit_href name)] [txt "edit"];
-            txt " · ";
-            HTML.a [HTML.href "%s" (Packages.inspect_href name)] [txt "inspect"];
-          ];
-        ]
+        chrome ~session ~title:name
+          ([ HTML.p [] [txt "author: %s" author] ]
+           @ binding_observability_nodes session ~mutual:None ~name ~expr
+           @ [
+               HTML.p [] [
+                 HTML.a [HTML.href "%s" (Packages.edit_href name)] [txt "edit"];
+                 txt " · ";
+                 HTML.a [HTML.href "%s" (Packages.inspect_href name)] [txt "inspect"];
+               ];
+             ])
   in
   html_response reqd ~session body;
   ()
@@ -419,113 +436,26 @@ let editor_form_partial ~(name : string) ~(body_src : string) ?(msg = "")
     ];
   ]
 
-let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
-    : unit =
-  let target = (Httpun.Reqd.request reqd).Httpun.Request.target in
-  let q = Option.value (query_param target "q") ~default:"" |> String.trim in
-  let pkg_q = query_param target "pkg" in
-  let fn_q = query_param target "fn" in
-  let defs_meta =
-    Store.list_function_names_meta (Session.store session)
-  in
-  (* Effective view only: one row per name (closest branch wins). *)
-  let defs =
-    List.map (fun (n, e, a, d) -> (n, e, a, d)) defs_meta
-  in
-  let used_by = used_by_pages_map session in
-  let kernel = Session.kernel_catalog session in
-  let matches_ws (name, _body, author, _depth) =
-    q = ""
-    || contains_ci name q
-    || contains_ci (Packages.package_of_name name) q
-    || contains_ci author q
-  in
-  let defs_f = List.filter matches_ws defs in
-  (* H0.2: derive-on-read known_fn so badges account for callees. *)
-  let known_fn =
-    Pricklypear_lisp.Effect.known_fn_of_bindings
-      (List.map (fun (n, e, _, _) -> (n, e)) defs_f)
-  in
-  let badge_of expr =
-    Pricklypear_lisp.Effect.EffSet.badge
-      (Pricklypear_lisp.Effect.infer ~known_fn expr)
-  in
-  let txn_hints_of expr =
-    Pricklypear_lisp.Effect.txn_lint ~known_fn expr
-  in
-  let txn_hint_nodes expr =
-    match txn_hints_of expr with
-    | [] -> []
-    | hs ->
-        [ HTML.div [HTML.class_ "card"]
-            (HTML.p [HTML.class_ "muted"] [txt "txn lint (soft):"]
-             :: List.map
-                  (fun h -> HTML.p [HTML.class_ "err"] [txt "%s" h])
-                  hs)
-        ]
-  in
-  (* group_by_package expects 3-tuples; strip depth for grouping. *)
-  let defs_for_group =
-    List.map (fun (n, e, a, _) -> (n, e, a)) defs_f
-  in
-  let groups = Packages.group_by_package defs_for_group in
-  let depth_of name =
-    match List.find_opt (fun (n, _, _, _) -> n = name) defs_f with
-    | Some (_, _, _, d) -> d
-    | None -> 0
-  in
-  let origin_badge depth author =
-    if depth = 0 then
-      HTML.span [HTML.class_ "ok"] [txt "own"]
-    else
-      HTML.span [HTML.class_ "muted"]
-        [txt "inherited · %s" author]
-  in
-  let used_links name =
-    let routes = try Hashtbl.find used_by name with Not_found -> [] in
-    match List.rev routes with
-    | [] -> HTML.span [HTML.class_ "muted"] [txt "—"]
-    | rs ->
-        HTML.span []
-          (List.concat
-             (List.mapi
-                (fun i route ->
-                  let link =
-                    HTML.a
-                      [HTML.href "%s" ("/page/" ^ page_inspect_path route)]
-                      [txt "%s" route]
-                  in
-                  if i = 0 then [link] else [txt " "; link])
-                rs))
-  in
-  let pkg_href pkg =
-    "/bindings?pkg=" ^ Packages.name_encode pkg
-  in
-  let fn_href ?tab pkg fn =
-    let base =
-      "/bindings?pkg=" ^ Packages.name_encode pkg ^ "&fn="
-      ^ Packages.name_encode fn
-    in
-    match tab with
-    | None | Some "" | Some "view" -> base
-    | Some t -> base ^ "&tab=" ^ t
-  in
-  let tab_q =
-    match query_param target "tab" with
-    | Some t -> String.lowercase_ascii (String.trim t)
-    | None -> "view"
-  in
-  let tab_q =
-    match tab_q with
-    | "edit" | "inspect" | "observe" | "observability" ->
-        if tab_q = "observability" then "observe" else tab_q
-    | _ -> "view"
-  in
-  let flash_msg =
-    Option.value (query_param target "msg") ~default:"" |> String.trim
-  in
-  match pkg_q, fn_q with
-  | Some "special-forms", Some fname ->
+(** Shared, precomputed view state for the /bindings pages: the effective
+    (closest-branch-wins) def list filtered by the q= search, its package
+    grouping, the kernel catalog, and the link/badge helpers the per-package
+    views share. Built once by list_bindings_page. *)
+type bindings_ctx = {
+  q : string;
+  defs_f : (string * Pricklypear_lisp.Ast.expr * string * int) list;
+  groups : (string * (string * Pricklypear_lisp.Ast.expr * string) list) list;
+  kernel : (string * string) list;
+  badge_of : Pricklypear_lisp.Ast.expr -> string;
+  txn_hint_nodes : Pricklypear_lisp.Ast.expr -> Pure_html.node list;
+  origin_badge : int -> string -> Pure_html.node;
+  used_links : string -> Pure_html.node;
+  pkg_href : string -> string;
+  fn_href : ?tab:string -> string -> string -> string;
+}
+
+(* /bindings?pkg=special-forms&fn=<name> — one special form's doc page. *)
+let special_form_detail_page (session : Session.t) ~(fname : string)
+    (reqd : Httpun.Reqd.t) : unit =
       let entry =
         Pricklypear_lisp.Special_forms.find fname
       in
@@ -574,12 +504,16 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
       in
       html_response reqd ~session body;
       ()
-  | Some "kernel", Some fname ->
-      let summary =
-        match List.assoc_opt fname kernel with
-        | Some s -> s
-        | None -> "unknown primitive"
-      in
+
+(* /bindings?pkg=kernel&fn=<name> — one kernel prim's doc page. *)
+let kernel_prim_detail_page (session : Session.t) ~(fname : string)
+    (reqd : Httpun.Reqd.t) : unit =
+  let kernel = Session.kernel_catalog session in
+  let summary =
+    match List.assoc_opt fname kernel with
+    | Some s -> s
+    | None -> "unknown primitive"
+  in
       let body =
         chrome ~session ~title:("Primitive " ^ fname) [
           HTML.p [] [
@@ -606,7 +540,32 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
       in
       html_response reqd ~session body;
       ()
-  | Some pkg, Some local ->
+
+(* /bindings?pkg=<pkg>&fn=<local> — the Smalltalk-column browser for one
+   Lisp function: packages | functions | meta columns over a tabbed code
+   pane (view / edit / inspect / observe). *)
+let binding_detail_page (session : Session.t) ~(ctx : bindings_ctx)
+    ~(pkg : string) ~(local : string) (reqd : Httpun.Reqd.t) : unit =
+  let target = (Httpun.Reqd.request reqd).Httpun.Request.target in
+  let tab_q =
+    match query_param target "tab" with
+    | Some t -> String.lowercase_ascii (String.trim t)
+    | None -> "view"
+  in
+  let tab_q =
+    match tab_q with
+    | "edit" | "inspect" | "observe" | "observability" ->
+        if tab_q = "observability" then "observe" else tab_q
+    | _ -> "view"
+  in
+  let flash_msg =
+    Option.value (query_param target "msg") ~default:"" |> String.trim
+  in
+  let depth_of name =
+    match List.find_opt (fun (n, _, _, _) -> n = name) ctx.defs_f with
+    | Some (_, _, _, d) -> d
+    | None -> 0
+  in
       let full =
         if String.contains local '/' then local
         else if pkg = "" || pkg = "(root)" || pkg = "root" then local
@@ -621,7 +580,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
                 HTML.p [] [
                   HTML.a [HTML.href "/bindings"] [txt "Functions"];
                   txt " › ";
-                  HTML.a [HTML.href "%s" (pkg_href pkg)]
+                  HTML.a [HTML.href "%s" (ctx.pkg_href pkg)]
                     [txt "%s" (Packages.package_label crumb_pkg)];
                 ];
                 HTML.p [HTML.class_ "err"] [txt "no function %s" full];
@@ -630,7 +589,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
                 ];
               ])
         | Some (expr, author, _doc) ->
-            let badge = badge_of expr in
+            let badge = ctx.badge_of expr in
             let cx_badge =
               Pricklypear_lisp.Complexity.badge
                 (Pricklypear_lisp.Complexity.classify ~fn_name:full expr)
@@ -658,7 +617,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
             let name_href n =
               let pkg = Packages.package_of_name n in
               let local = Packages.local_name n in
-              fn_href pkg local
+              ctx.fn_href pkg local
             in
             let name_links names =
               if names = [] then [txt "(none)"]
@@ -719,15 +678,15 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
                          if pkg_selected p then "bb-item is-active" else "bb-item"
                        in
                        HTML.li [HTML.class_ "%s" cls] [
-                         HTML.a [HTML.href "%s" (pkg_href key)] [txt "%s" lab];
+                         HTML.a [HTML.href "%s" (ctx.pkg_href key)] [txt "%s" lab];
                        ])
-                     groups);
+                     ctx.groups);
               ]
             in
             let fns_in_pkg =
               let rows =
-                try List.assoc crumb_pkg groups with Not_found ->
-                  (try List.assoc pkg groups with Not_found -> [])
+                try List.assoc crumb_pkg ctx.groups with Not_found ->
+                  (try List.assoc pkg ctx.groups with Not_found -> [])
               in
               HTML.div [HTML.class_ "card bb-col"] [
                 HTML.h3 [] [txt "%s" (Packages.package_label crumb_pkg)];
@@ -739,7 +698,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
                          if n = full then "bb-item is-active" else "bb-item"
                        in
                        HTML.li [HTML.class_ "%s" cls] [
-                         HTML.a [HTML.href "%s" (fn_href pkg loc)] [txt "%s" loc];
+                         HTML.a [HTML.href "%s" (ctx.fn_href pkg loc)] [txt "%s" loc];
                        ])
                      rows);
               ]
@@ -749,7 +708,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
               [ HTML.p [HTML.class_ "bb-crumb"] [
                    HTML.a [HTML.href "/bindings"] [txt "Functions"];
                    txt " › ";
-                   HTML.a [HTML.href "%s" (pkg_href pkg)]
+                   HTML.a [HTML.href "%s" (ctx.pkg_href pkg)]
                      [txt "%s" (Packages.package_label crumb_pkg)];
                    txt " › ";
                    HTML.strong [] [txt "%s" (Packages.local_name full)];
@@ -761,7 +720,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
                  ];
                  HTML.p [] [
                    HTML.span [HTML.class_ "muted"] [txt "origin: "];
-                   origin_badge depth author;
+                   ctx.origin_badge depth author;
                  ];
                  HTML.p [] [
                    HTML.span [HTML.class_ "muted"] [txt "author: "];
@@ -773,7 +732,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
                  ];
                  HTML.p [] [
                    HTML.span [HTML.class_ "muted"] [txt "used by (handler): "];
-                   used_links full;
+                   ctx.used_links full;
                  ];
                  HTML.p []
                    ([ HTML.span [HTML.class_ "muted"] [txt "used-by-routes: "] ]
@@ -790,14 +749,14 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
                  HTML.h3 [] [txt "Holes"];
                  hole_nodes;
                ]
-               @ txn_hint_nodes expr)
+               @ ctx.txn_hint_nodes expr)
             in
             let mutual = Call_graph.mutual_of snap full in
             let tab_link id label =
               let active = tab_q = id in
               HTML.a
                 [
-                  HTML.href "%s" (fn_href ~tab:id pkg local);
+                  HTML.href "%s" (ctx.fn_href ~tab:id pkg local);
                   HTML.class_ "%s"
                     (if active then "bb-tab is-active" else "bb-tab");
                 ]
@@ -837,7 +796,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
             let view_pane =
               Ast_html.pp_expr_html ~fn_name:full ~mutual expr
             in
-            let edit_return = fn_href ~tab:"edit" pkg local in
+            let edit_return = ctx.fn_href ~tab:"edit" pkg local in
             let edit_pane =
               let src = Pricklypear_lisp.Reader.pp_expr expr in
               editor_form_partial ~name:full ~body_src:src ~msg:flash_msg
@@ -866,124 +825,9 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
                 ]
             in
             let observe_pane =
-              let db_prims = Db_cost.db_prims_of_expr expr in
-              let db_nodes =
-                if db_prims = [] then [ txt "" ]
-                else
-                  List.concat_map
-                    (fun p ->
-                      [
-                        HTML.span [ HTML.class_ "badge db-cost" ]
-                          [
-                            txt "%s: %s" p
-                              (Db_cost.badge (Db_cost.static_cost p));
-                          ];
-                        txt " ";
-                      ])
-                    db_prims
-              in
-              let stats_node =
-                match
-                  Crud.find_row (Session.store session)
-                    ~type_name:"function_stat" ~field:"fn" ~value:full
-                with
-                | Pricklypear_lisp.Ast.VStr fields_json ->
-                    (try
-                       let j = Yojson.Safe.from_string fields_json in
-                       let open Yojson.Safe.Util in
-                       let steps =
-                         member "steps" j |> to_int_option
-                         |> Option.value ~default:0
-                       in
-                       let prims =
-                         member "prim_calls" j |> to_int_option
-                         |> Option.value ~default:0
-                       in
-                       let dbh =
-                         member "db_hits" j |> to_int_option
-                         |> Option.value ~default:0
-                       in
-                       HTML.p [ HTML.class_ "meta last-run" ]
-                         [
-                           txt
-                             "last run: %d steps, %d prim calls, %d DB hits"
-                             steps prims dbh;
-                         ]
-                     with _ -> HTML.p [ HTML.class_ "muted" ] [ txt "" ])
-                | _ ->
-                    HTML.p [ HTML.class_ "muted" ]
-                      [ txt "(no measured run yet)" ]
-              in
-              let explain_text =
-                match
-                  Analyze.explain_function (Session.store session)
-                    ~fn_name:full
-                with
-                | Ok t -> t
-                | Error _ -> ""
-              in
               HTML.div [ HTML.class_ "bb-observe" ]
-                [
-                  HTML.p []
-                    (Ast_html.recursion_badges ~fn_name:full expr
-                     @ [
-                         txt " ";
-                         HTML.span [ HTML.class_ "badge complexity" ]
-                           [ txt "%s" cx_badge ];
-                         txt " ";
-                       ]
-                     @ db_nodes);
-                  stats_node;
-                  Ast_html.pp_expr_html ~fn_name:full ~mutual expr;
-                  HTML.p []
-                    [
-                      HTML.button
-                        [
-                          HTML.type_ "button";
-                          HTML.class_ "btn";
-                          Hx.post "%s"
-                            ("/api/analyze/" ^ Packages.name_encode full);
-                          Hx.target "#analyze-result";
-                          Hx.swap "innerHTML";
-                        ]
-                        [ txt "Analyze" ];
-                      txt " ";
-                      HTML.button
-                        [
-                          HTML.type_ "button";
-                          HTML.class_ "btn secondary";
-                          Hx.post "%s"
-                            ("/api/analyze/"
-                             ^ Packages.name_encode full
-                             ^ "?llm=1");
-                          Hx.target "#analyze-result";
-                          Hx.swap "innerHTML";
-                        ]
-                        [ txt "Analyze (LLM)" ];
-                      txt " ";
-                      HTML.button
-                        [
-                          HTML.type_ "button";
-                          HTML.class_ "btn secondary";
-                          Hx.post "%s"
-                            ("/api/explain/" ^ Packages.name_encode full);
-                          Hx.target "#explain-result";
-                          Hx.swap "innerHTML";
-                        ]
-                        [ txt "Explain" ];
-                    ];
-                  HTML.div [ HTML.id "analyze-result" ] [ txt "" ];
-                  HTML.details [ HTML.class_ "explain-panel" ]
-                    [
-                      HTML.summary [] [ txt "Inside-out breakdown" ];
-                      HTML.div [ HTML.id "explain-result" ]
-                        [
-                          HTML.pre
-                            [ HTML.class_ "bb-source explain-layer" ]
-                            [ txt "%s" explain_text ];
-                        ];
-                    ];
-                ]
+                (binding_observability_nodes session
+                   ~mutual:(Some mutual) ~name:full ~expr)
             in
             let pane_body =
               match tab_q with
@@ -1023,7 +867,11 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
       in
       html_response reqd ~session body;
       ()
-  | Some "special-forms", None ->
+
+(* /bindings?pkg=special-forms — the read-only special-forms table. *)
+let special_forms_list_page (session : Session.t) ~(ctx : bindings_ctx)
+    (reqd : Httpun.Reqd.t) : unit =
+  let q = ctx.q in
       let rows =
         let all = Pricklypear_lisp.Special_forms.summaries in
         if q = "" then all
@@ -1034,7 +882,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
           (fun (n, summary) ->
             HTML.tr [] [
               HTML.td [] [
-                HTML.a [HTML.href "%s" (fn_href "special-forms" n)] [txt "%s" n];
+                HTML.a [HTML.href "%s" (ctx.fn_href "special-forms" n)] [txt "%s" n];
               ];
               HTML.td [] [txt "special form"];
               HTML.td [] [txt "%s" summary];
@@ -1061,7 +909,12 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
       in
       html_response reqd ~session body;
       ()
-  | Some "kernel", None ->
+
+(* /bindings?pkg=kernel — the read-only kernel-prims table. *)
+let kernel_list_page (session : Session.t) ~(ctx : bindings_ctx)
+    (reqd : Httpun.Reqd.t) : unit =
+  let q = ctx.q in
+  let kernel = ctx.kernel in
       let rows =
         if q = "" then kernel
         else List.filter (fun (n, s) -> contains_ci n q || contains_ci s q) kernel
@@ -1071,7 +924,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
           (fun (n, summary) ->
             HTML.tr [] [
               HTML.td [] [
-                HTML.a [HTML.href "%s" (fn_href "kernel" n)] [txt "%s" n];
+                HTML.a [HTML.href "%s" (ctx.fn_href "kernel" n)] [txt "%s" n];
               ];
               HTML.td [] [txt "primitive"];
               HTML.td [] [txt "%s" summary];
@@ -1098,25 +951,28 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
       in
       html_response reqd ~session body;
       ()
-  | Some pkg, None ->
+
+(* /bindings?pkg=<pkg> — one workspace package's function table. *)
+let package_list_page (session : Session.t) ~(ctx : bindings_ctx)
+    ~(pkg : string) (reqd : Httpun.Reqd.t) : unit =
       let pkg_key = if pkg = "(root)" || pkg = "root" then "" else pkg in
       let rows =
         List.filter
           (fun (name, _, _, _) -> Packages.package_of_name name = pkg_key)
-          defs_f
+          ctx.defs_f
       in
       let items =
         List.map
           (fun (name, body, author, depth) ->
-            let badge = badge_of body in
+            let badge = ctx.badge_of body in
             let local = Packages.local_name name in
             HTML.tr [] [
               HTML.td [] [
-                HTML.a [HTML.href "%s" (fn_href pkg local)] [txt "%s" name];
+                HTML.a [HTML.href "%s" (ctx.fn_href pkg local)] [txt "%s" name];
               ];
               HTML.td [] [txt "%s" badge];
-              HTML.td [] [origin_badge depth author];
-              HTML.td [] [used_links name];
+              HTML.td [] [ctx.origin_badge depth author];
+              HTML.td [] [ctx.used_links name];
             ])
           rows
       in
@@ -1154,14 +1010,18 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
       in
       html_response reqd ~session body;
       ()
-  | None, _ ->
+
+(* /bindings — the all-packages index (drill-down start). *)
+let bindings_index_page (session : Session.t) ~(ctx : bindings_ctx)
+    (reqd : Httpun.Reqd.t) : unit =
+  let q = ctx.q in
       let ws_pkgs =
         List.map
           (fun (pkg, rows) ->
             let label = Packages.package_label pkg in
             let key = if pkg = "" then "root" else pkg in
-            (label, pkg_href key, List.length rows, "workspace"))
-          groups
+            (label, ctx.pkg_href key, List.length rows, "workspace"))
+          ctx.groups
       in
       let all_pkgs =
         ( "(special-forms)"
@@ -1170,7 +1030,7 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
         , "language" )
         :: ( "(kernel)"
            , "/bindings?pkg=kernel"
-           , List.length kernel
+           , List.length ctx.kernel
            , "kernel" )
         :: ws_pkgs
       in
@@ -1246,6 +1106,110 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
       in
       html_response reqd ~session body;
       ()
+(* /bindings — dispatcher: parses the query, builds the shared view state
+   once, and hands off to the per-branch handler for this pkg/fn shape. *)
+let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
+    : unit =
+  let target = (Httpun.Reqd.request reqd).Httpun.Request.target in
+  let q = Option.value (query_param target "q") ~default:"" |> String.trim in
+  let pkg_q = query_param target "pkg" in
+  let fn_q = query_param target "fn" in
+  let defs =
+    Store.list_function_names_meta (Session.store session)
+  in
+  (* Effective view only: one row per name (closest branch wins). *)
+  let used_by = used_by_pages_map session in
+  let matches_ws (name, _body, author, _depth) =
+    q = ""
+    || contains_ci name q
+    || contains_ci (Packages.package_of_name name) q
+    || contains_ci author q
+  in
+  let defs_f = List.filter matches_ws defs in
+  (* H0.2: derive-on-read known_fn so badges account for callees. *)
+  let known_fn =
+    Pricklypear_lisp.Effect.known_fn_of_bindings
+      (List.map (fun (n, e, _, _) -> (n, e)) defs_f)
+  in
+  let badge_of expr =
+    Pricklypear_lisp.Effect.EffSet.badge
+      (Pricklypear_lisp.Effect.infer ~known_fn expr)
+  in
+  let txn_hint_nodes expr =
+    match Pricklypear_lisp.Effect.txn_lint ~known_fn expr with
+    | [] -> []
+    | hs ->
+        [ HTML.div [HTML.class_ "card"]
+            (HTML.p [HTML.class_ "muted"] [txt "txn lint (soft):"]
+             :: List.map
+                  (fun h -> HTML.p [HTML.class_ "err"] [txt "%s" h])
+                  hs)
+        ]
+  in
+  (* group_by_package expects 3-tuples; strip depth for grouping. *)
+  let groups =
+    Packages.group_by_package (List.map (fun (n, e, a, _) -> (n, e, a)) defs_f)
+  in
+  let origin_badge depth author =
+    if depth = 0 then
+      HTML.span [HTML.class_ "ok"] [txt "own"]
+    else
+      HTML.span [HTML.class_ "muted"]
+        [txt "inherited · %s" author]
+  in
+  let used_links name =
+    let routes = try Hashtbl.find used_by name with Not_found -> [] in
+    match List.rev routes with
+    | [] -> HTML.span [HTML.class_ "muted"] [txt "—"]
+    | rs ->
+        HTML.span []
+          (List.concat
+             (List.mapi
+                (fun i route ->
+                  let link =
+                    HTML.a
+                      [HTML.href "%s" ("/page/" ^ page_inspect_path route)]
+                      [txt "%s" route]
+                  in
+                  if i = 0 then [link] else [txt " "; link])
+                rs))
+  in
+  let pkg_href pkg =
+    "/bindings?pkg=" ^ Packages.name_encode pkg
+  in
+  let fn_href ?tab pkg fn =
+    let base =
+      "/bindings?pkg=" ^ Packages.name_encode pkg ^ "&fn="
+      ^ Packages.name_encode fn
+    in
+    match tab with
+    | None | Some "" | Some "view" -> base
+    | Some t -> base ^ "&tab=" ^ t
+  in
+  let ctx =
+    { q;
+      defs_f;
+      groups;
+      kernel = Session.kernel_catalog session;
+      badge_of;
+      txn_hint_nodes;
+      origin_badge;
+      used_links;
+      pkg_href;
+      fn_href }
+  in
+  match pkg_q, fn_q with
+  | Some "special-forms", Some fname ->
+      special_form_detail_page session ~fname reqd
+  | Some "kernel", Some fname ->
+      kernel_prim_detail_page session ~fname reqd
+  | Some pkg, Some local ->
+      binding_detail_page session ~ctx ~pkg ~local reqd
+  | Some "special-forms", None -> special_forms_list_page session ~ctx reqd
+  | Some "kernel", None -> kernel_list_page session ~ctx reqd
+  | Some pkg, None -> package_list_page session ~ctx ~pkg reqd
+  | None, _ -> bindings_index_page session ~ctx reqd
+
 
 let route_for_edit_name (session : Session.t) (name : string)
     : (string * string) option =
