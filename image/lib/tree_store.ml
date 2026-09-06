@@ -265,7 +265,7 @@ let upsert_fn (conn : Store_db.conn) ~(branch_id : string) ~(name : string)
         "  author=EXCLUDED.author, updated_at=now()" in
       let doc_param = match doc with Some d -> Pgx.Value.of_string d | None -> Pgx.Value.null in
       let _ =
-        Io_lwt.Db.execute conn
+        Store_db.exec conn
           ~params:[ Pgx.Value.of_string path; Pgx.Value.of_string body_json;
                     Pgx.Value.of_string author; doc_param ]
           sql
@@ -288,7 +288,7 @@ let upsert_type (conn : Store_db.conn) ~(branch_id : string) ~(name : string)
         "ON CONFLICT (path) DO UPDATE SET payload=EXCLUDED.payload, hash=EXCLUDED.hash, " ^
         "  author=EXCLUDED.author, updated_at=now()" in
       let _ =
-        Io_lwt.Db.execute conn
+        Store_db.exec conn
           ~params:[ Pgx.Value.of_string path; Pgx.Value.of_string name;
                     Pgx.Value.of_string fields_json; Pgx.Value.of_string author ]
           sql
@@ -313,7 +313,7 @@ let upsert_route (conn : Store_db.conn) ~(branch_id : string) ~(route : string)
         "ON CONFLICT (path) DO UPDATE SET payload=EXCLUDED.payload, hash=EXCLUDED.hash, " ^
         "  updated_at=now()" in
       let _ =
-        Io_lwt.Db.execute conn
+        Store_db.exec conn
           ~params:[ Pgx.Value.of_string path; Pgx.Value.of_string body_json ]
           sql
       in
@@ -325,7 +325,7 @@ let delete_fn (conn : Store_db.conn) ~(branch_id : string) ~(name : string) : bo
   (* conn: Store_db.conn (tx-aware) *)
         let sql = "DELETE FROM tree_nodes WHERE path = $1::ltree RETURNING path::text" in
       let rows =
-        Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string (fn_path ~branch_id ~name) ] sql
+        Store_db.exec conn ~params:[ Pgx.Value.of_string (fn_path ~branch_id ~name) ] sql
       in
       (* tmp/eval-fast-path: journal removes even when the row was absent
          (the pin-hygiene unpin path relies on delete_fn being idempotent;
@@ -349,7 +349,7 @@ let insert_datum (conn : Store_db.conn) ~(type_name : string) ~(fields_json : st
     "  encode(digest($2::jsonb::text,'sha256'),'hex'), $3::text, now() " ^
     "FROM nid RETURNING tree_datum_id(path)::text" in
   let rows =
-    Io_lwt.Db.execute conn
+    Store_db.exec conn
       ~params:[ Pgx.Value.of_string type_name; Pgx.Value.of_string fields_json;
                 Pgx.Value.of_string author ]
       sql
@@ -378,7 +378,7 @@ let update_datum (conn : Store_db.conn) ~(type_name : string) ~(id : string)
     "  AND NOT (path <@ 'data.l'::ltree) " ^
     "RETURNING tree_datum_id(path)::text" in
   let rows =
-    Io_lwt.Db.execute conn
+    Store_db.exec conn
       ~params:[ Pgx.Value.of_string id; Pgx.Value.of_string fields_json;
                 Pgx.Value.of_string type_name ]
       sql
@@ -396,7 +396,7 @@ let delete_datum (conn : Store_db.conn) ~(type_name : string) ~(id : string) : s
     "  AND NOT (path <@ 'data.l'::ltree) " ^
     "RETURNING tree_datum_id(path)::text" in
   let rows =
-    Io_lwt.Db.execute conn
+    Store_db.exec conn
       ~params:[ Pgx.Value.of_string id; Pgx.Value.of_string type_name ]
       sql
   in
@@ -426,7 +426,7 @@ let upsert_datum (conn : Store_db.conn) ~(path : string) ~(type_name : string)
   in
   let run_sql ~params sql =
     try
-      let rows = Io_lwt.Db.execute conn ~params sql in
+      let rows = Store_db.exec conn ~params sql in
       (match rows with
        | [ [ p ] ] ->
            (match Pgx.Value.to_string p with
@@ -519,7 +519,7 @@ let backlinks (conn : Store_db.conn) ~(needle : string) ?(limit : int = 200)
     "WHERE n.kind = 'datum' AND e.value = $1::text " ^
     "ORDER BY n.path::text ASC LIMIT $2" in
   let rows =
-    Io_lwt.Db.execute conn
+    Store_db.exec conn
       ~params:[ Pgx.Value.of_string needle; Pgx.Value.of_int limit ]
       sql
   in
@@ -540,7 +540,7 @@ let recompute_head_hash (conn : Store_db.conn) ~(branch_id : string) : unit =
     "  FROM tree_nodes WHERE path <@ $1::ltree AND nlevel(path) > 1 " ^
     "), '') WHERE branch_id = $2::uuid" in
   let _ =
-    Io_lwt.Db.execute conn
+    Store_db.exec conn
       ~params:[ Pgx.Value.of_string root; Pgx.Value.of_string branch_id ]
       sql
   in
@@ -558,7 +558,7 @@ let get_by_path (conn : Store_db.conn) ~(path : string) : node option =
         let sql =
         "SELECT " ^ select_cols ^ " FROM tree_nodes WHERE path = $1::ltree" in
       let rows =
-        Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string path ] sql
+        Store_db.exec conn ~params:[ Pgx.Value.of_string path ] sql
       in
       (match rows with
        | row :: _ -> (node_of_row row)
@@ -626,7 +626,7 @@ let versioned_head (conn : Store_db.conn) ~(path : string)
     ^ "ORDER BY v.gen DESC LIMIT 1"
   in
   let rows =
-    Io_lwt.Db.execute conn
+    Store_db.exec conn
       ~params:[ Pgx.Value.of_string path
                ; (match at_gen with Some g -> Pgx.Value.of_int64 g | None -> Pgx.Value.null) ]
       sql
@@ -643,7 +643,7 @@ let versioned_history (conn : Store_db.conn) ~(path : string) () : version list 
     ^ "FROM tree_versions v WHERE v.path = $1::ltree ORDER BY v.gen ASC"
   in
   let rows =
-    Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string path ] sql
+    Store_db.exec conn ~params:[ Pgx.Value.of_string path ] sql
   in
   (List.filter_map version_of_row rows)
 
@@ -659,22 +659,8 @@ let list_subtree (conn : Store_db.conn) ~(prefix : string)
            unranked, path-ordered among themselves. NULL rank = unordered. *)
         ^ "ORDER BY rank COLLATE \"C\" NULLS LAST, path::text ASC LIMIT $2" in
       let rows =
-        Io_lwt.Db.execute conn
+        Store_db.exec conn
           ~params:[ Pgx.Value.of_string prefix; Pgx.Value.of_int limit ] sql
-      in
-      (List.filter_map node_of_row rows)
-
-(** All datum nodes of a Nopales type (the (rows 't) backing in P3). *)
-let list_data_by_type (conn : Store_db.conn) ~(type_name : string)
-    ?(limit : int = 100) () : node list =
-  (* conn: Store_db.conn (tx-aware) *)
-        let sql =
-        "SELECT " ^ select_cols ^ " FROM tree_nodes " ^
-        "WHERE kind = 'datum' AND type_name = $1 " ^
-        "ORDER BY created_at ASC LIMIT $2" in
-      let rows =
-        Io_lwt.Db.execute conn
-          ~params:[ Pgx.Value.of_string type_name; Pgx.Value.of_int limit ] sql
       in
       (List.filter_map node_of_row rows)
 
@@ -755,7 +741,7 @@ let rec lens_versioned_in_chain (conn : Store_db.conn)
     Returns (kind, table_count, tree_count, in_sync) rows. *)
 let verify (conn : Store_db.conn) : (string * int * int * bool) list =
   (* conn: Store_db.conn (tx-aware) *)
-        let rows = Io_lwt.Db.execute conn "SELECT * FROM tree_verify()" in
+        let rows = Store_db.exec conn "SELECT * FROM tree_verify()" in
       (List.filter_map
            (fun row ->
              match row with
@@ -1136,7 +1122,7 @@ let get_by_uuid (conn : Store_db.conn) ~(uuid : string) : node option =
     ^ "WHERE payload #>> '{body,uuid}' = $1 LIMIT 1"
   in
   let rows =
-    Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string uuid ] sql
+    Store_db.exec conn ~params:[ Pgx.Value.of_string uuid ] sql
   in
   match rows with
   | row :: _ -> (node_of_row row)
@@ -1183,7 +1169,7 @@ let find_by_body_field (conn : Store_db.conn) ~(kind : string option)
       @ [ Pgx.Value.of_int limit ]
     in
     (List.filter_map node_of_row
-       (Io_lwt.Db.execute conn ~params:(head @ tail) sql))
+       (Store_db.exec conn ~params:(head @ tail) sql))
 
 (** Upsert a hierarchical node at [path]. [body_json] is the payload body
     object (fields). [kind] must be folder|note|heading.
@@ -1263,7 +1249,7 @@ let upsert_hier (conn : Store_db.conn) ~(path : string) ~(kind : string)
                   in
                   (try
       let rows =
-                        Io_lwt.Db.execute conn
+                        Store_db.exec conn
                           ~params:
                             [ Pgx.Value.of_string path
                             ; Pgx.Value.of_string kind
@@ -1305,7 +1291,7 @@ let delete_path (conn : Store_db.conn) ~(path : string) ~(recursive : bool)
         "DELETE FROM tree_nodes WHERE path = $1::ltree RETURNING path::text"
     in
     let rows =
-      Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string path ] sql
+      Store_db.exec conn ~params:[ Pgx.Value.of_string path ] sql
     in
     (List.length rows)
 
@@ -1342,7 +1328,7 @@ let move_subtree (conn : Store_db.conn) ~(old_path : string) ~(new_path : string
             ^ ") SELECT count(*)::int FROM moved"
           in
           let rows =
-            Io_lwt.Db.execute conn
+            Store_db.exec conn
               ~params:
                 [ Pgx.Value.of_string old_path; Pgx.Value.of_string new_path ]
               sql
@@ -1372,7 +1358,7 @@ let list_note_index (conn : Store_db.conn) ~(prefix : string) ?(limit : int = 20
       ^ "ORDER BY path::text ASC LIMIT $2"
     in
     let rows =
-      Io_lwt.Db.execute conn
+      Store_db.exec conn
         ~params:[ Pgx.Value.of_string prefix; Pgx.Value.of_int limit ]
         sql
     in
@@ -1455,7 +1441,7 @@ let list_folder_index (conn : Store_db.conn) ~(prefix : string) () : string list
       ^ "ORDER BY 1"
     in
     let rows =
-      Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string prefix ] sql
+      Store_db.exec conn ~params:[ Pgx.Value.of_string prefix ] sql
     in
     List.filter_map (function [ c ] -> Pgx.Value.to_string c | _ -> None) rows
 
@@ -1514,8 +1500,8 @@ let search_text (conn : Store_db.conn) ~(prefix : string) ~(needle : string)
         ; Pgx.Value.of_int limit
         ]
       in
-      let note_rows = Io_lwt.Db.execute conn ~params note_sql in
-      let heading_rows = Io_lwt.Db.execute conn ~params heading_sql in
+      let note_rows = Store_db.exec conn ~params note_sql in
+      let heading_rows = Store_db.exec conn ~params heading_sql in
       let hit ~slug ~title ~tags ~kind ~node_id ~header_path ~matched ~rank =
         Yojson.Safe.to_string
           (`Assoc
@@ -1624,7 +1610,7 @@ let list_by_kind (conn : Store_db.conn) ~(prefix : string) ~(kind : string)
       ^ "ORDER BY path::text ASC LIMIT $3"
     in
     let rows =
-      Io_lwt.Db.execute conn
+      Store_db.exec conn
         ~params:
           [ Pgx.Value.of_string prefix
           ; Pgx.Value.of_string kind
@@ -1664,7 +1650,7 @@ let list_children (conn : Store_db.conn) ~(prefix : string) ?(limit : int = 5000
       ^ "ORDER BY n.rank COLLATE \"C\" NULLS LAST, n.path::text ASC LIMIT $2"
     in
     let rows =
-      Io_lwt.Db.execute conn
+      Store_db.exec conn
         ~params:[ Pgx.Value.of_string prefix; Pgx.Value.of_int limit ]
         sql
     in
@@ -1730,7 +1716,7 @@ let list_children_as_of (conn : Store_db.conn) ~(prefix : string)
       ^ "ORDER BY v.path, v.gen DESC LIMIT $3"
     in
     let rows =
-      Io_lwt.Db.execute conn
+      Store_db.exec conn
         ~params:
           [ Pgx.Value.of_string prefix
           ; Pgx.Value.of_int64 gen
@@ -1771,7 +1757,7 @@ let set_rank (conn : Store_db.conn) ~(path : string)
       ^ "WHERE path = $1::ltree RETURNING path::text"
     in
     let rows =
-      Io_lwt.Db.execute conn
+      Store_db.exec conn
         ~params:
           [ Pgx.Value.of_string path
           ; (match rank with Some r -> Pgx.Value.of_string r | None -> Pgx.Value.null)
@@ -1880,7 +1866,7 @@ let upsert_link (conn : Store_db.conn) ~(path : string)
           in
           (try
              let rows =
-               Io_lwt.Db.execute conn
+               Store_db.exec conn
                  ~params:
                    [ Pgx.Value.of_string path
                    ; Pgx.Value.of_string (Yojson.Safe.to_string body)
@@ -1913,7 +1899,7 @@ let list_out_links (conn : Store_db.conn) ~(path : string)
       ^ "ORDER BY n.path::text ASC LIMIT $2"
     in
     let rows =
-      Io_lwt.Db.execute conn
+      Store_db.exec conn
         ~params:[ Pgx.Value.of_string path; Pgx.Value.of_int limit ]
         sql
     in
@@ -1930,7 +1916,7 @@ let edges_to (conn : Store_db.conn) ~(needle : string)
     ^ "ORDER BY n.path::text ASC LIMIT $2"
   in
   let rows =
-    Io_lwt.Db.execute conn
+    Store_db.exec conn
       ~params:[ Pgx.Value.of_string needle; Pgx.Value.of_int limit ]
       sql
   in
@@ -1946,7 +1932,7 @@ let incoming_edge_count (conn : Store_db.conn) ~(path : string) : int =
       ^ "WHERE kind = 'link' AND payload->'body'->>'to' = $1::text"
     in
     let rows =
-      Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string path ] sql
+      Store_db.exec conn ~params:[ Pgx.Value.of_string path ] sql
     in
     (match rows with
      | [ [ c ] ] -> (match Pgx.Value.to_int c with Some n -> n | None -> 0)
@@ -1998,7 +1984,7 @@ let parents_with_hier_children (conn : Store_db.conn) ~(prefix : string)
       ^ "AND kind IN ('folder', 'note')"
     in
     let rows =
-      Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string prefix ] sql
+      Store_db.exec conn ~params:[ Pgx.Value.of_string prefix ] sql
     in
     List.filter_map (function [ c ] -> Pgx.Value.to_string c | _ -> None) rows
 

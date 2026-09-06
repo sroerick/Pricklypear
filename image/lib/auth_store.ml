@@ -3,7 +3,7 @@
     Operates on migrations/002_auth.sql tables from the image process.
     No separate authd. Auth holds verify + mint only; session identity
     is attached per HTTP request (auth.multi-user-product / web-login). *)
-(* H2.4: DB execute via Io_lwt.Db *)
+(* H2.4: DB execute via Store_db.exec *)
 
 type user = {
   id : string;
@@ -113,7 +113,7 @@ let log_auth (store : Store.t) ?user_id ~kind ~success ?source_ip ()
             "VALUES ($1, $2, $3, $4)"
           in
           let _ =
-            Io_lwt.Db.execute conn
+            Store_db.exec conn
               ~params:
                 [ (match user_id with
                    | Some u -> Pgx.Value.of_string u
@@ -137,7 +137,7 @@ let count_users (store : Store.t) : int =
   | Some conn ->
       (try
       let rows =
-            Io_lwt.Db.execute conn "SELECT count(*)::text FROM users"
+            Store_db.exec conn "SELECT count(*)::text FROM users"
           in
           match rows with
           | row :: _ ->
@@ -172,7 +172,7 @@ let get_user_by_username (store : Store.t) (username : string)
             "SELECT " ^ user_cols ^ " FROM users WHERE username = $1 LIMIT 1"
           in
           let rows =
-            Io_lwt.Db.execute conn
+            Store_db.exec conn
               ~params:[ Pgx.Value.of_string username ] sql
           in
           match rows with
@@ -195,7 +195,7 @@ let get_user_by_id (store : Store.t) (user_id : string) : user option =
             "SELECT " ^ user_cols ^ " FROM users WHERE id = $1::uuid LIMIT 1"
           in
           let rows =
-            Io_lwt.Db.execute conn
+            Store_db.exec conn
               ~params:[ Pgx.Value.of_string user_id ] sql
           in
           match rows with
@@ -241,7 +241,7 @@ let create_user (store : Store.t) ~(username : string) ~(is_admin : bool)
             "RETURNING " ^ user_cols
           in
           let rows =
-            Io_lwt.Db.execute conn
+            Store_db.exec conn
               ~params:
                 [ Pgx.Value.of_string username;
                   Pgx.Value.of_bool is_admin ]
@@ -288,7 +288,7 @@ let create_agent (store : Store.t) ~(parent_username : string)
                       "RETURNING " ^ user_cols
                     in
                     let rows =
-                      Io_lwt.Db.execute conn
+                      Store_db.exec conn
                         ~params:
                           [ Pgx.Value.of_string agent_username;
                             Pgx.Value.of_string p.id ]
@@ -320,7 +320,7 @@ let set_password (store : Store.t) ~(user_id : string) ~(password : string)
           in
           (* One password credential per user: replace existing. *)
           let _ =
-            Io_lwt.Db.execute conn
+            Store_db.exec conn
               ~params:[ Pgx.Value.of_string user_id ]
               "DELETE FROM credentials WHERE user_id = $1::uuid AND kind = 'password'"
           in
@@ -329,7 +329,7 @@ let set_password (store : Store.t) ~(user_id : string) ~(password : string)
             "VALUES ($1::uuid, 'password', NULL, $2::jsonb)"
           in
           let _ =
-            Io_lwt.Db.execute conn
+            Store_db.exec conn
               ~params:
                 [ Pgx.Value.of_string user_id;
                   Pgx.Value.of_string secret ]
@@ -356,7 +356,7 @@ let password_hash_for_user (store : Store.t) ~(username : string)
             "ORDER BY c.created_at DESC LIMIT 1"
           in
           let rows =
-            Io_lwt.Db.execute conn
+            Store_db.exec conn
               ~params:[ Pgx.Value.of_string username ] sql
           in
           match rows with
@@ -451,7 +451,7 @@ let verify_password (store : Store.t) ~(username : string)
            | Some conn ->
                let _ =
                  (try
-      Io_lwt.Db.execute conn
+      Store_db.exec conn
                        ~params:[ Pgx.Value.of_string user.id ]
                        "UPDATE credentials SET last_used_at = now() \
                         WHERE user_id = $1::uuid AND kind = 'password'"
@@ -495,7 +495,7 @@ let mint_session
              RETURNING id::text"
           in
           let rows =
-            Io_lwt.Db.execute conn
+            Store_db.exec conn
               ~params:
                 [ Pgx.Value.of_string user_id;
                   Pgx.Value.of_string th;
@@ -534,7 +534,7 @@ let lookup_session (store : Store.t) ~(raw_token : string)
                LIMIT 1"
             in
             let rows =
-              Io_lwt.Db.execute conn
+              Store_db.exec conn
                 ~params:[ Pgx.Value.of_string th ] sql
             in
             match rows with
@@ -578,7 +578,7 @@ let lookup_session_user (store : Store.t) ~(raw_token : string)
             ^ "LIMIT 1"
           in
           let rows =
-            Io_lwt.Db.execute conn
+            Store_db.exec conn
               ~params:[ Pgx.Value.of_string th ] sql
           in
           match rows with
@@ -602,7 +602,7 @@ let revoke_session (store : Store.t) ~(raw_token : string) ?source_ip ()
              RETURNING user_id::text"
           in
           let rows =
-            Io_lwt.Db.execute conn
+            Store_db.exec conn
               ~params:[ Pgx.Value.of_string th ] sql
           in
           match rows with
@@ -627,7 +627,7 @@ let revoke_all_sessions (store : Store.t) ~(user_id : string) : int =
              RETURNING id"
           in
           let rows =
-            Io_lwt.Db.execute conn
+            Store_db.exec conn
               ~params:[ Pgx.Value.of_string user_id ] sql
           in
           let () =
@@ -669,7 +669,7 @@ let issue_token (store : Store.t) ~(user_id : string)
             "RETURNING id::text"
           in
           let _ =
-            Io_lwt.Db.execute conn
+            Store_db.exec conn
               ~params:
                 [ Pgx.Value.of_string user_id;
                   Pgx.Value.of_string public_json;
@@ -704,7 +704,7 @@ let verify_token (store : Store.t) ~(raw_token : string) ?source_ip ()
               "LIMIT 1"
             in
             let rows =
-              Io_lwt.Db.execute conn
+              Store_db.exec conn
                 ~params:[ Pgx.Value.of_string th ] sql
             in
             match rows with
@@ -714,7 +714,7 @@ let verify_token (store : Store.t) ~(raw_token : string) ?source_ip ()
                      (match cell_string row 5 with
                       | Some cid ->
                           let _ =
-                            Io_lwt.Db.execute conn
+                            Store_db.exec conn
                               ~params:[ Pgx.Value.of_string cid ]
                               ("UPDATE credentials SET last_used_at = now() " ^
                                "WHERE id = $1::uuid")
@@ -765,7 +765,7 @@ let list_tokens (store : Store.t) ~(user_id : string) : token_meta list =
             "ORDER BY created_at"
           in
           let rows =
-            Io_lwt.Db.execute conn
+            Store_db.exec conn
               ~params:[ Pgx.Value.of_string user_id ] sql
           in
           let metas =
@@ -807,7 +807,7 @@ let revoke_token (store : Store.t) ~(credential_id : string)
   | Some conn ->
       (try
       let _ =
-            Io_lwt.Db.execute conn
+            Store_db.exec conn
               ~params:[ Pgx.Value.of_string credential_id ]
               "DELETE FROM credentials WHERE id = $1::uuid AND kind = 'api_key'"
           in
@@ -833,7 +833,7 @@ let get_allow_agent_promote (store : Store.t) ~(user_id : string)
   | Some conn ->
       (try
       let rows =
-            Io_lwt.Db.execute conn
+            Store_db.exec conn
               ~params:[ Pgx.Value.of_string user_id ]
               "SELECT allow_agent_promote::text FROM users WHERE id = $1::uuid"
           in
@@ -878,7 +878,7 @@ let set_user_type (store : Store.t) ~(user_id : string)
   | Some conn ->
       (try
       let _ =
-            Io_lwt.Db.execute conn
+            Store_db.exec conn
               ~params:
                 [ Pgx.Value.of_string user_type;
                   (match parent_id with
@@ -901,7 +901,7 @@ let set_allow_agent_promote (store : Store.t) ~(user_id : string)
   | Some conn ->
       (try
       let _ =
-            Io_lwt.Db.execute conn
+            Store_db.exec conn
               ~params:
                 [ Pgx.Value.of_bool value;
                   Pgx.Value.of_string user_id ]
@@ -946,7 +946,7 @@ let set_llm_key (store : Store.t) ~(user_id : string) ~(api_key : string)
                 (`Assoc [ ("api_key", `String api_key) ])
             in
             let _ =
-              Io_lwt.Db.execute conn
+              Store_db.exec conn
                 ~params:[ Pgx.Value.of_string user_id ]
                 "DELETE FROM credentials WHERE user_id = $1::uuid AND kind = 'llm_key'"
             in
@@ -955,7 +955,7 @@ let set_llm_key (store : Store.t) ~(user_id : string) ~(api_key : string)
               "VALUES ($1::uuid, 'llm_key', $2::jsonb, $3::jsonb)"
             in
             let _ =
-              Io_lwt.Db.execute conn
+              Store_db.exec conn
                 ~params:
                   [ Pgx.Value.of_string user_id;
                     Pgx.Value.of_string public_json;
@@ -979,7 +979,7 @@ let clear_llm_key (store : Store.t) ~(user_id : string)
   | Some conn ->
       (try
       let _ =
-            Io_lwt.Db.execute conn
+            Store_db.exec conn
               ~params:[ Pgx.Value.of_string user_id ]
               "DELETE FROM credentials WHERE user_id = $1::uuid AND kind = 'llm_key'"
           in
@@ -1001,7 +1001,7 @@ let get_llm_key_meta_direct (store : Store.t) ~(user_id : string)
             "ORDER BY created_at DESC LIMIT 1"
           in
           let rows =
-            Io_lwt.Db.execute conn
+            Store_db.exec conn
               ~params:[ Pgx.Value.of_string user_id ] sql
           in
           match rows with
@@ -1060,7 +1060,7 @@ let get_llm_key_secret_direct (store : Store.t) ~(user_id : string)
             "ORDER BY created_at DESC LIMIT 1"
           in
           let rows =
-            Io_lwt.Db.execute conn
+            Store_db.exec conn
               ~params:[ Pgx.Value.of_string user_id ] sql
           in
           match rows with
@@ -1197,7 +1197,7 @@ let add_ssh_key (store : Store.t) ~(user_id : string) ~(openssh : string)
                 "RETURNING id::text"
               in
               let rows =
-                Io_lwt.Db.execute conn
+                Store_db.exec conn
                   ~params:
                     [ Pgx.Value.of_string user_id;
                       Pgx.Value.of_string public_json ]
@@ -1231,7 +1231,7 @@ let list_ssh_keys (store : Store.t) ~(user_id : string)
             "ORDER BY created_at"
           in
           let rows =
-            Io_lwt.Db.execute conn
+            Store_db.exec conn
               ~params:[ Pgx.Value.of_string user_id ] sql
           in
           let metas =
@@ -1283,7 +1283,7 @@ let revoke_ssh_key (store : Store.t) ~(user_id : string)
             "     OR public_data->>'openssh' = $2)"
           in
           let _ =
-            Io_lwt.Db.execute conn
+            Store_db.exec conn
               ~params:
                 [ Pgx.Value.of_string user_id;
                   Pgx.Value.of_string (String.trim id_or_fingerprint) ]
@@ -1313,7 +1313,7 @@ let verify_ssh_key (store : Store.t) ~(openssh_or_blob : string)
             "LIMIT 1"
           in
           let rows =
-            Io_lwt.Db.execute conn
+            Store_db.exec conn
               ~params:
                 [ Pgx.Value.of_string presented;
                   Pgx.Value.of_string fp ]
@@ -1330,7 +1330,7 @@ let verify_ssh_key (store : Store.t) ~(openssh_or_blob : string)
                    (match cell_string row 5 with
                     | Some cid ->
                         let _ =
-                          Io_lwt.Db.execute conn
+                          Store_db.exec conn
                             ~params:[ Pgx.Value.of_string cid ]
                             "UPDATE credentials SET last_used_at = now() \
                              WHERE id = $1::uuid"
@@ -1358,7 +1358,7 @@ let list_users (store : Store.t) : user list =
   | Some conn ->
       (try
       let rows =
-            Io_lwt.Db.execute conn
+            Store_db.exec conn
               ("SELECT " ^ user_cols ^ " FROM users ORDER BY username")
           in
           let users = List.filter_map user_of_row rows in

@@ -124,7 +124,7 @@ let get (store : Store.t) ~(type_name : string) ~(id : string) : value =
           "WHERE type_name = $1 AND id = $2::uuid AND " ^
           visible_sql ~user_param:3 in
         let rows =
-          Io_lwt.Db.execute conn
+          Store_db.exec conn
             ~params:[ Pgx.Value.of_string type_name;
                       Pgx.Value.of_string id;
                       Pgx.Value.of_string user ]
@@ -171,7 +171,7 @@ let select_for_update
           visible_sql ~user_param:3 ^ " " ^
           "FOR UPDATE" in
         let rows =
-          Io_lwt.Db.execute conn
+          Store_db.exec conn
             ~params:[ Pgx.Value.of_string type_name;
                       Pgx.Value.of_string id;
                       Pgx.Value.of_string user ]
@@ -217,7 +217,7 @@ let space_prim_error prim msg =
 (** Type admission: the space [type_name] writes route to, if any. *)
 let space_of_type (conn : Store_db.conn) ~(type_name : string) : string option =
   match
-    Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string type_name ]
+    Store_db.exec conn ~params:[ Pgx.Value.of_string type_name ]
       "SELECT space FROM data_space_types WHERE type_name = $1"
   with
   | [ [ c ] ] -> Pgx.Value.to_string c
@@ -230,7 +230,7 @@ let space_of_type (conn : Store_db.conn) ~(type_name : string) : string option =
 let is_space_member (conn : Store_db.conn) ~(space : string)
     ~(username : string) : bool =
   match
-    Io_lwt.Db.execute conn
+    Store_db.exec conn
       ~params:[ Pgx.Value.of_string space; Pgx.Value.of_string username ]
       "SELECT (EXISTS (SELECT 1 FROM data_space_members \
                 WHERE space = $1 AND username = $2) \
@@ -246,7 +246,7 @@ let is_space_member (conn : Store_db.conn) ~(space : string)
     admission, is what the row owes membership checks to). *)
 let space_of_datum (conn : Store_db.conn) ~(id : string) : string option =
   match
-    Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string id ]
+    Store_db.exec conn ~params:[ Pgx.Value.of_string id ]
       "SELECT tree_dec_label(subltree(path, 2, 3)::text) FROM tree_nodes \
        WHERE kind = 'datum' AND path <@ 'data.s'::ltree \
        AND tree_datum_id(path) = $1::uuid"
@@ -290,7 +290,7 @@ let guard_space_write (conn : Store_db.conn) ~(prim : string)
 
 let space_exists (conn : Store_db.conn) ~(space : string) : bool =
   match
-    Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string space ]
+    Store_db.exec conn ~params:[ Pgx.Value.of_string space ]
       "SELECT EXISTS (SELECT 1 FROM data_spaces WHERE name = $1)  "
   with
   | [ [ c ] ] -> Pgx.Value.to_bool c |> Option.value ~default:false
@@ -301,7 +301,7 @@ let space_owner_ok (conn : Store_db.conn) ~(space : string)
   if kernel_admin then true
   else
     match
-      Io_lwt.Db.execute conn
+      Store_db.exec conn
         ~params:[ Pgx.Value.of_string space; Pgx.Value.of_string caller ]
         "SELECT EXISTS (SELECT 1 FROM data_spaces WHERE name = $1 AND owner = $2 \
          UNION SELECT 1 FROM data_space_members \
@@ -332,7 +332,7 @@ let space_create (store : Store.t) ~(caller : string) ~(name : string)
         space_prim_error "space-create"
           (Printf.sprintf "space %s already exists" name);
       let rows =
-        Io_lwt.Db.execute conn
+        Store_db.exec conn
           ~params:[ Pgx.Value.of_string name; Pgx.Value.of_string caller;
                     Pgx.Value.of_bool open_ ]
           "INSERT INTO data_spaces (name, owner, open) \
@@ -341,7 +341,7 @@ let space_create (store : Store.t) ~(caller : string) ~(name : string)
       (match rows with
        | [ [ _ ] ] ->
            ignore
-             (Io_lwt.Db.execute conn
+             (Store_db.exec conn
                 ~params:[ Pgx.Value.of_string name;
                           Pgx.Value.of_string caller ]
                 "INSERT INTO data_space_members (space, username, role) \
@@ -363,7 +363,7 @@ let space_add_member (store : Store.t) ~(caller : string)
         space_prim_error "space-add-member"
           (Printf.sprintf "%s is not an owner of space %s" caller space);
       ignore
-        (Io_lwt.Db.execute conn
+        (Store_db.exec conn
            ~params:[ Pgx.Value.of_string space;
                      Pgx.Value.of_string username ]
            "INSERT INTO data_space_members (space, username) \
@@ -379,7 +379,7 @@ let space_remove_member (store : Store.t) ~(caller : string)
         space_prim_error "space-remove-member"
           (Printf.sprintf "%s is not an owner of space %s" caller space);
       ignore
-        (Io_lwt.Db.execute conn
+        (Store_db.exec conn
            ~params:[ Pgx.Value.of_string space;
                      Pgx.Value.of_string username ]
            "DELETE FROM data_space_members WHERE space = $1 AND username = $2");
@@ -396,7 +396,7 @@ let space_admit (store : Store.t) ~(caller : string) ~(kernel_admin : bool)
         space_prim_error "space-admit"
           (Printf.sprintf "%s is not an owner of space %s" caller space);
       ignore
-        (Io_lwt.Db.execute conn
+        (Store_db.exec conn
            ~params:[ Pgx.Value.of_string type_name;
                      Pgx.Value.of_string space;
                      Pgx.Value.of_string caller ]
@@ -423,7 +423,7 @@ let space_list (store : Store.t) ~(caller : string) ~(kernel_admin : bool)
              ORDER BY space"
           , [ Pgx.Value.of_string caller ] )
       in
-      let rows = Io_lwt.Db.execute conn ~params sql in
+      let rows = Store_db.exec conn ~params sql in
       VList
         (List.filter_map
            (fun row ->
@@ -445,7 +445,7 @@ let space_members (store : Store.t) ~(caller : string)
          space_prim_error "space-members"
            (Printf.sprintf "%s is not a member of space %s" caller space));
       let rows =
-        Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string space ]
+        Store_db.exec conn ~params:[ Pgx.Value.of_string space ]
           "SELECT username || ' (' || role || ')' FROM data_space_members \
            WHERE space = $1 ORDER BY username"
       in
@@ -486,7 +486,7 @@ let data_history_json (store : Store.t) ~(viewer : string)
           " WHERE type_name = $1 AND id = $2::uuid AND " ^
           visible_sql ~user_param:3 in
         (match
-           Io_lwt.Db.execute conn
+           Store_db.exec conn
              ~params:[ Pgx.Value.of_string type_name;
                        Pgx.Value.of_string id;
                        Pgx.Value.of_string viewer ]
@@ -628,7 +628,7 @@ let update_field_impl
           "WHERE type_name = $1 AND id = $2::uuid AND " ^
           visible_sql ~user_param:3 ^ " FOR UPDATE" in
         let rows =
-          Io_lwt.Db.execute conn
+          Store_db.exec conn
             ~params:[ Pgx.Value.of_string type_name;
                       Pgx.Value.of_string id;
                       Pgx.Value.of_string user ]
@@ -718,7 +718,7 @@ let list
           "WHERE type_name = $1 AND " ^ visible_sql ~user_param:3 ^
           order_by ^ " LIMIT $2" in
         let rows =
-          Io_lwt.Db.execute conn
+          Store_db.exec conn
             ~params:[ Pgx.Value.of_string type_name;
                       Pgx.Value.of_int limit;
                       Pgx.Value.of_string user ]
@@ -751,7 +751,7 @@ let find_row
           "ORDER BY created_at ASC LIMIT 1"
         in
         let rows =
-          Io_lwt.Db.execute conn
+          Store_db.exec conn
             ~params:[ Pgx.Value.of_string type_name
                     ; Pgx.Value.of_string field
                     ; Pgx.Value.of_string value
@@ -807,7 +807,7 @@ let find_rows
           in
           Buffer.add_string buf (Printf.sprintf "%s$%d" order_by !i);
           params := !params @ [ Pgx.Value.of_int limit ];
-          let rows = Io_lwt.Db.execute conn ~params:!params (Buffer.contents buf) in
+          let rows = Store_db.exec conn ~params:!params (Buffer.contents buf) in
           let lisp_rows =
             List.map
               (fun row ->
@@ -832,7 +832,7 @@ let find_random (store : Store.t) ~(type_name : string) : value =
           "ORDER BY random() LIMIT 1"
         in
         let rows =
-          Io_lwt.Db.execute conn
+          Store_db.exec conn
             ~params:[ Pgx.Value.of_string type_name;
                       Pgx.Value.of_string user ]
             sql
@@ -863,7 +863,7 @@ let find_text
         in
         let pat = "%" ^ needle ^ "%" in
         let rows =
-          Io_lwt.Db.execute conn
+          Store_db.exec conn
             ~params:[ Pgx.Value.of_string type_name
                     ; Pgx.Value.of_string field
                     ; Pgx.Value.of_string pat
@@ -902,7 +902,7 @@ let count_by_type (store : Store.t) ~(type_name : string) : int =
         " WHERE type_name = $1 AND " ^ visible_sql ~user_param:2
       in
       let rows =
-        Io_lwt.Db.execute conn
+        Store_db.exec conn
           ~params:[ Pgx.Value.of_string type_name;
                     Pgx.Value.of_string user ]
           sql
@@ -925,7 +925,7 @@ let list_data_type_names (store : Store.t) : string list =
         " ORDER BY type_name ASC"
       in
       let rows =
-        Io_lwt.Db.execute conn
+        Store_db.exec conn
           ~params:[ Pgx.Value.of_string user ]
           sql
       in
@@ -954,7 +954,7 @@ let list_page
         "ORDER BY created_at ASC LIMIT $2 OFFSET $3"
       in
       let rows =
-        Io_lwt.Db.execute conn
+        Store_db.exec conn
           ~params:[ Pgx.Value.of_string type_name
                   ; Pgx.Value.of_int lim
                   ; Pgx.Value.of_int off
@@ -993,7 +993,7 @@ let get_row
         visible_sql ~user_param:3
       in
       let rows =
-        Io_lwt.Db.execute conn
+        Store_db.exec conn
           ~params:[ Pgx.Value.of_string type_name
                   ; Pgx.Value.of_string id
                   ; Pgx.Value.of_string user ]
@@ -1542,14 +1542,6 @@ let datum_path_type (path : string) : string option =
   | None -> None
   | Some ty -> Tree_store.dec_label ty
 
-(** The lens name encoded in a data.l path datum path, decoded.
-    None for non-lens paths (data.u / data.shared). *)
-let datum_path_lens (path : string) : string option =
-  let parts = String.split_on_char '.' path in
-  match parts with
-  | "data" :: "l" :: lens :: _user :: _ty :: _id :: _ -> Tree_store.dec_label lens
-  | _ -> None
-
 (** If [old_path] -> [new_path] is a datum move that changes type, validate
     the moved node's body against the NEW type's declared fields. Returns
     Some rejection-message (naming the missing fields) when it fails; None
@@ -1643,7 +1635,7 @@ let link_edge (store : Store.t) ~(from_path : string) ~(to_path : string)
               "WITH nu AS (SELECT gen_random_uuid() AS id) "
               ^ "SELECT tree_uuid_label(nu.id) FROM nu"
             in
-            (match Io_lwt.Db.execute conn sql_uuid with
+            (match Store_db.exec conn sql_uuid with
              | [ [ u ] ] -> (
                  match Pgx.Value.to_string u with
                  | Some uuid ->
@@ -2101,7 +2093,7 @@ let tree_garden_root ~(user : string) : value =
    retention-policy-set / retention-policies / retention-delete-policy manage
    policy AS HABITAT DATA (tree_retention_policy, migration 022); retention-run
    drives the worker (rollup + DROP PARTITION) for each path class that has an
-   explicit whole-class policy. Retention is a TODO until a class outgrows its
+   explicit whole-class policy. Retention is deferred until a class outgrows its
    welcome — the default (no whole-class policy) is keep-everything, never
    ad-hoc deletion. *) 
 
@@ -2215,7 +2207,7 @@ let fork_data (store : Store.t) ~(lens : string)
               ^ " ON CONFLICT (path) DO NOTHING RETURNING path::text"
           in
          let rows =
-           Io_lwt.Db.execute conn ~params sql
+           Store_db.exec conn ~params sql
          in
          let n = List.length rows in
          VStr (Printf.sprintf "ok %s (%d nodes forked)" lens n))
@@ -2331,7 +2323,7 @@ let list_data_lenses (store : Store.t) () : value =
           ^ "AND subltree(path, 3, 4) = '" ^ user_enc ^ "'::ltree "
           ^ "ORDER BY 1"
         in
-       let rows = Io_lwt.Db.execute conn ~params:[] sql in
+       let rows = Store_db.exec conn ~params:[] sql in
        let lenses =
          List.filter_map
            (fun row ->

@@ -414,9 +414,6 @@ let is_system_hard_private (path : string) : bool =
     prefixes
   || path = "/"
 
-(* Back-compat name used only for hard public. *)
-let is_public_path (path : string) : bool = is_system_hard_public path
-
 type path_class =
   [ `Hard_public | `Hard_private | `User of string * string | `Unknown ]
 
