@@ -1963,19 +1963,6 @@ let incoming_edge_count (conn : Store_db.conn) ~(path : string) : int =
      | [ [ c ] ] -> (match Pgx.Value.to_int c with Some n -> n | None -> 0)
      | _ -> 0)
 
-let html_escape_text (s : string) : string =
-  let buf = Buffer.create (String.length s + 8) in
-  String.iter
-    (function
-      | '&' -> Buffer.add_string buf "&amp;"
-      | '<' -> Buffer.add_string buf "&lt;"
-      | '>' -> Buffer.add_string buf "&gt;"
-      | '"' -> Buffer.add_string buf "&quot;"
-      | '\'' -> Buffer.add_string buf "&#39;"
-      | c -> Buffer.add_char buf c)
-    s;
-  Buffer.contents buf
-
 let path_label_of (path : string) : string =
   match List.rev (String.split_on_char '.' path) with
   | [] -> path
@@ -2012,84 +1999,3 @@ let parents_with_hier_children (conn : Store_db.conn) ~(prefix : string)
       Store_db.exec conn ~params:[ Pgx.Value.of_string prefix ] sql
     in
     List.filter_map (function [ c ] -> Pgx.Value.to_string c | _ -> None) rows
-
-(** Budget-safe HTML for notes tree children under [prefix].
-    Mirrors notes/ui/tree-children-html but runs in OCaml so folders with
-    thousands of notes do not blow the Nopales eval budget. *)
-let render_children_html (conn : Store_db.conn) ~(prefix : string)
-    ?(limit : int = 50000) ~(garden_root : string) () : string =
-  if not (valid_path prefix) then
-    "<p class=\"muted\">(empty)</p>"
-  else
-    let kids = list_children conn ~prefix ~limit () in
-    let kids =
-      List.filter (fun n -> n.kind = "folder" || n.kind = "note") kids
-    in
-    if kids = [] then "<p class=\"muted\">(empty)</p>"
-    else
-      let expandable =
-        let set = Hashtbl.create 64 in
-        List.iter (fun p -> Hashtbl.replace set p true)
-          (parents_with_hier_children conn ~prefix);
-        set
-      in
-      let garden_path = garden_root ^ ".garden" in
-      let buf = Buffer.create 4096 in
-      let emit_folder_details ~path ~label ~open_slug =
-        Buffer.add_string buf "<details class=\"tree-folder\" hx-get=\"";
-        Buffer.add_string buf "/partials/notes-tree?path=";
-        Buffer.add_string buf (html_escape_text path);
-        Buffer.add_string buf
-          "\" hx-trigger=\"toggle once\" hx-target=\"find .tree-children\" ";
-        Buffer.add_string buf "hx-swap=\"innerHTML\"><summary class=\"tree-folder-header\">";
-        Buffer.add_string buf
-          "<span class=\"tree-folder-icon\">&#x1F4C1; </span>";
-        (match open_slug with
-         | Some slug ->
-             Buffer.add_string buf "<a href=\"/notes?slug=";
-             Buffer.add_string buf (html_escape_text slug);
-             Buffer.add_string buf "\" onclick=\"event.stopPropagation()\">";
-             Buffer.add_string buf (html_escape_text label);
-             Buffer.add_string buf "</a>"
-         | None -> Buffer.add_string buf (html_escape_text label));
-        Buffer.add_string buf
-          "</summary><div class=\"tree-children\"><span class=\"muted\">";
-        Buffer.add_string buf "open to load…</span></div></details>"
-      in
-      let emit_note_li n =
-        let slug = node_display_slug n in
-        let title = node_display_title n in
-        Buffer.add_string buf "<li class=\"tree-item\"><a href=\"/notes?slug=";
-        Buffer.add_string buf (html_escape_text slug);
-        Buffer.add_string buf "\">";
-        Buffer.add_string buf (html_escape_text title);
-        Buffer.add_string buf "</a></li>"
-      in
-      let rec emit_inlined path =
-        let nested = list_children conn ~prefix:path ~limit () in
-        let nested_expand =
-          let set = Hashtbl.create 64 in
-          List.iter (fun p -> Hashtbl.replace set p true)
-            (parents_with_hier_children conn ~prefix:path);
-          set
-        in
-        List.iter
-          (fun n ->
-            if n.kind = "folder" || n.kind = "note" then
-              emit_node ~expandable:nested_expand n)
-          nested
-      and emit_node ~expandable n =
-        if n.kind = "folder" then
-          if n.path = garden_path then emit_inlined n.path
-          else
-            emit_folder_details ~path:n.path ~label:(node_display_title n)
-              ~open_slug:None
-        else if n.kind = "note" then
-          if Hashtbl.mem expandable n.path then
-            emit_folder_details ~path:n.path ~label:(node_display_title n)
-              ~open_slug:(Some (node_display_slug n))
-          else emit_note_li n
-        else ()
-      in
-      List.iter (emit_node ~expandable) kids;
-      Buffer.contents buf

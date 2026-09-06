@@ -1463,14 +1463,116 @@ let tree_undo (store : Store.t) ~(path : string) ?(n : int64 = 1L) () : value =
                            (VStr p)
                        | Error e -> (VStr e))))
 
+let html_escape_text (s : string) : string =
+  let buf = Buffer.create (String.length s + 8) in
+  String.iter
+    (function
+      | '&' -> Buffer.add_string buf "&amp;"
+      | '<' -> Buffer.add_string buf "&lt;"
+      | '>' -> Buffer.add_string buf "&gt;"
+      | '"' -> Buffer.add_string buf "&quot;"
+      | '\'' -> Buffer.add_string buf "&#39;"
+      | c -> Buffer.add_char buf c)
+    s;
+  Buffer.contents buf
+
+(* Budget-safe HTML for notes tree children under [prefix].
+   Mirrors notes/ui/tree-children-html (libs/notes/ui) but runs in OCaml so
+   folders with thousands of notes do not blow the Nopales eval budget.
+   Presentation lives HERE (the prim/eval boundary next to tree/children-html),
+   not in Tree_store: the storage layer is HTML-free and only returns
+   structured children (list_children / parents_with_hier_children) plus the
+   display-title/slug accessors the fragment needs. *)
+let render_children_html (conn : Store_db.conn) ~(prefix : string)
+    ?(limit : int = 50000) ~(garden_root : string) () : string =
+  if not (Tree_store.valid_path prefix) then
+    "<p class=\"muted\">(empty)</p>"
+  else
+    let kids = Tree_store.list_children conn ~prefix ~limit () in
+    let kids =
+      List.filter
+        (fun n -> n.Tree_store.kind = "folder" || n.Tree_store.kind = "note")
+        kids
+    in
+    if kids = [] then "<p class=\"muted\">(empty)</p>"
+    else
+      let expandable =
+        let set = Hashtbl.create 64 in
+        List.iter (fun p -> Hashtbl.replace set p true)
+          (Tree_store.parents_with_hier_children conn ~prefix);
+        set
+      in
+      let garden_path = garden_root ^ ".garden" in
+      let buf = Buffer.create 4096 in
+      let emit_folder_details ~path ~label ~open_slug =
+        Buffer.add_string buf "<details class=\"tree-folder\" hx-get=\"";
+        Buffer.add_string buf "/partials/notes-tree?path=";
+        Buffer.add_string buf (html_escape_text path);
+        Buffer.add_string buf
+          "\" hx-trigger=\"toggle once\" hx-target=\"find .tree-children\" ";
+        Buffer.add_string buf "hx-swap=\"innerHTML\"><summary class=\"tree-folder-header\">";
+        Buffer.add_string buf
+          "<span class=\"tree-folder-icon\">&#x1F4C1; </span>";
+        (match open_slug with
+         | Some slug ->
+             Buffer.add_string buf "<a href=\"/notes?slug=";
+             Buffer.add_string buf (html_escape_text slug);
+             Buffer.add_string buf "\" onclick=\"event.stopPropagation()\">";
+             Buffer.add_string buf (html_escape_text label);
+             Buffer.add_string buf "</a>"
+         | None -> Buffer.add_string buf (html_escape_text label));
+        Buffer.add_string buf
+          "</summary><div class=\"tree-children\"><span class=\"muted\">";
+        Buffer.add_string buf "open to load…</span></div></details>"
+      in
+      let emit_note_li n =
+        let slug = Tree_store.node_display_slug n in
+        let title = Tree_store.node_display_title n in
+        Buffer.add_string buf "<li class=\"tree-item\"><a href=\"/notes?slug=";
+        Buffer.add_string buf (html_escape_text slug);
+        Buffer.add_string buf "\">";
+        Buffer.add_string buf (html_escape_text title);
+        Buffer.add_string buf "</a></li>"
+      in
+      let rec emit_inlined path =
+        let nested = Tree_store.list_children conn ~prefix:path ~limit () in
+        let nested_expand =
+          let set = Hashtbl.create 64 in
+          List.iter (fun p -> Hashtbl.replace set p true)
+            (Tree_store.parents_with_hier_children conn ~prefix:path);
+          set
+        in
+        List.iter
+          (fun n ->
+            if
+              n.Tree_store.kind = "folder" || n.Tree_store.kind = "note"
+            then
+              emit_node ~expandable:nested_expand n)
+          nested
+      and emit_node ~expandable n =
+        if n.Tree_store.kind = "folder" then
+          if n.Tree_store.path = garden_path then emit_inlined n.Tree_store.path
+          else
+            emit_folder_details ~path:n.Tree_store.path
+              ~label:(Tree_store.node_display_title n)
+              ~open_slug:None
+        else if n.Tree_store.kind = "note" then
+          if Hashtbl.mem expandable n.Tree_store.path then
+            emit_folder_details ~path:n.Tree_store.path
+              ~label:(Tree_store.node_display_title n)
+              ~open_slug:(Some (Tree_store.node_display_slug n))
+          else emit_note_li n
+        else ()
+      in
+      List.iter (emit_node ~expandable) kids;
+      Buffer.contents buf
+
 let tree_children_html (store : Store.t) ~(prefix : string) ~(garden_root : string)
     () : value =
   match Io_lwt.Db.current_conn store with
   | None -> (VStr "<p class=\"muted\">(empty)</p>")
   | Some conn ->
-      let html =
-        Tree_store.render_children_html conn ~prefix ~garden_root ()
-      in
+      let html = render_children_html conn ~prefix ~garden_root () in
       (VStr html)
 
 let tree_upsert (store : Store.t) ~(path : string) ~(kind : string)
