@@ -462,6 +462,10 @@
   (doc "Book chapter — getting events out of the image to a human: ntfy server-push from jobs schedules v1, in-habitat feed deferred, delivery-path decisions recorded; full text inlined from borge/notify.borg")
   (inline borge/notify.borg)
  )
+ (section music
+  (doc "Book chapter — the little music player package: tracks + playlists as data_rows, audio bytes in media_blobs, multipart upload via media-put-raw, player over the kernel Range/206 serve path; full text inlined from borge/music.borg")
+  (inline borge/music.borg)
+ )
  (section upsets
   (doc "Book chapter — prediction-market informed-flow analytics on the habitat: Nopales schedule-driven ingest (zero new kernel prims in v1), typed tree-row domain store, pure OCaml analytics + point-in-time simulator in spikes/upsets, parity contract between the engines, habitat control faces + paper ledger, execution signing prims gated behind paper-proof. Full text inlined from borge/upsets.borg")
   (inline borge/upsets.borg)
