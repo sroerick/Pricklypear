@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/ksh
 # Smoke: std macros + rewritten packages.
 set -eu
 export PP_URL="${PP_URL:-http://127.0.0.1:18080}"

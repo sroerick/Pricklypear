@@ -2,8 +2,10 @@
 # Monitor-rerunnable final verification for docstring-backfill
 # Requires: local image on PP_URL with this worktree as PP_LIBS_DIR
 set -e
-cd /home/roerick/dev/wyo.tech/pricklypear
-export PP_EVAL="${PP_EVAL:-$HOME/dev/wyo.tech/pricklypear/_build/default/cli/bin/pp_eval.exe}"
+SCRIPT_DIR=$(dirname "$0")
+cd "$SCRIPT_DIR/.."
+. "$SCRIPT_DIR/eval_json.sh"
+export PP_EVAL="${PP_EVAL:-$PWD/_build/default/cli/bin/pp_eval.exe}"
 export PP_URL="${PP_URL:-http://127.0.0.1:18080}"
 export PP_USER="${PP_USER:-admin}"
 export PP_PASS="${PP_PASS:-admin}"
@@ -14,7 +16,7 @@ fail=0
 for pkg in std layout welcome signup ai verify contacts ui bookmarks dabar \
            plan bi bible chat calendar outline notes flashcards todo hello weather ref; do
   r=$("$PP_EVAL" -j "(load-library \"$pkg\")") || true
-  echo "$r" | grep -q '"ok":true' || { echo "load fail $pkg: $r"; fail=1; }
+  printf '%s' "$r" | pp_json_ok || { echo "load fail $pkg: $r"; fail=1; }
 done
 
 for n in html/join theme/bg todo/page notes/page flash/due chat/lobby-id \
@@ -22,8 +24,9 @@ for n in html/join theme/bg todo/page notes/page flash/due chat/lobby-id \
          hi-page signup/page dabar/page bookmarks/page contacts/page \
          ai/context verify/run-suite ui/css plan/mine bi/metric/profit; do
   r=$("$PP_EVAL" -j "(function-doc \"$n\")")
-  echo "$r" | grep -q '"ok":true' || { echo "function-doc fail $n: $r"; fail=1; continue; }
-  echo "$r" | grep -q '"value":()' && { echo "nodoc $n"; fail=1; }
+  printf '%s' "$r" | pp_json_ok || { echo "function-doc fail $n: $r"; fail=1; continue; }
+  # nodoc = value null ("value":() never matched valid JSON — dead check before)
+  printf '%s' "$r" | pp_json_value >/dev/null 2>&1 || { echo "nodoc $n"; fail=1; }
 done
 
 # Routes (bare /ref walks all bindings and can budget-exceed — use filtered)

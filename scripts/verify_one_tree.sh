@@ -28,6 +28,8 @@ BASE="http://127.0.0.1:${PP_HTTP_PORT}"
 fail() { echo "FAIL: $*" >&2; exit 1; }
 ok() { echo "OK: $*"; }
 
+. "$(dirname "$0")/eval_json.sh"
+
 echo "=== one-tree verify (root=$PP_ROOT) ==="
 
 # 1. build + unit tests
@@ -90,7 +92,7 @@ eval_json() {
 }
 
 r=$(eval_json '{"expr":"(list (whoami) (count (list-bindings)))"}')
-echo "$r" | grep -q '"ok":true' || fail "whoami/bindings: $r"
+printf '%s' "$r" | pp_json_ok || fail "whoami/bindings: $r"
 ok "eval whoami + list-bindings"
 
 r=$(eval_json '{"expr":"(deftype (quote __otv) (quote a) (quote b))"}')
@@ -102,13 +104,13 @@ echo "$r" | grep -q 'missing fields' || fail "validation should reject: $r"
 ok "typed-node validation rejects missing fields"
 
 r=$(eval_json '{"expr":"(create (quote __otv) \"{\\\"a\\\":1,\\\"b\\\":2}\")"}')
-echo "$r" | grep -q '"ok":true' || fail "create full: $r"
+printf '%s' "$r" | pp_json_ok || fail "create full: $r"
 id=$(echo "$r" | sed -n 's/.*\([0-9a-f]\{8\}-[0-9a-f]\{4\}-[0-9a-f]\{4\}-[0-9a-f]\{4\}-[0-9a-f]\{12\}\).*/\1/p' | head -1)
 [ -n "$id" ] || fail "no uuid from create: $r"
 r=$(eval_json "{\"expr\":\"(node-path (quote __otv) \\\"$id\\\")\"}")
 echo "$r" | grep -qE 'data\.(u\.|shared\.)' || fail "node-path (want data.u.* or data.shared.*): $r"
 r=$(eval_json "{\"expr\":\"(get (quote __otv) \\\"$id\\\")\"}")
-echo "$r" | grep -q '"ok":true' || fail "get: $r"
+printf '%s' "$r" | pp_json_ok || fail "get: $r"
 r=$(eval_json "{\"expr\":\"(delete (quote __otv) \\\"$id\\\")\"}")
 echo "$r" | grep -q "$id" || fail "delete: $r"
 ok "CRUD + node-path round-trip"
@@ -128,7 +130,7 @@ ok "post-cleanup tree_verify"
 r=$(eval_json '{"expr":"(deftype (quote __otv_iso) (quote a))"}')
 echo "$r" | grep -q 'defined type' || fail "iso deftype: $r"
 r=$(eval_json '{"expr":"(create (quote __otv_iso) \"{\\\"a\\\":\\\"secret-alice\\\"}\")"}')
-echo "$r" | grep -q '"ok":true' || fail "iso create: $r"
+printf '%s' "$r" | pp_json_ok || fail "iso create: $r"
 iso_id=$(echo "$r" | sed -n 's/.*\([0-9a-f]\{8\}-[0-9a-f]\{4\}-[0-9a-f]\{4\}-[0-9a-f]\{4\}-[0-9a-f]\{12\}\).*/\1/p' | head -1)
 [ -n "$iso_id" ] || fail "iso no uuid: $r"
 
@@ -147,7 +149,7 @@ bob_eval() {
 }
 
 bob_r=$(bob_eval '{"expr":"(whoami)"}' 2>/dev/null || true)
-if echo "$bob_r" | grep -q '"ok":true' && echo "$bob_r" | grep -q bob; then
+if printf '%s' "$bob_r" | pp_json_ok && printf '%s' "$bob_r" | grep -q bob; then
   bob_rows=$(bob_eval '{"expr":"(rows (quote __otv_iso))"}')
   echo "$bob_rows" | grep -q 'secret-alice' && fail "bob prim leaked admin row: $bob_rows"
   ok "prim confinement: bob (rows '__otv_iso) does not see admin secret"

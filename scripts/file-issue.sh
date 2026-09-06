@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/ksh
 # file-issue.sh — quick-submit an issue to the habitat `log/issues` register.
 #
 # Opens /issues in a browser for the dedicated face, or append from the
@@ -19,6 +19,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
+. "$SCRIPT_DIR/eval_json.sh"
 
 case "${1:-}" in
   -h|--help)
@@ -55,7 +56,7 @@ esc () { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
 expr="(seq (load-library \"notes\") (notes/issues/add \"$kind\" \"$(esc "$title")\" \"$(esc "$body")\"))"
 
 if "$PP_EVAL" -j "$expr" >/tmp/pp-file-issue.out 2>&1; then
-  if grep -q '"ok":true' /tmp/pp-file-issue.out; then
+  if pp_json_ok </tmp/pp-file-issue.out; then
     echo "filed [$kind] $title → /issues"
   else
     echo "filed but habitat reported:" >&2; cat /tmp/pp-file-issue.out >&2; exit 1

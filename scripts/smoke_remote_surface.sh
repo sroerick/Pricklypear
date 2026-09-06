@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/ksh
 # pp-remote HTML surface smoke — the shared agent loop running on the
 # CLIENT host (borge/remote-eval.borg agent-loop): chat page, multipart
 # /chat stream over a mock provider, eval box at /eval, lens browser at

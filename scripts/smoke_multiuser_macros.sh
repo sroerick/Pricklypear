@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/ksh
 # Smoke: plan, chat, llm keys, ssh keys, macros.
 # Requires: scripts/dev.sh stack on :18080, admin/admin.
 set -eu

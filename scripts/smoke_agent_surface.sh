@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/ksh
 # Agent HTML surface smoke — framing + parts + termination over HTTP/1.1
 # keep-alive. Catches the close-delimited-body regression (respond_with_
 # streaming without transfer-encoding => response never completes on the
