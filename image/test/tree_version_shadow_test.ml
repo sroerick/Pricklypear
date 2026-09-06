@@ -208,8 +208,8 @@ let test_datum_delete_tombstone () =
             | Error e -> Alcotest.fail ("create failed: " ^ e)
           in
           (match T.delete_datum conn ~type_name ~id:(path_id path) with
-           | Some _ -> ()
-           | None -> ());
+           | Ok _ -> ()
+           | Error _ -> ());
           let hist = T.versioned_history conn ~path () in
           (* create + tombstone = 2 rows (delete appends, does not erase) *)
           Alcotest.(check int) "history keeps create + tombstone" 2
@@ -227,8 +227,10 @@ let test_fn_code_path_shadow () =
       | Some conn ->
           let name = uniq "sfn" in
           let path = T.fn_path ~branch_id:main_id ~name in
-          T.upsert_fn conn ~branch_id:main_id ~name
-            ~body_json:"{\"params\":[],\"body\":1}" ~author:"tester" ~doc:None;
+          ignore
+            (T.upsert_fn conn ~branch_id:main_id ~name
+               ~body_json:"{\"params\":[],\"body\":1}" ~author:"tester"
+               ~doc:None);
           (match T.get_by_path conn ~path with
            | None -> Alcotest.fail "fn node missing"
            | Some n ->
@@ -264,8 +266,9 @@ let test_hash_domain_cross_writer () =
           let name = "tv_hash_" ^ suffix in
           let body = "{\"params\":[\"x\"],\"zz\":1}" in
           (* Path 1: tree-first upsert (OCaml writer). *)
-          T.upsert_fn conn ~branch_id:main_id ~name ~body_json:body
-            ~author:"tester" ~doc:None;
+          ignore
+            (T.upsert_fn conn ~branch_id:main_id ~name ~body_json:body
+               ~author:"tester" ~doc:None);
           let path = T.fn_path ~branch_id:main_id ~name in
           let h_treefirst =
             match T.get_by_path conn ~path with

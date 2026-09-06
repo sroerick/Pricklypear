@@ -826,8 +826,10 @@ let delete_function_on_branch (t : t) ~(branch_id : string) ~(name : string)
   | None -> false
   | Some conn ->
       (try
-            Tree_store.delete_fn conn ~branch_id ~name
-    with exn ->
+        match Tree_store.delete_fn conn ~branch_id ~name with
+        | Ok _ -> true
+        | Error _ -> false
+     with exn ->
       Printf.eprintf "[store] delete_function_on_branch: %s\n"
             (Printexc.to_string exn);
           false)
@@ -1009,7 +1011,7 @@ let persist_function (t : t) (name : string)
           (* tree is truth; reverse trigger mirrors to table. Package
              provenance is scaffolding-only — stamped on function_defs
              directly since the tree node envelope has no package field. *)
-            let () =
+            let _ =
               Tree_store.upsert_fn conn ~branch_id:t.branch_id ~name
                 ~body_json ~author ~doc
             in
@@ -1119,7 +1121,7 @@ let persist_function_if_absent (t : t) (name : string)
             (match exists with
              | Some _ -> stamp_pkg_if_null ()
              | None ->
-                 let () =
+                 let _ =
                    Tree_store.upsert_fn conn ~branch_id:t.branch_id ~name
                      ~body_json ~author ~doc
                  in
@@ -1279,7 +1281,9 @@ let delete_function (t : t) (name : string) : bool =
     | Some conn ->
         (try
           (* tree is truth; reverse mirror deletes the function_defs row *)
-          Tree_store.delete_fn conn ~branch_id:t.branch_id ~name
+          match Tree_store.delete_fn conn ~branch_id:t.branch_id ~name with
+          | Ok _ -> true
+          | Error _ -> false
         with exn ->
           Printf.eprintf "[store] delete_function error: %s\n"
             (Printexc.to_string exn);
@@ -1323,8 +1327,12 @@ let prune_synced_fn_pins (t : t) : string list =
                   List.filter
                     (fun name ->
                       try
-                        Tree_store.delete_fn conn ~branch_id:t.branch_id
-                          ~name
+                        match
+                          Tree_store.delete_fn conn ~branch_id:t.branch_id
+                            ~name
+                        with
+                        | Ok _ -> true
+                        | Error _ -> false
                       with exn ->
                         Printf.eprintf
                           "[store] prune_synced_fn_pins %s: %s\n" name
@@ -1411,8 +1419,9 @@ let register_route (t : t) ~(route : string) ~(handler : string)
             | Some v -> normalize_visibility v
             | None -> "private"
           in
-          Tree_store.upsert_route conn ~branch_id:t.branch_id ~route ~handler
-            ~visibility:vis
+          ignore
+            (Tree_store.upsert_route conn ~branch_id:t.branch_id ~route
+               ~handler ~visibility:vis)
     with exn ->
       Printf.eprintf "[store] register_route error: %s\n"
             (Printexc.to_string exn);
@@ -1443,8 +1452,9 @@ let register_route_if_absent (t : t) ~(route : string) ~(handler : string)
             (match exists with
              | Some _ -> ()
              | None ->
-                 Tree_store.upsert_route conn ~branch_id:t.branch_id ~route
-                   ~handler ~visibility:vis);
+                 ignore
+                   (Tree_store.upsert_route conn ~branch_id:t.branch_id
+                      ~route ~handler ~visibility:vis));
             (match t.seed_names with
              | Some set -> Hashtbl.replace set route ()
              | None -> ())
@@ -1533,8 +1543,9 @@ let persist_type (t : t) ~(name : string) ~(fields : string list)
       let fields_json =
             Yojson.Safe.to_string
               (`List (List.map (fun s -> `String s) fields)) in
-          Tree_store.upsert_type conn ~branch_id:t.branch_id ~name
-            ~fields_json ~author
+          ignore
+            (Tree_store.upsert_type conn ~branch_id:t.branch_id ~name
+               ~fields_json ~author)
     with exn ->
       Printf.eprintf "[store] persist_type error: %s\n"
             (Printexc.to_string exn);
@@ -2620,20 +2631,23 @@ let code_restore (t : t) ~(branch_id : string) ~(name : string)
                      match rel with
                      | "function_defs" ->
                          let doc = code_doc_of_version v in
-                         Tree_store.upsert_fn conn ~branch_id ~name
-                           ~body_json:body_js ~author:rest_author ~doc;
+                         ignore
+                           (Tree_store.upsert_fn conn ~branch_id ~name
+                              ~body_json:body_js ~author:rest_author ~doc);
                          Printf.sprintf
                            "restored fn %s (%d steps back)" name n
                      | "type_defs" ->
-                         Tree_store.upsert_type conn ~branch_id ~name
-                           ~fields_json:body_js ~author:rest_author;
+                         ignore
+                           (Tree_store.upsert_type conn ~branch_id ~name
+                              ~fields_json:body_js ~author:rest_author);
                          Printf.sprintf
                            "restored type %s (%d steps back)" name n
                      | "view_bindings" -> (
                          match route_parts_of_body body_js with
                          | Some (handler, visibility) ->
-                             Tree_store.upsert_route conn ~branch_id
-                               ~route:name ~handler ~visibility;
+                             ignore
+                               (Tree_store.upsert_route conn ~branch_id
+                                  ~route:name ~handler ~visibility);
                              Printf.sprintf
                                "restored route %s (%d steps back)" name n
                          | None ->

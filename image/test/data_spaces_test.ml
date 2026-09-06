@@ -93,8 +93,8 @@ let insert conn ~type_name ~author =
   match
     TS.insert_datum conn ~type_name ~fields_json:"{\"n\":1}" ~author
   with
-  | Some id -> id
-  | None -> Alcotest.fail "insert_datum returned no id"
+  | Ok id -> id
+  | Error e -> Alcotest.fail ("insert_datum failed: " ^ e)
 
 let path_of conn ~id =
   q_string conn ~params:[ s id ]

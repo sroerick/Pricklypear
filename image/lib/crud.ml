@@ -534,6 +534,17 @@ let data_history (store : Store.t) ~(viewer : string)
   | [] -> VNil
   | xs -> VStr (Yojson.Safe.to_string (`List xs))
 
+(** Uniform no-DB contract for WRITE prims (i-1788670475): a write with
+    no DB connection raises Interp_error — it must never masquerade as an
+    empty result (VNil = "no row matched"), a benign error string, or a
+    fabricated success shape (tree/delete used to emit
+    {"deleted":0,...}). Read prims keep their empty defaults
+    (DB-down-as-empty is the separate swallow-and-default class).
+    Same (prim, message, kind) shape create already raised. *)
+let no_db (prim : string) : 'a =
+  raise (Pricklypear_lisp.Ast.Interp_error
+           (Pricklypear_lisp.Ast.Prim_error (prim, "failed: no DB", "failed")))
+
 let create
     (store : Store.t) ~(type_name : string) ~(fields_json : string)
     ~(author : string)
@@ -543,17 +554,14 @@ let create
   | Some msg -> (VStr msg)
   | None ->
   match Io_lwt.Db.current_conn store with
-  | None ->
-      raise (Pricklypear_lisp.Ast.Interp_error
-               (Pricklypear_lisp.Ast.Prim_error
-                  ("create", "failed: no DB", "failed")))
+  | None -> no_db "create"
   | Some conn ->
     guard_space_write conn ~prim:"create" ~type_name ~caller:author ~id:None;
     (* tree is truth; reverse trigger mirrors to data_rows *)
     let id = Tree_store.insert_datum conn ~type_name ~fields_json ~author in
     (match id with
-     | Some s -> VStr s
-     | None ->
+     | Ok s -> VStr s
+     | Error _ ->
          raise (Pricklypear_lisp.Ast.Interp_error
                   (Pricklypear_lisp.Ast.Prim_error
                      ("create", "failed", "failed"))))
@@ -575,12 +583,12 @@ let update_impl
   | Some msg -> (VStr msg)
   | None ->
   match Io_lwt.Db.current_conn store with
-  | None -> VNil
+  | None -> no_db "update"
   | Some conn ->
     guard_space_write conn ~prim:"update" ~type_name ~caller
       ~id:(Some id);
     let id' = Tree_store.update_datum conn ~type_name ~id ~fields_json in
-    (match id' with Some s -> VStr s | None -> VNil)
+    (match id' with Ok s -> VStr s | Error _ -> VNil)
 
 let update store ~type_name ~id ~fields_json =
   update_impl store ~type_name ~id ~fields_json ~caller:"unknown"
@@ -618,7 +626,7 @@ let update_field_impl
   | Some msg -> VStr msg
   | None ->
   Io_lwt.Db.with_transaction store (function
-    | None -> VNil
+    | None -> no_db "update-field"
     | Some conn ->
         guard_space_write conn ~prim:"update-field" ~type_name ~caller
           ~id:(Some id);
@@ -666,7 +674,7 @@ let update_field_impl
              let id' =
                Tree_store.update_datum conn ~type_name ~id ~fields_json:updated_json
              in
-             (match id' with Some s -> VStr s | None -> VNil)))
+             (match id' with Ok s -> VStr s | Error _ -> VNil)))
 
 let update_field store ~type_name ~id ~field ~value =
   update_field_impl store ~type_name ~id ~field ~value ~caller:"unknown"
@@ -680,13 +688,13 @@ let update_field_guarded store ~type_name ~id ~field ~value ~caller =
 let delete_impl (store : Store.t) ~(type_name : string) ~(id : string)
     ~(caller : string) : value =
   match Io_lwt.Db.current_conn store with
-  | None -> VNil
+  | None -> no_db "delete"
   | Some conn ->
     (* Closes the delete-by-id hole at the space boundary (loud error;
        the RLS floor already rejected cross-user deletes where active). *)
     guard_space_write conn ~prim:"delete" ~type_name ~caller ~id:(Some id);
     let id' = Tree_store.delete_datum conn ~type_name ~id in
-    (match id' with Some s -> VStr s | None -> VNil)
+    (match id' with Ok s -> VStr s | Error _ -> VNil)
 
 let delete store ~type_name ~id =
   delete_impl store ~type_name ~id ~caller:"unknown"
@@ -1371,7 +1379,7 @@ let tree_gen_diff (store : Store.t) ~(path : string)
    the written path or an error string. *)
 let tree_undo (store : Store.t) ~(path : string) ?(n : int64 = 1L) () : value =
   match Io_lwt.Db.current_conn store with
-  | None -> (VStr "undo: no DB")
+  | None -> no_db "undo"
   | Some conn ->
       if not (absolute_tree_path path) then
         (VStr "undo: path must be an absolute b.* or data.* path")
@@ -1476,7 +1484,7 @@ let tree_upsert (store : Store.t) ~(path : string) ~(kind : string)
      | Some msg -> (VStr msg)
      | None ->
      match Io_lwt.Db.current_conn store with
-     | None -> (VStr "tree/upsert: no DB")
+     | None -> no_db "tree/upsert"
      | Some conn ->
        let r =
          Tree_store.upsert_datum conn ~path ~type_name ~body_json ~author
@@ -1485,7 +1493,7 @@ let tree_upsert (store : Store.t) ~(path : string) ~(kind : string)
        (match r with Ok p -> (VStr p) | Error e -> (VStr e)))
   else
     match Io_lwt.Db.current_conn store with
-    | None -> (VStr "tree/upsert: no DB")
+    | None -> no_db "tree/upsert"
     | Some conn ->
       let r =
         Tree_store.upsert_hier conn ~path ~kind ~type_name ~body_json ~author
@@ -1498,7 +1506,11 @@ let tree_upsert (store : Store.t) ~(path : string) ~(kind : string)
 let tree_delete (store : Store.t) ~(path : string) ~(recursive : bool)
     : value =
   match Io_lwt.Db.current_conn store with
-  | None -> (VStr "{\"deleted\":0,\"inbound_edges\":0}")
+  | None ->
+      (* i-1788670475: was VStr "{\"deleted\":0,...}" — a fabricated
+         success shape that made destructive flows look idempotent with
+         the DB down. A write with no DB raises, loudly. *)
+      no_db "tree/delete"
   | Some conn ->
       (* tree-edges: report incoming-edge count (warn, not forbid — the
          delete succeeds; edges pointing at the deleted path dangle and
@@ -1583,7 +1595,7 @@ let tree_move (store : Store.t) ~(old_path : string) ~(new_path : string)
   | Some msg -> (VStr ("tree/move: " ^ msg))
   | None ->
   match Io_lwt.Db.current_conn store with
-  | None -> (VStr "tree/move: no DB")
+  | None -> no_db "tree/move"
   | Some conn ->
       (* tree-edges: moving the TARGET of inbound edges leaves them
          dangling (to is stored verbatim, never rewritten) — report the
@@ -1614,7 +1626,7 @@ let link_edge (store : Store.t) ~(from_path : string) ~(to_path : string)
     VStr "link: to must be a well-formed absolute path (it may dangle)"
   else
     match Io_lwt.Db.current_conn store with
-    | None -> VStr "link: no DB"
+    | None -> no_db "link"
     | Some conn -> (
         match Tree_store.get_by_path conn ~path:from_path with
         | None -> VStr ("link: from does not resolve: " ^ from_path)
@@ -1659,7 +1671,7 @@ let link_edge (store : Store.t) ~(from_path : string) ~(to_path : string)
    unlink restores the edge). Only kind=link nodes may be unlinked. *)
 let unlink_edge (store : Store.t) ~(edge_path : string) : value =
   match Io_lwt.Db.current_conn store with
-  | None -> VStr "unlink: no DB"
+  | None -> no_db "unlink"
   | Some conn -> (
       match Tree_store.get_by_path conn ~path:edge_path with
       | None -> VStr ("unlink: no node at " ^ edge_path)
@@ -1836,7 +1848,7 @@ let tree_move_before (store : Store.t) ~(path : string) ~(anchor : string)
       match Tree_store.path_parent path, Tree_store.path_parent anchor with
       | Some parent, Some ap when parent = ap && path <> anchor -> (
           match Io_lwt.Db.current_conn store with
-          | None -> VStr "tree/move-before: no DB"
+          | None -> no_db "tree/move-before"
           | Some conn -> (
               match place_candidate conn ~parent ~anchor ~before:true with
               | Error e -> VStr ("tree/move-before: " ^ e)
@@ -1855,7 +1867,7 @@ let tree_move_after (store : Store.t) ~(path : string) ~(anchor : string)
       match Tree_store.path_parent path, Tree_store.path_parent anchor with
       | Some parent, Some ap when parent = ap && path <> anchor -> (
           match Io_lwt.Db.current_conn store with
-          | None -> VStr "tree/move-after: no DB"
+          | None -> no_db "tree/move-after"
           | Some conn -> (
               match place_candidate conn ~parent ~anchor ~before:false with
               | Error e -> VStr ("tree/move-after: " ^ e)
@@ -1873,7 +1885,7 @@ let tree_move_after (store : Store.t) ~(path : string) ~(anchor : string)
    stays well-defined. Returns node JSON. *)
 let tree_reorder (store : Store.t) ~(path : string) ~(rank : string) : value =
   match Io_lwt.Db.current_conn store with
-  | None -> VStr "tree/reorder: no DB"
+  | None -> no_db "tree/reorder"
   | Some conn ->
       if rank <> "" && not (Tree_store.rank_valid rank) then
         VStr "tree/reorder: rank must be base-36 ([0-9a-z]+)"
@@ -1949,7 +1961,7 @@ let tree_insert_child (store : Store.t) ~(parent : string) ~(kind : string)
        tree/upsert + tree/reorder)"
   else
     match Io_lwt.Db.current_conn store with
-    | None -> VStr "tree/insert-child: no DB"
+    | None -> no_db "tree/insert-child"
     | Some conn -> (
         let label =
           match Tree_store.parse_body_json body_json with

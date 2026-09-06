@@ -75,12 +75,18 @@ let test_tree_backed_history () =
              STRICTLY-BELOW-HEAD rows (states before the latest change),
              newest-first = [v2, v1]. Match 012's before-image semantic (an
              insert-only fn has NO history until rewritten). *)
-          T.upsert_fn conn ~branch_id:main_id ~name
-            ~body_json:"{\"params\":[],\"body\":1}" ~author:"tester" ~doc:None;
-          T.upsert_fn conn ~branch_id:main_id ~name
-            ~body_json:"{\"params\":[],\"body\":2}" ~author:"tester" ~doc:None;
-          T.upsert_fn conn ~branch_id:main_id ~name
-            ~body_json:"{\"params\":[],\"body\":3}" ~author:"tester" ~doc:None;
+          ignore
+            (T.upsert_fn conn ~branch_id:main_id ~name
+               ~body_json:"{\"params\":[],\"body\":1}" ~author:"tester"
+               ~doc:None);
+          ignore
+            (T.upsert_fn conn ~branch_id:main_id ~name
+               ~body_json:"{\"params\":[],\"body\":2}" ~author:"tester"
+               ~doc:None);
+          ignore
+            (T.upsert_fn conn ~branch_id:main_id ~name
+               ~body_json:"{\"params\":[],\"body\":3}" ~author:"tester"
+               ~doc:None);
           let hist = S.list_code_history store ~branch_id:main_id ~name in
           (match hist with
            | [ n1; n2 ] ->

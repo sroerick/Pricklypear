@@ -78,12 +78,18 @@ let test_fn_restore () =
       | None -> ()
       | Some conn ->
           let name = uniq "fn" in
-          T.upsert_fn conn ~branch_id:main_id ~name
-            ~body_json:"{\"params\":[],\"body\":1}" ~author:"tester" ~doc:None;
-          T.upsert_fn conn ~branch_id:main_id ~name
-            ~body_json:"{\"params\":[],\"body\":2}" ~author:"tester" ~doc:None;
-          T.upsert_fn conn ~branch_id:main_id ~name
-            ~body_json:"{\"params\":[],\"body\":3}" ~author:"tester" ~doc:None;
+          ignore
+            (T.upsert_fn conn ~branch_id:main_id ~name
+               ~body_json:"{\"params\":[],\"body\":1}" ~author:"tester"
+               ~doc:None);
+          ignore
+            (T.upsert_fn conn ~branch_id:main_id ~name
+               ~body_json:"{\"params\":[],\"body\":2}" ~author:"tester"
+               ~doc:None);
+          ignore
+            (T.upsert_fn conn ~branch_id:main_id ~name
+               ~body_json:"{\"params\":[],\"body\":3}" ~author:"tester"
+               ~doc:None);
           let r = S.code_restore store ~branch_id:main_id ~name ~author:"tester" () in
           Alcotest.(check bool) "n=1 returns restored-fn" true
             (contains_sub r "restored fn");
@@ -100,12 +106,18 @@ let test_fn_restore () =
              restores — reuse of [name] after the n=1 restore would re-target the
              restored head. *) 
           let name3 = uniq "fn3" in
-          T.upsert_fn conn ~branch_id:main_id ~name:name3
-            ~body_json:"{\"params\":[],\"body\":1}" ~author:"tester" ~doc:None;
-          T.upsert_fn conn ~branch_id:main_id ~name:name3
-            ~body_json:"{\"params\":[],\"body\":2}" ~author:"tester" ~doc:None;
-          T.upsert_fn conn ~branch_id:main_id ~name:name3
-            ~body_json:"{\"params\":[],\"body\":3}" ~author:"tester" ~doc:None;
+          ignore
+            (T.upsert_fn conn ~branch_id:main_id ~name:name3
+               ~body_json:"{\"params\":[],\"body\":1}" ~author:"tester"
+               ~doc:None);
+          ignore
+            (T.upsert_fn conn ~branch_id:main_id ~name:name3
+               ~body_json:"{\"params\":[],\"body\":2}" ~author:"tester"
+               ~doc:None);
+          ignore
+            (T.upsert_fn conn ~branch_id:main_id ~name:name3
+               ~body_json:"{\"params\":[],\"body\":3}" ~author:"tester"
+               ~doc:None);
           let r2 =
             S.code_restore store ~branch_id:main_id ~name:name3 ~author:"tester" ~n:2 ()
           in
@@ -125,8 +137,10 @@ let test_fn_restore () =
             (contains_sub r3 "no state");
           (* insert-only fn (nothing below head) has no state to restore *)
           let name2 = uniq "fn2" in
-          T.upsert_fn conn ~branch_id:main_id ~name:name2
-            ~body_json:"{\"params\":[],\"body\":1}" ~author:"tester" ~doc:None;
+          ignore
+            (T.upsert_fn conn ~branch_id:main_id ~name:name2
+               ~body_json:"{\"params\":[],\"body\":1}" ~author:"tester"
+               ~doc:None);
           let r4 =
             S.code_restore store ~branch_id:main_id ~name:name2 ~author:"tester" ()
           in
@@ -154,12 +168,15 @@ let test_type_restore () =
       | Some conn ->
           let name = uniq "ty" in
           let f i = Printf.sprintf "{\"fields\":[\"a%d\"]}" i in
-          T.upsert_type conn ~branch_id:main_id ~name ~fields_json:(f 1)
-            ~author:"tester";
-          T.upsert_type conn ~branch_id:main_id ~name ~fields_json:(f 2)
-            ~author:"tester";
-          T.upsert_type conn ~branch_id:main_id ~name ~fields_json:(f 3)
-            ~author:"tester";
+          ignore
+            (T.upsert_type conn ~branch_id:main_id ~name ~fields_json:(f 1)
+               ~author:"tester");
+          ignore
+            (T.upsert_type conn ~branch_id:main_id ~name ~fields_json:(f 2)
+               ~author:"tester");
+          ignore
+            (T.upsert_type conn ~branch_id:main_id ~name ~fields_json:(f 3)
+               ~author:"tester");
           let r = S.code_restore store ~branch_id:main_id ~name ~author:"tester" () in
           Alcotest.(check bool) "type n=1 returns restored-type" true
             (contains_sub r "restored type");
@@ -178,12 +195,15 @@ let test_route_restore () =
       | Some conn ->
           let name = uniq "rt" in
           let h i = Printf.sprintf "handler%d" i in
-          T.upsert_route conn ~branch_id:main_id ~route:name ~handler:(h 1)
-            ~visibility:"public";
-          T.upsert_route conn ~branch_id:main_id ~route:name ~handler:(h 2)
-            ~visibility:"public";
-          T.upsert_route conn ~branch_id:main_id ~route:name ~handler:(h 3)
-            ~visibility:"private";
+          ignore
+            (T.upsert_route conn ~branch_id:main_id ~route:name ~handler:(h 1)
+               ~visibility:"public");
+          ignore
+            (T.upsert_route conn ~branch_id:main_id ~route:name ~handler:(h 2)
+               ~visibility:"public");
+          ignore
+            (T.upsert_route conn ~branch_id:main_id ~route:name ~handler:(h 3)
+               ~visibility:"private");
           let r = S.code_restore store ~branch_id:main_id ~name ~author:"tester" () in
           Alcotest.(check bool) "route n=1 returns restored-route" true
             (contains_sub r "restored route");
