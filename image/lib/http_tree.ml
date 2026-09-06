@@ -82,12 +82,13 @@ let resolve_focus (session : Session.t) (raw : string) :
         ~branch_id:(Session.branch_id session)
     in
     let suffix = if String.contains p '.' then p else "fn." ^ p in
-    match Io_lwt.Db.current_conn (Session.store session) with
-    | Some conn -> (
+    (* i-1788670872-3: ride the RLS-floor tx like every other /tree read. *)
+    C.with_tree_tx (Session.store session)
+      ~none:(fun () -> (p, suffix))
+      (fun conn ->
         match T.lens_get_in_chain conn ~suffix chain with
         | Some n -> (n.path, suffix)
         | None -> (p, suffix))
-    | None -> (p, suffix)
 
 let gen_of (q : string -> string option) : int64 option =
   match q "gen" with
@@ -125,9 +126,11 @@ let expand_url ~(prefix : string) ~(gen : int64 option)
 
 let children_fragment (session : Session.t) ~(prefix : string)
     ~(gen : int64 option) ~(kind_filter : string option) : Pure_html.node =
-  match Io_lwt.Db.current_conn (Session.store session) with
-  | None -> HTML.p [HTML.class_ "muted"] [txt "(no db)"]
-  | Some conn ->
+  (* i-1788670872-3: children lists include kind=datum rows — read inside
+     the RLS-floor tx (path_visible stays the primary OCaml control). *)
+  C.with_tree_tx (Session.store session)
+    ~none:(fun () -> HTML.p [HTML.class_ "muted"] [txt "(no db)"])
+    (fun conn ->
       (* head (hash, rank) per child for the as-of diff highlight
          (?gen= vs head) — rank-only reorders must highlight too *)
       let head_hashes =
@@ -190,7 +193,7 @@ let children_fragment (session : Session.t) ~(prefix : string)
                         ]
                     else txt "");
                  ])
-             kids)
+             kids))
 
 (* ---- breadcrumb (tree/ancestors, visible steps only) ---- *)
 
@@ -215,9 +218,9 @@ let breadcrumb ~(session : Session.t) ~(focus : string) : Pure_html.node =
 (* ---- detail pane ---- *)
 
 let detail_pane (session : Session.t) ~(focus : string) : Pure_html.node =
-  match Io_lwt.Db.current_conn (Session.store session) with
-  | None -> HTML.p [HTML.class_ "muted"] [txt "(no db)"]
-  | Some conn -> (
+  C.with_tree_tx (Session.store session)
+    ~none:(fun () -> HTML.p [HTML.class_ "muted"] [txt "(no db)"])
+    (fun conn ->
       match T.get_by_path conn ~path:focus with
       | None -> HTML.p [HTML.class_ "err"] [txt "no node at %s" focus]
       | Some n ->
@@ -329,9 +332,11 @@ let tree_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
       match kind_filter with Some k -> "&kind=" ^ k | None -> ""
     in
     let node_exists =
-      match Io_lwt.Db.current_conn (Session.store session) with
-      | Some conn -> (match T.get_by_path conn ~path:focus with Some _ -> true | None -> false)
-      | None -> false
+      C.with_tree_tx (Session.store session) ~none:(fun () -> false)
+        (fun conn ->
+           match T.get_by_path conn ~path:focus with
+           | Some _ -> true
+           | None -> false)
     in
     html_response reqd ~session
       (chrome ~session ~title:"tree"
@@ -418,11 +423,16 @@ let tree_edit (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
     html_response reqd ~session ~status:`Bad_request
       (chrome ~session ~title:"tree" [HTML.p [HTML.class_ "err"] [txt "no path"]])
   else
-    match Io_lwt.Db.current_conn (Session.store session) with
-    | None ->
+    (* i-1788670872-3: the node read, visibility check and the tree/upsert
+       write run in ONE RLS-floor tx; Crud.tree_upsert_outcome rides this
+       transaction via its in-transaction guard (set_config LOCAL armed
+       above), so a cross-identity write is rejected by migration 013's
+       WITH CHECK, not just the OCaml path_visible gate. *)
+    C.with_tree_tx (Session.store session)
+      ~none:(fun () ->
         html_response reqd ~session ~status:`Internal_server_error
-          (chrome ~session ~title:"tree" [HTML.p [] [txt "no db"]])
-    | Some conn -> (
+          (chrome ~session ~title:"tree" [HTML.p [] [txt "no db"]]))
+      (fun conn ->
         match T.get_by_path conn ~path with
         | None ->
             html_response reqd ~session ~status:`Not_found

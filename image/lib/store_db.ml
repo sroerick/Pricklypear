@@ -144,15 +144,52 @@ let set_local_pp_user (pg : Io_eio.Pg.t) : unit =
   in
   ()
 
+(** serialization_failure (SQLSTATE 40001): SSI aborted the transaction
+    after concurrent commits invalidated its snapshot. Nothing committed,
+    and the only correct response is to re-run the body. Retried
+    unconditionally by with_transaction (i-1788670872-3: the Serializable
+    default previously had zero retry anywhere). Other PG error classes
+    (constraint / RLS violations, syntax) are caller errors — retrying
+    would only repeat them. *)
+let serialization_retries = 2
+
+let is_serialization_failure (exn : exn) : bool =
+  match exn with
+  | Pgx.PostgreSQL_Error (_, fields) ->
+      String.equal fields.Pgx.Error_response.code "40001"
+  | _ -> false
+
 let with_transaction ?(isolation = Pgx.Isolation.Serializable) (t : t)
     (f : conn option -> 'a) : 'a =
   match t.conn with
   | None -> f None
   | Some (pg, mu) ->
-      with_eio_conn_lock mu (fun () ->
-          Io_eio.Pg.with_transaction ~isolation pg (fun tx ->
-              set_local_pp_user tx;
-              f (Some (tx, mu))))
+      let attempt () =
+        with_eio_conn_lock mu (fun () ->
+            Io_eio.Pg.with_transaction ~isolation pg (fun tx ->
+                set_local_pp_user tx;
+                f (Some (tx, mu))))
+      in
+      (* Bounded immediate retry: the body's DB effects rolled back with
+         the aborted tx, so re-running it is safe for the DB; OCaml-side
+         effects in f are the usual value-building closures. *)
+      let rec loop n =
+        match attempt () with
+        | v -> v
+        | exception ex when is_serialization_failure ex && n > 0 ->
+            loop (n - 1)
+      in
+      loop serialization_retries
+
+(** Low-isolation (READ COMMITTED) transaction for the datum-touching
+    tree/edge prims (Crud.with_tree_tx). Before the RLS-floor fix those
+    prims ran per-statement autocommit — i.e. READ COMMITTED — so the tx
+    here exists to (a) arm the pp.user RLS floor via set_local_pp_user
+    and (b) make multi-statement sequences (link, tree/move, delete +
+    edge count) atomic, NOT to add SSI conflict surface that did not
+    exist before. SERIALIZABLE remains the default for with_transaction. *)
+let with_transaction_low (t : t) (f : conn option -> 'a) : 'a =
+  with_transaction ~isolation:Pgx.Isolation.Read_committed t f
 
 let with_dynamic_transaction ?(isolation = Pgx.Isolation.Serializable)
     (t : t) (f : unit -> 'a) : 'a =
@@ -172,6 +209,12 @@ let with_dynamic_transaction ?(isolation = Pgx.Isolation.Serializable)
                 Fun.protect
                   ~finally:(fun () -> t.current_tx <- None)
                   f))
+
+(* with_dynamic_transaction deliberately does NOT retry serialization
+   failures: its body is arbitrary Lisp ((with-transaction …) prim) and
+   may carry non-DB side effects (net prims, output), which a silent
+   re-run would duplicate. A 40001 inside (with-transaction …) surfaces
+   to the Lisp caller, as before. *)
 
 let connect (t : t) : unit =
   match t.conn with

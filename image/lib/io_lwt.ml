@@ -26,6 +26,8 @@ module Db = struct
   let with_transaction ?isolation store f =
     Store_db.with_transaction ?isolation store f
 
+  let with_transaction_low store f = Store_db.with_transaction_low store f
+
   let with_dynamic_transaction ?isolation store f =
     Store_db.with_dynamic_transaction ?isolation store f
 end
