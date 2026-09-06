@@ -550,8 +550,13 @@ let lookup_session_user (store : Store.t) ~(raw_token : string)
     | Some conn ->
         (try
           let th = token_hash raw_token in
+          (* user_cols is unqualified (single-table sites); here it sits inside a
+             JOIN of auth_sessions s x users u, both owning "id", so the bare
+             columns are ambiguous (42702). Qualify explicitly. i-1788690774. *)
           let sql =
-            "SELECT " ^ user_cols ^ " FROM auth_sessions s "
+            "SELECT u.id::text, u.username, u.is_admin::text, u.user_type, "
+            ^ "u.parent_user_id::text "
+            ^ "FROM auth_sessions s "
             ^ "JOIN users u ON u.id = s.user_id "
             ^ "WHERE s.token_hash = $1 "
             ^ "AND s.revoked_at IS NULL "
