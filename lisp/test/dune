@@ -37,3 +37,8 @@
  (name stepping_test)
  (modules stepping_test)
  (libraries pricklypear-lisp alcotest))
+
+(test
+ (name prims_pure_test)
+ (modules prims_pure_test)
+ (libraries pricklypear-lisp pricklypear-pure-prims alcotest))

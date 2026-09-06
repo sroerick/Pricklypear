@@ -366,18 +366,16 @@ let prim_quotient args =
   | [ VInt a; VInt b ] when b <> 0L -> VInt (Int64.div a b)
   | [ VInt _; VInt 0L ] ->
       raise (Interp_error (User_error ("quotient by zero", "bad-args")))
-  | [ VInt _; _ ] | [ _; VInt _ ] | [ _; _ ] ->
+  | _ ->
       raise (Interp_error (User_error ("quotient needs two int args", "bad-args")))
-  | _ -> raise (Interp_error (User_error ("quotient needs two int args", "bad-args")))
 
 let prim_remainder args =
   match args with
   | [ VInt a; VInt b ] when b <> 0L -> VInt (Int64.rem a b)
   | [ VInt _; VInt 0L ] ->
       raise (Interp_error (User_error ("remainder by zero", "bad-args")))
-  | [ _; _ ] ->
+  | _ ->
       raise (Interp_error (User_error ("remainder needs two int args", "bad-args")))
-  | _ -> raise (Interp_error (User_error ("remainder needs two int args", "bad-args")))
 
 (* ---- math tower (lisp-interpreter.math) ---- *)
 
@@ -2023,13 +2021,17 @@ let prim_url_decode args =
    Handles &amp; &lt; &gt; &quot; &apos; &#NN; &#xHH; and common named entities.
    Best-effort; unknown entities are left as-is. *)
 
+(* All replacement values are UTF-8 byte sequences: Latin-1 range
+   entities (U+00A0..U+00BB) are two-byte C2-lead sequences, the rest
+   are the standard three-byte forms. Single-byte \169/\240 etc. are
+   invalid UTF-8 and once leaked into rendered pages. *)
 let named_entities =
   [ "amp", "&"; "lt", "<"; "gt", ">"; "quot", "\""; "apos", "'";
-    "nbsp", "\240"; "copy", "\169"; "reg", "\174";
+    "nbsp", "\194\160"; "copy", "\194\169"; "reg", "\194\174";
     "mdash", "\226\128\148"; "ndash", "\226\128\147";
     "hellip", "\226\128\166"; "rsquo", "\226\128\153"; "lsquo", "\226\128\152";
     "ldquo", "\226\128\156"; "rdquo", "\226\128\157"; "euro", "\226\130\172";
-    "trade", "\226\132\162"; "deg", "\176"; "plusmn", "\191"; (* actual ± U+00B1 *)
+    "trade", "\226\132\162"; "deg", "\194\176"; "plusmn", "\194\177";
     "times", "\195\151"; "divide", "\195\183"; "bull", "\226\128\162";
     "middot", "\194\183"; "laquo", "\194\171"; "raquo", "\194\187" ]
 
