@@ -135,6 +135,140 @@ let catalog : entry list =
       arity = "(or e1 e2 …)";
       examples = "(or #f 0 'x) → 0 (0 is truthy)";
     };
+    {
+      name = "begin";
+      summary =
+        "Alias of seq: evaluate body expressions left-to-right; value of \
+         the last. (begin) → nil.";
+      arity = "(begin e1 e2 … en)  — 0 or more bodies";
+      examples = "(begin (define x 1) (+ x 1))  →  2";
+    };
+    {
+      name = "match";
+      summary =
+        "Pattern dispatch: evaluate the scrutinee, try clauses in order, \
+         first matching pattern binds its variables and evaluates that \
+         clause's body. No match → error.";
+      arity = "(match scrut (pat body…) …)";
+      examples =
+        "(match '(a b) ((list 'a x) x) (_ 'none))  →  b";
+    };
+    {
+      name = "guard";
+      summary =
+        "Evaluate body; if a Lisp error is raised, call the handler lambda \
+         (0- or 1-arg; 1-arg receives an (error msg kind) list). \
+         Budget-exceeded always propagates.";
+      arity = "(guard handler-lambda body…)";
+      examples =
+        "(guard (lambda (e) 'caught) (/ 1 0))  →  caught";
+    };
+    {
+      name = "error";
+      summary =
+        "Raise a Lisp error: (error msg), (error kind msg), or evaluated \
+         argument forms. Catchable by guard.";
+      arity = "(error msg)  |  (error kind msg)";
+      examples = "(error \"bad input\")  ; kind defaults to user_error";
+    };
+    {
+      name = "with-step";
+      summary =
+        "Job checkpoint boundary: run a zero-arg lambda; in a job the \
+         result is memoized under (job-id, name), outside a job it is a \
+         plain call. See borge/jobs.borg step-checkpoints.";
+      arity = "(with-step \"name\" (lambda () body…))";
+      examples = "(with-step \"fetch\" (lambda () (http-get url)))";
+    };
+    {
+      name = "macroexpand-1";
+      summary =
+        "Expand ONE macro level: returns the expansion as data (list of \
+         symbols/values). Non-macro forms return reified unchanged.";
+      arity = "(macroexpand-1 form)";
+      examples =
+        "(macroexpand-1 (when #t 1))  →  (if #t 1 ())  ; no quote: the \
+         form is captured unevaluated";
+    };
+    {
+      name = "macroexpand";
+      summary =
+        "Expand macro call sites repeatedly until the head is no longer a \
+         macro; returns the fully expanded form as data.";
+      arity = "(macroexpand form)";
+      examples =
+        "(macroexpand (unless #f 1))  ; unless = (when (not t) b) → (if …)";
+    };
+    {
+      name = "apply";
+      summary =
+        "First-class application: call f with the elements of args-list as \
+         arguments. Works on closures and registered prims.";
+      arity = "(apply f args-list)";
+      examples = "(apply + (list 1 2 3))  →  6";
+    };
+    {
+      name = "list/map";
+      summary =
+        "Map f over the list (OCaml loop + apply; one eval step total, \
+         not per element).";
+      arity = "(list/map f xs)";
+      examples = "(list/map (lambda (x) (* x x)) '(1 2 3))  →  (1 4 9)";
+    };
+    {
+      name = "list/filter";
+      summary =
+        "Keep elements for which the predicate is truthy (OCaml loop + \
+         apply).";
+      arity = "(list/filter p xs)";
+      examples = "(list/filter (lambda (x) (< x 3)) '(1 2 3 4))  →  (1 2)";
+    };
+    {
+      name = "list/foldl";
+      summary =
+        "Left fold: (f acc x) over xs from the left, starting from init.";
+      arity = "(list/foldl f init xs)";
+      examples = "(list/foldl (lambda (a x) (+ a x)) 0 '(1 2 3))  →  6";
+    };
+    {
+      name = "list/foldr";
+      summary =
+        "Right fold: foldr f init [a;b;c] = f a (f b (f c init)).";
+      arity = "(list/foldr f init xs)";
+      examples = "(list/foldr cons () '(1 2 3))  →  (1 2 3)";
+    };
+    {
+      name = "delay";
+      summary =
+        "Build a lazy thunk from a body expr without evaluating it (see \
+         lazy-env-thunks). Var lookups auto-force thunks; force explicitly.";
+      arity = "(delay body)";
+      examples = "(define t (delay (expensive)))  ; nothing runs yet";
+    };
+    {
+      name = "force";
+      summary =
+        "Force a thunk: evaluate its body once, memoize the result, return \
+         it. Forcing an already-forced thunk returns the memoized value.";
+      arity = "(force thunk)";
+      examples = "(force t)  ; runs (expensive) now, once";
+    };
+    {
+      name = "unquote";
+      summary =
+        "Inside quasiquote, substitute the evaluated expr at depth 1 \
+         (reader sugar ,x). Error outside quasiquote.";
+      arity = "(unquote expr)  or  ,expr";
+      examples = "`(a ,( + 1 2))  →  (a 3)";
+    };
+    {
+      name = "unquote-splicing";
+      summary =
+        "Inside a quasiquoted list, splice the evaluated list's elements \
+         (reader sugar ,@x). Error outside quasiquote/list context.";
+      arity = "(unquote-splicing expr)  or  ,@expr";
+      examples = "`(a ,@'(b c) d)  →  (a b c d)";
+    };
   ]
 
 (** The [name] of every entry in [catalog], in catalog order. *)

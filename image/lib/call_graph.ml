@@ -50,12 +50,12 @@ type snapshot = {
   bound_kernel : (string, unit) Hashtbl.t;
 }
 
-let special_forms : string list =
-  [ "lambda"; "let"; "letrec"; "if"; "define"; "quote"; "seq"; "begin"
-  ; "and"; "or"; "cond"; "match"; "with-transaction"
-  ; "quasiquote"; "unquote"; "unquote-splicing"; "defmacro"
-  ; "guard"; "error"
-  ]
+(** Bound-kernel names for [bound_kernel] (holes()): the interpreter's
+    single special-form list (i-1788671219). Previously a hand-copied
+    18-name subset that had already drifted (missing delay/force/
+    with-step/apply, macroexpand-1/macroexpand, gensym, the list HOFs);
+    consuming Eval's list makes drift impossible. *)
+let special_forms : string list = Pricklypear_lisp.Eval.special_form_names
 
 let build_snapshot
     ~(defs : (string * Ast.expr) list)
