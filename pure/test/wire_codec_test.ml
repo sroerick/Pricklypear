@@ -88,20 +88,32 @@ let test_parse_error_shape () =
   | exn -> Alcotest.fail ("expected Reader_error, got: " ^ Printexc.to_string exn)
 
 let test_generic_exn () =
-  (* unknown exn → {ok:false, error} (no kind field). The inverse's
-     no-kind path is the parse_error reconstruction, so a generic exn
-     currently degrades to Reader_error (message, 0, 0): the MESSAGE
-     survives the hop, the classification is lost. Pinned AS-IS — the
-     kind loss is filed, not fixed, in this test-gap loop. *)
+  (* unknown exn → {ok:false, error, kind:"exn"} (i-1788714788: the
+     kind tag used to be missing and the inverse degraded the shape to
+     Reader_error (message, 0, 0), misattributing arbitrary server
+     failures as parse errors). The inverse maps kind:"exn" back to
+     User_error(msg,"exn") — the MESSAGE survives the hop and the
+     classification is a generic exception, never a Reader_error. *)
   let json = wire (Failure "disk gone") in
   Alcotest.(check bool) "generic shape has error" true
     (contains_seq json "disk gone");
-  match unwire json with
-  | Pricklypear_lisp.Reader.Reader_error (m, l, c) ->
-      Alcotest.(check bool) "message survives the hop" true
-        (contains_seq m "disk gone");
-      Alcotest.(check int) "degraded loc is 0,0" 0 (l + c)
-  | exn -> Alcotest.fail ("expected degraded Reader_error, got: " ^ Printexc.to_string exn)
+  Alcotest.(check bool) "generic shape has kind exn" true
+    (contains_seq json "\"kind\":\"exn\"");
+  (match unwire json with
+   | Interp_error (User_error (m, "exn")) ->
+       Alcotest.(check bool) "message survives the hop" true
+         (contains_seq m "disk gone")
+   | exn ->
+       Alcotest.fail ("expected User_error \"exn\", got: " ^ Printexc.to_string exn));
+  (* the regression pin: a generic exn must NOT come back as a
+     Reader_error, whatever its Printexc text contains *)
+  match unwire (wire (Sys_error "connection refused: /db")) with
+  | Pricklypear_lisp.Reader.Reader_error _ ->
+      Alcotest.fail "generic exn degraded to Reader_error"
+  | Interp_error (User_error (m, "exn")) ->
+      Alcotest.(check bool) "Sys_error text survives" true
+        (contains_seq m "connection refused")
+  | exn -> Alcotest.fail ("expected User_error \"exn\", got: " ^ Printexc.to_string exn)
 
 let test_garbage_json () =
   (* a non-object payload degrades to User_error, never a crash *)
