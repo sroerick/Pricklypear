@@ -603,7 +603,10 @@ let data_update (session : Session.t) (type_name : string) (id : string)
                 ]);
              ()
          | Ok fields_json ->
-             let v = Crud.update store ~type_name ~id ~fields_json in
+             let v =
+               Crud.update_guarded store ~type_name ~id ~fields_json
+                 ~caller:(Session.username session)
+             in
              (match v with
               | Pricklypear_lisp.Ast.VStr _ ->
                   redirect_response reqd
@@ -626,7 +629,9 @@ let data_delete (session : Session.t) (type_name : string) (id : string)
     ()
   end else
     let store = Session.store session in
-    let v = Crud.delete store ~type_name ~id in
+    let v =
+      Crud.delete_guarded store ~type_name ~id ~caller:(Session.username session)
+    in
     match v with
     | Pricklypear_lisp.Ast.VStr _ ->
         redirect_response reqd (Printf.sprintf "/data/%s" type_name);

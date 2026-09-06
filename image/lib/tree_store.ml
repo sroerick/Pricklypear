@@ -141,8 +141,18 @@ let verify_seed_types (conn : Store_db.conn) : unit =
     data.l.<lens>.<user>.<type>.<id> instead of data.u.<user>.<type>.<id>.
     A data lens is a deliberate fork of the user's live data that can
     diverge and merge back (one-tree.borg branching-interaction, 2026-08-23
-    make). Seed types are never lensed — data.shared is branch-free. *)
-let datum_path ?user ?(lens : string option = None) ~type_name ~id () =
+    make). Seed types are never lensed — data.shared is branch-free.
+
+    [~space] constructs the shared data space path data.s.<space>.<type>.<id>
+    (branching.shared-data-spaces; migrations/029_data_spaces.sql). The
+    authoritative SPACE ROUTING lives in the SQL tree_datum_path, which
+    consults data_space_types (type admission is dynamic — this pure mirror
+    cannot see it); callers that need the true path of an admitted type
+    must look the space up and pass [~space] themselves (see
+    Crud.node_path). Lookup order matches SQL: seed -> lens -> space ->
+    user. *)
+let datum_path ?user ?(lens : string option = None)
+    ?(space : string option = None) ~type_name ~id () =
   let id_lab = uuid_label id in
   let ty_lab = enc_label type_name in
   if is_seed_type type_name then
@@ -157,7 +167,11 @@ let datum_path ?user ?(lens : string option = None) ~type_name ~id () =
     | Some l when l <> "" ->
         Printf.sprintf "data.l.%s.%s.%s.%s" (enc_label l) (enc_label u) ty_lab id_lab
     | _ ->
-        Printf.sprintf "data.u.%s.%s.%s" (enc_label u) ty_lab id_lab
+        (match space with
+         | Some sp when sp <> "" ->
+             Printf.sprintf "data.s.%s.%s.%s" (enc_label sp) ty_lab id_lab
+         | _ ->
+             Printf.sprintf "data.u.%s.%s.%s" (enc_label u) ty_lab id_lab)
 
 (* ---- content hashing ---- *)
 

@@ -19,9 +19,12 @@ let static_cost (prim_name : string) : cost_tier =
   | "get" | "find-row" | "select-for-update" | "node-path" | "type-fields"
   | "tree/get" | "tree/get-uuid" -> Index_seek
   | "create" | "update" | "update-field" | "delete" | "tree/upsert"
-  | "tree/delete" | "tree/move" -> Constant
+  | "tree/delete" | "tree/move"
+  | "space-create" | "space-add-member" | "space-remove-member"
+  | "space-admit" -> Constant
   | "rows" | "find-random" | "tree/list" -> Seq_scan
-  | "find-rows" | "find-text" | "backlinks" | "tree/find-by" -> Linear
+  | "find-rows" | "find-text" | "backlinks" | "tree/find-by"
+  | "space-list" | "space-members" -> Linear
   | _ -> Unknown
 
 let sql_hint = function

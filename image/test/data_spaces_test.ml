@@ -207,6 +207,122 @@ let test_rls_floor () =
           Alcotest.(check bool) "RLS WITH CHECK: carol write denied" true
             blocked))
 
+(* ---------------- S2: prim surface (Crud-level) ---------------- *)
+
+module Crud = Pricklypear_image_lib.Crud
+module Ast = Pricklypear_lisp.Ast
+
+(** S2 fixture: unique names, nothing pre-seeded — the tests exercise the
+    Crud space-management functions themselves. Tears down by name. *)
+let with_s2 f =
+  with_store (fun store ->
+      let conn = Option.get (S.conn_of store) in
+      let uniq = Printf.sprintf "s2%06d" (Random.int 1_000_000) in
+      let sp = "sps" ^ uniq in
+      let ty = "spt" ^ uniq in
+      Fun.protect
+        ~finally:(fun () ->
+          exec conn
+            (Printf.sprintf
+               "DELETE FROM tree_nodes WHERE kind='datum' AND type_name='%s'; \
+                DELETE FROM data_rows WHERE type_name='%s'; \
+                DELETE FROM data_spaces WHERE name = '%s'"
+               ty ty sp))
+        (fun () -> f store ~sp ~ty))
+
+let expect_denied label f =
+  match f () with
+  | _ -> Alcotest.fail (label ^ ": expected denial, got success")
+  | exception Ast.Interp_error (Ast.User_error (msg, _)) ->
+      Alcotest.(check bool)
+        (label ^ " (msg: " ^ msg ^ ")")
+        true (String.length msg > 0)
+  | exception e -> Alcotest.fail (label ^ ": wrong exception " ^ Printexc.to_string e)
+
+let vlist_strs = function
+  | Ast.VList xs ->
+      List.filter_map (function Ast.VStr s -> Some s | _ -> None) xs
+  | _ -> Alcotest.fail "expected VList"
+
+(* S2: lifecycle — create, list, add, members, owner-gate on add. *)
+let test_lifecycle () =
+  with_s2 (fun store ~sp ~ty:_ ->
+      ignore (Crud.space_create store ~caller:"alice" ~name:sp);
+      let as_alice =
+        vlist_strs (Crud.space_list store ~caller:"alice" ~kernel_admin:false)
+      in
+      Alcotest.(check bool) "alice lists her space" true (List.mem sp as_alice);
+      ignore
+        (Crud.space_add_member store ~caller:"alice" ~kernel_admin:false
+           ~space:sp ~username:"bob");
+      let as_bob =
+        vlist_strs (Crud.space_list store ~caller:"bob" ~kernel_admin:false)
+      in
+      Alcotest.(check bool) "bob lists after add" true (List.mem sp as_bob);
+      let as_carol =
+        vlist_strs (Crud.space_list store ~caller:"carol" ~kernel_admin:false)
+      in
+      Alcotest.(check bool) "carol sees nothing" false (List.mem sp as_carol);
+      let members =
+        vlist_strs
+          (Crud.space_members store ~caller:"alice" ~kernel_admin:false ~space:sp)
+      in
+      Alcotest.(check int) "two members" 2 (List.length members);
+      expect_denied "non-owner add denied" (fun () ->
+          Crud.space_add_member store ~caller:"bob" ~kernel_admin:false
+            ~space:sp ~username:"dave");
+      expect_denied "duplicate create denied" (fun () ->
+          Crud.space_create store ~caller:"bob" ~name:sp))
+
+(* S2: admit routes create; non-member create/update/delete denied;
+   removed member's create denied; node-path reports the space home. *)
+let test_routing_and_guard () =
+  with_s2 (fun store ~sp ~ty ->
+      let conn = Option.get (S.conn_of store) in
+      ignore (Crud.space_create store ~caller:"alice" ~name:sp);
+      ignore
+        (Crud.space_add_member store ~caller:"alice" ~kernel_admin:false
+           ~space:sp ~username:"bob");
+      ignore
+        (Crud.space_admit store ~caller:"alice" ~kernel_admin:false ~space:sp
+           ~type_name:ty);
+      (* member create routes to the space *)
+      let id =
+        match Crud.create store ~type_name:ty ~fields_json:"{\"n\":7}" ~author:"bob" with
+        | Ast.VStr id -> id
+        | _ -> Alcotest.fail "member create did not return id"
+      in
+      let p = path_of conn ~id in
+      Alcotest.(check bool)
+        ("space path " ^ p)
+        true
+        (String.sub p 0 7 = "data.s.");
+      (* node-path parity *)
+      (match Crud.node_path store ~type_name:ty ~id with
+       | Ast.VStr np ->
+           Alcotest.(check bool) ("node-path " ^ np) true
+             (String.sub np 0 7 = "data.s.")
+       | _ -> Alcotest.fail "node-path not VStr");
+      (* guard: non-member create/update/delete all raise *)
+      expect_denied "carol create denied" (fun () ->
+          Crud.create store ~type_name:ty ~fields_json:"{\"n\":1}" ~author:"carol");
+      expect_denied "carol update denied" (fun () ->
+          Crud.update_guarded store ~type_name:ty ~id ~fields_json:"{\"n\":2}"
+            ~caller:"carol");
+      expect_denied "carol delete denied" (fun () ->
+          Crud.delete_guarded store ~type_name:ty ~id ~caller:"carol");
+      (* member update/delete work *)
+      (match Crud.update_guarded store ~type_name:ty ~id ~fields_json:"{\"n\":8}"
+               ~caller:"alice" with
+       | Ast.VStr _ -> ()
+       | _ -> Alcotest.fail "member update failed");
+      (* removed member errors, loudly *)
+      ignore
+        (Crud.space_remove_member store ~caller:"alice" ~kernel_admin:false
+           ~space:sp ~username:"bob");
+      expect_denied "removed member create denied" (fun () ->
+          Crud.create store ~type_name:ty ~fields_json:"{\"n\":3}" ~author:"bob"))
+
 let () =
   Alcotest.run "data_spaces"
     [
@@ -221,5 +337,12 @@ let () =
           Alcotest.test_case "visible_sql mirror semantics" `Quick
             test_visible_sql_mirror;
           Alcotest.test_case "RLS floor + write check" `Quick test_rls_floor;
+        ] );
+      ( "shared-data-spaces S2",
+        [
+          Alcotest.test_case "space lifecycle + owner gate" `Quick
+            test_lifecycle;
+          Alcotest.test_case "admit routing + non-member guard" `Quick
+            test_routing_and_guard;
         ] );
     ]
