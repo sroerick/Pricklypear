@@ -103,7 +103,8 @@ let register (t : t) (tbl : Primitives.t) : unit =
      them. Raises User_error on non-multipart requests or a malformed
      body. Pairs with (media-put-raw) for package upload flows (e.g.
      music): the multipart route-POST body cap is the media ceiling
-     (http.route_body_cap), so real audio files reach the handler. *)
+     (Http_core.request_body_cap ~kind:`Form, multipart branch), so real
+     audio files reach the handler. *)
   Primitives.register_sync tbl "request-multipart" (fun _args ->
       let r = require_request t in
       let ct =

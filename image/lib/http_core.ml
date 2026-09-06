@@ -820,6 +820,47 @@ let json_field_str ?(default = "")
 
 let max_user_body_bytes = 64 * 1024
 
+(* THE request-body cap — one table for every body-reading entry point
+   (i-1788671135-a; replaces the drifted pair http.ml route_body_cap for
+   the user-route pipeline vs Http_media.request_body_cap for the media
+   endpoints: same multipart answer, disagreement everywhere else, so a
+   future fix to one silently missed the other). Two explicit body
+   classes consult one policy:
+
+   - `Form — user-route POST bodies, INCLUDING anonymous public-route
+     POSTs (/guestbook, /signup are public-route). Multipart may carry
+     media files for package upload flows (e.g. music) up to the audio
+     ceiling plus framing slack; every other body keeps the 64 KiB form
+     cap — deliberately NOT the media ceilings, so unauthenticated
+     surfaces keep their small per-request memory bound.
+
+   - `Media — the dedicated media endpoints (/api/media, /media/upload):
+     multipart as above; application/json carries base64 (4/3 byte
+     inflation) so it rides an audio-inflated ceiling; any content type
+     is a candidate raw media body so it gets the per-type media ceiling
+     (audio >> images/pdf); a missing content type fails parse_upload_body
+     anyway and keeps the modest 5 MiB read ceiling.
+
+   Handlers parse these bodies via (request-multipart) and store the
+   file part via (media-put-raw). read_body raises Body_too_large at
+   the cap — Http.launch maps it to a 413. *)
+type body_class = [ `Form | `Media ]
+
+let request_body_cap ~(kind : body_class) (content_type : string option) : int
+  =
+  let audio = Media.max_http_audio_bytes in
+  match (kind, content_type) with
+  | `Form, Some ct when String.starts_with ~prefix:"multipart/form-data" (String.lowercase_ascii (String.trim ct))
+    -> audio + 65536
+  | `Form, _ -> max_user_body_bytes
+  | `Media, None -> Media.max_http_bytes
+  | `Media, Some ct ->
+      let ct = String.lowercase_ascii (String.trim ct) in
+      if String.starts_with ~prefix:"multipart/form-data" ct then audio + 65536
+      else if String.starts_with ~prefix:"application/json" ct then
+        ((audio * 4) / 3) + 4096
+      else Media.max_http_bytes_for ct
+
 let redirect_response (reqd : Httpun.Reqd.t) (location : string) : unit =
   let headers =
     Httpun.Headers.of_list

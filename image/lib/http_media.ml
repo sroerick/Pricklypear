@@ -10,21 +10,11 @@
 open Pure_html
 open Http_core
 
-(* Type-aware HTTP body cap. Audio (music files) gets the big
-   ceiling; images/pdf keep the v1 5 MiB. Multipart may carry audio
-   parts (framing overhead) and JSON data_b64 inflates bytes by 4/3,
-   so both get slack over the audio ceiling. The per-stored-type cap
-   is enforced a second time inside Media.put (store_upload). *)
-let request_body_cap (content_type : string option) : int =
-  match content_type with
-  | None -> Media.max_http_bytes
-  | Some ct ->
-      let ct = String.lowercase_ascii ct in
-      if String.starts_with ~prefix:"multipart/form-data" ct then
-        Media.max_http_audio_bytes + 65536
-      else if String.starts_with ~prefix:"application/json" ct then
-        ((Media.max_http_audio_bytes * 4) / 3) + 4096
-      else Media.max_http_bytes_for ct
+(* Type-aware HTTP body cap: THE Http_core.request_body_cap table
+   (~kind:`Media) — was a drifted private copy (i-1788671135-a). Audio
+   (music files) gets the big ceiling; images/pdf keep the v1 5 MiB;
+   JSON media pushes carry base64 (4/3 inflation). The per-stored-type
+   cap is enforced a second time inside Media.put (store_upload). *)
 
 (** Read body with a hard byte ceiling; Error `Too_large if exceeded. *)
 let read_body_limited (reqd : Httpun.Reqd.t) ~(max_bytes : int)
@@ -211,7 +201,7 @@ let api_media_post (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
       let ct_hdr =
         Option.map String.trim (header_ci headers "content-type")
       in
-      let cap = request_body_cap ct_hdr in
+      let cap = request_body_cap ~kind:`Media ct_hdr in
       let body_res = read_body_limited reqd ~max_bytes:cap in
       (match body_res with
        | Error `Too_large ->
@@ -589,7 +579,7 @@ let media_upload_post (session : Session.t) (reqd : Httpun.Reqd.t)
       ()
   | Ok (author, _) ->
       let cap =
-        request_body_cap
+        request_body_cap ~kind:`Media
           (Option.map String.trim
              (header_ci (header_list (Httpun.Reqd.request reqd)) "content-type"))
       in
