@@ -12,6 +12,8 @@
           prims_code prims_agent prims_llm prims_ops
           net_prims prims_hyper
           example_eval
+          session_control_prims
+          boot_seed
           session
           session_registry
           function_stats

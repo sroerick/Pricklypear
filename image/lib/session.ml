@@ -12,7 +12,7 @@ include Session_types
 
 (** Run direct-style eval under the Lwt prim rim (H1.7). *)
 let eval_under_rim (t : t) (thunk : unit -> 'a) : 'a =
-  Control_rim.run ~prims:t.prims thunk
+  Control_rim.run ~prims:t.eval_state.prims thunk
 
 let persist_budget_stats (t : t) ~(budget : Pricklypear_lisp.Eval.budget)
     ~(label : string) : unit =
@@ -54,7 +54,7 @@ let eval_string_rim_budgeted (t : t) (input : string)
   let v =
     eval_under_rim t (fun () ->
         Pricklypear_lisp.Eval.eval_string_direct
-          ~budget ~prims:Pricklypear_lisp.Eval.empty_prims t.env input)
+          ~budget ~prims:Pricklypear_lisp.Eval.empty_prims t.eval_state.env input)
   in
   (* Best-effort label: top-level (name) call *)
   let label =
@@ -95,7 +95,7 @@ let example_eval_engine (t : t) (src : string) : Pricklypear_lisp.Ast.value =
            | None -> None)
          (Store.list_function_names t.store))
   in
-  Example_eval.eval_source ~env:t.env ~full_prims:t.prims ~known_fn src
+  Example_eval.eval_source ~env:t.eval_state.env ~full_prims:t.eval_state.prims ~known_fn src
 
 let eval_expr_rim (t : t) (expr : Pricklypear_lisp.Ast.expr)
   : Pricklypear_lisp.Ast.value =
@@ -107,7 +107,7 @@ let eval_expr_rim (t : t) (expr : Pricklypear_lisp.Ast.expr)
          THIS eval's budget through the scope, even after a yield. *)
       Pricklypear_lisp.Eval.with_scope (Some budget) (fun () ->
           Pricklypear_lisp.Eval.eval
-            ~budget ~prims:Pricklypear_lisp.Eval.empty_prims t.env expr))
+            ~budget ~prims:Pricklypear_lisp.Eval.empty_prims t.eval_state.env expr))
 
 let load_defs (t : t) : unit =
   let disabled = Store.disabled_package_names t.store in
@@ -176,8 +176,8 @@ let load_defs (t : t) : unit =
                              rest
                     | _ -> []
                   in
-                  Pricklypear_lisp.Env.define t.env name
-                    (Pricklypear_lisp.Ast.VMacro (params, body_expr, t.env));
+                  Pricklypear_lisp.Env.define t.eval_state.env name
+                    (Pricklypear_lisp.Ast.VMacro (params, body_expr, t.eval_state.env));
               | _ ->
                   let force _env' expr' =
                     (* tmp/eval-fast-path: resolve against the session's
@@ -198,11 +198,11 @@ let load_defs (t : t) : unit =
                     eval_under_rim t (fun () ->
                         Pricklypear_lisp.Eval.with_scope (Some b) (fun () ->
                             Pricklypear_lisp.Eval.eval ~budget:b
-                              ~prims:Pricklypear_lisp.Eval.empty_prims t.env
+                              ~prims:Pricklypear_lisp.Eval.empty_prims t.eval_state.env
                               expr'))
                   in
-                  Pricklypear_lisp.Env.define_thunk t.env name ~force body;
-                  Hashtbl.replace t.thunk_bodies name body))
+                  Pricklypear_lisp.Env.define_thunk t.eval_state.env name ~force body;
+                  Hashtbl.replace t.eval_state.thunk_bodies name body))
       defs
   in
   (* Also load view_bindings into the in-memory routes table. The
@@ -228,14 +228,14 @@ let load_defs_async (t : t) : unit =
   load_defs t;
   (* image.per-identity-sessions: stamp AFTER a successful load so the
      attach-time staleness check has a baseline. *)
-  t.load_stamp <- Store.visible_stamp t.store
+  t.eval_state.load_stamp <- Store.visible_stamp t.store
 
 (** Clear env + routes and reload from the store for the current branch.
     Re-binds kernel prims from [t.kernel_catalog] first so checkout does
     not lose +/define/load-library/etc. *)
 let rehydrate (t : t) : unit =
   (* image.http-robustness invariant 4a: build a FRESH env record and
-     SWAP t.env to it. Do NOT Hashtbl.clear the old env's bindings —
+     SWAP t.eval_state.env to it. Do NOT Hashtbl.clear the old env's bindings —
      VLambda closures capture `env` by reference, so clearing in place
      would empty the binding table an in-flight page (holding the old
      env via its captured closures) is still reading. The old record
@@ -243,29 +243,29 @@ let rehydrate (t : t) : unit =
      the fresh env. This makes concurrent rehydrate safe to run
      alongside lock-free page work (invariant 4b). *)
   let fresh =
-    match t.env.parent with
+    match t.eval_state.env.parent with
     | None -> Pricklypear_lisp.Env.create ()
     | Some p -> Pricklypear_lisp.Env.create ~parent:(Some p) ()
   in
-  t.env <- fresh;
+  t.eval_state.env <- fresh;
   Hashtbl.clear t.routes;
   List.iter
     (fun (name, _) ->
-      Pricklypear_lisp.Env.define t.env name
+      Pricklypear_lisp.Env.define t.eval_state.env name
         (Pricklypear_lisp.Ast.VPrim name))
     t.kernel_catalog;
-  Pricklypear_lisp.Env.define t.env "load-string"
+  Pricklypear_lisp.Env.define t.eval_state.env "load-string"
     (Pricklypear_lisp.Ast.VPrim "load-string");
-  Pricklypear_lisp.Env.define t.env "eval-string"
+  Pricklypear_lisp.Env.define t.eval_state.env "eval-string"
     (Pricklypear_lisp.Ast.VPrim "eval-string");
-  Pricklypear_lisp.Env.define t.env "load-library"
+  Pricklypear_lisp.Env.define t.eval_state.env "load-library"
     (Pricklypear_lisp.Ast.VPrim "load-library");
   (* lisp-interpreter.math: pi is a bound value, not a zero-arg prim.
      Rebind on every rehydrate so /api/eval sessions see it. *)
-  Pricklypear_lisp.Env.define t.env "pi"
+  Pricklypear_lisp.Env.define t.eval_state.env "pi"
     (Pricklypear_lisp.Ast.VFloat Float.pi);
   load_defs t;
-  t.load_stamp <- Store.visible_stamp t.store
+  t.eval_state.load_stamp <- Store.visible_stamp t.store
 
 (** tmp/eval-fast-path: incremental rehydrate — drain the process-global
     Def_journal (all in-process def writes funnel through it) and rebind
@@ -290,9 +290,9 @@ let rehydrate (t : t) : unit =
 let rehydrate_incremental (t : t) : unit =
   let full () =
     let () = rehydrate t in
-    t.def_journal_seq <- Def_journal.current_epoch ()
+    t.eval_state.def_journal_seq <- Def_journal.current_epoch ()
   in
-  let delta = Def_journal.since t.def_journal_seq in
+  let delta = Def_journal.since t.eval_state.def_journal_seq in
   if delta.Def_journal.overflow then full ()
   else
     (try
@@ -305,16 +305,16 @@ let rehydrate_incremental (t : t) : unit =
        let routes_dirty = delta.Def_journal.routes_dirty in
        (* nothing for this chain: advance the cursor, keep the env *)
        if ups = [] && rems = [] && not routes_dirty then
-         t.def_journal_seq <- delta.Def_journal.epoch
+         t.eval_state.def_journal_seq <- delta.Def_journal.epoch
        else begin
-         let old = t.env in
+         let old = t.eval_state.env in
          let fresh =
            { Pricklypear_lisp.Ast.bindings = Hashtbl.copy old.bindings;
              parent = old.parent } in
          List.iter
            (fun (_b, name) ->
              Hashtbl.remove fresh.bindings name;
-             Hashtbl.remove t.thunk_bodies name)
+             Hashtbl.remove t.eval_state.thunk_bodies name)
            rems;
          if ups <> [] then begin
            let disabled_set = Hashtbl.create 16 in
@@ -392,11 +392,11 @@ let rehydrate_incremental (t : t) : unit =
                                (fun () ->
                                   Pricklypear_lisp.Eval.eval ~budget:b
                                     ~prims:Pricklypear_lisp.Eval.empty_prims
-                                    t.env expr'))
+                                    t.eval_state.env expr'))
                        in
                        Pricklypear_lisp.Env.define_thunk fresh name
                          ~force body;
-                       Hashtbl.replace t.thunk_bodies name body)
+                       Hashtbl.replace t.eval_state.thunk_bodies name body)
                bodies
          end;
          (* Re-thunk every carried def from the cached body registry:
@@ -414,11 +414,11 @@ let rehydrate_incremental (t : t) : unit =
                  eval_under_rim t (fun () ->
                      Pricklypear_lisp.Eval.with_scope (Some b) (fun () ->
                          Pricklypear_lisp.Eval.eval ~budget:b
-                           ~prims:Pricklypear_lisp.Eval.empty_prims t.env
+                           ~prims:Pricklypear_lisp.Eval.empty_prims t.eval_state.env
                            expr'))
                in
                Pricklypear_lisp.Env.define_thunk fresh name ~force body)
-           t.thunk_bodies;
+           t.eval_state.thunk_bodies;
          if routes_dirty then begin
            (* rebuild routes into a temp table, then swap contents in
               (no clear-then-refill DB gap for in-flight dispatch) *)
@@ -462,9 +462,9 @@ let rehydrate_incremental (t : t) : unit =
            Hashtbl.reset t.routes;
            Hashtbl.iter (fun r v -> Hashtbl.replace t.routes r v) fresh_routes
          end;
-         t.env <- fresh;
-         t.def_journal_seq <- delta.Def_journal.epoch;
-         t.load_stamp <- Store.visible_stamp t.store
+         t.eval_state.env <- fresh;
+         t.eval_state.def_journal_seq <- delta.Def_journal.epoch;
+         t.eval_state.load_stamp <- Store.visible_stamp t.store
        end
      with exn ->
        Printf.eprintf
@@ -479,7 +479,7 @@ let rehydrate_incremental (t : t) : unit =
 let ensure_fresh (t : t) : unit =
   match Store.visible_stamp t.store with
   | "" -> ()  (* no DB: stay on whatever is in memory *)
-  | stamp when stamp = t.load_stamp -> ()
+  | stamp when stamp = t.eval_state.load_stamp -> ()
   | _ ->
       (* tmp/eval-fast-path: incremental first (binds only changed defs,
          ~ms) with automatic full-load fallback; see rehydrate_incremental. *)
@@ -492,17 +492,17 @@ let ensure_fresh (t : t) : unit =
     busts unconditionally (read-sets are per-branch), as do
     load-library / reseed (bulk redefines). *)
 let bust_ui_shell_cache (t : t) : unit =
-  t.ui_nav_html <- None;
-  t.ui_css <- None;
-  t.ui_shell_reads <- [];
-  t.ui_shell_retry_at <- 0.0
+  t.ui_shell.nav_html <- None;
+  t.ui_shell.css <- None;
+  t.ui_shell.reads <- [];
+  t.ui_shell.retry_at <- 0.0
 
 (** image.product-theme: true when [name] was read by the last shell
     eval. Conservative when no read-set exists yet (never refreshed):
     fall back to the old shell-prefix set so first-refresh still
     triggers on shell-name defines. *)
 let touches_shell (t : t) (name : string) : bool =
-  match t.ui_shell_reads with
+  match t.ui_shell.reads with
   | [] -> name = "ui/nav" || name = "ui/home" || name = "ui/css"
           || name = "ui/theme"
           || String.starts_with ~prefix:"theme/" name
@@ -522,525 +522,26 @@ let checkout_to (t : t) ~(branch_id : string) ~(branch_ref : string)
   bust_ui_shell_cache t;
   rehydrate t
 
-let split_branch_ref (s : string) : string * string =
-  match String.split_on_char '/' s with
-  | [ o; n ] -> o, n
-  | [ n ] -> "system", n  (* bare name = system/<name> *)
-  | _ -> "system", s
+(* ---- Control prims (session_control_prims.ml) ----
+   The fork/merge/route/checkout/unbind/prune-synced/bench +
+   with-transaction/step/with-public-write surface and the branch-ref
+   helpers moved verbatim to Session_control_prims (i-1788671109-1).
+   Session supplies the env-driver hooks and re-exports the helpers so
+   the checkout funnel below (checkout_ref / unoverride / promote /
+   fork_ref) and the Session.* API stay unchanged. *)
+let split_branch_ref = Session_control_prims.split_branch_ref
 
-(** Branch-owner authorization (i-1787970640, spec branching.personal-
-    workspace): a session with username U (admin = t.is_admin || U =
-    "admin") may target a branch owner O iff O = U or the session is
-    admin. Agent users are named "<parent>/agent" and work in the
-    parent-owned <parent>/agent workshop branch, so their tenant is the
-    parent username. *)
-let branch_owner_authorized (t : t) (owner : string) : bool =
-  let u = t.manifest.username in
-  if t.is_admin || u = "admin" then true
-  else
-    let tenant =
-      let suffix = "/agent" in
-      let n = String.length u and m = String.length suffix in
-      if n > m && String.sub u (n - m) m = suffix then
-        String.sub u 0 (n - m)
-      else u
-    in
-    owner = u || owner = tenant
+let branch_owner_authorized = Session_control_prims.branch_owner_authorized
+
+(** The env-driver seam for the control prims: rehydrate + checkout_to
+    are defined above (driver concern) and cannot move behind the
+    module-cycle-free boundary. *)
+let control_hooks =
+  { Session_control_prims.rehydrate = rehydrate;
+    Session_control_prims.checkout_to = checkout_to }
 
 let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
-  (* (fork 'parent 'child) -> VStr new-branch-id | VStr "no such parent" *)
-  Primitives.register_server_only tbl "fork"
-    (fun args ->
-      if t.manifest.username = "anonymous" then
-        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("fork", "denied for anonymous", "denied"))))
-      else if t.agent_branch_lock then
-        (Pricklypear_lisp.Ast.VStr
-             "fork blocked: agent is locked to the current branch")
-      else
-      match args with
-      | [ Pricklypear_lisp.Ast.VStr parent_name;
-          Pricklypear_lisp.Ast.VStr child_name ] ->
-          let parent_owner, parent_short = split_branch_ref parent_name in
-          let child_owner, child_short = split_branch_ref child_name in
-          let parent_id =
-            Store.lookup_branch_id_by_name
-              t.store ~owner:parent_owner ~name:parent_short
-          in
-          (match parent_id with
-           | None ->
-               (Pricklypear_lisp.Ast.VStr
-                             (Printf.sprintf "no such parent: %s" parent_name))
-           | Some pid ->
-               (* i-1787970640: child_owner must pass the branch-owner rule
-                  (blocks pre-claiming another user's garden). *)
-               if not (branch_owner_authorized t child_owner) then
-                 (Pricklypear_lisp.Ast.VStr
-                    (Printf.sprintf "denied: branch %s is owned by %s"
-                       child_name child_owner))
-               else
-               let new_id =
-                 Store.fork_branch t.store ~parent_id:pid
-                   ~owner:child_owner ~child_name:child_short
-               in
-               (match new_id with
-                | Some id ->
-                    (Pricklypear_lisp.Ast.VStr id)
-                | None ->
-                    (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("prim", "fork failed", "failed"))))))
-      | _ ->
-          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("fork", "bad args (need 2 strings)", "bad-args")))));
-
-  (* (merge 'source 'target) -> VStr "merged N rows" | raise (denied).
-     POLICY (per spec [branching.merge]): merging into `system/*`
-     requires the session username to be "admin"; merges into the
-     caller's own `owner/*` branches are free. *)
-  Primitives.register_server_only tbl "merge"
-    (fun args ->
-      if t.manifest.username = "anonymous" then
-        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("merge", "denied for anonymous", "denied"))))
-      else if t.agent_branch_lock then
-        (Pricklypear_lisp.Ast.VStr
-             "merge blocked: agent is locked to the current branch")
-      else
-      match args with
-      | [ Pricklypear_lisp.Ast.VStr source_ref;
-          Pricklypear_lisp.Ast.VStr target_ref ] ->
-          let src_owner, src_short = split_branch_ref source_ref in
-          let tgt_owner, tgt_short = split_branch_ref target_ref in
-          (* i-1787970640: BOTH src_owner and tgt_owner must pass the
-             branch-owner rule. Target system/* stays admin-only (spec
-             branching.merge); the source check is new — it blocks reading
-             others' code via merge results. *)
-          if (tgt_owner = "system")
-             && not (t.is_admin || t.manifest.username = "admin")
-          then
-            (Pricklypear_lisp.Ast.VStr
-                          "denied: admin-only merge to system branch")
-          else if not (branch_owner_authorized t src_owner) then
-            (Pricklypear_lisp.Ast.VStr
-               (Printf.sprintf "denied: branch %s is owned by %s"
-                  source_ref src_owner))
-          else if not (branch_owner_authorized t tgt_owner) then
-            (Pricklypear_lisp.Ast.VStr
-               (Printf.sprintf "denied: branch %s is owned by %s"
-                  target_ref tgt_owner))
-          else
-            let src_id =
-              Store.lookup_branch_id_by_name
-                t.store ~owner:src_owner ~name:src_short
-            in
-            let tgt_id =
-              Store.lookup_branch_id_by_name
-                t.store ~owner:tgt_owner ~name:tgt_short
-            in
-            (match src_id, tgt_id with
-             | Some s, Some tg ->
-                 let r = Store.merge_branch t.store
-                            ~source_id:s ~target_id:tg in
-                 (match r with
-                  | Some res ->
-                      (Pricklypear_lisp.Ast.VStr
-                                    (Store.format_merge_result res))
-                  | None ->
-                      (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("prim", "merge failed", "failed")))))
-             | _ ->
-                 (Pricklypear_lisp.Ast.VStr
-                               "source or target branch not found"))
-      | _ ->
-          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("merge", "bad args (need 2 strings)", "bad-args")))));
-
-  (* (route "/path" handler [visibility]) -> VStr "/path".
-     Optional third arg 'public | "public" | 'private | "private".
-     Handler-only re-register keeps prior visibility (store ON CONFLICT).
-     Anonymous sessions may not register routes.
-     H0.3: public targets must pass the public-route lattice (same as AI
-     allow minus elevate): pure|read-db|write-db|html|txn. Branch/Ai/
-     Publish on a public handler is denied. Missing handler body is OK
-     (define-after-route still works). *)
-  let parse_vis = function
-    | Pricklypear_lisp.Ast.VStr s ->
-        (match String.lowercase_ascii (String.trim s) with
-         | "public" -> Some "public"
-         | "private" -> Some "private"
-         | _ -> None)
-    | _ -> None
-  in
-  let check_public_handler (handler : string) : (unit, string) result =
-    (* Fail-closed public-route gate (BORGE-1785212463 / 1785212603).
-       Infer effects from the in-memory env (synchronous, fresh) via the
-       pure [Route_gate] module. The previous store read was stale after
-       the define persist race and DEFAULTED TO ALLOW on unknown handlers;
-       now unknown / non-function handlers are DENIED. *)
-    (Pricklypear_lisp.Route_gate.check_public_handler ~env:t.env handler)
-  in
-  let register_route_checked ~route_path ~handler ~visibility
-      ~(pass_vis_to_store : bool) : Pricklypear_lisp.Ast.value =
-    let gate =
-      if visibility = "public" then check_public_handler handler
-      else (Ok ())
-    in
-    match gate with
-    | Error msg -> (Pricklypear_lisp.Ast.VStr msg)
-    | Ok () ->
-        Hashtbl.replace t.routes route_path (handler, visibility);
-        let _ =
-          if t.seed_additive then
-            if pass_vis_to_store then
-              Store.register_route_if_absent t.store ~route:route_path
-                ~handler ~visibility ()
-            else
-              Store.register_route_if_absent t.store ~route:route_path
-                ~handler ()
-          else if pass_vis_to_store then
-            Store.register_route t.store ~route:route_path ~handler
-              ~visibility ()
-          else
-            Store.register_route t.store ~route:route_path ~handler ()
-        in
-        (Pricklypear_lisp.Ast.VStr route_path)
-  in
-  Primitives.register_server_only tbl "route"
-    (fun args ->
-      if t.manifest.username = "anonymous" then
-        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("route", "denied for anonymous", "denied"))))
-      else
-        match args with
-        | [ Pricklypear_lisp.Ast.VStr route_path;
-            Pricklypear_lisp.Ast.VStr handler ] ->
-            let vis =
-              match Hashtbl.find_opt t.routes route_path with
-              | Some (_, v) -> v
-              | None -> "private"
-            in
-            (* handler-only: pass_vis_to_store=false so DB keeps visibility
-               on UPDATE; memory keeps prior or private for new. *)
-            register_route_checked ~route_path ~handler ~visibility:vis
-              ~pass_vis_to_store:false
-        | [ Pricklypear_lisp.Ast.VStr route_path;
-            Pricklypear_lisp.Ast.VStr handler;
-            vis_v ] ->
-            (match parse_vis vis_v with
-             | None ->
-                 (Pricklypear_lisp.Ast.VStr
-                      "route: visibility must be public or private")
-             | Some vis ->
-                 register_route_checked ~route_path ~handler ~visibility:vis
-                   ~pass_vis_to_store:true)
-        | _ ->
-            (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("route", "bad args", "bad-args")))));
-
-  (* (public-route path handler) sugar *)
-  Primitives.register tbl "public-route"
-    (fun args ->
-      if t.manifest.username = "anonymous" then
-        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("public-route", "denied for anonymous", "denied"))))
-      else
-        match args with
-        | [ Pricklypear_lisp.Ast.VStr route_path;
-            Pricklypear_lisp.Ast.VStr handler ] ->
-            register_route_checked ~route_path ~handler ~visibility:"public"
-              ~pass_vis_to_store:true
-        | _ ->
-            (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("public-route", "bad args", "bad-args")))));
-
-  (* (route-visibility path) -> "public" | "private" | () *)
-  Primitives.register tbl "route-visibility"
-    (fun args ->
-      match args with
-      | [ Pricklypear_lisp.Ast.VStr route_path ] ->
-          (match Hashtbl.find_opt t.routes route_path with
-           | Some (_, vis) ->
-               (Pricklypear_lisp.Ast.VStr vis)
-           | None -> Pricklypear_lisp.Ast.VNil)
-      | _ -> Pricklypear_lisp.Ast.VNil);
-
-  (* (checkout 'branch-ref) -> VStr "checked out" | "no such branch".
-     Mutates t.store.branch_id + t.manifest, then re-hydrates the env
-     from the new branch's function_defs (sync — so the next form sees
-     the right bindings). Blocked while agent_branch_lock is set. *)
-  Primitives.register_server_only tbl "checkout"
-    (fun args ->
-      if t.manifest.username = "anonymous" then
-        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("checkout", "denied for anonymous", "denied"))))
-      else if t.agent_branch_lock then
-        (Pricklypear_lisp.Ast.VStr
-             "checkout blocked: agent is locked to the current branch")
-      else
-        match args with
-        | [ Pricklypear_lisp.Ast.VStr branch_ref ] ->
-            let owner, name = split_branch_ref branch_ref in
-            (* i-1787970640: owner of the target ref must pass the
-               branch-owner rule (system/* included — non-admin users
-               never need main; personal branches inherit it). *)
-            if not (branch_owner_authorized t owner) then
-              (Pricklypear_lisp.Ast.VStr
-                 (Printf.sprintf "denied: branch %s is owned by %s"
-                    branch_ref owner))
-            else
-            let found =
-              Store.lookup_branch_id_by_name t.store ~owner ~name
-            in
-            (match found with
-             | None -> raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("checkout", "no such branch", "not-found")))
-             | Some new_id ->
-                 let () = checkout_to t ~branch_id:new_id ~branch_ref in
-                 (Pricklypear_lisp.Ast.VStr "checked out"))
-        | _ ->
-            (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("checkout", "bad args", "bad-args")))));
-
-  (* (unbind name) -> VStr "unbound" | "nothing to unbind" | error.
-     Deletes ONLY the current branch's function_defs row for name;
-     the name then resolves via inheritance to the shadowed parent
-     binding (or becomes unbound). Refuses on system/main and on
-     anonymous sessions. See branching.unbind spec. *)
-  Primitives.register tbl "unbind"
-    (fun args ->
-      if t.manifest.username = "anonymous" then
-        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("unbind", "denied for anonymous", "denied"))))
-      else
-        (* i-1787970640: the current branch's owner must pass the
-           branch-owner rule (delete_function already refuses system/main
-           and the prim refuses anonymous). *)
-        let cur_owner, _cur_name =
-          split_branch_ref t.manifest.branch_name in
-        if not (branch_owner_authorized t cur_owner) then
-          (Pricklypear_lisp.Ast.VStr
-             (Printf.sprintf "denied: branch %s is owned by %s"
-                t.manifest.branch_name cur_owner))
-        else
-        match args with
-        | [ Pricklypear_lisp.Ast.VStr name ] ->
-            (try
-              let deleted = Store.delete_function t.store name in
-              if deleted then begin
-                (* Rehydrate so the env sees the revealed parent binding *)
-                rehydrate t;
-                (Pricklypear_lisp.Ast.VStr "unbound")
-              end else
-                (Pricklypear_lisp.Ast.VStr "nothing to unbind")
-            with Failure msg ->
-              (Pricklypear_lisp.Ast.VStr msg))
-        | _ ->
-            (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("unbind", "need a name", "bad-args")))));
-
-  (* (prune-synced) -> VStr JSON {"pruned": N, "names": [...]}.
-     branching.pin-hygiene: unbinds every synced FN pin on the current
-     branch (body canonically identical to the parent chain — a
-     contentless pin). ahead/ahead-new/diverged pins untouched.
-     Denied for anonymous; system/main is a no-op (a root pin can never
-     be synced). Same branch-owner rule as unbind. *)
-  Primitives.register tbl "prune-synced"
-    (fun args ->
-      if t.manifest.username = "anonymous" then
-        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("prune-synced", "denied for anonymous", "denied"))))
-      else
-        (match args with
-         | [] ->
-             let cur_owner, _cur_name =
-               split_branch_ref t.manifest.branch_name in
-             if not (branch_owner_authorized t cur_owner) then
-               (Pricklypear_lisp.Ast.VStr
-                  (Printf.sprintf "denied: branch %s is owned by %s"
-                     t.manifest.branch_name cur_owner))
-             else if t.store.Store_db.branch_id = Store.system_main_id then
-               (Pricklypear_lisp.Ast.VStr
-                  (Yojson.Safe.to_string
-                     (`Assoc [ "pruned", `Int 0;
-                               "note", `String "system/main: nothing can be synced" ])))
-             else
-               let names = Store.prune_synced_fn_pins t.store in
-               let () = if names <> [] then rehydrate t in
-               Pricklypear_lisp.Ast.VStr
-                 (Yojson.Safe.to_string
-                    (`Assoc
-                      [ "pruned", `Int (List.length names);
-                        "names",
-                          `List
-                            (List.map (fun n -> `String n)
-                               (List.rev names)) ]))
-         | _ ->
-             (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("prune-synced", "no args", "bad-args"))))));
-
-  (* (bench expr-string [n]) -> VFloat average microseconds per iteration.
-     Parses once, warms up once, runs n times (default 1000) under a max
-     budget so the bench loop itself never hits Budget_exceeded. Uses the
-     current session env. Prefer pure expressions (side-effecting bodies
-     will run for real). *)
-  let bench_run (expr_str : string) (n : int) : Pricklypear_lisp.Ast.value =
-    let n = max 1 n in
-    let e =
-      try Pricklypear_lisp.Reader.read_one expr_str
-      with exn ->
-        raise
-          (Pricklypear_lisp.Ast.Interp_error
-             (Pricklypear_lisp.Ast.User_error
-                ("bench: parse failed: " ^ Printexc.to_string exn, "bad-args")))
-    in
-    let run_once () =
-      let budget =
-        Pricklypear_lisp.Eval.make_budget ~limit:max_int ()
-      in
-      Control_rim.run_lwt ~prims:t.prims (fun () ->
-          Pricklypear_lisp.Eval.eval
-            ~budget ~prims:Pricklypear_lisp.Eval.empty_prims t.env e)
-    in
-    (* warmup (discard) *)
-    let _ = run_once () in
-    let t0 = Unix.gettimeofday () in
-    let rec loop i =
-      if i >= n then ()
-      else
-        let _ = run_once () in
-        loop (i + 1)
-    in
-    let () = loop 0 in
-    let t1 = Unix.gettimeofday () in
-    let avg_us = ((t1 -. t0) *. 1_000_000.) /. float_of_int n in
-    (Pricklypear_lisp.Ast.VFloat avg_us)
-  in
-  Primitives.register tbl "bench"
-    (fun args ->
-      match args with
-      | [ Pricklypear_lisp.Ast.VStr s ] -> bench_run s 1000
-      | [ Pricklypear_lisp.Ast.VStr s; Pricklypear_lisp.Ast.VInt n ] ->
-          bench_run s (Int64.to_int n)
-      | _ ->
-          (Pricklypear_lisp.Ast.VStr
-               "bench: need (bench expr-string [iterations])"));
-
-  (* Private prim used by the with-transaction special form in eval.ml.
-     NOT USER-VISIBLE: it's looked up under name __with_transaction__ by
-     the special form handler, never `(with-transaction-call ...)` from Lisp.
-     Also bound into the env as a VPrim name by the auto-bind loop, but
-     a `(with-transaction-call ...)` call would just route through here.
-     The prim receives one arg: a VLambda value. It wraps Eval.apply
-     inside Store.with_dynamic_transaction, so prims called from the
-     body of the lambda see the in-transaction pgx conn via
-     Store.current_conn. Lands it29, option A from BORGE-1783438027.
-
-     Returns the lambda body's result. Nested transactions raise a clean
-     Interp_error (see with_dynamic_transaction). *)
-  (* Apply a VLambda under the effect rim (H1.7). *)
-  let apply_lambda_auto (lam : Pricklypear_lisp.Ast.value) : Pricklypear_lisp.Ast.value =
-    let budget = Pricklypear_lisp.Eval.make_budget () in
-    Control_rim.run_lwt ~prims:t.prims (fun () ->
-        Pricklypear_lisp.Eval.apply
-          ~budget ~prims:Pricklypear_lisp.Eval.empty_prims lam [])
-  in
-  Primitives.register tbl "__with_transaction__"
-    (fun args ->
-      match args with
-      | [ Pricklypear_lisp.Ast.VLambda (params, body, clo_env) as lam ] ->
-          (* Enforce zero-arg lambda for clarity: with-transaction bodies
-             shouldn't take args. *)
-          let _ = params in
-          let _ = clo_env in
-          (* H1.3: body re-enters apply_eff under Control.run_lwt when
-             PP_EVAL_CONTROL=eff so nested prims Prim_call while seeing
-             Store.current_conn from with_dynamic_transaction. *)
-          Io_lwt.Db.with_dynamic_transaction t.store (fun () ->
-              apply_lambda_auto lam)
-      | _ ->
-          (Pricklypear_lisp.Ast.VStr
-                        "__with_transaction__: bad args (need a lambda)"));
-
-  (* Private prim used by the with-step special form in eval.ml. NOT
-     USER-VISIBLE: routed to under name __step__ by eval.ml, never
-     `(with-step "name" (lambda ...))` from a plain prim call.
-
-     (__step__ "name" <lambda>) is a checkpoint boundary (borge/jobs.borg
-     step-checkpoints):
-       - Outside a job (Jobs.current_job_id_opt () = None, e.g. an HTTP
-         request or REPL) it is a PLAIN thunk call — no checkpoint.
-       - Inside a job (the runner binds the job id around eval), the
-         thunk's result is memoized under (job_id, name): first execution
-         runs the thunk and writes a job_steps row; re-execution (a retry)
-         returns the stored value WITHOUT re-running the thunk.
-
-     Exactly-once with (with-transaction (step …)): the checkpoint INSERT
-     rides Store.current_conn — when the caller is inside
-     with_transaction, the insert lands in the SAME transaction as the
-     thunk's writes, so it commits or rolls back atomically with them (a
-     failed/later-raised step leaves no checkpoint; a retry re-runs). If
-     the THUNK ITSELF raises, no checkpoint is written (the exception
-     propagates, rolling back the surrounding transaction if any). *)
-  Primitives.register tbl "__step__"
-    (fun args ->
-      match args with
-      | [ Pricklypear_lisp.Ast.VStr name;
-          Pricklypear_lisp.Ast.VLambda (_params, _body, _clo) as lam ] ->
-          (match Jobs.current_job_id_opt () with
-           | None ->
-               (* Outside a job: a plain thunk call with no checkpoint. *)
-               apply_lambda_auto lam
-           | Some job_id ->
-               (match
-                  Jobs.checkpoint_lookup ~store:t.store ~job_id ~name
-                with
-                | Some value_json ->
-                    (* Memoized: return the stored value without re-running. *)
-                    (try
-                       Prims_pure.json_to_value
-                         (Yojson.Safe.from_string value_json)
-                     with _ ->
-                       Pricklypear_lisp.Ast.VStr value_json)
-                | None ->
-                    (* First execution in this job: run the thunk, then write
-                       the checkpoint. If the thunk raises, the exception
-                       propagates (no checkpoint, surrounding tx rolls back). *)
-                    let result = apply_lambda_auto lam in
-                    let value_json =
-                      Yojson.Safe.to_string (Prims_pure.value_to_json result)
-                    in
-                    Jobs.checkpoint_write ~store:t.store ~job_id ~name
-                      ~value:value_json;
-                    result))
-      | _ ->
-          (Pricklypear_lisp.Ast.VStr
-                        "__step__: bad args (need name-str, lambda)"));
-
-  (* (with-public-write (lambda () body...)) — run body with write privilege
-     so public route handlers can create data_rows / notes captures.
-     Elevates anonymous only (logged-in sessions already write). Restores
-     identity afterward. Prefer for narrow public forms (signup), not general
-     unauth APIs.
-
-     Elevates BOTH the live session manifest AND the per-request context
-     manifest. CRUD prims (create/deftype) read their anon guard from
-     Request_context.manifest (the gate-time snapshot, per BORGE-1784434193
-     cotenant fix); without elevating the snapshot, the guard sees the stale
-     "anonymous" and silently denies (create returns a VStr, seq discards it,
-     the handler renders its thanks page with no row written). *)
-  Primitives.register tbl "with-public-write"
-    (fun args ->
-      match args with
-      | [ Pricklypear_lisp.Ast.VLambda (_params, _body, _clo) as lam ] ->
-          let prev = t.manifest in
-          let need_elevate = prev.username = "anonymous" in
-          if need_elevate then
-            t.manifest <-
-              { prev with user_id = "public"; username = "public" };
-          let run_body =
-            match Request_context.get () with
-            | Some ctx when need_elevate ->
-                let elevated_manifest =
-                  { (Request_context.manifest ctx) with
-                    user_id = "public"; username = "public" }
-                in
-                let elevated_ctx =
-                  Request_context.make
-                    ~manifest:elevated_manifest
-                    ~env:(Request_context.env ctx)
-                    ~routes:(Request_context.routes ctx)
-                in
-                Request_context.with_current elevated_ctx
-                  (fun () -> apply_lambda_auto lam)
-            | _ -> apply_lambda_auto lam
-          in
-          (Fun.protect ~finally:(fun () -> if need_elevate then t.manifest <- prev) (fun () -> run_body))
-      | _ ->
-          (Pricklypear_lisp.Ast.VStr
-               "with-public-write: bad args (need a zero-arg lambda)"))
+  Session_control_prims.register ~hooks:control_hooks t tbl
 
 (** If model returns a bare expression body, wrap as (lambda (x) ...). *)
 
@@ -1132,7 +633,7 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value =
          handle_package_form t args
      | _ ->
     let v = eval_string_rim t input in
-    let pkg = t.current_package in
+    let pkg = t.eval_state.current_package in
     let persist_fn name body_expr doc =
       (* Opaque-body contract (i-1788671083-c): the store persists the raw
          jsonb body; serialization happens here at the eval boundary. *)
@@ -1151,7 +652,7 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value =
         else ()
       in
       let () =
-        if not t.suppress_refresh_on_define && touches_shell t name
+        if not t.ui_shell.suppress_refresh_on_define && touches_shell t name
         then begin
           (* Bust only: the next request-gate refresh re-evals. Eager
              refresh here would multiply work per-define during bulk
@@ -1224,7 +725,7 @@ and handle_package_form (t : t) (args : Pricklypear_lisp.Ast.expr list)
                | _ ->
                    List.concat_map export_names rest
              in
-             t.current_package <- Some name;
+             t.eval_state.current_package <- Some name;
              let () =
                if t.manifest.username = "anonymous" then ()
                else begin
@@ -1307,7 +808,7 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
      (budget-exceeded loops). Changed/new defines still eval + persist
      normally. *)
   let load_skip_hit =
-    match t.load_skip_names with
+    match t.eval_state.load_skip_names with
     | None -> false
     | Some tbl ->
       (match Pricklypear_lisp.Eval.parse_top_define expr with
@@ -1337,7 +838,7 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
   if seed_skip || load_skip_hit then Pricklypear_lisp.Ast.VNil
   else
   let v = eval_expr_rim t expr in
-  let pkg = t.current_package in
+  let pkg = t.eval_state.current_package in
   let persist_fn name body_expr doc =
     (* Opaque-body contract (i-1788671083-c): the store persists the raw
        jsonb body; serialization happens here at the eval boundary. *)
@@ -1356,7 +857,7 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
       else ()
     in
     let () =
-      if not t.suppress_refresh_on_define && touches_shell t name
+      if not t.ui_shell.suppress_refresh_on_define && touches_shell t name
       then begin
         bust_ui_shell_cache t
       end else ()
@@ -1385,14 +886,14 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
    | _ -> v)))
 
 and load_string (t : t) (src : string) : (string, string) result =
-  let prev = t.current_package in
-  let prev_suppress = t.suppress_refresh_on_define in
-  t.current_package <- None;
-  t.suppress_refresh_on_define <- true;
+  let prev = t.eval_state.current_package in
+  let prev_suppress = t.ui_shell.suppress_refresh_on_define in
+  t.eval_state.current_package <- None;
+  t.ui_shell.suppress_refresh_on_define <- true;
   Fun.protect
     ~finally:(fun () ->
-      t.current_package <- prev;
-      t.suppress_refresh_on_define <- prev_suppress)
+      t.eval_state.current_package <- prev;
+      t.ui_shell.suppress_refresh_on_define <- prev_suppress)
     (fun () ->
       let r = Loader.load_string ~eval_form:(eval_form t) src in
       (* Boot seed holds suppress_refresh across many loads and does one
@@ -1406,10 +907,10 @@ and load_string (t : t) (src : string) : (string, string) result =
       r)
 
 and load_library (t : t) (name : string) : (string, string) result =
-  let prev = t.current_package in
-  let prev_suppress = t.suppress_refresh_on_define in
-  t.current_package <- None;
-  t.suppress_refresh_on_define <- true;
+  let prev = t.eval_state.current_package in
+  let prev_suppress = t.ui_shell.suppress_refresh_on_define in
+  t.eval_state.current_package <- None;
+  t.ui_shell.suppress_refresh_on_define <- true;
   (* image.load-library-skip (2026-09-03): fingerprint the branch's OWN
      stored defs (pp_expr of the stripped body + doc) once per load so
      eval_form can skip re-evaluating + re-persisting unchanged defines.
@@ -1423,7 +924,7 @@ and load_library (t : t) (name : string) : (string, string) result =
      unpin sweep on personal branches — (prune-synced) remains the
      contentless-pin sweep. Restored in finally: the skip window is
      exactly this load. *)
-  let prev_skip = t.load_skip_names in
+  let prev_skip = t.eval_state.load_skip_names in
   let () =
     if t.seed_additive then ()
     else begin
@@ -1457,14 +958,14 @@ and load_library (t : t) (name : string) : (string, string) result =
               (Pricklypear_lisp.Reader.pp_expr body ^ "\x00"
                ^ (match doc with Some d -> d | None -> "")))
         (Store.list_own_function_defs t.store);
-      t.load_skip_names <- Some tbl
+      t.eval_state.load_skip_names <- Some tbl
     end
   in
   Fun.protect
     ~finally:(fun () ->
-      t.current_package <- prev;
-      t.suppress_refresh_on_define <- prev_suppress;
-      t.load_skip_names <- prev_skip)
+      t.eval_state.current_package <- prev;
+      t.ui_shell.suppress_refresh_on_define <- prev_suppress;
+      t.eval_state.load_skip_names <- prev_skip)
     (fun () ->
       let r = Loader.load_library ~eval_form:(eval_form t) name in
       let () =
@@ -1487,9 +988,9 @@ and reseed_package (t : t) (pkg : string) : (string, string) result =
     (Error "requires admin")
   else begin
     t.seed_additive <- false;
-    t.suppress_refresh_on_define <- true;
+    t.ui_shell.suppress_refresh_on_define <- true;
     let finally () =
-      t.suppress_refresh_on_define <- false;
+      t.ui_shell.suppress_refresh_on_define <- false;
       t.seed_additive <- false;
       ()
     in
@@ -1544,8 +1045,8 @@ and refresh_ui_shell (t : t) : unit =
     let prev_hook = !Pricklypear_lisp.Env.lookup_hook in
     Pricklypear_lisp.Env.lookup_hook :=
       Some (fun n ->
-        if not (List.exists (String.equal n) t.ui_shell_reads) then
-          t.ui_shell_reads <- n :: t.ui_shell_reads);
+        if not (List.exists (String.equal n) t.ui_shell.reads) then
+          t.ui_shell.reads <- n :: t.ui_shell.reads);
     Fun.protect
       ~finally:(fun () -> Pricklypear_lisp.Env.lookup_hook := prev_hook)
       (fun () ->
@@ -1559,7 +1060,7 @@ and refresh_ui_shell (t : t) : unit =
                  | _ ->
                      set_cached
                        (Some (Pricklypear_lisp.Reader.pp_value v))));
-           t.ui_shell_retry_at <- 0.0;
+           t.ui_shell.retry_at <- 0.0;
            ()
          with exn ->
            (* Warn once per retry window, then go quiet. Print the
@@ -1571,318 +1072,83 @@ and refresh_ui_shell (t : t) : unit =
                  ^ string_of_float shell_retry_secs ^ "s): "
                  ^ pp_exn exn));
            set_cached None;
-           t.ui_shell_retry_at <- now +. shell_retry_secs;
+           t.ui_shell.retry_at <- now +. shell_retry_secs;
            ()))
   in
   let () =
-    match Pricklypear_lisp.Env.lookup t.env "ui/nav" with
-    | None -> t.ui_nav_html <- None
+    match Pricklypear_lisp.Env.lookup t.eval_state.env "ui/nav" with
+    | None -> t.ui_shell.nav_html <- None
     | Some _ ->
-        if t.ui_nav_html <> None then
+        if t.ui_shell.nav_html <> None then
           (* Cache present: serve it (bust clears it first). *)
           ()
-        else if now < t.ui_shell_retry_at then
+        else if now < t.ui_shell.retry_at then
           (* Recently failed: skip re-eval + skip warn. *)
           ()
         else
-          refresh "ui/nav" "(ui/nav)" (fun v -> t.ui_nav_html <- v)
+          refresh "ui/nav" "(ui/nav)" (fun v -> t.ui_shell.nav_html <- v)
   in
-  match Pricklypear_lisp.Env.lookup t.env "ui/css" with
-  | None -> t.ui_css <- None
+  match Pricklypear_lisp.Env.lookup t.eval_state.env "ui/css" with
+  | None -> t.ui_shell.css <- None
   | Some _ ->
-      if t.ui_css <> None then
+      if t.ui_shell.css <> None then
         ()
-      else if now < t.ui_shell_retry_at then
+      else if now < t.ui_shell.retry_at then
         ()
       else
-        refresh "ui/css" "(ui/css)" (fun v -> t.ui_css <- v)
+        refresh "ui/css" "(ui/css)" (fun v -> t.ui_shell.css <- v)
 
-and seed_one (t : t) (name : string) : string option =
-  (* promote-window task 7 (2026-09-04): per-package ms on the existing
-     load line — the boot-phase table drills into seed_stdlib here.
-     image.seed-failure-loud (i-1788670156): the error is also RETURNED
-     so seed_stdlib can list every failed package by name in the boot
-     summary, instead of the failure hiding as one stderr line among
-     boot noise (libs/list shipped broken for weeks that way). *)
-  let t0 = Unix.gettimeofday () in
-  let r = load_library t name in
-  let ms = (Unix.gettimeofday () -. t0) *. 1000.0 in
-  (match r with
-   | Ok msg -> Printf.eprintf "[session] %s: %s (%.0f ms)\n%!" name msg ms
-   | Error e ->
-       Printf.eprintf
-         "[session] SEED FAILURE: %s did not load: %s (%.0f ms) — its \
-          defines/routes are missing on this branch\n%!"
-         name e ms);
-  (match r with Error e -> Some e | Ok _ -> None)
+(* ---- Boot seeding + branch bootstrap (boot_seed.ml) ----
+   The additive libs seed, package discovery, the agents-note seed,
+   personal/agent branch bootstrap, and the first-load recipes moved
+   verbatim to Boot_seed (i-1788671109-1). Session supplies the driver
+   ops (load_library / eval_one / rehydrate / checkout_to, all defined
+   above) and re-exports the moved names so the Session.* API —
+   http.ml's recipe_* faces, Boot.boot_personal, attach_identity,
+   loader_test's seed-order pins — is unchanged. *)
+let boot_ops =
+  { Boot_seed.load_library = (fun t name -> load_library t name);
+    Boot_seed.eval_one = (fun t src -> eval_one t src);
+    Boot_seed.rehydrate = rehydrate;
+    Boot_seed.checkout_to = checkout_to }
 
-(** Boot seed order (BORGE-1785211333).
-    Preferred prefix preserves dependency-ish order (std/ui before notes,
-    outline before notes, …). Any other [libs/<name>/lib.pp] is appended
-    alphabetically so adding a package no longer requires an OCaml edit. *)
-and seed_package_priority : string list =
-  (* css before notes: notes/tree-css evaluates (css/sheet …) at define
-     time; if css is unbound the notes load aborts mid-file and routes
-     like /partials/notes-search never seed (notes.search-modal). *)
-  (* theme before ui: default theme/* tokens exist before ui/css first runs. *)
-  [ "std"; "theme"; "weather"; "ui"; "layout"; "welcome"; "ai"; "css"; "html"
-  ; "outline"; "structed"; "notes"; "signup"; "todo"; "contacts"
-  ; "plan"; "chat"; "bookmarks"; "calendar"; "workout"; "flashcards"
-  ; "bible"; "dabar"; "bi"; "ref"; "verify" ]
+let seed_one (t : t) (name : string) : string option =
+  Boot_seed.seed_one ~ops:boot_ops t name
 
-and discover_seed_packages () : string list =
-  let preferred = seed_package_priority in
-  let root = Loader.libs_dir () in
-  let discovered =
-    try
-      Sys.readdir root
-      |> Array.to_list
-      |> List.filter (fun name ->
-             name <> ""
-             && name.[0] <> '_'
-             && name.[0] <> '.'
-             (* Alternate skins (theme-paper, …) load on demand via
-                theme/set → load-library; seeding them would only
-                thrash in-memory theme/* before rehydrate. *)
-             && not (String.starts_with ~prefix:"theme-" name)
-             &&
-             let pp =
-               Filename.concat root (Filename.concat name "lib.pp")
-             in
-             Sys.file_exists pp)
-      |> List.sort String.compare
-    with _ -> []
-  in
-  let extras =
-    List.filter (fun n -> not (List.mem n preferred)) discovered
-  in
-  preferred @ extras
+let seed_package_priority : string list = Boot_seed.seed_package_priority
 
-(** Ensure living agents note exists on system/main after notes seed.
-    Idempotent: skip if slug agents already present. *)
-and seed_agents_note (t : t) : unit =
-  let body =
-    String.concat "\n"
-      [ "# Agents (living AGENTS.md)"
-      ; ""
-      ; "This note is the habitat AGENTS.md. Edit with notes/doc/upsert."
-      ; ""
-      ; "## Entry path"
-      ; "1. Public bootstrap (no secrets): GET /agent.txt and GET /.well-known/agent.json"
-      ; "2. Those docs explain HTTP Basic auth and how to build a REPL client (POST /api/eval)."
-      ; "3. Local helper: pp-eval CLI or curl with Basic auth."
-      ; "4. Then explore live:"
-      ; "   (whoami)"
-      ; "   (list-packages)"
-      ; "   (load-library \"todo\")"
-      ; "   (describe \"todo\")"
-      ; "   (apropos-docs \"todo/item\")"
-      ; "   (function-doc \"todo/item/add\")"
-      ; "   (function-source \"todo/item/add\")"
-      ; ""
-      ; "## Selective discovery"
-      ; "- (list-packages) — top-level package prefixes"
-      ; "- (package-bindings \"pkg\") — all names under pkg/ (any depth)"
-      ; "- (package-exports \"pkg\") — shallow pkg or pkg/local names"
-      ; "- (apropos \"pat\") / (apropos-docs \"pat\") — search names (+ docs)"
-      ; "- (describe \"name-or-pkg\") — one-shot orientation"
-      ; "- Prefer DATA builders from /api/eval; */page handlers need a real HTTP request."
-      ; ""
-      ; "## Libraries"
-      ; "Load before use: std ui notes todo outline bible dabar chat calendar"
-      ; "flashcards bookmarks contacts plan bi weather ref verify ai layout welcome."
-      ]
-  in
-  (* Escape body for a Lisp string literal. *)
-  let escaped =
-    let b = Buffer.create (String.length body + 32) in
-    String.iter
-      (function
-        | '\\' -> Buffer.add_string b "\\\\"
-        | '"' -> Buffer.add_string b "\\\""
-        | '\n' -> Buffer.add_string b "\\n"
-        | c -> Buffer.add_char b c)
-      body;
-    Buffer.contents b
-  in
-  let expr =
-    Printf.sprintf
-      {| (if (null? (notes/doc/get "agents"))
-            (notes/doc/upsert "agents" "Agents (living AGENTS.md)"
-              (outline/node* "root" "Agents (living AGENTS.md)" "%s" "" (list))
-              "" "note" "")
-            "agents-note-exists") |} 
-      escaped
-  in
-  (try
-      let v = eval_one t expr in
-      Printf.eprintf "[session] agents-note: %s\n%!"
-        (Pricklypear_lisp.Reader.pp_value v);
-      ()
-    with exn ->
-      Printf.eprintf "[session] agents-note seed: %s\n%!" (pp_interp_exn exn);
-      ())
+let discover_seed_packages : unit -> string list =
+  Boot_seed.discover_seed_packages
 
-and seed_stdlib (t : t) : unit =
-  (* Package defaults always land on system/main — NEVER on the user's
-     personal branch. Personal inherits main via the recursive CTE; user
-     (define)s write overrides on personal and survive reseed/deploy.
+let seed_agents_note (t : t) : unit = Boot_seed.seed_agents_note ~ops:boot_ops t
 
-     branching.seed-policy OPTION A: boot seed is ADDITIVE —
-     persist_function_if_absent / register_route_if_absent via
-     t.seed_additive. Existing system/main rows (e.g. from promote)
-     are not clobbered on deploy/restart. Explicit (reseed-package)
-     upserts from libs when an admin asks. Interactive load-library
-     still upserts the CURRENT branch.
+let seed_stdlib (t : t) : unit = Boot_seed.seed_stdlib ~ops:boot_ops t
 
-     suppress_refresh_on_define: the eval_one define-interceptor would
-     otherwise fire refresh_ui_shell when ui/nav is defined mid-seed
-     (before notes/capture/nav is bound) and fail with
-     `unbound: notes/capture/nav`. The boot sequence does one explicit
-     refresh_ui_shell AFTER all packages are loaded. *)
-  Store.with_branch t.store ~branch_id:Store.system_main_id (fun () ->
-    t.suppress_refresh_on_define <- true;
-    t.seed_additive <- true;
-    (* image.boot-seed-batch: preload existing fn/route names on
-       system/main once, so persist_function_if_absent /
-       register_route_if_absent skip the per-name get_by_path SELECT
-       (~1800 defines + routes). On a warm DB this collapses the seed
-       to two queries + zero writes. *)
-    Store.begin_seed_names t.store;
-    let started = Unix.gettimeofday () in
-    (* image.seed-failure-loud (i-1788670156): collect per-package load
-       failures so the boot-seed summary names them loudly. *)
-    let failed : string list ref = ref [] in
-    let record_failure name = function
-      | None -> ()
-      | Some e -> failed := (name ^ ": " ^ e) :: !failed
-    in
-    let finally () =
-      let preloaded =
-        match t.store.seed_names with
-        | Some h -> Some (Hashtbl.length h)
-        | None -> None in
-      Store.end_seed_names t.store;
-      t.suppress_refresh_on_define <- false;
-      t.seed_additive <- false;
-      let elapsed_ms =
-        int_of_float ((Unix.gettimeofday () -. started) *. 1000.0) in
-      Printf.eprintf "[session] boot seed: %d packages, %d ms%s%s\n%!"
-        (List.length (discover_seed_packages ())) elapsed_ms
-        (match preloaded with
-         | Some n -> Printf.sprintf " (%d names preloaded)" n
-         | None -> "")
-        (match !failed with
-         | [] -> ""
-         | xs ->
-             Printf.sprintf
-               "\n[session] *** BOOT SEED FAILURES (%d): %s — those \
-                packages' defines/routes are MISSING; fix libs/<pkg> \
-                and reseed ***"
-               (List.length xs) (String.concat " | " xs))
-    in
-    Fun.protect ~finally (fun () ->
-        let pkgs = discover_seed_packages () in
-        Printf.eprintf "[session] seed_stdlib packages (%d): %s\n%!"
-          (List.length pkgs) (String.concat " " pkgs);
-        let rec go = function
-          | [] -> ()
-          | "notes" :: rest ->
-              let () = record_failure "notes" (seed_one t "notes") in
-              let () = seed_agents_note t in
-              go rest
-          | name :: rest ->
-              let () = record_failure name (seed_one t name) in
-              go rest
-        in
-        go pkgs))
+let ensure_personal_branch (t : t) : string option =
+  Boot_seed.ensure_personal_branch t
 
-(** Ensure username/personal exists as an EMPTY child of system/main.
-    Inheritance (not copy) means main defaults stay visible; personal
-    only stores the user's overrides. *)
-and ensure_personal_branch (t : t) : string option =
-  let owner = t.manifest.username in
-  let main_id_opt =
-    Store.lookup_branch_id_by_name t.store ~owner:"system" ~name:"main"
-  in
-  let parent_id =
-    match main_id_opt with
-    | Some id -> id
-    | None -> Store.system_main_id
-  in
-  Store.ensure_branch t.store ~parent_id ~owner ~name:"personal"
+let checkout_personal (t : t) : unit = Boot_seed.checkout_personal ~ops:boot_ops t
 
-and checkout_personal (t : t) : unit =
-  let owner = t.manifest.username in
-  let branch_ref = owner ^ "/personal" in
-  let found =
-    Store.lookup_branch_id_by_name t.store ~owner ~name:"personal"
-  in
-  match found with
-  | None ->
-      Printf.eprintf
-        "[session] personal branch missing; staying on %s\n%!"
-        t.manifest.branch_name;
-      (* Still rehydrate whatever branch we have. *)
-      rehydrate t
-  | Some id ->
-      Printf.eprintf "[session] checkout %s (%s)\n%!" branch_ref id;
-      checkout_to t ~branch_id:id ~branch_ref
+let ensure_agent_branch (t : t) ~(parent_username : string) : string option =
+  Boot_seed.ensure_agent_branch t ~parent_username
 
-(** Agent branch: owner = parent human's username, name = "agent".
-    Sibling of the parent's personal; agent boots here, not in personal. *)
-and ensure_agent_branch (t : t) ~(parent_username : string)
-  : string option =
-  let main_id_opt =
-    Store.lookup_branch_id_by_name t.store ~owner:"system" ~name:"main"
-  in
-  let parent_id =
-    match main_id_opt with
-    | Some id -> id
-    | None -> Store.system_main_id
-  in
-  Store.ensure_branch t.store ~parent_id ~owner:parent_username ~name:"agent"
+let checkout_agent (t : t) ~(parent_username : string) : unit =
+  Boot_seed.checkout_agent ~ops:boot_ops t ~parent_username
 
-and checkout_agent (t : t) ~(parent_username : string) : unit =
-  let branch_ref = parent_username ^ "/agent" in
-  let found =
-    Store.lookup_branch_id_by_name t.store ~owner:parent_username
-      ~name:"agent"
-  in
-  match found with
-  | None ->
-      Printf.eprintf
-        "[session] agent branch missing; staying on %s\n%!"
-        t.manifest.branch_name;
-      rehydrate t
-  | Some id ->
-      Printf.eprintf "[session] checkout %s (%s)\n%!" branch_ref id;
-      checkout_to t ~branch_id:id ~branch_ref
+let recipe_hello (t : t) : (string, string) result =
+  Boot_seed.recipe_hello ~ops:boot_ops t
 
-and recipe_hello (t : t) : (string, string) result =
-  load_library t "hello"
+let recipe_todo (t : t) : (string, string) result =
+  Boot_seed.recipe_todo ~ops:boot_ops t
 
-and recipe_todo (t : t) : (string, string) result =
-  load_library t "todo"
+let recipe_bible (t : t) : (string, string) result =
+  Boot_seed.recipe_bible ~ops:boot_ops t
 
-and recipe_bible (t : t) : (string, string) result =
-  (* Types + API + /bible only — corpus via scripts/seed_bible_bsb.py *)
-  load_library t "bible"
+let recipe_dabar (t : t) : (string, string) result =
+  Boot_seed.recipe_dabar ~ops:boot_ops t
 
-and recipe_dabar (t : t) : (string, string) result =
-  (* Study layer — requires bible/*; Strong's/interlinear via seed scripts *)
-  let r = load_library t "bible" in
-  (match r with
-   | Error e -> (Error e)
-   | Ok _ -> load_library t "dabar")
-
-and recipe_notes (t : t) : (string, string) result =
-  (* Outline-first notes — outline pure lib then notes package *)
-  let r = load_library t "outline" in
-  (match r with
-   | Error e -> (Error e)
-   | Ok _ -> load_library t "notes")
-
+let recipe_notes (t : t) : (string, string) result =
+  Boot_seed.recipe_notes ~ops:boot_ops t
 
 let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
   let env = Pricklypear_lisp.Env.create () in
@@ -1896,17 +1162,20 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
     ref {
       manifest;
       store;
-      env;
-      load_stamp = "";
-      prims = prim_table;  (* temporary; replaced below *)
       routes;
       started_at = Unix.gettimeofday ();
       kernel_catalog = [];  (* filled after all prims register *)
-      ui_nav_html = None;
-      ui_css = None;
-      ui_shell_reads = [];
-      ui_shell_retry_at = 0.0;
-      suppress_refresh_on_define = false;
+      ui_shell =
+        { nav_html = None; css = None; reads = []; retry_at = 0.0;
+          suppress_refresh_on_define = false };
+      eval_state =
+        { env;
+          load_stamp = "";
+          prims = prim_table;  (* temporary; replaced below *)
+          current_package = None;
+          load_skip_names = None;
+          def_journal_seq = 0;
+          thunk_bodies = Hashtbl.create 512 };
       seed_additive = false;
       current_request = None;
       agent_branch_lock = false;
@@ -1914,11 +1183,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
       auth_token = None;
       impact_queue = [];
       change_transcript = [];
-      current_package = None;
-      load_skip_names = None;
       net_streams = Hashtbl.create 16;
-      def_journal_seq = 0;
-      thunk_bodies = Hashtbl.create 512;
     }
   in
   (* Register session-aware primitives (whoami, current-author,
@@ -1931,7 +1196,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
        | None -> (!t).manifest.username)
     ) ~env;
   (* Register the DB-touching control primitives on the prim_table,
-     then rebind t.prims to the populated table. These prims capture
+     then rebind t.eval_state.prims to the populated table. These prims capture
      (!t), so they read/write store+manifest on each invocation. *)
   register_session_control_prims !t prim_table;
   (* HTTP request-context prims (it33): request-method/path/param(s)/body +
@@ -2074,7 +1339,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
       | [ Pricklypear_lisp.Ast.VStr src ]
       | [ Pricklypear_lisp.Ast.VSymbol src ] ->
           Pricklypear_lisp.Eval.eval_string_direct
-            ~prims:Pricklypear_lisp.Eval.empty_prims !t.env
+            ~prims:Pricklypear_lisp.Eval.empty_prims !t.eval_state.env
             ~budget:(Pricklypear_lisp.Eval.make_budget ()) src
       | _ ->
           raise
@@ -2140,14 +1405,14 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
   (* Mutate the prims field in place (rather than building a fresh
      record via { (!t) with prims = ... }). Closures captured by
      register_session_control_prims / register_crud_prims read
-     t.prims at CALL time (e.g. __with_transaction__'s Eval.apply
-     ~prims:t.prims) and need the populated table, not the temporary
+     t.eval_state.prims at CALL time (e.g. __with_transaction__'s Eval.apply
+     ~prims:t.eval_state.prims) and need the populated table, not the temporary
      snapshot from step 3. Lands it29: this was latent until
      with-transaction's body needed to call back into the prim
      registry itself. The earlier control prims (fork/merge/route/
      checkout) didn't trip this because they only invoke Store.*
      functions, never Eval.apply against the prims table. *)
-  (!t).prims <- final_prims;
+  (!t).eval_state.prims <- final_prims;
   (!t).kernel_catalog <- kernel_catalog;
   (* Bind load prims into env (registered after the bulk VPrim bind). *)
   Pricklypear_lisp.Env.define env "load-string" (Pricklypear_lisp.Ast.VPrim "load-string");
@@ -2224,7 +1489,7 @@ let branch_id (t : t) : string = t.manifest.branch_id
     alive for captured closures), so holding this reference is a snapshot.
     routes is cleared in place on rehydrate, so the caller must copy it via
     Request_context.copy_routes when building the snapshot. *)
-let env (t : t) : Pricklypear_lisp.Ast.env = t.env
+let env (t : t) : Pricklypear_lisp.Ast.env = t.eval_state.env
 
 let routes (t : t) : (string, string * string) Hashtbl.t = t.routes
 let auth_token (t : t) : string option = t.auth_token
@@ -2448,13 +1713,13 @@ let is_anonymous (t : t) : bool = t.manifest.username = "anonymous"
 
 let kernel_catalog (t : t) : (string * string) list = t.kernel_catalog
 
-let ui_nav_html (t : t) : string option = t.ui_nav_html
+let ui_nav_html (t : t) : string option = t.ui_shell.nav_html
 
-let set_ui_nav_html (t : t) (s : string option) : unit = t.ui_nav_html <- s
+let set_ui_nav_html (t : t) (s : string option) : unit = t.ui_shell.nav_html <- s
 
-let ui_css (t : t) : string option = t.ui_css
+let ui_css (t : t) : string option = t.ui_shell.css
 
-let set_ui_css (t : t) (s : string option) : unit = t.ui_css <- s
+let set_ui_css (t : t) (s : string option) : unit = t.ui_shell.css <- s
 
 
 let list_pages (t : t) : (string * string) list =
@@ -2502,13 +1767,13 @@ let call_handler (t : t) ?request (handler_name : string)
   : handler_call =
   (* Resolve the handler env against the per-request snapshot when bound
      (image.per-request-context): a concurrent attach_anonymous +
-     checkout_to mid-request would otherwise rehydrate t.env to system/main
-     and this lookup would miss personal-branch handlers. Fall back to t.env
+     checkout_to mid-request would otherwise rehydrate t.eval_state.env to system/main
+     and this lookup would miss personal-branch handlers. Fall back to t.eval_state.env
      when no context (REPL, /api/eval outside HTTP gate, pre-gate paths). *)
   let env =
     match Request_context.get () with
     | Some ctx -> Request_context.env ctx
-    | None -> t.env
+    | None -> t.eval_state.env
   in
   match Pricklypear_lisp.Env.lookup env handler_name with
   | None -> Handler_unbound
@@ -2550,7 +1815,7 @@ let () =
       let ctx =
         Request_context.make
           ~manifest:t.manifest
-          ~env:t.env
+          ~env:t.eval_state.env
           ~routes:(Request_context.copy_routes t.routes)
       in
       Request_context.with_current ctx (fun () ->

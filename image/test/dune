@@ -243,3 +243,8 @@
  (name store_reraise_test)
  (modules store_reraise_test)
  (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt lwt.unix))
+
+(test
+ (name session_split_test)
+ (modules session_split_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main))

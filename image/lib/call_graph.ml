@@ -257,7 +257,7 @@ let take n xs =
 (** After successful function_def write: impact queue + change transcript. *)
 let record_define_side_effects (t : Session_types.t) ~(name : string)
     : unit =
-  if t.suppress_refresh_on_define || t.manifest.username = "anonymous" then
+  if t.ui_shell.suppress_refresh_on_define || t.manifest.username = "anonymous" then
     ()
   else
     let snap = snapshot_of_session t in
