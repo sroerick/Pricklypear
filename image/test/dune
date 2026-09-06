@@ -228,3 +228,13 @@
  (name rls_floor_test)
  (modules rls_floor_test)
  (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt lwt.unix))
+
+(test
+ (name loader_test)
+ (modules loader_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest unix))
+
+(test
+ (name book_roundtrip_test)
+ (modules book_roundtrip_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest yojson))
