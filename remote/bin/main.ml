@@ -28,146 +28,43 @@
 
 open Pricklypear_lisp
 
-let getenv name ~default =
-  match Sys.getenv_opt name with
-  | Some s when s <> "" -> s
-  | Some _ | None -> default
+(* Harness-specific prompt segments: identity, image/tools fact lines,
+   conduct. The shared skeleton (facts block + assembly) lives in
+   llm/lib/harness.ml (i-1788671587-9). NOTE: the trailing spaces inside
+   these lines are intentional — byte-identical to the pre-refactor
+   prompt. *)
+let pre_facts =
+  "You are the pp-remote chat agent: the LLM turn runs LOCALLY on this \n\
+   machine while Nopales evaluation runs against a remote Pricklypear \n\
+   image over a proxy rim. The human operator talks to you through the \n\
+   browser chat surface this process serves. You run as ONE unix process \n\
+   directly on the operator's machine -- no container, no sandbox; your \n\
+   commands affect the operator's real system."
 
-(* Auto-load ./.env if present (KEY=VALUE or `export KEY=VALUE` lines),
-   same as the agent binary — AGENT_API_KEY etc. land without sourcing.
-   Failures are silent (file optional). *)
-let load_dotenv () : unit =
-  let path = ".env" in
-  match open_in path with
-  | exception _ -> ()
-  | ic ->
-    (try
-       while true do
-         let line = String.trim (input_line ic) in
-         if line = "" || line.[0] = '#' then ()
-         else begin
-           let line =
-             if String.length line > 7 && String.sub line 0 7 = "export "
-             then String.trim (String.sub line 7 (String.length line - 7))
-             else line
-           in
-           match String.index_opt line '=' with
-           | Some i ->
-               let k = String.trim (String.sub line 0 i) in
-               let v_raw = String.trim (String.sub line (i + 1) (String.length line - i - 1)) in
-               let v =
-                 let n = String.length v_raw in
-                 if n >= 2
-                    && (v_raw.[0] = '"' && v_raw.[n - 1] = '"'
-                        || v_raw.[0] = '\'' && v_raw.[n - 1] = '\'')
-                 then String.sub v_raw 1 (n - 2)
-                 else v_raw
-               in
-               Unix.putenv k v
-           | None -> ()
-         end
-       done
-     with End_of_file -> ());
-    close_in ic
+let fact_lines ~(image : string) ~(user : string) : string =
+  Printf.sprintf
+    "- image: %s (basic-auth user %s) -- Nopales DB prims (get/create/\n\
+     rows/tree/*...) proxy there per call; whoami/current-author are\n\
+     server-asserted\n\
+     - tools: read, bash, plus Nopales plugin tools registered with\n\
+     (register-tool ...) -- a plugin tool's prim calls cross the proxy rim\n"
+    image user
 
-(* Mock provider: reads a JSON script of turns (same shape as the
-   agent's --mock-script), consumed in order. Mirrors the real
-   provider's streaming contract (fires the reply's text as an
-   on_delta) so the loop path is identical, canned or live. *)
-let parse_mock_script script_path : Provider.reply list =
-  let open Yojson.Safe.Util in
-  let j = Yojson.Safe.from_file script_path in
-  j |> to_list
-  |> List.map (fun t ->
-         let text = t |> member "text" |> to_string_option |> Option.value ~default:"" in
-         let calls =
-           match t |> member "calls" with
-           | `List cs ->
-               List.map
-                 (fun c ->
-                   {
-                     Provider.id = c |> member "id" |> to_string;
-                     name = c |> member "name" |> to_string;
-                     input = c |> member "input";
-                   })
-                 cs
-           | _ -> []
-         in
-         {
-           Provider.text;
-           calls;
-           stop_reason = "stop";
-           raw = `Assoc [ ("role", `String "assistant"); ("content", `String text) ];
-         })
-
-let mock_complete ~(env : Eio_unix.Stdenv.base) ~sw ~cfg ~messages ~tools
-    ~on_delta script_cell
-    : (Provider.reply, string) Result.t =
-  ignore env;
-  ignore sw;
-  ignore cfg;
-  ignore tools;
-  match !script_cell with
-  | [] ->
-      on_delta (Provider.Text "");
-      on_delta Provider.Done;
-      Ok { Provider.text = ""; calls = []; stop_reason = "end_turn"; raw = `Null }
-  | r :: rest ->
-      script_cell := rest;
-      ignore messages;
-      if r.Provider.text <> "" then on_delta (Provider.Text r.Provider.text);
-      on_delta Provider.Done;
-      Ok r
+let post_facts =
+  "Conduct:\n\
+   - Prefer the read and bash tools. Be terse.\n\
+   - For questions about the project, read AGENTS.md/docs in cwd -- do not \n\
+   probe the OS for facts listed above.\n\
+   - Never print secret VALUES (env vars ending in _API_KEY, _TOKEN, \n\
+   _SECRET); reference them by name. Avoid full `env` dumps."
 
 (* One-shot harness identity for the system prompt (pp-remote variant
    of the agent's harness_context): told up front so the model does not
    probe the OS or leak secrets discovering them. *)
-let run_captured (cmd : string) : string =
-  try
-    let ic = Unix.open_process_in cmd in
-    let out = String.trim (In_channel.input_all ic) in
-    match Unix.close_process_in ic with
-    | Unix.WEXITED 0 -> out
-    | _ -> ""
-  with _ -> ""
-
 let harness_context ~(model : string) ~(base_url : string) ~(image : string)
     ~(user : string) : string =
-  let host = try Unix.gethostname () with _ -> "?" in
-  let uname = run_captured "uname -srm" in
-  let cwd = Sys.getcwd () in
-  let tm = Unix.localtime (Unix.gettimeofday ()) in
-  let date =
-    Printf.sprintf "%04d-%02d-%02d %02d:%02d"
-      (tm.Unix.tm_year + 1900) (tm.Unix.tm_mon + 1) tm.Unix.tm_mday
-      tm.Unix.tm_hour tm.Unix.tm_min
-  in
-  Printf.sprintf
-    "You are the pp-remote chat agent: the LLM turn runs LOCALLY on this \n\
-     machine while Nopales evaluation runs against a remote Pricklypear \n\
-     image over a proxy rim. The human operator talks to you through the \n\
-     browser chat surface this process serves. You run as ONE unix process \n\
-     directly on the operator's machine -- no container, no sandbox; your \n\
-     commands affect the operator's real system.\n\
-     \n\
-     Harness facts (told to you here; do NOT probe the OS to discover them):\n\
-     - host: %s (%s)\n\
-     - cwd: %s -- the operator's working directory; treat as project root\n\
-     - date: %s (operator local)\n\
-     - model: %s via %s\n\
-     - image: %s (basic-auth user %s) -- Nopales DB prims (get/create/\n\
-       rows/tree/*...) proxy there per call; whoami/current-author are\n\
-       server-asserted\n\
-     - tools: read, bash, plus Nopales plugin tools registered with\n\
-       (register-tool ...) -- a plugin tool's prim calls cross the proxy rim\n\
-     \n\
-     Conduct:\n\
-     - Prefer the read and bash tools. Be terse.\n\
-     - For questions about the project, read AGENTS.md/docs in cwd -- do not \n\
-       probe the OS for facts listed above.\n\
-     - Never print secret VALUES (env vars ending in _API_KEY, _TOKEN, \n\
-       _SECRET); reference them by name. Avoid full `env` dumps."
-    host (if uname = "" then "?" else uname) cwd date model base_url image user
+  Harness.context ~pre_facts ~fact_lines:(fact_lines ~image ~user) ~post_facts
+    ~model ~base_url
 
 (** ---- local-first lens (borge/local-first.borg Phase 1) ----
 
@@ -233,7 +130,7 @@ let () =
     "pp-remote [--image URL] [--user U --pass P] [-e EXPR]\n\
      \                  [--lens DIR] [--lens-pull NAME] ... [--sync] [--sync-loop] [--serve [--open]]\n\
      \                  [--model NAME] [--base-url URL] [--mock-script FILE]";
-  load_dotenv ();
+  Envcfg.load_dotenv ();
   (* TLS (tls-eio) needs a seeded RNG before any HTTPS proxy call;
      mock transports in the tests never hit TLS, so this slipped.
      Mirage_crypto_rng_unix.use_default wires /dev/urandom + reseeding. *)
@@ -246,9 +143,9 @@ let () =
   let cfg : Http_transport.cfg =
     {
       base_url =
-        Option.value !image ~default:(getenv "PP_URL" ~default:"http://127.0.0.1:18080");
-      user = Option.value !user ~default:(getenv "PP_USER" ~default:"admin");
-      password = Option.value !pass ~default:(getenv "PP_PASS" ~default:"admin");
+        Option.value !image ~default:(Envcfg.getenv "PP_URL" ~default:"http://127.0.0.1:18080");
+      user = Option.value !user ~default:(Envcfg.getenv "PP_USER" ~default:"admin");
+      password = Option.value !pass ~default:(Envcfg.getenv "PP_PASS" ~default:"admin");
     }
   in
   let transport = Http_transport.transport ~env ~sw ~cfg in
@@ -457,19 +354,19 @@ let () =
      image. Mutually exclusive with --sync / REPL / -e. *)
   (if !serve_flag then begin
     let model_name =
-      Option.value !model ~default:(getenv "AGENT_MODEL" ~default:"hf:zai-org/GLM-4.7-Flash")
+      Option.value !model ~default:(Envcfg.getenv "AGENT_MODEL" ~default:"hf:zai-org/GLM-4.7-Flash")
     in
     let provider_base =
       Option.value !base_url
-        ~default:(getenv "AGENT_BASE_URL" ~default:"https://api.synthetic.new/openai/v1")
+        ~default:(Envcfg.getenv "AGENT_BASE_URL" ~default:"https://api.synthetic.new/openai/v1")
     in
     let pcfg : Provider.cfg =
       {
         base_url = provider_base;
-        api_key = getenv "AGENT_API_KEY" ~default:"";
+        api_key = Envcfg.getenv "AGENT_API_KEY" ~default:"";
         model = model_name;
         system =
-          getenv "AGENT_SYSTEM"
+          Envcfg.getenv "AGENT_SYSTEM"
             ~default:(harness_context ~model:model_name ~base_url:provider_base
                         ~image:cfg.base_url ~user:cfg.user);
       }
@@ -479,13 +376,11 @@ let () =
          "[chat] AGENT_API_KEY not set — /chat will fail provider calls; set \n\
           AGENT_API_KEY (or AGENT_BASE_URL/AGENT_MODEL) or pass --mock-script\n%!");
     let script_cell =
-      ref (Option.map parse_mock_script !mock_script |> Option.value ~default:[])
+      ref (Option.map Mock.parse_mock_script !mock_script |> Option.value ~default:[])
     in
     let complete =
       match !mock_script with
-      | Some _ ->
-          (fun ~env ~sw ~cfg ~messages ~tools ~on_delta ->
-             mock_complete ~env ~sw ~cfg ~messages ~tools ~on_delta script_cell)
+      | Some _ -> Mock.complete ~script_cell
       | None -> Provider.Openai.complete
     in
     Http_ui.serve ~env ~sw ~rt:t ~cfg:pcfg ~complete

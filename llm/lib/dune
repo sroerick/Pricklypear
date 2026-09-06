@@ -2,7 +2,7 @@
  (name pricklypear_llm)
  (public_name pricklypear-llm)
  (wrapped false)
- (modules provider loop tools)
+ (modules envcfg harness mock provider loop tools)
  (libraries
   pricklypear-lisp
   pricklypear-common

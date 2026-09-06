@@ -632,6 +632,76 @@ let test_pure_catalog_parity ~rt () =
   Alcotest.check pp_value_testable "length callable (was unbound)"
     (Ast.VInt 2L) (Runtime.eval_string ~rt "(length (list 1 2))")
 
+let contains (s : string) (p : string) : bool =
+  let n = String.length p in
+  let rec go i = i + n <= String.length s && (String.sub s i n = p || go (i + 1)) in
+  go 0
+
+(** harness-context: the shared skeleton (llm/lib/harness.ml) assembles
+    the binary's segments in the documented order with the facts block
+    spliced exactly once (byte-identity to the pre-refactor prompts was
+    verified by an A/B dump; this pins the assembly order). *)
+let test_harness_context_structure () =
+  let out =
+    Harness.context
+      ~pre_facts:"INTRO-PARAGRAPH."
+      ~fact_lines:"- tools: t1\n- image: i1\n"
+      ~post_facts:"Conduct:\n- be terse.\n"
+      ~model:"MODEL9" ~base_url:"URL9"
+  in
+  Alcotest.(check bool) "starts with identity + facts header" true
+    (contains out "INTRO-PARAGRAPH.\n\nHarness facts (told to you here;") ;
+  Alcotest.(check bool) "computed facts spliced" true
+    ((contains out "- host: ")
+     && contains out "- cwd: "
+     && contains out "- date: "
+     && contains out "- model: MODEL9 via URL9\n");
+  Alcotest.(check bool) "fact lines between model and conduct" true
+    ((contains out "- tools: t1\n")
+     && contains out "- image: i1\n\nConduct:\n");
+  Alcotest.(check bool) "ends with the conduct block" true
+    (let suf = "- be terse.\n" in
+     String.length out >= String.length suf
+     && String.sub out (String.length out - String.length suf)
+          (String.length suf) = suf)
+
+(** mock-script: Mock.parse_mock_script reads the canned JSON turns and
+    Mock.complete consumes them in order (text delta per turn, empty
+    end_turn reply once the script runs out). *)
+let test_mock_script_consumption ~env ~sw () =
+  let path = Filename.temp_file "pp_agent_mock" ".json" in
+  let oc = open_out path in
+  output_string oc
+    {|[{"text":"hi","calls":[{"id":"c1","name":"bash","input":{"command":"ls"}}]},
+       {"text":"","calls":[]}]|};
+  close_out oc;
+  let cell = ref (Mock.parse_mock_script path) in
+  let cfg : Provider.cfg =
+    { base_url = ""; api_key = ""; model = "mock"; system = "" }
+  in
+  let events = ref [] in
+  (match Mock.complete ~script_cell:cell ~env ~sw ~cfg ~messages:[] ~tools:[]
+           ~on_delta:(fun d -> events := d :: !events) with
+   | Ok r ->
+      Alcotest.(check string) "turn-1 text" "hi" r.Provider.text;
+      Alcotest.(check int) "turn-1 one call" 1 (List.length r.Provider.calls);
+      Alcotest.(check string) "turn-1 stop_reason" "stop" r.Provider.stop_reason
+   | Error e -> Alcotest.fail e);
+  Alcotest.(check int) "turn-1 fired text+done" 2 (List.length !events);
+  (match Mock.complete ~script_cell:cell ~env ~sw ~cfg ~messages:[] ~tools:[]
+           ~on_delta:(fun _ -> ()) with
+   | Ok r ->
+      Alcotest.(check string) "turn-2 empty text" "" r.Provider.text;
+      Alcotest.(check string) "turn-2 stop_reason" "stop" r.Provider.stop_reason
+   | Error e -> Alcotest.fail e);
+  (match Mock.complete ~script_cell:cell ~env ~sw ~cfg ~messages:[] ~tools:[]
+           ~on_delta:(fun _ -> ()) with
+   | Ok r ->
+      Alcotest.(check string) "exhausted -> end_turn" "end_turn"
+        r.Provider.stop_reason
+   | Error e -> Alcotest.fail e);
+  Sys.remove path
+
 let () =
   Eio_main.run @@ fun env ->
   let rt = Runtime.make () in
@@ -663,6 +733,12 @@ let () =
           Alcotest.test_case "sse-text-and-tool-deltas" `Quick
             test_sse_stream_reconstruction;
         ] );
+      ( "harness-context",
+        [ Alcotest.test_case "structure" `Quick
+            test_harness_context_structure ] );
+      ( "mock-script",
+        [ Alcotest.test_case "consumption" `Quick
+            (test_mock_script_consumption ~env ~sw) ] );
       ( "agent-route-table",
         [ Alcotest.test_case "register-and-render" `Quick
             (test_route_table_register_and_render ~rt)

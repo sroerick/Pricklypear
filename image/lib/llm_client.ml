@@ -324,18 +324,6 @@ let agent_chat
           | Some line ->
               let line = String.trim line in
               if line = "" then loop ()
-              else if String.length line >= 6
-                      && String.sub line 0 6 = "data: " then
-                let data = String.sub line 6 (String.length line - 6) |> String.trim in
-                if data = "[DONE]" then loop ()
-                else begin
-                  (match extract_stream_delta data with
-                   | Some tok ->
-                       Buffer.add_string buf tok;
-                       on_event (Token tok)
-                   | None -> ());
-                  loop ()
-                end
               else if String.length line >= 5
                       && (String.sub line 0 5 = "curl "
                           || String.sub line 0 5 = "curl:") then begin
@@ -343,8 +331,19 @@ let agent_chat
                 on_event (Fail line);
                 let _ = proc#close in
                 (Error line)
-              end else
-                loop ()
+              end
+              else
+                (* Shared SSE [data:] line parse (common/lib/llm_codec.ml);
+                   [extract_stream_delta] already handles "[DONE]". *)
+                (match Llm_codec.sse_data_payload line with
+                 | None -> loop ()
+                 | Some data ->
+                     (match extract_stream_delta data with
+                      | Some tok ->
+                          Buffer.add_string buf tok;
+                          on_event (Token tok)
+                      | None -> ());
+                     loop ())
         in
         loop ()
     with exn ->
