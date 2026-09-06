@@ -25,30 +25,39 @@
 --      Tree_store.recompute_head_hash: sha256 over string_agg of node
 --      hashes ordered by path, own subtree only, nlevel > 1).
 --
--- Strictly ADDITIVE + idempotent + image-applied (registered in
--- schema_migrations so the runner will not re-apply). Re-running is safe:
--- the recomputation is a pure function of body content.
+-- Strictly ADDITIVE + idempotent. Applied by the psql runners — never the
+-- image: scripts/dev.sh (dev) and scripts/openbsd/pricklypear-promote.ksh
+-- (prod), both version-gated on schema_migrations. The UPDATE backfills
+-- are ALSO guarded on that row here (DO block) so a re-apply of the file
+-- by any path — e.g. a runner without the gate — does not redo the
+-- O(all-rows) rehash. Re-running is safe either way: the recomputation is
+-- a pure function of body content.
+DO $migration$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM schema_migrations WHERE version = 27) THEN
 
--- 1) tree_nodes: one domain for every node kind (fn/type/route/datum/
---    note/folder/link — all carry a real body).
-UPDATE tree_nodes
-   SET hash = encode(digest((payload->'body')::text, 'sha256'), 'hex');
+    -- 1) tree_nodes: one domain for every node kind (fn/type/route/datum/
+    --    note/folder/link — all carry a real body).
+    UPDATE tree_nodes
+       SET hash = encode(digest((payload->'body')::text, 'sha256'), 'hex');
 
--- 2) tree_versions: real rows rehash from their captured envelope body;
---    tombstones keep the reserved digest.
-UPDATE tree_versions
-   SET hash = encode(digest((body->'body')::text, 'sha256'), 'hex')
- WHERE (body->>'_tombstone') IS NULL;
+    -- 2) tree_versions: real rows rehash from their captured envelope body;
+    --    tombstones keep the reserved digest.
+    UPDATE tree_versions
+       SET hash = encode(digest((body->'body')::text, 'sha256'), 'hex')
+     WHERE (body->>'_tombstone') IS NULL;
 
--- 3) head_hash aggregates: recompute for every branch from the uniform
---    column (mirrors Tree_store.recompute_head_hash exactly).
-UPDATE tree_branches tb
-   SET head_hash = COALESCE((
-         SELECT encode(digest(string_agg(tn.hash, '' ORDER BY tn.path::text), 'sha256'), 'hex')
-         FROM tree_nodes tn
-        WHERE tn.path <@ tb.root_path AND nlevel(tn.path) > 1
-       ), '');
+    -- 3) head_hash aggregates: recompute for every branch from the uniform
+    --    column (mirrors Tree_store.recompute_head_hash exactly).
+    UPDATE tree_branches tb
+       SET head_hash = COALESCE((
+             SELECT encode(digest(string_agg(tn.hash, '' ORDER BY tn.path::text), 'sha256'), 'hex')
+             FROM tree_nodes tn
+            WHERE tn.path <@ tb.root_path AND nlevel(tn.path) > 1
+           ), '');
 
-INSERT INTO schema_migrations (version, description)
-SELECT 27, 'one-tree hash-domain unification: rehash tree_nodes/tree_versions to digest(jsonb canonical body); recompute head_hash aggregates'
-WHERE NOT EXISTS (SELECT 1 FROM schema_migrations WHERE version = 27);
+    INSERT INTO schema_migrations (version, description)
+    VALUES (27, 'one-tree hash-domain unification: rehash tree_nodes/tree_versions to digest(jsonb canonical body); recompute head_hash aggregates');
+  END IF;
+END
+$migration$;
