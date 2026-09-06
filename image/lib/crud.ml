@@ -438,6 +438,80 @@ let space_members (store : Store.t) ~(caller : string)
              | _ -> None)
            rows)
 
+(** {1 Data history} (branching.shared-data-spaces S3: the log consumer.)
+
+    (data-history 'type id) -> VStr JSON list, NEWEST-FIRST:
+      [{gen, author, created_at, delete, body}]
+    Storage was already free: tree-time's tree_versions (018-021)
+    versions kind=datum on every destructive write, path-keyed, so any
+    compartment's rows get before-images per write. This is only the
+    consumer: resolve the row's CURRENT path through the visibility-
+    confined view (~viewer mirrors ~caller — the space compartment checks
+    the caller's membership, not the authoring function's), then read
+    Tree_store.versioned_history for that path.
+    LIVE ROWS ONLY in v1: a deleted row's path is no longer resolvable
+    through the view, so its history (incl. the tombstone version) is
+    unreachable from this prim until a history-by-id surface lands. *)
+
+let data_history_json (store : Store.t) ~(viewer : string)
+    ~(type_name : string) ~(id : string) : Yojson.Safe.t list =
+  match Io_lwt.Db.current_conn store with
+  | None -> []
+  | Some conn ->
+      let path_opt =
+        let sql =
+          "SELECT path::text FROM " ^ data_rel () ^
+          " WHERE type_name = $1 AND id = $2::uuid AND " ^
+          visible_sql ~user_param:3 in
+        (match
+           Io_lwt.Db.execute conn
+             ~params:[ Pgx.Value.of_string type_name;
+                       Pgx.Value.of_string id;
+                       Pgx.Value.of_string viewer ]
+             sql
+         with
+         | [ [ p ] ] -> Pgx.Value.to_string p
+         | _ -> None)
+      in
+      (match path_opt with
+       | None -> []
+       | Some path ->
+           let vs = Tree_store.versioned_history conn ~path () in
+           (* ASC on gen -> reverse to newest-first *)
+           List.rev_map
+             (fun (v : Tree_store.version) ->
+               let body =
+                 match v.Tree_store.v_body with
+                 | `Assoc a ->
+                     (match List.assoc_opt "body" a with
+                      | Some b -> b
+                      | None -> `Null)
+                 | _ -> `Null
+               in
+               `Assoc
+                 [ ("gen",
+                    (match v.Tree_store.v_gen with
+                     | Some g -> `Intlit (Int64.to_string g)
+                     | None -> `Null))
+                 ; ("author",
+                    (match v.Tree_store.v_author with
+                     | Some a -> `String a
+                     | None -> `Null))
+                 ; ("created_at",
+                    (match v.Tree_store.v_created_at with
+                     | Some t -> `String t
+                     | None -> `Null))
+                 ; ("delete", `Bool v.Tree_store.v_tombstone)
+                 ; ("body", body)
+                 ])
+             vs)
+
+let data_history (store : Store.t) ~(viewer : string)
+    ~(type_name : string) ~(id : string) : value =
+  match data_history_json store ~viewer ~type_name ~id with
+  | [] -> VNil
+  | xs -> VStr (Yojson.Safe.to_string (`List xs))
+
 let create
     (store : Store.t) ~(type_name : string) ~(fields_json : string)
     ~(author : string)
