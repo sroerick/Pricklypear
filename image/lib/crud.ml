@@ -42,12 +42,20 @@ let session_user () : string =
   | Some c -> (Request_context.manifest c).username
   | None -> "anonymous"
 
-(** SQL fragment: row is visible to $N (author match OR seed type).
-    Seed membership derives from the authoritative SQL predicate
-    tree_is_seed_type (migrations/016_seed_single_source.sql) rather than a
-    duplicated IN-list, so CRUD reads never drift from the RLS floor. *)
+(** SQL fragment: row is visible to $N (author match OR seed type OR
+    member space). Seed membership derives from the authoritative SQL
+    predicate tree_is_seed_type (migrations/016_seed_single_source.sql)
+    rather than a duplicated IN-list; space membership derives from
+    tree_path_in_member_space (migrations/029_data_spaces.sql) against
+    the view's exposed path column, so CRUD reads never drift from the
+    RLS floor. Per spec [branching.shared-data-spaces]: space visibility
+    checks the CALLER's membership (pp.user / session user), never the
+    authoring function's — author-runs-as-author does not apply to the
+    space compartment. *)
 let visible_sql ~(user_param : int) : string =
-  Printf.sprintf "(author = $%d OR tree_is_seed_type(type_name))" user_param
+  Printf.sprintf
+    "(author = $%d OR tree_is_seed_type(type_name) OR tree_path_in_member_space(path, $%d))"
+    user_param user_param
 
 (** If [type_name] is declared on the store's branch, validate [fields_json]
     against its field list. Undeclared types are free-form (no schema).
