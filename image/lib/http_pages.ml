@@ -115,6 +115,12 @@ let binding_observability_nodes (session : Session.t)
 let show_binding_page (session : Session.t) (name : string)
     (reqd : Httpun.Reqd.t) : unit =
   let found = Store.lookup_function (Session.store session) name in
+  (* Opaque-body contract (i-1788671083-c): parse at the eval boundary;
+     a malformed body renders like an absent binding, as before. *)
+  let found =
+    Option.bind found (fun (b, a, d) ->
+        Option.map (fun e -> (e, a, d)) (Pricklypear_lisp.Ast.expr_of_body_json b))
+  in
   let body =
     match found with
     | None ->
@@ -572,6 +578,12 @@ let binding_detail_page (session : Session.t) ~(ctx : bindings_ctx)
         else Packages.join_name ~package:pkg ~local
       in
       let found = Store.lookup_function (Session.store session) full in
+  (* Opaque-body contract (i-1788671083-c): parse at the eval boundary;
+     a malformed body is treated like an absent function, as before. *)
+  let found =
+    Option.bind found (fun (b, a, d) ->
+        Option.map (fun e -> (e, a, d)) (Pricklypear_lisp.Ast.expr_of_body_json b))
+  in
       let crumb_pkg = if pkg = "(root)" then "" else pkg in
       let body =
         match found with
@@ -1117,6 +1129,18 @@ let list_bindings_page (session : Session.t) (reqd : Httpun.Reqd.t)
   let defs =
     Store.list_function_names_meta (Session.store session)
   in
+  (* Opaque-body contract (i-1788671083-c): rows carry the RAW jsonb body;
+     parse ONCE here so the bindings ctx (and everything downstream:
+     badges, groups, detail panes) keeps working on parsed exprs.
+     Malformed rows skipped as the store's old decode guard did. *)
+  let defs =
+    List.filter_map
+      (fun (name, body, author, depth) ->
+        match Pricklypear_lisp.Ast.expr_of_body_json body with
+        | Some e -> Some (name, e, author, depth)
+        | None -> None)
+      defs
+  in
   (* Effective view only: one row per name (closest branch wins). *)
   let used_by = used_by_pages_map session in
   let matches_ws (name, _body, author, _depth) =
@@ -1286,6 +1310,12 @@ let missing_editor_card (session : Session.t) (name : string) : Pure_html.node =
 let editor_page (session : Session.t) (name : string) ?(msg = "")
     ?(body_src = "") (reqd : Httpun.Reqd.t) : unit =
   let found = Store.lookup_function (Session.store session) name in
+  (* Opaque-body contract (i-1788671083-c): parse at the eval boundary;
+     a malformed body is treated like an absent function, as before. *)
+  let found =
+    Option.bind found (fun (b, a, d) ->
+        Option.map (fun e -> (e, a, d)) (Pricklypear_lisp.Ast.expr_of_body_json b))
+  in
   let body =
     match found, body_src with
     | _, src when src <> "" ->
@@ -1371,6 +1401,12 @@ let page_inspector (session : Session.t) (path_seg : string)
   | Some handler ->
       let graph = page_function_graph session ~handler in
       let found = Store.lookup_function (Session.store session) handler in
+  (* Opaque-body contract (i-1788671083-c): parse at the eval boundary;
+     a malformed body is treated like an absent function, as before. *)
+  let found =
+    Option.bind found (fun (b, a, d) ->
+        Option.map (fun e -> (e, a, d)) (Pricklypear_lisp.Ast.expr_of_body_json b))
+  in
       let body_block =
         match found with
         | None ->
@@ -1442,10 +1478,22 @@ let page_inspector (session : Session.t) (path_seg : string)
 let inspect_binding_page (session : Session.t) (name : string)
     (reqd : Httpun.Reqd.t) : unit =
   let found = Store.lookup_function (Session.store session) name in
+  (* Opaque-body contract (i-1788671083-c): parse at the eval boundary;
+     a malformed body is treated like an absent function, as before. *)
+  let found =
+    Option.bind found (fun (b, a, d) ->
+        Option.map (fun e -> (e, a, d)) (Pricklypear_lisp.Ast.expr_of_body_json b))
+  in
   let defs = Store.list_function_names (Session.store session) in
+  (* Opaque-body contract (i-1788671083-c): parse at the eval boundary. *)
   let known_fn =
     Pricklypear_lisp.Effect.known_fn_of_bindings
-      (List.map (fun (n, e, _) -> (n, e)) defs)
+      (List.filter_map
+         (fun (n, body, _) ->
+           match Pricklypear_lisp.Ast.expr_of_body_json body with
+           | Some e -> Some (n, e)
+           | None -> None)
+         defs)
   in
   let body =
     match found with

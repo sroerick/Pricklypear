@@ -31,7 +31,7 @@
 module Manifest = Pricklypear_common.Manifest
 
 type t = {
-  cfg : Store.config;
+  cfg : Store_db.config;
   mu : Eio.Mutex.t;
   sessions : (string, Session.t) Hashtbl.t;
   creating : (string, unit Eio.Promise.t * unit Eio.Promise.u) Hashtbl.t;

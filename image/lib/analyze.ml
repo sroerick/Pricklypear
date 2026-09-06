@@ -295,7 +295,13 @@ let llm_analyze ~(fn_name : string) (e : Ast.expr) ~(creds : Llm_client.creds)
 let analyze_function (store : Store.t) ~(author : string)
     ~(user_id : string option) ~(fn_name : string) ~(force_llm : bool)
     : (Yojson.Safe.t, string) result =
-  match Store.lookup_function store fn_name with
+  (* Opaque-body contract (i-1788671083-c): the store hands back the raw
+     jsonb body; parse here at the eval boundary. A malformed body is
+     treated like an absent function, as the store's old decode guard did. *)
+  match
+    Option.bind (Store.lookup_function store fn_name) (fun (b, a, d) ->
+        Option.map (fun e -> (e, a, d)) (Ast.expr_of_body_json b))
+  with
   | None -> Error ("analyze: no function " ^ fn_name)
   | Some (expr, _, _) ->
       let hash = ast_hash expr in
@@ -319,7 +325,10 @@ let analyze_function (store : Store.t) ~(author : string)
 
 let explain_function (store : Store.t) ~(fn_name : string)
     : (string, string) result =
-  match Store.lookup_function store fn_name with
+  match
+    Option.bind (Store.lookup_function store fn_name) (fun (b, a, d) ->
+        Option.map (fun e -> (e, a, d)) (Ast.expr_of_body_json b))
+  with
   | None -> Error ("explain: no function " ^ fn_name)
   | Some (expr, _, _) ->
       let layers = Expl.peel ~fn_name expr in

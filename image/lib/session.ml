@@ -86,7 +86,13 @@ let eval_string_rim (t : t) (input : string) : Pricklypear_lisp.Ast.value =
 let example_eval_engine (t : t) (src : string) : Pricklypear_lisp.Ast.value =
   let known_fn =
     Pricklypear_lisp.Effect.known_fn_of_bindings
-      (List.map (fun (n, e, _) -> (n, e))
+      (List.filter_map
+         (fun (n, body, _) ->
+           (* Opaque-body contract (i-1788671083-c): parse at the eval
+              boundary; malformed rows skipped as before. *)
+           match Pricklypear_lisp.Ast.expr_of_body_json body with
+           | Some e -> Some (n, e)
+           | None -> None)
          (Store.list_function_names t.store))
   in
   Example_eval.eval_source ~env:t.env ~full_prims:t.prims ~known_fn src
@@ -123,6 +129,17 @@ let load_defs (t : t) : unit =
     | None -> name_disabled name
   in
   let defs = Store.list_function_names_for_load t.store in
+  (* Opaque-body contract (i-1788671083-c): rows carry the RAW jsonb body;
+     parse here at the interpreter boundary. A malformed row is skipped,
+     exactly as the store's old per-row decode guard did. *)
+  let defs =
+    List.filter_map
+      (fun (name, body_json, author, pkg, branch_id, updated_at) ->
+        match Pricklypear_lisp.Ast.expr_of_body_json body_json with
+        | Some body -> Some (name, body, author, pkg, branch_id, updated_at)
+        | None -> None)
+      defs
+  in
   (* Kernel prim names already bound as VPrim on rehydrate. Never let a
      stale function_defs row re-poison them (BORGE-1785213238). *)
   let is_kernel_prim name =
@@ -279,7 +296,7 @@ let rehydrate_incremental (t : t) : unit =
   if delta.Def_journal.overflow then full ()
   else
     (try
-       let chain = Store.branch_chain t.store ~branch_id:t.store.Store.branch_id in
+       let chain = Store.branch_chain t.store ~branch_id:t.store.Store_db.branch_id in
        let in_chain b = List.mem b chain in
        let ups =
          List.filter (fun (b, _) -> in_chain b) delta.Def_journal.ups in
@@ -314,6 +331,17 @@ let rehydrate_incremental (t : t) : unit =
              List.exists (fun (n, _) -> n = name) t.kernel_catalog in
            let bodies =
              Store.list_function_bodies_for t.store ~pairs:ups in
+           (* Opaque-body contract (i-1788671083-c): parse at the eval
+              boundary; malformed rows skipped as the store's old decode
+              guard did. *)
+           let bodies =
+             List.filter_map
+               (fun (name, body_json, author, pkg) ->
+                 match Pricklypear_lisp.Ast.expr_of_body_json body_json with
+                 | Some body -> Some (name, body, author, pkg)
+                 | None -> None)
+               bodies
+           in
            (* a row may legitimately be gone already (removed between
               events) — only bail when we got NONE of what we asked for
               and asked for several *)
@@ -814,7 +842,7 @@ let register_session_control_prims (t : t) (tbl : Primitives.t) : unit =
                (Pricklypear_lisp.Ast.VStr
                   (Printf.sprintf "denied: branch %s is owned by %s"
                      t.manifest.branch_name cur_owner))
-             else if t.store.Store.branch_id = Store.system_main_id then
+             else if t.store.Store_db.branch_id = Store.system_main_id then
                (Pricklypear_lisp.Ast.VStr
                   (Yojson.Safe.to_string
                      (`Assoc [ "pruned", `Int 0;
@@ -1106,11 +1134,14 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value =
     let v = eval_string_rim t input in
     let pkg = t.current_package in
     let persist_fn name body_expr doc =
+      (* Opaque-body contract (i-1788671083-c): the store persists the raw
+         jsonb body; serialization happens here at the eval boundary. *)
+      let body_json = Pricklypear_lisp.Ast.expr_to_body_json body_expr in
       if t.seed_additive then
-        Store.persist_function_if_absent t.store name body_expr ~doc
+        Store.persist_function_if_absent t.store name body_json ~doc
           ~package:pkg t.manifest.username
       else
-        Store.persist_function t.store name body_expr ~doc
+        Store.persist_function t.store name body_json ~doc
           ~package:pkg t.manifest.username
     in
     let persist_define name body_expr doc =
@@ -1308,11 +1339,14 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
   let v = eval_expr_rim t expr in
   let pkg = t.current_package in
   let persist_fn name body_expr doc =
+    (* Opaque-body contract (i-1788671083-c): the store persists the raw
+       jsonb body; serialization happens here at the eval boundary. *)
+    let body_json = Pricklypear_lisp.Ast.expr_to_body_json body_expr in
     if t.seed_additive then
-      Store.persist_function_if_absent t.store name body_expr ~doc
+      Store.persist_function_if_absent t.store name body_json ~doc
         ~package:pkg t.manifest.username
     else
-      Store.persist_function t.store name body_expr ~doc
+      Store.persist_function t.store name body_json ~doc
         ~package:pkg t.manifest.username
   in
   let persist_define name body_expr doc =
@@ -1409,14 +1443,16 @@ and load_library (t : t) (name : string) : (string, string) result =
         t.kernel_catalog;
       let tbl = Hashtbl.create 1024 in
       List.iter
-        (fun (name, body, _author, pkg, doc) ->
+        (fun (name, body_json, _author, pkg, doc) ->
           let hidden =
             match pkg with
             | Some p -> Hashtbl.mem disabled_set p || name_disabled name
             | None -> name_disabled name
           in
-          if hidden || Hashtbl.mem kernel_set name then ()
-          else
+          match (if hidden || Hashtbl.mem kernel_set name then None
+                 else Pricklypear_lisp.Ast.expr_of_body_json body_json) with
+          | None -> ()  (* hidden, or malformed row: skip as before *)
+          | Some body ->
             Hashtbl.replace tbl name
               (Pricklypear_lisp.Reader.pp_expr body ^ "\x00"
                ^ (match doc with Some d -> d | None -> "")))

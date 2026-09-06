@@ -347,6 +347,13 @@ let branch_detail_page (session : Session.t) (reqd : Httpun.Reqd.t)
             let child =
               Store.lookup_function_on_branch store ~branch_id:bid ~name:dname
             in
+            let child =
+              (* Opaque-body contract (i-1788671083-c): parse at the
+                 boundary; malformed body renders as (missing), as before. *)
+              Option.bind child (fun (b, a, u, d) ->
+                  Option.map (fun e -> (e, a, u, d))
+                    (Pricklypear_lisp.Ast.expr_of_body_json b))
+            in
             [ HTML.div [HTML.class_ "card"]
                   [ HTML.h2 [] [txt "Diff: %s (no parent)" dname]
                   ; (match child with
@@ -363,6 +370,15 @@ let branch_detail_page (session : Session.t) (reqd : Httpun.Reqd.t)
             let parent =
               Store.lookup_function_on_branch store ~branch_id:pid ~name:dname
             in
+            (* Opaque-body contract (i-1788671083-c): rows carry the RAW
+               jsonb body; parse at the boundary. A malformed body renders
+               like an absent side, as the old store decode guard did. *)
+            let parse opt =
+              Option.bind opt (fun (b, a, u, d) ->
+                  Option.map (fun e -> (e, a, u, d))
+                    (Pricklypear_lisp.Ast.expr_of_body_json b))
+            in
+            let child = parse child and parent = parse parent in
             let show = function
               | None -> "(absent)"
               | Some (e, _, _, _) -> Pricklypear_lisp.Reader.pp_expr e
@@ -836,9 +852,25 @@ let diff_status_cls : Store.diff_status -> string = function
     plain body/handler text. *)
 let diff_detail (r : Store.branch_diff_row) : Pure_html.node =
   let pre s = HTML.pre [] [txt "%s" s] in
+  (* Opaque-body contract (i-1788671083-c): diff rows carry the RAW stored
+     text; pretty-printing + AST parsing happen here at the rendering
+     boundary — byte-identical to the old store-side [pp] (parse →
+     pp_expr, raw fallback) and [ex] (parse for fn AST deltas). *)
+  let pretty kind = function
+    | None -> None
+    | Some bs when kind = Store.DiffFn ->
+        (match Pricklypear_lisp.Ast.expr_of_body_json bs with
+         | Some e -> Some (Pricklypear_lisp.Reader.pp_expr e)
+         | None -> Some bs)
+    | Some bs -> Some bs
+  in
+  let expr_of = function
+    | None -> None
+    | Some bs -> Pricklypear_lisp.Ast.expr_of_body_json bs
+  in
   match r.Store.diff_status with
   | Store.DiffModified when r.Store.diff_kind = Store.DiffFn ->
-      (match r.Store.from_expr, r.Store.to_expr with
+      (match expr_of r.Store.from_body, expr_of r.Store.to_body with
        | Some fe, Some te ->
            HTML.details [HTML.class_ "explain-panel"]
              [ HTML.summary [] [txt "AST delta"]
@@ -849,12 +881,14 @@ let diff_detail (r : Store.branch_diff_row) : Pure_html.node =
                      [ HTML.div []
                          [ HTML.span [HTML.class_ "muted"]
                              [txt "from: "]
-                         ; pre (Option.value ~default:"" r.Store.from_body)
+                         ; pre (Option.value ~default:""
+                                  (pretty r.Store.diff_kind r.Store.from_body))
                          ]
                      ; HTML.div []
                          [ HTML.span [HTML.class_ "muted"]
                              [txt "to:   "]
-                         ; pre (Option.value ~default:"" r.Store.to_body)
+                         ; pre (Option.value ~default:""
+                                  (pretty r.Store.diff_kind r.Store.to_body))
                          ]
                      ]
                  ] ]
@@ -864,16 +898,16 @@ let diff_detail (r : Store.branch_diff_row) : Pure_html.node =
         [ HTML.summary [] [txt "body"]
         ; pre
             (Printf.sprintf "from: %s\nto:   %s"
-               (Option.value ~default:"" r.Store.from_body)
-               (Option.value ~default:"" r.Store.to_body)) ]
+               (Option.value ~default:"" (pretty r.Store.diff_kind r.Store.from_body))
+               (Option.value ~default:"" (pretty r.Store.diff_kind r.Store.to_body))) ]
   | Store.DiffAdded ->
       HTML.details [HTML.class_ "explain-panel"]
         [ HTML.summary [] [txt "body"]
-        ; pre (Option.value ~default:"" r.Store.to_body) ]
+        ; pre (Option.value ~default:"" (pretty r.Store.diff_kind r.Store.to_body)) ]
   | Store.DiffRemoved ->
       HTML.details [HTML.class_ "explain-panel"]
         [ HTML.summary [] [txt "body"]
-        ; pre (Option.value ~default:"" r.Store.from_body) ]
+        ; pre (Option.value ~default:"" (pretty r.Store.diff_kind r.Store.from_body)) ]
 
 (** GET /diff?from=owner/name&to=owner/name — private branch diff page. *)
 let diff_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =

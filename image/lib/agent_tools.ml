@@ -64,7 +64,11 @@ let define_binding (t : t) ~(name : string) ~(body_src : string)
       (match Pricklypear_lisp.Eval.parse_top_define expr with
        | Some { name = n; body = body_expr; doc } ->
            let () =
-             Store.persist_function t.store n body_expr ~doc author
+             (* Opaque-body contract (i-1788671083-c): serialize at the
+                eval boundary; the store persists raw jsonb. *)
+             Store.persist_function t.store n
+               (Pricklypear_lisp.Ast.expr_to_body_json body_expr)
+               ~doc author
            in
            (* Stale chrome nav was the "bible only on home" bug: home
               live-calls ui/nav; other pages used a cached string. *)
@@ -100,7 +104,16 @@ let ai_allow_set () =
 let known_fn_from_store (t : t)
   : Pricklypear_lisp.Effect.known_fn_lookup =
   let rows = Store.list_function_names t.store in
-  let bindings = List.map (fun (n, e, _) -> (n, e)) rows in
+  (* Opaque-body contract (i-1788671083-c): parse at the eval boundary;
+     malformed rows skipped as the store's old decode guard did. *)
+  let bindings =
+    List.filter_map
+      (fun (n, body, _) ->
+        match Pricklypear_lisp.Ast.expr_of_body_json body with
+        | Some e -> Some (n, e)
+        | None -> None)
+      rows
+  in
   (Pricklypear_lisp.Effect.known_fn_of_bindings bindings)
 
 let check_ai_body_effects ?(known_fn = fun _ -> None)
@@ -185,6 +198,12 @@ let install_ai_function (t : t) ~(name : string) ~(body_src : string)
     Special forms are not stored; return a short language card instead. *)
 let function_source (t : t) (name : string) : string option =
   let found = Store.lookup_function t.store name in
+  (* Opaque-body contract (i-1788671083-c): parse at the eval boundary;
+     a malformed body is treated like an absent function, as before. *)
+  let found =
+    Option.bind found (fun (b, a, d) ->
+        Option.map (fun e -> (e, a, d)) (Pricklypear_lisp.Ast.expr_of_body_json b))
+  in
   match found with
   | Some (expr, _, _) ->
       (Some (Pricklypear_lisp.Reader.pp_expr expr))
@@ -213,6 +232,12 @@ let function_source (t : t) (name : string) : string option =
 let function_ast (t : t) (name : string)
   : Pricklypear_lisp.Ast.value option =
   let found = Store.lookup_function t.store name in
+  (* Opaque-body contract (i-1788671083-c): parse at the eval boundary;
+     a malformed body is treated like an absent function, as before. *)
+  let found =
+    Option.bind found (fun (b, a, d) ->
+        Option.map (fun e -> (e, a, d)) (Pricklypear_lisp.Ast.expr_of_body_json b))
+  in
   match found with
   | Some (expr, _, _) ->
       (Some (Pricklypear_lisp.Eval.quote_to_value expr))
@@ -537,6 +562,12 @@ let propose_function (t : t) ~(name : string) ~(spec : string)
 (** Pretty-print a stored function body, or default stub. *)
 let current_fn_pretty (t : t) (name : string) : string =
   let found = Store.lookup_function t.store name in
+  (* Opaque-body contract (i-1788671083-c): parse at the eval boundary;
+     a malformed body is treated like an absent function, as before. *)
+  let found =
+    Option.bind found (fun (b, a, d) ->
+        Option.map (fun e -> (e, a, d)) (Pricklypear_lisp.Ast.expr_of_body_json b))
+  in
   match found with
   | Some (expr, _, _) ->
       (Pricklypear_lisp.Reader.pp_expr expr)
@@ -925,7 +956,16 @@ let run_agent_tool (t : t) ~(name : string) ~(arguments : string)
              (* Phase 3: same public-route effect gate as (route … 'public). *)
              let gate =
                if vis = "public" then begin
-                 let rows = Store.list_function_names t.store in
+                 (* Opaque-body contract (i-1788671083-c): parse at the
+                    eval boundary; malformed rows skipped as before. *)
+                 let rows =
+                   List.filter_map
+                     (fun (n, body, a) ->
+                       match Pricklypear_lisp.Ast.expr_of_body_json body with
+                       | Some e -> Some (n, e, a)
+                       | None -> None)
+                     (Store.list_function_names t.store)
+                 in
                  let known_fn =
                    Pricklypear_lisp.Effect.known_fn_of_bindings
                      (List.map (fun (n, e, _) -> (n, e)) rows)
