@@ -105,7 +105,7 @@
     (let
       ((t (as-str s)))
       (wiki/extract-json-scan t 0 () ()))))
-  "Extract the first balanced {...} JSON object from a string; "{}" when none."
+  "Extract the first balanced {...} JSON object from a string; \"{}\" when none."
 
 (define wiki/extract-json-scan
   (lambda

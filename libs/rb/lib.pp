@@ -182,8 +182,12 @@
 (define (impact s) "Opt: impact key/value." (cons "impact" s))
 (define (unlocks s) "Opt: unlocks key/value." (cons "unlocks" s))
 
-(define (plan batches-per-month starter)
+(define (rb/plan batches-per-month starter)
   "Build a plan alist (batches and starter recipe)."
+  ;; Renamed from unprefixed plan (i-1788685367): libs/plan defines its
+  ;; own 1-param plan ("Set user plan"), and under the seed store-winner
+  ;; rules that other plan would resolve at request time once the data
+  ;; defines below became functions — prefix keeps rb self-contained.
   (list
     (cons "batches_per_month" batches-per-month)
     (cons "starter_recipe" starter)))
@@ -500,7 +504,7 @@
   "Seed every bundled recipe, skipping ones already present."
   (seq
     (rb/init-storage!)
-    (rb/seed-recipes rb/all-recipes)))
+    (rb/seed-recipes (rb/all-recipes))))
 
 (define (rb/seed-recipes recipes)
   "Seed a list of (name . recipe-alist) pairs that are not yet stored."
@@ -532,7 +536,7 @@
 ;; SHARED BLOCKS
 ;; ============================================================
 
-(define rb/ginger-bug-base
+(define (rb/ginger-bug-base)
   (shared "ginger-bug-base"
     (list
       (ingredient "Ginger bug starter" (qty 500 "mL") (qty 1 "L") 10.00
@@ -550,7 +554,7 @@
 ;; RECIPES
 ;; ============================================================
 
-(define rb/simple-root-beer
+(define (rb/simple-root-beer)
   (recipe "Simple Root Beer" (qty 6 "L")
     (list
       (ingredient "Ginger bug starter" (qty 300 "mL") (qty 1 "L") 10.00
@@ -592,10 +596,10 @@
           (pkg-cost "Breakage reserve" (qty 12 "each") (qty 96 "each") 5.00
             (list (note "~5% replacement rate for caps/gaskets."))))))))
 
-(define rb/root-beer
+(define (rb/root-beer)
   (recipe "Ginger Bug Root Beer" (qty 10 "L")
     (list
-      (uses rb/ginger-bug-base)
+      (uses (rb/ginger-bug-base))
       (ingredient "Sarsaparilla root" (qty 0.42 "lb") (qty 1 "lb") 22.00
         (list (source "Starwest Botanicals")
               (url "https://www.starwest-botanicals.com/sarsaparilla-root-whole-csw.html")
@@ -646,10 +650,10 @@
       (mixed "Half 1L + Half 500mL"
         (list (cons "1L Flip-Top" 5) (cons "500mL Flip-Top" 10))))))
 
-(define rb/ginger-ale
+(define (rb/ginger-ale)
   (recipe "Ginger Ale" (qty 10 "L")
     (list
-      (uses rb/ginger-bug-base)
+      (uses (rb/ginger-bug-base))
       (ingredient "Fresh ginger" (qty 1.5 "lb") (qty 1 "lb") 5.50
         (list (source "Any grocery / Asian market")
               (note "For syrup method: grate or slice thin, simmer with sugar and water, strain before mixing. Start with 1.5 lb for 10L, adjust to taste.")))
@@ -681,10 +685,10 @@
       (mixed "Market mix"
         (list (cons "1L Flip-Top" 4) (cons "500mL Flip-Top" 12))))))
 
-(define rb/lemonade
+(define (rb/lemonade)
   (recipe "Ginger Bug Lemonade" (qty 10 "L")
     (list
-      (uses rb/ginger-bug-base)
+      (uses (rb/ginger-bug-base))
       (ingredient "Fresh lemons" (qty 20 "each") (qty 20 "each") 18.00
         (list (source "Any grocery / Costco")
               (note "Bag of 20 lemons ~$18. Organic costs more. Check farmers markets for better pricing.")))
@@ -714,10 +718,10 @@
       (mixed "Market mix"
         (list (cons "1L Flip-Top" 4) (cons "500mL Flip-Top" 12))))))
 
-(define rb/cola
+(define (rb/cola)
   (recipe "Ginger Bug Cola" (qty 10 "L")
     (list
-      (uses rb/ginger-bug-base)
+      (uses (rb/ginger-bug-base))
       (ingredient "Kola nut" (qty 0.35 "lb") (qty 1 "lb") 24.00
         (list (source "American Bulk Herbs / KolaNutWholesale")
               (url "https://www.kolanutwholesale.com/")
@@ -764,7 +768,7 @@
       (mixed "Balanced split"
         (list (cons "1L Flip-Top" 5) (cons "500mL Flip-Top" 10))))))
 
-(define rb/happy-ginger
+(define (rb/happy-ginger)
   (recipe "Happy Ginger Ginger Beer" (qty 9.6 "L")
     (list
       (ingredient "Ginger bug starter" (qty 480 "mL") (qty 1 "L") 0.00
@@ -819,7 +823,7 @@
           (pkg-cost "Breakage reserve" (qty 19 "each") (qty 96 "each") 5.00
             (list (note "~5% replacement rate for caps/gaskets."))))))))
 
-(define rb/traditional-root-beer
+(define (rb/traditional-root-beer)
   (recipe "Traditional Root Beer" (qty 9.6 "L")
     (list
       (ingredient "Ginger bug starter" (qty 480 "mL") (qty 1 "L") 0.00
@@ -882,7 +886,7 @@
           (pkg-cost "Breakage reserve" (qty 19 "each") (qty 96 "each") 5.00
             (list (note "~5% replacement rate for caps/gaskets."))))))))
 
-(define rb/experimental-004
+(define (rb/experimental-004)
   (recipe "Experimental Root Beer 004: 1896 edition" (qty 6 "L")
     (list
       (ingredient "Ginger bug starter" (qty 300 "mL") (qty 1 "L") 0.00
@@ -944,11 +948,11 @@
 ;; BUSINESS CONFIG (from business.rb)
 ;; ============================================================
 
-(define rb/fixed-costs
+(define (rb/fixed-costs)
   (list
     (fixed-cost "Booth rent" 60.00)))
 
-(define rb/equipment-list
+(define (rb/equipment-list)
   (list
     (equipment "2-gal glass jar with airlock" 23.58 1
       (list (impact "Ferment a 10L batch in one vessel")
@@ -976,14 +980,14 @@
             (source "MoreBeer")
             (url "https://morebeer.com/products/folding-instant-read-digital-thermometer")))))
 
-(define rb/plan-config
-  (plan 4 "Ginger Bug Root Beer"))
+(define (rb/plan-config)
+  (rb/plan 4 "Ginger Bug Root Beer"))
 
 ;; ============================================================
 ;; OPERATING LOG (from batch_logs/ and orders/)
 ;; ============================================================
 
-(define rb/batches
+(define (rb/batches)
   (list
     (brew "2026-06-05" "Ginger Ale" 3.16 (list (packaged "500mL PET" 8)) 3 "light" 6
       "Ginger bug was weak, carbonation suffered. Too sweet (145 g/L). Lemon+vanilla combo was iffy. Some said 'tastes like Chinese food but in the best way.' Next time: reduce ginger to 180g, cut sugar, swap lemon for lime or pineapple.")
@@ -994,7 +998,7 @@
     (brew "2026-07-12" "Experimental Root Beer 004: 1896 edition" 6.0 (list (packaged "500mL PET" 12)) 7 () 7
       "Brewed 2026-07-05 (kitchen-sink herb haul); bottled ~2026-07-12. Molasses later diagnosed as 100% the off-flavor (dropped in Traditional Root Beer v2). Selling as Experimental 004 / 1896 edition.")))
 
-(define rb/purchases
+(define (rb/purchases)
   (list
     (bought "Sassafras root bark" (qty 454 "g") 128.99 "2026-06-12"
       (list (source "Mountain Rose Herbs") (note "SKU 11-00466-17. $112.50 + $16.49 shipping. Cut & sifted sassafras bark.")))
@@ -1019,21 +1023,21 @@
 ;; ALL RECIPES registry
 ;; ============================================================
 
-(define rb/all-recipes
+(define (rb/all-recipes)
   (list
-    (cons "Simple Root Beer" rb/simple-root-beer)
-    (cons "Ginger Bug Root Beer" rb/root-beer)
-    (cons "Ginger Ale" rb/ginger-ale)
-    (cons "Ginger Bug Lemonade" rb/lemonade)
-    (cons "Ginger Bug Cola" rb/cola)
-    (cons "Happy Ginger Ginger Beer" rb/happy-ginger)
-    (cons "Traditional Root Beer" rb/traditional-root-beer)
-    (cons "Experimental Root Beer 004: 1896 edition" rb/experimental-004)))
+    (cons "Simple Root Beer" (rb/simple-root-beer))
+    (cons "Ginger Bug Root Beer" (rb/root-beer))
+    (cons "Ginger Ale" (rb/ginger-ale))
+    (cons "Ginger Bug Lemonade" (rb/lemonade))
+    (cons "Ginger Bug Cola" (rb/cola))
+    (cons "Happy Ginger Ginger Beer" (rb/happy-ginger))
+    (cons "Traditional Root Beer" (rb/traditional-root-beer))
+    (cons "Experimental Root Beer 004: 1896 edition" (rb/experimental-004))))
 
 ;; lookup recipe by name
 (define (rb/find-recipe name)
   "Look up a recipe alist by name."
-  (rb/get name rb/all-recipes))
+  (rb/get name (rb/all-recipes)))
 
 ;; calc one recipe with first package option + fixed costs
 ;; returns (name . report) or (name . error-string)
@@ -1045,13 +1049,13 @@
       (let ((pkgs (rb/get "packages" r)))
         (if (null? pkgs)
             (cons name "no packages")
-          (let ((biz (rb/business r (car pkgs) rb/fixed-costs)))
-            (cons name (rb/monthly-report biz rb/plan-config))))))))
+          (let ((biz (rb/business r (car pkgs) (rb/fixed-costs))))
+            (cons name (rb/monthly-report biz (rb/plan-config)))))))))
 
 ;; calc all recipes -> list of (name . report)
 (define (rb/calc-all)
   "Monthly report for every recipe."
-  (rb/map (lambda (pair) (rb/calc-one (car pair))) rb/all-recipes))
+  (rb/map (lambda (pair) (rb/calc-one (car pair))) (rb/all-recipes)))
 ;; libs/rb/ui.pp — rb route handlers (htmx, server-rendered)
 ;; Depends on: libs/rb/lib.pp, libs/rb/recipes.pp, html package
 
@@ -1097,7 +1101,7 @@
       (list
         (rb/h1 "Recipes")
         (rb/table
-          (rb/map rb/recipe-row rb/all-recipes))))))
+          (rb/map rb/recipe-row (rb/all-recipes)))))))
 
 (define (rb/recipe-row pair)
   "HTML table row for one recipe with key figures."
@@ -1184,7 +1188,7 @@
 
 (define (rb/package-row r pk)
   "HTML row for one package option and its margins."
-  (let ((biz (rb/business r pk rb/fixed-costs)))
+  (let ((biz (rb/business r pk (rb/fixed-costs))))
     (rb/tr (list
       (rb/td (rb/get "product_name" pk))
       (rb/td (as-str (rb/get "units_per_batch" pk)))
@@ -1268,7 +1272,7 @@
   (rb/table
     (cons
       (rb/tr (list (rb/th "Priority") (rb/th "Item") (rb/th "Price") (rb/th "Impact") (rb/th "Unlocks")))
-      (rb/map rb/equipment-row rb/equipment-list))))
+      (rb/map rb/equipment-row (rb/equipment-list)))))
 
 (define (rb/equipment-row e)
   "HTML row for one equipment entry."
@@ -1284,7 +1288,7 @@
   (rb/table
     (cons
       (rb/tr (list (rb/th "Name") (rb/th "Monthly cost")))
-      (rb/map rb/fixed-cost-row rb/fixed-costs))))
+      (rb/map rb/fixed-cost-row (rb/fixed-costs)))))
 
 (define (rb/fixed-cost-row f)
   "HTML row for one fixed-cost entry."
@@ -1345,7 +1349,7 @@
   (rb/table
     (cons
       (rb/tr (list (rb/th "Date") (rb/th "Recipe") (rb/th "Yield") (rb/th "Packaged") (rb/th "Rating")))
-      (rb/map rb/batch-row rb/batches))))
+      (rb/map rb/batch-row (rb/batches)))))
 
 (define (rb/batch-row b)
   "HTML row for one batch log entry."
@@ -1374,7 +1378,7 @@
   (rb/table
     (cons
       (rb/tr (list (rb/th "Date") (rb/th "Item") (rb/th "Qty") (rb/th "Price") (rb/th "Source")))
-      (rb/map rb/purchase-row rb/purchases))))
+      (rb/map rb/purchase-row (rb/purchases)))))
 
 (define (rb/purchase-row p)
   "HTML row for one purchase entry."
@@ -1539,8 +1543,8 @@
   (rb/table
     (list
       (rb/tr (list (rb/th "Metric") (rb/th "Value")))
-      (rb/tr (list (rb/td "Batches/month") (rb/td (as-str (rb/get "batches_per_month" rb/plan-config)))))
-      (rb/tr (list (rb/td "Starter recipe") (rb/td (rb/get "starter_recipe" rb/plan-config)))))))
+      (rb/tr (list (rb/td "Batches/month") (rb/td (as-str (rb/get "batches_per_month" (rb/plan-config))))))
+      (rb/tr (list (rb/td "Starter recipe") (rb/td (rb/get "starter_recipe" (rb/plan-config))))))))
 
 ;; ============================================================
 ;; ROUTES

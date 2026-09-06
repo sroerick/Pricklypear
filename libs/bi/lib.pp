@@ -117,7 +117,7 @@
             "created_at"
             (date-today))))
       "published")))
-  "Install a new bi/dashboard-html source body and record a dashboard-revision; returns "published"."
+  "Install a new bi/dashboard-html source body and record a dashboard-revision; returns \"published\"."
 
 (define bi/dashboard/read
   (lambda
@@ -351,7 +351,7 @@
           0)
         0)
       "seeded")))
-  "Insert sample expense/revenue rows when empty; returns "seeded"."
+  "Insert sample expense/revenue rows when empty; returns \"seeded\"."
 
 (define bi/spec-expense-bars
   (lambda

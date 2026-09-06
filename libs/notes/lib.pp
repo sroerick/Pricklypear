@@ -4006,9 +4006,13 @@
   "Split a folder into non-empty segments.")
 
 (define notes/tree/style
-  (lambda () (html/tag "style" "" notes/tree/style-css)))
+  (lambda () (html/tag "style" "" (notes/tree/style-css))))
 
-(define notes/tree/style-css
+;; Zero-arg function, not a value define: the additive boot-seed skip
+;; leaves an existing sibling (notes/tree-css) unbound in the seed env,
+;; so a value define calling it raises unbound on warm DBs
+;; (i-1788685367, the rb/plan-config class).
+(define (notes/tree/style-css)
   (string-append
     (css/render notes/tree-css)
     (css/render notes/tree-css-patch)
