@@ -38,7 +38,7 @@ let test_plugin_lifecycle ~rt () =
    | _ -> Alcotest.fail "list-commands not a string");
   (* tool registered *)
   Alcotest.(check bool) "greet registered" true
-    (Hashtbl.mem rt.Runtime.tools "greet");
+    (Hashtbl.mem rt.seam.tools "greet");
   (* tool_call handler fires *)
   let results =
     Runtime.fire rt "tool_call"
@@ -604,7 +604,7 @@ let test_turn_replay_nested_blocks ~rt () =
   in
   ignore (Runtime.eval_string ~rt
     {|(define npg (soup/parse "<div id=log></div>"))|});
-  Env.define rt.Runtime.env "nparts" parts;
+  Env.define rt.seam.env "nparts" parts;
   Alcotest.check pp_value_testable "nested blocks replay into zone"
     (Ast.VStr
        ("<div id=\"t1-think\">"
@@ -623,10 +623,10 @@ let test_turn_replay_nested_blocks ~rt () =
     (the hand copy here lacked length and the math tower entirely and
     registered string-split twice), and the catalog is callable through
     the runtime env. *)
-let test_pure_catalog_parity ~rt () =
+let test_pure_catalog_parity ~(rt : Runtime.t) () =
   List.iter
     (fun name ->
-       if not (Hashtbl.mem rt.Runtime.prims name) then
+       if not (Hashtbl.mem rt.seam.prims name) then
          Alcotest.fail ("agent table missing pure prim: " ^ name))
     Prims_pure.catalog_names;
   Alcotest.check pp_value_testable "length callable (was unbound)"

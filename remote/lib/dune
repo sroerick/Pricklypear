@@ -9,6 +9,7 @@
  (wrapped false)
  (modules proxy_rim remote http_transport placer def_cache lens_store sync_client free_vars http_ui surface assets libs_source)
  (libraries
+  pricklypear-hostkit
   pricklypear-llm
   pricklypear-lisp
   pricklypear-pure-prims

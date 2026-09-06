@@ -1,0 +1,5 @@
+(test
+ (name host_seam_test)
+ (modules host_seam_test)
+ (libraries pricklypear-hostkit pricklypear-lisp pricklypear-pure-prims
+            pricklypear-llm alcotest))

@@ -127,7 +127,7 @@ let test_no_local_store_write () =
     [ "create"; "update"; "delete"; "fork"; "merge"; "checkout"; "create-user" ]
   in
   let local_names =
-    Hashtbl.to_seq_keys t.Remote.local_prims |> List.of_seq |> List.sort String.compare
+    Hashtbl.to_seq_keys t.seam.prims |> List.of_seq |> List.sort String.compare
   in
   List.iter
     (fun f ->
@@ -265,7 +265,7 @@ let test_pure_catalog_parity () =
   let t = Remote.make ~transport () in
   List.iter
     (fun name ->
-       if not (Hashtbl.mem t.Remote.local_prims name) then
+       if not (Hashtbl.mem t.seam.prims name) then
          Alcotest.fail ("remote local table missing pure prim: " ^ name))
     Prims_pure.catalog_names;
   Alcotest.check pp_value_testable "pure parity callable" (VInt 2L)

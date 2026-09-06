@@ -1,0 +1,34 @@
+;; hostkit — the shared host kit for the two LOCAL Nopales hosts:
+;; agent/lib (glochid) and remote/lib (pp-remote). Before i-1788671304-d
+;; both hosts carried ~1,000 duplicated lines: the HTTP surface plumbing
+;; (esc/responders/query parsing/multipart emitter + the whole chat
+;; queue-drain loop) and the host seam (request shape, route table +
+;; dispatch, template calls, event fire, tool registry, loop_host,
+;; boot stdlib macro) mirrored verbatim with comments admitting it —
+;; and had already DRIFTED (the remote chat emitter mis-targeted
+;; template-rendered fragments to #log; the agent targeted them
+;; correctly).
+
+;; Http_kit / Multipart_emitter / Chat_stream: the shared surface
+;; pieces. Host_seam: the lifted host seam, parameterized by
+;; [run_in_rim] (agent: the eval-lock + local host-prim rim;
+;; remote: Proxy_rim.run) — the prims_soup pattern applied to the seam.
+
+;; NOTE on module names: Http_kit has a name twin in image/lib
+;; (http_kit.ml, i-1788671505-a). They are never linked into one binary
+;; (image links neither agent nor remote libs) — same situation as the
+;; assets.ml/libs_source.ml/surface.ml/http_ui.ml name twins the two
+;; hosts already carry.
+(library
+ (name pricklypear_hostkit)
+ (public_name pricklypear-hostkit)
+ (wrapped false)
+ (modules host_seam http_kit multipart_emitter chat_stream)
+ (libraries
+  pricklypear-lisp
+  pricklypear-pure-prims
+  pricklypear-llm
+  yojson
+  eio
+  eio.unix
+  httpun))
