@@ -886,6 +886,21 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
               ~kernel_admin:(kernel_admin_of uname) ~space
         | _ ->
             ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("space-members", "need space", "bad-args"))))));
+
+  (* (data-history 'type id) -> VStr JSON list newest-first
+     [{gen, author, created_at, delete, body}]. branching.shared-data-
+     spaces S3: the LOG CONSUMER over tree_versions datum rows (any
+     compartment). Confined like get: the caller's identity must see the
+     row (own rows + shared + member spaces). Live rows only in v1. *)
+  register_crud "data-history"
+    (fun args ->
+      let uname = actor () in
+      (match args with
+       | [ Pricklypear_lisp.Ast.VStr type_name;
+           Pricklypear_lisp.Ast.VStr id ] ->
+           Crud.data_history t.store ~viewer:uname ~type_name ~id
+       | _ ->
+           ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("data-history", "need type id", "bad-args")))))));
   register_crud "tree/upsert"
     (fun args ->
       let uname = actor () in

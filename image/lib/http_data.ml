@@ -491,6 +491,13 @@ let data_detail_page (session : Session.t) (type_name : string)
         in
         let meta_bits =
           [ HTML.p [HTML.class_ "meta"] [txt "id: %s" row.Crud.id] ]
+          (* Space compartment: the row's home path makes which
+             compartment it lives in (per-user / shared seed / member
+             space) visible at a glance (shared-data-spaces S3). *)
+          @ (match Crud.node_path store ~type_name ~id with
+             | Pricklypear_lisp.Ast.VStr p ->
+                 [HTML.p [HTML.class_ "meta"] [txt "home: %s" p]]
+             | _ -> [])
           @ (match row.Crud.author with
              | Some a -> [HTML.p [HTML.class_ "meta"] [txt "author: %s" a]]
              | None -> [])
@@ -539,6 +546,43 @@ let data_detail_page (session : Session.t) (type_name : string)
                      ; HTML.button [HTML.type_ "submit"] [txt "Save"]
                      ]);
               ]
+            ; HTML.div [HTML.class_ "card"]
+                ([ HTML.h3 [] [txt "History"] ]
+                 @ (let hist =
+                      Crud.data_history_json store
+                        ~viewer:(Session.username session) ~type_name ~id
+                    in
+                    match hist with
+                    | [] ->
+                        [ HTML.p [HTML.class_ "meta"]
+                            [txt "no version history visible"] ]
+                    | _ ->
+                        List.map
+                          (fun (v : Yojson.Safe.t) ->
+                            let str k =
+                              match Yojson.Safe.Util.member k v with
+                              | `String s -> s
+                              | _ -> "?"
+                            in
+                            let deleted =
+                              match Yojson.Safe.Util.member "delete" v with
+                              | `Bool b -> b
+                              | _ -> false
+                            in
+                            let body_txt =
+                              try Yojson.Safe.pretty_to_string
+                                    (Yojson.Safe.Util.member "body" v)
+                              with _ -> ""
+                            in
+                            HTML.div []
+                              [ HTML.p [HTML.class_ "meta"]
+                                  [txt "gen %s · %s · %s%s"
+                                     (str "gen") (str "author")
+                                     (str "created_at")
+                                     (if deleted then " · deleted" else "")]
+                              ; HTML.pre [] [txt "%s" body_txt]
+                              ])
+                          hist))
             ; HTML.div [HTML.class_ "card"] [
                 HTML.h3 [] [txt "Delete"];
                 HTML.form
