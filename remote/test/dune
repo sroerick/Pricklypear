@@ -1,7 +1,7 @@
 (test
  (name remote_test)
  (modules remote_test)
- (libraries pricklypear-remote.lib pricklypear-lisp alcotest unix))
+ (libraries pricklypear-remote.lib pricklypear-lisp pricklypear-pure-prims alcotest unix))
 
 (test
  (name def_cache_test)

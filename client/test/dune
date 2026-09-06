@@ -1,0 +1,5 @@
+(test
+ (name pp_client_table_test)
+ (modules pp_client_table_test)
+ (libraries pricklypear_client_runtime pricklypear-lisp
+            pricklypear-pure-prims alcotest))

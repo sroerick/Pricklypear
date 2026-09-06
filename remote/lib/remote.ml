@@ -116,84 +116,18 @@ let placer_cfg (t : t) : Placer.cfg =
 let bind_proxy_prim (t : t) (name : string) : unit =
   Env.define t.env name (VPrim name)
 
-(** Register the frozen pure prim surface locally. Same code as the
-    image links (Prims_pure), so local semantics are identical — the
-    proxy rim's local table is the "pure compute stays local" half of
-    hybrid placement. Options that keep a prim OUT of this table
-    simply proxy it; nothing depends on the split being exhaustive. *)
+(** Register the frozen pure prim surface from the ONE shared catalog
+    (pure/prims_pure.ml [Prims_pure.catalog], i-1788670799-f — the
+    per-host hand copies had already diverged: this one registered
+    string-split twice and skipped the math/render towers). Same code
+    as the image links (Prims_pure), so local semantics are identical —
+    the proxy rim's local table is the "pure compute stays local" half
+    of hybrid placement. add_prim also records each name in
+    [t.pure_prims] so the placer keeps them OFF the wire. Options that
+    keep a prim OUT of this table simply proxy it; nothing depends on
+    the split being exhaustive. *)
 let register_pure_prims (t : t) : unit =
-  let open Prims_pure in
-  let r n f = add_prim t n f in
-  r "+" prim_add;
-  r "-" prim_sub;
-  r "*" prim_mul;
-  r "/" prim_div;
-  r "div" prim_div;
-  r "mod" prim_mod;
-  r "quotient" prim_quotient;
-  r "remainder" prim_remainder;
-  r "abs" prim_abs;
-  r "min" prim_min;
-  r "max" prim_max;
-  r "=" prim_num_eq;
-  r "<" prim_lt;
-  r ">" prim_gt;
-  r "<=" prim_le;
-  r ">=" prim_ge;
-  r "not" prim_not;
-  r "list" prim_list;
-  r "car" prim_car;
-  r "cdr" prim_cdr;
-  r "cons" prim_cons;
-  r "null?" prim_null_p;
-  r "pair?" prim_pair_p;
-  r "append" prim_append;
-  r "reverse" prim_reverse;
-  r "nth" prim_nth;
-  r "count" prim_count;
-  r "length" prim_length;
-  r "string-append" prim_string_append;
-  r "string-length" prim_string_length;
-  r "substring" prim_substring;
-  r "string-contains?" prim_string_contains;
-  r "string-split" prim_string_split;
-  r "string-trim" prim_string_trim;
-  r "string-replace" prim_string_replace;
-  r "string-downcase" prim_string_downcase;
-  r "string-upcase" prim_string_upcase;
-  r "string-starts-with?" prim_string_starts_with_p;
-  r "string-ends-with?" prim_string_ends_with_p;
-  r "string=?" prim_string_eq;
-  r "string-eq" prim_string_eq;
-  r "type-of" prim_type_of;
-  r "symbol?" prim_symbol_p;
-  r "string?" prim_string_p;
-  r "symbol->string" prim_symbol_to_string;
-  r "string->symbol" prim_string_to_symbol;
-  r "str" prim_str;
-  r "as-str" prim_as_str;
-  r "assoc" prim_assoc;
-  r "member" prim_member;
-  r "json-parse" prim_json_parse;
-  r "json-emit" prim_json_emit;
-  r "dict-get" prim_dict_get;
-  r "dict-set" prim_dict_set;
-  r "dict-keys" prim_dict_keys;
-  r "equal?" prim_equal_p;
-  r "random-uuid" prim_random_uuid;
-  (* Pure rendering + string prims the Nopales surface (libs/html, the
-     pp-remote surface) calls heavily. These are PURE (tag a VStr /
-     split a string) — registering them LOCAL (not proxied) keeps the
-     surface responsive offline and matches the agent's pure set. *)
-  r "render-html" prim_render_html;
-  r "html-escape" prim_html_escape;
-  r "string-split" prim_string_split;
-  (* c*r accessors used by libs/hyper + libs/html (parity with the
-     agent's pure set). *)
-  r "cadr" prim_cadr;
-  r "caar" prim_caar;
-  r "caddr" prim_caddr;
-  r "cddr" prim_cddr
+  List.iter (fun (name, fn) -> add_prim t name fn) Prims_pure.catalog
 
 (** Bind the server-side prims a client is allowed to proxy. These are
     the proxyable DB CRUD + read/identity prims (NOT the server-only

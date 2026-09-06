@@ -1,0 +1,9 @@
+;; The browser evaluator's boot prim table as a LINKABLE module: the
+;; jsoo build (client/bin) compiles it to js, and the native parity
+;; test (client/test) links the exact table the browser boots with.
+;; Spec: borge/structural-editing.borg client-eval.
+(library
+ (name pricklypear_client_runtime)
+ (wrapped false)
+ (modules pp_client_table)
+ (libraries pricklypear-lisp pricklypear-pure-prims))
