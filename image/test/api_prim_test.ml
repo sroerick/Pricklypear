@@ -42,7 +42,8 @@ let test_same_value_as_in_process () =
   let in_process =
     Pricklypear_image_lib.Control_rim.run ~prims:env_tbl (fun () ->
         Pricklypear_lisp.Eval.eval_string_direct
-          ~prims:Pricklypear_lisp.Eval.empty_prims env "(+ 1 2)")
+          ~prims:Pricklypear_lisp.Eval.empty_prims env
+          ~budget:(Pricklypear_lisp.Eval.make_budget ()) "(+ 1 2)")
   in
   Alcotest.(check string) "in-process (+ 1 2)" "3"
     (Pricklypear_lisp.Reader.pp_value in_process);

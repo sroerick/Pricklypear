@@ -36,11 +36,16 @@ let persist_last_budget_stats (t : t) ~(label : string) : unit =
            ~author:t.manifest.username
        with _ -> ())
 
-let eval_string_rim (t : t) (input : string) : Pricklypear_lisp.Ast.value =
+(* Budgeted variant (jobs.borg runner, 2026-09-05): the job runner passes
+   a max_int-step budget so long-running ingest/analytics ticks (400+ DB
+   ops) don't die on the 100k request budget. Same rim + label logic as
+   eval_string_rim; callers that don't care use eval_string_rim. *)
+let eval_string_rim_budgeted (t : t) (input : string)
+    (budget : Pricklypear_lisp.Eval.budget) : Pricklypear_lisp.Ast.value =
   let v =
     eval_under_rim t (fun () ->
         Pricklypear_lisp.Eval.eval_string_direct
-          ~prims:Pricklypear_lisp.Eval.empty_prims t.env input)
+          ~budget ~prims:Pricklypear_lisp.Eval.empty_prims t.env input)
   in
   (* Best-effort label: top-level (name) call *)
   let label =
@@ -60,6 +65,9 @@ let eval_string_rim (t : t) (input : string) : Pricklypear_lisp.Ast.value =
      && label <> "ui/home" && label <> "ui/theme"
   then persist_last_budget_stats t ~label;
   v
+
+let eval_string_rim (t : t) (input : string) : Pricklypear_lisp.Ast.value =
+  eval_string_rim_budgeted t input (Pricklypear_lisp.Eval.make_budget ())
 
 (* habitat-book.eval-examples: shared engine for the (example-eval …)
    prim and the POST /book/eval-example endpoint. Restriction lives in
@@ -1891,7 +1899,8 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
       | [ Pricklypear_lisp.Ast.VStr src ]
       | [ Pricklypear_lisp.Ast.VSymbol src ] ->
           Pricklypear_lisp.Eval.eval_string_direct
-            ~prims:Pricklypear_lisp.Eval.empty_prims !t.env src
+            ~prims:Pricklypear_lisp.Eval.empty_prims !t.env
+            ~budget:(Pricklypear_lisp.Eval.make_budget ()) src
       | _ ->
           raise
             (Pricklypear_lisp.Ast.Interp_error

@@ -293,7 +293,7 @@ let eval_local (t : t) (src : string) : value =
   let rec go () =
     try
       Proxy_rim.run ~local_prims:t.local_prims ~transport:t.transport (fun () ->
-          Eval.eval_string_direct ~prims:t.local_prims t.env src)
+          Eval.eval_string_direct ~prims:t.local_prims t.env ~budget:(Eval.make_budget ()) src)
     with
     | Interp_error (Unbound_var name) ->
         if Hashtbl.mem seen name then raise (Interp_error (Unbound_var name))
@@ -396,7 +396,7 @@ let apply_value_raw (t : t) (fn : Ast.value) (args : Ast.value list)
     ^ List.fold_left (fun acc a -> acc ^ " " ^ a) "" arg_syms
     ^ ")"
   in
-  Eval.eval_string_direct ~prims:t.local_prims t.env src
+  Eval.eval_string_direct ~prims:t.local_prims t.env ~budget:(Eval.make_budget ()) src
 
 (** Apply a Nopales function value to host-side value args under the
     proxy rim — for OCaml callers OUTSIDE an active eval (the HTTP

@@ -1263,15 +1263,16 @@ and apply
 (** Eval one toplevel form read from [s] directly, without any rim —
     the caller owns the [Prim_call] effect. Records the fresh budget in
     [last_budget] for image persistence. *)
-let eval_string_direct ~(prims : prim_table) (env : env) (s : string) : value =
-  let budget = make_budget () in
+let eval_string_direct ~(prims : prim_table) (env : env) ~(budget : budget)
+    (s : string) : value =
   last_budget := Some budget;
   let e = Reader.read_one s in
   eval ~budget ~prims env e
 
 (** Evaluate under [Control.run_sync] (pure tests; sync prim table). *)
 let eval_string ~(prims : prim_table) (env : env) (s : string) : value =
-  Control.run_sync ~prims (fun () -> eval_string_direct ~prims env s)
+  Control.run_sync ~prims (fun () ->
+      eval_string_direct ~prims env ~budget:(make_budget ()) s)
 
 (** Evaluate all toplevel forms in [s], sequentially, under the given
     prim table but WITHOUT installing any rim — the caller hosts the

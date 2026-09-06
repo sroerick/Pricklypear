@@ -133,7 +133,8 @@ let with_eval_lock (t : t) (f : unit -> 'a) : 'a =
 let eval_string ~(rt : t) (src : string) : Ast.value =
   with_eval_lock rt (fun () ->
       Control.run_with_rim ~prims:rt.prims (fun () ->
-          Eval.eval_string_direct ~prims:rt.prims rt.env src))
+          Eval.eval_string_direct ~prims:rt.prims rt.env
+            ~budget:(Eval.make_budget ()) src))
 
 (** Evaluate all top-level forms in [src] into the shared env, under
     the eval lock + rim. Used to boot-load Nopales packages (libs/std,
@@ -176,7 +177,7 @@ let apply_value_raw (t : t) (fn : Ast.value) (args : Ast.value list)
     ^ List.fold_left (fun acc a -> acc ^ " " ^ a) "" arg_syms
     ^ ")"
   in
-  Eval.eval_string_direct ~prims:t.prims t.env src
+  Eval.eval_string_direct ~prims:t.prims t.env ~budget:(Eval.make_budget ()) src
 
 (** Apply a Nopales function value to host-side value args. Acquires
     the eval lock and establishes the rim — for callers OUTSIDE an
