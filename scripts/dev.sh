@@ -67,8 +67,23 @@ apply_migrations() {
     echo "[dev] creating database $PP_DB_NAME"
     createdb -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U "$PP_DB_USER" "$PP_DB_NAME"
   fi
-  echo "[dev] applying migrations"
+  # Version-gate (ported from scripts/openbsd/pricklypear-promote.ksh): skip
+  # files whose version is already recorded in schema_migrations so expensive
+  # backfills (013 datum rewrite, 027 full-tree hash rehash) don't re-run on
+  # every dev.sh start. On a fresh DB schema_migrations may not exist yet ->
+  # empty means "run all"; migrations self-register their version at the end
+  # of the file. Files without a self-registration row (006/010/028 — cheap
+  # idempotent DDL) re-apply every start, as before.
+  applied="$(psql -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U "$PP_DB_USER" \
+               -d "$PP_DB_NAME" -At -c \
+               "SELECT coalesce(string_agg(version::text,','),'') FROM schema_migrations" \
+               2>/dev/null)" || applied=""
+  echo "[dev] applying migrations (version-gated on schema_migrations)"
   for m in "$PP_ROOT/migrations"/[0-9][0-9][0-9]_*.sql; do
+    base="$(basename "$m" .sql)"
+    ver=$(( 10#${base%%_*} ))   # 013 -> 13 (strip leading zeros, no octal)
+    case ",${applied}," in *",${ver},"*) continue ;; esac
+    echo "[dev]   applying ${base}"
     psql -h "$PP_SOCKET_DIR" -p "$PP_DB_PORT" -U "$PP_DB_USER" -d "$PP_DB_NAME" \
       -f "$m" -q
   done

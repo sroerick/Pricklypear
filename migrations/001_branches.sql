@@ -1,8 +1,10 @@
 -- Pricklypear migration 001: the code store.
 --
 -- Branched code (functions, types, view bindings) plus a lightweight
--- sessions table for process bookkeeping. Applied by the image on boot
--- (and by scripts/dev.sh / deploy hooks). Tracked in schema_migrations.
+-- sessions table for process bookkeeping. Applied by the psql runners —
+-- scripts/dev.sh (dev) and scripts/openbsd/pricklypear-promote.ksh (prod) —
+-- never by the image (see image/lib/boot.ml). Tracked in schema_migrations
+-- (created below; the runners version-gate on it).
 --
 -- Per spec [storage.schema]. NOTE: NO Postgres INHERITANCE anywhere
 -- (see storage.no-inheritance — branches are an OVERRIDE primitive, not

@@ -327,10 +327,12 @@ auth is **in-process** in the image.
   `Store.with_transaction` / `(with-transaction (lambda () body))` keep
   `(select-for-update ...)` locks across prims in the body. Under Eio the
   store holds a reentrant per-connection mutex for whole-tx wire sections.
-- Additive-only schema migrations; the migration runner uses
-  `split_sql_statements` (handles dollar-quoted `$$...$$` blocks,
-  single-quoted strings, `--` line comments, multi-statement splits —
-  the pgx prepared-statement protocol can't do multi-statement natively).
+- Additive-only schema migrations, applied by psql — never by the image
+  (image/lib/boot.ml does not read `schema_migrations`): `scripts/dev.sh`
+  (dev) and `scripts/openbsd/pricklypear-promote.ksh` (prod), both
+  version-gated on `schema_migrations`. Migration files self-register
+  their version row; expensive backfills additionally DO-guard on it
+  (027's hash-domain rehash).
 - The `.borg` file is the source of truth. Never edit `.borg` directly
   in make/task mode — a spec gap surfaced there becomes a `borge issue
   new "..."`, resolved by the next `plan` pass. Issues are the make-mode
