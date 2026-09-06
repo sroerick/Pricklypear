@@ -116,7 +116,138 @@ let quotient_tests =
         raises_interp_error "remainder needs two int args" (fun () ->
             Prims_pure.prim_remainder [ Ast.VInt 1L ]) ) ]
 
+(* --- i-1788671384: the ONE improper-tail list policy ---
+   All list unwrapping goes through Eval.value_to_list: VList / VNil /
+   proper VPair chains flatten; an improper (atom) tail is an
+   Interp_error — the same decision apply and the args evaluator make
+   (and standard Scheme: (length '(1 . 2)) is an error). The former
+   five divergent copies accepted dotted tails (length/append/reverse/
+   string-join/json-emit) or rejected even proper chains
+   (render-tokens); these tests lock the unified policy. *)
+let dotted = Ast.VPair (Ast.VInt 1L, Ast.VInt 2L)
+let proper_chain = Ast.VPair (Ast.VInt 1L, Ast.VPair (Ast.VInt 2L, Ast.VNil))
+let as_list what v =
+  match v with
+  | Ast.VList xs -> List.map (Reader.pp_value) xs |> String.concat ","
+  | v -> Alcotest.failf "%s: expected VList, got %s" what (Reader.pp_value v)
+
+let list_policy_tests =
+  [ ( "length proper cons chain"
+    , `Quick
+    , fun () ->
+        Alcotest.(check int) "len" 2
+          (as_int "length" (Prims_pure.prim_length [ proper_chain ])) )
+  ; ( "length rejects dotted tail"
+    , `Quick
+    , fun () -> raises_interp_error "list op needs a list, got 2" (fun () ->
+          Prims_pure.prim_length [ dotted ]) )
+  ; ( "string-join rejects dotted tail"
+    , `Quick
+    , fun () -> raises_interp_error "list op needs a list, got \"b\"" (fun () ->
+          Prims_pure.prim_string_join
+            [ Ast.VPair (Ast.VStr "a", Ast.VStr "b") ]) )
+  ; ( "append rejects dotted tail"
+    , `Quick
+    , fun () -> raises_interp_error "list op needs a list, got 2" (fun () ->
+          Prims_pure.prim_append [ Ast.VList [ Ast.VInt 1L ]; Ast.VInt 2L ]) )
+  ; ( "reverse rejects dotted tail"
+    , `Quick
+    , fun () -> raises_interp_error "list op needs a list, got 2" (fun () ->
+          Prims_pure.prim_reverse [ dotted ]) )
+  ; ( "json-emit dotted pair keeps list wire form"
+    , `Quick
+    , fun () ->
+        (* wire contract (codec_test): pairs travel as their JSON array;
+           value_to_json is the wire-form rule, not a list-policy site *)
+        let j = Prims_pure.value_to_json dotted in
+        Alcotest.(check string) "wire" "[1,2]"
+          (Yojson.Safe.to_string j) )
+  ; ( "render-tokens accepts proper cons chain"
+    , `Quick
+    , fun () ->
+        let tag s = Ast.VList [ Ast.VStr "__str__"; Ast.VStr s ] in
+        let out =
+          Prims_pure.prim_render_tokens
+            [ tag "x"; proper_chain; Ast.VNil ]
+        in
+        (match out with Ast.VStr _ -> () | v -> Alcotest.failf "got %s" (Reader.pp_value v)) )
+  ; ( "render-tokens rejects dotted tail"
+    , `Quick
+    , fun () -> raises_interp_error "list op needs a list, got 2" (fun () ->
+          Prims_pure.prim_render_tokens
+            [ Ast.VStr "x"; dotted; Ast.VNil ]) )
+  ; ( "count still rejects pairs (VList/VNil only)"
+    , `Quick
+    , fun () -> raises_interp_error "count needs a list" (fun () ->
+          Prims_pure.prim_count [ proper_chain ]) )
+  ]
+
+(* --- i-1788671384: the ONE string-coercion policy ---
+   string-replace and the dict-* prims used to demand bare VStr while
+   string-append/trim/split coerced; __str__ macro tags and symbols
+   now coerce everywhere (string-length/trim/downcase semantics). *)
+let tag s = Ast.VList [ Ast.VStr "__str__"; Ast.VStr s ]
+
+let coercion_tests =
+  [ ( "string-replace coerces int"
+    , `Quick
+    , fun () ->
+        Alcotest.(check string) "5->6" "6"
+          (match Prims_pure.prim_string_replace
+                 [ Ast.VInt 5L; Ast.VStr "5"; Ast.VStr "6" ] with
+           | Ast.VStr s -> s
+           | v -> Alcotest.failf "got %s" (Reader.pp_value v)) )
+  ; ( "string-replace coerces __str__ tag"
+    , `Quick
+    , fun () ->
+        Alcotest.(check string) "ab->xb" "xb"
+          (match Prims_pure.prim_string_replace
+                 [ tag "ab"; Ast.VStr "a"; Ast.VStr "x" ] with
+           | Ast.VStr s -> s
+           | v -> Alcotest.failf "got %s" (Reader.pp_value v)) )
+  ; ( "string-replace rejects non-stringy"
+    , `Quick
+    , fun () -> raises_interp_error
+          "string-replace needs a string (got (1 . 2))"
+        (fun () ->
+           Prims_pure.prim_string_replace
+             [ dotted; Ast.VStr "a"; Ast.VStr "b" ]) )
+  ; ( "dict-get coerces __str__ tag"
+    , `Quick
+    , fun () ->
+        Alcotest.(check string) "name" "ada"
+          (match Prims_pure.prim_dict_get
+                 [ tag "{\"name\":\"ada\"}"; Ast.VStr "name" ] with
+           | Ast.VStr s -> s
+           | v -> Alcotest.failf "got %s" (Reader.pp_value v)) )
+  ; ( "dict-set coerces symbol key"
+    , `Quick
+    , fun () ->
+        Alcotest.(check string) "json" "{\"k\":\"v\"}"
+          (match Prims_pure.prim_dict_set
+                 [ Ast.VStr "{}"; Ast.VSymbol "k"; Ast.VStr "v" ] with
+           | Ast.VStr s -> s
+           | v -> Alcotest.failf "got %s" (Reader.pp_value v)) )
+  ; ( "dict-keys coerces __str__ tag"
+    , `Quick
+    , fun () ->
+        (* as_list prints via pp_value, so the key renders quoted *)
+        Alcotest.(check string) "keys" "\"a\""
+          (as_list "dict-keys"
+             (Prims_pure.prim_dict_keys [ tag "{\"a\":1}" ])) )
+  ; ( "dict-get rejects non-stringy"
+    , `Quick
+    , fun () -> raises_interp_error "dict-get needs a string (got (1 . 2))"
+        (fun () -> Prims_pure.prim_dict_get [ dotted; Ast.VStr "k" ]) )
+  ; ( "dict-set keeps arity error"
+    , `Quick
+    , fun () -> raises_interp_error "dict-set needs 3 strings" (fun () ->
+          Prims_pure.prim_dict_set [ Ast.VStr "{}"; Ast.VStr "k" ]) )
+  ]
+
 let () =
   Alcotest.run "prims_pure"
     [ ("entities", entity_tests @ [ nbsp_regression ])
-    ; ("quotient-remainder", quotient_tests) ]
+    ; ("quotient-remainder", quotient_tests)
+    ; ("list-policy", list_policy_tests)
+    ; ("coercion-policy", coercion_tests) ]

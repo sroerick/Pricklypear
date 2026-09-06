@@ -1,0 +1,197 @@
+(* JSON <-> value codecs and the dict-* prims over VStr JSON, plus the
+   read-string/read-all-string reader bridge. dict-* operands go
+   through Prims_common.coerce_str (i-1788671384). Split from
+   prims_pure.ml. *)
+open Pricklypear_lisp.Ast
+open Prims_common
+
+
+(* ---- dict primitives over VStr JSON -----------------------------
+
+   Iteration-14 decision: don't introduce a new VDict value type yet
+   (that would ripple through ast.ml / reader.ml / eval.ml / value
+   JSON round-trip). Instead, (get 'type id) returns a VStr holding
+   the fields JSON; these prims operate on VStr JSON directly so Lisp
+   code can do:
+       (define u (get 'user id))
+       (dict-get u "name")
+       (dict-set u "active" "false")
+   The primitive returns VStr JSON (or VNil if the input wasn't a valid
+   object, or key wasn't found). The underlying parse-and-emit is
+   Yojson; the canonical round-trip preserves well-formed objects. *)
+
+(* (dict-get json-str key) -> VStr value | VNil.
+   Looks up [key] in the JSON object at [json-str]. Returns the value
+   as a VStr (numbers and booleans stringified via Yojson); VNil if
+   the key is missing or the input isn't a JSON object. *)
+let prim_dict_get args =
+  match args with
+  | [ json_v; key_v ] ->
+      (* Shared string-coercion policy (i-1788671384): __str__ tags and
+         symbols coerce like the string-append family. *)
+      let json = coerce_str ~ctx:"dict-get" json_v in
+      let key = coerce_str ~ctx:"dict-get" key_v in
+      (try
+        let j = Yojson.Safe.from_string json in
+        (match j with
+         | `Assoc kvs ->
+             (match List.assoc_opt key kvs with
+              | Some (`String s) -> VStr s
+              | Some (`Int n) -> VStr (string_of_int n)
+              | Some (`Intlit s) -> VStr s
+              | Some (`Float f) -> VStr (string_of_float f)
+              | Some (`Bool b) -> VStr (string_of_bool b)
+              | Some (`Null) -> VNil
+              | Some (#Yojson.Safe.t as v) ->
+                  VStr (Yojson.Safe.to_string v)
+              | None -> VNil)
+         | _ -> VNil)
+      with _ -> VNil)
+  | _ -> raise (Interp_error (User_error ("dict-get needs 2 strings", "bad-args")))
+
+(* (dict-set json-str key value) -> VStr new-json.
+   Builds a JSON object with [key] = [value] (a string; numbers
+   detected and emitted as JSON numeric where parseable). Returns the
+   updated JSON as a VStr. If [json-str] isn't a JSON object, starts
+   a fresh {} and adds the new key. *)
+let prim_dict_set args =
+  match args with
+  | [ json_v; key_v; value_v ] ->
+      let json = coerce_str ~ctx:"dict-set" json_v in
+      let key = coerce_str ~ctx:"dict-set" key_v in
+      let value = coerce_str ~ctx:"dict-set" value_v in
+      let base =
+        try
+          (match Yojson.Safe.from_string json with
+           | `Assoc kvs -> kvs
+           | _ -> [])
+        with _ -> []
+      in
+      let v_json =
+        (* Try parsing the value as JSON (so callers can pass nested
+           objects/arrays); if it doesn't parse, emit as a JSON string. *)
+        try Yojson.Safe.from_string value
+        with _ -> `String value
+      in
+      let updated =
+        (key, v_json) ::
+        (List.filter (fun (k, _) -> k <> key) base)
+      in
+      VStr (Yojson.Safe.to_string (`Assoc updated))
+  | _ -> raise (Interp_error (User_error ("dict-set needs 3 strings", "bad-args")))
+
+(* (dict-keys json-str) -> VList of VStr keys.
+   Returns the keys of the JSON object at [json-str] (insertion order
+   preserved by Yojson's `Assoc). Empty list if input isn't an object. *)
+let prim_dict_keys args =
+  match args with
+  | [ json_v ] ->
+      let json = coerce_str ~ctx:"dict-keys" json_v in
+      (try
+        (match Yojson.Safe.from_string json with
+         | `Assoc kvs ->
+             VList (List.map (fun (k, _) -> VStr k) kvs)
+         | _ -> VList [])
+      with _ -> VList [])
+  | _ -> raise (Interp_error (User_error ("dict-keys needs 1 string", "bad-args")))
+
+let rec json_to_value (j : Yojson.Safe.t) : value =
+  match j with
+  | `Null -> VNil
+  | `Bool b -> VBool b
+  | `Int n -> VInt (Int64.of_int n)
+  | `Intlit s -> (try VInt (Int64.of_string s) with _ -> VStr s)
+  | `Float f -> VFloat f
+  | `String s -> VStr s
+  | `List xs -> VList (List.map json_to_value xs)
+  | `Assoc _ as o -> VStr (Yojson.Safe.to_string o)
+
+let rec value_to_json (v : value) : Yojson.Safe.t =
+  match v with
+  | VNil -> `Null
+  | VBool b -> `Bool b
+  | VInt n -> `Intlit (Int64.to_string n)
+  | VStr s ->
+      (* Nested JSON object/array strings stay structured when emitted. *)
+      let len = String.length s in
+      if len >= 2
+         && ((s.[0] = '{' && s.[len - 1] = '}')
+             || (s.[0] = '[' && s.[len - 1] = ']'))
+      then (try Yojson.Safe.from_string s with _ -> `String s)
+      else `String s
+  | VList xs -> `List (List.map value_to_json xs)
+  | VFloat f ->
+      (* Real JSON float so it round-trips back to VFloat (not a VStr).
+         Integral floats still come back as VFloat via [json_to_value]
+         (Float f -> VFloat f), keeping the type distinct from VInt. *)
+      `Float f
+  | VPair (a, b) ->
+      (* WIRE-FORM rule, not a list-policy site (i-1788671384): pairs
+         travel as their JSON array (codec contract, lisp/test/codec_test.ml
+         "VPair (dotted) via list wire form"). A proper chain unwinds
+         element-wise; a cons-onto-list tail splices; a DOTTED (atom)
+         tail is serialized as wire data by the recursion — value_to_json
+         must not raise on any value. The list-op policy lives in
+         list_of_value alone. *)
+      let rec unwind acc = function
+        | VPair (x, y) -> unwind (x :: acc) y
+        | VNil -> List.rev acc
+        | VList ys -> List.rev_append acc ys
+        | tail -> List.rev (tail :: acc)
+      in
+      `List (List.map value_to_json (unwind [] (VPair (a, b))))
+  | other -> `String (Pricklypear_lisp.Reader.pp_value other)
+
+let prim_json_parse args =
+  match args with
+  | [ VStr s ] ->
+      (try json_to_value (Yojson.Safe.from_string s)
+       with _ -> raise (Interp_error (User_error ("json-parse: invalid JSON", "bad-args"))))
+  | _ -> raise (Interp_error (User_error ("json-parse needs 1 string", "bad-args")))
+
+let prim_json_emit args =
+  match args with
+  | [ v ] -> VStr (Yojson.Safe.to_string (value_to_json v))
+  | _ -> raise (Interp_error (User_error ("json-emit needs 1 value", "bad-args")))
+
+(* (read-string s) -> quoted value tree. Same reader as load-string / the
+   REPL, then quote_to_value — NO eval. Pair with (function-ast name):
+   both yield walkable s-expr data. Clojure-style twin of load-string.
+   (read-all-string s) -> VList of forms (multi top-level). *)
+let prim_read_string args =
+  match args with
+  | [ VStr s ] ->
+      (try
+         let e = Pricklypear_lisp.Reader.read_one s in
+         Pricklypear_lisp.Eval.quote_to_value e
+       with
+       | Pricklypear_lisp.Reader.Reader_error (msg, line, col) ->
+           raise
+             (Interp_error
+                (User_error
+                   (Printf.sprintf "read-string: %s (%d:%d)" msg line col, "bad-args")))
+       | exn ->
+           raise
+             (Interp_error
+                (User_error
+                   ("read-string: " ^ Printexc.to_string exn, "bad-args"))))
+  | _ -> raise (Interp_error (User_error ("read-string needs 1 string", "bad-args")))
+
+let prim_read_all_string args =
+  match args with
+  | [ VStr s ] ->
+      (try
+         let es = Pricklypear_lisp.Reader.read_all s in
+         VList (List.map Pricklypear_lisp.Eval.quote_to_value es)
+       with
+       | Pricklypear_lisp.Reader.Reader_error (msg, line, col) ->
+           raise
+             (Interp_error
+                (User_error
+                   (Printf.sprintf "read-all-string: %s (%d:%d)" msg line col, "bad-args")))
+       | exn ->
+           raise
+             (Interp_error
+                (User_error
+                   ("read-all-string: " ^ Printexc.to_string exn, "bad-args"))))
+  | _ -> raise (Interp_error (User_error ("read-all-string needs 1 string", "bad-args")))

@@ -276,9 +276,18 @@ let string_tests = [
   ("string-join coerces ints", `Quick, fun () ->
     Alcotest.(check string) "coerce" "\"1,2,3\""
       (eval_str "(string-join (list 1 2 3) \",\")"));
-  ("string-join cons list", `Quick, fun () ->
-    Alcotest.(check string) "pair" "\"ab\""
-      (eval_str "(string-join (cons \"a\" \"b\"))"));
+  ("string-join proper cons chain", `Quick, fun () ->
+    Alcotest.(check string) "pair-chain" "\"ab\""
+      (eval_str "(string-join (cons \"a\" (cons \"b\" ())))"));
+  (* i-1788671384: the ONE improper-tail policy (Eval.value_to_list) —
+     dotted tails are an error, matching apply/args and Scheme's length. *)
+  ("string-join dotted tail errors", `Quick, fun () ->
+    match try ignore (eval "(string-join (cons \"a\" \"b\"))"); None with
+          | Interp_error (User_error (_, _)) -> Some ()
+          | _ -> Some ()
+    with
+    | Some _ -> ()
+    | None -> Alcotest.fail "expected error on improper tail");
   ("str of int", `Quick, fun () ->
     Alcotest.(check string) "str int" "\"42\""
       (eval_str "(str 42)"));
