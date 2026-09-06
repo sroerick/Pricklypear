@@ -287,9 +287,9 @@ let cap_tests =
         (String.starts_with ~prefix:"REFUSED: example budget exceeded" out)
         true);
     ("outer caller budget untouched by a runaway example", `Quick, fun () ->
-      (* The nested budget dies; the caller's current_budget is
-         restored in finally — prove the session can keep evaluating
-         after a refusal. *)
+      (* The nested budget dies; the caller's scope re-emerges on
+         scope exit (fiber-scoped, i-1788670103-5) — prove the session
+         can keep evaluating after a refusal. *)
       let env, full = make_full () in
       (try
          ignore

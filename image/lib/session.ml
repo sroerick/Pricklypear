@@ -14,27 +14,32 @@ include Session_types
 let eval_under_rim (t : t) (thunk : unit -> 'a) : 'a =
   Control_rim.run ~prims:t.prims thunk
 
-let persist_last_budget_stats (t : t) ~(label : string) : unit =
-  match !Pricklypear_lisp.Eval.last_budget with
-  | None -> ()
-  | Some b when label = "" -> ()
-  | Some b ->
-      (try
-         let fields =
-           Yojson.Safe.to_string
-             (`Assoc
-                [
-                  ("fn", `String label);
-                  ("steps", `Int b.steps);
-                  ("prim_calls", `Int b.prim_calls);
-                  ("db_hits", `Int b.db_hits);
-                  ("when", `String (string_of_float (Unix.gettimeofday ())));
-                ])
-         in
-         (* image.function-stat-ring: push, no synchronous DB write. *)
-         Function_stats.push ~fn:label ~fields_json:fields
-           ~author:t.manifest.username
-       with _ -> ())
+let persist_budget_stats (t : t) ~(budget : Pricklypear_lisp.Eval.budget)
+    ~(label : string) : unit =
+  (* The budget object is passed explicitly (i-1788670103-5): reading the
+     [last_budget] global here raced across request fibers — while this
+     eval yielded in a DB prim, another request's eval entry re-set the
+     global and this persistence would have billed ITS counters under
+     OUR label. *)
+  let b = budget in
+  if label = "" then ()
+  else
+    (try
+       let fields =
+         Yojson.Safe.to_string
+           (`Assoc
+              [
+                ("fn", `String label);
+                ("steps", `Int b.steps);
+                ("prim_calls", `Int b.prim_calls);
+                ("db_hits", `Int b.db_hits);
+                ("when", `String (string_of_float (Unix.gettimeofday ())));
+              ])
+       in
+       (* image.function-stat-ring: push, no synchronous DB write. *)
+       Function_stats.push ~fn:label ~fields_json:fields
+         ~author:t.manifest.username
+     with _ -> ())
 
 (* Budgeted variant (jobs.borg runner, 2026-09-05): the job runner passes
    a max_int-step budget so long-running ingest/analytics ticks (400+ DB
@@ -42,6 +47,10 @@ let persist_last_budget_stats (t : t) ~(label : string) : unit =
    eval_string_rim; callers that don't care use eval_string_rim. *)
 let eval_string_rim_budgeted (t : t) (input : string)
     (budget : Pricklypear_lisp.Eval.budget) : Pricklypear_lisp.Ast.value =
+  (* Publish this request's eval budget to the /timing fiber slot
+     (i-1788670103-5) BEFORE the eval so a failed handler still samples
+     its partial DB accumulators. *)
+  Timing.note_eval_budget budget;
   let v =
     eval_under_rim t (fun () ->
         Pricklypear_lisp.Eval.eval_string_direct
@@ -63,7 +72,7 @@ let eval_string_rim_budgeted (t : t) (input : string)
      under the pgx sequencer. Skip stats for shell labels. *)
   if label <> "" && label <> "ui/css" && label <> "ui/nav"
      && label <> "ui/home" && label <> "ui/theme"
-  then persist_last_budget_stats t ~label;
+  then persist_budget_stats t ~budget ~label;
   v
 
 let eval_string_rim (t : t) (input : string) : Pricklypear_lisp.Ast.value =
@@ -86,9 +95,13 @@ let eval_expr_rim (t : t) (expr : Pricklypear_lisp.Ast.expr)
   : Pricklypear_lisp.Ast.value =
   let budget = Pricklypear_lisp.Eval.make_budget () in
   Pricklypear_lisp.Eval.last_budget := Some budget;
+  Timing.note_eval_budget budget;
   eval_under_rim t (fun () ->
-      Pricklypear_lisp.Eval.eval
-        ~budget ~prims:Pricklypear_lisp.Eval.empty_prims t.env expr)
+      (* Fiber-scope the budget (i-1788670103-5): prim bodies resolve
+         THIS eval's budget through the scope, even after a yield. *)
+      Pricklypear_lisp.Eval.with_scope (Some budget) (fun () ->
+          Pricklypear_lisp.Eval.eval
+            ~budget ~prims:Pricklypear_lisp.Eval.empty_prims t.env expr))
 
 let load_defs (t : t) : unit =
   let disabled = Store.disabled_package_names t.store in
@@ -158,14 +171,18 @@ let load_defs (t : t) : unit =
                        (full rehydrate gave the same guarantee by
                        re-thunking everything; this keeps unchanged
                        thunks fresh without rebinding them). *)
+                    (* The budget is read through the fiber scope
+                       (i-1788670103-5): the forcing eval's budget pays,
+                       never a concurrently-published request's. The
+                       nested eval re-establishes the scope so its own
+                       prim bodies' DB accounting resolves to [b] even
+                       across Eio awaits. *)
+                    let b = Pricklypear_lisp.Eval.current_or_fresh () in
                     eval_under_rim t (fun () ->
-                        let b =
-                          match !Pricklypear_lisp.Eval.current_budget with
-                          | Some b -> b
-                          | None -> Pricklypear_lisp.Eval.make_budget ()
-                        in
-                        Pricklypear_lisp.Eval.eval ~budget:b
-                          ~prims:Pricklypear_lisp.Eval.empty_prims t.env expr')
+                        Pricklypear_lisp.Eval.with_scope (Some b) (fun () ->
+                            Pricklypear_lisp.Eval.eval ~budget:b
+                              ~prims:Pricklypear_lisp.Eval.empty_prims t.env
+                              expr'))
                   in
                   Pricklypear_lisp.Env.define_thunk t.env name ~force body;
                   Hashtbl.replace t.thunk_bodies name body))
@@ -339,16 +356,15 @@ let rehydrate_incremental (t : t) : unit =
                             (params, body_expr, fresh))
                    | _ ->
                        let force _env' expr' =
+                         (* Fiber-scoped budget + scope for the nested
+                            eval (i-1788670103-5; see load_defs above). *)
+                         let b = Pricklypear_lisp.Eval.current_or_fresh () in
                          eval_under_rim t (fun () ->
-                             let b =
-                               match !Pricklypear_lisp.Eval.current_budget
-                               with
-                               | Some b -> b
-                               | None -> Pricklypear_lisp.Eval.make_budget ()
-                             in
-                             Pricklypear_lisp.Eval.eval ~budget:b
-                               ~prims:Pricklypear_lisp.Eval.empty_prims
-                               t.env expr')
+                             Pricklypear_lisp.Eval.with_scope (Some b)
+                               (fun () ->
+                                  Pricklypear_lisp.Eval.eval ~budget:b
+                                    ~prims:Pricklypear_lisp.Eval.empty_prims
+                                    t.env expr'))
                        in
                        Pricklypear_lisp.Env.define_thunk fresh name
                          ~force body;
@@ -364,14 +380,14 @@ let rehydrate_incremental (t : t) : unit =
            (fun name body ->
              if Hashtbl.mem fresh.bindings name then
                let force _env' expr' =
+                 (* Fiber-scoped budget + scope for the nested eval
+                    (i-1788670103-5; see load_defs above). *)
+                 let b = Pricklypear_lisp.Eval.current_or_fresh () in
                  eval_under_rim t (fun () ->
-                     let b =
-                       match !Pricklypear_lisp.Eval.current_budget with
-                       | Some b -> b
-                       | None -> Pricklypear_lisp.Eval.make_budget ()
-                     in
-                     Pricklypear_lisp.Eval.eval ~budget:b
-                       ~prims:Pricklypear_lisp.Eval.empty_prims t.env expr')
+                     Pricklypear_lisp.Eval.with_scope (Some b) (fun () ->
+                         Pricklypear_lisp.Eval.eval ~budget:b
+                           ~prims:Pricklypear_lisp.Eval.empty_prims t.env
+                           expr'))
                in
                Pricklypear_lisp.Env.define_thunk fresh name ~force body)
            t.thunk_bodies;
@@ -1480,12 +1496,22 @@ and refresh_ui_shell (t : t) : unit =
      cache the rendered string via [set_cached], handle failure with
      retry suppression. *)
   let refresh name eval_str set_cached =
+    (* Arm the read-set hook with CAPTURE-RESTORE (i-1788670103-5):
+       restoring [None] unconditionally used to drop a CONCURRENT
+       shell refresh's collector mid-eval (two identities' sessions
+       refresh in parallel), under-busting its cache and serving stale
+       CSS/nav after a dependency changed. Reads from OTHER fibers
+       still land in this collector while it is armed (no fiber
+       identity in [Env.lookup]); that direction is conservative — a
+       superset read-set only busts the cache more often, never
+       serves stale. *)
+    let prev_hook = !Pricklypear_lisp.Env.lookup_hook in
     Pricklypear_lisp.Env.lookup_hook :=
       Some (fun n ->
         if not (List.exists (String.equal n) t.ui_shell_reads) then
           t.ui_shell_reads <- n :: t.ui_shell_reads);
     Fun.protect
-      ~finally:(fun () -> Pricklypear_lisp.Env.lookup_hook := None)
+      ~finally:(fun () -> Pricklypear_lisp.Env.lookup_hook := prev_hook)
       (fun () ->
         (try
            let v = eval_one t eval_str in

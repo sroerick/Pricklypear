@@ -26,9 +26,13 @@ let child (e : env) : env = create ~parent:(Some e) ()
     posts the resolved name to this hook. Armed ONLY by
     [Session.refresh_ui_shell] around the (ui/css)/(ui/nav) evals so
     a define can bust the shell cache iff the defined name was
-    actually read — no TTL, no prefix guess. Global mutable by design
-    (eval is single-threaded within a session fiber); [None] costs
-    one ref-read per lookup. *)
+    actually read — no TTL, no prefix guess. Global mutable, and NOT
+    fiber-isolated (the kernel stays Eio-free): concurrent requests'
+    lookups land in whichever collector is armed. Session arms the
+    hook with capture-restore (i-1788670103-5) so an overlapping
+    refresh can no longer drop another's collector; cross-fiber
+    postings only INFLATE a read-set (superset ⇒ cache busts more
+    often, never serves stale). [None] costs one ref-read per lookup. *)
 let lookup_hook : (string -> unit) option ref = ref None
 
 (** Force a [VThunk] cell (lisp-interpreter.lazy-env-thunks).

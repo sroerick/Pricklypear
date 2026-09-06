@@ -218,3 +218,8 @@
  (name http_body_stream_test)
  (modules http_body_stream_test)
  (libraries pricklypear-image alcotest eio_main))
+
+(test
+ (name timing_slot_test)
+ (modules timing_slot_test)
+ (libraries pricklypear-image pricklypear-lisp eio_main))
