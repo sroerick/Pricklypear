@@ -1591,25 +1591,32 @@ let respond_handler_value
              in
              html_response reqd ~session body))
 
+(** i-1788670767: the four per-user settings handlers shared a copy-pasted
+    signed-in preamble (anonymous -> /login; user lookup -> continue or
+    caller-chosen no-user response). One combinator instead of 4 copies. *)
+let with_signed_in_user ~(session : Session.t) ~(reqd : Httpun.Reqd.t)
+    ~(no_user : unit -> unit) (k : Auth_store.user -> unit) : unit =
+  if Session.username session = "anonymous" then
+    redirect_response reqd "/login"
+  else
+    match
+      Auth_store.get_user_by_username (Session.store session)
+        (Session.username session)
+    with
+    | None -> no_user ()
+    | Some user -> k user
+
 (** /settings/keys — per-user LLM provider key (auth.user-llm-keys). *)
 let settings_keys_page (session : Session.t) (reqd : Httpun.Reqd.t)
   : unit =
-  let username = Session.username session in
-  if username = "anonymous" then begin
-    redirect_response reqd "/login";
-    ()
-  end else
-    let user_opt =
-      Auth_store.get_user_by_username (Session.store session) username
-    in
-    match user_opt with
-    | None ->
-        html_response reqd ~session ~status:`Unauthorized
-          (chrome ~session ~title:"Keys" [
-             HTML.p [HTML.class_ "err"] [txt "not signed in"];
-           ]);
-        ()
-    | Some user ->
+  with_signed_in_user ~session ~reqd
+    ~no_user:(fun () ->
+      html_response reqd ~session ~status:`Unauthorized
+        (chrome ~session ~title:"Keys" [
+           HTML.p [HTML.class_ "err"] [txt "not signed in"];
+         ]);
+      ())
+    (fun user ->
         let meta =
           Auth_store.get_llm_key_meta (Session.store session)
             ~user_id:user.Auth_store.id
@@ -1706,34 +1713,34 @@ let settings_keys_page (session : Session.t) (reqd : Httpun.Reqd.t)
           ]
         in
         html_response reqd ~session body;
-        ()
+        ())
 
 let post_settings_keys (session : Session.t) (reqd : Httpun.Reqd.t)
   : unit =
-  let username = Session.username session in
-  if username = "anonymous" then begin
-    redirect_response reqd "/login";
-    ()
-  end else
-    let user_opt =
-      Auth_store.get_user_by_username (Session.store session) username
-    in
-    match user_opt with
-    | None ->
-        redirect_response reqd "/login";
-        ()
-    | Some user ->
+  with_signed_in_user ~session ~reqd
+    ~no_user:(fun () -> redirect_response reqd "/login")
+    (fun user ->
         let body = read_body reqd in
         let action =
           Option.value (form_field body "action") ~default:"set" |> String.trim
         in
         if action = "clear" then
-          let _r =
-            Auth_store.clear_llm_key (Session.store session)
-              ~user_id:user.Auth_store.id
-          in
-          redirect_response reqd "/settings/keys";
-          ()
+          (* i-1788670767: honor the result — a failed clear must not
+             redirect as success (same contract as the set action). *)
+          (match
+             Auth_store.clear_llm_key (Session.store session)
+               ~user_id:user.Auth_store.id
+           with
+           | Error e ->
+               html_response reqd ~session ~status:`Bad_request
+                 (chrome ~session ~title:"LLM keys" [
+                    HTML.p [HTML.class_ "err"] [txt "%s" e];
+                    HTML.p [] [HTML.a [HTML.href "/settings/keys"] [txt "Back"]];
+                  ]);
+               ()
+           | Ok () ->
+               redirect_response reqd "/settings/keys";
+               ())
         else
           let api_key =
             Option.value (form_field body "api_key") ~default:"" |> String.trim
@@ -1762,23 +1769,13 @@ let post_settings_keys (session : Session.t) (reqd : Httpun.Reqd.t)
                ()
            | Ok _ ->
                redirect_response reqd "/settings/keys";
-               ())
+               ()))
 
 let settings_ssh_page (session : Session.t) (reqd : Httpun.Reqd.t)
   : unit =
-  let username = Session.username session in
-  if username = "anonymous" then begin
-    redirect_response reqd "/login";
-    ()
-  end else
-    let user_opt =
-      Auth_store.get_user_by_username (Session.store session) username
-    in
-    match user_opt with
-    | None ->
-        redirect_response reqd "/login";
-        ()
-    | Some user ->
+  with_signed_in_user ~session ~reqd
+    ~no_user:(fun () -> redirect_response reqd "/login")
+    (fun user ->
         let keys =
           Auth_store.list_ssh_keys (Session.store session)
             ~user_id:user.Auth_store.id
@@ -1847,23 +1844,13 @@ let settings_ssh_page (session : Session.t) (reqd : Httpun.Reqd.t)
           ]
         in
         html_response reqd ~session body;
-        ()
+        ())
 
 let post_settings_ssh (session : Session.t) (reqd : Httpun.Reqd.t)
   : unit =
-  let username = Session.username session in
-  if username = "anonymous" then begin
-    redirect_response reqd "/login";
-    ()
-  end else
-    let user_opt =
-      Auth_store.get_user_by_username (Session.store session) username
-    in
-    match user_opt with
-    | None ->
-        redirect_response reqd "/login";
-        ()
-    | Some user ->
+  with_signed_in_user ~session ~reqd
+    ~no_user:(fun () -> redirect_response reqd "/login")
+    (fun user ->
         let body = read_body reqd in
         let action =
           Option.value (form_field body "action") ~default:"add" |> String.trim
@@ -1872,12 +1859,22 @@ let post_settings_ssh (session : Session.t) (reqd : Httpun.Reqd.t)
           let id =
             Option.value (form_field body "id") ~default:"" |> String.trim
           in
-          let _r =
-            Auth_store.revoke_ssh_key (Session.store session)
-              ~user_id:user.Auth_store.id ~id_or_fingerprint:id
-          in
-          redirect_response reqd "/settings/ssh";
-          ()
+          (* i-1788670767: honor the result — a failed revoke must not
+             redirect as success (same contract as the add action). *)
+          (match
+             Auth_store.revoke_ssh_key (Session.store session)
+               ~user_id:user.Auth_store.id ~id_or_fingerprint:id
+           with
+           | Error e ->
+               html_response reqd ~session ~status:`Bad_request
+                 (chrome ~session ~title:"SSH keys" [
+                    HTML.p [HTML.class_ "err"] [txt "%s" e];
+                    HTML.p [] [HTML.a [HTML.href "/settings/ssh"] [txt "Back"]];
+                  ]);
+               ()
+           | Ok () ->
+               redirect_response reqd "/settings/ssh";
+               ())
         else
           let openssh =
             Option.value (form_field body "openssh") ~default:"" |> String.trim
@@ -1901,5 +1898,5 @@ let post_settings_ssh (session : Session.t) (reqd : Httpun.Reqd.t)
                ()
            | Ok _ ->
                redirect_response reqd "/settings/ssh";
-               ())
+               ()))
 

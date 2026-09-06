@@ -2255,8 +2255,9 @@ let checkout_ref (t : t) (branch_ref : string) : (unit, string) result =
 (** Delete a function row on the current branch (unoverride). Rehydrates. *)
 let unoverride (t : t) (name : string) : (bool, string) result =
   (* i-1787970640: current-branch owner must pass the branch-owner rule
-     (same guard as the unbind prim; branches_unoverride ignores its
-     checkout_ref result, so this is its own gate). *)
+     (same guard as the unbind prim; defense in depth — http_branches
+     now aborts on a failed checkout_ref (i-1788670767), but the gate
+     also covers every other entry into this path). *)
   let cur_owner, _cur_name = split_branch_ref t.manifest.branch_name in
   if not (branch_owner_authorized t cur_owner) then
     (Error (Printf.sprintf "denied: branch %s is owned by %s"
