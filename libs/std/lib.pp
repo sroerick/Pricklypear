@@ -57,6 +57,7 @@
     css/use
     css/sheet
     css/render
+    json-escape
     blank?
     string-find-pos))
 
@@ -376,6 +377,33 @@
   (lambda (parts)
     (render-html (html/join parts)))
   "render-html of joined page parts (list of HTML strings).")
+
+;; --- json (string escaping for JSON string/array literals) ---
+;;
+;;   (json-escape s) → body of a JSON "..." literal, safe to embed.
+;;   ONE shared escaper: the per-package copies (book/json-esc,
+;;   pads/json-escape, ntfy/json-esc, upsets/json-esc) diverged —
+;;   different escape sets, and a value containing a newline produced
+;;   invalid JSON (i-1788670711). Backslash is replaced FIRST so the
+;;   escape sequences inserted by the later passes are not re-escaped.
+
+(define json-escape
+  (lambda (s)
+    (string-replace
+      (string-replace
+        (string-replace
+          (string-replace
+            (string-replace (as-str s) "\\" "\\\\")
+            "\""
+            "\\\"")
+          "\n"
+          "\\n")
+        "\r"
+        "\\r")
+      "\t"
+      "\\t"))
+  "Escape s for embedding in a JSON string literal: backslash, quote,
+newline, CR, tab (coerces via as-str; backslash first).")
 
 ;; --- menu/  (navbar trees as plain lists) ---
 ;;

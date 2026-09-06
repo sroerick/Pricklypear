@@ -240,19 +240,7 @@ itself, keep the rest in order."
 
 ;; ---------- render-scene (V2: native soil path; W4 dialect v0) ----------
 
-(define pads/json-escape
-  (lambda (s)
-    "Escape s as a JSON string body: backslash, quote, CR, LF, TAB."
-    (string-replace
-      (string-replace
-        (string-replace
-          (string-replace (as-str s) "\\" "\\\\")
-          "\""
-          "\\\"")
-        "\n"
-        "\\n")
-      "\r"
-      "\\r")))
+;; json-escape comes from libs/std (shared escaper, i-1788670711).
 
 (define pads/scene-attr
   (lambda (a)
@@ -260,9 +248,9 @@ itself, keep the rest in order."
 so sizes normalize to the size grammar)."
     (string-append
       "\""
-      (pads/json-escape (as-str (car a)))
+      (json-escape (as-str (car a)))
       "\":\""
-      (pads/json-escape (pads/attr-string (cdr a)))
+      (json-escape (pads/attr-string (cdr a)))
       "\"")))
 
 (define pads/scene-attrs
@@ -328,7 +316,7 @@ href, sizes survive as strings)."
          "{\"kind\":\"text\",\"id\":\""
          path
          "\",\"text\":\""
-         (pads/json-escape node)
+         (json-escape node)
          "\",\"attrs\":{},\"kids\":[]}"))
       ((or (null? node) (not (pair? node)))
        (string-append
@@ -349,7 +337,7 @@ href, sizes survive as strings)."
                "{\"kind\":\"text\",\"id\":\""
                path
                "\",\"text\":\""
-               (pads/json-escape (pads/text-content node))
+               (json-escape (pads/text-content node))
                "\",\"attrs\":"
                (pads/scene-attrs attrs)
                ",\"kids\":[]}"))))))))

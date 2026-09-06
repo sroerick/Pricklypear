@@ -33,27 +33,9 @@
 (define upsets/min-trade-usd 1)
 
 ;; ---- small helpers ----
-(define upsets/json-esc-loop
-  (lambda
-    (s i acc)
-    (if
-      (>= i (string-length s))
-      acc
-      (let
-        ((c (substring s i 1)))
-        (upsets/json-esc-loop
-          s (+ i 1)
-          (string-append acc
-            (cond
-              ((string-eq c "\\") "\\\\")
-              ((string-eq c "\"") "\\\"")
-              (else c))))))))
-
-(define upsets/json-esc
-  (lambda
-    (s)
-    "Escape a string for embedding in a JSON document."
-    (upsets/json-esc-loop (as-str s) 0 "")))
+;; json-escape comes from libs/std (shared escaper, i-1788670711);
+;; the old upsets/json-esc only covered backslash+quote, so a newline
+;; in a question/market string produced invalid JSON payloads.
 
 (define upsets/min2
   (lambda (a b) (if (< a b) a b)))
@@ -85,14 +67,14 @@
   (lambda
     (question slug cid tok-yes tok-no vol end status last-odds observed watched lots flos)
     (string-append
-      "{\"question\":\"" (upsets/json-esc question)
-      "\",\"slug\":\"" (upsets/json-esc slug)
-      "\",\"condition-id\":\"" (upsets/json-esc cid)
-      "\",\"token-yes\":\"" (upsets/json-esc tok-yes)
-      "\",\"token-no\":\"" (upsets/json-esc tok-no)
+      "{\"question\":\"" (json-escape question)
+      "\",\"slug\":\"" (json-escape slug)
+      "\",\"condition-id\":\"" (json-escape cid)
+      "\",\"token-yes\":\"" (json-escape tok-yes)
+      "\",\"token-no\":\"" (json-escape tok-no)
       "\",\"vol\":" (as-str vol)
-      ",\"end\":\"" (upsets/json-esc end)
-      "\",\"status\":\"" (upsets/json-esc status)
+      ",\"end\":\"" (json-escape end)
+      "\",\"status\":\"" (json-escape status)
       "\",\"last-odds\":" (as-str last-odds)
       ",\"observed-at\":" (as-str observed)
       ",\"watched\":" (if watched "true" "false")
@@ -228,7 +210,7 @@
   (lambda
     (mid ts p)
     (string-append
-      "{\"market-id\":\"" (upsets/json-esc mid)
+      "{\"market-id\":\"" (json-escape mid)
       "\",\"ts\":" (as-str ts)
       ",\"p\":" (as-str p) "}")))
 
@@ -392,9 +374,9 @@
   (lambda
     (mid wallet side usd n first-ts last-ts)
     (string-append
-      "{\"market-id\":\"" (upsets/json-esc mid)
-      "\",\"wallet\":\"" (upsets/json-esc wallet)
-      "\",\"side\":\"" (upsets/json-esc side)
+      "{\"market-id\":\"" (json-escape mid)
+      "\",\"wallet\":\"" (json-escape wallet)
+      "\",\"side\":\"" (json-escape side)
       "\",\"usd\":" (as-str usd)
       ",\"n\":" (as-str n)
       ",\"first-ts\":" (as-str first-ts)
