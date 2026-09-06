@@ -10,4 +10,5 @@
  (public_name pp-sync)
  (package pricklypear-cli)
  (modules pp_sync)
- (libraries pricklypear-cli.lib cmdliner yojson unix re))
+ (libraries pricklypear-cli.lib cmdliner yojson unix re
+            pricklypear-lisp))
