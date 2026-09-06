@@ -187,23 +187,18 @@ let store_upload
     ~(data : string)
     ~(filename : string option)
     ~(meta_json : string)
-  : (Media.put_result, string) result =
+  : (Media.put_result, Media.put_error) result =
   Media.put (Session.store session) ~author ~content_type ~data ~filename
     ~meta_json ~max_bytes:(Media.max_http_bytes_for content_type) ()
 
-let put_error_status (msg : string) : Httpun.Status.t =
-  if String.starts_with ~prefix:"payload too large" msg then
-    `Payload_too_large
-  else if String.starts_with ~prefix:"disallowed" msg
-          || msg = "empty body"
-          || String.starts_with ~prefix:"multipart" msg
-          || String.starts_with ~prefix:"Content-Type" msg
-          || String.starts_with ~prefix:"invalid" msg
-          || String.starts_with ~prefix:"content_type" msg
-          || String.starts_with ~prefix:"data_b64" msg
-          || String.starts_with ~prefix:"JSON" msg
-  then `Bad_request
-  else `Internal_server_error
+(** ONE status mapping for Media.put failures (i-1788670909): exhaustive
+    over the typed variant — a new Media error constructor is a compile
+    error here instead of a silently-misclassified 500. *)
+let status_of_put_error (e : Media.put_error) : Httpun.Status.t =
+  match e with
+  | Media.Disallowed_content_type _ | Media.Empty_body -> `Bad_request
+  | Media.Too_large _ -> `Payload_too_large
+  | Media.No_db | Media.Store_failed _ -> `Internal_server_error
 
 let api_media_post (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
   match require_authed_user session with
@@ -240,10 +235,12 @@ let api_media_post (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
                      json_response reqd ~status:`Created
                        (Media.put_result_to_yojson r);
                      ()
-                 | Error msg ->
-                     json_response reqd ~status:(put_error_status msg)
+                 | Error e ->
+                     json_response reqd ~status:(status_of_put_error e)
                        (`Assoc
-                          [ ("ok", `Bool false); ("error", `String msg) ]);
+                          [ ("ok", `Bool false)
+                          ; ("error", `String (Media.put_error_message e))
+                          ]);
                      ())))
 
 let api_media_list (session : Session.t) (reqd : Httpun.Reqd.t)
@@ -631,9 +628,9 @@ let media_upload_post (session : Session.t) (reqd : Httpun.Reqd.t)
                      redirect_response reqd
                        ("/media?msg=" ^ url_encode msg);
                      ()
-                 | Error msg ->
+                 | Error e ->
                      redirect_response reqd
-                       ("/media?err=" ^ url_encode msg);
+                       ("/media?err=" ^ url_encode (Media.put_error_message e));
                      ())))
 
 let media_delete_post (session : Session.t) (reqd : Httpun.Reqd.t)

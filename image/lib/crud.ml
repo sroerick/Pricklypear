@@ -545,13 +545,22 @@ let no_db (prim : string) : 'a =
   raise (Pricklypear_lisp.Ast.Interp_error
            (Pricklypear_lisp.Ast.Prim_error (prim, "failed: no DB", "failed")))
 
-let create
+(** Typed write outcomes for OCaml callers (HTTP edge, internal writers)
+    — i-1788670909: the prims keep their VStr value contract, but callers
+    must never sniff shapes (a 36-char rejection string is not a uuid;
+    a validation rejection is not a missing row). The value-returning
+    create/update below wrap these. *)
+type datum_write =
+  | W_ok of string        (* success: the id echo *)
+  | W_rejected of string  (* typed-boundary validation rejection *)
+  | W_no_row              (* update matched no row *)
+
+let create_outcome
     (store : Store.t) ~(type_name : string) ~(fields_json : string)
-    ~(author : string)
-    : value =
+    ~(author : string) : datum_write =
   let reject = check_type_fields store ~type_name ~fields_json in
   match reject with
-  | Some msg -> (VStr msg)
+  | Some msg -> (W_rejected msg)
   | None ->
   match Io_lwt.Db.current_conn store with
   | None -> no_db "create"
@@ -560,11 +569,20 @@ let create
     (* tree is truth; reverse trigger mirrors to data_rows *)
     let id = Tree_store.insert_datum conn ~type_name ~fields_json ~author in
     (match id with
-     | Ok s -> VStr s
+     | Ok s -> W_ok s
      | Error _ ->
          raise (Pricklypear_lisp.Ast.Interp_error
                   (Pricklypear_lisp.Ast.Prim_error
                      ("create", "failed", "failed"))))
+
+let create
+    (store : Store.t) ~(type_name : string) ~(fields_json : string)
+    ~(author : string)
+    : value =
+  match create_outcome store ~type_name ~fields_json ~author with
+  | W_ok s -> VStr s
+  | W_rejected msg -> VStr msg
+  | W_no_row -> VNil (* unreachable for create; shape parity with update *)
 
 (** (update 'type id "{fields-json}") -> VStr id | VNil.
     UPDATE fields for ONE row by (type_name, id). Returns the id
@@ -574,13 +592,12 @@ let create
    writers keep the master signatures, which route through the guard
    with caller "unknown" (an admitted-type update by an unthreaded
    internal caller errors loudly — the intended straggler behavior). *)
-let update_impl
+let update_outcome
     (store : Store.t) ~(type_name : string) ~(id : string)
-    ~(fields_json : string) ~(caller : string)
-    : value =
+    ~(fields_json : string) ~(caller : string) : datum_write =
   let reject = check_type_fields store ~type_name ~fields_json in
   match reject with
-  | Some msg -> (VStr msg)
+  | Some msg -> (W_rejected msg)
   | None ->
   match Io_lwt.Db.current_conn store with
   | None -> no_db "update"
@@ -588,7 +605,16 @@ let update_impl
     guard_space_write conn ~prim:"update" ~type_name ~caller
       ~id:(Some id);
     let id' = Tree_store.update_datum conn ~type_name ~id ~fields_json in
-    (match id' with Ok s -> VStr s | Error _ -> VNil)
+    (match id' with Ok s -> W_ok s | Error _ -> W_no_row)
+
+let update_impl
+    (store : Store.t) ~(type_name : string) ~(id : string)
+    ~(fields_json : string) ~(caller : string)
+    : value =
+  match update_outcome store ~type_name ~id ~fields_json ~caller with
+  | W_ok s -> VStr s
+  | W_rejected msg -> VStr msg
+  | W_no_row -> VNil
 
 let update store ~type_name ~id ~fields_json =
   update_impl store ~type_name ~id ~fields_json ~caller:"unknown"
@@ -1566,35 +1592,36 @@ let tree_children_html (store : Store.t) ~(prefix : string) ~(garden_root : stri
       let html = render_children_html conn ~prefix ~garden_root () in
       (VStr html)
 
-let tree_upsert (store : Store.t) ~(path : string) ~(kind : string)
-    ~(type_name : string) ~(body_json : string) ~(author : string) : value =
+let tree_upsert_outcome (store : Store.t) ~(path : string) ~(kind : string)
+    ~(type_name : string) ~(body_json : string) ~(author : string)
+    : (string, string) result =
   if kind = "datum" then
     (* Datum node: run the same typed-boundary validation as create/update,
        then write via Tree_store.upsert_datum (path-explicit; generates an
        id when the path's id label is a placeholder). one-tree.tree-datum-prims. *)
     let reject = check_type_fields store ~type_name ~fields_json:body_json in
     (match reject with
-     | Some msg -> (VStr msg)
+     | Some msg -> (Error msg)
      | None ->
      match Io_lwt.Db.current_conn store with
      | None -> no_db "tree/upsert"
      | Some conn ->
-       let r =
-         Tree_store.upsert_datum conn ~path ~type_name ~body_json ~author
-           ~rank:None
-       in
-       (match r with Ok p -> (VStr p) | Error e -> (VStr e)))
+       Tree_store.upsert_datum conn ~path ~type_name ~body_json ~author
+         ~rank:None)
   else
     match Io_lwt.Db.current_conn store with
     | None -> no_db "tree/upsert"
     | Some conn ->
-      let r =
-        Tree_store.upsert_hier conn ~path ~kind ~type_name ~body_json ~author
-          ~rank:None
-      in
-      (match r with
-       | Ok p -> (VStr p)
-       | Error e -> (VStr e))
+      Tree_store.upsert_hier conn ~path ~kind ~type_name ~body_json ~author
+        ~rank:None
+
+let tree_upsert (store : Store.t) ~(path : string) ~(kind : string)
+    ~(type_name : string) ~(body_json : string) ~(author : string) : value =
+  match
+    tree_upsert_outcome store ~path ~kind ~type_name ~body_json ~author
+  with
+  | Ok p -> (VStr p)
+  | Error e -> (VStr e)
 
 let tree_delete (store : Store.t) ~(path : string) ~(recursive : bool)
     : value =

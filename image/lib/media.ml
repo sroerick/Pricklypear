@@ -175,6 +175,28 @@ let row_to_meta (row : Pgx.row) : meta option =
         }
   | _ -> None
 
+(** Typed put failures (i-1788670909): callers — the HTTP edge and the
+    media prims — match this variant instead of sniffing message
+    prefixes. A new failure mode is a constructor here and a compile
+    error at every match site, not a silently-misclassified 500.
+    [put_error_message] renders the exact strings the old
+    stringly-typed contract produced (prim output compat). *)
+type put_error =
+  | Disallowed_content_type of string
+  | Empty_body
+  | Too_large of int * int  (* got, max *)
+  | No_db
+  | Store_failed of string  (* rendered failure detail (insert anomaly or SQL exn) *)
+
+let put_error_message (e : put_error) : string =
+  match e with
+  | Disallowed_content_type ct -> "disallowed content_type: " ^ ct
+  | Empty_body -> "empty body"
+  | Too_large (got, max) ->
+      Printf.sprintf "payload too large (%d > %d)" got max
+  | No_db -> "no db connection"
+  | Store_failed detail -> detail
+
 let put
     (store : Store.t)
     ~(author : string)
@@ -183,19 +205,18 @@ let put
     ?(filename : string option = None)
     ?(meta_json : string = "{}")
     ?(max_bytes : int = max_http_bytes)
-    () : (put_result, string) result =
+    () : (put_result, put_error) result =
   let ct = normalize_content_type content_type in
   if not (content_type_allowed ct) then
-    (Error ("disallowed content_type: " ^ ct))
+    (Error (Disallowed_content_type ct))
   else
     let byte_size = String.length data in
-    if byte_size <= 0 then (Error "empty body")
+    if byte_size <= 0 then (Error Empty_body)
     else if byte_size > max_bytes then
-      (Error
-           (Printf.sprintf "payload too large (%d > %d)" byte_size max_bytes))
+      (Error (Too_large (byte_size, max_bytes)))
     else
       match Io_lwt.Db.current_conn store with
-      | None -> (Error "no db connection")
+      | None -> (Error No_db)
       | Some conn ->
           let fname = sanitize_filename filename in
           let digest = sha256_hex data in
@@ -247,10 +268,13 @@ let put
                             ; byte_size
                             ; sha256 = digest
                             })
-                   | None -> (Error "insert returned no id"))
-              | [] -> (Error "insert returned no row")
+                   | None ->
+                       (Error
+                          (Store_failed "insert returned no id")))
+              | [] -> (Error (Store_failed "insert returned no row"))
     with exn ->
-      (Error ("store failed: " ^ Printexc.to_string exn)))
+      (Error
+         (Store_failed ("store failed: " ^ Printexc.to_string exn))))
 
 (** Visibility confinement (BORGE-1785695911): a blob readable by [actor]
     iff [actor] authored it or [is_admin]. [None] performs no confinement

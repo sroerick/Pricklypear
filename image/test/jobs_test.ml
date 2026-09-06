@@ -132,8 +132,12 @@ let future = 86_400_000L  (* one day in ms — runner due-scan (run_at<=now) ski
 (** Submit a job the live runner will NOT claim (future run_at). *)
 let submit_future (store : S.t) ~(fn : string) ~(args_json : string)
     ~(branch : string) ~(submitted_by : string) : string =
-  J.submit ~store ~fn ~args_json ~branch
-    ~submitted_by ~run_at_ms:(Int64.add (now_ms ()) future) ()
+  match
+    J.submit ~store ~fn ~args_json ~branch
+      ~submitted_by ~run_at_ms:(Int64.add (now_ms ()) future) ()
+  with
+  | Ok id -> id
+  | Error msg -> failwith ("submit_future: " ^ msg)
 
 (** Drive a job's run_at to 0 so it is definitely due (run_at <= now); the
     runner's next due-scan is up to ~1s away, so the subsequent test-side
@@ -700,6 +704,20 @@ let test_schedule_to_value_json () =
      && member "every_ms" json2 = Some (`Int 60000))
 
 
+(** i-1788670909: submit is typed — failure is [Error], never an
+    id-shaped string. No DB needed: an unconnected store hits the
+    no-connection arm before any I/O. *)
+let test_submit_no_db_error () =
+  let store = S.make ~cfg:(S.config_from_env ()) ~branch_id:main_id () in
+  match
+    J.submit ~store ~fn:"f" ~args_json:"{}" ~branch:"system/main"
+      ~submitted_by:"a" ~run_at_ms:1L ()
+  with
+  | Error msg ->
+      Alcotest.(check string) "no-db failure message" "submit-job: no db connection"
+        msg
+  | Ok id -> Alcotest.fail ("expected Error, got id " ^ id)
+
 let () =
   Random.self_init ();
   Alcotest.run "jobs"
@@ -721,6 +739,9 @@ let () =
             test_job_to_value_json
         ; Alcotest.test_case "schedule_to_value escapes adversarial fields" `Quick
             test_schedule_to_value_json ] )
+    ; ( "submit-contract"
+      , [ Alcotest.test_case "no-DB submit is Error, not an id string" `Quick
+            test_submit_no_db_error ] )
     ; ( "step-checkpoints"
       , [ Alcotest.test_case "job-id fiber binding" `Quick
             test_current_job_id_binding

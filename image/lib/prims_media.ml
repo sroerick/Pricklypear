@@ -110,7 +110,8 @@ let register (t : t) (tbl : Primitives.t) : unit =
                  (match res with
                   | Ok r -> (Pricklypear_lisp.Ast.VStr r.id)
                   | Error e ->
-                      (Pricklypear_lisp.Ast.VStr ("media-put: " ^ e)))));
+                      (Pricklypear_lisp.Ast.VStr
+                         ("media-put: " ^ Media.put_error_message e)))));
   (* (media-put-raw content-type data [filename]) -> VStr id | error
      Like media-put but takes RAW bytes (no base64) and uses the
      type-aware HTTP ceiling instead of the 256 KiB eval ceiling.
@@ -146,7 +147,9 @@ let register (t : t) (tbl : Primitives.t) : unit =
             in
             (match res with
              | Ok r -> (Pricklypear_lisp.Ast.VStr r.id)
-             | Error e -> (Pricklypear_lisp.Ast.VStr ("media-put-raw: " ^ e))));
+             | Error e ->
+                 (Pricklypear_lisp.Ast.VStr
+                    ("media-put-raw: " ^ Media.put_error_message e))));
   (* (media-url id) -> VStr "/media/<id>" *)
   Primitives.register tbl "media-url"
     (fun args ->

@@ -1257,12 +1257,12 @@ let default_agent_seed (t : t) : string =
   "- When finished, SHORT text summary listing proofs, and NO tool calls.\n" ^
   "- Do not invent bindings; use list_bindings / inspect_function."
 
-let agent_session_new
+let agent_session_new_res
     (t : t)
     ~(seed : string)
     ?(tools = true)
     ?title
-    () : Pricklypear_lisp.Ast.value =
+    () : (string, string) result =
   let r =
     Ai_store.create_session t.store
       ~owner:t.manifest.username
@@ -1273,8 +1273,19 @@ let agent_session_new
       ~model:(Llm_client.model ())
       ()
   in
-  match r with
-  | Ok s -> (Pricklypear_lisp.Ast.VStr s.id)
+  match r with Ok s -> Ok s.id | Error e -> Error e
+
+(** Prim/value-surface wrapper (i-1788670909): Lisp callers keep the
+    VStr id | VStr "agent-session-new error: ..." contract; OCaml
+    callers use [agent_session_new_res] instead of sniffing the prefix. *)
+let agent_session_new
+    (t : t)
+    ~(seed : string)
+    ?(tools = true)
+    ?title
+    () : Pricklypear_lisp.Ast.value =
+  match agent_session_new_res t ~seed ~tools ?title () with
+  | Ok id -> (Pricklypear_lisp.Ast.VStr id)
   | Error e -> (Pricklypear_lisp.Ast.VStr ("agent-session-new error: " ^ e))
 
 let agent_say
@@ -1408,13 +1419,12 @@ let agent
     else Some (if String.length p > 80 then String.sub p 0 80 ^ "…" else p)
   in
   let created =
-    agent_session_new t ~seed ~tools:true ?title:title_opt ()
+    agent_session_new_res t ~seed ~tools:true ?title:title_opt ()
   in
   match created with
-  | Pricklypear_lisp.Ast.VStr sid
-    when not (String.starts_with ~prefix:"agent-session-new error" sid) ->
-      agent_say t ~session_id:sid ~prompt ~on_event ()
-  | other -> other
+  | Ok sid -> agent_say t ~session_id:sid ~prompt ~on_event ()
+  | Error e ->
+      (Pricklypear_lisp.Ast.VStr ("agent-session-new error: " ^ e))
 
 (** Temporary alias: new tools session + one say. *)
 let agent_task
@@ -1430,12 +1440,13 @@ let agent_task
     else Some (if String.length p > 80 then String.sub p 0 80 ^ "…" else p)
   in
   let created =
-    agent_session_new t ~seed ~tools:true ?title:title_opt ()
+    agent_session_new_res t ~seed ~tools:true ?title:title_opt ()
   in
   match created with
-  | Pricklypear_lisp.Ast.VStr sid when not (String.starts_with ~prefix:"agent-session-new error" sid) ->
+  | Ok sid ->
       agent_say t ~session_id:sid ~prompt ~max_steps ~on_event ()
-  | other -> other
+  | Error e ->
+      (Pricklypear_lisp.Ast.VStr ("agent-session-new error: " ^ e))
 
 
 let llm_rewrite (t : t) ~(mode : string) ~(name : string) ~(concept : string)

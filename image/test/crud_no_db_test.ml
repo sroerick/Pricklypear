@@ -112,6 +112,35 @@ let test_write_prims_raise () =
         ~type_name:"note" ~body_json:"{\"title\":\"t\"}" ~anchor:None
         ~author:"a")
 
+(** i-1788670909: the typed outcome fns (used by the HTTP edge instead of
+    shape/prefix sniffing) share the same loud no-DB contract — they
+    raise, never return a fabricated success shape. *)
+let test_outcome_fns_raise () =
+  let store = no_db_store () in
+  let raises : type a. (unit -> a) -> bool =
+    fun f ->
+      match f () with
+      | _ -> false
+      | exception Ast.Interp_error _ -> true
+      | exception _ -> false
+  in
+  Alcotest.(check bool) "create_outcome raises" true
+    (raises (fun () ->
+         C.create_outcome store ~type_name:"t" ~fields_json:"{}" ~author:"a"));
+  Alcotest.(check bool) "update_outcome raises" true
+    (raises (fun () ->
+         C.update_outcome store ~type_name:"t"
+           ~id:"00000000-0000-0000-0000-00000000000f" ~fields_json:"{}"
+           ~caller:"a"));
+  Alcotest.(check bool) "tree_upsert_outcome (datum) raises" true
+    (raises (fun () ->
+         C.tree_upsert_outcome store ~path:"data.u.a.t.new" ~kind:"datum"
+           ~type_name:"t" ~body_json:"{}" ~author:"a"));
+  Alcotest.(check bool) "tree_upsert_outcome (hier) raises" true
+    (raises (fun () ->
+         C.tree_upsert_outcome store ~path:"b.x.note.p" ~kind:"note"
+           ~type_name:"note" ~body_json:"{\"title\":\"t\"}" ~author:"a"))
+
 (** Reads keep their empty defaults — the write/read split is deliberate
     (reads are harmless when degraded; writes must be loud). *)
 let test_reads_keep_empty_defaults () =
@@ -134,6 +163,8 @@ let () =
       ( "write-prims-raise",
         [ test_case "every write prim raises Interp_error on no DB" `Quick
             test_write_prims_raise
+        ; test_case "typed outcome fns raise Interp_error on no DB" `Quick
+            test_outcome_fns_raise
         ; test_case "read prims keep empty defaults" `Quick
             test_reads_keep_empty_defaults
         ] )

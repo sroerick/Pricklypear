@@ -121,10 +121,15 @@ let job_to_value (j : job) : value =
 
 (* ---- submit ---- *)
 
+(** [submit] -> Ok id | Error message (i-1788670909: was id-or-error-string,
+    so a caller could not tell a real job id from "submit-job: ..." failure
+    text without prefix-sniffing; the prims keep their VStr value contract
+    by rendering [Error] as the value, byte-identically). *)
 let submit ~(store : Store.t) ~(fn : string) ~(args_json : string)
-    ~(branch : string) ~(submitted_by : string) ~(run_at_ms : int64) () : string =
+    ~(branch : string) ~(submitted_by : string) ~(run_at_ms : int64) ()
+    : (string, string) result =
   match pg_conn store with
-  | None -> "submit-job: no db connection"
+  | None -> Error "submit-job: no db connection"
   | Some conn ->
     (try
       let sql =
@@ -146,11 +151,11 @@ let submit ~(store : Store.t) ~(fn : string) ~(args_json : string)
       (match rows with
        | row :: _ ->
            (match Row.cell_string row 0 with
-            | Some id -> id
-            | None -> "submit-job: no id returned")
-       | [] -> "submit-job: insert returned no row")
+            | Some id -> Ok id
+            | None -> Error "submit-job: no id returned")
+       | [] -> Error "submit-job: insert returned no row")
     with exn ->
-      "submit-job: " ^ Printexc.to_string exn)
+      Error ("submit-job: " ^ Printexc.to_string exn))
 
 (* ---- get (by id, confined to caller unless admin) ---- *)
 

@@ -131,6 +131,27 @@ let test_stream_joins_producer () =
   Alcotest.check Alcotest.bool "producer completed before return" true
     (Atomic.get done_flag)
 
+(** i-1788670909: ONE status mapping for handler-signalled codes — the
+    named common cases, then any valid 3-digit HTTP code passes through
+    (418 was coerced to 400 before); only non-3-digit garbage coerces
+    to 400. *)
+let test_status_of_handler_code () =
+  let s = Http_core.status_of_handler_code_for_test in
+  let is c expected =
+    Alcotest.(check bool) ("code " ^ string_of_int c) true (s c = expected)
+  in
+  is 409 `Conflict;
+  is 400 `Bad_request;
+  is 403 `Forbidden;
+  is 404 `Not_found;
+  is 500 `Internal_server_error;
+  is 418 `I_m_a_teapot;
+  is 503 `Service_unavailable;
+  is 302 `Found;
+  is 42 `Bad_request;
+  is 1234 `Bad_request;
+  is (-1) `Bad_request
+
 let () =
   Eio_main.run @@ fun _env ->
   let open Alcotest in
@@ -138,6 +159,9 @@ let () =
     [ ( "parse_body"
       , [ test_case "shape" `Quick test_parse_body
         ; test_case "json_field_str" `Quick test_json_field_str ] )
+    ; ( "handler_status"
+      , [ test_case "status_of_handler_code" `Quick
+            test_status_of_handler_code ] )
     ; ( "stream_events"
       , [ test_case "drains in order then Finish" `Quick
             test_stream_drains_in_order
