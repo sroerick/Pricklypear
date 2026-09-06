@@ -718,22 +718,28 @@ let branches_unoverride (session : Session.t) (reqd : Httpun.Reqd.t)
   let body = read_body reqd in
   let ref_ = Option.value (form_field body "ref") ~default:"" |> String.trim in
   let name = Option.value (form_field body "name") ~default:"" |> String.trim in
-  (* Checkout target branch first if needed so delete hits the right id. *)
-  let _ =
+  (* Checkout target branch first if needed so delete hits the right id.
+     i-1788670767: a failed checkout must abort the action — proceeding
+     would run the unoverride against the wrong branch and delete a
+     same-named pin on the CURRENT branch. *)
+  let opened =
     if ref_ <> "" && Session.branch_name session <> ref_ then
       Session.checkout_ref session ref_
-    else (Ok ())
+    else Ok ()
   in
-  let r = Session.unoverride session name in
-  match r with
-  | Error e ->
-      branch_detail_page session reqd ~ref_ ~err:e ()
-  | Ok true ->
-      branch_detail_page session reqd ~ref_
-        ~msg:("unoverrode " ^ name ^ " — now inherits parent") ()
-  | Ok false ->
-      branch_detail_page session reqd ~ref_
-        ~err:("no pin named " ^ name ^ " on this branch") ()
+  match opened with
+  | Error e -> branch_detail_page session reqd ~ref_ ~err:e ()
+  | Ok () -> (
+      let r = Session.unoverride session name in
+      match r with
+      | Error e ->
+          branch_detail_page session reqd ~ref_ ~err:e ()
+      | Ok true ->
+          branch_detail_page session reqd ~ref_
+            ~msg:("unoverrode " ^ name ^ " — now inherits parent") ()
+      | Ok false ->
+          branch_detail_page session reqd ~ref_
+            ~err:("no pin named " ^ name ^ " on this branch") ())
 
 let branches_promote (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
   let body = read_body reqd in
