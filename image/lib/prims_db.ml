@@ -136,7 +136,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
         | [ Pricklypear_lisp.Ast.VStr type_name;
             Pricklypear_lisp.Ast.VStr id;
             Pricklypear_lisp.Ast.VStr fields_json ] ->
-            Crud.update t.store ~type_name ~id ~fields_json
+            Crud.update_guarded t.store ~type_name ~id ~fields_json ~caller:uname
         | _ ->
             ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("update", "bad args (need type, id, fields)", "bad-args"))))));
 
@@ -153,7 +153,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
             Pricklypear_lisp.Ast.VStr id;
             Pricklypear_lisp.Ast.VStr field;
             Pricklypear_lisp.Ast.VStr value ] ->
-            Crud.update_field t.store ~type_name ~id ~field ~value
+            Crud.update_field_guarded t.store ~type_name ~id ~field ~value ~caller:uname
         | _ ->
             ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("update-field", "bad args (need type, id, field, value)", "bad-args"))))));
 
@@ -166,7 +166,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
         match args with
         | [ Pricklypear_lisp.Ast.VStr type_name;
             Pricklypear_lisp.Ast.VStr id ] ->
-            Crud.delete t.store ~type_name ~id
+            Crud.delete_guarded t.store ~type_name ~id ~caller:uname
         | _ ->
             (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("delete", "bad args (need type, id)", "bad-args")))));
 
@@ -276,7 +276,7 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
       match args with
       | [ Pricklypear_lisp.Ast.VStr type_name;
           Pricklypear_lisp.Ast.VStr id ] ->
-          (Crud.node_path ~type_name ~id)
+          (Crud.node_path t.store ~type_name ~id)
       | _ ->
           (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("node-path", "need type, id", "bad-args")))));
 
@@ -805,6 +805,87 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
       let uname = actor () in
       if uname = "anonymous" then deny_anon "list-data-lenses"
       else Crud.list_data_lenses t.store ());
+
+  (* Shared data spaces (branching.shared-data-spaces S2): member-gated
+     collaboration compartments on the data plane. Gates: any non-anon
+     identity creates; owner (or role='owner' member, or kernel admin)
+     manages members and admits types; read prims are membership-scoped.
+     The non-member WRITE guard lives in Crud.create/update/update_field/
+     delete (guard_space_write), so every data prim honors membership. *)
+  let kernel_admin_of uname =
+    match Auth_store.get_user_by_username t.store uname with
+    | Some u -> u.Auth_store.is_admin
+    | None -> false
+  in
+  register_crud "space-create"
+    (fun args ->
+      let uname = actor () in
+      if uname = "anonymous" then deny_anon "space-create"
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr name ] ->
+            Crud.space_create t.store ~caller:uname ~name
+        | _ ->
+            ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("space-create", "need space-name", "bad-args"))))));
+
+  register_crud "space-add-member"
+    (fun args ->
+      let uname = actor () in
+      if uname = "anonymous" then deny_anon "space-add-member"
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr space;
+            Pricklypear_lisp.Ast.VStr username ] ->
+            Crud.space_add_member t.store ~caller:uname
+              ~kernel_admin:(kernel_admin_of uname) ~space ~username
+        | _ ->
+            ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("space-add-member", "need space username", "bad-args"))))));
+
+  register_crud "space-remove-member"
+    (fun args ->
+      let uname = actor () in
+      if uname = "anonymous" then deny_anon "space-remove-member"
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr space;
+            Pricklypear_lisp.Ast.VStr username ] ->
+            Crud.space_remove_member t.store ~caller:uname
+              ~kernel_admin:(kernel_admin_of uname) ~space ~username
+        | _ ->
+            ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("space-remove-member", "need space username", "bad-args"))))));
+
+  register_crud "space-admit"
+    (fun args ->
+      let uname = actor () in
+      if uname = "anonymous" then deny_anon "space-admit"
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr type_name;
+            Pricklypear_lisp.Ast.VStr space ] ->
+            Crud.space_admit t.store ~caller:uname
+              ~kernel_admin:(kernel_admin_of uname) ~space ~type_name
+        | _ ->
+            ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("space-admit", "need type space", "bad-args"))))));
+
+  register_crud "space-list"
+    (fun _args ->
+      let uname = actor () in
+      if uname = "anonymous" then deny_anon "space-list"
+      else
+        Crud.space_list t.store ~caller:uname
+          ~kernel_admin:(kernel_admin_of uname));
+
+  register_crud "space-members"
+    (fun args ->
+      let uname = actor () in
+      if uname = "anonymous" then deny_anon "space-members"
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr space ] ->
+            Crud.space_members t.store ~caller:uname
+              ~kernel_admin:(kernel_admin_of uname) ~space
+        | _ ->
+            ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("space-members", "need space", "bad-args"))))));
   register_crud "tree/upsert"
     (fun args ->
       let uname = actor () in

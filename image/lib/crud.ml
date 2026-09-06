@@ -197,6 +197,247 @@ let select_for_update
     - Caller can build the JSON via (string-append ...) or a future
       (json ...) prim; for now both caller and DB speak JSON strings.
     - The DB validates it's well-formed JSON (jsonb column). *)
+(* ---- shared data spaces (branching.shared-data-spaces) ----
+
+   S1 (migrations/029_data_spaces.sql) built the storage floor: the
+   data.s.<space>.<type>.<id> path compartment, membership tables, the
+   tree_datum_path routing rule (admitted type -> space), and the
+   member-space disjunct in tree_data_rows + RLS. S2 (this block) is the
+   PRIM surface: space management fns, the non-member write guard, and
+   node-path parity. Caller-membership is the check — author-runs-as-
+   author does NOT apply to the space compartment (the caller's identity
+   is threaded explicitly; the author field stays attribution). *)
+
+let space_prim_error prim msg =
+  raise
+    (Pricklypear_lisp.Ast.Interp_error
+       (Pricklypear_lisp.Ast.User_error
+          (Printf.sprintf "%s: %s" prim msg, "denied")))
+
+(** Type admission: the space [type_name] writes route to, if any. *)
+let space_of_type (conn : Store_db.conn) ~(type_name : string) : string option =
+  match
+    Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string type_name ]
+      "SELECT space FROM data_space_types WHERE type_name = $1"
+  with
+  | [ [ c ] ] -> Pgx.Value.to_string c
+  | _ -> None
+
+let is_space_member (conn : Store_db.conn) ~(space : string)
+    ~(username : string) : bool =
+  match
+    Io_lwt.Db.execute conn
+      ~params:[ Pgx.Value.of_string space; Pgx.Value.of_string username ]
+      "SELECT EXISTS (SELECT 1 FROM data_space_members \
+       WHERE space = $1 AND username = $2)::text"
+  with
+  | [ [ c ] ] -> Pgx.Value.to_bool c |> Option.value ~default:false
+  | _ -> false
+
+(** Space of the space row bearing datum [id] (the row may live in a space
+    whose type has since been un-admitted — the PATH, not current
+    admission, is what the row owes membership checks to). *)
+let space_of_datum (conn : Store_db.conn) ~(id : string) : string option =
+  match
+    Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string id ]
+      "SELECT tree_dec_label(subltree(path, 2, 3)::text) FROM tree_nodes \
+       WHERE kind = 'datum' AND path <@ 'data.s'::ltree \
+       AND tree_datum_id(path) = $1::uuid"
+  with
+  | [ [ c ] ] -> Pgx.Value.to_string c
+  | _ -> None
+
+(** The S2 non-member write guard (spec: "a removed member's subsequent
+    create errors with a membership error, not a silent per-user write").
+    Two checks: (1) writing a space-ADMITTED type requires membership;
+    (2) touching an existing space ROW requires membership in the row's
+    space (survives un-admit; covers update/delete-by-id). The RLS floor
+    (WITH CHECK) is the belt; this is the descriptive error. Callers that
+    do not thread an identity get [~caller] defaulted to "unknown"
+    (optional arg so internal stragglers keep compiling): touching an
+    admitted type or a space row then errors LOUDLY, which is the
+    intended straggler behavior — thread the real identity to pass. *)
+let guard_space_write (conn : Store_db.conn) ~(prim : string)
+    ~(type_name : string) ~(caller : string) ~(id : string option) : unit =
+  (match space_of_type conn ~type_name with
+   | Some sp when not (is_space_member conn ~space:sp ~username:caller) ->
+       space_prim_error prim
+         (Printf.sprintf "type %s is admitted to space %s; %s is not a member"
+            type_name sp caller)
+   | _ -> ());
+  match id with
+  | None -> ()
+  | Some id ->
+      (match space_of_datum conn ~id with
+       | Some sp when not (is_space_member conn ~space:sp ~username:caller) ->
+           space_prim_error prim
+             (Printf.sprintf "datum lives in space %s; %s is not a member"
+                sp caller)
+       | _ -> ())
+
+(** {1 Space management} (the S2 prim bodies; prims_db threads the
+    caller + kernel-admin bit). Gates: any non-anon identity may create;
+    member management + type admission require the space owner (owner
+    column or role='owner' member) or kernel admin; listing is membership-
+    scoped (kernel admin sees all). *)
+
+let space_exists (conn : Store_db.conn) ~(space : string) : bool =
+  match
+    Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string space ]
+      "SELECT EXISTS (SELECT 1 FROM data_spaces WHERE name = $1)::text"
+  with
+  | [ [ c ] ] -> Pgx.Value.to_bool c |> Option.value ~default:false
+  | _ -> false
+
+let space_owner_ok (conn : Store_db.conn) ~(space : string)
+    ~(caller : string) ~(kernel_admin : bool) : bool =
+  if kernel_admin then true
+  else
+    match
+      Io_lwt.Db.execute conn
+        ~params:[ Pgx.Value.of_string space; Pgx.Value.of_string caller ]
+        "SELECT EXISTS (SELECT 1 FROM data_spaces WHERE name = $1 AND owner = $2 \
+         UNION SELECT 1 FROM data_space_members \
+         WHERE space = $1 AND username = $2 AND role = 'owner')::text"
+    with
+    | [ [ c ] ] -> Pgx.Value.to_bool c |> Option.value ~default:false
+    | _ -> false
+
+let validate_space_name name =
+  (* Space names become single ltree labels; the encoder is the validator. *)
+  try ignore (Tree_store.enc_label name) with
+  | Invalid_argument msg -> space_prim_error "space-create" msg
+
+let space_create (store : Store.t) ~(caller : string) ~(name : string) : value =
+  validate_space_name name;
+  match Io_lwt.Db.current_conn store with
+  | None -> space_prim_error "space-create" "failed: no DB"
+  | Some conn ->
+      if space_exists conn ~space:name then
+        space_prim_error "space-create"
+          (Printf.sprintf "space %s already exists" name);
+      let rows =
+        Io_lwt.Db.execute conn
+          ~params:[ Pgx.Value.of_string name; Pgx.Value.of_string caller ]
+          "INSERT INTO data_spaces (name, owner) VALUES ($1, $2) \
+           RETURNING name"
+      in
+      (match rows with
+       | [ [ _ ] ] ->
+           ignore
+             (Io_lwt.Db.execute conn
+                ~params:[ Pgx.Value.of_string name;
+                          Pgx.Value.of_string caller ]
+                "INSERT INTO data_space_members (space, username, role) \
+                 VALUES ($1, $2, 'owner') ON CONFLICT DO NOTHING");
+           VStr (Printf.sprintf "created space %s (owner %s)" name caller)
+       | _ -> space_prim_error "space-create" "failed")
+
+let space_add_member (store : Store.t) ~(caller : string)
+    ~(kernel_admin : bool) ~(space : string) ~(username : string) : value =
+  match Io_lwt.Db.current_conn store with
+  | None -> space_prim_error "space-add-member" "failed: no DB"
+  | Some conn ->
+      if not (space_exists conn ~space) then
+        space_prim_error "space-add-member"
+          (Printf.sprintf "no such space %s" space);
+      if not (space_owner_ok conn ~space ~caller ~kernel_admin) then
+        space_prim_error "space-add-member"
+          (Printf.sprintf "%s is not an owner of space %s" caller space);
+      ignore
+        (Io_lwt.Db.execute conn
+           ~params:[ Pgx.Value.of_string space;
+                     Pgx.Value.of_string username ]
+           "INSERT INTO data_space_members (space, username) \
+            VALUES ($1, $2) ON CONFLICT DO NOTHING");
+      VStr (Printf.sprintf "%s added to space %s" username space)
+
+let space_remove_member (store : Store.t) ~(caller : string)
+    ~(kernel_admin : bool) ~(space : string) ~(username : string) : value =
+  match Io_lwt.Db.current_conn store with
+  | None -> space_prim_error "space-remove-member" "failed: no DB"
+  | Some conn ->
+      if not (space_owner_ok conn ~space ~caller ~kernel_admin) then
+        space_prim_error "space-remove-member"
+          (Printf.sprintf "%s is not an owner of space %s" caller space);
+      ignore
+        (Io_lwt.Db.execute conn
+           ~params:[ Pgx.Value.of_string space;
+                     Pgx.Value.of_string username ]
+           "DELETE FROM data_space_members WHERE space = $1 AND username = $2");
+      VStr (Printf.sprintf "%s removed from space %s" username space)
+
+let space_admit (store : Store.t) ~(caller : string) ~(kernel_admin : bool)
+    ~(space : string) ~(type_name : string) : value =
+  match Io_lwt.Db.current_conn store with
+  | None -> space_prim_error "space-admit" "failed: no DB"
+  | Some conn ->
+      if not (space_exists conn ~space) then
+        space_prim_error "space-admit" (Printf.sprintf "no such space %s" space);
+      if not (space_owner_ok conn ~space ~caller ~kernel_admin) then
+        space_prim_error "space-admit"
+          (Printf.sprintf "%s is not an owner of space %s" caller space);
+      ignore
+        (Io_lwt.Db.execute conn
+           ~params:[ Pgx.Value.of_string type_name;
+                     Pgx.Value.of_string space;
+                     Pgx.Value.of_string caller ]
+           "INSERT INTO data_space_types (type_name, space, admitted_by) \
+            VALUES ($1, $2, $3) \
+            ON CONFLICT (type_name) DO UPDATE \
+            SET space = EXCLUDED.space, admitted_by = EXCLUDED.admitted_by");
+      VStr (Printf.sprintf "type %s admitted to space %s" type_name space)
+
+let space_list (store : Store.t) ~(caller : string) ~(kernel_admin : bool)
+    : value =
+  match Io_lwt.Db.current_conn store with
+  | None -> VList []
+  | Some conn ->
+      let sql, params =
+        if kernel_admin then
+          ("SELECT name FROM data_spaces ORDER BY name", [])
+        else
+          ( "SELECT space FROM data_space_members WHERE username = $1 \
+             ORDER BY space"
+          , [ Pgx.Value.of_string caller ] )
+      in
+      let rows = Io_lwt.Db.execute conn ~params sql in
+      VList
+        (List.filter_map
+           (fun row ->
+             match row with
+             | [ c ] -> (
+                 match Pgx.Value.to_string c with
+                 | Some s -> Some (VStr s)
+                 | None -> None)
+             | _ -> None)
+           rows)
+
+let space_members (store : Store.t) ~(caller : string)
+    ~(kernel_admin : bool) ~(space : string) : value =
+  match Io_lwt.Db.current_conn store with
+  | None -> VList []
+  | Some conn ->
+      (if (not kernel_admin) && not (is_space_member conn ~space ~username:caller)
+       then
+         space_prim_error "space-members"
+           (Printf.sprintf "%s is not a member of space %s" caller space));
+      let rows =
+        Io_lwt.Db.execute conn ~params:[ Pgx.Value.of_string space ]
+          "SELECT username || ' (' || role || ')' FROM data_space_members \
+           WHERE space = $1 ORDER BY username"
+      in
+      VList
+        (List.filter_map
+           (fun row ->
+             match row with
+             | [ c ] -> (
+                 match Pgx.Value.to_string c with
+                 | Some s -> Some (VStr s)
+                 | None -> None)
+             | _ -> None)
+           rows)
+
 let create
     (store : Store.t) ~(type_name : string) ~(fields_json : string)
     ~(author : string)
@@ -211,6 +452,7 @@ let create
                (Pricklypear_lisp.Ast.Prim_error
                   ("create", "failed: no DB", "failed")))
   | Some conn ->
+    guard_space_write conn ~prim:"create" ~type_name ~caller:author ~id:None;
     (* tree is truth; reverse trigger mirrors to data_rows *)
     let id = Tree_store.insert_datum conn ~type_name ~fields_json ~author in
     (match id with
@@ -223,9 +465,14 @@ let create
 (** (update 'type id "{fields-json}") -> VStr id | VNil.
     UPDATE fields for ONE row by (type_name, id). Returns the id
     (echo of the row updated) on success, or VNil if no row matched. *)
-let update
+(* Identity-driven surfaces (prims, /data browser) call the _guarded
+   variants, threading the session identity; internal bookkeeping
+   writers keep the master signatures, which route through the guard
+   with caller "unknown" (an admitted-type update by an unthreaded
+   internal caller errors loudly — the intended straggler behavior). *)
+let update_impl
     (store : Store.t) ~(type_name : string) ~(id : string)
-    ~(fields_json : string)
+    ~(fields_json : string) ~(caller : string)
     : value =
   let reject = check_type_fields store ~type_name ~fields_json in
   match reject with
@@ -234,8 +481,16 @@ let update
   match Io_lwt.Db.current_conn store with
   | None -> VNil
   | Some conn ->
+    guard_space_write conn ~prim:"update" ~type_name ~caller
+      ~id:(Some id);
     let id' = Tree_store.update_datum conn ~type_name ~id ~fields_json in
     (match id' with Some s -> VStr s | None -> VNil)
+
+let update store ~type_name ~id ~fields_json =
+  update_impl store ~type_name ~id ~fields_json ~caller:"unknown"
+
+let update_guarded store ~type_name ~id ~fields_json ~caller =
+  update_impl store ~type_name ~id ~fields_json ~caller
 
 (** (update-field 'type id "field" "value") -> VStr id | VNil.
     Ergonomic shorthand for the v1 dict-set + update round-trip:
@@ -254,9 +509,9 @@ let update
     row, so two writers updating different fields both land (no
     lost-update race). The tx conn (with pp.user LOCAL set) is used
     throughout, so the RLS floor stays active. *)
-let update_field
+let update_field_impl
     (store : Store.t) ~(type_name : string) ~(id : string)
-    ~(field : string) ~(value : string)
+    ~(field : string) ~(value : string) ~(caller : string)
     : value =
   (* Preserve type-field validation (update_field used to route through
      update -> check_type_fields). Build a throwaway single-field JSON to
@@ -269,6 +524,8 @@ let update_field
   Io_lwt.Db.with_transaction store (function
     | None -> VNil
     | Some conn ->
+        guard_space_write conn ~prim:"update-field" ~type_name ~caller
+          ~id:(Some id);
         let user = session_user () in
         let sql =
           "SELECT fields::text FROM " ^ data_rel () ^ " " ^
@@ -315,15 +572,31 @@ let update_field
              in
              (match id' with Some s -> VStr s | None -> VNil)))
 
+let update_field store ~type_name ~id ~field ~value =
+  update_field_impl store ~type_name ~id ~field ~value ~caller:"unknown"
+
+let update_field_guarded store ~type_name ~id ~field ~value ~caller =
+  update_field_impl store ~type_name ~id ~field ~value ~caller
+
 (** (delete 'type id) -> VStr id | VNil.
     DELETEs one row by (type_name, id). Returns the id on success
     (echo), VNil if no row matched. *)
-let delete (store : Store.t) ~(type_name : string) ~(id : string) : value =
+let delete_impl (store : Store.t) ~(type_name : string) ~(id : string)
+    ~(caller : string) : value =
   match Io_lwt.Db.current_conn store with
   | None -> VNil
   | Some conn ->
+    (* Closes the delete-by-id hole at the space boundary (loud error;
+       the RLS floor already rejected cross-user deletes where active). *)
+    guard_space_write conn ~prim:"delete" ~type_name ~caller ~id:(Some id);
     let id' = Tree_store.delete_datum conn ~type_name ~id in
     (match id' with Some s -> VStr s | None -> VNil)
+
+let delete store ~type_name ~id =
+  delete_impl store ~type_name ~id ~caller:"unknown"
+
+let delete_guarded store ~type_name ~id ~caller =
+  delete_impl store ~type_name ~id ~caller
 
 (** (list 'type [limit] [sort]) -> VList of (VStr id, VStr fields) pairs.
     With no limit, defaults to 100 (avoid OOM on a huge table). Optional
@@ -645,10 +918,20 @@ let get_row
        | _ -> None)
 
 
-(** (node-path 'type id) -> VStr path. Pure path constructor. *)
-let node_path ~(type_name : string) ~(id : string) : value =
+(** (node-path 'type id) -> VStr path. Space-aware path constructor:
+    an admitted type reports its true data.s.<space>.* home (looked up in
+    data_space_types — the pure Tree_store.datum_path mirror cannot see
+    dynamic admission), everything else routes exactly as the SQL
+    tree_datum_path does (seed -> shared; else user). *)
+let node_path (store : Store.t) ~(type_name : string) ~(id : string) : value =
   let user = session_user () in
-  VStr (Tree_store.datum_path ~user ~type_name ~id ())
+  (match Io_lwt.Db.current_conn store with
+   | Some conn ->
+       (match space_of_type conn ~type_name with
+        | Some sp ->
+            VStr (Tree_store.datum_path ~space:(Some sp) ~type_name ~id ())
+        | None -> VStr (Tree_store.datum_path ~user ~type_name ~id ()))
+   | None -> VStr (Tree_store.datum_path ~user ~type_name ~id ()))
 
 (** (type-fields 'type) -> VList of VStr field names | VNil if undeclared. *)
 let type_fields (store : Store.t) ~(type_name : string) : value =
