@@ -7,6 +7,8 @@
           prims_time prims_crypto
           session_types call_graph agent_tools
           prims_request prims_net prims_media prims_graph prims_db
+          prims_db_common prims_data prims_sync prims_jobs prims_auth
+          prims_code prims_agent prims_llm prims_ops
           net_prims prims_hyper
           example_eval
           session
