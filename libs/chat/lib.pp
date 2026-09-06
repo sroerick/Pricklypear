@@ -276,6 +276,29 @@
               #f)))
         (rows (quote chat-room) 100)))))
 
+(define chat/open-space
+  "chat-lobby")
+
+(define chat/ensure-space
+  (lambda
+    ()
+    "Create the shared open chat space and admit chat types (idempotent,
+      best-effort; the first poster races safely). Repair of the post-013
+      confinement break: chat rows live in data.s.chat-lobby.*, visible
+      to every authenticated identity (open space)."
+    (if
+      (space-exists? chat/open-space)
+      #t
+      (guard
+        (lambda
+          (e)
+          #f)
+        (seq
+          (space-create chat/open-space 'open)
+          (space-admit (quote chat-room) chat/open-space)
+          (space-admit (quote chat-message) chat/open-space)
+          #t)))))
+
 (define chat/ensure-lobby
   (lambda
     ()
@@ -558,6 +581,7 @@
           (if
             (chat/can-access? rid)
             (seq
+              (chat/ensure-space)
               (if
                 (string-eq rid chat/lobby-id)
                 (chat/ensure-lobby)
