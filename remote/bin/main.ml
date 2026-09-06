@@ -446,7 +446,7 @@ let () =
      the client's tool registry so the chat loop has them. Path
      resolution is the client's sandbox (same refuse-".." posture as the
      agent). *)
-  Tools.install ~resolve_path:Remote.resolve_path
+  Tools.install ~env ~resolve_path:Remote.resolve_path
     ~register:(fun name run -> Remote.register_builtin_tool t name ~run);
 
   (* ---- --serve: serve the Nopales-authored HTML surface (chat + eval

@@ -229,43 +229,6 @@ let register_fs_prims (t : t) : unit =
   in
   add_prim t "fs/dir?" is_dir
 
-let register_shell_prims (t : t) : unit =
-  (* (shell/run cmd) -> {"exit": n, "out": "...", "truncated": bool}.
-     Fire-and-forget v0; the agent loop's real bash tool is in
-     tools.ml with timeout/streaming. *)
-  let run args =
-    match args with
-    | [ cmd ] -> (
-        let cmd = str_arg "shell/run" cmd in
-        let ic = Unix.open_process_in (cmd ^ " 2>&1") in
-        let buf = Buffer.create 4096 in
-        (try
-           while true do
-             Buffer.add_channel buf ic 4096
-           done
-         with End_of_file -> ());
-        match Unix.close_process_in ic with
-        | Unix.WEXITED code ->
-            let out = Buffer.contents buf in
-            let max_out = 50 * 1024 in
-            let out, truncated =
-              if String.length out > max_out then
-                (String.sub out 0 max_out, true)
-              else (out, false)
-            in
-            VStr
-              (Yojson.Safe.to_string
-                 (`Assoc
-                   [
-                     ("exit", `Int code);
-                     ("out", `String out);
-                     ("truncated", `Bool truncated);
-                   ]))
-        | _ -> emit_error "shell/run" "process did not exit normally")
-    | _ -> emit_error "shell/run" "usage: (shell/run cmd)"
-  in
-  add_prim t "shell/run" run
-
 let register_event_prims (t : t) : unit =
   (* (on "event" handler-fn) *)
   let on args =
@@ -659,7 +622,6 @@ let make () : t =
   register_pure_prims t;
   register_soup_prims t;
   register_fs_prims t;
-  register_shell_prims t;
   register_event_prims t;
   register_ui_prims t;
   register_route_prims t;

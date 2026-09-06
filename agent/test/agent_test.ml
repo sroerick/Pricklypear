@@ -65,6 +65,51 @@ let test_rim_errors_and_redefine ~rt () =
   Alcotest.check pp_value_testable "redefined" (VInt 42L)
     (Runtime.eval_string ~rt "(f 21)")
 
+(** builtin bash deadline (i-1788670652-6): a hung command is killed at
+    the PP_BASH_TIMEOUT_SECS deadline and reports a timeout error JSON
+    instead of holding the eval lock — and with it every later eval and
+    chat turn — until the command finishes on its own. Negative-verified
+    against the pre-fix tree: without the deadline the 30s sleep ran to
+    completion and the <15s check failed. *)
+let test_bash_deadline ~rt () =
+  let old = Sys.getenv_opt "PP_BASH_TIMEOUT_SECS" in
+  Fun.protect
+    ~finally:(fun () ->
+        (* 120 matches the in-code default, so the effective deadline is
+           the same whether or not the var was set before this test. *)
+        Unix.putenv "PP_BASH_TIMEOUT_SECS" (Option.value old ~default:"120"))
+    (fun () ->
+       Unix.putenv "PP_BASH_TIMEOUT_SECS" "1";
+       (* positive control: a quick command still runs to completion *)
+       (match Runtime.eval_string ~rt {|(__builtin__bash "{\"command\":\"echo hi\"}")|} with
+        | VStr s ->
+            Alcotest.(check bool) "quick command still runs" true
+              (try
+                 ignore (Str.search_forward (Str.regexp_string "hi") s 0);
+                 true
+               with Not_found -> false)
+        | _ -> Alcotest.fail "bash result not a string");
+       let t0 = Unix.gettimeofday () in
+       let out =
+         match
+           Runtime.eval_string ~rt
+             {|(__builtin__bash "{\"command\":\"sleep 30; echo late\"}")|}
+         with
+         | VStr s -> s
+         | _ -> Alcotest.fail "timeout result not a string"
+       in
+       let dt = Unix.gettimeofday () -. t0 in
+       Alcotest.(check bool)
+         "hung command returns well before its own 30s sleep" (dt < 15.0) true;
+       let j = Yojson.Safe.from_string out in
+       let err_field = Yojson.Safe.Util.member "error" j in
+       Alcotest.(check bool) "timeout reported in an error field" true
+         (err_field <> `Null);
+       let exit_code =
+         Yojson.Safe.Util.to_int (Yojson.Safe.Util.member "exit" j)
+       in
+       Alcotest.(check int) "timeout exit is -1" (-1) exit_code)
+
 (** agent-loop: a mock provider emitting one tool call round-trips
     exactly one follow-up call. *)
 let test_loop_tool_round_trip ~env ~sw ~rt () =
@@ -577,7 +622,7 @@ let test_turn_replay_nested_blocks ~rt () =
 let () =
   Eio_main.run @@ fun env ->
   let rt = Runtime.make () in
-  Tools.install ~resolve_path:Runtime.resolve_path ~register:(fun name run -> Runtime.register_builtin_tool rt name ~run);
+  Tools.install ~env ~resolve_path:Runtime.resolve_path ~register:(fun name run -> Runtime.register_builtin_tool rt name ~run);
   Eio.Switch.run @@ fun sw ->
   Alcotest.run "agent"
     [
@@ -590,6 +635,8 @@ let () =
         [
           Alcotest.test_case "tool-round-trip" `Quick
             (test_loop_tool_round_trip ~env ~sw ~rt);
+          Alcotest.test_case "bash-deadline" `Quick
+            (test_bash_deadline ~rt);
           Alcotest.test_case "tool-block" `Quick
             (test_loop_tool_block ~env ~sw ~rt);
           Alcotest.test_case "turn2-history-shape" `Quick

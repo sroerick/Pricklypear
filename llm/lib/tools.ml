@@ -4,7 +4,8 @@
     still fire around them, so plugins can block or rewrite.
 
     HOST-AGNOSTIC: tool bodies take an explicit [resolve_path] (each
-    host's path sandbox) and registration goes through an explicit
+    host's path sandbox) and the host's Eio env (bash's process spawn
+    + deadline live on it), and registration goes through an explicit
     [register] callback — no Runtime.t / Remote.t coupling, so the
     agent and pp-remote install the same builtin set. *)
 
@@ -29,25 +30,96 @@ let tool_read ~(resolve_path : string -> string) (args : Yojson.Safe.t) : string
       Yojson.Safe.to_string
         (`Assoc [ ("path", `String resolved); ("content", `String s) ])
 
-let tool_bash (args : Yojson.Safe.t) : string =
+(** Deadline for one bash invocation (seconds). Every builtin tool body
+    runs as a prim while the host holds its eval lock (agent: eval
+    mutex; pp-remote: proxy rim) — without a deadline one hung command
+    (sleep 100000) wedged every later eval and chat turn. The deadline
+    lives here, in the ONE bash tool both hosts install at their loop
+    boundary (the agent's duplicate shell/run prim was retired with
+    it). Override with PP_BASH_TIMEOUT_SECS. *)
+let default_bash_timeout = 120.0
+
+let bash_timeout_secs () =
+  match Sys.getenv_opt "PP_BASH_TIMEOUT_SECS" with
+  | None -> default_bash_timeout
+  | Some s -> (
+      match Float.of_string_opt s with
+      | Some v when Float.is_finite v && v > 0.0 -> v
+      | _ -> default_bash_timeout)
+
+let max_bash_out = 50 * 1024 (* chars; excess truncated and flagged *)
+
+(** Run [cmd] under [/bin/sh -c] (stderr merged — the old
+    [open_process_in (cmd ^ " 2>&1")] shape) and capture output up to
+    [max_bash_out] bytes; excess is truncated and flagged, never an
+    error. Pipe + single_read drain: read to EOF, then reap. No
+    deadline of its own — [tool_bash] wraps this in
+    [Eio.Time.with_timeout], whose cancellation releases the switch and
+    SIGKILLs the child (borge/agent.borg tool-registry: "bash runs via
+    Eio.Process with timeout and output truncation"). *)
+let run_bash_capture ~(env : Eio_unix.Stdenv.base) (cmd : string) :
+    int * string * bool =
+  let proc_mgr = Eio.Stdenv.process_mgr env in
+  Eio.Switch.run (fun sw ->
+      let out_r, out_w = Eio.Process.pipe ~sw proc_mgr in
+      let proc =
+        Eio.Process.spawn ~sw proc_mgr ~stdout:out_w
+          [ "/bin/sh"; "-c"; cmd ^ " 2>&1" ]
+      in
+      (* The child holds its own dup of the write end; dropping ours is
+         what lets the read below see EOF when the command exits. *)
+      Eio.Flow.close out_w;
+      let buf = Buffer.create 4096 in
+      let cs = Cstruct.create 4096 in
+      let truncated = ref false in
+      (try
+         while true do
+           let n = Eio.Flow.single_read out_r cs in
+           if Buffer.length buf < max_bash_out then begin
+             let take = min n (max_bash_out - Buffer.length buf) in
+             Buffer.add_string buf (Cstruct.to_string (Cstruct.sub cs 0 take));
+             if take < n then truncated := true
+           end
+           else truncated := true
+         done
+       with End_of_file -> ());
+      let code =
+        match Eio.Process.await proc with
+        | `Exited c -> c
+        | `Signaled _ -> -1
+      in
+      (code, Buffer.contents buf, !truncated))
+
+let tool_bash ~(env : Eio_unix.Stdenv.base) (args : Yojson.Safe.t) : string =
   let cmd = args |> member "command" |> to_string in
-  let ic = Unix.open_process_in (cmd ^ " 2>&1") in
-  let buf = Buffer.create 4096 in
-  (try
-     while true do
-       Buffer.add_channel buf ic 4096
-     done
-   with End_of_file -> ());
-  let code = match Unix.close_process_in ic with Unix.WEXITED c -> c | _ -> -1 in
-  let out = Buffer.contents buf in
-  let max_out = 50 * 1024 in
-  let out, truncated =
-    if String.length out > max_out then (String.sub out 0 max_out, true)
-    else (out, false)
-  in
-  Yojson.Safe.to_string
-    (`Assoc
-      [ ("exit", `Int code); ("out", `String out); ("truncated", `Bool truncated) ])
+  let timeout = bash_timeout_secs () in
+  match
+    Eio.Time.with_timeout (Eio.Stdenv.clock env) timeout (fun () ->
+        Ok (run_bash_capture ~env cmd))
+  with
+  | Ok (code, out, truncated) ->
+      Yojson.Safe.to_string
+        (`Assoc
+          [
+            ("exit", `Int code);
+            ("out", `String out);
+            ("truncated", `Bool truncated);
+          ])
+  | Error `Timeout ->
+      (* Deadline fired: cancellation released the switch, SIGKILLing
+         the child. Report a timeout error instead of holding the eval
+         lock until the command finishes on its own. *)
+      Yojson.Safe.to_string
+        (`Assoc
+          [
+            ("exit", `Int (-1));
+            ("out", `String "");
+            ("truncated", `Bool false);
+            ( "error",
+              `String
+                (Printf.sprintf "timeout: command exceeded %gs and was killed"
+                   timeout) );
+          ])
 
 (* JSON schemas in provider-neutral shape (JSON schema). *)
 let read_schema : Yojson.Safe.t =
@@ -84,14 +156,15 @@ let bash_schema : Yojson.Safe.t =
       ("required", `List [ `String "command" ]);
     ]
 
-let install ~(resolve_path : string -> string)
+let install ~(env : Eio_unix.Stdenv.base)
+    ~(resolve_path : string -> string)
     ~(register : string -> (Yojson.Safe.t -> string) -> unit) : unit =
   (* [register] is the host's builtin-tool registration (agent:
      Runtime.register_builtin_tool; pp-remote: Remote.register_builtin_
      tool) — same registry shape on both, so plugin hooks see builtins
      identically. *)
   register "read" (tool_read ~resolve_path);
-  register "bash" tool_bash
+  register "bash" (tool_bash ~env)
 
 let schema_of (_name : string) : Yojson.Safe.t option =
   match _name with

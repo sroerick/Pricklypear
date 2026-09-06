@@ -231,7 +231,7 @@ let () =
   Eio_main.run @@ fun env ->
   Eio.Switch.run @@ fun sw ->
   let rt = Runtime.make () in
-  Tools.install ~resolve_path:Runtime.resolve_path
+  Tools.install ~env ~resolve_path:Runtime.resolve_path
     ~register:(fun name run -> Runtime.register_builtin_tool rt name ~run);
   (* Boot-load the Nopales surface (libs/html + libs/hyper + the chat/code
      route-table handlers) so the HTML surface is Nopales-authored and
