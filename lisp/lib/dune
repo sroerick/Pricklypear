@@ -2,5 +2,6 @@
  (name pricklypear_lisp)
  (public_name pricklypear-lisp)
  (modules ast reader env eval effect control special_forms route_gate
-          recursion complexity explain ast_diff)
+          recursion complexity explain ast_diff
+          budget pattern quote_value)
  (libraries yojson digestif))

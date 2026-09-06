@@ -9,89 +9,23 @@
     define binds env; image persists. *)
 open Ast
 
-(** A budget tracks a per-call step limit. Counted down at each eval
-    step. When zero, raises [Interp_error Budget_exceeded]. *)
-type budget = {
-  mutable steps : int;
-  limit : int;
-  mutable current_fn : string option;
-  mutable prim_calls : int;
-  mutable db_hits : int;
-  mutable db_ms : float;
-  fn_step_counts : (string, int) Hashtbl.t;
-}
+(** Budget accounting, the match-pattern walker, and the quote/value ↔
+    expr bridge live in Budget.ml / Pattern.ml / Quote_value.ml (i-1788671219
+    walker split: eval.ml sheds three walkers, keeps the evaluator).
+    Aliases below preserve the historical [Eval.*] surface consumed by
+    image/lib/session.ml, pure/prims_pure.ml, agent, remote, cli and
+    the test suites. *)
+type budget = Budget.budget
 
-(** Default per-call step limit for [make_budget]. Raised 100k -> 400k
-    2026-09-03 (budget-exceeded loops): DB time does not consume steps,
-    but the ui shell re-render alone costs ~71k steps (ui/css 56k,
-    ui/nav 4k, ui/home 11k) whenever a page session refreshes it, so
-    real pages like todo/page could not fit 100k alongside the render.
-    400k steps ~= 0.25s of pure eval CPU; wall time is still bounded by
-    the request gate. *)
-let default_limit = 400_000
-
-(** Allocate a fresh [budget] with the given [limit] (default
-    [default_limit]); counters start at zero. *)
-let make_budget ?(limit = default_limit) () : budget =
-  {
-    steps = 0;
-    limit;
-    current_fn = None;
-    prim_calls = 0;
-    db_hits = 0;
-    db_ms = 0.;
-    fn_step_counts = Hashtbl.create 16;
-  }
-
-(** Dynamic binding for the budget of the eval currently on the stack.
-    Lets OCaml prims like [budget-remaining] and nested apply helpers
-    share the caller's step counter without threading budget through
-    the prim ABI. *)
-let current_budget : budget option ref = ref None
-
-(** Last top-level budget from [eval_string_direct] / rim entry — for
-    image-layer function_stat persistence. *)
-let last_budget : budget option ref = ref None
-
-(** Remaining steps on the current budget (0 if none active). *)
-let budget_remaining_steps () : int =
-  match !current_budget with
-  | None -> 0
-  | Some b -> max 0 (b.limit - b.steps)
-
-(** Absolute step count on the current budget (0 if none active). Used by
-    the remote-eval stepping trace (borge/remote-eval.borg stepping) to
-    attribute the span of local pure steps between two wire crossings: the
-    trace samples [current_steps] right before a prim forwards over the
-    wire, so the difference counts the local steps since the last sample.
-    Additive; harmless when no stepping controller is active. *)
-let current_steps () : int =
-  match !current_budget with
-  | None -> 0
-  | Some b -> b.steps
-
-(** Record one DB hit on the current budget, if any. *)
-let note_db_hit () : unit =
-  match !current_budget with
-  | Some b -> b.db_hits <- b.db_hits + 1
-  | None -> ()
-
-(** Add [ms] to the current budget's accumulated DB time, if any. *)
-let note_db_ms (ms : float) : unit =
-  match !current_budget with
-  | Some b -> b.db_ms <- b.db_ms +. ms
-  | None -> ()
-
-(** Advance [b]'s step count (tracking per-function counts) and raise
-    [Interp_error Budget_exceeded] once the limit is crossed. *)
-let tick (b : budget) : unit =
-  b.steps <- b.steps + 1;
-  (match b.current_fn with
-   | Some fn ->
-       let n = try Hashtbl.find b.fn_step_counts fn with Not_found -> 0 in
-       Hashtbl.replace b.fn_step_counts fn (n + 1)
-   | None -> ());
-  if b.steps > b.limit then raise (Interp_error Budget_exceeded)
+let default_limit = Budget.default_limit
+let make_budget = Budget.make_budget
+let current_budget = Budget.current_budget
+let last_budget = Budget.last_budget
+let budget_remaining_steps = Budget.budget_remaining_steps
+let current_steps = Budget.current_steps
+let note_db_hit = Budget.note_db_hit
+let note_db_ms = Budget.note_db_ms
+let tick = Budget.tick
 
 (** A primitive for pure tests / name registration: sync function.
     Image I/O prims are NOT stored here as Lwt — the rim handler owns those.
@@ -113,34 +47,47 @@ let register_prim (tbl : prim_table) (name : string) (fn : prim_fn) : unit =
 let lookup_prim (tbl : prim_table) (name : string) : prim_fn option =
   Hashtbl.find_opt tbl name
 
-(** Special-form recognition: an [App] whose head is [Var name] for one of
-    these names is dispatched as the special form, not as a function call. *)
-let is_special_form (name : string) : bool =
-  match name with
-  | "lambda" | "let" | "letrec" | "if" | "define" | "quote" | "seq"
-  | "begin" | "match" | "guard" | "error"
-  | "prim" | "with-transaction" | "with-step"
-  | "quasiquote" | "unquote" | "unquote-splicing" | "defmacro"
-  | "macroexpand-1" | "macroexpand" | "gensym"
-  | "cond" | "and" | "or"
-  (* Higher-order list ops: OCaml loops + apply, not recursive Lisp.
-     Avoids ~O(n) eval-frame overhead per element (budget P0). *)
-  | "apply" | "list/map" | "list/filter" | "list/foldl" | "list/foldr"
-  (* lazy-env-thunks: explicit delay/force (Var lookup auto-forces) *)
-  | "delay" | "force" -> true
-  | _ -> false
-
-(** The full set of reserved kernel special-form names (see
-    [is_special_form]). Used by [assert_bindable_name] to refuse
-    redefinition. *)
-let kernel_special_names =
+(** The single source of truth for kernel special-form names. An [App]
+    whose head is [Var name] for one of these names is dispatched as the
+    special form, not as a function call; the same list is the reserved
+    set refused by [assert_bindable_name], the name set of the
+    [Special_forms.catalog] doc index (lisp/lib/special_forms.ml), and
+    the bound-kernel set in image/lib/call_graph.ml. ONE list so dispatch
+    and bindability can never drift — a name dispatchable yet
+    user-definable is exactly the bug class [assert_bindable_name]
+    exists to close (i-1788671219). Parity with the catalog is asserted
+    in lisp/test/eval_test.ml. *)
+let special_form_names : string list =
   [ "lambda"; "let"; "letrec"; "if"; "define"; "quote"; "seq"; "begin";
     "match"; "guard"; "error"; "prim";
     "with-transaction"; "with-step"; "quasiquote"; "unquote"; "unquote-splicing";
     "defmacro"; "macroexpand-1"; "macroexpand"; "gensym";
     "cond"; "and"; "or";
+    (* Higher-order list ops: OCaml loops + apply, not recursive Lisp.
+       Avoids ~O(n) eval-frame overhead per element (budget P0). *)
     "apply"; "list/map"; "list/filter"; "list/foldl"; "list/foldr";
+    (* lazy-env-thunks: explicit delay/force (Var lookup auto-forces) *)
     "delay"; "force" ]
+
+(** Dispatch table for [is_special_form], built once from
+    [special_form_names] so dispatch consumes the list by construction
+    (a name added to the list is dispatchable; nothing else is). *)
+let special_form_tbl : (string, unit) Hashtbl.t =
+  let t = Hashtbl.create (2 * List.length special_form_names) in
+  List.iter (fun n -> Hashtbl.replace t n ()) special_form_names;
+  t
+
+(** Special-form recognition: an [App] whose head is [Var name] for one of
+    [special_form_names] is dispatched as the special form, not as a
+    function call. *)
+let is_special_form (name : string) : bool =
+  Hashtbl.mem special_form_tbl name
+
+(** The full set of reserved kernel special-form names (see
+    [special_form_names]). Used by [assert_bindable_name] to refuse
+    redefinition, and by remote/lib/free_vars.ml as the kernel-name
+    gate. Alias of the single source list. *)
+let kernel_special_names = special_form_names
 
 (** Refuse define/defmacro of kernel special forms and of names currently
     bound to [VPrim] (registered kernel prims). Closes BORGE-1785213238:
@@ -178,6 +125,30 @@ let peel_leading_doc (bodies : expr list) : string option * expr list =
   match bodies with
   | Lit (VStr doc) :: (_ :: _ as rest) -> (Some doc, rest)
   | _ -> (None, bodies)
+
+(** Parse the bindings shape shared by [let] and [letrec] (previously two
+    copy-pasted match blocks, i-1788671219): [( [(name val) …] )] as an
+    App-chain of (name val) pairs, or empty [Lit VNil]. Returns
+    (name, val_expr) pairs in source order. [label] names the form in
+    error messages ("let" / "letrec") so messages stay identical to the
+    pre-dedupe text. *)
+let parse_binding_pairs ~(label : string) (bindings_expr : expr)
+  : (string * expr) list =
+  match bindings_expr with
+  | Lit VNil -> []
+  | App (App (Var _, _) as first_binding, rest_bindings) ->
+      List.map
+        (function
+          | App (Var n, [ val_expr ]) -> (n, val_expr)
+          | _ ->
+              raise
+                (Interp_error
+                   (User_error ("bad " ^ label ^ " binding", "bad-args"))))
+        (first_binding :: rest_bindings)
+  | _ ->
+      raise
+        (Interp_error
+           (User_error ("bad " ^ label ^ " bindings", "bad-args")))
 
 (** Extract parameter names from [define] sugar param exprs; an
     [App (Var c, [_])] is accepted as an optional-with-default [c]. *)
@@ -249,51 +220,9 @@ let parse_top_define (e : expr) : define_shape option =
       Some { name; body; doc }
   | _ -> None
 
-(** Match pattern against value; returns Some binding list or None. *)
-let rec match_pat (pat : expr) (v : value) : (string * value) list option =
-  match pat, v with
-  | Var "_", _ -> Some []
-  | Var name, _ -> Some [ (name, v) ]
-  | Lit lit, v when lit = v -> Some []
-  | Lit (VInt n), VInt m when n = m -> Some []
-  | Lit (VFloat f), VFloat g when f = g -> Some []
-  | Lit (VStr s), VStr t when s = t -> Some []
-  | Lit (VBool b), VBool c when b = c -> Some []
-  | Lit VNil, VNil -> Some []
-  | Lit VNil, VList [] -> Some []
-  | Quote (Var s), VSymbol t when s = t -> Some []
-  | Quote (Var s), VStr t when s = t -> Some [] (* compat *)
-  | Quote (Lit lit), v when lit = v -> Some []
-  | App (Var "quote", [ Var s ]), VSymbol t when s = t -> Some []
-  | App (Var "quote", [ Var s ]), VStr t when s = t -> Some []
-  | App (Var "list", pats), VList vs -> match_list_pats pats vs
-  | App (Var "list", pats), VNil when pats = [] -> Some []
-  | App (Var head, pats), VList (vh :: vt) ->
-      (* (lambda params body) as pattern => list starting with symbol head *)
-      let head_ok =
-        match vh with
-        | VSymbol s | VStr s -> s = head
-        | _ -> false
-      in
-      if head_ok then match_list_pats pats vt else None
-  | App (Var head, []), VSymbol s when s = head -> Some []
-  | App (Var head, []), VStr s when s = head -> Some []
-  | _ -> None
-
-(** Match a list pattern against a value list (helper for [match_pat]).
-    Returns combined bindings or [None] on mismatch. *)
-and match_list_pats (pats : expr list) (vs : value list)
-  : (string * value) list option =
-  match pats, vs with
-  | [], [] -> Some []
-  | [], _ | _, [] -> None
-  | p :: ps, v :: vs ->
-      (match match_pat p v with
-       | None -> None
-       | Some b1 ->
-           (match match_list_pats ps vs with
-            | None -> None
-            | Some b2 -> Some (b1 @ b2)))
+(** Match-pattern walker moved to Pattern.ml (walker split); alias keeps
+    the Eval surface. *)
+let match_pat = Pattern.match_pat
 
 (** Lisp truthiness: [false] and [nil] are falsy, everything else truthy. *)
 let truthy (v : value) : bool =
@@ -301,105 +230,13 @@ let truthy (v : value) : bool =
   | VBool false | VNil -> false
   | _ -> true
 
-(** Quote any expr into a first-class value (full s-expr quote).
-    Compounds become nested VLists so quoted data is usable in Lisp.
-    Vars become VSymbol; string lits stay VStr (no collapse). *)
-let rec quote_to_value (e : expr) : value =
-  let sym s = VSymbol s in
-  match e with
-  | Lit v -> v
-  | Var s -> VSymbol s
-  | App (h, args) ->
-      VList (quote_to_value h :: List.map quote_to_value args)
-  | Quote e' -> VList [ sym "quote"; quote_to_value e' ]
-  | If (t, th, el) ->
-      VList [ sym "if"; quote_to_value t; quote_to_value th; quote_to_value el ]
-  | Lambda (params, body) ->
-      VList [ sym "lambda"
-            ; VList (List.map (fun p -> VSymbol p) params)
-            ; quote_to_value body ]
-  | Let (name, v, body) ->
-      VList [ sym "let"
-            ; VList [ VList [ VSymbol name; quote_to_value v ] ]
-            ; quote_to_value body ]
-  | Letrec (bindings, body) ->
-      VList [ sym "letrec"
-            ; VList (List.map (fun (n, e') ->
-                VList [ VSymbol n; quote_to_value e' ]) bindings)
-            ; quote_to_value body ]
-  | Define (name, v) ->
-      VList [ sym "define"; VSymbol name; quote_to_value v ]
-  | Seq (a, b) ->
-      VList [ sym "seq"; quote_to_value a; quote_to_value b ]
-  | Prim (name, args) ->
-      VList (sym name :: List.map quote_to_value args)
-
-(** Macro reify: same as quote_to_value now that symbols exist.
-    __str__ tagging retained only via value_to_expr compat path. *)
-let reify_expr (e : expr) : value = quote_to_value e
-
-(** Name atom: VSymbol preferred; bare VStr still accepted as a name
-    during compat (old trees / hand-built lists of strings). *)
-let name_of_atom ?(ctx = "value_to_expr") = function
-  | VSymbol s | VStr s -> s
-  | _ ->
-      raise (Interp_error (User_error (ctx ^ ": expected symbol or string name", "bad-args")))
-
-(** Head name of a value if it is a symbol or string atom. *)
-let head_name = function
-  | VSymbol s | VStr s -> Some s
-  | _ -> None
-
-(** Inverse of quote_to_value / macro expansion trees. *)
-let rec value_to_expr (v : value) : expr =
-  match v with
-  | VList [ VStr "__str__"; VStr s ] -> Lit (VStr s) (* transitional *)
-  | VList [ VSymbol "__str__"; VStr s ] -> Lit (VStr s)
-  | VInt _ | VFloat _ | VBool _ | VNil as lit -> Lit lit
-  | VSymbol s -> Var s
-  | VStr s -> Lit (VStr s) (* string data, not a name *)
-  | VList [] -> Lit VNil
-  | VList (h :: t) ->
-      (match head_name h, t with
-       | Some "quote", [ x ] -> Quote (value_to_expr x)
-       | Some "if", [ te; th; el ] ->
-           If (value_to_expr te, value_to_expr th, value_to_expr el)
-       | Some "lambda", [ VList params; body ] ->
-           let ps =
-             List.map
-               (fun p -> name_of_atom ~ctx:"value_to_expr:lambda" p)
-               params
-           in
-           Lambda (ps, value_to_expr body)
-       | Some "define", [ name_v; body ] ->
-           Define
-             ( name_of_atom ~ctx:"value_to_expr:define" name_v
-             , value_to_expr body )
-       | Some "let", [ VList binds; body ] ->
-           (match binds with
-            | [ VList [ name_v; bv ] ] ->
-                Let
-                  ( name_of_atom ~ctx:"value_to_expr:let" name_v
-                  , value_to_expr bv
-                  , value_to_expr body )
-            | _ ->
-                App
-                  ( Var "let"
-                  , [ value_to_expr (VList binds); value_to_expr body ] ))
-       | Some "seq", a :: b :: rest ->
-           let rec fold x xs =
-             match xs with
-             | [] -> value_to_expr x
-             | y :: ys -> Seq (value_to_expr x, fold y ys)
-           in
-           fold a (b :: rest)
-       | _ -> App (value_to_expr h, List.map value_to_expr t))
-  | VPair (a, b) ->
-      App (Var "cons", [ value_to_expr a; value_to_expr b ])
-  | VLambda _ | VPrim _ | VRef _ | VMacro _ | VThunk _ ->
-      raise
-        (Interp_error
-           (User_error ("value_to_expr: cannot reify live closure/prim/ref/macro/thunk", "bad-args")))
+(** Quote/value ↔ expr bridge moved to Quote_value.ml (walker split);
+    aliases keep the Eval surface for image/pure/agent/remote/tests. *)
+let quote_to_value = Quote_value.quote_to_value
+let reify_expr = Quote_value.reify_expr
+let name_of_atom = Quote_value.name_of_atom
+let head_name = Quote_value.head_name
+let value_to_expr = Quote_value.value_to_expr
 
 (** Global counter backing [gensym]. *)
 let gensym_counter = ref 0
@@ -471,21 +308,9 @@ let rec eval_step
       Cont (env', body)
   | Lambda (params, body) -> Done (VLambda (params, body, env))
   | Define (name, val_expr) ->
-      (match parse_top_define (Define (name, val_expr)) with
-       | Some { name = n; body; doc = _ } ->
-           assert_bindable_name env n;
-           let v =
-             match body with
-             | Lambda (params, b) -> VLambda (params, b, env)
-             | other -> eval ~budget ~prims env other
-           in
-           Env.define env n v;
-           Done v
-       | None ->
-           assert_bindable_name env name;
-           let v = eval ~budget ~prims env val_expr in
-           Env.define env name v;
-           Done v)
+      (* parse_top_define always succeeds for a Define node; eval_define
+         owns the binding (shared with the surface "define" form). *)
+      eval_define ~budget ~prims env (Define (name, val_expr))
   | Prim (name, args) ->
       let arg_vals = List.map (eval ~budget ~prims env) args in
       let _ = prims in
@@ -536,10 +361,39 @@ and eval
   in
   loop env e
 
-(** Expand and evaluate a macro application by name. Args are bound as
-    quoted values (VStr/VSymbol, not evaluated); the expansion is
-    [value_to_expr]-reified and re-evaluated in [call_env] via [Cont].
-    Enforces macro arity. *)
+(** THE macro-expansion engine — one implementation for all four call
+    sites (i-1788671219: the App dispatch, the [macroexpand_expr] walker,
+    and the [macroexpand-1] / [macroexpand] special forms previously
+    re-implemented this binding-and-eval loop four times, with subtle
+    arg-reification drift between them). Binds the macro's [params] to
+    the ARG EXPRS reified as quoted values (not evaluated: "foo" → VStr,
+    bare foo → VSymbol) in a child of the macro's closure env, evaluates
+    the macro body there, and returns the raw expansion VALUE. Enforces
+    macro arity. Callers reify with [value_to_expr] where an expr tree is
+    needed. Raises [Interp_error] if the expansion is not reifiable
+    ([value_to_expr]'s error — the old "not a valid expr tree" wrapper
+    arm was dead: value_to_expr only raises Interp_error). *)
+and expand_macro_once
+    ~(budget : budget)
+    ~(prims : prim_table)
+    ~(params : string list)
+    ~(body : expr)
+    ~(clo_env : env)
+    (arg_exprs : expr list)
+  : value =
+  tick budget;
+  let expected = List.length params
+  and got = List.length arg_exprs in
+  if expected <> got then
+    raise (Interp_error (Arity_mismatch ("macro", expected, got)));
+  let arg_vals = List.map reify_expr arg_exprs in
+  let menv = Env.child clo_env in
+  List.iter2 (fun p a -> Env.define menv p a) params arg_vals;
+  eval ~budget ~prims menv body
+
+(** Expand and evaluate a macro application by name (evaluator App
+    dispatch path). Thin wrapper over [expand_macro_once]; the expansion
+    is [value_to_expr]-reified and re-evaluated in [call_env] via [Cont]. *)
 and expand_and_eval_macro
   ~(budget : budget)
   ~(prims : prim_table)
@@ -549,24 +403,9 @@ and expand_and_eval_macro
   ~(clo_env : env)
   ~(arg_exprs : expr list)
   : step =
-  tick budget;
-  let expected = List.length params
-  and got = List.length arg_exprs in
-  if expected <> got then
-    raise (Interp_error (Arity_mismatch ("macro", expected, got)));
-  (* Bind macro args as quoted values (not evaluated).
-       "foo" -> VStr; bare foo -> VSymbol. *)
-  let arg_vals = List.map reify_expr arg_exprs in
-  let menv = Env.child clo_env in
-  List.iter2 (fun p a -> Env.define menv p a) params arg_vals;
-  let expansion_v = eval ~budget ~prims menv body in
   let expansion_e =
-    try value_to_expr expansion_v
-    with Interp_error _ as ex -> raise ex
-       | _ ->
-           raise
-             (Interp_error
-                (User_error ("macro expansion is not a valid expr tree", "bad-args")))
+    value_to_expr
+      (expand_macro_once ~budget ~prims ~params ~body ~clo_env arg_exprs)
   in
   Cont (call_env, expansion_e)
 
@@ -600,26 +439,40 @@ and macroexpand_expr
   | App (Var name, args) ->
       (match Env.lookup env name with
        | Some (VMacro (params, body, clo_env)) ->
-           let expected = List.length params
-           and got = List.length args in
-           if expected <> got then
-             raise (Interp_error (Arity_mismatch ("macro", expected, got)));
-           let arg_vals = List.map reify_expr args in
-           let menv = Env.child clo_env in
-           List.iter2 (fun p a -> Env.define menv p a) params arg_vals;
-           let expansion_v = eval ~budget ~prims menv body in
-           let expansion_e =
-             try value_to_expr expansion_v
-             with Interp_error _ as ex -> raise ex
-                | _ ->
-                    raise
-                      (Interp_error
-                         (User_error
-                            ("macro expansion is not a valid expr tree", "bad-args")))
-           in
-           go expansion_e
+           go
+             (value_to_expr
+                (expand_macro_once ~budget ~prims ~params ~body ~clo_env args))
        | _ -> App (Var name, List.map go args))
   | App (h, args) -> App (go h, List.map go args)
+
+(** Bind one [define] — shared by the [Define] AST node (eval_step) and
+    the surface [define] special form (eval_special_form); previously two
+    copy-pasted bind-and-store blocks (i-1788671219). [form] is the whole
+    (define …) app / Define node. [parse_top_define] handles the define
+    sugar (function-style params, docstrings) and strips the lambda
+    leading-doc; Lambda bodies short-circuit to a closure without
+    re-eval. Returns [Done] with the bound value. *)
+and eval_define
+    ~(budget : budget)
+    ~(prims : prim_table)
+    (env : env)
+    (form : expr) : step =
+  match parse_top_define form with
+  | Some { name; body; doc = _ } ->
+      assert_bindable_name env name;
+      let v =
+        match body with
+        | Lambda (params, b) -> VLambda (params, b, env)
+        | other -> eval ~budget ~prims env other
+      in
+      Env.define env name v;
+      Done v
+  | None ->
+      raise
+        (Interp_error
+           (User_error
+              ("define needs (define name expr [\"doc\"]) or \
+                (define (name args…) [\"doc\"] body…)", "bad-args")))
 
 (** Dispatch a special form by [name] (an [App] whose head is a [Var]
     recognized by [is_special_form]). [full_args] is head :: rest where
@@ -664,19 +517,15 @@ and eval_special_form
        | [ _; bindings_expr; body ] ->
            (match bindings_expr with
             | Lit VNil -> Cont (env, body)
-            | App (App (Var _, _) as first_binding, rest_bindings) ->
-                let all_bindings = first_binding :: rest_bindings in
+            | _ ->
+                let bindings = parse_binding_pairs ~label:"let" bindings_expr in
                 let env' = Env.child env in
                 List.iter
-                  (fun bp ->
-                    match bp with
-                    | App (Var n, [ val_expr ]) ->
-                        let v = eval ~budget ~prims env val_expr in
-                        Env.define env' n v
-                    | _ -> raise (Interp_error (User_error ("bad let binding", "bad-args"))))
-                  all_bindings;
-                Cont (env', body)
-            | _ -> raise (Interp_error (User_error ("bad let bindings", "bad-args"))))
+                  (fun (n, val_expr) ->
+                    let v = eval ~budget ~prims env val_expr in
+                    Env.define env' n v)
+                  bindings;
+                Cont (env', body))
        | _ -> raise (Interp_error (User_error ("let needs bindings + body", "bad-args"))))
   | "if", [ _; test; then_e; else_e ] ->
       let v = eval ~budget ~prims env test in
@@ -707,25 +556,9 @@ and eval_special_form
   | "force", _ ->
       raise (Interp_error (User_error ("force needs exactly one arg", "bad-args")))
   | "define", _ ->
-      (* Rebuild App without the head name already consumed: full_args is
-         head :: rest where head is Var "define". parse_top_define wants
-         the whole (define …) app. *)
-      (match parse_top_define (App (Var "define", List.tl full_args)) with
-       | Some { name = n; body; doc = _ } ->
-           assert_bindable_name env n;
-           let v =
-             match body with
-             | Lambda (params, b) -> VLambda (params, b, env)
-             | other -> eval ~budget ~prims env other
-           in
-           Env.define env n v;
-           Done v
-       | None ->
-           raise
-             (Interp_error
-                (User_error
-                   ("define needs (define name expr [\"doc\"]) or \
-                    (define (name args…) [\"doc\"] body…)", "bad-args"))))
+      (* eval_define owns binding; rebuild the whole (define …) app —
+         full_args is head :: rest where head is Var "define". *)
+      eval_define ~budget ~prims env (App (Var "define", List.tl full_args))
   | "quote", [ _; e' ] -> Done (quote_to_value e')
   | "begin", _head :: bodies | "seq", _head :: bodies ->
       (match bodies with
@@ -962,22 +795,7 @@ and eval_special_form
        | App (Var name, args) ->
            (match Env.lookup env name with
             | Some (VMacro (params, body, clo_env)) ->
-                let expected = List.length params
-                and got = List.length args in
-                if expected <> got then
-                  raise
-                    (Interp_error (Arity_mismatch ("macro", expected, got)));
-                let arg_vals =
-                  List.map
-                    (fun e ->
-                      match e with
-                      | Lit v -> v
-                      | _ -> reify_expr e)
-                    args
-                in
-                let menv = Env.child clo_env in
-                List.iter2 (fun p a -> Env.define menv p a) params arg_vals;
-                Done (eval ~budget ~prims menv body)
+                Done (expand_macro_once ~budget ~prims ~params ~body ~clo_env args)
             | _ -> Done (reify_expr form))
        | _ -> Done (reify_expr form))
   | "macroexpand", [ _; form ] ->
@@ -987,24 +805,9 @@ and eval_special_form
         | App (Var name, args) ->
             (match Env.lookup env name with
              | Some (VMacro (params, body, clo_env)) ->
-                 let expected = List.length params
-                 and got = List.length args in
-                 if expected <> got then
-                   raise
-                     (Interp_error (Arity_mismatch ("macro", expected, got)));
-                 let arg_vals =
-                   List.map
-                     (fun e' ->
-                       match e' with
-                       | Lit v -> v
-                       | _ -> reify_expr e')
-                     args
-                 in
-                 let menv = Env.child clo_env in
-                 List.iter2 (fun p a -> Env.define menv p a) params arg_vals;
-                 let v = eval ~budget ~prims menv body in
-                 let e' = value_to_expr v in
-                 loop e'
+                 loop
+                   (value_to_expr
+                      (expand_macro_once ~budget ~prims ~params ~body ~clo_env args))
              | _ -> reify_expr e)
         | _ -> reify_expr e
       in
@@ -1014,30 +817,21 @@ and eval_special_form
        | [ _; bindings_expr; body ] ->
            (match bindings_expr with
             | Lit VNil -> Cont (env, body)
-            | App (App (Var _, _) as first_binding, rest_bindings) ->
-                let all_bindings = first_binding :: rest_bindings in
+            | _ ->
+                let bindings =
+                  parse_binding_pairs ~label:"letrec" bindings_expr
+                in
                 let env' = Env.child env in
                 (* Backpatch: pre-bind all names to VNil so binding exprs
                    (lambdas) can close over env' and refer to each other
                    for mutual recursion, then evaluate and overwrite. *)
+                List.iter (fun (n, _) -> Env.define env' n VNil) bindings;
                 List.iter
-                  (fun bp ->
-                    match bp with
-                    | App (Var n, _) -> Env.define env' n VNil
-                    | _ ->
-                        raise (Interp_error (User_error ("bad letrec binding", "bad-args"))))
-                  all_bindings;
-                List.iter
-                  (fun bp ->
-                    match bp with
-                    | App (Var n, [ val_expr ]) ->
-                        let v = eval ~budget ~prims env' val_expr in
-                        Env.define env' n v
-                    | _ ->
-                        raise (Interp_error (User_error ("bad letrec binding", "bad-args"))))
-                  all_bindings;
-                Cont (env', body)
-            | _ -> raise (Interp_error (User_error ("bad letrec bindings", "bad-args"))))
+                  (fun (n, val_expr) ->
+                    let v = eval ~budget ~prims env' val_expr in
+                    Env.define env' n v)
+                  bindings;
+                Cont (env', body))
        | _ -> raise (Interp_error (User_error ("letrec needs bindings + body", "bad-args"))))
   (* apply: (apply f args-list) applies f to the list of args.
      First-class function application — reuses the same apply helper

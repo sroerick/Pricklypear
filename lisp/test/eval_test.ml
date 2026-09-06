@@ -1404,6 +1404,178 @@ let shadow_tests = [
 ]
 
 
+(* --- Special-form name parity (i-1788671219): ONE list consumed by
+   dispatch / kernel_special_names / Special_forms.catalog. The fourth
+   consumer, image/lib/call_graph.ml, now aliases Eval.special_form_names
+   directly (parity by construction; not testable from lisp/, which image
+   depends on, not the reverse). --- *)
+
+let sorted_names (xs : string list) : string list =
+  List.sort String.compare xs
+
+let special_form_parity_tests = [
+  ("catalog names == Eval.special_form_names", `Quick, fun () ->
+    Alcotest.(check (list string)) "parity (sorted)"
+      (sorted_names Eval.special_form_names)
+      (sorted_names Special_forms.names));
+  ("every special_form_names entry dispatches", `Quick, fun () ->
+    List.iter
+      (fun n ->
+        if not (Eval.is_special_form n) then
+          Alcotest.failf "%s in special_form_names but not dispatchable" n)
+      Eval.special_form_names);
+  ("ordinary names are not special forms", `Quick, fun () ->
+    List.iter
+      (fun n ->
+        if Eval.is_special_form n then
+          Alcotest.failf "%s must not be a special form" n)
+      [ "car"; "cdr"; "list"; "map"; "filter"; "when"; "unless"; "ifx"; "";
+        "string-append" ]);
+]
+
+(* --- Macro-engine unification (i-1788671219): all four expansion sites
+   (App dispatch, macroexpand_expr, macroexpand-1, macroexpand) run
+   through Eval.expand_macro_once. These tests lock the shared behavior:
+   data-shape results, one-level vs full expansion, arity, reified Lit
+   args (the old Lit-binding drift site), and the shared let/letrec
+   bindings parser + define paths. --- *)
+
+let macro_engine_tests = [
+  ("macroexpand-1 expands one level, as data", `Quick, fun () ->
+    (* NOTE: macroexpand-1/macroexpand are special forms — their arg is
+       captured unevaluated, so no quote: (macroexpand-1 (unless x 7)).
+       A quoted arg (macroexpand-1 '(unless x 7)) hands the form the
+       (quote …) wrapper, which is not a macro call and reifies as-is
+       (pre-dedupe behavior, preserved). *)
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let _ =
+      Eval.eval_string ~prims env
+        "(defmacro when (t b) `(if ,t ,b ()))"
+    in
+    let _ =
+      Eval.eval_string ~prims env
+        "(defmacro unless (t b) `(when (not ,t) ,b))"
+    in
+    let got = Eval.eval_string ~prims env "(macroexpand-1 (unless x 7))" in
+    match got with
+    | Ast.VList [ Ast.VSymbol "when"
+                ; Ast.VList [ Ast.VSymbol "not"; Ast.VSymbol "x" ]
+                ; Ast.VInt n ] when n = 7L -> ()
+    | other -> Alcotest.failf "one level: %s" (Reader.pp_value other));
+  ("macroexpand expands all levels", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let _ =
+      Eval.eval_string ~prims env
+        "(defmacro when (t b) `(if ,t ,b ()))"
+    in
+    let _ =
+      Eval.eval_string ~prims env
+        "(defmacro unless (t b) `(when (not ,t) ,b))"
+    in
+    let got = Eval.eval_string ~prims env "(macroexpand (unless x 7))" in
+    match got with
+    | Ast.VList [ Ast.VSymbol "if"
+                ; Ast.VList [ Ast.VSymbol "not"; Ast.VSymbol "x" ]
+                ; Ast.VInt n; Ast.VNil ] when n = 7L -> ()
+    | other -> Alcotest.failf "full expansion: %s" (Reader.pp_value other));
+  ("macroexpand-1 on a non-macro form reifies unchanged", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let got = Eval.eval_string ~prims env "(macroexpand-1 (+ 1 2))" in
+    match got with
+    | Ast.VList [ Ast.VSymbol "+"; Ast.VInt a; Ast.VInt b ]
+      when a = 1L && b = 2L -> ()
+    | other -> Alcotest.failf "non-macro: %s" (Reader.pp_value other));
+  ("macroexpand-1 reifies string-lit args (Lit-binding drift site)", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let _ = Eval.eval_string ~prims env "(defmacro passthru (x) x)" in
+    let got = Eval.eval_string ~prims env "(macroexpand-1 (passthru (a \"b\")))" in
+    match got with
+    | Ast.VList [ Ast.VSymbol "a"; Ast.VStr "b" ] -> ()
+    | other -> Alcotest.failf "lit args: %s" (Reader.pp_value other));
+  ("macroexpand-1 arity mismatch raises", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let _ =
+      Eval.eval_string ~prims env "(defmacro when (t b) `(if ,t ,b ()))"
+    in
+    match
+      try
+        ignore (Eval.eval_string ~prims env "(macroexpand-1 (when))");
+        None
+      with
+      | Ast.Interp_error (Ast.Arity_mismatch ("macro", 2, 0)) -> Some ()
+      | Ast.Interp_error e ->
+          Alcotest.failf "wrong error: %s" (Ast.pp_interp_error e)
+    with
+    | Some () -> ()
+    | None -> Alcotest.fail "expected macro arity mismatch");
+  ("macro-expanded macro call still evaluates (App dispatch path)", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    Eval.register_prim prims "not" (function
+      | [ Ast.VBool b ] -> Ast.VBool (not b)
+      | [ Ast.VNil ] -> Ast.VBool true
+      | _ -> raise (Ast.Interp_error (Ast.User_error ("not", "bad-args"))));
+    let env = Env.create () in
+    Env.define env "not" (Ast.VPrim "not");
+    let _ =
+      Eval.eval_string ~prims env
+        "(defmacro when (t b) `(if ,t ,b ()))"
+    in
+    let _ =
+      Eval.eval_string ~prims env
+        "(defmacro unless (t b) `(when (not ,t) ,b))"
+    in
+    let got = Eval.eval_string ~prims env "(unless #f 42)" in
+    Alcotest.(check string) "nested expansion evaluates" "42"
+      (Reader.pp_value got));
+  ("let rejects malformed binding pairs", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    match
+      try
+        ignore (Eval.eval_string ~prims env "(let ((a 1 2)) a)");
+        None
+      with Ast.Interp_error (Ast.User_error (m, _)) -> Some m
+    with
+    | Some m when contains_sub ~sub:"bad let binding" m -> ()
+    | Some m -> Alcotest.failf "wrong error: %s" m
+    | None -> Alcotest.fail "expected bad let binding");
+  ("letrec rejects malformed binding pairs", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    match
+      try
+        ignore (Eval.eval_string ~prims env "(letrec ((a 1 2)) a)");
+        None
+      with Ast.Interp_error (Ast.User_error (m, _)) -> Some m
+    with
+    | Some m when contains_sub ~sub:"bad letrec binding" m -> ()
+    | Some m -> Alcotest.failf "wrong error: %s" m
+    | None -> Alcotest.fail "expected bad letrec binding");
+  ("let empty bindings evaluates body", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let got = Eval.eval_string ~prims env "(let () 7)" in
+    Alcotest.(check string) "7" "7" (Reader.pp_value got));
+  ("define AST node binds via shared eval_define", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let budget = Eval.make_budget () in
+    let v =
+      Eval.eval ~budget ~prims env (Ast.Define ("q", Ast.Lit (Ast.VInt 9L)))
+    in
+    Alcotest.(check string) "bound value 9" "9" (Reader.pp_value v);
+    match Env.lookup env "q" with
+    | Some (Ast.VInt n) when n = 9L -> ()
+    | other ->
+        Alcotest.failf "q bound to %s"
+          (Reader.pp_value (match other with Some x -> x | None -> Ast.VNil)));
+]
+
 let () =
   Alcotest.run "pricklypear-lisp" [
     "reader", reader_tests @ reader_list_tests @ reader_completeness_tests
@@ -1413,6 +1585,8 @@ let () =
     "eval", eval_tests;
     "macros", macro_tests;
     "macro-str", macro_str_tests;
+    "macro-engine", macro_engine_tests;
+    "special-forms", special_form_parity_tests;
     "eval-eff", eval_eff_tests;
     "list-hof", list_hof_tests;
     "tco", tco_tests;
