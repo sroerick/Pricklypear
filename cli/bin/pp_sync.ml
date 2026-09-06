@@ -225,6 +225,18 @@ let cmd_pull ~url ~user ~password ~timeout package =
   if package = "" then begin
     prerr_endline "pull: need package name";
     2
+  end else if package = "(root)" || package = "root" then begin
+    (* vault-hygiene (i-1788671623-1): the (root) namespace is not a
+       package. Pulling it used to dump the whole root-branch lens
+       (REPL scratch defines + kernel copies) into libs/_root/lib.pp —
+       committed debris that only survived seeding via the
+       underscore-prefix boot exclusion. Root-branch dumps belong in
+       gitignored backups/ via `pp-sync snapshot --branch <ref>`;
+       libs/ is the package vault, root-namespace-free by policy. *)
+    prerr_endline
+      "pull: the (root) namespace is not a package; refused. Root-branch \
+       dumps belong in backups/ via pp-sync snapshot";
+    2
   end else
     match
       live ~url ~user ~password ~timeout

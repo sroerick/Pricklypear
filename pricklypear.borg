@@ -66,7 +66,6 @@
  (untracked "scripts/import_obsidian_notes.py" "DELETION CANDIDATE: one-off Obsidian import")
 
  (* agent note (|2026-08 drift pass: libs/ orphans. 6 product subpackages declared in their chapter implements (notes capture/migrate/tree, workout/log, structed/list, strongs). The remaining 26 are experimental/unDeparted product packages or Nopales stdlib — no dedicated spec chapter yet. Experimental packages are candidates for promotion (write a chapter) or removal.|) *)
- (untracked "libs/_root/lib.pp" "root _package, no chapter")
  (untracked "libs/astro/lib.pp" "experimental product package, no chapter yet")
  (untracked "libs/bi/lib.pp" "experimental BI/analytics package, no chapter yet")
  (untracked "libs/bi/dashboard/lib.pp" "experimental BI dashboard package, no chapter yet")
