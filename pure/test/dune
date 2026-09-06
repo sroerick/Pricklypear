@@ -1,0 +1,4 @@
+(test
+ (name wire_codec_test)
+ (modules wire_codec_test)
+ (libraries pricklypear-lisp pricklypear-pure-prims alcotest yojson))
