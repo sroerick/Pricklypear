@@ -2,7 +2,16 @@
 
     One runtime per process. All evaluation is serialized through
     [eval_mutex] (per borge/agent.borg nopales-embed); host prims are
-    synchronous and block the calling fiber under Eio. *)
+    synchronous and block the calling fiber under Eio.
+
+    The host seam (request shape, route table + dispatch, template
+    calls, event/tool registry, [Loop.host], boot stdlib macro) lives in
+    hostkit/host_seam.ml — ONE home shared with pp-remote
+    (i-1788671304-d). This module is the agent's [run_in_rim] (the eval
+    mutex + local host-prim rim) plus the agent-only prims: fs, ui,
+    register-command/list-commands, identity. The [Runtime.*] API is
+    kept as delegating aliases so plugins/surface/bin/tests are
+    unchanged. *)
 
 open Pricklypear_lisp
 open Ast
@@ -12,45 +21,15 @@ open Ast
     share the loop). *)
 type registry_entry = Loop.registry_entry
 
-(** Thin request context bound during route/dispatch (agent-route-table,
-    hypermedia-harness.request-runner AGENT HOST BACKING). Carries ONLY
-    request-shape values: method, path, params, headers, body. DB/branch/
-    auth request prims (current-author-as-DB-row etc.) are intentionally
-    UNBOUND in the agent — the agent's request context provides only the
-    request-shape values. *)
-type request_shape = {
-  method_ : string;
-  path : string;
-  params : (string * string) list;
-  headers : (string * string) list;  (* lowercased keys *)
-  body : string;
-}
-
 type t = {
-  env : Ast.env;
-  prims : Eval.prim_table;
+  seam : Host_seam.t;
   eval_mutex : Eio.Mutex.t;
-  handlers : (string, (Ast.value list -> Ast.value) list ref) Hashtbl.t;
-  tools : (string, registry_entry) Hashtbl.t;
-  mutable tool_order : string list;
+  (** The agent-only command registry (register-command /
+      list-commands). Tools + events live in the shared seam. *)
   commands : (string, registry_entry) Hashtbl.t;
-  (* Agent route table: path -> handler-name (THE HOST SEAM,
-     agent-route-table). Local-lens backing for the image's Postgres
-     routes — identical Nopales signatures so libs/hyper runs unchanged. *)
-  routes : (string, string) Hashtbl.t;
-  (* Per-call request snapshot bound while a route/dispatch handler runs,
-     so query-param / request-method / hx-request? resolve. None outside
-     a dispatch. *)
-  current_request : request_shape option ref;
-  (* Captured multipart parts of the last consumed chat/agent turn, as a
-     VList of part alists (("html" . frag) ("target" . sel) ("swap" .
-     strat)) — the data shape [soup/apply-parts!] consumes. Set by the
-     HTTP surface's multipart stream emitter so a consumed turn replays
-     deterministically through [hyper/stream] (surfaces smoke). *)
-  mutable last_turn_parts : Ast.value;
 }
 
-(* Current working directory as seen by path prims. Immutable per
+(** Current working directory as seen by path prims. Immutable per
    process: agent never chdir-s. *)
 let cwd = ref (Sys.getcwd ())
 
@@ -60,41 +39,24 @@ let cwd = ref (Sys.getcwd ())
     agent + pp-remote); re-exported for host callers. *)
 let json_of_value = Loop.json_of_value
 
-let str_arg name v =
-  match v with
-  | Ast.VStr s -> s
-  | Ast.VSymbol s -> s
-  | _ ->
-      raise
-        (Ast.Interp_error
-           (Ast.Prim_error (name, "expected string/symbol argument", "bad-args")))
+let str_arg = Host_seam.str_arg
 
-let emit_error name msg =
-  raise (Ast.Interp_error (Ast.Prim_error (name, msg, "error")))
+let emit_error = Host_seam.emit_error
 
 (** Register a host prim: dispatch table PLUS a VPrim binding in the
     shared env (Nopales resolves prims via env, like the image's
-    auto-bind loop in session.ml). All registrations go through here. *)
+    auto-bind loop in session.ml). All registrations go through the
+    shared seam. *)
 let add_prim (t : t) (name : string) (fn : Ast.value list -> Ast.value)
     : unit =
-  Eval.register_prim t.prims name fn;
-  Env.define t.env name (Ast.VPrim name)
+  Host_seam.add_prim t.seam name fn
 
 (** Path resolution: relative paths resolve under [cwd]; ".." escapes
-    are refused (v0 sandbox posture: refuse, not normalize). *)
-let resolve_path p =
-  let p =
-    if String.length p > 0 && p.[0] = '/' then p else Filename.concat !cwd p
-  in
-  let parts =
-    String.split_on_char '/' p
-    |> List.filter (fun s -> s <> "" && s <> ".")
-  in
-  if List.exists (fun s -> s = "..") parts then
-    emit_error "fs/path" ("path escapes sandbox: " ^ p);
-  "/" ^ String.concat "/" parts
+    are refused (v0 sandbox posture: refuse, not normalize). Shared
+    logic in Host_seam. *)
+let resolve_path (p : string) : string =
+  Host_seam.resolve_path ~cwd p
 
-(** Core eval path shared by user input and plugin callbacks. *)
 (** Serialize Nopales evals. Manual lock/unlock (not use_rw):
     Interp_error is a normal outcome of eval and must not poison the
     mutex for later evals. *)
@@ -102,20 +64,25 @@ let with_eval_lock (t : t) (f : unit -> 'a) : 'a =
   Eio.Mutex.lock t.eval_mutex;
   Fun.protect ~finally:(fun () -> Eio.Mutex.unlock t.eval_mutex) f
 
+(** The agent rim: eval lock + the local host-prim rim. This is the
+    ONE agent-specific seam decision (Host_seam.run_in_rim). *)
+let run_in_rim (t : t) (f : unit -> 'a) : 'a =
+  with_eval_lock t (fun () -> Control.run_with_rim ~prims:t.seam.prims f)
+
 let eval_string ~(rt : t) (src : string) : Ast.value =
-  with_eval_lock rt (fun () ->
-      Control.run_with_rim ~prims:rt.prims (fun () ->
-          Eval.eval_string_direct ~prims:rt.prims rt.env
-            ~budget:(Eval.make_budget ()) src))
+  rt.seam.run_in_rim (fun () ->
+      Eval.eval_string_direct ~prims:rt.seam.prims rt.seam.env
+        ~budget:(Eval.make_budget ()) src)
 
 (** Evaluate all top-level forms in [src] into the shared env, under
     the eval lock + rim. Used to boot-load Nopales packages (libs/std,
     libs/html, libs/hyper) as SOURCE — the same env as plugins/REPL, so
     the surface is redefinable live (borge/agent.borg surfaces). *)
 let load_source ~(rt : t) (src : string) : unit =
-  with_eval_lock rt (fun () ->
-      Control.run_with_rim ~prims:rt.prims (fun () ->
-          ignore (Eval.read_eval_all_direct ~prims:rt.prims rt.env src)))
+  ignore
+    (rt.seam.run_in_rim (fun () ->
+         ignore (Eval.read_eval_all_direct ~prims:rt.seam.prims rt.seam.env src);
+         Ast.VNil))
 
 (** Load a .pp file from [path] into the shared env. *)
 let load_file ~(rt : t) (path : string) : (unit, string) result =
@@ -128,39 +95,13 @@ let load_file ~(rt : t) (path : string) : (unit, string) result =
     Ok ()
   with exn -> Error (Printexc.to_string exn)
 
-(** [apply_value_raw] — apply a Nopales function value to host-side
-    value args directly, assuming the caller ALREADY holds the eval lock
-    AND has a rim active (direct_prims set). Used by prims that run
-    inside an eval (route/dispatch invokes a handler from within the
-    rim): re-locking the non-reentrant Eio.Mutex would deadlock, and the
-    outer rim already services the handler's prim calls via
-    [direct_prims]. Args NEVER go through the reader, so lambda values
-    and arbitrary JSON strings are safe. *)
-let apply_value_raw (t : t) (fn : Ast.value) (args : Ast.value list)
-    : Ast.value =
-  let fn_sym = "__host_apply_fn__" in
-  Env.define t.env fn_sym fn;
-  let arg_syms =
-    List.mapi (fun i _ -> Printf.sprintf "__host_apply_arg_%d__" i) args
-  in
-  List.iter2 (Env.define t.env) arg_syms args;
-  let src =
-    "(" ^ fn_sym
-    ^ List.fold_left (fun acc a -> acc ^ " " ^ a) "" arg_syms
-    ^ ")"
-  in
-  Eval.eval_string_direct ~prims:t.prims t.env ~budget:(Eval.make_budget ()) src
-
-(** Apply a Nopales function value to host-side value args. Acquires
-    the eval lock and establishes the rim — for callers OUTSIDE an
-    active eval (loop tool bodies, event handlers). Prims running
-    inside an eval use [apply_value_raw] instead (no re-lock). *)
+(** Apply a Nopales function value to host-side value args under the
+    eval lock + rim (Host_seam.apply_value). Callers inside an eval go
+    through Host_seam.apply_value_raw (no re-lock). *)
 let apply_value (t : t) (fn : Ast.value) (args : Ast.value list) : Ast.value =
-  with_eval_lock t (fun () ->
-      Control.run_with_rim ~prims:t.prims (fun () ->
-          apply_value_raw t fn args))
+  Host_seam.apply_value t.seam fn args
 
-(* ---- Host prims ---- *)
+(* ---- Host prims (agent-only) ---- *)
 
 let register_fs_prims (t : t) : unit =
   let read args =
@@ -229,38 +170,32 @@ let register_fs_prims (t : t) : unit =
   in
   add_prim t "fs/dir?" is_dir
 
-let register_event_prims (t : t) : unit =
-  (* (on "event" handler-fn) *)
-  let on args =
+let register_ui_prims (t : t) : unit =
+  let notify args =
     match args with
-    | [ ev; fn ] ->
-        let ev = str_arg "on" ev in
-        let cell =
-          match Hashtbl.find_opt t.handlers ev with
-          | Some c -> c
-          | None ->
-              let c = ref [] in
-              Hashtbl.replace t.handlers ev c;
-              c
-        in
-        cell := !cell @ [ (fun vals -> apply_value t fn vals) ];
-        VBool true
-    | _ -> emit_error "on" "usage: (on \"event\" (lambda (ev) ...))"
+    | [ msg ] ->
+        Printf.printf "\027[2m[notify] %s\027[0m\n%!" (str_arg "ui/notify" msg);
+        VNil
+    | _ -> emit_error "ui/notify" "usage: (ui/notify msg)"
   in
-  add_prim t "on" on;
-  (* (register-tool name params-alist fn). Params are validated but v0
-     wire schemas are synthesized from param names only (loop.ml). *)
-  let reg_tool args =
+  add_prim t "ui/notify" notify;
+  let confirm args =
     match args with
-    | [ name; _params; fn ] ->
-        let name = str_arg "register-tool" name in
-        Hashtbl.replace t.tools name { doc = ""; run = fn };
-        if not (List.mem name t.tool_order) then
-          t.tool_order <- t.tool_order @ [ name ];
-        VBool true
-    | _ -> emit_error "register-tool" "usage: (register-tool name params fn)"
+    | [ msg ] ->
+        Printf.printf "%s [y/N] %!" (str_arg "ui/confirm" msg);
+        let line = try input_line stdin with End_of_file -> "n" in
+        VBool
+          (match String.lowercase_ascii (String.trim line) with
+          | "y" | "yes" -> true
+          | _ -> false)
+    | _ -> emit_error "ui/confirm" "usage: (ui/confirm msg)"
   in
-  add_prim t "register-tool" reg_tool;
+  add_prim t "ui/confirm" confirm
+
+(** The agent-only command registry (register-command /
+    list-commands); the shared on/register-tool pair lives in
+    Host_seam.register_event_prims. *)
+let register_command_prims (t : t) : unit =
   let reg_cmd args =
     match args with
     | [ name; doc; fn ] ->
@@ -285,246 +220,19 @@ let register_event_prims (t : t) : unit =
   in
   add_prim t "list-commands" list_cmds
 
-let register_ui_prims (t : t) : unit =
-  let notify args =
-    match args with
-    | [ msg ] ->
-        Printf.printf "\027[2m[notify] %s\027[0m\n%!" (str_arg "ui/notify" msg);
-        VNil
-    | _ -> emit_error "ui/notify" "usage: (ui/notify msg)"
-  in
-  add_prim t "ui/notify" notify;
-  let confirm args =
-    match args with
-    | [ msg ] ->
-        Printf.printf "%s [y/N] %!" (str_arg "ui/confirm" msg);
-        let line = try input_line stdin with End_of_file -> "n" in
-        VBool
-          (match String.lowercase_ascii (String.trim line) with
-          | "y" | "yes" -> true
-          | _ -> false)
-    | _ -> emit_error "ui/confirm" "usage: (ui/confirm msg)"
-  in
-  add_prim t "ui/confirm" confirm
-
-(* ---- Route table + request-context prims (agent-route-table,
-   THE HOST SEAM; hypermedia-harness.request-runner AGENT HOST BACKING).
-
-   Identical Nopales signatures to the image's route / route/lookup /
-   route/dispatch, host-local backing (Runtime route table + a thin
-   request context vs the image's Postgres routes + fat
-   Request_context). libs/hyper runs unchanged on both. *)
-
-(** Look up the active request shape, or error if none is bound (i.e. a
-    request prim called outside a route/dispatch). Mirrors the image's
-    prims_request require_request, but the agent's context is thinner. *)
-let require_request (t : t) : request_shape =
-  match !(t.current_request) with
-  | Some r -> r
-  | None ->
-      emit_error "request" "no active request (call inside route/dispatch)"
-
-(** [dispatch_route_raw] — the shared route/dispatch body. Assumes the
-    caller holds the eval lock AND has a rim active (the route/dispatch
-    prim runs inside an eval; the HTTP gate uses the locking
-    [dispatch_route] wrapper). Returns the rendered raw-HTML VStr the
-    browser would receive. *)
-let dispatch_route_raw (t : t) ~handler ~method_ ~path ~params
-    ~headers ~body : Ast.value =
-  let req : request_shape =
-    { method_ = String.uppercase_ascii method_; path; params; headers; body }
-  in
-  match Env.lookup t.env handler with
-  | None -> VStr (Printf.sprintf "route/dispatch: unbound handler %s" handler)
-  | Some fn ->
-      t.current_request := Some req;
-      Fun.protect
-        ~finally:(fun () -> t.current_request := None)
-        (fun () ->
-          try
-            let v = apply_value_raw t fn [] in
-            VStr (Prims_soup.render_handler_value v)
-          with Ast.Interp_error ie ->
-            VStr
-              (Printf.sprintf "route/dispatch: %s"
-                 (Ast.pp_interp_error ie)))
-
-(** [dispatch_route] — locking wrapper for OCaml callers OUTSIDE an
-    active eval (the HTTP gate dispatches GET routes through the route
-    table). Acquires the eval lock + establishes the rim. *)
-let dispatch_route ~(rt : t) ~handler ~method_ ~path ~params ~headers
-    ~body : Ast.value =
-  with_eval_lock rt (fun () ->
-      Control.run_with_rim ~prims:rt.prims (fun () ->
-          dispatch_route_raw rt ~handler ~method_ ~path ~params ~headers ~body))
-
-(** Resolve a URL path to its handler name via the agent route table. *)
-let lookup_route ~(rt : t) (path : string) : string option =
-  Hashtbl.find_opt rt.routes path
-
-(** Call a Nopales template (zero-or-more-arg fn) by name and return the
-    rendered raw-HTML string (raw-HTML-tagged VStrs unwrap). For OCaml
-    callers outside an eval (the HTTP surface renders fragment templates).
-    Returns [None] if the template is unbound or errors. *)
-let call_template ~(rt : t) (name : string) (args : Ast.value list)
-    : string option =
-  match Env.lookup rt.env name with
-  | None -> None
-  | Some fn ->
-      (try
-         let v = apply_value rt fn args in
-         Some (Prims_soup.render_handler_value v)
-       with Ast.Interp_error _ -> None)
-
+(* The route table + request-context prims (route / route/lookup /
+   route/dispatch / query-param / request-method / hx-request? /
+   session/last-turn-parts) live in Host_seam.register_route_prims —
+   THE HOST SEAM, identical Nopales signatures to the image's route
+   prims so libs/hyper runs unchanged. *)
 let register_route_prims (t : t) : unit =
-  (* (route path handler) — bind a path to a Nopales render handler name
-     on the agent route table. The agent's local-lens backing for the
-     image's (route ...) over Postgres. *)
-  let route args =
-    match args with
-    | [ path; handler ] ->
-        let path = str_arg "route" path in
-        let handler = str_arg "route" handler in
-        Hashtbl.replace t.routes path handler;
-        VBool true
-    | _ -> emit_error "route" "usage: (route path handler)"
-  in
-  add_prim t "route" route;
-  (* (route/lookup path) -> handler-name VStr | VNil. Resolve a URL path
-     to its handler via the route table — exactly hyper/visit's
-     resolver. *)
-  let route_lookup args =
-    match args with
-    | [ path ] ->
-        let path = str_arg "route/lookup" path in
-        (match Hashtbl.find_opt t.routes path with
-         | Some h -> VStr h
-         | None -> VNil)
-    | _ -> emit_error "route/lookup" "usage: (route/lookup path)"
-  in
-  add_prim t "route/lookup" route_lookup;
-  (* (route/dispatch handler method path [params] [headers] [body])
-     -> rendered raw-HTML VStr. Invoke the handler fn (looked up in env)
-     through the rim (caller already holds the eval lock) with a THIN
-     REQUEST CONTEXT bound (query-param / request-method / hx-request?
-     resolve; DB/branch/auth request prims stay unbound), and return the
-     rendered value the browser would receive. Reuses assoc_of +
-     render_handler_value from the shared soup kernel. *)
-  let route_dispatch args =
-    match args with
-    | VStr handler :: VStr meth :: VStr path :: rest ->
-        let params =
-          match rest with p :: _ -> Prims_soup.assoc_of p | _ -> []
-        in
-        let headers =
-          match rest with
-          | _ :: h :: _ ->
-              List.map
-                (fun (k, v) -> (String.lowercase_ascii k, v))
-                (Prims_soup.assoc_of h)
-          | _ -> []
-        in
-        let body =
-          match rest with
-          | _ :: _ :: VStr b :: _ -> b
-          | _ -> ""
-        in
-        dispatch_route_raw t ~handler ~method_:meth ~path ~params ~headers ~body
-    | _ -> emit_error "route/dispatch"
-              "usage: (route/dispatch handler method path [params] [headers] [body])"
-  in
-  add_prim t "route/dispatch" route_dispatch;
-  (* ---- request-shape prims (the thin context) ----
-     query-param / request-method / hx-request? — they back
-     route/dispatch's thin context and libs/hyper's hyper/do-swap
-     HX-Request header path. DB/branch/auth request prims are NOT
-     registered here (the agent's request context carries only
-     request-shape values); calling them yields unbound-prim. *)
-  let query_param args =
-    match args with
-    | [ key ] ->
-        let r = require_request t in
-        let key = str_arg "query-param" key in
-        (match List.assoc_opt key r.params with
-         | Some v -> VStr v
-         | None -> VNil)
-    | _ -> emit_error "query-param" "usage: (query-param key)"
-  in
-  add_prim t "query-param" query_param;
-  let request_method _args =
-    let r = require_request t in
-    VStr r.method_
-  in
-  add_prim t "request-method" request_method;
-  let hx_request_p _args =
-    let r = require_request t in
-    (* hyper/do-swap passes hx-request in the PARAMS alist; the HTTP
-       gate passes it in HEADERS. Check both so libs/hyper works the same
-       way it does on the image. *)
-    let from_headers =
-      match List.assoc_opt "hx-request" r.headers with
-      | Some v when v <> "" && v <> "false" -> true
-      | _ -> false
-    in
-    let from_params =
-      match List.assoc_opt "hx-request" r.params with
-      | Some v when v <> "" && v <> "false" -> true
-      | _ -> false
-    in
-    VBool (from_headers || from_params)
-  in
-  add_prim t "hx-request?" hx_request_p;
-  (* (session/last-turn-parts) -> VList of part alists captured from the
-     last consumed chat/agent turn (the data shape soup/apply-parts! /
-     hyper/stream consume). Lets a consumed turn replay deterministically
-     through hyper/stream (surfaces smoke). Returns VNil if no turn ran. *)
-  let last_turn_parts _args = t.last_turn_parts
-  in
-  add_prim t "session/last-turn-parts" last_turn_parts
+  Host_seam.register_route_prims t.seam
 
-(** Install the shared pure-prim catalog (pure/prims_pure.ml
-    [Prims_pure.catalog] — the ONE hand-enumerated frozen surface,
-    i-1788670799-f: the per-host hand copies here / client / remote had
-    already diverged — this one lacked length and the math tower and
-    registered string-split twice). add_prim registers in the table AND
-    binds the VPrim in env, mirroring how the image session binds its
-    registry. Host-specific prims (fs/event/ui/route/identity, below)
-    layer on top. *)
 let register_pure_prims (t : t) : unit =
-  List.iter (fun (name, fn) -> add_prim t name fn) Prims_pure.catalog
+  Host_seam.register_pure_prims t.seam
 
-(** Register the SHARED soup/ tree prims (Phase 0: lifted into
-    pure/prims_soup.ml so both hosts register the same tree prims).
-    [Prims_soup.register_pure_prims] fills the prim table; we then
-    bind each as a VPrim in env so Nopales resolves them by name
-    (matching [add_prim]'s env-bind half, which the pure helper does
-    not do). *)
 let register_soup_prims (t : t) : unit =
-  Prims_soup.register_pure_prims t.prims;
-  Hashtbl.iter
-    (fun name _ ->
-      match name with
-      | n when String.length n >= 5 && String.sub n 0 5 = "soup/" ->
-          Env.define t.env name (Ast.VPrim name)
-      | _ -> ())
-    t.prims
-
-(** Minimal agent stdlib — the host library layer (borge/agent.borg
-    nopales-embed: "the agent adds HOST PRIMS and an optional host library
-    layer in .pp"). Provides the [let*] sequential-binding macro that
-    libs/hyper uses, without loading the heavy libs/std (which depends on
-    image-only prims: css/*, menu/*, list-bindings, redirect, ...).
-    The image gets [let*] from libs/std; the agent gets it here. Same
-    expansion as the libs/std macro (written with car/cdr so it depends on
-    no c*r beyond the registered set). *)
-let boot_stdlib = {|
-(defmacro let* (bindings body)
-  (if (null? bindings)
-      (list (quote let) (list) body)
-      (list (quote let)
-            (list (list (car (car bindings)) (car (cdr (car bindings)))))
-            (list (quote let*) (cdr bindings) body))))
-|}
+  Host_seam.register_soup_prims t.seam
 
 (** Identity prims — host-local backing. The image's whoami/current-author
     read the HTTP session identity. In the agent: whoami is the OPERATOR
@@ -544,104 +252,59 @@ let register_identity_prims (t : t) : unit =
   add_prim t "whoami" (fun _args -> Ast.VStr (operator_name ()))
 
 let make () : t =
+  let eval_mutex = Eio.Mutex.create () in
+  let prims = Eval.make_prim_table () in
+  let run_in_rim f =
+    Eio.Mutex.lock eval_mutex;
+    Fun.protect
+      ~finally:(fun () -> Eio.Mutex.unlock eval_mutex)
+      (fun () -> Control.run_with_rim ~prims f)
+  in
   let t =
     {
-      env = Env.create ();
-      prims = Eval.make_prim_table ();
-      eval_mutex = Eio.Mutex.create ();
-      handlers = Hashtbl.create 8;
-      tools = Hashtbl.create 16;
-      tool_order = [];
+      seam = Host_seam.make ~prims ~run_in_rim ~cwd ();
+      eval_mutex;
       commands = Hashtbl.create 8;
-      routes = Hashtbl.create 16;
-      current_request = ref None;
-      last_turn_parts = Ast.VNil;
     }
   in
   register_pure_prims t;
   register_soup_prims t;
   register_fs_prims t;
-  register_event_prims t;
+  Host_seam.register_event_prims t.seam;
+  register_command_prims t;
   register_ui_prims t;
   register_route_prims t;
   register_identity_prims t;
   (* Host library layer: the minimal stdlib (let* macro) so libs/hyper
      and the Nopales surface run unchanged. *)
-  load_source ~rt:t boot_stdlib;
+  load_source ~rt:t Host_seam.boot_stdlib;
   t
 
-(** Fire an event: run handlers in registration order. Returns the
-    last handler's value (or VNil). Callers that care about
-    short-circuiting (tool_call block) inspect per-handler values
-    themselves. *)
-let fire (t : t) (ev : string) (payload : Ast.value list) : Ast.value list =
-  match Hashtbl.find_opt t.handlers ev with
-  | None -> []
-  | Some hs ->
-      List.map
-        (fun h ->
-          (* A handler raising must not kill the host turn; surface it
-             as an {"error": ...} value the caller can inspect. *)
-          try h payload
-          with Ast.Interp_error ie ->
-            Ast.VStr
-              (Yojson.Safe.to_string
-                 (`Assoc
-                   [
-                     ("error",
-                      `String
-                        (Printf.sprintf "%s handler: %s" ev
-                           (Ast.pp_interp_error ie)));
-                   ])))
-        !hs
+let dispatch_route ~(rt : t) ~handler ~method_ ~path ~params ~headers
+    ~body : Ast.value =
+  Host_seam.dispatch_route ~rt:rt.seam ~handler ~method_ ~path ~params
+    ~headers ~body
 
-(** Run a plugin tool's closure with JSON args, containing errors into
-    a {"error": ...} JSON string. *)
+let lookup_route ~(rt : t) (path : string) : string option =
+  Host_seam.lookup_route ~rt:rt.seam path
+
+let call_template ~(rt : t) (name : string) (args : Ast.value list)
+    : string option =
+  Host_seam.call_template ~rt:rt.seam name args
+
+let fire (t : t) (ev : string) (payload : Ast.value list) : Ast.value list =
+  Host_seam.fire t.seam ev payload
+
 let eval_tool_body (t : t) (name : string) (args_json : string) : Ast.value =
-  match Hashtbl.find_opt t.tools name with
-  | None ->
-      VStr
-        (Yojson.Safe.to_string
-           (`Assoc [ ("error", `String ("no tool named " ^ name)) ]))
-  | Some e ->
-      (try apply_value t e.run [ VStr args_json ]
-       with Ast.Interp_error ie ->
-         VStr
-           (Yojson.Safe.to_string
-              (`Assoc
-                [ ("error", `String (Ast.pp_interp_error ie)) ])))
+  Host_seam.eval_tool_body t.seam name args_json
 
 let register_builtin_tool (t : t) (name : string) ~(run : Yojson.Safe.t -> string) : unit =
-  (* Builtin host tools bypass Nopales application for speed and to
-     keep their bodies in OCaml; the registry shape is the same so
-     plugin hooks (tool_call / tool_result events) still see them. *)
-  Hashtbl.replace t.tools name
-    { doc = "builtin"; run = VPrim ("__builtin__" ^ name) };
-  if not (List.mem name t.tool_order) then
-    t.tool_order <- t.tool_order @ [ name ];
-  (* prim that the registry entry's VPrim names; loop.ml calls
-     builtins through this prim table entry instead of applying a
-     lambda. *)
-  add_prim t ("__builtin__" ^ name)
-    (fun args ->
-      match args with
-      | [ Ast.VStr args_json ] -> (
-          try VStr (run (Yojson.Safe.from_string args_json))
-          with
-          | Yojson.Json_error e ->
-              VStr
-                (Yojson.Safe.to_string
-                   (`Assoc [ ("error", `String ("bad json: " ^ e)) ]))
-          | Ast.Interp_error ie ->
-              VStr
-                (Yojson.Safe.to_string
-                   (`Assoc
-                     [ ("error", `String (Ast.pp_interp_error ie)) ])))
-      | _ -> emit_error "__builtin" "expected single JSON string arg")
+  Host_seam.register_builtin_tool t.seam name ~run
 
 let is_builtin (t : t) (name : string) : bool =
-  match Hashtbl.find_opt t.tools name with
-  | Some { run = VPrim p; _ } -> String.length p > 10 && String.sub p 0 11 = "__builtin__"
+  match Hashtbl.find_opt t.seam.Host_seam.tools name with
+  | Some { Loop.run = VPrim p; _ } ->
+      String.length p > 10 && String.sub p 0 11 = "__builtin__"
   | _ -> false
 
 (** Host adapter for the shared agent turn loop (llm/lib/loop.ml): the
@@ -649,16 +312,5 @@ let is_builtin (t : t) (name : string) : bool =
     fire, tool-body eval, and serialized prim dispatch through the eval
     lock + the agent's local host rim. This is the ONLY coupling the
     loop has to this host; pp-remote supplies the same record over the
-    proxy rim (borge/remote-eval.borg agent-loop). *)
-let loop_host (t : t) : Loop.host =
-  {
-    Loop.tool_order = (fun () -> t.tool_order);
-    tool_entry = (fun name -> Hashtbl.find_opt t.tools name);
-    fire = fire t;
-    eval_tool_body = eval_tool_body t;
-    call_prim =
-      (fun name args ->
-         with_eval_lock t (fun () ->
-             Control.run_with_rim ~prims:t.prims (fun () ->
-                 (Hashtbl.find t.prims name) args)));
-  }
+    proxy rim (borge/local-first.borg agent-loop). *)
+let loop_host (t : t) : Loop.host = Host_seam.loop_host t.seam

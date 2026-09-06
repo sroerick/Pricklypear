@@ -72,7 +72,7 @@ let test_plugin_tool_proxies_db_prim ~env ~sw () =
     (Remote.eval t
        {|(register-tool "who" (list) (lambda (args) (whoami)))|});
   Alcotest.(check bool) "tool registered in order" true
-    (List.mem "who" t.Remote.tool_order);
+    (List.mem "who" t.seam.tool_order);
   let events = ref [] in
   let history = ref [] in
   (match

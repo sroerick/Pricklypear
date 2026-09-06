@@ -37,3 +37,7 @@
 (package
  (name pricklypear-remote)
  (description "pp-remote: a Nopales client process that embeds the pure lisp interpreter, lazily materializes function definitions from a remote branch, and proxies Prim_call effects to the image over HTTP — see borge/remote-eval.borg. Sibling of image/, not part of it"))
+
+(package
+ (name pricklypear-hostkit)
+ (description "Shared host kit for the two local Nopales hosts (agent + pp-remote): Host_seam (the lifted route-table/request/tool host seam, parameterized by run_in_rim), Http_kit, Multipart_emitter, Chat_stream — ONE home for the ~1,000 lines agent/lib and remote/lib used to mirror (i-1788671304-d)"))
