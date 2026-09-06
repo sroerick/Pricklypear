@@ -154,31 +154,35 @@ let live_value r =
   | _ -> Error "empty result"
 
 let discover_packages ~url ~user ~password ~timeout =
-  let pkgs = Hashtbl.create 32 in
+  (* vault-shape (i-1788671331-d): discovery lives in Pp_sync_vault —
+     dirs + live binding names collapsed to FIRST path segment (one
+     family, one file). The old rindex spelling inferred sub-packages
+     (notes/capture from notes/capture/add) so pull-all exported stale
+     nested dumps the boot seed never reads. *)
   let ld = libs_dir () in
-  if Sys.file_exists ld then
-    Array.iter
-      (fun name ->
-        let p = Filename.concat ld name in
-        if
-          Sys.is_directory p
-          && name <> "_root"
-          && Sys.file_exists (Filename.concat p "lib.pp")
-        then Hashtbl.replace pkgs name ())
-      (Sys.readdir ld);
-  (match live ~url ~user ~password ~timeout "(list-bindings)" |> live_value with
-   | Ok s ->
-       List.iter
-         (fun name ->
-           match String.rindex_opt name '/' with
-           | Some i ->
-               Hashtbl.replace pkgs (String.sub name 0 i) ()
-           | None -> ())
-         (unwrap_list_of_strings s)
-   | Error _ -> ());
-  Hashtbl.fold (fun k () acc -> k :: acc) pkgs [] |> List.sort String.compare
+  let dirs =
+    if Sys.file_exists ld then
+      Array.to_list (Sys.readdir ld)
+      |> List.filter (fun name ->
+             let p = Filename.concat ld name in
+             Sys.is_directory p
+             && name <> "_root"
+             && Sys.file_exists (Filename.concat p "lib.pp"))
+    else []
+  in
+  let bindings =
+    match live ~url ~user ~password ~timeout "(list-bindings)" |> live_value with
+    | Ok s -> unwrap_list_of_strings s
+    | Error _ -> []
+  in
+  Pp_sync_vault.packages_of ~dirs ~bindings
 
 let cmd_status ~url ~user ~password ~timeout ~verbose package =
+  match (if package <> "" then Pp_sync_vault.vault_refusal package else None) with
+  | Some msg ->
+      prerr_endline ("status: " ^ msg);
+      2
+  | None ->
   let pkgs =
     if package <> "" then [ package ]
     else discover_packages ~url ~user ~password ~timeout
@@ -233,22 +237,22 @@ let cmd_status ~url ~user ~password ~timeout ~verbose package =
   !rc
 
 let cmd_pull ~url ~user ~password ~timeout package =
+  (* vault-hygiene (i-1788671623-1, i-1788671331-d): refusals are checked
+     BEFORE any network call, so a refused name cannot write the vault.
+     The (root) namespace is not a package (root-branch lens dumps belong
+     in gitignored backups/ via `pp-sync snapshot --branch <ref>`);
+     sub-prefix names (notes/capture, …) are not packages either — pull
+     used to export them as stale nested libs/<pkg>/<sub>/lib.pp dumps
+     that boot never seeds and that drifted against the family monolith. *)
   if package = "" then begin
     prerr_endline "pull: need package name";
     2
-  end else if package = "(root)" || package = "root" then begin
-    (* vault-hygiene (i-1788671623-1): the (root) namespace is not a
-       package. Pulling it used to dump the whole root-branch lens
-       (REPL scratch defines + kernel copies) into libs/_root/lib.pp —
-       committed debris that only survived seeding via the
-       underscore-prefix boot exclusion. Root-branch dumps belong in
-       gitignored backups/ via `pp-sync snapshot --branch <ref>`;
-       libs/ is the package vault, root-namespace-free by policy. *)
-    prerr_endline
-      "pull: the (root) namespace is not a package; refused. Root-branch \
-       dumps belong in backups/ via pp-sync snapshot";
-    2
   end else
+  match Pp_sync_vault.vault_refusal package with
+  | Some msg ->
+      prerr_endline ("pull: " ^ msg);
+      2
+  | None ->
     match
       live ~url ~user ~password ~timeout
         (Printf.sprintf "(export-package %S)" package)
@@ -268,6 +272,11 @@ let cmd_push ~url ~user ~password ~timeout package =
     prerr_endline "push: need package name";
     2
   end else
+  match Pp_sync_vault.vault_refusal package with
+  | Some msg ->
+      prerr_endline ("push: " ^ msg);
+      2
+  | None ->
     let path = pkg_path package in
     if not (Sys.file_exists path) then begin
       Printf.eprintf "push: missing %s\n" path;
@@ -303,6 +312,11 @@ let cmd_reseed ~url ~user ~password ~timeout package =
     prerr_endline "reseed: need package name";
     2
   end else
+  match Pp_sync_vault.vault_refusal package with
+  | Some msg ->
+      prerr_endline ("reseed: " ^ msg);
+      2
+  | None ->
     match
       live ~url ~user ~password ~timeout
         (Printf.sprintf "(reseed-package %S)" package)
@@ -457,6 +471,11 @@ let cmd_land ~url ~user ~password ~timeout ~from_ref ~package ~names =
     prerr_endline "land: need package name";
     2
   end else
+  match Pp_sync_vault.vault_refusal package with
+  | Some msg ->
+      prerr_endline ("land: " ^ msg);
+      2
+  | None ->
     let prev = current_branch ~url ~user ~password ~timeout in
     let source =
       if from_ref <> "" then from_ref

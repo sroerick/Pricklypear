@@ -2,5 +2,5 @@
  (name pricklypear_cli_lib)
  (public_name pricklypear-cli.lib)
  (wrapped false)
- (modules pp_client)
+ (modules pp_client pp_sync_vault)
  (libraries yojson unix))

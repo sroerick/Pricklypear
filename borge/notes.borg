@@ -125,6 +125,19 @@
           garden isolation is path+author scoped (see personal-garden)
    |))
   )
+  (* agent note (|2026-09-09 vault-shape fix (i-1788671331-d): the 21
+     nested lib.pp stale snapshots named by the PACKAGE FILE LAYOUT rule
+     above are DELETED from the vault — notes/{capture,doc,issues,legacy,
+     light,migrate,outline,refile,tree,ui}, todo/{db,item,list,state,
+     tree,ui}, structed/list, bi/{dashboard,metric}, ops/code,
+     workout/log — content preserved under gitignored
+     backups/vault-debris-20260909/. pp-sync discovery now collapses to
+     first-segment families and refuses sub-prefix pull/push/reseed/
+     status/land, so pull-all cannot re-create the dumps;
+     scripts/verify_libs_layout.sh guards the one-file-per-family
+     shape. implements lists in this chapter (storage, links-and-roam,
+     outline-actions, index-read-path, tree-cutover) drop the deleted
+     paths — the monolith libs/notes/lib.pp is the implemented surface.|) *)
 
   (subsection outline-model
    (doc "Sexp outline ADT: node tree with stable ids — org structure as data")
@@ -203,7 +216,7 @@
    (doc "Notes as one-tree nodes: folders, note leaves, heading children; notes/* façade")
    (status implemented)
    (* agent note (|2026-08-02: notes/doc/* façade on tree (libs/notes/doc + lib.pp); live (notes/doc/get "agents") returns uuid/slug/title/outline; tree/garden-root path grammar in tree_store.ml.|) *)
-   (implements libs/notes/lib.pp libs/notes/capture/lib.pp libs/notes/migrate/lib.pp libs/notes/tree/lib.pp image/lib/tree_store.ml image/lib/crud.ml)
+   (implements libs/notes/lib.pp image/lib/tree_store.ml image/lib/crud.ml)
    (verify
     (smoke "notes/upsert then notes/get by slug returns outline")
     (smoke "second upsert same slug updates in place (idempotent)")
@@ -323,7 +336,6 @@
    (implements
     libs/roam/lib.pp
     libs/notes/lib.pp
-    libs/notes/refile/lib.pp
     libs/bible/lib.pp
     libs/dabar/lib.pp
     pure/prims_pure.ml)
@@ -544,8 +556,6 @@
    (status partial)
    (* agent note (|2026-08-02 confirm still partial: notes/outline/apply-op + eval + POST /partials/notes-node-op shipped; notes/refile* exist but not on structural-editing.op-protocol; full structed wrap/splice/raise not all on outline menu.|) *)
    (implements
-    libs/notes/outline/lib.pp
-    libs/notes/refile/lib.pp
     libs/outline/lib.pp
     libs/structed/lib.pp
     libs/notes/lib.pp
@@ -886,8 +896,6 @@
    (status implemented)
    (implements
     libs/notes/lib.pp
-    libs/notes/doc/lib.pp
-    libs/notes/ui/lib.pp
     image/lib/tree_store.ml)
    (verify
     (smoke "GET /notes lists garden folders incl. tree-only notes")
@@ -1132,7 +1140,7 @@
    (doc "Phased delivery: kernel tree prims → façade → UUID links → M0 PP migrate → M1 vault")
    (status partial)
    (* agent note (|2026-08-02 confirm: K0–N1/M0/I* largely done (index-read-path implemented). Open: M1 pass-2 links, F finish-cutover slices (legacy light/* residue, heading explode polish, legacy row delete).|) *)
-   (implements libs/notes/lib.pp libs/notes/doc/lib.pp image/lib/tree_store.ml libs/tree/lib.pp)
+   (implements libs/notes/lib.pp image/lib/tree_store.ml libs/tree/lib.pp)
    (verify
     (smoke "K0: tree/get list upsert delete move on folder/note/heading")
     (smoke "K1: tree/get-uuid + slug uniqueness reject")

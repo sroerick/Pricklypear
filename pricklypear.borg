@@ -68,8 +68,6 @@
  (* agent note (|2026-08 drift pass: libs/ orphans. 6 product subpackages declared in their chapter implements (notes capture/migrate/tree, workout/log, structed/list, strongs). The remaining 26 are experimental/unDeparted product packages or Nopales stdlib — no dedicated spec chapter yet. Experimental packages are candidates for promotion (write a chapter) or removal.|) *)
  (untracked "libs/astro/lib.pp" "experimental product package, no chapter yet")
  (untracked "libs/bi/lib.pp" "experimental BI/analytics package, no chapter yet")
- (untracked "libs/bi/dashboard/lib.pp" "experimental BI dashboard package, no chapter yet")
- (untracked "libs/bi/metric/lib.pp" "experimental BI metric package, no chapter yet")
  (untracked "libs/bookmarks/lib.pp" "experimental product package, no chapter yet")
  (untracked "libs/contacts/lib.pp" "experimental product package, no chapter yet")
  (untracked "libs/css/lib.pp" "Nopales stdlib: CSS helpers, no dedicated chapter")
@@ -84,10 +82,16 @@
  (untracked "libs/ref/lib.pp" "Nopales stdlib: ref helpers, no dedicated chapter")
  (untracked "libs/signup/lib.pp" "signup package; covered partly by multi-user, no dedicated chapter")
  (untracked "libs/spec/lib.pp" "Nopales stdlib: spec helpers, no dedicated chapter")
- (untracked "libs/todo/item/lib.pp" "todo package; partly covered by notes unified-todos, no dedicated chapter")
- (untracked "libs/todo/list/lib.pp" "todo package; partly covered by notes unified-todos, no dedicated chapter")
- (untracked "libs/todo/state/lib.pp" "todo package; partly covered by notes unified-todos, no dedicated chapter")
- (untracked "libs/todo/ui/lib.pp" "todo package; partly covered by notes unified-todos, no dedicated chapter")
+ (* agent note (|2026-09-09 vault-shape fix (i-1788671331-d): the 21 nested
+    lib.pp dumps (notes/{capture,doc,issues,legacy,light,migrate,outline,
+    refile,tree,ui}, todo/{db,item,list,state,tree,ui}, structed/list,
+    bi/{dashboard,metric}, ops/code, workout/log) are DELETED from the
+    vault — per the layout convention above they were stale pp_sync
+    snapshots of sub-prefix binding groups, double-bookkeeping the family
+    monoliths and already drifted. Content preserved under gitignored
+    backups/vault-debris-20260909/. pp-sync now collapses discovery to
+    first-segment families and refuses sub-prefix pull/push/reseed/land;
+    scripts/verify_libs_layout.sh guards the shape.|) *)
  (untracked "libs/verify/lib.pp" "Nopales stdlib: verify helpers, no dedicated chapter")
  (untracked "libs/weather/lib.pp" "experimental product package, no chapter yet")
  (untracked "libs/weight/lib.pp" "experimental product package, no chapter yet")
