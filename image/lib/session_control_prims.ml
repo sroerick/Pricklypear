@@ -1,0 +1,544 @@
+(** Session CONTROL PRIMS — the DB-touching control surface (fork/merge/
+    route/checkout/unbind/prune-synced/bench + private with-transaction/
+    step rims + with-public-write), extracted verbatim from session.ml
+    (i-1788671109-1). Also owns the branch-ref helpers (split_branch_ref /
+    branch_owner_authorized) the prims and Session's checkout funnel share.
+
+    Seam: this module cannot depend on Session (Session calls register),
+    so the two env-driver operations the prims need — [rehydrate] (full
+    env reload for the branch) and [checkout_to] (branch switch + shell
+    bust + rehydrate) — arrive as a [hooks] record supplied by Session
+    at registration time. Same pattern as Prims_db.~rehydrate_fn.
+
+    Behavior contract: byte-identical relocation; the prim table, arg
+    shapes, error strings, and owner-authorization rules are unchanged. *)
+
+open Session_types
+
+(** The env-driver seam (see module comment). *)
+type hooks = {
+  rehydrate : t -> unit;
+  checkout_to : t -> branch_id:string -> branch_ref:string -> unit;
+}
+
+let split_branch_ref (s : string) : string * string =
+  match String.split_on_char '/' s with
+  | [ o; n ] -> o, n
+  | [ n ] -> "system", n  (* bare name = system/<name> *)
+  | _ -> "system", s
+
+(** Branch-owner authorization (i-1787970640, spec branching.personal-
+    workspace): a session with username U (admin = t.is_admin || U =
+    "admin") may target a branch owner O iff O = U or the session is
+    admin. Agent users are named "<parent>/agent" and work in the
+    parent-owned <parent>/agent workshop branch, so their tenant is the
+    parent username. *)
+let branch_owner_authorized (t : t) (owner : string) : bool =
+  let u = t.manifest.username in
+  if t.is_admin || u = "admin" then true
+  else
+    let tenant =
+      let suffix = "/agent" in
+      let n = String.length u and m = String.length suffix in
+      if n > m && String.sub u (n - m) m = suffix then
+        String.sub u 0 (n - m)
+      else u
+    in
+    owner = u || owner = tenant
+
+let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
+  (* (fork 'parent 'child) -> VStr new-branch-id | VStr "no such parent" *)
+  Primitives.register_server_only tbl "fork"
+    (fun args ->
+      if t.manifest.username = "anonymous" then
+        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("fork", "denied for anonymous", "denied"))))
+      else if t.agent_branch_lock then
+        (Pricklypear_lisp.Ast.VStr
+             "fork blocked: agent is locked to the current branch")
+      else
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr parent_name;
+          Pricklypear_lisp.Ast.VStr child_name ] ->
+          let parent_owner, parent_short = split_branch_ref parent_name in
+          let child_owner, child_short = split_branch_ref child_name in
+          let parent_id =
+            Store.lookup_branch_id_by_name
+              t.store ~owner:parent_owner ~name:parent_short
+          in
+          (match parent_id with
+           | None ->
+               (Pricklypear_lisp.Ast.VStr
+                             (Printf.sprintf "no such parent: %s" parent_name))
+           | Some pid ->
+               (* i-1787970640: child_owner must pass the branch-owner rule
+                  (blocks pre-claiming another user's garden). *)
+               if not (branch_owner_authorized t child_owner) then
+                 (Pricklypear_lisp.Ast.VStr
+                    (Printf.sprintf "denied: branch %s is owned by %s"
+                       child_name child_owner))
+               else
+               let new_id =
+                 Store.fork_branch t.store ~parent_id:pid
+                   ~owner:child_owner ~child_name:child_short
+               in
+               (match new_id with
+                | Some id ->
+                    (Pricklypear_lisp.Ast.VStr id)
+                | None ->
+                    (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("prim", "fork failed", "failed"))))))
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("fork", "bad args (need 2 strings)", "bad-args")))));
+
+  (* (merge 'source 'target) -> VStr "merged N rows" | raise (denied).
+     POLICY (per spec [branching.merge]): merging into `system/*`
+     requires the session username to be "admin"; merges into the
+     caller's own `owner/*` branches are free. *)
+  Primitives.register_server_only tbl "merge"
+    (fun args ->
+      if t.manifest.username = "anonymous" then
+        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("merge", "denied for anonymous", "denied"))))
+      else if t.agent_branch_lock then
+        (Pricklypear_lisp.Ast.VStr
+             "merge blocked: agent is locked to the current branch")
+      else
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr source_ref;
+          Pricklypear_lisp.Ast.VStr target_ref ] ->
+          let src_owner, src_short = split_branch_ref source_ref in
+          let tgt_owner, tgt_short = split_branch_ref target_ref in
+          (* i-1787970640: BOTH src_owner and tgt_owner must pass the
+             branch-owner rule. Target system/* stays admin-only (spec
+             branching.merge); the source check is new — it blocks reading
+             others' code via merge results. *)
+          if (tgt_owner = "system")
+             && not (t.is_admin || t.manifest.username = "admin")
+          then
+            (Pricklypear_lisp.Ast.VStr
+                          "denied: admin-only merge to system branch")
+          else if not (branch_owner_authorized t src_owner) then
+            (Pricklypear_lisp.Ast.VStr
+               (Printf.sprintf "denied: branch %s is owned by %s"
+                  source_ref src_owner))
+          else if not (branch_owner_authorized t tgt_owner) then
+            (Pricklypear_lisp.Ast.VStr
+               (Printf.sprintf "denied: branch %s is owned by %s"
+                  target_ref tgt_owner))
+          else
+            let src_id =
+              Store.lookup_branch_id_by_name
+                t.store ~owner:src_owner ~name:src_short
+            in
+            let tgt_id =
+              Store.lookup_branch_id_by_name
+                t.store ~owner:tgt_owner ~name:tgt_short
+            in
+            (match src_id, tgt_id with
+             | Some s, Some tg ->
+                 let r = Store.merge_branch t.store
+                            ~source_id:s ~target_id:tg in
+                 (match r with
+                  | Some res ->
+                      (Pricklypear_lisp.Ast.VStr
+                                    (Store.format_merge_result res))
+                  | None ->
+                      (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("prim", "merge failed", "failed")))))
+             | _ ->
+                 (Pricklypear_lisp.Ast.VStr
+                               "source or target branch not found"))
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("merge", "bad args (need 2 strings)", "bad-args")))));
+
+  (* (route "/path" handler [visibility]) -> VStr "/path".
+     Optional third arg 'public | "public" | 'private | "private".
+     Handler-only re-register keeps prior visibility (store ON CONFLICT).
+     Anonymous sessions may not register routes.
+     H0.3: public targets must pass the public-route lattice (same as AI
+     allow minus elevate): pure|read-db|write-db|html|txn. Branch/Ai/
+     Publish on a public handler is denied. Missing handler body is OK
+     (define-after-route still works). *)
+  let parse_vis = function
+    | Pricklypear_lisp.Ast.VStr s ->
+        (match String.lowercase_ascii (String.trim s) with
+         | "public" -> Some "public"
+         | "private" -> Some "private"
+         | _ -> None)
+    | _ -> None
+  in
+  let check_public_handler (handler : string) : (unit, string) result =
+    (* Fail-closed public-route gate (BORGE-1785212463 / 1785212603).
+       Infer effects from the in-memory env (synchronous, fresh) via the
+       pure [Route_gate] module. The previous store read was stale after
+       the define persist race and DEFAULTED TO ALLOW on unknown handlers;
+       now unknown / non-function handlers are DENIED. *)
+    (Pricklypear_lisp.Route_gate.check_public_handler ~env:t.eval_state.env handler)
+  in
+  let register_route_checked ~route_path ~handler ~visibility
+      ~(pass_vis_to_store : bool) : Pricklypear_lisp.Ast.value =
+    let gate =
+      if visibility = "public" then check_public_handler handler
+      else (Ok ())
+    in
+    match gate with
+    | Error msg -> (Pricklypear_lisp.Ast.VStr msg)
+    | Ok () ->
+        Hashtbl.replace t.routes route_path (handler, visibility);
+        let _ =
+          if t.seed_additive then
+            if pass_vis_to_store then
+              Store.register_route_if_absent t.store ~route:route_path
+                ~handler ~visibility ()
+            else
+              Store.register_route_if_absent t.store ~route:route_path
+                ~handler ()
+          else if pass_vis_to_store then
+            Store.register_route t.store ~route:route_path ~handler
+              ~visibility ()
+          else
+            Store.register_route t.store ~route:route_path ~handler ()
+        in
+        (Pricklypear_lisp.Ast.VStr route_path)
+  in
+  Primitives.register_server_only tbl "route"
+    (fun args ->
+      if t.manifest.username = "anonymous" then
+        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("route", "denied for anonymous", "denied"))))
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr route_path;
+            Pricklypear_lisp.Ast.VStr handler ] ->
+            let vis =
+              match Hashtbl.find_opt t.routes route_path with
+              | Some (_, v) -> v
+              | None -> "private"
+            in
+            (* handler-only: pass_vis_to_store=false so DB keeps visibility
+               on UPDATE; memory keeps prior or private for new. *)
+            register_route_checked ~route_path ~handler ~visibility:vis
+              ~pass_vis_to_store:false
+        | [ Pricklypear_lisp.Ast.VStr route_path;
+            Pricklypear_lisp.Ast.VStr handler;
+            vis_v ] ->
+            (match parse_vis vis_v with
+             | None ->
+                 (Pricklypear_lisp.Ast.VStr
+                      "route: visibility must be public or private")
+             | Some vis ->
+                 register_route_checked ~route_path ~handler ~visibility:vis
+                   ~pass_vis_to_store:true)
+        | _ ->
+            (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("route", "bad args", "bad-args")))));
+
+  (* (public-route path handler) sugar *)
+  Primitives.register tbl "public-route"
+    (fun args ->
+      if t.manifest.username = "anonymous" then
+        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("public-route", "denied for anonymous", "denied"))))
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr route_path;
+            Pricklypear_lisp.Ast.VStr handler ] ->
+            register_route_checked ~route_path ~handler ~visibility:"public"
+              ~pass_vis_to_store:true
+        | _ ->
+            (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("public-route", "bad args", "bad-args")))));
+
+  (* (route-visibility path) -> "public" | "private" | () *)
+  Primitives.register tbl "route-visibility"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr route_path ] ->
+          (match Hashtbl.find_opt t.routes route_path with
+           | Some (_, vis) ->
+               (Pricklypear_lisp.Ast.VStr vis)
+           | None -> Pricklypear_lisp.Ast.VNil)
+      | _ -> Pricklypear_lisp.Ast.VNil);
+
+  (* (checkout 'branch-ref) -> VStr "checked out" | "no such branch".
+     Mutates t.store.branch_id + t.manifest, then re-hydrates the env
+     from the new branch's function_defs (sync — so the next form sees
+     the right bindings). Blocked while agent_branch_lock is set. *)
+  Primitives.register_server_only tbl "checkout"
+    (fun args ->
+      if t.manifest.username = "anonymous" then
+        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("checkout", "denied for anonymous", "denied"))))
+      else if t.agent_branch_lock then
+        (Pricklypear_lisp.Ast.VStr
+             "checkout blocked: agent is locked to the current branch")
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr branch_ref ] ->
+            let owner, name = split_branch_ref branch_ref in
+            (* i-1787970640: owner of the target ref must pass the
+               branch-owner rule (system/* included — non-admin users
+               never need main; personal branches inherit it). *)
+            if not (branch_owner_authorized t owner) then
+              (Pricklypear_lisp.Ast.VStr
+                 (Printf.sprintf "denied: branch %s is owned by %s"
+                    branch_ref owner))
+            else
+            let found =
+              Store.lookup_branch_id_by_name t.store ~owner ~name
+            in
+            (match found with
+             | None -> raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("checkout", "no such branch", "not-found")))
+             | Some new_id ->
+                 let () = (hooks.checkout_to) t ~branch_id:new_id ~branch_ref in
+                 (Pricklypear_lisp.Ast.VStr "checked out"))
+        | _ ->
+            (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("checkout", "bad args", "bad-args")))));
+
+  (* (unbind name) -> VStr "unbound" | "nothing to unbind" | error.
+     Deletes ONLY the current branch's function_defs row for name;
+     the name then resolves via inheritance to the shadowed parent
+     binding (or becomes unbound). Refuses on system/main and on
+     anonymous sessions. See branching.unbind spec. *)
+  Primitives.register tbl "unbind"
+    (fun args ->
+      if t.manifest.username = "anonymous" then
+        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("unbind", "denied for anonymous", "denied"))))
+      else
+        (* i-1787970640: the current branch's owner must pass the
+           branch-owner rule (delete_function already refuses system/main
+           and the prim refuses anonymous). *)
+        let cur_owner, _cur_name =
+          split_branch_ref t.manifest.branch_name in
+        if not (branch_owner_authorized t cur_owner) then
+          (Pricklypear_lisp.Ast.VStr
+             (Printf.sprintf "denied: branch %s is owned by %s"
+                t.manifest.branch_name cur_owner))
+        else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr name ] ->
+            (try
+              let deleted = Store.delete_function t.store name in
+              if deleted then begin
+                (* Rehydrate so the env sees the revealed parent binding *)
+                (hooks.rehydrate) t;
+                (Pricklypear_lisp.Ast.VStr "unbound")
+              end else
+                (Pricklypear_lisp.Ast.VStr "nothing to unbind")
+            with Failure msg ->
+              (Pricklypear_lisp.Ast.VStr msg))
+        | _ ->
+            (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("unbind", "need a name", "bad-args")))));
+
+  (* (prune-synced) -> VStr JSON {"pruned": N, "names": [...]}.
+     branching.pin-hygiene: unbinds every synced FN pin on the current
+     branch (body canonically identical to the parent chain — a
+     contentless pin). ahead/ahead-new/diverged pins untouched.
+     Denied for anonymous; system/main is a no-op (a root pin can never
+     be synced). Same branch-owner rule as unbind. *)
+  Primitives.register tbl "prune-synced"
+    (fun args ->
+      if t.manifest.username = "anonymous" then
+        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("prune-synced", "denied for anonymous", "denied"))))
+      else
+        (match args with
+         | [] ->
+             let cur_owner, _cur_name =
+               split_branch_ref t.manifest.branch_name in
+             if not (branch_owner_authorized t cur_owner) then
+               (Pricklypear_lisp.Ast.VStr
+                  (Printf.sprintf "denied: branch %s is owned by %s"
+                     t.manifest.branch_name cur_owner))
+             else if t.store.Store_db.branch_id = Store.system_main_id then
+               (Pricklypear_lisp.Ast.VStr
+                  (Yojson.Safe.to_string
+                     (`Assoc [ "pruned", `Int 0;
+                               "note", `String "system/main: nothing can be synced" ])))
+             else
+               let names = Store.prune_synced_fn_pins t.store in
+               let () = if names <> [] then (hooks.rehydrate) t in
+               Pricklypear_lisp.Ast.VStr
+                 (Yojson.Safe.to_string
+                    (`Assoc
+                      [ "pruned", `Int (List.length names);
+                        "names",
+                          `List
+                            (List.map (fun n -> `String n)
+                               (List.rev names)) ]))
+         | _ ->
+             (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("prune-synced", "no args", "bad-args"))))));
+
+  (* (bench expr-string [n]) -> VFloat average microseconds per iteration.
+     Parses once, warms up once, runs n times (default 1000) under a max
+     budget so the bench loop itself never hits Budget_exceeded. Uses the
+     current session env. Prefer pure expressions (side-effecting bodies
+     will run for real). *)
+  let bench_run (expr_str : string) (n : int) : Pricklypear_lisp.Ast.value =
+    let n = max 1 n in
+    let e =
+      try Pricklypear_lisp.Reader.read_one expr_str
+      with exn ->
+        raise
+          (Pricklypear_lisp.Ast.Interp_error
+             (Pricklypear_lisp.Ast.User_error
+                ("bench: parse failed: " ^ Printexc.to_string exn, "bad-args")))
+    in
+    let run_once () =
+      let budget =
+        Pricklypear_lisp.Eval.make_budget ~limit:max_int ()
+      in
+      Control_rim.run_lwt ~prims:t.eval_state.prims (fun () ->
+          Pricklypear_lisp.Eval.eval
+            ~budget ~prims:Pricklypear_lisp.Eval.empty_prims t.eval_state.env e)
+    in
+    (* warmup (discard) *)
+    let _ = run_once () in
+    let t0 = Unix.gettimeofday () in
+    let rec loop i =
+      if i >= n then ()
+      else
+        let _ = run_once () in
+        loop (i + 1)
+    in
+    let () = loop 0 in
+    let t1 = Unix.gettimeofday () in
+    let avg_us = ((t1 -. t0) *. 1_000_000.) /. float_of_int n in
+    (Pricklypear_lisp.Ast.VFloat avg_us)
+  in
+  Primitives.register tbl "bench"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr s ] -> bench_run s 1000
+      | [ Pricklypear_lisp.Ast.VStr s; Pricklypear_lisp.Ast.VInt n ] ->
+          bench_run s (Int64.to_int n)
+      | _ ->
+          (Pricklypear_lisp.Ast.VStr
+               "bench: need (bench expr-string [iterations])"));
+
+  (* Private prim used by the with-transaction special form in eval.ml.
+     NOT USER-VISIBLE: it's looked up under name __with_transaction__ by
+     the special form handler, never `(with-transaction-call ...)` from Lisp.
+     Also bound into the env as a VPrim name by the auto-bind loop, but
+     a `(with-transaction-call ...)` call would just route through here.
+     The prim receives one arg: a VLambda value. It wraps Eval.apply
+     inside Store.with_dynamic_transaction, so prims called from the
+     body of the lambda see the in-transaction pgx conn via
+     Store.current_conn. Lands it29, option A from BORGE-1783438027.
+
+     Returns the lambda body's result. Nested transactions raise a clean
+     Interp_error (see with_dynamic_transaction). *)
+  (* Apply a VLambda under the effect rim (H1.7). *)
+  let apply_lambda_auto (lam : Pricklypear_lisp.Ast.value) : Pricklypear_lisp.Ast.value =
+    let budget = Pricklypear_lisp.Eval.make_budget () in
+    Control_rim.run_lwt ~prims:t.eval_state.prims (fun () ->
+        Pricklypear_lisp.Eval.apply
+          ~budget ~prims:Pricklypear_lisp.Eval.empty_prims lam [])
+  in
+  Primitives.register tbl "__with_transaction__"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VLambda (params, body, clo_env) as lam ] ->
+          (* Enforce zero-arg lambda for clarity: with-transaction bodies
+             shouldn't take args. *)
+          let _ = params in
+          let _ = clo_env in
+          (* H1.3: body re-enters apply_eff under Control.run_lwt when
+             PP_EVAL_CONTROL=eff so nested prims Prim_call while seeing
+             Store.current_conn from with_dynamic_transaction. *)
+          Io_lwt.Db.with_dynamic_transaction t.store (fun () ->
+              apply_lambda_auto lam)
+      | _ ->
+          (Pricklypear_lisp.Ast.VStr
+                        "__with_transaction__: bad args (need a lambda)"));
+
+  (* Private prim used by the with-step special form in eval.ml. NOT
+     USER-VISIBLE: routed to under name __step__ by eval.ml, never
+     `(with-step "name" (lambda ...))` from a plain prim call.
+
+     (__step__ "name" <lambda>) is a checkpoint boundary (borge/jobs.borg
+     step-checkpoints):
+       - Outside a job (Jobs.current_job_id_opt () = None, e.g. an HTTP
+         request or REPL) it is a PLAIN thunk call — no checkpoint.
+       - Inside a job (the runner binds the job id around eval), the
+         thunk's result is memoized under (job_id, name): first execution
+         runs the thunk and writes a job_steps row; re-execution (a retry)
+         returns the stored value WITHOUT re-running the thunk.
+
+     Exactly-once with (with-transaction (step …)): the checkpoint INSERT
+     rides Store.current_conn — when the caller is inside
+     with_transaction, the insert lands in the SAME transaction as the
+     thunk's writes, so it commits or rolls back atomically with them (a
+     failed/later-raised step leaves no checkpoint; a retry re-runs). If
+     the THUNK ITSELF raises, no checkpoint is written (the exception
+     propagates, rolling back the surrounding transaction if any). *)
+  Primitives.register tbl "__step__"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr name;
+          Pricklypear_lisp.Ast.VLambda (_params, _body, _clo) as lam ] ->
+          (match Jobs.current_job_id_opt () with
+           | None ->
+               (* Outside a job: a plain thunk call with no checkpoint. *)
+               apply_lambda_auto lam
+           | Some job_id ->
+               (match
+                  Jobs.checkpoint_lookup ~store:t.store ~job_id ~name
+                with
+                | Some value_json ->
+                    (* Memoized: return the stored value without re-running. *)
+                    (try
+                       Prims_pure.json_to_value
+                         (Yojson.Safe.from_string value_json)
+                     with _ ->
+                       Pricklypear_lisp.Ast.VStr value_json)
+                | None ->
+                    (* First execution in this job: run the thunk, then write
+                       the checkpoint. If the thunk raises, the exception
+                       propagates (no checkpoint, surrounding tx rolls back). *)
+                    let result = apply_lambda_auto lam in
+                    let value_json =
+                      Yojson.Safe.to_string (Prims_pure.value_to_json result)
+                    in
+                    Jobs.checkpoint_write ~store:t.store ~job_id ~name
+                      ~value:value_json;
+                    result))
+      | _ ->
+          (Pricklypear_lisp.Ast.VStr
+                        "__step__: bad args (need name-str, lambda)"));
+
+  (* (with-public-write (lambda () body...)) — run body with write privilege
+     so public route handlers can create data_rows / notes captures.
+     Elevates anonymous only (logged-in sessions already write). Restores
+     identity afterward. Prefer for narrow public forms (signup), not general
+     unauth APIs.
+
+     Elevates BOTH the live session manifest AND the per-request context
+     manifest. CRUD prims (create/deftype) read their anon guard from
+     Request_context.manifest (the gate-time snapshot, per BORGE-1784434193
+     cotenant fix); without elevating the snapshot, the guard sees the stale
+     "anonymous" and silently denies (create returns a VStr, seq discards it,
+     the handler renders its thanks page with no row written). *)
+  Primitives.register tbl "with-public-write"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VLambda (_params, _body, _clo) as lam ] ->
+          let prev = t.manifest in
+          let need_elevate = prev.username = "anonymous" in
+          if need_elevate then
+            t.manifest <-
+              { prev with user_id = "public"; username = "public" };
+          let run_body =
+            match Request_context.get () with
+            | Some ctx when need_elevate ->
+                let elevated_manifest =
+                  { (Request_context.manifest ctx) with
+                    user_id = "public"; username = "public" }
+                in
+                let elevated_ctx =
+                  Request_context.make
+                    ~manifest:elevated_manifest
+                    ~env:(Request_context.env ctx)
+                    ~routes:(Request_context.routes ctx)
+                in
+                Request_context.with_current elevated_ctx
+                  (fun () -> apply_lambda_auto lam)
+            | _ -> apply_lambda_auto lam
+          in
+          (Fun.protect ~finally:(fun () -> if need_elevate then t.manifest <- prev) (fun () -> run_body))
+      | _ ->
+          (Pricklypear_lisp.Ast.VStr
+               "with-public-write: bad args (need a zero-arg lambda)"))
+
+

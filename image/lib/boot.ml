@@ -123,7 +123,7 @@ let jobs_runner_loop ~(session : Session.t) : unit =
          data_rows) returns nothing because the runner looks anonymous. *)
       let ctx =
         Request_context.make
-          ~manifest:t.manifest ~env:t.env ~routes:t.routes
+          ~manifest:t.manifest ~env:t.eval_state.env ~routes:t.routes
       in
       (* Bind the current job id on this fiber so the (with-step "name"
          thunk) special form (__step__ prim) scopes its checkpoints to this

@@ -56,9 +56,9 @@ let define_binding (t : t) ~(name : string) ~(body_src : string)
   (try
       let expr = Pricklypear_lisp.Reader.read_one input in
       let v =
-        Control_rim.run_lwt ~prims:t.prims (fun () ->
+        Control_rim.run_lwt ~prims:t.eval_state.prims (fun () ->
           Pricklypear_lisp.Eval.eval_string_direct
-            ~prims:Pricklypear_lisp.Eval.empty_prims t.env
+            ~prims:Pricklypear_lisp.Eval.empty_prims t.eval_state.env
             ~budget:(Pricklypear_lisp.Eval.make_budget ()) input)
       in
       (match Pricklypear_lisp.Eval.parse_top_define expr with
@@ -74,8 +74,8 @@ let define_binding (t : t) ~(name : string) ~(body_src : string)
               live-calls ui/nav; other pages used a cached string. *)
            if n = "ui/nav" || n = "ui/home" || n = "ui/css" || n = "ui/theme"
               || String.starts_with ~prefix:"theme/" n then (
-             t.ui_nav_html <- None;
-             t.ui_css <- None);
+             t.ui_shell.nav_html <- None;
+             t.ui_shell.css <- None);
            (* Impact + change transcript filled by Session after define when
               called via Session.eval paths; install_function appends text. *)
            (Ok v)
@@ -169,7 +169,7 @@ let install_ai_function (t : t) ~(name : string) ~(body_src : string)
            (Printf.sprintf "ai body invalid: %s\n---\n%s" e preview))
   | Ok body_src ->
       let known_fn = known_fn_from_store t in
-      (match check_ai_body_effects ~known_fn ~env:t.env body_src with
+      (match check_ai_body_effects ~known_fn ~env:t.eval_state.env body_src with
        | Error pe ->
            (Pricklypear_lisp.Ast.VStr
                 (Printf.sprintf "ai rejected by effects: %s\n---\n%s" pe body_src))
@@ -208,7 +208,7 @@ let function_source (t : t) (name : string) : string option =
   | Some (expr, _, _) ->
       (Some (Pricklypear_lisp.Reader.pp_expr expr))
   | None ->
-      (match Pricklypear_lisp.Env.lookup t.env name with
+      (match Pricklypear_lisp.Env.lookup t.eval_state.env name with
        | Some (Pricklypear_lisp.Ast.VLambda (params, body, _)) ->
            let e =
              Pricklypear_lisp.Ast.Lambda (params, body)
@@ -242,7 +242,7 @@ let function_ast (t : t) (name : string)
   | Some (expr, _, _) ->
       (Some (Pricklypear_lisp.Eval.quote_to_value expr))
   | None ->
-      (match Pricklypear_lisp.Env.lookup t.env name with
+      (match Pricklypear_lisp.Env.lookup t.eval_state.env name with
        | Some (Pricklypear_lisp.Ast.VLambda (params, body, _)) ->
            let e = Pricklypear_lisp.Ast.Lambda (params, body) in
            (Some (Pricklypear_lisp.Eval.quote_to_value e))
@@ -572,7 +572,7 @@ let current_fn_pretty (t : t) (name : string) : string =
   | Some (expr, _, _) ->
       (Pricklypear_lisp.Reader.pp_expr expr)
   | None ->
-      (match Pricklypear_lisp.Env.lookup t.env name with
+      (match Pricklypear_lisp.Env.lookup t.eval_state.env name with
        | Some (Pricklypear_lisp.Ast.VLambda (params, body, _)) ->
            let p =
              "(lambda (" ^ String.concat " " params ^ ") " ^
@@ -811,7 +811,7 @@ let run_smoke_route
            "ok: false\nerror: no route registered for %s\n(hint: register_route path=%s handler=...)"
            path path)
   | Some (handler, _vis) ->
-      (match Pricklypear_lisp.Env.lookup t.env handler with
+      (match Pricklypear_lisp.Env.lookup t.eval_state.env handler with
        | None ->
            (Printf.sprintf
                 "ok: false\nroute: %s -> %s\nerror: handler unbound in env"
@@ -833,9 +833,9 @@ let run_smoke_route
            let v_res =
              (Fun.protect ~finally:(fun () -> t.current_request <- None) (fun () -> (try
       let v =
-                         Control_rim.run_lwt ~prims:t.prims (fun () ->
+                         Control_rim.run_lwt ~prims:t.eval_state.prims (fun () ->
                              Pricklypear_lisp.Eval.eval_string_direct
-                               ~prims:Pricklypear_lisp.Eval.empty_prims t.env
+                               ~prims:Pricklypear_lisp.Eval.empty_prims t.eval_state.env
                                ~budget:(Pricklypear_lisp.Eval.make_budget ())
                                ("(" ^ handler ^ ")"))
                        in
@@ -898,7 +898,7 @@ let run_agent_tool (t : t) ~(name : string) ~(arguments : string)
   | "list_bindings" ->
       let names =
         try
-          match Primitives.prim_list_bindings_fn ~env:t.env [] with
+          match Primitives.prim_list_bindings_fn ~env:t.eval_state.env [] with
           | Pricklypear_lisp.Ast.VList xs ->
               List.filter_map
                 (function Pricklypear_lisp.Ast.VStr s -> Some s | _ -> None) xs
@@ -1039,9 +1039,9 @@ let run_agent_tool (t : t) ~(name : string) ~(arguments : string)
              | None ->
                  (try
       let v =
-                        Control_rim.run_lwt ~prims:t.prims (fun () ->
+                        Control_rim.run_lwt ~prims:t.eval_state.prims (fun () ->
                             Pricklypear_lisp.Eval.eval_string_direct
-                              ~prims:Pricklypear_lisp.Eval.empty_prims t.env
+                              ~prims:Pricklypear_lisp.Eval.empty_prims t.eval_state.env
                               ~budget:(Pricklypear_lisp.Eval.make_budget ()) expr)
                       in
                       let s = Pricklypear_lisp.Reader.pp_value v in
@@ -1075,7 +1075,7 @@ let run_agent_tool (t : t) ~(name : string) ~(arguments : string)
   | "image_context" ->
       let names =
         try
-          match Primitives.prim_list_bindings_fn ~env:t.env [] with
+          match Primitives.prim_list_bindings_fn ~env:t.eval_state.env [] with
           | Pricklypear_lisp.Ast.VList xs ->
               List.filter_map
                 (function Pricklypear_lisp.Ast.VStr s -> Some s | _ -> None)
@@ -1501,7 +1501,7 @@ let llm_rewrite (t : t) ~(mode : string) ~(name : string) ~(concept : string)
   | Error e -> (Pricklypear_lisp.Ast.VStr ("ai error: " ^ e))
   | Ok body_src ->
       let known_fn = known_fn_from_store t in
-      (match check_ai_body_effects ~known_fn ~env:t.env body_src with
+      (match check_ai_body_effects ~known_fn ~env:t.eval_state.env body_src with
        | Error pe ->
            (Pricklypear_lisp.Ast.VStr
                 (Printf.sprintf "ai rejected by effects: %s\n---\n%s" pe body_src))
@@ -1533,7 +1533,7 @@ let llm_seed (t : t) ~(requirement : string) ?(max_steps = 5) ()
   | Error e -> (Pricklypear_lisp.Ast.VStr ("seed error: " ^ e))
   | Ok body_src ->
       let known_fn = known_fn_from_store t in
-      (match check_ai_body_effects ~known_fn ~env:t.env body_src with
+      (match check_ai_body_effects ~known_fn ~env:t.eval_state.env body_src with
        | Error pe ->
            (Pricklypear_lisp.Ast.VStr ("seed rejected: " ^ pe ^ "\n" ^ body_src))
        | Ok () ->

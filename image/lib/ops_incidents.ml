@@ -87,9 +87,9 @@ let file_todo_and_note (session : Session_types.t) ~(title : string)
   in
   (try
       let v =
-        Control_rim.run_lwt ~prims:session.prims (fun () ->
+        Control_rim.run_lwt ~prims:session.eval_state.prims (fun () ->
             Pricklypear_lisp.Eval.eval_string_direct
-              ~prims:Pricklypear_lisp.Eval.empty_prims session.env
+              ~prims:Pricklypear_lisp.Eval.empty_prims session.eval_state.env
               ~budget:(Pricklypear_lisp.Eval.make_budget ()) expr)
       in
       match v with

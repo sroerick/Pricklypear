@@ -1651,7 +1651,7 @@ let api_prim (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
     json_response reqd ~status:`Bad_request
       (`Assoc [("ok", `Bool false); ("error", `String "name required")])
   else
-    match Primitives.dispatch session.prims name args with
+    match Primitives.dispatch session.eval_state.prims name args with
     | Primitives.Prim_refused_server_only (nm, reason) ->
         (* Refuse: server-only prim must run on the server's authority
            (branch state, locks, auth), not through a remote proxy. *) 
