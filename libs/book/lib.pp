@@ -205,21 +205,12 @@
 ;; a re-seed or precompute re-run refreshes them. Live compute remains
 ;; the fallback for un-precomputed rows.
 
-(define book/json-esc
-  (lambda (s i acc)
-    (if (>= i (string-length s))
-        acc
-        (let ((c (substring s i 1)))
-          (book/json-esc s (+ i 1)
-            (string-append acc
-              (if (string-eq c "\\") "\\\\"
-                (if (string-eq c "\"") "\\\"" c)))))))
-  "Escape one string for embedding in a JSON array literal.")
 (define book/json-array
   (lambda (xs)
     (string-append "["
-      (book/json-array-join xs "" #t)))
-  "JSON array string with comma separators (dict-set needs strings;\n   stored on section rows by book/precompute1).")
+      (book/json-array-join xs "" #t)
+      "]"))
+  "JSON array string with comma separators (dict-set needs strings;\n   stored on section rows by book/precompute1). Closing bracket:\n   dropped by the a58f878 comma refactor and restored 2026-09-10\n   (i-1788670711) — the stored literal never parsed without it.")
 (define book/json-array-join
   (lambda (xs acc first?)
     (if (null? xs)
@@ -228,7 +219,7 @@
           (cdr xs)
           (string-append acc
             (if first? "" ",")
-            "\"" (book/json-esc (as-str (car xs)) 0 "") "\"")
+            "\"" (json-escape (car xs)) "\"")
           #f)))
   "Comma-separated quoted elements for book/json-array.")
 (define book/partition-toks

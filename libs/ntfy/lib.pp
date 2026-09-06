@@ -14,32 +14,8 @@
 ;; Phone side: subscribe the ntfy app (or a UnifiedPush distributor) to
 ;;   <url>/<topic>. Self-hosting ntfy is a config change, not code.
 
-(define ntfy/json-esc
-  (lambda
-    (s i acc)
-    (if
-      (>= i (string-length s))
-      acc
-      (let
-        ((c (substring s i 1)))
-        (ntfy/json-esc
-          s
-          (+ i 1)
-          (string-append
-            acc
-            (cond
-              ((string-eq c "\\") "\\\\")
-              ((string-eq c "\"") "\\\"")
-              ((string-eq c "\n") "\\n")
-              ((string-eq c "\r") "\\r")
-              ((string-eq c "\t") "\\t")
-              (else c))))))))
-
-(define ntfy/json-escape
-  (lambda
-    (s)
-    "Escape a string for embedding in a JSON header value."
-    (ntfy/json-esc (as-str s) 0 "")))
+;; json-escape comes from libs/std (shared escaper, i-1788670711);
+;; the old ntfy/json-esc + ntfy/json-escape wrapper were deleted.
 
 (define ntfy/config
   (lambda
@@ -58,21 +34,21 @@
     "ntfy wire headers: Title, optional Click, optional Authorization."
     (string-append
       "{\"Title\": \""
-      (ntfy/json-escape title)
+      (json-escape title)
       "\""
       (if
         (string-eq (as-str click) "")
         ""
         (string-append
           ", \"Click\": \""
-          (ntfy/json-escape click)
+          (json-escape click)
           "\""))
       (if
         (string-eq (as-str token) "")
         ""
         (string-append
           ", \"Authorization\": \"Bearer "
-          (ntfy/json-escape token)
+          (json-escape token)
           "\""))
       "}")))
 
