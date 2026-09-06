@@ -846,15 +846,13 @@ let login_form_page ?(error = "") ?(next = "") (reqd : Httpun.Reqd.t) : unit =
         ; HTML.value "%s" next
         ]
   in
-  let body =
-    HTML.html [HTML.lang "en"] [
-      HTML.head [] [
-        HTML.title [] "Pricklypear — Sign in";
-        HTML.meta [HTML.charset "utf-8"];
-        HTML.meta [HTML.name "viewport";
-                   HTML.content "width=device-width, initial-scale=1"];
-        HTML.style [] "%s"
-          "body{font-family:ui-monospace,Menlo,monospace;max-width:28rem;
+  (* html_response owns the document (html/head/body); this page is only
+     the card fragment plus its stylesheet. It used to build a complete
+     second HTML document that html_response then wrapped in another one
+     (double DOCTYPE, nested html/head, login stylesheet demoted into the
+     outer body) — i-1788670686-b. *)
+  let login_css =
+    "body{font-family:ui-monospace,Menlo,monospace;max-width:28rem;
            margin:4rem auto;padding:1rem;background:#f4f1ea;color:#1a1a1a}
            .card{border:2px solid #1a1a1a;background:#fff;padding:1.25rem}
            h1{font-size:1.25rem;margin:0 0 1rem}
@@ -864,32 +862,30 @@ let login_form_page ?(error = "") ?(next = "") (reqd : Httpun.Reqd.t) : unit =
            button{margin-top:1rem;border:2px solid #1a1a1a;background:#1a1a1a;
            color:#fff;padding:.45rem .9rem;font:inherit;cursor:pointer}
            .err{color:#8b0000;margin:.5rem 0}
-           .muted{color:#555;font-size:.85rem;margin-top:1rem}";
+           .muted{color:#555;font-size:.85rem;margin-top:1rem}"
+  in
+  let card =
+    HTML.div [HTML.class_ "card"] [
+      HTML.h1 [] [txt "Sign in"];
+      err;
+      HTML.form [HTML.method_ `POST; HTML.action "/login"] [
+        next_field;
+        HTML.label [HTML.for_ "username"] [txt "Username"];
+        HTML.input [HTML.type_ "text"; HTML.name "username";
+                    HTML.id "username"; HTML.required;
+                    HTML.autocomplete `username];
+        HTML.label [HTML.for_ "password"] [txt "Password"];
+        HTML.input [HTML.type_ "password"; HTML.name "password";
+                    HTML.id "password"; HTML.required;
+                    HTML.autocomplete `current_password];
+        HTML.button [HTML.type_ "submit"] [txt "Log in"];
       ];
-      HTML.body [] [
-        HTML.div [HTML.class_ "card"] [
-          HTML.h1 [] [txt "Sign in"];
-          err;
-          HTML.form [HTML.method_ `POST; HTML.action "/login"] [
-            next_field;
-            HTML.label [HTML.for_ "username"] [txt "Username"];
-            HTML.input [HTML.type_ "text"; HTML.name "username";
-                        HTML.id "username"; HTML.required;
-                        HTML.autocomplete `username];
-            HTML.label [HTML.for_ "password"] [txt "Password"];
-            HTML.input [HTML.type_ "password"; HTML.name "password";
-                        HTML.id "password"; HTML.required;
-                        HTML.autocomplete `current_password];
-            HTML.button [HTML.type_ "submit"] [txt "Log in"];
-          ];
-          HTML.p [HTML.class_ "muted"] [
-            txt "Your garden: username/personal after login.";
-          ];
-        ];
+      HTML.p [HTML.class_ "muted"] [
+        txt "Your garden: username/personal after login.";
       ];
     ]
   in
-  html_response reqd body
+  html_response reqd ~css:login_css card
 
 let post_login (session : Session.t) ?source_ip (reqd : Httpun.Reqd.t) : unit =
   let body = read_body reqd in
