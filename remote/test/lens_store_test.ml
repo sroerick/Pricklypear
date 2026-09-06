@@ -14,8 +14,11 @@
       - the substrate (local-substrate): materialize writes one node
         envelope file per node at its path under the lens root; get /
         subtree_list are the path-addressed reads (the filesystem IS the
-        path index); put_body + node_hash are the local write path whose
-        content hash is the sync/three-way-diff key. *)
+        path index); put_body is the local write path whose envelope
+        carries NO client-computed hash — hash authority is server-side
+        (one-tree.hash-domain digests DB-side); the client carries server
+        hashes verbatim and a locally-written envelope converges to the
+        server stamp via the sync round's convergence pull. *)
 
 open Pricklypear_lisp
 open Lens_store
@@ -106,15 +109,106 @@ let test_put_body_hash () =
     put_body ~lens ~path:"data.u.abc.todo.id2" ~kind:"datum" ~type_:"todo"
       ~author:"admin" ~body;
     Alcotest.(check bool) "get present" true (get ~lens "data.u.abc.todo.id2" <> None);
-    (* the envelope carries the content hash of the canonical body *)
-    (match node_hash ~lens "data.u.abc.todo.id2" with
-     | Some h ->
-         let expected = content_hash (Yojson.Safe.to_string body) in
-         Alcotest.(check string) "hash = content hash" expected h
-     | None -> Alcotest.fail "node_hash None");
-    (* content_hash is deterministic *)
-    Alcotest.(check string) "deterministic hash"
-      (content_hash "x") (content_hash "x"))
+    (* the client fabricates NO hash: the OCaml-side hash domain is gone
+       (one-tree.hash-domain computes DB-side), so a locally-built
+       envelope carries "" — the server stamps the canonical hash when
+       the pushed body is applied, and the sync round's convergence pull
+       (sync_client) replaces the envelope with the server's. *)
+    Alcotest.(check (option string)) "no client-computed hash" (Some "")
+      (node_hash ~lens "data.u.abc.todo.id2");
+    (* the body itself travels intact (the sync push transfers it) *)
+    (match get ~lens "data.u.abc.todo.id2" with
+     | Some env ->
+         Alcotest.(check bool) "body intact for the push" true
+           (match Yojson.Safe.from_string env with
+            | `Assoc kv -> List.assoc_opt "body" kv = Some body
+            | _ -> false)
+     | None -> Alcotest.fail "get None"))
+
+let test_sync_convergence_pull () =
+  (* i-1788670970-5 end to end: a locally-written envelope (hash "")
+     converges to the server stamp in the SAME round that pushes it, so
+     an identical body never re-diverges — no permanent Diverge/LWW
+     churn. Round 2 proves the convergence: the manifest now carries the
+     server hash, the server classifies Same, and no second tree/get
+     fires. *)
+  with_tmpdir (fun root ->
+    let lens = lens_of ~root in
+    (* the manifest only carries the owner's replication prefix (encoded
+       user label), so the locally-written node must live there *)
+    let path = "data.u." ^ enc_label "admin" ^ ".todo.local1" in
+    put_body ~lens ~path ~kind:"datum" ~type_:"todo" ~author:"admin"
+      ~body:(`Assoc [("title", `String "offline edit")]);
+    Alcotest.(check (option string)) "starts unstamped" (Some "")
+      (node_hash ~lens path);
+    (* the server's canonical envelope for the merged body (the hash is
+       the DB-side one-tree.hash-domain digest the client can only learn
+       by pulling) *)
+    let server_env =
+      Yojson.Safe.to_string
+        (`Assoc [ ("v", `Int 1); ("kind", `String "datum");
+                  ("path", `String path); ("type", `String "todo");
+                  ("body", `Assoc [("title", `String "offline edit")]);
+                  ("author", `String "admin"); ("hash", `String "Hsrv");
+                  ("created_at", `String "t"); ("updated_at", `String "t") ])
+    in
+    let tree_gets = ref 0 in
+    (* stateful fake server: it holds the node (Hsrv); a client manifest
+       hash of "" is a diverge pair the LWW gives to the newer client
+       edit; the converged hash classifies Same. *)
+    let transport (prim : string) (args : Pricklypear_lisp.Ast.value list) :
+        (Pricklypear_lisp.Ast.value, exn) Result.t =
+      match prim, args with
+      | "sync/push", [ cm; _ ] ->
+          let client_hash =
+            match cm with
+            | Ast.VList rows ->
+                (match
+                   List.filter_map
+                     (function
+                       | Ast.VList [ Ast.VStr p; Ast.VStr h ] when p = path ->
+                           Some h
+                       | _ -> None)
+                     rows
+                 with h :: _ -> h | [] -> "")
+            | _ -> ""
+          in
+          let diverge, won, applied =
+            if client_hash = "" then ([path], [path], 1) else ([], [], 0)
+          in
+          let jlist xs = `List (List.map (fun s -> `String s) xs) in
+          Ok
+            (Ast.VStr
+               (Yojson.Safe.to_string
+                  (`Assoc
+                    [ ("mode", `String "two-way")
+                    ; ("applied", `Int applied)
+                    ; ("client_only", `Int 0)
+                    ; ("server_only", `Int 0)
+                    ; ("diverge", `Int (List.length diverge))
+                    ; ("server_only_paths", jlist [])
+                    ; ("diverge_paths", jlist diverge)
+                    ; ("lww_client_won", jlist won)
+                    ; ("lww_server_kept", jlist [])
+                    ; ("generation", `String "1") ])))
+      | "tree/get", [ Ast.VStr p ] when p = path ->
+          incr tree_gets;
+          Ok (Ast.VStr server_env)
+      | "current-branch", [] -> Ok (Ast.VStr "system/main")
+      | _ -> Error (Failure ("unexpected transport call: " ^ prim))
+    in
+    let r1 = Sync_client.run_round ~transport ~lens ~quiet:true () in
+    Alcotest.(check bool) "round 1 ok" true r1.ok;
+    Alcotest.(check int) "round 1 converged (the push applied)" 1 r1.pushed;
+    (* the local envelope now carries the SERVER hash *)
+    Alcotest.(check (option string)) "converged to server hash" (Some "Hsrv")
+      (node_hash ~lens path);
+    let r2 = Sync_client.run_round ~transport ~lens ~quiet:true () in
+    Alcotest.(check bool) "round 2 ok" true r2.ok;
+    Alcotest.(check int) "round 2: no divergence (no churn)" 0 r2.diverge;
+    Alcotest.(check int) "round 2: nothing applied" 0 r2.pushed;
+    Alcotest.(check int) "round 2: nothing pulled" 0 r2.pulled;
+    Alcotest.(check int) "exactly one tree/get across both rounds" 1 !tree_gets)
 
 let test_subtree_list () =
   with_tmpdir (fun root ->
@@ -331,6 +425,7 @@ let () =
        , [ Alcotest.test_case "path_to_file" `Quick test_path_to_file
          ; Alcotest.test_case "materialize_and_get" `Quick test_materialize_and_get
          ; Alcotest.test_case "put_body_hash" `Quick test_put_body_hash
+         ; Alcotest.test_case "sync_convergence_pull" `Quick test_sync_convergence_pull
          ; Alcotest.test_case "subtree_list" `Quick test_subtree_list
          ; Alcotest.test_case "code_kind_path" `Quick test_code_kind_path
          ; Alcotest.test_case "materialize_code_and_resolve" `Quick test_materialize_code_and_resolve

@@ -9,6 +9,15 @@
    round's base. The server is the merge authority; the client is a
    governed branch rendezvousing with it.
 
+   Hash authority is server-side too: the client never computes hashes
+   (the pre-027 OCaml-side hash domain is deleted — one-tree.hash-domain
+   digests PG-canonical jsonb DB-side). Envelope [hash] fields on the
+   client are server hashes carried verbatim from pulled envelopes; a
+   locally-built envelope carries "" and is convergence-pulled at the
+   end of the round so it inherits the server's canonical stamp —
+   without that pull an identical body would re-diverge every round
+   (the client side of the dead hash domain could never match).
+
    Invisibility is the common case: a quiet round (nothing to transfer,
    nothing diverged) prints nothing. Every divergence resolution —
    client-won or server-kept — is a printed line (the obituary rule
@@ -72,6 +81,11 @@ let run_round ~(transport : transport) ~(lens : Lens_store.lens)
   let report = ref (empty_report ()) in
   (try
      let manifest = data_manifest ~lens in
+     (* locally-written envelopes carry no server hash ("") yet — the
+        convergence pull below fetches the server envelope for each
+        after the round's merge, so the next round's manifest compares
+        real hashes. *)
+     let unstamped = List.filter (fun (_, h) -> h = "") manifest in
      let bodies =
        List.filter_map
          (fun (p, _) ->
@@ -188,6 +202,37 @@ let run_round ~(transport : transport) ~(lens : Lens_store.lens)
                    else n)
                  0 client_deletes
              in
+             (* convergence pull: a locally-written envelope (hash "")
+                that the server now holds — the push was applied (clean
+                edit or client-won LWW) — fetches the canonical server
+                envelope so the local copy inherits the server-computed
+                hash. Without this the next round would re-diverge on an
+                identical body (the client side has no hash domain to
+                match with) and churn LWW forever. Skips paths already
+                pulled above and server-deleted paths (the mirror delete
+                already removed the local copy — re-pulling would
+                resurrect it). A server miss (push rejected/not applied)
+                keeps the local envelope; the next round re-pushes it. *)
+             let unstamped_pulls =
+               List.filter
+                 (fun (p, _) ->
+                   not (List.mem p pulls) && not (List.mem p client_deletes))
+                 unstamped
+             in
+             let converged =
+               List.fold_left
+                 (fun n (p, _) ->
+                   match transport "tree/get" [ Ast.VStr p ] with
+                   | Ok (Ast.VStr env) ->
+                       ignore (Lens_store.materialize ~lens env);
+                       if not quiet then log "converged %s (server hash)" p;
+                       n + 1
+                   | Ok _ -> n
+                   | Error e ->
+                       log "converge %s: %s" p (Printexc.to_string e);
+                       n)
+                 0 unstamped_pulls
+             in
              (* the obituary rule, applied to sync losses: every LWW
                 resolution is surfaced with its winner *)
              List.iter (fun p -> log "LWW %s: client edit wins" p) won;
@@ -214,20 +259,20 @@ let run_round ~(transport : transport) ~(lens : Lens_store.lens)
               | _ -> ());
              Lens_store.record_snapshot ~lens ~branch ~generation:gen;
              let activity =
-               int "applied" + pulled + deleted + List.length kept
+               int "applied" + pulled + converged + deleted + List.length kept
              in
              if not quiet then
                log "applied=%d pulled=%d deleted=%d diverge=%d gen=%s"
-                 (int "applied") pulled deleted (List.length diverge) gen_str
+                 (int "applied") (pulled + converged) deleted (List.length diverge) gen_str
              else if activity > 0 || List.length diverge > 0 then
                log "pushed=%d pulled=%d deleted=%d diverge=%d (won=%d lost=%d) gen=%s"
-                 (int "applied") pulled deleted (List.length diverge)
+                 (int "applied") (pulled + converged) deleted (List.length diverge)
                  (List.length won) (List.length kept) gen_str;
              report :=
                { ok = true;
                  error = None;
                  pushed = int "applied";
-                 pulled;
+                 pulled = pulled + converged;
                  deleted_local = deleted;
                  diverge = List.length diverge;
                  lww_client_won = won;
