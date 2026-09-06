@@ -1534,16 +1534,24 @@ and refresh_ui_shell (t : t) : unit =
       else
         refresh "ui/css" "(ui/css)" (fun v -> t.ui_css <- v)
 
-and seed_one (t : t) (name : string) : unit =
+and seed_one (t : t) (name : string) : string option =
   (* promote-window task 7 (2026-09-04): per-package ms on the existing
-     load line — the boot-phase table drills into seed_stdlib here. *)
+     load line — the boot-phase table drills into seed_stdlib here.
+     image.seed-failure-loud (i-1788670156): the error is also RETURNED
+     so seed_stdlib can list every failed package by name in the boot
+     summary, instead of the failure hiding as one stderr line among
+     boot noise (libs/list shipped broken for weeks that way). *)
   let t0 = Unix.gettimeofday () in
   let r = load_library t name in
   let ms = (Unix.gettimeofday () -. t0) *. 1000.0 in
   (match r with
    | Ok msg -> Printf.eprintf "[session] %s: %s (%.0f ms)\n%!" name msg ms
-   | Error e -> Printf.eprintf "[session] %s load: %s (%.0f ms)\n%!" name e ms);
-  ()
+   | Error e ->
+       Printf.eprintf
+         "[session] SEED FAILURE: %s did not load: %s (%.0f ms) — its \
+          defines/routes are missing on this branch\n%!"
+         name e ms);
+  (match r with Error e -> Some e | Ok _ -> None)
 
 (** Boot seed order (BORGE-1785211333).
     Preferred prefix preserves dependency-ish order (std/ui before notes,
@@ -1555,7 +1563,7 @@ and seed_package_priority : string list =
      like /partials/notes-search never seed (notes.search-modal). *)
   (* theme before ui: default theme/* tokens exist before ui/css first runs. *)
   [ "std"; "theme"; "weather"; "ui"; "layout"; "welcome"; "ai"; "css"; "html"
-  ; "list"; "outline"; "structed"; "notes"; "signup"; "todo"; "contacts"
+  ; "outline"; "structed"; "notes"; "signup"; "todo"; "contacts"
   ; "plan"; "chat"; "bookmarks"; "calendar"; "workout"; "flashcards"
   ; "bible"; "dabar"; "bi"; "ref"; "verify" ]
 
@@ -1679,6 +1687,13 @@ and seed_stdlib (t : t) : unit =
        to two queries + zero writes. *)
     Store.begin_seed_names t.store;
     let started = Unix.gettimeofday () in
+    (* image.seed-failure-loud (i-1788670156): collect per-package load
+       failures so the boot-seed summary names them loudly. *)
+    let failed : string list ref = ref [] in
+    let record_failure name = function
+      | None -> ()
+      | Some e -> failed := (name ^ ": " ^ e) :: !failed
+    in
     let finally () =
       let preloaded =
         match t.store.seed_names with
@@ -1689,11 +1704,19 @@ and seed_stdlib (t : t) : unit =
       t.seed_additive <- false;
       let elapsed_ms =
         int_of_float ((Unix.gettimeofday () -. started) *. 1000.0) in
-      Printf.eprintf "[session] boot seed: %d packages, %d ms%s\n%!"
+      Printf.eprintf "[session] boot seed: %d packages, %d ms%s%s\n%!"
         (List.length (discover_seed_packages ())) elapsed_ms
         (match preloaded with
          | Some n -> Printf.sprintf " (%d names preloaded)" n
          | None -> "")
+        (match !failed with
+         | [] -> ""
+         | xs ->
+             Printf.sprintf
+               "\n[session] *** BOOT SEED FAILURES (%d): %s — those \
+                packages' defines/routes are MISSING; fix libs/<pkg> \
+                and reseed ***"
+               (List.length xs) (String.concat " | " xs))
     in
     Fun.protect ~finally (fun () ->
         let pkgs = discover_seed_packages () in
@@ -1702,11 +1725,11 @@ and seed_stdlib (t : t) : unit =
         let rec go = function
           | [] -> ()
           | "notes" :: rest ->
-              let () = seed_one t "notes" in
+              let () = record_failure "notes" (seed_one t "notes") in
               let () = seed_agents_note t in
               go rest
           | name :: rest ->
-              let () = seed_one t name in
+              let () = record_failure name (seed_one t name) in
               go rest
         in
         go pkgs))
@@ -2265,7 +2288,7 @@ let promote_soft_warnings (t : t) ~(names : string list) : string =
     (* Load lint deps if present; ignore failures (soft). *)
     List.iter
       (fun lib -> ignore (load_library t lib))
-      [ "list"; "outline"; "notes"; "spec" ];
+      [ "outline"; "notes"; "spec" ];
     let lines =
       List.filter_map
         (fun pkg ->

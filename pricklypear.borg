@@ -78,7 +78,6 @@
  (untracked "libs/flash/lib.pp" "experimental package (distinct from flashcards), no chapter yet")
  (untracked "libs/hello/lib.pp" "DELETION CANDIDATE: demo package, not a product feature")
  (untracked "libs/html/lib.pp" "Nopales stdlib: HTML helpers, no dedicated chapter")
- (untracked "libs/list/lib.pp" "Nopales stdlib: list helpers, no dedicated chapter")
  (untracked "libs/menu/lib.pp" "Nopales stdlib: menu helpers, no dedicated chapter")
  (untracked "libs/ops/lib.pp" "Nopales stdlib: ops helpers, no dedicated chapter")
  (untracked "libs/rb/lib.pp" "root-beer recipe DSL / business model, no chapter yet")
