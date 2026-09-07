@@ -1,17 +1,31 @@
 ;; package agent -- native-agent room/wake library (M2 tool loop)
-;; Proposed export from branch agent-prickle/personal 2026-09-04 (agent-native chapter, tool-loop).
+;; Export from branch agent-prickle/personal (agent-native chapter, tool-loop).
 ;; Promotion is HUMAN (promote gate); until promoted, the live defines run on agent-prickle/personal.
 ;; Sync: scripts/pp_sync.py pull|push
+;; 2026-09-08 repair: the promote proposal shipped WITHOUT six helpers its
+;; own bodies reference (agent/reverse has? last-id after notbot join) --
+;; every (agent/wake) died on "unbound: agent/reverse" (silent cron wedge).
+;; Recovered verbatim from the live agent-prickle/personal branch and
+;; completed here. Also: agent/rooms repointed from the dead pre-spaces
+;; "agent-lab" room to the open chat-lobby room (room_id "lobby",
+;; libs/chat chat/lobby-id; rows live in the open chat-lobby space);
+;; wake quarantine (fails marker, below); prompt newline restored.
 
 ;; Rooms this agent minds. One agent-state row per room carries its sid + cursor.
+;; 2026-09-08 quarantine: the state row gains a "fails" marker ("x" per
+;; consecutive failed wake on an unadvanced cursor; ANY cursor advance
+;; clears it). A deterministic provider failure used to wedge the room
+;; forever (fail -> no advance -> cron retries every 2 min). Now: 3
+;; consecutive failures -> advance past the poison message, notify
+;; "quarantined", reset. Loud (one push per failure) until then.
 (define agent/rooms
-  (list "agent-lab"))
+  (list "lobby"))
 
 (define agent/bot
   "agent-prickle")
 
 (define agent/seed
-  "You are agent-prickle, the resident agent of this Pricklypear habitat, reading the room agent-lab. Voice: dry, warm, brief, plain text, no markdown, no emoji. Answer directly; if you do not know, say so. Keep replies under 300 characters unless asked for detail.")
+  "You are agent-prickle, the resident agent of this Pricklypear habitat, reading the room lobby. Voice: dry, warm, brief, plain text, no markdown, no emoji. Answer directly; if you do not know, say so. Keep replies under 300 characters unless asked for detail.")
 
 (define agent/clamp
   (lambda
@@ -39,6 +53,78 @@
         (cdr xs)
         (if (string-eq acc "") (as-str (car xs)) (string-append acc sep (as-str (car xs))))
         sep))))
+
+;; ---- helpers recovered verbatim from agent-prickle/personal (they were
+;; ---- missing from the 775945f promote proposal; bodies as live) ----
+
+(define agent/reverse
+  (lambda
+    (xs acc)
+    "Reverse xs into accumulator acc."
+    (if (null? xs) acc (agent/reverse (cdr xs) (cons (car xs) acc)))))
+
+(define agent/has?
+  (lambda
+    (hay needle i)
+    "True when needle occurs in hay at or after index i."
+    (if
+      (> (+ i (string-length needle)) (string-length hay))
+      #f
+      (if
+        (string-eq (substring hay i (string-length needle)) needle)
+        #t
+        (agent/has? hay needle (+ i 1))))))
+
+(define agent/last-id
+  (lambda
+    (xs)
+    "Id of the last row in insertion order (the cursor advance target)."
+    (if
+      (null? (cdr xs))
+      (as-str (car (car xs)))
+      (agent/last-id (cdr xs)))))
+
+(define agent/after
+  (lambda
+    (xs marker)
+    "Rows strictly after the row whose id is marker (insertion order)."
+    (if
+      (null? xs)
+      ()
+      (if
+        (string-eq (as-str (car (car xs))) marker)
+        (cdr xs)
+        (agent/after (cdr xs) marker)))))
+
+(define agent/notbot
+  (lambda
+    (xs acc)
+    "Rows not authored by this bot (accumulates reversed)."
+    (if
+      (null? xs)
+      acc
+      (agent/notbot
+        (cdr xs)
+        (if
+          (string-eq (as-str (dict-get (cdr (car xs)) "from")) agent/bot)
+          acc
+          (cons (car xs) acc))))))
+
+(define agent/join
+  (lambda
+    (xs acc)
+    "Join rows as \"from: body\" lines for the transcript."
+    (if
+      (null? xs)
+      acc
+      (agent/join
+        (cdr xs)
+        (string-append
+          acc
+          (as-str (dict-get (cdr (car xs)) "from"))
+          ": "
+          (as-str (dict-get (cdr (car xs)) "body"))
+          "\n")))))
 
 (define agent/state-new
   (lambda
@@ -166,6 +252,7 @@
             id
             "cursor"
             (agent/last-id all))
+          (update-field (quote agent-state) id "fails" "")
           (string-append room ": init-quiet"))
         (let
           ((newm (agent/after all cur)))
@@ -186,6 +273,7 @@
                         id
                         "cursor"
                         (agent/last-id all))
+                      (update-field (quote agent-state) id "fails" "")
                       (string-append room ": quiet-self"))
                     (let*
                       ((noted (agent/notify-talk room talk))
@@ -200,20 +288,43 @@
                           (string-append
                             "You are agent-prickle, resident agent of room "
                             room
-                            " in this Pricklypear habitat. Messages since you last looked:"
+                            " in this Pricklypear habitat. Messages since you last looked:\n"
                             body
-                            "nReply with ONE short plain-text room message addressed to the people in it. You have tools if you need to check facts, but keep it to one reply. If nothing needs a reply, reply exactly NO-REPLY.")))
+                            "\nReply with ONE short plain-text room message addressed to the people in it. You have tools if you need to check facts, but keep it to one reply. If nothing needs a reply, reply exactly NO-REPLY.")))
                       (let
                         ((reply (as-str (agent-say sid prompt 4))))
                         (if
                           (agent/fail? reply)
-                          (string-append
-                            (agent/notify
-                              (string-append room ": wake failed")
-                              (agent/clamp reply 200))
-                            room
-                            ": provider failed - "
-                            (agent/clamp reply 160))
+                          (let
+                            ((fails (string-append (as-str (dict-get f "fails")) "x")))
+                            (if
+                              (> (string-length fails) 2)
+                              (seq
+                                (update-field (quote agent-state) id "fails" "")
+                                (update-field
+                                  (quote agent-state)
+                                  id
+                                  "cursor"
+                                  (agent/last-id all))
+                                (string-append
+                                  (agent/notify
+                                    (string-append room ": wake quarantined")
+                                    (string-append
+                                      "3 consecutive failures; skipping to "
+                                      (agent/last-id all)
+                                      " - last: "
+                                      (agent/clamp reply 160)))
+                                  room
+                                  ": quarantined after 3 failures"))
+                              (seq
+                                (update-field (quote agent-state) id "fails" fails)
+                                (string-append
+                                  (agent/notify
+                                    (string-append room ": wake failed")
+                                    (agent/clamp reply 200))
+                                  room
+                                  ": provider failed - "
+                                  (agent/clamp reply 160)))))
                           (if
                             (agent/has? reply "NO-REPLY" 0)
                             (seq
@@ -222,6 +333,7 @@
                                 id
                                 "cursor"
                                 (agent/last-id all))
+                              (update-field (quote agent-state) id "fails" "")
                               (string-append room ": nothing to say"))
                             (let
                               ((nid
@@ -246,6 +358,7 @@
                                   id
                                   "cursor"
                                   (as-str nid))
+                                (update-field (quote agent-state) id "fails" "")
                                 (string-append
                                   room
                                   ": posted"
@@ -259,6 +372,7 @@
                     id
                     "cursor"
                     (agent/last-id all))
+                  (update-field (quote agent-state) id "fails" "")
                   (string-append room ": replay-quiet")))))))))))
 
 (define agent/wake-all
