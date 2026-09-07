@@ -1,0 +1,8 @@
+;; Tests for the ONE HTTP/1.1 client (httpc/pp_http.ml, i-1788671008-e):
+;;   URL split + head/framing parse over first-class readers, and the real
+;;   wire (connect, TLS failure, deadline, round-trips) against in-process
+;;   loopback listeners -- no network, no external services.
+(test
+ (name http_test)
+ (modules http_test)
+ (libraries pricklypear_httpc alcotest eio eio_main))

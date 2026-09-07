@@ -1,10 +1,9 @@
-(** remote/lib/http.ml (borge/remote-eval.borg client).
+(** remote/lib/http.ml (borge/prim-seam.borg client).
 
     The production [Proxy_rim.transport]: POST /api/prim to the image
-    over a hand-rolled HTTP/1.1 connection on an Eio flow (plain or
-    TLS). No curl — the agent's [Provider.post_json] is the reference
-    pattern; gluten (Httpun_eio.Client) refuses non-socket TLS flows,
-    and a 1.1 request/response with `connection: close` is honest.
+    over the ONE shared HTTP/1.1 client (httpc/pp_http.ml, plain or
+    TLS; i-1788671008-e — this module hosted the hand-rolled Eio-flow
+    original the client was extracted from). No curl.
 
     Auth is HTTP Basic (user:pass base64), the SAME path /api/eval and
     /api/prim accept on the image. Identity is server-asserted: the
@@ -30,119 +29,50 @@ let trim_url base =
     String.sub base 0 (String.length base - 1)
   else base
 
-(** Split a http(s)://host[:port] base into (host, port, tls). *)
-let parse_base base =
-  match String.split_on_char '/' (trim_url base) with
-  | "https:" :: "" :: hostport :: _ ->
-      let h, p =
-        match String.split_on_char ':' hostport with
-        | [ h; p ] -> (h, int_of_string p)
-        | _ -> (hostport, 443)
-      in
-      (h, p, true)
-  | "http:" :: "" :: hostport :: _ ->
-      let h, p =
-        match String.split_on_char ':' hostport with
-        | [ h; p ] -> (h, int_of_string p)
-        | _ -> (hostport, 80)
-      in
-      (h, p, false)
-  | _ -> failwith ("bad base_url: " ^ base)
+(** Split a http(s)://host[:port] base into (host, port, tls).
+    RETIRED (i-1788671008-e): Pp_http.split_base is the ONE URL split
+    now; this copy died with the hand-rolled wire it fed. *)
 
 let basic_auth_header ~user ~password =
   let cred = user ^ ":" ^ password in
   let b64 = Base64.encode_string ~pad:true cred in
   ("authorization", "Basic " ^ b64)
 
-(** Read the response body off [br] honoring transfer-encoding /
-    content-length, mirroring agent/lib/provider.ml post_json. *)
-let read_body br ~headers =
-  let line () = String.trim (Eio.Buf_read.line br) in
-  match List.assoc_opt "transfer-encoding" headers with
-  | Some te when String.lowercase_ascii te = "chunked" ->
-      let buf = Buffer.create 8192 in
-      let rec chunks () =
-        let size_line = line () in
-        match int_of_string_opt ("0x" ^ size_line) with
-        | Some 0 -> ignore (line ()) (* trailing CRLF *)
-        | Some n ->
-            Buffer.add_string buf (Eio.Buf_read.take n br);
-            ignore (line ()); (* CRLF after chunk *)
-            chunks ()
-        | None -> ()
-      in
-      chunks ();
-      Buffer.contents buf
-  | _ ->
-      (match List.assoc_opt "content-length" headers with
-       | Some n -> Eio.Buf_read.take (int_of_string n) br
-       | None -> Eio.Buf_read.take_all br)
-
 (** Generic one-POST: POST [path] with [payload] (a JSON value, encoded
     as the request body) and return (parsed-response-JSON | Error msg).
-    The same HTTP/1.1-over-Eio/TLS plumbing as [post_prim], shared by
-    /api/prim (per prim call) and /api/eval (whole expression). *)
+    The wire is the ONE shared client (httpc/pp_http.ml,
+    i-1788671008-e) — this was the hand-rolled Eio-flow original the
+    client was extracted from. [sw] is retained in the signature (the
+    rim/bin seam passes its switch) but the wire runs on Pp_http's own
+    internal switch; caller cancellation still unwinds the request (the
+    body executes inline on the calling fiber). Connect/DNS/TLS failures
+    that used to CRASH (List.hd on empty getaddrinfo, Result.get_ok on
+    TLS auth/config) now degrade to Error strings. Non-2xx responses
+    keep the exact ["HTTP %d: %s"] error shape; [~timeout_s] on
+    Pp_http.request is deliberately NOT defaulted here — prim/eval
+    calls can legitimately run long, so the old wait-forever shape is
+    kept (the deadline capability + its tests live in httpc/test). *)
 let post_json
     ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t) ~(cfg : cfg)
     ~(path : string) ~(payload : Yojson.Safe.t)
     : (Yojson.Safe.t, string) Result.t =
-  let open Eio in
-  let host, port, tls = parse_base cfg.base_url in
-  let body = Yojson.Safe.to_string payload in
-  let net = (Stdenv.net env :> [ `Generic ] Net.ty Std.r) in
-  let addr =
-    Net.getaddrinfo_stream ~service:(string_of_int port) net host |> List.hd
-  in
-  let raw = Net.connect ~sw net addr in
-  let flow : Flow.two_way_ty Std.r =
-    if tls then
-      let auth = Result.get_ok (Ca_certs_nss.authenticator ()) in
-      let tls_config = Result.get_ok (Tls.Config.client ~authenticator:auth ()) in
-      (Tls_eio.client_of_flow tls_config
-         ~host:(Domain_name.host_exn (Domain_name.of_string_exn host))
-         raw
-       : Tls_eio.t :> Flow.two_way_ty Std.r)
-    else (raw :> Flow.two_way_ty Std.r)
-  in
-  let request_text =
-    let hdrs =
-      String.concat "\r\n"
-        (List.map
-           (fun (k, v) -> k ^ ": " ^ v)
-           ([ ("host", host); ("content-type", "application/json");
-              ("content-length", string_of_int (String.length body));
-              ("connection", "close")
-            ; basic_auth_header ~user:cfg.user ~password:cfg.password ]))
-    in
-    Printf.sprintf "POST %s HTTP/1.1\r\n%s\r\n\r\n%s" path hdrs body
-  in
-  Flow.copy_string request_text flow;
-  let br = Buf_read.of_flow ~initial_size:4096 ~max_size:(20 * 1024 * 1024) flow in
-  let line () = String.trim (Buf_read.line br) in
-  let status_line = line () in
-  let code =
-    match String.split_on_char ' ' status_line with
-    | _http :: c :: _ -> (try int_of_string c with _ -> 0)
-    | _ -> 0
-  in
-  let rec read_headers acc =
-    let l = line () in
-    if l = "" then List.rev acc
-    else
-      (match String.index_opt l ':' with
-       | Some i ->
-           read_headers
-             ((String.lowercase_ascii (String.sub l 0 i),
-               String.trim (String.sub l (i + 1) (String.length l - i - 1))) :: acc)
-       | None -> read_headers acc)
-  in
-  let headers = read_headers [] in
-  let body = read_body br ~headers in
-  (try Flow.shutdown flow `All with _ -> ());
-  if code >= 200 && code < 300 then
-    (try Ok (Yojson.Safe.from_string body)
-     with Yojson.Json_error e -> Error ("bad json: " ^ e))
-  else Error (Printf.sprintf "HTTP %d: %s" code body)
+  ignore sw;
+  match Pp_http.split_base (trim_url cfg.base_url) with
+  | Error e -> Error e
+  | Ok endpoint -> (
+      match
+        Pp_http.request ~env ~endpoint ~meth:"POST" ~path
+          ~headers:[ basic_auth_header ~user:cfg.user ~password:cfg.password ]
+          ~body:(Yojson.Safe.to_string payload) ()
+      with
+      | Error e -> Error e
+      | Ok r ->
+          if r.Pp_http.status >= 200 && r.Pp_http.status < 300 then
+            (try Ok (Yojson.Safe.from_string r.Pp_http.body)
+             with Yojson.Json_error e -> Error ("bad json: " ^ e))
+          else
+            Error
+              (Printf.sprintf "HTTP %d: %s" r.Pp_http.status r.Pp_http.body))
 
 (** One POST to /api/prim with {name, args:[json…]}. Returns the parsed
     JSON response (or an Error message). *)
