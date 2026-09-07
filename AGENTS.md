@@ -313,6 +313,12 @@ auth is **in-process** in the image.
   rim). Image domain still has monadic coloring at the prim ABI until the
   Eio-floor decolor pass (`docs/eio-floor-checklist.md` Phase 3). Default
   process rim is Eio; `PP_IO=lwt` remains rollback until Phase 5 deletes it.
+- No `(load-library "pkg")` in Nopales route handlers (spec/rb dec-2,
+  2026-09-07): the session env binds package defs from the branch chain
+  lazily, and load-library re-evals the DEPLOYED release file onto the
+  current branch — on a garden branch that clobbers newer pins of changed
+  handlers on their own next page load. notes/todo never call it; rb was
+  stripped (3c405cd).
 - `pure-html` for HTML generation; use `HTML.Hx.*` not raw htmx attribute
   strings (poohstack rule, preserved here via pure-html). Use
   `txt ~raw:true "%s" s` for raw-HTML injection (escape-bypass path);
