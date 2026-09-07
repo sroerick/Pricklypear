@@ -41,6 +41,39 @@ type turn_result =
     }
   | Turn_error of string
 
+(** OpenAI-compatible error bodies carry [{"error":{"message":…,
+    "type":…,"code":…}}] with NO choices (4xx/5xx + some gateway 200s).
+    Surface the provider's own message instead of a bare
+    [Type_error("Expected array, got null")] — the undiagnosable string
+    the wake loop wedged on. Pure + total: missing fields degrade to
+    the raw json excerpt. *)
+let provider_error_message (json : Yojson.Safe.t) : string option =
+  let open Yojson.Safe.Util in
+  match json |> member "error" with
+  | `Null | `String "" -> None
+  | `String s when s = "" -> None
+  | `String s -> Some s
+  | err ->
+      let msg =
+        match err |> member "message" |> to_string_option with
+        | Some m when String.trim m <> "" -> m
+        | _ ->
+            (match err with
+             | `String s when s <> "" -> s
+             | _ -> Yojson.Safe.to_string err)
+      in
+      let tag =
+        match err |> member "type" |> to_string_option with
+        | Some t -> t
+        | None ->
+            (match err |> member "code" with
+             | `String c -> c
+             | `Int i -> string_of_int i
+             | _ -> "")
+      in
+      Some
+        (if tag = "" then msg else Printf.sprintf "%s (%s)" msg tag)
+
 let string_field (msg : Yojson.Safe.t) (key : string) : string =
   match Yojson.Safe.Util.(msg |> member key |> to_string_option) with
   | Some s -> s
@@ -185,56 +218,75 @@ let parse_tool_calls_from_msg (msg : Yojson.Safe.t) : tool_call list =
 
 (** Parse a parsed chat-completions response into a [turn_result].
     Captures the assistant [message] object as [raw]. *)
+(** Parse a non-empty choices list into a turn_result (the body of the
+    old inline match, extracted so the error-body / shape guards above
+    keep one definition of the choice path). *)
+let parse_choices (choices : Yojson.Safe.t list) : turn_result option =
+  let open Yojson.Safe.Util in
+  match choices with
+  | [] -> None
+  | choice :: _ ->
+      let msg = choice |> member "message" in
+      let finish =
+        match choice |> member "finish_reason" |> to_string_option with
+        | Some f -> f
+        | None -> ""
+      in
+      let content_opt =
+        match msg |> member "content" |> to_string_option with
+        | Some c when String.trim c <> "" -> Some c
+        | _ -> None
+      in
+      let tcs = parse_tool_calls_from_msg msg in
+      if tcs <> [] then
+        Some (Need_tools { content = content_opt; tool_calls = tcs; raw = msg })
+      else
+        (* Fallback: XML tool_call blocks in content (common model failure). *)
+        let xml_tcs =
+          match content_opt with
+          | Some c -> parse_xml_tool_calls c
+          | None -> []
+        in
+        if xml_tcs <> [] then
+          Some (Need_tools { content = None; tool_calls = xml_tcs; raw = msg })
+        else if finish = "tool_calls" then
+          Some (Turn_error "LLM: finish_reason=tool_calls but no tool_calls payload")
+        else
+          (match content_opt with
+           | Some c -> Some (Final { content = c; raw = msg })
+           | None ->
+               let reasoning_alias =
+                 match msg |> member "reasoning_content" |> to_string_option with
+                 | Some r when String.trim r <> "" -> Some r
+                 | _ ->
+                     (* Synthetic streams/thinking messages carry plain
+                        "reasoning" (agent provider.ml has the wire probe). *)
+                     (match msg |> member "reasoning" |> to_string_option with
+                      | Some r when String.trim r <> "" -> Some r
+                      | _ -> None)
+               in
+               (match reasoning_alias with
+                | Some r -> Some (Final { content = r; raw = msg })
+                | None ->
+                    Some
+                      (Turn_error
+                         (Printf.sprintf "LLM: empty content (finish=%s)" finish))))
+
 let parse_turn_response_json (json : Yojson.Safe.t) : turn_result =
   try
     let open Yojson.Safe.Util in
-    match json |> member "choices" |> to_list with
-    | [] -> Turn_error "LLM: empty choices"
-    | choice :: _ ->
-        let msg = choice |> member "message" in
-        let finish =
-          match choice |> member "finish_reason" |> to_string_option with
-          | Some f -> f
-          | None -> ""
-        in
-        let content_opt =
-          match msg |> member "content" |> to_string_option with
-          | Some c when String.trim c <> "" -> Some c
-          | _ -> None
-        in
-        let tcs = parse_tool_calls_from_msg msg in
-        if tcs <> [] then
-          Need_tools { content = content_opt; tool_calls = tcs; raw = msg }
-        else
-          (* Fallback: XML tool_call blocks in content (common model failure). *)
-          let xml_tcs =
-            match content_opt with
-            | Some c -> parse_xml_tool_calls c
-            | None -> []
-          in
-          if xml_tcs <> [] then
-            Need_tools { content = None; tool_calls = xml_tcs; raw = msg }
-          else if finish = "tool_calls" then
-            Turn_error "LLM: finish_reason=tool_calls but no tool_calls payload"
-          else
-            (match content_opt with
-             | Some c -> Final { content = c; raw = msg }
-             | None ->
-                 let reasoning_alias =
-                   match msg |> member "reasoning_content" |> to_string_option with
-                   | Some r when String.trim r <> "" -> Some r
-                   | _ ->
-                       (* Synthetic streams/thinking messages carry plain
-                          "reasoning" (agent provider.ml has the wire probe). *)
-                       (match msg |> member "reasoning" |> to_string_option with
-                        | Some r when String.trim r <> "" -> Some r
-                        | _ -> None)
-                 in
-                 (match reasoning_alias with
-                  | Some r -> Final { content = r; raw = msg }
-                  | None ->
-                      Turn_error
-                        (Printf.sprintf "LLM: empty content (finish=%s)" finish)))
+    (match provider_error_message json with
+     | Some msg -> Turn_error ("provider error: " ^ msg)
+     | None ->
+         (match json |> member "choices" with
+          | `List (_ :: _ as choices) ->
+              (match parse_choices choices with
+               | Some r -> r
+               | None -> Turn_error "LLM: empty choices")
+          | `List [] -> Turn_error "LLM: empty choices"
+          | _ ->
+              (* choices missing/null/non-array with no error body *)
+              Turn_error "LLM: no choices in response"))
   with e ->
     Turn_error ("LLM parse error: " ^ Printexc.to_string e)
 
@@ -256,8 +308,11 @@ let extract_content (body : string) : (string, string) result =
   try
     let json = Yojson.Safe.from_string body in
     let open Yojson.Safe.Util in
-    let choices = json |> member "choices" |> to_list in
-    match choices with
+    (match provider_error_message json with
+     | Some msg -> Error ("provider error: " ^ msg)
+     | None ->
+         let choices = json |> member "choices" |> to_list in
+         match choices with
     | [] -> Error "LLM: empty choices"
     | choice :: _ ->
         let msg = choice |> member "message" in
@@ -284,7 +339,7 @@ let extract_content (body : string) : (string, string) result =
         in
         if content = "" then
           Error (Printf.sprintf "LLM: empty content (finish=%s)" finish)
-        else Ok content
+        else Ok content)
   with e ->
     let trunc =
       if String.length body > 300 then String.sub body 0 300 ^ "..." else body

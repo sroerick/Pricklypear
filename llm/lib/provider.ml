@@ -151,66 +151,38 @@ module Openai = struct
 
   let parse_reply (j : Yojson.Safe.t) : reply =
     let open Yojson.Safe.Util in
-    let choice = j |> member "choices" |> index 0 in
-    let msg = choice |> member "message" in
+    (* TOTAL PATH: the shared codec owns the error-body / no-choices /
+       empty-content guards and the XML-in-content + reasoning fallbacks.
+       Parse failure surfaces as [Failure msg] (a clean, diagnosable
+       "provider error: …") instead of a raw Yojson Type_error escaping
+       hosts that catch Error results but not exceptions. *)
+    let choice_head =
+      match j |> member "choices" with
+      | `List (c :: _) -> c
+      | _ -> `Null
+    in
     let stop_reason =
-      choice |> member "finish_reason" |> to_string_option
-      |> Option.value ~default:"stop"
+      match choice_head |> member "finish_reason" |> to_string_option with
+      | Some f -> f
+      | None -> "stop"
     in
-    (* Tool calls: shared parser handles the API [tool_calls] field AND
-       the XML-in-content fallback (GLM-class models that dump tool
-       calls as XML tags inside [content] instead of using the API
-       field). The image agent has bled for this; the standalone agent
-       inherits it. *)
-    let api_tcs = Llm_codec.parse_tool_calls_from_msg msg in
-    let tcs, content_for_xml =
-      match api_tcs with
-      | _ :: _ -> (api_tcs, None)
-      | [] ->
-          let content_opt =
-            match msg |> member "content" |> to_string_option with
-            | Some c when String.trim c <> "" -> Some c
-            | _ -> None
-          in
-          (match content_opt with
-           | Some c ->
-               let xml_tcs = Llm_codec.parse_xml_tool_calls c in
-               (xml_tcs, if xml_tcs = [] then None else Some "")
-           | None -> ([], None))
-    in
-    let calls =
-      List.map
-        (fun (tc : Llm_codec.tool_call) ->
-          let input =
-            match Yojson.Safe.from_string tc.arguments with
-            | json -> json
-            | exception _ -> `Assoc []
-          in
-          { id = tc.id; name = tc.name; input })
-        tcs
-    in
-    let text =
-      (* Prefer explicit content; GLM-class models sometimes fill
-         reasoning_content and leave content null — fall back to it so a
-         pure-text reply is not lost. *)
-      let c =
-        match content_for_xml with
-        | Some s -> s
-        | None -> (
-            match msg |> member "content" |> to_string_option with
-            | Some s -> s
-            | None -> "")
+    let map_call (tc : Llm_codec.tool_call) : tool_call =
+      let input =
+        match Yojson.Safe.from_string tc.arguments with
+        | json -> json
+        | exception _ -> `Assoc []
       in
-      if c <> "" then c
-      else
-        (match msg |> member "reasoning_content" |> to_string_option with
-         | Some s -> s
-         | None ->
-             (match msg |> member "reasoning" |> to_string_option with
-              | Some s -> s
-              | None -> ""))
+      { id = tc.id; name = tc.name; input }
     in
-    { text; calls; stop_reason; raw = msg }
+    match Llm_codec.parse_turn_response_json j with
+    | Llm_codec.Turn_error e -> raise (Failure e)
+    | Llm_codec.Final { content; raw } ->
+        { text = content; calls = []; stop_reason; raw }
+    | Llm_codec.Need_tools { content; tool_calls; raw } ->
+        { text = Option.value content ~default:""
+        ; calls = List.map map_call tool_calls
+        ; stop_reason = (if tool_calls = [] then stop_reason else "tool_calls")
+        ; raw }
 
   (* Reconstruct a [reply] from the list of SSE [data:] payloads in a
      streaming response. The accumulation engine (text/reasoning deltas,
@@ -250,7 +222,13 @@ module Openai = struct
           String.split_on_char '\n' body
           |> List.filter_map Llm_codec.sse_data_payload
         in
-        Ok (parse_stream_lines data_lines ~on_delta)
+        (* Total path: a provider error body (choices:null / error
+           object) surfaces as [Error "provider error: …"] via the
+           shared codec — parse_reply's clean [Failure] is caught here
+           so the loop seam stays (Ok reply | Error msg), never an
+           exception escape. *)
+        (try Ok (parse_stream_lines data_lines ~on_delta)
+         with Failure e -> Error e)
 
   (** GET {base}/models — the provider ABI's own model catalog
       (borge/agent.borg llm-config: the dropdown's source is the ABI,
