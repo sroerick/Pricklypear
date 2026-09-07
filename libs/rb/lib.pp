@@ -529,6 +529,94 @@
     (if (string-eq (dict-get (cdr (car rws)) "name") name)
         (car rws)
       (rb/find-in-rows name (cdr rws)))))
+
+;; ------------------------------------------------------------
+;; BREW PERSISTENCE — batches are data, not code (2026-09)
+;; ------------------------------------------------------------
+;; OBITUARY: the batch log used to live only as the static rb/batches
+;; define (hand-transcribed from rb/batch_logs/). New brews had to be
+;; lib edits + a promote. Now brews persist as data rows (type `brew`,
+;; tree path data.brew.<id>), and rb/batches stays as the SEED SOURCE
+;; for the historical log (rb/seed-brews!, idempotent on date+recipe).
+;; v1 choice: `packaged` is stored as a display string ("12 x 500mL PET")
+;; built by rb/packaged-str from the structured pairs at save time —
+;; structure lives in the brew alist, flat text in the row.
+
+(define (rb/init-brew-storage!)
+  "Ensure the brew type exists."
+  (if (null? (type-fields (quote brew)))
+      (deftype (quote brew) (quote date) (quote recipe) (quote yield_liters) (quote packaged) (quote ferment_days) (quote carbonation) (quote rating) (quote notes) (quote created_day))
+    ()))
+
+(define (rb/packaged-str pkgs)
+  "Render packaged pairs as '12 x 500mL PET' (comma-joined)."
+  (if (null? pkgs)
+      ""
+    (let ((p (car pkgs)))
+      (string-append
+        (as-str (cdr p)) " x " (as-str (car p))
+        (if (null? (cdr pkgs))
+            ""
+          (string-append ", " (rb/packaged-str (cdr pkgs))))))))
+
+(define (rb/save-brew! b)
+  "Persist a brew alist to the tree."
+  (seq
+    (rb/init-brew-storage!)
+    (create (quote brew)
+      (dict-set
+        (dict-set
+          (dict-set
+            (dict-set
+              (dict-set
+                (dict-set
+                  (dict-set
+                    (dict-set
+                      (dict-set (json-emit "{}")
+                        "date" (as-str (rb/get "date" b)))
+                      "recipe" (as-str (rb/get "recipe" b)))
+                    "yield_liters" (as-str (rb/get "yield_liters" b)))
+                  "packaged" (rb/packaged-str (rb/get "packaged" b)))
+                "ferment_days" (as-str (rb/get "ferment_days" b)))
+              "carbonation" (as-str (rb/get "carbonation" b)))
+            "rating" (as-str (rb/get "rating" b)))
+          "notes" (as-str (rb/get "notes" b)))
+        "created_day" (date-today)))))
+
+(define (rb/brew-rows)
+  "All persisted brew rows."
+  (rows (quote brew)))
+
+(define (rb/find-brew-row date recipe-name)
+  "Locate a stored brew row by date+recipe; () when absent."
+  (rb/find-in-brews date recipe-name (rb/brew-rows)))
+
+(define (rb/find-in-brews date recipe-name rws)
+  "Find a row whose date and recipe fields both match."
+  (if (null? rws)
+      ()
+    (if (and (string-eq (dict-get (cdr (car rws)) "date") date)
+             (string-eq (dict-get (cdr (car rws)) "recipe") recipe-name))
+        (car rws)
+      (rb/find-in-brews date recipe-name (cdr rws)))))
+
+(define (rb/seed-brews!)
+  "Seed the historical batch log, skipping brews already stored."
+  (seq
+    (rb/init-brew-storage!)
+    (rb/seed-brew-list (rb/batches))))
+
+(define (rb/seed-brew-list bs)
+  "Seed a list of brew alists that are not yet stored."
+  (if (null? bs)
+      (list)
+    (seq
+      (let ((b (car bs)))
+        (if (null? (rb/find-brew-row (as-str (rb/get "date" b)) (as-str (rb/get "recipe" b))))
+            (rb/save-brew! b)
+          ()))
+      (rb/seed-brew-list (cdr bs)))))
+
 ;; libs/rb/recipes.pp — all rb recipes converted to Nopales
 ;; Hand-converted from /home/roerick/dev/wyo.tech/rb/data/*.rb
 
@@ -1057,6 +1145,16 @@
   "Monthly report for every recipe."
   (rb/map (lambda (pair) (rb/calc-one (car pair))) (rb/all-recipes)))
 ;; libs/rb/ui.pp — rb route handlers (htmx, server-rendered)
+;;
+;; OBITUARY (2026-09): the handlers used to open with (load-library "rb").
+;; That predates lazy env (per-identity sessions bind package defs from the
+;; branch chain on attach, bodies force on first touch), and it was actively
+;; harmful on garden branches: load-library re-evals the DEPLOYED release
+;; file onto the CURRENT branch, so a personal-branch pin of a changed
+;; handler got clobbered back to the release body on the handler's own
+;; next page load (observed live 2026-09-07: /batches reverted mid-render).
+;; notes/todo never load-library in handlers — house style is no
+;; load-library in route handlers. Removed from all nine.
 ;; Depends on: libs/rb/lib.pp, libs/rb/recipes.pp, html package
 
 ;; ============================================================
@@ -1096,7 +1194,6 @@
 (define (rb/page-recipes)
   "Recipes index page route handler."
   (seq
-    (load-library "rb")
     (html/page
       (list
         (rb/h1 "Recipes")
@@ -1123,7 +1220,6 @@
 (define (rb/page-recipe-detail)
   "Recipe detail page route handler."
   (seq
-    (load-library "rb")
     (let ((name (request-param "name")))
       (if (null? name)
           (html/page (list (rb/h1 "Recipe not found")))
@@ -1222,7 +1318,6 @@
 (define (rb/page-shopping)
   "Shopping-list page route handler."
   (seq
-    (load-library "rb")
     (let ((name (request-param "name")))
       (if (null? name)
           (html/page (list (rb/h1 "Shopping list not found")))
@@ -1258,7 +1353,6 @@
 (define (rb/page-capital)
   "Capital plan page route handler."
   (seq
-    (load-library "rb")
     (html/page
       (list
         (rb/h1 "Capital Plan")
@@ -1303,7 +1397,6 @@
 (define (rb/page-label)
   "Label page route handler (renders a print label)."
   (seq
-    (load-library "rb")
     (let ((name (request-param "name")))
       (if (null? name)
           (html/page (list (rb/h1 "Label not found")))
@@ -1336,29 +1429,178 @@
 ;; ============================================================
 
 (define (rb/page-batches)
-  "Batch log page route handler."
+  "Batch log page route handler (table + log-a-brew form; POST logs a brew)."
   (seq
-    (load-library "rb")
-    (html/page
-      (list
-        (rb/h1 "Batch Log")
-        (rb/batch-table)))))
+    (if (string-eq (request-method) "POST")
+        (rb/brew-log-post)
+      (seq
+        (rb/seed-brews!)
+        (html/page
+          (list
+            (rb/h1 "Batch Log")
+            (rb/batch-table)
+            (rb/h2 "Log a brew")
+            (html/div (html/attr "id" "brew-status") "")
+            (rb/brew-form)))))))
 
 (define (rb/batch-table)
-  "Batch log table."
-  (rb/table
-    (cons
-      (rb/tr (list (rb/th "Date") (rb/th "Recipe") (rb/th "Yield") (rb/th "Packaged") (rb/th "Rating")))
-      (rb/map rb/batch-row (rb/batches)))))
+  "Batch log table from persisted brew rows (historical log seeded in)."
+  (let ((rws (rb/brew-rows)))
+    (if (null? rws)
+        (rb/p "No batches logged yet.")
+      (rb/table
+        (cons
+          (rb/tr (list (rb/th "Date") (rb/th "Recipe") (rb/th "Yield") (rb/th "Packaged") (rb/th "Ferment") (rb/th "Rating") (rb/th "Notes")))
+          (rb/map rb/batch-row rws))))))
 
-(define (rb/batch-row b)
-  "HTML row for one batch log entry."
-  (rb/tr (list
-    (rb/td (rb/get "date" b))
-    (rb/td (rb/get "recipe" b))
-    (rb/td (as-str (rb/get "yield_liters" b)))
-    (rb/td (as-str (rb/count (rb/get "packaged" b))))
-    (rb/td (as-str (rb/get "rating" b))))))
+(define (rb/batch-row row)
+  "HTML row for one persisted brew row."
+  (let ((f (cdr row)))
+    (rb/tr (list
+      (rb/td (dict-get f "date"))
+      (rb/td (dict-get f "recipe"))
+      (rb/td (string-append (dict-get f "yield_liters") " L"))
+      (rb/td (dict-get f "packaged"))
+      (rb/td (dict-get f "ferment_days"))
+      (rb/td (dict-get f "rating"))
+      (rb/td (dict-get f "notes"))))))
+
+(define (rb/brew-form)
+  "HTML form to log a new brew (htmx POST to /batches)."
+  (html/form
+    "POST"
+    "/batches"
+    (html/attrs
+      (list
+        (html/attr "hx-post" "/batches")
+        (html/attr "hx-target" "#brew-status")
+        (html/attr "hx-swap" "innerHTML")
+        (html/attr "hx-on::after-request" "if(event.detail.successful){this.reset()}")))
+    (html/join
+      (list
+        (html/label (html/attr "for" "brew-date") "Date")
+        (html/input
+          (html/attrs
+            (list
+              (html/attr "type" "date")
+              (html/attr "id" "brew-date")
+              (html/attr "name" "date")
+              (html/attr "required" "required"))))
+        (html/label (html/attr "for" "brew-recipe") "Recipe")
+        (html/select
+          "recipe"
+          (html/attrs
+            (list
+              (html/attr "id" "brew-recipe")
+              (html/attr "required" "required")))
+          (html/join
+            (rb/map
+              (lambda (pair) (html/option (car pair) (car pair) #f))
+              (rb/all-recipes))))
+        (html/label (html/attr "for" "brew-yield") "Yield (L)")
+        (html/input
+          (html/attrs
+            (list
+              (html/attr "type" "number")
+              (html/attr "id" "brew-yield")
+              (html/attr "name" "yield_liters")
+              (html/attr "step" "0.1")
+              (html/attr "required" "required"))))
+        (html/label (html/attr "for" "brew-pkg-name") "Packaged into")
+        (html/input
+          (html/attrs
+            (list
+              (html/attr "type" "text")
+              (html/attr "id" "brew-pkg-name")
+              (html/attr "name" "packaged_name")
+              (html/attr "placeholder" "500mL PET")
+              (html/attr "required" "required"))))
+        (html/label (html/attr "for" "brew-pkg-count") "Units")
+        (html/input
+          (html/attrs
+            (list
+              (html/attr "type" "number")
+              (html/attr "id" "brew-pkg-count")
+              (html/attr "name" "packaged_count")
+              (html/attr "min" "0")
+              (html/attr "required" "required"))))
+        (html/label (html/attr "for" "brew-ferment") "Ferment (days)")
+        (html/input
+          (html/attrs
+            (list
+              (html/attr "type" "number")
+              (html/attr "id" "brew-ferment")
+              (html/attr "name" "ferment_days")
+              (html/attr "min" "0"))))
+        (html/label (html/attr "for" "brew-carb") "Carbonation")
+        (html/input
+          (html/attrs
+            (list
+              (html/attr "type" "text")
+              (html/attr "id" "brew-carb")
+              (html/attr "name" "carbonation")
+              (html/attr "placeholder" "light / medium (optional)"))))
+        (html/label (html/attr "for" "brew-rating") "Rating (0-10)")
+        (html/input
+          (html/attrs
+            (list
+              (html/attr "type" "number")
+              (html/attr "id" "brew-rating")
+              (html/attr "name" "rating")
+              (html/attr "min" "0")
+              (html/attr "max" "10"))))
+        (html/label (html/attr "for" "brew-notes") "Notes")
+        (html/textarea
+          "notes"
+          (html/attrs
+            (list
+              (html/attr "id" "brew-notes")
+              (html/attr "rows" "4")
+              (html/attr "placeholder" "Tasting notes, what to change next time")))
+          "")
+        (html/div
+          (html/attr "class" "capture-row")
+          (html/button (html/attr "type" "submit") "Log brew"))))))
+
+(define (rb/brew-status ok msg)
+  "Status line for the brew form, ok/err classed."
+  (html/p* (html/attr "class" (if ok "ok" "err")) msg))
+
+(define (rb/param-str p)
+  "Coerce a request param to a trimmed string; () stays ()."
+  (if (null? p)
+      ()
+    (string-trim (as-str p))))
+
+(define (rb/param-or p default)
+  "Param as trimmed string, or the default when missing/empty."
+  (let ((s (rb/param-str p)))
+    (if (null? s) default (if (string-eq s "") default s))))
+
+(define (rb/brew-log-post)
+  "Handle POST /batches: validate, save the brew, redirect or render status."
+  (let ((date (rb/param-str (request-param "date")))
+        (recipe (rb/param-str (request-param "recipe"))))
+    (if (or (null? date) (null? recipe) (string-eq date "") (string-eq recipe ""))
+        (if (hx-request?)
+            (render-html (rb/brew-status #f "Date and recipe are required."))
+          (redirect "/batches"))
+      (seq
+        (rb/save-brew!
+          (rb/make-brew
+            date
+            recipe
+            (rb/param-or (request-param "yield_liters") "0")
+            (list (packaged
+                    (rb/param-or (request-param "packaged_name") "bottles")
+                    (rb/param-or (request-param "packaged_count") "0")))
+            (rb/param-or (request-param "ferment_days") "")
+            (rb/param-or (request-param "carbonation") "")
+            (rb/param-or (request-param "rating") "")
+            (rb/param-or (request-param "notes") "")))
+        (if (hx-request?)
+            (render-html (rb/brew-status #t "Brew logged."))
+          (redirect "/batches"))))))
 
 ;; ============================================================
 ;; PURCHASES PAGE — /purchases
@@ -1367,7 +1609,6 @@
 (define (rb/page-purchases)
   "Purchase log page route handler."
   (seq
-    (load-library "rb")
     (html/page
       (list
         (rb/h1 "Purchase Log")
@@ -1469,7 +1710,6 @@
 (define (rb/page-orders)
   "Orders page route handler (table + planned vs actual)."
   (seq
-    (load-library "rb")
     (html/page
       (list
         (rb/h1 "Orders")
@@ -1512,7 +1752,6 @@
 (define (rb/page-report)
   "Business report page route handler."
   (seq
-    (load-library "rb")
     (html/page
       (list
         (rb/h1 "Business Report")
