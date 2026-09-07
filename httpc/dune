@@ -1,0 +1,16 @@
+;; httpc — the ONE hand-rolled HTTP/1.1 client (module Pp_http),
+;; i-1788671008-e: before this library four copies of the same client
+;; existed, none with a deadline — llm/lib/provider.ml (agent provider),
+;; remote/lib/http_transport.ml (proxy rim transport), native/soil_strip.ml
+;; (loopback policy eval), and the curl subprocesses in
+;; image/lib/llm_client.ml + cli/lib/pp_client.ml (secrets on argv).
+;; This library owns the wire: URL split, connect + TLS with non-crashy
+;; errors, request/header parse, chunked/content-length framing, and an
+;; OPTIONAL deadline. Callers keep their own policy (2xx mapping, JSON
+;; decode, default timeout).
+(library
+ (name pricklypear_httpc)
+ (public_name pricklypear-httpc)
+ (wrapped false)
+ (modules pp_http)
+ (libraries eio eio.unix tls-eio ca-certs-nss domain-name))

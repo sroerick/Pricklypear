@@ -11,6 +11,7 @@
  (libraries
   pricklypear-hostkit
   pricklypear-llm
+  pricklypear-httpc
   pricklypear-lisp
   pricklypear-pure-prims
   yojson
@@ -20,9 +21,6 @@
   httpun
   httpun-eio
   gluten-eio
-  tls-eio
-  ca-certs-nss
-  domain-name
   unix))
 
 ;; The assets.ml / libs_source.ml embed rules are SHARED with

@@ -6,11 +6,9 @@
  (libraries
   pricklypear-lisp
   pricklypear-common
+  pricklypear-httpc
   yojson
   cstruct
   eio
   eio.unix
-  tls-eio
-  ca-certs-nss
-  domain-name
   unix))

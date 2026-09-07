@@ -56,103 +56,40 @@ type cfg = {
    history, so [reply.raw] is the assistant message object). *)
 module Llm_codec = Pricklypear_common.Llm_codec
 
-(* HTTP/1.1 POST written directly on an Eio flow (plain or TLS).
-   Httpun_eio.Client's gluten runtime insists on a socket-typed flow,
-   which TLS flows can't satisfy; a 1.1 request/response with
-   `connection: close` is simple enough to do honestly by hand.
-   Handles content-length and chunked framing. Returns the raw response
-   body string on 2xx (error string otherwise); callers parse it as
-   JSON ([post_json]) or as SSE event lines ([Openai.complete]). *)
+(* HTTP/1.1 POST via the ONE shared client (httpc/pp_http.ml,
+   i-1788671008-e) — this was the hand-rolled Eio-flow original that
+   Pp_http was extracted from. Returns the raw response body string on
+   2xx (error string otherwise); callers parse it as JSON ([post_json])
+   or as SSE event lines ([Openai.complete]).
+
+   [sw] is retained in the signature because this function sits under
+   the agent-loop seam (Loop.run passes its turn switch), but the wire
+   now runs on Pp_http's OWN internal switch. Caller cancellation still
+   unwinds the in-flight request (the request body executes inline on
+   the calling fiber, so a cancelled fiber tears the switch — and the
+   socket — down). [~timeout_s] is available on Pp_http.request and is
+   deliberately NOT defaulted here: streaming completions legitimately
+   run for minutes, so the old wait-forever shape is kept (the deadline
+   capability + its tests live in httpc/test). URL-split, getaddrinfo
+   (List.hd), and TLS setup failures that used to CRASH (failwith /
+   empty-list hd / Result.get_ok panics) now degrade to Error strings.
+   Non-2xx responses keep the exact ["HTTP %d: %s"] error shape. *)
 let request_body ~meth ~(env : Eio_unix.Stdenv.base) ~sw ~(cfg : cfg) ~path
     ~extra_headers ~body : (string, string) Result.t =
-  let open Eio in
-  let host, port, tls =
-    match String.split_on_char '/' cfg.base_url with
-    | "https:" :: "" :: hostport :: _ ->
-        let h, p =
-          match String.split_on_char ':' hostport with
-          | [ h; p ] -> (h, int_of_string p)
-          | _ -> (hostport, 443)
-        in
-        (h, p, true)
-    | "http:" :: "" :: hostport :: _ ->
-        let h, p =
-          match String.split_on_char ':' hostport with
-          | [ h; p ] -> (h, int_of_string p)
-          | _ -> (hostport, 80)
-        in
-        (h, p, false)
-    | _ -> failwith ("bad base_url: " ^ cfg.base_url)
-  in
-  let net = (Stdenv.net env :> [ `Generic ] Net.ty Std.r) in
-  let addr = Net.getaddrinfo_stream ~service:(string_of_int port) net host |> List.hd in
-  let raw = Net.connect ~sw net addr in
-  let flow : Flow.two_way_ty Std.r =
-    if tls then
-      let auth = Result.get_ok (Ca_certs_nss.authenticator ()) in
-      let tls_config = Result.get_ok (Tls.Config.client ~authenticator:auth ()) in
-      (Tls_eio.client_of_flow tls_config
-         ~host:(Domain_name.host_exn (Domain_name.of_string_exn host))
-         raw
-       : Tls_eio.t :> Flow.two_way_ty Std.r)
-    else (raw :> Flow.two_way_ty Std.r)
-  in
-  let request_text =
-    let hdrs =
-      String.concat "\r\n"
-        (List.map (fun (k, v) -> k ^ ": " ^ v)
-           ([ ("host", host); ("content-type", "application/json");
-              ("content-length", string_of_int (String.length body));
-              ("connection", "close") ]
-            @ extra_headers))
-    in
-    Printf.sprintf "%s %s HTTP/1.1\r\n%s\r\n\r\n%s" meth path hdrs body
-  in
-  Flow.copy_string request_text flow;
-  let br = Buf_read.of_flow ~initial_size:4096 ~max_size:(20 * 1024 * 1024) flow in
-  let line () = String.trim (Buf_read.line br) in
-  let status_line = line () in
-  let code =
-    match String.split_on_char ' ' status_line with
-    | _http :: c :: _ -> (try int_of_string c with _ -> 0)
-    | _ -> 0
-  in
-  let rec read_headers acc =
-    let l = line () in
-    if l = "" then List.rev acc
-    else
-      (match String.index_opt l ':' with
-       | Some i ->
-           read_headers
-             ((String.lowercase_ascii (String.sub l 0 i),
-               String.trim (String.sub l (i + 1) (String.length l - i - 1))) :: acc)
-       | None -> read_headers acc)
-  in
-  let headers = read_headers [] in
-  let body =
-    match List.assoc_opt "transfer-encoding" headers with
-    | Some te when String.lowercase_ascii te = "chunked" ->
-        let buf = Buffer.create 8192 in
-        let rec chunks () =
-          let size_line = line () in
-          match int_of_string_opt ("0x" ^ size_line) with
-          | Some 0 -> ignore (line ()) (* trailing CRLF *)
-          | Some n ->
-              Buffer.add_string buf (Buf_read.take n br);
-              ignore (line ()); (* CRLF after chunk *)
-              chunks ()
-          | None -> ()
-        in
-        chunks ();
-        Buffer.contents buf
-    | _ ->
-        (match List.assoc_opt "content-length" headers with
-         | Some n -> Buf_read.take (int_of_string n) br
-         | None -> Buf_read.take_all br)
-  in
-  (try Flow.shutdown flow `All with _ -> ());
-  if code >= 200 && code < 300 then Ok body
-  else Error (Printf.sprintf "HTTP %d: %s" code body)
+  ignore sw;
+  match Pp_http.split_base cfg.base_url with
+  | Error e -> Error e
+  | Ok endpoint -> (
+      match
+        Pp_http.request ~env ~endpoint ~meth ~path ~headers:extra_headers
+          ~body ()
+      with
+      | Error e -> Error e
+      | Ok r ->
+          if r.Pp_http.status >= 200 && r.Pp_http.status < 300 then
+            Ok r.Pp_http.body
+          else
+            Error (Printf.sprintf "HTTP %d: %s" r.Pp_http.status r.Pp_http.body))
 
 let post_body ~(env : Eio_unix.Stdenv.base) ~sw ~(cfg : cfg) ~path
     ~extra_headers ~body : (string, string) Result.t =

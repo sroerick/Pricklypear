@@ -41,3 +41,7 @@
 (package
  (name pricklypear-hostkit)
  (description "Shared host kit for the two local Nopales hosts (agent + pp-remote): Host_seam (the lifted route-table/request/tool host seam, parameterized by run_in_rim), Http_kit, Multipart_emitter, Chat_stream — ONE home for the ~1,000 lines agent/lib and remote/lib used to mirror (i-1788671304-d)"))
+
+(package
+ (name pricklypear-httpc)
+ (description "Pp_http — the ONE HTTP/1.1 client for Pricklypear's non-gluten transports (URL split, connect + TLS with non-crashy errors, request/header parse, chunked/content-length framing, optional deadline): ONE home for the four hand-rolled clients llm/provider, remote/http_transport, native/soil_strip and the curl subprocesses used to be (i-1788671008-e)"))
