@@ -196,6 +196,41 @@ let llm_codec_tests = [
      | Llm_codec.Final { content; _ } ->
         Alcotest.(check string) "content" "the real answer" content
      | other -> Alcotest.fail "expected Final from reasoning_content"));
+  ("llm-codec: parse_turn_response surfaces provider error body", `Quick, fun () ->
+    (* The wedge shape: an OpenAI error object has NO choices. The old
+       path died as Type_error("Expected array, got null") — the
+       undiagnosable string the wake loop retried forever. *)
+    let body =
+      {|{"error":{"message":"Invalid API key provided","type":"invalid_request_error","code":"invalid_api_key"}}|}
+    in
+    (match Llm_codec.parse_turn_response body with
+     | Llm_codec.Turn_error e ->
+        Alcotest.(check string) "provider message surfaced"
+          "provider error: Invalid API key provided (invalid_request_error)" e
+     | other -> Alcotest.fail ("expected Turn_error, got other")));
+  ("llm-codec: parse_turn_response null choices without error body", `Quick, fun () ->
+    let body = {|{"id":"x","object":"chat.completion","choices":null}|} in
+    (match Llm_codec.parse_turn_response body with
+     | Llm_codec.Turn_error e ->
+        Alcotest.(check string) "no-choices shape" "LLM: no choices in response" e
+     | other -> Alcotest.fail "expected Turn_error, got other"));
+  ("llm-codec: extract_content surfaces provider error body", `Quick, fun () ->
+    let body = {|{"error":{"message":"rate limited"}}|} in
+    (match Llm_codec.extract_content body with
+     | Error e -> Alcotest.(check string) "extract error" "provider error: rate limited" e
+     | Ok _ -> Alcotest.fail "expected Error"));
+  ("llm-codec: parse_turn_response error with bare string error", `Quick, fun () ->
+    let body = {|{"error":"upstream timeout"}|} in
+    (match Llm_codec.parse_turn_response body with
+     | Llm_codec.Turn_error e ->
+        Alcotest.(check string) "bare string error" "provider error: upstream timeout" e
+     | other -> Alcotest.fail "expected Turn_error, got other"));
+  ("llm-codec: parse_turn_response empty choices still empty-error", `Quick, fun () ->
+    let body = {|{"choices":[]}|} in
+    (match Llm_codec.parse_turn_response body with
+     | Llm_codec.Turn_error e ->
+        Alcotest.(check string) "empty choices" "LLM: empty choices" e
+     | other -> Alcotest.fail "expected Turn_error, got other"));
   ("llm-codec: extract_stream_delta", `Quick, fun () ->
     let chunk = {|{"choices":[{"delta":{"content":"tok"}}]}|} in
     Alcotest.(check string) "delta" "tok"
