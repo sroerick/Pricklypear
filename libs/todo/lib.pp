@@ -1,4 +1,4 @@
-;; package todo -- exported from live branch system/main
+;; package todo -- exported from live branch admin/personal
 ;; Sync: scripts/pp_sync.py pull|push
 
 (package todo
@@ -13,15 +13,8 @@
     todo/item/add
     todo/item/active
     todo/item/archive
-    todo/item/assign
-    todo/item/assignee
     todo/item/cycle
     todo/item/delete
-    todo/item/for-user
-    todo/item/priority
-    todo/item/queue
-    todo/item/set-priority
-    todo/item/unassign
     todo/list/all
     todo/list/create
     todo/list/delete
@@ -115,6 +108,30 @@
                           (html/attr "placeholder" "buy milk")
                           (html/attr "autocomplete" "off"))))
                     (html/button (html/attr "type" "submit") "Add")))))))))))
+
+(define todo/alist-get
+  (lambda
+    (alist k)
+    (if
+      (null? alist)
+      (list)
+      (if
+        (string-eq (car (car alist)) k)
+        (cdr (car alist))
+        (todo/alist-get (cdr alist) k))))
+  "bucket items for key k (or ())")
+
+(define todo/alist-push
+  (lambda
+    (k v alist)
+    (if
+      (null? alist)
+      (list (cons k (list v)))
+      (if
+        (string-eq (car (car alist)) k)
+        (cons (cons k (cons v (cdr (car alist)))) (cdr alist))
+        (cons (car alist) (todo/alist-push k v (cdr alist))))))
+  "push v onto alist bucket k (pure, one pass over groups)")
 
 (define todo/all-items
   (lambda () (todo/tree/rows "todo-item" 200)))
@@ -569,6 +586,28 @@
         ()
         (todo/db/update type id (dict-set fields field value))))))
 
+(define todo/dbg-scrape
+  (lambda
+    ()
+    (let
+      ((n (notes/doc/list)))
+      (let
+        ((row (todo/notes-cache-row)))
+        (let
+          ((f
+            (dict-set*
+              (if (null? row) "{}" (cdr row))
+              (list
+                "dbg_notes"
+                (as-str (count n))
+                "dbg_root"
+                (notes/tree/root)
+                "dbg_todos"
+                (as-str (count (notes/outline/all-todos)))
+                "dbg_who"
+                (whoami)))))
+          (seq (update (quote todo-cache) (car row) f) "dbg-done"))))))
+
 (define todo/delete
   (lambda (id) (todo/tree/del "todo-item" id)))
 
@@ -744,6 +783,22 @@
 
 (define todo/get-list
   (lambda (id) (todo/tree/get "todo-list" id)))
+
+(define todo/group-by-list
+  (lambda
+    (items inbox-id)
+    (list/foldl
+      (lambda
+        (acc item)
+        (let
+          ((fl (as-str (todo/item/list-id (cdr item)))))
+          (todo/alist-push
+            (if (string-eq fl "") inbox-id fl)
+            item
+            acc)))
+      (list)
+      items))
+  "group item rows by their list_id (empty -> inbox) in ONE pass; replaces the per-list 200-item refilters that cost ~7k ticks per nav entry")
 
 (define todo/handle-post
   (lambda
@@ -1015,12 +1070,7 @@
       (string-eq view "from-notes")
       (html/ul
         (html/attr "class" "card todo-list")
-        (list/foldl
-          (lambda
-            (acc t)
-            (string-append acc (todo/item/note-li t view)))
-          ""
-          (notes/outline/all-todos)))
+        (todo/notes-block "from-notes"))
       (if
         (string-eq view "archived")
         (html/ul
@@ -1030,7 +1080,7 @@
               (acc row)
               (string-append acc (todo/item/list-li row view)))
             ""
-            (todo/item/archived)))
+            (list/take (todo/item/archived) 80)))
         (if
           (string-eq view "everything")
           (html/join
@@ -1043,19 +1093,11 @@
                     (acc row)
                     (string-append acc (todo/item/list-li row view)))
                   ""
-                  (todo/item/active (todo/item/all))))
+                  (list/take (todo/item/active (todo/item/all)) 80)))
               (html/h2 "From notes")
               (html/ul
                 (html/attr "class" "card todo-list")
-                (list/foldl
-                  (lambda
-                    (acc t)
-                    (if
-                      (todo/state/open? (car (cdr (cdr (cdr t)))))
-                      (string-append acc (todo/item/note-li t view))
-                      acc))
-                  ""
-                  (notes/outline/all-todos)))))
+                (todo/notes-block "everything"))))
           (html/ul
             (html/attr "class" "card todo-list")
             (list/foldl
@@ -1063,7 +1105,9 @@
                 (acc row)
                 (string-append acc (todo/item/list-li row view)))
               ""
-              (todo/item/active (todo/item/for-list view)))))))))
+              (list/take
+                (todo/item/active (todo/item/for-list view))
+                150))))))))
 
 (define todo/item/list-id
   (lambda
@@ -1279,6 +1323,21 @@
 
 (define todo/item/title
   (lambda (fields) (as-str (dict-get fields "title"))))
+
+(define todo/items-for
+  (lambda
+    (lid all-items inbox-id)
+    (list/filter
+      (lambda
+        (row)
+        (let
+          ((fl (as-str (todo/item/list-id (cdr row)))))
+          (if
+            (string-eq fl lid)
+            #t
+            (if (string-eq fl "") (string-eq lid inbox-id) #f))))
+      all-items))
+  "pure: rows of one list from a prefetched items list (replaces per-list DB re-fetch)")
 
 (define todo/items-for-list
   (lambda
@@ -1599,10 +1658,7 @@
   (lambda
     (view row)
     (let
-      ((id (car row))
-        (f (cdr row))
-        (items
-          (todo/item/active (todo/item/for-list (car row)))))
+      ((id (car row)) (f (cdr row)))
       (html/li
         (html/attr
           "class"
@@ -1614,11 +1670,7 @@
           (list
             (html/a
               (string-append "/todos?view=" id)
-              (string-append
-                (todo/list/title f)
-                " ("
-                (todo/ui/ratio items)
-                ")"))
+              (todo/list/title f))
             (if
               (todo/list/default? f)
               ""
@@ -1645,7 +1697,8 @@
                           (html/attr "type" "submit")
                           (html/attr "class" "secondary")
                           (html/attr "title" "delete list")))
-                      "×")))))))))))
+                      "×"))))))))))
+  "nav entry for one list: title link + delete form. Ratio counts DROPPED — per-list ratios cost a dict-get JSON parse per item (~1.5k ticks each) and blew the 400k route budget; the list page shows its own counts.")
 
 (define todo/list/options
   (lambda
@@ -1897,6 +1950,149 @@
                 (html/span
                   (html/attr "class" "muted todo-src")
                   (html/text slug))))))))))
+
+(define todo/notes-block
+  (lambda
+    (view)
+    (let
+      ((row (todo/notes-cache-row)))
+      (let
+        ((fields (if (null? row) () (cdr row))))
+        (if
+          (todo/notes-cache-fresh? fields 900)
+          (todo/notes-cache-html fields view)
+          (seq
+            (todo/notes-cache-request)
+            (todo/notes-cache-html fields view))))))
+  "HTML <li> block for a view from the scrape cache. Never computes inline: serves cached (possibly stale) HTML and asks the jobs runner to refresh. The inline scrape cost 8-78s per render and blew route budgets.")
+
+(define todo/notes-cache-fresh?
+  (lambda
+    (fields ttl)
+    (if
+      (null? fields)
+      #f
+      (let
+        ((ts (dict-get fields "ts")))
+        (if
+          (null? ts)
+          #f
+          (let
+            ((age (- (now) (parse-int (as-str ts)))))
+            (if (> age ttl) #f #t))))))
+  "whether the scrape cache is within ttl seconds")
+
+(define todo/notes-cache-html
+  (lambda
+    (fields view)
+    (let
+      ((k
+        (if
+          (string-eq view "everything")
+          "html_open"
+          "html_all")))
+      (let
+        ((v (dict-get fields k)))
+        (if (null? v) "" (as-str v)))))
+  "cached <li> block for a view")
+
+(define todo/notes-cache-refresh
+  (lambda
+    ()
+    (let
+      ((todos (notes/outline/all-todos)))
+      (let
+        ((h-all
+            (string-join
+              (list/map
+                (lambda (t) (todo/item/note-li t "from-notes"))
+                todos)
+              ""))
+          (h-open
+            (string-join
+              (list/map
+                (lambda (t) (todo/item/note-li t "everything"))
+                (list/filter
+                  (lambda
+                    (t)
+                    (todo/state/open? (car (cdr (cdr (cdr t))))))
+                  todos))
+              "")))
+        (let
+          ((row (todo/notes-cache-row))
+            (fields
+              (dict-set*
+                "{}"
+                (list
+                  "key"
+                  "notes-todos"
+                  "ts"
+                  (as-str (now))
+                  "req"
+                  (as-str (now))
+                  "html_all"
+                  h-all
+                  "html_open"
+                  h-open))))
+          (seq
+            (if
+              (null? row)
+              (create (quote todo-cache) fields)
+              (update (quote todo-cache) (car row) fields))
+            "refreshed")))))
+  "recompute the notes-todo scrape once; O(n) string-join (was O(n^2) fold). Runs as a JOB (unbudgeted), never on the request path.")
+
+(define todo/notes-cache-request
+  (lambda
+    ()
+    (let
+      ((row (todo/notes-cache-row)))
+      (let
+        ((fields (if (null? row) () (cdr row))))
+        (let
+          ((req
+            (if
+              (null? fields)
+              0
+              (let
+                ((r (dict-get fields "req")))
+                (if (null? r) 0 (parse-int (as-str r)))))))
+          (if
+            (> (- (now) req) 120)
+            (seq
+              (if
+                (null? row)
+                (create
+                  (quote todo-cache)
+                  (dict-set*
+                    "{}"
+                    (list
+                      "key"
+                      "notes-todos"
+                      "req"
+                      (as-str (now))
+                      "ts"
+                      "0"
+                      "html_all"
+                      ""
+                      "html_open"
+                      "")))
+                (update
+                  (quote todo-cache)
+                  (car row)
+                  (dict-set* (cdr row) (list "req" (as-str (now))))))
+              (submit-job "todo/notes-cache-refresh" ""))
+            "already-requested")))))
+  "ask the UNBUDGETED jobs runner to refresh the scrape; bounded to one request/120s so renders never compute inline")
+
+(define todo/notes-cache-row
+  (lambda
+    ()
+    (let
+      ((rs
+        (find-rows (quote todo-cache) "key" "notes-todos" 1)))
+      (if (null? rs) () (car rs))))
+  "cache row for the notes-todo scrape (or ())")
 
 (define todo/open?
   (lambda
@@ -2513,48 +2709,57 @@
     (view)
     (let
       ((lists (todo/list/all))
-        (inbox (todo/list/ensure-inbox))
-        (arch-n (todo/item/count-all (todo/item/archived))))
-      (html/ul
-        (html/attr "class" "todo-nav")
-        (html/join
-          (list
-            (todo/ui/nav-link view "everything" "Everything" "")
-            (todo/ui/nav-link view "from-notes" "From notes" "")
-            (todo/ui/nav-link
-              view
-              "archived"
-              "Archived"
-              (string-append "(" (as-str arch-n) ")"))
-            (list/foldl
+        (items (todo/item/all))
+        (inbox (todo/list/ensure-inbox)))
+      (let
+        ((arch-n
+          (todo/item/count-all
+            (list/filter
               (lambda
-                (acc row)
-                (string-append acc (todo/list/nav-li view row)))
-              ""
-              lists)
-            (html/li
-              (html/attr "class" "todo-nav-item")
-              (html/form
-                "POST"
-                "/todos"
-                (html/attrs
-                  (list
-                    (html/attr "class" "todo-new-list")
-                    (html/attr "hx-post" "/todos")
-                    (html/attr "hx-target" "#todo-main")
-                    (html/attr "hx-swap" "innerHTML")))
-                (html/join
-                  (list
-                    (html/hidden "action" "create-list")
-                    (html/hidden "view" view)
-                    (html/text-input
-                      "title"
-                      (html/attrs
-                        (list
-                          (html/attr "placeholder" "New list")
-                          (html/attr "required" "required")
-                          (html/attr "class" "todo-new-list-input"))))
-                    (html/button (html/attr "type" "submit") "+ list")))))))))))
+                (row)
+                (todo/state/archived? (todo/item/state (cdr row))))
+              items))))
+        (html/ul
+          (html/attr "class" "todo-nav")
+          (html/join
+            (list
+              (todo/ui/nav-link view "everything" "Everything" "")
+              (todo/ui/nav-link view "from-notes" "From notes" "")
+              (todo/ui/nav-link
+                view
+                "archived"
+                "Archived"
+                (string-append "(" (as-str arch-n) ")"))
+              (list/foldl
+                (lambda
+                  (acc row)
+                  (string-append acc (todo/list/nav-li view row)))
+                ""
+                lists)
+              (html/li
+                (html/attr "class" "todo-nav-item")
+                (html/form
+                  "POST"
+                  "/todos"
+                  (html/attrs
+                    (list
+                      (html/attr "class" "todo-new-list")
+                      (html/attr "hx-post" "/todos")
+                      (html/attr "hx-target" "#todo-main")
+                      (html/attr "hx-swap" "innerHTML")))
+                  (html/join
+                    (list
+                      (html/hidden "action" "create-list")
+                      (html/hidden "view" view)
+                      (html/text-input
+                        "title"
+                        (html/attrs
+                          (list
+                            (html/attr "placeholder" "New list")
+                            (html/attr "required" "required")
+                            (html/attr "class" "todo-new-list-input"))))
+                      (html/button (html/attr "type" "submit") "+ list")))))))))))
+  "nav: ONE items fetch (archived count only); lists render without per-list ratios — dict-get JSON parses per item blew the route budget")
 
 (define todo/ui/nav-link
   (lambda
