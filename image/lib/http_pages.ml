@@ -39,7 +39,7 @@ let binding_observability_nodes (session : Session.t)
   let stats_node =
     match
       Crud.find_row (Session.store session) ~type_name:"function_stat"
-        ~field:"fn" ~value:name
+        ~field:"fn" ~value:name ~latest:true
     with
     | Pricklypear_lisp.Ast.VStr fields_json ->
         (try

@@ -148,10 +148,13 @@ let search_function_bodies (t : Store_db.t) ~(needle : string) ~(limit : int)
 (** Full branch-chain defs for env rehydrate: parents first (depth DESC),
     then children. Includes ALL rows (not deduped) so Session.load_defs can
     redefine — last write wins (child override). 4th = package provenance
-    (None = untagged / always load). See session.load_defs note. *)
+    (None = untagged / always load). 5th = doc (NULL-able) so the
+    load-library skip map can fingerprint body + doc exactly like the
+    old own-defs map did. See session.load_defs note. *)
 let list_function_names_for_load (t : Store_db.t)
-  : (string * string * string * string option
-     * string * string) list =  (* name, RAW body jsonb, author, pkg, branch, updated *)
+  : (string * string * string * string option * string option
+     * string * string) list =
+  (* name, RAW body jsonb, author, pkg, doc, branch, updated *)
   (* tmp/eval-fast-path: rows also carry (branch_id, updated_at) so
      load_defs can record per-def fingerprints for incremental
      rehydrate. *)
@@ -160,7 +163,7 @@ let list_function_names_for_load (t : Store_db.t)
   | Some conn ->
       (try
       let sql =
-            Store_common.chain_sql ("SELECT fd.name, fd.body, fd.author, chain.depth, fd.package, " ^
+            Store_common.chain_sql ("SELECT fd.name, fd.body, fd.author, chain.depth, fd.package, fd.doc, " ^
             "fd.branch_id::text, fd.updated_at::text " ^
             "FROM " ^ Store_common.fn_rel () ^ " fd " ^
             "JOIN chain ON fd.branch_id = chain.id " ^
@@ -173,7 +176,7 @@ let list_function_names_for_load (t : Store_db.t)
             List.filter_map
               (fun row ->
                 match row with
-                | [ name_c; body_cell; author_cell; _depth_c; pkg_c; branch_c; updated_c ] ->
+                | [ name_c; body_cell; author_cell; _depth_c; pkg_c; doc_c; branch_c; updated_c ] ->
                     (match Pgx.Value.to_string name_c,
                             Pgx.Value.to_string body_cell,
                             Pgx.Value.to_string author_cell,
@@ -181,7 +184,8 @@ let list_function_names_for_load (t : Store_db.t)
                             Pgx.Value.to_string updated_c with
                      | Some name, Some body_str, Some author, Some branch, Some updated ->
                          let pkg = Pgx.Value.to_string pkg_c in
-                         Some (name, body_str, author, pkg, branch, updated)
+                         let doc = Pgx.Value.to_string doc_c in
+                         Some (name, body_str, author, pkg, doc, branch, updated)
                      | _ -> None)
                 | _ -> None)
               rows

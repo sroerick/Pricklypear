@@ -134,7 +134,7 @@ let load_defs (t : t) : unit =
      exactly as the store's old per-row decode guard did. *)
   let defs =
     List.filter_map
-      (fun (name, body_json, author, pkg, branch_id, updated_at) ->
+      (fun (name, body_json, author, pkg, _doc, branch_id, updated_at) ->
         match Pricklypear_lisp.Ast.expr_of_body_json body_json with
         | Some body -> Some (name, body, author, pkg, branch_id, updated_at)
         | None -> None)
@@ -662,8 +662,40 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value =
         end else ()
       in
       let () = record_define_side_effects t ~name in
-      v
-    in
+    v
+  in
+  (* Persist one top-level-shaped form (define | defmacro) — shared by
+     plain top-level eval and the begin/seq spine walk below (log/issues
+     "begin-wrapped defines never persist"): defines inside (begin …)
+     bound in env via eval_special_form but never landed in the store
+     and died with the session. eval_one has no seed/load skip windows
+     (boot seed relies on persist_function_if_absent's name set), so
+     the only guard here is the anonymous one, as for plain defines. *)
+  let rec persist_toplevel (e : Pricklypear_lisp.Ast.expr) : unit =
+    match Pricklypear_lisp.Eval.parse_top_define e with
+    | Some { name; body; doc } -> ignore (persist_define name body doc)
+    | None ->
+        (match e with
+         | Pricklypear_lisp.Ast.App
+             (Pricklypear_lisp.Ast.Var "defmacro",
+              [ Pricklypear_lisp.Ast.Var name; params_expr; body_expr ]) ->
+             if t.manifest.username <> "anonymous" then begin
+               let stored =
+                 Pricklypear_lisp.Ast.App
+                   (Pricklypear_lisp.Ast.Var "__macro__",
+                    [ params_expr; body_expr ])
+               in
+               persist_fn name stored None
+             end
+         | Pricklypear_lisp.Ast.App
+             (Pricklypear_lisp.Ast.Var ("begin" | "seq"), inner) ->
+             (* raw AST args exclude the head (eval_step prepends it at
+                dispatch) — inner IS the body list *)
+             persist_spine inner
+         | _ -> ())
+  and persist_spine (forms : Pricklypear_lisp.Ast.expr list) : unit =
+    List.iter persist_toplevel forms
+  in
     (match Pricklypear_lisp.Eval.parse_top_define expr with
      | Some { name; body; doc } ->
          (* Persist peeled body + docstring. Env bind already ran via eval. *)
@@ -683,6 +715,10 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value =
              persist_fn name stored None
            end else ()
          in
+         v
+     | Pricklypear_lisp.Ast.App
+         (Pricklypear_lisp.Ast.Var ("begin" | "seq"), forms) ->
+         persist_spine forms;
          v
      | _ -> v)))
   with
@@ -781,37 +817,42 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
      suppress_refresh_on_define. Name extraction is by pattern only —
      malformed defines still fall through to eval and raise exactly as
      before. *)
-  let seed_skip =
+  (* image.boot-seed-skip, per-name (shared by top-level forms and the
+     begin/seq spine walk below). *)
+  let seed_skips (name : string) : bool =
     t.seed_additive
-    && (match t.store.seed_names with Some _ -> true | None -> false)
-    && (match expr with
-        | Pricklypear_lisp.Ast.App
-            (Pricklypear_lisp.Ast.Var "define",
-             (Pricklypear_lisp.Ast.Var name :: _))
-        | Pricklypear_lisp.Ast.App
-            (Pricklypear_lisp.Ast.Var "define",
-             Pricklypear_lisp.Ast.App (Pricklypear_lisp.Ast.Var name, _) :: _)
-        | Pricklypear_lisp.Ast.App
-            (Pricklypear_lisp.Ast.Var "defmacro",
-             [ Pricklypear_lisp.Ast.Var name; _; _ ]) ->
-            (match t.store.seed_names with
-             | Some set -> Hashtbl.mem set name
-             | None -> false)
-        | _ -> false)
+    && (match t.store.seed_names with
+        | Some set -> Hashtbl.mem set name
+        | None -> false)
   in
-  (* image.load-library-skip (2026-09-03): inside load-library /
-     reseed-package, skip defines whose name is among the branch's OWN
-     stored defs with an IDENTICAL normalized body + doc — the env
-     binding is already the branch thunk, so eval + persist are pure
-     waste. This is what made (load-library "todo") re-evaluate +
+  let seed_skip =
+    match expr with
+    | Pricklypear_lisp.Ast.App
+        (Pricklypear_lisp.Ast.Var "define",
+         (Pricklypear_lisp.Ast.Var name :: _))
+    | Pricklypear_lisp.Ast.App
+        (Pricklypear_lisp.Ast.Var "define",
+         Pricklypear_lisp.Ast.App (Pricklypear_lisp.Ast.Var name, _) :: _)
+    | Pricklypear_lisp.Ast.App
+        (Pricklypear_lisp.Ast.Var "defmacro",
+         [ Pricklypear_lisp.Ast.Var name; _; _ ]) ->
+        seed_skips name
+    | _ -> false
+  in
+  (* image.load-library-skip (2026-09-03), per-form (shared by the
+     top-level expr and the begin/seq spine walk below): inside
+     load-library / reseed-package, skip defines whose name resolves
+     (closest chain row) to an IDENTICAL normalized body + doc — the
+     env binding is already the branch thunk, so eval + persist are
+     pure waste. This is what made (load-library "todo") re-evaluate +
      re-persist ~1000 defines per call and blow page/eval budgets
      (budget-exceeded loops). Changed/new defines still eval + persist
      normally. *)
-  let load_skip_hit =
+  let load_skips (e : Pricklypear_lisp.Ast.expr) : bool =
     match t.eval_state.load_skip_names with
     | None -> false
     | Some tbl ->
-      (match Pricklypear_lisp.Eval.parse_top_define expr with
+      (match Pricklypear_lisp.Eval.parse_top_define e with
        | Some { name; body; doc } ->
            (match Hashtbl.find_opt tbl name with
             | Some stored ->
@@ -820,7 +861,7 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
                    ^ (match doc with Some d -> d | None -> ""))
             | None -> false)
        | None ->
-           (match expr with
+           (match e with
             | Pricklypear_lisp.Ast.App
                 (Pricklypear_lisp.Ast.Var "defmacro",
                  [ Pricklypear_lisp.Ast.Var name; params_expr; body_expr ]) ->
@@ -835,6 +876,7 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
                  | None -> false)
             | _ -> false))
   in
+  let load_skip_hit = load_skips expr in
   if seed_skip || load_skip_hit then Pricklypear_lisp.Ast.VNil
   else
   let v = eval_expr_rim t expr in
@@ -865,6 +907,43 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
     let () = record_define_side_effects t ~name in
     v
   in
+  (* Persist one top-level-shaped form (define | defmacro), honoring the
+     seed and load-skip windows. Used by the begin/seq spine walk —
+     log/issues "begin-wrapped defines never persist (bit me twice)":
+     the persist hook only watched the WHOLE top-level form, so defines
+     inside (begin …) bound in env but never landed in the store, and
+     died with the session. eval_special_form "begin" already evaluated
+     each body (env bindings exist); this walks the same spine after
+     eval and persists what it finds. Nested begin/seq recurse. *)
+  let rec persist_toplevel (e : Pricklypear_lisp.Ast.expr) : unit =
+    match Pricklypear_lisp.Eval.parse_top_define e with
+    | Some { name; body; doc } ->
+        if (not (seed_skips name)) && (not (load_skips e)) then
+          ignore (persist_define name body doc)
+    | None ->
+        (match e with
+         | Pricklypear_lisp.Ast.App
+             (Pricklypear_lisp.Ast.Var "defmacro",
+              [ Pricklypear_lisp.Ast.Var name; params_expr; body_expr ]) ->
+             if (not (seed_skips name)) && (not (load_skips e)) then begin
+               if t.manifest.username <> "anonymous" then begin
+                 let stored =
+                   Pricklypear_lisp.Ast.App
+                     (Pricklypear_lisp.Ast.Var "__macro__",
+                      [ params_expr; body_expr ])
+                 in
+                 persist_fn name stored None
+               end
+             end
+         | Pricklypear_lisp.Ast.App
+             (Pricklypear_lisp.Ast.Var ("begin" | "seq"), inner) ->
+             (* raw AST args exclude the head (eval_step prepends it at
+                dispatch) — inner IS the body list *)
+             persist_spine inner
+         | _ -> ())
+  and persist_spine (forms : Pricklypear_lisp.Ast.expr list) : unit =
+    List.iter persist_toplevel forms
+  in
   (match Pricklypear_lisp.Eval.parse_top_define expr with
    | Some { name; body; doc } -> persist_define name body doc
    | None ->
@@ -882,6 +961,10 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
            persist_fn name stored None
          end else ()
        in
+       v
+   | Pricklypear_lisp.Ast.App
+       (Pricklypear_lisp.Ast.Var ("begin" | "seq"), forms) ->
+       persist_spine forms;
        v
    | _ -> v)))
 
@@ -923,7 +1006,23 @@ and load_library (t : t) (name : string) : (string, string) result =
      Note: skipped identical defines no longer trigger persist_function's
      unpin sweep on personal branches — (prune-synced) remains the
      contentless-pin sweep. Restored in finally: the skip window is
-     exactly this load. *)
+     exactly this load.
+
+     log/issues "load-library re-persists inherited defs (~0.8s/def)"
+     (2026-09-08): the map used to fingerprint only the branch's OWN
+     defs, so an UNPINNED (inherited) name with an identical lib body
+     still took the full path — re-eval + persist_function, whose
+     no-diff-no-pin check is a parent-chain CTE per def (~0.8s each on
+     prod; a notes load burned minutes). The map is now fingerprinted
+     from the CHAIN-VISIBLE effective rows (list_function_names_for_load,
+     ancestors-first replace-fold → closest non-hidden row wins —
+     exactly what load_defs binds). Skip safety for the pin cases is
+     unchanged: an own pin with a DIFFERENT body is the effective row
+     and still misses the map (unpin stays reachable); an own pin with
+     the identical body skipped before and still skips. What changed is
+     the inherited-only case: env already binds the inherited body and
+     persist would be a no-op delete of a nonexistent row — both pure
+     waste, now skipped. *)
   let prev_skip = t.eval_state.load_skip_names in
   let () =
     if t.seed_additive then ()
@@ -943,8 +1042,14 @@ and load_library (t : t) (name : string) : (string, string) result =
         (fun (n, _) -> Hashtbl.replace kernel_set n ())
         t.kernel_catalog;
       let tbl = Hashtbl.create 1024 in
+      (* list_function_names_for_load is depth DESC (ancestors first),
+         so a plain replace-fold lands on the closest visible row —
+         the same closest-wins the env binds. Hidden rows never
+         clobber a visible ancestor binding; kernel-prim names stay out
+         of the map (full eval path preserved). Fingerprint = pp_expr
+         body + doc, same shape the own-defs map used. *)
       List.iter
-        (fun (name, body_json, _author, pkg, doc) ->
+        (fun (name, body_json, _author, pkg, doc, _branch, _updated) ->
           let hidden =
             match pkg with
             | Some p -> Hashtbl.mem disabled_set p || name_disabled name
@@ -957,7 +1062,7 @@ and load_library (t : t) (name : string) : (string, string) result =
             Hashtbl.replace tbl name
               (Pricklypear_lisp.Reader.pp_expr body ^ "\x00"
                ^ (match doc with Some d -> d | None -> "")))
-        (Store.list_own_function_defs t.store);
+        (Store.list_function_names_for_load t.store);
       t.eval_state.load_skip_names <- Some tbl
     end
   in

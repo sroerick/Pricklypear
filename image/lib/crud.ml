@@ -797,6 +797,7 @@ let list
 (** (find-row 'type "field" "value") -> VStr fields-json | VNil.
     First row where fields->>field = value (text equality). *)
 let find_row
+    ?(latest : bool = false)
     (store : Store.t) ~(type_name : string) ~(field : string) ~(value : string)
     : value =
   Io_lwt.Db.with_transaction store (function
@@ -807,7 +808,11 @@ let find_row
           "SELECT fields::text FROM " ^ data_rel () ^ " " ^
           "WHERE type_name = $1 AND fields->>$2 = $3 AND " ^
           visible_sql ~user_param:4 ^ " " ^
-          "ORDER BY created_at ASC LIMIT 1"
+          (* latest: newest row wins (function_stat "last run" widget).
+             Default stays oldest-first (first-row-wins) for existing
+             callers (issues register etc.). *)
+          (if latest then "ORDER BY created_at DESC LIMIT 1"
+           else "ORDER BY created_at ASC LIMIT 1")
         in
         let rows =
           Store_db.exec conn
@@ -972,6 +977,35 @@ let count_by_type (store : Store.t) ~(type_name : string) : int =
             | Some n -> n
             | None -> 0)
        | _ -> 0)
+
+(* ONE grouped count over the datum view instead of count_by_type per
+   type (log/issues "/data 49s"): the index page used to issue one
+   sequential-scan COUNT per type (~40 of them, each with the ltree
+   visibility predicates); one GROUP BY scan feeds the whole table. *)
+let counts_by_type (store : Store.t) : (string * int) list =
+  match Io_lwt.Db.current_conn store with
+  | None -> []
+ | Some conn ->
+      let user = session_user () in
+      let sql =
+        "SELECT type_name, COUNT(*)::int FROM " ^ data_rel () ^
+        " WHERE " ^ visible_sql ~user_param:1 ^
+        " GROUP BY type_name ORDER BY type_name ASC"
+      in
+      let rows =
+        Store_db.exec conn
+          ~params:[ Pgx.Value.of_string user ]
+          sql
+      in
+      List.filter_map
+        (fun row ->
+          match row with
+          | [ name_cell; count_cell ] ->
+              (match Pgx.Value.to_string name_cell, Pgx.Value.to_int count_cell with
+               | Some name, Some n -> Some (name, n)
+               | _ -> None)
+          | _ -> None)
+        rows
 
 let list_data_type_names (store : Store.t) : string list =
   match Io_lwt.Db.current_conn store with
@@ -2145,9 +2179,12 @@ let tree_list_kind (store : Store.t) ~(prefix : string) ~(kind : string)
       (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes)))
 
 let tree_note_index (store : Store.t) ~(prefix : string) ?(limit : int = 2000)
+    ?(with_outline : bool = false)
     () : value =
   with_tree_tx store ~none:(fun () -> VList []) (fun conn ->
-      let rows = Tree_store.list_note_index conn ~prefix ~limit () in
+      let rows =
+        Tree_store.list_note_index conn ~prefix ~limit ~with_outline ()
+      in
       (VList
            (List.map
               (fun (id, fields) -> VPair (VStr id, VStr fields))

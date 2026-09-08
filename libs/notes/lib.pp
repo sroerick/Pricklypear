@@ -21,8 +21,11 @@
               acc
               (outline/todos tree)))))
       (list)
-      (notes/list)))
-  "Collect todo rows (slug title nid done?) across every note.")
+      (notes/tree/full-notes)))
+  "Collect todo rows (slug title nid done?) across every note.
+   log/issues fix (note-index omits outline): folds the FULL index rows
+   (tree/note-index-full carries the real outline); the plain index rows
+   hardcode outline [] which silently killed this scrape.")
 
 (define notes/apply-op
   (lambda
@@ -2420,8 +2423,10 @@
               acc
               (outline/todos tree)))))
       (list)
-      (notes/doc/list)))
-  "Collect todo rows across every note (doc store).")
+      (notes/tree/full-notes)))
+  "Collect todo rows across every note (doc store).
+   log/issues fix: full index rows (real outline), not the light
+   tree/note-index rows whose outline is hardcoded [].")
 
 (define notes/outline/apply-op
   (lambda
@@ -3948,6 +3953,12 @@
 (define notes/tree/list-notes
   (lambda () (tree/note-index (notes/tree/root) 50000))
   "All notes in the garden via the tree index.")
+
+(define notes/tree/full-notes
+  (lambda () (tree/note-index-full (notes/tree/root) 50000))
+  "All notes with REAL outlines (full index rows; scrape source).
+   The plain tree/note-index rows hardcode outline [] to keep the /notes
+   UI light — scrapes must read the full variant.")
 
 (define notes/tree/load-outline
   (lambda
