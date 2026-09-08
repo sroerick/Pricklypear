@@ -197,22 +197,45 @@ let with_transaction ?(isolation = Pgx.Isolation.Serializable) (t : t)
   match t.conn with
   | None -> f None
   | Some (pg, mu) ->
-      let attempt () =
-        with_eio_conn_lock mu (fun () ->
-            Io_eio.Pg.with_transaction ~isolation pg (fun tx ->
-                set_local_pp_user tx;
-                f (Some (tx, mu))))
-      in
-      (* Bounded immediate retry: the body's DB effects rolled back with
-         the aborted tx, so re-running it is safe for the DB; OCaml-side
-         effects in f are the usual value-building closures. *)
-      let rec loop n =
-        match attempt () with
-        | v -> v
-        | exception ex when is_serialization_failure ex && n > 0 ->
-            loop (n - 1)
-      in
-      loop serialization_retries
+      (* Nested-transaction ride (i-job-tx-wedge, 2026-09-07): when a
+         transaction is already active on this store's connection — a Lisp
+         (with-transaction …) body (with_dynamic_transaction), a
+         session-control prim, or an outer with_transaction — JOIN it
+         instead of opening a nested BEGIN. pgx begin_work raises
+         "begin_work: cannot transact while in another transaction" on the
+         second BEGIN, and the raised exception aborts the OUTER tx
+         ("current transaction is aborted, commands ignored until end of
+         transaction block") — so every rows / find-rows / get / create
+         prim called from a (with-transaction …) body or a job body used to
+         wedge with an opaque error while the outer work rolled back (the
+         agent lobby bot went silent through this hole). Riding joins the
+         AMBIENT tx: its isolation wins, the OPENER owns commit/rollback
+         and pp.user (SET LOCAL armed by whoever opened it), and this
+         layer's retry loop does not apply (the owner's retry/backoff
+         governs). Same tradeoff Crud.with_tree_tx's ambient branch already
+         made. *)
+      (match t.current_tx with
+       | Some conn -> f (Some conn)
+       | None ->
+           let attempt () =
+             with_eio_conn_lock mu (fun () ->
+                 Io_eio.Pg.with_transaction ~isolation pg (fun tx ->
+                     t.current_tx <- Some (tx, mu);
+                     set_local_pp_user tx;
+                     Fun.protect
+                       ~finally:(fun () -> t.current_tx <- None)
+                       (fun () -> f (Some (tx, mu)))))
+           in
+           (* Bounded immediate retry: the body's DB effects rolled back with
+              the aborted tx, so re-running it is safe for the DB; OCaml-side
+              effects in f are the usual value-building closures. *)
+           let rec loop n =
+             match attempt () with
+             | v -> v
+             | exception ex when is_serialization_failure ex && n > 0 ->
+                 loop (n - 1)
+           in
+           loop serialization_retries)
 
 (** Low-isolation (READ COMMITTED) transaction for the datum-touching
     tree/edge prims (Crud.with_tree_tx). Before the RLS-floor fix those
@@ -230,18 +253,22 @@ let with_dynamic_transaction ?(isolation = Pgx.Isolation.Serializable)
   | None -> f ()
   | Some (pg, mu) ->
       with_eio_conn_lock mu (fun () ->
-          if t.current_tx <> None then
-            raise
-              (Pricklypear_lisp.Ast.Interp_error
-                 (Pricklypear_lisp.Ast.User_error
-                    ("with-transaction: nested transactions not supported", "bad-args")))
-          else
-            Io_eio.Pg.with_transaction ~isolation pg (fun tx_conn ->
-                t.current_tx <- Some (tx_conn, mu);
-                set_local_pp_user tx_conn;
-                Fun.protect
-                  ~finally:(fun () -> t.current_tx <- None)
-                  f))
+          (match t.current_tx with
+           | Some _ ->
+               (* Nested ride (i-job-tx-wedge): an active transaction owns
+                  commit/rollback — join it instead of raising. The old
+                  raise fired inside the OUTER tx's body, so the outer
+                  rollback took the whole (with-transaction …) body down
+                  with it. Riding keeps nested bodies composable: the
+                  inner join commits (or rolls back) with the outer. *)
+               f ()
+           | None ->
+               Io_eio.Pg.with_transaction ~isolation pg (fun tx_conn ->
+                   t.current_tx <- Some (tx_conn, mu);
+                   set_local_pp_user tx_conn;
+                   Fun.protect
+                     ~finally:(fun () -> t.current_tx <- None)
+                     f)))
 
 (* with_dynamic_transaction deliberately does NOT retry serialization
    failures: its body is arbitrary Lisp ((with-transaction …) prim) and

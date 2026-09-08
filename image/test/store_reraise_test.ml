@@ -207,6 +207,67 @@ let test_real_database_still_returns_values () =
     (List.exists (fun (b : Branch.t) -> b.Branch.id = main_id)
        (S.list_branches t))
 
+
+(* ---- i-job-tx-wedge: nested transactions RIDE the ambient tx ---- *)
+
+(* Inside an open transaction (a Lisp (with-transaction …) body, a job
+   body, or an outer with_transaction) the crud prims used to open a
+   SECOND BEGIN: pgx raised "begin_work: cannot transact while in
+   another transaction", and the raised exception aborted the OUTER tx
+   ("current transaction is aborted, commands ignored until end of
+   transaction block") — every rows/find-rows/get under a
+   with-transaction or job body wedged with an opaque error. The fix
+   makes Store_db.with_transaction / with_dynamic_transaction JOIN the
+   ambient transaction (Crud.with_tree_tx's old exclusive trick, now the
+   shared rule). Pinned against a REAL pg:
+     - a nested with_transaction sees the outer tx's UNCOMMITTED write
+       (same snapshot — proof it joined, not opened a second tx),
+     - a nested with_dynamic_transaction (the (with-transaction …) prim
+       shape) rides too — it used to raise "nested transactions not
+       supported" here,
+     - the whole stack commits exactly once (marker visible after). *)
+let probe_ride (t : S.t) : string option =
+  match S.current_conn t with
+  | Some c -> (
+      match S.exec c "SELECT k FROM ride_probe" with
+      | [ [ k ] ] -> Pgx.Value.to_string k
+      | _ -> None)
+  | None -> None
+
+let test_nested_transactions_ride () =
+  with_store ~database:(S.config_from_env ()).database @@ fun t ->
+  let marker = "ride-" ^ string_of_int (Unix.getpid ()) in
+  let inner_saw = ref None in
+  let dyn_saw = ref None in
+  S.with_transaction t (fun _ ->
+      (match S.current_conn t with
+       | Some c ->
+           let _ = S.exec c "CREATE TEMP TABLE ride_probe(k text)" in
+           let _ =
+             S.exec c ~params:[ Pgx.Value.of_string marker ]
+               "INSERT INTO ride_probe(k) VALUES ($1)"
+           in
+           ()
+       | None -> Alcotest.fail "no ambient conn inside with_transaction");
+      (* 1. nested with_transaction (the crud-prim shape) must ride. *)
+      inner_saw := S.with_transaction t (fun _ -> probe_ride t);
+      (* 2. nested with_dynamic_transaction (the (with-transaction …)
+         prim shape) must ride — no "nested transactions not supported". *)
+      dyn_saw :=
+        S.with_dynamic_transaction t (fun () ->
+            probe_ride t));
+  Alcotest.(check (option string))
+    "inner with_transaction saw the outer uncommitted write" (Some marker)
+    !inner_saw;
+  Alcotest.(check (option string))
+    "nested with_dynamic_transaction rides (no raise)" (Some marker) !dyn_saw;
+  (* 3. after the outer tx committed, the marker is visible — the ride
+     did not swallow or double-commit the outer work. (current_tx is
+     already None again: the finally cleared it inside the lock.) *)
+  let after = probe_ride t in
+  Alcotest.(check (option string))
+    "outer tx committed exactly once (marker survives)" (Some marker) after
+
 let () =
   Alcotest.run "store reraise policy (i-1788671060-2)"
     [
@@ -225,5 +286,7 @@ let () =
            test_unique_violation_classifier;
          Alcotest.test_case "real DB happy path unchanged" `Slow
            test_real_database_still_returns_values;
+         Alcotest.test_case "nested transactions ride the ambient tx" `Slow
+           test_nested_transactions_ride;
        ]);
     ]
