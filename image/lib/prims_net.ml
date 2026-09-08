@@ -355,20 +355,42 @@ let register (t : t) (tbl : Primitives.t) : unit =
   in
   (* headers-json -> (string * string) list; same Assoc format as the
      payload's "headers" field. Unknown shapes parse to []. *)
-  let hdrs_of_json (hdrs_json : string) : (string * string) list =
-    (try
-       let j = Yojson.Safe.from_string hdrs_json in
-       (match j with
-        | `Assoc kvs ->
-            List.filter_map
-              (fun (k, v) ->
-                 match v with
-                 | `String s -> Some (k, s)
-                 | `Int n -> Some (k, string_of_int n)
-                 | _ -> None)
-              kvs
-        | _ -> [])
-     with _ -> [])
+  (* Headers JSON is STRICT: an object mapping names to string (or int)
+     values. Anything else — a non-object, a nested/bool/null value, or
+     invalid JSON — is a loud prim error, NOT a silent drop
+     (i-hdrs-silent-drop, 2026-09-07: `{"Authorization": {"token": "…"}}`
+     used to vanish, the request went out unauthenticated, and the shim
+     read its silent success as a kernel LIE — the agent retried a broken
+     config forever). Rejection surfaces on the caller's error path (job
+     log, /api/eval error JSON, REPL) where a config bug belongs. *)
+  let hdrs_of_json ~(prim : string) (hdrs_json : string)
+      : (string * string) list =
+    let fail msg =
+      raise
+        (Pricklypear_lisp.Ast.Interp_error
+           (Pricklypear_lisp.Ast.Prim_error (prim, msg, "bad-args")))
+    in
+    let j =
+      try Yojson.Safe.from_string hdrs_json
+      with e -> fail ("headers-json: invalid JSON: " ^ Printexc.to_string e)
+    in
+    match j with
+    | `Assoc kvs ->
+        List.map
+          (fun (k, v) ->
+             match v with
+             | `String s -> (k, s)
+             | `Int n -> (k, string_of_int n)
+             | _ ->
+                 fail
+                   (Printf.sprintf
+                      "headers-json: value for %S must be a string or int, got %s"
+                      k (Yojson.Safe.to_string v)))
+          kvs
+    | other ->
+        fail
+          ("headers-json: need a JSON object of string values, got "
+           ^ Yojson.Safe.to_string other)
   in
   Primitives.register tbl "http-get"
     (fun args ->
@@ -377,7 +399,7 @@ let register (t : t) (tbl : Primitives.t) : unit =
       | [ Pricklypear_lisp.Ast.VStr url ] ->
           do_http "http-get" "GET" None url []
       | [ Pricklypear_lisp.Ast.VStr url; Pricklypear_lisp.Ast.VStr hdrs_json ] ->
-          do_http "http-get" "GET" None url (hdrs_of_json hdrs_json)
+          do_http "http-get" "GET" None url (hdrs_of_json ~prim:"http-get" hdrs_json)
       | _ ->
           (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("http-get", "need url [headers-json]", "bad-args")))));
   (* (http-post url [headers-json [body]]) -> payload dict VStr
@@ -391,9 +413,9 @@ let register (t : t) (tbl : Primitives.t) : unit =
       | [ Pricklypear_lisp.Ast.VStr url ] ->
           do_http "http-post" "POST" (Some "") url []
       | [ Pricklypear_lisp.Ast.VStr url; Pricklypear_lisp.Ast.VStr hdrs_json ] ->
-          do_http "http-post" "POST" (Some "") url (hdrs_of_json hdrs_json)
+          do_http "http-post" "POST" (Some "") url (hdrs_of_json ~prim:"http-post" hdrs_json)
       | [ Pricklypear_lisp.Ast.VStr url; Pricklypear_lisp.Ast.VStr hdrs_json;
           Pricklypear_lisp.Ast.VStr body ] ->
-          do_http "http-post" "POST" (Some body) url (hdrs_of_json hdrs_json)
+          do_http "http-post" "POST" (Some body) url (hdrs_of_json ~prim:"http-post" hdrs_json)
       | _ ->
           (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("http-post", "need url [headers-json [body]]", "bad-args")))))
