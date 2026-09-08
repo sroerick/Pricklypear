@@ -20,6 +20,49 @@ open Prims_common
    object, or key wasn't found). The underlying parse-and-emit is
    Yojson; the canonical round-trip preserves well-formed objects. *)
 
+(* ---- JSON parse memo (log/issues "dict-get re-parses per call") ----
+
+   dict-get / dict-set / dict-keys / json-parse re-parse the SAME fields
+   JSON per call in product folds — the todo nav ratio fold paid ~1.5k
+   ticks per item and blew the 400k route budget at 50 lists. The parse
+   result (Yojson.Safe.t) and the converted Lisp value are immutable, so
+   a CONTENT-keyed cache is sound: same bytes -> same tree, no hash
+   collision risk (full-string keys, structural equality). Bounds: 32
+   entries, 1MiB per string, clear-on-overflow — no LRU machinery on a
+   hot prim path; invalid JSON is not cached (re-parse per call, error
+   path stays cold). Single-domain image (no Domain.spawn) and these
+   functions never yield, so plain mutable state is fiber-atomic. *)
+
+let memo_max_entries = 32
+let memo_max_bytes = 1 lsl 20  (* 1MiB — big outlines skip the memo *)
+
+let memo_json_tbl : (string, Yojson.Safe.t) Hashtbl.t = Hashtbl.create 32
+let memo_val_tbl : (string, value) Hashtbl.t = Hashtbl.create 32
+let memo_json_n = ref 0
+let memo_val_n = ref 0
+
+(* Bounded insert shared by both tables: clear-all on overflow (simple
+   and predictable; a fold touches a handful of distinct strings). *)
+let memo_put (tbl : ('k, 'v) Hashtbl.t) (n : int ref) ~(k : 'k) ~(v : 'v) =
+  if !n >= memo_max_entries then begin
+    Hashtbl.reset tbl;
+    n := 0
+  end;
+  Hashtbl.replace tbl k v;
+  incr n
+
+(** Parse [s] once per distinct content (memoized). None on invalid JSON. *)
+let parse_cached (s : string) : Yojson.Safe.t option =
+  match Hashtbl.find_opt memo_json_tbl s with
+  | Some j -> Some j
+  | None ->
+      (match Yojson.Safe.from_string s with
+       | exception _ -> None
+       | j ->
+           if String.length s <= memo_max_bytes then
+             memo_put memo_json_tbl memo_json_n ~k:s ~v:j;
+           Some j)
+
 (* (dict-get json-str key) -> VStr value | VNil.
    Looks up [key] in the JSON object at [json-str]. Returns the value
    as a VStr (numbers and booleans stringified via Yojson); VNil if
@@ -31,22 +74,19 @@ let prim_dict_get args =
          symbols coerce like the string-append family. *)
       let json = coerce_str ~ctx:"dict-get" json_v in
       let key = coerce_str ~ctx:"dict-get" key_v in
-      (try
-        let j = Yojson.Safe.from_string json in
-        (match j with
-         | `Assoc kvs ->
-             (match List.assoc_opt key kvs with
-              | Some (`String s) -> VStr s
-              | Some (`Int n) -> VStr (string_of_int n)
-              | Some (`Intlit s) -> VStr s
-              | Some (`Float f) -> VStr (string_of_float f)
-              | Some (`Bool b) -> VStr (string_of_bool b)
-              | Some (`Null) -> VNil
-              | Some (#Yojson.Safe.t as v) ->
-                  VStr (Yojson.Safe.to_string v)
-              | None -> VNil)
-         | _ -> VNil)
-      with _ -> VNil)
+      (match parse_cached json with
+       | Some (`Assoc kvs) ->
+           (match List.assoc_opt key kvs with
+            | Some (`String s) -> VStr s
+            | Some (`Int n) -> VStr (string_of_int n)
+            | Some (`Intlit s) -> VStr s
+            | Some (`Float f) -> VStr (string_of_float f)
+            | Some (`Bool b) -> VStr (string_of_bool b)
+            | Some (`Null) -> VNil
+            | Some (#Yojson.Safe.t as v) ->
+                VStr (Yojson.Safe.to_string v)
+            | None -> VNil)
+       | _ -> VNil)
   | _ -> raise (Interp_error (User_error ("dict-get needs 2 strings", "bad-args")))
 
 (* (dict-set json-str key value) -> VStr new-json.
@@ -61,11 +101,9 @@ let prim_dict_set args =
       let key = coerce_str ~ctx:"dict-set" key_v in
       let value = coerce_str ~ctx:"dict-set" value_v in
       let base =
-        try
-          (match Yojson.Safe.from_string json with
-           | `Assoc kvs -> kvs
-           | _ -> [])
-        with _ -> []
+        match parse_cached json with
+        | Some (`Assoc kvs) -> kvs
+        | _ -> []
       in
       let v_json =
         (* Try parsing the value as JSON (so callers can pass nested
@@ -87,12 +125,10 @@ let prim_dict_keys args =
   match args with
   | [ json_v ] ->
       let json = coerce_str ~ctx:"dict-keys" json_v in
-      (try
-        (match Yojson.Safe.from_string json with
-         | `Assoc kvs ->
-             VList (List.map (fun (k, _) -> VStr k) kvs)
-         | _ -> VList [])
-      with _ -> VList [])
+      (match parse_cached json with
+       | Some (`Assoc kvs) ->
+           VList (List.map (fun (k, _) -> VStr k) kvs)
+       | _ -> VList [])
   | _ -> raise (Interp_error (User_error ("dict-keys needs 1 string", "bad-args")))
 
 let rec json_to_value (j : Yojson.Safe.t) : value =
@@ -142,11 +178,28 @@ let rec value_to_json (v : value) : Yojson.Safe.t =
       `List (List.map value_to_json (unwind [] (VPair (a, b))))
   | other -> `String (Pricklypear_lisp.Reader.pp_value other)
 
+(** (json-parse s) result memoized per distinct content: the converted
+    Lisp value tree is immutable and deterministic for fixed bytes, and
+    the conversion (not the parse) dominates for big outlines. *)
+let json_parse_cached (s : string) : value option =
+  match Hashtbl.find_opt memo_val_tbl s with
+  | Some v -> Some v
+  | None ->
+      (match Yojson.Safe.from_string s with
+       | exception _ -> None
+       | j ->
+           let v = json_to_value j in
+           if String.length s <= memo_max_bytes then
+             memo_put memo_val_tbl memo_val_n ~k:s ~v;
+           Some v)
+
 let prim_json_parse args =
   match args with
   | [ VStr s ] ->
-      (try json_to_value (Yojson.Safe.from_string s)
-       with _ -> raise (Interp_error (User_error ("json-parse: invalid JSON", "bad-args"))))
+      (match json_parse_cached s with
+       | Some v -> v
+       | None ->
+           raise (Interp_error (User_error ("json-parse: invalid JSON", "bad-args"))))
   | _ -> raise (Interp_error (User_error ("json-parse needs 1 string", "bad-args")))
 
 let prim_json_emit args =

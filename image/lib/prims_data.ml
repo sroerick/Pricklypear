@@ -670,6 +670,25 @@ let register (t : t) (tbl : Primitives.t) : unit =
       | _ ->
           ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/note-index", "[] | prefix [, limit]", "bad-args"))))));
 
+  (* Full variant: index rows carry the REAL outline (log/issues
+     "note-index omits outline → From-notes scrape silently dead").
+     The plain tree/note-index stays light (the /notes UI folds those
+     rows on the request path); scrapes that need outlines call this. *)
+  register_crud "tree/note-index-full"
+    (fun args ->
+      match args with
+      | [] ->
+          Crud.tree_note_index t.store
+            ~prefix:(Tree_store.garden_root ~user:(actor ()))
+            ~with_outline:true ()
+      | [ Pricklypear_lisp.Ast.VStr prefix ] ->
+          Crud.tree_note_index t.store ~prefix ~with_outline:true ()
+      | [ Pricklypear_lisp.Ast.VStr prefix; Pricklypear_lisp.Ast.VInt n ] ->
+          Crud.tree_note_index t.store ~prefix ~limit:(Int64.to_int n)
+            ~with_outline:true ()
+      | _ ->
+          ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/note-index-full", "[] | prefix [, limit]", "bad-args"))))));
+
   register_crud "tree/folder-index"
     (fun args ->
       match args with

@@ -80,33 +80,62 @@ let classify_status ~(own : bool) ~(b : string option) ~(p : string option)
   | Branch_algebra.Diverged -> SDiverged
   | Branch_algebra.Synced -> SSynced
 
-(* One round trip per call: chain walk + version resolution for all three
+(* One round trip per call: chain walk + status resolution for all three
    kinds (fn/type/route) + live-pin existence from the scaffolding tables.
    Read-only (plain Store_db.exec on the given conn — callers inside a transaction
-   pass the tx conn so the read shares its snapshot). *)
+   pass the tx conn so the read shares its snapshot).
+
+   log/issues "/branches 21s" (2026-09-08): b_res and p_res were resolved
+   from tree_versions — a full scan of EVERY gen of EVERY def on the
+   chain, per branch, per page load. The live head of a code path IS the
+   tree_nodes row (delete_fn physically removes the row; only the VERSION
+   trail keeps a tombstone), so:
+     - b_res (the body the branch RESOLVES to: own pin first, else the
+       nearest ancestor) = closest-depth live row over own + ancestor
+       prefixes \u2014 tombstone-free by construction (a deleted fn has
+       no live row, exactly like the old tombstone-filtered DISTINCT ON
+       over version heads).
+     - p_res (closest ancestor's defs) = live rows under ancestor
+       prefixes, closest depth wins — the same closest-wins the old
+       heads/p_res computed, minus the history scan.
+   a_res (base-resolved state) KEEPS the tree_versions walk: it must read
+   historical gens (gen <= base_gen at depth 1) with the exact old
+   tombstone-fallback semantics, and that scan is gen-bounded for the
+   common (parent) case.
+   keys reads b_res now: ancestor-only keys were joined and then dropped
+   by the OCaml filter ((not own) && b = None), so excluding them from
+   the key set changes nothing observable. $1 anchors the chain (uuid
+   context); $2 is the same branch id in TEXT context for the live-path
+   prefixes. *)
 let branch_status_conn (conn : Store_db.conn) ~(branch_id : string)
   : branch_status_row list =
   (try
         let sql =
-          Store_common.chain_sql (", vers AS ( "^
-          "  SELECT v.kind, "^
-          "         (string_to_array(v.path::text, '.'))[4] AS key, "^
-          "         c.depth, v.gen, v.hash, v.body "^
-          "  FROM tree_versions v "^
-          "  JOIN chain c ON c.id = v.branch_id "^
-          "  WHERE v.kind IN ('fn','type','route') "^
-          "), heads AS ( "^
-          "  SELECT DISTINCT ON (kind, key, depth) kind, key, depth, "^
-          "         hash AS chash, body "^
-          "  FROM vers ORDER BY kind, key, depth, gen DESC "^
-          "), b_res AS ( "^
-          "  SELECT DISTINCT ON (kind, key) kind, key, chash AS b_hash "^
-          "  FROM heads WHERE (body->>'_tombstone') IS NULL "^
-          "  ORDER BY kind, key, depth ASC "^
-          "), p_res AS ( "^
-          "  SELECT DISTINCT ON (kind, key) kind, key, chash AS p_hash "^
-          "  FROM heads WHERE depth >= 1 AND (body->>'_tombstone') IS NULL "^
-          "  ORDER BY kind, key, depth ASC "^
+          Store_common.chain_sql (", own_live AS MATERIALIZED ( "^
+          "  SELECT (string_to_array(path::text, '.'))[3] AS kind, "^
+          "         (string_to_array(path::text, '.'))[4] AS key, hash "^
+          "  FROM tree_nodes "^
+          "  WHERE path <@ ('b.' || replace($2::text, '-', ''))::ltree "^
+          "    AND (string_to_array(path::text, '.'))[3] IN ('fn','type','route') "^
+          "), live_all AS MATERIALIZED ( "^
+          "  SELECT 0 AS depth, kind, key, hash FROM own_live "^
+          "  UNION ALL "^
+          "  SELECT depth, kind, key, hash FROM anc_live "^
+          "), b_res AS MATERIALIZED ( "^
+          "  SELECT DISTINCT ON (kind, key) kind, key, hash AS b_hash "^
+          "  FROM live_all ORDER BY kind, key, depth ASC "^
+          "), anc_live AS ( "^
+          "  SELECT c.depth, "^
+          "         (string_to_array(tn.path::text, '.'))[3] AS kind, "^
+          "         (string_to_array(tn.path::text, '.'))[4] AS key, tn.hash "^
+          "  FROM chain c "^
+          "  JOIN tree_nodes tn "^
+          "    ON tn.path <@ ('b.' || replace(c.id::text, '-', ''))::ltree "^
+          "  WHERE c.depth >= 1 "^
+          "    AND (string_to_array(tn.path::text, '.'))[3] IN ('fn','type','route') "^
+          "), p_res AS MATERIALIZED ( "^
+          "  SELECT DISTINCT ON (kind, key) kind, key, hash AS p_hash "^
+          "  FROM anc_live ORDER BY kind, key, depth ASC "^
           "), vers_base AS ( "^
           "  SELECT v.kind, "^
           "         (string_to_array(v.path::text, '.'))[4] AS key, "^
@@ -135,7 +164,7 @@ let branch_status_conn (conn : Store_db.conn) ~(branch_id : string)
           "  SELECT tree_enc_label(route) AS key FROM view_bindings "^
           "  WHERE branch_id = $1 "^
           "), keys AS ( "^
-          "  SELECT kind, key FROM heads "^
+          "  SELECT kind, key FROM live_all "^
           "  UNION SELECT 'fn', key FROM own_fn "^
           "  UNION SELECT 'type', key FROM own_ty "^
           "  UNION SELECT 'route', key FROM own_rt "^
@@ -153,7 +182,14 @@ let branch_status_conn (conn : Store_db.conn) ~(branch_id : string)
           "LEFT JOIN own_rt o3 ON o3.key = k.key "^
           "ORDER BY k.kind, name")
         in
-        let rows = Store_db.exec conn ~params:[ Pgx.Value.of_string branch_id ] sql in
+        let rows =
+          Store_db.exec conn
+            ~params:[
+              Pgx.Value.of_string branch_id;
+              Pgx.Value.of_string branch_id;
+            ]
+            sql
+        in
         List.filter_map
           (fun row ->
             match row with
@@ -193,10 +229,66 @@ let branch_status_conn (conn : Store_db.conn) ~(branch_id : string)
           rows
         with exn -> Store_db.reraise ~op:"branch_status" exn)
 
+(* log/issues "/branches 21s" (2026-09-08): the page recomputes
+   branch_status for EVERY branch per render — N chain-walk queries.
+   A result is a pure function of (chain live defs, own pins, base_gens);
+   all three are covered by the trigger-maintained monotonic def_gen
+   stamps (migration 028; fn/type/route tree writes AND the reverse
+   mirror that reaches tree_nodes from scaffolding-direct promote/merge
+   writes) plus base_gen over the chain. So: stamp-keyed memo.
+     - stamp query is one aggregate over the (tiny) branches join;
+     - pre-migration (no def_gen column) or any stamp failure → "" →
+       compute directly, no caching (visible_stamp's fallback shape);
+     - inside a transaction (share-snapshot callers) → compute directly,
+       never cached — a deferred-mirror window must read its own tx;
+     - single-domain fibers: find/replace are non-yielding, so plain
+       mutable state is fiber-atomic; a lost update just recomputes;
+     - cap 256 branches, clear-on-overflow. *)
+let bs_cache : (string, string * branch_status_row list) Hashtbl.t =
+  Hashtbl.create 16
+
+let bs_stamp_sql =
+  (* SUM, not MAX: main's counter dwarfs a garden branch's, so a bump on
+     the branch itself must move the aggregate. Sum over the chain moves
+     on ANY member's bump; the counts catch tree_branches-row appear/
+     disappear (fork/delete) and base_gen moves (merge advance). *)
+  "WITH RECURSIVE chain AS ( "
+  ^ "  SELECT id, parent_id, 0 AS depth FROM branches WHERE id = $1::uuid "
+  ^ "  UNION ALL "
+  ^ "  SELECT b.id, b.parent_id, c.depth + 1 "
+  ^ "  FROM branches b JOIN chain c ON b.id = c.parent_id "
+  ^ ") SELECT COALESCE(sum(d.def_gen), -1)::text || '|' || "
+  ^ "count(d.def_gen)::text || '|' || "
+  ^ "COALESCE(sum(b.base_gen), -1)::text || '|' || count(*)::text "
+  ^ "FROM chain c "
+  ^ "JOIN branches b ON b.id = c.id "
+  ^ "LEFT JOIN tree_branches d ON d.branch_id = c.id"
+
 let branch_status (t : Store_db.t) ~(branch_id : string) : branch_status_row list =
   match t.conn with
   | None -> []
-  | Some conn -> branch_status_conn conn ~branch_id
+  | Some conn ->
+      if Store_db.in_transaction t then branch_status_conn conn ~branch_id
+      else
+        let stamp =
+          match
+            Store_db.exec conn
+              ~params:[ Pgx.Value.of_string branch_id ]
+              bs_stamp_sql
+          with
+          | [ [ c ] ] -> (match Pgx.Value.to_string c with Some s -> s | None -> "")
+          | _ -> ""
+        in
+        if stamp = "" || String.starts_with ~prefix:"|" stamp then
+          branch_status_conn conn ~branch_id
+        else
+          (match Hashtbl.find_opt bs_cache branch_id with
+           | Some (k, rows) when k = stamp -> rows
+           | _ ->
+               let rows = branch_status_conn conn ~branch_id in
+               if Hashtbl.length bs_cache >= 256 then Hashtbl.reset bs_cache;
+               Hashtbl.replace bs_cache branch_id (stamp, rows);
+               rows)
 
 
 (* Opaque-body contract (i-1788671083-c): returns the RAW jsonb body text;

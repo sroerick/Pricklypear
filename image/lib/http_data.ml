@@ -146,10 +146,15 @@ let data_index_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
   let orphans =
     List.filter (fun n -> not (List.mem n declared_set)) orphan_names
   in
+  (* One grouped scan instead of a per-type COUNT (log/issues /data 49s). *)
+  let counts = Crud.counts_by_type store in
+  let count_of name =
+    match List.assoc_opt name counts with Some n -> n | None -> 0
+  in
   let rows =
     List.map
       (fun (name, fields) ->
-        let n = Crud.count_by_type store ~type_name:name in
+        let n = count_of name in
         (HTML.tr [] [
              HTML.td [] [
                HTML.a [HTML.href "/data/%s" name] [txt "%s" name];
@@ -167,7 +172,7 @@ let data_index_page (session : Session.t) (reqd : Httpun.Reqd.t) : unit =
   let orphan_rows =
     List.map
       (fun name ->
-        let n = Crud.count_by_type store ~type_name:name in
+        let n = count_of name in
         (HTML.tr [] [
              HTML.td [] [
                HTML.a [HTML.href "/data/%s" name] [txt "%s" name];

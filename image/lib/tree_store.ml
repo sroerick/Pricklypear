@@ -1366,8 +1366,23 @@ let move_subtree (conn : Store_db.conn) ~(old_path : string) ~(new_path : string
            | _ -> (Error "move_subtree: failed"))
 
 (** Lightweight note index rows: (uuid, fields_json) for kind=note under prefix.
-    fields_json has slug/title/tags/kind/day/folder/_path — no outline. *)
+    fields_json has slug/title/tags/kind/day/folder/_path — outline is
+    "[]" by default (the /notes UI folds these rows on the request path;
+    outlines are the fat field).
+    [~with_outline:true] (tree/note-index-full) carries the REAL outline,
+    reconstructed from the note's heading nodes (data.note.<user>.<slug>
+    .h.<id> tree, kind='heading', body id/title/body/todo) — the same
+    reconstruction notes/tree/load-outline does per note in Nopales, but
+    ONE query for the whole subtree instead of per-note walks.
+    log/issues "note-index omits outline → From-notes scrape silently
+    dead": the todo scrape folds index rows and outline/decode
+    (dict-get f "outline"), so every note decoded to an empty tree and
+    the scrape found zero todos. Scrapes use the full variant; the flat
+    UI keeps the light rows. The emitted outline JSON is exactly
+    outline/encode's format (5-field node lists), so outline/decode and
+    outline/todos consume it unchanged. *)
 let list_note_index (conn : Store_db.conn) ~(prefix : string) ?(limit : int = 2000)
+    ?(with_outline : bool = false)
     () : (string * string) list =
   if not (valid_path prefix) then []
   else
@@ -1378,9 +1393,89 @@ let list_note_index (conn : Store_db.conn) ~(prefix : string) ?(limit : int = 20
       ^ "coalesce(payload #>> '{body,title}', ''), "
       ^ "coalesce(payload #>> '{body,tags}', ''), "
       ^ "coalesce(payload #>> '{body,kind}', 'note'), "
-      ^ "coalesce(payload #>> '{body,day}', '') "
+      ^ "coalesce(payload #>> '{body,day}', ''), "
+      ^ "coalesce(payload #>> '{body,body}', '') "
       ^ "FROM tree_nodes WHERE path <@ $1::ltree AND kind = 'note' "
       ^ "ORDER BY path::text ASC LIMIT $2"
+    in
+    (* Full variant only: one snapshot of ALL heading nodes under the
+       prefix (path-ASC), linked bottom-up by parent path. A heading
+       path is <note-path>.h.<id>[.h.<id>…]; its parent is the path
+       minus the last two labels. *)
+    let headings : (string * (string * string * string * string)) list =
+      if not with_outline then []
+      else
+        let hsql =
+          "SELECT path::text, "
+          ^ "coalesce(payload #>> '{body,id}', ''), "
+          ^ "coalesce(payload #>> '{body,title}', ''), "
+          ^ "coalesce(payload #>> '{body,body}', ''), "
+          ^ "coalesce(payload #>> '{body,todo}', '') "
+          ^ "FROM tree_nodes WHERE path <@ $1::ltree AND kind = 'heading' "
+          ^ "ORDER BY path::text ASC LIMIT 200000"
+        in
+        let hrows =
+          Store_db.exec conn ~params:[ Pgx.Value.of_string prefix ] hsql
+        in
+        List.filter_map
+          (fun row ->
+            match row with
+            | [ hp; id_c; t_c; b_c; td_c ] ->
+                (match Pgx.Value.to_string hp, Pgx.Value.to_string id_c,
+                        Pgx.Value.to_string t_c, Pgx.Value.to_string b_c,
+                        Pgx.Value.to_string td_c
+                with
+                 | Some hp, Some id, Some t, Some b, Some td ->
+                     Some (hp, (id, t, b, td))
+                 | _ -> None)
+            | _ -> None)
+          hrows
+    in
+    (* children map: parent path -> child heading paths (path-ASC order
+       preserved by the single ordered pass). *)
+    let kids_of : (string, string list) Hashtbl.t =
+      Hashtbl.create (max 64 (List.length headings))
+    in
+    let node_of : (string, string * string * string * string) Hashtbl.t =
+      Hashtbl.create (max 64 (List.length headings))
+    in
+    List.iter
+      (fun (hp, fields) ->
+        Hashtbl.replace node_of hp fields;
+        let labels = String.split_on_char '.' hp in
+        let parent =
+          match List.rev labels with
+          | _ :: _ :: rev_up -> String.concat "." (List.rev rev_up)
+          | _ -> hp
+        in
+        let prev = Option.value (Hashtbl.find_opt kids_of parent) ~default:[] in
+        Hashtbl.replace kids_of parent (prev @ [ hp ]))
+      headings;
+    let rec encode_outline (root_path : string) (title : string)
+        (root_body : string) : Yojson.Safe.t =
+      let kids =
+        match Hashtbl.find_opt kids_of root_path with
+        | None -> []
+        | Some paths -> List.map encode_heading paths
+      in
+      `List [ `String "root"; `String title; `String root_body; `String "";
+              `List kids ]
+    and encode_heading (hp : string) : Yojson.Safe.t =
+      let id, t, b, td = Hashtbl.find node_of hp in
+      let kids =
+        match Hashtbl.find_opt kids_of hp with
+        | None -> []
+        | Some paths -> List.map encode_heading paths
+      in
+      `List [ `String id; `String t; `String b; `String td; `List kids ]
+    in
+    let outline_root_of (note_path : string) (title : string) (nbody : string)
+        : Yojson.Safe.t =
+      (* only headings directly under THIS note path belong to it; a
+         heading whose parent chain climbs through another note is not
+         possible (notes are not nested), but the prefix check keeps
+         foreign headings out regardless. *)
+      encode_outline note_path title nbody
     in
     let rows =
       Store_db.exec conn
@@ -1403,7 +1498,7 @@ let list_note_index (conn : Store_db.conn) ~(prefix : string) ?(limit : int = 20
     in
     (List.filter_map
          (function
-           | [ path_c; uuid_c; slug_c; title_c; tags_c; kind_c; day_c ] ->
+           | [ path_c; uuid_c; slug_c; title_c; tags_c; kind_c; day_c; outline_c ] ->
                (match
                   Pgx.Value.to_string path_c,
                   Pgx.Value.to_string uuid_c,
@@ -1411,12 +1506,20 @@ let list_note_index (conn : Store_db.conn) ~(prefix : string) ?(limit : int = 20
                   Pgx.Value.to_string title_c,
                   Pgx.Value.to_string tags_c,
                   Pgx.Value.to_string kind_c,
-                  Pgx.Value.to_string day_c
+                  Pgx.Value.to_string day_c,
+                  Pgx.Value.to_string outline_c
                 with
-                | Some path, Some uuid, Some slug, Some title, Some tags, Some kind, Some day
+                | Some path, Some uuid, Some slug, Some title, Some tags, Some kind, Some day,
+                  Some nbody
                   ->
                     let folder = folder_of path in
                     let id = if uuid = "" then path else uuid in
+                    let outline =
+                      if with_outline then
+                        Yojson.Safe.to_string
+                          (outline_root_of path title nbody)
+                      else "[]"
+                    in
                     let fields =
                       Yojson.Safe.to_string
                         (`Assoc
@@ -1426,7 +1529,7 @@ let list_note_index (conn : Store_db.conn) ~(prefix : string) ?(limit : int = 20
                            ; ("kind", `String kind)
                            ; ("day", `String day)
                            ; ("folder", `String folder)
-                           ; ("outline", `String "[]")
+                           ; ("outline", `String outline)
                            ; ("_path", `String path)
                            ])
                     in
