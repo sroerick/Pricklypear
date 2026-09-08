@@ -46,6 +46,23 @@ filed in `/issues`: `notes/doc/get` ~80s on big docs; argon2id verify
 per Basic-auth request (~0.5-1s/request). Live details: notes doc
 `agents` → "Sessions & lazy env (2026-08-21)".
 
+### 2026-09-08 perf batch (four log/issues, deploys 81c0606 + fe78dbe)
+
+`function_stat` telemetry LEFT the object tree (migration 031):
+dedicated table, plain INSERT flush, set-based retention (newest 1000).
+TELEMETRY IS NOT CONTENT — never store it as tree datums, and never
+bulk-delete tree datum rows per-row on prod (~1s/row: mirrors + RLS +
+versions; a 54k-row delete was a 25-minute transaction that took prod
+down — the rc.d health probe now has a 5s timeout so the watchdog
+cannot hang). Also in the batch: `tree/note-index-full` (real outlines
+for scrapes; the plain index stays light for the /notes UI), a
+content-keyed JSON parse memo under the dict prims, one grouped COUNT
+for `/data`, `branch_status` from live tree rows + a def_gen-SUM stamp
+cache (`/branches` warm ~1.3s), and the load-library skip map
+fingerprinting chain-effective bodies (+ begin-wrapped top-level
+defines persist). Details: notes doc `agents` → "Perf batch + incident
+(2026-09-08)".
+
 ## Live image eval (laptop / pi agent)
 
 **Entry point for agents:** the public bootstrap docs on the running host — not this file as the full playbook.
