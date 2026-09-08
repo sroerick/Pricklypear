@@ -39,8 +39,16 @@ rc_check() {
 	# EADDRINUSE child — pidfile checks turned that into a restart loop
 	# on 2026-08-21. A healthy listener IS a healthy service; rc_stop's
 	# belt already culls strays during intentional restarts.
+	#
+	# BOUNDED (incident 2026-09-08): the bare `ftp -o -` probe hung
+	# forever when the image accepted connections but could not answer
+	# (store conn-mutex held by a runaway query) — the watchdog cron
+	# hung on the same probe, so NOTHING self-healed. curl (runtime
+	# package) with -m 5 makes the probe fail fast so rcctl check
+	# returns and the watchdog can restart. A wedged-but-listening
+	# image is DOWN by this definition.
 	port="${PP_HTTP_PORT:-18080}"
-	body="$(ftp -o - "http://127.0.0.1:${port}/health" 2>/dev/null)" || return 1
+	body="$(curl -sS -m 5 "http://127.0.0.1:${port}/health" 2>/dev/null)" || return 1
 	print -r -- "${body}" | grep -q '"ok"[[:space:]]*:[[:space:]]*true' || return 1
 }
 

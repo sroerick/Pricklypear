@@ -25,9 +25,23 @@ let flush_secs = 30.0
    flush fiber, throttled to once per [prune_secs] (one DELETE over the
    datum rows of type function_stat; the deferred mirrors keep the
    scaffolding table in lockstep). Loss is fine — perf stats, not
-   ledger. *)
+   ledger.
+
+   CHUNKED (incident 2026-09-08): the first prod pass fired ONE delete
+   of ~54k rows; per-row RLS (PLpgSQL tree_path_in_member_space) + the
+   deferred mirror triggers turned it into a 25-minute transaction that
+   held the store's per-connection mutex, starved every other DB fiber,
+   hung the health probe, and took prod down (the rc.d watchdog probe
+   had no timeout either, so nothing self-healed — fixed separately in
+   scripts/rc.d/pricklypear). The prune now deletes at most
+   [prune_chunk] rows per flush beat: each transaction is ~1-2s, the
+   backlog drains at ~4k rows/min, steady-state is one small chunk
+   every ~10min. Set PP_FUNCSTAT_PRUNE=0 to disable entirely. *)
 let keep_rows = 1000
 let prune_secs = 600.0
+let prune_chunk = 2000
+
+let enabled () = Sys.getenv_opt "PP_FUNCSTAT_PRUNE" <> Some "0"
 
 let buf : entry Queue.t = Queue.create ()
 let mu : Eio.Mutex.t = Eio.Mutex.create ()
@@ -61,29 +75,36 @@ let flush ~(store : Store.t) : unit =
                (Printexc.to_string exn)))
         xs
 
-(** Retention: keep only the newest [keep_rows] function_stat datum rows.
-    DELETE via OFFSET on the newest-first index scan; the mirror triggers
-    cascade to the data_rows scaffolding table. Best-effort: failures are
-    logged and retried on the next prune (never kills the flush loop). *)
-let prune ~(store : Store.t) : unit =
+(** Retention: delete at most [prune_chunk] function_stat datum rows
+    beyond the newest [keep_rows] (OFFSET on the newest-first scan;
+    mirror triggers cascade to the scaffolding table). Returns the
+    deleted count; best-effort — failures are logged and retried on the
+    next beat (never kills the flush loop). One chunk per call keeps
+    each transaction ~1-2s so the store mutex is never held for long. *)
+let prune_once ~(store : Store.t) : int =
   let sql =
     "DELETE FROM tree_nodes t USING ( " ^
     "  SELECT ctid FROM tree_nodes " ^
     "  WHERE kind = 'datum' AND type_name = 'function_stat' " ^
-    "  ORDER BY created_at DESC OFFSET $1 " ^
+    "  ORDER BY created_at DESC OFFSET $1 LIMIT $2 " ^
     ") victim WHERE t.ctid = victim.ctid"
   in
-  (match Io_lwt.Db.current_conn store with
-   | None -> ()
-   | Some c ->
-       (try
-          ignore
-            (Store_db.exec c
-               ~params:[ Pgx.Value.of_int keep_rows ]
-               sql)
-        with exn ->
-          Printf.eprintf "[function_stats] prune failed: %s\n%!"
-            (Printexc.to_string exn)))
+  match Io_lwt.Db.current_conn store with
+  | None -> 0
+  | Some c ->
+      (try
+         match
+           Store_db.exec c
+             ~params:[ Pgx.Value.of_int keep_rows;
+                       Pgx.Value.of_int prune_chunk ]
+             sql
+         with
+         | [ [ cnt ] ] -> (match Pgx.Value.to_int cnt with Some n -> n | None -> 0)
+         | _ -> 0
+       with exn ->
+         Printf.eprintf "[function_stats] prune failed: %s\n%!"
+           (Printexc.to_string exn);
+         0)
 
 let last_prune = ref 0.0
 
@@ -103,16 +124,18 @@ let flush_loop ~(clock : _ Eio.Time.clock) ~(store : Store.t) : unit =
        Printf.eprintf "[function_stats] flush failed: %s\n%!"
          (Printexc.to_string exn));
     (* Retention rides the flush cadence but at its own (slower) beat:
-       ~10min. Runs unconditionally on the first pass so a deployed image
-       prunes the accumulated backlog (~54k rows on prod, 2026-09-08)
-       without waiting. *)
+       ~10min, ONE bounded chunk per beat (see prune_once — the unchunked
+       first pass took prod down, 2026-09-08). Runs on the first pass so
+       a deployed image starts draining the accumulated backlog
+       (~54k rows on prod) immediately, in ~2s-per-beat slices. *)
     let now = Eio.Time.now clock in
     if prune_due now then begin
       last_prune := now;
-      (try prune ~store
-       with exn ->
-         Printf.eprintf "[function_stats] prune failed: %s\n%!"
-           (Printexc.to_string exn))
+      if enabled () then begin
+        let n = prune_once ~store in
+        if n > 0 then
+          Printf.eprintf "[function_stats] pruned %d function_stat rows\n%!" n
+      end
     end;
     loop ()
   in
