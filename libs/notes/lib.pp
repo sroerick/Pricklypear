@@ -1,4 +1,4 @@
-;; package notes -- exported from live branch system/main
+;; package notes -- exported from live branch admin/personal
 ;; Sync: scripts/pp_sync.py pull|push
 
 (define notes/all-todos
@@ -110,6 +110,104 @@
               (string-append "/notes?slug=" slug)))
           (outline/kids (notes/get-outline n))))))
   "Top-level outline headings of one doc, each a leaf to the doc view.")
+
+(define notes/cache-fresh?
+  (lambda
+    (fields ttl)
+    (if
+      (null? fields)
+      #f
+      (let
+        ((ts (dict-get fields "ts")))
+        (if
+          (null? ts)
+          #f
+          (let
+            ((age (- (now) (parse-int (as-str ts)))))
+            (if (> age ttl) #f #t))))))
+  "whether the cache is within ttl seconds")
+
+(define notes/cache-get
+  (lambda
+    (fields)
+    (let
+      ((v (dict-get fields "html")))
+      (if (null? v) "" (as-str v))))
+  "cached html from a row fields")
+
+(define notes/cache-put
+  (lambda
+    (key html)
+    (let
+      ((row (notes/cache-row key))
+        (fields
+          (dict-set*
+            "{}"
+            (list
+              "key"
+              key
+              "ts"
+              (as-str (now))
+              "req"
+              (as-str (now))
+              "html"
+              html))))
+      (seq
+        (if
+          (null? row)
+          (create (quote notes-cache) fields)
+          (update (quote notes-cache) (car row) fields))
+        "stored")))
+  "upsert one cache row (create or update by key)")
+
+(define notes/cache-request
+  (lambda
+    (key job)
+    (let
+      ((row (notes/cache-row key)))
+      (let
+        ((fields (if (null? row) (list) (cdr row))))
+        (let
+          ((req
+            (if
+              (null? fields)
+              0
+              (let
+                ((r (dict-get fields "req")))
+                (if (null? r) 0 (parse-int (as-str r)))))))
+          (if
+            (> (- (now) req) 10)
+            (seq
+              (if
+                (null? row)
+                (create
+                  (quote notes-cache)
+                  (dict-set*
+                    "{}"
+                    (list
+                      "key"
+                      key
+                      "req"
+                      (as-str (now))
+                      "ts"
+                      "0"
+                      "html"
+                      "")))
+                (update
+                  (quote notes-cache)
+                  (car row)
+                  (dict-set* (cdr row) (list "req" (as-str (now))))))
+              (submit-job job "null"))
+            "already-requested")))))
+  "ask the UNBUDGETED jobs runner to refresh; bounded to one request/10s so renders never compute inline")
+
+(define notes/cache-row
+  (lambda
+    (key)
+    (let
+      ((rs (find-rows (quote notes-cache) "key" key 1)))
+      (if (null? rs) (list) (car rs))))
+  "cache row for key (or ())")
 
 (define notes/capture
   (lambda
@@ -1305,6 +1403,49 @@
       (notes/list)))
   "All visible (non-hidden) notes for the index.")
 
+(define notes/issues-cache-refresh
+  (lambda
+    ()
+    (let
+      ((tree (notes/issues-fast-tree)))
+      (let
+        ((html
+          (if
+            (null? tree)
+            ""
+            (html/join
+              (list
+                (html/h2 "Register")
+                (html/ul
+                  (html/attr "class" "card")
+                  (notes/issues/nodes-html (outline/kids tree))))))))
+        (seq (notes/cache-put "issues-list" html) "refreshed"))))
+  "JOB (unbudgeted): rebuild the register HTML from the fast snapshot outline and store it")
+
+(define notes/issues-fast-tree
+  (lambda
+    ()
+    (let
+      ((hits (tree/find-by "note" "slug" "log/issues" 1)))
+      (if
+        (null? hits)
+        (list)
+        (let
+          ((n (notes/tree/parse (car hits))))
+          (if
+            (null? n)
+            (list)
+            (let
+              ((b (notes/tree/body n))
+                (path (as-str (dict-get n "path"))))
+              (outline/node*
+                "root"
+                (as-str (dict-get b "title"))
+                ""
+                ""
+                (notes/tree/heading-kids-snap path))))))))
+  "register outline via ONE subtree snapshot (job-only; the doc/get walk is 155 queries)")
+
 (define notes/issues/add
   (lambda
     (kind title body)
@@ -1350,19 +1491,19 @@
   (lambda
     ()
     (let
-      ((n (notes/doc/get "log/issues")))
+      ((found (tree/find-by "note" "slug" "log/issues" 1)))
       (if
-        (null? n)
-        (seq
-          (notes/doc/upsert
-            "log/issues"
-            "log/issues"
-            (notes/empty-outline "log/issues")
-            "log"
-            "issue"
-            "")
-          (notes/doc/get "log/issues"))
-        n))))
+        (null? found)
+        (notes/doc/upsert
+          "log/issues"
+          "log/issues"
+          "log/issues"
+          (notes/empty-outline "log/issues")
+          "log"
+          "issue"
+          "")
+        (car found))))
+  "ensure the register exists via ONE find-by (was: full doc/get walk, 100-300s under DB degradation)")
 
 (define notes/issues/form
   (lambda
@@ -1415,37 +1556,56 @@
               (request-param "kind")
               (request-param "title")
               (request-param "body"))
+            (notes/cache-request
+              "issues-list"
+              "notes/issues-cache-refresh")
             (redirect "/issues")))
         ((string-eq action "issue-resolve")
           (seq
             (notes/issues/resolve (request-param "id"))
+            (notes/cache-request
+              "issues-list"
+              "notes/issues-cache-refresh")
             (redirect "/issues")))
         ((string-eq action "issue-reopen")
           (seq
             (notes/issues/reopen (request-param "id"))
+            (notes/cache-request
+              "issues-list"
+              "notes/issues-cache-refresh")
             (redirect "/issues")))
         ((string-eq action "issue-delete")
           (seq
             (notes/issues/delete (request-param "id"))
+            (notes/cache-request
+              "issues-list"
+              "notes/issues-cache-refresh")
             (redirect "/issues")))
-        (else (redirect "/issues"))))))
+        (else (redirect "/issues")))))
+  "mutations bump the cache (bounded request) so the next render requests a job refresh")
 
 (define notes/issues/list-html
   (lambda
     ()
     (let
-      ((n (notes/doc/get "log/issues")))
-      (if
-        (null? n)
-        (html/p* (html/attr "class" "muted") "No issues yet.")
+      ((row (notes/cache-row "issues-list")))
+      (let
+        ((fields (if (null? row) (list) (cdr row))))
         (let
-          ((tree (notes/doc/outline n)))
-          (html/join
-            (list
-              (html/h2 "Register")
-              (html/ul
-                (html/attr "class" "card")
-                (notes/issues/nodes-html (outline/kids tree))))))))))
+          ((html
+            (if
+              (notes/cache-fresh? fields 300)
+              (notes/cache-get fields)
+              (seq
+                (notes/cache-request
+                  "issues-list"
+                  "notes/issues-cache-refresh")
+                (notes/cache-get fields)))))
+          (if
+            (string-eq html "")
+            (html/p* (html/attr "class" "muted") "No issues yet.")
+            html)))))
+  "register HTML from the cache row; refresh requested when stale (was: 155-query walk per render, 3-250s)")
 
 (define notes/issues/node-html
   (lambda
@@ -3614,6 +3774,17 @@
           (list "margin-top" ".5rem")))))
   "CSS stylesheet for the drawer-style folder tree.")
 
+(define notes/tree/dots
+  (lambda
+    (s i acc)
+    (let
+      ((pos (string-find-pos s "." i 1)))
+      (if
+        (< pos 0)
+        acc
+        (notes/tree/dots s (+ pos 1) (+ acc 1)))))
+  "count dots in s from index i (tail-recursive)")
+
 (define notes/tree/enabled?
   (lambda () #t)
   "Whether the one-tree storage path is enabled.")
@@ -3659,6 +3830,28 @@
         ()
         (notes/tree/node->row (car hits) #t))))
   "Tree row for a note slug, or () if absent.")
+
+(define notes/tree/flat-step
+  (lambda
+    (rest stack n)
+    (let
+      ((b (notes/tree/body n)))
+      (let
+        ((p (as-str (dict-get n "path"))))
+        (let
+          ((d (notes/tree/dots p 0 0)))
+          (let
+            ((node
+              (outline/node*
+                (as-str (dict-get b "id"))
+                (as-str (dict-get b "title"))
+                (as-str (dict-get b "body"))
+                (as-str (dict-get b "todo"))
+                (list))))
+            (notes/tree/of-flat
+              rest
+              (notes/tree/stack-pop stack d node)))))))
+  "process one parsed heading node: build outline node, attach at its dot-depth, continue")
 
 (define notes/tree/folder-label
   (lambda
@@ -3723,6 +3916,19 @@
       (list)
       (tree/list parent-path 1)))
   "Recursively load heading nodes under a parent path into an outline.")
+
+(define notes/tree/heading-kids-snap
+  (lambda
+    (parent-path)
+    (let
+      ((flat (tree/list parent-path)))
+      (let
+        ((stack
+          (notes/tree/of-flat
+            flat
+            (list (cons -1 (outline/node* "root" "" "" "" (list)))))))
+        (outline/kids (cdr (car stack))))))
+  "FAST outline builder from ONE (tree/list path) subtree snapshot. Job-only: 380k ticks for the 156-node issues register (json-parse dominates) would 500 route renders; the old recursive walk is 155 queries (minutes when DB is degraded, 1.5s healthy). Used by notes/issues-cache-refresh (unbudgeted job).")
 
 (define notes/tree/join-slash
   (lambda
@@ -3815,6 +4021,23 @@
           (notes/tree/split-folder folder))))
       (string-append base "." (tree/path-label slug))))
   "Tree path for a slug within a folder.")
+
+(define notes/tree/of-flat
+  (lambda
+    (flat stack)
+    (if
+      (null? flat)
+      stack
+      (let
+        ((n (notes/tree/parse (car flat))))
+        (if
+          (null? n)
+          (notes/tree/of-flat (cdr flat) stack)
+          (if
+            (string-eq (as-str (dict-get n "kind")) "heading")
+            (notes/tree/flat-step (cdr flat) stack n)
+            (notes/tree/of-flat (cdr flat) stack))))))
+  "single pass over a path-ASC subtree snapshot; stack keyed by dot-depth (subtrees are lexicographically contiguous in path order)")
 
 (define notes/tree/outline-paths
   (lambda
@@ -4005,18 +4228,35 @@
       (string-split (as-str folder) "/")))
   "Split a folder into non-empty segments.")
 
+(define notes/tree/stack-pop
+  (lambda
+    (stack d node)
+    (if
+      (null? stack)
+      (list (cons d node))
+      (if
+        (>= (car (car stack)) d)
+        (notes/tree/stack-pop (cdr stack) d node)
+        (let
+          ((top (car stack)))
+          (cons
+            (cons
+              (car top)
+              (outline/set-kids
+                (cdr top)
+                (append (outline/kids (cdr top)) (list node))))
+            (cdr stack))))))
+  "pop completed subtrees (dot-depth >= d), append node to the new top's kids, push (depth . node). Popped entries are already linked into their parents - discarding them is correct.")
+
 (define notes/tree/style
   (lambda () (html/tag "style" "" (notes/tree/style-css))))
 
-;; Zero-arg function, not a value define: the additive boot-seed skip
-;; leaves an existing sibling (notes/tree-css) unbound in the seed env,
-;; so a value define calling it raises unbound on warm DBs
-;; (i-1788685367, the rb/plan-config class).
-(define (notes/tree/style-css)
-  (string-append
-    (css/render notes/tree-css)
-    (css/render notes/tree-css-patch)
-    (css/render (notes/tree/details-css))))
+(define notes/tree/style-css
+  (lambda ()
+    (string-append
+      (css/render notes/tree-css)
+      (css/render notes/tree-css-patch)
+      (css/render (notes/tree/details-css)))))
 
 (define notes/tree/write-heading
   (lambda
