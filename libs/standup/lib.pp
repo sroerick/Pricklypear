@@ -1,10 +1,15 @@
 ;; package standup -- daily 09:00 Mountain standup brief (gregor)
-;; Delivery: one line to the lobby + one ntfy push. Data: lobby chat
-;; history + gregor-visible todo-item rows (calendar and full board
+;; Delivery: multi-line brief to the lobby + one ntfy push. Data: lobby
+;; chat history + gregor-visible todo-item rows (calendar and full board
 ;; coverage wait on shared-data-spaces S1/S2 grants).
 ;; Scheduling: cron is UTC-only in the kernel, so 09:00 MDT = "0 15 * * *".
 ;; After DST ends (first Sunday of November) flip the spec to "0 16 * * *".
 ;; The schedule row self-heals: standup/run re-upserts itself each run.
+;;
+;; Push ordering: the ntfy push runs FIRST and raises on non-ok so the
+;; jobs runner retries transient failures (observed: ntfy.sh returned a
+;; one-off 404 on 09-08); the lobby post follows, guarded. The job result
+;; is the brief plus a final "push ok" line for self-diagnostics.
 ;;
 ;; Topic: this lib reads the topic from a caller-garden ntfy-config row
 ;; (see libs/ntfy/lib.pp). gregor keeps one in his own garden; nothing
@@ -22,12 +27,6 @@
         (string-append (substring s 0 n) "...")
         s)))
 
-(define standup/last-row
-  (lambda (l)
-    (if (null? l)
-        ()
-        (if (null? (cdr l)) (car l) (standup/last-row (cdr l))))))
-
 (define standup/titles
   (lambda (l n)
     (if (null? l)
@@ -37,10 +36,10 @@
             (let ((t (string-append
                        "- "
                        (standup/short
-                         (as-str (dict-get (cdr (car l)) "title")) 42))))
+                         (as-str (dict-get (cdr (car l)) "title")) 46))))
               (if (if (null? (cdr l)) #t (< n 2))
                   t
-                  (string-append t " | " (standup/titles (cdr l) (- n 1)))))))))
+                  (string-append t "\n" (standup/titles (cdr l) (- n 1)))))))))
 
 (define standup/filter-open
   (lambda (l)
@@ -55,10 +54,10 @@
   (lambda ()
     (let ((open (standup/filter-open (rows 'todo-item 200))))
       (string-append
-        "open cards: "
+        "Open cards: "
         (as-str (standup/count open))
         (if (> (standup/count open) 0)
-            (string-append ": " (standup/titles open 3))
+            (string-append "\n" (standup/titles open 3))
             "")))))
 
 (define standup/last-other
@@ -77,20 +76,23 @@
     (let ((h (chat/history "lobby")))
       (let ((lastf (standup/last-other h)))
         (if (null? lastf)
-            "lobby: quiet"
+            "Lobby: quiet"
             (string-append
-              "lobby: "
+              "Lobby: "
               (as-str (standup/count h))
-              " msgs; last: "
-              (standup/short (as-str (dict-get (cdr lastf) "body")) 90)))))))
+              " msgs; last "
+              (as-str (dict-get (cdr lastf) "from"))
+              ": "
+              (standup/short (as-str (dict-get (cdr lastf) "body")) 80)))))))
 
 (define standup/brief
   (lambda ()
     (string-append
-      "Standup: "
+      "Standup:\n"
       (guard (lambda (e) "lobby: n/a") (standup/lobby-line))
-      " | "
-      (guard (lambda (e) "open cards: n/a") (standup/todo-line)))))
+      "\n"
+      (guard (lambda (e) "open cards: n/a") (standup/todo-line))
+      "\nhttps://pricklypear.rocks/chat")))
 
 (define standup/ntfy-push
   (lambda (body)
@@ -104,6 +106,7 @@
       (schedule "gregor-standup" "0 15 * * *" "standup/run" "[]")
       (let ((b (standup/brief)))
         (seq
-          (standup/ntfy-push b)
+          (let ((resp (standup/ntfy-push b)))
+            (if (dict-get resp "ok") resp (error "ntfy push failed")))
           (guard (lambda (e) e) (chat/say-in "lobby" b))
-          (string-append b " | push=ok")))))))
+          (string-append b "\npush ok")))))))
