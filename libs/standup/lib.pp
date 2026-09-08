@@ -61,17 +61,28 @@
             (string-append ": " (standup/titles open 3))
             "")))))
 
+(define standup/last-other
+  (lambda (l)
+    (if (null? l)
+        ()
+        (let ((rest (standup/last-other (cdr l))))
+          (if (null? rest)
+              (if (string-eq (as-str (dict-get (cdr (car l)) "from")) "gregor")
+                  ()
+                  (car l))
+              rest)))))
+
 (define standup/lobby-line
   (lambda ()
     (let ((h (chat/history "lobby")))
-      (if (null? h)
-          "lobby: quiet"
-          (let ((lastf (cdr (standup/last-row h))))
+      (let ((lastf (standup/last-other h)))
+        (if (null? lastf)
+            "lobby: quiet"
             (string-append
               "lobby: "
               (as-str (standup/count h))
               " msgs; last: "
-              (standup/short (as-str (dict-get lastf "body")) 90)))))))
+              (standup/short (as-str (dict-get (cdr lastf) "body")) 90)))))))
 
 (define standup/brief
   (lambda ()
