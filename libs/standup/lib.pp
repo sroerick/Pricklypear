@@ -94,11 +94,9 @@
 
 (define standup/ntfy-push
   (lambda (body)
-    (guard
-      (lambda (e) (dict-set* "{}" "status" "guard-err"))
-      (seq
-        (load-library "ntfy")
-        (ntfy/send "Standup" body)))))
+    (seq
+      (load-library "ntfy")
+      (ntfy/send "Standup" body))))
 
 (define standup/run
   (lambda ()
@@ -106,6 +104,6 @@
       (schedule "gregor-standup" "0 15 * * *" "standup/run" "[]")
       (let ((b (standup/brief)))
         (seq
+          (standup/ntfy-push b)
           (guard (lambda (e) e) (chat/say-in "lobby" b))
-          (let ((resp (standup/ntfy-push b)))
-            (string-append b " | push=" (as-str (dict-get resp "status")))))))))
+          (string-append b " | push=ok")))))))
