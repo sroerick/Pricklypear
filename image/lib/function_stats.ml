@@ -6,7 +6,15 @@
     http-robustness's ops-incidents rule: request path pushes to an
     in-process ring (drop-oldest at capacity), a background fiber
     flushes at most once every [flush_secs]. Crash loss is fine —
-    these are perf stats, not ledger. *)
+    these are perf stats, not ledger.
+
+    STORAGE (migration 031, incident 2026-09-08): telemetry lives in the
+    DEDICATED [function_stat] table — NOT tree datums. The datum path
+    paid the full tree write per row (mirrors, RLS, tree_versions) and
+    made every retention delete a 25-minute transaction at 76k rows that
+    took prod down twice. Plain rows: flush = one INSERT per entry,
+    retention = plain DELETE (milliseconds, no triggers). The only
+    reader is the per-fn "last run" widget (Crud.function_stat_last). *)
 
 type entry = {
   fn : string;
@@ -17,29 +25,12 @@ type entry = {
 let capacity = 512
 let flush_secs = 30.0
 
-(* Retention (log/issues "function_stat unbounded — 55,775 rows"): the
-   ring only bounded the WRITE path; the TABLE grew forever and dragged
-   every datum read (and /data, /branches) down with it. The only reader
-   is the per-fn "last run" widget (Crud.find_row ~latest:true), so
-   keep the newest [keep_rows] rows and drop the rest. Prune runs on the
-   flush fiber, throttled to once per [prune_secs] (one DELETE over the
-   datum rows of type function_stat; the deferred mirrors keep the
-   scaffolding table in lockstep). Loss is fine — perf stats, not
-   ledger.
-
-   CHUNKED (incident 2026-09-08): the first prod pass fired ONE delete
-   of ~54k rows; per-row RLS (PLpgSQL tree_path_in_member_space) + the
-   deferred mirror triggers turned it into a 25-minute transaction that
-   held the store's per-connection mutex, starved every other DB fiber,
-   hung the health probe, and took prod down (the rc.d watchdog probe
-   had no timeout either, so nothing self-healed — fixed separately in
-   scripts/rc.d/pricklypear). The prune now deletes at most
-   [prune_chunk] rows per flush beat: each transaction is ~1-2s, the
-   backlog drains at ~4k rows/min, steady-state is one small chunk
-   every ~10min. Set PP_FUNCSTAT_PRUNE=0 to disable entirely. *)
+(* Retention: keep the newest [keep_rows] rows. The delete is set-based
+   over plain rows (no triggers) — one statement, milliseconds, bounded
+   by the flush beat. PP_FUNCSTAT_PRUNE=0 disables (kept from the
+   2026-09-08 incident as a kill switch). *)
 let keep_rows = 1000
 let prune_secs = 600.0
-let prune_chunk = 2000
 
 let enabled () = Sys.getenv_opt "PP_FUNCSTAT_PRUNE" <> Some "0"
 
@@ -52,7 +43,7 @@ let push ~(fn : string) ~(fields_json : string) ~(author : string) : unit =
       if Queue.length buf >= capacity then ignore (Queue.pop buf);
       Queue.push { fn; fields_json; author } buf)
 
-(** Drain the ring into data_rows. Best-effort: a row that fails to
+(** Drain the ring into function_stat. Best-effort: a row that fails to
     insert is logged and dropped (stats must never kill the flush loop). *)
 let flush ~(store : Store.t) : unit =
   let pending =
@@ -64,30 +55,36 @@ let flush ~(store : Store.t) : unit =
   match pending with
   | [] -> ()
   | xs ->
-      List.iter
-        (fun e ->
-          (try
-             ignore
-               (Crud.create store ~type_name:"function_stat"
-                  ~fields_json:e.fields_json ~author:e.author)
-           with exn ->
-             Printf.eprintf "[function_stats] flush row failed: %s\n%!"
-               (Printexc.to_string exn)))
-        xs
+      let sql =
+        "INSERT INTO function_stat (fn, fields, author) " ^
+        "VALUES ($1, $2::jsonb, $3)"
+      in
+      match Io_lwt.Db.current_conn store with
+      | None -> ()
+      | Some c ->
+          List.iter
+            (fun e ->
+              (try
+                 ignore
+                   (Store_db.exec c
+                      ~params:[ Pgx.Value.of_string e.fn;
+                                Pgx.Value.of_string e.fields_json;
+                                Pgx.Value.of_string e.author ]
+                      sql)
+               with exn ->
+                 Printf.eprintf "[function_stats] flush row failed: %s\n%!"
+                   (Printexc.to_string exn)))
+            xs
 
-(** Retention: delete at most [prune_chunk] function_stat datum rows
-    beyond the newest [keep_rows] (OFFSET on the newest-first scan;
-    mirror triggers cascade to the scaffolding table). Returns the
-    deleted count; best-effort — failures are logged and retried on the
-    next beat (never kills the flush loop). One chunk per call keeps
-    each transaction ~1-2s so the store mutex is never held for long. *)
+(** Retention: keep only the newest [keep_rows] rows. Set-based DELETE
+    over plain rows — no mirrors, no RLS, no versions; returns the
+    deleted count; best-effort (failures logged, retried next beat). *)
 let prune_once ~(store : Store.t) : int =
   let sql =
-    "DELETE FROM tree_nodes t USING ( " ^
-    "  SELECT ctid FROM tree_nodes " ^
-    "  WHERE kind = 'datum' AND type_name = 'function_stat' " ^
-    "  ORDER BY created_at DESC OFFSET $1 LIMIT $2 " ^
-    ") victim WHERE t.ctid = victim.ctid"
+    "DELETE FROM function_stat f USING ( " ^
+    "  SELECT id FROM function_stat " ^
+    "  ORDER BY id DESC OFFSET $1 " ^
+    ") victim WHERE f.id = victim.id"
   in
   match Io_lwt.Db.current_conn store with
   | None -> 0
@@ -95,8 +92,7 @@ let prune_once ~(store : Store.t) : int =
       (try
          match
            Store_db.exec c
-             ~params:[ Pgx.Value.of_int keep_rows;
-                       Pgx.Value.of_int prune_chunk ]
+             ~params:[ Pgx.Value.of_int keep_rows ]
              sql
          with
          | [ [ cnt ] ] -> (match Pgx.Value.to_int cnt with Some n -> n | None -> 0)
@@ -123,11 +119,9 @@ let flush_loop ~(clock : _ Eio.Time.clock) ~(store : Store.t) : unit =
      with exn ->
        Printf.eprintf "[function_stats] flush failed: %s\n%!"
          (Printexc.to_string exn));
-    (* Retention rides the flush cadence but at its own (slower) beat:
-       ~10min, ONE bounded chunk per beat (see prune_once — the unchunked
-       first pass took prod down, 2026-09-08). Runs on the first pass so
-       a deployed image starts draining the accumulated backlog
-       (~54k rows on prod) immediately, in ~2s-per-beat slices. *)
+    (* Retention rides the flush cadence at its own (slower) beat:
+       ~10min. Runs on the first pass so a deployed image trims any
+       backlog immediately. *)
     let now = Eio.Time.now clock in
     if prune_due now then begin
       last_prune := now;

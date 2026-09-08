@@ -978,6 +978,27 @@ let count_by_type (store : Store.t) ~(type_name : string) : int =
             | None -> 0)
        | _ -> 0)
 
+(* function_stat telemetry (migration 031): the last measured run for
+   [fn], newest first — the /binding "last run" widget. Plain table, no
+   user scoping (server-wide perf telemetry; author is recorded). *)
+let function_stat_last (store : Store.t) ~(fn : string) : string option =
+  match Io_lwt.Db.current_conn store with
+  | None -> None
+  | Some conn ->
+      let sql =
+        "SELECT fields::text FROM function_stat " ^
+        "WHERE fn = $1 ORDER BY created_at DESC LIMIT 1"
+      in
+      (try
+         (match
+            Store_db.exec conn
+              ~params:[ Pgx.Value.of_string fn ]
+              sql
+          with
+          | [ [ fields ] ] -> Pgx.Value.to_string fields
+          | _ -> None)
+       with _ -> None)
+
 (* ONE grouped count over the datum view instead of count_by_type per
    type (log/issues "/data 49s"): the index page used to issue one
    sequential-scan COUNT per type (~40 of them, each with the ltree
