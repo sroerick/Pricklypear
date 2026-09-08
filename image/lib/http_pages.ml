@@ -37,21 +37,18 @@ let binding_observability_nodes (session : Session.t)
         db_prims
   in
   let stats_node =
-    match
-      Crud.find_row (Session.store session) ~type_name:"function_stat"
-        ~field:"fn" ~value:name ~latest:true
-    with
-    | Pricklypear_lisp.Ast.VStr fields_json ->
-        (try
-           let j = Yojson.Safe.from_string fields_json in
-           let open Yojson.Safe.Util in
-           let steps = member "steps" j |> to_int_option |> Option.value ~default:0 in
-           let prims = member "prim_calls" j |> to_int_option |> Option.value ~default:0 in
-           let dbh = member "db_hits" j |> to_int_option |> Option.value ~default:0 in
-           HTML.p [ HTML.class_ "meta last-run" ]
-             [ txt "last run: %d steps, %d prim calls, %d DB hits" steps prims dbh ]
-         with _ -> HTML.p [ HTML.class_ "muted" ] [ txt "" ])
-    | _ -> HTML.p [ HTML.class_ "muted" ] [ txt "(no measured run yet)" ]
+    (match Crud.function_stat_last (Session.store session) ~fn:name with
+     | Some fields_json ->
+         (try
+            let j = Yojson.Safe.from_string fields_json in
+            let open Yojson.Safe.Util in
+            let steps = member "steps" j |> to_int_option |> Option.value ~default:0 in
+            let prims = member "prim_calls" j |> to_int_option |> Option.value ~default:0 in
+            let dbh = member "db_hits" j |> to_int_option |> Option.value ~default:0 in
+            HTML.p [ HTML.class_ "meta last-run" ]
+              [ txt "last run: %d steps, %d prim calls, %d DB hits" steps prims dbh ]
+          with _ -> HTML.p [ HTML.class_ "muted" ] [ txt "" ])
+     | None -> HTML.p [ HTML.class_ "muted" ] [ txt "(no measured run yet)" ])
   in
   let explain_text =
     match Analyze.explain_function (Session.store session) ~fn_name:name with
