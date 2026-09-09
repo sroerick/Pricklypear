@@ -161,6 +161,58 @@ let register (t : t) (tbl : Primitives.t) : unit =
       | _ ->
           ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("find-rows", "need type and field/value pairs", "bad-args"))))));
 
+  (* (rows-author 'type [limit] [sort]) and
+     (find-rows-author 'type "f" "v" ... [limit] [sort]): author-visible
+     variants returning [id; author; fields] triples, so callers can bind
+     policy to the real data_rows.author instead of caller-written fields. *)
+  register_crud "rows-author"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr type_name ] ->
+          Crud.list_with_author t.store ~type_name ()
+      | [ Pricklypear_lisp.Ast.VStr type_name;
+          Pricklypear_lisp.Ast.VInt n ] ->
+          Crud.list_with_author t.store ~type_name ~limit:(Int64.to_int n) ()
+      | [ Pricklypear_lisp.Ast.VStr type_name;
+          Pricklypear_lisp.Ast.VStr sort ] ->
+          Crud.list_with_author t.store ~type_name ~sort:(Some sort) ()
+      | [ Pricklypear_lisp.Ast.VStr type_name;
+          Pricklypear_lisp.Ast.VInt n;
+          Pricklypear_lisp.Ast.VStr sort ] ->
+          Crud.list_with_author t.store ~type_name ~limit:(Int64.to_int n) ~sort:(Some sort) ()
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error
+                    (Pricklypear_lisp.Ast.Prim_error
+                       ("rows-author", "bad args (need type[, limit][, sort])", "bad-args")))));
+
+  register_crud "find-rows-author"
+    (fun args ->
+      let rec parse_filters acc = function
+        | [] -> Ok (List.rev acc, 500, None)
+        | [ Pricklypear_lisp.Ast.VInt n ] ->
+            Ok (List.rev acc, Int64.to_int n, None)
+        | [ Pricklypear_lisp.Ast.VStr s ] ->
+            Ok (List.rev acc, 500, Some s)
+        | [ Pricklypear_lisp.Ast.VInt n; Pricklypear_lisp.Ast.VStr s ] ->
+            Ok (List.rev acc, Int64.to_int n, Some s)
+        | Pricklypear_lisp.Ast.VStr f :: Pricklypear_lisp.Ast.VStr v :: rest ->
+            parse_filters ((f, v) :: acc) rest
+        | _ -> Error "find-rows-author: bad filter args"
+      in
+      match args with
+      | Pricklypear_lisp.Ast.VStr type_name :: rest ->
+          (match parse_filters [] rest with
+           | Error e ->
+               raise (Pricklypear_lisp.Ast.Interp_error
+                        (Pricklypear_lisp.Ast.Prim_error
+                           ("find-rows-author", e, "bad-args")))
+           | Ok (filters, limit, sort) ->
+               Crud.find_rows_with_author t.store ~type_name ~filters ~limit ~sort ())
+      | _ ->
+          ((raise (Pricklypear_lisp.Ast.Interp_error
+                     (Pricklypear_lisp.Ast.Prim_error
+                        ("find-rows-author", "need type and field/value pairs", "bad-args"))))));
+
   (* (find-text 'type "field" "needle" [limit]) *)
   register_crud "find-text"
     (fun args ->
