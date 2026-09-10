@@ -1284,6 +1284,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
       seed_additive = false;
       current_request = None;
       agent_branch_lock = false;
+      public_dispatch = false;
       is_admin = (manifest.username = "admin");
       auth_token = None;
       impact_queue = [];
@@ -1425,9 +1426,11 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
   Pricklypear_lisp.Env.define env "pi" (Pricklypear_lisp.Ast.VFloat Float.pi);
   Primitives.register prim_table "load-string"
     (fun args ->
+      if (!t).public_dispatch then
+        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("load-string", "denied in public-route handler dispatch", "denied"))));
       match args with
       | [ Pricklypear_lisp.Ast.VStr src ] ->
-          let r = load_string !t src in
+            let r = load_string !t src in
           (match r with
            | Ok msg -> (Pricklypear_lisp.Ast.VStr msg)
            | Error e ->
@@ -1440,6 +1443,8 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
      the Prim_call continuation twice → Continuation_already_resumed. *)
   Primitives.register prim_table "eval-string"
     (fun args ->
+      if (!t).public_dispatch then
+        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("eval-string", "denied in public-route handler dispatch", "denied"))));
       match args with
       | [ Pricklypear_lisp.Ast.VStr src ]
       | [ Pricklypear_lisp.Ast.VSymbol src ] ->
@@ -1483,6 +1488,8 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
                    ("example-eval", "need 1 source string", "bad-args")))));
   Primitives.register prim_table "load-library"
     (fun args ->
+      if (!t).public_dispatch then
+        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("load-library", "denied in public-route handler dispatch", "denied"))));
       match args with
       | [ Pricklypear_lisp.Ast.VStr name ] ->
           (* load_library busts shell cache + refresh_ui_shell once. *)
@@ -1507,6 +1514,18 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
           (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("reseed-package", "need package-str", "bad-args")))));
   let final_prims = prim_table in
   let kernel_catalog = Primitives.catalog prim_table in
+  (* i-1788670318: boot-time prim-classification assertion. Every
+     registered prim must appear in exactly one Effect capability
+     bucket. The whole fail-open class of i-1788669715 came from this
+     drifting silently — a prim absent from the lists inferred as
+     pure and sailed through the publish/AI gates. Fail construction
+     (session make runs at boot and per identity) on any drift. *)
+  (match Pricklypear_lisp.Effect.classification_errors (List.map fst kernel_catalog) with
+   | [] -> ()
+   | errs ->
+       raise (Failure
+                 ("prim classification drift (see lisp/lib/effect.ml): "
+                  ^ String.concat "; " errs)));
   (* Mutate the prims field in place (rather than building a fresh
      record via { (!t) with prims = ... }). Closures captured by
      register_session_control_prims / register_crud_prims read
@@ -1883,8 +1902,20 @@ let call_handler (t : t) ?request (handler_name : string)
   match Pricklypear_lisp.Env.lookup env handler_name with
   | None -> Handler_unbound
   | Some _fn ->
-      (* Evaluate (handler-name) — zero args. Re-uses eval's apply path
-         so VLambda closures AND VPrim dispatch both work. *)
+      (* i-1788669761 (TOCTOU): the publish-time gate is not enough —
+         (define h …) AFTER (route "/x" "h" 'public) re-points the route
+         with zero re-gate, and boot rehydrate loads stored routes
+         unchecked. Re-run the public-route effect gate here at every
+         dispatch of a handler currently bound to a public route. No
+         cache: define swaps the body under the same name, so a cached
+         verdict would be stale by construction. *)
+      let is_public_handler () =
+        Hashtbl.fold
+          (fun _route (h, vis) acc ->
+            acc || (vis = "public" && h = handler_name))
+          t.routes false
+      in
+      let public_gate_result = ref (Ok ()) in
       let run () =
         (try
       let v =
@@ -1900,13 +1931,36 @@ let call_handler (t : t) ?request (handler_name : string)
                msg;
              (Handler_error msg))
       in
-      (match request with
-       | None -> run ()
-       | Some req ->
-           t.current_request <- Some req;
-           Fun.protect
-             ~finally:(fun () -> t.current_request <- None)
-             run)
+      if is_public_handler () then begin
+        public_gate_result :=
+          Pricklypear_lisp.Route_gate.check_public_handler ~env handler_name;
+        (match !public_gate_result with
+         | Error msg -> Handler_error msg
+         | Ok () ->
+             (* i-1788669715: meta-eval prims are the capability reset
+                escape hatch; deny them for the duration of public
+                handler execution. *)
+             let prev = t.public_dispatch in
+             t.public_dispatch <- true;
+             let out =
+               (match request with
+                | None -> run ()
+                | Some req ->
+                    t.current_request <- Some req;
+                    Fun.protect
+                      ~finally:(fun () -> t.current_request <- None)
+                      run)
+             in
+             t.public_dispatch <- prev;
+             out)
+      end else
+        (match request with
+         | None -> run ()
+         | Some req ->
+             t.current_request <- Some req;
+             Fun.protect
+               ~finally:(fun () -> t.current_request <- None)
+               run)
 
 (* Late-bind the route/dispatch thunk now that call_handler exists. *)
 let () =

@@ -136,6 +136,11 @@ type t = {
   (** When true, (checkout)/(fork)/(merge) are blocked so the agent
       cannot leave the current branch mid-task. *)
   mutable agent_branch_lock : bool;
+  (** i-1788669715 / i-1788669761: set while a PUBLIC route handler is
+      being dispatched. The meta-eval prims (eval-string / load-string /
+      load-library) deny when set — they are the capability-reset escape
+      hatch and must not run inside public-handler execution. *)
+  mutable public_dispatch : bool;
   (** Admin flag from users.is_admin (auth identity). *)
   mutable is_admin : bool;
   (** Raw pp_session cookie for the active HTTP request, if any. *)

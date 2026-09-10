@@ -433,7 +433,25 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
           (* Enforce zero-arg lambda for clarity: with-transaction bodies
              shouldn't take args. *)
           let _ = params in
-          let _ = clo_env in
+          (* i-1788669886: a with-transaction body that blocks (sleep /
+             http-* / tcp streams / llm calls) holds the pool conn + the
+             SERIALIZABLE txn open for that duration — one request can
+             stall every other tenant behind the single per-connection
+             Eio mutex. Infer the body's effects (resolving helper fns
+             through the closure env) and refuse Net/Ai bodies up front. *)
+          let known_fn =
+            Pricklypear_lisp.Effect.known_fn_of_bindings
+              (Pricklypear_lisp.Route_gate.env_lambda_bindings clo_env)
+          in
+          let fx = Pricklypear_lisp.Effect.infer ~known_fn body in
+          if Pricklypear_lisp.Effect.EffSet.mem Pricklypear_lisp.Effect.Net fx
+             || Pricklypear_lisp.Effect.EffSet.mem Pricklypear_lisp.Effect.Ai fx then
+            (raise (Pricklypear_lisp.Ast.Interp_error
+                      (Pricklypear_lisp.Ast.User_error
+                         (Printf.sprintf
+                            "with-transaction body must not block or call the model (effects: %s) — it holds the pool connection + transaction open for every other tenant (i-1788669886)"
+                            (Pricklypear_lisp.Effect.EffSet.pp fx),
+                          "denied"))));
           (* H1.3: body re-enters apply_eff under Control.run_lwt when
              PP_EVAL_CONTROL=eff so nested prims Prim_call while seeing
              Store.current_conn from with_dynamic_transaction. *)

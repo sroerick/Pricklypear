@@ -258,3 +258,8 @@
  (name crud_sort_test)
  (modules crud_sort_test)
  (libraries pricklypear-image pricklypear-lisp alcotest))
+
+(test
+ (name prim_classification_test)
+ (modules prim_classification_test)
+ (libraries pricklypear-image pricklypear-common pricklypear-lisp alcotest))

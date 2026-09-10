@@ -59,7 +59,10 @@ let check_public_handler ~(env : Env.env) (handler : string)
   in
   match Env.lookup env handler with
   | Some (VLambda (_, body, _)) ->
-      (try check (Effect.infer ~known_fn (expand_body env body))
+      (try
+         check
+           (Effect.infer ~known_fn ~prims:Effect.strict_prim_effects
+              (expand_body env body))
        with Interp_error e ->
          Error
            (Printf.sprintf
@@ -70,7 +73,7 @@ let check_public_handler ~(env : Env.env) (handler : string)
                | Arity_mismatch (n, exp, got) ->
                    Printf.sprintf "%s arity %d vs %d" n exp got
                | _ -> "interp error")))
-  | Some (VPrim name) -> check (Effect.effects_for_prim name)
+  | Some (VPrim name) -> check (Effect.strict_prim_effects name)
   | Some _ | None ->
       Error
         (Printf.sprintf
