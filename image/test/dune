@@ -253,3 +253,8 @@
  (name http_router_test)
  (modules http_router_test)
  (libraries pricklypear-image alcotest httpun))
+
+(test
+ (name crud_sort_test)
+ (modules crud_sort_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest))
