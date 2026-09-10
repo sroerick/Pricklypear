@@ -251,6 +251,70 @@ let test_real_std_loads () =
   Alcotest.(check string) "list/take works after load" "(1 2)"
     (Pricklypear_lisp.Reader.pp_value v)
 
+(* L8 (i-1788670098): the package-name grammar. Traversal (..),
+   absolute paths, path pieces, casing, whitespace and oversize names
+   are rejected BEFORE the filesystem is touched — the error names the
+   grammar and never echoes a computed path. eval_form is unreachable
+   (assert false): a rejection must not evaluate anything. *)
+let test_library_name_grammar () =
+  let eval = fun _ -> assert false in
+  let bad =
+    [ ""; "."; ".."; "../std"; "std/../notes"; "a/b"; "std/lib.pp"
+    ; "/etc/passwd"; "/abs/lib.pp"; "STD"; "std "; " std"; "std\\x"
+    ; "package$"; String.make 65 'a' ]
+  in
+  List.iter
+    (fun name ->
+       match Pricklypear_image_lib.Loader.load_library ~eval_form:eval name with
+       | Ok m ->
+           Alcotest.fail
+             (Printf.sprintf "expected rejection for %S, got %s" name m)
+       | Error e ->
+           Alcotest.(check bool)
+             ("rejects " ^ String.escaped name) true
+             (contains_seq e "invalid package name"))
+    bad;
+  match
+    Pricklypear_image_lib.Loader.load_library ~eval_form:eval
+      "../../etc/passwd"
+  with
+  | Ok m -> Alcotest.fail m
+  | Error e ->
+      (* rejection leaks no filesystem layout: no resolved path *)
+      Alcotest.(check bool) "no path echo" true (not (contains_seq e "libs"))
+
+(* L9 (i-1788670098): a VALID name still loads through the real path
+   (libs_dir + read_file + eval), from a temp libs dir. *)
+let test_load_library_valid () =
+  let tmp =
+    let d =
+      Filename.concat (Filename.get_temp_dir_name ())
+        (Printf.sprintf "pp_loader_name_test_%d" (Unix.getpid ()))
+    in
+    if Sys.file_exists d then ignore (Sys.command ("rm -rf " ^ Filename.quote d));
+    Unix.mkdir d 0o755;
+    d
+  in
+  let () = Unix.mkdir (Filename.concat tmp "zpkg") 0o755 in
+  let lib = Filename.concat tmp (Filename.concat "zpkg" "lib.pp") in
+  let oc = open_out lib in
+  let () = output_string oc "(define loaded-fn 42)\n" in
+  let () = close_out oc in
+  point_pp_libs_dir tmp;
+  let eval_form, _, _ = eval_form_of () in
+  let r = Pricklypear_image_lib.Loader.load_library ~eval_form "zpkg" in
+  let () =
+    match r with
+    | Ok msg ->
+        Alcotest.(check bool) "loaded summary" true
+          (contains_seq msg "loaded 1 form(s)");
+        Alcotest.(check bool) "path in ok" true
+          (contains_seq msg "zpkg/lib.pp")
+    | Error e -> Alcotest.fail ("valid name failed: " ^ e)
+  in
+  let () = Sys.remove lib in
+  let () = Unix.rmdir (Filename.concat tmp "zpkg") in
+  Unix.rmdir tmp
 let () =
   Alcotest.run "pricklypear-loader"
     [ ( "loader"
@@ -260,4 +324,6 @@ let () =
         ; ("strip-line-comments", `Quick, test_strip_line_comments)
         ; ("seed-priority-order", `Quick, test_seed_priority_order)
         ; ("discover-seed-packages", `Quick, test_discover_seed_packages)
-        ; ("real-std-loads", `Quick, test_real_std_loads) ] ) ]
+        ; ("real-std-loads", `Quick, test_real_std_loads)
+        ; ("library-name-grammar", `Quick, test_library_name_grammar)
+        ; ("load-library-valid", `Quick, test_load_library_valid) ] ) ]

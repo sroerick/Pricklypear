@@ -20,6 +20,27 @@ let library_path (name : string) : string =
   else if Sys.file_exists b then b
   else a
 
+(* i-1788670098: load-library takes a PACKAGE name, not a path.
+   Filename.concat passes ".." components and absolute names through
+   verbatim, so an unvalidated name turned (load-library ...) into an
+   arbitrary-file-read + arbitrary-code-eval: any <name>.pp or
+   <name>/lib.pp on disk would be parsed and EVALUATED as lisp in the
+   caller's session, and failing forms echo source snippets back.
+   Package names everywhere (libs/ dirs, discover_seed_packages,
+   disabled-package prefixes "pkg/name") are flat [a-z0-9_-]; enforce
+   exactly that before any path is computed. Validating here, the only
+   entry with untrusted input, covers both the (load-library) prim and
+   the admin (reseed-package) path behind it. *)
+let valid_library_name (name : string) : bool =
+  let len = String.length name in
+  len > 0 && len <= 64
+  && String.for_all
+       (fun c ->
+          (c >= 'a' && c <= 'z')
+          || (c >= '0' && c <= '9')
+          || c = '-' || c = '_')
+       name
+
 let read_file (path : string) : (string, string) result =
   try
     let ic = open_in_bin path in
@@ -120,11 +141,16 @@ let load_library
     ~(eval_form : expr -> value)
     (name : string)
     : (string, string) result =
-  let path = library_path name in
-  match read_file path with
-  | Error e -> (Error e)
-  | Ok src ->
-      let r = load_string ~eval_form src in
-      (match r with
-       | Ok msg -> (Ok (Printf.sprintf "%s from %s" msg path))
-       | Error e -> (Error e))
+  if not (valid_library_name name) then
+    (Error
+       (Printf.sprintf "invalid package name %S (want [a-z0-9_-]{1,64})"
+          name))
+  else
+    let path = library_path name in
+    match read_file path with
+    | Error e -> (Error e)
+    | Ok src ->
+        let r = load_string ~eval_form src in
+        (match r with
+         | Ok msg -> (Ok (Printf.sprintf "%s from %s" msg path))
+         | Error e -> (Error e))
