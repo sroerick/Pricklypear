@@ -165,6 +165,11 @@
  (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio pgx unix))
 
 (test
+ (name envelope_test)
+ (modules envelope_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest base64 mirage-crypto-rng.unix unix))
+
+(test
  (name jobs_test)
  (modules jobs_test)
  (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))

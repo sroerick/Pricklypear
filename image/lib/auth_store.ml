@@ -912,8 +912,18 @@ let set_llm_key (store : Store.t) ~(user_id : string) ~(api_key : string)
               Yojson.Safe.to_string (`Assoc public_fields)
             in
             let secret_json =
-              Yojson.Safe.to_string
-                (`Assoc [ ("api_key", `String api_key) ])
+              (* i-1788670058: seal under the envelope when a master key
+                 is configured; degraded mode keeps plaintext but LOUD
+                 (a silently "sealed" secret would be worse than an
+                 honest plaintext row nobody knows about). *)
+              match Envelope.encrypt ~user_id api_key with
+              | Ok blob -> blob
+              | Error e ->
+                  Printf.eprintf
+                    "[auth_store] set_llm_key: STORING PLAINTEXT (%s); set PP_LLM_ENVELOPE_KEY\n%!"
+                    e;
+                  Yojson.Safe.to_string
+                    (`Assoc [ ("api_key", `String api_key) ])
             in
             let _ =
               Store_db.exec conn
@@ -954,10 +964,11 @@ let clear_llm_key (store : Store.t) ~(user_id : string)
               "DELETE FROM credentials WHERE user_id = $1::uuid AND kind = 'llm_key'"
           in
           (Ok ())
-    with exn ->
-      let msg = Printexc.to_string exn in
-          Printf.eprintf "[auth_store] clear_llm_key: %s\n%!" msg;
-          (Error msg))
+      with exn ->
+        let msg = Printexc.to_string exn in
+            Printf.eprintf "[auth_store] clear_llm_key: %s\n%!" msg;
+            (Error msg))
+
 
 (* ---- llm_key credential parsing (one home; was duplicated between
    get_llm_key_meta_direct and get_llm_key_secret_direct, ~79 lines) ---- *)
@@ -992,20 +1003,83 @@ let llm_key_meta_of_public ?(default_last4 = "????") (js : string option)
          | _ -> None
        with _ -> None)
 
-(* Extract the api_key from a secret_data JSON blob. *)
-let llm_key_of_secret (js : string) : string option =
-  try
-    match Yojson.Safe.from_string js with
-    | `Assoc a ->
-        (match List.assoc_opt "api_key" a with
-         | Some (`String k) when k <> "" -> Some k
-         | _ -> None)
-    | _ -> None
-  with _ -> None
+(* Extract the api_key from a secret_data JSON blob. Envelope blobs
+   (i-1788670058) are opened bound to [user_id]; legacy plaintext rows
+   still read. A wrong-identity or tampered envelope blob is None and
+   LOUD - a silent None would look like "no key configured". *)
+let llm_key_of_secret ~(user_id : string) (js : string) : string option =
+  if Envelope.is_envelope_blob js then
+    (match Envelope.decrypt ~user_id js with
+     | Some k when k <> "" -> Some k
+     | _ ->
+         Printf.eprintf
+           "[auth_store] llm_key_of_secret: envelope open FAILED for %s (wrong identity, tampered blob, or missing/mismatched PP_LLM_ENVELOPE_KEY)\n%!"
+           user_id;
+         None)
+  else
+    try
+      match Yojson.Safe.from_string js with
+      | `Assoc a ->
+          (match List.assoc_opt "api_key" a with
+           | Some (`String k) when k <> "" -> Some k
+           | _ -> None)
+      | _ -> None
+    with _ -> None
 
 let default_llm_key_meta (key : string) : llm_key_meta =
   { last4 = last4_of_key key; label = None; base = None; model = None }
 
+(** i-1788670058 boot migration: re-seal legacy plaintext llm_key rows
+    under the envelope. Idempotent: envelope blobs lack the legacy
+    'api_key' member and are skipped by both the SELECT guard and the
+    UPDATE guard. No master key configured -> no-op (rows stay
+    plaintext; boot prints the loud warning instead). Returns the
+    number of rows re-sealed. *)
+let migrate_llm_keys (store : Store.t) : int =
+  if not (Envelope.master_key_present ()) then 0
+  else
+    match pg_conn store with
+    | None -> 0
+    | Some conn ->
+        (try
+           let sel =
+             "SELECT user_id::text, secret_data::text FROM credentials "
+             ^ "WHERE kind = 'llm_key' AND secret_data ? 'api_key'"
+           in
+           let rows = Store_db.exec conn ~params:[] sel in
+           let n = ref 0 in
+           List.iter
+             (fun row ->
+                match (Row.cell_string row 0, Row.cell_string row 1) with
+                | Some uid, Some secret_js ->
+                    (match llm_key_of_secret ~user_id:uid secret_js with
+                     | Some key ->
+                         (match Envelope.encrypt ~user_id:uid key with
+                          | Ok blob ->
+                              let _ =
+                                Store_db.exec conn
+                                  ~params:
+                                    [ Pgx.Value.of_string uid;
+                                      Pgx.Value.of_string blob ]
+                                  ("UPDATE credentials SET secret_data = $2::jsonb "
+                                   ^ "WHERE user_id = $1::uuid AND kind = 'llm_key' "
+                                   ^ "AND secret_data ? 'api_key'")
+                              in
+                              incr n
+                          | Error e ->
+                              Printf.eprintf
+                                "[auth_store] migrate_llm_keys: seal failed for %s: %s\n%!"
+                                uid e)
+                     | None -> ())
+                | _ -> ())
+             rows;
+           if !n > 0 then
+             Printf.eprintf "[auth_store] llm-key envelope migration: re-sealed %d rows\n%!" !n;
+           !n
+         with exn ->
+           Printf.eprintf "[auth_store] migrate_llm_keys: %s\n%!"
+             (Printexc.to_string exn);
+           0)
 let get_llm_key_meta_direct (store : Store.t) ~(user_id : string)
   : llm_key_meta option =
   match pg_conn store with
@@ -1060,7 +1134,7 @@ let get_llm_key_secret_direct (store : Store.t) ~(user_id : string)
           | row :: _ ->
               (match Row.cell_string row 0 with
                | Some secret_js ->
-                   (match llm_key_of_secret secret_js with
+                     (match llm_key_of_secret ~user_id secret_js with
                     | None -> None
                     | Some key ->
                         let meta =

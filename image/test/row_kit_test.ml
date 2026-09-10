@@ -147,12 +147,16 @@ let test_llm_key_parsing () =
      | Some _ -> true | None -> false);
   (* secret blob: api_key extraction incl. the empty-key rejection *)
   Alcotest.(check (option string)) "secret key" (Some "sk-live-abcd")
-    (Auth_store.llm_key_of_secret {| {"api_key":"sk-live-abcd"} |});
+    (Auth_store.llm_key_of_secret ~user_id:"u1"
+       {| {"api_key":"sk-live-abcd"} |});
   Alcotest.(check bool) "empty secret" false
-    (match Auth_store.llm_key_of_secret {| {"api_key":""} |} with
+    (match
+       Auth_store.llm_key_of_secret ~user_id:"u1" {| {"api_key":""} |}
+     with
      | Some _ -> true | None -> false);
   Alcotest.(check bool) "garbage secret" false
-    (match Auth_store.llm_key_of_secret "{{{" with Some _ -> true | None -> false);
+    (match Auth_store.llm_key_of_secret ~user_id:"u1" "{{{" with
+     | Some _ -> true | None -> false);
   (* default record derives last4 from the key itself *)
   Alcotest.check meta_t "default meta"
     (m "abcd" None None None)
