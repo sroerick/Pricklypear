@@ -7,6 +7,8 @@ open Session_types
 
 let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives.t) : unit =
   let register_crud name fn = Prims_db_common.register_crud ~tbl name fn in
+  let deny_anon name = Prims_db_common.deny_anon name in
+  let actor () = Prims_db_common.actor ~t () in
 
   (* (list-branches) -> VList of "owner/name" strings *)
   Primitives.register tbl "list-branches"
@@ -84,17 +86,24 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
      error string. *)
   register_crud "undo"
     (fun args ->
-      match args with
-      | [ Pricklypear_lisp.Ast.VStr path ] ->
-          Crud.tree_undo t.store ~path ()
-      | [ Pricklypear_lisp.Ast.VStr path
-        ; Pricklypear_lisp.Ast.VInt n
-        ] ->
-          Crud.tree_undo t.store ~path ~n ()
-      | _ ->
-          (raise (Pricklypear_lisp.Ast.Interp_error
-                    (Pricklypear_lisp.Ast.Prim_error
-                       ("undo", "need path [, n]", "bad-args")))));
+      (* i-1788669842: undo is a write (restore-by-write appends a
+         version row) and joins the create/update/delete/tree-* anon
+         gate. RLS floors the datum path via pp.user, but that floor
+         opens whenever pp.user is unset (scripts/admin paths) - the
+         explicit gate keeps the write surface consistent. *)
+      if (actor ()) = "anonymous" then deny_anon "undo"
+      else
+        match args with
+        | [ Pricklypear_lisp.Ast.VStr path ] ->
+            Crud.tree_undo t.store ~path ()
+        | [ Pricklypear_lisp.Ast.VStr path
+          ; Pricklypear_lisp.Ast.VInt n
+          ] ->
+            Crud.tree_undo t.store ~path ~n ()
+        | _ ->
+            (raise (Pricklypear_lisp.Ast.Interp_error
+                      (Pricklypear_lisp.Ast.Prim_error
+                         ("undo", "need path [, n]", "bad-args")))));
 
   (* (code-restore name [n] [owner/branch]) -> restore a code node (fn/type/
      route) at head-n as a NEW write at head+1 (restore-by-write). The
@@ -107,60 +116,80 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
      cap. Consumers: tree-time.consumers — code-restore = gen-read + define. *)
   register_crud "code-restore"
     (fun args ->
-      let resolve_branch_id ref_opt =
-        match ref_opt with
-        | None -> Store.current_branch_id t.store
-        | Some branch_ref ->
-            let owner, name =
-              match String.split_on_char '/' branch_ref with
-              | [ o; n ] when o <> "" && n <> "" -> (o, n)
-              | _ -> ("", branch_ref)
-            in
-            (match Store.lookup_branch_id_by_name t.store ~owner ~name with
-             | Some id -> id
-             | None -> "")
+      (* i-1788669791: code-restore writes fn/type/route rows, and RLS
+         deliberately does NOT cover non-datum kinds (migration 013),
+         so it is gated like the rest of the code write surface: no
+         anonymous calls, and the target branch ref must pass the
+         branch-owner rule (admin-only for system/*, own tenant
+         otherwise) BEFORE the lookup. Closes the promote bypass: an
+         anonymous or cross-tenant identity can no longer time-travel
+         a promoted handler on system/main. Bare refs default to
+         system/<name>, matching checkout/fork. *)
+      if (actor ()) = "anonymous" then deny_anon "code-restore"
+      else
+      let current_branch_id () = Store.current_branch_id t.store in
+      let resolve_ref (branch_ref : string) =
+        let owner, name =
+          Session_control_prims.split_branch_ref branch_ref
+        in
+        if not (Session_control_prims.branch_owner_authorized t owner)
+        then `Denied (branch_ref, owner)
+        else
+          (match
+             Store.lookup_branch_id_by_name t.store ~owner ~name
+           with
+           | Some id -> `Found id
+           | None -> `Missing branch_ref)
       in
       let err = "code-restore: need name [n] [owner/branch]" in
-      let bad_branch ref_opt bid =
+      let bad_branch ref_opt =
         match ref_opt with
         | None -> (Pricklypear_lisp.Ast.VStr err)
         | Some branch_ref ->
             (Pricklypear_lisp.Ast.VStr
                (Printf.sprintf "code-restore: no such branch: %s" branch_ref))
       in
-      let default_author = t.manifest.username in
+      let denied_branch ref owner =
+        (Pricklypear_lisp.Ast.VStr
+           (Printf.sprintf "denied: branch %s is owned by %s" ref owner))
+      in
+      (* Attribute to the per-request identity, not the live manifest
+         (mid-swap under the cotenant race), same as create/update. *)
+      let default_author = actor () in
       match args with
       | [ Pricklypear_lisp.Ast.VStr name ] ->
-          let bid = resolve_branch_id None in
-          if bid = "" then bad_branch None bid
+          let bid = current_branch_id () in
+          if bid = "" then bad_branch None
           else
             (Pricklypear_lisp.Ast.VStr
                (Store.code_restore t.store ~branch_id:bid ~name
                   ~author:default_author ()))
       | [ Pricklypear_lisp.Ast.VStr name; Pricklypear_lisp.Ast.VInt n64 ] ->
-          let bid = resolve_branch_id None in
-          if bid = "" then bad_branch None bid
+          let bid = current_branch_id () in
+          if bid = "" then bad_branch None
           else
             (Pricklypear_lisp.Ast.VStr
                (Store.code_restore t.store ~branch_id:bid ~name
                   ~author:default_author ~n:(Int64.to_int n64) ()))
       | [ Pricklypear_lisp.Ast.VStr name; Pricklypear_lisp.Ast.VStr branch_ref
         ] ->
-          let bid = resolve_branch_id (Some branch_ref) in
-          if bid = "" then bad_branch (Some branch_ref) bid
-          else
-            (Pricklypear_lisp.Ast.VStr
-               (Store.code_restore t.store ~branch_id:bid ~name
-                  ~author:default_author ()))
+          (match resolve_ref branch_ref with
+           | `Found bid ->
+               (Pricklypear_lisp.Ast.VStr
+                  (Store.code_restore t.store ~branch_id:bid ~name
+                     ~author:default_author ()))
+           | `Denied (r, o) -> denied_branch r o
+           | `Missing r -> bad_branch (Some r))
       | [ Pricklypear_lisp.Ast.VStr name; Pricklypear_lisp.Ast.VInt n64
         ; Pricklypear_lisp.Ast.VStr branch_ref
         ] ->
-          let bid = resolve_branch_id (Some branch_ref) in
-          if bid = "" then bad_branch (Some branch_ref) bid
-          else
-            (Pricklypear_lisp.Ast.VStr
-               (Store.code_restore t.store ~branch_id:bid ~name
-                  ~author:default_author ~n:(Int64.to_int n64) ()))
+          (match resolve_ref branch_ref with
+           | `Found bid ->
+               (Pricklypear_lisp.Ast.VStr
+                  (Store.code_restore t.store ~branch_id:bid ~name
+                     ~author:default_author ~n:(Int64.to_int n64) ()))
+           | `Denied (r, o) -> denied_branch r o
+           | `Missing r -> bad_branch (Some r))
       | _ ->
           (raise (Pricklypear_lisp.Ast.Interp_error
                     (Pricklypear_lisp.Ast.Prim_error

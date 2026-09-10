@@ -263,3 +263,8 @@
  (name prim_classification_test)
  (modules prim_classification_test)
  (libraries pricklypear-image pricklypear-common pricklypear-lisp alcotest))
+
+(test
+ (name prim_gates_test)
+ (modules prim_gates_test)
+ (libraries pricklypear-image pricklypear-common pricklypear-lisp alcotest eio_main lwt_eio unix))
