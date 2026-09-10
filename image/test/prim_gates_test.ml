@@ -151,6 +151,76 @@ let test_code_restore_admin_system_passes () =
             "code-restore: no such branch: system/main" s
       | v -> Alcotest.fail ("expected no-such-branch, got: " ^ pp v))
 
+(* fork: parent owned by ANOTHER tenant -> VStr denial before the
+   lookup (i-1787970640 residue: fork copies the parent's code into the
+   caller's readable branch — same exfil shape the merge-source gate
+   closes). *)
+let test_fork_other_tenant_parent_denied () =
+  with_eio (fun () ->
+      let t = make_session ~username:"tester" in
+      match call t "fork" [ VStr "somebody/work"; VStr "tester/copy" ] with
+      | VStr s ->
+          Alcotest.(check string) "other-tenant fork parent denied"
+            "denied: branch somebody/work is owned by somebody" s
+      | v -> Alcotest.fail ("expected VStr denial, got: " ^ pp v))
+
+(* fork: system/* parent + own-tenant child passes both gates and
+   reaches the lookup; no DB -> the clean "no such parent" answer
+   (proves the gates let it through, unlike a denial). *)
+let test_fork_system_parent_own_child_passes () =
+  with_eio (fun () ->
+      let t = make_session ~username:"tester" in
+      match call t "fork" [ VStr "system/main"; VStr "tester/garden" ] with
+      | VStr s ->
+          Alcotest.(check string) "system parent fork reaches lookup"
+            "no such parent: system/main" s
+      | v -> Alcotest.fail ("expected no-such-parent, got: " ^ pp v))
+
+(* fork: child owned by ANOTHER tenant still denied (write rule, kept
+   from 511ebdf). *)
+let test_fork_other_tenant_child_denied () =
+  with_eio (fun () ->
+      let t = make_session ~username:"tester" in
+      match call t "fork" [ VStr "system/main"; VStr "somebody/garden" ] with
+      | VStr s ->
+          Alcotest.(check string) "other-tenant fork child denied"
+            "denied: branch somebody/garden is owned by somebody" s
+      | v -> Alcotest.fail ("expected VStr denial, got: " ^ pp v))
+
+(* merge: source owned by ANOTHER tenant -> VStr denial (kept from
+   511ebdf; blocks reading others' code via merge results). *)
+let test_merge_other_tenant_source_denied () =
+  with_eio (fun () ->
+      let t = make_session ~username:"tester" in
+      match call t "merge" [ VStr "somebody/work"; VStr "tester/main" ] with
+      | VStr s ->
+          Alcotest.(check string) "other-tenant merge source denied"
+            "denied: branch somebody/work is owned by somebody" s
+      | v -> Alcotest.fail ("expected VStr denial, got: " ^ pp v))
+
+(* merge: system/* SOURCE into own tenant now PASSES (spec
+   branching.merge: "per-user can merge into their own branches
+   freely" — the 511ebdf source gate over-denied this); no DB -> the
+   "source or target branch not found" answer, not a denial. *)
+let test_merge_system_source_own_target_passes () =
+  with_eio (fun () ->
+      let t = make_session ~username:"tester" in
+      match call t "merge" [ VStr "system/main"; VStr "tester/garden" ] with
+      | VStr s ->
+          Alcotest.(check string) "system source merge reaches lookup"
+            "source or target branch not found" s
+      | v -> Alcotest.fail ("expected not-found, got: " ^ pp v))
+
+(* merge: target system/* stays admin-only for non-admins (kept). *)
+let test_merge_system_target_denied () =
+  with_eio (fun () ->
+      let t = make_session ~username:"tester" in
+      match call t "merge" [ VStr "tester/work"; VStr "system/main" ] with
+      | VStr s ->
+          Alcotest.(check string) "merge to system denied"
+            "denied: admin-only merge to system branch" s
+      | v -> Alcotest.fail ("expected VStr denial, got: " ^ pp v))
+
 let () =
   Alcotest.run "pricklypear-prim-gates"
     [
@@ -165,8 +235,26 @@ let () =
         ; ( "code-restore-own-tenant-passes"
           , `Quick
           , test_code_restore_own_tenant_passes )
-        ; ( "code-restore-admin-system-passes"
-          , `Quick
-          , test_code_restore_admin_system_passes )
+          ; ( "code-restore-admin-system-passes"
+            , `Quick
+            , test_code_restore_admin_system_passes )
+          ; ( "fork-other-tenant-parent-denied"
+            , `Quick
+            , test_fork_other_tenant_parent_denied )
+          ; ( "fork-system-parent-own-child-passes"
+            , `Quick
+            , test_fork_system_parent_own_child_passes )
+          ; ( "fork-other-tenant-child-denied"
+            , `Quick
+            , test_fork_other_tenant_child_denied )
+          ; ( "merge-other-tenant-source-denied"
+            , `Quick
+            , test_merge_other_tenant_source_denied )
+          ; ( "merge-system-source-own-target-passes"
+            , `Quick
+            , test_merge_system_source_own_target_passes )
+          ; ( "merge-system-target-denied"
+            , `Quick
+            , test_merge_system_target_denied )
         ] )
     ]

@@ -533,6 +533,8 @@ let split_branch_ref = Session_control_prims.split_branch_ref
 
 let branch_owner_authorized = Session_control_prims.branch_owner_authorized
 
+let branch_readable = Session_control_prims.branch_readable
+
 (** The env-driver seam for the control prims: rehydrate + checkout_to
     are defined above (driver concern) and cannot move behind the
     module-cycle-free boundary. *)
@@ -1796,12 +1798,18 @@ let fork_ref (t : t) ~(parent_ref : string) ~(child_ref : string)
   : (string, string) result =
   let p_owner, p_name = split_branch_ref parent_ref in
   let c_owner, c_name = split_branch_ref child_ref in
-  (* i-1787970640: child_owner must pass the branch-owner rule (same as
-     the fork prim — blocks pre-claiming another user's garden). This is
-     the funnel behind http_branches.branches_fork. *)
+  (* i-1787970640: BOTH sides gate (same as the fork prim, BEFORE the
+     lookup so denials don't leak existence). child_owner passes the
+     branch-owner rule (blocks pre-claiming another user's garden);
+     parent_owner passes the READ rule — system/* stays forkable (the
+     UI default "fork from system/main"), other tenants' gardens are
+     not. This is the funnel behind http_branches.branches_fork. *)
   if not (branch_owner_authorized t c_owner) then
     (Error (Printf.sprintf "denied: branch %s is owned by %s"
               child_ref c_owner))
+  else if not (branch_readable t p_owner) then
+    (Error (Printf.sprintf "denied: branch %s is owned by %s"
+              parent_ref p_owner))
   else
     let parent_id =
       Store.lookup_branch_id_by_name t.store ~owner:p_owner ~name:p_name
