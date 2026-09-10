@@ -109,6 +109,74 @@ let value_of_id cell : value =
   | Some s -> VStr s
   | None -> VNil
 
+(** Safe ORDER BY parser for the [sort] argument of (rows …) / (find-rows …).
+
+    i-1788669685: [sort] used to be appended to the SQL verbatim
+    (" ORDER BY " ^ s), and PostgreSQL accepts arbitrary expressions in
+    ORDER BY — a blind/error-based read oracle over every table the image
+    role can read (credentials, auth_sessions, …; RLS floors only datum
+    trees). Live call-site audit (2026-09-10, 37 find-rows + rows callers
+    via find-code/function-source): NO caller passes a sort today, so a
+    strict grammar is compatible.
+
+    Accepted grammar — 1 or 2 whitespace-separated tokens:
+      column            := created_at | updated_at | id
+      field accessor    := fields->>'name'   (name: [A-Za-z0-9_-]{1,64})
+      direction (opt)   := ASC | DESC       (case-insensitive)
+    The SQL fragment is built only from the validated tokens; the raw
+    string never reaches the query. Anything else raises a clean prim
+    error naming the accepted forms (loud, not a silent default). *)
+let safe_sort_sql ~(prim : string) ~(sort : string) : string =
+  let bad () =
+    raise
+      (Interp_error
+         (Prim_error
+            ( prim,
+              "sort must be \"created_at|updated_at|id\" or "
+              ^ "\"fields->>'field'\", optionally followed by ASC|DESC",
+              "bad-args" )))
+  in
+  let is_field_char c =
+    (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+    || c = '_' || c = '-'
+  in
+  let s = String.trim sort in
+  let toks = List.filter (fun t -> t <> "") (String.split_on_char ' ' s) in
+  let finish token dir =
+    let dir_sql =
+      match dir with
+      | None -> "ASC"
+      | Some d ->
+          (match String.lowercase_ascii d with
+           | "asc" -> "ASC"
+           | "desc" -> "DESC"
+           | _ -> bad ())
+    in
+    let expr =
+      (match token with
+       | "created_at" | "updated_at" | "id" -> token
+       | _ -> (
+           (* fields->>'name' — exact shape, identifier-strict name. *)
+           let prefix = "fields->>'" in
+           let plen = String.length prefix in
+           let len = String.length token in
+           if len > plen + 2 && String.sub token 0 plen = prefix
+              && token.[len - 1] = '\''
+           then
+             let name = String.sub token plen (len - plen - 1) in
+             if name = "" || String.length name > 64
+                || not (String.for_all is_field_char name)
+             then bad ()
+             else Printf.sprintf "fields->>'%s'" name
+           else bad ()))
+    in
+    Printf.sprintf " ORDER BY %s %s" expr dir_sql
+  in
+  match toks with
+  | [ token ] -> finish token None
+  | [ token; dir ] -> finish token (Some dir)
+  | _ -> bad ()
+
 (** (deftype 'name field1 field2 ...) -> VStr "defined type <name>".
     INSERTs a row into type_defs with branch_id = session's branch and
     fields = JSON array ["field1","field2",...] (the field names in
@@ -755,10 +823,10 @@ let delete_guarded store ~type_name ~id ~caller =
 
 (** (list 'type [limit] [sort]) -> VList of (VStr id, VStr fields) pairs.
     With no limit, defaults to 100 (avoid OOM on a huge table). Optional
-    sort is a raw SQL ORDER BY clause (appended verbatim); default
-    ORDER BY is created_at ASC. Each row is a 2-element VList
-    `[id fields]` so callers can `(mapcar (lambda (row) (car row)) rows)`
-    to get ids, etc. *)
+    sort is parsed by safe_sort_sql (columns created_at|updated_at|id or
+    fields->>'field', optional ASC|DESC); default ORDER BY is created_at
+    ASC. Each row is a 2-element VList `[id fields]` so callers can
+    `(map (lambda (row) (car row)) rows)` to get ids, etc. *)
 let list
     (store : Store.t) ~(type_name : string) ?(limit : int = 100)
     ?(sort : string option = None) ()
@@ -769,7 +837,7 @@ let list
         let user = session_user () in
         let order_by =
           match sort with
-          | Some s -> " ORDER BY " ^ s
+          | Some s -> safe_sort_sql ~prim:"rows" ~sort:s
           | None -> " ORDER BY created_at ASC"
         in
         let sql =
@@ -833,9 +901,10 @@ let find_row
     -> VList of (id . fields) pairs.
     All field filters AND together (fields->>k = v text). Optional
     trailing VInt limit (default 500) and an optional trailing VStr sort
-    (a raw SQL ORDER BY clause, appended verbatim). Default ORDER BY:
-    created_at ASC. Callers needing domain-specific ordering (e.g. bible
-    verses by verse number) must pass the sort explicitly. *)
+    (parsed by safe_sort_sql: created_at|updated_at|id or fields->>'field',
+    optional ASC|DESC — never raw SQL). Default ORDER BY: created_at ASC.
+    Callers needing domain-specific ordering (e.g. verses by number) pass
+    e.g. "fields->>'verse' ASC" explicitly. *)
 let find_rows
     (store : Store.t) ~(type_name : string)
     ~(filters : (string * string) list) ?(limit : int = 500)
@@ -864,12 +933,12 @@ let find_rows
             (Printf.sprintf " AND %s" (visible_sql ~user_param:!i));
           params := !params @ [ Pgx.Value.of_string user ];
           i := !i + 1;
-          let order_by =
-            match sort with
-            | Some s -> " ORDER BY " ^ s ^ " LIMIT "
-            | None -> " ORDER BY created_at ASC LIMIT "
-          in
-          Buffer.add_string buf (Printf.sprintf "%s$%d" order_by !i);
+            let order_by =
+              match sort with
+              | Some s -> safe_sort_sql ~prim:"find-rows" ~sort:s
+              | None -> " ORDER BY created_at ASC"
+            in
+          Buffer.add_string buf (Printf.sprintf "%s LIMIT $%d" order_by !i);
           params := !params @ [ Pgx.Value.of_int limit ];
           let rows = Store_db.exec conn ~params:!params (Buffer.contents buf) in
           let lisp_rows =
