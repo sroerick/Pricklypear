@@ -46,6 +46,14 @@ let branch_owner_authorized (t : t) (owner : string) : bool =
     in
     owner = u || owner = tenant
 
+(** Read-side rule (i-1787970640 residue, 09-10): system/* is the shared
+    defaults tree every session inherits from, so its code is public to
+    the image's users; personal gardens are not. Fork's parent and
+    merge's source COPY code into the caller's space, so a garden owned
+    by another tenant would exfiltrate it. *)
+let branch_readable (t : t) (owner : string) : bool =
+  owner = "system" || branch_owner_authorized t owner
+
 let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
   (* (fork 'parent 'child) -> VStr new-branch-id | VStr "no such parent" *)
   Primitives.register_server_only tbl "fork"
@@ -59,33 +67,42 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
       match args with
       | [ Pricklypear_lisp.Ast.VStr parent_name;
           Pricklypear_lisp.Ast.VStr child_name ] ->
-          let parent_owner, parent_short = split_branch_ref parent_name in
-          let child_owner, child_short = split_branch_ref child_name in
-          let parent_id =
-            Store.lookup_branch_id_by_name
-              t.store ~owner:parent_owner ~name:parent_short
-          in
-          (match parent_id with
-           | None ->
-               (Pricklypear_lisp.Ast.VStr
-                             (Printf.sprintf "no such parent: %s" parent_name))
-           | Some pid ->
-               (* i-1787970640: child_owner must pass the branch-owner rule
-                  (blocks pre-claiming another user's garden). *)
-               if not (branch_owner_authorized t child_owner) then
-                 (Pricklypear_lisp.Ast.VStr
-                    (Printf.sprintf "denied: branch %s is owned by %s"
-                       child_name child_owner))
-               else
-               let new_id =
-                 Store.fork_branch t.store ~parent_id:pid
-                   ~owner:child_owner ~child_name:child_short
-               in
-               (match new_id with
-                | Some id ->
-                    (Pricklypear_lisp.Ast.VStr id)
-                | None ->
-                    (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("prim", "fork failed", "failed"))))))
+        let parent_owner, parent_short = split_branch_ref parent_name in
+        let child_owner, child_short = split_branch_ref child_name in
+        (* i-1787970640 (residue 09-10): BOTH sides gate, BEFORE the
+           lookup so a denial never leaks whether the ref exists.
+           child_owner passes the write rule (blocks pre-claiming
+           another user's garden); parent_owner passes the read rule —
+           system/* is the shared defaults tree, other tenants' gardens
+           are not, and fork would copy their code into the caller's
+           readable branch. *)
+        if not (branch_owner_authorized t child_owner) then
+          (Pricklypear_lisp.Ast.VStr
+             (Printf.sprintf "denied: branch %s is owned by %s"
+                child_name child_owner))
+        else if not (branch_readable t parent_owner) then
+          (Pricklypear_lisp.Ast.VStr
+             (Printf.sprintf "denied: branch %s is owned by %s"
+                parent_name parent_owner))
+        else
+        let parent_id =
+          Store.lookup_branch_id_by_name
+            t.store ~owner:parent_owner ~name:parent_short
+        in
+        (match parent_id with
+         | None ->
+             (Pricklypear_lisp.Ast.VStr
+                           (Printf.sprintf "no such parent: %s" parent_name))
+         | Some pid ->
+             let new_id =
+               Store.fork_branch t.store ~parent_id:pid
+                 ~owner:child_owner ~child_name:child_short
+             in
+             (match new_id with
+              | Some id ->
+                  (Pricklypear_lisp.Ast.VStr id)
+              | None ->
+                  (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("prim", "fork failed", "failed"))))))
       | _ ->
           (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("fork", "bad args (need 2 strings)", "bad-args")))));
 
@@ -106,16 +123,19 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
           Pricklypear_lisp.Ast.VStr target_ref ] ->
           let src_owner, src_short = split_branch_ref source_ref in
           let tgt_owner, tgt_short = split_branch_ref target_ref in
-          (* i-1787970640: BOTH src_owner and tgt_owner must pass the
-             branch-owner rule. Target system/* stays admin-only (spec
-             branching.merge); the source check is new — it blocks reading
-             others' code via merge results. *)
+          (* i-1787970640: BOTH src_owner and tgt_owner gate. Target
+             system/* stays admin-only (spec branching.merge). The
+             SOURCE is the read side: system/* is the shared defaults
+             tree (merging main into your own garden is the spec's
+             "per-user can merge into their own branches freely" sync
+             path), but another tenant's garden is denied — it would
+             copy their code into readable merge results. *)
           if (tgt_owner = "system")
              && not (t.is_admin || t.manifest.username = "admin")
           then
             (Pricklypear_lisp.Ast.VStr
                           "denied: admin-only merge to system branch")
-          else if not (branch_owner_authorized t src_owner) then
+          else if not (branch_readable t src_owner) then
             (Pricklypear_lisp.Ast.VStr
                (Printf.sprintf "denied: branch %s is owned by %s"
                   source_ref src_owner))
