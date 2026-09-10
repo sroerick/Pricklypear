@@ -25,6 +25,7 @@
           http_multipart http_media http_tree
           agent_discovery http
           lineedit boot llm_client
+          envelope
           auth_password auth_throttle auth_store ai_store jobs sync)
  (modules_without_implementation io)
  (libraries

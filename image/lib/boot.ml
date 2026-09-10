@@ -66,6 +66,13 @@ let prepare () : Session.t * int * int =
   Phase.log "pg-connect";
   ignore (Auth_store.bootstrap_admin_if_empty store);
   Phase.log "bootstrap-admin";
+  (* i-1788670058: re-seal legacy plaintext llm_key rows at boot when a
+     master key is configured (idempotent). Without a key, keep the
+     degraded mode VISIBLE at every boot - never silently "fixed". *)
+  if not (Envelope.master_key_present ()) then
+    Printf.eprintf
+      "[boot] WARNING: PP_LLM_ENVELOPE_KEY unset - llm keys stored PLAINTEXT (i-1788670058)\n%!"
+  else ignore (Auth_store.migrate_llm_keys store);
   (* Surface any drift between the OCaml seed-type mirror and the SQL
      authority (tree_seed_types) — non-fatal warning. See i-seed-list-3copies. *)
   (match Store.current_conn store with
