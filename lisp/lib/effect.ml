@@ -115,14 +115,28 @@ module EffSet = struct
     else if mem ReadDb s then "db-read"
     else if mem Html s then "html"
     else pp s
+
+  (** Strongest possible set: denied by every capability allowlist.
+      Used to fail closed on unclassified prim names in policy gates. *)
+  let top : t = normalize [ ReadDb; WriteDb; Branch; Publish; Ai; Html; Txn; Net ]
 end
 
 type effect_set = EffSet.t
 
-(** Default pure prim names (image may add more).
+(** Default capability buckets (image may add more).
     H0.1 audit 2026-07-18: every registered image prim must appear in
     exactly one capability bucket (or the special-case arms in
-    [effects_for_prim]). Guest-visible only — not host control effects. *)
+    [effects_for_prim]). Guest-visible only — not host control effects.
+
+    2026-09-10 FULL SWEEP (i-1788669715 / i-1788670318): the old
+    hand-maintained lists had drifted from the registered catalog —
+    eval-string, tree/upsert, tree/delete, link/unlink, sync/push,
+    lens/fork, fork-data, merge-data, abandon-data, type-fields, unbind,
+    space/*, media/*, promote*, tokens, streams, tcp-connect, … inferred
+    as PURE, so publish-time and AI gates sailed them through. Every
+    prim registered by the image is classified below, and
+    Session.make asserts it at boot (fail boot on drift). *)
+
 let pure_prims = [
   "+"; "-"; "*"; "div"; "/"; "mod"; "quotient"; "remainder";
   "abs"; "min"; "max";
@@ -143,10 +157,10 @@ let pure_prims = [
   "dict-get"; "dict-set"; "dict-keys";
   "hx-get"; "hx-post"; "hx-request?";
   "request-header"; "request-method"; "request-path";
-  "request-param"; "request-params"; "request-body";
+  "request-param"; "request-params"; "request-body"; "request-multipart";
   "date-today"; "date-weekday"; "date-format";
   "date-add-days"; "date-diff-days";
-  "now"; "now-ms"; "sleep";
+  "now"; "now-ms";
   "parse-int"; "parse-float"; "floor"; "round";
   "fsrs-schedule";
   "length"; "equal?";
@@ -156,33 +170,19 @@ let pure_prims = [
   "url-encode"; "url-decode"; "sha1"; "html-decode";
   "parse-date"; "xml-parse"; "random-uuid";
   "verify-ssh-key";  (* pure crypto check on args; no store *)
-]
-
-let read_db_prims = [
-  "get"; "rows"; "select-for-update";
-  "find-row"; "find-rows"; "find-text"; "find-random";
-  "list-branches"; "current-branch"; "list-bindings";
-  "whoami"; "current-author";
-  "function-source"; "function-doc"; "function-ast"; "package-bindings"; "package-exports";
-  "export-package";
-  "route-visibility";
-  "list-usernames"; "list-ssh-keys";
-  "llm-key-status";
-  "log-tail"; "ops/summary"; "ops/incidents";
-  "agent-history"; "agent-sessions";
-]
-
-let write_db_prims = [
-  "create"; "update"; "update-field"; "delete"; "deftype";
-  "load-string"; "load-library";  (* persist defs/routes onto branch *)
-  "add-ssh-key"; "revoke-ssh-key";
-  "set-llm-key"; "clear-llm-key";
-  "with-public-write";  (* elevates anon → may write data_rows *)
-  "submit-job"; "submit-job-at"; "cancel-job";  (* borge/jobs.borg WriteDb *)
-  "with-step"; "__step__";  (* checkpoint write; composes with Txn for exactly-once *)
-  "schedule"; "unschedule";  (* borge/jobs.borg schedules WriteDb *)
-  "undo";  (* borge/tree-time.borg reads-as-of-gen restore-by-write WriteDb *)
-  "code-restore";  (* borge/tree-time.borg consumers code-restore WriteDb *)
+  "media-url";       (* builds /media/<id> string; no store read *)
+  (* prims_pure shared-catalog extras + hypermedia harness (2026-09-10
+     boot-assertion catch): string/list utils, request-body shaping,
+     soup/* in-memory DOM ops, impact session-memory queue writes. *)
+  "budget-remaining"; "err/shape"; "extract-links"; "render-links";
+  "render-tokens"; "prose-tokens"; "status-response"; "sort";
+  "string-split"; "string=?"; "json-part"; "multipart"; "part";
+  "soup/parse"; "soup/page-copy"; "soup/select"; "soup/select-one";
+  "soup/serialize"; "soup/text"; "soup/attr"; "soup/has-attr";
+  "soup/swap!"; "soup/create"; "soup/replace"; "soup/closest-attr";
+  "soup/parent"; "soup/diff"; "soup/apply-parts!";
+  "impact-clear"; "impact-mark";  (* session-memory impact queue *)
+  "route/lookup";    (* session-memory route table lookup *)
 ]
 
 let read_db_prims = [
@@ -200,23 +200,115 @@ let read_db_prims = [
   "job-status"; "jobs"; "schedules";  (* borge/jobs.borg ReadDb *)
   "gen-now";  (* borge/tree-time.borg reads-as-of-gen ReadDb *)
   "gen-read"; "gen-diff";  (* borge/tree-time.borg reads-as-of-gen ReadDb *)
+  "data-history";  (* borge/tree-time.borg S3 datum history ReadDb *)
+  (* code introspection / call graph (prims_code, prims_graph) *)
+  "analyze"; "explain"; "describe"; "apropos-docs"; "find-code";
+  "code-history"; "code-diff"; "diff";
+  "callees"; "callers"; "dependents"; "used-by-routes"; "holes";
+  "backlinks"; "out-links"; "branch-changes"; "change-transcript";
+  "forge-effects";
+  (* tree reads (prims_data) — the read/write split mirrors
+     example_eval.ml's read_extra_prims *)
+  "tree/get"; "tree/list"; "tree/list-kind"; "tree/children-of";
+  "tree/child"; "tree/parent"; "tree/ancestors"; "tree/subtree";
+  "tree/leaf"; "tree/siblings"; "tree/next"; "tree/prev";
+  "tree/find-by"; "tree/search-text"; "tree/note-index";
+  "tree/note-index-full"; "tree/folder-index"; "tree/children-html";
+  "tree/path-label"; "tree/segments"; "tree/get-uuid"; "tree/garden-root";
+  "tree/lens-get"; "tree/lens-children"; "tree/lens-subtree";
+  "node-path";
+  (* data spaces reads *)
+  "space-exists?"; "space-list"; "space-members";
+  "list-data-lenses";
+  (* media reads *)
+  "media-list"; "media-meta";
+  (* sync planning is read-only over the caller's own lens unit *)
+  "sync/plan";
+  (* impact queue read arm (impact-mark/clear write below) *)
+  "impact-queue";
+  (* retention reads *)
+  "retention-policies";
+  (* admin/agent token reads *)
+  "list-tokens";
+  (* replication unit diagnostics *)
+  "replication/unit";
+  "list-packages"; "packages";
+  "is-admin?";
+
 ]
 
-let branch_prims = [ "fork"; "merge"; "checkout" ]
+let write_db_prims = [
+  "create"; "update"; "update-field"; "delete"; "deftype";
+  "load-string"; "load-library";  (* persist defs/routes onto branch *)
+  "add-ssh-key"; "revoke-ssh-key";
+  "set-llm-key"; "clear-llm-key";
+  "with-public-write";  (* elevates anon → may write data_rows *)
+  "submit-job"; "submit-job-at"; "cancel-job";  (* borge/jobs.borg WriteDb *)
+  "with-step"; "__step__";  (* checkpoint write; composes with Txn for exactly-once *)
+  "schedule"; "unschedule";  (* borge/jobs.borg schedules WriteDb *)
+  "undo";  (* borge/tree-time.borg reads-as-of-gen restore-by-write WriteDb *)
+  "code-restore";  (* borge/tree-time.borg consumers code-restore WriteDb *)
+  (* META-EVAL family (i-1788669715): evaluates code in the live env / a
+     fresh budget / a timing harness loop — capability or resource reset
+     in one prim. Classified WriteDb so the public-route and AI gates
+     deny them by default; runtime dispatch also denies eval-string et
+     al in public handlers. *)
+  "eval-string"; "bench"; "example-eval";
+  (* tree/data writes (prims_data) *)
+  "tree/upsert"; "tree/delete"; "tree/move"; "tree/move-before";
+  "tree/move-after"; "tree/reorder"; "tree/insert-child";
+  "link"; "unlink";
+  "type-fields";
+  "fork-data"; "merge-data"; "abandon-data";
+  "lens/fork";
+  (* data spaces writes *)
+  "space-create"; "space-add-member"; "space-admit"; "space-remove-member";
+  (* media writes *)
+  "media-put"; "media-put-raw"; "media-delete";
+  (* branch-time writes *)
+  "prune-synced"; "stub-function"; "unbind";
+  (* retention writes *)
+  "retention-delete-policy"; "retention-policy-set"; "retention-run";
+  (* auth writes *)
+  "issue-token"; "revoke-token"; "rotate-token";
+  "set-user-type"; "set-allow-agent-promote";
+  "create-user"; "create-agent";
+  (* package/config writes *)
+  "package-enable"; "package-disable"; "reseed-package";
+  (* sync push writes both sides (server-side merge authority) *)
+  "sync/push";
+  (* route/dispatch executes a named handler — conservative WriteDb so
+     public routes can never call it *)
+  "route/dispatch";
+]
+
+let branch_prims = [
+  "fork"; "merge"; "checkout";
+  (* promote upserts code onto a target branch (prims_auth) *)
+  "promote"; "promote-to-main";
+]
 let publish_prims = [ "route"; "public-route" ]
 let html_prims = [ "render-html"; "redirect" ]
 (* Outbound network (HTTP fetch). Gated to admin/agent at the prim level
    (session.ml); tracked as a capability badge so public routes and AI install
-   policy can deny it by default. *)
-let net_prims = [ "http-get"; "http-post" ]
+   policy can deny it by default. sleep + the tcp stream prims are here too:
+   they BLOCK a fiber for their duration, so any allowlist that denies net
+   also denies them (i-1788669886: sleep used to be "pure", letting public
+   handlers and txn bodies hold fibers/txns open for a minute at a time). *)
+let net_prims = [
+  "http-get"; "http-post";
+  "sleep";
+  "tcp-connect"; "stream-read"; "stream-write"; "stream-close"; "stream-list";
+]
 (* Author tools that freeze into function_defs or drive the model (Ai + WriteDb). *)
 let ai_write_prims = [
   "propose-function"; "install-function"; "agent-task";
   "llm-inner"; "llm-outer"; "llm-rewrite"; "llm-seed";
   "agent-session-new"; "agent-say"; "agent-session-delete";
 ]
-(* Portal that only talks to the model (Ai only) — legacy one-shot. *)
-let ai_prims = "agent" :: ai_write_prims
+(* Portal that only talks to the model (Ai only) — legacy one-shot + raw completion. *)
+let ai_only_prims = [ "agent"; "llm-chat" ]
+let ai_prims = ai_only_prims @ ai_write_prims
 
 let effects_for_prim (name : string) : effect_set =
   if List.mem name pure_prims then EffSet.empty
@@ -226,22 +318,86 @@ let effects_for_prim (name : string) : effect_set =
   else if List.mem name publish_prims then EffSet.singleton Publish
   else if List.mem name html_prims then EffSet.singleton Html
   else if List.mem name net_prims then EffSet.singleton Net
-  else if name = "agent" then EffSet.singleton Ai
+  else if List.mem name ai_only_prims then EffSet.singleton Ai
   else if List.mem name ai_write_prims then
     EffSet.union (EffSet.singleton Ai) (EffSet.singleton WriteDb)
   else if name = "with-transaction" || name = "__with_transaction__" then EffSet.singleton Txn
   else
-    (* Unknown name: not a registered capability prim. User fns resolved
-       via known_fn; bare unknowns contribute nothing (avoid painting every
-       call as db-write). *)
+    (* Unknown name: not a classified prim. User fns resolved via
+       known_fn; bare unknowns contribute nothing HERE (avoid painting
+       every call as db-write). POLICY GATES must not use this function
+       raw — go through [strict_prim_effects], which fails closed for
+       unclassified names (EffSet.top). Drift between the registered
+       catalog and these lists fails boot via Session.make's assertion. *)
     EffSet.empty
+
+(** [true] when [name] is in exactly one capability bucket (or a
+    special-case arm). Classification-complete names are the only ones a
+    policy gate should trust. *)
+let is_classified (name : string) : bool =
+  List.mem name pure_prims
+  || List.mem name read_db_prims
+  || List.mem name write_db_prims
+  || List.mem name branch_prims
+  || List.mem name publish_prims
+  || List.mem name html_prims
+  || List.mem name net_prims
+  || List.mem name ai_prims
+  || name = "with-transaction" || name = "__with_transaction__"
+
+(** Strict lookup for policy gates (public-route publish + dispatch,
+    AI install): unclassified names infer as [EffSet.top], denied by
+    every allowlist. User-fn names never reach this raw — inference
+    resolves them via known_fn first. *)
+let strict_prim_effects (name : string) : effect_set =
+  if is_classified name then effects_for_prim name else EffSet.top
+
+(** Boot-time classification audit (i-1788670318). Given the registered
+    prim catalog, returns drift errors: registered names missing from
+    every bucket, and names listed in more than one bucket. Empty list
+    = clean. Session.make fails boot on non-empty. *)
+let classification_errors (catalog : string list) : string list =
+  let buckets =
+    [ ("pure", pure_prims); ("read-db", read_db_prims);
+      ("write-db", write_db_prims); ("branch", branch_prims);
+      ("publish", publish_prims); ("html", html_prims);
+      ("net", net_prims); ("ai", ai_prims);
+      ("txn", [ "with-transaction"; "__with_transaction__" ]) ]
+  in
+  let bucket_of = Hashtbl.create 256 in
+  let errs = ref [] in
+  List.iter
+    (fun (label, names) ->
+      List.iter
+        (fun n ->
+          match Hashtbl.find_opt bucket_of n with
+          | None -> Hashtbl.replace bucket_of n [ label ]
+          | Some prev -> Hashtbl.replace bucket_of n (label :: prev))
+        names)
+    buckets;
+  List.iter
+    (fun name ->
+      match Hashtbl.find_opt bucket_of name with
+      | None ->
+          errs :=
+            Printf.sprintf "unclassified prim %S (registered, in no bucket)" name
+            :: !errs
+      | Some labels ->
+          if List.length labels > 1 then
+            errs :=
+              Printf.sprintf "prim %S in multiple buckets (%s)" name
+                (String.concat "," (List.rev labels))
+              :: !errs)
+    catalog;
+  List.rev !errs
+let default_prim_lookup = effects_for_prim
+
 
 type prim_effect_lookup = string -> effect_set
 type known_fn_lookup = string -> effect_set option
 
 (** Default [effect_set] resolution for prim names — [effects_for_prim]. *)
 let default_prim_lookup = effects_for_prim
-
 (** Build a [known_fn] lookup from visible bindings [(name, body)].
     Memoized; cycles break by treating the in-progress name as pure so
     mutual recursion does not diverge. Used by badges, AI install gate,
