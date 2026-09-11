@@ -136,6 +136,17 @@ type t = {
   (** When true, (checkout)/(fork)/(merge) are blocked so the agent
       cannot leave the current branch mid-task. *)
   mutable agent_branch_lock : bool;
+  (** spec_delegation q4 (2026-09-11): true when the session carries a
+      scoped on-behalf-of token - manifest.username is the OWNER the
+      session acts for; the carrying agent is the actor (recorded per
+      write once the token resolve path lands; no producer yet, so every
+      session is self today). A delegated session may load SEEDED
+      packages only (Session.load_library) and NEVER persists code:
+      define/route/package persistence is skipped while set -
+      delegation is for data, never for code. Blocks reseed-package and
+      deftype (schema is code-adjacent). Branch moves (fork/merge/
+      checkout) are the token resolve path's job via agent_branch_lock. *)
+  mutable delegated : bool;
   (** Admin flag from users.is_admin (auth identity). *)
   mutable is_admin : bool;
   (** Raw pp_session cookie for the active HTTP request, if any. *)
