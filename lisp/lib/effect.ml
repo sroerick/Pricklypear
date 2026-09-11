@@ -314,6 +314,29 @@ let ai_write_prims = [
 let ai_only_prims = [ "agent"; "llm-chat" ]
 let ai_prims = ai_only_prims @ ai_write_prims
 
+(** Heads the EVALUATOR dispatches as special forms before any prim
+    lookup (Eval.special_form_names, i-1788671219). They can therefore
+    reach [infer] as App (Var name, …) nodes — stored ASTs from before
+    the If-node codec, macro templates round-tripped through
+    value_to_expr — and must never fall through to a prim lookup:
+    strict lookups would raise Unresolved_name (prod /guestbook denied
+    on "if", 2026-09-11) and default lookups would silently drop the
+    body's effects. Special forms are not user-bindable
+    (assert_bindable_name) and carry no capability of their own; infer
+    recurses into the argument exprs, which for control flow
+    over-approximates (both arms), for delay captures the recipe's
+    static effects, and for the OCaml-loop list ops includes the mapped
+    function's effects. Parity with Eval.special_form_names is asserted
+    in lisp/test/eval_test.ml. *)
+let special_form_heads : string list =
+  [ "lambda"; "let"; "letrec"; "if"; "define"; "quote"; "seq"; "begin";
+    "match"; "guard"; "error"; "prim";
+    "with-transaction"; "with-step"; "quasiquote"; "unquote"; "unquote-splicing";
+    "defmacro"; "macroexpand-1"; "macroexpand"; "gensym";
+    "cond"; "and"; "or";
+    "apply"; "list/map"; "list/filter"; "list/foldl"; "list/foldr";
+    "delay"; "force" ]
+
 let effects_for_prim (name : string) : effect_set =
   if List.mem name pure_prims then EffSet.empty
   else if List.mem name read_db_prims then EffSet.singleton ReadDb
@@ -477,6 +500,22 @@ and infer
   | App (head, args) ->
       let head_fx =
         match head with
+        | Var name when List.mem name special_form_heads ->
+            (* Mirror eval's App dispatch: special forms never reach prim
+               dispatch, so do not consult [prims] (strict would raise,
+               default would drop the body). Capabilities these forms
+               carry themselves: with-transaction holds the txn;
+               with-step writes a checkpoint (composes with Txn).
+               Everything else is pure dispatch — the args carry the
+               effects. *)
+            let extra =
+              if name = "with-transaction" then EffSet.singleton Txn
+              else if name = "with-step" then
+                EffSet.unions [ EffSet.singleton Txn;
+                                EffSet.singleton WriteDb ]
+              else EffSet.empty
+            in
+            EffSet.unions (extra :: List.map go args)
         | Var name ->
             (match known_fn name with
              | Some s -> s
