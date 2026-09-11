@@ -35,13 +35,19 @@ let expand_body (env : Env.env) (body : expr) : expr =
     fell through to the strict prim lookup and inferred as EffSet.top,
     denying every published public route (prod /welcome 500, 2026-09-11).
     Forcing is the memoized single observation point dispatch itself
-    uses, so the gate does no work the request would not do. Bodies are
-    macroexpanded so sibling known_fn resolution also sees through
-    macros. *)
+    uses, so the gate does no work the request would not do.
+
+    A binding whose force raises (any exception — the prod chain carries
+    defines that fail under anon, e.g. admin-gated prim bodies) is
+    SKIPPED, not propagated: it just won't be in known_fn, so if the
+    handler actually applies that name, inference falls through to the
+    strict prim lookup and fails closed with the normal denial message
+    instead of 500ing the gate. Bodies are macroexpanded so sibling
+    known_fn resolution also sees through macros. *)
 let env_lambda_bindings (env : Env.env) : (string * expr) list =
   Env.fold env
     (fun name v acc ->
-      match Env.force_value v with
+      match (try Env.force_value v with _ -> v) with
       | VLambda (_, body, _) -> (name, expand_body env body) :: acc
       | _ -> acc)
     []
@@ -53,7 +59,6 @@ let env_lambda_bindings (env : Env.env) : (string * expr) list =
     Unknown / non-function handlers return [Error] (fail-closed). *)
 let check_public_handler ~(env : Env.env) (handler : string)
     : (unit, string) result =
-  let known_fn = Effect.known_fn_of_bindings (env_lambda_bindings env) in
   let allow = Effect.public_route_allow () in
   let check fx =
     if Effect.policy_allows ~allow fx then Ok ()
@@ -68,13 +73,16 @@ let check_public_handler ~(env : Env.env) (handler : string)
   match Env.lookup env handler with
   | Some (VLambda (_, body, _)) ->
       (try
+         let known_fn =
+           Effect.known_fn_of_bindings (env_lambda_bindings env)
+         in
          check
            (Effect.infer ~known_fn ~prims:Effect.strict_prim_effects
               (expand_body env body))
        with Interp_error e ->
          Error
            (Printf.sprintf
-              "public route denied: handler %S macroexpand failed: %s"
+              "public route denied: handler %S failed the effect walk: %s"
               handler
               (match e with
                | User_error (m, _) -> m
