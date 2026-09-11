@@ -353,8 +353,17 @@ let is_classified (name : string) : bool =
     AI install): unclassified names infer as [EffSet.top], denied by
     every allowlist. User-fn names never reach this raw — inference
     resolves them via known_fn first. *)
+(** Raised by [strict_prim_effects] for an applied name that is neither a
+    visible user function nor a classified prim. Policy gates catch it to
+    NAME the offender — "effects = EffSet.top" told you nothing about
+    which symbol the walk could not resolve (the /guestbook prod hunt,
+    2026-09-11). Every raise site previously inferred top and was denied
+    anyway, so this only changes the message, never the verdict. *)
+exception Unresolved_name of string
+
 let strict_prim_effects (name : string) : effect_set =
-  if is_classified name then effects_for_prim name else EffSet.top
+  if is_classified name then effects_for_prim name
+  else raise (Unresolved_name name)
 
 (** Boot-time classification audit (i-1788670318). Given the registered
     prim catalog, returns drift errors: registered names missing from

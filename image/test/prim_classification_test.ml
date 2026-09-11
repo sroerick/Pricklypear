@@ -30,10 +30,16 @@ let test_full_catalog_classified () =
   Alcotest.(check bool) "session make passed classification" true true
 
 let test_strict_fails_closed () =
-  let fx = E.strict_prim_effects "definitely-not-a-prim-xyz" in
-  Alcotest.(check bool) "unclassified name infers top" true
-    (E.EffSet.mem E.Net fx && E.EffSet.mem E.WriteDb fx
-   && E.EffSet.mem E.Ai fx);
+  (* 2026-09-11: unclassified names RAISE Unresolved_name (the gate names
+     the offender); catching it and denying is the fail-closed path —
+     every raise site previously inferred EffSet.top and was denied. *)
+  (match E.strict_prim_effects "definitely-not-a-prim-xyz" with
+   | fx ->
+       Alcotest.failf "expected Unresolved_name, got effects %s"
+         (E.EffSet.pp fx)
+   | exception E.Unresolved_name n ->
+       Alcotest.(check string) "names the offender" n
+         "definitely-not-a-prim-xyz");
   let fx2 = E.strict_prim_effects "eval-string" in
   Alcotest.(check bool) "eval-string is WriteDb (meta-eval)" true
     (E.EffSet.mem E.WriteDb fx2);
