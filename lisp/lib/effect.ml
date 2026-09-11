@@ -394,14 +394,13 @@ let classification_errors (catalog : string list) : string list =
               :: !errs)
     catalog;
   List.rev !errs
-let default_prim_lookup = effects_for_prim
-
 
 type prim_effect_lookup = string -> effect_set
 type known_fn_lookup = string -> effect_set option
 
 (** Default [effect_set] resolution for prim names — [effects_for_prim]. *)
 let default_prim_lookup = effects_for_prim
+
 (** Build a [known_fn] lookup from visible bindings [(name, body)].
     Memoized; cycles break by treating the in-progress name as pure so
     mutual recursion does not diverge. Used by badges, AI install gate,
