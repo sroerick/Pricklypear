@@ -327,7 +327,7 @@ let rec eval_step
            (match Env.lookup env name with
             | Some (VMacro (params, body, clo_env)) ->
                 expand_and_eval_macro ~budget ~prims env
-                  ~params ~body ~clo_env ~arg_exprs:args
+                  ~name ~params ~body ~clo_env ~arg_exprs:args
             | _ ->
                 let f = eval ~budget ~prims env head in
                 let arg_vals = List.map (eval ~budget ~prims env) args in
@@ -379,6 +379,7 @@ and eval
 and expand_macro_once
     ~(budget : budget)
     ~(prims : prim_table)
+    ~(name : string)
     ~(params : string list)
     ~(body : expr)
     ~(clo_env : env)
@@ -388,7 +389,9 @@ and expand_macro_once
   let expected = List.length params
   and got = List.length arg_exprs in
   if expected <> got then
-    raise (Interp_error (Arity_mismatch ("macro", expected, got)));
+    (* Name the macro: a bare "macro arity 2 vs 3" told you nothing about
+       which stored binding drifted (the 2026-09-11 /guestbook hunt). *)
+    raise (Interp_error (Arity_mismatch ("macro " ^ name, expected, got)));
   let arg_vals = List.map reify_expr arg_exprs in
   let menv = Env.child clo_env in
   List.iter2 (fun p a -> Env.define menv p a) params arg_vals;
@@ -401,6 +404,7 @@ and expand_and_eval_macro
   ~(budget : budget)
   ~(prims : prim_table)
   (call_env : env)
+  ~(name : string)
   ~(params : string list)
   ~(body : expr)
   ~(clo_env : env)
@@ -408,7 +412,7 @@ and expand_and_eval_macro
   : step =
   let expansion_e =
     value_to_expr
-      (expand_macro_once ~budget ~prims ~params ~body ~clo_env arg_exprs)
+      (expand_macro_once ~budget ~prims ~name ~params ~body ~clo_env arg_exprs)
   in
   Cont (call_env, expansion_e)
 
@@ -444,7 +448,7 @@ and macroexpand_expr
        | Some (VMacro (params, body, clo_env)) ->
            go
              (value_to_expr
-                (expand_macro_once ~budget ~prims ~params ~body ~clo_env args))
+                (expand_macro_once ~budget ~prims ~name ~params ~body ~clo_env args))
        | _ -> App (Var name, List.map go args))
   | App (h, args) -> App (go h, List.map go args)
 
@@ -798,7 +802,7 @@ and eval_special_form
        | App (Var name, args) ->
            (match Env.lookup env name with
             | Some (VMacro (params, body, clo_env)) ->
-                Done (expand_macro_once ~budget ~prims ~params ~body ~clo_env args)
+                Done (expand_macro_once ~budget ~prims ~name ~params ~body ~clo_env args)
             | _ -> Done (reify_expr form))
        | _ -> Done (reify_expr form))
   | "macroexpand", [ _; form ] ->
@@ -810,7 +814,7 @@ and eval_special_form
              | Some (VMacro (params, body, clo_env)) ->
                  loop
                    (value_to_expr
-                      (expand_macro_once ~budget ~prims ~params ~body ~clo_env args))
+                      (expand_macro_once ~budget ~prims ~name ~params ~body ~clo_env args))
              | _ -> reify_expr e)
         | _ -> reify_expr e
       in

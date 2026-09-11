@@ -109,4 +109,4 @@
           (let ((resp (standup/ntfy-push b)))
             (if (dict-get resp "ok") resp (error "ntfy push failed")))
           (guard (lambda (e) e) (chat/say-in "lobby" b))
-          (string-append b "\npush ok")))))))
+          (string-append b "\npush ok"))))))
