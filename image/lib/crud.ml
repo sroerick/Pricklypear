@@ -966,9 +966,12 @@ let list_with_author
     | None -> (VList [])
     | Some conn ->
         let user = session_user () in
+        (* Merge-integration: rows-author postdates i-1788669685 but kept
+           the raw concat this file's other readers route through
+           safe_sort_sql — same strict grammar, no raw SQL. *)
         let order_by =
           match sort with
-          | Some s -> " ORDER BY " ^ s
+          | Some s -> safe_sort_sql ~prim:"rows-author" ~sort:s
           | None -> " ORDER BY created_at ASC"
         in
         let sql =
@@ -1029,10 +1032,10 @@ let find_rows_with_author
           i := !i + 1;
           let order_by =
             match sort with
-            | Some s -> " ORDER BY " ^ s ^ " LIMIT "
-            | None -> " ORDER BY created_at ASC LIMIT "
+            | Some s -> safe_sort_sql ~prim:"find-rows-author" ~sort:s
+            | None -> " ORDER BY created_at ASC"
           in
-          Buffer.add_string buf (Printf.sprintf "%s$%d" order_by !i);
+          Buffer.add_string buf (Printf.sprintf "%s LIMIT $%d" order_by !i);
           params := !params @ [ Pgx.Value.of_int limit ];
           let rows = Store_db.exec conn ~params:!params (Buffer.contents buf) in
           let lisp_rows =

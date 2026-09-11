@@ -217,6 +217,10 @@ let read_db_prims = [
   "tree/path-label"; "tree/segments"; "tree/get-uuid"; "tree/garden-root";
   "tree/lens-get"; "tree/lens-children"; "tree/lens-subtree";
   "node-path";
+  (* author-visible reads (agent-native-m2): rows-author/find-rows-author
+     return [id; author; fields] triples with the same RLS visibility as
+     rows/find-rows *)
+  "rows-author"; "find-rows-author";
   (* data spaces reads *)
   "space-exists?"; "space-list"; "space-members";
   "list-data-lenses";
