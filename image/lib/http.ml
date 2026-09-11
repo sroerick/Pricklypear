@@ -491,13 +491,11 @@ let invoke_user_route (env : route_env)
               (fun () -> Session.call_handler session ~request handler_name)
           in
           match result with
-          | Session.Handler_ok value ->
-              (* Public front-door pages: no product chrome (private nav). *)
-              if env.path = "/welcome"
-                 || env.path = "/background" || env.path = "/roadmap"
-                 || env.path = "/signup"
-                 || env.path = "/guestbook"
-              then begin
+            | Session.Handler_ok value ->
+                (* Public front-door pages: no product chrome (private nav).
+                   The list lives in Http_core.front_door_pages — one source
+                   of truth shared with the hard-public gate. *)
+                if List.mem env.path Http_core.front_door_pages then begin
                 let title =
                   if env.path = "/background" then "Background"
                   else if env.path = "/roadmap" then "Roadmap"
