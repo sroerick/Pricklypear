@@ -498,36 +498,55 @@ and infer
   | Prim (name, args) ->
       EffSet.union (prims name) (EffSet.unions (List.map go args))
   | App (head, args) ->
-      let head_fx =
-        match head with
-        | Var name when List.mem name special_form_heads ->
-            (* Mirror eval's App dispatch: special forms never reach prim
-               dispatch, so do not consult [prims] (strict would raise,
-               default would drop the body). Capabilities these forms
-               carry themselves: with-transaction holds the txn;
-               with-step writes a checkpoint (composes with Txn).
-               Everything else is pure dispatch — the args carry the
-               effects. *)
-            let extra =
-              if name = "with-transaction" then EffSet.singleton Txn
-              else if name = "with-step" then
-                EffSet.unions [ EffSet.singleton Txn;
-                                EffSet.singleton WriteDb ]
-              else EffSet.empty
-            in
-            EffSet.unions (extra :: List.map go args)
-        | Var name ->
-            (match known_fn name with
-             | Some s -> s
-             | None -> prims name)
-        | _ -> go head
-      in
-      let special =
-        match head with
-        | Var "with-transaction" -> EffSet.singleton Txn
-        | _ -> EffSet.empty
-      in
-      EffSet.unions (head_fx :: special :: List.map go args)
+      (match head with
+       | Var name when name = "let" || name = "letrec" ->
+           (* let/letrec arrive as App nodes: the reader encodes the
+              binding list as App (first_pair, [rest pairs]) where each
+              pair is App (Var name, [val]) — parse_binding_pairs' exact
+              shape. The pair heads are BINDING NAMES (syntax), not
+              calls: strict prim lookups on them denied every
+              multi-binding-let public handler (prod /guestbook,
+              2026-09-11). Walk the VALUE exprs and the body — and ONLY
+              those: the generic tail below re-walks args verbatim,
+              which would hit the pair heads a second time. *)
+           (match args with
+            | [ App (App (Var _, [ v ]), rest_pairs); body ] ->
+                let pair_val p =
+                  match p with App (Var _, [ v ]) -> go v | x -> go x
+                in
+                EffSet.unions (go v :: List.map pair_val rest_pairs @ [ go body ])
+            | _ -> EffSet.unions (List.map go args))
+       | _ ->
+           let head_fx =
+             match head with
+             | Var name when List.mem name special_form_heads ->
+                 (* Mirror eval's App dispatch: special forms never reach
+                    prim dispatch, so do not consult [prims] (strict
+                    would raise, default would drop the body).
+                    Capabilities these forms carry themselves:
+                    with-transaction holds the txn; with-step writes a
+                    checkpoint (composes with Txn). Everything else is
+                    pure dispatch — the args carry the effects. *)
+                 let extra =
+                   if name = "with-transaction" then EffSet.singleton Txn
+                   else if name = "with-step" then
+                     EffSet.unions [ EffSet.singleton Txn;
+                                     EffSet.singleton WriteDb ]
+                   else EffSet.empty
+                 in
+                 EffSet.unions (extra :: List.map go args)
+             | Var name ->
+                 (match known_fn name with
+                  | Some s -> s
+                  | None -> prims name)
+             | _ -> go head
+           in
+           let special =
+             match head with
+             | Var "with-transaction" -> EffSet.singleton Txn
+             | _ -> EffSet.empty
+           in
+           EffSet.unions (head_fx :: special :: List.map go args))
 
 (** Default AI allowlist for generated code (install_function bodies).
 
