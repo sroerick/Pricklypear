@@ -1,4 +1,4 @@
-;;;; nopales.lisp -- Gregor's Pricklypear dual-home layer.
+;;;; nopalito.lisp -- Gregor's Pricklypear dual-home layer.
 ;;;; A portable Nopales subset interpreter with local/remote backends, plus
 ;;;; the PP-backed store for Autolith persistent memories.
 ;;;;
@@ -13,7 +13,7 @@
 ;;;; member-gated cactus-ops space (owner gregor), one row per active
 ;;;; memory keyed by the Autolith stable id in field "mid".
 
-(defpackage :nopales
+(defpackage :nopalito
   (:use :cl)
   (:export
    #:*pp-url* #:*pp-token* #:*pp-timeout* #:load-env
@@ -35,7 +35,7 @@
  #:graft-drain #:graft-status #:graft-pending-count #:graft-compact
  #:graft-rebuild))
 
-(in-package :nopales)
+(in-package :nopalito)
 
 ;;;; -- tiny string helpers
 
@@ -245,7 +245,7 @@ arrays as lists, true/false as :true/:false, null as :nil."
 
 (defun nopales-read (string)
   "Read one form from STRING using the CL reader in the NOPALES package."
-  (let ((*package* (find-package :nopales)))
+  (let ((*package* (find-package :nopalito)))
     (with-input-from-string (s string)
       (read s))))
 
@@ -602,7 +602,7 @@ arrays as lists, true/false as :true/:false, null as :nil."
         (pathname (if (char= (char env (1- (length env))) #\/)
                       env
                       (concatenate 'string env "/")))
-        #P"/home/al/.local/share/nopales/"))
+        (merge-pathnames (concatenate 'string (or (sb-ext:posix-getenv "HOME") "/home/al") "/.local/share/nopalito/"))))
   "Graft queue directory; override with $NOPALES_DATA for portable installs.")
 (defparameter *graft-log-path* (merge-pathnames "graft.log" *graft-dir*))
 (defparameter *graft-state-path* (merge-pathnames "graft-state.sexp" *graft-dir*))

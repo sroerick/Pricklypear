@@ -1,8 +1,8 @@
 ;;;; tests.lisp -- equivalence battery: local interpreter vs live PP.
-;;;; Run in the worker: (load "~/nopales/nopales.lisp") (load "~/nopales/tests.lisp") (battery) (store-battery)
+;;;; Run in the worker: (load "~/nopales/nopalito.lisp") (load "~/nopales/tests.lisp") (battery) (store-battery)
 ;;;; Uses type gregor-memory in cactus-ops; all test rows are deleted at the end.
 
-(in-package :nopales)
+(in-package :nopalito)
 
 (defparameter *pass* 0)
 (defparameter *fail* 0)
