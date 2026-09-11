@@ -213,9 +213,10 @@ let jobs_runner_loop ~(session : Session.t) : unit =
                    ~branch:sch.Jobs.s_branch
                    ~submitted_by:sch.Jobs.s_submitted_by
                    ~run_at_ms:fired_at ());
-              Jobs.advance_schedule ~store:session.store
-                ~name:sch.Jobs.s_name ~fired_at
-                ~cron:sch.Jobs.s_cron ~every_ms:sch.Jobs.s_every_ms
+               Jobs.advance_schedule ~store:session.store
+                 ~name:sch.Jobs.s_name ~fired_at
+                 ~cron:sch.Jobs.s_cron ~every_ms:sch.Jobs.s_every_ms
+                 ~tz:sch.Jobs.s_tz
             with _ -> ());
            fire_schedules ()
      in

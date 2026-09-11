@@ -503,6 +503,34 @@ let test_every_ms_drift () =
   Alcotest.(check bool) "cron spec is cron" true
     (J.spec_is_cron "* * * * *")
 
+(* tz knob (roerick 09-11, "match cron with mountain time"): the cron
+   calendar is injectable, so tests run without touching the process TZ.
+   [utc_minus_6] stands in for America/Denver in DST (MDT). *)
+let utc_minus_6 (t : float) : Unix.tm =
+  Unix.gmtime (t -. (6.0 *. 3600.0))
+
+let test_cron_tz_local () =
+  let now = now_ms () in
+  let base = J.next_cron_ms_with ~calendar:utc_minus_6 "0 9 * * *" now in
+  let utc = J.next_cron_ms "0 9 * * *" now in
+  let hour_of ~calendar n = (calendar (Int64.to_float n /. 1000.0)).Unix.tm_hour in
+  (match base, utc with
+   | Some b, Some u ->
+       Alcotest.(check int) "local calendar fires at 09:00 projected"
+         9 (hour_of ~calendar:utc_minus_6 b);
+       Alcotest.(check bool) "09:00 local (15:00Z in MDT) differs from 09:00Z"
+         true (Int64.compare b u <> 0);
+       Alcotest.(check int) "utc calendar still fires at 09:00Z"
+         9 (hour_of ~calendar:Unix.gmtime u);
+       Alcotest.(check bool) "local fire is 6h after the utc fire"
+         true (Int64.compare b (Int64.add u (Int64.of_int (6 * 3600 * 1000))) = 0)
+   | _ -> Alcotest.fail "next_cron_ms_with returned None");
+  (* every-ms schedules ignore tz; the matcher routes by the tz string *)
+  Alcotest.(check bool) "tz routing: local vs utc differ" true
+    (Int64.compare
+       (Option.get (J.next_cron_for_tz "local" "0 9 * * *" now))
+       (Option.get (J.next_cron_for_tz "utc" "0 9 * * *" now)) <> 0)
+
 let test_cron_across_month () =
   let now = now_ms () in
   (* "0 0 1 1 *" = every Jan 1 00:00 UTC; the returned fire must be a
@@ -678,7 +706,7 @@ let test_schedule_to_value_json () =
     { J.s_name = "s\"ch"; J.s_fn = adversarial; J.s_args = "{}"
     ; J.s_branch = "b\"r"; J.s_submitted_by = "a\\ice"
     ; J.s_cron = Some "* * * * *"; J.s_every_ms = None; J.s_next_run = 99L
-    ; J.s_enabled = true }
+    ; J.s_enabled = true; J.s_tz = "utc" }
   in
   let json = parse_json (match J.schedule_to_value s with
                          | Pricklypear_lisp.Ast.VStr s -> s
@@ -754,6 +782,8 @@ let () =
             test_every_ms_drift
         ; Alcotest.test_case "cron across-month boundary" `Quick
             test_cron_across_month
+        ; Alcotest.test_case "cron tz: local calendar vs utc" `Quick
+            test_cron_tz_local
         ; Alcotest.test_case "schedule CRUD + claim/advance/disable" `Quick
             test_schedule_crud ] )
     ]
