@@ -181,9 +181,14 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
     match gate with
     | Error msg -> (Pricklypear_lisp.Ast.VStr msg)
     | Ok () ->
-        Hashtbl.replace t.routes route_path (handler, visibility);
-        let _ =
-          if t.seed_additive then
+          (* spec_delegation: delegated sessions register in-memory only -
+             the view_bindings row is a code write, and delegation is for
+             data, never for code. Seeded package loads keep their routes
+             working in-session; nothing outlives the session. *)
+          Hashtbl.replace t.routes route_path (handler, visibility);
+          let _ =
+            if t.delegated then ()
+            else if t.seed_additive then
             if pass_vis_to_store then
               Store.register_route_if_absent t.store ~route:route_path
                 ~handler ~visibility ()
