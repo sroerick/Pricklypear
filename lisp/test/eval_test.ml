@@ -1390,6 +1390,25 @@ let gate_tests = [
     in
     Env.define env "h" (Ast.VLambda ([], body, env));
     Alcotest.(check bool) "app-if pure branches allowed" true (gate_ok env "h"));
+  ("gate: multi-binding let pairs are syntax, not calls", `Quick, fun () ->
+    (* The reader encodes (let ((name v) (site s)) body) as
+       App(Var "let", [App(App(Var "name",[v]), [App(Var "site",[s])]); body])
+       — parse_binding_pairs' shape. Strict lookups on the pair heads
+       ("name", "site") denied every multi-let public handler. *)
+    let env = Env.create () in
+    let bindings =
+      Ast.App (Ast.App (Ast.Var "name", [ Ast.App (Ast.Var "request-param", [ Ast.Lit (Ast.VStr "k") ]) ]),
+               [ Ast.App (Ast.Var "site", [ Ast.Lit (Ast.VStr "s") ]) ])
+    in
+    let body =
+      Ast.App (Ast.Var "let",
+               [ bindings;
+                 Ast.App (Ast.Var "string-append", [ Ast.Var "name"; Ast.Var "site" ]) ])
+    in
+    Env.define env "h" (Ast.VLambda ([], body, env));
+    (match Route_gate.check_public_handler ~env "h" with
+     | Ok () -> Alcotest.(check bool) "multi-let handler allowed" true true
+     | Error m -> Alcotest.fail m));
 ]
 
 let contains_sub ~sub s =
