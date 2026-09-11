@@ -110,9 +110,29 @@ let register (t : t) (tbl : Primitives.t) : unit =
       | _ ->
         (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("cancel-job", "need job-id-str", "bad-args")))));
 
-  (* (schedule "name" "cron-or-ms" "fn" args) -> upsert a schedule,
+  (* (schedule "name" "cron-or-ms" "fn" args [tz]) -> upsert a schedule,
      caller-scoped identity + branch. spec is a 5-field cron or an
-     every-ms integer. Capability: WriteDb (borge/jobs.borg schedules). *)
+     every-ms integer. Optional [tz] is "utc" (default) or "local":
+     cron fields match the image process zone (America/Denver in prod).
+     Capability: WriteDb (borge/jobs.borg schedules). *)
+  let do_schedule ~tz name spec fn args_val =
+    let args_json =
+      match args_val with
+      | Pricklypear_lisp.Ast.VStr s -> s
+      | _ -> Pricklypear_lisp.Reader.pp_value args_val
+    in
+    let caller = job_caller () in
+    if caller = "anonymous" then
+      (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("schedule", "denied for anonymous", "denied"))))
+    else
+      let branch =
+        match Request_context.get () with
+        | Some c -> (Request_context.manifest c).branch_name
+        | None -> t.manifest.branch_name
+      in
+      Jobs.schedule_upsert ~store:t.store ~name ~spec ~fn ~args_json
+        ~branch ~submitted_by:caller ?tz ()
+  in
   Primitives.register tbl "schedule"
     (fun args ->
       match args with
@@ -120,24 +140,15 @@ let register (t : t) (tbl : Primitives.t) : unit =
           Pricklypear_lisp.Ast.VStr spec;
           Pricklypear_lisp.Ast.VStr fn;
           args_val ] ->
-        let args_json =
-          match args_val with
-          | Pricklypear_lisp.Ast.VStr s -> s
-          | _ -> Pricklypear_lisp.Reader.pp_value args_val
-        in
-        let caller = job_caller () in
-        if caller = "anonymous" then
-          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("schedule", "denied for anonymous", "denied"))))
-        else
-          let branch =
-            match Request_context.get () with
-            | Some c -> (Request_context.manifest c).branch_name
-            | None -> t.manifest.branch_name
-          in
-          Jobs.schedule_upsert ~store:t.store ~name ~spec ~fn ~args_json
-            ~branch ~submitted_by:caller ()
+        do_schedule ~tz:None name spec fn args_val
+      | [ Pricklypear_lisp.Ast.VStr name;
+          Pricklypear_lisp.Ast.VStr spec;
+          Pricklypear_lisp.Ast.VStr fn;
+          args_val;
+          Pricklypear_lisp.Ast.VStr tz ] ->
+        do_schedule ~tz:(Some tz) name spec fn args_val
       | _ ->
-        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("schedule", "need name-str, spec-str, fn-str, args", "bad-args")))));
+        (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("schedule", "need name-str, spec-str, fn-str, args, [tz-str]", "bad-args")))));
 
   Primitives.register tbl "unschedule"
     (fun args ->
