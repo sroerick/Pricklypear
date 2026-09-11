@@ -1377,6 +1377,19 @@ let gate_tests = [
     Env.define_thunk env "h" ~force
       (Reader.read_one "(lambda () (writer))");
     Alcotest.(check bool) "thunk sibling write denied" false (gate_ok env "h"));
+  ("gate: App(Var \"if\") from old stored ASTs infers structurally", `Quick, fun () ->
+    (* 2026-09-11 prod /guestbook: ASTs stored before the If-node codec
+       decode to App (Var "if", …). Eval's App dispatch handles them at
+       runtime; infer must mirror that (special_form_heads) instead of
+       consulting the prim lookup — strict raised Unresolved_name "if"
+       and denied the route. *)
+    let env = Env.create () in
+    let body =
+      Ast.App (Ast.Var "if",
+               [ Ast.Lit (Ast.VBool true); Ast.Var "x"; Ast.Var "y" ])
+    in
+    Env.define env "h" (Ast.VLambda ([], body, env));
+    Alcotest.(check bool) "app-if pure branches allowed" true (gate_ok env "h"));
 ]
 
 let contains_sub ~sub s =
@@ -1455,6 +1468,14 @@ let special_form_parity_tests = [
           Alcotest.failf "%s must not be a special form" n)
       [ "car"; "cdr"; "list"; "map"; "filter"; "when"; "unless"; "ifx"; "";
         "string-append" ]);
+  ("Effect.special_form_heads == Eval.special_form_names", `Quick, fun () ->
+    (* 2026-09-11: Effect.infer mirrors eval's App dispatch for special
+       forms (stored ASTs from before the If-node codec reach infer as
+       App (Var "if") nodes). Drift here would make inference raise
+       Unresolved_name on a special form — or silently drop its body. *)
+    Alcotest.(check (list string)) "parity (sorted)"
+      (sorted_names Eval.special_form_names)
+      (sorted_names Effect.special_form_heads));
 ]
 
 (* --- Macro-engine unification (i-1788671219): all four expansion sites
