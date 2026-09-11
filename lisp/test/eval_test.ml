@@ -1552,7 +1552,7 @@ let macro_engine_tests = [
         ignore (Eval.eval_string ~prims env "(macroexpand-1 (when))");
         None
       with
-      | Ast.Interp_error (Ast.Arity_mismatch ("macro", 2, 0)) -> Some ()
+      | Ast.Interp_error (Ast.Arity_mismatch ("macro when", 2, 0)) -> Some ()
       | Ast.Interp_error e ->
           Alcotest.failf "wrong error: %s" (Ast.pp_interp_error e)
     with
