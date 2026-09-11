@@ -509,6 +509,13 @@
         borge/habitat-workflow.borg.")
   (inline borge/habitat-workflow.borg)
  )
+ (section work-triage
+  (doc "Book chapter — work triage: the flow that turns incoming work
+        (kanban cards, note todos, filed issues) into a ranked, owned,
+        flowing board; the triage CONVENTION and the issue-board
+        bridge. Full text inlined from borge/work-triage.borg.")
+  (inline borge/work-triage.borg)
+ )
  (section habitat-book
   (doc "Book chapter — the spec IS the book: borg chapters rendered
         to paper (borge) and to the habitat (Nopales `book` package),
