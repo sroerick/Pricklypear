@@ -1,13 +1,15 @@
 ;;;; graft-drain.lisp -- one-shot cron drain: graft queue -> Pricklypear.
-;;;; Crontab (user al):
-;;;;   */10 * * * * /usr/local/bin/sbcl --script /home/al/nopales/graft-drain.lisp
-;;;; Loads ~/nopales/nopales.lisp, drains pending graft entries in batched
-;;;; evals (idempotent by mid), appends one result line per run to
-;;;; ~/.local/share/nopales/drain.log. Exit 1 on error (visible in cron.log).
+;;;; Portable: honor $NOPALES_DATA for the queue dir and $NOPALES_HOME for
+;;;; the nopales.lisp location. Cron example:
+;;;;   */10 * * * * sbcl --script $NOPALES_HOME/graft-drain.lisp
+;;;; Drains pending graft entries in batched evals (idempotent by mid) and
+;;;; appends one result line per run to <queue>/drain.log. Exit 1 on error.
 
-(load "/home/al/nopales/nopales.lisp")
+(load (or (and (sb-ext:posix-getenv "NOPALES_HOME")
+               (concatenate 'string (sb-ext:posix-getenv "NOPALES_HOME") "/nopales.lisp"))
+          "/home/al/nopales/nopales.lisp"))
 
-(defparameter *drain-log* #P"/home/al/.local/share/nopales/drain.log")
+(defparameter *drain-log* (merge-pathnames "drain.log" nopales:*graft-dir*))
 
 (handler-case
     (let ((result (nopales:graft-drain)))

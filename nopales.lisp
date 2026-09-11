@@ -30,7 +30,7 @@
  #:pp-memory-delete #:pp-memory-pull
  #:pp-memory-ensure-space
  ;; graft queue (local-first)
- #:*graft-log-path* #:*graft-state-path*
+ #:*graft-dir* #:*graft-log-path* #:*graft-state-path*
  #:graft-record #:graft-upsert #:graft-delete #:graft-load
  #:graft-drain #:graft-status #:graft-pending-count #:graft-compact
  #:graft-rebuild))
@@ -596,7 +596,14 @@ arrays as lists, true/false as :true/:false, null as :nil."
 ;;;; CL reader; a torn final line is skipped and lost (accept: the local
 ;;;; Autolith memory log remains the source of truth and can re-graft).
 
-(defparameter *graft-dir* #P"/home/al/.local/share/nopales/")
+(defparameter *graft-dir*
+  (let ((env (sb-ext:posix-getenv "NOPALES_DATA")))
+    (if (and env (> (length env) 0))
+        (pathname (if (char= (char env (1- (length env))) #\/)
+                      env
+                      (concatenate 'string env "/")))
+        #P"/home/al/.local/share/nopales/"))
+  "Graft queue directory; override with $NOPALES_DATA for portable installs.")
 (defparameter *graft-log-path* (merge-pathnames "graft.log" *graft-dir*))
 (defparameter *graft-state-path* (merge-pathnames "graft-state.sexp" *graft-dir*))
 (defparameter *graft-chunk-bytes* 32000
