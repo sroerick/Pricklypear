@@ -952,6 +952,102 @@ let find_rows
           in
           (VList lisp_rows))
 
+(** (rows-author 'type [limit] [sort]) -> VList of [id; author; fields]
+    triples. Same RLS visibility and ordering as [list], but each row also
+    carries its data_rows.author, so callers can enforce identity policy
+    (e.g. glochid call ACL) against the REAL writer instead of a
+    caller-written "from" field. Additive: plain [rows]/[find-rows] shapes
+    are unchanged. *)
+let list_with_author
+    (store : Store.t) ~(type_name : string) ?(limit : int = 100)
+    ?(sort : string option = None) ()
+    : value =
+  Io_lwt.Db.with_transaction store (function
+    | None -> (VList [])
+    | Some conn ->
+        let user = session_user () in
+        let order_by =
+          match sort with
+          | Some s -> " ORDER BY " ^ s
+          | None -> " ORDER BY created_at ASC"
+        in
+        let sql =
+          "SELECT id::text, author, fields::text FROM " ^ data_rel () ^ " " ^
+          "WHERE type_name = $1 AND " ^ visible_sql ~user_param:3 ^
+          order_by ^ " LIMIT $2" in
+        let rows =
+          Store_db.exec conn
+            ~params:[ Pgx.Value.of_string type_name;
+                      Pgx.Value.of_int limit;
+                      Pgx.Value.of_string user ]
+            sql
+        in
+        let lisp_rows =
+          List.map
+            (fun row ->
+              match row with
+              | [ id_cell; author_cell; fields_cell ] ->
+                  VList [ value_of_id id_cell;
+                          value_of_id author_cell;
+                          value_of_id fields_cell ]
+              | _ -> VNil)
+            rows
+        in
+        (VList lisp_rows))
+
+(** (find-rows-author 'type "f1" "v1" ... [limit] [sort]) -> VList of
+    [id; author; fields] triples. [find_rows] with the author column
+    surfaced; see [list_with_author]. *)
+let find_rows_with_author
+    (store : Store.t) ~(type_name : string)
+    ~(filters : (string * string) list) ?(limit : int = 500)
+    ?(sort : string option = None) ()
+    : value =
+  Io_lwt.Db.with_transaction store (function
+    | None -> (VList [])
+    | Some conn ->
+        if filters = [] then list_with_author store ~type_name ~limit ()
+        else
+          let user = session_user () in
+          let buf = Buffer.create 128 in
+          Buffer.add_string buf
+            ("SELECT id::text, author, fields::text FROM " ^ data_rel () ^
+             " WHERE type_name = $1");
+          let params = ref [ Pgx.Value.of_string type_name ] in
+          let i = ref 2 in
+          List.iter
+            (fun (field, value) ->
+              Buffer.add_string buf
+                (Printf.sprintf " AND fields->>$%d = $%d" !i (!i + 1));
+              params := !params @ [ Pgx.Value.of_string field
+                                  ; Pgx.Value.of_string value ];
+              i := !i + 2)
+            filters;
+          Buffer.add_string buf
+            (Printf.sprintf " AND %s" (visible_sql ~user_param:!i));
+          params := !params @ [ Pgx.Value.of_string user ];
+          i := !i + 1;
+          let order_by =
+            match sort with
+            | Some s -> " ORDER BY " ^ s ^ " LIMIT "
+            | None -> " ORDER BY created_at ASC LIMIT "
+          in
+          Buffer.add_string buf (Printf.sprintf "%s$%d" order_by !i);
+          params := !params @ [ Pgx.Value.of_int limit ];
+          let rows = Store_db.exec conn ~params:!params (Buffer.contents buf) in
+          let lisp_rows =
+            List.map
+              (fun row ->
+                match row with
+                | [ id_cell; author_cell; fields_cell ] ->
+                    VList [ value_of_id id_cell;
+                            value_of_id author_cell;
+                            value_of_id fields_cell ]
+                | _ -> VNil)
+              rows
+          in
+          (VList lisp_rows))
+
 (** (find-random 'type) -> (id . fields) pair | VNil.
     One random row of the given type (for bible/random etc.). *)
 let find_random (store : Store.t) ~(type_name : string) : value =
