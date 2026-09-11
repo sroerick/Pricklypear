@@ -27,8 +27,13 @@
    ;; memory store
    #:*memory-type* #:*memory-space*
    #:memory-record->fields #:fields->memory-record
-   #:pp-memory-upsert #:pp-memory-delete #:pp-memory-pull
-   #:pp-memory-ensure-space))
+ #:pp-memory-delete #:pp-memory-pull
+ #:pp-memory-ensure-space
+ ;; graft queue (local-first)
+ #:*graft-log-path* #:*graft-state-path*
+ #:graft-record #:graft-upsert #:graft-delete #:graft-load
+ #:graft-drain #:graft-status #:graft-pending-count #:graft-compact
+ #:graft-rebuild))
 
 (in-package :nopales)
 
@@ -581,3 +586,184 @@ arrays as lists, true/false as :true/:false, null as :nil."
             (list :pp-id (first row)
                   :record (fields->memory-record (second row))))
           (pp-eval (format nil "(rows (quote ~a) 500)" type))))
+;;;; -- graft queue (local-first)
+;;;;
+;;;; The local store is primary: Autolith memory writes eval locally and
+;;;; append to an on-disk graft log. A separate drain replays unsynced
+;;;; entries to PP in batched evals, idempotent by mid. Nothing on the
+;;;; write path touches the network; PP unavailability only delays the
+;;;; drain. Log format: one (prin1)ed plist per line, read back with the
+;;;; CL reader; a torn final line is skipped and lost (accept: the local
+;;;; Autolith memory log remains the source of truth and can re-graft).
+
+(defparameter *graft-dir* #P"/home/al/.local/share/nopales/")
+(defparameter *graft-log-path* (merge-pathnames "graft.log" *graft-dir*))
+(defparameter *graft-state-path* (merge-pathnames "graft-state.sexp" *graft-dir*))
+(defparameter *graft-chunk-bytes* 32000
+  "Max eval string size per drain chunk; PP eval cap is 64 KiB.")
+(defvar *graft-seq* 0)
+(defvar *graft-watermark* 0)
+(defvar *graft-loaded* nil)
+
+(defun graft-read-log ()
+  (when (probe-file *graft-log-path*)
+    (with-open-file (f *graft-log-path* :if-does-not-exist nil)
+      (when f
+        (loop for form = (read f nil nil)
+              while form collect form)))))
+
+(defun graft-save-state ()
+  (with-open-file (f *graft-state-path* :direction :output :if-exists :supersede)
+    (prin1 (list :seq *graft-seq* :watermark *graft-watermark*) f))
+  nil)
+
+(defun graft-load ()
+  "Fold the graft log into the local store; restore seq and watermark."
+  (ensure-directories-exist *graft-dir*)
+  (when (probe-file *graft-state-path*)
+    (with-open-file (f *graft-state-path*)
+      (let ((state (read f nil nil)))
+        (when state
+          (setf *graft-seq* (max *graft-seq* (or (getf state :seq) 0))
+                *graft-watermark* (max *graft-watermark* (or (getf state :watermark) 0)))))))
+  (dolist (entry (graft-read-log))
+    (graft-apply-local entry)
+    (setf *graft-seq* (max *graft-seq* (or (getf entry :seq) 0))))
+  (setf *graft-loaded* t)
+  nil)
+
+(defun graft-apply-local (entry)
+  "Apply one graft entry to the in-memory local store. No I/O."
+  (let ((rows (local-rows *memory-type*))
+        (mid (getf entry :mid)))
+    (if (eq (getf entry :op) :delete)
+        (remhash mid rows)
+        (setf (gethash mid rows)
+              (memory-record->fields (getf entry :record))))))
+
+(defun graft-append (entry)
+  "Apply ENTRY locally, assign the next sequence number, append to the log."
+  (unless *graft-loaded* (graft-load))
+  (graft-apply-local entry)
+  (incf *graft-seq*)
+  (setf (getf entry :seq) *graft-seq*)
+  (with-open-file (f *graft-log-path*
+                     :direction :output :if-exists :append :if-does-not-exist :create)
+    (prin1 entry f)
+    (terpri f))
+  *graft-seq*)
+
+(defun graft-upsert (record)
+  "Queue an Autolith :memory RECORD for PP and apply it locally."
+  (graft-append (list :op :upsert :mid (getf (rest record) :id)
+                      :record record :ts (get-universal-time))))
+
+(defun graft-delete (mid)
+  "Queue deletion of memory MID from PP and apply it locally."
+  (graft-append (list :op :delete :mid mid :ts (get-universal-time))))
+
+(defun graft-record (record)
+  "Autolith hook entry point: dispatch one record onto the graft queue."
+  (cond ((eq (first record) :memory)
+         (graft-upsert record))
+        ((eq (first record) :memory-forgotten)
+         (graft-delete (getf (rest record) :id)))
+        (t (error "graft-record: unknown record kind ~s" (first record)))))
+
+(defun graft-status ()
+  (unless *graft-loaded* (graft-load))
+  (list :local-rows (hash-table-count (local-rows *memory-type*))
+        :graft-seq *graft-seq*
+        :watermark *graft-watermark*
+        :pending (max 0 (- *graft-seq* *graft-watermark*))))
+
+(defun graft-chunk-exprs (entries id-map)
+  "Build batched (seq ...) eval strings for ENTRIES given MID->PP-ID MAP."
+  (let ((chunks ()) (current "(seq") (size 5))
+    (labels ((flush ()
+               (unless (string= current "(seq")
+                 (push (concatenate 'string current " )") chunks)
+                 (setf current "(seq" size 5)))
+             (emit (form-text)
+               (let ((len (length form-text)))
+                 (when (> (+ size len) *graft-chunk-bytes*) (flush))
+                 (setf current (concatenate 'string current " " form-text)
+                       size (+ size len 1)))))
+      (dolist (entry entries)
+        (let* ((mid (getf entry :mid))
+               (pp-id (cdr (assoc mid id-map :test #'string=))))
+          (cond ((eq (getf entry :op) :delete)
+                 (when pp-id
+                   (emit (format nil "(delete (quote ~a) ~s)" *memory-type* pp-id))))
+                (t
+                 (let ((fields (json-object (memory-record->fields (getf entry :record)))))
+                   (if pp-id
+                       (emit (format nil "(update (quote ~a) ~s ~s)"
+                                     *memory-type* pp-id fields))
+                       (emit (format nil "(create (quote ~a) ~s)"
+                                     *memory-type* fields))))))))
+      (flush))
+    (nreverse chunks)))
+
+(defun graft-drain ()
+  "Replay unsynced graft entries to PP in batched evals. Idempotent by mid:
+advances the watermark only when every chunk succeeds, so a failure simply
+replays next time."
+  (unless *graft-loaded* (graft-load))
+  (let* ((collected (loop for entry in (graft-read-log)
+                          when (> (getf entry :seq 0) *graft-watermark*)
+                            collect entry))
+         ;; fold to the latest entry per mid so several queued writes of
+         ;; one memory produce exactly one remote op per drain
+         (latest (make-hash-table :test 'equal))
+         (top-seq 0))
+    (dolist (entry collected)
+      (setf (gethash (getf entry :mid) latest) entry
+            top-seq (max top-seq (getf entry :seq 0))))
+    (let ((pending (loop for entry being the hash-values of latest collect entry)))
+      (if (null pending)
+          (list :drained 0 :watermark *graft-watermark*)
+          (progn
+            (pp-memory-ensure-space)
+            (let* ((remote-rows (pp-eval (format nil "(rows (quote ~a) 500)" *memory-type*)))
+                   (id-map (loop for row in remote-rows
+                                 for fields = (second row)
+                                 for mid = (and fields (cdr (assoc "mid" fields :test #'string=)))
+                                 when mid collect (cons mid (first row))))
+                   (chunks (graft-chunk-exprs pending id-map)))
+              (dolist (expr chunks) (pp-eval expr)))
+            (setf *graft-watermark* top-seq)
+            (graft-save-state)
+            (when (> (length (graft-read-log)) 500) (graft-compact))
+            (list :drained (length pending) :watermark *graft-watermark*))))))
+
+(defun graft-compact ()
+  "Rewrite the graft log: latest upsert per mid for drained entries, plus the
+undrained tail. Drained deletes simply drop."
+  (unless *graft-loaded* (graft-load))
+  (let* ((entries (graft-read-log))
+         (latest (make-hash-table :test 'equal))
+         (tail ()))
+    (dolist (entry entries)
+      (if (> (getf entry :seq 0) *graft-watermark*)
+          (push entry tail)
+          (setf (gethash (getf entry :mid) latest) entry)))
+    (let ((folded (loop for entry being the hash-values of latest
+                        when (eq (getf entry :op) :upsert) collect entry)))
+      (with-open-file (f *graft-log-path* :direction :output :if-exists :supersede)
+        (dolist (entry (append (nreverse folded) (nreverse tail)))
+          (prin1 entry f)
+          (terpri f)))
+      (list :folded (length folded) :tail (length tail)))))
+
+(defun graft-rebuild ()
+  "Re-queue an upsert for every memory currently in the local store
+(disaster recovery / full push); drain replays them idempotently."
+  (unless *graft-loaded* (graft-load))
+  (let ((count 0))
+    (maphash (lambda (mid fields)
+               (declare (ignore mid))
+               (graft-upsert (fields->memory-record fields))
+               (incf count))
+             (local-rows *memory-type*))
+    (list :queued count)))
