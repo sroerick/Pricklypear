@@ -28,12 +28,20 @@ let expand_body (env : Env.env) (body : expr) : expr =
      | _ -> body
 
 (** Collect (name, body) for every VLambda visible in [env] (walks the
-    parent chain). Bodies are macroexpanded so sibling known_fn resolution
-    also sees through macros. *)
+    parent chain). Values are forced with [Env.force_value] first: under
+    the lazy-env model (lisp-interpreter.lazy-env-thunks) package defines
+    bind as VThunk recipes, and a gate that only matched raw VLambda
+    cells saw none of the session's helpers — their applied names then
+    fell through to the strict prim lookup and inferred as EffSet.top,
+    denying every published public route (prod /welcome 500, 2026-09-11).
+    Forcing is the memoized single observation point dispatch itself
+    uses, so the gate does no work the request would not do. Bodies are
+    macroexpanded so sibling known_fn resolution also sees through
+    macros. *)
 let env_lambda_bindings (env : Env.env) : (string * expr) list =
   Env.fold env
     (fun name v acc ->
-      match v with
+      match Env.force_value v with
       | VLambda (_, body, _) -> (name, expand_body env body) :: acc
       | _ -> acc)
     []

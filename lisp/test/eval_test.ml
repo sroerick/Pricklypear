@@ -1353,6 +1353,30 @@ let gate_tests = [
     ignore (Eval.eval_string ~prims env
       "(define h (lambda () (twice 3)))");
     Alcotest.(check bool) "pure macro allowed" true (gate_ok env "h"));
+  (* Lazy-env regression (prod /welcome 500, 2026-09-11): the image binds
+     package defines as VThunk recipes; a gate that only matched raw
+     VLambda cells saw none of the helpers, their applied names fell
+     through to the strict prim lookup and inferred as EffSet.top —
+     denying every published public route. The gate must force thunks
+     (the memoized dispatch observation point) before matching. *)
+  ("gate: thunk-bound helper resolved (lazy env)", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let force e body = Eval.eval ~prims ~budget:(Eval.make_budget ()) e body in
+    Env.define_thunk env "reader" ~force
+      (Reader.read_one "(lambda () (get))");
+    Env.define_thunk env "h" ~force
+      (Reader.read_one "(lambda () (reader))");
+    Alcotest.(check bool) "thunk sibling read allowed" true (gate_ok env "h"));
+  ("gate: thunk-bound write sibling still denied (lazy env)", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let force e body = Eval.eval ~prims ~budget:(Eval.make_budget ()) e body in
+    Env.define_thunk env "writer" ~force
+      (Reader.read_one "(lambda () (create))");
+    Env.define_thunk env "h" ~force
+      (Reader.read_one "(lambda () (writer))");
+    Alcotest.(check bool) "thunk sibling write denied" false (gate_ok env "h"));
 ]
 
 let contains_sub ~sub s =
