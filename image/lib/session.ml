@@ -1950,17 +1950,20 @@ let call_handler (t : t) ?request (handler_name : string)
                 handler execution. *)
              let prev = t.public_dispatch in
              t.public_dispatch <- true;
-             let out =
-               (match request with
-                | None -> run ()
-                | Some req ->
-                    t.current_request <- Some req;
-                    Fun.protect
-                      ~finally:(fun () -> t.current_request <- None)
-                      run)
-             in
-             t.public_dispatch <- prev;
-             out)
+             (* Exception-safe: an escaped non-Interp_error must not leave
+                the flag stuck true for the session (fail-closed, but it
+                would deny meta-eval prims for the identity's session
+                lifetime). *)
+             Fun.protect
+               (fun () ->
+                  match request with
+                  | None -> run ()
+                  | Some req ->
+                      t.current_request <- Some req;
+                      Fun.protect
+                        ~finally:(fun () -> t.current_request <- None)
+                        run)
+               ~finally:(fun () -> t.public_dispatch <- prev))
       end else
         (match request with
          | None -> run ()

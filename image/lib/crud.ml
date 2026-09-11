@@ -160,7 +160,7 @@ let safe_sort_sql ~(prim : string) ~(sort : string) : string =
            let prefix = "fields->>'" in
            let plen = String.length prefix in
            let len = String.length token in
-           if len > plen + 2 && String.sub token 0 plen = prefix
+           if len >= plen + 2 && String.sub token 0 plen = prefix
               && token.[len - 1] = '\''
            then
              let name = String.sub token plen (len - plen - 1) in
