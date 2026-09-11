@@ -79,7 +79,13 @@ let check_public_handler ~(env : Env.env) (handler : string)
          check
            (Effect.infer ~known_fn ~prims:Effect.strict_prim_effects
               (expand_body env body))
-       with Interp_error e ->
+       with
+       | Effect.Unresolved_name n ->
+           Error
+             (Printf.sprintf
+                "public route denied: handler %S references unresolvable name %S (not a visible function or classified prim)"
+                handler n)
+       | Interp_error e ->
          Error
            (Printf.sprintf
               "public route denied: handler %S failed the effect walk: %s"
