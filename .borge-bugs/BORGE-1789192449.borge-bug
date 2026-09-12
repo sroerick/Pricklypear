@@ -1,0 +1,7 @@
+(borge-bug (id "BORGE-1789192449")
+  (title "persist_function swallows upsert exceptions; in-memory env masks lost writes, so promote-to-main copies stale bodies")
+  (status triage)
+  (created 2026-09-11)
+  (filed-by roerick)
+  (doc "")
+)
