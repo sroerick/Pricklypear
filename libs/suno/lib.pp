@@ -452,18 +452,17 @@ absolute urls + our track-card keys."
 
 (define suno/submit
   (lambda (title style prompt instrumental? model)
-    "Submit a generation and record a suno-task row (status PENDING).
+    "Submit a generation and record a suno-task row.
 Gateway engine: custom mode when title or style is nonblank, simple
-mode otherwise. ACE engine (ace_url set): caption = style when set,
-else prompt; lyrics = prompt for lyrics use, blank for instrumental.
-Returns the row id."
+mode otherwise; the transport POST happens in-habitat (flaky: see
+log/issues http-post). ACE engine (ace_url set): NO transport at all —
+the row is created with status PENDING-LOCAL and the laptop loop
+(scripts/pp-suno-loop.py) owns the pod round-trip. Returns row id."
     (let
       ((task-id
          (if
            (string-eq (suno/engine) "ace")
-           (suno/ace/submit
-             (suno/nonblank style prompt)
-             (if instrumental? "" prompt))
+           (suno/nonblank title "local")
            (if
              (and
                (string-eq (suno/nonblank style "") "")
@@ -473,9 +472,15 @@ Returns the row id."
                (suno/nonblank title "Untitled")
                (suno/nonblank style "")
                prompt instrumental? model)))))
-      (create 'suno-task
-              (suno/task-fields task-id title style model instrumental?
-                                prompt "PENDING" "[]")))))
+      (let
+        ((status
+           (if
+             (string-eq (suno/engine) "ace")
+             "PENDING-LOCAL"
+             "PENDING")))
+          (create 'suno-task
+                  (suno/task-fields task-id title style model instrumental?
+                                    prompt status "[]"))))))
 
 (define suno/task-rows
   (lambda (n)
@@ -494,7 +499,76 @@ Returns the row id."
 
 ;; ---- ui (/suno) ----
 ;;
+;; Generate form + task cards. On the ace engine the form does no
+;; transport at all: rows land as PENDING-LOCAL and the laptop loop
+;; (scripts/pp-suno-loop.py) fills them from the pod.
+;;
 ;; Generate form + task cards. Post backs hit /suno; refresh is manual
+
+(define suno/client-js
+  (lambda ()
+    "Browser-side engine (ace mode): submit + poll the pod straight from
+the page and import finished tracks into the habitat. Backslash-free
+JS (single quotes + fromCharCode(39)) so the Nopales string stays clean."
+    (html/tag
+      "script"
+      ""
+      (html/join
+        (list
+          "var SUNO_BASE = 'https://jzvxeopclkrhj5-8000.proxy.runpod.net';
+function sunoVal(id) { return document.getElementById(id).value; }
+async function sunoPost(url, obj) {
+  var r = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(obj)});
+  return r.json();
+}
+async function sunoSubmit(ev) {
+  ev.preventDefault();
+  var st = document.getElementById('suno-status');
+  var mode = sunoVal('suno-mode'), title = sunoVal('suno-title'),
+      style = sunoVal('suno-style'), prompt = sunoVal('suno-prompt');
+  var payload;
+  if (mode === 'lyrics') payload = {prompt: style || title || 'song', lyrics: prompt, batch_size: 2};
+  else if (mode === 'instrumental') payload = {prompt: style || title || 'instrumental music', batch_size: 2};
+  else payload = {prompt: prompt, batch_size: 2};
+  try {
+    st.textContent = 'submitting...';
+    var j = await sunoPost(SUNO_BASE + '/release_task', payload);
+    if (!j || j.code !== 200) { st.textContent = 'submit failed: ' + String((j && (j.error || j.msg)) || '?'); return false; }
+    var taskId = j.data.task_id;
+    st.textContent = 'queued ' + taskId + ' - polling (keep this tab open, ~1-3 min)';
+    var tracks = null;
+    while (true) {
+      await new Promise(function(rs) { setTimeout(rs, 10000); });
+      var q = await sunoPost(SUNO_BASE + '/query_result', {task_id_list: [taskId]});
+      if (!q || q.code !== 200 || !q.data || !q.data.length) continue;
+      var el = q.data[0];
+      if (el.status === 2) { st.textContent = 'generation failed (sensitive words?)'; return false; }
+      if (el.status !== 1) { st.textContent = 'still generating... ' + new Date().toLocaleTimeString(); continue; }
+      tracks = JSON.parse(el.result || '[]'); break;
+    }
+    st.textContent = 'generated ' + tracks.length + ' track(s) - importing into the habitat...';
+    for (var i = 0; i < tracks.length; i++) {
+      var t = tracks[i];
+      var audioUrl = t.file;
+      if (audioUrl.indexOf('http') !== 0) audioUrl = SUNO_BASE + t.file;
+      var bytes = await (await fetch(audioUrl)).blob();
+      var m = await fetch('/api/media', {method: 'POST', headers: {'Content-Type': 'audio/mpeg', 'X-Filename': taskId.slice(0, 8) + '-' + (i + 1) + '.mp3'}, body: bytes});
+      var mj = await m.json();
+      if (!mj.ok) { st.textContent = 'media upload failed: ' + (mj.error || '?'); return false; }
+      var label = title || payload.prompt;
+      if (tracks.length > 1) label = label + ' (' + (i + 1) + ')';
+      var fields = {title: label, artist: 'ace-step', album: '', media_id: mj.id, notes: payload.prompt};
+      var q39 = String.fromCharCode(39);
+      var expr = '(create ' + q39 + 'music-track ' + JSON.stringify(JSON.stringify(fields)) + ')';
+      var e = await sunoPost('/api/eval', {expr: expr});
+      if (!e.ok) { st.textContent = 'track row failed: ' + e.error; return false; }
+      st.textContent = 'imported: ' + label;
+    }
+    st.textContent = 'all done - reloading...';
+    setTimeout(function() { location.reload(); }, 1200);
+  } catch (err) { st.textContent = 'error: ' + err; }
+  return false;
+}")))))
 
 (define suno/style-html
   (lambda ()
@@ -619,7 +693,7 @@ Returns the row id."
     "Mode dropdown: where the words come from."
     (html/select
       "mode"
-      ""
+      (html/attr "id" "suno-mode")
       (html/join
         (list
           (html/option "simple" "Simple — gateway writes the lyrics" #t)
@@ -634,7 +708,11 @@ lyrics (verbatim lyrics: title + style required) or instrumental
     (html/form
       "POST"
       "/suno"
-      (html/attr "class" "suno-form")
+      (html/attrs
+        (list
+          (html/attr "id" "suno-form")
+          (html/attr "class" "suno-form")
+          (html/attr "onsubmit" "return sunoSubmit(event)")))
       (html/join
         (list
           (html/hidden "action" "generate")
@@ -642,7 +720,15 @@ lyrics (verbatim lyrics: title + style required) or instrumental
           (suno/text-input "title" "Title (required for lyrics mode)" default-title)
           (suno/text-input "style" "Style, e.g. folk ballad, close harmonies" default-style)
           "<br>"
-          (html/textarea "prompt" (html/attr "rows" "5")
+          (html/tag "textarea"
+            (html/attrs
+              (list
+                (html/attr "id" "suno-prompt")
+                (html/attr "name" "prompt")
+                (html/attr "rows" "5")))
+            "")
+          (html/span
+            (html/attr "id" "suno-status")
             "")
           "<br>"
           (if (string-eq (suno/engine) "ace")
@@ -665,6 +751,9 @@ lyrics (verbatim lyrics: title + style required) or instrumental
               ""
               (html/p (html/text msg)))
           (html/h2 "Generate")
+          (if (string-eq (suno/engine) "ace")
+              (suno/client-js)
+              "")
           (suno/generate-form "" "")
           (html/p*
             (html/attr "class" "suno-muted")
@@ -683,6 +772,8 @@ Actions: generate (mode=simple | lyrics | instrumental; posts without
 a mode keep the legacy rule), refresh (poll record-info + update)."
     (let ((action (as-str (request-param "action"))))
       (cond
+        ((and (string-eq action "generate") (string-eq (suno/engine) "ace"))
+         "client engine: the submit runs in your browser (keep the tab open); the track card appears when it finishes importing")
         ((string-eq action "generate")
          (let
            ((prompt (as-str (request-param "prompt")))
