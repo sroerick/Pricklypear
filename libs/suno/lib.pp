@@ -60,7 +60,7 @@
 
 ;; ---- types ----
 
-(deftype 'suno-config 'api_key 'base_url 'callback_url 'model)
+(deftype 'suno-config 'api_key 'base_url 'callback_url 'model 'ace_url)
 (deftype 'suno-task 'task_id 'title 'style 'model 'instrumental 'prompt 'status 'tracks 'created)
 
 ;; ---- small helpers ----
@@ -253,15 +253,21 @@ SUCCESS | CREATE_TASK_FAILED | GENERATE_AUDIO_FAILED | CALLBACK_EXCEPTION
     (or (string-eq st "CREATE_TASK_FAILED")
         (string-eq st "GENERATE_AUDIO_FAILED")
         (string-eq st "CALLBACK_EXCEPTION")
-        (string-eq st "SENSITIVE_WORD_ERROR"))))
+        (string-eq st "SENSITIVE_WORD_ERROR")
+        (string-eq st "FAILED"))))
 
 (define suno/wait-loop
   (lambda (task-id n interval)
     "Bounded poll loop behind suno/wait."
-    (let ((data (suno/record task-id)))
-      (let ((st (suno/record-status data)))
-        (cond
-          ((string-eq st "SUCCESS") data)
+    (let
+      ((st
+         (if
+           (string-eq (suno/engine) "ace")
+           (let ((elem (suno/ace/query task-id)))
+             (if (null? elem) "PENDING" (suno/ace/status-of elem)))
+           (suno/record-status (suno/record task-id)))))
+      (cond
+          ((string-eq st "SUCCESS") st)
           ((suno/failed? st)
            (error (string-append "suno/wait: task " task-id " failed: " st)))
           ((<= n 1)
@@ -269,7 +275,7 @@ SUCCESS | CREATE_TASK_FAILED | GENERATE_AUDIO_FAILED | CALLBACK_EXCEPTION
                                  " (status " st ")")))
           (else
             (sleep interval)
-            (suno/wait-loop task-id (- n 1) interval)))))))
+            (suno/wait-loop task-id (- n 1) interval))))))
 
 (define suno/wait
   (lambda (task-id)
@@ -288,6 +294,124 @@ manual refresh instead of blocking."
   (lambda () "Remaining gateway credits (GET /api/v1/generate/credit)."
     (let ((d (suno/get-call "/api/v1/generate/credit")))
       (suno/nonblank (dict-get d "credits") "?"))))
+
+;; ---- self-hosted engine (ACE-Step on your own GPU, e.g. RunPod) ----
+;;
+;; Deploy once: RunPod template uuc79b5j3c (ValyrianTech/ace-step-1.5)
+;; bakes the API server + models; REST surfaces at
+;; https://<POD-ID>-8000.proxy.runpod.net. Set ace_url on the
+;; suno-config row (and optionally ACESTEP_API_KEY + ai_token later)
+;; and the whole lib switches engines: suno-config.ace_url nonblank
+;; => ACE-Step, blank => Suno gateway (kie/sunoapi.org dialect).
+;;
+;; ACE-Step API: POST /release_task {prompt, lyrics, audio_duration, ...}
+;;   -> {task_id}; POST /query_result {task_id_list:[..]} -> data[] with
+;;   {status: 0|1|2, result: "<json string>"} whose entries carry
+;;   file: "/v1/audio?path=..."; GET that path for the audio.
+
+(define suno/ace-url
+  (lambda ()
+    "Self-hosted ACE-Step API base (config ace_url), or \"\" for the
+Suno gateway engine."
+    (suno/nonblank (dict-get (suno/config) "ace_url") "")))
+
+(define suno/engine
+  (lambda ()
+    "Active engine: ace | gateway."
+    (if (string-eq (suno/ace-url) "") "gateway" "ace")))
+
+(define suno/ace/check
+  (lambda (tag r)
+    "ACE-Step envelope discipline: {code:200,...}; returns data."
+    (if (string-eq (as-str (dict-get r "ok")) "true")
+        (let ((j (json-parse (dict-get r "body"))))
+          (if (string-eq (as-str (dict-get j "code")) "200")
+              (dict-get j "data")
+              (error (string-append "suno/ace " tag ": HTTP "
+                      (as-str (dict-get r "status")) " — "
+                      (as-str (dict-get j "error"))))))
+        (error (string-append "suno/ace " tag ": "
+                (as-str (dict-get r "err")) " HTTP "
+                (as-str (dict-get r "status")))))))
+
+(define suno/ace/call
+  (lambda (path body)
+    "POST one ACE-Step call; returns the data member."
+    (suno/ace/check path
+      (http-post
+        (string-append (suno/ace-url) path)
+        "{\"Content-Type\": \"application/json\"}"
+        body))))
+
+(define suno/ace/submit
+  (lambda (caption lyrics)
+    "Submit one ACE-Step text2music task (batch of 2); returns taskId.
+caption describes the music; lyrics is the vocal text (\"\" =
+no vocals). Duration is LM-autocompleted server-side."
+    (let
+      ((body
+         (string-append
+           "{\"prompt\":\"" (json-escape caption)
+           (if (string-eq lyrics "")
+               ""
+               (string-append "\",\"lyrics\":\"" (json-escape lyrics)))
+           "\",\"batch_size\":2}")))
+      (let ((d (suno/ace/call "/release_task" body)))
+        (as-str (dict-get d "task_id"))))))
+
+(define suno/ace/query
+  (lambda (task-id)
+    "One query_result element for a task: {status:0|1|2,
+result:\"<json string>\"}; result entries carry file paths."
+    (let
+      ((d (suno/ace/call
+            "/query_result"
+            (string-append "{\"task_id_list\":[\"" (json-escape task-id) "\"]}"))))
+      (if (null? d)
+          '()
+          (car d)))))
+
+(define suno/ace/absolutize
+  (lambda (path)
+    "ace file path -> proxied absolute url."
+    (if (string-contains? path "http")
+        path
+        (string-append (suno/ace-url) path))))
+
+(define suno/ace/status-of
+  (lambda (elem)
+    "ace int status (0|1|2) -> our status string."
+    (let ((n (suno/nonblank (dict-get elem "status") "0")))
+      (cond
+        ((string-eq n "1") "SUCCESS")
+        ((string-eq n "2") "FAILED")
+        (else "PENDING")))))
+
+(define suno/ace/tracks-json
+  (lambda (elem)
+    "Normalized track-array JSON from a query_result element:
+absolute urls + our track-card keys."
+    (let ((rj (dict-get elem "result")))
+      (if (null? rj)
+          "[]"
+          (as-str
+            (map
+              (lambda (t)
+                (let
+                  ((url (suno/ace/absolutize (suno/pick t "file" "file"))))
+                  (dict-set*
+                    "{}"
+                    (list
+                      "audioUrl" url
+                      "streamAudioUrl" url
+                      "tags" (suno/pick t "prompt" "prompt")
+                      "duration" (suno/pick
+                                   (dict-get t "metas")
+                                   "duration" "duration")
+                      "id" (suno/pick t "task_id" "task_id")))))
+              (if (null? (json-parse (as-str rj)))
+                  '()
+                  (json-parse (as-str rj)))))))))
 
 ;; ---- task rows ----
 
@@ -310,19 +434,26 @@ manual refresh instead of blocking."
 (define suno/submit
   (lambda (title style prompt instrumental? model)
     "Submit a generation and record a suno-task row (status PENDING).
-Custom mode when title or style is nonblank, simple mode otherwise.
+Gateway engine: custom mode when title or style is nonblank, simple
+mode otherwise. ACE engine (ace_url set): caption = style when set,
+else prompt; lyrics = prompt for lyrics use, blank for instrumental.
 Returns the row id."
     (let
       ((task-id
          (if
-           (and
-             (string-eq (suno/nonblank style "") "")
-             (string-eq (suno/nonblank title "") ""))
-           (suno/generate/model prompt model instrumental?)
-           (suno/generate/custom
-             (suno/nonblank title "Untitled")
-             (suno/nonblank style "")
-             prompt instrumental? model))))
+           (string-eq (suno/engine) "ace")
+           (suno/ace/submit
+             (suno/nonblank style prompt)
+             (if instrumental? "" prompt))
+           (if
+             (and
+               (string-eq (suno/nonblank style "") "")
+               (string-eq (suno/nonblank title "") ""))
+             (suno/generate/model prompt model instrumental?)
+             (suno/generate/custom
+               (suno/nonblank title "Untitled")
+               (suno/nonblank style "")
+               prompt instrumental? model)))))
       (create 'suno-task
               (suno/task-fields task-id title style model instrumental?
                                 prompt "PENDING" "[]")))))
@@ -600,6 +731,26 @@ still pending."
     (let ((j (suno/tracks-json (suno/record task-id))))
       (if (string-eq j "[]") '() (json-parse j)))))
 
+(define suno/ace/refresh
+  (lambda (row-id f task-id)
+    "Poll a task row against the self-hosted ACE engine; update
+status/tracks; returns a short status string."
+    (let ((elem (suno/ace/query task-id)))
+      (let
+        ((st (if (null? elem) "PENDING" (suno/ace/status-of elem))))
+        (update
+          'suno-task
+          row-id
+          (dict-set*
+            (as-str f)
+            (list "status" "tracks")
+            (list
+              st
+              (if (null? elem) "[]" (suno/ace/tracks-json elem)))))
+        (if (suno/failed? st)
+            (string-append "task failed: " st)
+            (string-append "status: " st))))))
+
 (define suno/task-refresh
   (lambda (row-id)
     "Poll record-info for a task row and update status/tracks; returns
@@ -608,18 +759,20 @@ a short status string."
       (let ((task-id (suno/nonblank (dict-get f "task_id") "")))
         (if (string-eq task-id "")
             "refresh: row has no task_id"
-            (let ((data (suno/record task-id)))
-              (let ((st (suno/record-status data)))
-                (let
-                  ((fields
-                     (dict-set*
-                       (as-str f)
-                       (list "status" "tracks")
-                       (list st (suno/tracks-json data)))))
-                  (update 'suno-task row-id fields)
-                  (if (suno/failed? st)
-                      (string-append "task failed: " st)
-                      (string-append "status: " st))))))))))
+            (if (string-eq (suno/engine) "ace")
+                (suno/ace/refresh row-id f task-id)
+                (let ((data (suno/record task-id)))
+                  (let ((st (suno/record-status data)))
+                    (let
+                      ((fields
+                         (dict-set*
+                           (as-str f)
+                           (list "status" "tracks")
+                           (list st (suno/tracks-json data)))))
+                      (update 'suno-task row-id fields)
+                      (if (suno/failed? st)
+                          (string-append "task failed: " st)
+                          (string-append "status: " st)))))))))))
 
 ;; ---- route ----
 
