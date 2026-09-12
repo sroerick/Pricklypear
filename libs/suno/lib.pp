@@ -505,70 +505,121 @@ the row is created with status PENDING-LOCAL and the laptop loop
 ;;
 ;; Generate form + task cards. Post backs hit /suno; refresh is manual
 
-(define suno/client-js
-  (lambda ()
-    "Browser-side engine (ace mode): submit + poll the pod straight from
-the page and import finished tracks into the habitat. Backslash-free
-JS (single quotes + fromCharCode(39)) so the Nopales string stays clean."
-    (html/tag
-      "script"
-      ""
-      (html/join
-        (list
-          "var SUNO_BASE = 'https://jzvxeopclkrhj5-8000.proxy.runpod.net';
+(define suno/client-js (lambda ()
+      "Browser-side engine (ace mode): submit + poll the pod straight from
+the page and import finished tracks into the habitat. Writes the
+suno-task row at submit (status RUNNING) so Tasks shows a live
+indication, marks cards with a pulsing dot, and resumes orphaned
+RUNNING tasks after any page reload. Backslash-free JS."
+      (html/tag
+        "script"
+        ""
+        (html/join
+          (list
+            "var SUNO_BASE = 'https://jzvxeopclkrhj5-8000.proxy.runpod.net';
+var SQ = String.fromCharCode(39);
 function sunoVal(id) { return document.getElementById(id).value; }
 async function sunoPost(url, obj) {
   var r = await fetch(url, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(obj)});
   return r.json();
+}
+async function sunoEval(expr) { return sunoPost('/api/eval', {expr: expr}); }
+function sunoEmbed(s) { return JSON.stringify(JSON.stringify(s)); }
+function sunoTaskFields(taskId, title, style, inst, prompt, status, tracks) {
+  return {task_id: taskId, title: title || 'Untitled', style: style || '', model: '',
+          instrumental: inst ? 'true' : 'false', prompt: prompt || '', status: status,
+          tracks: tracks || '[]', created: String(Date.now())};
+}
+async function sunoWaitUrls(taskId) {
+  while (true) {
+    await new Promise(function(rs) { setTimeout(rs, 10000); });
+    var q = await sunoPost(SUNO_BASE + '/query_result', {task_id_list: [taskId]});
+    if (!q || q.code !== 200 || !q.data || !q.data.length) continue;
+    var el = q.data[0];
+    if (el.status === 2) throw new Error('generation failed (sensitive words?)');
+    if (el.status !== 1) return null;
+    var tracks = JSON.parse(el.result || '[]');
+    var urls = [];
+    for (var i = 0; i < tracks.length; i++) {
+      var f = tracks[i].file || '';
+      urls.push(f.indexOf('http') === 0 ? f : SUNO_BASE + f);
+    }
+    return urls;
+  }
+}
+async function sunoImportUrls(taskId, baseTitle, prompt, urls, rowId) {
+  for (var i = 0; i < urls.length; i++) {
+    var bytes = await (await fetch(urls[i])).blob();
+    var m = await fetch('/api/media', {method: 'POST', headers: {'Content-Type': 'audio/mpeg', 'X-Filename': taskId.slice(0, 8) + '-' + (i + 1) + '.mp3'}, body: bytes});
+    var mj = await m.json();
+    if (!mj.ok) throw new Error('media upload failed: ' + (mj.error || '?'));
+    var title = urls.length > 1 ? baseTitle + ' (' + (i + 1) + ')' : baseTitle;
+    var tracks = JSON.stringify([{audioUrl: '/media/' + mj.id, streamAudioUrl: '/media/' + mj.id, tags: prompt, id: mj.id}]);
+    var fields = sunoTaskFields(taskId, title, '', false, prompt, 'SUCCESS', tracks);
+    if (rowId) {
+      var u = await sunoEval('(update ' + SQ + 'suno-task ' + sunoEmbed(rowId) + ' ' + sunoEmbed(JSON.stringify(fields)) + ')');
+      if (!u.ok) throw new Error('row update failed: ' + u.error);
+    } else {
+      var c = await sunoEval('(create ' + SQ + 'suno-task ' + sunoEmbed(JSON.stringify(fields)) + ')');
+      if (!c.ok) throw new Error('row create failed: ' + c.error);
+    }
+  }
+}
+async function sunoRun(taskId, baseTitle, prompt, rowId) {
+  var st = document.getElementById('suno-status');
+  var urls = null;
+  while (true) {
+    urls = await sunoWaitUrls(taskId);
+    if (urls) break;
+    st.textContent = 'still generating... ' + new Date().toLocaleTimeString();
+  }
+  st.textContent = 'generated ' + urls.length + ' track(s) - importing into the habitat...';
+  await sunoImportUrls(taskId, baseTitle, prompt, urls, rowId);
+  st.textContent = 'imported: ' + baseTitle;
+}
+async function sunoResume() {
+  var r = await sunoEval('(find-rows ' + SQ + 'suno-task ' + sunoEmbed('status') + ' ' + sunoEmbed('RUNNING') + ' 10)');
+  if (!r || !r.ok || !r.value || !r.value.length) return;
+  var rows = (typeof r.value === 'string') ? JSON.parse(r.value) : r.value;
+  for (var k = 0; k < rows.length; k++) {
+    var rid = rows[k][0], f = rows[k][1];
+    var taskId = f.task_id;
+    if (!taskId || taskId === 'local') continue;
+    document.getElementById('suno-status').textContent = 'resuming ' + (f.title || taskId) + '...';
+    try {
+      await sunoRun(taskId, f.title || 'Untitled', f.prompt || '', rid);
+    } catch (err) {
+      var fields = f; fields.status = 'FAILED';
+      await sunoEval('(update ' + SQ + 'suno-task ' + sunoEmbed(rid) + ' ' + sunoEmbed(JSON.stringify(fields)) + ')');
+      document.getElementById('suno-status').textContent = 'task failed: ' + err.message;
+    }
+  }
+  setTimeout(function() { location.reload(); }, 1000);
 }
 async function sunoSubmit(ev) {
   ev.preventDefault();
   var st = document.getElementById('suno-status');
   var mode = sunoVal('suno-mode'), title = sunoVal('suno-title'),
       style = sunoVal('suno-style'), prompt = sunoVal('suno-prompt');
+  var label = title || style || 'Untitled';
   var payload;
-  if (mode === 'lyrics') payload = {prompt: style || title || 'song', lyrics: prompt, batch_size: 2};
-  else if (mode === 'instrumental') payload = {prompt: style || title || 'instrumental music', batch_size: 2};
+  if (mode === 'lyrics') payload = {prompt: style || title, lyrics: prompt, batch_size: 2};
+  else if (mode === 'instrumental') payload = {prompt: style || title, batch_size: 2};
   else payload = {prompt: prompt, batch_size: 2};
   try {
     st.textContent = 'submitting...';
     var j = await sunoPost(SUNO_BASE + '/release_task', payload);
     if (!j || j.code !== 200) { st.textContent = 'submit failed: ' + String((j && (j.error || j.msg)) || '?'); return false; }
     var taskId = j.data.task_id;
-    st.textContent = 'queued ' + taskId + ' - polling (keep this tab open, ~1-3 min)';
-    var tracks = null;
-    while (true) {
-      await new Promise(function(rs) { setTimeout(rs, 10000); });
-      var q = await sunoPost(SUNO_BASE + '/query_result', {task_id_list: [taskId]});
-      if (!q || q.code !== 200 || !q.data || !q.data.length) continue;
-      var el = q.data[0];
-      if (el.status === 2) { st.textContent = 'generation failed (sensitive words?)'; return false; }
-      if (el.status !== 1) { st.textContent = 'still generating... ' + new Date().toLocaleTimeString(); continue; }
-      tracks = JSON.parse(el.result || '[]'); break;
-    }
-    st.textContent = 'generated ' + tracks.length + ' track(s) - importing into the habitat...';
-    for (var i = 0; i < tracks.length; i++) {
-      var t = tracks[i];
-      var audioUrl = t.file;
-      if (audioUrl.indexOf('http') !== 0) audioUrl = SUNO_BASE + t.file;
-      var bytes = await (await fetch(audioUrl)).blob();
-      var m = await fetch('/api/media', {method: 'POST', headers: {'Content-Type': 'audio/mpeg', 'X-Filename': taskId.slice(0, 8) + '-' + (i + 1) + '.mp3'}, body: bytes});
-      var mj = await m.json();
-      if (!mj.ok) { st.textContent = 'media upload failed: ' + (mj.error || '?'); return false; }
-      var label = title || payload.prompt;
-      if (tracks.length > 1) label = label + ' (' + (i + 1) + ')';
-      var fields = {title: label, artist: 'ace-step', album: '', media_id: mj.id, notes: payload.prompt};
-      var q39 = String.fromCharCode(39);
-      var expr = '(create ' + q39 + 'music-track ' + JSON.stringify(JSON.stringify(fields)) + ')';
-      var e = await sunoPost('/api/eval', {expr: expr});
-      if (!e.ok) { st.textContent = 'track row failed: ' + e.error; return false; }
-      st.textContent = 'imported: ' + label;
-    }
+    var c = await sunoEval('(create ' + SQ + 'suno-task ' + sunoEmbed(JSON.stringify(sunoTaskFields(taskId, label, style, mode === 'instrumental', payload.prompt, 'RUNNING', '[]'))) + ')');
+    if (!c.ok) { st.textContent = 'row create failed: ' + c.error; return false; }
+    await sunoRun(taskId, label, payload.prompt, String(c.value));
     st.textContent = 'all done - reloading...';
     setTimeout(function() { location.reload(); }, 1200);
-  } catch (err) { st.textContent = 'error: ' + err; }
+  } catch (err) { st.textContent = 'error: ' + err.message; }
   return false;
-}")))))
+}
+window.addEventListener('load', function() { try { sunoResume(); } catch (e) {} });")))))
 
 (define suno/style-html
   (lambda ()
@@ -582,7 +633,9 @@ async function sunoSubmit(ev) {
           ".suno-audio{width:100%;max-width:34rem;display:block;margin:.5rem 0}"
           ".suno-form input,.suno-form select,.suno-form textarea{margin:.15rem .35rem .15rem 0}"
           ".suno-muted{color:var(--muted,#777);font-size:.9em}"
-          ".suno-status{font-weight:600}")))))
+          ".suno-status{font-weight:600}"
+          ".suno-live{animation:suno-blink 1.2s infinite}"
+          "@keyframes suno-blink{50%{opacity:.35}}")))))
 
 (define suno/action-form
   (lambda (pairs label)
@@ -653,7 +706,10 @@ async function sunoSubmit(ev) {
               (html/strong title)
               (html/text " ")
               (html/span
-                (html/attr "class" "suno-status")
+                (html/attr "class"
+                  (if (string-eq st "RUNNING")
+                      "suno-status suno-live"
+                      "suno-status"))
                 st)
               (html/span
                 (html/attr "class" "suno-muted")
