@@ -101,6 +101,21 @@ keep the two roughly aligned when you change authority/workflow rules.
 
 Also: `(notes/doc/get "wiki-schema")` for the notes/wiki shape.
 
+### Local-first dev loop (laptop lens, no per-call HTTP)
+
+For Nopales development on this device, prefer the local lens over
+`pp-eval` round trips: `scripts/pp-local.sh` (committed 2026-09-11)
+wraps `pp-remote` with the repo `lens/` directory (gitignored working
+copy) always wired. Seed once (`pull-data user`, `pull-tree <entry>`),
+then defs + `(get …)`/`(tree/get …)` reads and pure compute resolve
+locally (~20-30ms, works offline); `rows`/writes/transactions still
+cross the wire (server is index + write authority). `sync` runs one
+three-way data round; `sync-loop` runs it in the background; `serve`
+adds the local chat/eval surface. Full lore: habitat `agents` note,
+section **Local-first dev loop on a laptop (pp-local)**; sync 413
+round-trip fix + open gaps: borge issue `i-1789178161-87d0742f` in
+`log/issues`.
+
 ### Session ritual (habitat-workflow)
 
 Live authority: agents note section **Session ritual (habitat-workflow)**
