@@ -27,3 +27,8 @@
  (name loop_test)
  (modules loop_test)
  (libraries pricklypear-remote.lib pricklypear-lisp alcotest eio eio_main yojson str unix))
+
+(test
+ (name sync_client_test)
+ (modules sync_client_test)
+ (libraries pricklypear-remote.lib pricklypear-lisp alcotest unix))

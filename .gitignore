@@ -63,6 +63,9 @@ backups/
 # local-only ops notes (not shipped / not public)
 docs/openbsd-prod-branch-deploy.md
 
+# local-first lens working copy (device-owned; the repo stays the vault)
+lens/
+
 
 # borge session lock (ephemeral)
 .borge.lock/
