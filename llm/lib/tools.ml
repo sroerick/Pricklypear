@@ -170,4 +170,27 @@ let schema_of (_name : string) : Yojson.Safe.t option =
   match _name with
   | "read" -> Some read_schema
   | "bash" -> Some bash_schema
+  | "memory" ->
+      (* glochid's habitat memory tool (agent/lib/habitat.ml — the host
+         registers the run; pp-remote never does, so this schema only
+         matters on the agent). *)
+      Some
+        (`Assoc
+          [ ("type", `String "object")
+          ; ("properties",
+             `Assoc
+               [ ("action", `Assoc [ ("type", `String "string")
+                                   ; ("description",
+                                      `String
+                                        "remember | search | get | forget") ])
+               ; ("id", `Assoc [ ("type", `String "string") ])
+               ; ("title", `Assoc [ ("type", `String "string") ])
+               ; ("content", `Assoc [ ("type", `String "string") ])
+               ; ("tags",
+                  `Assoc
+                    [ ("type", `String "string")
+                    ; ("description",
+                       `String
+                         "comma-separated tags, e.g. \"ops,goals\"") ]) ])
+          ; ("required", `List [ `String "action" ; `String "content" ]) ])
   | _ -> None

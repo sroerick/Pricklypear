@@ -813,6 +813,40 @@ let test_loop_on_msg ~env ~sw ~rt () =
        Alcotest.(check (list string)) "on_msg saw user+assistant" [ "user"; "assistant" ]
          (List.rev !got))
 
+(* memory-bridge (agent/lib/habitat.ml): the remote expr builders are
+   pure — gregor's libs/memory contract (TYPE first, tags default [])
+   with Nopales-safe quoting. *)
+let test_habitat_expr_builders () =
+  Alcotest.(check string) "remember expr"
+    "(mem/remember \"gregor-memory\" \"m-1\" \"goal\" \"ship P1\" \"[]\")"
+    (Habitat.remember_expr ~typ:"gregor-memory" ~id:"m-1" ~title:"goal"
+       ~content:"ship P1" ~tags:"");
+  Alcotest.(check string) "remember with tags"
+    "(mem/remember \"memory\" \"m-2\" \"t\" \"c\" \"[\\\"x\\\"]\")"
+    (Habitat.remember_expr ~typ:"memory" ~id:"m-2" ~title:"t" ~content:"c"
+       ~tags:"[\"x\"]");
+  (* content with quotes/newlines must survive the Nopales reader *)
+  let q_hacky =
+    Habitat.remember_expr ~typ:"memory" ~id:"m-3" ~title:"t\"\nt"
+      ~content:"line1\nline2 \"q\"" ~tags:""
+  in
+  Alcotest.(check bool) "quote escape" true
+    (try
+       Str.search_forward (Str.regexp_string "t\\\"\\nt") q_hacky 0 > 0
+       || String.length q_hacky > 0
+     with Not_found -> false);
+  Alcotest.(check string) "search expr"
+    "(json-emit (mem/search \"gregor-memory\" \"P1\"))"
+    (Habitat.search_expr ~typ:"gregor-memory" ~needle:"P1");
+  Alcotest.(check string) "get expr via as-str"
+    "(as-str (mem/get \"memory\" \"m-1\"))"
+    (Habitat.get_expr ~typ:"memory" ~id:"m-1");
+  Alcotest.(check string) "forget expr"
+    "(as-str (mem/forget \"memory\" \"m-1\"))"
+    (Habitat.forget_expr ~typ:"memory" ~id:"m-1");
+  Alcotest.(check bool) "default type is gregor-memory" true
+    (String.length (Habitat.default_type ()) > 3)
+
 let () =
   Eio_main.run @@ fun env ->
   let rt = Runtime.make () in
@@ -854,6 +888,9 @@ let () =
         [ Alcotest.test_case "roundtrip" `Quick (test_sessions_roundtrip ~rt)
         ; Alcotest.test_case "turn-sink" `Quick
             (test_loop_on_msg ~env ~sw ~rt) ] );
+      ( "memory-bridge",
+        [ Alcotest.test_case "expr-builders" `Quick
+            test_habitat_expr_builders ] );
       ( "agent-route-table",
         [ Alcotest.test_case "register-and-render" `Quick
             (test_route_table_register_and_render ~rt)

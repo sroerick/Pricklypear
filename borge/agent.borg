@@ -129,6 +129,9 @@
            session/list session/data session/new session/resume
            session/name session/text             (sessions-persist;
                                                   the live store prims)
+           mem/remember mem/get mem/search        (memory-bridge local
+           mem/replace mem/forget mem/list        delegates to the
+                                                  habitat libs/memory)
            on register-tool register-command     (plugin API)
            http/get http/post                    (Eio; JSON in/out)
            route route/lookup route/dispatch     (agent-route-table;
@@ -475,6 +478,54 @@
          never touch the store (no smoke litter). The retired
          'session/append session/name' namespace line described the
          pre-make sketch; the implemented family is the list above.
+    |))))
+
+  (subsection memory-bridge
+   (doc "glochid shares the habitat agent-memory store across residences: gregor's libs/memory (mem/remember / get / search / replace / forget) over POST /api/eval, shared store type gregor-memory in space cactus-ops")
+   (status implemented)
+   (implements agent/lib/habitat.ml libs/memory/lib.pp llm/lib/tools.ml agent/bin/main.ml)
+   (verify
+    (test "memory-bridge expr-builders: remote expr construction matches the libs/memory contract (TYPE first, tags default to [], quote/newline content survives the Nopales reader escaping)")
+    (smoke "LIVE-VERIFIED (2026-09-11): glochid /chat turn — the model searched, then remembered; the row (m-6aa4bffc-5e89) landed in gregor-memory (space cactus-ops) with author = the env identity; pp-eval (mem/get ...) returns the same content"))
+   (details
+    (doc (|
+         PAIRED RESIDENCES, ONE STORE (agent-native M4/M5). Gregor
+         (the resident agent identity) saves memory rows into the
+         habitat via libs/memory (wyo/memory-fns): remember/replace/
+         forget keyed by a caller-chosen stable string mid, fields
+         mid/ver/cat/uat/scope/ws/title/content/tags/src, author
+         attributed by the habitat (RLS): rows are shared through the
+         cactus-ops SPACE (space-admit + members), so gregor and
+         glochid see one another's rows.
+
+         THE BRIDGE. agent/lib/habitat.ml exposes the SAME verbs as
+         LOCAL Nopales prims (mem/remember mem/replace mem/get
+         mem/search mem/forget mem/list mem/new-id) that forward-
+         evaluate the corresponding mem/* call on the habitat over
+         POST /api/eval (HTTP Basic — the ONE Pp_http client). Type is
+         the first arg (gregor's contract, habits transfer);
+         mem/search + mem/forget take TYPE as a 1-arg short form
+         against the default shared store (AGENT_MEMORY_TYPE, default
+         gregor-memory). The model gets a `memory` TOOL (remember /
+         search / get / forget) with a prompt fact line: search before
+         saving. Registration happens in EVERY mode (serve, REPL,
+         pipe); the tool only when credentials resolve.
+
+         IDENTITY + CONFIG. The habitat sees the caller the env
+         presents: AGENT_HABITAT_(URL|USER|PASS) > PP_(URL|USER|PASS)
+         > ~/.config/pricklypear/env, which is a SHELL file and is
+         sourced through /bin/sh (same semantics pp-eval uses), so
+         quoting/expansion is the operator's own. Fail-soft: with no
+         reachable habitat the prims raise a habitat-unreachable
+         Prim_error at CALL time — boot, chat turns, sessions, and
+         sync never depend on the bridge.
+
+         SESSIONS VS MEMORY. transcripts (sessions-persist) are the
+         LOCAL append-only log of what was said; memory rows are the
+         DURABLE cross-device store of what is worth KEEPING. The
+         split is deliberate: a consumed turn replays locally; facts
+         worth carrying to the next device/residence are promoted by
+         the agent (or its operator) into the store explicitly.
     |))))
 
   (subsection v0-non-goals
