@@ -206,7 +206,7 @@ let forget_expr ~(typ : string) ~(id : string) : string =
   remote "as-str" [ remote "mem/forget" [ q typ; q id ] ]
 
 let list_expr ~(typ : string) ~(n : int) : string =
-  remote "json-emit" [ remote "mem/list" [ q typ; q (string_of_int n) ] ]
+  remote "json-emit" [ remote "mem/list" [ q typ; string_of_int n ] ]
 
 let new_mid () : string =
   Printf.sprintf "m-%x-%04x" (int_of_float (Unix.gettimeofday ()))
@@ -269,7 +269,61 @@ let register ~(rt : Runtime.t) ~(env : Eio_unix.Stdenv.base) : unit =
           (try call ~env (list_expr ~typ ~n:(int_of_string n))
            with _ -> prim_err "mem/list" "usage: (mem/list type [n])")
       | _ -> prim_err "mem/list" "usage: (mem/list type [n])");
-  Runtime.add_prim rt "mem/new-id" (fun _ -> VStr (new_mid ()))
+  Runtime.add_prim rt "mem/new-id" (fun _ -> VStr (new_mid ()));
+  (* Terminal ergonomics (glooide daily-drive): /remember saves one fact
+     with an auto id/title; /memories prints the formatted recent
+     list. Both ride the REPL command seam. *)
+  let first_line (s : string) : string =
+    let s = String.map (fun c -> if c = '\n' || c = '\r' then ' ' else c) (String.trim s) in
+    let cut = 60 in
+    if String.length s <= cut then s
+    else String.sub s 0 cut ^ "…"
+  in
+  Runtime.add_prim rt "mem/save" (fun args ->
+      match strs "mem/save" args with
+      | [ content ] ->
+          let id = new_mid () in
+          ignore
+            (call ~env
+               (remember_expr ~typ:(default_type ()) ~id
+                  ~title:(first_line content)
+                  ~content ~tags:""));
+          VStr id
+      | _ -> prim_err "mem/save" "usage: (mem/save content)");
+  Runtime.add_prim rt "mem/recent" (fun args ->
+      let n =
+        match strs "mem/recent" args with
+        | [ n ] -> (try int_of_string n with _ -> 12)
+        | _ -> 12
+      in
+      let typ = default_type () in
+      match eval env (list_expr ~typ ~n) with
+      | Error e -> raise (Interp_error (Prim_error ("habitat", e, "habitat-unreachable")))
+      | Ok (`List entries) ->
+          let fmt (entry : Yojson.Safe.t) : string =
+            match entry with
+            | `List [ id; fields ] ->
+                let str k default =
+                  match Yojson.Safe.Util.member k fields with
+                  | `String s when s <> "" -> s
+                  | _ -> default
+                in
+                Printf.sprintf "%-18s %s"
+                  (str "mid" "?") (first_line (str "title" "(no title)"))
+              | _ -> "(row)"
+            in
+          let lines = List.map fmt entries in
+          if entries = [] then VStr "(no memories yet)"
+          else VStr (String.concat "\n" lines)
+      | Ok _ -> VStr "(mem/recent: unexpected store reply)");
+  (* REPLACE commands (both ride the command seam; plugin
+     register-command posts AFTER this and may override) *)
+  Hashtbl.replace rt.Runtime.commands "remember"
+    { Loop.doc = "save a durable fact (flags in the line)";
+      run = Ast.VPrim "mem/save" };
+  Hashtbl.replace rt.Runtime.commands "memories"
+    { Loop.doc = "recent rows in the shared agent-memory store";
+      run = Ast.VPrim "mem/recent" }
 
 (** The MODEL-facing memory tool (Loop tool over the same verbs):
     {"action":"remember|search|get|forget", "id"?, "title"?,
