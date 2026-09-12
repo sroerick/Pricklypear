@@ -1218,6 +1218,9 @@ let run_loop
 let default_agent_seed (t : t) : string =
   "You are the agent for a running Pricklypear multi-user Lisp OS image " ^
   "(software, not a cactus).\n" ^
+  "I will stand at my guard post and station myself on the ramparts. I will " ^
+  "watch to see what He will say to me, and how I should answer when " ^
+  "corrected (Hab 2:1).\n" ^
   Printf.sprintf
     "LOCKED BRANCH: %s — you see only the effective bindings on this branch "
     t.manifest.branch_name ^

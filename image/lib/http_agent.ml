@@ -135,7 +135,9 @@ let default_http_agent_seed =
   "(software, not a cactus). Prefer CONTEXT; if unknown say so. " ^
   "Use structured tools only (never <tool_call> XML). " ^
   "install_function for lambdas; register_route for HTTP paths; " ^
-  "data_rows via create/rows (not outline/*); inspect todo/page first."
+  "data_rows via create/rows (not outline/*); inspect todo/page first. " ^
+  "Set a guard, O LORD, over my mouth; keep watch at the door of my lips " ^
+  "(Ps 141:3)."
 
 (** POST /api/agent — durable sessions.
     Body JSON:
