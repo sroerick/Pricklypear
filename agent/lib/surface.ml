@@ -26,6 +26,67 @@ open Pricklypear_lisp
     the / and /code routes via the agent route table. Uses libs/html +
     the agent's request-shape prims (query-param). *)
 let surface_source = {pp|
+;; ---- shared page chrome (borge/agent.borg filmstrip-shell) ----
+;; Pages are PANE-AWARE: under HX-Request (filmstrip partial mode) a
+;; route renders the BODY fragment only; a full GET gets the doc
+;; skeleton + htmx scripts. One css block shared by every page + the
+;; shell (incl. the theme custom props filmstrip/css consumes). Redefine
+;; glochid/base-css live to restyle everything.
+(define glochid/base-css
+  (string-append
+    ":root{color-scheme:dark;--border:#2a2e3a;--panel:#1b1f2a;--ink:#d8dee9;--muted:#6b7080;--chrome:#12141c;--sel-bg:#2a2e3a;--sel-accent:#7aa2f7}"
+    "html,body{height:100%}"
+    "body{background:#0f1117;color:#d8dee9;font-family:ui-monospace,Menlo,monospace;margin:0;padding:1rem;box-sizing:border-box}"
+    "a{color:#7aa2f7;text-decoration:none}a:hover{text-decoration:underline}"
+    ".muted{color:#6b7080}"
+    "h1{margin:.25rem 0 .75rem 0;font-size:1.1rem}"
+    "table{border-collapse:collapse;width:100%;max-width:60rem}td,th{padding:.35rem .6rem;border-bottom:1px solid #222;text-align:left;white-space:nowrap}"
+    "pre{background:#12141c;padding:1rem;border-radius:6px;overflow:auto}"
+    "input{background:#1b1f2a;color:#d8dee9;border:1px solid #333;border-radius:6px;padding:.5rem}"
+    "select{background:#1b1f2a;color:#d8dee9;border:1px solid #333;border-radius:4px}"
+    "label{color:#8a8f9e}"
+    ".card{background:#1b1f2a;border:1px solid #2a2e3a;border-radius:6px;padding:1rem;max-width:38rem}"
+    ".card p{margin:.5rem 0}"
+    ".card input,.card select{width:100%;padding:.5rem;margin-top:.25rem}"
+    "button{background:#2a6fdb;color:#fff;border:0;border-radius:6px;padding:.5rem 1rem;cursor:pointer}"
+    ".fs-shell{height:calc(100vh - 2rem)}"
+    ".bubble{background:#1b1f2a;border-radius:6px;padding:.5rem .75rem;margin:.5rem 0;white-space:pre-wrap}"
+    ".bubble.user{color:#9ece6a}"
+    ".bubble.llm{color:#c0caf5}.bubble.repl{color:#bb9af7}"
+    ".trace{color:#6b7080;font-size:.85em;white-space:pre-wrap}"
+    ".think{color:#6b7080;font-size:.9em;margin:.4rem 0}"
+    ".think summary{cursor:pointer}"
+    ".think>div{white-space:pre-wrap}"
+    ".reason{color:#8a8f9e;font-style:italic}"
+    ".think .tk,.think .tool{margin:.25rem 0 .25rem .25rem}"
+    ".think .tk>summary,.think .tool>summary{color:#8a8f9e}"
+    ".think .tk>div,.think .tool>div{margin-left:.9rem;padding-left:.5rem;border-left:1px solid #2a2e3a}"
+    ".think:not(:has(.reason,.trace)){display:none}"
+    ".chatpage{display:flex;flex-direction:column;height:calc(100vh - 6rem)}"
+    ".chatpage #log{flex:1;min-height:0;overflow-y:auto;border:1px solid #333;border-radius:6px;padding:.75rem;margin-bottom:.75rem}"
+    ".chatpage form{display:flex;gap:.5rem;flex-shrink:0}"
+    ".chatpage #msg{flex:1}"
+    ".chatpage form button{flex-shrink:0}"
+    "*{scrollbar-width:thin;scrollbar-color:#2a2e3a transparent}"
+    "::-webkit-scrollbar{width:10px;height:10px}"
+    "::-webkit-scrollbar-track{background:transparent}"
+    "::-webkit-scrollbar-thumb{background:#2a2e3a;border-radius:6px}"
+    "::-webkit-scrollbar-thumb:hover{background:#4a4f5c}"
+    "::-webkit-scrollbar-corner{background:transparent}"))
+
+(define (glochid/layout title body)
+  (if (hx-request?)
+      (render-html body)
+      (render-html
+        (string-append
+          "<!doctype html><html><head><meta charset=utf-8><title>" title "</title>"
+          "<style>" glochid/base-css "</style></head><body>"
+          body
+          "<script src=\"/assets/htmx.min.js\"></script>"
+          "<script src=\"/assets/htmx-2-compat.min.js\"></script>"
+          "<script src=\"/assets/hx-multipart.js\"></script>"
+          "</body></html>"))))
+
 ;; ---- llm-config helpers (borge/agent.borg llm-config) ----
 ;; The model dropdown is fed by the provider ABI (agent/models = GET
 ;; {base}/models, cached host-side); the choice POSTs to /settings and
@@ -46,47 +107,17 @@ let surface_source = {pp|
 ;; vendored assets served at /assets/*.js (baked into the agent binary).
 ;; hx-config '{"timeout":0}' disables htmx's 60s defaultTimeout for a
 ;; request whose lawful lifetime is "a whole agent turn".
-(define (chat/page)
-  ;; ?session=<id> resumes/backfills: the page renders the stored
-  ;; transcript into #log (sessions-persist resume path). The live
-  ;; resume side effect happens on /resume (GET) before the redirect here.
+;; hx-config '{"'timeout'":0}' disables htmx's 60s defaultTimeout for a
+;; request whose lawful lifetime is "a whole agent turn".
+(define (chat/body)
+  "Chat surface body — one structure for page AND pane, so the stream's
+#log target works in both (borge/agent.borg filmstrip-shell #4)."
   (let ((sid (query-param "session")))
-    (render-html
     (string-append
-      "<!doctype html><html><head><meta charset=utf-8><title>agent</title>"
-      "<style>"
-      "html,body{height:100%}"
-      "body{background:#0f1117;color:#d8dee9;font-family:ui-monospace,Menlo,monospace;margin:0;padding:1rem;box-sizing:border-box;display:flex;flex-direction:column}"
-      "a{color:#7aa2f7;text-decoration:none}a:hover{text-decoration:underline}"
-      ".muted{color:#6b7080}"
-      "#log{flex:1;min-height:0;overflow-y:auto;border:1px solid #333;border-radius:6px;padding:.75rem;margin-bottom:.75rem}"
-      ".bubble{background:#1b1f2a;border-radius:6px;padding:.5rem .75rem;margin:.5rem 0;white-space:pre-wrap}"
-      ".bubble.user{color:#9ece6a}"
-      ".bubble.llm{color:#c0caf5}.bubble.repl{color:#bb9af7}"
-      ".trace{color:#6b7080;font-size:.85em;white-space:pre-wrap}"
-      ".think{color:#6b7080;font-size:.9em;margin:.4rem 0}"
-      ".think summary{cursor:pointer}"
-      ".think>div{white-space:pre-wrap}"
-      ".reason{color:#8a8f9e;font-style:italic}"
-      ".think .tk,.think .tool{margin:.25rem 0 .25rem .25rem}"
-      ".think .tk>summary,.think .tool>summary{color:#8a8f9e}"
-      ".think .tk>div,.think .tool>div{margin-left:.9rem;padding-left:.5rem;border-left:1px solid #2a2e3a}"
-      ".think:not(:has(.reason,.trace)){display:none}"
-      "form{display:flex;gap:.5rem;flex-shrink:0}"
-      "h1{margin:.25rem 0 .75rem 0;font-size:1.1rem;flex-shrink:0}"
-      "input{flex:1;background:#1b1f2a;color:#d8dee9;border:1px solid #333;border-radius:6px;padding:.5rem}"
-      "button{background:#2a6fdb;color:#fff;border:0;border-radius:6px;padding:.5rem 1rem;cursor:pointer}"
-      ":root{color-scheme:dark}"
-      "*{scrollbar-width:thin;scrollbar-color:#2a2e3a transparent}"
-      "::-webkit-scrollbar{width:10px;height:10px}"
-      "::-webkit-scrollbar-track{background:transparent}"
-      "::-webkit-scrollbar-thumb{background:#2a2e3a;border-radius:6px}"
-      "::-webkit-scrollbar-thumb:hover{background:#4a4f5c}"
-      "::-webkit-scrollbar-corner{background:transparent}"
-      "</style></head><body>"
+      "<div class=\"chatpage\">"
       "<h1><a href=\"/\">agent</a> <span class=\"muted\">— <a href=\"/code\">/code</a> · <a href=\"/sessions\">/sessions</a> · <a href=\"/settings\">/settings</a> · model: "
       "<select name=\"model\" hx-post=\"/settings\" hx-trigger=\"change\" hx-swap=\"none\" "
-      "style=\"background:#1b1f2a;color:#d8dee9;border:1px solid #333;border-radius:4px;font-size:.6em\">"
+      "style=\"font-size:.6em\">"
       (settings/model-options (agent/model) (agent/models))
       "</select></span></h1>"
       "<div id=\"log\">"
@@ -98,12 +129,11 @@ let surface_source = {pp|
       " hx-config='{\"timeout\":0}' hx-on::before:request=\"this.reset()\">"
       "<input id=\"msg\" name=\"msg\" type=\"text\" placeholder=\"prompt…\" autocomplete=\"off\" autofocus>"
       "<button>send</button>"
-      "</form>"
-      "<script src=\"/assets/htmx.min.js\"></script>"
-      "<script src=\"/assets/htmx-2-compat.min.js\"></script>"
-      "<script src=\"/assets/hx-multipart.js\"></script>"
-      "</body></html>"))))
-(route "/" "chat/page")
+      "</form></div>")))
+
+(define (chat/page)
+  (glochid/layout "agent" (chat/body)))
+(route "/chat" "chat/page")
 
 ;; ---- sessions surface (GET /sessions; borge/agent.borg sessions-persist) ----
 ;; Appended-only JSONL transcripts under .agent/sessions/. Resume:
@@ -149,23 +179,14 @@ let surface_source = {pp|
     "" (json-parse data)))
 
 (define (sessions/page)
-  (render-html
+  (glochid/layout "agent sessions"
     (string-append
-      "<!doctype html><html><head><meta charset=utf-8><title>agent sessions</title>"
-      "<style>"
-      "body{background:#0f1117;color:#d8dee9;font-family:ui-monospace,Menlo,monospace;margin:0;padding:1.5rem}"
-      "a{color:#7aa2f7;text-decoration:none}a:hover{text-decoration:underline}"
-      ".muted{color:#6b7080}"
-      "table{border-collapse:collapse;width:100%;max-width:60rem}td,th{padding:.35rem .6rem;border-bottom:1px solid #222;text-align:left;white-space:nowrap}"
-      ":root{color-scheme:dark}"
-      "</style></head><body>"
       "<h1><a href=\"/\">agent</a> <span class=\"muted\">— /sessions</span></h1>"
       "<p><a href=\"/new\">+ new session</a></p>"
       "<table><tr><th>time</th><th>model</th><th>msgs</th><th>first prompt</th><th></th></tr>"
       (sessions/rows (session/list))
       "</table>"
-      "<p class=\"muted\">transcripts: .agent/sessions/*.jsonl (append-only, local store)</p>"
-      "</body></html>")))
+      "<p class=\"muted\">transcripts: .agent/sessions/*.jsonl (append-only, local store)</p>")))
 (route "/sessions" "sessions/page")
 
 (define (sessions/new)
@@ -185,18 +206,8 @@ let surface_source = {pp|
 ;; (auth.user-llm-keys 5b). Model is a per-surface dial from the
 ;; provider's own /models catalog.
 (define (settings/page)
-  (render-html
+  (glochid/layout "agent settings"
     (string-append
-      "<!doctype html><html><head><meta charset=utf-8><title>agent settings</title>"
-      "<style>"
-      "body{background:#0f1117;color:#d8dee9;font-family:ui-monospace,Menlo,monospace;margin:0;padding:1.5rem}"
-      "a{color:#7aa2f7;text-decoration:none}a:hover{text-decoration:underline}"
-      ".muted{color:#6b7080}"
-      ".card{background:#1b1f2a;border:1px solid #2a2e3a;border-radius:6px;padding:1rem;max-width:38rem}"
-      "label{color:#8a8f9e}"
-      "input,select{width:100%;background:#0f1117;color:#d8dee9;border:1px solid #333;border-radius:6px;padding:.5rem;margin-top:.25rem}"
-      "button{background:#2a6fdb;color:#fff;border:0;border-radius:6px;padding:.5rem 1rem;cursor:pointer;margin-top:.5rem}"
-      "</style></head><body>"
       "<h1><a href=\"/\">agent</a> <span class=\"muted\">— /settings</span></h1>"
       "<div class=\"card\"><form method=\"post\" action=\"/settings\">"
       "<p><label>API key — " (agent/key-status) " · blank keeps current</label>"
@@ -208,9 +219,7 @@ let surface_source = {pp|
       "<button>save</button></form>"
       "<p class=\"muted\">Key + base come down invisibly via pp-remote --sync "
       "(lens __config.json). Model is chosen per surface from the provider's /models.</p>"
-      "</div>"
-      "<script src=\"/assets/htmx.min.js\"></script>"
-      "</body></html>")))
+      "</div>")))
 (route "/settings" "settings/page")
 
 ;; ---- chat fragment templates (called per-part by the OCaml stream) ----
@@ -290,48 +299,19 @@ let surface_source = {pp|
     (if (fs/dir? rel)
         (let* ((entries (fs/ls rel))
                (items (json-parse entries)))
-          (render-html
+          (glochid/layout "agent code"
             (string-append
-              "<!doctype html><html><head><meta charset=utf-8><title>code</title>"
-              "<style>"
-              "body{background:#0f1117;color:#d8dee9;font-family:ui-monospace,Menlo,monospace;margin:0;padding:1.5rem}"
-              "a{color:#7aa2f7;text-decoration:none}"
-              ".muted{color:#6b7080}"
-              "table{border-collapse:collapse}td,th{padding:.25rem .75rem;border-bottom:1px solid #222}"
-              "pre{background:#12141c;padding:1rem;border-radius:6px;overflow:auto}"
-              ":root{color-scheme:dark}"
-              "*{scrollbar-width:thin;scrollbar-color:#2a2e3a transparent}"
-              "::-webkit-scrollbar{width:10px;height:10px}"
-              "::-webkit-scrollbar-track{background:transparent}"
-              "::-webkit-scrollbar-thumb{background:#2a2e3a;border-radius:6px}"
-              "::-webkit-scrollbar-thumb:hover{background:#4a4f5c}"
-              "::-webkit-scrollbar-corner{background:transparent}"
-              "</style></head><body>"
               "<h1><a href=\"/\">agent</a> <span class=\"muted\">/</span> <a href=\"/code\">code</a></h1>"
               "<p class=\"muted\">" (html-escape rel) "</p>"
               "<table><tr><th></th><th>name</th></tr>"
               (code/rows items rel)
-              "</table></body></html>")))
+              "</table>")))
         (let* ((content (fs/read rel)))
-          (render-html
+          (glochid/layout "agent code"
             (string-append
-              "<!doctype html><html><head><meta charset=utf-8><title>code</title>"
-              "<style>"
-              "body{background:#0f1117;color:#d8dee9;font-family:ui-monospace,Menlo,monospace;margin:0;padding:1.5rem}"
-              "a{color:#7aa2f7;text-decoration:none}"
-              ".muted{color:#6b7080}"
-              "pre{background:#12141c;padding:1rem;border-radius:6px;overflow:auto}"
-              ":root{color-scheme:dark}"
-              "*{scrollbar-width:thin;scrollbar-color:#2a2e3a transparent}"
-              "::-webkit-scrollbar{width:10px;height:10px}"
-              "::-webkit-scrollbar-track{background:transparent}"
-              "::-webkit-scrollbar-thumb{background:#2a2e3a;border-radius:6px}"
-              "::-webkit-scrollbar-thumb:hover{background:#4a4f5c}"
-              "::-webkit-scrollbar-corner{background:transparent}"
-              "</style></head><body>"
               "<h1><a href=\"/\">agent</a> <span class=\"muted\">/</span> <a href=\"/code\">code</a></h1>"
               "<p class=\"muted\">" (html-escape rel) "</p>"
-              "<pre>" (html-escape content) "</pre></body></html>"))))))
+              "<pre>" (html-escape content) "</pre>"))))))
 
 (define (code/rows items rel)
   (list/foldl
@@ -347,6 +327,212 @@ let surface_source = {pp|
     "" items))
 
 (route "/code" "code/page")
+|pp}
+
+(** The glochid layer (borge/agent.borg filmstrip-shell). Load order:
+    libs/html, libs/css, libs/filmstrip, THIS, then [surface_source].
+    The filmstrip lib boots as glochid's shell with two HOST seams
+    swapped (the harness's request-runner seam makes this a load, not a
+    port — the allowed variation is recorded in borge/filmstrip.borg):
+
+      1. WORKSPACE BACKING: filmstrip/ws-node / ws-save redefined over
+         fs prims into .agent/workspace.json (project-local, beside
+         .agent/sessions). The habitat's tree/upsert row stays the
+         image's; a lens-backed row is the deferred unification.
+      2. THE CASCADE IS THE AGENT'S: filmstrip/apps + filmstrip/browse
+         redefined — chat, code (a filesystem cascade), sessions,
+         settings. request-param is a shim over query-param (the POST
+         gate merges the form body into params) — NOT a new host prim.
+
+    Filmstrip make-note dialect gotchas apply: let* is SINGLE-BODY
+    (wrap multi-step tails in (seq ...)); length accepts cons pairs;
+    routes are exact-match strings. *)
+let glochid_source = {pp|
+;; ---- addressing shim: filmstrip reads request-param; the gate merges
+;; the form body into params, so query-param answers both channels.
+(define (request-param n) (query-param n))
+
+;; ---- flat multi-key dict update (pure catalog has dict-set only; the
+;; habitat gets this from libs/std).
+(define dict-set*
+  (lambda (json kvs)
+    (if (null? kvs)
+        json
+        (if (null? (cdr kvs))
+            json
+            (dict-set*
+              (dict-set json (car kvs) (car (cdr kvs)))
+              (cdr (cdr kvs))))))
+  "Apply flat key/value pairs from kvs onto json via dict-set.")
+
+;; ---- 1. WORKSPACE BACKING: .agent/workspace.json ----
+(define glochid/ws-file ".agent/workspace.json")
+(define filmstrip/ws-node
+  (lambda ()
+    (if (fs/exists? glochid/ws-file)
+        (dict-set "{}" "body" (fs/read glochid/ws-file))
+        ()))
+  "This workspace's fields holder, or () when never saved. The habitat
+uses tree/get + node-path; glochid rides the local fs (HOST SEAM 1).")
+(define filmstrip/ws-save
+  (lambda (fields)
+    (seq (fs/write glochid/ws-file fields) fields))
+  "Persist workspace fields to .agent/workspace.json (HOST SEAM 1).")
+
+;; ---- 2. THE CASCADE IS THE AGENT'S ----
+(define glochid/apps
+  (lambda ()
+    (list
+      (list "chat" "/chat")
+      (list "code" "code")
+      (list "sessions" "/sessions")
+      (list "settings" "/settings")))
+  "Column 0: the agent's own surfaces. Entries are (label . target);
+a target starting / is a route (leaf), a bare name is a crumb that
+names a deeper cascade — only \"code\" is a cascade here: dir -> dir
+-> file over the operator's cwd (fs/ls).")
+
+(define glochid/dir-of
+  (lambda (prefix)
+    (if (string-eq prefix "code")
+        "."
+        (substring prefix 5 (string-length prefix))))
+  "Cascade path element -> fs dir (\"code\" is the root, \"code/lib\" ->
+\"lib\").")
+
+(define glochid/ls-entries
+  (lambda (prefix items)
+    (if
+      (null? items)
+      (list)
+      (let*
+        ((e (car items))
+          (name (as-str (dict-get e "name")))
+          (dir (glochid/dir-of prefix))
+          (child (if (string-eq dir ".") name (string-append dir "/" name))))
+        (append
+          (if
+            (string-starts-with? name ".")
+            (list)
+            (if
+              (string-eq (dict-get e "dir") "true")
+              (list (list name (string-append "code/" child)))
+              (list (list name (string-append "/code?path=" child)))))
+          (glochid/ls-entries prefix (cdr items))))))
+  "One fs/ls listing as cascade entries: dirs are crumbs (code/<child>),
+files are leaves (routes /code?path=<child>); dot entries hidden.")
+
+(define glochid/code-entries
+  (lambda (prefix)
+    (glochid/ls-entries prefix (json-parse (fs/ls (glochid/dir-of prefix)))))
+  "childfn for the code cascade: list one directory.")
+
+(define glochid/pkg-browse
+  (lambda (pkg pkg-path)
+    (if
+      (string-eq pkg "code")
+      (filmstrip/browse-walk
+        glochid/code-entries
+        (list (glochid/code-entries "code"))
+        pkg-path)
+      (cons (list (list)) #f)))
+  "Dispatch the package browse; code walks the filesystem, unknown
+packages get one empty column.")
+
+(define filmstrip/browse
+  (lambda
+    (path)
+    (let
+      ((apps (glochid/apps)))
+      (if
+        (null? path)
+        (cons (list apps) #f)
+        (let
+          ((r
+            (glochid/pkg-browse (as-str (car path)) (cdr path))))
+          (cons (cons apps (car r)) (cdr r))))))
+  "glochid's shell cascade (HOST SEAM 2): column 0 is the agent's own
+surfaces; deeper columns come from glochid/pkg-browse.")
+
+;; ---- 3. THE SHELL PAGE (GET / and GET /filmstrip) ----
+;; ?session=ID resumes as a chat fragment pane (/chat?session=ID — the
+;; sessions table's view link and /resume land HERE); ?open=ROUTE is the
+;; GET twin of the launcher POST (open-or-focus through the same defs). 
+(define glochid/shell-requested
+  (lambda ()
+    (let
+      ((sess (query-param "session")))
+      (if
+        (null? sess)
+        (let
+          ((o (query-param "open")))
+          (if (null? o) "" (as-str o)))
+        (string-append "/chat?session=" sess))))
+  "Route text the shell should open-or-focus this render, or \"\".")
+
+(define glochid/shell-row
+  (lambda ()
+    (let*
+      ((r (string-trim (glochid/shell-requested)))
+        (row (filmstrip/row)))
+      (if
+        (string-eq r "")
+        row
+        (if
+          (string-starts-with? r "/")
+          (if
+            (null? (route/lookup (car (filmstrip/split-query r))))
+            row
+            (let*
+              ((res (filmstrip/open-apply (nth row 1) r))
+                (panes2 (nth res 0))
+                (focus2 (nth res 1)))
+              (filmstrip/save-all (nth row 0) panes2 focus2)
+              (list (nth row 0) panes2 focus2)))
+          row))))
+  "Workspace row after honoring the open/session param (persisted — a
+reload keeps the pane). Bad routes fall back to the plain row.")
+
+(define glochid/shell-doc
+  (lambda (frag shell)
+    (if
+      frag
+      (render-html shell)
+      (render-html
+        (string-append
+          "<!doctype html><html><head><meta charset=utf-8><title>glochid</title>"
+          "<style>" glochid/base-css "</style></head><body>"
+          shell
+          "<script src=\"/assets/htmx.min.js\"></script>"
+          "<script src=\"/assets/htmx-2-compat.min.js\"></script>"
+          "<script src=\"/assets/hx-multipart.js\"></script>"
+          "</body></html>"))))
+  "The shell doc: glochid chrome + filmstrip/shell-html (which carries
+its own strip css + theme props from glochid/base-css). HX-Request
+renders the fragment only — the shell itself can be windowed. frag is
+captured by the CALLER before pane dispatch runs: nested route/dispatch
+rebinds the request context, so hx-request? must be read first.")
+
+(define glochid/shell
+  (lambda ()
+    (let*
+      ((frag (hx-request?))
+        (row (glochid/shell-row)))
+      (glochid/shell-doc
+        frag
+        (filmstrip/shell-html (nth row 0) (nth row 1) (nth row 2)))))
+  "GET / and /filmstrip: the glochid shell. filmstrip/page's body with
+glochid chrome; zero JS beyond the vendored htmx assets.")
+
+;; ---- shell routes ----
+(route "/" "glochid/shell")
+(route "/filmstrip" "glochid/shell")
+(route "/filmstrip/open" "filmstrip/open")
+(route "/filmstrip/cascade" "filmstrip/cascade")
+(route "/filmstrip/close" "filmstrip/close")
+(route "/filmstrip/focus" "filmstrip/focus")
+(route "/filmstrip/move" "filmstrip/move")
+(route "/filmstrip/width" "filmstrip/width")
 |pp}
 
 (** Boot-load the embedded Nopales packages + this surface into the
@@ -373,6 +559,12 @@ let register_config_default_prims ~(rt : Runtime.t) : unit =
 
 let load ~(rt : Runtime.t) : unit =
   register_config_default_prims ~rt;
+  (* Boot order (glochid_source header): libs, then the glochid layer
+     (whose ws/browse/shell redefinitions must win over the filmstrip
+     defaults via env late binding), then the agent surface. *)
   Runtime.load_source ~rt Libs_source.html_lib;
+  Runtime.load_source ~rt Libs_source.css_lib;
   Runtime.load_source ~rt Libs_source.hyper_lib;
+  Runtime.load_source ~rt Libs_source.filmstrip_lib;
+  Runtime.load_source ~rt glochid_source;
   Runtime.load_source ~rt surface_source

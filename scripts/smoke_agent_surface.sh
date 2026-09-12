@@ -46,11 +46,18 @@ check() { # name, condition(0/1)
   if [ "$2" = 0 ]; then echo "OK   $1"; else echo "FAIL $1"; fails=$((fails+1)); fi
 }
 
-# 1. chat page
-PAGE=$(curl -sS -m 5 "$URL/")
-echo "$PAGE" | grep -q 'hx-post="/chat"'                       ; check "page has hx-post /chat form" $?
-echo "$PAGE" | grep -q '/assets/hx-multipart.js'              ; check "page loads hx-multipart asset" $?
-echo "$PAGE" | grep -q 'id="log"'                             ; check "page has #log target" $?
+# 1. filmstrip shell + chat page
+SHELL=$(curl -sS -m 5 "$URL/")
+echo "$SHELL" | grep -q 'id="fs-cascade"'                     ; check "shell has cascade strip" $?
+echo "$SHELL" | grep -q 'id="fs-content"'                     ; check "shell has content strip" $?
+echo "$SHELL" | grep -q 'id="fs-sink"'                        ; check "shell has OOB sink" $?
+echo "$SHELL" | grep -q 'id="fs-launch"'                      ; check "shell has launcher" $?
+echo "$SHELL" | grep -q '/assets/htmx.min.js'                 ; check "shell loads htmx" $?
+echo "$SHELL" | grep -q 'fs-entry'                            ; check "cascade lists the agent surfaces" $?
+PAGE=$(curl -sS -m 5 "$URL/chat")
+echo "$PAGE" | grep -q 'hx-post="/chat"'                      ; check "chat page has hx-post /chat form" $?
+echo "$PAGE" | grep -q '/assets/hx-multipart.js'              ; check "chat page loads hx-multipart asset" $?
+echo "$PAGE" | grep -q 'id="log"'                             ; check "chat page has #log target" $?
 
 # 2. extension asset
 ASSET=$(curl -sS -m 5 -o /dev/null -w '%{http_code}' "$URL/assets/hx-multipart.js")
@@ -85,6 +92,30 @@ echo "$CODE" | grep -q 'name</th>'                            ; check "/code ren
 SETTINGS=$(curl -sS -m 5 "$URL/settings")
 echo "$SETTINGS" | grep -q '<select name="model"'             ; check "/settings has model select" $?
 echo "$PAGE" | grep -q 'hx-post="/settings"'                  ; check "chat header has model dropdown" $?
+
+# 6. filmstrip protocol (borge/agent.borg filmstrip-shell verify).
+#    Runs in the repo cwd (the smoke cds to the repo root); clean below.
+WS=.agent/workspace.json
+rm -f "$WS"
+OPEN=$(curl -sS -m 5 -X POST "$URL/filmstrip/open" -d 'route=/code')
+echo "$OPEN" | grep -q 'hx-swap-oob="beforeend:#fs-content"'  ; check "launcher open answers OOB pane append" $?
+echo "$OPEN" | grep -q 'fs-pane fs-third focused'             ; check "opened pane wears .focused at third width" $?
+echo "$OPEN" | grep -q 'fs-title">/code'                      ; check "pane carries the dispatched /code fragment" $?
+FRAG=$(curl -sS -m 5 -H 'HX-Request: true' "$URL/")
+echo "$FRAG" | grep -q '<!doctype'
+[ "$?" != 0 ]                                                 ; check "HX-Request / renders the shell FRAGMENT (no doctype)" $?
+echo "$FRAG" | grep -q 'fs-body'                              ; check "shell fragment mounts pane bodies" $?
+[ -f "$WS" ]                                                  ; check "workspace row persisted (.agent/workspace.json)" $?
+PANE_ID=$(sed -n 's/.*"id":"\([^"]*\)".*/\1/p' "$WS" | head -1)
+FOCUS=$(curl -sS -m 5 -X POST "$URL/filmstrip/focus" -d 'dir=right')
+echo "$FOCUS" | grep -q 'hx-swap-oob="true"'                  ; check "focus POST answers OOB section swaps" $?
+CASCADE=$(curl -sS -m 5 -X POST "$URL/filmstrip/cascade" -d 'd=0&t=code')
+echo "$CASCADE" | grep -q 'fs-col'                            ; check "cascade crumb walk appends Miller columns" $?
+RELOAD=$(curl -sS -m 5 "$URL/")
+echo "$RELOAD" | grep -q 'fs-pane'                            ; check "workspace round-trips on reload" $?
+CLOSE=$(curl -sS -m 5 -X POST "$URL/filmstrip/close" -d "id=$PANE_ID")
+echo "$CLOSE" | grep -q "delete:#fs-pane-$PANE_ID"            ; check "close answers OOB pane delete" $?
+rm -f "$WS"
 
 if [ "$fails" = 0 ]; then echo "PASS agent surface smoke"; exit 0
 else echo "FAIL ($fails checks)"; exit 1; fi
