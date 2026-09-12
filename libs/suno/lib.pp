@@ -341,13 +341,14 @@ Suno gateway engine."
 (define suno/retry
   (lambda (n f)
     "Call f (0-arg); on Lisp error retry up to n total attempts with a
-1s gap; re-raises the last error. Prod POST bodies drop intermittently
-(transport returns 200 + headers, empty body) — retries absorb it."
+3s gap; re-raises the last error. Prod POST bodies drop intermittently
+(transport returns 200 + headers, empty body) in minutes-long windows —
+8 x 3s absorbs most of them."
     (guard
       (lambda (e)
         (if (<= n 1)
             (error (car (cdr e)) (car (cdr (cdr e))))
-            (begin (sleep 1) (suno/retry (- n 1) f))))
+            (begin (sleep 3) (suno/retry (- n 1) f))))
       (f))))
 
 (define suno/ace/call
@@ -644,9 +645,13 @@ lyrics (verbatim lyrics: title + style required) or instrumental
           (html/textarea "prompt" (html/attr "rows" "5")
             "")
           "<br>"
-          (html/text "model ")
-          (suno/model-select)
-          "<br>"
+          (if (string-eq (suno/engine) "ace")
+              ""
+              (html/join
+                (list
+                  (html/text "model ")
+                  (suno/model-select)
+                  "<br>")))
           (html/button (html/attr "type" "submit") "generate"))))))
 
 (define suno/main-html
