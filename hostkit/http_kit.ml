@@ -128,6 +128,23 @@ let form_field (body : string) (name : string) : string =
   in
   match find 0 with None -> "" | Some v -> url_decode v
 
+(** Parse a url-encoded form body into a params alist (htmx posts
+    application/x-www-form-urlencoded; hx-vals ride the POST body on
+    non-GET requests). Parsed names + values are url-decoded, so the
+    filmstrip POST routes read them as request params. *)
+let parse_form_body (body : string) : (string * string) list =
+  List.filter_map
+    (fun kv ->
+      if kv = "" then None
+      else
+        match String.index_opt kv '=' with
+        | Some i ->
+            Some
+              ( url_decode (String.sub kv 0 i),
+                url_decode (String.sub kv (i + 1) (String.length kv - i - 1)) )
+        | None -> Some (url_decode kv, ""))
+    (String.split_on_char '&' body)
+
 (** Serve a vendored, baked-into-the-binary asset at /assets/*.js. The
     asset TABLE is host-provided (each host embeds its own Assets
     module): entries are (name, body, content_type). *)

@@ -365,6 +365,71 @@
          per-process-park.
     |))))
 
+  (subsection filmstrip-shell
+   (doc "The glochid shell IS a filmstrip (filmstrip.borg, working on the agent host): a Miller-column cascade strip over the agent's OWN surfaces above an niri-style content strip of ordinary route panes. Same seam as the habitat shell — Nopales fragments on the agent route table — with two host seams swapped: the workspace row persists to a LOCAL file (fs prims), and the cascade browse is defined by the agent (chat/code/sessions/settings/memory), not by todo/notes/calendar.")
+   (status implemented)
+   (implements agent/lib/surface.ml agent/lib/http_ui.ml libs/filmstrip/lib.pp libs/css/lib.pp)
+   (verify
+    (smoke "GET / renders the shell: #fs-cascade + launcher + #fs-content + key sentinels, zero <script> tags")
+    (smoke "launcher open /code -> pane appears with the dispatched code fragment + .focused; workspace round-trips through .agent/workspace.json on reload")
+    (smoke "cascade: code -> dir walks fs/ls columns; a file leaf opens-or-focuses the /code?path pane")
+    (smoke "alt+arrow focus POSTs answer OOB class swaps; close answers OOB delete + focus hand-off")
+    (smoke "POST /filmstrip/* dispatch through the route-table POST fallback; hx-vals form params reach request-param"))
+   (details
+    (doc (|
+         HOST SEAMS (what differs from the habitat shell:
+         filmstrip.borg's shell-protocol UNCHANGED — strips, OOB swaps,
+         zero-JS hotkeys, workspace round-trip are the same defs):
+
+         1. WORKSPACE BACKING. filmstrip/ws-node + filmstrip/ws-save are
+            the persistence seam (tree/get + tree/upsert on the image).
+            The glochid layer REDEFINES both after load: fields JSON
+            rides fs/read + fs/write into .agent/workspace.json
+            (project-local, beside .agent/sessions). No Postgres in the
+            agent rim; a lens-backed row (shared desktop across
+            devices) is the follow-up once the campaign-8 data prims
+            land — the seam is two defs on purpose for exactly that.
+
+         2. THE CASCADE IS THE AGENT'S. filmstrip/browse (and its
+            pkg-browse + apps collaborators) is redefined by the glochid
+            layer: column 0 lists the agent's own surfaces — chat
+            (/chat), code (/code), sessions (/sessions), settings
+            (/settings), memory (/memories) — and code walks the
+            FILESYSTEM cascade (fs/ls: dir -> dir -> file; a file leaf
+            opens-or-focuses the /code?path= pane). The image's
+            todo/notes/calendar browse stays the habitat's shell.
+
+         3. FRAGMENT MODE = HX-Request PASSTHROUGH. http_ui dispatch_get
+            threads the client's HX-Request header into the agent route
+            table, so / /code /sessions /settings render pane fragments
+            when windowed — partial mode is the pane protocol (the
+            image's route-gate discipline, agent-host backed). POST
+            bodies (htmx hx-vals rides form-encoded) are parsed into
+            params before route-table dispatch. request-param is a
+            TWO-LINE NOPALES SHIM over query-param (params already
+            merged with the form body by the gate) — NOT a new host
+            prim, keeping the shared seam un-touched.
+
+         4. CHAT IN A PANE. GET / is the SHELL (the standalone chat page
+            moves to /chat); page bodies branch on hx-request? and
+            render the fragment skeleton only when windowed (style
+            lives in the shell head). ONE chat pane max: open-or-focus
+            is by route, so the fixed #log id stays unique under the
+            multipart stream targets.
+
+         EMBEDDING. libs/filmstrip + libs/css boot-load (in order) like
+         libs/html via the shared embed rules; the glochid layer loads
+         LAST so its redefinitions win (env-based late binding makes
+         cascade/focus/open pick them up on every call). The filmstrip
+         lib's tree prims are referenced only INSIDE ws-node/ws-save
+         (never called after the override); css/sheet comes from
+         libs/css; dict-set* is defined in the glochid layer (the pure
+         catalog lacks the flat multi-key form). Filmstrip make-note
+         dialect gotchas apply (let* single-body; exact-match routes;
+         cons-pair counting for length).
+    |))))
+ (* agent note (|2026-09-11 MAKE (filmstrip-shell) DONE: the filmstrip lib boots as glochid's shell. Mechanism: libs/css + libs/filmstrip embedded via the shared embed rules (new dune rule strips the pp-sync (package …) header the image intercepts but the agent's bare evaluator does not), then the glochid layer (glochid_source in surface.ml) loads BEFORE the agent surface and redefines the two host seams: ws-node/ws-save over fs prims into .agent/workspace.json (fs/write now mkdirs parents), and filmstrip/apps + filmstrip/browse over the agent's own surfaces with code as a FILESYSTEM cascade (fs/ls: dir -> dir -> file leaves opening /code?path= panes). http_ui threads HX-Request into the route-table context and falls unknown POST paths through to the route table (form body parsed into params; request-param is a Nopales shim over query-param). GET / is the shell (GET /filmstrip same, GET ?session= resumes as a chat fragment pane, ?open= is the launcher GET twin); GET /chat is the old page; all pages pane-aware via glochid/layout branching on hx-request?. GOTCHA FOUND LIVE: nested route/dispatch (filmstrip/pane-content inside the shell render) rebinds the request context, so hx-request? must be captured BEFORE opening panes (glochid/shell does). VERIFY: dune build @all; agent_test 20/20 green; scripts/smoke_agent_surface.sh 32/32 PASS (9 new filmstrip checks incl. OOB append pane, fragment-mode /, workspace round-trip, focus swap, close OOB delete, cascade walk, reload); chromium screenshot verified strip layout + two panes dispatched live; borge balance+parse clean; drift NONE (pre-existing baseline).|) *)
+
   (subsection generated-surface-artifacts
    (doc "The dune-generated agent surface modules (Assets, Libs_source) — build slices produced into _build by dune rules, not authored source. Recorded so borge's module cross-reference is covered.")
    (status partial)

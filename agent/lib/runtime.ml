@@ -81,7 +81,18 @@ let eval_string ~(rt : t) (src : string) : Ast.value =
 let load_source ~(rt : t) (src : string) : unit =
   ignore
     (rt.seam.run_in_rim (fun () ->
-         ignore (Eval.read_eval_all_direct ~prims:rt.seam.prims rt.seam.env src);
+         let v =
+           try
+             Eval.read_eval_all_direct ~prims:rt.seam.prims rt.seam.env src
+           with
+           | Ast.Interp_error ie ->
+               Printf.eprintf "boot-load: %s\n%!" (Ast.pp_interp_error ie);
+               raise (Ast.Interp_error ie)
+           | Pricklypear_lisp.Reader.Reader_error (m, l, c) ->
+               Printf.eprintf "boot-load: reader error line %d col %d: %s\n%!" l c m;
+               raise (Pricklypear_lisp.Reader.Reader_error (m, l, c))
+         in
+         ignore v;
          Ast.VNil))
 
 (** Load a .pp file from [path] into the shared env. *)
@@ -123,6 +134,10 @@ let register_fs_prims (t : t) : unit =
     | [ path; content ] -> (
         let p = resolve_path (str_arg "fs/write" path) in
         let s = str_arg "fs/write" content in
+        (* create the parent dir when missing (e.g. .agent/workspace.json
+           in a project without .agent/ yet) *)
+        (let dir = Filename.dirname p in
+         if not (Sys.file_exists dir) then ignore (Unix.mkdir dir 0o755));
         try
           let oc = open_out_bin p in
           output_string oc s;

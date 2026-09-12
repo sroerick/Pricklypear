@@ -48,6 +48,18 @@ type server_state = {
   on_msg : Provider.message -> unit;
 }
 
+(** filmstrip-shell host seam #3 (borge/agent.borg): thread the client's
+    request headers (HX-Request is the one that matters) into the route
+    table's thin request context, so routes serve pane fragments in
+    partial mode — the image's route-gate discipline, agent-backed. *)
+let dispatch_headers (reqd : Httpun.Reqd.t) : (string * string) list =
+  match
+    Httpun.Headers.get (Httpun.Reqd.request reqd).Httpun.Request.headers
+      "hx-request"
+  with
+  | Some v -> [ ("hx-request", v) ]
+  | None -> []
+
 (* ---- GET route dispatch through the agent route table ---- *)
 
 let dispatch_get (st : server_state) (reqd : Httpun.Reqd.t) (target : string)
@@ -68,7 +80,7 @@ let dispatch_get (st : server_state) (reqd : Httpun.Reqd.t) (target : string)
   | Some handler ->
       let v =
         Runtime.dispatch_route ~rt:st.rt ~handler ~method_:"GET" ~path
-          ~params ~headers:[] ~body:""
+          ~params ~headers:(dispatch_headers reqd) ~body:""
       in
       let html =
         match v with Ast.VStr s -> s | other -> Pricklypear_lisp.Reader.pp_value other
@@ -243,12 +255,15 @@ let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
     let reqd = g.Gluten.reqd in
     let req = Httpun.Reqd.request reqd in
     let target = req.Httpun.Request.target in
-    let path, _query =
+    let path, query =
       match String.index_opt target '?' with
       | Some i ->
           ( String.sub target 0 i,
             Some (String.sub target (i + 1) (String.length target - i - 1)) )
       | None -> (target, None)
+    in
+    let query_params =
+      match query with Some q -> Http_kit.parse_query q | None -> []
     in
     let fork_work (f : unit -> unit) : unit =
       Eio.Fiber.fork ~sw (fun () ->
@@ -267,10 +282,32 @@ let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
         match path with
         | "/chat" -> fork_work (fun () -> handle_chat env sw st reqd)
         | "/settings" -> fork_work (fun () -> handle_settings env sw st reqd)
-        | _ ->
-            Http_kit.respond_html reqd ~status:`Not_found
-              ~body:(Http_kit.status_page "404"
-                       (Printf.sprintf "<p>no route %s</p>" (Http_kit.esc path))))
+        | _ -> (
+            (* filmstrip-shell host seam #3: POSTs to unknown paths fall
+               through to the route table (the /filmstrip/* shell routes
+               live there). hx-vals ride the form-encoded body; params
+               = query ++ body so either channel reaches request-param. *)
+            match Runtime.lookup_route ~rt:st.rt path with
+            | None ->
+                Http_kit.respond_html reqd ~status:`Not_found
+                  ~body:(Http_kit.status_page "404"
+                           (Printf.sprintf "<p>no route %s</p>" (Http_kit.esc path)))
+            | Some handler ->
+                fork_work (fun () ->
+                    let body = Http_kit.read_body reqd in
+                    let params =
+                      query_params @ Http_kit.parse_form_body body
+                    in
+                    let v =
+                      Runtime.dispatch_route ~rt:st.rt ~handler ~method_:"POST"
+                        ~path ~params ~headers:(dispatch_headers reqd) ~body
+                    in
+                    let html =
+                      match v with
+                      | Ast.VStr s -> s
+                      | other -> Pricklypear_lisp.Reader.pp_value other
+                    in
+                    Http_kit.respond_html reqd ~status:`OK ~body:html)))
     | _ -> Http_kit.respond_html reqd ~status:`Not_found
              ~body:(Http_kit.status_page "404" "<p>method not supported</p>")
   in
