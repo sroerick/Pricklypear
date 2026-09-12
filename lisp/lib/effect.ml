@@ -209,7 +209,7 @@ let read_db_prims = [
   "forge-effects";
   (* tree reads (prims_data) — the read/write split mirrors
      example_eval.ml's read_extra_prims *)
-  "tree/get"; "tree/list"; "tree/list-kind"; "tree/children-of";
+  "tree/get"; "tree/get-many"; "tree/list"; "tree/list-kind"; "tree/children-of";
   "tree/child"; "tree/parent"; "tree/ancestors"; "tree/subtree";
   "tree/leaf"; "tree/siblings"; "tree/next"; "tree/prev";
   "tree/find-by"; "tree/search-text"; "tree/note-index";
@@ -228,6 +228,9 @@ let read_db_prims = [
   "media-list"; "media-meta";
   (* sync planning is read-only over the caller's own lens unit *)
   "sync/plan";
+  (* delta exchange negotiate + base commit are read/classify over the
+     caller's own sync_bases row (the write arm is sync/push2 below) *)
+  "sync/plan2"; "sync/commit2";
   (* impact queue read arm (impact-mark/clear write below) *)
   "impact-queue";
   (* retention reads *)
@@ -280,7 +283,7 @@ let write_db_prims = [
   (* package/config writes *)
   "package-enable"; "package-disable"; "reseed-package";
   (* sync push writes both sides (server-side merge authority) *)
-  "sync/push";
+  "sync/push"; "sync/push2";
   (* route/dispatch executes a named handler — conservative WriteDb so
      public routes can never call it *)
   "route/dispatch";

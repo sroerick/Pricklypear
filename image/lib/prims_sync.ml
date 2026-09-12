@@ -372,49 +372,309 @@ let register (t : t) (tbl : Primitives.t) : unit =
           ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("sync/push", "need (client-manifest client-bodies [base-manifest])", "bad-args"))))));
 
 
-  (* data lens operations (one-tree.borg branching-interaction, 2026-08-23
-     make: versioned user-keyed data). fork-data creates a deliberate
-     fork of the user's live data into data.l.<lens>.<user>; merge-data
-     merges a lens back (LWW v0); abandon-data drops a lens;
-     list-data-lenses enumerates the user's lenses. *)
-  register_crud "fork-data"
-    (fun args ->
-      let uname = actor () in
-      if uname = "anonymous" then deny_anon "fork-data"
-      else
-        match args with
-        | [ Pricklypear_lisp.Ast.VStr lens ] ->
-            Crud.fork_data t.store ~lens ()
-        | [ Pricklypear_lisp.Ast.VStr lens;
-            Pricklypear_lisp.Ast.VStr ty ] ->
-            Crud.fork_data t.store ~lens ~type_name:(Some ty) ()
-        | _ ->
-            ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("fork-data", "need lens-name [, type-name]", "bad-args"))))));
+  (* ---- delta exchange (borge/local-first.borg sync, chunked protocol,
+     2026-09-11; issue i-1789178161-87d0742f) ----
 
-  register_crud "merge-data"
-    (fun args ->
-      let uname = actor () in
-      if uname = "anonymous" then deny_anon "merge-data"
-      else
-        match args with
-        | [ Pricklypear_lisp.Ast.VStr lens ] ->
-            Crud.merge_data_lens t.store ~lens ()
-        | _ ->
-            ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("merge-data", "need lens-name", "bad-args"))))));
+     The v1 sync/push carries the client's FULL (path,hash) manifest (plus
+     bodies) every round — O(subtree) on the wire, 413-bound past the
+     edge proxy's ~1MB request cap, and unchunkable (a subset manifest
+     would classify its absent paths as ServerOnly and inflate the pull
+     list). The delta exchange stores the per-client last-synced merged
+     manifest SERVER-SIDE — the merge index the spec already assigns to
+     the server (sync_bases, migration 032; git's remote-tracking ref in
+     miniature) — and negotiates deltas against it:
 
-  register_crud "abandon-data"
-    (fun args ->
-      let uname = actor () in
-      if uname = "anonymous" then deny_anon "abandon-data"
-      else
-        match args with
-        | [ Pricklypear_lisp.Ast.VStr lens ] ->
-            Crud.abandon_data_lens t.store ~lens ()
-        | _ ->
-            ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("abandon-data", "need lens-name", "bad-args"))))));
+       sync/plan2  (lens delta-manifest deleted-paths)
+           read-only negotiate: reconstruct the client's full manifest
+           from the stored base + delta (merge_delta), run the SAME
+           plan_of three-way as v1, and return pull_paths (ours_add /
+           ours_mod), client_delete_paths (ours_del), diverge_paths
+           (conflict previews — bodies + LWW happen at push2), and the
+           generation. O(changes) request.
+       sync/push2  (lens changes-bodies deleted-paths)
+           apply ONE chunk of the delta: the same plan_of over the same
+           stored base (chunks compose — every call re-derives theirs
+           from the stored base, per-path apply is idempotent), commit
+           the chunk-scoped outcomes (Theirs_add/Mod/Del + Conflict LWW
+           with the chunk's bodies). Repeatable until the client's
+           bodies are all sent. O(chunk) request.
+       sync/commit2 (lens)
+           end-of-round: store the CURRENT merged server manifest +
+           generation as this (user, lens)'s next base. The client
+           calls it once, after all pushes and pulls succeed; a crashed
+           round never commits, so the next round re-plans against the
+           old base (client deltas are idempotent on retry).
 
-  register_crud "list-data-lenses"
-    (fun _args ->
-      let uname = actor () in
-      if uname = "anonymous" then deny_anon "list-data-lenses"
-      else Crud.list_data_lenses t.store ());
+     A client with no stored base (fresh lens, or pre-032 server) gets a
+     structured "no stored base" error and falls back to the v1 full
+     exchange, then commits — so old clients keep working and new
+     clients bootstrap themselves onto the delta protocol.
+
+     THE BASE IS NEGOTIATION STATE, NOT CONTENT — one row per (user,
+     lens) in its own table (032), never a tree datum, never in a
+     manifest, never a snapshot. Multi-device is the star topology per
+     lens-model: each device lens keys its OWN base row, so two devices
+     of one user each negotiate against what THEY last had, and the
+     server tree stays the sole content authority. *)
+
+  (* the caller's uuid — the sync_bases key is per-identity so a user can
+     only ever read/write their own base rows *)
+  let sync_user_id () =
+    let uname = actor () in
+    match Auth_store.get_user_by_username t.store uname with
+    | Some u -> u.Auth_store.id
+    | None ->
+        ((raise
+            (Pricklypear_lisp.Ast.Interp_error
+               (Pricklypear_lisp.Ast.Prim_error
+                  ("sync", "no user row for caller", "failed")))))
+  in
+  (* same body-pair shape as the v1 sync/push prim: [[path, envelope-json], …] *)
+  let parse_delta_bodies (body_pairs : Pricklypear_lisp.Ast.value)
+      : (string * Yojson.Safe.t) list =
+    match body_pairs with
+    | Pricklypear_lisp.Ast.VList pairs ->
+        List.filter_map
+          (function
+            | Pricklypear_lisp.Ast.VList
+                [ Pricklypear_lisp.Ast.VStr p; Pricklypear_lisp.Ast.VStr env ] ->
+                (try Some (p, Yojson.Safe.from_string env) with _ -> None)
+            | _ -> None)
+          pairs
+    | _ -> []
+  in
+  let parse_path_list (v : Pricklypear_lisp.Ast.value) : string list =
+    match v with
+    | Pricklypear_lisp.Ast.VList items ->
+        List.filter_map
+          (function Pricklypear_lisp.Ast.VStr p -> Some p | _ -> None)
+          items
+    | _ -> []
+  in
+  let base_or_raise ~(prim : string) ~(lens : string) =
+    let user_id = sync_user_id () in
+    match Sync.load_base t.store ~user_id ~lens with
+    | Some (base, branch, gen) -> (user_id, base, branch, gen)
+    | None ->
+        ((raise
+            (Pricklypear_lisp.Ast.Interp_error
+               (Pricklypear_lisp.Ast.Prim_error
+                  ( prim
+                  , "no stored base for this lens — run the v1 full "
+                    ^ "exchange (sync/push) then sync/commit2"
+                  , "no-stored-base" )))))
+  in
+  (* the shared server half of a delta round: stored base + current
+     server manifest + the client's manifest reconstructed from its
+     delta, ready for plan_of *)
+  let delta_theirs ~(lens : string) ~(delta : Sync.manifest)
+      ~(deleted : string list) =
+    let _, base, _, _ = base_or_raise ~prim:"sync" ~lens in
+    let prefix = sync_user_prefix () in
+    match Sync.server_manifest t.store ~prefix with
+    | None ->
+        ((raise
+            (Pricklypear_lisp.Ast.Interp_error
+               (Pricklypear_lisp.Ast.Prim_error ("sync", "no DB", "failed")))))
+    | Some server ->
+        let theirs = Sync.merge_delta ~base ~changes:delta ~deleted in
+        (base, server, theirs)
+  in
+
+  (* sync/plan2 — read-only negotiate (no apply, no base advance).
+     (sync/plan2 lens delta-manifest deleted-paths) -> JSON
+       {mode:"delta", generation, pull_paths, client_delete_paths,
+        diverge_paths, theirs_add, theirs_mod, theirs_del} *)
+  register_crud "sync/plan2"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr lens; delta; deleted ] ->
+          let delta_m =
+            match parse_manifest delta with
+            | Some m -> m
+            | None ->
+                ((raise
+                    (Pricklypear_lisp.Ast.Interp_error
+                       (Pricklypear_lisp.Ast.Prim_error
+                          ( "sync/plan2"
+                          , "delta must be [[path, hash], …]"
+                                              , "bad-args" )))))
+          in
+          let deleted = parse_path_list deleted in
+          let _, base, _, base_gen =
+            base_or_raise ~prim:"sync/plan2" ~lens in
+          let prefix = sync_user_prefix () in
+          let server =
+            match Sync.server_manifest t.store ~prefix with
+            | Some sv -> sv
+            | None ->
+                ((raise
+                    (Pricklypear_lisp.Ast.Interp_error
+                       (Pricklypear_lisp.Ast.Prim_error
+                          ("sync/plan2", "no DB", "failed")))))
+          in
+          let theirs = Sync.merge_delta ~base ~changes:delta_m ~deleted in
+          let plans = Sync.plan_of base server theirs in
+          let actionable = Sync.actionable plans in
+          let paths_of_outcome ~(over : Sync.plan list)
+              (tag : Sync.outcome) : string list =
+            List.filter_map
+              (fun { Sync.path; outcome } ->
+                if outcome = tag then Some path else None)
+              over
+          in
+          (* the pull list is OURS_KEEP over the FULL plan — actionable
+             deliberately excludes Ours_keep (nothing to transfer
+             server-side), but ours_add/ours_mod are exactly the rows
+             the client must pull; deriving them from the actionable
+             subset silently emptied the pull list and stranded
+             server-side rows (the missing-pull bug, 2026-09-11) *)
+          let pull_paths =
+            paths_of_outcome ~over:plans Sync.Ours_keep in
+          let client_deletes =
+            paths_of_outcome ~over:actionable Sync.Ours_del in
+          let diverge =
+            List.filter_map
+              (fun { Sync.path; outcome } ->
+                match outcome with Sync.Conflict _ -> Some path | _ -> None)
+              actionable
+          in
+          let theirs_add =
+            List.length (paths_of_outcome ~over:actionable Sync.Theirs_add) in
+          let theirs_mod =
+            List.length (paths_of_outcome ~over:actionable Sync.Theirs_mod) in
+          let theirs_del =
+            List.length (paths_of_outcome ~over:actionable Sync.Theirs_del) in
+          let bid = Store.current_branch_id t.store in
+          let gen =
+            match Store.current_generation t.store ~branch_id:bid with
+            | Some n -> n
+            | None -> 0L
+          in
+          (Pricklypear_lisp.Ast.VStr
+             (Yojson.Safe.to_string
+                (`Assoc
+                   [ ("mode", `String "delta")
+                   ; ("generation", `String (Int64.to_string gen))
+                   ; ( "base_generation"
+                     , `String (Int64.to_string base_gen) )
+                   ; ("pull_paths", `List (List.map (fun p -> `String p) pull_paths))
+                   ; ( "client_delete_paths"
+                     , `List (List.map (fun p -> `String p) client_deletes) )
+                   ; ("diverge_paths", `List (List.map (fun p -> `String p) diverge))
+                   ; ("theirs_add", `Int theirs_add)
+                   ; ("theirs_mod", `Int theirs_mod)
+                   ; ("theirs_del", `Int theirs_del)
+                   ])))
+      | _ ->
+          ((raise
+              (Pricklypear_lisp.Ast.Interp_error
+                 (Pricklypear_lisp.Ast.Prim_error
+                    ( "sync/plan2"
+                    , "need (lens delta-manifest deleted-paths)"
+                                              , "bad-args" ))))));
+
+  (* sync/push2 — apply ONE delta chunk (repeatable; chunks compose over
+     the stored base). Deleted paths travel every chunk: the apply is
+     idempotent (a second Theirs_del on a gone node plans Unchanged).
+     (sync/push2 lens changes-bodies deleted-paths) -> JSON
+       {mode:"delta", applied, lww_client_won, lww_server_kept, generation} *)
+  register_crud "sync/push2"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr lens; bodies; deleted ] ->
+          let cb = parse_delta_bodies bodies in
+          let deleted = parse_path_list deleted in
+          (* the chunk's delta: paths only (marker hashes — the client's
+             new hash for a locally-written node is "" until the
+             convergence pull anyway, and plan_of's Theirs_* outcomes
+             apply the BODY, whose updated_at is what LWW reads). The
+             filter keeps apply/LWW scoped to what this chunk carries. *)
+          let chunk_delta = List.map (fun (p, _) -> (p, "CHUNK")) cb in
+          let chunk_paths = List.map fst cb in
+          let base, server, theirs = delta_theirs ~lens ~delta:chunk_delta ~deleted in
+          let plans =
+            Sync.plan_of base server theirs
+            |> List.filter (fun { Sync.path; outcome } ->
+                   (List.mem path chunk_paths || List.mem path deleted)
+                   &&
+                   match outcome with
+                   | Sync.Ours_del -> false (* plan2 owns the mirror list *)
+                   | _ -> true)
+          in
+          let report = Sync.commit t.store ~client_bodies:cb plans in
+          let bid = Store.current_branch_id t.store in
+          let gen =
+            match Store.current_generation t.store ~branch_id:bid with
+            | Some n -> n
+            | None -> 0L
+          in
+          (Pricklypear_lisp.Ast.VStr
+             (Yojson.Safe.to_string
+                (`Assoc
+                   [ ("mode", `String "delta")
+                   ; ("applied", `Int report.Sync.applied)
+                   ; ( "lww_client_won"
+                     , `List (List.map (fun p -> `String p) (List.rev report.Sync.lww_client_won)) )
+                   ; ( "lww_server_kept"
+                     , `List (List.map (fun p -> `String p) (List.rev report.Sync.lww_server_kept)) )
+                   ; ( "failed_paths"
+                     , `List (List.map (fun p -> `String p) (List.rev report.Sync.failed)) )
+                   ; ("generation", `String (Int64.to_string gen))
+                   ])))
+      | _ ->
+          ((raise
+              (Pricklypear_lisp.Ast.Interp_error
+                 (Pricklypear_lisp.Ast.Prim_error
+                    ( "sync/push2"
+                    , "need (lens changes-bodies deleted-paths)"
+                                              , "bad-args" ))))));
+
+  (* sync/commit2 — end-of-round base advance (the ONLY base writer).
+     Stores the CURRENT merged server manifest + generation as this
+     (user, lens)'s next-round base. A crashed round never reaches it,
+     so the next round re-plans against the old base.
+     (sync/commit2 lens) -> JSON {mode:"delta", committed:true, paths, generation} *)
+  register_crud "sync/commit2"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr lens ] ->
+          let user_id = sync_user_id () in
+          let prefix = sync_user_prefix () in
+          let merged =
+            match Sync.server_manifest t.store ~prefix with
+            | Some m -> m
+            | None ->
+                ((raise
+                    (Pricklypear_lisp.Ast.Interp_error
+                       (Pricklypear_lisp.Ast.Prim_error
+                          ("sync/commit2", "no DB", "failed")))))
+          in
+          let branch_name =
+            match Request_context.get () with
+            | Some c -> (Request_context.manifest c).branch_name
+            | None -> t.manifest.branch_name
+          in
+          let bid = Store.current_branch_id t.store in
+          let gen =
+            match Store.current_generation t.store ~branch_id:bid with
+            | Some n -> n
+            | None -> 0L
+          in
+          Sync.save_base t.store ~user_id ~lens ~branch:branch_name
+            ~generation:gen merged;
+          (Pricklypear_lisp.Ast.VStr
+             (Yojson.Safe.to_string
+                (`Assoc
+                   [ ("mode", `String "delta")
+                   ; ("committed", `Bool true)
+                   ; ("paths", `Int (List.length merged))
+                   ; ("generation", `String (Int64.to_string gen))
+                   ])))
+      | _ ->
+          ((raise
+              (Pricklypear_lisp.Ast.Interp_error
+                 (Pricklypear_lisp.Ast.Prim_error
+                    ( "sync/commit2"
+                    , "need (lens)"
+                    , "bad-args" ))))));

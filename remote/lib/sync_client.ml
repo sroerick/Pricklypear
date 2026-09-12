@@ -95,12 +95,349 @@ let data_manifest ~(lens : Lens_store.lens) : (string * string) list =
   |> List.filter (fun (p, _) ->
          String.length p >= plen && String.sub p 0 plen = user_prefix)
 
+(** The delta exchange raises these when the image can't run it —
+    the caller falls back to the v1 full exchange. *)
+exception No_stored_base
+exception Other_prim_error
+
+(** [delta_of ~base manifest] — the client's delta against its recorded
+    base: changes (manifest entries whose hash differs from base, or
+    which base lacks) and deletions (base paths the manifest no longer
+    holds). Pure — unit-tested. *)
+let delta_of ~(base : (string * string) list)
+    (manifest : (string * string) list) :
+    (string * string) list * string list =
+  let base_tbl = Hashtbl.create (List.length base + 1) in
+  List.iter (fun (p, h) -> Hashtbl.replace base_tbl p h) base;
+  let man_tbl = Hashtbl.create (List.length manifest + 1) in
+  List.iter (fun (p, h) -> Hashtbl.replace man_tbl p h) manifest;
+  let changes =
+    List.filter
+      (fun (p, h) ->
+        match Hashtbl.find_opt base_tbl p with
+        | None -> true
+        | Some bh -> bh <> h)
+      manifest
+  in
+  let deletes =
+    List.filter_map
+      (fun (p, _) -> if Hashtbl.mem man_tbl p then None else Some p)
+      base
+  in
+  (changes, deletes)
+
+(** [chunk_bodies ~max_bytes bodies] — split (path, envelope-json) pairs
+    into request-sized chunks. The edge proxy caps request bodies at
+    ~1MB (nginx client_max_body_size); ~400KB chunks leave headroom for
+    the manifest/path lists and JSON encoding overhead. Pure — tested. *)
+let chunk_bodies ~(max_bytes : int)
+    (bodies : (string * string) list) : (string * string) list list =
+  let max_bytes = max max_bytes 1 in
+  let chunks = ref [] in
+  let cur = ref [] and cur_bytes = ref 0 in
+  List.iter
+    (fun ((p, env) as pair) ->
+      let sz = String.length p + String.length env + 8 in
+      if !cur_bytes > 0 && !cur_bytes + sz > max_bytes then begin
+        chunks := List.rev !cur :: !chunks;
+        cur := [];
+        cur_bytes := 0
+      end;
+      cur := pair :: !cur;
+      cur_bytes := !cur_bytes + sz)
+    bodies;
+  if !cur <> [] then chunks := List.rev !cur :: !chunks;
+  List.rev !chunks
+
+(** True when the transport error is a SERVER-SIDE prim failure (as
+    opposed to a transport/offline failure, kind "transport"): the delta
+    exchange should fall back to the v1 full exchange for those — an
+    old image without the delta prims, a wiped base row, a transient
+    prim error — while an unreachable image must surface (the v1 round
+    would just fail too). *)
+let is_transport_error (e : exn) : bool =
+  match e with
+  | Ast.Interp_error (Ast.Prim_error (_, _, kind)) -> kind = "transport"
+  | _ -> false
+
+(** True when the transport error is the delta exchange's structured
+    "no stored base" refusal (pre-032 server, or the base row was wiped
+    for this lens) — the caller falls back to the v1 full exchange. *)
+let is_no_stored_base (e : exn) : bool =
+  match e with
+  | Ast.Interp_error (Ast.Prim_error (_, msg, _)) ->
+      let sub = "no stored base" in
+      let n = String.length msg and m = String.length sub in
+      let rec go i = i + m <= n && (String.sub msg i m = sub || go (i + 1)) in
+      go 0
+  | _ -> false
+
+(** One sync round over the DELTA exchange (the chunked protocol;
+     issue i-1789178161-87d0742f). Requires a recorded base (the caller
+     checks). The round:
+
+       1. compute the delta vs the base (delta_of — O(changes));
+       2. sync/plan2 → pull list (server changes) + mirror-deletions;
+       3. sync/push2 per body chunk (~400KB, edge-proxy safe);
+       4. batched pulls via tree/get-many (~100 paths per call) for the
+          server-only list AND every pushed path (convergence: the
+          server envelope stamps the canonical hash so the next round's
+          manifest matches its base — v1's per-node unstamped pull, but
+          batched and total);
+       5. sync/commit2 pins the stored base + generation (the ONLY base
+          advance — a crashed round never commits, so retries re-plan
+          against the old base; applies are idempotent);
+       6. the client records its OWN base from the post-round substrate
+          (they coincide on a fully-successful round — no O(N) merged
+          manifest crosses the wire in either direction).
+
+     A fully-quiet round whose generation matches the recorded snapshot
+     skips steps 3-5 entirely (the common case in steady state). *)
+let run_delta_round ~(transport : transport) ~(lens : Lens_store.lens)
+    ~(base : (string * string) list) ~(quiet : bool) () :
+    (round_report, [ `No_stored_base | `Other_prim_error | `Failed of string ])
+    result =
+  let log fmt =
+    Printf.ksprintf (fun s -> prerr_endline ("[sync] " ^ s)) fmt
+  in
+  let manifest = data_manifest ~lens in
+  let changes, deletes = delta_of ~base manifest in
+  let vstr_list ps = Ast.VList (List.map (fun p -> Ast.VStr p) ps) in
+  let manifest_v m =
+    Ast.VList
+      (List.map (fun (p, h) -> Ast.VList [ Ast.VStr p; Ast.VStr h ]) m)
+  in
+  let ok = ref true and err = ref None in
+  let outcome = ref `Ok in
+  let pushed_total = ref 0 and pulled_total = ref 0
+    and deleted_total = ref 0 and diverge_total = ref 0 in
+  let won_all = ref [] and kept_all = ref [] in
+  let branch = ref (match Lens_store.snapshot ~lens with
+      | Some (b, _) -> b | None -> "")
+  in
+  let gen = ref 0L in
+  (try
+     (* 1. plan — read-only negotiate *)
+     let plan_resp =
+       transport "sync/plan2"
+         [ Ast.VStr lens.Lens_store.branch; manifest_v changes; vstr_list deletes ]
+     in
+     let plan_json =
+       match plan_resp with
+       | Ok (Ast.VStr j) -> j
+       | Ok _ -> failwith "sync/plan2: bad shape"
+       | Error e ->
+           if is_transport_error e then raise e
+           else if is_no_stored_base e then raise No_stored_base
+           else raise Other_prim_error
+     in
+     let kv =
+       match Yojson.Safe.from_string plan_json with
+       | `Assoc kv -> kv
+       | _ -> failwith "sync/plan2: bad json"
+     in
+     let strs k =
+       match List.assoc_opt k kv with
+       | Some (`List xs) ->
+           List.filter_map (function `String s -> Some s | _ -> None) xs
+       | _ -> []
+     in
+     let int k =
+       match List.assoc_opt k kv with Some (`Int n) -> n | _ -> 0
+     in
+     let plan_gen =
+       match List.assoc_opt "generation" kv with
+       | Some (`String g) -> (try Int64.of_string g with _ -> 0L)
+       | _ -> 0L
+     in
+     let stored_base_gen =
+       match List.assoc_opt "base_generation" kv with
+       | Some (`String g) -> (try Int64.of_string g with _ -> 0L)
+       | _ -> 0L
+     in
+     let pull_paths = strs "pull_paths" in
+     let client_deletes = strs "client_delete_paths" in
+     let diverge = strs "diverge_paths" in
+     (* STALE-BASE GUARD. The stored base and the client's base must be
+        the SAME state — they advance together (server at commit2, client
+        on the commit2 response). A disagreement means a round died
+        between the two advances: the plan above was computed against a
+        base the client doesn't hold, so its pull list can silently omit
+        rows (the crash-window hole). Discard and fall back to the v1
+        full exchange, which re-syncs against the client's real base and
+        re-commits. *)
+     let snap_gen =
+       match Lens_store.snapshot ~lens with Some (_, g) -> g | None -> 0L
+     in
+     if snap_gen <> 0L && stored_base_gen <> 0L
+        && stored_base_gen <> snap_gen then begin
+       if not quiet then
+         log "stored base gen %Ld ≠ client gen %Ld — v1 re-sync"
+           stored_base_gen snap_gen;
+       raise Other_prim_error
+     end;
+     (* fully-quiet round: nothing on either side, and the server
+        generation matches the recorded snapshot → skip to done *)
+     if changes = [] && deletes = [] && pull_paths = []
+        && client_deletes = [] && diverge = [] && plan_gen = snap_gen
+     then begin
+       gen := plan_gen;
+       if not quiet then log "quiet (delta): nothing to transfer"
+     end
+     else begin
+       (* 2. mirror server deletions locally *)
+       List.iter
+         (fun p ->
+           if Lens_store.delete_node ~lens p then begin
+             incr deleted_total;
+             if not quiet then log "deleted local %s (server deleted)" p
+           end)
+         client_deletes;
+       (* 3. push the client delta in body chunks *)
+       if changes <> [] then begin
+         let bodies =
+           List.filter_map
+             (fun (p, _) ->
+               match Lens_store.get ~lens p with
+               | Some env -> Some (p, env)
+               | None -> None)
+             changes
+         in
+         let chunks = chunk_bodies ~max_bytes:400_000 bodies in
+         List.iter
+           (fun chunk ->
+             let chunk_paths = List.map fst chunk in
+             let bodies_v =
+               Ast.VList
+                 (List.map
+                    (fun (p, env) ->
+                      Ast.VList [ Ast.VStr p; Ast.VStr env ])
+                    chunk)
+             in
+             (match
+                transport "sync/push2"
+                  [ Ast.VStr lens.Lens_store.branch; bodies_v; vstr_list deletes ]
+              with
+              | Ok (Ast.VStr j) -> (
+                  match Yojson.Safe.from_string j with
+                  | `Assoc kv ->
+                      pushed_total := !pushed_total + (int "applied");
+                      won_all := !won_all @ strs "lww_client_won";
+                      kept_all := !kept_all @ strs "lww_server_kept";
+                      (match List.assoc_opt "failed_paths" kv with
+                       | Some (`List xs) ->
+                           List.iter
+                             (function
+                               | `String p ->
+                                   log "push %s: server rejected (kept locally; re-pushes next round)" p
+                               | _ -> ())
+                             xs
+                       | _ -> ())
+                  | _ -> log "push2: bad json")
+              | Ok _ -> log "push2: bad shape"
+              | Error e ->
+                  log "push2 failed: %s" (Printexc.to_string e);
+                  ok := false);
+             ignore chunk_paths)
+           chunks
+       end;
+       (* 4. pulls — server-only list + every pushed path (convergence:
+          the server envelope stamps the canonical hash; for an
+          LWW-kept path it also replaces the stale local copy). *)
+       let pull_set =
+         let t = Hashtbl.create (List.length pull_paths + List.length changes + 1) in
+         List.iter (fun p -> Hashtbl.replace t p ()) pull_paths;
+         List.iter (fun p -> Hashtbl.replace t p ()) !kept_all;
+         List.iter (fun (p, _) -> Hashtbl.replace t p ()) changes;
+         Hashtbl.fold (fun p () acc -> p :: acc) t []
+       in
+       let pull_paths = List.sort String.compare pull_set in
+       let batch_n = 100 in
+       let rec batches l =
+         if l = [] then []
+         else
+           let b, rest =
+             if List.length l <= batch_n then (l, [])
+             else (List.filteri (fun i _ -> i < batch_n) l,
+                   List.filteri (fun i _ -> i >= batch_n) l)
+           in
+           b :: batches rest
+       in
+       List.iter
+         (fun batch ->
+           match transport "tree/get-many" [ vstr_list batch ] with
+           | Ok (Ast.VList envs) ->
+               let n = ref 0 in
+               List.iter
+                 (fun node ->
+                   match node with
+                   | Ast.VStr env ->
+                       ignore (Lens_store.materialize ~lens env);
+                       incr n
+                   | _ -> ())
+                 envs;
+               pulled_total := !pulled_total + !n
+           | Ok _ -> log "pull batch: bad shape"
+           | Error e ->
+               log "pull batch failed: %s" (Printexc.to_string e);
+               ok := false)
+         (batches pull_paths);
+       diverge_total := List.length diverge;
+       (* 5. commit — the ONLY base advance, and ONLY on a fully-successful
+          round: commit2 after a failed pull would advance the stored base
+          past rows the client never received (the crash-window hole the
+          stale-base guard above closes on recovery). *)
+       if not !ok then raise (Failure "round had failures — skipping commit");
+       (match transport "sync/commit2" [ Ast.VStr lens.Lens_store.branch ] with
+        | Ok (Ast.VStr j) -> (
+            match Yojson.Safe.from_string j with
+            | `Assoc kv -> (
+                match List.assoc_opt "generation" kv with
+                | Some (`String g) -> gen := (try Int64.of_string g with _ -> 0L)
+                | _ -> ())
+            | _ -> ())
+        | Ok _ -> ()
+        | Error e ->
+            log "commit2 failed: %s" (Printexc.to_string e);
+            ok := false);
+       (* 6. record the client base from the post-round substrate (they
+          coincide on a fully-successful round) *)
+       if !ok then begin
+         Lens_store.record_base_manifest ~lens (data_manifest ~lens);
+         if !gen > 0L then
+           Lens_store.record_snapshot ~lens ~branch:!branch ~generation:!gen
+       end
+     end
+   with
+   | No_stored_base -> outcome := `No_stored_base
+   | Other_prim_error -> outcome := `Other_prim_error
+   | exn ->
+       ok := false;
+       err := Some (Printexc.to_string exn);
+       log "failed: %s" (Printexc.to_string exn));
+  if not !ok && !err = None then err := Some "delta round failed";
+  if !outcome = `No_stored_base then Error `No_stored_base
+  else if !outcome = `Other_prim_error then Error `Other_prim_error
+  else if not !ok then Error (`Failed (Option.value !err ~default:"delta round failed"))
+  else
+    Ok
+      { (empty_report ()) with
+        ok = true;
+        pushed = !pushed_total;
+        pulled = !pulled_total;
+        deleted_local = !deleted_total;
+        diverge = !diverge_total;
+        lww_client_won = !won_all;
+        lww_server_kept = !kept_all;
+        branch = !branch;
+        generation = !gen }
+
 (** Run ONE sync round. [quiet] = background mode: print only activity
     (pushes, pulls, deletions, surfaced LWW resolutions) and errors —
     a clean round is silent. Never raises: transport errors (including
     exceptions — Eio raises, it does not return Error) come back as
     {ok = false; error}. *)
-let run_round ~(transport : transport) ~(lens : Lens_store.lens)
+let run_v1_round_inner ~(transport : transport) ~(lens : Lens_store.lens)
     ~(quiet : bool) () : round_report =
   let log fmt =
     Printf.ksprintf (fun s -> prerr_endline ("[sync] " ^ s)) fmt
@@ -321,3 +658,57 @@ let run_round ~(transport : transport) ~(lens : Lens_store.lens)
          error = Some (Printexc.to_string exn) };
      log "failed: %s" (Printexc.to_string exn));
   !report
+
+(* The v1 full-manifest exchange — unchanged behavior, plus an optional
+   end-of-round sync/commit2 so a v1 bootstrap registers the stored base
+   and the NEXT round can go delta (ignored silently on a pre-032
+   server: the client just keeps running v1). *)
+let run_v1_round ~(transport : transport) ~(lens : Lens_store.lens)
+    ~(quiet : bool) ~(register_base : bool) () : round_report =
+  let report = run_v1_round_inner ~transport ~lens ~quiet () in
+  if report.ok && register_base then
+    (try
+       match transport "sync/commit2" [ Ast.VStr lens.Lens_store.branch ] with
+       | Ok (Ast.VStr j) -> (
+           match Yojson.Safe.from_string j with
+           | `Assoc kv -> (
+               match List.assoc_opt "generation" kv with
+               | Some (`String g) ->
+                   let g = try Int64.of_string g with _ -> 0L in
+                   if g > 0L then
+                     Lens_store.record_snapshot ~lens
+                       ~branch:lens.Lens_store.branch ~generation:g
+               | _ -> ())
+           | _ -> ())
+       | Ok _ | Error _ -> ()
+     with _ -> ());
+  report
+
+(** Run ONE sync round — the dispatcher. A lens with a recorded base
+    negotiates the delta exchange (O(changes) requests, chunked bodies,
+    batched pulls); everything else — fresh lens, pre-032 server, wiped
+    base row — falls back to the v1 full-manifest exchange (which then
+    registers a base via sync/commit2 so the next round goes delta).
+    [quiet] = background mode (activity only; a clean round is silent). *)
+let run_round ~(transport : transport) ~(lens : Lens_store.lens)
+    ~(quiet : bool) () : round_report =
+  let base = Lens_store.base_manifest ~lens in
+  if base = [] then
+    (* fresh lens: the v1 full exchange, then commit the stored base *)
+    run_v1_round ~transport ~lens ~quiet ~register_base:true ()
+  else
+    match run_delta_round ~transport ~lens ~base ~quiet () with
+    | Ok r -> r
+    | Error `No_stored_base ->
+        if not quiet then
+          prerr_endline
+            "[sync] no stored base on image — falling back to v1 full round";
+        run_v1_round ~transport ~lens ~quiet ~register_base:true ()
+    | Error `Other_prim_error ->
+        if not quiet then
+          prerr_endline
+            "[sync] image rejected the delta exchange — falling back to v1 full round";
+        run_v1_round ~transport ~lens ~quiet ~register_base:true ()
+    | Error (`Failed msg) ->
+        if not quiet then prerr_endline ("[sync] failed: " ^ msg);
+        { (empty_report ()) with ok = false; error = Some msg }
