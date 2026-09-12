@@ -58,9 +58,36 @@ let empty_report () =
     branch = "";
     generation = 0L }
 
+(** [push_paths ~base manifest] — the SUBSET of the client manifest whose
+    envelopes must travel this round. The server consults client-bodies
+    only to apply ClientOnly / theirs_mod pushes and to LWW-arbitrate
+    diverge pairs (it reads updated_at off the client envelope); a node
+    whose manifest hash equals its base hash needs no envelope. Shipping
+    every envelope every round made the sync/push POST grow with the
+    WHOLE data subtree (2124 rows ≈ 8.6MB → nginx 413 on prod) even on a
+    quiet round. No base (fresh lens, no recorded snapshot): everything
+    travels, as before. Pure — unit-tested in sync_client_test.ml. *)
+let push_paths ~(base : (string * string) list)
+    (manifest : (string * string) list) : (string * string) list =
+  match base with
+  | [] -> manifest
+  | _ ->
+    let t = Hashtbl.create (List.length base + 1) in
+    List.iter (fun (p, h) -> Hashtbl.replace t p h) base;
+    List.filter
+      (fun (p, h) ->
+        match Hashtbl.find_opt t p with
+        | None -> true
+        | Some bh -> bh <> h)
+      manifest
+
 (** The data replication unit this client syncs: data.u.<owner>.* (the
     user's own rows). Code-lens sync is deliberately NOT here — it is
-    the branch-pointer move (promote/merge), server-mediated. *)
+    the branch-pointer move (promote/merge), server-mediated. Exported:
+    the pull path (remote/bin main) records the same filter as the
+    first round's BASE — a batched --lens-pull-data seed IS a
+    last-synced state (server hashes verbatim), so the first round
+    must not ship every envelope again (nginx 413 at ~1MB). *)
 let data_manifest ~(lens : Lens_store.lens) : (string * string) list =
   let user_prefix = "data.u." ^ Lens_store.enc_label lens.owner in
   let plen = String.length user_prefix in
@@ -86,13 +113,16 @@ let run_round ~(transport : transport) ~(lens : Lens_store.lens)
         after the round's merge, so the next round's manifest compares
         real hashes. *)
      let unstamped = List.filter (fun (_, h) -> h = "") manifest in
+     let base = Lens_store.base_manifest ~lens in
+     (* bodies only where the base says something changed (push_paths):
+        a quiet round POSTs the manifest (~300KB for 2k rows), not every
+        envelope (8.6MB → nginx 413). *)
      let bodies =
-       List.filter_map
-         (fun (p, _) ->
+       push_paths ~base manifest
+       |> List.filter_map (fun (p, _) ->
            match Lens_store.get ~lens p with
            | Some env -> Some (Ast.VList [ Ast.VStr p; Ast.VStr env ])
            | None -> None)
-         manifest
      in
      let manifest_v =
        Ast.VList
@@ -100,7 +130,6 @@ let run_round ~(transport : transport) ~(lens : Lens_store.lens)
             (fun (p, h) -> Ast.VList [ Ast.VStr p; Ast.VStr h ])
             manifest)
      in
-     let base = Lens_store.base_manifest ~lens in
      let resp =
        if base = [] then
          (* no recorded base yet (fresh lens): two-way round — additions

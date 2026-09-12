@@ -267,6 +267,7 @@ let () =
             [tree/subtree] (returns a VList of node envelopes, each the
             exact shape [Lens_store.materialize] writes). 'user' →
             data.u.<owner>, 'shared' → data.shared, else a raw path. *)
+         let pulled_data = ref false in
          List.iter
            (fun spec ->
              let prefix =
@@ -278,6 +279,7 @@ let () =
              match transport "tree/subtree" [ Ast.VStr prefix ] with
              | Ok (Ast.VList nodes) ->
                  let n = List.length nodes in
+                 if n > 0 then pulled_data := true;
                  List.iter
                    (fun node ->
                      match node with
@@ -293,6 +295,13 @@ let () =
                  Printf.eprintf "[lens] pull-data %s: %s\n%!" prefix
                    (Printexc.to_string e))
            (List.rev !lens_pull_data);
+         (* A batched data pull IS a last-synced state: the pulled
+            envelopes carry server hashes verbatim, so record them as
+            the first sync round's BASE manifest (__base.json). Without
+            it the first round runs base-less and ships every envelope
+            again — the 8.6MB POST nginx 413s on prod. *)
+         if !pulled_data then
+           Lens_store.record_base_manifest ~lens (Sync_client.data_manifest ~lens);
          (* pin the (branch, generation) snapshot — the merge base a
             later sync round's three-way diff keys on. Only when we
             actually pulled (code or data); a pure offline eval against
