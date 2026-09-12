@@ -75,3 +75,6 @@ package-lock.json
 
 # pi agent local run state
 .pi/
+
+# glochid local state: persistent session transcripts (never commit the store)
+.agent/

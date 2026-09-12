@@ -52,6 +52,12 @@ type t = {
     (Provider.reply, string) Result.t;
   cfg : unit -> Provider.cfg;
   eval_repl : (string -> (Ast.value, string) Result.t) option;
+  (* persistence sink (the loop's on_msg): each provider message the
+     turn appends to history is mirrored into the current session
+     transcript. None = no persistence (tests, replays). *)
+  on_msg : (Provider.message -> unit) option;
+  (* provider round-trip cap for one turn (passed to Loop.run) *)
+  max_turns : int;
 }
 
 (** Run one streamed turn for [reqd] (POST /chat, form field "msg").
@@ -184,6 +190,7 @@ let run ~(env : Eio_unix.Stdenv.base) (h : t) (reqd : Httpun.Reqd.t) : unit =
         (match
            Loop.run ~env ~sw:lsw ~host:(Host_seam.loop_host seam)
              ~cfg:(h.cfg ()) ~complete:h.complete
+             ~max_turns:h.max_turns ?on_msg:h.on_msg
              ~on_event h.history prompt
          with
          | Ok () -> ()

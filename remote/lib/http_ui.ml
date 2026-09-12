@@ -128,6 +128,10 @@ let handle_chat (env : Eio_unix.Stdenv.base) (sw : Eio.Switch.t)
          (the client has no shared local env to eval into — the agent's
          REPL-mode prompt rule is host-specific). *)
       eval_repl = None;
+      max_turns = Loop.max_turns_default;
+      (* pp-remote has no local session store (sessions live in the
+         agent's .agent store); turns are not persisted here. *)
+      on_msg = None;
     }
   in
   Chat_stream.run ~env chat reqd

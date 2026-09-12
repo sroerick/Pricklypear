@@ -702,6 +702,117 @@ let test_mock_script_consumption ~env ~sw () =
    | Error e -> Alcotest.fail e);
   Sys.remove path
 
+(* sessions-persist (agent/lib/sessions.ml): append-only JSONL
+   transcripts under the local store; list + resume round-trip; the
+   message JSON (incl. tool_calls) survives a write+read; prims are
+   registered on the runtime. *)
+let test_sessions_roundtrip ~rt () =
+  let dir =
+    Filename.concat (Filename.get_temp_dir_name ())
+      (Printf.sprintf "pp-sessions-test-%d" (Unix.getpid ()))
+  in
+  (try Unix.mkdir dir 0o755 with Unix.Unix_error (Unix.EEXIST, _, _) -> ());
+  Fun.protect
+    ~finally:(fun () ->
+        (* 0444/0700: unset takes precedence over "not set" *)
+        Unix.putenv "AGENT_SESSIONS_DIR" "")
+    (fun () ->
+       Unix.putenv "AGENT_SESSIONS_DIR" dir;
+       let sess : Sessions.handle option ref = ref None in
+       let history : Provider.message list ref = ref [] in
+       sess := Some (Sessions.new_session ~model:"test-model");
+       let on_msg = Sessions.on_msg sess in
+       let user = { Provider.role = "user"; content = `String "first prompt";
+                    tool_call_id = None; tool_calls = None } in
+       let asst =
+         { Provider.role = "assistant"; content = `String "";
+           tool_call_id = None;
+           tool_calls =
+             Some
+               (`List
+                 [ `Assoc
+                     [ ("id", `String "t1"); ("type", `String "function")
+                     ; ( "function"
+                       , `Assoc
+                           [ ("name", `String "bash")
+                           ; ( "arguments"
+                             , `String "{\"command\":\"echo hi\"}" ) ] ) ] ]) }
+       in
+       let tool =
+         { Provider.role = "tool"; content = `String "hi";
+           tool_call_id = Some "t1"; tool_calls = None }
+       in
+       List.iter on_msg [ user; asst; tool ];
+       Alcotest.(check int) "count tracked" 3 (match !sess with Some h -> h.Sessions.count | None -> -1);
+       (* listing: one entry, correct preview + count *)
+       (match Sessions.entries () with
+        | [ e ] ->
+            Alcotest.(check string) "entry model" "test-model" e.Sessions.e_model;
+            Alcotest.(check int) "entry count" 3 e.Sessions.e_count;
+            Alcotest.(check string) "entry preview" "first prompt" e.Sessions.e_preview
+        | other -> Alcotest.fail ("expected one entry, got " ^ string_of_int (List.length other)));
+       (* resume round-trip: same messages replay, incl. tool_calls *)
+       let id = (match !sess with Some h -> h.Sessions.id | None -> assert false) in
+       (match Sessions.resume id with
+        | Ok (h, msgs) ->
+            Alcotest.(check int) "resumed count" 3 h.Sessions.count;
+            (match msgs with
+             | [ u; a; t ] ->
+                 Alcotest.(check string) "user role" "user" u.Provider.role;
+                 Alcotest.(check string) "user text" "first prompt"
+                   (match u.Provider.content with `String s -> s | _ -> "?");
+                 Alcotest.(check bool) "tool_calls survived" true
+                   (Option.is_some a.Provider.tool_calls);
+                 Alcotest.(check string) "tool result" "hi"
+                   (match t.Provider.content with `String s -> s | _ -> "?")
+             | _ -> Alcotest.fail "resume gave wrong arity");
+            (* appending CONTINUES the resumed file (the prim re-points
+               sess; mirror that here) *)
+            sess := Some h;
+            let on_msg2 = Sessions.on_msg sess in
+            on_msg2 { Provider.role = "user"; content = `String "after resume";
+                      tool_call_id = None; tool_calls = None };
+            Alcotest.(check int) "count continued" 4 h.Sessions.count
+        | Error e -> Alcotest.fail e);
+       (* prims work over the seam *)
+       Sessions.register ~rt ~history ~sess ~model:(fun () -> "test-model");
+       (match Runtime.eval_string ~rt ("(session/data \"" ^ id ^ "\")") with
+        | VStr j ->
+            let j = Yojson.Safe.from_string j in
+            let first = List.hd (Yojson.Safe.Util.to_list j) in
+            Alcotest.(check string) "data first role" "user"
+              (Yojson.Safe.Util.member "role" first |> Yojson.Safe.Util.to_string)
+        | _ -> Alcotest.fail "session/data not a string");
+       (match Runtime.eval_string ~rt "(session/name)" with
+        | VStr s -> Alcotest.(check string) "session/name" id s
+        | _ -> Alcotest.fail "session/name not a string");
+       (* resume refuses path escapes *)
+       (match Sessions.resume "../etc/passwd" with
+        | Error _ -> ()
+        | Ok _ -> Alcotest.fail "path escape allowed"))
+
+(* sessions-persist: the loop's ?on_msg fires once per message the
+   turn appends (user + assistant here; + one per tool result). *)
+let test_loop_on_msg ~env ~sw ~rt () =
+  let complete ~env:_ ~sw:_ ~cfg:_ ~messages:_ ~tools:_ ~on_delta:_ =
+    Ok
+      { Provider.text = "done"; calls = []; stop_reason = "stop";
+        raw = `Assoc [ ("role", `String "assistant"); ("content", `String "done") ] }
+  in
+  let cfg : Provider.cfg =
+    { base_url = "http://127.0.0.1:1"; api_key = ""; model = "mock"; system = "" }
+  in
+  let got = ref [] in
+  (match
+     Loop.run ~env ~sw ~host:(Runtime.loop_host rt) ~cfg ~complete
+       ~on_msg:(fun m -> got := m.Provider.role :: !got)
+       ~on_event:(fun _ -> ()) (ref []) "hello"
+   with
+   | Error e -> Alcotest.fail e
+   | Ok () ->
+       Alcotest.(check (list string)) "on_msg saw user+assistant" [ "user"; "assistant" ]
+         (List.rev !got))
+
 let () =
   Eio_main.run @@ fun env ->
   let rt = Runtime.make () in
@@ -739,6 +850,10 @@ let () =
       ( "mock-script",
         [ Alcotest.test_case "consumption" `Quick
             (test_mock_script_consumption ~env ~sw) ] );
+      ( "sessions-persist",
+        [ Alcotest.test_case "roundtrip" `Quick (test_sessions_roundtrip ~rt)
+        ; Alcotest.test_case "turn-sink" `Quick
+            (test_loop_on_msg ~env ~sw ~rt) ] );
       ( "agent-route-table",
         [ Alcotest.test_case "register-and-render" `Quick
             (test_route_table_register_and_render ~rt)

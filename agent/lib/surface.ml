@@ -47,14 +47,19 @@ let surface_source = {pp|
 ;; hx-config '{"timeout":0}' disables htmx's 60s defaultTimeout for a
 ;; request whose lawful lifetime is "a whole agent turn".
 (define (chat/page)
-  (render-html
+  ;; ?session=<id> resumes/backfills: the page renders the stored
+  ;; transcript into #log (sessions-persist resume path). The live
+  ;; resume side effect happens on /resume (GET) before the redirect here.
+  (let ((sid (query-param "session")))
+    (render-html
     (string-append
       "<!doctype html><html><head><meta charset=utf-8><title>agent</title>"
       "<style>"
-      "body{background:#0f1117;color:#d8dee9;font-family:ui-monospace,Menlo,monospace;margin:0;padding:1.5rem}"
+      "html,body{height:100%}"
+      "body{background:#0f1117;color:#d8dee9;font-family:ui-monospace,Menlo,monospace;margin:0;padding:1rem;box-sizing:border-box;display:flex;flex-direction:column}"
       "a{color:#7aa2f7;text-decoration:none}a:hover{text-decoration:underline}"
       ".muted{color:#6b7080}"
-      "#log{height:70vh;overflow-y:scroll;border:1px solid #333;border-radius:6px;padding:.75rem;margin-bottom:.75rem}"
+      "#log{flex:1;min-height:0;overflow-y:auto;border:1px solid #333;border-radius:6px;padding:.75rem;margin-bottom:.75rem}"
       ".bubble{background:#1b1f2a;border-radius:6px;padding:.5rem .75rem;margin:.5rem 0;white-space:pre-wrap}"
       ".bubble.user{color:#9ece6a}"
       ".bubble.llm{color:#c0caf5}.bubble.repl{color:#bb9af7}"
@@ -67,7 +72,8 @@ let surface_source = {pp|
       ".think .tk>summary,.think .tool>summary{color:#8a8f9e}"
       ".think .tk>div,.think .tool>div{margin-left:.9rem;padding-left:.5rem;border-left:1px solid #2a2e3a}"
       ".think:not(:has(.reason,.trace)){display:none}"
-      "form{display:flex;gap:.5rem}"
+      "form{display:flex;gap:.5rem;flex-shrink:0}"
+      "h1{margin:.25rem 0 .75rem 0;font-size:1.1rem;flex-shrink:0}"
       "input{flex:1;background:#1b1f2a;color:#d8dee9;border:1px solid #333;border-radius:6px;padding:.5rem}"
       "button{background:#2a6fdb;color:#fff;border:0;border-radius:6px;padding:.5rem 1rem;cursor:pointer}"
       ":root{color-scheme:dark}"
@@ -78,12 +84,16 @@ let surface_source = {pp|
       "::-webkit-scrollbar-thumb:hover{background:#4a4f5c}"
       "::-webkit-scrollbar-corner{background:transparent}"
       "</style></head><body>"
-      "<h1><a href=\"/\">agent</a> <span class=\"muted\">— <a href=\"/code\">/code</a> · <a href=\"/settings\">/settings</a> · model: "
+      "<h1><a href=\"/\">agent</a> <span class=\"muted\">— <a href=\"/code\">/code</a> · <a href=\"/sessions\">/sessions</a> · <a href=\"/settings\">/settings</a> · model: "
       "<select name=\"model\" hx-post=\"/settings\" hx-trigger=\"change\" hx-swap=\"none\" "
       "style=\"background:#1b1f2a;color:#d8dee9;border:1px solid #333;border-radius:4px;font-size:.6em\">"
       (settings/model-options (agent/model) (agent/models))
       "</select></span></h1>"
-      "<div id=\"log\"><div class=\"muted\">agent ready.</div></div>"
+      "<div id=\"log\">"
+      (if (null? sid)
+          "<div class=\"muted\">agent ready.</div>"
+          (string-append "<div class=\"muted\">resumed session " (html-escape sid) " · <a href=\"/new\">+ new</a> · <a href=\"/sessions\">/sessions</a></div>" (chat/bubbles (session/data sid))))
+      "</div>"
       "<form id=\"f\" hx-post=\"/chat\" hx-target=\"#log\" hx-swap=\"beforeend\" hx-ext=\"hx-multipart\""
       " hx-config='{\"timeout\":0}' hx-on::before:request=\"this.reset()\">"
       "<input id=\"msg\" name=\"msg\" type=\"text\" placeholder=\"prompt…\" autocomplete=\"off\" autofocus>"
@@ -92,10 +102,83 @@ let surface_source = {pp|
       "<script src=\"/assets/htmx.min.js\"></script>"
       "<script src=\"/assets/htmx-2-compat.min.js\"></script>"
       "<script src=\"/assets/hx-multipart.js\"></script>"
-      "</body></html>")))
+      "</body></html>"))))
 (route "/" "chat/page")
 
-;; ---- settings surface (GET /settings; borge/agent.borg llm-config) ----
+;; ---- sessions surface (GET /sessions; borge/agent.borg sessions-persist) ----
+;; Appended-only JSONL transcripts under .agent/sessions/. Resume:
+;; GET /resume?id=<id> re-points the live history + current session,
+;; then lands back on the chat page with the transcript backfilled.
+(define (redirect loc)
+  ;; unquoted attribute values (url may not contain spaces/quotes here —
+  ;; ids are hex-safe) keep the Nopales string free of escape layers.
+  (render-html
+    (string-append "<!doctype html><meta http-equiv=refresh content=0;url=" (html-escape loc) ">")))
+
+(define (query-str n)
+  (let ((v (query-param n)))
+    (if (null? v) "" v)))
+
+(define (chat/bubble m)
+  (let ((role (dict-get m "role")) (text (dict-get m "text")))
+    (if (string-eq role "user")
+        (string-append "<div class=\"bubble user\">" (html-escape text) "</div>")
+        (if (string-eq role "tool")
+            (string-append "<div class=\"trace\">" (html-escape text) "</div>")
+            (string-append "<div class=\"bubble llm\">" (html-escape text) "</div>")))))
+
+(define (chat/bubbles data)
+  (list/foldl (lambda (acc m) (string-append acc (chat/bubble m)))
+               "" (json-parse data)))
+
+(define (sessions/rows data)
+  (list/foldl
+    (lambda (acc s)
+      (let ((id (dict-get s "id"))
+            (utc (dict-get s "utc"))
+            (count (dict-get s "count"))
+            (model (dict-get s "model"))
+            (preview (dict-get s "preview")))
+        (string-append acc
+          "<tr><td class=\"muted\">" (html-escape utc)
+          "</td><td>" (html-escape model)
+          "</td><td>" (html-escape count)
+          "</td><td class=\"muted\">" (html-escape preview)
+          "</td><td><a href=\"/resume?id=" (html-escape id) "\">resume</a>"
+          " \183 <a href=\"/?session=" (html-escape id) "\">view</a></td></tr>")))
+    "" (json-parse data)))
+
+(define (sessions/page)
+  (render-html
+    (string-append
+      "<!doctype html><html><head><meta charset=utf-8><title>agent sessions</title>"
+      "<style>"
+      "body{background:#0f1117;color:#d8dee9;font-family:ui-monospace,Menlo,monospace;margin:0;padding:1.5rem}"
+      "a{color:#7aa2f7;text-decoration:none}a:hover{text-decoration:underline}"
+      ".muted{color:#6b7080}"
+      "table{border-collapse:collapse;width:100%;max-width:60rem}td,th{padding:.35rem .6rem;border-bottom:1px solid #222;text-align:left;white-space:nowrap}"
+      ":root{color-scheme:dark}"
+      "</style></head><body>"
+      "<h1><a href=\"/\">agent</a> <span class=\"muted\">— /sessions</span></h1>"
+      "<p><a href=\"/new\">+ new session</a></p>"
+      "<table><tr><th>time</th><th>model</th><th>msgs</th><th>first prompt</th><th></th></tr>"
+      (sessions/rows (session/list))
+      "</table>"
+      "<p class=\"muted\">transcripts: .agent/sessions/*.jsonl (append-only, local store)</p>"
+      "</body></html>")))
+(route "/sessions" "sessions/page")
+
+(define (sessions/new)
+  (session/new)
+  (redirect "/"))
+(route "/new" "sessions/new")
+
+(define (sessions/resume)
+  (let ((id (query-str "id")))
+    (begin
+      (session/resume id)
+      (redirect (string-append "/?session=" (html-escape id))))))
+(route "/resume" "sessions/resume");; ---- settings surface (GET /settings; borge/agent.borg llm-config) ----
 ;; Blank fields KEEP their values (password input round-trips blank).
 ;; Key + base normally arrive invisibly: pp-remote --sync writes them
 ;; to <lens>/__config.json from the habitat's sync round metadata
@@ -278,7 +361,15 @@ let register_config_default_prims ~(rt : Runtime.t) : unit =
   Runtime.add_prim rt "agent/models" (fun _ -> Ast.VList []);
   Runtime.add_prim rt "agent/model" (fun _ -> Ast.VStr "");
   Runtime.add_prim rt "agent/base-url" (fun _ -> Ast.VStr "");
-  Runtime.add_prim rt "agent/key-status" (fun _ -> Ast.VStr "not set")
+  Runtime.add_prim rt "agent/key-status" (fun _ -> Ast.VStr "not set");
+  (* inert session prims (sessions-persist) so the pages render in
+     non-serve contexts; Http_ui.serve / the REPL re-register with live
+     store backing — prim registration is last-write-wins. *)
+  Runtime.add_prim rt "session/name" (fun _ -> Ast.VStr "");
+  Runtime.add_prim rt "session/list" (fun _ -> Ast.VStr "[]");
+  Runtime.add_prim rt "session/data" (fun _ -> Ast.VStr "[]");
+  Runtime.add_prim rt "session/new" (fun _ -> Ast.VStr "");
+  Runtime.add_prim rt "session/resume" (fun _ -> Ast.VStr "")
 
 let load ~(rt : Runtime.t) : unit =
   register_config_default_prims ~rt;

@@ -116,3 +116,11 @@ let save ?(path : string option) (c : t) : unit =
 let last4 (k : string) : string =
   if String.length k >= 4 then String.sub k (String.length k - 4) 4
   else "????"
+
+(** One-turn provider round-trip cap (Loop.run max_turns). Default is
+    the engine's max_turns_default; AGENT_MAX_TURNS overrides. *)
+let max_turns () : int =
+  match Sys.getenv_opt "AGENT_MAX_TURNS" with
+  | Some s when s <> "" ->
+    (try max (int_of_string (String.trim s)) 1 with _ -> Loop.max_turns_default)
+  | _ -> Loop.max_turns_default
