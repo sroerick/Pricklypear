@@ -1,0 +1,3 @@
+# GitHub Linguist: .pp is our Nopales package source, but Linguist maps
+# .pp to Free Pascal. Recategorize so the language bar isn't lying.
+*.pp linguist-language=Scheme
