@@ -126,7 +126,9 @@
 
          HOST PRIM NAMESPACE. Agent prims are prefixed by family:
            ui/notify ui/confirm ui/select        (browser surfaces)
-           session/append session/name
+           session/list session/data session/new session/resume
+           session/name session/text             (sessions-persist;
+                                                  the live store prims)
            on register-tool register-command     (plugin API)
            http/get http/post                    (Eio; JSON in/out)
            route route/lookup route/dispatch     (agent-route-table;
@@ -427,14 +429,64 @@
       absence (no __config.json write) and the field shape is pinned in
       auth.user-llm-keys 5b.|) *)
 
+  (subsection sessions-persist
+   (doc "Persistent sessions: append-only JSONL transcripts in the local pp store (.agent/sessions/), one file per session; list/resume prims + REPL commands; /sessions surface; transcript backfill on resume")
+   (status implemented)
+   (implements agent/lib/sessions.ml agent/lib/http_ui.ml agent/lib/surface.ml agent/bin/main.ml llm/lib/loop.ml hostkit/chat_stream.ml)
+   (verify
+    (test "sessions-persist roundtrip: new/append/list/resume in an overridden AGENT_SESSIONS_DIR — message JSON (incl. tool_calls) survives write+read; appending CONTINUES the resumed file; resume refuses path escapes; session/name + session/data prims resolve through the runtime")
+    (test "turn-sink: Loop.run's ?on_msg fires exactly once per message the turn appends (user + assistant)")
+    (smoke "scripts/smoke_agent_surface.sh PASS (surfaces unchanged; mock runs — no .agent/sessions/ litter)"))
+   (details
+    (doc (|
+         LOCAL-FIRST STORE, NOT POSTGRES. A session is an APPEND-ONLY
+         JSONL transcript in the working tree: .agent/sessions/<id>.
+         jsonl (one file per session, named by id, under .agent/ next
+         to .agent/plugins). Header line {"t":"session", id, ts,
+         model}, then one {"t":"msg", ts, msg:{role, content,
+         tool_call_id, tool_calls}} line per provider message. The
+         image is the DURABLE store at rest, but the session WRITE
+         path never leaves the laptop (offline-tolerant by
+         construction); sync-up of transcripts is local-first.sync
+         future work, out of scope here.
+
+         SINK AT THE LOOP BOUNDARY, NOT PER-SURFACE. llm/lib/loop.ml
+         grew an optional ?on_msg sink called at every history append
+         (user, assistant-with-tool_calls, each tool result) — shared
+         by the stdin REPL (run_turn), piped-turn mode, and the web
+         chat (Chat_stream.t gained on_msg, None on pp-remote). The
+         agent passes Sessions.on_msg (a closure over the
+         current-session REF): rotation (/new, /resume) re-points the
+         ref and later turns stream into whatever session is current
+         without re-wiring the sink.
+
+         PRIMS + REPL COMMANDS + SURFACE. agent/lib/sessions.ml owns
+         the store and registers LIVE prims (session/name session/list
+         session/data session/new session/resume session/text) over
+         the host's history+session refs (surface loads inert defaults
+         first so pages render pre-serve; last-write-wins), plus REPL
+         commands /new /resume /sessions on the same command seam.
+         Surfaces (all Nopales-authored, redefinable live):
+         /sessions (sessions/page — newest-first table, resume/view
+         links), GET /new (rotates, redirects), GET /resume?id= (sets
+         history + current session, redirects to /?session=<id>), and
+         the chat page backfills the stored transcript into #log when
+         ?session= is present (chat/bubbles). Mock runs and pipe mode
+         never touch the store (no smoke litter). The retired
+         'session/append session/name' namespace line described the
+         pre-make sketch; the implemented family is the list above.
+    |))))
+
   (subsection v0-non-goals
    (doc "Explicit exclusions for the first working version")
    (status implemented)
    (details
     (doc (|
          OUT for v0, even though pi has them:
-           - Session trees / fork / resume (sessions are one JSONL
-             file per directory under .agent/sessions/, appended only)
+           - Session TREES / fork (flat one-file-per-session store, no
+             branching; basic sessions + resume are IMPLEMENTED —
+             sessions-persist — and the JSONL store is the seed they
+             would fork from)
            - Compaction hooks, custom TUI widgets, theme system
            - Provider discovery / model registry beyond a
              ~/.config/agent/config.toml table

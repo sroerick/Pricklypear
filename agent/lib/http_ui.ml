@@ -41,6 +41,11 @@ type server_state = {
   cfg : Provider.cfg ref;
   models : string list ref;
   turn_mutex : Eio.Mutex.t;
+  (* sessions-persist: the CURRENT session transcript handle. Rotation
+     (/new, /resume) re-points this ref; the [on_msg] sink below stays
+     fixed, so all later turns stream into whatever session is current. *)
+  sess : Sessions.handle option ref;
+  on_msg : Provider.message -> unit;
 }
 
 (* ---- GET route dispatch through the agent route table ---- *)
@@ -97,6 +102,9 @@ let handle_chat (env : Eio_unix.Stdenv.base) (sw : Eio.Switch.t)
          non-space char is ( evaluates as Nopales in the shared env —
          no model call. Render interp errors like the stdin REPL does —
          the OCaml default printer shows the opaque Interp_error(_). *)
+      (* turn cap: env-overridable (AGENT_MAX_TURNS), engine default 40 *)
+      max_turns = Config.max_turns ();
+      on_msg = Some st.on_msg;
       eval_repl =
         Some
           (fun src ->
@@ -170,15 +178,29 @@ let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
         tools:Provider.tool_def list ->
         on_delta:(Provider.delta -> unit) ->
         (Provider.reply, string) Result.t)
-    ?(port = 18090) ?(open_browser = false) (print : string -> unit) : unit =
+    ?(port = 18090) ?(open_browser = false)
+    ?(persist_sessions = true)
+    ?(shutdown : unit Eio.Promise.t option) (print : string -> unit) : unit =
+
+  (* sessions-persist: boot a fresh transcript for this process run
+     (disabled for mock providers so tests/smokes never write the
+     store). A chat turn appends user/assistant/tool messages via
+     [on_msg] as the loop produces them. *)
+  let history = ref [] in
+  let sess = ref None in
+  if persist_sessions then
+    sess := Some (Sessions.new_session ~model:cfg.Provider.model);
+  let on_msg = Sessions.on_msg sess in
   let st =
     {
-      history = ref [];
+      history;
       complete;
       rt;
       cfg = ref cfg;
       models = ref [];
       turn_mutex = Eio.Mutex.create ();
+      sess;
+      on_msg;
     }
   in
   (* llm-config host prims for the Nopales settings/chat surfaces
@@ -209,7 +231,12 @@ let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
     (fun _ ->
       match !(st.cfg).Provider.api_key with
       | "" -> Ast.VStr "not set"
-      | k -> Ast.VStr ("set · last4=" ^ Config.last4 k));
+      | k -> Ast.VStr ("set \194\183 last4=" ^ Config.last4 k));
+  (* Live session prims (borge/agent.borg sessions-persist) over the
+     surface's history + current-session ref; /new /resume /sessions
+     REPL commands ride the same seam (hashtable registration). *)
+  Sessions.register ~rt ~history:st.history ~sess:st.sess
+    ~model:(fun () -> !(st.cfg).Provider.model);
   let request_handler (sa : Eio.Net.Sockaddr.stream)
       (g : Httpun.Reqd.t Gluten.reqd) : unit =
     ignore sa;
@@ -291,8 +318,27 @@ let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
       ()
     with _ -> ());
   let on_error ex = ignore ex in
-  while true do
-    Eio.Net.accept_fork socket ~sw ~on_error (fun client_sock client_addr ->
-        try conn_handler client_addr client_sock
-        with exn -> ignore exn)
-  done
+  (* Run the accept loop under a CHILD switch raced against [shutdown].
+     Using Fiber.first in a fresh Switch.run lets the return path
+     cancel the still-blocked accept loop — Switch.run waits for both
+     fibers to return, so without the child switch the calling fiber
+     would end on shutdown while the accept fiber remains blocked in
+     the outer switch, deadlocking the process. *)
+  let accept_loop () =
+    while true do
+      Eio.Net.accept_fork socket ~sw ~on_error (fun client_sock client_addr ->
+          try conn_handler client_addr client_sock
+          with exn -> ignore exn)
+    done
+  in
+  (match shutdown with
+   | None -> accept_loop ()
+   | Some p ->
+       (* Fiber.first cancels the loser. The accept loop runs in its
+          own switch scope so its cancellation is contained — when
+          [shutdown] resolves we return from [serve] cleanly. *)
+       Eio.Switch.run @@ fun _loop_sw ->
+       Eio.Fiber.first
+         (fun () -> Eio.Switch.run (fun _ -> accept_loop ()))
+         (fun () -> Eio.Promise.await p));
+  print "agent: shutting down (signal)\n"

@@ -93,6 +93,8 @@ let () =
   let serve = ref false in
   let open_browser = ref false in
   let port = ref 18090 in
+  let do_stop = ref false in
+  let do_reload = ref false in
   let anon (_ : string) = () in
   let speclist =
     Arg.align
@@ -107,12 +109,24 @@ let () =
         ("--serve", Arg.Set serve, "serve the HTML chat surface on 127.0.0.1 until Ctrl-C (default port 18090)");
         ("--port", Arg.Int (fun p -> port := p), "PORT fixed port for --serve (default 18090; 0 = random)");
         ("--open", Arg.Set open_browser, "with --serve: best-effort browser launch");
+        ("--stop", Arg.Set do_stop, "send SIGTERM to the running --serve process and exit");
+        ("--reload", Arg.Set do_reload, "send SIGHUP to the running --serve process to reload surface + plugins");
         ("-p", Arg.String (fun s -> pipe_expr := Some s), "EXPR eval and exit");
       ]
   in
   Arg.parse speclist anon "agent [--mock-script F] [--provider N] [--once] [--serve [--port P] [--open]] [-p EXPR]";
   (* Pipe mode is entered either explicitly (--once) or implicitly when
      stdin is not a tty (surfaces smoke #2: `echo ... | agent ...`). *)
+  if !do_stop then begin
+    match Lifecycle.signal_running Sys.sigterm with
+    | Ok () -> print_endline "agent: stop sent"; exit 0
+    | Error e -> Printf.eprintf "agent: stop failed: %s\n%!" e; exit 1
+  end;
+  if !do_reload then begin
+    match Lifecycle.signal_running Sys.sighup with
+    | Ok () -> print_endline "agent: reload sent"; exit 0
+    | Error e -> Printf.eprintf "agent: reload failed: %s\n%!" e; exit 1
+  end;
   let pipe_mode = !once || not (Unix.isatty Unix.stdin) in
   (* TLS (tls-eio) needs a seeded RNG before any HTTPS provider call;
      mock-only runs never hit TLS, so the smokes didn't surface this.
@@ -194,19 +208,44 @@ let () =
         | None -> Provider.Openai.complete
       in
       let history : Provider.message list ref = ref [] in
+      (* sessions-persist: interactive + serve runs get a fresh
+         transcript in .agent/sessions/; pipe/mock runs stay store-
+         silent (no accidental test/smoke litter, no one-shot noise).
+         The sink ref is shared with the session prims so /new +
+         /resume rotate where the next turn streams without re-wiring. *)
+      let persist = Option.is_none !mock_script && not pipe_mode in
+      let sess : Sessions.handle option ref = ref None in
+      if persist then
+        sess := Some (Sessions.new_session ~model:cfg_model);
+      let on_msg = Sessions.on_msg sess in
       (* Run one full agent turn (model call -> tool calls -> final
          reply) for the given prompt, streaming events via print_event.
          Returns Ok () / Error msg. Exit status is derived by callers. *)
       let run_turn prompt =
-        Loop.run ~env ~sw ~host:(Runtime.loop_host rt) ~cfg ~complete
-          ~on_event:print_event history prompt
+        Loop.run ~env ~sw ~host:(Runtime.loop_host rt) ~cfg ~complete ~max_turns:(Config.max_turns ())
+          ~on_event:print_event ~on_msg history prompt
       in
-      if !serve then
-        (* HTML primary surface: serve until Ctrl-C. Blocks forever in
-           the accept loop. wrap_serve passes the sink-only [print]
-           used for URL output. --open is best-effort browser launch. *)
-        Http_ui.serve ~env ~sw ~rt ~cfg ~complete ~port:!port
-          ~open_browser:!open_browser print_endline
+      if !serve then begin
+        (* HTML primary surface: serve until shutdown resolves. *)
+        let reload_surface () =
+          Printf.eprintf "[agent] SIGHUP: reloading surface + plugins\n%!";
+          (try Surface.load ~rt with e ->
+             Printf.eprintf "[agent] surface reload failed: %s\n%!" (Printexc.to_string e));
+          (try Plugins.load_all rt with e ->
+             Printf.eprintf "[agent] plugin reload failed: %s\n%!" (Printexc.to_string e));
+          Printf.eprintf "[agent] reloaded\n%!"
+        in
+        Lifecycle.write_pid_file ();
+        let shutdown_promise, watcher = Lifecycle.install ~on_reload:reload_surface in
+        Eio.Fiber.fork ~sw watcher;
+        Fun.protect
+          ~finally:(fun () -> Lifecycle.remove_pid_file ())
+          (fun () ->
+             Http_ui.serve ~env ~sw ~rt ~cfg ~complete ~port:!port
+               ~open_browser:!open_browser
+               ~persist_sessions:(Option.is_none !mock_script)
+               ~shutdown:shutdown_promise print_endline)
+      end
       else if pipe_mode then (
         (* Piped-turn smoke: read ALL of stdin as the prompt, run ONE
            full turn, print the final assistant text, exit 0 on Ok.
@@ -222,6 +261,9 @@ let () =
             Printf.eprintf "agent turn error: %s\n%!" e;
             exit 1)
       else (
+      (* Live session prims + /new /resume /sessions commands (REPL
+         process shares the store; borge/agent.borg sessions-persist). *)
+      Sessions.register ~rt ~history ~sess ~model:(fun () -> cfg_model);
       print_endline "agent v0.0 — Nopales plugins. (expr) evaluates; /cmd dispatches; other lines prompt the model.";
       let rec loop () =
         print_string "\027[1magent>\027[0m ";
@@ -264,8 +306,8 @@ let () =
               loop ())
             else (
               (match
-                 Loop.run ~env ~sw ~host:(Runtime.loop_host rt) ~cfg ~complete
-                 ~on_event:print_event history line
+                 Loop.run ~env ~sw ~host:(Runtime.loop_host rt) ~cfg ~complete ~max_turns:(Config.max_turns ())
+                 ~on_event:print_event ~on_msg history line
                with
                | Ok () -> ()
                | Error e -> Printf.printf "\027[31m[loop error] %s\027[0m\n%!" e);

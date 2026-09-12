@@ -13,7 +13,7 @@
 open Pricklypear_lisp
 open Ast
 
-let max_turns_default = 8
+let max_turns_default = 40
 
 (** Tool registry entry: a Nopales closure (plugin tool) or a VPrim
     naming a builtin's registered prim. Structural record — the hosts'
@@ -175,13 +175,21 @@ let run ~(env : Eio_unix.Stdenv.base) ~sw ~(host : host)
         on_delta:(Provider.delta -> unit) ->
         (Provider.reply, string) Result.t)
     ?(max_turns = max_turns_default)
+    ?(on_msg : (Provider.message -> unit) option)
     ~(on_event : turn_event -> unit) (history : Provider.message list ref)
     (prompt : string) : (unit, string) Result.t =
-  history := !history @ [ { Provider.role = "user"; content = `String prompt; tool_call_id = None; tool_calls = None } ];
+  let on_msg = Option.value on_msg ~default:ignore in
+  let user_msg =
+    { Provider.role = "user"; content = `String prompt;
+      tool_call_id = None; tool_calls = None }
+  in
+  on_msg user_msg;
+  history := !history @ [ user_msg ];
   (* input + before_turn events *)
   ignore (host.fire "input" [ Ast.VStr prompt ]);
   let rec go turn =
-    if turn > max_turns then Error "max turns exceeded"
+    if turn > max_turns then
+        Error (Printf.sprintf "max turns exceeded (%d; raise with AGENT_MAX_TURNS)" max_turns)
     else
       match
         complete ~env ~sw ~cfg ~messages:!history ~tools:(tool_defs host)
@@ -208,9 +216,12 @@ let run ~(env : Eio_unix.Stdenv.base) ~sw ~(host : host)
             | Some _ -> `String reply.text
           in
           let tool_calls = List.assoc_opt "tool_calls" raw_fields in
-          history :=
-            !history
-            @ [ { role = "assistant"; content; tool_call_id = None; tool_calls } ];
+          let assistant_msg =
+            { Provider.role = "assistant"; content; tool_call_id = None;
+              tool_calls }
+          in
+          on_msg assistant_msg;
+          history := !history @ [ assistant_msg ];
           (match reply.calls with
            | [] -> Ok ()
            | calls ->
@@ -222,16 +233,17 @@ let run ~(env : Eio_unix.Stdenv.base) ~sw ~(host : host)
                    (* OpenAI tool-result message: role=tool, tool_call_id
                       routes the result to the call that produced it,
                       content is the plain tool output string. *)
+                   let tool_msg =
+                     { Provider.role = "tool";
+                       content = `String out;
+                       tool_call_id = Some c.id;
+                       tool_calls = None;
+                     }
+                   in
+                   on_msg tool_msg;
                    history :=
                      !history
-                     @ [
-                         {
-                           role = "tool";
-                           content = `String out;
-                           tool_call_id = Some c.id;
-                           tool_calls = None;
-                         };
-                       ])
+                     @ [ tool_msg ])
                  calls;
                go (turn + 1))
   in
