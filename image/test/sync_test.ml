@@ -172,6 +172,67 @@ let json_plan_roundtrip () =
         | _ -> failwith "expected one row")
    | _ -> failwith "expected Assoc")
 
+(* ---- delta exchange (merge_delta: the client's manifest implied by
+   its delta against the stored base — the chunked protocol's server
+   half, 2026-09-11) ---- *)
+
+let merge_delta_empty () =
+  let base = [ ("a", h 1); ("b", h 2) ] in
+  Alcotest.(check (list (pair string string)))
+    "empty delta = the base" (S.normalize base)
+    (S.merge_delta ~base ~changes:[] ~deleted:[])
+
+let merge_delta_change () =
+  let base = [ ("a", h 1); ("b", h 2) ] in
+  let got = S.merge_delta ~base ~changes:[ ("a", h 9) ] ~deleted:[] in
+  Alcotest.(check (list (pair string string)))
+    "changed path carries the new hash"
+    (S.normalize [ ("a", h 9); ("b", h 2) ]) got
+
+let merge_delta_add () =
+  let base = [ ("a", h 1) ] in
+  let got = S.merge_delta ~base ~changes:[ ("new", h 7) ] ~deleted:[] in
+  Alcotest.(check (list (pair string string)))
+    "delta addition lands in the reconstructed manifest"
+    (S.normalize [ ("a", h 1); ("new", h 7) ]) got
+
+let merge_delta_delete () =
+  let base = [ ("a", h 1); ("b", h 2) ] in
+  let got = S.merge_delta ~base ~changes:[] ~deleted:[ "a" ] in
+  Alcotest.(check (list (pair string string)))
+    "deleted path drops from the reconstructed manifest"
+    (S.normalize [ ("b", h 2) ]) got
+
+let merge_delta_roundtrip_plan () =
+  (* the point of merge_delta: reconstructed theirs + stored base feeds
+     the SAME plan_of as v1. Server adds x, client edits a, client adds
+     n, client deletes b → plan must show ours_add/theirs_mod/theirs_add/
+     theirs_del and NOTHING else *)
+  let base = [ ("a", h 1); ("b", h 2) ] in
+  let server = [ ("a", h 1); ("b", h 2); ("x", h 5) ] in
+  let theirs =
+    S.merge_delta ~base ~changes:[ ("a", h 9); ("n", h 4) ] ~deleted:[ "b" ]
+  in
+  let plans = S.plan_of base server theirs in
+  let outcomes =
+    List.filter_map
+      (fun { S.path; outcome } ->
+        match outcome with
+        | S.Unchanged -> None
+        | o -> Some (path, o))
+      plans
+  in
+  Alcotest.(check int) "four actionable rows" 4 (List.length outcomes);
+  List.iter
+    (fun (path, o) ->
+      match path, o with
+      | "x", S.Ours_keep -> ()
+      | "a", S.Theirs_mod -> ()
+      | "n", S.Theirs_add -> ()
+      | "b", S.Theirs_del -> ()
+      | p, _ -> failwith ("unexpected plan row " ^ p))
+    outcomes
+
 let () =
   Alcotest.run "sync" [
     ("classify", [
@@ -195,5 +256,12 @@ let () =
     ("json", [
         test_case "report" `Quick json_report_roundtrip;
         test_case "plan" `Quick json_plan_roundtrip;
+      ]);
+    ("delta", [
+        test_case "empty-delta-is-base" `Quick merge_delta_empty;
+        test_case "change" `Quick merge_delta_change;
+        test_case "add" `Quick merge_delta_add;
+        test_case "delete" `Quick merge_delta_delete;
+        test_case "roundtrip-plan" `Quick merge_delta_roundtrip_plan;
       ]);
   ]

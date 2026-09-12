@@ -1347,6 +1347,22 @@ let tree_get (store : Store.t) ~(path : string) ?(at_gen : int64 option) () : va
        | None -> VNil
        | Some node -> (VStr (Tree_store.node_to_json node))))
 
+let tree_get_many (store : Store.t) ~(paths : string list) () : value =
+  (* One tree tx, N reads: the sync round's batched pull (and the lens
+     seed) — N tree/get calls would pay per-call transaction + round
+     trip. Envelopes return in path order; misses are SKIPPED (matches
+     the per-node pull's Ok VNil skip). *)
+  with_tree_tx store ~none:(fun () -> VList []) (fun conn ->
+      let envs =
+        List.filter_map
+          (fun p ->
+            match Tree_store.get_by_path conn ~path:p with
+            | None -> None
+            | Some node -> Some (VStr (Tree_store.node_to_json node)))
+          paths
+      in
+      VList envs)
+
 let tree_list (store : Store.t) ~(prefix : string) ?(depth : int option)
     ?(limit : int = 50000) () : value =
   with_tree_tx store ~none:(fun () -> VList []) (fun conn ->

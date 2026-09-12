@@ -284,6 +284,19 @@ let register (t : t) (tbl : Primitives.t) : unit =
       | _ ->
           (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/get", "need path [, :gen]/", "bad-args")))));
 
+  register_crud "tree/get-many"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VList paths ] ->
+          let ps =
+            List.filter_map
+              (function Pricklypear_lisp.Ast.VStr p -> Some p | _ -> None)
+              paths
+          in
+          Crud.tree_get_many t.store ~paths:ps ()
+      | _ ->
+          (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/get-many", "need [path, …]", "bad-args")))));
+
   register_crud "tree/list"
     (fun args ->
       match args with

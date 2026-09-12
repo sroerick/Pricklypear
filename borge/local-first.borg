@@ -501,6 +501,66 @@
          (GET {base}/models) and persisted per surface; sync carries
          base so the ABI is reachable, and the client-side record
          merge PRESERVES a locally chosen model across rounds.
+
+         THE DELTA EXCHANGE (2026-09-11, issue i-1789178161-87d0742f).
+         The v1 transport above carries the client's FULL (path, hash)
+         manifest every round — O(subtree) on the wire, 413-bound past
+         the edge proxy's ~1MB request cap, and unchunkable (a subset
+         manifest would classify its absent paths as ServerOnly and
+         inflate the pull list). The chunked protocol stores the
+         per-client last-synced merged manifest SERVER-SIDE — the merge
+         index the positioning stanza already assigns to the server
+         (sync_bases, migration 032; git's remote-tracking ref in
+         miniature, one row per (user, lens) — multi-device is the star
+         topology per lens-model: each device lens negotiates against
+         what IT last had, the server tree stays the sole content
+         authority) — and negotiates deltas against it:
+
+           sync/plan2  (lens delta deleted) — read-only negotiate:
+             reconstruct the client's full manifest from the stored
+             base + delta (Sync.merge_delta) and run the SAME
+             plan_of three-way as v1. Returns pull_paths (Ours_keep
+             over the FULL plan — actionable excludes Ours_keep, and
+             deriving pulls from the actionable subset silently
+             emptied the pull list: the missing-pull bug, fixed same
+             day), client_delete_paths, diverge previews, the current
+             generation, and the STORED base generation.
+           sync/push2  (lens chunk-bodies deleted) — apply ONE chunk;
+             repeatable (chunks compose: every call re-derives theirs
+             from the same stored base, per-path apply is idempotent,
+             Theirs_del on a gone node plans Unchanged). Bodies chunk
+             at ~400KB client-side (edge-proxy safe). The response
+             carries lww resolutions + failed_paths (pushes the server
+             REJECTED — typed-boundary validation — surfaced so the
+             client keeps and re-pushes them instead of converging:
+             the obituary rule). Commit's report gained the failed
+             field for this.
+           sync/commit2 (lens) — end-of-round: store the CURRENT merged
+             server manifest + generation as the next base. The ONLY
+             base writer. The client calls it once, only after every
+             push and pull succeeded (committing after a failed pull
+             advances the stored base past rows the client never
+             received — the crash-window hole).
+
+         The client round: delta vs its base (O(changes)), plan2, mirror
+         deletions, push2 chunks, batched pulls (tree/get-many, ~100
+         paths per call — also the convergence mechanism: every pushed
+         path is re-fetched so the local envelope inherits the server's
+         canonical hash and the next round is quiet), commit2, then the
+         client records its OWN base from the post-round substrate (they
+         coincide on a fully-successful round — no O(N) merged manifest
+         crosses the wire in either direction). A fully-quiet round
+         whose generation matches the recorded snapshot skips pushes,
+         pulls, and commit entirely. TWO guards keep the stored base and
+         the client base honest: (a) the stale-base guard — plan2 returns
+         the stored base generation; a mismatch with the client's
+         recorded generation (a round that died between commit2 and the
+         client's base-record) discards the plan and falls back to the
+         v1 full exchange; (b) the v1 fallback itself — no stored base,
+         a pre-032 image, or any non-transport plan2 error falls back to
+         v1 (which then commits, bootstrapping the lens onto the delta
+         protocol). Verified end-to-end on the dev stack: push+converge,
+         pull+stamp, quiet rounds, v1 bootstrap, wipe-recovery.
     |))))
 
   (subsection sync-conflicts

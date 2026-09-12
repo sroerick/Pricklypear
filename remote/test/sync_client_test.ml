@@ -46,10 +46,75 @@ let test_server_side_delete_stays_quiet () =
     "client-side-unchanged node needs no body" []
     (push_paths ~base m)
 
+(* ---- delta_of: the client's delta against its recorded base ---- *)
+
+let test_delta_empty () =
+  let base = [ ("data.u.a.x.1", "h1") ] in
+  let changes, deletes = delta_of ~base base in
+  Alcotest.(check (list (pair string string)))
+    "manifest == base: no changes" [] changes;
+  Alcotest.(check (list string)) "no deletions" [] deletes
+
+let test_delta_change_and_add () =
+  let base = [ ("a", "h1"); ("b", "h2") ] in
+  let manifest = [ ("a", "h1-new"); ("b", "h2"); ("c", "h3") ] in
+  let changes, deletes = delta_of ~base manifest in
+  Alcotest.(check (list (pair string string)))
+    "edit + addition travel"
+    [ ("a", "h1-new"); ("c", "h3") ]
+    changes;
+  Alcotest.(check (list string)) "no deletions" [] deletes
+
+let test_delta_delete () =
+  let base = [ ("a", "h1"); ("b", "h2") ] in
+  let manifest = [ ("b", "h2") ] in
+  let changes, deletes = delta_of ~base manifest in
+  Alcotest.(check (list (pair string string))) "no changes" [] changes;
+  Alcotest.(check (list string)) "dropped base path is a deletion" [ "a" ] deletes
+
+(* ---- chunk_bodies: request-sized body chunks (edge-proxy ~1MB cap) ---- *)
+
+let test_chunk_small_single () =
+  let bodies = [ ("p1", "{v:1}"); ("p2", "{v:2}") ] in
+  (match chunk_bodies ~max_bytes:100_000 bodies with
+   | [ only ] ->
+       Alcotest.(check int) "one chunk holds both" 2 (List.length only)
+   | _ -> Alcotest.fail "expected a single chunk")
+
+let test_chunk_respects_cap () =
+  let env = String.make 5000 'x' in
+  let bodies = List.init 40 (fun i -> (Printf.sprintf "p%d" i, env)) in
+  let chunks = chunk_bodies ~max_bytes:60_000 bodies in
+  (* 40 x ~5KB = ~200KB; 60KB cap => 4 chunks *)
+  Alcotest.(check int) "splits into 4 chunks" 4 (List.length chunks);
+  List.iter
+    (fun c -> Alcotest.(check bool) "chunk nonempty" true (c <> []))
+    chunks;
+  let total =
+    List.fold_left (fun acc c -> acc + List.length c) 0 chunks
+  in
+  Alcotest.(check int) "all bodies preserved across chunks" 40 total
+
+let test_chunk_exact_one () =
+  let bodies = [ ("p1", String.make 100 'x') ] in
+  (match chunk_bodies ~max_bytes:50 bodies with
+   | [ [ _ ] ] -> ()
+   | _ -> Alcotest.fail "an oversized single body still travels (own chunk)")
+
 let () =
   let open Alcotest in
   run "sync_client"
-    [ ( "push_paths"
+    [ ( "delta"
+      , [ test_case "empty" `Quick test_delta_empty
+        ; test_case "change-and-add" `Quick test_delta_change_and_add
+        ; test_case "delete" `Quick test_delta_delete
+        ] )
+    ; ( "chunk_bodies"
+      , [ test_case "small-single" `Quick test_chunk_small_single
+        ; test_case "respects-cap" `Quick test_chunk_respects_cap
+        ; test_case "oversized-single" `Quick test_chunk_exact_one
+        ] )
+    ; ( "push_paths"
       , [ test_case "no-base sends everything" `Quick test_no_base_sends_everything
           ; test_case "unchanged nodes skip bodies" `Quick
               test_unchanged_nodes_skip_bodies

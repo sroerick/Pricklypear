@@ -35,9 +35,17 @@ SCRIPT_DIR="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
 ROOT="$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)"
 BUILD="$ROOT/_build/default/remote/bin/main.exe"
 
-# habitat secrets (PP_URL / PP_USER / PP_PASS); never committed
+# habitat secrets (PP_URL / PP_USER / PP_PASS); never committed.
+# Explicit environment WINS over the secrets file — an exported PP_URL
+# (e.g. a dev-stack test) must not be silently clobbered with prod.
 if [ -f "$HOME/.config/pricklypear/env" ]; then
+  _pp_url="${PP_URL-}"; _pp_user="${PP_USER-}"; _pp_pass="${PP_PASS-}"; _pp_eval="${PP_EVAL-}"
   set -a; . "$HOME/.config/pricklypear/env"; set +a
+  [ -n "$_pp_url" ]  && PP_URL="$_pp_url"
+  [ -n "$_pp_user" ] && PP_USER="$_pp_user"
+  [ -n "$_pp_pass" ] && PP_PASS="$_pp_pass"
+  [ -n "$_pp_eval" ] && PP_EVAL="$_pp_eval"
+  unset _pp_url _pp_user _pp_pass _pp_eval
 fi
 
 LENS="${PP_LENS:-$ROOT/lens}"

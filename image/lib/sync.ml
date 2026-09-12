@@ -219,6 +219,111 @@ let actionable (plans : plan list) : plan list =
     plans
 
 (* ==================================================================
+   DELTA EXCHANGE (the chunked protocol's server half, 2026-09-11)
+
+   The v1 exchange carries the client's FULL manifest every round —
+   O(subtree) on the wire, 413-bound past nginx's ~1MB request cap and
+   unchunkable (a subset manifest classifies its absent paths as
+   ServerOnly and inflates the pull list). The delta exchange stores
+   the per-client last-synced merged manifest SERVER-SIDE (the merge
+   index — sync_bases, migration 032; git's remote-tracking ref in
+   miniature) and negotiates deltas against it: the client sends only
+   what changed vs its base (changes + deletions); a path ABSENT from
+   the delta means "client unchanged = base", so the server can
+   reconstruct the client's full manifest locally and feed the SAME
+   plan_of / commit machinery as v1. Requests become O(changes);
+   chunks compose because every push2 re-derives theirs from the same
+   stored base and applies per-path (idempotent).
+   ================================================================== *)
+
+(** [merge_delta base changes deleted] — the client's FULL manifest as
+    implied by its delta against [base]: start from the base, apply the
+    client's changed (path, hash) entries, drop the deleted paths. A
+    path absent from both delta lists means the client never touched it
+    (its hash is the base hash). Pure — the heart of the delta
+    exchange; unit-tested in sync_test.ml. *)
+let merge_delta ~(base : manifest) ~(changes : manifest)
+    ~(deleted : string list) : manifest =
+  let deleted_set =
+    let t = Hashtbl.create (List.length deleted + 1) in
+    List.iter (fun p -> Hashtbl.replace t p ()) deleted;
+    t
+  in
+  let ch = Hashtbl.create (List.length changes + 1) in
+  List.iter (fun (p, h) -> Hashtbl.replace ch p h) changes;
+  (* base paths: dropped when deleted, overridden when changed *)
+  let kept =
+    List.filter
+      (fun (p, _) ->
+        not (Hashtbl.mem deleted_set p) && not (Hashtbl.mem ch p))
+      (normalize base)
+  in
+  normalize (kept @ normalize changes)
+
+(* ---- the merge index (sync_bases, migration 032) ---- *)
+
+(** Load the stored base manifest for one client lens. Returns None when
+    no base was ever committed for (user, lens) — the caller falls back
+    to the v1 full-manifest exchange. *)
+let load_base (store : Store.t) ~(user_id : string) ~(lens : string)
+    : (manifest * string * Int64.t) option =
+  match Store.conn_of store with
+  | None -> None
+  | Some conn -> (
+      match
+        Store_db.exec conn
+          ~params:
+            [ Pgx.Value.of_string user_id; Pgx.Value.of_string lens ]
+          "SELECT manifest::text, branch, generation FROM sync_bases \
+           WHERE user_id = $1::uuid AND lens = $2"
+      with
+      | [ [ m; b; g ] ] -> (
+          let manifest =
+            match Yojson.Safe.from_string (Pgx.Value.to_string m |> Option.value ~default:"[]") with
+            | `List rows ->
+                List.filter_map
+                  (function
+                    | `List [ `String p; `String h ] -> Some (p, h)
+                    | _ -> None)
+                  rows
+            | _ -> []
+          in
+          let branch = Pgx.Value.to_string b |> Option.value ~default:"" in
+          let gen =
+            match Pgx.Value.to_string g with
+            | Some s -> (try Int64.of_string s with _ -> 0L)
+            | None -> 0L
+          in
+          Some (manifest, branch, gen))
+      | _ -> None)
+
+(** Store the merged manifest this client lens last synced at (upsert —
+    one row per (user, lens), the merge index the next round's delta
+    negotiates against). *)
+let save_base (store : Store.t) ~(user_id : string) ~(lens : string)
+    ~(branch : string) ~(generation : Int64.t) (manifest : manifest) : unit =
+  match Store.conn_of store with
+  | None -> ()
+  | Some conn ->
+      let rows =
+        `List (List.map (fun (p, h) -> `List [ `String p; `String h ]) (normalize manifest))
+      in
+      ignore
+        (Store_db.exec conn
+           ~params:
+             [ Pgx.Value.of_string user_id
+             ; Pgx.Value.of_string lens
+             ; Pgx.Value.of_string branch
+             ; Pgx.Value.of_string (Int64.to_string generation)
+             ; Pgx.Value.of_string (Yojson.Safe.to_string rows)
+             ]
+           "INSERT INTO sync_bases (user_id, lens, branch, generation, manifest, updated_at) \
+            VALUES ($1::uuid, $2, $3, $4::bigint, $5::jsonb, now()) \
+            ON CONFLICT (user_id, lens) \
+            DO UPDATE SET branch = EXCLUDED.branch, generation = EXCLUDED.generation, \
+            manifest = EXCLUDED.manifest, updated_at = now()")
+
+(* ==================================================================
    SERVER-SIDE HARNESS (DB-backed)
    ================================================================== *)
 
@@ -416,6 +521,9 @@ type commit_report = {
   lww_client_won : string list;  (* conflicts arbitrated TO the client copy (applied) *)
   lww_server_kept : string list; (* conflicts arbitrated TO the server copy (client edit surfaced as lost) *)
   client_deletes : string list;  (* Ours_del: server deleted; client's stale copy must go too *)
+  failed : string list;          (* pushes the server REJECTED (typed-boundary validation etc.) —
+                                    surfaced so the client keeps + re-pushes them instead of
+                                    converging to the server copy (the obituary rule) *)
 }
 
 let commit (store : Store.t)
@@ -436,8 +544,8 @@ let commit (store : Store.t)
            | Some env ->
                (match apply_client_node store ~env with
                 | Ok () -> { r with applied = r.applied + 1 }
-                | Error _ -> r)
-           | None -> r)
+                | Error _ -> { r with failed = path :: r.failed })
+           | None -> { r with failed = path :: r.failed })
       | Theirs_del ->
           (match Store.conn_of store with
            | Some conn ->
@@ -480,6 +588,7 @@ let commit (store : Store.t)
       lww_client_won = [];
       lww_server_kept = [];
       client_deletes = [];
+      failed = [];
     }
     plans
 
