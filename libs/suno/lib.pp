@@ -146,14 +146,18 @@ parsed data dict, raises a descriptive error otherwise."
 (define suno/post-call
   (lambda (path body)
     "POST one gateway call; returns the parsed data dict when code=200."
-    (suno/check-call path
-      (http-post (string-append (suno/base) path) (suno/headers) body))))
+    (suno/retry 3
+      (lambda ()
+        (suno/check-call path
+          (http-post (string-append (suno/base) path) (suno/headers) body))))))
 
 (define suno/get-call
   (lambda (path+qs)
     "GET one gateway call; same code=200 discipline as suno/post-call."
-    (suno/check-call path+qs
-      (http-get (string-append (suno/base) path+qs) (suno/headers)))))
+    (suno/retry 3
+      (lambda ()
+        (suno/check-call path+qs
+          (http-get (string-append (suno/base) path+qs) (suno/headers)))))))
 
 ;; ---- generate payloads ----
 ;;
@@ -334,14 +338,28 @@ Suno gateway engine."
                 (as-str (dict-get r "err")) " HTTP "
                 (as-str (dict-get r "status")))))))
 
+(define suno/retry
+  (lambda (n f)
+    "Call f (0-arg); on Lisp error retry up to n total attempts with a
+1s gap; re-raises the last error. Prod POST bodies drop intermittently
+(transport returns 200 + headers, empty body) — retries absorb it."
+    (guard
+      (lambda (e)
+        (if (<= n 1)
+            (error (car (cdr e)) (car (cdr (cdr e))))
+            (begin (sleep 1) (suno/retry (- n 1) f))))
+      (f))))
+
 (define suno/ace/call
   (lambda (path body)
     "POST one ACE-Step call; returns the data member."
-    (suno/ace/check path
-      (http-post
-        (string-append (suno/ace-url) path)
-        "{\"Content-Type\": \"application/json\"}"
-        body))))
+    (suno/retry 3
+      (lambda ()
+        (suno/ace/check path
+          (http-post
+            (string-append (suno/ace-url) path)
+            "{\"Content-Type\": \"application/json\"}"
+            body))))))
 
 (define suno/ace/submit
   (lambda (caption lyrics)
