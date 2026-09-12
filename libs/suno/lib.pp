@@ -959,7 +959,7 @@ a short status string."
         (html/page
           (list
             (suno/style-html)
-            (html/h1 "Suno")
+            (html/h1 (string-append "Suno — engine: " (suno/engine)))
             (html/p*
               (html/attr "class" "suno-muted")
               (html/text
