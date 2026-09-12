@@ -43,6 +43,12 @@
 ;;   (suno/submit title style prompt instrumental? model) -> row-id
 ;;   (suno/task-refresh row-id) -> updated status string
 ;;   route: /suno (private) — form + task cards with <audio> players.
+;;   POST action=generate takes mode=simple (gateway writes lyrics from
+;;   the prompt) | lyrics (prompt used VERBATIM as the lyrics; title +
+;;   style required) | instrumental (style required, title defaults to
+;;   "Untitled"); legacy posts without mode keep the old rule.
+;;   (suno/task-refresh row-id) -> updated status string
+;;   route: /suno (private) — form + task cards with <audio> players.
 ;;
 ;; Callbacks: sunoapi.org pushes POST {code,msg,data:{callbackType,task_id,data}}
 ;; to callback_url when set; this lib does not ingest callbacks — polling
@@ -270,7 +276,7 @@ manual refresh instead of blocking."
 (define suno/wait/with
   (lambda (task-id attempts interval-s)
     "suno/wait with explicit attempts and interval seconds."
-    (suno/wait-loop task-id attempts interval-s))))
+    (suno/wait-loop task-id attempts interval-s)))
 
 (define suno/credits
   (lambda () "Remaining gateway credits (GET /api/v1/generate/credit)."
@@ -452,9 +458,23 @@ Returns the row id."
           (lambda (m) (html/option m m (string-eq m (suno/default-model))))
           (list "V4_5ALL" "V4_5" "V4_5PLUS" "V5" "V5_5"))))))
 
+(define suno/mode-select
+  (lambda ()
+    "Mode dropdown: where the words come from."
+    (html/select
+      "mode"
+      ""
+      (html/join
+        (list
+          (html/option "simple" "Simple — gateway writes the lyrics" #t)
+          (html/option "lyrics" "Lyrics — use my prompt verbatim" #f)
+          (html/option "instrumental" "Instrumental — no lyrics" #f))))))
+
 (define suno/generate-form
   (lambda (default-title default-style)
-    "The generate form; simple mode when title+style are left blank."
+    "The generate form; mode select picks simple (free-text prompt),
+lyrics (verbatim lyrics: title + style required) or instrumental
+(style required, title defaults to Untitled)."
     (html/form
       "POST"
       "/suno"
@@ -462,21 +482,15 @@ Returns the row id."
       (html/join
         (list
           (html/hidden "action" "generate")
-          (suno/text-input "title"
-            "Title (blank title+style = simple mode)" default-title)
-          (suno/text-input "style"
-            "Style, e.g. lofi hiphop on a rainy night" default-style)
+          (suno/mode-select)
+          (suno/text-input "title" "Title (required for lyrics mode)" default-title)
+          (suno/text-input "style" "Style, e.g. folk ballad, close harmonies" default-style)
           "<br>"
-          (html/textarea "prompt" (html/attr "rows" "3") "")
+          (html/textarea "prompt" (html/attr "rows" "5")
+            "")
           "<br>"
           (html/text "model ")
           (suno/model-select)
-          (html/input
-            (html/attrs
-              (list
-                (html/attr "type" "checkbox")
-                (html/attr "name" "instrumental"))))
-          (html/text " instrumental")
           "<br>"
           (html/button (html/attr "type" "submit") "generate"))))))
 
@@ -495,7 +509,7 @@ Returns the row id."
           (html/p*
             (html/attr "class" "suno-muted")
             (html/text
-              "Simple mode leaves title+style blank (gateway writes the lyrics). Generation takes ~2-3 minutes; press refresh on a card. Gateway files expire after ~2 weeks."))
+              "Simple: describe the song, gateway writes + sings the lyrics. Lyrics: your prompt is the lyrics, word for word (title + style required). Instrumental: describe the music. Generation takes ~2-3 minutes — press refresh on a card. Gateway files expire after ~2 weeks."))
           (html/h2 "Tasks")
           (html/join
             (map
@@ -505,7 +519,8 @@ Returns the row id."
 (define suno/dispatch
   (lambda ()
     "Dispatch a POST /suno action; returns a short status string.
-Actions: generate (submit + row), refresh (poll record-info + update)."
+Actions: generate (mode=simple | lyrics | instrumental; posts without
+a mode keep the legacy rule), refresh (poll record-info + update)."
     (let ((action (as-str (request-param "action"))))
       (cond
         ((string-eq action "generate")
@@ -513,25 +528,54 @@ Actions: generate (submit + row), refresh (poll record-info + update)."
            ((prompt (as-str (request-param "prompt")))
              (title (as-str (request-param "title")))
              (style (as-str (request-param "style")))
+             (mode (as-str (request-param "mode")))
              (model (suno/nonblank (request-param "model")
-                                  (suno/default-model)))
-             (inst? (not (string-eq
-                           (as-str (request-param "instrumental"))
-                           ""))))
-           (if
-             (string-eq prompt "")
-             (if inst?
-                 "prompt required (only custom+instrumental may omit it)"
-                 "prompt required")
-             (let ((row-id (suno/submit title style prompt inst? model)))
-               (string-append "submitted task (row " (as-str row-id)
-                              ") — refresh its card in ~2-3 minutes")))))
+                                  (suno/default-model))))
+           (cond
+             ((string-eq mode "lyrics")
+              (cond
+                ((string-eq prompt "")
+                 "lyrics mode: paste your lyrics in the prompt box (used verbatim)")
+                ((string-eq title "") "lyrics mode: title required")
+                ((string-eq style "") "lyrics mode: style required")
+                (else
+                  (suno/submit-msg
+                    (suno/submit title style prompt #f model)
+                    "lyrics"))))
+             ((string-eq mode "instrumental")
+              (cond
+                ((string-eq style "") "instrumental mode: style required")
+                (else
+                  (suno/submit-msg
+                    (suno/submit title style prompt #t model)
+                    "instrumental"))))
+             ((and (string-eq title "") (string-eq style ""))
+              (if (string-eq prompt "")
+                  "prompt required"
+                  (suno/submit-msg (suno/submit "" "" prompt #f model) "")))
+             (else
+               (cond
+                 ((string-eq prompt "")
+                  "custom mode: prompt (lyrics) required when not instrumental")
+                 ((string-eq title "") "custom mode: title required")
+                 ((string-eq style "") "custom mode: style required")
+                 (else
+                   (suno/submit-msg (suno/submit title style prompt #f model) "custom")))))))
         ((string-eq action "refresh")
          (let ((row-id (as-str (request-param "id"))))
            (if (string-eq row-id "")
                "refresh: no row id"
                (suno/task-refresh row-id))))
         (else (string-append "unknown action: " action))))))
+
+(define suno/submit-msg
+  (lambda (row-id label)
+    "Standard submit status string; label may be blank."
+    (string-append
+      "submitted"
+      (if (string-eq label "") "" (string-append " " label))
+      " task (row " (as-str row-id)
+      ") — refresh in ~2-3 minutes")))
 
 (define suno/tracks-json
   (lambda (data)
