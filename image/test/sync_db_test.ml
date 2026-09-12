@@ -52,7 +52,7 @@ let test_server_manifest () =
                 ~type_name:("sync_" ^ uniq)
                 ~fields_json:"{\"n\":1}" ~author:"anonymous"));
       let prefix = "data.u." ^ anon_enc in
-      (match Sync.server_manifest store ~prefix with
+      (match Sync.server_manifest store ~prefixes:[ prefix ] with
        | None -> Alcotest.fail "server_manifest None"
        | Some m ->
            Alcotest.(check bool) "probe row in manifest" true
@@ -190,7 +190,7 @@ let test_commit_lww_client_newer_wins () =
               manifest hash change over the original body hash *)
            let m =
              Option.value
-               (Sync.server_manifest store ~prefix:("data.u." ^ anon_enc))
+                (Sync.server_manifest store ~prefixes:[ "data.u." ^ anon_enc ])
                ~default:[]
            in
            Alcotest.(check bool) "node still present post-LWW" true
@@ -231,7 +231,7 @@ let test_commit_theirs_del_and_ours_del () =
          theirs (client) deleted it *)
       let m =
         Option.value
-          (Sync.server_manifest store ~prefix:("data.u." ^ anon_enc))
+            (Sync.server_manifest store ~prefixes:[ "data.u." ^ anon_enc ])
           ~default:[]
       in
       let srv_hash = List.assoc path m in
@@ -290,7 +290,8 @@ let test_two_way_push_applies_client_only () =
       in
       (* server manifest is EMPTY for this subtree; client offers the
          node → classify reports it ClientOnly *)
-      let server = Sync.server_manifest store ~prefix:("data.u." ^ anon_enc) in
+      let server =
+        Sync.server_manifest store ~prefixes:[ "data.u." ^ anon_enc ] in
       let server = Option.value server ~default:[] in
       let r = Sync.classify server [ (path, "H") ] in
       Alcotest.(check int) "one client_only" 1 (List.length r.client_only);
@@ -319,6 +320,96 @@ let test_two_way_push_applies_client_only () =
                 "DELETE FROM type_defs WHERE name = $1")
        | None -> ()))
 
+let test_space_guard_rejects_client_writes () =
+  with_store (fun store ->
+      (* Space subtrees are NEVER in a lens's write scope (borge/
+         local-first.borg sync): any client-driven write outcome on a
+         data.s.* path must be REJECTED and surfaced via failed — never
+         applied. A server-side deletion (Ours_del) is the authority
+         speaking and still mirrors to the client. *)
+      let path = "data.s.fencefans.fencetest.probe" in
+      let env : Yojson.Safe.t =
+        `Assoc
+          [ ("v", `Int 1); ("kind", `String "datum"); ("path", `String path);
+            ("type", `String "fencetest"); ("body", `Assoc [ ("n", `Int 5) ]);
+            ("author", `String "anonymous") ]
+      in
+      (* theirs_add on a space path (client offers a node the server lacks) *)
+      let plans = Sync.plan_of [] [ (path, "H0") ] [ (path, "H") ] in
+      let r = Sync.commit store ~client_bodies:[ (path, env) ] plans in
+      Alcotest.(check int) "theirs_add on a space path rejected" 0 r.applied;
+      Alcotest.(check (list string)) "surfaced as failed" [ path ] r.failed;
+      (match S.conn_of store with
+       | Some conn ->
+           Alcotest.(check bool) "nothing persisted" false
+             (Pricklypear_image_lib.Tree_store.get_by_path conn ~path <> None)
+       | None -> ());
+      (* theirs_del on a space path is also rejected *)
+      let plans2 = Sync.plan_of [ (path, "H0") ] [ (path, "H0") ] [] in
+      let r2 = Sync.commit store ~client_bodies:[] plans2 in
+      Alcotest.(check int) "theirs_del on a space path rejected" 0 r2.applied;
+      Alcotest.(check (list string)) "surfaced as failed" [ path ] r2.failed;
+      (* a server-side deletion (Ours_del) still mirrors to the client *)
+      let plans3 = Sync.plan_of [ (path, "H0") ] [] [ (path, "H0") ] in
+      let r3 = Sync.commit store ~client_bodies:[] plans3 in
+      Alcotest.(check (list string)) "ours_del mirrors" [ path ]
+        r3.client_deletes)
+
+let test_member_space_prefixes_manifest () =
+  with_store (fun store ->
+      (* member_space_prefixes returns the encoded data.s.<space> prefix
+         for every space the identity belongs to (migration 029), and
+         server_manifest over the multi-prefix unit reads the space
+         subtree — the replication unit's PULL side. *)
+      let space = "fencefans" in
+      let ty = "fencetest" in
+      let path = "data.s." ^ space ^ "." ^ ty ^ ".probeL" in
+      (match S.conn_of store with
+       | Some conn ->
+           ignore
+             (S.exec conn
+                ~params:[ Pgx.Value.of_string space ]
+                "INSERT INTO data_space_members (space, username) \
+                 SELECT $1, 'anonymous' \
+                 WHERE NOT EXISTS (SELECT 1 FROM data_space_members \
+                                   WHERE space = $1 AND username = 'anonymous')");
+           ignore
+             (S.exec conn
+                ~params:
+                  [ Pgx.Value.of_string path; Pgx.Value.of_string ty ]
+                "INSERT INTO tree_nodes (path, kind, type_name, payload, hash, author) \
+                 VALUES ($1::ltree, 'datum', $2, \
+                   jsonb_build_object('v',1,'kind','datum','path',$1::text,\
+                     'type',$2,'body','{\"n\":9}'::jsonb,'author','anonymous',\
+                     'hash','H'), 'H', 'anonymous')")
+       | None -> ());
+      let prefixes = Sync.member_space_prefixes store ~user:"anonymous" in
+      let expected =
+        "data.s." ^ Pricklypear_image_lib.Tree_store.enc_label space
+      in
+      Alcotest.(check bool) "member space prefix present" true
+        (List.mem expected prefixes);
+      let m =
+        Option.value
+          (Sync.server_manifest store ~prefixes:[ expected ])
+          ~default:[]
+      in
+      Alcotest.(check bool) "space row in space manifest" true
+        (List.exists (fun (p, _) -> p = path) m);
+      (match S.conn_of store with
+       | Some conn ->
+           ignore
+             (S.exec conn ~params:[ Pgx.Value.of_string path ]
+                "DELETE FROM tree_nodes WHERE path = $1::ltree");
+           ignore
+             (S.exec conn
+                ~params:
+                  [ Pgx.Value.of_string space
+                  ; Pgx.Value.of_string "anonymous" ]
+                "DELETE FROM data_space_members \
+                 WHERE space = $1 AND username = $2")
+       | None -> ()))
+
 let () =
   Random.self_init ();
   Alcotest.run "sync_db"
@@ -336,4 +427,8 @@ let () =
             `Quick test_commit_theirs_del_and_ours_del;
           Alcotest.test_case "two-way push applies client-only node"
             `Quick test_two_way_push_applies_client_only;
-        ] ) ]
+          Alcotest.test_case "space guard rejects client writes on data.s paths"
+            `Quick test_space_guard_rejects_client_writes;
+          Alcotest.test_case "member spaces join the replication unit"
+            `Quick test_member_space_prefixes_manifest;
+          ] ) ]

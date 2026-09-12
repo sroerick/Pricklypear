@@ -1488,7 +1488,9 @@ let replication_unit (store : Store.t) () : value =
     | Some conn ->
         List.length (Tree_store.list_subtree conn ~prefix ~limit:100000 ())
   in
-  let owner, bname =
+    let spaces = Sync.member_space_prefixes store ~user:user in
+    let space_counts = List.map (fun p -> (p, count p)) spaces in
+    let owner, bname =
     match current_branch_ref store with
     | Some (o, n) -> (o, n)
     | None -> ("", "")
@@ -1505,18 +1507,24 @@ let replication_unit (store : Store.t) () : value =
         , `String (owner ^ "/lens-<device>[-<date>] (forked as empty child)")
         )
       ; ("ancestry", `List (List.map (fun id -> `String id) chain))
-      ; ( "data"
-        , `Assoc
-            [ ("user", `String user_prefix)
-            ; ("user_count", `Int (count user_prefix))
-            ; ("shared", `String "data.shared")
-            ; ("shared_count", `Int (count "data.shared"))
-            ]
-        )
-      ; ( "scope"
-        , `String
-            "data.u.<user>.* + data.shared.* + b.<lens>.* + branch ancestry; path-prefix RLS confinement = replication boundary"
-        )
+        ; ( "data"
+          , `Assoc
+              [ ("user", `String user_prefix)
+              ; ("user_count", `Int (count user_prefix))
+              ; ("shared", `String "data.shared")
+              ; ("shared_count", `Int (count "data.shared"))
+              ; ( "spaces"
+                , `List
+                    (List.map
+                       (fun (p, c) ->
+                         `Assoc [ ("prefix", `String p); ("count", `Int c) ])
+                       space_counts))
+              ]
+          )
+    ; ( "scope"
+      , `String
+          "data.u.<user>.* + data.shared.* + data.s.<space>.* (member spaces, pull + propose) + b.<lens>.* + branch ancestry; path-prefix RLS confinement = replication boundary"
+      )
       ]
   in
   VStr (Yojson.Safe.to_string manifest)
