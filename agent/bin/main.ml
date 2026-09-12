@@ -34,9 +34,13 @@ let pre_facts =
    sandbox; your commands affect the operator's real system."
 
 let fact_lines =
-  "- tools: read, bash, plus any Nopales plugin tools loaded from \
+  "- tools: read, bash, memory (habitat durable store), plus any Nopales \
+   plugin tools loaded from \
    ~/.config/agent/plugins/*.pp and ./.agent/plugins/*.pp\n\
-   - /code on this binary's web surface is a read-only file browser over cwd\n"
+   - /code on this binary's web surface is a read-only file browser over cwd\n\
+   - memory tool: save durable facts/goals/decisions with action=remember \
+     (short title + content; optional tags \"a,b\"); search with \
+     action=search before saving to avoid duplicate rows\n"
 
 let post_facts =
   "Conduct:\n\
@@ -140,6 +144,16 @@ let () =
   let rt = Runtime.make () in
   Tools.install ~env ~resolve_path:Runtime.resolve_path
     ~register:(fun name run -> Runtime.register_builtin_tool rt name ~run);
+  (* Habitat bridge (borge/agent.borg memory-bridge): mem/* prims on the
+     shared env + the `memory` tool when env credentials exist (no
+     creds -> prims still registered; they fail-soft at call time).
+     Registers in every mode (serve, REPL, pipe). *)
+  Habitat.register ~rt ~env;
+  (match Habitat.creds ~env with
+   | Some _ ->
+       Runtime.register_builtin_tool rt "memory" ~run:(fun args ->
+           Habitat.memory_tool ~env args)
+   | None -> ());
   (* Boot-load the Nopales surface (libs/html + libs/hyper + the chat/code
      route-table handlers) so the HTML surface is Nopales-authored and
      redefinable live (borge/agent.borg surfaces). *)
