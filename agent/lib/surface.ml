@@ -139,7 +139,7 @@ let surface_source = {pp|
       "</form></div>")))
 
 (define (chat/page)
-  (glochid/layout "agent" (chat/body)))
+  (glochid/layout "glochid — agent" (chat/body)))
 (route "/chat" "chat/page")
 
 ;; ---- sessions surface (GET /sessions; borge/agent.borg sessions-persist) ----
@@ -186,7 +186,7 @@ let surface_source = {pp|
     "" (json-parse data)))
 
 (define (sessions/page)
-  (glochid/layout "agent sessions"
+  (glochid/layout "glochid — sessions"
     (string-append
       "<h1><a href=\"/\">agent</a> <span class=\"muted\">— /sessions</span></h1>"
       "<p><a href=\"/new\">+ new session</a></p>"
@@ -213,7 +213,7 @@ let surface_source = {pp|
 ;; (auth.user-llm-keys 5b). Model is a per-surface dial from the
 ;; provider's own /models catalog.
 (define (settings/page)
-  (glochid/layout "agent settings"
+  (glochid/layout "glochid — settings"
     (string-append
       "<h1><a href=\"/\">agent</a> <span class=\"muted\">— /settings</span></h1>"
       "<div class=\"card\"><form method=\"post\" action=\"/settings\">"
@@ -306,7 +306,7 @@ let surface_source = {pp|
     (if (fs/dir? rel)
         (let* ((entries (fs/ls rel))
                (items (json-parse entries)))
-          (glochid/layout "agent code"
+          (glochid/layout "glochid — code"
             (string-append
               "<h1><a href=\"/\">agent</a> <span class=\"muted\">/</span> <a href=\"/code\">code</a></h1>"
               "<p class=\"muted\">" (html-escape rel) "</p>"
@@ -314,7 +314,7 @@ let surface_source = {pp|
               (code/rows items rel)
               "</table>")))
         (let* ((content (fs/read rel)))
-          (glochid/layout "agent code"
+          (glochid/layout "glochid — code"
             (string-append
               "<h1><a href=\"/\">agent</a> <span class=\"muted\">/</span> <a href=\"/code\">code</a></h1>"
               "<p class=\"muted\">" (html-escape rel) "</p>"
@@ -599,7 +599,7 @@ reload keeps the pane). Bad routes fall back to the plain row.")
       (render-html shell)
       (render-html
         (string-append
-          "<!doctype html><html><head><meta charset=utf-8><title>glochid</title>"
+          "<!doctype html><html><head><meta charset=utf-8><title>glochid shell</title>"
           "<style>" glochid/base-css "</style></head><body>"
           shell
           "<script src=\"/assets/htmx.min.js\"></script>"
