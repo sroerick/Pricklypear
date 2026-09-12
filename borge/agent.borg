@@ -366,7 +366,7 @@
     |))))
 
   (subsection filmstrip-shell
-   (doc "The glochid shell IS a filmstrip (filmstrip.borg, working on the agent host): a Miller-column cascade strip over the agent's OWN surfaces above an niri-style content strip of ordinary route panes. Same seam as the habitat shell — Nopales fragments on the agent route table — with two host seams swapped: the workspace row persists to a LOCAL file (fs prims), and the cascade browse is defined by the agent (chat/code/sessions/settings/memory), not by todo/notes/calendar.")
+   (doc "The glochid shell IS a filmstrip (filmstrip.borg, working on the agent host): a Miller-column cascade strip over the agent's OWN surfaces above an niri-style content strip of ordinary route panes — with a persisted AXIS toggle (⇅ stack): horizontal film row (default) or vertical full-width pane stack for small screens. Same seam as the habitat shell — Nopales fragments on the agent route table — with two host seams swapped: the workspace row persists to a LOCAL file (fs prims), and the cascade browse is defined by the agent (chat/code/sessions/settings/memory), not by todo/notes/calendar.")
    (status implemented)
    (implements agent/lib/surface.ml agent/lib/http_ui.ml libs/filmstrip/lib.pp libs/css/lib.pp)
    (verify
@@ -374,7 +374,8 @@
     (smoke "launcher open /code -> pane appears with the dispatched code fragment + .focused; workspace round-trips through .agent/workspace.json on reload")
     (smoke "cascade: code -> dir walks fs/ls columns; a file leaf opens-or-focuses the /code?path pane")
     (smoke "alt+arrow focus POSTs answer OOB class swaps; close answers OOB delete + focus hand-off")
-    (smoke "POST /filmstrip/* dispatch through the route-table POST fallback; hx-vals form params reach request-param"))
+    (smoke "POST /filmstrip/* dispatch through the route-table POST fallback; hx-vals form params reach request-param")
+    (smoke "POST /filmstrip/orient toggles the persisted axis; OOB sentinel+button swap keeps live pane DOM; reload renders the stored axis; width presets become height presets (CSS flex-direction flip)"))
    (details
     (doc (|
          HOST SEAMS (what differs from the habitat shell:
@@ -427,6 +428,17 @@
          catalog lacks the flat multi-key form). Filmstrip make-note
          dialect gotchas apply (let* single-body; exact-match routes;
          cons-pair counting for length).
+
+         AXIS TOGGLE (v addition, 2026-09-11): POST /filmstrip/orient
+         flips the ws row's \"axis\" field (row=horizontal film, col=
+         vertical full-width stack — width presets become height presets
+         purely via CSS flex-direction, no new geometry code). The
+         response is TWO OOB swaps — the #fs-axis sentinel div and the
+         toggle button — so live pane DOM survives; the selector side is
+         CSS :has(#fs-axis.col) on #fs-shell. save-all is redefined in
+         the glochid layer to carry the axis field through (the lib's
+         version writes only cascade/content/focus). The lib's
+         no-<script> rule holds: :has() is CSS, not JS.
     |))))
  (* agent note (|2026-09-11 MAKE (filmstrip-shell) DONE: the filmstrip lib boots as glochid's shell. Mechanism: libs/css + libs/filmstrip embedded via the shared embed rules (new dune rule strips the pp-sync (package …) header the image intercepts but the agent's bare evaluator does not), then the glochid layer (glochid_source in surface.ml) loads BEFORE the agent surface and redefines the two host seams: ws-node/ws-save over fs prims into .agent/workspace.json (fs/write now mkdirs parents), and filmstrip/apps + filmstrip/browse over the agent's own surfaces with code as a FILESYSTEM cascade (fs/ls: dir -> dir -> file leaves opening /code?path= panes). http_ui threads HX-Request into the route-table context and falls unknown POST paths through to the route table (form body parsed into params; request-param is a Nopales shim over query-param). GET / is the shell (GET /filmstrip same, GET ?session= resumes as a chat fragment pane, ?open= is the launcher GET twin); GET /chat is the old page; all pages pane-aware via glochid/layout branching on hx-request?. GOTCHA FOUND LIVE: nested route/dispatch (filmstrip/pane-content inside the shell render) rebinds the request context, so hx-request? must be captured BEFORE opening panes (glochid/shell does). VERIFY: dune build @all; agent_test 20/20 green; scripts/smoke_agent_surface.sh 32/32 PASS (9 new filmstrip checks incl. OOB append pane, fragment-mode /, workspace round-trip, focus swap, close OOB delete, cascade walk, reload); chromium screenshot verified strip layout + two panes dispatched live; borge balance+parse clean; drift NONE (pre-existing baseline).|) *)
 

@@ -50,6 +50,13 @@ let surface_source = {pp|
     ".card input,.card select{width:100%;padding:.5rem;margin-top:.25rem}"
     "button{background:#2a6fdb;color:#fff;border:0;border-radius:6px;padding:.5rem 1rem;cursor:pointer}"
     ".fs-shell{height:calc(100vh - 2rem)}"
+    ".fs-topline{display:flex;gap:.75rem;align-items:center;flex:0 0 auto;margin:0}"
+    ".fs-sh-axis{display:none}"
+    ;; vertical axis: full-width panes stacked (flex-direction flip only —
+    ;; the same flex-basis presets become heights; cascade compacts)
+    ".fs-shell:has(#fs-axis.col) .fs-cascade{flex:0 0 14vh;min-height:5rem}"
+    ".fs-shell:has(#fs-axis.col) .fs-content{flex-direction:column;overflow-y:auto;overflow-x:hidden}"
+    ".fs-shell:has(#fs-axis.col) .fs-pane{min-width:0;width:100%;min-height:6rem}"
     ".bubble{background:#1b1f2a;border-radius:6px;padding:.5rem .75rem;margin:.5rem 0;white-space:pre-wrap}"
     ".bubble.user{color:#9ece6a}"
     ".bubble.llm{color:#c0caf5}.bubble.repl{color:#bb9af7}"
@@ -379,6 +386,35 @@ uses tree/get + node-path; glochid rides the local fs (HOST SEAM 1).")
     (seq (fs/write glochid/ws-file fields) fields))
   "Persist workspace fields to .agent/workspace.json (HOST SEAM 1).")
 
+;; ---- 2b. AXIS TOGGLE (row = horizontal film, col = vertical stack) ----
+;; The lib's save-all writes only cascade/content/focus; the glochid
+;; version carries the axis field through (the pane width presets stay
+;; the same three values — vertical mode just re-reads them as heights
+;; via the CSS flex-direction flip: .fs-shell:has(#fs-axis.col)).
+(define glochid/axis
+  (lambda ()
+    (let
+      ((v (dict-get (filmstrip/ws-fields) "axis")))
+      (if (null? v) "row" (as-str v))))
+  "Persisted shell axis from the ws row; \"row\" when unset.")
+
+(define filmstrip/save-all
+  (lambda (cascade panes focus)
+    (filmstrip/ws-save
+      (dict-set*
+        "{}"
+        (list
+          "cascade"
+          (json-emit (list/map (lambda (c) c) cascade))
+          "content"
+          (filmstrip/panes-emit panes)
+          "focus"
+          (string-append "content:" (as-str focus))
+          "axis"
+          (glochid/axis)))))
+  "Write all workspace fields + the axis in one row upsert (glochid:
+  the lib's save-all would drop the axis field).")
+
 ;; ---- 2. THE CASCADE IS THE AGENT'S ----
 (define glochid/apps
   (lambda ()
@@ -457,7 +493,70 @@ surfaces; deeper columns come from glochid/pkg-browse.")
 ;; ---- 3. THE SHELL PAGE (GET / and GET /filmstrip) ----
 ;; ?session=ID resumes as a chat fragment pane (/chat?session=ID — the
 ;; sessions table's view link and /resume land HERE); ?open=ROUTE is the
-;; GET twin of the launcher POST (open-or-focus through the same defs). 
+;; GET twin of the launcher POST (open-or-focus through the same defs).
+;; The shell body is glochid's own assemble of the filmstrip parts
+;; (instead of filmstrip/shell-html) so the AXIS toggle rides along: an
+;; inert #fs-axis sentinel + a toggle button beside the launcher.
+(define glochid/axis-btn
+  (lambda (axis)
+    (html/tag
+      "button"
+      (html/attrs
+        (list
+          (html/attr "id" "fs-axis-btn")
+          (html/attr "class" "fs-btn")
+          (html/attr "title" "toggle horizontal / vertical pane strip (persisted)")
+          (html/attr "hx-post" "/filmstrip/orient")
+          (html/attr "hx-target" "#fs-sink")
+          (html/attr "hx-swap" "innerHTML")))
+      (html/text (if (string-eq axis "col") "⇆ strip" "⇅ stack"))))
+  "Axis toggle beside the launcher: stack = vertical full-width panes,
+strip = the horizontal film row. OOB-swappable (the id carries it).")
+
+(define glochid/axis-sentinel
+  (lambda (axis ?oob)
+    (html/tag
+      "div"
+      (html/attrs
+        (append
+          (list
+            (html/attr "id" "fs-axis")
+            (html/attr "class" (string-append "fs-sh-axis " axis)))
+          (if ?oob
+              (list (html/attr "hx-swap-oob" "outerHTML:#fs-axis"))
+              (list))))
+      ""))
+  "Inert axis sentinel; CSS :has(#fs-axis.col) flips the strip layout.
+?oob true renders it as an OOB outerHTML swap (the orient response).")
+
+(define glochid/orient
+  (lambda ()
+    (let*
+      ((next (if (string-eq (glochid/axis) "col") "row" "col")))
+      (seq
+        (filmstrip/ws-save
+          (dict-set* (filmstrip/ws-fields) (list "axis" next)))
+        (render-html
+          (html/join
+            (list
+              (filmstrip/oob-msg "")
+              (glochid/axis-sentinel next #t)
+              (html/tag
+                "button"
+                (html/attrs
+                  (list
+                    (html/attr "id" "fs-axis-btn")
+                    (html/attr "class" "fs-btn")
+                    (html/attr "title" "toggle horizontal / vertical pane strip (persisted)")
+                    (html/attr "hx-post" "/filmstrip/orient")
+                    (html/attr "hx-target" "#fs-sink")
+                    (html/attr "hx-swap" "innerHTML")
+                    (html/attr "hx-swap-oob" "outerHTML:#fs-axis-btn")))
+                (html/text (if (string-eq next "col") "⇆ strip" "⇅ stack")))))))))
+  "POST /filmstrip/orient: flip + persist the shell axis; two OOB swaps
+(sentinel + button) keep every live pane DOM untouched — the layout
+flip is CSS-only on the client.")
+
 (define glochid/shell-requested
   (lambda ()
     (let
@@ -513,6 +612,48 @@ renders the fragment only — the shell itself can be windowed. frag is
 captured by the CALLER before pane dispatch runs: nested route/dispatch
 rebinds the request context, so hx-request? must be read first.")
 
+(define glochid/shell-inner
+  (lambda (cascade panes focus)
+    (html/join
+      (list
+        (html/tag "style" "" (css/render (filmstrip/css)))
+        (html/tag
+          "div"
+          (html/attrs
+            (list
+              (html/attr "class" "fs-shell")
+              (html/attr "id" "fs-shell")))
+          (html/join
+            (list
+              (filmstrip/cascade-html cascade)
+              (html/tag
+                "div"
+                (html/attr "class" "fs-topline")
+                (html/join
+                  (list
+                    (filmstrip/launcher-html)
+                    (glochid/axis-btn (glochid/axis)))))
+              (html/tag
+                "div"
+                (html/attrs
+                  (list
+                    (html/attr "id" "fs-content")
+                    (html/attr "class" "fs-content")))
+                (html/join (filmstrip/panes-html panes focus)))
+              (filmstrip/key-sentinels)
+              (html/tag
+                "div"
+                (html/attrs
+                  (list
+                    (html/attr "id" "fs-sink")
+                    (html/attr "class" "fs-sink")))
+                "")
+              (glochid/axis-sentinel (glochid/axis) #f)))))))
+  "The shell inner (filmstrip/shell-html's parts + the axis toggle):
+style + cascade strip over launcher+toggle + content strip, key
+sentinels, OOB sink, axis sentinel. Zero scripts (CSS :has flips the
+layout from the sentinel's class).")
+
 (define glochid/shell
   (lambda ()
     (let*
@@ -520,8 +661,8 @@ rebinds the request context, so hx-request? must be read first.")
         (row (glochid/shell-row)))
       (glochid/shell-doc
         frag
-        (filmstrip/shell-html (nth row 0) (nth row 1) (nth row 2)))))
-  "GET / and /filmstrip: the glochid shell. filmstrip/page's body with
+        (glochid/shell-inner (nth row 0) (nth row 1) (nth row 2)))))
+  "GET / and /filmstrip: the glochid shell. filmstrip's parts under
 glochid chrome; zero JS beyond the vendored htmx assets.")
 
 ;; ---- shell routes ----
@@ -533,6 +674,7 @@ glochid chrome; zero JS beyond the vendored htmx assets.")
 (route "/filmstrip/focus" "filmstrip/focus")
 (route "/filmstrip/move" "filmstrip/move")
 (route "/filmstrip/width" "filmstrip/width")
+(route "/filmstrip/orient" "glochid/orient")
 |pp}
 
 (** Boot-load the embedded Nopales packages + this surface into the

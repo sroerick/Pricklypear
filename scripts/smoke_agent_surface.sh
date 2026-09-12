@@ -115,6 +115,11 @@ RELOAD=$(curl -sS -m 5 "$URL/")
 echo "$RELOAD" | grep -q 'fs-pane'                            ; check "workspace round-trips on reload" $?
 CLOSE=$(curl -sS -m 5 -X POST "$URL/filmstrip/close" -d "id=$PANE_ID")
 echo "$CLOSE" | grep -q "delete:#fs-pane-$PANE_ID"            ; check "close answers OOB pane delete" $?
+ORIENT=$(curl -sS -m 5 -X POST "$URL/filmstrip/orient")
+echo "$ORIENT" | grep -q 'id="fs-axis" class="fs-sh-axis col"' ; check "orient toggles persisted axis (OOB sentinel col)" $?
+echo "$ORIENT" | grep -q 'hx-swap-oob="outerHTML:#fs-axis-btn"' ; check "orient OOB-swaps the toggle button" $?
+grep -q '"axis":"col"' "$WS"                                  ; check "axis persisted to the workspace row" $?
+curl -sS -m 5 -X POST "$URL/filmstrip/orient" >/dev/null      ; check "orient toggles back (row default)" $?
 rm -f "$WS"
 
 if [ "$fails" = 0 ]; then echo "PASS agent surface smoke"; exit 0
