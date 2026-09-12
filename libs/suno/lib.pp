@@ -13,14 +13,16 @@
 ;; html/*, html/page, list/*, map, filter, foldl.
 ;;
 ;; CONFIG: one data row of type suno-config (fields dict, via rows):
-;;   api_key       sunoapi.org bearer key (API Key Management page)
+;;   api_key       bearer key from your gateway's API-key page
+;;   base_url      gateway base (default "" = https://api.sunoapi.org;
+;;                 e.g. "https://api.kie.ai" — same endpoint shape)
 ;;   callback_url  optional public callback URL (""). When blank the
 ;;                 lib relies on record-info polling only. The OpenAPI
 ;;                 marks callBackUrl required; if the gateway rejects a
 ;;                 generate without it, set this field to a public URL.
 ;;   model         default model (e.g. "V4_5ALL")
 ;; Create it (admin; type is declared below at load):
-;;   (create 'suno-config "{\"api_key\":\"<key>\",\"callback_url\":\"\",\"model\":\"V4_5ALL\"}")
+;;   (create 'suno-config "{\"api_key\":\"<key>\",\"base_url\":\"\",\"callback_url\":\"\",\"model\":\"V4_5ALL\"}")
 ;;
 ;; DATA: suno-task rows record submissions:
 ;;   task_id title style model instrumental prompt status tracks created
@@ -58,7 +60,7 @@
 
 ;; ---- types ----
 
-(deftype 'suno-config 'api_key 'callback_url 'model)
+(deftype 'suno-config 'api_key 'base_url 'callback_url 'model)
 (deftype 'suno-task 'task_id 'title 'style 'model 'instrumental 'prompt 'status 'tracks 'created)
 
 ;; ---- small helpers ----
@@ -82,8 +84,12 @@
           (as-str v)))))
 
 (define suno/base
-  (lambda () "Gateway base url, no trailing slash."
-    "https://api.sunoapi.org"))
+  (lambda ()
+    "Gateway base url from config base_url; empty = sunoapi.org.
+Compatible gateways (same /api/v1/generate + record-info shape):
+https://api.kie.ai."
+    (suno/nonblank (dict-get (suno/config) "base_url")
+                   "https://api.sunoapi.org")))
 
 ;; ---- config ----
 
