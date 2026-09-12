@@ -327,20 +327,49 @@ let save_base (store : Store.t) ~(user_id : string) ~(lens : string)
    SERVER-SIDE HARNESS (DB-backed)
    ================================================================== *)
 
-(** Read the server's (path, hash) manifest for the subtree under
-    [prefix] (one-tree path-prefix RLS confinement = the replication
-    boundary; the caller passes the replication-unit prefix). None when
-    there is no live connection. *)
-let server_manifest (store : Store.t) ~(prefix : string) : manifest option =
+(** Member-space replication prefixes for one identity (borge/local-first
+    .borg replication-units, data.s.<space>.* — branching.shared-data-spaces
+    membership from migration 029): encoded data.s.<space> prefixes for every
+    space the user is a member of, per the same authorized-reads argument as
+    a member space's read rights. Empty without a live connection. *)
+let member_space_prefixes (store : Store.t) ~(user : string) : string list =
+  match Store.conn_of store with
+  | None -> []
+  | Some conn ->
+      let rows =
+        Store_db.exec conn
+          ~params:[ Pgx.Value.of_string user ]
+          "SELECT space FROM data_space_members WHERE username = $1 ORDER BY space"
+      in
+      List.filter_map
+        (function
+          | [ s ] -> (
+              match Pgx.Value.to_string s with
+              | Some sp when sp <> "" ->
+                  Some ("data.s." ^ Tree_store.enc_label sp)
+              | _ -> None)
+          | _ -> None)
+        rows
+
+(** Read the server's (path, hash) manifest for the subtrees under
+    [prefixes] (one-tree path-prefix RLS confinement = the replication
+    boundary; the caller passes the replication-unit prefixes: the user's
+    data.u.<owner> subtree plus their member-space data.s.<space> subtrees —
+    for spaces, PULL + PROPOSE per the data.shared policy, never lens-writes).
+    None when there is no live connection. *)
+let server_manifest (store : Store.t) ~(prefixes : string list) :
+    manifest option =
   match Store.conn_of store with
   | None -> None
   | Some conn ->
       let rows =
-        Store_db.exec conn
-          ~params:
-            [ Pgx.Value.of_string prefix ]
-          "SELECT path::text, hash FROM tree_nodes \
-           WHERE path <@ $1::ltree ORDER BY path::text ASC"
+        List.concat_map
+          (fun prefix ->
+            Store_db.exec conn
+              ~params:[ Pgx.Value.of_string prefix ]
+              "SELECT path::text, hash FROM tree_nodes \
+               WHERE path <@ $1::ltree ORDER BY path::text ASC")
+          prefixes
       in
       Some
         (List.filter_map
@@ -526,6 +555,16 @@ type commit_report = {
                                     converging to the server copy (the obituary rule) *)
 }
 
+(** True for a shared-space data path (data.s.<space>.<type>.<id>,
+    migration 029). Space subtrees are NEVER in a lens's write scope
+    (borge/local-first.borg sync, lines "SPACE SUBTREES ... INHERIT THE
+    data.shared POLICY VERBATIM"): the lens pulls them and the server
+    stays sole write authority, so any client-driven apply/delete of a
+    space path is rejected here and surfaced via the failed list. *)
+let is_space_path (p : string) : bool =
+  let pre = "data.s." in
+  String.length p >= String.length pre && String.sub p 0 (String.length pre) = pre
+
 let commit (store : Store.t)
     ~(client_bodies : (string * Yojson.Safe.t) list)
     (plans : plan list) : commit_report =
@@ -536,9 +575,20 @@ let commit (store : Store.t)
            match outcome with Conflict (p, _, _, _) -> Some p | _ -> None)
          plans)
   in
+  (* space guard: reject every client-driven write outcome on a space
+     path (Theirs_add/Theirs_mod/Theirs_del + LWW-apply on Conflict) —
+     they land in [failed] so the client is told to drop the local copy
+     and keep the server's. Ours_del passes through: a server-side
+     space deletion is the authority speaking, and must mirror. *)
   List.fold_left
     (fun r { path; outcome } ->
       match outcome with
+      | Theirs_add | Theirs_mod when is_space_path path ->
+          { r with failed = path :: r.failed }
+      | Theirs_del when is_space_path path ->
+          { r with failed = path :: r.failed }
+      | Conflict (p, _, _, _) when is_space_path p ->
+          { r with failed = p :: r.failed }
       | Theirs_add | Theirs_mod ->
           (match List.assoc_opt path client_bodies with
            | Some env ->

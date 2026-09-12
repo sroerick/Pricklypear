@@ -101,6 +101,23 @@ let test_chunk_exact_one () =
    | [ [ _ ] ] -> ()
    | _ -> Alcotest.fail "an oversized single body still travels (own chunk)")
 
+(* ------ the space scope: PULL + PROPOSE, never client-pushed ------ *)
+
+let test_pushable_paths_drop_space_rows () =
+  (* space rows (the data.s prefix family) join the manifest for pulls and
+     the base, but NEVER travel in a client push — the server is sole
+     write authority for spaces (borge/local-first.borg sync, SPACE
+     SUBTREES subsection) *)
+  let m =
+    [ ("data.u." ^ "anon5.testty.1", "h1")
+    ; ("data.s.cactus5.memty.9", "h2")
+    ; ("data.shared.seedty.4", "h3") ]
+  in
+  Alcotest.(check (list (pair string string)))
+    "space rows dropped, everything else kept"
+    [ ("data.u." ^ "anon5.testty.1", "h1"); ("data.shared.seedty.4", "h3") ]
+    (pushable_paths m)
+
 let () =
   let open Alcotest in
   run "sync_client"
@@ -122,5 +139,8 @@ let () =
           ; test_case "unstamped local write travels" `Quick
               test_locally_written_unstamped_travel
           ; test_case "server-side delete stays quiet" `Quick
-              test_server_side_delete_stays_quiet
-        ] ) ]
+                test_server_side_delete_stays_quiet
+          ] )
+    ; ( "pushable_paths"
+      , [ test_case "space rows are dropped, others kept" `Quick
+              test_pushable_paths_drop_space_rows ] ) ]

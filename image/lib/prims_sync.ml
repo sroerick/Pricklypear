@@ -71,9 +71,16 @@ let register (t : t) (tbl : Primitives.t) : unit =
         if List.length m = List.length pairs then Some m else None
     | _ -> None
   in
-  let sync_user_prefix () =
+  (* replication-unit prefixes (borge/local-first.borg replication-units,
+     data.s.<space>.* PLANNED component): the caller's data.u subtree plus
+     every member-space data.s.<space> subtree under the data.shared PULL +
+     PROPOSE policy — spaces are never in the lens's write scope, so these
+     prefixes drive the PULL side; client-driven space writes are rejected
+     in Sync.commit. *)
+  let sync_unit_prefixes () =
     let uname = actor () in
-    "data.u." ^ Tree_store.enc_label uname
+    ("data.u." ^ Tree_store.enc_label uname)
+    :: Sync.member_space_prefixes t.store ~user:uname
   in
   register_crud "sync/plan"
     (fun args ->
@@ -82,8 +89,8 @@ let register (t : t) (tbl : Primitives.t) : unit =
           (* three-way: client manifest + base (last-synced) manifest *)
           (match parse_manifest cm, parse_manifest b with
            | Some c, Some base ->
-               let prefix = sync_user_prefix () in
-               (match Sync.server_manifest t.store ~prefix with
+               let prefixes = sync_unit_prefixes () in
+               (match Sync.server_manifest t.store ~prefixes with
                 | None -> ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("sync/plan", "no DB", "failed")))))
                 | Some server ->
                     let plans = Sync.plan_of base server c in
@@ -93,8 +100,8 @@ let register (t : t) (tbl : Primitives.t) : unit =
           (* two-way classify: client manifest vs server, no base *)
           (match parse_manifest cm with
            | Some c ->
-               let prefix = sync_user_prefix () in
-               (match Sync.server_manifest t.store ~prefix with
+               let prefixes = sync_unit_prefixes () in
+               (match Sync.server_manifest t.store ~prefixes with
                 | None -> ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("sync/plan", "no DB", "failed")))))
                 | Some server ->
                     let r = Sync.classify server c in
@@ -219,8 +226,8 @@ let register (t : t) (tbl : Primitives.t) : unit =
       | [ cm; bodies ] ->
           (match parse_manifest cm, bodies with
            | Some c, _ ->
-               let prefix = sync_user_prefix () in
-               (match Sync.server_manifest t.store ~prefix with
+               let prefixes = sync_unit_prefixes () in
+               (match Sync.server_manifest t.store ~prefixes with
                 | None ->
                     ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("sync/push", "no DB", "failed")))))
                 | Some server ->
@@ -285,8 +292,8 @@ let register (t : t) (tbl : Primitives.t) : unit =
       | [ cm; bodies; base ] ->
           (match parse_manifest cm, bodies, parse_manifest base with
            | Some c, _, Some base ->
-               let prefix = sync_user_prefix () in
-               (match Sync.server_manifest t.store ~prefix with
+               let prefixes = sync_unit_prefixes () in
+               (match Sync.server_manifest t.store ~prefixes with
                 | None ->
                     ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("sync/push", "no DB", "failed")))))
                 | Some server ->
@@ -309,7 +316,7 @@ let register (t : t) (tbl : Primitives.t) : unit =
                        hold — or will, once the client mirrors the
                        deletions and pulls). *)
                     let merged =
-                      match Sync.server_manifest t.store ~prefix with
+                      match Sync.server_manifest t.store ~prefixes with
                       | Some m -> m
                       | None -> []
                     in
@@ -470,8 +477,8 @@ let register (t : t) (tbl : Primitives.t) : unit =
   let delta_theirs ~(lens : string) ~(delta : Sync.manifest)
       ~(deleted : string list) =
     let _, base, _, _ = base_or_raise ~prim:"sync" ~lens in
-    let prefix = sync_user_prefix () in
-    match Sync.server_manifest t.store ~prefix with
+    let prefixes = sync_unit_prefixes () in
+    match Sync.server_manifest t.store ~prefixes with
     | None ->
         ((raise
             (Pricklypear_lisp.Ast.Interp_error
@@ -503,9 +510,9 @@ let register (t : t) (tbl : Primitives.t) : unit =
           let deleted = parse_path_list deleted in
           let _, base, _, base_gen =
             base_or_raise ~prim:"sync/plan2" ~lens in
-          let prefix = sync_user_prefix () in
+          let prefixes = sync_unit_prefixes () in
           let server =
-            match Sync.server_manifest t.store ~prefix with
+            match Sync.server_manifest t.store ~prefixes with
             | Some sv -> sv
             | None ->
                 ((raise
@@ -640,9 +647,9 @@ let register (t : t) (tbl : Primitives.t) : unit =
       match args with
       | [ Pricklypear_lisp.Ast.VStr lens ] ->
           let user_id = sync_user_id () in
-          let prefix = sync_user_prefix () in
+          let prefixes = sync_unit_prefixes () in
           let merged =
-            match Sync.server_manifest t.store ~prefix with
+            match Sync.server_manifest t.store ~prefixes with
             | Some m -> m
             | None ->
                 ((raise

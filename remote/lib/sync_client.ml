@@ -81,10 +81,21 @@ let push_paths ~(base : (string * string) list)
         | Some bh -> bh <> h)
       manifest
 
+let is_space_path (p : string) : bool =
+  let pre = "data.s." in
+  String.length p >= String.length pre && String.sub p 0 (String.length pre) = pre
+
 (** The data replication unit this client syncs: data.u.<owner>.* (the
-    user's own rows). Code-lens sync is deliberately NOT here — it is
-    the branch-pointer move (promote/merge), server-mediated. Exported:
-    the pull path (remote/bin main) records the same filter as the
+    user's own rows) plus member-space data.s.<space>.* rows living in the
+    lens substrate (borge/local-first.borg replication-units — the PLANNED
+    data.s.<space> component lands here). Space paths join the manifest and
+    the recorded base so pulls and mirror-deletions flow, but they NEVER
+    travel in a client push: spaces are PULL + PROPOSE, server-authoritative
+    (the server rejects any client-driven space write in Sync.commit), and
+    a locally-changed space row is force-pulled each round, superseding the
+    local copy with the surfacing below. Code-lens sync is deliberately NOT
+    here — it is the branch-pointer move (promote/merge), server-mediated.
+    Exported: the pull path (remote/bin main) records the same filter as the
     first round's BASE — a batched --lens-pull-data seed IS a
     last-synced state (server hashes verbatim), so the first round
     must not ship every envelope again (nginx 413 at ~1MB). *)
@@ -93,7 +104,15 @@ let data_manifest ~(lens : Lens_store.lens) : (string * string) list =
   let plen = String.length user_prefix in
   Lens_store.node_manifest ~lens
   |> List.filter (fun (p, _) ->
-         String.length p >= plen && String.sub p 0 plen = user_prefix)
+         (String.length p >= plen && String.sub p 0 plen = user_prefix)
+         || is_space_path p)
+
+(** The pushable half of the manifest: everything except server-
+    authoritative space paths (the data.s prefix family). The server rejects
+    those regardless (Sync.commit space guard); filtering them client-side
+    keeps quiet rounds quiet. Pure — unit-tested in sync_client_test.ml. *)
+let pushable_paths (m : (string * string) list) : (string * string) list =
+  List.filter (fun (p, _) -> not (is_space_path p)) m
 
 (** The delta exchange raises these when the image can't run it —
     the caller falls back to the v1 full exchange. *)
@@ -201,7 +220,18 @@ let run_delta_round ~(transport : transport) ~(lens : Lens_store.lens)
     Printf.ksprintf (fun s -> prerr_endline ("[sync] " ^ s)) fmt
   in
   let manifest = data_manifest ~lens in
-  let changes, deletes = delta_of ~base manifest in
+  let all_changes, all_deletes = delta_of ~base manifest in
+  (* space paths never travel in a client push (PULL + PROPOSE,
+     server-authoritative — the server rejects them regardless); a
+     locally-changed or locally-deleted space row is force-pulled below
+     instead, which supersedes the local copy and surfaces the loss. *)
+  let changes = pushable_paths all_changes in
+  let deletes =
+    List.filter (fun p -> not (is_space_path p)) all_deletes in
+  let space_changes =
+    List.filter (fun (p, _) -> is_space_path p) all_changes
+    @ List.map (fun p -> (p, "DELETED")) (List.filter is_space_path all_deletes)
+  in
   let vstr_list ps = Ast.VList (List.map (fun p -> Ast.VStr p) ps) in
   let manifest_v m =
     Ast.VList
@@ -344,13 +374,15 @@ let run_delta_round ~(transport : transport) ~(lens : Lens_store.lens)
        (* 4. pulls — server-only list + every pushed path (convergence:
           the server envelope stamps the canonical hash; for an
           LWW-kept path it also replaces the stale local copy). *)
-       let pull_set =
-         let t = Hashtbl.create (List.length pull_paths + List.length changes + 1) in
-         List.iter (fun p -> Hashtbl.replace t p ()) pull_paths;
-         List.iter (fun p -> Hashtbl.replace t p ()) !kept_all;
-         List.iter (fun (p, _) -> Hashtbl.replace t p ()) changes;
-         Hashtbl.fold (fun p () acc -> p :: acc) t []
-       in
+        let pull_set =
+          let t = Hashtbl.create (List.length pull_paths + List.length changes + 1) in
+          List.iter (fun p -> Hashtbl.replace t p ()) pull_paths;
+          List.iter (fun p -> Hashtbl.replace t p ()) !kept_all;
+          List.iter (fun (p, _) -> Hashtbl.replace t p ()) changes;
+          (* force-pull locally-changed space rows: the server copy wins *)
+          List.iter (fun p -> Hashtbl.replace t p ()) (List.map fst space_changes);
+          Hashtbl.fold (fun p () acc -> p :: acc) t []
+        in
        let pull_paths = List.sort String.compare pull_set in
        let batch_n = 100 in
        let rec batches l =
@@ -382,7 +414,31 @@ let run_delta_round ~(transport : transport) ~(lens : Lens_store.lens)
                log "pull batch failed: %s" (Printexc.to_string e);
                ok := false)
          (batches pull_paths);
-       diverge_total := List.length diverge;
+        diverge_total := List.length diverge;
+        (* space paths surface locally: the server copy is authority. A
+           locally-changed space row was force-pulled above (the edit is
+           superseded — the obituary line says so); a local-only space row
+           the server does not hold just sits, never replicated outward. *)
+        List.iter
+          (fun (p, h) ->
+            let env_hash =
+              match Lens_store.get ~lens p with
+              | None -> ""
+              | Some env -> (
+                  match Yojson.Safe.from_string env with
+                  | `Assoc kv -> (
+                      match List.assoc_opt "hash" kv with
+                      | Some (`String s) -> s
+                      | _ -> "")
+                  | _ -> "")
+            in
+            if env_hash <> "" && env_hash <> h then
+              log "space %s: local edit superseded — server copy kept \
+(land agent writes on the image, not in the lens)" p
+            else if env_hash = "" then
+              log "space %s: local-only copy kept — server does not hold it \
+(lens space rows are pull-only)" p)
+          space_changes;
        (* 5. commit — the ONLY base advance, and ONLY on a fully-successful
           round: commit2 after a failed pull would advance the stored base
           past rows the client never received (the crash-window hole the
@@ -449,18 +505,20 @@ let run_v1_round_inner ~(transport : transport) ~(lens : Lens_store.lens)
         convergence pull below fetches the server envelope for each
         after the round's merge, so the next round's manifest compares
         real hashes. *)
-     let unstamped = List.filter (fun (_, h) -> h = "") manifest in
+      let unstamped =
+        List.filter (fun (p, h) -> h = "" && not (is_space_path p)) manifest in
      let base = Lens_store.base_manifest ~lens in
      (* bodies only where the base says something changed (push_paths):
         a quiet round POSTs the manifest (~300KB for 2k rows), not every
         envelope (8.6MB → nginx 413). *)
-     let bodies =
-       push_paths ~base manifest
-       |> List.filter_map (fun (p, _) ->
-           match Lens_store.get ~lens p with
-           | Some env -> Some (Ast.VList [ Ast.VStr p; Ast.VStr env ])
-           | None -> None)
-     in
+      let bodies =
+        push_paths ~base manifest
+        |> pushable_paths (* space rows never travel: server-authoritative *)
+        |> List.filter_map (fun (p, _) ->
+            match Lens_store.get ~lens p with
+            | Some env -> Some (Ast.VList [ Ast.VStr p; Ast.VStr env ])
+            | None -> None)
+      in
      let manifest_v =
        Ast.VList
          (List.map
@@ -507,14 +565,25 @@ let run_v1_round_inner ~(transport : transport) ~(lens : Lens_store.lens)
              in
              let server_only = strs "server_only_paths" in
              let pull_paths = strs "pull_paths" in
-             let pulls =
-               (* three-way rounds give an explicit pull list (server-only
-                  + LWW-server-kept convergence); two-way rounds just
-                  server_only_paths. *)
-               if pull_paths = [] then server_only else pull_paths
-             in
-             let client_deletes = strs "client_delete_paths" in
-             let diverge = strs "diverge_paths" in
+               let client_deletes = strs "client_delete_paths" in
+               let diverge = strs "diverge_paths" in
+               let pulls =
+                 (* three-way rounds give an explicit pull list (server-only
+                    + LWW-server-kept convergence); two-way rounds just
+                    server_only_paths. *)
+                 if pull_paths = [] then server_only else pull_paths
+               in
+               (* space rows: the server copy is authority — every locally-held
+                  space path re-pulls (supersedes local edits / refreshes stale
+                  copies; the manifest carries their canonical hashes into the
+                  recorded base). Never pushed: bodies are pushable-paths only. *)
+               let pulls =
+                 pulls
+                 @ (manifest
+                    |> List.filter (fun (p, _) -> is_space_path p)
+                    |> List.map fst
+                    |> List.filter (fun p -> not (List.mem p client_deletes)))
+                 in
              let won = strs "lww_client_won" in
              let kept = strs "lww_server_kept" in
              let gen_str = str "generation" in
