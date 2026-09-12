@@ -258,7 +258,18 @@ let () =
              Http_ui.serve ~env ~sw ~rt ~cfg ~complete ~port:!port
                ~open_browser:!open_browser
                ~persist_sessions:(Option.is_none !mock_script)
-               ~shutdown:shutdown_promise print_endline)
+               ~shutdown:shutdown_promise print_endline;
+             (* Shutdown resolved and serve returned: the process's work
+                is DONE. Exit explicitly — Eio's event-loop teardown can
+                wedge on a leaked backend operation (both the io-uring
+                and posix 1.3 backends: the dying process ends up with
+                one thread parked in io_cqring_wait / poll forever,
+                SIGTERM-ignoring since our own handler owns TERM). All
+                durable state is already on disk (sessions + workspace
+                under .agent/, the pid file removed by the finally
+                above), so the exit is safe and the watcher/accept
+                fibers have nothing left to finish. *)
+             exit 0)
       end
       else if pipe_mode then (
         (* Piped-turn smoke: read ALL of stdin as the prompt, run ONE
