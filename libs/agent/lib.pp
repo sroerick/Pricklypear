@@ -1,22 +1,5 @@
-;; package agent -- native-agent room/wake library (M2 tool loop)
-;; Export from branch agent-prickle/personal (agent-native chapter, tool-loop).
-;; Promotion is HUMAN (promote gate); the operational copy runs on
-;; agent-prickle/personal; system/main carries the seeded copy (reseed
-;; from the deployed release after each ship).
+;; package agent -- exported from live branch system/main
 ;; Sync: scripts/pp_sync.py pull|push
-;; 2026-09-08 repairs (after the open-spaces deploy):
-;;  - cursor-race: the post-success advance used the reply row's own id as
-;;    the new cursor. Messages arriving BETWEEN the wake's snapshot and the
-;;    reply insert sort BEFORE the reply row, so they were skipped forever
-;;    (admin's "one more ping" got no reply; every later tick read
-;;    "lobby: quiet"). The post branch now advances to (agent/last-id all)
-;;    -- the wake-start snapshot -- like every other path: rows already in
-;;    the prompt are skipped, anything landing during processing is picked
-;;    up next wake (the bot's own reply is filtered by agent/notbot, so no
-;;    self-loop).
-;;  - kernel pair (40ecb07 + the agent-lib ship): nested transactions ride
-;;    the ambient tx (the find-rows wedge), headers-json rejects loudly
-;;    (no silent drops).
 
 (define agent/after
   (lambda
@@ -278,7 +261,9 @@
       (if
         (null? hits)
         (let
-          ((sid (agent-session-new agent/seed)))
+          ((sid
+            (agent-session-new
+              (ai/seed+verse-range agent/seed "Josh" 24 15 15))))
           (let
             ((nid
               (create
@@ -317,7 +302,9 @@
   (lambda
     (room)
     (let
-      ((sid (agent-session-new agent/seed)))
+      ((sid
+        (agent-session-new
+          (ai/seed+verse-range agent/seed "Josh" 24 15 15))))
       (let
         ((nid
           (create
@@ -346,7 +333,7 @@
               sid
               "cursor"
               ""))))))
-  "Create this room's agent-state row (kind=wake, room, sid, cursor) with a fresh tools session.")
+  "Create this room's agent-state row (kind=wake, room, sid, cursor) with a fresh tools session (seed closes with Josh 24:15, as-for-me-and-my-house, via ai/seed+verse-range).")
 
 (define agent/state-scan
   (lambda
