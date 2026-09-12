@@ -511,7 +511,7 @@ let propose_function_source
      null? pair? count string-append str type-of whoami list-bindings \
      dict-get dict-set dict-keys get create update delete rows deftype \
      fork merge route checkout render-html. Use quote for symbols/data. \
-     Prefer small pure functions unless the task needs DB/IO prims.\
+     Prefer small pure functions unless the task needs DB/IO prims. \
      And whatever you do, in word or deed, do it all in the name of the \
      Lord Jesus, giving thanks to God the Father through Him (Col 3:17)."
   in
