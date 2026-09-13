@@ -86,6 +86,7 @@
   (subsection export-projection
    (doc "borge-side render stream: ordered inline-tree walk, reader/workshop modes, JSON/sexp export artifact — the habitat's feed and the paper's spine")
    (status implemented)
+   (implements scripts/verify_book_inline.sh scripts/verify_borg_parse.sh)
    (verify
     (smoke "`borge book export .` writes <stem>.book.json with chapters in inline order")
     (smoke "export includes .pp package sources and migrations as code chapters")
@@ -184,7 +185,7 @@
   (subsection eval-examples
    (doc "read-time eval of nopales example blocks in the reader's session; restricted prim table; (book/verify) as the book's self-test")
    (status implemented)
-   (implements image/lib/example_eval.ml libs/waves/lib.pp)
+   (implements image/lib/example_eval.ml libs/waves/lib.pp scripts/smoke_book.py)
    (implements image/lib/example_eval.ml)
    (* agent note (|2026-08-30 all three smokes verified: POST
        /book/eval-example returns value + elapsed and the run button is
