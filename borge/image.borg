@@ -9,7 +9,7 @@
   
   (subsection boot
    (doc "Single-image boot process: initialize Postgres, load stdlib, start services")
-   (implements image/lib/boot.ml image/lib/loader.ml image/lib/session.ml)
+   (implements image/lib/boot.ml image/lib/loader.ml image/lib/session.ml scripts/measure-boot.sh)
    (status verified)
    (verify
     (build "dune build image")
