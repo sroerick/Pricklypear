@@ -23,6 +23,10 @@ const PORTC = 9025;
 const CHROME = process.env.CHROME || "/usr/bin/chromium";
 const USER_DATA = `/tmp/chrome-agent-cdp-${process.pid}`;
 const MOCK = `/tmp/agent-cdp-mock-${process.pid}.json`;
+// Own agent cwd: a fresh glochid boot renders an EMPTY shell (no bare
+// /chat page anymore), so the smoke seeds its own workspace with one
+// focused /chat pane instead of inheriting the caller's .agent.
+const AGENT_DIR = `/tmp/agent-cdp-cwd-${process.pid}`;
 
 function ok(m) { console.log("OK  ", m); }
 function fail(m) { console.error("FAIL", m); cleanup(); process.exit(1); }
@@ -59,14 +63,21 @@ function cleanup() {
   try { agent?.kill(); } catch (_) {}
   try { chrome?.kill(); } catch (_) {}
   try { fs.rmSync(MOCK, { force: true }); } catch (_) {}
+  try { fs.rmSync(AGENT_DIR, { recursive: true, force: true }); } catch (_) {}
 }
 process.on("exit", cleanup);
 
 if (!fs.existsSync(AGENT)) fail(`${AGENT} missing (run: dune build agent/bin/main.exe)`);
 fs.writeFileSync(MOCK, JSON.stringify([{ text: "cdp smoke reply", calls: [] }]) + "\n");
+fs.mkdirSync(`${AGENT_DIR}/.agent`, { recursive: true });
+fs.writeFileSync(`${AGENT_DIR}/.agent/workspace.json`, JSON.stringify({
+  axis: "col", desktop: 0, focus: "content:0",
+  content: [{ width: "full", route: "/chat", id: "p1", desktop: 0, state: "live" }],
+  cascade: ["/chat"],
+}));
 
 // --- boot agent surface ---
-agent = spawn(AGENT, ["--serve", "--port", "0", "--mock-script", MOCK], { stdio: ["ignore", "pipe", "pipe"] });
+agent = spawn(AGENT, ["--serve", "--port", "0", "--mock-script", MOCK], { stdio: ["ignore", "pipe", "pipe"], cwd: AGENT_DIR });
 let agentUrl = "";
 let buf = "";
 agent.stdout.on("data", (c) => {
