@@ -58,7 +58,17 @@ let seed_package_priority : string list =
   ; "plan"; "chat"; "bookmarks"; "calendar"; "workout"; "flashcards"
   ; "bible"; "dabar"; "bi"; "ref"; "verify" ]
 
-let discover_seed_packages () : string list =
+(** Pure: apply a profile to the full discovery list (spec_town_profile).
+    Canonical priority order is kept for preferred names (std first,
+    css before notes, theme before ui); profile-only extras follow in
+    FILE order, so the profile author controls extra dep order. *)
+let apply_profile ~(profile : string list) : string list =
+  let in_profile n = List.mem n profile in
+  let preferred = List.filter in_profile seed_package_priority in
+  let extras = List.filter (fun n -> not (List.mem n preferred)) profile in
+  preferred @ extras
+
+let full_seed_packages () : string list =
   let preferred = seed_package_priority in
   let root = Loader.libs_dir () in
   let discovered =
@@ -85,6 +95,31 @@ let discover_seed_packages () : string list =
     List.filter (fun n -> not (List.mem n preferred)) discovered
   in
   preferred @ extras
+
+(** Boot seed set. No PP_PROFILE: full discovery, byte-identical to the
+    pre-profile behavior. PP_PROFILE set: the profile file IS the seed
+    set (and the tenant load-library allowlist). A profile that cannot
+    be read or validates to an empty list FAILS CLOSED — nothing is
+    seeded (a public box must never fall back to the full organ set);
+    admin sessions keep load-library and can reseed after a fix. *)
+let discover_seed_packages () : string list =
+  match Profile.packages () with
+  | Error e ->
+      Printf.eprintf
+        "[session] PROFILE FAILURE: %s — seeding NOTHING (fix profiles/ or \
+         unset PP_PROFILE)\n%!"
+        e;
+      []
+  | Ok profile -> (
+      match Profile.name () with
+      | None -> full_seed_packages ()
+      | Some n ->
+          if profile = [] then (
+            Printf.eprintf "[session] PROFILE: %s is empty — seeding \
+                           nothing\n%!"
+              n;
+            [])
+          else apply_profile ~profile)
 
 (** Ensure living agents note exists on system/main after notes seed.
     Idempotent: skip if slug agents already present. *)

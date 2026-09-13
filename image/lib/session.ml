@@ -639,7 +639,7 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value =
     let persist_fn name body_expr doc =
       (* spec_delegation: delegated sessions NEVER persist code -
          define/defmacro bind in-env only (data, never for code). *)
-      if t.delegated then ()
+      if restricted t then ()
       else begin
         (* Opaque-body contract (i-1788671083-c): the store persists the raw
            jsonb body; serialization happens here at the eval boundary. *)
@@ -772,7 +772,7 @@ and handle_package_form (t : t) (args : Pricklypear_lisp.Ast.expr list)
               let () =
                 (* spec_delegation: delegated sessions never write the
                    package registry or bindings stamps (code, not data). *)
-                if t.manifest.username = "anonymous" || t.delegated then ()
+                if t.manifest.username = "anonymous" || restricted t then ()
                 else begin
                  let trace = Sys.getenv_opt "PP_TRACE_LOAD" <> None in
                  let t1 = Unix.gettimeofday () in
@@ -893,7 +893,7 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
   let persist_fn name body_expr doc =
     (* spec_delegation: delegated sessions NEVER persist code -
        define/defmacro bind in-env only. *)
-    if t.delegated then ()
+    if restricted t then ()
     else begin
       (* Opaque-body contract (i-1788671083-c): the store persists the raw
          jsonb body; serialization happens here at the eval boundary. *)
@@ -1007,12 +1007,12 @@ and load_library (t : t) (name : string) : (string, string) result =
   (* spec_delegation: delegated sessions may load SEEDED packages only -
      libs/<pkg> product code that boot seed already put on system/main.
      Anything else would upsert foreign code onto the owner's branch. *)
-  if t.delegated
+  if restricted t
      && not (List.mem name (Boot_seed.discover_seed_packages ()))
   then
     Error
       (Printf.sprintf
-         "load-library: delegated sessions may load seeded packages only \
+         "load-library: delegated or tenant sessions may load seeded packages only \
           (denied: %s)" name)
   else
   let prev = t.eval_state.current_package in
@@ -1113,8 +1113,8 @@ and reseed_package (t : t) (pkg : string) : (string, string) result =
   let pkg = String.trim pkg in
   (* spec_delegation: delegated sessions never reseed (a code write to
      system/main; data, never for code). *)
-  if t.delegated then
-    (Error "reseed-package: denied for delegated sessions")
+  if restricted t then
+    (Error "reseed-package: denied for delegated or tenant sessions")
   else if pkg = "" then (Error "empty package name")
   else if (not t.is_admin)
           && t.manifest.username <> "admin"

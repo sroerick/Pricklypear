@@ -207,7 +207,7 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
              working in-session; nothing outlives the session. *)
           Hashtbl.replace t.routes route_path (handler, visibility);
           let _ =
-            if t.delegated then ()
+            if Session_types.restricted t then ()
             else if t.seed_additive then
             if pass_vis_to_store then
               Store.register_route_if_absent t.store ~route:route_path
