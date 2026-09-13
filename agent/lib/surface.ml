@@ -162,30 +162,53 @@ let surface_source = {pp|
 ;; request whose lawful lifetime is "a whole agent turn".
 ;; hx-config '{"'timeout'":0}' disables htmx's 60s defaultTimeout for a
 ;; request whose lawful lifetime is "a whole agent turn".
+(define (chat/head frag)
+  ;; The 'agent' root anchor is shell-level (it reloads / in place) — a
+  ;; plain <a> inside a fragment is the escape bug class, so fragments
+  ;; get a muted label instead; nav words stay app-links in both modes.
+  (string-append
+    "<h1>"
+    (if frag
+        "<span class=\"muted\">agent</span>"
+        "<a href=\"/\">agent</a>")
+    " <span class=\"muted\">— "
+    (filmstrip/app-link "/code" "/code")
+    " · "
+    (filmstrip/app-link "/sessions" "/sessions")
+    " · "
+    (filmstrip/app-link "/settings" "/settings")
+    " · model: "
+    "<select name=\"model\" hx-post=\"/settings\" hx-trigger=\"change\" hx-swap=\"none\" "
+    "style=\"font-size:.6em\">"
+    (settings/model-options (agent/model) (agent/models))
+    "</select></span></h1>"))
+
 (define (chat/body)
   "Chat surface body — one structure for page AND pane, so the stream's
-#log target works in both (borge/agent.borg filmstrip-shell #4)."
-  (let ((sid (query-param "session")))
+#log target works in both (borge/agent.borg filmstrip-shell #4).
+Fragment-mode (hx-request?) differences: the h1 'agent' anchor and the
+resumed-line +new //sessions anchors are shell-level escapes — a plain
+<a> inside a fragment is the filmstrip bug class, so fragments get
+app-link/button twins (POST /filmstrip/new, open-or-focus /sessions)."
+  (let ((frag (hx-request?))
+        (sid (query-param "session")))
     (string-append
       "<div class=\"chatpage\">"
-      "<h1><a href=\"/\">agent</a> <span class=\"muted\">— "
-      ;; v2 app-links: the nav words POST /filmstrip/open (open-or-focus
-      ;; into a shell pane) instead of anchors that navigate the whole
-      ;; window out of the shell with a full GET.
-      (filmstrip/app-link "/code" "/code")
-      " · "
-      (filmstrip/app-link "/sessions" "/sessions")
-      " · "
-      (filmstrip/app-link "/settings" "/settings")
-      " · model: "
-      "<select name=\"model\" hx-post=\"/settings\" hx-trigger=\"change\" hx-swap=\"none\" "
-      "style=\"font-size:.6em\">"
-      (settings/model-options (agent/model) (agent/models))
-      "</select></span></h1>"
+      (chat/head frag)
       "<div id=\"log\">"
       (if (null? sid)
           "<div class=\"muted\">agent ready.</div>"
-          (string-append "<div class=\"muted\">resumed session " (html-escape sid) " · <a href=\"/new\">+ new</a> · <a href=\"/sessions\">/sessions</a></div>" (chat/bubbles (session/data sid))))
+          (string-append
+            "<div class=\"muted\">resumed session " (html-escape sid) " · "
+            (if frag
+                "<button class=\"fs-applink\" hx-post=\"/filmstrip/new\" hx-target=\"#fs-sink\" hx-swap=\"innerHTML\">+ new</button>"
+                "<a href=\"/new\">+ new</a>")
+            " · "
+            (if frag
+                (filmstrip/app-link "/sessions" "/sessions")
+                "<a href=\"/sessions\">/sessions</a>")
+            "</div>"
+            (chat/bubbles (session/data sid))))
       "</div>"
       "<form id=\"f\" hx-post=\"/chat\" hx-target=\"#log\" hx-swap=\"beforeend\" hx-ext=\"hx-multipart\""
       " hx-config='{\"timeout\":0}' hx-on::before:request=\"this.reset()\">"
@@ -231,20 +254,37 @@ let surface_source = {pp|
             (count (dict-get s "count"))
             (model (dict-get s "model"))
             (preview (dict-get s "preview")))
+        ;; Fragment mode (pane body): view = open-or-focus its chat pane
+        ;; via app-link; resume = POST /filmstrip/resume (act + OOB swaps
+        ;; — the anchor twins navigate the whole window out of the shell).
+        ;; Standalone page keeps the anchor twins (meta-refresh redirect).
         (string-append acc
           "<tr><td class=\"muted\">" (html-escape utc)
           "</td><td>" (html-escape model)
           "</td><td>" (html-escape count)
           "</td><td class=\"muted\">" (html-escape preview)
-          "</td><td><a href=\"/resume?id=" (html-escape id) "\">resume</a>"
-          " \183 <a href=\"/?session=" (html-escape id) "\">view</a></td></tr>")))
+          "</td><td>"
+          (if (hx-request?)
+              (string-append
+                "<button class=\"fs-applink\" hx-post=\"/filmstrip/resume\" "
+                "hx-vals='{\"id\":\"" (html-escape id) "\"}' "
+                "hx-target=\"#fs-sink\" hx-swap=\"innerHTML\">resume</button>"
+                " \183 "
+                (filmstrip/app-link (string-append "/chat?session=" id) "view"))
+              (string-append "<a href=\"/resume?id=" (html-escape id) "\">resume</a>"
+                " \183 <a href=\"/?session=" (html-escape id) "\">view</a>"))
+          "</td></tr>")))
     "" (json-parse data)))
 
 (define (sessions/page)
   (glochid/layout "glochid — sessions"
     (string-append
-      "<h1><a href=\"/\">agent</a> <span class=\"muted\">— /sessions</span></h1>"
-      "<p><a href=\"/new\">+ new session</a></p>"
+      (if (hx-request?)
+          "<h1><span class=\"muted\">/sessions</span></h1>"
+          "<h1><a href=\"/\">agent</a> <span class=\"muted\">— /sessions</span></h1>")
+      (if (hx-request?)
+          "<p><button class=\"fs-applink\" hx-post=\"/filmstrip/new\" hx-target=\"#fs-sink\" hx-swap=\"innerHTML\">+ new session</button></p>"
+          "<p><a href=\"/new\">+ new session</a></p>")
       "<table><tr><th>time</th><th>model</th><th>msgs</th><th>first prompt</th><th></th></tr>"
       (sessions/rows (session/list))
       "</table>"
@@ -355,6 +395,26 @@ let surface_source = {pp|
 ;; fs/read + fs/dir? (agent host prims). query-param "path" selects the
 ;; entry (relative to the agent's cwd); the agent's fs prims refuse ".."
 ;; escapes (sandbox posture).
+;; PANE-LOCAL NAV (filmstrip nav discipline): in fragment mode (pane
+;; body) the rows/issues carry hx-get targeting closest .fs-body, so a
+;; dir walk happens INSIDE the pane instead of navigating the whole
+;; window out of the shell (the app-link twin would open-or-focus a NEW
+;; pane per path — wrong for a tree walk). The standalone page keeps
+;; plain anchors.
+(define (code/link child label)
+  (if (hx-request?)
+      (string-append "<a href=\"/code?path=" (html-escape child)
+        "\" hx-get=\"/code?path=" (html-escape child)
+        "\" hx-target=\"closest .fs-body\" hx-swap=\"innerHTML\">"
+        (html-escape label) "</a>")
+      (string-append "<a href=\"/code?path=" (html-escape child)
+        "\">" (html-escape label) "</a>")))
+
+(define (code/head)
+  (if (hx-request?)
+      "<h1><span class=\"muted\">/code</span></h1>"
+      "<h1><a href=\"/\">agent</a> <span class=\"muted\">/</span> <a href=\"/code\">code</a></h1>"))
+
 (define (code/page)
   (let* ((p (query-param "path"))
          (rel (if (null? p) "" p)))
@@ -363,7 +423,7 @@ let surface_source = {pp|
                (items (json-parse entries)))
           (glochid/layout "glochid — code"
             (string-append
-              "<h1><a href=\"/\">agent</a> <span class=\"muted\">/</span> <a href=\"/code\">code</a></h1>"
+              (code/head)
               "<p class=\"muted\">" (html-escape rel) "</p>"
               "<table><tr><th></th><th>name</th></tr>"
               (code/rows items rel)
@@ -371,7 +431,7 @@ let surface_source = {pp|
         (let* ((content (fs/read rel)))
           (glochid/layout "glochid — code"
             (string-append
-              "<h1><a href=\"/\">agent</a> <span class=\"muted\">/</span> <a href=\"/code\">code</a></h1>"
+              (code/head)
               "<p class=\"muted\">" (html-escape rel) "</p>"
               "<pre>" (html-escape content) "</pre>"))))))
 
@@ -384,8 +444,8 @@ let surface_source = {pp|
              (child (if (string-eq rel "") name (string-append rel "/" name))))
         (string-append acc
           "<tr><td>" kind
-          "</td><td><a href=\"/code?path=" child "\">"
-          (html-escape name) "</a></td></tr>")))
+          "</td><td>" (code/link child name)
+          "</td></tr>")))
     "" items))
 
 (route "/code" "code/page")
@@ -854,6 +914,59 @@ desktop (-1 when the desktop has none — falls back to the first live
 pane anywhere). Not persisted — alt+right heals it for real on the
 next focus step.")
 
+;; ---- 2f. HOST STAMP + fragment twins of the /new /resume redirects ----
+;; open-apply stamps fresh panes through filmstrip/pane-stamp (lib hook,
+;; default identity); glochid's override rides the CURRENT desktop, so an
+;; app-link open on desk>0 is VISIBLE there (closes the window-controlbox-v2
+;; known gap: panes used to land on desk 0, hidden mid-flight). The lib
+;; must not read glochid row fields — same seam discipline as save-all.
+(define filmstrip/pane-stamp
+  (lambda (rec)
+    (dict-set rec "desktop" (as-str (glochid/deskt))))
+  "A fresh pane record with the operator's current desktop.")
+
+;; The sessions table's resume/+new links are shell-level actions wearing
+;; redirect responses (GET /new /resume answer meta-refresh). In fragment
+;; mode those escapes are the plain-<a> bug class; the twins below act and
+;; answer OOB swaps instead. The chat pane picks up the new/resumed
+;; session on its next render (or shows it via open-or-focus).
+(define glochid/new
+  (lambda ()
+    (seq
+      (session/new)
+      (render-html
+        (html/join
+          (list
+            (filmstrip/oob-msg "glochid: new session started")
+            (filmstrip/winbox-oob))))))
+  "POST /filmstrip/new: rotate the transcript; fragment twin of GET /new.")
+
+(define glochid/resume
+  (lambda ()
+    (let*
+      ((sid (request-param "id"))
+        (row (filmstrip/row))
+        (cascade (nth row 0))
+        (panes (nth row 1))
+        (focus (nth row 2))
+        (r (string-append "/chat?session=" (as-str sid)))
+        (res (filmstrip/open-apply panes r))
+        (panes2 (nth res 0))
+        (focus2 (nth res 1))
+        (appended? (nth res 2))
+        (unshelved? (nth res 3)))
+      (seq
+        (session/resume (as-str sid))
+        (filmstrip/save-all cascade panes2 focus2)
+        (render-html
+          (html/join
+            (list
+              (filmstrip/oob-msg "")
+              (if unshelved? (filmstrip/shelf-oob) "")
+              (filmstrip/winbox-oob)
+              (filmstrip/open-response panes2 focus focus2 appended?)))))))
+  "POST /filmstrip/resume: re-point the live session AND open-or-focus\nits /chat?session= pane (fragment twin of GET /resume).")
+
 ;; ---- 3. THE SHELL PAGE (GET / and GET /filmstrip) ----
 ;; ?session=ID resumes as a chat fragment pane (/chat?session=ID — the
 ;; sessions table's view link and /resume land HERE); ?open=ROUTE is the
@@ -1056,6 +1169,8 @@ to pane 0 at render when unset — rail mode always has a main pane.")
 (route "/filmstrip/width" "filmstrip/width")
 (route "/filmstrip/orient" "glochid/orient")
 (route "/filmstrip/desktop" "glochid/desktop-set")
+(route "/filmstrip/new" "glochid/new")
+(route "/filmstrip/resume" "glochid/resume")
 |pp}
 
 (** Boot-load the embedded Nopales packages + this surface into the
