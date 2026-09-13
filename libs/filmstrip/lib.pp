@@ -1243,6 +1243,27 @@
               (html/attrs
                 (list
                   (html/attr "class" "fs-btn")
+                  (html/attr
+                    "title"
+                    (if
+                      (string-eq (filmstrip/pane-region p) "rail")
+                      "return the pane to the main strip"
+                      "pin the pane to the rail (dock; body stays live here)"))
+                  (html/attr "hx-post" "/filmstrip/pin")
+                  (html/attr
+                    "hx-vals"
+                    (string-append "{\"id\":\"" id "\"}"))
+                  (html/attr "hx-target" "#fs-sink")
+                  (html/attr "hx-swap" "innerHTML")))
+              (if
+                (string-eq (filmstrip/pane-region p) "rail")
+                "unpin"
+                "pin"))
+            (html/tag
+              "button"
+              (html/attrs
+                (list
+                  (html/attr "class" "fs-btn")
                   (html/attr "title" "cycle width (third/half/full)")
                   (html/attr "hx-post" "/filmstrip/width")
                   (html/attr
@@ -1264,7 +1285,9 @@
                   (html/attr "hx-target" "#fs-sink")
                   (html/attr "hx-swap" "innerHTML")))
               "close"))))))
-  "Pane title bar: route label + width cycle + close, all htmx POSTs.")
+  "Pane title bar: route label + pin (region flip, v3) + width cycle +
+close, all htmx POSTs. The pin word labels by the pane's CURRENT
+region (pin/unpin).")
 
 (define filmstrip/pane-html
   (lambda
@@ -1317,6 +1340,11 @@
 (define filmstrip/pane-set-width
   (lambda (p w) (dict-set p "width" w))
   "Pane record with a new width preset.")
+
+(define filmstrip/pane-set-region
+  (lambda (p r) (dict-set p "region" r))
+  "Pane record with a new region (main | rail) — the field persists on
+the record like width/state, so it rides every writer below save-all.")
 
 (define filmstrip/pane-view
   (lambda (p) (as-str (dict-get p "view")))
@@ -1791,6 +1819,40 @@ desktop 0).")
       (list)
       (cons (car xs) (filmstrip/take (cdr xs) (- n 1)))))
   "First n elements of a list.")
+
+(define filmstrip/pin
+  (lambda
+    ()
+    (let*
+      ((id (as-str (request-param "id")))
+        (row (filmstrip/row))
+        (cascade (nth row 0))
+        (panes (nth row 1))
+        (focus (nth row 2))
+        (i (filmstrip/find-pane-index panes id)))
+      (if
+        (< i 0)
+        (render-html
+          (filmstrip/oob-msg "filmstrip: no such pane"))
+        (let*
+          ((p2
+              (filmstrip/pane-set-region
+                (nth panes i)
+                (if
+                  (string-eq (filmstrip/pane-region (nth panes i)) "rail")
+                  "main"
+                  "rail")))
+            (panes2 (filmstrip/replace-at panes i p2)))
+          (seq
+            (filmstrip/save-all cascade panes2 focus)
+            (render-html
+              (html/join
+                (list
+                  (filmstrip/oob-msg "")
+                  (filmstrip/shelf-oob)
+                  (filmstrip/winbox-oob)
+                  (filmstrip/oob-section p2 (= i focus))))))))))
+  "POST /filmstrip/pin: id param -> trade the pane's region (main/rail\nv3 pin). Rail = dock semantics: the body stays LIVE inside the rail\n(glochid CSS shows [data-region=rail] bodies) beside the focused main\npane. Same grammar as filmstrip/width: OOB section swap (body DOM\npreserved via hx-preserve), plus winbox/shelf OOB refreshes (the win\nrow's pin word re-labels by region).")
 
 (define filmstrip/width
   (lambda

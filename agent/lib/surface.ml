@@ -70,8 +70,19 @@ let surface_source = {pp|
     ;; the rail is the strip of panes; the FOCUSED pane is lifted out of it
     ;; into the main window (position:fixed fills the space right of the
     ;; rail). Open-or-focus a pane and it jumps to the main window; the
-    ;; focus ring drops (the big window IS the focus signal).
-    ".fs-shell:has(#fs-axis.col) .fs-pane.focused{position:fixed;left:22rem;top:1rem;right:1rem;bottom:1rem;width:auto;min-width:0;min-height:0;z-index:1000;outline:none}"
+    ;; focus ring drops (the big window IS the focus signal). v3: the lift
+    ;; applies ONLY to region=main panes — a pinned (region=rail) focused
+    ;; pane stays docked in the rail (the lib outline rule is the ring).
+    ".fs-shell:has(#fs-axis.col) .fs-pane.focused[data-region=\"main\"]{position:fixed;left:22rem;top:1rem;right:1rem;bottom:1rem;width:auto;min-width:0;min-height:0;z-index:1000;outline:none}"
+    ;; v3 region: a PINNED pane keeps its body live INSIDE the rail —
+    ;; dock semantics (desktop-global, acme-like reading views beside the
+    ;; lift). It shares the rail height via flex (the cascade's 16rem cap
+    ;; never applies: pinned panes live in .fs-content, not the cascade),
+    ;; the heads-only hiding above is overridden for the rail region, and
+    ;; the pane grows to its share of the dead middle instead of sitting
+    ;; at head height.
+    ".fs-shell:has(#fs-axis.col) .fs-pane[data-region=\"rail\"]{flex:1 1 auto;width:100%;min-height:0}"
+    ".fs-shell:has(#fs-axis.col) .fs-pane[data-region=\"rail\"] .fs-body{display:block;flex:1 1 auto;min-height:0;overflow:auto}"
     ;; chatpage sizes against the VIEWPORT (calc(100vh - 6rem)); that always
     ;; overflows a pane box. In rail mode fit it to the pane instead.
     ".fs-shell:has(#fs-axis.col) .chatpage{height:100%}"
@@ -844,9 +855,15 @@ workspace row keeps every record, only the swapped DOM shrinks).")
           (list
             (html/span (html/attr "class" "fs-title") (html/text route))
             (glochid/win-btn id "focus" "lift into the main window" "/filmstrip/focus-id")
+            (glochid/win-btn id
+              (if (string-eq (filmstrip/pane-region p) "rail") "unpin" "pin")
+              (if (string-eq (filmstrip/pane-region p) "rail")
+                  "return the pane to the main strip"
+                  "pin the pane to the rail (dock; body stays live here)")
+              "/filmstrip/pin")
             (glochid/win-btn id "width" "cycle width (third/half/full)" "/filmstrip/width")
             (glochid/win-btn id "close" "close pane (to the shelf)" "/filmstrip/close"))))))
-  "One windows controlbox row: route label + focus + width + close.")
+  "One windows controlbox row: route label + focus + pin (v3, label by\ncurrent region) + width + close.")
 
 (define glochid/win-rows
   (lambda (panes)
@@ -1169,6 +1186,7 @@ to pane 0 at render when unset — rail mode always has a main pane.")
 (route "/filmstrip/focus-id" "filmstrip/focus-id")
 (route "/filmstrip/move" "filmstrip/move")
 (route "/filmstrip/width" "filmstrip/width")
+(route "/filmstrip/pin" "filmstrip/pin")
 (route "/filmstrip/orient" "glochid/orient")
 (route "/filmstrip/desktop" "glochid/desktop-set")
 (route "/filmstrip/new" "glochid/new")
