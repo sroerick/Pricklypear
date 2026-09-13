@@ -1006,6 +1006,21 @@
               ""))))))
   "OOB outerHTML swap carrying only shell state: width + .focused classes.\nThe body div is an hx-preserve placeholder -- htmx re-inserts the live\npane DOM, so focus/width changes never clobber in-pane state.")
 
+(define filmstrip/app-link
+  (lambda
+    (r label)
+    (html/button
+      (html/attrs
+        (list
+          (html/attr "type" "button")
+          (html/attr "class" "fs-applink")
+          (html/attr "hx-post" "/filmstrip/open")
+          (html/attr "hx-vals" (string-append "{\"route\":\"" r "\"}"))
+          (html/attr "hx-target" "#fs-sink")
+          (html/attr "hx-swap" "innerHTML")))
+      (html/text label)))
+  "In-shell app link: a link-looking button POSTing /filmstrip/open\n(hx-vals carries the route; open-or-focus semantics) with the OOB pane\nswaps landed in #fs-sink. Pane chrome uses these INSTEAD of <a href> --\nan anchor navigates the WHOLE WINDOW out of the shell; an app-link\nnever leaves it. Returns a PLAIN string (no render-html: the sentinel\nwould leak into any string-append embed like chat/body's h1 nav).")
+
 (define filmstrip/open
   (lambda
     ()

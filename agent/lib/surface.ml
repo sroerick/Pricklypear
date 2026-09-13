@@ -120,7 +120,12 @@ let surface_source = {pp|
     ".fs-shell:has(#ws-desk.dsk-8) .fs-pane[data-desktop]:not([data-desktop=\"8\"]){display:none}"
     ".fs-shell:has(#ws-desk.dsk-9) .fs-pane[data-desktop]:not([data-desktop=\"9\"]){display:none}"
     ;; desktop controlbox chrome (same shelf look)
-    ".fs-deskbox{display:flex;gap:.3rem;align-items:center;border:1px solid var(--border);background:var(--panel);padding:.3rem .35rem}"))
+    ".fs-deskbox{display:flex;gap:.3rem;align-items:center;border:1px solid var(--border);background:var(--panel);padding:.3rem .35rem}"
+    ;; v2 app-links: a button styled as a bare link (chat/sessions/settings
+    ;; nav in pane chrome; the anchor version navigated the whole window
+    ;; out of the shell with a full GET). Overrides the generic button look.
+    ".fs-applink{background:none;border:0;color:#7aa2f7;padding:0;margin:0;font:inherit;cursor:pointer;text-decoration:none}"
+    ".fs-applink:hover{text-decoration:underline}"))
 
 (define (glochid/layout title body)
   (if (hx-request?)
@@ -163,7 +168,16 @@ let surface_source = {pp|
   (let ((sid (query-param "session")))
     (string-append
       "<div class=\"chatpage\">"
-      "<h1><a href=\"/\">agent</a> <span class=\"muted\">— <a href=\"/code\">/code</a> · <a href=\"/sessions\">/sessions</a> · <a href=\"/settings\">/settings</a> · model: "
+      "<h1><a href=\"/\">agent</a> <span class=\"muted\">— "
+      ;; v2 app-links: the nav words POST /filmstrip/open (open-or-focus
+      ;; into a shell pane) instead of anchors that navigate the whole
+      ;; window out of the shell with a full GET.
+      (filmstrip/app-link "/code" "/code")
+      " · "
+      (filmstrip/app-link "/sessions" "/sessions")
+      " · "
+      (filmstrip/app-link "/settings" "/settings")
+      " · model: "
       "<select name=\"model\" hx-post=\"/settings\" hx-trigger=\"change\" hx-swap=\"none\" "
       "style=\"font-size:.6em\">"
       (settings/model-options (agent/model) (agent/models))
