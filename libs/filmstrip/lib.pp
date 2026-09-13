@@ -918,6 +918,8 @@
         (filmstrip/pane-route p)
         "width"
         (filmstrip/pane-width p)
+        "region"
+        (filmstrip/pane-region p)
         "view"
         (filmstrip/pane-view p)
         "focused"
@@ -1048,6 +1050,9 @@
             (html/attr
               "data-desktop"
               (as-str (filmstrip/pane-desk p)))
+            (html/attr
+              "data-region"
+              (filmstrip/pane-region p))
             (html/attr "hx-swap-oob" "true")))
         (html/join
           (list
@@ -1284,7 +1289,10 @@
             (html/attr "data-pane" id)
             (html/attr
               "data-desktop"
-              (as-str (filmstrip/pane-desk p)))))
+              (as-str (filmstrip/pane-desk p)))
+            (html/attr
+              "data-region"
+              (filmstrip/pane-region p))))
         (html/join
           (list
             (filmstrip/pane-head p)
@@ -1317,6 +1325,13 @@
 (define filmstrip/pane-state
   (lambda (p) (as-str (dict-get p "state")))
   "Pane record state: live | shelved (v2 shelf). Empty = live — records\nfrom before the state field exist and stay live.")
+
+(define filmstrip/pane-region
+  (lambda (p)
+    (let
+      ((r (as-str (dict-get p "region"))))
+      (if (string-eq r "") "main" r)))
+  "Pane record region (v3 pin): main | rail. Empty = main — records\nfrom before the region field exist and stay main (main keeps the v2\nmodel: strip + one lifted focused pane). The ACCESSOR defaults, so\nselectors + JSON see \"main\" on legacy records, never an empty value.")
 
 (define filmstrip/pane-live?
   (lambda (p)

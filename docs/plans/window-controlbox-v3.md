@@ -88,7 +88,7 @@ all geometry stays in CSS classes, zero JS, zero inline styles.
       Show the probe ALL GREEN on the unmodified shell (this proves the
       widened invariants are backward-compatible), commit.
 
-- [ ] 1. REGION STATE (lib): pane records carry "region"
+- [x] 1. REGION STATE (lib): pane records carry "region"
       (filmstrip/pane-region accessor, default "main" — like
       pane-state's empty=live). Carry it through EVERY write path:
       panes-emit JSON, and guard save-all-style rebuilds
@@ -198,3 +198,33 @@ all geometry stays in CSS classes, zero JS, zero inline styles.
 
 Still open: tasks 1-5 (region state lib layer, pin verb + rail bodies,
 focus/open discipline, files-as-rail-pane, final round-trip + report).
+
+### Task 1 DONE (loop 2, 2026-09-15) — region state in the lib
+
+- libs/filmstrip/lib.pp, no product OCaml touched:
+  - NEW `filmstrip/pane-region` accessor (default "main" when the field
+    is missing/empty — the ACCESSOR defaults, so selectors + JSON see
+    "main" on pre-v3 records, never `data-region=""`; an empty attribute
+    would have broken task 2's `[data-region="main"]` scoping of the
+    focused-lift rule on legacy records).
+  - `filmstrip/pane-html` + `filmstrip/oob-section` now emit
+    `data-region` on every pane section.
+  - `filmstrip/native-pane-json` (soil-strip policy state) carries
+    `region` too — every writer rides.
+- Write-path check: `panes-emit` is a pass-through of whole records, so
+  region rides save-all automatically; glochid/save-all rebuilds only WS
+  fields and needed no change. VERIFIED live: seed p3/p2 with
+  region:"rail" -> POST /filmstrip/width {p3} + /filmstrip/restore {p2}
+  -> region still "rail" in workspace.json after each; reload keeps it.
+- No-visual-change VERIFIED via CDP on the seeded scratch: rail-region
+  panes render exactly like today's heads-only rows (322x27, body
+  display:none), focused main lift untouched; legacy p1 renders
+  data-region="main".
+- Verified: probe ALL GREEN (standard region-less seed; I8 still SKIP /
+  pinned=0), `dune build agent/bin/main.exe` green, `dune runtest lisp/
+  common/` green.
+- Harness lore: none new (throwaway CDP check lived in /tmp; the pattern
+  above is enough for lib-only state tasks).
+
+Still open: tasks 2-5 (pin verb + rail CSS, focus/open discipline,
+files-as-rail-pane, final round-trip + REPORT; I8 arming is task 2).
