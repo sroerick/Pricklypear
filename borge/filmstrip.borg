@@ -118,6 +118,17 @@
    (status implemented)
   )
 
+  (subsection window-controlbox-v2
+   (doc "V2 shell model (glochid-led, habitat-shared). Two primitives, following acme: WINDOW = tag + body (tag row of words over a dispatched route fragment; the filmstrip pane head already IS a tag), CONTROLBOX = one labeled row of words where each word is a mutation POST (rail rows, pane heads, shelf rows are all control boxes). Everything renders from DECLARED STATE, never estimate geometry in code: panes gain region (rail | main), desktop (int), state (live | shelved); the workspace row grows a desktop int. The shell is two scroll-strips — a RAIL strip (vertical on wide-short screens, top-rotatable by 3 CSS rules; modes are rail panes: apps/files/windows/shelf, for PICKING not reading) over a MAIN strip (the niri horizontal strip third/half/full, unconditional) — same mutations on both. VIRTUAL DESKTOPS are class flips: one sentinel carries the current desktop, a generated :has() set display:nones the rest; zero JS. Shelf is the DEFAULT close (DOM survives via hx-preserve; shelf rows carry destroy; destroy is the OOB delete that exists today). NAV DISCIPLINE is part of the vocabulary: app-link = open-or-focus POST for cross-app nav; pane-local links target closest .fs-body; plain <a> is shell-level only (a pane escaping the shell — plain <a> inside a fragment — is a BUG CLASS, fixed by app-link). Focus always heals so a focused main pane exists while panes do. make harness: seeded fake workspace on a scratch instance, CDP screenshots with measured geometry per mutation; live hosts touched last.")
+   (* agent note (|2026-09-13 DESIGN SESSION (glochid rail work): the col axis grew the left rail (shell narrows to ~20rem; cascade stacks as a vertical app menu; presets re-read as rail heights — landed), then the focused pane was LIFTED into the main window via position:fixed with rail rows heads-only (landed; .chatpage height:100% fix landed with it). Session then RENAMED the target: main = niri strip (option B, not master-stack), sidebar = own scroll strip, desktops like hyprland via CSS hiding, close defaults to shelf, no JS drag — never. Inspiration named: acme tag lines = control boxes; gui-better-than-tui via TWO simple primitives instead of a renderer. Hidden-DOM cost confirmed negligible; live-updating shelved DOM is the only budget (later: server pauses streams to shelved panes). What landed pre-v2 stays in agent.borg filmstrip-shell; THIS stanza owns the forward model.|) *)
+   (verify
+    (smoke "desktop flip: sentinel class change toggles which panes render; others display:none but keep live DOM")
+    (smoke "shelve: close moves pane to the shelf rail pane with DOM intact; restore returns it to its desktop+position")
+    (smoke "app-link inside a pane open-or-focuses the target route; a plain <a> inside a fragment never escapes the shell")
+    (smoke "geometry probe: seeded 8-pane 3-desktop workspace renders from state classes only (no inline styles)"))
+   (status planned)
+  )
+
   (subsection roadmap-tiers
    (doc "Where filmstrip points once the web product runs: (1) pads
        migration makes the shell a pad tree — the same workspace value
