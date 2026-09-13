@@ -517,7 +517,8 @@
     image/lib/store_history.ml
     image/lib/store_retention.ml
     image/lib/row.ml
-    scripts/verify_store_split.sh)
+    scripts/verify_store_split.sh
+    scripts/verify_store_chain_sql.sh)
    (verify
     (build "ksh scripts/verify_store_split.sh")
     (smoke "facade exposes explicit accessors only: renaming a family function breaks the build until the accessor is updated")
@@ -1220,7 +1221,7 @@
   (subsection land
    (doc "pp-sync land: promote + vault snapshot + git commit as one operator step")
    (status implemented)
-   (implements cli/bin/pp_sync.ml scripts/pp-sync.sh cli/lib/pp_client.ml cli/lib/pp_sync_vault.ml)
+   (implements cli/bin/pp_sync.ml scripts/pp-sync.sh cli/lib/pp_client.ml cli/lib/pp_sync_vault.ml scripts/verify_libs_layout.sh)
    (details
     (doc (|
          PROBLEM:
