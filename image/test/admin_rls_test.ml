@@ -125,7 +125,7 @@ let test_visible_sql_mirror () =
 
 (* RLS floor under an unprivileged role: the admin disjunct applies *)
 let test_rls_floor () =
-  with_fixture (fun _store conn ~ty ~id:_ ~admin_u ~plain_u:_ ~other_u ->
+  with_fixture (fun _store conn ~ty ~id:_ ~admin_u ~plain_u ~other_u ->
       exec conn "DROP ROLE IF EXISTS pp_admin_probe";
       exec conn
         "CREATE ROLE pp_admin_probe NOLOGIN NOSUPERUSER NOBYPASSRLS NOINHERIT";
