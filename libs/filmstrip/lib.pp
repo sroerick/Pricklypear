@@ -945,6 +945,9 @@
                     "")))
             (html/attr "id" (string-append "fs-pane-" id))
             (html/attr "data-pane" id)
+            (html/attr
+              "data-desktop"
+              (as-str (filmstrip/pane-desk p)))
             (html/attr "hx-swap-oob" "true")))
         (html/join
           (list
@@ -1146,7 +1149,10 @@
                     " shelved"
                     "")))
             (html/attr "id" (string-append "fs-pane-" id))
-            (html/attr "data-pane" id)))
+            (html/attr "data-pane" id)
+            (html/attr
+              "data-desktop"
+              (as-str (filmstrip/pane-desk p)))))
         (html/join
           (list
             (filmstrip/pane-head p)
@@ -1158,7 +1164,7 @@
                   (html/attr "id" (string-append "fs-body-" id))
                   (html/attr "hx-preserve" "true")))
               content))))))
-  "One pane section. content is the dispatched fragment (full page) or an\nempty hx-preserve placeholder (OOB class/width swaps keep the live DOM).")
+  "One pane section. content is the dispatched fragment (full page) or an\nempty hx-preserve placeholder (OOB class/width swaps keep the live DOM).\ndata-desktop feeds the shell's :has(#ws-desk.dsk-N) hiding.")
 
 (define filmstrip/pane-id
   (lambda (p) (as-str (dict-get p "id")))
@@ -1184,6 +1190,14 @@
   (lambda (p)
     (not (string-eq (filmstrip/pane-state p) "shelved")))
   "True when the pane is not shelved (missing state counts live).")
+
+(define filmstrip/pane-desk
+  (lambda (p)
+    (let
+      ((v (dict-get p "desktop")))
+      (if (null? v) 0 (parse-int (as-str v)))))
+  "Pane record desktop index (0 when unset — pre-v2 records ride
+desktop 0).")
 
 (define filmstrip/first-live-index
   (lambda (panes)

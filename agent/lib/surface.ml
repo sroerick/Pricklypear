@@ -101,7 +101,22 @@ let surface_source = {pp|
     "::-webkit-scrollbar-track{background:transparent}"
     "::-webkit-scrollbar-thumb{background:#2a2e3a;border-radius:6px}"
     "::-webkit-scrollbar-thumb:hover{background:#4a4f5c}"
-    "::-webkit-scrollbar-corner{background:transparent}"))
+    "::-webkit-scrollbar-corner{background:transparent}"
+    ;; v2 desktops: the #ws-desk sentinel carries the current desktop to
+    ;; CSS — one :has pair per desktop (0..9) hides panes of the others
+    ;; (data-desktop is on every pane section; no JS, no re-render).
+    ".fs-shell:has(#ws-desk.dsk-0) .fs-pane[data-desktop]:not([data-desktop=\"0\"]){display:none}"
+    ".fs-shell:has(#ws-desk.dsk-1) .fs-pane[data-desktop]:not([data-desktop=\"1\"]){display:none}"
+    ".fs-shell:has(#ws-desk.dsk-2) .fs-pane[data-desktop]:not([data-desktop=\"2\"]){display:none}"
+    ".fs-shell:has(#ws-desk.dsk-3) .fs-pane[data-desktop]:not([data-desktop=\"3\"]){display:none}"
+    ".fs-shell:has(#ws-desk.dsk-4) .fs-pane[data-desktop]:not([data-desktop=\"4\"]){display:none}"
+    ".fs-shell:has(#ws-desk.dsk-5) .fs-pane[data-desktop]:not([data-desktop=\"5\"]){display:none}"
+    ".fs-shell:has(#ws-desk.dsk-6) .fs-pane[data-desktop]:not([data-desktop=\"6\"]){display:none}"
+    ".fs-shell:has(#ws-desk.dsk-7) .fs-pane[data-desktop]:not([data-desktop=\"7\"]){display:none}"
+    ".fs-shell:has(#ws-desk.dsk-8) .fs-pane[data-desktop]:not([data-desktop=\"8\"]){display:none}"
+    ".fs-shell:has(#ws-desk.dsk-9) .fs-pane[data-desktop]:not([data-desktop=\"9\"]){display:none}"
+    ;; desktop controlbox chrome (same shelf look)
+    ".fs-deskbox{display:flex;gap:.3rem;align-items:center;border:1px solid var(--border);background:var(--panel);padding:.3rem .35rem}"))
 
 (define (glochid/layout title body)
   (if (hx-request?)
@@ -433,9 +448,13 @@ uses tree/get + node-path; glochid rides the local fs (HOST SEAM 1).")
           "focus"
           (string-append "content:" (as-str focus))
           "axis"
-          (glochid/axis)))))
-  "Write all workspace fields + the axis in one row upsert (glochid:
-  the lib's save-all would drop the axis field).")
+          (glochid/axis)
+          "desktop"
+          (as-str (glochid/deskt))))))
+  "Write all workspace fields (cascade/content/focus + axis + desktop)
+in one row upsert (glochid: the lib's save-all would drop the shell
+fields). save-all REBUILDS the dict — every field added to the ws row
+must be carried HERE through every write path.")
 
 ;; ---- 2. THE CASCADE IS THE AGENT'S ----
 (define glochid/apps
@@ -592,6 +611,114 @@ surfaces; deeper columns come from glochid/pkg-browse.")
       (glochid/shelf-body (nth (filmstrip/row) 1))))
   "OOB re-render of #fs-shelf (the lib's default is empty; glochid owns
 the shelf rail). Close/restore/destroy call it in every response.")
+
+;; ---- 2d. DESKTOPS (v2) ----
+;; The ws row carries "desktop":N (0 default) and each pane record a
+;; "desktop" field. An inert #ws-desk sentinel beside #fs-axis carries
+;; the current desktop to CSS (:has hides the other desktops' panes —
+;; ten pairs in glochid/base-css, no JS); d0/d1/d2 buttons in the rail
+;; POST the switch. Focus heals onto the first live pane of the target
+;; desktop when the focused pane lives elsewhere (a main pane ALWAYS
+;; exists).
+(define glochid/deskt
+  (lambda ()
+    (let
+      ((v (dict-get (filmstrip/ws-fields) "desktop")))
+      (if (null? v) 0 (parse-int (as-str v)))))
+  "Current shell desktop from the ws row (0 when unset).")
+
+(define glochid/first-on-desk
+  (lambda (panes d i)
+    (if
+      (null? panes)
+      -1
+      (if
+        (and (= (filmstrip/pane-desk (car panes)) d)
+             (filmstrip/pane-live? (car panes)))
+        i
+        (glochid/first-on-desk (cdr panes) d (+ i 1)))))
+  "Index of the first LIVE pane on desktop d, else -1.")
+
+(define glochid/desk-sentinel
+  (lambda (d ?oob)
+    (html/tag
+      "div"
+      (html/attrs
+        (append
+          (list
+            (html/attr "id" "ws-desk")
+            (html/attr "class" (string-append "fs-sh-axis dsk-" (as-str d))))
+          (if ?oob
+              (list (html/attr "hx-swap-oob" "outerHTML:#ws-desk"))
+              (list))))
+      ""))
+  "Inert desktop sentinel beside the axis one; CSS :has(#ws-desk.dsk-N)
+hides the other desktops' panes. ?oob renders it as an OOB outerHTML
+swap (the desktop response).")
+
+(define glochid/desk-btn
+  (lambda (d)
+    (html/tag
+      "button"
+      (html/attrs
+        (list
+          (html/attr "class" "fs-btn")
+          (html/attr "title" (string-append "switch to desktop " d))
+          (html/attr "hx-post" "/filmstrip/desktop")
+          (html/attr "hx-vals" (string-append "{\"d\":\"" d "\"}"))
+          (html/attr "hx-target" "#fs-sink")
+          (html/attr "hx-swap" "innerHTML")))
+      (html/text (string-append "d" d))))
+  "One desktop switcher button: POSTs /filmstrip/desktop {d:N}.")
+
+(define glochid/deskbox-html
+  (lambda ()
+    (html/tag
+      "div"
+      (html/attrs
+        (list
+          (html/attr "id" "fs-deskbox")
+          (html/attr "class" "fs-cbox fs-deskbox")
+          (html/attr "data-cbox" "desktop")))
+      (html/join
+        (append
+          (list (html/span (html/attr "class" "fs-title") (html/text "desktop")))
+          (list/map glochid/desk-btn (list "0" "1" "2"))))))
+  "The desktop controlbox in the rail: [d0] [d1] [d2].")
+
+(define glochid/desktop-set
+  (lambda ()
+    (let*
+      ((dv (request-param "d"))
+        (d (if (null? dv) 0 (parse-int (as-str dv))))
+        (row (filmstrip/row))
+        (cascade (nth row 0))
+        (panes (nth row 1))
+        (focus (nth row 2))
+        (focus2
+          (if
+            (and (>= focus 0)
+                 (= (filmstrip/pane-desk (filmstrip/pane-at panes focus)) d))
+            focus
+            (let
+              ((f (glochid/first-on-desk panes d 0)))
+              (if (< f 0) focus f)))))
+      (seq
+        (filmstrip/ws-save
+          (dict-set* (filmstrip/ws-fields) (list "desktop" (as-str d))))
+        (filmstrip/save-all cascade panes focus2)
+        (render-html
+          (html/join
+            (list
+              (filmstrip/oob-msg "")
+              (glochid/desk-sentinel d #t)
+              (filmstrip/oob-content-strip panes focus2)))))))
+  "POST /filmstrip/desktop: d param -> set + persist the shell desktop;
+heal focus onto the first live pane of that desktop when the focused
+pane lives elsewhere; answer with OOB swaps of the desk sentinel + a
+re-render of the content strip (panes of the new desktop keep their
+live DOM via hx-preserve; panes of the others re-render inert — the
+workspace row keeps every record, only the swapped DOM shrinks).")
 
 ;; focus healing at render: an unset focus OR one pointing at a shelved
 ;; pane heals to the first LIVE pane (the desktop dimension joins in
@@ -761,6 +888,7 @@ rebinds the request context, so hx-request? must be read first.")
                     (html/attr "id" "fs-content")
                     (html/attr "class" "fs-content")))
                 (html/join (filmstrip/panes-html panes focus)))
+              (glochid/deskbox-html)
               (glochid/shelf-html panes)
               (filmstrip/key-sentinels)
               (html/tag
@@ -770,11 +898,13 @@ rebinds the request context, so hx-request? must be read first.")
                     (html/attr "id" "fs-sink")
                     (html/attr "class" "fs-sink")))
                 "")
-              (glochid/axis-sentinel (glochid/axis) #f)))))))
-  "The shell inner (filmstrip/shell-html's parts + the axis toggle):
-style + cascade strip over launcher+toggle + content strip, key
-sentinels, OOB sink, axis sentinel. Zero scripts (CSS :has flips the
-layout from the sentinel's class).")
+              (glochid/axis-sentinel (glochid/axis) #f)
+              (glochid/desk-sentinel (glochid/deskt) #f)))))))
+  "The shell inner (filmstrip/shell-html's parts + the axis toggle + the
+desktop controlbox + sentinels): style + cascade strip over
+launcher+toggle + content strip, deskbox, key sentinels, OOB sink, axis
+desktop sentinels. Zero scripts (CSS :has flips the layout from the
+axis sentinel's class and hides off-desktop panes from the desk one).")
 
 (define glochid/shell
   (lambda ()
@@ -805,6 +935,7 @@ to pane 0 at render when unset — rail mode always has a main pane.")
 (route "/filmstrip/move" "filmstrip/move")
 (route "/filmstrip/width" "filmstrip/width")
 (route "/filmstrip/orient" "glochid/orient")
+(route "/filmstrip/desktop" "glochid/desktop-set")
 |pp}
 
 (** Boot-load the embedded Nopales packages + this surface into the
