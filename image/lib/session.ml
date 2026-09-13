@@ -1114,7 +1114,7 @@ and reseed_package (t : t) (pkg : string) : (string, string) result =
   (* spec_delegation: delegated sessions never reseed (a code write to
      system/main; data, never for code). *)
   if restricted t then
-    (Error "reseed-package: denied for delegated or tenant sessions")
+    (Error "reseed-package: denied for delegated sessions and tenants")
   else if pkg = "" then (Error "empty package name")
   else if (not t.is_admin)
           && t.manifest.username <> "admin"

@@ -16,7 +16,7 @@ let register (t : t) (tbl : Primitives.t) : unit =
      own admin session. *)
   let deny_delegated op =
     raise (Pricklypear_lisp.Ast.Interp_error
-             (Pricklypear_lisp.Ast.Prim_error (op, "denied for tenant sessions (data, never for code)", "denied")))
+             (Pricklypear_lisp.Ast.Prim_error (op, "denied for delegated sessions and tenants (data, never for code)", "denied")))
   in
 
   (* (get 'type id) -> VStr fields-json | VNil *)
