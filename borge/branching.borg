@@ -503,6 +503,48 @@
     (smoke "S2: /branches renders dirty + synced columns; branch detail status table with unbind hint on synced; (branch-changes) class = status; list_overrides has no callers")
     (smoke "S3: merge upserts only ahead/ahead-new names; diverged names are conflict-report-only, never auto-applied (merged 0 rows when all synced); base_gen advances post-commit"))
   )
+
+  (subsection store-split
+   (doc "The store split: store.ml was a ~2,700-line monolith mixing five domains and the conn/tx substrate into ONE module")
+   (status implemented)
+   (* agent note (|2026-09 split i-1788671083-c, pinned by scripts/verify_store_split.sh: store.ml became a composition facade over store_common (rel names + the ONE branch-chain CTE + staleness stamp), store_defs (def lookups/counts/fingerprints), store_branch (branch status/persist/promote/merge/diff/fork), store_packages (package registry), store_history (code history/diff/restore), store_retention (tree-time.gc retention worker). Two structural decisions the script pins: (1) the facade does NOT re-export the substrate wholesale — explicit accessors instead of 'include Store_db'; (2) the whole family stores OPAQUE jsonb bodies — no store_*.ml module references the Lisp interpreter (the AST codec lives at the eval boundary: Pricklypear_lisp.Ast.expr_of_body_json). row.ml is the shared sibling: ONE pgx row-cell codec that previously existed as byte-identical copies inside ai_store/jobs/media/auth_store (i-1788671505).|) *)
+   (implements
+    image/lib/store.ml
+    image/lib/store_common.ml
+    image/lib/store_defs.ml
+    image/lib/store_branch.ml
+    image/lib/store_packages.ml
+    image/lib/store_history.ml
+    image/lib/store_retention.ml
+    image/lib/row.ml
+    scripts/verify_store_split.sh)
+   (verify
+    (build "ksh scripts/verify_store_split.sh")
+    (smoke "facade exposes explicit accessors only: renaming a family function breaks the build until the accessor is updated")
+    (smoke "deleting one family prim registration and re-running the verifier FAILS (negative test)"))
+  )
+
+  (subsection db-prim-split
+   (doc "The DB-prim split: prims_db registered 137 prims across unrelated domains; the families now live in per-domain modules with prims_db as composition root")
+   (status implemented)
+   (* agent note (|2026-09 split i-1788671048/1035, pinned by scripts/verify_prims_db_split.sh: the old single-closure prims_db.register registered 137 prims across unrelated domains; the families now live in prims_data / prims_sync / prims_jobs / prims_auth / prims_code / prims_agent / prims_llm / prims_ops, with prims_db as composition root (registers NOTHING) over shared helpers in prims_db_common. The script pins the full 137-name list (no drops/renames/duplicates), the server-only set of exactly 7 names (remote-eval classification stays registry-derived per prim-seam.server-endpoint), and that every family module exposes 'let register'. Each family's BEHAVIOR is owned by its domain chapter (data -> one-tree; sync -> local-first; jobs -> jobs.borg; auth -> auth.borg; code history -> branching.code-history; agent/llm -> agent.borg); this stanza declares the MODULE decomposition so the drift surface has a home.|) *)
+   (implements
+    image/lib/prims_db_common.ml
+    image/lib/prims_data.ml
+    image/lib/prims_sync.ml
+    image/lib/prims_jobs.ml
+    image/lib/prims_auth.ml
+    image/lib/prims_code.ml
+    image/lib/prims_agent.ml
+    image/lib/prims_llm.ml
+    image/lib/prims_ops.ml
+    scripts/verify_prims_db_split.sh)
+   (verify
+    (build "ksh scripts/verify_prims_db_split.sh")
+    (smoke "family modules register exactly the pinned 137 names, each exactly once")
+    (smoke "server-only set is exactly the pinned 7 names, derived from register_server_only metadata"))
+  )
+
   (subsection agent-promote
    (doc "Agent promotes from its workshop into the parent human's personal")
    (status implemented)
