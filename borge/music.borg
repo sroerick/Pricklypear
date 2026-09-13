@@ -6,6 +6,7 @@
  (section music
   (doc "Tracks + playlists on data_rows; audio bytes in media_blobs; player is <audio controls> over the kernel Range/206 serve path")
   (status implemented)
+  (implements libs/music/lib.pp)
 
   (subsection model
    (doc "music-track and music-playlist rows; media_id points at media_blobs")
@@ -123,6 +124,14 @@
          - NO per-user quotas (storage.media non-goal already).
    |))
    )
+  )
+
+  (subsection suno
+   (doc "libs/suno — AI song generation via the sunoapi.org gateway: submit a two-song task, poll record-info to SUCCESS, land finished audio into the music library")
+   (status implemented)
+   (implements libs/suno/lib.pp scripts/pp_suno.py)
+   (verify
+    (smoke "suno/generate submits a task and returns its taskId; suno/record-info polls PENDING -> SUCCESS and suno/land pulls the finished audio into a music-track row"))
   )
  )
 )
