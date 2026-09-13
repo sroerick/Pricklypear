@@ -76,9 +76,10 @@
         (let*
           ((res (filmstrip/open-apply panes t))
             (panes2 (nth res 0))
-            (focus2 (nth res 1))
+            (target (nth res 1))
             (appended? (nth res 2))
-            (unshelved? (nth res 3)))
+            (unshelved? (nth res 3))
+            (focus2 (filmstrip/rail-focus-onto panes2 focus target)))
           (seq
             (filmstrip/save-all path2 panes2 focus2)
             (render-html
@@ -88,7 +89,7 @@
                   (if unshelved? (filmstrip/shelf-oob) "")
                   (filmstrip/winbox-oob)
                   (filmstrip/oob-cascade path2)
-                  (filmstrip/open-response panes2 focus focus2 appended?))))))
+                  (filmstrip/open-response panes2 focus focus2 target appended?))))))
         (seq
           (filmstrip/save-all path2 panes focus)
           (render-html
@@ -585,6 +586,45 @@
                   #t))))))))
   "POST /filmstrip/focus: dir param -> move .focused one pane over\n(clamped, no wrap); OOB class swap on exactly two panes (old, new).")
 
+(define filmstrip/lift-holds-live-main?
+  (lambda
+    (panes old)
+    (if
+      (< old 0)
+      #f
+      (let
+        ((p (filmstrip/pane-at panes old)))
+        (and
+          (filmstrip/pane-live? p)
+          (string-eq (filmstrip/pane-region p) "main")))))
+  "True when the persisted focus points at a LIVE main-region pane (that
+pane owns the fixed lift). A focused rail pane is a ring, not a window
+— it never counts as the lift.")
+
+(define filmstrip/rail-focus-onto
+  (lambda
+    (panes old new)
+    (if
+      (= new old)
+      old
+      (if
+        (not
+          (string-eq
+            (filmstrip/pane-region (filmstrip/pane-at panes new))
+            "rail"))
+        new
+        (if
+          (filmstrip/lift-holds-live-main? panes old)
+          old
+          new))))
+  "Focused index for a focus attempt onto pane `new` (v3 region
+discipline): a rail-region target NEVER takes the fixed main slot. If
+a live main pane holds the lift, focus stays on it (only the caller's
+OOB ring moves onto the rail pane); when no live main pane is lifted,
+the rail pane becomes the persisted focus itself — a focused rail pane
+visible in the rail satisfies I1 (no forced main pane). Main-region
+targets behave exactly as before (take the focus).")
+
 (define filmstrip/focus-id
   (lambda
     ()
@@ -600,27 +640,24 @@
         (render-html (filmstrip/oob-msg "filmstrip: no such live pane"))
         (if (= i focus)
             (render-html (filmstrip/oob-msg ""))
-            (if (< focus 0)
-                (seq
-                  (filmstrip/save-all cascade panes i)
-                  (render-html
-                    (html/join
-                      (list
-                        (filmstrip/oob-msg "")
-                        (filmstrip/oob-section (filmstrip/pane-at panes i) #t)))))
-                (seq
-                  (filmstrip/save-all cascade panes i)
-                  (render-html
-                    (html/join
-                      (list
-                        (filmstrip/oob-msg "")
+            (let
+              ((focus2 (filmstrip/rail-focus-onto panes focus i)))
+              (seq
+                (filmstrip/save-all cascade panes focus2)
+                (render-html
+                  (html/join
+                    (list
+                      (filmstrip/oob-msg "")
+                      (if
+                        (if (>= focus 0) (not (= focus focus2)) #f)
                         (filmstrip/oob-section
                           (filmstrip/pane-at panes focus)
                           #f)
-                        (filmstrip/oob-section
-                          (filmstrip/pane-at panes i)
-                          #t))))))))))
-  "POST /filmstrip/focus-id: id param -> point .focused at that pane's\nindex (persisted + same OOB two-section class swap as focus).\nShelved/unknown ids answer the status line only; an already-focused\nid answers empty.")
+                        "")
+                      (filmstrip/oob-section
+                        (filmstrip/pane-at panes i)
+                        #t))))))))))
+  "POST /filmstrip/focus-id: id param -> point .focused at that pane's\nindex (persisted + same OOB two-section class swap as focus).\nShelved/unknown ids answer the status line only; an already-focused\nid answers empty. v3: a rail-region target never takes the lift — a\nlifted live main pane keeps focus and only the ring lands in the rail.")
 
 (define filmstrip/focus-step
   (lambda
@@ -1112,9 +1149,10 @@
             (let*
               ((res (filmstrip/open-apply panes r))
                 (panes2 (nth res 0))
-                (focus2 (nth res 1))
+                (target (nth res 1))
                 (appended? (nth res 2))
-                (unshelved? (nth res 3)))
+                (unshelved? (nth res 3))
+                (focus2 (filmstrip/rail-focus-onto panes2 focus target)))
               (seq
                 (filmstrip/save-all cascade panes2 focus2)
                 (render-html
@@ -1123,7 +1161,7 @@
                       (filmstrip/oob-msg "")
                       (if unshelved? (filmstrip/shelf-oob) "")
                       (filmstrip/winbox-oob)
-                      (filmstrip/open-response panes2 focus focus2 appended?)))))))))))
+                      (filmstrip/open-response panes2 focus focus2 target appended?)))))))))))
   "POST /filmstrip/open: launcher route param -> open-or-focus a pane.\nBad/missing routes answer with the launcher status line only; valid ones\npersist the row and answer with OOB pane swaps + winbox/shelf\nrefreshes (a win that unshelves drops its shelf row in the same\nresponse).")
 
 (define filmstrip/open-apply
@@ -1165,7 +1203,7 @@
 
 (define filmstrip/open-response
   (lambda
-    (panes2 old-focus focus2 appended?)
+    (panes2 old-focus focus2 target appended?)
     (html/join
       (list
         (if
@@ -1177,12 +1215,12 @@
         (if
           appended?
           (filmstrip/oob-append-pane
-            (filmstrip/pane-at panes2 focus2)
+            (filmstrip/pane-at panes2 target)
             #t)
           (filmstrip/oob-section
-            (filmstrip/pane-at panes2 focus2)
+            (filmstrip/pane-at panes2 target)
             #t)))))
-  "OOB response body for an open/leaf click: OOB class swap on the\npreviously focused pane, then the opened pane -- appended with its real\ndispatched content, or re-swapped focused (open-or-focus).")
+  "OOB response body for an open/leaf click: OOB class swap on the\npreviously focused pane (skipped when focus2 stays behind — the v3\nrail discipline keeps a lifted main pane focused while the ring moves),\nthen the OPENED pane (target -- appended with its real dispatched\ncontent, or re-swapped focused, open-or-focus). focus2 is the index\nthat gets PERSISTED; target is the pane the ring lands on.")
 
 (define filmstrip/page
   (lambda

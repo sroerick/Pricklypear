@@ -118,7 +118,7 @@ all geometry stays in CSS classes, zero JS, zero inline styles.
       not break). probe I1 widened + I8 green; unpin returns to the
       strip. Commit.
 
-- [ ] 3. FOCUS/OPEN DISCIPLINE IN BOTH REGIONS (lib): focus-id and
+- [x] 3. FOCUS/OPEN DISCIPLINE IN BOTH REGIONS (lib): focus-id and
       open-apply/cascade/open-or-focus never lift a rail-region pane
       into the fixed main slot — instead the rail pane gets .focused
       (highlight, CSS only) and a MAIN pane stays lifted if one exists;
@@ -287,3 +287,59 @@ files-as-rail-pane, final round-trip + REPORT; I8 arming is task 2).
 Still open: tasks 3-5 (focus/open discipline in both regions, files as
 a rail pane + demo seed, final round-trip + geometry probe + chat smoke
 + REPORT).
+
+### Task 3 DONE (loop 4, 2026-09-15) — focus/open discipline in both regions
+
+- libs/filmstrip/lib.pp:
+  - NEW `filmstrip/lift-holds-live-main?` (focus points at a LIVE
+    main-region pane — that pane owns the fixed lift) + NEW
+    `filmstrip/rail-focus-onto panes old new` — THE region-focus rule:
+    a rail-region target never takes the persisted focus when a live
+    main pane holds the lift (only the OOB ring moves onto it); when no
+    live main pane is lifted, the rail pane BECOMES the persisted focus
+    (a focused rail pane in the rail satisfies I1). Main targets behave
+    exactly as before.
+  - `filmstrip/focus-id` rewritten over rail-focus-onto; `filmstrip/open`,
+    `filmstrip/cascade` (leaf clicks) and (surface.ml)
+    `glochid/resume` compute focus2 the same way. open-response
+    signature grew `target` (the pane the ring lands on) distinct from
+    `focus2` (the index persisted) — callers updated everywhere.
+  - Removal of one reader error I introduced (first-on-desk rewrite
+    below missing a close paren — caught by scratch boot, NOT by dune:
+    .pp/.pp-embedded strings are read at BOOT). Probe lore: after ANY
+    surface.ml-string edit, boot the binary once before trusting dune.
+- agent/lib/surface.ml:
+  - `glochid/first-on-desk` now two passes: first LIVE MAIN pane on the
+    desktop, else first live RAIL pane (rail panes are valid focus
+    targets — I1 holds when the desk has no live main); helper
+    `glochid/first-region-on-desk`. Never a shelved pane (pane-live?
+    gates both passes — I2 kept). heal-focus + desktop-set inherit.
+  - win-row focus button title is region-aware ("highlight the rail
+    pane in place (no lift)" vs "lift into the main window").
+- SEMANTIC MODEL (for task 5): the rail ring is live-DOM state, NOT
+  persisted — after reload only the persisted focus (a live main pane
+  when one was lifted) wears .focused. Shimmed deliberately; flagged
+  for the REPORT as a minor gap (ring does not survive reload; spec
+  text does not require it).
+- scripts/probe_shell_sem.mjs: I8 now ARMED BY DEFAULT
+  (I8_ARMED=0 record-only — task 2's "armed by default" note was
+  aspirational; the env gate remained and the default run printed SKIP).
+  New v3-task-3 steps after the pin/unpin churn: (a) re-pin p2, real
+  winbox focus click -> p2 ringed in place + p1 keeps .focused + lift
+  1512x825 + ws focus still content:0 (no rail steal); (b) reload (ring
+  is live-DOM state, gone), real cascade leaf click on 'settings'
+  (pinned route) -> ring lands fresh on p2, main lift untouched, ws
+  focus unmoved; (c) shelve both MAIN panes via real winbox closes
+  (second close heals focus onto the pinned pane), reload ->
+  focusedRegion=rail, body visible, not shelved (I1 satisfied with no
+  forced main lift); restore /chat -> I1 stays green.
+- Verified: probe ALL GREEN (default armed + I8_ARMED=0 both exit 0),
+  dune build agent/bin/main.exe + dune runtest lisp/ common/ green,
+  `borge drift` 0 items.
+- Harness lore: (a) JS labels on blocks (`tag: {…}`) are valid; the
+  probe uses them for scoping reload steps. (b) The reader error line
+  number refers to the boot-loaded source (embedded glochid string),
+  not the OCaml file line — grep for the flagged form instead.
+
+Still open: tasks 4-5 (files as a rail pane + demo seed, final
+round-trip + geometry probe + chat smoke + REPORT).

@@ -165,10 +165,10 @@ const SNAPSHOT = `(()=>{
 
 // ---- I8 (region invariants) — recorded from v3 task 0, ASSERTED from v3 task 2 ----
 // "pinning a pane to the rail leaves its BODY visible in the rail while the
-// focused main pane stays visible." Until the pin verb ships there are no
-// rail panes, so the assertions would be vacuous: print the observation,
-// fail only once the implementing loop exports I8_ARMED=1.
-const I8_ARMED = process.env.I8_ARMED === "1";
+// focused main pane stays visible." Arming: task 2 shipped the pin verb, so I8
+// is ASSERTED BY DEFAULT from v3 task 3 onward; export I8_ARMED=0 to record
+// only (e.g. bisecting an older shell).
+const I8_ARMED = process.env.I8_ARMED !== "0";
 // expectPinned=false: nothing pinned YET (pre-pin load/records tags) — print
 // the observation without asserting, so the armed gate still pins through the
 // real verb before any I8 assertion is made.
@@ -284,6 +284,63 @@ ok((await ev(`[...document.querySelectorAll('.fs-win-row')].some(r=>r.textConten
 ok(s5.focusedRect && s5.focusedRect.q, "I1 still visible-focused after pin/unpin churn", JSON.stringify(s5.focusedRect));
 const wsp4 = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
 ok(wsp4.content.find((p) => p.id === "p2").region === "main", "unpin persisted to workspace row (region=main)");
+
+// ---- v3 task 3: focus/open discipline in both regions ----
+// Re-pin p2 and click ITS winbox focus row: the rail pane must take the ring
+// IN PLACE (body visible in the rail) while the focused main pane (p1) keeps
+// its lift — main pane unaffected, persisted focus stays on the main pane.
+await ev(`htmx.ajax('POST','/filmstrip/pin',{values:{id:'p2'},target:'#fs-sink',swap:'innerHTML'})`);
+await sleep(600);
+console.log(await ev(`(()=>{const row=[...document.querySelectorAll('.fs-win-row')].find(r=>/settings/.test(r.textContent||'')); const b=[...row.querySelectorAll('button')].find(b=>b.textContent.trim()==='focus'); b.click(); return 'focus clicked'})()`));
+await sleep(600);
+const s6 = await ev(SNAPSHOT);
+ok((await ev(`document.querySelector('.fs-pane[data-pane="p1"]').classList.contains('focused')`)), "rail focus: p1 keeps .focused (main lift intact)");
+ok((await ev(`document.querySelector('.fs-pane[data-pane="p2"]').classList.contains('focused')`)), "rail focus: winbox focus gives p2 the ring in place");
+ok(s6.focusedRegion === "main", "rail focus: the lift region is still main", JSON.stringify({region: s6.focusedRegion}));
+ok(s6.railBodies[0] && s6.railBodies[0].pane === "p2" && s6.railBodies[0].bodyVisible, "rail focus: pinned p2 body still visible in the rail", JSON.stringify(s6.railBodies));
+const wsp5 = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
+ok(wsp5.focus === "content:0", "rail focus: persisted focus stays on the lifted main pane (no rail steal)", JSON.stringify(wsp5.focus));
+ok(s6.focusedRect && s6.focusedRect.q, "I1 visible focused pane after rail focus", JSON.stringify(s6.focusedRect));
+
+// open-or-focus of the pinned route via a real cascade leaf click: highlight
+// in place, main pane unaffected (no lift steal; workspace focus unmoved).
+after_reload_tag: {
+  await send("Page.navigate", { url: base + "/" });
+  await sleep(1200);
+  // the rail ring is live-DOM state: after reload only the PERSISTED focus
+  // (p1) wears the ring, so the cascade open must apply it afresh.
+  ok(!(await ev(`document.querySelector('.fs-pane[data-pane="p2"]').classList.contains('focused')`)), "cascade setup: p2 ring is live-DOM state, gone after reload");
+  console.log(await ev(`(()=>{const b=[...document.querySelectorAll('#fs-cascade .fs-entry')].find(e=>e.textContent.trim()==='settings'); b.click(); return 'clicked'})()`));
+  await sleep(900);
+  const s7 = await ev(SNAPSHOT);
+  ok((await ev(`document.querySelector('.fs-pane[data-pane="p2"]').classList.contains('focused')`)), "open-or-focus of a pinned route highlights the rail pane in place");
+  ok((await ev(`document.querySelector('.fs-pane[data-pane="p1"]').classList.contains('focused')`)), "open-or-focus of a pinned route leaves the main lift untouched");
+  ok(s7.focusedRegion === "main" && s7.focusedRect && s7.focusedRect.q, "I1 main lift still valid after pinned-route open", JSON.stringify({region: s7.focusedRegion, rect: s7.focusedRect}));
+  ok(s7.railBodies[0] && s7.railBodies[0].bodyVisible, "pinned p2 body still visible after open-or-focus", JSON.stringify(s7.railBodies));
+  const wsp6 = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
+  ok(wsp6.focus === "content:0", "pinned-route open did not move the persisted focus", JSON.stringify(wsp6.focus));
+}
+
+// Healing considers rail panes: shelve every MAIN pane (real winbox close
+// clicks — the second close heals focus onto the pinned pane), reload: the
+// focused RAIL pane satisfies I1 (no forced main lift), body visible.
+after_reload_tag2: {
+  const closePane = (route) => `(()=>{const row=[...document.querySelectorAll('.fs-win-row')].find(r=>r.textContent&&r.textContent.includes('${route}')); if(!row) return 'no row'; const b=[...row.querySelectorAll('button')].find(b=>b.textContent.trim()==='close'); b.click(); return 'closed'})()`;
+  console.log(await ev(closePane("/sessions")));
+  await sleep(600);
+  console.log(await ev(closePane("/chat")));
+  await sleep(600);
+  await send("Page.navigate", { url: base + "/" });
+  await sleep(1200);
+  const s8 = await ev(SNAPSHOT);
+  ok(s8.focusedRegion === "rail" && s8.focusedRect && s8.focusedRect.q && !s8.focusedShelved, "I1 rail-only heal: the focused rail pane satisfies I1 (no forced main lift)", JSON.stringify({region: s8.focusedRegion, rect: s8.focusedRect, shelved: s8.focusedShelved}));
+  ok(s8.railBodies[0] && s8.railBodies[0].pane === "p2" && s8.railBodies[0].bodyVisible, "rail-only heal: pinned p2 body still visible", JSON.stringify(s8.railBodies));
+  // restore the shelved mains so the world stays sane for later runs
+  console.log(await ev(`(()=>{const row=[...document.querySelectorAll('.fs-shelf-row')].find(r=>r.textContent&&r.textContent.includes('/chat')); const b=[...row.querySelectorAll('button')].find(b=>b.textContent.trim()==='restore'); b.click(); return 'restored'})()`));
+  await sleep(600);
+  const s9 = await ev(SNAPSHOT);
+  ok(s9.focusedRect && s9.focusedRect.q && !s9.focusedShelved, "I1 still green after restoring a main pane beside a focused rail pane", JSON.stringify(s9.focusedRect));
+}
 
 console.log(fails === 0 ? "\nSEMANTIC PROBE: ALL GREEN" : `\nSEMANTIC PROBE: ${fails} FAILING`);
 process.exit(fails === 0 ? 0 : 1);
