@@ -64,8 +64,8 @@ let with_fixture f =
       let other_u = "admo" ^ uniq in
       exec conn
         (Printf.sprintf
-           "INSERT INTO users (username, is_admin) VALUES (%s, true), (%s, false), (%s, false)"
-           (s admin_u) (s plain_u) (s other_u));
+           "INSERT INTO users (username, is_admin) VALUES ('%s', true), ('%s', false), ('%s', false)"
+           admin_u plain_u other_u);
       let id =
         match TS.insert_datum conn ~type_name:ty ~fields_json:"{\"n\":1}" ~author:plain_u with
         | Ok id -> id
