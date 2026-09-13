@@ -292,7 +292,7 @@
   (subsection surfaces
    (doc "Interaction surfaces: HTML primary, line REPL secondary. The chat/agent surface is NOPALES-AUTHORED htmx fragments + multipart streaming; the stream is emitted by OCaml, the fragments by Nopales.")
    (status implemented)
-   (implements agent/lib/http_ui.ml agent/lib/lifecycle.ml agent/lib/runtime.ml agent/lib/surface.ml libs/html/lib.pp libs/hyper/lib.pp)
+   (implements agent/lib/http_ui.ml agent/lib/lifecycle.ml agent/lib/runtime.ml agent/lib/surface.ml libs/html/lib.pp libs/hyper/lib.pp scripts/probe_glochid_clear.mjs scripts/probe_glochid_input.mjs scripts/smoke_agent_cdp.mjs scripts/smoke_agent_surface.sh)
    (verify
     (smoke "surfaces / nopales-routes: agent boots and serves the NOPALES-authored chat + code pages on the route table (/ and /code), redefinable from the session REPL without restart")
     (smoke "surfaces / turn-replay-hyper-stream + turn-replay-nested-blocks: a consumed chat turn replays deterministically through libs/hyper (hyper/stream over the captured part list) in the agent host")

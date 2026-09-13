@@ -129,7 +129,7 @@
   (subsection suno
    (doc "libs/suno — AI song generation via the sunoapi.org gateway: submit a two-song task, poll record-info to SUCCESS, land finished audio into the music library")
    (status implemented)
-   (implements libs/suno/lib.pp scripts/pp_suno.py)
+   (implements libs/suno/lib.pp scripts/pp_suno.py scripts/pp_pod.py)
    (verify
     (smoke "suno/generate submits a task and returns its taskId; suno/record-info polls PENDING -> SUCCESS and suno/land pulls the finished audio into a music-track row"))
   )

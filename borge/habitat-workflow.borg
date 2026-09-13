@@ -177,6 +177,19 @@
   
    )
   )
+  (subsection ritual-tooling
+   (doc "Laptop-side scripts that make the session ritual cheap: file the issue, assert on eval JSON, recover a notes doc — operator/agent tooling living outside the image")
+   (status implemented)
+   (implements
+    scripts/eval_json.sh
+    scripts/file-issue.sh
+    scripts/recover_agents_outline.py)
+   (verify
+    (smoke "scripts/file-issue.sh submits one line to the habitat log/issues register (opens the /issues face or POSTs notes/issues/add)")
+    (smoke "sourcing scripts/eval_json.sh gives smoke scripts python3-json assertions over pp_eval -j / POST /api/eval responses instead of brittle grep -q '"ok":true'")
+    (smoke "scripts/recover_agents_outline.py rebuilds a notes doc outline from latest tree_versions rows and writes it back via POST /api/eval (2026-09-04 agents-note incident recovery; node.toml one-off tool for doc-level recovery)"))
+  )
+
   (subsection spec-checks
    (doc "Promote-time comparison: spec->code resolution, code->spec acknowledgment, doc coverage — promote grows a checklist")
    (status implemented)
@@ -296,6 +309,7 @@
     docs/plans/soil-m-a.md
     docs/plans/soil-m-b.md
     docs/plans/window-controlbox-v2.md
+    docs/plans/window-controlbox-v3.md
     docs/security-review-2026-09.md
     docs/theme-hex-audit.md
     docs/tree-traversal-handoff.md)
