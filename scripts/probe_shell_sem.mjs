@@ -10,7 +10,9 @@
  * truths. These are the falsifiable versions of the window-controlbox
  * spec smokes:
  *
- *   I1  a visible focused (main) pane always exists while panes do
+ *   I1  a visible FOCUSED pane always exists while panes do — in the MAIN
+ *       window (the lift, region=main) or in the rail (region=rail); with
+ *       zero rail panes this is exactly the v2 "focused main pane" rule
  *   I2  clicking a shelved app's name UNSHELVES it (no 0x0 focused pane)
  *   I3  open/cascade mutations refresh the windows rail (winbox rows ==
  *       live panes of the current desktop after a reload)
@@ -19,6 +21,13 @@
  *       (hx-target="closest .fs-body"); zero plain shell-escaping anchors
  *   I6  a /code dir walk happens INSIDE the pane (same window throughout)
  *   I7  fresh panes stamp the operator's current desktop
+ *   I8  (region, window-controlbox-v3) pinning a pane to the rail leaves
+ *       its BODY visible in the rail while the focused main pane stays
+ *       visible. RECORDED from v3 task 0 (snapshot carries pinnedCount +
+ *       per-pane region + rail-body visibility), ASSERTED only from
+ *       v3 task 2 onward — before the pin verb exists the assertions
+ *       would be vacuous, so they are gated on I8_ARMED=1 and printed
+ *       as SKIP.
  *
  *   AGENT_BIN=... node scripts/probe_shell_sem.mjs     (exit 0 = all OK)
  */
@@ -132,12 +141,20 @@ await send("Page.enable"); await send("Runtime.enable");
 
 const SNAPSHOT = `(()=>{
   const vis=(e)=>{const r=e.getBoundingClientRect();return r.width>1&&r.height>1;};
+  // Per-pane REGION readout (window-controlbox-v3): data-region attribute;
+  // a MISSING attribute defaults to "main" (pre-v3 panes carry none).
+  const region=(p)=>p.getAttribute('data-region')||'main';
   const panes=[...document.querySelectorAll('.fs-pane')];
   const focused=panes.find(p=>p.classList.contains('focused'));
   const live=panes.filter(p=>!p.classList.contains('shelved'));
+  const rail=panes.filter(p=>region(p)==='rail'&&!p.classList.contains('shelved'));
   return {
+    panes: panes.map(p=>({pane:p.getAttribute('data-pane')||'', route:((p.querySelector('.fs-title')||{}).textContent||'').trim(), region:region(p), state:p.classList.contains('shelved')?'shelved':'live', focused:p.classList.contains('focused')})),
+    focusedRegion: focused?region(focused):null,
     focusedRect: focused?(function(){const r=focused.getBoundingClientRect();return {w:Math.round(r.width),h:Math.round(r.height),q:vis(focused)};})():null,
     focusedShelved: focused?focused.classList.contains('shelved'):false,
+    pinnedCount: rail.length,
+    railBodies: rail.map(p=>({pane:p.getAttribute('data-pane')||'', bodyVisible:vis(p.querySelector(':scope > .fs-body'))})),
     liveCount: live.length,
     shelvedCount: panes.length-live.length,
     winRows: document.querySelectorAll('.fs-win-row').length,
@@ -146,6 +163,23 @@ const SNAPSHOT = `(()=>{
   };
 })()`;
 
+// ---- I8 (region invariants) — recorded from v3 task 0, ASSERTED from v3 task 2 ----
+// "pinning a pane to the rail leaves its BODY visible in the rail while the
+// focused main pane stays visible." Until the pin verb ships there are no
+// rail panes, so the assertions would be vacuous: print the observation,
+// fail only once the implementing loop exports I8_ARMED=1.
+const I8_ARMED = process.env.I8_ARMED === "1";
+async function checkI8(tag) {
+  const s = await ev(SNAPSHOT);
+  if (!I8_ARMED) {
+    console.log(`SKIP I8 ${tag} (asserted from v3 task 2; I8_ARMED=1 to arm)`);
+    console.log(`     I8 record pinned=${s.pinnedCount} railBodies=${JSON.stringify(s.railBodies)}`);
+    return;
+  }
+  ok(s.railBodies.length > 0 && s.railBodies.every((r) => r.bodyVisible), `I8 pinned rail pane body visible in the rail (${tag})`, JSON.stringify(s.railBodies));
+  ok(s.focusedRect && s.focusedRect.q, `I8 focused pane stays visible alongside pinned rail body (${tag})`, JSON.stringify(s.focusedRect));
+}
+
 await send("Page.navigate", { url: base + "/" });
 await sleep(1500);
 
@@ -153,7 +187,12 @@ console.log(`# probe_shell_sem @ ${base} (agent cwd ${AGENT_DIR})`);
 
 // ---- I1/I3/I5 as loaded ----
 const s0 = await ev(SNAPSHOT);
-ok(s0.focusedRect && s0.focusedRect.q, "I1 visible focused main pane on load", JSON.stringify(s0.focusedRect));
+// I1 widened (v3): a FOCUSED pane exists, is visible, live, and its region
+// is main (the lift) or rail (visible in the rail). With zero pinned panes
+// this must reduce to exactly the v2 rule — assert that too.
+ok(s0.focusedRect && s0.focusedRect.q && !s0.focusedShelved && (s0.focusedRegion === "main" || s0.focusedRegion === "rail"), "I1 visible focused pane on load (main lift or rail)", JSON.stringify({rect: s0.focusedRect, region: s0.focusedRegion}));
+ok(s0.pinnedCount > 0 || s0.focusedRegion === "main", "I1 backward-compat: with zero pinned panes the focused pane is the main lift", `pinned=${s0.pinnedCount} region=${s0.focusedRegion}`);
+await checkI8("on load");
 ok(s0.shelfRows === 1 && s0.shelvedCount === 1, "shelf row == shelved count on load", `shelf=${s0.shelfRows} shelved=${s0.shelvedCount}`);
 ok(s0.liveCount === 1 && s0.winRows === 1, "winbox rows == live panes on load", `win=${s0.winRows} live=${s0.liveCount}`);
 ok(s0.bareAnchors === 0, "I5 zero shell-escaping anchors in pane bodies", `bare=${s0.bareAnchors}`);
@@ -203,7 +242,7 @@ console.log(await ev(`(()=>{const pane=document.querySelector('.fs-pane.focused'
 await sleep(900);
 const s3 = await ev(SNAPSHOT);
 ok(await ev(`window.__sem2==='s'`), "I6 dir walk stayed in the same window");
-ok(s3.focusedRect && s3.focusedRect.q, "I1 visible focused pane after pane-local walk", JSON.stringify(s3.focusedRect));
+ok(s3.focusedRect && s3.focusedRect.q && (s3.focusedRegion === "main" || s3.focusedRegion === "rail"), "I1 visible focused pane after pane-local walk (main lift or rail)", JSON.stringify({rect: s3.focusedRect, region: s3.focusedRegion}));
 ok((await ev(`document.querySelector('.fs-pane.focused .fs-body').textContent.includes('leaf')`)), "I6 file content rendered inside the pane body");
 
 console.log(fails === 0 ? "\nSEMANTIC PROBE: ALL GREEN" : `\nSEMANTIC PROBE: ${fails} FAILING`);
