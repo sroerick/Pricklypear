@@ -124,6 +124,43 @@
         (render-html
           (filmstrip/oob-msg "filmstrip: no such pane"))
         (let*
+          ((p2 (dict-set (nth panes i) "state" "shelved"))
+            (panes2 (filmstrip/replace-at panes i p2))
+            (focus2
+              (if (= i focus)
+                  (filmstrip/first-live-index panes2)
+                  focus)))
+          (seq
+            (filmstrip/save-all cascade panes2 focus2)
+            (render-html
+              (html/join
+                (list
+                  (filmstrip/oob-msg "")
+                  (filmstrip/shelf-oob)
+                  (filmstrip/oob-section p2 (= i focus2))
+                  (if
+                    (if (>= focus2 0) (not (= focus2 focus)) #f)
+                    (filmstrip/oob-section
+                      (filmstrip/pane-at panes2 focus2)
+                      #t)
+                    "")))))))))
+  "POST /filmstrip/close: id param -> v2 SHELF = the default close:\nstate=shelved, the pane record SURVIVES (its hx-preserve body keeps\nlive DOM), OOB class swap adds .shelved; focus heals to the first\nlive pane when the shelved pane held it. Row removal is destroy.")
+
+(define filmstrip/destroy
+  (lambda
+    ()
+    (let*
+      ((id (as-str (request-param "id")))
+        (row (filmstrip/row))
+        (cascade (nth row 0))
+        (panes (nth row 1))
+        (focus (nth row 2))
+        (i (filmstrip/find-pane-index panes id)))
+      (if
+        (< i 0)
+        (render-html
+          (filmstrip/oob-msg "filmstrip: no such pane"))
+        (let*
           ((panes2 (filmstrip/remove-at panes i))
             (focus2 (filmstrip/close-focus i focus (length panes2))))
           (seq
@@ -132,6 +169,7 @@
               (html/join
                 (list
                   (filmstrip/oob-msg "")
+                  (filmstrip/shelf-oob)
                   (filmstrip/oob-delete-pane id)
                   (if
                     (if (>= focus2 0) (not (= focus2 focus)) #f)
@@ -139,7 +177,53 @@
                       (filmstrip/pane-at panes2 focus2)
                       #t)
                     "")))))))))
-  "POST /filmstrip/close: id param -> remove the pane record; OOB delete\nof its section + focus hand-off per close-focus.")
+  "POST /filmstrip/destroy: id param -> REMOVE the pane record (the\npre-v2 close): OOB delete of its section + focus hand-off per\nclose-focus. The shelf row for the pane goes with it.")
+
+(define filmstrip/restore
+  (lambda
+    ()
+    (let*
+      ((id (as-str (request-param "id")))
+        (row (filmstrip/row))
+        (cascade (nth row 0))
+        (panes (nth row 1))
+        (focus (nth row 2))
+        (i (filmstrip/find-pane-index panes id)))
+      (if
+        (< i 0)
+        (render-html
+          (filmstrip/oob-msg "filmstrip: no such pane"))
+        (let*
+          ((p2 (dict-set (nth panes i) "state" "live"))
+            (panes2 (filmstrip/replace-at panes i p2))
+            (focus2
+              (if
+                (or
+                  (< focus 0)
+                  (string-eq
+                    (filmstrip/pane-state (filmstrip/pane-at panes focus))
+                    "shelved"))
+                i
+                focus)))
+          (seq
+            (filmstrip/save-all cascade panes2 focus2)
+            (render-html
+              (html/join
+                (list
+                  (filmstrip/oob-msg "")
+                  (filmstrip/shelf-oob)
+                  (filmstrip/oob-section p2 (= i focus2))
+                  (if
+                    (if (>= focus 0) (not (= focus2 focus)) #f)
+                    (filmstrip/oob-section
+                      (filmstrip/pane-at panes2 focus)
+                      #f)
+                    "")))))))))
+  "POST /filmstrip/restore: id param -> state=live, the pane returns to\nits position; OOB class swap brings the section back; focus heals onto\nthe restored pane when nothing live holds focus (a shelved pane's\n.focused class is cleared by the same swap).")
+
+(define filmstrip/shelf-oob
+  (lambda () "")
+  "OOB payload re-rendering the shelf controlbox after\nclose/restore/destroy. Default empty -- the plain habitat shell has\nno shelf rail yet; glochid redefines it to swap its #fs-shelf rows.")
 
 (define filmstrip/close-focus
   (lambda
@@ -314,6 +398,9 @@
             "2px solid var(--sel-accent)"
             "outline-offset"
             "-2px"))
+        (css/rule
+          ".fs-pane.shelved"
+          (list "display" "none"))
         (css/rule
           ".fs-head"
           (list
@@ -711,7 +798,9 @@
                     "width"
                     filmstrip/default-width
                     "view"
-                    view-key))))))
+                    view-key
+                    "state"
+                    "live"))))))
           (seq
             (filmstrip/save-all cascade panes2 (length panes))
             (filmstrip/native-state))))))
@@ -850,7 +939,10 @@
                 "fs-pane"
                 " fs-"
                 (filmstrip/pane-width p)
-                (if focused? " focused" "")))
+                (if focused? " focused" "")
+                (if (string-eq (filmstrip/pane-state p) "shelved")
+                    " shelved"
+                    "")))
             (html/attr "id" (string-append "fs-pane-" id))
             (html/attr "data-pane" id)
             (html/attr "hx-swap-oob" "true")))
@@ -924,10 +1016,12 @@
                   "route"
                   r
                   "width"
-                  filmstrip/default-width))))
+                  filmstrip/default-width
+                  "state"
+                  "live"))))
           (length panes)
           #t))))
-  "Open-or-focus for route r: a fresh pane record (UUID id, default\nwidth preset) appended, or the existing pane's index. Returns\n(panes focus appended?) -- appended? false means an existing pane won.")
+  "Open-or-focus for route r: a fresh pane record (UUID id, default\nwidth preset, state=live) appended, or the existing pane's index. Returns\n(panes focus appended?) -- appended? false means an existing pane won.")
 
 (define filmstrip/open-response
   (lambda
@@ -1047,7 +1141,10 @@
                 "fs-pane"
                 " fs-"
                 (filmstrip/pane-width p)
-                (if focused? " focused" "")))
+                (if focused? " focused" "")
+                (if (string-eq (filmstrip/pane-state p) "shelved")
+                    " shelved"
+                    "")))
             (html/attr "id" (string-append "fs-pane-" id))
             (html/attr "data-pane" id)))
         (html/join
@@ -1078,6 +1175,20 @@
 (define filmstrip/pane-view
   (lambda (p) (as-str (dict-get p "view")))
   "Pane record's river window key (empty for habitat panes).")
+
+(define filmstrip/pane-state
+  (lambda (p) (as-str (dict-get p "state")))
+  "Pane record state: live | shelved (v2 shelf). Empty = live — records\nfrom before the state field exist and stay live.")
+
+(define filmstrip/pane-live?
+  (lambda (p)
+    (not (string-eq (filmstrip/pane-state p) "shelved")))
+  "True when the pane is not shelved (missing state counts live).")
+
+(define filmstrip/first-live-index
+  (lambda (panes)
+    (filmstrip/find-index filmstrip/pane-live? panes 0))
+  "Index of the first live (not shelved) pane, else -1.")
 
 (define filmstrip/pane-width
   (lambda
