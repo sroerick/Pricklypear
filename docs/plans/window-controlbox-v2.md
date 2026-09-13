@@ -1,0 +1,204 @@
+# HANDOFF: window-controlbox-v2 (glochid shell)
+
+You are a fresh agent looping through the make-phase of a designed
+feature. The spec is DONE and committed — read it first, it is the
+authority:
+
+    borge/filmstrip.borg -> section filmstrip-shell ->
+    subsection WINDOW-CONTROLBOX-V2   (status planned)
+
+Supporting background (skim, don't re-litigate):
+- borge/agent.borg -> section filmstrip-shell (what ALREADY landed on
+  the glochid host: left-rail col mode, focused-pane lift, heads-only
+  rail rows, chatpage height fix; commits 8689bd7, 6468add, da7c3c8)
+- docs/plans/filmstrip-v1.md (the v1 handoff whose shape this file copies)
+
+## What you are building (one sentence)
+
+The glochid shell becomes a two-strip window manager: a vertical RAIL
+strip of control boxes (apps / files / windows / shelf) beside a
+horizontal MAIN niri strip of windows third/half/full wide, with
+virtual desktops done by CSS hiding and close-defaults-to-shelf —
+all state in the workspace row (Nopales data), zero JS, all geometry
+in the `glochid/base-css` CSS block.
+
+## Loop protocol (how you work)
+
+- ONE task per loop (the checklists below, in order). Do the next
+  unchecked item, verify it, tick it in this file, commit, then end
+  your turn. When ALL items are `[x]`, write a short REPORT section at
+  the bottom of this file and end your turn.
+- Work on the laptop repo. Do NOT push. Do NOT deploy. Do NOT touch:
+  - the live glochid on 127.0.0.1:18090, its chromium window,
+    `systemctl --user ... glochid`, or repo-root `.agent/` (that IS the
+    live user workspace — the running glochid serves with cwd = repo
+    root)
+  - the untracked junk in repo root: bootstrap-picoclaw-repo.ksh,
+    libs/qmlsmith/, scripts/glochid-served.sh, spikesizon — never
+    `git add` them
+  - any `.borg` file. If the spec must change, run
+    `borge issue new "..."` and keep moving; note it in REPORT.
+- Commit after every item that builds and probes green. Stage files by
+  name only. Commit style: short first line + a WHY sentence.
+- If blocked >2 attempts on one item, write the attempts tried into a
+  `## BLOCKERS` section here and go on to the next item (or, if
+  everything left depends on it, still end the turn — the operator
+  will read BLOCKERS).
+
+## Environment facts
+
+- OCaml switch: run `eval $(opam env --switch=poohstack --set-switch)`
+  before dune. Build target: `dune build agent/bin/main.exe`.
+- The glochid UI source is a Nopales program embedded in an OCaml
+  string: `agent/lib/surface.ml`, variable `surface_source` inside
+  `{pp| ... |pp}`. Most of your edits live inside that string, in
+  Nopales (a Scheme-family Lisp-1); dune compiles the wrapper.
+- Nopales dialect gotchas (from borge/agent.borg filmstrip-shell):
+  `let*` is SINGLE-BODY — multi-step handlers wrap the tail in
+  `(seq ...)`; `(length ...)` uses cons-pair counting; routes are
+  exact-match strings; `dict-get/dict-set*` over row dicts;
+  `render-html` for fragments; htmx via html/attr strings.
+- The lib (shared with the habitat) is `libs/filmstrip/lib.pp`. Only
+  touch it when the spec says a prim is lib-level (the app-link prim
+  is; desktop/shelf state is glochid row fields).
+
+## The make loop (harness) — memorize this
+
+1. Build: `eval $(opam env --switch=poohstack --set-switch) && dune
+   build agent/bin/main.exe && echo BUILD_OK`
+2. Boot a SCRATCH instance (own workspace, own cwd, mock LLM):
+
+       mkdir -p /tmp/wm-test/.agent
+       cat > /tmp/wm-test/.agent/workspace.json <<'EOF'
+       {"axis":"col","desktop":0,"focus":"content:0","content":[
+         {"width":"third","route":"/chat","id":"p1","desktop":0},
+         {"width":"half","route":"/settings","id":"p2","desktop":0},
+         {"width":"full","route":"/sessions","id":"p3","desktop":1}],"cascade":["/chat"]}
+       EOF
+       echo '[{"text":"probe reply","calls":[]}]' > /tmp/wm-test/mock.json
+       cd /tmp/wm-test && nohup /home/roerick/dev/wyo.tech/pricklypear/_build/default/agent/bin/main.exe \
+         --serve --port 18091 --mock-script mock.json > boot.log 2>&1 &
+       sleep 3; curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:18091/
+
+   Kill between rebuilds with a NARROW pattern, e.g.
+   `pkill -f 'main.exe --serve --port 18091'` — NEVER a bare `pkill -f
+   <port>` from a shell whose own command line contains the pattern
+   (it will kill itself; learned the hard way).
+3. Probe (read-only; screenshots to /tmp, geometry JSON to stdout):
+
+       cd /home/roerick/dev/wyo.tech/pricklypear
+       PROBE_URL=http://127.0.0.1:18091/ SHOT=1 node scripts/probe_shell_wm.mjs
+
+   Expected CURRENT baseline (col axis): shell rail 320x825 at (16,16);
+   focused pane lifted to (352,16) 1512x825; non-focused rail rows
+   322x27 with bodyShown false; deskSentinel null (until task 2).
+   After every UI item, re-probe and diff against expectations you
+   write down BEFORE running.
+4. Interaction tests (when needed): extend NO product code with test
+   hooks; drive real htmx via CDP Runtime.evaluate clicking the
+   rendered buttons (document.querySelector('.fs-cbox ...').click())
+   in the probe if you need click-through assertions, or post forms
+   directly with curl to the SCRATCH instance only:
+   `curl -s -X POST http://127.0.0.1:18091/filmstrip/orient`.
+5. Patterns to copy (exist, don't reinvent):
+   - new POST route + OOB swaps: `glochid/orient` in agent/lib/surface.ml
+     (reads param, mutates ws row, answers OOB swaps)
+   - OOB pane class swap: `filmstrip/oob-section` in libs/filmstrip/lib.pp
+   - shell assembly + CSS: `glochid/shell-inner` and `glochid/base-css`
+     in agent/lib/surface.ml (the CSS is a Nopales string-append of
+     rule strings; keep every rule on its own string)
+   - workspace persistence: `glochid/ws-load / ws-save` +
+     `glochid/save-all` (already carries `axis` — extend for
+     `desktop`; note save-all currently REBUILDS the dict: preserve any
+     fields you add through every write path)
+
+## Tasks (do in order; tick when green+committed)
+
+- [ ] 0. BASELINE (no product code). Build, boot scratch, run probe,
+      record the numbers in a `## MEASURED` section here. Confirm the
+      workspace seed above loads all three panes (p3 lives on desktop 1
+      — it will RENDER anyway until task 3 exists; note the observed
+      rects).
+
+- [ ] 1. SHELF = default close. Pane records gain `"state":"live"`.
+      POST /filmstrip/close becomes: set state=shelved (NOT delete),
+      OOB class-swap the pane section to add class `shelved`, and
+      persist. New route POST /filmstrip/destroy {id}= the OLD delete
+      (row removal + filmstrip/close-focus hand-off). CSS:
+      `.fs-pane.shelved{display:none}`. Shelf UI: a controlbox row in
+      the rail (below the strip) listing shelved pane routes, each row
+      words: `[route] restore destroy`. Clicking restore POSTs
+      /filmstrip/restore {id} (state=live, OOB class swap back).
+      Render path: pane sections in glochid/shell-inner (via
+      filmstrip/panes-html) must emit the shelved class from row data.
+      Probe: seed p2 with state shelved; assert p2 rect is zero/hidden
+      and bodyShown irrelevant; curl POST restore then re-probe shows
+      it back. `width`/`close` button on a pane head still works —
+      close now shelves.
+
+- [ ] 2. DESKTOPS. Workspace gains `"desktop":N` (int, default 0); pane
+      records carry `"desktop"`. New route POST /filmstrip/desktop
+      {d:int} — sets ws desktop, persists, answers with OOB re-render
+      of the content strip (swap #fs-content innerHTML — pane DOM of
+      OTHER desktops may be dropped per swap; the workspace row keeps
+      them; acceptable for v2, note it in REPORT). Render: pane
+      sections get `data-desktop="N"` attribute; a sentinel
+      `<div id="ws-desk" class="fs-sh-axis dsk-N">` (inert, beside
+      #fs-axis) carries the current desktop. CSS (generate the ten
+      pairs in the base-css string):
+      `.fs-shell:has(#ws-desk.dsk-2) .fs-pane[data-desktop]:not([data-desktop="2"]){display:none}`.
+      Controlbox row in the rail: `[d0] [d1] [d2]` words POSTing
+      desktop=0/1/2. Probe: seed p3 on desktop 1; as-loaded
+      deskSentinel `fs-sh-axis dsk-0`, p3 hidden; curl POST desktop=1;
+      re-probe shows p3 visible and p1/p2 hidden. Save-all must carry
+      desktop through (same caution as axis).
+
+- [ ] 3. WINDOWS rail + focus-by-id. In the lib, add
+      `filmstrip/focus-id` (POST id param -> set focus to that pane's
+      index, same OOB two-section class swap as filmstrip/focus) and
+      register route pattern in the GLOCHID layer (see
+      `(route "/filmstrip/focus" ...)` block in surface.ml: add
+      `(route "/filmstrip/focus-id" "filmstrip/focus-id")`; keep the
+      lib's route table untouched if the lib has its own — glochid
+      routes are the shell's). Windows controlbox in the rail: one row
+      per LIVE pane of the CURRENT desktop: `[/chat focus] [width]
+      [close]` — focus word = POST focus-id. Extend focus healing
+      (glochid/shell, exists today: heals unset focus to pane 0) to
+      heal to `first live pane on the current desktop`. Probe: with 3
+      panes, click-through via curl POST focus-id {id:p3}; re-probe
+      shows p3 carrying .focused (lifted at 352,16).
+
+- [ ] 4. APP-LINK prim + chat nav repair (the bug that started this:
+      clicking `code` in the chat pane's nav did a full-window GET and
+      escaped the shell). In libs/filmstrip/lib.pp add
+      `filmstrip/app-link` (lambda (route label)) emitting a button
+      styled as a link (class fs-applink; CSS: bare link look, padding
+      0) with hx-post /filmstrip/open — check filmstrip/open's
+      parameter shape (route param, open-or-focus semantics) in
+      lib.pp. In agent/lib/surface.ml, the chat surface's
+      "agent — /code /sessions /settings" nav
+      (chat/body fragment chrome) re-authors to app-links. Probe:
+      seed workspace with only the chat pane focused; via CDP
+      evaluate a click on the rendered app-link for /code; re-probe:
+      the shell is STILL present (dot .fs-shell exists, rail rows
+      exist) and a /code pane was open-or-focused. None of this may
+      require a page reload.
+
+- [ ] 5. FINAL. Seed the 8-pane 3-desktop workspace from the spec's
+      smoke line (invent routes from the glochid surface list:
+      /chat /code /sessions /settings; extra routes may 404 inside
+      panes — acceptable for geometry probing, but prefer existing
+      ones). Probe all states; save 3 screenshots to /tmp
+      (wm-f0.png..). Run the chat-surface regression:
+      `dune runtest` (lisp/ + common/ need no services) and
+      `node scripts/smoke_agent_cdp.mjs` if it passes preconditions —
+      if it needs the mock-agent boot it should work (it boots its
+      own). Write REPORT.
+
+## Done means
+
+- build green, probe green on every claimed behavior, all tasks ticked
+- REPORT section below lists: commits (short hashes), measured
+  geometry changes, any BLOCKERS, any borge issues filed
+- nothing in repo root .agent/, nothing live touched, tasks list fully
+  checked
