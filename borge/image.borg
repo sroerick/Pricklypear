@@ -218,6 +218,19 @@
     |))
    )
   )
+
+  (subsection session-split
+   (doc "The session split: session.ml was a 2.5k-line monolith mixing the interpreter driver, control prims, boot seeding, and the UI shell cache")
+   (status implemented)
+   (* agent note (|2026-09 split i-1788671109-1, pinned by scripts/verify_session_split.sh: session_control_prims.ml owns the DB-touching control prims (fork/merge/route/checkout/unbind/prune-synced/bench + private __with_transaction__/__step__/with-public-write) and the branch-ref helpers, parameterized by a hooks record (rehydrate + checkout_to) so the module cycle stays broken; boot_seed.ml owns the additive libs seed, package discovery, the agents-note seed, personal/agent branch bootstrap, and the first-load recipes, parameterized by an ops record (load_library, eval_one, rehydrate, checkout_to); session_types.ml groups the 25-field Session.t into ui_shell and eval_state sub-records. The script pins that control-prim registrations live ONLY in session_control_prims and that the split modules register nothing else.|) *)
+   (implements
+    image/lib/session_control_prims.ml
+    image/lib/boot_seed.ml
+    scripts/verify_session_split.sh)
+   (verify
+    (build "ksh scripts/verify_session_split.sh")
+    (smoke "control-prim registrations live only in session_control_prims; family modules register nothing else"))
+  )
   (subsection function-stat-ring
    (doc "function_stat writes go through an in-process ring flushed by a background fiber; no per-eval DB write")
    (status implemented)

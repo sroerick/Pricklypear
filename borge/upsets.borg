@@ -224,7 +224,7 @@
          the bench consumes files. The bench never talks to Postgres
          and never needs the image running.
          |)))
-   (implements spikes/upsets/dune spikes/upsets/stats.ml spikes/upsets/flow.ml spikes/upsets/cooc.ml spikes/upsets/rules.ml)
+   (implements spikes/upsets/dune spikes/upsets/stats.ml spikes/upsets/flow.ml spikes/upsets/cooc.ml spikes/upsets/rules.ml spikes/upsets/types.ml)
   )
 
   (subsection simulator

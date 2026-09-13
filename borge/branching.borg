@@ -1220,7 +1220,7 @@
   (subsection land
    (doc "pp-sync land: promote + vault snapshot + git commit as one operator step")
    (status implemented)
-   (implements cli/bin/pp_sync.ml scripts/pp-sync.sh cli/lib/pp_client.ml)
+   (implements cli/bin/pp_sync.ml scripts/pp-sync.sh cli/lib/pp_client.ml cli/lib/pp_sync_vault.ml)
    (details
     (doc (|
          PROBLEM:

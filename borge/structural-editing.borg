@@ -341,7 +341,7 @@
   (subsection client-eval
    (doc "Browser build of the Nopales evaluator runs the same pure op algebra the server runs, so an optimistic edit is a real local computation — not a predicted guess — reconciled to server truth by morph")
    (status implemented)
-   (implements lisp/lib pure/prims_pure.ml client/bin/main.ml client/conformance/main.ml libs/structed/lib.pp libs/outline/lib.pp libs/html/lib.pp)
+   (implements lisp/lib pure/prims_pure.ml client/bin/main.ml client/conformance/main.ml client/lib/pp_client_table.ml libs/structed/lib.pp libs/outline/lib.pp libs/html/lib.pp)
    (details
     (doc (|
          SAME EVALUATOR, SECOND TARGET. The pure interpreter core
