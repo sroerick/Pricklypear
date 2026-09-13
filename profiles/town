@@ -6,12 +6,12 @@
 #
 # Order: preferred names keep their canonical seed order (std first,
 # css before notes, theme before ui) regardless of file position;
-# non-preferred names (kanban, ntfy, roam, tree) load after them in
-# FILE order. Support deps beyond the approved IN list, justified by
-# the packages that need them at call time: outline + structed + roam
-# (notes/doc/upsert calls roam/reindex unconditionally, so notes
-# without roam breaks - 09-13 town boot), tree (todo/calendar/kanban).
-# Amends go through the admin line like code.
+# non-preferred names load after them in FILE order. Support deps
+# beyond the approved IN list, justified by what IN packages call:
+# outline + structed + roam (notes; doc/upsert calls roam/reindex
+# unconditionally - 09-13 town boot), tree (todo/calendar/kanban),
+# weather (ui/css shell) + menu (ui/nav shell). Amends go through the
+# admin line like code.
 std
 theme
 ui
@@ -28,3 +28,5 @@ kanban
 ntfy
 roam
 tree
+weather
+menu

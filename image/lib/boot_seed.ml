@@ -121,8 +121,13 @@ let discover_seed_packages () : string list =
             [])
           else apply_profile ~profile)
 
-(** Ensure living agents note exists on system/main after notes seed.
-    Idempotent: skip if slug agents already present. *)
+(** Ensure living agents note exists on system/main. Called from
+    Session.boot_personal AFTER checkout_personal's rehydrate: with the
+    load-skip map active (unchanged defines bind via rehydrate, not the
+    seed eval), the seed needs notes/doc/get + roam/reindex actually
+    bound — mid-seed placement failed with 'unbound: notes/doc/get' on
+    the 2026-09-13 town boot. Idempotent: skip if slug agents is
+    already present. *)
 let seed_agents_note ~(ops : ops) (t : t) : unit =
   let body =
     String.concat "\n"
@@ -251,10 +256,6 @@ let seed_stdlib ~(ops : ops) (t : t) : unit =
           (List.length pkgs) (String.concat " " pkgs);
         let rec go = function
           | [] -> ()
-          | "notes" :: rest ->
-              let () = record_failure "notes" (seed_one ~ops t "notes") in
-              let () = seed_agents_note ~ops t in
-              go rest
           | name :: rest ->
               let () = record_failure name (seed_one ~ops t name) in
               go rest
