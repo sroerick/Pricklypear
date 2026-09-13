@@ -310,7 +310,9 @@ app-link/button twins (POST /filmstrip/new, open-or-focus /sessions)."
 (define (settings/page)
   (glochid/layout "glochid — settings"
     (string-append
-      "<h1><a href=\"/\">agent</a> <span class=\"muted\">— /settings</span></h1>"
+      (if (hx-request?)
+          "<h1><span class=\"muted\">/settings</span></h1>"
+          "<h1><a href=\"/\">agent</a> <span class=\"muted\">— /settings</span></h1>")
       "<div class=\"card\"><form method=\"post\" action=\"/settings\">"
       "<p><label>API key — " (agent/key-status) " · blank keeps current</label>"
       "<input type=\"password\" name=\"api_key\" autocomplete=\"off\"></p>"
