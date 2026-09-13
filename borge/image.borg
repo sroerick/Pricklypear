@@ -157,6 +157,7 @@
    (implements
     migrations/028_branch_def_gen.sql
     image/lib/session_registry.ml
+    image/lib/def_journal.ml
     image/lib/session.ml
     image/lib/http.ml
     image/lib/http_core.ml

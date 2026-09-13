@@ -496,7 +496,7 @@
   (subsection user-llm-keys
    (doc "Per-user LLM provider keys; session AI uses user key with env fallback")
    (status implemented)
-   (implements image/lib/auth_store.ml image/lib/llm_client.ml image/lib/session.ml image/lib/http_pages.ml)
+   (implements image/lib/auth_store.ml image/lib/envelope.ml image/lib/llm_client.ml image/lib/session.ml image/lib/http_pages.ml)
    (verify
     (build "dune build image")
     (smoke "user sets llm_key; propose-function uses it not empty env")
@@ -832,7 +832,7 @@
   (subsection web-login
    (doc "Browser password login, session cookie, middleware, logout")
    (status verified)
-   (implements image/lib/http.ml image/lib/session.ml image/lib/auth_password.ml image/lib/auth_store.ml)
+   (implements image/lib/http.ml image/lib/session.ml image/lib/auth_password.ml image/lib/auth_store.ml image/lib/auth_throttle.ml)
    (verify
     (build "dune build")
     (smoke "POST /login valid -> Set-Cookie -> GET / as that user")

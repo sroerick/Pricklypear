@@ -8,7 +8,7 @@
 
   (subsection mime-framing
    (doc "One route response streams N MIME parts; each part is one htmx swap")
-   (implements image/lib/http_core.ml pure/prims_pure.ml image/lib/primitives.ml lisp/lib/eval.ml)
+   (implements image/lib/http_core.ml image/lib/http_multipart.ml pure/prims_pure.ml image/lib/primitives.ml lisp/lib/eval.ml)
    (status implemented)
    (verify
     (build "dune build image")

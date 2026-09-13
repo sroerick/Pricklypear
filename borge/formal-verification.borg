@@ -11,5 +11,6 @@
           docs/formal-verification-plan.md. First island (branch algebra) shipped 2026-09;
           see the agent note above.")
    (status partial)
+   (implements image/lib/branch_algebra.ml image/test/branch_algebra_test.ml)
  )
 )
