@@ -208,7 +208,7 @@
   (subsection caching
    (doc "Definition cache invalidation via branch generation; the one cheap round trip")
    (status implemented)
-   (implements remote/lib/def_cache.ml migrations/)
+   (implements remote/lib/def_cache.ml migrations/017_branch_generation.sql)
    (verify
     (test "a write in the client's branch ancestry bumps a generation counter; the client's next cache-check round trip observes the bump and reloads affected defs")
     (test "a checkout to a different branch invalidates the whole local def cache (branch is the namespace)")
