@@ -147,7 +147,7 @@
   (subsection agent-loop
    (doc "The minimal agent turn loop and tool registry")
    (status partial)
-   (implements llm/lib/loop.ml llm/lib/provider.ml llm/lib/tools.ml common/lib/llm_codec.ml)
+   (implements llm/lib/loop.ml llm/lib/provider.ml llm/lib/tools.ml common/lib/llm_codec.ml llm/lib/envcfg.ml llm/lib/harness.ml llm/lib/mock.ml httpc/pp_http.ml)
    (verify
     (test "a mock provider emitting one tool call round-trips: tool executes, result message is appended, loop makes exactly one follow-up model call")
     (test "budget: the loop stops after a configurable max turns and reports rather than spinning")
@@ -239,7 +239,7 @@
   (subsection agent-route-table
    (doc "The Nopales route table: route, route/lookup, route/dispatch — THE HOST SEAM between the agent and the image (hypermedia-harness.request-runner). Identical Nopales signatures, host-local backing. Routes bind a path to a Nopales render handler the same way the image's (route ...) does.")
    (status implemented)
-   (implements agent/lib/runtime.ml)
+   (implements agent/lib/runtime.ml hostkit/host_seam.ml hostkit/http_kit.ml hostkit/multipart_emitter.ml)
    (verify
     (test "agent-route-table / register-and-render: a (route \"/chat\" \"chat/render\") registered by a plugin makes /chat resolvable via route/lookup and renderable via route/dispatch (which invokes the handler through Runtime.apply_value under the eval rim and returns the rendered raw-HTML VStr)")
     (test "agent-route-table / thin-context: route/dispatch binds a thin request context so query-param / request-method / hx-request? resolve inside the handler")
@@ -292,7 +292,7 @@
   (subsection surfaces
    (doc "Interaction surfaces: HTML primary, line REPL secondary. The chat/agent surface is NOPALES-AUTHORED htmx fragments + multipart streaming; the stream is emitted by OCaml, the fragments by Nopales.")
    (status implemented)
-   (implements agent/lib/http_ui.ml agent/lib/runtime.ml agent/lib/surface.ml libs/html/lib.pp libs/hyper/lib.pp)
+   (implements agent/lib/http_ui.ml agent/lib/lifecycle.ml agent/lib/runtime.ml agent/lib/surface.ml libs/html/lib.pp libs/hyper/lib.pp)
    (verify
     (smoke "surfaces / nopales-routes: agent boots and serves the NOPALES-authored chat + code pages on the route table (/ and /code), redefinable from the session REPL without restart")
     (smoke "surfaces / turn-replay-hyper-stream + turn-replay-nested-blocks: a consumed chat turn replays deterministically through libs/hyper (hyper/stream over the captured part list) in the agent host")
