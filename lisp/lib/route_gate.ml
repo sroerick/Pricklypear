@@ -43,12 +43,24 @@ let expand_body (env : Env.env) (body : expr) : expr =
     handler actually applies that name, inference falls through to the
     strict prim lookup and fails closed with the normal denial message
     instead of 500ing the gate. Bodies are macroexpanded so sibling
-    known_fn resolution also sees through macros. *)
+    known_fn resolution also sees through macros.
+
+    Same contract for a sibling whose MACROEXPANSION raises (2026-09-13
+    prod /welcome outage: a DB-only define used the 3-arg (let* binds b1
+    b2) form, std's let* macro is fixed-arity 2, expand_macro_once raised
+    Interp_error mid-fold, and every gated public route 500'd
+    "macro let* arity 2 vs 3"). The broken sibling is skipped — a handler
+    that actually applies it denies with the normal unresolved-name
+    message; the handler's OWN body stays strict (expand_body
+    propagates, and check_public_handler turns that into a denial). *)
 let env_lambda_bindings (env : Env.env) : (string * expr) list =
   Env.fold env
     (fun name v acc ->
       match (try Env.force_value v with _ -> v) with
-      | VLambda (_, body, _) -> (name, expand_body env body) :: acc
+      | VLambda (_, body, _) ->
+          (match expand_body env body with
+           | expanded -> (name, expanded) :: acc
+           | exception Interp_error _ -> acc)
       | _ -> acc)
     []
 

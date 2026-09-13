@@ -9,6 +9,11 @@
  (libraries pricklypear-lisp alcotest))
 
 (test
+ (name route_gate_test)
+ (modules route_gate_test)
+ (libraries pricklypear-lisp alcotest))
+
+(test
  (name conformance_test)
  (modules conformance_test)
  (libraries pricklypear-lisp pricklypear-conformance alcotest))
