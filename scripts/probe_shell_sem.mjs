@@ -271,6 +271,11 @@ ok((await ev(`document.querySelector('.fs-pane[data-pane="p2"]').getAttribute('d
 ok((await ev(`[...document.querySelectorAll('.fs-win-row')].some(r=>r.textContent.includes('unpin'))`)), "I8 winbox row re-labeled to unpin (winbox OOB rode the pin response)");
 ok((await ev(`[...document.querySelectorAll('.fs-pane[data-pane="p2"] header button')].some(b=>b.textContent.trim()==='unpin')`)), "I8 pane-head pin word re-labeled to unpin");
 await checkI8("after pin");
+// cascade cap released (spec smoke: pinned view fills rail height): with
+// exactly ONE pinned pane it takes the whole rail band — far past the 16rem
+// max the cascade app-picker entries live under (256px at 16px root font;
+// task-2 measured 433px pane / 406px body vs the 118px cascade entry cap).
+ok((await ev(`Math.round(document.querySelector('.fs-pane[data-pane="p2"]').getBoundingClientRect().height)`)) > 256, "cascade cap released: the single pinned pane fills the rail band (> 16rem)");
 const wsp3 = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
 ok(wsp3.content.find((p) => p.id === "p2").region === "rail", "I8 pin persisted to workspace row (region=rail)");
 
@@ -340,6 +345,54 @@ after_reload_tag2: {
   await sleep(600);
   const s9 = await ev(SNAPSHOT);
   ok(s9.focusedRect && s9.focusedRect.q && !s9.focusedShelved, "I1 still green after restoring a main pane beside a focused rail pane", JSON.stringify(s9.focusedRect));
+}
+
+// ---- v3 task 4: FILES AS A RAIL PANE (/code walk at rail height) ----
+// The /code surface is the files view. A fresh reload re-renders every pane
+// from its ROUTE (the I6 walk left the /code DOM body on leaf.txt but the
+// persisted route is /code), so this block starts with a navigate to reset
+// to route-rendered state. Then: flip to desktop 1 (where the live /code
+// pane lives), pin it, and run the SAME pane-local walk I6 ran in the main
+// window but INSIDE the rail — same window, in-pane swaps, both pinned
+// bodies visible (rail is dock semantics: p2 from desk 0 still shows), and
+// the pinned body must outgrow the cascade 16rem cap (flex rail share, not
+// a max-height 16rem box). The cascade stays the app picker, so the pinned
+// section must live in the content strip, never inside #fs-cascade.
+v3_rail_files: {
+  await send("Page.navigate", { url: base + "/" });
+  await sleep(1200);
+  console.log(await ev(`(()=>{const b=[...document.querySelectorAll('#fs-deskbox button')].find(x=>x.getAttribute('hx-vals')==='{\\"d\\":\\"1\\"}'); if(!b) return 'no desk-1 button'; b.click(); return 'flipped'})()`));
+  await sleep(900);
+  ok(await ev(`document.querySelector('#ws-desk').classList.contains('dsk-1')`), "files setup: desktop 1 active after the deskbox click");
+  const wsj = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
+  const codeRec = wsj.content.find((p) => p.route === "/code" && p.state === "live");
+  ok(codeRec && codeRec.region !== "rail", "files setup: live /code pane present (still on the strip)", codeRec ? codeRec.id : "missing");
+  if (codeRec) {
+    const idSel = `.fs-pane[data-pane="${codeRec.id}"]`;
+    await ev(`htmx.ajax('POST','/filmstrip/pin',{values:{id:'${codeRec.id}'},target:'#fs-sink',swap:'innerHTML'})`);
+    await sleep(600);
+    ok((await ev(`document.querySelector('${idSel}').getAttribute('data-region')`)) === "rail", "files: /code pane pinned to the rail (data-region=rail)");
+    ok((await ev(`document.querySelector('${idSel}').closest('#fs-cascade') === null`)), "files: pinned /code section lives in the content strip, not the cascade");
+    const sF = await ev(SNAPSHOT);
+    ok(sF.railBodies.length === 2 && sF.railBodies.every((r) => r.bodyVisible), "files: both pinned rail bodies visible (desk-0 p2 rides along — dock semantics)", JSON.stringify(sF.railBodies));
+    ok(sF.focusedRect && sF.focusedRect.q && (sF.focusedRegion === "main" || sF.focusedRegion === "rail"), "I1 visible focused pane with /code pinned", JSON.stringify({region: sF.focusedRegion, rect: sF.focusedRect}));
+    const bodyH = await ev(`Math.round(document.querySelector('${idSel} > .fs-body').getBoundingClientRect().height)`);
+    // The 16rem cap is a CASCADE column rule (.fs-cascade max-height); the
+    // pinned section lives in .fs-content. Direct proof of release: its
+    // computed max-height is none, and the pinned panes consume the whole
+    // content band between them (flex shares, counters of the fixed cap).
+    ok((await ev(`getComputedStyle(document.querySelector('${idSel}')).maxHeight`)) === "none", "files: pinned section carries no max-height (cascade cap released)");
+    console.log(`     rail geometry: bodyH=${bodyH} contentH=${await ev(`Math.round(document.querySelector('.fs-content').getBoundingClientRect().height)`)}`);
+    // I6 at rail height: REAL clicks inside the RAIL pane body.
+    console.log(await ev(`(()=>{window.__sem3='pre'; const pane=document.querySelector('${idSel}'); const row=[...pane.querySelectorAll('.fs-body a')].find(a=>a.textContent.trim()==='deep'); if(!row) return 'no deep link in rail body: '+[...pane.querySelectorAll('.fs-body a')].map(a=>a.textContent.trim()).join(','); if(row.getAttribute('hx-target')!=='closest .fs-body') return 'ROW NOT PANE-LOCAL'; row.click(); return 'walked-deep'})()`));
+    await sleep(900);
+    console.log(await ev(`(()=>{const pane=document.querySelector('${idSel}'); const row=[...pane.querySelectorAll('.fs-body a')].find(a=>a.textContent.trim()==='leaf.txt'); if(!row) return 'no leaf in rail body'; row.click(); return 'walked-leaf'})()`));
+    await sleep(900);
+    ok(await ev(`window.__sem3==='pre'`), "files: rail walk stayed in the same window (no navigation)");
+    ok((await ev(`document.querySelector('${idSel} > .fs-body').textContent.includes('leaf')`)), "files: file content rendered INSIDE the rail pane body (I6 at rail height)");
+    const sF2 = await ev(SNAPSHOT);
+    ok(sF2.focusedRect && sF2.focusedRect.q, "I1 visible focused pane after the rail files walk", JSON.stringify(sF2.focusedRect));
+  }
 }
 
 console.log(fails === 0 ? "\nSEMANTIC PROBE: ALL GREEN" : `\nSEMANTIC PROBE: ${fails} FAILING`);

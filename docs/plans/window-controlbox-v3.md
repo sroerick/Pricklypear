@@ -131,7 +131,7 @@ all geometry stays in CSS classes, zero JS, zero inline styles.
       unaffected; focus-id onto a pinned route via cascade click -> same.
       Commit.
 
-- [ ] 4. FILES AS A RAIL PANE: the /code surface is the files view.
+- [x] 4. FILES AS A RAIL PANE: the /code surface is the files view.
       Verify a pinned /code pane with the pane-local tree walk (I6)
       works at rail height (click sub/leaf dirs in the RAIL; same
       window, in-pane updates); the cascade keeps only the app picker
@@ -343,3 +343,54 @@ a rail pane + demo seed, final round-trip + geometry probe + chat smoke
 
 Still open: tasks 4-5 (files as a rail pane + demo seed, final
 round-trip + geometry probe + chat smoke + REPORT).
+
+### Task 4 DONE (loop 5, 2026-09-15) — files as a rail pane, dock semantics
+
+- Product change (agent/lib/surface.ml base-css, ONE rule family): the v2
+  desktop-hide rules (`:has(#ws-desk.dsk-N) .fs-pane[data-desktop]:not(...)
+  {display:none}`) now carry `:not([data-region="rail"])` — rail panes are
+  EXEMPT from desktop hiding. This is spec-mandated (region=rail is
+  "desktop-global, dock semantics"), and the probe caught its absence as a
+  FAIL the moment a pinned pane was checked on a foreign desktop: p2 (desk 0)
+  pinned, flip to desk 1, whole section hidden at 0x0. All other v3 files
+  behavior was ALREADY correct from tasks 1-3: the pinned /code section lives
+  in .fs-content (never in the cascade), its body rides oob-section/hx-
+  preserve, and pane-local walk links (`hx-target closest .fs-body`) work at
+  rail height with zero JS.
+- Probe task-4 block (after the task-3 healing steps): fresh reload (resets
+  the /code DOM body to its ROUTE — the I6 walk had left it on leaf.txt in
+  the DOM), real deskbox click -> desktop 1 (where the I7 churn left the live
+  /code pane), htmx.ajax pin -> assertions: data-region=rail, section NOT in
+  #fs-cascade, BOTH pinned bodies visible (desk-0 p2 rides along — dock
+  semantics now probed), I1 green (focused rail pane in the rail — no live
+  main on desk 1), computed max-height 'none' on the pinned section, then the
+  REAL I6 walk INSIDE THE RAIL: deep -> leaf.txt clicks in the rail body,
+  same window, file content rendered inside the rail pane body, I1 green
+  after.
+- CASCADE CAP (probed precisely): the 16rem cap is a `.fs-cascade` column
+  rule (the app picker); pinned panes never touch it. Direct proof: computed
+  max-height 'none'. Fill proof: with exactly ONE pinned pane the section
+  fills the whole rail band (433px pane / 406px body — asserted > 16rem in
+  the task-2 pin step of the probe where pinnedCount==1). With TWO pinned
+  panes the band (contentH 425 on the probe viewport) flex-shares between
+  them (290/127 here) and scrolls inside — flex shares, not a fixed cap, and
+  no per-pane invariant past max-height:none + visible bodies is honest at
+  n>1, so none is asserted.
+- Demo workspace (screenshots to /tmp, throwaway /tmp/v3-demo-rail.mjs):
+  scratch agent seeded p1 /chat live FOCUSED MAIN + p2 /code live region=rail
+  + deep/leaf.txt — renders the review's target exactly: /chat lifted 825px,
+  /code pinned 322x433 body 320x406 in the rail beside it, walk to leaf.txt
+  stays pane-local, zero inline styles in the rail pane (the pane's only
+  [style] anywhere is chat/head's pre-existing v2 model-select). Screens:
+  /tmp/v3-demo-rail-code.png, /tmp/v3-demo-rail-code-walked.png.
+- Verified: probe ALL GREEN (default + I8_ARMED=0, exit 0 both), dune build
+  agent/bin/main.exe green, dune runtest lisp/ common/ green, borge drift 0.
+- Harness lore: (a) a pane's DOM body is LIVE state — a full navigate is the
+  only reset back to its route's render (OOB body preserves keep walks alive
+  across class/desktop swaps by design); probe any route-body assertion from
+  a fresh navigate. (b) Flex `1 1 auto` pinned panes distribute the rail
+  band proportionally to content size — two pinned panes need not be equal,
+  do not assert symmetric halves.
+
+Still open: task 5 (final round-trip + desktop flips + shelf interplay +
+full gate + REPORT).
