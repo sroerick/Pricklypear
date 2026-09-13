@@ -52,10 +52,16 @@ let surface_source = {pp|
     ".fs-shell{height:calc(100vh - 2rem)}"
     ".fs-topline{display:flex;gap:.75rem;align-items:center;flex:0 0 auto;margin:0}"
     ".fs-sh-axis{display:none}"
-    ;; vertical axis: full-width panes stacked (flex-direction flip only —
-    ;; the same flex-basis presets become heights; cascade compacts)
-    ".fs-shell:has(#fs-axis.col) .fs-cascade{flex:0 0 14vh;min-height:5rem}"
-    ".fs-shell:has(#fs-axis.col) .fs-content{flex-direction:column;overflow-y:auto;overflow-x:hidden}"
+    ;; left-rail axis: the WHOLE SHELL collapses to a screen-edge toolbar
+    ;; column (~20rem). Cascade stacks its Miller columns as a vertical
+    ;; app menu; panes stack BELOW it as the vertical filmstrip (the same
+    ;; flex-basis width presets re-read as heights); the desktop stays
+    ;; free to the right. Same three override toggles, no JS.
+    ".fs-shell:has(#fs-axis.col){width:20rem;max-width:20rem;height:calc(100vh - 2rem);min-height:0}"
+    ".fs-shell:has(#fs-axis.col) .fs-cascade{flex:0 0 auto;flex-direction:column;max-height:16rem;min-height:0;overflow-y:auto;overflow-x:hidden}"
+    ".fs-shell:has(#fs-axis.col) .fs-launch,.fs-shell:has(#fs-axis.col) .fs-topline{flex-wrap:wrap}"
+    ".fs-shell:has(#fs-axis.col) .fs-launch input[type=text]{width:100%}"
+    ".fs-shell:has(#fs-axis.col) .fs-content{flex:1 1 auto;min-height:0;flex-direction:column;overflow-y:auto;overflow-x:hidden}"
     ".fs-shell:has(#fs-axis.col) .fs-pane{min-width:0;width:100%;min-height:6rem}"
     ".bubble{background:#1b1f2a;border-radius:6px;padding:.5rem .75rem;margin:.5rem 0;white-space:pre-wrap}"
     ".bubble.user{color:#9ece6a}"
@@ -386,10 +392,10 @@ uses tree/get + node-path; glochid rides the local fs (HOST SEAM 1).")
     (seq (fs/write glochid/ws-file fields) fields))
   "Persist workspace fields to .agent/workspace.json (HOST SEAM 1).")
 
-;; ---- 2b. AXIS TOGGLE (row = horizontal film, col = vertical stack) ----
+;; ---- 2b. AXIS TOGGLE (row = horizontal film, col = left rail) ----
 ;; The lib's save-all writes only cascade/content/focus; the glochid
 ;; version carries the axis field through (the pane width presets stay
-;; the same three values — vertical mode just re-reads them as heights
+;; the same three values — rail mode just re-reads them as heights
 ;; via the CSS flex-direction flip: .fs-shell:has(#fs-axis.col)).
 (define glochid/axis
   (lambda ()
@@ -526,8 +532,9 @@ strip = the horizontal film row. OOB-swappable (the id carries it).")
               (list (html/attr "hx-swap-oob" "outerHTML:#fs-axis"))
               (list))))
       ""))
-  "Inert axis sentinel; CSS :has(#fs-axis.col) flips the strip layout.
-?oob true renders it as an OOB outerHTML swap (the orient response).")
+  "Inert axis sentinel; CSS :has(#fs-axis.col) flips the shell to the
+left-rail strip layout. ?oob true renders it as an OOB outerHTML swap
+(the orient response).")
 
 (define glochid/orient
   (lambda ()
