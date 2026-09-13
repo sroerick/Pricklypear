@@ -487,6 +487,15 @@ a target starting / is a route (leaf), a bare name is a crumb that
 names a deeper cascade — only \"code\" is a cascade here: dir -> dir
 -> file over the operator's cwd (fs/ls).")
 
+;; The lib's filmstrip/apps is redefined TOO (not just browse): the app
+;; list IS the cascade's column 0 AND the launcher's hint source
+;; (filmstrip/launcher-hint) — if it stayed habitat vocabulary, the
+;; launcher advertised /todos on a host with no /todos route.
+(define filmstrip/apps
+  (lambda () (glochid/apps))
+  "glochid's shell app list (HOST SEAM 2): chat / code / sessions /
+settings; code is the filesystem cascade crumb.")
+
 (define glochid/dir-of
   (lambda (prefix)
     (if (string-eq prefix "code")

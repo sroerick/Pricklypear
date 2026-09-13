@@ -13,6 +13,9 @@
     filmstrip/native-close
     filmstrip/native-focus
     filmstrip/native-move
+    filmstrip/pane-stamp
+    filmstrip/hint-routes
+    filmstrip/launcher-hint
 ))
 
 (define filmstrip/apps
@@ -74,13 +77,16 @@
           ((res (filmstrip/open-apply panes t))
             (panes2 (nth res 0))
             (focus2 (nth res 1))
-            (appended? (nth res 2)))
+            (appended? (nth res 2))
+            (unshelved? (nth res 3)))
           (seq
             (filmstrip/save-all path2 panes2 focus2)
             (render-html
               (html/join
                 (list
                   (filmstrip/oob-msg "")
+                  (if unshelved? (filmstrip/shelf-oob) "")
+                  (filmstrip/winbox-oob)
                   (filmstrip/oob-cascade path2)
                   (filmstrip/open-response panes2 focus focus2 appended?))))))
         (seq
@@ -662,6 +668,56 @@
         (filmstrip/last-col (cdr cols)))))
   "The deepest column of a column list.")
 
+(define filmstrip/app-routes
+  (lambda
+    (apps)
+    (if
+      (null? apps)
+      (list)
+      (if
+        (string-starts-with? (as-str (car (cdr (car apps)))) "/")
+        (cons (as-str (car (cdr (car apps))))
+          (filmstrip/app-routes (cdr apps)))
+        (filmstrip/app-routes (cdr apps)))))
+  "The route-leaf targets of the app list ((label target) entries whose\ntarget starts with /).")
+
+(define filmstrip/hint-routes
+  (lambda ()
+    (let
+      ((rs (filmstrip/app-routes (filmstrip/apps))))
+      (if
+        (null? rs)
+        (list/map
+          (lambda (a) (string-append "/" (as-str (car a))))
+          (filmstrip/apps))
+        rs)))
+  "Route names the launcher may honestly suggest: the apps' route-leaf\ntargets when the host has them (glochid: /chat /code /sessions\n/settings), else /+label for package-key apps (habitat: /todos\n/notes /calendar). Env late binding picks up host redefinitions of\nfilmstrip/apps — no host seam needed.")
+
+(define filmstrip/routes-str
+  (lambda
+    (rs)
+    (if
+      (null? rs)
+      ""
+      (string-append
+        (car rs)
+        (if (null? (cdr rs)) "" " ")
+        (filmstrip/routes-str (cdr rs)))))
+  "Space-joined routes string.")
+
+(define filmstrip/launcher-hint
+  (lambda ()
+    (let
+      ((rs (filmstrip/hint-routes)))
+      (if (null? rs) "/" (car rs))))
+  "The launcher's example route: the first real route of THIS host's\napp list (was the habitat-specific /todos — the miss that made glochid's\nlauncher a dead end).")
+
+(define filmstrip/pane-stamp
+  (lambda
+    (rec)
+    rec)
+  "Host hook on freshly-stamped pane records (default identity). A host\nmay add its own fields — glochid stamps the pane's desktop from the ws\nrow so an app-link open on desk>0 lands VISIBLE there (the lib must not\nread glochid row fields itself; same seam discipline as save-all).")
+
 (define filmstrip/launcher-html
   (lambda
     ()
@@ -687,7 +743,7 @@
             (html/attrs
               (list
                 (html/attr "id" "fs-launch-route")
-                (html/attr "placeholder" "/todos")
+                (html/attr "placeholder" (filmstrip/launcher-hint))
                 (html/attr "autocomplete" "off")
                 (html/attr "accesskey" "l")
                 (html/attr
@@ -1036,27 +1092,34 @@
           (not (string-starts-with? r "/")))
         (render-html
           (filmstrip/oob-msg
-            "filmstrip: routes start with / (try /todos)"))
+            (string-append "filmstrip: routes start with / (try "
+              (filmstrip/launcher-hint) ")")))
         (let
           ((path (car (filmstrip/split-query r))))
           (if
             (null? (route/lookup path))
             (render-html
               (filmstrip/oob-msg
-                (string-append "filmstrip: no route " path)))
+                (string-append "filmstrip: no route " path
+                  "  (routes on this host: "
+                  (filmstrip/routes-str (filmstrip/hint-routes))
+                  ")")))
             (let*
               ((res (filmstrip/open-apply panes r))
                 (panes2 (nth res 0))
                 (focus2 (nth res 1))
-                (appended? (nth res 2)))
+                (appended? (nth res 2))
+                (unshelved? (nth res 3)))
               (seq
                 (filmstrip/save-all cascade panes2 focus2)
                 (render-html
                   (html/join
                     (list
                       (filmstrip/oob-msg "")
+                      (if unshelved? (filmstrip/shelf-oob) "")
+                      (filmstrip/winbox-oob)
                       (filmstrip/open-response panes2 focus focus2 appended?)))))))))))
-  "POST /filmstrip/open: launcher route param -> open-or-focus a pane.\nBad/missing routes answer with the launcher status line only; valid ones\npersist the row and answer with OOB pane swaps.")
+  "POST /filmstrip/open: launcher route param -> open-or-focus a pane.\nBad/missing routes answer with the launcher status line only; valid ones\npersist the row and answer with OOB pane swaps + winbox/shelf\nrefreshes (a win that unshelves drops its shelf row in the same\nresponse).")
 
 (define filmstrip/open-apply
   (lambda
@@ -1065,25 +1128,35 @@
       ((i (filmstrip/find-route-index panes r)))
       (if
         (>= i 0)
-        (list panes i #f)
-        (list
-          (append
-            panes
+        (let
+          ((p (filmstrip/pane-at panes i)))
+          (if
+            (string-eq (filmstrip/pane-state p) "shelved")
             (list
-              (dict-set*
-                "{}"
-                (list
-                  "id"
-                  (filmstrip/new-id)
-                  "route"
-                  r
-                  "width"
-                  filmstrip/default-width
-                  "state"
-                  "live"))))
+              (filmstrip/replace-at panes i (dict-set p "state" "live"))
+              i
+              #f
+              #t)
+            (list panes i #f #f)))
+          (list
+            (append
+              panes
+              (list
+                (filmstrip/pane-stamp
+                  (dict-set*
+                    "{}"
+                    (list
+                      "id"
+                      (filmstrip/new-id)
+                      "route"
+                      r
+                      "width"
+                      filmstrip/default-width
+                      "state"
+                      "live")))))
           (length panes)
           #t))))
-  "Open-or-focus for route r: a fresh pane record (UUID id, default\nwidth preset, state=live) appended, or the existing pane's index. Returns\n(panes focus appended?) -- appended? false means an existing pane won.")
+  "Open-or-focus for route r: a fresh pane record (UUID id, default\nwidth preset, state=live, passed through filmstrip/pane-stamp) appended,\nor the existing pane's index. A HIT ON A SHELVED PANE UNSHELVES it\n(acme Get semantics: naming a hidden window re-shows it). Returns\n(panes focus appended? unshelved?) -- appended? false means an existing\npane won; unshelved? true means the caller owes a shelf OOB swap.")
 
 (define filmstrip/open-response
   (lambda
