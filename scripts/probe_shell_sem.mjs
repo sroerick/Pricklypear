@@ -395,5 +395,69 @@ v3_rail_files: {
   }
 }
 
+// ---- v3 task 5: FINAL — round-trip + desktop flips + shelf interplay ----
+// (a) reload: pinned regions survive workspace.json -> GET / (both pinned
+//     sections re-render as rail panes with visible bodies); (b) desktop
+//     flips: rail panes are DOCK semantics, visible on EVERY desktop;
+//     (c) shelve a rail-region pane via the real winbox close: it shelves
+//     like any pane (shelf row, no forced focus onto it), and RESTORE keeps
+//     its region; (d) unpin round-trip persists region back to main.
+v3_final: {
+  const flipDesk = (d) => `(()=>{const b=[...document.querySelectorAll('#fs-deskbox button')].find(x=>x.getAttribute('hx-vals')==='{"d":"${d}"}'); if(!b) return 'no desk-${d} button'; b.click(); return 'flipped'})()`;
+  const closePane = (route) => `(()=>{const row=[...document.querySelectorAll('.fs-win-row')].find(r=>r.textContent&&r.textContent.includes('${route}')); if(!row) return 'no row'; const b=[...row.querySelectorAll('button')].find(b=>b.textContent.trim()==='close'); b.click(); return 'closed'})()`;
+  // (a) full round-trip: workspace.json -> reload -> DOM
+  await send("Page.navigate", { url: base + "/" });
+  await sleep(1200);
+  const wsj5 = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
+  const pinnedIds = wsj5.content.filter((p) => p.region === "rail").map((p) => p.id);
+  ok(pinnedIds.length === 2, "final: both pinned regions survive in workspace.json across the session", JSON.stringify(pinnedIds));
+  const sR = await ev(SNAPSHOT);
+  ok(sR.pinnedCount === 2 && sR.railBodies.length === 2 && sR.railBodies.every((r) => r.bodyVisible), "final: reload re-renders both pinned panes as rail sections with visible bodies", JSON.stringify(sR.railBodies));
+  ok(sR.focusedRect && sR.focusedRect.q, "I1 visible focused pane after the final reload", JSON.stringify(sR.focusedRect));
+  // (b) dock semantics: the pinned panes stay visible on EVERY desktop.
+  for (const d of ["0", "1"]) {
+    console.log(await ev(flipDesk(d)));
+    await sleep(900);
+    ok(await ev(`document.querySelector('#ws-desk').classList.contains('dsk-${d}')`), `final: desktop ${d} active after the deskbox click`);
+    const sD = await ev(SNAPSHOT);
+    ok(sD.railBodies.length === 2 && sD.railBodies.every((r) => r.bodyVisible), `final: both pinned rail bodies visible on desktop ${d} (dock semantics)`, JSON.stringify(sD.railBodies));
+    ok(sD.focusedRect && sD.focusedRect.q, `I1 visible focused pane on desktop ${d} with pinned panes`, JSON.stringify(sD.focusedRect));
+  }
+  // (c) shelve the pinned /code pane via the REAL winbox close: it must
+  // shelf like any pane (row appears, record keeps region), focus must
+  // heal (never onto a shelved pane), and RESTORE must return it with its
+  // region intact.
+  const wsj6 = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
+  const codeRec6 = wsj6.content.find((p) => p.route === "/code");
+  ok(codeRec6 && codeRec6.region === "rail", "final setup: the live /code pane is currently pinned", JSON.stringify(codeRec6 && codeRec6.region));
+  console.log(await ev(closePane("/code")));
+  await sleep(900);
+  const wsj7 = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
+  ok(codeRec6 && wsj7.content.find((p) => p.id === codeRec6.id).state === "shelved", "final: shelve persisted to workspace row (state=shelved)");
+  ok(codeRec6 && wsj7.content.find((p) => p.id === codeRec6.id).region === "rail", "final: the shelved row KEEPS region=rail (restore will re-pin)");
+  const sSh = await ev(SNAPSHOT);
+  ok((await ev(`[...document.querySelectorAll('.fs-shelf-row')].some(r=>r.textContent&&r.textContent.includes('/code'))`)), "final: /code has a shelf row after the close (shelved like any pane)");
+  ok(sSh.pinnedCount === 1, "final: only the desk-0 pane remains pinned+live in the rail", `pinned=${sSh.pinnedCount}`);
+  ok(sSh.focusedRect && sSh.focusedRect.q && !sSh.focusedShelved, "I1 after shelving a pinned pane: visible live focused pane (heal never lands on the shelved pane)", JSON.stringify({rect: sSh.focusedRect, shelved: sSh.focusedShelved}));
+  console.log(await ev(`(()=>{const row=[...document.querySelectorAll('.fs-shelf-row')].find(r=>r.textContent&&r.textContent.includes('/code')); const b=[...row.querySelectorAll('button')].find(b=>b.textContent.trim()==='restore'); if(!b) return 'no restore button'; b.click(); return 'restored'})()`));
+  await sleep(900);
+  const wsj8 = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
+  ok(codeRec6 && wsj8.content.find((p) => p.id === codeRec6.id).region === "rail", "final: restore brings /code back WITH its region (rail)");
+  const sSt = await ev(SNAPSHOT);
+  ok(sSt.pinnedCount === 2 && sSt.railBodies.every((r) => r.bodyVisible), "final: both pinned panes live again with visible rail bodies after restore", JSON.stringify(sSt.railBodies));
+  ok(sSt.focusedRect && sSt.focusedRect.q, "I1 visible focused pane after the rail shelve/restore round-trip", JSON.stringify(sSt.focusedRect));
+  await checkI8("after the final shelve/restore round-trip");
+  // (d) unpin round-trip: /code back to the strip, persisted region=main.
+  if (codeRec6) {
+    await ev(`htmx.ajax('POST','/filmstrip/pin',{values:{id:'${codeRec6.id}'},target:'#fs-sink',swap:'innerHTML'})`);
+    await sleep(600);
+    const wsj9 = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
+    ok(wsj9.content.find((p) => p.id === codeRec6.id).region === "main", "final: unpin round-trip persists region=main on /code");
+    const sU = await ev(SNAPSHOT);
+    ok(sU.pinnedCount === 1 && sU.railBodies.every((r) => r.bodyVisible), "final: only p2 remains pinned after the /code unpin", JSON.stringify(sU.railBodies));
+    ok(sU.focusedRect && sU.focusedRect.q, "I1 visible focused pane after the final unpin", JSON.stringify(sU.focusedRect));
+  }
+}
+
 console.log(fails === 0 ? "\nSEMANTIC PROBE: ALL GREEN" : `\nSEMANTIC PROBE: ${fails} FAILING`);
 process.exit(fails === 0 ? 0 : 1);
