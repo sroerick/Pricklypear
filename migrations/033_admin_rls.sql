@@ -18,11 +18,11 @@
 --     is not member-scoped. Grant is_admin by hand in users only.
 --
 -- STABLE, not IMMUTABLE: reads users.
-CREATE OR REPLACE FUNCTION tree_user_is_admin(username text)
+CREATE OR REPLACE FUNCTION tree_user_is_admin(p_username text)
 RETURNS boolean
 LANGUAGE sql STABLE AS $$
   SELECT COALESCE(
-    (SELECT is_admin FROM users u WHERE u.username = username),
+    (SELECT is_admin FROM users u WHERE u.username = p_username),
     false)
 $$;
 
