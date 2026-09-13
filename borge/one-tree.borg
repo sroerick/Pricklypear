@@ -76,7 +76,8 @@
   (subsection tree-model
    (doc "The tree: one root, typed nodes, path addressing")
    (status implemented)
-   (implements image/lib/tree_store.ml migrations/009_tree.sql)
+   (implements image/lib/tree_store.ml migrations/009_tree.sql
+    migrations/016_seed_single_source.sql migrations/027_hash_domain.sql)
    (details
     (doc (|
          ONE TREE, ONE ROOT:

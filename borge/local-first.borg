@@ -392,7 +392,7 @@
   (subsection sync
    (doc "Sync = three-way tree-diff (branching.borg / one-tree.branching-interaction), keyed on subtree node hashes. The exchange is the git protocol in miniature.")
    (status implemented)
-   (implements image/lib/tree_store.ml image/lib/sync.ml image/test/sync_test.ml image/lib/prims_db.ml image/test/sync_db_test.ml branching.borg)
+   (implements image/lib/tree_store.ml image/lib/sync.ml image/test/sync_test.ml image/lib/prims_db.ml image/test/sync_db_test.ml branching.borg migrations/032_sync_bases.sql)
    (verify
     (doc (|
          Sync = the server-side merge authority over tree_nodes, keyed on

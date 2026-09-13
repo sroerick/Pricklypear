@@ -155,6 +155,7 @@
    (doc "One Session.t per attached identity (env+routes+store handle); attach selects, never mutates; anonymous gets its own parked session")
    (status implemented)
    (implements
+    migrations/028_branch_def_gen.sql
     image/lib/session_registry.ml
     image/lib/session.ml
     image/lib/http.ml
@@ -221,6 +222,7 @@
    (status implemented)
    (implements
     image/lib/function_stats.ml
+    migrations/031_function_stat.sql
     image/lib/session.ml
     image/lib/boot.ml)
    (verify
