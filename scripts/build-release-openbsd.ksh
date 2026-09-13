@@ -46,6 +46,12 @@ cp migrations/*.sql "$STAGE/migrations/"
 if [ -d libs ]; then
   cp -R libs/. "$STAGE/libs/"
 fi
+# Instance profiles (spec_town_profile): staged BESIDE libs/ so the
+# runtime default (dirname(PP_LIBS_DIR)/profiles) finds profiles/<name>
+# without a PP_PROFILE_DIR override.
+if [ -d profiles ]; then
+  cp -R profiles "$STAGE/profiles"
+fi
 # Vendored browser assets (CodeMirror for /code)
 if [ -d image/static ]; then
   cp -R image/static/. "$STAGE/static/"
