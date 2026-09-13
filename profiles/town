@@ -1,0 +1,28 @@
+# Town deploy profile v0.1 (spec_town_profile, approved 2026-09-13).
+#
+# One repo, two profiles: mainframe = no PP_PROFILE (full discovery),
+# town = PP_PROFILE=town. This list is BOTH the boot seed set AND the
+# tenant load-library allowlist; admin sessions stay unrestricted.
+#
+# Order: preferred names keep their canonical seed order (std first,
+# css before notes, theme before ui) regardless of file position;
+# non-preferred names (kanban, ntfy, tree) load after them in FILE
+# order. notes/todo/calendar reference tree/ and outline/ at call time
+# (not define time), so the extras' order is not load-critical; tree
+# ships so tenants can load-library it. Amends go through the admin
+# line like code.
+std
+theme
+ui
+layout
+html
+css
+outline
+structed
+notes
+todo
+calendar
+chat
+kanban
+ntfy
+tree

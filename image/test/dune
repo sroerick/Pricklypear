@@ -240,6 +240,11 @@
  (libraries pricklypear-image pricklypear-lisp alcotest unix))
 
 (test
+ (name profile_test)
+ (modules profile_test)
+ (libraries pricklypear-image pricklypear-lisp alcotest))
+
+(test
  (name book_roundtrip_test)
  (modules book_roundtrip_test)
  (libraries pricklypear-image pricklypear-lisp alcotest yojson))

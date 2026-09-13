@@ -166,7 +166,18 @@ type t = {
       finishing. Quota enforced at insert. The stream type is defined
       here to avoid a module cycle (Net_prims references it). *)
   mutable net_streams : (string, Unix.file_descr) Hashtbl.t;
-}
+  }
+
+(** Tenant tier (spec_town_profile 2026-09-13): delegated tokens always
+    carry the data-only tier; in ANY named profile (PP_PROFILE set, e.g.
+    town) every non-admin session is a tenant in P1 — one tier.
+    Mainframe runs without PP_PROFILE and is unchanged: only delegated
+    tokens restrict. Enforcement sites: define/route/package persist,
+    load-library, reseed-package, deftype. The check reads only the env
+    (cheap; no profile file I/O). *)
+let restricted (t : t) : bool =
+  t.delegated
+  || (match Profile.name () with Some _ -> not t.is_admin | None -> false)
 
 (* Load persisted function_defs + routes into the env.
    Returns when finished (caller may then seed libs/ which overwrite).

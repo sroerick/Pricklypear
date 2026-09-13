@@ -17,7 +17,7 @@
           session
           session_registry
           function_stats
-          crud media packages loader repl_endpoint
+           crud media packages loader profile repl_endpoint
           ops_log ops_stats ops_incidents
           timing
           ast_html db_cost analyze http_analyze

@@ -16,7 +16,7 @@ let register (t : t) (tbl : Primitives.t) : unit =
      own admin session. *)
   let deny_delegated op =
     raise (Pricklypear_lisp.Ast.Interp_error
-             (Pricklypear_lisp.Ast.Prim_error (op, "denied for delegated sessions (delegation is for data, never for code)", "denied")))
+             (Pricklypear_lisp.Ast.Prim_error (op, "denied for tenant sessions (data, never for code)", "denied")))
   in
 
   (* (get 'type id) -> VStr fields-json | VNil *)
@@ -887,7 +887,7 @@ let register (t : t) (tbl : Primitives.t) : unit =
     (fun args ->
       let uname = caller_username () in
       if uname = "anonymous" then deny_anon "deftype"
-      else if t.delegated then deny_delegated "deftype"
+      else if Session_types.restricted t then deny_delegated "deftype"
       else
         require_admin "deftype" (fun () ->
             Crud.deftype t.store ~args ~author:uname));
