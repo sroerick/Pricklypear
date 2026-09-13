@@ -153,7 +153,7 @@ in the `glochid/base-css` CSS block.
       re-probe shows p3 visible and p1/p2 hidden. Save-all must carry
       desktop through (same caution as axis).
 
-- [ ] 3. WINDOWS rail + focus-by-id. In the lib, add
+- [x] 3. WINDOWS rail + focus-by-id. In the lib, add
       `filmstrip/focus-id` (POST id param -> set focus to that pane's
       index, same OOB two-section class swap as filmstrip/focus) and
       register route pattern in the GLOCHID layer (see
@@ -194,6 +194,50 @@ in the `glochid/base-css` CSS block.
       `node scripts/smoke_agent_cdp.mjs` if it passes preconditions —
       if it needs the mock-agent boot it should work (it boots its
       own). Write REPORT.
+
+## MEASURED (task 3, 2026-09-13; scratch 18091, build + `dune runtest lisp/ common/` green)
+
+Seed: plan seed (p1 /chat third live focused desk 0, p2 /settings half
+live desk 0, p3 /sessions full live desk 1; ws desktop 0, focus content:0,
+axis col).
+
+- windows controlbox exists: `#fs-winbox` (class `fs-cbox fs-winbox`,
+  data-cbox windows) between #fs-content and #fs-deskbox — 320x79 (label
+  + one row per live pane of the CURRENT desktop: p1+p2; p3 excluded on
+  desk 1). Each row: `[route] focus width close` — focus POSTs
+  /filmstrip/focus-id, width/close ride the pane-head verbs. Content
+  strip narrowed 583→425 to make room (winbox above deskbox above shelf).
+- curl POST /filmstrip/focus-id {id:p3}: persisted + same OOB two-section
+  class swap as focus (p1 section unfocused, p3 section focused); first
+  cut had NO save-all — caught by the probe (workspace.json focus stayed
+  content:0), fixed. Shelved/unknown id answers "no such live pane";
+  already-focused id answers empty (mirrors filmstrip/focus). Re-probe:
+  p3 `.fs-pane.fs-full.focused` at rect 0x0 — CORRECT (desk 0 hides it;
+  .focused landed without lifting, no JS).
+- POST desktop d=1: p3 already focused → lifts 1512x825 @ (352,16);
+  focus content:2 carried through (screenshot /tmp/wm-f1-desk1-p3-focused.png)
+- REAL htmx click-through (CDP Runtime.evaluate on the rendered win-row
+  focus button, no reload): click /settings focus → .focused lands on p2,
+  focus persists content:1
+- winbox freshness: POST close {id:p2} answers ONE #fs-winbox OOB (1 row —
+  p2's row dropped) + shelf gains /settings row; POST restore {id:p2} →
+  winbox 2 rows again, state live re-persisted. Done via a second lib
+  hook, `filmstrip/winbox-oob` (default "", like shelf-oob) called from
+  close/restore/destroy responses; glochid redefines it over the row.
+- healing is DESKTOP-AWARE now (glochid/heal-focus →
+  glochid/first-on-desk panes (glochid/deskt) 0, fallback
+  first-live-index when the current desktop has none): distinguishing
+  seed w1 desk-1 live + w2 desk-0 live, ws desktop 0, focus unset → GET /
+  lifts w2 (352,16), not w1; winbox shows only w2. Still render-time
+  only (not persisted), per the existing contract.
+- `dune runtest lisp/ common/` green; zero JS; no JS errors in any probe;
+  nothing live touched
+
+Checkpoint note: the pkill footgun has a SECOND tooth — the bracket
+trick does NOT save you when the same invocation also SPAWNS the server
+(the wrapper `bash -c` cmdline then contains the literal unbracketed
+pattern from the spawn text and pkill kills the worker shell). Always
+split pkill and boot into separate tool calls.
 
 ## MEASURED (task 2, 2026-09-13; scratch 18091, build + `dune runtest lisp/ common/` green)
 
