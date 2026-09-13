@@ -76,7 +76,7 @@ all geometry stays in CSS classes, zero JS, zero inline styles.
 
 ## Tasks (do in order; tick when green+committed)
 
-- [ ] 0. PROBE FIRST (harness only, no product code). Extend
+- [x] 0. PROBE FIRST (harness only, no product code). Extend
       probe_shell_sem.mjs: (a) snapshot gains pinnedCount + per-pane
       region readout (`data-region`/row fields; region undefined =>
       "main"); (b) I1 widens to "a FOCUSED pane exists and is visible —
@@ -169,3 +169,32 @@ all geometry stays in CSS classes, zero JS, zero inline styles.
 - shelve/restore of a rail pane: task 5
 - pinned files view fills rail height (cascade cap released): task 2/4
 - region persists through save-all + reload: tasks 1/5
+
+## PROGRESS (loop-log)
+
+### Task 0 DONE (loop 1, 2026-09-15) — probe FIRST, harness only
+
+- scripts/probe_shell_sem.mjs extended, no product code touched:
+  - SNAPSHOT gains per-pane region readout (`panes: {pane, route, region,
+    state, focused}` — `data-region` attribute, MISSING attr => "main"),
+    plus `focusedRegion`, `pinnedCount` (non-shelved rail panes) and
+    `railBodies` ({pane, bodyVisible} per pinned pane).
+  - I1 widened: focused pane exists + visible + live + region is "main"
+    (lift) or "rail" (visible in rail), asserted on load AND after the
+    I6 pane-local walk. Extra backward-compat assertion: with
+    `pinnedCount === 0` the focused pane's region must be "main" — so on
+    the unmodified shell the widened I1 reduces to exactly the v2 rule.
+  - I8 recorded-not-asserted: `checkI8(tag)` prints the observation
+    (SKIP + record line) unless `I8_ARMED=1` is exported; when armed it
+    asserts (a) at least one pinned rail pane with its `.fs-body`
+    visible inside the rail, (b) the focused pane stays visible beside
+    it. Arming is the job of the task-2 loop.
+- Verified on the UNMODIFIED shell (dune build green first): probe
+  ALL GREEN (exit 0) — `SKIP I8 on load ... record pinned=0
+  railBodies=[]`, region readout all "main", both I1 lines OK.
+  `dune runtest lisp/ common/` green.
+- Harness lore: `:scope > .fs-body` selects the pane's own body div
+  (needed once panes can carry sibling bodies via OOB swaps).
+
+Still open: tasks 1-5 (region state lib layer, pin verb + rail bodies,
+focus/open discipline, files-as-rail-pane, final round-trip + report).
