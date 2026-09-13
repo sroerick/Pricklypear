@@ -437,8 +437,12 @@
          flex-direction, no new geometry code). In rail mode the
          .focused pane is position:fixed into the main window right of
          the rail (its rail slot collapses; open-or-focus moves the
-         big window), and .chatpage is pinned to height:100% — its
-         normal calc(100vh - 6rem) always overflows a pane box. The
+         big window), RAIL ROWS ARE HEAD-ONLY (non-focused .fs-body
+         display:none — bodies only exist in the main pane), and
+         .chatpage is pinned to height:100% — its
+         normal calc(100vh - 6rem) always overflows a pane box. Focus
+         unpersisted-heals to pane 0 at shell render when unset, so a
+         main pane always exists while panes do. The
          response is TWO OOB swaps — the #fs-axis sentinel div and the
          toggle button — so live pane DOM survives; the selector side is
          CSS :has(#fs-axis.col) on #fs-shell. save-all is redefined in
