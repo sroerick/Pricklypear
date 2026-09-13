@@ -183,6 +183,7 @@
   (subsection eval-examples
    (doc "read-time eval of nopales example blocks in the reader's session; restricted prim table; (book/verify) as the book's self-test")
    (status implemented)
+   (implements image/lib/example_eval.ml)
    (* agent note (|2026-08-30 all three smokes verified: POST
        /book/eval-example returns value + elapsed and the run button is
        live (loop 18); define refused at the static gate, create/delete
