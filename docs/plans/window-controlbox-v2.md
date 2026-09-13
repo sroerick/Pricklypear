@@ -184,7 +184,7 @@ in the `glochid/base-css` CSS block.
       exist) and a /code pane was open-or-focused. None of this may
       require a page reload.
 
-- [ ] 5. FINAL. Seed the 8-pane 3-desktop workspace from the spec's
+- [x] 5. FINAL. Seed the 8-pane 3-desktop workspace from the spec's
       smoke line (invent routes from the glochid surface list:
       /chat /code /sessions /settings; extra routes may 404 inside
       panes — acceptable for geometry probing, but prefer existing
@@ -389,3 +389,84 @@ introducing with the controlbox work.
   geometry changes, any BLOCKERS, any borge issues filed
 - nothing in repo root .agent/, nothing live touched, tasks list fully
   checked
+
+## REPORT (window-controlbox-v2 — done 2026-09-13, loops 0-6)
+
+All five tasks built, probed green, and committed per-loop. Nothing
+live touched: no 18090, no chromium, no `systemctl --user glochid`, no
+repo-root `.agent/` writes (scratch copies live under /tmp only).
+
+### Commits
+- 25f2805 probe harness · c04712d spec stanza · f74ae27 plan handoff
+- b796648 task 0 baseline · 30a142f task 1 shelf-close · 5009433
+  task 2 desktops · 3c1e3a2 task 3 windows rail · 8aae00f task 4
+  app-link · (this loop) task 5 final smoke + self-contained CDP smoke
+
+### MEASURED (task 5, final 8-pane 3-desktop smoke; scratch 18091)
+Seed: 8 panes over 3 desktops, axis col — desk0 p1 /chat third (focused)
+p2 /settings half, p3 /code third; desk1 p4 /sessions half p5 /chat half
+p6 /settings full; desk2 p7 /code half, p8 /sessions half SHELVED.
+
+- desktop 0: deskSentinel dsk-0; p1 lifted 1512x825 @ (352,16) focused,
+  p2/p3 heads-only rail rows 322x27; desks 1+2 hidden (5 panes rect 0x0);
+  winbox 320x104 (3 rows), deskbox 320x30, shelf 320x54 (p8 row); 0 JS errors
+- POST desktop=1: sentinel dsk-1; p4 healed-focused lifted 1512x825 @
+  (352,16), p5/p6 rail rows; 5 hidden; workspace.json persisted
+  desktop:1 + focus content:3 (screenshot /tmp/wm-f1.png)
+- POST desktop=2: sentinel dsk-2; p7 healed-focused lifted 1512x825 @
+  (352,16); 7 hidden (incl. shelved p8); winbox shrunk to 320x54 (1
+  live row), shelf keeps p8 (screenshot /tmp/wm-f2.png, /tmp/wm-f0.png
+  for desk 0)
+- SPEC SMOKE "renders from state classes only (no inline styles)": every
+  pane is `<section class="fs-pane …" data-desktop=…>` with ZERO style=
+  attributes — geometry comes entirely from .fs-third/.fs-half/.fs-full/
+  .focused/.shelved classes + the :has(#ws-desk.dsk-N) hiding rules.
+  DOM for ALL desktops (incl. hidden) stays in the page (bodies
+  hx-preserve'd), so desktop flips chat scroll state (task-2 caveat).
+
+### Regression net
+- `dune build agent/bin/main.exe` green; `dune runtest lisp/ common/`
+  green (exit 0).
+- `scripts/smoke_agent_cdp.mjs` was REPORTING-ready but its bare-`/`
+  precondition broke when the glochid shell landed: a FRESH glochid
+  boot now renders an EMPTY strip (no default chat pane, no #f form).
+  Fixed the harness (script, not product): it now seeds its own
+  /tmp agent cwd with a minimal workspace (one focused /chat pane) and
+  spawns `--serve` with that cwd — no longer inherits the caller's
+  .agent (which also protects repo-root .agent/). Green end-to-end:
+  "turn streamed: 3 parts, DOM has user+llm bubbles + assistant text".
+
+### Known gaps / leftovers (not fixed, by scope)
+- filmstrip/open-apply stamps new panes without "desktop" — an
+  app-link open on desk>0 lands on desk 0 hidden until a desktop
+  switch re-heals focus. Lib must not read glochid row fields;
+  documented in task 4.
+- Nav teeth that still navigate out of the shell as plain anchors:
+  resumed-session `+ new` / `/sessions` links, /code page h1 + rows
+  anchors, and the chat h1 `agent` root anchor. Each is a candidate
+  app-link conversion in a follow-up pass.
+- The desktop POST re-renders #fs-content server-side: bodies of
+  panes on the desktop you LEFT are re-dispatched (scroll state reset,
+  hx-preserve survives only same-count swaps) — per-frame DOM cost of
+  the v2 CSS-hiding model, row data untouched.
+- Fresh glochid boot = empty workspace (no default pane). Pre-existing
+  glochid behavior, now covered by the self-contained smoke.
+
+### Harness lore (learned this loop)
+- pkill kills your own shell when the same bash invocation also SPAWNS
+  the server (the wrapper cmdline contains the pattern) — always split
+  pkill and boot into separate tool calls (loop 3 note, still true).
+- smoke_agent_cdp needs a seeded chat workspace ("OK agent at…" then
+  `FAIL chat form #f not found` otherwise) — now built in.
+- SMOKE/EXIT codes: the smoke script calls process.exit(1) only on the
+  fail() path through its own exit handler — always read the OK/FAIL
+  lines, not the shell exit status.
+
+### Spec smokes (borge/filmstrip.borg window-controlbox-v2.verify)
+- desktop flip via sentinel class: VERIFIED (task 2 + task 5)
+- shelve/restore with DOM intact to desktop+position: VERIFIED (task 1,
+  restore returns the pane to its row position)
+- app-link open-or-focus, plain <a> never escapes: app-link VERIFIED by
+  real CDP click (task 4); plain-<a>-never-escapes PARTIAL — existing
+  teeth enumerated above are bugs of that class, left open
+- geometry probe of a seeded 8-pane 3-desktop workspace: VERIFIED (task 5)
