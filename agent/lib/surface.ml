@@ -718,8 +718,8 @@ the shelf rail). Close/restore/destroy call it in every response.")
 ;; the current desktop to CSS (:has hides the other desktops' panes —
 ;; ten pairs in glochid/base-css, no JS); d0/d1/d2 buttons in the rail
 ;; POST the switch. Focus heals onto the first live pane of the target
-;; desktop when the focused pane lives elsewhere (a main pane ALWAYS
-;; exists).
+;; desktop when the focused pane lives elsewhere (a live MAIN pane is
+;; preferred — the lift; a rail pane satisfies I1 when no main exists).
 (define glochid/deskt
   (lambda ()
     (let
@@ -729,15 +729,26 @@ the shelf rail). Close/restore/destroy call it in every response.")
 
 (define glochid/first-on-desk
   (lambda (panes d i)
+    (let
+      ((m (glochid/first-region-on-desk panes d i "main")))
+      (if (< m 0) (glochid/first-region-on-desk panes d i "rail") m)))
+  "Index of the first LIVE pane on desktop d, else -1 (v3 heal
+discipline: a live MAIN pane is preferred — it takes the lift; rail
+panes are valid focus targets too and satisfy I1 when the desktop has
+no live main pane. Never a shelved pane: pane-live? gates both passes.")
+
+(define glochid/first-region-on-desk
+  (lambda (panes d i region)
     (if
       (null? panes)
       -1
       (if
         (and (= (filmstrip/pane-desk (car panes)) d)
+             (string-eq (filmstrip/pane-region (car panes)) region)
              (filmstrip/pane-live? (car panes)))
         i
-        (glochid/first-on-desk (cdr panes) d (+ i 1)))))
-  "Index of the first LIVE pane on desktop d, else -1.")
+        (glochid/first-region-on-desk (cdr panes) d (+ i 1) region))))
+  "Index of the first LIVE pane of one REGION on desktop d, else -1.")
 
 (define glochid/desk-sentinel
   (lambda (d ?oob)
@@ -854,7 +865,11 @@ workspace row keeps every record, only the swapped DOM shrinks).")
         (html/join
           (list
             (html/span (html/attr "class" "fs-title") (html/text route))
-            (glochid/win-btn id "focus" "lift into the main window" "/filmstrip/focus-id")
+            (glochid/win-btn id "focus"
+              (if (string-eq (filmstrip/pane-region p) "rail")
+                  "highlight the rail pane in place (no lift)"
+                  "lift into the main window")
+              "/filmstrip/focus-id")
             (glochid/win-btn id
               (if (string-eq (filmstrip/pane-region p) "rail") "unpin" "pin")
               (if (string-eq (filmstrip/pane-region p) "rail")
@@ -913,8 +928,8 @@ the windows rail). Close/restore/destroy call it in every response.")
 
 ;; focus healing at render: an unset focus OR one pointing at a shelved
 ;; pane heals to the first LIVE pane ON THE CURRENT DESKTOP (v2 task 3;
-;; falls back to the first live pane anywhere when the desktop has
-;; none).
+;; v3: main panes first, rail panes as the valid fallback; falls back to
+;; the first live pane anywhere when the desktop has none).
 (define glochid/heal-focus
   (lambda (panes focus)
     (if
@@ -927,11 +942,14 @@ the windows rail). Close/restore/destroy call it in every response.")
         ((f (glochid/first-on-desk panes (glochid/deskt) 0)))
         (if (< f 0) (filmstrip/first-live-index panes) f))
       focus))
-  "Focus that always has a live main pane behind it: unset (-1) and
+  "Focus that always has a live pane behind it: unset (-1) and
 shelved-pointing both heal to the first live pane on the CURRENT
-desktop (-1 when the desktop has none — falls back to the first live
-pane anywhere). Not persisted — alt+right heals it for real on the
-next focus step.")
+desktop — v3: a live MAIN pane first (the lift), the first live RAIL
+pane as the fallback (a focused rail pane in the rail satisfies I1
+when the desktop has no live main pane); -1 only when the desktop has
+no live pane at all (falls back to the first live pane anywhere).
+Never a shelved pane (I2). Not persisted — alt+right heals it for real
+on the next focus step.")
 
 ;; ---- 2f. HOST STAMP + fragment twins of the /new /resume redirects ----
 ;; open-apply stamps fresh panes through filmstrip/pane-stamp (lib hook,
@@ -971,9 +989,10 @@ next focus step.")
         (r (string-append "/chat?session=" (as-str sid)))
         (res (filmstrip/open-apply panes r))
         (panes2 (nth res 0))
-        (focus2 (nth res 1))
+        (target (nth res 1))
         (appended? (nth res 2))
-        (unshelved? (nth res 3)))
+        (unshelved? (nth res 3))
+        (focus2 (filmstrip/rail-focus-onto panes2 focus target)))
       (seq
         (session/resume (as-str sid))
         (filmstrip/save-all cascade panes2 focus2)
@@ -983,7 +1002,7 @@ next focus step.")
               (filmstrip/oob-msg "")
               (if unshelved? (filmstrip/shelf-oob) "")
               (filmstrip/winbox-oob)
-              (filmstrip/open-response panes2 focus focus2 appended?)))))))
+              (filmstrip/open-response panes2 focus focus2 target appended?)))))))
   "POST /filmstrip/resume: re-point the live session AND open-or-focus\nits /chat?session= pane (fragment twin of GET /resume).")
 
 ;; ---- 3. THE SHELL PAGE (GET / and GET /filmstrip) ----
