@@ -169,11 +169,18 @@ const SNAPSHOT = `(()=>{
 // rail panes, so the assertions would be vacuous: print the observation,
 // fail only once the implementing loop exports I8_ARMED=1.
 const I8_ARMED = process.env.I8_ARMED === "1";
-async function checkI8(tag) {
+// expectPinned=false: nothing pinned YET (pre-pin load/records tags) — print
+// the observation without asserting, so the armed gate still pins through the
+// real verb before any I8 assertion is made.
+async function checkI8(tag, expectPinned = true) {
   const s = await ev(SNAPSHOT);
   if (!I8_ARMED) {
     console.log(`SKIP I8 ${tag} (asserted from v3 task 2; I8_ARMED=1 to arm)`);
     console.log(`     I8 record pinned=${s.pinnedCount} railBodies=${JSON.stringify(s.railBodies)}`);
+    return;
+  }
+  if (!expectPinned) {
+    console.log(`I8 record ${tag} pinned=${s.pinnedCount} railBodies=${JSON.stringify(s.railBodies)} (nothing pinned yet)`);
     return;
   }
   ok(s.railBodies.length > 0 && s.railBodies.every((r) => r.bodyVisible), `I8 pinned rail pane body visible in the rail (${tag})`, JSON.stringify(s.railBodies));
@@ -192,7 +199,7 @@ const s0 = await ev(SNAPSHOT);
 // this must reduce to exactly the v2 rule — assert that too.
 ok(s0.focusedRect && s0.focusedRect.q && !s0.focusedShelved && (s0.focusedRegion === "main" || s0.focusedRegion === "rail"), "I1 visible focused pane on load (main lift or rail)", JSON.stringify({rect: s0.focusedRect, region: s0.focusedRegion}));
 ok(s0.pinnedCount > 0 || s0.focusedRegion === "main", "I1 backward-compat: with zero pinned panes the focused pane is the main lift", `pinned=${s0.pinnedCount} region=${s0.focusedRegion}`);
-await checkI8("on load");
+await checkI8("on load", false);
 ok(s0.shelfRows === 1 && s0.shelvedCount === 1, "shelf row == shelved count on load", `shelf=${s0.shelfRows} shelved=${s0.shelvedCount}`);
 ok(s0.liveCount === 1 && s0.winRows === 1, "winbox rows == live panes on load", `win=${s0.winRows} live=${s0.liveCount}`);
 ok(s0.bareAnchors === 0, "I5 zero shell-escaping anchors in pane bodies", `bare=${s0.bareAnchors}`);
@@ -244,6 +251,39 @@ const s3 = await ev(SNAPSHOT);
 ok(await ev(`window.__sem2==='s'`), "I6 dir walk stayed in the same window");
 ok(s3.focusedRect && s3.focusedRect.q && (s3.focusedRegion === "main" || s3.focusedRegion === "rail"), "I1 visible focused pane after pane-local walk (main lift or rail)", JSON.stringify({rect: s3.focusedRect, region: s3.focusedRegion}));
 ok((await ev(`document.querySelector('.fs-pane.focused .fs-body').textContent.includes('leaf')`)), "I6 file content rendered inside the pane body");
+
+// ---- I8 ARMED (v3 task 2): pin/unpin through the real verbs ----
+// Desktop 1 holds the focused /code pane (main lift). Flip to desktop 0
+// via the real deskbox button (htmx applies the OOB swap DOM-side; focus
+// heals to the first live desk-0 pane, a MAIN lift), then pin p2
+// (/settings, live desk 0) — an UNFOCUSED pane — with htmx.ajax (the real
+// request machinery: response OOB swaps land in the DOM) so the focused
+// main pane stays visible BESIDE the pinned rail body: I8's full shape.
+await ev(`(()=>{const b=[...document.querySelectorAll('#fs-deskbox button')].find(x=>x.getAttribute('hx-vals')==='{\\"d\\":\\"0\\"}'); b.click(); return 'flipped'})()`);
+await sleep(900);
+ok(await ev(`document.querySelector('#ws-desk').classList.contains('dsk-0')`), "I8 setup: desktop 0 active after the deskbox click");
+await ev(`htmx.ajax('POST','/filmstrip/pin',{values:{id:'p2'},target:'#fs-sink',swap:'innerHTML'})`);
+await sleep(600);
+const s4 = await ev(SNAPSHOT);
+ok(s4.pinnedCount === 1 && s4.focusedRegion === "main", "I8 pin leaves the focused pane on the main lift", JSON.stringify({pinned: s4.pinnedCount, region: s4.focusedRegion}));
+ok(s4.railBodies[0] && s4.railBodies[0].pane === "p2", "I8 the pinned pane is p2", JSON.stringify(s4.railBodies));
+ok((await ev(`document.querySelector('.fs-pane[data-pane="p2"]').getAttribute('data-region')`)) === "rail", "I8 pinned section carries data-region=rail in the DOM");
+ok((await ev(`[...document.querySelectorAll('.fs-win-row')].some(r=>r.textContent.includes('unpin'))`)), "I8 winbox row re-labeled to unpin (winbox OOB rode the pin response)");
+ok((await ev(`[...document.querySelectorAll('.fs-pane[data-pane="p2"] header button')].some(b=>b.textContent.trim()==='unpin')`)), "I8 pane-head pin word re-labeled to unpin");
+await checkI8("after pin");
+const wsp3 = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
+ok(wsp3.content.find((p) => p.id === "p2").region === "rail", "I8 pin persisted to workspace row (region=rail)");
+
+// unpin returns the pane to the strip
+await ev(`htmx.ajax('POST','/filmstrip/pin',{values:{id:'p2'},target:'#fs-sink',swap:'innerHTML'})`);
+await sleep(600);
+const s5 = await ev(SNAPSHOT);
+ok(s5.pinnedCount === 0 && s5.focusedRegion === "main", "unpin returns the pane to the strip (zero pinned, focused main lift restored)", JSON.stringify({pinned: s5.pinnedCount, region: s5.focusedRegion}));
+ok((await ev(`document.querySelector('.fs-pane[data-pane="p2"]').getAttribute('data-region')`)) === "main", "I8 unpinned section carries data-region=main in the DOM");
+ok((await ev(`[...document.querySelectorAll('.fs-win-row')].some(r=>r.textContent.includes('unpin'))`)) === false, "I8 winbox row re-labeled back to pin (unpin OOB rode the response)");
+ok(s5.focusedRect && s5.focusedRect.q, "I1 still visible-focused after pin/unpin churn", JSON.stringify(s5.focusedRect));
+const wsp4 = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
+ok(wsp4.content.find((p) => p.id === "p2").region === "main", "unpin persisted to workspace row (region=main)");
 
 console.log(fails === 0 ? "\nSEMANTIC PROBE: ALL GREEN" : `\nSEMANTIC PROBE: ${fails} FAILING`);
 process.exit(fails === 0 ? 0 : 1);

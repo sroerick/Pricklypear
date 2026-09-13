@@ -99,7 +99,7 @@ all geometry stays in CSS classes, zero JS, zero inline styles.
       confirm no visual change yet (rail-region renders like today's
       heads-only row). probe I1-I7 green. Commit.
 
-- [ ] 2. PIN VERB + RAIL BODIES: new POST /filmstrip/pin {id} (lib)
+- [x] 2. PIN VERB + RAIL BODIES: new POST /filmstrip/pin {id} (lib)
       -> flips region, persists, answers the OOB two-section class
       swap (same grammar as filmstrip/width) + winbox/shelf OOBs.
       Register the route in the glochid layer (surface.ml routes
@@ -228,3 +228,62 @@ focus/open discipline, files-as-rail-pane, final round-trip + report).
 
 Still open: tasks 2-5 (pin verb + rail CSS, focus/open discipline,
 files-as-rail-pane, final round-trip + REPORT; I8 arming is task 2).
+
+### Task 2 DONE (loop 3, 2026-09-15) — pin verb + rail bodies, I8 ARMED
+
+- libs/filmstrip/lib.pp:
+  - NEW `filmstrip/pane-set-region` (setter beside pane-set-width) and
+    `filmstrip/pin` (POST /filmstrip/pin {id}) — flips region main<->rail,
+    persists via save-all, answers the SAME grammar as filmstrip/width:
+    oob-msg + shelf-oob + winbox-oob + one oob-section (body DOM rides
+    through hx-preserve). Unknown id -> status line only.
+  - `filmstrip/pane-head` gains the pin word BEFORE width, label "pin"/
+    "unpin" by the pane's CURRENT region (rail -> "unpin").
+- agent/lib/surface.ml (glochid layer):
+  - route registered: `(route "/filmstrip/pin" "filmstrip/pin")` after
+    the width line.
+  - `glochid/win-row` gains a pin word (win-btn, region-aware label
+    pin/unpin) between focus and width.
+  - base-css: the fixed LIFT is scoped to
+    `.fs-pane.focused[data-region="main"]`; NEW
+    `.fs-pane[data-region="rail"]{flex:1 1 auto;...}` +
+    `.fs-pane[data-region="rail"] .fs-body{display:block;flex:1 1 auto;
+    min-height:0;overflow:auto}` — pinned panes share the rail height by
+    flex, the cascade 16rem cap never binds (pinned panes live in
+    .fs-content, not the cascade). ROW mode untouched (all rules scoped
+    to :has(#fs-axis.col); row has no heads-only rule, bodies already
+    visible there — geometry unchanged).
+- scripts/probe_shell_sem.mjs: I8 ARMED by default during the pin step
+  (I8_ARMED=1 not needed anymore for the assertions; the env var still
+  forces the old gate). `checkI8(tag, expectPinned=true)` — the load
+  tag passes expectPinned=false (nothing pinned yet: record line, no
+  vacuous assertion). NEW pin/unpin step after I6: deskbox BUTTON click
+  to desktop 0 (raw httpPost does NOT apply OOB — htmx only applies
+  swaps on its own requests; use real clicks or htmx.ajax), then pin
+  p2 via `htmx.ajax(...)` (real request machinery — OOB swaps LAND),
+  assertions: pinned=1 + focused region main; railBodies=[p2 visible];
+  data-region=rail in DOM; win row + pane-head re-labeled "unpin";
+  workspace region=rail; then unpin -> all back to main. I8 on load
+  still prints the record. Probe ALL GREEN both unsecured and with
+  I8_ARMED=1 (exit 0 both ways).
+- MEASURED (CDP, /tmp/v3-pin-geom.mjs + /tmp/v3-pin-geom.png, throwaway):
+  before pin p2 322x27 (head) body 0x0 hidden, focused pane position:fixed
+  1512x825 @ (352,16); after pin p2 322x433 with body 320x406
+  overflow:auto INSIDE the rail, focused main pane UNCHANGED (fixed lift),
+  cascade cap 118px untouched. Zero NEW inline styles (the one [style] in
+  panes is chat/head's model select, pre-existing v2).
+- Verified: `dune build agent/bin/main.exe` green, `dune runtest lisp/
+  common/` green, probe ALL GREEN (both runs above).
+- Harness lore: (a) httpPost-raw responses NEVER mutate the DOM — after a
+  raw POST only workspace.json changes; DOM-visible behavior needs an
+  htmx-driven request (element click or htmx.ajax with
+  target/swap/values). (b) htmx.ajax IS the CDP harness twin of a real
+  button: values:{id}, target:#fs-sink, swap:innerHTML — OOB sections in
+  the response are processed. (c) chromium reuse footgun: a probe that
+  dies before cleanup leaves an orphan chrome holding the CDP port —
+  pkill 'remote-debugging-port=<N>' in its OWN tool call, rm -rf the
+  /tmp dirs, retry.
+
+Still open: tasks 3-5 (focus/open discipline in both regions, files as
+a rail pane + demo seed, final round-trip + geometry probe + chat smoke
++ REPORT).
