@@ -1612,6 +1612,10 @@ let boot_personal (t : t) : unit =
   let p = mark p "seed-stdlib" in
   checkout_personal t;
   let p = mark p "checkout-personal" in
+  (* Living agents note AFTER rehydrate (see Boot_seed.seed_agents_note):
+     the load-skip path binds unchanged defines via checkout's rehydrate,
+     so notes/doc/get + roam/reindex are only guaranteed bound here. *)
+  seed_agents_note t;
   refresh_ui_shell t;
   let _ = mark p "ui-shell" in
   ()
