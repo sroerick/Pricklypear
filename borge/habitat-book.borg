@@ -121,6 +121,7 @@
   (subsection habitat-loader
    (doc "seed the export into the one tree: chapters as typed nodes, refresh on release — reads then inherit branch/lens semantics for free")
    (status implemented)
+   (implements libs/book/lib.pp scripts/load-book.sh scripts/load_book.py)
    (verify
     (smoke "scripts/load-book.sh <stem>.book.json upserts book chapters without clobbering hand edits elsewhere")
     (smoke "(load-library \"book\") renders an index from tree rows, not from files"))
@@ -183,6 +184,7 @@
   (subsection eval-examples
    (doc "read-time eval of nopales example blocks in the reader's session; restricted prim table; (book/verify) as the book's self-test")
    (status implemented)
+   (implements image/lib/example_eval.ml libs/waves/lib.pp)
    (implements image/lib/example_eval.ml)
    (* agent note (|2026-08-30 all three smokes verified: POST
        /book/eval-example returns value + elapsed and the run button is

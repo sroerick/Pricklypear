@@ -421,5 +421,13 @@
    (verify
     (smoke "pp_eval workout/session-list and workout/volume"))
   )
+
+  (subsection nutrition
+   (doc "libs/food — daily meal templates + calorie/macros logging: the body-format sibling of the workout session doc (same day-living family, weight alongside food/calories)")
+   (status implemented)
+   (implements libs/food/lib.pp)
+   (verify
+    (smoke "(load-library \"food\") defines food/* helpers; food/add-template logs a meal row keyed by day-type + meal"))
+  )
  )
 )

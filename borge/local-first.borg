@@ -693,6 +693,14 @@
          the v1 data transport.
     |))))
 
+  (subsection client-packages
+   (doc "libs/sync + libs/replication — the Nopales-side product surface of the lens sync, seeded as empty stubs awaiting the client-sync make")
+   (status planned)
+   (implements libs/sync/lib.pp libs/replication/lib.pp)
+   (verify
+    (smoke "both packages seed with importable names on system/main; neither carries behavior yet — this subsection flips implemented when the client-sync make gives them a surface"))
+  )
+
   (subsection phasing
    (doc "Read-only offline first (achievable, defers the conflicts); write-capable lenses with automatic merge second")
    (status planned)

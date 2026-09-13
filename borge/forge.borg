@@ -46,6 +46,7 @@
         anomalies; the human approves each level before the descent
         continues.")
   (status planned)
+  (implements libs/forge/lib.pp scripts/smoke_forge.sh)
 
   (details
    (doc (|

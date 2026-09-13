@@ -10,6 +10,7 @@
   (subsection ntfy-delivery
    (doc "libs/ntfy — one POST per event to an ntfy topic; the ntfy Android app (or any UnifiedPush distributor reading the same topic) turns it into a native lock-screen notification. No native app development on our side.")
    (status planned)
+   (implements libs/ntfy/lib.pp)
    (verify
     (smoke "(load-library \"ntfy\") then (ntfy/send \"t\" \"b\") POSTs to the configured topic (observe via the ntfy app or topic URL)")
     (smoke "ntfy/send raises transient on unreachable host (job runner retries per jobs.runner backoff)")
@@ -51,6 +52,14 @@
          guard themselves or fire via submit-job.
     |))
    )
+  )
+
+  (subsection daily-standup
+   (doc "libs/standup — daily 09:00 Mountain standup brief (gregor): multi-line brief to the lobby + one ntfy push, on a self-healing cron schedule row")
+   (status implemented)
+   (implements libs/standup/lib.pp)
+   (verify
+    (smoke "the schedule row re-upserts itself each run; ntfy push fires first and raises on non-ok so the jobs runner retries transients"))
   )
 
   (subsection in-habitat-feed
