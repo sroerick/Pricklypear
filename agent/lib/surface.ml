@@ -75,6 +75,10 @@ let surface_source = {pp|
     ;; chatpage sizes against the VIEWPORT (calc(100vh - 6rem)); that always
     ;; overflows a pane box. In rail mode fit it to the pane instead.
     ".fs-shell:has(#fs-axis.col) .chatpage{height:100%}"
+    ;; v2 shelf: the rail's shelved-pane controlbox (rows: [route] restore destroy);
+    ;; hidden panes are .fs-pane.shelved (display:none, lib css).
+    ".fs-shelf{display:flex;flex-direction:column;gap:.15rem;border:1px solid var(--border);background:var(--panel);padding:.3rem .35rem}"
+    ".fs-shelf-row{display:flex;gap:.3rem;align-items:center;min-height:1.4rem}"
     ".bubble{background:#1b1f2a;border-radius:6px;padding:.5rem .75rem;margin:.5rem 0;white-space:pre-wrap}"
     ".bubble.user{color:#9ece6a}"
     ".bubble.llm{color:#c0caf5}.bubble.repl{color:#bb9af7}"
@@ -508,6 +512,104 @@ packages get one empty column.")
   "glochid's shell cascade (HOST SEAM 2): column 0 is the agent's own
 surfaces; deeper columns come from glochid/pkg-browse.")
 
+;; ---- 2c. SHELF RAIL (v2: close defaults to shelf) ----
+;; The rail gains a shelf controlbox (#fs-shelf): one row per SHELVED
+;; pane -- [route] restore destroy. Restore POSTs /filmstrip/restore
+;; (state=live); destroy POSTs /filmstrip/destroy (record removal).
+;; The close/restore/destroy handlers answer a shelf OOB re-render via
+;; filmstrip/shelf-oob (default "" in the lib; redefined here).
+(define glochid/shelf-row
+  (lambda (p)
+    (let
+      ((id (filmstrip/pane-id p))
+        (route (filmstrip/pane-route p)))
+      (html/tag
+        "div"
+        (html/attr "class" "fs-shelf-row")
+        (html/join
+          (list
+            (html/span (html/attr "class" "fs-title") (html/text route))
+            (html/tag
+              "button"
+              (html/attrs
+                (list
+                  (html/attr "class" "fs-btn")
+                  (html/attr "title" "restore to its position")
+                  (html/attr "hx-post" "/filmstrip/restore")
+                  (html/attr "hx-vals" (string-append "{\"id\":\"" id "\"}"))
+                  (html/attr "hx-target" "#fs-sink")
+                  (html/attr "hx-swap" "innerHTML")))
+              "restore")
+            (html/tag
+              "button"
+              (html/attrs
+                (list
+                  (html/attr "class" "fs-btn")
+                  (html/attr "title" "destroy the pane record")
+                  (html/attr "hx-post" "/filmstrip/destroy")
+                  (html/attr "hx-vals" (string-append "{\"id\":\"" id "\"}"))
+                  (html/attr "hx-target" "#fs-sink")
+                  (html/attr "hx-swap" "innerHTML")))
+              "destroy"))))))
+  "One shelf controlbox row: route label + restore + destroy.")
+(define glochid/shelf-rows
+  (lambda (panes)
+    (filmstrip/map-indexed
+      (lambda (p i)
+        (if (string-eq (filmstrip/pane-state p) "shelved")
+            (glochid/shelf-row p)
+            ""))
+      panes 0))
+  "One row per shelved pane (live panes render nothing here).")
+(define glochid/shelf-body
+  (lambda (panes)
+    (html/join
+      (append
+        (list (html/span (html/attr "class" "fs-title") (html/text "shelf")))
+        (glochid/shelf-rows panes))))
+  "Shell label + one row per shelved pane.")
+(define glochid/shelf-html
+  (lambda (panes)
+    (html/tag
+      "div"
+      (html/attrs
+        (list
+          (html/attr "id" "fs-shelf")
+          (html/attr "class" "fs-cbox fs-shelf")
+          (html/attr "data-cbox" "shelf")))
+      (glochid/shelf-body panes)))
+  "The shelf controlbox in the rail (below the content strip).")
+(define filmstrip/shelf-oob
+  (lambda ()
+    (html/tag
+      "div"
+      (html/attrs
+        (list
+          (html/attr "id" "fs-shelf")
+          (html/attr "class" "fs-cbox fs-shelf")
+          (html/attr "data-cbox" "shelf")
+          (html/attr "hx-swap-oob" "outerHTML:#fs-shelf")))
+      (glochid/shelf-body (nth (filmstrip/row) 1))))
+  "OOB re-render of #fs-shelf (the lib's default is empty; glochid owns
+the shelf rail). Close/restore/destroy call it in every response.")
+
+;; focus healing at render: an unset focus OR one pointing at a shelved
+;; pane heals to the first LIVE pane (the desktop dimension joins in
+;; window-controlbox-v2 task 3).
+(define glochid/heal-focus
+  (lambda (panes focus)
+    (if
+      (< focus 0)
+      (filmstrip/first-live-index panes)
+      (if
+        (string-eq
+          (filmstrip/pane-state (filmstrip/pane-at panes focus))
+          "shelved")
+        (filmstrip/first-live-index panes)
+        focus)))
+  "Focus that always has a live main pane behind it: unset (-1) and
+shelved-pointing both heal to the first live pane (-1 when none).")
+
 ;; ---- 3. THE SHELL PAGE (GET / and GET /filmstrip) ----
 ;; ?session=ID resumes as a chat fragment pane (/chat?session=ID — the
 ;; sessions table's view link and /resume land HERE); ?open=ROUTE is the
@@ -659,6 +761,7 @@ rebinds the request context, so hx-request? must be read first.")
                     (html/attr "id" "fs-content")
                     (html/attr "class" "fs-content")))
                 (html/join (filmstrip/panes-html panes focus)))
+              (glochid/shelf-html panes)
               (filmstrip/key-sentinels)
               (html/tag
                 "div"
@@ -678,12 +781,11 @@ layout from the sentinel's class).")
     (let*
       ((frag (hx-request?))
         (row (glochid/shell-row))
-        ;; rail discipline: a main pane ALWAYS exists when panes do.
-        ;; Heal an unset focus to pane 0 at RENDER (not persisted —
-        ;; alt+right heals it for real on the next focus step).
-        (focus (if (and (< (nth row 2) 0) (> (length (nth row 1)) 0))
-                   0
-                   (nth row 2))))
+        ;; rail discipline: a main pane ALWAYS exists while live panes
+        ;; do. Heal an unset focus (or one sitting on a shelved pane) to
+        ;; the first live pane at RENDER (not persisted — alt+right
+        ;; heals it for real on the next focus step).
+        (focus (glochid/heal-focus (nth row 1) (nth row 2))))
       (glochid/shell-doc
         frag
         (glochid/shell-inner (nth row 0) (nth row 1) focus))))
@@ -697,6 +799,8 @@ to pane 0 at render when unset — rail mode always has a main pane.")
 (route "/filmstrip/open" "filmstrip/open")
 (route "/filmstrip/cascade" "filmstrip/cascade")
 (route "/filmstrip/close" "filmstrip/close")
+(route "/filmstrip/restore" "filmstrip/restore")
+(route "/filmstrip/destroy" "filmstrip/destroy")
 (route "/filmstrip/focus" "filmstrip/focus")
 (route "/filmstrip/move" "filmstrip/move")
 (route "/filmstrip/width" "filmstrip/width")

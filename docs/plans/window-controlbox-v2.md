@@ -120,7 +120,7 @@ in the `glochid/base-css` CSS block.
       — it will RENDER anyway until task 3 exists; note the observed
       rects).
 
-- [ ] 1. SHELF = default close. Pane records gain `"state":"live"`.
+- [x] 1. SHELF = default close. Pane records gain `"state":"live"`.
       POST /filmstrip/close becomes: set state=shelved (NOT delete),
       OOB class-swap the pane section to add class `shelved`, and
       persist. New route POST /filmstrip/destroy {id}= the OLD delete
@@ -194,6 +194,35 @@ in the `glochid/base-css` CSS block.
       `node scripts/smoke_agent_cdp.mjs` if it passes preconditions —
       if it needs the mock-agent boot it should work (it boots its
       own). Write REPORT.
+
+## MEASURED (task 1, 2026-09-13; scratch 18091, build green)
+
+All done on the laptop repo, scratch instance only (seed: p1 /chat third
+live focused, p2 /settings half SHELVED, p3 /sessions full live desktop 1;
+axis col):
+
+- as loaded: p2 renders `fs-pane fs-half shelved` at rect 0x0 (display:none)
+  — shelved class comes from row data through filmstrip/pane-html; p1 lifted
+  1512x825 @ (352,16) focused; p3 heads-only rail row 322x27 @ (16,258)
+  (one row HIGHER than baseline — the shelved pane no longer takes a rail row;
+  content strip narrowed 583→522 to make room for the shelf controlbox)
+- shelf controlbox exists: `#fs-shelf` (class `fs-cbox fs-shelf`, data-cbox
+  shelf) below #fs-content, rect 320x54 @ (16,787) with one row; only the
+  label remains when nothing is shelved (320x30)
+- curl POST /filmstrip/restore {id:p2}: OOB shelf swap (empty again) + OOB
+  section swap WITHOUT shelved + state=live persisted; re-probe: p2 back as a
+  322x27 rail row @ (16,258)
+- curl POST /filmstrip/close {id:p1} on the FOCUSED pane: state=shelved
+  persisted, focus healed content:0 -> content:1 (first live = p2), OOB
+  swap adds shelved class + shelf gains a /chat row; re-probe: p2 lifted
+  1512x825 @ (352,16), p1 0x0
+- curl POST /filmstrip/destroy {id:p2}: OOB delete:#fs-pane-p2, row removed,
+  focus hand-off content:1 -> content:0 (the old close semantics verbatim)
+- width cycle on a live pane still works (p3 full -> third)
+- `dune runtest lisp/ common/` green; no JS errors in any probe
+
+Note: the probe seed now stamps `state` on each pane record; old records
+without `state` render live (pane-state defaults empty to live).
 
 ## MEASURED (task 0 baseline, 2026-09-13, build green, scratch 18091)
 
