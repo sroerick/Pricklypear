@@ -366,7 +366,7 @@
     |))))
 
   (subsection filmstrip-shell
-   (doc "The glochid shell IS a filmstrip (filmstrip.borg, working on the agent host): a Miller-column cascade strip over the agent's OWN surfaces above an niri-style content strip of ordinary route panes — with a persisted AXIS toggle (⇅ stack): horizontal film row (default) or a LEFT-RAIL mode — the shell collapses to a ~20rem screen-edge toolbar (cascade as vertical app menu, panes stacked beneath as a vertical filmstrip), leaving the desktop free to the right. Same seam as the habitat shell — Nopales fragments on the agent route table — with two host seams swapped: the workspace row persists to a LOCAL file (fs prims), and the cascade browse is defined by the agent (chat/code/sessions/settings/memory), not by todo/notes/calendar.")
+   (doc "The glochid shell IS a filmstrip (filmstrip.borg, working on the agent host): a Miller-column cascade strip over the agent's OWN surfaces above an niri-style content strip of ordinary route panes — with a persisted AXIS toggle (⇅ stack): horizontal film row (default) or a LEFT-RAIL mode — the shell collapses to a ~20rem screen-edge toolbar (cascade as vertical app menu, panes stacked beneath as a vertical filmstrip) and the FOCUSED pane is lifted out of the rail into the main window (position:fixed, right of the rail — open-or-focus jumps it there). Same seam as the habitat shell — Nopales fragments on the agent route table — with two host seams swapped: the workspace row persists to a LOCAL file (fs prims), and the cascade browse is defined by the agent (chat/code/sessions/settings/memory), not by todo/notes/calendar.")
    (status implemented)
    (implements agent/lib/surface.ml agent/lib/http_ui.ml libs/filmstrip/lib.pp libs/css/lib.pp)
    (verify
@@ -434,7 +434,11 @@
          LEFT RAIL — the shell narrows to a screen-edge column; cascade
          stacks its Miller columns as a vertical menu; panes stack
          beneath with width presets re-read as heights, purely via CSS
-         flex-direction, no new geometry code). The
+         flex-direction, no new geometry code). In rail mode the
+         .focused pane is position:fixed into the main window right of
+         the rail (its rail slot collapses; open-or-focus moves the
+         big window), and .chatpage is pinned to height:100% — its
+         normal calc(100vh - 6rem) always overflows a pane box. The
          response is TWO OOB swaps — the #fs-axis sentinel div and the
          toggle button — so live pane DOM survives; the selector side is
          CSS :has(#fs-axis.col) on #fs-shell. save-all is redefined in

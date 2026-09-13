@@ -63,6 +63,14 @@ let surface_source = {pp|
     ".fs-shell:has(#fs-axis.col) .fs-launch input[type=text]{width:100%}"
     ".fs-shell:has(#fs-axis.col) .fs-content{flex:1 1 auto;min-height:0;flex-direction:column;overflow-y:auto;overflow-x:hidden}"
     ".fs-shell:has(#fs-axis.col) .fs-pane{min-width:0;width:100%;min-height:6rem}"
+    ;; the rail is the strip of panes; the FOCUSED pane is lifted out of it
+    ;; into the main window (position:fixed fills the space right of the
+    ;; rail). Open-or-focus a pane and it jumps to the main window; the
+    ;; focus ring drops (the big window IS the focus signal).
+    ".fs-shell:has(#fs-axis.col) .fs-pane.focused{position:fixed;left:22rem;top:1rem;right:1rem;bottom:1rem;width:auto;min-width:0;min-height:0;z-index:1000;outline:none}"
+    ;; chatpage sizes against the VIEWPORT (calc(100vh - 6rem)); that always
+    ;; overflows a pane box. In rail mode fit it to the pane instead.
+    ".fs-shell:has(#fs-axis.col) .chatpage{height:100%}"
     ".bubble{background:#1b1f2a;border-radius:6px;padding:.5rem .75rem;margin:.5rem 0;white-space:pre-wrap}"
     ".bubble.user{color:#9ece6a}"
     ".bubble.llm{color:#c0caf5}.bubble.repl{color:#bb9af7}"
