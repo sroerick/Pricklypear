@@ -273,7 +273,7 @@
   (subsection symbols
    (doc "Distinguish symbols from strings at the value layer (undo v1 collapse)")
    (status implemented)
-   (implements lisp/lib/ast.ml lisp/lib/eval.ml lisp/lib/reader.ml pure/prims_pure.ml image/lib/primitives.ml)
+   (implements lisp/lib/ast.ml lisp/lib/eval.ml lisp/lib/reader.ml pure/prims_pure.ml pure/prims_json.ml lisp/lib/quote_value.ml image/lib/primitives.ml)
    (verify
     (test "quote hello is symbol; quote \"hello\" is string; not equal")
     (test "value_to_expr round-trip preserves Var vs Lit VStr without __str__")
@@ -517,7 +517,7 @@
   )
   (subsection eval
    (doc "The evaluator: env * expr -> value")
-   (implements lisp/lib/env.ml lisp/lib/eval.ml)
+   (implements lisp/lib/env.ml lisp/lib/eval.ml lisp/lib/budget.ml lisp/lib/pattern.ml)
    (status implemented)
    (* agent note (|2026-08-02: trampoline TCO, budget steps, pure eval+Prim_call; lisp tests green. define persist no longer Lwt.async.|) *)
    (verify
@@ -1024,6 +1024,53 @@
          Effect tags for each prim are defined in
          lisp-interpreter.effects (capability lattice).
    |))
+   )
+  )
+  (subsection pure-prim-modules
+   (doc "The shared PURE prim layer: value coercion policies, arithmetic,
+        list/string/json/html/mime prims, and the wire codecs — all
+        DB-free, all linked by every host that runs Nopales (the image,
+        the agent's local lens, pp-remote, the browser client).
+        i-1788671384 split prims_pure.ml into the focused modules below;
+        prims_pure.ml itself stays the register/assembly file the hosts
+        actually call into, and the soup prims live in pure/prims_soup.ml
+        (hypermedia-harness.kernel-prims).")
+   (implements pure/prims_common.ml pure/prims_num.ml pure/prims_list.ml pure/prims_string.ml pure/prims_json.ml pure/prims_html.ml pure/prims_mime.ml pure/wire_codec.ml)
+   (status implemented)
+   (verify
+    (build "dune build pure lisp image")
+    (test "lisp/test + pure/test suites green (coercion, wire codec round-trips)"))
+   (details
+    (doc (|
+         Module map (one concern each, i-1788671384):
+           prims_common  — THE shared coercion policies: num_of_value
+                           (int/float only), coerce_str (VStr/__str__
+                           tags/symbols/numbers/bool/nil/empty-list — the
+                           ONE string policy), list_of_value (the ONE
+                           improper-tail policy). Every other module here
+                           (and every DB prim) routes operands through it.
+           prims_num     — arithmetic, comparison, predicates, the math
+                           tower, number parsing, RNG, uuid, FSRS.
+           prims_list    — construction/destructuring, list ops,
+                           structural equality, alist lookup.
+           prims_string  — concat/join/slice/search/replace/case/compare,
+                           split, percent-encoding, date parsing.
+           prims_json    — JSON <-> value codecs, dict-* prims over VStr
+                           JSON (dict-get/dict-set/dict-keys — no new
+                           value type, v1 choice), read-string bridge.
+           prims_html    — render-html/status/redirect sentinels, HTML
+                           escape/decode, wiki-link + bible rendering,
+                           prose/render tokens, xml-parse, hx helpers.
+           prims_mime    — multipart/part value shapes (the __pp_part__/
+                           __pp_multipart__ tags), kwargs parsing,
+                           part/multipart constructors + decoders
+                           (multipart.mime-framing's pure half).
+           wire_codec    — the /api/eval error JSON shape
+                           (error_to_json / error_of_json) that image and
+                           proxy rims share, plus the curl -D header blob
+                           parser. prim-seam.server-endpoint owns the
+                           ENDPOINT this codec serves.
+    |))
    )
   )
   (subsection effects
@@ -1550,7 +1597,7 @@
   (subsection match
    (doc "Pattern match / destructuring for lists and code-as-data trees")
    (status implemented)
-   (implements lisp/lib/eval.ml)
+   (implements lisp/lib/eval.ml lisp/lib/pattern.ml)
    (verify
     (test "match list pattern binds vars")
     (test "match symbolic head (lambda params body) with VSymbol")

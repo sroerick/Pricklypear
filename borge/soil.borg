@@ -71,7 +71,7 @@
        measure callback. v1 damage discipline is intentionally dumb —
        kiosk-sized repaint on change; culling/occlusion/motion damage
        are v2 concerns, stated so nobody gold-plates the blitter.")
-   (implements libs/pads/render-scene.pp)
+   (implements libs/pads/lib.pp)
    (status implemented)
   )
 
