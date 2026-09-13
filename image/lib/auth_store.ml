@@ -222,6 +222,28 @@ let create_user (store : Store.t) ~(username : string) ~(is_admin : bool)
   | None -> (Error "no database")
   | Some conn ->
       (try
+      (* Instance user cap (spec_town_profile P1, Tier_limits): non-agent
+      accounts only — agents attach to parents and never consume a seat. *)
+      let cap = Profile.max_users () in
+        let count_rows =
+              Store_db.exec conn ~params:[]
+                ("SELECT count(*)::int FROM users " ^
+                 "WHERE coalesce(user_type,'human') <> 'agent'")
+            in
+          let cap_error =
+            match count_rows with
+            | row :: _ ->
+                (match Row.cell_int row 0 with
+                 | Some n when n >= cap ->
+                     Some
+                       (Printf.sprintf
+                          "user limit reached (%d non-agent accounts max)" cap)
+                 | _ -> None)
+            | [] -> None (* count failed to return: let INSERT decide *)
+          in
+          (match cap_error with
+           | Some e -> (Error e)
+           | None ->
       let sql =
             "INSERT INTO users (username, is_admin) VALUES ($1, $2) " ^
             "RETURNING " ^ user_cols
@@ -238,11 +260,11 @@ let create_user (store : Store.t) ~(username : string) ~(is_admin : bool)
               (match user_of_row row with
                | Some u -> (Ok u)
                | None -> (Error "create_user: bad row"))
-          | [] -> (Error "create_user: no row")
-    with exn ->
-      let msg = Printexc.to_string exn in
-          Printf.eprintf "[auth_store] create_user: %s\n%!" msg;
-          (Error msg))
+            | [] -> (Error "create_user: no row"))
+      with exn ->
+        let msg = Printexc.to_string exn in
+            Printf.eprintf "[auth_store] create_user: %s\n%!" msg;
+            (Error msg))
 
 (** Create an agent user attached to a parent human.
     username = "<parent>/agent", user_type='agent', parent_user_id=parent.

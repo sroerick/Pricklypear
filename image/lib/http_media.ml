@@ -188,6 +188,7 @@ let status_of_put_error (e : Media.put_error) : Httpun.Status.t =
   match e with
   | Media.Disallowed_content_type _ | Media.Empty_body -> `Bad_request
   | Media.Too_large _ -> `Payload_too_large
+  | Media.Quota_exceeded _ -> `Forbidden (* no 507 in Httpun.Status *)
   | Media.No_db | Media.Store_failed _ -> `Internal_server_error
 
 let api_media_post (session : Session.t) (reqd : Httpun.Reqd.t) : unit =

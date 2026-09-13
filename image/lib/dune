@@ -26,7 +26,8 @@
           agent_discovery http
           lineedit boot llm_client
           envelope
-          auth_password auth_throttle auth_store ai_store jobs sync)
+           auth_password auth_throttle auth_store ai_store jobs sync
+           tier_limits)
  (modules_without_implementation io)
  (libraries
    pricklypear-lisp
