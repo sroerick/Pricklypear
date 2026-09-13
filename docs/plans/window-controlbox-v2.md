@@ -168,7 +168,7 @@ in the `glochid/base-css` CSS block.
       panes, click-through via curl POST focus-id {id:p3}; re-probe
       shows p3 carrying .focused (lifted at 352,16).
 
-- [ ] 4. APP-LINK prim + chat nav repair (the bug that started this:
+- [x] 4. APP-LINK prim + chat nav repair (the bug that started this:
       clicking `code` in the chat pane's nav did a full-window GET and
       escaped the shell). In libs/filmstrip/lib.pp add
       `filmstrip/app-link` (lambda (route label)) emitting a button
@@ -194,6 +194,51 @@ in the `glochid/base-css` CSS block.
       `node scripts/smoke_agent_cdp.mjs` if it passes preconditions —
       if it needs the mock-agent boot it should work (it boots its
       own). Write REPORT.
+
+## MEASURED (task 4, 2026-09-13; scratch 18091, build + `dune runtest lisp/ common/` green)
+
+Seed: ONE chat pane, full width, live, focused, desktop 0 (the bug's
+minimal state: nav anchors in a lifted pane navigate the whole window
+out of the shell).
+
+- lib prim `filmstrip/app-link` (route label): link-look BUTTON, class
+  `fs-applink`, `hx-post /filmstrip/open` + `hx-vals {"route":...}` +
+  `hx-target #fs-sink` (same shape as the key sentinels — open-or-focus,
+  OOB pane swaps answer). Returns a PLAIN string: render-html inserts
+  the `__html__:` sentinel which is only unwrapped at the route
+  boundary — embedding it in chat/body's string-append would leak the
+  sentinel into the page. html/button is string-append based, so the
+  prim is safe to embed mid-string.
+- CSS in glochid/base-css (covers pane + any non-shell render):
+  `.fs-applink{background:none;border:0;color:#7aa2f7;padding:0;margin:0;
+  font:inherit;cursor:pointer;text-decoration:none}` + hover underline —
+  bare link look over the generic blue button.
+- chat/body h1 nav re-authored: "agent — /code /sessions /settings —
+  model:" — the three nav words are app-links now; the `agent` root
+  anchor is left as an anchor (untouched per scope; it reloads the
+  shell at `/` in place). NOTE for later: the resumed-session line's
+  `+ new` and `/sessions` links and the /code page's own h1 anchors
+  still navigate out — REPORTed as leftover teeth, not fixed here.
+- REAL htmx click-through (CDP Runtime.evaluate btn.click() on the
+  rendered /code app-link, window marker set before the click):
+  sameWindow true (marker + href intact — NO navigation), `#fs-shell`
+  and `#fs-sink` still present, pane count 1→2, the new /code pane is
+  `.fs-pane.fs-third.focused` lifted 1512x825 @ (352,16) with the code
+  page dispatched in its body, chat pane dropped back to a 322x27 rail
+  head, 0 JS errors (screenshot /tmp/wm-applink-code.png).
+- p2 audit via curl (HX-Request): POST /filmstrip/open route=/settings
+  with /code already present → appended a new pane, focus content:2,
+  workspace.json carried the new record (state live, desktop absent →
+  defaults to desk 0). Re-POST /settings → open-OR-FOCUS: single OOB
+  section re-swap focused, no duplicate row (find-route-index works).
+- reload persistence: fresh GET renders all three panes, /settings
+  focused + lifted, no errors.
+- KNOWN v2 gap (compile into REPORT): filmstrip/open-apply stamps new
+  pane records WITHOUT "desktop" — a pane opened by app-link on a desk>0
+  lands on desk 0 and is hidden there until a desktop switch re-heals
+  focus. Acceptable for v2 (desktop state is glochid row fields, the
+  lib must not read them); noted, not fixed.
+- `dune runtest lisp/ common/` green; zero JS; nothing live touched.
 
 ## MEASURED (task 3, 2026-09-13; scratch 18091, build + `dune runtest lisp/ common/` green)
 
