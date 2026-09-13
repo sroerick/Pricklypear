@@ -114,7 +114,7 @@ in the `glochid/base-css` CSS block.
 
 ## Tasks (do in order; tick when green+committed)
 
-- [ ] 0. BASELINE (no product code). Build, boot scratch, run probe,
+- [x] 0. BASELINE (no product code). Build, boot scratch, run probe,
       record the numbers in a `## MEASURED` section here. Confirm the
       workspace seed above loads all three panes (p3 lives on desktop 1
       — it will RENDER anyway until task 3 exists; note the observed
@@ -194,6 +194,32 @@ in the `glochid/base-css` CSS block.
       `node scripts/smoke_agent_cdp.mjs` if it passes preconditions —
       if it needs the mock-agent boot it should work (it boots its
       own). Write REPORT.
+
+## MEASURED (task 0 baseline, 2026-09-13, build green, scratch 18091)
+
+Probe `scripts/probe_shell_wm.mjs` with the plan's seed workspace
+(p1 /chat third focused, p2 /settings half desktop 0, p3 /sessions full
+desktop 1; axis col):
+
+- axisSentinel: `fs-sh-axis col` · deskSentinel: null (no `#ws-desk` yet,
+  as expected pre-task-2)
+- shell `#fs-shell`: 320x825 @ (16,16) — matches design expectation
+- rail strip: `.fs-rail` selector matches nothing (null) — the rail is
+  currently built from `#fs-cascade` (320x126 @ (16,16)) + `#fs-content`
+  (320x583 @ (16,258)) inside the shell, not a `.fs-rail` element
+- focused pane p1 lifted into main window: 1512x825 @ (352,16), cls
+  `fs-pane fs-third focused`, bodyShown true
+- non-focused panes are heads-only rail rows: p2 322x27 @ (16,258),
+  p3 322x27 @ (16,294), both bodyShown false
+- p3 (desktop 1 in the seed) RENDERS as a rail row anyway — confirmed;
+  no desktop hiding exists pre-task-2, no `data-desktop` attributes yet
+- controlboxes: none with `.fs-cbox` class (pane-head tag rows exist but
+  unclassified) · JS errors: none
+- screenshot: /tmp/wm-col.png
+
+Implication for later tasks: CSS written against `.fs-rail` (if any)
+should target the existing shell structure, or the rail wrapper needs
+introducing with the controlbox work.
 
 ## Done means
 
