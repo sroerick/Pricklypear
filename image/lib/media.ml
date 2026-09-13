@@ -187,6 +187,7 @@ type put_error =
   | Too_large of int * int  (* got, max *)
   | No_db
   | Store_failed of string  (* rendered failure detail (insert anomaly or SQL exn) *)
+  | Quota_exceeded of int * int * int  (* used, incoming, cap *)
 
 let put_error_message (e : put_error) : string =
   match e with
@@ -196,6 +197,8 @@ let put_error_message (e : put_error) : string =
       Printf.sprintf "payload too large (%d > %d)" got max
   | No_db -> "no db connection"
   | Store_failed detail -> detail
+  | Quota_exceeded (used, incoming, cap) ->
+      Tier_limits.quota_message (used, incoming, cap)
 
 let put
     (store : Store.t)
@@ -218,7 +221,50 @@ let put
       match Io_lwt.Db.current_conn store with
       | None -> (Error No_db)
       | Some conn ->
-          let fname = sanitize_filename filename in
+          (* Media storage quota (spec_town_profile P1): under a named
+             profile, non-admin authors are capped on summed blob bytes.
+             One choke point here covers the HTTP edge AND the
+             media-put / media-put-raw prims. Admins exempt; unknown
+             authors count as tenants (deny-lean). *)
+          let quota_error =
+            match Profile.tenant_limits () with
+            | None -> None
+            | Some limits ->
+                let is_admin_rows =
+                  Store_db.exec conn
+                    ~params:[ Pgx.Value.of_string author ]
+                    "SELECT is_admin::int FROM users WHERE username = $1"
+                in
+                let admin =
+                  match is_admin_rows with
+                  | row :: _ -> (match Row.cell_int row 0 with Some 1 -> true | _ -> false)
+                  | [] -> false
+                in
+                if admin then None
+                else
+                    let used_rows =
+                      Store_db.exec conn
+                        ~params:[ Pgx.Value.of_string author ]
+                        ("SELECT coalesce(sum(byte_size),0)::int FROM media_blobs " ^
+                         "WHERE author = $1")
+                    in
+                  let used =
+                    match used_rows with
+                    | row :: _ ->
+                        (match Row.cell_int row 0 with Some n -> n | None -> 0)
+                    | [] -> 0
+                  in
+                  (match
+                     Tier_limits.media_ok ~used ~incoming:byte_size
+                       ~limit:limits.media_bytes
+                     with
+                     | Ok () -> None
+                     | Error (u, i, l) -> Some (Quota_exceeded (u, i, l)))
+          in
+          (match quota_error with
+           | Some e -> (Error e)
+           | None ->
+            let fname = sanitize_filename filename in
           let digest = sha256_hex data in
           let meta =
             let m = String.trim meta_json in
@@ -272,9 +318,9 @@ let put
                        (Error
                           (Store_failed "insert returned no id")))
               | [] -> (Error (Store_failed "insert returned no row"))
-    with exn ->
-      (Error
-         (Store_failed ("store failed: " ^ Printexc.to_string exn))))
+      with exn ->
+        (Error
+           (Store_failed ("store failed: " ^ Printexc.to_string exn)))))
 
 (** Visibility confinement (BORGE-1785695911): a blob readable by [actor]
     iff [actor] authored it or [is_admin]. [None] performs no confinement

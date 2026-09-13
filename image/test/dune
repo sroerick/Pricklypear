@@ -54,10 +54,15 @@
  (modules packages_test)
  (libraries pricklypear-image alcotest))
 
+ (test
+  (name auth_password_test)
+  (modules auth_password_test)
+  (libraries pricklypear-image alcotest mirage-crypto-rng.unix))
+
 (test
- (name auth_password_test)
- (modules auth_password_test)
- (libraries pricklypear-image alcotest mirage-crypto-rng.unix))
+ (name tier_limits_test)
+ (modules tier_limits_test)
+ (libraries pricklypear-image alcotest))
 
 (test
  (name ai_store_test)
