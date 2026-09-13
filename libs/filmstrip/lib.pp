@@ -137,6 +137,7 @@
                 (list
                   (filmstrip/oob-msg "")
                   (filmstrip/shelf-oob)
+                  (filmstrip/winbox-oob)
                   (filmstrip/oob-section p2 (= i focus2))
                   (if
                     (if (>= focus2 0) (not (= focus2 focus)) #f)
@@ -170,6 +171,7 @@
                 (list
                   (filmstrip/oob-msg "")
                   (filmstrip/shelf-oob)
+                  (filmstrip/winbox-oob)
                   (filmstrip/oob-delete-pane id)
                   (if
                     (if (>= focus2 0) (not (= focus2 focus)) #f)
@@ -212,6 +214,7 @@
                 (list
                   (filmstrip/oob-msg "")
                   (filmstrip/shelf-oob)
+                  (filmstrip/winbox-oob)
                   (filmstrip/oob-section p2 (= i focus2))
                   (if
                     (if (>= focus 0) (not (= focus2 focus)) #f)
@@ -224,6 +227,10 @@
 (define filmstrip/shelf-oob
   (lambda () "")
   "OOB payload re-rendering the shelf controlbox after\nclose/restore/destroy. Default empty -- the plain habitat shell has\nno shelf rail yet; glochid redefines it to swap its #fs-shelf rows.")
+
+(define filmstrip/winbox-oob
+  (lambda () "")
+  "OOB payload re-rendering the windows controlbox after\nclose/restore/destroy (a pane leaving or rejoining the live set\nchanges its rows). Default empty -- the plain habitat shell has no\nwindows rail yet; glochid redefines it to swap its #fs-winbox rows.")
 
 (define filmstrip/close-focus
   (lambda
@@ -571,6 +578,43 @@
                   (filmstrip/pane-at panes focus2)
                   #t))))))))
   "POST /filmstrip/focus: dir param -> move .focused one pane over\n(clamped, no wrap); OOB class swap on exactly two panes (old, new).")
+
+(define filmstrip/focus-id
+  (lambda
+    ()
+    (let*
+      ((id (as-str (request-param "id")))
+        (row (filmstrip/row))
+        (cascade (nth row 0))
+        (panes (nth row 1))
+        (focus (nth row 2))
+        (i (filmstrip/find-pane-index panes id)))
+      (if
+        (if (< i 0) #t (not (filmstrip/pane-live? (filmstrip/pane-at panes i))))
+        (render-html (filmstrip/oob-msg "filmstrip: no such live pane"))
+        (if (= i focus)
+            (render-html (filmstrip/oob-msg ""))
+            (if (< focus 0)
+                (seq
+                  (filmstrip/save-all cascade panes i)
+                  (render-html
+                    (html/join
+                      (list
+                        (filmstrip/oob-msg "")
+                        (filmstrip/oob-section (filmstrip/pane-at panes i) #t)))))
+                (seq
+                  (filmstrip/save-all cascade panes i)
+                  (render-html
+                    (html/join
+                      (list
+                        (filmstrip/oob-msg "")
+                        (filmstrip/oob-section
+                          (filmstrip/pane-at panes focus)
+                          #f)
+                        (filmstrip/oob-section
+                          (filmstrip/pane-at panes i)
+                          #t))))))))))
+  "POST /filmstrip/focus-id: id param -> point .focused at that pane's\nindex (persisted + same OOB two-section class swap as focus).\nShelved/unknown ids answer the status line only; an already-focused\nid answers empty.")
 
 (define filmstrip/focus-step
   (lambda

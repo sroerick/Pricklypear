@@ -79,6 +79,10 @@ let surface_source = {pp|
     ;; hidden panes are .fs-pane.shelved (display:none, lib css).
     ".fs-shelf{display:flex;flex-direction:column;gap:.15rem;border:1px solid var(--border);background:var(--panel);padding:.3rem .35rem}"
     ".fs-shelf-row{display:flex;gap:.3rem;align-items:center;min-height:1.4rem}"
+    ;; v2 windows rail: the per-live-pane controlbox (rows: [route] focus
+    ;; width close); same chrome as the shelf box.
+    ".fs-winbox{display:flex;flex-direction:column;gap:.15rem;border:1px solid var(--border);background:var(--panel);padding:.3rem .35rem}"
+    ".fs-win-row{display:flex;gap:.3rem;align-items:center;min-height:1.4rem}"
     ".bubble{background:#1b1f2a;border-radius:6px;padding:.5rem .75rem;margin:.5rem 0;white-space:pre-wrap}"
     ".bubble.user{color:#9ece6a}"
     ".bubble.llm{color:#c0caf5}.bubble.repl{color:#bb9af7}"
@@ -720,22 +724,112 @@ re-render of the content strip (panes of the new desktop keep their
 live DOM via hx-preserve; panes of the others re-render inert — the
 workspace row keeps every record, only the swapped DOM shrinks).")
 
+;; ---- 2e. WINDOWS rail (v2) ----
+;; The rail gains a windows controlbox (#fs-winbox): one row per LIVE
+;; pane of the CURRENT desktop — [route] focus width close. focus POSTs
+;; /filmstrip/focus-id (lib, above the deskbox work: the OOB two-section
+;; class swap); width/close ride the pane-head verbs (/filmstrip/width,
+;; /filmstrip/close). close/restore/destroy answer a winbox OOB
+;; re-render via filmstrip/winbox-oob (default "" in the lib;
+;; redefined here), so a pane shelved from ANY surface drops its row.
+(define glochid/win-btn
+  (lambda (id verb title route)
+    (html/tag
+      "button"
+      (html/attrs
+        (list
+          (html/attr "class" "fs-btn")
+          (html/attr "title" title)
+          (html/attr "hx-post" route)
+          (html/attr "hx-vals" (string-append "{\"id\":\"" id "\"}"))
+          (html/attr "hx-target" "#fs-sink")
+          (html/attr "hx-swap" "innerHTML")))
+      verb))
+  "One windows-row button: POSTs {id} at the verb's route.")
+
+(define glochid/win-row
+  (lambda (p)
+    (let
+      ((id (filmstrip/pane-id p))
+        (route (filmstrip/pane-route p)))
+      (html/tag
+        "div"
+        (html/attr "class" "fs-win-row")
+        (html/join
+          (list
+            (html/span (html/attr "class" "fs-title") (html/text route))
+            (glochid/win-btn id "focus" "lift into the main window" "/filmstrip/focus-id")
+            (glochid/win-btn id "width" "cycle width (third/half/full)" "/filmstrip/width")
+            (glochid/win-btn id "close" "close pane (to the shelf)" "/filmstrip/close"))))))
+  "One windows controlbox row: route label + focus + width + close.")
+
+(define glochid/win-rows
+  (lambda (panes)
+    (filmstrip/map-indexed
+      (lambda (p i)
+        (if
+          (and (= (filmstrip/pane-desk p) (glochid/deskt))
+               (filmstrip/pane-live? p))
+          (glochid/win-row p)
+          ""))
+      panes 0))
+  "One row per LIVE pane of the CURRENT desktop (others render nothing).")
+
+(define glochid/winbox-body
+  (lambda (panes)
+    (html/join
+      (append
+        (list (html/span (html/attr "class" "fs-title") (html/text "windows")))
+        (glochid/win-rows panes))))
+  "Windows label + one row per live pane of the current desktop.")
+
+(define glochid/winbox-html
+  (lambda (panes)
+    (html/tag
+      "div"
+      (html/attrs
+        (list
+          (html/attr "id" "fs-winbox")
+          (html/attr "class" "fs-cbox fs-winbox")
+          (html/attr "data-cbox" "windows")))
+      (glochid/winbox-body panes)))
+  "The windows controlbox in the rail (between content strip and deskbox).")
+
+(define filmstrip/winbox-oob
+  (lambda ()
+    (html/tag
+      "div"
+      (html/attrs
+        (list
+          (html/attr "id" "fs-winbox")
+          (html/attr "class" "fs-cbox fs-winbox")
+          (html/attr "data-cbox" "windows")
+          (html/attr "hx-swap-oob" "outerHTML:#fs-winbox")))
+      (glochid/winbox-body (nth (filmstrip/row) 1))))
+  "OOB re-render of #fs-winbox (the lib's default is empty; glochid owns
+the windows rail). Close/restore/destroy call it in every response.")
+
 ;; focus healing at render: an unset focus OR one pointing at a shelved
-;; pane heals to the first LIVE pane (the desktop dimension joins in
-;; window-controlbox-v2 task 3).
+;; pane heals to the first LIVE pane ON THE CURRENT DESKTOP (v2 task 3;
+;; falls back to the first live pane anywhere when the desktop has
+;; none).
 (define glochid/heal-focus
   (lambda (panes focus)
     (if
-      (< focus 0)
-      (filmstrip/first-live-index panes)
-      (if
-        (string-eq
-          (filmstrip/pane-state (filmstrip/pane-at panes focus))
-          "shelved")
-        (filmstrip/first-live-index panes)
-        focus)))
+      (if (< focus 0)
+          #t
+          (string-eq
+            (filmstrip/pane-state (filmstrip/pane-at panes focus))
+            "shelved"))
+      (let
+        ((f (glochid/first-on-desk panes (glochid/deskt) 0)))
+        (if (< f 0) (filmstrip/first-live-index panes) f))
+      focus))
   "Focus that always has a live main pane behind it: unset (-1) and
-shelved-pointing both heal to the first live pane (-1 when none).")
+shelved-pointing both heal to the first live pane on the CURRENT
+desktop (-1 when the desktop has none — falls back to the first live
+pane anywhere). Not persisted — alt+right heals it for real on the
+next focus step.")
 
 ;; ---- 3. THE SHELL PAGE (GET / and GET /filmstrip) ----
 ;; ?session=ID resumes as a chat fragment pane (/chat?session=ID — the
@@ -888,6 +982,7 @@ rebinds the request context, so hx-request? must be read first.")
                     (html/attr "id" "fs-content")
                     (html/attr "class" "fs-content")))
                 (html/join (filmstrip/panes-html panes focus)))
+              (glochid/winbox-html panes)
               (glochid/deskbox-html)
               (glochid/shelf-html panes)
               (filmstrip/key-sentinels)
@@ -901,10 +996,11 @@ rebinds the request context, so hx-request? must be read first.")
               (glochid/axis-sentinel (glochid/axis) #f)
               (glochid/desk-sentinel (glochid/deskt) #f)))))))
   "The shell inner (filmstrip/shell-html's parts + the axis toggle + the
-desktop controlbox + sentinels): style + cascade strip over
-launcher+toggle + content strip, deskbox, key sentinels, OOB sink, axis
-desktop sentinels. Zero scripts (CSS :has flips the layout from the
-axis sentinel's class and hides off-desktop panes from the desk one).")
+windows desktop controlboxes + sentinels): style + cascade strip over
+launcher+toggle + content strip, winbox, deskbox, key sentinels, OOB
+sink, axis desktop sentinels. Zero scripts (CSS :has flips the layout
+from the axis sentinel's class and hides off-desktop panes from the
+desk one).")
 
 (define glochid/shell
   (lambda ()
@@ -932,6 +1028,7 @@ to pane 0 at render when unset — rail mode always has a main pane.")
 (route "/filmstrip/restore" "filmstrip/restore")
 (route "/filmstrip/destroy" "filmstrip/destroy")
 (route "/filmstrip/focus" "filmstrip/focus")
+(route "/filmstrip/focus-id" "filmstrip/focus-id")
 (route "/filmstrip/move" "filmstrip/move")
 (route "/filmstrip/width" "filmstrip/width")
 (route "/filmstrip/orient" "glochid/orient")
