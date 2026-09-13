@@ -78,7 +78,8 @@ log "pack public source tree"
   | tar -C "$STAGE/src" -xf -
 ) 2>/dev/null || {
   # OpenBSD tar may lack GNU long options — copy key trees
-  for d in lisp common image migrations libs scripts docs borge; do
+  log "WARN: full tar failed; using tree fallback"
+  for d in lisp common image migrations libs scripts docs borge profiles; do
     [ -d "$d" ] && cp -R "$d" "$STAGE/src/"
   done
   for f in *.borg README.md AGENTS.md dune-project; do
