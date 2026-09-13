@@ -136,7 +136,7 @@ in the `glochid/base-css` CSS block.
       it back. `width`/`close` button on a pane head still works —
       close now shelves.
 
-- [ ] 2. DESKTOPS. Workspace gains `"desktop":N` (int, default 0); pane
+- [x] 2. DESKTOPS. Workspace gains `"desktop":N` (int, default 0); pane
       records carry `"desktop"`. New route POST /filmstrip/desktop
       {d:int} — sets ws desktop, persists, answers with OOB re-render
       of the content strip (swap #fs-content innerHTML — pane DOM of
@@ -194,6 +194,49 @@ in the `glochid/base-css` CSS block.
       `node scripts/smoke_agent_cdp.mjs` if it passes preconditions —
       if it needs the mock-agent boot it should work (it boots its
       own). Write REPORT.
+
+## MEASURED (task 2, 2026-09-13; scratch 18091, build + `dune runtest lisp/ common/` green)
+
+Seed: p1 /chat third live desk 0 FOCUSED, p2 /settings half live desk 0,
+p3 /sessions full live desk 1; ws desktop 0, axis col.
+
+- as loaded: deskSentinel `fs-sh-axis dsk-0` (#ws-desk exists, inert,
+  beside #fs-axis); every pane section carries `data-desktop`; p3 (desk 1)
+  HIDDEN — rect 0x0 via the `:has(#ws-desk.dsk-0)` CSS pair, no JS;
+  p1 lifted 1512x825 @ (352,16); p2 rail row 322x27 @ (16,258)
+- desktop controlbox exists: `#fs-deskbox` (class `fs-cbox fs-deskbox`,
+  data-cbox desktop) between #fs-content and #fs-shelf — deskbox 320x30,
+  shelf now 320x30 below it
+- curl POST /filmstrip/desktop d=1: response = OOB msg + `#ws-desk`
+  dsk-1 outerHTML swap + `#fs-content` re-render (all panes keep their
+  data/desktop records; bodies via hx-preserve); workspace.json now has
+  `"desktop":1` AND `"focus":"content:2"` — focus healed onto the first
+  live pane of the target desktop (rail discipline: a main pane ALWAYS
+  exists; not required by the task text, noted as an addition)
+- re-probe after d=1: deskSentinel dsk-1; p1/p2 rect 0x0 (hidden);
+  p3 `.fs-pane.fs-full.focused` lifted 1512x825 @ (352,16), body dispatched
+- reload persistence: GET / re-renders dsk-1; POST d=0 restores
+  dsk-0 + focus content:0 (heals onto p1); round-trip verified both ways
+- CDP click-through (real htmx, no reload — window marker survived):
+  d1 click → sentinel dsk-1 + p3 display none→flex + .focused lands on
+  p3; d0 click → back. Booking the deskbox buttons POSTs exactly
+  /filmstrip/desktop {d:'N'}
+- `dune runtest lisp/ common/` green; zero JS added; no JS errors in
+  any probe; nothing live touched
+
+v2 DOM caveat (per plan, acceptable, REPORTed): the #fs-content OOB
+re-render re-dispatches EVERY pane's fragment server-side; panes of the
+desktops you are LEAVING keep their slot in the row but their body DOM
+is re-created (hx-preserve only survives for panes present in the new
+HTML, which is all of them here — count is unchanged). Also: switching
+desktop re-renders in-pane chat scroll state of the desktop you left.
+Workspace rows are untouched — only the swapped DOM shrinks back on
+return via fresh dispatch.
+
+Process note for future loops: pkill/nohup within one bash invocation
+must use the `[.]` bracket trick in the pattern (the plan's own
+caveat); a bare quoted pattern killed the worker shell mid-command and
+produced phantom boot failures.
 
 ## MEASURED (task 1, 2026-09-13; scratch 18091, build green)
 
