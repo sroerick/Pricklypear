@@ -142,7 +142,7 @@ all geometry stays in CSS classes, zero JS, zero inline styles.
       demo workspace (/chat focused main + /code pinned rail) as the
       probe's default state if useful. Screenshots to /tmp. Commit.
 
-- [ ] 5. FINAL: round-trip + shelf interplay + full gate. Region must
+- [x] 5. FINAL: round-trip + shelf interplay + full gate. Region must
       survive reload (workspace.json -> GET /) and desktop flips
       (rail panes visible on every desktop); shelving a rail-region
       pane shelves it like any pane (shelf row; restore restores
@@ -394,3 +394,117 @@ round-trip + geometry probe + chat smoke + REPORT).
 
 Still open: task 5 (final round-trip + desktop flips + shelf interplay +
 full gate + REPORT).
+
+### Task 5 DONE (loop 6, 2026-09-15) — final round-trip + close-heal fix + REPORT: FEATURE COMPLETE
+
+- PRODUCT CHANGE (one real gap, caught by the new task-5 probe block):
+  the lib's close-time heal (`filmstrip/close` used
+  `filmstrip/first-live-index`) was region/desktop-blind. Closing a
+  FOCUSED pinned rail pane on a foreign desktop (the probe: /code
+  pinned on desk 1, closed from desk 1 while p1/p2 live on desk 0)
+  healed focus onto the first live main pane — hidden there at 0x0:
+  the exact "no 0x0 focused pane / I1 holds" violation the v3 spec
+  bans, with a dock-visible rail pane right there.
+  libs/filmstrip/lib.pp gained (region+desktop aware, lib-side only):
+  - `filmstrip/ws-desktop` — current desktop from the workspace row's
+    desktop field, through the lib's OWN ws-fields seam (the same read
+    glochid/deskt already does; the lib never touches host pane-row
+    fields).
+  - `filmstrip/first-region-live` — first LIVE pane of one region;
+    MAIN is desktop-scoped (must sit on desk d), RAIL is
+    desktop-global (d check skipped — dock semantics).
+  - `filmstrip/close-heal` — close-time heal priority: first a live
+    MAIN pane on the CURRENT desktop (v2 lift continuity on a visible
+    pane), else the first live RAIL pane (focused rail pane satisfies
+    I1 with no lift), else `first-live-index` (v2 fallback for
+    region-less hosts). Wired into `filmstrip/close`'s focus2. Zero
+    rail panes + same-desk panes => exactly v2 behavior (probe-verified
+    backward compat: all pre-task-5 blocks still green).
+- scripts/probe_shell_sem.mjs gained the `v3_final` block: (a)
+  workspace.json -> GET / full round-trip of BOTH pinned regions; (b)
+  deskbox flips to desk 0 AND desk 1 with both pinned bodies visible on
+  each (dock semantics) + I1 on each; (c) shelve the pinned /code pane
+  via a REAL winbox close — shelf row appears, workspace row keeps
+  region=rail while shelved, focus heals to the VISIBLE rail pane (the
+  close-heal fix, 322x425 not 0x0), never onto a shelved pane; restore
+  via the real shelf-row button brings it back WITH its region and both
+  bodies visible again; (d) unpin round-trip persists region=main on
+  /code. I8 asserted at the shelve/restore round-trip.
+- FULL GATE (all green):
+  - probe_shell_sem.mjs ALL GREEN, exit 0 — default AND I8_ARMED=0.
+  - probe_shell_wm.mjs (read-only geometry, scratch 18091 with the v2
+    plan seed): diffs match the v2 baseline — rail/shell 320x825
+    @(16,16); focused lift (352,16) 1512x825; shelved pane 0x0
+    bodyShown=false; desk-1 pane 0x0 from desk 0; cascade 320x118 (the
+    16rem cap, unpinned); controlboxes windows/desktop/shelf plausible;
+    errors []. deskSentinel `fs-sh-axis dsk-0` vs the null in the v2
+    pre-task-2 baseline — expected post-v2 (desktop sentinel shipped in
+    v2 task 2).
+  - smoke_agent_cdp.mjs (chat regression, AGENT_BIN absolute path —
+    relative spawn ENOENTs): OK agent / OK CDP / OK turn streamed.
+  - `dune build agent/bin/main.exe` green; `dune runtest lisp/ common/`
+    green; `borge drift` 0.
+- Harness lore: (a) the .pp lib is read at boot from the BINARY — a
+  reader error surfaces as `agent exited code 2` in the probe and
+  "unterminated list" at EOF even when the missing paren is mid-file
+  (python paren-balance script finds the culprit form fast; lib.pp
+  top-level forms are (define ...) at depth 0-1). (b)
+  spawn(...,"_build/default/...") is cwd-dependent only sometimes —
+  pass AGENT_BIN absolute. (c) probe_shell_wm needs a running scratch
+  agent: seed /tmp/agent-wmprobe with the v2 plan's workspace, --serve
+  --port 18091, PROBE_URL default; spawn and pkill in separate calls.
+
+## REPORT (window-controlbox-v3, 2026-09-15, loops 1-6, FEATURE COMPLETE)
+
+- COMMITS: 476f4db (task 0, probe first) · 91d2109 (task 1, region
+  state) · d2303cc (task 2, pin verb + rail bodies, I8 armed) · fc4e82f
+  (task 3, focus/open discipline) · 4ba70d9 (task 4, files as a rail
+  pane, dock semantics) · task 5 commit (close-heal + final gate + this
+  REPORT). Every task: build green, probe_green, tests green, drift 0.
+- WHAT SHIPPED: region=rail is a first-class pane state carried on the
+  pane record through EVERY writer (accessor default "main", data-region
+  on every section, region in native-pane-json); POST /filmstrip/pin
+  flips it with the same OOB grammar as width (winbox/shelf/section
+  swaps, zero JS); pin words in pane-head + win-row; rail-region panes
+  render their LIVE BODY in the rail (flex rail-share, no 16rem cap —
+  the cap is a .fs-cascade column rule the pinned panes never touch),
+  desktop-GLOBAL (exempt from the :has desk-hiding rules — dock
+  semantics); focus/open/cascade never steal the main lift for a rail
+  target (rail-focus-onto: live-DOM ring in place, persisted focus stays
+  with the lifted main when one exists — a focused rail pane satisfies
+  I1 when no main is live); healing (render-time heal-focus AND close-
+  time close-heal) prefers main-on-current-desk, then dock-visible
+  rail panes, and never lands on a shelved pane; /code walks pane-locally
+  at rail height (I6 in the rail).
+- MEASURED (probe viewport 1880x1000): rail 320x825 @(16,16); main lift
+  (352,16) 1512x825; pre-v3 rail rows 322x27 hidden body; ONE pinned
+  pane fills the rail band (322x433, body 320x406 — vs the cascade's
+  118px cap, computed max-height none); TWO pinned panes flex-share
+  (e.g. 290/127) and scroll inside; pinned bodies identical on desk 0
+  and desk 1; shelve/restore of a pinned pane round-trips region;
+  zero inline styles in rail panes (the only [style] in panes remains
+  chat/head's pre-existing v2 model select).
+- WEAK POINTS / DEFERRED (none spec-mandated to change; listed for
+  honesty): (1) the rail FOCUS RING is live-DOM state — after reload
+  only the persisted focus wears .focused (an open-or-focus re-applies
+  it; spec text does not require ring persistence); (2) unpin restores
+  the pane to its record position — position never moves on pin, so
+  "old position" is trivially the record's (spec smoke satisfied
+  structurally, not via a remembered pre-pin geometry); (3) restore
+  focuses the restored pane only when nothing live holds focus (v2
+  rule, unchanged); (4) desktop-flip HEAL considers pane-desk fields
+  the host stamps — a lib-level model of desktops exists only as far as
+  ws-desktop/pane-desk (documented in the close-heal docstring).
+- .BORGE DISCIPLINE: no .borg files touched; the v3 stanza is FROZEN
+  and no spec change was needed — the close-time heal was code brought
+  INTO spec ("no 0x0 focused pane, I1/I2 hold" was already the law),
+  not a spec edit, so no borge issue was filed.
+- HARNESS LORE distilled (details in the per-task log above): raw http
+  POSTs never mutate the DOM — use real clicks or htmx.ajax (values +
+  #fs-sink target) for DOM-visible behavior; OOB body preserves keep
+  pane-local walks alive across class swaps (a pane's DOM body is live
+  state — fresh-navigate to reset to route-rendered); flex 1 1 auto
+  pins share the band by content, do not assert symmetric halves;
+  probe shells NEVER in the same bash call as the server spawn; a
+  chromium probe that dies early leaves an orphan --remote-debugging-
+  port holder (pkill in its OWN call).

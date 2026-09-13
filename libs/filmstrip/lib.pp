@@ -135,7 +135,7 @@
             (panes2 (filmstrip/replace-at panes i p2))
             (focus2
               (if (= i focus)
-                  (filmstrip/first-live-index panes2)
+                  (filmstrip/close-heal panes2)
                   focus)))
           (seq
             (filmstrip/save-all cascade panes2 focus2)
@@ -1416,6 +1416,56 @@ desktop 0).")
   (lambda (panes)
     (filmstrip/find-index filmstrip/pane-live? panes 0))
   "Index of the first live (not shelved) pane, else -1.")
+
+(define filmstrip/ws-desktop
+  (lambda ()
+    (let
+      ((v (dict-get (filmstrip/ws-fields) "desktop")))
+      (if (null? v) 0 (parse-int (as-str v)))))
+  "Current desktop from the workspace row's desktop field (0 when
+unset — hosts that don't model desktops ride 0). Read through THIS
+lib's own ws-fields seam, the same read the habitat shell's deskt
+wrapper does; the lib never touches host pane-row fields.")
+
+(define filmstrip/first-region-live
+  (lambda (panes i region d)
+    (if
+      (null? panes)
+      -1
+      (if
+        (and
+          (filmstrip/pane-live? (car panes))
+          (string-eq (filmstrip/pane-region (car panes)) region)
+          (if (string-eq region "rail")
+              #t
+              (= (filmstrip/pane-desk (car panes)) d)))
+        i
+        (filmstrip/first-region-live (cdr panes) (+ i 1) region d))))
+  "Index of the first LIVE pane of one region (else -1). MAIN panes
+are desktop-scoped (must sit on desktop d); RAIL panes are
+desktop-global (dock semantics — visible on every desktop, so the d
+check is skipped). Never a shelved pane.")
+
+(define filmstrip/close-heal
+  (lambda (panes)
+    (let*
+      ((d (filmstrip/ws-desktop))
+        (m (filmstrip/first-region-live panes 0 "main" d))
+        (r (filmstrip/first-region-live panes 0 "rail" d)))
+      (cond
+        ((>= m 0) m)
+        ((>= r 0) r)
+        (#t (filmstrip/first-live-index panes)))))
+  "Focus target after a close SHELVED the focused pane (v3): first a
+live MAIN pane on the CURRENT desktop (the v2 lift continues, on a
+pane the operator can actually see), else the first live RAIL pane
+(dock semantics: a rail pane is visible on every desktop, so a
+focused rail pane satisfies I1 with no main lift), else the first
+live pane anywhere (v2 behavior for region-less hosts). Never a
+shelved pane. Without this, closing the last focused pane while
+pinned panes showed beside it healed focus onto a hidden 0x0 main
+pane on a foreign desktop — the exact I1 violation the v3 spec
+bans (no 0x0 focused pane).")
 
 (define filmstrip/pane-width
   (lambda
