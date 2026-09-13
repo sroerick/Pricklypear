@@ -62,7 +62,11 @@ let surface_source = {pp|
     ".fs-shell:has(#fs-axis.col) .fs-launch,.fs-shell:has(#fs-axis.col) .fs-topline{flex-wrap:wrap}"
     ".fs-shell:has(#fs-axis.col) .fs-launch input[type=text]{width:100%}"
     ".fs-shell:has(#fs-axis.col) .fs-content{flex:1 1 auto;min-height:0;flex-direction:column;overflow-y:auto;overflow-x:hidden}"
-    ".fs-shell:has(#fs-axis.col) .fs-pane{min-width:0;width:100%;min-height:6rem}"
+    ;; rail rows are pane HEADS only — bodies belong to the focused pane
+    ;; (lifted into the main window below). No presets-as-heights in the
+    ;; rail; a row collapses to its title bar.
+    ".fs-shell:has(#fs-axis.col) .fs-pane{flex:0 0 auto;min-width:0;width:100%;min-height:0}"
+    ".fs-shell:has(#fs-axis.col) .fs-pane:not(.focused) .fs-body{display:none}"
     ;; the rail is the strip of panes; the FOCUSED pane is lifted out of it
     ;; into the main window (position:fixed fills the space right of the
     ;; rail). Open-or-focus a pane and it jumps to the main window; the
@@ -673,12 +677,19 @@ layout from the sentinel's class).")
   (lambda ()
     (let*
       ((frag (hx-request?))
-        (row (glochid/shell-row)))
+        (row (glochid/shell-row))
+        ;; rail discipline: a main pane ALWAYS exists when panes do.
+        ;; Heal an unset focus to pane 0 at RENDER (not persisted —
+        ;; alt+right heals it for real on the next focus step).
+        (focus (if (and (< (nth row 2) 0) (> (length (nth row 1)) 0))
+                   0
+                   (nth row 2))))
       (glochid/shell-doc
         frag
-        (glochid/shell-inner (nth row 0) (nth row 1) (nth row 2)))))
+        (glochid/shell-inner (nth row 0) (nth row 1) focus))))
   "GET / and /filmstrip: the glochid shell. filmstrip's parts under
-glochid chrome; zero JS beyond the vendored htmx assets.")
+glochid chrome; zero JS beyond the vendored htmx assets. Focus heals
+to pane 0 at render when unset — rail mode always has a main pane.")
 
 ;; ---- shell routes ----
 (route "/" "glochid/shell")
