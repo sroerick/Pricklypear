@@ -282,6 +282,25 @@
   
    )
   )
+  (subsection working-docs
+   (doc "Session working docs under docs/: make-phase plans, design proposals, review findings, handoffs — the ralph-loop shared memory that complements the spec docs")
+   (status implemented)
+   (* agent note (|These are POINT-IN-TIME working artifacts, not spec: plan files (docs/plans/*) drive ralph/loop make phases and are the shared memory between loops; reviews (security-review-2026-09, theme-hex-audit) and redesign proposals (chat-ui-redesign, component-ui-proposal) record findings + drafts whose accepted content gets promoted into .borg chapters; treansversal handoffs (tree-traversal-handoff) and cutover records (one-tree-userland-cutover) capture state between sessions. Where a doc's content is ACCEPTED SPEC, the owning .borg chapter is the authority and the doc is evidence/trail. cs-curriculum is the curriculum plan behind course/cs-interpreters.borg (habitat-book.course-documents).|) *)
+   (implements
+    docs/chat-ui-redesign.md
+    docs/component-ui-proposal.md
+    docs/cs-curriculum.md
+    docs/one-tree-userland-cutover.md
+    docs/plans/delete-lwt-rim.md
+    docs/plans/filmstrip-v1.md
+    docs/plans/soil-m-a.md
+    docs/plans/soil-m-b.md
+    docs/plans/window-controlbox-v2.md
+    docs/security-review-2026-09.md
+    docs/theme-hex-audit.md
+    docs/tree-traversal-handoff.md)
+  )
+
   (subsection non-goals
    (doc "What habitat-workflow is NOT")
    (status implemented)
