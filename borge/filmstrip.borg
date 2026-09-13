@@ -144,7 +144,8 @@
     (smoke "a pinned files view fills available rail height — the cascade 16rem cap no longer bounds it")
     (smoke "workspace round-trip: region persists through save-all and reload")
    )
-   (status planned)
+   (* agent note (|2026-09-14 MAKE (window-controlbox-v3) DONE via the plan loop (docs/plans/window-controlbox-v3.md REPORT, commits 476f4db..55619a5 + ca7a9d8): region is a first-class pane state (records + data-region + native-scene); POST /filmstrip/pin flips it with the width-grammar OOBs; pin words in pane-head + win-row; rail-region panes render their LIVE BODY in the rail at flex rail-share (the cascade 16rem cap never touches them), desktop-GLOBAL (exempt from the desk :has hiding — dock semantics); focus/open/cascade never lift a rail pane (in-place live-DOM ring; a focused rail pane satisfies the visible-focus invariant when no main pane is live); healing (render heal-focus AND a new lib close-heal — the loop's probe caught v2's first-live-index healing onto HIDDEN 0x0 main panes when a pinned pane was closed on a foreign desktop) prefers main-on-current-desk, then dock-visible rail panes, never shelved. /code walks pane-locally at rail height. probe_shell_sem.mjs extended to the v3 block: 82 assertions ALL GREEN (default + final passes); geometry probe matches the v2 baseline with pinned bands as flex shares; chat smoke green; lisp/common runtest green; borge drift 0. Zero inline styles. Weak points deferred: rail focus ring is live-DOM state (server can re-derive on reload); shelved-DOM stream pause still open budget.|) *)
+   (status implemented)
   )
 
   (subsection roadmap-tiers
