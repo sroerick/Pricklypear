@@ -637,15 +637,20 @@ let rec eval_one (t : t) (input : string) : Pricklypear_lisp.Ast.value =
     let v = eval_string_rim t input in
     let pkg = t.eval_state.current_package in
     let persist_fn name body_expr doc =
-      (* Opaque-body contract (i-1788671083-c): the store persists the raw
-         jsonb body; serialization happens here at the eval boundary. *)
-      let body_json = Pricklypear_lisp.Ast.expr_to_body_json body_expr in
-      if t.seed_additive then
-        Store.persist_function_if_absent t.store name body_json ~doc
-          ~package:pkg t.manifest.username
-      else
-        Store.persist_function t.store name body_json ~doc
-          ~package:pkg t.manifest.username
+      (* spec_delegation: delegated sessions NEVER persist code -
+         define/defmacro bind in-env only (data, never for code). *)
+      if t.delegated then ()
+      else begin
+        (* Opaque-body contract (i-1788671083-c): the store persists the raw
+           jsonb body; serialization happens here at the eval boundary. *)
+        let body_json = Pricklypear_lisp.Ast.expr_to_body_json body_expr in
+        if t.seed_additive then
+          Store.persist_function_if_absent t.store name body_json ~doc
+            ~package:pkg t.manifest.username
+        else
+          Store.persist_function t.store name body_json ~doc
+            ~package:pkg t.manifest.username
+      end
     in
     let persist_define name body_expr doc =
       let () =
@@ -764,9 +769,11 @@ and handle_package_form (t : t) (args : Pricklypear_lisp.Ast.expr list)
                    List.concat_map export_names rest
              in
              t.eval_state.current_package <- Some name;
-             let () =
-               if t.manifest.username = "anonymous" then ()
-               else begin
+              let () =
+                (* spec_delegation: delegated sessions never write the
+                   package registry or bindings stamps (code, not data). *)
+                if t.manifest.username = "anonymous" || t.delegated then ()
+                else begin
                  let trace = Sys.getenv_opt "PP_TRACE_LOAD" <> None in
                  let t1 = Unix.gettimeofday () in
                  let () =
@@ -884,15 +891,20 @@ and eval_form (t : t) (expr : Pricklypear_lisp.Ast.expr)
   let v = eval_expr_rim t expr in
   let pkg = t.eval_state.current_package in
   let persist_fn name body_expr doc =
-    (* Opaque-body contract (i-1788671083-c): the store persists the raw
-       jsonb body; serialization happens here at the eval boundary. *)
-    let body_json = Pricklypear_lisp.Ast.expr_to_body_json body_expr in
-    if t.seed_additive then
-      Store.persist_function_if_absent t.store name body_json ~doc
-        ~package:pkg t.manifest.username
-    else
-      Store.persist_function t.store name body_json ~doc
-        ~package:pkg t.manifest.username
+    (* spec_delegation: delegated sessions NEVER persist code -
+       define/defmacro bind in-env only. *)
+    if t.delegated then ()
+    else begin
+      (* Opaque-body contract (i-1788671083-c): the store persists the raw
+         jsonb body; serialization happens here at the eval boundary. *)
+      let body_json = Pricklypear_lisp.Ast.expr_to_body_json body_expr in
+      if t.seed_additive then
+        Store.persist_function_if_absent t.store name body_json ~doc
+          ~package:pkg t.manifest.username
+      else
+        Store.persist_function t.store name body_json ~doc
+          ~package:pkg t.manifest.username
+    end
   in
   let persist_define name body_expr doc =
     let () =
@@ -992,6 +1004,17 @@ and load_string (t : t) (src : string) : (string, string) result =
       r)
 
 and load_library (t : t) (name : string) : (string, string) result =
+  (* spec_delegation: delegated sessions may load SEEDED packages only -
+     libs/<pkg> product code that boot seed already put on system/main.
+     Anything else would upsert foreign code onto the owner's branch. *)
+  if t.delegated
+     && not (List.mem name (Boot_seed.discover_seed_packages ()))
+  then
+    Error
+      (Printf.sprintf
+         "load-library: delegated sessions may load seeded packages only \
+          (denied: %s)" name)
+  else
   let prev = t.eval_state.current_package in
   let prev_suppress = t.ui_shell.suppress_refresh_on_define in
   t.eval_state.current_package <- None;
@@ -1088,7 +1111,11 @@ and load_library (t : t) (name : string) : (string, string) result =
     personal/dev rows. seed_additive stays false so persist upserts. *)
 and reseed_package (t : t) (pkg : string) : (string, string) result =
   let pkg = String.trim pkg in
-  if pkg = "" then (Error "empty package name")
+  (* spec_delegation: delegated sessions never reseed (a code write to
+     system/main; data, never for code). *)
+  if t.delegated then
+    (Error "reseed-package: denied for delegated sessions")
+  else if pkg = "" then (Error "empty package name")
   else if (not t.is_admin)
           && t.manifest.username <> "admin"
           && t.manifest.username <> "system" then
@@ -1287,6 +1314,7 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
       current_request = None;
       agent_branch_lock = false;
       public_dispatch = false;
+      delegated = false;  (* spec_delegation q4: no token producer yet *)
       is_admin = (manifest.username = "admin");
       auth_token = None;
       impact_queue = [];

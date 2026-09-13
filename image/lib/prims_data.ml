@@ -11,6 +11,13 @@ let register (t : t) (tbl : Primitives.t) : unit =
   let register_crud name fn = Prims_db_common.register_crud ~tbl name fn in
   let caller_username () = Prims_db_common.caller_username ~t () in
   let require_admin op k = Prims_db_common.require_admin ~t op k in
+  (* spec_delegation: delegated sessions carry data grants only; schema
+     authority (type_defs) is code-adjacent and stays with the owner's
+     own admin session. *)
+  let deny_delegated op =
+    raise (Pricklypear_lisp.Ast.Interp_error
+             (Pricklypear_lisp.Ast.Prim_error (op, "denied for delegated sessions (delegation is for data, never for code)", "denied")))
+  in
 
   (* (get 'type id) -> VStr fields-json | VNil *)
   register_crud "get"
@@ -880,6 +887,7 @@ let register (t : t) (tbl : Primitives.t) : unit =
     (fun args ->
       let uname = caller_username () in
       if uname = "anonymous" then deny_anon "deftype"
+      else if t.delegated then deny_delegated "deftype"
       else
         require_admin "deftype" (fun () ->
             Crud.deftype t.store ~args ~author:uname));
