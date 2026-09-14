@@ -442,8 +442,9 @@
     (let* ((rows (tree/list "data.note.u.gregor.log_issues" 1 100))
            (titles (list/map (lambda (n) (dict-get (dict-get n "body") "title")) rows))
            (n (length titles)))
-      (inbox/add "triage" "weekly"
-                 (string-append "weekly workstream triage: "
-                                (as-str n)
-                                " tracked issues in log/issues. Sweep kanban + stuck cards, place them, hand roerick a decision list."))
-      (string-append "triage queued: " (as-str n) " issues"))))
+      (seq
+        (inbox/add "triage" "weekly"
+                   (string-append "weekly workstream triage: "
+                                  (as-str n)
+                                  " tracked issues in log/issues. Sweep kanban + stuck cards, place them, hand roerick a decision list."))
+        (string-append "triage queued: " (as-str n) " issues")))))
