@@ -430,3 +430,20 @@
         (html/page (list (inbox/body-html))))))
 
 (route "/inbox" "inbox/page")
+
+;; ---- weekly workstream triage trigger (gregor-triage schedule) ----
+;; Files a row into log/inbox for gregor; the heartbeat sweep reads
+;; inbox/unread and gregor does the actual triage live (kanban placement,
+;; stale flags, decision list for roerick). Defined here so the bridge's
+;; inbox_lib reload re-arms it after image restarts.
+
+(define triage/weekly
+  (lambda ()
+    (let* ((rows (tree/list "data.note.u.gregor.log_issues" 1 100))
+           (titles (list/map (lambda (n) (dict-get (dict-get n "body") "title")) rows))
+           (n (length titles)))
+      (inbox/add "triage" "weekly"
+                 (string-append "weekly workstream triage: "
+                                (as-str n)
+                                " tracked issues in log/issues. Sweep kanban + stuck cards, place them, hand roerick a decision list."))
+      (string-append "triage queued: " (as-str n) " issues"))))
