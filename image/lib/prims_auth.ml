@@ -234,6 +234,161 @@ let register ?(rehydrate_fn : t -> unit = fun _ -> ()) (t : t) (tbl : Primitives
         | _ ->
             (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("prim", "create-agent: need parent-username", "bad-args"))))));
 
+  (* (mint-delegated-token actor [label]) -> VStr raw-token (ONCE).
+     Owner mints for self: the token acts AS the caller with data grants
+     only, carried by [actor]'s credentials-holders. Admin may mint for
+     another owner via for-username. auth.delegation-tokens. *)
+  Primitives.register tbl "mint-delegated-token"
+    (fun args ->
+      let caller = caller_username () in
+      let parse_label = function
+        | Pricklypear_lisp.Ast.VStr s when s <> "" -> Some s
+        | _ -> None
+      in
+      (match args with
+       | [ Pricklypear_lisp.Ast.VStr actor; label ]
+       | [ Pricklypear_lisp.Ast.VStr actor; Pricklypear_lisp.Ast.VNil; label ] ->
+           (* mint for self *)
+           let u = Auth_store.get_user_by_username t.store caller in
+           (match u with
+            | None ->
+                raise (Pricklypear_lisp.Ast.Interp_error
+                         (Pricklypear_lisp.Ast.Prim_error
+                            ("mint-delegated-token", "no such user", "not-found")))
+            | Some owner ->
+                (match
+                   Auth_store.mint_delegated_token t.store
+                     ~owner_user_id:owner.id ~actor ~label:(parse_label label) ()
+                 with
+                 | Error e ->
+                     raise (Pricklypear_lisp.Ast.Interp_error
+                              (Pricklypear_lisp.Ast.Prim_error
+                                 ("mint-delegated-token", e, "failed")))
+                 | Ok (raw, _cid) -> Pricklypear_lisp.Ast.VStr raw))
+       | [ Pricklypear_lisp.Ast.VStr actor; label;
+           Pricklypear_lisp.Ast.VStr owner_name ] ->
+           (* admin mints on another owner's behalf *)
+           require_admin "mint-delegated-token" (fun () ->
+             match Auth_store.get_user_by_username t.store owner_name with
+             | None ->
+                 raise (Pricklypear_lisp.Ast.Interp_error
+                          (Pricklypear_lisp.Ast.Prim_error
+                             ("mint-delegated-token", "no such owner", "not-found")))
+             | Some owner ->
+                 (match
+                    Auth_store.mint_delegated_token t.store
+                      ~owner_user_id:owner.id ~actor ~label:(parse_label label) ()
+                  with
+                  | Error e ->
+                      raise (Pricklypear_lisp.Ast.Interp_error
+                               (Pricklypear_lisp.Ast.Prim_error
+                                  ("mint-delegated-token", e, "failed")))
+                  | Ok (raw, _cid) -> Pricklypear_lisp.Ast.VStr raw))
+       | _ ->
+           raise (Pricklypear_lisp.Ast.Interp_error
+                    (Pricklypear_lisp.Ast.Prim_error
+                       ("mint-delegated-token",
+                        "need (actor [label]) or (actor label owner-username) (admin)",
+                        "bad-args")))));
+
+  (* (list-delegated-tokens) -> VList of (id actor label last4 last_used_at)
+     for the CALLER's own rows. Admin may pass a username to inspect. *)
+  Primitives.register tbl "list-delegated-tokens"
+    (fun args ->
+      match args with
+      | [] ->
+          let caller = caller_username () in
+          let u = Auth_store.get_user_by_username t.store caller in
+          (match u with
+           | None -> Pricklypear_lisp.Ast.VList []
+           | Some owner ->
+               let metas =
+                 Auth_store.list_delegated_tokens t.store ~user_id:owner.id
+               in
+               Pricklypear_lisp.Ast.VList
+                 (List.map
+                    (fun (m : Auth_store.delegated_token_meta) ->
+                       Pricklypear_lisp.Ast.VList
+                         [ Pricklypear_lisp.Ast.VStr m.Auth_store.did;
+                           Pricklypear_lisp.Ast.VStr m.Auth_store.dactor;
+                           Pricklypear_lisp.Ast.VStr
+                             (match m.Auth_store.dlabel with Some l -> l | None -> "");
+                           Pricklypear_lisp.Ast.VStr m.Auth_store.dlast4;
+                           Pricklypear_lisp.Ast.VStr
+                             (match m.Auth_store.dlast_used_at with
+                              | Some s -> s | None -> "") ])
+                    metas))
+      | [ Pricklypear_lisp.Ast.VStr uname ] ->
+          require_admin "list-delegated-tokens" (fun () ->
+            match Auth_store.get_user_by_username t.store uname with
+            | None ->
+                raise (Pricklypear_lisp.Ast.Interp_error
+                         (Pricklypear_lisp.Ast.Prim_error
+                            ("list-delegated-tokens", "no such user", "not-found")))
+            | Some owner ->
+                let metas =
+                  Auth_store.list_delegated_tokens t.store ~user_id:owner.id
+                in
+                Pricklypear_lisp.Ast.VList
+                  (List.map
+                     (fun (m : Auth_store.delegated_token_meta) ->
+                        Pricklypear_lisp.Ast.VList
+                          [ Pricklypear_lisp.Ast.VStr m.Auth_store.did;
+                            Pricklypear_lisp.Ast.VStr m.Auth_store.dactor;
+                            Pricklypear_lisp.Ast.VStr
+                              (match m.Auth_store.dlabel with Some l -> l | None -> "");
+                            Pricklypear_lisp.Ast.VStr m.Auth_store.dlast4;
+                            Pricklypear_lisp.Ast.VStr
+                              (match m.Auth_store.dlast_used_at with
+                               | Some s -> s | None -> "") ])
+                     metas))
+      | _ ->
+          raise (Pricklypear_lisp.Ast.Interp_error
+                   (Pricklypear_lisp.Ast.Prim_error
+                      ("list-delegated-tokens", "need [] or [username] (admin)",
+                       "bad-args"))));
+
+  (* (revoke-delegated-token id) -> VBool. Owner revokes own rows;
+     admin revokes any. Delegation dies on the holder's NEXT request
+     (identity resolve re-runs per request). *)
+  Primitives.register tbl "revoke-delegated-token"
+    (fun args ->
+      match args with
+      | [ Pricklypear_lisp.Ast.VStr cid ] ->
+          let caller = caller_username () in
+          let caller_opt = Auth_store.get_user_by_username t.store caller in
+          (match caller_opt with
+           | None ->
+               raise (Pricklypear_lisp.Ast.Interp_error
+                        (Pricklypear_lisp.Ast.Prim_error
+                           ("revoke-delegated-token", "no such user", "not-found")))
+           | Some u ->
+               let ok =
+                 Auth_store.revoke_delegated_token t.store
+                   ~user_id:u.id ~admin:u.Auth_store.is_admin
+                   ~credential_id:cid
+               in
+               Pricklypear_lisp.Ast.VBool ok)
+      | _ ->
+          raise (Pricklypear_lisp.Ast.Interp_error
+                   (Pricklypear_lisp.Ast.Prim_error
+                      ("revoke-delegated-token", "need credential id", "bad-args"))));
+
+  (* (current-actor) -> VStr. The carrying agent when this session was
+     attached via a delegated on-behalf-of token (auth.delegation-tokens);
+     otherwise (whoami). Provenance surface for packages that stamp
+     field-level provenance; attribution (author) stays the owner. *)
+  Primitives.register tbl "current-actor"
+    (fun _ ->
+       let actor =
+         match Request_context.get () with
+         | Some c -> (Request_context.manifest c).actor
+         | None -> t.manifest.actor
+       in
+       match actor with
+       | Some a -> Pricklypear_lisp.Ast.VStr a
+       | None -> Pricklypear_lisp.Ast.VStr (caller_username ()));
+
   (* (issue-token [label]) -> VStr raw-token (returned ONCE). Caller's own user. *)
   (* (issue-token user-id [label]) -> VStr raw token. Admin only when user-id given. *)
   Primitives.register tbl "issue-token"

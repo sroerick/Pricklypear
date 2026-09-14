@@ -61,6 +61,12 @@ let config_of_json (j : Yojson.Safe.t) : (config, string) result =
 type t = {
   user_id : string;        (* process default identity; HTTP may re-attach per request *)
   username : string;       (* for the REPL prompt and author tracking *)
+  (* spec_delegation (auth.delegation-tokens): when the session was carried
+     by a delegated on-behalf-of token, [username] is the OWNER the session
+     acts for and [actor] names the carrying agent. None = self (every
+     non-delegated session). Provenance only — attribution/authorship stays
+     the owner. *)
+  actor : string option;
   branch_id : string;      (* default branch UUID, usually user/main *)
   branch_name : string;    (* qualified: "alice/main" *)
   boot_mode : boot_mode;
@@ -69,26 +75,32 @@ type t = {
 }
 
 let make
-  ~user_id ~username ~branch_id ~branch_name ~boot_mode ~image_version
-  ?(config = default_config) () : t =
-  { user_id; username; branch_id; branch_name; boot_mode; image_version; config }
+    ~user_id ~username ~branch_id ~branch_name ~boot_mode ~image_version
+    ?(actor : string option = None)
+    ?(config = default_config) () : t =
+  { user_id; username; actor; branch_id; branch_name; boot_mode; image_version; config }
 
 (* Accessors for cross-package callers that don't have the record type. *)
 let user_id (m : t) : string = m.user_id
 let username (m : t) : string = m.username
+let actor (m : t) : string option = m.actor
 let branch_id (m : t) : string = m.branch_id
 let branch_name (m : t) : string = m.branch_name
 
 let to_json (m : t) : Yojson.Safe.t =
-  `Assoc [
+  `Assoc ([
     ("user_id", `String m.user_id);
     ("username", `String m.username);
+  ] @ (match m.actor with
+       | Some a -> [ ("actor", `String a) ]
+       | None -> [])
+    @ [
     ("branch_id", `String m.branch_id);
     ("branch_name", `String m.branch_name);
     ("boot_mode", `String (boot_mode_to_string m.boot_mode));
     ("image_version", `String m.image_version);
     ("config", config_to_json m.config);
-  ]
+  ])
 
 let of_json (j : Yojson.Safe.t) : (t, string) result =
   try
@@ -100,9 +112,14 @@ let of_json (j : Yojson.Safe.t) : (t, string) result =
     let boot_mode_str = match List.assoc "boot_mode" assoc with `String s -> s | _ -> failwith "boot_mode" in
     let boot_mode = match boot_mode_of_string boot_mode_str with
                     | Some m -> m | None -> failwith "bad boot_mode" in
+    let actor =
+      match List.assoc_opt "actor" assoc with
+      | Some (`String a) -> Some a
+      | _ -> None
+    in
     let image_version = match List.assoc "image_version" assoc with `String s -> s | _ -> failwith "image_version" in
     let config = match List.assoc_opt "config" assoc with
                  | Some cj -> (match config_of_json cj with Ok c -> c | Error _ -> default_config)
                  | None -> default_config in
-    Ok { user_id; username; branch_id; branch_name; boot_mode; image_version; config }
+    Ok { user_id; username; actor; branch_id; branch_name; boot_mode; image_version; config }
   with Failure msg -> Error msg

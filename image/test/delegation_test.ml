@@ -150,6 +150,40 @@ let test_self_load_unchanged () =
       Alcotest.(check bool) "plain loader error, no delegation text" true
         (not (contains_seq e "seeded packages only"))
 
+(* D6: THE PRODUCER (auth.delegation-tokens): attach_identity with
+   ~delegated ~actor builds the data-only on-behalf-of session: owner
+   manifest, actor provenance, denied admin, locked branch. No DB
+   (checkout_personal_now false + same username skips branch work). *)
+let test_delegated_attach_producer () =
+  let t = make_session ~delegated:false in
+  S.attach_identity t ~user_id:"tester-uuid" ~username:"tester"
+    ~is_admin:true  (* owner is admin — but delegation must NOT inherit it *)
+    ~auth_token:None ~checkout_personal_now:false
+    ~user_type:"human" ~parent_user_id:None
+    ~delegated:true ~actor:(Some "gregor") ();
+  Alcotest.(check bool) "delegated flag set" true t.delegated ;
+  Alcotest.(check bool) "actor recorded" true
+    (t.manifest.actor = Some "gregor") ;
+  Alcotest.(check bool) "username stays owner" true
+    (t.manifest.username = "tester") ;
+  Alcotest.(check bool) "admin NOT inherited" false t.is_admin ;
+  Alcotest.(check bool) "branch locked" true t.agent_branch_lock
+
+(* D7: a plain (self) attach resets provenance — actor cleared, admin
+   as given, no lock. Attach twice to prove re-attach (cookie +
+   delegated interleave) cannot leave stale actor behind. *)
+let test_self_attach_clears_actor () =
+  let t = make_session ~delegated:false in
+  S.attach_identity t ~user_id:"tester-uuid" ~username:"tester"
+    ~is_admin:true ~auth_token:None ~checkout_personal_now:false
+    ~delegated:true ~actor:(Some "gregor") ();
+  S.attach_identity t ~user_id:"tester-uuid" ~username:"tester"
+    ~is_admin:true ~auth_token:None ~checkout_personal_now:false ();
+  Alcotest.(check bool) "delegated cleared" false t.delegated ;
+  Alcotest.(check bool) "actor cleared" true (t.manifest.actor = None) ;
+  Alcotest.(check bool) "admin restored" true t.is_admin ;
+  Alcotest.(check bool) "lock released" false t.agent_branch_lock
+
 let () =
   Alcotest.run "delegation_loader"
     [ ( "delegation is for data, never for code",
@@ -163,4 +197,8 @@ let () =
             (fun () -> in_eio test_delegated_deftype_denied)
         ; Alcotest.test_case "self sessions unchanged" `Quick
             (fun () -> in_eio test_self_load_unchanged)
+        ; Alcotest.test_case "attach producer: owner manifest + actor + no admin + lock"
+            `Quick test_delegated_attach_producer
+        ; Alcotest.test_case "self attach resets provenance" `Quick
+            test_self_attach_clears_actor
         ] ) ]

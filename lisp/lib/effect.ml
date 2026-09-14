@@ -190,6 +190,7 @@ let read_db_prims = [
   "find-row"; "find-rows"; "find-text"; "find-random";
   "list-branches"; "current-branch"; "list-bindings";
   "whoami"; "current-author";
+  "current-actor";  (* auth.delegation-tokens: session identity provenance *)
   "function-source"; "function-doc"; "function-ast"; "package-bindings"; "package-exports";
   "export-package";
   "route-visibility";
@@ -237,6 +238,8 @@ let read_db_prims = [
   "retention-policies";
   (* admin/agent token reads *)
   "list-tokens";
+  (* delegated on-behalf-of token reads (auth.delegation-tokens) *)
+  "list-delegated-tokens";
   (* replication unit diagnostics *)
   "replication/unit";
   "list-packages"; "packages";
@@ -278,6 +281,8 @@ let write_db_prims = [
   "retention-delete-policy"; "retention-policy-set"; "retention-run";
   (* auth writes *)
   "issue-token"; "revoke-token"; "rotate-token";
+  (* delegated on-behalf-of token writes (auth.delegation-tokens) *)
+  "mint-delegated-token"; "revoke-delegated-token";
   "set-user-type"; "set-allow-agent-promote";
   "create-user"; "create-agent";
   (* package/config writes *)

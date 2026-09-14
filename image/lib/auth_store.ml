@@ -719,6 +719,206 @@ let verify_token (store : Store.t) ~(raw_token : string) ?source_ip ()
                 None
     with exn -> Store_db.reraise ~op:"verify_token" exn)
 
+(** Delegated tokens (auth.delegation-tokens, spec_delegation producer):
+    kind='delegated_token' credentials. user_id is the OWNER the bearer
+    acts for; public_data.actor names the carrying agent. Raw token
+    returned once; only the sha256 hash stored. Data-only: the session
+    built from a hit is delegated (no code persistence, no admin). *)
+let mint_delegated_token (store : Store.t) ~(owner_user_id : string)
+    ~(actor : string) ?(label : string option = None) ()
+  : (string * string, string) result =
+  (* returns (raw_token, credential_id) *)
+  if String.trim actor = "" then
+    (Error "mint-delegated-token: actor must be a non-empty username")
+  else
+    match pg_conn store with
+    | None -> (Error "no database")
+    | Some conn ->
+        (try
+      let raw =
+            Base64.encode_string ~pad:false
+              (Auth_password.random_bytes 32)
+          in
+          let th = token_hash raw in
+          let public_fields =
+            [ ("actor", `String (String.trim actor));
+              ("token_last4", `String (last4_of_key raw)) ]
+            @ (match label with
+               | Some l when l <> "" -> [ ("label", `String l) ]
+               | _ -> [])
+          in
+          let public_json = Yojson.Safe.to_string (`Assoc public_fields) in
+          let secret_json =
+            Yojson.Safe.to_string (`Assoc [ ("token_hash", `String th) ])
+          in
+          let sql =
+            "INSERT INTO credentials (user_id, kind, public_data, secret_data) " ^
+            "VALUES ($1::uuid, 'delegated_token', $2::jsonb, $3::jsonb) " ^
+            "RETURNING id::text"
+          in
+          let rows =
+            Store_db.exec conn
+              ~params:
+                [ Pgx.Value.of_string owner_user_id;
+                  Pgx.Value.of_string public_json;
+                  Pgx.Value.of_string secret_json ]
+              sql
+          in
+          let () =
+            log_auth store ~user_id:owner_user_id
+              ~kind:"mint_delegated" ~success:true ()
+          in
+          (match rows with
+           | row :: _ ->
+               (match Row.cell_string row 0 with
+                | Some cid -> (Ok (raw, cid))
+                | None -> (Error "mint-delegated-token: no credential id returned"))
+           | [] -> (Error "mint-delegated-token: insert returned no row"))
+    with exn ->
+      let msg = Printexc.to_string exn in
+          Printf.eprintf "[auth_store] mint_delegated_token: %s\n%!" msg;
+          (Error msg))
+
+(** Resolve a delegated Bearer token to the OWNER user + actor username.
+    Same token_hash domain as api_key; on a hit, last_used_at is updated
+    and auth_log kind='delegated'. Returns None on miss / revoked /
+    malformed actor. *)
+let verify_delegated_token (store : Store.t) ~(raw_token : string)
+    ?source_ip () : (user * string) option =
+  if raw_token = "" then None
+  else
+    match pg_conn store with
+    | None -> None
+    | Some conn ->
+        (try
+      let th = token_hash raw_token in
+          let sql =
+            "SELECT " ^
+            "  u.id::text, u.username, u.is_admin::text, u.user_type, " ^
+            "  u.parent_user_id::text, c.id::text, " ^
+            "  c.public_data->>'actor' " ^
+            "FROM credentials c JOIN users u ON u.id = c.user_id " ^
+            "WHERE c.kind = 'delegated_token' " ^
+            "  AND c.secret_data->>'token_hash' = $1 " ^
+            "LIMIT 1"
+          in
+          let rows =
+            Store_db.exec conn
+              ~params:[ Pgx.Value.of_string th ] sql
+          in
+          match rows with
+          | row :: _ ->
+              (match user_of_row row, Row.cell_string row 6 with
+               | Some owner, Some actor when String.trim actor <> "" ->
+                   (* Provenance must be real, not aspirational: the actor
+                      has to name an extant user (auth.delegation-tokens). *)
+                   (match get_user_by_username store (String.trim actor) with
+                    | None ->
+                        let () =
+                          log_auth store ~user_id:owner.id ~kind:"delegated"
+                            ~success:false ?source_ip ()
+                        in
+                        None
+                    | Some _ ->
+                        (match Row.cell_string row 5 with
+                         | Some cid ->
+                             let _ =
+                               Store_db.exec conn
+                                 ~params:[ Pgx.Value.of_string cid ]
+                                 ("UPDATE credentials SET last_used_at = now() " ^
+                                  "WHERE id = $1::uuid")
+                             in
+                             let () =
+                               log_auth store ~user_id:owner.id ~kind:"delegated"
+                                 ~success:true ?source_ip ()
+                             in
+                             Some (owner, String.trim actor)
+                         | None ->
+                             let () =
+                               log_auth store ~user_id:owner.id ~kind:"delegated"
+                                 ~success:true ?source_ip ()
+                             in
+                             Some (owner, String.trim actor)))
+               | _ ->
+                   (* owner row unresolvable or actor provenance missing —
+                      deny closed rather than mis-attribute a write *)
+                   let () =
+                     log_auth store ~kind:"delegated" ~success:false ?source_ip ()
+                   in
+                   None)
+          | [] ->
+              let () =
+                log_auth store ~kind:"delegated" ~success:false ?source_ip ()
+              in
+              None
+    with exn -> Store_db.reraise ~op:"verify_delegated_token" exn)
+
+type delegated_token_meta = {
+  did : string;
+  dactor : string;
+  dlabel : string option;
+  dlast4 : string;
+  dlast_used_at : string option;
+}
+
+let list_delegated_tokens (store : Store.t) ~(user_id : string)
+  : delegated_token_meta list =
+  match pg_conn store with
+  | None -> []
+  | Some conn ->
+      (try
+      let sql =
+            "SELECT id::text, public_data->>'actor', " ^
+            "       public_data->>'label', public_data->>'token_last4', " ^
+            "       last_used_at::text FROM credentials " ^
+            "WHERE user_id = $1::uuid AND kind = 'delegated_token' " ^
+            "ORDER BY created_at"
+          in
+          let rows = Store_db.exec conn ~params:[ Pgx.Value.of_string user_id ] sql in
+          List.filter_map
+            (fun row ->
+               match Row.cell_string row 0, Row.cell_string row 1 with
+               | Some cid, Some actor when cid <> "" ->
+                   Some
+                     { did = cid;
+                       dactor = actor;
+                       dlabel = Row.cell_string row 2;
+                       dlast4 = (match Row.cell_string row 3 with Some s -> s | None -> "");
+                       dlast_used_at = Row.cell_string row 4 }
+               | _ -> None)
+            rows
+    with exn -> Store_db.reraise ~op:"list_delegated_tokens" exn)
+
+(** Revoke (delete) a delegated credential row. Owner may revoke own
+    rows; the is-admin check lives at the prim layer. Returns true when
+    a row was deleted. *)
+let revoke_delegated_token (store : Store.t) ~(user_id : string)
+    ~(admin : bool) ~(credential_id : string) : bool =
+  match pg_conn store with
+  | None -> false
+  | Some conn ->
+      (try
+      let sql =
+            "DELETE FROM credentials " ^
+            "WHERE id = $1::uuid AND kind = 'delegated_token' " ^
+            "  AND (user_id = $2::uuid OR $3::bool) " ^
+            "RETURNING id::text"
+          in
+          let rows =
+            Store_db.exec conn
+              ~params:
+                [ Pgx.Value.of_string credential_id;
+                  Pgx.Value.of_string user_id;
+                  Pgx.Value.of_bool admin ]
+              sql
+          in
+          let () =
+            log_auth store ~user_id ~kind:"revoke_delegated"
+              ~success:(rows <> []) ()
+          in
+          rows <> []
+    with exn -> Store_db.reraise ~op:"revoke_delegated_token" exn)
+
 type token_meta = {
   id : string;
   label : string option;

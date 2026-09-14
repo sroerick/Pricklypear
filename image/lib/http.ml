@@ -138,14 +138,20 @@ let launch (env : route_env) (page_fn : Session.t -> unit) : unit =
                let t0 = Unix.gettimeofday () in
                let c0 = Atomic.get Store_db.trace_count in
                let m0 = Atomic.get Store_db.trace_ms in
-               let user_opt = resolve_identity session ~headers ~source_ip () in
+               (* auth.delegation-tokens: identity resolve returns the
+                  user (for a delegated hit, the OWNER) plus the agent
+                  actor when the Bearer was a delegated token. *)
+               let identity_opt = resolve_identity session ~headers ~source_ip () in
+               let user_opt = Option.map fst identity_opt in
+               let actor = Option.bind identity_opt snd in
                let t1 = phase "resolve_identity" t0 c0 m0 in
-               let session = Session_registry.select registry ~user:user_opt in
+               let session = Session_registry.select registry ~user:user_opt ~actor in
                let () =
                  match user_opt with
                  | Some user ->
                      let tok = cookie_value headers cookie_name in
                      attach_from_user session user ~auth_token:tok
+                       ~delegated:(actor <> None) ~actor
                        ~checkout_personal_now:false ()
                  | None -> Session.attach_anonymous session
                in
