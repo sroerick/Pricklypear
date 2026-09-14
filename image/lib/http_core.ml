@@ -564,12 +564,15 @@ let source_ip_of_sockaddr (sa : Unix.sockaddr) : string =
   | Unix.ADDR_INET (addr, _) -> Unix.string_of_inet_addr addr
   | Unix.ADDR_UNIX path -> "unix:" ^ path
 
-(** Resolve identity for this request: cookie session, then Basic auth.
-    Returns None if unauthenticated. [?source_ip] is propagated into the
-    auth_log rows written by verify_token / verify_password. *)
+(** Resolve identity for this request: cookie session, then Bearer —
+    api_key first, then DELEGATED on-behalf-of token — then Basic auth.
+    Returns None if unauthenticated, otherwise the resolved user (for a
+    delegated hit, the OWNER) plus the actor username when carried by a
+    delegated token (auth.delegation-tokens; None = self). [?source_ip]
+    is propagated into the auth_log rows written by the verify calls. *)
 let resolve_identity (session : Session.t)
     ~(headers : (string * string) list) ?source_ip ()
-  : Auth_store.user option =
+  : (Auth_store.user * string option) option =
   let store = Session.store session in
   match cookie_value headers cookie_name with
   | Some token when token <> "" ->
@@ -577,29 +580,42 @@ let resolve_identity (session : Session.t)
          round trips: lookup_session then get_user_by_id). *)
       let user_opt = Auth_store.lookup_session_user store ~raw_token:token in
       (match user_opt with
-       | Some u -> Some u
+       | Some u -> Some (u, None)
        | None ->
            (* Fall through to Basic if cookie stale. *)
            (match parse_basic_auth headers with
             | None -> None
             | Some (u, p) ->
                 Auth_store.verify_password store ~username:u ~password:p
-                  ?source_ip ()))
+                  ?source_ip ()
+                |> Option.map (fun u -> (u, None))))
   | _ ->
-      (* No cookie: try Bearer token, then Basic. *)
+      (* No cookie: try Bearer token (api_key, then delegated), then Basic. *)
       (match parse_bearer_auth headers with
        | Some token when token <> "" ->
-           Auth_store.verify_token store ~raw_token:token ?source_ip ()
+           (match Auth_store.verify_token store ~raw_token:token ?source_ip () with
+            | Some u -> Some (u, None)
+            | None ->
+                (* Not an api_key: delegated on-behalf-of token kind.
+                   Resolves (owner, actor); the session builds delegated
+                   (data-only) off the OWNER. *)
+                Auth_store.verify_delegated_token store ~raw_token:token
+                  ?source_ip ()
+                |> Option.map (fun (u, a) -> (u, Some a)))
        | _ ->
            (match parse_basic_auth headers with
             | None -> None
             | Some (u, p) ->
                 Auth_store.verify_password store ~username:u ~password:p
-                  ?source_ip ()))
+                  ?source_ip ()
+                |> Option.map (fun u -> (u, None))))
 
 let attach_from_user (session : Session.t) (user : Auth_store.user)
     ?(auth_token : string option = None)
-    ?(checkout_personal_now = false) () : unit =
+    ?(checkout_personal_now = false)
+    ?(delegated : bool = false)
+    ?(actor : string option = None)
+    () : unit =
   Session.attach_identity session
     ~user_id:user.Auth_store.id
     ~username:user.Auth_store.username
@@ -608,6 +624,7 @@ let attach_from_user (session : Session.t) (user : Auth_store.user)
     ~checkout_personal_now
     ~user_type:user.Auth_store.user_type
     ~parent_user_id:user.Auth_store.parent_user_id
+    ~delegated ~actor
     ()
 
 let fragment_response (reqd : Httpun.Reqd.t) ?(status = `OK) (html : string)

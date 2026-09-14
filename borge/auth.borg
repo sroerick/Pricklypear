@@ -33,11 +33,14 @@
 
            credentials (id uuid PK, user_id uuid FK,
                         kind text,        -- 'ssh_key'|'password'|'web_token'|'api_key'|'llm_key'
+                                          -- |'delegated_token' (auth.delegation-tokens)
                         public_data jsonb,  -- SSH key material / llm last4+meta;
-                                            -- null for password (hash is secret)
+                                            -- null for password (hash is secret);
+                                            -- delegated_token: {actor, label?, token_last4}
                         secret_data jsonb,   -- argon2 hash for password;
                                             -- api_key token hash/reference;
-                                            -- llm_key provider secret (never list)
+                                            -- llm_key provider secret (never list);
+                                            -- delegated_token: {token_hash}
                         created_at timestamptz,
                         last_used_at timestamptz)
 
@@ -118,6 +121,15 @@
             tokens; every token belongs to a user_id. Generate/
             rotate/revoke via /admin/users or a Nopales prim.
             The raw token is returned once at creation.
+
+         DELEGATED TOKEN VERIFICATION (see auth.delegation-tokens):
+         the Bearer probe falls through kind='api_key' to
+         kind='delegated_token'; on a hit the RESOLVED IDENTITY
+         is the credential's owner (user_id) and public_data.actor
+         names the carrying agent. The factory is the same
+         token_hash lookup; the difference is purely in how the
+         resolved identity builds a session (owner manifest,
+         delegated flag, no admin, no code persistence).
 
          TOKEN FORMAT (minimal, NOT JWT):
          opaque_id (32B random) || HMAC(opaque_id)
@@ -1140,6 +1152,178 @@
          per user; self-service /settings/* is the human path.
     |))
    )
+  )
+  (subsection delegation-tokens
+   (doc "On-behalf-of tokens: an agent authenticates with its own bearer credential and acts AS the owner — data grants only, never code")
+   (status implemented)
+   (* agent note (|spec written + make done 2026-09-14 after the workout-incident diagnosis: roerick's designated agent could not post workouts as him because (a) every CRUD create binds author=whoami from the request manifest, (b) the datum RLS floor (migrations/013+033) confines writes to data.u.<caller>.*, and (c) spec_delegation had enforcement gates in session.ml but NO token producer (session.ml: delegated = false, 'no token producer yet'). This subsection is the producer half and the producer is NOW LANDED. Enforcement half (9c83efe, pre-existing): delegated sessions never persist code (define/route/package), load seeded packages only, never reseed, never deftype. MAKE LANDING 2026-09-14 (all in-image, NO migration — credentials.kind is free text, the migration-008 (kind, token_hash) index already serves lookup): verify_delegated_token/mint_delegated_token/list/revoke in auth_store.ml (actor MUST name an extant user - deny closed, provenance is not aspirational); resolve_identity Bearer probe falls through api_key to delegated_token and returns (owner, actor); Session_registry.select keys delegated sessions 'owner@by:actor' so they never collide with the owner's own session; attach_identity ?delegated ?actor forces is_admin=false, sets manifest.actor, locks the branch (cleared on transition back to self attach, defensive); prims mint-delegated-token / list-delegated-tokens / revoke-delegated-token / current-actor (classified: read_db for reads, WriteDb for writes - the boot classification assertion caught the buckets, as designed); Manifest.t ?actor with VS round-trip (payloads from pre-delegation images load as self); agent.txt DELEGATION section. TESTS: image delegation_test D6 (attach producer: owner manifest + actor + admin NOT inherited + lock) + D7 (self attach resets provenance); common manifest actor round-trip + back-compat (no actor key = self). LIVE SMOKE on the dev kernel-lab (dune runtest green): Bearer-wrote a workout-session as delegated gregor-actor - row landed author=admin with (whoami)=admin, (current-actor)=gregor; delegated (define) evaluated but did NOT persist (function-source empty); delegated (checkout) blocked by the lock; revoke => next request 401; self admin sessions unaffected throughout. STORY: roerick hands agent-prickle a delegated token; the agent runs (whoami) => admin (the owner), creates workout rows that land in data.u.admin.* with author=admin, and cannot persist a single define. The gate is the token scope, not the Nopales surface. DEPLOY NOTE: needs an image promote to reach prod; prod's designated-agent workout flow = owner mints once on prod, agent ships the Bearer token in place of Basic.|) *)
+   (details
+    (doc (|
+         ==================================================================
+         WHY
+         ==================================================================
+
+         An agent (user_type='agent', or any secondary identity)
+         authenticates with its OWN api_key and therefore acts AS
+         ITSELF: every write binds author = caller and lands in
+         data.u.<agent>.*. Handing the agent the OWNER's api_key
+         fixes attribution only by collapsing identity entirely
+         (the bearer IS the owner: full admin surface, code
+         persistence, no provenance). Neither pole gives "act as
+         me, with data only".
+
+         The fix is a third credential kind that separates
+         AUTHENTICATION (the agent, provenance) from ACTING
+         IDENTITY (the owner, whose space and authorship the
+         request uses):
+
+           kind = 'delegated_token'
+             user_id    = the OWNER the session acts for
+             public_data = { "actor": "<agent-username>",   ;; REQUIRED: who carries it
+                             "label": "…",                  ;; optional
+                             "token_last4": "xxxx" }
+             secret_data = { "token_hash": sha256(raw) }   ;; same domain as api_key
+
+         Raw token returned ONCE at mint; only the hash is stored;
+         revocable per-credential (delete the row). No schema
+         migration: credentials.kind is free text and the (kind,
+         secret_data->>'token_hash') index from migration 008
+         already serves the lookup.
+
+         ==================================================================
+         VERIFY PATH
+         ==================================================================
+
+         The Bearer probe in resolve_identity becomes ordered:
+
+           1. cookie pp_session (unchanged)
+           2. Bearer -> verify_token (kind='api_key') — unchanged
+           3. Bearer -> verify_delegated_token (kind='delegated_token')
+           4. Basic (unchanged)
+
+         verify_delegated_token resolves the OWNER user row plus
+         public_data.actor (denied when actor is missing/blanks or
+         names no extant user — provenance must be real, not
+         aspirational). auth_log kind='delegated' per verify;
+         last_used_at updated like api_key. Revocation takes effect
+         on the NEXT request because identity resolve re-runs every
+         request (the session cache never short-circuits verify).
+
+         Basic-auth IS NOT delegated: a delegated token travels only
+         as Bearer. (A Basic pair is a password — full trust by
+         definition.)
+
+         ==================================================================
+         SESSION SHAPE (the resolve path's job)
+         ==================================================================
+
+         A delegated request resolves to (owner_user, actor) and
+         attaches a session with:
+
+           manifest.username = owner.username     ;; (whoami) = owner
+           manifest.user_id  = owner.id
+           manifest.actor    = Some actor         ;; provenance
+           is_admin          = false              ;; data-only tier EVEN IF
+                                                  ;; the owner is admin
+                                                  ;; (spec_town_profile:
+                                                  ;; delegated tokens always
+                                                  ;; carry the data-only tier)
+           delegated         = true
+           branch            = owner/<personal-or-agent-home> — the same
+                               home attach_identity picks for the OWNER
+           agent_branch_lock = true               ;; no checkout/fork/merge
+                                                  ;; mid-delegation
+
+         Registry: the per-identity session cache (image.per-identity-
+         sessions) keys DELEGATED sessions separately — key is
+         "<owner>@by:<actor>", never colliding with the owner's own
+         session (whose authorized surface differs: real admin flag,
+         code persistence). Session.construction dedupes by the same
+         key, single-flight unchanged.
+
+         ==================================================================
+         WHAT A DELEGATED SESSION MAY DO (enforcement: session.ml,
+         Session_types.restricted — ALREADY LANDED, 9c83efe)
+         ==================================================================
+
+         MAY:
+           - read/write data via CRUD prims; rows are attributed to
+             the OWNER (author=owner) inside the OWNER's datum space;
+             RLS pp.user = owner — the agent sees exactly the owner's
+             view of the data plane;
+           - call package fns, run routes, eval anything that is not
+             a code/schema write;
+           - (current-actor) => the agent identity (see below).
+
+         MAY NOT:
+           - persist code: define/route/package persistence skipped;
+           - load non-seeded libraries; reseed-package; deftype;
+           - checkout/fork/merge (agent_branch_lock);
+           - anything is_admin gates (create-user, promote, …) —
+             is_admin is forced false.
+
+         ==================================================================
+         PROVENANCE: ACTOR PER WRITE
+         ==================================================================
+
+         kernel: Manifest.t gains ?actor (None = self). Prims:
+
+           (current-actor)  => VStr actor when carried by a delegated
+                             token; VStr (whoami) when self. Never
+                             raises; never returns another user's name
+                             beyond the declared actor.
+
+         Packages that care stamp provenance into their own fields
+         (e.g. a workout writer may add "actor": (current-actor))
+         — the KERNEL never rewrites data_rows.author: attribution
+         stays the owner; actor is provenance, CASE-preserved, and
+         advisory to callers.
+
+         auth_log carries the per-request provenance
+         (kind='delegated').
+
+         ==================================================================
+         LISP SURFACE (mints, lists, revokes)
+         ==================================================================
+
+           (mint-delegated-token actor [label] [for-username])
+               Owner-only for self by default. ADMIN may name
+               for-username to mint on another owner's behalf.
+               Returns the raw token ONCE (same contract as issue-token).
+           (list-delegated-tokens)      — caller's own rows (id, actor,
+                                          label, last4, last_used_at)
+           (revoke-delegated-token id)  — owner (or admin) deletes the
+                                          credential row
+
+         agent.txt gains a DELEGATION section: owners mint, paste the
+         token once to the agent; agents send
+         Authorization: Bearer <token> and verify with
+         (whoami)/(current-actor) before working.
+
+         ==================================================================
+         NON-GOALS
+         ==================================================================
+
+         - No scopes/grants matrix in v1: delegated = data-only, full
+           data. A scoped grant surface (per-type/per-space) is
+           future work riding data_spaces (migration 029).
+         - No expiry on delegated v1 tokens (same standing as api_key;
+           revoke is the control).
+         - No delegation of ADMIN capability, ever: an owner who is
+           admin passes NO admin through the token. Use the owner's
+           own session for admin work.
+         - Basic-auth delegation and pp_session cookie delegation are
+           explicitly rejected shapes.
+    |))
+   )
+   (verify
+    (build "dune build @all")
+    (test "delegation_test: delegated manifest carries actor; gates deny code persists")
+    (smoke "owner mints delegated token for agent-prickle; agent Bearer-writes a workout-session row; row lands data.u.<owner>.* author=<owner>; (whoami)=<owner>; (current-actor)=<agent>")
+    (smoke "delegated (define) does NOT persist; after image restart (or fresh session) the name is unbound")
+    (smoke "delegated session (checkout \"other/personal\") denied (agent_branch_lock)")
+    (smoke "revoke-delegated-token: next request with the raw token resolves anonymous/401")
+    (smoke "owner's own admin session is unaffected by concurrent delegated traffic (registry key owner@by:actor)"))
   )
   (subsection identity-and-branch
    (doc "Session identity drives personal garden and authorship")

@@ -1314,7 +1314,9 @@ let make ~(manifest : Pricklypear_common.Manifest.t) ~(store : Store.t) () : t =
       current_request = None;
       agent_branch_lock = false;
       public_dispatch = false;
-      delegated = false;  (* spec_delegation q4: no token producer yet *)
+      delegated = false;  (* spec_delegation: set true by attach_identity
+                             when the request carried a delegated on-behalf-of
+                             token (auth.delegation-tokens) *)
       is_admin = (manifest.username = "admin");
       auth_token = None;
       impact_queue = [];
@@ -1671,11 +1673,26 @@ let attach_identity
     ?(checkout_personal_now = false)
     ?(user_type : string = "human")
     ?(parent_user_id : string option = None)
+    ?(delegated : bool = false)
+    ?(actor : string option = None)
     () : unit =
   let prev = t.manifest.username in
+  let was_delegated = t.delegated in
   t.manifest <-
-    { t.manifest with user_id; username };
-  t.is_admin <- is_admin;
+    { t.manifest with user_id; username; actor };
+  (* spec_delegation (auth.delegation-tokens): a delegated session acts
+     for the manifest.username (OWNER) with data grants only — never
+     inherits the owner's admin, never persists code, never moves branch.
+     The enforcement gates read t.delegated via Session_types.restricted;
+     locking the branch here is the 'token resolve path's job' the
+     session_types comment reserves for exactly this producer. A session
+     returning to SELF attach clears the lock (defensive: the registry
+     keys delegated sessions separately, so this transition should never
+     fire in production). *)
+  t.delegated <- delegated;
+  t.is_admin <- (if delegated then false else is_admin);
+  if delegated then t.agent_branch_lock <- true
+  else if was_delegated then t.agent_branch_lock <- false;
   t.auth_token <- auth_token;
   if checkout_personal_now || prev <> username then
     if user_type = "agent" then
@@ -1710,8 +1727,10 @@ let attach_anonymous (t : t) : unit =
     { t.manifest with
       user_id = "anonymous"
     ; username = "anonymous"
+    ; actor = None  (* spec_delegation: anonymous is always self *)
     };
   t.is_admin <- false;
+  t.delegated <- false;
   t.auth_token <- None;
   (* Prefer system/main for package defaults. *)
   let found =

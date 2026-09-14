@@ -68,15 +68,23 @@ let make_anonymous_session (t : t) : Session.t =
   Session.rehydrate s;
   s
 
-let make_user_session (t : t) (user : Auth_store.user) : Session.t =
-  (* Start on system/main; attach_identity with checkout_personal_now
-     checks out the identity's home branch (personal / agent) and
-     rehydrates onto it. *)
+let make_user_session (t : t) ~(actor : string option)
+    (user : Auth_store.user) : Session.t =
+  (* spec_delegation (auth.delegation-tokens): when [actor] is Some, this
+     session is carried by a delegated on-behalf-of token — manifest
+     username is still the OWNER (whoami = owner), but the session is
+     data-only: delegated=true (session.ml gates: no code persistence,
+     seeded-only load-library), is_admin forced false in attach_identity,
+     agent_branch_lock set. The owner's OWN session (actor=None) keeps
+     its full authorized surface; the two never share a registry slot
+     (keyed user@by:actor vs user in [select]). *)
+  let delegated = actor <> None in
   let manifest =
     Manifest.make ~user_id:user.Auth_store.id ~username:user.username
       ~branch_id:Store.system_main_id ~branch_name:"system/main"
       ~boot_mode:t.boot.Session.manifest.Manifest.boot_mode
-      ~image_version:t.boot.Session.manifest.Manifest.image_version ()
+      ~image_version:t.boot.Session.manifest.Manifest.image_version
+      ~actor ()
   in
   let store = fresh_store t ~branch_id:Store.system_main_id in
   let s = Session.make ~manifest ~store () in
@@ -86,7 +94,8 @@ let make_user_session (t : t) (user : Auth_store.user) : Session.t =
     ~username:user.Auth_store.username ~is_admin:user.Auth_store.is_admin
     ~auth_token:None ~checkout_personal_now:true
     ~user_type:user.Auth_store.user_type
-    ~parent_user_id:user.Auth_store.parent_user_id ();
+    ~parent_user_id:user.Auth_store.parent_user_id
+    ~delegated ~actor ();
   s
 
 (** Get-or-create the session for [key]. Lookup is mutex-guarded;
@@ -134,11 +143,23 @@ let get_or_create (t : t) (key : string) (make : unit -> Session.t)
 
 (** Select the session for this request's identity. Pure selection:
     no branch movement, no cross-identity mutation. [anon] picks the
-    parked anonymous session; a resolved user picks their own. The
+    parked anonymous session; a resolved user picks their own — keyed
+    by "<owner>@by:<actor>" when the identity was carried by a delegated
+    token (auth.delegation-tokens) so the delegated data-only session
+    NEVER collides with the owner's own full-privilege session. The
     caller still runs attach_from_user / attach_anonymous on the
     returned session (cheap no-op when the identity matches) and
     [Session.ensure_fresh] for the staleness stamp. *)
-let select (t : t) ~(user : Auth_store.user option) : Session.t =
-  match user with
-  | None -> get_or_create t "anonymous" (fun () -> make_anonymous_session t)
-  | Some u -> get_or_create t u.Auth_store.username (fun () -> make_user_session t u)
+let select (t : t) ~(user : Auth_store.user option)
+    ~(actor : string option) : Session.t =
+  let key =
+    match user, actor with
+    | None, _ -> "anonymous"
+    | Some u, None -> u.Auth_store.username
+    | Some u, Some a -> Printf.sprintf "%s@by:%s" u.Auth_store.username a
+  in
+  get_or_create t key
+    (fun () ->
+       match user with
+       | None -> make_anonymous_session t
+       | Some u -> make_user_session t ~actor u)

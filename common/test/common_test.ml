@@ -27,6 +27,29 @@ let branch_tests = [
         Alcotest.(check string) "last_synced" "2026-07-05T02:00:00Z"
                                   (match b'.last_synced with Some s -> s | None -> "")
      | Error e -> Alcotest.failf "round-trip failed: %s" e));
+  ("manifest: JSON round-trip preserves delegated actor", `Quick, fun () ->
+    let m = Manifest.make
+      ~user_id:"u1" ~username:"admin" ~branch_id:"b2"
+      ~branch_name:"admin/personal" ~boot_mode:Manifest.Boot_on_connect
+      ~image_version:"v1" ~actor:(Some "gregor") () in
+    let j = Manifest.to_json m in
+    (match Manifest.of_json j with
+     | Ok m' ->
+        Alcotest.(check bool) "actor survives round-trip" true
+          (m'.actor = Some "gregor")
+     | Error e -> Alcotest.failf "round-trip failed: %s" e));
+  ("manifest: loads manifest without actor field as self (back-compat)", `Quick, fun () ->
+    let m = Manifest.make
+      ~user_id:"u1" ~username:"alice" ~branch_id:"b2"
+      ~branch_name:"alice/main" ~boot_mode:Manifest.Boot_on_connect
+      ~image_version:"v1" () in
+    (* strip any actor key: a payload from a pre-delegation image *)
+    let stripped = match Manifest.to_json m with
+      | `Assoc kv -> `Assoc (List.filter (fun (k, _) -> k <> "actor") kv)
+      | j -> j in
+    (match Manifest.of_json stripped with
+     | Ok m' -> Alcotest.(check bool) "no actor = self" true (m'.actor = None)
+     | Error e -> Alcotest.failf "round-trip failed: %s" e));
 ]
 
 let manifest_tests = [
