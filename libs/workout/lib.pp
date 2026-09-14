@@ -975,7 +975,20 @@
                   (date-add-days date 1)
                   weekdays)))
             (seq
-              (if create? (calendar/create title date "" notes) ())
+                (if
+                  create?
+                  (if
+                    (null?
+                      (find-rows
+                        (quote calendar-event)
+                        "day"
+                        (as-str date)
+                        "title"
+                        title
+                        1))
+                    (calendar/create title date "" notes)
+                    ())
+                  ())
               (if
                 (null? nxt)
                 (if create? (count acc2) acc2)
@@ -1014,6 +1027,36 @@
       notes
       create?
       (list))))
+
+(define workout/cal-delete-ksk1-from
+  (lambda
+    (from-day)
+    "Delete KSK1 calendar events dated from-day or later."
+    (list/foldl
+      (lambda
+        (acc row)
+        (let
+          ((f (workout/row-fields row))
+            (rid (workout/row-id row)))
+          (if
+            (workout/str-lt? (workout/field f "day") from-day)
+            acc
+            (if
+              (string-eq (nth (string-split (workout/field f "title") " ") 0) "KSK1")
+              (seq
+                (delete (quote calendar-event) rid)
+                acc)
+                acc))))
+      ()
+      (rows (quote calendar-event) 500))))
+
+(define workout/ksk1-replan
+  (lambda
+    (start-date weekdays load unit skip notes)
+    "Replace the KSK1 plan: deletes KSK1 calendar events dated today or later, then regenerates the full schedule from start-date. Past events and logged sessions are untouched."
+    (seq
+      (workout/cal-delete-ksk1-from (workout/today))
+      (workout/ksk1-schedule start-date weekdays load unit skip notes true))))
 
 (define workout/ksk2-plan
   (lambda
