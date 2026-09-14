@@ -288,6 +288,27 @@ let start_eio ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t) : unit =
         Printf.eprintf "[boot] jobs runner fiber exited: %s\n%!"
           (Printexc.to_string exn));
 
+  (* i-20260914-agents-note-async: the living agents-note seed runs in the
+     background, once per boot, on its OWN store+session (jobs-runner
+     pattern: never race the boot session / REPL env). Sync placement in
+     boot_personal paid prod's 40-90s notes tree floor before /health ever
+     answered — both 2026-09-14 promote gates rolled back a healthy
+     release on it (20347ee 61s, ca2bc21 89s, boot-personal 78/90s).
+     Identity + branch match the boot session's post-boot_personal state
+     (username/personal), so the note lands exactly where it always has. *)
+  Eio.Fiber.fork ~sw (fun () ->
+      try
+        let cfg = Store.config_from_env () in
+        let store = Store.make ~cfg ~branch_id:session.manifest.branch_id () in
+        Store.connect store;
+        let s = Session.make ~manifest:session.manifest ~store () in
+        ignore (Session.ensure_personal_branch s);
+        Session.checkout_personal s;
+        Session.seed_agents_note s
+      with exn ->
+        Printf.eprintf "[boot] agents-note seed fiber exited: %s\n%!"
+          (Printexc.to_string exn));
+
   (* image.function-stat-ring: flush labeled-eval stats <= every 30s
      instead of a synchronous insert per /api/eval. *)
   Eio.Fiber.fork ~sw (fun () ->

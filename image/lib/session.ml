@@ -1612,10 +1612,16 @@ let boot_personal (t : t) : unit =
   let p = mark p "seed-stdlib" in
   checkout_personal t;
   let p = mark p "checkout-personal" in
-  (* Living agents note AFTER rehydrate (see Boot_seed.seed_agents_note):
-     the load-skip path binds unchanged defines via checkout's rehydrate,
-     so notes/doc/get + roam/reindex are only guaranteed bound here. *)
-  seed_agents_note t;
+  (* i-20260914-agents-note-async: the agents-note seed NO LONGER runs
+     synchronously here. Its existence probe (even the cheap notes/doc/row
+     form) pays prod's 40-90s notes tree floor, which pushed boot_personal
+     to 78s+ and blew BOTH 2026-09-14 promote health gates (20347ee and
+     ca2bc21 rolled back while perfectly healthy). The seed is additive,
+     once per boot, and only acts when the note is missing — Boot.start_eio
+     now runs it on a background fiber (own store+session, jobs-runner
+     pattern) AFTER the HTTP path is about to serve. Spec: the boot-order
+     contract keeps item 4 (refresh ui shell from personal-visible ui/nav)
+     synchronous; the living-agents-note seed moves to the async phase. *)
   refresh_ui_shell t;
   let _ = mark p "ui-shell" in
   ()
