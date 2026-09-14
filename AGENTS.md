@@ -30,6 +30,23 @@ Supervisor/authd multi-process topology is retired (see
 `.borge-bugs/` (quote compounds, AST nodes design, schema-authority,
 optional SSH). Monitor command: bottom of `README.md`.
 
+### 2026-09-14 promote incident (gate vs boot floor)
+
+Two promotes (20347ee, ca2bc21) rolled back despite healthy binaries:
+gregor's town-p1 moved `seed_agents_note` into `boot_personal`, and its
+existence probe — even the "cheap" `notes/doc/row` form (40s live) —
+pays prod's notes tree floor before `/health` answers; boot-personal
+hit 78-90s against a 30s gate. Fix (bede450): the agents-note seed is
+**async** — a Boot.start_eio fiber with its own store+session (jobs-
+runner pattern, same identity/branch); boot_personal no longer calls
+it. Health gate raised 30s→120s (`scripts/openbsd/pricklypear-promote.ksh`).
+Two standing constraints: **nothing that touches the notes tree eval
+path may run synchronously before /health serves**, and the promote
+hook self-updates the installed promote script only AFTER a success —
+so a gate fix can never rescue its own first deploy. Rollback restarts
+can also race EADDRINUSE with a slow old image (rc_stop's port-free
+poll is bounded at 10s+2s).
+
 ### 2026-08-21 session model (perf)
 
 Shared-session flip stall is fixed on prod (commits bf2e808, 74699ba):
