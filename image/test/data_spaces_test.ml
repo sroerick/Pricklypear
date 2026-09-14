@@ -39,7 +39,12 @@ let with_store f =
 
 let s = Pgx.Value.of_string
 
-let exec conn sql = ignore (Db.exec conn sql)
+(* pgx execute is single-result; split fixture SQL on ';' so multi-statement
+   setup/teardown strings run statement by statement. *)
+let exec conn sql =
+  String.split_on_char ';' sql
+  |> List.filter (fun stmt -> String.trim stmt <> "")
+  |> List.iter (fun stmt -> ignore (Db.exec conn stmt))
 
 let q_count conn ?(params = []) sql : int =
   match Db.exec conn ~params sql with
