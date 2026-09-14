@@ -539,6 +539,133 @@ let test_surfaces_nopales_routes ~rt () =
            with Not_found -> false))
    | other -> Alcotest.fail ("redef: " ^ Reader.pp_value other))
 
+(** surfaces: the bindings browser renders over the bind/*
+    habitat-bridge prims (faked — tests have no habitat), is pane-aware
+    in fragment mode, feeds the filmstrip cascade, and fails soft (muted
+    notice, no 500; an EMPTY cascade column) when the bridge raises. *)
+let test_surfaces_bindings_browser ~rt () =
+  Surface.load ~rt;
+  Runtime.add_prim rt "bind/packages" (fun _ -> Ast.VStr {|["notes","todo"]|});
+  Runtime.add_prim rt "bind/list" (fun _ -> Ast.VStr {|["todo/add","todo/list"]|});
+  Runtime.add_prim rt "bind/get" (fun _ ->
+      Ast.VStr {|{"doc":"Adds a todo.","source":"(define (todo/add t) (create 'todo t))"}|});
+  let has needle s =
+    (try ignore (Str.search_forward (Str.regexp_string needle) s 0); true
+     with Not_found -> false)
+  in
+  let get ?(headers = []) params =
+    match Runtime.dispatch_route ~rt ~handler:"bind/page" ~method_:"GET"
+            ~path:"/bindings" ~params ~headers ~body:"" with
+    | Ast.VStr s -> s
+    | other -> Alcotest.fail ("bind/page: " ^ Reader.pp_value other)
+  in
+  let root = get [] in
+  Alcotest.(check bool) "packages list" true
+    (has "?pkg=notes" root && has "?pkg=todo" root);
+  let pkg = get [ ("pkg", "todo") ] in
+  Alcotest.(check bool) "package rows" true
+    (has "&name=todo/add" pkg && has "&name=todo/list" pkg);
+  Alcotest.(check bool) "breadcrumb trail" true
+    (has "/bindings\">packages</a>" pkg);
+  let detail = get [ ("pkg", "todo"); ("name", "todo/add") ] in
+  Alcotest.(check bool) "detail doc + source" true
+    (has "Adds a todo." detail
+     && has "<pre>(define (todo/add t)" detail);
+  let frag = get ~headers:[ ("hx-request", "true") ] [ ("pkg", "todo") ] in
+  Alcotest.(check bool) "fragment links walk inside the pane" true
+    (has "hx-target=\"closest .fs-body\"" frag);
+  Alcotest.(check bool) "fragment has no doctype" false (has "<!doctype" frag);
+  (* the filmstrip cascade: crumb + leaf entries *)
+  Alcotest.check pp_value_testable "bindings col lists package crumbs"
+    (Ast.VStr "bindings/notes")
+    (Runtime.eval_string ~rt {|(nth (nth (bind/browse-entries "bindings") 0) 1)|});
+  Alcotest.check pp_value_testable "package col lists fn leaf routes"
+    (Ast.VStr "/bindings?pkg=todo&name=todo/add")
+    (Runtime.eval_string ~rt {|(nth (nth (bind/browse-entries "bindings/todo") 0) 1)|});
+  Alcotest.check pp_value_testable "apps col1 gained the bindings crumb"
+    (Ast.VStr "bindings")
+    (Runtime.eval_string ~rt {|(nth (nth (glochid/apps) 2) 1)|});
+  (* fail-soft: the bridge raises habitat-unreachable at CALL time — the
+     page renders a muted notice and the cascade one empty column. *)
+  Runtime.add_prim rt "bind/packages" (fun _ ->
+      raise
+        (Ast.Interp_error
+           (Ast.Prim_error ("habitat", "down", "habitat-unreachable"))));
+  let down = get [] in
+  Alcotest.(check bool) "bridge-down notice" true (has "habitat bridge:" down);
+  Alcotest.check pp_value_testable "bridge-down col is empty"
+    (Ast.VList [])
+    (Runtime.eval_string ~rt {|(bind/browse-entries "bindings")|});
+  (* restore the canned bridge for any later evals on this rt *)
+  Runtime.add_prim rt "bind/packages" (fun _ -> Ast.VStr {|["notes","todo"]|})
+
+(** rail trees (borge/filmstrip.borg rail-trees-v4): the windows tree
+    renders from DECLARED ws state (3 desktop dirs + shelf subtree on an
+    empty workspace), level fragments splice lazy, dir rows carry
+    hx-trigger "toggle once" (fetch exactly once), the tree endpoint
+    serves one level, and url-enc/url-dec round-trip. No habitat, no
+    real workspace row needed -- filmstrip/ws-default covers the reads. *)
+let test_rail_trees ~rt () =
+  Surface.load ~rt;
+  let has needle s =
+    (try ignore (Str.search_forward (Str.regexp_string needle) s 0); true
+     with Not_found -> false)
+  in
+  Alcotest.check pp_value_testable "roots: windows first"
+    (Ast.VStr "windows")
+    (Runtime.eval_string ~rt
+      {|(as-str (car (car (filmstrip/tree-roots))))|});
+  Alcotest.check pp_value_testable "windows tree root level: 3 desks + shelf"
+    (Ast.VList
+       [ Ast.VStr "desktop 0"; Ast.VStr "desktop 1"; Ast.VStr "desktop 2";
+         Ast.VStr "shelf" ])
+    (Runtime.eval_string ~rt
+      {|(list/map
+          (lambda (n) (as-str (dict-get n "label")))
+          (glochid/windows-tree ""))|});
+  (* toggling: dir rows carry the laziness attrs; labels carry open verbs *)
+  let box =
+    match Runtime.eval_string ~rt
+            {|(render-html (filmstrip/tree-box (car (filmstrip/tree-roots))))|}
+    with
+    | Ast.VStr s -> s
+    | other -> Alcotest.fail ("tree-box: " ^ Reader.pp_value other)
+  in
+  Alcotest.(check bool) "tree box: level-0 root ul" true
+    (has "fs-tr-root" box);
+  Alcotest.(check bool) "tree box: dir rows lazy via toggle once" true
+    (has "hx-trigger=\"toggle once\"" box);
+  Alcotest.(check bool) "tree box: level fragment URL is hxoas (tree?root)" true
+    (has "/filmstrip/tree?root=windows&amp;node=" box);
+  Alcotest.(check bool) "tree box: collapse-all word POSTs (a mutation, not a fetch)" true
+    (has "hx-post=\"/filmstrip/tree/collapse\"" box);
+  (* one level endpoint: the desk/0 level of an empty workspace is empty *)
+  (match
+     Runtime.dispatch_route ~rt ~handler:"filmstrip/tree" ~method_:"GET"
+       ~path:"/filmstrip/tree"
+       ~params:[ ("root", "windows"); ("node", "desk/0") ]
+       ~headers:[ ("hx-request", "true") ] ~body:""
+   with
+   | Ast.VStr s ->
+       Alcotest.(check bool) "empty level = empty fragment" true
+         (not (has "<li" s))
+   | other -> Alcotest.fail ("tree level: " ^ Reader.pp_value other));
+  (* unknown roots surface the status line, never a 500 *)
+  (match
+     Runtime.dispatch_route ~rt ~handler:"filmstrip/tree" ~method_:"GET"
+       ~path:"/filmstrip/tree" ~params:[ ("root", "nope"); ("node", "") ]
+       ~headers:[] ~body:""
+   with
+   | Ast.VStr s ->
+       Alcotest.(check bool) "missing root: status line only" true
+         (has "no tree root nope" s)
+   | other -> Alcotest.fail ("tree missing root: " ^ Reader.pp_value other));
+  (* url round-trip on the six escapees *)
+  Alcotest.check pp_value_testable "url-enc/url-dec round trip"
+    (Ast.VStr "/code?path=a b&x%25y")
+    (Runtime.eval_string ~rt
+      {|(filmstrip/url-dec (filmstrip/url-enc "/code?path=a b&x%25y"))|})
+
 (** A consumed turn's captured parts replay through hyper/stream: simulate
     the multipart emitter's captured part list, then hyper/stream over a
     page that has #log. *)
@@ -845,7 +972,17 @@ let test_habitat_expr_builders () =
     "(as-str (mem/forget \"memory\" \"m-1\"))"
     (Habitat.forget_expr ~typ:"memory" ~id:"m-1");
   Alcotest.(check bool) "default type is gregor-memory" true
-    (String.length (Habitat.default_type ()) > 3)
+    (String.length (Habitat.default_type ()) > 3);
+  (* bindings browser verbs (the AST browser over the habitat grammar) *)
+  Alcotest.(check string) "bind/packages expr"
+    "(json-emit (list-packages))"
+    (Habitat.packages_expr ());
+  Alcotest.(check string) "bind/list expr"
+    "(json-emit (package-bindings \"todo\"))"
+    (Habitat.bindings_expr ~pkg:"todo");
+  Alcotest.(check string) "bind/get expr"
+    "(json-emit (dict-set (dict-set \"{}\" \"doc\" (function-doc \"todo/add\")) \"source\" (function-source \"todo/add\")))"
+    (Habitat.binding_expr ~name:"todo/add")
 
 let () =
   Eio_main.run @@ fun env ->
@@ -908,5 +1045,9 @@ let () =
         ; Alcotest.test_case "turn-replay-hyper-stream" `Quick
             (test_turn_replay_hyper_stream ~rt)
         ; Alcotest.test_case "turn-replay-nested-blocks" `Quick
-            (test_turn_replay_nested_blocks ~rt) ] );
+            (test_turn_replay_nested_blocks ~rt)
+        ; Alcotest.test_case "bindings-browser" `Quick
+            (test_surfaces_bindings_browser ~rt)
+        ; Alcotest.test_case "rail-trees" `Quick
+            (test_rail_trees ~rt) ] );
     ]

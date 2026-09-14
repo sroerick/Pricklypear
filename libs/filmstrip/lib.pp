@@ -492,7 +492,118 @@
           (list "color" "var(--muted)" "font-size" ".85rem"))
         (css/rule ".fs-sentinel" (list "display" "none"))
         (css/rule ".fs-sink" (list "display" "none"))
-        (css/rule ".fs-oob-delete" (list "display" "none")))))
+        (css/rule ".fs-oob-delete" (list "display" "none"))
+        (css/rule
+          ".fs-rmode"
+          (list
+            "display"
+            "flex"
+            "flex-direction"
+            "column"
+            "border"
+            "1px solid var(--border)"
+            "background"
+            "var(--panel)"
+            "padding"
+            ".3rem .35rem"
+            "gap"
+            ".15rem"
+            "max-height"
+            "22rem"
+            "overflow"
+            "auto"))
+        (css/rule
+          ".fs-tr-root"
+          (list
+            "list-style"
+            "none"
+            "margin"
+            "0"
+            "padding"
+            "0"))
+        (css/rule
+          ".fs-tr-kids"
+          (list
+            "list-style"
+            "none"
+            "margin"
+            "0"
+            "padding"
+            "0 0 0 .8rem"
+            "border-left"
+            "1px solid var(--border)"))
+        (css/rule
+          ".fs-tr-item"
+          (list "min-height" "1.4rem"))
+        (css/rule
+          ".fs-tr-row"
+          (list
+            "display"
+            "flex"
+            "gap"
+            ".3rem"
+            "align-items"
+            "center"
+            "min-height"
+            "1.4rem"
+            "cursor"
+            "pointer"
+            "list-style"
+            "none"))
+        (css/rule
+          ".fs-tr-row::-webkit-details-marker"
+          (list "display" "none"))
+        (css/rule
+          ".fs-tr-fold"
+          (list
+            "flex"
+            "0 0 1rem"
+            "width"
+            "1rem"
+            "text-align"
+            "center"
+            "color"
+            "var(--muted)"
+            "display"
+            "inline-block"
+            "transition"
+            "transform .08s"))
+        (css/rule
+          "details[open] > .fs-tr-row .fs-tr-fold"
+          (list "transform" "rotate(90deg)"))
+        (css/rule
+          ".fs-tr-open"
+          (list
+            "flex"
+            "1 1 auto"
+            "overflow"
+            "hidden"
+            "text-overflow"
+            "ellipsis"
+            "white-space"
+            "nowrap"
+            "text-align"
+            "left"))
+        (css/rule
+          ".fs-tr-verb"
+          (list "flex" "0 0 auto"))
+        (css/rule
+          ".fs-tr-acts-ul"
+          (list
+            "list-style"
+            "none"
+            "margin"
+            "0"
+            "padding"
+            "0"))
+        ;; verbs demote to the actions fold on narrow viewports
+        ;; (responsive = depth, not a new widget: the fold IS the menu)
+        (css/media
+          "max-width:40rem"
+          (list
+            (css/rule
+              ".fs-tr-verb"
+              (list "display" "none")))))))
   "Strip + pane + launcher stylesheet (~50 lines of rules). Widths are\nthe three presets only; .focused is the server-owned ring.")
 
 (define filmstrip/default-width
@@ -1176,7 +1287,8 @@ targets behave exactly as before (take the focus).")
           (if
             (string-eq (filmstrip/pane-state p) "shelved")
             (list
-              (filmstrip/replace-at panes i (dict-set p "state" "live"))
+              (filmstrip/replace-at panes i
+                (filmstrip/pane-stamp (dict-set p "state" "live")))
               i
               #f
               #t)
@@ -1199,7 +1311,9 @@ targets behave exactly as before (take the focus).")
                       "live")))))
           (length panes)
           #t))))
-  "Open-or-focus for route r: a fresh pane record (UUID id, default\nwidth preset, state=live, passed through filmstrip/pane-stamp) appended,\nor the existing pane's index. A HIT ON A SHELVED PANE UNSHELVES it\n(acme Get semantics: naming a hidden window re-shows it). Returns\n(panes focus appended? unshelved?) -- appended? false means an existing\npane won; unshelved? true means the caller owes a shelf OOB swap.")
+  "Open-or-focus for route r: a fresh pane record (UUID id, default\nwidth preset, state=live, passed through filmstrip/pane-stamp) appended,\nor the existing pane's index. A HIT ON A SHELVED PANE UNSHELVES it\n(acme Get semantics: naming a hidden window re-shows it -- and re-stamps
+it to the operator's current desktop via pane-stamp, same as a fresh
+pane: a cross-desktop tree row must open VISIBLE, not 0x0). Returns\n(panes focus appended? unshelved?) -- appended? false means an existing\npane won; unshelved? true means the caller owes a shelf OOB swap.")
 
 (define filmstrip/open-response
   (lambda
@@ -2074,3 +2188,287 @@ bans (no 0x0 focused pane).")
 
 (define filmstrip/ws-type
   "filmstrip-ws")
+
+;; ---- 5. RAIL TREES (v4: ONE tree renderer, N roots) ----
+;; borge/filmstrip.borg rail-trees-v4: a tree is a GEOMETRY RULE over
+;; controlboxes, not a third primitive. A node row is an acme tag-line:
+;; leading fold word (its own hitbox), LABEL word (open-or-focus via
+;; POST /filmstrip/open), trailing VERB words (mutation POSTs). The
+;; host supplies EVERYTHING tree-shaped: filmstrip/tree-roots is a list
+;; of (id title levelfn) where levelfn: path -> list of node dicts
+;; (label kind node open verbs). The lib renders ONE LEVEL per response
+;; (lazy levels are load-bearing: never a whole tree server-side);
+;; expansion state is NATIVE <details> DOM state -- splice never swap;
+;; the server never knows which nodes are open.
+(define filmstrip/tree-roots
+  (lambda () (list))
+  "Host seam: list of (id title levelfn). A levelfn takes a node path
+string (\"\" = the root level) and answers a list of node dicts:
+(label kind node open verbs) -- kind dir|leaf, node the lazy-kids key,
+open a route string or empty (label verb, open-or-focus), verbs a list
+of (word route vals-json) mutation words. Hosts redefine; default
+empty (a rootless shell renders no rail trees).")
+
+(define filmstrip/url-enc-ch
+  (lambda (c)
+    (if (string-eq c "%") "%25"
+    (if (string-eq c " ") "%20"
+    (if (string-eq c "?") "%3F"
+    (if (string-eq c "&") "%26"
+    (if (string-eq c "#") "%23"
+    (if (string-eq c "+") "%2B" c)))))))
+  "One char of filmstrip/url-enc: the six escapees, else identity.")
+
+(define filmstrip/url-enc-go
+  (lambda (s i acc)
+    (if (>= i (string-length s))
+        acc
+        (filmstrip/url-enc-go s (+ i 1)
+          (string-append acc
+            (filmstrip/url-enc-ch (substring s i 1))))))
+  "filmstrip/url-enc's accumulator walk (named define, not letrec).")
+
+(define filmstrip/url-enc
+  (lambda (s)
+    (filmstrip/url-enc-go s 0 ""))
+  "Minimal percent-encoding for a tree node path riding a query param
+(same six escapees filmstrip/url-dec inverts; everything else passes).")
+
+(define filmstrip/url-dec-ch
+  (lambda (hex)
+    (if (string-eq hex "20") " "
+    (if (string-eq hex "25") "%"
+    (if (string-eq hex "3F") "?"
+    (if (string-eq hex "26") "&"
+    (if (string-eq hex "23") "#"
+    (if (string-eq hex "2B") "+"
+    (string-append "%" hex))))))))
+  "One filmstrip/url-dec escapee, or verbatim %xx passthrough.")
+
+(define filmstrip/url-dec-go
+  (lambda (s i acc)
+    (if (>= i (string-length s))
+        acc
+        (if (string-eq (substring s i 1) "%")
+            (if (< (+ i 3) (string-length s))
+                (filmstrip/url-dec-go s (+ i 3)
+                  (string-append acc
+                    (filmstrip/url-dec-ch (substring s (+ i 1) 2))))
+                (filmstrip/url-dec-go s (+ i 1)
+                  (string-append acc (substring s i 1))))
+            (filmstrip/url-dec-go s (+ i 1)
+              (string-append acc (substring s i 1))))))
+  "filmstrip/url-dec's accumulator walk (named define, not letrec).")
+
+(define filmstrip/url-dec
+  (lambda (s)
+    (filmstrip/url-dec-go s 0 ""))
+  "Inverse of filmstrip/url-enc for the SAME six escapees (unknown %xx
+passes through verbatim as %xx -- never throw inside a renderer).")
+
+(define filmstrip/tree-find-root
+  (lambda (roots id)
+    (if (null? roots)
+        (list)
+        (if (string-eq (as-str (car (car roots))) id)
+            (car roots)
+            (filmstrip/tree-find-root (cdr roots) id))))
+  "The root row (id title levelfn) matching id, or the empty list.")
+
+(define filmstrip/tree-node-li
+  (lambda (root-id n)
+    (let*
+      ((label (as-str (dict-get n "label")))
+        (kind (as-str (dict-get n "kind")))
+        (path (as-str (dict-get n "node")))
+        (open (let ((o (dict-get n "open"))) (if (null? o) "" (as-str o))))
+        (verbs (let ((raw (dict-get n "verbs")))
+                 (if (null? raw)
+                     (list)
+                     (let ((s (as-str raw)))
+                       (if (string-eq s "") (list) (json-parse s))))))
+        (is-dir (string-eq kind "dir"))
+        (label-word
+          (if (string-eq open "")
+              (html/span (html/attr "class" "fs-tr-open") (html/text label))
+              (html/tag
+                "button"
+                (html/attrs
+                  (list
+                    (html/attr "class" "fs-btn fs-applink fs-tr-open")
+                    (html/attr "title" (string-append "open-or-focus " label))
+                    (html/attr "hx-post" "/filmstrip/open")
+                    (html/attr "hx-vals"
+                      (string-append "{\"route\":\"" (filmstrip/url-enc open) "\"}"))
+                    (html/attr "hx-target" "#fs-sink")
+                    (html/attr "hx-swap" "innerHTML")))
+                (html/text label))))
+        (verb-word
+          (lambda (v)
+            (html/tag
+              "button"
+              (html/attrs
+                (list
+                  (html/attr "class" "fs-btn fs-tr-verb")
+                  (html/attr "title" (as-str (car v)))
+                  (html/attr "hx-post" (as-str (car (cdr v))))
+                  (html/attr "hx-vals" (as-str (car (cdr (cdr v)))))
+                  (html/attr "hx-target" "#fs-sink")
+                  (html/attr "hx-swap" "innerHTML")))
+              (html/text (as-str (car v))))))
+        (action-li
+          (lambda (v)
+            (html/tag
+              "li"
+              (html/attr "class" "fs-tr-item fs-tr-actrow")
+              (verb-word v))))
+        (actions-fold
+          (if (null? verbs)
+              ""
+              (html/tag
+                "li"
+                (html/attr "class" "fs-tr-item")
+                (html/tag
+                  "details"
+                  (html/attr "class" "fs-tr-node fs-tr-acts")
+                  (html/join
+                    (list
+                      (html/tag
+                        "summary"
+                        (html/attr "class" "fs-tr-row")
+                        (html/join
+                          (list
+                            (html/span (html/attr "class" "fs-tr-fold") (html/text "▸"))
+                            (html/span (html/attr "class" "fs-tr-open muted") (html/text "⋯ actions")))))
+                      (html/tag
+                        "ul"
+                        (html/attr "class" "fs-tr-acts-ul")
+                        (html/join (list/map action-li verbs)))))))))
+        (details-attrs
+          (append
+            (list (html/attr "class" "fs-tr-node"))
+            (if (not is-dir)
+                (list)
+                (list
+                  (html/attr "hx-get"
+                    (string-append "/filmstrip/tree?root=" root-id
+                      "&node=" (filmstrip/url-enc path)))
+                  (html/attr "hx-trigger" "toggle once")
+                  (html/attr "hx-target" "find .fs-tr-kids")
+                  (html/attr "hx-swap" "innerHTML")))))
+        (row-els
+          (list
+            (html/span (html/attr "class" "fs-tr-fold") (html/text "▸"))
+            label-word
+            (html/join (list/map verb-word verbs)))))
+      (html/tag
+        "li"
+        (html/attrs
+          (list
+            (html/attr "class" "fs-tr-item")
+            (html/attr "data-node" path)))
+        (html/tag
+          "details"
+          (html/attrs details-attrs)
+          (html/join
+            (append
+              (list
+                (html/tag
+                  "summary"
+                  (html/attr "class" "fs-tr-row")
+                  (html/join row-els)))
+              (if (not is-dir)
+                  (list)
+                  (list (html/tag "ul" (html/attr "class" "fs-tr-kids") "")))
+              (list actions-fold)))))))
+  "One node row: li[data-node] > details > summary(fold word + label\nword + verb words) [+ lazy kids ul for dirs] [+ eager actions fold\nwhen the node carries verbs]. Dir details carry the lazy level GET;\nleaf details are fold-only. Zero JS beyond the htmx attrs.")
+
+(define filmstrip/tree-level
+  (lambda (root-id nodes)
+    (html/join (list/map (lambda (n) (filmstrip/tree-node-li root-id n)) nodes)))
+  "One LEVEL of a tree as a joined li fragment (the splice payload).")
+
+(define filmstrip/tree-box
+  (lambda (root)
+    (let*
+      ((id (as-str (car root)))
+        (title (as-str (car (cdr root))))
+        (levelfn (car (cdr (cdr root)))))
+      (html/tag
+        "div"
+        (html/attrs
+          (list
+            (html/attr "id" (string-append "fs-tree-" id))
+            (html/attr "class" "fs-cbox fs-rmode")
+            (html/attr "data-rmode" id)))
+        (html/join
+          (list
+            (html/span (html/attr "class" "fs-title") (html/text title))
+            (html/tag
+              "button"
+              (html/attrs
+                (list
+                  (html/attr "class" "fs-btn")
+                  (html/attr "title" "fold everything back (one POST; state is DOM)")
+                  (html/attr "hx-post" "/filmstrip/tree/collapse")
+                  (html/attr "hx-vals" (string-append "{\"root\":\"" id "\"}"))
+                  (html/attr "hx-target" "#fs-sink")
+                  (html/attr "hx-swap" "innerHTML")))
+              (html/text "collapse"))
+            (html/tag
+              "ul"
+              (html/attrs
+                (list
+                  (html/attr "id" (string-append "fs-tree-" id "-root"))
+                  (html/attr "class" "fs-tr-kids fs-tr-root")))
+              (filmstrip/tree-level id (levelfn ""))))))))
+  "One rail tree controlbox: title + collapse-all word + level 0. All
+geometry from classes; the level-0 UL id (fs-tree-<id>-root) is the
+mutation OOB seam -- the head never changes, so only rows re-render.")
+
+(define filmstrip/tree-oob
+  (lambda (root)
+    (let*
+      ((id (as-str (car root)))
+        (levelfn (car (cdr (cdr root)))))
+      (html/tag
+        "ul"
+        (html/attrs
+          (list
+            (html/attr "id" (string-append "fs-tree-" id "-root"))
+            (html/attr "class" "fs-tr-kids fs-tr-root")
+            (html/attr "hx-swap-oob" "innerHTML")))
+        (filmstrip/tree-level id (levelfn "")))))
+  "OOB (hx-swap-oob innerHTML on the level-0 UL) re-render of one
+tree's ROWS -- the mutation refresh seam. The box head never changes,
+so the div itself is never swapped (swapping it made htmx drop
+listeners for subsequently spliced levels); expansion state above the
+mutated rows now survives mutations, which is the truer v4 story.")
+
+(define filmstrip/tree
+  (lambda ()
+    (let*
+      ((id (as-str (request-param "root")))
+        (node (filmstrip/url-dec (as-str (request-param "node"))))
+        (root (filmstrip/tree-find-root (filmstrip/tree-roots) id)))
+      (if (null? root)
+          (render-html (filmstrip/oob-msg (string-append "filmstrip: no tree root " id)))
+          (render-html
+            (filmstrip/tree-level id ((car (cdr (cdr root))) node))))))
+  "GET /filmstrip/tree?root=<id>&node=<path>: ONE level of the named\nroot, as the li splice payload (native 200 fragment; a missing root\nanswers the status line only).")
+
+(define filmstrip/tree-collapse
+  (lambda ()
+    (let*
+      ((id (as-str (request-param "root")))
+        (root (filmstrip/tree-find-root (filmstrip/tree-roots) id)))
+      (if (null? root)
+          (render-html (filmstrip/oob-msg (string-append "filmstrip: no tree root " id)))
+          (render-html
+            (html/join
+              (list
+                (filmstrip/oob-msg "")
+                (filmstrip/tree-oob root)))))))
+  "POST /filmstrip/tree/collapse: the DOM pressure valve -- one POST\nOOB-swaps the box back to head + level 0 (the ONLY sanctioned way the\nserver touches expansion state).")
+
+;; tree css appended to the strip sheet: rows are tag-line rows (fold\nword is its own hitbox), k indent per level, verbs fade on narrow.
