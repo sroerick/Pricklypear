@@ -738,8 +738,7 @@
             (workout/session-state cur)
             (workout/session-notes cur)
             doc
-            (workout/field cur "duration_sec")
-            (workout/field cur "author")))))))
+            (workout/field cur "duration_sec")))))))
 
 (define workout/ksk-start
   (lambda
@@ -1360,8 +1359,7 @@
               "complete"
               n
               doc2
-              ""
-              (as-str (whoami))))))
+              ""))))
       (seq
         (unless
           (< tl 1)
@@ -1878,8 +1876,7 @@
             "abandoned"
             (workout/session-notes cur)
             (workout/session-doc cur)
-            (workout/field cur "duration_sec")
-            (workout/field cur "author")))))))
+            (workout/field cur "duration_sec")))))))
 
 (define workout/session-actions
   (lambda
@@ -1975,8 +1972,7 @@
               "complete"
               n
               (workout/session-doc cur)
-              (workout/field cur "duration_sec")
-              (workout/field cur "author"))))))))
+              (workout/field cur "duration_sec"))))))))
 
 (define workout/session-create
   (lambda
@@ -1995,8 +1991,7 @@
           "in_progress"
           ""
           (workout/empty-doc prog inten)
-          ""
-          (as-str (whoami)))))))
+          "")))))
 
 (define workout/session-create-complete
   (lambda
@@ -2021,8 +2016,7 @@
           "complete"
           n
           (workout/empty-doc prog inten)
-          ""
-          (as-str (whoami)))))))
+          "")))))
 
 (define workout/session-create-with-doc
   (lambda
@@ -2050,8 +2044,7 @@
           "in_progress"
           ""
           d
-          ""
-          (as-str (whoami)))))))
+          "")))))
 
 (define workout/session-date
   (lambda (f) "Date field of a session." (workout/field f "date")))
@@ -2089,8 +2082,7 @@
       state
       notes
       doc
-      duration_sec
-      author)
+      duration_sec)
     "Dict of fields for a workout-session row."
     (dict-set*
       "{}"
@@ -2110,7 +2102,7 @@
         "duration_sec"
         (as-str duration_sec)
         "author"
-        (as-str author)))))
+        (as-str (whoami))))))
 
 (define workout/session-in-progress
   (lambda
@@ -2571,8 +2563,7 @@
           "complete"
           (if (null? notes) "" (as-str notes))
           (workout/walk-doc distance unit dur location)
-          (as-str (* (workout/as-int dur) 60))
-          (as-str (whoami)))))))
+          (as-str (* (workout/as-int dur) 60)))))))
 
 (define workout/walk-detail
   (lambda
