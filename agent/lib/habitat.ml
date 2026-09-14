@@ -1,4 +1,5 @@
-(** glochid habitat bridge — gregor's memory functions (memory-fns).
+(** glochid habitat bridge — gregor's memory functions (memory-fns)
+    + the bindings browser's read verbs (the function grammar).
 
     mem/* LOCAL prims delegating to the habitat's libs/memory package
     over POST /api/eval (HTTP Basic, the ONE Pp_http client). The
@@ -208,6 +209,26 @@ let forget_expr ~(typ : string) ~(id : string) : string =
 let list_expr ~(typ : string) ~(n : int) : string =
   remote "json-emit" [ remote "mem/list" [ q typ; string_of_int n ] ]
 
+(* ---- bindings browser verbs (the AST browser over the habitat's
+   function grammar; borge/agent.borg filmstrip-shell cascade) ---- *)
+
+(* (bind/packages) <= (json-emit (list-packages)) -> JSON array of
+   package name strings (top-level prefixes on the bridge identity's
+   branch chain). *)
+let packages_expr () : string = "(json-emit (list-packages))"
+
+(* (bind/list pkg) <= (json-emit (package-bindings pkg)) -> JSON array
+   of full binding-name strings. *)
+let bindings_expr ~(pkg : string) : string =
+  remote "json-emit" [ remote "package-bindings" [ q pkg ] ]
+
+(* (bind/get name) <= one row as a JSON object; function-doc /
+   function-source VNil both emit json null, which json-parse reads as
+   VNil and the surface prints as "". *)
+let binding_expr ~(name : string) : string =
+  "(json-emit (dict-set (dict-set \"{}\" \"doc\" (function-doc " ^ q name
+  ^ ")) \"source\" (function-source " ^ q name ^ ")))"
+
 let new_mid () : string =
   Printf.sprintf "m-%x-%04x" (int_of_float (Unix.gettimeofday ()))
     (Random.bits () land 0xFFFF)
@@ -270,6 +291,23 @@ let register ~(rt : Runtime.t) ~(env : Eio_unix.Stdenv.base) : unit =
            with _ -> prim_err "mem/list" "usage: (mem/list type [n])")
       | _ -> prim_err "mem/list" "usage: (mem/list type [n])");
   Runtime.add_prim rt "mem/new-id" (fun _ -> VStr (new_mid ()));
+  (* The bindings browser's read verbs: the habitat's function grammar
+     (list-packages / package-bindings / function-doc+source) over the
+     same bridge. Same fail-soft rule — raise habitat-unreachable at
+     CALL time; the Nopales surface and the filmstrip cascade guard
+     (bind/safe) and keep rendering instead of erroring the shell. *)
+  Runtime.add_prim rt "bind/packages" (fun args ->
+      match args with
+      | [] -> call ~env (packages_expr ())
+      | _ -> prim_err "bind/packages" "usage: (bind/packages)");
+  Runtime.add_prim rt "bind/list" (fun args ->
+      match strs "bind/list" args with
+      | [ pkg ] -> call ~env (bindings_expr ~pkg)
+      | _ -> prim_err "bind/list" "usage: (bind/list pkg)");
+  Runtime.add_prim rt "bind/get" (fun args ->
+      match strs "bind/get" args with
+      | [ name ] -> call ~env (binding_expr ~name)
+      | _ -> prim_err "bind/get" "usage: (bind/get name)");
   (* Terminal ergonomics (glooide daily-drive): /remember saves one fact
      with an auto id/title; /memories prints the formatted recent
      list. Both ride the REPL command seam. *)

@@ -136,7 +136,17 @@ let surface_source = {pp|
     ;; nav in pane chrome; the anchor version navigated the whole window
     ;; out of the shell with a full GET). Overrides the generic button look.
     ".fs-applink{background:none;border:0;color:#7aa2f7;padding:0;margin:0;font:inherit;cursor:pointer;text-decoration:none}"
-    ".fs-applink:hover{text-decoration:underline}"))
+    ".fs-applink:hover{text-decoration:underline}"
+    ".fs-modelsel{font-size:.6em;padding:.1rem .3rem}"
+    ;; v4 rail trees: mode tabs controlbox + one :has pair per root id
+    ;; (windows / code / prims) shows only the active tree box off the
+    ;; #fs-railmode sentinel -- the SAME hiding trick desktops use, so a
+    ;; mode flip never re-renders (expansion state is DOM).
+    ".fs-railtabs{display:flex;gap:.3rem;align-items:center;border:1px solid var(--border);background:var(--panel);padding:.3rem .35rem}"
+    ".fs-railtab.fs-btn{background:none;border:1px solid transparent;color:#7aa2f7}"
+    ".fs-shell:has(#fs-railmode.rm-windows) .fs-rmode:not([data-rmode=\"windows\"]){display:none}"
+    ".fs-shell:has(#fs-railmode.rm-code) .fs-rmode:not([data-rmode=\"code\"]){display:none}"
+    ".fs-shell:has(#fs-railmode.rm-prims) .fs-rmode:not([data-rmode=\"prims\"]){display:none}"))
 
 (define (glochid/layout title body)
   (if (hx-request?)
@@ -185,12 +195,13 @@ let surface_source = {pp|
     " <span class=\"muted\">— "
     (filmstrip/app-link "/code" "/code")
     " · "
+    (filmstrip/app-link "/bindings" "/bindings")
+    " · "
     (filmstrip/app-link "/sessions" "/sessions")
     " · "
     (filmstrip/app-link "/settings" "/settings")
     " · model: "
-    "<select name=\"model\" hx-post=\"/settings\" hx-trigger=\"change\" hx-swap=\"none\" "
-    "style=\"font-size:.6em\">"
+    "<select name=\"model\" class=\"fs-modelsel\" hx-post=\"/settings\" hx-trigger=\"change\" hx-swap=\"none\">"
     (settings/model-options (agent/model) (agent/models))
     "</select></span></h1>"))
 
@@ -462,6 +473,170 @@ app-link/button twins (POST /filmstrip/new, open-or-focus /sessions)."
     "" items))
 
 (route "/code" "code/page")
+
+;; ---- bindings browser (GET /bindings; borge/agent.borg filmstrip-shell cascade) ----
+;; The habitat's FUNCTION GRAMMAR (the image's /bindings face) as a
+;; glochid app: package -> function -> doc+source, read-only over the
+;; bind/* habitat-bridge prims (agent/lib/habitat.ml — the one
+;; POST /api/eval client; creds AGENT_HABITAT_(URL|USER|PASS) > PP_*).
+;; FAIL-SOFT at CALL time like the mem/* bridge, so every page/cascade
+;; touch wraps its call in bind/safe (a guard) and renders a muted
+;; notice / empty column when the bridge is unconfigured or down — the
+;; shell itself never errors on the browser's behalf.
+;; PANE-LOCAL NAV: same discipline as the code browser — pane-body
+;; links hx-get into closest .fs-body; the standalone page keeps plain
+;; anchors. The deep pages ride the pane-dispatchable URLs
+(define bind/safe
+  (lambda (thunk)
+    (guard (lambda (e) (list "err" (nth e 1)))
+           (list "ok" (thunk))))
+  "Run one bridge call; (ok json) or (err msg). The bridge raises
+habitat-unreachable at CALL time, so the surface renders instead of
+500ing.")
+
+(define bind/list-result
+  (lambda (r)
+    (if (string-eq (car r) "ok") (json-parse (nth r 1)) (list)))
+  "Parsed entry list of a bind/safe (ok json), else the empty list.")
+
+(define bind/bridge-down
+  (lambda (msg)
+    (string-append
+      "<p class=\"muted\">habitat bridge: " (html-escape (as-str msg)) "</p>"
+      "<p class=\"muted\">set AGENT_HABITAT_URL / AGENT_HABITAT_USER / AGENT_HABITAT_PASS "
+      "(or PP_URL / PP_USER / PP_PASS) so glochid can read the habitat's function grammar.</p>"))
+  "The page's bridge-down block: the bridge's own error text + the
+credential pointer (same env trio the mem/* bridge uses).")
+
+(define bind/head
+  (lambda ()
+    (if (hx-request?)
+        "<h1><span class=\"muted\">/bindings</span></h1>"
+        "<h1><a href=\"/\">agent</a> <span class=\"muted\">/</span> <a href=\"/bindings\">bindings</a></h1>"))
+  "Pane-mode head is a muted label (a plain <a> in a fragment is the
+shell-escape bug class).")
+
+(define bind/link
+  (lambda (url label)
+    (if (hx-request?)
+        (string-append
+          "<a href=\"" url "\" hx-get=\"" url
+          "\" hx-target=\"closest .fs-body\" hx-swap=\"innerHTML\">"
+          (html-escape label) "</a>")
+        (string-append "<a href=\"" url "\">" (html-escape label) "</a>")))
+  "A pane-aware link: fragment mode walks INSIDE the pane (closest
+.fs-body); standalone GET carries a plain href.")
+
+(define bind/trail
+  (lambda (pkg name)
+    (if (string-eq pkg "")
+        ""
+        (string-append
+          "<p class=\"muted\">"
+          (bind/link "/bindings" "packages")
+          " · " (bind/link (string-append "/bindings?pkg=" pkg) pkg)
+          (if (string-eq name "") "" (string-append " · " (html-escape name)))
+          "</p>")))
+  "Breadcrumb line: packages · <pkg> [ · <name>]. Nothing at the root
+(the packages page needs no trail).")
+
+(define bind/rows
+  (lambda (entries url-of)
+    (list/foldl
+      (lambda (acc e)
+        (let ((s (as-str e)))
+          (string-append acc
+            "<tr><td>" (bind/link (url-of s) s) "</td></tr>")))
+      "" entries))
+  "One-column table of name rows, each link pane-aware.")
+
+(define bind/packages-html
+  (lambda ()
+    (let ((r (bind/safe bind/packages)))
+      (if (string-eq (car r) "ok")
+          (string-append
+            "<table><tr><th>package</th></tr>"
+            (bind/rows (bind/list-result r)
+              (lambda (s) (string-append "/bindings?pkg=" s)))
+            "</table>"
+            "<p class=\"muted\">the habitat's function grammar (list-packages over POST /api/eval) — read-only in glochid</p>")
+          (bind/bridge-down (nth r 1)))))
+  "The /bindings root: one row per package of the bridge identity's
+current branch chain.")
+
+(define bind/pkg-html
+  (lambda (pkg)
+    (let ((r (bind/safe (lambda () (bind/list pkg)))))
+      (if (string-eq (car r) "ok")
+          (string-append
+            "<table><tr><th>" (html-escape pkg) "/</th></tr>"
+            (bind/rows (bind/list-result r)
+              (lambda (s) (string-append "/bindings?pkg=" pkg "&name=" s)))
+            "</table>")
+          (bind/bridge-down (nth r 1)))))
+  "/bindings?pkg=<pkg>: one row per function in the package.")
+
+(define bind/field
+  (lambda (d k)
+    (let ((v (dict-get d k)))
+      (if (null? v) "" (as-str v))))
+  "Text at key k of a detail row; doc/source null (no doc / no body on
+this branch) renders as the empty string.")
+
+(define bind/detail-html
+  (lambda (pkg name)
+    (let ((r (bind/safe (lambda () (bind/get name)))))
+      (if (string-eq (car r) "ok")
+          (let ((d (nth r 1)))
+            (string-append
+              "<h2>" (html-escape name) "</h2>"
+              "<p class=\"muted\">" (html-escape (bind/field d "doc")) "</p>"
+              "<pre>" (html-escape (bind/field d "source")) "</pre>"))
+          (bind/bridge-down (nth r 1)))))
+  "/bindings?pkg=<pkg>&name=<name>: docstring + pretty source.")
+
+(define bind/page
+  (lambda ()
+    (let ((pkg (query-str "pkg")) (name (query-str "name")))
+      (glochid/layout "glochid — bindings"
+        (string-append
+          (bind/head)
+          (bind/trail pkg name)
+          (if (string-eq name "")
+              (if (string-eq pkg "")
+                  (bind/packages-html)
+                  (bind/pkg-html pkg))
+              (bind/detail-html pkg name))))))
+  "GET /bindings: package -> function -> doc+source over the bind/* bridge.")
+(route "/bindings" "bind/page")
+
+;; ---- bindings cascade childfn (glochid/pkg-browse host seam 2) ----
+;; "bindings" lists package crumbs; "bindings/<pkg>" lists that package's
+;; function leaves — leaf routes /bindings?pkg=<pkg>&name=<name>
+;; open-or-focus panes. Bridge-down renders ONE EMPTY COLUMN (a broken
+;; shell is the worse failure; the bridge's call-time raise must not
+;; escape the walk).
+(define bind/dir-of
+  (lambda (prefix)
+    (substring prefix 9 (string-length prefix)))
+  "Cascade path element -> habitat package (\"bindings/todo\" -> \"todo\").")
+
+(define bind/browse-entries
+  (lambda (prefix)
+    (if (string-eq prefix "bindings")
+        (list/map
+          (lambda (p)
+            (let ((s (as-str p)))
+              (list s (string-append "bindings/" s))))
+          (bind/list-result (bind/safe bind/packages)))
+        (let ((pkg (bind/dir-of prefix)))
+          (list/map
+            (lambda (n)
+              (let ((s (as-str n)))
+                (list s (string-append "/bindings?pkg=" pkg "&name=" s))))
+            (bind/list-result (bind/safe (lambda () (bind/list pkg))))))))
+  "childfn for the bindings cascade: packages, then the package's
+function leaves.")
 |pp}
 
 (** The glochid layer (borge/agent.borg filmstrip-shell). Load order:
@@ -553,12 +728,14 @@ must be carried HERE through every write path.")
     (list
       (list "chat" "/chat")
       (list "code" "code")
+      (list "bindings" "bindings")
       (list "sessions" "/sessions")
       (list "settings" "/settings")))
   "Column 0: the agent's own surfaces. Entries are (label . target);
 a target starting / is a route (leaf), a bare name is a crumb that
-names a deeper cascade — only \"code\" is a cascade here: dir -> dir
--> file over the operator's cwd (fs/ls).")
+names a deeper cascade — \"code\" walks dir -> dir -> file over the
+operator's cwd (fs/ls); \"bindings\" walks package -> function over
+the habitat's grammar (bridge prims bind/packages + bind/list).")
 
 ;; The lib's filmstrip/apps is redefined TOO (not just browse): the app
 ;; list IS the cascade's column 0 AND the launcher's hint source
@@ -612,9 +789,17 @@ files are leaves (routes /code?path=<child>); dot entries hidden.")
         glochid/code-entries
         (list (glochid/code-entries "code"))
         pkg-path)
-      (cons (list (list)) #f)))
-  "Dispatch the package browse; code walks the filesystem, unknown
-packages get one empty column.")
+      (if
+        (string-eq pkg "bindings")
+        (filmstrip/browse-walk
+          bind/browse-entries
+          (list (bind/browse-entries "bindings"))
+          pkg-path)
+        (cons (list (list)) #f))))
+  "Dispatch the package browse; code walks the filesystem, bindings
+walks the habitat's function grammar (bind/browse-entries comes from
+the surface — late binding picks it up), unknown packages get one
+empty column.")
 
 (define filmstrip/browse
   (lambda
@@ -951,6 +1136,297 @@ no live pane at all (falls back to the first live pane anywhere).
 Never a shelved pane (I2). Not persisted — alt+right heals it for real
 on the next focus step.")
 
+;; ---- 2b2. RAIL TREES (v4: the rail inventory = N trees, ONE renderer) ----
+;; borge/filmstrip.borg rail-trees-v4. Three roots:
+;;   windows -- TARGETING tree from DECLARED ws state (desktops 0..2 +
+;;              shelf subtree; labels POST the verb the word names;
+;;              pane rows carry focus/pin/width/close or restore/destroy)
+;;   code    -- the fs walk as a tree (leaf labels open /code?path panes)
+;;   prims   -- the habitat's function grammar via the bind/* bridge
+;;              (packages -> functions; leaf labels open /bindings panes)
+;; The windows tree REPLACES the v2 winbox/shelf cboxes (shelf = subtree):
+;; the lib's mutation hooks re-render #fs-tree-windows OOB (these
+;; redefinitions live BELOW the v2 defines so load order wins).
+;; Expansion state is <details> DOM state -- splice never swap; rail
+;; mode flips are a sentinel :has hide exactly like desktops.
+(define glochid/pane-verb
+  (lambda (word route vals)
+    (list word route
+      (string-append "{" (list/foldl
+        (lambda (acc kv)
+          (string-append acc
+            (if (string-eq acc "") "" ",")
+            "\"" (car kv) "\":\"" (filmstrip/url-enc (car (cdr kv))) "\""))
+        "" vals)
+        "}")))
+  "One tree verb row spec: (word route vals-json) from (key val)
+pairs; values ride filmstrip/url-enc (route/path vals carry ?&).")
+
+(define glochid/windows-pane-node
+  (lambda (p shelved?)
+    (let*
+      ((id (filmstrip/pane-id p))
+        (route (filmstrip/pane-route p))
+        (v-verbs
+          (lambda (pairs)
+            (list/map
+              (lambda (pr)
+                (glochid/pane-verb (car pr) (car (cdr pr))
+                  (list (list "id" id))))
+              pairs)))
+        (live-verbs
+          (v-verbs
+            (list
+              (list "focus" "/filmstrip/focus-id")
+              (if (string-eq (filmstrip/pane-region p) "rail")
+                  (list "unpin" "/filmstrip/pin")
+                  (list "pin" "/filmstrip/pin"))
+              (list "width" "/filmstrip/width")
+              (list "close" "/filmstrip/close"))))
+        (shelved-verbs
+          (v-verbs
+            (list (list "restore" "/filmstrip/restore")
+                  (list "destroy" "/filmstrip/destroy")))))
+      (dict-set*
+        "{}"
+        (list
+          "label" route
+          "kind" "leaf"
+          "node" (string-append "pane/" id)
+          "open" route
+          "verbs" (json-emit (if shelved? shelved-verbs live-verbs))))))
+  "One pane row: label = route (open-or-focus, acme Get on a shelved
+row), verbs by CURRENT state (live: focus/pin/width/close; shelved:
+restore/destroy). Declared state only -- no DOM scraping.")
+
+(define glochid/keep-nodes
+  (lambda (nodes)
+    (if (null? nodes)
+        (list)
+        (if (string-eq (car nodes) "")
+            (glochid/keep-nodes (cdr nodes))
+            (cons (car nodes) (glochid/keep-nodes (cdr nodes))))))
+  "Drop the empty-string markers map-indexed leaves in place (the tree
+renderer takes only real node dicts).")
+
+(define glochid/windows-tree
+  (lambda (path)
+    (let*
+      ((panes (nth (filmstrip/row) 1))
+        (live-on-desk
+          (lambda (d)
+            (glochid/keep-nodes
+              (filmstrip/map-indexed
+                (lambda (p i)
+                  (if
+                    (if (string-eq (filmstrip/pane-state p) "shelved") #f
+                        (string-eq (as-str (filmstrip/pane-desk p)) d))
+                    (glochid/windows-pane-node p #f)
+                    ""))
+                panes 0))))
+        (desk-dir
+          (lambda (d)
+            (dict-set*
+              "{}"
+              (list
+                "label" (string-append "desktop " d)
+                "kind" "dir"
+                "node" (string-append "desk/" d)
+                "open" ""
+                "verbs"
+                (json-emit
+                  (list
+                    (list "switch" "/filmstrip/desktop"
+                      (string-append "{\"d\":\"" d "\"}"))))))))
+        (shelf-dir
+          (dict-set*
+            "{}"
+            (list
+              "label" "shelf"
+              "kind" "dir"
+              "node" "shelf"
+              "open" ""
+              "verbs" ""))))
+      (if
+        (string-eq path "")
+        (list (desk-dir "0") (desk-dir "1") (desk-dir "2") shelf-dir)
+        (if
+          (string-eq path "shelf")
+          (glochid/keep-nodes
+            (filmstrip/map-indexed
+              (lambda (p i)
+                (if (string-eq (filmstrip/pane-state p) "shelved")
+                    (glochid/windows-pane-node p #t)
+                    ""))
+              panes 0))
+          (live-on-desk (substring path 5 (string-length path)))))))
+  "levelfn for the windows tree (node 'desk/<n>' -> that desktop's
+panes; 'shelf' -> the shelved panes): DESKTOP-GLOBAL data from the
+one workspace row, never from live DOM.")
+
+(define glochid/code-tree
+  (lambda (path)
+    (let*
+      ((dir (if (string-eq path "") "." path))
+        (entries
+          (filmstrip/map-indexed
+            (lambda (e i)
+              (let*
+                ((name (as-str (dict-get e "name")))
+                  (child (if (string-eq dir ".") name (string-append dir "/" name)))
+                  (is-dir (string-eq (dict-get e "dir") "true")))
+                (if (string-starts-with? name ".")
+                    ""
+                    (dict-set*
+                      "{}"
+                      (list
+                        "label" name
+                        "kind" (if is-dir "dir" "leaf")
+                        "node" child
+                        "open"
+                        (if is-dir "" (string-append "/code?path=" child))
+                        "verbs" "")))))
+            (json-parse (fs/ls dir))
+            0)))
+      (glochid/keep-nodes entries)))
+  "levelfn for the files tree (the same hidden-dot rule as the cascade
+walk; leaf labels open /code?path=<child> panes).")
+
+(define glochid/prims-tree
+  (lambda (path)
+    (if
+      (string-eq path "")
+      (list/map
+        (lambda (p)
+          (let ((s (as-str p)))
+            (dict-set*
+              "{}"
+              (list
+                "label" s
+                "kind" "dir"
+                "node" (string-append "prims/" s)
+                "open" ""
+                "verbs" ""))))
+        (bind/list-result (bind/safe bind/packages)))
+      (let ((pkg (substring path 6 (string-length path))))
+        (list/map
+          (lambda (n)
+            (let ((s (as-str n)))
+              (dict-set*
+                "{}"
+                (list
+                  "label" s
+                  "kind" "leaf"
+                  "node" path
+                  "open" (string-append "/bindings?pkg=" pkg "&name=" s)
+                  "verbs" ""))))
+          (bind/list-result (bind/safe (lambda () (bind/list pkg))))))))
+  "levelfn for the prims tree (package -> function). Bridge fail-soft:
+a down bridge answers an empty level like the cascade does -- the
+shell never errors on the browser's behalf.")
+
+(define filmstrip/tree-roots
+  (lambda ()
+    (list
+      (list "windows" "windows" glochid/windows-tree)
+      (list "code" "code" glochid/code-tree)
+      (list "prims" "prims" glochid/prims-tree)))
+  "glochid's rail tree roots (windows / files / prims). Redefining the
+lib's default host seam; the renderer + endpoints stay shared.")
+
+(define glochid/railtabs
+  (lambda ()
+    (list/map
+      (lambda (r)
+        (let ((id (as-str (car r))))
+          (html/tag
+            "button"
+            (html/attrs
+              (list
+                (html/attr "class" "fs-btn fs-railtab")
+                (html/attr "title" (string-append "show the " id " tree"))
+                (html/attr "hx-post" "/filmstrip/railmode")
+                (html/attr "hx-vals" (string-append "{\"root\":\"" id "\"}"))
+                (html/attr "hx-target" "#fs-sink")
+                (html/attr "hx-swap" "innerHTML")))
+            (html/text id))))
+      (filmstrip/tree-roots)))
+  "The rail mode tabs: one word per tree root. POST /filmstrip/railmode
+flips the #fs-railmode sentinel -- the SAME :has hiding desktops use,
+so mode flips keep every tree's expansion DOM alive.")
+
+(define glochid/railtabs-html
+  (lambda ()
+    (html/tag
+      "div"
+      (html/attrs
+        (list
+          (html/attr "id" "fs-railtabs")
+          (html/attr "class" "fs-cbox fs-railtabs")
+          (html/attr "data-cbox" "railtabs")))
+      (html/join
+        (append
+          (list (html/span (html/attr "class" "fs-title") (html/text "rail")))
+          (glochid/railtabs)))))
+  "The rail mode controlbox (one word per root).")
+
+(define glochid/railmode
+  (lambda ()
+    (let
+      ((m (as-str (dict-get (filmstrip/ws-fields) "railmode"))))
+      (if (string-eq m "") "windows" m)))
+  "Rail mode read (ws fields; empty = the first root, never an error).")
+
+(define glochid/railmode-set
+  (lambda ()
+    (let
+      ((root (as-str (request-param "root"))))
+      (seq
+        (filmstrip/ws-save
+          (dict-set* (filmstrip/ws-fields) (list "railmode" root)))
+        (render-html
+          (html/join
+            (list
+              (filmstrip/oob-msg "")
+              (glochid/railmode-sentinel root #t)))))))
+  "POST /filmstrip/railmode: root param -> persist + OOB the sentinel
+(class rm-<root>; CSS shows only that tree); no tree re-render --
+expansion state is DOM.")
+
+(define glochid/railmode-sentinel
+  (lambda (m ?oob)
+    (html/tag
+      "div"
+      (html/attrs
+        (append
+          (list
+            (html/attr "id" "fs-railmode")
+            (html/attr "class" (string-append "fs-sh-axis rm-" m)))
+          (if ?oob
+              (list (html/attr "hx-swap-oob" "outerHTML:#fs-railmode"))
+              (list))))
+      ""))
+  "Inert rail-mode sentinel (like the axis/desk ones); CSS
+:has(#fs-railmode.rm-<id>) hides every other tree box.")
+
+(define glochid/tree-boxes
+  (lambda ()
+    (list/map filmstrip/tree-box (filmstrip/tree-roots)))
+  "All host tree boxes (shell render: each in its own .fs-rmode cbox;
+the sentinel :has shows exactly one).")
+
+(define filmstrip/shelf-oob
+  (lambda () "")
+  "v4: the shelf is a windows-tree SUBTREE; the windows OOB re-renders
+#fs-tree-windows once -- a second identical OOB swap of the same id in
+one response would make htmx run its OOB pass twice over the same
+node, so the shelf hook answers empty.")
+
+(define filmstrip/winbox-oob
+  (lambda () (filmstrip/tree-oob (car (filmstrip/tree-roots))))
+  "v4: same -- the windows tree REPLACES the winbox (close/restore/
+destroy/refresh call this on every mutation response).")
+
 ;; ---- 2f. HOST STAMP + fragment twins of the /new /resume redirects ----
 ;; open-apply stamps fresh panes through filmstrip/pane-stamp (lib hook,
 ;; default identity); glochid's override rides the CURRENT desktop, so an
@@ -1156,9 +1632,10 @@ rebinds the request context, so hx-request? must be read first.")
                     (html/attr "id" "fs-content")
                     (html/attr "class" "fs-content")))
                 (html/join (filmstrip/panes-html panes focus)))
-              (glochid/winbox-html panes)
+              (glochid/railtabs-html)
+              (html/join (glochid/tree-boxes))
+              (glochid/railmode-sentinel (glochid/railmode) #f)
               (glochid/deskbox-html)
-              (glochid/shelf-html panes)
               (filmstrip/key-sentinels)
               (html/tag
                 "div"
@@ -1206,6 +1683,9 @@ to pane 0 at render when unset — rail mode always has a main pane.")
 (route "/filmstrip/move" "filmstrip/move")
 (route "/filmstrip/width" "filmstrip/width")
 (route "/filmstrip/pin" "filmstrip/pin")
+(route "/filmstrip/tree" "filmstrip/tree")
+(route "/filmstrip/tree/collapse" "filmstrip/tree-collapse")
+(route "/filmstrip/railmode" "glochid/railmode-set")
 (route "/filmstrip/orient" "glochid/orient")
 (route "/filmstrip/desktop" "glochid/desktop-set")
 (route "/filmstrip/new" "glochid/new")

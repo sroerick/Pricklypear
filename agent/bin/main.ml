@@ -38,6 +38,8 @@ let fact_lines =
    plugin tools loaded from \
    ~/.config/agent/plugins/*.pp and ./.agent/plugins/*.pp\n\
    - /code on this binary's web surface is a read-only file browser over cwd\n\
+   - /bindings is a read-only browser of the habitat's function grammar via \
+     the bind/* bridge prims\n\
    - memory tool: save durable facts/goals/decisions with action=remember \
      (short title + content; optional tags \"a,b\"); search with \
      action=search before saving to avoid duplicate rows\n"

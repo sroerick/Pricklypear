@@ -92,8 +92,21 @@ echo "$CODE" | grep -q 'name</th>'                            ; check "/code ren
 SETTINGS=$(curl -sS -m 5 "$URL/settings")
 echo "$SETTINGS" | grep -q '<select name="model"'             ; check "/settings has model select" $?
 echo "$PAGE" | grep -q 'hx-post="/settings"'                  ; check "chat header has model dropdown" $?
+echo "$PAGE" | grep -q '/bindings'                              ; check "chat header links the bindings browser" $?
 
-# 6. filmstrip protocol (borge/agent.borg filmstrip-shell verify).
+# 6. bindings browser renders (borge/agent.borg filmstrip-shell; the
+#    bind/* habitat-bridge prims fail soft at CALL time — with or
+#    without habitat creds the page itself must render). Shape-only:
+#    a package TABLE when a habitat answers, the muted bridge-down
+#    notice otherwise. -m 30: list-packages rides the identity's env
+#    load the first time.
+BINDINGS=$(curl -sS -m 30 "$URL/bindings")
+echo "$BINDINGS" | grep -qF 'glochid — bindings'                ; check "/bindings renders" $?
+BIND_FRAG=$(curl -sS -m 30 -H 'HX-Request: true' "$URL/bindings")
+echo "$BIND_FRAG" | grep -q '<!doctype'
+[ "$?" != 0 ]                                                   ; check "/bindings fragment mode (no doctype)" $?
+
+# 7. filmstrip protocol (borge/agent.borg filmstrip-shell verify). (borge/agent.borg filmstrip-shell verify).
 #    Runs in the repo cwd (the smoke cds to the repo root); clean below.
 WS=.agent/workspace.json
 rm -f "$WS"
@@ -114,7 +127,8 @@ echo "$CASCADE" | grep -q 'fs-col'                            ; check "cascade c
 RELOAD=$(curl -sS -m 5 "$URL/")
 echo "$RELOAD" | grep -q 'fs-pane'                            ; check "workspace round-trips on reload" $?
 CLOSE=$(curl -sS -m 5 -X POST "$URL/filmstrip/close" -d "id=$PANE_ID")
-echo "$CLOSE" | grep -q "delete:#fs-pane-$PANE_ID"            ; check "close answers OOB pane delete" $?
+echo "$CLOSE" | grep -q 'state="shelved"\|fs-pane.*shelved'        ; check "close answers OOB shelve (record survives, v2 default close)" $?
+echo "$CLOSE" | grep -q 'fs-tree-windows-root'                 ; check "close answers windows-tree rows OOB (v4)" $?
 ORIENT=$(curl -sS -m 5 -X POST "$URL/filmstrip/orient")
 echo "$ORIENT" | grep -q 'id="fs-axis" class="fs-sh-axis col"' ; check "orient toggles persisted axis (OOB sentinel col)" $?
 echo "$ORIENT" | grep -q 'hx-swap-oob="outerHTML:#fs-axis-btn"' ; check "orient OOB-swaps the toggle button" $?
