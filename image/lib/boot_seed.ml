@@ -173,9 +173,21 @@ let seed_agents_note ~(ops : ops) (t : t) : unit =
       body;
     Buffer.contents b
   in
+  (* i-20260914-promote-rollback: probe EXISTENCE with notes/doc/row (one
+     tree find-by), never notes/doc/get — the full decode is the known
+     155-query walk (~60-80s on prod's big notes under DB degradation),
+     and this expression runs SYNCHRONOUSLY in boot_personal. The 2026-09-14
+     promote died at the 30s health gate exactly here: town-p1 moved
+     seed_agents_note after checkout rehydrate, so the notes/doc/get call
+     ran for real for the first time (before, mid-seed it short-circuited
+     'unbound: notes/doc/get'), boot-personal hit 78s, gate rolled back.
+     Contract with gregor's move: notes/doc/row is in the notes package,
+     so it is bound after checkout rehydrate exactly like notes/doc/get.
+     Only the upsert branch decodes nothing — doc/get is not needed for
+     existence. *)
   let expr =
     Printf.sprintf
-      {| (if (null? (notes/doc/get "agents"))
+      {| (if (null? (notes/doc/row "agents"))
             (notes/doc/upsert "agents" "Agents (living AGENTS.md)"
               (outline/node* "root" "Agents (living AGENTS.md)" "%s" "" (list))
               "" "note" "")

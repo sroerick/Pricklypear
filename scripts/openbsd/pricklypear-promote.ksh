@@ -199,10 +199,13 @@ if ! rcctl restart "${service}"; then
   }
 fi
 
-# Health gate: require ok:true (not mere "ok"), 0.25s x 120 = 30s budget
-# (was 20 x 1s — a 1s poll floor on every promote). On timeout do NOT
-# declare success: roll back to the previous release and die, so the deploy
-# hook sees the failure and prod keeps serving the old release.
+# Health gate: require ok:true (not mere "ok"), 0.25s x 480 = 120s budget
+# (was 120 x 0.25 = 30s, which was 20 x 1s before that). 2026-09-14:
+# boot-personal on prod is not a constant — a legit 78s boot (slow seed /
+# degraded-DB phases) rolled back a perfectly good release at 30s, the
+# same class as the 2026-09-05 incident but hit via the gate budget, not
+# the boot_epoch comparison. 120s covers observed worst-case boots with
+# margin; a genuinely broken image still rolls back after 2 minutes.
 # (2026-09-03, promote task 4) ok:true alone is NOT proof: a pre-restart
 # ORPHAN still holding :18080 answers ok:true too — that is exactly how the
 # 2026-09-03 prod incident served the old release under a green gate. So the
@@ -216,7 +219,7 @@ fi
 ok=0
 attempts=0
 orphan_seen=0
-while [ "${attempts}" -lt 120 ]; do
+while [ "${attempts}" -lt 480 ]; do
   body="$(ftp -o - "${health_url}" 2>/dev/null || true)"
   if print -r -- "${body}" | grep -q '"ok"[[:space:]]*:[[:space:]]*true'; then
     boot_epoch="$(print -r -- "${body}" | sed -n 's/.*"boot_epoch"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p')"
@@ -234,12 +237,12 @@ while [ "${attempts}" -lt 120 ]; do
 done
 
 if [ "${ok}" -ne 1 ]; then
-  log "health endpoint not ok:true within 30s of restart"
+  log "health endpoint not ok:true within 120s of restart"
   log "  image log: /var/log/pricklypear/image.log"
   if rollback; then
-    die "health gate failed (30s); rolled back to ${previous_target}"
+    die "health gate failed (120s); rolled back to ${previous_target}"
   else
-    die "health gate failed (30s); no previous release to roll back to"
+    die "health gate failed (120s); no previous release to roll back to"
   fi
 fi
 
