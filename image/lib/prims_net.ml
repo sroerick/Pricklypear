@@ -184,9 +184,9 @@ let do_http (name : string)
             (shell_quote url)
         in
         let stderr =
-          Lwt_eio.run_lwt (fun () ->
-            Lwt_process.pread ~timeout:(float_of_int timeout /. 1000. +. 5.)
-              (Lwt_process.shell cmd))
+          Io_eio.sh_capture
+            ~timeout_s:(float_of_int timeout /. 1000. +. 5.)
+            cmd
         in
         let resp_body =
           try
@@ -305,8 +305,8 @@ let register (t : t) (tbl : Primitives.t) : unit =
   in
   (* (sleep seconds) -> VNil after delay. Host-owned concurrency surface
      (BORGE-1785211069). Caps at 60s per call so a runaway form cannot
-     park the image forever. Uses Lwt_unix.sleep (yields; does not block
-     the OS thread for the full duration under Lwt). *)
+     park the image forever. Uses Io_eio.sleep (yields the fiber; does
+     not block the scheduler for the full duration). *)
   Primitives.register tbl "sleep"
     (fun args ->
       let secs =
@@ -321,7 +321,7 @@ let register (t : t) (tbl : Primitives.t) : unit =
         (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("sleep", "need non-negative seconds", "bad-args"))))
       else
         let secs = min secs 60.0 in
-        let () = Lwt_eio.run_lwt (fun () -> Lwt_unix.sleep secs) in
+        let () = Io_eio.sleep secs in
         Pricklypear_lisp.Ast.VNil);
   let is_admin_or_agent () =
     let uname =

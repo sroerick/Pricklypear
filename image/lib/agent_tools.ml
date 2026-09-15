@@ -56,7 +56,7 @@ let define_binding (t : t) ~(name : string) ~(body_src : string)
   (try
       let expr = Pricklypear_lisp.Reader.read_one input in
       let v =
-        Control_rim.run_lwt ~prims:t.eval_state.prims (fun () ->
+        Control_rim.run ~prims:t.eval_state.prims (fun () ->
           Pricklypear_lisp.Eval.eval_string_direct
             ~prims:Pricklypear_lisp.Eval.empty_prims t.eval_state.env
             ~budget:(Pricklypear_lisp.Eval.make_budget ()) input)
@@ -833,7 +833,7 @@ let run_smoke_route
            let v_res =
              (Fun.protect ~finally:(fun () -> t.current_request <- None) (fun () -> (try
       let v =
-                         Control_rim.run_lwt ~prims:t.eval_state.prims (fun () ->
+                         Control_rim.run ~prims:t.eval_state.prims (fun () ->
                              Pricklypear_lisp.Eval.eval_string_direct
                                ~prims:Pricklypear_lisp.Eval.empty_prims t.eval_state.env
                                ~budget:(Pricklypear_lisp.Eval.make_budget ())
@@ -1039,7 +1039,7 @@ let run_agent_tool (t : t) ~(name : string) ~(arguments : string)
              | None ->
                  (try
       let v =
-                        Control_rim.run_lwt ~prims:t.eval_state.prims (fun () ->
+                        Control_rim.run ~prims:t.eval_state.prims (fun () ->
                             Pricklypear_lisp.Eval.eval_string_direct
                               ~prims:Pricklypear_lisp.Eval.empty_prims t.eval_state.env
                               ~budget:(Pricklypear_lisp.Eval.make_budget ()) expr)

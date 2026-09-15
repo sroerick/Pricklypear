@@ -404,7 +404,7 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
       let budget =
         Pricklypear_lisp.Eval.make_budget ~limit:max_int ()
       in
-      Control_rim.run_lwt ~prims:t.eval_state.prims (fun () ->
+      Control_rim.run ~prims:t.eval_state.prims (fun () ->
           Pricklypear_lisp.Eval.eval
             ~budget ~prims:Pricklypear_lisp.Eval.empty_prims t.eval_state.env e)
     in
@@ -447,7 +447,7 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
   (* Apply a VLambda under the effect rim (H1.7). *)
   let apply_lambda_auto (lam : Pricklypear_lisp.Ast.value) : Pricklypear_lisp.Ast.value =
     let budget = Pricklypear_lisp.Eval.make_budget () in
-    Control_rim.run_lwt ~prims:t.eval_state.prims (fun () ->
+    Control_rim.run ~prims:t.eval_state.prims (fun () ->
         Pricklypear_lisp.Eval.apply
           ~budget ~prims:Pricklypear_lisp.Eval.empty_prims lam [])
   in
@@ -477,10 +477,10 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
                             "with-transaction body must not block or call the model (effects: %s) — it holds the pool connection + transaction open for every other tenant (i-1788669886)"
                             (Pricklypear_lisp.Effect.EffSet.pp fx),
                           "denied"))));
-          (* H1.3: body re-enters apply_eff under Control.run_lwt when
+          (* H1.3: body re-enters apply_eff under Control.run when
              PP_EVAL_CONTROL=eff so nested prims Prim_call while seeing
              Store.current_conn from with_dynamic_transaction. *)
-          Io_lwt.Db.with_dynamic_transaction t.store (fun () ->
+          Io_db.Db.with_dynamic_transaction t.store (fun () ->
               apply_lambda_auto lam)
       | _ ->
           (Pricklypear_lisp.Ast.VStr

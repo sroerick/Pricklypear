@@ -1,16 +1,15 @@
 (** Pricklypear Image — entry point.
 
-    Always Eio_main + Httpun_eio + Io_eio PG. Lwt remains only under
-    Lwt_eio for the optional TCP REPL. See single-image.runtime. *)
+    Always Eio_main + Httpun_eio + Io_eio PG; Lwt fully removed.
+    See single-image.runtime. *)
 
 open Pricklypear_image_lib
 
 let () =
   Eio_main.run @@ fun env ->
-  Lwt_eio.with_event_loop ~clock:(Eio.Stdenv.clock env) @@ fun _token ->
   Eio.Switch.run @@ fun sw ->
   let ctx : Io_eio.Ctx.t =
-    { sw; net = (Eio.Stdenv.net env :> [ `Generic ] Eio.Net.ty Eio.Std.r) }
+    Io_eio.Ctx.of_stdenv ~sw env
   in
   Io_eio.with_ctx ctx (fun () ->
       Printf.eprintf

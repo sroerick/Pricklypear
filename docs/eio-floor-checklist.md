@@ -98,16 +98,33 @@ module per commit:
 
 Only after Eio path is default and quiet.
 
-- [ ] Remove `io_lwt.ml`, `store_db.ml` Lwt_conn arm + `Io_unix` shim,
-      `control_rim.run_lwt`, `PP_IO` flag.
-- [ ] Drop deps from `image/lib/dune`: `lwt`, `lwt.unix`, `lwt_eio`, `pgx_lwt`,
-      `httpaf-lwt-unix` / `httpun-lwt-unix`.
-- [ ] `rg -n "Lwt" image/lib lisp/lib` → empty. Update `scripts/check_io_rim.sh`
-      to assert it.
-- [ ] Flip spec subsection `runtime` status planned → implemented on next
-      borge plan pass; update `thesis`/`topology` subsections (they still say
-      httpaf-lwt-unix / pgx_lwt).
-- [ ] Close BORGE-1785397493, BORGE-1785211159, BORGE-1785481932 with evidence.
+**DONE 2026-09-15** (backed out the pre-Phase-5 drift first — the flag parser
+and dual-conn were already dead code; flourishes kept as notes in the
+commit). Evidence:
+
+- [x] Removed the `Lwt_eio` bridge (`main.ml`/`boot.ml`), `io_lwt.ml`
+      (renamed `io_db.ml` — the name was a lie after the Lwt backend died),
+      the dead `PP_IO` flag parser, dead `Lwt_eio` wrappers in `io_eio.ml`,
+      dead `lineedit.ml`, and `control_rim.run_lwt` (call sites → `run`).
+      (`store_db.ml` was already single-conn Eio; no `Lwt_conn` arm left by
+      earlier Phase-4 work.)
+- [x] Dropped `lwt`, `lwt.unix`, `lwt_eio`, `pgx_lwt`, `httpun-lwt-unix`
+      from `image/lib/dune` + `image/test/dune` + `image/bin/dune`.
+- [x] TCP REPL → direct Eio (`Eio.Net.listen` + `Eio.Buf_read`, per-conn
+      child switch; bind-retry semantics preserved). Subprocess prims →
+      `Io_eio.sh_capture` (`Eio.Process` + `Eio.Time.Timeout`, child killed
+      on timeout); llm stream path reads SSE via `Eio.Buf_read.line` —
+      streaming semantics preserved exactly.
+- [x] `rg -n "Lwt" image/lib lisp/lib` → comments only (historical notes).
+      `check_io_rim.sh` allowlist updated (io_db/store_db/io_eio).
+- [x] `dune build @all` + `dune runtest` green; `scripts/dev.sh restart`:
+      `/health` ok, TCP REPL eval + error paths verified live; 22 PG-gated
+      suites pass through `Io_eio`.
+- [x] Spec: `borge/single-image.borg` § runtime + AGENTS.md toggled to the
+      declarative Eio-only end state; `runtime` stanza `implements` list
+      says `io_db.ml`.
+- [ ] Close BORGE-1785397493, BORGE-1785211159, BORGE-1785481932 with a
+      link to the commit (left open for the next `borg review` pass).
 
 ## Watch-list (known traps)
 

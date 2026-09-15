@@ -15,7 +15,7 @@ type session = {
   updated_at : string;
 }
 
-let pg_conn (store : Store.t) : Io_lwt.Db.conn option = Io_lwt.Db.current_conn store
+let pg_conn (store : Store.t) : Io_db.Db.conn option = Io_db.Db.current_conn store
 
 (* row-cell accessors live in Row (was a local copy here). *)
 
@@ -322,7 +322,7 @@ let row_to_chat_message
                 }))
   | _ -> None
 
-let next_seq (conn : Io_lwt.Db.conn) ~(session_id : string) : int =
+let next_seq (conn : Io_db.Db.conn) ~(session_id : string) : int =
   let sql =
     "SELECT COALESCE(MAX(seq), -1)::text FROM ai_messages \
      WHERE session_id = $1::uuid"

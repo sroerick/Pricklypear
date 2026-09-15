@@ -2,7 +2,7 @@
 
     Takes an env and an expr, returns a value (or raises [Interp_error]).
     I/O prims use [Control.perform_prim] (OCaml 5 effects). The image rim
-    ([Control_rim.run_lwt]) or pure tests ([Control.run_sync]) service
+    ([Control_rim.run]) or pure tests ([Control.run_sync]) service
     [Prim_call]. No Lwt in this module.
 
     Per spec [lisp-interpreter.eval]: cooperative [budget], special forms,

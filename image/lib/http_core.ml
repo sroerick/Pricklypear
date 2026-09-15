@@ -1625,9 +1625,9 @@ let respond_handler_value
     ~(path : string)
     ~(fragment : bool)
     (value : Pricklypear_lisp.Ast.value) : unit =
-  (* Pull the per-request snapshot manifest (if bound, sync via Lwt.get)
-     so chrome renders this request's identity, not whatever a concurrent
-     attach flipped. *)
+  (* Pull the per-request snapshot manifest (fiber-local binding, so
+     chrome renders this request's identity, not whatever a concurrent
+     attach flipped). *)
   let manifest =
     match Request_context.get () with
     | Some ctx -> Request_context.manifest ctx

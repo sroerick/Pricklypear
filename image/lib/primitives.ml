@@ -221,7 +221,7 @@ let prim_summary (name : string) : string =
   | "date-today" -> "local date YYYY-MM-DD"
   | "now" -> "unix epoch seconds (UTC int)"
   | "now-ms" -> "unix epoch milliseconds (UTC int)"
-  | "sleep" -> "sleep N seconds (float or int); yields on Lwt"
+  | "sleep" -> "sleep N seconds (float or int); yields the fiber (Eio)"
   | "http-get" -> "outbound HTTP GET: (http-get url [headers-json]) -> {ok,status,headers,body,err,kind} dict; admin/agent only"
   | "http-post" -> "outbound HTTP POST: (http-post url [headers-json [body]]) -> {ok,status,headers,body,err,kind} dict; admin/agent only"
   | "parse-int" -> "string or int to int"

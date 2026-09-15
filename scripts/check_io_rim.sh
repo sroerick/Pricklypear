@@ -4,7 +4,7 @@ set -e
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
 bad=$(rg -n 'Pg\.execute' image/lib --type ml \
-  | rg -v 'image/lib/io_lwt\.ml|image/lib/store_db\.ml|image/lib/io_eio\.ml' \
+  | rg -v 'image/lib/io_db.ml|image/lib/store_db\.ml|image/lib/io_eio\.ml' \
   | rg -v 'must use|Io_lwt|Io_eio|H2\.6|domain SQL' \
   || true)
 if [ -n "$bad" ]; then
@@ -12,4 +12,4 @@ if [ -n "$bad" ]; then
   echo "$bad" >&2
   exit 1
 fi
-echo "H2.6 OK: only io_lwt/store_db/io_eio call Pg.execute"
+echo "H2.6 OK: only io_db/store_db/io_eio call Pg.execute"

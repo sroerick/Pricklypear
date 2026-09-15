@@ -83,10 +83,9 @@ let test_no_db_arms_unchanged () =
 
 let with_store ~database f =
   Eio_main.run @@ fun env ->
-  Lwt_eio.with_event_loop ~clock:(Eio.Stdenv.clock env) @@ fun _ ->
   Eio.Switch.run @@ fun sw ->
   let ctx : Pricklypear_image_lib.Io_eio.Ctx.t =
-    { sw; net = (Eio.Stdenv.net env :> [ `Generic ] Eio.Net.ty Eio.Std.r) }
+    Pricklypear_image_lib.Io_eio.Ctx.of_stdenv ~sw env
   in
   Pricklypear_image_lib.Io_eio.with_ctx ctx (fun () ->
       let base = { (S.config_from_env ()) with database } in

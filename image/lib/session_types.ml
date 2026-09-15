@@ -78,7 +78,7 @@ type eval_state = {
       last load_defs for the current branch. [ensure_fresh] compares
       the live stamp at attach time and rehydrates only on mismatch. *)
   mutable load_stamp : string;
-  (** Lwt prim table for [Control_rim.run_lwt] (H1.7). Interpreter is
+  (** Sync prim table for [Control_rim.run] (H1.7). Interpreter is
       direct-style; I/O prims are serviced only at this rim. *)
   mutable prims : Primitives.t;
   (** lisp-interpreter.package-surface: while loading a lib.pp that opened

@@ -215,7 +215,7 @@ let put
     else if byte_size > max_bytes then
       (Error (Too_large (byte_size, max_bytes)))
     else
-      match Io_lwt.Db.current_conn store with
+      match Io_db.Db.current_conn store with
       | None -> (Error No_db)
       | Some conn ->
           let fname = sanitize_filename filename in
@@ -286,7 +286,7 @@ let visible_sql ~(is_admin : bool) ~(actor_param : int) : string =
 
 let get_meta (store : Store.t) ~(id : string)
   ?(visible_to : (string * bool) option) () : meta option =
-  match Io_lwt.Db.current_conn store with
+  match Io_db.Db.current_conn store with
   | None -> None
   | Some conn ->
       let sql, params =
@@ -326,7 +326,7 @@ let get_meta (store : Store.t) ~(id : string)
 
 let get_bytes (store : Store.t) ~(id : string)
   ?(visible_to : (string * bool) option) () : (meta * string) option =
-  match Io_lwt.Db.current_conn store with
+  match Io_db.Db.current_conn store with
   | None -> None
   | Some conn ->
       let sql, params =
@@ -375,7 +375,7 @@ let list
     ?(author : string option = None)
     ?(limit : int = 50)
     () : meta list =
-  match Io_lwt.Db.current_conn store with
+  match Io_db.Db.current_conn store with
   | None -> []
   | Some conn ->
       let limit = max 1 (min 200 limit) in
@@ -415,7 +415,7 @@ let delete
       if (not is_admin) && m.author <> actor then
         (Ok `Forbidden)
       else
-        match Io_lwt.Db.current_conn store with
+        match Io_db.Db.current_conn store with
         | None -> (Error "no db connection")
         | Some conn ->
             let sql = "DELETE FROM media_blobs WHERE id = $1::uuid" in

@@ -10,7 +10,7 @@
       - Switching branch (checkout) keeps REPL locals but changes visibility. *)
 include Session_types
 
-(** Run direct-style eval under the Lwt prim rim (H1.7). *)
+(** Run direct-style eval under the prim rim (H1.7). *)
 let eval_under_rim (t : t) (thunk : unit -> 'a) : 'a =
   Control_rim.run ~prims:t.eval_state.prims thunk
 

@@ -23,7 +23,7 @@ let () =
     Eio_main.run @@ fun env ->
     Eio.Switch.run @@ fun sw ->
     let ctx : IE.Ctx.t =
-      { sw; net = (Eio.Stdenv.net env :> [ `Generic ] Eio.Net.ty Eio.Std.r) }
+      Pricklypear_image_lib.Io_eio.Ctx.of_stdenv ~sw env
     in
     IE.with_ctx ctx (fun () ->
         let cfg = IE.Db.config_from_env () in

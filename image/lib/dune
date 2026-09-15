@@ -3,7 +3,7 @@
  (public_name pricklypear-image)
  (modules store_db store_common store_defs store_branch store_packages
           store_history store_retention store tree_store branch_algebra def_journal
-          primitives request_context control_rim io io_lwt io_eio
+          primitives request_context control_rim io io_db io_eio
           row http_kit
           prims_time prims_crypto
           session_types call_graph agent_tools
@@ -24,7 +24,7 @@
           http_core http_code http_data http_branches http_agent http_pages http_ops
           http_multipart http_media http_tree
           agent_discovery http
-          lineedit boot llm_client
+          boot llm_client
           envelope
           auth_password auth_throttle auth_store ai_store jobs sync)
  (modules_without_implementation io)
@@ -32,17 +32,12 @@
    pricklypear-lisp
    pricklypear-common
    pricklypear-pure-prims
-   pgx_lwt
    pgx
-   httpun-lwt-unix
    httpun
    httpun-eio
    gluten-eio
    bigstringaf
    cstruct
-   lwt
-   lwt.unix
-   lwt_eio
    eio
    eio_main
    eio.unix

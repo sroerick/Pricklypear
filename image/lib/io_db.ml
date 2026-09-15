@@ -1,7 +1,8 @@
-(** Db port name kept for call-site stability (H2.2).
+(** The domain-side DB port (H2.2 name: was [Io_lwt]; renamed at
+    eio-floor Phase 5 — the name no longer implies any backend).
 
-    Direct-style: delegates to [Store_db]. Process runs under Eio_main;
-    Lwt backend (if PP_IO=lwt) blocks via Lwt_eio inside Store_db. *)
+    Direct-style: delegates to [Store_db] (the single Eio backend:
+    pure pgx over Eio.Net via [Io_eio]). *)
 
 module Db = struct
   type conn = Store_db.conn

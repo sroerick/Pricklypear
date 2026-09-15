@@ -16,5 +16,3 @@ let run ~(prims : (string, Ast.value list -> Ast.value) Hashtbl.t)
     (thunk : unit -> 'a) : 'a =
   Control.run_with_rim ~prims thunk
 
-(** Alias kept for call sites that still say run_lwt. *)
-let run_lwt = run

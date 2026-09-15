@@ -59,7 +59,7 @@ let flush ~(store : Store.t) : unit =
         "INSERT INTO function_stat (fn, fields, author) " ^
         "VALUES ($1, $2::jsonb, $3)"
       in
-      match Io_lwt.Db.current_conn store with
+      match Io_db.Db.current_conn store with
       | None -> ()
       | Some c ->
           List.iter
@@ -86,7 +86,7 @@ let prune_once ~(store : Store.t) : int =
     "  ORDER BY id DESC OFFSET $1 " ^
     ") victim WHERE f.id = victim.id"
   in
-  match Io_lwt.Db.current_conn store with
+  match Io_db.Db.current_conn store with
   | None -> 0
   | Some c ->
       (try
@@ -109,9 +109,10 @@ let last_prune = ref 0.0
 let prune_due (now : float) : bool = now -. !last_prune >= prune_secs
 
 (** Background flush loop; fork once at boot. Uses the Eio clock —
-    NOT Lwt_eio.run_lwt: concurrent run_lwt across fibers (this loop vs
-    the jobs runner) is unsafe and took the whole switch down on prod
-    (watchdog restart loop, 2026-08-21). *)
+    never route this through any run_lwt-style bridge: concurrent
+    bridge calls across fibers (this loop vs the jobs runner) is
+    unsafe and took the whole switch down on prod (watchdog restart
+    loop, 2026-08-21). *)
 let flush_loop ~(clock : _ Eio.Time.clock) ~(store : Store.t) : unit =
   let rec loop () =
     Eio.Time.sleep clock flush_secs;
