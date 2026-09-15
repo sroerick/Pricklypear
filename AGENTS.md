@@ -239,10 +239,11 @@ Postgres still holds bytes, but the **logical store is ONE TREE**
 - OCaml 5.4.1 on the **`poohstack`** opam switch (NOT a dedicated
   `pricklypear` switch). `eval $(opam env --switch=poohstack --set-switch)`
   before building any package.
-- **Default I/O rim is Eio** (`Httpun_eio` + `Io_eio.Pg` / pure pgx over
-  Eio.Net). Set `PP_IO=lwt` for the rollback path (`httpun-lwt-unix` +
-  `pgx_lwt`). See `borge/single-image.borg` § runtime and
-  `docs/eio-floor-checklist.md` / `docs/runtime-effects-transition.md`.
+- **The I/O rim is Eio, period** (`Httpun_eio` + `Io_eio.Pg` / pure pgx
+  over Eio.Net). The Lwt rim, the `PP_IO` flag, and the `Lwt_eio` bridge
+  were deleted at eio-floor Phase 5 (2026-09-15): there is no rollback
+  flag, rollback is git revert. See `borge/single-image.borg` § runtime
+  and `docs/eio-floor-checklist.md` / `docs/runtime-effects-transition.md`.
 - Single unix binary (`image/`) — not a Solo5 unikernel in v1. Solo5 remains
   an optional later hardening axis (`spikes/mirage_solo5/`), not the product path.
 - Auth is in-process (`image/lib/auth_*.ml`). Password hashes are argon2id as of
@@ -361,7 +362,8 @@ auth is **in-process** in the image.
 - Eval core is direct-style (`lisp/` Lwt-free; `Control.Prim_call` +
   rim). Image domain still has monadic coloring at the prim ABI until the
   Eio-floor decolor pass (`docs/eio-floor-checklist.md` Phase 3). Default
-  process rim is Eio; `PP_IO=lwt` remains rollback until Phase 5 deletes it.
+  process rim is Eio; Phase 5 (2026-09-15) deleted the Lwt rim and the
+  `PP_IO` flag.
 - No `(load-library "pkg")` in Nopales route handlers (spec/rb dec-2,
   2026-09-07): the session env binds package defs from the branch chain
   lazily, and load-library re-evals the DEPLOYED release file onto the
@@ -376,8 +378,8 @@ auth is **in-process** in the image.
   a11y snapshots over CSS selectors, graduate green flows into smokes.
   Research wiki: [`docs/agent-ui-harness.md`](docs/agent-ui-harness.md).
   Example contract: [`docs/notes-ui-contract.md`](docs/notes-ui-contract.md).
-- HTTP: `Httpun_eio` default accept loop; `httpun-lwt-unix` under `PP_IO=lwt`.
-  Postgres: pure pgx over Eio.Net (`Io_eio`) default; `pgx_lwt` rollback.
+- HTTP: `Httpun_eio` accept loop (`httpun-lwt-unix` deleted at Phase 5).
+  Postgres: pure pgx over Eio.Net (`Io_eio`); `pgx_lwt` deleted at Phase 5.
   No ORM, plain SQL. SERIALIZABLE transactions by default —
   `Store.with_transaction` / `(with-transaction (lambda () body))` keep
   `(select-for-update ...)` locks across prims in the body. Under Eio the

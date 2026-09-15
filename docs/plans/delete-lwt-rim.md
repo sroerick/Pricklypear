@@ -1,6 +1,6 @@
 # Plan — Remove the Lwt rim (eio-floor Phase 5)
 
-**Status:** plan for a follow-up agent. Not started.
+**Status:** EXECUTED (2026-09-15 — see `docs/eio-floor-checklist.md` § Phase 5 for evidence). Kept as the record of how the deletion was planned; inventory below is pre-execution.
 **Read first:** `docs/eio-floor-checklist.md` § Phase 5 (the authoritative
 checklist) and `borge/single-image.borg` § runtime (the declarative spec).
 

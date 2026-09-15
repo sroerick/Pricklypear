@@ -1,17 +1,19 @@
-(** Eio + pure pgx implementation of the Io.Db port (H3).
+(** Eio + pure pgx implementation of the Io.Db port (H3/H3.5 — exit).
 
-    Identity monad over Eio.Net flows. Domain still speaks [Lwt.t] via
-    the [Io.DB] interface: each call is scheduled with [Lwt_eio.run_eio]
-    when the process is under [Lwt_eio.with_event_loop], or runs
-    directly inside [Eio_main.run] for the smoke binary.
+    Direct-style everywhere: domain code runs on Eio fibers, SQL on
+    pure pgx over Eio.Net flows, no runtime bridge in the call path.
+    [Io_db.Db] is a legacy name that delegates to [Store_db], which
+    dispatches here.
 
-    Ambient [ctx] (switch + net) must be installed with [with_ctx] before
-    [connect]. *)
+    Ambient [ctx] (switch + net + clock + process mgr) must be
+    installed with [with_ctx] before [connect]. *)
 
 module Ctx = struct
   type t = {
     sw : Eio.Switch.t;
     net : [ `Generic ] Eio.Net.ty Eio.Std.r;
+    mono_clock : Eio.Time.Mono.ty Eio.Std.r;
+    process : [ `Generic ] Eio.Process.mgr_ty Eio.Std.r;
   }
 
   let current : t option ref = ref None
@@ -28,6 +30,14 @@ module Ctx = struct
     current := Some c;
     Fun.protect ~finally:(fun () -> current := prev) f
 
+  let of_stdenv ~sw (env : Eio_unix.Stdenv.base) : t =
+    { sw;
+      net = (Eio.Stdenv.net env :> [ `Generic ] Eio.Net.ty Eio.Std.r);
+      mono_clock = Eio.Stdenv.mono_clock env;
+      process =
+        (Eio.Stdenv.process_mgr env
+          :> [ `Generic ] Eio.Process.mgr_ty Eio.Std.r) }
+
   (** True when [with_ctx] is active (Eio_main path). *)
   let installed () = !current <> None
 end
@@ -35,27 +45,35 @@ end
 let with_ctx = Ctx.with_ctx
 let ctx_installed = Ctx.installed
 
-(** Fiber-local: true while this fiber is inside [Lwt_eio.run_eio] / an
-    ambient Eio SQL section. A process-global ref is wrong under Httpun_eio
-    (many fibers): fiber A in a tx yields at [run_lwt], fiber B would see
-    depth>0 and skip [run_eio], racing the shared PG wire. *)
-let eio_enter_key : bool Eio.Fiber.key = Eio.Fiber.create_key ()
+(** Yield for [secs] without blocking the fiber (host-GC'd sleep prim,
+    jobs backoff, REPL bind-retry cadence). Replaces [Lwt_unix.sleep]. *)
+let sleep (secs : float) : unit =
+  Eio.Time.Mono.sleep (Ctx.get ()).mono_clock secs
 
-let in_eio_enter () =
-  match Eio.Fiber.get eio_enter_key with Some true -> true | _ -> false
-
-(** Run [f] via [Lwt_eio.run_eio], or directly if this fiber is already in one. *)
-let on_eio (f : unit -> 'a) : 'a Lwt.t =
-  if in_eio_enter () then Lwt.return (f ())
-  else
-    Lwt_eio.run_eio (fun () ->
-        Eio.Fiber.with_binding eio_enter_key true f)
-
-(** Same as [on_eio] but for call sites already on an Eio fiber that need to
-    mark the enter-key for nested SQL (e.g. whole-tx critical sections). *)
-let with_eio_enter (f : unit -> 'a) : 'a =
-  if in_eio_enter () then f ()
-  else Eio.Fiber.with_binding eio_enter_key true f
+(** Run [sh -c cmd], capture stdout as a string (the call sites build
+    [cmd] with ["2>&1"] so shell-merged stderr arrives in-band, as
+    under [Lwt_process.pread]). The child is killed on timeout —
+    spawn runs on a private (child) switch, so timeout cancellation
+    releases it. Raises [Eio.Time.Timeout]. *)
+let sh_capture ?timeout_s (cmd : string) : string =
+  let ctx = Ctx.get () in
+  let run () =
+    Eio.Switch.run @@ fun sw ->
+    let rd, wr = Eio.Process.pipe ~sw ctx.process in
+    let proc =
+      Eio.Process.spawn ~sw ctx.process ~stdout:wr
+        [ "/bin/sh"; "-c"; cmd ]
+    in
+    Eio.Resource.close wr;
+    let s = Eio.Buf_read.parse_exn ~max_size:64_000_000 Eio.Buf_read.take_all rd in
+    ignore (Eio.Process.await proc);
+    s
+  in
+  match timeout_s with
+  | None -> run ()
+  | Some secs ->
+      Eio.Time.Timeout.run_exn
+        (Eio.Time.Timeout.seconds ctx.mono_clock secs) (fun () -> run ())
 
 (** Pgx Io backend: direct-style ('a t = 'a) over one Eio two-way flow. *)
 module Pgx_io = struct
@@ -277,25 +295,6 @@ module Db = struct
                 ~finally:(fun () -> s.current_tx <- None)
                 f)
 
-  (** Io.DB-shaped Lwt wrappers (for dual-run under Lwt_eio). *)
-  let connect (s : store) : unit Lwt.t =
-    Lwt_eio.run_eio (fun () -> connect_sync s)
-
-  let execute (c : conn) ?params sql : Pgx.row list Lwt.t =
-    Lwt_eio.run_eio (fun () -> execute_sync c ?params sql)
-
-  let with_transaction ?isolation (s : store) (f : conn option -> 'a Lwt.t)
-      : 'a Lwt.t =
-    Lwt_eio.run_eio (fun () ->
-        with_transaction_sync ?isolation s (fun copt ->
-            Lwt_eio.run_lwt (fun () -> f copt)))
-
-  let with_dynamic_transaction ?isolation (s : store) (f : unit -> 'a Lwt.t)
-      : 'a Lwt.t =
-    Lwt_eio.run_eio (fun () ->
-        with_dynamic_transaction_sync ?isolation s (fun () ->
-            Lwt_eio.run_lwt f))
-
   (** Health: SELECT 1. Returns row count (expect 1). *)
   let health_query_sync (s : store) : int =
     connect_sync s;
@@ -340,11 +339,3 @@ let sequencer_survives_raise () : bool =
     | _ -> false
     | exception _ -> false
 
-(** [PP_IO=lwt|eio] — default eio. Explicit [PP_IO=lwt] is rollback. *)
-let io_mode_from_env () =
-  match Sys.getenv_opt "PP_IO" with
-  | Some s ->
-      (match String.lowercase_ascii (String.trim s) with
-       | "lwt" -> `Lwt
-       | _ -> `Eio)
-  | None -> `Eio

@@ -20,7 +20,7 @@
       - No ORM; parameterized SQL via pgx. Multi-step atomicity uses
         Store.with_dynamic_transaction / (with-transaction …).
 
-    Uses [Io_lwt.Db.current_conn] so in-tx calls see the bound connection
+    Uses [Io_db.Db.current_conn] so in-tx calls see the bound connection
     (read prims run inside with_transaction so set_local_pp_user keeps the
     RLS floor active; see i-rls-nontx).  Misses return VNil so Lisp can
     branch on `(if (get 'user id) ...)`. *)
@@ -65,12 +65,12 @@ let session_user () : string =
     current conn unchanged. *)
 let with_tree_tx (store : Store.t) ~(none : unit -> 'a)
     (f : Store_db.conn -> 'a) : 'a =
-  if Io_lwt.Db.in_transaction store then
-    (match Io_lwt.Db.current_conn store with
+  if Io_db.Db.in_transaction store then
+    (match Io_db.Db.current_conn store with
      | None -> none () (* unreachable: in_transaction ⇒ tx conn bound *)
      | Some conn -> f conn)
   else
-    Io_lwt.Db.with_transaction_low store
+    Io_db.Db.with_transaction_low store
       (function None -> none () | Some conn -> f conn)
 
 (** SQL fragment: row is visible to $N (author match OR seed type OR
@@ -217,7 +217,7 @@ let get (store : Store.t) ~(type_name : string) ~(id : string) : value =
   (* Route through with_transaction so set_local_pp_user runs and the RLS
      floor (tree_data_rows / tree_nodes policy, migration 013) is active.
      The callback conn is the tx conn (set pp.user is LOCAL to it). *)
-  Io_lwt.Db.with_transaction store (function
+  Io_db.Db.with_transaction store (function
     | None -> VNil
     | Some conn ->
         let user = session_user () in
@@ -256,14 +256,14 @@ let get (store : Store.t) ~(type_name : string) ~(id : string) : value =
     Eio mutexes and cascade into auth failures (observed 2026-07-22). *)
 let select_for_update
     (store : Store.t) ~(type_name : string) ~(id : string) : value =
-  if not (Io_lwt.Db.in_transaction store) then
+  if not (Io_db.Db.in_transaction store) then
     raise
       (Interp_error
          (User_error
             ("select-for-update requires (with-transaction ...); \
              refusing FOR UPDATE outside a transaction", "bad-args")))
   else
-    match Io_lwt.Db.current_conn store with
+    match Io_db.Db.current_conn store with
     | None -> VNil
     | Some conn ->
         let user = session_user () in
@@ -415,7 +415,7 @@ let space_owner_ok (conn : Store_db.conn) ~(space : string)
 (** The space-exists? prim body (lazy ensure paths in Nopales packages
     create-or-skip without parsing the duplicate-creation error). *)
 let space_exists_prim (store : Store.t) ~(name : string) : value =
-  match Io_lwt.Db.current_conn store with
+  match Io_db.Db.current_conn store with
   | None -> VBool false
   | Some conn -> VBool (space_exists conn ~space:name)
 
@@ -427,7 +427,7 @@ let validate_space_name name =
 let space_create (store : Store.t) ~(caller : string) ~(name : string)
     ?(open_ : bool = false) () : value =
   validate_space_name name;
-  match Io_lwt.Db.current_conn store with
+  match Io_db.Db.current_conn store with
   | None -> space_prim_error "space-create" "failed: no DB"
   | Some conn ->
       if space_exists conn ~space:name then
@@ -455,7 +455,7 @@ let space_create (store : Store.t) ~(caller : string) ~(name : string)
 
 let space_add_member (store : Store.t) ~(caller : string)
     ~(kernel_admin : bool) ~(space : string) ~(username : string) : value =
-  match Io_lwt.Db.current_conn store with
+  match Io_db.Db.current_conn store with
   | None -> space_prim_error "space-add-member" "failed: no DB"
   | Some conn ->
       if not (space_exists conn ~space) then
@@ -474,7 +474,7 @@ let space_add_member (store : Store.t) ~(caller : string)
 
 let space_remove_member (store : Store.t) ~(caller : string)
     ~(kernel_admin : bool) ~(space : string) ~(username : string) : value =
-  match Io_lwt.Db.current_conn store with
+  match Io_db.Db.current_conn store with
   | None -> space_prim_error "space-remove-member" "failed: no DB"
   | Some conn ->
       if not (space_owner_ok conn ~space ~caller ~kernel_admin) then
@@ -489,7 +489,7 @@ let space_remove_member (store : Store.t) ~(caller : string)
 
 let space_admit (store : Store.t) ~(caller : string) ~(kernel_admin : bool)
     ~(space : string) ~(type_name : string) : value =
-  match Io_lwt.Db.current_conn store with
+  match Io_db.Db.current_conn store with
   | None -> space_prim_error "space-admit" "failed: no DB"
   | Some conn ->
       if not (space_exists conn ~space) then
@@ -510,7 +510,7 @@ let space_admit (store : Store.t) ~(caller : string) ~(kernel_admin : bool)
 
 let space_list (store : Store.t) ~(caller : string) ~(kernel_admin : bool)
     : value =
-  match Io_lwt.Db.current_conn store with
+  match Io_db.Db.current_conn store with
   | None -> VList []
   | Some conn ->
       let sql, params =
@@ -539,7 +539,7 @@ let space_list (store : Store.t) ~(caller : string) ~(kernel_admin : bool)
 
 let space_members (store : Store.t) ~(caller : string)
     ~(kernel_admin : bool) ~(space : string) : value =
-  match Io_lwt.Db.current_conn store with
+  match Io_db.Db.current_conn store with
   | None -> VList []
   | Some conn ->
       (if (not kernel_admin) && not (is_space_member conn ~space ~username:caller)
@@ -579,7 +579,7 @@ let space_members (store : Store.t) ~(caller : string)
 
 let data_history_json (store : Store.t) ~(viewer : string)
     ~(type_name : string) ~(id : string) : Yojson.Safe.t list =
-  match Io_lwt.Db.current_conn store with
+  match Io_db.Db.current_conn store with
   | None -> []
   | Some conn ->
       let path_opt =
@@ -726,7 +726,7 @@ let update_guarded store ~type_name ~id ~fields_json ~caller =
       (update 'type id (dict-set u "field" "value"))
     -> (update-field 'type id "field" "value")
     Composition is pure-OCaml (one get, one dict-set, one update inside
-    this prim). Lwt-typed; returns VStr id on success, VNil if no row
+    this prim). Returns VStr id on success, VNil if no row
     matched or no DB. Value is JSON-coerced (numeric strings emit as JSON
     numbers; non-parseable values emit as JSON strings — same rules as
     dict-set).
@@ -749,7 +749,7 @@ let update_field_impl
   match reject with
   | Some msg -> VStr msg
   | None ->
-  Io_lwt.Db.with_transaction store (function
+  Io_db.Db.with_transaction store (function
     | None -> no_db "update-field"
     | Some conn ->
         guard_space_write conn ~prim:"update-field" ~type_name ~caller
@@ -834,7 +834,7 @@ let list
     (store : Store.t) ~(type_name : string) ?(limit : int = 100)
     ?(sort : string option = None) ()
     : value =
-  Io_lwt.Db.with_transaction store (function
+  Io_db.Db.with_transaction store (function
     | None -> (VList [])
     | Some conn ->
         let user = session_user () in
@@ -871,7 +871,7 @@ let find_row
     ?(latest : bool = false)
     (store : Store.t) ~(type_name : string) ~(field : string) ~(value : string)
     : value =
-  Io_lwt.Db.with_transaction store (function
+  Io_db.Db.with_transaction store (function
     | None -> VNil
     | Some conn ->
         let user = session_user () in
@@ -913,7 +913,7 @@ let find_rows
     ~(filters : (string * string) list) ?(limit : int = 500)
     ?(sort : string option = None) ()
     : value =
-  Io_lwt.Db.with_transaction store (function
+  Io_db.Db.with_transaction store (function
     | None -> (VList [])
     | Some conn ->
         if filters = [] then list store ~type_name ~limit ()
@@ -965,7 +965,7 @@ let list_with_author
     (store : Store.t) ~(type_name : string) ?(limit : int = 100)
     ?(sort : string option = None) ()
     : value =
-  Io_lwt.Db.with_transaction store (function
+  Io_db.Db.with_transaction store (function
     | None -> (VList [])
     | Some conn ->
         let user = session_user () in
@@ -1009,7 +1009,7 @@ let find_rows_with_author
     ~(filters : (string * string) list) ?(limit : int = 500)
     ?(sort : string option = None) ()
     : value =
-  Io_lwt.Db.with_transaction store (function
+  Io_db.Db.with_transaction store (function
     | None -> (VList [])
     | Some conn ->
         if filters = [] then list_with_author store ~type_name ~limit ()
@@ -1057,7 +1057,7 @@ let find_rows_with_author
 (** (find-random 'type) -> (id . fields) pair | VNil.
     One random row of the given type (for bible/random etc.). *)
 let find_random (store : Store.t) ~(type_name : string) : value =
-  Io_lwt.Db.with_transaction store (function
+  Io_db.Db.with_transaction store (function
     | None -> VNil
     | Some conn ->
         let user = session_user () in
@@ -1086,7 +1086,7 @@ let find_text
     (store : Store.t) ~(type_name : string) ~(field : string)
     ~(needle : string) ?(limit : int = 50) ()
     : value =
-  Io_lwt.Db.with_transaction store (function
+  Io_db.Db.with_transaction store (function
     | None -> (VList [])
     | Some conn ->
         let user = session_user () in
@@ -1128,7 +1128,7 @@ type row_record = {
 }
 
 let count_by_type (store : Store.t) ~(type_name : string) : int =
-  match Io_lwt.Db.current_conn store with
+  match Io_db.Db.current_conn store with
   | None -> 0
   | Some conn ->
       let user = session_user () in
@@ -1153,7 +1153,7 @@ let count_by_type (store : Store.t) ~(type_name : string) : int =
    [fn], newest first — the /binding "last run" widget. Plain table, no
    user scoping (server-wide perf telemetry; author is recorded). *)
 let function_stat_last (store : Store.t) ~(fn : string) : string option =
-  match Io_lwt.Db.current_conn store with
+  match Io_db.Db.current_conn store with
   | None -> None
   | Some conn ->
       let sql =
@@ -1175,7 +1175,7 @@ let function_stat_last (store : Store.t) ~(fn : string) : string option =
    sequential-scan COUNT per type (~40 of them, each with the ltree
    visibility predicates); one GROUP BY scan feeds the whole table. *)
 let counts_by_type (store : Store.t) : (string * int) list =
-  match Io_lwt.Db.current_conn store with
+  match Io_db.Db.current_conn store with
   | None -> []
  | Some conn ->
       let user = session_user () in
@@ -1200,7 +1200,7 @@ let counts_by_type (store : Store.t) : (string * int) list =
         rows
 
 let list_data_type_names (store : Store.t) : string list =
-  match Io_lwt.Db.current_conn store with
+  match Io_db.Db.current_conn store with
   | None -> []
   | Some conn ->
       let user = session_user () in
@@ -1225,7 +1225,7 @@ let list_page
     (store : Store.t) ~(type_name : string)
     ?(limit : int = 50) ?(offset : int = 0) ()
     : row_record list =
-  match Io_lwt.Db.current_conn store with
+  match Io_db.Db.current_conn store with
   | None -> []
   | Some conn ->
       let lim = max 1 (min limit 200) in
@@ -1267,7 +1267,7 @@ let list_page
 let get_row
     (store : Store.t) ~(type_name : string) ~(id : string)
     : row_record option =
-  match Io_lwt.Db.current_conn store with
+  match Io_db.Db.current_conn store with
   | None -> None
   | Some conn ->
       let user = session_user () in
@@ -1306,7 +1306,7 @@ let get_row
     tree_datum_path does (seed -> shared; else user). *)
 let node_path (store : Store.t) ~(type_name : string) ~(id : string) : value =
   let user = session_user () in
-  (match Io_lwt.Db.current_conn store with
+  (match Io_db.Db.current_conn store with
    | Some conn ->
        (match space_of_type conn ~type_name with
         | Some sp ->
@@ -1486,7 +1486,7 @@ let replication_unit (store : Store.t) () : value =
   let bid = Store.current_branch_id store in
   let chain = Store.branch_chain store ~branch_id:bid in
   let count prefix =
-    match Io_lwt.Db.current_conn store with
+    match Io_db.Db.current_conn store with
     | None -> 0
     | Some conn ->
         List.length (Tree_store.list_subtree conn ~prefix ~limit:100000 ())
@@ -1934,7 +1934,7 @@ let datum_move_type_reject (store : Store.t) ~(old_path : string)
     ~(new_path : string) : string option =
   match datum_path_type old_path, datum_path_type new_path with
   | Some old_ty, Some new_ty when old_ty <> new_ty ->
-      (match Io_lwt.Db.current_conn store with
+      (match Io_db.Db.current_conn store with
        | None -> None
        | Some conn ->
            (match Tree_store.get_by_path conn ~path:old_path with

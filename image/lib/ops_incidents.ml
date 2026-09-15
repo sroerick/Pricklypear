@@ -87,7 +87,7 @@ let file_todo_and_note (session : Session_types.t) ~(title : string)
   in
   (try
       let v =
-        Control_rim.run_lwt ~prims:session.eval_state.prims (fun () ->
+        Control_rim.run ~prims:session.eval_state.prims (fun () ->
             Pricklypear_lisp.Eval.eval_string_direct
               ~prims:Pricklypear_lisp.Eval.empty_prims session.eval_state.env
               ~budget:(Pricklypear_lisp.Eval.make_budget ()) expr)
@@ -259,7 +259,7 @@ let list_open_incidents (store : Store.t) : Yojson.Safe.t =
   (`List items)
 
 let count_logins (store : Store.t) : (int * int) =
-  match Io_lwt.Db.current_conn store with
+  match Io_db.Db.current_conn store with
   | None -> (0, 0)
   | Some conn ->
       let day = Ops_stats.today_str () in

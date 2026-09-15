@@ -532,4 +532,5 @@ ksh scripts/check_io_rim.sh
 | 2026-07-18 | **H1.5** eval_eff special-form parity (cond/qq/defmacro/macroexpand); local image smoke under `PP_EVAL_CONTROL=eff` (whoami/+ /cond/branch); `dev.sh` forwards flag. |
 | 2026-07-18 | **H1.3/H1.4** `__with_transaction__` + `with-public-write` re-enter via `apply_eff`/`Control.run_lwt` when `PP_EVAL_CONTROL=eff`; session `eval_one`/`eval_form` use auto mode; budget tests on both paths. |
 
+| 2026-09-15 | **Phase 5 / H3.5 exit** — remaining Lwt deleted: `Lwt_eio` bridge, TCP REPL (→ direct `Eio.Net`), `Lwt_process` subprocess prims (→ `Eio.Process` + `Timeout` via `Io_eio.sh_capture`), `Io_lwt` renamed `Io_db`, `control_rim.run_lwt` alias, dead `PP_IO` parser + `lineedit.ml`; `lwt`/`lwt_eio`/`pgx_lwt`/`httpun-lwt-unix` deps dropped. Build+tests+dev.sh smoke green; see eio-floor-checklist.md Phase 5. |
 When a horizon unit ships, add a row here (or point at commit).

@@ -92,7 +92,7 @@ let last4_of_key (key : string) : string =
 let env_or name dft =
   match Sys.getenv_opt name with Some s -> s | None -> dft
 
-let pg_conn (store : Store.t) : Io_lwt.Db.conn option = Io_lwt.Db.current_conn store
+let pg_conn (store : Store.t) : Io_db.Db.conn option = Io_db.Db.current_conn store
 
 let log_auth (store : Store.t) ?user_id ~kind ~success ?source_ip ()
   : unit =

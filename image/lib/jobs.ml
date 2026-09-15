@@ -87,8 +87,8 @@ let row_to_job row : job option =
     | _ -> None
   with _ -> None
 
-let pg_conn (store : Store.t) : Io_lwt.Db.conn option =
-  Io_lwt.Db.current_conn store
+let pg_conn (store : Store.t) : Io_db.Db.conn option =
+  Io_db.Db.current_conn store
 
 (* ---- value serialization ---- *)
 

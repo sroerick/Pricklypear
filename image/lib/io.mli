@@ -1,9 +1,9 @@
-(** I/O port for the image (H2/H3).
+(** I/O port for the image (H2/H3 — Eio floor exited, Phase 5).
 
-    Domain code depends on this module type rather than [Lwt]/[pgx_lwt]
-    directly. After the Eio-floor flip, APIs are direct-style (plain ['a]).
-    [Io_lwt.Db] remains the name domain code calls; it delegates to
-    [Store_db] (dual backend). See docs/runtime-effects-transition.md. *)
+    Domain code depends on this module type, not on [pgx] directly.
+    APIs are direct-style (plain ['a]). [Io_db.Db] is the name domain
+    code calls; it delegates to [Store_db] (the single Eio backend).
+    See docs/runtime-effects-transition.md. *)
 
 module type DB = sig
   (** Opaque connection handle. *)

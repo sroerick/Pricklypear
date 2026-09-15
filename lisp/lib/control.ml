@@ -6,7 +6,7 @@
     See docs/runtime-effects-transition.md Appendix D.
 
     H1.7: this module is Lwt-free. The image rim provides
-    [Control_rim.run_lwt] to service [Prim_call] with Lwt prim tables. *)
+    [Control_rim.run] to service [Prim_call] with Lwt prim tables. *)
 
 open Ast
 module Effect = Stdlib.Effect
@@ -35,13 +35,13 @@ let perform_prim (name : string) (args : value list) : value =
              (Interp_error (Prim_error (name, "unregistered primitive", "prim_error"))))
   | None -> Effect.perform (Prim_call (name, args))
 
-type control_mode = Lwt_mode | Eff_mode
+type control_mode = Eff_mode
 
 (** Parse a control-mode string into a [control_mode]; unknown strings
-    default to [Eff_mode]. *)
+    and the legacy ["lwt"|"promise"] (pre-H1.7 escape) all parse to
+    [Eff_mode] — the only mode since H1.7 deleted the monadic path. *)
 let control_mode_of_string = function
-  | "lwt" | "promise" -> Lwt_mode
-  | "eff" | "effect" | "effects" | _ -> Eff_mode
+  | _ -> Eff_mode
 
 (** [PP_EVAL_CONTROL=lwt|eff] — default **eff** (H1.6).
     [lwt] is a legacy escape; after H1.7 the monadic eval path is gone and

@@ -95,7 +95,7 @@ let prepare () : Session.t * int * int =
   (session, http_port, repl_port)
 
 (** Eio path: prepare + fork REPL fiber + Httpun_eio accept loop.
-    Call under Eio_main + Io_eio.with_ctx + Lwt_eio.with_event_loop. *)
+    Call under Eio_main + Io_eio.with_ctx. *)
 (** Jobs runner loop — lives here (not in Jobs.ml) to avoid a dependency
     cycle: Jobs (DB ops) must not depend on Session, which depends on
     Prims_db, which depends on Jobs. boot.ml can depend on both. *)
@@ -246,7 +246,7 @@ let jobs_runner_loop ~(session : Session.t) : unit =
            with _ -> ()));
        loop ()
      | None ->
-       Lwt_eio.run_lwt (fun () -> Lwt_unix.sleep 1.0);
+       Io_eio.sleep 1.0;
        loop ())
   in
   Printf.eprintf "[jobs] runner fiber started (runner_id=%s)\n%!" Jobs.runner_id;
@@ -255,11 +255,10 @@ let jobs_runner_loop ~(session : Session.t) : unit =
 
 let start_eio ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t) : unit =
   let session, http_port, repl_port = prepare () in
-  (* REPL still uses Lwt_unix sockets under Lwt_eio. *)
+  (* REPL serves directly on Eio (Eio.Net), no runtime bridge. *)
   Eio.Fiber.fork ~sw (fun () ->
       try
-        Lwt_eio.run_lwt (fun () ->
-            Repl_endpoint.serve ~session ~port:repl_port ())
+        Repl_endpoint.serve ~session ~port:repl_port ()
       with exn ->
         Printf.eprintf "[boot] REPL fiber exited: %s\n%!"
           (Printexc.to_string exn));

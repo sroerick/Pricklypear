@@ -6,7 +6,7 @@
     needs manifest + store); instead we build the table directly.
 
     H1.7: lisp eval is direct-style; pure image prims still register as
-    Lwt via [register_sync], serviced by [Control_rim.run_lwt]. *)
+    Lwt via [register_sync], serviced by [Control_rim.run]. *)
 open Pricklypear_lisp.Ast
 
 (* Build a prim_table + an env with all prims auto-defined as VPrim,

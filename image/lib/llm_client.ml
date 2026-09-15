@@ -91,7 +91,7 @@ let list_models ?(creds : creds option = None) () : string list =
     in
     (try
        let stdout =
-         Lwt_eio.run_lwt (fun () -> Lwt_process.pread ~timeout:25. (Lwt_process.shell cmd))
+         Io_eio.sh_capture ~timeout_s:25.0 cmd
        in
        match Yojson.Safe.from_string stdout with
        | `Assoc kv ->
@@ -165,7 +165,7 @@ let call ?(temperature = 0.2) ?(max_tokens = 4096)
     Printf.eprintf "[llm] POST %s model=%s\n" url (active_model ());
     (try
       let stdout =
-          Lwt_eio.run_lwt (fun () -> Lwt_process.pread ~timeout:200. (Lwt_process.shell cmd))
+          Io_eio.sh_capture ~timeout_s:200.0 cmd
         in
         (try Sys.remove tmp with _ -> ());
         if String.trim stdout = "" then
@@ -303,14 +303,19 @@ let agent_chat
     Printf.eprintf "[llm] STREAM %s model=%s\n" url (active_model ());
     let buf = Buffer.create 4096 in
     (try
-      let proc = Lwt_process.open_process_in (Lwt_process.shell cmd) in
+      let ctx = Io_eio.Ctx.get () in
+      (* Pipe curl's (shell-merged stderr: "2>&1") stdout to us line-wise. *)
+      let rd, wr = Eio.Process.pipe ~sw:ctx.sw ctx.process in
+      let proc =
+        Eio.Process.spawn ~sw:ctx.sw ctx.process ~stdout:wr
+          [ "/bin/sh"; "-c"; cmd ]
+      in
+      Eio.Resource.close wr;
+      let br = Eio.Buf_read.of_flow ~max_size:1_048_576 rd in
         let rec loop () =
-          let line_opt =
-            Lwt_eio.run_lwt (fun () -> Lwt_io.read_line_opt proc#stdout)
-          in
-          match line_opt with
-          | None ->
-              let st = Lwt_eio.run_lwt (fun () -> proc#close) in
+          match Eio.Buf_read.line br with
+          | exception End_of_file ->
+              let st = Eio.Process.await proc in
               (try Sys.remove tmp with _ -> ());
               ignore st;
               let text = Buffer.contents buf in
@@ -321,7 +326,7 @@ let agent_chat
                 on_event Done;
                 (Ok text)
               end
-          | Some line ->
+          | line ->
               let line = String.trim line in
               if line = "" then loop ()
               else if String.length line >= 5
@@ -329,7 +334,7 @@ let agent_chat
                           || String.sub line 0 5 = "curl:") then begin
                 (try Sys.remove tmp with _ -> ());
                 on_event (Fail line);
-                let _ = proc#close in
+                let _ = Eio.Process.await proc in
                 (Error line)
               end
               else
@@ -482,7 +487,7 @@ let chat_turn
       url (active_model ()) (List.length tools) (List.length messages);
     (try
       let stdout =
-          Lwt_eio.run_lwt (fun () -> Lwt_process.pread ~timeout:200. (Lwt_process.shell cmd))
+          Io_eio.sh_capture ~timeout_s:200.0 cmd
         in
         (try Sys.remove tmp with _ -> ());
         if String.trim stdout = "" then

@@ -64,7 +64,7 @@
         |   +-- Httpun_eio on PP_HTTP_PORT (htmx UI,
         |   |   /api/eval, /repl, user routes)
         |   +-- optional line-protocol REPL on
-        |   |   PP_REPL_PORT (operator only; Lwt_eio bridge)
+        |   |   PP_REPL_PORT (operator only; direct Eio.Net)
         |   +-- Io_eio.Pg to Postgres (function_defs,
         |       data_rows, branches, auth tables)
         |
@@ -107,7 +107,7 @@
      image/lib/primitives.ml
      image/lib/store_db.ml
      image/lib/io.mli
-     image/lib/io_lwt.ml
+     image/lib/io_db.ml
      image/lib/io_eio.ml
      image/lib/crud.ml
      image/lib/tree_store.ml
@@ -117,7 +117,7 @@
    (verify
      (build "dune build && dune runtest")
      (test "image/test/io_eio_test.ml")
-     (smoke "image serves /health and a CRUD roundtrip under PP_IO=eio")
+     (smoke "image serves /health and a CRUD roundtrip (Eio floor: no Lwt anywhere)")
      (smoke "(with-transaction (lambda () (create ...))) commits; select-for-update inside body sees the lock, on the default backend"))
    (details
     (doc (|
@@ -135,8 +135,9 @@
            never perform it; eval's prim dispatch is the only
            performer.
         C. I/O RUNTIME — who schedules sockets/DB/fibers.
-           Lwt today; Eio is the floor we are moving to.
-           The power company; chosen last, replaceable first.
+           Eio, period (eio-floor Phase 5: the Lwt rim and its
+           PP_IO rollback are deleted). The power company;
+           chosen, replaceable if a better one shows up.
 
       This subsection is the book authority for layers B and C.
       The phase plan and runbook live in
@@ -178,10 +179,10 @@
           prims_net / prims_media / prims_graph / prims_db;
           session.ml keeps t, rehydrate, checkout, eval,
           seed_stdlib, and register_session_control_prims.
-        - Residual Lwt is rim-only: optional TCP REPL and
-          curl-backed llm/http-get/sleep via Lwt_eio bridges.
-          A later pass can replace those without touching
-          domain code.
+        - No Lwt anywhere: the TCP REPL serves on Eio.Net
+           (direct-style), and llm/http-get/sleep prims run
+           subprocesses through Eio.Process (Io_eio.sh_capture),
+           all without touching domain code.
 
       DYNAMIC TRANSACTION SCOPE (preserved):
 
@@ -197,7 +198,7 @@
       RIM LINT:
 
         - scripts/check_io_rim.sh stays green: only store_db /
-          io_eio (and legacy io_lwt name) call pgx execute.
+          io_db (the domain port) and io_eio call pgx execute.
 
       HARD INVARIANTS (every horizon, restated):
 

@@ -1,7 +1,7 @@
 (test
  (name primitives_test)
  (modules primitives_test)
- (libraries pricklypear-image pricklypear-lisp alcotest lwt lwt.unix))
+ (libraries pricklypear-image pricklypear-lisp alcotest))
 
 (test
  (name example_eval_test)
@@ -16,12 +16,12 @@
 (test
  (name agent_tools_test)
  (modules agent_tools_test)
- (libraries pricklypear-image pricklypear-lisp alcotest lwt lwt.unix))
+ (libraries pricklypear-image pricklypear-lisp alcotest))
 
 (test
  (name http_get_test)
  (modules http_get_test)
- (libraries pricklypear-image pricklypear-lisp alcotest lwt lwt.unix unix))
+ (libraries pricklypear-image pricklypear-lisp alcotest unix))
 
 
 (test
@@ -62,7 +62,7 @@
 (test
  (name ai_store_test)
  (modules ai_store_test)
- (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson))
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson))
 
 (test
  (name ops_incidents_test)
@@ -87,87 +87,87 @@
 (test
  (name history_test)
  (modules history_test)
- (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx))
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx))
 
 (test
  (name merge_promote_test)
  (modules merge_promote_test)
- (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))
 
 (test
  (name branch_generation_test)
  (modules branch_generation_test)
- (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))
 
 (test
  (name diff_branches_test)
  (modules diff_branches_test)
- (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))
 
 (test
  (name tree_lens_test)
  (modules tree_lens_test)
- (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))
 
 (test
  (name local_first_prims_test)
  (modules local_first_prims_test)
- (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))
 
 (test
  (name sync_test)
  (modules sync_test)
- (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))
 
 (test
  (name sync_db_test)
  (modules sync_db_test)
- (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))
 
 (test
  (name data_spaces_test)
  (modules data_spaces_test)
- (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))
 
 (test
  (name admin_rls_test)
  (modules admin_rls_test)
- (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))
 
 (test
  (name tree_datum_test)
  (modules tree_datum_test)
- (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))
 
 (test
  (name tree_version_shadow_test)
  (modules tree_version_shadow_test)
- (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))
 
 (test
  (name tree_retention_test)
  (modules tree_retention_test)
- (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))
 
 (test
  (name reads_as_of_gen_test)
  (modules reads_as_of_gen_test)
- (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))
 
 (test
  (name code_history_tree_test)
  (modules code_history_tree_test)
- (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))
 
 (test
  (name code_restore_test)
  (modules code_restore_test)
- (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))
 
 (test
  (name auth_store_test)
  (modules auth_store_test)
- (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio pgx unix))
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main pgx unix))
 
 (test
  (name envelope_test)
@@ -177,7 +177,7 @@
 (test
  (name jobs_test)
  (modules jobs_test)
- (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))
 
 (test
  (name tree_path_prims_test)
@@ -187,17 +187,17 @@
 (test
  (name tree_sibling_order_test)
  (modules tree_sibling_order_test)
- (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))
 
 (test
  (name tree_edges_test)
  (modules tree_edges_test)
- (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))
 
 (test
  (name branch_status_test)
  (modules branch_status_test)
- (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt_eio yojson pgx unix))
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main yojson pgx unix))
 
 (test
  (name auth_throttle_test)
@@ -237,7 +237,7 @@
 (test
  (name rls_floor_test)
  (modules rls_floor_test)
- (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt lwt.unix))
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main))
 
 (test
  (name loader_test)
@@ -257,7 +257,7 @@
 (test
  (name store_reraise_test)
  (modules store_reraise_test)
- (libraries pricklypear-image pricklypear-lisp alcotest eio_main lwt lwt.unix))
+ (libraries pricklypear-image pricklypear-lisp alcotest eio_main))
 
 (test
  (name session_split_test)
@@ -287,4 +287,4 @@
 (test
  (name prim_gates_test)
  (modules prim_gates_test)
- (libraries pricklypear-image pricklypear-common pricklypear-lisp alcotest eio_main lwt_eio unix))
+ (libraries pricklypear-image pricklypear-common pricklypear-lisp alcotest eio_main unix))
