@@ -50,15 +50,15 @@ check() { # name, condition(0/1)
 # checks must not race the CPU (a cold first render after a heavy
 # dune build + runtest run measured >5s once; the /chat POST below
 # keeps its tight timing — THAT one asserts the streaming contract).
-SHELL=$(curl -sS -m 30 "$URL/")
-echo "$SHELL" | grep -q 'id="fs-cascade"'                     ; check "shell has cascade strip" $?
-echo "$SHELL" | grep -q 'id="fs-content"'                     ; check "shell has content strip" $?
-echo "$SHELL" | grep -q 'id="fs-sink"'                        ; check "shell has OOB sink" $?
-echo "$SHELL" | grep -q 'id="fs-railtabs"'                    ; check "shell has rail tabs (trees)" $?
-! echo "$SHELL" | grep -q 'id="fs-launch"'                   ; check "no launcher in the shell" $?
-! echo "$SHELL" | grep -q 'fs-deskbox'                        ; check "no desktop controlbox in the shell" $?
-echo "$SHELL" | grep -q '/assets/htmx.min.js'                 ; check "shell loads htmx" $?
-echo "$SHELL" | grep -q 'fs-entry'                            ; check "cascade lists the agent surfaces" $?
+DOC=$(curl -sS -m 30 "$URL/")
+echo "${DOC}" | grep -q 'id="fs-cascade"'                     ; check "shell has cascade strip" $?
+echo "${DOC}" | grep -q 'id="fs-content"'                     ; check "shell has content strip" $?
+echo "${DOC}" | grep -q 'id="fs-sink"'                        ; check "shell has OOB sink" $?
+echo "${DOC}" | grep -q 'id="fs-railtabs"'                    ; check "shell has rail tabs (trees)" $?
+! echo "${DOC}" | grep -q 'id="fs-launch"'                   ; check "no launcher in the shell" $?
+! echo "${DOC}" | grep -q 'fs-deskbox'                        ; check "no desktop controlbox in the shell" $?
+echo "${DOC}" | grep -q '/assets/htmx.min.js'                 ; check "shell loads htmx" $?
+echo "${DOC}" | grep -q 'fs-entry'                            ; check "cascade lists the agent surfaces" $?
 PAGE=$(curl -sS -m 30 "$URL/chat")
 echo "$PAGE" | grep -q 'hx-post="/chat"'                      ; check "chat page has hx-post /chat form" $?
 echo "$PAGE" | grep -q '/assets/hx-multipart.js'              ; check "chat page loads hx-multipart asset" $?
@@ -100,8 +100,8 @@ curl -sS -m 5 -o /dev/null -w '%{http_code}' "$URL/assets/codemirror.min.js" | g
 curl -sS -m 5 -o /dev/null -w '%{http_code}' "$URL/assets/codemirror.min.css" | grep -q 200 ; check "CM css asset serves" $?
 curl -sS -m 5 -o /dev/null -w '%{http_code}' "$URL/assets/cm/scheme.min.js" | grep -q 200 ; check "CM scheme mode asset serves" $?
 curl -sS -m 5 -o /dev/null -w '%{http_code}' "$URL/assets/pp-cm.js" | grep -q 200            ; check "CM boot script serves" $?
-echo "$SHELL" | grep -q '/assets/codemirror.min.js'            ; check "shell loads CodeMirror" $?
-echo "$SHELL" | grep -q '/assets/pp-cm.js'                     ; check "shell loads pp-cm boot" $?
+echo "${DOC}" | grep -q '/assets/codemirror.min.js'            ; check "shell loads CodeMirror" $?
+echo "${DOC}" | grep -q '/assets/pp-cm.js'                     ; check "shell loads pp-cm boot" $?
 
 # 4c. editor write-back: POST /code/save (fs/write sandbox guard is the
 #     prim's) round-trips, and a traversal attempt is rejected (fs write
