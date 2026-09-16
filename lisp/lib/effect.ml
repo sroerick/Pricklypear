@@ -176,6 +176,7 @@ let pure_prims = [
      soup/* in-memory DOM ops, impact session-memory queue writes. *)
   "budget-remaining"; "err/shape"; "extract-links"; "render-links";
   "render-tokens"; "prose-tokens"; "status-response"; "sort";
+  "bytes-response";    (* tagged __bytes__ value; no store, no net *)
   "string-split"; "string=?"; "json-part"; "multipart"; "part";
   "soup/parse"; "soup/page-copy"; "soup/select"; "soup/select-one";
   "soup/serialize"; "soup/text"; "soup/attr"; "soup/has-attr";

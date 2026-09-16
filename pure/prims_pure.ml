@@ -115,6 +115,7 @@ let catalog :
   ; ("fsrs-schedule", prim_fsrs_schedule)
   ; ("dict-keys", prim_dict_keys)
   ; ("render-html", prim_render_html)
+  ; ("bytes-response", Prims_html.prim_bytes_response)
   ; ("status-response", prim_status_response)
   ; ("part", prim_part); ("json-part", prim_json_part)
   ; ("multipart", prim_multipart)

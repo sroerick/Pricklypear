@@ -5,6 +5,56 @@
 open Pricklypear_lisp.Ast
 open Prims_common
 
+let bytes_sentinel = "__bytes__:"
+
+
+(* (bytes-response content-type max-age body) -> VStr tagged for a
+   non-HTML byte response: __bytes__:<ctype>\n<max-age>\n<body>.
+   http.ml's respond_handler_value answers it with text_response
+   (real Content-Type + Cache-Control: public, max-age). Needed for
+   the stylesheet face (product-experience.html-builders
+   layout.css-face): the chrome sends x-content-type-options:
+   nosniff, so a text/css sheet had better be served AS text/css
+   or the browser blocks it. max-age is seconds as a string; "0"
+   means re-validate (EMax-Age absent). *)
+let bytes_response ~(content_type : string) ~(max_age : string)
+    ~(body : string) : value =
+  (* Reuse the redirect funnel's header-injection defense: ctype and
+     max_age must not carry CR/LF (body may — it IS the payload). *)
+  if String.contains content_type '\r' || String.contains content_type '\n'
+  then
+    raise
+      (Interp_error
+         (User_error ("bytes-response content-type must not contain CR or LF", "bad-args")))
+  else if String.contains max_age '\r' || String.contains max_age '\n' then
+    raise
+      (Interp_error
+         (User_error ("bytes-response max-age must not contain CR or LF", "bad-args")))
+  else VStr (bytes_sentinel ^ content_type ^ "\n" ^ max_age ^ "\n" ^ body)
+
+let is_bytes (v : value) : (string * string * string) option =
+  match v with
+  | VStr s when String.length s >= String.length bytes_sentinel
+              && String.sub s 0 (String.length bytes_sentinel) = bytes_sentinel
+  ->
+    let rest =
+      String.sub s (String.length bytes_sentinel)
+        (String.length s - String.length bytes_sentinel)
+    in
+    (match String.index_opt rest '\n' with
+     | None -> None
+     | Some i1 ->
+       let ctype = String.sub rest 0 i1 in
+       let rest2 = String.sub rest (i1 + 1) (String.length rest - i1 - 1) in
+       (match String.index_opt rest2 '\n' with
+        | None -> None
+        | Some i2 ->
+          let max_age = String.sub rest2 0 i2 in
+          let body =
+            String.sub rest2 (i2 + 1) (String.length rest2 - i2 - 1)
+          in
+          Some (ctype, max_age, body)))
+  | _ -> None
 
 (* (render-html html-str) -> VStr tagged-for-raw-rendering.
    Marks the returned VStr as raw HTML so http.ml renders it
@@ -55,6 +105,20 @@ let is_redirect (v : value) : string option =
    client-eval OP-SEQ. *)
 let status_response ~(code : int) ~(body : string) : value =
   VStr (status_sentinel ^ string_of_int code ^ "\n" ^ body)
+
+(* (bytes-response content-type max-age body) -> VStr tagged for a
+   non-HTML byte response. Nopales-facing prim wrapper around
+   bytes_response. *)
+let prim_bytes_response args =
+  match args with
+  | [ VStr ctype; VStr max_age; VStr body ] ->
+    bytes_response ~content_type:ctype ~max_age:max_age ~body
+  | _ ->
+    raise
+      (Interp_error
+         (User_error
+            ("bytes-response needs (content-type max-age body) strings",
+             "bad-args")))
 
 (* (status-response code body) -> VStr tagged for non-200 response.
    Nopales-facing prim wrapper around status_response. *)

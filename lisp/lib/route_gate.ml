@@ -82,8 +82,47 @@ let check_public_handler ~(env : Env.env) (handler : string)
            (Effect.EffSet.pp fx)
            (Effect.public_route_allow_pp ()))
   in
-  match Env.lookup env handler with
-  | Some (VLambda (_, body, _)) ->
+  (* Lazy-env model (lisp-interpreter.lazy-env-thunks): package defines
+     bind as VThunk recipes. An UNFORCED lookup is neither VLambda nor
+     VPrim, so it fell through to the deny arm — silently killing every
+     fresh package's (public-route ...) at boot seed (welcome's route
+     rows predate the lazy model, which is why they kept working while
+     new public faces silently stayed private).
+
+     FORCING the thunk (evaluating to its value) is ALSO wrong: the
+     gate runs at boot seed and at publish time, outside any request
+     context, but handler bodies may read fiber-locals (request-param,
+     request-method) — seed-layout's /css/layout.css face tripped this
+     on 2026-12-30. A gate must INFER EFFECTS FROM SOURCE, not run the
+     program. So: read the thunk BODY out of the cell (no execution)
+     and walk it like a lambda body. If the cell is already Forced, the
+     memoized value is a VLambda (its body) or not-a-function (deny);
+     if it was Forced to failure (Failed), deny fail-closed. *)
+  let deny_not_a_function () =
+    Error
+      (Printf.sprintf
+         "public route denied: handler %S is not a defined function"
+         handler)
+  in
+  (* NOT Env.lookup: lookup forces VThunks, and forcing EXECUTES the
+     handler body — under no current_request that raises "no active
+     request" for any request-context prim before we ever see the cell.
+     Raw walk of the public env records only (Env.env fields are plain
+     values in ast.ml). *)
+  let raw_lookup (e : Env.env) (name : string) : value option =
+    let rec go e =
+      match Hashtbl.find_opt e.bindings name with
+      | Some v -> Some v
+      | None ->
+        (match e.parent with
+         | Some p -> go p
+         | None -> None)
+    in
+    go e
+  in
+  match raw_lookup env handler with
+  | None -> deny_not_a_function ()
+  | Some (VLambda (_, body, _)) | Some (VThunk { contents = Unforced { thunk_body = body; _ } }) ->
       (try
          let known_fn =
            Effect.known_fn_of_bindings (env_lambda_bindings env)
@@ -106,10 +145,38 @@ let check_public_handler ~(env : Env.env) (handler : string)
                | User_error (m, _) -> m
                | Arity_mismatch (n, exp, got) ->
                    Printf.sprintf "%s arity %d vs %d" n exp got
-               | _ -> "interp error")))
-  | Some (VPrim name) -> check (Effect.strict_prim_effects name)
-  | Some _ | None ->
-      Error
-        (Printf.sprintf
-           "public route denied: handler %S is not a defined function"
-           handler)
+               | _ -> "interp error"))
+       | e ->
+         Error
+           (Printf.sprintf
+              "public route denied: handler %S gate walk failed: %s"
+              handler (Printexc.to_string e)))
+  | Some (VPrim name) ->
+      (try check (Effect.strict_prim_effects name)
+       with
+       | Effect.Unresolved_name n ->
+         Error
+           (Printf.sprintf
+              "public route denied: handler %S references unresolvable name %S (not a visible function or classified prim)"
+              name n))
+  | Some (VThunk { contents = Forced (VLambda (_, body, _)) }) ->
+      (try
+         let known_fn =
+           Effect.known_fn_of_bindings (env_lambda_bindings env)
+         in
+         check
+           (Effect.infer ~known_fn ~prims:Effect.strict_prim_effects
+              (expand_body env body))
+       with
+       | Effect.Unresolved_name n ->
+           Error
+             (Printf.sprintf
+                "public route denied: handler %S references unresolvable name %S (not a visible function or classified prim)"
+                handler n)
+       | Interp_error _ | _ ->
+         Error
+           (Printf.sprintf
+              "public route denied: handler %S failed the effect walk"
+              handler))
+  | Some (VThunk _) -> deny_not_a_function ()
+  | Some _ -> deny_not_a_function ()

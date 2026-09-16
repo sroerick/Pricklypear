@@ -206,11 +206,26 @@ let html_response (reqd : Httpun.Reqd.t) ?(status = `OK)
   let resp = Httpun.Response.create ~headers status in
   safe_respond_with_string reqd resp s
 
-let text_response (reqd : Httpun.Reqd.t) ?(status = `OK) ~content_type (s : string) : unit =
+let text_response (reqd : Httpun.Reqd.t) ?(status = `OK) ~content_type
+    ?(cache : int option) (s : string) : unit =
+  (* Optional public caching (product-experience.html-builders
+     layout.css-face): the stylesheet face passes the max-age seconds
+     from the bytes-response sentinel. max_age > 0 -> long-lived
+     immutable entry; 0 (or absent) -> no Cache-Control header, the
+     pre-existing behavior everywhere else. *)
+  let cache_headers =
+    match cache with
+    | Some secs when secs > 0 ->
+      [ ("cache-control",
+         "public, max-age=" ^ string_of_int secs ^ ", immutable") ]
+    | Some _ -> [ ("cache-control", "no-cache") ]
+    | None -> []
+  in
   let headers =
     Httpun.Headers.of_list
       ([("content-type", content_type);
         ("content-length", string_of_int (String.length s))]
+       @ cache_headers
        @ Timing.timing_header ()
        @ security_headers ())
   in
@@ -1633,6 +1648,14 @@ let respond_handler_value
     | Some ctx -> Request_context.manifest ctx
     | None -> Session.manifest session
   in
+  match Primitives.is_bytes value with
+  | Some (ctype, max_age, body) ->
+      (* Handler returned a non-HTML byte response, e.g. the stylesheet
+         face (product-experience.html-builders layout.css-face). Serve
+         the real Content-Type; Cache-Control comes from the max-age of
+         the sentinel ("0" -> no-cache revalidation). *)
+      text_response reqd ~content_type:ctype ?cache:(int_of_string_opt max_age) body
+  | None ->
   match Primitives.is_redirect value with
   | Some loc -> redirect_response reqd loc
   | None ->
