@@ -27,6 +27,13 @@ rm -rf "$STAGE"
 log "opam env (poohstack)"
 eval "$(opam env --switch=poohstack --set-switch)"
 
+# OpenBSD cc/ld does not search /usr/local/lib for -l by default. The
+# argon2/ctypes-foreign cmxa archives embed bare -cclib -largon2/-lffi
+# and rely on the environment. Recent releases linked only via dune
+# shared-cache hits; a fresh link fails with "unable to find library
+# -largon2/-lffi". Set LIBRARY_PATH so libargon2.a / libffi.a resolve.
+export LIBRARY_PATH="/usr/local/lib${LIBRARY_PATH:+:${LIBRARY_PATH}}"
+
 log "dune build"
 dune build image/bin/main.exe
 
