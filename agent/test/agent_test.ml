@@ -890,8 +890,10 @@ let test_sessions_roundtrip ~rt () =
        Unix.putenv "AGENT_SESSIONS_DIR" dir;
        let sess : Sessions.handle option ref = ref None in
        let history : Provider.message list ref = ref [] in
-       sess := Some (Sessions.new_session ~model:"test-model");
-       let on_msg = Sessions.on_msg sess in
+       (* lazy trigger: NO eager session; the FIRST on_msg creates it *)
+       let on_msg = Sessions.on_msg ~create:true ~model:(fun () -> "test-model") sess in
+       Alcotest.(check int) "lazy: empty store before first msg" 0
+         (try Sys.readdir (Sessions.root ()) |> Array.length with _ -> 0);
        let user = { Provider.role = "user"; content = `String "first prompt";
                     tool_call_id = None; tool_calls = None } in
        let asst =
@@ -913,6 +915,8 @@ let test_sessions_roundtrip ~rt () =
            tool_call_id = Some "t1"; tool_calls = None }
        in
        List.iter on_msg [ user; asst; tool ];
+       Alcotest.(check bool) "lazy: first msg CREATED the session" true
+         (match !sess with Some _ -> true | None -> false);
        Alcotest.(check int) "count tracked" 3 (match !sess with Some h -> h.Sessions.count | None -> -1);
        (* listing: one entry, correct preview + count *)
        (match Sessions.entries () with
@@ -939,7 +943,7 @@ let test_sessions_roundtrip ~rt () =
             (* appending CONTINUES the resumed file (the prim re-points
                sess; mirror that here) *)
             sess := Some h;
-            let on_msg2 = Sessions.on_msg sess in
+            let on_msg2 = Sessions.on_msg ~create:true ~model:(fun () -> "test-model") sess in
             on_msg2 { Provider.role = "user"; content = `String "after resume";
                       tool_call_id = None; tool_calls = None };
             Alcotest.(check int) "count continued" 4 h.Sessions.count

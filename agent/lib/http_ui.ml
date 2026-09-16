@@ -95,6 +95,14 @@ let serve_asset (reqd : Httpun.Reqd.t) (name : string) : unit =
       ("htmx.min.js", Assets.htmx_min, "application/javascript; charset=utf-8");
       ("htmx-2-compat.min.js", Assets.htmx_2_compat, "application/javascript; charset=utf-8");
       ("hx-multipart.js", Assets.hx_multipart, "application/javascript; charset=utf-8");
+      (* CodeMirror baked for the /code file arm (BORGE-1789581611) — same
+         assets the habitat's public /code face serves from disk. *)
+      ("codemirror.min.js", Assets.codemirror_min, "application/javascript; charset=utf-8");
+      ("codemirror.min.css", Assets.codemirror_css, "text/css; charset=utf-8");
+      ("cm/mllike.min.js", Assets.cm_mllike, "application/javascript; charset=utf-8");
+      ("cm/markdown.min.js", Assets.cm_markdown, "application/javascript; charset=utf-8");
+      ("cm/scheme.min.js", Assets.cm_scheme, "application/javascript; charset=utf-8");
+      ("pp-cm.js", Assets.pp_cm, "application/javascript; charset=utf-8");
     ]
     name
 
@@ -194,21 +202,27 @@ let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
     ?(persist_sessions = true)
     ?(shutdown : unit Eio.Promise.t option) (print : string -> unit) : unit =
 
-  (* sessions-persist: boot a fresh transcript for this process run
-     (disabled for mock providers so tests/smokes never write the
-     store). A chat turn appends user/assistant/tool messages via
-     [on_msg] as the loop produces them. *)
+  (* sessions-persist: NO transcript at boot. The sink creates the
+     session LAZILY on the first appended message (the first user
+     prompt) — page opens and harness restarts that never send a
+     prompt leave nothing under .agent/sessions/ (the lazy [create]
+     trigger lives in Sessions.on_msg). Disabled for mock providers so
+     tests/smokes never write the store. A chat turn appends
+     user/assistant/tool messages via [on_msg] as the loop produces
+     them. *)
   let history = ref [] in
   let sess = ref None in
-  if persist_sessions then
-    sess := Some (Sessions.new_session ~model:cfg.Provider.model);
-  let on_msg = Sessions.on_msg sess in
+  let cfg_ref = ref cfg in
+  let on_msg =
+    Sessions.on_msg ~create:persist_sessions
+      ~model:(fun () -> (!cfg_ref).Provider.model) sess
+  in
   let st =
     {
       history;
       complete;
       rt;
-      cfg = ref cfg;
+      cfg = cfg_ref;
       models = ref [];
       turn_mutex = Eio.Mutex.create ();
       sess;

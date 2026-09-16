@@ -224,16 +224,18 @@ let () =
         | None -> Provider.Openai.complete
       in
       let history : Provider.message list ref = ref [] in
-      (* sessions-persist: interactive + serve runs get a fresh
-         transcript in .agent/sessions/; pipe/mock runs stay store-
-         silent (no accidental test/smoke litter, no one-shot noise).
-         The sink ref is shared with the session prims so /new +
-         /resume rotate where the next turn streams without re-wiring. *)
+      (* sessions-persist: interactive + serve runs get a transcript ON
+         THE FIRST PROMPT (lazy [create] in the sink) — plain boots /
+         page opens never write the store header-first; pipe/mock runs
+         stay store-silent (no accidental test/smoke litter, no
+         one-shot noise) via [create:false]. The sink ref is shared
+         with the session prims so /new + /resume rotate where the
+         next turn streams without re-wiring. *)
       let persist = Option.is_none !mock_script && not pipe_mode in
       let sess : Sessions.handle option ref = ref None in
-      if persist then
-        sess := Some (Sessions.new_session ~model:cfg_model);
-      let on_msg = Sessions.on_msg sess in
+      let on_msg =
+        Sessions.on_msg ~create:persist ~model:(fun () -> cfg_model) sess
+      in
       (* Run one full agent turn (model call -> tool calls -> final
          reply) for the given prompt, streaming events via print_event.
          Returns Ok () / Error msg. Exit status is derived by callers. *)

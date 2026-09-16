@@ -184,9 +184,29 @@ let append_msg (h : handle) (m : Provider.message) : unit =
 
 (** A persistence SINK for the loop: appends to whatever session handle
     is CURRENT (ref'd, so /new rotation mid-run re-points the stream
-    without changing the sink closure). *)
-let on_msg (sess : handle option ref) : Provider.message -> unit =
- fun m -> (match !sess with Some h -> append_msg h m | None -> ())
+    without changing the sink closure).
+
+    LAZY TRIGGER (2026-09-16): with [create:true] the sink CREATES the
+    first session on the first appended message — the first user
+    prompt — instead of the host pre-creating one at boot. Boots,
+    page opens, and harness restarts that never send a prompt leave
+    NO transcript (no header-only litter in .agent/sessions/).
+    [create:false] appends only when a session already exists
+    (/resume, explicit /new) and stays store-silent otherwise —
+    mock/pipe runs must never write the store. *)
+let on_msg ?(create = false) ~(model : unit -> string)
+    (sess : handle option ref) : Provider.message -> unit =
+ fun m ->
+  (match !sess with
+   | Some h -> Some h
+   | None ->
+       if create then begin
+         let h = new_session ~model:(model ()) in
+         sess := Some h;
+         Some h
+       end
+       else None)
+  |> Option.iter (fun h -> append_msg h m)
 
 (** Register an env-independent sink ref + history in one call; hosts
     pass the same refs everywhere. *)
