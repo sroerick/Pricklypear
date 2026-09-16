@@ -9,15 +9,22 @@
  * real mutations — geometry probes measure rects, this one measures
  * truths. Falsifiable versions of the window-controlbox spec smokes:
  *
- *   I1  a visible FOCUSED pane always exists while panes do — in the MAIN
- *       window (the lift, region=main) or in the rail (region=rail)
+ *   I1  a visible FOCUSED pane always exists while panes do — a strip
+ *       column on stage (region=main) or in the rail (region=rail)
  *   I2  clicking a shelved app's name UNSHELVES it (no 0x0 focused pane)
  *   I3  open/cascade mutations refresh the windows rail (the windows-tree
  *       OOB rides every mutation response)
  *   D   sidebar/main dichotomy (filmstrip.borg sidebar-main-dichotomy):
  *       cascade column 0 is all route leaves; no launcher, no desktop
- *       controlbox, no pane-tag strip in the col rail; unfocused main
- *       panes render nowhere; the axis toggle lives on the rail tabs row
+ *       controlbox, no pane-tag strip in the col rail; the axis toggle
+ *       lives on the rail tabs row
+ *  S1..S4 (main-strip-v5): the main region IS the niri strip — live
+ *       main panes of the current desktop render SIMULTANEOUSLY as
+ *       columns of one overflow row; focus is on-stage with neighbors
+ *       peeking (no lift, no position:fixed); the one-up verb stages a
+ *       pane alone (workspace field, round-trips); a region flip MOVES
+ *       the section between #fs-content and #fs-rail via the surface
+ *       OOB; close heals to the adjacent column; zero JS.
  *   I5  every <a> inside a fragment pane body is pane-local
  *   I6  a /code dir walk happens INSIDE the pane (same window throughout)
  *   I7  fresh panes stamp the operator's current desktop
@@ -163,6 +170,20 @@ const SNAPSHOT = `(()=>{
 })()`;
 
 
+// Wait for the shell DOM after a navigate (boot renders are lazy-budgeted;
+// a fixed 1200/1500ms raced under heavier boot renders).
+async function waitShell(ms = 10000) {
+  const t0 = Date.now();
+  while (Date.now() - t0 < ms) {
+    try {
+      if (await ev(`document.querySelectorAll('.fs-pane').length > 0 && !!document.querySelector('#fs-railtabs')`)) return true;
+    } catch (_) {}
+    await sleep(300);
+  }
+  console.log("     DEBUG waitShell: location=" + await ev(`location.href`) + " title=" + await ev(`document.title`) + " bodyLen=" + await ev(`document.body?document.body.innerHTML.length:-1`) + " body=" + await ev(`document.body?document.body.innerHTML.slice(0,120):""`) + " panes=" + await ev(`document.querySelectorAll('.fs-pane').length`));
+  return false;
+}
+
 // ---- v4 TREE HELPERS (rail-trees-v4) ----
 // The winbox/shelf cboxes are gone: the windows TREE (targeting) carries
 // the rows lazily under desk/<n> and shelf dirs. Expand via a real
@@ -212,7 +233,8 @@ async function checkI8(tag, expectPinned = true) {
 }
 
 await send("Page.navigate", { url: base + "/" });
-await sleep(1500);
+ok(await waitShell(), "shell appeared after load");
+await sleep(500);
 
 console.log(`# probe_shell_sem @ ${base} (agent cwd ${AGENT_DIR})`);
 
@@ -241,7 +263,8 @@ ok(wsp.content.find((p) => p.id === "p2").state === "live", "I2 unshelve persist
 
 // ---- I3: open a new route via launcher POST, windows rail refreshes ----
 await send("Page.navigate", { url: base + "/" });
-await sleep(1200);
+ok(await waitShell(), "shell appeared after load");
+await sleep(500);
 const openResp = await httpPost(base + "/filmstrip/open", { route: "/sessions" }, true);
 ok(/id="fs-tree-windows-root"/.test(openResp.body), "I3 /filmstrip/open response carries the windows-tree rows OOB (ul innerHTML seam)");
 const s2 = await ev(SNAPSHOT);
@@ -249,12 +272,29 @@ ok(s2.liveCount === 2, "I3 live panes after open", `live=${s2.liveCount}`);
 await ensureNode("desk/0");
 ok((await ev(`[...document.querySelectorAll('#fs-tree-windows li.fs-tr-item .fs-tr-open')].filter(b=>['/chat','/sessions'].includes(b.textContent.trim())).length`)) === 2, "I3 windows tree lists the live panes under desk/0 after the open OOB");
 
+// ---- S: the main region IS the niri strip (main-strip-v5) ----
+ok((await ev(`[...document.querySelectorAll('#fs-content .fs-pane')].filter(p=>(p.getAttribute('data-region')||'main')==='main'&&!p.classList.contains('shelved')&&String(p.getAttribute('data-desktop'))==='0').every(p=>p.getClientRects().length>0)`)), "S1 live main panes of the current desktop render as strip columns", ``);
+ok((await ev(`[...document.querySelectorAll('#fs-content .fs-pane')].filter(p=>(p.getAttribute('data-region')||'main')==='main'&&!p.classList.contains('shelved')&&String(p.getAttribute('data-desktop'))==='0').length`)) >= 2, "S2 more than one reading view on stage at once (the 2026-09-14 review's ask)");
+ok((await ev(`getComputedStyle(document.querySelector('.fs-pane[data-region="main"]')).position`)) !== "fixed", "S3 no lifted pane: no position:fixed main pane (geometry from classes)");
+ok((await ev(`document.querySelectorAll('#fs-surface').length===1 && !!document.querySelector('#fs-surface #fs-content') && !!document.querySelector('#fs-surface #fs-rail')`)), "S4 surface wrapper hosts both containers (the region-move OOB target)");
+
+// ---- v5 one-up: stage a pane alone, verify field + class, unstage ----
+await ev(`htmx.ajax('POST','/filmstrip/single',{values:{id:'p1'},target:'#fs-sink',swap:'innerHTML'})`);
+await sleep(700);
+ok((await ev(`document.querySelector('.fs-pane[data-pane="p1"]').classList.contains('fs-single')`)), "v5 one-up: the staged pane wears fs-single");
+ok((await ev(`[...document.querySelectorAll('#fs-content .fs-pane:not(.fs-single)')].filter(p=>(p.getAttribute('data-region')||'main')==='main'&&!p.classList.contains('shelved')&&String(p.getAttribute('data-desktop'))==='0'&&p.getClientRects().length>0).length`)) === 0, "v5 one-up: staged alone (strip siblings step aside)");
+ok((await ev(`document.querySelector('.fs-pane[data-pane="p1"] header button[data-verb="single"]')`)) !== null, "v5 one-up: the pane head carries the single glyph");
+const wsSingle = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
+ok(wsSingle.content.find((p) => p.id === "p1").single === true, "v5 one-up persisted to workspace row (single)");
+await ev(`htmx.ajax('POST','/filmstrip/single',{values:{id:'p1'},target:'#fs-sink',swap:'innerHTML'})`);
+await sleep(700);
+ok((await ev(`!document.querySelector('.fs-pane[data-pane="p1"]').classList.contains('fs-single')`)), "v5 one-off: unstaging returns the pane to the strip");
+
 // ---- D: sidebar/main dichotomy ----
 const boot = await httpGet(base + "/");
 ok(!/id="fs-launch"/.test(boot.body), "D no launcher in the shell");
 ok(!/fs-deskbox/.test(boot.body), "D no desktop controlbox in the shell");
 ok((await ev(`[...document.querySelectorAll('#fs-cascade .fs-entry')].every(e=>JSON.parse(e.getAttribute('hx-vals')).t.startsWith('/'))`)), "D cascade column 0 entries are all route leaves");
-ok((await ev(`[...document.querySelectorAll('.fs-pane')].filter(p=>!p.classList.contains('focused')&&(p.getAttribute('data-region')||'main')==='main'&&!p.classList.contains('shelved')).every(p=>p.getClientRects().length===0)`)), "D unfocused main panes render nowhere in the col rail");
 ok((await ev(`!!document.querySelector('#fs-railtabs #fs-axis-btn')`)), "D the axis toggle lives on the rail tabs row");
 ok(/id="fs-railtabs"/.test(boot.body) && !/fs-pane .fs-title.*settings.*pin/.test(boot.body.split('#fs-content')[1] || ""), "D no pane-tag strip inventory in the rail (tree is the pane inventory)");
 
@@ -271,7 +311,8 @@ ok(codePane && String(codePane.desktop) === "1", "I7 fresh pane stamps the curre
 fs.mkdirSync(path.join(AGENT_DIR, "deep"), { recursive: true });
 fs.writeFileSync(path.join(AGENT_DIR, "deep", "leaf.txt"), "leaf\n");
 await send("Page.navigate", { url: base + "/" });
-await sleep(1200);
+ok(await waitShell(), "shell appeared after load");
+await sleep(500);
 console.log(await ev(`(()=>{window.__sem2='s'; const pane=document.querySelector('.fs-pane.focused'); const d=pane.querySelector('.fs-body li[data-node="deep"] > details'); if(!d) return 'no deep row: '+[...pane.querySelectorAll('.fs-body li.fs-tr-item')].map(li=>li.getAttribute('data-node')).join(','); if(!d.open) d.querySelector('summary').click(); return 'deep folded open'})()`));
 await sleep(600);
 ok((await ev(`document.querySelector('.fs-pane.focused .fs-body li[data-node="deep"] > details').getAttribute('hx-get')`)) === null, "I6 the small deep dir rendered EAGER (no toggle-once pull -- zero XHRs below the threshold)");
@@ -290,9 +331,13 @@ after_reload_tag: {
   await ev(`htmx.ajax('POST','/filmstrip/pin',{values:{id:'p2'},target:'#fs-sink',swap:'innerHTML'})`);
   await sleep(600);
   const s4 = await ev(SNAPSHOT);
-  ok(s4.pinnedCount === 1 && s4.focusedRegion === "main", "I8 pin leaves the focused pane on the main lift", JSON.stringify({pinned: s4.pinnedCount, region: s4.focusedRegion}));
+  ok(s4.pinnedCount === 1 && s4.focusedRegion === "main", "I8 pin leaves the focused pane on the strip's focused column", JSON.stringify({pinned: s4.pinnedCount, region: s4.focusedRegion}));
   ok(s4.railBodies[0] && s4.railBodies[0].pane === "p2", "I8 the pinned pane is p2", JSON.stringify(s4.railBodies));
   ok((await ev(`document.querySelector('.fs-pane[data-pane="p2"]').getAttribute('data-region')`)) === "rail", "I8 pinned section carries data-region=rail in the DOM");
+  // v5: a region flip MOVES the section between containers — the pane
+  // section must be inside #fs-rail now (the surface OOB did its job).
+  ok((await ev(`!!document.querySelector('.fs-pane[data-pane="p2"]').closest('#fs-rail')`)), "v5 region move: the pinned section physically lives inside #fs-rail");
+  ok((await ev(`!!document.querySelector('.fs-pane[data-pane="p1"]').closest('#fs-content')`)), "v5 region move: main panes still in #fs-content after the flip");
   // the pin OOB re-rendered the box back to head+level0 -> re-expand, then
   // the /settings row should carry the UNPIN verb (region=rail).
   await ensureNode("desk/0");
@@ -307,8 +352,9 @@ after_reload_tag: {
   await ev(`htmx.ajax('POST','/filmstrip/pin',{values:{id:'p2'},target:'#fs-sink',swap:'innerHTML'})`);
   await sleep(600);
   const s5 = await ev(SNAPSHOT);
-  ok(s5.pinnedCount === 0 && s5.focusedRegion === "main", "unpin returns the pane to the strip (zero pinned, focused main lift restored)", JSON.stringify({pinned: s5.pinnedCount, region: s5.focusedRegion}));
+  ok(s5.pinnedCount === 0 && s5.focusedRegion === "main", "unpin returns the pane to the strip (zero pinned, focused strip column unchanged)", JSON.stringify({pinned: s5.pinnedCount, region: s5.focusedRegion}));
   ok((await ev(`document.querySelector('.fs-pane[data-pane="p2"]').getAttribute('data-region')`)) === "main", "I8 unpinned section carries data-region=main in the DOM");
+  ok((await ev(`!!document.querySelector('.fs-pane[data-pane="p2"]').closest('#fs-content')`)), "v5 region move back: the unpinned section physically lives inside #fs-content");
   await ensureNode("desk/0");
   ok((await ev(`[...document.querySelectorAll('#fs-tree-windows li.fs-tr-item .fs-tr-verb')].some(b=>b.getAttribute('data-verb')==='unpin')`)) === false, "I8 tree row re-labeled back to pin (unpin OOB rode the response)");
   ok(s5.focusedRect && s5.focusedRect.q, "I1 still visible-focused after pin/unpin churn", JSON.stringify(s5.focusedRect));
@@ -332,7 +378,8 @@ after_reload_tag: {
 
   // open-or-focus of the pinned route via a real cascade leaf click
   await send("Page.navigate", { url: base + "/" });
-  await sleep(1200);
+  ok(await waitShell(), "shell appeared after load");
+  await sleep(500);
   ok(!(await ev(`document.querySelector('.fs-pane[data-pane="p2"]').classList.contains('focused')`)), "cascade setup: p2 ring is live-DOM state, gone after reload");
   console.log(await ev(`(()=>{const b=[...document.querySelectorAll('#fs-cascade .fs-entry')].find(e=>e.textContent.trim()==='settings'); b.click(); return 'clicked'})()`));
   await sleep(900);
@@ -354,7 +401,8 @@ after_reload_tag2: {
   console.log(await treeClose("/chat"));
   await sleep(600);
   await send("Page.navigate", { url: base + "/" });
-  await sleep(1200);
+  ok(await waitShell(), "shell appeared after load");
+  await sleep(500);
   const s8 = await ev(SNAPSHOT);
   ok(s8.focusedRegion === "rail" && s8.focusedRect && s8.focusedRect.q && !s8.focusedShelved, "I1 rail-only heal: the focused rail pane satisfies I1 (no forced main lift)", JSON.stringify({region: s8.focusedRegion, rect: s8.focusedRect, shelved: s8.focusedShelved}));
   ok(s8.railBodies[0] && s8.railBodies[0].pane === "p2" && s8.railBodies[0].bodyVisible, "rail-only heal: pinned p2 body still visible", JSON.stringify(s8.railBodies));
@@ -369,7 +417,8 @@ after_reload_tag2: {
 // ---- v3 task 4: FILES AS A RAIL PANE (/code walk at rail height) ----
 v3_rail_files: {
   await send("Page.navigate", { url: base + "/" });
-  await sleep(1200);
+  ok(await waitShell(), "shell appeared after load");
+  await sleep(500);
   console.log(await ev(`htmx.ajax('POST','/filmstrip/desktop',{values:{d:'1'},target:'#fs-sink',swap:'innerHTML'})`));
   await sleep(900);
   ok(await ev(`document.querySelector('#ws-desk').classList.contains('dsk-1')`), "files setup: desktop 1 active after the desktop POST");
@@ -403,7 +452,8 @@ v3_rail_files: {
 v3_final: {
   const flipDesk = (d) => `htmx.ajax('POST','/filmstrip/desktop',{values:{d:'${d}'},target:'#fs-sink',swap:'innerHTML'})`;
   await send("Page.navigate", { url: base + "/" });
-  await sleep(1200);
+  ok(await waitShell(), "shell appeared after load");
+  await sleep(500);
   const wsj5 = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
   const pinnedIds = wsj5.content.filter((p) => p.region === "rail").map((p) => p.id);
   ok(pinnedIds.length === 2, "final: both pinned regions survive in workspace.json across the session", JSON.stringify(pinnedIds));
@@ -463,7 +513,8 @@ v3_final: {
 //    width -- never an inline row AND a duplicate fold at once
 v4_batch_c: {
   await send("Page.navigate", { url: base + "/" });
-  await sleep(1200);
+  ok(await waitShell(), "shell appeared after load");
+  await sleep(500);
   ok((await ev(`document.querySelector('#fs-railmode').className`)).includes("rm-windows"), "T0 railmode sentinel defaults to windows");
   ok((await ev(`[...document.querySelectorAll('.fs-rmode')].filter(box=>box.getClientRects().length>0).length`)) === 1, "T0 exactly one tree box visible (sentinel :has)");
   await ensureNode("desk/0");
