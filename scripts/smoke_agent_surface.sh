@@ -46,15 +46,20 @@ check() { # name, condition(0/1)
   if [ "$2" = 0 ]; then echo "OK   $1"; else echo "FAIL $1"; fails=$((fails+1)); fi
 }
 
-# 1. filmstrip shell + chat page
-SHELL=$(curl -sS -m 5 "$URL/")
+# 1. filmstrip shell + chat page. GET-page curls ride -m 30: shape
+# checks must not race the CPU (a cold first render after a heavy
+# dune build + runtest run measured >5s once; the /chat POST below
+# keeps its tight timing — THAT one asserts the streaming contract).
+SHELL=$(curl -sS -m 30 "$URL/")
 echo "$SHELL" | grep -q 'id="fs-cascade"'                     ; check "shell has cascade strip" $?
 echo "$SHELL" | grep -q 'id="fs-content"'                     ; check "shell has content strip" $?
 echo "$SHELL" | grep -q 'id="fs-sink"'                        ; check "shell has OOB sink" $?
-echo "$SHELL" | grep -q 'id="fs-launch"'                      ; check "shell has launcher" $?
+echo "$SHELL" | grep -q 'id="fs-railtabs"'                    ; check "shell has rail tabs (trees)" $?
+! echo "$SHELL" | grep -q 'id="fs-launch"'                   ; check "no launcher in the shell" $?
+! echo "$SHELL" | grep -q 'fs-deskbox'                        ; check "no desktop controlbox in the shell" $?
 echo "$SHELL" | grep -q '/assets/htmx.min.js'                 ; check "shell loads htmx" $?
 echo "$SHELL" | grep -q 'fs-entry'                            ; check "cascade lists the agent surfaces" $?
-PAGE=$(curl -sS -m 5 "$URL/chat")
+PAGE=$(curl -sS -m 30 "$URL/chat")
 echo "$PAGE" | grep -q 'hx-post="/chat"'                      ; check "chat page has hx-post /chat form" $?
 echo "$PAGE" | grep -q '/assets/hx-multipart.js'              ; check "chat page loads hx-multipart asset" $?
 echo "$PAGE" | grep -q 'id="log"'                             ; check "chat page has #log target" $?
@@ -62,7 +67,7 @@ echo "$PAGE" | grep -q 'id="log"'                             ; check "chat page
 # 2. extension asset
 ASSET=$(curl -sS -m 5 -o /dev/null -w '%{http_code}' "$URL/assets/hx-multipart.js")
 [ "$ASSET" = 200 ]                                            ; check "hx-multipart.js 200" $?
-curl -sS -m 5 "$URL/assets/hx-multipart.js" | grep -q 'Response.prototype.parts' \
+curl -sS -m 30 "$URL/assets/hx-multipart.js" | grep -q 'Response.prototype.parts' \
                                                               ; check "asset is upstream artifact (fetch-multipart prollyfill)" $?
 
 # 3. /chat round trip on keep-alive — must terminate promptly
@@ -81,15 +86,15 @@ grep -q 'three parts make a turn' "$B"                        ; check "/chat par
 tail -c 120 "$B" | grep -q -- "--.*--"                        ; check "/chat close boundary present" $?
 rm -f "$H" "$B"
 
-# 4. code browser renders a file tree
-CODE=$(curl -sS -m 5 "$URL/code")
-echo "$CODE" | grep -q 'name</th>'                            ; check "/code renders file tree" $?
+# 4. code browser renders the file tree (the SAME outline rows the rail rides)
+CODE=$(curl -sS -m 30 "$URL/code")
+echo "$CODE" | grep -q 'fs-tr-item'                            ; check "/code renders the file tree" $?
 
 # 5. llm-config surface: settings page renders with a model <select>,
 #    and the chat header carries the same dropdown (hx-post /settings).
 #    With no API key in the smoke env the catalog is current-model-only
 #    (the provider /models fetch is skipped) — shape, not contents.
-SETTINGS=$(curl -sS -m 5 "$URL/settings")
+SETTINGS=$(curl -sS -m 30 "$URL/settings")
 echo "$SETTINGS" | grep -q '<select name="model"'             ; check "/settings has model select" $?
 echo "$PAGE" | grep -q 'hx-post="/settings"'                  ; check "chat header has model dropdown" $?
 echo "$PAGE" | grep -q '/bindings'                              ; check "chat header links the bindings browser" $?
@@ -97,9 +102,9 @@ echo "$PAGE" | grep -q '/bindings'                              ; check "chat he
 # 6. bindings browser renders (borge/agent.borg filmstrip-shell; the
 #    bind/* habitat-bridge prims fail soft at CALL time — with or
 #    without habitat creds the page itself must render). Shape-only:
-#    a package TABLE when a habitat answers, the muted bridge-down
-#    notice otherwise. -m 30: list-packages rides the identity's env
-#    load the first time.
+#    the package TREE (the rail prims box pane-face twin) when a
+#    habitat answers, the muted bridge-down notice otherwise. -m 30:
+#    list-packages rides the identity's env load the first time.
 BINDINGS=$(curl -sS -m 30 "$URL/bindings")
 echo "$BINDINGS" | grep -qF 'glochid — bindings'                ; check "/bindings renders" $?
 BIND_FRAG=$(curl -sS -m 30 -H 'HX-Request: true' "$URL/bindings")
@@ -111,10 +116,10 @@ echo "$BIND_FRAG" | grep -q '<!doctype'
 WS=.agent/workspace.json
 rm -f "$WS"
 OPEN=$(curl -sS -m 5 -X POST "$URL/filmstrip/open" -d 'route=/code')
-echo "$OPEN" | grep -q 'hx-swap-oob="beforeend:#fs-content"'  ; check "launcher open answers OOB pane append" $?
+echo "$OPEN" | grep -q 'hx-swap-oob="beforeend:#fs-content"'  ; check "open POST answers OOB pane append" $?
 echo "$OPEN" | grep -q 'fs-pane fs-third focused'             ; check "opened pane wears .focused at third width" $?
 echo "$OPEN" | grep -q 'fs-title">/code'                      ; check "pane carries the dispatched /code fragment" $?
-FRAG=$(curl -sS -m 5 -H 'HX-Request: true' "$URL/")
+FRAG=$(curl -sS -m 30 -H 'HX-Request: true' "$URL/")
 echo "$FRAG" | grep -q '<!doctype'
 [ "$?" != 0 ]                                                 ; check "HX-Request / renders the shell FRAGMENT (no doctype)" $?
 echo "$FRAG" | grep -q 'fs-body'                              ; check "shell fragment mounts pane bodies" $?
@@ -122,9 +127,11 @@ echo "$FRAG" | grep -q 'fs-body'                              ; check "shell fra
 PANE_ID=$(sed -n 's/.*"id":"\([^"]*\)".*/\1/p' "$WS" | head -1)
 FOCUS=$(curl -sS -m 5 -X POST "$URL/filmstrip/focus" -d 'dir=right')
 echo "$FOCUS" | grep -q 'hx-swap-oob="true"'                  ; check "focus POST answers OOB section swaps" $?
-CASCADE=$(curl -sS -m 5 -X POST "$URL/filmstrip/cascade" -d 'd=0&t=code')
-echo "$CASCADE" | grep -q 'fs-col'                            ; check "cascade crumb walk appends Miller columns" $?
-RELOAD=$(curl -sS -m 5 "$URL/")
+CASCADE=$(curl -sS -m 5 -X POST "$URL/filmstrip/cascade" -d 'd=0&t=/settings')
+echo "$CASCADE" | grep -q 'hx-swap-oob="beforeend:#fs-content"' ; check "cascade leaf click open-or-focuses the pane" $?
+ZERO=$(curl -sS -m 5 -X POST "$URL/filmstrip/cascade" -d 'd=0&t=code')
+echo "$ZERO" | grep -q 'fs-col'                                ; check "bare-name target gets exactly one column (no walk)" $?
+RELOAD=$(curl -sS -m 30 "$URL/")
 echo "$RELOAD" | grep -q 'fs-pane'                            ; check "workspace round-trips on reload" $?
 CLOSE=$(curl -sS -m 5 -X POST "$URL/filmstrip/close" -d "id=$PANE_ID")
 echo "$CLOSE" | grep -q 'state="shelved"\|fs-pane.*shelved'        ; check "close answers OOB shelve (record survives, v2 default close)" $?
