@@ -1,0 +1,7 @@
+[
+  {
+    "name": "demo",
+    "expr": "(qmlsmith/render qml/demo)",
+    "refresh": 8
+  }
+]
