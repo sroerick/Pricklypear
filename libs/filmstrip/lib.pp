@@ -588,6 +588,17 @@
           ".fs-tr-verb"
           (list "flex" "0 0 auto"))
         (css/rule
+          ".fs-act"
+          (list
+            "padding"
+            ".06rem .34rem"
+            "font-size"
+            ".9rem"
+            "line-height"
+            "1.1"
+            "min-width"
+            "1.5rem"))
+        (css/rule
           ".fs-tr-acts-ul"
           (list
             "list-style"
@@ -595,15 +606,21 @@
             "margin"
             "0"
             "padding"
-            "0"))
-        ;; verbs demote to the actions fold on narrow viewports
-        ;; (responsive = depth, not a new widget: the fold IS the menu)
+            ".1rem 0 .15rem 1.3rem"))
+        ;; The actions fold is NARROW-ONLY: at rail width the row reads
+        ;; as fold + label + glyphs; past the breakpoint the glyphs
+        ;; demote into the fold (responsive = depth, not a new widget --
+        ;; the fold IS the menu). Never both at once.
+        (css/rule ".fs-tr-node > .fs-tr-acts-ul" (list "display" "none"))
         (css/media
           "max-width:40rem"
           (list
             (css/rule
               ".fs-tr-verb"
-              (list "display" "none")))))))
+              (list "display" "none"))
+            (css/rule
+              ".fs-tr-node[open] > .fs-tr-acts-ul"
+              (list "display" "block")))))))
   "Strip + pane + launcher stylesheet (~50 lines of rules). Widths are\nthe three presets only; .focused is the server-owned ring.")
 
 (define filmstrip/default-width
@@ -1376,6 +1393,62 @@ pane: a cross-desktop tree row must open VISIBLE, not 0x0). Returns\n(panes focu
           (list (cons "hx-request" "true"))))))
   "In-process partial dispatch of a pane route (HX-Request header on --\nthe route gate's existing fragment path, the hyper/visit seam).")
 
+;; ---- action glyphs (UI vocabulary, ONE table) ----
+;; borge/filmstrip.borg action-glyphs: verbs are GLYPHS in the row; the
+;; word survives as title + aria-label + data-verb (the queryable
+;; identity), never as the label. The default table lives HERE because
+;; the LIB renders the pane head too -- a host that wants another glyph
+;; set redefines this one function (same seam as filmstrip/apps), no
+;; renderer fork. Narrow viewports and a missing/invalid glyph both
+;; fall back to the word, so the shell degrades to the old behavior
+;; instead of rendering a blank button.
+(define filmstrip/act-glyphs
+  (list
+    (list "focus" "⦿")
+    (list "pin" "⤒")
+    (list "unpin" "⤓")
+    (list "width" "⇆")
+    (list "close" "⌄")
+    (list "restore" "⌃")
+    (list "destroy" "✕")
+    (list "switch" "⇥")
+    (list "collapse" "⇱"))
+  "Verb word -> glyph pairs (the UI vocabulary table). A verb with no
+entry (or an entry whose glyph is empty) renders its WORD -- glyphs
+are an improvement over words, never a hard requirement.")
+
+(define filmstrip/act-glyph-lookup
+  (lambda (word table)
+    (if (null? table)
+        ""
+        (if (string-eq (car (car table)) word)
+            (as-str (car (cdr (car table))))
+            (filmstrip/act-glyph-lookup word (cdr table)))))
+  "The glyph for word in table, or \"\" when the table has no entry.")
+
+(define filmstrip/act-glyph
+  (lambda (word)
+    (let ((g (filmstrip/act-glyph-lookup (as-str word) filmstrip/act-glyphs)))
+      (if (string-eq g "") (as-str word) g)))
+  "Action glyph for a verb word; the WORD when the table has no glyph
+(so an unknown verb renders as itself -- never an empty button).")
+
+(define filmstrip/verb-hint
+  (lambda (w)
+    (if (string-eq w "focus") "focus this pane"
+    (if (string-eq w "pin") "pin to the rail (dock; body stays live)"
+    (if (string-eq w "unpin") "unpin (back to the main strip)"
+    (if (string-eq w "width") "width: cycle third / half / full"
+    (if (string-eq w "close") "close: shelve the pane (restore it from the shelf)"
+    (if (string-eq w "restore") "restore from the shelf"
+    (if (string-eq w "destroy") "destroy the pane for good"
+    (if (string-eq w "switch") "switch this desktop"
+    (if (string-eq w "collapse") "fold everything back"
+    w))))))))))
+  "The TOOLTIP text for a verb word (title attr). A glyph is not
+self-explanatory -- every action button carries its words here and its
+word in aria-label/data-verb, so the glyph is purely visual chrome.")
+
 (define filmstrip/pane-head
   (lambda
     (p)
@@ -1394,52 +1467,68 @@ pane: a cross-desktop tree row must open VISIBLE, not 0x0). Returns\n(panes focu
               "button"
               (html/attrs
                 (list
-                  (html/attr "class" "fs-btn")
+                  (html/attr "class" "fs-btn fs-act")
                   (html/attr
                     "title"
                     (if
                       (string-eq (filmstrip/pane-region p) "rail")
-                      "return the pane to the main strip"
-                      "pin the pane to the rail (dock; body stays live here)"))
+                      "unpin (back to the main strip)"
+                      "pin to the rail (dock; body stays live)"))
+                  (html/attr
+                    "aria-label"
+                    (if
+                      (string-eq (filmstrip/pane-region p) "rail")
+                      "unpin"
+                      "pin"))
+                  (html/attr "data-verb" (if
+                      (string-eq (filmstrip/pane-region p) "rail")
+                      "unpin"
+                      "pin"))
                   (html/attr "hx-post" "/filmstrip/pin")
                   (html/attr
                     "hx-vals"
                     (string-append "{\"id\":\"" id "\"}"))
                   (html/attr "hx-target" "#fs-sink")
                   (html/attr "hx-swap" "innerHTML")))
-              (if
-                (string-eq (filmstrip/pane-region p) "rail")
-                "unpin"
-                "pin"))
+              (html/text (filmstrip/act-glyph
+                (if (string-eq (filmstrip/pane-region p) "rail")
+                    "unpin"
+                    "pin"))))
             (html/tag
               "button"
               (html/attrs
                 (list
-                  (html/attr "class" "fs-btn")
-                  (html/attr "title" "cycle width (third/half/full)")
+                  (html/attr "class" "fs-btn fs-act")
+                  (html/attr "title" "width: cycle third / half / full")
+                  (html/attr "aria-label" "cycle width")
+                  (html/attr "data-verb" "width")
                   (html/attr "hx-post" "/filmstrip/width")
                   (html/attr
                     "hx-vals"
                     (string-append "{\"id\":\"" id "\"}"))
                   (html/attr "hx-target" "#fs-sink")
                   (html/attr "hx-swap" "innerHTML")))
-              "width")
+              (html/text (filmstrip/act-glyph "width")))
             (html/tag
               "button"
               (html/attrs
                 (list
-                  (html/attr "class" "fs-btn")
-                  (html/attr "title" "close pane")
+                  (html/attr "class" "fs-btn fs-act")
+                  (html/attr "title" "close: shelve the pane (restore from the rail's shelf)")
+                  (html/attr "aria-label" "close pane")
+                  (html/attr "data-verb" "close")
                   (html/attr "hx-post" "/filmstrip/close")
                   (html/attr
                     "hx-vals"
                     (string-append "{\"id\":\"" id "\"}"))
                   (html/attr "hx-target" "#fs-sink")
                   (html/attr "hx-swap" "innerHTML")))
-              "close"))))))
-  "Pane title bar: route label + pin (region flip, v3) + width cycle +
-close, all htmx POSTs. The pin word labels by the pane's CURRENT
-region (pin/unpin).")
+              (html/text (filmstrip/act-glyph "close"))))))))
+  "Pane title bar: route label + pin/unpin (region flip, v3) + width
+cycle + close (shelve), all htmx POSTs, all GLYPHS. The pin button
+labels by the pane's CURRENT region; every glyph carries a title
+(human tooltip), an aria-label (screen reader) and a data-verb (the
+queryable identity -- selectors never read the glyph).")
 
 (define filmstrip/pane-html
   (lambda
@@ -2303,47 +2392,57 @@ passes through verbatim as %xx -- never throw inside a renderer).")
                     (html/attr "hx-target" "#fs-sink")
                     (html/attr "hx-swap" "innerHTML")))
                 (html/text label))))
-        (verb-word
+        (verb-text
+          (lambda (v) (filmstrip/verb-hint (as-str (car v)))))
+        (verb-glyph
           (lambda (v)
+            (let ((g (if (< (count v) 4) "" (as-str (car (cdr (cdr (cdr v))))))))
+              (if (string-eq g "")
+                  (as-str (car v))
+                  g))))
+        (verb-glyph-or
+          (lambda (v)
+            (let ((g (verb-glyph v)))
+              (if (string-eq g (as-str (car v)))
+                  (filmstrip/act-glyph (as-str (car v)))
+                  g))))
+        (verb-btn
+          (lambda (v ?act)
             (html/tag
               "button"
               (html/attrs
                 (list
-                  (html/attr "class" "fs-btn fs-tr-verb")
-                  (html/attr "title" (as-str (car v)))
+                  (html/attr
+                    "class"
+                    (if ?act "fs-btn fs-act" "fs-btn fs-tr-verb"))
+                  (html/attr "title" (verb-text v))
+                  (html/attr "aria-label" (as-str (car v)))
+                  (html/attr "data-verb" (as-str (car v)))
                   (html/attr "hx-post" (as-str (car (cdr v))))
                   (html/attr "hx-vals" (as-str (car (cdr (cdr v)))))
                   (html/attr "hx-target" "#fs-sink")
                   (html/attr "hx-swap" "innerHTML")))
-              (html/text (as-str (car v))))))
+              (html/text (verb-glyph-or v)))))
+        (verb-word (lambda (v) (verb-btn v #f)))
+        (verb-act (lambda (v) (verb-btn v #t)))
         (action-li
           (lambda (v)
             (html/tag
               "li"
               (html/attr "class" "fs-tr-item fs-tr-actrow")
-              (verb-word v))))
+              (verb-act v))))
+        ;; The actions fold is the NARROW-ONLY demotion of the row's
+        ;; glyphs: a PLAIN ul child of the node's own <details> (no
+        ;; nested summary, no duplicate row) -- CSS hides it at rail
+        ;; width and reveals it past the breakpoint, where the inline
+        ;; .fs-tr-verb glyphs are hidden instead.
         (actions-fold
           (if (null? verbs)
               ""
               (html/tag
-                "li"
-                (html/attr "class" "fs-tr-item")
-                (html/tag
-                  "details"
-                  (html/attr "class" "fs-tr-node fs-tr-acts")
-                  (html/join
-                    (list
-                      (html/tag
-                        "summary"
-                        (html/attr "class" "fs-tr-row")
-                        (html/join
-                          (list
-                            (html/span (html/attr "class" "fs-tr-fold") (html/text "▸"))
-                            (html/span (html/attr "class" "fs-tr-open muted") (html/text "⋯ actions")))))
-                      (html/tag
-                        "ul"
-                        (html/attr "class" "fs-tr-acts-ul")
-                        (html/join (list/map action-li verbs)))))))))
+                "ul"
+                (html/attr "class" "fs-tr-acts-ul")
+                (html/join (list/map action-li verbs)))))
         (details-attrs
           (append
             (list (html/attr "class" "fs-tr-node"))
@@ -2381,7 +2480,7 @@ passes through verbatim as %xx -- never throw inside a renderer).")
                   (list)
                   (list (html/tag "ul" (html/attr "class" "fs-tr-kids") "")))
               (list actions-fold)))))))
-  "One node row: li[data-node] > details > summary(fold word + label\nword + verb words) [+ lazy kids ul for dirs] [+ eager actions fold\nwhen the node carries verbs]. Dir details carry the lazy level GET;\nleaf details are fold-only. Zero JS beyond the htmx attrs.")
+  "One node row: li[data-node] > details > summary(fold arrow + label\n+ verb GLYPHS) [+ lazy kids ul for dirs] [+ a narrow-only actions\nul when the node carries verbs -- the SAME glyphs as children, never\na second summary or a duplicate list]. Dir details carry the lazy\nlevel GET; leaf details are fold-only. Zero JS beyond the htmx attrs.")
 
 (define filmstrip/tree-level
   (lambda (root-id nodes)
@@ -2408,13 +2507,15 @@ passes through verbatim as %xx -- never throw inside a renderer).")
               "button"
               (html/attrs
                 (list
-                  (html/attr "class" "fs-btn")
+                  (html/attr "class" "fs-btn fs-act")
                   (html/attr "title" "fold everything back (one POST; state is DOM)")
+                  (html/attr "aria-label" "collapse all")
+                  (html/attr "data-verb" "collapse")
                   (html/attr "hx-post" "/filmstrip/tree/collapse")
                   (html/attr "hx-vals" (string-append "{\"root\":\"" id "\"}"))
                   (html/attr "hx-target" "#fs-sink")
                   (html/attr "hx-swap" "innerHTML")))
-              (html/text "collapse"))
+              (html/text (filmstrip/act-glyph "collapse")))
             (html/tag
               "ul"
               (html/attrs

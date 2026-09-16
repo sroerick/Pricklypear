@@ -50,7 +50,6 @@ let surface_source = {pp|
     ".card input,.card select{width:100%;padding:.5rem;margin-top:.25rem}"
     "button{background:#2a6fdb;color:#fff;border:0;border-radius:6px;padding:.5rem 1rem;cursor:pointer}"
     ".fs-shell{height:calc(100vh - 2rem)}"
-    ".fs-topline{display:flex;gap:.75rem;align-items:center;flex:0 0 auto;margin:0}"
     ".fs-sh-axis{display:none}"
     ;; left-rail axis: the WHOLE SHELL collapses to a screen-edge toolbar
     ;; column (~20rem). Cascade stacks its Miller columns as a vertical
@@ -59,9 +58,16 @@ let surface_source = {pp|
     ;; free to the right. Same three override toggles, no JS.
     ".fs-shell:has(#fs-axis.col){width:20rem;max-width:20rem;height:calc(100vh - 2rem);min-height:0}"
     ".fs-shell:has(#fs-axis.col) .fs-cascade{flex:0 0 auto;flex-direction:column;max-height:16rem;min-height:0;overflow-y:auto;overflow-x:hidden}"
-    ".fs-shell:has(#fs-axis.col) .fs-launch,.fs-shell:has(#fs-axis.col) .fs-topline{flex-wrap:wrap}"
-    ".fs-shell:has(#fs-axis.col) .fs-launch input[type=text]{width:100%}"
     ".fs-shell:has(#fs-axis.col) .fs-content{flex:1 1 auto;min-height:0;flex-direction:column;overflow-y:auto;overflow-x:hidden}"
+    ;; sidebar/main dichotomy (borge/filmstrip.borg): a pane is visible
+    ;; as the lifted focused main pane, a pinned rail body, or a
+    ;; windows-tree row — an UNFOCUSED main pane renders NOWHERE in the
+    ;; col rail.
+    ".fs-shell:has(#fs-axis.col) .fs-pane[data-region=\"main\"]:not(.focused){display:none}"
+    ;; with no pinned rail panes the strip is empty: collapse it so the
+    ;; trees own the rail (with a pinned pane, content keeps flex-1 and
+    ;; shares the middle band, v3 dock semantics).
+    ".fs-shell:has(#fs-axis.col):not(:has(.fs-pane[data-region=\"rail\"])) .fs-content{flex:0 0 auto}"
     ;; rail rows are pane HEADS only — bodies belong to the focused pane
     ;; (lifted into the main window below). No presets-as-heights in the
     ;; rail; a row collapses to its title bar.
@@ -86,14 +92,6 @@ let surface_source = {pp|
     ;; chatpage sizes against the VIEWPORT (calc(100vh - 6rem)); that always
     ;; overflows a pane box. In rail mode fit it to the pane instead.
     ".fs-shell:has(#fs-axis.col) .chatpage{height:100%}"
-    ;; v2 shelf: the rail's shelved-pane controlbox (rows: [route] restore destroy);
-    ;; hidden panes are .fs-pane.shelved (display:none, lib css).
-    ".fs-shelf{display:flex;flex-direction:column;gap:.15rem;border:1px solid var(--border);background:var(--panel);padding:.3rem .35rem}"
-    ".fs-shelf-row{display:flex;gap:.3rem;align-items:center;min-height:1.4rem}"
-    ;; v2 windows rail: the per-live-pane controlbox (rows: [route] focus
-    ;; width close); same chrome as the shelf box.
-    ".fs-winbox{display:flex;flex-direction:column;gap:.15rem;border:1px solid var(--border);background:var(--panel);padding:.3rem .35rem}"
-    ".fs-win-row{display:flex;gap:.3rem;align-items:center;min-height:1.4rem}"
     ".bubble{background:#1b1f2a;border-radius:6px;padding:.5rem .75rem;margin:.5rem 0;white-space:pre-wrap}"
     ".bubble.user{color:#9ece6a}"
     ".bubble.llm{color:#c0caf5}.bubble.repl{color:#bb9af7}"
@@ -130,8 +128,6 @@ let surface_source = {pp|
     ".fs-shell:has(#ws-desk.dsk-7) .fs-pane[data-desktop]:not([data-desktop=\"7\"]):not([data-region=\"rail\"]){display:none}"
     ".fs-shell:has(#ws-desk.dsk-8) .fs-pane[data-desktop]:not([data-desktop=\"8\"]):not([data-region=\"rail\"]){display:none}"
     ".fs-shell:has(#ws-desk.dsk-9) .fs-pane[data-desktop]:not([data-desktop=\"9\"]):not([data-region=\"rail\"]){display:none}"
-    ;; desktop controlbox chrome (same shelf look)
-    ".fs-deskbox{display:flex;gap:.3rem;align-items:center;border:1px solid var(--border);background:var(--panel);padding:.3rem .35rem}"
     ;; v2 app-links: a button styled as a bare link (chat/sessions/settings
     ;; nav in pane chrome; the anchor version navigated the whole window
     ;; out of the shell with a full GET). Overrides the generic button look.
@@ -727,182 +723,41 @@ must be carried HERE through every write path.")
   (lambda ()
     (list
       (list "chat" "/chat")
-      (list "code" "code")
-      (list "bindings" "bindings")
+      (list "code" "/code")
+      (list "bindings" "/bindings")
       (list "sessions" "/sessions")
       (list "settings" "/settings")))
-  "Column 0: the agent's own surfaces. Entries are (label . target);
-a target starting / is a route (leaf), a bare name is a crumb that
-names a deeper cascade — \"code\" walks dir -> dir -> file over the
-operator's cwd (fs/ls); \"bindings\" walks package -> function over
-the habitat's grammar (bridge prims bind/packages + bind/list).")
+  "Column 0: the agent's interfaces, ALL route leaves
+(borge/filmstrip.borg sidebar-main-dichotomy): every entry
+open-or-focuses a main-window pane. Structure browsing is the rail
+trees' job (code -> glochid/code-tree fs walk; prims ->
+glochid/prims-tree over the habitat's grammar), never cascade crumbs.
 
-;; The lib's filmstrip/apps is redefined TOO (not just browse): the app
-;; list IS the cascade's column 0 AND the launcher's hint source
-;; (filmstrip/launcher-hint) — if it stayed habitat vocabulary, the
-;; launcher advertised /todos on a host with no /todos route.
+The lib's filmstrip/apps is redefined TOO (not just browse): the app
+list IS the cascade's column 0 AND the launcher's hint source
+(filmstrip/launcher-hint) — if it stayed habitat vocabulary, the
+launcher advertised /todos on a host with no /todos route.")
+
 (define filmstrip/apps
   (lambda () (glochid/apps))
-  "glochid's shell app list (HOST SEAM 2): chat / code / sessions /
-settings; code is the filesystem cascade crumb.")
-
-(define glochid/dir-of
-  (lambda (prefix)
-    (if (string-eq prefix "code")
-        "."
-        (substring prefix 5 (string-length prefix))))
-  "Cascade path element -> fs dir (\"code\" is the root, \"code/lib\" ->
-\"lib\").")
-
-(define glochid/ls-entries
-  (lambda (prefix items)
-    (if
-      (null? items)
-      (list)
-      (let*
-        ((e (car items))
-          (name (as-str (dict-get e "name")))
-          (dir (glochid/dir-of prefix))
-          (child (if (string-eq dir ".") name (string-append dir "/" name))))
-        (append
-          (if
-            (string-starts-with? name ".")
-            (list)
-            (if
-              (string-eq (dict-get e "dir") "true")
-              (list (list name (string-append "code/" child)))
-              (list (list name (string-append "/code?path=" child)))))
-          (glochid/ls-entries prefix (cdr items))))))
-  "One fs/ls listing as cascade entries: dirs are crumbs (code/<child>),
-files are leaves (routes /code?path=<child>); dot entries hidden.")
-
-(define glochid/code-entries
-  (lambda (prefix)
-    (glochid/ls-entries prefix (json-parse (fs/ls (glochid/dir-of prefix)))))
-  "childfn for the code cascade: list one directory.")
-
-(define glochid/pkg-browse
-  (lambda (pkg pkg-path)
-    (if
-      (string-eq pkg "code")
-      (filmstrip/browse-walk
-        glochid/code-entries
-        (list (glochid/code-entries "code"))
-        pkg-path)
-      (if
-        (string-eq pkg "bindings")
-        (filmstrip/browse-walk
-          bind/browse-entries
-          (list (bind/browse-entries "bindings"))
-          pkg-path)
-        (cons (list (list)) #f))))
-  "Dispatch the package browse; code walks the filesystem, bindings
-walks the habitat's function grammar (bind/browse-entries comes from
-the surface — late binding picks it up), unknown packages get one
-empty column.")
+  "glochid's shell app list (HOST SEAM 2): the agent's interfaces, all
+leaves. Redefined so any lib read of the app list (hint-routes) sees
+host vocabulary, never habitat apps.")
 
 (define filmstrip/browse
-  (lambda
-    (path)
-    (let
-      ((apps (glochid/apps)))
-      (if
-        (null? path)
-        (cons (list apps) #f)
-        (let
-          ((r
-            (glochid/pkg-browse (as-str (car path)) (cdr path))))
-          (cons (cons apps (car r)) (cdr r))))))
-  "glochid's shell cascade (HOST SEAM 2): column 0 is the agent's own
-surfaces; deeper columns come from glochid/pkg-browse.")
+  (lambda (path)
+    (cons (list (glochid/apps)) #f))
+  "glochid's shell cascade (HOST SEAM 2): column 0 is the agent's
+interfaces, all leaves — no deeper columns, no crumbs. The stored path
+only ever names the picked route (entry-html wears it as fs-sel).")
 
-;; ---- 2c. SHELF RAIL (v2: close defaults to shelf) ----
-;; The rail gains a shelf controlbox (#fs-shelf): one row per SHELVED
-;; pane -- [route] restore destroy. Restore POSTs /filmstrip/restore
-;; (state=live); destroy POSTs /filmstrip/destroy (record removal).
-;; The close/restore/destroy handlers answer a shelf OOB re-render via
-;; filmstrip/shelf-oob (default "" in the lib; redefined here).
-(define glochid/shelf-row
-  (lambda (p)
-    (let
-      ((id (filmstrip/pane-id p))
-        (route (filmstrip/pane-route p)))
-      (html/tag
-        "div"
-        (html/attr "class" "fs-shelf-row")
-        (html/join
-          (list
-            (html/span (html/attr "class" "fs-title") (html/text route))
-            (html/tag
-              "button"
-              (html/attrs
-                (list
-                  (html/attr "class" "fs-btn")
-                  (html/attr "title" "restore to its position")
-                  (html/attr "hx-post" "/filmstrip/restore")
-                  (html/attr "hx-vals" (string-append "{\"id\":\"" id "\"}"))
-                  (html/attr "hx-target" "#fs-sink")
-                  (html/attr "hx-swap" "innerHTML")))
-              "restore")
-            (html/tag
-              "button"
-              (html/attrs
-                (list
-                  (html/attr "class" "fs-btn")
-                  (html/attr "title" "destroy the pane record")
-                  (html/attr "hx-post" "/filmstrip/destroy")
-                  (html/attr "hx-vals" (string-append "{\"id\":\"" id "\"}"))
-                  (html/attr "hx-target" "#fs-sink")
-                  (html/attr "hx-swap" "innerHTML")))
-              "destroy"))))))
-  "One shelf controlbox row: route label + restore + destroy.")
-(define glochid/shelf-rows
-  (lambda (panes)
-    (filmstrip/map-indexed
-      (lambda (p i)
-        (if (string-eq (filmstrip/pane-state p) "shelved")
-            (glochid/shelf-row p)
-            ""))
-      panes 0))
-  "One row per shelved pane (live panes render nothing here).")
-(define glochid/shelf-body
-  (lambda (panes)
-    (html/join
-      (append
-        (list (html/span (html/attr "class" "fs-title") (html/text "shelf")))
-        (glochid/shelf-rows panes))))
-  "Shell label + one row per shelved pane.")
-(define glochid/shelf-html
-  (lambda (panes)
-    (html/tag
-      "div"
-      (html/attrs
-        (list
-          (html/attr "id" "fs-shelf")
-          (html/attr "class" "fs-cbox fs-shelf")
-          (html/attr "data-cbox" "shelf")))
-      (glochid/shelf-body panes)))
-  "The shelf controlbox in the rail (below the content strip).")
-(define filmstrip/shelf-oob
-  (lambda ()
-    (html/tag
-      "div"
-      (html/attrs
-        (list
-          (html/attr "id" "fs-shelf")
-          (html/attr "class" "fs-cbox fs-shelf")
-          (html/attr "data-cbox" "shelf")
-          (html/attr "hx-swap-oob" "outerHTML:#fs-shelf")))
-      (glochid/shelf-body (nth (filmstrip/row) 1))))
-  "OOB re-render of #fs-shelf (the lib's default is empty; glochid owns
-the shelf rail). Close/restore/destroy call it in every response.")
-
-;; ---- 2d. DESKTOPS (v2) ----
+;; ---- 2d. DESKTOPS ----
 ;; The ws row carries "desktop":N (0 default) and each pane record a
 ;; "desktop" field. An inert #ws-desk sentinel beside #fs-axis carries
 ;; the current desktop to CSS (:has hides the other desktops' panes —
-;; ten pairs in glochid/base-css, no JS); d0/d1/d2 buttons in the rail
-;; POST the switch. Focus heals onto the first live pane of the target
+;; ten pairs in glochid/base-css, no JS); the windows tree's desktop
+;; rows carry the switch verb (no separate desktop controlbox —
+;; sidebar-main-dichotomy). Focus heals onto the first live pane of the target
 ;; desktop when the focused pane lives elsewhere (a live MAIN pane is
 ;; preferred — the lift; a rail pane satisfies I1 when no main exists).
 (define glochid/deskt
@@ -952,36 +807,6 @@ no live main pane. Never a shelved pane: pane-live? gates both passes.")
 hides the other desktops' panes. ?oob renders it as an OOB outerHTML
 swap (the desktop response).")
 
-(define glochid/desk-btn
-  (lambda (d)
-    (html/tag
-      "button"
-      (html/attrs
-        (list
-          (html/attr "class" "fs-btn")
-          (html/attr "title" (string-append "switch to desktop " d))
-          (html/attr "hx-post" "/filmstrip/desktop")
-          (html/attr "hx-vals" (string-append "{\"d\":\"" d "\"}"))
-          (html/attr "hx-target" "#fs-sink")
-          (html/attr "hx-swap" "innerHTML")))
-      (html/text (string-append "d" d))))
-  "One desktop switcher button: POSTs /filmstrip/desktop {d:N}.")
-
-(define glochid/deskbox-html
-  (lambda ()
-    (html/tag
-      "div"
-      (html/attrs
-        (list
-          (html/attr "id" "fs-deskbox")
-          (html/attr "class" "fs-cbox fs-deskbox")
-          (html/attr "data-cbox" "desktop")))
-      (html/join
-        (append
-          (list (html/span (html/attr "class" "fs-title") (html/text "desktop")))
-          (list/map glochid/desk-btn (list "0" "1" "2"))))))
-  "The desktop controlbox in the rail: [d0] [d1] [d2].")
-
 (define glochid/desktop-set
   (lambda ()
     (let*
@@ -1015,101 +840,6 @@ pane lives elsewhere; answer with OOB swaps of the desk sentinel + a
 re-render of the content strip (panes of the new desktop keep their
 live DOM via hx-preserve; panes of the others re-render inert — the
 workspace row keeps every record, only the swapped DOM shrinks).")
-
-;; ---- 2e. WINDOWS rail (v2) ----
-;; The rail gains a windows controlbox (#fs-winbox): one row per LIVE
-;; pane of the CURRENT desktop — [route] focus width close. focus POSTs
-;; /filmstrip/focus-id (lib, above the deskbox work: the OOB two-section
-;; class swap); width/close ride the pane-head verbs (/filmstrip/width,
-;; /filmstrip/close). close/restore/destroy answer a winbox OOB
-;; re-render via filmstrip/winbox-oob (default "" in the lib;
-;; redefined here), so a pane shelved from ANY surface drops its row.
-(define glochid/win-btn
-  (lambda (id verb title route)
-    (html/tag
-      "button"
-      (html/attrs
-        (list
-          (html/attr "class" "fs-btn")
-          (html/attr "title" title)
-          (html/attr "hx-post" route)
-          (html/attr "hx-vals" (string-append "{\"id\":\"" id "\"}"))
-          (html/attr "hx-target" "#fs-sink")
-          (html/attr "hx-swap" "innerHTML")))
-      verb))
-  "One windows-row button: POSTs {id} at the verb's route.")
-
-(define glochid/win-row
-  (lambda (p)
-    (let
-      ((id (filmstrip/pane-id p))
-        (route (filmstrip/pane-route p)))
-      (html/tag
-        "div"
-        (html/attr "class" "fs-win-row")
-        (html/join
-          (list
-            (html/span (html/attr "class" "fs-title") (html/text route))
-            (glochid/win-btn id "focus"
-              (if (string-eq (filmstrip/pane-region p) "rail")
-                  "highlight the rail pane in place (no lift)"
-                  "lift into the main window")
-              "/filmstrip/focus-id")
-            (glochid/win-btn id
-              (if (string-eq (filmstrip/pane-region p) "rail") "unpin" "pin")
-              (if (string-eq (filmstrip/pane-region p) "rail")
-                  "return the pane to the main strip"
-                  "pin the pane to the rail (dock; body stays live here)")
-              "/filmstrip/pin")
-            (glochid/win-btn id "width" "cycle width (third/half/full)" "/filmstrip/width")
-            (glochid/win-btn id "close" "close pane (to the shelf)" "/filmstrip/close"))))))
-  "One windows controlbox row: route label + focus + pin (v3, label by\ncurrent region) + width + close.")
-
-(define glochid/win-rows
-  (lambda (panes)
-    (filmstrip/map-indexed
-      (lambda (p i)
-        (if
-          (and (= (filmstrip/pane-desk p) (glochid/deskt))
-               (filmstrip/pane-live? p))
-          (glochid/win-row p)
-          ""))
-      panes 0))
-  "One row per LIVE pane of the CURRENT desktop (others render nothing).")
-
-(define glochid/winbox-body
-  (lambda (panes)
-    (html/join
-      (append
-        (list (html/span (html/attr "class" "fs-title") (html/text "windows")))
-        (glochid/win-rows panes))))
-  "Windows label + one row per live pane of the current desktop.")
-
-(define glochid/winbox-html
-  (lambda (panes)
-    (html/tag
-      "div"
-      (html/attrs
-        (list
-          (html/attr "id" "fs-winbox")
-          (html/attr "class" "fs-cbox fs-winbox")
-          (html/attr "data-cbox" "windows")))
-      (glochid/winbox-body panes)))
-  "The windows controlbox in the rail (between content strip and deskbox).")
-
-(define filmstrip/winbox-oob
-  (lambda ()
-    (html/tag
-      "div"
-      (html/attrs
-        (list
-          (html/attr "id" "fs-winbox")
-          (html/attr "class" "fs-cbox fs-winbox")
-          (html/attr "data-cbox" "windows")
-          (html/attr "hx-swap-oob" "outerHTML:#fs-winbox")))
-      (glochid/winbox-body (nth (filmstrip/row) 1))))
-  "OOB re-render of #fs-winbox (the lib's default is empty; glochid owns
-the windows rail). Close/restore/destroy call it in every response.")
 
 ;; focus healing at render: an unset focus OR one pointing at a shelved
 ;; pane heals to the first LIVE pane ON THE CURRENT DESKTOP (v2 task 3;
@@ -1158,9 +888,15 @@ on the next focus step.")
             (if (string-eq acc "") "" ",")
             "\"" (car kv) "\":\"" (filmstrip/url-enc (car (cdr kv))) "\""))
         "" vals)
-        "}")))
-  "One tree verb row spec: (word route vals-json) from (key val)
-pairs; values ride filmstrip/url-enc (route/path vals carry ?&).")
+        "}")
+      ;; 4th element = the GLYPH. Rows carry it explicitly (the renderer
+      ;; falls back to the word when it is empty), so a host edit or a
+      ;; lib table change cannot silently re-label the rail.
+      (filmstrip/act-glyph word)))
+  "One tree verb row spec: (word route vals-json glyph) from (key val)
+pairs; values ride filmstrip/url-enc (route/path vals carry ?&). The
+glyph is filmstrip/act-glyph's answer for the word (host: pin/pin
+label by region, so the row and the pane head agree).")
 
 (define glochid/windows-pane-node
   (lambda (p shelved?)
@@ -1351,9 +1087,11 @@ lib's default host seam; the renderer + endpoints stay shared.")
                 (html/attr "hx-swap" "innerHTML")))
             (html/text id))))
       (filmstrip/tree-roots)))
-  "The rail mode tabs: one word per tree root. POST /filmstrip/railmode
-flips the #fs-railmode sentinel -- the SAME :has hiding desktops use,
-so mode flips keep every tree's expansion DOM alive.")
+  "The rail mode tabs: one word per tree root (mode names are CONTENT
+labels, not verbs -- they stay words, like the cascade's app names).
+POST /filmstrip/railmode flips the #fs-railmode sentinel -- the SAME
+:has hiding desktops use, so mode flips keep every tree's expansion
+DOM alive.")
 
 (define glochid/railtabs-html
   (lambda ()
@@ -1367,8 +1105,10 @@ so mode flips keep every tree's expansion DOM alive.")
       (html/join
         (append
           (list (html/span (html/attr "class" "fs-title") (html/text "rail")))
-          (glochid/railtabs)))))
-  "The rail mode controlbox (one word per root).")
+          (glochid/railtabs)
+          (list (glochid/axis-btn (glochid/axis)))))))
+  "The rail mode controlbox (one word per root + the axis toggle word,
+per filmstrip.borg sidebar-main-dichotomy).")
 
 (define glochid/railmode
   (lambda ()
@@ -1495,14 +1235,18 @@ destroy/refresh call this on every mutation response).")
       (html/attrs
         (list
           (html/attr "id" "fs-axis-btn")
-          (html/attr "class" "fs-btn")
-          (html/attr "title" "toggle horizontal / vertical pane strip (persisted)")
+          (html/attr "class" "fs-btn fs-act")
+          (html/attr "title" "axis: toggle the pane strip between stack and strip (persisted)")
+          (html/attr "aria-label" "toggle pane axis")
+          (html/attr "data-verb" "axis")
           (html/attr "hx-post" "/filmstrip/orient")
           (html/attr "hx-target" "#fs-sink")
           (html/attr "hx-swap" "innerHTML")))
-      (html/text (if (string-eq axis "col") "⇆ strip" "⇅ stack"))))
-  "Axis toggle beside the launcher: stack = vertical full-width panes,
-strip = the horizontal film row. OOB-swappable (the id carries it).")
+      (html/text (if (string-eq axis "col") "⇅" "⇆"))))
+  "Axis toggle (rail tabs row): stack = vertical full-width panes, strip
+= the horizontal film row. The glyph is the ACTION (what the click
+switches TO, after the orient); the title says the state (axis).
+OOB-swappable (the id carries it).")
 
 (define glochid/axis-sentinel
   (lambda (axis ?oob)
@@ -1538,13 +1282,15 @@ left-rail strip layout. ?oob true renders it as an OOB outerHTML swap
                 (html/attrs
                   (list
                     (html/attr "id" "fs-axis-btn")
-                    (html/attr "class" "fs-btn")
-                    (html/attr "title" "toggle horizontal / vertical pane strip (persisted)")
+                    (html/attr "class" "fs-btn fs-act")
+                    (html/attr "title" "axis: toggle the pane strip between stack and strip (persisted)")
+                    (html/attr "aria-label" "toggle pane axis")
+                    (html/attr "data-verb" "axis")
                     (html/attr "hx-post" "/filmstrip/orient")
                     (html/attr "hx-target" "#fs-sink")
                     (html/attr "hx-swap" "innerHTML")
                     (html/attr "hx-swap-oob" "outerHTML:#fs-axis-btn")))
-                (html/text (if (string-eq next "col") "⇆ strip" "⇅ stack")))))))))
+                (html/text (if (string-eq next "col") "⇅" "⇆")))))))))
   "POST /filmstrip/orient: flip + persist the shell axis; two OOB swaps
 (sentinel + button) keep every live pane DOM untouched — the layout
 flip is CSS-only on the client.")
@@ -1620,13 +1366,6 @@ rebinds the request context, so hx-request? must be read first.")
               (filmstrip/cascade-html cascade)
               (html/tag
                 "div"
-                (html/attr "class" "fs-topline")
-                (html/join
-                  (list
-                    (filmstrip/launcher-html)
-                    (glochid/axis-btn (glochid/axis)))))
-              (html/tag
-                "div"
                 (html/attrs
                   (list
                     (html/attr "id" "fs-content")
@@ -1635,7 +1374,6 @@ rebinds the request context, so hx-request? must be read first.")
               (glochid/railtabs-html)
               (html/join (glochid/tree-boxes))
               (glochid/railmode-sentinel (glochid/railmode) #f)
-              (glochid/deskbox-html)
               (filmstrip/key-sentinels)
               (html/tag
                 "div"
@@ -1644,14 +1382,25 @@ rebinds the request context, so hx-request? must be read first.")
                     (html/attr "id" "fs-sink")
                     (html/attr "class" "fs-sink")))
                 "")
+              ;; inert anchor for the lib's OOB status line: a shell with
+              ;; no launcher still has somewhere for oob-msg to land, so
+              ;; htmx never warns on a missing OOB target.
+              (html/span
+                (html/attrs
+                  (list
+                    (html/attr "id" "fs-launch-msg")
+                    (html/attr "class" "fs-msg")
+                    (html/attr "hidden" "hidden")))
+                "")
               (glochid/axis-sentinel (glochid/axis) #f)
               (glochid/desk-sentinel (glochid/deskt) #f)))))))
-  "The shell inner (filmstrip/shell-html's parts + the axis toggle + the
-windows desktop controlboxes + sentinels): style + cascade strip over
-launcher+toggle + content strip, winbox, deskbox, key sentinels, OOB
-sink, axis desktop sentinels. Zero scripts (CSS :has flips the layout
-from the axis sentinel's class and hides off-desktop panes from the
-desk one).")
+  "The shell inner (filmstrip/shell-html's parts minus the launcher and
+the desktop controlbox, plus rail tabs + rail trees + sentinels —
+filmstrip.borg sidebar-main-dichotomy): style + cascade strip over
+content strip, rail tabs, tree boxes, key sentinels, OOB sink,
+status-line anchor, axis and desktop sentinels. Zero scripts (CSS :has
+flips the layout from the axis sentinel's class and hides off-desktop
+panes from the desk one).")
 
 (define glochid/shell
   (lambda ()
