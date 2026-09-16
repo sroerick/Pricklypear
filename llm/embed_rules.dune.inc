@@ -4,18 +4,25 @@
 ;; and remote/lib/dune (i-1788671587-9): vendored htmx assets + the
 ;; Nopales package sources the HTML surfaces boot-load, embedded as
 ;; OCaml strings so each binary is self-contained regardless of cwd.
-;; Real sources: image/static/*.js + libs/html/lib.pp + libs/css/lib.pp
-;; + libs/filmstrip/lib.pp + libs/hyper/lib.pp.
+;; Real sources: image/static/*.js + image/static/codemirror/*
+;; + libs/html/lib.pp + libs/css/lib.pp + libs/filmstrip/lib.pp
+;; + libs/hyper/lib.pp.
 
 (rule
  (targets assets.ml)
  (deps ../../image/static/htmx.min.js
         ../../image/static/hx-multipart.js
-        ../../image/static/htmx-2-compat.min.js)
+        ../../image/static/htmx-2-compat.min.js
+        ../../image/static/codemirror/codemirror.min.js
+        ../../image/static/codemirror/codemirror.min.css
+        ../../image/static/codemirror/mode/mllike/mllike.min.js
+        ../../image/static/codemirror/mode/markdown/markdown.min.js
+        ../../image/static/codemirror/mode/scheme.min.js
+        ../../image/static/pp-cm.js)
  (action
   (with-stdout-to assets.ml
    (progn
-    (echo "(* Auto-generated: vendored htmx assets baked into the binary. *)")
+    (echo "(* Auto-generated: vendored htmx + CodeMirror assets baked into the binary. *)")
     (echo "(* Do not edit by hand. *)")
     (echo "let htmx_min = {asset|")
     (cat ../../image/static/htmx.min.js)
@@ -25,6 +32,27 @@
     (echo "|asset}")
     (echo "let htmx_2_compat = {asset|")
     (cat ../../image/static/htmx-2-compat.min.js)
+    (echo "|asset}")
+    ;; CodeMirror rides the SAME emitted module so both surface hosts
+    ;; (agent + remote) can serve it (BORGE-1789581611: glochid /code
+    ;; file arm boots CM read-only like the habitat's /code face).
+    (echo "let codemirror_min = {asset|")
+    (cat ../../image/static/codemirror/codemirror.min.js)
+    (echo "|asset}")
+    (echo "let codemirror_css = {asset|")
+    (cat ../../image/static/codemirror/codemirror.min.css)
+    (echo "|asset}")
+    (echo "let cm_mllike = {asset|")
+    (cat ../../image/static/codemirror/mode/mllike/mllike.min.js)
+    (echo "|asset}")
+    (echo "let cm_markdown = {asset|")
+    (cat ../../image/static/codemirror/mode/markdown/markdown.min.js)
+    (echo "|asset}")
+    (echo "let cm_scheme = {asset|")
+    (cat ../../image/static/codemirror/mode/scheme.min.js)
+    (echo "|asset}")
+    (echo "let pp_cm = {asset|")
+    (cat ../../image/static/pp-cm.js)
     (echo "|asset}")))))
 
 ;; The pp-sync header record — (package NAME (export …)) — is a

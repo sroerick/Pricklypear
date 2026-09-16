@@ -143,6 +143,16 @@ let surface_source = {pp|
     ".fs-shell:has(#fs-railmode.rm-windows) .fs-rmode:not([data-rmode=\"windows\"]){display:none}"
     ".fs-shell:has(#fs-railmode.rm-code) .fs-rmode:not([data-rmode=\"code\"]){display:none}"
     ".fs-shell:has(#fs-railmode.rm-prims) .fs-rmode:not([data-rmode=\"prims\"]){display:none}"
+    ;; /code file arm: CodeMirror boots into .pp-cm-host (replaces the
+    ;; tagged <pre>; theme rides the shell dark palette).
+    ".pp-cm-host .CodeMirror{height:80vh;font-size:13px;line-height:1.4;background:#12141c;color:#c0caf5}"
+    ".pp-cm-host .CodeMirror-gutters{background:#12141c;border-right:1px solid #2a2e3a}"
+    ".pp-cm-host .CodeMirror-linenumber{color:#4a4f5c}"
+    ".pp-cm-host .CodeMirror-cursor{border-left:1px solid #7aa2f7}"
+    ;; editor chrome: save row (button + status) the boot script injects
+    ;; above each CM host
+    ".pp-cm-bar{display:flex;gap:.6rem;align-items:center;margin:.35rem 0}"
+    ".pp-cm-save{cursor:pointer}"
     ".pp-cm-status::after{content:none}"))
 
 (define (glochid/layout title body)
@@ -151,12 +161,20 @@ let surface_source = {pp|
       (render-html
         (string-append
           "<!doctype html><html><head><meta charset=utf-8><title>" title "</title>"
+          ;; CodeMirror for the /code file arm (BORGE-1789581611): CSS in
+          ;; head, lib + modes + boot before </body> — boot-all benches
+          ;; page pres; observer boots swapped-in pane pres later.
+          "<link rel=stylesheet href=\"/assets/codemirror.min.css\">"
           "<style>" glochid/base-css "</style></head><body>"
           body
           "<script src=\"/assets/htmx.min.js\"></script>"
           "<script src=\"/assets/htmx-2-compat.min.js\"></script>"
           "<script src=\"/assets/hx-multipart.js\"></script>"
           "<script src=\"/assets/codemirror.min.js\"></script>"
+          "<script src=\"/assets/cm/mllike.min.js\"></script>"
+          "<script src=\"/assets/cm/markdown.min.js\"></script>"
+          "<script src=\"/assets/cm/scheme.min.js\"></script>"
+          "<script src=\"/assets/pp-cm.js\"></script>"
           "</body></html>"))))
 
 ;; ---- llm-config helpers (borge/agent.borg llm-config) ----
@@ -1400,12 +1418,19 @@ reload keeps the pane). Bad routes fall back to the plain row.")
       (render-html
         (string-append
           "<!doctype html><html><head><meta charset=utf-8><title>glochid shell</title>"
+          ;; CM ride (BORGE-1789581611) — code panes boot wherever they
+          ;; end up (boot-all + observer in pp-cm.js).
+          "<link rel=stylesheet href=\"/assets/codemirror.min.css\">"
           "<style>" glochid/base-css "</style></head><body>"
           shell
           "<script src=\"/assets/htmx.min.js\"></script>"
           "<script src=\"/assets/htmx-2-compat.min.js\"></script>"
           "<script src=\"/assets/hx-multipart.js\"></script>"
           "<script src=\"/assets/codemirror.min.js\"></script>"
+          "<script src=\"/assets/cm/mllike.min.js\"></script>"
+          "<script src=\"/assets/cm/markdown.min.js\"></script>"
+          "<script src=\"/assets/cm/scheme.min.js\"></script>"
+          "<script src=\"/assets/pp-cm.js\"></script>"
           "</body></html>"))))
   "The shell doc: glochid chrome + filmstrip/shell-html (which carries
 its own strip css + theme props from glochid/base-css). HX-Request
