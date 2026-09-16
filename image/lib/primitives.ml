@@ -140,6 +140,7 @@ let is_part = Prims_pure.is_part
 let is_redirect = Prims_pure.is_redirect
 let redirect_value = Prims_pure.redirect_value
 let is_status = Prims_pure.is_status
+let is_bytes = Prims_html.is_bytes
 let status_response = Prims_pure.status_response
 let prim_dict_set = Prims_pure.prim_dict_set
 
@@ -278,6 +279,7 @@ let prim_summary (name : string) : string =
   | "request-params" -> "all params as JSON object"
   | "request-body" -> "raw body of active request"
   | "redirect" -> "HTTP 303 redirect response"
+  | "bytes-response" -> "serve non-HTML bytes from a route (content-type, max-age, body)"
   | "append" -> "concatenate lists"
   | "reverse" -> "reverse list"
   | "nth" -> "nth element of list (0-based)"

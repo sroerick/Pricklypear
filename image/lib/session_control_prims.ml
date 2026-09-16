@@ -194,12 +194,22 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
   in
   let register_route_checked ~route_path ~handler ~visibility
       ~(pass_vis_to_store : bool) : Pricklypear_lisp.Ast.value =
+    (* Publish-time gate. SKIPPED during additive boot seed: at seed the
+       env holds only the kernel prim catalog (fingerprint-skipped
+       defines never bind), so an env-based gate would deny every fresh
+       package's (public-route …) and permanently prevent the route row
+       from ever storing. The seed file set is the trusted distribution
+       channel (same trust as the (define)s it carries), and the gate
+       still ENFORCES at every dispatch: Session.call_handler re-runs
+       check_public_handler against the FULL session env before any
+       public handler runs (BORGE-1785212463 dispatch gate). *)
     let gate =
-      if visibility = "public" then check_public_handler handler
+      if visibility = "public" && not t.seed_additive
+      then check_public_handler handler
       else (Ok ())
     in
-    match gate with
-    | Error msg -> (Pricklypear_lisp.Ast.VStr msg)
+    (match gate with
+     | Error msg -> (Pricklypear_lisp.Ast.VStr msg)
     | Ok () ->
           (* spec_delegation: delegated sessions register in-memory only -
              the view_bindings row is a code write, and delegation is for
@@ -221,7 +231,7 @@ let register ~(hooks : hooks) (t : t) (tbl : Primitives.t) : unit =
           else
             Store.register_route t.store ~route:route_path ~handler ()
         in
-        (Pricklypear_lisp.Ast.VStr route_path)
+        (Pricklypear_lisp.Ast.VStr route_path))
   in
   Primitives.register_server_only tbl "route"
     (fun args ->
