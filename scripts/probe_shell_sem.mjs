@@ -14,7 +14,10 @@
  *   I2  clicking a shelved app's name UNSHELVES it (no 0x0 focused pane)
  *   I3  open/cascade mutations refresh the windows rail (the windows-tree
  *       OOB rides every mutation response)
- *   I4  the launcher names only routes that exist on this host
+ *   D   sidebar/main dichotomy (filmstrip.borg sidebar-main-dichotomy):
+ *       cascade column 0 is all route leaves; no launcher, no desktop
+ *       controlbox, no pane-tag strip in the col rail; unfocused main
+ *       panes render nowhere; the axis toggle lives on the rail tabs row
  *   I5  every <a> inside a fragment pane body is pane-local
  *   I6  a /code dir walk happens INSIDE the pane (same window throughout)
  *   I7  fresh panes stamp the operator's current desktop
@@ -169,7 +172,10 @@ const SNAPSHOT = `(()=>{
 const treeExpand = (node) => `(()=>{const d=document.querySelector('#fs-tree-windows li[data-node="${node}"] > details'); if(!d) return 'no node ${node}'; if(d.open) return 'open already'; d.querySelector('summary').click(); return 'opening ${node}'})()`;
 const treeRowExpr = (route) => `[...document.querySelectorAll('#fs-tree-windows li.fs-tr-item')].find(li=>{const b=li.querySelector(':scope > details > summary .fs-tr-open'); return b && b.textContent.trim()==='${route}' && li.getClientRects().length>0;})`;
 const treeOpenClick = (route) => `(()=>{const row=${treeRowExpr(route)}; if(!row) return 'no row ${route}'; const b=row.querySelector(':scope > details > summary .fs-tr-open'); if(!b) return 'no open word on ${route}'; const vals=b.getAttribute('hx-vals')||'{}'; htmx.ajax('POST','/filmstrip/open',{values:JSON.parse(vals),target:'#fs-sink',swap:'innerHTML'}); return 'opened ${route}'})()`;
-const treeVerbClick = (route, verb) => `(()=>{const row=${treeRowExpr(route)}; if(!row) return 'no row ${route}'; const b=[...row.querySelectorAll(':scope > details > summary .fs-tr-verb')].find(b=>b.textContent.trim()==='${verb}'); if(!b) return 'no ${verb} word on ${route}'; htmx.ajax('POST', b.getAttribute('hx-post'), {values: JSON.parse(b.getAttribute('hx-vals')), target:'#fs-sink', swap:'innerHTML'}); return '${verb} posted on ${route} via ' + b.getAttribute('hx-post')})()`;
+const treeVerbClick = (route, verb) => `(()=>{const row=${treeRowExpr(route)}; if(!row) return 'no row ${route}'; const b=[...row.querySelectorAll(':scope > details > summary .fs-tr-verb')].find(b=>b.getAttribute('data-verb')==='${verb}'); if(!b) return 'no ${verb} word on ${route}'; htmx.ajax('POST', b.getAttribute('hx-post'), {values: JSON.parse(b.getAttribute('hx-vals')), target:'#fs-sink', swap:'innerHTML'}); return '${verb} posted on ${route} via ' + b.getAttribute('hx-post')})()`;
+// action buttons are GLYPHS now: select by data-verb, never by text.
+const treeVerbPresent = (verb, route) => `[...document.querySelectorAll('#fs-tree-windows li.fs-tr-item .fs-tr-verb')].some(b=>b.getAttribute('data-verb')==='${verb}' && b.getAttribute('hx-post')==='${route}')`;
+const paneHeadVerb = (pane, verb) => `[...document.querySelectorAll('.fs-pane[data-pane="${pane}"] header button')].some(b=>b.getAttribute('data-verb')==='${verb}')`;
 // expand + wait for the spliced level
 async function ensureNode(node) {
   const r = await ev(treeExpand(node));
@@ -216,7 +222,7 @@ ok(s0.focusedRect && s0.focusedRect.q && !s0.focusedShelved && (s0.focusedRegion
 ok(s0.pinnedCount > 0 || s0.focusedRegion === "main", "I1 backward-compat: with zero pinned panes the focused pane is the main lift", `pinned=${s0.pinnedCount} region=${s0.focusedRegion}`);
 await checkI8("on load", false);
 ok(s0.shelvedCount === 1 && s0.shelfDir, "windows tree: shelf subtree present with the shelved pane counted", `shelved=${s0.shelvedCount} shelfDir=${s0.shelfDir}`);
-ok(s0.liveCount === 1 && s0.trees === 3 && s0.railtabs === 3, "v4: three tree boxes + three rail mode tabs", `trees=${s0.trees} tabs=${s0.railtabs} live=${s0.liveCount}`);
+ok(s0.liveCount === 1 && s0.trees === 3 && s0.railtabs === 4, "v4: three tree boxes + three rail mode tabs + the axis word (dichotomy)", `trees=${s0.trees} tabs=${s0.railtabs} live=${s0.liveCount}`);
 ok(s0.bareAnchors === 0, "I5 zero shell-escaping anchors in pane bodies", `bare=${s0.bareAnchors}`);
 ok((await ev(`[...document.querySelectorAll('#fs-shell [style]')].length`)) === 0, "T6 zero inline styles in the shell at rest (classes only, before any htmx settling)");
 const __styleEls = await ev("[...document.querySelectorAll('#fs-shell [style]')].map(function(e){return e.tagName}).join(',')");
@@ -243,12 +249,14 @@ ok(s2.liveCount === 2, "I3 live panes after open", `live=${s2.liveCount}`);
 await ensureNode("desk/0");
 ok((await ev(`[...document.querySelectorAll('#fs-tree-windows li.fs-tr-item .fs-tr-open')].filter(b=>['/chat','/sessions'].includes(b.textContent.trim())).length`)) === 2, "I3 windows tree lists the live panes under desk/0 after the open OOB");
 
-// ---- I4: launcher honesty ----
+// ---- D: sidebar/main dichotomy ----
 const boot = await httpGet(base + "/");
-ok(/placeholder="\/chat"/.test(boot.body), "I4 placeholder names a real host route (== /chat)");
-const bad = await httpPost(base + "/filmstrip/open", { route: "/todos" }, true);
-ok(/routes on this host:/.test(bad.body), "I4 no-route message lists real routes", bad.body.slice(0, 140));
-ok(!/try \/todos/.test(bad.body), "I4 no dead /todos hint in the no-route message");
+ok(!/id="fs-launch"/.test(boot.body), "D no launcher in the shell");
+ok(!/fs-deskbox/.test(boot.body), "D no desktop controlbox in the shell");
+ok((await ev(`[...document.querySelectorAll('#fs-cascade .fs-entry')].every(e=>JSON.parse(e.getAttribute('hx-vals')).t.startsWith('/'))`)), "D cascade column 0 entries are all route leaves");
+ok((await ev(`[...document.querySelectorAll('.fs-pane')].filter(p=>!p.classList.contains('focused')&&(p.getAttribute('data-region')||'main')==='main'&&!p.classList.contains('shelved')).every(p=>p.getClientRects().length===0)`)), "D unfocused main panes render nowhere in the col rail");
+ok((await ev(`!!document.querySelector('#fs-railtabs #fs-axis-btn')`)), "D the axis toggle lives on the rail tabs row");
+ok(/id="fs-railtabs"/.test(boot.body) && !/fs-pane .fs-title.*settings.*pin/.test(boot.body.split('#fs-content')[1] || ""), "D no pane-tag strip inventory in the rail (tree is the pane inventory)");
 
 // ---- I7: fresh pane stamps current desktop ----
 await httpPost(base + "/filmstrip/desktop", { d: "1" });
@@ -273,9 +281,9 @@ ok((await ev(`document.querySelector('.fs-pane.focused .fs-body').textContent.in
 
 // ---- I8 ARMED (v3): pin/unpin through the real verbs ----
 after_reload_tag: {
-  await ev(`(()=>{const b=[...document.querySelectorAll('#fs-deskbox button')].find(x=>x.getAttribute('hx-vals')==='{\\"d\\":\\"0\\"}'); b.click(); return 'flipped'})()`);
+  await ev(`htmx.ajax('POST','/filmstrip/desktop',{values:{d:'0'},target:'#fs-sink',swap:'innerHTML'})`);
   await sleep(900);
-  ok(await ev(`document.querySelector('#ws-desk').classList.contains('dsk-0')`), "I8 setup: desktop 0 active after the deskbox click");
+  ok(await ev(`document.querySelector('#ws-desk').classList.contains('dsk-0')`), "I8 setup: desktop 0 active after the desktop POST");
   await ev(`htmx.ajax('POST','/filmstrip/pin',{values:{id:'p2'},target:'#fs-sink',swap:'innerHTML'})`);
   await sleep(600);
   const s4 = await ev(SNAPSHOT);
@@ -285,8 +293,8 @@ after_reload_tag: {
   // the pin OOB re-rendered the box back to head+level0 -> re-expand, then
   // the /settings row should carry the UNPIN verb (region=rail).
   await ensureNode("desk/0");
-  ok((await ev(`[...document.querySelectorAll('#fs-tree-windows li.fs-tr-item .fs-tr-verb')].some(b=>b.textContent.trim()==='unpin' && b.getAttribute('hx-post')==='/filmstrip/pin')`)), "I8 tree row re-labeled to unpin (windows-tree rows OOB rode the pin response)");
-  ok((await ev(`[...document.querySelectorAll('.fs-pane[data-pane="p2"] header button')].some(b=>b.textContent.trim()==='unpin')`)), "I8 pane-head pin word re-labeled to unpin");
+  ok((await ev(treeVerbPresent('unpin', '/filmstrip/pin'))), "I8 tree row re-labeled to unpin (windows-tree rows OOB rode the pin response)");
+  ok((await ev(paneHeadVerb('p2', 'unpin'))), "I8 pane-head pin glyph re-labeled to unpin");
   await checkI8("after pin");
   ok((await ev(`Math.round(document.querySelector('.fs-pane[data-pane="p2"]').getBoundingClientRect().height)`)) > 256, "cascade cap released: the single pinned pane fills the rail band (> 16rem)");
   const wsp3 = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
@@ -299,7 +307,7 @@ after_reload_tag: {
   ok(s5.pinnedCount === 0 && s5.focusedRegion === "main", "unpin returns the pane to the strip (zero pinned, focused main lift restored)", JSON.stringify({pinned: s5.pinnedCount, region: s5.focusedRegion}));
   ok((await ev(`document.querySelector('.fs-pane[data-pane="p2"]').getAttribute('data-region')`)) === "main", "I8 unpinned section carries data-region=main in the DOM");
   await ensureNode("desk/0");
-  ok((await ev(`[...document.querySelectorAll('#fs-tree-windows li.fs-tr-item .fs-tr-verb')].some(b=>b.textContent.trim()==='unpin')`)) === false, "I8 tree row re-labeled back to pin (unpin OOB rode the response)");
+  ok((await ev(`[...document.querySelectorAll('#fs-tree-windows li.fs-tr-item .fs-tr-verb')].some(b=>b.getAttribute('data-verb')==='unpin')`)) === false, "I8 tree row re-labeled back to pin (unpin OOB rode the response)");
   ok(s5.focusedRect && s5.focusedRect.q, "I1 still visible-focused after pin/unpin churn", JSON.stringify(s5.focusedRect));
   const wsp4 = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
   ok(wsp4.content.find((p) => p.id === "p2").region === "main", "unpin persisted to workspace row (region=main)");
@@ -359,9 +367,9 @@ after_reload_tag2: {
 v3_rail_files: {
   await send("Page.navigate", { url: base + "/" });
   await sleep(1200);
-  console.log(await ev(`(()=>{const b=[...document.querySelectorAll('#fs-deskbox button')].find(x=>x.getAttribute('hx-vals')==='{\\"d\\":\\"1\\"}'); if(!b) return 'no desk-1 button'; b.click(); return 'flipped'})()`));
+  console.log(await ev(`htmx.ajax('POST','/filmstrip/desktop',{values:{d:'1'},target:'#fs-sink',swap:'innerHTML'})`));
   await sleep(900);
-  ok(await ev(`document.querySelector('#ws-desk').classList.contains('dsk-1')`), "files setup: desktop 1 active after the deskbox click");
+  ok(await ev(`document.querySelector('#ws-desk').classList.contains('dsk-1')`), "files setup: desktop 1 active after the desktop POST");
   const wsj = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
   const codeRec = wsj.content.find((p) => p.route === "/code" && p.state === "live");
   ok(codeRec && codeRec.region !== "rail", "files setup: live /code pane present (still on the strip)", codeRec ? codeRec.id : "missing");
@@ -390,7 +398,7 @@ v3_rail_files: {
 
 // ---- v3 task 5: FINAL — round-trip + desktop flips + shelf interplay ----
 v3_final: {
-  const flipDesk = (d) => `(()=>{const b=[...document.querySelectorAll('#fs-deskbox button')].find(x=>x.getAttribute('hx-vals')==='{"d":"${d}"}'); if(!b) return 'no desk-${d} button'; b.click(); return 'flipped'})()`;
+  const flipDesk = (d) => `htmx.ajax('POST','/filmstrip/desktop',{values:{d:'${d}'},target:'#fs-sink',swap:'innerHTML'})`;
   await send("Page.navigate", { url: base + "/" });
   await sleep(1200);
   const wsj5 = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
@@ -402,7 +410,7 @@ v3_final: {
   for (const d of ["0", "1"]) {
     console.log(await ev(flipDesk(d)));
     await sleep(900);
-    ok(await ev(`document.querySelector('#ws-desk').classList.contains('dsk-${d}')`), `final: desktop ${d} active after the deskbox click`);
+    ok(await ev(`document.querySelector('#ws-desk').classList.contains('dsk-${d}')`), `final: desktop ${d} active after the desktop POST`);
     const sD = await ev(SNAPSHOT);
     ok(sD.railBodies.length === 2 && sD.railBodies.every((r) => r.bodyVisible), `final: both pinned rail bodies visible on desktop ${d} (dock semantics)`, JSON.stringify(sD.railBodies));
     ok(sD.focusedRect && sD.focusedRect.q, `I1 visible focused pane on desktop ${d} with pinned panes`, JSON.stringify(sD.focusedRect));
@@ -447,6 +455,9 @@ v3_final: {
 // T4 collapse-all restores head state with ONE POST
 // T5 shelve via a tree verb OOB-moves the row under the shelf subtree
 // T6 zero inline styles in the shell (geometry from classes only)
+// T7 action buttons are GLYPHS with word metadata (data-verb / aria-label
+//    / tooltip); the narrow-only actions fold is NOT visible at rail
+//    width -- never an inline row AND a duplicate fold at once
 v4_batch_c: {
   await send("Page.navigate", { url: base + "/" });
   await sleep(1200);
@@ -516,6 +527,23 @@ v4_batch_c: {
   // leave the world sane for later runs: reopen /chat
   await ev(`htmx.ajax('POST','/filmstrip/open',{values:{route:'/chat'},target:'#fs-sink',swap:'innerHTML'})`);
   await sleep(700);
+
+  // T7 glyph vocabulary: every action button is a GLYPH carrying its word
+  // as data-verb + aria-label + a human title; and the row's actions fold
+  // is NOT also visible at rail width (the duplication bug: inline words
+  // plus an eager fold listing the same verbs).
+  await ensureNode("desk/0");
+  const acts = await ev(`[...document.querySelectorAll('#fs-tree-windows li.fs-tr-item .fs-tr-verb')].filter(b=>b.getClientRects().length>0).map(b=>({g:(b.textContent||'').trim(),v:b.getAttribute('data-verb'),a:b.getAttribute('aria-label'),t:(b.getAttribute('title')||'').length}))`);
+  ok(acts.length > 0, "T7 the windows tree renders visible action glyphs", JSON.stringify(acts.slice(0, 4)));
+  ok(acts.every((a) => a.v && a.v.length > 0), "T7 every action glyph carries data-verb (the queryable identity)", JSON.stringify(acts.filter((a) => !a.v)));
+  ok(acts.every((a) => a.a === a.v), "T7 aria-label mirrors the verb word on every glyph", JSON.stringify(acts.filter((a) => a.a !== a.v)));
+  ok(acts.every((a) => a.t > 0), "T7 every glyph carries a human tooltip (title)", JSON.stringify(acts.filter((a) => a.t === 0)));
+  const dupRows = await ev(`[...document.querySelectorAll('#fs-tree-windows li[data-node="desk/0"] > details > .fs-tr-acts-ul')].filter(u=>u.getClientRects().length>0).length`);
+  ok(dupRows === 0, "T7 the actions fold is NARROW-ONLY: no visible duplicate verb list at rail width", `visibleFolds=${dupRows}`);
+  const ghostRows = await ev(`[...document.querySelectorAll('#fs-tree-windows .fs-tr-actrow')].filter(li=>li.getClientRects().length>0).length`);
+  ok(ghostRows === 0, "T7 no stray visible action rows outside a collapsed fold", `visibleActionRows=${ghostRows}`);
+  const paneHead = await ev(`[...document.querySelectorAll('.fs-pane header button')].map(b=>({v:b.getAttribute('data-verb'),t:(b.getAttribute('title')||'').length,g:(b.textContent||'').trim()}))`);
+  ok(paneHead.length > 0 && paneHead.every((b) => b.v && b.t > 0), "T7 the lifted pane head renders the same glyph + data-verb + tooltip contract", JSON.stringify(paneHead.slice(0, 3)));
 }
 
 console.log(fails === 0 ? "\nSEMANTIC PROBE: ALL GREEN" : `\nSEMANTIC PROBE: ${fails} FAILING`);

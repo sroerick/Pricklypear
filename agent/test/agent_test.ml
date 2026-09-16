@@ -575,15 +575,12 @@ let test_surfaces_bindings_browser ~rt () =
   Alcotest.(check bool) "fragment links walk inside the pane" true
     (has "hx-target=\"closest .fs-body\"" frag);
   Alcotest.(check bool) "fragment has no doctype" false (has "<!doctype" frag);
-  (* the filmstrip cascade: crumb + leaf entries *)
-  Alcotest.check pp_value_testable "bindings col lists package crumbs"
-    (Ast.VStr "bindings/notes")
-    (Runtime.eval_string ~rt {|(nth (nth (bind/browse-entries "bindings") 0) 1)|});
-  Alcotest.check pp_value_testable "package col lists fn leaf routes"
+  (* the filmstrip cascade: leaf-entries only (sidebar-main-dichotomy) *)
+  Alcotest.check pp_value_testable "bindings col lists fn leaf routes"
     (Ast.VStr "/bindings?pkg=todo&name=todo/add")
     (Runtime.eval_string ~rt {|(nth (nth (bind/browse-entries "bindings/todo") 0) 1)|});
-  Alcotest.check pp_value_testable "apps col1 gained the bindings crumb"
-    (Ast.VStr "bindings")
+  Alcotest.check pp_value_testable "apps col1 is the bindings route leaf"
+    (Ast.VStr "/bindings")
     (Runtime.eval_string ~rt {|(nth (nth (glochid/apps) 2) 1)|});
   (* fail-soft: the bridge raises habitat-unreachable at CALL time — the
      page renders a muted notice and the cascade one empty column. *)
@@ -639,6 +636,19 @@ let test_rail_trees ~rt () =
     (has "/filmstrip/tree?root=windows&amp;node=" box);
   Alcotest.(check bool) "tree box: collapse-all word POSTs (a mutation, not a fetch)" true
     (has "hx-post=\"/filmstrip/tree/collapse\"" box);
+  (* action-glyphs: verbs are GLYPHS; the word survives as data-verb +
+     aria-label + title (the queryable identity + the tooltip), and the
+     narrow-only actions fold is a PLAIN ul -- no nested summary/row. *)
+  Alcotest.(check bool) "tree box: collapse-all renders a glyph" true
+    (has "data-verb=\"collapse\"" box);
+  Alcotest.(check bool) "tree box: desktop switch renders a glyph" true
+    (has "data-verb=\"switch\"" box);
+  Alcotest.(check bool) "tree box: glyphs carry a tooltip" true
+    (has "title=\"switch this desktop\"" box);
+  Alcotest.(check bool) "tree box: actions fold is a plain ul (no second summary)" true
+    (has "class=\"fs-tr-acts-ul\"" box);
+  Alcotest.(check bool) "tree box: no word-labeled verb buttons remain" true
+    (not (has ">switch</button>" box));
   (* one level endpoint: the desk/0 level of an empty workspace is empty *)
   (match
      Runtime.dispatch_route ~rt ~handler:"filmstrip/tree" ~method_:"GET"
