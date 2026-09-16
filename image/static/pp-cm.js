@@ -68,6 +68,19 @@
     });
     btn.addEventListener("click", function () { if (cm.__ppDirty) save(cm, path, status); });
     pre.replaceWith(bar, host);
+    // CodeMirror measures everything (line height, gutter, wrap points)
+    // AT CONSTRUCTION. When the host boots inside a pane that is still
+    // hidden / zero-size — filmstrip swap order, off-desktop panes,
+    // cascade re-renders — every measurement is garbage and the editor
+    // renders blank or with misaligned ghost lines until refreshed.
+    // Refresh at boot (extra frames for settle), after webfonts land
+    // (wrap points change), and whenever the host box changes size
+    // (pane fade-in, filmstrip width edits). (BORGE-1789581611)
+    var rere = function () { cm.refresh(); };
+    requestAnimationFrame(rere);
+    setTimeout(rere, 250);
+    if (document.fonts && document.fonts.ready) document.fonts.ready.then(rere);
+    if (typeof ResizeObserver !== "undefined") new ResizeObserver(rere).observe(host);
   }
 
   function bootAll(root) {
