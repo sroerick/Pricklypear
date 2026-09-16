@@ -189,15 +189,53 @@
       xs))
   "Space-join attribute strings.")
 
+;; --- html block-level whitespace (product-experience.html-builders) ---
+;; Block-level elements get ONE newline before the open tag and ONE after
+;; the close tag; bodies/attrs/text are verbatim and the newlines sit only
+;; OUTSIDE tag boundaries — so no newline can ever land inside
+;; pre/textarea/script/style content, and rendering is unchanged (block
+;; boundaries already break lines). Inline names render exactly as before.
+(define html/block-tags
+  (list
+    "div" "p" "h1" "h2" "h3" "h4" "h5" "h6"
+    "ul" "ol" "li" "dl" "dt" "dd"
+    "table" "thead" "tbody" "tfoot" "tr"
+    "section" "header" "footer" "main" "nav" "article"
+    "form" "fieldset" "blockquote" "figure" "figcaption" "aside"
+    "pre" "hr"))
+
+(define html/block-member?
+  (lambda (n tags)
+    (if (null? tags)
+        ()
+        (if (string-eq n (car tags))
+            n
+            (html/block-member? n (cdr tags)))))
+  "Internal: the first block tag equal to n, else ().")
+
+(define html/block-tag?
+  (lambda (name)
+    (html/block-member? (as-str name) html/block-tags))
+  "True when name is in the block-level tag set (exact lowercase match).")
+
+(define html/tag-core
+  (lambda (n a b)
+    (if (string-eq a "")
+        (string-append "<" n ">" b "</" n ">")
+        (string-append "<" n " " a ">" b "</" n ">")))
+  "Internal: bare <name attrs>body</name> concatenation.")
+
+(define html/tag-emit
+  (lambda (n a b)
+    (if (html/block-tag? n)
+        (string-append "\n" (html/tag-core n a b) "\n")
+        (html/tag-core n a b)))
+  "Internal: wrap tag-core output in block-boundary newlines when n is block-level.")
+
 (define html/tag
   (lambda (name attrs body)
-    (let ((n (as-str name))
-          (a (as-str attrs))
-          (b (as-str body)))
-      (if (string-eq a "")
-          (string-append "<" n ">" b "</" n ">")
-          (string-append "<" n " " a ">" b "</" n ">"))))
-  "Element <name attrs>body</name>; attrs may be empty string.")
+    (html/tag-emit (as-str name) (as-str attrs) (as-str body)))
+  "Element <name attrs>body</name>; block-level names emit one newline around the open/close boundary (never inside the element, so pre/textarea/script/style content is untouched). Inline names render as before; attrs may be empty string.")
 
 (define html/void
   (lambda (name attrs)

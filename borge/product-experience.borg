@@ -375,6 +375,161 @@
     |))
    )
   )
+  (subsection html-builders
+   (doc "The html/ string-builder contract: block-level whitespace discipline (2026-12-30 assessment of ugly rendered HTML)")
+   (status implemented)
+   (* agent note (|2026-12-30: product pages arrived as one unbroken line — html/tag is pure string-append and nothing crosses the wire with newline discipline. Kernel pure-html pages already indent; the debt was all Nopales-side. Contract below added to the shared builders.|) *)
+   (implements libs/std/lib.pp libs/html/lib.pp pure/prims_html.ml pure/prims_pure.ml image/lib/http_core.ml)
+   (verify
+    (build "dune runtest lisp")
+    (smoke "a product page (e.g. /welcome) puts block-level tags on their own lines; chrome stays pure-html indented")
+    (smoke "no newline appears inside pre/textarea/script/style content (bodies render byte-identical apart from block boundaries)")
+    (smoke "inline tags (a span strong code em button label) stay adjacent to surrounding text")
+    (smoke "unauth GET /css/layout.css answers 200 text/css with Cache-Control from the ?v= hash match")
+    (smoke "unauth GET /css/layout.css?v=<wrong-hash> answers 200 text/css max-age=0")
+    (smoke "GET /welcome emits <link rel=stylesheet href=/css/layout.css?v=…> and no layout/theme <style> block"))
+
+   (details
+    (doc (|
+         =========================================================
+         WHY
+         =========================================================
+         Kernel/system pages (http_core chrome, /branches, /data…)
+         are pure-html TREES — pure_html.to_string indents them fine.
+         Product pages are Nopales route handlers returning raw HTML
+         strings built by the html/ package (html/tag / html/join /
+         html/void / layout/*), embedded via txt ~raw:true inside the
+         chrome. The string builders concatenate with string-append
+         and NEVER emit a newline, so every handler body is one
+         unbroken line (measured 2026-12-30 on /welcome: single 6.8KB
+         line). This is a pure readability/debuggability tax: view
+         source, human and LLM review of rendered output, and
+         per-page diffs all suffer. Transfer size is fine; browsers
+         collapse the newlines back to nothing.
+
+         =========================================================
+         CONTRACT (libs/std — authoritative; libs/html mirrors it)
+         =========================================================
+         Both packages define the same html/* names; boot seed loads
+         std FIRST and is additive (first writer wins), so std's
+         definitions are live. The html package vault file must be
+         kept byte-equivalent on these names until it is deduped.
+
+         1. BLOCK-LEVEL NEWLINES: (html/tag name attrs body) where
+            name is a block-level element emits ONE newline before
+            the open tag and ONE newline after the close tag.
+            Block set (literal lowercase names): div p h1 h2 h3 h4
+            h5 h6 ul ol li dl dt dd table thead tbody tfoot tr
+            section header footer main nav article form fieldset
+            blockquote figure figcaption aside pre hr.
+
+         2. NOTHING ELSE CHANGES: bodies, attributes, and text
+            content are emitted verbatim. The newlines sit only
+            OUTSIDE tag boundaries — therefore step 1 can never put
+            a newline inside pre/textarea/script/style content
+            (no textual-container special case is needed; that is
+            the point of placing newlines outside the element).
+
+         3. INLINE STAYS INLINE: names outside the block set (a
+            span strong code em button label option input …) render
+            exactly as before, adjacent to surrounding text.
+
+         4. RENDERING IS UNCHANGED: block boundaries already break
+            lines in the box model, and whitespace at a line start
+            or end is stripped, so pages render the same; only
+            view-source improves. Adjacent block boundaries may
+            produce blank lines — acceptable, not optimized away
+            (no reflow pass).
+
+         5. ASSUMPTION: tag names are literal lowercase strings,
+            as every existing caller does. No runtime case-folding.
+
+         NON-GOALS (deliberately):
+           - NO indentation pass. Correct indent depth would need
+             builder state (a drawer) or a re-indent post-pass over
+             the wire — v1 contract is newlines-at-block-boundaries
+             only. A debug-only pretty renderer (xmllint --html or
+             equivalent, never in the serving path) is the escape
+             hatch for deep inspection.
+           - NO kernel change: pure-html is already indented; the
+             chrome is not the ugliness source.
+           - NO minification goal. Whitespace is spent for humans;
+             transfer is not a v1 constraint.
+
+         =========================================================
+         CSS DEBT (assessed 2026-12-30; stylesheet face added
+         2026-12-30 — inline sweeps remain)
+         =========================================================
+         The second half of "ugly" is styling strategy, not string
+         building: every product page inlines its CSS —
+           - layout/style renders the layout/theme css/render tree
+             into an inline <style> per page;
+           - neocities-style ships a raw ~5KB style string per page;
+           - repl and several product libs hand-concat <style>;
+           - theme-* packages stack more style blocks on theme-vars.
+
+         IMPLEMENTED — THE STYLESHEET FACE (layout.css-face):
+           A Nopales handler can serve non-HTML bytes from a route:
+           (bytes-response content-type max-age body) wraps the value
+           in a __bytes__: sentinel (sibling of __html__ /
+           __redirect__ / __status__); respond_handler_value answers
+           it with text_response + Cache-Control: public, max-age.
+           text/html would NOT do for sheets — the chrome sends
+           x-content-type-options: nosniff, so mis-typed stylesheets
+           are blocked (http_core.csp-invariants).
+
+           layout/* gains:
+             (public-route "/css/layout.css" "layout/css")
+             layout/css         — face handler: renders
+               (css/render (layout/theme)); when ?v= sha1 matches
+               the rendered text it answers max-age 31536000
+               (immutable) else max-age 0 (re-check)
+             layout/css-link    — versioned <link> tag combinator
+           layout/page + layout/page-with-css link the face instead
+           of inlining (layout/style stays for callers that want the
+           inline form; neocities-style stays inline — it is the
+           homesite flavor, not product chrome).
+
+         GATE POLICY (branching.public-route, 2026-12-30):
+           The gate now reads a handler's BODY (VLambda or VThunk
+           cell) WITHOUT forcing — forcing executed handler bodies,
+           which raise for request-context prims outside a request.
+           The publish-time check is skipped during additive boot
+           seed (the env then holds only the kernel prim catalog —
+           fingerprint-skipped defines never bind, so the old check
+           denied every fresh package's (public-route …) and the
+           route row could never store). The ENFORCING gate remains
+           per-dispatch: Session.call_handler re-runs
+           check_public_handler against the full session env before
+           any public handler executes.
+
+           The face path is /css/layout.css, NOT /assets/*: the
+           kernel asset Prefix route intercepts /assets/* before the
+           user-route catch-all, so a Nopales-registered /assets
+           face would 404. /css/* keeps the change kernel-free.
+
+           CACHING CONTRACT: cache-busting is content-addressed —
+           the page links ?v=<sha1 of sheet text>; a variant (e.g.
+           a personal-branch layout/theme override) renders a
+           different hash so per-user variants get separate cache
+           entries. After a theme change the page links the new ?v;
+           the old URL stays valid forever (immutable) — no purge
+           machinery.
+
+         STILL INLINE (debt, sweep per-package on touch):
+           - neocities-style (raw ~5KB string per page)
+           - notes/tree/style-css (three rendered sheets inline)
+           - filmstrip/css, repl, ui style strings
+           - inline style= attributes: rb, qmlsmith, waves, forge,
+             flash, pads, weight
+           New code MUST NOT use inline style= attributes; use
+           classes. Theme-* packages: switching themes still means
+           swapping which sheet renders; whether theme selection
+           compiles into the face or rides a per-user URL variant is
+           the next decision (deferred until more packages migrate).
+    |))
+   )
+  )
   (subsection analytics
    (doc "Product metrics page: viewers, logins, traffic — observation not work")
    (status implemented)
