@@ -148,32 +148,64 @@
 (define html/strong
   (lambda (body) "A strong tag with escaped text body." (html/tag "strong" "" (html/text body))))
 
+;; --- block-level whitespace (product-experience.html-builders) ---
+;; Mirrors libs/std (the live authority): block-level elements get ONE
+;; newline before the open tag and ONE after the close tag; newlines sit
+;; only OUTSIDE tag boundaries, so nothing lands inside
+;; pre/textarea/script/style content and rendering is unchanged.
+(define html/block-tags
+  (list
+    "div" "p" "h1" "h2" "h3" "h4" "h5" "h6"
+    "ul" "ol" "li" "dl" "dt" "dd"
+    "table" "thead" "tbody" "tfoot" "tr"
+    "section" "header" "footer" "main" "nav" "article"
+    "form" "fieldset" "blockquote" "figure" "figcaption" "aside"
+    "pre" "hr"))
+
+(define html/block-member?
+  (lambda
+    (n tags)
+    "Internal: the first block tag equal to n, else ()."
+    (if
+      (null? tags)
+      ()
+      (if
+        (string-eq n (car tags))
+        n
+        (html/block-member? n (cdr tags))))))
+
+(define html/block-tag?
+  (lambda
+    (name)
+    "True when name is in the block-level tag set (exact lowercase match)."
+    (html/block-member? (as-str name) html/block-tags)))
+
+(define html/tag-core
+  (lambda
+    (n a b)
+    "Internal: bare <name attrs>body</name> concatenation."
+    (if
+      (string-eq a "")
+      (string-append "<" n ">" b "</" n ">")
+      (string-append "<" n " " a ">" b "</" n ">"))))
+
+(define html/tag-emit
+  (lambda
+    (n a b)
+    "Internal: wrap tag-core output in block-boundary newlines when n is block-level."
+    (if
+      (html/block-tag? n)
+      (string-append "\n" (html/tag-core n a b) "\n")
+      (html/tag-core n a b))))
+
 (define html/tag
   (lambda
     (name attrs body)
-    "Wrap body in an opening/closing tag, adding attrs when non-empty."
-    (let
-      ((n (as-str name)) (a (as-str attrs)) (b (as-str body)))
-      (if
-        (string-eq a "")
-        (string-append
-          "<"
-          n
-          ">"
-          b
-          "</"
-          n
-          ">")
-        (string-append
-          "<"
-          n
-          " "
-          a
-          ">"
-          b
-          "</"
-          n
-          ">")))))
+    "Wrap body in an opening/closing tag, adding attrs when non-empty. Block-level names emit one newline around the open/close boundary — never inside the element, so pre/textarea/script/style content is untouched."
+    (html/tag-emit
+      (as-str name)
+      (as-str attrs)
+      (as-str body))))
 
 (define html/text
   (lambda (s) "HTML-escapes the string s." (html-escape s)))
