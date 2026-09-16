@@ -51,46 +51,32 @@ let surface_source = {pp|
     "button{background:#2a6fdb;color:#fff;border:0;border-radius:6px;padding:.5rem 1rem;cursor:pointer}"
     ".fs-shell{height:calc(100vh - 2rem)}"
     ".fs-sh-axis{display:none}"
-    ;; left-rail axis: the WHOLE SHELL collapses to a screen-edge toolbar
-    ;; column (~20rem). Cascade stacks its Miller columns as a vertical
-    ;; app menu; panes stack BELOW it as the vertical filmstrip (the same
-    ;; flex-basis width presets re-read as heights); the desktop stays
-    ;; free to the right. Same three override toggles, no JS.
-    ".fs-shell:has(#fs-axis.col){width:20rem;max-width:20rem;height:calc(100vh - 2rem);min-height:0}"
-    ".fs-shell:has(#fs-axis.col) .fs-cascade{flex:0 0 auto;flex-direction:column;max-height:16rem;min-height:0;overflow-y:auto;overflow-x:hidden}"
-    ".fs-shell:has(#fs-axis.col) .fs-content{flex:1 1 auto;min-height:0;flex-direction:column;overflow-y:auto;overflow-x:hidden}"
-    ;; sidebar/main dichotomy (borge/filmstrip.borg): a pane is visible
-    ;; as the lifted focused main pane, a pinned rail body, or a
-    ;; windows-tree row — an UNFOCUSED main pane renders NOWHERE in the
-    ;; col rail.
-    ".fs-shell:has(#fs-axis.col) .fs-pane[data-region=\"main\"]:not(.focused){display:none}"
-    ;; with no pinned rail panes the strip is empty: collapse it so the
-    ;; trees own the rail (with a pinned pane, content keeps flex-1 and
-    ;; shares the middle band, v3 dock semantics).
-    ".fs-shell:has(#fs-axis.col):not(:has(.fs-pane[data-region=\"rail\"])) .fs-content{flex:0 0 auto}"
-    ;; rail rows are pane HEADS only — bodies belong to the focused pane
-    ;; (lifted into the main window below). No presets-as-heights in the
-    ;; rail; a row collapses to its title bar.
-    ".fs-shell:has(#fs-axis.col) .fs-pane{flex:0 0 auto;min-width:0;width:100%;min-height:0}"
-    ".fs-shell:has(#fs-axis.col) .fs-pane:not(.focused) .fs-body{display:none}"
-    ;; the rail is the strip of panes; the FOCUSED pane is lifted out of it
-    ;; into the main window (position:fixed fills the space right of the
-    ;; rail). Open-or-focus a pane and it jumps to the main window; the
-    ;; focus ring drops (the big window IS the focus signal). v3: the lift
-    ;; applies ONLY to region=main panes — a pinned (region=rail) focused
-    ;; pane stays docked in the rail (the lib outline rule is the ring).
-    ".fs-shell:has(#fs-axis.col) .fs-pane.focused[data-region=\"main\"]{position:fixed;left:22rem;top:1rem;right:1rem;bottom:1rem;width:auto;min-width:0;min-height:0;z-index:1000;outline:none}"
-    ;; v3 region: a PINNED pane keeps its body live INSIDE the rail —
-    ;; dock semantics (desktop-global, acme-like reading views beside the
-    ;; lift). It shares the rail height via flex (the cascade's 16rem cap
-    ;; never applies: pinned panes live in .fs-content, not the cascade),
-    ;; the heads-only hiding above is overridden for the rail region, and
-    ;; the pane grows to its share of the dead middle instead of sitting
-    ;; at head height.
+    ;; v5 col axis is a ROW, not a collapsed rail: cascade app menu
+    ;; (20rem) | #fs-rail box (20rem: docked pane bodies + railtabs +
+    ;; trees) | #fs-content = THE NIRI STRIP of main panes (full
+    ;; remaining width, overflow-x). Focus is a SCROLL into stage (the
+    ;; OOB autofocus + scroll-margin peeks), NOT a lift: no
+    ;; position:fixed pane, no heads-only rail, no one-body-on-stage
+    ;; model. Left ordering is CSS `order` so the DOM keeps the row-axis
+    ;; sequence (content, then rail furniture) for the flex column.
+    ".fs-shell:has(#fs-axis.col){flex-direction:row}"
+    ".fs-shell:has(#fs-axis.col) .fs-cascade{order:-2;flex:0 0 20rem;flex-direction:column;max-height:none;height:100%;min-height:0;overflow-y:auto;overflow-x:hidden}"
+    ".fs-shell:has(#fs-axis.col) .fs-content{order:0;flex:1 1 auto;min-height:0;min-width:0}"
+    "#fs-surface{display:contents}"
+    "#fs-rail{display:contents}"
+    ".fs-shell:has(#fs-axis.col) #fs-rail{order:-1;display:flex;flex-direction:column;flex:0 0 20rem;max-width:20rem;min-width:0;min-height:0;overflow-y:auto;overflow-x:hidden;gap:.25rem;padding:.25rem .25rem .25rem 0}"
+    ;; row axis: the rail furniture is a bottom band — rail panes dock
+    ;; there as horizontal boxes (bodies live; dock semantics in both
+    ;; axes).
+    ".fs-shell:not(:has(#fs-axis.col)) .fs-pane[data-region=\"rail\"]{flex:0 0 auto;max-height:20rem;min-width:20rem;min-height:0;overflow:hidden}"
+    ".fs-shell:not(:has(#fs-axis.col)) .fs-pane[data-region=\"rail\"] .fs-body{display:block;flex:1 1 auto;min-height:0;overflow:auto}"
+    ;; col axis: docked panes stack down the rail box, each live body at
+    ;; its flex share (the cascade's 16rem cap never applies — pinned
+    ;; panes live in #fs-rail, not the cascade).
     ".fs-shell:has(#fs-axis.col) .fs-pane[data-region=\"rail\"]{flex:1 1 auto;width:100%;min-height:0}"
     ".fs-shell:has(#fs-axis.col) .fs-pane[data-region=\"rail\"] .fs-body{display:block;flex:1 1 auto;min-height:0;overflow:auto}"
-    ;; chatpage sizes against the VIEWPORT (calc(100vh - 6rem)); that always
-    ;; overflows a pane box. In rail mode fit it to the pane instead.
+    ;; chatpage sizes against the VIEWPORT (calc(100vh - 6rem)); that
+    ;; always overflows a pane box. In rail mode fit it to the pane.
     ".fs-shell:has(#fs-axis.col) .chatpage{height:100%}"
     ".bubble{background:#1b1f2a;border-radius:6px;padding:.5rem .75rem;margin:.5rem 0;white-space:pre-wrap}"
     ".bubble.user{color:#9ece6a}"
@@ -914,6 +900,7 @@ label by region, so the row and the pane head agree).")
                   (list "unpin" "/filmstrip/pin")
                   (list "pin" "/filmstrip/pin"))
               (list "width" "/filmstrip/width")
+              (list "single" "/filmstrip/single")
               (list "close" "/filmstrip/close"))))
         (shelved-verbs
           (v-verbs
@@ -1438,6 +1425,91 @@ renders the fragment only — the shell itself can be windowed. frag is
 captured by the CALLER before pane dispatch runs: nested route/dispatch
 rebinds the request context, so hx-request? must be read first.")
 
+(define glochid/panes-region
+  (lambda (panes focus region)
+    (filmstrip/map-indexed
+      (lambda (p i)
+        (if (string-eq (filmstrip/pane-region p) region)
+            (filmstrip/pane-html p (= i focus)
+              (filmstrip/pane-content (filmstrip/pane-route p)))
+            ""))
+      panes 0))
+  "Pane sections of ONE region only (v5 split): glochid renders main
+panes into the #fs-content strip and rail (pinned) panes into #fs-rail
+— the strip is the reading surface, the rail box the dock. Empty
+strings for the other region keep map-indexed's shape (html/join skips
+them).")
+
+(define glochid/rail-box
+  (lambda (panes focus)
+    (html/tag
+      "div"
+      (html/attrs
+        (list
+          (html/attr "id" "fs-rail")
+          (html/attr "class" "fs-rail")))
+      (html/join
+        (append
+          (glochid/panes-region panes focus "rail")
+          (list
+            (glochid/railtabs-html)
+            (html/join (glochid/tree-boxes)))))))
+  "The rail BOX (v5): docked panes + railtabs + tree boxes in one
+flex-column side panel. Row-axis CSS turns #fs-rail into
+display:contents (the furniture flows into the shell column as
+before); col-axis CSS makes it a real 20rem left panel.")
+
+(define glochid/content-area
+  (lambda (panes focus)
+    (html/tag
+      "div"
+      (html/attrs
+        (list
+          (html/attr "id" "fs-surface")
+          (html/attr "class" "fs-surface")))
+      (html/join
+        (list
+          (html/tag
+            "div"
+            (html/attrs
+              (list
+                (html/attr "id" "fs-content")
+                (html/attr "class" "fs-content")))
+            (html/join (glochid/panes-region panes focus "main")))
+          (glochid/rail-box panes focus)))))
+  "The surface area (v5): the main strip FIRST (plain strip on wide
+screens, the niri row on the col axis's right), then the rail box.
+Wrapping both under #fs-surface gives the region-move OOB ONE swap
+target (filmstrip/oob-content-strip's glochid override re-renders
+this wrapper; every pane body is an hx-preserve placeholder, so live
+DOM survives the move between strip and rail).")
+
+;; v5 region-move OOB override: the lib's default re-renders
+;; #fs-content with ALL panes; glochid's split inventory needs the
+;; wrapper (strip + rail box) so a pane MOVES containers on pin/unpin.
+;; Load order wins: this redefinition lands after libs/filmstrip.
+(define filmstrip/oob-content-strip
+  (lambda (panes focus)
+    (html/tag
+      "div"
+      (html/attrs
+        (list
+          (html/attr "id" "fs-surface")
+          (html/attr "class" "fs-surface")
+          (html/attr "hx-swap-oob" "true")))
+      (html/join
+        (list
+          (html/tag
+            "div"
+            (html/attrs
+              (list
+                (html/attr "id" "fs-content")
+                (html/attr "class" "fs-content")))
+            (html/join (glochid/panes-region panes focus "main")))
+          (glochid/rail-box panes focus)))))
+  "OOB re-render of glochid's whole surface area (both containers, pane
+bodies preserved). The pin/move responses land here.")
+
 (define glochid/shell-inner
   (lambda (cascade panes focus)
     (html/join
@@ -1452,15 +1524,7 @@ rebinds the request context, so hx-request? must be read first.")
           (html/join
             (list
               (filmstrip/cascade-html cascade)
-              (html/tag
-                "div"
-                (html/attrs
-                  (list
-                    (html/attr "id" "fs-content")
-                    (html/attr "class" "fs-content")))
-                (html/join (filmstrip/panes-html panes focus)))
-              (glochid/railtabs-html)
-              (html/join (glochid/tree-boxes))
+              (glochid/content-area panes focus)
               (glochid/railmode-sentinel (glochid/railmode) #f)
               (filmstrip/key-sentinels)
               (html/tag
@@ -1484,11 +1548,11 @@ rebinds the request context, so hx-request? must be read first.")
               (glochid/desk-sentinel (glochid/deskt) #f)))))))
   "The shell inner (filmstrip/shell-html's parts minus the launcher and
 the desktop controlbox, plus rail tabs + rail trees + sentinels —
-filmstrip.borg sidebar-main-dichotomy): style + cascade strip over
-content strip, rail tabs, tree boxes, key sentinels, OOB sink,
-status-line anchor, axis and desktop sentinels. Zero scripts (CSS :has
-flips the layout from the axis sentinel's class and hides off-desktop
-panes from the desk one).")
+filmstrip.borg sidebar-main-dichotomy, v5-ized: content-area wrapper
+holds the main strip + rail box): style + cascade over [strip | rail],
+key sentinels, OOB sink, status-line anchor, axis and desktop
+sentinels. Zero scripts (CSS :has flips the layout from the axis
+sentinel's class and hides off-desktop panes from the desk one).")
 
 (define glochid/shell
   (lambda ()
@@ -1505,7 +1569,9 @@ panes from the desk one).")
         (glochid/shell-inner (nth row 0) (nth row 1) focus))))
   "GET / and /filmstrip: the glochid shell. filmstrip's parts under
 glochid chrome; zero JS beyond the vendored htmx assets. Focus heals
-to pane 0 at render when unset — rail mode always has a main pane.")
+to the first visible pane at render when unset — v5: the strip shows
+every live main pane of the desktop, so the heal picks the ring only
+(the panes are visible regardless).")
 
 ;; ---- shell routes ----
 (route "/" "glochid/shell")
@@ -1520,6 +1586,7 @@ to pane 0 at render when unset — rail mode always has a main pane.")
 (route "/filmstrip/move" "filmstrip/move")
 (route "/filmstrip/width" "filmstrip/width")
 (route "/filmstrip/pin" "filmstrip/pin")
+(route "/filmstrip/single" "filmstrip/single")
 (route "/filmstrip/tree" "filmstrip/tree")
 (route "/filmstrip/tree/collapse" "filmstrip/tree-collapse")
 (route "/filmstrip/railmode" "glochid/railmode-set")

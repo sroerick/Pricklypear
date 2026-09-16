@@ -135,7 +135,7 @@
             (panes2 (filmstrip/replace-at panes i p2))
             (focus2
               (if (= i focus)
-                  (filmstrip/close-heal panes2)
+                  (filmstrip/close-heal panes2 i)
                   focus)))
           (seq
             (filmstrip/save-all cascade panes2 focus2)
@@ -399,12 +399,31 @@
             "background"
             "var(--panel)"
             "overflow"
-            "hidden"))
+            "hidden"
+            ;; v5 focus-scroll: when the OOB swap autofocuses the focused
+            ;; pane, the browser scrolls every scrollable ancestor so the
+            ;; section is on-stage; these inline margins reserve peek
+            ;; space so the NEIGHBOR columns stay visible at the edges
+            ;; (niri semantics; the margin shrinks as the column grows).
+            "scroll-margin-inline"
+            "3rem"))
         (css/rule
           ".fs-pane.fs-third"
-          (list "flex-basis" "33.333%"))
-        (css/rule ".fs-pane.fs-half" (list "flex-basis" "50%"))
+          (list "flex-basis" "33.333%" "scroll-margin-inline" "3rem"))
+        (css/rule ".fs-pane.fs-half" (list "flex-basis" "50%" "scroll-margin-inline" "1.5rem"))
         (css/rule ".fs-pane.fs-full" (list "flex-basis" "100%"))
+        ;; v5 one-up: while ANY LIVE single pane exists it takes the
+        ;; whole strip and its strip siblings step aside (shelved and
+        ;; cross-desktop panes are already display:none; a shelved
+        ;; single releases the strip back). Rail-region panes are not
+        ;; strip siblings (glochid renders them in its rail box; a bare
+        ;; host shell shows pinned panes as columns) — the region guard
+        ;; keeps those visible.
+        (css/rule ".fs-pane.fs-single"
+          (list "flex-basis" "100%" "scroll-margin-inline" "0"))
+        (css/rule
+          ".fs-shell:has(.fs-pane.fs-single:not(.shelved)) .fs-pane[data-region=\"main\"]:not(.fs-single)"
+          (list "display" "none"))
         (css/rule
           ".fs-pane.focused"
           (list
@@ -696,7 +715,7 @@
         (cascade (nth row 0))
         (panes (nth row 1))
         (focus (nth row 2))
-        (focus2 (filmstrip/focus-step (length panes) focus dir)))
+        (focus2 (filmstrip/focus-step panes focus dir)))
       (if
         (= focus2 focus)
         (render-html (filmstrip/oob-msg ""))
@@ -789,14 +808,55 @@ targets behave exactly as before (take the focus).")
 
 (define filmstrip/focus-step
   (lambda
-    (n i dir)
-    (if
-      (or (< i 0) (>= i n))
-      (if (string-eq dir "left") -1 (if (> n 0) 0 -1))
-      (let
-        ((j (if (string-eq dir "left") (- i 1) (+ i 1))))
-        (if (< j 0) 0 (if (>= j n) (- n 1) j)))))
-  "Next focus index for dir (left/right): clamped to the pane count, no\nwrap (niri discipline). An unset/out-of-range focus heals to pane 0 on\nright, none on left.")
+    (panes i dir)
+    (letrec
+      ((n (length panes))
+        (d (filmstrip/ws-desktop))
+        ;; v5: the strip's visible columns. A column takes the ring only
+        ;; if live AND not :has-hidden (shelved panes never; main panes
+        ;; of a foreign desktop never; docked rail panes always). The
+        ;; pre-v5 arithmetic could land .focused on a display:none
+        ;; section — the 0x0 focus bug, cut off at the source.
+        (visible?
+          (lambda (p)
+            (and
+              (filmstrip/pane-live? p)
+              (or
+                (string-eq (filmstrip/pane-region p) "rail")
+                (= (filmstrip/pane-desk p) d)))))
+        (vis-at
+          (lambda (j)
+            (let ((p (filmstrip/pane-at panes j)))
+              (if (if (null? p) #f (visible? p)) #t #f))))
+        (first-vis-from
+          (lambda (lo)
+            (if (>= lo n) -1
+                (if (vis-at lo) lo (first-vis-from (+ lo 1))))))
+        (last-vis-before
+          (lambda (hi)
+            (if (< hi 0) -1
+                (if (vis-at hi) hi (last-vis-before (- hi 1))))))
+        (raw
+          (lambda ()
+            (if
+              (or (< i 0) (>= i n))
+              (if (string-eq dir "left") -1 (if (> n 0) 0 -1))
+              (let
+                ((j (if (string-eq dir "left") (- i 1) (+ i 1))))
+                (if (< j 0) 0 (if (>= j n) (- n 1) j))))))
+        (stay-put
+          (lambda ()
+            (if (and (>= i 0) (< i n) (vis-at i)) i -1)))
+        (j (raw)))
+      (cond
+        ((< j 0) -1)
+        ((string-eq dir "left")
+          (let ((v (last-vis-before j)))
+            (if (>= v 0) v (stay-put))))
+        (#t
+          (let ((v (first-vis-from j)))
+            (if (>= v 0) v (stay-put)))))))
+  "Next focus index for dir (left/right): clamped to the pane count, no\nwrap (niri discipline) — then v5 visibility: the walk skips panes the\nstrip would hide (shelved, or main panes of a foreign desktop),\nsettling on the nearest visible column (the current pane keeps the\nring when none exists in that direction — a no-op, and the caller\nanswers empty). Rail panes (dock-visible every desktop) count\neverywhere. An unset/out-of-range focus heals to the first visible\npane on right, none on left.")
 
 (define filmstrip/key-sentinels
   (lambda
@@ -1006,7 +1066,7 @@ targets behave exactly as before (take the focus).")
         (cascade (nth row 0))
         (panes (nth row 1))
         (focus (nth row 2))
-        (focus2 (filmstrip/focus-step (length panes) focus dir)))
+        (focus2 (filmstrip/focus-step panes focus dir)))
       (seq
         (filmstrip/save-all cascade panes focus2)
         (filmstrip/native-state))))
@@ -1199,26 +1259,26 @@ targets behave exactly as before (take the focus).")
       (html/tag
         "section"
         (html/attrs
-          (list
-            (html/attr
-              "class"
-              (string-append
-                "fs-pane"
-                " fs-"
-                (filmstrip/pane-width p)
-                (if focused? " focused" "")
-                (if (string-eq (filmstrip/pane-state p) "shelved")
-                    " shelved"
-                    "")))
-            (html/attr "id" (string-append "fs-pane-" id))
-            (html/attr "data-pane" id)
-            (html/attr
-              "data-desktop"
-              (as-str (filmstrip/pane-desk p)))
-            (html/attr
-              "data-region"
-              (filmstrip/pane-region p))
-            (html/attr "hx-swap-oob" "true")))
+          (append
+            (list
+              (html/attr "class" (filmstrip/pane-sclass p focused?))
+              (html/attr "id" (string-append "fs-pane-" id))
+              (html/attr "data-pane" id)
+              (html/attr "tabindex" "-1")
+              (html/attr
+                "data-desktop"
+                (as-str (filmstrip/pane-desk p)))
+              (html/attr
+                "data-region"
+                (filmstrip/pane-region p))
+              (html/attr "hx-swap-oob" "true"))
+            ;; autofocus ONLY on the pane TAKING focus: htmx focuses the
+            ;; first [autofocus] in the response, and a two-section swap
+            ;; (old focus + new focus) must land the browser's focus --
+            ;; and therefore the v5 scroll -- on the new one.
+            (if focused?
+                (list (html/attr "autofocus" "autofocus"))
+                (list))))
         (html/join
           (list
             (filmstrip/pane-head p)
@@ -1412,7 +1472,8 @@ pane: a cross-desktop tree row must open VISIBLE, not 0x0). Returns\n(panes focu
     (list "restore" "⌃")
     (list "destroy" "✕")
     (list "switch" "⇥")
-    (list "collapse" "⇱"))
+    (list "collapse" "⇱")
+    (list "single" "⛶"))
   "Verb word -> glyph pairs (the UI vocabulary table). A verb with no
 entry (or an entry whose glyph is empty) renders its WORD -- glyphs
 are an improvement over words, never a hard requirement.")
@@ -1514,6 +1575,24 @@ word in aria-label/data-verb, so the glyph is purely visual chrome.")
               (html/attrs
                 (list
                   (html/attr "class" "fs-btn fs-act")
+                  (html/attr "title"
+                    (if (filmstrip/pane-single p)
+                        "strip: back to the row (unstage from one-up)"
+                        "one-up: stage this pane alone on the strip"))
+                  (html/attr "aria-label"
+                    (if (filmstrip/pane-single p) "back to strip" "one-up"))
+                  (html/attr "data-verb" "single")
+                  (html/attr "hx-post" "/filmstrip/single")
+                  (html/attr "hx-vals"
+                    (string-append "{\"id\":\"" id "\"}"))
+                  (html/attr "hx-target" "#fs-sink")
+                  (html/attr "hx-swap" "innerHTML")))
+              (html/text (filmstrip/act-glyph "single")))
+            (html/tag
+              "button"
+              (html/attrs
+                (list
+                  (html/attr "class" "fs-btn fs-act")
                   (html/attr "title" "close: shelve the pane (restore from the rail's shelf)")
                   (html/attr "aria-label" "close pane")
                   (html/attr "data-verb" "close")
@@ -1525,10 +1604,27 @@ word in aria-label/data-verb, so the glyph is purely visual chrome.")
                   (html/attr "hx-swap" "innerHTML")))
               (html/text (filmstrip/act-glyph "close"))))))))
   "Pane title bar: route label + pin/unpin (region flip, v3) + width
-cycle + close (shelve), all htmx POSTs, all GLYPHS. The pin button
-labels by the pane's CURRENT region; every glyph carries a title
-(human tooltip), an aria-label (screen reader) and a data-verb (the
-queryable identity -- selectors never read the glyph).")
+cycle + single (v5 one-up: stage the pane alone) + close (shelve), all
+htmx POSTs, all GLYPHS. The pin and single buttons label by the pane's
+CURRENT state; every glyph carries a title (human tooltip), an
+aria-label (screen reader) and a data-verb (the queryable identity --
+selectors never read the glyph).")
+
+(define filmstrip/pane-sclass
+  (lambda
+    (p focused?)
+    (string-append
+      "fs-pane"
+      " fs-"
+      (filmstrip/pane-width p)
+      (if focused? " focused" "")
+      (if (filmstrip/pane-single p) " fs-single" "")
+      (if (string-eq (filmstrip/pane-state p) "shelved")
+          " shelved"
+          "")))
+  "The pane section's class assembly — ONE place, so the natural render
+and the OOB swap cannot drift (v5 adds fs-single to width + focused +
+shelved).")
 
 (define filmstrip/pane-html
   (lambda
@@ -1539,18 +1635,13 @@ queryable identity -- selectors never read the glyph).")
         "section"
         (html/attrs
           (list
-            (html/attr
-              "class"
-              (string-append
-                "fs-pane"
-                " fs-"
-                (filmstrip/pane-width p)
-                (if focused? " focused" "")
-                (if (string-eq (filmstrip/pane-state p) "shelved")
-                    " shelved"
-                    "")))
+            (html/attr "class" (filmstrip/pane-sclass p focused?))
             (html/attr "id" (string-append "fs-pane-" id))
             (html/attr "data-pane" id)
+            ;; tabindex -1: the section is programmatically focusable, so
+            ;; an OOB swap carrying autofocus scrolls it on-stage (v5
+            ;; focus-scroll; the scroll-margin peeks decide the landing).
+            (html/attr "tabindex" "-1")
             (html/attr
               "data-desktop"
               (as-str (filmstrip/pane-desk p)))
@@ -1568,7 +1659,7 @@ queryable identity -- selectors never read the glyph).")
                   (html/attr "id" (string-append "fs-body-" id))
                   (html/attr "hx-preserve" "true")))
               content))))))
-  "One pane section. content is the dispatched fragment (full page) or an\nempty hx-preserve placeholder (OOB class/width swaps keep the live DOM).\ndata-desktop feeds the shell's :has(#ws-desk.dsk-N) hiding.")
+  "One pane section. content is the dispatched fragment (full page) or an\nempty hx-preserve placeholder (OOB class/width swaps keep the live DOM).\ndata-desktop feeds the shell's :has(#ws-desk.dsk-N) hiding; tabindex=-1\nlets the OOB path autofocus the section — the browser scrolls every\nscrollable ancestor so the focused column lands on-stage (v5).")
 
 (define filmstrip/pane-id
   (lambda (p) (as-str (dict-get p "id")))
@@ -1586,6 +1677,22 @@ queryable identity -- selectors never read the glyph).")
   (lambda (p r) (dict-set p "region" r))
   "Pane record with a new region (main | rail) — the field persists on
 the record like width/state, so it rides every writer below save-all.")
+
+(define filmstrip/pane-single
+  (lambda (p)
+    (let
+      ((v (dict-get p "single")))
+      (if (string-eq (as-str v) "false")
+          #f
+          (not (null? v)))))
+  "Pane record single flag (v5 one-up): true unless the key is absent
+or explicitly false — the flag READS through, so staging then
+unstaging (dict-set … #f) really turns it off (as-str #f = \"false\").")
+
+(define filmstrip/pane-set-single
+  (lambda (p s) (dict-set p "single" s))
+  "Pane record with a new single value — the flag persists on the
+record like region/state and rides every writer below save-all.")
 
 (define filmstrip/pane-view
   (lambda (p) (as-str (dict-get p "view")))
@@ -1650,25 +1757,56 @@ desktop-global (dock semantics — visible on every desktop, so the d
 check is skipped). Never a shelved pane.")
 
 (define filmstrip/close-heal
-  (lambda (panes)
+  (lambda (panes i)
     (let*
       ((d (filmstrip/ws-desktop))
+        ;; v5 strip discipline: heal to the NEAREST live strip column —
+        ;; the closed pane's neighbors were peeking in, so attention is
+        ;; already there. Same visibility rule focus-step uses (live
+        ;; main on the current desktop, or a docked rail pane); the
+        ;; left neighbor wins a tied distance. Fallbacks keep v3's
+        ;; order: first live main on the desk, then rail, then first
+        ;; live anywhere.
+        (near-live?
+          (lambda (p)
+            (and
+              (filmstrip/pane-live? p)
+              (or
+                (string-eq (filmstrip/pane-region p) "rail")
+                (and
+                  (string-eq (filmstrip/pane-region p) "main")
+                  (= (filmstrip/pane-desk p) d))))))
+        (live-at
+          (lambda (j)
+            (let ((p (filmstrip/pane-at panes j)))
+              (if (if (null? p) #f (near-live? p)) j -1))))
+        (near
+          (letrec
+            ((out
+                (lambda (k)
+                  (if (>= k (length panes))
+                      -1
+                      (let ((l (live-at (- i k))))
+                        (if (>= l 0)
+                            l
+                            (let ((r2 (live-at (+ i k))))
+                              (if (>= r2 0) r2 (out (+ k 1))))))))))
+            (out 1)))
         (m (filmstrip/first-region-live panes 0 "main" d))
         (r (filmstrip/first-region-live panes 0 "rail" d)))
       (cond
+        ((>= near 0) near)
         ((>= m 0) m)
         ((>= r 0) r)
         (#t (filmstrip/first-live-index panes)))))
-  "Focus target after a close SHELVED the focused pane (v3): first a
-live MAIN pane on the CURRENT desktop (the v2 lift continues, on a
-pane the operator can actually see), else the first live RAIL pane
-(dock semantics: a rail pane is visible on every desktop, so a
-focused rail pane satisfies I1 with no main lift), else the first
-live pane anywhere (v2 behavior for region-less hosts). Never a
-shelved pane. Without this, closing the last focused pane while
-pinned panes showed beside it healed focus onto a hidden 0x0 main
-pane on a foreign desktop — the exact I1 violation the v3 spec
-bans (no 0x0 focused pane).")
+  "Focus target after close shelved pane i (v5): the NEAREST live
+strip column — neighbors of the closed pane peek in, so attention is
+already there. Same visibility rule focus-step uses (live main on the
+current desktop, or a docked rail pane); the LEFT neighbor wins a
+tied distance. Fallbacks keep v3's order — first live main on the
+desk, first live rail pane, first live anywhere. Never a shelved
+pane (I2), never a pane the strip hides (I1 — the 0x0 heal lesson,
+generalized: hidden means NOT a heal target).")
 
 (define filmstrip/pane-width
   (lambda
@@ -2142,8 +2280,44 @@ bans (no 0x0 focused pane).")
                   (filmstrip/oob-msg "")
                   (filmstrip/shelf-oob)
                   (filmstrip/winbox-oob)
+                  ;; v5: a region flip MOVES the section between
+                  ;; containers -- the region move answers re-rendering
+                  ;; the whole pane area; bodies preserved via
+                  ;; hx-preserve placeholders.
+                  (filmstrip/oob-content-strip panes2 focus)))))))))
+  "POST /filmstrip/pin: id param -> trade the pane's region (main/rail\nv3 pin). Rail = dock semantics: the body stays LIVE beside the strip\n(glochid keeps rail panes in its rail box). v5: the answer is the\noob-content-strip OOB (the pane MOVED containers — hosts re-render\ntheir pane area, bodies preserved), plus winbox/shelf OOB refreshes\n(the win row's pin word re-labels by region).")
+
+(define filmstrip/single
+  (lambda
+    ()
+    (let*
+      ((id (as-str (request-param "id")))
+        (row (filmstrip/row))
+        (cascade (nth row 0))
+        (panes (nth row 1))
+        (focus (nth row 2))
+        (i (filmstrip/find-pane-index panes id)))
+      (if
+        (< i 0)
+        (render-html
+          (filmstrip/oob-msg "filmstrip: no such pane"))
+        (let*
+          ((p2 (filmstrip/pane-set-single (nth panes i)
+                 (if (filmstrip/pane-single (nth panes i)) #f #t)))
+            (panes2 (filmstrip/replace-at panes i p2)))
+          (seq
+            (filmstrip/save-all cascade panes2 focus)
+            (render-html
+              (html/join
+                (list
+                  (filmstrip/oob-msg "")
                   (filmstrip/oob-section p2 (= i focus))))))))))
-  "POST /filmstrip/pin: id param -> trade the pane's region (main/rail\nv3 pin). Rail = dock semantics: the body stays LIVE inside the rail\n(glochid CSS shows [data-region=rail] bodies) beside the focused main\npane. Same grammar as filmstrip/width: OOB section swap (body DOM\npreserved via hx-preserve), plus winbox/shelf OOB refreshes (the win\nrow's pin word re-labels by region).")
+  "POST /filmstrip/single: id param -> v5 ONE-UP: toggle the pane's
+single flag. Staged single, the pane rides the strip alone (full
+width, neighbors hidden by CSS while a focused single exists); off,
+it rejoins the strip at its preset width. Same grammar as width: OOB
+section swap, pane body preserved. The flag persists in the workspace
+row (niri singling as declared state).")
 
 (define filmstrip/width
   (lambda

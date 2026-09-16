@@ -191,9 +191,72 @@
    (verify
     (smoke "cascade column 0 entries are all route leaves; each open-or-focuses a main-window pane")
     (smoke "the col rail renders no pane-tag strip, desktop switcher controlbox, or launcher; the windows tree is the pane inventory")
-    (smoke "an unfocused main pane is absent from the col rail; focusing its tree row (or a shelf restore) lifts or shows it")
+    (smoke "an unfocused main pane is absent from the col rail; focusing its tree row (or a shelf restore) lifts or shows it -- AMENDED by main-strip-v5: in niri mode there is no lift; a tree-row focus scrolls the pane's column into stage")
     (smoke "the axis toggle renders as a word on the rail tabs row and persists through reload"))
    (status implemented)
+  )
+
+  (subsection main-strip-v5
+   (doc "THE MAIN REGION IS THE NIRI STRIP AGAIN. window-controlbox-v2/v3
+       lifted the focused main pane out of the flow (position:fixed,
+       exactly one body on stage); v5 ⟶ region=main panes are COLUMNS
+       in one horizontal scroll strip — the model filmstrip v1 shipped
+       and the 2026-09-14 review named as the design gap ('more than
+       one reading view at once'). FOCUS IS SCROLL, NOT LIFT:
+       focusing a main pane scrolls the strip so the focused column is
+       ON-STAGE with its neighbors PEEKING at both edges (native
+       focus-scroll + scroll-margin peeks). EXACT CENTERING IS NOT
+       PROMISED: CSS scroll-margin takes no percentages, so niri's
+       perfectly-centered focus without JS is out of reach — the
+       contract is the niri FEEL (focused column fully on-stage, always
+       ≥ its scroll-margin of visible neighbor on each side, viewport
+       permitting), not the exact geometry; a probe-verified
+       no-JS centering path would be a welcome amendment, never a JS
+       permit (scroll.js stays quarantined). There is no lift, no
+       position:fixed main pane, no 'exactly one main body' invariant. NO NEW STATE: the strip is
+       the existing workspace rows rendered in place region=main (rank
+       order, width presets third/half/full ARE niri column widths,
+       desktop via the existing :has sentinel, shelf unchanged —
+       shelved panes never render in the strip). OPEN-OR-FOCUS RULES
+       (niri-ized): a main-pane open-or-focus focuses its column in
+       place (creating it first when absent) — nothing is stolen,
+       because geometry no longer moves; the acme-Get rule (naming a
+       shelved pane unshelves it, pane-stamp on entry) is unchanged;
+       close-heal prefers the adjacent column of the strip. REGION=RAIL
+       is untouched: pinned rail panes keep v3 dock semantics, and pin
+       + strip compose (strip = the reading surface, rail panes = the
+       persistent side views — the two together are the 2026-09-14
+       review's full ask). LIFT SURVIVES AS A VERB, NOT AS THE MODEL:
+       the pane head's width glyph gains a singling verb ('one-up')
+       that toggles a .fs-single class — full-width column, neighbors
+       hidden — the niri column-toggle analogue; it is pane state in
+       the workspace row (record field single: bool), never a DOM
+       estimate. SCROLL IS ZERO-JS: strip scroll-to-focus is native —
+       the OOB-swapped pane head carries autofocus on its tabbable head
+       element (or the focused pane's own tabindex=-1 dispatch
+       equivalent), and glochid/base-css uses scroll-margin (columns)
+       + scroll-padding (strip) to center the focused column with the
+       neighbors peeking; NO scroll.js, no inline styles, classes and
+       declared state only — if a probe proves the native-focus path
+       cannot center a column, the stanza is reopened as a borge issue
+       rather than smuggling JS in. HORIZONTAL WHEEL: native overflow-x
+       scroll on the strip, unmapped. Make harness unchanged in kind:
+       probe_shell_sem.mjs — I1 rewritten as strip invariants (focused
+       column on-stage and scroll-centered on its desktop within
+       measurement tolerance; adjacent columns peek; zero JS)
+       alongside the v3 region assertions; geometry probe after; live
+       hosts last.")
+   (* agent note (|2026-09-17 DESIGN SESSION (operator ask: 'the horizontally scrolling window function like niri — can we do that?'): read the model's own history first — filmstrip v1 WAS the niri strip ('bottom strip is the niri-style row of content panes', both strips scroll horizontally, independently); the glochid rail session (2026-09-13) recast main as the lift model, and the 2026-09-14 review flagged the loss as the design limit: 'the rail-modes model ... rules out the thing you most want — more than one reading view visible at once. That last one is a spec conversation, not a fix.' v5 IS that spec conversation. Key unpicking: the lift model exists because focus USED to be geometry (something must be position:fixed); once main is a strip, focus is purely which column is centered — the 'exactly one main body' invariant and the heal-lift machinery (close-heal's lift preference, open-apply's steal) stop being load-bearing and mostly simplify (a main pane is either strip-visible on its desktop, staged-single, pinned in the rail, shelved, or a tree row — dichotomy clause amended, repealing 'renders NOWHERE'). Decisions taken in-session: (a) NO new workspace state beyond single: bool — rank/width/desktop/region/focus already encode the strip; (b) lift demoted from implicit model to explicit pane verb (one-up), rather than deleted — niri itself has singling, and the operator liked it; (c) scroll impossibility is an issue, not a JS permit — the shell's zero-JS discipline held through v2/v3/v4, v5 holds it too; (d) ran the niri-vs-master-stack fork deliberately AGAIN (option B, per the 2026-09-13 note) — strip, not stack.|) *)
+   (verify
+    (smoke "two /code-style main panes open the strip: both render as columns side by side, the focused one fully on-stage with measured scroll-margin peeks of its neighbors — zero JS, zero inline styles")
+    (smoke "open-or-focus on an already-strip-visible pane does NOT move its geometry: it flips .focused, scrolls that column into stage (on-stage, neighbors peeking), and I1's visible-focused-always holds on the foreign desktop (:has hiding) too")
+    (smoke "width presets read as column widths (third/half/full resize the column, not the stage); the one-up verb stages the pane single and toggles back to the strip; single persists through reload (workspace row field)")
+    (smoke "close-heal focuses the adjacent column of the strip; closing the last main pane heals exactly as v3 did (rail pane, else none — the strip being empty is valid, launcher visible)")
+    (smoke "shelving hides a column (no strip footprint); acme-Get on its tree row unshelves it INTO the strip (appended or restored rank, pane-stamped); desktop flips hide foreign-desktop columns and never scroll the strip")
+    (smoke "Alt+arrow walks focus column-by-column across the strip; pinned rail panes are NOT strip columns (region=rail untouched); probe_shell_sem.mjs ALL GREEN with the rewritten I1 strip block plus v3/v4 assertions")
+    (smoke "the strip is an overflow container: horizontal wheel scrolls it natively; scroll-margin/scroll-padding carry all centering; grep-level check: no inline styles added, no .js artifact added for v5"))
+   (* agent note (|2026-09-16 MAKE (main-strip-v5) IN PROGRESS: lib + glochid + probe landed in the working tree; agent tests 22/22 green, probe_shell_sem ALL GREEN against a budget-healthy build (my files + HEAD libs). FOCUS AS SCROLL: OOB autofocus on the pane section (tabindex=-1, autofocus only on the pane TAKING focus — htmx focuses the first) + scroll-margin-inline peeks (3rem/1.5rem/0 by width) so neighbors peek; NO JS; exact centering not promised, per the stanza. ONE-UP: pane field single (MUST read THROUGH — the accessor checks as-str = "false", not key presence, or unstaging can't turn it off); verb glyph on head + windows-tree rows; css gate = :has(.fs-pane.fs-single:not(.shelved)) so any live single stages the strip, a shelved one releases it. REGION MOVES: pin answers filmstrip/oob-content-strip (in-place section swaps cannot cross containers); glochid splits the inventory into #fs-content (main strip) + #fs-rail (docked bodies + railtabs + trees) under one #fs-surface wrapper the override OOB-re-renders (bodies hx-preserve — live DOM survives the move). FOCUS DISCIPLINE: focus-step + close-heal share one visibility rule (live AND not :has-hidden; dock-visible rail panes everywhere; left neighbor wins a tied distance) — cutting the 0x0 focus arithmetic off at the source (an alt+arrow onto a shelved/foreign-desktop pane used to land the ring on a display:none section). BLOCKER RECORDED: the main-repo build cannot boot the scratch agent — the boot shell render exceeds the 400k budget with the same-day in-flight, uncommitted edits to libs/html + layout + std + pure (measured: tree-boxes ~94k on c184b00 vs ~224k working tree; ~112k with those files reverted at HEAD even with the v5 lib) — habitat issue i-1789591788-8d507ea1-4455-4421-97bd-ae8e9a3705b2; status stays planned until the gate re-runs green on the main tree.|) *)
+   (status planned)
   )
 
   (subsection action-glyphs
