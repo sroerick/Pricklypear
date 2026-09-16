@@ -1,5 +1,6 @@
 # dune / OCaml
 _build/
+_build-v4/
 *.install
 .merlin
 *.cmi
