@@ -6,10 +6,16 @@ set -eu
 
 PORT="${GLOCHID_PORT:-18090}"
 
+# GLOCHID_BIN overrides the exec target (default: the repo _build, the
+# development truth). A stable install at ~/.local/share/glochid/bin
+# lets the local service run a pinned, budget-verified build while the
+# working tree is mid-make (see habitat issue i-1789591788-8d507ea1).
+BIN="${GLOCHID_BIN:-/home/roerick/dev/wyo.tech/pricklypear/_build/default/agent/bin/main.exe}"
+
 case "${GLOCHID_SERVED_OPEN:-0}" in
   1) OPEN_FLAG="--open" ;;
   *) OPEN_FLAG="" ;;
 esac
 
-exec /home/roerick/dev/wyo.tech/pricklypear/_build/default/agent/bin/main.exe \
+exec "$BIN" \
   --serve --port "$PORT" $OPEN_FLAG
