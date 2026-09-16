@@ -90,6 +90,32 @@ rm -f "$H" "$B"
 CODE=$(curl -sS -m 30 "$URL/code")
 echo "$CODE" | grep -q 'fs-tr-item'                            ; check "/code renders the file tree" $?
 
+# 4b. code file arm boots CodeMirror (BORGE-1789581611): the file <pre>
+#     carries the pp-cm boot target attributes, the CM assets serve, and
+#     the shell page bakes the CM boot scripts.
+CMFILE=$(curl -sS -m 30 "$URL/code?path=AGENTS.md")
+echo "$CMFILE" | grep -q 'data-pp-cm'                          ; check "/code file arm is a pp-cm boot target" $?
+echo "$CMFILE" | grep -q 'data-path="AGENTS.md"'               ; check "/code file arm carries data-path" $?
+curl -sS -m 5 -o /dev/null -w '%{http_code}' "$URL/assets/codemirror.min.js" | grep -q 200 ; check "CM core asset serves" $?
+curl -sS -m 5 -o /dev/null -w '%{http_code}' "$URL/assets/codemirror.min.css" | grep -q 200 ; check "CM css asset serves" $?
+curl -sS -m 5 -o /dev/null -w '%{http_code}' "$URL/assets/cm/scheme.min.js" | grep -q 200 ; check "CM scheme mode asset serves" $?
+curl -sS -m 5 -o /dev/null -w '%{http_code}' "$URL/assets/pp-cm.js" | grep -q 200            ; check "CM boot script serves" $?
+echo "$SHELL" | grep -q '/assets/codemirror.min.js'            ; check "shell loads CodeMirror" $?
+echo "$SHELL" | grep -q '/assets/pp-cm.js'                     ; check "shell loads pp-cm boot" $?
+
+# 4c. editor write-back: POST /code/save (fs/write sandbox guard is the
+#     prim's) round-trips, and a traversal attempt is rejected (fs write
+#     error -> non-2xx/task error text).
+SAVE=$(curl -sS -m 10 -X POST "$URL/code/save" -d 'path=.agent/smoke-save.txt&content=hello cm save')
+echo "$SAVE" | grep -q '^saved$'                              ; check "/code/save writes" $?
+RDBACK=$(curl -sS -m 10 "$URL/code?path=.agent/smoke-save.txt")
+echo "$RDBACK" | grep -q 'hello cm save'                      ; check "/code/save round-trips in the view" $?
+# the escape POST returns an error body; the guard verdict is: the target
+# must NOT exist on disk
+curl -sS -m 10 -X POST "$URL/code/save" --data-urlencode 'path=../../etc/smoke-escape' --data-urlencode 'content=nope' > /dev/null 2>&1 || true
+[ ! -e /etc/smoke-escape ]                                     ; check "traversal escape did not write" $?
+rm -f .agent/smoke-save.txt
+
 # 5. llm-config surface: settings page renders with a model <select>,
 #    and the chat header carries the same dropdown (hx-post /settings).
 #    With no API key in the smoke env the catalog is current-model-only

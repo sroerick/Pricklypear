@@ -498,6 +498,7 @@ loadFile(FILE);
           ; HTML.script [HTML.src "/assets/cm/mode/mllike/mllike.min.js"] ""
           ; HTML.script
               [HTML.src "/assets/cm/mode/markdown/markdown.min.js"] ""
+          ; HTML.script [HTML.src "/assets/cm/mode/scheme.min.js"] ""
           ; HTML.script [] "%s" boot_js
           ]
       ]
