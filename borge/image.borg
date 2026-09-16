@@ -1522,6 +1522,150 @@
     |))
    )
   )
+  (subsection budget-ledger
+   (doc "Per-route eval-step ledger: /timing gains steps + budget share; unprobed route enumeration + progressive GET probes")
+   (status implemented)
+   (* agent note (|2026-12-30: layout/css-url re-rendered the theme sheet per page (~20k steps) and pushed near-cap pages over budget; the step cost was invisible because /timing measured WALL time only while the kernel already billed STEPS on every eval. This ledger makes steps first-class at the same choke point.|) *)
+   (implements image/lib/timing.ml image/lib/http_data.ml image/lib/session.ml lisp/lib/budget.ml)
+   (verify
+    (build "dune build image")
+    (smoke "GET /timing shows steps + budget-share columns for sampled routes (steps total from the handler's own eval budget)")
+    (smoke "steps column zero for prims-free routes; ui/home-scale chains show 10k-100k scale")
+    (smoke "routes with NO samples appear in the ledger as unprobed, with handler + visibility, sorted last")
+    (smoke "each /timing page load probes a bounded batch (≤15) of unprobed GET routes and their samples appear on reload")
+    (smoke "probe of an unbound handler records a skip, not an incident storm")
+    (smoke "budget-share flag highlights routes over 25% of the eval budget"))
+
+   (details
+    (doc (|
+         =========================================================
+         WHY
+         =========================================================
+         The kernel bills EVERY eval: budget.steps (400k default;
+         ui shell refresh alone ~71k) with the handler name as the
+         stat label. Three sinks already existed: wall clock
+         (/timing), db_ms/db_hits (same ring), and steps →
+         function_stat (write-only telemetry, no read face). None
+         answered the operator question "what does each ENDPOINT
+         cost, in steps, and what is near the cap?" — e.g. the
+         layout/css-url face re-rendered the theme sheet (~20k)
+         inside a per-call LAMBDA, re-paid on every page, and the
+         ledger was blind to it because wall time stayed flat
+         (in-process eval, sub-ms).
+
+         THE FIX — make steps first-class at the same choke point:
+         Timing.measure's fiber-keyed budget slot already exposes the
+         handler's OWN eval budget race-free (i-1788670103-5). Sample
+         gains steps = b.steps at record time. Zero new plumbing.
+
+         =========================================================
+         WHAT THE LEDGER SHOWS
+         =========================================================
+         1. STEPS + BUDGET SHARE: every sampled route row gains
+            avg steps + steps-share-of-budget (flag routes over
+            25%). Steps are the handler eval's OWN budget — fresh
+            per dispatch — so they compose across nested evals
+            (a forced thunk's cost bills where the force happens).
+
+         2. ROUTE ENUMERATION: the ledger section lists EVERY
+            user route visible to the session (Session.routes —
+            route, handler, visibility), not just routes traffic
+            has hit. Unprobed routes list as "—" and sort last.
+
+         3. PROGRESSIVE PROBE: each /timing page load probes a
+            bounded batch (≤15) of unprobed routes through
+            Session.call_handler with a synthetic GET request (no
+            params, no body), wrapped in measure — so probes land
+            in the SAME ring as live traffic and accumulate across
+            page loads until the sweep covers everything. Admin
+            only (the page already is). Probe results CANNOT be
+            distinguished from real traffic in the ring — accepted
+            v1 simplification; the count column tells the story.
+
+         =========================================================
+         CONSTRAINTS / NON-GOALS
+         =========================================================
+         - GET-ROUTE PROBES MAY HAVE SIDE EFFECTS: any GET handler
+           body runs for real (counters, logs, cache warmers). This
+           is the operator's own habitat; the page carries an
+           explicit note. Handlers that error record their sample
+           (work happened) and MAY file ops incidents — that is the
+           existing error funnel, unchanged.
+         - POST-only routes are never probed (the routes table has
+           no method, but a synthetic GET only renders form-shells
+           or no-ops for all seeded handlers; op-protocol writes
+           ride POST, which the sweep never sends).
+         - NO new schema; the ring stays in-process. Persistent
+           steps history remains function_stat (already billed
+           there; a read face for it is deferred until this page
+           proves its numbers against the ring).
+         - fragile totals: steps vary with data size and stale
+           memoization across sessions; the ledger is a relative
+           ranking tool, not SLA measurement.
+    |))
+   )
+  )
+  (subsection db-panel
+   (doc "DB panel: per-endpoint DB-prim breakdown + global Postgres stats face (/db, admin)")
+   (status implemented)
+   (* agent note (|2026-12-30: user asked to pipe Postgres analytics to the front end — per endpoint: number of db calls, efficiency. The timing ring already carried db_ms/db_hits per route; the new piece is WHICH prims each route ran (note_prim_db at the register_crud choke point) and a global pg_stat face.|) *)
+   (implements lisp/lib/budget.ml image/lib/prims_db_common.ml image/lib/timing.ml image/lib/http_data.ml image/lib/http.ml image/lib/store_db.ml)
+   (verify
+    (build "dune build image")
+    (smoke "GET /timing rows show a db-prim breakdown cell (get×3, rows×1 …) with per-prim db ms")
+    (smoke "GET /db (admin) shows pg_stat_database hit ratio, xacts, deadlocks; zero-safe when counters empty")
+    (smoke "GET /db shows pg_stat_user_tables top-by-seq_scan with n_live_tup and write counts")
+    (smoke "GET /db shows running pg_stat_activity queries (idle excluded) — or a none row")
+    (smoke "GET /db shows pg_stat_statements top-by-total_exec_time when the extension exists; a no-extension note otherwise")
+    (smoke "GET /db non-admin 403/redirect; fixed SQL only (no dynamic SQL, no user input into pg_stat queries)"))
+
+   (details
+    (doc (|
+         =========================================================
+         WHY
+         =========================================================
+         budget-ledger ranks endpoints by steps; the user asked the
+         next question: WHICH DB CALLS does each endpoint make, and
+         what is it doing to Postgres? Two halves:
+
+         1. PER-ENDPOINT PRIM BREAKDOWN (lisp/lib/budget.ml):
+            the budget gains prim_db : (string, calls × db_ms)
+            Hashtbl. note_prim_db fires at the SAME choke point that
+            already bills db_hits/db_ms — prims_db_common
+            register_crud knows its prim name — so the breakdown is
+            exact, cheap (one Hashtbl update per DB prim call), and
+            flows through the existing fiber slot into the timing
+            ring. No new schema, no new sample plumbing.
+
+         2. GLOBAL POSTGRES STATS (/db system page, admin-only):
+            fixed-read-SQL panels over catalog statistics —
+              pg_stat_database: hits/read cache ratio, xacts,
+                rollbacks, deadlocks, temp bytes
+              pg_stat_user_tables: top-by-seq_scan (the missing-
+                index smell), n_live_tup, write counts
+              pg_stat_activity: non-idle queries with age + snippet
+              pg_stat_statements: top-by-total_exec_time when the
+                extension exists (to_regclass probe; a note row
+                otherwise — never a broken page)
+            All SQL is FIXED strings — no user input ever reaches
+            these queries.
+
+         EFFICIENCY LANGUAGE (read the ledger this way):
+           db_ms / db_hits = avg query wall time per endpoint;
+           steps / db_hit  = eval CPU paid per query (high values
+             mean rendering/compute, low values mean the endpoint
+             is basically a query pipe);
+           db_share (from budget-ledger) = time spent WAITING on
+             Postgres vs doing work.
+
+         NON-GOALS: no per-statement correlation to routes (would
+         need query tagging; pg_stat_statements' global view is the
+         v1 answer); no real-time graphing; /db is admin-only and
+         fixed-SQL on purpose — it is a Postgres WINDOW, not a
+         query console.
+    |))
+   )
+  )
   (subsection product-theme
    (doc "Product presentation as Nopales data: css/* sheet compiler, ui/theme + ui/css, emergency CSS only in OCaml")
    (status implemented)

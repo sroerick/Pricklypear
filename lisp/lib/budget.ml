@@ -17,6 +17,12 @@ type budget = {
   mutable db_hits : int;
   mutable db_ms : float;
   fn_step_counts : (string, int) Hashtbl.t;
+  (* image.db-panel: per DB-prim breakdown — prim name → (calls, db ms).
+     Filled at the register_crud choke point (note_prim_db); read by
+     Timing.measure through the fiber-keyed slot so /timing can show
+     WHICH prims an endpoint ran. One Hashtbl update per DB prim call —
+     negligible next to the query it wraps. *)
+  prim_db : (string, int * float) Hashtbl.t;
 }
 
 (** Default per-call step limit for [make_budget]. Raised 100k -> 400k
@@ -39,6 +45,7 @@ let make_budget ?(limit = default_limit) () : budget =
     db_hits = 0;
     db_ms = 0.;
     fn_step_counts = Hashtbl.create 16;
+    prim_db = Hashtbl.create 8;
   }
 
 (** {2 Concurrency contract (i-1788670103-5)}
@@ -153,6 +160,15 @@ let note_db_hit () : unit =
 let note_db_ms (ms : float) : unit =
   match current () with
   | Some b -> b.db_ms <- b.db_ms +. ms
+  | None -> ()
+
+(** Bill one DB-prim call under [name] with [ms] of DB wall time onto
+    the per-prim breakdown (image.db-panel). No-op outside an eval. *)
+let note_prim_db (name : string) (ms : float) : unit =
+  match current () with
+  | Some b ->
+    let calls, tot = try Hashtbl.find b.prim_db name with Not_found -> (0, 0.) in
+    Hashtbl.replace b.prim_db name (calls + 1, tot +. ms)
   | None -> ()
 
 (** Advance [b]'s step count (tracking per-function counts) and raise

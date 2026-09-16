@@ -28,6 +28,7 @@ let budget_remaining_steps = Budget.budget_remaining_steps
 let current_steps = Budget.current_steps
 let note_db_hit = Budget.note_db_hit
 let note_db_ms = Budget.note_db_ms
+let note_prim_db = Budget.note_prim_db
 let tick = Budget.tick
 
 (** A primitive for pure tests / name registration: sync function.
