@@ -985,6 +985,9 @@ let routes : route list =
       (fun env -> launch env (fun session -> list_types_page session env.reqd));
     rt "timing" [ `GET ] (Exact "/timing")
       (fun env -> launch env (fun session -> timing_page session env.reqd));
+    (* ---- db panel (image.db-panel; admin; fixed read SQL) ---- *)
+    rt "db-panel" [ `GET ] (Exact "/db")
+      (fun env -> launch env (fun session -> db_panel_page session env.reqd));
     (* ---- data_rows browser ---- *)
     rt "data-index" [ `GET ] (Exact_any [ "/data"; "/data/" ])
       (fun env -> launch env (fun session -> data_index_page session env.reqd));

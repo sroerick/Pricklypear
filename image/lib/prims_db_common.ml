@@ -23,8 +23,10 @@ let register_crud ~(tbl : Primitives.t) name fn =
       let t0 = Unix.gettimeofday () in
       let result = fn (coerce_sym_args args) in
       let elapsed_ms = (Unix.gettimeofday () -. t0) *. 1000. in
-      (* accumulate DB wall time into the eval budget for page-timing *)
+      (* accumulate DB wall time into the eval budget for page-timing;
+         per-prim breakdown for the db-panel (image.db-panel) *)
       Pricklypear_lisp.Eval.note_db_ms elapsed_ms;
+      Pricklypear_lisp.Eval.note_prim_db name elapsed_ms;
       result)
 
 let deny_anon name =
