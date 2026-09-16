@@ -101,3 +101,20 @@ mechanism, the chat-contacts/calendar-month trees are content work,
 not renderer work. Drill-down projection likewise deferred; outline
 projection shipped.
 
+
+## Postscript (2026-09-16, pane-trees amendment)
+
+The open seam landed as the "kids" amendment rather than a drill
+projection: `/code` now renders the SAME node rows the rail rides
+(filmstrip/tree-node-li over the glochid/code-tree levelfn) -- one
+template, two faces. Node dicts MAY carry `kids` (JSON string of a
+pre-walked child level; eager dir, zero XHRs below the host threshold
+-- glochid: 12 visible entries, 1 level, calibrated to the 400k step
+request budget). Boot/head rail renders strip kids (filmstrip/
+tree-lazy); splices and pane faces honor them. Latent v4 bug fixed
+en route: label-word hx-vals were url-enc'd, which broke
+filmstrip/open's split-query route matching for every query-bearing
+route (fs leaves could never open from tree labels); vals are raw
+now. code/rows + code/link deleted (obituary in borge/agent.borg
+filmstrip-shell, amendment note in borge/filmstrip.borg
+rail-trees-v4). Full battery green: runtest, smoke, probe 115 OK.

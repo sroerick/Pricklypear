@@ -265,19 +265,22 @@ const wsp2 = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspac
 const codePane = wsp2.content.find((p) => p.route === "/code");
 ok(codePane && String(codePane.desktop) === "1", "I7 fresh pane stamps the current desktop", codePane ? String(codePane.desktop) : "missing");
 
-// ---- I6 + I5: real click-through, dir walk inside the pane ----
+// ---- I6 + I5: real click-through, the SAME outline template as the
+// rail (rail-trees-v4 amendment): dir labels fold in place (eager small
+// dirs pull NOTHING), leaf labels open-or-focus via acme Get. ----
 fs.mkdirSync(path.join(AGENT_DIR, "deep"), { recursive: true });
 fs.writeFileSync(path.join(AGENT_DIR, "deep", "leaf.txt"), "leaf\n");
 await send("Page.navigate", { url: base + "/" });
 await sleep(1200);
-console.log(await ev(`(()=>{window.__sem2='s'; const pane=document.querySelector('.fs-pane.focused'); const row=[...pane.querySelectorAll('.fs-body a')].find(a=>a.textContent.trim()==='deep'); if(!row) return 'rows: '+[...pane.querySelectorAll('.fs-body a')].map(a=>a.textContent.trim()).join(','); if(row.getAttribute('hx-target')!=='closest .fs-body') return 'ROW NOT PANE-LOCAL'; row.click(); return 'walked'})()`));
-await sleep(900);
-console.log(await ev(`(()=>{const pane=document.querySelector('.fs-pane.focused'); const row=[...pane.querySelectorAll('.fs-body a')].find(a=>a.textContent.trim()==='leaf.txt'); if(!row) return 'no leaf'; row.click(); return 'leaf clicked'})()`));
+console.log(await ev(`(()=>{window.__sem2='s'; const pane=document.querySelector('.fs-pane.focused'); const d=pane.querySelector('.fs-body li[data-node="deep"] > details'); if(!d) return 'no deep row: '+[...pane.querySelectorAll('.fs-body li.fs-tr-item')].map(li=>li.getAttribute('data-node')).join(','); if(!d.open) d.querySelector('summary').click(); return 'deep folded open'})()`));
+await sleep(600);
+ok((await ev(`document.querySelector('.fs-pane.focused .fs-body li[data-node="deep"] > details').getAttribute('hx-get')`)) === null, "I6 the small deep dir rendered EAGER (no toggle-once pull -- zero XHRs below the threshold)");
+console.log(await ev(`(()=>{const b=[...document.querySelectorAll('.fs-pane.focused .fs-body li[data-node="deep/leaf.txt"] > details > summary .fs-tr-open')].find(x=>x.getClientRects().length>0); if(!b) return 'no leaf label'; b.click(); return 'leaf opened-or-focused (acme Get)'})()`));
 await sleep(900);
 const s3 = await ev(SNAPSHOT);
-ok(await ev(`window.__sem2==='s'`), "I6 dir walk stayed in the same window");
-ok(s3.focusedRect && s3.focusedRect.q && (s3.focusedRegion === "main" || s3.focusedRegion === "rail"), "I1 visible focused pane after pane-local walk (main lift or rail)", JSON.stringify({rect: s3.focusedRect, region: s3.focusedRegion}));
-ok((await ev(`document.querySelector('.fs-pane.focused .fs-body').textContent.includes('leaf')`)), "I6 file content rendered inside the pane body");
+ok(await ev(`window.__sem2==='s'`), "I6 tree walk stayed in the same window");
+ok(s3.focusedRect && s3.focusedRect.q && (s3.focusedRegion === "main" || s3.focusedRegion === "rail"), "I1 visible focused pane after the tree walk (main lift or rail)", JSON.stringify({rect: s3.focusedRect, region: s3.focusedRegion}));
+ok((await ev(`document.querySelector('.fs-pane.focused .fs-body').textContent.includes('leaf')`)), "I6 the leaf label's acme Get focused the file pane (content in the body)");
 
 // ---- I8 ARMED (v3): pin/unpin through the real verbs ----
 after_reload_tag: {
@@ -385,12 +388,12 @@ v3_rail_files: {
     const bodyH = await ev(`Math.round(document.querySelector('${idSel} > .fs-body').getBoundingClientRect().height)`);
     ok((await ev(`getComputedStyle(document.querySelector('${idSel}')).maxHeight`)) === "none", "files: pinned section carries no max-height (cascade cap released)");
     console.log(`     rail geometry: bodyH=${bodyH} contentH=${await ev(`Math.round(document.querySelector('.fs-content').getBoundingClientRect().height)`)}`);
-    console.log(await ev(`(()=>{window.__sem3='pre'; const pane=document.querySelector('${idSel}'); const row=[...pane.querySelectorAll('.fs-body a')].find(a=>a.textContent.trim()==='deep'); if(!row) return 'no deep link in rail body: '+[...pane.querySelectorAll('.fs-body a')].map(a=>a.textContent.trim()).join(','); if(row.getAttribute('hx-target')!=='closest .fs-body') return 'ROW NOT PANE-LOCAL'; row.click(); return 'walked-deep'})()`));
+    console.log(await ev(`(()=>{window.__sem3='pre'; const pane=document.querySelector('${idSel}'); const d=pane.querySelector('.fs-body li[data-node="deep"] > details'); if(!d) return 'no deep row in rail body: '+[...pane.querySelectorAll('.fs-body li.fs-tr-item')].map(li=>li.getAttribute('data-node')).join(','); if(!d.open) d.querySelector('summary').click(); return 'deep folded open in the rail'})()`));
+    await sleep(600);
+    console.log(await ev(`(()=>{const b=[...document.querySelectorAll('${idSel} .fs-body li[data-node="deep/leaf.txt"] > details > summary .fs-tr-open')].find(x=>x.getClientRects().length>0); if(!b) return 'no leaf label in rail body'; b.click(); return 'leaf opened-or-focused via acme Get'})()`));
     await sleep(900);
-    console.log(await ev(`(()=>{const pane=document.querySelector('${idSel}'); const row=[...pane.querySelectorAll('.fs-body a')].find(a=>a.textContent.trim()==='leaf.txt'); if(!row) return 'no leaf in rail body'; row.click(); return 'walked-leaf'})()`));
-    await sleep(900);
-    ok(await ev(`window.__sem3==='pre'`), "files: rail walk stayed in the same window (no navigation)");
-    ok((await ev(`document.querySelector('${idSel} > .fs-body').textContent.includes('leaf')`)), "files: file content rendered INSIDE the rail pane body (I6 at rail height)");
+    ok(await ev(`window.__sem3==='pre'`), "files: the rail tree stayed in the same window (no navigation)");
+    ok((await ev(`document.querySelector('.fs-pane.focused .fs-body').textContent.includes('leaf')`)), "files: the leaf label's acme Get focused the file pane (I6 at rail height)");
     const sF2 = await ev(SNAPSHOT);
     ok(sF2.focusedRect && sF2.focusedRect.q, "I1 visible focused pane after the rail files walk", JSON.stringify(sF2.focusedRect));
   }

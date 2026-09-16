@@ -2285,18 +2285,21 @@ bans (no 0x0 focused pane).")
 ;; POST /filmstrip/open), trailing VERB words (mutation POSTs). The
 ;; host supplies EVERYTHING tree-shaped: filmstrip/tree-roots is a list
 ;; of (id title levelfn) where levelfn: path -> list of node dicts
-;; (label kind node open verbs). The lib renders ONE LEVEL per response
-;; (lazy levels are load-bearing: never a whole tree server-side);
-;; expansion state is NATIVE <details> DOM state -- splice never swap;
-;; the server never knows which nodes are open.
+;; (label kind node open verbs kids). The lib renders ONE LEVEL per
+;; response, EXCEPT where the host pre-walked a small subtree (the
+;; optional kids field renders inline with no pull attrs -- the
+;; threshold is host policy, never lib state); expansion state is
+;; NATIVE <details> DOM state -- splice never swap; the server never
+;; knows which nodes are open.
 (define filmstrip/tree-roots
   (lambda () (list))
   "Host seam: list of (id title levelfn). A levelfn takes a node path
 string (\"\" = the root level) and answers a list of node dicts:
-(label kind node open verbs) -- kind dir|leaf, node the lazy-kids key,
-open a route string or empty (label verb, open-or-focus), verbs a list
-of (word route vals-json) mutation words. Hosts redefine; default
-empty (a rootless shell renders no rail trees).")
+(label kind node open verbs kids) -- kind dir|leaf, node the lazy-kids
+key, open a route string or empty (label verb, open-or-focus), verbs a
+list of (word route vals-json) mutation words, kids an OPTIONAL JSON
+string of a pre-walked child level (eager dir: fold pulls nothing).
+Hosts redefine; default empty (a rootless shell renders no rail trees).")
 
 (define filmstrip/url-enc-ch
   (lambda (c)
@@ -2319,9 +2322,20 @@ empty (a rootless shell renders no rail trees).")
 
 (define filmstrip/url-enc
   (lambda (s)
-    (filmstrip/url-enc-go s 0 ""))
+    (if (or (string-contains? s "%")
+            (string-contains? s " ")
+            (string-contains? s "?")
+            (string-contains? s "&")
+            (string-contains? s "#")
+            (string-contains? s "+"))
+        (filmstrip/url-enc-go s 0 "")
+        s))
   "Minimal percent-encoding for a tree node path riding a query param
-(same six escapees filmstrip/url-dec inverts; everything else passes).")
+(same six escapees filmstrip/url-dec inverts; everything else passes).
+FAST PATH: a per-char Nopales walk costs ~10 steps/char, which the
+eager trees multiplied into whole budget levels; the OCaml
+string-contains? probes settle the no-escapee case in one prim and
+the walk only runs when an escapee is present.")
 
 (define filmstrip/url-dec-ch
   (lambda (hex)
@@ -2377,6 +2391,14 @@ passes through verbatim as %xx -- never throw inside a renderer).")
                      (let ((s (as-str raw)))
                        (if (string-eq s "") (list) (json-parse s))))))
         (is-dir (string-eq kind "dir"))
+        ;; EAGER MODE (rail-trees-v4 amendment): a dir node MAY carry
+        ;; "kids" -- a JSON string of its walked child level. The fold
+        ;; then needs NO toggle-once pull (pure <details>, zero XHRs);
+        ;; absent/empty kids keeps the lazy level GET exactly as v4
+        ;; shipped it. Whether to pre-walk is the HOST's threshold
+        ;; decision -- the lib only renders what it is handed.
+        (kids (let ((k (dict-get n "kids"))) (if (null? k) "" (as-str k))))
+        (eager (and is-dir (not (string-eq kids ""))))
         (label-word
           (if (string-eq open "")
               (html/span (html/attr "class" "fs-tr-open") (html/text label))
@@ -2388,7 +2410,16 @@ passes through verbatim as %xx -- never throw inside a renderer).")
                     (html/attr "title" (string-append "open-or-focus " label))
                     (html/attr "hx-post" "/filmstrip/open")
                     (html/attr "hx-vals"
-                      (string-append "{\"route\":\"" (filmstrip/url-enc open) "\"}"))
+                      ;; RAW route, not url-enc'd: vals ride the POST
+                      ;; body (htmx json-parses the attr), and
+                      ;; filmstrip/open route-matches via split-query --
+                      ;; an encoded %3F reads as literal text there and
+                      ;; breaks every query-bearing route (the fs face's
+                      ;; /code?path=... panes could not open from tree
+                      ;; labels under the v4 draft). url-enc stays for
+                      ;; GET URLs (hx-get querystrings), where ?& must
+                      ;; not delimit.
+                      (string-append "{\"route\":\"" open "\"}"))
                     (html/attr "hx-target" "#fs-sink")
                     (html/attr "hx-swap" "innerHTML")))
                 (html/text label))))
@@ -2446,7 +2477,7 @@ passes through verbatim as %xx -- never throw inside a renderer).")
         (details-attrs
           (append
             (list (html/attr "class" "fs-tr-node"))
-            (if (not is-dir)
+            (if (or (not is-dir) eager)
                 (list)
                 (list
                   (html/attr "hx-get"
@@ -2478,14 +2509,34 @@ passes through verbatim as %xx -- never throw inside a renderer).")
                   (html/join row-els)))
               (if (not is-dir)
                   (list)
-                  (list (html/tag "ul" (html/attr "class" "fs-tr-kids") "")))
+                  (list
+                    (html/tag
+                      "ul"
+                      (html/attr "class" "fs-tr-kids")
+                      (if
+                        eager
+                        (filmstrip/tree-level root-id (json-parse kids))
+                        ""))))
               (list actions-fold)))))))
-  "One node row: li[data-node] > details > summary(fold arrow + label\n+ verb GLYPHS) [+ lazy kids ul for dirs] [+ a narrow-only actions\nul when the node carries verbs -- the SAME glyphs as children, never\na second summary or a duplicate list]. Dir details carry the lazy\nlevel GET; leaf details are fold-only. Zero JS beyond the htmx attrs.")
+  "One node row: li[data-node] > details > summary(fold arrow + label\n+ verb GLYPHS) [+ kids ul for dirs: EAGER (pre-walked level rendered\ninline, no pull attrs) when the node carries a non-empty kids JSON\nstring, else the lazy toggle-once level GET] [+ a narrow-only actions\nul when the node carries verbs -- the SAME glyphs as children, never\na second summary or a duplicate list]. Leaf details are fold-only.\nZero JS beyond the htmx attrs.")
 
 (define filmstrip/tree-level
   (lambda (root-id nodes)
     (html/join (list/map (lambda (n) (filmstrip/tree-node-li root-id n)) nodes)))
   "One LEVEL of a tree as a joined li fragment (the splice payload).")
+
+(define filmstrip/tree-lazy
+  (lambda (nodes)
+    (list/map (lambda (n) (dict-set n "kids" "")) nodes))
+  "Boot-lazy projection of a level: eager kids are EMPTIED so the head
+render stays level-0-only (the request budget is a whole shared shell
+-- an eager head over the fs made the boot shell bust the 400k step
+ceiling). The DOM rule still holds at boot: folding pulls the level
+fresh via toggle-once, and the SPLICE renders whatever eager kids the
+host chose (a GET answers a small subtree in one response). Pane faces
+render the level directly and honor kids -- one template, two
+materialization points. Node dicts ride JSON strings (v4 make-note:
+dict-set* refuses non-strings), so dict-set applies cleanly.")
 
 (define filmstrip/tree-box
   (lambda (root)
@@ -2522,7 +2573,7 @@ passes through verbatim as %xx -- never throw inside a renderer).")
                 (list
                   (html/attr "id" (string-append "fs-tree-" id "-root"))
                   (html/attr "class" "fs-tr-kids fs-tr-root")))
-              (filmstrip/tree-level id (levelfn ""))))))))
+              (filmstrip/tree-level id (filmstrip/tree-lazy (levelfn "")))))))))
   "One rail tree controlbox: title + collapse-all word + level 0. All
 geometry from classes; the level-0 UL id (fs-tree-<id>-root) is the
 mutation OOB seam -- the head never changes, so only rows re-render.")
@@ -2539,7 +2590,7 @@ mutation OOB seam -- the head never changes, so only rows re-render.")
             (html/attr "id" (string-append "fs-tree-" id "-root"))
             (html/attr "class" "fs-tr-kids fs-tr-root")
             (html/attr "hx-swap-oob" "innerHTML")))
-        (filmstrip/tree-level id (levelfn "")))))
+        (filmstrip/tree-level id (filmstrip/tree-lazy (levelfn ""))))))
   "OOB (hx-swap-oob innerHTML on the level-0 UL) re-render of one
 tree's ROWS -- the mutation refresh seam. The box head never changes,
 so the div itself is never swapped (swapping it made htmx drop

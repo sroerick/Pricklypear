@@ -22,7 +22,7 @@
 open Pricklypear_lisp
 
 (** The surface source. Defines chat/page, chat/user-bubble,
-    chat/llm-bubble-open, chat/token, code/page, code/rows and registers
+    chat/llm-bubble-open, chat/token, code/page and registers
     the / and /code routes via the agent route table. Uses libs/html +
     the agent's request-shape prims (query-param). *)
 let surface_source = {pp|
@@ -142,7 +142,8 @@ let surface_source = {pp|
     ".fs-railtab.fs-btn{background:none;border:1px solid transparent;color:#7aa2f7}"
     ".fs-shell:has(#fs-railmode.rm-windows) .fs-rmode:not([data-rmode=\"windows\"]){display:none}"
     ".fs-shell:has(#fs-railmode.rm-code) .fs-rmode:not([data-rmode=\"code\"]){display:none}"
-    ".fs-shell:has(#fs-railmode.rm-prims) .fs-rmode:not([data-rmode=\"prims\"]){display:none}"))
+    ".fs-shell:has(#fs-railmode.rm-prims) .fs-rmode:not([data-rmode=\"prims\"]){display:none}"
+    ".pp-cm-status::after{content:none}"))
 
 (define (glochid/layout title body)
   (if (hx-request?)
@@ -155,6 +156,7 @@ let surface_source = {pp|
           "<script src=\"/assets/htmx.min.js\"></script>"
           "<script src=\"/assets/htmx-2-compat.min.js\"></script>"
           "<script src=\"/assets/hx-multipart.js\"></script>"
+          "<script src=\"/assets/codemirror.min.js\"></script>"
           "</body></html>"))))
 
 ;; ---- llm-config helpers (borge/agent.borg llm-config) ----
@@ -411,62 +413,67 @@ app-link/button twins (POST /filmstrip/new, open-or-focus /sessions)."
   (render-html (string-append "<div class=\"trace\">[turn error: " (html-escape text) "]</div>")))
 
 ;; ---- code browser (GET /code) ----
-;; Read-only file tree + file view, rendered by Nopales via fs/ls +
-;; fs/read + fs/dir? (agent host prims). query-param "path" selects the
-;; entry (relative to the agent's cwd); the agent's fs prims refuse ".."
-;; escapes (sandbox posture).
-;; PANE-LOCAL NAV (filmstrip nav discipline): in fragment mode (pane
-;; body) the rows/issues carry hx-get targeting closest .fs-body, so a
-;; dir walk happens INSIDE the pane instead of navigating the whole
-;; window out of the shell (the app-link twin would open-or-focus a NEW
-;; pane per path — wrong for a tree walk). The standalone page keeps
-;; plain anchors.
-(define (code/link child label)
-  (if (hx-request?)
-      (string-append "<a href=\"/code?path=" (html-escape child)
-        "\" hx-get=\"/code?path=" (html-escape child)
-        "\" hx-target=\"closest .fs-body\" hx-swap=\"innerHTML\">"
-        (html-escape label) "</a>")
-      (string-append "<a href=\"/code?path=" (html-escape child)
-        "\">" (html-escape label) "</a>")))
-
+;; Read-only file tree + file content arm, rendered by Nopales via fs/ls
+;; + fs/read + fs/dir? (agent host prims). query-param "path" selects
+;; the entry (relative to the agent's cwd); the agent's fs prims refuse
+;; ".." escapes (sandbox posture).
+;; ONE TEMPLATE, TWO FACES (rail-trees-v4 amendment): the dir arm
+;; renders the SAME outline rows the rail code box renders --
+;; filmstrip/tree-node-li over the glochid/code-tree levelfn, eager
+;; kids under the threshold, native <details> folds. The retired table
+;; walk (code/rows + code/link + the pane-local <a> discipline)
+;; wanted a second template and a nav trick the tree makes moot: a dir
+;; label folds IN PLACE (no re-render, no URL change), a leaf label
+;; open-or-focuses /code?path=<file> via POST /filmstrip/open.
+;; The file arm is the pane's own: <pre> content, no children.
 (define (code/head)
   (if (hx-request?)
       "<h1><span class=\"muted\">/code</span></h1>"
       "<h1><a href=\"/\">agent</a> <span class=\"muted\">/</span> <a href=\"/code\">code</a></h1>"))
 
+(define (code/tree rel)
+  "The /code dir face, both modes: the same node rows the rail tree
+box rides (root id 'code' -- lazily folded dirs pull their level via
+the ONE /filmstrip/tree endpoint; neither face gets box chrome here)."
+  (string-append
+    "<p class=\"muted\">/code"
+    (if (string-eq rel "") "" (string-append " " (html-escape rel)))
+    "</p>"
+    "<ul class=\"fs-tr-kids fs-tr-root\">"
+    (filmstrip/tree-level "code" (glochid/code-tree rel))
+    "</ul>"))
+
 (define (code/page)
   (let* ((p (query-param "path"))
          (rel (if (null? p) "" p)))
     (if (fs/dir? rel)
-        (let* ((entries (fs/ls rel))
-               (items (json-parse entries)))
-          (glochid/layout "glochid — code"
-            (string-append
-              (code/head)
-              "<p class=\"muted\">" (html-escape rel) "</p>"
-              "<table><tr><th></th><th>name</th></tr>"
-              (code/rows items rel)
-              "</table>")))
+        (glochid/layout "glochid — code"
+          (string-append (code/head) (code/tree rel)))
         (let* ((content (fs/read rel)))
           (glochid/layout "glochid — code"
             (string-append
               (code/head)
               "<p class=\"muted\">" (html-escape rel) "</p>"
-              "<pre>" (html-escape content) "</pre>"))))))
+              ;; file arm (BORGE-1789581611): still a server-escaped
+              ;; <pre>, tagged as a CM boot target — pp-cm.js swaps in
+              ;; the read-only CodeMirror; spec stanza amended.
+              "<pre data-pp-cm data-path=\"" (html-escape rel) "\">"
+              (html-escape content) "</pre>"))))))
 
-(define (code/rows items rel)
-  (list/foldl
-    (lambda (acc entry)
-      (let* ((name (dict-get entry "name"))
-             (dir? (string-eq (dict-get entry "dir") "true"))
-             (kind (if dir? "dir" "file"))
-             (child (if (string-eq rel "") name (string-append rel "/" name))))
-        (string-append acc
-          "<tr><td>" kind
-          "</td><td>" (code/link child name)
-          "</td></tr>")))
-    "" items))
+;; POST /code/save — the file arm's write-back (edit half of
+;; BORGE-1789581611): pp-cm.js posts the CM buffer as path+content and
+;; reads the response body as a status string. The sandbox is the PRIM
+;; layer's job: fs/write resolves through resolve_path, which refuses
+;; ".." — no Nopales-side traversal guard to maintain.
+(define (code/save)
+  (let ((rel (request-param "path"))
+        (content (request-param "content")))
+    (if (or (null? rel) (null? content))
+        "error: path and content required"
+        (begin
+          (fs/write rel content)
+          "saved"))))
+(route "/code/save" "code/save")
 
 (route "/code" "code/page")
 
@@ -534,43 +541,36 @@ shell-escape bug class).")
           (if (string-eq name "") "" (string-append " · " (html-escape name)))
           "</p>")))
   "Breadcrumb line: packages · <pkg> [ · <name>]. Nothing at the root
-(the packages page needs no trail).")
+(the tree folds DOWN; the trail is the only way up, so its pane-local
+anchors stay — the one legal <a> use in a fragment).")
 
-(define bind/rows
-  (lambda (entries url-of)
-    (list/foldl
-      (lambda (acc e)
-        (let ((s (as-str e)))
-          (string-append acc
-            "<tr><td>" (bind/link (url-of s) s) "</td></tr>")))
-      "" entries))
-  "One-column table of name rows, each link pane-aware.")
+(define bind/tree
+  (lambda (pkg)
+    (string-append
+      "<p class=\"muted\">/bindings"
+      (if (string-eq pkg "") "" (string-append " " (html-escape pkg)))
+      "</p>"
+      "<ul class=\"fs-tr-kids fs-tr-root\">"
+      (filmstrip/tree-level
+        "prims"
+        (glochid/prims-tree
+          (if (string-eq pkg "") "" (string-append "prims/" pkg))))
+      "</ul>"))
+  "The /bindings tree face, both modes: the SAME node rows the rail
+prims box rides (root id 'prims' -- folded packages pull their level
+via the ONE /filmstrip/tree endpoint; neither face gets box chrome).")
 
-(define bind/packages-html
+(define bind/root-html
   (lambda ()
     (let ((r (bind/safe bind/packages)))
       (if (string-eq (car r) "ok")
           (string-append
-            "<table><tr><th>package</th></tr>"
-            (bind/rows (bind/list-result r)
-              (lambda (s) (string-append "/bindings?pkg=" s)))
-            "</table>"
+            (bind/tree "")
             "<p class=\"muted\">the habitat's function grammar (list-packages over POST /api/eval) — read-only in glochid</p>")
           (bind/bridge-down (nth r 1)))))
-  "The /bindings root: one row per package of the bridge identity's
-current branch chain.")
-
-(define bind/pkg-html
-  (lambda (pkg)
-    (let ((r (bind/safe (lambda () (bind/list pkg)))))
-      (if (string-eq (car r) "ok")
-          (string-append
-            "<table><tr><th>" (html-escape pkg) "/</th></tr>"
-            (bind/rows (bind/list-result r)
-              (lambda (s) (string-append "/bindings?pkg=" pkg "&name=" s)))
-            "</table>")
-          (bind/bridge-down (nth r 1)))))
-  "/bindings?pkg=<pkg>: one row per function in the package.")
+  "The /bindings root: the package tree when the bridge answers; the
+bridge-down block otherwise (ONE bridge call, checked before render
+-- the levelfn re-calls fail-soft).")
 
 (define bind/field
   (lambda (d k)
@@ -600,39 +600,17 @@ this branch) renders as the empty string.")
           (bind/trail pkg name)
           (if (string-eq name "")
               (if (string-eq pkg "")
-                  (bind/packages-html)
-                  (bind/pkg-html pkg))
+                  (bind/root-html)
+                  (bind/tree pkg))
               (bind/detail-html pkg name))))))
-  "GET /bindings: package -> function -> doc+source over the bind/* bridge.")
+  "GET /bindings: the SAME tree template as the rail prims box --
+root = package dirs, ?pkg=<pkg> = that package's function level,
+?pkg=&name= = the detail arm (docstring + pretty source, the pane's
+file-arm twin). The retired table walk (bind/rows + bind/packages-html
++ bind/pkg-html) wanted a second template the shared outline makes
+moot: a package label folds in place, a function label open-or-focuses
+its detail pane, the trail is the only way up.")
 (route "/bindings" "bind/page")
-
-;; ---- bindings cascade childfn (glochid/pkg-browse host seam 2) ----
-;; "bindings" lists package crumbs; "bindings/<pkg>" lists that package's
-;; function leaves — leaf routes /bindings?pkg=<pkg>&name=<name>
-;; open-or-focus panes. Bridge-down renders ONE EMPTY COLUMN (a broken
-;; shell is the worse failure; the bridge's call-time raise must not
-;; escape the walk).
-(define bind/dir-of
-  (lambda (prefix)
-    (substring prefix 9 (string-length prefix)))
-  "Cascade path element -> habitat package (\"bindings/todo\" -> \"todo\").")
-
-(define bind/browse-entries
-  (lambda (prefix)
-    (if (string-eq prefix "bindings")
-        (list/map
-          (lambda (p)
-            (let ((s (as-str p)))
-              (list s (string-append "bindings/" s))))
-          (bind/list-result (bind/safe bind/packages)))
-        (let ((pkg (bind/dir-of prefix)))
-          (list/map
-            (lambda (n)
-              (let ((s (as-str n)))
-                (list s (string-append "/bindings?pkg=" pkg "&name=" s))))
-            (bind/list-result (bind/safe (lambda () (bind/list pkg))))))))
-  "childfn for the bindings cascade: packages, then the package's
-function leaves.")
 |pp}
 
 (** The glochid layer (borge/agent.borg filmstrip-shell). Load order:
@@ -1000,66 +978,150 @@ renderer takes only real node dicts).")
 panes; 'shelf' -> the shelved panes): DESKTOP-GLOBAL data from the
 one workspace row, never from live DOM.")
 
+;; ---- 2b2b. THE SHARED FILE TREE (rail + pane ARE the same rows) ----
+;; rail-trees-v4 amendment: a node dict MAY carry "kids" -- a JSON
+;; string of its walked child level; the lib renders eager kids INLINE
+;; (no toggle-once GET) and keeps the lazy level pull for big/deep
+;; dirs. The threshold is HOST policy (fs knowledge lives here, not in
+;; the lib): a dir pre-walks its children only while the child level
+;; holds at most glochid/tree-kids-max visible entries and the eager
+;; depth is below glochid/tree-kids-depth. The defaults (12 entries, 1
+;; level) are calibrated to the interpreter's 400k-step request budget:
+;; the whole-root walk costs ~60k steps (vs 16k lazy) and fits beside
+;; the shell render; bigger budgets can push both constants up.
+;; node_modules-scale subtrees degrade to the ordinary one-GET lazy
+;; level. ONE walk feeds BOTH faces: the rail code box and the /code
+;; pane are the same rows.
+(define glochid/tree-kids-max 12)
+(define glochid/tree-kids-depth 1)
+
+(define glochid/json-arr-tail
+  (lambda (xs)
+    (if (null? (cdr xs))
+        (car xs)
+        (string-append (car xs) "," (glochid/json-arr-tail (cdr xs)))))
+  "Comma join (glochid/json-arr's inner walk).")
+
+(define glochid/json-arr
+  (lambda (xs)
+    (if (null? xs)
+        "[]"
+        (string-append "[" (glochid/json-arr-tail xs) "]")))
+  "Join already-encoded JSON object strings into one array literal.")
+
+(define glochid/fs-node
+  (lambda (name is-dir path kids-json)
+    (if (string-eq kids-json "")
+        (dict-set*
+          "{}"
+          (list
+            "label" name
+            "kind" (if is-dir "dir" "leaf")
+            "node" path
+            "open" (if is-dir "" (string-append "/code?path=" path))
+            "verbs" ""))
+        (dict-set*
+          "{}"
+          (list
+            "label" name
+            "kind" (if is-dir "dir" "leaf")
+            "node" path
+            "open" (if is-dir "" (string-append "/code?path=" path))
+            "verbs" ""
+            "kids" kids-json))))
+  "One fs node dict (a JSON string, like every tree row): absent/empty
+kids = ordinary lazy dir; a non-empty kids array string = eager dir.")
+
+(define glochid/kids-arr
+  (lambda (dir depth)
+    (if (>= depth glochid/tree-kids-depth)
+        ""
+        (let
+          ((entries (json-parse (fs/ls dir))))
+          (if (> (count entries) glochid/tree-kids-max)
+              ""
+              (glochid/json-arr
+                (glochid/fs-rows-of dir (+ depth 1) entries))))))
+  "The eager threshold in one place: one readdir to COUNT the child
+level, inline it only under the cap and below the depth bound; else
+lazy (empty string, no kids field).")
+
+(define glochid/fs-rows-of
+  (lambda (path depth entries)
+    (glochid/keep-nodes
+      (filmstrip/map-indexed
+        (lambda (e i)
+          (let*
+            ((name (as-str (dict-get e "name")))
+              (is-dir (string-eq (dict-get e "dir") "true"))
+              (child
+                (if (string-eq path "")
+                    name
+                    (string-append path "/" name))))
+            (if (string-starts-with? name ".")
+                ""
+                (glochid/fs-node
+                  name
+                  is-dir
+                  child
+                  (if is-dir (glochid/kids-arr child depth) "")))))
+        entries
+        0)))
+  "One fs level as node-dict rows (JSON strings): the same hidden-dot
+rule as the old cascade walk; dir children self-report their eager
+threshold. glochid/keep-nodes drops the hidden markers in place.")
+
 (define glochid/code-tree
   (lambda (path)
-    (let*
-      ((dir (if (string-eq path "") "." path))
-        (entries
-          (filmstrip/map-indexed
-            (lambda (e i)
-              (let*
-                ((name (as-str (dict-get e "name")))
-                  (child (if (string-eq dir ".") name (string-append dir "/" name)))
-                  (is-dir (string-eq (dict-get e "dir") "true")))
-                (if (string-starts-with? name ".")
-                    ""
-                    (dict-set*
-                      "{}"
-                      (list
-                        "label" name
-                        "kind" (if is-dir "dir" "leaf")
-                        "node" child
-                        "open"
-                        (if is-dir "" (string-append "/code?path=" child))
-                        "verbs" "")))))
-            (json-parse (fs/ls dir))
-            0)))
-      (glochid/keep-nodes entries)))
-  "levelfn for the files tree (the same hidden-dot rule as the cascade
-walk; leaf labels open /code?path=<child> panes).")
+    (let ((entries (json-parse (fs/ls (if (string-eq path "") "." path)))))
+      (glochid/fs-rows-of path 0 entries)))
+  "levelfn for the files tree (rail code box AND /code pane face): one
+node contract, one walk -- small subtrees render eagerly, big ones
+fetch their level exactly once on first unfold.")
+
+(define glochid/prim-leaf
+  (lambda (pkg fn)
+    (dict-set*
+      "{}"
+      (list
+        "label" (as-str fn)
+        "kind" "leaf"
+        "node" (string-append "prims/" pkg)
+        "open" (string-append "/bindings?pkg=" pkg "&name=" (as-str fn))
+        "verbs" "")))
+  "One function leaf row (a JSON string, like every tree row): label
+open-or-focuses the /bindings?pkg=&name= detail pane via acme Get.")
 
 (define glochid/prims-tree
   (lambda (path)
     (if
       (string-eq path "")
-      (list/map
-        (lambda (p)
-          (let ((s (as-str p)))
+      (glochid/keep-nodes
+        (filmstrip/map-indexed
+          (lambda (p i)
             (dict-set*
               "{}"
               (list
-                "label" s
+                "label" (as-str p)
                 "kind" "dir"
-                "node" (string-append "prims/" s)
+                "node" (string-append "prims/" (as-str p))
                 "open" ""
-                "verbs" ""))))
-        (bind/list-result (bind/safe bind/packages)))
-      (let ((pkg (substring path 6 (string-length path))))
-        (list/map
-          (lambda (n)
-            (let ((s (as-str n)))
-              (dict-set*
-                "{}"
-                (list
-                  "label" s
-                  "kind" "leaf"
-                  "node" path
-                  "open" (string-append "/bindings?pkg=" pkg "&name=" s)
-                  "verbs" ""))))
-          (bind/list-result (bind/safe (lambda () (bind/list pkg))))))))
-  "levelfn for the prims tree (package -> function). Bridge fail-soft:
-a down bridge answers an empty level like the cascade does -- the
-shell never errors on the browser's behalf.")
+                "verbs" "")))
+          (bind/list-result (bind/safe bind/packages))
+          0))
+      (list/map
+        (lambda (n)
+          (glochid/prim-leaf (substring path 6 (string-length path)) n))
+        (bind/list-result
+          (bind/safe
+            (lambda () (bind/list (substring path 6 (string-length path)))))))))
+  "levelfn for the prims tree (package -> function) ON THE SHARED NODE
+CONTRACT (rail box and pane face both ride it). Bridge fail-soft: a
+down bridge answers an empty level -- the shell never errors on the
+browser's behalf. NO eager kids here, deliberately: unlike fs/ls a
+count costs one habitat BRIDGE round-trip per package, so folds pull
+their level exactly once -- the template is shared, only the cache
+locality differs.")
 
 (define filmstrip/tree-roots
   (lambda ()
@@ -1343,6 +1405,7 @@ reload keeps the pane). Bad routes fall back to the plain row.")
           "<script src=\"/assets/htmx.min.js\"></script>"
           "<script src=\"/assets/htmx-2-compat.min.js\"></script>"
           "<script src=\"/assets/hx-multipart.js\"></script>"
+          "<script src=\"/assets/codemirror.min.js\"></script>"
           "</body></html>"))))
   "The shell doc: glochid chrome + filmstrip/shell-html (which carries
 its own strip css + theme props from glochid/base-css). HX-Request

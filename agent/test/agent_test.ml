@@ -520,12 +520,19 @@ let test_surfaces_nopales_routes ~rt () =
          ((try ignore (Str.search_forward (Str.regexp_string "/assets/hx-multipart.js") html 0); true
            with Not_found -> false))
    | other -> Alcotest.fail ("chat/page: " ^ Reader.pp_value other));
-  (* GET /code renders the code browser page (root listing). *)
+  (* GET /code renders the code browser page (root listing): since the
+     rail-trees-v4 amendment the dir face IS the rail's outline
+     template -- node rows, not the retired table walk. *)
   (match Runtime.dispatch_route ~rt ~handler:"code/page" ~method_:"GET"
            ~path:"/code" ~params:[] ~headers:[] ~body:""
    with
    | Ast.VStr html ->
-       Alcotest.(check bool) "code page renders" true (String.length html > 0)
+       Alcotest.(check bool) "code page renders" true (String.length html > 0);
+       Alcotest.(check bool) "code page: tree rows, not the table" true
+         ((try ignore (Str.search_forward (Str.regexp_string "fs-tr-item") html 0); true
+           with Not_found -> false)
+          && (try ignore (Str.search_forward (Str.regexp_string "<th>name</th>") html 0); false
+              with Not_found -> true))
    | other -> Alcotest.fail ("code/page: " ^ Reader.pp_value other));
   (* Redefining chat/page live changes the next render (redefinable
      without restart). *)
@@ -539,10 +546,11 @@ let test_surfaces_nopales_routes ~rt () =
            with Not_found -> false))
    | other -> Alcotest.fail ("redef: " ^ Reader.pp_value other))
 
-(** surfaces: the bindings browser renders over the bind/*
-    habitat-bridge prims (faked — tests have no habitat), is pane-aware
-    in fragment mode, feeds the filmstrip cascade, and fails soft (muted
-    notice, no 500; an EMPTY cascade column) when the bridge raises. *)
+(** surfaces: the bindings browser renders on the SHARED tree template
+    (rail prims box pane-face twin) over the bind/* habitat-bridge
+    prims (faked — tests have no habitat), is pane-aware in fragment
+    mode, and fails soft (muted notice on the root face, an empty
+    level otherwise; no 500) when the bridge raises. *)
 let test_surfaces_bindings_browser ~rt () =
   Surface.load ~rt;
   Runtime.add_prim rt "bind/packages" (fun _ -> Ast.VStr {|["notes","todo"]|});
@@ -560,11 +568,12 @@ let test_surfaces_bindings_browser ~rt () =
     | other -> Alcotest.fail ("bind/page: " ^ Reader.pp_value other)
   in
   let root = get [] in
-  Alcotest.(check bool) "packages list" true
-    (has "?pkg=notes" root && has "?pkg=todo" root);
+  Alcotest.(check bool) "packages render the tree rows (dir labels + node paths)" true
+    (has "fs-tr-item" root && has "data-node=\"prims/notes\"" root
+     && has "data-node=\"prims/todo\"" root);
   let pkg = get [ ("pkg", "todo") ] in
-  Alcotest.(check bool) "package rows" true
-    (has "&name=todo/add" pkg && has "&name=todo/list" pkg);
+  Alcotest.(check bool) "package fn rows (leaf labels open-or-focus)" true
+    (has "fs-tr-item" pkg && has "name=todo/add" pkg && has "name=todo/list" pkg);
   Alcotest.(check bool) "breadcrumb trail" true
     (has "/bindings\">packages</a>" pkg);
   let detail = get [ ("pkg", "todo"); ("name", "todo/add") ] in
@@ -572,27 +581,28 @@ let test_surfaces_bindings_browser ~rt () =
     (has "Adds a todo." detail
      && has "<pre>(define (todo/add t)" detail);
   let frag = get ~headers:[ ("hx-request", "true") ] [ ("pkg", "todo") ] in
-  Alcotest.(check bool) "fragment links walk inside the pane" true
-    (has "hx-target=\"closest .fs-body\"" frag);
+  Alcotest.(check bool) "fragment = tree + trail, no doctype" true
+    (has "fs-tr-item" frag && has "closest .fs-body" frag);
   Alcotest.(check bool) "fragment has no doctype" false (has "<!doctype" frag);
-  (* the filmstrip cascade: leaf-entries only (sidebar-main-dichotomy) *)
-  Alcotest.check pp_value_testable "bindings col lists fn leaf routes"
-    (Ast.VStr "/bindings?pkg=todo&name=todo/add")
-    (Runtime.eval_string ~rt {|(nth (nth (bind/browse-entries "bindings/todo") 0) 1)|});
+  (* apps col1 is the bindings route leaf (sidebar-main-dichotomy) *)
   Alcotest.check pp_value_testable "apps col1 is the bindings route leaf"
     (Ast.VStr "/bindings")
     (Runtime.eval_string ~rt {|(nth (nth (glochid/apps) 2) 1)|});
-  (* fail-soft: the bridge raises habitat-unreachable at CALL time — the
-     page renders a muted notice and the cascade one empty column. *)
+  (* fail-soft: the bridge raises habitat-unreachable at CALL time -- the
+     page renders a muted notice and the tree level comes up empty. *)
   Runtime.add_prim rt "bind/packages" (fun _ ->
       raise
         (Ast.Interp_error
            (Ast.Prim_error ("habitat", "down", "habitat-unreachable"))));
   let down = get [] in
   Alcotest.(check bool) "bridge-down notice" true (has "habitat bridge:" down);
-  Alcotest.check pp_value_testable "bridge-down col is empty"
-    (Ast.VList [])
-    (Runtime.eval_string ~rt {|(bind/browse-entries "bindings")|});
+  let downLevel =
+    match Runtime.eval_string ~rt {|(render-html (filmstrip/tree-level "prims" (glochid/prims-tree "")))|} with
+    | Ast.VStr s -> s
+    | other -> Alcotest.fail ("prims level: " ^ Reader.pp_value other)
+  in
+  Alcotest.(check bool) "bridge-down tree level is empty (fail-soft)" true
+    (not (has "<li" downLevel));
   (* restore the canned bridge for any later evals on this rt *)
   Runtime.add_prim rt "bind/packages" (fun _ -> Ast.VStr {|["notes","todo"]|})
 
@@ -674,7 +684,30 @@ let test_rail_trees ~rt () =
   Alcotest.check pp_value_testable "url-enc/url-dec round trip"
     (Ast.VStr "/code?path=a b&x%25y")
     (Runtime.eval_string ~rt
-      {|(filmstrip/url-dec (filmstrip/url-enc "/code?path=a b&x%25y"))|})
+      {|(filmstrip/url-dec (filmstrip/url-enc "/code?path=a b&x%25y"))|});
+  (* EAGER MODE (rail-trees-v4 amendment): a dir node carrying a kids
+     JSON string renders its child level INLINE -- no toggle-once pull
+     for that dir -- while kid rows keep the plain contract. *)
+  let eager_row =
+    match Runtime.eval_string ~rt
+            {|(render-html (filmstrip/tree-node-li "code"
+                 (dict-set* "{}" (list
+                   "label" "small"
+                   "kind" "dir"
+                   "node" "small"
+                   "open" ""
+                   "verbs" ""
+                   "kids" "[{\"label\":\"k.txt\",\"kind\":\"leaf\",\"node\":\"small/k.txt\",\"open\":\"/code?path=small/k.txt\",\"verbs\":\"\"}]"))))|}
+    with
+    | Ast.VStr s -> s
+    | other -> Alcotest.fail ("eager row: " ^ Reader.pp_value other)
+  in
+  Alcotest.(check bool) "eager dir: kids render inline" true
+    (has ">k.txt</button>" eager_row);
+  Alcotest.(check bool) "eager dir: no lazy pull attrs on the details" true
+    (not (has "hx-trigger=\"toggle once\"" eager_row));
+  Alcotest.(check bool) "eager dir: kid rows ride the spliced-ul classes" true
+    (has "fs-tr-kids" eager_row)
 
 (** A consumed turn's captured parts replay through hyper/stream: simulate
     the multipart emitter's captured part list, then hyper/stream over a
