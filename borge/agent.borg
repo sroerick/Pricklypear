@@ -366,13 +366,14 @@
     |))))
 
   (subsection filmstrip-shell
-   (doc "The glochid shell IS a filmstrip (filmstrip.borg, working on the agent host): a Miller-column cascade strip over the agent's OWN surfaces above an niri-style content strip of ordinary route panes — with a persisted AXIS toggle (⇅ stack): horizontal film row (default) or a LEFT-RAIL mode — the shell collapses to a ~20rem screen-edge toolbar (cascade as vertical app menu, panes stacked beneath as a vertical filmstrip) and the FOCUSED pane is lifted out of the rail into the main window (position:fixed, right of the rail — open-or-focus jumps it there). Same seam as the habitat shell — Nopales fragments on the agent route table — with two host seams swapped: the workspace row persists to a LOCAL file (fs prims), and the cascade browse is defined by the agent (chat/code/sessions/settings/memory), not by todo/notes/calendar.")
+   (doc "The glochid shell IS a filmstrip (filmstrip.borg, working on the agent host): a cascade strip (interface PICKER — column 0 entries are route leaves over the agent's OWN surfaces) above an niri-style content strip of ordinary route panes — with a persisted AXIS toggle (strip ⇆ / rail ⇅): horizontal film row (default) or a LEFT-RAIL mode — the shell collapses to a ~20rem sidebar (trees: windows / code / prims per filmstrip.borg rail-trees-v4 + sidebar-main-dichotomy) and the FOCUSED main pane is lifted into the main window (position:fixed — open-or-focus jumps it there). Same seam as the habitat shell — Nopales fragments on the agent route table — with two host seams swapped: the workspace row persists to a LOCAL file (fs prims), and the cascade column 0 is the agent's own surfaces (chat/code/bindings/sessions/settings, all leaves — trees, not menu walks), not by todo/notes/calendar.")
    (status implemented)
    (implements agent/lib/surface.ml agent/lib/http_ui.ml libs/filmstrip/lib.pp libs/css/lib.pp)
    (verify
-    (smoke "GET / renders the shell: #fs-cascade + launcher + #fs-content + key sentinels, zero <script> tags")
-    (smoke "launcher open /code -> pane appears with the dispatched code fragment + .focused; workspace round-trips through .agent/workspace.json on reload")
-    (smoke "cascade: code -> dir walks fs/ls columns; a file leaf opens-or-focuses the /code?path pane")
+    (smoke "GET / renders the shell: #fs-cascade + #fs-content + rail tabs + tree boxes + key sentinels, zero <script> tags")
+    (smoke "cascade leaf click (or POST /filmstrip/open) /code -> pane appears with the dispatched code fragment + .focused; workspace round-trips through .agent/workspace.json on reload")
+    (smoke "trees in the sidebar: the windows tree lists panes under their desktop rows (switch action) + the shelf subtree; the code tree walks fs/ls; the prims tree walks the habitat grammar — no launcher, no pane-tag strip, no desktop switcher controlbox (sidebar-main-dichotomy)")
+    (smoke "every rail-tree action and pane-head action renders a GLYPH carrying its verb word as tooltip + aria-label + data-verb (filmstrip.borg action-glyphs); no verb words are rendered as button labels and the actions fold is narrow-only")
     (smoke "alt+arrow focus POSTs answer OOB class swaps; close answers OOB delete + focus hand-off")
     (smoke "POST /filmstrip/* dispatch through the route-table POST fallback; hx-vals form params reach request-param")
     (smoke "POST /filmstrip/orient toggles the persisted axis; OOB sentinel+button swap keeps live pane DOM; reload renders the stored axis; width presets become height presets in the rail (CSS flex-direction flip)"))
@@ -391,14 +392,16 @@
             devices) is the follow-up once the campaign-8 data prims
             land — the seam is two defs on purpose for exactly that.
 
-         2. THE CASCADE IS THE AGENT'S. filmstrip/browse (and its
-            pkg-browse + apps collaborators) is redefined by the glochid
-            layer: column 0 lists the agent's own surfaces — chat
-            (/chat), code (/code), sessions (/sessions), settings
-            (/settings), memory (/memories) — and code walks the
-            FILESYSTEM cascade (fs/ls: dir -> dir -> file; a file leaf
-            opens-or-focuses the /code?path= pane). The image's
-            todo/notes/calendar browse stays the habitat's shell.
+         2. THE CASCADE IS THE AGENT'S. filmstrip/apps + filmstrip/browse
+            are redefined by the glochid layer: column 0 lists the
+            agent's interfaces as route LEAVES — chat (/chat), code
+            (/code), bindings (/bindings), sessions (/sessions),
+            settings (/settings) — each open-or-focuses a main-window
+            pane. There are no cascade walk entries: structure browsing
+            is the rail trees' job (code -> the fs walk tree, prims ->
+            the habitat grammar tree; filmstrip.borg
+            sidebar-main-dichotomy). The image's todo/notes/calendar
+            browse stays the habitat's shell.
 
          3. FRAGMENT MODE = HX-Request PASSTHROUGH. http_ui dispatch_get
             threads the client's HX-Request header into the agent route
@@ -431,14 +434,14 @@
 
          AXIS TOGGLE (v addition, 2026-09-11): POST /filmstrip/orient
          flips the ws row's \"axis\" field (row=horizontal film, col=
-         LEFT RAIL — the shell narrows to a screen-edge column; cascade
-         stacks its Miller columns as a vertical menu; panes stack
-         beneath with width presets re-read as heights, purely via CSS
-         flex-direction, no new geometry code). In rail mode the
-         .focused pane is position:fixed into the main window right of
-         the rail (its rail slot collapses; open-or-focus moves the
-         big window), RAIL ROWS ARE HEAD-ONLY (non-focused .fs-body
-         display:none — bodies only exist in the main pane), and
+         LEFT RAIL — the shell narrows to a sidebar; the cascade stacks
+         as a vertical interface menu; trees render beneath, purely via
+         CSS flex-direction, no new geometry code). In rail mode the
+         focused MAIN pane is position:fixed into the main window right
+         of the rail (its rail slot collapses; open-or-focus moves the
+         big window), UNFOCUSED MAIN PANES are ABSENT from the rail
+         (a pane is visible as the lifted focused main pane, a pinned
+         region=rail body, or a windows-tree row), and
          .chatpage is pinned to height:100% — its
          normal calc(100vh - 6rem) always overflows a pane box. Focus
          unpersisted-heals to pane 0 at shell render when unset, so a

@@ -164,6 +164,87 @@
    (status implemented)
   )
 
+  (subsection sidebar-main-dichotomy
+   (doc "THE SHELL'S NAV MODEL, one rule: trees live in the SIDEBAR
+       (the col-axis rail), interfaces live in the MAIN window. The
+       cascade is an interface PICKER only — its column 0 entries are
+       route LEAVES that open-or-focus a main-window pane; no host
+       ships cascade walk entries (structure browsing is tree work,
+       not menu work). The rail's inventory comes from rail-trees-v4,
+       and the windows tree is the ONE rendering of the pane inventory
+       — desktop rows (desktop 0..9) carry the switch verb, live pane
+       rows carry focus / pin / width / close, shelved panes are
+       restore / destroy rows under the shelf subtree — so a host
+       renders NO sibling desktop switcher, pane-tag strip, or
+       standalone shelf beside it: any second rendering of the pane
+       inventory is a stale copy waiting to drift. In the col axis an
+       unfocused main pane renders NOWHERE: a pane is visible as the
+       lifted focused main pane, a pinned (region=rail) body, or a row
+       of the windows tree. There is no route-text launcher — opening
+       is PICKING (cascade or tree). The axis toggle is a word on the
+       rail tabs row (its last entry). Filmstrip the framework keeps
+       the walk-capable cascade and the launcher/open endpoint as
+       primitives; the dichotomy is glochid's COMPOSITION of them —
+       glochid's column 0 is all leaves, its shell has no launcher, no
+       pane-tag strip, and no desktop controlbox.")
+   (verify
+    (smoke "cascade column 0 entries are all route leaves; each open-or-focuses a main-window pane")
+    (smoke "the col rail renders no pane-tag strip, desktop switcher controlbox, or launcher; the windows tree is the pane inventory")
+    (smoke "an unfocused main pane is absent from the col rail; focusing its tree row (or a shelf restore) lifts or shows it")
+    (smoke "the axis toggle renders as a word on the rail tabs row and persists through reload"))
+   (status implemented)
+  )
+
+  (subsection action-glyphs
+   (doc "THE UI VOCABULARY IS GLYPHS, and the word is metadata. An
+       action button renders a GLYPH; the verb WORD survives on it as
+       title (a human tooltip), aria-label (the accessible name) and
+       data-verb (the queryable identity). 'pin' / 'width' / 'close' /
+       'focus' were implementation vocabulary leaking into the UI -- a
+       user does not know what pinning MEANS, and a decision is not a
+       word; the glyphs are the decision, the words are its
+       documentation. This refines, and does not repeal, the
+       rail-trees-v4 acme row grammar: the split (fold arrow =
+       children, label = safe open-or-focus, trailing GLYPHS =
+       mutation verbs) is unchanged -- only the verb's rendering
+       changed from word to glyph, and the word moved to the tooltip
+       and data attributes. GLYPHS ARE HOST VOCABULARY: the table
+       filmstrip/act-glyphs (verb word -> glyph) lives in the LIB so
+       the lib's own pane head has a default, and a host redefines
+       that ONE value for another glyph set -- no renderer fork (same
+       seam discipline as filmstrip/apps). A verb absent from the
+       table renders its WORD: glyphs are an improvement over words,
+       never a hard requirement, and a missing glyph must never render
+       a blank button. ROW GRAMMAR (rails trees): fold arrow, label,
+       then the glyphs. THE ACTIONS FOLD IS NARROW-ONLY -- it is the
+       responsive demotion of those same glyphs (responsive = depth,
+       not a new widget), a PLAIN ul child of the node's own
+       <details>, with NO summary of its own and NO duplicate of the
+       node: at rail width the glyphs are hidden in the row and the
+       fold reveals them as children, past the breakpoint the fold is
+       hidden and the glyphs are inline. Exactly ONE of the two is
+       visible at any width; a nested 'actions' summary row that
+       re-lists verbs already shown inline is the bug this rule
+       prohibits (it also duplicated the parent's verbs at child
+       depth). Pane head (filmstrip/pane-head): the same contract --
+       pin/unpin, width and close are glyphs with the same tooltip /
+       aria-label / data-verb trio, so the rail's rows and the lifted
+       pane's header never disagree about vocabulary. rail mode tabs
+       and collapse-all: the tab names are CONTENT labels (like the
+       cascade's app names) and stay words; collapse-all is an action
+       and is a glyph. Every action button carries data-verb so
+       probes + tests select by identity, never by rendered glyph --
+       the glyph is free to change.")
+   (verify
+    (smoke "every action button in the rail trees and the pane head renders a glyph and carries title, aria-label and data-verb (the word is metadata, never the label)")
+    (smoke "a verb missing from filmstrip/act-glyphs renders its word -- never an empty button; redefining the table re-labels every surface at once")
+    (smoke "at rail width the row shows glyphs and the actions fold is hidden; past the breakpoint the glyphs are hidden and the fold reveals them -- never both, never neither")
+    (smoke "no tree row renders a nested actions summary or a second verb list beside the inline glyphs (the duplication regression)")
+    (smoke "probe_shell_sem.mjs T7 green: glyph + data-verb + aria-label + tooltip on every action button, no visible duplicate fold at rail width"))
+   (* agent note (|2026-09-16 SESSION (glochid rail): began as a bug report -- the windows tree rendered each pane's verbs TWICE (inline 'focus pin width close' in the row AND an always-present '... actions' nested details re-listing them; the nested fold was a sibling <li> INSIDE the dir's kids ul, so an expanded desktop showed its 'switch' verb inline on the parent summary and again at child depth). Root cause: the narrow-viewport demotion rule was half-implemented -- CSS hid .fs-tr-verb under max-width:40rem but the fold was ALWAYS emitted. Operator pushed past the bug to the real question: the verb words themselves ('pin'/'width'/'close'/'focus') are implementation vocabulary that means nothing in a UI. RESOLUTION: glyphs, NOT words, with the word surviving as tooltip + accessible name + queryable identity. Implemented: filmstrip/act-glyphs + filmstrip/act-glyph + filmstrip/verb-hint in the lib; tree-node-li renders glyph buttons (title/aria-label/data-verb) and the actions fold became a plain ul child of the node's <details> (CSS: hidden at rail width, revealed past 40rem where the inline glyphs hide instead); pane-head converted to the same trio; collapse-all -> a glyph; axis toggle -> a glyph (title names the axis, the glyph names the action after the flip). glochid's tree rows carry the glyph explicitly (4th tuple slot) via filmstrip/act-glyph, so its region-dependent pin/unpin label agrees with the pane head. Tests moved to data-verb selectors (probe_shell_sem.mjs had 6 textContent lookups + agent_test) and T7 was ADDED as the regression gate for both halves (glyph contract + no duplicate fold). MAKE GOTCHA (recorded): `(filmstrip/act-glyphs)` parses as a CALL on the list -- passing a table VALUE needs the bare symbol `filmstrip/act-glyphs`; Nopales is a Lisp-1 with no 'function value' paren convention, so parenthesizing a value is always a call form.|) *)
+   (status implemented)
+  )
+
   (subsection roadmap-tiers
    (doc "Where filmstrip points once the web product runs: (1) pads
        migration makes the shell a pad tree — the same workspace value
