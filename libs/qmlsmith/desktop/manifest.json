@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "id": "roerick.qmlsmith",
+  "name": "QML Smith",
+  "version": "1.0.0",
+  "author": "roerick",
+  "license": "MIT",
+  "description": "Desktop icons forged by Pricklypear: describe a widget in words, the image's UI prims author a tree, a deterministic compiler emits QtQuick, and it lands on your desktop. Not prod ready. Extremely wacky.",
+  "kinds": ["overlay"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "overlay": "Desktop.qml"
+  }
+}
