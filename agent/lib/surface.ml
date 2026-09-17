@@ -41,6 +41,11 @@ let surface_source = {pp|
     ".muted{color:#6b7080}"
     "h1{margin:.25rem 0 .75rem 0;font-size:1.1rem}"
     "table{border-collapse:collapse;width:100%;max-width:60rem}td,th{padding:.35rem .6rem;border-bottom:1px solid #222;text-align:left;white-space:nowrap}"
+    ;; sessions table: FIXED layout so the three width presets always
+    ;; fit the pane — long first-prompt/model cells ellipsize instead of
+    ;; forcing the pane body (and the strip) to scroll horizontally.
+    "table.sess{table-layout:fixed}table.sess td,table.sess th{overflow:hidden;text-overflow:ellipsis}"
+    "table.sess th:nth-child(1){width:10.5rem}table.sess th:nth-child(3){width:3rem}table.sess th:nth-child(5){width:6.5rem}"
     "pre{background:#12141c;padding:1rem;border-radius:6px;overflow:auto}"
     "input{background:#1b1f2a;color:#d8dee9;border:1px solid #333;border-radius:6px;padding:.5rem}"
     "select{background:#1b1f2a;color:#d8dee9;border:1px solid #333;border-radius:4px}"
@@ -309,7 +314,7 @@ app-link/button twins (POST /filmstrip/new, open-or-focus /sessions)."
       (if (hx-request?)
           "<p><button class=\"fs-applink\" hx-post=\"/filmstrip/new\" hx-target=\"#fs-sink\" hx-swap=\"innerHTML\">+ new session</button></p>"
           "<p><a href=\"/new\">+ new session</a></p>")
-      "<table><tr><th>time</th><th>model</th><th>msgs</th><th>first prompt</th><th></th></tr>"
+      "<table class=\"sess\"><tr><th>time</th><th>model</th><th>msgs</th><th>first prompt</th><th></th></tr>"
       (sessions/rows (session/list))
       "</table>"
       "<p class=\"muted\">transcripts: .agent/sessions/*.jsonl (append-only, local store)</p>")))
