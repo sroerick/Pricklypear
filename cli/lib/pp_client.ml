@@ -38,25 +38,34 @@ let eval_url base =
   in
   base ^ "/api/eval"
 
-(** Run curl; return stdout body (and stderr on failure message). *)
+(** Run curl; return stdout body (and stderr on failure message).
+
+    Auth: Basic user:password by default; a non-empty PP_TOKEN takes
+    over when no password is configured (the delegated-token identity
+    — the agent — has no Basic password). An explicit password always
+    wins, so habitat scripts that set both keep their behavior. *)
 let curl_post ~url ~user ~password ~body ~timeout_s : (string, string) Result.t =
   let timeout = max 1 (int_of_float (Float.ceil timeout_s)) in
+  let auth_args =
+    match getenv "PP_TOKEN" with
+    | Some t when password = "" && String.trim t <> "" ->
+        [| "-H"; "Authorization: Bearer " ^ String.trim t |]
+    | _ -> [| "-u"; user ^ ":" ^ password |]
+  in
   let args =
-    [|
-      "curl";
-      "-sS";
-      "-u";
-      user ^ ":" ^ password;
-      "-H";
-      "Content-Type: application/json";
-      "-H";
-      "Accept: application/json";
-      "--max-time";
-      string_of_int timeout;
-      "-d";
-      body;
-      url;
-    |]
+    Array.append
+      [| "curl"; "-sS" |]
+      (Array.append auth_args
+         [| "-H";
+            "Content-Type: application/json";
+            "-H";
+            "Accept: application/json";
+            "--max-time";
+            string_of_int timeout;
+            "-d";
+            body;
+            url;
+         |])
   in
   (* Prefer open_process_args when available (no shell). *)
   let stdout_path, stderr_path =
