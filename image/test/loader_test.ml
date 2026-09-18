@@ -354,13 +354,18 @@ let test_load_multibyte_utf8 () =
         msg
   | Error e -> Alcotest.fail ("multibyte load failed: " ^ e));
   (* the tail string is byte-exact *)
-  let eval_sym name =
-    Pricklypear_image_lib.Control_rim.run ~prims (fun () ->
-        Pricklypear_lisp.Eval.eval
-          ~budget:(Pricklypear_lisp.Eval.make_budget ())
-          ~prims:Pricklypear_lisp.Eval.empty_prims env
-          (App (Var name, [])))
-  in
+    let eval_sym name =
+      (* Value readback: evaluate the NAME itself. (App (Var name, []))
+         would APPLY the bound value, and applying a non-procedure (a
+         VStr here) raises Interp_error - which is exactly what the
+         first wyo run of this suite tripped over (opaque Interp_error
+         at the readback, load itself green). *)
+      Pricklypear_image_lib.Control_rim.run ~prims (fun () ->
+          Pricklypear_lisp.Eval.eval
+            ~budget:(Pricklypear_lisp.Eval.make_budget ())
+            ~prims:Pricklypear_lisp.Eval.empty_prims env
+            (Var name))
+    in
   (match eval_sym "mb-tail" with
   | VStr s ->
       Alcotest.(check string) "tail string byte-exact"
