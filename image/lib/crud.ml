@@ -1329,7 +1329,42 @@ let wrap_path_exn name (f : unit -> value) : value =
 
 (* ---- hierarchical tree prims (notes.tree-cutover K0) ---- *)
 
-let tree_get (store : Store.t) ~(path : string) ?(at_gen : int64 option) () : value =
+(* note-vis-p1: a direct-path read that lands in ANOTHER user's note
+   garden (data.note.u.<owner>...) must clear the note's body vis floor:
+   private = inside the owner's garden only, users = any signed-in
+   caller, public = anyone. Paths outside data.note.u (fn/route/data.book
+   paths) are untouched. Kernel-internal callers pass viewer=None
+   and stay ungated. Raises so probes get an explicit denial instead of
+   a silent miss. *)
+let gate_note_vis ~(node : Tree_store.node option) ~(path : string)
+    ~(viewer : string option) : unit =
+  match (node, viewer) with
+  | Some n, Some v ->
+    (match Tree_store.note_garden_owner n.path with
+     | Some owner when owner <> Tree_store.path_label v ->
+         let vis =
+           match Tree_store.body_string_field n.body "vis" with
+           | Some s -> s
+           | None -> "private"
+         in
+         let allowed =
+           match vis with
+           | "public" -> true
+           | "users" -> v <> "anonymous"
+           | _ -> false
+         in
+         if not allowed then
+           raise
+             (Pricklypear_lisp.Ast.Interp_error
+                (Pricklypear_lisp.Ast.User_error
+                   (Printf.sprintf "tree read: denied: %s is in %s's garden (vis %s)"
+                      n.path owner vis,
+                    "bad-args")))
+     | _ -> ())
+  | _ -> ()
+
+let tree_get (store : Store.t) ~(path : string) ?(at_gen : int64 option)
+    ?(viewer : string option = None) () : value =
   with_tree_tx store ~none:(fun () -> VNil) (fun conn ->
       let n =
         match at_gen with
@@ -1343,20 +1378,25 @@ let tree_get (store : Store.t) ~(path : string) ?(at_gen : int64 option) () : va
              | None -> None
              | Some v -> Tree_store.version_of_leaf v)
       in
+      gate_note_vis ~node:n ~path ~viewer;
       (match n with
        | None -> VNil
        | Some node -> (VStr (Tree_store.node_to_json node))))
 
-let tree_get_many (store : Store.t) ~(paths : string list) () : value =
+let tree_get_many (store : Store.t) ~(paths : string list)
+    ?(viewer : string option = None) () : value =
   (* One tree tx, N reads: the sync round's batched pull (and the lens
      seed) — N tree/get calls would pay per-call transaction + round
      trip. Envelopes return in path order; misses are SKIPPED (matches
-     the per-node pull's Ok VNil skip). *)
+     the per-node pull's Ok VNil skip). note-vis-p1: each fetched node
+     clears the same vis gate as tree/get — no batch bypass. *)
   with_tree_tx store ~none:(fun () -> VList []) (fun conn ->
       let envs =
         List.filter_map
           (fun p ->
-            match Tree_store.get_by_path conn ~path:p with
+            let n = Tree_store.get_by_path conn ~path:p in
+            gate_note_vis ~node:n ~path:p ~viewer;
+            match n with
             | None -> None
             | Some node -> Some (VStr (Tree_store.node_to_json node)))
           paths
@@ -2368,18 +2408,23 @@ let tree_insert_child (store : Store.t) ~(parent : string) ~(kind : string)
                      | None -> VStr p)
                  | Error e -> VStr ("tree/insert-child: " ^ e))))
 
-let tree_get_uuid (store : Store.t) ~(uuid : string) : value =
+let tree_get_uuid (store : Store.t) ~(uuid : string)
+    ?(viewer : string option = None) () : value =
   with_tree_tx store ~none:(fun () -> VNil) (fun conn ->
       let n = Tree_store.get_by_uuid conn ~uuid in
       (match n with
        | None -> VNil
-       | Some node -> (VStr (Tree_store.node_to_json node))))
+       | Some node ->
+           gate_note_vis ~node:n ~path:node.path ~viewer;
+           (VStr (Tree_store.node_to_json node))))
 
 let tree_find_by (store : Store.t) ~(kind : string option) ~(field : string)
-    ~(value : string) ?(prefix : string = "") ?(limit : int = 50) () : value =
+    ~(value : string) ?(prefix : string = "") ?(viewer : string option = None)
+    ?(limit : int = 50) () : value =
   with_tree_tx store ~none:(fun () -> VList []) (fun conn ->
       let nodes =
-        Tree_store.find_by_body_field conn ~kind ~field ~value ~prefix ~limit ()
+        Tree_store.find_by_body_field conn ~kind ~field ~value ~prefix ~viewer
+          ~limit ()
       in
       (VList (List.map (fun n -> VStr (Tree_store.node_to_json n)) nodes)))
 

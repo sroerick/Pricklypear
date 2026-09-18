@@ -1125,6 +1125,44 @@ let routes : route list =
       (fun env ->
         let name = Packages.name_decode (prefix_rest "/edit/" env.path) in
         launch env (fun session -> save_edit session name env.reqd));
+    (* ---- notes cross-garden read (note-vis-p1) ----
+       /notes/<user>/<slug> resolves slug inside <user>'s garden; the vis
+       floor in tree/find-by decides whether the caller may see it (the
+       lib never decides visibility). Segments ride as cross-user /
+       cross-slug params, percent-decoded per the /edit/ convention, so
+       notes/page keeps one body for /notes and this shape. No POST arm:
+       cross-garden pages are read-only in phase one. *)
+    rt "notes-cross" [ `GET ] (Prefix_nonempty "/notes/")
+      (fun env ->
+        match String.split_on_char '/' (prefix_rest "/notes/" env.path) with
+        | [ user; slug ] when user <> "" && slug <> "" ->
+            launch env (fun session ->
+                let request : Session.request =
+                  { method_ = `GET
+                  ; path = env.path
+                  ; params =
+                      [ ("cross-user", Packages.name_decode user)
+                      ; ("cross-slug", Packages.name_decode slug)
+                      ]
+                      @ parse_query env.target
+                  ; body = ""
+                  ; headers = env.headers
+                  }
+                in
+                match Session.call_handler session ~request "notes/page" with
+                | Session.Handler_ok value ->
+                    respond_handler_value ~session ~reqd:env.reqd
+                      ~path:env.path ~fragment:false value
+                | Session.Handler_unbound ->
+                    text_response env.reqd ~status:`Not_found
+                      ~content_type:"text/plain"
+                      "notes/page unbound — (load-library \"notes\")"
+                | Session.Handler_error msg ->
+                    text_response env.reqd ~status:`Internal_server_error
+                      ~content_type:"text/plain" msg)
+        | _ ->
+            bad_path_page env ~title:"Bad notes path"
+              "use /notes/<user>/<slug>");
     (* ---- CATCH-ALLS (must stay last) ---- *)
     (* User routes: GET + POST (it33). Same path → same handler;
        request-* prims expose method/params for branching. *)
