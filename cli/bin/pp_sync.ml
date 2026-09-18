@@ -283,8 +283,18 @@ let cmd_push ~url ~user ~password ~timeout package =
       1
     end else
       let src = read_file path in
-      (* JSON-encode as Lisp string literal for load-string *)
-      let lit = Yojson.Safe.to_string (`String src) in
+      (* Build a LISP string literal with the reader's own escaper
+         (i-1789409290-0252a259). Yojson's JSON escaping was consumed
+         directly by the Lisp reader, whose escape grammar differs:
+         JSON \f / \b arrived as literal f / b (the reader is forgiving
+         for unknown backslash-X), silently mutating pushed source.
+         escape_string keeps UTF-8 raw and emits \\ddd for other
+         controls, which the reader decodes byte-exactly. The JSON
+         layer still encodes the REQUEST envelope (eval_expr does that
+         itself) — only the Lisp literal inside the expr changes. *)
+      let lit =
+        "\"" ^ Pricklypear_lisp.Reader.escape_string src ^ "\""
+      in
       match
         live ~url ~user ~password ~timeout
           (Printf.sprintf "(load-string %s)" lit)
@@ -648,8 +658,10 @@ let main command package names verbose url user password password_file timeout
   let password =
     Pp_client.resolve_password ~password ~password_file
   in
-  if password = "" then begin
-    prerr_endline "pp-sync: set PP_PASS or --password";
+  let token = Pp_client.getenv_default "PP_TOKEN" "" in
+  if password = "" && String.trim token = "" then begin
+    prerr_endline
+      "pp-sync: set PP_PASS or --password (or PP_TOKEN for Bearer auth)";
     2
   end else
     match command with
