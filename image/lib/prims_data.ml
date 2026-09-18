@@ -274,13 +274,15 @@ let register (t : t) (tbl : Primitives.t) : unit =
     (fun args ->
       match args with
       | [ Pricklypear_lisp.Ast.VStr path ] ->
-          Crud.tree_get t.store ~path ()
+          Crud.tree_get t.store ~path ~viewer:(Some (actor ())) ()
       | [ Pricklypear_lisp.Ast.VStr path
         ; Pricklypear_lisp.Ast.VInt g
         ] ->
-          (* reads-as-of-gen: optional :gen N -> versioned read at that gen
-             (tree-time.reads-as-of-gen). Omitted means head. *)
-          Crud.tree_get t.store ~path ~at_gen:g ()
+            (* reads-as-of-gen: optional :gen N -> versioned read at that gen
+               (tree-time.reads-as-of-gen). Omitted means head.
+               note-vis-p1: both arms carry the caller as viewer so a read
+               into another user's note garden clears the body vis floor. *)
+            Crud.tree_get t.store ~path ~at_gen:g ~viewer:(Some (actor ())) ()
       | _ ->
           (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/get", "need path [, :gen]/", "bad-args")))));
 
@@ -293,7 +295,7 @@ let register (t : t) (tbl : Primitives.t) : unit =
               (function Pricklypear_lisp.Ast.VStr p -> Some p | _ -> None)
               paths
           in
-          Crud.tree_get_many t.store ~paths:ps ()
+          Crud.tree_get_many t.store ~paths:ps ~viewer:(Some (actor ())) ()
       | _ ->
           (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/get-many", "need [path, …]", "bad-args")))));
 
@@ -667,7 +669,7 @@ let register (t : t) (tbl : Primitives.t) : unit =
     (fun args ->
       match args with
       | [ Pricklypear_lisp.Ast.VStr uuid ] ->
-          Crud.tree_get_uuid t.store ~uuid
+          Crud.tree_get_uuid t.store ~uuid ~viewer:(Some (actor ())) ()
       | _ ->
           (raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/get-uuid", "need uuid", "bad-args")))));
 
@@ -675,29 +677,34 @@ let register (t : t) (tbl : Primitives.t) : unit =
     (fun args ->
       (* i-1788348645: reads are garden-scoped by default (writes always
          were). (tree/find-by kind field value [limit] [prefix]); an
-         explicit prefix opts out to a wider subtree, "" = whole store. *)
+         explicit prefix opts out to a wider subtree, "" = whole store.
+         note-vis-p1: every Lisp call carries the caller as viewer, so
+         rows outside the caller's garden must clear the body vis floor
+         (private | users | public); the lib never decides visibility. *)
       let garden () = Tree_store.garden_root ~user:(actor ()) in
+      let viewer = actor () in
       match args with
       | [ Pricklypear_lisp.Ast.VStr kind
         ; Pricklypear_lisp.Ast.VStr field
         ; Pricklypear_lisp.Ast.VStr value
         ] ->
             Crud.tree_find_by t.store ~kind:(Some kind) ~field ~value
-              ~prefix:(garden ()) ()
+              ~prefix:(garden ()) ~viewer:(Some viewer) ()
       | [ Pricklypear_lisp.Ast.VStr kind
         ; Pricklypear_lisp.Ast.VStr field
         ; Pricklypear_lisp.Ast.VStr value
         ; Pricklypear_lisp.Ast.VInt n
         ] ->
             Crud.tree_find_by t.store ~kind:(Some kind) ~field ~value
-              ~prefix:(garden ()) ~limit:(Int64.to_int n) ()
+              ~prefix:(garden ()) ~viewer:(Some viewer)
+              ~limit:(Int64.to_int n) ()
       | [ Pricklypear_lisp.Ast.VStr kind
         ; Pricklypear_lisp.Ast.VStr field
         ; Pricklypear_lisp.Ast.VStr value
         ; Pricklypear_lisp.Ast.VStr p
         ] ->
             Crud.tree_find_by t.store ~kind:(Some kind) ~field ~value
-              ~prefix:p ()
+              ~prefix:p ~viewer:(Some viewer) ()
       | [ Pricklypear_lisp.Ast.VStr kind
         ; Pricklypear_lisp.Ast.VStr field
         ; Pricklypear_lisp.Ast.VStr value
@@ -705,7 +712,7 @@ let register (t : t) (tbl : Primitives.t) : unit =
         ; Pricklypear_lisp.Ast.VStr p
         ] ->
             Crud.tree_find_by t.store ~kind:(Some kind) ~field ~value
-              ~prefix:p ~limit:(Int64.to_int n) ()
+              ~prefix:p ~viewer:(Some viewer) ~limit:(Int64.to_int n) ()
       | _ ->
           ((raise (Pricklypear_lisp.Ast.Interp_error (Pricklypear_lisp.Ast.Prim_error ("tree/find-by", "need kind field value [, limit] [, prefix]", "bad-args"))))));
 

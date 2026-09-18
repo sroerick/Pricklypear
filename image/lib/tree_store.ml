@@ -838,6 +838,13 @@ let valid_path (path : string) : bool =
 let garden_root ~user =
   Printf.sprintf "data.note.u.%s" (path_label user)
 
+(* note-vis-p1: which user's note garden does [path] live under, if any?
+   Paths outside the per-user note namespace (fn/route/data.book paths)
+   have no owner and stay outside the vis gate. *)
+let note_garden_owner (path : string) : string option =
+  match String.split_on_char '.' path with
+  | "data" :: "note" :: "u" :: owner :: _ when owner <> "" -> Some owner
+  | _ -> None
 (* ---- path algebra (one-tree.tree-path-prims; pure, no DB) ----
 
    Kernel path constructors/accessors over the ltree textual form — the
@@ -1154,20 +1161,38 @@ let get_by_uuid (conn : Store_db.conn) ~(uuid : string) : node option =
   | [] -> None
 
 (** Find hierarchical nodes where body->>field = value (e.g. slug).
-    [prefix] restricts hits to an ltree subtree ("" = whole store).
-    The tree/find-by prim passes the caller's garden root by default
-    (i-1788348645); internal callers (slug uniqueness) keep "". *)
+      [prefix] restricts hits to an ltree subtree ("" = whole store).
+      The tree/find-by prim passes the caller's garden root by default
+      (i-1788348645); internal callers (slug uniqueness) keep "".
+
+      [viewer] turns on the per-note vis floor (note-vis-p1): rows OUTSIDE
+      the caller's own note garden must carry body vis users (any
+      signed-in caller) or public (anyone). Rows inside the caller's
+      garden pass unconditionally — vis only ever widens. Internal
+      callers pass None and see the store unfiltered. *)
 let find_by_body_field (conn : Store_db.conn) ~(kind : string option)
     ~(field : string) ~(value : string) ?(prefix : string = "")
+    ?(viewer : string option = None)
     ?(limit : int = 50) () : node list =
   if prefix <> "" && not (valid_path prefix) then []
   else
     let scoped = prefix <> "" in
+    let vis_on = match viewer with Some _ -> true | None -> false in
     (* Placeholders: the kind match consumes $1..$base, an optional scope
-       filter takes $base+1, and LIMIT always comes last. *)
+       filter takes $base+1, the optional vis floor takes the next two
+       (garden floor + viewer), and LIMIT always comes last. *)
     let base = match kind with Some _ -> 3 | None -> 2 in
-    let scope_i = base + 1 in
-    let limit_i = if scoped then base + 2 else base + 1 in
+    let scope_i = if scoped then base + 1 else 0 in
+    let floor_i = base + (if scoped then 1 else 0) + 1 in
+    let viewer_i = floor_i + 1 in
+    let limit_i = viewer_i + 1 in
+    let vis_clause =
+      if not vis_on then ""
+      else
+        Printf.sprintf
+          "AND (path <@ $%d::ltree OR COALESCE(payload #>> '{body,vis}','private') = 'public' OR (COALESCE(payload #>> '{body,vis}','private') = 'users' AND $%d <> 'anonymous')) "
+          floor_i viewer_i
+      in
     let sql =
       (match kind with
        | Some _ ->
@@ -1177,6 +1202,7 @@ let find_by_body_field (conn : Store_db.conn) ~(kind : string option)
            "SELECT " ^ select_cols ^ " FROM tree_nodes "
            ^ "WHERE payload #>> ARRAY['body',$1] = $2 ")
       ^ (if scoped then Printf.sprintf "AND path <@ $%d::ltree " scope_i else "")
+      ^ (if vis_on then vis_clause else "")
       ^ Printf.sprintf "ORDER BY path::text ASC LIMIT $%d" limit_i
     in
     let head =
@@ -1191,6 +1217,11 @@ let find_by_body_field (conn : Store_db.conn) ~(kind : string option)
     in
     let tail =
       (if scoped then [ Pgx.Value.of_string prefix ] else [])
+      @ (if vis_on then
+           let v = (match viewer with Some v -> v | None -> assert false) in
+           [ Pgx.Value.of_string (garden_root ~user:v)
+           ; Pgx.Value.of_string v ]
+         else [])
       @ [ Pgx.Value.of_int limit ]
     in
     (List.filter_map node_of_row

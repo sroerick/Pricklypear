@@ -1495,8 +1495,66 @@
            on-demand partials. Any future caching (e.g. a per-branch
            doc-index value) is optional and must be invalidated
            conservatively; premature caching is a non-goal.
-    |))
+     |))
    )
+  )
+
+ (section note-visibility
+  (doc "Per-note vis (private | users | public, absent reads private) plus the read-only cross-garden route /notes/<user>/<slug>; the kernel prims enforce the floor, the lib stamps and renders")
+  (status partial)
+  (verify
+   (build "dune build image")
+   (smoke "owner reads own notes in own garden with vis absent (no migration)")
+   (smoke "other signed-in user and anonymous: find-by in the owner's garden returns nil for vis private; tree/get into the garden denies")
+   (smoke "vis users: other signed-in user reads via /notes/<owner>/<slug>; anonymous still denied")
+   (smoke "vis public: anonymous visitor renders the read-only page with the owner breadcrumb")
+   (smoke "upsert stamps vis private on create, preserves it on update; set-vis persists; POST action=set-vis")
+   (smoke "/notes?slug=… and POST /notes unchanged; /notes/<user> and deeper shapes 400")
+   (smoke "scripts/smoke_note_vis.sh end-to-end (two identities + anonymous)")
+   )
+  (details
+   (doc (|
+        MODEL (spec_note_visibility, 2026-09-18):
+          Every note body carries vis: private | users | public.
+          Absent reads private, so existing notes need no migration.
+          vis only ever WIDENS: garden and space membership stay the
+          floor. Writes are unchanged (vis never grants write access).
+
+        KERNEL ENFORCEMENT (the lib never decides visibility):
+          - tree/find-by: every Lisp call carries the caller as viewer.
+            The SQL gains one clause: a row OUTSIDE the caller's garden
+            floor (data.note.u.<caller>) must carry vis public, or
+            users with a signed-in caller. prefix remains a plain
+            scope filter; the cross-garden page passes the target
+            garden as prefix and the kernel does the rest.
+          - tree/get, tree/get-uuid, tree/get-many: a read landing in
+            another user's note garden raises "tree read: denied:
+            ... (vis ...)" unless the body vis allows the caller;
+            anonymous callers only ever match public. Kernel-internal
+            callers (slug uniqueness, sync internals) pass viewer=None
+            and stay ungated.
+          - NOT yet gated (pre-existing surfaces, next): tree/list,
+            tree/children-of, tree/subtree, tree/list-kind,
+            tree/note-index, tree/search-text. The global doc index
+            still lists across gardens; P2 tags each entry with owner
+            + vis before it links anywhere.
+
+        LIB (libs/notes/lib.pp):
+          - notes/doc/upsert-in stamps vis: create gets private,
+            update keeps the row's vis; the legacy data_rows path
+            stamps the same via dict-set*.
+          - notes/doc/set-vis rebuilds the note body with vis
+            (move-safe); the note page gets a small selector next to
+            delete; POST action=set-vis persists it.
+          - notes/page branches on cross-user / cross-slug params:
+            the kernel router decodes the /notes/<user>/<slug>
+            segments (Packages.name_decode, /edit/ convention) and
+            injects them, so one page body serves /notes and the
+            cross-garden shape. show-cross renders read-only (outline
+            without actions, no toolbar, no scripts) with the owner
+            breadcrumb; absent and not-visible both render the plain
+            Missing page, so the route never leaks existence.
+      |))
   )
 
  )

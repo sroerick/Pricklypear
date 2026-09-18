@@ -1180,6 +1180,82 @@
         (if (null? row) "" (notes/doc/row-folder row)))))
   "Insert or update a note, preserving its folder.")
 
+(define notes/doc/vis-valid?
+  (lambda
+    (v)
+    (if
+      (string-eq v "private")
+      #t
+      (if
+        (string-eq v "users")
+        #t
+        (string-eq v "public"))))
+  "Whether v is one of the three vis levels (private | users | public).")
+
+(define notes/doc/row-vis
+  (lambda
+    (row)
+    (let
+      ((v (as-str (dict-get (cdr row) "vis"))))
+      (if (notes/doc/vis-valid? v) v "private")))
+  "Resolved vis of a note row: absent or garbage reads private.")
+
+(define notes/doc/next-vis
+  (lambda
+    (prev)
+    (if (null? prev) "private" (notes/doc/row-vis prev)))
+  "Vis to stamp on an upsert: keep the existing row's vis, else private.")
+
+(define notes/doc/set-vis
+  (lambda
+    (slug vis)
+    (let
+      ((v (as-str vis)))
+      (if
+        (notes/doc/vis-valid? v)
+        (let
+          ((row (notes/doc/row (as-str slug))))
+          (if
+            (null? row)
+            ""
+            (if
+              (notes/tree/enabled?)
+              (let
+                ((path (notes/doc/row-path row)))
+                (if
+                  (string-eq path "")
+                  ""
+                  (let
+                    ((f (cdr row)))
+                    (seq
+                      (tree/upsert
+                        path
+                        "note"
+                        "note"
+                        (dict-set*
+                          "{}"
+                          (list
+                            "uuid"
+                            (car row)
+                            "slug"
+                            (as-str (dict-get f "slug"))
+                            "title"
+                            (as-str (dict-get f "title"))
+                            "tags"
+                            (as-str (dict-get f "tags"))
+                            "kind"
+                            (as-str (dict-get f "kind"))
+                            "day"
+                            (as-str (dict-get f "day"))
+                            "vis"
+                            v)))
+                      v))))
+              (seq
+                (update-field (quote note) (car row) "vis" v)
+                v))))
+        "")))
+  "Set a note's vis (private | users | public). Returns vis, or empty when the slug is absent or vis is invalid. Writes stay garden-local: vis never grants write access.")
+
 (define notes/doc/upsert-in
   (lambda
     (slug
@@ -1217,7 +1293,9 @@
                     "kind"
                     (as-str kind)
                     "day"
-                    (as-str day)))))
+                    (as-str day)
+                    "vis"
+                    (notes/doc/next-vis prev)))))
             (seq
               (notes/tree/ensure-folder (notes/tree/root) (whoami))
               (tree/upsert path "note" "note" body)
@@ -1233,16 +1311,18 @@
               (roam/reindex (as-str slug) outline)
               slug))))
       (let
-        ((row (notes/doc/row slug))
-          (fields
-            (notes/doc/make-fields
-              slug
-              title
-              outline
-              tags
-              kind
-              day
-              folder)))
+          ((row (notes/doc/row slug))
+            (fields
+              (dict-set*
+                (notes/doc/make-fields
+                  slug
+                  title
+                  outline
+                  tags
+                  kind
+                  day
+                  folder)
+                (list "vis" (notes/doc/next-vis row)))))
         (seq
           (if
             (null? row)
@@ -2844,12 +2924,85 @@
       (string-eq (request-method) "POST")
       (notes/ui/handle-post)
       (let
-        ((slug (request-param "slug")))
+        ((cuser (request-param "cross-user")))
         (if
-          (if (null? slug) #t (string-eq (as-str slug) ""))
-          (html/page (list (notes/ui/index)))
-          (html/page (list (notes/ui/show (as-str slug))))))))
-  "Serve the notes page: handle a POST, else render index or show.")
+          (null? cuser)
+          (let
+            ((slug (request-param "slug")))
+            (if
+              (if (null? slug) #t (string-eq (as-str slug) ""))
+              (html/page (list (notes/ui/index)))
+              (html/page (list (notes/ui/show (as-str slug))))))
+          (html/page
+            (list
+              (notes/ui/cross-page
+                (as-str cuser)
+                (as-str (request-param "cross-slug")))))))))
+  "Serve the notes page: a POST, the garden index or show, or the read-only cross-garden show (/notes/<user>/<slug> rides in as cross-user/cross-slug params).")
+
+(define notes/doc/cross-row
+  (lambda
+    (user slug)
+    (if
+      (notes/tree/enabled?)
+      (let
+        ((hits
+          (tree/find-by
+            "note"
+            "slug"
+            (as-str slug)
+            5
+            (tree/garden-root (as-str user)))))
+        (if
+          (null? hits)
+          ()
+          (notes/tree/node->row (car hits) #t)))
+      ()))
+  "Row for slug inside user's garden. Visibility is the kernel's vis floor, not ours: nil means absent or not for this viewer, and the page must not say which.")
+
+(define notes/ui/show-cross
+  (lambda
+    (user row)
+    (let
+      ((f (cdr row)))
+      (let
+        ((slug (as-str (dict-get f "slug")))
+          (title (as-str (dict-get f "title")))
+          (tags (as-str (dict-get f "tags"))))
+        (html/join
+          (list
+            (notes/tree/style)
+            (html/p*
+              (html/attr "class" "muted")
+              (html/join
+                (list
+                  (html/a "/notes" "Notes")
+                  " / "
+                  (html/span
+                    (html/attr "class" "muted")
+                    (string-append (as-str user) "'s garden"))
+                  " / "
+                  (html/code slug))))
+            (html/h1 (html/text title))
+            (html/p*
+              (html/attr "class" "muted")
+              (string-append "tags: " tags))
+            (outline/html-lite
+              slug
+              (outline/decode (dict-get f "outline"))
+              #f))))))
+  "Read-only cross-garden note page with the owner in the breadcrumb.")
+
+(define notes/ui/cross-page
+  (lambda
+    (user slug)
+    (let
+      ((row (notes/doc/cross-row user slug)))
+      (if
+        (null? row)
+        (notes/ui/missing slug)
+        (notes/ui/show-cross user row))))
+  "Cross-garden page for (user, slug): read-only show, else the missing page (same answer for absent and not-visible).")
 
 (define notes/recent-list
   (lambda
@@ -4002,12 +4155,14 @@
                       (as-str (dict-get b "tags"))
                       "kind"
                       (as-str (dict-get b "kind"))
-                      "day"
-                      (as-str (dict-get b "day"))
-                      "folder"
-                      (notes/tree/folder-of-path path)
-                      "_path"
-                      path)))
+                        "day"
+                        (as-str (dict-get b "day"))
+                        "vis"
+                        (as-str (dict-get b "vis"))
+                        "folder"
+                        (notes/tree/folder-of-path path)
+                        "_path"
+                        path)))
                   (cons
                     uuid
                     (dict-set*
@@ -4809,6 +4964,15 @@
         ((string-eq action "refile") (notes/refile/handle))
         ((string-eq action "extract")
           (notes/refile/extract-handle))
+        ((string-eq action "set-vis")
+          (seq
+            (notes/doc/set-vis
+              (request-param "slug")
+              (as-str (request-param "vis")))
+            (redirect
+              (string-append
+                "/notes?slug="
+                (as-str (request-param "slug"))))))
         (else (redirect "/notes")))))
   "Dispatch a notes POST by action to the matching handler.")
 
@@ -5482,6 +5646,41 @@
       (list)
       hits)))
 
+(define notes/ui/vis-form
+  (lambda
+    (slug)
+    (let
+      ((row (notes/doc/row (as-str slug))))
+      (if
+        (null? row)
+        ""
+        (let
+          ((cur (notes/doc/row-vis row)))
+          (html/form
+            "POST"
+            "/notes"
+            (html/attr "class" "note-vis")
+            (html/join
+              (list
+                (html/hidden "action" "set-vis")
+                (html/hidden "slug" (as-str slug))
+                (html/select
+                  "vis"
+                  ""
+                  (html/join
+                    (list
+                      (html/option "private" "private" (string-eq cur "private"))
+                      (html/option "users" "users" (string-eq cur "users"))
+                      (html/option "public" "public" (string-eq cur "public")))))
+                (html/button
+                  (html/attrs
+                    (list
+                      (html/attr "type" "submit")
+                      (html/attr "class" "secondary")
+                      (html/attr "title" "who can read this note outside your garden")))
+                    "vis"))))))))
+  "Visibility selector for a note (posts action=set-vis).")
+
 (define notes/ui/show
   (lambda
     (slug)
@@ -5554,15 +5753,16 @@
                     (html/attr "title" "undo the last change to this note")))
                 (html/join
                   (list
-                    (html/hidden "action" "undo")
-                    (html/hidden "slug" (as-str slug))
-                    (html/button
-                      (html/attrs
-                        (list
-                          (html/attr "type" "submit")
-                          (html/attr "class" "secondary")
-                          (html/attr "title" "undo last note change")))
-                      "Undo")))))))
+                      (html/hidden "action" "undo")
+                      (html/hidden "slug" (as-str slug))
+                      (html/button
+                        (html/attrs
+                          (list
+                            (html/attr "type" "submit")
+                            (html/attr "class" "secondary")
+                            (html/attr "title" "undo last note change")))
+                        "Undo")))
+                    (notes/ui/vis-form slug)))))
         (html/p*
           (html/attr "class" "muted")
           (string-append "tags: " (as-str tags)))
