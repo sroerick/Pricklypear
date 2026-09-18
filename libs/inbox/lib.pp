@@ -177,7 +177,7 @@
 
 (define inbox/add
   (lambda (from kind body)
-    "File one message row. Returns the new row id."
+    "File one message row. Returns the new row id · UTF-8 round-trip ✓ · naïve — check."
     (let ((path (inbox/ensure)))
       (let ((id (string-append "m-" (as-str (now)) "-" (random-uuid))))
         (inbox/node-add path id (as-str from) (as-str kind)
