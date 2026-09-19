@@ -5,7 +5,9 @@
     TLS; i-1788671008-e — this module hosted the hand-rolled Eio-flow
     original the client was extracted from). No curl.
 
-    Auth is HTTP Basic (user:pass base64), the SAME path /api/eval and
+    Auth is HTTP Basic (user:pass base64) by default; a configured
+    [token] (PP_TOKEN, the delegated agent identity) takes over as
+    Bearer when no password is given explicitly. Same path /api/eval and
     /api/prim accept on the image. Identity is server-asserted: the
     client only presents credentials; whoami/current-author come back
     FROM the server. The transport returns (value, exn) Result so it
@@ -20,6 +22,7 @@ type cfg = {
   base_url : string;   (* e.g. http://127.0.0.1:18080 *)
   user : string;
   password : string;
+  token : string option;  (* PP_TOKEN: Bearer, wins when no password set *)
 }
 
 let trim_url base =
@@ -37,6 +40,14 @@ let basic_auth_header ~user ~password =
   let cred = user ^ ":" ^ password in
   let b64 = Base64.encode_string ~pad:true cred in
   ("authorization", "Basic " ^ b64)
+
+(** Bearer when a token is configured (the delegated identity has no
+    Basic password); Basic otherwise. Mirrors cli/lib/pp_client.ml. *)
+let auth_header ~user ~password ~token =
+  match token with
+  | Some t when String.trim t <> "" ->
+      ("authorization", "Bearer " ^ String.trim t)
+  | _ -> basic_auth_header ~user ~password
 
 (** Generic one-POST: POST [path] with [payload] (a JSON value, encoded
     as the request body) and return (parsed-response-JSON | Error msg).
@@ -62,7 +73,9 @@ let post_json
   | Ok endpoint -> (
       match
         Pp_http.request ~env ~endpoint ~meth:"POST" ~path
-          ~headers:[ basic_auth_header ~user:cfg.user ~password:cfg.password ]
+            ~headers:
+              [ auth_header ~user:cfg.user ~password:cfg.password
+                  ~token:cfg.token ]
           ~body:(Yojson.Safe.to_string payload) ()
       with
       | Error e -> Error e
