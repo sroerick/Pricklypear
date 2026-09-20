@@ -244,7 +244,7 @@ ok(s0.focusedRect && s0.focusedRect.q && !s0.focusedShelved && (s0.focusedRegion
 ok(s0.pinnedCount > 0 || s0.focusedRegion === "main", "I1 backward-compat: with zero pinned panes the focused pane is the main lift", `pinned=${s0.pinnedCount} region=${s0.focusedRegion}`);
 await checkI8("on load", false);
 ok(s0.shelvedCount === 1 && s0.shelfDir, "windows tree: shelf subtree present with the shelved pane counted", `shelved=${s0.shelvedCount} shelfDir=${s0.shelfDir}`);
-ok(s0.liveCount === 1 && s0.trees === 3 && s0.railtabs === 4, "v4: three tree boxes + three rail mode tabs + the axis word (dichotomy)", `trees=${s0.trees} tabs=${s0.railtabs} live=${s0.liveCount}`);
+ok(s0.liveCount === 1 && s0.trees === 3 && s0.railtabs === 3, "v4: three tree boxes + three rail mode tabs (dichotomy — axis word retired, BORGE-1789879934)", `trees=${s0.trees} tabs=${s0.railtabs} live=${s0.liveCount}`);
 ok(s0.bareAnchors === 0, "I5 zero shell-escaping anchors in pane bodies", `bare=${s0.bareAnchors}`);
 ok((await ev(`[...document.querySelectorAll('#fs-shell [style]')].length`)) === 0, "T6 zero inline styles in the shell at rest (classes only, before any htmx settling)");
 const __styleEls = await ev("[...document.querySelectorAll('#fs-shell [style]')].map(function(e){return e.tagName}).join(',')");
@@ -295,7 +295,7 @@ const boot = await httpGet(base + "/");
 ok(!/id="fs-launch"/.test(boot.body), "D no launcher in the shell");
 ok(!/fs-deskbox/.test(boot.body), "D no desktop controlbox in the shell");
 ok((await ev(`[...document.querySelectorAll('#fs-cascade .fs-entry')].every(e=>JSON.parse(e.getAttribute('hx-vals')).t.startsWith('/'))`)), "D cascade column 0 entries are all route leaves");
-ok((await ev(`!!document.querySelector('#fs-railtabs #fs-axis-btn')`)), "D the axis toggle lives on the rail tabs row");
+ok((await ev(`!document.querySelector('#fs-railtabs #fs-axis-btn')`)), "D the axis toggle is retired (sidebar-only shell, BORGE-1789879934)");
 ok(/id="fs-railtabs"/.test(boot.body) && !/fs-pane .fs-title.*settings.*pin/.test(boot.body.split('#fs-content')[1] || ""), "D no pane-tag strip inventory in the rail (tree is the pane inventory)");
 
 // ---- I7: fresh pane stamps current desktop ----

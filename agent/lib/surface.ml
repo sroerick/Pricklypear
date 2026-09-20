@@ -672,17 +672,18 @@ uses tree/get + node-path; glochid rides the local fs (HOST SEAM 1).")
     (seq (fs/write glochid/ws-file fields) fields))
   "Persist workspace fields to .agent/workspace.json (HOST SEAM 1).")
 
-;; ---- 2b. AXIS TOGGLE (row = horizontal film, col = left rail) ----
-;; The lib's save-all writes only cascade/content/focus; the glochid
-;; version carries the axis field through (the pane width presets stay
-;; the same three values — rail mode just re-reads them as heights
-;; via the CSS flex-direction flip: .fs-shell:has(#fs-axis.col)).
+;; ---- 2b. AXIS (RETIRED — sidebar-only shell) ----
+;; OBITUARY (BORGE-1789879934, 2026-09-19 operator decision): the axis
+;; toggle (POST /filmstrip/orient + the rail-tabs button) is GONE; glochid
+;; is a sidebar-only shell. glochid/axis pins "col" unconditionally — a
+;; stale ws row that still says "row" cannot strand the operator in the
+;; bottom-band layout with no way back. The #fs-axis inert sentinel stays
+;; (CSS :has(#fs-axis.col) keys the sidebar layout off it; the lib's
+;; row-axis rules + ws field remain as dormant shared defaults).
 (define glochid/axis
-  (lambda ()
-    (let
-      ((v (dict-get (filmstrip/ws-fields) "axis")))
-      (if (null? v) "row" (as-str v))))
-  "Persisted shell axis from the ws row; \"row\" when unset.")
+  (lambda () "col")
+  "Pinned shell axis: COL (left rail) always — the axis toggle was
+retired, see the obituary above.")
 
 (define filmstrip/save-all
   (lambda (cascade panes focus)
@@ -1177,10 +1178,10 @@ DOM alive.")
       (html/join
         (append
           (list (html/span (html/attr "class" "fs-title") (html/text "rail")))
-          (glochid/railtabs)
-          (list (glochid/axis-btn (glochid/axis)))))))
-  "The rail mode controlbox (one word per root + the axis toggle word,
-per filmstrip.borg sidebar-main-dichotomy).")
+          (glochid/railtabs)))))
+  "The rail mode controlbox (one word per tree root, per
+filmstrip.borg sidebar-main-dichotomy — the axis toggle word was
+retired, BORGE-1789879934: sidebar-only shell).")
 
 (define glochid/railmode
   (lambda ()
@@ -1297,29 +1298,9 @@ destroy/refresh call this on every mutation response).")
 ;; ?session=ID resumes as a chat fragment pane (/chat?session=ID — the
 ;; sessions table's view link and /resume land HERE); ?open=ROUTE is the
 ;; GET twin of the launcher POST (open-or-focus through the same defs).
-;; The shell body is glochid's own assemble of the filmstrip parts
-;; (instead of filmstrip/shell-html) so the AXIS toggle rides along: an
-;; inert #fs-axis sentinel + a toggle button beside the launcher.
-(define glochid/axis-btn
-  (lambda (axis)
-    (html/tag
-      "button"
-      (html/attrs
-        (list
-          (html/attr "id" "fs-axis-btn")
-          (html/attr "class" "fs-btn fs-act")
-          (html/attr "title" "axis: toggle the pane strip between stack and strip (persisted)")
-          (html/attr "aria-label" "toggle pane axis")
-          (html/attr "data-verb" "axis")
-          (html/attr "hx-post" "/filmstrip/orient")
-          (html/attr "hx-target" "#fs-sink")
-          (html/attr "hx-swap" "innerHTML")))
-      (html/text (if (string-eq axis "col") "⇅" "⇆"))))
-  "Axis toggle (rail tabs row): stack = vertical full-width panes, strip
-= the horizontal film row. The glyph is the ACTION (what the click
-switches TO, after the orient); the title says the state (axis).
-OOB-swappable (the id carries it).")
-
+;; The shell body is glochid's own assemble of the filmstrip parts, which
+;; includes the inert #fs-axis sentinel. The AXIS TOGGLE was retired
+;; (BORGE-1789879934): no button, no /filmstrip/orient — sidebar only.
 (define glochid/axis-sentinel
   (lambda (axis ?oob)
     (html/tag
@@ -1333,39 +1314,10 @@ OOB-swappable (the id carries it).")
               (list (html/attr "hx-swap-oob" "outerHTML:#fs-axis"))
               (list))))
       ""))
-  "Inert axis sentinel; CSS :has(#fs-axis.col) flips the shell to the
-left-rail strip layout. ?oob true renders it as an OOB outerHTML swap
-(the orient response).")
+  "Inert axis sentinel (axis PINNED col — BORGE-1789879934); CSS
+:has(#fs-axis.col) lays the shell out as the left-rail sidebar; no OOB
+mutator remains for it.")
 
-(define glochid/orient
-  (lambda ()
-    (let*
-      ((next (if (string-eq (glochid/axis) "col") "row" "col")))
-      (seq
-        (filmstrip/ws-save
-          (dict-set* (filmstrip/ws-fields) (list "axis" next)))
-        (render-html
-          (html/join
-            (list
-              (filmstrip/oob-msg "")
-              (glochid/axis-sentinel next #t)
-              (html/tag
-                "button"
-                (html/attrs
-                  (list
-                    (html/attr "id" "fs-axis-btn")
-                    (html/attr "class" "fs-btn fs-act")
-                    (html/attr "title" "axis: toggle the pane strip between stack and strip (persisted)")
-                    (html/attr "aria-label" "toggle pane axis")
-                    (html/attr "data-verb" "axis")
-                    (html/attr "hx-post" "/filmstrip/orient")
-                    (html/attr "hx-target" "#fs-sink")
-                    (html/attr "hx-swap" "innerHTML")
-                    (html/attr "hx-swap-oob" "outerHTML:#fs-axis-btn")))
-                (html/text (if (string-eq next "col") "⇅" "⇆")))))))))
-  "POST /filmstrip/orient: flip + persist the shell axis; two OOB swaps
-(sentinel + button) keep every live pane DOM untouched — the layout
-flip is CSS-only on the client.")
 
 (define glochid/shell-requested
   (lambda ()
@@ -1595,7 +1547,6 @@ every live main pane of the desktop, so the heal picks the ring only
 (route "/filmstrip/tree" "filmstrip/tree")
 (route "/filmstrip/tree/collapse" "filmstrip/tree-collapse")
 (route "/filmstrip/railmode" "glochid/railmode-set")
-(route "/filmstrip/orient" "glochid/orient")
 (route "/filmstrip/desktop" "glochid/desktop-set")
 (route "/filmstrip/new" "glochid/new")
 (route "/filmstrip/resume" "glochid/resume")
