@@ -315,6 +315,76 @@ let test_load_library_valid () =
   let () = Sys.remove lib in
   let () = Unix.rmdir (Filename.concat tmp "zpkg") in
   Unix.rmdir tmp
+
+(* L10 (i-1789409290-0252a259): multibyte UTF-8 survives load_string —
+   middots/accents/CJK in strings, comments and docstrings across many
+   forms, with symbol defines AFTER the multibyte content (the 09-14
+   prod repro failed at the TAIL form with NUL-byte symbol names).
+   Byte escapes keep this test file ASCII; the runtime strings are the
+   real UTF-8 bytes (\194\183 = U+00B7 middot, \195\169 = é,
+   \226\128\148 = em dash, \226\156\147 = ✓, 日本 = \230\151\165\230\156\172). *)
+let test_load_multibyte_utf8 () =
+  point_pp_libs_dir (real_libs_dir ());
+  let eval_form, env, prims = eval_form_of () in
+  let middot = "\194\183" in
+  let doc = "caf\195\169 \194\183 na\195\175ve \226\128\148 \230\151\165\230\156\172 \226\156\147" in
+  let filler_forms = 36 in
+  let src = Buffer.create 2048 in
+  Buffer.add_string src "(define mb-doc \"";
+  Buffer.add_string src doc;
+  Buffer.add_string src "\")\n";
+  (* a line comment carrying multibyte (stripped, but bytes must not
+     poison the byte/char accounting of what follows) *)
+  Buffer.add_string src "; caf\195\169 \194\183 comment\n";
+  for i = 1 to filler_forms do
+    Buffer.add_string src (Printf.sprintf "(define mb-filler-%d %d)\n" i i)
+  done;
+  (* a multibyte SYMBOL: symbol chars include bytes >= 0x80 *)
+  Buffer.add_string src "(define caf\195\169-symbol 42)\n";
+  Buffer.add_string src "(define mb-tail \"";
+  Buffer.add_string src (middot ^ "tail" ^ middot);
+  Buffer.add_string src "\")\n";
+  (match
+     Pricklypear_image_lib.Loader.load_string ~eval_form
+       (Buffer.contents src)
+   with
+  | Ok msg ->
+      Alcotest.(check string) "summary"
+        (Printf.sprintf "loaded %d form(s)" (filler_forms + 3))
+        msg
+  | Error e -> Alcotest.fail ("multibyte load failed: " ^ e));
+  (* the tail string is byte-exact *)
+    let eval_sym name =
+      (* Value readback: evaluate the NAME itself. (App (Var name, []))
+         would APPLY the bound value, and applying a non-procedure (a
+         VStr here) raises Interp_error - which is exactly what the
+         first wyo run of this suite tripped over (opaque Interp_error
+         at the readback, load itself green). *)
+      Pricklypear_image_lib.Control_rim.run ~prims (fun () ->
+          Pricklypear_lisp.Eval.eval
+            ~budget:(Pricklypear_lisp.Eval.make_budget ())
+            ~prims:Pricklypear_lisp.Eval.empty_prims env
+            (Var name))
+    in
+  (match eval_sym "mb-tail" with
+  | VStr s ->
+      Alcotest.(check string) "tail string byte-exact"
+        (middot ^ "tail" ^ middot) s
+  | v ->
+      Alcotest.fail
+        ("mb-tail not a string: " ^ Pricklypear_lisp.Reader.pp_value v));
+  (match eval_sym "mb-doc" with
+  | VStr s -> Alcotest.(check string) "doc string byte-exact" doc s
+  | v ->
+      Alcotest.fail
+        ("mb-doc not a string: " ^ Pricklypear_lisp.Reader.pp_value v));
+  (* the symbol defined AFTER all multibyte content resolves *)
+  (match eval_sym "caf\195\169-symbol" with
+  | VInt n -> Alcotest.(check int64) "multibyte symbol bound" 42L n
+  | v ->
+      Alcotest.fail
+        ("caf\195\169-symbol not an int: " ^ Pricklypear_lisp.Reader.pp_value v))
+
 let () =
   Alcotest.run "pricklypear-loader"
     [ ( "loader"
@@ -326,4 +396,5 @@ let () =
         ; ("discover-seed-packages", `Quick, test_discover_seed_packages)
         ; ("real-std-loads", `Quick, test_real_std_loads)
         ; ("library-name-grammar", `Quick, test_library_name_grammar)
-        ; ("load-library-valid", `Quick, test_load_library_valid) ] ) ]
+        ; ("load-library-valid", `Quick, test_load_library_valid)
+        ; ("load-multibyte-utf8", `Quick, test_load_multibyte_utf8) ] ) ]
