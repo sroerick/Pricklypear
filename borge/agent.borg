@@ -421,6 +421,40 @@
             is by route, so the fixed #log id stays unique under the
             multipart stream targets.
 
+         5. HABITAT PANES (2026-09-20 operator make: load the existing
+            apps onto glochid). The habitat's app faces are already
+            htmx fragment routes — glochid panes WEAR them instead of
+            the agent porting them: bin/main.ml registers a small
+            forward-prefix set (/todos /notes /calendar; kernel paths
+            are refused by construction — auth.route-visibility) and
+            the http_ui gate forwards each request to the habitat with
+            the OPERATOR'S session, piping status + HX-* reply headers
+            + body straight back. The Nopales layer adds glochid/fwd-apps
+            (the cascade labels = the HABITAT's route vocabulary, never
+            renamed) and the fwd faces for the in-process pane OPEN
+            (filmstrip/open pane-content): the habitat's fragment loaded
+            through the habitat/fwd prim inside a boost shell
+            (glochid/fwd-wrap — one stable id per app, hx-boost makes
+            the faces' shell-level ANCHORS swap INTO the pane; explicit
+            hx-* elements keep their own targets). AUTH: ONE POST
+            /login per process — one argon2id verify — and the
+            pp_session cookie rides every forward; Basic auth per
+            request would re-verify argon2 on every click (a known
+            habitat floor). Fragment-vs-full-page is the CALLER's
+            htmx-ness: boosted anchors and in-process dispatch answer
+            fragments, address-bar GETs pipe the habitat's full page
+            raw (E2b locks the no-nested-document invariant). KNOWN
+            HABITAT FLOORS met while dogfooding: an overlapping
+            dispatch race on the shared per-identity session can 500 a
+            forwarded GET ('no active request'); notes-doc loads pay
+            the recorded 80s floor — both habitat product issues, on
+            file, not glochid's. PASS TWO (recorded): when the chat
+            loop should compose app defs inline, glochid adopts the
+            pp-remote data plane (proxy_rim / placer / def_cache, the
+            prims proxy to /api/prim with-transaction-goes-remote
+            discipline) — the fragment proxy is deliberately smaller
+            than that and does not preempt it.
+
          EMBEDDING. libs/filmstrip + libs/css boot-load (in order) like
          libs/html via the shared embed rules; the glochid layer loads
          LAST so its redefinitions win (env-based late binding makes

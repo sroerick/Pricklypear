@@ -53,7 +53,7 @@ let dispatch_get (rt : Remote.t) (reqd : Httpun.Reqd.t) (target : string)
   let params = Http_kit.parse_query query in
   match Remote.lookup_route ~rt path with
   | None ->
-      Http_kit.respond_html reqd ~status:`Not_found
+      Http_kit.respond_html reqd ~status:`Not_found ~relay:[]
         ~body:(Http_kit.status_page "404"
                  (Printf.sprintf "<p>no route %s</p>" (Http_kit.esc path)))
   | Some handler ->
@@ -65,9 +65,9 @@ let dispatch_get (rt : Remote.t) (reqd : Httpun.Reqd.t) (target : string)
          let html =
            match v with Ast.VStr s -> s | other -> Pricklypear_lisp.Reader.pp_value other
          in
-         Http_kit.respond_html reqd ~status:`OK ~body:html
+         Http_kit.respond_html reqd ~status:`OK ~relay:[] ~body:html
        with exn ->
-         Http_kit.respond_html reqd ~status:`Internal_server_error
+         Http_kit.respond_html reqd ~status:`Internal_server_error ~relay:[]
            ~body:(Http_kit.status_page "error"
                     (Printf.sprintf "<p>dispatch error: %s</p>"
                        (Http_kit.esc (Printexc.to_string exn)))))
@@ -110,7 +110,7 @@ let handle_eval (rt : Remote.t) (reqd : Httpun.Reqd.t) : unit =
         Printf.sprintf "<div class=\"expr\">$ %s</div><pre>%s</pre>"
           (Http_kit.esc expr) (Http_kit.esc result)
   in
-  Http_kit.respond_html reqd ~status:`OK ~body:html
+  Http_kit.respond_html reqd ~status:`OK ~relay:[] ~body:html
 
 (* ---- chat turn: the shared Chat_stream engine (the shared agent loop
    on this host, multipart/mixed) ---- *)
@@ -195,10 +195,10 @@ let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
         | "/chat" ->
             fork_work (fun () -> with_mutex (fun () -> handle_chat env sw st reqd))
         | _ ->
-            Http_kit.respond_html reqd ~status:`Not_found
+            Http_kit.respond_html reqd ~status:`Not_found ~relay:[]
               ~body:(Http_kit.status_page "404"
                        (Printf.sprintf "<p>no route %s</p>" (Http_kit.esc path))))
-    | _ -> Http_kit.respond_html reqd ~status:`Not_found
+    | _ -> Http_kit.respond_html reqd ~status:`Not_found ~relay:[]
              ~body:(Http_kit.status_page "404" "<p>method not supported</p>")
   in
   let error_handler (_sa : Eio.Net.Sockaddr.stream)

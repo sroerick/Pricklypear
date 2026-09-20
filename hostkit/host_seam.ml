@@ -350,6 +350,19 @@ let register_route_prims (t : t) : unit =
     VStr r.method_
   in
   add_prim t "request-method" request_method;
+  (* (request-params) -> VList of (k v) pairs — the FULL merged param
+     alist (query ++ form body). Exists for hosts that pipe a request
+     through to another server wholesale (the habitat-pane forwarder
+     rebuilds a query string from it); it is the one prim that hands
+     over the whole alist instead of one key. *)
+  let request_params _args =
+    let r = require_request t in
+    VList
+      (List.map
+         (fun (k, v) -> VList [ VStr k; VStr v ])
+         r.params)
+  in
+  add_prim t "request-params" request_params;
   let hx_request_p _args =
     let r = require_request t in
     (* hyper/do-swap passes hx-request in the PARAMS alist; the HTTP

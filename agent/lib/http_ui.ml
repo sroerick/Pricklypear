@@ -74,7 +74,7 @@ let dispatch_get (st : server_state) (reqd : Httpun.Reqd.t) (target : string)
   let params = Http_kit.parse_query query in
   match Runtime.lookup_route ~rt:st.rt path with
   | None ->
-      Http_kit.respond_html reqd ~status:`Not_found
+      Http_kit.respond_html reqd ~status:`Not_found ~relay:[]
         ~body:(Http_kit.status_page "404"
                  (Printf.sprintf "<p>no route %s</p>" (Http_kit.esc path)))
   | Some handler ->
@@ -85,7 +85,7 @@ let dispatch_get (st : server_state) (reqd : Httpun.Reqd.t) (target : string)
       let html =
         match v with Ast.VStr s -> s | other -> Pricklypear_lisp.Reader.pp_value other
       in
-      Http_kit.respond_html reqd ~status:`OK ~body:html
+      Http_kit.respond_html reqd ~status:`OK ~relay:[] ~body:html
 
 (* ---- static assets (vendored, baked into the binary) ---- *)
 
@@ -106,7 +106,43 @@ let serve_asset (reqd : Httpun.Reqd.t) (name : string) : unit =
     ]
     name
 
-(* ---- chat turn: the shared Chat_stream engine under the turn mutex ---- *)
+(* ---- habitat-pane forwarder gate hook (agent.borg habitat-panes):
+   allowlisted prefixes (registered by the Nopales boot layer via
+   habitat/fwd-prefix) forward TO THE HABITAT with the operator's
+   session — the gate carries the browser's method + query + body
+   through and relays status + HX-* reply headers + body back. The
+   address-bar htmx-ness passes through (fragment vs full page is the
+   caller's decision, byte-piped). In-process pane dispatch (filmstrip/
+   open) does NOT come through here — it rides the Nopales fwd faces
+   over the habitat/fwd prim. ---- *)
+
+let dispatch_fwd (env : Eio_unix.Stdenv.base) (reqd : Httpun.Reqd.t)
+    (method_ : string) (path : string) (query : string) (body : string)
+    ~(hx : bool) =
+  match
+    Habitat.forward_response ~env ~meth:method_ ~path ~query ~body ~hx
+  with
+  | Error e ->
+      Http_kit.respond_html reqd ~status:`Internal_server_error ~relay:[]
+        ~body:
+          (String.concat ""
+             [ "<div class=\"lb-card\"><p class=\"muted\">habitat pane: "
+             ; Http_kit.esc e
+             ; "</p></div>" ])
+  | Ok (status, hs, b) ->
+      let relay =
+        List.filter
+          (fun (k, _) ->
+             String.starts_with ~prefix:"hx-" k || k = "location")
+          hs
+      in
+      let status =
+        if status >= 500 then `Internal_server_error
+        else if status >= 400 then `Not_found
+        else if status >= 300 then `See_other
+        else `OK
+      in
+      Http_kit.respond_html reqd ~status ~relay ~body:b
 
 let handle_chat (env : Eio_unix.Stdenv.base) (sw : Eio.Switch.t)
     (st : server_state) (reqd : Httpun.Reqd.t) : unit =
@@ -177,7 +213,7 @@ let handle_settings (env : Eio_unix.Stdenv.base) (sw : Eio.Switch.t)
     | Some "true" -> true
     | _ -> false
   in
-  if hx then Http_kit.respond_text reqd ~status:`OK ~content_type:"text/plain" ~body:"ok"
+  if hx then Http_kit.respond_text reqd ~status:`OK ~relay:[] ~content_type:"text/plain" ~body:"ok"
   else begin
     let headers =
       Httpun.Headers.of_list [ ("location", "/settings"); ("content-length", "0") ]
@@ -290,20 +326,38 @@ let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
         if String.length path >= 8 && String.sub path 0 8 = "/assets/" then
           fork_work (fun () ->
               serve_asset reqd (String.sub path 8 (String.length path - 8)))
-        else
-          fork_work (fun () -> dispatch_get st reqd target))
+        else if Habitat.fwd_matches_prefix path <> None then
+          fork_work (fun () ->
+              let body = Http_kit.read_body reqd in
+              dispatch_fwd env reqd "GET" path
+                (match query with Some q -> q | None -> "")
+                body
+                ~hx:(dispatch_headers reqd <> []))
+        else fork_work (fun () -> dispatch_get st reqd target))
     | `POST -> (
         match path with
         | "/chat" -> fork_work (fun () -> handle_chat env sw st reqd)
         | "/settings" -> fork_work (fun () -> handle_settings env sw st reqd)
         | _ -> (
+            (* habitat-pane forwarder rides BEFORE the route table: a
+               registered prefix (/todo /notes /calendar) forwards to the
+               habitat with the operator's session (agent.borg
+               habitat-panes). *)
+            if Habitat.fwd_matches_prefix path <> None then
+              fork_work (fun () ->
+                  let body = Http_kit.read_body reqd in
+                  dispatch_fwd env reqd "POST" path
+                    (match query with Some q -> q | None -> "")
+                    body
+                    ~hx:(dispatch_headers reqd <> []))
+            else
             (* filmstrip-shell host seam #3: POSTs to unknown paths fall
                through to the route table (the /filmstrip/* shell routes
                live there). hx-vals ride the form-encoded body; params
                = query ++ body so either channel reaches request-param. *)
             match Runtime.lookup_route ~rt:st.rt path with
             | None ->
-                Http_kit.respond_html reqd ~status:`Not_found
+                Http_kit.respond_html reqd ~status:`Not_found ~relay:[]
                   ~body:(Http_kit.status_page "404"
                            (Printf.sprintf "<p>no route %s</p>" (Http_kit.esc path)))
             | Some handler ->
@@ -321,8 +375,8 @@ let serve ~(env : Eio_unix.Stdenv.base) ~(sw : Eio.Switch.t)
                       | Ast.VStr s -> s
                       | other -> Pricklypear_lisp.Reader.pp_value other
                     in
-                    Http_kit.respond_html reqd ~status:`OK ~body:html)))
-    | _ -> Http_kit.respond_html reqd ~status:`Not_found
+                    Http_kit.respond_html reqd ~status:`OK ~relay:[] ~body:html)))
+    | _ -> Http_kit.respond_html reqd ~status:`Not_found ~relay:[]
              ~body:(Http_kit.status_page "404" "<p>method not supported</p>")
   in
   let error_handler (_sa : Eio.Net.Sockaddr.stream)

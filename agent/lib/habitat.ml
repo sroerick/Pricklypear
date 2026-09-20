@@ -412,3 +412,263 @@ let memory_tool ~(env : Eio_unix.Stdenv.base) (args : Yojson.Safe.t) : string
          | v -> Yojson.Safe.to_string v)
       ^ "}"
   | Error e -> "{\"error\":" ^ q e ^ "}"
+
+(* ---- habitat/fwd: the habitat-pane forwarder (agent.borg
+   habitat-panes stanza, 2026-09-20). Habitat app faces are ordinary
+   htmx fragment routes already — glochid panes WEAR them: the gate
+   forwards allowlisted prefixes (glochid/fwd-apps registers
+   /todo /notes /calendar via habitat/fwd-prefix at boot) with the
+   operator's habitat session and pipes the answer back: status,
+   htmx relay headers, body. ONE auth tax per PROCESS, not per
+   interaction: the jar's POST /login pays one argon2id verify and
+   the pp_session cookie rides every forward (Basic-auth per request
+   would re-verify argon2 on every click — a known habitat floor).
+   Kernel paths (auth.route-visibility) can never be registered: the
+   prefix prim refuses the hard-private set. Fragment/pass-through
+   policy: the caller decides HX-Request (pane dispatch forces
+   fragments; an address-bar GET pipes the habitat's full page
+   through raw). ---- *)
+
+let fwd_timeout_s = 30.
+
+(* the session jar: one token per process; guarded so concurrent
+   forwards settle into exactly one re-login on expiry *)
+type fwd_jar = { fwd_mutex : Eio.Mutex.t; fwd_token : string option ref }
+
+let fwd_jar = { fwd_mutex = Eio.Mutex.create (); fwd_token = ref None }
+
+(* the NEVER-forward set: kernel paths stay hard-private on the
+   habitat (the auth.route-visibility subset that could be mistaken
+   for an app face, plus glochid's own surfaces) — the prefix prim
+   refuses these *)
+let fwd_refused =
+  [ "/"
+  ; "/admin"
+  ; "/analytics"
+  ; "/api"
+  ; "/login"
+  ; "/logout"
+  ; "/health"
+  ; "/assets"
+  ; "/media"
+  ; "/bindings"
+  ; "/binding"
+  ; "/repl"
+  ; "/agent"
+  ; "/filmstrip"
+  ; "/chat"
+  ; "/sessions"
+  ; "/settings"
+  ; "/memory"
+  ]
+
+let fwd_prefixes : (string, unit) Hashtbl.t = Hashtbl.create 8
+
+let fwd_prefix_allowed (path : string) : bool =
+  not
+    (List.exists
+       (fun p -> path = p || String.starts_with ~prefix:(p ^ "/") path)
+       fwd_refused)
+
+(** register one forwardable prefix (Nopales boot config). Answers
+    false on a kernel-path refusal — the prim surfaces that. *)
+let fwd_register_prefix (path : string) : bool =
+  if fwd_prefix_allowed path then begin
+    Hashtbl.replace fwd_prefixes path ();
+    true
+  end
+  else false
+
+let fwd_matches_prefix (path : string) : string option =
+  Hashtbl.fold
+    (fun k _ acc ->
+       if String.starts_with ~prefix:k path then Some k else acc)
+    fwd_prefixes None
+
+(** minimal percent-encode for form fields (login user/pass; pane
+    params already ride the Nopales side's url-enc) *)
+let fwd_url_encode (s : string) : string =
+  let buf = Buffer.create (String.length s) in
+  String.iter
+    (fun c ->
+       match c with
+       | 'A' .. 'Z' | 'a' .. 'z' | '0' .. '9' | '-' | '_' | '.' | '~' ->
+           Buffer.add_char buf c
+       | c -> Buffer.add_string buf (Printf.sprintf "%%%02X" (Char.code c)))
+    s;
+  Buffer.contents buf
+
+(** first pp_session cookie in the (lowercased) reply headers, else
+    None — login's 302 carries it *)
+let fwd_take_token (headers : (string * string) list) : string option =
+  List.find_map
+    (fun (k, v) ->
+       if k <> "set-cookie" then None
+       else begin
+         let prefix = "pp_session=" in
+         let rec cut i =
+           if i + String.length prefix > String.length v then None
+           else if String.sub v i (String.length prefix) = prefix then begin
+             let start = i + String.length prefix in
+             let stop =
+               match String.index_from_opt v start ';' with
+               | Some j -> j
+               | None -> String.length v
+             in
+             Some (String.sub v start (stop - start))
+           end
+           else cut (i + 1)
+         in
+         cut 0
+       end)
+    headers
+
+(** Mint the session under the jar lock: skip (Ok token) if another
+    fiber logged in while this one awaited. One argon2id verify per
+    process, not per bounce. *)
+let fwd_login ~(env : Eio_unix.Stdenv.base) (c : creds)
+    : (string, string) Result.t =
+  Eio.Mutex.use_rw ~protect:false fwd_jar.fwd_mutex (fun () ->
+      match !(fwd_jar.fwd_token) with
+      | Some t -> Ok t
+      | None -> (
+          match Pp_http.split_base (trim_url c.url) with
+          | Error e -> Error ("habitat: " ^ e)
+          | Ok endpoint -> (
+              let body =
+                "username=" ^ fwd_url_encode c.user
+                ^ "&password=" ^ fwd_url_encode c.pass
+                ^ "&next=%2F"
+              in
+              match
+                Pp_http.request ~timeout_s:fwd_timeout_s ~env ~endpoint
+                  ~meth:"POST" ~path:"/login"
+                  ~content_type:(Some "application/x-www-form-urlencoded")
+                  ~headers:[] ~body ()
+              with
+              | Error e -> Error ("habitat: " ^ e)
+              | Ok r -> (
+                  match fwd_take_token r.Pp_http.headers with
+                  | Some token ->
+                      fwd_jar.fwd_token := Some token;
+                      Ok token
+                  | None ->
+                      Error
+                        "habitat: login did not mint a pp_session cookie"))))
+
+(** One forward hop: jar token if minted else anonymous (the bounce
+    detection re-authenticates). [content-type] rides POSTs only. *)
+let fwd_hop ~(env : Eio_unix.Stdenv.base) (c : creds) (meth : string)
+    (path : string) (query : string) (body : string) ~(hx : bool)
+    : (Pp_http.response, string) Result.t =
+  match Pp_http.split_base (trim_url c.url) with
+  | Error e -> Error ("habitat: " ^ e)
+  | Ok endpoint -> (
+      let target = if query = "" then path else path ^ "?" ^ query in
+      let extra =
+        match !(fwd_jar.fwd_token) with
+        | Some t -> [ ("cookie", "pp_session=" ^ t) ]
+        | None -> []
+      in
+      (* the caller's htmx-ness decides fragment vs full page: a boosted
+         anchor or in-process pane dispatch answers fragments; an
+         address-bar GET pipes the habitat's full page raw *)
+      let extra = if hx then extra @ [ ("hx-request", "true") ] else extra in
+      Pp_http.request ~timeout_s:fwd_timeout_s ~env ~endpoint ~meth
+        ~path:target
+        ?content_type:
+          (if meth = "POST" then
+           Some (Some "application/x-www-form-urlencoded")
+           else Some None) ~headers:extra ~body ())
+
+(** Is this reply an unauthenticated bounce (401, 302->/login, or the
+    login page served on a 200)? A stale jar token lands there. *)
+let fwd_auth_bounced (status : int) (headers : (string * string) list)
+    (body : string) : bool =
+  if status = 401 then true
+  else if status >= 300 && status < 400 then
+    (match List.assoc_opt "location" headers with
+     | Some loc -> String.starts_with ~prefix:"/login" loc
+     | None -> false)
+  else String.starts_with ~prefix:"login" body
+
+(** THE forward call: cookie'd hops; re-authenticate once on an auth
+    bounce (the jar lock makes concurrent bounces settle into one
+    login); walk relative redirects up to 3 hops so an action POST
+    lands on its target — never cross-host (redirects to another
+    server are surfaced as-is). The HX-* reply headers of the final
+    hop ride back for the gate to relay. *)
+let forward_response ~(env : Eio_unix.Stdenv.base) ~(meth : string)
+    ~(path : string) ~(query : string) ~(body : string) ~(hx : bool)
+    : (int * (string * string) list * string, string) Result.t =
+  match creds ~env with
+  | None ->
+      Error
+        "habitat bridge not configured: set AGENT_HABITAT_URL/USER/PASS \
+         (or PP_URL/PP_USER/PP_PASS)"
+  | Some c ->
+      let rec walk path query redirects =
+        match fwd_hop ~env c meth path query body ~hx with
+        | Error e -> Error ("habitat: " ^ e)
+        | Ok { Pp_http.status; Pp_http.headers = hs; Pp_http.body = b } ->
+            if fwd_auth_bounced status hs b then
+              if redirects <= 0 then
+                Error "habitat: unauthenticated (session expired)"
+              else
+                match fwd_login ~env c with
+                | Error e -> Error e
+                | Ok _ -> walk path query (redirects - 1)
+            else if status >= 300 && status < 400 && redirects > 0 then (
+              match List.assoc_opt "location" hs with
+              | Some loc when String.starts_with ~prefix:"/" loc ->
+                  let p, q =
+                    match String.index_opt loc '?' with
+                    | Some i ->
+                        ( String.sub loc 0 i,
+                          String.sub loc (i + 1) (String.length loc - i - 1) )
+                    | None -> (loc, "")
+                  in
+                  walk p q (redirects - 1)
+              | _ -> Ok (status, hs, b))
+            else Ok (status, hs, b)
+      in
+      walk path query 3
+
+(** relay-worthy response headers for htmx: the HX-* family the
+    habitat faces answer actions with (actions + htmx docs). *)
+let fwd_relay_headers (headers : (string * string) list)
+    : (string * string) list =
+  List.filter (fun (k, _) -> String.starts_with ~prefix:"hx-" k) headers
+
+(** The gate's prim face: (habitat/fwd meth path query body) -> VStr
+    body (the gate hook relays status/headers itself; this prim is the
+    IN-PROCESS dispatch path — filmstrip/open's pane content — where
+    HX-Request semantics are already fragment-shaped). Fail-LOUD: the
+    Nopales fwd face guards it into a muted card. *)
+let fwd_register ~(rt : Runtime.t) ~(env : Eio_unix.Stdenv.base) : unit =
+  Runtime.add_prim rt "habitat/fwd"
+    (fun args ->
+       match args with
+       | [ Ast.VStr meth; Ast.VStr path; Ast.VStr query; Ast.VStr body ] ->
+           (match forward_response ~env ~meth ~path ~query ~body ~hx:true with
+            | Ok (_, _, b) -> Ast.VStr b
+            | Error e ->
+                raise
+                  (Interp_error
+                     (Prim_error ("habitat", e, "habitat-unreachable"))))
+       | _ ->
+           prim_err "habitat/fwd"
+             "usage: (habitat/fwd meth path query body)");
+  Runtime.add_prim rt "habitat/fwd-prefix"
+    (fun args ->
+       match args with
+       | [ Ast.VStr path ] ->
+           if fwd_register_prefix path then Ast.VBool true
+           else
+             raise
+               (Interp_error
+                  (Prim_error
+                     ( "habitat/fwd-prefix",
+                       "kernel paths cannot be forwarded (auth.route-visibility)",
+                       "refused" )))
+       | _ -> prim_err "habitat/fwd-prefix" "usage: (habitat/fwd-prefix path)")

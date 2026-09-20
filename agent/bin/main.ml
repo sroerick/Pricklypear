@@ -151,6 +151,7 @@ let () =
      creds -> prims still registered; they fail-soft at call time).
      Registers in every mode (serve, REPL, pipe). *)
   Habitat.register ~rt ~env;
+  Habitat.fwd_register ~rt ~env;
   (match Habitat.creds ~env with
    | Some _ ->
        Runtime.register_builtin_tool rt "memory" ~run:(fun args ->
@@ -160,6 +161,10 @@ let () =
      route-table handlers) so the HTML surface is Nopales-authored and
      redefinable live (borge/agent.borg surfaces). *)
   Surface.load ~rt;
+  (* habitat-pane forward prefixes (agent.borg habitat-panes): register
+     OCaml-side so the Nopales boot layer has no boot prim dependency --
+     kernel paths refuse by construction in fwd_register_prefix. *)
+  ignore (List.map Habitat.fwd_register_prefix [ "/todos"; "/notes"; "/calendar" ]);
   Plugins.load_all rt;
   match !pipe_expr with
   | Some src ->
