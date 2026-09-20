@@ -100,6 +100,8 @@ let () =
   let model = ref None in
   let base_url = ref None in
   let mock_script = ref None in
+  let agent_context_flag = ref false in
+  let board_list = ref None in
   let anon _ = () in
   let speclist =
     Arg.align
@@ -124,11 +126,13 @@ let () =
         ("--model", Arg.String (fun s -> model := Some s), "NAME provider model (AGENT_MODEL)");
         ("--base-url", Arg.String (fun s -> base_url := Some s), "URL provider base URL (AGENT_BASE_URL)");
         ("--mock-script", Arg.String (fun s -> mock_script := Some s), "FILE canned provider replies (test/demo of /chat)");
+        ("--agent-context", Arg.Unit (fun () -> agent_context_flag := true), "print the issue-board digest from the local lens and exit (borge/agent.borg boot verb)");
+        ("--board-list", Arg.String (fun s -> board_list := Some s), "UUID todo-list id for --agent-context (default: PP inbox)");
       ]
   in
     Arg.parse speclist anon
     "pp-remote [--image URL] [--user U --pass P] [-e EXPR]\n\
-     \                  [--lens DIR] [--lens-pull NAME] ... [--sync] [--sync-loop] [--serve [--open]]\n\
+       \                  [--lens DIR] [--lens-pull NAME] ... [--sync] [--sync-loop] [--serve [--open]] [--agent-context]\n\
      \                  [--model NAME] [--base-url URL] [--mock-script FILE]";
   Envcfg.load_dotenv ();
   (* TLS (tls-eio) needs a seeded RNG before any HTTPS proxy call;
@@ -334,6 +338,32 @@ let () =
            Lens_store.record_snapshot ~lens ~branch ~generation:gen
          end)
   in
+
+  (* ---- --agent-context: the borge/agent.borg boot verb (card 1ce0929f
+     gap 2): print the issue-board digest from the local lens and exit.
+     A pure lens read - no transport, works offline. The assigned-cards
+     half of boot step (d) arrives when todo/for-user ships (card
+     402516f4). ---- *)
+  (if !agent_context_flag then begin
+     match lens_opt with
+     | None ->
+         prerr_endline "--agent-context requires --lens DIR";
+         exit 2
+     | Some lens ->
+         let list_id =
+           Option.value !board_list ~default:Agent_context.default_board_list_id
+         in
+         (match
+            Agent_context.digest ~root:lens.root ~list_id
+              ~max_chars:Agent_context.default_max_chars
+          with
+          | Some digest ->
+              print_endline digest;
+              exit 0
+          | None ->
+              prerr_endline "agent-context: no board cards in the lens";
+              exit 1)
+   end);
   let lens_lookup =
     match lens_opt with
     | None -> None
