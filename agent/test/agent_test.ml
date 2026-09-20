@@ -902,6 +902,84 @@ let test_turn_replay_nested_blocks ~rt () =
     (Runtime.eval_string ~rt
        {|(soup/serialize (soup/select-one (hyper/stream npg nparts) "#t1"))|})
 
+(** lookbook (borge/filmstrip.borg lookbook): declared ui values + both
+    projections over libs/lookbook, the /lookbook pane (card = the
+    declaration; live variant call through the lookbook/eval seam;
+    stage-only params re-render), the ui rail root over the declared
+    inventory, and the no-card fail-soft path. *)
+let test_lookbook ~rt () =
+  Surface.load ~rt;
+  let has needle s =
+    (try ignore (Str.search_forward (Str.regexp_string needle) s 0); true
+     with Not_found -> false)
+  in
+  (* the DECLARATION: a ui value is a dict (JSON), never markup *)
+  let val_txt =
+    match Runtime.eval_string ~rt {|(as-str (ui/button "Save" "primary"))|} with
+    | Ast.VStr s -> s
+    | other -> Alcotest.fail ("ui/button: " ^ Reader.pp_value other)
+  in
+  Alcotest.(check bool) "declared value is a dict (t=el, tag/attrs/kids)" true
+    (has "\"t\":\"el\"" val_txt && has "\"tag\":\"button\"" val_txt
+     && has "\"class\":\"lb-btn lb-btn-primary\"" val_txt);
+  (match Runtime.eval_string ~rt {|(lookbook/html (ui/button "Save" "primary"))|} with
+   | Ast.VStr s ->
+       Alcotest.(check bool) "projection 1: pure html, both attrs" true
+         (has "<button" s && has "class=\"lb-btn lb-btn-primary\"" s
+          && has ">Save</button>" s)
+   | other -> Alcotest.fail ("lookbook/html: " ^ Reader.pp_value other));
+  (match Runtime.eval_string ~rt {|(lookbook/text (ui/card "Notes" "12 new" "body") 0)|} with
+   | Ast.VStr s ->
+       Alcotest.(check bool) "projection 2: indented outline of the COMPOSED element" true
+         (has "section" s && has "span" s && has "text: 12 new" s)
+   | other -> Alcotest.fail ("lookbook/text: " ^ Reader.pp_value other));
+  (* the pane: card = declaration; stage = live variant call + folds *)
+  let get ?(headers = []) params =
+    match Runtime.dispatch_route ~rt ~handler:"lookbook/page" ~method_:"POST"
+            ~path:"/lookbook" ~params ~headers ~body:"" with
+    | Ast.VStr s -> s
+    | other -> Alcotest.fail ("lookbook/page: " ^ Reader.pp_value other)
+  in
+  let pane = get ~headers:[ ("hx-request", "true") ] [ ("name", "ui/button"); ("v", "0") ] in
+  Alcotest.(check bool) "pane: card name + doc + both folds + stage" true
+    (has "ui/button" pane && has "One kind-preset button" pane
+     && has "lb-stage" pane && has "declared value" pane
+     && has "text projection" pane);
+  (match Runtime.dispatch_route ~rt ~handler:"lookbook/run" ~method_:"POST"
+           ~path:"/lookbook/run"
+           ~params:[ ("name", "ui/button"); ("v", "0");
+                     ("p_label", "Ship"); ("p_kind", "danger") ]
+           ~headers:[] ~body:""
+   with
+   | Ast.VStr s ->
+       Alcotest.(check bool) "stage POST: params re-render ONLY the stage" true
+         (has "lb-btn-danger" s && has ">Ship<" s
+          && not (has "<form" s));
+       Alcotest.(check bool) "stage POST: same stage id (hx-target survives)" true
+         (has "id=\"lb-stage-ui-button\"" s)
+   | other -> Alcotest.fail ("lookbook/run: " ^ Reader.pp_value other));
+  (* the ui rail root inventories the DECLARED elements (never sniffed) *)
+  (match Runtime.eval_string ~rt
+           {|(list/map (lambda (n) (lb/get n "open")) (glochid/ui-tree ""))|}
+   with
+   | Ast.VList opens ->
+       Alcotest.(check int) "ui root: three seed elements" 3
+         (List.length opens);
+       Alcotest.(check bool) "ui rows open-or-focus the /lookbook pane" true
+         (List.exists
+            (function Ast.VStr s -> String.equal s "/lookbook?name=ui/button" | _ -> false)
+            opens)
+   | other -> Alcotest.fail ("ui-tree: " ^ Reader.pp_value other));
+  (* EXAMPLES ARE the declaration: no card -> the no-card message, never
+     an error. Also proves the fail-soft eval seam path. *)
+  let nocard = get ~headers:[ ("hx-request", "true") ] [ ("name", "ui/nonesuch") ] in
+  Alcotest.(check bool) "no-card message (fail-soft)" true
+    (has "no examples card for ui/nonesuch" nocard);
+  (* the empty-name face renders a hint (inventory lives in the rail) *)
+  let root = get ~headers:[ ("hx-request", "true") ] [] in
+  Alcotest.(check bool) "root face: hint, no stage" true
+    (has "ui rail tree" root && not (has "lb-stage" root))
+
 (** i-1788670799-f: the agent's table covers the shared pure catalog
     (the hand copy here lacked length and the math tower entirely and
     registered string-split twice), and the catalog is callable through
@@ -1210,6 +1288,8 @@ let () =
             (test_surfaces_bindings_browser ~rt)
         ; Alcotest.test_case "rail-trees" `Quick
             (test_rail_trees ~rt)
+        ; Alcotest.test_case "lookbook" `Quick
+            (test_lookbook ~rt)
         ; Alcotest.test_case "keyboard-shortcuts" `Quick
             (test_glochid_keys ~rt) ] );
     ]

@@ -125,6 +125,31 @@ let surface_source = {pp|
     ".fs-applink{background:none;border:0;color:#7aa2f7;padding:0;margin:0;font:inherit;cursor:pointer;text-decoration:none}"
     ".fs-applink:hover{text-decoration:underline}"
     ".fs-modelsel{font-size:.6em;padding:.1rem .3rem}"
+    ;; lookbook seed elements (libs/lookbook): the elements declare
+    ;; classes; the HOST stylesheet styles them (same seam discipline
+    ;; as every host variation -- the habitat pass-two will theme its
+    ;; own). Kinds ride the class suffix from the variant param.
+    ".lb-btn{font:inherit;padding:.25rem .7rem;border:1px solid var(--border);border-radius:4px;background:var(--panel);color:inherit;cursor:pointer}"
+    ".lb-btn-primary{background:#3b5bdb;border-color:#3b5bdb;color:#fff}"
+    ".lb-btn-danger{background:#c92a2a;border-color:#c92a2a;color:#fff}"
+    ".lb-badge{display:inline-block;font-size:.72em;padding:.05rem .45rem;border-radius:999px;border:1px solid var(--border);color:var(--muted,#9aa3b2)}"
+    ".lb-badge-ok{color:#2f9e44;border-color:#2f9e44}"
+    ".lb-badge-warn{color:#e8590c;border-color:#e8590c}"
+    ".lb-card{border:1px solid var(--border);border-radius:6px;padding:.75rem;background:var(--panel)}"
+    ".lb-card h3{margin:0 0 .5rem;display:flex;gap:.5rem;align-items:center}"
+    ".lb-card p{margin:.25rem 0 0}"
+    ;; lookbook pane chrome: the stage + the forms + the folds.
+    ".lb-stage{border:1px dashed var(--border);padding:.9rem;border-radius:6px;display:flex;gap:.6rem;align-items:center;flex-wrap:wrap}"
+    ".lb-form{display:flex;gap:.4rem;flex-wrap:wrap;align-items:center;margin:.6rem 0}"
+    ".lb-form input{font:inherit;padding:.2rem .4rem;background:var(--panel);color:inherit;border:1px solid var(--border);border-radius:4px}"
+    ".lb-form label{color:var(--muted,#9aa3b2);font-size:.85em}"
+    ".lb-folds{margin-top:.6rem}"
+    ".lb-folds details{margin:.3rem 0}"
+    ".lb-folds summary{cursor:pointer;color:var(--muted,#9aa3b2)}"
+    ".lb-folds pre{overflow:auto;font-size:.85em;background:var(--panel);padding:.5rem;border-radius:4px;border:1px solid var(--border)}"
+    ".lb-vtabs{display:flex;gap:.3rem;flex-wrap:wrap;margin:.4rem 0}
+    .lb-vtab{cursor:pointer}
+    .lb-vtab.fs-sel{outline:1px solid var(--sel-accent)}"
     ;; v4 rail trees: mode tabs controlbox + one :has pair per root id
     ;; (windows / code / prims) shows only the active tree box off the
     ;; #fs-railmode sentinel -- the SAME hiding trick desktops use, so a
@@ -741,13 +766,15 @@ must be carried HERE through every write path.")
       (list "chat" "/chat")
       (list "code" "/code")
       (list "bindings" "/bindings")
+      (list "lookbook" "/lookbook")
       (list "sessions" "/sessions")
       (list "settings" "/settings")))
   "Column 0: the agent's interfaces, ALL route leaves
 (borge/filmstrip.borg sidebar-main-dichotomy): every entry
 open-or-focuses a main-window pane. Structure browsing is the rail
 trees' job (code -> glochid/code-tree fs walk; prims ->
-glochid/prims-tree over the habitat's grammar), never cascade crumbs.
+glochid/prims-tree over the habitat's grammar; ui -> glochid/ui-tree
+over the lookbook's declared elements), never cascade crumbs.
 
 The lib's filmstrip/apps is redefined TOO (not just browse): the app
 list IS the cascade's column 0 AND the launcher's hint source
@@ -1162,14 +1189,50 @@ count costs one habitat BRIDGE round-trip per package, so folds pull
 their level exactly once -- the template is shared, only the cache
 locality differs.")
 
+;; ---- 2b2d. THE UI TREE (lookbook inventory; borge/filmstrip.borg
+;; lookbook) ----
+;; The DECLARED ui elements as tree rows: one leaf per element, label =
+;; the def name, label word open-or-focuses the /lookbook pane (acme
+;; Get). Variants live IN the pane (variant tabs), not as tree levels --
+;; the tree is PICKING, the pane is the inspecting. No eager kids, no
+;; deeper levels: the inventory is the <name>/examples cards, one
+;; string list per level, fail-soft like every root (a bad card means a
+;; no-card pane, never a broken tree).
+(define glochid/ui-tree
+  (lambda (path)
+    (if (string-eq path "")
+        (list/map
+          (lambda (name)
+            (dict-set*
+              "{}"
+              (list
+                "label" name
+                "kind" "leaf"
+                "node" (string-append "elt/" name)
+                "open"
+                (string-append
+                  "/lookbook?name=" (filmstrip/url-enc name))
+                "verbs" "")))
+          (lookbook/elements))
+        (list)))
+  "levelfn for the ui tree (root = declared lookbook elements), ON THE
+SHARED NODE CONTRACT. lookbook/elements is the host inventory seam
+(libs/lookbook default: the lib seeds; glochid may redefine); an
+entry without a card still opens -- the pane renders the no-card
+message (falsifiable inventory, never source sniffing).")
+
 (define filmstrip/tree-roots
   (lambda ()
     (list
       (list "windows" "windows" glochid/windows-tree)
       (list "code" "code" glochid/code-tree)
-      (list "prims" "prims" glochid/prims-tree)))
-  "glochid's rail tree roots (windows / files / prims). Redefining the
-lib's default host seam; the renderer + endpoints stay shared.")
+      (list "prims" "prims" glochid/prims-tree)
+      (list "ui" "ui" glochid/ui-tree)))
+  "glochid's rail tree roots (windows / files / prims / ui). Redefining
+the lib's default host seam; the renderer + endpoints stay shared.
+The ui root inventories the DECLARED lookbook elements (the
+<name>/examples cards -- examples ARE the declaration), never guesses
+from source sniffing.")
 
 (define glochid/railtabs
   (lambda ()
@@ -1729,6 +1792,246 @@ every live main pane of the desktop, so the heal picks the ring only
 (the panes are visible regardless).")
 
 ;; ---- shell routes ----
+;; ---- lookbook (GET/POST /lookbook + POST /lookbook/run;
+;; borge/filmstrip.borg lookbook stanza) ----
+;; The UI-element inspector over libs/lookbook. Components are ordinary
+;; Nopales defs DECLARING UI VALUES; the card (<name>/examples) is the
+;; declaration (doc + formals + variants + source); the stage renders a
+;; LIVE variant call through the lookbook/eval seam and shows BOTH
+;; projections (lookbook/html + lookbook/text) over the SAME value.
+;; Pane-local discipline (I5): variant tabs re-render the pane body,
+;; the param form re-renders ONLY the stage div. No do-it in v1 (pass
+;; two adds edit-back-to-branch with its own stanza). The face is
+;; glochid's because the eval seam + layout are host seams; the lib
+;; (values, projections, cards) is host-free.
+;; DIALECT NOTE: all defs here use the (define (name args) body) sugar
+;; WITHOUT trailing docstrings -- (define (f x) body "doc") returns the
+;; docstring (the filmstrip make-note gotcha). Docs live in ;; above.
+(define (lookbook/head)
+  (if (hx-request?)
+      "<h1><span class=\"muted\">/lookbook</span></h1>"
+      "<h1><a href=\"/\">agent</a> <span class=\"muted\">/</span> <a href=\"/lookbook\">lookbook</a></h1>"))
+
+;; The <name>/examples card through the lookbook/eval seam (guarded),
+;; validated by the lib's lookbook/card: (card-text) or ().
+(define (lookbook/fetch-card name)
+  (let
+    ((r (guard
+          (lambda (e) "")
+          (lookbook/eval (string-append "(" name "/examples)")))))
+    (lookbook/card (as-str r))))
+
+;; Text at key k of a flat (k v ...) kv list.
+(define (lb/kv-get kvs k)
+  (if (null? kvs)
+      ""
+      (if (string-eq (as-str (car kvs)) k)
+          (as-str (car (cdr kvs)))
+          (lb/kv-get (cdr (cdr kvs)) k))))
+
+;; Param kvs for one render: defaults from the selected variant,
+;; overridden field-by-field by form values p_<formal> (the POST gate
+;; merges the form body into params; GET pane loads ride the variant).
+(define (lookbook/variant-kvs card v)
+  (let*
+    ((formals (lb/field-list card "formals"))
+     (variants (lb/field-list card "variants"))
+     (n (length variants))
+     (vv
+       (cond
+         ((null? variants) (list))
+         ((< v 0) (car variants))
+         ((>= v n) (car variants))
+         (#t (nth variants v)))))
+    (list/foldl
+      (lambda
+        (acc f)
+        (let*
+          ((req (request-param (string-append "p_" f)))
+           (def (if (null? vv) "" (lb/get vv f)))
+           (val (if (null? req) def (as-str req))))
+          (append acc (list f val))))
+      (list)
+      formals)))
+
+;; The variant's call source: (name "v1" ...). Params ride json-emit —
+;; Nopales-reader-compatible escapes -- so quote-bearing values stay
+;; literal.
+(define (lb/stage-id name)
+  (string-join (string-split name "/") "-"))
+;; The stage id: the element name FLATTENED (/ -> -) -- url-enc keeps
+;; escapes for route text, but an id rides a CSS selector in hx-target,
+;; so it must be selector-clean.
+
+(define (lb/src-walk kvs out)
+  (if (null? kvs)
+      out
+      (lb/src-walk
+        (cdr (cdr kvs))
+        (string-append
+          out
+          " "
+          (json-emit (as-str (car (cdr kvs))))))))
+;; The variant's call source: (name "v1" ...). Params ride json-emit --
+;; Nopales-reader-compatible escapes -- so quote-bearing values stay
+;; literal. kvs is the FLAT (k v ...) list from variant-kvs.
+(define (lookbook/call-src name kvs)
+  (string-append "(" name (lb/src-walk kvs "") ")"))
+
+;; The stage: the LIVE variant call (lookbook/eval), its html
+;; projection on stage, and both other views folded beside it --
+;; declared value + text projection + the card's source. One value,
+;; three views, zero markup authored outside the projections.
+(define (lookbook/stage-html card name v)
+  (let*
+    ((sid (string-append "lb-stage-" (lb/stage-id name)))
+     (kvs (lookbook/variant-kvs card v))
+     (src (lookbook/call-src name kvs))
+     (res (lookbook/eval src))
+     (err? (string-eq (lb/get res "t") "err"))
+     (proj (if err? "" (lookbook/html res)))
+     (txt (if err? "" (lookbook/text res 0))))
+    (string-append
+      "<div id=\"" sid "\" class=\"lb-stage\">"
+      (if err?
+          (string-append
+            "<p class=\"muted\">lookbook: "
+            (html-escape (lb/get res "v"))
+            "</p>")
+          (string-append
+            "<div data-lb-projection=\"html\">" proj "</div>"))
+      "<details class=\"lb-fold\"><summary>declared value</summary><pre>"
+      (html-escape (as-str res))
+      "</pre></details>"
+      (if err?
+          ""
+          (string-append
+            "<details class=\"lb-fold\"><summary>text projection</summary><pre>"
+            (html-escape txt)
+            "</pre></details>"))
+      "<details class=\"lb-fold\"><summary>source</summary><pre>"
+      (html-escape (lb/get card "source"))
+      "</pre></details>"
+      "</div>")))
+
+;; The params form: one field per DECLARED formal (never sniffed),
+;; POSTing a stage-only re-render (the hx-target pins the stage id --
+;; the pane body around it never swaps, the I5 discipline).
+(define (lookbook/form-html card name v)
+  (let*
+    ((formals (lb/field-list card "formals"))
+     (kvs (lookbook/variant-kvs card v))
+     (sid (string-append "lb-stage-" (lb/stage-id name))))
+    (string-append
+      "<form class=\"lb-form\" hx-post=\"/lookbook/run\""
+      " hx-target=\"#" sid "\" hx-swap=\"outerHTML\">"
+      "<input type=\"hidden\" name=\"name\" value=\"" (html-escape name) "\">"
+      "<input type=\"hidden\" name=\"v\" value=\"" (as-str v) "\">"
+      (html/join
+        (list/map
+          (lambda (f)
+            (string-append
+              "<label>"
+              (html-escape f)
+              " <input name=\"p_"
+              (html-escape f)
+              "\" value=\"" (html-escape (lb/kv-get kvs f)) "\"></label>"))
+          formals))
+      "<button class=\"fs-btn\" type=\"submit\">render</button>"
+      "</form>")))
+
+;; Variant tabs: one POST per variant, pane-local (closest .fs-body --
+;; the pane re-renders with the variant selected). Variants stay
+;; declared state; the ui tree lists ELEMENTS, never variants.
+(define (lookbook/vtabs-html card name v)
+  (let ((variants (lb/field-list card "variants")))
+    (if (null? variants)
+        ""
+        (string-append
+          "<div class=\"lb-vtabs\">"
+          (html/join
+            (filmstrip/map-indexed
+              (lambda (vt i)
+                (string-append
+                  "<button class=\"fs-btn lb-vtab"
+                  (if (= i v) " fs-sel" "")
+                  "\""
+                  " "
+                  (html/attr "hx-post" "/lookbook")
+                  " "
+                  (html/attr "hx-target" "closest .fs-body")
+                  " "
+                  (html/attr "hx-swap" "innerHTML")
+                  " "
+                  (html/attr "hx-vals"
+                    (string-append
+                      "{\"name\":\"" name
+                      "\",\"v\":\"" (as-str i) "\"}"))
+                  ">" "variant " (as-str i) "</button>"))
+              variants
+              0))
+          "</div>"))))
+
+(define (lookbook/no-card name)
+  (string-append
+    "<p class=\"muted\">lookbook: no examples card for "
+    (html-escape name)
+    "</p>"
+    "<p class=\"muted\">declare one:"
+    " (define " (html-escape name) "/examples (lambda () <card dict>))"
+    " -- EXAMPLES ARE THE DECLARATION (borge/filmstrip.borg lookbook;"
+    " a card = name + doc + formals + variants + file + source).</p>"))
+
+;; The pane body: name + doc + declaring file, variant tabs, params
+;; form, stage. Bad route / missing card render the no-card message --
+;; the pane never errors on the browser's behalf.
+(define (lookbook/pane-body name v)
+  (if (string-eq name "")
+      (string-append
+        "<p class=\"muted\">the lookbook: declared ui elements with both"
+        " projections. Open an element from the ui rail tree, or pick one"
+        " from the cascade.</p>")
+      (let ((card (lookbook/fetch-card name)))
+        (if (null? card)
+            (lookbook/no-card name)
+            (string-append
+              "<h2>" (html-escape (lb/get (car card) "name")) "</h2>"
+              "<p class=\"muted\">" (html-escape (lb/get (car card) "doc")) "</p>"
+              "<p class=\"muted muted-file\">" (html-escape (lb/get (car card) "file")) "</p>"
+              (lookbook/vtabs-html (car card) name v)
+              (lookbook/form-html (car card) name v)
+              (lookbook/stage-html (car card) name v))))))
+
+;; GET/POST /lookbook: the pane fragment under HX-Request (variant tabs
+;; POST here), the standalone page otherwise -- the code/bindings face
+;; pattern.
+(define (lookbook/page)
+  (let*
+    ((name (as-str (request-param "name")))
+     (vv (request-param "v"))
+     (v (if (null? vv) 0 (parse-int (as-str vv)))))
+    (if (hx-request?)
+        (render-html
+          (string-append (lookbook/head) (lookbook/pane-body name v)))
+        (glochid/layout "glochid -- lookbook"
+          (string-append (lookbook/head) (lookbook/pane-body name v))))))
+
+;; POST /lookbook/run: params re-render ONLY the stage div (the form's
+;; hx-target; the pane around it never swaps -- the I5 discipline the
+;; v4 review enforced on every fragment surface).
+(define (lookbook/run)
+  (let*
+    ((name (as-str (request-param "name")))
+     (vv (request-param "v"))
+     (v (if (null? vv) 0 (parse-int (as-str vv))))
+     (card (lookbook/fetch-card name)))
+    (if (null? card)
+        (render-html "<p class=\"muted\">lookbook: no card</p>")
+        (render-html (lookbook/stage-html (car card) name v)))))
+
+(route "/lookbook" "lookbook/page")
+(route "/lookbook/run" "lookbook/run")
+
 (route "/" "glochid/shell")
 (route "/filmstrip" "glochid/shell")
 (route "/filmstrip/open" "filmstrip/open")
@@ -1756,7 +2059,7 @@ every live main pane of the desktop, so the heal picks the ring only
 (** Boot-load the embedded Nopales packages + this surface into the
     shared env, registering the route-table routes. Idempotent-ish:
     re-evaluating defines redefines bindings live. *)
-(** Inert defaults for the llm-config host prims (agent/models,
+(* Inert defaults for the llm-config host prims (agent/models,
     agent/model, agent/base-url, agent/key-status) so the surface
     renders in non-serve contexts (tests, -p pipe evals).
     [Http_ui.serve] RE-REGISTERS them with live cfg backing — prim
@@ -1775,8 +2078,35 @@ let register_config_default_prims ~(rt : Runtime.t) : unit =
   Runtime.add_prim rt "session/new" (fun _ -> Ast.VStr "");
   Runtime.add_prim rt "session/resume" (fun _ -> Ast.VStr "")
 
+(** (lookbook/eval src) — the lookbook face's eval seam (borge/
+    filmstrip.borg lookbook): ONE source eval against the shared env
+    with a fresh step budget — a variant call "(ui/button \"Save\"
+    \"primary\")" or a card fetch "(ui/button/examples)". Callers run
+    INSIDE a route eval, so this takes NO eval lock (same discipline
+    as Host_seam.apply_value_raw; the eval mutex serializes whole
+    requests) — and eval errors surface as an {"t":"err"} card the
+    Nopales face renders, never a 500. A budget caps runaway seeds. *)
+let register_lookbook_prims ~(rt : Runtime.t) : unit =
+  Runtime.add_prim rt "lookbook/eval" (fun args ->
+      match args with
+      | [ Ast.VStr src ] ->
+          (try
+             Eval.eval_string_direct ~prims:rt.seam.prims rt.seam.env
+               ~budget:(Eval.make_budget ()) src
+           with e ->
+             Ast.VStr
+               ("{\"t\":\"err\",\"v\":\"eval failed: "
+                ^ String.escaped (Printexc.to_string e)
+                ^ "\"}"))
+      | _ ->
+          raise
+            (Ast.Interp_error
+               (Ast.Prim_error
+                  ("lookbook/eval", "usage: (lookbook/eval src)", "bad-args"))))
+
 let load ~(rt : Runtime.t) : unit =
   register_config_default_prims ~rt;
+  register_lookbook_prims ~rt;
   (* Boot order (glochid_source header): libs, then the glochid layer
      (whose ws/browse/shell redefinitions must win over the filmstrip
      defaults via env late binding), then the agent surface. *)
@@ -1784,5 +2114,8 @@ let load ~(rt : Runtime.t) : unit =
   Runtime.load_source ~rt Libs_source.css_lib;
   Runtime.load_source ~rt Libs_source.hyper_lib;
   Runtime.load_source ~rt Libs_source.filmstrip_lib;
+  (* libs/lookbook: declared ui values + the two projections (the
+     lookbook face in surface_source rides it through lookbook/eval). *)
+  Runtime.load_source ~rt Libs_source.lookbook_lib;
   Runtime.load_source ~rt glochid_source;
   Runtime.load_source ~rt surface_source

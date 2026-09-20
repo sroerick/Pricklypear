@@ -69,7 +69,8 @@
 
 (rule
  (targets libs_source.ml)
- (deps ../../libs/html/lib.pp ../../libs/hyper/lib.pp ../../libs/css/lib.pp filmstrip_nohdr.pp)
+ (deps ../../libs/html/lib.pp ../../libs/hyper/lib.pp ../../libs/css/lib.pp filmstrip_nohdr.pp
+        ../../libs/lookbook/lib.pp)
  (action
   (with-stdout-to libs_source.ml
    (progn
@@ -90,4 +91,11 @@
     (echo "|pp}")
     (echo "let filmstrip_lib = {pp|")
     (cat filmstrip_nohdr.pp)
+    (echo "|pp}")
+    ;; libs/lookbook: declared ui values + projections + seed elements
+    ;; (borge/filmstrip.borg lookbook). No (package ...) header to
+    ;; strip: the file is written headerless for glochid's bare boot
+    ;; evaluator (lookbook pass-two carries the pp-sync story).
+    (echo "let lookbook_lib = {pp|")
+    (cat ../../libs/lookbook/lib.pp)
     (echo "|pp}")))))
