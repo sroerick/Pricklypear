@@ -422,29 +422,19 @@ app-link/button twins (POST /filmstrip/new, open-or-focus /sessions)."
 ;; finished turn scans as a list of collapsible items instead of one flat
 ;; span/trace wall.
 (define (chat/turn-open id)
-  (render-html
-    (string-append
-      "<div class=\"turn\"><details class=\"think\"><summary>thinking + tools</summary>"
-      "<div id=\"" id "-think\"></div></details>"
-      "<div class=\"bubble llm\" id=\"" id "\"></div></div>")))
+  (render-html (lookbook/html (ui/turn-open id))))
 
 ;; Nested thinking block: one contiguous reasoning run gets its own
 ;; <details>/<summary> inside the zone; think-token deltas stream into #id.
 ;; Starts CLOSED so a finished turn stays scannable.
 (define (chat/think-open id)
-  (render-html
-    (string-append
-      "<details class=\"tk\"><summary>thinking</summary>"
-      "<div id=\"" id "\"></div></details>")))
+  (render-html (lookbook/html (ui/think-open id))))
 
 ;; Nested tool-call block: <details>/<summary> inside the zone; input/output
 ;; lines (chat/tool-line) stream into #id, and chat/tool-done marks the
 ;; summary via innerHTML on #<id>-sum when the call returns.
 (define (chat/tool-open id name)
-  (render-html
-    (string-append
-      "<details class=\"tool\"><summary id=\"" id "-sum\">tool: "
-      (html-escape name) "</summary><div id=\"" id "\"></div></details>")))
+  (render-html (lookbook/html (ui/tool-open id name))))
 
 (define (chat/tool-line label text)
   (render-html (lookbook/html (ui/tool-line label text))))
@@ -460,7 +450,7 @@ app-link/button twins (POST /filmstrip/new, open-or-focus /sessions)."
   (render-html (string-append "<span>" (html-escape text) "</span>")))
 
 (define (chat/error text)
-  (render-html (string-append "<div class=\"trace\">[turn error: " (html-escape text) "]</div>")))
+  (render-html (lookbook/html (ui/turn-error text))))
 
 ;; ---- code browser (GET /code) ----
 ;; Read-only file tree + file content arm, rendered by Nopales via fs/ls
@@ -768,6 +758,54 @@ streamed LLM bubble opens EMPTY: deltas swap innerHTML into #id.")
   "One tool trace line inside a tool-call fold: label + text, both
 escaped through the projection (never trust the model's strings).")
 
+(define ui/turn-open
+  (lambda (id)
+    (ui/elm
+      "div"
+      (list "class" "turn")
+      (list
+        (ui/elm "details" (list "class" "think")
+          (list
+            (ui/elm "summary" (list)
+              (list (ui/text "thinking + tools")))
+            (ui/elm "div"
+              (list "id" (string-append (as-str id) "-think"))
+              (list))))
+        (ui/elm "div" (list "class" "bubble llm" "id" (as-str id))
+          (list)))))
+  "Per-turn skeleton: the thinking+tools fold (the empty zone div the
+stream APPENDS reasoning/tool folds into) + the empty streamed LLM
+bubble #id. Rendered as ONE part so the targets exist before any
+delta parts arrive.")
+
+(define ui/think-open
+  (lambda (id)
+    (ui/elm "details" (list "class" "tk")
+      (list
+        (ui/elm "summary" (list)
+          (list (ui/text "thinking")))
+        (ui/elm "div" (list "id" (as-str id)) (list)))))
+  "One contiguous reasoning run: starts CLOSED so a finished turn
+stays scannable; think-token deltas stream into #id.")
+
+(define ui/tool-open
+  (lambda (id name)
+    (ui/elm "details" (list "class" "tool")
+      (list
+        (ui/elm "summary"
+          (list "id" (string-append (as-str id) "-sum"))
+          (list (ui/text (string-append "tool: " name))))
+        (ui/elm "div" (list "id" (as-str id)) (list)))))
+  "One tool call fold: trace lines (ui/tool-line) stream into #id;
+completion marks the summary via innerHTML on #<id>-sum.")
+
+(define ui/turn-error
+  (lambda (text)
+    (ui/elm "div" (list "class" "trace")
+      (list (ui/text (string-append "[turn error: " text "]")))))
+  "One turn error line: trace-styled bracketed message, escaped
+through the projection like everything else.")
+
 ;; ---- examples cards: the declaration (doc + formals + variants +
 ;; source; the card shape mirrors bind/get's doc+source row). The file
 ;; field names the GLOCHID layer, not a lib: these are host elements. ----
@@ -836,13 +874,76 @@ attrs (declaration), never markup.")
         "(ui/tool-line label text) ->\n  (ui/elm \"div\" (list \"class\" \"trace\")\n    (list (ui/text label) (ui/text \" \") (ui/text text)))")))
   "The ui/tool-line card.")
 
+(define ui/turn-open/examples
+  (lambda ()
+    (lb/obj
+      (list
+        "name" "ui/turn-open"
+        "doc" "Per-turn skeleton: thinking+tools fold + the streamed LLM bubble target."
+        "file" "agent/lib/surface.ml (glochid layer)"
+        "formals" (json-emit (list "id"))
+        "variants" (json-emit
+                     (list
+                       (lb/obj (list "id" "t-1"))))
+        "source"
+        "(ui/turn-open id) ->\n  (ui/elm \"div\" (list \"class\" \"turn\")\n    (list (ui/elm \"details\" (list \"class\" \"think\")\n            (list (ui/elm \"summary\" (list) ...)\n                  (ui/elm \"div\" (list \"id\" (string-append id \"-think\")) (list))))\n          (ui/elm \"div\" (list \"class\" \"bubble llm\" \"id\" id) (list))))")))
+  "The ui/turn-open card -- the composite seed: three defs composed by
+plain calls, the nesting visible in BOTH projections.")
+
+(define ui/think-open/examples
+  (lambda ()
+    (lb/obj
+      (list
+        "name" "ui/think-open"
+        "doc" "One reasoning-run fold (starts closed; deltas stream into #id)."
+        "file" "agent/lib/surface.ml (glochid layer)"
+        "formals" (json-emit (list "id"))
+        "variants" (json-emit
+                     (list
+                       (lb/obj (list "id" "t-1"))))
+        "source"
+        "(ui/think-open id) ->\n  (ui/elm \"details\" (list \"class\" \"tk\")\n    (list (ui/elm \"summary\" (list) (list (ui/text \"thinking\")))\n          (ui/elm \"div\" (list \"id\" id) (list))))")))
+  "The ui/think-open card.")
+
+(define ui/tool-open/examples
+  (lambda ()
+    (lb/obj
+      (list
+        "name" "ui/tool-open"
+        "doc" "One tool-call fold (summary #id-sum; trace lines stream into #id)."
+        "file" "agent/lib/surface.ml (glochid layer)"
+        "formals" (json-emit (list "id" "name"))
+        "variants" (json-emit
+                     (list
+                       (lb/obj (list "id" "t-1" "name" "fs/ls"))))
+        "source"
+        "(ui/tool-open id name) ->\n  (ui/elm \"details\" (list \"class\" \"tool\")\n    (list (ui/elm \"summary\" (list \"id\" (string-append id \"-sum\"))\n            (list (ui/text (string-append \"tool: \" name))))\n          (ui/elm \"div\" (list \"id\" id) (list))))")))
+  "The ui/tool-open card.")
+
+(define ui/turn-error/examples
+  (lambda ()
+    (lb/obj
+      (list
+        "name" "ui/turn-error"
+        "doc" "One turn error line (trace-styled, bracketed, escaped)."
+        "file" "agent/lib/surface.ml (glochid layer)"
+        "formals" (json-emit (list "text"))
+        "variants" (json-emit
+                     (list
+                       (lb/obj (list "text" "model request failed"))))
+        "source"
+        "(ui/turn-error text) ->\n  (ui/elm \"div\" (list \"class\" \"trace\")\n    (list (ui/text (string-append \"[turn error: \" text \"]\"))))")))
+  "The ui/turn-error card.")
+
 ;; ---- inventory seam (HOST SEAM: libs/lookbook seeds + the glochid
 ;; elements above; redefining is exactly the seam's intended use) ----
 (define lookbook/elements
   (lambda ()
     (append
       lb/seed-elements
-      (list "ui/railtab" "ui/start-entry" "ui/bubble" "ui/tool-line")))
+      (list
+        "ui/railtab" "ui/start-entry" "ui/bubble" "ui/tool-line"
+        "ui/turn-open" "ui/think-open" "ui/tool-open" "ui/turn-error")))
   "Glochid's lookbook inventory: the lib seed elements + glochid's own
 shell chrome. Every entry answers a <name>/examples card; the ui rail
 root + /lookbook face read this one def.")
