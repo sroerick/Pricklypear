@@ -169,21 +169,3 @@ let classify ~(fn_name : string) (e : expr) : complexity =
   then O_constant
   else if n_self > 0 then O_linear (* recursive but shape unclear — mild guess *)
   else Unknown
-
-(** Classify [e] but also fold in the complexity of known callees
-    (looked up in [known_fn]), taking the max of all reachable calls. *)
-let classify_with_known
-    ~(known_fn : (string, expr) Hashtbl.t)
-    ~(fn_name : string)
-    (e : expr)
-  : complexity =
-  let base = classify ~fn_name e in
-  let info = analyze_self ~fn_name e in
-  List.fold_left
-    (fun acc callee ->
-      match Hashtbl.find_opt known_fn callee with
-      | None -> acc
-      | Some body ->
-          let cx = classify ~fn_name:callee body in
-          max_cx acc cx)
-    base info.callees
