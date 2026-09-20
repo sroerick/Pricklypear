@@ -501,6 +501,49 @@ v3_final: {
   }
 }
 
+// ---- I2b CROSS-DESKTOP RESTORE (the "restore did nothing" bug class)
+// The shelf subtree is DESKTOP-GLOBAL: shelving a pane on desktop N then
+// restoring it from desktop M must re-stamp desktop=M (pane-stamp, like
+// open-apply's acme-Get unshelve). state=live alone keeps the OLD
+// data-desktop on the record, and :has(#ws-desk.dsk-N) keeps the pane
+// display:none -- the operator sees nothing happen.
+cross_desk_restore: {
+  const flipDesk = (d) => `htmx.ajax('POST','/filmstrip/desktop',{values:{d:'${d}'},target:'#fs-sink',swap:'innerHTML'})`;
+  await send("Page.navigate", { url: base + "/" });
+  ok(await waitShell(), "shell appeared after load");
+  await sleep(500);
+  await ev(flipDesk("0"));
+  await sleep(900);
+  console.log(await treeClose("/code"));
+  await sleep(600);
+  const wsA = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
+  const shelved = wsA.content.find((p) => p.route === "/code" && p.state === "shelved");
+  ok(!!shelved, "I2b setup: /code is shelved (state=shelved)");
+  // restore from the OTHER desktop than the one the pane carries (the
+  // pane's desktop is whatever it was last stamped with -- run order
+  // dependent -- so derive the target instead of assuming 0 vs 1).
+  const from = String(shelved ? shelved.desktop : 0);
+  const to = from === "0" ? "1" : "0";
+  await ev(flipDesk(to));
+  await sleep(900);
+  await ensureNode("shelf");
+  console.log(await ev(treeVerbClick("/code", "restore")));
+  await sleep(900);
+  const wsB = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
+  const rec = wsB.content.find((p) => p.route === "/code" && p.state === "live");
+  ok(rec && String(rec.desktop) === to, `I2b restore re-stamps the pane to the CURRENT desktop (${to}, not the shelving desktop ${from})`, JSON.stringify(rec && rec.desktop));
+  if (rec) {
+    const sel = `.fs-pane[data-pane="${rec.id}"]`;
+    ok((await ev(`!!document.querySelector('${sel}')`)) && !(await ev(`document.querySelector('${sel}').classList.contains('shelved')`)), "I2b restored section live in the DOM (no .shelved class)");
+    ok((await ev(`document.querySelector('${sel}').getAttribute('data-desktop')`)) === to, `I2b restored section carries data-desktop=${to} in the DOM`);
+    const r = JSON.parse(await ev(`(()=>{const s=document.querySelector('${sel}'); const b=s.getBoundingClientRect(); return JSON.stringify({q:b.width>0&&b.height>0,w:b.width,h:b.height})})()`));
+    ok(r.q, `I2b I1: the restored pane is actually VISIBLE on desktop ${to} (nonzero rect)`, JSON.stringify(r));
+  }
+  // leave a sane world: back to desktop 0 as the run started
+  await ev(flipDesk("0"));
+  await sleep(600);
+}
+
 // ---- v4 BATCH C (rail-trees-v4): ONE tree renderer, N roots ----
 // T0 mode tabs swap visible root only (sentinel :has, zero JS)
 // T1 expansion state survives mode flips (DOM kept, never re-rendered)
