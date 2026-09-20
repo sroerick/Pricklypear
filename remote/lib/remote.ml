@@ -112,6 +112,7 @@ let register_pure_prims (t : t) : unit =
 let register_proxy_prims (t : t) : unit =
   List.iter (bind_proxy_prim t)
     [ "get"; "create"; "update"; "delete"; "rows"
+    ; "find-rows"; "find-rows-author"
     ; "function-source"; "function-doc"; "apropos"; "apropos-docs"
     ; "find-code"
     ; "list-bindings"; "whoami"; "current-author"
