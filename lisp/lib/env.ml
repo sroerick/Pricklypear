@@ -95,22 +95,6 @@ let rec lookup (e : env) (name : string) : value option =
 let define (e : env) (name : string) (v : value) : unit =
   Hashtbl.replace e.bindings name v
 
-(** Like [define] but only binds if [name] is already bound somewhere in
-    the parent chain. Returns [true] on success, [false] if [name] is
-    not bound (leaving the env unchanged). See [lisp-interpreter.eval] for
-    the set!/redefinition semantics this mirrors. *)
-let set_existing (e : env) (name : string) (v : value) : bool =
-  (* Like [define] but only succeeds if the name is already bound
-     somewhere in the parent chain. Returns false if not bound. *)
-  let rec find_env e =
-    match Hashtbl.find_opt e.bindings name with
-    | Some _ -> Some e
-    | None -> Option.bind e.parent find_env
-  in
-  match find_env e with
-  | Some e' -> Hashtbl.replace e'.bindings name v; true
-  | None -> false
-
 (** Fold [f] over every binding in [e] and its ancestor chain, in
     child-to-parent order. Used by reflection primitives like
     [(list-bindings)]. *)
