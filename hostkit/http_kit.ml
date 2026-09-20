@@ -43,13 +43,15 @@ let read_body (reqd : Httpun.Reqd.t) : string =
   Eio.Promise.await promise
 
 let respond_text (reqd : Httpun.Reqd.t) ~(status : Httpun.Status.t)
-    ~(content_type : string) ~(body : string) : unit =
+    ~(content_type : string) ~(body : string)
+    ~(relay : (string * string) list) : unit =
   let headers =
     Httpun.Headers.of_list
-      [
+      (List.map (fun (k, v) -> (k, v)) relay
+      @ [
         ("content-type", content_type);
         ("content-length", string_of_int (String.length body));
-      ]
+      ])
   in
   let _body_w =
     Httpun.Reqd.respond_with_string reqd
@@ -59,8 +61,9 @@ let respond_text (reqd : Httpun.Reqd.t) ~(status : Httpun.Status.t)
   ()
 
 let respond_html (reqd : Httpun.Reqd.t) ~(status : Httpun.Status.t)
-    ~(body : string) : unit =
-  respond_text reqd ~status ~content_type:"text/html; charset=utf-8" ~body
+    ~(body : string) ~(relay : (string * string) list) : unit =
+  respond_text reqd ~status ~content_type:"text/html; charset=utf-8" ~relay
+    ~body
 
 (** The httpun closed-writer guard: after a peer disconnect, write/flush
     on the Body.Writer raises Failure "cannot write to closed writer"
@@ -156,6 +159,6 @@ let serve_asset (reqd : Httpun.Reqd.t)
     | None -> ("", "application/octet-stream")
   in
   if body = "" then
-    respond_html reqd ~status:`Not_found
+    respond_html reqd ~status:`Not_found ~relay:[]
       ~body:(status_page "404" (Printf.sprintf "<p>no asset %s</p>" (esc name)))
-  else respond_text reqd ~status:`OK ~content_type:ct ~body
+  else respond_text reqd ~status:`OK ~content_type:ct ~body ~relay:[]

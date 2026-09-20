@@ -902,6 +902,60 @@ let test_turn_replay_nested_blocks ~rt () =
     (Runtime.eval_string ~rt
        {|(soup/serialize (soup/select-one (hyper/stream npg nparts) "#t1"))|})
 
+(** habitat-panes (agent.borg habitat-panes): glochid panes WEAR the
+    habitat's fragment faces — the fwd faces over the habitat/fwd prim
+    (boot shell + boost wrapper + in-process dispatch), the fwd-prefix
+    registry (kernel paths refused), the cascade app entries. The gate
+    plane itself (put/forward) is exercised by the probe against a live
+    habitat; here the prim is canned. *)
+let test_habitat_panes ~rt () =
+  Surface.load ~rt;
+  let has needle s =
+    (try ignore (Str.search_forward (Str.regexp_string needle) s 0); true
+     with Not_found -> false)
+  in
+  (* canned habitat: the forward returns a fragment *)
+  Runtime.add_prim rt "habitat/fwd" (fun args ->
+      match args with
+      | [ Ast.VStr _meth; Ast.VStr path; Ast.VStr _q; Ast.VStr _b ] ->
+          Ast.VStr ("<h1>canned</h1> for " ^ path)
+      | _ -> Alcotest.fail "habitat/fwd: bad args");
+  (* the open face: boost wrapper + canned fragment inside *)
+  (match Runtime.dispatch_route ~rt ~handler:"glochid/fwd-todo" ~method_:"GET"
+           ~path:"/todos" ~params:[ ("hx-request", "true") ] ~headers:[]
+           ~body:""
+   with
+   | Ast.VStr s ->
+       Alcotest.(check bool) "fwd face: boost shell + fragment + stub target" true
+         (has "id=\"fwd-todo\"" s && has "hx-boost=\"true\"" s
+          && has "hx-target=\"#fwd-todo\"" s && has "<h1>canned</h1> for /todos" s)
+   | other -> Alcotest.fail ("fwd-todo: " ^ Reader.pp_value other));
+  (* prefix registry: app paths register, kernel paths refuse *)
+  (* OCaml-side registry (boot registers the defaults; test adds one) *)
+  ignore (Habitat.fwd_register_prefix "/kanban");
+  Alcotest.(check bool) "fwd prefix: app prefix registered" true
+    (Habitat.fwd_matches_prefix "/kanban?x=1" <> None);
+  (match Habitat.fwd_register_prefix "/api" with
+   | false -> ()
+   | true -> Alcotest.fail "fwd prefix: kernel path was accepted");
+  Alcotest.(check bool) "fwd prefix: kernel path NOT registered" false
+    (Habitat.fwd_matches_prefix "/api/eval" <> None);
+  (* the cascade wears the habitat apps (host vocabulary = habitat routes) *)
+  let dumped =
+    match Runtime.eval_string ~rt {|(json-emit (glochid/fwd-apps))|} with
+    | Ast.VStr s -> s
+    | other -> Alcotest.fail ("fwd-apps: " ^ Reader.pp_value other)
+  in
+  Alcotest.(check bool) "cascade: habitat apps are route leaves" true
+    (has "/todos" dumped && has "/calendar" dumped);
+  let bound p =
+    match Runtime.eval_string ~rt ("(as-str (route/lookup \"" ^ p ^ "\"))") with
+    | Ast.VStr h -> has "glochid/fwd" h
+    | _ -> false
+  in
+  Alcotest.(check bool) "route table: /todos /notes /calendar bound" true
+    (bound "/todos" && bound "/notes" && bound "/calendar")
+
 (** lookbook (borge/filmstrip.borg lookbook): declared ui values + both
     projections over libs/lookbook, the /lookbook pane (card = the
     declaration; live variant call through the lookbook/eval seam;
@@ -1290,6 +1344,8 @@ let () =
             (test_rail_trees ~rt)
         ; Alcotest.test_case "lookbook" `Quick
             (test_lookbook ~rt)
+        ; Alcotest.test_case "habitat-panes" `Quick
+            (test_habitat_panes ~rt)
         ; Alcotest.test_case "keyboard-shortcuts" `Quick
             (test_glochid_keys ~rt) ] );
     ]

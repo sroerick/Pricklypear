@@ -244,7 +244,7 @@ ok(s0.focusedRect && s0.focusedRect.q && !s0.focusedShelved && (s0.focusedRegion
 ok(s0.pinnedCount > 0 || s0.focusedRegion === "main", "I1 backward-compat: with zero pinned panes the focused pane is the main lift", `pinned=${s0.pinnedCount} region=${s0.focusedRegion}`);
 await checkI8("on load", false);
 ok(s0.shelvedCount === 1 && s0.shelfDir, "windows tree: shelf subtree present with the shelved pane counted", `shelved=${s0.shelvedCount} shelfDir=${s0.shelfDir}`);
-ok(s0.liveCount === 1 && s0.trees === 4 && s0.railtabs === 10, "v4+ lookbook: FOUR tree boxes (windows/code/prims/ui) + tabs + SIX start-menu entries (dichotomy — launchbar folded into the rail)", `trees=${s0.trees} tabs=${s0.railtabs} live=${s0.liveCount}`);
+ok(s0.liveCount === 1 && s0.trees === 4 && s0.railtabs === 13, "v4+ habitat-panes: FOUR tree boxes (windows/code/prims/ui) + tabs + NINE start-menu entries (six glochid surfaces + three habitat faces)", `trees=${s0.trees} tabs=${s0.railtabs} live=${s0.liveCount}`);
 ok(s0.bareAnchors === 0, "I5 zero shell-escaping anchors in pane bodies", `bare=${s0.bareAnchors}`);
 ok((await ev(`[...document.querySelectorAll('#fs-shell [style]')].length`)) === 0, "T6 zero inline styles in the shell at rest (classes only, before any htmx settling)");
 const __styleEls = await ev("[...document.querySelectorAll('#fs-shell [style]')].map(function(e){return e.tagName}).join(',')");
@@ -686,6 +686,31 @@ lookbook_batch_d: {
   await ev(`htmx.ajax('POST','/filmstrip/open',{values:{route:'/lookbook?name=ui/nonesuch'},target:'#fs-sink',swap:'innerHTML'})`);
   await sleep(1100);
   ok(await ev(`[...document.querySelectorAll('.fs-pane.fs-body, .fs-pane > .fs-body')].some(b=>b.textContent.includes('no examples card for ui/nonesuch'))`), "D6 a cardless element answers the no-card declaration message (fail-soft)");
+}
+
+// ---- BATCH E (habitat-panes): the shell wears the habitat's app
+// faces as panes. The probe's scratch agent has NO habitat creds, so
+// the honest assertions are the FAIL-SOFT ones: the pane opens, the
+// boost shell is present, the muted setup card renders (never a 500,
+// never a document crash). A live-creds run additionally pipes real
+// fragments (dogfood; the OCaml gate plane is module-tested).
+habitat_panes_batch_e: {
+  await send("Page.navigate", { url: base + "/" });
+  ok(await waitShell(), "E0 shell appeared for the habitat-panes batch");
+  await sleep(500);
+  ok(await ev(`[...document.querySelectorAll('.fs-railtab')].map(b=>b.textContent.trim()).length === 4`), "E0 four rail trees (windows/code/prims/ui)");
+  await ev(`htmx.ajax('POST','/filmstrip/open',{values:{route:'/todos'},target:'#fs-sink',swap:'innerHTML'})`);
+  await sleep(1400);
+  ok(await ev(`!!document.querySelector('.fs-pane .fs-body [hx-boost="true"][id="fwd-todo"]')`), "E1 the /todos pane carries the boost shell (anchors swap into the pane, never out)");
+  // the file-fallback means creds may exist even without env vars: the
+  // invariant is FAIL-SOFT EITHER WAY — real habitat content OR the
+  // muted setup card, never a nested <!DOCTYPE document and never a 500
+  const paneTxt = await ev(`((document.querySelector('[id="fwd-todo"]')||{}).textContent||'')`);
+  ok(paneTxt.includes('To-dos') || paneTxt.includes('habitat bridge'), "E2 the pane shows habitat content or the setup card (fail-soft)", paneTxt.slice(0, 120));
+  ok(!(await ev(`((document.querySelector('[id="fwd-todo"]'))?.outerHTML||'').toLowerCase().includes('<!doctype')`)), "E2b the pane body is fragment-shaped (no nested document)");
+  await ev(`htmx.ajax('POST','/filmstrip/open',{values:{route:'/notes'},target:'#fs-sink',swap:'innerHTML'})`);
+  await sleep(1200);
+  ok(await ev(`!!document.querySelector('[id="fwd-notes"][hx-boost="true"]')`), "E3 /notes pane wears the same shell");
 }
 
 console.log(fails === 0 ? "\nSEMANTIC PROBE: ALL GREEN" : `\nSEMANTIC PROBE: ${fails} FAILING`);

@@ -762,14 +762,17 @@ must be carried HERE through every write path.")
 ;; ---- 2. THE CASCADE IS THE AGENT'S ----
 (define glochid/apps
   (lambda ()
-    (list
-      (list "chat" "/chat")
-      (list "code" "/code")
-      (list "bindings" "/bindings")
-      (list "lookbook" "/lookbook")
-      (list "sessions" "/sessions")
-      (list "settings" "/settings")))
-  "Column 0: the agent's interfaces, ALL route leaves
+    (append
+      (list
+        (list "chat" "/chat")
+        (list "code" "/code")
+        (list "bindings" "/bindings")
+        (list "lookbook" "/lookbook")
+        (list "sessions" "/sessions")
+        (list "settings" "/settings"))
+      (glochid/fwd-apps)))
+  "Column 0: the agent's interfaces + the habitat's app faces the
+panes wear (glochid/fwd-apps), ALL route leaves
 (borge/filmstrip.borg sidebar-main-dichotomy): every entry
 open-or-focuses a main-window pane. Structure browsing is the rail
 trees' job (code -> glochid/code-tree fs walk; prims ->
@@ -793,6 +796,88 @@ host vocabulary, never habitat apps.")
   "glochid's shell cascade (HOST SEAM 2): column 0 is the agent's
 interfaces, all leaves — no deeper columns, no crumbs. The stored path
 only ever names the picked route (entry-html wears it as fs-sel).")
+
+;; ---- 2c. HABITAT PANES (agent.borg habitat-panes, 2026-09-20) ----
+;; The habitat's app faces are ordinary htmx fragment routes already;
+;; glochid panes WEAR them: the gate forwards these prefixes to the
+;; habitat with the operator's session (habitat/fwd-prefix at boot;
+;; kernel paths can never register — the prim refuses). In-pane nav on
+;; the habitat faces is anchor-shaped, so the pane shell carries
+;; hx-boost: anchors become ajax swaps INTO the pane (one wrapper div
+;; per app, id stable across swaps; hx-target keeps the wrapper's inner
+;; being the pane). In-process pane OPEN (filmstrip/open pane-content)
+;; rides the Nopales fwd faces over the habitat/fwd prim; browser
+;; interactions ride the OCaml gate plane. Auth: ONE POST /login per
+;; process (one argon2id verify); the pp_session cookie rides every
+;; forward.
+;; PREFIX REGISTRY: registered OCaml-side at boot (bin/main.ml, after
+;; Surface.load) so this layer has no boot prim dependency; kernel paths
+;; refuse by construction in Habitat.fwd_register_prefix. The routes
+;; below are the habitat's vocabulary. DIALECT: no trailing docstrings
+;; on sugar defines (they RETURN the docstring) -- docs in ;; here.
+
+;; (cascade-label home-path) rows: the PATHS are the habitat's route
+;; vocabulary (/todos -- the habitat built for full-page anchors),
+;; never a glochid-side renaming.
+(define glochid/fwd-apps
+  (lambda ()
+    (list
+      (list "todo" "/todos")
+      (list "notes" "/notes")
+      (list "calendar" "/calendar"))))
+
+;; one stable id per app so boosted anchors swap INTO the wrapper's
+;; inner (the wrapper survives every swap); hx-boost catches anchors
+;; AND un-attributed forms; explicit hx-* elements inside (todo's
+;; check forms) keep their own targets.
+(define (glochid/fwd-wrap app inner)
+  (string-append
+    "<div id=\"fwd-" app
+    "\" hx-boost=\"true\" hx-target=\"#fwd-" app
+    "\" hx-swap=\"innerHTML\">"
+    inner
+    "</div>"))
+
+;; the merged param alist (query ++ body) as one query string -- the
+;; forward pipes the browser's params through 1:1.
+(define (glochid/fwd-qs)
+  (list/foldl
+    (lambda
+      (acc kv)
+      (string-append
+        acc
+        (if (string-eq acc "") "" "&")
+        (filmstrip/url-enc (car kv))
+        "="
+        (filmstrip/url-enc (car (cdr kv)))))
+    ""
+    (request-params)))
+
+;; the in-process face for one app: the habitat's fragment inside the
+;; boost shell, loaded with the pane's own query params. Fail-soft --
+;; a down bridge renders the muted setup card, the pane never 500s.
+(define (glochid/fwd-face app)
+  (render-html
+    (guard
+      (lambda (e)
+        (string-append
+          "<p class=\"muted\">habitat bridge: "
+          (html-escape (as-str (nth e 1)))
+          " -- set AGENT_HABITAT_URL/USER/PASS (or PP_URL/PP_USER/PP_PASS)."
+          "</p>"))
+      (glochid/fwd-wrap
+        app
+        (habitat/fwd
+          (as-str (request-method))
+          (car (cdr (car (list/filter
+                           (lambda (a) (string-eq app (car a)))
+                           (glochid/fwd-apps)))))
+          (glochid/fwd-qs)
+          "")))))
+
+(define (glochid/fwd-todo) (glochid/fwd-face "todo"))
+(define (glochid/fwd-notes) (glochid/fwd-face "notes"))
+(define (glochid/fwd-calendar) (glochid/fwd-face "calendar"))
 
 ;; ---- 2d. DESKTOPS ----
 ;; The ws row carries "desktop":N (0 default) and each pane record a
@@ -2031,6 +2116,13 @@ every live main pane of the desktop, so the heal picks the ring only
 
 (route "/lookbook" "lookbook/page")
 (route "/lookbook/run" "lookbook/run")
+
+;; habitat-pane faces: the root routes for open-or-focus + route/lookup
+;; sanity. Sub-paths ride the OCaml gate plane (fwd prefixes), never
+;; the Nopales table.
+(route "/todos" "glochid/fwd-todo")
+(route "/notes" "glochid/fwd-notes")
+(route "/calendar" "glochid/fwd-calendar")
 
 (route "/" "glochid/shell")
 (route "/filmstrip" "glochid/shell")
