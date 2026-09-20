@@ -177,20 +177,27 @@
 ;; O(1) membership for the render hot path (2026-09-19 obituary: the
 ;; recursive list walk cost ~233k interpreter steps per glochid shell
 ;; render — 58% of the whole render, blowing the 400k request budget).
-;; html/block-lookup is built ONCE at load time; dict-get on it returns
-;; the tag or () — same exact-lowercase-match semantics, same truthy
-;; value, and the walk stays for anything that calls block-member? raw.
+;; html/block-lookup is the SAME one-time fold, but DELAYED
+;; (lisp-interpreter.lazy-env-thunks): the body binds without
+;; evaluating, so define time never calls the html/block-tags sibling
+;; (the seed-sources no-define-time gate — a warm additive skip would
+;; otherwise raise unbound); first (force) per session memoizes the
+;; dict, so the render hot path still pays the fold ONCE. dict-get on
+;; it returns the tag or () — same exact-lowercase-match semantics,
+;; same truthy value, and the walk stays for anything that calls
+;; block-member? raw.
 (define html/block-lookup
-  (list/foldl
-    (lambda (acc name) (dict-set acc name name))
-    "{}"
-    html/block-tags))
+  (delay
+    (list/foldl
+      (lambda (acc name) (dict-set acc name name))
+      "{}"
+      html/block-tags)))
 
 (define html/block-tag?
   (lambda
     (name)
     "True when name is in the block-level tag set (exact lowercase match)."
-    (dict-get html/block-lookup (as-str name))))
+    (dict-get (force html/block-lookup) (as-str name))))
 
 (define html/tag-core
   (lambda
