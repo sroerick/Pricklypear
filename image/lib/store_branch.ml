@@ -60,12 +60,6 @@ type branch_status_row = {
   st_base_hash : string option;     (* a *)
 }
 
-let hash_eq (x : string option) (y : string option) : bool =
-  match x, y with
-  | None, None -> true
-  | Some a, Some b -> String.equal a b
-  | _ -> false
-
 (* The spec's decision table, as code. Comparisons are hash equality with
    ABSENT (None) as its own value. DELEGATES to Branch_algebra.classify —
    the pure decision table lives there (formal-verification island 1, one
