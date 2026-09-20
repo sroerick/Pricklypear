@@ -203,7 +203,14 @@
         (render-html
           (filmstrip/oob-msg "filmstrip: no such pane"))
         (let*
-          ((p2 (dict-set (nth panes i) "state" "live"))
+          ;; pane-stamp on unshelve, same as open-apply (v4 cross-desk
+          ;; rule): the shelf subtree is DESKTOP-GLOBAL, so a restore
+          ;; fired from desktop M on a pane shelved from desktop N must
+          ;; re-stamp desktop=M -- state=live alone leaves the old
+          ;; data-desktop on the record and the :has(#ws-desk.dsk-N)
+          ;; hiding makes the pane invisible ("restore did nothing").
+          ((p2 (filmstrip/pane-stamp
+                 (dict-set (nth panes i) "state" "live")))
             (panes2 (filmstrip/replace-at panes i p2))
             (focus2
               (if
@@ -229,7 +236,7 @@
                       (filmstrip/pane-at panes2 focus)
                       #f)
                     "")))))))))
-  "POST /filmstrip/restore: id param -> state=live, the pane returns to\nits position; OOB class swap brings the section back; focus heals onto\nthe restored pane when nothing live holds focus (a shelved pane's\n.focused class is cleared by the same swap).")
+  "POST /filmstrip/restore: id param -> state=live, the pane returns to\nits position; OOB class swap brings the section back; focus heals onto\nthe restored pane when nothing live holds focus (a shelved pane's\n.focused class is cleared by the same swap). The unshelve passes\nthrough filmstrip/pane-stamp like open-apply's acme-Get branch: the\nshelf is desktop-global, so a cross-desktop restore re-stamps\ndesktop=current and the pane is VISIBLE on the operator's desktop,\nnever stranded hidden on its shelving desktop.")
 
 (define filmstrip/shelf-oob
   (lambda () "")
