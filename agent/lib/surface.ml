@@ -675,6 +675,20 @@ uses tree/get + node-path; glochid rides the local fs (HOST SEAM 1).")
     (seq (fs/write glochid/ws-file fields) fields))
   "Persist workspace fields to .agent/workspace.json (HOST SEAM 1).")
 
+;; ---- 2a. THE SHEET IS A LAZY MEMO (lisp-interpreter.lazy-env-thunks) ---
+;; The filmstrip sheet is static lib vocabulary, yet filmstrip/shell-html
+;; re-built it as data AND css/render-ed it to text on EVERY shell render
+;; (css/render-decls showed ~5k steps/render — small next to the trees,
+;; but the habitat hit budget-death on exactly this pattern in
+;; libs/layout 2026-12-30: layout/style-text was the fix; this is its
+;; glochid twin). (delay ...) binds without evaluating; first touch
+;; renders the sheet ONCE and memoizes for the session.
+(define glochid/css-text
+  (delay (css/render (filmstrip/css))))
+"Rendered filmstrip stylesheet, memoized: (force glochid/css-text).
+CAVEAT same as layout/style-text: redefining filmstrip/css live leaves
+the memo stale until the session rehydrates."
+
 ;; ---- 2b. AXIS (RETIRED — sidebar-only shell) ----
 ;; OBITUARY (BORGE-1789879934, 2026-09-19 operator decision): the axis
 ;; toggle (POST /filmstrip/orient + the rail-tabs button) is GONE; glochid
@@ -1598,7 +1612,7 @@ bodies preserved). The pin/move responses land here.")
   (lambda (cascade panes focus)
     (html/join
       (list
-        (html/tag "style" "" (css/render (filmstrip/css)))
+        (html/tag "style" "" (force glochid/css-text))
         (html/tag
           "div"
           (html/attrs

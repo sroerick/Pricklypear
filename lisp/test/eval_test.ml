@@ -318,6 +318,23 @@ let eval_tests = [
       let _ = (Eval.eval ~budget ~prims env e) in
       Alcotest.fail "expected budget exceeded"
     with Ast.Interp_error Ast.Budget_exceeded -> ());
+  ("eval: fn call counts per application", `Quick, fun () ->
+    let prims = Eval.make_prim_table () in
+    let env = Env.create () in
+    let budget = Eval.make_budget () in
+    let e =
+      Reader.read_one
+        "(seq (define (bump x) x) (bump 1) (bump 2) (bump 3))"
+    in
+    let _ = Eval.eval ~budget ~prims env e in
+    let calls =
+      try Hashtbl.find budget.Budget.fn_call_counts "bump" with Not_found -> 0
+    in
+    let steps =
+      try Hashtbl.find budget.Budget.fn_step_counts "bump" with Not_found -> 0
+    in
+    Alcotest.(check int) "bump called 3x" 3 calls;
+    Alcotest.(check bool) "steps >= calls" (steps >= calls) true);
   ("eval: unbound var raises", `Quick, fun () ->
     let prims = Eval.make_prim_table () in
     let env = Env.create () in
