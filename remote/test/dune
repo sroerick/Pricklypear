@@ -32,3 +32,8 @@
  (name sync_client_test)
  (modules sync_client_test)
  (libraries pricklypear-remote.lib pricklypear-lisp alcotest unix))
+
+(test
+ (name agent_context_test)
+ (modules agent_context_test)
+ (libraries pricklypear-remote.lib pricklypear-lisp alcotest str unix yojson))
