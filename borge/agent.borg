@@ -452,6 +452,32 @@
          the glochid layer to carry the axis field through (the lib's
          version writes only cascade/content/focus). The lib's
          no-<script> rule holds: :has() is CSS, not JS.
+
+         KEYBOARD SHORTCUTS (2026-09-19): the filmstrip zero-JS hotkeys
+         mechanism extended to glochid's chord set. THE KEYBOARD MAP IS
+         ONE TABLE — glochid/shortcuts in glochid_source, one row per
+         chord (condition url vals guard); filmstrip/key-sentinels is
+         REDEFINED on that table (the lib's four alt+arrows restated
+         verbatim — a capture is not reload-safe, each load would nest
+         the join deeper — plus the glochid rows), so a new chord is a
+         row edit and the whole map reads in one place:
+         alt+1/2/3 desktops, alt+a axis, alt+n new session, alt+w/p/s
+         close/pin/single at the FOCUSED pane. Each sentinel POSTs the
+         same route the pointing UI uses. The guard clause (on the
+         glochid rows only — the lib rows keep their original
+         conditions) splices document.activeElement.tagName checks into
+         the trigger condition so a chord typed into the chat prompt
+         never fires the shell. FOCUSED-PANE VERBS: the shell has no JS
+         to scrape the DOM, and the focused pane is DECLARED ws state
+         anyway (the focus index in the row) — new routes
+         /filmstrip/keys/{close,pin,single} resolve glochid/focused-id
+         and re-dispatch the lib verb handler BY NAME with the id
+         injected through nested route/dispatch (the pane-content
+         seam; nested dispatch carries its own params), so the keyboard
+         wears the EXACT pointing-UI semantics and the lib owns the
+         mutation + OOB grammar. No focused pane answers the OOB status
+         line, never a 500. The rail tabs row adds a muted ⌨ hint whose
+         title tooltip IS the map.
     |))))
  (* agent note (|2026-09-16 SESSION (pane-trees: the /code face IS the rail's tree template): per the rail-trees-v4 amendment (filmstrip.borg), the /code dir face renders the SAME node rows the rail code box rides -- glochid/code-tree as the levelfn, filmstrip/tree-level directly (no box chrome, pane-local URL /code?path=<dir> unchanged, file arm stays the <pre>). OBITUARY for the replaced implementations: code/rows (the table two-column name walk) and code/link (the pane-local hx-get anchor twin) are DELETED, not wrapped -- the pane-local <a> discipline existed because the table walk had no fold; with the outline template the dir label folds IN PLACE (native <details>, no re-render, no URL change) and leaf labels open-or-focus via /filmstrip/open (acme Get), so there is no second template and no nav trick to maintain. Dialect NOTES recorded the hard way: (1) (define (f x) body "doc") makes the DOCSTRING the return value -- the doc must PRECEDE the body (or ride (define name (lambda ...) "doc")); the /code page first rendered its docstring as pane body. (2) (count) rejects cons pairs -- (length) accepts them (filmstrip map-indexed results are pairs); the glochid make-note was right. (3) The eager thresholds (glochid/tree-kids-max 12 / depth 1) are calibrated against the interpreter's 400k-step request budget measured with budget-remaining in pipe mode: walk 16k lazy / 60k eager, /code page render ~250k eager (fits), but the BOOT SHELL stacks chrome + windows + prims boxes -- which is why the boot/head rail render strips kids (filmstrip/tree-lazy) and splices/panes honor them. The repo root cwd is the honest boot test (node_modules + 49 root entries): / 62212 bytes, /code 58103 bytes, node_modules-scale dirs degrade to the ordinary one-GET lazy level. code/rows' json-parse(fs/ls) shape survives in glochid/fs-rows-of (same hidden-dot rule).|) *)
  (* agent note (|2026-09-16 SESSION (pane-trees, bindings half): the /bindings face is now the SAME tree template as the rail prims box -- identical amendment as the /code face, no second pass. Face map: root = package dirs (tree over glochid/prims-tree ""), /bindings?pkg=<pkg> = that package's function LEVEL (tree over "prims/<pkg>"), /bindings?pkg=&name= = the detail ARM (docstring + source pre -- the file-arm twin). OBITUARY for the deleted: bind/rows + bind/packages-html + bind/pkg-html (the table walk, same rationale as code/rows) AND bind/browse-entries + bind/dir-of -- the bindings cascade childfn was ALREADY DEAD CODE (the sidebar-main-dichotomy retired cascade walks: filmstrip/browse is leaf-only and never called it; the test still pinned it -- both gone). bind/link SURVIVES for one caller: bind/trail (the pane's breadcrumb) -- in a tree the fold only goes DOWN, so the trail's pane-local anchors are the only way up and remain the one legal <a> use in a fragment. DELIBERATE DIFFERENCE vs the fs face: NO eager kids on prims rows -- unlike fs/ls, a package's entry count costs one habitat BRIDGE round-trip, so folds pull their level exactly once (same template, different cache locality; the /bindings page pays one bridge call for level 0, exactly what the table paid). HTML-escapes note for test authors: & in attr values renders &amp;, so "has" needles should anchor on "name=..." not "&name=...". boot-lazy strips the rail prims box (glass ceiling: 88 package rows ~136k steps fit, their fn levels pull per-fold). smoke GET-page timeouts widened -m 5 -> -m 30 (shape checks must not race the CPU: a cold first render after a heavy build+runtest measured >5s once; the /chat POST keeps its tight -m 10 -- that one asserts the streaming contract).|) *)
