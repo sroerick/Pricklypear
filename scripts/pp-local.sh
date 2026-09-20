@@ -15,6 +15,7 @@
 #   scripts/pp-local.sh sync                   # one data sync round
 #   scripts/pp-local.sh sync-loop              # background rounds every 30s
 #   scripts/pp-local.sh serve                  # local HTML surface (chat+eval)
+#   scripts/pp-local.sh agent-context          # board digest from the lens (borge/agent.borg boot verb)
 #
 # Model (what is local vs wire):
 #   - defs + (get …)/(tree/get …) reads: LENS FIRST, server on miss
@@ -87,6 +88,7 @@ case "${1:-}" in
   sync)       shift; exec $PP_REMOTE_BIN --lens "$LENS" --sync "$@" </dev/null ;;
   sync-loop)  shift; exec $PP_REMOTE_BIN --lens "$LENS" --sync-loop "$@" ;;
   serve)      shift; exec $PP_REMOTE_BIN --lens "$LENS" --sync-loop --serve "$@" ;;
+    agent-context) shift; exec $PP_REMOTE_BIN --lens "$LENS" --agent-context "$@" </dev/null ;;
   help|-h|--help)
     sed -n '2,40p' "$0" | sed 's/^# \{0,1\}//'
     exit 0 ;;
