@@ -35,22 +35,6 @@ let perform_prim (name : string) (args : value list) : value =
              (Interp_error (Prim_error (name, "unregistered primitive", "prim_error"))))
   | None -> Effect.perform (Prim_call (name, args))
 
-type control_mode = Eff_mode
-
-(** Parse a control-mode string into a [control_mode]; unknown strings
-    and the legacy ["lwt"|"promise"] (pre-H1.7 escape) all parse to
-    [Eff_mode] — the only mode since H1.7 deleted the monadic path. *)
-let control_mode_of_string = function
-  | _ -> Eff_mode
-
-(** [PP_EVAL_CONTROL=lwt|eff] — default **eff** (H1.6).
-    [lwt] is a legacy escape; after H1.7 the monadic eval path is gone and
-    lwt mode only changes nothing if the image always uses the rim handler. *)
-let control_mode_from_env () : control_mode =
-  match Sys.getenv_opt "PP_EVAL_CONTROL" with
-  | Some s -> control_mode_of_string (String.lowercase_ascii (String.trim s))
-  | None -> Eff_mode
-
 (** Sync prim table for pure lisp tests (no services). *)
 type sync_prim_fn = value list -> value
 type sync_prim_table = (string, sync_prim_fn) Hashtbl.t
