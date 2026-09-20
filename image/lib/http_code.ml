@@ -32,9 +32,7 @@ let static_root () : string =
   | _ ->
       let root = source_root () in
       let a = Filename.concat root "image/static" in
-      if Sys.file_exists a then a
-      else if Sys.file_exists "image/static" then "image/static"
-      else "image/static"
+      if Sys.file_exists a then a else "image/static"
 
 (* Directory holding built browser assets (interp.js from client/ via
    js_of_ocaml). Falls back to the dune build tree under the source root.
