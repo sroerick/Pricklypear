@@ -144,7 +144,10 @@ let surface_source = {pp|
     ;; above each CM host
     ".pp-cm-bar{display:flex;gap:.6rem;align-items:center;margin:.35rem 0}"
     ".pp-cm-save{cursor:pointer}"
-    ".pp-cm-status::after{content:none}"))
+    ".pp-cm-status::after{content:none}"
+    ;; keyboard hint glyph in the rail tabs row: the map lives in the
+    ;; title tooltip (zero-JS discoverability).
+    ".fs-keys{margin-left:auto;color:var(--muted,#6b7080);cursor:help;font-size:1.1em;user-select:none}"))
 
 (define (glochid/layout title body)
   (if (hx-request?)
@@ -1178,10 +1181,134 @@ DOM alive.")
       (html/join
         (append
           (list (html/span (html/attr "class" "fs-title") (html/text "rail")))
-          (glochid/railtabs)))))
+          (glochid/railtabs)
+          (list (glochid/keys-hint))))))
   "The rail mode controlbox (one word per tree root, per
-filmstrip.borg sidebar-main-dichotomy — the axis toggle word was
-retired, BORGE-1789879934: sidebar-only shell).")
+filmstrip.borg sidebar-main-dichotomy -- the axis toggle word was
+retired, BORGE-1789879934: sidebar-only shell) + the keyboard-hint
+glyph (the shortcut map is the glyph's title tooltip).")
+
+;; ---- 2e. KEYBOARD SHORTCUTS (borge/agent.borg keyboard-shortcuts:
+;; the filmstrip zero-JS hotkeys mechanism, glochid's chord set) ----
+;; THE KEYBOARD MAP IS ONE TABLE restated as body sentinels: rows 1-4
+;; restate the lib's alt+arrows (focus / row move) verbatim -- a capture
+;; of filmstrip/key-sentinels would not be reload-safe (each load would
+;; nest the join deeper), and one table reads whole. The glochid rows:
+;; alt+1/2/3 jump desktops, alt+n starts a new
+;; session, alt+w/p/s drive the FOCUSED pane (close / pin / single),
+;; each POSTing the same route the pointing UI uses. The guard clause
+;; keeps a chord typed into the chat prompt (or any input) inert.
+(define glochid/keyguard
+  (string-append
+    "document.activeElement.tagName!='INPUT'"
+    "&&document.activeElement.tagName!='TEXTAREA'"
+    "&&document.activeElement.tagName!='SELECT'")
+  "Guard clause spliced into the trigger conditions of the glochid
+shortcuts: a chord typed into the chat prompt (or any input/textarea/
+select) never fires the shell. The lib's alt+arrow rows keep their
+original conditions (restated verbatim, no guard applied).")
+
+(define glochid/shortcuts
+  (lambda ()
+    (list
+      ;; the lib's four alt+arrows (restated; condition / url / vals / guard)
+      (list "altKey&&!shiftKey&&key=='ArrowLeft'" "/filmstrip/focus" "{\"dir\":\"left\"}" "")
+      (list "altKey&&!shiftKey&&key=='ArrowRight'" "/filmstrip/focus" "{\"dir\":\"right\"}" "")
+      (list "altKey&&shiftKey&&key=='ArrowLeft'" "/filmstrip/move" "{\"dir\":\"left\"}" "")
+      (list "altKey&&shiftKey&&key=='ArrowRight'" "/filmstrip/move" "{\"dir\":\"right\"}" "")
+      ;; the glochid layer: desktops / session / focused pane
+      (list "altKey&&key=='1'" "/filmstrip/desktop" "{\"d\":\"0\"}" glochid/keyguard)
+      (list "altKey&&key=='2'" "/filmstrip/desktop" "{\"d\":\"1\"}" glochid/keyguard)
+      (list "altKey&&key=='3'" "/filmstrip/desktop" "{\"d\":\"2\"}" glochid/keyguard)
+            (list "altKey&&key=='n'" "/filmstrip/new" "{}" glochid/keyguard)
+      (list "altKey&&key=='w'" "/filmstrip/keys/close" "{}" glochid/keyguard)
+      (list "altKey&&key=='p'" "/filmstrip/keys/pin" "{}" glochid/keyguard)
+      (list "altKey&&key=='s'" "/filmstrip/keys/single" "{}" glochid/keyguard)))
+  "THE KEYBOARD MAP, one row per chord: (condition url vals guard).
+Rows 1-4 are filmstrip/key-sentinels (alt+arrows: focus, row move);
+the rest are glochid's: alt+1/2/3 desktops, alt+n new
+session, alt+w/p/s close/pin/single at the FOCUSED pane. A row edit
+adds a chord; the renderer below splices the guard into the condition
+and the sentinel POSTs the same route the pointing UI does.")
+
+(define filmstrip/key-sentinels
+  (lambda ()
+    (html/join
+      (filmstrip/map-indexed
+        (lambda (row i)
+          (let ((condn (car row))
+                (url (car (cdr row)))
+                (vals (car (cdr (cdr row))))
+                (gcond (car (cdr (cdr (cdr row))))))
+            (filmstrip/sentinel url vals
+              (string-append "keydown[" condn
+                (if (string-eq gcond "") "" (string-append "&&" gcond))
+                "] from:body"))))
+        (glochid/shortcuts) 0)))
+  "REDEFINES the lib's key sentinels on the ONE table (glochid/\nshortcuts) so the whole keyboard map reads in one place and a new\nchord is a row edit. Zero JS files still: filmstrip/sentinel carries\nthe trigger filter, the guard only extends the condition.")
+
+;; ---- 2e2. FOCUSED-PANE VERBS (alt+w/p/s land here) ----
+;; The shell has no JS to read the DOM, and the focused pane is
+;; DECLARED workspace state anyway (the focus index in the ws row, the
+;; same index alt+right heals). A keys route resolves the focus index
+;; into a pane id and re-dispatches the lib verb handler with the id
+;; injected (nested route/dispatch carries its own params -- the
+;; pane-content seam), so the keyboard wears the EXACT pointing-UI
+;; semantics and the lib owns the mutation + OOB grammar.
+(define glochid/focused-id
+  (lambda ()
+    (let ((row (filmstrip/row)))
+      (let ((p (filmstrip/pane-at (nth row 1) (nth row 2))))
+        (if (null? p) "" (filmstrip/pane-id p)))))
+  "The focused pane's id from the ws row, or the empty string when
+nothing is focused (filmstrip/pane-at answers () out of range).")
+
+(define glochid/focused-verb
+  (lambda (verb)
+    (let ((fid (glochid/focused-id)))
+      (if (string-eq fid "")
+          (render-html (filmstrip/oob-msg "glochid: no focused pane"))
+          (render-html
+            (route/dispatch
+              (string-append "filmstrip/" verb)
+              "POST"
+              (string-append "/filmstrip/" verb)
+              (list (cons "id" fid))
+              (list (cons "hx-request" "true")))))))
+  "Dispatch one pane verb at the FOCUSED pane; the rendered OOB answer
+is re-tagged raw for the outer gate. No focused pane = a status line,
+never a 500.")
+
+(define glochid/keys-close
+  (lambda () (glochid/focused-verb "close"))
+  "POST /filmstrip/keys/close -- alt+w: shelve the focused pane. The
+record survives (hx-preserve live DOM); focus heals exactly as the
+head glyph's close does.")
+
+(define glochid/keys-pin
+  (lambda () (glochid/focused-verb "pin"))
+  "POST /filmstrip/keys/pin -- alt+p: trade the focused pane's region
+(main/rail); the pane MOVES containers on the region flip.")
+
+(define glochid/keys-single
+  (lambda () (glochid/focused-verb "single"))
+  "POST /filmstrip/keys/single -- alt+s: toggle the focused pane's
+one-up staging (v5 single).")
+
+(define glochid/keys-hint
+  (lambda ()
+    (html/span
+      (html/attrs
+        (list
+          (html/attr "class" "fs-keys")
+          (html/attr "title"
+            (string-append
+              "alt+←/→ focus · alt+shift+←/→ move "
+              "· alt+1/2/3 desktop · alt+n new session "
+              "· alt+w close · alt+p pin · alt+s single"))))
+      (html/text "⌨")))
+  "The keyboard map as a muted glyph in the rail tabs row: the map is
+the title tooltip (hover affordance), zero JS.")
 
 (define glochid/railmode
   (lambda ()
@@ -1550,6 +1677,9 @@ every live main pane of the desktop, so the heal picks the ring only
 (route "/filmstrip/desktop" "glochid/desktop-set")
 (route "/filmstrip/new" "glochid/new")
 (route "/filmstrip/resume" "glochid/resume")
+(route "/filmstrip/keys/close" "glochid/keys-close")
+(route "/filmstrip/keys/pin" "glochid/keys-pin")
+(route "/filmstrip/keys/single" "glochid/keys-single")
 |pp}
 
 (** Boot-load the embedded Nopales packages + this surface into the

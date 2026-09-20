@@ -736,6 +736,119 @@ let test_turn_replay_hyper_stream ~rt () =
     (Ast.VStr "<div id=\"log\"><div>ready</div></div>")
     (Runtime.eval_string ~rt {|(soup/serialize (soup/select-one pg "#log"))|})
 
+(** keyboard shortcuts (borge/agent.borg keyboard-shortcuts): the body
+    sentinels render from the ONE chord table (lib restated + glochid
+    rows, guard spliced into the condition), the /filmstrip/keys/*
+    routes act on the FOCUSED pane -- the ws row's focus index resolved
+    server-side, id injected through nested route/dispatch (lib verb
+    semantics unchanged) -- and a chord with no live focus answers the
+    status line, never a 500. Uses a temp ws file so the suite never
+    touches a real .agent/workspace.json. *)
+let test_glochid_keys ~rt () =
+  Surface.load ~rt;
+  let has needle s =
+    (try ignore (Str.search_forward (Str.regexp_string needle) s 0); true
+     with Not_found -> false)
+  in
+  let post handler =
+    match
+      Runtime.dispatch_route ~rt ~handler ~method_:"POST" ~path:handler
+        ~params:[] ~headers:[] ~body:""
+    with
+    | Ast.VStr s -> s
+    | other -> Alcotest.fail (handler ^ ": " ^ Reader.pp_value other)
+  in
+  let open_ route =
+    ignore
+      (Runtime.dispatch_route ~rt ~handler:"filmstrip/open" ~method_:"POST"
+         ~path:"/filmstrip/open" ~params:[ ("route", route) ] ~headers:[]
+         ~body:"")
+  in
+  (* the verb OOBs re-render the windows tree, which walks the prims
+     bridge -- inert stubs (test 3 registers live ones on the same rt) *)
+  Runtime.add_prim rt "bind/packages" (fun _ -> Ast.VStr {|[]|});
+  Runtime.add_prim rt "bind/list" (fun _ -> Ast.VStr {|[]|});
+  Runtime.add_prim rt "bind/get" (fun _ -> Ast.VStr {|{}|});
+  let ws = Filename.temp_file "glochid-keys" ".json" in
+  ignore
+    (Runtime.eval_string ~rt
+       (Printf.sprintf {|(define glochid/ws-file "%s")|} ws));
+  Fun.protect
+  begin
+    fun () ->
+      (* the sentinel table renders whole (the full shell render is not
+         dispatched here: it exceeds the 400k eval budget on the
+         main-repo build -- habitat issue i-1789591788). *)
+      (match
+         Runtime.eval_string ~rt {|(render-html (filmstrip/key-sentinels))|}
+       with
+       | Ast.VStr html ->
+           (* attribute values render escaped: && -> &amp;&amp;, ' -> &#39; *)
+           Alcotest.(check bool) "lib focus row restated" true
+             (has "altKey&amp;&amp;!shiftKey&amp;&amp;key==&#39;ArrowLeft&#39;" html);
+           Alcotest.(check bool) "desktop chord" true
+             (has "altKey&amp;&amp;key==&#39;1&#39;" html);
+           Alcotest.(check bool) "close chord" true
+             (has "altKey&amp;&amp;key==&#39;w&#39;" html);
+           Alcotest.(check bool) "pin chord" true
+             (has "altKey&amp;&amp;key==&#39;p&#39;" html);
+           Alcotest.(check bool) "single chord" true
+             (has "altKey&amp;&amp;key==&#39;s&#39;" html);
+           Alcotest.(check bool) "keys routes in the map" true
+             (has "/filmstrip/keys/close" html);
+           Alcotest.(check bool) "guard spliced into the condition" true
+             (has "activeElement.tagName!=&#39;INPUT&#39;" html)
+       | other -> Alcotest.fail ("key-sentinels: " ^ Reader.pp_value other));
+      (* the rail tabs row carries the keys hint glyph *)
+      (match
+         Runtime.eval_string ~rt {|(render-html (glochid/railtabs-html))|}
+       with
+       | Ast.VStr html ->
+           Alcotest.(check bool) "keys hint glyph in the rail tabs" true
+             (has "fs-keys" html)
+       | other -> Alcotest.fail ("railtabs: " ^ Reader.pp_value other));
+      (* END-TO-END: the shell itself renders the sentinels + hint (the
+         476k->188k step/perf fix keeps the boot render under the
+         400k gate, so the keys surface is reachable in situ). *)
+      (match
+         Runtime.dispatch_route ~rt ~handler:"glochid/shell" ~method_:"GET"
+           ~path:"/" ~params:[] ~headers:[] ~body:""
+       with
+       | Ast.VStr html ->
+           Alcotest.(check bool) "shell carries the keys routes" true
+             (has "/filmstrip/keys/close" html);
+           Alcotest.(check bool) "shell carries the guard clause" true
+             (has "activeElement.tagName" html);
+           Alcotest.(check bool) "shell carries the keys hint" true
+             (has "fs-keys" html)
+       | other -> Alcotest.fail ("shell: " ^ Reader.pp_value other));
+      (* no live pane yet: the chord answers the status line *)
+      Alcotest.(check bool) "no focused pane = status line" true
+        (has "no focused pane" (post "glochid/keys-close"));
+      (* open a pane (focus lands on it) -- then the chords act on it *)
+      open_ "/bindings";
+      Alcotest.(check bool) "focused close shelves the pane" true
+        (has "shelved" (post "glochid/keys-close"));
+      let ic = open_in_bin ws in
+      let n = in_channel_length ic in
+      let saved = really_input_string ic n in
+      close_in ic;
+      Alcotest.(check bool) "ws row persisted the shelve" true
+        (has "shelved" saved);
+      (* pin + single: open a SECOND pane (open focuses it), the chords
+         act on the focused pane exactly as the head glyphs do *)
+      open_ "/code";
+      Alcotest.(check bool) "focused pin moves the region" true
+        (has "fs-surface" (post "glochid/keys-pin"));
+      Alcotest.(check bool) "focused single stages one-up" true
+        (has "fs-single" (post "glochid/keys-single"))
+  end
+    ~finally:(fun () ->
+        (try Sys.remove ws with Sys_error _ -> ());
+        ignore
+          (Runtime.eval_string ~rt
+             {|(define glochid/ws-file ".agent/workspace.json")|}))
+
 (** Nested-block replay: the /chat emitter wraps each contiguous reasoning
     run and each tool call in its OWN <details>/<summary> inside the turn's
     "thinking + tools" zone (#<rid>-think). Build the capture-ordered part
@@ -1096,5 +1209,7 @@ let () =
         ; Alcotest.test_case "bindings-browser" `Quick
             (test_surfaces_bindings_browser ~rt)
         ; Alcotest.test_case "rail-trees" `Quick
-            (test_rail_trees ~rt) ] );
+            (test_rail_trees ~rt)
+        ; Alcotest.test_case "keyboard-shortcuts" `Quick
+            (test_glochid_keys ~rt) ] );
     ]
