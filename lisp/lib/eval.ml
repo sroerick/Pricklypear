@@ -1109,9 +1109,3 @@ let read_eval_all_direct ~(prims : prim_table) (env : env) (s : string)
 
 (** An empty [prim_table] convenience value. *)
 let empty_prims : prim_table = make_prim_table ()
-
-(** Aliases kept for call-site stability during H1 cleanup. *)
-let apply_eff = apply
-let eval_eff = eval
-let eval_string_eff = eval_string_direct
-let eval_string_auto = eval_string
