@@ -49,11 +49,6 @@ let lookup_route (ctx : t) (route : string) : string option =
 let lookup_route_meta (ctx : t) (route : string) : (string * string) option =
   Hashtbl.find_opt ctx.routes route
 
-(** Sync env lookup against the snapshot (for handler resolution). *)
-let lookup_handler (ctx : t) (name : string)
-  : Pricklypear_lisp.Ast.value option =
-  Pricklypear_lisp.Env.lookup (ctx.env : Pricklypear_lisp.Ast.env) name
-
 (** Fiber-local binding for the current request context (Eio floor).
     Set by the HTTP handler after the identity gate; read by prims
     that need stable manifest (whoami, current-branch, author checks, etc.).
