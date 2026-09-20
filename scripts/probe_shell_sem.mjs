@@ -267,10 +267,38 @@ ok(await waitShell(), "shell appeared after load");
 await sleep(500);
 const openResp = await httpPost(base + "/filmstrip/open", { route: "/sessions" }, true);
 ok(/id="fs-tree-windows-root"/.test(openResp.body), "I3 /filmstrip/open response carries the windows-tree rows OOB (ul innerHTML seam)");
+// drive the SAME open through the page's htmx so the OOB actually lands
+// (an eager desk carries its kid rows in the boot render -- it never
+// re-fetches its level, so the side-channel POST would never show up)
+await ev(`htmx.ajax('POST','/filmstrip/open',{values:{route:'/sessions'},target:'#fs-sink',swap:'innerHTML'})`);
+await sleep(700);
 const s2 = await ev(SNAPSHOT);
 ok(s2.liveCount === 2, "I3 live panes after open", `live=${s2.liveCount}`);
 await ensureNode("desk/0");
 ok((await ev(`[...document.querySelectorAll('#fs-tree-windows li.fs-tr-item .fs-tr-open')].filter(b=>['/chat','/sessions'].includes(b.textContent.trim())).length`)) === 2, "I3 windows tree lists the live panes under desk/0 after the open OOB");
+
+// ---- M: cross-desktop move (window-controlbox desktop int, move verb) ----
+// The desk dirs render DEFAULT-OPEN (expand seed rides eager kids: a
+// parsed-open details never fires its toggle-once pull), so the pane rows
+// under desk/0 are already in the DOM without any expand step.
+ok(await ev(`(function(){const ds=[...document.querySelectorAll('#fs-tree-windows li[data-node^="desk"] > details')]; return ds.length===3 && ds.every(d=>d.open);})()`), "M0 the three desk dirs render DEFAULT-OPEN (expand seed)");
+ok(await ev(`[...document.querySelectorAll('#fs-tree-windows li[data-node^="desk"] > details')].every(d=>d.getAttribute('hx-get')==null)`), "M0b default-open dirs carry eager kids (no lazy pull attrs)");
+// move /sessions to desktop 1 through its tree row's explicit to1 word
+// (the row also carries to2; the current desktop has no self-move word)
+let mv = await ev(treeVerbClick('/sessions','to1'));
+ok(String(mv).includes('to1 posted'), "M1 the tree row carries explicit to-verbs per other desktop", mv);
+await sleep(300);
+// the OOB swap (tree rows + whole strip) must settle before the DOM reads
+let __m2b = false;
+for (let t = 0; t < 15 && !__m2b; t++) { await sleep(300); __m2b = await ev(`[...document.querySelectorAll('#fs-content .fs-pane')].some(p=>String(p.getAttribute('data-desktop'))==='1' && (p.querySelector('.fs-title')||{}).textContent.trim()==='/sessions')`); }
+ok(__m2b, "M2b the moved pane's section re-rendered with data-desktop=1");
+const wspM = JSON.parse(fs.readFileSync(path.join(AGENT_DIR, ".agent", "workspace.json")));
+ok(wspM.content.find((p) => p.route === "/sessions" && p.state !== "shelved").desktop === 1, "M2 move-to persisted desktop=1 on the pane record");
+ok((await ev(`[...document.querySelectorAll('#fs-content .fs-pane')].some(p=>String(p.getAttribute('data-desktop'))==='1' && (p.querySelector('.fs-title')||{}).textContent.trim()==='/sessions')`)), "M2b the moved pane's section re-rendered with data-desktop=1");
+const sm1 = await ev(SNAPSHOT);
+ok(!(sm1.panes.find((p)=>p.route==='/sessions')||{focused:false}).focused, "M3 the moved-away pane never keeps the ring", JSON.stringify(sm1.panes));
+ok(sm1.focusedRect && sm1.focusedRect.q && !sm1.focusedShelved, "I1 focus healed onto a visible pane after the leave");
+ok(await ev(`[...document.querySelectorAll('#fs-content .fs-pane:not(.shelved) header button')].some(b=>b.getAttribute('data-verb')==='move' && b.getAttribute('hx-post')==='/filmstrip/move-to')`), "M4 the pane head carries the move glyph POSTing move-to");
 
 // ---- S: the main region IS the niri strip (main-strip-v5) ----
 ok((await ev(`[...document.querySelectorAll('#fs-content .fs-pane')].filter(p=>(p.getAttribute('data-region')||'main')==='main'&&!p.classList.contains('shelved')&&String(p.getAttribute('data-desktop'))==='0').every(p=>p.getClientRects().length>0)`)), "S1 live main panes of the current desktop render as strip columns", ``);

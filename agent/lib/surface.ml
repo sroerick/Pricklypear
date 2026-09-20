@@ -1048,6 +1048,24 @@ label by region, so the row and the pane head agree).")
               (list "width" "/filmstrip/width")
               (list "single" "/filmstrip/single")
               (list "close" "/filmstrip/close"))))
+        (desk (as-str (filmstrip/pane-desk p)))
+        ;; cross-desktop MOVE words: an explicit destination verb per
+        ;; desktop EXCEPT the pane's current one (rail panes carry none
+        ;; -- dock semantics mean nothing to move). The pane-head move
+        ;; glyph cycles; the tree row words are acme-explicit.
+        (m-verbs
+          (if (string-eq (filmstrip/pane-region p) "rail")
+              (list)
+              (list/map
+                (lambda (d)
+                  (glochid/pane-verb
+                    (string-append "to" d)
+                    "/filmstrip/move-to"
+                    (list (list "id" id) (list "d" d))))
+                (list/filter
+                  (lambda (d) (not (string-eq d desk)))
+                  (list "0" "1" "2")))))
+        (live-verbs2 (append live-verbs m-verbs))
         (shelved-verbs
           (v-verbs
             (list (list "restore" "/filmstrip/restore")
@@ -1059,10 +1077,12 @@ label by region, so the row and the pane head agree).")
           "kind" "leaf"
           "node" (string-append "pane/" id)
           "open" route
-          "verbs" (json-emit (if shelved? shelved-verbs live-verbs))))))
+          "verbs" (json-emit (if shelved? shelved-verbs live-verbs2))))))
   "One pane row: label = route (open-or-focus, acme Get on a shelved
-row), verbs by CURRENT state (live: focus/pin/width/close; shelved:
-restore/destroy). Declared state only -- no DOM scraping.")
+row), verbs by CURRENT state (live: focus/pin/width/close + to<N>
+move words for every OTHER desktop; shelved: restore/destroy). Rail
+panes carry no move words (dock semantics -- desktop-global). Declared
+state only -- no DOM scraping.")
 
 (define glochid/keep-nodes
   (lambda (nodes)
@@ -1091,6 +1111,13 @@ renderer takes only real node dicts).")
                 panes 0))))
         (desk-dir
           (lambda (d)
+            ;; DEFAULT-OPEN (rail-trees-v4 expand seed + operator note:
+            ;; the desktop tree reads expanded): eager kids (this
+            ;; desktop's live panes, pre-walked -- a parsed-open details
+            ;; never fires its toggle-once pull, so expand RIDES kids)
+            ;; + the switch verb. The windows subtree is tiny, so the
+            ;; eager head cost is host-trivial (the budget gate is the
+            ;; FS tree, not this one).
             (dict-set*
               "{}"
               (list
@@ -1102,7 +1129,9 @@ renderer takes only real node dicts).")
                 (json-emit
                   (list
                     (list "switch" "/filmstrip/desktop"
-                      (string-append "{\"d\":\"" d "\"}"))))))))
+                      (string-append "{\"d\":\"" d "\"}"))))
+                "kids" (glochid/json-arr (live-on-desk d))
+                "expand" "true"))))
         (shelf-dir
           (dict-set*
             "{}"
@@ -1127,7 +1156,9 @@ renderer takes only real node dicts).")
           (live-on-desk (substring path 5 (string-length path)))))))
   "levelfn for the windows tree (node 'desk/<n>' -> that desktop's
 panes; 'shelf' -> the shelved panes): DESKTOP-GLOBAL data from the
-one workspace row, never from live DOM.")
+one workspace row, never from live DOM. Desk dirs 0..2 render
+DEFAULT-OPEN: their level answer pre-walks the pane rows as eager
+kids + the expand seed (the lazy level pull stays for the shelf).")
 
 ;; ---- 2b2b. THE SHARED FILE TREE (rail + pane ARE the same rows) ----
 ;; rail-trees-v4 amendment: a node dict MAY carry "kids" -- a JSON
@@ -2134,6 +2165,7 @@ every live main pane of the desktop, so the heal picks the ring only
 (route "/filmstrip/focus" "filmstrip/focus")
 (route "/filmstrip/focus-id" "filmstrip/focus-id")
 (route "/filmstrip/move" "filmstrip/move")
+(route "/filmstrip/move-to" "filmstrip/move-to")
 (route "/filmstrip/width" "filmstrip/width")
 (route "/filmstrip/pin" "filmstrip/pin")
 (route "/filmstrip/single" "filmstrip/single")
